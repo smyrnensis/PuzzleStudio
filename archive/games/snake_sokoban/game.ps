@@ -1,0 +1,387 @@
+case_sensitive
+level_select
+title Snake Sokoban
+author PuzzleStudio
+
+========
+OBJECTS
+========
+
+Background
+#f5f3ef
+
+Wall
+#334155 #64748b
+00000
+01110
+00000
+01110
+00000
+
+Goal
+#7f6cff
+..0..
+.000.
+00.00
+.000.
+..0..
+
+Crate
+#8a5326 #d28a3c
+00000
+01110
+01010
+01110
+00000
+
+HeadUp
+#37c871
+..0..
+.000.
+00000
+..0..
+..0..
+
+HeadDown
+#37c871
+..0..
+..0..
+00000
+.000.
+..0..
+
+HeadLeft
+#37c871
+..0..
+.00..
+00000
+.00..
+..0..
+
+HeadRight
+#37c871
+..0..
+..00.
+00000
+..00.
+..0..
+
+BodyUp
+#2ba35b
+.000.
+00000
+00000
+00000
+.000.
+
+BodyDown
+#2ba35b
+.000.
+00000
+00000
+00000
+.000.
+
+BodyLeft
+#2ba35b
+.000.
+00000
+00000
+00000
+.000.
+
+BodyRight
+#2ba35b
+.000.
+00000
+00000
+00000
+.000.
+
+TailUp
+#207545
+.000.
+..0..
+..0..
+..0..
+.....
+
+TailDown
+#207545
+.....
+..0..
+..0..
+..0..
+.000.
+
+TailLeft
+#207545
+.....
+...0.
+0000.
+...0.
+.....
+
+TailRight
+#207545
+.....
+.0...
+.0000
+.0...
+.....
+
+Moved
+#f5f3ef
+.....
+.....
+.....
+.....
+.....
+
+PushUp
+#f5f3ef
+.....
+.....
+.....
+.....
+.....
+
+PushDown
+#f5f3ef
+.....
+.....
+.....
+.....
+.....
+
+PushLeft
+#f5f3ef
+.....
+.....
+.....
+.....
+.....
+
+PushRight
+#f5f3ef
+.....
+.....
+.....
+.....
+.....
+
+=======
+LEGEND
+=======
+
+. = Background
+# = Wall
+G = Background and Goal
+B = Background and Crate
+* = Background and Goal and Crate
+N = Background and HeadUp
+S = Background and HeadDown
+W = Background and HeadLeft
+E = Background and HeadRight
+u = Background and BodyUp
+d = Background and BodyDown
+l = Background and BodyLeft
+r = Background and BodyRight
+U = Background and TailUp
+T = Background and TailDown
+L = Background and TailLeft
+R = Background and TailRight
+
+Snake = HeadUp or HeadDown or HeadLeft or HeadRight or BodyUp or BodyDown or BodyLeft or BodyRight or TailUp or TailDown or TailLeft or TailRight
+Head = HeadUp or HeadDown or HeadLeft or HeadRight
+player = HeadUp or HeadDown or HeadLeft or HeadRight
+Body = BodyUp or BodyDown or BodyLeft or BodyRight
+Tail = TailUp or TailDown or TailLeft or TailRight
+Solid = Wall or Crate or Snake
+
+================
+COLLISIONLAYERS
+================
+
+Background
+Goal
+Wall, Crate, HeadUp, HeadDown, HeadLeft, HeadRight, BodyUp, BodyDown, BodyLeft, BodyRight, TailUp, TailDown, TailLeft, TailRight
+Moved, PushUp, PushDown, PushLeft, PushRight
+
+=====
+RULES
+=====
+
+up    [ up Head | Crate ] -> [ up Head | Crate PushUp ]
+down  [ down Head | Crate ] -> [ down Head | Crate PushDown ]
+left  [ left Head | Crate ] -> [ left Head | Crate PushLeft ]
+right [ right Head | Crate ] -> [ right Head | Crate PushRight ]
+
+up    [ Crate PushUp | Crate ] -> [ Crate PushUp | Crate PushUp ]
+down  [ Crate PushDown | Crate ] -> [ Crate PushDown | Crate PushDown ]
+left  [ Crate PushLeft | Crate ] -> [ Crate PushLeft | Crate PushLeft ]
+right [ Crate PushRight | Crate ] -> [ Crate PushRight | Crate PushRight ]
+up    [ Crate PushUp | Crate ] -> [ Crate PushUp | Crate PushUp ]
+down  [ Crate PushDown | Crate ] -> [ Crate PushDown | Crate PushDown ]
+left  [ Crate PushLeft | Crate ] -> [ Crate PushLeft | Crate PushLeft ]
+right [ Crate PushRight | Crate ] -> [ Crate PushRight | Crate PushRight ]
+up    [ Crate PushUp | Crate ] -> [ Crate PushUp | Crate PushUp ]
+down  [ Crate PushDown | Crate ] -> [ Crate PushDown | Crate PushDown ]
+left  [ Crate PushLeft | Crate ] -> [ Crate PushLeft | Crate PushLeft ]
+right [ Crate PushRight | Crate ] -> [ Crate PushRight | Crate PushRight ]
+up    [ Crate PushUp | Crate ] -> [ Crate PushUp | Crate PushUp ]
+down  [ Crate PushDown | Crate ] -> [ Crate PushDown | Crate PushDown ]
+left  [ Crate PushLeft | Crate ] -> [ Crate PushLeft | Crate PushLeft ]
+right [ Crate PushRight | Crate ] -> [ Crate PushRight | Crate PushRight ]
+up    [ Crate PushUp | Crate ] -> [ Crate PushUp | Crate PushUp ]
+down  [ Crate PushDown | Crate ] -> [ Crate PushDown | Crate PushDown ]
+left  [ Crate PushLeft | Crate ] -> [ Crate PushLeft | Crate PushLeft ]
+right [ Crate PushRight | Crate ] -> [ Crate PushRight | Crate PushRight ]
+up    [ Crate PushUp | Crate ] -> [ Crate PushUp | Crate PushUp ]
+down  [ Crate PushDown | Crate ] -> [ Crate PushDown | Crate PushDown ]
+left  [ Crate PushLeft | Crate ] -> [ Crate PushLeft | Crate PushLeft ]
+right [ Crate PushRight | Crate ] -> [ Crate PushRight | Crate PushRight ]
+up    [ Crate PushUp | Crate ] -> [ Crate PushUp | Crate PushUp ]
+down  [ Crate PushDown | Crate ] -> [ Crate PushDown | Crate PushDown ]
+left  [ Crate PushLeft | Crate ] -> [ Crate PushLeft | Crate PushLeft ]
+right [ Crate PushRight | Crate ] -> [ Crate PushRight | Crate PushRight ]
+up    [ Crate PushUp | Crate ] -> [ Crate PushUp | Crate PushUp ]
+down  [ Crate PushDown | Crate ] -> [ Crate PushDown | Crate PushDown ]
+left  [ Crate PushLeft | Crate ] -> [ Crate PushLeft | Crate PushLeft ]
+right [ Crate PushRight | Crate ] -> [ Crate PushRight | Crate PushRight ]
+
+up    [ Crate PushUp | no Solid ] -> [ | Crate ]
+down  [ Crate PushDown | no Solid ] -> [ | Crate ]
+left  [ Crate PushLeft | no Solid ] -> [ | Crate ]
+right [ Crate PushRight | no Solid ] -> [ | Crate ]
+up    [ Crate PushUp | no Solid ] -> [ | Crate ]
+down  [ Crate PushDown | no Solid ] -> [ | Crate ]
+left  [ Crate PushLeft | no Solid ] -> [ | Crate ]
+right [ Crate PushRight | no Solid ] -> [ | Crate ]
+up    [ Crate PushUp | no Solid ] -> [ | Crate ]
+down  [ Crate PushDown | no Solid ] -> [ | Crate ]
+left  [ Crate PushLeft | no Solid ] -> [ | Crate ]
+right [ Crate PushRight | no Solid ] -> [ | Crate ]
+up    [ Crate PushUp | no Solid ] -> [ | Crate ]
+down  [ Crate PushDown | no Solid ] -> [ | Crate ]
+left  [ Crate PushLeft | no Solid ] -> [ | Crate ]
+right [ Crate PushRight | no Solid ] -> [ | Crate ]
+up    [ Crate PushUp | no Solid ] -> [ | Crate ]
+down  [ Crate PushDown | no Solid ] -> [ | Crate ]
+left  [ Crate PushLeft | no Solid ] -> [ | Crate ]
+right [ Crate PushRight | no Solid ] -> [ | Crate ]
+up    [ Crate PushUp | no Solid ] -> [ | Crate ]
+down  [ Crate PushDown | no Solid ] -> [ | Crate ]
+left  [ Crate PushLeft | no Solid ] -> [ | Crate ]
+right [ Crate PushRight | no Solid ] -> [ | Crate ]
+up    [ Crate PushUp | no Solid ] -> [ | Crate ]
+down  [ Crate PushDown | no Solid ] -> [ | Crate ]
+left  [ Crate PushLeft | no Solid ] -> [ | Crate ]
+right [ Crate PushRight | no Solid ] -> [ | Crate ]
+up    [ Crate PushUp | no Solid ] -> [ | Crate ]
+down  [ Crate PushDown | no Solid ] -> [ | Crate ]
+left  [ Crate PushLeft | no Solid ] -> [ | Crate ]
+right [ Crate PushRight | no Solid ] -> [ | Crate ]
+
+up    [ up Head | no Solid ] -> [ BodyUp Moved | HeadUp ]
+down  [ down Head | no Solid ] -> [ BodyDown Moved | HeadDown ]
+left  [ left Head | no Solid ] -> [ BodyLeft Moved | HeadLeft ]
+right [ right Head | no Solid ] -> [ BodyRight Moved | HeadRight ]
+
+startloop
+
+down  [ BodyUp Moved | TailUp ] -> [ TailUp | ]
+down  [ BodyDown Moved | TailUp ] -> [ TailDown | ]
+down  [ BodyLeft Moved | TailUp ] -> [ TailLeft | ]
+down  [ BodyRight Moved | TailUp ] -> [ TailRight | ]
+
+up    [ BodyUp Moved | TailDown ] -> [ TailUp | ]
+up    [ BodyDown Moved | TailDown ] -> [ TailDown | ]
+up    [ BodyLeft Moved | TailDown ] -> [ TailLeft | ]
+up    [ BodyRight Moved | TailDown ] -> [ TailRight | ]
+
+right [ BodyUp Moved | TailLeft ] -> [ TailUp | ]
+right [ BodyDown Moved | TailLeft ] -> [ TailDown | ]
+right [ BodyLeft Moved | TailLeft ] -> [ TailLeft | ]
+right [ BodyRight Moved | TailLeft ] -> [ TailRight | ]
+
+left  [ BodyUp Moved | TailRight ] -> [ TailUp | ]
+left  [ BodyDown Moved | TailRight ] -> [ TailDown | ]
+left  [ BodyLeft Moved | TailRight ] -> [ TailLeft | ]
+left  [ BodyRight Moved | TailRight ] -> [ TailRight | ]
+
+down  [ Moved | BodyUp ] -> [ | BodyUp Moved ]
+up    [ Moved | BodyDown ] -> [ | BodyDown Moved ]
+right [ Moved | BodyLeft ] -> [ | BodyLeft Moved ]
+left  [ Moved | BodyRight ] -> [ | BodyRight Moved ]
+
+endloop
+
+up    [ TailUp | BodyUp | HeadUp ] -> cancel
+down  [ TailDown | BodyDown | HeadDown ] -> cancel
+left  [ TailLeft | BodyLeft | HeadLeft ] -> cancel
+right [ TailRight | BodyRight | HeadRight ] -> cancel
+
+[ Moved ] -> [ ]
+[ PushUp ] -> [ ]
+[ PushDown ] -> [ ]
+[ PushLeft ] -> [ ]
+[ PushRight ] -> [ ]
+
+==============
+WINCONDITIONS
+==============
+
+All Goal on Crate
+
+=======
+LEVELS
+=======
+
+SECTION Warmup
+
+########
+#......#
+#..NBG.#
+#.Ru...#
+#......#
+########
+
+SECTION Train Push
+
+#########
+#.......#
+#..NBBG.#
+#.Ru....#
+#.......#
+#########
+
+SECTION Corner Push
+
+########
+#......#
+#......#
+#..EBG.#
+#.ru...#
+#.U....#
+########
+
+SECTION Down Push
+
+########
+#......#
+#.T....#
+#.rE...#
+#..B...#
+#..G...#
+########
+
+SECTION Left Hook
+
+########
+#......#
+#......#
+#.GBN..#
+#..ru..#
+#..U...#
+########

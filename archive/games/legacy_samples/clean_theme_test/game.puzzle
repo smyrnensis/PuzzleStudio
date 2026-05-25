@@ -1,0 +1,8 @@
+title CleanThemeTest
+
+import "themes/clean.puzzle"
+
+const theme_title = "Clean Theme Test"
+const theme_subtitle = "Neutral readable baseline"
+
+import "../theme_test_common/game_body.puzzle"

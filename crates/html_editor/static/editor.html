@@ -1,0 +1,980 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>PuzzleStudio Editor</title>
+    <script>
+(() => {
+  const path = decodeURIComponent(window.location.pathname);
+  if (window.location.protocol === "file:" && path.endsWith("/crates/html_editor/static/editor.html")) {
+    window.location.replace(new URL("../../../editor.html", window.location.href).href);
+  }
+})();
+    </script>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+    <script src="/editor_boot.js"></script>
+    <link rel="stylesheet" href="/renderer.css">
+    <link rel="stylesheet" href="/editor.css">
+    <style id="gameStyle"></style>
+  </head>
+  <body>
+    <main class="editor-shell">
+      <header class="topbar">
+        <div class="title-block">
+          <div class="brand-lockup">
+            <svg class="app-mark" viewBox="88 96 336 336" aria-hidden="true" focusable="false">
+              <path fill="currentColor" d="M172 104H340Q352 104 352 116V232H404Q416 232 416 244V284Q416 296 404 296H352V412Q352 424 340 424H300Q288 424 288 412V360H224V412Q224 424 212 424H172Q160 424 160 412V296H108Q96 296 96 284V244Q96 232 108 232H160V116Q160 104 172 104Z"/>
+            </svg>
+            <h1>PuzzleStudio</h1>
+          </div>
+          <div class="preview-modebar" aria-label="Work panes">
+            <button id="playModeButton" class="is-active" type="button">Preview</button>
+            <button id="solverModeButton" type="button">Solve</button>
+            <button id="editModeButton" type="button">Level</button>
+            <button id="spriteModeButton" type="button">Sprite</button>
+            <button id="soundsTopbarButton" type="button">Sound</button>
+            <button id="psImportTopbarButton" type="button">PS Import</button>
+            <button id="docsTopbarButton" type="button">Docs</button>
+          </div>
+        </div>
+        <div class="toolbar" aria-label="Editor utilities">
+          <button id="downloadButton" class="icon-button topbar-icon-button" type="button" aria-label="Export HTML" title="Export HTML" disabled>
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+              <path d="M17 8l-5-5-5 5"></path>
+              <path d="M12 3v12"></path>
+            </svg>
+          </button>
+          <button id="themeToggleButton" class="theme-toggle icon-button" type="button" aria-label="Switch to light mode" title="Switch to light mode" aria-pressed="true">
+            <svg class="theme-toggle-sun" viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="12" cy="12" r="4"></circle>
+              <path d="M12 2v2"></path>
+              <path d="M12 20v2"></path>
+              <path d="m4.93 4.93 1.41 1.41"></path>
+              <path d="m17.66 17.66 1.41 1.41"></path>
+              <path d="M2 12h2"></path>
+              <path d="M20 12h2"></path>
+              <path d="m6.34 17.66-1.41 1.41"></path>
+              <path d="m19.07 4.93-1.41 1.41"></path>
+            </svg>
+            <svg class="theme-toggle-moon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M20.99 12.34A8.5 8.5 0 1 1 11.66 3.01 6.5 6.5 0 0 0 20.99 12.34z"></path>
+            </svg>
+          </button>
+          <input id="importFileInput" type="file" multiple hidden>
+          <input id="importFolderInput" type="file" webkitdirectory directory multiple hidden>
+        </div>
+      </header>
+
+      <section class="workbench" aria-label="Puzzle editor">
+        <button class="pane-restore-button pane-restore-explorer" type="button" data-pane-toggle="explorer" aria-label="Show file pane" title="Show file pane (Command+B)">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <rect x="3" y="4" width="18" height="16" rx="2"></rect>
+            <path d="M9 4v16"></path>
+          </svg>
+        </button>
+        <button class="pane-restore-button pane-restore-preview" type="button" data-pane-toggle="preview" aria-label="Show game pane" title="Show game pane">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <rect x="3" y="4" width="18" height="16" rx="2"></rect>
+            <path d="M15 4v16"></path>
+          </svg>
+        </button>
+        <aside class="explorer-pane" aria-label="Files">
+          <div class="explorer-header">
+            <span>Files</span>
+            <div class="explorer-tools" aria-label="File actions">
+              <button id="newDocumentButton" class="icon-button" type="button" aria-label="New puzzle" title="New puzzle">
+                <svg viewBox="0 0 24 24" aria-hidden="true" class="lucide lucide-file-plus-corner-icon lucide-file-plus-corner">
+                  <path d="M11.35 22H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.706.706l3.588 3.588A2.4 2.4 0 0 1 20 8v5.35"></path>
+                  <path d="M14 2v5a1 1 0 0 0 1 1h5"></path>
+                  <path d="M14 19h6"></path>
+                  <path d="M17 16v6"></path>
+                </svg>
+              </button>
+              <button id="fileActionsButton" class="icon-button" type="button" aria-haspopup="true" aria-expanded="false" aria-label="More file actions" title="More file actions">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <circle cx="12" cy="12" r="1"></circle>
+                  <circle cx="19" cy="12" r="1"></circle>
+                  <circle cx="5" cy="12" r="1"></circle>
+                </svg>
+              </button>
+              <div id="fileActionsMenu" class="file-actions-menu" role="menu" hidden>
+                <button id="newFolderButton" type="button" role="menuitem">New folder</button>
+                <button id="openProjectMenuButton" type="button" role="menuitem" data-open-project hidden>Open folder</button>
+                <button id="importButton" type="button" role="menuitem">Import files</button>
+                <button id="importFolderButton" type="button" role="menuitem">Import folder</button>
+              </div>
+              <button class="icon-button pane-toggle-button" type="button" data-pane-toggle="explorer" aria-label="Hide file pane" title="Hide file pane (Command+B)">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <rect x="3" y="4" width="18" height="16" rx="2"></rect>
+                  <path d="M9 4v16"></path>
+                </svg>
+              </button>
+            </div>
+          </div>
+          <div id="documentList" class="document-list" role="tree" aria-label="Puzzle files"></div>
+        </aside>
+
+        <div id="explorerSplitter" class="explorer-splitter" role="separator" aria-label="Resize file pane" aria-orientation="vertical"></div>
+
+        <section class="code-pane" aria-label="Puzzle source" data-work-pane="source">
+          <div class="document-tabbar" data-pane-drag-handle="source" draggable="true" title="Drag header to move source pane">
+            <div class="source-history-actions" aria-label="Source navigation">
+              <button id="sourceBackButton" class="icon-button source-history-button" type="button" aria-label="Back" title="Back" disabled>
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="m15 18-6-6 6-6"></path>
+                </svg>
+              </button>
+              <button id="sourceForwardButton" class="icon-button source-history-button" type="button" aria-label="Forward" title="Forward" disabled>
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="m9 18 6-6-6-6"></path>
+                </svg>
+              </button>
+            </div>
+            <div id="documentTabs" class="document-tabs" role="tablist" aria-label="Open files"></div>
+            <div class="document-tabbar-actions">
+              <button id="saveButton" class="icon-button document-save-button" type="button" aria-label="Save" title="Save (Command+S)">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
+                  <path d="M17 21v-8H7v8"></path>
+                  <path d="M7 3v5h8"></path>
+                </svg>
+              </button>
+              <button class="pane-close-button" type="button" data-pane-close="source" aria-label="Hide source pane" title="Hide source pane">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M18 6 6 18"></path>
+                  <path d="m6 6 12 12"></path>
+                </svg>
+              </button>
+            </div>
+          </div>
+          <div id="sourceEditorWrap" class="source-editor-wrap">
+            <pre id="sourceHighlight" class="source-highlight" aria-hidden="true"></pre>
+            <textarea id="sourceEditor" spellcheck="false" autocomplete="off" autocapitalize="off"></textarea>
+          </div>
+          <div class="code-footer">
+            <span id="editorStatusLabel" class="document-status">Idle</span>
+            <span id="sourceMeta">0 lines</span>
+          </div>
+        </section>
+
+        <div id="paneSplitter" class="pane-splitter" role="separator" aria-label="Resize panes" aria-orientation="vertical"></div>
+
+        <section class="preview-pane" aria-label="Game tools" data-work-pane="active-preview">
+          <div class="pane-header" data-pane-drag-handle="active-preview" draggable="true" title="Drag header to move tool pane">
+            <div class="pane-title">
+              <span id="gamePaneTitle">Preview</span>
+              <div id="levelPaneModeSwitch" class="sprite-pane-mode-switch level-pane-mode-switch" role="group" aria-label="Level editor mode" hidden>
+                <button class="sprite-pane-mode-button is-active" type="button" data-level-pane-mode="edit" aria-pressed="true">2D</button>
+                <button class="sprite-pane-mode-button" type="button" data-level-pane-mode="level3d" aria-pressed="false">3D</button>
+              </div>
+              <div id="spritePaneModeSwitch" class="sprite-pane-mode-switch" role="group" aria-label="Sprite editor mode" hidden>
+                <button class="sprite-pane-mode-button is-active" type="button" data-sprite-pane-mode="sprite" aria-pressed="true">2D</button>
+                <button class="sprite-pane-mode-button" type="button" data-sprite-pane-mode="sprite3d" aria-pressed="false">3D</button>
+              </div>
+              <button id="runButton" class="icon-button preview-run-button" type="button" aria-label="Refresh preview" title="Refresh preview">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M21 12a9 9 0 0 1-15.4 6.36"></path>
+                  <path d="M3 12a9 9 0 0 1 15.4-6.36"></path>
+                  <path d="M18 2v4h-4"></path>
+                  <path d="M6 22v-4h4"></path>
+                </svg>
+              </button>
+            </div>
+            <div class="pane-actions">
+              <span id="statusLabel" class="pane-status"></span>
+              <button class="pane-close-button" type="button" data-pane-close="active-preview" aria-label="Hide current tool pane" title="Hide current tool pane">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M18 6 6 18"></path>
+                  <path d="m6 6 12 12"></path>
+                </svg>
+              </button>
+            </div>
+          </div>
+          <div id="playPreview" class="play-preview">
+            <div id="previewFrameWrap" class="preview-frame-wrap">
+              <div id="previewViewport" class="preview-viewport">
+                <iframe
+                  id="previewFrame"
+                  class="preview-frame"
+                  title="Compiled puzzle preview"
+                  sandbox="allow-scripts"
+                  scrolling="no"
+                ></iframe>
+              </div>
+            </div>
+            <div id="previewLogSplitter" class="preview-log-splitter" role="separator" aria-label="Resize preview log" aria-orientation="horizontal"></div>
+            <div id="previewLogPanel" class="preview-log-panel" role="log" aria-label="Preview log" aria-live="polite">
+              <div class="preview-log-header">
+                <span>Log</span>
+                <button id="clearPreviewLogButton" class="preview-log-clear" type="button">Clear</button>
+              </div>
+              <div id="previewLogOutput" class="preview-log-output">
+                <div class="preview-log-line is-muted">$ waiting for preview output</div>
+              </div>
+            </div>
+          </div>
+          <div id="psImportPanel" class="ps-import-panel" hidden>
+            <div class="source-action-group ps-import-actions" role="group" aria-label="PuzzleScript import actions">
+              <button id="psImportConvertButton" class="source-action-button" type="button" aria-label="Generate .puzzle translation" title="Generate .puzzle translation">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M4 11V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.706.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-1"></path>
+                  <path d="M14 2v5a1 1 0 0 0 1 1h5"></path>
+                  <path d="M2 15h10"></path>
+                  <path d="m9 18 3-3-3-3"></path>
+                </svg>
+              </button>
+              <button id="psImportCopyButton" class="source-action-button source-copy-button" type="button" aria-label="Copy converted .puzzle" title="Copy converted .puzzle" disabled>
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <rect x="8" y="8" width="14" height="14" rx="2"></rect>
+                  <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path>
+                </svg>
+              </button>
+              <button id="psImportAddFileButton" class="source-action-button is-primary" type="button" aria-label="Add converted .puzzle file" title="Add converted .puzzle file" disabled>
+                <svg viewBox="0 0 24 24" aria-hidden="true" class="lucide lucide-file-plus-corner-icon lucide-file-plus-corner">
+                  <path d="M11.35 22H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.706.706l3.588 3.588A2.4 2.4 0 0 1 20 8v5.35"></path>
+                  <path d="M14 2v5a1 1 0 0 0 1 1h5"></path>
+                  <path d="M14 19h6"></path>
+                  <path d="M17 16v6"></path>
+                </svg>
+              </button>
+              <span id="psImportStatus" class="ps-import-status" aria-live="polite"></span>
+            </div>
+            <div class="ps-import-grid">
+              <label class="ps-import-field">
+                <span>PuzzleScript</span>
+                <textarea id="psImportSourceInput" spellcheck="false" autocomplete="off" autocapitalize="off"></textarea>
+              </label>
+              <label class="ps-import-field">
+                <span>.puzzle</span>
+                <textarea id="psImportOutput" spellcheck="false" autocomplete="off" autocapitalize="off" readonly></textarea>
+              </label>
+            </div>
+          </div>
+          <div id="docsPanel" class="docs-panel" hidden>
+            <div class="docs-toolbar">
+              <label class="docs-search">
+                <span>Search</span>
+                <input id="docsSearchInput" type="search" placeholder="Find syntax, rules, scenes" autocomplete="off">
+              </label>
+              <div class="docs-filter-tabs" role="group" aria-label="Documentation sections">
+                <button class="is-active" type="button">Guide</button>
+                <button type="button">Syntax</button>
+                <button type="button">Workflow</button>
+              </div>
+            </div>
+            <div class="docs-layout">
+              <nav class="docs-nav" aria-label="Documentation outline">
+                <button class="docs-nav-item is-active" type="button">
+                  <span class="docs-nav-kicker">Start</span>
+                  <span>Getting Started</span>
+                </button>
+                <button class="docs-nav-item" type="button">
+                  <span class="docs-nav-kicker">Core</span>
+                  <span>Rules and Patterns</span>
+                </button>
+                <button class="docs-nav-item" type="button">
+                  <span class="docs-nav-kicker">Model</span>
+                  <span>Layers and Levels</span>
+                </button>
+                <button class="docs-nav-item" type="button">
+                  <span class="docs-nav-kicker">Flow</span>
+                  <span>Scenes and Menus</span>
+                </button>
+              </nav>
+              <article class="docs-article">
+                <header class="docs-hero">
+                  <p class="docs-eyebrow">PuzzleStudio Docs</p>
+                  <h2>Authoring Reference</h2>
+                  <p>Compact notes for writing, previewing, and shipping `.puzzle` games from inside the editor.</p>
+                </header>
+                <section class="docs-section-grid" aria-label="Documentation overview">
+                  <a class="docs-card is-primary" href="#docs-tutorial">
+                    <span class="docs-card-label">Tutorial</span>
+                    <strong>Build a small Sokoban</strong>
+                    <span>Objects, layers, rules, levels, and win checks in one path.</span>
+                  </a>
+                  <a class="docs-card" href="#docs-rules">
+                    <span class="docs-card-label">Rules</span>
+                    <strong>Pattern rewrites</strong>
+                    <span>Read cells, match directions, and apply state changes.</span>
+                  </a>
+                  <a class="docs-card" href="#docs-scenes">
+                    <span class="docs-card-label">Scenes</span>
+                    <strong>Menus and flow</strong>
+                    <span>Title screens, level select, embedded boards, and buttons.</span>
+                  </a>
+                </section>
+                <section id="docs-tutorial" class="docs-section">
+                  <div>
+                    <p class="docs-section-label">Current Page</p>
+                    <h3>Getting Started</h3>
+                  </div>
+                  <p>The final text will live here. This pass fixes spacing, scan rhythm, code blocks, and navigation density before the full documentation is written.</p>
+                  <pre><code>rules {
+  once input directions [ Player | Box | no solid ] -> [ | Player | Box ]
+  once input directions [ Player | no solid ] -> [ | Player ]
+}</code></pre>
+                </section>
+              </article>
+            </div>
+          </div>
+          <div id="levelBuilder" class="level-builder" hidden>
+            <div class="level-controls">
+              <div class="source-target-control">
+                <label>
+                  <span>Levels</span>
+                  <input id="levelNamespaceInput" type="text" value="" spellcheck="false" autocomplete="off" autocapitalize="off">
+                </label>
+                <label>
+                  <span>Level</span>
+                  <input id="levelNameInput" type="text" value="new_level">
+                </label>
+              </div>
+            </div>
+            <div class="level-palette-toolbar" aria-label="Palette display controls" hidden></div>
+            <div id="levelPalette" class="level-palette" aria-label="Level tile palette">
+              <button id="levelPaletteCollapseButton" class="level-palette-toggle-button" type="button" aria-expanded="true" aria-label="Hide palette" title="Hide palette">
+                <svg class="palette-open-icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <rect x="4" y="4" width="6" height="6" rx="1"></rect>
+                  <rect x="14" y="4" width="6" height="6" rx="1"></rect>
+                  <rect x="4" y="14" width="6" height="6" rx="1"></rect>
+                  <rect x="14" y="14" width="6" height="6" rx="1"></rect>
+                </svg>
+                <svg class="palette-closed-icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <rect x="4" y="4" width="6" height="6" rx="1"></rect>
+                  <rect x="14" y="4" width="6" height="6" rx="1"></rect>
+                  <rect x="4" y="14" width="6" height="6" rx="1"></rect>
+                  <rect x="14" y="14" width="6" height="6" rx="1"></rect>
+                  <path d="M3 21 21 3"></path>
+                </svg>
+              </button>
+            </div>
+            <div class="level-board-wrap game-preview-scope">
+              <div id="levelBoardViewport" class="level-board-viewport">
+              <div class="level-board-editor" aria-label="Editable level puzzle">
+                <button class="edge-add edge-add-top" type="button" data-level-edge="top" aria-label="Add row above">+</button>
+                <button class="edge-add edge-add-left" type="button" data-level-edge="left" aria-label="Add column left">+</button>
+                <div id="levelBoard" class="level-board board"></div>
+                <button class="edge-add edge-add-right" type="button" data-level-edge="right" aria-label="Add column right">+</button>
+                <button class="edge-add edge-add-bottom" type="button" data-level-edge="bottom" aria-label="Add row below">+</button>
+              </div>
+              </div>
+              <span id="levelSizeLabel" class="level-size">9 × 5</span>
+            </div>
+            <div class="source-action-group source-preview-actions" role="group" aria-label="Level source actions">
+              <button id="levelPlaytestButton" class="source-action-button level-playtest-button" type="button" aria-label="Play level" title="Play level">
+                <svg class="level-play-icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <polygon points="8 5 19 12 8 19 8 5"></polygon>
+                </svg>
+                <svg class="level-stop-icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <rect x="7" y="7" width="10" height="10" rx="1"></rect>
+                </svg>
+              </button>
+              <button id="copyLevelButton" class="source-action-button source-copy-button" type="button" aria-label="Copy level source" title="Copy level source">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <rect x="8" y="8" width="14" height="14" rx="2"></rect>
+                  <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path>
+                </svg>
+              </button>
+              <button id="addLevelButton" class="source-action-button" type="button" aria-label="Add level to source" title="Add level to source">
+                <svg viewBox="0 0 24 24" aria-hidden="true" class="lucide lucide-file-plus-corner-icon lucide-file-plus-corner">
+                  <path d="M11.35 22H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.706.706l3.588 3.588A2.4 2.4 0 0 1 20 8v5.35"></path>
+                  <path d="M14 2v5a1 1 0 0 0 1 1h5"></path>
+                  <path d="M14 19h6"></path>
+                  <path d="M17 16v6"></path>
+                </svg>
+              </button>
+              <button id="updateLevelButton" class="source-action-button is-primary" type="button" aria-label="Update matching level in source" title="Update matching level in source">
+                <svg viewBox="0 0 24 24" aria-hidden="true" class="lucide lucide-file-pen-line-icon lucide-file-pen-line">
+                  <path d="M14.364 13.634a2 2 0 0 0-.506.854l-.837 2.87a.5.5 0 0 0 .62.62l2.87-.837a2 2 0 0 0 .854-.506l4.013-4.009a1 1 0 0 0-3.004-3.004z"></path>
+                  <path d="M14.487 7.858A1 1 0 0 1 14 7V2"></path>
+                  <path d="M20 19.645V20a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l2.516 2.516"></path>
+                  <path d="M8 18h1"></path>
+                </svg>
+              </button>
+            </div>
+            <pre id="levelSourcePreview" class="level-source-preview source-line-preview" aria-label="Level source preview"></pre>
+          </div>
+          <div id="solverPanel" class="solver-panel" hidden>
+            <div class="solver-controls">
+              <span class="solver-action-buttons" aria-label="Solver controls">
+                <button id="solveLevelButton" type="button" aria-label="Solve level" title="Solve level">
+                  <svg class="solve-level-icon" viewBox="0 0 24 24" aria-hidden="true">
+                    <circle cx="6" cy="19" r="3"></circle>
+                    <path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"></path>
+                    <circle cx="18" cy="5" r="3"></circle>
+                  </svg>
+                  <svg class="cancel-solve-icon" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M6 6l12 12"></path>
+                    <path d="M18 6 6 18"></path>
+                  </svg>
+                  <span class="solve-button-label">Solve</span>
+                </button>
+                <span class="solution-step-controls" aria-label="Solution playback controls">
+                  <button id="solutionPrevButton" class="solution-step-button solution-step-prev" type="button" aria-label="Previous step" title="Previous step" disabled></button>
+                  <button id="solutionPlayButton" class="solution-step-button solution-play-button" type="button" aria-label="Play solution" title="Play solution" disabled></button>
+                  <button id="solutionNextButton" class="solution-step-button solution-step-next" type="button" aria-label="Next step" title="Next step" disabled></button>
+                  <select id="solutionSpeedSelect" class="solution-speed-select" aria-label="Playback speed" title="Playback speed" disabled>
+                    <option value="0.5">0.5x</option>
+                    <option value="1" selected>1x</option>
+                    <option value="2">2x</option>
+                    <option value="4">4x</option>
+                  </select>
+                  <button id="solutionResetButton" class="solution-step-button solution-step-reset" type="button" aria-label="Reset solution preview" title="Reset solution preview" disabled>
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M21 12a9 9 0 1 1-2.64-6.36L21 8"></path>
+                      <path d="M21 3v5h-5"></path>
+                    </svg>
+                  </button>
+                </span>
+              </span>
+              <span id="levelSolveStatus" class="level-solve-status" aria-live="polite">Ready to solve</span>
+              <div id="levelSolutionControls" class="level-solution-controls is-empty">
+                <span class="solution-seek-group">
+                  <input id="solutionSeekInput" class="solution-seek-input" type="range" min="0" max="0" step="1" value="0" aria-label="Solution step" disabled>
+                  <output id="solutionStepText" class="solution-step-text" aria-live="polite">0/0</output>
+                </span>
+                <span class="solution-copy-group">
+                  <span class="solution-format-label">Solution:</span>
+                  <output id="solutionText" class="solution-text" aria-live="polite">No solution yet</output>
+                  <button id="solutionExportButton" class="solution-copy-button" type="button" aria-label="Copy solution" title="Copy solution" disabled>
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <rect x="8" y="8" width="14" height="14" rx="2"></rect>
+                      <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path>
+                    </svg>
+                  </button>
+                </span>
+              </div>
+            </div>
+            <div class="solver-board-wrap game-preview-scope">
+              <div id="solverBoardViewport" class="solver-board-viewport">
+                <div id="solverBoard" class="solver-board board" tabindex="0" aria-label="Solver state preview"></div>
+              </div>
+            </div>
+          </div>
+          <div id="spriteBuilder" class="sprite-builder" hidden>
+            <div class="sprite-controls">
+              <div class="source-target-control sprite-source-target">
+                <label class="sprite-name-control">
+                  <span>Name</span>
+                  <input id="spriteNameInput" type="text" value="Sprite" spellcheck="false" autocomplete="off" autocapitalize="off">
+                </label>
+              </div>
+              <div class="sprite-transform-bar" aria-label="Sprite transform settings">
+                <label class="sprite-size-control sprite-compact-control">
+                  <span>Size</span>
+                  <input id="spriteSizeInput" type="number" min="1" max="64" value="5" inputmode="numeric">
+                </label>
+                <div class="sprite-scale-control sprite-compact-control" role="group" aria-label="Sprite scale">
+                  <span class="sprite-control-label">Scale</span>
+                  <div class="sprite-scale-group">
+                    <span class="sprite-scale-prefix" aria-hidden="true">x</span>
+                    <input id="spriteScaleInput" type="number" min="2" max="64" value="2" inputmode="numeric" aria-label="Scale multiplier">
+                    <button id="spriteScaleDownButton" class="sprite-scale-step-button" type="button" aria-label="Scale down sprite" title="Scale down sprite">
+                      <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M4 14h6v6"></path>
+                        <path d="M10 14l-7 7"></path>
+                        <path d="M20 10h-6V4"></path>
+                        <path d="M14 10l7-7"></path>
+                      </svg>
+                    </button>
+                    <button id="spriteScaleUpButton" class="sprite-scale-step-button" type="button" aria-label="Scale up sprite" title="Scale up sprite">
+                      <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M15 3h6v6"></path>
+                        <path d="M21 3l-7 7"></path>
+                        <path d="M9 21H3v-6"></path>
+                        <path d="M3 21l7-7"></path>
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div id="spritePalette" class="sprite-palette" aria-label="Sprite character palette"></div>
+            <div class="sprite-board-wrap">
+              <div id="spriteBoard" class="sprite-board" aria-label="Editable sprite puzzle"></div>
+            </div>
+            <div class="sprite-toolbar" role="toolbar" aria-label="Sprite actions">
+              <button id="spriteRotateLeftButton" class="sprite-icon-button" type="button" aria-label="Rotate left" title="Rotate left">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M3 12a9 9 0 1 0 2.64-6.36L3 8"></path>
+                  <path d="M3 3v5h5"></path>
+                </svg>
+              </button>
+              <button id="spriteRotateRightButton" class="sprite-icon-button" type="button" aria-label="Rotate right" title="Rotate right">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M21 12a9 9 0 1 1-2.64-6.36L21 8"></path>
+                  <path d="M21 3v5h-5"></path>
+                </svg>
+              </button>
+              <button id="spriteFlipHorizontalButton" class="sprite-icon-button" type="button" aria-label="Flip horizontal" title="Flip horizontal">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M8 3H5a2 2 0 0 0-2 2v14c0 1.1.9 2 2 2h3"></path>
+                  <path d="M16 3h3a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-3"></path>
+                  <path d="M12 20v2"></path>
+                  <path d="M12 14v2"></path>
+                  <path d="M12 8v2"></path>
+                  <path d="M12 2v2"></path>
+                </svg>
+              </button>
+              <button id="spriteFlipVerticalButton" class="sprite-icon-button" type="button" aria-label="Flip vertical" title="Flip vertical">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M21 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v3"></path>
+                  <path d="M21 16v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-3"></path>
+                  <path d="M4 12H2"></path>
+                  <path d="M10 12H8"></path>
+                  <path d="M16 12h-2"></path>
+                  <path d="M22 12h-2"></path>
+                </svg>
+              </button>
+              <button id="spriteFillButton" class="sprite-fill-button sprite-icon-button" type="button" aria-label="Fill sprite" title="Fill sprite">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="m19 11-8-8-8.6 8.6a2 2 0 0 0 0 2.8l5.2 5.2a2 2 0 0 0 2.8 0L19 11Z"></path>
+                  <path d="m5 2 5 5"></path>
+                  <path d="M2 13h15"></path>
+                  <path d="M22 20a2 2 0 1 1-4 0c0-1.6 1.7-2.4 2-4 .3 1.6 2 2.4 2 4Z"></path>
+                </svg>
+              </button>
+              <button id="spriteClearButton" class="sprite-clear-button sprite-icon-button" type="button" aria-label="Clear sprite" title="Clear sprite">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M3 6h18"></path>
+                  <path d="M8 6V4h8v2"></path>
+                  <path d="M19 6l-1 14H6L5 6"></path>
+                  <path d="M10 11v5"></path>
+                  <path d="M14 11v5"></path>
+                </svg>
+              </button>
+            </div>
+            <div class="sprite-preview-panel">
+              <div class="source-action-group source-preview-actions sprite-source-actions" role="group" aria-label="Sprite source actions">
+                <button id="spriteExportButton" class="source-action-button source-copy-button" type="button" aria-label="Copy sprite" title="Copy sprite">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <rect x="8" y="8" width="14" height="14" rx="2"></rect>
+                    <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path>
+                  </svg>
+                </button>
+                <button id="spriteInsertButton" class="source-action-button" type="button" aria-label="Add sprite to source" title="Add sprite to source">
+                  <svg viewBox="0 0 24 24" aria-hidden="true" class="lucide lucide-file-plus-corner-icon lucide-file-plus-corner">
+                    <path d="M11.35 22H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.706.706l3.588 3.588A2.4 2.4 0 0 1 20 8v5.35"></path>
+                    <path d="M14 2v5a1 1 0 0 0 1 1h5"></path>
+                    <path d="M14 19h6"></path>
+                    <path d="M17 16v6"></path>
+                  </svg>
+                </button>
+                <button id="spriteUpdateButton" class="source-action-button is-primary" type="button" aria-label="Update matching sprite in source" title="Update matching sprite in source">
+                  <svg viewBox="0 0 24 24" aria-hidden="true" class="lucide lucide-file-pen-line-icon lucide-file-pen-line">
+                    <path d="M14.364 13.634a2 2 0 0 0-.506.854l-.837 2.87a.5.5 0 0 0 .62.62l2.87-.837a2 2 0 0 0 .854-.506l4.013-4.009a1 1 0 0 0-3.004-3.004z"></path>
+                    <path d="M14.487 7.858A1 1 0 0 1 14 7V2"></path>
+                    <path d="M20 19.645V20a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l2.516 2.516"></path>
+                    <path d="M8 18h1"></path>
+                  </svg>
+                </button>
+              </div>
+              <div id="spriteTextPreview" class="sprite-text-preview" aria-label="Sprite ASCII preview"></div>
+              <span id="spriteActionStatus" class="sprite-action-status" aria-live="polite"></span>
+            </div>
+          </div>
+          <div id="sprite3dBuilder" class="sprite-builder sprite3d-builder" hidden>
+            <div class="sprite-controls">
+              <div class="source-target-control sprite-source-target">
+                <label class="sprite-name-control">
+                  <span>Name</span>
+                  <input id="sprite3dNameInput" type="text" value="VoxelSprite" spellcheck="false" autocomplete="off" autocapitalize="off">
+                </label>
+              </div>
+              <div class="sprite-transform-bar sprite3d-transform-bar" aria-label="3D sprite transform settings">
+                <label class="sprite-size-control sprite-compact-control">
+                  <span>Size</span>
+                  <input id="sprite3dSizeInput" type="number" min="1" max="64" value="5" inputmode="numeric">
+                </label>
+                <div class="sprite-scale-control sprite3d-scale-control sprite-compact-control" role="group" aria-label="3D sprite scale">
+                  <span class="sprite-control-label">Scale</span>
+                  <div class="sprite-scale-group">
+                    <span class="sprite-scale-prefix" aria-hidden="true">x</span>
+                    <input id="sprite3dScaleInput" type="number" min="2" max="64" value="2" inputmode="numeric" aria-label="3D sprite scale multiplier">
+                    <button id="sprite3dScaleDownButton" class="sprite-scale-step-button" type="button" aria-label="Scale down 3D sprite" title="Scale down 3D sprite">
+                      <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M4 14h6v6"></path>
+                        <path d="M10 14l-7 7"></path>
+                        <path d="M20 10h-6V4"></path>
+                        <path d="M14 10l7-7"></path>
+                      </svg>
+                    </button>
+                    <button id="sprite3dScaleUpButton" class="sprite-scale-step-button" type="button" aria-label="Scale up 3D sprite" title="Scale up 3D sprite">
+                      <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M15 3h6v6"></path>
+                        <path d="M21 3l-7 7"></path>
+                        <path d="M9 21H3v-6"></path>
+                        <path d="M3 21l7-7"></path>
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div id="sprite3dPalette" class="sprite-palette sprite3d-palette" aria-label="3D sprite palette"></div>
+            <div class="sprite3d-workspace">
+                <div class="sprite-board-wrap sprite3d-slice-wrap">
+                  <div id="sprite3dSliceBoard" class="sprite-board sprite3d-slice-board" aria-label="Editable 3D sprite slice"></div>
+                  <div class="sprite-toolbar sprite3d-edit-actions" role="toolbar" aria-label="3D sprite edit actions">
+                    <button id="sprite3dRotatePlaneLeftButton" class="sprite-icon-button" type="button" aria-label="Rotate current plane counterclockwise" title="Rotate current plane counterclockwise">
+                      <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M3 12a9 9 0 1 0 2.64-6.36L3 8"></path>
+                        <path d="M3 3v5h5"></path>
+                      </svg>
+                    </button>
+                    <button id="sprite3dRotatePlaneRightButton" class="sprite-icon-button" type="button" aria-label="Rotate current plane clockwise" title="Rotate current plane clockwise">
+                      <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M21 12a9 9 0 1 1-2.64-6.36L21 8"></path>
+                        <path d="M21 3v5h-5"></path>
+                      </svg>
+                    </button>
+                    <button id="sprite3dFlipPlaneHorizontalButton" class="sprite-icon-button" type="button" aria-label="Flip current plane horizontally" title="Flip current plane horizontally">
+                      <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M8 3H5a2 2 0 0 0-2 2v14c0 1.1.9 2 2 2h3"></path>
+                        <path d="M16 3h3a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-3"></path>
+                        <path d="M12 20v2"></path>
+                        <path d="M12 14v2"></path>
+                        <path d="M12 8v2"></path>
+                        <path d="M12 2v2"></path>
+                      </svg>
+                    </button>
+                    <button id="sprite3dFlipPlaneVerticalButton" class="sprite-icon-button" type="button" aria-label="Flip current plane vertically" title="Flip current plane vertically">
+                      <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M21 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v3"></path>
+                        <path d="M21 16v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-3"></path>
+                        <path d="M4 12H2"></path>
+                        <path d="M10 12H8"></path>
+                        <path d="M16 12h-2"></path>
+                        <path d="M22 12h-2"></path>
+                      </svg>
+                    </button>
+                    <button id="sprite3dCopySliceButton" class="sprite-icon-button" type="button" aria-label="Copy current 2D slice" title="Copy current 2D slice">
+                      <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <rect x="8" y="8" width="12" height="12" rx="2"></rect>
+                        <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path>
+                      </svg>
+                    </button>
+                    <button id="sprite3dPasteSliceButton" class="sprite-icon-button" type="button" aria-label="Paste copied 2D slice to current slice" title="Paste copied 2D slice" disabled>
+                      <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path>
+                        <rect x="8" y="2" width="8" height="4" rx="1"></rect>
+                        <path d="M9 14h6"></path>
+                        <path d="M12 11v6"></path>
+                      </svg>
+                    </button>
+                    <span class="sprite3d-edit-separator" aria-hidden="true"></span>
+                    <button id="sprite3dScopeButton" class="sprite3d-scope-button sprite-icon-button" type="button" aria-label="Edit scope: current 2D slice" title="2D scope: affect current slice">
+                      <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <rect x="5" y="5" width="14" height="14" rx="1.8"></rect>
+                      </svg>
+                    </button>
+                    <button id="sprite3dFillButton" class="sprite-fill-button sprite3d-fill-button sprite-icon-button" type="button" aria-label="Fill current 2D slice" title="Fill current 2D slice">
+                      <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="m19 11-8-8-8.6 8.6a2 2 0 0 0 0 2.8l5.2 5.2a2 2 0 0 0 2.8 0L19 11Z"></path>
+                        <path d="m5 2 5 5"></path>
+                        <path d="M2 13h15"></path>
+                        <path d="M22 20a2 2 0 1 1-4 0c0-1.6 1.7-2.4 2-4 .3 1.6 2 2.4 2 4Z"></path>
+                      </svg>
+                    </button>
+                    <button id="sprite3dClearButton" class="sprite-clear-button sprite3d-clear-button sprite-icon-button" type="button" aria-label="Clear current 2D slice" title="Clear current 2D slice">
+                      <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M18 6 6 18"></path>
+                        <path d="m6 6 12 12"></path>
+                      </svg>
+                    </button>
+                  </div>
+                  <div class="sprite3d-slice-axis-control" role="group" aria-label="3D sprite slice and axis">
+                    <span class="sprite3d-layer-axis-label">Slices</span>
+                    <button id="sprite3dPreviousSliceButton" class="sprite-icon-button" type="button" aria-label="Move to lower slice" title="Lower slice">
+                      <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M15 18l-6-6 6-6"></path>
+                      </svg>
+                    </button>
+                    <span class="sprite3d-slice-value-wrap">
+                      <input id="sprite3dSliceValue" class="sprite3d-layer-axis-value" type="number" min="1" max="5" value="1" inputmode="numeric" aria-label="Current 3D sprite slice">
+                      <span class="sprite3d-slice-total-separator" aria-hidden="true">/</span>
+                      <span id="sprite3dSliceTotal" class="sprite3d-slice-total">5</span>
+                    </span>
+                    <button id="sprite3dNextSliceButton" class="sprite-icon-button" type="button" aria-label="Move to higher slice" title="Higher slice">
+                      <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M9 18l6-6-6-6"></path>
+                      </svg>
+                    </button>
+                    <span class="sprite3d-edit-separator" aria-hidden="true"></span>
+                    <span class="sprite3d-layer-axis-label">Axis</span>
+                    <div class="sprite3d-axis-control sprite3d-toolbar-axis" role="group" aria-label="3D sprite slice axis">
+                      <div class="sprite3d-axis-buttons">
+                        <button class="sprite3d-axis-button" type="button" data-sprite3d-axis="x" aria-pressed="false" title="Edit YZ slices">X</button>
+                        <button class="sprite3d-axis-button" type="button" data-sprite3d-axis="y" aria-pressed="false" title="Edit XZ slices">Y</button>
+                        <button class="sprite3d-axis-button is-active" type="button" data-sprite3d-axis="z" aria-pressed="true" title="Edit XY slices">Z</button>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="source-action-group source-preview-actions sprite-source-actions sprite3d-source-actions" role="group" aria-label="3D sprite source actions">
+                    <button id="sprite3dExportButton" class="source-action-button source-copy-button" type="button" aria-label="Copy 3D sprite" title="Copy 3D sprite">
+                      <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <rect x="8" y="8" width="14" height="14" rx="2"></rect>
+                        <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path>
+                      </svg>
+                    </button>
+                    <button id="sprite3dInsertButton" class="source-action-button" type="button" aria-label="Add 3D sprite to source" title="Add 3D sprite to source">
+                      <svg viewBox="0 0 24 24" aria-hidden="true" class="lucide lucide-file-plus-corner-icon lucide-file-plus-corner">
+                        <path d="M11.35 22H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.706.706l3.588 3.588A2.4 2.4 0 0 1 20 8v5.35"></path>
+                        <path d="M14 2v5a1 1 0 0 0 1 1h5"></path>
+                        <path d="M14 19h6"></path>
+                        <path d="M17 16v6"></path>
+                      </svg>
+                    </button>
+                    <button id="sprite3dUpdateButton" class="source-action-button is-primary" type="button" aria-label="Update matching 3D sprite in source" title="Update matching 3D sprite in source">
+                      <svg viewBox="0 0 24 24" aria-hidden="true" class="lucide lucide-file-pen-line-icon lucide-file-pen-line">
+                        <path d="M14.364 13.634a2 2 0 0 0-.506.854l-.837 2.87a.5.5 0 0 0 .62.62l2.87-.837a2 2 0 0 0 .854-.506l4.013-4.009a1 1 0 0 0-3.004-3.004z"></path>
+                        <path d="M14.487 7.858A1 1 0 0 1 14 7V2"></path>
+                        <path d="M20 19.645V20a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l2.516 2.516"></path>
+                        <path d="M8 18h1"></path>
+                      </svg>
+                    </button>
+                  </div>
+                  <pre id="sprite3dTextPreview" class="sprite-text-preview sprite3d-text-preview" aria-label="3D sprite source preview"></pre>
+                  <span id="sprite3dActionStatus" class="sprite-action-status" aria-live="polite"></span>
+                </div>
+                <div class="sprite3d-preview-column">
+                  <div class="sprite3d-preview-wrap">
+                    <canvas id="sprite3dPreviewCanvas" class="sprite3d-preview-canvas" width="360" height="320" aria-label="3D sprite preview"></canvas>
+                    <div class="sprite3d-camera-controls" aria-label="3D preview camera controls">
+                      <label>
+                        <span title="yaw">Y</span>
+                        <button id="sprite3dCameraYawScrub" class="sprite3d-camera-scrub" type="button" data-sprite3d-camera="yaw" aria-label="Drag horizontally to adjust yaw" title="Drag horizontally to adjust yaw">340</button>
+                      </label>
+                      <label>
+                        <span title="pitch">P</span>
+                        <button id="sprite3dCameraPitchScrub" class="sprite3d-camera-scrub" type="button" data-sprite3d-camera="pitch" aria-label="Drag horizontally to adjust pitch" title="Drag horizontally to adjust pitch">28</button>
+                      </label>
+                      <label>
+                        <span title="zoom">Z</span>
+                        <button id="sprite3dCameraZoomScrub" class="sprite3d-camera-scrub" type="button" data-sprite3d-camera="zoom" aria-label="Drag horizontally to adjust zoom" title="Drag horizontally to adjust zoom">1</button>
+                      </label>
+                      <button id="sprite3dResetCameraButton" class="sprite3d-preview-reset-button sprite-icon-button" type="button" aria-label="Reset 3D preview camera" title="Reset camera">
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                          <path d="M21 12a9 9 0 0 1-15.4 6.36"></path>
+                          <path d="M3 12a9 9 0 0 1 15.4-6.36"></path>
+                          <path d="M18 2v4h-4"></path>
+                          <path d="M6 22v-4h4"></path>
+                        </svg>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          <div id="level3dBuilder" class="level-builder level3d-builder" hidden>
+            <div class="level-controls level3d-controls">
+              <label>
+                <span>Bundle</span>
+                <input id="level3dBundleInput" type="text" value="levels" spellcheck="false" autocomplete="off" autocapitalize="off">
+              </label>
+              <label>
+                <span>Name</span>
+                <input id="level3dNameInput" type="text" value="level_1" spellcheck="false" autocomplete="off" autocapitalize="off">
+              </label>
+              <span id="level3dSizeLabel" class="level3d-size-label">0 x 0 x 0</span>
+            </div>
+            <div id="level3dPalette" class="level-palette level3d-palette" aria-label="3D level palette"></div>
+            <div class="level3d-workspace">
+              <div class="level3d-runtime-wrap">
+                <canvas
+                  id="level3dStageCanvas"
+                  class="level3d-stage-canvas"
+                  width="960"
+                  height="620"
+                  tabindex="0"
+                  aria-label="3D level stage preview"
+                ></canvas>
+              </div>
+              <div class="level3d-source-panel">
+                <div class="source-action-group source-preview-actions level3d-source-actions" role="group" aria-label="3D level source actions">
+                  <button id="copyLevel3dButton" class="source-action-button source-copy-button" type="button" aria-label="Copy 3D level" title="Copy 3D level">
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <rect x="8" y="8" width="14" height="14" rx="2"></rect>
+                      <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path>
+                    </svg>
+                  </button>
+                  <button id="addLevel3dButton" class="source-action-button" type="button" aria-label="Add 3D level to source" title="Add 3D level to source">
+                    <svg viewBox="0 0 24 24" aria-hidden="true" class="lucide lucide-file-plus-corner-icon lucide-file-plus-corner">
+                      <path d="M11.35 22H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.706.706l3.588 3.588A2.4 2.4 0 0 1 20 8v5.35"></path>
+                      <path d="M14 2v5a1 1 0 0 0 1 1h5"></path>
+                      <path d="M14 19h6"></path>
+                      <path d="M17 16v6"></path>
+                    </svg>
+                  </button>
+                  <button id="updateLevel3dButton" class="source-action-button is-primary" type="button" aria-label="Update matching 3D level in source" title="Update matching 3D level in source">
+                    <svg viewBox="0 0 24 24" aria-hidden="true" class="lucide lucide-file-pen-line-icon lucide-file-pen-line">
+                      <path d="M14.364 13.634a2 2 0 0 0-.506.854l-.837 2.87a.5.5 0 0 0 .62.62l2.87-.837a2 2 0 0 0 .854-.506l4.013-4.009a1 1 0 0 0-3.004-3.004z"></path>
+                      <path d="M14.487 7.858A1 1 0 0 1 14 7V2"></path>
+                      <path d="M20 19.645V20a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l2.516 2.516"></path>
+                      <path d="M8 18h1"></path>
+                    </svg>
+                  </button>
+                </div>
+                <pre id="level3dSourcePreview" class="sprite-text-preview level3d-source-preview" aria-label="3D level source preview"></pre>
+                <span id="level3dActionStatus" class="sprite-action-status" aria-live="polite"></span>
+              </div>
+            </div>
+          </div>
+          <div id="soundsBuilder" class="sounds-builder" hidden>
+            <div class="sounds-mode-switch" role="group" aria-label="Sounds generator mode">
+              <button id="soundsSfxModeButton" class="is-active" type="button" aria-pressed="true">SFX</button>
+              <button id="soundsMusicModeButton" type="button" aria-pressed="false">Music</button>
+            </div>
+
+            <section id="soundsSfxPanel" class="sounds-panel" aria-label="SFX generator">
+              <div class="sounds-transport">
+                <button id="soundsSfxPlayButton" class="sounds-icon-button" type="button" aria-label="Play SFX" title="Play SFX">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <polygon points="8 5 19 12 8 19 8 5"></polygon>
+                  </svg>
+                </button>
+                <button id="soundsSfxRandomButton" class="sounds-icon-button" type="button" aria-label="Randomize SFX" title="Randomize SFX">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M16 3h5v5"></path>
+                    <path d="M4 20 21 3"></path>
+                    <path d="M21 16v5h-5"></path>
+                    <path d="M15 15l6 6"></path>
+                    <path d="M4 4l5 5"></path>
+                  </svg>
+                </button>
+              </div>
+              <div class="sounds-controls">
+                <div class="source-target-control sounds-source-target">
+                  <label>
+                    <span>Title</span>
+                    <input id="soundsSfxTitleInput" type="text" spellcheck="false" autocomplete="off" autocapitalize="off" placeholder="sfx" aria-label="SFX title">
+                  </label>
+                </div>
+                <label>
+                  <span>Seed</span>
+                  <input id="soundsSfxSeedInput" type="text" spellcheck="false" autocomplete="off" autocapitalize="off">
+                </label>
+                <label>
+                  <span>Type</span>
+                  <select id="soundsSfxTypeSelect"></select>
+                </label>
+              </div>
+            </section>
+
+            <section id="soundsMusicPanel" class="sounds-panel" aria-label="Music generator" hidden>
+              <div class="sounds-transport">
+                <button id="soundsMusicPlayButton" class="sounds-icon-button" type="button" aria-label="Play music" title="Play music">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <polygon points="8 5 19 12 8 19 8 5"></polygon>
+                  </svg>
+                </button>
+                <button id="soundsMusicRandomButton" class="sounds-icon-button" type="button" aria-label="Randomize music" title="Randomize music">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M16 3h5v5"></path>
+                    <path d="M4 20 21 3"></path>
+                    <path d="M21 16v5h-5"></path>
+                    <path d="M15 15l6 6"></path>
+                    <path d="M4 4l5 5"></path>
+                  </svg>
+                </button>
+                <input id="soundsMusicProgress" class="sounds-progress" type="range" min="0" max="1" step="0.001" value="0" aria-label="Music playhead">
+              </div>
+              <div class="sounds-controls sounds-music-controls">
+                <div class="source-target-control sounds-source-target">
+                  <label>
+                    <span>Title</span>
+                    <input id="soundsMusicTitleInput" type="text" spellcheck="false" autocomplete="off" autocapitalize="off" placeholder="music" aria-label="Music title">
+                  </label>
+                </div>
+                <label>
+                  <span>Seed</span>
+                  <input id="soundsMusicSeedInput" type="text" spellcheck="false" autocomplete="off" autocapitalize="off">
+                </label>
+                <div class="sounds-slider-puzzle">
+                  <label>
+                    <span>Tone <output id="soundsMusicToneValue">0.62</output></span>
+                    <input id="soundsMusicToneInput" type="range" min="0" max="1" step="0.01" value="0.62">
+                  </label>
+                  <label>
+                    <span>BPM <output id="soundsMusicBpmValue">104</output></span>
+                    <input id="soundsMusicBpmInput" type="range" min="40" max="180" step="1" value="104">
+                  </label>
+                  <label>
+                    <span>Volume <output id="soundsMusicVolumeValue">50%</output></span>
+                    <input id="soundsMusicVolumeInput" type="range" min="0" max="1" step="0.01" value="0.5">
+                  </label>
+                </div>
+              </div>
+            </section>
+
+            <div id="soundsSfxSourceActions" class="source-action-group source-preview-actions sounds-source-actions" role="group" aria-label="SFX source actions">
+              <button id="soundsSfxCopyButton" class="source-action-button source-copy-button" type="button" aria-label="Copy SFX sound line" title="Copy SFX sound line">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <rect x="8" y="8" width="14" height="14" rx="2"></rect>
+                  <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path>
+                </svg>
+              </button>
+              <button id="soundsSfxInsertButton" class="source-action-button" type="button" aria-label="Add SFX to source" title="Add SFX to source">
+                <svg viewBox="0 0 24 24" aria-hidden="true" class="lucide lucide-file-plus-corner-icon lucide-file-plus-corner">
+                  <path d="M11.35 22H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.706.706l3.588 3.588A2.4 2.4 0 0 1 20 8v5.35"></path>
+                  <path d="M14 2v5a1 1 0 0 0 1 1h5"></path>
+                  <path d="M14 19h6"></path>
+                  <path d="M17 16v6"></path>
+                </svg>
+              </button>
+              <button id="soundsSfxUpdateButton" class="source-action-button is-primary" type="button" aria-label="Update matching SFX in source" title="Update matching SFX in source">
+                <svg viewBox="0 0 24 24" aria-hidden="true" class="lucide lucide-file-pen-line-icon lucide-file-pen-line">
+                  <path d="M14.364 13.634a2 2 0 0 0-.506.854l-.837 2.87a.5.5 0 0 0 .62.62l2.87-.837a2 2 0 0 0 .854-.506l4.013-4.009a1 1 0 0 0-3.004-3.004z"></path>
+                  <path d="M14.487 7.858A1 1 0 0 1 14 7V2"></path>
+                  <path d="M20 19.645V20a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l2.516 2.516"></path>
+                  <path d="M8 18h1"></path>
+                </svg>
+              </button>
+            </div>
+            <div id="soundsMusicSourceActions" class="source-action-group source-preview-actions sounds-source-actions" role="group" aria-label="Music source actions" hidden>
+              <button id="soundsMusicCopyButton" class="source-action-button source-copy-button" type="button" aria-label="Copy music sound line" title="Copy music sound line">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <rect x="8" y="8" width="14" height="14" rx="2"></rect>
+                  <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path>
+                </svg>
+              </button>
+              <button id="soundsMusicInsertButton" class="source-action-button" type="button" aria-label="Add music to source" title="Add music to source">
+                <svg viewBox="0 0 24 24" aria-hidden="true" class="lucide lucide-file-plus-corner-icon lucide-file-plus-corner">
+                  <path d="M11.35 22H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.706.706l3.588 3.588A2.4 2.4 0 0 1 20 8v5.35"></path>
+                  <path d="M14 2v5a1 1 0 0 0 1 1h5"></path>
+                  <path d="M14 19h6"></path>
+                  <path d="M17 16v6"></path>
+                </svg>
+              </button>
+              <button id="soundsMusicUpdateButton" class="source-action-button is-primary" type="button" aria-label="Update matching music in source" title="Update matching music in source">
+                <svg viewBox="0 0 24 24" aria-hidden="true" class="lucide lucide-file-pen-line-icon lucide-file-pen-line">
+                  <path d="M14.364 13.634a2 2 0 0 0-.506.854l-.837 2.87a.5.5 0 0 0 .62.62l2.87-.837a2 2 0 0 0 .854-.506l4.013-4.009a1 1 0 0 0-3.004-3.004z"></path>
+                  <path d="M14.487 7.858A1 1 0 0 1 14 7V2"></path>
+                  <path d="M20 19.645V20a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l2.516 2.516"></path>
+                  <path d="M8 18h1"></path>
+                </svg>
+              </button>
+            </div>
+            <pre id="soundsOutput" class="sounds-output" aria-live="polite"></pre>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <script src="/game.visuals.js"></script>
+    <script src="/renderer.js"></script>
+    <script src="/sound-generator.js"></script>
+    <script src="/editor_theme_imports.js"></script>
+    <script src="/editor_dom.js"></script>
+    <script src="/editor_source.js"></script>
+    <script src="/editor_level3d.js"></script>
+    <script src="/editor.js"></script>
+    <script src="/editor_sprite.js"></script>
+    <script src="/puzzle3_visual_core.js"></script>
+    <script src="/editor_sprite3d.js"></script>
+    <script src="/editor_sounds.js"></script>
+  </body>
+</html>

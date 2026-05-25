@@ -1,0 +1,287 @@
+title Snake Sokoban
+author PuzzleStudio
+
+========
+OBJECTS
+========
+
+Background
+#f5f3ef
+
+Wall
+#334155 #64748b
+11111
+11111
+11111
+11111
+11111
+
+Goal
+#7f6cff
+00000
+00000
+00000
+00000
+00000
+
+Crate
+#8a5316 #d18a3c
+00000
+01110
+01010
+01110
+00000
+
+HeadUp
+#37c871
+00000
+00000
+00000
+00000
+00000
+
+HeadDown
+#37c871
+00000
+00000
+00000
+00000
+00000
+
+HeadLeft
+#37c871
+00000
+00000
+00000
+00000
+00000
+
+HeadRight
+#37c871
+00000
+00000
+00000
+00000
+00000
+
+BodyUp
+#1ba35b
+00000
+00000
+00000
+00000
+00000
+
+BodyDown
+#1ba35b
+00000
+00000
+00000
+00000
+00000
+
+BodyLeft
+#1ba35b
+00000
+00000
+00000
+00000
+00000
+
+BodyRight
+#1ba35b
+00000
+00000
+00000
+00000
+00000
+
+TailUp
+#107545
+00000
+00000
+00000
+00000
+00000
+
+TailDown
+#107545
+00000
+00000
+00000
+00000
+00000
+
+TailLeft
+#107545
+00000
+00000
+00000
+00000
+00000
+
+TailRight
+#107545
+00000
+00000
+00000
+00000
+00000
+
+MoveUp
+#f5f3ef
+00000
+00000
+00000
+00000
+00000
+
+MoveDown
+#f5f3ef
+00000
+00000
+00000
+00000
+00000
+
+MoveLeft
+#f5f3ef
+00000
+00000
+00000
+00000
+00000
+
+MoveRight
+#f5f3ef
+00000
+00000
+00000
+00000
+00000
+
+=======
+LEGEND
+=======
+
+0 = Background
+# = Wall
+G = Background and Goal
+B = Background and Crate
+* = Background and Goal and Crate
+N = Background and HeadUp
+S = Background and HeadDown
+W = Background and HeadLeft
+E = Background and HeadRight
+u = Background and BodyUp
+d = Background and BodyDown
+l = Background and BodyLeft
+r = Background and BodyRight
+U = Background and TailUp
+T = Background and TailDown
+L = Background and TailLeft
+R = Background and TailRight
+
+Snake = HeadUp or HeadDown or HeadLeft or HeadRight or BodyUp or BodyDown or BodyLeft or BodyRight or TailUp or TailDown or TailLeft or TailRight
+Head = HeadUp or HeadDown or HeadLeft or HeadRight
+Player = Head
+Body = BodyUp or BodyDown or BodyLeft or BodyRight
+Tail = TailUp or TailDown or TailLeft or TailRight
+Solid = Wall or Crate or Snake
+Move = MoveUp or MoveDown or MoveLeft or MoveRight
+
+================
+COLLISIONLAYERS
+================
+
+Background
+Goal
+Wall, Crate, HeadUp, HeadDown, HeadLeft, HeadRight, BodyUp, BodyDown, BodyLeft, BodyRight, TailUp, TailDown, TailLeft, TailRight
+MoveUp, MoveDown, MoveLeft, MoveRight
+
+=====
+RULES
+=====
+
+up    [ Head | Crate | no Solid ] -> [ BodyUp | MoveUp up Crate | no Solid ]
+down  [ Head | Crate | no Solid ] -> [ BodyDown | MoveDown down Crate | no Solid ]
+left  [ Head | Crate | no Solid ] -> [ BodyLeft | MoveLeft left Crate | no Solid ]
+right [ Head | Crate | no Solid ] -> [ BodyRight | MoveRight right Crate | no Solid ]
+
+up    [ Head | no Solid ] -> [ BodyUp | MoveUp ]
+down  [ Head | no Solid ] -> [ BodyDown | MoveDown ]
+left  [ Head | no Solid ] -> [ BodyLeft | MoveLeft ]
+right [ Head | no Solid ] -> [ BodyRight | MoveRight ]
+
+late [ MoveUp ] -> [ HeadUp ]
+late [ MoveDown ] -> [ HeadDown ]
+late [ MoveLeft ] -> [ HeadLeft ]
+late [ MoveRight ] -> [ HeadRight ]
+
+late up    [ Tail | BodyUp ] -> [ | TailUp ]
+late down  [ Tail | BodyUp ] -> [ | TailUp ]
+late left  [ Tail | BodyUp ] -> [ | TailUp ]
+late right [ Tail | BodyUp ] -> [ | TailUp ]
+
+late up    [ Tail | BodyDown ] -> [ | TailDown ]
+late down  [ Tail | BodyDown ] -> [ | TailDown ]
+late left  [ Tail | BodyDown ] -> [ | TailDown ]
+late right [ Tail | BodyDown ] -> [ | TailDown ]
+
+late up    [ Tail | BodyLeft ] -> [ | TailLeft ]
+late down  [ Tail | BodyLeft ] -> [ | TailLeft ]
+late left  [ Tail | BodyLeft ] -> [ | TailLeft ]
+late right [ Tail | BodyLeft ] -> [ | TailLeft ]
+
+late up    [ Tail | BodyRight ] -> [ | TailRight ]
+late down  [ Tail | BodyRight ] -> [ | TailRight ]
+late left  [ Tail | BodyRight ] -> [ | TailRight ]
+late right [ Tail | BodyRight ] -> [ | TailRight ]
+
+==============
+WINCONDITIONS
+==============
+
+All Goal on Crate
+
+=======
+LEVELS
+=======
+
+########
+#000000#
+#00NBG0#
+#0Ru000#
+#000000#
+########
+
+#########
+#0000000#
+#00NBBG0#
+#0Ru0000#
+#0000000#
+#########
+
+########
+#000000#
+#000000#
+#00EBG0#
+#0ru000#
+#0U0000#
+########
+
+########
+#000000#
+#0T0000#
+#0rE000#
+#00B000#
+#00G000#
+########
+
+########
+#000000#
+#000000#
+#0GBN00#
+#00ru00#
+#00U000#
+########

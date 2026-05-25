@@ -1,0 +1,181 @@
+var clear_message = "Level clear"
+var final_message = "All levels clear"
+
+model puzzle theme_test_sokoban {
+	layers {
+		floor = Goal
+		solid = Player Box Wall
+	}
+
+	sprites {
+		Goal {
+			#f7d51d #d13f31
+			.000.
+			0...0
+			0.1.0
+			0...0
+			.000.
+		}
+
+		Player {
+			#2aa7c9 #ffffff #111111
+			.000.
+			01110
+			01210
+			.000.
+			.0.0.
+		}
+
+		Box {
+			#d13f31 #f7d51d #2f9e44
+			00000
+			01110
+			01210
+			01110
+			00000
+		}
+
+		Wall {
+			#111111 #777777
+			01010
+			11111
+			01010
+			11111
+			01010
+		}
+	}
+
+	win_conditions {
+		all Goal on Box
+	}
+
+	rules {
+		once input directions [ Player | Box | no solid ] -> [ | Player | Box ]
+		once input directions [ Player | no solid ] -> [ | Player ]
+	}
+
+	levels {
+		legend {
+			. = empty
+			G = Goal
+			P = Player
+			B = Box
+			# = Wall
+			* = Goal Box
+			+ = Goal Player
+		}
+		level boot_sequence
+			#########
+			#.......#
+			#...G...#
+			#...B...#
+			#...P...#
+			#.......#
+			#########
+
+		level narrow_bus
+			#########
+			#.......#
+			#..G.G..#
+			#..B.B..#
+			#...P...#
+			#.......#
+			#########
+
+		level tiny_chip
+			##########
+			#..G..G..#
+			#..B..B..#
+			#........#
+			#....P...#
+			##########
+	}
+}
+
+scene title {
+	title theme_title
+	subtitle theme_subtitle
+	button "Play" -> playing.goto 0
+	button "Levels" -> goto level_select
+}
+
+scene playing {
+	view {
+		row {
+			title theme_title
+			subtitle level.label
+		}
+		board = puzzle theme_test_sokoban
+	}
+	keys {
+		q -> input quit
+		Escape -> input open_menu
+	}
+	rules {
+		board.rules
+		if input == quit -> goto level_select
+		if input == open_menu -> enter menu
+		if board.win_conditions and level.last -> {
+			message final_message
+			goto level_select
+		}
+		if board.win_conditions -> {
+			message clear_message
+			board.next_level
+		}
+	}
+}
+
+scene level_clear {
+	view {
+		board = puzzle theme_test_sokoban
+		message = "Level clear"
+		box {
+			text message
+			button "Next Level" -> playing.next_level
+			button "Restart" -> playing.restart
+			button "Level Select" -> goto level_select
+		}
+	}
+	keys {
+		Enter Space -> playing.next_level
+		q -> input quit
+	}
+	rules {
+		if input == quit -> goto level_select
+	}
+}
+
+scene menu {
+	view {
+		text "Paused"
+		column {
+			button "Resume" -> input resume
+			button "Restart" -> playing.restart
+			button "Level Select" -> input quit
+		}
+	}
+	keys {
+		Escape Enter Space -> input resume
+		q -> input quit
+	}
+	rules {
+		if input == resume -> back
+		if input == quit -> goto level_select
+	}
+}
+
+scene level_select {
+	view {
+		message = "Select a theme test level"
+		text message
+		level_menu {
+			show_index = true
+			show_solved = true
+			button "Back" -> input back_to_title
+		}
+	}
+	rules {
+		if input == back_to_title -> back
+	}
+}

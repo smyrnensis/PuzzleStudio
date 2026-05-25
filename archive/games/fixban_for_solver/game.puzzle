@@ -1,0 +1,330 @@
+name Fixban
+
+assets {
+	css "game.css"
+	script "visuals.js"
+}
+
+puzzle fixban {
+kind = A B C P
+box_kind = A B C
+
+map rotate directions {
+up -> right
+right -> down
+down -> left
+left -> up
+}
+
+on_level_start {
+mark_safe
+display refresh_board
+}
+
+layers {
+target_layer = Target:kind
+each Safe:kind
+actor = Box:kind Wall
+moment = Moment
+each @Boundary:directions
+each @Corner:directions
+}
+
+group {
+target = Target
+pushable = Box
+solid = pushable Wall
+object = Box Wall
+wall_visual = @Boundary @Corner
+}
+
+legend {
+. = empty
+a = Target:A
+b = Target:B
+c = Target:C
+p = Target:P
+A = Box:A
+B = Box:B
+C = Box:C
+P = Box:P
+# = Wall
+1 = Box:A Target:B
+2 = Box:B Target:A
+}
+
+win_conditions = count(target) == 0
+lose_conditions any {
+exists([ Wall | ; Box no Box:P | Wall ])
+for k in box_kind {
+exists([ Box:k no Safe:k ])
+}
+}
+
+sprites {
+shape mark:kind {
+A {
+00000
+01010
+00100
+01010
+00000
+}
+B {
+00000
+00100
+01010
+00100
+00000
+}
+C {
+00000
+00100
+00100
+00100
+00000
+}
+P {
+00000
+00000
+01010
+00000
+00000
+}
+}
+
+shape edge:directions rotate from up {
+11111
+00000
+00000
+00000
+00000
+}
+
+shape corner:directions rotate from up {
+00001
+00000
+00000
+00000
+00000
+}
+
+colors piece_color:kind {
+A = #4a4
+B = #a4a
+C = #46c
+P = #000
+}
+
+Box:kind {
+piece_color:kind #00000000
+ascii mark:kind
+}
+
+Target:kind {
+#00000000 piece_color:kind
+ascii mark:kind
+}
+
+@Boundary:directions {
+#00000000 #555
+ascii edge:directions
+}
+
+@Corner:directions {
+#00000000 #555
+ascii corner:directions
+}
+
+Wall {
+#444
+0
+}
+}
+
+routine display wall_edges repeat {
+for d in directions {
+d [ Wall no @Boundary:d | no Wall ] -> [ Wall @Boundary:d | ]
+}
+}
+
+routine display wall_corners_270 repeat {
+for d in directions {
+d [ Wall no @Corner:d | Wall ; Wall | no Wall ] -> [ Wall @Corner:d | Wall ; Wall | ]
+}
+}
+
+routine mark_safe once {
+repeat [ Safe ] -> []
+
+for k in box_kind {
+repeat [ Target:k no Safe:k ] -> [ Target:k Safe:k ]
+repeat {
+[ no Wall | no Wall no Safe:k | Safe:k ] -> [ | Safe:k | Safe:k ]
+}
+}
+}
+
+routine display refresh_board once {
+repeat [ wall_visual ] -> []
+wall_edges
+wall_corners_270
+}
+
+rules {
+once input [ Box:P ] -> [ Box:P Moment ]
+input [ Box:kind Moment | pushable no Moment ] -> [ Box:kind Moment | pushable Moment ]
+repeat {
+input [ pushable Moment | no solid ] -> [ | pushable ]
+}
+input [ pushable Moment ] -> [ pushable ]
+
+for k in kind {
+[ Box:k Target:k ] -> [ Wall ]
+}
+display refresh_board
+}
+
+levels {
+level level_1
+########
+##.a####
+##A.####
+##a...##
+##..A.##
+##P.####
+########
+
+level level_2
+########
+#...####
+#P.AA..#
+###Aa..#
+##.....#
+##a.a.##
+########
+
+level level_3
+#######
+###..##
+#.AB..#
+#.#.P.#
+#.ab.##
+#######
+
+level level_4
+#########
+###..####
+###A.####
+##.bBa.##
+##.P...##
+###..####
+#########
+
+level level_5
+#######
+###..##
+#Pb..##
+#.#BBb#
+#..aA.#
+#....##
+#######
+
+level level_6
+########
+#......#
+#.2..1.#
+#.#.P#.#
+#.#2.1.#
+#......#
+########
+
+level level_7
+########
+#....#p#
+#.B.Bb.#
+##.Aa..#
+###.b.P#
+########
+
+level level_8
+########
+####...#
+#PA.b2.#
+#.1p.B.#
+#...a..#
+########
+}
+}
+
+scene playing {
+view {
+row {
+title game.title
+subtitle join level.number, ". ", level.label
+}
+board = puzzle fixban
+}
+keys {
+q = quit
+Escape = open_menu
+}
+rules {
+board.rules
+quit -> goto level_select
+open_menu -> enter menu
+if board.win_conditions and level.last -> goto level_select
+if board.win_conditions -> board.next_level
+}
+}
+
+scene level_clear {
+view {
+board = puzzle fixban
+message = "Stage clear"
+panel {
+text message
+button "Next Level" -> playing.next_level
+button "Restart" -> playing.restart
+button "Level Select" -> goto level_select
+}
+}
+keys {
+Enter Space = playing.next_level
+q = quit
+}
+rules {
+quit -> goto level_select
+}
+}
+
+scene menu {
+view {
+text "Menu"
+column {
+button "Resume" -> back
+button "Restart" -> playing.restart
+button "Level Select" -> goto level_select
+}
+}
+keys {
+Escape Enter Space = resume
+q = quit
+}
+rules {
+resume -> back
+quit -> goto level_select
+}
+}
+
+scene level_select {
+view {
+message = "Select a stage"
+text message
+level_menu {
+index on
+solved on
+button "Back" -> back
+}
+}
+}

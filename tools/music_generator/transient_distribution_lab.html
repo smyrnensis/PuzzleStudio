@@ -1,0 +1,395 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Transient Distribution Lab</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: #0f0f11;
+        color: #f1f0ea;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        box-sizing: border-box;
+        padding: 20px 0;
+        display: grid;
+        justify-items: center;
+      }
+
+      main {
+        width: min(1040px, calc(100vw - 24px));
+        display: grid;
+        gap: 12px;
+      }
+
+      header {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        align-items: center;
+      }
+
+      nav {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: end;
+        gap: 12px;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: 18px;
+        font-weight: 700;
+        letter-spacing: 0;
+      }
+
+      a {
+        color: #f3cc73;
+        font-size: 13px;
+        text-decoration: none;
+      }
+
+      .panel {
+        border: 1px solid #34312a;
+        border-radius: 8px;
+        background: #191816;
+        overflow: hidden;
+        box-shadow: 0 18px 60px rgba(0, 0, 0, 0.28);
+      }
+
+      .controls {
+        padding: 14px;
+        display: grid;
+        grid-template-columns: minmax(150px, 1fr) 86px auto auto auto minmax(170px, 1fr) auto;
+        gap: 12px;
+        align-items: end;
+      }
+
+      .field {
+        display: grid;
+        gap: 7px;
+        min-width: 0;
+      }
+
+      label,
+      .label {
+        color: #aaa49a;
+        font-size: 12px;
+      }
+
+      input[type="text"],
+      input[type="number"] {
+        width: 100%;
+        min-width: 0;
+        height: 38px;
+        box-sizing: border-box;
+        border: 1px solid #453f34;
+        border-radius: 8px;
+        background: #0f0f11;
+        color: #f1f0ea;
+        padding: 0 10px;
+        font: inherit;
+      }
+
+      input[type="range"] {
+        width: 100%;
+        accent-color: #f3cc73;
+      }
+
+      button {
+        min-width: 40px;
+        height: 40px;
+        padding: 0 14px;
+        display: inline-grid;
+        place-items: center;
+        border: 0;
+        border-radius: 999px;
+        background: #f3cc73;
+        color: #0f0f11;
+        cursor: pointer;
+        font: inherit;
+        font-weight: 700;
+      }
+
+      button.secondary {
+        background: #34312a;
+        color: #f1f0ea;
+      }
+
+      .field-head {
+        display: flex;
+        justify-content: space-between;
+        gap: 10px;
+        align-items: baseline;
+      }
+
+      .value {
+        font-size: 13px;
+        font-weight: 700;
+      }
+
+      .rows {
+        display: grid;
+      }
+
+      .row {
+        display: grid;
+        grid-template-columns: 132px minmax(230px, 1.1fr) minmax(220px, 1fr) minmax(150px, 0.8fr) 72px;
+        gap: 10px;
+        align-items: center;
+        padding: 10px 14px;
+        border-top: 1px solid #34312a;
+      }
+
+      .row:first-child {
+        border-top: 0;
+      }
+
+      .row.active {
+        background: #26231d;
+      }
+
+      .name {
+        font-weight: 700;
+        overflow-wrap: anywhere;
+      }
+
+      .meta {
+        color: #aaa49a;
+        font-size: 12px;
+        line-height: 1.4;
+        overflow-wrap: anywhere;
+      }
+
+      .bands {
+        color: #d7d1c5;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 11px;
+        line-height: 1.45;
+        overflow-wrap: anywhere;
+      }
+
+      .row button {
+        justify-self: end;
+        min-width: 64px;
+        height: 32px;
+        padding: 0 12px;
+      }
+
+      @media (max-width: 900px) {
+        .controls,
+        .row {
+          grid-template-columns: 1fr;
+          gap: 8px;
+        }
+
+        .row button {
+          justify-self: start;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <script>
+      if (location.protocol === "file:") {
+        location.replace("http://localhost:8875/transient_distribution_lab.html");
+      }
+    </script>
+    <main>
+      <header>
+        <h1>Transient Distribution Lab</h1>
+        <nav>
+          <a href="./timbre_distribution_lab.html">Pitched Lab</a>
+          <a href="./timbre_lab.html">Timbre Lab</a>
+          <a href="./timbre_axis_lab.html">Axis Lab</a>
+          <a href="./function_music_lab.html">Function Lab</a>
+          <a href="./music_lab.html">Music Lab</a>
+        </nav>
+      </header>
+
+      <section class="panel">
+        <div class="controls">
+          <div class="field">
+            <label for="seed">Seed</label>
+            <input id="seed" type="text" value="transient-1" autocomplete="off">
+          </div>
+          <div class="field">
+            <label for="count">Count</label>
+            <input id="count" type="number" min="1" max="32" step="1" value="12">
+          </div>
+          <button id="generate" type="button">Generate</button>
+          <button id="random" class="secondary" type="button">Random</button>
+          <button id="play-all" class="secondary" type="button">Play All</button>
+          <div class="field">
+            <div class="field-head">
+              <span class="label">Volume</span>
+              <span id="volume-value" class="value">50%</span>
+            </div>
+            <input id="volume" type="range" min="0" max="1" step="0.01" value="0.5" aria-label="Audition volume">
+          </div>
+          <button id="stop" class="secondary" type="button">Stop</button>
+        </div>
+      </section>
+
+      <section id="list" class="panel rows"></section>
+    </main>
+
+    <script type="module">
+      import { generateTransientSet, playGeneratedTransient, randomTransientSummary } from "./timbre_axis_lab.mjs?v=transient-2";
+
+      const seedInput = document.querySelector("#seed");
+      const countInput = document.querySelector("#count");
+      const generateButton = document.querySelector("#generate");
+      const randomButton = document.querySelector("#random");
+      const playAllButton = document.querySelector("#play-all");
+      const stopButton = document.querySelector("#stop");
+      const volumeInput = document.querySelector("#volume");
+      const volumeValue = document.querySelector("#volume-value");
+      const list = document.querySelector("#list");
+      let audioContext = null;
+      let activePlayback = null;
+      let activeId = null;
+      let playAllTimer = null;
+      let transients = [];
+
+      render();
+      updateVolumeLabel();
+
+      function render() {
+        stopCurrent();
+        const count = Math.max(1, Math.min(32, Number(countInput.value) || 12));
+        countInput.value = String(count);
+        transients = generateTransientSet(seedInput.value || "transient-1", count);
+        window.__randomTransients = transients;
+        list.innerHTML = "";
+        for (const model of transients) {
+          const row = document.createElement("div");
+          row.className = "row";
+          row.dataset.id = model.id;
+
+          const name = document.createElement("div");
+          name.className = "name";
+          name.textContent = model.id;
+
+          const summary = document.createElement("div");
+          summary.className = "meta";
+          summary.textContent = randomTransientSummary(model);
+
+          const bands = document.createElement("div");
+          bands.className = "bands";
+          bands.textContent = bandSummary(model.signal.bands);
+
+          const mechanics = document.createElement("div");
+          mechanics.className = "meta";
+          mechanics.textContent = mechanicsSummary(model);
+
+          const button = document.createElement("button");
+          button.type = "button";
+          button.dataset.id = model.id;
+          button.textContent = "Play";
+
+          row.append(name, summary, bands, mechanics, button);
+          list.append(row);
+        }
+      }
+
+      function bandSummary(bands) {
+        const first = bands.slice(0, 8).map((band) => `${Math.round(band.frequency)}Hz:${band.gain}`);
+        const suffix = bands.length > first.length ? ` ... +${bands.length - first.length}` : "";
+        return `${first.join("  ")}${suffix}`;
+      }
+
+      function mechanicsSummary(model) {
+        const body = model.parameters.bodyType === "none" ? "no body" : model.parameters.bodyType;
+        return `click ${model.parameters.clickGain} / ${body} / output ${model.signal.distanceGain}`;
+      }
+
+      async function ensureAudio() {
+        if (!audioContext) {
+          audioContext = new AudioContext();
+        }
+        if (audioContext.state === "suspended") {
+          await audioContext.resume();
+        }
+      }
+
+      async function playOne(model) {
+        await ensureAudio();
+        stopCurrent();
+        activeId = model.id;
+        paintActive();
+        activePlayback = playGeneratedTransient(audioContext, model, {
+          gain: Number(volumeInput.value) * 0.32,
+        });
+      }
+
+      async function playAll() {
+        await ensureAudio();
+        stopCurrent();
+        let index = 0;
+        const playNext = () => {
+          if (index >= transients.length) {
+            stopCurrent();
+            return;
+          }
+          const model = transients[index];
+          activeId = model.id;
+          paintActive();
+          activePlayback = playGeneratedTransient(audioContext, model, {
+            gain: Number(volumeInput.value) * 0.32,
+          });
+          index += 1;
+          playAllTimer = setTimeout(playNext, 740);
+        };
+        playNext();
+      }
+
+      function stopCurrent() {
+        if (playAllTimer !== null) {
+          clearTimeout(playAllTimer);
+          playAllTimer = null;
+        }
+        if (activePlayback) {
+          activePlayback.stop();
+          activePlayback = null;
+        }
+        activeId = null;
+        paintActive();
+      }
+
+      function paintActive() {
+        for (const row of list.querySelectorAll(".row")) {
+          row.classList.toggle("active", row.dataset.id === activeId);
+        }
+      }
+
+      function updateVolumeLabel() {
+        volumeValue.textContent = `${Math.round(Number(volumeInput.value) * 100)}%`;
+      }
+
+      generateButton.addEventListener("click", render);
+      randomButton.addEventListener("click", () => {
+        seedInput.value = `transient-${Math.floor(Math.random() * 1000000)}`;
+        render();
+      });
+      playAllButton.addEventListener("click", playAll);
+      stopButton.addEventListener("click", stopCurrent);
+      volumeInput.addEventListener("input", updateVolumeLabel);
+      list.addEventListener("click", (event) => {
+        const button = event.target.closest("button[data-id]");
+        if (!button) {
+          return;
+        }
+        const model = transients.find((item) => item.id === button.dataset.id);
+        if (model) {
+          playOne(model);
+        }
+      });
+    </script>
+  </body>
+</html>

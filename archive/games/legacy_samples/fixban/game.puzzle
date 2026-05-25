@@ -1,0 +1,185 @@
+title Fixban
+
+assets {
+	css "game.css"
+	script "visuals.js"
+}
+
+model puzzle fixban {
+kind = A B C P
+box_kind = A B C
+
+map rotate directions {
+up -> right
+right -> down
+down -> left
+left -> up
+}
+
+layers {
+floor = @Floor
+shade = @Shade
+target_layer = Target:kind
+each Safe:kind
+light = @LightBase @Light:kind
+actor = Box:kind Wall
+moment = Moment
+each @Boundary:directions
+each @Corner:directions
+}
+
+group {
+target = Target:*
+pushable = Box:*
+solid = pushable Wall
+object = Box:* Wall
+wall_visual = @Boundary:* @Corner:*
+}
+
+win_conditions = count(target) == 0
+lose_conditions any {
+some [ Wall | ; Box:* no Box:P | Wall ]
+for k in box_kind {
+some [ Box:k no Safe:k ]
+}
+}
+
+routine display @fill_floor repeat {
+[ no @Floor ] -> [ @Floor ]
+}
+
+routine display @wall_edges repeat {
+for d in directions {
+d [ Wall no @Boundary:d | no Wall ] -> [ Wall @Boundary:d | ]
+}
+}
+
+routine display @wall_corners_270 repeat {
+for d in directions {
+d [ Wall no @Corner:d | Wall ; Wall | no Wall ] -> [ Wall @Corner:d | Wall ; Wall | ]
+}
+}
+
+routine mark_safe once {
+repeat [ Safe:* ] -> []
+
+for k in box_kind {
+repeat [ Target:k no Safe:k ] -> [ Target:k Safe:k ]
+repeat {
+[ no Wall | no Wall no Safe:k | Safe:k ] -> [ | Safe:k | Safe:k ]
+}
+}
+}
+
+routine display @refresh_board once {
+repeat [ wall_visual ] -> []
+repeat [ light ] -> []
+repeat [ @Shade ] -> []
+repeat [ object no light ] -> [ object @LightBase ]
+repeat down [ object | no @Shade ] -> [ object | @Shade ]
+for k in kind {
+repeat [ @LightBase Target:k ] -> [ @Light:k Target:k ]
+}
+@wall_edges
+@wall_corners_270
+}
+
+on_level_start {
+mark_safe
+}
+
+on_display {
+display @fill_floor
+display @refresh_board
+}
+
+rules {
+once input directions [ Box:P ] -> [ Box:P Moment ]
+input directions [ Box:kind Moment | pushable no Moment ] -> [ Box:kind Moment | pushable Moment ]
+repeat {
+input directions [ pushable Moment | no solid ] -> [ | pushable ]
+}
+input directions [ pushable Moment ] -> [ pushable ]
+
+for k in kind {
+[ Box:k Target:k ] -> [ Wall ]
+}
+}
+
+}
+
+import "sprites.puzzle"
+import "levels.puzzle"
+
+scene playing {
+view {
+row {
+title "Fixban"
+subtitle board.level.label
+}
+board = puzzle fixban
+}
+inputs {
+quit <- q
+open_menu <- Escape
+}
+rules {
+board.rules
+if input == quit -> goto level_select
+if input == open_menu -> enter menu
+if board.win_conditions and board.level.last -> goto level_select
+if board.win_conditions -> board.next_level
+}
+}
+
+scene level_clear {
+view {
+board = puzzle fixban
+message = "Level clear"
+box {
+text message
+button "Next Level" -> playing.next_level
+button "Restart" -> playing.restart
+button "Level Select" -> goto level_select
+}
+}
+inputs {
+next <- Enter Space
+quit <- q
+}
+rules {
+if input == next -> playing.next_level
+if input == quit -> goto level_select
+}
+}
+
+scene menu {
+view {
+text "Menu"
+column {
+button "Resume" -> back
+button "Restart" -> playing.restart
+button "Level Select" -> goto level_select
+}
+}
+inputs {
+resume <- Escape Enter Space
+quit <- q
+}
+rules {
+if input == resume -> back
+if input == quit -> goto level_select
+}
+}
+
+scene level_select {
+view {
+message = "Select a level"
+text message
+level_menu {
+show_index = true
+show_solved = true
+button "Back" -> back
+}
+}
+}

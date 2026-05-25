@@ -1,0 +1,1801 @@
+const board = document.querySelector("#board");
+const screenView = document.querySelector("#screenView");
+const screenFrame = document.querySelector("#screenFrame") || screenView?.parentElement;
+const playSurface = document.querySelector(".play-surface");
+const shell = document.querySelector("#shell");
+const componentEmbedMode = new URLSearchParams(window.location.search).get("component") === "1";
+document.documentElement.classList.toggle("is-component-embed", componentEmbedMode);
+document.body.classList.toggle("is-component-embed", componentEmbedMode);
+const messageQueue = [];
+let messagePopup = null;
+let clientPendingWaits = 0;
+let activeThemeClass = "";
+const activeThemeVariables = new Set();
+const activationConfirmDelayMs = 160;
+const puzzlescriptTerminalWidth = 34;
+
+class PuzzleSoundRuntime {
+  constructor() {
+    this.sounds = { sfx: [], music: [] };
+    this.context = null;
+    this.activeMusic = new Map();
+    this.pausedMusic = new Map();
+  }
+
+  configure(sounds) {
+    this.sounds = sounds || { sfx: [], music: [] };
+  }
+
+  applyEvents(events) {
+    for (const event of events || []) {
+      if (event.kind === "play_sfx") {
+        this.playSfx(event.name);
+      } else if (event.kind === "play_music") {
+        this.playMusic(event.name);
+      } else if (event.kind === "pause_music") {
+        this.pauseMusic(event.name || null);
+      } else if (event.kind === "resume_music") {
+        this.resumeMusic(event.name || null);
+      } else if (event.kind === "stop_music") {
+        this.stopMusic(event.name || null);
+      }
+    }
+  }
+
+  ensureContext() {
+    const AudioContext = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContext) {
+      return null;
+    }
+    if (!this.context) {
+      this.context = new AudioContext();
+    }
+    if (this.context.state === "suspended") {
+      this.context.resume();
+    }
+    return this.context;
+  }
+
+  playSfx(name) {
+    const def = this.sfxDef(name);
+    const context = this.ensureContext();
+    if (!def || !context) {
+      return;
+    }
+    const api = window.PuzzleSoundGenerator || window.PuzzleSoundTools || null;
+    if (def.type === "puzzlescript" && api?.generatePuzzleScriptSoundEffect && api?.createPuzzleScriptSfxPlayer) {
+      const effect = api.generatePuzzleScriptSoundEffect(def.seed);
+      const player = api.createPuzzleScriptSfxPlayer(context, effect);
+      player.start();
+      return;
+    }
+    if (api?.generateSoundEffect && api?.createSfxPlayer) {
+      const effect = api.generateSoundEffect(def.seed, { type: def.type || "random" });
+      const player = api.createSfxPlayer(context, effect);
+      player.start();
+      return;
+    }
+    const seed = this.seedValue(def.seed);
+    const type = String(def.type || "random");
+    const now = context.currentTime;
+    const duration = 0.08 + ((seed % 90) / 1000);
+    const gain = context.createGain();
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(0.16, now + 0.008);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+    gain.connect(context.destination);
+
+    if (type.includes("hit") || type.includes("step") || type.includes("noise")) {
+      const buffer = context.createBuffer(1, Math.max(1, Math.floor(context.sampleRate * duration)), context.sampleRate);
+      const data = buffer.getChannelData(0);
+      let random = this.seededRandom(seed);
+      for (let index = 0; index < data.length; index += 1) {
+        data[index] = (random() * 2 - 1) * (1 - index / data.length);
+      }
+      const source = context.createBufferSource();
+      const filter = context.createBiquadFilter();
+      filter.type = "bandpass";
+      filter.frequency.value = 400 + (seed % 2200);
+      source.buffer = buffer;
+      source.connect(filter).connect(gain);
+      source.start(now);
+      source.stop(now + duration);
+      return;
+    }
+
+    const oscillator = context.createOscillator();
+    oscillator.type = type.includes("jump") ? "square" : "triangle";
+    const startHz = 180 + (seed % 520);
+    const endHz = type.includes("jump") ? startHz * 1.75 : Math.max(80, startHz * 0.55);
+    oscillator.frequency.setValueAtTime(startHz, now);
+    oscillator.frequency.exponentialRampToValueAtTime(endHz, now + duration);
+    oscillator.connect(gain);
+    oscillator.start(now);
+    oscillator.stop(now + duration);
+  }
+
+  hasSfx(name) {
+    return Boolean(this.sfxDef(name));
+  }
+
+  sfxDef(name) {
+    return (this.sounds.sfx || []).find((entry) => entry.name === name);
+  }
+
+  playMusic(name, resume = {}) {
+    const def = (this.sounds.music || []).find((entry) => entry.name === name);
+    const context = this.ensureContext();
+    if (!def || !context) {
+      return;
+    }
+    if (this.activeMusic.has(name)) {
+      return;
+    }
+    this.stopMusic();
+    this.pausedMusic.delete(name);
+    const api = window.PuzzleSoundGenerator || window.PuzzleSoundTools || null;
+    if (api?.generateSong && api?.createPlayer) {
+      const progress = typeof resume === "number" ? 0 : Number(resume.progress || 0);
+      const song = api.generateSong(def.seed, {
+        tone: Number(def.tone ?? 0.62),
+        bpm: Number(def.bpm || 104),
+        volume: Number(def.volume ?? 0.5),
+      });
+      const player = api.createPlayer(context, song.playbackScore);
+      const handle = { player, progress };
+      this.activeMusic.set(name, handle);
+      player.start(progress);
+      return;
+    }
+    const startIndex = typeof resume === "number" ? resume : Number(resume.index || 0);
+    const handle = { timers: [], sources: [], index: startIndex };
+    this.activeMusic.set(name, handle);
+    const bpm = Number(def.bpm || 104);
+    const step = 60 / Math.max(40, bpm);
+    const volume = Math.max(0, Math.min(1, Number(def.volume ?? 0.5))) * 0.08;
+    const seed = this.seedValue(def.seed);
+    const root = 48 + (seed % 12);
+    const scale = [0, 3, 5, 7, 10, 12, 15, 17];
+    const notes = scale.map((offset) => root + offset);
+    const schedule = () => {
+      if (!this.activeMusic.has(name)) {
+        return;
+      }
+      const note = notes[(handle.index + seed) % notes.length];
+      this.playMusicNote(context, handle, note, context.currentTime + 0.02, step * 0.85, volume, Number(def.tone ?? 0.62));
+      handle.index += 1;
+      handle.timers.push(window.setTimeout(schedule, step * 1000));
+    };
+    schedule();
+  }
+
+  playMusicNote(context, handle, midi, startsAt, duration, volume, tone) {
+    const oscillator = context.createOscillator();
+    const gain = context.createGain();
+    const filter = context.createBiquadFilter();
+    const hz = 440 * Math.pow(2, (midi - 69) / 12);
+    oscillator.type = tone > 0.68 ? "sine" : tone > 0.35 ? "triangle" : "square";
+    oscillator.frequency.value = hz;
+    filter.type = "lowpass";
+    filter.frequency.value = 600 + tone * 2400;
+    gain.gain.setValueAtTime(0.0001, startsAt);
+    gain.gain.exponentialRampToValueAtTime(Math.max(0.0001, volume), startsAt + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, startsAt + duration);
+    oscillator.connect(filter).connect(gain).connect(context.destination);
+    oscillator.start(startsAt);
+    oscillator.stop(startsAt + duration + 0.02);
+    handle.sources.push(oscillator);
+  }
+
+  stopMusic(name = null) {
+    for (const [key, handle] of [...this.activeMusic.entries()]) {
+      if (name && key !== name) {
+        continue;
+      }
+      this.stopMusicHandle(handle);
+      this.activeMusic.delete(key);
+    }
+    for (const key of [...this.pausedMusic.keys()]) {
+      if (!name || key === name) {
+        this.pausedMusic.delete(key);
+      }
+    }
+  }
+
+  pauseMusic(name = null) {
+    for (const [key, handle] of [...this.activeMusic.entries()]) {
+      if (name && key !== name) {
+        continue;
+      }
+      this.stopMusicHandle(handle);
+      this.activeMusic.delete(key);
+      this.pausedMusic.set(key, {
+        index: handle.index || 0,
+        progress: handle.player?.loopProgress?.() ?? handle.progress ?? 0,
+      });
+    }
+  }
+
+  resumeMusic(name = null) {
+    const entries = [...this.pausedMusic.entries()].filter(([key]) => !name || key === name);
+    for (const [key, paused] of entries) {
+      this.playMusic(key, paused);
+      this.pausedMusic.delete(key);
+    }
+  }
+
+  stopMusicHandle(handle) {
+    if (handle.player) {
+      try {
+        handle.progress = handle.player.loopProgress?.() ?? handle.progress ?? 0;
+        handle.player.stop();
+      } catch (_) {
+      }
+    }
+    for (const timer of handle.timers || []) {
+      window.clearTimeout(timer);
+    }
+    for (const source of handle.sources || []) {
+      try {
+        source.stop();
+      } catch (_) {
+      }
+    }
+  }
+
+  seedValue(seed) {
+    return String(seed || "0").split("").reduce((value, ch) => ((value * 31) + ch.charCodeAt(0)) >>> 0, 2166136261);
+  }
+
+  seededRandom(seed) {
+    let value = seed >>> 0;
+    return () => {
+      value = (value * 1664525 + 1013904223) >>> 0;
+      return value / 4294967296;
+    };
+  }
+}
+
+const standaloneRuntime = window.PuzzleStandaloneRuntime
+  ? new window.PuzzleStandaloneRuntime(window.PuzzleExport)
+  : null;
+const soundRuntime = new PuzzleSoundRuntime();
+
+let currentState = null;
+let swipeStart = null;
+const puzzleViewports = new Map();
+const activeSolveRequests = new Map();
+const standardMenuCursors = new Map();
+let wasmSolverPromise = null;
+let screenScaleSyncFrame = 0;
+let screenScaleSyncPasses = 0;
+
+async function requestJson(url, options = {}) {
+  if (standaloneRuntime) {
+    return standaloneRuntime.requestJson(url, options);
+  }
+  const response = await fetch(url, options);
+  const body = await response.json();
+  if (!response.ok) {
+    throw new Error(body.error || response.statusText);
+  }
+  return body;
+}
+
+async function loadWasmSolver() {
+  if (!wasmSolverPromise) {
+    wasmSolverPromise = import("./wasm/puzzle_wasm.js")
+      .then(async (module) => {
+        await module.default("./wasm/puzzle_wasm_bg.wasm");
+        if (typeof module.solve_state !== "function") {
+          throw new Error("Solver is not available");
+        }
+        return module;
+      })
+      .catch((error) => {
+        wasmSolverPromise = null;
+        throw error;
+      });
+  }
+  return wasmSolverPromise;
+}
+
+async function solveStandaloneCurrentState(options = {}) {
+  if (!standaloneRuntime) {
+    return requestJson("/api/solve", { method: "POST" });
+  }
+  if (!window.PuzzleExport?.source) {
+    throw new Error("standalone solve requires PuzzleExport.source");
+  }
+  const solver = await loadWasmSolver();
+  return JSON.parse(solver.solve_state(
+    window.PuzzleExport.source,
+    window.PuzzleExport.puzzlePath || "game.puzzle",
+    JSON.stringify(standaloneRuntime.state),
+    Number(options.maxDepth ?? 512),
+    Number(options.maxNodes ?? 5_000_000),
+    Number(options.maxMs ?? 0),
+  ));
+}
+
+async function loadState() {
+  render(await requestJson("/api/state"));
+}
+
+async function post(url) {
+  try {
+    const nextState = await requestJson(url, { method: "POST" });
+    render(nextState);
+  } catch (error) {
+    showError(error);
+  }
+}
+
+function render(state) {
+  currentState = state;
+  window.__PuzzleCurrentState = state;
+  applyTheme(state?.theme || window.PuzzleExport?.theme || null);
+  soundRuntime.configure(state?.sounds || window.PuzzleExport?.sounds || { sfx: [], music: [] });
+  soundRuntime.applyEvents(state?.soundEvents || []);
+  applyMessageEvents(state?.messageEvents || []);
+  applyWaitEvents(state?.waitEvents || []);
+  if (state) {
+    state.busy = state.busy === true || clientPendingWaits > 0;
+    state.waitEvents = [];
+  }
+  renderSceneStack(state);
+  scheduleScreenScaleSync(3);
+  notifyPreviewState(state);
+  focusShell();
+}
+
+function scheduleScreenScaleSync(passes = 2) {
+  if (componentEmbedMode || !screenFrame || !screenView || !playSurface) {
+    return;
+  }
+  screenScaleSyncPasses = Math.max(screenScaleSyncPasses, Math.max(1, Math.trunc(Number(passes) || 1)));
+  if (screenScaleSyncFrame) {
+    return;
+  }
+  const tick = () => {
+    screenScaleSyncFrame = 0;
+    syncScreenScale();
+    screenScaleSyncPasses -= 1;
+    if (screenScaleSyncPasses > 0) {
+      screenScaleSyncFrame = requestAnimationFrame(tick);
+    }
+  };
+  screenScaleSyncFrame = requestAnimationFrame(tick);
+}
+
+function syncScreenScale() {
+  if (componentEmbedMode || !screenFrame || !screenView || !playSurface) {
+    return;
+  }
+  if (screenView.getClientRects().length === 0 || playSurface.getClientRects().length === 0) {
+    return;
+  }
+  const naturalWidth = Math.ceil(Math.max(1, screenView.scrollWidth, screenView.offsetWidth));
+  const naturalHeight = Math.ceil(Math.max(1, screenView.scrollHeight, screenView.offsetHeight));
+  const available = elementContentBox(playSurface);
+  if (available.width <= 0 || available.height <= 0) {
+    return;
+  }
+  const scale = Math.max(0.05, Math.min(1, available.width / naturalWidth, available.height / naturalHeight));
+  screenView.style.setProperty("--screen-scale", String(scale));
+  screenFrame.style.width = `${Math.ceil(naturalWidth * scale)}px`;
+  screenFrame.style.height = `${Math.ceil(naturalHeight * scale)}px`;
+  screenFrame.dataset.screenScale = scale.toFixed(4);
+  screenFrame.dataset.screenWidth = String(naturalWidth);
+  screenFrame.dataset.screenHeight = String(naturalHeight);
+}
+
+function elementContentBox(element) {
+  const style = window.getComputedStyle(element);
+  const width = element.clientWidth
+    - parseFloat(style.paddingLeft || "0")
+    - parseFloat(style.paddingRight || "0");
+  const height = element.clientHeight
+    - parseFloat(style.paddingTop || "0")
+    - parseFloat(style.paddingBottom || "0");
+  return {
+    width: Math.max(0, width),
+    height: Math.max(0, height),
+  };
+}
+
+function applyTheme(theme) {
+  const root = document.body;
+  for (const name of activeThemeVariables) {
+    root.style.removeProperty(`--${name}`);
+  }
+  activeThemeVariables.clear();
+
+  for (const [name, value] of Object.entries(theme?.variables || {})) {
+    const variableName = normalizeThemeVariableName(name);
+    if (!variableName) {
+      continue;
+    }
+    root.style.setProperty(`--${variableName}`, String(value));
+    activeThemeVariables.add(variableName);
+  }
+
+  if (activeThemeClass) {
+    document.body.classList.remove(activeThemeClass);
+    activeThemeClass = "";
+  }
+  const className = themeClassName(theme?.name);
+  if (className) {
+    document.body.classList.add(className);
+    activeThemeClass = className;
+  }
+}
+
+function normalizeThemeVariableName(name) {
+  const normalized = String(name || "")
+    .replace(/^--/, "")
+    .replace(/_/g, "-")
+    .toLowerCase();
+  return /^[a-z0-9-]*[a-z][a-z0-9-]*$/.test(normalized) ? normalized : "";
+}
+
+function themeClassName(name) {
+  const normalized = String(name || "")
+    .replace(/[^a-zA-Z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .toLowerCase();
+  return normalized ? `theme-${normalized}` : "";
+}
+
+function applyMessageEvents(events) {
+  for (const event of events || []) {
+    if (event.kind === "message") {
+      messageQueue.push(String(event.text || ""));
+    }
+  }
+  showNextMessage();
+}
+
+function showNextMessage() {
+  if (messagePopup || messageQueue.length === 0) {
+    return;
+  }
+  if (document.body.classList.contains("theme-puzzlescript") && soundRuntime.hasSfx("ShowMessage")) {
+    soundRuntime.playSfx("ShowMessage");
+  }
+  const text = messageQueue.shift();
+  const backdrop = document.createElement("div");
+  backdrop.className = "message-popup-backdrop";
+  backdrop.setAttribute("role", "dialog");
+  backdrop.setAttribute("aria-modal", "true");
+
+  const panel = document.createElement("div");
+  panel.className = "message-popup";
+  const body = document.createElement("p");
+  body.className = "message-popup-text";
+  body.textContent = text;
+  panel.append(body);
+  backdrop.append(panel);
+  backdrop.tabIndex = -1;
+  backdrop.addEventListener("click", closeMessagePopup);
+  shell.append(backdrop);
+  messagePopup = backdrop;
+  backdrop.focus();
+}
+
+function closeMessagePopup() {
+  if (!messagePopup) {
+    return;
+  }
+  if (document.body.classList.contains("theme-puzzlescript") && soundRuntime.hasSfx("CloseMessage")) {
+    soundRuntime.playSfx("CloseMessage");
+  }
+  messagePopup.remove();
+  messagePopup = null;
+  focusShell();
+  showNextMessage();
+}
+
+function notifyPreviewState(state) {
+  if (window.parent === window) {
+    return;
+  }
+  window.parent.postMessage({
+    type: "PuzzleStudioPreviewState",
+    levelIndex: state.levelIndex,
+    rawScene: state.rawScene,
+    scene: state.scene,
+    inputs: state.inputs,
+    screen: state.currentScene || state.screen,
+    screenHasPuzzle: currentSceneHasPuzzle() || Boolean(state.scene),
+    theme: state.theme || window.PuzzleExport?.theme || null,
+  }, "*");
+}
+
+function renderSceneStack(state) {
+  screenView.replaceChildren();
+
+  const layers = sceneLayers(state);
+  syncVisualThemeForSceneStack(layers);
+  if (componentEmbedMode && renderEmbeddedPuzzleComponent(layers)) {
+    return;
+  }
+  screenView.classList.toggle("has-scene-stack", layers.length > 1);
+  for (const [index, layer] of layers.entries()) {
+    const sceneDef = sceneDefByName(layer.name);
+    const components = sceneDef?.components || [];
+    const hasPuzzle = sceneHasComponent(sceneDef, "puzzle");
+    const isMenuScene = sceneIsMenuLike(sceneDef, hasPuzzle);
+    const scope = {
+      __sceneLayer: layer,
+      __sceneDef: sceneDef,
+      __sceneState: layer.sceneState || layer.state || {},
+      __sceneMenuLike: isMenuScene,
+      __standardMenuButtonCounter: { value: 0 },
+    };
+
+    const layerEl = document.createElement("div");
+    layerEl.className = "scene-layer";
+    layerEl.classList.toggle("is-focused", layer.focused === true);
+    layerEl.classList.toggle("scene-overlay-layer", index > 0);
+    layerEl.classList.toggle("is-menu-scene", isMenuScene);
+    layerEl.style.zIndex = String(10 + index);
+    applySceneLayout(layerEl, sceneDef?.layout);
+    renderSurfaceComponents(components, layerEl, scope);
+    screenView.append(layerEl);
+  }
+}
+
+function renderEmbeddedPuzzleComponent(layers) {
+  const layer = layers.find((candidate) => candidate.focused === true) || layers[0];
+  const sceneDef = sceneDefByName(layer?.name);
+  const component = findComponentByKind(sceneDef?.components || [], "puzzle");
+  if (!layer || !sceneDef || !component) {
+    return false;
+  }
+  const scope = {
+    __sceneLayer: layer,
+    __sceneDef: sceneDef,
+    __sceneState: layer.sceneState || layer.state || {},
+    __sceneMenuLike: false,
+    __standardMenuButtonCounter: { value: 0 },
+  };
+  screenView.classList.remove("has-scene-stack");
+  screenView.append(renderPuzzle(component, scope));
+  return true;
+}
+
+function syncVisualThemeForSceneStack(layers) {
+  const visualThemeClass = window.GameVisuals?.themeClass || "";
+  if (!visualThemeClass || visualThemeClass === activeThemeClass) {
+    return;
+  }
+  const hasPuzzleLayer = layers.some((layer) => sceneHasComponent(sceneDefByName(layer.name), "puzzle"));
+  if (!hasPuzzleLayer) {
+    document.body.classList.remove(visualThemeClass);
+  }
+}
+
+function sceneLayers(state) {
+  if (Array.isArray(state?.sceneLayers) && state.sceneLayers.length > 0) {
+    return state.sceneLayers;
+  }
+  const name = state?.currentScene || state?.screen || "playing";
+  return [{
+    name,
+    focused: true,
+    scene: state?.scene || null,
+    sceneState: state?.sceneState || state?.screenState || {},
+    scenePuzzles: state?.scenePuzzles || state?.screenPuzzles || [],
+  }];
+}
+
+function sceneHasComponent(scene, kind) {
+  return Boolean(scene?.components?.some((component) => componentHasKind(component, kind)));
+}
+
+function componentHasKind(component, kind) {
+  if (component.kind === kind) {
+    return true;
+  }
+  return Boolean(component.children?.some((child) => componentHasKind(child, kind)));
+}
+
+function findComponentByKind(components, kind) {
+  for (const component of components || []) {
+    if (component.kind === kind) {
+      return component;
+    }
+    const found = findComponentByKind(component.children || [], kind);
+    if (found) {
+      return found;
+    }
+  }
+  return null;
+}
+
+function currentSceneHasPuzzle() {
+  return sceneHasComponent(currentSceneDef(), "puzzle");
+}
+
+function currentSceneHasLevelMenu() {
+  return sceneHasComponent(currentSceneDef(), "level_menu");
+}
+
+function sceneIsMenuLike(scene, hasPuzzle = sceneHasComponent(scene, "puzzle")) {
+  return Boolean(scene && (sceneHasComponent(scene, "level_menu") || !hasPuzzle));
+}
+
+function sceneTitle(name) {
+  return String(name || "")
+    .split(/[_-]+/)
+    .filter(Boolean)
+    .map((part) => part[0]?.toUpperCase() + part.slice(1))
+    .join(" ") || "Screen";
+}
+
+function renderSurfaceComponents(components, parent = screenView, scope = {}) {
+  for (const component of components || []) {
+    parent.append(renderComponent(component, scope));
+  }
+}
+
+function renderComponent(component, scope = {}) {
+  switch (component.kind) {
+    case "puzzle":
+      return renderPuzzle(component, scope);
+    case "title":
+      return renderTitle(component, "view-title", scope);
+    case "subtitle":
+      return renderTitle(component, "view-subtitle", scope);
+    case "text":
+      return renderText(component, scope);
+    case "button":
+      return renderButton(component, scope);
+    case "box":
+    case "row":
+    case "column":
+      return renderContainer(component, scope);
+    case "for":
+      return renderFor(component, scope);
+    case "level_menu":
+      return renderLevelMenu(currentState, component, scope);
+    case "menu":
+      return renderMenuInstance(component, scope);
+    default: {
+      const empty = document.createElement("div");
+      empty.hidden = true;
+      return empty;
+    }
+  }
+}
+
+function renderMenuInstance(component, scope = {}) {
+  const menu = currentState?.menus?.find((candidate) => candidate.name === component.menu);
+  const container = document.createElement("div");
+  container.className = "view-menu";
+  if (!menu) {
+    container.hidden = true;
+    return container;
+  }
+
+  const menuScope = {
+    ...scope,
+    __menuInstance: component.name,
+    __menuButtonCounter: { value: 0 },
+    __menuCursor: Number((scope.__sceneState || currentState?.sceneState || currentState?.screenState)?.[`__menu_${component.name}_cursor`] || 0),
+  };
+  renderSurfaceComponents(menu.view || [], container, menuScope);
+  return container;
+}
+
+function renderTitle(component, className, scope = {}) {
+  const title = document.createElement("p");
+  title.className = className;
+  title.textContent = resolveLabel(component.content, scope);
+  return title;
+}
+
+function renderPuzzle(component, scope = {}) {
+  const layer = scope.__sceneLayer;
+  const scene = layer?.scene || currentState.scene;
+  if (!scene) {
+    const empty = document.createElement("div");
+    empty.hidden = true;
+    return empty;
+  }
+  const root = document.createElement("div");
+  root.className = "board";
+  root.dataset.source = component.source || "";
+  root.dataset.scene = layer?.name || currentState?.currentScene || currentState?.screen || "";
+  const key = `${root.dataset.scene}:${root.dataset.source}`;
+  const renderer = new window.PuzzleRenderer(root, {
+    renderMode: "canvas",
+  });
+  renderer.viewport = puzzleViewports.get(key);
+  renderer.render(scene);
+  puzzleViewports.set(key, renderer.viewport);
+  return root;
+}
+
+function renderText(component, scope = {}) {
+  const text = document.createElement("p");
+  text.className = "view-text";
+  if (component.source === "path") {
+    text.textContent = String(resolveViewPath(component.path, scope) ?? "");
+  } else {
+    text.textContent = component.value || "";
+  }
+  return text;
+}
+
+function renderButton(component, scope = {}) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.textContent = resolveLabel(component.label, scope) || sceneTitle(effectLabel(component.effect));
+  if (scope.__menuInstance && component.value) {
+    const counter = scope.__menuButtonCounter || { value: 0 };
+    const index = counter.value;
+    counter.value += 1;
+    button.classList.toggle("is-selected", index === scope.__menuCursor);
+    button.addEventListener("click", () => runActivationConfirm(button, () => sendCommand(`${scope.__menuInstance}.enter:${index}`)));
+  } else if (scope.__sceneMenuLike && !scope.__insideFor) {
+    const counter = scope.__standardMenuButtonCounter || { value: 0 };
+    scope.__standardMenuButtonCounter = counter;
+    const index = counter.value;
+    counter.value += 1;
+    button.classList.add("standard-menu-button");
+    button.classList.toggle("is-selected", index === standardMenuCursor(scope.__sceneDef));
+    button.addEventListener("click", () => {
+      standardMenuCursors.set(scope.__sceneDef.name, index);
+      runEffectActivationConfirm(button, component.effect, scope);
+    });
+  } else {
+    button.addEventListener("click", () => runEffectActivationConfirm(button, component.effect, scope));
+  }
+  return button;
+}
+
+function runEffectActivationConfirm(control, effect, scope = {}) {
+  if (!shouldDelayActivationConfirm()) {
+    return sendEffect(effect, scope);
+  }
+  const { immediate, delayed } = splitActivationEffects(effect);
+  for (const child of immediate) {
+    Promise.resolve(runImmediateActivationEffect(child, scope)).catch((error) => showError(error));
+  }
+  return runActivationConfirm(control, () => delayed ? sendEffect(delayed, scope) : undefined);
+}
+
+function splitActivationEffects(effect) {
+  if (effect?.kind !== "sequence") {
+    return { immediate: [], delayed: effect };
+  }
+  const effects = effect.effects || [];
+  let delayedStart = 0;
+  while (delayedStart < effects.length && isImmediateActivationEffect(effects[delayedStart].effect || effects[delayedStart])) {
+    delayedStart += 1;
+  }
+  const immediate = effects.slice(0, delayedStart).map((child) => child.effect || child);
+  const delayedEffects = effects.slice(delayedStart);
+  if (delayedEffects.length === 0) {
+    return { immediate, delayed: null };
+  }
+  if (delayedEffects.length === 1) {
+    return { immediate, delayed: delayedEffects[0].effect || delayedEffects[0] };
+  }
+  return { immediate, delayed: { kind: "sequence", effects: delayedEffects } };
+}
+
+function isImmediateActivationEffect(effect) {
+  return effect?.kind === "play_sfx";
+}
+
+function runImmediateActivationEffect(effect, scope = {}) {
+  if (effect?.kind === "play_sfx") {
+    soundRuntime.playSfx(effect.name);
+    return undefined;
+  }
+  return sendEffect(effect, scope);
+}
+
+function runActivationConfirm(control, run) {
+  if (!shouldDelayActivationConfirm()) {
+    return run();
+  }
+  const target = control;
+  if (!target) {
+    return run();
+  }
+  if (target.dataset.confirming === "true") {
+    return undefined;
+  }
+  target.dataset.confirming = "true";
+  applyActivationConfirmGlyphs(target);
+  target.classList.add("is-confirming");
+  window.setTimeout(() => {
+    Promise.resolve(run())
+      .finally(() => {
+        target.classList.remove("is-confirming");
+        clearActivationConfirmGlyphs(target);
+        delete target.dataset.confirming;
+      })
+      .catch((error) => showError(error));
+  }, activationConfirmDelayMs);
+  return undefined;
+}
+
+function shouldDelayActivationConfirm() {
+  return document.body.classList.contains("theme-puzzlescript");
+}
+
+function applyActivationConfirmGlyphs(target) {
+  if (!document.body.classList.contains("theme-puzzlescript")) {
+    return;
+  }
+  const label = activationConfirmLabel(target);
+  const labelWidth = Array.from(label).length;
+  const dashCount = Math.max(0, puzzlescriptTerminalWidth - 2 - labelWidth);
+  const leftCount = Math.floor(dashCount / 2);
+  const rightCount = dashCount - leftCount;
+  target.style.setProperty("--ps-confirm-before", JSON.stringify(`#${"-".repeat(leftCount)}`));
+  target.style.setProperty("--ps-confirm-after", JSON.stringify(`${"-".repeat(rightCount)}#`));
+}
+
+function clearActivationConfirmGlyphs(target) {
+  target.style.removeProperty("--ps-confirm-before");
+  target.style.removeProperty("--ps-confirm-after");
+}
+
+function activationConfirmLabel(target) {
+  const labelNode = target.querySelector?.("span:not(.level-clear-mark)");
+  return (labelNode?.textContent || target.textContent || "").trim();
+}
+
+function activationConfirmTargetForCommand(effect) {
+  const command = effectToCommand(effect, { __sceneDef: currentSceneDef() });
+  if (!command) {
+    return null;
+  }
+  if (currentSceneHasLevelMenu() && String(command).split(":", 1)[0] === "enter") {
+    return selectedLevelMenuElement();
+  }
+  return null;
+}
+
+function selectedLevelMenuElement() {
+  return document.querySelector(".scene-layer.is-focused .level-menu li.is-selected")
+    || document.querySelector(".level-menu li.is-selected");
+}
+
+function renderContainer(component, scope = {}) {
+  const container = document.createElement("div");
+  container.className = `view-${component.kind}`;
+  applySceneLayout(container, component.layout);
+  renderSurfaceComponents(component.children || [], container, scope);
+  return container;
+}
+
+function applySceneLayout(element, layout) {
+  if (!element || !layout) {
+    return;
+  }
+  if (layout.size) {
+    element.style.width = `${Math.max(1, Number(layout.size.width) || 1)}px`;
+    element.style.height = `${Math.max(1, Number(layout.size.height) || 1)}px`;
+  }
+  if (layout.gap !== undefined && layout.gap !== null) {
+    element.style.gap = `${Math.max(0, Number(layout.gap) || 0)}px`;
+  }
+  const align = layout.align || {};
+  if (align.x) {
+    element.style.justifyItems = sceneLayoutAlignCss(align.x);
+    element.style.justifyContent = sceneLayoutAlignCss(align.x);
+  }
+  if (align.y) {
+    element.style.alignItems = sceneLayoutAlignCss(align.y);
+    element.style.alignContent = sceneLayoutAlignCss(align.y);
+  }
+}
+
+function sceneLayoutAlignCss(value) {
+  if (value === "left" || value === "top") {
+    return "start";
+  }
+  if (value === "right" || value === "bottom") {
+    return "end";
+  }
+  return "center";
+}
+
+function renderFor(component, scope = {}) {
+  const list = document.createElement("ul");
+  list.className = "view-list";
+
+  for (const item of viewItems(component, scope)) {
+    const row = document.createElement("li");
+    row.classList.toggle("is-selected", item.selected === true);
+    renderSurfaceComponents(component.children || [], row, {
+      ...scope,
+      __insideFor: true,
+      [component.binding]: item,
+    });
+    if (!row.childNodes.length) {
+      row.textContent = item.label || item.name || "";
+    }
+    list.append(row);
+  }
+
+  return list;
+}
+
+function viewItems(component, scope = {}) {
+  if (component.source === "levels") {
+    return sceneLevelEntries(scope.__sceneDef).map(({ level, index }, position) => ({
+      index,
+      position,
+      number: position + 1,
+      name: level.name || `Level ${index + 1}`,
+      label: level.label || level.name || `Level ${index + 1}`,
+      current: index === currentState.levelIndex,
+      selected: index === currentState.selectedLevelIndex,
+    }));
+  }
+  return [];
+}
+
+function sceneLevelEntries(scene = currentSceneDef()) {
+  return (currentState?.levels || [])
+    .map((level, index) => ({ level, index }))
+    .filter(({ level }) => sceneAcceptsResource(scene, "levels", level?.name || ""));
+}
+
+function sceneAcceptsResource(scene, kind, name) {
+  const resources = scene?.resources || {};
+  const mode = resources[`${kind}Mode`] || "all";
+  if (mode !== "named") {
+    return true;
+  }
+  return (resources[kind] || []).some((resource) => resourceMatches(resource, name));
+}
+
+function resourceMatches(resource, name) {
+  return name === resource || String(name || "").startsWith(`${resource}.`);
+}
+
+function menuInstanceComponent(scene = currentSceneDef()) {
+  const components = scene?.components || [];
+  return findComponent(components, (component) => component.kind === "menu");
+}
+
+function findComponent(components, predicate) {
+  for (const component of components || []) {
+    if (predicate(component)) {
+      return component;
+    }
+    const found = findComponent(component.children || [], predicate);
+    if (found) {
+      return found;
+    }
+  }
+  return null;
+}
+
+function resolveViewPath(path, scope = {}) {
+  const parts = String(path || "").split(".").filter(Boolean);
+  if (parts.length === 0) {
+    return "";
+  }
+  if (parts.length === 1) {
+    if (Object.prototype.hasOwnProperty.call(scope, parts[0])) {
+      return scope[parts[0]];
+    }
+    if (currentState && Object.prototype.hasOwnProperty.call(currentState, parts[0])) {
+      return currentState[parts[0]];
+    }
+    return (scope.__sceneState || currentState?.sceneState || currentState?.screenState)?.[parts[0]]
+      ?? currentState?.gameState?.[parts[0]];
+  }
+  if (parts.length >= 3 && parts[1] === "level") {
+    const puzzle = currentState?.scenePuzzleState?.[parts[0]];
+    if (puzzle !== undefined) {
+      let value = puzzle;
+      for (const part of parts.slice(1)) {
+        value = value?.[part];
+      }
+      return value;
+    }
+  }
+  let value = Object.prototype.hasOwnProperty.call(scope, parts[0])
+    ? scope[parts[0]]
+    : currentState?.[parts[0]];
+  if (value === undefined) {
+  value = (scope.__sceneState || currentState?.sceneState || currentState?.screenState)?.[parts[0]];
+  }
+  if (value === undefined) {
+    value = currentState?.gameState?.[parts[0]];
+  }
+  for (const part of parts.slice(1)) {
+    value = value?.[part];
+  }
+  return value;
+}
+
+function resolveLabel(label, scope = {}) {
+  if (!label) {
+    return "";
+  }
+  if (typeof label === "string") {
+    return label;
+  }
+  if (label.kind === "text") {
+    return label.value || "";
+  }
+  if (label.kind === "int" || label.kind === "bool") {
+    return String(label.value);
+  }
+  if (label.kind === "path") {
+    return String(resolveViewPath(label.path, scope) ?? "");
+  }
+  if (label.kind === "call") {
+    return exprSource(label, scope);
+  }
+  return "";
+}
+
+function renderLevelMenu(state, component = {}, scope = {}) {
+  const list = document.createElement("ul");
+  list.className = "view-list level-menu";
+  const columns = Number(component.columns || 0);
+  if (columns > 0) {
+    list.classList.add("is-matrix");
+    list.style.gridTemplateColumns = `repeat(${columns}, minmax(0, 1fr))`;
+  }
+  const levels = sceneLevelEntries(scope.__sceneDef);
+  for (const [position, { level, index }] of levels.entries()) {
+    const item = document.createElement("li");
+    item.classList.toggle("is-selected", index === state.selectedLevelIndex);
+
+    if (component.showCleared) {
+      const cleared = document.createElement("span");
+      cleared.className = "level-clear-mark";
+      cleared.classList.toggle("is-cleared", level?.cleared === true);
+      item.append(cleared);
+    }
+
+    const label = document.createElement("span");
+    const levelName = level?.name || `Level ${index + 1}`;
+    label.textContent = component.showIndex ? `${position + 1}. ${levelName}` : levelName;
+    item.append(label);
+    item.addEventListener("click", () => runActivationConfirm(item, () => sendCommand(`enter:${position}`)));
+
+    list.append(item);
+  }
+  for (const [commandIndex, commandButton] of (component.buttons || []).entries()) {
+    const position = levels.length + commandIndex;
+    const index = state.levelCount + commandIndex;
+    const item = document.createElement("li");
+    item.className = "level-menu-button";
+    item.classList.toggle("is-selected", index === state.selectedLevelIndex);
+    if (component.showCleared) {
+      const cleared = document.createElement("span");
+      cleared.className = "level-clear-mark";
+      item.append(cleared);
+    }
+    const label = document.createElement("span");
+    label.textContent = resolveLabel(commandButton.label);
+    item.append(label);
+    item.addEventListener("click", () => runActivationConfirm(item, () => sendCommand(`enter:${position}`)));
+    list.append(item);
+  }
+  return list;
+}
+
+function focusShell() {
+  if (!shell) {
+    return;
+  }
+  shell.focus({ preventScroll: true });
+}
+
+function commandForKey(event) {
+  if (!currentState) {
+    return null;
+  }
+  const rawKey = String(event.key || "");
+  const rawCode = String(event.code || "");
+  const key = normalizedKeyName(rawKey, rawCode);
+  const keyTokens = rawKeyTokens(rawKey, rawCode);
+  const scene = currentSceneDef();
+  const standardInput = standardMenuInputForKey(key, key, rawCode);
+  if (standardInput && standardMenuButtons(scene).length > 0) {
+    return { kind: "standard_menu", input: standardInput };
+  }
+  const binding = scene?.keys?.find((binding) => binding.keys.some((candidate) => keyTokens.includes(candidate)));
+  if (binding) {
+    return binding.effect || { kind: "command", name: binding.command };
+  }
+
+  const menu = menuInstanceComponent(scene);
+  if (menu) {
+    const menuInput = menuInputForKey(key, key, rawCode);
+    if (menuInput) {
+      return { kind: "command", name: `${menu.name}.${menuInput}` };
+    }
+  }
+
+  if (currentSceneHasLevelMenu()) {
+    const menuInput = menuInputForKey(key, key, rawCode);
+    if (menuInput) {
+      const command = {
+        up: "up",
+        down: "down",
+        left: "left",
+        right: "right",
+        enter: "enter",
+        back: "back",
+      }[menuInput];
+      return command ? { kind: "command", name: command } : null;
+    }
+  }
+
+  if (key === "z") {
+    return { kind: "command", name: "undo" };
+  }
+  if (key === "y") {
+    return { kind: "command", name: "redo" };
+  }
+  if (!currentSceneHasPuzzle()) {
+    return null;
+  }
+
+  const input = currentState.inputs.find((input) =>
+    keyTokens.includes(input.key)
+    || keyTokens.includes(input.arrow)
+    || (input.keys || []).some((candidate) => keyTokens.includes(candidate))
+  );
+  return input ? { kind: "command", name: input.name } : null;
+}
+
+function normalizedKeyName(key, code = "") {
+  if (key.length === 1) {
+    return key.toLowerCase();
+  }
+  if (!key && code.startsWith("Key") && code.length === 4) {
+    return code.slice(3).toLowerCase();
+  }
+  return key;
+}
+
+function rawKeyTokens(key, code = "") {
+  const normalized = normalizedKeyName(key, code);
+  return [...new Set([normalized, key, code, codeToArrowName(code), codeToLetterName(code)].filter(Boolean))];
+}
+
+function codeToArrowName(code) {
+  return ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(code) ? code : "";
+}
+
+function codeToLetterName(code) {
+  return code.startsWith("Key") && code.length === 4 ? code.slice(3).toLowerCase() : "";
+}
+
+function standardMenuInputForKey(key, rawKey, code = "") {
+  if (key === "w" || rawKey === "ArrowUp" || code === "ArrowUp" || key === "a" || rawKey === "ArrowLeft" || code === "ArrowLeft") {
+    return "prev";
+  }
+  if (key === "s" || rawKey === "ArrowDown" || code === "ArrowDown" || key === "d" || rawKey === "ArrowRight" || code === "ArrowRight") {
+    return "next";
+  }
+  if (isStandardMenuConfirmKey(key, rawKey, code)) {
+    return "enter";
+  }
+  return null;
+}
+
+function isStandardMenuConfirmKey(key, rawKey, code = "") {
+  return rawKey === "Enter"
+    || rawKey === " "
+    || code === "Enter"
+    || code === "Space"
+    || (document.body.classList.contains("theme-puzzlescript") && (key === "x" || code === "KeyX"));
+}
+
+function menuInputForKey(key, rawKey, code = "") {
+  if (key === "w" || rawKey === "ArrowUp" || code === "ArrowUp") {
+    return "up";
+  }
+  if (key === "s" || rawKey === "ArrowDown" || code === "ArrowDown") {
+    return "down";
+  }
+  if (key === "a" || rawKey === "ArrowLeft" || code === "ArrowLeft") {
+    return "left";
+  }
+  if (key === "d" || rawKey === "ArrowRight" || code === "ArrowRight") {
+    return "right";
+  }
+  if (rawKey === "Enter" || rawKey === " " || code === "Enter" || code === "Space") {
+    return "enter";
+  }
+  if (rawKey === "Escape" || code === "Escape" || key === "q") {
+    return "back";
+  }
+  return null;
+}
+
+function inputByName(name) {
+  if (!currentState) {
+    return null;
+  }
+  return currentState.inputs.find((input) => input.name === name);
+}
+
+function currentSceneDef() {
+  const name = currentState?.currentScene || currentState?.screen || "playing";
+  const scenes = currentState?.scenes || currentState?.screens || [];
+  return scenes.find((scene) => scene.name === name) || null;
+}
+
+function sceneDefByName(name) {
+  const scenes = currentState?.scenes || currentState?.screens || [];
+  return scenes.find((scene) => scene.name === name) || null;
+}
+
+function isSceneConditionTrue(condition) {
+  return String(condition || "")
+    .split(" and ")
+    .every((part) => isSceneConditionAtomTrue(part.trim()));
+}
+
+function isSceneConditionAtomTrue(condition) {
+  const equalMatch = String(condition || "").match(/^(.+?)\s*==\s*(.+)$/);
+  if (equalMatch) {
+    const left = sceneConditionValue(equalMatch[1].trim());
+    const right = sceneConditionValue(equalMatch[2].trim());
+    return left !== undefined && right !== undefined && left === right;
+  }
+  const notEqualMatch = String(condition || "").match(/^(.+?)\s*!=\s*(.+)$/);
+  if (notEqualMatch) {
+    const left = sceneConditionValue(notEqualMatch[1].trim());
+    const right = sceneConditionValue(notEqualMatch[2].trim());
+    return left !== undefined && right !== undefined && left !== right;
+  }
+  const levelValue = resolveViewPath(condition);
+  if (typeof levelValue === "boolean") {
+    return levelValue;
+  }
+  return false;
+}
+
+function sceneConditionValue(value) {
+  if (value === "true" || value === "false") {
+    return value;
+  }
+  const levelValue = resolveViewPath(value);
+  if (levelValue !== undefined && levelValue !== null && typeof levelValue !== "object") {
+    return String(levelValue);
+  }
+  if (/^-?\d+$/.test(String(value))) {
+    return String(Number(value));
+  }
+  const quoted = String(value).match(/^"(.*)"$/);
+  if (quoted) {
+    return quoted[1].replace(/\\"/g, "\"");
+  }
+  if (/^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$/.test(String(value))) {
+    return String(value);
+  }
+  return undefined;
+}
+
+async function sendEffect(effect, scope = {}) {
+  if (effect?.kind === "standard_menu") {
+    handleStandardMenuInput(effect.input);
+    return;
+  }
+  if (effect?.kind === "wait") {
+    await waitForEffect(effect);
+    return;
+  }
+  if (effect?.kind === "sequence") {
+    for (const child of effect.effects || []) {
+      await sendEffect(child.effect || child, scope);
+    }
+    return;
+  }
+  if (effect?.kind === "conditional") {
+    if (isSceneConditionTrue(effect.condition)) {
+      await sendEffect(effect.effect?.effect || effect.effect, scope);
+    }
+    return;
+  }
+  const command = effectToCommand(effect, scope);
+  if (command) {
+    await sendCommand(command);
+  }
+}
+
+function waitForEffect(effect) {
+  const milliseconds = Math.max(0, Number(effect?.milliseconds || effect?.ms || 0));
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function applyWaitEvents(events) {
+  for (const event of events || []) {
+    if (event.kind !== "wait") {
+      continue;
+    }
+    clientPendingWaits += 1;
+    if (currentState) {
+      currentState.busy = true;
+    }
+    setTimeout(() => {
+      clientPendingWaits = Math.max(0, clientPendingWaits - 1);
+      if (currentState) {
+        currentState.busy = clientPendingWaits > 0;
+      }
+    }, Math.max(0, Number(event.milliseconds || event.ms || 0)));
+  }
+}
+
+function sendCommand(command) {
+  if (currentState?.busy) {
+    return undefined;
+  }
+  if (currentSceneHasLevelMenu() && isLevelMenuCommandName(command)) {
+    return post(`/api/command/${encodeURIComponent(command)}`);
+  }
+  if (currentState?.inputs?.some((input) => input.name === command)) {
+    return post(`/api/input/${encodeURIComponent(command)}`);
+  }
+  return post(`/api/command/${encodeURIComponent(command)}`);
+}
+
+function isLevelMenuCommandName(command) {
+  const name = String(command || "").split(":", 1)[0];
+  return [
+    "up",
+    "down",
+    "left",
+    "right",
+    "enter",
+    "back",
+  ].includes(name);
+}
+
+function standardMenuButtons(scene = currentSceneDef()) {
+  if (!scene || !sceneIsMenuLike(scene)) {
+    return [];
+  }
+  const buttons = [];
+  collectStandardMenuButtons(scene.components || [], buttons, false);
+  return buttons;
+}
+
+function collectStandardMenuButtons(components, out, insideFor) {
+  for (const component of components || []) {
+    if (component.kind === "for") {
+      collectStandardMenuButtons(component.children || [], out, true);
+      continue;
+    }
+    if (component.kind === "menu" || component.kind === "level_menu") {
+      continue;
+    }
+    if (component.kind === "button" && !insideFor) {
+      out.push(component);
+      continue;
+    }
+    collectStandardMenuButtons(component.children || [], out, insideFor);
+  }
+}
+
+function standardMenuCursor(scene = currentSceneDef()) {
+  const buttons = standardMenuButtons(scene);
+  const max = Math.max(0, buttons.length - 1);
+  const cursor = Number(standardMenuCursors.get(scene?.name) || 0);
+  return Math.max(0, Math.min(max, cursor));
+}
+
+function handleStandardMenuInput(input) {
+  const scene = currentSceneDef();
+  const buttons = standardMenuButtons(scene);
+  if (!scene || buttons.length === 0) {
+    return;
+  }
+  const cursor = standardMenuCursor(scene);
+  if (input === "prev" || input === "next") {
+    const delta = input === "prev" ? -1 : 1;
+    const next = (cursor + delta + buttons.length) % buttons.length;
+    standardMenuCursors.set(scene.name, next);
+    render(currentState);
+    return;
+  }
+  if (input === "enter") {
+    const selectedButton = document.querySelector(".standard-menu-button.is-selected");
+    runEffectActivationConfirm(selectedButton, buttons[cursor]?.effect || null, { __sceneDef: scene });
+  }
+}
+
+function effectLabel(effect) {
+  if (!effect) {
+    return "";
+  }
+  if (typeof effect === "string") {
+    return effect;
+  }
+  if (effect.kind === "command" || effect.kind === "input" || effect.kind === "component_effect") {
+    return effect.name;
+  }
+  if (effect.kind === "message") {
+    return "message";
+  }
+  if (effect.kind === "wait") {
+    return "wait";
+  }
+  if (effect.kind === "conditional") {
+    return effectLabel(effect.effect?.effect || effect.effect);
+  }
+  if (effect.kind === "play_sfx" || effect.kind === "play_music" || effect.kind === "pause_music" || effect.kind === "resume_music") {
+    return effect.name;
+  }
+  if (effect.kind === "stop_music") {
+    return "stop music";
+  }
+  if (["goto", "enter", "create", "reset", "delete", "show", "hide", "toggle", "focus"].includes(effect.kind)) {
+    return effectCommandName(effect);
+  }
+  if (effect.kind === "start_level") {
+    return effect.scope ? `start levels ${effect.scope} in ${effect.scene}` : `start levels in ${effect.scene}`;
+  }
+  if (effect.kind === "continue_level") {
+    return effect.scope ? `continue levels ${effect.scope} in ${effect.scene}` : `continue levels in ${effect.scene}`;
+  }
+  if (effect.kind === "puzzle_next_level") {
+    return `${effect.target}.next_level`;
+  }
+  if (effect.kind === "puzzle_previous_level") {
+    return `${effect.target}.previous_level`;
+  }
+  if (effect.kind === "puzzle_reset") {
+    return `${effect.target}.restart`;
+  }
+  if (effect.kind === "puzzle_goto_level") {
+    return `${effect.target}.goto`;
+  }
+  if (effect.kind === "back") {
+    return "back";
+  }
+  return "";
+}
+
+function effectToCommand(effect, scope = {}) {
+  if (!effect) {
+    return "";
+  }
+  if (typeof effect === "string") {
+    return effect;
+  }
+  if (effect.kind === "command" || effect.kind === "input" || effect.kind === "component_effect") {
+    return commandWithScope(effect.name, scope);
+  }
+  if (effect.kind === "message") {
+    return `message ${exprSource(effect.text, scope)}`.trim();
+  }
+  if (effect.kind === "wait") {
+    return "";
+  }
+  if (effect.kind === "sequence") {
+    const commands = (effect.effects || [])
+      .map((child) => effectToCommand(child.effect || child, scope))
+      .filter(Boolean);
+    return commands.at(-1) || "";
+  }
+  if (effect.kind === "conditional") {
+    return isSceneConditionTrue(effect.condition)
+      ? effectToCommand(effect.effect?.effect || effect.effect, scope)
+      : "";
+  }
+  if (effect.kind === "play_sfx") {
+    return `sfx ${effect.name || ""}`.trim();
+  }
+  if (effect.kind === "play_music") {
+    return `play_music ${effect.name || ""}`.trim();
+  }
+  if (effect.kind === "pause_music") {
+    return effect.name ? `pause_music ${effect.name}` : "pause_music";
+  }
+  if (effect.kind === "resume_music") {
+    return effect.name ? `resume_music ${effect.name}` : "resume_music";
+  }
+  if (effect.kind === "stop_music") {
+    return effect.name ? `stop_music ${effect.name}` : "stop_music";
+  }
+  if (["goto", "enter", "create", "reset", "delete", "show", "hide", "toggle", "focus"].includes(effect.kind)) {
+    return effectCommand(effect, scope);
+  }
+  if (effect.kind === "start_level") {
+    return effect.scope ? `start levels ${effect.scope} in ${effect.scene}` : `start levels in ${effect.scene}`;
+  }
+  if (effect.kind === "continue_level") {
+    return effect.scope ? `continue levels ${effect.scope} in ${effect.scene}` : `continue levels in ${effect.scene}`;
+  }
+  if (effect.kind === "puzzle_next_level") {
+    return `${effect.target}.next_level`;
+  }
+  if (effect.kind === "puzzle_previous_level") {
+    return `${effect.target}.previous_level`;
+  }
+  if (effect.kind === "puzzle_reset") {
+    return `${effect.target}.restart`;
+  }
+  if (effect.kind === "puzzle_goto_level") {
+    return `${effect.target}.goto ${effectValueToCommand(effect.level, scope)}`;
+  }
+  if (effect.kind === "back") {
+    return "back";
+  }
+  return "";
+}
+
+function effectCommandName(effect) {
+  return effect?.scene || effect?.screen || "";
+}
+
+function effectValueToCommand(value, scope = {}) {
+  if (!value) {
+    return "";
+  }
+  if (value.kind === "bool" || value.kind === "int") {
+    return String(value.value);
+  }
+  if (value.kind === "text") {
+    return value.value || "";
+  }
+  if (value.kind === "path") {
+    return commandWithScope(value.path || "", scope);
+  }
+  return "";
+}
+
+function effectCommand(effect, scope = {}) {
+  const screen = effect?.scene || effect?.screen || "";
+  if (!screen) {
+    return "";
+  }
+  const params = (effect.params || []).map((param) => `${param.name} = ${exprSource(param.value, scope)}`);
+  const base = `${effect.kind} ${screen}`;
+  return params.length ? `${base} with ${params.join(", ")}` : base;
+}
+
+function exprSource(expr, scope = {}) {
+  if (!expr) {
+    return "";
+  }
+  if (expr.kind === "text") {
+    return JSON.stringify(expr.value || "");
+  }
+  if (expr.kind === "int" || expr.kind === "bool") {
+    return String(expr.value);
+  }
+  if (expr.kind === "path") {
+    const resolved = resolveViewPath(expr.path, scope);
+    return resolved === undefined || resolved === null ? expr.path : commandPayload(resolved);
+  }
+  if (expr.kind === "call") {
+    return `${expr.name}(${(expr.args || []).map((arg) => exprSource(arg, scope)).join(", ")})`;
+  }
+  return "";
+}
+
+function commandWithScope(command, scope = {}) {
+  const [name, payload] = String(command || "").split(":", 2);
+  if (!payload) {
+    return command;
+  }
+  const scoped = resolveViewPath(payload, scope);
+  if (scoped === undefined || scoped === null) {
+    return command;
+  }
+  return `${name}:${commandPayload(scoped)}`;
+}
+
+function commandPayload(value) {
+  if (typeof value === "object") {
+    if (value.index !== undefined) {
+      return String(value.index);
+    }
+    if (value.name !== undefined) {
+      return String(value.name);
+    }
+    if (value.label !== undefined) {
+      return String(value.label);
+    }
+  }
+  return String(value);
+}
+
+document.addEventListener("keydown", (event) => {
+  if (componentEmbedMode) {
+    return;
+  }
+  if (messagePopup) {
+    event.preventDefault();
+    closeMessagePopup();
+    return;
+  }
+
+  const command = commandForKey(event);
+  if (!currentState) {
+    return;
+  }
+
+  if (command) {
+    event.preventDefault();
+    const confirmTarget = activationConfirmTargetForCommand(command);
+    if (confirmTarget) {
+      runEffectActivationConfirm(confirmTarget, command);
+    } else {
+      sendEffect(command);
+    }
+    return;
+  }
+});
+
+if (standaloneRuntime) {
+  window.addEventListener("PuzzleStandaloneStateChanged", () => {
+    loadState().catch((error) => {
+      showError(error);
+    });
+  });
+}
+
+window.addEventListener("message", async (event) => {
+  if (event.data?.type === "PuzzleStudioInput") {
+    if (standaloneRuntime && event.data.input) {
+      sendCommand(String(event.data.input));
+    }
+    return;
+  }
+
+  if (event.data?.type === "PuzzleStudioSetState") {
+    if (standaloneRuntime && event.data.state) {
+      standaloneRuntime.setCurrentState(event.data.state, {
+        levelIndex: event.data.levelIndex,
+        regions: event.data.regions,
+        materializeLevelStart: event.data.materializeLevelStart === true,
+        materializeDisplay: event.data.materializeDisplay === true,
+        materializeTurnStart: event.data.materializeTurnStart === true,
+      });
+      if (event.data.silent === true) {
+        notifyPreviewState(standaloneRuntime.snapshot());
+      } else {
+        loadState();
+      }
+    }
+    return;
+  }
+
+  if (event.data?.type === "PuzzleStudioSolve") {
+    const requestId = event.data.requestId;
+    const solveRequest = { cancelled: false };
+    activeSolveRequests.set(requestId, solveRequest);
+    try {
+      if (standaloneRuntime && event.data.state) {
+        standaloneRuntime.setCurrentState(event.data.state, {
+          levelIndex: event.data.levelIndex,
+          regions: event.data.regions,
+          materializeLevelStart: event.data.materializeLevelStart === true,
+          materializeDisplay: event.data.materializeDisplay === true,
+          materializeTurnStart: event.data.materializeTurnStart === true,
+        });
+        if (event.data.silent === true) {
+          notifyPreviewState(standaloneRuntime.snapshot());
+        } else {
+          await loadState();
+        }
+      }
+      const solution = await solveStandaloneCurrentState(event.data.options || {});
+      window.parent.postMessage({
+        type: "PuzzleStudioSolveResult",
+        requestId,
+        solution,
+      }, "*");
+    } catch (error) {
+      window.parent.postMessage({
+        type: "PuzzleStudioSolveResult",
+        requestId,
+        error: String(error?.message || error),
+      }, "*");
+    } finally {
+      activeSolveRequests.delete(requestId);
+    }
+    return;
+  }
+
+  if (event.data?.type === "PuzzleStudioCancelSolve") {
+    const solveRequest = activeSolveRequests.get(event.data.requestId);
+    if (solveRequest) {
+      solveRequest.cancelled = true;
+    }
+    return;
+  }
+
+  if (event.data?.type === "PuzzleStudioKey") {
+    if (currentState?.busy) {
+      return;
+    }
+    const command = commandForKey({
+      key: String(event.data.key || ""),
+      code: String(event.data.code || ""),
+    });
+    if (command) {
+      sendEffect(command);
+    }
+    return;
+  }
+
+  if (event.data?.type !== "PuzzleStudioCommand") {
+    return;
+  }
+  const command = String(event.data.command || "");
+  if (command) {
+    sendCommand(command);
+  }
+});
+
+playSurface.addEventListener("pointerdown", (event) => {
+  if (!currentState || currentState.busy || !currentSceneHasPuzzle()) {
+    return;
+  }
+  swipeStart = { x: event.clientX, y: event.clientY, pointerId: event.pointerId };
+  playSurface.setPointerCapture(event.pointerId);
+});
+
+playSurface.addEventListener("pointerup", (event) => {
+  if (!swipeStart || swipeStart.pointerId !== event.pointerId) {
+    return;
+  }
+
+  const dx = event.clientX - swipeStart.x;
+  const dy = event.clientY - swipeStart.y;
+  swipeStart = null;
+
+  const threshold = 24;
+  if (Math.max(Math.abs(dx), Math.abs(dy)) < threshold) {
+    return;
+  }
+
+  const inputName = Math.abs(dx) > Math.abs(dy)
+    ? (dx > 0 ? "right" : "left")
+    : (dy > 0 ? "down" : "up");
+  const input = inputByName(inputName);
+  if (input) {
+    sendCommand(input.name);
+  }
+});
+
+playSurface.addEventListener("pointercancel", () => {
+  swipeStart = null;
+});
+
+loadState().catch((error) => {
+  showError(error);
+});
+
+if (!componentEmbedMode) {
+  document.addEventListener("DOMContentLoaded", focusShell);
+  document.addEventListener("pointerdown", focusShell);
+  window.addEventListener("resize", () => scheduleScreenScaleSync(2));
+  window.addEventListener("load", () => {
+    scheduleScreenScaleSync(3);
+    focusShell();
+    requestAnimationFrame(focusShell);
+    setTimeout(focusShell, 0);
+  });
+  window.addEventListener("focus", focusShell);
+  document.fonts?.ready.then(() => scheduleScreenScaleSync(2)).catch(() => {});
+}
+
+function showError(error) {
+  console.error(error);
+}

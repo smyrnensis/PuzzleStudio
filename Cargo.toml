@@ -1,0 +1,20 @@
+[workspace]
+members = [
+    "crates/core",
+    "crates/scene",
+    "crates/puzzle3d_model",
+    "crates/lang",
+    "crates/solver",
+    "crates/play",
+    "crates/ascii_play",
+    "crates/html_play",
+    "crates/html_editor",
+    "crates/cli",
+    "crates/wasm",
+    "src-tauri",
+]
+resolver = "3"
+
+[workspace.package]
+edition = "2024"
+license = "UNLICENSED"
