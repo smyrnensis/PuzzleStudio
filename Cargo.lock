@@ -2379,7 +2379,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "puzzlestudio-cli"
+name = "puzzlestudio"
 version = "0.1.0"
 dependencies = [
  "ascii-play",

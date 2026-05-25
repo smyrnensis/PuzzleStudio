@@ -11,8 +11,10 @@ const EDITOR_CSS: &str = include_str!("../static/editor.css");
 const EDITOR_BOOT_JS: &str = include_str!("../static/editor_boot.js");
 const EDITOR_THEME_IMPORTS_JS: &str = include_str!("../static/editor_theme_imports.js");
 const EDITOR_DOM_JS: &str = include_str!("../static/editor_dom.js");
+const EDITOR_WORKSPACE_JS: &str = include_str!("../static/editor_workspace.js");
 const EDITOR_SOURCE_JS: &str = include_str!("../static/editor_source.js");
 const EDITOR_LEVEL3D_JS: &str = include_str!("../static/editor_level3d.js");
+const EDITOR_WORKBENCH_JS: &str = include_str!("../static/editor_workbench.js");
 const EDITOR_JS: &str = include_str!("../static/editor.js");
 const EDITOR_SPRITE_JS: &str = include_str!("../static/editor_sprite.js");
 const PUZZLE3_VISUAL_CORE_JS: &str = include_str!("../../html_play/static/puzzle3_visual_core.js");
@@ -111,7 +113,7 @@ impl Config {
         }
 
         let puzzle_path = puzzle_lang::resolve_game_entry(
-            &puzzle_path.unwrap_or_else(|| PathBuf::from("games/spec_2d/game.puzzle")),
+            &puzzle_path.unwrap_or_else(|| PathBuf::from("games/spec_2d.puzzle")),
         )
         .map_err(|error| AppError::Config(error.to_string()))?;
 
@@ -857,9 +859,15 @@ fn route(request: &HttpRequest, service: &EditorService) -> Vec<u8> {
             http_ok("text/javascript; charset=utf-8", EDITOR_THEME_IMPORTS_JS)
         }
         ("GET", "/editor_dom.js") => http_ok("text/javascript; charset=utf-8", EDITOR_DOM_JS),
+        ("GET", "/editor_workspace.js") => {
+            http_ok("text/javascript; charset=utf-8", EDITOR_WORKSPACE_JS)
+        }
         ("GET", "/editor_source.js") => http_ok("text/javascript; charset=utf-8", EDITOR_SOURCE_JS),
         ("GET", "/editor_level3d.js") => {
             http_ok("text/javascript; charset=utf-8", EDITOR_LEVEL3D_JS)
+        }
+        ("GET", "/editor_workbench.js") => {
+            http_ok("text/javascript; charset=utf-8", EDITOR_WORKBENCH_JS)
         }
         ("GET", "/editor.js") => http_ok("text/javascript; charset=utf-8", EDITOR_JS),
         ("GET", "/editor_sprite.js") => http_ok("text/javascript; charset=utf-8", EDITOR_SPRITE_JS),
@@ -1166,8 +1174,10 @@ fn export_editor_html(state: &EditorState) -> Result<String, AppError> {
     let editor_boot_js = escape_script(EDITOR_BOOT_JS);
     let editor_theme_imports_js = escape_script(EDITOR_THEME_IMPORTS_JS);
     let editor_dom_js = escape_script(EDITOR_DOM_JS);
+    let editor_workspace_js = escape_script(EDITOR_WORKSPACE_JS);
     let editor_source_js = escape_script(EDITOR_SOURCE_JS);
     let editor_level3d_js = escape_script(EDITOR_LEVEL3D_JS);
+    let editor_workbench_js = escape_script(EDITOR_WORKBENCH_JS);
     let game_visuals_js = escape_script(&state.game_visuals_js);
     let renderer_js = escape_script(RENDERER_JS);
     let editor_js = escape_script(EDITOR_JS);
@@ -1223,12 +1233,20 @@ fn export_editor_html(state: &EditorState) -> Result<String, AppError> {
             ),
         )
         .replace(
+            r#"<script src="/editor_workspace.js"></script>"#,
+            &format!("<script>\n{editor_workspace_js}\n</script>"),
+        )
+        .replace(
             r#"<script src="/editor_source.js"></script>"#,
             &format!("<script>\n{editor_source_js}\n</script>"),
         )
         .replace(
             r#"<script src="/editor_level3d.js"></script>"#,
             &format!("<script>\n{editor_level3d_js}\n</script>"),
+        )
+        .replace(
+            r#"<script src="/editor_workbench.js"></script>"#,
+            &format!("<script>\n{editor_workbench_js}\n</script>"),
         )
         .replace(
             r#"<script src="/editor.js"></script>"#,
@@ -1595,10 +1613,10 @@ board.rules
     }
 
     fn starter_puzzle_source_from_editor_js() -> String {
-        let function_start = EDITOR_JS
+        let function_start = EDITOR_WORKSPACE_JS
             .find("function starterPuzzleSource(name) {")
             .expect("starterPuzzleSource function");
-        let body = &EDITOR_JS[function_start..];
+        let body = &EDITOR_WORKSPACE_JS[function_start..];
         let literal_start = body
             .find("return `")
             .map(|index| index + "return `".len())
@@ -1792,7 +1810,7 @@ board.rules
             .expect("compile puzzle3 preview");
 
         assert!(html.contains("window.Puzzle3DFixture"));
-        assert!(html.contains("Puzzle3DTestRuntime"));
+        assert!(html.contains("WasmPuzzle3Runtime"));
         assert!(html.contains("Microban Basic 3D"));
     }
 
@@ -1831,6 +1849,31 @@ board.rules
     }
 
     #[test]
+    fn level3d_editor_playtest_uses_runtime_preview_contract() {
+        assert!(EDITOR_HTML.contains(r#"id="level3dPlaytestButton""#));
+        assert!(EDITOR_DOM_JS.contains("const level3dPlaytestButton = document.querySelector"));
+        assert!(EDITOR_LEVEL3D_JS.contains("let level3dPlaytestActive = false;"));
+        assert!(EDITOR_LEVEL3D_JS.contains("function startLevel3dPlaytest()"));
+        assert!(EDITOR_LEVEL3D_JS.contains("function stopLevel3dPlaytest(options = {})"));
+        assert!(EDITOR_LEVEL3D_JS.contains("function sendLevel3dPlaytestKey(event)"));
+        assert!(
+            EDITOR_LEVEL3D_JS.contains(
+                "target.postMessage({ type: \"PuzzleStudioCommand\", command: \"undo\" }"
+            )
+        );
+        assert!(EDITOR_LEVEL3D_JS.contains("type: \"PuzzleStudioRequestPuzzle3State\""));
+        assert!(EDITOR_LEVEL3D_JS.contains("function handleLevel3dPlaytestStateMessage(event)"));
+        assert!(EDITOR_LEVEL3D_JS.contains("event.data?.type !== \"PuzzleStudioPuzzle3State\""));
+        assert!(EDITOR_LEVEL3D_JS.contains(
+            "level3dPlaytestButton?.addEventListener(\"click\", toggleLevel3dPlaytest);"
+        ));
+        assert!(EDITOR_LEVEL3D_JS.contains("level3dCameraYawScrub"));
+        assert!(EDITOR_LEVEL3D_JS.contains("if (level3dPlaytestActive) {\n    return;\n  }\n  const target = level3dPreviewScrubTarget(event);"));
+        assert!(EDITOR_CSS.contains(".level-builder.is-playtesting .level3d-stage-canvas"));
+        assert!(EDITOR_CSS.contains(".level-builder.is-playtesting .level3d-preview-controls"));
+    }
+
+    #[test]
     fn level_editor_uses_compiled_preview_source_for_level_reference_data() {
         assert!(EDITOR_JS.contains("function levelReferenceSource(exportData = previewExport)"));
         assert!(
@@ -1844,6 +1887,30 @@ board.rules
         assert!(EDITOR_JS.contains(
             "function levelSourceData(source = levelReferenceSource(previewExport || extractPreviewExport(latestHtml))"
         ));
+    }
+
+    #[test]
+    fn solver_pane_has_level_selector() {
+        assert!(EDITOR_HTML.contains(r#"id="solverLevelSelect""#));
+        assert!(EDITOR_DOM_JS.contains("const solverLevelSelect = document.querySelector"));
+        assert!(EDITOR_JS.contains("let solverLevelIndex = 0;"));
+        assert!(EDITOR_JS.contains("function syncSolverLevelSelector("));
+        assert!(EDITOR_JS.contains("function selectSolverLevel("));
+        assert!(EDITOR_JS.contains("function setSolverTargetFromState("));
+        assert!(EDITOR_JS.contains("function compiledLevelStateData("));
+        assert!(EDITOR_JS.contains("function solverPuzzle3dPreviewSnapshot("));
+        assert!(EDITOR_JS.contains("return currentPreviewMode === \"edit\";"));
+        assert!(!EDITOR_JS.contains("requestFocusedPreviewState();"));
+        assert!(
+            !EDITOR_JS.contains("syncPreviewStateFromLevel();\n  try {\n    worker.postMessage")
+        );
+        assert!(EDITOR_JS.contains("solverLevelSelect?.addEventListener(\"change\""));
+        assert!(EDITOR_LEVEL3D_JS.contains("function level3dEditedSnapshotAppliesToLevel("));
+        assert!(EDITOR_LEVEL3D_JS.contains("function level3dCellsWithObjectDescriptors("));
+        assert!(
+            EDITOR_JS
+                .contains("isPuzzle3dExport(exportData) && typeof renderPuzzle3dSolverPreview")
+        );
     }
 
     #[test]
@@ -1878,12 +1945,14 @@ board.rules
         assert!(EDITOR_LEVEL3D_JS.contains("const snapshot = level3dRuntimeSnapshot();"));
         assert!(EDITOR_LEVEL3D_JS.contains("resources: level3dRuntimePreviewResources(snapshot)"));
         assert!(EDITOR_LEVEL3D_JS.contains("function showBlankLevel3dRuntimeFrame(frame)"));
+        assert!(EDITOR_HTML.contains("id=\"level3dRuntimeFrame\""));
+        assert!(EDITOR_CSS.contains(".level3d-runtime-frame"));
         assert!(EDITOR_LEVEL3D_JS.contains("showBlankLevel3dRuntimeFrame(level3dLayerFrame);"));
         assert!(EDITOR_LEVEL3D_JS.contains(
             "function defaultLevel3dSourceDefinition(source, ranges = findLevels3Ranges(source))"
         ));
         assert!(EDITOR_LEVEL3D_JS.contains("sourceLevel3dRangeHasReadableLegend(source, range)"));
-        assert!(EDITOR_LEVEL3D_JS.contains("function sendLevel3dSnapshotToPreviewFrame"));
+        assert!(!EDITOR_LEVEL3D_JS.contains("function sendLevel3dSnapshotToPreviewFrame"));
         assert!(EDITOR_LEVEL3D_JS.contains("function refreshLevel3dRuntimePreviews()"));
         assert!(EDITOR_LEVEL3D_JS.contains("sendLevel3dLayerSnapshotToRuntime();"));
         assert!(EDITOR_LEVEL3D_JS.contains(
@@ -1896,16 +1965,19 @@ board.rules
         ));
         assert!(EDITOR_LEVEL3D_JS.contains("function level3dRuntimePreviewResources"));
         assert!(EDITOR_LEVEL3D_JS.contains("sprites: exportData?.sprites || {}"));
-        assert!(EDITOR_LEVEL3D_JS.contains("camera: level3dPreviewCamera(snapshot)"));
+        assert!(EDITOR_LEVEL3D_JS.contains("camera: level3dRuntimePreviewCamera(snapshot)"));
+        assert!(EDITOR_LEVEL3D_JS.contains("view: level3dRuntimePreviewView(snapshot)"));
         assert!(
             EDITOR_LEVEL3D_JS.contains("settings: level3dPreviewSettings(snapshot.settings || {})")
         );
-        assert!(EDITOR_LEVEL3D_JS.contains("previewFrameHasEditorLevelState = true;"));
+        assert!(!EDITOR_LEVEL3D_JS.contains("previewFrameHasEditorLevelState = true;"));
         assert!(EDITOR_LEVEL3D_JS.contains("function renderPuzzle3dSolverPreview()"));
         assert!(EDITOR_LEVEL3D_JS.contains("function sendPuzzle3dSolutionToSolverRuntime()"));
         assert!(EDITOR_LEVEL3D_JS.contains("level3dSolverFrame.contentWindow.postMessage({"));
         assert!(EDITOR_LEVEL3D_JS.contains("function level3dPreviewUpdateFromSnapshot(snapshot)"));
-        assert!(EDITOR_JS.contains("levelSolutionPreview?.kind === \"puzzle3d\" && typeof renderPuzzle3dSolverPreview === \"function\""));
+        assert!(EDITOR_JS.contains(
+            "isPuzzle3dExport(exportData) && typeof renderPuzzle3dSolverPreview === \"function\""
+        ));
         assert!(EDITOR_JS.contains("typeof clearPuzzle3dSolverPreview === \"function\""));
         assert!(EDITOR_CSS.contains(".solver-board-viewport.is-puzzle3d"));
         assert!(EDITOR_CSS.contains(".solver3d-frame"));
@@ -1961,7 +2033,8 @@ board.rules
 
         assert!(EDITOR_LEVEL3D_JS.contains("level: {"));
         assert!(EDITOR_LEVEL3D_JS.contains("resources: level3dRuntimePreviewResources(snapshot)"));
-        assert!(EDITOR_LEVEL3D_JS.contains("camera: level3dPreviewCamera(snapshot)"));
+        assert!(EDITOR_LEVEL3D_JS.contains("camera: level3dRuntimePreviewCamera(snapshot)"));
+        assert!(EDITOR_LEVEL3D_JS.contains("view: level3dRuntimePreviewView(snapshot)"));
         assert!(
             EDITOR_LEVEL3D_JS.contains("settings: level3dPreviewSettings(snapshot.settings || {})")
         );

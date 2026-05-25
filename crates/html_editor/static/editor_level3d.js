@@ -13,6 +13,8 @@ let level3dStageHit = null;
 let level3dLayerPaintDrag = null;
 let level3dPreviewScrubDrag = null;
 let level3dSliceScrubDrag = null;
+let level3dPlaytestActive = false;
+let level3dPlaytestSnapshot = null;
 let level3dPreviewCameraState = null;
 let level3dPreviewOrigin = { x: 0, y: 0, z: 0 };
 let level3dSurfaceResizeFrame = 0;
@@ -51,6 +53,7 @@ function renderLevel3dBuilder() {
   renderLevel3dSourcePreview();
   renderLevel3dRuntime();
   renderLevel3dStageOverlay();
+  updateLevel3dPlaytestControls();
 }
 
 function syncLevel3dControlsFromPreview() {
@@ -297,6 +300,10 @@ function level3dRowsFromState() {
 }
 
 function resizeLevel3dWidth(nextWidth, options = {}) {
+  if (level3dPlaytestActive) {
+    syncLevel3dSizeControls();
+    return false;
+  }
   const before = visualEditSnapshot("level3d");
   const width = normalizedLevel3dWidth(nextWidth);
   const currentWidth = Math.max(1, Math.trunc(Number(level3d.width) || 1));
@@ -340,6 +347,10 @@ function normalizedLevel3dWidth(value) {
 }
 
 function resizeLevel3dDepth(nextDepth, options = {}) {
+  if (level3dPlaytestActive) {
+    syncLevel3dSizeControls();
+    return false;
+  }
   const before = visualEditSnapshot("level3d");
   const depth = normalizedLevel3dDepth(nextDepth);
   const currentDepth = Math.max(1, Math.trunc(Number(level3d.depth) || 1));
@@ -386,6 +397,10 @@ function normalizedLevel3dDepth(value) {
 }
 
 function resizeLevel3dHeight(nextHeight, options = {}) {
+  if (level3dPlaytestActive) {
+    syncLevel3dSizeControls();
+    return false;
+  }
   const before = visualEditSnapshot("level3d");
   const height = normalizedLevel3dHeight(nextHeight);
   const currentHeight = Math.max(1, Math.trunc(Number(level3d.height) || 1));
@@ -844,6 +859,7 @@ function renderLevel3dPalette() {
     button.dataset.label = level3dPaletteEntryLabel(entry);
     button.title = level3dPaletteEntryLabel(entry);
     button.setAttribute("aria-label", `Paint ${level3dPaletteEntryLabel(entry)}`);
+    button.disabled = level3dPlaytestActive;
 
     const visual = document.createElement("canvas");
     visual.className = "level3d-token-preview";
@@ -892,6 +908,7 @@ function level3dFrameToggleButton() {
   button.title = "Cell and stage frames";
   button.setAttribute("aria-label", "Toggle occupied cell and stage frames in the 3D preview");
   button.setAttribute("aria-pressed", level3d.previewFrames ? "true" : "false");
+  button.disabled = level3dPlaytestActive;
   button.innerHTML = `
     <svg class="level3d-frame-token-icon lucide lucide-grid2x2-icon lucide-grid-2x2" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
       <path d="M12 3v18"></path>
@@ -955,6 +972,7 @@ function level3dStageResizeModeButton({ mode, className, label, ariaLabel, icon 
   button.title = label;
   button.setAttribute("aria-label", ariaLabel);
   button.setAttribute("aria-pressed", level3dStageResizeMode() === mode ? "true" : "false");
+  button.disabled = level3dPlaytestActive;
   button.innerHTML = icon;
   button.addEventListener("click", () => {
     setLevel3dStageResizeMode(level3dStageResizeMode() === mode ? null : mode);
@@ -1220,6 +1238,10 @@ function paintLevel3dLayerHoverCell() {
 }
 
 function startLevel3dLayerPaint(event) {
+  if (level3dPlaytestActive) {
+    level3dLayerBoard?.focus();
+    return;
+  }
   if (event.button !== 0) {
     return;
   }
@@ -1282,6 +1304,9 @@ function stopLevel3dLayerPaint(event) {
 }
 
 function paintLevel3dCellAtPosition(position, ch = level3d.selectedChar) {
+  if (level3dPlaytestActive) {
+    return false;
+  }
   const x = Math.trunc(Number(position?.x));
   const y = Math.trunc(Number(position?.y));
   const z = Math.trunc(Number(position?.z));
@@ -1560,6 +1585,9 @@ function loadLevel3dSourceTarget(target, options = {}) {
 }
 
 function loadLevel3dSourceDefinition(entry, source, options = {}) {
+  if (level3dPlaytestActive) {
+    stopLevel3dPlaytest({ syncPreview: false });
+  }
   const sourceDocument = options.document || activeDocument();
   if (!sourceDocument || sourceDocument.id === activeDocument()?.id) {
     ensurePreviewTargetsActiveDocument();
@@ -1614,7 +1642,7 @@ function level3dScannerCode(line) {
 
 function renderLevel3dRuntime() {
   if (!level3dRuntimeFrame) {
-    sendLevel3dSnapshotToPreviewFrame();
+    renderLevel3dStageOverlay();
     return;
   }
   const update = level3dRuntimePreviewUpdate();
@@ -1642,7 +1670,6 @@ function renderLevel3dRuntime() {
 
 function sendLevel3dSnapshotToRuntime() {
   if (!level3dRuntimeFrameLoaded || !level3dRuntimeFrame?.contentWindow) {
-    sendLevel3dSnapshotToPreviewFrame();
     return;
   }
   const update = level3dRuntimePreviewUpdate();
@@ -1656,23 +1683,188 @@ function sendLevel3dSnapshotToRuntime() {
     type: LEVEL3D_MODEL_COMPONENT_PREVIEW_MESSAGE,
     ...update,
   }, "*");
-  sendLevel3dSnapshotToPreviewFrame(update);
-}
-
-function sendLevel3dSnapshotToPreviewFrame(update = level3dRuntimePreviewUpdate()) {
-  if (currentPreviewMode !== "level3d" || !previewFrame?.contentWindow || !update) {
-    return;
-  }
-  previewFrameHasEditorLevelState = true;
-  previewFrame.contentWindow.postMessage({
-    type: LEVEL3D_MODEL_COMPONENT_PREVIEW_MESSAGE,
-    ...update,
-  }, "*");
 }
 
 function refreshLevel3dRuntimePreviews() {
   sendLevel3dSnapshotToRuntime();
   sendLevel3dLayerSnapshotToRuntime();
+}
+
+function startLevel3dPlaytest() {
+  if (level3dPlaytestActive) {
+    return;
+  }
+  const snapshot = level3dRuntimeSnapshot();
+  if (!latestHtml || !snapshot) {
+    setLevel3dActionStatus(latestHtml ? "Load a 3D level first" : "Run Preview first", "is-error");
+    return;
+  }
+  if (typeof clearSolutionPreview === "function") {
+    clearSolutionPreview();
+  }
+  level3dPlaytestSnapshot = level3dNormalizePlaytestSnapshot(snapshot);
+  level3dPlaytestActive = true;
+  level3dStageHit = null;
+  updateLevel3dPlaytestControls();
+  renderLevel3dStageOverlay();
+  refreshLevel3dRuntimePreviews();
+  requestLevel3dPlaytestState();
+  focusLevel3dPlaytestTarget();
+  requestAnimationFrame(focusLevel3dPlaytestTarget);
+  setLevel3dActionStatus("Playing 3D level", "is-ok");
+}
+
+function stopLevel3dPlaytest(options = {}) {
+  if (!level3dPlaytestActive) {
+    updateLevel3dPlaytestControls();
+    return;
+  }
+  level3dPlaytestActive = false;
+  level3dPlaytestSnapshot = null;
+  level3dStageHit = null;
+  updateLevel3dPlaytestControls();
+  renderLevel3dStageOverlay();
+  if (options.syncPreview !== false) {
+    refreshLevel3dRuntimePreviews();
+  }
+  setLevel3dActionStatus("Stopped 3D level play", "");
+}
+
+function toggleLevel3dPlaytest() {
+  if (level3dPlaytestActive) {
+    stopLevel3dPlaytest();
+  } else {
+    startLevel3dPlaytest();
+  }
+}
+
+function updateLevel3dPlaytestControls() {
+  if (!level3dBuilder) {
+    return;
+  }
+  level3dBuilder.classList.toggle("is-playtesting", level3dPlaytestActive);
+  if (level3dPlaytestButton) {
+    const label = level3dPlaytestActive ? "Stop 3D level play" : "Play 3D level";
+    level3dPlaytestButton.classList.toggle("is-playing", level3dPlaytestActive);
+    level3dPlaytestButton.setAttribute("aria-label", label);
+    level3dPlaytestButton.title = label;
+  }
+  for (const element of [
+    level3dBundleInput,
+    level3dNameInput,
+    level3dWidthInput,
+    level3dDepthInput,
+    level3dHeightInput,
+    copyLevel3dButton,
+    addLevel3dButton,
+    updateLevel3dButton,
+    level3dCameraYawScrub,
+    level3dCameraPitchScrub,
+    level3dCameraZoomScrub,
+    level3dOriginXScrub,
+    level3dOriginYScrub,
+    level3dOriginZScrub,
+    level3dResetPreviewButton,
+  ]) {
+    if (element) {
+      element.disabled = level3dPlaytestActive;
+    }
+  }
+  level3dPalette?.querySelectorAll("button").forEach((button) => {
+    button.disabled = level3dPlaytestActive;
+  });
+}
+
+function focusLevel3dPlaytestTarget() {
+  if (level3dStageOverlay) {
+    level3dStageOverlay.focus?.({ preventScroll: true });
+    return;
+  }
+  level3dStageCanvas?.focus?.({ preventScroll: true });
+}
+
+function level3dPlaytestFrameWindow() {
+  if (level3dRuntimeFrame) {
+    return level3dRuntimeFrameLoaded ? level3dRuntimeFrame.contentWindow : null;
+  }
+  return previewFrame?.contentWindow || null;
+}
+
+function requestLevel3dPlaytestState() {
+  const target = level3dPlaytestFrameWindow();
+  if (!target) {
+    return false;
+  }
+  target.postMessage({ type: "PuzzleStudioRequestPuzzle3State" }, "*");
+  return true;
+}
+
+function sendLevel3dPlaytestKey(event) {
+  if (!level3dPlaytestActive) {
+    return false;
+  }
+  const target = level3dPlaytestFrameWindow();
+  if (!target) {
+    setLevel3dActionStatus("3D play runtime is not ready", "is-error");
+    return false;
+  }
+  if (event.code === "KeyZ") {
+    target.postMessage({ type: "PuzzleStudioCommand", command: "undo" }, "*");
+  } else if (event.code === "KeyR") {
+    target.postMessage({ type: "PuzzleStudioCommand", command: "restart" }, "*");
+  } else {
+    target.postMessage({
+      type: "PuzzleStudioKey",
+      key: event.key,
+      code: event.code,
+    }, "*");
+  }
+  event.preventDefault();
+  event.stopPropagation();
+  return true;
+}
+
+function handleLevel3dPlaytestStateMessage(event) {
+  if (!level3dPlaytestActive || event.data?.type !== "PuzzleStudioPuzzle3State") {
+    return;
+  }
+  const source = String(event.data.source || "");
+  if (source && source !== level3dModelPreviewComponent().source) {
+    return;
+  }
+  level3dPlaytestSnapshot = level3dNormalizePlaytestSnapshot(event.data.snapshot);
+  renderLevel3dStageOverlay();
+  sendLevel3dLayerSnapshotToRuntime();
+}
+
+function level3dNormalizePlaytestSnapshot(snapshot) {
+  const next = JSON.parse(JSON.stringify(snapshot || {}));
+  next.__kind = "puzzle3d";
+  const levelCount = Array.isArray(next.levels) && next.levels.length ? next.levels.length : 1;
+  const levelIndex = Math.max(0, Math.min(levelCount - 1, Math.trunc(Number(next.levelIndex) || 0)));
+  next.levelIndex = levelIndex;
+  const size = next.size || next.levels?.[levelIndex]?.size || {};
+  const cells = Array.isArray(next.cells)
+    ? JSON.parse(JSON.stringify(next.cells))
+    : JSON.parse(JSON.stringify(next.levels?.[levelIndex]?.cells || []));
+  next.size = { ...size };
+  next.cells = cells;
+  if (!Array.isArray(next.levels) || !next.levels.length) {
+    next.levels = [{
+      name: level3dNameInput?.value || "level_1",
+      label: level3dNameInput?.value || "Level 1",
+      size: { ...next.size },
+      cells,
+    }];
+    next.levelIndex = 0;
+  } else if (next.levels[levelIndex]) {
+    next.levels[levelIndex] = {
+      ...next.levels[levelIndex],
+      size: { ...next.size },
+      cells,
+    };
+  }
+  return next;
 }
 
 function renderLevel3dLayerRuntime() {
@@ -1745,10 +1937,32 @@ function level3dRuntimePreviewUpdate() {
       cells: JSON.parse(JSON.stringify(cells)),
     },
     resources: level3dRuntimePreviewResources(snapshot),
-    camera: level3dPreviewCamera(snapshot),
+    camera: level3dRuntimePreviewCamera(snapshot),
+    view: level3dRuntimePreviewView(snapshot),
     settings: level3dPreviewSettings(snapshot.settings || {}),
     component: level3dModelPreviewComponent(),
     componentEmbed: true,
+  };
+}
+
+function level3dRuntimePreviewCamera(source) {
+  const camera = level3dPreviewCamera(source);
+  return {
+    yawDegrees: camera.yawDegrees,
+    pitchDegrees: camera.pitchDegrees,
+  };
+}
+
+function level3dRuntimePreviewView(source) {
+  const camera = level3dPreviewCamera(source);
+  const origin = level3dPreviewOriginState();
+  return {
+    zoom: camera.zoom,
+    target: {
+      x: origin.x,
+      y: origin.y,
+      z: origin.z,
+    },
   };
 }
 
@@ -2215,7 +2429,6 @@ function renderLevel3dStageOverlay() {
   }
   ctx.setTransform(scale, 0, 0, scale, 0, 0);
   ctx.clearRect(0, 0, rect.width, rect.height);
-  drawLevel3dStagePreview(ctx, rect.width, rect.height);
   if (!level3dStageHit?.polygon?.length) {
     return;
   }
@@ -2253,6 +2466,13 @@ function scheduleLevel3dSurfaceResize() {
 }
 
 function handleLevel3dStagePointerMove(event) {
+  if (level3dPlaytestActive) {
+    if (level3dStageHit) {
+      level3dStageHit = null;
+      renderLevel3dStageOverlay();
+    }
+    return;
+  }
   const hit = level3dStageHitFromEvent(event);
   if (level3dStageHitKey(hit) === level3dStageHitKey(level3dStageHit)) {
     return;
@@ -2262,6 +2482,10 @@ function handleLevel3dStagePointerMove(event) {
 }
 
 function handleLevel3dStagePointerDown(event) {
+  if (level3dPlaytestActive) {
+    level3dStageOverlay?.focus();
+    return;
+  }
   if (event.button !== 0) {
     return;
   }
@@ -2276,6 +2500,10 @@ function handleLevel3dStagePointerDown(event) {
 }
 
 function handleLevel3dStageKeydown(event) {
+  if (level3dPlaytestActive) {
+    sendLevel3dPlaytestKey(event);
+    return;
+  }
   if ((event.key !== "Enter" && event.key !== " ") || !level3dStageHit) {
     return;
   }
@@ -2443,6 +2671,9 @@ function level3dSelectedEntry() {
 }
 
 function level3dRuntimeSnapshot() {
+  if (level3dPlaytestActive && level3dPlaytestSnapshot) {
+    return level3dSnapshotWithPreviewGrid(level3dPlaytestSnapshot);
+  }
   const exportData = previewExport || extractPreviewExport(latestHtml);
   if (!isPuzzle3dExport(exportData)) {
     return fallbackLevel3dRuntimeSnapshot(exportData);
@@ -2453,7 +2684,9 @@ function level3dRuntimeSnapshot() {
     return JSON.parse(JSON.stringify(exportData));
   }
   const snapshot = JSON.parse(JSON.stringify(exportData));
-  const edited = level3dSnapshotLevelData(snapshot);
+  const edited = level3dEditedSnapshotAppliesToLevel(exportData, levelIndex)
+    ? level3dSnapshotLevelData(snapshot)
+    : null;
   snapshot.levelIndex = levelIndex;
   if (edited) {
     snapshot.levels[levelIndex].size = edited.size;
@@ -2465,6 +2698,26 @@ function level3dRuntimeSnapshot() {
     snapshot.cells = Array.isArray(levelEntry.cells) ? JSON.parse(JSON.stringify(levelEntry.cells)) : [];
   }
   return level3dSnapshotWithPreviewGrid(snapshot);
+}
+
+function level3dEditedSnapshotAppliesToLevel(exportData = previewExport, levelIndex = currentEditableLevelIndex(exportData)) {
+  if (!level3d.slices.length || !exportData) {
+    return false;
+  }
+  const levelEntry = Array.isArray(exportData?.levels) ? exportData.levels[levelIndex] : null;
+  if (!levelEntry) {
+    return false;
+  }
+  const document = level3dSourceDocument();
+  if (level3d.sourceDocumentId && document?.id && level3d.sourceDocumentId !== document.id) {
+    return false;
+  }
+  const source = level3dEditorSource(document);
+  const expectedKey = currentLevel3dEditorSourceKey(levelEntry, document, source);
+  if (level3d.sourceKey && expectedKey && level3d.sourceKey === expectedKey) {
+    return true;
+  }
+  return Boolean(levelEntry.name && level3dNameInput?.value && levelEntry.name === level3dNameInput.value);
 }
 
 function showPuzzle3dSolutionPreview(solution) {
@@ -2502,12 +2755,11 @@ function setPuzzle3dSolutionStep(index) {
 }
 
 function renderPuzzle3dSolverPreview() {
-  if (!solverBoardViewport || !latestHtml || levelSolutionPreview?.kind !== "puzzle3d") {
+  if (!solverBoardViewport || !latestHtml) {
     clearPuzzle3dSolverPreview();
     return false;
   }
-  const snapshot = levelSolutionPreview.snapshot
-    || puzzle3dSolutionStepSnapshot(levelSolutionPreview.steps?.[levelSolutionPreview.index || 0]);
+  const snapshot = puzzle3dSolverPreviewSnapshot();
   const update = level3dPreviewUpdateFromSnapshot(snapshot);
   if (!update) {
     clearPuzzle3dSolverPreview();
@@ -2525,7 +2777,8 @@ function renderPuzzle3dSolverPreview() {
   if (solverBoard) {
     solverBoard.hidden = true;
   }
-  const key = `${activePreviewDocument()?.id || ""}:${latestHtml.length}:solver3d`;
+  const mode = levelSolutionPreview?.kind === "puzzle3d" ? `solution:${levelSolutionPreview.index || 0}` : "level";
+  const key = `${activePreviewDocument()?.id || ""}:${latestHtml.length}:solver3d:${mode}:${update.levelIndex}`;
   if (level3dSolverFrameKey !== key) {
     level3dSolverFrameLoaded = false;
     level3dSolverFrameKey = key;
@@ -2554,11 +2807,10 @@ function clearPuzzle3dSolverPreview() {
 }
 
 function sendPuzzle3dSolutionToSolverRuntime() {
-  if (!level3dSolverFrameLoaded || !level3dSolverFrame?.contentWindow || levelSolutionPreview?.kind !== "puzzle3d") {
+  if (!level3dSolverFrameLoaded || !level3dSolverFrame?.contentWindow) {
     return;
   }
-  const snapshot = levelSolutionPreview.snapshot
-    || puzzle3dSolutionStepSnapshot(levelSolutionPreview.steps?.[levelSolutionPreview.index || 0]);
+  const snapshot = puzzle3dSolverPreviewSnapshot();
   const update = level3dPreviewUpdateFromSnapshot(snapshot);
   if (!update) {
     return;
@@ -2567,6 +2819,17 @@ function sendPuzzle3dSolutionToSolverRuntime() {
     type: LEVEL3D_MODEL_COMPONENT_PREVIEW_MESSAGE,
     ...update,
   }, "*");
+}
+
+function puzzle3dSolverPreviewSnapshot() {
+  if (levelSolutionPreview?.kind === "puzzle3d") {
+    return levelSolutionPreview.snapshot
+      || puzzle3dSolutionStepSnapshot(levelSolutionPreview.steps?.[levelSolutionPreview.index || 0]);
+  }
+  if (typeof solverPuzzle3dPreviewSnapshot === "function") {
+    return solverPuzzle3dPreviewSnapshot();
+  }
+  return level3dRuntimeSnapshot();
 }
 
 function level3dPreviewUpdateFromSnapshot(snapshot) {
@@ -2582,20 +2845,51 @@ function level3dPreviewUpdateFromSnapshot(snapshot) {
     : Array.isArray(levelEntry.cells)
       ? levelEntry.cells
       : [];
+  const resources = level3dRuntimePreviewResources(snapshot);
   return {
     levelIndex,
     level: {
       name: levelEntry.name || level3dNameInput?.value || "level_1",
       label: levelEntry.label || levelEntry.name || level3dNameInput?.value || "Level 1",
       size: size ? { ...size } : undefined,
-      cells: JSON.parse(JSON.stringify(cells)),
+      cells: level3dCellsWithObjectDescriptors(cells, resources.objects),
     },
-    resources: level3dRuntimePreviewResources(snapshot),
-    camera: level3dPreviewCamera(snapshot),
+    resources,
+    camera: level3dRuntimePreviewCamera(snapshot),
+    view: level3dRuntimePreviewView(snapshot),
     settings: level3dPreviewSettings(snapshot.settings || {}),
     component: level3dModelPreviewComponent(),
     componentEmbed: true,
   };
+}
+
+function level3dCellsWithObjectDescriptors(cells, objects = {}) {
+  const descriptors = new Map();
+  for (const descriptor of Object.values(objects || {})) {
+    if (!descriptor) {
+      continue;
+    }
+    if (descriptor.id != null) {
+      descriptors.set(`id:${Number(descriptor.id)}`, descriptor);
+    }
+    if (descriptor.name) {
+      descriptors.set(`name:${descriptor.name}`, descriptor);
+    }
+  }
+  return (cells || []).map((cell) => ({
+    ...JSON.parse(JSON.stringify(cell || {})),
+    objects: (cell?.objects || []).map((object) => {
+      const descriptor = descriptors.get(`id:${Number(object?.id)}`)
+        || descriptors.get(`name:${object?.name || ""}`)
+        || {};
+      return {
+        ...JSON.parse(JSON.stringify(descriptor)),
+        ...JSON.parse(JSON.stringify(object || {})),
+        sprite: object?.sprite || descriptor.sprite || object?.name || descriptor.name,
+        layer: object?.layer ?? descriptor.layer ?? null,
+      };
+    }),
+  }));
 }
 
 function puzzle3dSolutionStepSnapshot(step) {
@@ -3199,20 +3493,6 @@ function fitLevel3dPreviewPrimitives(primitives, width, height, options = {}) {
   }
 }
 
-function drawLevel3dStagePreview(ctx, width, height) {
-  const snapshot = level3dRuntimeSnapshot();
-  if (!snapshot) {
-    return;
-  }
-  const view = level3dPreviewView(snapshot, width, height, level3dStageViewOptions());
-  ctx.save();
-  ctx.fillStyle = "#f5f3ef";
-  ctx.fillRect(0, 0, width, height);
-  drawLevel3dCellsPreview(ctx, width, height, snapshot, snapshot.cells || [], level3dStageViewOptions());
-  drawLevel3dPreviewGrid(ctx, snapshot, view);
-  ctx.restore();
-}
-
 function drawLevel3dPreviewGrid(ctx, snapshot, view) {
   const grid = level3dPreviewGridSettings(snapshot);
   if (!grid.visibility) {
@@ -3489,12 +3769,7 @@ function level3dObjectPreviewFaces(position, object, snapshot, view) {
 function level3dObjectPreviewVoxels(position, object, snapshot) {
   const sprite = snapshot.sprites?.[object.sprite] || snapshot.sprites?.[object.name];
   if (!sprite) {
-    return [{
-      fill: "#ffde8a",
-      scale: 1,
-      position: { ...position },
-      bounds: level3dVoxelBounds(position, 1),
-    }];
+    return [];
   }
   const blocks = level3dBitmapBlocks(sprite.bitmap || []);
   const spriteHeight = Math.max(1, blocks.length);
@@ -3877,6 +4152,9 @@ function applyLevel3dSourceChange(sourceDocument, source) {
 }
 
 function resetLevel3dPreviewView() {
+  if (level3dPlaytestActive) {
+    return;
+  }
   resetLevel3dPreviewState(previewExport || extractPreviewExport(latestHtml));
   renderLevel3dPreviewControls();
   level3dStageHit = null;
@@ -3895,6 +4173,9 @@ function level3dPreviewScrubTarget(event) {
 }
 
 function startLevel3dPreviewScrub(event) {
+  if (level3dPlaytestActive) {
+    return;
+  }
   const target = level3dPreviewScrubTarget(event);
   if (!target || event.button !== 0) {
     return;
@@ -3951,6 +4232,9 @@ function finishLevel3dPreviewScrub(pointerId = null) {
 }
 
 function adjustLevel3dPreviewScrubWithKey(event) {
+  if (level3dPlaytestActive) {
+    return;
+  }
   const target = level3dPreviewScrubTarget(event);
   if (!target || !["ArrowLeft", "ArrowDown", "ArrowRight", "ArrowUp"].includes(event.key)) {
     return;
@@ -3996,6 +4280,9 @@ function level3dPreviewValue(kind) {
 }
 
 function setLevel3dPreviewValue(kind, value, options = {}) {
+  if (level3dPlaytestActive) {
+    return;
+  }
   if (kind === "width") {
     resizeLevel3dWidth(Math.round(value), { edge: "right", status: options.status });
     return;
@@ -4182,7 +4469,15 @@ level3dLayerBoard?.addEventListener("pointerleave", () => {
   renderLevel3dLayerOverlay();
 });
 window.addEventListener("message", handleLevel3dLayerRendererViewMessage);
+window.addEventListener("message", handleLevel3dPlaytestStateMessage);
 window.addEventListener("resize", scheduleLevel3dSurfaceResize);
+document.addEventListener("keydown", (event) => {
+  const tagName = event.target?.tagName || "";
+  if (level3dBuilder.hidden || !level3dPlaytestActive || ["INPUT", "TEXTAREA", "SELECT"].includes(tagName)) {
+    return;
+  }
+  sendLevel3dPlaytestKey(event);
+});
 if (window.ResizeObserver) {
   const level3dSurfaceObserver = new ResizeObserver(scheduleLevel3dSurfaceResize);
   if (level3dStageCanvas) {
@@ -4192,6 +4487,7 @@ if (window.ResizeObserver) {
     level3dSurfaceObserver.observe(level3dLayerBoard);
   }
 }
+level3dPlaytestButton?.addEventListener("click", toggleLevel3dPlaytest);
 copyLevel3dButton?.addEventListener("click", () => {
   copyLevel3dToClipboard().catch((error) => setLevel3dActionStatus(error?.message || String(error), "is-error"));
 });

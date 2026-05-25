@@ -565,32 +565,16 @@ show_index = true
 scene condition は current level context を読める。`level.name == <name>` / `level.name != <name>`、`level.label == <label>` / `level.label != <label>`、`level.last`、`level.has_next` をサポートする。level 固有の message / sounds / exception flow は effect 側ではなく condition 側で scoped にする。通常の level progression は scene condition の標準責務にしない。authoring での level 指定は `level.name` を標準にし、index / number 条件は標準 surface にしない。
 
 ```txt
-scene level_select {
-view {
-message = "Select a level"
-text message
-level_menu {
+scene level_menu level_select {
 show_index = true
 show_solved = true
-}
 button "Back" -> back
 }
-}
 ```
 
-`level_menu` は level 選択専用 component。component が cursor と enter を所有する。通常は key binding を書かなくてよい。既定では `w/a/s/d` と arrow keys が移動、Enter/Space が `enter`、Escape/q が `back` になる。
+`level_menu` は level 選択専用 component。component が cursor と enter と多すぎる項目の scroll を所有する。通常は key binding を書かなくてよい。既定では `w/a/s/d` と arrow keys が移動、Enter/Space が `enter`、Escape/q が `back` になる。
 
-```txt
-scene level_select {
-view {
-level_menu {
-show_index = true
-}
-}
-}
-```
-
-enter 時は選択 level を開始する。これは `level_menu` template の主動作なので、`action goto_level` や `choose_level` transition は書かない。旧 `show index`、`columns <n>`、裸の `wrap`、`action <name>` は読まない。`show` / `hide` / `toggle` は scene visibility effect として残す。
+見出しなどを足す場合だけ、通常の `scene` の `view` に `level_menu { ... }` を置く。`level_menu` は level 選択専用 component なので、`up` / `down` / `left` / `right` / `enter` の cursor 動作と、多すぎる項目の scroll を所有する。enter 時は選択 level を開始する。これは `level_menu` template の主動作なので、`action goto_level` や `choose_level` transition は書かない。旧 `show index`、`columns <n>`、裸の `wrap`、`action <name>` は読まない。`show` / `hide` / `toggle` は scene visibility effect として残す。
 
 level の開始、読み込み、restart は level scene / puzzle slot に対する command として書ける。ただし通常の clear / advance / restart は level scene 内の model window component と puzzle lifecycle が所有する。scene からの target command は、title/menu から開始する、button で明示 restart する、hub から特定 level に飛ぶ、通常 clear とは別の例外 flow に入る、などの介入だけに使う。`start levels in playing` は playing scene の受け入れる level 集合のうち、先に書かれた level で開始する。`continue levels in playing` は保存復元や level menu で選ばれた level が playing scene に入れるならそこから再開し、なければ先頭 level で開始する。`start levels microban in playing` / `continue levels microban in playing` は scope/prefix を絞った level に絞る。`playing.restart` は playing scene の現在 level を初期状態に戻し、`playing.next_level` は playing scene を次 level で開始し、`playing.previous_level` は前 level で開始する。`playing.goto <level>` は指定 level で playing scene に移る。`board.restart` のように puzzle slot を target にした場合は、その puzzle state を初期状態に戻す。`board.next_level` はその puzzle を所有する level scene を進める。
 

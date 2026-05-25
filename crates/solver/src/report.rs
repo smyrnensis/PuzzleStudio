@@ -15,6 +15,15 @@ pub struct SearchStats {
     pub elapsed: Duration,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SearchProgress {
+    pub visited: usize,
+    pub expanded: usize,
+    pub frontier: usize,
+    pub max_depth_reached: u32,
+    pub depth: u32,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SearchFailure<Action, Error> {
     pub action: Action,

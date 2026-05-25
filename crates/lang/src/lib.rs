@@ -659,7 +659,7 @@ fn puzzle3_scene_component_json(
             let action = puzzle3_scene_action_json(&button.effect, level_bundle_names)?;
             let mut out = format!(
                 "{{ \"kind\": \"button\", \"label\": {}, \"action\": {}",
-                json_string(&scene_expr_fixture_text(&button.label)),
+                puzzle3_scene_expr_json(&button.label),
                 action
             );
             push_puzzle3_inline_layout_json(&mut out, &button.layout);
@@ -706,6 +706,25 @@ fn puzzle3_scene_component_json(
             &container.layout,
             level_bundle_names,
         ),
+        SceneComponent::For(for_view) => {
+            let mut out = format!(
+                "{{ \"kind\": \"for\", \"binding\": {}, \"source\": {}, \"children\": [",
+                json_string(&for_view.binding),
+                json_string(for_view.source.as_str())
+            );
+            let mut wrote = false;
+            for child in &for_view.children {
+                if let Some(child_json) = puzzle3_scene_component_json(child, level_bundle_names) {
+                    if wrote {
+                        out.push_str(", ");
+                    }
+                    wrote = true;
+                    out.push_str(&child_json);
+                }
+            }
+            out.push_str("] }");
+            Some(out)
+        }
         _ => None,
     }
 }
@@ -738,10 +757,25 @@ fn puzzle3_scene_action_json(
     level_bundle_names: &mut Vec<String>,
 ) -> Option<String> {
     match effect {
-        SceneEffect::Goto { scene, .. } => Some(format!(
-            "{{ \"kind\": \"goto\", \"scene\": {} }}",
-            json_string(scene)
-        )),
+        SceneEffect::Goto { scene, params } => {
+            let mut out = format!("{{ \"kind\": \"goto\", \"scene\": {}", json_string(scene));
+            if !params.is_empty() {
+                out.push_str(", \"params\": [");
+                for (index, param) in params.iter().enumerate() {
+                    if index > 0 {
+                        out.push_str(", ");
+                    }
+                    out.push_str("{ \"name\": ");
+                    out.push_str(&json_string(&param.name));
+                    out.push_str(", \"value\": ");
+                    out.push_str(&puzzle3_scene_expr_json(&param.value));
+                    out.push_str(" }");
+                }
+                out.push(']');
+            }
+            out.push_str(" }");
+            Some(out)
+        }
         SceneEffect::StartLevel { scene, scope } => {
             let levels = scope.as_deref().unwrap_or("levels");
             push_unique_string(level_bundle_names, levels);
@@ -752,6 +786,37 @@ fn puzzle3_scene_action_json(
             ))
         }
         _ => None,
+    }
+}
+
+fn puzzle3_scene_expr_json(expr: &SceneExpr) -> String {
+    match expr {
+        SceneExpr::Bool(value) => format!("{{ \"kind\": \"bool\", \"value\": {value} }}"),
+        SceneExpr::Int(value) => format!("{{ \"kind\": \"int\", \"value\": {value} }}"),
+        SceneExpr::Text(value) => format!(
+            "{{ \"kind\": \"text\", \"value\": {} }}",
+            json_string(value)
+        ),
+        SceneExpr::Path(path) => {
+            format!(
+                "{{ \"kind\": \"path\", \"path\": {} }}",
+                json_string(&path.join("."))
+            )
+        }
+        SceneExpr::Call { name, args } => {
+            let mut out = format!(
+                "{{ \"kind\": \"call\", \"name\": {}, \"args\": [",
+                json_string(name)
+            );
+            for (index, arg) in args.iter().enumerate() {
+                if index > 0 {
+                    out.push_str(", ");
+                }
+                out.push_str(&puzzle3_scene_expr_json(arg));
+            }
+            out.push_str("] }");
+            out
+        }
     }
 }
 
@@ -770,6 +835,7 @@ fn push_puzzle3_inline_layout_json(out: &mut String, layout: &SceneLayoutDef) {
     if layout.size.is_none()
         && layout.gap.is_none()
         && layout.align == SceneLayoutDef::default().align
+        && !layout.scroll
     {
         return;
     }
@@ -813,6 +879,13 @@ fn push_puzzle3_layout_json(out: &mut String, layout: &SceneLayoutDef) {
             SceneAlignYDef::Bottom => "bottom",
         }));
         out.push_str(" }");
+        wrote = true;
+    }
+    if layout.scroll {
+        if wrote {
+            out.push_str(", ");
+        }
+        out.push_str("\"scroll\": true");
     }
     out.push('}');
 }
@@ -5447,10 +5520,7 @@ fn parse_for_component(
 
 fn parse_for_source(value: &str, line: &str) -> Result<ForSource, AppError> {
     if value == "levels" {
-        return Err(parse_error(
-            line,
-            "`for <item> in levels` is obsolete; use level_menu for level lists",
-        ));
+        return Ok(ForSource::Levels);
     }
     if is_identifier(value) {
         return Ok(ForSource::State(value.to_string()));
@@ -6347,6 +6417,9 @@ fn parse_scene_effect_value(value: &str, line: &str) -> Result<SceneEffect, AppE
             }
         }
         ["goto", screen] => {
+            if let Some((scene, params)) = parse_scene_call_params(screen, line)? {
+                return Ok(SceneEffect::Goto { scene, params });
+            }
             validate_qualified_identifier(screen, line, "scene name")?;
             Ok(SceneEffect::Goto {
                 scene: (*screen).to_string(),
@@ -6363,6 +6436,9 @@ fn parse_scene_effect_value(value: &str, line: &str) -> Result<SceneEffect, AppE
             ))
         }
         ["enter", screen] => {
+            if let Some((scene, params)) = parse_scene_call_params(screen, line)? {
+                return Ok(SceneEffect::Enter { scene, params });
+            }
             validate_qualified_identifier(screen, line, "scene name")?;
             Ok(SceneEffect::Enter {
                 scene: (*screen).to_string(),
@@ -6637,6 +6713,50 @@ fn parse_rule_call_expr(value: &str, line: &str) -> Result<(String, Vec<SceneExp
     Ok((name.to_string(), args))
 }
 
+fn parse_scene_call_params(
+    value: &str,
+    line: &str,
+) -> Result<Option<(String, Vec<SceneEffectParam>)>, AppError> {
+    let Some(open) = value.find('(') else {
+        return Ok(None);
+    };
+    if !value.ends_with(')') {
+        return Err(parse_error(line, "scene call must close with `)`"));
+    }
+    let scene = value[..open].trim();
+    validate_qualified_identifier(scene, line, "scene name")?;
+    let args = value[open + 1..value.len() - 1].trim();
+    if args.is_empty() {
+        return Ok(Some((scene.to_string(), Vec::new())));
+    }
+
+    let parts = args.split(',').map(str::trim).collect::<Vec<_>>();
+    let params = if parts.len() == 1 && !parts[0].contains('=') {
+        vec![SceneEffectParam {
+            name: "level".to_string(),
+            value: parse_scene_expr(parts[0], line)?,
+        }]
+    } else {
+        let mut params = Vec::new();
+        for part in parts {
+            let (name, value) = part.split_once('=').ok_or_else(|| {
+                parse_error(
+                    line,
+                    "scene call params must be positional `<level>` or named `<name> = <expr>`",
+                )
+            })?;
+            let name = name.trim();
+            validate_identifier(name, line, "scene param name")?;
+            params.push(SceneEffectParam {
+                name: name.to_string(),
+                value: parse_scene_expr(value.trim(), line)?,
+            });
+        }
+        params
+    };
+    Ok(Some((scene.to_string(), params)))
+}
+
 fn parse_scene_expr(value: &str, line: &str) -> Result<SceneExpr, AppError> {
     if value == "true" {
         return Ok(SceneExpr::Bool(true));
@@ -6652,12 +6772,6 @@ fn parse_scene_expr(value: &str, line: &str) -> Result<SceneExpr, AppError> {
     }
     if value.contains('(') {
         let (name, args) = parse_rule_call_expr(value, line)?;
-        if name == "join" {
-            return Err(parse_error(
-                line,
-                "`join` scene expression is not supported",
-            ));
-        }
         return Ok(SceneExpr::Call { name, args });
     }
     if value.starts_with("join ") {

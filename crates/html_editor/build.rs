@@ -5,8 +5,10 @@ fn main() {
     println!("cargo:rerun-if-changed=static/editor_boot.js");
     println!("cargo:rerun-if-changed=static/editor_theme_imports.js");
     println!("cargo:rerun-if-changed=static/editor_dom.js");
+    println!("cargo:rerun-if-changed=static/editor_workspace.js");
     println!("cargo:rerun-if-changed=static/editor_source.js");
     println!("cargo:rerun-if-changed=static/editor_level3d.js");
+    println!("cargo:rerun-if-changed=static/editor_workbench.js");
     println!("cargo:rerun-if-changed=static/editor.js");
     println!("cargo:rerun-if-changed=static/editor_sprite.js");
     println!("cargo:rerun-if-changed=../html_play/static/puzzle3_visual_core.js");

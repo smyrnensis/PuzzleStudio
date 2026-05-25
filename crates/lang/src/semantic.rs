@@ -50,6 +50,7 @@ pub(crate) enum SemanticCompletionSlot {
     Variants,
     ValueSets,
     Directions,
+    DirectionSets,
     Inputs,
     Commands,
     Effects,
@@ -87,7 +88,10 @@ pub(crate) fn semantic_completion_context(
     let scope = scope_at_cursor(&context, cursor);
     let sounds_definition_scope = scope == Some(SourceScope::Sounds);
 
-    let slots = if previous.as_deref() == Some("goto") {
+    let contextual_slots = contextual_completion_slots(source, &context, &token, scope);
+    let slots = if let Some(slots) = contextual_slots {
+        slots
+    } else if previous.as_deref() == Some("goto") {
         vec![SemanticCompletionSlot::Scenes]
     } else if previous.as_deref() == Some("of") {
         vec![SemanticCompletionSlot::Puzzles]
@@ -111,6 +115,89 @@ pub(crate) fn semantic_completion_context(
         token_text: token.text,
         slots,
     }
+}
+
+fn contextual_completion_slots(
+    source: &str,
+    context: &crate::source::SourceContext,
+    token: &CompletionTokenAtCursor,
+    scope: Option<SourceScope>,
+) -> Option<Vec<SemanticCompletionSlot>> {
+    if token.text.contains(':') {
+        return Some(vec![
+            SemanticCompletionSlot::ValueSets,
+            SemanticCompletionSlot::Variants,
+        ]);
+    }
+
+    let line = line_at_cursor(context, token.replace_start)?;
+    let line_end = line.start + line.content.len();
+    let before = &source[line.start..token.replace_start.min(line_end)];
+    let after = &source[token.replace_end.min(line_end)..line_end];
+    let previous = previous_completion_token(source, token.replace_start);
+
+    if inside_scratch_selector_attrs(before) {
+        return Some(vec![
+            SemanticCompletionSlot::Directions,
+            SemanticCompletionSlot::DirectionSets,
+            SemanticCompletionSlot::Scratches,
+        ]);
+    }
+
+    if previous.as_deref() == Some("in") {
+        return Some(vec![
+            SemanticCompletionSlot::ValueSets,
+            SemanticCompletionSlot::Groups,
+        ]);
+    }
+
+    if is_rule_like_scope(scope) && next_non_whitespace_starts_pattern(after) {
+        return Some(vec![
+            SemanticCompletionSlot::Directions,
+            SemanticCompletionSlot::DirectionSets,
+        ]);
+    }
+
+    None
+}
+
+fn line_at_cursor<'a>(
+    context: &'a crate::source::SourceContext,
+    cursor: usize,
+) -> Option<&'a crate::source::SourceContextLine> {
+    context.lines.iter().find(|line| {
+        let end = line.start + line.content.len();
+        cursor >= line.start && cursor <= end
+    })
+}
+
+fn inside_scratch_selector_attrs(before: &str) -> bool {
+    let Some(open) = before.rfind('{') else {
+        return false;
+    };
+    if before[open + 1..].contains('}') {
+        return false;
+    }
+    if open == 0 {
+        return true;
+    }
+    let before_open = &before[..open];
+    let Some(previous) = before_open.chars().next_back() else {
+        return true;
+    };
+    if !previous.is_whitespace() {
+        return true;
+    }
+    let trimmed = before_open.trim_end();
+    trimmed.ends_with('[') || trimmed.ends_with('|')
+}
+
+fn next_non_whitespace_starts_pattern(after: &str) -> bool {
+    after.trim_start().starts_with('[')
+}
+
+fn is_rule_like_scope(scope: Option<SourceScope>) -> bool {
+    matches!(scope, Some(SourceScope::Puzzle | SourceScope::Other))
 }
 
 pub(crate) fn semantic_builtin_effect_commands() -> Vec<(&'static str, SemanticKind)> {
@@ -411,7 +498,6 @@ const SCENE_COMPLETION_KEYWORDS: &[&str] = &[
     "state",
     "text",
     "title",
-    "transitions",
     "view",
     "with",
 ];
@@ -525,7 +611,7 @@ fn scan_semantic_line(
         scan_rewrite_effect_line(scope, tokens, ranges);
         return;
     }
-    scan_scene_semantic_line(tokens, ranges);
+    scan_scene_semantic_line(scope, tokens, ranges);
 }
 
 fn is_scene_semantic_scope(scope: Option<SourceScope>) -> bool {
@@ -606,6 +692,7 @@ fn scan_authoring_semantic_line(
 
     scan_levels_header(tokens, ranges);
     scan_level_header(tokens, ranges);
+    scan_standard_move_call_line(scope, tokens, ranges);
     scan_layer_assignment_line(scope, tokens, ranges);
     scan_render_setting_line(scope, tokens, ranges);
 
@@ -617,6 +704,21 @@ fn scan_authoring_semantic_line(
             SceneStateLhsSyntax::PuzzleSlot | SceneStateLhsSyntax::Variable => SemanticKind::State,
         };
         add_token_range(ranges, name, kind);
+    }
+}
+
+fn scan_standard_move_call_line(
+    scope: Option<SourceScope>,
+    tokens: &[LineToken<'_>],
+    ranges: &mut Vec<SemanticToken>,
+) {
+    if scope != Some(SourceScope::Other) {
+        return;
+    }
+    if let [call] = tokens
+        && call.text == "move"
+    {
+        add_token_range(ranges, *call, SemanticKind::Effect);
     }
 }
 
@@ -863,13 +965,21 @@ fn add_frame_orientation_token(ranges: &mut Vec<SemanticToken>, token: LineToken
     }
 }
 
-fn scan_scene_semantic_line(tokens: &[LineToken<'_>], ranges: &mut Vec<SemanticToken>) {
+fn scan_scene_semantic_line(
+    scope: Option<SourceScope>,
+    tokens: &[LineToken<'_>],
+    ranges: &mut Vec<SemanticToken>,
+) {
     let Some(first) = tokens.first().copied() else {
         return;
     };
     match first.text {
         "scene" => {
             scan_scene_header(tokens, ranges);
+            return;
+        }
+        "step" if scope == Some(SourceScope::SceneTransitions) => {
+            scan_scene_step_line(tokens, ranges);
             return;
         }
         "button" => {
@@ -888,6 +998,14 @@ fn scan_scene_semantic_line(tokens: &[LineToken<'_>], ranges: &mut Vec<SemanticT
     }
 
     scan_scene_effect_tokens(tokens, ranges);
+}
+
+fn scan_scene_step_line(tokens: &[LineToken<'_>], ranges: &mut Vec<SemanticToken>) {
+    let [step, target] = tokens else {
+        return;
+    };
+    add_token_range(ranges, *step, SemanticKind::Keyword);
+    add_token_range(ranges, *target, SemanticKind::State);
 }
 
 fn scan_scene_condition_prefix(tokens: &[LineToken<'_>], ranges: &mut Vec<SemanticToken>) {
@@ -1155,20 +1273,71 @@ set score = 1
     }
 
     #[test]
+    fn classifies_standard_move_call_as_routine_effect() {
+        let source = r#"
+title standard_move_semantics
+
+puzzle board {
+layers {
+actor = Player
+}
+rules {
+move
+}
+}
+"#;
+        let tokens = semantic_tokens(source);
+        let move_start = source.find("move\n").unwrap();
+
+        assert!(tokens.iter().any(|token| {
+            token.start == move_start
+                && token.end == move_start + "move".len()
+                && token.kind == SemanticKind::Effect
+        }));
+    }
+
+    #[test]
+    fn classifies_scene_step_rule_as_scene_transition_directive() {
+        let source = r#"
+title scene_step_semantics
+
+scene playing {
+rules {
+step board
+}
+}
+"#;
+        let tokens = semantic_tokens(source);
+        let step_start = source.find("step board").unwrap();
+        let board_start = step_start + "step ".len();
+
+        assert!(tokens.iter().any(|token| {
+            token.start == step_start
+                && token.end == step_start + "step".len()
+                && token.kind == SemanticKind::Keyword
+        }));
+        assert!(tokens.iter().any(|token| {
+            token.start == board_start
+                && token.end == board_start + "board".len()
+                && token.kind == SemanticKind::State
+        }));
+    }
+
+    #[test]
     fn classifies_same_spelling_by_surface_role() {
         let source = r#"
 title semantic_surface_roles
 
 scene title {
 view {
-title game.title
+title
 }
 }
 "#;
         let tokens = semantic_tokens(source);
         let metadata_title_start = source.find("title semantic_surface_roles").unwrap();
         let scene_title_start = source.find("scene title").unwrap() + "scene ".len();
-        let component_title_start = source.rfind("title game.title").unwrap();
+        let component_title_start = source.rfind("title\n").unwrap();
 
         assert!(tokens.iter().any(|token| {
             token.start == metadata_title_start

@@ -658,6 +658,7 @@ fn write_layout_json(out: &mut String, layout: &SceneLayout3) {
     if layout.size.is_none()
         && layout.gap.is_none()
         && layout.align == SceneLayout3::default().align
+        && !layout.scroll
     {
         return;
     }
@@ -690,6 +691,13 @@ fn write_layout_json(out: &mut String, layout: &SceneLayout3) {
             json_string(align_y_name(layout.align.y))
         )
         .unwrap();
+        wrote = true;
+    }
+    if layout.scroll {
+        if wrote {
+            out.push_str(", ");
+        }
+        out.push_str("\"scroll\": true");
     }
     out.push('}');
 }

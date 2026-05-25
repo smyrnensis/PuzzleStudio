@@ -18,9 +18,9 @@
 
 ```bash
 cargo test
-puzzlestudio play games/spec_2d/game.puzzle
-puzzlestudio check games/spec_2d/game.puzzle
-puzzlestudio export-html games/spec_2d/game.puzzle -o /tmp/game.html
+puzzlestudio play games/spec_2d.puzzle
+puzzlestudio check games/spec_2d.puzzle
+puzzlestudio export-html games/spec_2d.puzzle -o /tmp/game.html
 ```
 
 If the local CLI is not installed or stale, refresh it with
@@ -56,7 +56,7 @@ Platform divergence should happen last, at the host adapter/file-access boundary
 
 Editor frame geometry is owned in one place. The workbench owns pane columns and splitter width through `syncWorkbenchGridLayout` plus the `--workbench-splitter-width` CSS variable. Tool panes must not rederive pane widths. Preview iframe fitting, level board fitting, and similar editor surfaces should ask the shared frame helpers in `crates/html_editor/static/editor.js` (`editorFrameAvailableSize`, `editorFrameContentInlineSize`, `fitEditorAspectFrame`) for the available rectangle, then apply only their own aspect ratio, virtual size, or tool chrome. The compiled game/runtime still owns scene aspect and internal layout; the editor owns only the outer device rectangle.
 
-3D level editor preview must use a public runtime control contract, not runtime fixture internals. The compiled preview HTML may initialize the runtime, but editor-originated changes must go through `PuzzleStudioUpdatePuzzle3Preview` with explicit `level`, `resources`, `camera`, and `settings` fields. `resources` carries the model/visual context needed to interpret a level patch, currently `layerCount`, `objects`, and `sprites`; without it the runtime can receive cells such as `Goal` while rendering every object as a fallback cube because the sprite table was never part of the update contract. Keep whole-fixture replacement such as `PuzzleStudioSetPuzzle3Snapshot` as compatibility/debug surface only; do not use it from the level editor. This is the boundary that lets runtime scene/component JSON evolve without forcing the editor to chase internal fixture schema, while still exposing the preview knobs the editor legitimately needs.
+3D level editor preview must use a public runtime control contract, not runtime fixture internals. The compiled preview HTML may initialize the runtime, but editor-originated changes must go through `PuzzleStudioUpdatePuzzle3Preview` / `PuzzleStudioRenderPuzzle3ModelComponent` with explicit `level`, `resources`, `camera`, `view`, and `settings` fields. `camera` is the orientation/runtime camera surface; editor viewport framing such as preview zoom and XYZ target/pan belongs in `view` so it affects the level preview without contaminating tile palette capture. `resources` carries the model/visual context needed to interpret a level patch, currently `layerCount`, `objects`, and `sprites`; without it the runtime can receive cells such as `Goal` while rendering every object as a fallback cube because the sprite table was never part of the update contract. Keep whole-fixture replacement such as `PuzzleStudioSetPuzzle3Snapshot` as compatibility/debug surface only; do not use it from the level editor. This is the boundary that lets runtime scene/component JSON evolve without forcing the editor to chase internal fixture schema, while still exposing the preview knobs the editor legitimately needs.
 
 Highlighting should be Rust-owned. The browser editor should use the host/server or WASM `highlight_source_html` path for syntax color, and its fallback should be plain escaped text rather than a second JavaScript `.puzzle` grammar. `scan_source_context` now preserves span-bearing source tokens for editor-facing semantic passes; continue migrating parser/highlight/completion toward that shared token/span pipeline instead of adding independent tokenization tables.
 
@@ -183,7 +183,7 @@ Adapters:
 - `crates/ascii_play/src/lib.rs`
 - `crates/html_play/src/main.rs`
 - `crates/cli/src/main.rs`
-- `games/spec_2d/game.puzzle`
+- `games/spec_2d.puzzle`
 
 ## Current Implemented Capabilities
 

@@ -836,6 +836,37 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   flex: 1 1 auto;
 }
 
+.pane-header-icon-button {
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  min-height: 28px;
+  padding: 0;
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 28px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+}
+
+.pane-header-icon-button svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.pane-header-icon-button:hover,
+.pane-header-icon-button:focus-visible {
+  background: var(--hover-bg);
+  color: var(--ink);
+}
+
 [data-pane-drag-handle] {
   cursor: grab;
 }
@@ -1137,8 +1168,34 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
 .source-block-selection-layer {
   position: absolute;
   inset: 0;
+  z-index: 3;
+  pointer-events: none;
+}
+
+.source-find-match-layer {
+  position: absolute;
+  inset: 0;
   z-index: 2;
   pointer-events: none;
+}
+
+.source-find-match-layer[hidden] {
+  display: none;
+}
+
+.source-find-match {
+  position: absolute;
+  min-width: 2px;
+  border-radius: 2px;
+  background: color-mix(in srgb, #f2c94c 34%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, #f2c94c 72%, transparent);
+}
+
+.source-find-match.is-current {
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--accent) 82%, transparent),
+    0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent);
 }
 
 .source-caret-layer {
@@ -1388,6 +1445,120 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
 .source-completion-kind-music { color: var(--syntax-asset); }
 .source-completion-kind-sprite { color: var(--syntax-asset); }
 .source-completion-kind-asset { color: var(--syntax-asset); }
+
+.source-find-panel {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  z-index: 8;
+  width: min(520px, calc(100% - 20px));
+  padding: 7px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 6px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--panel) 96%, var(--code-bg));
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.32);
+}
+
+.source-find-panel[hidden] {
+  display: none;
+}
+
+.source-find-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 30px 30px 30px 30px;
+  gap: 5px;
+  align-items: center;
+}
+
+.source-replace-row {
+  display: none;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+}
+
+.source-find-panel.has-replace .source-replace-row {
+  display: grid;
+}
+
+.source-find-input {
+  min-width: 0;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  outline: none;
+  background: var(--input-bg);
+  color: var(--ink);
+  font: 600 12px/1.2 ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+}
+
+.source-find-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.source-find-icon-button,
+.source-find-command-button {
+  height: 28px;
+  min-height: 28px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.source-find-icon-button {
+  width: 30px;
+  min-width: 30px;
+  padding: 0;
+  display: inline-grid;
+  place-items: center;
+}
+
+.source-find-icon-button svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.source-find-command-button {
+  min-width: 0;
+  padding: 0 8px;
+  white-space: nowrap;
+}
+
+.source-find-icon-button:hover,
+.source-find-icon-button:focus-visible,
+.source-find-icon-button.is-active,
+.source-find-command-button:hover,
+.source-find-command-button:focus-visible {
+  background: var(--hover-bg);
+  color: var(--ink);
+}
+
+.source-find-icon-button.is-active {
+  border-color: color-mix(in srgb, var(--accent) 44%, transparent);
+}
+
+.source-find-status {
+  min-width: 0;
+  padding: 0 2px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.2;
+  text-align: right;
+  white-space: nowrap;
+}
 
 .source-color-code-input {
   min-width: 0;
@@ -1813,8 +1984,32 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   display: block;
 }
 
+.level-solve-shortcut-button .cancel-solve-icon,
+.level-solve-shortcut-button.is-solving .solve-level-icon {
+  display: none;
+}
+
+.level-solve-shortcut-button.is-solving {
+  background: color-mix(in srgb, var(--danger) 14%, var(--control-bg));
+  color: var(--danger);
+}
+
+.level-solve-shortcut-button.is-solving .cancel-solve-icon {
+  display: block;
+}
+
 .level-builder.is-playtesting .level-board {
   cursor: default;
+}
+
+.level-builder.is-playtesting .level3d-stage-canvas,
+.level-builder.is-playtesting .level3d-stage-overlay,
+.level-builder.is-playtesting .level3d-layer-board {
+  cursor: default;
+}
+
+.level-builder.is-playtesting .level3d-preview-controls {
+  display: none;
 }
 
 .source-line-preview {
@@ -1912,6 +2107,44 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   align-items: center;
   gap: 2px;
   flex: 0 0 auto;
+}
+
+.solver-level-strip {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bar-bg);
+}
+
+.solver-level-control {
+  min-width: 0;
+  width: 100%;
+  display: grid;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.1;
+  text-transform: uppercase;
+}
+
+.solver-level-control select {
+  width: 100%;
+  min-width: 0;
+  height: 34px;
+  padding: 0 28px 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--control-bg);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: none;
 }
 
 .level-solve-status {
@@ -2818,6 +3051,7 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   z-index: 1;
 }
 
+.level3d-runtime-frame,
 .level3d-stage-canvas {
   position: absolute;
   inset: 0;
@@ -2825,9 +3059,18 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   height: 100%;
   display: block;
   border: 0;
+}
+
+.level3d-runtime-frame {
+  background: transparent;
+  pointer-events: none;
+}
+
+.level3d-stage-canvas {
   background: transparent;
   cursor: crosshair;
   touch-action: none;
+  z-index: 2;
 }
 
 .level3d-stage-canvas:focus-visible,
@@ -4251,36 +4494,45 @@ html.is-sprite3d-slice-scrubbing * {
 
 .sprite3d-scope-toggle {
   min-width: 0;
-  min-height: var(--icon-button-size);
+  min-height: 24px;
   display: inline-flex;
   align-items: center;
-  gap: 3px;
-  padding: 0 4px;
+  gap: 2px;
+  padding: 2px;
   border: 1px solid var(--line);
-  border-radius: 6px;
-  background: color-mix(in srgb, var(--control-bg) 76%, transparent);
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--control-bg) 64%, transparent);
 }
 
 .sprite3d-scope-toggle-label {
-  padding: 0 3px;
+  padding: 0 4px 0 2px;
   color: var(--muted);
   font-size: 10px;
   font-weight: 900;
-  line-height: var(--icon-button-size);
+  line-height: 20px;
   text-transform: uppercase;
 }
 
 .sprite3d-scope-button {
+  width: 22px;
+  min-width: 22px;
+  height: 20px;
+  min-height: 20px;
+  border-radius: 4px;
   color: var(--muted);
 }
 
 .sprite3d-scope-button.is-active {
-  background: var(--active-bg);
+  background: color-mix(in srgb, var(--accent) 20%, var(--control-bg));
   color: var(--ink);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ink) 14%, transparent);
+  box-shadow: none;
 }
 
-.sprite3d-scope-button svg,
+.sprite3d-scope-button svg {
+  width: 14px;
+  height: 14px;
+}
+
 .sprite3d-clear-button svg {
   width: 18px;
   height: 18px;
@@ -4330,6 +4582,11 @@ html.is-sprite3d-slice-scrubbing * {
   justify-content: flex-start;
   gap: 3px;
   padding: 2px 0;
+}
+
+.sprite-toolbar.sprite3d-edit-actions {
+  gap: 8px;
+  padding: 0;
 }
 
 .sprite-add-color-button svg,

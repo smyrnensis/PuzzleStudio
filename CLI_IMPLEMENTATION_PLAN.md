@@ -67,9 +67,9 @@ puzzlestudio
 `.puzzle` を読み込み、parse / validation / lowering を実行する。
 
 ```bash
-puzzlestudio check games/spec_2d/game.puzzle
+puzzlestudio check games/spec_2d.puzzle
 puzzlestudio check games/spec_2d/
-puzzlestudio check games/spec_2d/game.puzzle --json
+puzzlestudio check games/spec_2d.puzzle --json
 ```
 
 Expected behavior:
@@ -85,7 +85,7 @@ Expected behavior:
 standalone HTML を生成する。
 
 ```bash
-puzzlestudio export-html games/spec_2d/game.puzzle -o dist/game.html
+puzzlestudio export-html games/spec_2d.puzzle -o dist/game.html
 ```
 
 Expected behavior:
@@ -99,7 +99,7 @@ Expected behavior:
 ローカル preview server を起動する。
 
 ```bash
-puzzlestudio preview games/spec_2d/game.puzzle
+puzzlestudio preview games/spec_2d.puzzle
 ```
 
 Expected behavior:
@@ -113,7 +113,7 @@ Expected behavior:
 terminal player を起動する。
 
 ```bash
-puzzlestudio play games/spec_2d/game.puzzle
+puzzlestudio play games/spec_2d.puzzle
 ```
 
 Expected behavior:
@@ -127,7 +127,7 @@ Expected behavior:
 local editor server を起動する。
 
 ```bash
-puzzlestudio editor games/spec_2d/game.puzzle
+puzzlestudio editor games/spec_2d.puzzle
 ```
 
 Expected behavior:
@@ -141,8 +141,8 @@ Expected behavior:
 入力列を流し、最終状態や結果を返す。
 
 ```bash
-puzzlestudio simulate games/spec_2d/game.puzzle --level first --inputs right,right,up
-puzzlestudio simulate games/spec_2d/game.puzzle --level 3 --inputs @inputs.txt --json
+puzzlestudio simulate games/spec_2d.puzzle --level first --inputs right,right,up
+puzzlestudio simulate games/spec_2d.puzzle --level 3 --inputs @inputs.txt --json
 ```
 
 Expected behavior:
@@ -170,8 +170,8 @@ Expected behavior:
 `.puzzle` source を整形する。
 
 ```bash
-puzzlestudio format games/spec_2d/game.puzzle
-puzzlestudio format games/spec_2d/game.puzzle --check
+puzzlestudio format games/spec_2d.puzzle
+puzzlestudio format games/spec_2d.puzzle --check
 ```
 
 Expected behavior:
@@ -198,7 +198,7 @@ Expected behavior:
 standalone editor HTML を生成する。
 
 ```bash
-puzzlestudio export-editor games/spec_2d/game.puzzle -o editor.html
+puzzlestudio export-editor games/spec_2d.puzzle -o editor.html
 ```
 
 Expected behavior:
@@ -275,9 +275,9 @@ Rules:
 The first useful milestone is:
 
 ```bash
-puzzlestudio check games/spec_2d/game.puzzle
-puzzlestudio check games/spec_2d/game.puzzle --json
-puzzlestudio export-html games/spec_2d/game.puzzle -o /tmp/game.html
+puzzlestudio check games/spec_2d.puzzle
+puzzlestudio check games/spec_2d.puzzle --json
+puzzlestudio export-html games/spec_2d.puzzle -o /tmp/game.html
 ```
 
 ## 7. Design Checks Before Implementation
@@ -294,7 +294,7 @@ Do not make the CLI a parallel implementation of parser, runtime, preview, or pr
 
 ## 8. Open Questions
 
-- Should the workspace package be named `puzzlestudio-cli` while the binary is `puzzlestudio`?
+- Resolved: the workspace package and installed binary are both named `puzzlestudio`.
 - Should `preview` open a browser automatically, or only print the URL?
 - Should `check` treat warnings as failure behind `--deny-warnings`?
 - Should formatter work from original tokens to preserve comments, or initially print canonical source only?

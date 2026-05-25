@@ -109,33 +109,12 @@
     }
 
     async loadCoreRuntime() {
-      const embedded = window.PuzzleStandaloneEmbeddedWasm;
-      if (!embedded?.moduleSource || !embedded?.wasmBase64) {
-        throw new Error("Puzzle core WASM is not embedded in this standalone export.");
-      }
       const version = String(this.data?.engineVersion || Date.now());
-      const url = URL.createObjectURL(new Blob([embedded.moduleSource], {
-        type: "text/javascript",
-      }));
-      try {
-        const module = await import(`${url}#${encodeURIComponent(version)}`);
-        await module.default({ module_or_path: this.base64ToUint8Array(embedded.wasmBase64) });
-        if (typeof module.WasmCoreRuntime !== "function") {
-          throw new Error("Puzzle core WASM runtime is unavailable.");
-        }
-        this.coreRuntime = new module.WasmCoreRuntime(this.data.source || "", this.data.puzzlePath || "game.puzzle");
-      } finally {
-        URL.revokeObjectURL(url);
+      const module = await window.PuzzleRuntimeWasmLoader.load(version);
+      if (typeof module.WasmCoreRuntime !== "function") {
+        throw new Error("Puzzle core WASM runtime is unavailable.");
       }
-    }
-
-    base64ToUint8Array(value) {
-      const binary = atob(value || "");
-      const bytes = new Uint8Array(binary.length);
-      for (let index = 0; index < binary.length; index += 1) {
-        bytes[index] = binary.charCodeAt(index);
-      }
-      return bytes;
+      this.coreRuntime = new module.WasmCoreRuntime(this.data.source || "", this.data.puzzlePath || "game.puzzle");
     }
 
     snapshot() {

@@ -27,25 +27,25 @@ cargo install --path crates/cli
 Run the main validation command:
 
 ```bash
-puzzlestudio check games/spec_2d/game.puzzle
+puzzlestudio check games/spec_2d.puzzle
 ```
 
 Play the 2D sample in a terminal:
 
 ```bash
-puzzlestudio play games/spec_2d/game.puzzle
+puzzlestudio play games/spec_2d.puzzle
 ```
 
 Export a standalone HTML build:
 
 ```bash
-puzzlestudio export-html games/spec_2d/game.puzzle -o /tmp/spec_2d.html
+puzzlestudio export-html games/spec_2d.puzzle -o /tmp/spec_2d.html
 ```
 
 Serve the browser player locally:
 
 ```bash
-puzzlestudio preview games/spec_2d/game.puzzle
+puzzlestudio preview games/spec_2d.puzzle
 ```
 
 The server prints a `http://127.0.0.1:<port>` URL after it starts.
@@ -66,7 +66,7 @@ different semantic inputs with an `inputs { ... }` block.
 Run the browser editor with a local preview server:
 
 ```bash
-puzzlestudio editor games/spec_2d/game.puzzle
+puzzlestudio editor games/spec_2d.puzzle
 ```
 
 By default this serves `http://127.0.0.1:8787/editor.html`. Use `--port` to pick
@@ -75,7 +75,7 @@ a different port.
 Generate a standalone editor HTML file:
 
 ```bash
-puzzlestudio export-editor games/spec_2d/game.puzzle -o editor.html
+puzzlestudio export-editor games/spec_2d.puzzle -o editor.html
 ```
 
 If editor JavaScript, WASM, or preview code has changed, refresh the editor WASM
@@ -89,7 +89,7 @@ For static web hosting, generate the standalone editor plus WASM preview
 fallback:
 
 ```bash
-tools/generate_web_editor.sh games/spec_2d/game.puzzle -o docs/index.html
+tools/generate_web_editor.sh games/spec_2d.puzzle -o docs/index.html
 ```
 
 ## 3D Prototype
@@ -215,11 +215,11 @@ cargo test
 Run a focused syntax/runtime smoke check:
 
 ```bash
-puzzlestudio check games/spec_2d/game.puzzle
+puzzlestudio check games/spec_2d.puzzle
 ```
 
 Export smoke test:
 
 ```bash
-puzzlestudio export-html games/spec_2d/game.puzzle -o /tmp/spec_2d.html
+puzzlestudio export-html games/spec_2d.puzzle -o /tmp/spec_2d.html
 ```

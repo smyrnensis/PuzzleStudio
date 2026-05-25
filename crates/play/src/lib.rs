@@ -2568,9 +2568,6 @@ fn parse_runtime_command(command_text: &str, default_wait_ms: u64) -> Option<Sce
         return None;
     }
     let (command, rest) = command_text.split_once(' ')?;
-    if rest.contains(" with ") {
-        return None;
-    }
     let (screen, params) = if let Some((screen, params)) = rest.split_once(" with ") {
         (screen.trim(), parse_runtime_params(params.trim())?)
     } else {
@@ -3199,7 +3196,89 @@ text "Level Select"
             .unwrap();
     }
 
-    fn enter_loaded_spec_hub(loaded: &LoadedGame, session: &mut GameSession) {
+    fn scene_local_puzzle_fixture() -> LoadedGame {
+        parse_game(
+            r#"
+title scene_local_puzzle_fixture
+
+puzzle sokoban {
+var portal_entered = false
+
+layers {
+trigger = Portal
+solid = Player Wall
+}
+
+rules {
+once [ Player ] -> set portal_entered = false
+for d in directions {
+if input == d {
+once d [ Player | Portal no solid ] -> [ | Player ] set portal_entered = true
+once d [ Player | no solid ] -> [ | Player ]
+}
+}
+}
+
+levels spec of sokoban {
+legend {
+. = empty
+P = Player
+O = Portal
+# = Wall
+}
+
+level hub {
+####
+#PO#
+#..#
+####
+}
+}
+}
+
+scene hub {
+resources {
+levels spec
+}
+state {
+board = puzzle sokoban
+spec_board = puzzle sokoban
+}
+view {
+board
+}
+rules {
+step spec_board
+if spec_board.portal_entered -> goto child_1
+}
+}
+
+scene child_1 {
+view {
+text "Child 1"
+}
+}
+
+scene checkpoint {
+resources {
+levels spec
+}
+state {
+spec_board = puzzle sokoban
+}
+view {
+spec_board
+}
+rules {
+step spec_board
+}
+}
+"#,
+        )
+        .unwrap()
+    }
+
+    fn enter_scene_local_hub(loaded: &LoadedGame, session: &mut GameSession) {
         session.apply_command(loaded, "goto hub").unwrap();
         load_named_scene_level(loaded, session, "hub.spec_board", "spec.hub");
         assert_eq!(session.screen(), "hub");
@@ -3704,7 +3783,7 @@ text "Playing"
 
     #[test]
     fn render_ascii_top_uses_loaded_legend() {
-        let source = include_str!("../../../games/spec_2d/game.puzzle");
+        let source = include_str!("../../../games/spec_2d.puzzle");
         let loaded = parse_game(source).unwrap();
 
         assert_eq!(
@@ -3751,7 +3830,7 @@ B = Box
 
     #[test]
     fn session_supports_undo_redo_and_restart() {
-        let source = include_str!("../../../games/spec_2d/game.puzzle");
+        let source = include_str!("../../../games/spec_2d.puzzle");
         let loaded = parse_game(source).unwrap();
         let mut session = GameSession::new(&loaded);
         session.start_level(&loaded, 0);
@@ -3859,7 +3938,7 @@ P
 
     #[test]
     fn spec_2d_start_and_continue_levels_use_distinct_progress_semantics() {
-        let source = include_str!("../../../games/spec_2d/game.puzzle");
+        let source = include_str!("../../../games/spec_2d.puzzle");
         let loaded = parse_game(source).unwrap();
         let cleared_current_level = loaded.levels[1].name.clone();
         let save = ProgressSaveData {
@@ -3886,15 +3965,6 @@ P
             session.progress_save_data(&loaded).current_level,
             Some(cleared_current_level)
         );
-        assert!(
-            session
-                .progress_save_data(&loaded)
-                .persistent_vars
-                .contains(&PersistentVarSaveData {
-                    name: "visits".to_string(),
-                    value: 0,
-                })
-        );
 
         session
             .apply_command(&loaded, "start levels in playing")
@@ -3917,7 +3987,7 @@ P
 
     #[test]
     fn default_actions_work_from_playing() {
-        let source = include_str!("../../../games/spec_2d/game.puzzle");
+        let source = include_str!("../../../games/spec_2d.puzzle");
         let loaded = parse_game(source).unwrap();
         let mut session = GameSession::new(&loaded);
         session
@@ -4221,7 +4291,7 @@ text "clear"
 
     #[test]
     fn puzzle_transition_only_runs_on_scenes_that_enable_main() {
-        let source = include_str!("../../../games/spec_2d/game.puzzle");
+        let source = include_str!("../../../games/spec_2d.puzzle");
         let loaded = parse_game(source).unwrap();
         let mut session = GameSession::new(&loaded);
         session
@@ -4238,15 +4308,22 @@ text "clear"
 
     #[test]
     fn screen_local_puzzle_persists_across_level_entry() {
-        let source = include_str!("../../../games/spec_2d/game.puzzle");
-        let loaded = parse_game(source).unwrap();
+        let loaded = scene_local_puzzle_fixture();
         let mut session = GameSession::new(&loaded);
         let player = object_named(&loaded, "Player");
 
-        enter_loaded_spec_hub(&loaded, &mut session);
+        enter_scene_local_hub(&loaded, &mut session);
 
         session
-            .apply_input(&loaded, input_named(&loaded, "down"))
+            .apply_screen_effect(
+                &loaded,
+                &SceneEffect::Apply {
+                    rule: "down".to_string(),
+                    args: Vec::new(),
+                    target: Some("hub.board".to_string()),
+                },
+                &HashMap::new(),
+            )
             .unwrap();
         assert!(
             session
@@ -4274,12 +4351,11 @@ text "clear"
     }
 
     #[test]
-    fn spec_2d_hub_portal_enters_child_scene() {
-        let source = include_str!("../../../games/spec_2d/game.puzzle");
-        let loaded = parse_game(source).unwrap();
+    fn scene_hub_portal_enters_child_scene() {
+        let loaded = scene_local_puzzle_fixture();
         let mut session = GameSession::new(&loaded);
 
-        enter_loaded_spec_hub(&loaded, &mut session);
+        enter_scene_local_hub(&loaded, &mut session);
 
         session
             .apply_input(&loaded, input_named(&loaded, "right"))
@@ -4288,13 +4364,12 @@ text "clear"
     }
 
     #[test]
-    fn spec_2d_hub_reset_restores_checkpoint() {
-        let source = include_str!("../../../games/spec_2d/game.puzzle");
-        let loaded = parse_game(source).unwrap();
+    fn scene_hub_reset_restores_checkpoint() {
+        let loaded = scene_local_puzzle_fixture();
         let mut session = GameSession::new(&loaded);
         let player = object_named(&loaded, "Player");
 
-        enter_loaded_spec_hub(&loaded, &mut session);
+        enter_scene_local_hub(&loaded, &mut session);
         load_named_scene_level(&loaded, &mut session, "checkpoint.spec_board", "spec.hub");
         session
             .apply_input(&loaded, input_named(&loaded, "down"))
@@ -4524,7 +4599,7 @@ text "done"
 
     #[test]
     fn screen_transition_can_goto_level_with_payload() {
-        let source = include_str!("../../../games/spec_2d/game.puzzle");
+        let source = include_str!("../../../games/spec_2d.puzzle");
         let loaded = parse_game(source).unwrap();
         let mut session = GameSession::new(&loaded);
         session
@@ -4940,12 +5015,13 @@ layers 1
 empty .
 
 object Player 0
-legend P = Player
 
 rules {
 }
 
 levels {
+legend P = Player
+
 level start {
 P
 }
@@ -5000,12 +5076,13 @@ layers 1
 empty .
 
 object Player 0
-legend P = Player
 
 rules {
 }
 
 levels {
+legend P = Player
+
 level start {
 P
 }
@@ -5047,7 +5124,7 @@ text tab
     }
 
     #[test]
-    fn runtime_ignores_scene_params() {
+    fn runtime_applies_scene_params_without_overwriting_consts() {
         let source = r#"
 title scene_param_rejection
 puzzle default {
@@ -5055,12 +5132,13 @@ layers 1
 empty .
 
 object Player 0
-legend P = Player
 
 rules {
 }
 
 levels {
+legend P = Player
+
 level start {
 P
 }
@@ -5086,7 +5164,13 @@ text tab
         session
             .apply_command(&loaded, "enter menu with tab = settings")
             .unwrap();
-        assert_eq!(session.screen(), "playing");
+        assert_eq!(session.screen(), "menu");
+        assert_eq!(
+            session
+                .scene_state()
+                .and_then(|state| state.values.get("tab")),
+            Some(&SceneValue::Symbol("levels".to_string()))
+        );
     }
 
     #[test]

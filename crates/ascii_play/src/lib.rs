@@ -347,12 +347,6 @@ fn render_component(
                 out.push_str(&level.name);
                 out.push('\n');
             }
-            for (offset, button) in menu.buttons.iter().enumerate() {
-                let selected = level_indices.len() + offset == cursor;
-                out.push_str(if selected { "> [" } else { "  [" });
-                out.push_str(&eval_expr(loaded, session, &button.label, scope));
-                out.push_str("]\n");
-            }
         }
         SceneComponent::Menu(instance) => {
             if let Some(menu) = loaded.menus.iter().find(|menu| menu.name == instance.menu) {
@@ -1019,22 +1013,15 @@ fn resolve_path(
     scope: &RenderScope,
 ) -> String {
     match path {
-        [name] if name == "game" => loaded.title.clone(),
+        [name] if name == "title" => loaded.title.clone(),
+        [name] if name == "subtitle" => loaded.subtitle.clone().unwrap_or_default(),
+        [name] if name == "author" => loaded.author.clone().unwrap_or_default(),
+        [name] if name == "homepage" => loaded.homepage.clone().unwrap_or_default(),
         [name] if name == "level" => session.level_index().to_string(),
         [name] => scope
             .level_value(name, loaded)
             .or_else(|| scene_value(session, &scope.scene_name, name))
             .unwrap_or_else(|| name.clone()),
-        [root, field] if root == "game" && field == "title" => loaded.title.clone(),
-        [root, field] if root == "game" && field == "subtitle" => {
-            loaded.subtitle.clone().unwrap_or_default()
-        }
-        [root, field] if root == "game" && field == "author" => {
-            loaded.author.clone().unwrap_or_default()
-        }
-        [root, field] if root == "game" && field == "homepage" => {
-            loaded.homepage.clone().unwrap_or_default()
-        }
         [root, field] if root == "level" => current_level_field(loaded, session, field),
         [root, field] => scope
             .level_field(root, field, loaded)

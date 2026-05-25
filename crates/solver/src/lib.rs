@@ -7,10 +7,12 @@ pub mod puzzle_domain;
 pub mod report;
 mod stable_hash;
 
-pub use best_first::{best_first, best_first_with_dead_states};
+pub use best_first::{
+    best_first, best_first_with_dead_states, best_first_with_dead_states_and_progress,
+};
 pub use bfs::exact_bfs;
 pub use budget::SearchBudget;
 pub use domain::SearchDomain;
 pub use puzzle_domain::{PuzzleDomain, PuzzleStateKey};
 pub use puzzle3_domain::{Puzzle3Domain, Puzzle3StateKey};
-pub use report::{SearchFailure, SearchOutcome, SearchStats, Witness};
+pub use report::{SearchFailure, SearchOutcome, SearchProgress, SearchStats, Witness};

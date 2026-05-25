@@ -80,13 +80,8 @@ pub fn suggest_source_completions(source: &str, cursor_offset: usize) -> Complet
 
     let mut items = Vec::<CompletionItem>::new();
 
-    if let Some(axis_values) = selector_axis_values(&symbols, &context.token_text) {
-        add_named_items(
-            &mut items,
-            axis_values.iter(),
-            CompletionKind::Variant,
-            "tag",
-        );
+    if let Some(axis_items) = selector_axis_items(&symbols, &context.token_text) {
+        items.extend(axis_items);
     } else {
         for slot in &context.slots {
             add_slot_items(&mut items, &symbols, *slot);
@@ -149,6 +144,7 @@ struct CompletionSymbols {
     value_set_names: BTreeSet<String>,
     variants: BTreeSet<String>,
     directions: BTreeSet<String>,
+    direction_sets: BTreeSet<String>,
     inputs: BTreeSet<String>,
     commands: BTreeSet<String>,
     effects: BTreeSet<String>,
@@ -185,6 +181,11 @@ fn collect_completion_symbols(source: &str) -> CompletionSymbols {
     );
     symbols.directions.extend(
         ["up", "down", "left", "right"]
+            .into_iter()
+            .map(str::to_string),
+    );
+    symbols.direction_sets.extend(
+        ["directions", "horizontal", "vertical"]
             .into_iter()
             .map(str::to_string),
     );
@@ -293,6 +294,9 @@ fn collect_line_symbols(
             symbols
                 .value_sets
                 .insert((*name).to_string(), values.clone());
+            if values.iter().all(|value| is_direction_value(value)) {
+                symbols.direction_sets.insert((*name).to_string());
+            }
             symbols.variants.extend(values);
         }
         [name, "=", selectors @ ..] if scope == Some(SourceScope::Group) => {
@@ -375,16 +379,47 @@ fn collect_keys(tokens: &[&str], symbols: &mut CompletionSymbols) {
     }
 }
 
-fn selector_axis_values(symbols: &CompletionSymbols, token: &str) -> Option<Vec<String>> {
+fn selector_axis_items(symbols: &CompletionSymbols, token: &str) -> Option<Vec<CompletionItem>> {
     let (base, partial) = token.split_once(':')?;
     let axes = symbols.object_axes.get(base)?;
     let supplied = partial.split(':').count();
     let axis = axes.get(supplied.saturating_sub(1))?;
-    let mut values = symbols.value_sets.get(axis).cloned()?;
-    if !values.iter().any(|value| value == "_") {
-        values.insert(0, "_".to_string());
+    let axis_values = symbols.value_sets.get(axis)?;
+    let mut items = Vec::new();
+
+    if !axis_values.iter().any(|value| value == "_") {
+        items.push(CompletionItem {
+            label: "_".to_string(),
+            kind: CompletionKind::Variant,
+            insert_text: "_".to_string(),
+            detail: "tag".to_string(),
+        });
     }
-    Some(values)
+    for value in axis_values {
+        items.push(CompletionItem {
+            label: value.clone(),
+            kind: CompletionKind::Variant,
+            insert_text: value.clone(),
+            detail: "tag".to_string(),
+        });
+    }
+    for (name, values) in &symbols.value_sets {
+        if name == axis {
+            continue;
+        }
+        if axis_values.iter().any(|value| value == name) {
+            continue;
+        }
+        if values.iter().all(|value| axis_values.contains(value)) {
+            items.push(CompletionItem {
+                label: name.clone(),
+                kind: CompletionKind::ValueSet,
+                insert_text: name.clone(),
+                detail: "tags".to_string(),
+            });
+        }
+    }
+    Some(items)
 }
 
 fn completion_prefix(token: &str) -> &str {
@@ -443,6 +478,12 @@ fn add_slot_items(
         SemanticCompletionSlot::Directions => add_named_items(
             items,
             symbols.directions.iter(),
+            CompletionKind::Direction,
+            "direction",
+        ),
+        SemanticCompletionSlot::DirectionSets => add_named_items(
+            items,
+            symbols.direction_sets.iter(),
             CompletionKind::Direction,
             "direction",
         ),
@@ -554,6 +595,10 @@ fn tag_set_tokens(name: &str, values: &[&str]) -> bool {
         && !is_completion_keyword(name)
         && !values.is_empty()
         && values.iter().all(|value| is_identifier(value))
+}
+
+fn is_direction_value(value: &str) -> bool {
+    matches!(value, "up" | "down" | "left" | "right")
 }
 
 fn clean_spec(spec: &str) -> &str {
@@ -700,12 +745,82 @@ for c in co
     }
 
     #[test]
+    fn labels_builtin_axes_by_completion_context() {
+        let source = r#"
+title complete_contextual_axes
+puzzle board {
+objects {
+Player
+Box:directions
+}
+rules {
+for h in hori
+once hori [
+[ Player{hori
+[ Box:hori
+}
+}
+"#;
+        let for_cursor = source.find("in hori").unwrap() + "in hori".len();
+        let for_list = suggest_source_completions(source, for_cursor);
+        assert!(
+            for_list.items.iter().any(|item| {
+                item.label == "horizontal" && item.kind == CompletionKind::ValueSet
+            })
+        );
+        assert!(
+            !for_list.items.iter().any(|item| {
+                item.label == "horizontal" && item.kind == CompletionKind::Direction
+            })
+        );
+
+        let rewrite_cursor = source.find("once hori").unwrap() + "once hori".len();
+        let rewrite_list = suggest_source_completions(source, rewrite_cursor);
+        assert!(
+            rewrite_list.items.iter().any(|item| {
+                item.label == "horizontal" && item.kind == CompletionKind::Direction
+            })
+        );
+        assert!(
+            !rewrite_list.items.iter().any(|item| {
+                item.label == "horizontal" && item.kind == CompletionKind::ValueSet
+            })
+        );
+
+        let scratch_cursor = source.find("Player{hori").unwrap() + "Player{hori".len();
+        let scratch_list = suggest_source_completions(source, scratch_cursor);
+        assert!(
+            scratch_list.items.iter().any(|item| {
+                item.label == "horizontal" && item.kind == CompletionKind::Direction
+            })
+        );
+        assert!(
+            !scratch_list.items.iter().any(|item| {
+                item.label == "horizontal" && item.kind == CompletionKind::ValueSet
+            })
+        );
+
+        let selector_cursor = source.find("Box:hori").unwrap() + "Box:hori".len();
+        let selector_list = suggest_source_completions(source, selector_cursor);
+        assert!(selector_list.items.iter().any(|item| {
+            item.label == "horizontal"
+                && item.kind == CompletionKind::ValueSet
+                && item.detail == "tags"
+        }));
+        assert!(
+            !selector_list.items.iter().any(|item| {
+                item.label == "horizontal" && item.kind == CompletionKind::Direction
+            })
+        );
+    }
+
+    #[test]
     fn suggests_scene_names_after_goto() {
         let source = r#"
 title complete_goto
 scene title {
-transitions {
-start -> goto 
+rules {
+input start -> goto 
 }
 }
 scene playing {

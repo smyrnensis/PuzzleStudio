@@ -6,12 +6,11 @@ use crate::{
     Level3, LevelBundle3, LevelCell3, LevelEntry3, Lifecycle3, LifecycleCommand3,
     LineMatchCellTemplate3, LineOrientation3, LinePatternTemplate3, LineRuleTemplate3,
     LineWriteOpTemplate3, LocalWriteOpTemplate3, MatchCell3, ObjectDef3, ObjectFamily3, ObjectId,
-    ObjectSelector3, ObjectVariant3, Offset3, Pattern3, Rule3, Scene3, SceneAction3, SceneAlign3,
-    SceneAlignX3, SceneAlignY3, SceneComponent3, SceneControl3, SceneControlTarget3,
-    SceneInputMap3, SceneKeyBinding3, SceneLayout3, ScenePuzzle3, SceneRuleCall3, SceneSize3,
-    SelectorCatalog3, SelectorGroup3, SelectorTag3, Size3, Sprite3, SpriteColor3, SpriteSet3,
-    SpriteVoxels3, VariantAxis3, WinCondition3, lower_dense_rule_template,
-    lower_line_rule_template,
+    ObjectSelector3, ObjectVariant3, Offset3, Pattern3, Rule3, Scene3, SceneAction3,
+    SceneComponent3, SceneControl3, SceneControlTarget3, SceneInputMap3, SceneKeyBinding3,
+    SceneLayout3, ScenePuzzle3, SceneRuleCall3, SelectorCatalog3, SelectorGroup3, SelectorTag3,
+    Size3, Sprite3, SpriteColor3, SpriteSet3, SpriteVoxels3, VariantAxis3, WinCondition3,
+    lower_dense_rule_template, lower_line_rule_template,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -84,6 +83,18 @@ impl Default for SpriteRenderSettings3 {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ParseError3 {
     Message(String),
+}
+
+impl From<puzzle_scene::SceneBlockParseError> for ParseError3 {
+    fn from(value: puzzle_scene::SceneBlockParseError) -> Self {
+        Self::Message(value.to_string())
+    }
+}
+
+impl From<puzzle_scene::SceneLayoutParseError> for ParseError3 {
+    fn from(value: puzzle_scene::SceneLayoutParseError) -> Self {
+        Self::Message(value.to_string())
+    }
 }
 
 pub fn parse_puzzle3d(source: &str) -> Result<ParsedPuzzle3, ParseError3> {
@@ -438,49 +449,28 @@ impl Parser3 {
 
     fn parse_scene_components_block(
         &self,
-        mut index: usize,
+        index: usize,
         block_name: &str,
     ) -> Result<(usize, Vec<SceneComponent3>), ParseError3> {
-        let mut components = Vec::new();
-        while index < self.lines.len() {
-            let line = self.lines[index].clone();
-            if line == "}" {
-                return Ok((index + 1, components));
-            }
-            if line.is_empty() {
-                index += 1;
-                continue;
-            }
-            let (next, component) = self.parse_scene_component_at(index)?;
-            components.push(component);
-            index = next;
-        }
-        Err(message(format!("scene {block_name} block missing }}")))
+        let mut parse_leaf =
+            |_: &[String], index: usize| -> Result<(usize, SceneComponent3), ParseError3> {
+                self.parse_scene_leaf_component_at(index)
+            };
+        puzzle_scene::parse_scene_component_block(
+            &self.lines,
+            index,
+            block_name,
+            puzzle_scene::SceneBlockSyntax::Braces,
+            &mut parse_leaf,
+            &build_scene_container3,
+        )
     }
 
-    fn parse_scene_component_at(
+    fn parse_scene_leaf_component_at(
         &self,
         index: usize,
     ) -> Result<(usize, SceneComponent3), ParseError3> {
         let line = self.lines[index].clone();
-        if let Some(rest) = line.strip_prefix("row ") {
-            return self.parse_scene_container(index, "row", rest);
-        }
-        if line == "row {" {
-            return self.parse_scene_container(index, "row", "{");
-        }
-        if let Some(rest) = line.strip_prefix("column ") {
-            return self.parse_scene_container(index, "column", rest);
-        }
-        if line == "column {" {
-            return self.parse_scene_container(index, "column", "{");
-        }
-        if let Some(rest) = line.strip_prefix("box ") {
-            return self.parse_scene_container(index, "box", rest);
-        }
-        if line == "box {" {
-            return self.parse_scene_container(index, "box", "{");
-        }
         if let Some(rest) = line.strip_prefix("puzzle3 ").map(str::trim) {
             if rest.ends_with('{') {
                 return self.parse_puzzle3_component_block(index, rest);
@@ -552,28 +542,6 @@ impl Parser3 {
             index += 1;
         }
         Err(message("component inputs block missing }"))
-    }
-
-    fn parse_scene_container(
-        &self,
-        index: usize,
-        kind: &str,
-        rest: &str,
-    ) -> Result<(usize, SceneComponent3), ParseError3> {
-        let rest = rest.trim();
-        let attrs = rest
-            .strip_suffix('{')
-            .map(str::trim)
-            .ok_or_else(|| message(format!("{kind} component must open a block with {{")))?;
-        let layout = parse_scene_layout_attrs(attrs)?;
-        let (next, children) = self.parse_scene_components_block(index + 1, kind)?;
-        let component = match kind {
-            "row" => SceneComponent3::Row { children, layout },
-            "column" => SceneComponent3::Column { children, layout },
-            "box" => SceneComponent3::Box { children, layout },
-            _ => unreachable!(),
-        };
-        Ok((next, component))
     }
 
     fn parse_scene_keys_block(
@@ -1404,90 +1372,20 @@ fn split_name_and_attrs(value: &str) -> Result<(&str, &str), ParseError3> {
 }
 
 fn parse_scene_layout_attrs(value: &str) -> Result<SceneLayout3, ParseError3> {
-    let tokens = value.split_whitespace().collect::<Vec<_>>();
-    let mut index = 0;
-    let mut layout = SceneLayout3::default();
-    while index < tokens.len() {
-        match tokens[index] {
-            "size" => {
-                if index + 2 >= tokens.len() {
-                    return Err(message("size must be: size <width> <height>"));
-                }
-                layout.size = Some(SceneSize3::new(
-                    parse_layout_u16(tokens[index + 1], "width")?,
-                    parse_layout_u16(tokens[index + 2], "height")?,
-                ));
-                index += 3;
-            }
-            "gap" => {
-                if index + 1 >= tokens.len() {
-                    return Err(message("gap must be: gap <amount>"));
-                }
-                layout.gap = Some(parse_layout_u16(tokens[index + 1], "gap")?);
-                index += 2;
-            }
-            "align" => {
-                if index + 1 >= tokens.len() {
-                    return Err(message("align must name at least one alignment"));
-                }
-                let first = tokens[index + 1];
-                let mut consumed = 2;
-                let second = tokens.get(index + 2).copied();
-                layout.align = parse_scene_align(first, second)?;
-                if second.is_some_and(is_align_token) {
-                    consumed += 1;
-                }
-                index += consumed;
-            }
-            other => {
-                return Err(message(format!("unknown scene layout attribute: {other}")));
-            }
-        }
-    }
-    Ok(layout)
+    puzzle_scene::parse_scene_layout_attr_text(value).map_err(ParseError3::from)
 }
 
-fn parse_layout_u16(value: &str, name: &str) -> Result<u16, ParseError3> {
-    let parsed = value
-        .parse::<u16>()
-        .map_err(|_| message(format!("{name} must be a positive integer")))?;
-    if parsed == 0 {
-        return Err(message(format!("{name} must be greater than zero")));
+fn build_scene_container3(
+    kind: puzzle_scene::SceneComponentKind,
+    children: Vec<SceneComponent3>,
+    layout: SceneLayout3,
+) -> SceneComponent3 {
+    match kind {
+        puzzle_scene::SceneComponentKind::Row => SceneComponent3::Row { children, layout },
+        puzzle_scene::SceneComponentKind::Column => SceneComponent3::Column { children, layout },
+        puzzle_scene::SceneComponentKind::Box => SceneComponent3::Box { children, layout },
+        _ => unreachable!("shared scene parser only builds generic containers"),
     }
-    Ok(parsed)
-}
-
-fn is_align_token(value: &str) -> bool {
-    matches!(value, "left" | "center" | "right" | "top" | "bottom")
-}
-
-fn parse_scene_align(first: &str, second: Option<&str>) -> Result<SceneAlign3, ParseError3> {
-    if !is_align_token(first) {
-        return Err(message(format!("unknown alignment: {first}")));
-    }
-    if let Some(second) = second {
-        if !is_align_token(second) {
-            return Ok(parse_scene_align(first, None)?);
-        }
-    }
-    let mut align = SceneAlign3::default();
-    apply_align_token(&mut align, first)?;
-    if let Some(second) = second.filter(|token| is_align_token(token)) {
-        apply_align_token(&mut align, second)?;
-    }
-    Ok(align)
-}
-
-fn apply_align_token(align: &mut SceneAlign3, token: &str) -> Result<(), ParseError3> {
-    match token {
-        "left" => align.x = SceneAlignX3::Left,
-        "center" => {}
-        "right" => align.x = SceneAlignX3::Right,
-        "top" => align.y = SceneAlignY3::Top,
-        "bottom" => align.y = SceneAlignY3::Bottom,
-        _ => return Err(message(format!("unknown alignment: {token}"))),
-    }
-    Ok(())
 }
 
 fn parse_scene_key_binding(line: &str) -> Result<SceneKeyBinding3, ParseError3> {
