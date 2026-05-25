@@ -8,13 +8,16 @@ sounds {
 }
 
 puzzle main {
+flickscreen 13 13
+screen_focus player
+
 layers {
   layer_1 = Background
   layer_2 = playerreset
   layer_3 = player2reset
   layer_4 = reset1 reset2 cratespawn1 cratespawn2 lockspawn1 lockspawn2 keyspawn1 keyspawn2 wallspawn1 wallspawn2 deadplayer1reset deadplayer2reset
   layer_5 = Target flag nflag death
-  layer_6 = gplayer Player1 Wall1 wall2 Crate1 crate2 gcrate lock1 lock2 key1 key2 gkey glock gwall pcrate1 pkey1 pkey2 Player2 Deadplayer2 gdeadplayer pplayer1 pplayer2 Deadplayer1
+  layer_6 = gplayer Player1 Wall1 wall2 Crate1 crate2 gcrate lock1 lock2 key1 key2 gkey glock gwall pcrate1 pcrate2 pkey1 pkey2 Player2 Deadplayer2 gdeadplayer pplayer1 pplayer2 Deadplayer1
   layer_7 = picrate1 picrate2
   layer_8 = pikey1 pikey2
   layer_9 = piplayer2 piplayer1
@@ -31,8 +34,8 @@ inputs {
 group {
   key = key1 key2 gkey pkey1 pkey2
   lock = lock1 lock2 glock
-  crate = Crate1 crate2 gcrate pcrate1
-  pushable = key1 key2 Crate1 crate2 gcrate gkey pcrate1 pkey1 pkey2 Deadplayer1 Deadplayer2 gdeadplayer
+  crate = Crate1 crate2 gcrate pcrate1 pcrate2
+  pushable = key1 key2 Crate1 crate2 gcrate gkey pcrate1 pcrate2 pkey1 pkey2 Deadplayer1 Deadplayer2 gdeadplayer
   player = Player1 gplayer Player2 pplayer1 pplayer2
   gobject = gcrate gkey gdeadplayer
 }
@@ -368,7 +371,14 @@ sprites {
     0...0
     0...0
     00000
-    pcrate2
+
+  pcrate2
+    #800080
+    00000
+    0...0
+    0...0
+    0...0
+    00000
 
   picrate2
     #800080
@@ -442,7 +452,7 @@ routine __ps_main once {
   [ pkey1{>} ] [ pikey2 ] -> [ pkey1{>} ] [ pikey2{>} ]
   [ pkey2{>} ] [ pikey1 ] -> [ pkey2{>} ] [ pikey1{>} ]
   [ pcrate1{>} ] [ picrate2 ] -> [ pcrate1{>} ] [ picrate2{>} ]
-  [ > pcrate2 ] [ picrate1 ] -> [ > pcrate2 ] [ picrate1{>} ]
+  [ pcrate2{>} ] [ picrate1 ] -> [ pcrate2{>} ] [ picrate1{>} ]
   [ Target crate ] [ nflag ] -> [ Target crate ] [ flag ]
   [ Target no crate ] [ flag ] -> [ Target ] [ nflag ]
   move
@@ -499,6 +509,10 @@ on_level_start {
 rules {
   input directions [ player ] -> [ player{>} ]
   __ps_main
+}
+
+on_level_clear {
+  next_level
 }
 
 levels {
@@ -876,9 +890,6 @@ scene playing {
     board = puzzle main
   }
   view {
-    row {
-      title "Transition"
-    }
     puzzle board
   }
   inputs {

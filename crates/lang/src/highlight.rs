@@ -36,6 +36,7 @@ enum HighlightKind {
     String,
     Comment,
     Operator,
+    Arrow,
     Section,
     SectionRule,
 }
@@ -62,6 +63,7 @@ impl HighlightKind {
             HighlightKind::String => "syntax-string",
             HighlightKind::Comment => "syntax-comment",
             HighlightKind::Operator => "syntax-operator",
+            HighlightKind::Arrow => "syntax-arrow",
             HighlightKind::Section => "syntax-keyword",
             HighlightKind::SectionRule => "syntax-section-rule",
         }
@@ -318,7 +320,7 @@ fn highlight_html(
         }
 
         if is_word_start(ch) {
-            let end = consume_while(source, index, is_word_continue);
+            let end = consume_word(source, index);
             let token = &source[index..end];
             if context.is_plain_range(index, end) {
                 escape_html_into(&mut out, token);
@@ -336,6 +338,12 @@ fn highlight_html(
                 );
             }
             skip_until(&mut chars, end);
+            continue;
+        }
+
+        if source[index..].starts_with("->") {
+            push_span(&mut out, HighlightKind::Arrow, &source[index..index + 2]);
+            skip_until(&mut chars, index + 2);
             continue;
         }
 
@@ -520,7 +528,15 @@ fn collect_line_symbols(
                 family_axis_names,
             );
         }
-        [spec] if scope == Some(SourceScope::Scratch) => collect_scratch_spec(spec, symbols),
+        [name, "=", ty] if scope == Some(SourceScope::Scratch) => {
+            collect_scratch_spec(name, Some(*ty), symbols)
+        }
+        [spec] if scope == Some(SourceScope::Scratch) => {
+            let (name, ty) = spec
+                .split_once('=')
+                .map_or((*spec, None), |(name, ty)| (name, Some(ty)));
+            collect_scratch_spec(name, ty, symbols);
+        }
         [..] if scope == Some(SourceScope::Keys) => collect_key_binding_symbols(tokens, symbols),
         [name, "=", values @ ..]
             if scope == Some(SourceScope::Tags) && tag_set_tokens(name, values) =>
@@ -632,13 +648,13 @@ fn clean_object_spec(spec: &str) -> &str {
     spec.split_once('{').map_or(spec, |(head, _)| head)
 }
 
-fn collect_scratch_spec(spec: &str, symbols: &mut HashMap<String, HighlightKind>) {
-    let Some((name, ty)) = spec.split_once(':') else {
-        insert_source_symbol(symbols, spec, HighlightKind::Scratch);
-        return;
-    };
+fn collect_scratch_spec(
+    name: &str,
+    ty: Option<&str>,
+    symbols: &mut HashMap<String, HighlightKind>,
+) {
     insert_source_symbol(symbols, name, HighlightKind::Scratch);
-    if ty != "int" {
+    if let Some(ty) = ty.filter(|ty| !matches!(*ty, "bool" | "int")) {
         insert_source_symbol(symbols, ty, HighlightKind::Variant);
     }
 }
@@ -1469,6 +1485,21 @@ fn is_word_continue(ch: char) -> bool {
         || ch.is_ascii_alphanumeric()
 }
 
+fn consume_word(source: &str, start: usize) -> usize {
+    let mut end = start;
+    for (index, ch) in source[start..].char_indices() {
+        let absolute = start + index;
+        if ch == '-' && source[absolute..].starts_with("->") {
+            break;
+        }
+        if !is_word_continue(ch) {
+            break;
+        }
+        end = absolute + ch.len_utf8();
+    }
+    end
+}
+
 fn is_operator_char(ch: char) -> bool {
     matches!(
         ch,
@@ -1609,6 +1640,7 @@ P
         assert!(highlighted.parsed);
         assert!(highlighted.html.contains("syntax-keyword\">puzzle"));
         assert!(highlighted.html.contains("syntax-object\">Player"));
+        assert!(highlighted.html.contains("syntax-arrow\">-&gt;</span>"));
     }
 
     #[test]
@@ -1628,6 +1660,31 @@ P = Player
 
         assert!(highlighted.html.contains("syntax-section-rule\">======"));
         assert!(highlighted.html.contains("syntax-keyword\">LEGEND"));
+    }
+
+    #[test]
+    fn highlights_arrow_tokens() {
+        let highlighted = highlight_source(
+            r#"
+title arrow_highlight
+
+puzzle board {
+objects {
+Player Box
+}
+rules {
+[ Player ]->[ Box ]
+}
+level start {
+.
+}
+}
+"#,
+        );
+
+        assert!(highlighted.html.contains(
+            "</span><span class=\"syntax-arrow\">-&gt;</span><span class=\"syntax-operator\">["
+        ));
     }
 
     #[test]
@@ -1654,8 +1711,8 @@ var moves = 0
 persistent var best = 0
 scratch {
 mark
-shade:color
-steps:int
+shade = color
+steps = int
 }
 legend P = Player
 legend B = Box:red
@@ -1919,6 +1976,11 @@ level start {
             !highlighted
                 .html
                 .contains("-<span class=\"syntax-literal\">&gt;")
+        );
+        assert!(
+            !highlighted
+                .html
+                .contains("syntax-arrow\">-<span class=\"syntax-literal\">&gt;")
         );
     }
 
@@ -2316,10 +2378,10 @@ rules {
 
 levels3 basic of same_name {
 legend {
-. = Floor
+, = Floor
 }
 level start {
-.
+,
 }
 }
 "#;
@@ -2640,18 +2702,18 @@ rules {
 
 levels3 microban of board {
 legend {
-_ = empty
-. = Floor
+. = empty
+, = Floor
 G = Goal
 }
 
 level microban_01 {
-    ####__
-    #__#__
+    ####..
+    #..#..
 
-    ......
-    ..G...
-    .G....
+    ,,,,,,
+    ,,G,,,
+    ,G,,,,
 }
 }
 "#,
@@ -2660,13 +2722,13 @@ level microban_01 {
         assert!(
             highlighted
                 .html
-                .contains("\n    ......\n    ..G...\n    .G....\n")
+                .contains("\n    ,,,,,,\n    ,,G,,,\n    ,G,,,,\n")
         );
-        assert!(!highlighted.html.contains("..G<span"));
+        assert!(!highlighted.html.contains(",,G<span"));
         assert!(
             !highlighted
                 .html
-                .contains(".<span class=\"syntax-effect\">G</span>....")
+                .contains(",<span class=\"syntax-effect\">G</span>,,,,")
         );
     }
 
@@ -2675,12 +2737,12 @@ level microban_01 {
         let source = include_str!("../../../games/spec_3d.puzzle");
         let highlighted = highlight_source(source);
 
-        assert!(highlighted.html.contains("\n    ..G...\n"));
-        assert!(highlighted.html.contains("\n    .G....\n"));
+        assert!(highlighted.html.contains("\n    ,,G,,,\n"));
+        assert!(highlighted.html.contains("\n    ,G,,,,\n"));
         assert!(
             !highlighted
                 .html
-                .contains(".<span class=\"syntax-effect\">G</span>....")
+                .contains(",<span class=\"syntax-effect\">G</span>,,,,")
         );
     }
 

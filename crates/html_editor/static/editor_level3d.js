@@ -22,12 +22,13 @@ const LEVEL3D_SLICE_SCRUB_STEP_PX = 18;
 const LEVEL3D_CAMERA_MIN_PITCH_DEGREES = -90;
 const LEVEL3D_CAMERA_MAX_PITCH_DEGREES = 90;
 const LEVEL3D_MODEL_COMPONENT_PREVIEW_MESSAGE = "PuzzleStudioRenderPuzzle3ModelComponent";
+const LEVEL3D_EMPTY_CHAR = ".";
 let level3d = {
   width: 0,
   depth: 0,
   height: 0,
   slice: 0,
-  selectedChar: "_",
+  selectedChar: LEVEL3D_EMPTY_CHAR,
   stageResizeMode: null,
   stageExpandMode: false,
   previewFrames: false,
@@ -186,7 +187,7 @@ function level3dSelectedCharForPalette(palette, current) {
   }
   return (palette || []).find((entry) => entry.objects.length > 0)?.char
     || (palette || [])[0]?.char
-    || "_";
+    || LEVEL3D_EMPTY_CHAR;
 }
 
 function sameLevel3dPalette(left = [], right = []) {
@@ -212,7 +213,7 @@ function loadLevel3dFromEntry(entry, source, exportData = previewExport, sourceK
   if (!level3d.palette.some((entry) => entry.char === level3d.selectedChar)) {
     level3d.selectedChar = level3d.palette.find((entry) => entry.objects.length > 0)?.char
       || level3d.palette[0]?.char
-      || "_";
+      || LEVEL3D_EMPTY_CHAR;
   }
   level3d.sourceDocumentId = document?.id || level3d.sourceDocumentId || "";
   level3d.sourceKey = sourceKey || currentLevel3dEditorSourceKey(entry, document, source);
@@ -231,7 +232,7 @@ function loadLevel3dFromSourceDefinition(definition, source, sourceKey = "", doc
   if (!level3d.palette.some((entry) => entry.char === level3d.selectedChar)) {
     level3d.selectedChar = level3d.palette.find((entry) => entry.objects.length > 0)?.char
       || level3d.palette[0]?.char
-      || "_";
+      || LEVEL3D_EMPTY_CHAR;
   }
   level3d.sourceDocumentId = document?.id || level3d.sourceDocumentId || "";
   level3d.sourceKey = sourceKey || currentLevel3dEditorSourceKey(definition, document, source);
@@ -253,16 +254,16 @@ function normalizedLevel3dLegendEntries(entries) {
     chars.add(ch);
   }
   if (!unique.some((entry) => entry.objects.length === 0)) {
-    unique.unshift({ char: "_", objects: [] });
+    unique.unshift({ char: LEVEL3D_EMPTY_CHAR, objects: [] });
   }
-  return unique.length ? unique : [{ char: "_", objects: [] }];
+  return unique.length ? unique : [{ char: LEVEL3D_EMPTY_CHAR, objects: [] }];
 }
 
 function level3dEmptyChar(entries = level3d.palette) {
-  return (entries || []).find((entry) => entry.objects.length === 0)?.char || "_";
+  return (entries || []).find((entry) => entry.objects.length === 0)?.char || LEVEL3D_EMPTY_CHAR;
 }
 
-function level3dSlicesFromRows(rows, emptyChar = "_") {
+function level3dSlicesFromRows(rows, emptyChar = LEVEL3D_EMPTY_CHAR) {
   const slices = [];
   let current = [];
   for (const raw of Array.isArray(rows) ? rows : []) {
@@ -326,6 +327,7 @@ function resizeLevel3dWidth(nextWidth, options = {}) {
   renderLevel3dSourcePreview();
   level3dStageHit = null;
   renderLevel3dStageOverlay();
+  refreshLevel3dRuntimePreviews();
   pushVisualEditUndoSnapshot("level3d", before);
   if (options.status !== false) {
     setLevel3dActionStatus(`Width ${width}`, "is-ok");
@@ -371,6 +373,7 @@ function resizeLevel3dDepth(nextDepth, options = {}) {
   renderLevel3dSourcePreview();
   level3dStageHit = null;
   renderLevel3dStageOverlay();
+  refreshLevel3dRuntimePreviews();
   pushVisualEditUndoSnapshot("level3d", before);
   if (options.status !== false) {
     setLevel3dActionStatus(`Depth ${depth}`, "is-ok");
@@ -417,6 +420,7 @@ function resizeLevel3dHeight(nextHeight, options = {}) {
   renderLevel3dSourcePreview();
   level3dStageHit = null;
   renderLevel3dStageOverlay();
+  refreshLevel3dRuntimePreviews();
   pushVisualEditUndoSnapshot("level3d", before);
   if (options.status !== false) {
     setLevel3dActionStatus(`Height ${height}`, "is-ok");
@@ -692,7 +696,7 @@ function level3dRowsForEntry(entry, legendEntries) {
         if (ch) {
           text += ch;
         } else if (objects.length === 0) {
-          text += exactByObjects.get("") || "_";
+          text += exactByObjects.get("") || LEVEL3D_EMPTY_CHAR;
         } else {
           text += "?";
           unknownCells += 1;
@@ -710,7 +714,7 @@ function sourceLevel3dLegendEntries(source) {
     entries.push(...sourceLevel3dLegendEntriesForRange(source, range));
   }
   if (!entries.some((entry) => entry.objects.length === 0)) {
-    entries.unshift({ char: "_", objects: [] });
+    entries.unshift({ char: LEVEL3D_EMPTY_CHAR, objects: [] });
   }
   return entries;
 }
@@ -899,7 +903,7 @@ function level3dFrameToggleButton() {
     level3d.previewFrames = !level3d.previewFrames;
     renderLevel3dPalette();
     renderLevel3dStageOverlay();
-    sendLevel3dSnapshotToRuntime();
+    refreshLevel3dRuntimePreviews();
   });
   return button;
 }
@@ -995,20 +999,28 @@ function drawLevel3dPalettePreview(canvas, entry, exportData = previewExport) {
     if ((entry.objects || []).length) {
       drawLevel3dUnavailableTilePreview(ctx, width, height);
     } else {
-      drawLevel3dEmptyTilePreview(ctx, width, height, snapshot, { camera: snapshot.camera });
+      drawLevel3dEmptyTilePreview(ctx, width, height, snapshot, level3dPalettePreviewOptions(snapshot.camera));
     }
     return;
   }
   drawLevel3dCellsPreview(ctx, width, height, snapshot, [{
     position: { x: 0, y: 0, z: 0 },
     objects,
-  }], { camera: snapshot.camera, padding: 0.96 });
+  }], level3dPalettePreviewOptions(snapshot.camera));
 }
 
 function level3dPalettePreviewCamera(source) {
   return {
     ...level3dPreviewCamera(source),
     zoom: 1,
+  };
+}
+
+function level3dPalettePreviewOptions(camera) {
+  return {
+    camera,
+    origin: { x: 0, y: 0, z: 0 },
+    padding: 0.96,
   };
 }
 
@@ -1291,6 +1303,7 @@ function paintLevel3dCellAtPosition(position, ch = level3d.selectedChar) {
   renderLevel3dSourcePreview();
   renderLevel3dLayerBoard();
   renderLevel3dStageOverlay();
+  refreshLevel3dRuntimePreviews();
   return true;
 }
 
@@ -1655,6 +1668,11 @@ function sendLevel3dSnapshotToPreviewFrame(update = level3dRuntimePreviewUpdate(
     type: LEVEL3D_MODEL_COMPONENT_PREVIEW_MESSAGE,
     ...update,
   }, "*");
+}
+
+function refreshLevel3dRuntimePreviews() {
+  sendLevel3dSnapshotToRuntime();
+  sendLevel3dLayerSnapshotToRuntime();
 }
 
 function renderLevel3dLayerRuntime() {
@@ -3534,12 +3552,13 @@ function level3dPreviewView(snapshot, width, height, options = {}) {
   const boundsHeight = Math.max(0.001, bounds.maxY - bounds.minY);
   const padding = Number(options.padding) || 0.72;
   const scale = Math.min(width / boundsWidth, height / boundsHeight) * padding * camera.zoom;
+  const previewOrigin = options.origin || level3dPreviewOriginState();
   return {
     camera,
     center: {
-      x: (Math.max(1, Number(size.width) || 1) - 1) / 2 + level3dPreviewOriginState().x,
-      y: (Math.max(1, Number(size.depth) || 1) - 1) / 2 + level3dPreviewOriginState().y,
-      z: (Math.max(1, Number(size.height) || 1) - 1) / 2 + level3dPreviewOriginState().z,
+      x: (Math.max(1, Number(size.width) || 1) - 1) / 2 + (Number(previewOrigin.x) || 0),
+      y: (Math.max(1, Number(size.depth) || 1) - 1) / 2 + (Number(previewOrigin.y) || 0),
+      z: (Math.max(1, Number(size.height) || 1) - 1) / 2 + (Number(previewOrigin.z) || 0),
     },
     origin: {
       x: width / 2 - ((bounds.minX + bounds.maxX) / 2) * scale,
@@ -3862,6 +3881,7 @@ function resetLevel3dPreviewView() {
   renderLevel3dPreviewControls();
   level3dStageHit = null;
   renderLevel3dStageOverlay();
+  refreshLevel3dRuntimePreviews();
   setLevel3dActionStatus("Reset 3D preview view", "is-ok");
 }
 
@@ -4010,6 +4030,7 @@ function setLevel3dPreviewValue(kind, value, options = {}) {
   renderLevel3dPreviewControls();
   level3dStageHit = null;
   renderLevel3dStageOverlay();
+  refreshLevel3dRuntimePreviews();
 }
 
 function level3dPreviewScrubScale(kind) {

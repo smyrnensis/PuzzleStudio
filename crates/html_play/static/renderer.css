@@ -1,5 +1,6 @@
 .board {
   --cols: 1;
+  --rows: 1;
   --cell-size: 56px;
   --cell-background: transparent;
   display: grid;
@@ -8,6 +9,9 @@
   align-content: center;
   justify-content: center;
   width: calc(var(--cols) * var(--cell-size));
+  max-width: 100%;
+  max-height: 100%;
+  aspect-ratio: var(--cols) / var(--rows);
 }
 
 .cell {
@@ -26,6 +30,16 @@
   height: auto;
   display: block;
   image-rendering: pixelated;
+}
+
+.scene-layer > .board.is-canvas-renderer:only-child {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.scene-layer > .board.is-canvas-renderer:only-child .board-canvas {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
 }
 
 body.is-component-embed .board {

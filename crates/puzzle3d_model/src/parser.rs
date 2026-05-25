@@ -1153,14 +1153,25 @@ fn lower_legend(
     specs: &[LegendSpec3],
 ) -> Result<BTreeMap<char, Vec<ObjectId>>, ParseError3> {
     let mut legend = BTreeMap::new();
-    let mut has_empty_override = false;
+    legend.insert('.', Vec::new());
     for spec in specs {
-        if legend.contains_key(&spec.ch) {
-            return Err(message(format!("duplicate legend char: {}", spec.ch)));
-        }
         let mut objects = Vec::new();
         if spec.selectors.len() == 1 && spec.selectors[0] == "empty" {
-            has_empty_override = true;
+            if spec.ch != '.' {
+                return Err(message(format!(
+                    "3D levels use `.` for empty; remove `{}` = empty",
+                    spec.ch
+                )));
+            }
+            continue;
+        }
+        if spec.ch == '.' {
+            return Err(message(
+                "3D levels reserve `.` for empty; use another legend char for objects",
+            ));
+        }
+        if legend.contains_key(&spec.ch) {
+            return Err(message(format!("duplicate legend char: {}", spec.ch)));
         } else {
             for token in &spec.selectors {
                 let selector = parse_selector(token, &catalog.families, &catalog.groups)?;
@@ -1173,9 +1184,6 @@ fn lower_legend(
             }
         }
         legend.insert(spec.ch, objects);
-    }
-    if !has_empty_override && !legend.contains_key(&'.') {
-        legend.insert('.', Vec::new());
     }
     Ok(legend)
 }

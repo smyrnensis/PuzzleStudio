@@ -21,7 +21,8 @@ fn translates_basic_vanilla_puzzlescript_to_canonical_fixture() {
     assert!(translated.contains("confirm <- Enter Space x"));
     assert!(translated.contains("back <- Escape q"));
     assert!(!translated.contains("\n  keys {"));
-    assert!(translated.contains("if board.win_conditions -> {"));
+    assert!(translated.contains("on_level_clear {\n  next_level\n}"));
+    assert!(!translated.contains("board.next_level"));
     assert!(!translated.contains("board.level.has_next"));
 }
 
@@ -136,6 +137,101 @@ P
         &background_sprite.kind,
         VisualSpriteKind::Solid(color) if color == "#9CBD0F"
     ));
+}
+
+#[test]
+fn puzzlescript_object_name_with_digit_after_sprite_is_not_imported_as_sprite_row() {
+    let source = r##"
+title Digit Object Boundary
+
+OBJECTS
+
+Background
+black
+
+pcrate1
+purple
+00000
+0...0
+0...0
+0...0
+00000
+
+pcrate2
+yellow
+00000
+0...0
+0...0
+0...0
+00000
+
+Player
+white
+
+LEGEND
+. = Background
+1 = pcrate1
+2 = pcrate2
+P = Player
+
+COLLISIONLAYERS
+Background
+pcrate1, pcrate2
+Player
+
+RULES
+
+LEVELS
+P12
+"##;
+
+    let translated = translate_puzzlescript_to_canonical(source).unwrap();
+
+    assert!(translated.contains(
+        "  pcrate1\n    #800080\n    00000\n    0...0\n    0...0\n    0...0\n    00000\n\n  pcrate2"
+    ));
+    assert!(!translated.contains("00000\n    pcrate2"));
+    parse_game(&translated).unwrap();
+}
+
+#[test]
+fn puzzlescript_flickscreen_import_keeps_cell_viewport_out_of_scene_layout() {
+    let source = r##"
+title Flick Fit
+flickscreen 13x13
+
+OBJECTS
+
+Background
+black
+
+Player
+white
+
+LEGEND
+. = Background
+P = Player
+
+COLLISIONLAYERS
+Background
+Player
+
+RULES
+
+LEVELS
+P
+"##;
+
+    let translated = translate_puzzlescript_to_canonical(source).unwrap();
+
+    assert!(
+        translated.contains("puzzle main {\nflickscreen 13 13\nscreen_focus Player\n\nlayers {")
+    );
+    assert!(translated.contains("  view {\n    puzzle board\n  }"));
+    assert!(!translated.contains("view size 13 13"));
+    assert!(!translated.contains("puzzle board size 13 13"));
+    assert!(!translated.contains("      title \"Flick Fit\""));
+    parse_game(&translated).unwrap();
 }
 
 #[test]
@@ -396,6 +492,67 @@ p
 }
 
 #[test]
+fn puzzlescript_win_effect_advances_without_win_conditions() {
+    let source = r#"
+title Rule Win
+
+========
+OBJECTS
+========
+
+Background
+black
+
+Player
+blue
+
+Exit
+green
+
+=======
+LEGEND
+=======
+
+. = Background
+P = Player
+X = Player Exit
+
+================
+COLLISIONLAYERS
+================
+
+Background
+Exit
+Player
+
+======
+RULES
+======
+
+late [ Player Exit ] -> win
+
+==============
+WINCONDITIONS
+==============
+
+=======
+LEVELS
+=======
+
+X
+
+P
+"#;
+
+    let translated = translate_puzzlescript_to_canonical(source).unwrap();
+
+    assert!(!translated.contains("win_conditions {"));
+    assert!(translated.contains("on_level_clear {\n  next_level\n}"));
+    let loaded = parse_game(&translated).unwrap();
+    assert!(loaded.level_clear_program.is_some());
+}
+
+#[test]
 fn puzzlescript_parenthetical_comment_lines_are_not_imported_as_rules() {
     let source = r#"
 title Parenthetical Comment
@@ -464,6 +621,7 @@ fn translates_official_sumo_demo_with_disconnected_pattern() {
     assert!(translated.contains("back <- Escape q"));
     assert!(!translated.contains("\n  keys {"));
     assert!(!translated.contains("if board.win_conditions -> {"));
+    assert!(translated.contains("on_level_clear {\n  next_level\n}"));
 
     let loaded = parse_game(&translated).unwrap();
     let right = input_named(&loaded, "right");

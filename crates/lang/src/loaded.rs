@@ -65,6 +65,7 @@ pub struct LoadedGame {
     pub scenes: Vec<SceneDef>,
     pub menus: Vec<MenuDef>,
     pub object_labels: HashMap<ObjectId, String>,
+    pub object_groups: HashMap<String, Vec<ObjectId>>,
     pub input_labels: HashMap<InputId, String>,
     pub global_labels: HashMap<GlobalId, String>,
     pub persistent_vars: Vec<GlobalId>,

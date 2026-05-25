@@ -29,6 +29,7 @@
   --syntax-comment: #6a9955;
   --syntax-effect: #c586c0;
   --syntax-emission: #ffb86c;
+  --syntax-arrow: #ff6b6b;
   --syntax-group: #f2c15d;
   --syntax-input: #9cdcfe;
   --syntax-binding: #b4a7ff;
@@ -93,6 +94,7 @@ html[data-theme="light"] {
   --syntax-comment: #4f7f45;
   --syntax-effect: #8f3f86;
   --syntax-emission: #a65f00;
+  --syntax-arrow: #c73a3a;
   --syntax-group: #8a5a00;
   --syntax-input: #0f6f95;
   --syntax-binding: #5e4fa2;
@@ -1119,7 +1121,7 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   margin: 0;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
   font-size: 13px;
-  line-height: 1.55;
+  line-height: 20px;
   tab-size: 2;
   white-space: pre-wrap;
   overflow-wrap: break-word;
@@ -1238,7 +1240,7 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
 }
 
 #sourceEditor::selection {
-  background: color-mix(in srgb, var(--accent) 42%, transparent);
+  background: transparent;
 }
 
 .syntax-asset { color: var(--syntax-asset); }
@@ -1403,6 +1405,7 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
 .syntax-comment { color: var(--syntax-comment); }
 .syntax-effect { color: var(--syntax-effect); }
 .syntax-emission { color: var(--syntax-emission); }
+.syntax-arrow { color: var(--syntax-arrow); }
 .syntax-group { color: var(--syntax-group); }
 .syntax-input { color: var(--syntax-input); }
 .syntax-binding { color: var(--syntax-binding); }

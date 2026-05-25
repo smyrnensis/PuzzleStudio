@@ -327,7 +327,9 @@ group は selector の別名。rewrite では object selector と同じ場所で
 scratch {
 visited
 frontier
-intent:directions
+intent = directions
+count = int
+armed = bool
 }
 ```
 
@@ -339,10 +341,12 @@ scratch は宣言時に cell 用 / object 用を分けない。書いた位置�
 {visited}          // cell に付く scratch
 Box{visited}       // Box occurrence に付く scratch
 Box {visited}      // Box object + cell scratch
-Box{intent:right}  // Box occurrence に値付き scratch
+Box{intent=right}  // Box occurrence に値付き scratch
 no {visited}       // cell scratch の不存在
 Box{no visited}    // Box occurrence scratch の不存在
 ```
+
+`bool` scratch は例外的に object-like な presence / absence として書く。`Box{armed}` は armed scratch を足す / 持つこと、`Box{no armed}` は armed scratch を消す / 持たないことを表す。
 
 cell scratch と occurrence scratch は同じ名前を使えるが、互いに match しない。`Box{mark}` と `Box {mark}` は別の意味を持つため、anchor が変わる rewrite や同じ cell pattern 内での同居は valid だが warning になる。
 
@@ -350,7 +354,7 @@ cell scratch と occurrence scratch は同じ名前を使えるが、互いに m
 
 ```txt
 > Box
-Box{__move:right}
+Box{__move=right}
 ```
 
 上の2つは概念的に同じ occurrence scratch を表す。通常は sugar か標準 `move` rule 経由で使い、author-defined scratch 名として `__move` を再宣言しない。
@@ -1375,7 +1379,7 @@ legend {
 
 `empty` は object ではなく、何もない cell を表す予約語。
 
-3D の `levels3` では、`.` は既定の empty 文字なので `legend` に書かなくてよい。`_ = empty` のような `empty` 行は、その既定 empty 文字を別文字へ上書きするためのもの。上書き後に `.` を floor などとして使う場合は、`. = Floor` のように通常の `legend` 行で明示する。
+3D の `levels3` では、`.` は empty 文字として予約されているので `legend` に書かなくてよい。`_ = empty` のように別文字を empty にする書き方や、`. = Floor` のように `.` を object に割り当てる書き方は使わない。floor などの実体 object は `, = Floor` のように別の文字へ割り当てる。
 
 右辺は既存の object / schema / group / layer tag selector に解決される必要がある。`legend` は新しい object を定義しない。未知の名前は parse error。
 
@@ -1527,7 +1531,21 @@ puzzle rule の rewrite effect としても `message "text"` / `message <path>` 
 [ Player | Box | ] -> [ | Player | Box ] sfx push
 ```
 
-PuzzleScript の `Sounds` section は object move / create / SFX0 などの runtime event に seed を結びつける。importer は `sfx0 12345` のような単純な named seed を `sounds { sfx sfx0 seed=12345 type=puzzlescript }` に lower し、rule suffix の `SFX0` は明示的な `sfx sfx0` として鳴らす。object `create` sound は turn 内で既存 object を scratch mark して差分検出する。object movement sound は、現在の canonical rule では未知の方向 scratch を RHS で保存しながら追加 scratch を足せないため、まだ暗黙 event sound としては鳴らさない。
+同じ turn 中に同じ `sfx` が複数回要求されても、再生 event は 1 回にまとめられる。`again` による follow-up turn は別 turn なので、各 automatic turn で同じ `sfx` を最大 1 回ずつ鳴らせる。
+
+model 内の `sounds` block では、object が実際に move として lower された rule firing に SFX を結びつけられる。
+
+```txt
+puzzle sokoban {
+sounds {
+on move Box -> sfx push
+}
+}
+```
+
+`on move <selector> -> sfx <name>` の `<selector>` は通常の object selector / group / schema selector。これは runtime event watcher ではなく lowering sugar で、rewrite alternative が `Move` write を含む場合だけ、その rule に `sfx` emission を付ける。remove+add として書かれた変化は move ではないので対象外。
+
+PuzzleScript の `Sounds` section は object move / create / SFX0 などの runtime event に seed を結びつける。importer は `sfx0 12345` のような単純な named seed を `sounds { sfx sfx0 seed=12345 type=puzzlescript }` に lower し、rule suffix の `SFX0` は明示的な `sfx sfx0` として鳴らす。PuzzleScript importer の event-based sounds、たとえば object movement / create sounds はまだ canonical syntax へ自動変換しない。
 
 ## Menu / Scene Syntax
 

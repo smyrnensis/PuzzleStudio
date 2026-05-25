@@ -232,6 +232,7 @@ function setSourceHighlightHtml(source, html, mode) {
   }
   sourceHighlightMode = mode;
   syncSourceHighlightScroll();
+  renderSourceBlockSelection();
   renderSourceCaret();
 }
 
@@ -250,6 +251,7 @@ function syncSourceHighlightScroll() {
   syncSourceHighlightMetrics();
   sourceHighlight.style.transform = `translate(${-sourceEditor.scrollLeft}px, ${-sourceEditor.scrollTop}px)`;
   renderSourceCaret();
+  renderSourceBlockSelection();
   if (sourceTargetHintActive) {
     renderSourceTargetHintFrames();
   }
@@ -648,10 +650,13 @@ function sourceCaretRectForOffset(offset) {
     };
   }
   const useRightEdge = domPosition.edge === "right";
+  const rectHeight = rect.height || lineHeight;
+  const height = Math.max(lineHeight, rectHeight);
+  const top = rect.top - wrapRect.top - Math.max(0, (lineHeight - rectHeight) / 2);
   return {
     left: (useRightEdge ? rect.right : rect.left) - wrapRect.left,
-    top: rect.top - wrapRect.top,
-    height: Math.max(lineHeight, rect.height || lineHeight),
+    top,
+    height,
   };
 }
 
@@ -789,6 +794,7 @@ function setSourceRangeSelection(anchor, focus) {
   const start = Math.max(0, Math.min(source.length, Math.min(anchor, focus)));
   const end = Math.max(start, Math.min(source.length, Math.max(anchor, focus)));
   sourceEditor.setSelectionRange(start, end, focus < anchor ? "backward" : "forward");
+  renderSourceBlockSelection();
   renderSourceCaret();
 }
 
@@ -1339,19 +1345,26 @@ sourceEditor.addEventListener("keyup", (event) => {
     syncPreviewModeFromSourceCursor();
   }
   renderSourceCaret();
+  renderSourceBlockSelection();
 });
 sourceEditor.addEventListener("focus", () => {
   renderSourceCaret();
+  renderSourceBlockSelection();
   syncPreviewModeFromSourceCursor({ force: true });
 });
-sourceEditor.addEventListener("blur", renderSourceCaret);
+sourceEditor.addEventListener("blur", () => {
+  renderSourceCaret();
+  renderSourceBlockSelection();
+});
 document.addEventListener("selectionchange", () => {
   if (document.activeElement !== sourceEditor) {
     renderSourceCaret();
+    renderSourceBlockSelection();
     return;
   }
   syncPreviewModeFromSourceCursor();
   renderSourceCaret();
+  renderSourceBlockSelection();
 });
 }
 
@@ -1672,6 +1685,58 @@ function deleteSourceRange(selectionStart, selectionEnd, fallbackPosition) {
   sourceEditorContentChanged();
 }
 
+function handleSourceIndentBackspace(event) {
+  if (event.key !== "Backspace" || event.altKey || event.ctrlKey || event.metaKey || event.isComposing) {
+    return false;
+  }
+  const start = sourceEditor.selectionStart;
+  const end = sourceEditor.selectionEnd;
+  if (start !== end) {
+    return false;
+  }
+  const source = sourceEditor.value;
+  const lineStart = sourceLineStart(start);
+  const linePrefix = source.slice(lineStart, start);
+  if (!linePrefix || !/^[\t ]+$/.test(linePrefix)) {
+    return false;
+  }
+
+  let removeStart = start;
+  if (source[start - 1] === "\t") {
+    removeStart = start - 1;
+  } else if (source[start - 1] === " ") {
+    const column = sourceIndentColumn(linePrefix);
+    const targetColumn = Math.max(0, column - (column % 4 || 4));
+    const removeCount = Math.max(1, Math.min(sourceTrailingSpaceCount(linePrefix), column - targetColumn));
+    removeStart = start - removeCount;
+  } else {
+    return false;
+  }
+
+  event.preventDefault();
+  event.stopPropagation();
+  sourceEditor.setRangeText("", removeStart, start, "start");
+  sourceEditorContentChanged();
+  return true;
+}
+
+function sourceIndentColumn(indent) {
+  let column = 0;
+  for (const char of indent) {
+    if (char === "\t") {
+      const offset = column % 4;
+      column += offset === 0 ? 4 : 4 - offset;
+    } else {
+      column += 1;
+    }
+  }
+  return column;
+}
+
+function sourceTrailingSpaceCount(value) {
+  return value.match(/ *$/)?.[0].length || 0;
+}
+
 function killSourceLineEnd() {
   const start = sourceEditor.selectionStart;
   const end = sourceEditor.selectionEnd;
@@ -1772,6 +1837,157 @@ function handleSourceBraceBackspace(event) {
   event.stopPropagation();
   sourceEditor.setRangeText("", start - 1, start + 1, "start");
   sourceEditorContentChanged();
+  return true;
+}
+
+function handleSourceRewriteRhsPatternAssist(event) {
+  if (event.altKey || event.ctrlKey || event.metaKey || event.isComposing || event.key !== "[") {
+    return false;
+  }
+  const cursor = sourceEditor.selectionStart;
+  if (cursor !== sourceEditor.selectionEnd) {
+    return false;
+  }
+  const source = sourceEditor.value || "";
+  const lineStart = source.lastIndexOf("\n", cursor - 1) + 1;
+  const lineEnd = source.indexOf("\n", cursor);
+  const safeLineEnd = lineEnd < 0 ? source.length : lineEnd;
+  const lineBeforeCursor = source.slice(lineStart, cursor);
+  const lineAfterCursor = source.slice(cursor, safeLineEnd);
+  const codeBeforeCursor = stripSourceImportLineComment(lineBeforeCursor);
+  const arrow = codeBeforeCursor.lastIndexOf("->");
+  if (arrow < 0 || !/^[\t ]*$/.test(codeBeforeCursor.slice(arrow + 2))) {
+    return false;
+  }
+  if (stripSourceImportLineComment(lineAfterCursor).trim()) {
+    return false;
+  }
+  const pattern = sourceRewritePatternBeforeArrow(codeBeforeCursor.slice(0, arrow));
+  if (!pattern) {
+    return false;
+  }
+  event.preventDefault();
+  event.stopPropagation();
+  clearSourceBlockSelection();
+  const rhsPattern = sourceEmptyRewritePattern(pattern);
+  const firstSlot = sourceRewritePatternSlotOffsets(rhsPattern)[0];
+  sourceEditor.setRangeText(rhsPattern, cursor, cursor, "end");
+  if (Number.isInteger(firstSlot)) {
+    const slot = cursor + firstSlot;
+    sourceEditor.setSelectionRange(slot, slot);
+  }
+  sourceEditorContentChanged();
+  return true;
+}
+
+function sourceRewritePatternBeforeArrow(lineBeforeArrow) {
+  const line = String(lineBeforeArrow || "").replace(/[ \t]+$/, "");
+  if (!line.endsWith("]")) {
+    return "";
+  }
+  const end = line.length;
+  let scanEnd = end;
+  let patternStart = -1;
+  while (scanEnd > 0 && line[scanEnd - 1] === "]") {
+    const open = sourceMatchingPatternOpen(line, scanEnd - 1);
+    if (open < 0) {
+      break;
+    }
+    patternStart = open;
+    const before = line.slice(0, open);
+    const gap = before.match(/[ \t]*$/)?.[0] || "";
+    scanEnd = open - gap.length;
+  }
+  return patternStart >= 0 ? line.slice(patternStart, end) : "";
+}
+
+function sourceMatchingPatternOpen(text, closeIndex) {
+  let depth = 0;
+  for (let index = closeIndex; index >= 0; index -= 1) {
+    if (text[index] === "]") {
+      depth += 1;
+    } else if (text[index] === "[") {
+      depth -= 1;
+      if (depth === 0) {
+        return index;
+      }
+    }
+  }
+  return -1;
+}
+
+function sourceEmptyRewritePattern(pattern) {
+  return String(pattern || "").replace(/\[[^\]\[]*\]/g, (cell) => {
+    const body = cell.slice(1, -1);
+    const parts = body.split("|");
+    return `[ ${Array(parts.length).fill("").join(" | ")} ]`;
+  });
+}
+
+function sourceRewritePatternSlotOffsets(pattern) {
+  const slots = [];
+  const text = String(pattern || "");
+  const cellPattern = /\[[^\]\[]*\]/g;
+  for (const match of text.matchAll(cellPattern)) {
+    const cell = match[0];
+    const body = cell.slice(1, -1);
+    let segmentStart = 0;
+    const pushSegment = (segmentEnd) => {
+      const segment = body.slice(segmentStart, segmentEnd);
+      if (/^[\t ]*$/.test(segment)) {
+        slots.push((match.index || 0) + 1 + segmentStart + Math.ceil(segment.length / 2));
+      }
+      segmentStart = segmentEnd + 1;
+    };
+    for (let index = 0; index <= body.length; index += 1) {
+      if (index === body.length || body[index] === "|") {
+        pushSegment(index);
+      }
+    }
+  }
+  return slots;
+}
+
+function handleSourceRewritePatternTab(event) {
+  if (
+    event.key !== "Tab"
+    || event.altKey
+    || event.ctrlKey
+    || event.metaKey
+    || sourceEditor.selectionStart !== sourceEditor.selectionEnd
+  ) {
+    return false;
+  }
+  const source = sourceEditor.value || "";
+  const cursor = sourceEditor.selectionStart;
+  const lineStart = source.lastIndexOf("\n", cursor - 1) + 1;
+  const lineEnd = source.indexOf("\n", cursor);
+  const safeLineEnd = lineEnd < 0 ? source.length : lineEnd;
+  const line = source.slice(lineStart, safeLineEnd);
+  const code = stripSourceImportLineComment(line);
+  const arrow = code.indexOf("->");
+  if (arrow < 0) {
+    return false;
+  }
+  const rhsStart = lineStart + arrow + 2;
+  const rhsEnd = lineStart + code.length;
+  if (cursor < rhsStart || cursor > rhsEnd) {
+    return false;
+  }
+  const slots = sourceRewritePatternSlotOffsets(source.slice(rhsStart, rhsEnd))
+    .map((slot) => rhsStart + slot);
+  if (!slots.length) {
+    return false;
+  }
+  const target = event.shiftKey
+    ? slots.slice().reverse().find((slot) => slot < cursor) ?? slots.at(-1)
+    : slots.find((slot) => slot > cursor) ?? slots[0];
+  event.preventDefault();
+  event.stopPropagation();
+  sourceEditor.setSelectionRange(target, target);
+  updateSourceMeta();
+  hideSourceCompletions();
+  renderSourceCaret();
   return true;
 }
 
@@ -2672,25 +2888,89 @@ function renderSourceBlockSelection() {
     return;
   }
   const ranges = sourceEditorBlockSelection?.ranges || [];
-  sourceBlockSelectionLayer.hidden = !ranges.length;
   sourceBlockSelectionLayer.replaceChildren();
-  if (!ranges.length) {
+  if (ranges.length) {
+    for (const range of ranges) {
+      appendSourceSelectionRects(range.start, range.end);
+    }
+    sourceBlockSelectionLayer.hidden = sourceBlockSelectionLayer.childElementCount === 0;
     return;
   }
-  const style = window.getComputedStyle(sourceEditor);
-  const paddingLeft = Number.parseFloat(style.paddingLeft) || 0;
-  const paddingTop = Number.parseFloat(style.paddingTop) || 0;
-  const lineHeight = sourceEditorLineHeight();
-  const charWidth = sourceEditorCharWidth();
-  for (const range of ranges) {
+  if (
+    document.activeElement !== sourceEditor
+    || sourceEditor.selectionStart === sourceEditor.selectionEnd
+    || !isTextDocument(activeDocument())
+  ) {
+    sourceBlockSelectionLayer.hidden = true;
+    return;
+  }
+  appendSourceSelectionRects(sourceEditor.selectionStart, sourceEditor.selectionEnd);
+  sourceBlockSelectionLayer.hidden = sourceBlockSelectionLayer.childElementCount === 0;
+}
+
+function appendSourceSelectionRects(start, end) {
+  const rects = sourceSelectionRectsForOffsets(start, end);
+  for (const item of rects) {
     const rect = document.createElement("div");
     rect.className = "source-block-selection-range";
-    rect.style.left = `${paddingLeft + (range.startCol * charWidth) - sourceEditor.scrollLeft}px`;
-    rect.style.top = `${paddingTop + (range.lineIndex * lineHeight) - sourceEditor.scrollTop}px`;
-    rect.style.width = `${Math.max(2, (range.endCol - range.startCol) * charWidth)}px`;
-    rect.style.height = `${lineHeight}px`;
+    rect.style.left = `${item.left}px`;
+    rect.style.top = `${item.top}px`;
+    rect.style.width = `${item.width}px`;
+    rect.style.height = `${item.height}px`;
     sourceBlockSelectionLayer.append(rect);
   }
+}
+
+function sourceSelectionRectsForOffsets(start, end) {
+  if (!sourceHighlight || !sourceEditorWrap) {
+    return [];
+  }
+  const source = sourceEditor.value || "";
+  const safeStart = Math.max(0, Math.min(source.length, Math.min(start || 0, end || 0)));
+  const safeEnd = Math.max(safeStart, Math.min(source.length, Math.max(start || 0, end || 0)));
+  if (safeStart === safeEnd) {
+    return [];
+  }
+  const startPosition = sourceHighlightDomPositionForOffset(safeStart);
+  const endPosition = sourceHighlightDomPositionForOffset(safeEnd);
+  if (!startPosition || !endPosition) {
+    return [];
+  }
+  const range = document.createRange();
+  range.setStart(startPosition.node, startPosition.offset);
+  range.setEnd(endPosition.node, endPosition.offset);
+  const wrapRect = sourceEditorWrap.getBoundingClientRect();
+  const lineHeight = sourceEditorLineHeight();
+  const rects = Array.from(range.getClientRects())
+    .filter((rect) => rect.width > 0 || rect.height > 0)
+    .map((rect) => {
+      const rectHeight = rect.height || lineHeight;
+      const height = Math.max(lineHeight, rectHeight);
+      return {
+        left: rect.left - wrapRect.left,
+        right: rect.right - wrapRect.left,
+        top: rect.top - wrapRect.top - Math.max(0, (lineHeight - rectHeight) / 2),
+        height,
+      };
+    });
+  range.detach?.();
+  const merged = [];
+  for (const rect of rects) {
+    const existing = merged.find((item) => Math.abs(item.top - rect.top) < 1);
+    if (existing) {
+      existing.left = Math.min(existing.left, rect.left);
+      existing.right = Math.max(existing.right, rect.right);
+      existing.height = Math.max(existing.height, rect.height);
+    } else {
+      merged.push({ ...rect });
+    }
+  }
+  return merged.map((rect) => ({
+    left: rect.left,
+    top: rect.top,
+    width: Math.max(2, rect.right - rect.left),
+    height: rect.height,
+  }));
 }
 
 function clearSourceBlockSelection() {
@@ -2879,6 +3159,15 @@ sourceEditor.addEventListener("keydown", (event) => {
     return;
   }
   if (handleSourceBraceAssist(event)) {
+    return;
+  }
+  if (handleSourceIndentBackspace(event)) {
+    return;
+  }
+  if (handleSourceRewriteRhsPatternAssist(event)) {
+    return;
+  }
+  if (handleSourceRewritePatternTab(event)) {
     return;
   }
   if (event.key === "Tab") {

@@ -1272,6 +1272,7 @@ fn parse_game2d_expanded(source: &str) -> Result<LoadedGame, AppError> {
     let menus = Vec::<MenuDef>::new();
     let mut variables = Vec::<SceneVarDef>::new();
     let mut render_overlays = Vec::<(Vec<ObjectId>, char)>::new();
+    let mut model_sound_triggers = Vec::<ModelSoundTrigger>::new();
     let mut named_conditions = HashMap::<String, (String, ConditionAst)>::new();
     let mut run_rules_on_level_start = false;
     let mut visuals = VisualsDef::default();
@@ -1309,6 +1310,7 @@ fn parse_game2d_expanded(source: &str) -> Result<LoadedGame, AppError> {
                     &mut display_statements,
                     &mut level_blocks,
                     &mut render_overlays,
+                    &mut model_sound_triggers,
                     &mut named_conditions,
                     &mut run_rules_on_level_start,
                     &mut visuals,
@@ -1540,6 +1542,7 @@ fn parse_game2d_expanded(source: &str) -> Result<LoadedGame, AppError> {
         &catalog.query_names,
         &visual_query_reads,
         &catalog.scratch_names,
+        &model_sound_triggers,
         &value_sets,
         &effective_directions,
         default_wait_ms,
@@ -1610,6 +1613,7 @@ fn parse_game2d_expanded(source: &str) -> Result<LoadedGame, AppError> {
         scenes: default_scenes_if_empty(scenes),
         menus,
         object_labels: catalog.object_labels,
+        object_groups: catalog.object_groups,
         input_labels: catalog.input_labels,
         global_labels: catalog.global_labels,
         persistent_vars: catalog.persistent_vars,
@@ -1954,6 +1958,7 @@ fn starts_authoring_block(tokens: &[&str], line: &str) -> bool {
         | ["win_conditions", ..]
         | ["lose_conditions", ..]
         | ["sprites"]
+        | ["sounds"]
         | ["screen"]
         | ["view", ..]
         | ["routine", ..]
@@ -2063,6 +2068,73 @@ fn parse_sounds_block(
     }
 
     Err(parse_error(&lines[start], "sounds missing end"))
+}
+
+#[derive(Clone, Debug)]
+struct ModelSoundTrigger {
+    objects: Vec<ObjectId>,
+    sfx_name: String,
+}
+
+fn parse_model_sounds_block(
+    lines: &[String],
+    start: usize,
+    catalog: &Catalog,
+    triggers: &mut Vec<ModelSoundTrigger>,
+) -> Result<usize, AppError> {
+    let header = split_tokens(&lines[start]);
+    if !matches!(header.as_slice(), ["sounds"] | ["sounds", "{"]) {
+        return Err(parse_error(
+            &lines[start],
+            "model sounds header must be: sounds",
+        ));
+    }
+
+    let mut i = start + 1;
+    while i < lines.len() {
+        let line = &lines[i];
+        if line == "end" {
+            return Ok(i + 1);
+        }
+        let tokens = split_tokens(line);
+        match tokens.as_slice() {
+            ["on", "move", selector, "->", "sfx", name] => {
+                validate_qualified_identifier(name, line, "sfx name")?;
+                let selector = resolve_object_selector(
+                    selector,
+                    line,
+                    &catalog.object_names,
+                    &catalog.object_schemas,
+                    &catalog_value_sets(catalog),
+                    &catalog.maps,
+                    &catalog.object_groups,
+                )?;
+                if selector
+                    .alternatives
+                    .iter()
+                    .any(|object| catalog.visual_objects.contains(object))
+                {
+                    return Err(parse_error(
+                        line,
+                        "model sound triggers cannot target display objects",
+                    ));
+                }
+                triggers.push(ModelSoundTrigger {
+                    objects: selector.alternatives,
+                    sfx_name: (*name).to_string(),
+                });
+            }
+            _ => {
+                return Err(parse_error(
+                    line,
+                    "model sounds entry must be: on move <object-selector> -> sfx <name>",
+                ));
+            }
+        }
+        i += 1;
+    }
+
+    Err(parse_error(&lines[start], "model sounds missing end"))
 }
 
 fn parse_theme_block(
@@ -2338,6 +2410,7 @@ fn parse_puzzle_definition(
     display_statements: &mut Option<Vec<StatementAst>>,
     level_blocks: &mut Vec<LevelBlock>,
     render_overlays: &mut OverlayDefs,
+    model_sound_triggers: &mut Vec<ModelSoundTrigger>,
     named_conditions: &mut HashMap<String, (String, ConditionAst)>,
     run_rules_on_level_start: &mut bool,
     visuals: &mut VisualsDef,
@@ -2587,6 +2660,9 @@ fn parse_puzzle_definition(
             }
             "sprites" => {
                 i = parse_visuals_block(lines, i, catalog, visuals)?;
+            }
+            "sounds" => {
+                i = parse_model_sounds_block(lines, i, catalog, model_sound_triggers)?;
             }
             "screen" | "view" => {
                 i = parse_puzzle_screen_block(lines, i, puzzle_screen)?;
@@ -3969,12 +4045,24 @@ fn parse_scratch_block(
         let line = &lines[i];
         let tokens = split_tokens(line);
         match tokens.as_slice() {
+            [name, "=", ty] => {
+                parse_scratch_directive(name, Some(*ty), line, catalog)?;
+                i += 1;
+            }
             [spec] => {
-                parse_scratch_directive(spec, line, catalog)?;
+                let (name, ty) = spec
+                    .split_once('=')
+                    .map_or((*spec, None), |(name, ty)| (name, Some(ty)));
+                parse_scratch_directive(name, ty, line, catalog)?;
                 i += 1;
             }
             [] => i += 1,
-            _ => return Err(parse_error(line, "scratch row must be: <name>[:<type>]")),
+            _ => {
+                return Err(parse_error(
+                    line,
+                    "scratch row must be: <name> or <name> = <type>",
+                ));
+            }
         }
     }
     if i >= lines.len() {
@@ -3983,11 +4071,20 @@ fn parse_scratch_block(
     Ok(i + 1)
 }
 
-fn parse_scratch_directive(spec: &str, line: &str, catalog: &mut Catalog) -> Result<(), AppError> {
-    let (name, kind, values) = if let Some((name, ty)) = spec.split_once(':') {
+fn parse_scratch_directive(
+    name: &str,
+    ty: Option<&str>,
+    line: &str,
+    catalog: &mut Catalog,
+) -> Result<(), AppError> {
+    let (name, kind, values) = if let Some(ty) = ty {
         validate_identifier(name, line, "scratch name")?;
+        if ty.is_empty() {
+            return Err(parse_error(line, "scratch type must not be empty"));
+        }
         match ty {
             "int" => (name, ScratchKind::Int, Vec::new()),
+            "bool" => (name, ScratchKind::Bool, Vec::new()),
             axis if catalog.value_sets.contains_key(axis)
                 || catalog.object_axes.contains_key(axis) =>
             {
@@ -4005,12 +4102,8 @@ fn parse_scratch_directive(spec: &str, line: &str, catalog: &mut Catalog) -> Res
             _ => return Err(parse_error(line, "unknown scratch type")),
         }
     } else {
-        validate_identifier(spec, line, "scratch name")?;
-        if let Some(values) = catalog.object_axes.get(spec) {
-            (spec, ScratchKind::Enum, values.clone())
-        } else {
-            (spec, ScratchKind::Marker, Vec::new())
-        }
+        validate_identifier(name, line, "scratch name")?;
+        (name, ScratchKind::Bool, Vec::new())
     };
     if catalog.scratch_names.contains_key(name) {
         return Err(parse_error(line, "duplicate scratch"));
@@ -11841,6 +11934,7 @@ struct ProgramLowerer<'a> {
     query_names: &'a HashMap<String, QueryId>,
     visual_query_reads: &'a HashSet<QueryId>,
     scratch_names: &'a HashMap<String, ScratchDef>,
+    model_sound_triggers: &'a [ModelSoundTrigger],
     value_sets: &'a HashMap<String, Vec<String>>,
     directions: &'a [Direction],
     visual_objects: &'a [ObjectId],
@@ -11894,6 +11988,7 @@ fn lower_programs(
     query_names: &HashMap<String, QueryId>,
     visual_query_reads: &HashSet<QueryId>,
     scratch_names: &HashMap<String, ScratchDef>,
+    model_sound_triggers: &[ModelSoundTrigger],
     value_sets: &HashMap<String, Vec<String>>,
     directions: &[Direction],
     default_wait_ms: u64,
@@ -11920,6 +12015,7 @@ fn lower_programs(
         query_names,
         visual_query_reads,
         scratch_names,
+        model_sound_triggers,
         value_sets,
         directions,
         visual_objects,
@@ -13640,6 +13736,12 @@ impl<'a> ProgramLowerer<'a> {
     ) -> Result<Vec<RuleStep>, AppError> {
         let mut rules = Vec::with_capacity(alternatives.len());
         for alternative in alternatives {
+            let mut rule_emissions = emissions.clone();
+            append_move_sound_emissions(
+                &alternative.writes,
+                self.model_sound_triggers,
+                &mut rule_emissions,
+            );
             let compiled_components = alternative
                 .components
                 .iter()
@@ -13694,8 +13796,8 @@ impl<'a> ProgramLowerer<'a> {
             if role == RuleRole::Visual {
                 self.visual_rules.push(id);
             }
-            if !emissions.is_empty() {
-                self.rule_emissions.insert(id, emissions.clone());
+            if !rule_emissions.is_empty() {
+                self.rule_emissions.insert(id, rule_emissions);
             }
             rules.push(RuleStep::Rule(Rule {
                 id,
@@ -13771,6 +13873,33 @@ fn ensure_visual_write_object(
 struct RuleBodyAlternative {
     components: Vec<PatternComponentTemplate>,
     writes: Vec<WriteOpTemplate>,
+}
+
+fn append_move_sound_emissions(
+    writes: &[WriteOpTemplate],
+    triggers: &[ModelSoundTrigger],
+    emissions: &mut Vec<RuleEmission>,
+) {
+    if triggers.is_empty() {
+        return;
+    }
+    for trigger in triggers {
+        let matches_move = writes.iter().any(|write| {
+            matches!(
+                write,
+                WriteOpTemplate::Move { object, .. } if trigger.objects.contains(object)
+            )
+        });
+        if matches_move
+            && !emissions.iter().any(|emission| {
+                matches!(emission, RuleEmission::PlaySfx { name } if name == &trigger.sfx_name)
+            })
+        {
+            emissions.push(RuleEmission::PlaySfx {
+                name: trigger.sfx_name.clone(),
+            });
+        }
+    }
 }
 
 fn parse_inline_rewrite(
@@ -14834,7 +14963,7 @@ fn parse_selector_scratch(attrs: &str, line: &str) -> Result<Vec<ParsedScratch>,
             continue;
         }
         let (name, value) = spec
-            .split_once(':')
+            .split_once('=')
             .map_or((spec, None), |(name, value)| (name, Some(value)));
         validate_identifier(name, line, "scratch name")?;
         if value.is_some_and(str::is_empty) {
@@ -15583,6 +15712,15 @@ fn parsed_scratch_pattern(
             }
             None
         }
+        ScratchKind::Bool => {
+            if scratch.value.is_some() {
+                return Err(parse_error(
+                    line,
+                    "bool scratch uses presence syntax; write `flag` or `no flag`",
+                ));
+            }
+            Some(ScratchValueTemplate::Literal(1))
+        }
         ScratchKind::Int => scratch
             .value
             .as_deref()
@@ -15609,7 +15747,7 @@ fn parsed_scratch_pattern(
         scratch: def.id,
         value,
         match_value,
-        is_marker: def.kind == ScratchKind::Marker,
+        is_marker: matches!(def.kind, ScratchKind::Marker | ScratchKind::Bool),
     })
 }
 

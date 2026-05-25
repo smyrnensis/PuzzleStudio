@@ -4367,12 +4367,45 @@ fn push_puzzle_screen(out: &mut String, loaded: &LoadedGame) {
     out.push(',');
     push_json_pair(out, "viewportFocus", &loaded.screen.viewport_focus);
     out.push(',');
+    out.push_str("\"viewportFocusObjects\":");
+    push_viewport_focus_objects(out, loaded);
+    out.push(',');
     let mode = match loaded.screen.viewport_mode {
         puzzle_lang::ViewportModeDef::Paged => "paged",
         puzzle_lang::ViewportModeDef::Centered => "centered",
     };
     push_json_pair(out, "viewportMode", mode);
     out.push('}');
+}
+
+fn push_viewport_focus_objects(out: &mut String, loaded: &LoadedGame) {
+    let focus = &loaded.screen.viewport_focus;
+    let mut objects = loaded
+        .object_groups
+        .get(focus)
+        .cloned()
+        .or_else(|| {
+            loaded.object_groups.iter().find_map(|(name, objects)| {
+                name.eq_ignore_ascii_case(focus).then(|| objects.clone())
+            })
+        })
+        .unwrap_or_else(|| {
+            loaded
+                .object_labels
+                .iter()
+                .filter_map(|(object, name)| name.eq_ignore_ascii_case(focus).then_some(*object))
+                .collect()
+        });
+    objects.sort_by_key(|object| object.0);
+    objects.dedup();
+    out.push('[');
+    for (index, object) in objects.iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        out.push_str(&object.0.to_string());
+    }
+    out.push(']');
 }
 
 fn push_scene_regions(out: &mut String, level: Option<&Level>) {
@@ -5605,6 +5638,15 @@ mod tests {
         assert!(APP_CSS.contains("grid-auto-rows: max-content;"));
         assert!(APP_CSS.contains("place-content: center;"));
         assert!(APP_CSS.contains("justify-content: center;"));
+        assert!(APP_JS.contains("function markSingleFrameComponentLayer("));
+        assert!(APP_JS.contains("function fitPuzzleFrameComponents("));
+        assert!(APP_JS.contains("Math.min(frame.width / cols, frame.height / rows)"));
+        assert!(APP_JS.contains(r#"root.dataset.frameComponent = "true";"#));
+        assert!(APP_CSS.contains(".scene-layer.has-single-frame-component"));
+        assert!(APP_CSS.contains("grid-template: minmax(0, 1fr) / minmax(0, 1fr);"));
+        assert!(APP_CSS.contains(
+            ".scene-layer.has-single-frame-component > .board[data-frame-component=\"true\"]"
+        ));
         assert!(!APP_JS.contains(r#""has-puzzle-scene""#));
         assert!(!APP_CSS.contains(".scene-layer.has-puzzle-scene"));
         assert!(!APP_CSS.contains("justify-content: space-between;"));
@@ -5612,6 +5654,13 @@ mod tests {
         assert!(
             RENDERER_CSS.contains("grid-template-columns: repeat(var(--cols), var(--cell-size));")
         );
+        assert!(RENDERER_JS.contains("this.root.style.setProperty(\"--rows\", viewport.height);"));
+        assert!(RENDERER_JS.contains("this.root.classList.toggle(\"is-canvas-renderer\""));
+        assert!(RENDERER_JS.contains("scene.screen?.viewportFocusObjects"));
+        assert!(RENDERER_JS.contains("focusObjects.has(Number(layer.objectId))"));
+        assert!(RENDERER_CSS.contains(".scene-layer > .board.is-canvas-renderer:only-child"));
+        assert!(RENDERER_CSS.contains("grid-template-columns: minmax(0, 1fr);"));
+        assert!(RENDERER_CSS.contains("object-fit: contain;"));
         assert!(!APP_CSS.contains("grid-auto-flow: row;"));
         assert!(!RENDERER_CSS.contains("minmax(24px, 1fr)"));
     }
@@ -5679,7 +5728,7 @@ puzzle3 cube {
 
 levels3 cube_levels of cube {
   legend {
-    _ = empty
+    . = empty
     P = Player
   }
 
@@ -5961,16 +6010,16 @@ no down [ no Box | Goal ]
 
 levels3 tiny of push3 {
 legend {
-_ = empty
+. = empty
 P = Player
 B = Box
 G = Goal
 }
 
 level one {
-PB_
+PB.
 
-__G
+..G
 }
 }
 "#;
@@ -6130,6 +6179,51 @@ scene playing {
         assert_eq!(data.matches("\"scenes\":[").count(), 1);
         assert_eq!(data.matches("\"screens\":[").count(), 1);
         assert!(data.contains("\"persistentVars\":["));
+    }
+
+    #[test]
+    fn standalone_export_resolves_viewport_focus_group_objects() {
+        let source = r#"
+title Flickscreen Focus
+
+puzzle default {
+layers {
+  floor = Background
+  actor = Player1 Player2
+}
+empty .
+group player = Player1 Player2
+flickscreen 5 5
+screen_focus player
+
+levels {
+  legend {
+    . = Background
+    P = Player1
+  }
+  P....
+}
+
+rules {
+  [ Player1 ] -> [ Player1 ]
+}
+}
+"#;
+        let loaded = parse_game(source).unwrap();
+        let state = ServerState::new(
+            loaded,
+            source.to_string(),
+            "games/focus/game.puzzle".to_string(),
+            String::new(),
+            String::new(),
+            SolverConfig::default(),
+        );
+        let mut data = String::new();
+        push_export_data(&mut data, &state);
+
+        assert!(data.contains(r#""viewportFocus":"player""#));
+        assert!(data.contains(r#""viewportFocusObjects":[2,3]"#));
+        assert!(RENDERER_JS.contains("focusObjects.has(Number(layer.objectId))"));
     }
 
     #[test]

@@ -66,6 +66,10 @@ rules {
   move
 }
 
+on_level_clear {
+  next_level
+}
+
 levels {
   legend {
     . = Background
