@@ -1,155 +1,225 @@
 # PuzzleStudio
 
-ターンベース・グリッドベース・ルール駆動型パズルゲームのための実験環境。
+PuzzleStudio is an experimental authoring environment for turn-based,
+grid-based, rule-driven puzzle games.
 
-現時点では、Rust の `puzzle-core` が高速で決定論的な状態遷移を担当し、`puzzle-lang` が `.puzzle` を低レベル IR にコンパイルし、`ascii-play` がテストプレイ用 UI、`html-play` が単体 `.html` エクスポートを提供する。
+The project is intentionally narrow. It is not trying to be a general-purpose
+game engine. It is built around a short feedback loop between human intent,
+AI-assisted rule editing, deterministic execution, and concrete inspection of
+game behavior.
 
-## Run
+At the moment, the repository provides:
 
-HTML:
+- a `.puzzle` authoring language for 2D and prototype 3D puzzle games
+- a deterministic Rust transition core
+- a parser/compiler that lowers `.puzzle` files into runtime data
+- terminal, browser, standalone HTML, editor, and desktop-shell entry points
+- early solver and inspection support for authoring workflows
 
-```bash
-cargo run -p html-play -- games/spec_2d/game.puzzle
-```
+## Quick Start
 
-デフォルトでは `games/spec_2d/game.html` を生成する。出力先を変える場合:
-
-```bash
-cargo run -p html-play -- games/spec_2d/game.puzzle -o /tmp/spec_2d.html
-```
-
-旧ローカルサーバで確認する場合:
-
-```bash
-cargo run -p html-play -- games/spec_2d/game.puzzle --serve
-```
-
-起動後に表示される `http://127.0.0.1:<port>` をブラウザで開く。
-
-Editor:
+Install or refresh the local CLI:
 
 ```bash
-tools/generate_editor.sh games/spec_2d/game.puzzle
+cargo install --path crates/cli
 ```
 
-デフォルトではプロジェクト直下の `editor.html` を生成する。出力先を変える場合:
+Run the main validation command:
 
 ```bash
-tools/generate_editor.sh games/spec_2d/game.puzzle -o /tmp/editor.html
+puzzlestudio check games/spec_2d/game.puzzle
 ```
 
-ローカルサーバで Run Preview しながら編集する場合:
+Play the 2D sample in a terminal:
 
 ```bash
-cargo run -p html-editor -- games/spec_2d/game.puzzle --serve
+puzzlestudio play games/spec_2d/game.puzzle
 ```
 
-editor は `html-play` とは別 binary。生成 HTML には初期 preview と source を埋め込み、右ペインの
-Level で level を追加して `.puzzle` として export できる。Solver は同じ右ペインの別画面で解探索と
-解の再生/書き出しを行う。再コンパイルは `--serve` 時の Run Preview で行う。
+Export a standalone HTML build:
 
-`tools/generate_editor.sh` は先に editor 用 WASM を更新し、その後で
-`cargo run --release -p html-editor -- ...` を使う。`target/release/html-editor` を直接実行すると、
-`static/editor.js` や `html-play/static/standalone.js`、WASM export を変更した直後に古い binary /
-古い WASM から stale な `editor.html` を生成してしまうことがあるため、standalone editor を生成するときは
-この script を使う。
+```bash
+puzzlestudio export-html games/spec_2d/game.puzzle -o /tmp/spec_2d.html
+```
 
-GitHub Pages など静的ホスティング向けに、standalone editor と WASM preview fallback をまとめて生成する場合:
+Serve the browser player locally:
+
+```bash
+puzzlestudio preview games/spec_2d/game.puzzle
+```
+
+The server prints a `http://127.0.0.1:<port>` URL after it starts.
+
+## Player Controls
+
+The default 2D sample uses these controls:
+
+- `w/a/s/d` or arrow keys: move
+- `r`: send the standard `restart` input
+- `q`: quit the terminal player
+
+Input handling is part of the `.puzzle` model. Other games can map keys to
+different semantic inputs with an `inputs { ... }` block.
+
+## Editor
+
+Run the browser editor with a local preview server:
+
+```bash
+puzzlestudio editor games/spec_2d/game.puzzle
+```
+
+By default this serves `http://127.0.0.1:8787/editor.html`. Use `--port` to pick
+a different port.
+
+Generate a standalone editor HTML file:
+
+```bash
+puzzlestudio export-editor games/spec_2d/game.puzzle -o editor.html
+```
+
+If editor JavaScript, WASM, or preview code has changed, refresh the editor WASM
+bundle before exporting:
+
+```bash
+tools/build_wasm_editor.sh
+```
+
+For static web hosting, generate the standalone editor plus WASM preview
+fallback:
 
 ```bash
 tools/generate_web_editor.sh games/spec_2d/game.puzzle -o docs/index.html
 ```
 
-ASCII:
+## 3D Prototype
+
+There is also a prototype 3D `.puzzle` model path:
 
 ```bash
-cargo run -p ascii-play -- games/spec_2d/game.puzzle
+puzzlestudio preview games/spec_3d.puzzle
 ```
 
-操作:
+The 3D path shares the scene and browser adapter direction, but it is still
+more experimental than the 2D rules path.
 
-- `w/a/s/d` または矢印キー: 移動
-- `r`: 現在ステージをリスタート
-- `n`: クリア後に次ステージへ
-- `q`: 終了
+## Desktop Shell
 
-## Test
+The Tauri desktop shell hosts the shared HTML editor. If the Tauri CLI is
+installed in your Rust environment, run:
+
+```bash
+cargo tauri dev
+```
+
+The desktop shell starts empty. It should only read or write project files after
+the user opens a project folder or game entry.
+
+## CLI Commands
+
+The `puzzlestudio-cli` package installs a `puzzlestudio` binary with:
+
+```bash
+puzzlestudio check <path> [--json]
+puzzlestudio play [path]
+puzzlestudio preview [path] [--port 7878]
+puzzlestudio editor [path] [--port 8787]
+puzzlestudio export-html <path> -o <output.html>
+puzzlestudio export-editor [path] -o <editor.html>
+puzzlestudio import-puzzlescript <source.txt> -o <game.puzzle>
+```
+
+`<path>` can be a game folder or a `.puzzle` file. Folder paths resolve to the
+best game entry in that folder.
+
+## Game Entries And Imports
+
+A game entry is a `.puzzle` file with top-level game metadata such as:
+
+```txt
+title "Microban"
+author "David Skinner"
+```
+
+When a folder is passed to a tool, PuzzleStudio looks for a prelude-bearing
+entry file in that folder. `game.puzzle` is preferred, but it is a convention,
+not a requirement.
+
+Files without top-level game metadata are import fragments. They are not loaded
+automatically; the entry file must import them explicitly.
+
+## Project Layout
+
+```txt
+crates/core/            deterministic transition core
+crates/lang/            .puzzle parser, validation, lowering, imports
+crates/scene/           shared scene/layout data structures
+crates/play/            loaded-game session mechanics and render helpers
+crates/solver/          search support for puzzle states
+crates/ascii_play/      terminal adapter
+crates/html_play/       browser player and standalone HTML export
+crates/html_editor/     browser editor and editor export
+crates/wasm/            WASM bridge used by editor/player workflows
+crates/puzzle3d_model/  prototype 3D model parser/runtime
+src-tauri/              desktop shell for the shared editor
+games/                  current small specification/sample games
+themes/                 built-in HTML theme imports
+archive/games/          older experiments and compatibility samples
+tools/                  export scripts and authoring utilities
+```
+
+## Architecture
+
+The main data path is:
+
+```txt
+.puzzle source
+  -> puzzle-lang parser/compiler
+  -> puzzle-core CompiledGame
+  -> puzzle-play session/render helpers
+  -> ascii-play / html-play / html-editor / desktop shell
+```
+
+The important boundary is that `puzzle-core` stays deterministic and independent
+from file IO, parsing, rendering, terminal input, browser behavior, and
+game-specific UI shortcuts. Syntax and validation belong to `puzzle-lang`;
+session behavior belongs to `puzzle-play`; adapters present and host the result.
+
+## Documentation
+
+User-facing documentation:
+
+- `AUTHORING_SYNTAX.md`: canonical `.puzzle` authoring reference
+- `README.md`: repository entry point, commands, and orientation
+
+Developer-facing documentation:
+
+- `DESIGN_PRINCIPLES.md`: project philosophy and design constraints
+- `CURRENT_SPEC.md`: current parser/runtime/adapter behavior
+- `AGENT_HANDOFF.md`: compact implementation map and recent design state
+- `SOLVER_DESIGN.md`: solver role and design notes
+- `PUBLICATION_PLAN.md`: release and hosting direction
+- `EDITOR_COMPLETION_PLAN.md`: editor completion plan
+
+When changing behavior, keep user-facing syntax guidance separate from
+developer-facing implementation rationale.
+
+## Development Checks
+
+Run the full test suite:
 
 ```bash
 cargo test
 ```
 
-## Project Layout
+Run a focused syntax/runtime smoke check:
 
-```txt
-crates/core/
-  汎用 transition core。表示・入力・ファイル読み込みに依存しない。
-
-crates/lang/
-  `.puzzle` parser/compiler。authoring syntax を `puzzle-core` の IR と level metadata に落とす。
-
-crates/play/
-  ロード済みゲームの session 管理と state 描画 helper。parser は持たない。
-
-crates/ascii_play/
-  terminal adapter。ファイル選択、キー入力、terminal 表示を担当する。
-
-crates/html_play/
-  browser adapter。単体 `.html` を生成し、必要に応じてHTTP経由のローカルHTMLテスト環境も提供する。
-
-games/
-  仕様カテゴリごとの小さな検証 entry。大量の遊び用・実験用サンプルは
-  `archive/games/legacy_samples/` に退避し、通常のテスト入口にはしない。
-  top-level `title` などの game prelude metadata を持つ `.puzzle` が entry。
-  play / build / editor に folder を渡すと、その folder 内の prelude-bearing
-  `.puzzle` を entry として読む。`game.puzzle` は慣例名として優先されるが必須ではない。
-  prelude のない `levels.puzzle` や `sprites.puzzle` は import fragment。
-  外部 CSS / JS は entry `.puzzle` の `assets { ... }` で明示参照したものだけを読み込む。
-  例: `assets { ... }` に `css "game.css"` / `script "visuals.js"` を書く。
-  HTML renderer の sprite class は object 名の大文字・小文字を保持し、
-  CSS class に使えない区切り文字だけ `-` に置き換える。例: `Player`
-  は `.sprite.Player`、`Portal:one` は `.sprite.Portal-one`。
-  画像・音声などの asset は `sprites/`, `sounds/` などに置き、game folder からの相対パスで参照する。
-
-User-facing docs:
-
-AUTHORING_SYNTAX.md
-  `.puzzle` を書くための canonical 文法リファレンス。
-
-README.md
-  実行方法、プロジェクト構成、主要 entrypoint。
-
-Developer-facing docs:
-
-DESIGN_PRINCIPLES.md
-  最上位の設計原則。文法の一貫性、所有者境界、hardcode 回避の判断基準を含む。
-
-CURRENT_SPEC.md
-  現時点の実装仕様。parser / lowering / runtime / adapter の実際の契約。
-
-IMPLEMENTATION_PLAN.md
-  runtime / authoring / solver に向けた実装計画。
-
-PUBLICATION_PLAN.md
-  ローカルアプリ、Web/WASM、standalone HTML の公開・配布方針。
-
-EDITOR_COMPLETION_PLAN.md
-  `.puzzle` editor の予測提示 / 補完の実装計画。
-
-SOLVER_DESIGN.md
-  solver の役割と設計方針。
+```bash
+puzzlestudio check games/spec_2d/game.puzzle
 ```
 
-## Current Architecture
+Export smoke test:
 
-```txt
-.puzzle authoring file
-  -> puzzle-lang parser/compiler
-  -> typed orientation AST
-  -> puzzle-core CompiledGame IR
-  -> puzzle-play session/render helpers
-  -> transition_state / transition_trace
-  -> HTML export / ASCII play / future solver
+```bash
+puzzlestudio export-html games/spec_2d/game.puzzle -o /tmp/spec_2d.html
 ```
-
-`core` はゲーム固有ルールを持たない。2D 仕様検証用のルール、ステージ、表示文字、入力割り当ては `games/spec_2d/game.puzzle` にある。
