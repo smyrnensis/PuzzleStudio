@@ -8,6 +8,40 @@ const sourceCompletionTextEncoder = new TextEncoder();
 const sourceBlockSelectionLayer = createSourceBlockSelectionLayer();
 const sourceCaretLayer = createSourceCaretLayer();
 const sourceImportLinkFrame = createSourceImportLinkFrame();
+const sourceTargetHintLayer = createSourceTargetHintLayer();
+const SOURCE_EDITABLE_TARGETS = [
+  {
+    kind: "level3d",
+    label: "3D level",
+    openOptions: { switchMode: true },
+    showInitialFrame: true,
+  },
+  {
+    kind: "level",
+    label: "level",
+    openOptions: {},
+    showInitialFrame: true,
+  },
+  {
+    kind: "sprite3d",
+    label: "3D sprite",
+    openOptions: { switchMode: true },
+    showInitialFrame: true,
+  },
+  {
+    kind: "sprite",
+    label: "sprite",
+    openOptions: { switchMode: true },
+    showInitialFrame: true,
+  },
+  {
+    kind: "sounds",
+    label: (entry) => entry?.kind || "sound",
+    openOptions: { switchMode: true },
+    showInitialFrame: false,
+  },
+];
+const sourceEditableTargetHandlers = new Map();
 let sourceHighlightTimer = 0;
 let sourceCompletionTimer = 0;
 let activeHighlightRequest = null;
@@ -16,6 +50,9 @@ let sourceCompletionRequestId = 0;
 let sourceColorEdit = null;
 let sourceCompletionState = null;
 let sourceImportLinkState = null;
+let sourceTargetHintKey = "";
+let sourceTargetHintTimer = 0;
+let sourceTargetHintActive = false;
 let sourceEditorKillRing = "";
 let sourceEditorBlockSelection = null;
 let sourceEditorRangeDrag = null;
@@ -134,6 +171,7 @@ function handleSourceUndoShortcut(event) {
 
 function setSourceEditorValue(value, options = {}) {
   sourceEditor.value = value || "";
+  invalidateSourceTargetHintFrames();
   updateSourceMeta();
   scheduleSourceHighlight(true);
   if (options.resetUndo === false) {
@@ -141,6 +179,7 @@ function setSourceEditorValue(value, options = {}) {
   } else {
     resetSourceUndoHistory();
   }
+  showSourceTargetHintFramesOnce();
 }
 
 function scheduleSourceHighlight(immediate = false) {
@@ -155,250 +194,7 @@ function renderPlainSourceHighlight(source = sourceEditor.value) {
   if (!sourceHighlight) {
     return;
   }
-  const document = activeDocument();
-  const html = isPuzzleDocument(document) && isTextDocument(document)
-    ? highlightSourceLexically(source)
-    : escapeHtml(source || " ");
-  setSourceHighlightHtml(source, html, isPuzzleDocument(document) ? "lexical" : "plain");
-}
-
-const lexicalSourceKeywords = new Set([
-  "action",
-  "all",
-  "and",
-  "assets",
-  "sounds",
-  "button",
-  "colors",
-  "column",
-  "command",
-  "const",
-  "css",
-  "direction",
-  "directions",
-  "display",
-  "display_objects",
-  "each",
-  "else",
-  "for",
-  "from",
-  "group",
-  "homepage",
-  "horizontal",
-  "if",
-  "import",
-  "in",
-  "input",
-  "keys",
-  "layer",
-  "layers",
-  "legend",
-  "level",
-  "levels",
-  "main",
-  "map",
-  "model",
-  "music",
-  "no",
-  "not",
-  "object",
-  "objects",
-  "of",
-  "on",
-  "on_display",
-  "on_level_clear",
-  "on_level_start",
-  "on_scene_start",
-  "or",
-  "palette",
-  "palettes",
-  "box",
-  "persistent",
-  "puzzle",
-  "repeat",
-  "rotate",
-  "routine",
-  "row",
-  "rule",
-  "rules",
-  "scene",
-  "script",
-  "scratch",
-  "shape",
-  "shapes",
-  "sfx",
-  "some",
-  "sprites",
-  "state",
-  "subtitle",
-  "text",
-  "theme",
-  "title",
-  "transitions",
-  "until",
-  "var",
-  "vertical",
-  "view",
-  "win_conditions",
-  "with",
-]);
-
-const lexicalEffectKeywords = new Set([
-  "back",
-  "effect",
-  "enter",
-  "goto",
-  "hide",
-  "message",
-  "next_level",
-  "pause_music",
-  "play_music",
-  "play_sfx",
-  "previous_level",
-  "restart",
-  "resume_music",
-  "set",
-  "show",
-  "start",
-  "stop_music",
-  "toggle",
-  "wait",
-]);
-
-const lexicalInputKeywords = new Set([
-  "down",
-  "left",
-  "right",
-  "up",
-]);
-
-const lexicalLiteralKeywords = new Set([
-  "clean",
-  "empty",
-  "false",
-  "true",
-]);
-
-const lexicalQueryKeywords = new Set([
-  "count",
-  "exists",
-]);
-
-function highlightSourceLexically(source) {
-  if (!source) {
-    return " ";
-  }
-  let html = "";
-  let index = 0;
-  while (index < source.length) {
-    const rest = source.slice(index);
-    const char = source[index];
-    const next = source[index + 1] || "";
-
-    if (char === "/" && next === "/") {
-      const end = source.indexOf("\n", index);
-      const stop = end === -1 ? source.length : end;
-      html += sourceSyntaxSpan("comment", source.slice(index, stop));
-      index = stop;
-      continue;
-    }
-
-    if (char === "\"") {
-      let stop = index + 1;
-      let escaped = false;
-      while (stop < source.length) {
-        const current = source[stop];
-        stop += 1;
-        if (escaped) {
-          escaped = false;
-        } else if (current === "\\") {
-          escaped = true;
-        } else if (current === "\"") {
-          break;
-        }
-      }
-      html += sourceSyntaxSpan("string", source.slice(index, stop));
-      index = stop;
-      continue;
-    }
-
-    const color = rest.match(/^#(?:[0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{4}|[0-9a-fA-F]{3})(?![_A-Za-z0-9])/);
-    if (color) {
-      const token = color[0];
-      html += `<span class="syntax-color" style="--syntax-color-token: ${escapeHtml(token)}">${escapeHtml(token)}</span>`;
-      index += token.length;
-      continue;
-    }
-
-    if (/\s/.test(char)) {
-      html += char;
-      index += 1;
-      continue;
-    }
-
-    const arrow = rest.match(/^(?:->|==|!=|<=|>=|\+=|-=|\*=|\/=)/);
-    if (arrow) {
-      html += sourceSyntaxSpan("operator", arrow[0]);
-      index += arrow[0].length;
-      continue;
-    }
-
-    if (/^[{}\[\]().,:;|=<>+\-*\/]$/.test(char)) {
-      html += sourceSyntaxSpan("operator", char);
-      index += 1;
-      continue;
-    }
-
-    const number = rest.match(/^\d+(?:\.\d+)?(?:ms|s)?(?![_A-Za-z0-9])/);
-    if (number) {
-      html += sourceSyntaxSpan("number", number[0]);
-      index += number[0].length;
-      continue;
-    }
-
-    const identifier = rest.match(/^@?[_A-Za-z][_A-Za-z0-9]*/);
-    if (identifier) {
-      const token = identifier[0];
-      const kind = lexicalSourceTokenKind(token);
-      html += kind ? sourceSyntaxSpan(kind, token) : escapeHtml(token);
-      index += token.length;
-      continue;
-    }
-
-    html += escapeHtml(char);
-    index += 1;
-  }
-  return html || " ";
-}
-
-function lexicalSourceTokenKind(token) {
-  const plain = token.startsWith("@") ? token.slice(1) : token;
-  if (token.startsWith("@")) {
-    return "object";
-  }
-  if (lexicalSourceKeywords.has(plain)) {
-    return "keyword";
-  }
-  if (lexicalEffectKeywords.has(plain)) {
-    return "effect";
-  }
-  if (lexicalInputKeywords.has(plain)) {
-    return "input";
-  }
-  if (lexicalLiteralKeywords.has(plain)) {
-    return "literal";
-  }
-  if (lexicalQueryKeywords.has(plain)) {
-    return "query";
-  }
-  if (/^[A-Z]/.test(plain)) {
-    return "object";
-  }
-  return "";
-}
-
-function sourceSyntaxSpan(kind, token) {
-  return `<span class="syntax-${kind}">${escapeHtml(token)}</span>`;
+  setSourceHighlightHtml(source, escapeHtml(source || " "), "plain");
 }
 
 function renderSourceHighlightWithLoadedWasm(source = sourceEditor.value) {
@@ -454,6 +250,43 @@ function syncSourceHighlightScroll() {
   syncSourceHighlightMetrics();
   sourceHighlight.style.transform = `translate(${-sourceEditor.scrollLeft}px, ${-sourceEditor.scrollTop}px)`;
   renderSourceCaret();
+  if (sourceTargetHintActive) {
+    renderSourceTargetHintFrames();
+  }
+}
+
+function invalidateSourceTargetHintFrames() {
+  sourceTargetHintKey = "";
+}
+
+function showSourceTargetHintFramesOnce() {
+  if (!sourceTargetHintLayer || !sourceDocumentSupportsEditableTargets()) {
+    return;
+  }
+  sourceTargetHintActive = true;
+  invalidateSourceTargetHintFrames();
+  renderSourceTargetHintFrames();
+  window.clearTimeout(sourceTargetHintTimer);
+  sourceTargetHintTimer = window.setTimeout(hideSourceTargetHintFrames, 1800);
+}
+
+function hideSourceTargetHintFrames() {
+  sourceTargetHintActive = false;
+  sourceTargetHintKey = "";
+  window.clearTimeout(sourceTargetHintTimer);
+  sourceTargetHintTimer = 0;
+  if (sourceTargetHintLayer) {
+    sourceTargetHintLayer.replaceChildren();
+    sourceTargetHintLayer.hidden = true;
+  }
+}
+
+function sourceDocumentSupportsEditableTargets() {
+  return typeof activeDocument === "function"
+    && typeof isPuzzleDocument === "function"
+    && typeof isTextDocument === "function"
+    && isPuzzleDocument(activeDocument())
+    && isTextDocument(activeDocument());
 }
 
 async function refreshSourceHighlight() {
@@ -1116,6 +949,17 @@ function createSourceImportLinkFrame() {
   return frame;
 }
 
+function createSourceTargetHintLayer() {
+  if (!sourceEditorWrap) {
+    return null;
+  }
+  const layer = document.createElement("div");
+  layer.className = "source-target-hint-layer";
+  layer.hidden = true;
+  sourceEditorWrap.append(layer);
+  return layer;
+}
+
 function showSourceColorEditor(event = null) {
   if (!sourceColorPopover || !sourceColorCodeInput) {
     return false;
@@ -1442,6 +1286,8 @@ sourceEditor.addEventListener("input", () => {
   if (!isTextDocument(documents[currentDocumentIndex])) {
     return;
   }
+  hideSourceTargetHintFrames();
+  invalidateSourceTargetHintFrames();
   hideSourceImportLinkFrame();
   clearSourceBlockSelection();
   sourceEditorPreferredCaretX = null;
@@ -1460,6 +1306,7 @@ sourceEditor.addEventListener("input", () => {
   schedulePreview();
 });
 sourceEditor.addEventListener("click", (event) => {
+  hideSourceTargetHintFrames();
   if (suppressNextSourceClickSelection) {
     suppressNextSourceClickSelection = false;
     return;
@@ -1493,7 +1340,10 @@ sourceEditor.addEventListener("keyup", (event) => {
   }
   renderSourceCaret();
 });
-sourceEditor.addEventListener("focus", renderSourceCaret);
+sourceEditor.addEventListener("focus", () => {
+  renderSourceCaret();
+  syncPreviewModeFromSourceCursor({ force: true });
+});
 sourceEditor.addEventListener("blur", renderSourceCaret);
 document.addEventListener("selectionchange", () => {
   if (document.activeElement !== sourceEditor) {
@@ -1926,6 +1776,7 @@ function handleSourceBraceBackspace(event) {
 }
 
 function sourceEditorContentChanged() {
+  invalidateSourceTargetHintFrames();
   recordSourceUndoSnapshot();
   updateSourceMeta();
   refreshSourceColorEditor();
@@ -2229,7 +2080,8 @@ function handleSourceBlockSelectionPointerDown(event) {
 }
 
 function updateSourceImportLinkFromPointer(event) {
-  if (!sourceImportLinkFrame || sourceEditorBlockSelection || !isPuzzleDocument(activeDocument()) || !isTextDocument(activeDocument())) {
+  hideSourceTargetHintFrames();
+  if (!sourceImportLinkFrame || sourceEditorBlockSelection || !sourceDocumentSupportsEditableTargets()) {
     hideSourceImportLinkFrame();
     return;
   }
@@ -2264,7 +2116,7 @@ function sourceImportLinkAtPointer(event) {
 }
 
 function sourceEditableTargetAtPointer(event) {
-  if (!event || sourceEditorBlockSelection || !isPuzzleDocument(activeDocument()) || !isTextDocument(activeDocument())) {
+  if (!event || sourceEditorBlockSelection || !sourceDocumentSupportsEditableTargets()) {
     return null;
   }
   const source = sourceEditor.value || "";
@@ -2272,60 +2124,57 @@ function sourceEditableTargetAtPointer(event) {
   if (!Number.isInteger(offset)) {
     return null;
   }
-  const hoverLine = sourceLineRangeAtOffset(source, offset);
-  const level = typeof findLevelDefinitionAtPosition === "function"
-    ? findLevelDefinitionAtPosition(source, offset)
-    : null;
-  if (level) {
+  return sourceEditableTargetAtOffset(source, offset);
+}
+
+function sourceEditableTargetAtOffset(source, offset, options = {}) {
+  const hoverLine = options.lineRange || sourceLineRangeAtOffset(source, offset);
+  const configs = options.configs || SOURCE_EDITABLE_TARGETS;
+  for (const config of configs) {
+    const finder = sourceEditableTargetFinder(config);
+    const entry = finder ? finder(source, offset) : null;
+    if (!entry) {
+      continue;
+    }
     return sourceEditableTargetFrameState({
-      kind: "level",
-      name: level.name || "",
+      kind: config.kind,
+      name: entry.name || "",
       start: hoverLine.start,
       end: hoverLine.end,
       position: offset,
-      label: `Edit level ${level.name || ""}`.trim(),
-    });
-  }
-  const sprite3d = typeof findSprite3dDefinitionAtPosition === "function"
-    ? findSprite3dDefinitionAtPosition(source, offset)
-    : null;
-  if (sprite3d) {
-    return sourceEditableTargetFrameState({
-      kind: "sprite3d",
-      name: sprite3d.name || "",
-      start: hoverLine.start,
-      end: hoverLine.end,
-      position: offset,
-      label: `Edit 3D sprite ${sprite3d.name || ""}`.trim(),
-    });
-  }
-  const sprite = typeof findSpriteDefinitionAtPosition === "function"
-    ? findSpriteDefinitionAtPosition(source, offset)
-    : null;
-  if (sprite) {
-    return sourceEditableTargetFrameState({
-      kind: "sprite",
-      name: sprite.name || "",
-      start: hoverLine.start,
-      end: hoverLine.end,
-      position: offset,
-      label: `Edit sprite ${sprite.name || ""}`.trim(),
-    });
-  }
-  const sound = typeof findSoundsDefinitionAtPosition === "function"
-    ? findSoundsDefinitionAtPosition(source, offset)
-    : null;
-  if (sound) {
-    return sourceEditableTargetFrameState({
-      kind: "sounds",
-      name: sound.name || "",
-      start: hoverLine.start,
-      end: hoverLine.end,
-      position: offset,
-      label: `Edit ${sound.kind || "sound"} ${sound.name || ""}`.trim(),
+      label: sourceEditableTargetLabel(config, entry),
     });
   }
   return null;
+}
+
+function sourceEditableTargetFinder(config) {
+  const finder = sourceEditableTargetHandlers.get(config.kind)?.find;
+  return typeof finder === "function" ? finder : null;
+}
+
+function sourceEditableTargetLoader(config) {
+  const loader = sourceEditableTargetHandlers.get(config.kind)?.load;
+  return typeof loader === "function" ? loader : null;
+}
+
+function sourceEditableTargetLabel(config, entry) {
+  const targetLabel = typeof config.label === "function" ? config.label(entry) : config.label;
+  return `Edit ${targetLabel || "source target"} ${entry?.name || ""}`.trim();
+}
+
+function registerSourceEditableTarget(kind, handlers = {}) {
+  if (!SOURCE_EDITABLE_TARGETS.some((config) => config.kind === kind)) {
+    return;
+  }
+  sourceEditableTargetHandlers.set(kind, {
+    find: typeof handlers.find === "function" ? handlers.find : null,
+    load: typeof handlers.load === "function" ? handlers.load : null,
+  });
+  invalidateSourceTargetHintFrames();
+  if (sourceTargetHintActive && sourceDocumentSupportsEditableTargets()) {
+    renderSourceTargetHintFrames();
+  }
 }
 
 function sourceEditableTargetFrameState(target) {
@@ -2341,6 +2190,76 @@ function sourceEditableTargetFrameState(target) {
     label: target.label,
     ...frame,
   };
+}
+
+function renderSourceTargetHintFrames() {
+  if (!sourceTargetHintLayer) {
+    return;
+  }
+  const states = sourceInitialEditableTargetFrames();
+  const key = [
+    activeDocument()?.id || "",
+    sourceEditor.value.length,
+    sourceEditor.scrollLeft,
+    sourceEditor.scrollTop,
+    ...states.map((state) => `${state.targetKind}:${state.position}:${state.left}:${state.top}`),
+  ].join("|");
+  if (key === sourceTargetHintKey) {
+    return;
+  }
+  sourceTargetHintKey = key;
+  sourceTargetHintLayer.replaceChildren();
+  sourceTargetHintLayer.hidden = states.length === 0;
+  for (const state of states) {
+    const frame = document.createElement("span");
+    frame.className = "source-target-hint-frame";
+    frame.style.left = `${state.left}px`;
+    frame.style.top = `${state.top}px`;
+    frame.style.width = `${state.width}px`;
+    frame.style.height = `${state.height}px`;
+    frame.dataset.sourceTargetKind = state.targetKind;
+    frame.title = state.label;
+    frame.setAttribute("aria-label", state.label);
+    sourceTargetHintLayer.append(frame);
+  }
+}
+
+function sourceInitialEditableTargetFrames() {
+  if (!sourceDocumentSupportsEditableTargets()) {
+    return [];
+  }
+  const source = sourceEditor.value || "";
+  const lines = sourceImportLinesWithOffsets(source);
+  const states = [];
+  const seenKinds = new Set();
+  const configs = SOURCE_EDITABLE_TARGETS.filter((config) => config.showInitialFrame);
+  for (const line of lines) {
+    if (seenKinds.size >= configs.length) {
+      break;
+    }
+    const firstCode = String(line.raw || "").search(/\S/);
+    if (firstCode < 0) {
+      continue;
+    }
+    const offset = line.start + firstCode;
+    const lineRange = sourceLineRangeAtOffset(source, offset);
+    for (const config of configs) {
+      if (seenKinds.has(config.kind)) {
+        continue;
+      }
+      const state = sourceEditableTargetAtOffset(source, offset, {
+        configs: [config],
+        lineRange,
+      });
+      if (!state) {
+        continue;
+      }
+      states.push(state);
+      seenKinds.add(config.kind);
+      break;
+    }
+  }
+  return states;
 }
 
 function sourceFrameRectForOffsets(start, end) {
@@ -2616,16 +2535,7 @@ function openSourceEditableTarget() {
   if (!target || !Number.isInteger(target.position)) {
     return false;
   }
-  let key = "";
-  if (target.targetKind === "level" && typeof loadLevelFromSourcePosition === "function") {
-    key = loadLevelFromSourcePosition(target.position, { recordHistory: true }) || "";
-  } else if (target.targetKind === "sprite3d" && typeof loadSprite3dFromSourcePosition === "function") {
-    key = loadSprite3dFromSourcePosition(target.position, { switchMode: true, recordHistory: true }) || "";
-  } else if (target.targetKind === "sprite" && typeof loadSpriteFromSourcePosition === "function") {
-    key = loadSpriteFromSourcePosition(target.position, { switchMode: true, recordHistory: true }) || "";
-  } else if (target.targetKind === "sounds" && typeof loadSoundFromSourcePosition === "function") {
-    key = loadSoundFromSourcePosition(target.position, { switchMode: true, recordHistory: true }) || "";
-  }
+  const key = loadSourceEditableTarget(target, { recordHistory: true });
   hideSourceImportLinkFrame();
   if (key) {
     sourceEditor.focus({ preventScroll: true });
@@ -2634,8 +2544,29 @@ function openSourceEditableTarget() {
   return false;
 }
 
+function loadSourceEditableTargetFromPosition(position, options = {}) {
+  if (!sourceDocumentSupportsEditableTargets()) {
+    return "";
+  }
+  const source = sourceEditor.value || "";
+  const target = sourceEditableTargetAtOffset(source, position);
+  return target ? loadSourceEditableTarget(target, options) : "";
+}
+
+function loadSourceEditableTarget(target, options = {}) {
+  const config = SOURCE_EDITABLE_TARGETS.find((entry) => entry.kind === target.targetKind);
+  const loader = config ? sourceEditableTargetLoader(config) : null;
+  if (!loader || !Number.isInteger(target.position)) {
+    return "";
+  }
+  return loader(target.position, {
+    ...(config.openOptions || {}),
+    ...options,
+  }) || "";
+}
+
 function openSourceImportLinkFromPointer(event) {
-  if (sourceEditorBlockSelection || !isPuzzleDocument(activeDocument()) || !isTextDocument(activeDocument())) {
+  if (sourceEditorBlockSelection || !sourceDocumentSupportsEditableTargets()) {
     return false;
   }
   const link = sourceImportLinkAtPointer(event);
@@ -3011,6 +2942,7 @@ function insertAtSelection(value) {
 
 function setSourceEditorText(value, selectionStart = null, selectionEnd = selectionStart) {
   sourceEditor.value = value || "";
+  invalidateSourceTargetHintFrames();
   hideSourceColorEditor();
   hideSourceCompletions();
   clearSourceBlockSelection();
@@ -3072,4 +3004,132 @@ function nextLineIndent() {
     return `\n${currentIndent}${extraIndent}\n${currentIndent}`;
   }
   return `\n${currentIndent}${extraIndent}`;
+}
+
+function sourceLevelNameControlEntries(config = {}) {
+  const source = String(config.source || "");
+  const requestedScope = String(config.scopeValue || "").trim();
+  const findRanges = config.findRanges || (() => []);
+  const findDefinitions = config.findDefinitions || (() => []);
+  const rangeScope = config.rangeScope || (() => "");
+  const entryName = config.entryName || ((entry) => entry?.name || "");
+  const optionValue = config.optionValue || ((entry) => entryName(entry));
+  const ranges = findRanges(source).filter((range) => {
+    const scope = String(rangeScope(range) || "").trim();
+    return requestedScope ? scope === requestedScope : scope === "";
+  });
+  const entries = [];
+  const seen = new Set();
+  for (const range of ranges) {
+    for (const entry of findDefinitions(source, range) || []) {
+      const name = String(entryName(entry, range) || "").trim();
+      const value = String(optionValue(entry, range) || name).trim();
+      if (!name || !value) {
+        continue;
+      }
+      const key = `${value}\u0000${name}`;
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      entries.push({ range, entry, name, value });
+    }
+  }
+  return entries;
+}
+
+function syncSourceLevelNameDatalist(config = {}) {
+  const datalist = config.datalist;
+  if (!(datalist instanceof HTMLDataListElement)) {
+    return [];
+  }
+  const entries = sourceLevelNameControlEntries(config);
+  datalist.replaceChildren(...entries.map((entry) => {
+    const option = document.createElement("option");
+    option.value = entry.value;
+    if (entry.name !== entry.value) {
+      option.label = entry.name;
+    }
+    return option;
+  }));
+  return entries;
+}
+
+function loadSourceLevelNameSelection(config = {}) {
+  const input = config.nameInput;
+  if (!(input instanceof HTMLInputElement)) {
+    return false;
+  }
+  const value = String(input.value || "").trim();
+  if (!value) {
+    return false;
+  }
+  const entries = sourceLevelNameControlEntries(config);
+  const match = entries.find((entry) => entry.value === value || entry.name === value);
+  if (!match || typeof config.load !== "function") {
+    return false;
+  }
+  return Boolean(config.load(match));
+}
+
+function showSourceLevelNameMenu(config = {}) {
+  const input = config.nameInput;
+  if (!(input instanceof HTMLInputElement)) {
+    return [];
+  }
+  const entries = sourceLevelNameControlEntries(config);
+  const menu = ensureSourceLevelNameMenu(input);
+  if (!entries.length || !menu) {
+    hideSourceLevelNameMenu(input);
+    return entries;
+  }
+  const current = String(input.value || "").trim();
+  menu.replaceChildren(...entries.map((entry) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "source-level-name-option";
+    button.classList.toggle("is-current", entry.value === current || entry.name === current);
+    button.textContent = entry.value;
+    button.title = entry.name === entry.value ? entry.value : entry.name;
+    button.addEventListener("mousedown", (event) => {
+      event.preventDefault();
+    });
+    button.addEventListener("click", () => {
+      input.value = entry.value;
+      hideSourceLevelNameMenu(input);
+      if (typeof config.load === "function") {
+        config.load(entry);
+      }
+      input.focus();
+    });
+    return button;
+  }));
+  menu.hidden = false;
+  return entries;
+}
+
+function ensureSourceLevelNameMenu(input) {
+  const label = input?.closest?.("label");
+  if (!label) {
+    return null;
+  }
+  let menu = label.querySelector(".source-level-name-menu");
+  if (!menu) {
+    menu = document.createElement("div");
+    menu.className = "source-level-name-menu";
+    menu.hidden = true;
+    menu.addEventListener("mousedown", (event) => {
+      event.preventDefault();
+    });
+    label.append(menu);
+  }
+  return menu;
+}
+
+function hideSourceLevelNameMenu(input) {
+  const label = input?.closest?.("label");
+  const menu = label?.querySelector?.(".source-level-name-menu");
+  if (menu) {
+    menu.hidden = true;
+  }
 }

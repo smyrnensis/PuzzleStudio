@@ -6,7 +6,7 @@ window.Puzzle3DFixture = {
     interactiveLook: true,
     interactiveZoom: true,
     grid: {
-      visible: true,
+      visibility: 1,
       occupied_cells: true,
       color: "rgba(31, 36, 40, 0.66)",
     },

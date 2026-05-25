@@ -244,7 +244,7 @@ pub struct ScratchDef {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ScratchKind {
-    Flag,
+    Marker,
     Int,
     Enum,
 }
@@ -374,10 +374,13 @@ pub struct QueryDef {
 pub enum QueryKind {
     CountObjects(Vec<ObjectId>),
     ExistsObjects(Vec<ObjectId>),
+    NoneObjects(Vec<ObjectId>),
     CountMatches(Vec<Pattern>),
     ExistsMatches(Vec<Pattern>),
+    NoneMatches(Vec<Pattern>),
     CountInputMatches(Vec<(InputId, Pattern)>),
     ExistsInputMatches(Vec<(InputId, Pattern)>),
+    NoneInputMatches(Vec<(InputId, Pattern)>),
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

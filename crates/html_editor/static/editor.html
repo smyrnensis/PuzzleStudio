@@ -28,6 +28,10 @@
             </svg>
             <h1>PuzzleStudio</h1>
           </div>
+          <div id="editorDimensionSwitch" class="editor-dimension-switch" role="group" aria-label="Editor dimension" data-mode="2d" hidden aria-hidden="true">
+            <button class="editor-dimension-button is-active" type="button" data-editor-dimension="2d" aria-pressed="true">2D</button>
+            <button class="editor-dimension-button" type="button" data-editor-dimension="3d" aria-pressed="false">3D</button>
+          </div>
           <div class="preview-modebar" aria-label="Work panes">
             <button id="playModeButton" class="is-active" type="button">Preview</button>
             <button id="solverModeButton" type="button">Solve</button>
@@ -67,6 +71,15 @@
         </div>
       </header>
 
+      <div id="levelPaneModeSwitch" class="level-pane-mode-switch" role="group" aria-label="Level editor dimension" hidden>
+        <button class="level-pane-mode-button" type="button" data-level-pane-mode="edit" aria-pressed="true">2D</button>
+        <button class="level-pane-mode-button" type="button" data-level-pane-mode="level3d" aria-pressed="false">3D</button>
+      </div>
+      <div id="spritePaneModeSwitch" class="sprite-pane-mode-switch" role="group" aria-label="Sprite editor dimension" hidden>
+        <button class="sprite-pane-mode-button" type="button" data-sprite-pane-mode="sprite" aria-pressed="true">2D</button>
+        <button class="sprite-pane-mode-button" type="button" data-sprite-pane-mode="sprite3d" aria-pressed="false">3D</button>
+      </div>
+
       <section class="workbench" aria-label="Puzzle editor">
         <button class="pane-restore-button pane-restore-explorer" type="button" data-pane-toggle="explorer" aria-label="Show file pane" title="Show file pane (Command+B)">
           <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -85,11 +98,11 @@
             <span>Files</span>
             <div class="explorer-tools" aria-label="File actions">
               <button id="newDocumentButton" class="icon-button" type="button" aria-label="New puzzle" title="New puzzle">
-                <svg viewBox="0 0 24 24" aria-hidden="true" class="lucide lucide-file-plus-corner-icon lucide-file-plus-corner">
-                  <path d="M11.35 22H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.706.706l3.588 3.588A2.4 2.4 0 0 1 20 8v5.35"></path>
+                <svg viewBox="0 0 24 24" aria-hidden="true" class="lucide lucide-file-plus-icon lucide-file-plus">
+                  <path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z"></path>
                   <path d="M14 2v5a1 1 0 0 0 1 1h5"></path>
-                  <path d="M14 19h6"></path>
-                  <path d="M17 16v6"></path>
+                  <path d="M9 15h6"></path>
+                  <path d="M12 18v-6"></path>
                 </svg>
               </button>
               <button id="fileActionsButton" class="icon-button" type="button" aria-haspopup="true" aria-expanded="false" aria-label="More file actions" title="More file actions">
@@ -134,6 +147,14 @@
             </div>
             <div id="documentTabs" class="document-tabs" role="tablist" aria-label="Open files"></div>
             <div class="document-tabbar-actions">
+              <button id="runButton" class="icon-button source-refresh-button" type="button" aria-label="Refresh preview" title="Refresh preview">
+                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-refresh-cw-icon lucide-refresh-cw" aria-hidden="true">
+                  <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"></path>
+                  <path d="M21 3v5h-5"></path>
+                  <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"></path>
+                  <path d="M8 16H3v5"></path>
+                </svg>
+              </button>
               <button id="saveButton" class="icon-button document-save-button" type="button" aria-label="Save" title="Save (Command+S)">
                 <svg viewBox="0 0 24 24" aria-hidden="true">
                   <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
@@ -165,25 +186,8 @@
           <div class="pane-header" data-pane-drag-handle="active-preview" draggable="true" title="Drag header to move tool pane">
             <div class="pane-title">
               <span id="gamePaneTitle">Preview</span>
-              <div id="levelPaneModeSwitch" class="sprite-pane-mode-switch level-pane-mode-switch" role="group" aria-label="Level editor mode" hidden>
-                <button class="sprite-pane-mode-button is-active" type="button" data-level-pane-mode="edit" aria-pressed="true">2D</button>
-                <button class="sprite-pane-mode-button" type="button" data-level-pane-mode="level3d" aria-pressed="false">3D</button>
-              </div>
-              <div id="spritePaneModeSwitch" class="sprite-pane-mode-switch" role="group" aria-label="Sprite editor mode" hidden>
-                <button class="sprite-pane-mode-button is-active" type="button" data-sprite-pane-mode="sprite" aria-pressed="true">2D</button>
-                <button class="sprite-pane-mode-button" type="button" data-sprite-pane-mode="sprite3d" aria-pressed="false">3D</button>
-              </div>
-              <button id="runButton" class="icon-button preview-run-button" type="button" aria-label="Refresh preview" title="Refresh preview">
-                <svg viewBox="0 0 24 24" aria-hidden="true">
-                  <path d="M21 12a9 9 0 0 1-15.4 6.36"></path>
-                  <path d="M3 12a9 9 0 0 1 15.4-6.36"></path>
-                  <path d="M18 2v4h-4"></path>
-                  <path d="M6 22v-4h4"></path>
-                </svg>
-              </button>
             </div>
             <div class="pane-actions">
-              <span id="statusLabel" class="pane-status"></span>
               <button class="pane-close-button" type="button" data-pane-close="active-preview" aria-label="Hide current tool pane" title="Hide current tool pane">
                 <svg viewBox="0 0 24 24" aria-hidden="true">
                   <path d="M18 6 6 18"></path>
@@ -204,7 +208,6 @@
                 ></iframe>
               </div>
             </div>
-            <div id="previewLogSplitter" class="preview-log-splitter" role="separator" aria-label="Resize preview log" aria-orientation="horizontal"></div>
             <div id="previewLogPanel" class="preview-log-panel" role="log" aria-label="Preview log" aria-live="polite">
               <div class="preview-log-header">
                 <span>Log</span>
@@ -216,41 +219,43 @@
             </div>
           </div>
           <div id="psImportPanel" class="ps-import-panel" hidden>
-            <div class="source-action-group ps-import-actions" role="group" aria-label="PuzzleScript import actions">
-              <button id="psImportConvertButton" class="source-action-button" type="button" aria-label="Generate .puzzle translation" title="Generate .puzzle translation">
-                <svg viewBox="0 0 24 24" aria-hidden="true">
-                  <path d="M4 11V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.706.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-1"></path>
-                  <path d="M14 2v5a1 1 0 0 0 1 1h5"></path>
-                  <path d="M2 15h10"></path>
-                  <path d="m9 18 3-3-3-3"></path>
-                </svg>
-              </button>
-              <button id="psImportCopyButton" class="source-action-button source-copy-button" type="button" aria-label="Copy converted .puzzle" title="Copy converted .puzzle" disabled>
-                <svg viewBox="0 0 24 24" aria-hidden="true">
-                  <rect x="8" y="8" width="14" height="14" rx="2"></rect>
-                  <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path>
-                </svg>
-              </button>
-              <button id="psImportAddFileButton" class="source-action-button is-primary" type="button" aria-label="Add converted .puzzle file" title="Add converted .puzzle file" disabled>
-                <svg viewBox="0 0 24 24" aria-hidden="true" class="lucide lucide-file-plus-corner-icon lucide-file-plus-corner">
-                  <path d="M11.35 22H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.706.706l3.588 3.588A2.4 2.4 0 0 1 20 8v5.35"></path>
-                  <path d="M14 2v5a1 1 0 0 0 1 1h5"></path>
-                  <path d="M14 19h6"></path>
-                  <path d="M17 16v6"></path>
-                </svg>
-              </button>
-              <span id="psImportStatus" class="ps-import-status" aria-live="polite"></span>
+            <div class="tool-pane-scroll">
+              <div class="source-action-group ps-import-actions" role="group" aria-label="PuzzleScript import actions">
+                <button id="psImportConvertButton" class="source-action-button" type="button" aria-label="Generate .puzzle translation" title="Generate .puzzle translation">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M4 11V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.706.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-1"></path>
+                    <path d="M14 2v5a1 1 0 0 0 1 1h5"></path>
+                    <path d="M2 15h10"></path>
+                    <path d="m9 18 3-3-3-3"></path>
+                  </svg>
+                </button>
+                <button id="psImportCopyButton" class="source-action-button source-copy-button" type="button" aria-label="Copy converted .puzzle" title="Copy converted .puzzle" disabled>
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <rect x="8" y="8" width="14" height="14" rx="2"></rect>
+                    <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path>
+                  </svg>
+                </button>
+                <button id="psImportAddFileButton" class="source-action-button is-primary" type="button" aria-label="Add converted .puzzle file" title="Add converted .puzzle file" disabled>
+                  <svg viewBox="0 0 24 24" aria-hidden="true" class="lucide lucide-file-plus-corner-icon lucide-file-plus-corner">
+                    <path d="M11.35 22H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.706.706l3.588 3.588A2.4 2.4 0 0 1 20 8v5.35"></path>
+                    <path d="M14 2v5a1 1 0 0 0 1 1h5"></path>
+                    <path d="M14 19h6"></path>
+                    <path d="M17 16v6"></path>
+                  </svg>
+                </button>
+              </div>
+              <div class="ps-import-grid">
+                <label class="ps-import-field">
+                  <span>PuzzleScript</span>
+                  <textarea id="psImportSourceInput" spellcheck="false" autocomplete="off" autocapitalize="off"></textarea>
+                </label>
+                <label class="ps-import-field">
+                  <span>.puzzle</span>
+                  <textarea id="psImportOutput" spellcheck="false" autocomplete="off" autocapitalize="off" readonly></textarea>
+                </label>
+              </div>
             </div>
-            <div class="ps-import-grid">
-              <label class="ps-import-field">
-                <span>PuzzleScript</span>
-                <textarea id="psImportSourceInput" spellcheck="false" autocomplete="off" autocapitalize="off"></textarea>
-              </label>
-              <label class="ps-import-field">
-                <span>.puzzle</span>
-                <textarea id="psImportOutput" spellcheck="false" autocomplete="off" autocapitalize="off" readonly></textarea>
-              </label>
-            </div>
+            <span id="psImportStatus" class="ps-import-status tool-feedback-bar" aria-live="polite"></span>
           </div>
           <div id="docsPanel" class="docs-panel" hidden>
             <div class="docs-toolbar">
@@ -322,14 +327,15 @@
           </div>
           <div id="levelBuilder" class="level-builder" hidden>
             <div class="level-controls">
-              <div class="source-target-control">
+              <div class="source-target-control level-source-control">
                 <label>
                   <span>Levels</span>
                   <input id="levelNamespaceInput" type="text" value="" spellcheck="false" autocomplete="off" autocapitalize="off">
                 </label>
                 <label>
                   <span>Level</span>
-                  <input id="levelNameInput" type="text" value="new_level">
+                  <input id="levelNameInput" type="text" value="new_level" spellcheck="false" autocomplete="off" autocapitalize="off">
+                  <datalist id="levelNameOptions"></datalist>
                 </label>
               </div>
             </div>
@@ -356,7 +362,7 @@
               <div class="level-board-editor" aria-label="Editable level puzzle">
                 <button class="edge-add edge-add-top" type="button" data-level-edge="top" aria-label="Add row above">+</button>
                 <button class="edge-add edge-add-left" type="button" data-level-edge="left" aria-label="Add column left">+</button>
-                <div id="levelBoard" class="level-board board"></div>
+                <div id="levelBoard" class="level-board board" tabindex="0"></div>
                 <button class="edge-add edge-add-right" type="button" data-level-edge="right" aria-label="Add column right">+</button>
                 <button class="edge-add edge-add-bottom" type="button" data-level-edge="bottom" aria-label="Add row below">+</button>
               </div>
@@ -398,7 +404,8 @@
             <pre id="levelSourcePreview" class="level-source-preview source-line-preview" aria-label="Level source preview"></pre>
           </div>
           <div id="solverPanel" class="solver-panel" hidden>
-            <div class="solver-controls">
+            <div class="tool-pane-scroll">
+              <div class="solver-controls">
               <span class="solver-action-buttons" aria-label="Solver controls">
                 <button id="solveLevelButton" type="button" aria-label="Solve level" title="Solve level">
                   <svg class="solve-level-icon" viewBox="0 0 24 24" aria-hidden="true">
@@ -430,7 +437,6 @@
                   </button>
                 </span>
               </span>
-              <span id="levelSolveStatus" class="level-solve-status" aria-live="polite">Ready to solve</span>
               <div id="levelSolutionControls" class="level-solution-controls is-empty">
                 <span class="solution-seek-group">
                   <input id="solutionSeekInput" class="solution-seek-input" type="range" min="0" max="0" step="1" value="0" aria-label="Solution step" disabled>
@@ -447,15 +453,18 @@
                   </button>
                 </span>
               </div>
-            </div>
-            <div class="solver-board-wrap game-preview-scope">
-              <div id="solverBoardViewport" class="solver-board-viewport">
-                <div id="solverBoard" class="solver-board board" tabindex="0" aria-label="Solver state preview"></div>
+              </div>
+              <div class="solver-board-wrap game-preview-scope">
+                <div id="solverBoardViewport" class="solver-board-viewport">
+                  <div id="solverBoard" class="solver-board board" tabindex="0" aria-label="Solver state preview"></div>
+                </div>
               </div>
             </div>
+            <span id="levelSolveStatus" class="level-solve-status tool-feedback-bar" aria-live="polite">Ready to solve</span>
           </div>
           <div id="spriteBuilder" class="sprite-builder" hidden>
-            <div class="sprite-controls">
+            <div class="tool-pane-scroll">
+              <div class="sprite-controls">
               <div class="source-target-control sprite-source-target">
                 <label class="sprite-name-control">
                   <span>Name</span>
@@ -491,12 +500,12 @@
                   </div>
                 </div>
               </div>
-            </div>
-            <div id="spritePalette" class="sprite-palette" aria-label="Sprite character palette"></div>
-            <div class="sprite-board-wrap">
-              <div id="spriteBoard" class="sprite-board" aria-label="Editable sprite puzzle"></div>
-            </div>
-            <div class="sprite-toolbar" role="toolbar" aria-label="Sprite actions">
+              </div>
+              <div id="spritePalette" class="sprite-palette" aria-label="Sprite character palette"></div>
+              <div class="sprite-board-wrap">
+                <div id="spriteBoard" class="sprite-board" aria-label="Editable sprite puzzle"></div>
+              </div>
+              <div class="sprite-toolbar" role="toolbar" aria-label="Sprite actions">
               <button id="spriteRotateLeftButton" class="sprite-icon-button" type="button" aria-label="Rotate left" title="Rotate left">
                 <svg viewBox="0 0 24 24" aria-hidden="true">
                   <path d="M3 12a9 9 0 1 0 2.64-6.36L3 8"></path>
@@ -529,7 +538,7 @@
                   <path d="M22 12h-2"></path>
                 </svg>
               </button>
-              <button id="spriteFillButton" class="sprite-fill-button sprite-icon-button" type="button" aria-label="Fill sprite" title="Fill sprite">
+              <button id="spriteFillButton" class="sprite-fill-button sprite-icon-button" type="button" aria-label="Bucket fill connected area" aria-pressed="false" title="Bucket fill connected area">
                 <svg viewBox="0 0 24 24" aria-hidden="true">
                   <path d="m19 11-8-8-8.6 8.6a2 2 0 0 0 0 2.8l5.2 5.2a2 2 0 0 0 2.8 0L19 11Z"></path>
                   <path d="m5 2 5 5"></path>
@@ -546,8 +555,8 @@
                   <path d="M14 11v5"></path>
                 </svg>
               </button>
-            </div>
-            <div class="sprite-preview-panel">
+              </div>
+              <div class="sprite-preview-panel">
               <div class="source-action-group source-preview-actions sprite-source-actions" role="group" aria-label="Sprite source actions">
                 <button id="spriteExportButton" class="source-action-button source-copy-button" type="button" aria-label="Copy sprite" title="Copy sprite">
                   <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -573,11 +582,13 @@
                 </button>
               </div>
               <div id="spriteTextPreview" class="sprite-text-preview" aria-label="Sprite ASCII preview"></div>
-              <span id="spriteActionStatus" class="sprite-action-status" aria-live="polite"></span>
+              </div>
             </div>
+            <span id="spriteActionStatus" class="sprite-action-status tool-feedback-bar" aria-live="polite"></span>
           </div>
           <div id="sprite3dBuilder" class="sprite-builder sprite3d-builder" hidden>
-            <div class="sprite-controls">
+            <div class="tool-pane-scroll">
+              <div class="sprite-controls">
               <div class="source-target-control sprite-source-target">
                 <label class="sprite-name-control">
                   <span>Name</span>
@@ -613,12 +624,28 @@
                   </div>
                 </div>
               </div>
-            </div>
-            <div id="sprite3dPalette" class="sprite-palette sprite3d-palette" aria-label="3D sprite palette"></div>
-            <div class="sprite3d-workspace">
+              </div>
+              <div id="sprite3dPalette" class="sprite-palette sprite3d-palette" aria-label="3D sprite palette"></div>
+              <div class="sprite3d-workspace">
                 <div class="sprite-board-wrap sprite3d-slice-wrap">
                   <div id="sprite3dSliceBoard" class="sprite-board sprite3d-slice-board" aria-label="Editable 3D sprite slice"></div>
                   <div class="sprite-toolbar sprite3d-edit-actions" role="toolbar" aria-label="3D sprite edit actions">
+                    <div class="sprite3d-scope-toggle" role="group" aria-label="3D sprite edit scope">
+                      <span class="sprite3d-scope-toggle-label">Scope</span>
+                      <button id="sprite3dScopeSliceButton" class="sprite3d-scope-button sprite-icon-button is-active" type="button" data-sprite3d-scope-option="slice" aria-label="Edit scope: current slice" aria-pressed="true" title="Scope: current slice">
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                          <rect x="5" y="5" width="14" height="14" rx="1.8"></rect>
+                        </svg>
+                      </button>
+                      <button id="sprite3dScopeAllButton" class="sprite3d-scope-button sprite-icon-button" type="button" data-sprite3d-scope-option="all" aria-label="Edit scope: whole sprite" aria-pressed="false" title="Scope: whole sprite">
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                          <path d="M12 2.8 20 7.3v9.4l-8 4.5-8-4.5V7.3Z"></path>
+                          <path d="M4 7.3 12 12l8-4.7"></path>
+                          <path d="M12 12v9.2"></path>
+                        </svg>
+                      </button>
+                    </div>
+                    <div class="sprite3d-action-row" role="group" aria-label="3D sprite edit commands">
                     <button id="sprite3dRotatePlaneLeftButton" class="sprite-icon-button" type="button" aria-label="Rotate current plane counterclockwise" title="Rotate current plane counterclockwise">
                       <svg viewBox="0 0 24 24" aria-hidden="true">
                         <path d="M3 12a9 9 0 1 0 2.64-6.36L3 8"></path>
@@ -665,13 +692,7 @@
                         <path d="M12 11v6"></path>
                       </svg>
                     </button>
-                    <span class="sprite3d-edit-separator" aria-hidden="true"></span>
-                    <button id="sprite3dScopeButton" class="sprite3d-scope-button sprite-icon-button" type="button" aria-label="Edit scope: current 2D slice" title="2D scope: affect current slice">
-                      <svg viewBox="0 0 24 24" aria-hidden="true">
-                        <rect x="5" y="5" width="14" height="14" rx="1.8"></rect>
-                      </svg>
-                    </button>
-                    <button id="sprite3dFillButton" class="sprite-fill-button sprite3d-fill-button sprite-icon-button" type="button" aria-label="Fill current 2D slice" title="Fill current 2D slice">
+                    <button id="sprite3dFillButton" class="sprite-fill-button sprite3d-fill-button sprite-icon-button" type="button" aria-label="Bucket fill current slice connected component" aria-pressed="false" title="Bucket fill current slice connected component">
                       <svg viewBox="0 0 24 24" aria-hidden="true">
                         <path d="m19 11-8-8-8.6 8.6a2 2 0 0 0 0 2.8l5.2 5.2a2 2 0 0 0 2.8 0L19 11Z"></path>
                         <path d="m5 2 5 5"></path>
@@ -681,36 +702,13 @@
                     </button>
                     <button id="sprite3dClearButton" class="sprite-clear-button sprite3d-clear-button sprite-icon-button" type="button" aria-label="Clear current 2D slice" title="Clear current 2D slice">
                       <svg viewBox="0 0 24 24" aria-hidden="true">
-                        <path d="M18 6 6 18"></path>
-                        <path d="m6 6 12 12"></path>
+                        <path d="M3 6h18"></path>
+                        <path d="M8 6V4h8v2"></path>
+                        <path d="M19 6l-1 14H6L5 6"></path>
+                        <path d="M10 11v5"></path>
+                        <path d="M14 11v5"></path>
                       </svg>
                     </button>
-                  </div>
-                  <div class="sprite3d-slice-axis-control" role="group" aria-label="3D sprite slice and axis">
-                    <span class="sprite3d-layer-axis-label">Slices</span>
-                    <button id="sprite3dPreviousSliceButton" class="sprite-icon-button" type="button" aria-label="Move to lower slice" title="Lower slice">
-                      <svg viewBox="0 0 24 24" aria-hidden="true">
-                        <path d="M15 18l-6-6 6-6"></path>
-                      </svg>
-                    </button>
-                    <span class="sprite3d-slice-value-wrap">
-                      <input id="sprite3dSliceValue" class="sprite3d-layer-axis-value" type="number" min="1" max="5" value="1" inputmode="numeric" aria-label="Current 3D sprite slice">
-                      <span class="sprite3d-slice-total-separator" aria-hidden="true">/</span>
-                      <span id="sprite3dSliceTotal" class="sprite3d-slice-total">5</span>
-                    </span>
-                    <button id="sprite3dNextSliceButton" class="sprite-icon-button" type="button" aria-label="Move to higher slice" title="Higher slice">
-                      <svg viewBox="0 0 24 24" aria-hidden="true">
-                        <path d="M9 18l6-6-6-6"></path>
-                      </svg>
-                    </button>
-                    <span class="sprite3d-edit-separator" aria-hidden="true"></span>
-                    <span class="sprite3d-layer-axis-label">Axis</span>
-                    <div class="sprite3d-axis-control sprite3d-toolbar-axis" role="group" aria-label="3D sprite slice axis">
-                      <div class="sprite3d-axis-buttons">
-                        <button class="sprite3d-axis-button" type="button" data-sprite3d-axis="x" aria-pressed="false" title="Edit YZ slices">X</button>
-                        <button class="sprite3d-axis-button" type="button" data-sprite3d-axis="y" aria-pressed="false" title="Edit XZ slices">Y</button>
-                        <button class="sprite3d-axis-button is-active" type="button" data-sprite3d-axis="z" aria-pressed="true" title="Edit XY slices">Z</button>
-                      </div>
                     </div>
                   </div>
                   <div class="source-action-group source-preview-actions sprite-source-actions sprite3d-source-actions" role="group" aria-label="3D sprite source actions">
@@ -738,7 +736,6 @@
                     </button>
                   </div>
                   <pre id="sprite3dTextPreview" class="sprite-text-preview sprite3d-text-preview" aria-label="3D sprite source preview"></pre>
-                  <span id="sprite3dActionStatus" class="sprite-action-status" aria-live="polite"></span>
                 </div>
                 <div class="sprite3d-preview-column">
                   <div class="sprite3d-preview-wrap">
@@ -746,15 +743,15 @@
                     <div class="sprite3d-camera-controls" aria-label="3D preview camera controls">
                       <label>
                         <span title="yaw">Y</span>
-                        <button id="sprite3dCameraYawScrub" class="sprite3d-camera-scrub" type="button" data-sprite3d-camera="yaw" aria-label="Drag horizontally to adjust yaw" title="Drag horizontally to adjust yaw">340</button>
+                        <button id="sprite3dCameraYawScrub" class="sprite3d-camera-scrub" type="button" data-sprite3d-camera="yaw" aria-label="Drag vertically to adjust yaw" title="Drag vertically to adjust yaw">340</button>
                       </label>
                       <label>
                         <span title="pitch">P</span>
-                        <button id="sprite3dCameraPitchScrub" class="sprite3d-camera-scrub" type="button" data-sprite3d-camera="pitch" aria-label="Drag horizontally to adjust pitch" title="Drag horizontally to adjust pitch">28</button>
+                        <button id="sprite3dCameraPitchScrub" class="sprite3d-camera-scrub" type="button" data-sprite3d-camera="pitch" aria-label="Drag vertically to adjust pitch" title="Drag vertically to adjust pitch">28</button>
                       </label>
                       <label>
                         <span title="zoom">Z</span>
-                        <button id="sprite3dCameraZoomScrub" class="sprite3d-camera-scrub" type="button" data-sprite3d-camera="zoom" aria-label="Drag horizontally to adjust zoom" title="Drag horizontally to adjust zoom">1</button>
+                        <button id="sprite3dCameraZoomScrub" class="sprite3d-camera-scrub" type="button" data-sprite3d-camera="zoom" aria-label="Drag vertically to adjust zoom" title="Drag vertically to adjust zoom">1</button>
                       </label>
                       <button id="sprite3dResetCameraButton" class="sprite3d-preview-reset-button sprite-icon-button" type="button" aria-label="Reset 3D preview camera" title="Reset camera">
                         <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -766,23 +763,54 @@
                       </button>
                     </div>
                   </div>
+                  <div class="sprite3d-slice-axis-control" role="group" aria-label="3D sprite slice and axis">
+                    <span class="sprite3d-layer-axis-label">Slices</span>
+                    <button id="sprite3dPreviousSliceButton" class="sprite-icon-button" type="button" aria-label="Move to lower slice" title="Lower slice">
+                      <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M15 18l-6-6 6-6"></path>
+                      </svg>
+                    </button>
+                    <span class="sprite3d-slice-value-wrap" data-sprite3d-slice-scrub title="Drag horizontally to adjust slice">
+                      <input id="sprite3dSliceValue" class="sprite3d-layer-axis-value" type="number" min="1" max="5" value="1" inputmode="numeric" aria-label="Current 3D sprite slice">
+                      <span class="sprite3d-slice-total-separator" aria-hidden="true">/</span>
+                      <span id="sprite3dSliceTotal" class="sprite3d-slice-total">5</span>
+                    </span>
+                    <button id="sprite3dNextSliceButton" class="sprite-icon-button" type="button" aria-label="Move to higher slice" title="Higher slice">
+                      <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M9 18l6-6-6-6"></path>
+                      </svg>
+                    </button>
+                    <span class="sprite3d-layer-axis-label">Axis</span>
+                    <div class="sprite3d-axis-control sprite3d-toolbar-axis" role="group" aria-label="3D sprite slice axis">
+                      <div class="sprite3d-axis-buttons">
+                        <button class="sprite3d-axis-button" type="button" data-sprite3d-axis="x" aria-pressed="false" title="Edit YZ slices">X</button>
+                        <button class="sprite3d-axis-button" type="button" data-sprite3d-axis="y" aria-pressed="false" title="Edit XZ slices">Y</button>
+                        <button class="sprite3d-axis-button is-active" type="button" data-sprite3d-axis="z" aria-pressed="true" title="Edit XY slices">Z</button>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
+            <span id="sprite3dActionStatus" class="sprite-action-status tool-feedback-bar" aria-live="polite"></span>
+          </div>
           <div id="level3dBuilder" class="level-builder level3d-builder" hidden>
-            <div class="level-controls level3d-controls">
-              <label>
-                <span>Bundle</span>
-                <input id="level3dBundleInput" type="text" value="levels" spellcheck="false" autocomplete="off" autocapitalize="off">
-              </label>
-              <label>
-                <span>Name</span>
-                <input id="level3dNameInput" type="text" value="level_1" spellcheck="false" autocomplete="off" autocapitalize="off">
-              </label>
-              <span id="level3dSizeLabel" class="level3d-size-label">0 x 0 x 0</span>
-            </div>
-            <div id="level3dPalette" class="level-palette level3d-palette" aria-label="3D level palette"></div>
-            <div class="level3d-workspace">
+            <div class="tool-pane-scroll">
+              <div class="level-controls level3d-controls">
+              <div class="source-target-control level-source-control">
+                <label>
+                  <span>Levels</span>
+                  <input id="level3dBundleInput" type="text" value="levels" spellcheck="false" autocomplete="off" autocapitalize="off">
+                </label>
+                <label>
+                  <span>Level</span>
+                  <input id="level3dNameInput" type="text" value="level_1" spellcheck="false" autocomplete="off" autocapitalize="off">
+                  <datalist id="level3dNameOptions"></datalist>
+                </label>
+              </div>
+              </div>
+              <div id="level3dPalette" class="level-palette level3d-palette" aria-label="3D level palette"></div>
+              <div class="level3d-workspace">
               <div class="level3d-runtime-wrap">
                 <canvas
                   id="level3dStageCanvas"
@@ -792,6 +820,78 @@
                   tabindex="0"
                   aria-label="3D level stage preview"
                 ></canvas>
+                <div class="sprite3d-camera-controls level3d-preview-controls" aria-label="3D level preview controls">
+                  <label>
+                    <span title="yaw">Y</span>
+                    <button id="level3dCameraYawScrub" class="sprite3d-camera-scrub level3d-preview-scrub" type="button" data-level3d-preview="yaw" aria-label="Drag vertically to adjust yaw" title="Drag vertically to adjust yaw">15</button>
+                  </label>
+                  <label>
+                    <span title="pitch">P</span>
+                    <button id="level3dCameraPitchScrub" class="sprite3d-camera-scrub level3d-preview-scrub" type="button" data-level3d-preview="pitch" aria-label="Drag vertically to adjust pitch" title="Drag vertically to adjust pitch">55</button>
+                  </label>
+                  <label>
+                    <span title="zoom">Z</span>
+                    <button id="level3dCameraZoomScrub" class="sprite3d-camera-scrub level3d-preview-scrub" type="button" data-level3d-preview="zoom" aria-label="Drag vertically to adjust zoom" title="Drag vertically to adjust zoom">1</button>
+                  </label>
+                  <span class="level3d-preview-control-separator" aria-hidden="true"></span>
+                  <label>
+                    <span title="origin x">X</span>
+                    <button id="level3dOriginXScrub" class="sprite3d-camera-scrub level3d-preview-scrub" type="button" data-level3d-preview="originX" aria-label="Drag vertically to adjust origin x" title="Drag vertically to adjust origin x">0</button>
+                  </label>
+                  <label>
+                    <span title="origin y">Y</span>
+                    <button id="level3dOriginYScrub" class="sprite3d-camera-scrub level3d-preview-scrub" type="button" data-level3d-preview="originY" aria-label="Drag vertically to adjust origin y" title="Drag vertically to adjust origin y">0</button>
+                  </label>
+                  <label>
+                    <span title="origin z">Z</span>
+                    <button id="level3dOriginZScrub" class="sprite3d-camera-scrub level3d-preview-scrub" type="button" data-level3d-preview="originZ" aria-label="Drag vertically to adjust origin z" title="Drag vertically to adjust origin z">0</button>
+                  </label>
+                  <button id="level3dResetPreviewButton" class="sprite3d-preview-reset-button sprite-icon-button" type="button" aria-label="Reset 3D level preview view" title="Reset preview view">
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M21 12a9 9 0 0 1-15.4 6.36"></path>
+                      <path d="M3 12a9 9 0 0 1 15.4-6.36"></path>
+                      <path d="M18 2v4h-4"></path>
+                      <path d="M6 22v-4h4"></path>
+                    </svg>
+                  </button>
+                </div>
+                <span id="level3dSizeLabel" class="level-size">0 × 0 × 0</span>
+              </div>
+              <div class="level3d-layer-editor" aria-label="Editable 3D level layer">
+                <div class="level3d-layer-toolbar sprite3d-slice-axis-control" role="group" aria-label="3D level slice controls">
+                  <span class="sprite3d-layer-axis-label">Slice</span>
+                  <button id="level3dPreviousLayerButton" class="sprite-icon-button" type="button" aria-label="Move to lower 3D level slice" title="Lower slice">
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M15 18l-6-6 6-6"></path>
+                    </svg>
+                  </button>
+                  <span class="sprite3d-slice-value-wrap" data-level3d-slice-scrub title="Drag horizontally to adjust slice">
+                    <input id="level3dLayerInput" class="sprite3d-layer-axis-value" type="number" min="1" max="1" value="1" inputmode="numeric" aria-label="Current 3D level slice">
+                    <span class="sprite3d-slice-total-separator" aria-hidden="true">/</span>
+                    <span id="level3dLayerTotal" class="sprite3d-slice-total">1</span>
+                  </span>
+                  <button id="level3dNextLayerButton" class="sprite-icon-button" type="button" aria-label="Move to higher 3D level slice" title="Higher slice">
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M9 18l6-6-6-6"></path>
+                    </svg>
+                  </button>
+                </div>
+                <div id="level3dLayerBoard" class="level3d-layer-board" tabindex="0" aria-label="Editable top-down 3D level layer">
+                  <iframe
+                    id="level3dLayerFrame"
+                    class="level3d-layer-frame"
+                    title="Top-down 3D level layer"
+                    sandbox="allow-scripts"
+                    scrolling="no"
+                  ></iframe>
+                  <canvas
+                    id="level3dLayerOverlay"
+                    class="level3d-layer-overlay"
+                    width="960"
+                    height="520"
+                    aria-hidden="true"
+                  ></canvas>
+                </div>
               </div>
               <div class="level3d-source-panel">
                 <div class="source-action-group source-preview-actions level3d-source-actions" role="group" aria-label="3D level source actions">
@@ -819,9 +919,10 @@
                   </button>
                 </div>
                 <pre id="level3dSourcePreview" class="sprite-text-preview level3d-source-preview" aria-label="3D level source preview"></pre>
-                <span id="level3dActionStatus" class="sprite-action-status" aria-live="polite"></span>
+              </div>
               </div>
             </div>
+            <span id="level3dActionStatus" class="sprite-action-status tool-feedback-bar" aria-live="polite"></span>
           </div>
           <div id="soundsBuilder" class="sounds-builder" hidden>
             <div class="sounds-mode-switch" role="group" aria-label="Sounds generator mode">
@@ -960,6 +1061,7 @@
             </div>
             <pre id="soundsOutput" class="sounds-output" aria-live="polite"></pre>
           </div>
+          <span id="statusLabel" class="pane-status tool-feedback-bar" aria-live="polite"></span>
         </section>
       </section>
     </main>

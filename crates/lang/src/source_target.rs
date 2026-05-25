@@ -5,6 +5,7 @@ use crate::source::{
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SourceTargetKind {
     Level,
+    Level3d,
     Sprite,
     Sprite3d,
     Sounds,
@@ -14,6 +15,7 @@ impl SourceTargetKind {
     fn as_str(&self) -> &'static str {
         match self {
             Self::Level => "level",
+            Self::Level3d => "level3d",
             Self::Sprite => "sprite",
             Self::Sprite3d => "sprite3d",
             Self::Sounds => "sounds",
@@ -53,6 +55,7 @@ pub fn resolve_source_target(source: &str, cursor_offset: usize) -> Option<Sourc
     let cursor = cursor_offset.min(source.len());
     let context = scan_source_context(source);
     resolve_sounds_target(&context, cursor)
+        .or_else(|| resolve_level3d_target(source, &context, cursor))
         .or_else(|| resolve_level_target(source, &context, cursor))
         .or_else(|| resolve_sprite3d_target(source, &context, cursor))
         .or_else(|| resolve_sprite_target(source, &context, cursor))
@@ -172,8 +175,15 @@ fn resolve_level_target(
     context: &SourceContext,
     cursor: usize,
 ) -> Option<SourceTarget> {
+    let level3d_blocks = level3d_blocks(source, context);
     let mut level_index = 0usize;
     for (index, line) in context.lines.iter().enumerate() {
+        if level3d_blocks
+            .iter()
+            .any(|block| line.start > block.open_index && line.start < block.close_index)
+        {
+            continue;
+        }
         let Some(name) = level_name(line) else {
             continue;
         };
@@ -195,6 +205,54 @@ fn resolve_level_target(
             sound_kind: None,
             params: Vec::new(),
         });
+    }
+    None
+}
+
+fn resolve_level3d_target(
+    source: &str,
+    context: &SourceContext,
+    cursor: usize,
+) -> Option<SourceTarget> {
+    let mut level_index = 0usize;
+    for block in level3d_blocks(source, context) {
+        let bundle = block.bundle.clone();
+        let model = block.model.clone();
+        if cursor <= block.open_index || cursor >= block.close_index {
+            level_index += context
+                .lines
+                .iter()
+                .filter(|line| line.start > block.open_index && line.start < block.close_index)
+                .filter(|line| level_name(line).is_some())
+                .count();
+            continue;
+        }
+        for (index, line) in context.lines.iter().enumerate() {
+            if line.start <= block.open_index || line.start >= block.close_index {
+                continue;
+            }
+            let Some(name) = level_name(line) else {
+                continue;
+            };
+            let start = line.start;
+            let (end, body_start, body_end) = level_range(source, context, index);
+            let current_index = level_index;
+            level_index += 1;
+            if cursor < start || cursor > end {
+                continue;
+            }
+            return Some(SourceTarget {
+                kind: SourceTargetKind::Level3d,
+                name,
+                start,
+                end,
+                body_start: Some(body_start),
+                body_end: Some(body_end),
+                level_index: Some(current_index),
+                sound_kind: None,
+                params: vec![("bundle".to_string(), bundle), ("model".to_string(), model)],
+            });
+        }
     }
     None
 }
@@ -312,6 +370,49 @@ fn resolve_sprite_target(
 struct Sprite3dBlock {
     open_index: usize,
     close_index: usize,
+}
+
+#[derive(Clone, Debug)]
+struct Level3dBlock {
+    open_index: usize,
+    close_index: usize,
+    bundle: String,
+    model: String,
+}
+
+fn level3d_blocks(source: &str, context: &SourceContext) -> Vec<Level3dBlock> {
+    context
+        .lines
+        .iter()
+        .filter(|line| line.tokens.first().is_some_and(|token| token == "levels3"))
+        .filter_map(|line| {
+            let header_end = line_end(line);
+            let open_index = source[line.start..header_end]
+                .find('{')
+                .map(|offset| line.start + offset)?;
+            let close_index = find_matching_brace(source, open_index)?;
+            let (bundle, model) = parse_levels3_tokens(&line.tokens);
+            Some(Level3dBlock {
+                open_index,
+                close_index,
+                bundle,
+                model,
+            })
+        })
+        .collect()
+}
+
+fn parse_levels3_tokens(tokens: &[String]) -> (String, String) {
+    let bundle = tokens
+        .get(1)
+        .filter(|token| token.as_str() != "of" && token.as_str() != "{")
+        .cloned()
+        .unwrap_or_else(|| "levels".to_string());
+    let model = tokens
+        .windows(2)
+        .find_map(|pair| (pair[0] == "of").then(|| pair[1].clone()))
+        .unwrap_or_default();
+    (clean_name_token(&bundle), clean_name_token(&model))
 }
 
 fn resolve_sprite3d_target(
@@ -721,6 +822,30 @@ level microban_02
         assert_eq!(target.kind, SourceTargetKind::Level);
         assert_eq!(target.name, "microban_01");
         assert_eq!(target.level_index, Some(0));
+    }
+
+    #[test]
+    fn resolves_levels3_body_to_3d_level() {
+        let source = r#"
+levels3 basic of push3d {
+level push3d_01 {
+___
+_P_
+}
+}
+"#;
+        let cursor = source.find("_P_").unwrap();
+        let target = resolve_source_target(source, cursor).unwrap();
+
+        assert_eq!(target.kind, SourceTargetKind::Level3d);
+        assert_eq!(target.name, "push3d_01");
+        assert_eq!(target.level_index, Some(0));
+        assert!(
+            target
+                .params
+                .iter()
+                .any(|param| param == &("bundle".to_string(), "basic".to_string()))
+        );
     }
 
     #[test]

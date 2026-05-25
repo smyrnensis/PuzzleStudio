@@ -147,7 +147,7 @@ marker:right
 
 `up` / `down` / `left` / `right` は標準の意味入力でもあり、direction mapping も既定で用意される。
 
-これらは physical key ではなく、key を読み替えた semantic input である。キーやタッチなどの物理入力との対応は model の `inputs` table で定義し、puzzle rule からは `transition(state, input)` の transition context として参照する。
+これらは physical key ではなく、key を読み替えた semantic input である。キーやタッチなどの物理入力との対応は puzzle の `inputs` table で定義し、puzzle rule からは `transition(state, input)` の transition context として参照する。
 
 別名を使いたい場合だけ、`direction` で標準方向への alias を定義する。
 
@@ -172,7 +172,7 @@ direction <alias> <up | down | left | right>
 
 すべての input が方向を持つわけではない。`right` / `left` などは方向付き input なので `input directions [ A | ]` の orientation として使えるが、`enter` や `restart` のような非方向 input は名前としては存在しても orientation にはならない。非方向 input で `input directions [ ... ]` 型の pattern を評価すると match しない。
 
-`restart` は標準の非方向 input として定義済みで、物理 key `r` は既定でこの input に対応する。model rule に `restart` input の明示 handler がなければ、`restart -> restart` が暗黙に追加される。
+`restart` は標準の非方向 input として定義済みで、物理 key `r` は既定でこの input に対応する。puzzle rule に `restart` input の明示 handler がなければ、`restart -> restart` が暗黙に追加される。
 
 追加 input は `input <name>` で定義する。方向付き input にしたい場合だけ direction を付ける。
 
@@ -188,7 +188,7 @@ button "Restart" -> playing.restart
 button "Restart Board" -> board.restart
 ```
 
-物理入力の対応は model の `inputs` block に書く。
+物理入力の対応は puzzle の `inputs` block に書く。
 
 ```txt
 inputs {
@@ -200,7 +200,7 @@ restart <- r
 }
 ```
 
-`inputs` は `<input> <- <key...>` の形で、raw key を model semantic input に割り当てる。`my_restart <- r` のように書くと、既定の `restart <- r` は shadow され、`r` は `my_restart` として解釈される。
+`inputs` は `<input> <- <key...>` の形で、raw key を puzzle semantic input に割り当てる。`my_restart <- r` のように書くと、既定の `restart <- r` は shadow され、`r` は `my_restart` として解釈される。
 
 `rules` 内では `<input> -> <effect>` を `if input == <input> { <effect> }` の sugar として書ける。
 
@@ -394,6 +394,8 @@ query cargo_count = count(cargo)
 query pressed_buttons = count([ Button Box ])
 query any_cargo = exists(cargo)
 query has_pressed_button = exists([ Button Box ])
+query no_open_doors = none(OpenDoor)
+query no_pressed_buttons = none([ Button Box ])
 ```
 
 ```txt
@@ -409,7 +411,13 @@ count(selector)
 count(pattern)
 exists(selector)
 exists(pattern)
+none(selector)
+none(pattern)
+some(selector)
+some(pattern)
 ```
+
+`exists` / `none` は boolean query として 1 または 0 を返す。意味としては `exists(matcher)` が「1つ以上ある」、`none(matcher)` が「1つもない」だが、実装は `count(matcher)` を計算して比較するのではなく、match が見つかった時点で止まる query primitive として扱う。`some(...)` は `exists(...)` の PuzzleScript 互換 alias。
 
 `if` では query 名、または query expression を直接参照できる。
 
@@ -418,26 +426,31 @@ if pressed_buttons == 2
 if has_pressed_button
 if count(cargo) == 2
 if exists(cargo)
+if none([ Goal no Box ])
 ```
 
 ### `win_conditions`
 
 ```txt
 win_conditions {
-some Goal
-all Goal on Box
+exists(Goal)
+none([ Goal no Box ])
 }
 ```
 
 `win_conditions` は loaded game metadata として扱われる。定義済みの named condition として puzzle rule の `if` から参照することもできる。
 
 ```txt
+exists(<selector-or-pattern>)
+none(<selector-or-pattern>)
 some <selector>
+no <selector-or-pattern>
 all <selector> on <selector>
 some <selector> on <selector>
 ```
 
-`some Goal` と `all Goal on Box` は「Goal が存在し、すべての Goal に Box が乗っていればクリア」という意味になる。
+`exists(Goal)` と `none([ Goal no Box ])` は「Goal が存在し、Box が乗っていない Goal がなければクリア」という意味になる。PuzzleScript 互換の読みやすい sugar として `some Goal` / `all Goal on Box` も受け付ける。
+`all <selector> on <selector>` の右辺は selector だけを受け取る。方向つきの空間関係は `all Goal on down [ Box | Goal ]` のように混ぜず、`exists` / `none` または `some` / `no` の pattern 条件で書く。たとえば 3D で「Box が上にない Goal がない」は `none(down [ no Box | Goal ])` と書く。
 
 ### Levels
 
@@ -493,7 +506,8 @@ P.
 }
 ```
 
-play UI では、クリア後に `n` で次 level に進む。
+通常のクリア後進行は puzzle rule effect の `next_level` や model lifecycle が所有する。
+play UI の固定キーとして `n` が次 level に進めるわけではない。
 
 level body には、その level の puzzle parse だけに有効な局所 `legend` を置ける。
 
@@ -1357,9 +1371,11 @@ legend {
 }
 ```
 
-`legend` は `levels` 直下で level/render 用の文字対応を定義する。`model puzzle` 直下の `legend` は読まない。
+`legend` は `levels` 直下で level/render 用の文字対応を定義する。`puzzle` 直下の `legend` は読まない。
 
 `empty` は object ではなく、何もない cell を表す予約語。
+
+3D の `levels3` では、`.` は既定の empty 文字なので `legend` に書かなくてよい。`_ = empty` のような `empty` 行は、その既定 empty 文字を別文字へ上書きするためのもの。上書き後に `.` を floor などとして使う場合は、`. = Floor` のように通常の `legend` 行で明示する。
 
 右辺は既存の object / schema / group / layer tag selector に解決される必要がある。`legend` は新しい object を定義しない。未知の名前は parse error。
 
@@ -1537,17 +1553,17 @@ step sokoban
 
 `puzzle sokoban` は scene-local な puzzle state slot を model と同じ名前で定義する。複数 instance が必要な場合は `sokoban1 = puzzle sokoban` のように明示名を付けられるが、これは advanced な形として扱う。
 
-scene は 2D / 3D model の違いを直接所有しない。scene が所有するのは root layout、component tree、入力、遷移で、model の違いは model window component に閉じる。`view size 720 540 { ... }` は 2D board でも 3D board でも同じ root scene size を表す。
+scene は 2D / 3D model の違いを直接所有しない。scene が所有するのは root layout、component tree、入力、遷移で、model の違いは model window component に閉じる。`view size 4 3 { ... }` は 2D board でも 3D board でも同じ 4:3 の root scene を表す。`size` は pixel ではなく整数比率 / 論理単位で、HTML では利用可能領域に fit し、実寸は theme が決める。`align` を省略した場合は中央揃えになる。
 
 ```txt
 scene playing {
 state {
 puzzle sokoban
 }
-view size 720 540 {
-column gap 12 align center top {
+view size 4 3 {
+column gap 1 align center top {
 sokoban
-row gap 8 {
+row gap 1 {
 button "Restart" -> sokoban.restart
 button "Levels" -> goto level_select
 }
@@ -1566,10 +1582,10 @@ scene playing3d {
 state {
 board = puzzle3 push3d
 }
-view size 720 540 {
-column gap 12 align center top {
+view size 4 3 {
+column gap 1 align center top {
 puzzle3 board
-row gap 8 {
+row gap 1 {
 button "Restart" -> board.restart
 button "Levels" -> goto level_select
 }
@@ -1581,28 +1597,30 @@ button "Levels" -> goto level_select
 3D camera の初期 view と操作可否は scene ではなく 3D model の `render` block に書く。
 
 ```txt
-model puzzle3 push3d {
+puzzle3 push3d {
 render {
 camera {
-yaw 34
-pitch 38
-zoom 1.1
-interactive_look true
-interactive_zoom true
+yaw = 34
+pitch = 38
+zoom = 1.1
+interactive_look = true
+interactive_zoom = true
 }
 grid {
-occupied_cells true
+occupied_cells = true
 }
-shade true
+shade = true
 }
 }
 ```
 
 `interactive_look` は pointer drag で視線方向を変える設定、`interactive_zoom` は wheel/pinch 系の zoom 操作を許す設定である。これは `input` 名ではなく、`puzzle3` component が自分の表示 box 内で始まった raw pointer gesture を camera view state に使ってよいという許可である。model `rules` の `if input == ...` には渡らず、undo/restart/transition state にも入らない。旧 `debug_camera` や `camera_yaw` 系は新しい例では使わない。
 
-`grid { occupied_cells true }` は object が存在する cell の外周 edge を表示する読み取り補助。floor や volume の追加ではなく、level、collision、rule、win condition には影響しない。省略時は off。
+3D model `rules` では `set yaw = <deg>` / `set pitch = <deg>` / `set zoom = <n>` を、rule 発火時の camera view-state 更新として書ける。`reset_camera` は camera view を `render { camera { ... } }` の初期値に戻す。これは盤面 state ではなく表示 command なので、solver、win condition、undo/restart の state には入らない。
 
-`render { shade false }` は 3D sprite voxel の面ごとの明暗付けを無効にする表示設定。sprite data や puzzle state には影響しない。省略時は on。
+`grid { occupied_cells = true }` は object が存在する cell の外周 edge を表示する読み取り補助。floor や volume の追加ではなく、level、collision、rule、win condition には影響しない。省略時は off。
+
+`render { shade = false }` は 3D sprite voxel の面ごとの明暗付けを無効にする表示設定。sprite data や puzzle state には影響しない。省略時は on。
 
 Canonical な generic scene component は `title`、`subtitle`、`text`、`button`、`row`、`column`、`box`、`for`、`level_menu`、`menu`。Model window component は `puzzle` と `puzzle3`。`view` は component ではなく scene root layout block。`panel` は component keyword ではない。
 
@@ -1710,7 +1728,7 @@ button "Back" -> back
 button level.label -> playing.goto level
 ```
 
-`box` / `row` / `column` は view component を入れ子にする layout primitive。`box` は純粋な配置用の矩形で、背景・枠線・装飾をデフォルトでは持たない。renderer はこれを HTML 固有の DOM ではなく、構造化された view tree として受け取る。`panel` は layout primitive ではなく、canonical syntax では使わない。`view` / `box` / `row` / `column` は共通の layout header attribute として `size <w> <h>`、`gap <n>`、`align <x> [y]` を読める。scene root の標準サイズ指定は `view size 720 540 { ... }`。
+`box` / `row` / `column` は view component を入れ子にする layout primitive。`box` は純粋な配置用の矩形で、背景・枠線・装飾をデフォルトでは持たない。renderer はこれを HTML 固有の DOM ではなく、構造化された view tree として受け取る。`panel` は layout primitive ではなく、canonical syntax では使わない。`view` / `box` / `row` / `column` は共通の layout header attribute として `size <w> <h>`、`gap <n>`、`align <x> [y]` を読める。scene root の標準サイズ指定は `view size 4 3 { ... }`。`left` / `center` / `right` と `top` / `center` / `bottom` を組み合わせられ、指定しない場合は中央揃えになる。
 
 `for` は scene state collection の各 item から view node を生成する projection primitive。固定 component を並べる場合も、collection を表示する場合も、最終的には `row` / `column` の children として扱われる。level list には使わず、`level_menu` を使う。
 
@@ -1752,7 +1770,7 @@ restart <- r
 }
 ```
 
-`inputs` は owner-scoped な raw input source から semantic input への対応表。model 内では puzzle/model rules が読む input に変換し、scene 内では scene-wide shortcut や menu/title confirm が読む input に変換する。
+`inputs` は owner-scoped な raw input source から semantic input への対応表。puzzle 内では puzzle rules が読む input に変換し、scene 内では scene-wide shortcut や menu/title confirm が読む input に変換する。
 
 ```txt
 <input> <- <key> [<key> ...]

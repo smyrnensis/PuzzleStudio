@@ -76,7 +76,7 @@ pub enum SceneTransitionTrigger {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SceneComponent<Effect = SceneCommand, LabelExpr = SceneTextExpr, TextExpr = SceneTextExpr>
 {
-    ModelWindow(ModelWindowComponent),
+    Frame(FrameComponent),
     Title(SceneTextComponent<LabelExpr>),
     Subtitle(SceneTextComponent<LabelExpr>),
     Text(SceneTextComponent<TextExpr>),
@@ -92,10 +92,7 @@ pub enum SceneComponent<Effect = SceneCommand, LabelExpr = SceneTextExpr, TextEx
 impl<Effect, LabelExpr, TextExpr> SceneComponent<Effect, LabelExpr, TextExpr> {
     pub fn kind(&self) -> SceneComponentKind {
         match self {
-            Self::ModelWindow(component) => match component.model_kind {
-                ModelKind::Puzzle2d => SceneComponentKind::Puzzle,
-                ModelKind::Puzzle3d => SceneComponentKind::Puzzle3,
-            },
+            Self::Frame(_) => SceneComponentKind::Frame,
             Self::Title(_) => SceneComponentKind::Title,
             Self::Subtitle(_) => SceneComponentKind::Subtitle,
             Self::Text(_) => SceneComponentKind::Text,
@@ -133,7 +130,7 @@ impl<Effect, LabelExpr, TextExpr> SceneComponent<Effect, LabelExpr, TextExpr> {
 
     pub fn layout(&self) -> Option<&SceneLayout> {
         match self {
-            Self::ModelWindow(component) => Some(&component.layout),
+            Self::Frame(component) => Some(&component.layout),
             Self::Button(button) => Some(&button.layout),
             Self::Row(container) | Self::Column(container) | Self::Box(container) => {
                 Some(&container.layout)
@@ -147,7 +144,7 @@ impl<Effect, LabelExpr, TextExpr> SceneComponent<Effect, LabelExpr, TextExpr> {
 
     pub fn layout_mut(&mut self) -> Option<&mut SceneLayout> {
         match self {
-            Self::ModelWindow(component) => Some(&mut component.layout),
+            Self::Frame(component) => Some(&mut component.layout),
             Self::Button(button) => Some(&mut button.layout),
             Self::Row(container) | Self::Column(container) | Self::Box(container) => {
                 Some(&mut container.layout)
@@ -162,8 +159,7 @@ impl<Effect, LabelExpr, TextExpr> SceneComponent<Effect, LabelExpr, TextExpr> {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SceneComponentKind {
-    Puzzle,
-    Puzzle3,
+    Frame,
     Title,
     Subtitle,
     Text,
@@ -179,8 +175,7 @@ pub enum SceneComponentKind {
 impl SceneComponentKind {
     pub fn keyword(self) -> &'static str {
         match self {
-            Self::Puzzle => "puzzle",
-            Self::Puzzle3 => "puzzle3",
+            Self::Frame => "frame",
             Self::Title => "title",
             Self::Subtitle => "subtitle",
             Self::Text => "text",
@@ -196,8 +191,7 @@ impl SceneComponentKind {
 
     pub fn from_keyword(value: &str) -> Option<Self> {
         Some(match value {
-            "puzzle" => Self::Puzzle,
-            "puzzle3" => Self::Puzzle3,
+            "frame" | "puzzle" | "puzzle3" => Self::Frame,
             "title" => Self::Title,
             "subtitle" => Self::Subtitle,
             "text" => Self::Text,
@@ -231,16 +225,10 @@ pub const GENERIC_SCENE_COMPONENT_KINDS: &[SceneComponentKind] = &[
 ];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ModelWindowComponent {
-    pub model_kind: ModelKind,
+pub struct FrameComponent {
+    pub kind: String,
     pub source: String,
     pub layout: SceneLayout,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum ModelKind {
-    Puzzle2d,
-    Puzzle3d,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -300,6 +288,8 @@ impl SceneForSource {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LevelMenuComponent<Effect = SceneCommand, Expr = SceneTextExpr> {
+    pub source: Option<String>,
+    pub action: Option<Effect>,
     pub show_index: bool,
     pub show_cleared: bool,
     pub columns: Option<u16>,
@@ -312,6 +302,8 @@ pub struct LevelMenuComponent<Effect = SceneCommand, Expr = SceneTextExpr> {
 impl<Effect, Expr> Default for LevelMenuComponent<Effect, Expr> {
     fn default() -> Self {
         Self {
+            source: None,
+            action: None,
             show_index: false,
             show_cleared: false,
             columns: None,
@@ -471,6 +463,88 @@ impl std::fmt::Display for SceneBlockParseError {
 }
 
 impl std::error::Error for SceneBlockParseError {}
+
+pub trait SceneBlockHandler {
+    type Error: From<SceneBlockParseError>;
+
+    fn parse_state_block(&mut self, lines: &[String], start: usize) -> Result<usize, Self::Error> {
+        let _ = lines;
+        Err(SceneBlockParseError::new(&lines[start], "unknown scene directive state").into())
+    }
+
+    fn parse_view_block(&mut self, lines: &[String], start: usize) -> Result<usize, Self::Error>;
+
+    fn parse_inputs_block(&mut self, lines: &[String], start: usize) -> Result<usize, Self::Error> {
+        let _ = lines;
+        Err(SceneBlockParseError::new(&lines[start], "unknown scene directive inputs").into())
+    }
+
+    fn parse_keys_block(&mut self, lines: &[String], start: usize) -> Result<usize, Self::Error> {
+        let _ = lines;
+        Err(SceneBlockParseError::new(&lines[start], "unknown scene directive keys").into())
+    }
+
+    fn parse_rules_block(&mut self, lines: &[String], start: usize) -> Result<usize, Self::Error> {
+        let _ = lines;
+        Err(SceneBlockParseError::new(&lines[start], "unknown scene directive rules").into())
+    }
+
+    fn parse_scene_start_block(
+        &mut self,
+        lines: &[String],
+        start: usize,
+    ) -> Result<usize, Self::Error> {
+        let _ = lines;
+        Err(
+            SceneBlockParseError::new(&lines[start], "unknown scene directive on_scene_start")
+                .into(),
+        )
+    }
+
+    fn parse_inline_directive(
+        &mut self,
+        lines: &[String],
+        start: usize,
+    ) -> Result<usize, Self::Error>;
+}
+
+pub fn parse_scene_block_with_handler<Handler>(
+    lines: &[String],
+    start: usize,
+    scene_name: &str,
+    syntax: SceneBlockSyntax,
+    handler: &mut Handler,
+) -> Result<usize, Handler::Error>
+where
+    Handler: SceneBlockHandler,
+{
+    let mut index = start;
+    while index < lines.len() {
+        let line = &lines[index];
+        if line == syntax.close_token() {
+            return Ok(index + 1);
+        }
+        if line.is_empty() {
+            index += 1;
+            continue;
+        }
+        let keyword = line.split_whitespace().next().unwrap_or("");
+        index = match keyword {
+            "state" => handler.parse_state_block(lines, index)?,
+            "view" => handler.parse_view_block(lines, index)?,
+            "inputs" => handler.parse_inputs_block(lines, index)?,
+            "keys" => handler.parse_keys_block(lines, index)?,
+            "rules" => handler.parse_rules_block(lines, index)?,
+            "on_scene_start" => handler.parse_scene_start_block(lines, index)?,
+            _ => handler.parse_inline_directive(lines, index)?,
+        };
+    }
+    Err(SceneBlockParseError::new(
+        "",
+        format!("scene {scene_name} block missing {}", syntax.close_token()),
+    )
+    .into())
+}
 
 pub fn parse_scene_layout_header(
     line: &str,
@@ -653,11 +727,11 @@ mod tests {
         }
         assert_eq!(
             SceneComponentKind::from_keyword("puzzle"),
-            Some(SceneComponentKind::Puzzle)
+            Some(SceneComponentKind::Frame)
         );
         assert_eq!(
             SceneComponentKind::from_keyword("puzzle3"),
-            Some(SceneComponentKind::Puzzle3)
+            Some(SceneComponentKind::Frame)
         );
         assert_eq!(SceneComponentKind::from_keyword("panel"), None);
     }
@@ -697,18 +771,18 @@ mod tests {
 
     #[test]
     fn component_layout_helpers_expose_layout_owned_components() {
-        let mut component = SceneComponent::<SceneCommand>::ModelWindow(ModelWindowComponent {
-            model_kind: ModelKind::Puzzle3d,
+        let mut component = SceneComponent::<SceneCommand>::Frame(FrameComponent {
+            kind: "puzzle3".to_string(),
             source: "board".to_string(),
             layout: SceneLayout::default(),
         });
 
-        component.layout_mut().unwrap().size = Some(SceneSize::new(720, 540));
+        component.layout_mut().unwrap().size = Some(SceneSize::new(4, 3));
 
-        assert_eq!(component.kind(), SceneComponentKind::Puzzle3);
+        assert_eq!(component.kind(), SceneComponentKind::Frame);
         assert_eq!(
             component.layout().and_then(|layout| layout.size),
-            Some(SceneSize::new(720, 540))
+            Some(SceneSize::new(4, 3))
         );
 
         let menu = SceneComponent::<SceneCommand>::Menu(MenuInstance {
@@ -759,7 +833,7 @@ mod tests {
     #[test]
     fn parses_brace_delimited_component_blocks_and_layout_headers() {
         let lines = vec![
-            "view size 720 540 {".to_string(),
+            "view size 4 3 {".to_string(),
             "box align left top {".to_string(),
             "leaf".to_string(),
             "}".to_string(),
@@ -767,7 +841,7 @@ mod tests {
         ];
         let layout =
             parse_scene_layout_header(&lines[0], "view", SceneBlockSyntax::Braces).unwrap();
-        assert_eq!(layout.size, Some(SceneSize::new(720, 540)));
+        assert_eq!(layout.size, Some(SceneSize::new(4, 3)));
 
         let mut parse_leaf =
             |lines: &[String], index: usize| -> Result<(usize, String), SceneBlockParseError> {

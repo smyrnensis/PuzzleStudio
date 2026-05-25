@@ -2773,7 +2773,7 @@ fn component_has_level_menu(component: &SceneComponent) -> bool {
         | SceneComponent::Column(container)
         | SceneComponent::Box(container) => container.children.iter().any(component_has_level_menu),
         SceneComponent::For(for_view) => for_view.children.iter().any(component_has_level_menu),
-        SceneComponent::ModelWindow(_)
+        SceneComponent::Frame(_)
         | SceneComponent::Title(_)
         | SceneComponent::Subtitle(_)
         | SceneComponent::Text(_)
@@ -2926,7 +2926,7 @@ mod tests {
         let loaded = parse_game(
             r#"
 title again_runtime
-model puzzle default {
+puzzle default {
 layers 1
 empty .
 object Before 0
@@ -2967,7 +2967,7 @@ B
         let loaded = parse_game(
             r#"
 title again_effect
-model puzzle default {
+puzzle default {
 layers 1
 empty .
 object Before 0
@@ -2998,7 +2998,7 @@ A
         let loaded = parse_game(
             r#"
 title win_effect
-model puzzle default {
+puzzle default {
 layers {
 floor = Exit
 actor = Player
@@ -3029,7 +3029,7 @@ X
         let loaded = parse_game(
             r#"
 title win_effect_runtime
-model puzzle default {
+puzzle default {
 layers {
 floor = Exit
 marker = Cleared
@@ -3071,7 +3071,7 @@ P
         parse_game(
             r#"
 title transition_fixture
-model puzzle sokoban {
+puzzle sokoban {
 layers {
 floor = Goal
 actor = Player Box Wall
@@ -3157,7 +3157,7 @@ text "Level Select"
             r#"
 title scene_var_condition
 
-model puzzle default {
+puzzle default {
 layers 2
 empty .
 
@@ -3210,7 +3210,7 @@ text "moved"
         let loaded = parse_game(
             r#"
 title scene_start_fixture
-model puzzle default {
+puzzle default {
 persistent var moves = 0
 
 layers 1
@@ -3266,7 +3266,7 @@ title rule_sfx_fixture
 sounds {
 sfx push seed=push01 type=jump
 }
-model puzzle default {
+puzzle default {
 layers 1
 empty .
 object Player 0
@@ -3306,7 +3306,7 @@ title rule_do_sfx_fixture
 sounds {
 sfx tick seed=tick01 type=jump
 }
-model puzzle default {
+puzzle default {
 layers 1
 empty .
 object Player 0
@@ -3344,7 +3344,7 @@ P
             r#"
 title rule_wait_fixture
 default_wait_time = 300ms
-model puzzle default {
+puzzle default {
 layers 1
 empty .
 object Player 0
@@ -3384,7 +3384,7 @@ P
             r#"
 title scene_message_fixture
 var hint = "Push the box"
-model puzzle default {
+puzzle default {
 layers 1
 empty .
 object Player 0
@@ -3424,7 +3424,7 @@ message hint
             r#"
 title level_name_condition_message
 var hint = "First level only"
-model puzzle default {
+puzzle default {
 layers 1
 empty .
 object Player 0
@@ -3476,7 +3476,7 @@ message hint
             r#"
 title puzzle_message_fixture
 var hint = "Found"
-model puzzle default {
+puzzle default {
 layers {
 actor = Player
 floor = Goal
@@ -3530,6 +3530,40 @@ text "Playing"
     }
 
     #[test]
+    fn render_ascii_top_uses_the_top_layer_char_for_overlaps() {
+        let loaded = parse_game(
+            r#"
+title overlap_render
+puzzle default {
+layers {
+floor = Floor
+target = Goal
+solid = Box
+}
+rules {
+}
+levels {
+legend {
+. = empty
+F = Floor
+G = Goal
+B = Box
+* = Floor Goal Box
+}
+*
+}
+}
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            render_ascii_top(&loaded.levels[0].initial_state, &loaded.legend),
+            "B"
+        );
+    }
+
+    #[test]
     fn session_supports_undo_redo_and_restart() {
         let source = include_str!("../../../games/spec_2d/game.puzzle");
         let loaded = parse_game(source).unwrap();
@@ -3567,7 +3601,7 @@ text "Playing"
         let loaded = parse_game(
             r#"
 title progress_fixture
-model puzzle default {
+puzzle default {
 persistent var moves = 0
 
 layers 1
@@ -3729,7 +3763,7 @@ P
             r#"
 title next_level_target_scene
 
-model puzzle board {
+puzzle board {
 layers {
 floor = Goal
 actor = Box Player
@@ -3799,7 +3833,7 @@ if board.win_conditions -> board.next_level
             r#"
 title persistent_history
 
-model puzzle default {
+puzzle default {
 persistent var cleared = false
 
 layers 1
@@ -3856,7 +3890,7 @@ board.rules
         let source = r#"
 title puzzle_load_reset
 
-model puzzle default {
+puzzle default {
 layers 2
 empty .
 object Player 1
@@ -3951,7 +3985,7 @@ board.rules
             r#"
 title cancel_screen_transition
 
-model puzzle default {
+puzzle default {
 layers 2
 empty .
 
@@ -4116,7 +4150,7 @@ text "clear"
             r#"
 title sequence_saved_puzzle
 
-model puzzle default {
+puzzle default {
 var marks = 0
 
 layers {
@@ -4239,7 +4273,7 @@ goto hub
         let loaded = parse_game(
             r#"
 title level_clear_hook
-model puzzle sokoban {
+puzzle sokoban {
 layers {
 floor = Goal
 actor = Player Box Wall
@@ -4326,7 +4360,7 @@ text "done"
         let loaded = parse_game(
             r#"
 title scene_level_commands
-model puzzle default {
+puzzle default {
 layers 1
 empty .
 object Player 0
@@ -4391,7 +4425,7 @@ rules {
         let source = r#"
 title for_levels_rejected
 
-model puzzle default {
+puzzle default {
 layers 1
 empty .
 object Player 0
@@ -4437,7 +4471,7 @@ text level.label
         let source = r#"
 title level_menu_commands
 
-model puzzle default {
+puzzle default {
 layers 1
 empty .
 
@@ -4487,7 +4521,7 @@ level_menu
         let source = r#"
 title scene_level_resources
 
-model puzzle default {
+puzzle default {
 layers 1
 empty .
 
@@ -4550,7 +4584,7 @@ board = puzzle default
         let source = r#"
 title level_menu_matrix
 
-model puzzle default {
+puzzle default {
 layers 1
 empty .
 
@@ -4616,7 +4650,7 @@ wrap = true
         let source = r#"
 title level_menu_default_enter
 
-model puzzle default {
+puzzle default {
 layers 1
 empty .
 
@@ -4665,7 +4699,7 @@ level_menu
         let source = r#"
 title level_menu_buttons
 
-model puzzle default {
+puzzle default {
 layers 1
 empty .
 
@@ -4715,7 +4749,7 @@ button "Back" -> back
     fn enter_back_preserves_nested_screen_history_and_state() {
         let source = r#"
 title screen_history
-model puzzle default {
+puzzle default {
 layers 1
 empty .
 
@@ -4775,7 +4809,7 @@ text "C"
     fn persistent_scene_var_survives_scene_reset() {
         let source = r#"
 title persistent_scene_var
-model puzzle default {
+puzzle default {
 layers 1
 empty .
 
@@ -4830,7 +4864,7 @@ text tab
     fn runtime_ignores_scene_params() {
         let source = r#"
 title scene_param_rejection
-model puzzle default {
+puzzle default {
 layers 1
 empty .
 
@@ -4873,7 +4907,7 @@ text tab
     fn scene_visibility_and_focus_are_separate() {
         let source = r#"
 title screen_focus
-model puzzle default {
+puzzle default {
 layers 1
 empty .
 
@@ -4956,7 +4990,7 @@ text "Levels"
     fn session_initializes_screen_local_state() {
         let source = r#"
 title scene_state
-model puzzle default {
+puzzle default {
 layers 2
 empty .
 
@@ -5039,7 +5073,7 @@ Escape -> back
             r#"
 title rule_next_level
 
-model puzzle board {
+puzzle board {
 layers {
 floor = Goal
 actor = Box Player
@@ -5096,7 +5130,7 @@ board.rules
             r#"
 title condition_next_level
 
-model puzzle board {
+puzzle board {
 layers {
 floor = Goal
 actor = Box Player
@@ -5158,7 +5192,7 @@ board.rules
             r#"
 title runtime_level_start
 
-model puzzle board {
+puzzle board {
 layers 2
 empty .
 object Player 0
@@ -5220,7 +5254,7 @@ board.rules
             r#"
 title level_message_sugar
 
-model puzzle board {
+puzzle board {
 layers 1
 empty .
 object Player 0
@@ -5285,7 +5319,7 @@ board.rules
             r#"
 title title_level_start_boundary
 
-model puzzle board {
+puzzle board {
 layers 1
 empty .
 object Player 0
@@ -5345,7 +5379,7 @@ board.rules
             r#"
 title rule_next_level_turn_completion
 
-model puzzle board {
+puzzle board {
 persistent var clear_seen = false
 
 layers {

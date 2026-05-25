@@ -123,6 +123,26 @@ AI が生成したルールは、動いたというだけでは採用されな�
 
 たとえば、人間向けの記述文法は読みやすさを優先してよい。一方で、エンジンが扱うルールモデルは曖昧さを持たず、AI が差分編集しやすい構造であるべきである。
 
+### 編集可能面は public contract として外に出す
+
+エディタ、プレビュー、ランタイムの関係では、「内部を隠す」だけでは境界にならない。
+エディタが必要とする操作面が明示されていなければ、エディタは結局 runtime fixture、scene JSON、renderer state などの内部表現を読みに行き、内部変更に追従する壊れやすい依存を作る。
+
+したがって、エディタが正当に変更したいものは public contract として外に出す。
+たとえば 3D preview では、level、camera、grid などの preview 設定は runtime が明示的な更新 API として受け取り、エディタは runtime fixture 全体や scene/component の内部 schema を再構成しない。
+
+これは runtime を editor から完全に独立させるという意味ではない。
+むしろ逆で、editor が触るべき面を runtime 側の責任で定義することで、runtime は内部表現を自由に変えられ、editor は公開された control surface だけに依存できる。
+
+この原則に反する兆候は次の通りである。
+
+- エディタが preview HTML から runtime fixture を抜き出し、編集 state として再解釈している。
+- エディタが scene/component の renderer 向け JSON を書き換えて、preview の見た目を操作している。
+- runtime の内部 schema を変えると、編集対象の level や preview 設定まで壊れる。
+- 「内部だから直接触らないはず」という期待だけで、実際に使える public API がない。
+
+この場合の修正は、内部表現をさらに隠すことではなく、編集可能な面を小さく、名前付きで、テスト可能な contract として公開することである。
+
 ## ドキュメントの読者分離
 
 ドキュメントは、ユーザー向けと開発者向けを分けて書くべきである。

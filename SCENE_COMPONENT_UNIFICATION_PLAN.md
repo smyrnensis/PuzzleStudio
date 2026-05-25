@@ -137,7 +137,7 @@ Tasks:
 
 - Add canonical examples for mixed 2D/3D scenes using the same `scene`,
   `view`, `row`, `column`, and `box` forms.
-- Document that `view size 720 540 { ... }` is root scene layout, independent
+- Document that `view size 4 3 { ... }` is root scene logical layout, independent
   of whether the model window is 2D or 3D.
 - List canonical component keywords in one developer-facing place.
 - Mark legacy 3D `keys { ... }` as compatibility or schedule its removal in
@@ -303,7 +303,7 @@ Tasks:
 
 Validation:
 
-- Browser or Playwright check for a 2D scene with `view size 720 540`.
+- Browser or Playwright check for a 2D scene with `view size 4 3`.
 - Browser or Playwright check for a 3D scene with the same layout shape.
 - Component embed mode must remain a model-window contract; it must not cause a
   child scene to reinterpret its own scene layout inside the host component.

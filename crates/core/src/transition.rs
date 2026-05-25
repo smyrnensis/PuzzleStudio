@@ -674,6 +674,13 @@ fn eval_query_kind(context: &TransitionContext, state: &State, kind: &QueryKind)
                 0
             }
         }
+        QueryKind::NoneObjects(objects) => {
+            if objects.iter().any(|object| state.object_count(*object) > 0) {
+                0
+            } else {
+                1
+            }
+        }
         QueryKind::CountMatches(patterns) => patterns
             .iter()
             .map(|pattern| i64::from(count_pattern_matches(context.game, state, pattern)))
@@ -688,6 +695,16 @@ fn eval_query_kind(context: &TransitionContext, state: &State, kind: &QueryKind)
                 0
             }
         }
+        QueryKind::NoneMatches(patterns) => {
+            if patterns
+                .iter()
+                .any(|pattern| has_pattern_match(context.game, state, pattern))
+            {
+                0
+            } else {
+                1
+            }
+        }
         QueryKind::CountInputMatches(patterns) => patterns
             .iter()
             .filter(|(input, _)| *input == context.input)
@@ -700,6 +717,15 @@ fn eval_query_kind(context: &TransitionContext, state: &State, kind: &QueryKind)
                 1
             } else {
                 0
+            }
+        }
+        QueryKind::NoneInputMatches(patterns) => {
+            if patterns.iter().any(|(input, pattern)| {
+                *input == context.input && has_pattern_match(context.game, state, pattern)
+            }) {
+                0
+            } else {
+                1
             }
         }
     }

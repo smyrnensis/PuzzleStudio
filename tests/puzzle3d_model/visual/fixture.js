@@ -1,8 +1,9 @@
 window.Puzzle3DFixture = {
   "title": "Sokoban Literally in 3D",
+  "layerCount": 3,
   "size": { "width": 6, "depth": 7, "height": 2 },
   "camera": { "yawDegrees": 15, "pitchDegrees": 55, "zoom": 1.1 },
-  "settings": { "interactiveLook": false, "interactiveZoom": false },
+  "settings": { "interactiveLook": true, "interactiveZoom": true, "grid": { "visibility": 1, "occupied_cells": true }, "shade": true },
   "directions": {
     "up": { "dx": 0, "dy": 0, "dz": 1 },
     "down": { "dx": 0, "dy": 0, "dz": -1 },
@@ -16,15 +17,32 @@ window.Puzzle3DFixture = {
     "vertical": ["up", "down"]
   },
   "controls": {
-    "keys": {}
+    "keys": {
+      "ArrowLeft": "left",
+      "ArrowRight": "right",
+      "ArrowUp": "forward",
+      "ArrowDown": "backward",
+      "KeyA": "left",
+      "KeyD": "right",
+      "KeyW": "forward",
+      "KeyS": "backward",
+      "a": "left",
+      "d": "right",
+      "w": "forward",
+      "s": "backward",
+      "Left": "left",
+      "Right": "right",
+      "Up": "forward",
+      "Down": "backward"
+    }
   },
   "inputs": [{ "id": 0, "name": "left", "direction": "left" }, { "id": 1, "name": "right", "direction": "right" }, { "id": 2, "name": "up", "direction": "up" }, { "id": 3, "name": "down", "direction": "down" }, { "id": 4, "name": "forward", "direction": "forward" }, { "id": 5, "name": "backward", "direction": "backward" }],
-  "rules": [{ "id": 1, "application": "once", "guards": [{ "kind": "input_is", "input": 0 }], "pattern": { "cells": [{ "offset": { "dx": 0, "dy": 0, "dz": 0 }, "require": [3], "forbid": [] }, { "offset": { "dx": -1, "dy": 0, "dz": 0 }, "require": [4], "forbid": [] }, { "offset": { "dx": -2, "dy": 0, "dz": 0 }, "require": [], "forbid": [3, 4, 5] }] }, "writes": [{ "kind": "move", "fromOffset": { "dx": 0, "dy": 0, "dz": 0 }, "toOffset": { "dx": -1, "dy": 0, "dz": 0 }, "object": 3 }, { "kind": "move", "fromOffset": { "dx": -1, "dy": 0, "dz": 0 }, "toOffset": { "dx": -2, "dy": 0, "dz": 0 }, "object": 4 }] }, { "id": 2, "application": "once", "guards": [{ "kind": "input_is", "input": 1 }], "pattern": { "cells": [{ "offset": { "dx": 0, "dy": 0, "dz": 0 }, "require": [3], "forbid": [] }, { "offset": { "dx": 1, "dy": 0, "dz": 0 }, "require": [4], "forbid": [] }, { "offset": { "dx": 2, "dy": 0, "dz": 0 }, "require": [], "forbid": [3, 4, 5] }] }, "writes": [{ "kind": "move", "fromOffset": { "dx": 0, "dy": 0, "dz": 0 }, "toOffset": { "dx": 1, "dy": 0, "dz": 0 }, "object": 3 }, { "kind": "move", "fromOffset": { "dx": 1, "dy": 0, "dz": 0 }, "toOffset": { "dx": 2, "dy": 0, "dz": 0 }, "object": 4 }] }, { "id": 3, "application": "once", "guards": [{ "kind": "input_is", "input": 4 }], "pattern": { "cells": [{ "offset": { "dx": 0, "dy": 0, "dz": 0 }, "require": [3], "forbid": [] }, { "offset": { "dx": 0, "dy": 1, "dz": 0 }, "require": [4], "forbid": [] }, { "offset": { "dx": 0, "dy": 2, "dz": 0 }, "require": [], "forbid": [3, 4, 5] }] }, "writes": [{ "kind": "move", "fromOffset": { "dx": 0, "dy": 0, "dz": 0 }, "toOffset": { "dx": 0, "dy": 1, "dz": 0 }, "object": 3 }, { "kind": "move", "fromOffset": { "dx": 0, "dy": 1, "dz": 0 }, "toOffset": { "dx": 0, "dy": 2, "dz": 0 }, "object": 4 }] }, { "id": 4, "application": "once", "guards": [{ "kind": "input_is", "input": 5 }], "pattern": { "cells": [{ "offset": { "dx": 0, "dy": 0, "dz": 0 }, "require": [3], "forbid": [] }, { "offset": { "dx": 0, "dy": -1, "dz": 0 }, "require": [4], "forbid": [] }, { "offset": { "dx": 0, "dy": -2, "dz": 0 }, "require": [], "forbid": [3, 4, 5] }] }, "writes": [{ "kind": "move", "fromOffset": { "dx": 0, "dy": 0, "dz": 0 }, "toOffset": { "dx": 0, "dy": -1, "dz": 0 }, "object": 3 }, { "kind": "move", "fromOffset": { "dx": 0, "dy": -1, "dz": 0 }, "toOffset": { "dx": 0, "dy": -2, "dz": 0 }, "object": 4 }] }, { "id": 5, "application": "once", "guards": [{ "kind": "input_is", "input": 0 }], "pattern": { "cells": [{ "offset": { "dx": 0, "dy": 0, "dz": 0 }, "require": [3], "forbid": [] }, { "offset": { "dx": -1, "dy": 0, "dz": 0 }, "require": [], "forbid": [3, 4, 5] }] }, "writes": [{ "kind": "move", "fromOffset": { "dx": 0, "dy": 0, "dz": 0 }, "toOffset": { "dx": -1, "dy": 0, "dz": 0 }, "object": 3 }] }, { "id": 6, "application": "once", "guards": [{ "kind": "input_is", "input": 1 }], "pattern": { "cells": [{ "offset": { "dx": 0, "dy": 0, "dz": 0 }, "require": [3], "forbid": [] }, { "offset": { "dx": 1, "dy": 0, "dz": 0 }, "require": [], "forbid": [3, 4, 5] }] }, "writes": [{ "kind": "move", "fromOffset": { "dx": 0, "dy": 0, "dz": 0 }, "toOffset": { "dx": 1, "dy": 0, "dz": 0 }, "object": 3 }] }, { "id": 7, "application": "once", "guards": [{ "kind": "input_is", "input": 4 }], "pattern": { "cells": [{ "offset": { "dx": 0, "dy": 0, "dz": 0 }, "require": [3], "forbid": [] }, { "offset": { "dx": 0, "dy": 1, "dz": 0 }, "require": [], "forbid": [3, 4, 5] }] }, "writes": [{ "kind": "move", "fromOffset": { "dx": 0, "dy": 0, "dz": 0 }, "toOffset": { "dx": 0, "dy": 1, "dz": 0 }, "object": 3 }] }, { "id": 8, "application": "once", "guards": [{ "kind": "input_is", "input": 5 }], "pattern": { "cells": [{ "offset": { "dx": 0, "dy": 0, "dz": 0 }, "require": [3], "forbid": [] }, { "offset": { "dx": 0, "dy": -1, "dz": 0 }, "require": [], "forbid": [3, 4, 5] }] }, "writes": [{ "kind": "move", "fromOffset": { "dx": 0, "dy": 0, "dz": 0 }, "toOffset": { "dx": 0, "dy": -1, "dz": 0 }, "object": 3 }] }],
+  "rules": [{ "id": 1, "application": "once", "guards": [{ "kind": "input_is", "input": 0 }], "pattern": { "cells": [{ "offset": { "dx": 0, "dy": 0, "dz": 0 }, "require": [3], "forbid": [] }, { "offset": { "dx": -1, "dy": 0, "dz": 0 }, "require": [4], "forbid": [] }, { "offset": { "dx": -2, "dy": 0, "dz": 0 }, "require": [], "forbid": [3, 4, 5] }] }, "writes": [{ "kind": "move", "fromOffset": { "dx": 0, "dy": 0, "dz": 0 }, "toOffset": { "dx": -1, "dy": 0, "dz": 0 }, "object": 3 }, { "kind": "move", "fromOffset": { "dx": -1, "dy": 0, "dz": 0 }, "toOffset": { "dx": -2, "dy": 0, "dz": 0 }, "object": 4 }], "effects": [] }, { "id": 2, "application": "once", "guards": [{ "kind": "input_is", "input": 1 }], "pattern": { "cells": [{ "offset": { "dx": 0, "dy": 0, "dz": 0 }, "require": [3], "forbid": [] }, { "offset": { "dx": 1, "dy": 0, "dz": 0 }, "require": [4], "forbid": [] }, { "offset": { "dx": 2, "dy": 0, "dz": 0 }, "require": [], "forbid": [3, 4, 5] }] }, "writes": [{ "kind": "move", "fromOffset": { "dx": 0, "dy": 0, "dz": 0 }, "toOffset": { "dx": 1, "dy": 0, "dz": 0 }, "object": 3 }, { "kind": "move", "fromOffset": { "dx": 1, "dy": 0, "dz": 0 }, "toOffset": { "dx": 2, "dy": 0, "dz": 0 }, "object": 4 }], "effects": [] }, { "id": 3, "application": "once", "guards": [{ "kind": "input_is", "input": 4 }], "pattern": { "cells": [{ "offset": { "dx": 0, "dy": 0, "dz": 0 }, "require": [3], "forbid": [] }, { "offset": { "dx": 0, "dy": 1, "dz": 0 }, "require": [4], "forbid": [] }, { "offset": { "dx": 0, "dy": 2, "dz": 0 }, "require": [], "forbid": [3, 4, 5] }] }, "writes": [{ "kind": "move", "fromOffset": { "dx": 0, "dy": 0, "dz": 0 }, "toOffset": { "dx": 0, "dy": 1, "dz": 0 }, "object": 3 }, { "kind": "move", "fromOffset": { "dx": 0, "dy": 1, "dz": 0 }, "toOffset": { "dx": 0, "dy": 2, "dz": 0 }, "object": 4 }], "effects": [] }, { "id": 4, "application": "once", "guards": [{ "kind": "input_is", "input": 5 }], "pattern": { "cells": [{ "offset": { "dx": 0, "dy": 0, "dz": 0 }, "require": [3], "forbid": [] }, { "offset": { "dx": 0, "dy": -1, "dz": 0 }, "require": [4], "forbid": [] }, { "offset": { "dx": 0, "dy": -2, "dz": 0 }, "require": [], "forbid": [3, 4, 5] }] }, "writes": [{ "kind": "move", "fromOffset": { "dx": 0, "dy": 0, "dz": 0 }, "toOffset": { "dx": 0, "dy": -1, "dz": 0 }, "object": 3 }, { "kind": "move", "fromOffset": { "dx": 0, "dy": -1, "dz": 0 }, "toOffset": { "dx": 0, "dy": -2, "dz": 0 }, "object": 4 }], "effects": [] }, { "id": 5, "application": "once", "guards": [{ "kind": "input_is", "input": 0 }], "pattern": { "cells": [{ "offset": { "dx": 0, "dy": 0, "dz": 0 }, "require": [3], "forbid": [] }, { "offset": { "dx": -1, "dy": 0, "dz": 0 }, "require": [], "forbid": [3, 4, 5] }] }, "writes": [{ "kind": "move", "fromOffset": { "dx": 0, "dy": 0, "dz": 0 }, "toOffset": { "dx": -1, "dy": 0, "dz": 0 }, "object": 3 }], "effects": [] }, { "id": 6, "application": "once", "guards": [{ "kind": "input_is", "input": 1 }], "pattern": { "cells": [{ "offset": { "dx": 0, "dy": 0, "dz": 0 }, "require": [3], "forbid": [] }, { "offset": { "dx": 1, "dy": 0, "dz": 0 }, "require": [], "forbid": [3, 4, 5] }] }, "writes": [{ "kind": "move", "fromOffset": { "dx": 0, "dy": 0, "dz": 0 }, "toOffset": { "dx": 1, "dy": 0, "dz": 0 }, "object": 3 }], "effects": [] }, { "id": 7, "application": "once", "guards": [{ "kind": "input_is", "input": 4 }], "pattern": { "cells": [{ "offset": { "dx": 0, "dy": 0, "dz": 0 }, "require": [3], "forbid": [] }, { "offset": { "dx": 0, "dy": 1, "dz": 0 }, "require": [], "forbid": [3, 4, 5] }] }, "writes": [{ "kind": "move", "fromOffset": { "dx": 0, "dy": 0, "dz": 0 }, "toOffset": { "dx": 0, "dy": 1, "dz": 0 }, "object": 3 }], "effects": [] }, { "id": 8, "application": "once", "guards": [{ "kind": "input_is", "input": 5 }], "pattern": { "cells": [{ "offset": { "dx": 0, "dy": 0, "dz": 0 }, "require": [3], "forbid": [] }, { "offset": { "dx": 0, "dy": -1, "dz": 0 }, "require": [], "forbid": [3, 4, 5] }] }, "writes": [{ "kind": "move", "fromOffset": { "dx": 0, "dy": 0, "dz": 0 }, "toOffset": { "dx": 0, "dy": -1, "dz": 0 }, "object": 3 }], "effects": [] }],
   "lifecycle": {
     "onLevelStart": [],
     "onLevelClear": ["next_level"]
   },
-  "winCondition": { "kind": "all", "conditions": [{ "kind": "some_object", "object": 2 }, { "kind": "all_objects_covered_by_pattern", "object": 2, "coverPattern": { "cells": [{ "offset": { "dx": 0, "dy": 0, "dz": 0 }, "require": [4], "forbid": [] }, { "offset": { "dx": 0, "dy": 0, "dz": -1 }, "require": [2], "forbid": [] }] } }] },
+  "winCondition": { "kind": "all", "conditions": [{ "kind": "some_object", "object": 2 }, { "kind": "no_pattern", "pattern": { "cells": [{ "offset": { "dx": 0, "dy": 0, "dz": 0 }, "require": [], "forbid": [4] }, { "offset": { "dx": 0, "dy": 0, "dz": -1 }, "require": [2], "forbid": [] }] } }] },
   "objects": {
     "Floor": { "id": 1, "name": "Floor", "sprite": "Floor", "layer": 0 },
     "Goal": { "id": 2, "name": "Goal", "sprite": "Goal", "layer": 1 },
@@ -36,26 +54,23 @@ window.Puzzle3DFixture = {
   "scenes": [
     {
       "name": "title",
+      "layout": {},
       "puzzles": [],
-      "controls": {},
       "keys": {},
-      "rules": [],
       "components": [{ "kind": "title", "text": "Microban Basic 3D" }, { "kind": "button", "label": "Start", "action": { "kind": "start_levels", "levels": "microban", "scene": "playing" } }, { "kind": "button", "label": "Level Select", "action": { "kind": "goto", "scene": "level_select" } }]
     },
     {
       "name": "level_select",
+      "layout": {},
       "puzzles": [{ "slot": "board", "model": "sokoban_literally_in_3d" }],
-      "controls": {},
       "keys": {},
-      "rules": [],
       "components": [{ "kind": "title", "text": "Select Level" }, { "kind": "level_menu", "levels": "microban", "action": { "kind": "start_levels", "levels": "microban", "scene": "playing" } }, { "kind": "button", "label": "Back", "action": { "kind": "goto", "scene": "title" } }]
     },
     {
       "name": "playing",
+      "layout": {},
       "puzzles": [{ "slot": "board", "model": "sokoban_literally_in_3d" }],
-      "controls": {},
       "keys": {"q": { "kind": "goto", "scene": "level_select" }, "Escape": { "kind": "goto", "scene": "level_select" }},
-      "rules": [{ "kind": "component_rules", "target": "board", "rule": "rules" }],
       "components": [{ "kind": "box", "children": [{ "kind": "puzzle3", "source": "board", "layout": {"size": { "width": 7, "height": 7 }} }], "layout": {"size": { "width": 8, "height": 8 }} }]
     }
   ],

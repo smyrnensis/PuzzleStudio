@@ -34,12 +34,25 @@ fn main() {
     if editor_js.contains("puzzle-studio-editor-preview-layout-script") {
         failures.push("preview layout injection script must stay removed");
     }
+    if !editor_js.contains("function fitPreviewViewportSize(")
+        || !editor_js.contains("previewAspectForScene(")
+    {
+        failures.push("editor preview viewport must preserve the compiled game scene aspect");
+    }
+    if editor_js.contains("const viewportWidth = availableWidth || previewVirtualWidth") {
+        failures.push("editor preview iframe must not inherit the pane aspect");
+    }
     if !editor_js.contains("previousFrame.removeAttribute(\"id\")") {
         failures
             .push("preview iframe swap must show the loaded frame before removing the old frame");
     }
-    if editor_css.contains("transform: scale(var(--preview-scale))") {
-        failures.push("preview iframe must not use fractional CSS scaling");
+    if !editor_css.contains("transform: scale(var(--preview-scale))") {
+        failures.push("editor preview must fit the fixed iframe viewport as a whole");
+    }
+    if editor_js.contains(
+        "previewFrameWrap.style.setProperty(\"--preview-virtual-width\", `${viewportWidth}px`)",
+    ) {
+        failures.push("editor preview virtual size must not inherit the pane size");
     }
     if editor_css.contains("transform: scale(var(--board-scale))") {
         failures.push("editor level/solver boards must not use fractional CSS scaling");

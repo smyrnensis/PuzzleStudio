@@ -5,13 +5,13 @@ use puzzle_core::{
     State,
 };
 pub use puzzle_scene::{
-    LevelMenuLocked, ModelKind, ModelWindowComponent, SceneAlign as SceneAlignDef,
-    SceneAlignX as SceneAlignXDef, SceneAlignY as SceneAlignYDef, SceneButton as SharedSceneButton,
+    LevelMenuLocked, SceneAlign as SceneAlignDef, SceneAlignX as SceneAlignXDef,
+    SceneAlignY as SceneAlignYDef, SceneButton as SharedSceneButton,
     SceneComponent as SharedSceneComponent, SceneContainer as SharedSceneContainer,
     SceneFor as SharedSceneFor, SceneForSource as ForSource, SceneLayout as SceneLayoutDef,
     SceneSize as SceneSizeDef, SceneTextComponent as SharedSceneTextComponent,
 };
-use puzzle3d_model::{ParsedPuzzle3, Scene3};
+use puzzle3d_model::ParsedPuzzle3;
 
 #[derive(Clone, Debug)]
 pub struct LoadedDocument {
@@ -23,7 +23,7 @@ pub struct LoadedDocument {
     pub sounds: SoundsDef,
     pub theme: ThemeDef,
     pub assets: AssetsDef,
-    pub scenes: Vec<LoadedDocumentScene>,
+    pub scenes: Vec<SceneDef>,
     pub models: Vec<LoadedDocumentModel>,
 }
 
@@ -40,12 +40,6 @@ impl LoadedDocument {
 pub enum LoadedDocumentModel {
     Puzzle2d { name: String, game: LoadedGame },
     Puzzle3d { name: String, puzzle: ParsedPuzzle3 },
-}
-
-#[derive(Clone, Debug)]
-pub enum LoadedDocumentScene {
-    Puzzle2d(SceneDef),
-    Puzzle3d(Scene3),
 }
 
 #[derive(Clone, Debug)]
@@ -314,6 +308,8 @@ pub struct SceneVarDef {
 #[derive(Clone, Debug)]
 pub struct ScenePuzzleDef {
     pub name: String,
+    pub kind: String,
+    pub model: String,
     pub initializer: ScenePuzzleInitializer,
     pub lifetime: SceneStateLifetime,
 }
@@ -650,6 +646,13 @@ fn eval_goal_query_kind(game: &CompiledGame, state: &State, kind: &QueryKind) ->
                 0
             }
         }
+        QueryKind::NoneObjects(objects) => {
+            if objects.iter().any(|object| state.object_count(*object) > 0) {
+                0
+            } else {
+                1
+            }
+        }
         QueryKind::CountMatches(patterns) => patterns
             .iter()
             .map(|pattern| i64::from(puzzle_core::count_pattern_matches(game, state, pattern)))
@@ -664,7 +667,19 @@ fn eval_goal_query_kind(game: &CompiledGame, state: &State, kind: &QueryKind) ->
                 0
             }
         }
-        QueryKind::CountInputMatches(_) | QueryKind::ExistsInputMatches(_) => 0,
+        QueryKind::NoneMatches(patterns) => {
+            if patterns
+                .iter()
+                .any(|pattern| puzzle_core::has_pattern_match(game, state, pattern))
+            {
+                0
+            } else {
+                1
+            }
+        }
+        QueryKind::CountInputMatches(_)
+        | QueryKind::ExistsInputMatches(_)
+        | QueryKind::NoneInputMatches(_) => 0,
     }
 }
 
@@ -682,23 +697,15 @@ fn compare_i64(left: i64, op: ComparisonOp, right: i64) -> bool {
 #[derive(Clone, Debug)]
 pub struct AsciiLegend {
     chars: Vec<char>,
-    overlays: Vec<AsciiOverlay>,
     ignored: Vec<ObjectId>,
     empty: char,
     unknown: char,
-}
-
-#[derive(Clone, Debug)]
-struct AsciiOverlay {
-    objects: Vec<ObjectId>,
-    ch: char,
 }
 
 impl AsciiLegend {
     pub(crate) fn new(object_count: usize, empty: char) -> Self {
         Self {
             chars: vec!['?'; object_count + 1],
-            overlays: Vec::new(),
             ignored: Vec::new(),
             empty,
             unknown: '?',
@@ -713,8 +720,9 @@ impl AsciiLegend {
         self.chars[index] = ch;
     }
 
-    pub(crate) fn add_overlay(&mut self, objects: Vec<ObjectId>, ch: char) {
-        self.overlays.push(AsciiOverlay { objects, ch });
+    pub(crate) fn add_overlay(&mut self, _objects: Vec<ObjectId>, _ch: char) {
+        // Multi-object legend entries are still accepted for level input, but
+        // runtime ASCII display uses the top layer object's own legend char.
     }
 
     pub(crate) fn ignore(&mut self, object: ObjectId) {
@@ -729,20 +737,28 @@ impl AsciiLegend {
             .copied()
             .filter(|object| !self.ignored.contains(object))
             .collect::<Vec<_>>();
-        for overlay in &self.overlays {
-            if overlay
-                .objects
-                .iter()
-                .all(|object| visible_objects.contains(object))
-            {
-                return overlay.ch;
-            }
-        }
+        self.char_for_cell_with_visible_objects(&visible_objects)
+    }
 
+    pub fn legended_objects_for_cell(&self, objects: &[ObjectId]) -> Vec<ObjectId> {
+        objects
+            .iter()
+            .copied()
+            .filter(|object| !object.is_empty())
+            .filter(|object| !self.ignored.contains(object))
+            .filter(|object| self.char_for_object(*object) != self.unknown)
+            .collect()
+    }
+
+    fn char_for_cell_with_visible_objects(&self, visible_objects: &[ObjectId]) -> char {
         let object = visible_objects.last().copied().unwrap_or(ObjectId::EMPTY);
         if object.is_empty() {
             return self.empty;
         }
+        self.char_for_object(object)
+    }
+
+    fn char_for_object(&self, object: ObjectId) -> char {
         self.chars
             .get(usize::from(object.0))
             .copied()

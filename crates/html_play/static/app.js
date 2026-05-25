@@ -264,11 +264,14 @@ const soundRuntime = new PuzzleSoundRuntime();
 let currentState = null;
 let swipeStart = null;
 const puzzleViewports = new Map();
+const puzzle3FrameIframes = new Map();
 const activeSolveRequests = new Map();
 const standardMenuCursors = new Map();
 let wasmSolverPromise = null;
 let screenScaleSyncFrame = 0;
 let screenScaleSyncPasses = 0;
+const defaultSceneLogicalSize = { width: 4, height: 3 };
+const defaultSceneLayoutUnit = 180;
 
 async function requestJson(url, options = {}) {
   if (standaloneRuntime) {
@@ -375,19 +378,69 @@ function syncScreenScale() {
   if (screenView.getClientRects().length === 0 || playSurface.getClientRects().length === 0) {
     return;
   }
-  const naturalWidth = Math.ceil(Math.max(1, screenView.scrollWidth, screenView.offsetWidth));
-  const naturalHeight = Math.ceil(Math.max(1, screenView.scrollHeight, screenView.offsetHeight));
+  const logicalSize = currentSceneLogicalSize();
   const available = elementContentBox(playSurface);
   if (available.width <= 0 || available.height <= 0) {
     return;
   }
-  const scale = Math.max(0.05, Math.min(1, available.width / naturalWidth, available.height / naturalHeight));
-  screenView.style.setProperty("--screen-scale", String(scale));
-  screenFrame.style.width = `${Math.ceil(naturalWidth * scale)}px`;
-  screenFrame.style.height = `${Math.ceil(naturalHeight * scale)}px`;
-  screenFrame.dataset.screenScale = scale.toFixed(4);
-  screenFrame.dataset.screenWidth = String(naturalWidth);
-  screenFrame.dataset.screenHeight = String(naturalHeight);
+  const virtualSize = virtualSceneSize(logicalSize);
+  const fit = fitLogicalSceneSize(virtualSize, available);
+  const scale = Math.max(
+    0.0001,
+    Math.min(fit.width / virtualSize.width, fit.height / virtualSize.height),
+  );
+  const unit = virtualSize.unit;
+  screenView.style.setProperty("--scene-layout-unit", `${unit}px`);
+  screenView.style.setProperty("--scene-logical-width", String(logicalSize.width));
+  screenView.style.setProperty("--scene-logical-height", String(logicalSize.height));
+  screenView.style.setProperty("--screen-virtual-width", `${virtualSize.width}px`);
+  screenView.style.setProperty("--screen-virtual-height", `${virtualSize.height}px`);
+  screenView.style.setProperty("--screen-scale", scale.toFixed(6));
+  screenFrame.style.width = `${Math.ceil(fit.width)}px`;
+  screenFrame.style.height = `${Math.ceil(fit.height)}px`;
+  screenFrame.dataset.screenScale = scale.toFixed(6);
+  screenFrame.dataset.screenWidth = String(logicalSize.width);
+  screenFrame.dataset.screenHeight = String(logicalSize.height);
+  screenFrame.dataset.screenVirtualWidth = String(virtualSize.width);
+  screenFrame.dataset.screenVirtualHeight = String(virtualSize.height);
+  syncLogicalLayoutElementSizes(unit);
+}
+
+function currentSceneLogicalSize() {
+  const layers = sceneLayers(currentState);
+  const layer = layers.find((candidate) => candidate.focused === true) || layers[0];
+  const sceneDef = sceneDefByName(layer?.name) || currentSceneDef();
+  return logicalSceneSize(sceneDef?.layout?.size);
+}
+
+function logicalSceneSize(size) {
+  const width = Math.max(1, Number(size?.width) || defaultSceneLogicalSize.width);
+  const height = Math.max(1, Number(size?.height) || defaultSceneLogicalSize.height);
+  return { width, height };
+}
+
+function virtualSceneSize(logicalSize) {
+  const width = Math.max(1, logicalSize.width * defaultSceneLayoutUnit);
+  const height = Math.max(1, logicalSize.height * defaultSceneLayoutUnit);
+  return {
+    width,
+    height,
+    unit: defaultSceneLayoutUnit,
+  };
+}
+
+function fitLogicalSceneSize(virtualSize, available) {
+  const aspect = virtualSize.width / virtualSize.height;
+  let width = available.width;
+  let height = width / aspect;
+  if (height > available.height) {
+    height = available.height;
+    width = height * aspect;
+  }
+  return {
+    width: Math.max(1, width),
+    height: Math.max(1, height),
+  };
 }
 
 function elementContentBox(element) {
@@ -524,7 +577,7 @@ function renderSceneStack(state) {
   for (const [index, layer] of layers.entries()) {
     const sceneDef = sceneDefByName(layer.name);
     const components = sceneDef?.components || [];
-    const hasPuzzle = sceneHasComponent(sceneDef, "puzzle");
+    const hasPuzzle = sceneHasComponent(sceneDef, "puzzle") || sceneHasComponent(sceneDef, "frame");
     const isMenuScene = sceneIsMenuLike(sceneDef, hasPuzzle);
     const scope = {
       __sceneLayer: layer,
@@ -540,7 +593,7 @@ function renderSceneStack(state) {
     layerEl.classList.toggle("scene-overlay-layer", index > 0);
     layerEl.classList.toggle("is-menu-scene", isMenuScene);
     layerEl.style.zIndex = String(10 + index);
-    applySceneLayout(layerEl, sceneDef?.layout);
+    applySceneLayout(layerEl, sceneDef?.layout, { root: true });
     renderSurfaceComponents(components, layerEl, scope);
     screenView.append(layerEl);
   }
@@ -570,7 +623,10 @@ function syncVisualThemeForSceneStack(layers) {
   if (!visualThemeClass || visualThemeClass === activeThemeClass) {
     return;
   }
-  const hasPuzzleLayer = layers.some((layer) => sceneHasComponent(sceneDefByName(layer.name), "puzzle"));
+  const hasPuzzleLayer = layers.some((layer) => {
+    const scene = sceneDefByName(layer.name);
+    return sceneHasComponent(scene, "puzzle") || sceneHasComponent(scene, "frame");
+  });
   if (!hasPuzzleLayer) {
     document.body.classList.remove(visualThemeClass);
   }
@@ -615,14 +671,18 @@ function findComponentByKind(components, kind) {
 }
 
 function currentSceneHasPuzzle() {
-  return sceneHasComponent(currentSceneDef(), "puzzle");
+  return sceneHasComponent(currentSceneDef(), "puzzle") || sceneHasComponent(currentSceneDef(), "frame");
+}
+
+function currentSceneHasPuzzle3() {
+  return sceneHasComponent(currentSceneDef(), "puzzle3");
 }
 
 function currentSceneHasLevelMenu() {
   return sceneHasComponent(currentSceneDef(), "level_menu");
 }
 
-function sceneIsMenuLike(scene, hasPuzzle = sceneHasComponent(scene, "puzzle")) {
+function sceneIsMenuLike(scene, hasPuzzle = sceneHasComponent(scene, "puzzle") || sceneHasComponent(scene, "frame")) {
   return Boolean(scene && (sceneHasComponent(scene, "level_menu") || !hasPuzzle));
 }
 
@@ -642,8 +702,11 @@ function renderSurfaceComponents(components, parent = screenView, scope = {}) {
 
 function renderComponent(component, scope = {}) {
   switch (component.kind) {
+    case "frame":
     case "puzzle":
       return renderPuzzle(component, scope);
+    case "puzzle3":
+      return renderPuzzle3Frame(component, scope);
     case "title":
       return renderTitle(component, "view-title", scope);
     case "subtitle":
@@ -693,6 +756,7 @@ function renderTitle(component, className, scope = {}) {
   const title = document.createElement("p");
   title.className = className;
   title.textContent = resolveLabel(component.content, scope);
+  applySceneLayout(title, component.layout);
   return title;
 }
 
@@ -715,7 +779,70 @@ function renderPuzzle(component, scope = {}) {
   renderer.viewport = puzzleViewports.get(key);
   renderer.render(scene);
   puzzleViewports.set(key, renderer.viewport);
+  applySceneLayout(root, component.layout);
   return root;
+}
+
+function renderPuzzle3Frame(component, scope = {}) {
+  if (!window.Puzzle3DFrameFixture || !window.Puzzle3DFrameAssets) {
+    const empty = document.createElement("div");
+    empty.hidden = true;
+    return empty;
+  }
+  const sceneName = scope.__sceneDef?.name || scope.__sceneLayer?.name || currentState?.currentScene || currentState?.screen || "playing";
+  const source = component.source || "board";
+  const key = `${sceneName}:${source}`;
+  let frame = puzzle3FrameIframes.get(key);
+  if (!frame) {
+    frame = document.createElement("iframe");
+    frame.className = "puzzle3-frame";
+    frame.loading = "eager";
+    frame.dataset.scene = sceneName;
+    frame.dataset.source = source;
+    frame.title = `${sceneTitle(sceneName)} ${source}`;
+    frame.srcdoc = puzzle3FrameSrcdoc(sceneName);
+    puzzle3FrameIframes.set(key, frame);
+  }
+  applySceneLayout(frame, component.layout);
+  return frame;
+}
+
+function puzzle3FrameSrcdoc(sceneName) {
+  const assets = window.Puzzle3DFrameAssets || {};
+  const fixture = JSON.parse(JSON.stringify(window.Puzzle3DFrameFixture || {}));
+  fixture.currentScene = sceneName || fixture.currentScene || fixture.scenes?.[0]?.name || "playing";
+  const fixtureJson = puzzle3SafeScriptJson(fixture);
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>${puzzle3SafeScriptText(assets.styleCss || "")}</style>
+<style>html,body,#screenView{width:100%;height:100%;margin:0;overflow:hidden;background:transparent;}body{display:block;}.puzzle3-component{width:100%;height:100%;}</style>
+</head>
+<body class="theme-clean is-component-embed">
+<main id="screenView" class="scene">
+  <div class="puzzle3-component">
+    <canvas id="view" width="960" height="640" aria-label="Puzzle3 component"></canvas>
+  </div>
+</main>
+<script>window.Puzzle3DComponentEmbed=true;window.Puzzle3DFixture=${fixtureJson};</script>
+<script>${puzzle3SafeScriptText(assets.runtimeJs || "")}</script>
+<script>${puzzle3SafeScriptText(assets.visualCoreJs || "")}</script>
+<script>${puzzle3SafeScriptText(assets.appJs || "")}</script>
+</body>
+</html>`;
+}
+
+function puzzle3SafeScriptJson(value) {
+  return JSON.stringify(value)
+    .replace(/</g, "\\u003c")
+    .replace(/>/g, "\\u003e")
+    .replace(/&/g, "\\u0026");
+}
+
+function puzzle3SafeScriptText(value) {
+  return String(value || "").replace(/<\/(script|style)/gi, "<\\/$1");
 }
 
 function renderText(component, scope = {}) {
@@ -726,6 +853,7 @@ function renderText(component, scope = {}) {
   } else {
     text.textContent = component.value || "";
   }
+  applySceneLayout(text, component.layout);
   return text;
 }
 
@@ -753,6 +881,7 @@ function renderButton(component, scope = {}) {
   } else {
     button.addEventListener("click", () => runEffectActivationConfirm(button, component.effect, scope));
   }
+  applySceneLayout(button, component.layout);
   return button;
 }
 
@@ -876,16 +1005,26 @@ function renderContainer(component, scope = {}) {
   return container;
 }
 
-function applySceneLayout(element, layout) {
+function applySceneLayout(element, layout, options = {}) {
   if (!element || !layout) {
     return;
   }
   if (layout.size) {
-    element.style.width = `${Math.max(1, Number(layout.size.width) || 1)}px`;
-    element.style.height = `${Math.max(1, Number(layout.size.height) || 1)}px`;
+    const width = Math.max(1, Number(layout.size.width) || 1);
+    const height = Math.max(1, Number(layout.size.height) || 1);
+    element.classList.add("has-layout-size");
+    element.style.setProperty("--layout-width", String(width));
+    element.style.setProperty("--layout-height", String(height));
+    element.dataset.layoutWidth = String(width);
+    element.dataset.layoutHeight = String(height);
+    element.dataset.layoutRoot = options.root ? "true" : "false";
+    element.style.aspectRatio = `${width} / ${height}`;
+    if (!options.root) {
+      applyLogicalElementSize(element);
+    }
   }
   if (layout.gap !== undefined && layout.gap !== null) {
-    element.style.gap = `${Math.max(0, Number(layout.gap) || 0)}px`;
+    element.style.gap = `calc(${Math.max(0, Number(layout.gap) || 0)} * var(--scene-layout-gap-unit))`;
   }
   const align = layout.align || {};
   if (align.x) {
@@ -896,6 +1035,33 @@ function applySceneLayout(element, layout) {
     element.style.alignItems = sceneLayoutAlignCss(align.y);
     element.style.alignContent = sceneLayoutAlignCss(align.y);
   }
+}
+
+function syncLogicalLayoutElementSizes(unit = currentSceneLayoutUnit()) {
+  document.querySelectorAll(".has-layout-size").forEach((element) => {
+    applyLogicalElementSize(element, unit);
+  });
+}
+
+function applyLogicalElementSize(element, unit = currentSceneLayoutUnit()) {
+  if (!element || element.dataset.layoutRoot === "true") {
+    return;
+  }
+  const width = Math.max(1, Number(element.dataset.layoutWidth) || 1);
+  const height = Math.max(1, Number(element.dataset.layoutHeight) || 1);
+  element.style.inlineSize = `${Math.ceil(width * unit)}px`;
+  element.style.blockSize = `${Math.ceil(height * unit)}px`;
+}
+
+function currentSceneLayoutUnit() {
+  const inlineValue = Number.parseFloat(screenView?.style.getPropertyValue("--scene-layout-unit") || "");
+  if (Number.isFinite(inlineValue) && inlineValue > 0) {
+    return inlineValue;
+  }
+  const computedValue = Number.parseFloat(
+    getComputedStyle(screenView || document.documentElement).getPropertyValue("--scene-layout-unit") || "",
+  );
+  return Number.isFinite(computedValue) && computedValue > 0 ? computedValue : 1;
 }
 
 function sceneLayoutAlignCss(value) {
@@ -1046,6 +1212,7 @@ function resolveLabel(label, scope = {}) {
 function renderLevelMenu(state, component = {}, scope = {}) {
   const list = document.createElement("ul");
   list.className = "view-list level-menu";
+  applySceneLayout(list, component.layout);
   const columns = Number(component.columns || 0);
   if (columns > 0) {
     list.classList.add("is-matrix");
@@ -1145,7 +1312,7 @@ function commandForKey(event) {
   if (key === "y") {
     return { kind: "command", name: "redo" };
   }
-  if (!currentSceneHasPuzzle()) {
+  if (!currentSceneHasPuzzle() && !currentState.scene) {
     return null;
   }
 
@@ -1342,6 +1509,12 @@ function sendCommand(command) {
   if (currentState?.busy) {
     return undefined;
   }
+  if (sendPuzzle3Command(command)) {
+    return undefined;
+  }
+  if (applyStandaloneEditorInput(command)) {
+    return undefined;
+  }
   if (currentSceneHasLevelMenu() && isLevelMenuCommandName(command)) {
     return post(`/api/command/${encodeURIComponent(command)}`);
   }
@@ -1349,6 +1522,57 @@ function sendCommand(command) {
     return post(`/api/input/${encodeURIComponent(command)}`);
   }
   return post(`/api/command/${encodeURIComponent(command)}`);
+}
+
+function sendPuzzle3Command(command) {
+  const parsed = parsePuzzle3Command(command);
+  if (!parsed) {
+    return false;
+  }
+  const frame = puzzle3FrameForTarget(parsed.target);
+  if (!frame?.contentWindow) {
+    return false;
+  }
+  frame.contentWindow.postMessage({
+    type: "PuzzleStudioCommand",
+    command: parsed.command,
+    level: parsed.level,
+  }, "*");
+  return true;
+}
+
+function parsePuzzle3Command(command) {
+  const text = String(command || "").trim();
+  const match = text.match(/^([A-Za-z_][A-Za-z0-9_.]*)\.(restart|reset_camera|next_level|previous_level|goto|goto_level)(?:\s+(.+))?$/);
+  if (!match) {
+    return null;
+  }
+  const [, target, rawCommand, level] = match;
+  const commandName = rawCommand === "goto" ? "goto_level" : rawCommand;
+  return { target, command: commandName, level };
+}
+
+function puzzle3FrameForTarget(target) {
+  const targetName = String(target || "").split(".").pop();
+  const frames = [...document.querySelectorAll("iframe.puzzle3-frame")];
+  return frames.find((frame) => frame.dataset.source === targetName)
+    || frames.find((frame) => frame.dataset.source === target)
+    || null;
+}
+
+function applyStandaloneEditorInput(command) {
+  const acceptsEditorInput = standaloneRuntime?.editorPreviewInputEnabled
+    || (standaloneRuntime?.editorPreviewSceneEnabled && currentState?.scene);
+  if (!acceptsEditorInput || !standaloneRuntime?.inputIdsByName?.has(command)) {
+    return false;
+  }
+  try {
+    standaloneRuntime.applyInputName(command);
+    render(standaloneRuntime.snapshot());
+  } catch (error) {
+    showError(error);
+  }
+  return true;
 }
 
 function isLevelMenuCommandName(command) {
@@ -1628,6 +1852,7 @@ document.addEventListener("keydown", (event) => {
   if (!currentState) {
     return;
   }
+  broadcastPuzzle3Key(event);
 
   if (command) {
     event.preventDefault();
@@ -1640,6 +1865,19 @@ document.addEventListener("keydown", (event) => {
     return;
   }
 });
+
+function broadcastPuzzle3Key(event) {
+  if (!currentSceneHasPuzzle3()) {
+    return;
+  }
+  for (const frame of document.querySelectorAll("iframe.puzzle3-frame")) {
+    frame.contentWindow?.postMessage({
+      type: "PuzzleStudioKey",
+      key: String(event.key || ""),
+      code: String(event.code || ""),
+    }, "*");
+  }
+}
 
 if (standaloneRuntime) {
   window.addEventListener("PuzzleStandaloneStateChanged", () => {
@@ -1662,6 +1900,7 @@ window.addEventListener("message", async (event) => {
       standaloneRuntime.setCurrentState(event.data.state, {
         levelIndex: event.data.levelIndex,
         regions: event.data.regions,
+        acceptModelInput: event.data.acceptModelInput === true,
         materializeLevelStart: event.data.materializeLevelStart === true,
         materializeDisplay: event.data.materializeDisplay === true,
         materializeTurnStart: event.data.materializeTurnStart === true,
@@ -1684,6 +1923,7 @@ window.addEventListener("message", async (event) => {
         standaloneRuntime.setCurrentState(event.data.state, {
           levelIndex: event.data.levelIndex,
           regions: event.data.regions,
+          acceptModelInput: event.data.acceptModelInput === true,
           materializeLevelStart: event.data.materializeLevelStart === true,
           materializeDisplay: event.data.materializeDisplay === true,
           materializeTurnStart: event.data.materializeTurnStart === true,
@@ -1724,10 +1964,12 @@ window.addEventListener("message", async (event) => {
     if (currentState?.busy) {
       return;
     }
-    const command = commandForKey({
+    const keyEvent = {
       key: String(event.data.key || ""),
       code: String(event.data.code || ""),
-    });
+    };
+    broadcastPuzzle3Key(keyEvent);
+    const command = commandForKey(keyEvent);
     if (command) {
       sendEffect(command);
     }

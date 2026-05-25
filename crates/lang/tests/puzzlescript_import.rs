@@ -60,9 +60,7 @@ fn translated_basic_vanilla_puzzlescript_parses_as_loaded_game() {
     );
     assert!(loaded.scenes[1].components.iter().any(|component| matches!(
         component,
-        SceneComponent::ModelWindow(window)
-            if window.model_kind == puzzle_lang::ModelKind::Puzzle2d
-                && window.source == "board"
+        SceneComponent::Frame(frame) if frame.kind == "puzzle" && frame.source == "board"
     )));
     assert!(
         loaded
@@ -221,7 +219,7 @@ fn routine_once_does_not_force_inner_rewrites_to_once() {
     let source = r#"
 title routine_once_repeat_fixture
 
-model puzzle main {
+puzzle main {
 layers {
   layer_1 = A
 }
@@ -487,17 +485,22 @@ fn translates_official_simple_block_sliding_with_groups_and_again_effects() {
     assert!(translated.contains("group {\n  crate = Crate1 Crate2 Crate3"));
     assert!(translated.contains("  1 = Crate1"));
     assert!(translated.contains("  , = nospawn"));
-    assert!(translated.contains("[ Player{up} ] -> [ Player{up} slideup ] again"));
+    assert!(translated.contains("var __ps_again = false"));
+    assert!(translated.contains("repeat until __ps_again == false"));
+    assert!(translated.contains("[ Player{up} ] -> [ Player{up} slideup ] set __ps_again = true"));
+    assert!(translated.contains(
+        "[ slideup ] [ crate{no up} ] -> [ slideup ] [ crate{up} ] set __ps_again = true"
+    ));
     assert!(translated.contains("[ crate{>} | obs{no directions} ] -> [ crate | obs ]"));
     assert!(
         translated
             .contains("[ Crate1{directions} | Crate1{no directions} ] -> [ Crate1 | Crate1 ]")
     );
     assert!(
-        translated.contains("repeat {\n    [ crate{>} | obs{no directions} ] -> [ crate | obs ]")
+        translated.contains("repeat {\n      [ crate{>} | obs{no directions} ] -> [ crate | obs ]")
     );
-    assert!(translated.contains("  move\n  [ Target crate ] -> [ Target ]"));
-    assert!(!translated.contains("__ps_again"));
+    assert!(translated.contains("    move\n    [ Target crate ] -> [ Target ]"));
+    assert!(!translated.contains(" again"));
     assert!(!translated.contains("level imported_"));
     assert!(!translated.contains("\nobjects {"));
     assert!(!translated.contains("late ["));

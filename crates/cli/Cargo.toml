@@ -9,5 +9,7 @@ name = "puzzlestudio"
 path = "src/main.rs"
 
 [dependencies]
+ascii-play = { path = "../ascii_play" }
+html-editor = { path = "../html_editor" }
 html-play = { path = "../html_play" }
 puzzle-lang = { path = "../lang" }

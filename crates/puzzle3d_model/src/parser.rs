@@ -6,10 +6,9 @@ use crate::{
     LevelBundle3, LevelCell3, LevelEntry3, Lifecycle3, LifecycleCommand3, LineMatchCellTemplate3,
     LineOrientation3, LinePatternTemplate3, LineRuleTemplate3, LineWriteOpTemplate3,
     LocalWriteOpTemplate3, MatchCell3, ObjectDef3, ObjectFamily3, ObjectId, ObjectSelector3,
-    ObjectVariant3, Offset3, Pattern3, Rule3, Scene3, SceneAction3, SceneComponent3,
-    SceneKeyBinding3, SceneLayout3, ScenePuzzle3, SelectorCatalog3, SelectorGroup3, SelectorTag3,
-    Size3, Sprite3, SpriteColor3, SpriteSet3, SpriteVoxels3, VariantAxis3, WinCondition3,
-    lower_dense_rule_template, lower_line_rule_template,
+    ObjectVariant3, Offset3, Pattern3, Rule3, RuleEffect3, SelectorCatalog3, SelectorGroup3,
+    SelectorTag3, Size3, Sprite3, SpriteColor3, SpriteSet3, SpriteVoxels3, VariantAxis3,
+    WinCondition3, lower_dense_rule_template, lower_line_rule_template,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -22,7 +21,6 @@ pub struct ParsedPuzzle3 {
     pub win_condition: Option<WinCondition3>,
     pub lifecycle: Lifecycle3,
     pub sprite_set: Option<SpriteSet3>,
-    pub scenes: Vec<Scene3>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -97,6 +95,7 @@ pub fn parse_puzzle3d(source: &str) -> Result<ParsedPuzzle3, ParseError3> {
 struct Parser3 {
     lines: Vec<String>,
     value_sets: Vec<(String, Vec<String>)>,
+    input_specs: Vec<InputSpec3>,
     layers: Vec<String>,
     object_specs: Vec<ObjectSpec3>,
     group_specs: Vec<GroupSpec3>,
@@ -108,7 +107,6 @@ struct Parser3 {
     win_condition_lines: Vec<String>,
     settings: ModelSettings3,
     sprite_set: Option<SpriteSet3>,
-    scenes: Vec<Scene3>,
 }
 
 impl Parser3 {
@@ -121,6 +119,7 @@ impl Parser3 {
                 .map(str::to_string)
                 .collect(),
             value_sets: Vec::new(),
+            input_specs: Vec::new(),
             layers: Vec::new(),
             object_specs: Vec::new(),
             group_specs: Vec::new(),
@@ -132,7 +131,6 @@ impl Parser3 {
             win_condition_lines: Vec::new(),
             settings: ModelSettings3::default(),
             sprite_set: None,
-            scenes: Vec::new(),
         }
     }
 
@@ -144,6 +142,10 @@ impl Parser3 {
                 index += 1;
             } else if is_model3_header(&line) {
                 index = self.parse_model_block(index + 1)?;
+            } else if line.starts_with("model puzzle3 ") {
+                return Err(message(
+                    "top-level 3D puzzle definition must be: puzzle3 <name>",
+                ));
             } else if is_document_metadata_line(&line) {
                 index += 1;
             } else if is_document_shell_block(&line) {
@@ -152,6 +154,8 @@ impl Parser3 {
                 index = self.parse_layers_block(index + 1)?;
             } else if line == "objects {" {
                 index = self.parse_objects_block(index + 1)?;
+            } else if line == "inputs {" {
+                index = self.parse_inputs_block(index + 1)?;
             } else if line == "groups {" || line == "group {" {
                 index = self.parse_groups_block(index + 1)?;
             } else if line == "legend {" {
@@ -161,7 +165,8 @@ impl Parser3 {
             } else if is_sprites3_header(&line) {
                 index = self.parse_sprites3_block(index + 1, &line)?;
             } else if let Some(name) = parse_scene_header(&line) {
-                index = self.parse_scene_block(index + 1, name)?;
+                let _ = name;
+                index = skip_braced_block(&self.lines, index + 1)?;
             } else if line == "rules {" {
                 index = self.parse_rules_block(index + 1)?;
             } else if line == "on_level_start {" {
@@ -197,7 +202,11 @@ impl Parser3 {
         }
         let object_defs = build.object_defs.clone();
         let catalog = build.catalog_with_groups(self.group_specs)?;
-        let game = Game3::new_with_inputs(layer_count, object_defs, default_inputs());
+        let game = Game3::new_with_inputs(
+            layer_count,
+            object_defs,
+            inputs_from_specs(self.input_specs)?,
+        );
 
         let mut rules = Vec::new();
         for line in &self.rule_lines {
@@ -238,7 +247,6 @@ impl Parser3 {
             win_condition,
             lifecycle,
             sprite_set: self.sprite_set,
-            scenes: self.scenes,
         })
     }
 
@@ -254,6 +262,8 @@ impl Parser3 {
                 index = self.parse_layers_block(index + 1)?;
             } else if line == "objects {" {
                 index = self.parse_objects_block(index + 1)?;
+            } else if line == "inputs {" {
+                index = self.parse_inputs_block(index + 1)?;
             } else if line == "groups {" || line == "group {" {
                 index = self.parse_groups_block(index + 1)?;
             } else if line == "rules {" {
@@ -272,7 +282,8 @@ impl Parser3 {
             } else if is_sprites3_header(&line) {
                 index = self.parse_sprites3_block(index + 1, &line)?;
             } else if let Some(name) = parse_scene_header(&line) {
-                index = self.parse_scene_block(index + 1, name)?;
+                let _ = name;
+                index = skip_braced_block(&self.lines, index + 1)?;
             } else if let Some(rest) = line.strip_prefix("group ") {
                 self.group_specs.push(parse_group_spec(rest)?);
                 index += 1;
@@ -354,121 +365,6 @@ impl Parser3 {
             index += 1;
         }
         Err(message("grid block missing }"))
-    }
-
-    fn parse_scene_block(&mut self, mut index: usize, name: String) -> Result<usize, ParseError3> {
-        let mut layout = SceneLayout3::default();
-        let mut puzzles = Vec::new();
-        let mut keys = Vec::new();
-        let mut components = Vec::new();
-        while index < self.lines.len() {
-            let line = self.lines[index].clone();
-            if line == "}" {
-                self.scenes
-                    .push(Scene3::new(name, layout, puzzles, keys, components));
-                return Ok(index + 1);
-            }
-            if line.is_empty() {
-                index += 1;
-                continue;
-            }
-            if line == "state {" {
-                let (next, parsed) = self.parse_scene_state_block(index + 1)?;
-                puzzles.extend(parsed);
-                index = next;
-                continue;
-            }
-            if let Some(rest) = line.strip_prefix("view ") {
-                let _ = rest;
-                layout = puzzle_scene::parse_scene_layout_header(
-                    &line,
-                    "view",
-                    puzzle_scene::SceneBlockSyntax::Braces,
-                )?;
-                let (next, parsed) = self.parse_scene_view_block(index + 1)?;
-                components.extend(parsed);
-                index = next;
-                continue;
-            }
-            if line == "keys {" {
-                let (next, parsed) = self.parse_scene_keys_block(index + 1)?;
-                keys.extend(parsed);
-                index = next;
-                continue;
-            }
-            if line == "rules {" {
-                index = skip_braced_block(&self.lines, index + 1)?;
-                continue;
-            }
-            return Err(message(format!("unknown scene directive: {line}")));
-        }
-        Err(message(format!("scene {name} block missing }}")))
-    }
-
-    fn parse_scene_state_block(
-        &self,
-        mut index: usize,
-    ) -> Result<(usize, Vec<ScenePuzzle3>), ParseError3> {
-        let mut puzzles = Vec::new();
-        while index < self.lines.len() {
-            let line = self.lines[index].clone();
-            if line == "}" {
-                return Ok((index + 1, puzzles));
-            }
-            if line.is_empty() {
-                index += 1;
-                continue;
-            }
-            puzzles.push(parse_scene_puzzle_state(&line)?);
-            index += 1;
-        }
-        Err(message("scene state block missing }"))
-    }
-
-    fn parse_scene_view_block(
-        &self,
-        index: usize,
-    ) -> Result<(usize, Vec<SceneComponent3>), ParseError3> {
-        self.parse_scene_components_block(index, "view")
-    }
-
-    fn parse_scene_components_block(
-        &self,
-        index: usize,
-        block_name: &str,
-    ) -> Result<(usize, Vec<SceneComponent3>), ParseError3> {
-        let mut parse_leaf =
-            |lines: &[String], index: usize| -> Result<(usize, SceneComponent3), ParseError3> {
-                Ok((index + 1, parse_scene_component(&lines[index])?))
-            };
-        puzzle_scene::parse_scene_component_block(
-            &self.lines,
-            index,
-            block_name,
-            puzzle_scene::SceneBlockSyntax::Braces,
-            &mut parse_leaf,
-            &build_scene3_container_component,
-        )
-    }
-
-    fn parse_scene_keys_block(
-        &self,
-        mut index: usize,
-    ) -> Result<(usize, Vec<SceneKeyBinding3>), ParseError3> {
-        let mut keys = Vec::new();
-        while index < self.lines.len() {
-            let line = self.lines[index].clone();
-            if line == "}" {
-                return Ok((index + 1, keys));
-            }
-            if line.is_empty() {
-                index += 1;
-                continue;
-            }
-            keys.push(parse_scene_key_binding(&line)?);
-            index += 1;
-        }
-        Err(message("scene keys block missing }"))
     }
 
     fn parse_sprites3_block(
@@ -611,6 +507,20 @@ impl Parser3 {
         Err(message("objects block missing }"))
     }
 
+    fn parse_inputs_block(&mut self, mut index: usize) -> Result<usize, ParseError3> {
+        while index < self.lines.len() {
+            let line = &self.lines[index];
+            if line == "}" {
+                return Ok(index + 1);
+            }
+            if !line.is_empty() {
+                self.input_specs.push(parse_input_spec(line)?);
+            }
+            index += 1;
+        }
+        Err(message("inputs block missing }"))
+    }
+
     fn parse_groups_block(&mut self, mut index: usize) -> Result<usize, ParseError3> {
         while index < self.lines.len() {
             let line = &self.lines[index];
@@ -751,6 +661,12 @@ struct ObjectSpec3 {
     name: String,
     axes: Vec<String>,
     layer: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct InputSpec3 {
+    name: String,
+    keys: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -933,12 +849,7 @@ fn parse_model_setting_line(line: &str) -> Result<Option<ModelSetting3>, ParseEr
 }
 
 fn parse_camera_setting_line(line: &str) -> Result<ModelSetting3, ParseError3> {
-    let tokens = line.split_whitespace().collect::<Vec<_>>();
-    if tokens.len() != 2 {
-        return Err(message(format!("camera setting must be: {line} <value>")));
-    }
-    let name = tokens[0];
-    let value = tokens[1];
+    let (name, value) = parse_setting_assignment(line, "camera setting")?;
     match name {
         "yaw" => Ok(ModelSetting3::CameraYaw(parse_degrees_setting(
             value, name,
@@ -960,12 +871,7 @@ fn parse_camera_setting_line(line: &str) -> Result<ModelSetting3, ParseError3> {
 }
 
 fn parse_grid_setting_line(line: &str) -> Result<ModelSetting3, ParseError3> {
-    let tokens = line.split_whitespace().collect::<Vec<_>>();
-    if tokens.len() != 2 {
-        return Err(message(format!("grid setting must be: {line} <value>")));
-    }
-    let name = tokens[0];
-    let value = tokens[1];
+    let (name, value) = parse_setting_assignment(line, "grid setting")?;
     match name {
         "occupied_cells" => Ok(ModelSetting3::OccupiedCellGrid(parse_bool_setting(
             value, name,
@@ -975,15 +881,22 @@ fn parse_grid_setting_line(line: &str) -> Result<ModelSetting3, ParseError3> {
 }
 
 fn parse_render_setting_line(line: &str) -> Result<ModelSetting3, ParseError3> {
-    let tokens = line.split_whitespace().collect::<Vec<_>>();
-    if tokens.len() != 2 {
-        return Err(message(format!("render setting must be: {line} <value>")));
-    }
-    let name = tokens[0];
-    let value = tokens[1];
+    let (name, value) = parse_setting_assignment(line, "render setting")?;
     match name {
         "shade" => Ok(ModelSetting3::SpriteShade(parse_bool_setting(value, name)?)),
         _ => Err(message(format!("unknown render setting: {name}"))),
+    }
+}
+
+fn parse_setting_assignment<'a>(
+    line: &'a str,
+    context: &str,
+) -> Result<(&'a str, &'a str), ParseError3> {
+    let tokens = line.split_whitespace().collect::<Vec<_>>();
+    match tokens.as_slice() {
+        [name, value] => Ok((*name, *value)),
+        [name, "=", value] => Ok((*name, *value)),
+        _ => Err(message(format!("{context} must be: <name> = <value>"))),
     }
 }
 
@@ -1047,6 +960,27 @@ fn parse_object_spec(line: &str) -> Result<ObjectSpec3, ParseError3> {
         name: base,
         axes: name_parts.map(str::to_string).collect(),
         layer: layer.to_string(),
+    })
+}
+
+fn parse_input_spec(line: &str) -> Result<InputSpec3, ParseError3> {
+    let (name, keys) = line
+        .split_once("<-")
+        .ok_or_else(|| message("inputs row must be: <input> <- <key...>"))?;
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(message("inputs row must name an input before <-"));
+    }
+    let keys = keys
+        .split_whitespace()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    if keys.is_empty() {
+        return Err(message("inputs row must include at least one key after <-"));
+    }
+    Ok(InputSpec3 {
+        name: name.to_string(),
+        keys,
     })
 }
 
@@ -1127,160 +1061,8 @@ fn parse_scene_header(line: &str) -> Option<String> {
     (!name.is_empty()).then(|| name.to_string())
 }
 
-fn parse_scene_puzzle_state(line: &str) -> Result<ScenePuzzle3, ParseError3> {
-    let (slot, value) = line
-        .split_once('=')
-        .ok_or_else(|| message("scene puzzle state must be: <slot> = puzzle3 <model>"))?;
-    let slot = slot.trim();
-    let model = value
-        .trim()
-        .strip_prefix("puzzle3 ")
-        .map(str::trim)
-        .ok_or_else(|| message("scene puzzle state must be: <slot> = puzzle3 <model>"))?;
-    if slot.is_empty() || model.is_empty() {
-        return Err(message("scene puzzle state must name a slot and model"));
-    }
-    Ok(ScenePuzzle3::new(slot, model))
-}
-
-fn parse_scene_component(line: &str) -> Result<SceneComponent3, ParseError3> {
-    if let Some(rest) = line.strip_prefix("title ") {
-        let (text, rest) = parse_quoted_scene_text(rest.trim())?;
-        let layout = parse_scene_layout_attrs(rest.trim())?;
-        return Ok(SceneComponent3::Title { text, layout });
-    }
-    if let Some(rest) = line.strip_prefix("button ") {
-        let (label, rest) = parse_quoted_scene_text(rest.trim())?;
-        let (attrs, action_text) = split_scene_attrs_before_action(rest.trim())?;
-        let layout = parse_scene_layout_attrs(attrs)?;
-        let action = parse_scene_action(&format!("-> {}", action_text.trim()))?;
-        return Ok(SceneComponent3::Button {
-            label,
-            action,
-            layout,
-        });
-    }
-    if let Some(rest) = line.strip_prefix("level_menu ").map(str::trim) {
-        let (left, action_text) = rest.split_once("->").ok_or_else(|| {
-            message(
-                "level_menu component must be: level_menu <levels> -> start <levels> in <scene>",
-            )
-        })?;
-        let (levels, attrs) = split_name_and_attrs(left.trim())?;
-        let levels = levels.trim();
-        if levels.is_empty() {
-            return Err(message("level_menu component must name a levels source"));
-        }
-        let layout = parse_scene_layout_attrs(attrs)?;
-        let action = parse_scene_action(&format!("-> {}", action_text.trim()))?;
-        return Ok(SceneComponent3::LevelMenu {
-            levels: levels.to_string(),
-            action,
-            layout,
-        });
-    }
-    if let Some(rest) = line.strip_prefix("puzzle3 ").map(str::trim) {
-        let (source, attrs) = split_name_and_attrs(rest)?;
-        if source.is_empty() {
-            return Err(message("puzzle3 component must name a source slot"));
-        }
-        let layout = parse_scene_layout_attrs(attrs)?;
-        return Ok(SceneComponent3::Puzzle3 {
-            source: source.to_string(),
-            layout,
-        });
-    }
-    Err(message(format!("unknown scene view component: {line}")))
-}
-
-fn build_scene3_container_component(
-    kind: puzzle_scene::SceneComponentKind,
-    children: Vec<SceneComponent3>,
-    layout: SceneLayout3,
-) -> SceneComponent3 {
-    match kind {
-        puzzle_scene::SceneComponentKind::Row => SceneComponent3::Row { children, layout },
-        puzzle_scene::SceneComponentKind::Column => SceneComponent3::Column { children, layout },
-        puzzle_scene::SceneComponentKind::Box => SceneComponent3::Box { children, layout },
-        _ => unreachable!("shared scene parser only builds generic containers"),
-    }
-}
-
-fn split_scene_attrs_before_action(value: &str) -> Result<(&str, &str), ParseError3> {
-    value
-        .split_once("->")
-        .map(|(attrs, action)| (attrs.trim(), action.trim()))
-        .ok_or_else(|| message("button component must include an action after ->"))
-}
-
-fn split_name_and_attrs(value: &str) -> Result<(&str, &str), ParseError3> {
-    let mut parts = value.splitn(2, char::is_whitespace);
-    let name = parts.next().unwrap_or("").trim();
-    let attrs = parts.next().unwrap_or("").trim();
-    if name.is_empty() {
-        return Err(message("component must name a source"));
-    }
-    Ok((name, attrs))
-}
-
-fn parse_scene_layout_attrs(value: &str) -> Result<SceneLayout3, ParseError3> {
-    puzzle_scene::parse_scene_layout_attr_text(value).map_err(|error| message(error.message))
-}
-
-fn parse_scene_key_binding(line: &str) -> Result<SceneKeyBinding3, ParseError3> {
-    let (key, action_text) = line
-        .split_once('=')
-        .ok_or_else(|| message("scene key binding must be: <key> = <scene action>"))?;
-    let key = key.trim();
-    if key.is_empty() {
-        return Err(message("scene key binding must name a key"));
-    }
-    let action = parse_scene_action(&format!("-> {}", action_text.trim()))?;
-    Ok(SceneKeyBinding3::new(key, action))
-}
-
-fn parse_scene_action(value: &str) -> Result<SceneAction3, ParseError3> {
-    let command = value
-        .strip_prefix("->")
-        .map(str::trim)
-        .ok_or_else(|| message("scene action must start with ->"))?;
-    if let Some(scene) = command.strip_prefix("goto ").map(str::trim) {
-        if scene.is_empty() {
-            return Err(message("goto action must name a scene"));
-        }
-        return Ok(SceneAction3::Goto {
-            scene: scene.to_string(),
-        });
-    }
-    if let Some(rest) = command.strip_prefix("start ").map(str::trim) {
-        let (levels, scene) = rest
-            .split_once(" in ")
-            .ok_or_else(|| message("start action must be: start <levels> in <scene>"))?;
-        let levels = levels.trim();
-        let scene = scene.trim();
-        if levels.is_empty() || scene.is_empty() {
-            return Err(message("start action must name levels and scene"));
-        }
-        return Ok(SceneAction3::StartLevels {
-            levels: levels.to_string(),
-            scene: scene.to_string(),
-        });
-    }
-    Err(message(format!("unknown scene action: {command}")))
-}
-
-fn parse_quoted_scene_text(value: &str) -> Result<(String, &str), ParseError3> {
-    let rest = value
-        .strip_prefix('"')
-        .ok_or_else(|| message("scene text must start with a quote"))?;
-    let end = rest
-        .find('"')
-        .ok_or_else(|| message("scene text must end with a quote"))?;
-    Ok((rest[..end].to_string(), &rest[end + 1..]))
-}
-
 fn is_model3_header(line: &str) -> bool {
-    line.strip_prefix("model puzzle3 ")
+    line.strip_prefix("puzzle3 ")
         .is_some_and(|rest| rest.ends_with('{'))
 }
 
@@ -1371,12 +1153,15 @@ fn lower_legend(
     specs: &[LegendSpec3],
 ) -> Result<BTreeMap<char, Vec<ObjectId>>, ParseError3> {
     let mut legend = BTreeMap::new();
+    let mut has_empty_override = false;
     for spec in specs {
         if legend.contains_key(&spec.ch) {
             return Err(message(format!("duplicate legend char: {}", spec.ch)));
         }
         let mut objects = Vec::new();
-        if !(spec.selectors.len() == 1 && spec.selectors[0] == "empty") {
+        if spec.selectors.len() == 1 && spec.selectors[0] == "empty" {
+            has_empty_override = true;
+        } else {
             for token in &spec.selectors {
                 let selector = parse_selector(token, &catalog.families, &catalog.groups)?;
                 let resolved = catalog
@@ -1388,6 +1173,9 @@ fn lower_legend(
             }
         }
         legend.insert(spec.ch, objects);
+    }
+    if !has_empty_override && !legend.contains_key(&'.') {
+        legend.insert('.', Vec::new());
     }
     Ok(legend)
 }
@@ -1575,6 +1363,12 @@ fn parse_lifecycle_command_line(line: &str) -> Result<LifecycleCommand3, ParseEr
 }
 
 fn parse_rule_line(line: &str, catalog: &SelectorCatalog3) -> Result<Vec<Rule3>, ParseError3> {
+    if let Some(effect) = parse_camera_rule_effect_line(line)? {
+        return Ok(vec![
+            Rule3::once(Pattern3::new(Vec::new()), Vec::new()).with_effects(vec![effect]),
+        ]);
+    }
+
     if let Some(rest) = line.strip_prefix("input ") {
         return parse_input_rule_line(rest.trim(), catalog);
     }
@@ -1582,7 +1376,7 @@ fn parse_rule_line(line: &str, catalog: &SelectorCatalog3) -> Result<Vec<Rule3>,
     let (prefix, rest) = line
         .split_once(' ')
         .ok_or_else(|| message("rule must be: <orientation> [ ... ] -> [ ... ]"))?;
-    let (lhs, rhs) = parse_rewrite(rest)?;
+    let (lhs, rhs, effects) = parse_rewrite(rest)?;
     if prefix.contains(':') || matches!(prefix, "frames" | "canonical" | "mirrored") {
         let orientation = parse_frame_orientation(prefix)?;
         let rule = DenseRuleTemplate3::once(
@@ -1590,8 +1384,10 @@ fn parse_rule_line(line: &str, catalog: &SelectorCatalog3) -> Result<Vec<Rule3>,
             parse_dense_pattern(lhs, catalog)?,
             infer_dense_writes(lhs, rhs, catalog)?,
         );
-        return lower_dense_rule_template(catalog, &rule)
-            .map_err(|error| message(format!("failed to lower dense rule: {error:?}")));
+        let mut rules = lower_dense_rule_template(catalog, &rule)
+            .map_err(|error| message(format!("failed to lower dense rule: {error:?}")))?;
+        attach_rule_effects(&mut rules, &effects);
+        return Ok(rules);
     }
 
     let orientation = parse_line_orientation(prefix)?;
@@ -1600,8 +1396,19 @@ fn parse_rule_line(line: &str, catalog: &SelectorCatalog3) -> Result<Vec<Rule3>,
         parse_line_pattern(lhs, catalog)?,
         infer_line_writes(lhs, rhs, catalog)?,
     );
-    lower_line_rule_template(catalog, &rule)
-        .map_err(|error| message(format!("failed to lower line rule: {error:?}")))
+    let mut rules = lower_line_rule_template(catalog, &rule)
+        .map_err(|error| message(format!("failed to lower line rule: {error:?}")))?;
+    attach_rule_effects(&mut rules, &effects);
+    Ok(rules)
+}
+
+fn attach_rule_effects(rules: &mut [Rule3], effects: &[RuleEffect3]) {
+    if effects.is_empty() {
+        return;
+    }
+    for rule in rules {
+        rule.effects.extend(effects.iter().cloned());
+    }
 }
 
 fn parse_input_rule_line(
@@ -1705,6 +1512,13 @@ fn parse_win_condition_line(
     line: &str,
     catalog: &SelectorCatalog3,
 ) -> Result<WinCondition3, ParseError3> {
+    if let Some((name, arg)) = parse_win_condition_call(line)? {
+        return match name {
+            "exists" | "some" => parse_some_condition(arg, catalog),
+            "none" => parse_no_condition(arg, catalog),
+            _ => Err(message(format!("unknown win condition function: {name}"))),
+        };
+    }
     if let Some(rest) = line.strip_prefix("some ") {
         return parse_some_condition(rest.trim(), catalog);
     }
@@ -1715,6 +1529,24 @@ fn parse_win_condition_line(
         return parse_all_on_condition(rest.trim(), catalog);
     }
     Err(message(format!("unknown win condition: {line}")))
+}
+
+fn parse_win_condition_call<'a>(line: &'a str) -> Result<Option<(&'a str, &'a str)>, ParseError3> {
+    let Some((name, rest)) = line.split_once('(') else {
+        return Ok(None);
+    };
+    if !name
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+    {
+        return Ok(None);
+    }
+    let Some(arg) = rest.strip_suffix(')') else {
+        return Err(message(format!(
+            "win condition function missing closing ): {line}"
+        )));
+    };
+    Ok(Some((name, arg.trim())))
 }
 
 fn parse_some_condition(
@@ -1745,27 +1577,19 @@ fn parse_all_on_condition(
 ) -> Result<WinCondition3, ParseError3> {
     let (object_selector, cover) = rest
         .split_once(" on ")
-        .ok_or_else(|| message("all condition must be: all <selector> on <selector-or-pattern>"))?;
+        .ok_or_else(|| message("all condition must be: all <selector> on <selector>"))?;
     let object = resolve_single_selector_object(catalog, object_selector.trim())?;
-    let patterns = if cover.contains('[') {
-        parse_oriented_patterns(cover.trim(), catalog)?
-    } else {
-        let cover_object = resolve_single_selector_object(catalog, cover.trim())?;
-        vec![Pattern3::new(vec![
-            MatchCell3::new(Offset3::ZERO)
-                .require(object)
-                .require(cover_object),
-        ])]
-    };
-    if patterns.len() != 1 {
+    if cover.contains('[') {
         return Err(message(
-            "all <selector> on <pattern> requires a single concrete pattern",
+            "all <selector> on <pattern> is not valid; use some/no <orientation> [ ... ] for spatial win patterns",
         ));
     }
-    Ok(WinCondition3::AllObjectsCoveredByPattern {
-        object,
-        cover_pattern: patterns.into_iter().next().unwrap(),
-    })
+    let cover_object = resolve_single_selector_object(catalog, cover.trim())?;
+    Ok(WinCondition3::NoPattern(Pattern3::new(vec![
+        MatchCell3::new(Offset3::ZERO)
+            .require(object)
+            .forbid(cover_object),
+    ])))
 }
 
 fn pattern_conditions(
@@ -1854,11 +1678,13 @@ fn parse_oriented_patterns(
         .map_err(|error| message(format!("failed to lower win pattern: {error:?}")))
 }
 
-fn parse_rewrite(rest: &str) -> Result<(&str, &str), ParseError3> {
+fn parse_rewrite(rest: &str) -> Result<(&str, &str, Vec<RuleEffect3>), ParseError3> {
     let (lhs, rhs) = rest
         .split_once("->")
         .ok_or_else(|| message("rewrite missing ->"))?;
-    Ok((parse_bracketed(lhs.trim())?, parse_bracketed(rhs.trim())?))
+    let (rhs, suffix) = parse_bracketed_with_suffix(rhs.trim())?;
+    let effects = parse_rule_effect_suffix(suffix)?;
+    Ok((parse_bracketed(lhs.trim())?, rhs, effects))
 }
 
 fn parse_bracketed(value: &str) -> Result<&str, ParseError3> {
@@ -1867,6 +1693,49 @@ fn parse_bracketed(value: &str) -> Result<&str, ParseError3> {
         .and_then(|value| value.strip_suffix(']'))
         .map(str::trim)
         .ok_or_else(|| message("pattern must be enclosed in [ ]"))
+}
+
+fn parse_bracketed_with_suffix(value: &str) -> Result<(&str, &str), ParseError3> {
+    let value = value.trim();
+    let Some(rest) = value.strip_prefix('[') else {
+        return Err(message("pattern must be enclosed in [ ]"));
+    };
+    let Some(end) = rest.find(']') else {
+        return Err(message("pattern must be enclosed in [ ]"));
+    };
+    Ok((rest[..end].trim(), rest[end + 1..].trim()))
+}
+
+fn parse_rule_effect_suffix(suffix: &str) -> Result<Vec<RuleEffect3>, ParseError3> {
+    if suffix.is_empty() {
+        return Ok(Vec::new());
+    }
+    let Some(effect) = parse_camera_rule_effect_line(suffix)? else {
+        return Err(message(format!("unknown 3D rule effect: {suffix}")));
+    };
+    Ok(vec![effect])
+}
+
+fn parse_camera_rule_effect_line(line: &str) -> Result<Option<RuleEffect3>, ParseError3> {
+    if line.trim() == "reset_camera" {
+        return Ok(Some(RuleEffect3::ResetCamera));
+    }
+    let tokens = line.split_whitespace().collect::<Vec<_>>();
+    let ["set", name, "=", value] = tokens.as_slice() else {
+        return Ok(None);
+    };
+    match *name {
+        "yaw" => Ok(Some(RuleEffect3::SetCameraYaw(parse_degrees_setting(
+            value, name,
+        )?))),
+        "pitch" => Ok(Some(RuleEffect3::SetCameraPitch(parse_degrees_setting(
+            value, name,
+        )?))),
+        "zoom" => Ok(Some(RuleEffect3::SetCameraZoom(parse_zoom_milli_setting(
+            value, name,
+        )?))),
+        _ => Err(message(format!("unknown 3D view variable: {name}"))),
+    }
 }
 
 fn parse_line_orientation(prefix: &str) -> Result<LineOrientation3, ParseError3> {
@@ -2223,6 +2092,38 @@ fn default_inputs() -> Vec<InputDef3> {
         InputDef3::directional(InputId3(4), "forward", Direction3::FORWARD),
         InputDef3::directional(InputId3(5), "backward", Direction3::BACKWARD),
     ]
+}
+
+fn inputs_from_specs(specs: Vec<InputSpec3>) -> Result<Vec<InputDef3>, ParseError3> {
+    if specs.is_empty() {
+        return Ok(default_inputs());
+    }
+
+    let defaults = default_inputs();
+    let mut next_id = defaults
+        .iter()
+        .map(|input| input.id.0)
+        .max()
+        .unwrap_or(0)
+        .saturating_add(1);
+    let mut inputs = Vec::new();
+    for spec in specs {
+        if inputs
+            .iter()
+            .any(|input: &InputDef3| input.name == spec.name)
+        {
+            return Err(message(format!("duplicate input: {}", spec.name)));
+        }
+        let input = if let Some(default) = defaults.iter().find(|input| input.name == spec.name) {
+            default.clone().with_keys(spec.keys)
+        } else {
+            let id = InputId3(next_id);
+            next_id = next_id.saturating_add(1);
+            InputDef3::action(id, spec.name).with_keys(spec.keys)
+        };
+        inputs.push(input);
+    }
+    Ok(inputs)
 }
 
 fn strip_comment(line: &str) -> &str {

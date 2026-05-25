@@ -51,8 +51,10 @@ checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 name = "ascii-play"
 version = "0.1.0"
 dependencies = [
+ "puzzle-core",
  "puzzle-lang",
  "puzzle-play",
+ "puzzle3d-model",
 ]
 
 [[package]]
@@ -1241,6 +1243,7 @@ dependencies = [
  "puzzle-lang",
  "puzzle-play",
  "puzzle-solver",
+ "puzzle3d-model",
 ]
 
 [[package]]
@@ -2356,6 +2359,7 @@ version = "0.1.0"
 dependencies = [
  "puzzle-core",
  "puzzle-lang",
+ "puzzle3d-model",
 ]
 
 [[package]]
@@ -2378,6 +2382,8 @@ dependencies = [
 name = "puzzlestudio-cli"
 version = "0.1.0"
 dependencies = [
+ "ascii-play",
+ "html-editor",
  "html-play",
  "puzzle-lang",
 ]

@@ -1,6 +1,6 @@
 title "Parallel Sokoban 2D"
 
-model puzzle sokoban_2d {
+puzzle sokoban_2d {
   layers {
     floor = @Floor
     target = Goal

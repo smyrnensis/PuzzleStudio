@@ -29,11 +29,15 @@ const VISUALS_JS: &str = include_str!("../../html_play/static/visuals.js");
 const RENDERER_JS: &str = include_str!("../../html_play/static/renderer.js");
 
 pub fn run_cli() -> Result<(), AppError> {
-    run()
+    run_cli_with_args(env::args().skip(1))
 }
 
-fn run() -> Result<(), AppError> {
-    let config = Config::from_args()?;
+pub fn run_cli_with_args(args: impl IntoIterator<Item = String>) -> Result<(), AppError> {
+    run(args)
+}
+
+fn run(args: impl IntoIterator<Item = String>) -> Result<(), AppError> {
+    let config = Config::from_args(args)?;
     let service = EditorService::open(&config.puzzle_path)?;
 
     if !config.serve {
@@ -69,12 +73,12 @@ struct Config {
 }
 
 impl Config {
-    fn from_args() -> Result<Self, AppError> {
+    fn from_args(args: impl IntoIterator<Item = String>) -> Result<Self, AppError> {
         let mut puzzle_path = None;
         let mut output_path = None;
         let mut serve = false;
         let mut port = 8787;
-        let mut args = env::args().skip(1);
+        let mut args = args.into_iter();
 
         while let Some(arg) = args.next() {
             match arg.as_str() {
@@ -98,7 +102,7 @@ impl Config {
                 }
                 "--help" | "-h" => {
                     return Err(AppError::Config(
-                        "usage: cargo run -p html-editor -- [path/to/game-folder-or-game.puzzle] [-o editor.html] [--serve] [--port 8787]"
+                        "usage: html-editor [path/to/game-folder-or-game.puzzle] [-o editor.html] [--serve] [--port 8787]"
                             .to_string(),
                     ));
                 }
@@ -449,7 +453,7 @@ fn source_looks_puzzle3d(source: &str) -> bool {
         let tokens = trimmed.split_whitespace().collect::<Vec<_>>();
         matches!(
             tokens.as_slice(),
-            ["model", "puzzle3", ..] | ["levels3", ..] | ["sprites3", ..]
+            ["puzzle3", ..] | ["levels3", ..] | ["sprites3", ..]
         )
     })
 }
@@ -1542,7 +1546,7 @@ mod tests {
         format!(
             r#"title "{title}"
 
-model puzzle default {{
+puzzle default {{
 layers {{
 actor = Player
 }}
@@ -1588,6 +1592,48 @@ board.rules
             .iter()
             .find(|document| document.puzzle_path.replace('\\', "/").ends_with(suffix))
             .expect("document with suffix")
+    }
+
+    fn starter_puzzle_source_from_editor_js() -> String {
+        let function_start = EDITOR_JS
+            .find("function starterPuzzleSource(name) {")
+            .expect("starterPuzzleSource function");
+        let body = &EDITOR_JS[function_start..];
+        let literal_start = body
+            .find("return `")
+            .map(|index| index + "return `".len())
+            .expect("starterPuzzleSource template literal");
+        let literal_tail = &body[literal_start..];
+        let literal_end = literal_tail
+            .find("`;\n}")
+            .expect("starterPuzzleSource template literal end");
+        let literal =
+            literal_tail[..literal_end].replace("${JSON.stringify(title)}", "\"New Puzzle\"");
+        decode_js_template_literal(&literal)
+    }
+
+    fn decode_js_template_literal(input: &str) -> String {
+        let mut decoded = String::new();
+        let mut chars = input.chars();
+        while let Some(ch) = chars.next() {
+            if ch != '\\' {
+                decoded.push(ch);
+                continue;
+            }
+            match chars.next() {
+                Some('n') => decoded.push('\n'),
+                Some('t') => decoded.push('\t'),
+                Some('\\') => decoded.push('\\'),
+                Some('`') => decoded.push('`'),
+                Some('$') => decoded.push('$'),
+                Some(other) => {
+                    decoded.push('\\');
+                    decoded.push(other);
+                }
+                None => decoded.push('\\'),
+            }
+        }
+        decoded
     }
 
     #[test]
@@ -1764,18 +1810,166 @@ board.rules
     #[test]
     fn level_editor_playtest_is_explicit_and_does_not_overwrite_authored_cells() {
         assert!(EDITOR_HTML.contains(r#"id="levelPlaytestButton""#));
+        assert!(EDITOR_HTML.contains(r#"id="levelBoard" class="level-board board" tabindex="0""#));
         assert!(EDITOR_JS.contains("let levelPlaytestActive = false;"));
+        assert!(EDITOR_JS.contains("let levelPlaytestStateData = null;"));
         assert!(EDITOR_JS.contains("function startLevelPlaytest()"));
         assert!(EDITOR_JS.contains("function stopLevelPlaytest(options = {})"));
+        assert!(EDITOR_JS.contains("function focusLevelInputTarget()"));
+        assert!(EDITOR_JS.contains("function transitionPlaytestProgram("));
+        assert!(EDITOR_JS.contains("function applyLevelPlaytestKey(event)"));
+        assert!(EDITOR_JS.contains("acceptModelInput: true"));
         assert!(EDITOR_JS.contains(
             "return levelPlaytestActive && levelDisplayCells?.length === level.cells.length ? levelDisplayCells : level.cells;"
         ));
         assert!(EDITOR_JS.contains(
             "if (!levelBuilder.hidden && levelPlaytestActive && pendingPreviewKeyStateSync > 0)"
         ));
-        assert!(EDITOR_JS.contains("materializeLevelStart: true"));
+        assert!(EDITOR_JS.contains("materializeLevelStart: false"));
         assert!(EDITOR_JS.contains("materializeDisplay: true"));
         assert!(EDITOR_JS.contains("levelIndex,"));
+    }
+
+    #[test]
+    fn level_editor_uses_compiled_preview_source_for_level_reference_data() {
+        assert!(EDITOR_JS.contains("function levelReferenceSource(exportData = previewExport)"));
+        assert!(
+            EDITOR_JS.contains("level.palette = levelPaletteFromExport(levelReferenceSource());")
+        );
+        assert!(EDITOR_JS.contains(
+            "function previewLevelIndexForSourceEntry(entry, exportData = previewExport)"
+        ));
+        assert!(EDITOR_JS.contains("sourceTitleMatches(requestedName, level.name)"));
+        assert!(EDITOR_JS.contains("openPreviewModePane(\"edit\");"));
+        assert!(EDITOR_JS.contains(
+            "function levelSourceData(source = levelReferenceSource(previewExport || extractPreviewExport(latestHtml))"
+        ));
+    }
+
+    #[test]
+    fn level_editor_draft_edits_do_not_commit_preview_or_source() {
+        assert!(EDITOR_JS.contains("function addLevelToSource()"));
+        assert!(EDITOR_JS.contains("function updateLevelInSource()"));
+        assert!(EDITOR_JS.contains("const tracksSource = kind === \"level3d\" || kind === \"sprite\" || kind === \"sprite3d\";"));
+        assert!(!EDITOR_JS.contains("nextExport.levels[levelIndex].initialState = stateData"));
+        assert!(!EDITOR_JS.contains("previewMode === \"play\" && wasLevelMode"));
+        assert!(EDITOR_JS.contains("let previewFrameHasEditorLevelState = false;"));
+        assert!(EDITOR_JS.contains("function restoreCompiledGamePreview()"));
+        assert!(EDITOR_JS.contains("if (previewMode === \"play\")"));
+        assert!(EDITOR_JS.contains("setPreviewFrameHtml(editorPreviewDocument(latestHtml));"));
+        assert!(EDITOR_LEVEL3D_JS.contains("function addLevel3dToSource()"));
+        assert!(EDITOR_LEVEL3D_JS.contains("function updateLevel3dInSource()"));
+        assert!(!EDITOR_LEVEL3D_JS.contains("syncLevel3dSourceFromState"));
+        assert!(!EDITOR_LEVEL3D_JS.contains("syncPreviewStateFromLevel3d"));
+        assert!(!EDITOR_LEVEL3D_JS.contains("nextExport.levels[levelIndex].size = edited.size"));
+    }
+
+    #[test]
+    fn level3d_editor_updates_runtime_through_preview_contract() {
+        assert!(EDITOR_LEVEL3D_JS.contains("function level3dRuntimePreviewUpdate()"));
+        assert!(EDITOR_LEVEL3D_JS.contains("const LEVEL3D_MODEL_COMPONENT_PREVIEW_MESSAGE = \"PuzzleStudioRenderPuzzle3ModelComponent\";"));
+        assert!(EDITOR_LEVEL3D_JS.contains("type: LEVEL3D_MODEL_COMPONENT_PREVIEW_MESSAGE"));
+        assert!(EDITOR_LEVEL3D_JS.contains("function level3dRuntimePreviewDocument(update)"));
+        assert!(EDITOR_LEVEL3D_JS.contains("window.PuzzleStudioInitialModelComponentPreview="));
+        assert!(EDITOR_LEVEL3D_JS.contains("puzzle-studio-initial-model-preview-boot"));
+        assert!(!EDITOR_LEVEL3D_JS.contains("type: \"PuzzleStudioSetPuzzle3Snapshot\""));
+        assert!(EDITOR_LEVEL3D_JS.contains("level: {"));
+        assert!(EDITOR_LEVEL3D_JS.contains("component: level3dModelPreviewComponent()"));
+        assert!(EDITOR_LEVEL3D_JS.contains("const snapshot = level3dRuntimeSnapshot();"));
+        assert!(EDITOR_LEVEL3D_JS.contains("resources: level3dRuntimePreviewResources(snapshot)"));
+        assert!(EDITOR_LEVEL3D_JS.contains("function showBlankLevel3dRuntimeFrame(frame)"));
+        assert!(EDITOR_LEVEL3D_JS.contains("showBlankLevel3dRuntimeFrame(level3dLayerFrame);"));
+        assert!(EDITOR_LEVEL3D_JS.contains(
+            "function defaultLevel3dSourceDefinition(source, ranges = findLevels3Ranges(source))"
+        ));
+        assert!(EDITOR_LEVEL3D_JS.contains("sourceLevel3dRangeHasReadableLegend(source, range)"));
+        assert!(EDITOR_LEVEL3D_JS.contains("function sendLevel3dSnapshotToPreviewFrame"));
+        assert!(EDITOR_JS.contains("currentPreviewMode === \"level3d\" && typeof sendLevel3dSnapshotToRuntime === \"function\""));
+        assert!(EDITOR_JS.contains("const stateData = solverStateData(exportData);"));
+        assert!(EDITOR_JS.contains(
+            "isPuzzle3dExport(exportData) && typeof sendLevel3dSnapshotToRuntime === \"function\""
+        ));
+        assert!(EDITOR_LEVEL3D_JS.contains("function level3dRuntimePreviewResources"));
+        assert!(EDITOR_LEVEL3D_JS.contains("sprites: exportData?.sprites || {}"));
+        assert!(EDITOR_LEVEL3D_JS.contains("camera: level3dPreviewCamera(snapshot)"));
+        assert!(
+            EDITOR_LEVEL3D_JS.contains("settings: level3dPreviewSettings(snapshot.settings || {})")
+        );
+        assert!(EDITOR_LEVEL3D_JS.contains("previewFrameHasEditorLevelState = true;"));
+        assert!(EDITOR_LEVEL3D_JS.contains("function renderPuzzle3dSolverPreview()"));
+        assert!(EDITOR_LEVEL3D_JS.contains("function sendPuzzle3dSolutionToSolverRuntime()"));
+        assert!(EDITOR_LEVEL3D_JS.contains("level3dSolverFrame.contentWindow.postMessage({"));
+        assert!(EDITOR_LEVEL3D_JS.contains("function level3dPreviewUpdateFromSnapshot(snapshot)"));
+        assert!(EDITOR_JS.contains("levelSolutionPreview?.kind === \"puzzle3d\" && typeof renderPuzzle3dSolverPreview === \"function\""));
+        assert!(EDITOR_JS.contains("typeof clearPuzzle3dSolverPreview === \"function\""));
+        assert!(EDITOR_CSS.contains(".solver-board-viewport.is-puzzle3d"));
+        assert!(EDITOR_CSS.contains(".solver3d-frame"));
+        assert!(
+            EDITOR_LEVEL3D_JS.contains("function level3dLayerUsesRuntimeScreenFootprints(view)")
+        );
+        assert!(EDITOR_LEVEL3D_JS.contains("view?.coordinateSpace === \"canvas-css-px\""));
+        assert!(
+            EDITOR_LEVEL3D_JS
+                .contains("level3dLayerScreenPointToFootprint({ x, y }, view, width, height)")
+        );
+        assert!(EDITOR_LEVEL3D_JS.contains("return height - 1 - slice;"));
+    }
+
+    #[test]
+    fn level3d_editor_syncs_source_focus_and_click_targets() {
+        assert!(
+            EDITOR_JS
+                .contains("sourceEditor.addEventListener(\"click\", loadLevelFromSourceClick);")
+        );
+        assert!(EDITOR_LEVEL3D_JS.contains("registerSourceEditableTarget?.(\"level3d\""));
+        assert!(EDITOR_SOURCE_JS.contains("syncPreviewModeFromSourceCursor({ force: true });"));
+        assert!(EDITOR_JS.contains("function syncPreviewModeFromSourceCursor(options = {})"));
+        assert!(EDITOR_JS.contains("[\"edit\", \"level3d\", \"sprite\", \"sprite3d\", \"sounds\"].includes(currentPreviewMode)"));
+        assert!(
+            EDITOR_JS.contains("loadSourceTargetWithJsFallback(source, position, loadOptions)")
+        );
+        assert!(EDITOR_JS.contains("resolveSourceTargetFromWasm(source, position)"));
+        assert!(EDITOR_JS.contains(
+            "currentPreviewMode === \"level3d\" && typeof renderLevel3dBuilder === \"function\""
+        ));
+    }
+
+    #[test]
+    fn new_puzzle_starter_source_uses_canonical_syntax() {
+        let source = starter_puzzle_source_from_editor_js();
+
+        puzzle_lang::parse_game(&source).expect("new puzzle starter source should parse");
+        assert!(source.contains("exists(Goal)\n\t\tnone([ Goal no Player ])"));
+        assert!(source.contains("for d in directions {\n\t\t\tif input == d {"));
+        assert!(source.contains("once d [ Player | no solid ] -> [ | Player ]"));
+        assert!(source.contains("view size 4 3 {"));
+        assert!(source.contains("rules {\n\t\tstep main\n\t}"));
+        assert!(!source.contains("all Goal on Player"));
+        assert!(!source.contains("input directions"));
+        assert!(!source.contains("if main.win_conditions"));
+        assert!(!source.contains("main.next_level"));
+    }
+
+    #[test]
+    fn level3d_stage_resize_tools_support_expand_and_shrink() {
+        assert!(EDITOR_LEVEL3D_JS.contains("function level3dShrinkModeButton()"));
+        assert!(EDITOR_LEVEL3D_JS.contains("mode: \"shrink\""));
+        assert!(EDITOR_LEVEL3D_JS.contains("edge: \"backward\""));
+        assert!(EDITOR_LEVEL3D_JS.contains("edge: \"forward\""));
+        assert!(EDITOR_LEVEL3D_JS.contains("edge: \"down\""));
+        assert!(EDITOR_LEVEL3D_JS.contains("edge: \"up\""));
+        assert!(EDITOR_LEVEL3D_JS.contains("function level3dStageResizeFrameEdges(size, hit)"));
+        assert!(EDITOR_LEVEL3D_JS.contains(
+            "function level3dResizeSliceFrameBounds(size, dimension, edge, mode = \"shrink\")"
+        ));
+        assert!(
+            EDITOR_LEVEL3D_JS
+                .contains("function level3dExpandedSliceFrameBounds(size, dimension, edge)")
+        );
+        assert!(
+            EDITOR_LEVEL3D_JS.contains("function level3dSliceFrameBounds(size, dimension, edge)")
+        );
+        assert!(EDITOR_CSS.contains(".level3d-shrink-button"));
     }
 
     #[test]
@@ -1971,6 +2165,60 @@ board.rules
         assert!(!html.contains(r#"<script src="/wasm/puzzle_wasm.js"></script>"#));
         assert!(!html.contains(r#"<link rel="stylesheet" href="/editor.css">"#));
         assert!(!html.contains(r#"<link rel="icon" type="image/svg+xml" href="/favicon.svg">"#));
+    }
+
+    #[test]
+    fn sprite3d_preview_uses_runtime_visual_ordering_contract() {
+        assert!(PUZZLE3_VISUAL_CORE_JS.contains("function comparePrimitiveOrder(a, b)"));
+        assert!(PUZZLE3_VISUAL_CORE_JS.contains("function faceGridOrder(corners, view)"));
+        assert!(
+            EDITOR_SPRITE3D_JS
+                .contains("sceneFaces.sort(Puzzle3VisualCore.comparePrimitiveOrder);")
+        );
+        assert!(
+            EDITOR_SPRITE3D_JS
+                .contains("return Puzzle3VisualCore.faceGridOrder(corners, sprite3dVisualView());")
+        );
+        assert!(EDITOR_SPRITE3D_JS.contains("const previewOwner = sprite3dPreviewRenderOwner();"));
+        assert!(EDITOR_SPRITE3D_JS.contains("ownerCell: previewOwner"));
+        assert!(EDITOR_SPRITE3D_JS.contains("renderPriority: order"));
+        assert!(!EDITOR_SPRITE3D_JS.contains("function compareSprite3dSceneFaceOrder"));
+    }
+
+    #[test]
+    fn visual_editors_allow_vertical_camera_pitch() {
+        assert!(EDITOR_LEVEL3D_JS.contains("const LEVEL3D_CAMERA_MIN_PITCH_DEGREES = -90;"));
+        assert!(EDITOR_LEVEL3D_JS.contains("const LEVEL3D_CAMERA_MAX_PITCH_DEGREES = 90;"));
+        assert!(EDITOR_SPRITE3D_JS.contains("const SPRITE3D_CAMERA_MIN_PITCH_DEGREES = -90;"));
+        assert!(EDITOR_SPRITE3D_JS.contains("const SPRITE3D_CAMERA_MAX_PITCH_DEGREES = 90;"));
+        assert!(EDITOR_LEVEL3D_JS.contains("LEVEL3D_CAMERA_MAX_PITCH_DEGREES"));
+        assert!(EDITOR_SPRITE3D_JS.contains("SPRITE3D_CAMERA_MAX_PITCH_DEGREES"));
+        assert!(!EDITOR_LEVEL3D_JS.contains("level3dClampNumber(value, -80, 80)"));
+        assert!(!EDITOR_SPRITE3D_JS.contains("sprite3dClampNumber(value, -80, 80)"));
+    }
+
+    #[test]
+    fn level3d_palette_preview_ignores_camera_zoom() {
+        assert!(EDITOR_LEVEL3D_JS.contains("function level3dPalettePreviewCamera(source)"));
+        assert!(EDITOR_LEVEL3D_JS.contains("zoom: 1,"));
+        assert!(
+            EDITOR_LEVEL3D_JS.contains(
+                "function level3dPaletteObjectDescriptor(name, exportData = previewExport)"
+            )
+        );
+        assert!(
+            EDITOR_LEVEL3D_JS.contains(
+                "return level3dObjectHasPreviewSprite(object, exportData) ? object : null;"
+            )
+        );
+        assert!(
+            EDITOR_LEVEL3D_JS.contains("drawLevel3dCellsPreview(ctx, width, height, snapshot, [{")
+        );
+        assert!(EDITOR_LEVEL3D_JS.contains("}], { camera: snapshot.camera, padding: 0.96 });"));
+        assert!(
+            EDITOR_LEVEL3D_JS
+                .contains("const camera = options.camera || level3dPreviewCamera(snapshot);")
+        );
     }
 
     #[test]

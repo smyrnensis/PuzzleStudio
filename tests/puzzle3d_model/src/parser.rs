@@ -1,17 +1,17 @@
 use std::collections::BTreeMap;
 
 use crate::{
-    lower_dense_rule_template, lower_line_rule_template, ComponentInputBinding3, DenseCell3,
-    DensePattern3, DenseRow3, DenseRuleTemplate3, DenseSlice3, Direction3, DirectionSet3,
-    FrameOrientation3, FrameSlot3, Game3, InputDef3, InputId3, LayerId, Level3, LevelBundle3,
-    LevelCell3, LevelEntry3, Lifecycle3, LifecycleCommand3, LineMatchCellTemplate3,
-    LineOrientation3, LinePatternTemplate3, LineRuleTemplate3, LineWriteOpTemplate3,
-    LocalWriteOpTemplate3, MatchCell3, ObjectDef3, ObjectFamily3, ObjectId, ObjectSelector3,
-    ObjectVariant3, Offset3, Pattern3, Rule3, Scene3, SceneAction3, SceneAlign3, SceneAlignX3,
-    SceneAlignY3, SceneComponent3, SceneControl3, SceneControlTarget3, SceneInputMap3,
-    SceneKeyBinding3, SceneLayout3, ScenePuzzle3, SceneRuleCall3, SceneSize3, SelectorCatalog3,
-    SelectorGroup3, SelectorTag3, Size3, Sprite3, SpriteColor3, SpriteSet3, SpriteVoxels3,
-    VariantAxis3, WinCondition3,
+    ComponentInputBinding3, DenseCell3, DensePattern3, DenseRow3, DenseRuleTemplate3, DenseSlice3,
+    Direction3, DirectionSet3, FrameOrientation3, FrameSlot3, Game3, InputDef3, InputId3, LayerId,
+    Level3, LevelBundle3, LevelCell3, LevelEntry3, Lifecycle3, LifecycleCommand3,
+    LineMatchCellTemplate3, LineOrientation3, LinePatternTemplate3, LineRuleTemplate3,
+    LineWriteOpTemplate3, LocalWriteOpTemplate3, MatchCell3, ObjectDef3, ObjectFamily3, ObjectId,
+    ObjectSelector3, ObjectVariant3, Offset3, Pattern3, Rule3, Scene3, SceneAction3, SceneAlign3,
+    SceneAlignX3, SceneAlignY3, SceneComponent3, SceneControl3, SceneControlTarget3,
+    SceneInputMap3, SceneKeyBinding3, SceneLayout3, ScenePuzzle3, SceneRuleCall3, SceneSize3,
+    SelectorCatalog3, SelectorGroup3, SelectorTag3, Size3, Sprite3, SpriteColor3, SpriteSet3,
+    SpriteVoxels3, VariantAxis3, WinCondition3, lower_dense_rule_template,
+    lower_line_rule_template,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -140,6 +140,10 @@ impl Parser3 {
                 index += 1;
             } else if is_model3_header(&line) {
                 index = self.parse_model_block(index + 1)?;
+            } else if line.starts_with("model puzzle3 ") {
+                return Err(message(
+                    "top-level 3D puzzle definition must be: puzzle3 <name>",
+                ));
             } else if is_document_metadata_line(&line) {
                 index += 1;
             } else if is_document_shell_block(&line) {
@@ -1662,7 +1666,7 @@ fn parse_quoted_scene_text(value: &str) -> Result<(String, &str), ParseError3> {
 }
 
 fn is_model3_header(line: &str) -> bool {
-    line.strip_prefix("model puzzle3 ")
+    line.strip_prefix("puzzle3 ")
         .is_some_and(|rest| rest.ends_with('{'))
 }
 
@@ -1752,12 +1756,15 @@ fn lower_legend(
     specs: &[LegendSpec3],
 ) -> Result<BTreeMap<char, Vec<ObjectId>>, ParseError3> {
     let mut legend = BTreeMap::new();
+    let mut has_empty_override = false;
     for spec in specs {
         if legend.contains_key(&spec.ch) {
             return Err(message(format!("duplicate legend char: {}", spec.ch)));
         }
         let mut objects = Vec::new();
-        if !(spec.selectors.len() == 1 && spec.selectors[0] == "empty") {
+        if spec.selectors.len() == 1 && spec.selectors[0] == "empty" {
+            has_empty_override = true;
+        } else {
             for token in &spec.selectors {
                 let selector = parse_selector(token, &catalog.families, &catalog.groups)?;
                 let resolved = catalog
@@ -1769,6 +1776,9 @@ fn lower_legend(
             }
         }
         legend.insert(spec.ch, objects);
+    }
+    if !has_empty_override && !legend.contains_key(&'.') {
+        legend.insert('.', Vec::new());
     }
     Ok(legend)
 }
@@ -2086,6 +2096,13 @@ fn parse_win_condition_line(
     line: &str,
     catalog: &SelectorCatalog3,
 ) -> Result<WinCondition3, ParseError3> {
+    if let Some((name, arg)) = parse_win_condition_call(line)? {
+        return match name {
+            "exists" | "some" => parse_some_condition(arg, catalog),
+            "none" => parse_no_condition(arg, catalog),
+            _ => Err(message(format!("unknown win condition function: {name}"))),
+        };
+    }
     if let Some(rest) = line.strip_prefix("some ") {
         return parse_some_condition(rest.trim(), catalog);
     }
@@ -2096,6 +2113,24 @@ fn parse_win_condition_line(
         return parse_all_on_condition(rest.trim(), catalog);
     }
     Err(message(format!("unknown win condition: {line}")))
+}
+
+fn parse_win_condition_call<'a>(line: &'a str) -> Result<Option<(&'a str, &'a str)>, ParseError3> {
+    let Some((name, rest)) = line.split_once('(') else {
+        return Ok(None);
+    };
+    if !name
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+    {
+        return Ok(None);
+    }
+    let Some(arg) = rest.strip_suffix(')') else {
+        return Err(message(format!(
+            "win condition function missing closing ): {line}"
+        )));
+    };
+    Ok(Some((name, arg.trim())))
 }
 
 fn parse_some_condition(
@@ -2126,25 +2161,19 @@ fn parse_all_on_condition(
 ) -> Result<WinCondition3, ParseError3> {
     let (object_selector, cover) = rest
         .split_once(" on ")
-        .ok_or_else(|| message("all condition must be: all <selector> on <selector-or-pattern>"))?;
+        .ok_or_else(|| message("all condition must be: all <selector> on <selector>"))?;
     let object = resolve_single_selector_object(catalog, object_selector.trim())?;
-    let patterns = if cover.contains('[') {
-        parse_oriented_patterns(cover.trim(), catalog)?
-    } else {
-        let cover_object = resolve_single_selector_object(catalog, cover.trim())?;
-        vec![Pattern3::new(vec![MatchCell3::new(Offset3::ZERO)
-            .require(object)
-            .require(cover_object)])]
-    };
-    if patterns.len() != 1 {
+    if cover.contains('[') {
         return Err(message(
-            "all <selector> on <pattern> requires a single concrete pattern",
+            "all <selector> on <pattern> is not valid; use some/no <orientation> [ ... ] for spatial win patterns",
         ));
     }
-    Ok(WinCondition3::AllObjectsCoveredByPattern {
-        object,
-        cover_pattern: patterns.into_iter().next().unwrap(),
-    })
+    let cover_object = resolve_single_selector_object(catalog, cover.trim())?;
+    Ok(WinCondition3::NoPattern(Pattern3::new(vec![
+        MatchCell3::new(Offset3::ZERO)
+            .require(object)
+            .forbid(cover_object),
+    ])))
 }
 
 fn pattern_conditions(

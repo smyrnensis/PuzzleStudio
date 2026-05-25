@@ -8,7 +8,7 @@ sounds {
   sfx sumo_move seed=48878907 type=puzzlescript
 }
 
-model puzzle main {
+puzzle main {
 layers {
   layer_1 = Background
   layer_2 = Player Wall Sumo

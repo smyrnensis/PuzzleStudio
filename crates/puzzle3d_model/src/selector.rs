@@ -716,6 +716,7 @@ pub fn lower_rule_template(
                 application: template.application,
                 pattern: Pattern3::new(partial.cells),
                 writes,
+                effects: Vec::new(),
             })
         })
         .collect()

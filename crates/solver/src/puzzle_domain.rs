@@ -1,4 +1,5 @@
 use crate::domain::SearchDomain;
+use crate::stable_hash::{fnv_mix, fnv_seed};
 use puzzle_core::{
     CompiledGame, InputId, LayerId, ObjectId, State, TransitionError, transition_solver_state,
 };
@@ -18,7 +19,7 @@ impl PuzzleStateKey {
         let layers = game.main_layers();
         let mut slots =
             Vec::with_capacity(usize::from(state.width) * usize::from(state.height) * layers.len());
-        let mut hash = 0xcbf29ce484222325_u64;
+        let mut hash = fnv_seed();
 
         for y in 0..state.height {
             for x in 0..state.width {
@@ -65,10 +66,6 @@ impl Hash for PuzzleStateKey {
 fn source_slot_index(state: &State, x: u16, y: u16, layer: LayerId) -> usize {
     ((usize::from(y) * usize::from(state.width) + usize::from(x)) * usize::from(state.layer_count))
         + usize::from(layer.0)
-}
-
-fn fnv_mix(hash: u64, value: u64) -> u64 {
-    hash.wrapping_mul(0x100000001b3) ^ value
 }
 
 pub struct PuzzleDomain {
@@ -199,7 +196,7 @@ mod tests {
         let source = r#"
 title scratch_solver
 
-model puzzle default {
+puzzle default {
 layers {
 floor = Goal
 actor = Player Box Wall
@@ -210,24 +207,26 @@ push
 dest
 }
 
+win_conditions {
+all Goal on Box
+}
+
+rules {
+if input == right {
+once right [ Player | Box | no actor ] -> [ Player | Box{push} | {dest} ]
+once right [ Box{push} | {dest} ] -> [ | Box ]
+once right [ Player | no actor ] -> [ | Player ]
+}
+}
+}
+
+levels tiny of default {
 legend {
 . = empty
 P = Player
 B = Box
 G = Goal
 * = Goal Box
-}
-
-win_conditions {
-all Goal on Box
-}
-
-main {
-if input == right {
-once right [ Player | Box | no actor ] -> [ Player | Box{push} | {dest} ]
-once right [ Box{push} | {dest} ] -> [ | Box ]
-once right [ Player | no actor ] -> [ | Player ]
-}
 }
 
 level start {

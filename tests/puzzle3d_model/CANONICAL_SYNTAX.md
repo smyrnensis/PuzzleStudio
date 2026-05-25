@@ -133,8 +133,9 @@ Validation:
 - Rows must be rectangular within a slice.
 - All slices must have the same width and depth.
 - Every non-empty character must resolve through `legend`.
-- The empty character is handled by the same canonical empty-cell mechanism as
-  2D.
+- `.` is the default empty character and does not need a legend entry.
+- `<char> = empty` overrides that default empty character for levels that use a
+  different blank marker, such as `_`.
 
 ## Regions
 
@@ -174,7 +175,7 @@ canonical syntax.
 Use a `render` block and keep camera settings inside `camera`:
 
 ```txt
-model puzzle3 push3d {
+puzzle3 push3d {
   render {
     camera {
       yaw 34
@@ -302,7 +303,7 @@ not appear in new canonical examples. The migration target is
 ## Minimal example
 
 ```txt
-model puzzle3 push3d {
+puzzle3 push3d {
   layers {
     floor = Goal
     solid = Player Box Wall
@@ -320,7 +321,6 @@ model puzzle3 push3d {
 
 levels3 basic of push3d {
   legend {
-    . = empty
     P = Player
     B = Box
     # = Wall

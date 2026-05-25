@@ -523,8 +523,16 @@ pub(crate) enum SourceLineRole {
 }
 
 #[derive(Clone, Debug)]
+pub(crate) struct SourceToken {
+    pub(crate) text: String,
+    pub(crate) start: usize,
+    pub(crate) end: usize,
+}
+
+#[derive(Clone, Debug)]
 pub(crate) struct SourceContextLine {
     pub(crate) tokens: Vec<String>,
+    pub(crate) token_spans: Vec<SourceToken>,
     pub(crate) scope: Option<SourceScope>,
     pub(crate) start: usize,
     pub(crate) content: String,
@@ -628,6 +636,7 @@ pub(crate) fn scan_source_context(source: &str) -> SourceContext {
 
         context.lines.push(SourceContextLine {
             tokens: tokens.iter().map(|token| (*token).to_string()).collect(),
+            token_spans: source_line_tokens(raw, offset),
             scope: current,
             start: offset,
             content: content.to_string(),
@@ -733,6 +742,32 @@ fn source_context_tokens(line: &str) -> Vec<&str> {
         .collect()
 }
 
+pub(crate) fn source_line_tokens(line: &str, line_offset: usize) -> Vec<SourceToken> {
+    let mut tokens = Vec::new();
+    let mut start = None;
+    for (index, ch) in line.char_indices() {
+        if ch.is_whitespace() {
+            if let Some(token_start) = start.take() {
+                tokens.push(SourceToken {
+                    text: line[token_start..index].to_string(),
+                    start: line_offset + token_start,
+                    end: line_offset + index,
+                });
+            }
+        } else if start.is_none() {
+            start = Some(index);
+        }
+    }
+    if let Some(token_start) = start {
+        tokens.push(SourceToken {
+            text: line[token_start..].to_string(),
+            start: line_offset + token_start,
+            end: line_offset + line.len(),
+        });
+    }
+    tokens
+}
+
 fn push_opening_scope(name: &str, block_stack: &mut Vec<SourceScope>) {
     if let Some(block) = source_scope_for_name(name) {
         block_stack.push(block);
@@ -815,8 +850,7 @@ fn source_opens_block(line: &str, tokens: &[&str], current: Option<SourceScope>)
                 | ["camera"]
                 | ["scene", ..]
                 | ["puzzle", ..]
-                | ["model", "puzzle", ..]
-                | ["model", "puzzle3", ..]
+                | ["puzzle3", ..]
                 | ["view", ..]
                 | ["state"]
                 | ["rules"]
@@ -831,7 +865,6 @@ fn source_opens_block(line: &str, tokens: &[&str], current: Option<SourceScope>)
                 | ["for", ..]
                 | ["level_menu", ..]
                 | ["menu", ..]
-                | ["puzzle3", ..]
         )
 }
 
@@ -886,7 +919,7 @@ fn opening_scope(line: &str, tokens: &[&str], current: Option<SourceScope>) -> O
         ["sounds"] => Some(SourceScope::Sounds),
         ["assets"] => Some(SourceScope::Assets),
         ["scene", ..] => Some(SourceScope::Scene),
-        ["puzzle", ..] | ["model", "puzzle" | "puzzle3", ..] => Some(SourceScope::Puzzle),
+        ["puzzle", ..] | ["puzzle3", ..] => Some(SourceScope::Puzzle),
         ["level", ..] => Some(SourceScope::Level),
         ["shapes"] => Some(SourceScope::VisualShapeTable),
         ["colors"] => Some(SourceScope::VisualColorTable),
@@ -975,4 +1008,34 @@ fn leading_token_len(line: &str) -> Option<usize> {
 
 fn parse_error(line: &str, message: &str) -> AppError {
     AppError::Parse(format!("{message}: {line}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::scan_source_context;
+
+    #[test]
+    fn source_context_preserves_token_spans_before_comments() {
+        let source = "scene title {\n  button \"Play\" -> start levels in playing // comment\n}\n";
+        let context = scan_source_context(source);
+        let button_line = context
+            .lines
+            .iter()
+            .find(|line| line.content.contains("button"))
+            .unwrap();
+
+        let start = button_line
+            .token_spans
+            .iter()
+            .find(|token| token.text == "start")
+            .unwrap();
+        assert_eq!(&source[start.start..start.end], "start");
+
+        assert!(
+            !button_line
+                .token_spans
+                .iter()
+                .any(|token| token.text == "//" || token.text == "comment")
+        );
+    }
 }

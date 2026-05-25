@@ -1,6 +1,6 @@
 title "Microban Basic 3D"
 
-model puzzle3 sokoban_literally_in_3d {
+puzzle3 sokoban_literally_in_3d {
   render {
     camera {
       yaw 15
@@ -29,7 +29,7 @@ model puzzle3 sokoban_literally_in_3d {
 
   win_conditions {
     some Goal
-    all Goal on down [ Box | Goal ]
+    no down [ no Box | Goal ]
   }
 
   on_level_clear {

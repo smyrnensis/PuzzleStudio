@@ -521,6 +521,7 @@ pub struct InputDef3 {
     pub id: InputId3,
     pub name: String,
     pub direction: Option<Direction3>,
+    pub keys: Vec<String>,
 }
 
 impl InputDef3 {
@@ -529,6 +530,7 @@ impl InputDef3 {
             id,
             name: name.into(),
             direction: Some(direction),
+            keys: Vec::new(),
         }
     }
 
@@ -537,7 +539,13 @@ impl InputDef3 {
             id,
             name: name.into(),
             direction: None,
+            keys: Vec::new(),
         }
+    }
+
+    pub fn with_keys(mut self, keys: Vec<String>) -> Self {
+        self.keys = keys;
+        self
     }
 }
 

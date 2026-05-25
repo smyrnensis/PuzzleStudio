@@ -3,8 +3,8 @@ use std::fmt::Write;
 
 use crate::{
     Direction3, Guard3, Lifecycle3, LifecycleCommand3, MatchCell3, ObjectId, ParsedPuzzle3,
-    Pattern3, Rule3, RuleApplication3, SceneAction3, SceneAlignX3, SceneAlignY3, SceneComponent3,
-    SceneLayout3, SelectorCatalog3, Size3, SpriteColor3, SpriteSet3, WinCondition3, WriteOp3,
+    Pattern3, Rule3, RuleApplication3, RuleEffect3, SelectorCatalog3, Size3, SpriteColor3,
+    SpriteSet3, WinCondition3, WriteOp3,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -23,6 +23,15 @@ pub fn export_visual_fixture_json_with_title(
     parsed: &ParsedPuzzle3,
     title: Option<&str>,
 ) -> Result<String, VisualFixtureExportError3> {
+    export_visual_fixture_json_with_title_and_scenes(parsed, title, None, &[])
+}
+
+pub fn export_visual_fixture_json_with_title_and_scenes(
+    parsed: &ParsedPuzzle3,
+    title: Option<&str>,
+    scene_fields_json: Option<&str>,
+    level_bundle_names: &[String],
+) -> Result<String, VisualFixtureExportError3> {
     let bundle = parsed
         .level_bundle
         .as_ref()
@@ -35,12 +44,13 @@ pub fn export_visual_fixture_json_with_title(
     let mut out = String::new();
     out.push_str("{\n");
     write_json_string_field(&mut out, 1, "title", &title, true);
+    let _ = writeln!(out, "  \"layerCount\": {},", parsed.game.layer_count);
     write_size_field(&mut out, 1, "size", bundle.levels[0].level.size, true);
     write_camera(&mut out, parsed);
     write_settings(&mut out, parsed);
     write_directions(&mut out);
     write_direction_sets(&mut out);
-    write_controls(&mut out);
+    write_controls(&mut out, parsed);
     write_inputs(&mut out, parsed);
     write_rules(&mut out, "rules", &parsed.rules);
     write_lifecycle(&mut out, &parsed.lifecycle);
@@ -48,9 +58,9 @@ pub fn export_visual_fixture_json_with_title(
         write_win_condition(&mut out, condition);
     }
     write_objects(&mut out, parsed, &object_names)?;
-    write_scenes(&mut out, parsed);
+    write_scenes(&mut out, scene_fields_json);
     write_levels(&mut out, parsed, &object_names)?;
-    write_level_bundles(&mut out, parsed);
+    write_level_bundles(&mut out, parsed, level_bundle_names);
     write_sprites(&mut out, parsed.sprite_set.as_ref());
     out.push_str("}\n");
     Ok(out)
@@ -71,10 +81,14 @@ fn write_settings(out: &mut String, parsed: &ParsedPuzzle3) {
     let camera = &parsed.settings.camera;
     let _ = writeln!(
         out,
-        "  \"settings\": {{ \"interactiveLook\": {}, \"interactiveZoom\": {}, \"grid\": {{ \"visible\": {}, \"occupied_cells\": {} }}, \"shade\": {} }},",
+        "  \"settings\": {{ \"interactiveLook\": {}, \"interactiveZoom\": {}, \"grid\": {{ \"visibility\": {}, \"occupied_cells\": {} }}, \"shade\": {} }},",
         camera.interactive_look,
         camera.interactive_zoom,
-        parsed.settings.grid.occupied_cells,
+        if parsed.settings.grid.occupied_cells {
+            1
+        } else {
+            0
+        },
         parsed.settings.grid.occupied_cells,
         parsed.settings.sprite.shade,
     );
@@ -172,10 +186,10 @@ fn write_direction_sets(out: &mut String) {
     out.push_str("  },\n");
 }
 
-fn write_controls(out: &mut String) {
+fn write_controls(out: &mut String, parsed: &ParsedPuzzle3) {
     out.push_str("  \"controls\": {\n");
     out.push_str("    \"keys\": {\n");
-    let keys = [
+    let default_keys = [
         ("ArrowLeft", "left"),
         ("ArrowRight", "right"),
         ("ArrowUp", "forward"),
@@ -193,6 +207,21 @@ fn write_controls(out: &mut String) {
         ("Up", "forward"),
         ("Down", "backward"),
     ];
+    let mut keys = Vec::<(&str, &str)>::new();
+    if parsed
+        .game
+        .inputs
+        .iter()
+        .any(|input| !input.keys.is_empty())
+    {
+        for input in &parsed.game.inputs {
+            for key in &input.keys {
+                keys.push((key.as_str(), input.name.as_str()));
+            }
+        }
+    } else {
+        keys.extend(default_keys);
+    }
     for (index, (key, input)) in keys.iter().enumerate() {
         let comma = if index + 1 == keys.len() { "" } else { "," };
         writeln!(
@@ -223,6 +252,16 @@ fn write_inputs(out: &mut String, parsed: &ParsedPuzzle3) {
         .unwrap();
         if let Some(direction) = input.direction {
             write!(out, ", \"direction\": {}", json_string(direction.name)).unwrap();
+        }
+        if !input.keys.is_empty() {
+            out.push_str(", \"keys\": [");
+            for (key_index, key) in input.keys.iter().enumerate() {
+                if key_index > 0 {
+                    out.push_str(", ");
+                }
+                out.push_str(&json_string(key));
+            }
+            out.push(']');
         }
         out.push_str(" }");
     }
@@ -292,7 +331,46 @@ fn write_rule_json(out: &mut String, rule: &Rule3, index: usize) {
         }
         write_write_op_json(out, write_op);
     }
+    out.push_str("], \"effects\": [");
+    for (effect_index, effect) in rule.effects.iter().enumerate() {
+        if effect_index > 0 {
+            out.push_str(", ");
+        }
+        write_rule_effect_json(out, effect);
+    }
     out.push_str("] }");
+}
+
+fn write_rule_effect_json(out: &mut String, effect: &RuleEffect3) {
+    match effect {
+        RuleEffect3::SetCameraYaw(value) => {
+            write!(
+                out,
+                "{{ \"kind\": \"set_camera\", \"variable\": \"yaw\", \"value\": {} }}",
+                value
+            )
+            .unwrap();
+        }
+        RuleEffect3::SetCameraPitch(value) => {
+            write!(
+                out,
+                "{{ \"kind\": \"set_camera\", \"variable\": \"pitch\", \"value\": {} }}",
+                value
+            )
+            .unwrap();
+        }
+        RuleEffect3::SetCameraZoom(value) => {
+            write!(
+                out,
+                "{{ \"kind\": \"set_camera\", \"variable\": \"zoom\", \"value\": {} }}",
+                format_zoom(*value)
+            )
+            .unwrap();
+        }
+        RuleEffect3::ResetCamera => {
+            out.push_str("{ \"kind\": \"reset_camera\" }");
+        }
+    }
 }
 
 fn rule_application_name(application: RuleApplication3) -> &'static str {
@@ -486,278 +564,22 @@ fn write_objects(
     Ok(())
 }
 
-fn write_scenes(out: &mut String, parsed: &ParsedPuzzle3) {
-    let scenes = if parsed.scenes.is_empty() {
-        Vec::new()
-    } else {
-        parsed.scenes.iter().collect::<Vec<_>>()
-    };
-    let current_scene = scenes
-        .iter()
-        .find(|scene| scene.name == "title")
-        .copied()
-        .or_else(|| scenes.first().copied())
-        .map(|scene| scene.name.as_str())
-        .unwrap_or("playing");
-    write_json_string_field(out, 1, "currentScene", current_scene, true);
-    out.push_str("  \"scenes\": [\n");
-    if scenes.is_empty() {
-        out.push_str("    {\n");
-        out.push_str("      \"name\": \"playing\",\n");
-        out.push_str("      \"puzzles\": [{ \"slot\": \"board\", \"model\": \"default\" }],\n");
-        out.push_str("      \"components\": [{ \"kind\": \"puzzle3\", \"source\": \"board\" }]\n");
-        out.push_str("    }\n");
-    } else {
-        for (index, scene) in scenes.iter().enumerate() {
-            let comma = if index + 1 == scenes.len() { "" } else { "," };
-            out.push_str("    {\n");
-            write_json_string_field(out, 3, "name", &scene.name, true);
-            write_scene_layout_json_field(out, 3, &scene.layout, true);
-            out.push_str("      \"puzzles\": [");
-            for (puzzle_index, puzzle) in scene.puzzles.iter().enumerate() {
-                if puzzle_index > 0 {
-                    out.push_str(", ");
-                }
-                write!(
-                    out,
-                    "{{ \"slot\": {}, \"model\": {} }}",
-                    json_string(&puzzle.slot),
-                    json_string(&puzzle.model)
-                )
-                .unwrap();
-            }
-            out.push_str("],\n");
-            out.push_str("      \"keys\": {");
-            for (key_index, key) in scene.keys.iter().enumerate() {
-                if key_index > 0 {
-                    out.push_str(", ");
-                }
-                write!(
-                    out,
-                    "{}: {}",
-                    json_string(&key.key),
-                    scene_action_json(&key.action)
-                )
-                .unwrap();
-            }
-            out.push_str("},\n");
-            out.push_str("      \"components\": [");
-            for (component_index, component) in scene.components.iter().enumerate() {
-                if component_index > 0 {
-                    out.push_str(", ");
-                }
-                write_scene_component_json(out, component);
-            }
-            out.push_str("]\n");
-            writeln!(out, "    }}{}", comma).unwrap();
+fn write_scenes(out: &mut String, scene_fields_json: Option<&str>) {
+    if let Some(scene_fields_json) = scene_fields_json {
+        out.push_str(scene_fields_json);
+        if !scene_fields_json.ends_with('\n') {
+            out.push('\n');
         }
-    }
-    out.push_str("  ],\n");
-}
-
-fn write_scene_component_json(out: &mut String, component: &SceneComponent3) {
-    match component {
-        SceneComponent3::Title { text, layout } => {
-            write!(
-                out,
-                "{{ \"kind\": \"title\", \"text\": {}",
-                json_string(text)
-            )
-            .unwrap();
-            write_layout_json(out, layout);
-            out.push_str(" }");
-        }
-        SceneComponent3::Button {
-            label,
-            action,
-            layout,
-        } => {
-            write!(
-                out,
-                "{{ \"kind\": \"button\", \"label\": {}, \"action\": {}",
-                json_string(label),
-                scene_action_json(action)
-            )
-            .unwrap();
-            write_layout_json(out, layout);
-            out.push_str(" }");
-        }
-        SceneComponent3::LevelMenu {
-            levels,
-            action,
-            layout,
-        } => {
-            write!(
-                out,
-                "{{ \"kind\": \"level_menu\", \"levels\": {}, \"action\": {}",
-                json_string(levels),
-                scene_action_json(action)
-            )
-            .unwrap();
-            write_layout_json(out, layout);
-            out.push_str(" }");
-        }
-        SceneComponent3::Puzzle3 { source, layout } => {
-            write!(
-                out,
-                "{{ \"kind\": \"puzzle3\", \"source\": {}",
-                json_string(source)
-            )
-            .unwrap();
-            write_layout_json(out, layout);
-            out.push_str(" }");
-        }
-        SceneComponent3::Row { children, layout } => {
-            write_container_json(out, "row", children, layout);
-        }
-        SceneComponent3::Column { children, layout } => {
-            write_container_json(out, "column", children, layout);
-        }
-        SceneComponent3::Box { children, layout } => {
-            write_container_json(out, "box", children, layout);
-        }
-    }
-}
-
-fn write_container_json(
-    out: &mut String,
-    kind: &str,
-    children: &[SceneComponent3],
-    layout: &SceneLayout3,
-) {
-    write!(out, "{{ \"kind\": {kind:?}, \"children\": [").unwrap();
-    for (index, child) in children.iter().enumerate() {
-        if index > 0 {
-            out.push_str(", ");
-        }
-        write_scene_component_json(out, child);
-    }
-    out.push(']');
-    write_layout_json(out, layout);
-    out.push_str(" }");
-}
-
-fn write_layout_json(out: &mut String, layout: &SceneLayout3) {
-    if layout.size.is_none()
-        && layout.gap.is_none()
-        && layout.align == SceneLayout3::default().align
-    {
         return;
     }
-    out.push_str(", \"layout\": {");
-    let mut wrote = false;
-    if let Some(size) = layout.size {
-        write!(
-            out,
-            "\"size\": {{ \"width\": {}, \"height\": {} }}",
-            size.width, size.height
-        )
-        .unwrap();
-        wrote = true;
-    }
-    if let Some(gap) = layout.gap {
-        if wrote {
-            out.push_str(", ");
-        }
-        write!(out, "\"gap\": {gap}").unwrap();
-        wrote = true;
-    }
-    if layout.align != SceneLayout3::default().align {
-        if wrote {
-            out.push_str(", ");
-        }
-        write!(
-            out,
-            "\"align\": {{ \"x\": {}, \"y\": {} }}",
-            json_string(align_x_name(layout.align.x)),
-            json_string(align_y_name(layout.align.y))
-        )
-        .unwrap();
-    }
-    out.push('}');
-}
-
-fn write_scene_layout_json_field(
-    out: &mut String,
-    indent: usize,
-    layout: &SceneLayout3,
-    comma: bool,
-) {
-    write_indent(out, indent);
-    out.push_str("\"layout\": ");
-    write_layout_json_object(out, layout);
-    if comma {
-        out.push(',');
-    }
-    out.push('\n');
-}
-
-fn write_layout_json_object(out: &mut String, layout: &SceneLayout3) {
-    out.push('{');
-    let mut wrote = false;
-    if let Some(size) = layout.size {
-        write!(
-            out,
-            "\"size\": {{ \"width\": {}, \"height\": {} }}",
-            size.width, size.height
-        )
-        .unwrap();
-        wrote = true;
-    }
-    if let Some(gap) = layout.gap {
-        if wrote {
-            out.push_str(", ");
-        }
-        write!(out, "\"gap\": {gap}").unwrap();
-        wrote = true;
-    }
-    if layout.align != SceneLayout3::default().align {
-        if wrote {
-            out.push_str(", ");
-        }
-        write!(
-            out,
-            "\"align\": {{ \"x\": {}, \"y\": {} }}",
-            json_string(align_x_name(layout.align.x)),
-            json_string(align_y_name(layout.align.y))
-        )
-        .unwrap();
-    }
-    out.push('}');
-}
-
-fn align_x_name(value: SceneAlignX3) -> &'static str {
-    match value {
-        SceneAlignX3::Left => "left",
-        SceneAlignX3::Center => "center",
-        SceneAlignX3::Right => "right",
-    }
-}
-
-fn align_y_name(value: SceneAlignY3) -> &'static str {
-    match value {
-        SceneAlignY3::Top => "top",
-        SceneAlignY3::Center => "center",
-        SceneAlignY3::Bottom => "bottom",
-    }
-}
-
-fn scene_action_json(action: &SceneAction3) -> String {
-    match action {
-        SceneAction3::Goto { scene } => {
-            format!(
-                "{{ \"kind\": \"goto\", \"scene\": {} }}",
-                json_string(scene)
-            )
-        }
-        SceneAction3::StartLevels { levels, scene } => {
-            format!(
-                "{{ \"kind\": \"start_levels\", \"levels\": {}, \"scene\": {} }}",
-                json_string(levels),
-                json_string(scene)
-            )
-        }
-    }
+    write_json_string_field(out, 1, "currentScene", "playing", true);
+    out.push_str("  \"scenes\": [\n");
+    out.push_str("    {\n");
+    out.push_str("      \"name\": \"playing\",\n");
+    out.push_str("      \"puzzles\": [{ \"slot\": \"board\", \"model\": \"default\" }],\n");
+    out.push_str("      \"components\": [{ \"kind\": \"puzzle3\", \"source\": \"board\" }]\n");
+    out.push_str("    }\n");
+    out.push_str("  ],\n");
 }
 
 fn write_levels(
@@ -791,13 +613,13 @@ fn write_levels(
     Ok(())
 }
 
-fn write_level_bundles(out: &mut String, parsed: &ParsedPuzzle3) {
+fn write_level_bundles(out: &mut String, parsed: &ParsedPuzzle3, extra_names: &[String]) {
     let Some(bundle) = parsed.level_bundle.as_ref() else {
         return;
     };
     let mut names = vec!["default".to_string(), "levels".to_string()];
-    for scene in &parsed.scenes {
-        collect_component_levels(&mut names, &scene.components);
+    for name in extra_names {
+        push_unique_string(&mut names, name);
     }
 
     out.push_str("  \"levelBundles\": {\n");
@@ -818,28 +640,6 @@ fn write_level_bundles(out: &mut String, parsed: &ParsedPuzzle3) {
         writeln!(out, "]{}", comma).unwrap();
     }
     out.push_str("  },\n");
-}
-
-fn collect_component_levels(names: &mut Vec<String>, components: &[SceneComponent3]) {
-    for component in components {
-        match component {
-            SceneComponent3::Button { action, .. } => collect_action_levels(names, action),
-            SceneComponent3::LevelMenu { levels, action, .. } => {
-                push_unique_string(names, levels);
-                collect_action_levels(names, action);
-            }
-            SceneComponent3::Row { children, .. }
-            | SceneComponent3::Column { children, .. }
-            | SceneComponent3::Box { children, .. } => collect_component_levels(names, children),
-            SceneComponent3::Title { .. } | SceneComponent3::Puzzle3 { .. } => {}
-        }
-    }
-}
-
-fn collect_action_levels(names: &mut Vec<String>, action: &SceneAction3) {
-    if let SceneAction3::StartLevels { levels, .. } = action {
-        push_unique_string(names, levels);
-    }
 }
 
 fn push_unique_string(names: &mut Vec<String>, value: &str) {

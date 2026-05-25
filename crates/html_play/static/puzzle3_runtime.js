@@ -5,10 +5,13 @@ window.Puzzle3DTestRuntime = {
 };
 
 const PUZZLE3_UNTIL_STABLE_REPEAT_LIMIT = 200;
+const PUZZLE3_CAMERA_MIN_PITCH_DEGREES = -90;
+const PUZZLE3_CAMERA_MAX_PITCH_DEGREES = 90;
 
 class Puzzle3DTestRuntime {
   constructor(initialSnapshot) {
     this.base = cloneSnapshot(initialSnapshot);
+    this.camera = cloneCameraState(initialSnapshot.camera);
     this.levels = cloneLevels(initialSnapshot.levels?.length
       ? initialSnapshot.levels
       : [snapshotLevel(initialSnapshot)]);
@@ -26,6 +29,7 @@ class Puzzle3DTestRuntime {
     return {
       ...this.base,
       size: { ...level.size },
+      camera: cloneCameraState(this.camera),
       cells: cloneCells(this.cells),
       levelIndex: this.levelIndex,
       levelCount: this.levels.length,
@@ -44,19 +48,27 @@ class Puzzle3DTestRuntime {
       return false;
     }
     const before = this.historyEntry();
-    const next = this.transitionProgram(this.cells, this.base.rules || [], inputId);
-    if (sameCells(next, this.cells)) {
+    const outcome = this.transitionProgram(this.cells, this.base.rules || [], inputId);
+    const changedCells = !sameCells(outcome.cells, this.cells);
+    if (!changedCells && outcome.effects.length === 0) {
       return false;
     }
-    this.undoStack.push(before);
-    this.cells = next;
-    this.moveCount += 1;
-    const wasCompleted = this.completed;
-    this.completed = this.isComplete();
-    if (!wasCompleted && this.completed) {
-      this.runLevelClearLifecycle();
+    if (changedCells) {
+      this.undoStack.push(before);
+      this.cells = outcome.cells;
+      this.moveCount += 1;
+      const wasCompleted = this.completed;
+      this.completed = this.isComplete();
+      if (!wasCompleted && this.completed) {
+        this.runLevelClearLifecycle();
+      }
     }
+    this.applyRuleEffects(outcome.effects);
     return true;
+  }
+
+  setCamera(camera) {
+    this.camera = cloneCameraState(camera || this.camera);
   }
 
   undo() {
@@ -133,7 +145,9 @@ class Puzzle3DTestRuntime {
 
   initialCellsForCurrentLevel() {
     const raw = cloneCells(this.currentLevel().cells);
-    return this.transitionProgram(raw, this.base.lifecycle?.onLevelStart || [], undefined);
+    const outcome = this.transitionProgram(raw, this.base.lifecycle?.onLevelStart || [], undefined);
+    this.applyRuleEffects(outcome.effects);
+    return outcome.cells;
   }
 
   currentLevel() {
@@ -150,89 +164,123 @@ class Puzzle3DTestRuntime {
 
   transitionProgram(initialCells, rules, inputId) {
     let current = cloneCells(initialCells);
+    const effects = [];
     for (const rule of rules || []) {
       if (!this.guardsAccept(rule, inputId)) {
         continue;
       }
+      let outcome = null;
       if (rule.application === "once_all") {
-        current = this.transitionOnceAll(current, rule, inputId);
+        outcome = this.transitionOnceAll(current, rule, inputId);
       } else if (rule.application === "once_per_level") {
-        current = this.transitionOncePerLevel(current, rule, inputId);
+        outcome = this.transitionOncePerLevel(current, rule, inputId);
       } else if (rule.application === "until_stable") {
-        current = this.transitionUntilStable(current, rule, inputId);
+        outcome = this.transitionUntilStable(current, rule, inputId);
       } else {
-        current = this.transitionOnce(current, rule, inputId);
+        outcome = this.transitionOnce(current, rule, inputId);
       }
+      current = outcome.cells;
+      effects.push(...outcome.effects);
     }
-    return current;
+    return { cells: current, effects };
   }
 
   transitionOnce(cells, rule, inputId) {
     if (!this.guardsAccept(rule, inputId)) {
-      return cloneCells(cells);
+      return transitionOutcome(cloneCells(cells));
     }
     const origin = this.firstMatch(cells, rule.pattern);
     if (!origin) {
-      return cloneCells(cells);
+      return transitionOutcome(cloneCells(cells));
     }
-    return this.applyPatch(cells, this.buildPatch(origin, rule.writes || []), false);
+    return transitionOutcome(
+      this.applyPatch(cells, this.buildPatch(origin, rule.writes || []), false),
+      rule.effects,
+    );
   }
 
   transitionOnceAll(cells, rule, inputId) {
     if (!this.guardsAccept(rule, inputId)) {
-      return cloneCells(cells);
+      return transitionOutcome(cloneCells(cells));
     }
     const origins = this.allMatches(cells, rule.pattern);
     let current = cloneCells(cells);
+    const effects = [];
     for (const origin of origins) {
       if (!this.patternMatchesAt(current, rule.pattern, origin)) {
         continue;
       }
       try {
         current = this.applyPatch(current, this.buildPatch(origin, rule.writes || []), true);
+        effects.push(...(rule.effects || []));
       } catch (error) {
         if (!error?.stale) {
           throw error;
         }
       }
     }
-    return current;
+    return transitionOutcome(current, effects);
   }
 
   transitionOncePerLevel(cells, rule, inputId) {
     const ruleId = rule.id ?? 0;
     if (this.levelFiredRules.has(ruleId) || !this.guardsAccept(rule, inputId)) {
-      return cloneCells(cells);
+      return transitionOutcome(cloneCells(cells));
     }
     const origin = this.firstMatch(cells, rule.pattern);
     if (!origin) {
-      return cloneCells(cells);
+      return transitionOutcome(cloneCells(cells));
     }
     const next = this.applyPatch(cells, this.buildPatch(origin, rule.writes || []), false);
     this.levelFiredRules.add(ruleId);
-    return next;
+    return transitionOutcome(next, rule.effects);
   }
 
   transitionUntilStable(cells, rule, inputId) {
     let current = cloneCells(cells);
     const seen = new Set([canonicalCellsKey(current)]);
+    const effects = [];
     let repeatCount = 0;
     for (;;) {
       const next = this.transitionOnceAll(current, rule, inputId);
-      if (sameCells(next, current)) {
-        return current;
+      effects.push(...next.effects);
+      if (sameCells(next.cells, current)) {
+        return transitionOutcome(current, effects);
       }
-      const key = canonicalCellsKey(next);
+      const key = canonicalCellsKey(next.cells);
       if (seen.has(key)) {
         console.warn(`until_stable cycle in rule ${rule.id ?? 0}; ending repeat at current state`);
-        return next;
+        return transitionOutcome(next.cells, effects);
       }
       seen.add(key);
-      current = next;
+      current = next.cells;
       repeatCount += 1;
       if (repeatCount >= PUZZLE3_UNTIL_STABLE_REPEAT_LIMIT) {
         console.warn(`until_stable repeat limit reached in rule ${rule.id ?? 0}; ending repeat at current state`);
-        return current;
+        return transitionOutcome(current, effects);
+      }
+    }
+  }
+
+  applyRuleEffects(effects) {
+    for (const effect of effects || []) {
+      if (effect?.kind === "reset_camera") {
+        this.camera = cloneCameraState(this.base.camera);
+        continue;
+      }
+      if (effect?.kind !== "set_camera") {
+        continue;
+      }
+      if (effect.variable === "yaw") {
+        this.camera.yawDegrees = normalizeDegrees(Number(effect.value) || 0);
+      } else if (effect.variable === "pitch") {
+        this.camera.pitchDegrees = clamp(
+          Number(effect.value) || 0,
+          PUZZLE3_CAMERA_MIN_PITCH_DEGREES,
+          PUZZLE3_CAMERA_MAX_PITCH_DEGREES,
+        );
+      } else if (effect.variable === "zoom") {
+        this.camera.zoom = clamp(Number(effect.value) || 1, 0.1, 8);
       }
     }
   }
@@ -402,6 +450,10 @@ class Puzzle3DTestRuntime {
   }
 }
 
+function transitionOutcome(cells, effects = []) {
+  return { cells, effects: cloneJson(effects || []) };
+}
+
 function evaluateWinCondition(runtime, condition, cells) {
   if (!condition) {
     return false;
@@ -445,7 +497,7 @@ function cloneSnapshot(snapshot) {
   return {
     ...snapshot,
     size: { ...snapshot.size },
-    camera: snapshot.camera ? { ...snapshot.camera } : undefined,
+    camera: cloneCameraState(snapshot.camera),
     settings: { ...(snapshot.settings || {}) },
     directions: cloneRecord(snapshot.directions || {}),
     directionSets: cloneRecord(snapshot.directionSets || {}),
@@ -461,6 +513,14 @@ function cloneSnapshot(snapshot) {
     cells: cloneCells(snapshot.cells || []),
     levels: cloneLevels(snapshot.levels || []),
     levelBundles: cloneLevelBundles(snapshot.levelBundles || {}),
+  };
+}
+
+function cloneCameraState(camera) {
+  return {
+    yawDegrees: Number(camera?.yawDegrees ?? 0),
+    pitchDegrees: Number(camera?.pitchDegrees ?? 35),
+    zoom: Number(camera?.zoom ?? 1),
   };
 }
 
@@ -607,4 +667,12 @@ function transitionError(code) {
   const error = new Error(code);
   error.code = code;
   return error;
+}
+
+function normalizeDegrees(value) {
+  return ((value % 360) + 360) % 360;
+}
+
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
 }

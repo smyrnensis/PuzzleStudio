@@ -1,4 +1,4 @@
-model puzzle3 from_puzzle_sokoban_3d {
+puzzle3 from_puzzle_sokoban_3d {
   layers {
     floor = Floor
     target = Goal
@@ -14,7 +14,7 @@ model puzzle3 from_puzzle_sokoban_3d {
 
   win_conditions {
     some Goal
-    all Goal on down [ Box | Goal ]
+    no down [ no Box | Goal ]
   }
 
   on_level_clear {
