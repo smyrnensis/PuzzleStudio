@@ -73,6 +73,10 @@ rules {
   move
 }
 
+on_level_clear {
+  next_level
+}
+
 levels {
   legend {
     . = Background
@@ -118,8 +122,5 @@ scene playing {
   rules {
     board.rules
     if input == back -> goto title
-    if board.win_conditions -> {
-      board.next_level
-    }
   }
 }

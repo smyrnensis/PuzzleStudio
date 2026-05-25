@@ -404,6 +404,7 @@ function syncScreenScale() {
   screenFrame.dataset.screenVirtualWidth = String(virtualSize.width);
   screenFrame.dataset.screenVirtualHeight = String(virtualSize.height);
   syncLogicalLayoutElementSizes(unit);
+  fitPuzzleFrameComponents(screenView);
 }
 
 function currentSceneLogicalSize() {
@@ -595,7 +596,38 @@ function renderSceneStack(state) {
     layerEl.style.zIndex = String(10 + index);
     applySceneLayout(layerEl, sceneDef?.layout, { root: true });
     renderSurfaceComponents(components, layerEl, scope);
+    markSingleFrameComponentLayer(layerEl);
     screenView.append(layerEl);
+  }
+  fitPuzzleFrameComponents(screenView);
+}
+
+function markSingleFrameComponentLayer(layerEl) {
+  const visibleChildren = [...layerEl.children].filter((child) => !child.hidden);
+  const singleFrameComponent =
+    visibleChildren.length === 1 && visibleChildren[0]?.dataset.frameComponent === "true";
+  layerEl.classList.toggle("has-single-frame-component", singleFrameComponent);
+}
+
+function fitPuzzleFrameComponents(root = screenView) {
+  if (!root) {
+    return;
+  }
+  for (const boardEl of root.querySelectorAll(".board[data-frame-component=\"true\"]")) {
+    const parent = boardEl.parentElement;
+    const cols = Math.max(1, Number(boardEl.dataset.viewportWidth) || 1);
+    const rows = Math.max(1, Number(boardEl.dataset.viewportHeight) || 1);
+    if (!parent || parent.getClientRects().length === 0) {
+      continue;
+    }
+    const frame = elementContentBox(parent);
+    if (frame.width <= 0 || frame.height <= 0) {
+      continue;
+    }
+    const cellSize = Math.max(0.0001, Math.min(frame.width / cols, frame.height / rows));
+    boardEl.style.width = `${cols * cellSize}px`;
+    boardEl.style.height = `${rows * cellSize}px`;
+    boardEl.style.setProperty("--cell-size", `${cellSize}px`);
   }
 }
 
@@ -770,6 +802,7 @@ function renderPuzzle(component, scope = {}) {
   }
   const root = document.createElement("div");
   root.className = "board";
+  root.dataset.frameComponent = "true";
   root.dataset.source = component.source || "";
   root.dataset.scene = layer?.name || currentState?.currentScene || currentState?.screen || "";
   const key = `${root.dataset.scene}:${root.dataset.source}`;
@@ -796,6 +829,7 @@ function renderPuzzle3Frame(component, scope = {}) {
   if (!frame) {
     frame = document.createElement("iframe");
     frame.className = "puzzle3-frame";
+    frame.dataset.frameComponent = "true";
     frame.loading = "eager";
     frame.dataset.scene = sceneName;
     frame.dataset.source = source;

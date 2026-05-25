@@ -40,6 +40,7 @@
       this.againRunToken = 0;
       this.defaultAgainMs = Number(exportData.defaultAgainMs ?? 120);
       this.currentInput = null;
+      this.currentTurnSfx = null;
       this.maxAgainTurnsPerInput = 256;
       this.coreRuntime = null;
       this.editorPreviewSceneEnabled = false;
@@ -242,16 +243,19 @@
       }
       const previousInput = this.currentInput;
       this.currentInput = inputName;
+      const ownsTurnSfx = this.beginTurnSfx();
       try {
         this.applyTurnCompletion([]);
       } finally {
         this.currentInput = previousInput;
+        this.endTurnSfx(ownsTurnSfx);
       }
     }
 
     applyInput(input) {
       const previousInput = this.currentInput;
       this.currentInput = this.inputNamesById.get(input) ?? null;
+      const ownsTurnSfx = this.beginTurnSfx();
       try {
         const result = this.applyModelInput(input);
         if (!result?.cancelled) {
@@ -259,6 +263,7 @@
         }
       } finally {
         this.currentInput = previousInput;
+        this.endTurnSfx(ownsTurnSfx);
       }
     }
 
@@ -376,7 +381,7 @@
           continue;
         }
         if (command?.kind === "play_sfx") {
-          this.soundEvents.push({ kind: "play_sfx", name: command.name });
+          this.emitTurnSfx(command.name);
           continue;
         }
         if (command?.kind === "wait") {
@@ -456,22 +461,63 @@
     }
 
     runAgainTurn(target) {
-      const result = target
-        ? this.applyModelInputToTarget(target, 0)
-        : this.applyModelInput(0);
-      if (result?.cancelled) {
-        return { continueAgain: false };
+      const previousTurnSfx = this.beginSeparateTurnSfx();
+      try {
+        const result = target
+          ? this.applyModelInputToTarget(target, 0)
+          : this.applyModelInput(0);
+        if (result?.cancelled) {
+          return { continueAgain: false };
+        }
+        const commands = result?.commands || [];
+        const hasAgain = commands.some((queued) => {
+          const command = queued?.command;
+          return command === "again" || command?.kind === "again";
+        });
+        this.applyTurnCompletion(commands.filter((queued) => {
+          const command = queued?.command;
+          return command !== "again" && command?.kind !== "again";
+        }));
+        return { continueAgain: hasAgain };
+      } finally {
+        this.endSeparateTurnSfx(previousTurnSfx);
       }
-      const commands = result?.commands || [];
-      const hasAgain = commands.some((queued) => {
-        const command = queued?.command;
-        return command === "again" || command?.kind === "again";
-      });
-      this.applyTurnCompletion(commands.filter((queued) => {
-        const command = queued?.command;
-        return command !== "again" && command?.kind !== "again";
-      }));
-      return { continueAgain: hasAgain };
+    }
+
+    beginTurnSfx() {
+      if (this.currentTurnSfx) {
+        return false;
+      }
+      this.currentTurnSfx = new Set();
+      return true;
+    }
+
+    endTurnSfx(owned) {
+      if (owned) {
+        this.currentTurnSfx = null;
+      }
+    }
+
+    beginSeparateTurnSfx() {
+      const previous = this.currentTurnSfx;
+      this.currentTurnSfx = new Set();
+      return previous;
+    }
+
+    endSeparateTurnSfx(previous) {
+      this.currentTurnSfx = previous || null;
+    }
+
+    emitTurnSfx(name) {
+      if (!this.currentTurnSfx) {
+        this.soundEvents.push({ kind: "play_sfx", name });
+        return;
+      }
+      if (this.currentTurnSfx.has(name)) {
+        return;
+      }
+      this.currentTurnSfx.add(name);
+      this.soundEvents.push({ kind: "play_sfx", name });
     }
 
     applyCommandName(command) {
@@ -1650,7 +1696,7 @@
           return this.applySceneEffect(effect.effect?.effect || effect.effect, bindings);
         }
       } else if (effect.kind === "play_sfx") {
-        this.soundEvents.push({ kind: "play_sfx", name: effect.name });
+        this.emitTurnSfx(effect.name);
       } else if (effect.kind === "play_music") {
         this.soundEvents.push({ kind: "play_music", name: effect.name });
       } else if (effect.kind === "pause_music") {

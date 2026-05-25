@@ -24,8 +24,8 @@ puzzle3 from_puzzle_sokoban_3d {
 
 levels3 handmade of from_puzzle_sokoban_3d {
   legend {
-    _ = empty
-    . = Floor
+    . = empty
+    , = Floor
     G = Floor Goal
     P = Player
     B = Box
@@ -34,30 +34,30 @@ levels3 handmade of from_puzzle_sokoban_3d {
 
   level push_once {
     #####
-    #___#
-    #PB_#
-    #___#
+    #...#
+    #PB.#
+    #...#
     #####
 
-    .....
-    .....
-    ...G.
-    .....
-    .....
+    ,,,,,
+    ,,,,,
+    ,,,G,
+    ,,,,,
+    ,,,,,
   }
 
   level corner_lift {
     #####
-    #___#
-    #_B_#
-    #_P_#
+    #...#
+    #.B.#
+    #.P.#
     #####
 
-    .....
-    ..G..
-    .....
-    .....
-    .....
+    ,,,,,
+    ,,G,,
+    ,,,,,
+    ,,,,,
+    ,,,,,
   }
 }
 

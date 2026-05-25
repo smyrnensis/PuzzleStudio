@@ -60,7 +60,7 @@ impl Default for Catalog {
         };
         let anonymous_bool = ScratchDef {
             id: ScratchId(1),
-            kind: ScratchKind::Enum,
+            kind: ScratchKind::Bool,
             values: ["false", "true"].into_iter().map(str::to_string).collect(),
         };
         let anonymous_int = ScratchDef {
@@ -70,7 +70,7 @@ impl Default for Catalog {
         };
         let action = ScratchDef {
             id: ScratchId(3),
-            kind: ScratchKind::Marker,
+            kind: ScratchKind::Bool,
             values: Vec::new(),
         };
 

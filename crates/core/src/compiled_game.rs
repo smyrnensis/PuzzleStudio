@@ -245,6 +245,7 @@ pub struct ScratchDef {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ScratchKind {
     Marker,
+    Bool,
     Int,
     Enum,
 }

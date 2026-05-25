@@ -52,6 +52,12 @@ struct PsSoundDef {
     trigger: PsSoundTrigger,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PsViewportSize {
+    width: usize,
+    height: usize,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum PsSoundTrigger {
     Named,
@@ -71,6 +77,7 @@ pub fn translate_puzzlescript_to_canonical(source: &str) -> Result<String, AppEr
     let homepage = parse_homepage(&sections.prelude);
     let run_rules_on_level_start = parse_run_rules_on_level_start(&sections.prelude);
     let theme_colors = parse_theme_colors(&sections.prelude);
+    let viewport_size = parse_viewport_size(&sections.prelude);
     let sounds = parse_sound_defs(&sections.sounds);
     let startgame_sfx = ps_sound_name(&sounds, "startgame");
     let object_defs = parse_object_defs(&sections.objects);
@@ -78,11 +85,6 @@ pub fn translate_puzzlescript_to_canonical(source: &str) -> Result<String, AppEr
     let aliases = parse_alias_defs(&sections.legend, &object_defs);
     let collision_layers =
         parse_collision_layers(&sections.collision_layers, &object_defs, &aliases);
-    let has_win_conditions = sections
-        .win_conditions
-        .iter()
-        .any(|line| !line.trim().is_empty());
-
     let mut out = Vec::new();
     out.push(format!("title {}", canonical_metadata_text(&title)));
     if let Some(author) = &author {
@@ -95,6 +97,11 @@ pub fn translate_puzzlescript_to_canonical(source: &str) -> Result<String, AppEr
     push_theme_colors(&mut out, &theme_colors);
     push_sounds(&mut out, &sounds);
     out.push("puzzle main {".to_string());
+    push_viewport_size(
+        &mut out,
+        viewport_size,
+        ps_viewport_focus(&object_defs, &aliases).as_deref(),
+    );
     push_layers(&mut out, &collision_layers);
     push_default_inputs(&mut out);
     push_groups(&mut out, &aliases);
@@ -111,6 +118,7 @@ pub fn translate_puzzlescript_to_canonical(source: &str) -> Result<String, AppEr
         background_object.as_deref(),
         &sounds,
     );
+    push_ps_level_clear(&mut out);
     push_levels(
         &mut out,
         &sections.levels,
@@ -124,8 +132,8 @@ pub fn translate_puzzlescript_to_canonical(source: &str) -> Result<String, AppEr
         &mut out,
         &title,
         author.as_deref(),
-        has_win_conditions,
         startgame_sfx.as_deref(),
+        viewport_size,
     );
     Ok(out.join("\n"))
 }
@@ -253,6 +261,50 @@ fn parse_theme_colors(prelude: &[String]) -> Vec<(String, String)> {
         }
     }
     colors
+}
+
+fn parse_viewport_size(prelude: &[String]) -> Option<PsViewportSize> {
+    prelude.iter().find_map(|line| {
+        let tokens = line.split_whitespace().collect::<Vec<_>>();
+        match tokens.as_slice() {
+            [command, size] if command.eq_ignore_ascii_case("flickscreen") => {
+                parse_ps_screen_size(size)
+            }
+            [command, width, height] if command.eq_ignore_ascii_case("flickscreen") => {
+                parse_ps_screen_size_pair(width, height)
+            }
+            _ => None,
+        }
+    })
+}
+
+fn parse_ps_screen_size(value: &str) -> Option<PsViewportSize> {
+    let (width, height) = value.split_once(['x', 'X'])?;
+    parse_ps_screen_size_pair(width, height)
+}
+
+fn parse_ps_screen_size_pair(width: &str, height: &str) -> Option<PsViewportSize> {
+    let width = width.parse::<usize>().ok()?;
+    let height = height.parse::<usize>().ok()?;
+    (width > 0 && height > 0).then_some(PsViewportSize { width, height })
+}
+
+fn push_viewport_size(
+    out: &mut Vec<String>,
+    viewport_size: Option<PsViewportSize>,
+    viewport_focus: Option<&str>,
+) {
+    if let Some(size) = viewport_size {
+        out.push(format!("flickscreen {} {}", size.width, size.height));
+        if let Some(focus) = viewport_focus {
+            out.push(format!("screen_focus {focus}"));
+        }
+        out.push(String::new());
+    }
+}
+
+fn ps_viewport_focus(objects: &[PsObjectDef], aliases: &[PsAliasDef]) -> Option<String> {
+    resolve_name("player", objects, aliases)
 }
 
 fn push_theme_colors(out: &mut Vec<String>, colors: &[(String, String)]) {
@@ -549,7 +601,13 @@ fn parse_object_sprite(lines: &[String], start: usize) -> (Option<PsSpriteDef>, 
     i += 1;
 
     let mut pattern = Vec::new();
-    while i < lines.len() && is_sprite_row(lines[i].trim()) {
+    while i < lines.len()
+        && is_sprite_row_for_palette(
+            lines[i].trim(),
+            colors.len(),
+            pattern.first().map(|row: &String| row.chars().count()),
+        )
+    {
         pattern.push(lines[i].trim().to_string());
         i += 1;
     }
@@ -602,6 +660,18 @@ fn is_sprite_row(line: &str) -> bool {
             .chars()
             .all(|ch| ch == '.' || ch.is_ascii_digit() || ch.is_ascii_alphabetic())
         && line.chars().any(|ch| ch == '.' || ch.is_ascii_digit())
+}
+
+fn is_sprite_row_for_palette(line: &str, color_count: usize, width: Option<usize>) -> bool {
+    if line.is_empty() || width.is_some_and(|width| line.chars().count() != width) {
+        return false;
+    }
+    line.chars().all(|ch| {
+        ch == '.'
+            || (0..color_count)
+                .filter_map(crate::visual_color_token_for_index)
+                .any(|token| token == ch)
+    })
 }
 
 fn parse_alias_defs(lines: &[String], objects: &[PsObjectDef]) -> Vec<PsAliasDef> {
@@ -962,6 +1032,13 @@ fn ps_rules_have_again(lines: &[String]) -> bool {
         line.split_whitespace()
             .any(|token| token.eq_ignore_ascii_case("again"))
     })
+}
+
+fn push_ps_level_clear(out: &mut Vec<String>) {
+    out.push("on_level_clear {".to_string());
+    out.push("  next_level".to_string());
+    out.push("}".to_string());
+    out.push(String::new());
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1511,8 +1588,8 @@ fn push_playing_scene(
     out: &mut Vec<String>,
     title: &str,
     author: Option<&str>,
-    has_win_conditions: bool,
     startgame_sfx: Option<&str>,
+    viewport_size: Option<PsViewportSize>,
 ) {
     out.push("scene title {".to_string());
     out.push(format!("  title \"{}\"", escape_scene_text(title)));
@@ -1533,23 +1610,24 @@ fn push_playing_scene(
     out.push("  state {".to_string());
     out.push("    board = puzzle main".to_string());
     out.push("  }".to_string());
-    out.push("  view {".to_string());
-    out.push("    row {".to_string());
-    out.push(format!("      title \"{}\"", escape_scene_text(title)));
-    out.push("    }".to_string());
-    out.push("    puzzle board".to_string());
-    out.push("  }".to_string());
+    if viewport_size.is_some() {
+        out.push("  view {".to_string());
+        out.push("    puzzle board".to_string());
+        out.push("  }".to_string());
+    } else {
+        out.push("  view {".to_string());
+        out.push("    row {".to_string());
+        out.push(format!("      title \"{}\"", escape_scene_text(title)));
+        out.push("    }".to_string());
+        out.push("    puzzle board".to_string());
+        out.push("  }".to_string());
+    }
     out.push("  inputs {".to_string());
     out.push("    back <- Escape q".to_string());
     out.push("  }".to_string());
     out.push("  rules {".to_string());
     out.push("    board.rules".to_string());
     out.push("    if input == back -> goto title".to_string());
-    if has_win_conditions {
-        out.push("    if board.win_conditions -> {".to_string());
-        out.push("      board.next_level".to_string());
-        out.push("    }".to_string());
-    }
     out.push("  }".to_string());
     out.push("}".to_string());
     out.push(String::new());

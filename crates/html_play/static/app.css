@@ -185,6 +185,28 @@ button:disabled {
   gap: 14px;
 }
 
+.scene-layer.has-single-frame-component {
+  grid-template: minmax(0, 1fr) / minmax(0, 1fr);
+  grid-auto-rows: minmax(0, 1fr);
+  place-items: stretch;
+  place-content: stretch;
+}
+
+.scene-layer.has-single-frame-component > [data-frame-component="true"] {
+  min-width: 0;
+  min-height: 0;
+}
+
+.scene-layer.has-single-frame-component > .board[data-frame-component="true"] {
+  align-self: center;
+  justify-self: center;
+}
+
+.scene-layer.has-single-frame-component > iframe[data-frame-component="true"] {
+  align-self: stretch;
+  justify-self: stretch;
+}
+
 .scene-overlay-layer {
   align-self: stretch;
   justify-self: stretch;

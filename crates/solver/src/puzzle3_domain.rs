@@ -142,16 +142,16 @@ no down [ no Box | Goal ]
 
 levels3 tiny of push3 {
 legend {
-_ = empty
+. = empty
 P = Player
 B = Box
 G = Goal
 }
 
 level one {
-PB_
+PB.
 
-__G
+..G
 }
 }
 "#;

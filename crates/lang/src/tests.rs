@@ -2461,8 +2461,8 @@ empty .
 
 scratch {
 checked
-move:directions
-count:int
+move = directions
+count = int
 }
 
 object Box 1
@@ -2470,8 +2470,8 @@ object Marker 0
 legend B = Box
 
 rules {
-once right [ Box ] -> [ Box{checked move:> count:3} ]
-once right [ Box{checked move:> count:3} no Marker ] -> [ Box{no checked no move count:2} Marker ]
+once right [ Box ] -> [ Box{checked move=> count=3} ]
+once right [ Box{checked move=> count=3} no Marker ] -> [ Box{no checked no move count=2} Marker ]
 }
 
 level start {
@@ -2487,6 +2487,71 @@ B
     assert!(moved.has_object(&loaded.game, 0, 0, marker));
     assert!(moved.slot_scratch().iter().all(Vec::is_empty));
     assert!(moved.cell_scratch().iter().all(Vec::is_empty));
+}
+
+#[test]
+fn bool_scratch_uses_presence_and_no_syntax() {
+    let source = r#"
+title bool_scratch
+
+puzzle default {
+layers 2
+empty .
+
+scratch {
+flag = bool
+}
+
+object Box 1
+object Marker 0
+legend B = Box
+
+rules {
+once [ Box ] -> [ Box{flag} ]
+once [ Box{flag} no Marker ] -> [ Box{no flag} Marker ]
+}
+
+level start {
+B
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    let moved =
+        transition_state(&loaded.game, &loaded.levels[0].initial_state, InputId(0)).unwrap();
+    let marker = object_named(&loaded, "Marker");
+
+    assert!(moved.has_object(&loaded.game, 0, 0, marker));
+    assert!(moved.slot_scratch().iter().all(Vec::is_empty));
+}
+
+#[test]
+fn scratch_colon_value_syntax_is_rejected() {
+    let source = r#"
+title scratch_colon
+
+puzzle default {
+layers 1
+empty .
+
+scratch {
+count:int
+}
+
+object Box 0
+legend B = Box
+
+rules {
+once [ Box ] -> [ Box{count:3} ]
+}
+
+level start {
+B
+}
+}
+"#;
+    let error = parse_game(source).unwrap_err().to_string();
+    assert!(error.contains("scratch name must be an identifier"));
 }
 
 #[test]
@@ -3242,7 +3307,7 @@ color = red blue
 
 scratch {
 color
-paint:color
+paint = color
 }
 
 object Box 1
@@ -3250,8 +3315,8 @@ object Marker 0
 legend B = Box
 
 rules {
-once [ Box ] -> [ Box{color:red paint:blue} ]
-once [ Box{color:red paint:blue} no Marker ] -> [ Box Marker ]
+once [ Box ] -> [ Box{color paint=blue} ]
+once [ Box{color paint=blue} no Marker ] -> [ Box Marker ]
 }
 
 level start {
@@ -4349,12 +4414,7 @@ fn parses_spec_2d_display_floor_object() {
     ))
     .unwrap();
 
-    assert!(
-        loaded
-            .object_labels
-            .values()
-            .any(|label| label == "@Floor")
-    );
+    assert!(loaded.object_labels.values().any(|label| label == "@Floor"));
 }
 
 #[test]
@@ -10825,8 +10885,7 @@ puzzle3 push3 {
 
 levels3 demo of push3 {
   legend {
-    _ = empty
-    . = Floor
+    . = empty
     P = Player
     B = Box
     # = Wall
@@ -10835,7 +10894,7 @@ levels3 demo of push3 {
   level start {
     ####
     #PB#
-    #__#
+    #..#
     ####
   }
 }
@@ -10928,8 +10987,7 @@ puzzle3 push3 {
 
 levels3 demo of push3 {
   legend {
-    _ = empty
-    . = Floor
+    . = empty
     P = Player
     B = Box
     # = Wall
@@ -10938,7 +10996,7 @@ levels3 demo of push3 {
   level start {
     ####
     #PB#
-    #__#
+    #..#
     ####
   }
 }
@@ -11080,7 +11138,7 @@ puzzle3 cube {
 
 levels3 cube_levels of cube {
   legend {
-    _ = empty
+    . = empty
     P = Player
   }
 

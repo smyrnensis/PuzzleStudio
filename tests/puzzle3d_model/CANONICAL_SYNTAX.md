@@ -133,9 +133,8 @@ Validation:
 - Rows must be rectangular within a slice.
 - All slices must have the same width and depth.
 - Every non-empty character must resolve through `legend`.
-- `.` is the default empty character and does not need a legend entry.
-- `<char> = empty` overrides that default empty character for levels that use a
-  different blank marker, such as `_`.
+- `.` is the reserved empty character and does not need a legend entry.
+- Do not map another character to `empty`, and do not map `.` to an object.
 
 ## Regions
 

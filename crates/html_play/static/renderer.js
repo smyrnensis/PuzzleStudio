@@ -10,6 +10,8 @@ class PuzzleRenderer {
     this.lastScene = scene;
     const viewport = this.resolveViewport(scene);
     this.root.style.setProperty("--cols", viewport.width);
+    this.root.style.setProperty("--rows", viewport.height);
+    this.root.classList.toggle("is-canvas-renderer", this.options.renderMode !== "dom");
     this.root.dataset.viewportX = String(viewport.x);
     this.root.dataset.viewportY = String(viewport.y);
     this.root.dataset.viewportWidth = String(viewport.width);
@@ -66,7 +68,16 @@ class PuzzleRenderer {
   }
 
   focusCell(scene, objectName) {
+    const focusObjects = new Set((scene.screen?.viewportFocusObjects || scene.view?.viewportFocusObjects || [])
+      .map((objectId) => Number(objectId))
+      .filter((objectId) => Number.isFinite(objectId) && objectId > 0));
     for (const cell of scene.cells || []) {
+      if (
+        focusObjects.size > 0
+        && cell.layers?.some((layer) => focusObjects.has(Number(layer.objectId)))
+      ) {
+        return cell;
+      }
       if (cell.layers?.some((layer) => layer.object === objectName || layer.sprite === objectName)) {
         return cell;
       }

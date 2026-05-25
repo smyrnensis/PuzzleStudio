@@ -1,4 +1,7 @@
-use std::{collections::HashMap, ops::Deref};
+use std::{
+    collections::{HashMap, HashSet},
+    ops::Deref,
+};
 
 use puzzle_core::{
     InputId, LayerId, ObjectId, State as PuzzleState, TransitionCommand, TransitionError,
@@ -114,6 +117,7 @@ pub struct GameSession {
     session_values: HashMap<String, SceneValue>,
     persistent_vars: Vec<i64>,
     current_input: Option<String>,
+    current_turn_sfx: Option<HashSet<String>>,
     sound_events: Vec<SoundEvent>,
     message_events: Vec<MessageEvent>,
     wait_events: Vec<WaitEvent>,
@@ -141,6 +145,7 @@ impl GameSession {
                 .collect(),
             persistent_vars: vec![0; game.persistent_vars.len()],
             current_input: None,
+            current_turn_sfx: None,
             sound_events: Vec::new(),
             message_events: Vec::new(),
             wait_events: Vec::new(),
@@ -368,20 +373,24 @@ impl GameSession {
     ) -> Result<(), TransitionError> {
         let previous_input = self.current_input.clone();
         self.current_input = game.input_labels.get(&input).cloned();
+        let owns_turn_sfx = self.begin_rule_emission_turn();
         let result = match self.apply_model_input(game, input) {
             Ok(result) => result,
             Err(error) => {
                 self.current_input = previous_input;
+                self.end_rule_emission_turn(owns_turn_sfx);
                 return Err(error);
             }
         };
         if !result.cancelled {
             let condition_result = self.apply_turn_completion(game, result.commands);
             self.current_input = previous_input;
+            self.end_rule_emission_turn(owns_turn_sfx);
             condition_result?;
             return Ok(());
         }
         self.current_input = previous_input;
+        self.end_rule_emission_turn(owns_turn_sfx);
         Ok(())
     }
 
@@ -564,12 +573,20 @@ impl GameSession {
         target: Option<String>,
     ) -> Result<(), TransitionError> {
         for _ in 0..MAX_AGAIN_TURNS_PER_INPUT {
-            let result = if let Some(target) = target.as_deref() {
-                self.apply_model_input_to_target(game, target, InputId(0))?
+            let previous_turn_sfx = self.begin_separate_rule_emission_turn();
+            let result = match if let Some(target) = target.as_deref() {
+                self.apply_model_input_to_target(game, target, InputId(0))
             } else {
-                self.apply_model_input_to_current_level(game, InputId(0))?
+                self.apply_model_input_to_current_level(game, InputId(0))
+            } {
+                Ok(result) => result,
+                Err(error) => {
+                    self.end_separate_rule_emission_turn(previous_turn_sfx);
+                    return Err(error);
+                }
             };
             if result.cancelled {
+                self.end_separate_rule_emission_turn(previous_turn_sfx);
                 return Ok(());
             }
             let has_again = result
@@ -581,12 +598,45 @@ impl GameSession {
                 .into_iter()
                 .filter(|command| !matches!(command.command, TransitionCommand::Again))
                 .collect();
-            self.apply_turn_completion(game, commands)?;
+            let completion = self.apply_turn_completion(game, commands);
+            self.end_separate_rule_emission_turn(previous_turn_sfx);
+            completion?;
             if !has_again {
                 return Ok(());
             }
         }
         Ok(())
+    }
+
+    fn begin_rule_emission_turn(&mut self) -> bool {
+        if self.current_turn_sfx.is_some() {
+            return false;
+        }
+        self.current_turn_sfx = Some(HashSet::new());
+        true
+    }
+
+    fn end_rule_emission_turn(&mut self, owned: bool) {
+        if owned {
+            self.current_turn_sfx = None;
+        }
+    }
+
+    fn begin_separate_rule_emission_turn(&mut self) -> Option<HashSet<String>> {
+        let previous = self.current_turn_sfx.take();
+        self.current_turn_sfx = Some(HashSet::new());
+        previous
+    }
+
+    fn end_separate_rule_emission_turn(&mut self, previous: Option<HashSet<String>>) {
+        self.current_turn_sfx = previous;
+    }
+
+    fn should_emit_turn_sfx(&mut self, name: &str) -> bool {
+        let Some(seen) = &mut self.current_turn_sfx else {
+            return true;
+        };
+        seen.insert(name.to_string())
     }
 
     fn apply_rule_emissions(&mut self, game: &LoadedGame, fired_rules: &[puzzle_core::RuleId]) {
@@ -597,8 +647,10 @@ impl GameSession {
             for emission in emissions {
                 match emission {
                     RuleEmission::PlaySfx { name } => {
-                        self.sound_events
-                            .push(SoundEvent::PlaySfx { name: name.clone() });
+                        if self.should_emit_turn_sfx(name) {
+                            self.sound_events
+                                .push(SoundEvent::PlaySfx { name: name.clone() });
+                        }
                     }
                     RuleEmission::Wait { milliseconds } => {
                         self.wait_events.push(WaitEvent::Wait {
@@ -1250,8 +1302,10 @@ impl GameSession {
                 Ok(())
             }
             SceneEffect::PlaySfx { name } => {
-                self.sound_events
-                    .push(SoundEvent::PlaySfx { name: name.clone() });
+                if self.should_emit_turn_sfx(name) {
+                    self.sound_events
+                        .push(SoundEvent::PlaySfx { name: name.clone() });
+                }
                 Ok(())
             }
             SceneEffect::PlayMusic { name } => {
@@ -3295,6 +3349,138 @@ P.
             vec![SoundEvent::PlaySfx {
                 name: "push".to_string()
             }]
+        );
+    }
+
+    #[test]
+    fn model_move_sound_trigger_queues_sound_event_on_matching_move() {
+        let loaded = parse_game(
+            r#"
+title model_move_sfx_fixture
+sounds {
+sfx push seed=push01 type=jump
+}
+puzzle default {
+layers {
+actor = Player Box
+}
+sounds {
+on move Box -> sfx push
+}
+rules {
+right [ Player | Box | ] -> [ | Player | Box ]
+}
+levels {
+legend {
+. = empty
+P = Player
+B = Box
+}
+level start {
+PB.
+}
+}
+}
+"#,
+        )
+        .unwrap();
+        let right = input_named(&loaded, "right");
+        let mut session = GameSession::new(&loaded);
+
+        session.apply_input(&loaded, right).unwrap();
+
+        assert_eq!(
+            session.take_sound_events(),
+            vec![SoundEvent::PlaySfx {
+                name: "push".to_string()
+            }]
+        );
+    }
+
+    #[test]
+    fn rule_sfx_is_deduped_within_one_turn() {
+        let loaded = parse_game(
+            r#"
+title rule_sfx_dedup_fixture
+sounds {
+sfx push seed=push01 type=jump
+}
+puzzle default {
+layers {
+actor = Box
+}
+rules {
+once_all right [ Box | ] -> [ | Box ] sfx push
+}
+levels {
+legend {
+. = empty
+B = Box
+}
+level start {
+B.B.
+}
+}
+}
+"#,
+        )
+        .unwrap();
+        let right = input_named(&loaded, "right");
+        let mut session = GameSession::new(&loaded);
+
+        session.apply_input(&loaded, right).unwrap();
+
+        assert_eq!(
+            session.take_sound_events(),
+            vec![SoundEvent::PlaySfx {
+                name: "push".to_string()
+            }]
+        );
+    }
+
+    #[test]
+    fn again_follow_up_turn_has_separate_sfx_dedup_scope() {
+        let loaded = parse_game(
+            r#"
+title again_sfx_scope_fixture
+sounds {
+sfx push seed=push01 type=jump
+}
+puzzle default {
+layers {
+actor = Box
+}
+rules {
+once right [ Box | ] -> [ | Box ] sfx push again
+}
+levels {
+legend {
+. = empty
+B = Box
+}
+level start {
+B..
+}
+}
+}
+"#,
+        )
+        .unwrap();
+        let right = input_named(&loaded, "right");
+        let mut session = GameSession::new(&loaded);
+
+        session.apply_input(&loaded, right).unwrap();
+
+        assert_eq!(
+            session.take_sound_events(),
+            vec![
+                SoundEvent::PlaySfx {
+                    name: "push".to_string()
+                },
+                SoundEvent::PlaySfx {
+                    name: "push".to_string()
+                }
+            ]
         );
     }
 

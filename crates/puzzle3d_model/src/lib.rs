@@ -1808,7 +1808,7 @@ P.
     }
 
     #[test]
-    fn parser_treats_empty_legend_as_default_empty_char_override() {
+    fn parser_rejects_non_dot_empty_char_for_3d_levels() {
         let err = parse_puzzle3d(
             r#"
 layers {
@@ -1830,7 +1830,7 @@ P.
         .unwrap_err();
 
         assert!(
-            matches!(err, ParseError3::Message(message) if message.contains("unknown legend char: ."))
+            matches!(err, ParseError3::Message(message) if message.contains("3D levels use `.` for empty"))
         );
     }
 

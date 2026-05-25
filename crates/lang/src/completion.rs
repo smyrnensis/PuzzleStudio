@@ -314,7 +314,16 @@ fn collect_line_symbols(
                 collect_object_spec(spec, symbols);
             }
         }
-        [spec] if scope == Some(SourceScope::Scratch) => collect_scratch_spec(spec, symbols),
+        [name, "=", ty] if scope == Some(SourceScope::Scratch) => {
+            collect_scratch_spec(name, Some(*ty), symbols)
+        }
+        [spec] if scope == Some(SourceScope::Scratch) => {
+            let cleaned = clean_spec(spec);
+            let (name, ty) = cleaned
+                .split_once('=')
+                .map_or((cleaned, None), |(name, ty)| (name, Some(ty)));
+            collect_scratch_spec(name, ty, symbols);
+        }
         [..] if scope == Some(SourceScope::Keys) => collect_keys(tokens, symbols),
         _ => {}
     }
@@ -347,11 +356,9 @@ fn collect_object_spec(spec: &str, symbols: &mut CompletionSymbols) {
     }
 }
 
-fn collect_scratch_spec(spec: &str, symbols: &mut CompletionSymbols) {
-    let cleaned = clean_spec(spec);
-    let (name, ty) = cleaned.split_once(':').unwrap_or((cleaned, ""));
+fn collect_scratch_spec(name: &str, ty: Option<&str>, symbols: &mut CompletionSymbols) {
     insert_identifier(&mut symbols.scratches, name);
-    if !ty.is_empty() && ty != "int" {
+    if let Some(ty) = ty.filter(|ty| !matches!(*ty, "bool" | "int")) {
         insert_identifier(&mut symbols.variants, ty);
     }
 }

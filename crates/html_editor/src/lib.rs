@@ -1884,6 +1884,11 @@ board.rules
         ));
         assert!(EDITOR_LEVEL3D_JS.contains("sourceLevel3dRangeHasReadableLegend(source, range)"));
         assert!(EDITOR_LEVEL3D_JS.contains("function sendLevel3dSnapshotToPreviewFrame"));
+        assert!(EDITOR_LEVEL3D_JS.contains("function refreshLevel3dRuntimePreviews()"));
+        assert!(EDITOR_LEVEL3D_JS.contains("sendLevel3dLayerSnapshotToRuntime();"));
+        assert!(EDITOR_LEVEL3D_JS.contains(
+            "renderLevel3dLayerBoard();\n  renderLevel3dStageOverlay();\n  refreshLevel3dRuntimePreviews();\n  return true;"
+        ));
         assert!(EDITOR_JS.contains("currentPreviewMode === \"level3d\" && typeof sendLevel3dSnapshotToRuntime === \"function\""));
         assert!(EDITOR_JS.contains("const stateData = solverStateData(exportData);"));
         assert!(EDITOR_JS.contains(
@@ -1916,6 +1921,53 @@ board.rules
     }
 
     #[test]
+    fn level3d_microban_01_supplies_preview_contract_data() {
+        let source = include_str!("../../puzzle3d_model/games/sokoban_literally_in_3d.puzzle");
+        let document = puzzle_lang::parse_game(source).expect("parse Microban 3D fixture");
+        let fixture_json = puzzle_lang::export_loaded_document_visual_fixture_json(&document)
+            .expect("export Microban 3D fixture");
+
+        assert!(fixture_json.contains("\"levelIndex\": 0"));
+        assert!(fixture_json.contains("\"name\": \"microban_01\""));
+        assert!(fixture_json.contains("\"label\": \"Microban 01\""));
+        assert!(fixture_json.contains("\"size\": { \"width\": 6, \"depth\": 7, \"height\": 2 }"));
+        assert!(fixture_json.contains(
+            "\"position\": { \"x\": 2, \"y\": 3, \"z\": 1 }, \"objects\": [{ \"id\": 3, \"name\": \"Player\", \"sprite\": \"Player\" }]"
+        ));
+        assert!(fixture_json.contains(
+            "\"position\": { \"x\": 1, \"y\": 3, \"z\": 1 }, \"objects\": [{ \"id\": 4, \"name\": \"Box\", \"sprite\": \"Box\" }]"
+        ));
+        assert!(fixture_json.contains(
+            "\"position\": { \"x\": 2, \"y\": 5, \"z\": 0 }, \"objects\": [{ \"id\": 1, \"name\": \"Floor\", \"sprite\": \"Floor\" }, { \"id\": 2, \"name\": \"Goal\", \"sprite\": \"Goal\" }]"
+        ));
+
+        assert!(fixture_json.contains("\"layerCount\": 3"));
+        assert!(fixture_json.contains(
+            "\"Player\": { \"id\": 3, \"name\": \"Player\", \"sprite\": \"Player\", \"layer\": 2 }"
+        ));
+        assert!(fixture_json.contains(
+            "\"Box\": { \"id\": 4, \"name\": \"Box\", \"sprite\": \"Box\", \"layer\": 2 }"
+        ));
+        assert!(fixture_json.contains("\"sprites\": {"));
+        assert!(fixture_json.contains("\"Player\": {"));
+        assert!(
+            fixture_json.contains(
+                "\"camera\": { \"yawDegrees\": 34, \"pitchDegrees\": 38, \"zoom\": 1.1 }"
+            )
+        );
+        assert!(fixture_json.contains(
+            "\"settings\": { \"interactiveLook\": false, \"interactiveZoom\": false, \"grid\": { \"visibility\": 1, \"occupied_cells\": true }, \"shade\": true }"
+        ));
+
+        assert!(EDITOR_LEVEL3D_JS.contains("level: {"));
+        assert!(EDITOR_LEVEL3D_JS.contains("resources: level3dRuntimePreviewResources(snapshot)"));
+        assert!(EDITOR_LEVEL3D_JS.contains("camera: level3dPreviewCamera(snapshot)"));
+        assert!(
+            EDITOR_LEVEL3D_JS.contains("settings: level3dPreviewSettings(snapshot.settings || {})")
+        );
+    }
+
+    #[test]
     fn level3d_editor_syncs_source_focus_and_click_targets() {
         assert!(
             EDITOR_JS
@@ -1932,6 +1984,33 @@ board.rules
         assert!(EDITOR_JS.contains(
             "currentPreviewMode === \"level3d\" && typeof renderLevel3dBuilder === \"function\""
         ));
+    }
+
+    #[test]
+    fn source_editor_completes_rewrite_rhs_from_lhs_pattern() {
+        assert!(EDITOR_SOURCE_JS.contains("function handleSourceRewriteRhsPatternAssist(event)"));
+        assert!(EDITOR_SOURCE_JS.contains("sourceRewritePatternBeforeArrow(lineBeforeArrow)"));
+        assert!(EDITOR_SOURCE_JS.contains("function sourceEmptyRewritePattern(pattern)"));
+        assert!(EDITOR_SOURCE_JS.contains("function handleSourceRewritePatternTab(event)"));
+        assert!(
+            EDITOR_SOURCE_JS
+                .contains("sourceEditor.setRangeText(rhsPattern, cursor, cursor, \"end\")")
+        );
+        assert!(EDITOR_SOURCE_JS.contains("if (handleSourceRewriteRhsPatternAssist(event))"));
+    }
+
+    #[test]
+    fn source_editor_backspace_removes_one_indent_unit() {
+        assert!(EDITOR_SOURCE_JS.contains("function handleSourceIndentBackspace(event)"));
+        assert!(
+            EDITOR_SOURCE_JS
+                .contains("const targetColumn = Math.max(0, column - (column % 4 || 4));")
+        );
+        assert!(EDITOR_SOURCE_JS.contains("if (handleSourceIndentBackspace(event))"));
+        assert!(
+            EDITOR_SOURCE_JS
+                .contains("sourceEditor.setRangeText(\"\", removeStart, start, \"start\")")
+        );
     }
 
     #[test]
@@ -2198,9 +2277,11 @@ board.rules
     }
 
     #[test]
-    fn level3d_palette_preview_ignores_camera_zoom() {
+    fn level3d_palette_preview_ignores_camera_zoom_and_origin() {
         assert!(EDITOR_LEVEL3D_JS.contains("function level3dPalettePreviewCamera(source)"));
         assert!(EDITOR_LEVEL3D_JS.contains("zoom: 1,"));
+        assert!(EDITOR_LEVEL3D_JS.contains("function level3dPalettePreviewOptions(camera)"));
+        assert!(EDITOR_LEVEL3D_JS.contains("origin: { x: 0, y: 0, z: 0 },"));
         assert!(
             EDITOR_LEVEL3D_JS.contains(
                 "function level3dPaletteObjectDescriptor(name, exportData = previewExport)"
@@ -2214,10 +2295,14 @@ board.rules
         assert!(
             EDITOR_LEVEL3D_JS.contains("drawLevel3dCellsPreview(ctx, width, height, snapshot, [{")
         );
-        assert!(EDITOR_LEVEL3D_JS.contains("}], { camera: snapshot.camera, padding: 0.96 });"));
+        assert!(EDITOR_LEVEL3D_JS.contains("}], level3dPalettePreviewOptions(snapshot.camera));"));
         assert!(
             EDITOR_LEVEL3D_JS
                 .contains("const camera = options.camera || level3dPreviewCamera(snapshot);")
+        );
+        assert!(
+            EDITOR_LEVEL3D_JS
+                .contains("const previewOrigin = options.origin || level3dPreviewOriginState();")
         );
     }
 
