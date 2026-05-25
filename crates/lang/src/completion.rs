@@ -242,7 +242,7 @@ fn collect_line_symbols(
     symbols: &mut CompletionSymbols,
 ) {
     match tokens {
-        ["puzzle", name, ..] | ["model", "puzzle", name, ..] => {
+        ["puzzle", name, ..] => {
             insert_identifier(&mut symbols.puzzles, name);
         }
         ["scene", name, ..] => {
@@ -607,7 +607,7 @@ mod tests {
     fn suggests_objects_by_prefix() {
         let source = r#"
 title complete_objects
-model puzzle board {
+puzzle board {
 tags {
 kind = A B
 }
@@ -630,7 +630,7 @@ rules {
     fn suggests_selector_axis_values_after_colon() {
         let source = r#"
 title complete_variants
-model puzzle board {
+puzzle board {
 tags {
 kind = A B
 }
@@ -654,7 +654,7 @@ rules {
     fn labels_tag_axes_and_values_without_duplicate_axis_values() {
         let source = r#"
 title complete_tags
-model puzzle board {
+puzzle board {
 tags {
 color = red blue
 }
@@ -708,6 +708,36 @@ scene playing {
         let list = suggest_source_completions(source, cursor);
 
         assert!(list.items.iter().any(|item| item.label == "playing"));
+    }
+
+    #[test]
+    fn suggests_level_flow_effect_commands() {
+        let source = r#"
+title complete_level_flow_effects
+scene title {
+view {
+button "Play" -> st
+button "Continue" -> co
+}
+}
+"#;
+        let start_cursor = source.find("-> st").unwrap() + "-> st".len();
+        let start_list = suggest_source_completions(source, start_cursor);
+        assert!(
+            start_list
+                .items
+                .iter()
+                .any(|item| item.label == "start" && item.kind == CompletionKind::Effect)
+        );
+
+        let continue_cursor = source.find("-> co").unwrap() + "-> co".len();
+        let continue_list = suggest_source_completions(source, continue_cursor);
+        assert!(
+            continue_list
+                .items
+                .iter()
+                .any(|item| item.label == "continue" && item.kind == CompletionKind::Effect)
+        );
     }
 
     #[test]
@@ -816,7 +846,7 @@ win -> s
     fn builtin_model_commands_are_effects_not_commands() {
         let source = r#"
 title complete_effects
-model puzzle board {
+puzzle board {
 objects {
 Player
 }
@@ -845,7 +875,7 @@ rules {
     fn distinguishes_value_sets_and_puzzles() {
         let source = r#"
 title complete_kinds
-model puzzle sokoban {
+puzzle sokoban {
 tags {
 kind = A B
 }
@@ -885,7 +915,7 @@ board = puzzle so
     fn layer_names_are_single_selector_completions() {
         let source = r#"
 title complete_layer_selectors
-model puzzle board {
+puzzle board {
 objects {
 Player
 Goal

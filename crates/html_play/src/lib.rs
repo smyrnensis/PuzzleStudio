@@ -23,18 +23,26 @@ use puzzle_core::{
     transition_program_outcome, transition_state,
 };
 use puzzle_lang::AssetKind;
+#[cfg(not(target_arch = "wasm32"))]
+use puzzle_lang::AssetsDef;
 use puzzle_lang::{
-    ArrowKey, AssetsDef, GoalCondition, GoalExpr, GoalValue, KeyTrigger, Level,
-    LoadedDocumentModel, LoadedGame, MenuComponent, ResourceSelection, RuleEmission,
-    SceneAlignXDef, SceneAlignYDef, SceneComponent, SceneEffect, SceneExpr, SceneLayoutDef,
-    ScenePuzzleInitializer, SceneTextContent, SceneTransitionTrigger, SceneValue, SoundsDef,
-    ThemeDef, VisualSpriteKind, parse_game2d as parse_game,
+    ArrowKey, GoalCondition, GoalExpr, GoalValue, KeyTrigger, Level, LoadedDocumentModel,
+    LoadedGame, MenuComponent, ResourceSelection, RuleEmission, SceneAlignXDef, SceneAlignYDef,
+    SceneComponent, SceneDef, SceneEffect, SceneExpr, SceneLayoutDef, ScenePuzzleInitializer,
+    SceneTextContent, SceneTransitionTrigger, SceneValue, SoundsDef, ThemeDef, VisualSpriteKind,
+    parse_game2d as parse_game,
 };
 #[cfg(not(target_arch = "wasm32"))]
 use puzzle_lang::{discover_game_entries, expand_game_imports_for_file, resolve_game_entry};
 use puzzle_play::{GameSession, MessageEvent, SoundEvent, WaitEvent};
 use puzzle_solver::{
-    PuzzleDomain, SearchBudget, SearchOutcome, SearchStats, best_first_with_dead_states,
+    Puzzle3Domain, PuzzleDomain, SearchBudget, SearchOutcome, SearchStats,
+    best_first_with_dead_states,
+};
+use puzzle3d_model::{
+    Coord3, Game3, InputId3, LifecycleCommand3, ObjectId as ObjectId3, ParsedPuzzle3, Rule3,
+    RuleId3, Size3, State3, WinCondition3, transition_program as transition_program3,
+    transition_program_without_input,
 };
 
 const INDEX_HTML: &str = include_str!("../static/index.html");
@@ -58,15 +66,20 @@ const SEEDED_MUSIC_JS: &str = include_str!("../../../tools/music_generator/seede
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn run_cli() {
-    if let Err(error) = run() {
+    if let Err(error) = run_cli_with_args(env::args().skip(1)) {
         eprintln!("error: {error}");
         std::process::exit(1);
     }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn run() -> Result<(), AppError> {
-    let config = Config::from_args()?;
+pub fn run_cli_with_args(args: impl IntoIterator<Item = String>) -> Result<(), String> {
+    run(args).map_err(|error| error.to_string())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn run(args: impl IntoIterator<Item = String>) -> Result<(), AppError> {
+    let config = Config::from_args(args)?;
     let source = fs::read_to_string(&config.puzzle_path)?;
     let source = if source_looks_puzzle3d(&source) {
         source
@@ -78,7 +91,22 @@ fn run() -> Result<(), AppError> {
         let document = puzzle_lang::parse_game(&source).map_err(AppError::Lang)?;
         let game_css = load_asset_css(&config.puzzle_path, &document.assets)?;
         let output_path = config.output_path();
-        let html = export_puzzle3_document_html(&document, &game_css).map_err(AppError::Config)?;
+        let html = if document.models.len() == 1 {
+            export_puzzle3_document_html(&document, &game_css).map_err(AppError::Config)?
+        } else {
+            let loaded = mixed_document_loaded_game(&document).map_err(AppError::Config)?;
+            let game_visuals_js = load_game_visuals_js(&config.puzzle_path, &loaded)?;
+            export_mixed_document_html(
+                &document,
+                loaded,
+                source.clone(),
+                config.puzzle_path.display().to_string(),
+                game_css,
+                game_visuals_js,
+                config.solver,
+            )
+            .map_err(AppError::Config)?
+        };
         if !config.serve {
             fs::write(&output_path, html)?;
             println!("exported {}", output_path.display());
@@ -149,13 +177,13 @@ struct Config {
 
 #[cfg(not(target_arch = "wasm32"))]
 impl Config {
-    fn from_args() -> Result<Self, AppError> {
+    fn from_args(args: impl IntoIterator<Item = String>) -> Result<Self, AppError> {
         let mut puzzle_path = None;
         let mut output_path = None;
         let mut serve = false;
         let mut port = 7878;
         let mut solver = SolverConfig::default();
-        let mut args = env::args().skip(1);
+        let mut args = args.into_iter();
 
         while let Some(arg) = args.next() {
             match arg.as_str() {
@@ -189,7 +217,7 @@ impl Config {
                 }
                 "--help" | "-h" => {
                     return Err(AppError::Config(
-                        "usage: cargo run -p html-play -- [path/to/game-folder-or-game.puzzle] [-o game.html] [--serve] [--port 7878] [--solver-depth 128] [--solver-nodes 1000000] [--solver-ms 5000]".to_string(),
+                        "usage: html-play [path/to/game-folder-or-game.puzzle] [-o game.html] [--serve] [--port 7878] [--solver-depth 128] [--solver-nodes 1000000] [--solver-ms 5000]".to_string(),
                     ));
                 }
                 value => puzzle_path = Some(PathBuf::from(value)),
@@ -793,6 +821,29 @@ enum SolutionResponse {
     },
 }
 
+#[derive(Clone, Debug)]
+struct SolutionStep3 {
+    index: usize,
+    input: Option<InputId3>,
+    state: State3,
+    completed: bool,
+}
+
+#[derive(Clone, Debug)]
+enum SolutionResponse3 {
+    Solved {
+        depth: u32,
+        moves: Vec<InputId3>,
+        steps: Vec<SolutionStep3>,
+    },
+    Exhausted(SearchStats),
+    BudgetExceeded(SearchStats),
+    Failed {
+        depth: u32,
+        error: String,
+    },
+}
+
 fn solve_current_state(
     loaded: &LoadedGame,
     initial: State,
@@ -871,6 +922,87 @@ fn solution_steps(
     Ok(steps)
 }
 
+fn solve_current_state3_with_budget(
+    parsed: &ParsedPuzzle3,
+    initial: State3,
+    budget: SearchBudget,
+) -> Result<SolutionResponse3, AppError> {
+    let inputs = solver_inputs3(&parsed.game);
+    if inputs.is_empty() {
+        return Err(AppError::Config("no 3D model inputs available".to_string()));
+    }
+    let win_condition = parsed
+        .win_condition
+        .clone()
+        .ok_or_else(|| AppError::Config("3D solver requires win_conditions".to_string()))?;
+
+    let game = Arc::new(parsed.game.clone());
+    let rules = parsed.rules.clone();
+    let goal_game = Arc::clone(&game);
+    let mut domain = Puzzle3Domain::new(
+        Arc::clone(&game),
+        rules.clone(),
+        inputs,
+        move |state: &State3| win_condition.is_met(&goal_game, state),
+    );
+    let outcome =
+        best_first_with_dead_states(&mut domain, initial.clone(), budget, |_| 0, |_| false);
+
+    let response = match outcome {
+        SearchOutcome::Solved(witness) => {
+            let depth = witness.depth;
+            let solution_inputs = witness.actions;
+            SolutionResponse3::Solved {
+                depth,
+                steps: solution_steps3(
+                    &game,
+                    &rules,
+                    parsed.win_condition.as_ref(),
+                    initial,
+                    &solution_inputs,
+                )?,
+                moves: solution_inputs,
+            }
+        }
+        SearchOutcome::Exhausted(stats) => SolutionResponse3::Exhausted(stats),
+        SearchOutcome::BudgetExceeded(stats) => SolutionResponse3::BudgetExceeded(stats),
+        SearchOutcome::Failed(failure) => SolutionResponse3::Failed {
+            depth: failure.depth,
+            error: format!("{:?}", failure.error),
+        },
+    };
+    Ok(response)
+}
+
+fn solution_steps3(
+    game: &Game3,
+    rules: &[Rule3],
+    win_condition: Option<&WinCondition3>,
+    mut state: State3,
+    inputs: &[InputId3],
+) -> Result<Vec<SolutionStep3>, AppError> {
+    let mut steps = Vec::with_capacity(inputs.len() + 1);
+    steps.push(SolutionStep3 {
+        index: 0,
+        input: None,
+        completed: win_condition.is_some_and(|condition| condition.is_met(game, &state)),
+        state: state.clone(),
+    });
+
+    for (index, input) in inputs.iter().enumerate() {
+        state = transition_program3(game, &state, rules, *input)
+            .map_err(|error| AppError::Config(format!("{error:?}")))?;
+        steps.push(SolutionStep3 {
+            index: index + 1,
+            input: Some(*input),
+            completed: win_condition.is_some_and(|condition| condition.is_met(game, &state)),
+            state: state.clone(),
+        });
+    }
+
+    Ok(steps)
+}
+
 fn goal_score(loaded: &LoadedGame, state: &State) -> i64 {
     loaded
         .goal
@@ -927,6 +1059,10 @@ fn query_kind_score(
 ) -> i64 {
     match kind {
         QueryKind::CountMatches(patterns) if expected == 0 => patterns
+            .iter()
+            .map(|pattern| pattern_distance_score(game, state, pattern))
+            .sum(),
+        QueryKind::NoneMatches(patterns) if expected != 0 => patterns
             .iter()
             .map(|pattern| pattern_distance_score(game, state, pattern))
             .sum(),
@@ -1044,6 +1180,13 @@ fn goal_query_kind(game: &CompiledGame, state: &State, kind: &QueryKind) -> i64 
                 0
             }
         }
+        QueryKind::NoneObjects(objects) => {
+            if objects.iter().any(|object| state.object_count(*object) > 0) {
+                0
+            } else {
+                1
+            }
+        }
         QueryKind::CountMatches(patterns) => patterns
             .iter()
             .map(|pattern| i64::from(puzzle_core::count_pattern_matches(game, state, pattern)))
@@ -1058,7 +1201,19 @@ fn goal_query_kind(game: &CompiledGame, state: &State, kind: &QueryKind) -> i64 
                 0
             }
         }
-        QueryKind::CountInputMatches(_) | QueryKind::ExistsInputMatches(_) => 0,
+        QueryKind::NoneMatches(patterns) => {
+            if patterns
+                .iter()
+                .any(|pattern| puzzle_core::has_pattern_match(game, state, pattern))
+            {
+                0
+            } else {
+                1
+            }
+        }
+        QueryKind::CountInputMatches(_)
+        | QueryKind::ExistsInputMatches(_)
+        | QueryKind::NoneInputMatches(_) => 0,
     }
 }
 
@@ -1244,6 +1399,143 @@ fn export_puzzle3_document_html(
     Ok(export_puzzle3_html(&fixture_json, game_css))
 }
 
+fn export_mixed_document_html(
+    document: &puzzle_lang::LoadedDocument,
+    loaded: LoadedGame,
+    source: String,
+    puzzle_path: String,
+    game_css: String,
+    game_visuals_js: String,
+    solver: SolverConfig,
+) -> Result<String, String> {
+    let fixture_json = mixed_document_puzzle3_fixture_json(document)?;
+    let state = ServerState::new(
+        loaded,
+        source,
+        puzzle_path,
+        game_css,
+        game_visuals_js,
+        solver,
+    );
+    Ok(inject_puzzle3_frame_assets(
+        export_html(&state),
+        &fixture_json,
+    ))
+}
+
+fn mixed_document_loaded_game(
+    document: &puzzle_lang::LoadedDocument,
+) -> Result<LoadedGame, String> {
+    let Some(LoadedDocumentModel::Puzzle2d { game, .. }) = document
+        .models
+        .iter()
+        .find(|model| matches!(model, LoadedDocumentModel::Puzzle2d { .. }))
+    else {
+        return Err("mixed HTML export requires a 2D puzzle model host".to_string());
+    };
+    let mut loaded = game.clone();
+    loaded.title = document.title.clone();
+    loaded.subtitle = document.subtitle.clone();
+    loaded.author = document.author.clone();
+    loaded.homepage = document.homepage.clone();
+    loaded.default_wait_ms = document.default_wait_ms;
+    loaded.sounds = document.sounds.clone();
+    loaded.theme = document.theme.clone();
+    loaded.assets = document.assets.clone();
+    loaded.scenes = document
+        .scenes
+        .iter()
+        .cloned()
+        .map(scene_with_only_2d_puzzle_state)
+        .collect();
+    Ok(loaded)
+}
+
+fn scene_with_only_2d_puzzle_state(mut scene: SceneDef) -> SceneDef {
+    scene.state.puzzles.retain(|puzzle| puzzle.kind == "puzzle");
+    if let Some(rule) = &scene.puzzle_rule {
+        let target = rule
+            .target
+            .split('.')
+            .next_back()
+            .unwrap_or(rule.target.as_str());
+        if !scene
+            .state
+            .puzzles
+            .iter()
+            .any(|puzzle| puzzle.name == target)
+        {
+            scene.puzzle_rule = None;
+        }
+    }
+    scene
+}
+
+fn mixed_document_puzzle3_fixture_json(
+    document: &puzzle_lang::LoadedDocument,
+) -> Result<String, String> {
+    let Some(LoadedDocumentModel::Puzzle3d { name, puzzle }) = document
+        .models
+        .iter()
+        .find(|model| matches!(model, LoadedDocumentModel::Puzzle3d { .. }))
+    else {
+        return Err("mixed HTML export requires a 3D puzzle model".to_string());
+    };
+    let puzzle3_document = puzzle_lang::LoadedDocument {
+        title: document.title.clone(),
+        subtitle: document.subtitle.clone(),
+        author: document.author.clone(),
+        homepage: document.homepage.clone(),
+        default_wait_ms: document.default_wait_ms,
+        sounds: document.sounds.clone(),
+        theme: document.theme.clone(),
+        assets: document.assets.clone(),
+        scenes: document.scenes.clone(),
+        models: vec![LoadedDocumentModel::Puzzle3d {
+            name: name.clone(),
+            puzzle: puzzle.clone(),
+        }],
+    };
+    puzzle_lang::export_loaded_document_visual_fixture_json(&puzzle3_document)
+        .map_err(|error| error.to_string())
+}
+
+fn inject_puzzle3_frame_assets(html: String, fixture_json: &str) -> String {
+    let puzzle3_style_css = escape_style(PUZZLE3_STYLE_CSS);
+    let mut assets = String::new();
+    assets.push('{');
+    push_json_string(&mut assets, "styleCss");
+    assets.push(':');
+    push_json_string(&mut assets, PUZZLE3_STYLE_CSS);
+    assets.push(',');
+    push_json_string(&mut assets, "runtimeJs");
+    assets.push(':');
+    push_json_string(&mut assets, PUZZLE3_RUNTIME_JS);
+    assets.push(',');
+    push_json_string(&mut assets, "visualCoreJs");
+    assets.push(':');
+    push_json_string(&mut assets, PUZZLE3_VISUAL_CORE_JS);
+    assets.push(',');
+    push_json_string(&mut assets, "appJs");
+    assets.push(':');
+    push_json_string(&mut assets, PUZZLE3_APP_JS);
+    assets.push('}');
+    let assets = escape_script(&assets);
+    let fixture_json = escape_script_json(fixture_json);
+    let html = html.replace(
+        "</head>",
+        &format!(
+            "<style>\n{puzzle3_style_css}\n.puzzle3-frame {{ border: 0; display: block; inline-size: 100%; block-size: 100%; background: transparent; }}\n</style>\n</head>"
+        ),
+    );
+    html.replace(
+        "window.PuzzleExport = JSON.parse(",
+        &format!(
+            "window.Puzzle3DFrameFixture = JSON.parse(\"{fixture_json}\");\nwindow.Puzzle3DFrameAssets = {assets};\nwindow.PuzzleExport = JSON.parse("
+        ),
+    )
+}
+
 fn sound_tools_js() -> String {
     fn expose_module(source: &str, exports: &[&str]) -> String {
         let body = source
@@ -1289,6 +1581,19 @@ pub fn export_html_from_source(
     game_visuals_js: &str,
 ) -> Result<String, String> {
     let document = puzzle_lang::parse_game(source).map_err(|error| error.to_string())?;
+    if document.models.len() > 1 {
+        let loaded = mixed_document_loaded_game(&document)?;
+        let game_visuals_js = join_visuals_js(game_visuals_js, &generated_visuals_js(&loaded));
+        return export_mixed_document_html(
+            &document,
+            loaded,
+            source.to_string(),
+            puzzle_path.to_string(),
+            game_css.to_string(),
+            game_visuals_js,
+            SolverConfig::default(),
+        );
+    }
     match document.single_model() {
         Some(LoadedDocumentModel::Puzzle2d { game, .. }) => {
             let game_visuals_js = join_visuals_js(game_visuals_js, &generated_visuals_js(game));
@@ -1322,6 +1627,21 @@ pub fn export_html_file(path: impl AsRef<Path>) -> Result<String, String> {
     let game_css =
         load_asset_css(&puzzle_path, &document.assets).map_err(|error| error.to_string())?;
 
+    if document.models.len() > 1 {
+        let loaded = mixed_document_loaded_game(&document)?;
+        let game_visuals_js =
+            load_game_visuals_js(&puzzle_path, &loaded).map_err(|error| error.to_string())?;
+        return export_mixed_document_html(
+            &document,
+            loaded,
+            source,
+            puzzle_path.display().to_string(),
+            game_css,
+            game_visuals_js,
+            SolverConfig::default(),
+        );
+    }
+
     match document.single_model() {
         Some(LoadedDocumentModel::Puzzle2d { game, .. }) => {
             let game_visuals_js =
@@ -1348,6 +1668,13 @@ pub fn export_visuals_js_from_source(
     base_visuals_js: &str,
 ) -> Result<String, String> {
     let document = puzzle_lang::parse_game(source).map_err(|error| error.to_string())?;
+    if document.models.len() > 1 {
+        let loaded = mixed_document_loaded_game(&document)?;
+        return Ok(join_visuals_js(
+            base_visuals_js,
+            &generated_visuals_js(&loaded),
+        ));
+    }
     match document.single_model() {
         Some(LoadedDocumentModel::Puzzle2d { game, .. }) => Ok(join_visuals_js(
             base_visuals_js,
@@ -1514,7 +1841,7 @@ fn source_looks_puzzle3d(source: &str) -> bool {
         let tokens = trimmed.split_whitespace().collect::<Vec<_>>();
         matches!(
             tokens.as_slice(),
-            ["model", "puzzle3", ..] | ["levels3", ..] | ["sprites3", ..]
+            ["puzzle3", ..] | ["levels3", ..] | ["sprites3", ..]
         )
     })
 }
@@ -1546,6 +1873,12 @@ fn solve_state_json_from_source_inner(
     max_nodes: usize,
     max_ms: u64,
 ) -> Result<String, AppError> {
+    if source_looks_puzzle3d(source) || state_json.contains("\"kind\":\"puzzle3d\"") {
+        return solve_state3_json_from_source_inner(
+            source, state_json, max_depth, max_nodes, max_ms,
+        );
+    }
+
     let loaded = parse_game(source)?;
     let state = state_from_json(&loaded, state_json)?;
     let state = match level_index_from_state_json(&loaded, state_json) {
@@ -1574,6 +1907,37 @@ fn solve_state_json_from_source_inner(
     let response = solve_current_state_with_budget(&loaded, state, budget)?;
     let mut out = String::new();
     push_solution_response(&mut out, &loaded, &response);
+    Ok(out)
+}
+
+fn solve_state3_json_from_source_inner(
+    source: &str,
+    state_json: &str,
+    max_depth: u32,
+    max_nodes: usize,
+    max_ms: u64,
+) -> Result<String, AppError> {
+    let parsed = puzzle3d_model::parse_puzzle3d(source)
+        .map_err(|error| AppError::Config(format!("{error:?}")))?;
+    let state = state3_from_json(&parsed.game, state_json)?;
+    let state = if level_index_from_state3_json(&parsed, state_json).is_some() {
+        materialize_level_start_state3(&parsed, state)?
+    } else {
+        state
+    };
+    let budget = if max_ms > 0 {
+        SearchBudget::bounded(max_depth, max_nodes, Duration::from_millis(max_ms))
+    } else {
+        SearchBudget {
+            max_depth: Some(max_depth),
+            max_nodes: Some(max_nodes),
+            max_frontier: None,
+            max_duration: None,
+        }
+    };
+    let response = solve_current_state3_with_budget(&parsed, state, budget)?;
+    let mut out = String::new();
+    push_solution_response3(&mut out, &parsed, &response);
     Ok(out)
 }
 
@@ -1677,6 +2041,97 @@ fn materialize_level_start_state(
         }
     }
     Ok(state)
+}
+
+fn state3_from_json(game: &Game3, state_json: &str) -> Result<State3, AppError> {
+    let width = json_u64_field(state_json, "width")
+        .ok_or_else(|| AppError::Config("3D solver state missing width".to_string()))?
+        .try_into()
+        .map_err(|_| AppError::Config("3D solver state width out of range".to_string()))?;
+    let depth = json_u64_field(state_json, "depth")
+        .ok_or_else(|| AppError::Config("3D solver state missing depth".to_string()))?
+        .try_into()
+        .map_err(|_| AppError::Config("3D solver state depth out of range".to_string()))?;
+    let height = json_u64_field(state_json, "height")
+        .ok_or_else(|| AppError::Config("3D solver state missing height".to_string()))?
+        .try_into()
+        .map_err(|_| AppError::Config("3D solver state height out of range".to_string()))?;
+    let layer_count = json_u64_field(state_json, "layerCount")
+        .map(u16::try_from)
+        .transpose()
+        .map_err(|_| AppError::Config("3D solver state layerCount out of range".to_string()))?
+        .unwrap_or(game.layer_count);
+    if layer_count != game.layer_count {
+        return Err(AppError::Config(format!(
+            "3D solver state layerCount mismatch: expected {}, got {layer_count}",
+            game.layer_count
+        )));
+    }
+    let slots = json_u64_array_field(state_json, "slots")
+        .ok_or_else(|| AppError::Config("3D solver state missing slots".to_string()))?;
+    let fired_rules = json_u64_array_field(state_json, "levelFiredRules").unwrap_or_default();
+    let expected_slots = usize::from(width)
+        .checked_mul(usize::from(depth))
+        .and_then(|count| count.checked_mul(usize::from(height)))
+        .and_then(|count| count.checked_mul(usize::from(layer_count)))
+        .ok_or_else(|| AppError::Config("3D solver state dimensions are too large".to_string()))?;
+    if slots.len() != expected_slots {
+        return Err(AppError::Config(format!(
+            "3D solver state slots length mismatch: expected {expected_slots}, got {}",
+            slots.len()
+        )));
+    }
+
+    let mut state = State3::empty(Size3::new(width, depth, height), layer_count)
+        .map_err(|error| AppError::Config(format!("{error:?}")))?;
+    for (index, object) in slots.into_iter().enumerate() {
+        if object == 0 {
+            continue;
+        }
+        let object: u16 = object
+            .try_into()
+            .map_err(|_| AppError::Config("3D solver state object id out of range".to_string()))?;
+        let layer = index % usize::from(layer_count);
+        let cell = index / usize::from(layer_count);
+        let x = (cell % usize::from(width)) as u16;
+        let yz = cell / usize::from(width);
+        let y = (yz % usize::from(depth)) as u16;
+        let z = (yz / usize::from(depth)) as u16;
+        let object = ObjectId3(object);
+        let expected_layer = game.object_layer(object).ok_or_else(|| {
+            AppError::Config(format!("3D solver state unknown object id {}", object.0))
+        })?;
+        if usize::from(expected_layer.0) != layer {
+            return Err(AppError::Config(format!(
+                "3D solver state object {} is in layer {layer}, expected {}",
+                object.0, expected_layer.0
+            )));
+        }
+        state
+            .place_object(game, Coord3 { x, y, z }, object)
+            .map_err(|error| AppError::Config(format!("{error:?}")))?;
+    }
+    for rule in fired_rules {
+        let rule: u16 = rule
+            .try_into()
+            .map_err(|_| AppError::Config("3D solver state rule id out of range".to_string()))?;
+        state.mark_level_rule_fired(RuleId3(rule));
+    }
+    Ok(state)
+}
+
+fn level_index_from_state3_json(parsed: &ParsedPuzzle3, state_json: &str) -> Option<usize> {
+    let index = usize::try_from(json_u64_field(state_json, "levelIndex")?).ok()?;
+    let level_count = parsed.level_bundle.as_ref()?.levels.len();
+    (index < level_count).then_some(index)
+}
+
+fn materialize_level_start_state3(
+    parsed: &ParsedPuzzle3,
+    state: State3,
+) -> Result<State3, AppError> {
+    transition_program_without_input(&parsed.game, &state, &parsed.lifecycle.on_level_start)
+        .map_err(|error| AppError::Config(format!("{error:?}")))
 }
 
 fn json_u64_field(source: &str, key: &str) -> Option<u64> {
@@ -2734,6 +3189,11 @@ fn push_query_kind(out: &mut String, kind: &QueryKind) {
             out.push(',');
             push_object_ids(out, "objects", objects);
         }
+        QueryKind::NoneObjects(objects) => {
+            push_json_pair(out, "kind", "none_objects");
+            out.push(',');
+            push_object_ids(out, "objects", objects);
+        }
         QueryKind::CountMatches(patterns) => {
             push_json_pair(out, "kind", "count_matches");
             out.push(',');
@@ -2744,6 +3204,11 @@ fn push_query_kind(out: &mut String, kind: &QueryKind) {
             out.push(',');
             push_patterns(out, patterns);
         }
+        QueryKind::NoneMatches(patterns) => {
+            push_json_pair(out, "kind", "none_matches");
+            out.push(',');
+            push_patterns(out, patterns);
+        }
         QueryKind::CountInputMatches(patterns) => {
             push_json_pair(out, "kind", "count_input_matches");
             out.push(',');
@@ -2751,6 +3216,11 @@ fn push_query_kind(out: &mut String, kind: &QueryKind) {
         }
         QueryKind::ExistsInputMatches(patterns) => {
             push_json_pair(out, "kind", "exists_input_matches");
+            out.push(',');
+            push_input_patterns(out, patterns);
+        }
+        QueryKind::NoneInputMatches(patterns) => {
+            push_json_pair(out, "kind", "none_input_matches");
             out.push(',');
             push_input_patterns(out, patterns);
         }
@@ -3006,6 +3476,45 @@ fn push_solution_response(out: &mut String, loaded: &LoadedGame, response: &Solu
     out.push('}');
 }
 
+fn push_solution_response3(out: &mut String, parsed: &ParsedPuzzle3, response: &SolutionResponse3) {
+    out.push('{');
+    push_json_pair(out, "model", "puzzle3d");
+    out.push(',');
+    match response {
+        SolutionResponse3::Solved {
+            depth,
+            moves,
+            steps,
+        } => {
+            push_json_pair(out, "result", "solved");
+            out.push(',');
+            push_json_number(out, "depth", *depth as u64);
+            out.push(',');
+            push_solution_moves3(out, parsed, moves);
+            out.push(',');
+            push_solution_steps3(out, parsed, steps);
+        }
+        SolutionResponse3::Exhausted(stats) => {
+            push_json_pair(out, "result", "exhausted");
+            out.push(',');
+            push_search_stats(out, stats);
+        }
+        SolutionResponse3::BudgetExceeded(stats) => {
+            push_json_pair(out, "result", "budget_exceeded");
+            out.push(',');
+            push_search_stats(out, stats);
+        }
+        SolutionResponse3::Failed { depth, error } => {
+            push_json_pair(out, "result", "failed");
+            out.push(',');
+            push_json_number(out, "depth", *depth as u64);
+            out.push(',');
+            push_json_pair(out, "error", error);
+        }
+    }
+    out.push('}');
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 fn bind_listener(preferred_port: u16) -> io::Result<(TcpListener, u16)> {
     for offset in 0..100 {
@@ -3237,6 +3746,22 @@ fn solver_inputs(loaded: &LoadedGame) -> Vec<InputId> {
     inputs
 }
 
+fn solver_inputs3(game: &Game3) -> Vec<InputId3> {
+    let mut inputs = game
+        .inputs
+        .iter()
+        .filter(|input| {
+            !matches!(
+                input.name.as_str(),
+                "undo" | "restart" | "next_level" | "previous_level"
+            )
+        })
+        .map(|input| input.id)
+        .collect::<Vec<_>>();
+    inputs.sort();
+    inputs
+}
+
 fn push_solution_moves(out: &mut String, loaded: &LoadedGame, inputs: &[InputId]) {
     out.push_str("\"moves\":[");
     for (index, input) in inputs.iter().enumerate() {
@@ -3270,6 +3795,48 @@ fn push_solution_steps(out: &mut String, loaded: &LoadedGame, steps: &[SolutionS
     out.push(']');
 }
 
+fn push_solution_moves3(out: &mut String, parsed: &ParsedPuzzle3, inputs: &[InputId3]) {
+    out.push_str("\"moves\":[");
+    for (index, input) in inputs.iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        push_input_move3(out, parsed, *input);
+    }
+    out.push(']');
+}
+
+fn push_solution_steps3(out: &mut String, parsed: &ParsedPuzzle3, steps: &[SolutionStep3]) {
+    out.push_str("\"steps\":[");
+    for (index, step) in steps.iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        out.push('{');
+        push_json_number(out, "index", step.index as u64);
+        out.push(',');
+        if let Some(input) = step.input {
+            out.push_str("\"move\":");
+            push_input_move3(out, parsed, input);
+        } else {
+            out.push_str("\"move\":null");
+        }
+        out.push(',');
+        push_json_bool(out, "completed", step.completed);
+        out.push(',');
+        out.push_str("\"clearCommands\":");
+        if step.completed {
+            push_lifecycle_commands3(out, &parsed.lifecycle.on_level_clear);
+        } else {
+            out.push_str("[]");
+        }
+        out.push(',');
+        push_state3_scene(out, parsed, &step.state);
+        out.push('}');
+    }
+    out.push(']');
+}
+
 fn push_input_move(out: &mut String, loaded: &LoadedGame, input: InputId) {
     out.push('{');
     let name = loaded
@@ -3290,6 +3857,120 @@ fn push_input_move(out: &mut String, loaded: &LoadedGame, input: InputId) {
     } else {
         out.push_str("\"arrow\":null");
     }
+    out.push('}');
+}
+
+fn push_input_move3(out: &mut String, parsed: &ParsedPuzzle3, input: InputId3) {
+    out.push('{');
+    let input_def = parsed.game.input(input);
+    let name = input_def.map(|input| input.name.as_str()).unwrap_or("?");
+    push_json_pair(out, "name", name);
+    out.push(',');
+    out.push_str("\"key\":null");
+    out.push(',');
+    out.push_str("\"arrow\":null");
+    out.push(',');
+    if let Some(direction) = input_def.and_then(|input| input.direction) {
+        push_json_pair(out, "direction", direction.name);
+    } else {
+        out.push_str("\"direction\":null");
+    }
+    out.push('}');
+}
+
+fn push_lifecycle_commands3(out: &mut String, commands: &[LifecycleCommand3]) {
+    out.push('[');
+    for (index, command) in commands.iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        match command {
+            LifecycleCommand3::NextLevel => push_json_string(out, "next_level"),
+        }
+    }
+    out.push(']');
+}
+
+fn push_state3_scene(out: &mut String, parsed: &ParsedPuzzle3, state: &State3) {
+    out.push_str("\"scene\":{");
+    push_json_pair(out, "kind", "puzzle3d");
+    out.push(',');
+    push_size3(out, state.size);
+    out.push(',');
+    push_json_number(out, "layerCount", state.layer_count as u64);
+    out.push(',');
+    out.push_str("\"cells\":[");
+    let mut first = true;
+    for z in 0..state.size.height {
+        for y in 0..state.size.depth {
+            for x in 0..state.size.width {
+                let position = Coord3 { x, y, z };
+                let Ok(view) = state.cell_view(position) else {
+                    continue;
+                };
+                if view.objects.is_empty() {
+                    continue;
+                }
+                if !first {
+                    out.push(',');
+                }
+                first = false;
+                out.push('{');
+                push_coord3(out, position);
+                out.push(',');
+                out.push_str("\"objects\":[");
+                for (object_index, object) in view.objects.iter().enumerate() {
+                    if object_index > 0 {
+                        out.push(',');
+                    }
+                    push_object3(out, parsed, *object);
+                }
+                out.push_str("]}");
+            }
+        }
+    }
+    out.push_str("]}");
+}
+
+fn push_size3(out: &mut String, size: Size3) {
+    out.push_str("\"size\":{");
+    push_json_number(out, "width", size.width as u64);
+    out.push(',');
+    push_json_number(out, "depth", size.depth as u64);
+    out.push(',');
+    push_json_number(out, "height", size.height as u64);
+    out.push('}');
+}
+
+fn push_coord3(out: &mut String, position: Coord3) {
+    out.push_str("\"position\":{");
+    push_json_number(out, "x", position.x as u64);
+    out.push(',');
+    push_json_number(out, "y", position.y as u64);
+    out.push(',');
+    push_json_number(out, "z", position.z as u64);
+    out.push('}');
+}
+
+fn push_object3(out: &mut String, parsed: &ParsedPuzzle3, object: ObjectId3) {
+    out.push('{');
+    push_json_number(out, "id", object.0 as u64);
+    out.push(',');
+    let name = parsed
+        .catalog
+        .objects
+        .iter()
+        .find_map(|entry| (entry.id == object).then_some(entry.name.as_str()))
+        .unwrap_or("?");
+    push_json_pair(out, "name", name);
+    out.push(',');
+    if let Some(layer) = parsed.game.object_layer(object) {
+        push_json_number(out, "layer", layer.0 as u64);
+    } else {
+        out.push_str("\"layer\":null");
+    }
+    out.push(',');
+    push_json_pair(out, "sprite", name);
     out.push('}');
 }
 
@@ -3594,10 +4275,8 @@ fn scene_puzzle_state<'a>(
 fn first_puzzle_component(components: &[SceneComponent]) -> Option<&str> {
     for component in components {
         match component {
-            SceneComponent::ModelWindow(window)
-                if window.model_kind == puzzle_lang::ModelKind::Puzzle2d =>
-            {
-                return Some(window.source.as_str());
+            SceneComponent::Frame(frame) if frame.kind == "puzzle" || frame.kind == "frame" => {
+                return Some(frame.source.as_str());
             }
             SceneComponent::Row(container)
             | SceneComponent::Column(container)
@@ -4151,6 +4830,10 @@ fn push_scene_state_def(out: &mut String, scene: &puzzle_lang::SceneDef) {
         out.push('{');
         push_json_pair(out, "name", &puzzle.name);
         out.push(',');
+        push_json_pair(out, "kind", &puzzle.kind);
+        out.push(',');
+        push_json_pair(out, "model", &puzzle.model);
+        out.push(',');
         match &puzzle.initializer {
             ScenePuzzleInitializer::CurrentLevel => {
                 push_json_pair(out, "initializer", "current_level")
@@ -4238,30 +4921,12 @@ fn push_scene_layout(out: &mut String, layout: &SceneLayoutDef) {
 fn push_scene_component(out: &mut String, component: &SceneComponent) {
     out.push('{');
     match component {
-        SceneComponent::ModelWindow(window)
-            if window.model_kind == puzzle_lang::ModelKind::Puzzle2d =>
-        {
-            push_json_pair(out, "kind", "puzzle");
+        SceneComponent::Frame(frame) => {
+            push_json_pair(out, "kind", &frame.kind);
             out.push(',');
-            push_json_pair(out, "source", &window.source);
+            push_json_pair(out, "source", &frame.source);
             out.push(',');
-            push_scene_layout(out, &window.layout);
-        }
-        SceneComponent::ModelWindow(window) => {
-            push_json_pair(out, "kind", "model_window");
-            out.push(',');
-            push_json_pair(
-                out,
-                "modelKind",
-                match window.model_kind {
-                    puzzle_lang::ModelKind::Puzzle2d => "puzzle",
-                    puzzle_lang::ModelKind::Puzzle3d => "puzzle3",
-                },
-            );
-            out.push(',');
-            push_json_pair(out, "source", &window.source);
-            out.push(',');
-            push_scene_layout(out, &window.layout);
+            push_scene_layout(out, &frame.layout);
         }
         SceneComponent::Title(title) => {
             push_json_pair(out, "kind", "title");
@@ -4339,6 +5004,22 @@ fn push_scene_component(out: &mut String, component: &SceneComponent) {
             }
             out.push(',');
             push_json_bool(out, "wrap", menu.wrap);
+            out.push(',');
+            out.push_str("\"source\":");
+            if let Some(source) = &menu.source {
+                push_json_string(out, source);
+            } else {
+                out.push_str("null");
+            }
+            out.push(',');
+            out.push_str("\"action\":");
+            if let Some(effect) = &menu.action {
+                out.push('{');
+                push_json_effect(out, effect);
+                out.push('}');
+            } else {
+                out.push_str("null");
+            }
             out.push(',');
             out.push_str("\"buttons\":[");
             for (index, button) in menu.buttons.iter().enumerate() {
@@ -4908,16 +5589,171 @@ mod tests {
     }
 
     #[test]
-    fn html_play_scales_the_screen_root_not_individual_cells() {
+    fn html_play_fits_the_logical_scene_root_not_individual_cells() {
         assert!(INDEX_HTML.contains(r#"<div id="screenFrame" class="screen-frame">"#));
-        assert!(APP_CSS.contains("transform: scale(var(--screen-scale, 1));"));
+        assert!(APP_CSS.contains("--scene-layout-unit: 180px;"));
+        assert!(APP_CSS.contains("--scene-layout-gap-unit: 1px;"));
         assert!(APP_JS.contains("function syncScreenScale()"));
+        assert!(APP_JS.contains("const defaultSceneLogicalSize = { width: 4, height: 3 };"));
+        assert!(APP_JS.contains("function fitLogicalSceneSize("));
+        assert!(APP_JS.contains("const defaultSceneLayoutUnit = 180;"));
+        assert!(APP_JS.contains("function virtualSceneSize("));
+        assert!(APP_JS.contains("screenView.style.setProperty(\"--screen-scale\""));
         assert!(APP_JS.contains("screenFrame.style.width"));
+        assert!(APP_JS.contains("screenFrame.style.height"));
+        assert!(APP_CSS.contains("transform: scale(var(--screen-scale, 1));"));
+        assert!(APP_CSS.contains("grid-auto-rows: max-content;"));
+        assert!(APP_CSS.contains("place-content: center;"));
+        assert!(APP_CSS.contains("justify-content: center;"));
+        assert!(!APP_JS.contains(r#""has-puzzle-scene""#));
+        assert!(!APP_CSS.contains(".scene-layer.has-puzzle-scene"));
+        assert!(!APP_CSS.contains("justify-content: space-between;"));
         assert!(APP_JS.contains(r#"renderMode: "canvas""#));
         assert!(
             RENDERER_CSS.contains("grid-template-columns: repeat(var(--cols), var(--cell-size));")
         );
+        assert!(!APP_CSS.contains("grid-auto-flow: row;"));
         assert!(!RENDERER_CSS.contains("minmax(24px, 1fr)"));
+    }
+
+    #[test]
+    fn puzzle3_runtime_exposes_editor_preview_update_contract() {
+        assert!(PUZZLE3_APP_JS.contains("function applyPuzzle3PreviewUpdate(update = {})"));
+        assert!(PUZZLE3_APP_JS.contains("PuzzleStudioUpdatePuzzle3Preview"));
+        assert!(PUZZLE3_APP_JS.contains("PuzzleStudioRenderPuzzle3ModelComponent"));
+        assert!(PUZZLE3_APP_JS.contains("PuzzleStudioInitialModelComponentPreview"));
+        assert!(
+            PUZZLE3_APP_JS
+                .contains("function applyPuzzle3ModelComponentPreviewUpdate(update = {})")
+        );
+        assert!(PUZZLE3_APP_JS.contains("modelComponentPreview: {"));
+        assert!(PUZZLE3_APP_JS.contains("if (editorModelComponentPreview)"));
+        assert!(PUZZLE3_APP_JS.contains("mergePuzzle3PreviewSettings"));
+        assert!(
+            PUZZLE3_APP_JS
+                .contains("applyPuzzle3PreviewResources(next, update.resources || update)")
+        );
+        assert!(PUZZLE3_APP_JS.contains("function applyPuzzle3PreviewResources"));
+        assert!(
+            PUZZLE3_APP_JS
+                .contains("target.sprites = JSON.parse(JSON.stringify(resources.sprites));")
+        );
+        assert!(PUZZLE3_APP_JS.contains("next.levels[levelIndex]"));
+        assert!(PUZZLE3_APP_JS.contains("next.camera = cloneCamera(update.camera);"));
+        assert!(PUZZLE3_APP_JS.contains("next.settings = mergePuzzle3PreviewSettings"));
+        assert!(PUZZLE3_APP_JS.contains(r#"coordinateSpace: "canvas-css-px""#));
+    }
+
+    #[test]
+    fn mixed_export_hosts_puzzle3_as_scene_component() {
+        let source = r#"
+title Mixed Game
+
+puzzle flat {
+layers 1
+empty .
+object Player 0
+rules {
+
+}
+}
+
+levels flat_levels of flat {
+legend P = Player
+level start {
+P
+}
+}
+
+puzzle3 cube {
+  layers {
+    actor = Player Box Wall
+  }
+
+  group solid = Player Box Wall
+
+  rules {
+
+  }
+}
+
+levels3 cube_levels of cube {
+  legend {
+    _ = empty
+    P = Player
+  }
+
+  level start {
+    P
+  }
+}
+
+scene mixed_play {
+  state {
+    flat_board = puzzle flat
+    cube_board = puzzle3 cube
+  }
+  view size 4 3 {
+    row {
+      puzzle flat_board
+      puzzle3 cube_board
+    }
+  }
+}
+"#;
+        let document = puzzle_lang::parse_game(source).unwrap();
+        let loaded = mixed_document_loaded_game(&document).unwrap();
+        let mixed_scene = loaded
+            .scenes
+            .iter()
+            .find(|scene| scene.name == "mixed_play")
+            .unwrap();
+        assert_eq!(mixed_scene.state.puzzles.len(), 1);
+        assert_eq!(mixed_scene.state.puzzles[0].name, "flat_board");
+
+        let html = export_mixed_document_html(
+            &document,
+            loaded,
+            source.to_string(),
+            "mixed.puzzle".to_string(),
+            String::new(),
+            VISUALS_JS.to_string(),
+            SolverConfig::default(),
+        )
+        .unwrap();
+        assert!(html.contains("window.Puzzle3DFrameFixture"));
+        assert!(html.contains("window.Puzzle3DFrameAssets"));
+        assert!(html.contains("case \"puzzle3\""));
+        assert!(html.contains("iframe.puzzle3-frame"));
+        assert!(html.contains("\\\"kind\\\":\\\"puzzle3\\\""));
+    }
+
+    #[test]
+    fn puzzle3_runtime_camera_pitch_allows_vertical_view() {
+        assert!(PUZZLE3_APP_JS.contains("const PUZZLE3_APP_CAMERA_MIN_PITCH_DEGREES = -90;"));
+        assert!(PUZZLE3_APP_JS.contains("const PUZZLE3_APP_CAMERA_MAX_PITCH_DEGREES = 90;"));
+        assert!(PUZZLE3_RUNTIME_JS.contains("const PUZZLE3_CAMERA_MIN_PITCH_DEGREES = -90;"));
+        assert!(PUZZLE3_RUNTIME_JS.contains("const PUZZLE3_CAMERA_MAX_PITCH_DEGREES = 90;"));
+        assert!(PUZZLE3_APP_JS.contains("PUZZLE3_APP_CAMERA_MAX_PITCH_DEGREES"));
+        assert!(PUZZLE3_RUNTIME_JS.contains("PUZZLE3_CAMERA_MAX_PITCH_DEGREES"));
+        assert!(!PUZZLE3_APP_JS.contains("camera.pitchDegrees - deltaY * 0.25, -80, 80"));
+        assert!(!PUZZLE3_RUNTIME_JS.contains(
+            r#""pitch") {
+        this.camera.pitchDegrees = clamp(Number(effect.value) || 0, -80, 80);"#
+        ));
+    }
+
+    #[test]
+    fn puzzle3_visual_core_owns_render_order_helpers() {
+        assert!(PUZZLE3_VISUAL_CORE_JS.contains("function comparePrimitiveOrder(a, b)"));
+        assert!(PUZZLE3_VISUAL_CORE_JS.contains("function faceGridOrder(corners, view)"));
+        assert!(PUZZLE3_VISUAL_CORE_JS.contains("function directionDepth(vector, view)"));
+        assert!(PUZZLE3_APP_JS.contains("primitives.sort(comparePrimitiveOrder);"));
+        assert!(PUZZLE3_APP_JS.contains("return Puzzle3VisualCore.comparePrimitiveOrder(a, b);"));
+        assert!(
+            PUZZLE3_APP_JS
+                .contains("return Puzzle3VisualCore.faceGridOrder(corners, puzzle3VisualView());")
+        );
     }
 
     #[test]
@@ -4958,6 +5794,24 @@ mod tests {
         assert!(
             APP_JS.contains("screenHasPuzzle: currentSceneHasPuzzle() || Boolean(state.scene)")
         );
+        assert!(APP_JS.contains("if (!currentSceneHasPuzzle() && !currentState.scene)"));
+        assert!(APP_JS.contains("acceptModelInput: event.data.acceptModelInput === true"));
+        assert!(APP_JS.contains("function applyStandaloneEditorInput(command)"));
+        assert!(
+            APP_JS.contains(
+                "const acceptsEditorInput = standaloneRuntime?.editorPreviewInputEnabled"
+            )
+        );
+        assert!(APP_JS.contains("standaloneRuntime?.inputIdsByName?.has(command)"));
+        assert!(APP_JS.contains("standaloneRuntime.applyInputName(command);"));
+        assert!(STANDALONE_JS.contains("this.editorPreviewInputEnabled = false;"));
+        assert!(
+            STANDALONE_JS
+                .contains("this.currentSceneAcceptsModelInput() || this.editorPreviewInputEnabled")
+        );
+        assert!(STANDALONE_JS.contains(
+            "(options.materializeDisplay || options.materializeTurnStart) && options.acceptModelInput !== true"
+        ));
         assert!(STANDALONE_JS.contains(
             "this.materializeDisplayProgram(displayProgram, state, \"display_level_clear\")"
         ));
@@ -4972,7 +5826,7 @@ mod tests {
         let source = r#"
 title display_solver
 
-model puzzle board {
+puzzle board {
   layers {
     actor = Player
     cursor = @Cursor
@@ -5022,7 +5876,7 @@ scene playing {
         let source = r#"
 title solver_level_start
 
-model puzzle board {
+puzzle board {
   layers {
     floor = Goal
     actor = Player
@@ -5075,11 +5929,89 @@ scene playing {
     }
 
     #[test]
+    fn solver_accepts_puzzle3d_state_and_returns_replay_steps() {
+        let source = r#"
+puzzle3 push3 {
+layers {
+floor = Goal
+solid = Player Box Wall
+}
+
+inputs {
+right <- d ArrowRight
+restart <- r
+}
+
+group solid = Player Box Wall
+
+rules {
+input right [ Player | Box | no solid ] -> [ | Player | Box ]
+input right [ Player | no solid ] -> [ | Player ]
+}
+
+on_level_clear {
+if win_conditions -> next_level
+}
+
+win_conditions {
+some Goal
+no down [ no Box | Goal ]
+}
+}
+
+levels3 tiny of push3 {
+legend {
+_ = empty
+P = Player
+B = Box
+G = Goal
+}
+
+level one {
+PB_
+
+__G
+}
+}
+"#;
+
+        let parsed = puzzle3d_model::parse_puzzle3d(source).unwrap();
+        let state = parsed
+            .level_bundle
+            .as_ref()
+            .unwrap()
+            .build_level_state(0)
+            .unwrap();
+        let slots = state
+            .slots()
+            .iter()
+            .map(|object| object.0.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        let state_json = format!(
+            r#"{{"kind":"puzzle3d","width":{},"depth":{},"height":{},"layerCount":{},"slots":[{}]}}"#,
+            state.size.width, state.size.depth, state.size.height, state.layer_count, slots
+        );
+
+        let response =
+            solve_state_json_from_source(source, "game.puzzle", &state_json, 4, 1000, 0).unwrap();
+
+        assert!(response.contains(r#""model":"puzzle3d""#));
+        assert!(response.contains(r#""result":"solved""#));
+        assert!(response.contains(r#""name":"right""#));
+        assert!(response.contains(r#""direction":"right""#));
+        assert!(response.contains(r#""completed":true"#));
+        assert!(response.contains(r#""clearCommands":["next_level"]"#));
+        assert!(response.contains(r#""scene":{"kind":"puzzle3d""#));
+        assert!(!response.contains(r#""name":"restart""#));
+    }
+
+    #[test]
     fn core_runtime_bridge_uses_core_once_all_semantics() {
         let source = r#"
 title once_all_overlap
 
-model puzzle board {
+puzzle board {
   layers {
     tiles = A B
   }
@@ -5119,7 +6051,7 @@ scene playing {
         let source = r#"
 title Wasm Export
 
-model puzzle board {
+puzzle board {
   layers {
     tiles = Player
   }
@@ -5157,7 +6089,7 @@ scene playing {
         let source = r#"
 title Export Test
 
-model puzzle default {
+puzzle default {
 layers 1
 empty .
 object Player 0
@@ -5208,7 +6140,7 @@ theme noir {
   background_color #123456
 }
 
-model puzzle default {
+puzzle default {
 layers 1
 empty .
 object Player 0

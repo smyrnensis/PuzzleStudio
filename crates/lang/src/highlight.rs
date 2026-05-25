@@ -5,7 +5,7 @@ use crate::source::{
     SourceScope, SourceSectionPart, scan_source_context, split_tokens, strip_line_comment,
 };
 use crate::{
-    LoadedDocumentModel, LoadedDocumentScene, RewriteEffectCommandSyntax, is_visual_color_token,
+    LoadedDocumentModel, RewriteEffectCommandSyntax, is_visual_color_token,
     rewrite_effect_command_syntax, scene_effect_command_syntax, visual_color_token_for_index,
 };
 
@@ -98,13 +98,10 @@ pub fn highlight_source(source: &str) -> HighlightedSource {
             }
         }
         for scene in &document.scenes {
-            match scene {
-                LoadedDocumentScene::Puzzle2d(scene) => {
-                    symbols.insert(scene.name.clone(), HighlightKind::Scene);
-                }
-                LoadedDocumentScene::Puzzle3d(scene) => {
-                    symbols.insert(scene.name.clone(), HighlightKind::Scene);
-                }
+            symbols.insert(scene.name.clone(), HighlightKind::Scene);
+            for puzzle in &scene.state.puzzles {
+                symbols.insert(puzzle.name.clone(), HighlightKind::State);
+                symbols.insert(puzzle.model.clone(), HighlightKind::Scene);
             }
         }
         for sfx in &document.sounds.sfx {
@@ -212,13 +209,6 @@ fn collect_puzzle3_symbols(
             symbols.insert(sprite.name.clone(), HighlightKind::Asset);
         }
     }
-    for scene in &puzzle.scenes {
-        symbols.insert(scene.name.clone(), HighlightKind::Scene);
-        for puzzle in &scene.puzzles {
-            symbols.insert(puzzle.slot.clone(), HighlightKind::State);
-            symbols.insert(puzzle.model.clone(), HighlightKind::Scene);
-        }
-    }
 }
 
 fn highlight_html(
@@ -232,7 +222,9 @@ fn highlight_html(
     let context = scan_source_context(source);
     let binding_ranges = scan_for_binding_ranges(source);
     let semantic_ranges = semantic_tokens(source);
-    let visual_ascii_color_ranges = scan_visual_ascii_color_ranges(source);
+    let visual_color_aliases = scan_visual_color_aliases(&context);
+    let visual_named_color_ranges = scan_visual_named_color_ranges(&context, &visual_color_aliases);
+    let visual_ascii_color_ranges = scan_visual_ascii_color_ranges(source, &visual_color_aliases);
     let mut chars = source.char_indices().peekable();
 
     while let Some((index, ch)) = chars.next() {
@@ -248,7 +240,14 @@ fn highlight_html(
 
         if let Some(range) = visual_ascii_color_range_starting_at(&visual_ascii_color_ranges, index)
         {
-            push_colored_text_span(&mut out, range.color, &source[range.start..range.end]);
+            push_colored_text_span(&mut out, &range.color, &source[range.start..range.end]);
+            skip_until(&mut chars, range.end);
+            continue;
+        }
+
+        if let Some(range) = visual_named_color_range_starting_at(&visual_named_color_ranges, index)
+        {
+            push_color_text_span(&mut out, &range.color, &source[range.start..range.end]);
             skip_until(&mut chars, range.end);
             continue;
         }
@@ -432,7 +431,7 @@ fn collect_line_symbols(
         ["scene", name, ..] => {
             insert_source_symbol(symbols, name, HighlightKind::Scene);
         }
-        ["puzzle", name, ..] | ["model", "puzzle" | "puzzle3", name, ..] => {
+        ["puzzle" | "puzzle3", name, ..] => {
             insert_source_symbol(symbols, name, HighlightKind::Scene);
         }
         ["levels3", name, "of", model, ..] | ["sprites3", name, "of", model, ..] => {
@@ -669,6 +668,7 @@ fn insert_source_symbol(
 
 fn symbol_priority(kind: HighlightKind) -> u8 {
     match kind {
+        HighlightKind::Object => 6,
         HighlightKind::Group => 5,
         HighlightKind::State
         | HighlightKind::Scratch
@@ -678,7 +678,6 @@ fn symbol_priority(kind: HighlightKind) -> u8 {
         | HighlightKind::Query
         | HighlightKind::Scene
         | HighlightKind::Asset => 4,
-        HighlightKind::Object => 3,
         HighlightKind::Variant => 2,
         _ => 1,
     }
@@ -854,6 +853,7 @@ fn highlight_kind_for_semantic(kind: SemanticKind) -> HighlightKind {
         SemanticKind::Binding => HighlightKind::Binding,
         SemanticKind::Effect => HighlightKind::Effect,
         SemanticKind::Emission => HighlightKind::Emission,
+        SemanticKind::Object => HighlightKind::Object,
         SemanticKind::Input => HighlightKind::Input,
         SemanticKind::State => HighlightKind::State,
         SemanticKind::Group => HighlightKind::Group,
@@ -865,26 +865,209 @@ fn highlight_kind_for_semantic(kind: SemanticKind) -> HighlightKind {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-struct VisualAsciiColorRange<'a> {
+#[derive(Clone, Debug)]
+struct VisualAsciiColorRange {
     start: usize,
     end: usize,
-    color: &'a str,
+    color: String,
 }
 
-fn visual_ascii_color_range_starting_at<'a>(
-    ranges: &'a [VisualAsciiColorRange<'a>],
+fn visual_ascii_color_range_starting_at(
+    ranges: &[VisualAsciiColorRange],
     start: usize,
-) -> Option<&'a VisualAsciiColorRange<'a>> {
+) -> Option<&VisualAsciiColorRange> {
     ranges.iter().find(|range| range.start == start)
 }
 
-fn scan_visual_ascii_color_ranges(source: &str) -> Vec<VisualAsciiColorRange<'_>> {
+#[derive(Clone, Debug)]
+struct VisualNamedColorRange {
+    start: usize,
+    end: usize,
+    color: String,
+}
+
+fn visual_named_color_range_starting_at(
+    ranges: &[VisualNamedColorRange],
+    start: usize,
+) -> Option<&VisualNamedColorRange> {
+    ranges.iter().find(|range| range.start == start)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum VisualHighlightScope {
+    Sprites,
+    SpriteEntry,
+    Colors,
+    ColorTable,
+    Palettes,
+    PaletteTable,
+    Other,
+}
+
+fn scan_visual_named_color_ranges(
+    context: &crate::source::SourceContext,
+    aliases: &HashMap<String, String>,
+) -> Vec<VisualNamedColorRange> {
+    let scopes = visual_highlight_scopes(context);
+    let mut ranges = Vec::<VisualNamedColorRange>::new();
+
+    if aliases.is_empty() {
+        return ranges;
+    }
+
+    for (line, scope) in context.lines.iter().zip(scopes.iter().copied()) {
+        if !matches!(
+            scope,
+            Some(
+                VisualHighlightScope::Sprites
+                    | VisualHighlightScope::SpriteEntry
+                    | VisualHighlightScope::Palettes
+                    | VisualHighlightScope::PaletteTable
+            )
+        ) || is_visual_closing_line(line)
+        {
+            continue;
+        }
+        add_visual_named_color_references(scope, &mut ranges, &line.token_spans, aliases);
+    }
+
+    ranges
+}
+
+fn scan_visual_color_aliases(context: &crate::source::SourceContext) -> HashMap<String, String> {
+    let scopes = visual_highlight_scopes(context);
+    let mut aliases = HashMap::<String, String>::new();
+
+    for (line, scope) in context.lines.iter().zip(scopes.iter().copied()) {
+        if scope != Some(VisualHighlightScope::Colors) || is_visual_closing_line(line) {
+            continue;
+        }
+        let tokens = &line.token_spans;
+        let [name, equals, color] = tokens.as_slice() else {
+            continue;
+        };
+        if equals.text != "="
+            || name.text.contains(':')
+            || !is_source_identifier(&name.text)
+            || !highlightable_visual_color_token(&color.text)
+        {
+            continue;
+        }
+        aliases.insert(name.text.clone(), color.text.clone());
+    }
+
+    aliases
+}
+
+fn visual_highlight_scopes(
+    context: &crate::source::SourceContext,
+) -> Vec<Option<VisualHighlightScope>> {
+    let mut scopes = Vec::with_capacity(context.lines.len());
+    let mut stack = Vec::<VisualHighlightScope>::new();
+    for line in &context.lines {
+        let current = stack.last().copied();
+        scopes.push(current);
+        if is_visual_closing_line(line) {
+            stack.pop();
+            continue;
+        }
+        if let Some(opened) = visual_highlight_opening_scope(current, line) {
+            stack.push(opened);
+        }
+    }
+    scopes
+}
+
+fn visual_highlight_opening_scope(
+    current: Option<VisualHighlightScope>,
+    line: &crate::source::SourceContextLine,
+) -> Option<VisualHighlightScope> {
+    let first = line.tokens.first().map(String::as_str)?;
+    let has_assignment = line.tokens.iter().any(|token| token == "=");
+    match current {
+        None if matches!(first, "sprites" | "sprites3") => Some(VisualHighlightScope::Sprites),
+        Some(VisualHighlightScope::Sprites) => match first {
+            "colors" => Some(VisualHighlightScope::Colors),
+            "palettes" => Some(VisualHighlightScope::Palettes),
+            "shapes" | "shape" => Some(VisualHighlightScope::Other),
+            _ if line.content.trim_end().ends_with('{') => Some(VisualHighlightScope::SpriteEntry),
+            _ => None,
+        },
+        Some(VisualHighlightScope::Colors)
+            if !has_assignment && first.contains(':') && line.content.trim_end().ends_with('{') =>
+        {
+            Some(VisualHighlightScope::ColorTable)
+        }
+        Some(VisualHighlightScope::Palettes)
+            if !has_assignment && first.contains(':') && line.content.trim_end().ends_with('{') =>
+        {
+            Some(VisualHighlightScope::PaletteTable)
+        }
+        Some(
+            VisualHighlightScope::SpriteEntry
+            | VisualHighlightScope::ColorTable
+            | VisualHighlightScope::PaletteTable,
+        ) if line.content.trim_end().ends_with('{') => Some(VisualHighlightScope::Other),
+        _ => None,
+    }
+}
+
+fn is_visual_closing_line(line: &crate::source::SourceContextLine) -> bool {
+    let trimmed = strip_line_comment(&line.content).trim();
+    matches!(trimmed, "}" | "end")
+}
+
+fn add_visual_named_color_references(
+    scope: Option<VisualHighlightScope>,
+    ranges: &mut Vec<VisualNamedColorRange>,
+    tokens: &[crate::source::SourceToken],
+    aliases: &HashMap<String, String>,
+) {
+    let first_color_index = match scope {
+        Some(VisualHighlightScope::Sprites | VisualHighlightScope::SpriteEntry) => {
+            if tokens.is_empty()
+                || !tokens
+                    .iter()
+                    .all(|token| visual_color_value_for_token(&token.text, aliases).is_some())
+            {
+                return;
+            }
+            0
+        }
+        _ => {
+            let Some(equals) = tokens.iter().position(|token| token.text == "=") else {
+                return;
+            };
+            equals + 1
+        }
+    };
+    for token in &tokens[first_color_index..] {
+        if let Some(color) = aliases.get(&token.text) {
+            ranges.push(VisualNamedColorRange {
+                start: token.start,
+                end: token.end,
+                color: color.clone(),
+            });
+        }
+    }
+}
+
+fn highlightable_visual_color_token(value: &str) -> bool {
+    if value.starts_with('#') {
+        return hex_color_end(value, 0, '#') == Some(value.len());
+    }
+    is_visual_color_token(value)
+}
+
+fn scan_visual_ascii_color_ranges(
+    source: &str,
+    aliases: &HashMap<String, String>,
+) -> Vec<VisualAsciiColorRange> {
     let mut ranges = Vec::new();
     let mut in_sprites = false;
     let mut sprites_depth = 0i32;
     let mut pending_color_row = false;
-    let mut palette = HashMap::<char, &str>::new();
+    let mut palette = HashMap::<char, String>::new();
     let mut offset = 0usize;
 
     for line in source.split_inclusive('\n') {
@@ -911,7 +1094,7 @@ fn scan_visual_ascii_color_ranges(source: &str) -> Vec<VisualAsciiColorRange<'_>
         }
 
         let starts_entry = visual_sprite_entry_header(&tokens, trimmed);
-        if pending_color_row && let Some(next_palette) = visual_ascii_palette(&tokens) {
+        if pending_color_row && let Some(next_palette) = visual_ascii_palette(&tokens, aliases) {
             palette = next_palette;
             pending_color_row = false;
             offset = line_end;
@@ -962,39 +1145,53 @@ fn visual_sprite_entry_header(tokens: &[&str], trimmed: &str) -> bool {
     tokens.len() == 1 || trimmed.ends_with('{')
 }
 
-fn visual_ascii_palette<'a>(tokens: &[&'a str]) -> Option<HashMap<char, &'a str>> {
-    if tokens.is_empty() || !tokens.iter().all(|token| is_visual_color_token(token)) {
+fn visual_ascii_palette(
+    tokens: &[&str],
+    aliases: &HashMap<String, String>,
+) -> Option<HashMap<char, String>> {
+    if tokens.is_empty()
+        || !tokens
+            .iter()
+            .all(|token| visual_color_value_for_token(token, aliases).is_some())
+    {
         return None;
     }
     let mut palette = HashMap::new();
     for (index, color) in tokens.iter().enumerate() {
         let token = visual_color_token_for_index(index)?;
-        if color.starts_with('#') && color[1..].chars().all(|ch| ch.is_ascii_hexdigit()) {
-            palette.insert(token, *color);
+        if let Some(color) = visual_color_value_for_token(color, aliases) {
+            palette.insert(token, color);
         }
     }
     (!palette.is_empty()).then_some(palette)
 }
 
-fn visual_ascii_row(row: &str, palette: &HashMap<char, &str>) -> bool {
+fn visual_color_value_for_token(token: &str, aliases: &HashMap<String, String>) -> Option<String> {
+    if let Some(color) = aliases.get(token) {
+        return Some(color.clone());
+    }
+    highlightable_visual_color_token(token).then(|| token.to_string())
+}
+
+fn visual_ascii_row(row: &str, palette: &HashMap<char, String>) -> bool {
     !row.is_empty()
         && !row.contains(char::is_whitespace)
         && row.chars().all(|ch| ch == '.' || palette.contains_key(&ch))
 }
 
-fn add_visual_ascii_row_ranges<'a>(
-    ranges: &mut Vec<VisualAsciiColorRange<'a>>,
+fn add_visual_ascii_row_ranges(
+    ranges: &mut Vec<VisualAsciiColorRange>,
     line_start: usize,
     content: &str,
     trimmed: &str,
-    palette: &HashMap<char, &'a str>,
+    palette: &HashMap<char, String>,
 ) {
     let leading = content.len() - content.trim_start().len();
     let mut column = 0usize;
     for ch in trimmed.chars() {
         let start = line_start + leading + column;
         let end = start + ch.len_utf8();
-        if let Some(color) = palette.get(&ch).copied() {
+        if let Some(color) = palette.get(&ch).cloned() {
             ranges.push(VisualAsciiColorRange { start, end, color });
         }
         column += ch.len_utf8();
@@ -1120,7 +1317,6 @@ fn parser_keyword(token: &str) -> bool {
             | "lose_conditions"
             | "map"
             | "menu"
-            | "model"
             | "music"
             | "name"
             | "objects"
@@ -1190,7 +1386,6 @@ fn parser_literal(token: &str) -> bool {
             | "empty"
             | "exists"
             | "false"
-            | "flag"
             | "forward"
             | "frames"
             | "full"
@@ -1344,12 +1539,16 @@ fn push_span(out: &mut String, kind: HighlightKind, text: &str) {
 }
 
 fn push_color_span(out: &mut String, color: &str) {
+    push_color_text_span(out, color, color);
+}
+
+fn push_color_text_span(out: &mut String, color: &str, text: &str) {
     out.push_str("<span class=\"");
     out.push_str(HighlightKind::Color.class_name());
     out.push_str("\" style=\"--syntax-color-token: ");
     out.push_str(color);
     out.push_str("\">");
-    escape_html_into(out, color);
+    escape_html_into(out, text);
     out.push_str("</span>");
 }
 
@@ -1386,7 +1585,7 @@ mod tests {
         let source = r#"
 title highlight_symbols
 
-model puzzle board {
+puzzle board {
 layers {
 actor = Player
 }
@@ -1418,7 +1617,7 @@ P
             r#"
 title section_header
 
-model puzzle board {
+puzzle board {
 ======
 LEGEND
 ======
@@ -1437,7 +1636,7 @@ P = Player
             r#"
 title colored_elements
 
-model puzzle board {
+puzzle board {
 tags {
 color = red blue
 }
@@ -1488,7 +1687,7 @@ PB
             r#"
 title fallback_elements
 
-model puzzle board {
+puzzle board {
 tags {
 kind = A B
 }
@@ -1513,6 +1712,8 @@ sfx bump seed=hit type=jump
 }
 
 scene title {
+button "Play" -> start levels in playing
+button "Continue" -> continue levels in playing
 transitions {
 start -> goto playing
 }
@@ -1531,6 +1732,8 @@ scene playing {
         assert!(highlighted.html.contains("syntax-input\">jump"));
         assert!(highlighted.html.contains("syntax-query\">blocked"));
         assert!(highlighted.html.contains("syntax-asset\">bump"));
+        assert!(highlighted.html.contains("syntax-effect\">start"));
+        assert!(highlighted.html.contains("syntax-effect\">continue"));
         assert!(highlighted.html.contains("syntax-scene\">playing"));
     }
 
@@ -1540,7 +1743,7 @@ scene playing {
             r#"
 title binding_highlight
 
-model puzzle board {
+puzzle board {
 tags {
 kind = A B
 }
@@ -1574,7 +1777,7 @@ level start {
             r#"
 title family_axis_highlight
 
-model puzzle board {
+puzzle board {
 tags {
 kind = A B
 }
@@ -1622,7 +1825,7 @@ level start {
             r#"
 title layer_axis_highlight
 
-model puzzle board {
+puzzle board {
 tags {
 kind = A B
 }
@@ -1653,7 +1856,7 @@ level start {
             r#"
 title direction_axis_highlight
 
-model puzzle board {
+puzzle board {
 objects {
 Facing:directions
 }
@@ -1683,7 +1886,7 @@ level start {
             r#"
 title glyph_highlight
 
-model puzzle board {
+puzzle board {
 objects {
 Player
 }
@@ -1725,7 +1928,7 @@ level start {
             r#"
 title layer_highlight
 
-model puzzle board {
+puzzle board {
 layers {
 floor = Goal
 solid = Player Box Wall
@@ -1803,6 +2006,71 @@ level accidental {
     }
 
     #[test]
+    fn highlights_registered_sprite_color_names_with_swatches() {
+        let highlighted = highlight_source(
+            r#"
+sprites {
+colors {
+light_green = #90ee90
+dark_green = #008000
+piece_color:kind {
+A = #ff004d
+B = #29adff
+}
+}
+palettes {
+floor = light_green dark_green
+piece:kind {
+A = light_green
+B = dark_green
+}
+}
+Floor {
+light_green dark_green
+01.
+}
+}
+"#,
+        );
+
+        assert!(
+            highlighted
+                .html
+                .contains("syntax-color\" style=\"--syntax-color-token: #90ee90\">#90ee90")
+        );
+        assert!(
+            highlighted
+                .html
+                .contains("syntax-color\" style=\"--syntax-color-token: #008000\">#008000")
+        );
+        assert!(
+            highlighted
+                .html
+                .contains("style=\"--syntax-color-token: #90ee90\">light_green</span> <span class=\"syntax-color\" style=\"--syntax-color-token: #008000\">dark_green")
+        );
+        assert!(
+            highlighted
+                .html
+                .contains("style=\"--syntax-color-token: #ff004d\">#ff004d")
+        );
+        assert!(
+            highlighted
+                .html
+                .contains("syntax-sprite-pixel\" style=\"--syntax-sprite-pixel-color: #90ee90\">0</span><span class=\"syntax-sprite-pixel\" style=\"--syntax-sprite-pixel-color: #008000\">1</span>.")
+        );
+        assert!(
+            !highlighted
+                .html
+                .contains("style=\"--syntax-color-token: #90ee90\">light_green</span> <span class=\"syntax-operator\">=")
+        );
+        assert!(
+            !highlighted
+                .html
+                .contains("style=\"--syntax-color-token: #ff004d\">A")
+        );
+    }
+
+    #[test]
     fn highlights_scene_key_bindings() {
         let highlighted = highlight_source(
             r#"
@@ -1835,7 +2103,7 @@ resume -> back
             r#"
 title rewrite_direction_highlight
 
-model puzzle board {
+puzzle board {
 objects {
 Player
 }
@@ -1866,7 +2134,7 @@ level start {
             r#"
 title scene_highlight
 
-model puzzle board {
+puzzle board {
 objects {
 Player
 }
@@ -1880,6 +2148,8 @@ level start {
 
 scene title {
 view {
+title
+subtitle
 row {
 column {
 box {
@@ -1908,6 +2178,11 @@ scene menu {
         );
         assert!(highlighted.html.contains("syntax-scene\">title"));
         assert!(highlighted.html.contains("syntax-keyword\">view"));
+        assert!(
+            highlighted
+                .html
+                .contains("syntax-keyword\">title</span>\n<span class=\"syntax-keyword\">subtitle")
+        );
         assert!(highlighted.html.contains("syntax-keyword\">row"));
         assert!(highlighted.html.contains("syntax-keyword\">column"));
         assert!(highlighted.html.contains("syntax-keyword\">box"));
@@ -1934,7 +2209,7 @@ scene menu {
         let source = r#"
 title highlight_3d
 
-model puzzle3 push3d {
+puzzle3 push3d {
 layers {
 floor = Goal
 solid = Player Box Wall
@@ -1947,6 +2222,10 @@ zoom 1.1
 interactive_look true
 interactive_zoom true
 }
+grid {
+occupied_cells true
+}
+shade false
 }
 rules {
 forward [ Player | Box | no solid ] -> [ | Player | Box ]
@@ -1978,10 +2257,10 @@ scene playing3d {
 state {
 board = puzzle3 push3d
 }
-view size 720 540 {
-column gap 12 align center top {
+view size 4 3 {
+column gap 1 align center top {
 puzzle3 board
-row gap 8 {
+row gap 1 {
 button "Restart" -> board.restart
 button "Levels" -> start levels basic in level_select
 }
@@ -2000,6 +2279,9 @@ button "Levels" -> start levels basic in level_select
                 .html
                 .contains("syntax-keyword\">interactive_look")
         );
+        assert!(highlighted.html.contains("syntax-keyword\">grid"));
+        assert!(highlighted.html.contains("syntax-keyword\">occupied_cells"));
+        assert!(highlighted.html.contains("syntax-keyword\">shade"));
         assert!(highlighted.html.contains("syntax-keyword\">levels3"));
         assert!(highlighted.html.contains("syntax-scene\">basic"));
         assert!(highlighted.html.contains("syntax-scene\">push3d"));
@@ -2019,10 +2301,47 @@ button "Levels" -> start levels basic in level_select
     }
 
     #[test]
+    fn highlights_3d_objects_when_layer_and_object_share_a_name() {
+        let source = r#"
+title same_name_3d
+
+puzzle3 same_name {
+layers {
+Floor = Floor
+}
+rules {
+[ Floor ] -> [ Floor ]
+}
+}
+
+levels3 basic of same_name {
+legend {
+. = Floor
+}
+level start {
+.
+}
+}
+"#;
+        let highlighted = highlight_source(source);
+
+        assert!(highlighted.html.contains(
+            "syntax-group\">Floor</span> <span class=\"syntax-operator\">=</span> <span class=\"syntax-object\">Floor"
+        ));
+        assert_eq!(
+            highlighted
+                .html
+                .matches("<span class=\"syntax-object\">Floor</span>")
+                .count(),
+            4
+        );
+    }
+
+    #[test]
     fn highlights_canonical_3d_inputs_and_sprites3_without_parser_success() {
         let highlighted = highlight_source(
             r#"
-model puzzle3 push3d {
+puzzle3 push3d {
 layers {
 solid = Player Box
 }
@@ -2071,7 +2390,7 @@ sfx clear seed=clear01 type=jump
 music music_name seed=bgm01
 }
 
-model puzzle board {
+puzzle board {
 objects {
 Player
 }
@@ -2120,7 +2439,7 @@ sfx clear seed=clear01 type=jump
 music music_name seed=bgm01 tone=0 bpm=100 volume=0.5
 }
 
-model puzzle fixban {
+puzzle fixban {
 objects {
 Player
 }
@@ -2185,7 +2504,7 @@ goto title
             r#"
 title scoped_highlight
 
-model puzzle board {
+puzzle board {
 tags {
 kind = A B
 }
@@ -2238,7 +2557,7 @@ level start {
             r#"
 title section_scoped_highlight
 
-model puzzle board {
+puzzle board {
 tags {
 kind = A B
 }
@@ -2272,7 +2591,7 @@ level start {
             r#"
 title top_level_levels_highlight
 
-model puzzle board {
+puzzle board {
 layers 2
 objects {
 Player
@@ -2311,7 +2630,7 @@ P
             r#"
 title levels3_highlight
 
-model puzzle3 board {
+puzzle3 board {
 layers {
 floor = Floor
 }
@@ -2371,7 +2690,7 @@ level microban_01 {
             r#"
 title named_levels_highlight
 
-model puzzle sokoban {
+puzzle sokoban {
 layers {
 floor = Goal
 solid = Box Wall Player
@@ -2416,7 +2735,7 @@ G*
             r#"
 title top_level_unbraced_levels_highlight
 
-model puzzle board {
+puzzle board {
 layers 2
 objects {
 Player
@@ -2454,7 +2773,7 @@ P
             r#"
 title routine_highlight
 
-model puzzle board {
+puzzle board {
 layers 2
 legend . = empty
 objects {
@@ -2492,7 +2811,7 @@ level start {
             r#"
 title keyword_group_highlight
 
-model puzzle board {
+puzzle board {
 layers 2
 legend . = empty
 objects {
@@ -2516,12 +2835,69 @@ level start {
     }
 
     #[test]
+    fn flag_can_be_used_as_an_object_name_without_literal_color() {
+        let highlighted = highlight_source(
+            r#"
+title flag_object_highlight
+
+puzzle board {
+layers 2
+legend . = empty
+objects {
+flag
+}
+rules {
+[ flag ] -> [ flag ]
+}
+level start {
+.
+}
+}
+"#,
+        );
+
+        assert!(highlighted.html.contains("syntax-object\">flag</span>"));
+        assert!(!highlighted.html.contains("syntax-literal\">flag</span>"));
+        assert!(!highlighted.html.contains("syntax-keyword\">flag</span>"));
+    }
+
+    #[test]
+    fn flag_can_be_used_as_a_scratch_name_without_literal_color() {
+        let highlighted = highlight_source(
+            r#"
+title flag_scratch_highlight
+
+puzzle board {
+layers 2
+legend . = empty
+objects {
+Player
+}
+scratch {
+flag
+}
+rules {
+[ Player ] -> [ Player{flag} ]
+}
+level start {
+.
+}
+}
+"#,
+        );
+
+        assert!(highlighted.html.contains("syntax-scratch\">flag</span>"));
+        assert!(!highlighted.html.contains("syntax-literal\">flag</span>"));
+        assert!(!highlighted.html.contains("syntax-keyword\">flag</span>"));
+    }
+
+    #[test]
     fn star_schema_family_selectors_keep_object_color() {
         let highlighted = highlight_source(
             r#"
 title schema_family_highlight
 
-model puzzle board {
+puzzle board {
 tags {
 kind = A B
 }
@@ -2579,7 +2955,7 @@ level start {
             r#"
 title partial_schema_selector_highlight
 
-model puzzle board {
+puzzle board {
 tags {
 kind = A B
 }

@@ -43,6 +43,7 @@
       this.maxAgainTurnsPerInput = 256;
       this.coreRuntime = null;
       this.editorPreviewSceneEnabled = false;
+      this.editorPreviewInputEnabled = false;
       this.initialized = false;
       this.initializationPromise = this.initializeRuntime();
     }
@@ -235,7 +236,7 @@
       if (input === undefined) {
         throw new Error(`unknown input: ${inputName}`);
       }
-      if (this.currentSceneAcceptsModelInput()) {
+      if (this.currentSceneAcceptsModelInput() || this.editorPreviewInputEnabled) {
         this.applyInput(input);
         return;
       }
@@ -1289,12 +1290,18 @@
       if (kind.kind === "exists_objects") {
         return kind.objects.some((object) => this.objectCount(state, object) > 0) ? 1 : 0;
       }
+      if (kind.kind === "none_objects") {
+        return kind.objects.some((object) => this.objectCount(state, object) > 0) ? 0 : 1;
+      }
       const patterns = kind.patterns || [];
       if (kind.kind === "count_matches") {
         return patterns.reduce((sum, entry) => sum + this.countPatternMatches(state, entry.pattern || entry), 0);
       }
       if (kind.kind === "exists_matches") {
         return patterns.some((entry) => this.hasPatternMatch(state, entry.pattern || entry)) ? 1 : 0;
+      }
+      if (kind.kind === "none_matches") {
+        return patterns.some((entry) => this.hasPatternMatch(state, entry.pattern || entry)) ? 0 : 1;
       }
       if (kind.kind === "count_input_matches") {
         return patterns
@@ -1303,6 +1310,9 @@
       }
       if (kind.kind === "exists_input_matches") {
         return patterns.some((entry) => entry.input === input && this.hasPatternMatch(state, entry.pattern || entry)) ? 1 : 0;
+      }
+      if (kind.kind === "none_input_matches") {
+        return patterns.some((entry) => entry.input === input && this.hasPatternMatch(state, entry.pattern || entry)) ? 0 : 1;
       }
       return 0;
     }
@@ -1961,6 +1971,7 @@
 
     setCurrentState(state, options = {}) {
       this.editorPreviewSceneEnabled = true;
+      this.editorPreviewInputEnabled = options.acceptModelInput === true;
       if (options.levelIndex !== undefined) {
         this.levelIndex = this.clampLevelIndex(options.levelIndex);
         this.selectedLevelIndex = this.levelIndex;
@@ -1981,7 +1992,7 @@
       this.state = options.materializeLevelStart
         ? this.materializeLevelStart(state)
         : this.cloneState(state);
-      if (options.materializeDisplay || options.materializeTurnStart) {
+      if ((options.materializeDisplay || options.materializeTurnStart) && options.acceptModelInput !== true) {
         this.state = this.displayState(this.state);
       }
       this.capturePersistentVars(this.state);
@@ -2535,7 +2546,7 @@
 
     firstPuzzleComponent(components) {
       for (const component of components || []) {
-        if (component.kind === "puzzle" && component.source && component.source !== "current_level") {
+        if ((component.kind === "puzzle" || component.kind === "frame") && component.source && component.source !== "current_level") {
           return component.source;
         }
         const child = this.firstPuzzleComponent(component.children || []);

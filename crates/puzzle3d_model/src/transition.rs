@@ -50,6 +50,7 @@ pub struct Rule3 {
     pub application: RuleApplication3,
     pub pattern: Pattern3,
     pub writes: Vec<WriteOp3>,
+    pub effects: Vec<RuleEffect3>,
 }
 
 impl Rule3 {
@@ -60,6 +61,7 @@ impl Rule3 {
             application: RuleApplication3::Once,
             pattern,
             writes,
+            effects: Vec::new(),
         }
     }
 
@@ -70,6 +72,7 @@ impl Rule3 {
             application: RuleApplication3::UntilStable,
             pattern,
             writes,
+            effects: Vec::new(),
         }
     }
 
@@ -80,6 +83,7 @@ impl Rule3 {
             application: RuleApplication3::OnceAll,
             pattern,
             writes,
+            effects: Vec::new(),
         }
     }
 
@@ -90,6 +94,7 @@ impl Rule3 {
             application: RuleApplication3::OncePerLevel,
             pattern,
             writes,
+            effects: Vec::new(),
         }
     }
 
@@ -100,6 +105,11 @@ impl Rule3 {
 
     pub fn when_input(mut self, input: InputId3) -> Self {
         self.guards.push(Guard3::InputIs(input));
+        self
+    }
+
+    pub fn with_effects(mut self, effects: Vec<RuleEffect3>) -> Self {
+        self.effects = effects;
         self
     }
 }
@@ -115,6 +125,14 @@ pub enum RuleApplication3 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Guard3 {
     InputIs(InputId3),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RuleEffect3 {
+    SetCameraYaw(i16),
+    SetCameraPitch(i16),
+    SetCameraZoom(u16),
+    ResetCamera,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

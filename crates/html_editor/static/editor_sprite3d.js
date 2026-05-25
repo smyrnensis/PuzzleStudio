@@ -1,7 +1,12 @@
 let sprite3dActionClearTimer = 0;
 let sprite3dPreviewDrag = null;
 let sprite3dCameraScrubDrag = null;
+let sprite3dSliceScrubDrag = null;
+let sprite3dBucketActive = false;
 const SPRITE3D_EDITOR_MAX_SIZE = 64;
+const SPRITE3D_SLICE_SCRUB_STEP_PX = 18;
+const SPRITE3D_CAMERA_MIN_PITCH_DEGREES = -90;
+const SPRITE3D_CAMERA_MAX_PITCH_DEGREES = 90;
 const SPRITE3D_CAMERA_DEFAULT = {
   yawDegrees: 340,
   pitchDegrees: 28,
@@ -39,6 +44,7 @@ function renderSprite3dBuilder() {
 function renderSprite3dControls() {
   sprite3dNameInput.value = sprite3dNameInput.value || "VoxelSprite";
   sprite3dSizeInput.value = String(sprite3d.size);
+  syncSprite3dBucketButton();
   renderSprite3dScopeControl();
   renderSprite3dCameraControls();
   renderSpriteScaleControl({
@@ -85,18 +91,31 @@ function sprite3dEditScope() {
 }
 
 function renderSprite3dScopeControl() {
-  if (!sprite3dScopeButton) {
-    return;
-  }
   const scope = sprite3dEditScope();
-  const isAll = scope === "all";
-  const label = isAll ? "Edit scope: whole 3D sprite" : "Edit scope: current 2D slice";
-  const title = isAll ? "3D scope: affect whole sprite" : "2D scope: affect current slice";
-  sprite3dScopeButton.dataset.sprite3dScope = scope;
-  sprite3dScopeButton.setAttribute("aria-label", label);
-  sprite3dScopeButton.setAttribute("aria-pressed", String(isAll));
-  sprite3dScopeButton.title = title;
-  sprite3dScopeButton.innerHTML = isAll ? sprite3dCubeIconSvg() : sprite3dSquareIconSvg();
+  const buttons = [
+    {
+      button: sprite3dScopeSliceButton,
+      scope: "slice",
+      label: "Edit scope: current slice",
+      title: "Scope: current slice",
+    },
+    {
+      button: sprite3dScopeAllButton,
+      scope: "all",
+      label: "Edit scope: whole sprite",
+      title: "Scope: whole sprite",
+    },
+  ];
+  for (const item of buttons) {
+    if (!item.button) {
+      continue;
+    }
+    const active = item.scope === scope;
+    item.button.classList.toggle("is-active", active);
+    item.button.setAttribute("aria-label", item.label);
+    item.button.setAttribute("aria-pressed", String(active));
+    item.button.title = item.title;
+  }
   updateSprite3dScopedActionLabels();
 }
 
@@ -104,22 +123,33 @@ function updateSprite3dScopedActionLabels() {
   const isAll = sprite3dEditScope() === "all";
   setSprite3dButtonLabel(
     sprite3dRotatePlaneLeftButton,
-    isAll ? "Rotate whole 3D sprite counterclockwise" : "Rotate current 2D slice counterclockwise",
+    isAll ? "Rotate whole sprite counterclockwise" : "Rotate current slice counterclockwise",
   );
   setSprite3dButtonLabel(
     sprite3dRotatePlaneRightButton,
-    isAll ? "Rotate whole 3D sprite clockwise" : "Rotate current 2D slice clockwise",
+    isAll ? "Rotate whole sprite clockwise" : "Rotate current slice clockwise",
   );
   setSprite3dButtonLabel(
     sprite3dFlipPlaneHorizontalButton,
-    isAll ? "Flip whole 3D sprite horizontally" : "Flip current 2D slice horizontally",
+    isAll ? "Flip whole sprite horizontally" : "Flip current slice horizontally",
   );
   setSprite3dButtonLabel(
     sprite3dFlipPlaneVerticalButton,
-    isAll ? "Flip whole 3D sprite vertically" : "Flip current 2D slice vertically",
+    isAll ? "Flip whole sprite vertically" : "Flip current slice vertically",
   );
-  setSprite3dButtonLabel(sprite3dFillButton, isAll ? "Fill whole 3D sprite" : "Fill current 2D slice");
-  setSprite3dButtonLabel(sprite3dClearButton, isAll ? "Clear whole 3D sprite" : "Clear current 2D slice");
+  setSprite3dButtonLabel(
+    sprite3dFillButton,
+    isAll ? "Bucket fill 3D connected component" : "Bucket fill current slice connected component",
+  );
+  setSprite3dButtonLabel(sprite3dClearButton, isAll ? "Clear whole sprite" : "Clear current slice");
+}
+
+function syncSprite3dBucketButton() {
+  if (!sprite3dFillButton) {
+    return;
+  }
+  sprite3dFillButton.classList.toggle("is-active", sprite3dBucketActive);
+  sprite3dFillButton.setAttribute("aria-pressed", String(sprite3dBucketActive));
 }
 
 function setSprite3dButtonLabel(button, label) {
@@ -149,10 +179,26 @@ function sprite3dCubeIconSvg() {
 }
 
 function toggleSprite3dEditScope() {
-  sprite3d.editScope = sprite3dEditScope() === "all" ? "slice" : "all";
+  setSprite3dEditScope(sprite3dEditScope() === "all" ? "slice" : "all");
+}
+
+function setSprite3dEditScope(scope) {
+  sprite3d.editScope = scope === "all" ? "all" : "slice";
   renderSprite3dScopeControl();
   setSprite3dActionStatus(
     sprite3d.editScope === "all" ? "3D edits affect the whole sprite" : "2D edits affect the current slice",
+    "is-ok",
+  );
+}
+
+function toggleSprite3dBucketMode() {
+  sprite3dBucketActive = !sprite3dBucketActive;
+  syncSprite3dBucketButton();
+  const scope = sprite3dEditScope();
+  setSprite3dActionStatus(
+    sprite3dBucketActive
+      ? scope === "all" ? "Bucket: click a voxel to fill its 3D component" : "Bucket: click a slice area to fill its component"
+      : "Brush: paint individual voxels",
     "is-ok",
   );
 }
@@ -407,12 +453,15 @@ function renderSprite3dPreview() {
 
   const occupied = sprite3dOccupancyMap();
   const faces = sprite3dMergedVoxelFaces(occupied, view);
+  const previewOwner = sprite3dPreviewRenderOwner();
   const sceneFaces = [
-    ...faces.map((face) => ({ ...face, kind: "voxel", order: 0 })),
-    ...sprite3dSliceSurfaceFaces(sprite3d.hoverSlice, view, "hover", occupied, 1),
-    ...sprite3dSliceSurfaceFaces(sprite3d.slice, view, "active", occupied, 2),
+    ...faces.map((face) => ({ ...face, kind: "voxel", ownerCell: previewOwner, renderPriority: 0 })),
+    ...sprite3dSliceSurfaceFaces(sprite3d.hoverSlice, view, "hover", occupied, 1)
+      .map((face) => ({ ...face, ownerCell: previewOwner })),
+    ...sprite3dSliceSurfaceFaces(sprite3d.slice, view, "active", occupied, 2)
+      .map((face) => ({ ...face, ownerCell: previewOwner })),
   ];
-  sceneFaces.sort((a, b) => (a.depth - b.depth) || ((a.order || 0) - (b.order || 0)));
+  sceneFaces.sort(Puzzle3VisualCore.comparePrimitiveOrder);
   for (const face of sceneFaces) {
     if (face.kind === "slice") {
       drawSprite3dSliceFace(ctx, face, face.mode);
@@ -475,11 +524,27 @@ function sprite3dCamera() {
   sprite3d.camera.yawDegrees = sprite3dNormalizeDegrees(sprite3d.camera.yawDegrees ?? SPRITE3D_CAMERA_DEFAULT.yawDegrees);
   sprite3d.camera.pitchDegrees = sprite3dClampNumber(
     sprite3d.camera.pitchDegrees ?? SPRITE3D_CAMERA_DEFAULT.pitchDegrees,
-    -80,
-    80,
+    SPRITE3D_CAMERA_MIN_PITCH_DEGREES,
+    SPRITE3D_CAMERA_MAX_PITCH_DEGREES,
   );
   sprite3d.camera.zoom = sprite3dClampNumber(sprite3d.camera.zoom ?? SPRITE3D_CAMERA_DEFAULT.zoom, 0.25, 4);
   return sprite3d.camera;
+}
+
+function sprite3dFaceGridOrder(corners) {
+  return Puzzle3VisualCore.faceGridOrder(corners, sprite3dVisualView());
+}
+
+function sprite3dVisualView() {
+  return { camera: sprite3dCamera() };
+}
+
+function sprite3dPreviewRenderOwner() {
+  return {
+    key: "sprite3d-preview",
+    order: { x: 0, y: 0, z: 0 },
+    depth: 0,
+  };
 }
 
 function renderSprite3dCameraControls() {
@@ -495,7 +560,7 @@ function renderSprite3dCameraScrub(element, kind, value) {
   }
   const text = String(value);
   element.textContent = text;
-  element.setAttribute("aria-label", `Drag horizontally to adjust ${kind}, current ${text}`);
+  element.setAttribute("aria-label", `Drag vertically to adjust ${kind}, current ${text}`);
 }
 
 function sprite3dClampNumber(value, min, max) {
@@ -684,12 +749,14 @@ function sprite3dMergedSliceFaces(groups, view, fill, stroke, mode, order) {
       kind: "slice",
       mode,
       order,
+      renderPriority: order,
       polygons: projectedPolygons.map((polygon) => polygon.map(({ x, y }) => ({ x, y }))),
       edges: sprite3dSliceGroupBoundaryEdges(group).map((edge) => edge.map((point) => sprite3dProject(
         sprite3dSliceGroupPoint(group.side, group.planeIndex, point.u, point.v),
         view,
       ))),
       depth: projectedPoints.reduce((total, point) => total + point.depth, 0) / Math.max(1, projectedPoints.length),
+      gridOrder: sprite3dFaceGridOrder(polygons.flat()),
       fill,
       stroke,
     });
@@ -918,6 +985,8 @@ function sprite3dMergedVoxelFaces(occupied, view) {
       return {
         points: projected.map(({ x, y }) => ({ x, y })),
         depth: projected.reduce((total, point) => total + point.depth, 0) / projected.length,
+        gridOrder: sprite3dFaceGridOrder(corners),
+        renderPriority: 0,
         fill: group.fill,
         overlays: sprite3dVoxelFaceOverlays(group.side, group.planeIndex, rect, view),
       };
@@ -1185,6 +1254,7 @@ function selectSprite3dColor(index) {
 }
 
 function addSprite3dColor() {
+  const before = visualEditSnapshot("sprite3d");
   const draftIndex = validSprite3dColorIndex(sprite3d.addDraftColorIndex) ? sprite3d.addDraftColorIndex : null;
   if (draftIndex === null && sprite3dPaletteEntries().length >= SPRITE_COLOR_TOKENS.length) {
     setSprite3dActionStatus(`Palette limit is ${SPRITE_COLOR_TOKENS.length} colors`, "is-error");
@@ -1201,9 +1271,11 @@ function addSprite3dColor() {
   sprite3d.customColorOpen = false;
   sprite3d.addDraftColorIndex = null;
   renderSprite3dBuilder();
+  pushVisualEditUndoSnapshot("sprite3d", before);
 }
 
 function toggleSprite3dAddPalette() {
+  const before = visualEditSnapshot("sprite3d");
   const opening = !sprite3d.addPaletteOpen;
   if (opening && sprite3dPaletteEntries().length >= SPRITE_COLOR_TOKENS.length) {
     setSprite3dActionStatus(`Palette limit is ${SPRITE_COLOR_TOKENS.length} colors`, "is-error");
@@ -1219,13 +1291,16 @@ function toggleSprite3dAddPalette() {
     }
     sprite3d.selectedColorIndex = sprite3d.addDraftColorIndex;
     renderSprite3dBuilder();
+    pushVisualEditUndoSnapshot("sprite3d", before);
     return;
   }
   sprite3d.addDraftColorIndex = null;
   renderSprite3dBuilder();
+  pushVisualEditUndoSnapshot("sprite3d", before);
 }
 
 function previewNewSprite3dColor(color, options = {}) {
+  const before = visualEditSnapshot("sprite3d");
   if (!validSprite3dColorIndex(sprite3d.addDraftColorIndex) && sprite3dPaletteEntries().length >= SPRITE_COLOR_TOKENS.length) {
     return;
   }
@@ -1246,9 +1321,11 @@ function previewNewSprite3dColor(color, options = {}) {
     sprite3d.addDraftColorIndex = null;
     renderSprite3dBuilder();
   }
+  pushVisualEditUndoSnapshot("sprite3d", before);
 }
 
 function updateSelectedSprite3dColor(value, options = {}) {
+  const before = visualEditSnapshot("sprite3d");
   if (!validSprite3dColorIndex(sprite3d.selectedColorIndex)) {
     sprite3d.selectedColorIndex = 0;
   }
@@ -1262,9 +1339,11 @@ function updateSelectedSprite3dColor(value, options = {}) {
     sprite3d.customColorOpen = false;
     sprite3d.addDraftColorIndex = null;
     renderSprite3dBuilder();
+    pushVisualEditUndoSnapshot("sprite3d", before);
     return;
   }
   renderSprite3dColorSurfaces();
+  pushVisualEditUndoSnapshot("sprite3d", before);
 }
 
 function closeSprite3dColorEditor() {
@@ -1276,6 +1355,7 @@ function closeSprite3dColorEditor() {
 }
 
 function cancelSprite3dColorAdd() {
+  const before = visualEditSnapshot("sprite3d");
   if (validSprite3dColorIndex(sprite3d.addDraftColorIndex)) {
     removeSprite3dPaletteColor(sprite3d.addDraftColorIndex);
   }
@@ -1284,9 +1364,11 @@ function cancelSprite3dColorAdd() {
   sprite3d.customColorOpen = false;
   sprite3d.addDraftColorIndex = null;
   renderSprite3dBuilder();
+  pushVisualEditUndoSnapshot("sprite3d", before);
 }
 
 function removeSprite3dColor() {
+  const before = visualEditSnapshot("sprite3d");
   const deletedIndex = sprite3d.selectedColorIndex;
   const palette = sprite3dPaletteEntries();
   if (!validSprite3dColorIndex(deletedIndex) || palette.length <= 1) {
@@ -1298,6 +1380,7 @@ function removeSprite3dColor() {
   sprite3d.addDraftColorIndex = null;
   removeSprite3dPaletteColor(deletedIndex);
   renderSprite3dBuilder();
+  pushVisualEditUndoSnapshot("sprite3d", before);
 }
 
 function removeSprite3dPaletteColor(deletedIndex) {
@@ -1369,6 +1452,11 @@ function validSprite3dColorIndex(index) {
   return Number.isInteger(index) && index >= 0 && index < sprite3dPaletteEntries().length;
 }
 
+function normalizedSprite3dCellColorIndex(index) {
+  const colorIndex = sprite3d.cells[index];
+  return validSprite3dColorIndex(colorIndex) ? colorIndex : null;
+}
+
 function sprite3dColorForColorIndex(index) {
   return validSprite3dColorIndex(index) ? normalizeSpriteColor(sprite3dPaletteEntries()[index].color) : "#00000000";
 }
@@ -1428,6 +1516,123 @@ function paintSprite3dCellAtSliceIndex(index, colorIndex) {
   return true;
 }
 
+function floodFillSprite3dSliceComponentAtIndex(index, colorIndex) {
+  if (!Number.isInteger(index) || index < 0 || index >= sprite3d.size * sprite3d.size) {
+    return 0;
+  }
+  const startCoords = sprite3dCoordsFromSliceCell(index);
+  const startVoxelIndex = sprite3dCellIndex(startCoords.x, startCoords.y, startCoords.z);
+  const nextColorIndex = validSprite3dColorIndex(colorIndex) ? colorIndex : null;
+  const targetColorIndex = normalizedSprite3dCellColorIndex(startVoxelIndex);
+  if (targetColorIndex === nextColorIndex) {
+    return 0;
+  }
+  const size = sprite3d.size;
+  const visited = new Uint8Array(size * size);
+  const stack = [index];
+  let changed = 0;
+  while (stack.length) {
+    const current = stack.pop();
+    if (visited[current]) {
+      continue;
+    }
+    const coords = sprite3dCoordsFromSliceCell(current);
+    const voxelIndex = sprite3dCellIndex(coords.x, coords.y, coords.z);
+    if (normalizedSprite3dCellColorIndex(voxelIndex) !== targetColorIndex) {
+      continue;
+    }
+    visited[current] = 1;
+    sprite3d.cells[voxelIndex] = nextColorIndex;
+    changed += 1;
+    const u = current % size;
+    const v = Math.floor(current / size);
+    if (u > 0) {
+      stack.push(current - 1);
+    }
+    if (u < size - 1) {
+      stack.push(current + 1);
+    }
+    if (v > 0) {
+      stack.push(current - size);
+    }
+    if (v < size - 1) {
+      stack.push(current + size);
+    }
+  }
+  return changed;
+}
+
+function floodFillSprite3dComponentAtSliceIndex(index, colorIndex) {
+  if (!Number.isInteger(index) || index < 0 || index >= sprite3d.size * sprite3d.size) {
+    return 0;
+  }
+  const startCoords = sprite3dCoordsFromSliceCell(index);
+  const startVoxelIndex = sprite3dCellIndex(startCoords.x, startCoords.y, startCoords.z);
+  const nextColorIndex = validSprite3dColorIndex(colorIndex) ? colorIndex : null;
+  const targetColorIndex = normalizedSprite3dCellColorIndex(startVoxelIndex);
+  if (targetColorIndex === nextColorIndex) {
+    return 0;
+  }
+  const size = sprite3d.size;
+  const visited = new Uint8Array(sprite3d.cells.length);
+  const stack = [startCoords];
+  let changed = 0;
+  while (stack.length) {
+    const current = stack.pop();
+    if (
+      current.x < 0 || current.y < 0 || current.z < 0
+      || current.x >= size || current.y >= size || current.z >= size
+    ) {
+      continue;
+    }
+    const voxelIndex = sprite3dCellIndex(current.x, current.y, current.z);
+    if (visited[voxelIndex] || normalizedSprite3dCellColorIndex(voxelIndex) !== targetColorIndex) {
+      continue;
+    }
+    visited[voxelIndex] = 1;
+    sprite3d.cells[voxelIndex] = nextColorIndex;
+    changed += 1;
+    stack.push(
+      { x: current.x - 1, y: current.y, z: current.z },
+      { x: current.x + 1, y: current.y, z: current.z },
+      { x: current.x, y: current.y - 1, z: current.z },
+      { x: current.x, y: current.y + 1, z: current.z },
+      { x: current.x, y: current.y, z: current.z - 1 },
+      { x: current.x, y: current.y, z: current.z + 1 },
+    );
+  }
+  return changed;
+}
+
+function bucketFillSprite3dFromSliceIndex(index) {
+  const colorIndex = sprite3d.selectedColorIndex;
+  const allScope = sprite3dEditScope() === "all";
+  const count = allScope
+    ? floodFillSprite3dComponentAtSliceIndex(index, colorIndex)
+    : floodFillSprite3dSliceComponentAtIndex(index, colorIndex);
+  if (!count) {
+    setSprite3dActionStatus("Connected component already has that color", "is-ok");
+    return false;
+  }
+  sprite3d.addPaletteOpen = false;
+  sprite3d.editPaletteOpen = false;
+  sprite3d.customColorOpen = false;
+  sprite3d.addDraftColorIndex = null;
+  sprite3d.hoverSlice = null;
+  renderSprite3dBuilder();
+  const nextColorIndex = validSprite3dColorIndex(colorIndex) ? colorIndex : null;
+  const message = nextColorIndex === null
+    ? allScope ? "Filled 3D component with empty voxels" : "Filled slice component with empty voxels"
+    : allScope ? "Filled 3D component" : "Filled slice component";
+  setSprite3dActionStatus(message, "is-ok");
+  setStatus(message, "is-ok");
+  return true;
+}
+
+function bucketFillSprite3dFromElement(element) {
+  return bucketFillSprite3dFromSliceIndex(sprite3dSliceCellIndexFromElement(element));
+}
+
 function paintSprite3dCellFromElement(element) {
   return paintSprite3dCellAtSliceIndex(sprite3dSliceCellIndexFromElement(element), sprite3d.selectedColorIndex);
 }
@@ -1441,10 +1646,19 @@ function startSprite3dPaint(event) {
     return;
   }
   event.preventDefault();
+  if (sprite3dBucketActive) {
+    const before = visualEditSnapshot("sprite3d");
+    if (bucketFillSprite3dFromSliceIndex(index)) {
+      pushVisualEditUndoSnapshot("sprite3d", before);
+    }
+    return;
+  }
   sprite3dPaintDrag = {
     pointerId: event.pointerId,
     colorIndex: sprite3d.selectedColorIndex,
     lastIndex: -1,
+    beforeSnapshot: visualEditSnapshot("sprite3d"),
+    changed: false,
   };
   sprite3dSliceBoard.setPointerCapture?.(event.pointerId);
   paintSprite3dDragIndex(index);
@@ -1465,6 +1679,9 @@ function stopSprite3dPaint(event) {
   if (sprite3dSliceBoard.hasPointerCapture?.(event.pointerId)) {
     sprite3dSliceBoard.releasePointerCapture(event.pointerId);
   }
+  if (sprite3dPaintDrag.changed) {
+    pushVisualEditUndoSnapshot("sprite3d", sprite3dPaintDrag.beforeSnapshot);
+  }
   sprite3dPaintDrag = null;
 }
 
@@ -1473,10 +1690,13 @@ function paintSprite3dDragIndex(index) {
     return;
   }
   sprite3dPaintDrag.lastIndex = index;
-  paintSprite3dCellAtSliceIndex(index, sprite3dPaintDrag.colorIndex);
+  if (paintSprite3dCellAtSliceIndex(index, sprite3dPaintDrag.colorIndex)) {
+    sprite3dPaintDrag.changed = true;
+  }
 }
 
 function updateSprite3dSize(value) {
+  const before = visualEditSnapshot("sprite3d");
   const nextSize = clampSprite3dSize(value);
   if (nextSize === sprite3d.size) {
     renderSprite3dControls();
@@ -1497,6 +1717,7 @@ function updateSprite3dSize(value) {
   sprite3d.slice = Math.min(sprite3d.slice, nextSize - 1);
   sprite3d.cells = nextCells;
   renderSprite3dBuilder();
+  pushVisualEditUndoSnapshot("sprite3d", before);
 }
 
 function sprite3dScaleFactor() {
@@ -1508,6 +1729,7 @@ function canScaleDownSprite3d(factor = sprite3dScaleFactor()) {
 }
 
 function scaleUpSprite3d() {
+  const before = visualEditSnapshot("sprite3d");
   const factor = sprite3dScaleFactor();
   const previousSize = sprite3d.size;
   const nextSize = previousSize * factor;
@@ -1548,9 +1770,11 @@ function scaleUpSprite3d() {
   const message = `Scaled ${factor}x to ${nextSize}x${nextSize}x${nextSize}`;
   setSprite3dActionStatus(message, "is-ok");
   setStatus(`Scaled 3D sprite ${factor}x to ${nextSize}x${nextSize}x${nextSize}`, "is-ok");
+  pushVisualEditUndoSnapshot("sprite3d", before);
 }
 
 function scaleDownSprite3d() {
+  const before = visualEditSnapshot("sprite3d");
   const factor = sprite3dScaleFactor();
   if (!canScaleDownSprite3d(factor)) {
     setSprite3dActionStatus(`Size ${sprite3d.size} is not divisible by ${factor}`, "is-error");
@@ -1580,6 +1804,7 @@ function scaleDownSprite3d() {
   const message = `Scaled down ${factor}x to ${nextSize}x${nextSize}x${nextSize}`;
   setSprite3dActionStatus(message, "is-ok");
   setStatus(`Scaled 3D sprite down ${factor}x to ${nextSize}x${nextSize}x${nextSize}`, "is-ok");
+  pushVisualEditUndoSnapshot("sprite3d", before);
 }
 
 function setSprite3dAxis(axis) {
@@ -1606,18 +1831,85 @@ function applySprite3dSliceInput() {
   setSprite3dSlice(Math.trunc(Number(sprite3dSliceValue.value) || 1) - 1);
 }
 
+function sprite3dSliceScrubTarget(event) {
+  return event.target?.closest?.("[data-sprite3d-slice-scrub]") || null;
+}
+
+function startSprite3dSliceScrub(event) {
+  const target = sprite3dSliceScrubTarget(event);
+  if (!target || event.button !== 0) {
+    return;
+  }
+  event.preventDefault();
+  event.stopPropagation();
+  sprite3dSliceScrubDrag = {
+    pointerId: event.pointerId,
+    target,
+    inputTarget: event.target === sprite3dSliceValue,
+    startX: event.clientX,
+    moved: false,
+    slice: sprite3d.slice,
+  };
+  target.setPointerCapture?.(event.pointerId);
+  target.classList.add("is-dragging");
+  document.documentElement.classList.add("is-sprite3d-slice-scrubbing");
+}
+
+function continueSprite3dSliceScrub(event) {
+  if (!sprite3dSliceScrubDrag || sprite3dSliceScrubDrag.pointerId !== event.pointerId) {
+    return;
+  }
+  event.preventDefault();
+  event.stopPropagation();
+  const deltaX = event.clientX - sprite3dSliceScrubDrag.startX;
+  if (Math.abs(deltaX) > 2) {
+    sprite3dSliceScrubDrag.moved = true;
+  }
+  setSprite3dSlice(sprite3dSliceScrubDrag.slice + Math.round(deltaX / SPRITE3D_SLICE_SCRUB_STEP_PX));
+}
+
+function stopSprite3dSliceScrub(event) {
+  if (!sprite3dSliceScrubDrag || sprite3dSliceScrubDrag.pointerId !== event.pointerId) {
+    return;
+  }
+  event.preventDefault();
+  event.stopPropagation();
+  finishSprite3dSliceScrub(event.pointerId);
+}
+
+function finishSprite3dSliceScrub(pointerId = null) {
+  if (!sprite3dSliceScrubDrag) {
+    return;
+  }
+  const { target, inputTarget, moved } = sprite3dSliceScrubDrag;
+  if (pointerId !== null && target.hasPointerCapture?.(pointerId)) {
+    target.releasePointerCapture(pointerId);
+  }
+  target.classList.remove("is-dragging");
+  document.documentElement.classList.remove("is-sprite3d-slice-scrubbing");
+  sprite3dSliceScrubDrag = null;
+  if (!moved && inputTarget && sprite3dSliceValue instanceof HTMLInputElement) {
+    sprite3dSliceValue.focus();
+    sprite3dSliceValue.select();
+  }
+}
+
 function clearSprite3dSlice() {
+  const before = visualEditSnapshot("sprite3d");
   for (let index = 0; index < sprite3d.size * sprite3d.size; index += 1) {
     const coords = sprite3dCoordsFromSliceCell(index);
     sprite3d.cells[sprite3dCellIndex(coords.x, coords.y, coords.z)] = null;
   }
   renderSprite3dBuilder();
   setSprite3dActionStatus("Cleared current 2D slice", "is-ok");
+  pushVisualEditUndoSnapshot("sprite3d", before);
 }
 
 function clearSprite3dBuilder() {
+  const before = visualEditSnapshot("sprite3d");
   resetSprite3dBuilder(sprite3d.size);
   setSprite3dActionStatus("Cleared whole 3D sprite", "is-ok");
+  pushVisualEditUndoSnapshot("sprite3d", before);
 }
 
 function clearSprite3dScoped() {
@@ -1629,6 +1921,7 @@ function clearSprite3dScoped() {
 }
 
 function transformSprite3dCells(mapper, message) {
+  const before = visualEditSnapshot("sprite3d");
   const size = sprite3d.size;
   const previousCells = sprite3d.cells;
   const nextCells = Array.from({ length: size * size * size }, () => null);
@@ -1651,6 +1944,7 @@ function transformSprite3dCells(mapper, message) {
   renderSprite3dPreview();
   renderSprite3dTextPreview();
   setSprite3dActionStatus(message, "is-ok");
+  pushVisualEditUndoSnapshot("sprite3d", before);
 }
 
 function sprite3dPlaneCoordinates(axis, x, y, z) {
@@ -1704,6 +1998,74 @@ function readSprite3dSliceCells(axis, slice, size = sprite3d.size) {
   return cells;
 }
 
+function sprite3dPaletteColors() {
+  return sprite3dPaletteEntries().map((entry) => normalizeSpriteColor(entry.color));
+}
+
+function sprite3dSliceCellColors(cells) {
+  const paletteColors = sprite3dPaletteColors();
+  return cells.map((colorIndex) => (
+    Number.isInteger(colorIndex) && colorIndex >= 0 && colorIndex < paletteColors.length
+      ? paletteColors[colorIndex]
+      : null
+  ));
+}
+
+function sprite3dClipboardPaletteColor(entry) {
+  return parseSpriteHexColor(typeof entry === "string" ? entry : entry?.color);
+}
+
+function sprite3dClipboardCellColors(copied) {
+  if (Array.isArray(copied.colors)) {
+    return copied.colors.map((color) => parseSpriteHexColor(color) || null);
+  }
+  if (!Array.isArray(copied.palette) || !Array.isArray(copied.cells)) {
+    return null;
+  }
+  const paletteColors = copied.palette.map(sprite3dClipboardPaletteColor);
+  return copied.cells.map((colorIndex) => (
+    Number.isInteger(colorIndex) && colorIndex >= 0 && colorIndex < paletteColors.length
+      ? paletteColors[colorIndex]
+      : null
+  ));
+}
+
+function sprite3dPastedSliceCells(copied, targetSize) {
+  const cellCount = targetSize * targetSize;
+  const colors = sprite3dClipboardCellColors(copied);
+  if (!colors) {
+    return {
+      cells: copied.cells.map((colorIndex) => (validSprite3dColorIndex(colorIndex) ? colorIndex : null)),
+      addedColors: 0,
+    };
+  }
+  if (colors.length !== cellCount) {
+    return { error: "Copied slice color data is incomplete" };
+  }
+  const palette = sprite3dPaletteEntries();
+  const colorToIndex = new Map(palette.map((entry, index) => [normalizeSpriteColor(entry.color), index]));
+  const missingColors = [];
+  for (const color of colors) {
+    if (!color || color === "#00000000" || colorToIndex.has(color) || missingColors.includes(color)) {
+      continue;
+    }
+    missingColors.push(color);
+  }
+  if (palette.length + missingColors.length > SPRITE_COLOR_TOKENS.length) {
+    return {
+      error: `Paste needs ${missingColors.length} more colors, but the 3D sprite palette has ${SPRITE_COLOR_TOKENS.length - palette.length} slots`,
+    };
+  }
+  for (const color of missingColors) {
+    colorToIndex.set(color, palette.length);
+    palette.push({ color });
+  }
+  return {
+    cells: colors.map((color) => (color && color !== "#00000000" ? colorToIndex.get(color) : null)),
+    addedColors: missingColors.length,
+  };
+}
+
 function writeSprite3dSliceCells(axis, slice, cells) {
   for (let v = 0; v < sprite3d.size; v += 1) {
     for (let u = 0; u < sprite3d.size; u += 1) {
@@ -1726,6 +2088,7 @@ function transformSprite3dCurrentPlane(mapper, message) {
 }
 
 function transformSprite3dCurrentSlice(mapper, message) {
+  const before = visualEditSnapshot("sprite3d");
   const source = sprite3dCurrentSliceDescriptor();
   const previousCells = readSprite3dSliceCells(source.axis, source.slice, source.size);
   const nextCells = Array.from({ length: source.size * source.size }, () => null);
@@ -1745,6 +2108,7 @@ function transformSprite3dCurrentSlice(mapper, message) {
   renderSprite3dPreview();
   renderSprite3dTextPreview();
   setSprite3dActionStatus(`${message} ${source.axis.toUpperCase()} slice ${source.slice + 1}`, "is-ok");
+  pushVisualEditUndoSnapshot("sprite3d", before);
 }
 
 function transformSprite3dScoped(mapper, message) {
@@ -1773,15 +2137,19 @@ function flipSprite3dPlaneVertical() {
 
 function copySprite3dSlice() {
   const source = sprite3dCurrentSliceDescriptor();
+  const cells = readSprite3dSliceCells(source.axis, source.slice, source.size);
   sprite3d.sliceClipboard = {
     ...source,
-    cells: readSprite3dSliceCells(source.axis, source.slice, source.size),
+    cells,
+    colors: sprite3dSliceCellColors(cells),
+    palette: sprite3dPaletteColors(),
   };
   renderSprite3dControls();
   setSprite3dActionStatus(`Copied 2D ${source.axis.toUpperCase()} slice ${source.slice + 1}`, "is-ok");
 }
 
 function pasteSprite3dSlice() {
+  const before = visualEditSnapshot("sprite3d");
   const copied = sprite3d.sliceClipboard;
   if (!copied) {
     setSprite3dActionStatus("No copied slice", "is-error");
@@ -1792,75 +2160,20 @@ function pasteSprite3dSlice() {
     setSprite3dActionStatus(`Copied slice is ${copied.size}x${copied.size}; current sprite is ${target.size}x${target.size}`, "is-error");
     return;
   }
-  writeSprite3dSliceCells(target.axis, target.slice, copied.cells);
+  const pasted = sprite3dPastedSliceCells(copied, target.size);
+  if (pasted.error) {
+    setSprite3dActionStatus(pasted.error, "is-error");
+    return;
+  }
+  writeSprite3dSliceCells(target.axis, target.slice, pasted.cells);
   sprite3d.hoverSlice = null;
-  renderSprite3dSliceBoard();
-  renderSprite3dPreview();
-  renderSprite3dTextPreview();
+  renderSprite3dBuilder();
+  const paletteMessage = pasted.addedColors > 0 ? `, added ${pasted.addedColors} color${pasted.addedColors === 1 ? "" : "s"}` : "";
   setSprite3dActionStatus(
-    `Pasted 2D ${copied.axis.toUpperCase()} slice ${copied.slice + 1} to ${target.axis.toUpperCase()} slice ${target.slice + 1}`,
+    `Pasted 2D ${copied.axis.toUpperCase()} slice ${copied.slice + 1} to ${target.axis.toUpperCase()} slice ${target.slice + 1}${paletteMessage}`,
     "is-ok",
   );
-}
-
-function fillSprite3dBuilder() {
-  const colorIndex = validSprite3dColorIndex(sprite3d.selectedColorIndex) ? sprite3d.selectedColorIndex : null;
-  let changed = false;
-  for (let index = 0; index < sprite3d.cells.length; index += 1) {
-    if (sprite3d.cells[index] !== colorIndex) {
-      sprite3d.cells[index] = colorIndex;
-      changed = true;
-    }
-  }
-  if (!changed) {
-    setSprite3dActionStatus("3D sprite already filled", "is-ok");
-    return;
-  }
-  sprite3d.addPaletteOpen = false;
-  sprite3d.editPaletteOpen = false;
-  sprite3d.customColorOpen = false;
-  sprite3d.addDraftColorIndex = null;
-  sprite3d.hoverSlice = null;
-  renderSprite3dBuilder();
-  const message = colorIndex === null ? "Filled whole 3D sprite with empty voxels" : "Filled whole 3D sprite";
-  setSprite3dActionStatus(message, "is-ok");
-  setStatus(message, "is-ok");
-}
-
-function fillSprite3dSlice() {
-  const colorIndex = validSprite3dColorIndex(sprite3d.selectedColorIndex) ? sprite3d.selectedColorIndex : null;
-  const source = sprite3dCurrentSliceDescriptor();
-  let changed = false;
-  for (let index = 0; index < sprite3d.size * sprite3d.size; index += 1) {
-    const coords = sprite3dCoordsFromSliceCell(index);
-    const voxelIndex = sprite3dCellIndex(coords.x, coords.y, coords.z);
-    if (sprite3d.cells[voxelIndex] !== colorIndex) {
-      sprite3d.cells[voxelIndex] = colorIndex;
-      changed = true;
-    }
-  }
-  if (!changed) {
-    setSprite3dActionStatus("Current 2D slice already filled", "is-ok");
-    return;
-  }
-  sprite3d.addPaletteOpen = false;
-  sprite3d.editPaletteOpen = false;
-  sprite3d.customColorOpen = false;
-  sprite3d.addDraftColorIndex = null;
-  sprite3d.hoverSlice = null;
-  renderSprite3dBuilder();
-  const message = colorIndex === null
-    ? `Filled ${source.axis.toUpperCase()} slice ${source.slice + 1} with empty voxels`
-    : `Filled ${source.axis.toUpperCase()} slice ${source.slice + 1}`;
-  setSprite3dActionStatus(message, "is-ok");
-}
-
-function fillSprite3dScoped() {
-  if (sprite3dEditScope() === "all") {
-    fillSprite3dBuilder();
-  } else {
-    fillSprite3dSlice();
-  }
+  pushVisualEditUndoSnapshot("sprite3d", before);
 }
 
 function sprite3dObjectName() {
@@ -2022,8 +2335,9 @@ function replaceSprite3dDefinition(source) {
   if (!entry) {
     return null;
   }
+  const replacement = sprite3dObjectDefinitionText(entry.indent);
   return {
-    source: `${source.slice(0, entry.start)}${sprite3dObjectDefinitionText(entry.indent)}${source.slice(entry.end)}`,
+    source: replaceEditorSourceRangePreservingLineBoundary(source, entry.start, entry.end, replacement),
   };
 }
 
@@ -2289,7 +2603,7 @@ function parseSprite3dRows(paletteEntries, rawRows) {
 }
 
 function findPuzzle3Block(source) {
-  const pattern = /(^|\n)([\t ]*)model\s+puzzle3\s+(@?[A-Za-z_][\w:]*)[^{]*\{/m;
+  const pattern = /(^|\n)([\t ]*)puzzle3\s+(@?[A-Za-z_][\w:]*)[^{]*\{/m;
   const match = pattern.exec(source);
   if (!match) {
     return null;
@@ -2349,12 +2663,14 @@ function startSprite3dCameraScrub(event) {
     target,
     kind,
     startX: event.clientX,
+    startY: event.clientY,
     moved: false,
     value: sprite3dCameraValue(kind),
   };
   target.setPointerCapture?.(event.pointerId);
   target.classList.add("is-dragging");
   document.documentElement.classList.add("is-sprite3d-camera-scrubbing");
+  document.documentElement.classList.add("is-vertical-scrubbing");
 }
 
 function continueSprite3dCameraScrub(event) {
@@ -2363,13 +2679,13 @@ function continueSprite3dCameraScrub(event) {
   }
   event.preventDefault();
   event.stopPropagation();
-  const deltaX = event.clientX - sprite3dCameraScrubDrag.startX;
-  if (Math.abs(deltaX) > 2) {
+  const deltaY = sprite3dCameraScrubDrag.startY - event.clientY;
+  if (Math.abs(deltaY) > 2) {
     sprite3dCameraScrubDrag.moved = true;
   }
   setSprite3dCameraValue(
     sprite3dCameraScrubDrag.kind,
-    sprite3dCameraScrubDrag.value + deltaX * sprite3dCameraScrubScale(sprite3dCameraScrubDrag.kind),
+    sprite3dCameraScrubDrag.value + deltaY * sprite3dCameraScrubScale(sprite3dCameraScrubDrag.kind),
   );
 }
 
@@ -2392,6 +2708,7 @@ function finishSprite3dCameraScrub(pointerId = null) {
   }
   target.classList.remove("is-dragging");
   document.documentElement.classList.remove("is-sprite3d-camera-scrubbing");
+  document.documentElement.classList.remove("is-vertical-scrubbing");
   sprite3dCameraScrubDrag = null;
 }
 
@@ -2423,7 +2740,11 @@ function setSprite3dCameraValue(kind, value) {
   if (kind === "yaw") {
     camera.yawDegrees = sprite3dNormalizeDegrees(value);
   } else if (kind === "pitch") {
-    camera.pitchDegrees = sprite3dClampNumber(value, -80, 80);
+    camera.pitchDegrees = sprite3dClampNumber(
+      value,
+      SPRITE3D_CAMERA_MIN_PITCH_DEGREES,
+      SPRITE3D_CAMERA_MAX_PITCH_DEGREES,
+    );
   } else if (kind === "zoom") {
     camera.zoom = sprite3dClampNumber(value, 0.25, 4);
   }
@@ -2444,12 +2765,13 @@ function setSprite3dActionStatus(text, className = "") {
     return;
   }
   window.clearTimeout(sprite3dActionClearTimer);
-  sprite3dActionStatus.className = `sprite-action-status ${className}`.trim();
+  sprite3dActionStatus.className = `sprite-action-status tool-feedback-bar ${className}`.trim();
   sprite3dActionStatus.textContent = text;
+  setStatus(text, className);
   if (text && className === "is-ok") {
     sprite3dActionClearTimer = window.setTimeout(() => {
       if (sprite3dActionStatus.textContent === text && sprite3dActionStatus.classList.contains("is-ok")) {
-        sprite3dActionStatus.className = "sprite-action-status";
+        sprite3dActionStatus.className = "sprite-action-status tool-feedback-bar";
         sprite3dActionStatus.textContent = "";
       }
     }, 1800);
@@ -2495,7 +2817,11 @@ function continueSprite3dPreviewDrag(event) {
     sprite3dPreviewDrag.moved = true;
   }
   camera.yawDegrees = sprite3dNormalizeDegrees(camera.yawDegrees + deltaX * 0.35);
-  camera.pitchDegrees = Math.max(-80, Math.min(80, camera.pitchDegrees - deltaY * 0.25));
+  camera.pitchDegrees = sprite3dClampNumber(
+    camera.pitchDegrees - deltaY * 0.25,
+    SPRITE3D_CAMERA_MIN_PITCH_DEGREES,
+    SPRITE3D_CAMERA_MAX_PITCH_DEGREES,
+  );
   renderSprite3dCameraControls();
   renderSprite3dPreview();
 }
@@ -2652,6 +2978,11 @@ sprite3dSliceValue?.addEventListener("keydown", (event) => {
   event.preventDefault();
   applySprite3dSliceInput();
 });
+const sprite3dSliceScrub = document.querySelector("[data-sprite3d-slice-scrub]");
+sprite3dSliceScrub?.addEventListener("pointerdown", startSprite3dSliceScrub);
+sprite3dSliceScrub?.addEventListener("pointermove", continueSprite3dSliceScrub);
+sprite3dSliceScrub?.addEventListener("pointerup", stopSprite3dSliceScrub);
+sprite3dSliceScrub?.addEventListener("pointercancel", stopSprite3dSliceScrub);
 for (const scrub of [sprite3dCameraYawScrub, sprite3dCameraPitchScrub, sprite3dCameraZoomScrub]) {
   scrub?.addEventListener("pointerdown", startSprite3dCameraScrub);
   scrub?.addEventListener("pointermove", continueSprite3dCameraScrub);
@@ -2661,7 +2992,12 @@ for (const scrub of [sprite3dCameraYawScrub, sprite3dCameraPitchScrub, sprite3dC
 }
 window.addEventListener("pointerup", stopSprite3dCameraScrub, true);
 window.addEventListener("pointercancel", stopSprite3dCameraScrub, true);
-window.addEventListener("blur", () => finishSprite3dCameraScrub());
+window.addEventListener("pointerup", stopSprite3dSliceScrub, true);
+window.addEventListener("pointercancel", stopSprite3dSliceScrub, true);
+window.addEventListener("blur", () => {
+  finishSprite3dCameraScrub();
+  finishSprite3dSliceScrub();
+});
 for (const button of sprite3dAxisButtons) {
   button.addEventListener("click", () => setSprite3dAxis(button.dataset.sprite3dAxis));
 }
@@ -2684,7 +3020,8 @@ sprite3dSliceBoard?.addEventListener("keydown", (event) => {
     return;
   }
   if (event.key === "Enter" || event.key === " ") {
-    if (paintSprite3dCellFromElement(event.target)) {
+    const mutate = sprite3dBucketActive ? bucketFillSprite3dFromElement : paintSprite3dCellFromElement;
+    if (withVisualEditHistory("sprite3d", () => mutate(event.target))) {
       event.preventDefault();
       event.stopPropagation();
     }
@@ -2701,8 +3038,9 @@ sprite3dFlipPlaneHorizontalButton?.addEventListener("click", flipSprite3dPlaneHo
 sprite3dFlipPlaneVerticalButton?.addEventListener("click", flipSprite3dPlaneVertical);
 sprite3dCopySliceButton?.addEventListener("click", copySprite3dSlice);
 sprite3dPasteSliceButton?.addEventListener("click", pasteSprite3dSlice);
-sprite3dScopeButton?.addEventListener("click", toggleSprite3dEditScope);
-sprite3dFillButton?.addEventListener("click", fillSprite3dScoped);
+sprite3dScopeSliceButton?.addEventListener("click", () => setSprite3dEditScope("slice"));
+sprite3dScopeAllButton?.addEventListener("click", () => setSprite3dEditScope("all"));
+sprite3dFillButton?.addEventListener("click", toggleSprite3dBucketMode);
 sprite3dExportButton?.addEventListener("click", exportSprite3dSource);
 sprite3dInsertButton?.addEventListener("click", addSprite3dToSource);
 sprite3dUpdateButton?.addEventListener("click", updateSprite3dInSource);
@@ -2716,6 +3054,10 @@ window.addEventListener("resize", () => {
   if (!sprite3dBuilder?.hidden) {
     renderSprite3dPreview();
   }
+});
+registerSourceEditableTarget?.("sprite3d", {
+  find: findSprite3dDefinitionAtPosition,
+  load: loadSprite3dFromSourcePosition,
 });
 
 resetSprite3dBuilder();

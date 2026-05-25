@@ -70,7 +70,7 @@ impl Default for Catalog {
         };
         let action = ScratchDef {
             id: ScratchId(3),
-            kind: ScratchKind::Flag,
+            kind: ScratchKind::Marker,
             values: Vec::new(),
         };
 

@@ -20,7 +20,7 @@ sounds {
 	music music_name seed=test1 tone=0 bpm=105 volume=0.5
 }
 
-model puzzle sokoban {
+puzzle sokoban {
 	var box_moved = false
 
 	layers {

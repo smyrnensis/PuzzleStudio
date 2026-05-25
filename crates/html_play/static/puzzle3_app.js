@@ -1,5 +1,6 @@
 const screenView = document.querySelector("#screenView") || document.body;
-const componentEmbedMode = new URLSearchParams(window.location.search).get("component") === "1";
+const componentEmbedMode = new URLSearchParams(window.location.search).get("component") === "1"
+  || window.Puzzle3DComponentEmbed === true;
 let editorComponentEmbedMode = false;
 document.documentElement.classList.toggle("is-component-embed", componentEmbedMode);
 document.body.classList.add("theme-clean");
@@ -7,6 +8,8 @@ document.body.classList.toggle("is-component-embed", componentEmbedMode);
 const puzzle3Frame = ensurePuzzle3ComponentFrame();
 const canvas = puzzle3Frame.querySelector("#view");
 const ctx = canvas.getContext("2d");
+const PUZZLE3_APP_CAMERA_MIN_PITCH_DEGREES = -90;
+const PUZZLE3_APP_CAMERA_MAX_PITCH_DEGREES = 90;
 
 function ensurePuzzle3ComponentFrame() {
   let existing = document.querySelector("#view");
@@ -35,7 +38,7 @@ const fallbackSnapshot = {
   settings: {
     interactiveLook: false,
     interactiveZoom: false,
-    grid: { visible: false },
+    grid: { visibility: 0 },
     shade: true,
   },
   directions: {
@@ -133,14 +136,19 @@ const view = {
   lastPointerX: 0,
   lastPointerY: 0,
   shadowsEnabled: false,
+  projectionFitKey: "",
+  projectionWidth: 0,
+  projectionHeight: 0,
 };
 let snapshot = fallbackSnapshot;
 let runtime = window.Puzzle3DTestRuntime.create(fallbackSnapshot);
 let initialCamera = cloneCamera(fallbackSnapshot.camera);
 let currentSceneName = initialSceneName(fallbackSnapshot);
+let editorModelComponentPreview = null;
 let levelMenuCursor = 0;
 let sceneButtonCursor = 0;
 let mountedPuzzle3Component = null;
+let pendingResizeFrame = 0;
 const puzzle3Component = createPuzzle3Component();
 
 async function loadSnapshot() {
@@ -159,19 +167,122 @@ async function loadSnapshot() {
     nextSnapshot = fallbackSnapshot;
   }
   loadSnapshotData(nextSnapshot);
+  if (window.PuzzleStudioInitialModelComponentPreview?.type === "PuzzleStudioRenderPuzzle3ModelComponent") {
+    applyPuzzle3ModelComponentPreviewUpdate(window.PuzzleStudioInitialModelComponentPreview);
+  }
 }
 
 function loadSnapshotData(source, options = {}) {
   snapshot = normalizeSnapshot(source || fallbackSnapshot);
   runtime = window.Puzzle3DTestRuntime.create(snapshot);
   snapshot = runtime.snapshot();
+  editorModelComponentPreview = options.modelComponentPreview || null;
   document.title = snapshot.title || "Puzzle3";
-  currentSceneName = options.scene
+  currentSceneName = editorModelComponentPreview?.sceneName
+    || options.scene
     || (options.preferPuzzleScene ? puzzleSceneName(snapshot) : "")
     || initialSceneName(snapshot);
   levelMenuCursor = snapshot.levelIndex || 0;
   initialCamera = cloneCamera(snapshot.camera || fallbackSnapshot.camera);
   renderScene();
+}
+
+function applyPuzzle3PreviewUpdate(update = {}) {
+  const next = puzzle3PreviewSnapshot(update);
+  loadSnapshotData(next, {
+    scene: update.scene,
+    preferPuzzleScene: update.preferPuzzleScene !== false,
+  });
+}
+
+function applyPuzzle3ModelComponentPreviewUpdate(update = {}) {
+  const next = puzzle3PreviewSnapshot(update);
+  loadSnapshotData(next, {
+    modelComponentPreview: {
+      sceneName: update.scene || "__editor_model_preview__",
+      component: puzzle3ModelPreviewComponent(update),
+    },
+  });
+}
+
+function puzzle3PreviewSnapshot(update = {}) {
+  const next = JSON.parse(JSON.stringify(snapshot || fallbackSnapshot));
+  applyPuzzle3PreviewResources(next, update.resources || update);
+  const rawLevelIndex = update.levelIndex ?? next.levelIndex ?? 0;
+  const levelCount = Array.isArray(next.levels) && next.levels.length ? next.levels.length : 1;
+  const levelIndex = clampIndex(rawLevelIndex, levelCount);
+  next.levelIndex = levelIndex;
+
+  const level = update.level || {};
+  const size = level.size || update.size;
+  const cells = Array.isArray(level.cells)
+    ? level.cells
+    : Array.isArray(update.cells)
+      ? update.cells
+      : null;
+  if (!Array.isArray(next.levels) || !next.levels.length) {
+    next.levels = [{
+      name: level.name || next.levelName || "level_1",
+      label: level.label || level.name || next.levelLabel || "Level 1",
+      size: size || next.size || fallbackSnapshot.size,
+      cells: cells || next.cells || [],
+    }];
+    next.levelIndex = 0;
+  } else if (size || cells) {
+    const target = next.levels[levelIndex] || {};
+    next.levels[levelIndex] = {
+      ...target,
+      name: level.name || target.name,
+      label: level.label || target.label || level.name || target.name,
+      size: size ? { ...size } : target.size,
+      cells: cells ? JSON.parse(JSON.stringify(cells)) : target.cells,
+    };
+  }
+  if (size) {
+    next.size = { ...size };
+  }
+  if (cells) {
+    next.cells = JSON.parse(JSON.stringify(cells));
+  }
+  if (update.camera) {
+    next.camera = cloneCamera(update.camera);
+  }
+  if (update.settings) {
+    next.settings = mergePuzzle3PreviewSettings(next.settings || {}, update.settings);
+  }
+  return next;
+}
+
+function puzzle3ModelPreviewComponent(update = {}) {
+  const component = update.component || update.modelComponent || {};
+  return {
+    kind: "puzzle3",
+    source: component.source || update.source || "__editor_model_preview__",
+    layout: component.layout || update.layout || {},
+  };
+}
+
+function applyPuzzle3PreviewResources(target, resources = {}) {
+  if (Number.isFinite(Number(resources.layerCount))) {
+    target.layerCount = Math.max(1, Math.trunc(Number(resources.layerCount)));
+  }
+  if (resources.objects && typeof resources.objects === "object") {
+    target.objects = JSON.parse(JSON.stringify(resources.objects));
+  }
+  if (resources.sprites && typeof resources.sprites === "object") {
+    target.sprites = JSON.parse(JSON.stringify(resources.sprites));
+  }
+}
+
+function mergePuzzle3PreviewSettings(base, patch) {
+  const next = { ...base, ...patch };
+  if (base.grid || patch.grid) {
+    next.grid = {
+      ...(typeof base.grid === "object" && base.grid ? base.grid : {}),
+      ...(typeof patch.grid === "object" && patch.grid ? patch.grid : {}),
+    };
+  }
+  return next;
 }
 
 function applySceneComponentMetadata(component, sceneName) {
@@ -193,13 +304,19 @@ function puzzle3ComponentFor(scene) {
 }
 
 function renderScene() {
+  if (editorModelComponentPreview) {
+    const sceneName = editorModelComponentPreview.sceneName || "__editor_model_preview__";
+    screenView.className = `scene ${sceneName}`;
+    puzzle3Component.mount(editorModelComponentPreview.component || puzzle3ModelPreviewComponent(), sceneName);
+    return;
+  }
   const scene = currentScene();
+  screenView.className = `scene ${scene?.name || currentSceneName || "default"}`;
   const embeddedPuzzle3Component = puzzle3ComponentFor(scene);
   if (effectiveComponentEmbedMode() && embeddedPuzzle3Component) {
     puzzle3Component.mount(embeddedPuzzle3Component, scene?.name || currentSceneName || "default");
     return;
   }
-  screenView.className = `scene ${scene?.name || currentSceneName || "default"}`;
   const components = scene?.components?.length
     ? scene.components
     : [{ kind: "title", text: snapshot.title || "Puzzle3" }];
@@ -507,11 +624,17 @@ function gotoScene(sceneName) {
 function createPuzzle3Component() {
   return {
     mount(component, sceneName) {
-      puzzle3Frame.style.position = "relative";
-      puzzle3Frame.style.left = "auto";
-      puzzle3Frame.style.top = "auto";
-      puzzle3Frame.style.width = "100%";
-      puzzle3Frame.style.height = "100%";
+      const embed = effectiveComponentEmbedMode();
+      puzzle3Frame.style.position = embed ? "fixed" : "relative";
+      puzzle3Frame.style.inset = embed ? "0" : "auto";
+      puzzle3Frame.style.left = embed ? "0" : "auto";
+      puzzle3Frame.style.top = embed ? "0" : "auto";
+      puzzle3Frame.style.width = embed ? "auto" : "100%";
+      puzzle3Frame.style.height = embed ? "auto" : "100%";
+      canvas.style.position = embed ? "absolute" : "";
+      canvas.style.inset = embed ? "0" : "";
+      canvas.style.width = embed ? "100%" : "";
+      canvas.style.height = embed ? "100%" : "";
       screenView.replaceChildren(puzzle3Frame);
       applySceneComponentMetadata(component, sceneName);
       updateCameraInteractionState();
@@ -535,6 +658,7 @@ function createPuzzle3Component() {
       draw();
     },
     applyInput(input) {
+      runtime.setCamera(snapshot.camera);
       if (input === "undo") {
         if (!runtime.undo()) {
           return false;
@@ -547,6 +671,37 @@ function createPuzzle3Component() {
         return false;
       }
       snapshot = runtime.snapshot();
+      draw();
+      return true;
+    },
+    nextLevel() {
+      if (!runtime.nextLevel()) {
+        return false;
+      }
+      snapshot = runtime.snapshot();
+      draw();
+      return true;
+    },
+    previousLevel() {
+      if (!runtime.previousLevel()) {
+        return false;
+      }
+      snapshot = runtime.snapshot();
+      draw();
+      return true;
+    },
+    gotoLevel(level) {
+      const index = puzzle3LevelIndex(level);
+      if (index === null) {
+        return false;
+      }
+      runtime.loadLevel(index);
+      snapshot = runtime.snapshot();
+      draw();
+      return true;
+    },
+    resetCamera() {
+      resetCamera();
       draw();
       return true;
     },
@@ -596,6 +751,20 @@ function globalLevelIndexForBundle(levelsName, relativeIndex) {
   return indexes[clamp(relativeIndex || 0, 0, Math.max(0, indexes.length - 1))] ?? 0;
 }
 
+function puzzle3LevelIndex(level) {
+  if (level === undefined || level === null || level === "") {
+    return null;
+  }
+  const levels = snapshot.levels || [];
+  const numeric = Number(level);
+  if (Number.isInteger(numeric) && numeric >= 0 && numeric < levels.length) {
+    return numeric;
+  }
+  const text = String(level);
+  const index = levels.findIndex((candidate) => candidate?.name === text || candidate?.label === text);
+  return index >= 0 ? index : null;
+}
+
 function relativeLevelIndexForBundle(levelsName, globalIndex) {
   const indexes = levelIndexesForBundle(levelsName);
   const relative = indexes.indexOf(globalIndex);
@@ -605,25 +774,104 @@ function relativeLevelIndexForBundle(levelsName, globalIndex) {
 function resizeCanvas() {
   const rect = canvas.getBoundingClientRect();
   const scale = window.devicePixelRatio || 1;
-  canvas.width = Math.max(1, Math.floor(rect.width * scale));
-  canvas.height = Math.max(1, Math.floor(rect.height * scale));
+  const nextWidth = Math.max(1, Math.floor(rect.width * scale));
+  const nextHeight = Math.max(1, Math.floor(rect.height * scale));
+  const changed = canvas.width !== nextWidth || canvas.height !== nextHeight;
+  canvas.width = nextWidth;
+  canvas.height = nextHeight;
   ctx.setTransform(scale, 0, 0, scale, 0, 0);
   updateProjectionFit(rect);
+  return changed;
+}
+
+function schedulePuzzle3Resize() {
+  if (pendingResizeFrame) {
+    return;
+  }
+  pendingResizeFrame = requestAnimationFrame(() => {
+    pendingResizeFrame = 0;
+    if (effectiveComponentEmbedMode() && puzzle3ComponentFor(currentScene())) {
+      puzzle3Component.handleResize();
+    } else {
+      renderScene();
+    }
+  });
+}
+
+function syncCanvasSize() {
+  const rect = canvas.getBoundingClientRect();
+  const scale = window.devicePixelRatio || 1;
+  const nextWidth = Math.max(1, Math.floor(rect.width * scale));
+  const nextHeight = Math.max(1, Math.floor(rect.height * scale));
+  if (canvas.width !== nextWidth || canvas.height !== nextHeight) {
+    resizeCanvas();
+  }
 }
 
 function updateProjectionFit(rect) {
   const size = snapshot.size || fallbackSnapshot.size;
   const camera = snapshot.camera || fallbackSnapshot.camera;
-  const zoom = Math.max(0.1, Number(camera.zoom ?? 1));
+  if (!shouldAutoFitFiniteStage(size)) {
+    return;
+  }
+  const width = Math.max(1, Number(rect.width) || 1);
+  const height = Math.max(1, Number(rect.height) || 1);
+  const zoom = projectionZoom(camera);
   const bounds = projectedSceneBoundsUnit(size, camera);
   const boundsWidth = Math.max(0.001, bounds.maxX - bounds.minX);
   const boundsHeight = Math.max(0.001, bounds.maxY - bounds.minY);
   const padding = 0.72;
-  const scale = Math.min(rect.width / boundsWidth, rect.height / boundsHeight) * padding;
-  view.cellScale = Math.max(4, scale / zoom);
+  const scale = Math.min(width / boundsWidth, height / boundsHeight) * padding;
+  view.cellScale = Math.max(0.0001, scale / zoom);
   const effectiveScale = view.cellScale * zoom;
-  view.originX = rect.width / 2 - ((bounds.minX + bounds.maxX) / 2) * effectiveScale;
-  view.originY = rect.height / 2 - ((bounds.minY + bounds.maxY) / 2) * effectiveScale;
+  view.originX = width / 2 - ((bounds.minX + bounds.maxX) / 2) * effectiveScale;
+  view.originY = height / 2 - ((bounds.minY + bounds.maxY) / 2) * effectiveScale;
+  view.projectionWidth = width;
+  view.projectionHeight = height;
+  view.projectionFitKey = projectionFitKey(size, camera);
+}
+
+function ensureProjectionFit() {
+  const rect = canvas.getBoundingClientRect();
+  const size = snapshot.size || fallbackSnapshot.size;
+  if (!shouldAutoFitFiniteStage(size)) {
+    return;
+  }
+  const width = Math.max(1, Number(rect.width) || 1);
+  const height = Math.max(1, Number(rect.height) || 1);
+  const key = projectionFitKey(size, snapshot.camera || fallbackSnapshot.camera);
+  if (
+    key !== view.projectionFitKey
+    || Math.abs(width - view.projectionWidth) > 0.5
+    || Math.abs(height - view.projectionHeight) > 0.5
+  ) {
+    updateProjectionFit({ width, height });
+  }
+}
+
+function shouldAutoFitFiniteStage(size) {
+  return finiteStageDimension(size?.width)
+    && finiteStageDimension(size?.depth)
+    && finiteStageDimension(size?.height);
+}
+
+function finiteStageDimension(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0;
+}
+
+function projectionFitKey(size, camera) {
+  return [
+    Math.max(1, Number(size?.width) || 1),
+    Math.max(1, Number(size?.depth) || 1),
+    Math.max(1, Number(size?.height) || 1),
+    Number(camera?.yawDegrees ?? 0),
+    Number(camera?.pitchDegrees ?? 35),
+  ].join(":");
+}
+
+function projectionZoom(camera) {
+  return Math.max(0.1, Number(camera?.zoom ?? 1) || 1);
 }
 
 function projectedSceneBoundsUnit(size, camera) {
@@ -678,6 +926,7 @@ function cloneCamera(camera) {
 
 function resetCamera() {
   snapshot.camera = cloneCamera(initialCamera);
+  runtime.setCamera(snapshot.camera);
 }
 
 function cameraLookEnabled() {
@@ -706,8 +955,13 @@ function updateCameraInteractionState() {
 function rotateCamera(deltaX, deltaY) {
   const camera = snapshot.camera || fallbackSnapshot.camera;
   camera.yawDegrees = normalizeDegrees(camera.yawDegrees + deltaX * 0.35);
-  camera.pitchDegrees = clamp(camera.pitchDegrees - deltaY * 0.25, -80, 80);
+  camera.pitchDegrees = clamp(
+    camera.pitchDegrees - deltaY * 0.25,
+    PUZZLE3_APP_CAMERA_MIN_PITCH_DEGREES,
+    PUZZLE3_APP_CAMERA_MAX_PITCH_DEGREES,
+  );
   snapshot.camera = camera;
+  resetProjection();
 }
 
 function zoomCamera(deltaY) {
@@ -744,37 +998,258 @@ function degreesToRadians(value) {
 }
 
 function draw() {
+  syncCanvasSize();
+  ensureProjectionFit();
   const width = canvas.clientWidth;
   const height = canvas.clientHeight;
   ctx.clearRect(0, 0, width, height);
 
-  const primitives = [...sceneFaces(), ...gridLines(gridSettings())];
-  if (view.shadowsEnabled) {
-    primitives.push(...shadowFaces());
+  let primitives = scenePrimitives();
+  if (fitProjectionToContent(primitives, width, height)) {
+    primitives = scenePrimitives();
   }
   primitives.sort(comparePrimitiveOrder);
   for (const primitive of primitives) {
     if (primitive.kind === "line") {
-      lineSegment(primitive.from, primitive.to, primitive.stroke, primitive.width);
+      lineSegment(primitive.from, primitive.to, primitive.stroke, primitive.width, primitive.alpha);
     } else {
       polygonPoints(primitive.points, primitive.fill);
     }
   }
+  notifyPuzzle3View(width, height);
+}
+
+function scenePrimitives() {
+  const primitives = [...sceneFaces(), ...gridLines(gridSettings())];
+  if (view.shadowsEnabled) {
+    primitives.push(...shadowFaces());
+  }
+  return primitives;
+}
+
+function fitProjectionToContent(primitives, width, height) {
+  const fit = projectionContentFitSettings();
+  if (!fit.enabled) {
+    return false;
+  }
+  if (fit.mode === "xy") {
+    return fitProjectionToXYStageBounds(width, height, fit);
+  }
+  if (fit.mode === "stage") {
+    return fitProjectionToStageBounds(width, height, fit);
+  }
+  if (!primitives.length) {
+    return false;
+  }
+  const points = primitives.flatMap(primitiveScreenPoints);
+  if (!points.length) {
+    return false;
+  }
+  const minX = Math.min(...points.map((point) => point.x));
+  const maxX = Math.max(...points.map((point) => point.x));
+  const minY = Math.min(...points.map((point) => point.y));
+  const maxY = Math.max(...points.map((point) => point.y));
+  const contentWidth = Math.max(0.001, maxX - minX);
+  const contentHeight = Math.max(0.001, maxY - minY);
+  const margin = Math.max(0, Number(fit.margin) || 0);
+  const availableWidth = Math.max(1, width - margin * 2);
+  const availableHeight = Math.max(1, height - margin * 2);
+  const multiplier = Math.min(availableWidth / contentWidth, availableHeight / contentHeight);
+  if (!Number.isFinite(multiplier) || multiplier <= 0 || Math.abs(multiplier - 1) < 0.0001) {
+    return false;
+  }
+  const centerX = (minX + maxX) / 2;
+  const centerY = (minY + maxY) / 2;
+  view.originX = width / 2 + (view.originX - centerX) * multiplier;
+  view.originY = height / 2 + (view.originY - centerY) * multiplier;
+  view.cellScale *= multiplier;
+  return true;
+}
+
+function fitProjectionToXYStageBounds(width, height, fit) {
+  const size = snapshot.size || fallbackSnapshot.size;
+  const camera = snapshot.camera || fallbackSnapshot.camera;
+  const margin = Math.max(0, Number(fit.margin) || 0);
+  const availableWidth = Math.max(1, width - margin * 2);
+  const availableHeight = Math.max(1, height - margin * 2);
+  const bounds = stageProjectionUnitBounds(size, camera, "xy");
+  const boundsWidth = Math.max(0.001, bounds.maxX - bounds.minX);
+  const boundsHeight = Math.max(0.001, bounds.maxY - bounds.minY);
+  const effectiveScale = Math.max(0.0001, Math.min(availableWidth / boundsWidth, availableHeight / boundsHeight));
+  const nextCellScale = effectiveScale / projectionZoom(camera);
+  const nextOriginX = width / 2 - ((bounds.minX + bounds.maxX) / 2) * effectiveScale;
+  const nextOriginY = height / 2 - ((bounds.minY + bounds.maxY) / 2) * effectiveScale;
+  const changed = Math.abs(view.cellScale - nextCellScale) > 0.0001
+    || Math.abs(view.originX - nextOriginX) > 0.0001
+    || Math.abs(view.originY - nextOriginY) > 0.0001;
+  view.cellScale = nextCellScale;
+  view.originX = nextOriginX;
+  view.originY = nextOriginY;
+  return changed;
+}
+
+function fitProjectionToStageBounds(width, height, fit) {
+  const size = snapshot.size || fallbackSnapshot.size;
+  const camera = snapshot.camera || fallbackSnapshot.camera;
+  const margin = Math.max(0, Number(fit.margin) || 0);
+  const availableWidth = Math.max(1, width - margin * 2);
+  const availableHeight = Math.max(1, height - margin * 2);
+  const bounds = stageProjectionUnitBounds(size, camera, fit.mode);
+  const boundsWidth = Math.max(0.001, bounds.maxX - bounds.minX);
+  const boundsHeight = Math.max(0.001, bounds.maxY - bounds.minY);
+  const effectiveScale = Math.max(0.0001, Math.min(availableWidth / boundsWidth, availableHeight / boundsHeight));
+  const nextCellScale = effectiveScale / projectionZoom(camera);
+  const nextOriginX = width / 2 - ((bounds.minX + bounds.maxX) / 2) * effectiveScale;
+  const nextOriginY = height / 2 - ((bounds.minY + bounds.maxY) / 2) * effectiveScale;
+  const changed = Math.abs(view.cellScale - nextCellScale) > 0.0001
+    || Math.abs(view.originX - nextOriginX) > 0.0001
+    || Math.abs(view.originY - nextOriginY) > 0.0001;
+  view.cellScale = nextCellScale;
+  view.originX = nextOriginX;
+  view.originY = nextOriginY;
+  return changed;
+}
+
+function stageProjectionUnitBounds(size, camera, mode = "stage") {
+  const width = Math.max(1, Number(size.width) || 1);
+  const depth = Math.max(1, Number(size.depth) || 1);
+  const height = Math.max(1, Number(size.height) || 1);
+  const zValues = mode === "xy" ? [0] : [-0.5, height - 0.5];
+  const points = [];
+  for (const x of [-0.5, width - 0.5]) {
+    for (const y of [-0.5, depth - 0.5]) {
+      for (const z of zValues) {
+        points.push(projectScenePointUnit({ x, y, z }, { width, depth, height }, camera));
+      }
+    }
+  }
+  return points.reduce(
+    (bounds, point) => ({
+      minX: Math.min(bounds.minX, point.x),
+      maxX: Math.max(bounds.maxX, point.x),
+      minY: Math.min(bounds.minY, point.y),
+      maxY: Math.max(bounds.maxY, point.y),
+    }),
+    { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity },
+  );
+}
+
+function projectionContentFitSettings() {
+  const raw = snapshot.settings?.fitContent ?? snapshot.settings?.fit_content;
+  if (!raw) {
+    return { enabled: false };
+  }
+  if (raw === true) {
+    return { enabled: true, mode: "content", margin: 18 };
+  }
+  return {
+    enabled: raw.enabled !== false,
+    mode: String(raw.mode || "content"),
+    margin: Number(raw.margin ?? raw.padding ?? 18) || 18,
+  };
+}
+
+function primitiveScreenPoints(primitive) {
+  if (Array.isArray(primitive.points)) {
+    return primitive.points;
+  }
+  return [primitive.from, primitive.to].filter(Boolean);
+}
+
+function notifyPuzzle3View(width, height) {
+  if (!effectiveComponentEmbedMode() || !window.parent || window.parent === window) {
+    return;
+  }
+  const size = snapshot.size || fallbackSnapshot.size;
+  const camera = snapshot.camera || fallbackSnapshot.camera;
+  const canvasRect = canvas.getBoundingClientRect();
+  window.parent.postMessage({
+    type: "PuzzleStudioPuzzle3View",
+    source: canvas.dataset.source || "",
+    scene: canvas.dataset.scene || "",
+    view: {
+      width: Math.max(1, Number(width) || 1),
+      height: Math.max(1, Number(height) || 1),
+      viewport: {
+        width: Math.max(1, Number(window.innerWidth) || Number(width) || 1),
+        height: Math.max(1, Number(window.innerHeight) || Number(height) || 1),
+      },
+      canvasRect: {
+        x: canvasRect.x,
+        y: canvasRect.y,
+        width: Math.max(1, canvasRect.width || Number(width) || 1),
+        height: Math.max(1, canvasRect.height || Number(height) || 1),
+      },
+      coordinateSpace: "canvas-css-px",
+      originX: view.originX,
+      originY: view.originY,
+      scale: view.cellScale * projectionZoom(camera),
+      center: {
+        x: (Math.max(1, Number(size.width) || 1) - 1) / 2,
+        y: (Math.max(1, Number(size.depth) || 1) - 1) / 2,
+        z: (Math.max(1, Number(size.height) || 1) - 1) / 2,
+      },
+      camera: cloneCamera(camera),
+      size: {
+        width: Math.max(1, Number(size.width) || 1),
+        depth: Math.max(1, Number(size.depth) || 1),
+        height: Math.max(1, Number(size.height) || 1),
+      },
+      cellFootprints: projectedStageCellFootprints(size),
+    },
+  }, "*");
+}
+
+function projectedStageCellFootprints(size) {
+  const width = Math.max(1, Math.trunc(Number(size?.width) || 1));
+  const depth = Math.max(1, Math.trunc(Number(size?.depth) || 1));
+  const footprints = [];
+  for (let y = 0; y < depth; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const points = [
+        { x: x - 0.5, y: y - 0.5, z: 0 },
+        { x: x + 0.5, y: y - 0.5, z: 0 },
+        { x: x + 0.5, y: y + 0.5, z: 0 },
+        { x: x - 0.5, y: y + 0.5, z: 0 },
+      ].map((point) => {
+        const projected = projectWithDepth(point);
+        return { x: projected.x, y: projected.y };
+      });
+      footprints.push({
+        position: { x, y, z: 0 },
+        points,
+      });
+    }
+  }
+  return footprints;
 }
 
 function gridSettings() {
   const raw = snapshot.settings?.grid;
-  if (raw === true) {
-    return { visible: true, occupiedCells: true };
+  if (!raw || raw === false || raw === true) {
+    return { visibility: 0 };
   }
-  if (!raw || raw === false) {
-    return { visible: false };
-  }
+  const visibility = gridVisibility(raw);
   return {
-    visible: raw.visible !== false,
+    visibility,
     color: raw.color,
+    frameColor: raw.frameColor || raw.frame_color,
     occupiedCells: raw.occupied_cells !== false && raw.occupiedCells !== false,
+    stageFrame: Boolean(raw.stageFrame ?? raw.stage_frame ?? raw.frame),
+    xyPlane: Boolean(raw.xyPlane ?? raw.xy_plane),
   };
+}
+
+function gridVisibility(raw) {
+  return clamp01(raw.visibility);
+}
+
+function clamp01(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) {
+    return 0;
+  }
+  return Math.max(0, Math.min(1, number));
 }
 
 function spriteRenderSettings() {
@@ -791,21 +1266,64 @@ function spriteRenderSettings() {
 }
 
 function gridLines(grid) {
-  if (!grid.visible) {
+  if (!grid.visibility) {
     return [];
   }
-  if (!grid.occupiedCells) {
-    return [];
+  const lines = [];
+  if (grid.xyPlane) {
+    lines.push(...xyPlaneGridLines(grid));
   }
-  const occupiedCells = occupiedCellSet(snapshot.cells || []);
-  const edgeLines = new Map();
-  for (const cell of snapshot.cells || []) {
-    if (!cell.objects?.length) {
-      continue;
+  if (grid.occupiedCells) {
+    const occupiedCells = occupiedCellSet(snapshot.cells || []);
+    const edgeLines = new Map();
+    for (const cell of snapshot.cells || []) {
+      if (!cell.objects?.length) {
+        continue;
+      }
+      addVisibleOccupiedCellGridLines(cell.position, occupiedCells, edgeLines, grid);
     }
-    addVisibleOccupiedCellGridLines(cell.position, occupiedCells, edgeLines, grid);
+    lines.push(...edgeLines.values());
   }
-  return [...edgeLines.values()];
+  if (grid.stageFrame) {
+    lines.push(...stageFrameGridLines(grid));
+  }
+  return lines;
+}
+
+function xyPlaneGridLines(grid) {
+  const size = snapshot.size || fallbackSnapshot.size;
+  const width = Math.max(1, Number(size?.width) || 1);
+  const depth = Math.max(1, Number(size?.depth) || 1);
+  const lines = [];
+  for (let x = 0; x <= width; x += 1) {
+    const edgeX = x - 0.5;
+    lines.push(projectGridLine(
+      { x: edgeX, y: -0.5, z: 0 },
+      { x: edgeX, y: depth - 0.5, z: 0 },
+      "minor",
+      grid,
+      gridOrder({ x: edgeX, y: (depth - 1) / 2, z: 0 }),
+    ));
+  }
+  for (let y = 0; y <= depth; y += 1) {
+    const edgeY = y - 0.5;
+    lines.push(projectGridLine(
+      { x: -0.5, y: edgeY, z: 0 },
+      { x: width - 0.5, y: edgeY, z: 0 },
+      "minor",
+      grid,
+      gridOrder({ x: (width - 1) / 2, y: edgeY, z: 0 }),
+    ));
+  }
+  return lines;
+}
+
+function stageFrameGridLines(grid) {
+  return Puzzle3VisualCore.stageFrameEdges(snapshot.size || fallbackSnapshot.size).map((edge) => {
+    const line = projectGridLine(edge.from, edge.to, "stageFrame", grid, gridOrder(midpoint3(edge.from, edge.to)));
+    line.renderPriority = 2;
+    return line;
+  });
 }
 
 function occupiedCellSet(cells) {
@@ -882,11 +1400,7 @@ function addVisibleOccupiedCellGridLines(position, occupiedCells, edgeLines, gri
 }
 
 function directionDepth(vector) {
-  const camera = snapshot.camera || fallbackSnapshot.camera;
-  const yaw = degreesToRadians(camera.yawDegrees ?? 0);
-  const pitch = degreesToRadians(camera.pitchDegrees ?? 35);
-  const yawY = vector.x * Math.sin(yaw) + vector.y * Math.cos(yaw);
-  return -yawY * Math.cos(pitch) + vector.z * Math.sin(pitch);
+  return Puzzle3VisualCore.directionDepth(vector, puzzle3VisualView());
 }
 
 function edgeKey(a, b) {
@@ -896,15 +1410,7 @@ function edgeKey(a, b) {
 }
 
 function faceGridOrder(corners) {
-  const center = corners.reduce(
-    (total, corner) => ({
-      x: total.x + corner.x / corners.length,
-      y: total.y + corner.y / corners.length,
-      z: total.z + corner.z / corners.length,
-    }),
-    { x: 0, y: 0, z: 0 },
-  );
-  return gridOrder(center);
+  return Puzzle3VisualCore.faceGridOrder(corners, puzzle3VisualView());
 }
 
 function projectGridLine(from, to, kind, grid, gridOrderOverride = null, ownerCell = null) {
@@ -919,70 +1425,13 @@ function projectGridLine(from, to, kind, grid, gridOrderOverride = null, ownerCe
     renderPriority: 1,
     depth: (a.depth + b.depth) / 2,
     stroke: gridStroke(kind, grid),
-    width: kind === "minor" ? 1 : 1.5,
+    alpha: grid.visibility,
+    width: kind === "stageFrame" ? 1.6 : (kind === "minor" ? 1 : 1.5),
   };
 }
 
 function comparePrimitiveOrder(a, b) {
-  const ownerComparison = compareOwnerCellOrder(a, b);
-  if (ownerComparison !== 0) {
-    return ownerComparison;
-  }
-  const localPriorityComparison = compareLocalRenderPriority(a, b);
-  if (localPriorityComparison !== 0) {
-    return localPriorityComparison;
-  }
-  const gridComparison = compareGridOrder(a.gridOrder, b.gridOrder);
-  if (gridComparison !== 0) {
-    return gridComparison;
-  }
-  const depthDiff = (a.depth ?? 0) - (b.depth ?? 0);
-  if (Math.abs(depthDiff) > 0.000001) {
-    return depthDiff;
-  }
-  return (a.renderPriority ?? 0) - (b.renderPriority ?? 0);
-}
-
-function compareOwnerCellOrder(a, b) {
-  if (!a.ownerCell || !b.ownerCell || a.ownerCell.key === b.ownerCell.key) {
-    return 0;
-  }
-  const gridComparison = compareGridOrder(a.ownerCell.order, b.ownerCell.order);
-  if (gridComparison !== 0) {
-    return gridComparison;
-  }
-  const depthDiff = a.ownerCell.depth - b.ownerCell.depth;
-  if (Math.abs(depthDiff) > 0.000001) {
-    return depthDiff;
-  }
-  return 0;
-}
-
-function compareLocalRenderPriority(a, b) {
-  if (!a.ownerCell || !b.ownerCell || a.ownerCell.key !== b.ownerCell.key) {
-    return 0;
-  }
-  const priorityDiff = (a.renderPriority ?? 0) - (b.renderPriority ?? 0);
-  if (Math.abs(priorityDiff) > 0.000001) {
-    return priorityDiff;
-  }
-  return 0;
-}
-
-function compareGridOrder(a, b) {
-  if (!a || !b) {
-    return 0;
-  }
-  const diffs = [a.x - b.x, a.y - b.y, a.z - b.z];
-  const hasPositive = diffs.some((diff) => diff > 0.000001);
-  const hasNegative = diffs.some((diff) => diff < -0.000001);
-  if (hasPositive && !hasNegative) {
-    return 1;
-  }
-  if (hasNegative && !hasPositive) {
-    return -1;
-  }
-  return 0;
+  return Puzzle3VisualCore.comparePrimitiveOrder(a, b);
 }
 
 function midpoint3(a, b) {
@@ -994,33 +1443,17 @@ function midpoint3(a, b) {
 }
 
 function gridOrder(position) {
-  const signs = cameraGridSigns();
-  return {
-    x: signs.x * position.x,
-    y: signs.y * position.y,
-    z: signs.z * position.z,
-  };
+  return Puzzle3VisualCore.gridOrder(position, puzzle3VisualView());
 }
 
-function cameraGridSigns() {
-  const camera = snapshot.camera || fallbackSnapshot.camera;
-  const yaw = degreesToRadians(camera.yawDegrees ?? 0);
-  const pitch = degreesToRadians(camera.pitchDegrees ?? 35);
-  return {
-    x: signedAxis(-Math.sin(yaw) * Math.cos(pitch)),
-    y: signedAxis(-Math.cos(yaw) * Math.cos(pitch)),
-    z: signedAxis(Math.sin(pitch)),
-  };
-}
-
-function signedAxis(value) {
-  if (Math.abs(value) < 0.000001) {
-    return 0;
-  }
-  return value > 0 ? 1 : -1;
+function puzzle3VisualView() {
+  return { camera: snapshot.camera || fallbackSnapshot.camera };
 }
 
 function gridStroke(kind, grid) {
+  if (kind === "stageFrame") {
+    return grid.frameColor || "rgba(29, 37, 44, 0.82)";
+  }
   return grid.color || "rgba(31, 36, 40, 0.62)";
 }
 
@@ -1548,8 +1981,9 @@ function polygonPoints(points, fill) {
   ctx.fill();
 }
 
-function lineSegment(from, to, stroke, width) {
+function lineSegment(from, to, stroke, width, alpha = 1) {
   ctx.save();
+  ctx.globalAlpha = clamp01(alpha);
   ctx.strokeStyle = stroke;
   ctx.lineWidth = width;
   ctx.lineCap = "round";
@@ -1638,9 +2072,14 @@ canvas.addEventListener("wheel", (event) => {
   draw();
 }, { passive: false });
 
-window.addEventListener("resize", () => {
-  renderScene();
-});
+window.addEventListener("resize", schedulePuzzle3Resize);
+
+if (window.ResizeObserver) {
+  const resizeObserver = new ResizeObserver(schedulePuzzle3Resize);
+  resizeObserver.observe(screenView);
+  resizeObserver.observe(puzzle3Frame);
+  resizeObserver.observe(canvas);
+}
 
 function handleStandaloneKeydown(event) {
   const control = sceneControlForEvent(event);
@@ -1713,6 +2152,18 @@ if (!effectiveComponentEmbedMode()) {
 }
 
 window.addEventListener("message", (event) => {
+  if (event.data?.type === "PuzzleStudioUpdatePuzzle3Preview") {
+    setEditorComponentEmbedMode(event.data.componentEmbed === true);
+    applyPuzzle3PreviewUpdate(event.data);
+    return;
+  }
+
+  if (event.data?.type === "PuzzleStudioRenderPuzzle3ModelComponent") {
+    setEditorComponentEmbedMode(event.data.componentEmbed !== false);
+    applyPuzzle3ModelComponentPreviewUpdate(event.data);
+    return;
+  }
+
   if (event.data?.type === "PuzzleStudioSetPuzzle3Snapshot") {
     setEditorComponentEmbedMode(event.data.componentEmbed === true);
     loadSnapshotData(event.data.snapshot, {
@@ -1722,10 +2173,23 @@ window.addEventListener("message", (event) => {
     return;
   }
 
+  if (event.data?.type === "PuzzleStudioResize") {
+    schedulePuzzle3Resize();
+    return;
+  }
+
   if (event.data?.type === "PuzzleStudioCommand") {
     const command = String(event.data.command || "");
     if (command === "undo" || command === "restart") {
       puzzle3Component.applyInput(command);
+    } else if (command === "next_level") {
+      puzzle3Component.nextLevel();
+    } else if (command === "previous_level") {
+      puzzle3Component.previousLevel();
+    } else if (command === "goto_level" || command === "goto") {
+      puzzle3Component.gotoLevel(event.data.level);
+    } else if (command === "reset_camera") {
+      puzzle3Component.resetCamera();
     }
     return;
   }

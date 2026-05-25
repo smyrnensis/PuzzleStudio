@@ -2,7 +2,9 @@
 
 この文書は、PuzzleStudio CLI の目的、責務境界、初期コマンド、実装順をまとめる。
 
-Status: 計画段階。ここに書かれたコマンドは、実装済みであることを意味しない。
+Status: 一部実装済み。`check`、`play`、`preview`、`editor`、`export-html`、
+`export-editor`、`import-puzzlescript` は `puzzlestudio` binary から呼べる。
+`simulate`、`test`、`format`、`new` はまだ計画段階。
 
 ## 1. Purpose
 
@@ -55,6 +57,9 @@ puzzlestudio
 
 既存の `ascii-play`、`html-play`、`html-editor` binary は当面残す。CLI が安定した後、共通コマンドからそれらの体験を呼べるようにしてもよい。
 
+現在は `puzzlestudio play` / `preview` / `editor` がそれぞれ既存 adapter の
+実装を薄く呼び出す。既存 binary は開発・後方互換用に残す。
+
 ## 4. Initial Command Surface
 
 ### `puzzlestudio check`
@@ -94,7 +99,7 @@ Expected behavior:
 ローカル preview server を起動する。
 
 ```bash
-puzzlestudio preview games/spec_2d/game.puzzle --serve
+puzzlestudio preview games/spec_2d/game.puzzle
 ```
 
 Expected behavior:
@@ -102,6 +107,34 @@ Expected behavior:
 - 既存の editor / html preview server behavior を共有する
 - 起動時に URL を stdout に出す
 - file watching は初期実装では必須にしない
+
+### `puzzlestudio play`
+
+terminal player を起動する。
+
+```bash
+puzzlestudio play games/spec_2d/game.puzzle
+```
+
+Expected behavior:
+
+- 既存の `ascii-play` terminal runtime を共有する
+- 2D / prototype 3D document の single model を実行する
+- terminal 固有の key handling と表示だけを adapter が所有する
+
+### `puzzlestudio editor`
+
+local editor server を起動する。
+
+```bash
+puzzlestudio editor games/spec_2d/game.puzzle
+```
+
+Expected behavior:
+
+- 既存の `html-editor` service を共有する
+- 起動時に editor URL を stdout に出す
+- save / preview / workspace root semantics は editor service が所有する
 
 ### `puzzlestudio simulate`
 
@@ -160,6 +193,19 @@ Expected behavior:
 - 既存の `translate_puzzlescript_to_canonical` を呼ぶ
 - 現在の import coverage が限定的であることを diagnostics に含める
 
+### `puzzlestudio export-editor`
+
+standalone editor HTML を生成する。
+
+```bash
+puzzlestudio export-editor games/spec_2d/game.puzzle -o editor.html
+```
+
+Expected behavior:
+
+- 既存の `html-editor` export logic を共有する
+- editor WASM bundle の更新自体は `tools/build_wasm_editor.sh` が所有する
+
 ### `puzzlestudio new`
 
 新規 project scaffold を作る。
@@ -216,12 +262,15 @@ Rules:
 3. Add human diagnostics and stable exit codes
 4. Add `--json` diagnostics
 5. Add `export-html` by sharing existing HTML export code
-6. Add `preview --serve`
-7. Add `simulate --json`
-8. Add `import-puzzlescript`
-9. Add `test`
-10. Add `format`
-11. Add `new`
+6. Add `preview`
+7. Add `play`
+8. Add `editor`
+9. Add `export-editor`
+10. Add `simulate --json`
+11. Add `import-puzzlescript`
+12. Add `test`
+13. Add `format`
+14. Add `new`
 
 The first useful milestone is:
 

@@ -72,10 +72,10 @@ fn write_settings(out: &mut String, parsed: &ParsedPuzzle3) {
     let camera = &parsed.settings.camera;
     let _ = writeln!(
         out,
-        "  \"settings\": {{ \"interactiveLook\": {}, \"interactiveZoom\": {}, \"grid\": {{ \"visible\": {}, \"occupied_cells\": {} }}, \"shade\": {} }},",
+        "  \"settings\": {{ \"interactiveLook\": {}, \"interactiveZoom\": {}, \"grid\": {{ \"visibility\": {}, \"occupied_cells\": {} }}, \"shade\": {} }},",
         camera.interactive_look,
         camera.interactive_zoom,
-        parsed.settings.grid.occupied_cells,
+        if parsed.settings.grid.occupied_cells { 1 } else { 0 },
         parsed.settings.grid.occupied_cells,
         parsed.settings.sprite.shade,
     );

@@ -1,10 +1,10 @@
-use crate::source::{SourceScope, scan_source_context, strip_line_comment};
+use crate::source::{SourceScope, SourceToken, scan_source_context};
 use crate::{
-    LevelPathPartSyntax, MapHeaderTokenSyntax, RewriteEffectCommandSyntax,
-    SceneEffectCommandSyntax, SceneStateLhsSyntax, SoundSettingValueSyntax, level_path_part_syntax,
-    map_header_token_syntax, metadata_directive_value_token_index,
-    rewrite_direction_prefix_token_index, rewrite_effect_command_syntax,
-    scene_effect_command_syntax, scene_state_lhs_syntax, sound_setting_value_syntax,
+    LevelPathPartSyntax, MapHeaderTokenSyntax, RewriteEffectCommandSyntax, SceneStateLhsSyntax,
+    SoundSettingValueSyntax, level_path_part_syntax, map_header_token_syntax,
+    metadata_directive_value_token_index, rewrite_direction_prefix_token_index,
+    rewrite_effect_command_syntax, rewrite_effect_semantic_tokens, scene_effect_command_syntax,
+    scene_effect_semantic_tokens, scene_state_lhs_syntax, sound_setting_value_syntax,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -14,6 +14,7 @@ pub enum SemanticKind {
     Binding,
     Effect,
     Emission,
+    Object,
     Input,
     State,
     Group,
@@ -68,10 +69,10 @@ pub fn semantic_tokens(source: &str) -> Vec<SemanticToken> {
     let context = scan_source_context(source);
     let mut tokens = Vec::new();
     for line in &context.lines {
-        let raw = strip_line_comment(&line.content);
-        let line_tokens = line_tokens(raw, line.start);
+        let line_tokens = source_tokens_as_line_tokens(&line.token_spans);
         scan_semantic_line(line.scope, &line_tokens, &mut tokens);
     }
+    tokens.extend(crate::surface_document_semantic_tokens(source));
     tokens
 }
 
@@ -320,9 +321,9 @@ const TOP_LEVEL_COMPLETION_KEYWORDS: &[&str] = &[
     "import",
     "levels",
     "levels3",
-    "model",
     "music",
     "puzzle",
+    "puzzle3",
     "resources",
     "scene",
     "sfx",
@@ -455,7 +456,6 @@ const COMPLETION_KEYWORDS: &[&str] = &[
     "levels3",
     "lose_conditions",
     "map",
-    "model",
     "music",
     "objects",
     "of",
@@ -500,6 +500,7 @@ const COMPLETION_KEYWORDS: &[&str] = &[
 struct LineToken<'a> {
     text: &'a str,
     start: usize,
+    end: usize,
 }
 
 fn scan_semantic_line(
@@ -521,6 +522,7 @@ fn scan_semantic_line(
     scan_authoring_semantic_line(scope, tokens, ranges);
     scan_rewrite_direction_prefix(tokens, ranges);
     if !is_scene_semantic_scope(scope) && first.text != "scene" {
+        scan_rewrite_effect_line(scope, tokens, ranges);
         return;
     }
     scan_scene_semantic_line(tokens, ranges);
@@ -604,6 +606,8 @@ fn scan_authoring_semantic_line(
 
     scan_levels_header(tokens, ranges);
     scan_level_header(tokens, ranges);
+    scan_layer_assignment_line(scope, tokens, ranges);
+    scan_render_setting_line(scope, tokens, ranges);
 
     if is_scene_semantic_scope(scope)
         && let Some((index, syntax)) = scene_state_lhs_syntax(&token_texts)
@@ -613,6 +617,60 @@ fn scan_authoring_semantic_line(
             SceneStateLhsSyntax::PuzzleSlot | SceneStateLhsSyntax::Variable => SemanticKind::State,
         };
         add_token_range(ranges, name, kind);
+    }
+}
+
+fn scan_layer_assignment_line(
+    scope: Option<SourceScope>,
+    tokens: &[LineToken<'_>],
+    ranges: &mut Vec<SemanticToken>,
+) {
+    if scope != Some(SourceScope::Layers) {
+        return;
+    }
+    let Some(separator) = tokens.iter().position(|token| token.text == "=") else {
+        return;
+    };
+    if separator > 0 {
+        add_token_range(ranges, tokens[0], SemanticKind::Group);
+    }
+    for object in &tokens[separator + 1..] {
+        add_selector_object_token(ranges, *object);
+    }
+}
+
+fn add_selector_object_token(ranges: &mut Vec<SemanticToken>, token: LineToken<'_>) {
+    let head = token
+        .text
+        .trim_matches(|ch: char| matches!(ch, '[' | ']' | '(' | ')' | '|'));
+    let head_len = head.find([':', '{']).unwrap_or(head.len());
+    if head_len == 0 {
+        return;
+    }
+    let Some(relative_start) = token.text.find(&head[..head_len]) else {
+        return;
+    };
+    add_token_subrange(
+        ranges,
+        token,
+        relative_start,
+        relative_start + head_len,
+        SemanticKind::Object,
+    );
+}
+
+fn scan_render_setting_line(
+    scope: Option<SourceScope>,
+    tokens: &[LineToken<'_>],
+    ranges: &mut Vec<SemanticToken>,
+) {
+    if scope != Some(SourceScope::Other) {
+        return;
+    }
+    if let Some(first) = tokens.first().copied()
+        && first.text == "shade"
+    {
+        add_token_range(ranges, first, SemanticKind::Keyword);
     }
 }
 
@@ -709,6 +767,34 @@ fn scan_rewrite_direction_prefix(tokens: &[LineToken<'_>], ranges: &mut Vec<Sema
     add_frame_orientation_token(ranges, tokens[index]);
 }
 
+fn scan_rewrite_effect_line(
+    scope: Option<SourceScope>,
+    tokens: &[LineToken<'_>],
+    ranges: &mut Vec<SemanticToken>,
+) {
+    if let Some(arrow) = tokens.iter().position(|token| token.text == "->") {
+        let rhs = &tokens[arrow + 1..];
+        let effect_start = rhs
+            .iter()
+            .rposition(|token| token.text.contains(']'))
+            .map_or(0, |index| index + 1);
+        if effect_start < rhs.len() {
+            scan_rewrite_effect_tokens(&rhs[effect_start..], ranges);
+        }
+        return;
+    }
+
+    if scope != Some(SourceScope::Other) {
+        return;
+    }
+    scan_rewrite_effect_tokens(tokens, ranges);
+}
+
+fn scan_rewrite_effect_tokens(tokens: &[LineToken<'_>], ranges: &mut Vec<SemanticToken>) {
+    let source_tokens = line_tokens_as_source_tokens(tokens);
+    ranges.extend(rewrite_effect_semantic_tokens(&source_tokens));
+}
+
 fn rewrite3_prefix_token_index(tokens: &[&str]) -> Option<usize> {
     let mut index = 0usize;
     while tokens.get(index).is_some_and(|token| {
@@ -789,7 +875,6 @@ fn scan_scene_semantic_line(tokens: &[LineToken<'_>], ranges: &mut Vec<SemanticT
         "button" => {
             scan_button_line(tokens, ranges);
         }
-        "keys" | "view" | "rules" | "resources" | "state" => {}
         _ => {}
     }
 
@@ -896,123 +981,19 @@ fn add_command_token(ranges: &mut Vec<SemanticToken>, token: LineToken<'_>) {
 }
 
 fn scan_scene_effect_tokens(tokens: &[LineToken<'_>], ranges: &mut Vec<SemanticToken>) {
-    let Some(first) = tokens.first().copied() else {
-        return;
-    };
-
-    if first.text.starts_with("cursor.") {
-        add_cursor_token(ranges, first);
-        return;
-    }
-
-    if first.text.contains('.') {
-        let mut parts = first.text.split('.');
-        if let Some(target) = parts.next() {
-            add_token_part_range(ranges, first, target, SemanticKind::Scene);
-        }
-        if let Some(effect) = parts.next() {
-            add_token_part_range(ranges, first, effect, SemanticKind::Effect);
-        }
-        return;
-    }
-
-    if matches!(first.text, "start" | "continue") && scan_level_flow_effect_tokens(tokens, ranges) {
-        return;
-    }
-
-    match scene_effect_command_syntax(first.text) {
-        Some(SceneEffectCommandSyntax::InputTarget) => {
-            add_token_range(ranges, first, SemanticKind::Effect);
-            if let Some(input) = tokens.get(1).copied() {
-                add_command_token(ranges, input);
-            }
-        }
-        Some(SceneEffectCommandSyntax::ComponentEffectTarget) => {
-            add_token_range(ranges, first, SemanticKind::Effect);
-            if let Some(effect) = tokens.get(1).copied() {
-                add_command_token(ranges, effect);
-            }
-        }
-        Some(SceneEffectCommandSyntax::SceneTarget) => {
-            add_token_range(ranges, first, SemanticKind::Effect);
-            if let Some(scene) = tokens.get(1).copied() {
-                add_token_range(ranges, scene, SemanticKind::Scene);
-            }
-        }
-        Some(SceneEffectCommandSyntax::AssetTarget) => {
-            let kind = if parser_emission(first.text) {
-                SemanticKind::Emission
-            } else {
-                SemanticKind::Effect
-            };
-            add_token_range(ranges, first, kind);
-            if let Some(asset) = tokens.get(1).copied() {
-                add_token_range(ranges, asset, SemanticKind::Asset);
-            }
-        }
-        Some(SceneEffectCommandSyntax::OptionalAssetTarget) => {
-            add_token_range(ranges, first, SemanticKind::Effect);
-            if let Some(asset) = tokens.get(1).copied() {
-                add_token_range(ranges, asset, SemanticKind::Asset);
-            }
-        }
-        Some(SceneEffectCommandSyntax::Plain) => {
-            let kind = if parser_emission(first.text) {
-                SemanticKind::Emission
-            } else {
-                SemanticKind::Effect
-            };
-            add_token_range(ranges, first, kind);
-        }
-        None => {}
-    }
+    let source_tokens = line_tokens_as_source_tokens(tokens);
+    ranges.extend(scene_effect_semantic_tokens(&source_tokens));
 }
 
-fn scan_level_flow_effect_tokens(
-    tokens: &[LineToken<'_>],
-    ranges: &mut Vec<SemanticToken>,
-) -> bool {
-    match tokens {
-        [command, levels, in_keyword, scene]
-            if levels.text == "levels" && in_keyword.text == "in" =>
-        {
-            add_token_range(ranges, *command, SemanticKind::Effect);
-            add_token_range(ranges, *levels, SemanticKind::Keyword);
-            add_token_range(ranges, *in_keyword, SemanticKind::Keyword);
-            add_token_range(ranges, *scene, SemanticKind::Scene);
-            true
-        }
-        [command, levels, scope, in_keyword, scene]
-            if levels.text == "levels" && in_keyword.text == "in" =>
-        {
-            add_token_range(ranges, *command, SemanticKind::Effect);
-            add_token_range(ranges, *levels, SemanticKind::Keyword);
-            add_token_range(ranges, *scope, SemanticKind::Scene);
-            add_token_range(ranges, *in_keyword, SemanticKind::Keyword);
-            add_token_range(ranges, *scene, SemanticKind::Scene);
-            true
-        }
-        _ => false,
-    }
-}
-
-fn parser_emission(token: &str) -> bool {
-    matches!(
-        rewrite_effect_command_syntax(token),
-        Some(RewriteEffectCommandSyntax::Emission)
-    )
-}
-
-fn add_cursor_token(ranges: &mut Vec<SemanticToken>, token: LineToken<'_>) {
-    add_token_part_range(ranges, token, "cursor", SemanticKind::State);
-    if let Some((_, tail)) = token.text.split_once('.') {
-        let kind = if matches!(tail, "prev" | "next") {
-            SemanticKind::Effect
-        } else {
-            SemanticKind::Literal
-        };
-        add_token_part_range(ranges, token, tail, kind);
-    }
+fn line_tokens_as_source_tokens(tokens: &[LineToken<'_>]) -> Vec<SourceToken> {
+    tokens
+        .iter()
+        .map(|token| SourceToken {
+            text: token.text.to_string(),
+            start: token.start,
+            end: token.end,
+        })
+        .collect()
 }
 
 fn add_token_range(ranges: &mut Vec<SemanticToken>, token: LineToken<'_>, kind: SemanticKind) {
@@ -1020,24 +1001,6 @@ fn add_token_range(ranges: &mut Vec<SemanticToken>, token: LineToken<'_>, kind: 
         return;
     };
     ranges.push(SemanticToken { start, end, kind });
-}
-
-fn add_token_part_range(
-    ranges: &mut Vec<SemanticToken>,
-    token: LineToken<'_>,
-    part: &str,
-    kind: SemanticKind,
-) {
-    if part.is_empty() {
-        return;
-    }
-    if let Some(relative) = token.text.find(part) {
-        ranges.push(SemanticToken {
-            start: token.start + relative,
-            end: token.start + relative + part.len(),
-            kind,
-        });
-    }
 }
 
 fn add_token_subrange(
@@ -1092,31 +1055,21 @@ fn identifier_bounds(token: LineToken<'_>) -> Option<(usize, usize)> {
         .char_indices()
         .rev()
         .find_map(|(index, ch)| is_word_continue(ch).then_some(index + ch.len_utf8()))?;
-    (start_offset < end_offset).then_some((token.start + start_offset, token.start + end_offset))
+    let start = token.start + start_offset;
+    let end = token.start + end_offset;
+    debug_assert!(end <= token.end);
+    (start < end).then_some((start, end))
 }
 
-fn line_tokens<'a>(line: &'a str, line_offset: usize) -> Vec<LineToken<'a>> {
-    let mut tokens = Vec::new();
-    let mut start = None;
-    for (index, ch) in line.char_indices() {
-        if ch.is_whitespace() {
-            if let Some(token_start) = start.take() {
-                tokens.push(LineToken {
-                    text: &line[token_start..index],
-                    start: line_offset + token_start,
-                });
-            }
-        } else if start.is_none() {
-            start = Some(index);
-        }
-    }
-    if let Some(token_start) = start {
-        tokens.push(LineToken {
-            text: &line[token_start..],
-            start: line_offset + token_start,
-        });
-    }
+fn source_tokens_as_line_tokens(tokens: &[SourceToken]) -> Vec<LineToken<'_>> {
     tokens
+        .iter()
+        .map(|token| LineToken {
+            text: token.text.as_str(),
+            start: token.start,
+            end: token.end,
+        })
+        .collect()
 }
 
 fn is_word_start(ch: char) -> bool {
@@ -1159,6 +1112,78 @@ win -> sfx clear
             token.start == scene_sfx_start
                 && token.end == scene_sfx_start + "sfx".len()
                 && token.kind == SemanticKind::Emission
+        }));
+    }
+
+    #[test]
+    fn classifies_rewrite_effects_from_parser_owned_tokens() {
+        let source = r#"
+title rewrite_effect_semantics
+puzzle default {
+rules {
+once [ Player ] -> [ Player ] sfx clear
+set score = 1
+}
+}
+"#;
+        let tokens = semantic_tokens(source);
+        let sfx_start = source.find("sfx clear").unwrap();
+        let clear_start = source.find("clear").unwrap();
+        let set_start = source.find("set score").unwrap();
+        let score_start = source.find("score").unwrap();
+
+        assert!(tokens.iter().any(|token| {
+            token.start == sfx_start
+                && token.end == sfx_start + "sfx".len()
+                && token.kind == SemanticKind::Emission
+        }));
+        assert!(tokens.iter().any(|token| {
+            token.start == clear_start
+                && token.end == clear_start + "clear".len()
+                && token.kind == SemanticKind::Asset
+        }));
+        assert!(tokens.iter().any(|token| {
+            token.start == set_start
+                && token.end == set_start + "set".len()
+                && token.kind == SemanticKind::Effect
+        }));
+        assert!(tokens.iter().any(|token| {
+            token.start == score_start
+                && token.end == score_start + "score".len()
+                && token.kind == SemanticKind::State
+        }));
+    }
+
+    #[test]
+    fn classifies_same_spelling_by_surface_role() {
+        let source = r#"
+title semantic_surface_roles
+
+scene title {
+view {
+title game.title
+}
+}
+"#;
+        let tokens = semantic_tokens(source);
+        let metadata_title_start = source.find("title semantic_surface_roles").unwrap();
+        let scene_title_start = source.find("scene title").unwrap() + "scene ".len();
+        let component_title_start = source.rfind("title game.title").unwrap();
+
+        assert!(tokens.iter().any(|token| {
+            token.start == metadata_title_start
+                && token.end == metadata_title_start + "title".len()
+                && token.kind == SemanticKind::Keyword
+        }));
+        assert!(tokens.iter().any(|token| {
+            token.start == scene_title_start
+                && token.end == scene_title_start + "title".len()
+                && token.kind == SemanticKind::Scene
+        }));
+        assert!(tokens.iter().any(|token| {
+            token.start == component_title_start
+                && token.end == component_title_start + "title".len()
+                && token.kind == SemanticKind::Keyword
         }));
     }
 

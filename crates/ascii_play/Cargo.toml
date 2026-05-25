@@ -9,5 +9,7 @@ name = "ascii-play"
 path = "src/main.rs"
 
 [dependencies]
+puzzle-core = { path = "../core" }
+puzzle3d-model = { path = "../puzzle3d_model" }
 puzzle-lang = { path = "../lang" }
 puzzle-play = { path = "../play" }

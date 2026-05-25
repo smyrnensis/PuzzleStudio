@@ -9,6 +9,7 @@ mod puzzlescript;
 mod semantic;
 mod source;
 mod source_target;
+mod surface;
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 #[cfg(not(target_arch = "wasm32"))]
@@ -32,17 +33,17 @@ use level::{LevelBlock, parse_level};
 pub use loaded::{
     ArrowKey, AsciiLegend, AssetDef, AssetKind, AssetsDef, Controls, ForSource, GoalClause,
     GoalCondition, GoalExpr, GoalValue, KeyBinding, KeyTrigger, Level, LevelMenuDef,
-    LevelMenuLocked, LevelRegionDef, LoadedDocument, LoadedDocumentModel, LoadedDocumentScene,
-    LoadedGame, MenuButtonDef, MenuCommand, MenuCommandBinding, MenuComponent, MenuContainerDef,
+    LevelMenuLocked, LevelRegionDef, LoadedDocument, LoadedDocumentModel, LoadedGame,
+    MenuButtonDef, MenuCommand, MenuCommandBinding, MenuComponent, MenuContainerDef,
     MenuDataBinding, MenuDataDef, MenuDef, MenuEmit, MenuForDef, MenuInstanceDef, MenuValueExpr,
-    ModelKind, ModelWindowComponent, MusicSoundDef, PuzzleScreenDef, PuzzleViewDef,
-    ResourceSelection, RuleEmission, SceneAlignDef, SceneAlignXDef, SceneAlignYDef, SceneButtonDef,
-    SceneComponent, SceneContainerDef, SceneDef, SceneEffect, SceneEffectParam, SceneExpr,
-    SceneForDef, SceneLayoutDef, ScenePuzzleDef, ScenePuzzleInitializer, ScenePuzzleRule,
-    SceneResources, SceneSizeDef, SceneStateDef, SceneStateLifetime, SceneTextContent,
-    SceneTextDef, SceneTitleDef, SceneTransition, SceneTransitionTrigger, SceneValue, SceneVarDef,
-    SfxSoundDef, SoundsDef, ThemeDef, ThemeVariableDef, ViewportModeDef, ViewportSizeDef,
-    VisualAliasDef, VisualColorDef, VisualSpriteDef, VisualSpriteKind, VisualsDef,
+    MusicSoundDef, PuzzleScreenDef, PuzzleViewDef, ResourceSelection, RuleEmission, SceneAlignDef,
+    SceneAlignXDef, SceneAlignYDef, SceneButtonDef, SceneComponent, SceneContainerDef, SceneDef,
+    SceneEffect, SceneEffectParam, SceneExpr, SceneForDef, SceneLayoutDef, ScenePuzzleDef,
+    ScenePuzzleInitializer, ScenePuzzleRule, SceneResources, SceneSizeDef, SceneStateDef,
+    SceneStateLifetime, SceneTextContent, SceneTextDef, SceneTitleDef, SceneTransition,
+    SceneTransitionTrigger, SceneValue, SceneVarDef, SfxSoundDef, SoundsDef, ThemeDef,
+    ThemeVariableDef, ViewportModeDef, ViewportSizeDef, VisualAliasDef, VisualColorDef,
+    VisualSpriteDef, VisualSpriteKind, VisualsDef,
 };
 use puzzle_core::{
     ComparisonOp, CompiledGame, Effect, GapTerm, GlobalId, GlobalUpdateOp, Guard, InputId, LayerId,
@@ -52,14 +53,22 @@ use puzzle_core::{
 };
 pub use puzzle3d_model::{
     ParseError3, ParsedPuzzle3, VisualFixtureExportError3, export_visual_fixture_json,
-    export_visual_fixture_json_with_title, parse_puzzle3d,
+    export_visual_fixture_json_with_title, export_visual_fixture_json_with_title_and_scenes,
+    parse_puzzle3d,
 };
 pub use puzzlescript::translate_puzzlescript_to_canonical;
 pub use semantic::{SemanticKind, SemanticToken, semantic_tokens};
-use source::{logical_lines, split_tokens, strip_line_comment};
+use source::{
+    SourceScope, SourceToken, logical_lines, scan_source_context, source_line_tokens, split_tokens,
+    strip_line_comment,
+};
 pub use source_target::{
     SoundSourceTargetKind, SourceTarget, SourceTargetKind, resolve_source_target,
     source_target_json,
+};
+use surface::{
+    SourceSpan, SurfaceDocument, SurfaceNodeKind, SurfaceRewriteEffect, SurfaceSceneEffect,
+    SurfaceSemanticKind, SurfaceSemanticToken, SurfaceSink,
 };
 
 const ANONYMOUS_MOVEMENT_SCRATCH: ScratchId = ScratchId(0);
@@ -88,7 +97,163 @@ pub fn parse_game(source: &str) -> Result<LoadedDocument, AppError> {
 }
 
 pub fn parse_game2d(source: &str) -> Result<LoadedGame, AppError> {
+    let _surface = parse_surface_document(source);
     parse_game2d_expanded(source)
+}
+
+pub(crate) fn parse_surface_document(source: &str) -> SurfaceDocument {
+    let context = scan_source_context(source);
+    let mut sink = SurfaceSink::default();
+    for line in &context.lines {
+        record_surface_document_line(line.scope, &line.token_spans, &mut sink);
+    }
+    sink.into_document()
+}
+
+pub(crate) fn surface_document_semantic_tokens(source: &str) -> Vec<semantic::SemanticToken> {
+    project_surface_semantic_tokens(&parse_surface_document(source).semantic_tokens)
+}
+
+fn record_surface_document_line(
+    scope: Option<SourceScope>,
+    tokens: &[SourceToken],
+    sink: &mut SurfaceSink,
+) {
+    if record_document_prelude_surface_line(scope, tokens, sink) {
+        return;
+    }
+    if tokens
+        .first()
+        .is_some_and(|token| token.text.as_str() == "scene")
+    {
+        record_scene_surface_line(scope, tokens, sink);
+        return;
+    }
+    if is_scene_surface_scope(scope) {
+        record_scene_surface_line(scope, tokens, sink);
+        return;
+    }
+    record_rewrite_surface_line(scope, tokens, sink);
+}
+
+fn record_document_prelude_surface_line(
+    scope: Option<SourceScope>,
+    tokens: &[SourceToken],
+    sink: &mut SurfaceSink,
+) -> bool {
+    if scope.is_some() {
+        return false;
+    }
+    let Some(first) = tokens.first() else {
+        return false;
+    };
+    if matches!(
+        first.text.as_str(),
+        "title" | "subtitle" | "author" | "homepage"
+    ) {
+        add_scene_effect_token_range(sink, first, SurfaceSemanticKind::Keyword);
+        if let Some(value) = tokens.get(1) {
+            add_scene_effect_token_range(sink, value, SurfaceSemanticKind::String);
+        }
+        return true;
+    }
+    false
+}
+
+fn is_scene_surface_scope(scope: Option<SourceScope>) -> bool {
+    matches!(
+        scope,
+        Some(
+            SourceScope::Scene
+                | SourceScope::SceneView
+                | SourceScope::SceneState
+                | SourceScope::SceneKeys
+                | SourceScope::SceneTransitions
+                | SourceScope::LevelMenu
+        )
+    )
+}
+
+fn record_scene_surface_line(
+    scope: Option<SourceScope>,
+    tokens: &[SourceToken],
+    sink: &mut SurfaceSink,
+) {
+    let Some(first) = tokens.first() else {
+        return;
+    };
+    if first.text == "scene" {
+        add_scene_effect_token_range(sink, first, SurfaceSemanticKind::Keyword);
+        if let Some(name) = tokens.get(1) {
+            add_scene_effect_token_range(sink, name, SurfaceSemanticKind::Scene);
+        }
+        return;
+    }
+    if scene_block_keyword(&first.text)
+        || puzzle_scene::SceneComponentKind::from_keyword(&first.text).is_some()
+    {
+        add_scene_effect_token_range(sink, first, SurfaceSemanticKind::Keyword);
+    }
+    if let Some(arrow) = tokens.iter().position(|token| token.text == "->") {
+        if tokens
+            .iter()
+            .any(|token| token.text.contains('[') || token.text.contains(']'))
+        {
+            return;
+        }
+        record_scene_condition_surface_tokens(&tokens[..arrow], sink);
+        sink.extend(scene_effect_surface_document(&tokens[arrow + 1..]));
+        return;
+    }
+    if first.text == "button" || scope == Some(SourceScope::LevelMenu) {
+        return;
+    }
+    sink.extend(scene_effect_surface_document(tokens));
+}
+
+fn record_scene_condition_surface_tokens(tokens: &[SourceToken], sink: &mut SurfaceSink) {
+    let Some(first) = tokens.first() else {
+        return;
+    };
+    if first.text == "if" {
+        add_scene_effect_token_range(sink, first, SurfaceSemanticKind::Keyword);
+    }
+}
+
+fn scene_block_keyword(value: &str) -> bool {
+    matches!(
+        value,
+        "inputs"
+            | "keys"
+            | "on_scene_start"
+            | "resources"
+            | "rules"
+            | "state"
+            | "transitions"
+            | "view"
+    )
+}
+
+fn record_rewrite_surface_line(
+    scope: Option<SourceScope>,
+    tokens: &[SourceToken],
+    sink: &mut SurfaceSink,
+) {
+    if let Some(arrow) = tokens.iter().position(|token| token.text == "->") {
+        let rhs = &tokens[arrow + 1..];
+        let effect_start = rhs
+            .iter()
+            .rposition(|token| token.text.contains(']'))
+            .map_or(0, |index| index + 1);
+        if effect_start < rhs.len() {
+            sink.extend(rewrite_effect_surface_document(&rhs[effect_start..]));
+        }
+        return;
+    }
+
+    if scope == Some(SourceScope::Other) {
+        sink.extend(rewrite_effect_surface_document(tokens));
+    }
 }
 
 pub fn export_loaded_document_visual_fixture_json(
@@ -99,8 +264,14 @@ pub fn export_loaded_document_visual_fixture_json(
             "visual fixture export currently requires a single puzzle3 model".to_string(),
         ));
     };
-    export_visual_fixture_json_with_title(puzzle, Some(&document.title))
-        .map_err(|error| AppError::Parse(format!("failed to export puzzle3 fixture: {error:?}")))
+    let (scene_fields, level_bundle_names) = puzzle3_scene_fixture_fields(document);
+    export_visual_fixture_json_with_title_and_scenes(
+        puzzle,
+        Some(&document.title),
+        scene_fields.as_deref(),
+        &level_bundle_names,
+    )
+    .map_err(|error| AppError::Parse(format!("failed to export puzzle3 fixture: {error:?}")))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -149,12 +320,7 @@ fn parse_game_document(source: &str) -> Result<LoadedDocument, AppError> {
             let puzzle = parse_puzzle3d(&model_source).map_err(|error| match error {
                 ParseError3::Message(message) => AppError::Parse(message),
             })?;
-            let scenes = puzzle
-                .scenes
-                .iter()
-                .cloned()
-                .map(LoadedDocumentScene::Puzzle3d)
-                .collect();
+            let scenes = default_3d_scenes_if_empty(parse_document_scenes(source)?, &name);
             Ok(LoadedDocument {
                 title: shell.title,
                 subtitle: shell.subtitle,
@@ -168,10 +334,150 @@ fn parse_game_document(source: &str) -> Result<LoadedDocument, AppError> {
                 models: vec![LoadedDocumentModel::Puzzle3d { name, puzzle }],
             })
         }
-        GameDocumentKind::Mixed => Err(AppError::Parse(
-            "mixed 2D and 3D game documents are not supported by parse_game yet".to_string(),
-        )),
+        GameDocumentKind::Mixed => parse_mixed_game_document(source),
     }
+}
+
+fn parse_mixed_game_document(source: &str) -> Result<LoadedDocument, AppError> {
+    let shell = parse_document_shell(source)?;
+    let sources = split_mixed_game_document_source(source)?;
+    let model_2d_name =
+        first_model_name(&sources.puzzle2d, "puzzle").unwrap_or_else(|| "default".to_string());
+    let game_2d = parse_game2d(&sources.puzzle2d)?;
+    let model_3d_name =
+        first_model_name(&sources.puzzle3d, "puzzle3").unwrap_or_else(|| "default".to_string());
+    let puzzle_3d = parse_puzzle3d(&sources.puzzle3d).map_err(|error| match error {
+        ParseError3::Message(message) => AppError::Parse(message),
+    })?;
+
+    let scenes = parse_document_scenes(source)?;
+
+    Ok(LoadedDocument {
+        title: shell.title,
+        subtitle: shell.subtitle,
+        author: shell.author,
+        homepage: shell.homepage,
+        default_wait_ms: shell.default_wait_ms,
+        sounds: shell.sounds,
+        theme: shell.theme,
+        assets: shell.assets,
+        scenes,
+        models: vec![
+            LoadedDocumentModel::Puzzle2d {
+                name: model_2d_name,
+                game: game_2d,
+            },
+            LoadedDocumentModel::Puzzle3d {
+                name: model_3d_name,
+                puzzle: puzzle_3d,
+            },
+        ],
+    })
+}
+
+#[derive(Default)]
+struct MixedDocumentSources {
+    puzzle2d: String,
+    puzzle3d: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MixedSectionTarget {
+    Puzzle2d,
+    Puzzle3d,
+    Shared,
+}
+
+fn split_mixed_game_document_source(source: &str) -> Result<MixedDocumentSources, AppError> {
+    let raw_lines = source.lines().collect::<Vec<_>>();
+    let mut sources = MixedDocumentSources::default();
+    let mut index = 0usize;
+    while index < raw_lines.len() {
+        let line = raw_lines[index];
+        let trimmed = strip_line_comment(line).trim();
+        if trimmed.is_empty() {
+            push_raw_line(&mut sources.puzzle2d, line);
+            push_raw_line(&mut sources.puzzle3d, line);
+            index += 1;
+            continue;
+        }
+
+        let tokens = split_tokens(trimmed);
+        let target = match tokens.as_slice() {
+            ["title", ..]
+            | ["subtitle", ..]
+            | ["author", ..]
+            | ["homepage", ..]
+            | ["default_wait_time", ..]
+            | ["sounds", ..]
+            | ["theme", ..]
+            | ["assets", ..] => MixedSectionTarget::Shared,
+            ["puzzle", ..] | ["levels", ..] | ["sprites", ..] | ["level", ..] => {
+                MixedSectionTarget::Puzzle2d
+            }
+            ["puzzle3", ..] | ["levels3", ..] | ["sprites3", ..] => MixedSectionTarget::Puzzle3d,
+            ["scene", ..] => {
+                let next = skip_raw_top_level_block(&raw_lines, index);
+                index = next;
+                continue;
+            }
+            ["var", ..] | ["const", ..] | ["persistent", ..] => MixedSectionTarget::Puzzle2d,
+            _ => MixedSectionTarget::Puzzle2d,
+        };
+        let next = if mixed_section_is_block(trimmed, tokens.as_slice()) {
+            skip_raw_top_level_block(&raw_lines, index)
+        } else {
+            index + 1
+        };
+        push_raw_block(&raw_lines, index, next, target, &mut sources);
+        index = next;
+    }
+    Ok(sources)
+}
+
+fn mixed_section_is_block(trimmed: &str, tokens: &[&str]) -> bool {
+    if trimmed.ends_with('{') {
+        return true;
+    }
+    matches!(
+        tokens,
+        ["puzzle", ..]
+            | ["levels", ..]
+            | ["sprites", ..]
+            | ["puzzle3", ..]
+            | ["levels3", ..]
+            | ["sprites3", ..]
+            | ["sounds", ..]
+            | ["theme", ..]
+            | ["assets", ..]
+            | ["level", ..]
+    )
+}
+
+fn push_raw_block(
+    raw_lines: &[&str],
+    start: usize,
+    end: usize,
+    target: MixedSectionTarget,
+    sources: &mut MixedDocumentSources,
+) {
+    for line in &raw_lines[start..end] {
+        match target {
+            MixedSectionTarget::Puzzle2d => push_raw_line(&mut sources.puzzle2d, line),
+            MixedSectionTarget::Puzzle3d => push_raw_line(&mut sources.puzzle3d, line),
+            MixedSectionTarget::Shared => {
+                push_raw_line(&mut sources.puzzle2d, line);
+                push_raw_line(&mut sources.puzzle3d, line);
+            }
+        }
+    }
+}
+
+fn push_raw_line(target: &mut String, line: &str) {
+    if !target.is_empty() {
+        target.push('\n');
+    }
+    target.push_str(line);
 }
 
 fn loaded_game_document_shell(
@@ -187,13 +493,356 @@ fn loaded_game_document_shell(
         sounds: game.sounds.clone(),
         theme: game.theme.clone(),
         assets: game.assets.clone(),
-        scenes: game
-            .scenes
-            .iter()
-            .cloned()
-            .map(LoadedDocumentScene::Puzzle2d)
-            .collect(),
+        scenes: game.scenes.clone(),
         models,
+    }
+}
+
+fn parse_document_scenes(source: &str) -> Result<Vec<SceneDef>, AppError> {
+    let lines = logical_lines(source)?;
+    let mut scenes = Vec::new();
+    let mut i = 0;
+    while i < lines.len() {
+        let tokens = split_tokens(&lines[i]);
+        if matches!(tokens.as_slice(), ["scene", ..]) {
+            let (scene, next_i) = parse_scene_definition_with_options(
+                &lines,
+                i,
+                SceneParseOptions {
+                    allow_legacy_keys: true,
+                },
+            )?;
+            scenes.push(scene);
+            i = next_i;
+        } else {
+            i += 1;
+        }
+    }
+    Ok(scenes)
+}
+
+fn default_3d_scenes_if_empty(mut scenes: Vec<SceneDef>, model_name: &str) -> Vec<SceneDef> {
+    if !scenes.is_empty() {
+        return scenes;
+    }
+    scenes.push(SceneDef {
+        name: "playing".to_string(),
+        layout: SceneLayoutDef::default(),
+        resources: SceneResources::default(),
+        state: SceneStateDef {
+            variables: Vec::new(),
+            puzzles: vec![ScenePuzzleDef {
+                name: "board".to_string(),
+                kind: "puzzle3".to_string(),
+                model: model_name.to_string(),
+                initializer: ScenePuzzleInitializer::CurrentLevel,
+                lifetime: SceneStateLifetime::Instance,
+            }],
+        },
+        components: vec![scene_frame_component("puzzle3", "board")],
+        key_bindings: Vec::new(),
+        transitions: Vec::new(),
+        puzzle_rule: Some(ScenePuzzleRule {
+            target: "board".to_string(),
+            rule: "rules".to_string(),
+        }),
+    });
+    scenes
+}
+
+fn puzzle3_scene_fixture_fields(document: &LoadedDocument) -> (Option<String>, Vec<String>) {
+    if document.scenes.is_empty() {
+        return (None, Vec::new());
+    }
+    let mut level_bundle_names = Vec::new();
+    let current_scene = document
+        .scenes
+        .iter()
+        .find(|scene| scene.name == "title")
+        .or_else(|| document.scenes.first())
+        .map(|scene| scene.name.as_str())
+        .unwrap_or("playing");
+    let mut out = String::new();
+    out.push_str("  \"currentScene\": ");
+    out.push_str(&json_string(current_scene));
+    out.push_str(",\n  \"scenes\": [\n");
+    for (index, scene) in document.scenes.iter().enumerate() {
+        if index > 0 {
+            out.push_str(",\n");
+        }
+        push_puzzle3_scene_json(&mut out, scene, &mut level_bundle_names);
+    }
+    out.push_str("\n  ],");
+    (Some(out), level_bundle_names)
+}
+
+fn push_puzzle3_scene_json(
+    out: &mut String,
+    scene: &SceneDef,
+    level_bundle_names: &mut Vec<String>,
+) {
+    out.push_str("    {\n");
+    out.push_str("      \"name\": ");
+    out.push_str(&json_string(&scene.name));
+    out.push_str(",\n      \"layout\": ");
+    push_puzzle3_layout_json(out, &scene.layout);
+    out.push_str(",\n      \"puzzles\": [");
+    let mut wrote_puzzle = false;
+    for puzzle in &scene.state.puzzles {
+        if puzzle.kind != "puzzle3" {
+            continue;
+        }
+        if wrote_puzzle {
+            out.push_str(", ");
+        }
+        wrote_puzzle = true;
+        out.push_str("{ \"slot\": ");
+        out.push_str(&json_string(&puzzle.name));
+        out.push_str(", \"model\": ");
+        out.push_str(&json_string(&puzzle.model));
+        out.push_str(" }");
+    }
+    out.push_str("],\n      \"keys\": {");
+    let mut wrote_key = false;
+    for binding in &scene.key_bindings {
+        let Some(action) = puzzle3_scene_action_json(&binding.effect, level_bundle_names) else {
+            continue;
+        };
+        for key in &binding.keys {
+            if wrote_key {
+                out.push_str(", ");
+            }
+            wrote_key = true;
+            out.push_str(&json_string(&key_trigger_name(key)));
+            out.push_str(": ");
+            out.push_str(&action);
+        }
+    }
+    out.push_str("},\n      \"components\": [");
+    let mut wrote_component = false;
+    for component in &scene.components {
+        if let Some(component_json) = puzzle3_scene_component_json(component, level_bundle_names) {
+            if wrote_component {
+                out.push_str(", ");
+            }
+            wrote_component = true;
+            out.push_str(&component_json);
+        }
+    }
+    out.push_str("]\n    }");
+}
+
+fn puzzle3_scene_component_json(
+    component: &SceneComponent,
+    level_bundle_names: &mut Vec<String>,
+) -> Option<String> {
+    match component {
+        SceneComponent::Frame(frame) if frame.kind == "puzzle3" => {
+            let mut out = format!(
+                "{{ \"kind\": \"puzzle3\", \"source\": {}",
+                json_string(&frame.source)
+            );
+            push_puzzle3_inline_layout_json(&mut out, &frame.layout);
+            out.push_str(" }");
+            Some(out)
+        }
+        SceneComponent::Title(title) => {
+            let mut out = format!(
+                "{{ \"kind\": \"title\", \"text\": {}",
+                json_string(&scene_expr_fixture_text(&title.content))
+            );
+            push_puzzle3_inline_layout_json(&mut out, &title.layout);
+            out.push_str(" }");
+            Some(out)
+        }
+        SceneComponent::Button(button) => {
+            let action = puzzle3_scene_action_json(&button.effect, level_bundle_names)?;
+            let mut out = format!(
+                "{{ \"kind\": \"button\", \"label\": {}, \"action\": {}",
+                json_string(&scene_expr_fixture_text(&button.label)),
+                action
+            );
+            push_puzzle3_inline_layout_json(&mut out, &button.layout);
+            out.push_str(" }");
+            Some(out)
+        }
+        SceneComponent::LevelMenu(menu) => {
+            let levels = menu.source.as_deref().unwrap_or("levels");
+            push_unique_string(level_bundle_names, levels);
+            let action = menu
+                .action
+                .as_ref()
+                .and_then(|effect| puzzle3_scene_action_json(effect, level_bundle_names))
+                .unwrap_or_else(|| {
+                    format!(
+                        "{{ \"kind\": \"start_levels\", \"levels\": {}, \"scene\": \"playing\" }}",
+                        json_string(levels)
+                    )
+                });
+            let mut out = format!(
+                "{{ \"kind\": \"level_menu\", \"levels\": {}, \"action\": {}",
+                json_string(levels),
+                action
+            );
+            push_puzzle3_inline_layout_json(&mut out, &menu.layout);
+            out.push_str(" }");
+            Some(out)
+        }
+        SceneComponent::Row(container) => puzzle3_container_json(
+            "row",
+            &container.children,
+            &container.layout,
+            level_bundle_names,
+        ),
+        SceneComponent::Column(container) => puzzle3_container_json(
+            "column",
+            &container.children,
+            &container.layout,
+            level_bundle_names,
+        ),
+        SceneComponent::Box(container) => puzzle3_container_json(
+            "box",
+            &container.children,
+            &container.layout,
+            level_bundle_names,
+        ),
+        _ => None,
+    }
+}
+
+fn puzzle3_container_json(
+    kind: &str,
+    children: &[SceneComponent],
+    layout: &SceneLayoutDef,
+    level_bundle_names: &mut Vec<String>,
+) -> Option<String> {
+    let mut out = format!("{{ \"kind\": {}, \"children\": [", json_string(kind));
+    let mut wrote = false;
+    for child in children {
+        if let Some(child_json) = puzzle3_scene_component_json(child, level_bundle_names) {
+            if wrote {
+                out.push_str(", ");
+            }
+            wrote = true;
+            out.push_str(&child_json);
+        }
+    }
+    out.push(']');
+    push_puzzle3_inline_layout_json(&mut out, layout);
+    out.push_str(" }");
+    Some(out)
+}
+
+fn puzzle3_scene_action_json(
+    effect: &SceneEffect,
+    level_bundle_names: &mut Vec<String>,
+) -> Option<String> {
+    match effect {
+        SceneEffect::Goto { scene, .. } => Some(format!(
+            "{{ \"kind\": \"goto\", \"scene\": {} }}",
+            json_string(scene)
+        )),
+        SceneEffect::StartLevel { scene, scope } => {
+            let levels = scope.as_deref().unwrap_or("levels");
+            push_unique_string(level_bundle_names, levels);
+            Some(format!(
+                "{{ \"kind\": \"start_levels\", \"levels\": {}, \"scene\": {} }}",
+                json_string(levels),
+                json_string(scene)
+            ))
+        }
+        _ => None,
+    }
+}
+
+fn scene_expr_fixture_text(expr: &SceneExpr) -> String {
+    match expr {
+        SceneExpr::Text(value) => value.clone(),
+        SceneExpr::Path(path) if path.as_slice() == ["game", "title"] => "title".to_string(),
+        SceneExpr::Path(path) => path.join("."),
+        SceneExpr::Int(value) => value.to_string(),
+        SceneExpr::Bool(value) => value.to_string(),
+        SceneExpr::Call { name, .. } => name.clone(),
+    }
+}
+
+fn push_puzzle3_inline_layout_json(out: &mut String, layout: &SceneLayoutDef) {
+    if layout.size.is_none()
+        && layout.gap.is_none()
+        && layout.align == SceneLayoutDef::default().align
+    {
+        return;
+    }
+    out.push_str(", \"layout\": ");
+    push_puzzle3_layout_json(out, layout);
+}
+
+fn push_puzzle3_layout_json(out: &mut String, layout: &SceneLayoutDef) {
+    out.push('{');
+    let mut wrote = false;
+    if let Some(size) = layout.size {
+        out.push_str("\"size\": { \"width\": ");
+        out.push_str(&size.width.to_string());
+        out.push_str(", \"height\": ");
+        out.push_str(&size.height.to_string());
+        out.push_str(" }");
+        wrote = true;
+    }
+    if let Some(gap) = layout.gap {
+        if wrote {
+            out.push_str(", ");
+        }
+        out.push_str("\"gap\": ");
+        out.push_str(&gap.to_string());
+        wrote = true;
+    }
+    if layout.align != SceneLayoutDef::default().align {
+        if wrote {
+            out.push_str(", ");
+        }
+        out.push_str("\"align\": { \"x\": ");
+        out.push_str(&json_string(match layout.align.x {
+            SceneAlignXDef::Left => "left",
+            SceneAlignXDef::Center => "center",
+            SceneAlignXDef::Right => "right",
+        }));
+        out.push_str(", \"y\": ");
+        out.push_str(&json_string(match layout.align.y {
+            SceneAlignYDef::Top => "top",
+            SceneAlignYDef::Center => "center",
+            SceneAlignYDef::Bottom => "bottom",
+        }));
+        out.push_str(" }");
+    }
+    out.push('}');
+}
+
+fn json_string(value: &str) -> String {
+    let mut out = String::from("\"");
+    for ch in value.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            ch => out.push(ch),
+        }
+    }
+    out.push('"');
+    out
+}
+
+fn push_unique_string(values: &mut Vec<String>, value: &str) {
+    if !value.is_empty() && !values.iter().any(|existing| existing == value) {
+        values.push(value.to_string());
+    }
+}
+
+fn key_trigger_name(key: &KeyTrigger) -> String {
+    match key {
+        KeyTrigger::Char(ch) => ch.to_string(),
+        KeyTrigger::Named(name) => name.clone(),
     }
 }
 
@@ -375,14 +1024,15 @@ enum GameDocumentKind {
 }
 
 fn detect_game_document_kind(source: &str) -> Result<GameDocumentKind, AppError> {
-    let lines = logical_lines(source)?;
     let mut has_2d = false;
     let mut has_3d = false;
-    for line in &lines {
-        let tokens = split_tokens(line);
-        match tokens.as_slice() {
-            ["model", "puzzle", ..] => has_2d = true,
-            ["model", "puzzle3", ..] | ["levels3", ..] | ["sprites3", ..] => has_3d = true,
+    let context = scan_source_context(source);
+    for line in &context.lines {
+        let tokens = line.tokens.iter().map(String::as_str).collect::<Vec<_>>();
+        match (line.scope, tokens.as_slice()) {
+            (None, ["puzzle", ..]) => has_2d = true,
+            (None, ["puzzle3", ..]) => has_3d = true,
+            (_, ["levels3", ..] | ["sprites3", ..]) => has_3d = true,
             _ => {}
         }
     }
@@ -394,11 +1044,16 @@ fn detect_game_document_kind(source: &str) -> Result<GameDocumentKind, AppError>
 }
 
 fn first_model_name(source: &str, kind: &str) -> Option<String> {
-    let lines = logical_lines(source).ok()?;
-    lines.iter().find_map(|line| {
-        let tokens = split_tokens(line);
+    let context = scan_source_context(source);
+    context.lines.iter().find_map(|line| {
+        if line.scope.is_some() {
+            return None;
+        }
+        let tokens = line.tokens.iter().map(String::as_str).collect::<Vec<_>>();
         match tokens.as_slice() {
-            ["model", model_kind, name, ..] if *model_kind == kind => Some((*name).to_string()),
+            [model_kind, name, ..] if line.scope.is_none() && *model_kind == kind => {
+                Some((*name).to_string())
+            }
             _ => None,
         }
     })
@@ -636,7 +1291,7 @@ fn parse_game2d_expanded(source: &str) -> Result<LoadedGame, AppError> {
         }
 
         match tokens[0] {
-            "model" => {
+            "puzzle" => {
                 let (next_i, puzzle_name) = parse_puzzle_definition(
                     &lines,
                     i,
@@ -662,11 +1317,14 @@ fn parse_game2d_expanded(source: &str) -> Result<LoadedGame, AppError> {
                 puzzle_models.push(puzzle_name);
                 i = next_i;
             }
-            "puzzle" => {
-                return Err(parse_error(
-                    line,
-                    "model definition must be: model puzzle <name>",
-                ));
+            "model" => {
+                let message = match tokens.as_slice() {
+                    ["model", "puzzle3", ..] => {
+                        "top-level 3D puzzle definition must be: puzzle3 <name>"
+                    }
+                    _ => "top-level puzzle definition must be: puzzle <name>",
+                };
+                return Err(parse_error(line, message));
             }
             "name" => {
                 return Err(parse_error(
@@ -741,7 +1399,7 @@ fn parse_game2d_expanded(source: &str) -> Result<LoadedGame, AppError> {
                 return Err(parse_error(
                     line,
                     &format!(
-                        "top-level directive must be title, subtitle, author, homepage, var, const, default_wait_time, model, levels, sprites, menu, scene, sounds, theme, or assets; found {other}"
+                        "top-level directive must be title, subtitle, author, homepage, var, const, default_wait_time, puzzle, levels, sprites, menu, scene, sounds, theme, or assets; found {other}"
                     ),
                 ));
             }
@@ -1205,10 +1863,8 @@ fn scene_entry_is_component(tokens: &[&str]) -> bool {
         | puzzle_scene::SceneComponentKind::Box
         | puzzle_scene::SceneComponentKind::For
         | puzzle_scene::SceneComponentKind::Menu => true,
-        puzzle_scene::SceneComponentKind::LevelMenu => tokens.len() == 1,
-        puzzle_scene::SceneComponentKind::Puzzle | puzzle_scene::SceneComponentKind::Puzzle3 => {
-            false
-        }
+        puzzle_scene::SceneComponentKind::LevelMenu => true,
+        puzzle_scene::SceneComponentKind::Frame => tokens.len() >= 2,
     }
 }
 
@@ -1689,23 +2345,11 @@ fn parse_puzzle_definition(
 ) -> Result<(usize, String), AppError> {
     let header = split_tokens(&lines[start]);
     let name = match header.as_slice() {
-        ["model", "puzzle", name] => *name,
-        ["puzzle", ..] => {
-            return Err(parse_error(
-                &lines[start],
-                "model definition must be: model puzzle <name>",
-            ));
-        }
-        ["model", kind, ..] => {
-            return Err(parse_error(
-                &lines[start],
-                &format!("unsupported model kind {kind}; only puzzle is supported"),
-            ));
-        }
+        ["puzzle", name] => *name,
         _ => {
             return Err(parse_error(
                 &lines[start],
-                "puzzle model header must be: model puzzle <name>",
+                "puzzle header must be: puzzle <name>",
             ));
         }
     };
@@ -2231,7 +2875,7 @@ fn resolve_level_block_puzzles(
         match unique_models.len() {
             0 => {
                 return Err(AppError::Parse(
-                    "bare levels requires one model puzzle definition".to_string(),
+                    "bare levels requires one puzzle definition".to_string(),
                 ));
             }
             1 => {
@@ -2622,10 +3266,9 @@ fn parse_condition_block_row(
             &catalog.maps,
             &catalog.object_groups,
         )? {
-            return Ok(ConditionAst::QueryValueEquals {
-                kind: QueryKindAst::CountMatches(pattern),
-                value: 0,
-            });
+            return Ok(ConditionAst::QueryValueNonZero(QueryKindAst::NoneMatches(
+                pattern,
+            )));
         }
     }
 
@@ -2647,7 +3290,7 @@ fn parse_condition_block_row(
     let tokens = split_tokens(line);
     match tokens.as_slice() {
         ["all", target, "on", cover] => {
-            let expr = format!("count([ {target} no {cover} ]) == 0");
+            let expr = format!("none([ {target} no {cover} ])");
             parse_condition_expr(
                 &expr,
                 line,
@@ -2662,7 +3305,7 @@ fn parse_condition_block_row(
             )
         }
         ["some", target, "on", cover] => {
-            let expr = format!("count([ {target} {cover} ]) > 0");
+            let expr = format!("exists([ {target} {cover} ])");
             parse_condition_expr(
                 &expr,
                 line,
@@ -2692,7 +3335,7 @@ fn parse_condition_block_row(
             )
         }
         ["no", target] => {
-            let expr = format!("count({target}) == 0");
+            let expr = format!("none({target})");
             parse_condition_expr(
                 &expr,
                 line,
@@ -3366,7 +4009,7 @@ fn parse_scratch_directive(spec: &str, line: &str, catalog: &mut Catalog) -> Res
         if let Some(values) = catalog.object_axes.get(spec) {
             (spec, ScratchKind::Enum, values.clone())
         } else {
-            (spec, ScratchKind::Flag, Vec::new())
+            (spec, ScratchKind::Marker, Vec::new())
         }
     };
     if catalog.scratch_names.contains_key(name) {
@@ -4063,6 +4706,19 @@ fn named_direction_vector(value: &str, line: &str) -> Result<(i16, i16), AppErro
 }
 
 fn parse_scene_definition(lines: &[String], start: usize) -> Result<(SceneDef, usize), AppError> {
+    parse_scene_definition_with_options(lines, start, SceneParseOptions::default())
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct SceneParseOptions {
+    allow_legacy_keys: bool,
+}
+
+fn parse_scene_definition_with_options(
+    lines: &[String],
+    start: usize,
+    options: SceneParseOptions,
+) -> Result<(SceneDef, usize), AppError> {
     let header = split_tokens(&lines[start]);
     let (name, level_menu_scene) = match header.as_slice() {
         ["scene", "level_menu"] => ("level_select", true),
@@ -4097,121 +4753,136 @@ fn parse_scene_definition(lines: &[String], start: usize) -> Result<(SceneDef, u
         screen.components.push(SceneComponent::LevelMenu(menu));
         return Ok((screen, next_i));
     }
-    let mut i = start + 1;
-    while i < lines.len() && lines[i] != "end" {
-        let tokens = split_tokens(&lines[i]);
+    let mut handler = Scene2dBlockHandler {
+        screen: &mut screen,
+        options,
+    };
+    let next = puzzle_scene::parse_scene_block_with_handler(
+        lines,
+        start + 1,
+        name,
+        puzzle_scene::SceneBlockSyntax::End,
+        &mut handler,
+    )?;
+
+    Ok((screen, next))
+}
+
+struct Scene2dBlockHandler<'a> {
+    screen: &'a mut SceneDef,
+    options: SceneParseOptions,
+}
+
+impl puzzle_scene::SceneBlockHandler for Scene2dBlockHandler<'_> {
+    type Error = AppError;
+
+    fn parse_state_block(&mut self, lines: &[String], start: usize) -> Result<usize, AppError> {
+        let (state, next_i) = parse_scene_state_block(lines, start, SceneStateLifetime::Instance)?;
+        self.screen.state.variables.extend(state.variables);
+        self.screen.state.puzzles.extend(state.puzzles);
+        Ok(next_i)
+    }
+
+    fn parse_view_block(&mut self, lines: &[String], start: usize) -> Result<usize, AppError> {
+        let (view, next_i) = parse_screen_view_block(lines, start)?;
+        self.screen.layout = view.layout;
+        self.screen.state.variables.extend(view.state.variables);
+        self.screen.state.puzzles.extend(view.state.puzzles);
+        self.screen.components.extend(view.components);
+        Ok(next_i)
+    }
+
+    fn parse_inputs_block(&mut self, lines: &[String], start: usize) -> Result<usize, AppError> {
+        let (bindings, next_i) = parse_scene_inputs_block(lines, start)?;
+        self.screen.key_bindings.extend(bindings);
+        Ok(next_i)
+    }
+
+    fn parse_keys_block(&mut self, lines: &[String], start: usize) -> Result<usize, AppError> {
+        if self.options.allow_legacy_keys {
+            let (bindings, next_i) = parse_scene_legacy_keys_block(lines, start)?;
+            self.screen.key_bindings.extend(bindings);
+            return Ok(next_i);
+        }
+        Err(parse_error(
+            &lines[start],
+            "`keys` was removed; use scene `inputs { <input> <- <key...> }` or model `inputs { <input> <- <key...> }`",
+        ))
+    }
+
+    fn parse_rules_block(&mut self, lines: &[String], start: usize) -> Result<usize, AppError> {
+        let (block, next_i) = parse_screen_transitions_block(lines, start)?;
+        self.screen.transitions.extend(block.transitions);
+        if let Some(puzzle_rule) = block.puzzle_rule {
+            self.screen.puzzle_rule = Some(puzzle_rule);
+        }
+        Ok(next_i)
+    }
+
+    fn parse_scene_start_block(
+        &mut self,
+        lines: &[String],
+        start: usize,
+    ) -> Result<usize, AppError> {
+        let (transition, next_i) = parse_scene_lifecycle_block(lines, start)?;
+        self.screen.transitions.push(transition);
+        Ok(next_i)
+    }
+
+    fn parse_inline_directive(
+        &mut self,
+        lines: &[String],
+        start: usize,
+    ) -> Result<usize, AppError> {
+        let tokens = split_tokens(&lines[start]);
         match tokens.as_slice() {
-            ["state"] => {
-                let (state, next_i) =
-                    parse_scene_state_block(lines, i, SceneStateLifetime::Instance)?;
-                screen.state.variables.extend(state.variables);
-                screen.state.puzzles.extend(state.puzzles);
-                i = next_i;
-            }
-            ["resources"] => {
-                i = parse_scene_resources_block(lines, i, &mut screen.resources)?;
-            }
+            ["resources"] => parse_scene_resources_block(lines, start, &mut self.screen.resources),
             ["var", ..]
             | ["const", ..]
             | ["persistent", "var", ..]
             | ["persistent", "const", ..] => {
-                match parse_scene_state_entry(&lines[i], SceneStateLifetime::Instance)? {
+                match parse_scene_state_entry(&lines[start], SceneStateLifetime::Instance)? {
                     ParsedSceneStateEntry::Variable(variable) => {
-                        screen.state.variables.push(variable);
+                        self.screen.state.variables.push(variable);
                     }
                     ParsedSceneStateEntry::Puzzle(_) => {
-                        return Err(parse_error(&lines[i], "var cannot define a puzzle slot"));
+                        return Err(parse_error(
+                            &lines[start],
+                            "var cannot define a puzzle slot",
+                        ));
                     }
                 }
-                i += 1;
+                Ok(start + 1)
             }
-            ["view", ..] => {
-                let (view, next_i) = parse_screen_view_block(lines, i)?;
-                screen.layout = view.layout;
-                screen.state.variables.extend(view.state.variables);
-                screen.state.puzzles.extend(view.state.puzzles);
-                screen.components.extend(view.components);
-                i = next_i;
-            }
-            ["button", ..]
-            | ["text", ..]
-            | ["title", ..]
-            | ["subtitle", ..]
-            | ["menu", ..]
-            | ["row", ..]
-            | ["column", ..]
-            | ["box", ..]
-            | ["for", ..] => {
-                let (component, next_i) = parse_screen_component(lines, i)?;
-                screen.components.push(component);
-                i = next_i;
-            }
-            ["inputs"] => {
-                let (bindings, next_i) = parse_scene_inputs_block(lines, i)?;
-                screen.key_bindings.extend(bindings);
-                i = next_i;
-            }
-            ["keys"] => {
-                return Err(parse_error(
-                    &lines[i],
-                    "`keys` was removed; use scene `inputs { <input> <- <key...> }` or model `inputs { <input> <- <key...> }`",
-                ));
-            }
-            ["rules"] => {
-                let (block, next_i) = parse_screen_transitions_block(lines, i)?;
-                screen.transitions.extend(block.transitions);
-                if let Some(puzzle_rule) = block.puzzle_rule {
-                    screen.puzzle_rule = Some(puzzle_rule);
-                }
-                i = next_i;
-            }
-            ["on_scene_start"] => {
-                let (transition, next_i) = parse_scene_lifecycle_block(lines, i)?;
-                screen.transitions.push(transition);
-                i = next_i;
-            }
-            ["on_level_start"] => {
-                return Err(parse_error(
-                    &lines[i],
-                    "on_level_start belongs inside puzzle; scene lifecycle block must be on_scene_start",
-                ));
-            }
-            ["level_menu"] => {
-                let (menu, next_i) = parse_level_menu_component(lines, i)?;
-                screen.components.push(SceneComponent::LevelMenu(menu));
-                i = next_i;
-            }
-            ["input", ..] => {
-                return Err(parse_error(
-                    &lines[i],
-                    "scene input handlers are removed; use `rules { if input == <command> -> ... }`",
-                ));
-            }
-            ["action", ..] => {
-                return Err(parse_error(
-                    &lines[i],
-                    "`action` scene handlers were removed; use `rules { if input == <name> -> ... }`",
-                ));
-            }
+            ["on_level_start"] => Err(parse_error(
+                &lines[start],
+                "on_level_start belongs inside puzzle; scene lifecycle block must be on_scene_start",
+            )),
+            ["input", ..] => Err(parse_error(
+                &lines[start],
+                "scene input handlers are removed; use `rules { if input == <command> -> ... }`",
+            )),
+            ["action", ..] => Err(parse_error(
+                &lines[start],
+                "`action` scene handlers were removed; use `rules { if input == <name> -> ... }`",
+            )),
             ["if", ..] => {
-                let (transition, next_i) = parse_screen_condition_block(lines, i)?;
-                screen.transitions.push(transition);
-                i = next_i;
+                let (transition, next_i) = parse_screen_condition_block(lines, start)?;
+                self.screen.transitions.push(transition);
+                Ok(next_i)
             }
-            [other, ..] => {
-                return Err(parse_error(
-                    &lines[i],
-                    &format!("unknown scene directive {other}"),
-                ));
+            [] => Ok(start + 1),
+            _ if scene_entry_is_component(&tokens) => {
+                let (component, next_i) = parse_screen_component(lines, start)?;
+                self.screen.components.push(component);
+                Ok(next_i)
             }
-            [] => i += 1,
+            [other, ..] => Err(parse_error(
+                &lines[start],
+                &format!("unknown scene directive {other}"),
+            )),
         }
     }
-    if i >= lines.len() {
-        return Err(parse_error(&lines[start], "scene missing end"));
-    }
-
-    Ok((screen, i + 1))
 }
 
 fn parse_scene_resources_block(
@@ -4378,21 +5049,29 @@ fn parse_layer_visibility(line: &str) -> Result<Option<(String, bool)>, AppError
     }
 }
 
-fn scene_puzzle_component(source: impl Into<String>) -> SceneComponent {
-    SceneComponent::ModelWindow(puzzle_scene::ModelWindowComponent {
-        model_kind: puzzle_scene::ModelKind::Puzzle2d,
+fn scene_frame_component(kind: impl Into<String>, source: impl Into<String>) -> SceneComponent {
+    scene_frame_component_with_layout(kind, source, SceneLayoutDef::default())
+}
+
+fn scene_frame_component_with_layout(
+    kind: impl Into<String>,
+    source: impl Into<String>,
+    layout: SceneLayoutDef,
+) -> SceneComponent {
+    SceneComponent::Frame(puzzle_scene::FrameComponent {
+        kind: kind.into(),
         source: source.into(),
-        layout: SceneLayoutDef::default(),
+        layout,
     })
+}
+
+fn scene_puzzle_component(source: impl Into<String>) -> SceneComponent {
+    scene_frame_component("puzzle", source)
 }
 
 fn scene_puzzle_component_source(component: &SceneComponent) -> Option<&str> {
     match component {
-        SceneComponent::ModelWindow(window)
-            if window.model_kind == puzzle_scene::ModelKind::Puzzle2d =>
-        {
-            Some(window.source.as_str())
-        }
+        SceneComponent::Frame(frame) => Some(frame.source.as_str()),
         _ => None,
     }
 }
@@ -4466,7 +5145,7 @@ fn parse_screen_leaf_component(
             &lines[start],
             "current_level is not scene syntax; declare a puzzle slot with `board = puzzle <name>`",
         )),
-        ["puzzle", state_name] => {
+        ["puzzle", state_name, attrs @ ..] => {
             if *state_name == "current_level" {
                 return Err(parse_error(
                     &lines[start],
@@ -4479,7 +5158,44 @@ fn parse_screen_leaf_component(
                     "puzzle state name must be an identifier",
                 ));
             }
-            Ok((scene_puzzle_component((*state_name).to_string()), start + 1))
+            let layout = parse_scene_layout_attrs_for_line(attrs, &lines[start])?;
+            Ok((
+                scene_frame_component_with_layout("puzzle", (*state_name).to_string(), layout),
+                start + 1,
+            ))
+        }
+        ["frame", source, attrs @ ..] => {
+            if !is_identifier(source) {
+                return Err(parse_error(
+                    &lines[start],
+                    "frame source must be an identifier",
+                ));
+            }
+            let layout = parse_scene_layout_attrs_for_line(attrs, &lines[start])?;
+            Ok((
+                scene_frame_component_with_layout("frame", (*source).to_string(), layout),
+                start + 1,
+            ))
+        }
+        ["puzzle3", source, attrs @ ..] => {
+            if !is_identifier(source) {
+                return Err(parse_error(
+                    &lines[start],
+                    "puzzle3 frame source must be an identifier",
+                ));
+            }
+            let layout = parse_scene_layout_attrs_for_line(attrs, &lines[start])?;
+            Ok((
+                scene_frame_component_with_layout("puzzle3", (*source).to_string(), layout),
+                start + 1,
+            ))
+        }
+        ["level_menu", source, "->", effect @ ..] if !effect.is_empty() => {
+            validate_qualified_identifier(source, &lines[start], "level source")?;
+            let mut menu = LevelMenuDef::default();
+            menu.source = Some((*source).to_string());
+            menu.action = Some(parse_scene_effect(&effect.join(" "), &lines[start])?);
+            Ok((SceneComponent::LevelMenu(menu), start + 1))
         }
         ["text", ..] => Ok((parse_text_component(&lines[start])?, start + 1)),
         ["title", ..] => Ok((parse_title_component(&lines[start], true)?, start + 1)),
@@ -4490,15 +5206,23 @@ fn parse_screen_leaf_component(
             let (menu, next_i) = parse_level_menu_component(lines, start)?;
             Ok((SceneComponent::LevelMenu(menu), next_i))
         }
-        [state_name] if is_identifier(state_name) => {
-            Ok((scene_puzzle_component((*state_name).to_string()), start + 1))
-        }
+        [state_name] if is_identifier(state_name) => Ok((
+            scene_frame_component("puzzle", (*state_name).to_string()),
+            start + 1,
+        )),
         [other, ..] => Err(parse_error(
             &lines[start],
             &format!("unknown view directive {other}"),
         )),
         [] => Err(parse_error(&lines[start], "empty view directive")),
     }
+}
+
+fn parse_scene_layout_attrs_for_line(
+    attrs: &[&str],
+    line: &str,
+) -> Result<SceneLayoutDef, AppError> {
+    puzzle_scene::parse_scene_layout_attrs(attrs).map_err(|error| parse_error(line, &error.message))
 }
 
 fn parse_title_component(line: &str, is_title: bool) -> Result<SceneComponent, AppError> {
@@ -4671,11 +5395,340 @@ pub(crate) fn scene_effect_command_syntax(token: &str) -> Option<SceneEffectComm
         "pause_music" | "resume_music" | "stop_music" => {
             Some(SceneEffectCommandSyntax::OptionalAssetTarget)
         }
-        "apply" | "back" | "clear_history" | "copy" | "load" | "message" | "wait" => {
-            Some(SceneEffectCommandSyntax::Plain)
-        }
+        "apply" | "back" | "clear_history" | "continue" | "copy" | "load" | "message" | "start"
+        | "wait" => Some(SceneEffectCommandSyntax::Plain),
         _ => None,
     }
+}
+
+pub(crate) fn scene_effect_semantic_tokens(tokens: &[SourceToken]) -> Vec<semantic::SemanticToken> {
+    project_surface_semantic_tokens(&scene_effect_surface_document(tokens).semantic_tokens)
+}
+
+fn project_surface_semantic_tokens(
+    tokens: &[SurfaceSemanticToken],
+) -> Vec<semantic::SemanticToken> {
+    tokens
+        .iter()
+        .map(|token| semantic::SemanticToken {
+            start: token.span.start,
+            end: token.span.end,
+            kind: match token.kind {
+                SurfaceSemanticKind::Keyword => semantic::SemanticKind::Keyword,
+                SurfaceSemanticKind::Literal => semantic::SemanticKind::Literal,
+                SurfaceSemanticKind::Binding => semantic::SemanticKind::Binding,
+                SurfaceSemanticKind::Effect => semantic::SemanticKind::Effect,
+                SurfaceSemanticKind::Emission => semantic::SemanticKind::Emission,
+                SurfaceSemanticKind::Input => semantic::SemanticKind::Input,
+                SurfaceSemanticKind::State => semantic::SemanticKind::State,
+                SurfaceSemanticKind::Scene => semantic::SemanticKind::Scene,
+                SurfaceSemanticKind::Asset => semantic::SemanticKind::Asset,
+                SurfaceSemanticKind::Number => semantic::SemanticKind::Number,
+                SurfaceSemanticKind::String => semantic::SemanticKind::String,
+            },
+        })
+        .collect()
+}
+
+fn scene_effect_surface_document(tokens: &[SourceToken]) -> SurfaceDocument {
+    let mut sink = SurfaceSink::default();
+    let Some(first) = tokens.first() else {
+        return sink.into_document();
+    };
+    let effect_span = source_tokens_span(tokens);
+
+    if first.text.starts_with("cursor.") {
+        add_cursor_scene_effect_token(&mut sink, first);
+        return surface_document_with_node(sink, SurfaceNodeKind::SceneEffect, effect_span);
+    }
+
+    if first.text.contains('.') {
+        let mut parts = first.text.split('.');
+        if let Some(target) = parts.next() {
+            add_scene_effect_token_part(&mut sink, first, target, SurfaceSemanticKind::Scene);
+        }
+        if let Some(effect) = parts.next() {
+            add_scene_effect_token_part(&mut sink, first, effect, SurfaceSemanticKind::Effect);
+        }
+        return surface_document_with_node(sink, SurfaceNodeKind::SceneEffect, effect_span);
+    }
+
+    if matches!(first.text.as_str(), "start" | "continue")
+        && add_level_flow_scene_effect_tokens(tokens, &mut sink)
+    {
+        return surface_document_with_node(sink, SurfaceNodeKind::SceneEffect, effect_span);
+    }
+
+    match scene_effect_command_syntax(&first.text) {
+        Some(SceneEffectCommandSyntax::InputTarget) => {
+            add_scene_effect_token_range(&mut sink, first, SurfaceSemanticKind::Effect);
+            if let Some(input) = tokens.get(1) {
+                add_scene_command_token(&mut sink, input);
+            }
+        }
+        Some(SceneEffectCommandSyntax::ComponentEffectTarget) => {
+            add_scene_effect_token_range(&mut sink, first, SurfaceSemanticKind::Effect);
+            if let Some(effect) = tokens.get(1) {
+                add_scene_command_token(&mut sink, effect);
+            }
+        }
+        Some(SceneEffectCommandSyntax::SceneTarget) => {
+            add_scene_effect_token_range(&mut sink, first, SurfaceSemanticKind::Effect);
+            if let Some(scene) = tokens.get(1) {
+                add_scene_effect_token_range(&mut sink, scene, SurfaceSemanticKind::Scene);
+            }
+        }
+        Some(SceneEffectCommandSyntax::AssetTarget) => {
+            let kind = scene_effect_command_kind(&first.text);
+            add_scene_effect_token_range(&mut sink, first, kind);
+            if let Some(asset) = tokens.get(1) {
+                add_scene_effect_token_range(&mut sink, asset, SurfaceSemanticKind::Asset);
+            }
+        }
+        Some(SceneEffectCommandSyntax::OptionalAssetTarget) => {
+            add_scene_effect_token_range(&mut sink, first, SurfaceSemanticKind::Effect);
+            if let Some(asset) = tokens.get(1) {
+                add_scene_effect_token_range(&mut sink, asset, SurfaceSemanticKind::Asset);
+            }
+        }
+        Some(SceneEffectCommandSyntax::Plain) => {
+            let kind = scene_effect_command_kind(&first.text);
+            add_scene_effect_token_range(&mut sink, first, kind);
+        }
+        None => {}
+    }
+
+    surface_document_with_node(sink, SurfaceNodeKind::SceneEffect, effect_span)
+}
+
+fn source_tokens_span(tokens: &[SourceToken]) -> Option<SourceSpan> {
+    let start = tokens.first()?.start;
+    let end = tokens.last()?.end;
+    (start < end).then_some(SourceSpan { start, end })
+}
+
+fn surface_document_with_node(
+    mut sink: SurfaceSink,
+    kind: SurfaceNodeKind,
+    span: Option<SourceSpan>,
+) -> SurfaceDocument {
+    if sink.has_semantic_tokens()
+        && let Some(span) = span
+    {
+        sink.node(kind, span);
+    }
+    sink.into_document()
+}
+
+fn scene_effect_command_kind(token: &str) -> SurfaceSemanticKind {
+    if matches!(
+        rewrite_effect_command_syntax(token),
+        Some(RewriteEffectCommandSyntax::Emission)
+    ) {
+        SurfaceSemanticKind::Emission
+    } else {
+        SurfaceSemanticKind::Effect
+    }
+}
+
+fn add_level_flow_scene_effect_tokens(tokens: &[SourceToken], sink: &mut SurfaceSink) -> bool {
+    match tokens {
+        [command, levels, in_keyword, scene]
+            if levels.text == "levels" && in_keyword.text == "in" =>
+        {
+            add_scene_effect_token_range(sink, command, SurfaceSemanticKind::Effect);
+            add_scene_effect_token_range(sink, levels, SurfaceSemanticKind::Keyword);
+            add_scene_effect_token_range(sink, in_keyword, SurfaceSemanticKind::Keyword);
+            add_scene_effect_token_range(sink, scene, SurfaceSemanticKind::Scene);
+            true
+        }
+        [command, levels, scope, in_keyword, scene]
+            if levels.text == "levels" && in_keyword.text == "in" =>
+        {
+            add_scene_effect_token_range(sink, command, SurfaceSemanticKind::Effect);
+            add_scene_effect_token_range(sink, levels, SurfaceSemanticKind::Keyword);
+            add_scene_effect_token_range(sink, scope, SurfaceSemanticKind::Scene);
+            add_scene_effect_token_range(sink, in_keyword, SurfaceSemanticKind::Keyword);
+            add_scene_effect_token_range(sink, scene, SurfaceSemanticKind::Scene);
+            true
+        }
+        _ => false,
+    }
+}
+
+fn add_scene_command_token(sink: &mut SurfaceSink, token: &SourceToken) {
+    if let Some(cursor_offset) = token.text.find("cursor.") {
+        add_scene_effect_token_subrange(
+            sink,
+            token,
+            cursor_offset,
+            cursor_offset + "cursor".len(),
+            SurfaceSemanticKind::State,
+        );
+        let value_start = cursor_offset + "cursor.".len();
+        if let Some(value_end) = scene_effect_identifier_end(&token.text, value_start) {
+            let value = &token.text[value_start..value_end];
+            let kind = if matches!(value, "prev" | "next") {
+                SurfaceSemanticKind::Effect
+            } else {
+                SurfaceSemanticKind::Literal
+            };
+            add_scene_effect_token_subrange(sink, token, value_start, value_end, kind);
+        }
+    }
+
+    let Some((first_start, first_end)) = scene_effect_first_identifier_bounds(&token.text) else {
+        return;
+    };
+    let after_first = &token.text[first_end..];
+    if after_first.starts_with('.') {
+        add_scene_effect_token_subrange(
+            sink,
+            token,
+            first_start,
+            first_end,
+            SurfaceSemanticKind::Scene,
+        );
+        let command_start = first_end + 1;
+        if let Some(command_end) = scene_effect_identifier_end(&token.text, command_start) {
+            add_scene_effect_token_subrange(
+                sink,
+                token,
+                command_start,
+                command_end,
+                SurfaceSemanticKind::Effect,
+            );
+        }
+    } else {
+        add_scene_effect_token_subrange(
+            sink,
+            token,
+            first_start,
+            first_end,
+            SurfaceSemanticKind::Input,
+        );
+        if after_first.starts_with(':') {
+            let binding_start = first_end + 1;
+            if let Some(binding_end) = scene_effect_identifier_end(&token.text, binding_start) {
+                add_scene_effect_token_subrange(
+                    sink,
+                    token,
+                    binding_start,
+                    binding_end,
+                    SurfaceSemanticKind::Binding,
+                );
+            }
+        }
+    }
+}
+
+fn add_cursor_scene_effect_token(sink: &mut SurfaceSink, token: &SourceToken) {
+    add_scene_effect_token_part(sink, token, "cursor", SurfaceSemanticKind::State);
+    if let Some((_, tail)) = token.text.split_once('.') {
+        let kind = if matches!(tail, "prev" | "next") {
+            SurfaceSemanticKind::Effect
+        } else {
+            SurfaceSemanticKind::Literal
+        };
+        add_scene_effect_token_part(sink, token, tail, kind);
+    }
+}
+
+fn add_scene_effect_token_range(
+    sink: &mut SurfaceSink,
+    token: &SourceToken,
+    kind: SurfaceSemanticKind,
+) {
+    let Some((start, end)) = scene_effect_identifier_bounds(token) else {
+        return;
+    };
+    sink.mark(SourceSpan { start, end }, kind);
+}
+
+fn add_scene_effect_token_part(
+    sink: &mut SurfaceSink,
+    token: &SourceToken,
+    part: &str,
+    kind: SurfaceSemanticKind,
+) {
+    if part.is_empty() {
+        return;
+    }
+    if let Some(relative) = token.text.find(part) {
+        sink.mark(
+            SourceSpan {
+                start: token.start + relative,
+                end: token.start + relative + part.len(),
+            },
+            kind,
+        );
+    }
+}
+
+fn add_scene_effect_token_subrange(
+    sink: &mut SurfaceSink,
+    token: &SourceToken,
+    relative_start: usize,
+    relative_end: usize,
+    kind: SurfaceSemanticKind,
+) {
+    if relative_start >= relative_end || relative_end > token.text.len() {
+        return;
+    }
+    sink.mark(
+        SourceSpan {
+            start: token.start + relative_start,
+            end: token.start + relative_end,
+        },
+        kind,
+    );
+}
+
+fn scene_effect_first_identifier_bounds(value: &str) -> Option<(usize, usize)> {
+    let start = value
+        .char_indices()
+        .find_map(|(index, ch)| scene_effect_is_word_start(ch).then_some(index))?;
+    scene_effect_identifier_end(value, start).map(|end| (start, end))
+}
+
+fn scene_effect_identifier_end(value: &str, start: usize) -> Option<usize> {
+    if start >= value.len() {
+        return None;
+    }
+    let mut end = start;
+    for (offset, ch) in value[start..].char_indices() {
+        if offset == 0 {
+            if !scene_effect_is_word_start(ch) {
+                return None;
+            }
+        } else if !scene_effect_is_word_continue(ch) || matches!(ch, ':' | '.') {
+            break;
+        }
+        end = start + offset + ch.len_utf8();
+    }
+    (end > start).then_some(end)
+}
+
+fn scene_effect_identifier_bounds(token: &SourceToken) -> Option<(usize, usize)> {
+    let start_offset = token
+        .text
+        .char_indices()
+        .find_map(|(index, ch)| scene_effect_is_word_start(ch).then_some(index))?;
+    let end_offset = token.text.char_indices().rev().find_map(|(index, ch)| {
+        scene_effect_is_word_continue(ch).then_some(index + ch.len_utf8())
+    })?;
+    let start = token.start + start_offset;
+    let end = token.start + end_offset;
+    debug_assert!(end <= token.end);
+    (start < end).then_some((start, end))
+}
+
+fn scene_effect_is_word_start(ch: char) -> bool {
+    ch == '@' || ch == '_' || ch.is_ascii_alphabetic()
+}
+
+fn scene_effect_is_word_continue(ch: char) -> bool {
+    ch == '@' || ch == '_' || ch == '-' || ch.is_ascii_alphanumeric()
 }
 
 impl EffectAst {
@@ -4702,10 +5755,166 @@ pub(crate) fn rewrite_effect_command_syntax(token: &str) -> Option<RewriteEffect
         "set" => "set __highlight_probe = 0".to_string(),
         _ => return None,
     };
-    parse_rewrite_effect(&probe, &probe)
+    parse_rewrite_effect_value(&probe, &probe)
         .ok()
         .and_then(|effects| effects.into_iter().next())
         .map(|effect| effect.command_syntax())
+}
+
+pub(crate) fn rewrite_effect_semantic_tokens(
+    tokens: &[SourceToken],
+) -> Vec<semantic::SemanticToken> {
+    project_surface_semantic_tokens(&rewrite_effect_surface_document(tokens).semantic_tokens)
+}
+
+fn rewrite_effect_surface_document(tokens: &[SourceToken]) -> SurfaceDocument {
+    let mut sink = SurfaceSink::default();
+    let effect_span = source_tokens_span(tokens);
+    add_rewrite_effect_semantic_tokens(tokens, &mut sink);
+    surface_document_with_node(sink, SurfaceNodeKind::RewriteEffect, effect_span)
+}
+
+fn add_rewrite_effect_semantic_tokens(tokens: &[SourceToken], sink: &mut SurfaceSink) -> bool {
+    let Some(first) = tokens.first() else {
+        return false;
+    };
+
+    if first.text == "message" {
+        add_scene_effect_token_range(sink, first, SurfaceSemanticKind::Emission);
+        if tokens.len() > 1 {
+            let text_start = tokens[1].start;
+            let text_end = tokens.last().map(|token| token.end).unwrap_or(text_start);
+            if text_start < text_end {
+                sink.mark(
+                    SourceSpan {
+                        start: text_start,
+                        end: text_end,
+                    },
+                    SurfaceSemanticKind::String,
+                );
+            }
+        }
+        return true;
+    }
+
+    if tokens.len() > 2
+        && tokens
+            .iter()
+            .any(|token| is_rewrite_effect_command_token(&token.text))
+    {
+        return add_simple_rewrite_effect_semantic_tokens(tokens, sink);
+    }
+
+    match tokens {
+        [command]
+            if matches_rewrite_effect_command(
+                &command.text,
+                RewriteEffectCommandSyntax::Effect,
+            ) =>
+        {
+            add_scene_effect_token_range(sink, command, SurfaceSemanticKind::Effect);
+            true
+        }
+        [command]
+            if matches_rewrite_effect_command(
+                &command.text,
+                RewriteEffectCommandSyntax::Emission,
+            ) =>
+        {
+            add_scene_effect_token_range(sink, command, SurfaceSemanticKind::Emission);
+            true
+        }
+        [command, duration] if command.text == "wait" => {
+            add_scene_effect_token_range(sink, command, SurfaceSemanticKind::Emission);
+            add_scene_effect_token_range(sink, duration, SurfaceSemanticKind::Number);
+            true
+        }
+        [command, asset] if command.text == "sfx" => {
+            add_scene_effect_token_range(sink, command, SurfaceSemanticKind::Emission);
+            add_scene_effect_token_range(sink, asset, SurfaceSemanticKind::Asset);
+            true
+        }
+        [command, name, equals, value] if command.text == "set" && equals.text == "=" => {
+            add_scene_effect_token_range(sink, command, SurfaceSemanticKind::Effect);
+            add_scene_effect_token_range(sink, name, SurfaceSemanticKind::State);
+            add_scene_effect_token_range(sink, value, SurfaceSemanticKind::Number);
+            true
+        }
+        [name, op, value] if is_global_update_operator(&op.text) => {
+            add_scene_effect_token_range(sink, name, SurfaceSemanticKind::State);
+            add_scene_effect_token_range(sink, value, SurfaceSemanticKind::Number);
+            true
+        }
+        _ => false,
+    }
+}
+
+fn add_simple_rewrite_effect_semantic_tokens(
+    tokens: &[SourceToken],
+    sink: &mut SurfaceSink,
+) -> bool {
+    let mut index = 0usize;
+    let mut parsed_any = false;
+    while index < tokens.len() {
+        match tokens[index].text.to_ascii_lowercase().as_str() {
+            "cancel" | "win" | "restart" | "next_level" | "again" => {
+                add_scene_effect_token_range(sink, &tokens[index], SurfaceSemanticKind::Effect);
+                index += 1;
+                parsed_any = true;
+            }
+            "wait" => {
+                add_scene_effect_token_range(sink, &tokens[index], SurfaceSemanticKind::Emission);
+                if index + 1 < tokens.len()
+                    && !is_rewrite_effect_command_token(&tokens[index + 1].text)
+                {
+                    add_scene_effect_token_range(
+                        sink,
+                        &tokens[index + 1],
+                        SurfaceSemanticKind::Number,
+                    );
+                    index += 2;
+                } else {
+                    index += 1;
+                }
+                parsed_any = true;
+            }
+            "sfx" => {
+                add_scene_effect_token_range(sink, &tokens[index], SurfaceSemanticKind::Emission);
+                if let Some(asset) = tokens.get(index + 1) {
+                    add_scene_effect_token_range(sink, asset, SurfaceSemanticKind::Asset);
+                    index += 2;
+                } else {
+                    index += 1;
+                }
+                parsed_any = true;
+            }
+            "set" => {
+                add_scene_effect_token_range(sink, &tokens[index], SurfaceSemanticKind::Effect);
+                if let (Some(name), Some(value)) = (tokens.get(index + 1), tokens.get(index + 3)) {
+                    add_scene_effect_token_range(sink, name, SurfaceSemanticKind::State);
+                    add_scene_effect_token_range(sink, value, SurfaceSemanticKind::Number);
+                    index += 4;
+                } else {
+                    index += 1;
+                }
+                parsed_any = true;
+            }
+            _ if index + 2 < tokens.len() && is_global_update_operator(&tokens[index + 1].text) => {
+                add_scene_effect_token_range(sink, &tokens[index], SurfaceSemanticKind::State);
+                add_scene_effect_token_range(sink, &tokens[index + 2], SurfaceSemanticKind::Number);
+                index += 3;
+                parsed_any = true;
+            }
+            _ => {
+                return parsed_any;
+            }
+        }
+    }
+    parsed_any
+}
+
+fn matches_rewrite_effect_command(token: &str, syntax: RewriteEffectCommandSyntax) -> bool {
+    rewrite_effect_command_syntax(&token.to_ascii_lowercase()) == Some(syntax)
 }
 
 pub(crate) fn rewrite_direction_prefix_token_index(tokens: &[&str]) -> Option<usize> {
@@ -4879,7 +6088,43 @@ fn parse_scene_effect_with_optional_block(
     ))
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct ParsedSceneEffect {
+    pub(crate) surface: SurfaceSceneEffect,
+    pub(crate) semantic_tokens: Vec<semantic::SemanticToken>,
+}
+
 fn parse_scene_effect(value: &str, line: &str) -> Result<SceneEffect, AppError> {
+    let parsed = parse_scene_effect_with_semantic_tokens(value, line)?;
+    debug_assert!(
+        parsed
+            .semantic_tokens
+            .iter()
+            .all(|token| token.start < token.end)
+    );
+    Ok(parsed.surface.effect)
+}
+
+fn parse_scene_effect_with_semantic_tokens(
+    value: &str,
+    line: &str,
+) -> Result<ParsedSceneEffect, AppError> {
+    let surface = parse_surface_scene_effect(value, line)?;
+    let semantic_tokens = project_surface_semantic_tokens(&surface.document.semantic_tokens);
+    Ok(ParsedSceneEffect {
+        surface,
+        semantic_tokens,
+    })
+}
+
+fn parse_surface_scene_effect(value: &str, line: &str) -> Result<SurfaceSceneEffect, AppError> {
+    let tokens = source_line_tokens(strip_line_comment(value), 0);
+    let document = scene_effect_surface_document(&tokens);
+    let effect = parse_scene_effect_value(value, line)?;
+    Ok(SurfaceSceneEffect { effect, document })
+}
+
+fn parse_scene_effect_value(value: &str, line: &str) -> Result<SceneEffect, AppError> {
     if value.contains(" then ") {
         return Err(parse_error(
             line,
@@ -5046,6 +6291,14 @@ fn parse_scene_effect(value: &str, line: &str) -> Result<SceneEffect, AppError> 
                 scope: Some((*scope).to_string()),
             })
         }
+        ["start", scope, "in", scene] => {
+            validate_qualified_identifier(scope, line, "level scope")?;
+            validate_qualified_identifier(scene, line, "scene name")?;
+            Ok(SceneEffect::StartLevel {
+                scene: (*scene).to_string(),
+                scope: Some((*scope).to_string()),
+            })
+        }
         ["continue", "levels", "in", scene] => {
             validate_qualified_identifier(scene, line, "scene name")?;
             Ok(SceneEffect::ContinueLevel {
@@ -5151,7 +6404,7 @@ fn resolve_default_wait_in_component(component: &mut SceneComponent, default_wai
                 resolve_default_wait_in_effect(&mut button.effect, default_wait_ms);
             }
         }
-        SceneComponent::ModelWindow(_)
+        SceneComponent::Frame(_)
         | SceneComponent::Title(_)
         | SceneComponent::Subtitle(_)
         | SceneComponent::Text(_)
@@ -5480,7 +6733,9 @@ fn parse_scene_state_entry(
         }
         return Ok(ParsedSceneStateEntry::Puzzle(ScenePuzzleDef {
             name: name.to_string(),
-            initializer,
+            kind: initializer.kind,
+            model: initializer.model,
+            initializer: initializer.initializer,
             lifetime,
         }));
     }
@@ -5502,6 +6757,8 @@ fn parse_implicit_scene_puzzle_state_entry(
             validate_qualified_identifier(puzzle_name, line, "puzzle name")?;
             Ok(Some(ScenePuzzleDef {
                 name: (*puzzle_name).to_string(),
+                kind: "puzzle".to_string(),
+                model: (*puzzle_name).to_string(),
                 initializer: ScenePuzzleInitializer::CurrentLevel,
                 lifetime,
             }))
@@ -5511,6 +6768,8 @@ fn parse_implicit_scene_puzzle_state_entry(
             validate_qualified_identifier(level_name, line, "level name")?;
             Ok(Some(ScenePuzzleDef {
                 name: (*puzzle_name).to_string(),
+                kind: "puzzle".to_string(),
+                model: (*puzzle_name).to_string(),
                 initializer: ScenePuzzleInitializer::Level((*level_name).to_string()),
                 lifetime,
             }))
@@ -5566,10 +6825,17 @@ fn parse_default_wait_time_directive(tokens: &[&str], line: &str) -> Result<u64,
     parse_wait_duration_ms(duration, line)
 }
 
+#[derive(Clone, Debug)]
+struct ParsedScenePuzzleInitializer {
+    kind: String,
+    model: String,
+    initializer: ScenePuzzleInitializer,
+}
+
 fn parse_screen_puzzle_initializer(
     value: &str,
     line: &str,
-) -> Result<Option<ScenePuzzleInitializer>, AppError> {
+) -> Result<Option<ParsedScenePuzzleInitializer>, AppError> {
     let tokens = split_tokens(value);
     match tokens.as_slice() {
         ["puzzle", "current_level"] => Err(parse_error(
@@ -5579,9 +6845,11 @@ fn parse_screen_puzzle_initializer(
         ["puzzle", puzzle_name, "level", level_name] => {
             validate_qualified_identifier(puzzle_name, line, "puzzle name")?;
             validate_qualified_identifier(level_name, line, "level name")?;
-            Ok(Some(ScenePuzzleInitializer::Level(
-                (*level_name).to_string(),
-            )))
+            Ok(Some(ParsedScenePuzzleInitializer {
+                kind: "puzzle".to_string(),
+                model: (*puzzle_name).to_string(),
+                initializer: ScenePuzzleInitializer::Level((*level_name).to_string()),
+            }))
         }
         ["puzzle", puzzle_name] => {
             if *puzzle_name == "current_level" {
@@ -5591,7 +6859,28 @@ fn parse_screen_puzzle_initializer(
                 ));
             }
             validate_qualified_identifier(puzzle_name, line, "puzzle name")?;
-            Ok(Some(ScenePuzzleInitializer::CurrentLevel))
+            Ok(Some(ParsedScenePuzzleInitializer {
+                kind: "puzzle".to_string(),
+                model: (*puzzle_name).to_string(),
+                initializer: ScenePuzzleInitializer::CurrentLevel,
+            }))
+        }
+        ["puzzle3", puzzle_name] => {
+            validate_qualified_identifier(puzzle_name, line, "puzzle3 model name")?;
+            Ok(Some(ParsedScenePuzzleInitializer {
+                kind: "puzzle3".to_string(),
+                model: (*puzzle_name).to_string(),
+                initializer: ScenePuzzleInitializer::CurrentLevel,
+            }))
+        }
+        ["puzzle3", puzzle_name, "level", level_name] => {
+            validate_qualified_identifier(puzzle_name, line, "puzzle3 model name")?;
+            validate_qualified_identifier(level_name, line, "level name")?;
+            Ok(Some(ParsedScenePuzzleInitializer {
+                kind: "puzzle3".to_string(),
+                model: (*puzzle_name).to_string(),
+                initializer: ScenePuzzleInitializer::Level((*level_name).to_string()),
+            }))
         }
         ["puzzle", puzzle_name, "current_level"] => {
             validate_qualified_identifier(puzzle_name, line, "puzzle name")?;
@@ -5603,6 +6892,10 @@ fn parse_screen_puzzle_initializer(
         ["puzzle", ..] => Err(parse_error(
             line,
             "scene puzzle initializer must be: puzzle <name> | puzzle <name> level <level>",
+        )),
+        ["puzzle3", ..] => Err(parse_error(
+            line,
+            "scene puzzle3 initializer must be: puzzle3 <name> | puzzle3 <name> level <level>",
         )),
         _ => Ok(None),
     }
@@ -6143,6 +7436,33 @@ fn parse_scene_inputs_block(
     Ok((bindings, i + 1))
 }
 
+fn parse_scene_legacy_keys_block(
+    lines: &[String],
+    start: usize,
+) -> Result<(Vec<KeyBinding>, usize), AppError> {
+    let mut bindings = Vec::<KeyBinding>::new();
+    let mut i = start + 1;
+    while i < lines.len() && lines[i] != "end" {
+        let Some((key, effect)) = lines[i].split_once('=') else {
+            return Err(parse_error(
+                &lines[i],
+                "keys row must be: <key> = <scene command>",
+            ));
+        };
+        let trigger = parse_key_trigger(key.trim(), &lines[i])?;
+        validate_key_trigger_supported(&trigger, &lines[i])?;
+        bindings.push(KeyBinding {
+            keys: vec![trigger],
+            effect: parse_scene_effect(effect.trim(), &lines[i])?,
+        });
+        i += 1;
+    }
+    if i >= lines.len() {
+        return Err(parse_error(&lines[start], "keys missing end"));
+    }
+    Ok((bindings, i + 1))
+}
+
 fn add_key_trigger_to_controls(
     key: &KeyTrigger,
     input: InputId,
@@ -6232,6 +7552,8 @@ fn default_scenes_if_empty(scenes: Vec<SceneDef>) -> Vec<SceneDef> {
             variables: Vec::new(),
             puzzles: vec![ScenePuzzleDef {
                 name: "board".to_string(),
+                kind: "puzzle".to_string(),
+                model: "default".to_string(),
                 initializer: ScenePuzzleInitializer::CurrentLevel,
                 lifetime: SceneStateLifetime::Instance,
             }],
@@ -8371,6 +9693,9 @@ fn parse_query_expr(
         "exists" | "some" if pattern_arg.is_some() => {
             Ok(QueryKindAst::ExistsMatches(pattern_arg.expect("checked")))
         }
+        "none" if pattern_arg.is_some() => {
+            Ok(QueryKindAst::NoneMatches(pattern_arg.expect("checked")))
+        }
         "exists" => Ok(QueryKindAst::ExistsObjects(
             resolve_object_selector(
                 arg,
@@ -8384,6 +9709,18 @@ fn parse_query_expr(
             .alternatives,
         )),
         "some" => Ok(QueryKindAst::ExistsObjects(
+            resolve_object_selector(
+                arg,
+                line,
+                object_names,
+                object_schemas,
+                value_sets,
+                maps,
+                object_groups,
+            )?
+            .alternatives,
+        )),
+        "none" => Ok(QueryKindAst::NoneObjects(
             resolve_object_selector(
                 arg,
                 line,
@@ -10358,10 +11695,9 @@ fn parse_condition_atom(
             maps,
             object_groups,
         )? {
-            return Ok(ConditionAst::QueryValueEquals {
-                kind: QueryKindAst::CountMatches(pattern),
-                value: 0,
-            });
+            return Ok(ConditionAst::QueryValueNonZero(QueryKindAst::NoneMatches(
+                pattern,
+            )));
         }
     }
 
@@ -10703,9 +12039,10 @@ fn lower_query_kind(
     match kind {
         QueryKindAst::CountObjects(objects) => Ok(QueryKind::CountObjects(objects.clone())),
         QueryKindAst::ExistsObjects(objects) => Ok(QueryKind::ExistsObjects(objects.clone())),
+        QueryKindAst::NoneObjects(objects) => Ok(QueryKind::NoneObjects(objects.clone())),
         QueryKindAst::CountMatches(pattern) => lower_query_match_kind(
             pattern,
-            true,
+            QueryMatchKind::Count,
             input_names,
             object_layers,
             scratch_names,
@@ -10714,7 +12051,16 @@ fn lower_query_kind(
         ),
         QueryKindAst::ExistsMatches(pattern) => lower_query_match_kind(
             pattern,
-            false,
+            QueryMatchKind::Exists,
+            input_names,
+            object_layers,
+            scratch_names,
+            value_sets,
+            directions,
+        ),
+        QueryKindAst::NoneMatches(pattern) => lower_query_match_kind(
+            pattern,
+            QueryMatchKind::None,
             input_names,
             object_layers,
             scratch_names,
@@ -10724,9 +12070,16 @@ fn lower_query_kind(
     }
 }
 
+#[derive(Clone, Copy)]
+enum QueryMatchKind {
+    Count,
+    Exists,
+    None,
+}
+
 fn lower_query_match_kind(
     query_pattern: &QueryPatternAst,
-    count: bool,
+    kind: QueryMatchKind,
     input_names: &HashMap<String, InputId>,
     object_layers: &HashMap<ObjectId, LayerId>,
     scratch_names: &HashMap<String, ScratchDef>,
@@ -10745,10 +12098,10 @@ fn lower_query_match_kind(
             value_sets,
             directions,
         )?;
-        return Ok(if count {
-            QueryKind::CountInputMatches(patterns)
-        } else {
-            QueryKind::ExistsInputMatches(patterns)
+        return Ok(match kind {
+            QueryMatchKind::Count => QueryKind::CountInputMatches(patterns),
+            QueryMatchKind::Exists => QueryKind::ExistsInputMatches(patterns),
+            QueryMatchKind::None => QueryKind::NoneInputMatches(patterns),
         });
     }
     let patterns = lower_query_patterns(
@@ -10759,10 +12112,10 @@ fn lower_query_match_kind(
         input_names,
         directions,
     )?;
-    Ok(if count {
-        QueryKind::CountMatches(patterns)
-    } else {
-        QueryKind::ExistsMatches(patterns)
+    Ok(match kind {
+        QueryMatchKind::Count => QueryKind::CountMatches(patterns),
+        QueryMatchKind::Exists => QueryKind::ExistsMatches(patterns),
+        QueryMatchKind::None => QueryKind::NoneMatches(patterns),
     })
 }
 
@@ -11175,10 +12528,14 @@ fn validate_non_visual_query_kind(
 
 fn query_kind_reads_visual_object(kind: &QueryKindAst, visual_objects: &[ObjectId]) -> bool {
     match kind {
-        QueryKindAst::CountObjects(objects) | QueryKindAst::ExistsObjects(objects) => objects
+        QueryKindAst::CountObjects(objects)
+        | QueryKindAst::ExistsObjects(objects)
+        | QueryKindAst::NoneObjects(objects) => objects
             .iter()
             .any(|object| object_is_visual(*object, visual_objects)),
-        QueryKindAst::CountMatches(pattern) | QueryKindAst::ExistsMatches(pattern) => {
+        QueryKindAst::CountMatches(pattern)
+        | QueryKindAst::ExistsMatches(pattern)
+        | QueryKindAst::NoneMatches(pattern) => {
             pattern_block_reads_visual_object(&pattern.pattern, visual_objects)
         }
     }
@@ -12468,7 +13825,46 @@ fn split_rewrite_effects<'a>(
     parse_rewrite_effect(suffix, line).map(|effects| (pattern, effects))
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct ParsedRewriteEffect {
+    pub(crate) surface: SurfaceRewriteEffect,
+    pub(crate) semantic_tokens: Vec<semantic::SemanticToken>,
+}
+
 fn parse_rewrite_effect(suffix: &str, line: &str) -> Result<Vec<EffectAst>, AppError> {
+    let parsed = parse_rewrite_effect_with_semantic_tokens(suffix, line)?;
+    debug_assert!(
+        parsed
+            .semantic_tokens
+            .iter()
+            .all(|token| token.start < token.end)
+    );
+    Ok(parsed.surface.effects)
+}
+
+fn parse_rewrite_effect_with_semantic_tokens(
+    suffix: &str,
+    line: &str,
+) -> Result<ParsedRewriteEffect, AppError> {
+    let surface = parse_surface_rewrite_effect(suffix, line)?;
+    let semantic_tokens = project_surface_semantic_tokens(&surface.document.semantic_tokens);
+    Ok(ParsedRewriteEffect {
+        surface,
+        semantic_tokens,
+    })
+}
+
+fn parse_surface_rewrite_effect(
+    suffix: &str,
+    line: &str,
+) -> Result<SurfaceRewriteEffect, AppError> {
+    let tokens = source_line_tokens(strip_line_comment(suffix), 0);
+    let document = rewrite_effect_surface_document(&tokens);
+    let effects = parse_rewrite_effect_value(suffix, line)?;
+    Ok(SurfaceRewriteEffect { effects, document })
+}
+
+fn parse_rewrite_effect_value(suffix: &str, line: &str) -> Result<Vec<EffectAst>, AppError> {
     let suffix = suffix.trim();
     if suffix.strip_prefix("emit ").is_some() {
         return Err(parse_error(
@@ -12734,7 +14130,7 @@ struct ScratchPatternTemplate {
     scratch: ScratchId,
     value: Option<ScratchValueTemplate>,
     match_value: ScratchValueMatch,
-    is_flag: bool,
+    is_marker: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -14181,9 +15577,9 @@ fn parsed_scratch_pattern(
         .get(&scratch.name)
         .ok_or_else(|| parse_error(line, "unknown scratch"))?;
     let value = match def.kind {
-        ScratchKind::Flag => {
+        ScratchKind::Marker => {
             if scratch.value.is_some() {
-                return Err(parse_error(line, "flag scratch cannot have a value"));
+                return Err(parse_error(line, "marker scratch cannot have a value"));
             }
             None
         }
@@ -14213,7 +15609,7 @@ fn parsed_scratch_pattern(
         scratch: def.id,
         value,
         match_value,
-        is_flag: def.kind == ScratchKind::Flag,
+        is_marker: def.kind == ScratchKind::Marker,
     })
 }
 
@@ -14260,7 +15656,7 @@ fn parsed_anonymous_scratch_pattern(
         scratch: scratch_id,
         value,
         match_value,
-        is_flag: false,
+        is_marker: false,
     })
 }
 
@@ -14336,7 +15732,7 @@ fn scratch_to_set(
 ) -> Result<Vec<ScratchPatternTemplate>, AppError> {
     let mut writes = Vec::new();
     for attr in after {
-        if !attr.is_flag && attr.value.is_none() {
+        if !attr.is_marker && attr.value.is_none() {
             return Err(parse_error(line, "valued RHS scratch must specify a value"));
         }
         if !before.iter().any(|before| before == attr) {

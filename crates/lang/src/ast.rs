@@ -161,8 +161,10 @@ pub(crate) struct QueryDefinitionAst {
 pub(crate) enum QueryKindAst {
     CountObjects(Vec<ObjectId>),
     ExistsObjects(Vec<ObjectId>),
+    NoneObjects(Vec<ObjectId>),
     CountMatches(QueryPatternAst),
     ExistsMatches(QueryPatternAst),
+    NoneMatches(QueryPatternAst),
 }
 
 #[derive(Clone, Debug)]

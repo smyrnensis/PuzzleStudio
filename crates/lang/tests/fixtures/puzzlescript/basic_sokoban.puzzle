@@ -2,7 +2,7 @@ title "Basic PS Sokoban"
 
 theme puzzlescript
 
-model puzzle main {
+puzzle main {
 layers {
   layer_1 = Background
   layer_2 = Target

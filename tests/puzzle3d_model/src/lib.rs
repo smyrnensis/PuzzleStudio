@@ -1499,7 +1499,7 @@ horizontal [ Player | no solid ] -> [ | Player ]
     fn parser_keeps_render_settings_as_model_owned_display_state() {
         let parsed = parse_puzzle3d(
             r#"
-model puzzle3 camera_test {
+puzzle3 camera_test {
 render {
   camera {
     yaw 90
@@ -1563,7 +1563,7 @@ Player actor
     fn parser_maps_legacy_debug_camera_to_interactive_look() {
         let parsed = parse_puzzle3d(
             r#"
-model puzzle3 camera_test {
+puzzle3 camera_test {
 debug_camera = true
 camera_yaw = 90
 camera_pitch = 42
@@ -1697,7 +1697,6 @@ horizontal [ Player | no solid ] -> [ | Player ]
 
 levels3 {
 legend {
-. = empty
 P = Player
 B = Box
 # = Wall
@@ -1733,6 +1732,64 @@ level stacked {
         assert!(state.has_object(&bundle.game, Coord3::new(1, 1, 0), ObjectId(2)));
         assert!(state.has_object(&bundle.game, Coord3::new(2, 1, 0), ObjectId(3)));
         assert!(state.has_object(&bundle.game, Coord3::new(0, 2, 0), ObjectId(4)));
+    }
+
+    #[test]
+    fn parser_uses_dot_as_default_empty_char_for_3d_levels() {
+        let parsed = parse_puzzle3d(
+            r#"
+layers {
+actor = Player
+}
+
+levels3 {
+legend {
+P = Player
+}
+
+level default_dot {
+P.
+}
+}
+"#,
+        )
+        .unwrap();
+
+        let bundle = parsed.level_bundle.as_ref().expect("level bundle exists");
+        let state = bundle.build_level_state(0).unwrap();
+
+        assert!(state.has_object(&bundle.game, Coord3::new(0, 0, 0), ObjectId(1)));
+        assert_eq!(
+            state.cell_view(Coord3::new(1, 0, 0)).unwrap().objects,
+            Vec::<ObjectId>::new()
+        );
+    }
+
+    #[test]
+    fn parser_treats_empty_legend_as_default_empty_char_override() {
+        let err = parse_puzzle3d(
+            r#"
+layers {
+actor = Player
+}
+
+levels3 {
+legend {
+_ = empty
+P = Player
+}
+
+level override_empty {
+P.
+}
+}
+"#,
+        )
+        .unwrap_err();
+
+        assert!(
+            matches!(err, ParseError3::Message(message) if message.contains("unknown legend char: ."))
+        );
     }
 
     #[test]
@@ -1831,7 +1888,7 @@ PX
     fn parser_lowers_model_wrapped_win_conditions_and_named_level_pack() {
         let parsed = parse_puzzle3d(
             r#"
-model puzzle3 push3d {
+puzzle3 push3d {
 layers {
 floor = Goal
 actor = Player Box
@@ -1839,7 +1896,7 @@ actor = Player Box
 
 win_conditions {
 some Goal
-all Goal on down [ Box | Goal ]
+no down [ no Box | Goal ]
 }
 }
 
@@ -1888,10 +1945,78 @@ level unsolved {
     }
 
     #[test]
+    fn parser_rejects_all_on_oriented_win_pattern() {
+        let err = parse_puzzle3d(
+            r#"
+puzzle3 push3d {
+layers {
+floor = Goal
+actor = Box
+}
+
+win_conditions {
+some Goal
+all Goal on down [ Box | Goal ]
+}
+}
+"#,
+        )
+        .unwrap_err();
+
+        assert!(
+            matches!(err, ParseError3::Message(message) if message.contains("all <selector> on <pattern> is not valid"))
+        );
+    }
+
+    #[test]
+    fn parser_accepts_function_style_3d_win_conditions() {
+        let parsed = parse_puzzle3d(
+            r#"
+puzzle3 push3d {
+layers {
+floor = Goal
+actor = Box
+}
+
+win_conditions {
+exists(Goal)
+none(down [ no Box | Goal ])
+}
+}
+
+levels3 basic of push3d {
+legend {
+. = empty
+G = Goal
+B = Box
+}
+
+level solved {
+...
+.B.
+...
+
+...
+.G.
+...
+}
+}
+"#,
+        )
+        .unwrap();
+
+        let bundle = parsed.level_bundle.as_ref().expect("level bundle exists");
+        let win = parsed.win_condition.as_ref().expect("win condition exists");
+        let solved = bundle.build_level_state(0).unwrap();
+
+        assert!(win.is_met(&bundle.game, &solved));
+    }
+
+    #[test]
     fn parser_rejects_2d_model_keyword_in_3d_parser() {
         let err = parse_puzzle3d(
             r#"
-model puzzle push3d {
+puzzle push3d {
 layers {
 actor = Player
 }
@@ -1909,7 +2034,7 @@ actor = Player
     fn parser_lowers_scene_layout_tree() {
         let parsed = parse_puzzle3d(
             r#"
-model puzzle3 layout_test {
+puzzle3 layout_test {
 layers {
 actor = Player
 }
@@ -1987,7 +2112,7 @@ button "Restart" size 4 1 -> goto playing
 
         let fixture_json = export_visual_fixture_json(&parsed).unwrap();
         assert!(
-            fixture_json.contains("\"grid\": { \"visible\": false, \"occupied_cells\": false }")
+            fixture_json.contains("\"grid\": { \"visibility\": 0, \"occupied_cells\": false }")
         );
         assert!(fixture_json.contains("\"shade\": true"));
         assert!(fixture_json.contains("\"kind\": \"row\""));
@@ -2000,7 +2125,7 @@ button "Restart" size 4 1 -> goto playing
     fn parser_lowers_component_inputs_on_puzzle3_components() {
         let parsed = parse_puzzle3d(
             r#"
-model puzzle3 control_test {
+puzzle3 control_test {
 layers {
 actor = Player
 }
@@ -2146,11 +2271,11 @@ scene playing {
         );
         let fixture_json = export_visual_fixture_json(&parsed).unwrap();
         assert!(fixture_json.contains("\"title\": \"Sokoban Literally in 3D\""));
-        assert!(fixture_json.contains("\"grid\": { \"visible\": true, \"occupied_cells\": true }"));
+        assert!(fixture_json.contains("\"grid\": { \"visibility\": 1, \"occupied_cells\": true }"));
         assert!(fixture_json.contains("\"shade\": true"));
         assert!(fixture_json.contains("\"rules\": ["));
         assert!(fixture_json.contains("\"onLevelClear\": [\"next_level\"]"));
-        assert!(fixture_json.contains("\"kind\": \"all_objects_covered_by_pattern\""));
+        assert!(fixture_json.contains("\"kind\": \"no_pattern\""));
         assert!(fixture_json.contains("\"Box\": {"));
         assert!(fixture_json.contains("\"bitmap\": ["));
 

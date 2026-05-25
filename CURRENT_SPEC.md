@@ -367,10 +367,10 @@ direction north up
 direction south down
 ```
 
-物理キーは owner-scoped な `inputs` block で semantic input 名に対応させる。model 内の `inputs` は puzzle/model rules へ渡す input、scene 内の `inputs` は scene-wide shortcut や title/menu confirm など scene rules が読む input を定義する。
+物理キーは owner-scoped な `inputs` block で semantic input 名に対応させる。puzzle 内の `inputs` は puzzle rules へ渡す input、scene 内の `inputs` は scene-wide shortcut や title/menu confirm など scene rules が読む input を定義する。
 
 ```txt
-model puzzle sokoban {
+puzzle sokoban {
 inputs {
 up <- w ArrowUp
 down <- s ArrowDown
@@ -410,7 +410,7 @@ scene は local state を持てる。`view` block は scene-local state slot と
 
 scene は 2D / 3D model の所有者ではなく、presentation と flow の所有者である。root layout、component tree、scene input、scene transition は model の次元数に依存しない。同じ scene 構文の中で、model window component だけが `puzzle <slot>` または `puzzle3 <slot>` として model-specific になる。
 
-`view` は component ではなく scene root layout block。`view size 720 540 { ... }` は、2D board でも 3D board でも同じ意味で scene の標準表示領域を指定する。`row` / `column` / `box` は generic layout component で、`size <w> <h>`、`gap <n>`、`align <x> [y]` の header attribute を `view` と同じ形で読める。
+`view` は component ではなく scene root layout block。`view size 4 3 { ... }` は、2D board でも 3D board でも同じ意味で 4:3 の論理 scene 領域を指定する。`size` は pixel ではなく author-facing な整数比率 / 論理単位で、実寸への変換は renderer と theme が所有する。`row` / `column` / `box` は generic layout component で、`size <w> <h>`、`gap <n>`、`align <x> [y]` の header attribute を `view` と同じ形で読める。`align` 省略時は horizontal / vertical ともに `center`。`left` / `center` / `right` と `top` / `center` / `bottom` を組み合わせられる。
 
 Canonical generic scene component keywords:
 
@@ -443,10 +443,10 @@ scene playing {
 state {
 puzzle sokoban
 }
-view size 720 540 {
-column gap 12 align center top {
+view size 4 3 {
+column gap 1 align center top {
 sokoban
-row gap 8 {
+row gap 1 {
 button "Restart" -> sokoban.restart
 button "Levels" -> goto level_select
 }
@@ -465,10 +465,10 @@ scene playing3d {
 state {
 board = puzzle3 push3d
 }
-view size 720 540 {
-column gap 12 align center top {
+view size 4 3 {
+column gap 1 align center top {
 puzzle3 board
-row gap 8 {
+row gap 1 {
 button "Restart" -> board.restart
 button "Levels" -> goto level_select
 }
@@ -479,33 +479,35 @@ button "Levels" -> goto level_select
 
 The examples differ only at the model slot initializer and model window component. The scene root size, layout nesting, buttons, and scene commands are shared scene concepts.
 
-3D model の renderer 初期値は model 内の `render` が所有する。camera は scene layout や rule state ではないため、canonical syntax では model top scope の個別設定ではなく `render { camera { ... } }` に包む。
+3D puzzle の renderer 初期値は puzzle3 内の `render` が所有する。camera は scene layout や rule state ではないため、canonical syntax では puzzle3 top scope の個別設定ではなく `render { camera { ... } }` に包む。
 
 ```txt
-model puzzle3 push3d {
+puzzle3 push3d {
 render {
 camera {
-yaw 34
-pitch 38
-zoom 1.1
-interactive_look true
-interactive_zoom true
+yaw = 34
+pitch = 38
+zoom = 1.1
+interactive_look = true
+interactive_zoom = true
 }
 grid {
-occupied_cells true
+occupied_cells = true
 }
-shade true
+shade = true
 }
 }
 ```
 
 `yaw` / `pitch` / `zoom` は初期 camera view、`interactive_look` は pointer drag による yaw/pitch 変更、`interactive_zoom` は wheel/pinch 系の zoom 変更を許す設定である。旧 `debug_camera` / `camera_yaw` / `camera_pitch` / `camera_zoom` は compatibility syntax で、新しい例では使わない。
 
-`grid { occupied_cells true }` は object が存在する cell の外周 edge を表示する preview/debug 用の読み取り補助である。これは floor や volume を追加するものではなく、puzzle state、collision、win condition、level data には影響しない。省略時は off。
+3D model `rules` では `set yaw = <deg>` / `set pitch = <deg>` / `set zoom = <n>` を view-state emission として書ける。`reset_camera` は camera view を `render { camera { ... } }` の初期値に戻す。これらは `sfx` と同じく rule 発火に付随する presentation command であり、puzzle state、solver key、win condition には入らない。
 
-`render { shade false }` は sprite voxel の面ごとの明暗付けを無効にする renderer 設定である。色の表示だけを揃えたい preview 用であり、puzzle state、sprite voxel data、collision、win condition には影響しない。省略時は既存どおり on。
+`grid { occupied_cells = true }` は object が存在する cell の外周 edge を表示する preview/debug 用の読み取り補助である。これは floor や volume を追加するものではなく、puzzle state、collision、win condition、level data には影響しない。省略時は off。
 
-`interactive_look` は semantic input ではない。親 scene は click/drag を 3D camera 用として特別扱いせず、raw input を通常どおり focused scene と layout/hit-test に従って component へ配信する。`puzzle3` component は、自分の表示 box 内で始まった pointer drag を取得してよい。`interactive_look true` のときだけ、その gesture を camera yaw/pitch の view-state 更新として解釈する。これは model `rules` の `input` には渡らず、`if input == ...`、undo、restart、transition state、win condition には影響しない。
+`render { shade = false }` は sprite voxel の面ごとの明暗付けを無効にする renderer 設定である。色の表示だけを揃えたい preview 用であり、puzzle state、sprite voxel data、collision、win condition には影響しない。省略時は既存どおり on。
+
+`interactive_look` は semantic input ではない。親 scene は click/drag を 3D camera 用として特別扱いせず、raw input を通常どおり focused scene と layout/hit-test に従って component へ配信する。`puzzle3` component は、自分の表示 box 内で始まった pointer drag を取得してよい。`interactive_look = true` のときだけ、その gesture を camera yaw/pitch の view-state 更新として解釈する。これは model `rules` の `input` には渡らず、`if input == ...`、undo、restart、transition state、win condition には影響しない。
 
 pointer drag の所有者は開始点で決まる。pointer down が `puzzle3` の box 内なら、release/cancel まではその component が gesture を capture してよく、途中で pointer が box 外へ出ても同じ drag として継続する。例外は modal、disabled component、overlay、明示的な pointer capture、scene-level gesture など、より具体的な所有者がある場合だけである。
 
@@ -558,7 +560,7 @@ show_index = true
 }
 ```
 
-`text` は literal text、scene state の scalar value、または `for` binding の path を表示する。`button` は input、component effect、または scene command を発行する view component。旧 `button "Label" = name` や裸名 RHS は読まない。`-> input <name>`、`-> component_effect <name>`、または direct scene command を使う。`box` / `row` / `column` は入れ子の view tree を作る layout component。`box` は純粋な配置用の矩形で、背景・枠線・装飾をデフォルトでは持たない。`panel` は layout primitive ではなく、canonical syntax では使わない。`view` / `box` / `row` / `column` は共通の layout header attribute として `size <w> <h>`、`gap <n>`、`align <x> [y]` を読める。scene root の標準サイズ指定は `view size 720 540 { ... }`。`for` は scene state collection の各 item から view node を生成する projection primitive で、level list には使わない。
+`text` は literal text、scene state の scalar value、または `for` binding の path を表示する。`button` は input、component effect、または scene command を発行する view component。旧 `button "Label" = name` や裸名 RHS は読まない。`-> input <name>`、`-> component_effect <name>`、または direct scene command を使う。`box` / `row` / `column` は入れ子の view tree を作る layout component。`box` は純粋な配置用の矩形で、背景・枠線・装飾をデフォルトでは持たない。`panel` は layout primitive ではなく、canonical syntax では使わない。`view` / `box` / `row` / `column` は共通の layout header attribute として `size <w> <h>`、`gap <n>`、`align <x> [y]` を読める。scene root の標準サイズ指定は `view size 4 3 { ... }`。`size` と `gap` の実寸は HTML adapter / theme が決め、`.puzzle` author は px を書かない。`for` は scene state collection の各 item から view node を生成する projection primitive で、level list には使わない。
 
 scene condition は current level context を読める。`level.name == <name>` / `level.name != <name>`、`level.label == <label>` / `level.label != <label>`、`level.last`、`level.has_next` をサポートする。level 固有の message / sounds / exception flow は effect 側ではなく condition 側で scoped にする。通常の level progression は scene condition の標準責務にしない。authoring での level 指定は `level.name` を標準にし、index / number 条件は標準 surface にしない。
 
@@ -661,6 +663,8 @@ query cargo_count = count(cargo)
 query pressed_buttons = count([ Button Box ])
 query any_cargo = exists(cargo)
 query has_pressed_button = exists([ Button Box ])
+query no_cargo = none(cargo)
+query no_pressed_buttons = none([ Button Box ])
 ```
 
 現在の query primitive:
@@ -670,9 +674,13 @@ count(selector)
 count(pattern)
 exists(selector)
 exists(pattern)
+none(selector)
+none(pattern)
 some(selector)
 some(pattern)
 ```
+
+`exists` / `none` / `some` は boolean query primitive として 1 または 0 を返す。意味上は `exists(matcher)` が `count(matcher) > 0`、`none(matcher)` が `count(matcher) == 0` と同値だが、runtime は `count` に lower せず、object count cache または `has_pattern_match` の short-circuit で評価する。`some` は `exists` の alias。
 
 `if <query> == <number>` と `if <query>` は rule guard に lower される。`if <query>` は query value が 0 ではないことを意味する。
 
@@ -848,7 +856,7 @@ cargo = Box Crate
 
 ## Legend And Levels
 
-表示文字と level 文字は `levels` 直下の `legend` で定義する。`model puzzle` 直下の `legend` は読まない。
+表示文字と level 文字は `levels` 直下の `legend` で定義する。`puzzle` 直下の `legend` は読まない。
 
 ```txt
 levels {
@@ -895,6 +903,8 @@ level warmup
 複数 object の `legend` は overlay 表示。
 
 `empty` は object ではなく、何もない cell を表す予約語。
+
+3D `levels3` では `.` が既定の empty 文字で、`legend` に `. = empty` を書かなくても空 cell として読まれる。`_ = empty` のような明示的な `empty` 行は既定 empty 文字の上書きであり、その場合 `.` は通常文字に戻るため、floor などに使うなら `. = Floor` のように明示する。
 
 level:
 
@@ -963,8 +973,8 @@ level-local `legend` は `levels` 直下の共有 legend に合成してその l
 
 ```txt
 win_conditions {
-some Goal
-all Goal on Box
+exists(Goal)
+none([ Goal no Box ])
 }
 ```
 
@@ -972,6 +982,11 @@ all Goal on Box
 
 ```txt
 some <selector>
+no <selector-or-pattern>
 all <selector> on <selector>
 some <selector> on <selector>
 ```
+
+Canonical な意味モデルでは `exists(matcher)` / `none(matcher)` / `count(matcher)` を使う。`some Goal` は `exists(Goal)`、`no <pattern>` は `none(<pattern>)`、`all Goal on Box` は `none([ Goal no Box ])` へ lower される sugar である。
+
+`all <selector> on <selector>` は same-cell coverage sugar であり、右辺に oriented pattern を取らない。方向つきの spatial relation は condition pattern が所有するため、`exists(<orientation> [ ... ])` / `none(<orientation> [ ... ])` または `some <orientation> [ ... ]` / `no <orientation> [ ... ]` で表す。3D の vertical support goal なら `exists(Goal)` と `none(down [ no Box | Goal ])` の組み合わせが canonical で、`all Goal on down [ Box | Goal ]` は受け入れない。

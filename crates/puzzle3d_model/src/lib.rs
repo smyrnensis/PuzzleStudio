@@ -3,7 +3,6 @@ mod level;
 mod model;
 mod parser;
 mod patch;
-mod scene;
 mod selector;
 mod session;
 mod snapshot;
@@ -24,10 +23,6 @@ pub use parser::{
     CameraSettings3, GridSettings3, ModelSettings3, ParseError3, ParsedPuzzle3, parse_puzzle3d,
 };
 pub use patch::{Patch3, PatchError3, PatchOp3};
-pub use scene::{
-    Scene3, SceneAction3, SceneAlign3, SceneAlignX3, SceneAlignY3, SceneComponent3,
-    SceneKeyBinding3, SceneLayout3, ScenePuzzle3, SceneSize3,
-};
 pub use selector::{
     ConcreteObject3, DenseCell3, DensePattern3, DenseRow3, DenseRuleTemplate3, DenseSlice3,
     FrameOrientation3, LineMatchCellTemplate3, LineOrientation3, LinePatternTemplate3,
@@ -47,7 +42,7 @@ pub use snapshot::{BoardCell3, BoardSnapshot3};
 pub use sprite::{Sprite3, SpriteColor3, SpriteSet3, SpriteVoxels3};
 pub use state::{CellView3, State3, StateError3};
 pub use transition::{
-    Guard3, MatchCell3, Pattern3, Rule3, RuleApplication3, TransitionError3, WriteOp3,
+    Guard3, MatchCell3, Pattern3, Rule3, RuleApplication3, RuleEffect3, TransitionError3, WriteOp3,
     count_pattern_matches, has_pattern_match, transition_once, transition_once_all,
     transition_once_per_level, transition_once_with_input, transition_program,
     transition_program_without_input, transition_repeated,
@@ -55,6 +50,7 @@ pub use transition::{
 pub use visual::{ObjectVisual3, VisualCell3, VisualObject3, VisualSnapshot3};
 pub use visual_fixture::{
     VisualFixtureExportError3, export_visual_fixture_json, export_visual_fixture_json_with_title,
+    export_visual_fixture_json_with_title_and_scenes,
 };
 pub use win::WinCondition3;
 
@@ -1498,20 +1494,20 @@ horizontal [ Player | no solid ] -> [ | Player ]
     fn parser_keeps_render_settings_as_model_owned_display_state() {
         let parsed = parse_puzzle3d(
             r#"
-model puzzle3 camera_test {
+puzzle3 camera_test {
 render {
-  camera {
-    yaw 90
-    pitch 42
-    zoom 1.25
-    interactive_look true
-    interactive_zoom true
-  }
-  grid {
-    occupied_cells true
-  }
-  shade false
-}
+	  camera {
+	    yaw = 90
+	    pitch = 42
+	    zoom = 1.25
+	    interactive_look = true
+	    interactive_zoom = true
+	  }
+	  grid {
+	    occupied_cells = true
+	  }
+	  shade = false
+	}
 
 layers {
 actor
@@ -1562,7 +1558,7 @@ Player actor
     fn parser_maps_legacy_debug_camera_to_interactive_look() {
         let parsed = parse_puzzle3d(
             r#"
-model puzzle3 camera_test {
+puzzle3 camera_test {
 debug_camera = true
 camera_yaw = 90
 camera_pitch = 42
@@ -1612,6 +1608,53 @@ input horizontal [ Player | no solid ] -> [ | Player ]
             parsed.rules[3].guards,
             vec![Guard3::InputIs(INPUT_BACKWARD)]
         );
+    }
+
+    #[test]
+    fn parser_lowers_camera_variable_effects_from_rules() {
+        let parsed = parse_puzzle3d(
+            r#"
+layers {
+actor = Player Wall
+}
+
+rules {
+right [ Player | no Wall ] -> [ | Player ] set yaw = 100
+set zoom = 1.5
+reset_camera
+}
+
+levels3 test {
+legend {
+P = Player
+}
+
+level one {
+P
+}
+}
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(parsed.rules.len(), 3);
+        assert_eq!(
+            parsed.rules[0].effects,
+            vec![RuleEffect3::SetCameraYaw(100)]
+        );
+        assert_eq!(
+            parsed.rules[1].effects,
+            vec![RuleEffect3::SetCameraZoom(1500)]
+        );
+        assert!(parsed.rules[1].pattern.cells.is_empty());
+        assert!(parsed.rules[1].writes.is_empty());
+        assert_eq!(parsed.rules[2].effects, vec![RuleEffect3::ResetCamera]);
+
+        let fixture = export_visual_fixture_json(&parsed).unwrap();
+        assert!(fixture.contains(r#""effects": ["#));
+        assert!(fixture.contains(r#""kind": "set_camera""#));
+        assert!(fixture.contains(r#""variable": "yaw""#));
+        assert!(fixture.contains(r#""kind": "reset_camera""#));
     }
 
     #[test]
@@ -1696,7 +1739,6 @@ horizontal [ Player | no solid ] -> [ | Player ]
 
 levels3 {
 legend {
-. = empty
 P = Player
 B = Box
 # = Wall
@@ -1732,6 +1774,64 @@ level stacked {
         assert!(state.has_object(&bundle.game, Coord3::new(1, 1, 0), ObjectId(2)));
         assert!(state.has_object(&bundle.game, Coord3::new(2, 1, 0), ObjectId(3)));
         assert!(state.has_object(&bundle.game, Coord3::new(0, 2, 0), ObjectId(4)));
+    }
+
+    #[test]
+    fn parser_uses_dot_as_default_empty_char_for_3d_levels() {
+        let parsed = parse_puzzle3d(
+            r#"
+layers {
+actor = Player
+}
+
+levels3 {
+legend {
+P = Player
+}
+
+level default_dot {
+P.
+}
+}
+"#,
+        )
+        .unwrap();
+
+        let bundle = parsed.level_bundle.as_ref().expect("level bundle exists");
+        let state = bundle.build_level_state(0).unwrap();
+
+        assert!(state.has_object(&bundle.game, Coord3::new(0, 0, 0), ObjectId(1)));
+        assert_eq!(
+            state.cell_view(Coord3::new(1, 0, 0)).unwrap().objects,
+            Vec::<ObjectId>::new()
+        );
+    }
+
+    #[test]
+    fn parser_treats_empty_legend_as_default_empty_char_override() {
+        let err = parse_puzzle3d(
+            r#"
+layers {
+actor = Player
+}
+
+levels3 {
+legend {
+_ = empty
+P = Player
+}
+
+level override_empty {
+P.
+}
+}
+"#,
+        )
+        .unwrap_err();
+
+        assert!(
+            matches!(err, ParseError3::Message(message) if message.contains("unknown legend char: ."))
+        );
     }
 
     #[test]
@@ -1830,7 +1930,7 @@ PX
     fn parser_lowers_model_wrapped_win_conditions_and_named_level_pack() {
         let parsed = parse_puzzle3d(
             r#"
-model puzzle3 push3d {
+puzzle3 push3d {
 layers {
 floor = Goal
 actor = Player Box
@@ -1838,7 +1938,7 @@ actor = Player Box
 
 win_conditions {
 some Goal
-all Goal on down [ Box | Goal ]
+no down [ no Box | Goal ]
 }
 }
 
@@ -1887,10 +1987,78 @@ level unsolved {
     }
 
     #[test]
+    fn parser_rejects_all_on_oriented_win_pattern() {
+        let err = parse_puzzle3d(
+            r#"
+puzzle3 push3d {
+layers {
+floor = Goal
+actor = Box
+}
+
+win_conditions {
+some Goal
+all Goal on down [ Box | Goal ]
+}
+}
+"#,
+        )
+        .unwrap_err();
+
+        assert!(
+            matches!(err, ParseError3::Message(message) if message.contains("all <selector> on <pattern> is not valid"))
+        );
+    }
+
+    #[test]
+    fn parser_accepts_function_style_3d_win_conditions() {
+        let parsed = parse_puzzle3d(
+            r#"
+puzzle3 push3d {
+layers {
+floor = Goal
+actor = Box
+}
+
+win_conditions {
+exists(Goal)
+none(down [ no Box | Goal ])
+}
+}
+
+levels3 basic of push3d {
+legend {
+. = empty
+G = Goal
+B = Box
+}
+
+level solved {
+...
+.B.
+...
+
+...
+.G.
+...
+}
+}
+"#,
+        )
+        .unwrap();
+
+        let bundle = parsed.level_bundle.as_ref().expect("level bundle exists");
+        let win = parsed.win_condition.as_ref().expect("win condition exists");
+        let solved = bundle.build_level_state(0).unwrap();
+
+        assert!(win.is_met(&bundle.game, &solved));
+    }
+
+    #[test]
     fn parser_rejects_2d_model_keyword_in_3d_parser() {
         let err = parse_puzzle3d(
             r#"
-model puzzle push3d {
+puzzle push3d {
 layers {
 actor = Player
 }
@@ -1922,24 +2090,6 @@ actor = Player
             parsed.lifecycle.on_level_clear,
             vec![LifecycleCommand3::NextLevel]
         );
-        assert_eq!(parsed.scenes[2].name, "playing");
-        assert_eq!(
-            parsed.scenes[2].keys,
-            vec![
-                SceneKeyBinding3::new(
-                    "q",
-                    SceneAction3::Goto {
-                        scene: "level_select".to_string()
-                    }
-                ),
-                SceneKeyBinding3::new(
-                    "Escape",
-                    SceneAction3::Goto {
-                        scene: "level_select".to_string()
-                    }
-                )
-            ]
-        );
         let sprites = parsed.sprite_set.as_ref().expect("sprite set exists");
         assert_eq!(sprites.name, "basic");
         assert_eq!(sprites.model.as_deref(), Some("sokoban_literally_in_3d"));
@@ -1962,11 +2112,11 @@ actor = Player
         );
         let fixture_json = export_visual_fixture_json(&parsed).unwrap();
         assert!(fixture_json.contains("\"title\": \"Sokoban Literally in 3D\""));
-        assert!(fixture_json.contains("\"grid\": { \"visible\": true, \"occupied_cells\": true }"));
+        assert!(fixture_json.contains("\"grid\": { \"visibility\": 1, \"occupied_cells\": true }"));
         assert!(fixture_json.contains("\"shade\": true"));
         assert!(fixture_json.contains("\"rules\": ["));
         assert!(fixture_json.contains("\"onLevelClear\": [\"next_level\"]"));
-        assert!(fixture_json.contains("\"kind\": \"all_objects_covered_by_pattern\""));
+        assert!(fixture_json.contains("\"kind\": \"no_pattern\""));
         assert!(fixture_json.contains("\"Box\": {"));
         assert!(fixture_json.contains("\"bitmap\": ["));
 
@@ -2107,65 +2257,6 @@ actor = Player
         assert_eq!(bundle.level(0).unwrap().name, "push_once");
         assert_eq!(bundle.level(1).unwrap().name, "corner_lift");
         assert_eq!(bundle.level(0).unwrap().level.size, Size3::new(5, 5, 2));
-        assert_eq!(parsed.scenes.len(), 3);
-        assert_eq!(parsed.scenes[0].name, "title");
-        assert_eq!(
-            parsed.scenes[0].components,
-            vec![
-                SceneComponent3::Title {
-                    text: "Sokoban Literally in 3D".to_string(),
-                    layout: SceneLayout3::default(),
-                },
-                SceneComponent3::Button {
-                    label: "Start".to_string(),
-                    action: SceneAction3::StartLevels {
-                        levels: "handmade".to_string(),
-                        scene: "playing".to_string()
-                    },
-                    layout: SceneLayout3::default(),
-                },
-                SceneComponent3::Button {
-                    label: "Level Select".to_string(),
-                    action: SceneAction3::Goto {
-                        scene: "level_select".to_string()
-                    },
-                    layout: SceneLayout3::default(),
-                }
-            ]
-        );
-        assert_eq!(parsed.scenes[1].name, "level_select");
-        assert_eq!(
-            parsed.scenes[1].components,
-            vec![
-                SceneComponent3::Title {
-                    text: "Select Level".to_string(),
-                    layout: SceneLayout3::default(),
-                },
-                SceneComponent3::LevelMenu {
-                    levels: "handmade".to_string(),
-                    action: SceneAction3::StartLevels {
-                        levels: "handmade".to_string(),
-                        scene: "playing".to_string()
-                    },
-                    layout: SceneLayout3::default(),
-                },
-                SceneComponent3::Button {
-                    label: "Back".to_string(),
-                    action: SceneAction3::Goto {
-                        scene: "title".to_string()
-                    },
-                    layout: SceneLayout3::default(),
-                }
-            ]
-        );
-        assert_eq!(parsed.scenes[2].name, "playing");
-        assert_eq!(
-            parsed.scenes[2].components,
-            vec![SceneComponent3::Puzzle3 {
-                source: "board".to_string(),
-                layout: SceneLayout3::default(),
-            }]
-        );
         assert_eq!(
             sprites.sprite("Floor").unwrap().voxels.size,
             Size3::new(3, 3, 1)
@@ -2177,8 +2268,7 @@ actor = Player
 
         let fixture_json = export_visual_fixture_json(&parsed).unwrap();
         assert!(fixture_json.contains("\"title\": \"From Puzzle Sokoban 3D\""));
-        assert!(fixture_json.contains("\"currentScene\": \"title\""));
-        assert!(fixture_json.contains("\"kind\": \"level_menu\""));
+        assert!(fixture_json.contains("\"currentScene\": \"playing\""));
         assert!(fixture_json.contains("\"kind\": \"puzzle3\""));
         assert!(fixture_json.contains("\"levels\""));
 
@@ -2297,6 +2387,38 @@ actor = Player
             Some(Direction3::RIGHT)
         );
         assert_eq!(game.direction_for_input(InputId3(6)), None);
+    }
+
+    #[test]
+    fn parser_accepts_owner_scoped_inputs_for_3d_models() {
+        let parsed = parse_puzzle3d(
+            r#"
+puzzle3 scoped_inputs {
+layers {
+solid = Player
+}
+
+inputs {
+right <- d ArrowRight
+restart <- r
+}
+
+rules {
+input right [ Player | ] -> [ | Player ]
+}
+}
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(parsed.game.inputs.len(), 2);
+        let right = parsed.game.input_by_name("right").unwrap();
+        assert_eq!(right.id, INPUT_RIGHT);
+        assert_eq!(right.direction, Some(Direction3::RIGHT));
+        assert_eq!(right.keys, vec!["d", "ArrowRight"]);
+        let restart = parsed.game.input_by_name("restart").unwrap();
+        assert_eq!(restart.direction, None);
+        assert_eq!(restart.keys, vec!["r"]);
     }
 
     #[test]

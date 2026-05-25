@@ -27,13 +27,50 @@ fn run() -> Result<(), CliError> {
     match command.as_str() {
         "check" => check_command(&args),
         "export-html" => export_html_command(&args),
+        "export-editor" => export_editor_command(&args),
         "import-puzzlescript" => import_puzzlescript_command(&args),
+        "play" => play_command(&args),
+        "preview" => preview_command(&args),
+        "editor" | "edit" => editor_command(&args),
         "--help" | "-h" | "help" => {
             print_usage();
             Ok(())
         }
         other => Err(CliError::Usage(format!("unknown command: {other}"))),
     }
+}
+
+fn play_command(args: &[String]) -> Result<(), CliError> {
+    if args.iter().any(|arg| arg == "--help" || arg == "-h") {
+        print_play_usage();
+        return Ok(());
+    }
+    ascii_play::run_terminal_from_args(args.iter().cloned())
+        .map_err(|error| CliError::Config(error.to_string()))
+}
+
+fn preview_command(args: &[String]) -> Result<(), CliError> {
+    if args.iter().any(|arg| arg == "--help" || arg == "-h") {
+        print_preview_usage();
+        return Ok(());
+    }
+    let mut forwarded = args.to_vec();
+    if !forwarded.iter().any(|arg| arg == "--serve") {
+        forwarded.push("--serve".to_string());
+    }
+    html_play::run_cli_with_args(forwarded).map_err(CliError::Config)
+}
+
+fn editor_command(args: &[String]) -> Result<(), CliError> {
+    if args.iter().any(|arg| arg == "--help" || arg == "-h") {
+        print_editor_usage();
+        return Ok(());
+    }
+    let mut forwarded = args.to_vec();
+    if !forwarded.iter().any(|arg| arg == "--serve") {
+        forwarded.push("--serve".to_string());
+    }
+    html_editor::run_cli_with_args(forwarded).map_err(|error| CliError::Config(error.to_string()))
 }
 
 fn check_command(args: &[String]) -> Result<(), CliError> {
@@ -172,6 +209,15 @@ fn export_html_command(args: &[String]) -> Result<(), CliError> {
     fs::write(&output_path, html)?;
     println!("exported {}", output_path.display());
     Ok(())
+}
+
+fn export_editor_command(args: &[String]) -> Result<(), CliError> {
+    if args.iter().any(|arg| arg == "--help" || arg == "-h") {
+        print_export_editor_usage();
+        return Ok(());
+    }
+    html_editor::run_cli_with_args(args.iter().cloned())
+        .map_err(|error| CliError::Config(error.to_string()))
 }
 
 fn import_puzzlescript_command(args: &[String]) -> Result<(), CliError> {
@@ -355,7 +401,7 @@ fn escape_json(value: &str) -> String {
 
 fn print_usage() {
     eprintln!(
-        "usage:\n  puzzlestudio check <path> [--json]\n  puzzlestudio export-html <path> -o <output.html>\n  puzzlestudio import-puzzlescript <source.txt> -o <game.puzzle>"
+        "usage:\n  puzzlestudio check <path> [--json]\n  puzzlestudio play [path]\n  puzzlestudio preview [path] [--port 7878] [--solver-depth N] [--solver-nodes N] [--solver-ms N]\n  puzzlestudio editor [path] [--port 8787]\n  puzzlestudio export-html <path> -o <output.html>\n  puzzlestudio export-editor [path] -o <editor.html>\n  puzzlestudio import-puzzlescript <source.txt> -o <game.puzzle>"
     );
 }
 
@@ -366,6 +412,26 @@ fn print_check_usage() {
 fn print_export_html_usage() {
     eprintln!(
         "usage: puzzlestudio export-html <path/to/game-folder-or-game.puzzle> -o <output.html>"
+    );
+}
+
+fn print_play_usage() {
+    eprintln!("usage: puzzlestudio play [path/to/game-folder-or-game.puzzle]");
+}
+
+fn print_preview_usage() {
+    eprintln!(
+        "usage: puzzlestudio preview [path/to/game-folder-or-game.puzzle] [--port 7878] [--solver-depth N] [--solver-nodes N] [--solver-ms N]"
+    );
+}
+
+fn print_editor_usage() {
+    eprintln!("usage: puzzlestudio editor [path/to/game-folder-or-game.puzzle] [--port 8787]");
+}
+
+fn print_export_editor_usage() {
+    eprintln!(
+        "usage: puzzlestudio export-editor [path/to/game-folder-or-game.puzzle] -o <editor.html>"
     );
 }
 

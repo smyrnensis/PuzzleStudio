@@ -466,7 +466,7 @@ function existingSoundsDefinitionNames(source, kind) {
 
 function findSoundsDefinitionAtPosition(source, position) {
   const text = String(source || "");
-  const lines = sourceLinesWithOffsets(text);
+  const lines = soundSourceLinesWithOffsets(text);
   const soundsBlock = findTopLevelSoundsBlock(lines);
   if (!soundsBlock || position < soundsBlock.bodyStart || position > soundsBlock.bodyEnd) {
     return null;
@@ -510,7 +510,7 @@ function parseSoundsDefinitionLine(line) {
 
 function insertSoundsDefinitionIntoSource(source, line) {
   const text = String(source || "");
-  const lines = sourceLinesWithOffsets(text);
+  const lines = soundSourceLinesWithOffsets(text);
   const soundsBlock = findTopLevelSoundsBlock(lines);
   if (soundsBlock) {
     const entryIndent = soundsBlock.entryIndent || `${soundsBlock.indent}\t`;
@@ -539,7 +539,7 @@ function insertSoundsDefinitionIntoSource(source, line) {
 
 function replaceSoundsDefinitionInSource(source, definition) {
   const text = String(source || "");
-  const lines = sourceLinesWithOffsets(text);
+  const lines = soundSourceLinesWithOffsets(text);
   const soundsBlock = findTopLevelSoundsBlock(lines);
   if (!soundsBlock) {
     return null;
@@ -560,7 +560,7 @@ function replaceSoundsDefinitionInSource(source, definition) {
   return null;
 }
 
-function sourceLinesWithOffsets(source) {
+function soundSourceLinesWithOffsets(source) {
   const lines = [];
   let start = 0;
   while (start <= source.length) {
@@ -760,6 +760,10 @@ soundsMusicProgress.addEventListener("keydown", (event) => {
     event.preventDefault();
     seekSoundMusic(0.9999);
   }
+});
+registerSourceEditableTarget?.("sounds", {
+  find: findSoundsDefinitionAtPosition,
+  load: loadSoundFromSourcePosition,
 });
 
 resetSoundsBuilder();

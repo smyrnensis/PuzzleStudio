@@ -6,6 +6,8 @@ document.body.classList.toggle("is-component-embed", componentEmbedMode);
 const puzzle3Frame = ensurePuzzle3ComponentFrame();
 const canvas = puzzle3Frame.querySelector("#view");
 const ctx = canvas.getContext("2d");
+const PUZZLE3_CAMERA_MIN_PITCH_DEGREES = -90;
+const PUZZLE3_CAMERA_MAX_PITCH_DEGREES = 90;
 
 function ensurePuzzle3ComponentFrame() {
   let existing = document.querySelector("#view");
@@ -34,7 +36,7 @@ const fallbackSnapshot = {
   settings: {
     interactiveLook: false,
     interactiveZoom: false,
-    grid: { visible: false },
+    grid: { visibility: 0 },
     shade: true,
   },
   directions: {
@@ -132,6 +134,9 @@ const view = {
   lastPointerX: 0,
   lastPointerY: 0,
   shadowsEnabled: false,
+  projectionFitKey: "",
+  projectionWidth: 0,
+  projectionHeight: 0,
 };
 let snapshot = fallbackSnapshot;
 let runtime = window.Puzzle3DTestRuntime.create(fallbackSnapshot);
@@ -600,16 +605,67 @@ function resizeCanvas() {
 function updateProjectionFit(rect) {
   const size = snapshot.size || fallbackSnapshot.size;
   const camera = snapshot.camera || fallbackSnapshot.camera;
-  const zoom = Math.max(0.1, Number(camera.zoom ?? 1));
+  if (!shouldAutoFitFiniteStage(size)) {
+    return;
+  }
+  const width = Math.max(1, Number(rect.width) || 1);
+  const height = Math.max(1, Number(rect.height) || 1);
+  const zoom = projectionZoom(camera);
   const bounds = projectedSceneBoundsUnit(size, camera);
   const boundsWidth = Math.max(0.001, bounds.maxX - bounds.minX);
   const boundsHeight = Math.max(0.001, bounds.maxY - bounds.minY);
   const padding = 0.72;
-  const scale = Math.min(rect.width / boundsWidth, rect.height / boundsHeight) * padding;
-  view.cellScale = Math.max(4, scale / zoom);
+  const scale = Math.min(width / boundsWidth, height / boundsHeight) * padding;
+  view.cellScale = Math.max(0.0001, scale / zoom);
   const effectiveScale = view.cellScale * zoom;
-  view.originX = rect.width / 2 - ((bounds.minX + bounds.maxX) / 2) * effectiveScale;
-  view.originY = rect.height / 2 - ((bounds.minY + bounds.maxY) / 2) * effectiveScale;
+  view.originX = width / 2 - ((bounds.minX + bounds.maxX) / 2) * effectiveScale;
+  view.originY = height / 2 - ((bounds.minY + bounds.maxY) / 2) * effectiveScale;
+  view.projectionWidth = width;
+  view.projectionHeight = height;
+  view.projectionFitKey = projectionFitKey(size, camera);
+}
+
+function ensureProjectionFit() {
+  const rect = canvas.getBoundingClientRect();
+  const size = snapshot.size || fallbackSnapshot.size;
+  if (!shouldAutoFitFiniteStage(size)) {
+    return;
+  }
+  const width = Math.max(1, Number(rect.width) || 1);
+  const height = Math.max(1, Number(rect.height) || 1);
+  const key = projectionFitKey(size, snapshot.camera || fallbackSnapshot.camera);
+  if (
+    key !== view.projectionFitKey
+    || Math.abs(width - view.projectionWidth) > 0.5
+    || Math.abs(height - view.projectionHeight) > 0.5
+  ) {
+    updateProjectionFit({ width, height });
+  }
+}
+
+function shouldAutoFitFiniteStage(size) {
+  return finiteStageDimension(size?.width)
+    && finiteStageDimension(size?.depth)
+    && finiteStageDimension(size?.height);
+}
+
+function finiteStageDimension(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0;
+}
+
+function projectionFitKey(size, camera) {
+  return [
+    Math.max(1, Number(size?.width) || 1),
+    Math.max(1, Number(size?.depth) || 1),
+    Math.max(1, Number(size?.height) || 1),
+    Number(camera?.yawDegrees ?? 0),
+    Number(camera?.pitchDegrees ?? 35),
+  ].join(":");
+}
+
+function projectionZoom(camera) {
+  return Math.max(0.1, Number(camera?.zoom ?? 1) || 1);
 }
 
 function projectedSceneBoundsUnit(size, camera) {
@@ -681,8 +737,13 @@ function updateCameraInteractionState() {
 function rotateCamera(deltaX, deltaY) {
   const camera = snapshot.camera || fallbackSnapshot.camera;
   camera.yawDegrees = normalizeDegrees(camera.yawDegrees + deltaX * 0.35);
-  camera.pitchDegrees = clamp(camera.pitchDegrees - deltaY * 0.25, -80, 80);
+  camera.pitchDegrees = clamp(
+    camera.pitchDegrees - deltaY * 0.25,
+    PUZZLE3_CAMERA_MIN_PITCH_DEGREES,
+    PUZZLE3_CAMERA_MAX_PITCH_DEGREES,
+  );
   snapshot.camera = camera;
+  resetProjection();
 }
 
 function zoomCamera(deltaY) {
@@ -719,6 +780,7 @@ function degreesToRadians(value) {
 }
 
 function draw() {
+  ensureProjectionFit();
   const width = canvas.clientWidth;
   const height = canvas.clientHeight;
   ctx.clearRect(0, 0, width, height);
@@ -730,7 +792,7 @@ function draw() {
   primitives.sort(comparePrimitiveOrder);
   for (const primitive of primitives) {
     if (primitive.kind === "line") {
-      lineSegment(primitive.from, primitive.to, primitive.stroke, primitive.width);
+      lineSegment(primitive.from, primitive.to, primitive.stroke, primitive.width, primitive.alpha);
     } else {
       polygonPoints(primitive.points, primitive.fill);
     }
@@ -739,17 +801,29 @@ function draw() {
 
 function gridSettings() {
   const raw = snapshot.settings?.grid;
-  if (raw === true) {
-    return { visible: true, occupiedCells: true };
+  if (!raw || raw === false || raw === true) {
+    return { visibility: 0 };
   }
-  if (!raw || raw === false) {
-    return { visible: false };
-  }
+  const visibility = gridVisibility(raw);
   return {
-    visible: raw.visible !== false,
+    visibility,
     color: raw.color,
+    frameColor: raw.frameColor || raw.frame_color,
     occupiedCells: raw.occupied_cells !== false && raw.occupiedCells !== false,
+    stageFrame: Boolean(raw.stageFrame ?? raw.stage_frame ?? raw.frame),
   };
+}
+
+function gridVisibility(raw) {
+  return clamp01(raw.visibility);
+}
+
+function clamp01(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) {
+    return 0;
+  }
+  return Math.max(0, Math.min(1, number));
 }
 
 function spriteRenderSettings() {
@@ -766,21 +840,33 @@ function spriteRenderSettings() {
 }
 
 function gridLines(grid) {
-  if (!grid.visible) {
+  if (!grid.visibility) {
     return [];
   }
-  if (!grid.occupiedCells) {
-    return [];
-  }
-  const occupiedCells = occupiedCellSet(snapshot.cells || []);
-  const edgeLines = new Map();
-  for (const cell of snapshot.cells || []) {
-    if (!cell.objects?.length) {
-      continue;
+  const lines = [];
+  if (grid.occupiedCells) {
+    const occupiedCells = occupiedCellSet(snapshot.cells || []);
+    const edgeLines = new Map();
+    for (const cell of snapshot.cells || []) {
+      if (!cell.objects?.length) {
+        continue;
+      }
+      addVisibleOccupiedCellGridLines(cell.position, occupiedCells, edgeLines, grid);
     }
-    addVisibleOccupiedCellGridLines(cell.position, occupiedCells, edgeLines, grid);
+    lines.push(...edgeLines.values());
   }
-  return [...edgeLines.values()];
+  if (grid.stageFrame) {
+    lines.push(...stageFrameGridLines(grid));
+  }
+  return lines;
+}
+
+function stageFrameGridLines(grid) {
+  return Puzzle3VisualCore.stageFrameEdges(snapshot.size || fallbackSnapshot.size).map((edge) => {
+    const line = projectGridLine(edge.from, edge.to, "stageFrame", grid, gridOrder(midpoint3(edge.from, edge.to)));
+    line.renderPriority = 2;
+    return line;
+  });
 }
 
 function occupiedCellSet(cells) {
@@ -894,7 +980,8 @@ function projectGridLine(from, to, kind, grid, gridOrderOverride = null, ownerCe
     renderPriority: 1,
     depth: (a.depth + b.depth) / 2,
     stroke: gridStroke(kind, grid),
-    width: kind === "minor" ? 1 : 1.5,
+    alpha: grid.visibility,
+    width: kind === "stageFrame" ? 1.6 : (kind === "minor" ? 1 : 1.5),
   };
 }
 
@@ -996,6 +1083,9 @@ function signedAxis(value) {
 }
 
 function gridStroke(kind, grid) {
+  if (kind === "stageFrame") {
+    return grid.frameColor || "rgba(29, 37, 44, 0.82)";
+  }
   return grid.color || "rgba(31, 36, 40, 0.62)";
 }
 
@@ -1523,8 +1613,9 @@ function polygonPoints(points, fill) {
   ctx.fill();
 }
 
-function lineSegment(from, to, stroke, width) {
+function lineSegment(from, to, stroke, width, alpha = 1) {
   ctx.save();
+  ctx.globalAlpha = clamp01(alpha);
   ctx.strokeStyle = stroke;
   ctx.lineWidth = width;
   ctx.lineCap = "round";

@@ -94,7 +94,7 @@ pub fn translate_puzzlescript_to_canonical(source: &str) -> Result<String, AppEr
     out.push(String::new());
     push_theme_colors(&mut out, &theme_colors);
     push_sounds(&mut out, &sounds);
-    out.push("model puzzle main {".to_string());
+    out.push("puzzle main {".to_string());
     push_layers(&mut out, &collision_layers);
     push_default_inputs(&mut out);
     push_groups(&mut out, &aliases);
@@ -914,9 +914,14 @@ fn push_rules(
     sounds: &[PsSoundDef],
 ) {
     let player_selector = ps_player_selector(objects, aliases);
+    let has_again = ps_rules_have_again(lines);
+    if has_again {
+        out.push("var __ps_again = false".to_string());
+        out.push(String::new());
+    }
     if run_rules_on_level_start {
         out.push("routine __ps_main once {".to_string());
-        push_ps_main_rule_body(out, lines, objects, aliases, sounds, "  ");
+        push_ps_main_rule_body(out, lines, objects, aliases, sounds, "  ", has_again);
         out.push("}".to_string());
         out.push(String::new());
 
@@ -947,9 +952,22 @@ fn push_rules(
     out.push(format!(
         "  input directions [ {player_selector} ] -> [ {player_selector}{{>}} ]"
     ));
-    push_ps_main_rule_body(out, lines, objects, aliases, sounds, "  ");
+    push_ps_main_rule_body(out, lines, objects, aliases, sounds, "  ", has_again);
     out.push("}".to_string());
     out.push(String::new());
+}
+
+fn ps_rules_have_again(lines: &[String]) -> bool {
+    lines.iter().any(|line| {
+        line.split_whitespace()
+            .any(|token| token.eq_ignore_ascii_case("again"))
+    })
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PsAgainLowering {
+    Command,
+    LoopFlag,
 }
 
 fn push_ps_background_fill(out: &mut Vec<String>, background_object: Option<&str>, indent: &str) {
@@ -968,6 +986,44 @@ fn push_ps_main_rule_body(
     aliases: &[PsAliasDef],
     sounds: &[PsSoundDef],
     indent: &str,
+    use_loop_flag_for_again: bool,
+) {
+    if use_loop_flag_for_again {
+        out.push(format!("{indent}set __ps_again = true"));
+        out.push(format!("{indent}repeat until __ps_again == false {{"));
+        out.push(format!("{indent}  set __ps_again = false"));
+        push_ps_main_rule_body_steps(
+            out,
+            lines,
+            objects,
+            aliases,
+            sounds,
+            &format!("{indent}  "),
+            PsAgainLowering::LoopFlag,
+        );
+        out.push(format!("{indent}}}"));
+        out.push(format!("{indent}set __ps_again = false"));
+        return;
+    }
+    push_ps_main_rule_body_steps(
+        out,
+        lines,
+        objects,
+        aliases,
+        sounds,
+        indent,
+        PsAgainLowering::Command,
+    );
+}
+
+fn push_ps_main_rule_body_steps(
+    out: &mut Vec<String>,
+    lines: &[String],
+    objects: &[PsObjectDef],
+    aliases: &[PsAliasDef],
+    sounds: &[PsSoundDef],
+    indent: &str,
+    again_lowering: PsAgainLowering,
 ) {
     push_ps_sound_call(out, sounds, indent, "__ps_sound_mark_existing");
     push_canonical_rule_rows(
@@ -980,6 +1036,7 @@ fn push_ps_main_rule_body(
         objects,
         aliases,
         indent,
+        again_lowering,
     );
     out.push(format!("{indent}move"));
     push_canonical_rule_rows(
@@ -992,6 +1049,7 @@ fn push_ps_main_rule_body(
         objects,
         aliases,
         indent,
+        again_lowering,
     );
     push_ps_sound_call(out, sounds, indent, "__ps_sound_emit_events");
 }
@@ -1002,6 +1060,7 @@ fn push_canonical_rule_rows<'a>(
     objects: &[PsObjectDef],
     aliases: &[PsAliasDef],
     indent: &str,
+    again_lowering: PsAgainLowering,
 ) {
     let mut group = Vec::<String>::new();
     for line in lines {
@@ -1009,7 +1068,7 @@ fn push_canonical_rule_rows<'a>(
         if !is_continuation {
             flush_canonical_rule_group(out, &mut group, indent);
         }
-        if let Some(rule) = canonical_rule_row(line, objects, aliases) {
+        if let Some(rule) = canonical_rule_row(line, objects, aliases, again_lowering) {
             group.push(rule);
         }
     }
@@ -1045,6 +1104,7 @@ fn canonical_rule_row(
     line: &str,
     objects: &[PsObjectDef],
     aliases: &[PsAliasDef],
+    again_lowering: PsAgainLowering,
 ) -> Option<String> {
     let trimmed = line.trim().trim_start_matches('+').trim();
     if !trimmed.contains("->") {
@@ -1064,12 +1124,129 @@ fn canonical_rule_row(
         .into_iter()
         .map(|token| resolve_rule_token(&token, objects, aliases))
         .collect::<Vec<_>>();
-    let tokens = expand_ps_sfx_effect_tokens(tokens);
+    let mut tokens = expand_ps_sfx_effect_tokens(tokens);
+    if has_again && again_lowering == PsAgainLowering::LoopFlag {
+        tokens = add_ps_again_idempotence_guards(tokens);
+    }
     let mut row = tokens.join(" ");
     if has_again {
-        row.push_str(" again");
+        match again_lowering {
+            PsAgainLowering::Command => row.push_str(" again"),
+            PsAgainLowering::LoopFlag => row.push_str(" set __ps_again = true"),
+        }
     }
     Some(row)
+}
+
+fn add_ps_again_idempotence_guards(tokens: Vec<String>) -> Vec<String> {
+    let Some(arrow) = tokens.iter().position(|token| token == "->") else {
+        return tokens;
+    };
+    let before_cells = bracket_cell_ranges(&tokens, 0, arrow);
+    let after_cells = bracket_cell_ranges(&tokens, arrow + 1, tokens.len());
+    let mut insertions = Vec::<(usize, Vec<String>)>::new();
+
+    for ((before_start, before_end), (after_start, after_end)) in
+        before_cells.iter().zip(after_cells.iter())
+    {
+        let guards = ps_again_guards_for_cell(
+            &tokens[before_start + 1..*before_end],
+            &tokens[after_start + 1..*after_end],
+        );
+        if !guards.is_empty() {
+            insertions.push((*before_end, guards));
+        }
+    }
+
+    if insertions.is_empty() {
+        return tokens;
+    }
+    let mut out = tokens;
+    for (index, guards) in insertions.into_iter().rev() {
+        for guard in guards.into_iter().rev() {
+            out.insert(index, guard);
+        }
+    }
+    remove_redundant_base_before_movement_guards(out)
+}
+
+fn bracket_cell_ranges(tokens: &[String], start: usize, end: usize) -> Vec<(usize, usize)> {
+    let mut ranges = Vec::new();
+    let mut open = None::<usize>;
+    for index in start..end {
+        match tokens[index].as_str() {
+            "[" => open = Some(index),
+            "]" => {
+                if let Some(start) = open.take() {
+                    ranges.push((start, index));
+                }
+            }
+            _ => {}
+        }
+    }
+    ranges
+}
+
+fn ps_again_guards_for_cell(before: &[String], after: &[String]) -> Vec<String> {
+    let mut guards = Vec::new();
+    for token in after {
+        if matches!(token.as_str(), "|" | "...") || token == "no" {
+            continue;
+        }
+        if let Some((base, value)) = movement_token_parts(token) {
+            if before.iter().any(|existing| existing == token) {
+                continue;
+            }
+            if before.iter().any(|existing| {
+                existing == base
+                    || movement_token_parts(existing)
+                        .is_some_and(|(existing_base, _)| existing_base == base)
+            }) {
+                let guard = format!("{base}{{no {value}}}");
+                if !before.iter().any(|existing| existing == &guard)
+                    && !guards.iter().any(|existing| existing == &guard)
+                {
+                    guards.push(guard);
+                }
+            }
+            continue;
+        }
+    }
+    guards
+}
+
+fn movement_token_parts(token: &str) -> Option<(&str, &str)> {
+    let (base, rest) = token.split_once('{')?;
+    let value = rest.strip_suffix('}')?;
+    if matches!(value, "up" | "down" | "left" | "right") {
+        Some((base, value))
+    } else {
+        None
+    }
+}
+
+fn movement_no_token_parts(token: &str) -> Option<(&str, &str)> {
+    let (base, rest) = token.split_once('{')?;
+    let value = rest.strip_suffix('}')?.strip_prefix("no ")?;
+    if matches!(value, "up" | "down" | "left" | "right") {
+        Some((base, value))
+    } else {
+        None
+    }
+}
+
+fn remove_redundant_base_before_movement_guards(mut tokens: Vec<String>) -> Vec<String> {
+    let mut index = 1;
+    while index < tokens.len() {
+        if let Some((base, _)) = movement_no_token_parts(&tokens[index]) {
+            if tokens[index - 1] == base {
+                tokens.remove(index - 1);
+                continue;
+            }
+        }
+        index += 1;
+    }
+    tokens
 }
 
 fn expand_ps_sfx_effect_tokens(tokens: Vec<String>) -> Vec<String> {

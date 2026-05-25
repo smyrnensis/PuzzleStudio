@@ -6,7 +6,7 @@ fn scene_and_model_inputs_are_owner_scoped() {
     let source = r##"
 title "scene inputs"
 
-model puzzle main {
+puzzle main {
 layers {
   layer_1 = Player
 }

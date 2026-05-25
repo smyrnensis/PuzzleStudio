@@ -84,7 +84,7 @@ fn modernize_test_source(source: &str) -> String {
                 continue;
             }
             ["puzzle", name] if !in_scene && is_identifier(name) => {
-                out.push(format!("model puzzle {name}"));
+                out.push(format!("puzzle {name}"));
             }
             ["render_overlay", rest @ ..] if rest.len() >= 3 => {
                 let ch = rest[rest.len() - 1];
@@ -1591,7 +1591,7 @@ fn scene_input_handler_requires_arrow_block_syntax() {
     let source = r#"
 title old_scene_input_handler
 
-model puzzle board {
+puzzle board {
 layers {
 actor = Player
 }
@@ -1627,7 +1627,7 @@ fn scene_template_rejects_using_keyword() {
     let source = r#"
 title old_using_scene
 
-model puzzle board {
+puzzle board {
 layers {
 actor = Player
 }
@@ -1660,7 +1660,7 @@ fn scene_key_command_assignment_can_feed_input_rule() {
     let source = r#"
 title scene_key_command_assignment
 
-model puzzle board {
+puzzle board {
 layers {
 actor = Player
 }
@@ -1708,7 +1708,7 @@ fn scene_rules_accept_input_trigger_sugar() {
     let source = r#"
 title input_sugar
 
-model puzzle board {
+puzzle board {
 layers {
 actor = Player
 }
@@ -1751,7 +1751,7 @@ fn bare_scene_title_and_subtitle_inherit_game_metadata() {
 title "Display Title"
 subtitle "Display Subtitle"
 
-model puzzle board {
+puzzle board {
 layers {
 actor = Player
 }
@@ -1793,7 +1793,7 @@ fn scene_can_use_model_name_as_default_puzzle_slot() {
     let source = r#"
 title default_slot
 
-model puzzle sokoban {
+puzzle sokoban {
 layers {
 actor = Player
 }
@@ -1826,9 +1826,7 @@ step sokoban
     assert_eq!(scene.state.puzzles[0].name, "sokoban");
     assert!(matches!(
         &scene.components[0],
-        SceneComponent::ModelWindow(window)
-            if window.model_kind == puzzle_scene::ModelKind::Puzzle2d
-                && window.source == "sokoban"
+        SceneComponent::Frame(frame) if frame.kind == "puzzle" && frame.source == "sokoban"
     ));
     assert!(matches!(
         &scene.puzzle_rule,
@@ -1837,11 +1835,49 @@ step sokoban
 }
 
 #[test]
+fn scene_frame_component_places_content_slot_without_model_kind() {
+    let source = r#"
+title frame_slot
+
+puzzle board {
+layers {
+actor = Player
+}
+legend {
+. = empty
+P = Player
+}
+rules {
+
+}
+levels {
+level start
+P
+}
+}
+
+scene playing {
+state {
+board = puzzle board
+}
+view {
+frame board
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    assert!(matches!(
+        &loaded.scenes[0].components[0],
+        SceneComponent::Frame(frame) if frame.kind == "frame" && frame.source == "board"
+    ));
+}
+
+#[test]
 fn scene_can_still_name_multiple_puzzle_slots_explicitly() {
     let source = r#"
 title named_slots
 
-model puzzle sokoban {
+puzzle sokoban {
 layers {
 actor = Player
 }
@@ -1886,7 +1922,7 @@ fn command_declaration_defines_direction_input() {
     let source = r#"
 title command_direction
 
-model puzzle board {
+puzzle board {
 layers {
 actor = Player
 }
@@ -1913,7 +1949,7 @@ fn scene_keys_reject_equals_effect_syntax() {
     let source = r#"
 title old_scene_keys
 
-model puzzle board {
+puzzle board {
 layers {
 actor = Player
 }
@@ -1947,7 +1983,7 @@ fn button_action_assignment_uses_equals() {
     let source = r#"
 title button_action_assignment
 
-model puzzle board {
+puzzle board {
 layers {
 actor = Player
 }
@@ -1992,7 +2028,7 @@ fn scene_box_is_layout_container_and_panel_is_not_scene_syntax() {
     let source = r#"
 title scene_box_layout
 
-model puzzle board {
+puzzle board {
 layers {
 actor = Player
 }
@@ -2013,26 +2049,26 @@ P
 }
 
 scene menu {
-view size 720 540 {
-box size 320 180 gap 12 align left top {
+view size 4 3 {
+box size 3 2 gap 1 align left top {
 text "Ready"
 }
 }
 }
 "#;
     let loaded = parse_game(source).unwrap();
-    assert_eq!(loaded.scenes[0].layout.size.unwrap().width, 720);
-    assert_eq!(loaded.scenes[0].layout.size.unwrap().height, 540);
+    assert_eq!(loaded.scenes[0].layout.size.unwrap().width, 4);
+    assert_eq!(loaded.scenes[0].layout.size.unwrap().height, 3);
     assert!(matches!(
         &loaded.scenes[0].components[0],
         SceneComponent::Box(container)
-            if container.layout.size.unwrap().width == 320
-                && container.layout.size.unwrap().height == 180
-                && container.layout.gap == Some(12)
+            if container.layout.size.unwrap().width == 3
+                && container.layout.size.unwrap().height == 2
+                && container.layout.gap == Some(1)
                 && matches!(&container.children[0], SceneComponent::Text(_))
     ));
 
-    let rejected = source.replace("box size 320 180 gap 12 align left top {", "panel {");
+    let rejected = source.replace("box size 3 2 gap 1 align left top {", "panel {");
     let error = parse_game(&rejected).unwrap_err();
     assert!(
         error.to_string().contains("unknown view directive panel"),
@@ -2045,7 +2081,7 @@ fn explicit_scene_input_and_component_effect_parse_separately() {
     let source = r#"
 title explicit_scene_input_effects
 
-model puzzle board {
+puzzle board {
 layers {
 actor = Player
 }
@@ -2139,7 +2175,7 @@ fn button_arrow_rejects_plain_action_rhs() {
     let source = r#"
 title old_button_action_arrow
 
-model puzzle board {
+puzzle board {
 layers {
 actor = Player
 }
@@ -2280,9 +2316,7 @@ button "Back" -> back
     assert_eq!(loaded.scenes[0].state.puzzles[0].name, "playing");
     assert!(matches!(
         &loaded.scenes[0].components[0],
-        SceneComponent::ModelWindow(window)
-            if window.model_kind == puzzle_scene::ModelKind::Puzzle2d
-                && window.source == "playing"
+        SceneComponent::Frame(frame) if frame.kind == "puzzle" && frame.source == "playing"
     ));
 
     let level_select = &loaded.scenes[1];
@@ -2350,7 +2384,7 @@ subtitle "Small Metadata Puzzle"
 author "Puzzle Person"
 homepage "https://example.com/puzzle"
 
-model puzzle default {
+puzzle default {
 layers {
 actor = Player
 }
@@ -2392,7 +2426,7 @@ fn top_level_name_metadata_is_rejected() {
     let source = r#"
 name Old Metadata
 
-model puzzle default {
+puzzle default {
 layers {
 actor = Player
 }
@@ -2824,7 +2858,7 @@ fn action_statement_is_rejected() {
     let source = r#"
 title action_button
 
-model puzzle board {
+puzzle board {
 layers {
 floor = Target Open
 actor = Player
@@ -3770,7 +3804,7 @@ fn bare_tag_set_assignment_is_not_canonical_syntax() {
     let source = r#"
 title old_tag_assignment
 
-model puzzle default {
+puzzle default {
 layers 2
 empty .
 
@@ -3844,7 +3878,7 @@ end
 
     let error = parse_game(source).unwrap_err().to_string();
     assert!(error.contains(
-        "top-level directive must be title, subtitle, author, homepage, var, const, default_wait_time, model, levels, sprites, menu, scene, sounds, theme, or assets; found layers"
+        "top-level directive must be title, subtitle, author, homepage, var, const, default_wait_time, puzzle, levels, sprites, menu, scene, sounds, theme, or assets; found layers"
     ));
 }
 
@@ -4153,7 +4187,7 @@ fn game_file_can_import_theme_metadata() {
 title themed
 import "themes/clean.puzzle"
 
-model puzzle default {
+puzzle default {
 layers {
 actor = Player
 }
@@ -4202,7 +4236,7 @@ fn theme_name_can_be_declared_without_block() {
         r##"
 title themed
 theme pixel
-model puzzle default {
+puzzle default {
 layers {
 actor = Player
 }
@@ -4233,7 +4267,7 @@ title themed
 theme {
 name pixel
 }
-model puzzle default {
+puzzle default {
 layers {
 actor = Player
 }
@@ -4308,7 +4342,7 @@ fn folder_without_game_prelude_is_not_auto_resolved() {
 }
 
 #[test]
-fn parses_fixban_with_builtin_directions_value_set() {
+fn parses_spec_2d_display_floor_object() {
     let loaded = super::parse_game2d_file(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../games/spec_2d/game.puzzle"
@@ -4319,7 +4353,7 @@ fn parses_fixban_with_builtin_directions_value_set() {
         loaded
             .object_labels
             .values()
-            .any(|label| label == "@Boundary:right")
+            .any(|label| label == "@Floor")
     );
 }
 
@@ -4704,6 +4738,74 @@ B
             );
             assert_eq!(colors[0].color, "#111");
             assert_eq!(colors[1].color, "#eee");
+        }
+        _ => panic!("Box should be an ascii sprite"),
+    }
+}
+
+#[test]
+fn puzzle_sprites_allow_duplicate_palette_color_refs() {
+    let source = r##"
+title duplicate_palette_color_refs
+
+puzzle default {
+tags {
+kind = A B
+}
+objects {
+layer {
+Box B
+}
+}
+legend {
+. = empty
+}
+sprites {
+colors {
+shared = #123456
+tagged:kind {
+A = #abcdef
+B = #fedcba
+}
+}
+palettes {
+box_palette = shared shared tagged:A tagged:A
+}
+shapes {
+box_shape {
+0123
+}
+}
+Box
+box_palette
+shape box_shape
+}
+rules {
+
+}
+levels {
+level start
+B
+}
+}
+"##;
+    let loaded = parse_game(source).unwrap();
+    let box_sprite = loaded
+        .visuals
+        .sprites
+        .iter()
+        .find(|sprite| sprite.name == "Box")
+        .unwrap();
+    match &box_sprite.kind {
+        VisualSpriteKind::Ascii { pattern, colors } => {
+            assert_eq!(pattern.as_slice(), ["0123".to_string()].as_slice());
+            assert_eq!(colors.len(), 4);
+            assert_eq!(colors[0].token, '0');
+            assert_eq!(colors[1].token, '1');
+            assert_eq!(colors[0].color, "#123456");
+            assert_eq!(colors[1].color, "#123456");
+            assert_eq!(colors[2].color, "#abcdef");
+            assert_eq!(colors[3].color, "#abcdef");
         }
         _ => panic!("Box should be an ascii sprite"),
     }
@@ -6402,6 +6504,108 @@ board = puzzle default
 }
 
 #[test]
+fn scene_effect_parser_retains_semantic_tokens() {
+    let line = "start levels first in playing";
+    let parsed = parse_scene_effect_with_semantic_tokens(line, line).unwrap();
+    assert!(matches!(
+        parsed.surface.effect,
+        SceneEffect::StartLevel { ref scene, ref scope }
+            if scene == "playing" && scope.as_deref() == Some("first")
+    ));
+    assert!(parsed.semantic_tokens.iter().any(|token| {
+        &line[token.start..token.end] == "start" && token.kind == SemanticKind::Effect
+    }));
+    assert!(parsed.surface.document.semantic_tokens.iter().any(|token| {
+        &line[token.span.start..token.span.end] == "start"
+            && token.kind == SurfaceSemanticKind::Effect
+    }));
+    assert!(parsed.surface.document.nodes.iter().any(|node| {
+        node.kind == SurfaceNodeKind::SceneEffect && &line[node.span.start..node.span.end] == line
+    }));
+    assert!(parsed.semantic_tokens.iter().any(|token| {
+        &line[token.start..token.end] == "levels" && token.kind == SemanticKind::Keyword
+    }));
+    assert!(parsed.semantic_tokens.iter().any(|token| {
+        &line[token.start..token.end] == "playing" && token.kind == SemanticKind::Scene
+    }));
+}
+
+#[test]
+fn rewrite_effect_parser_retains_semantic_tokens() {
+    let line = "sfx clear";
+    let parsed = parse_rewrite_effect_with_semantic_tokens(line, line).unwrap();
+    assert!(matches!(
+        parsed.surface.effects.as_slice(),
+        [EffectAst::PlaySfx { name }] if name == "clear"
+    ));
+    assert!(parsed.semantic_tokens.iter().any(|token| {
+        &line[token.start..token.end] == "sfx" && token.kind == SemanticKind::Emission
+    }));
+    assert!(parsed.surface.document.semantic_tokens.iter().any(|token| {
+        &line[token.span.start..token.span.end] == "sfx"
+            && token.kind == SurfaceSemanticKind::Emission
+    }));
+    assert!(parsed.surface.document.nodes.iter().any(|node| {
+        node.kind == SurfaceNodeKind::RewriteEffect && &line[node.span.start..node.span.end] == line
+    }));
+    assert!(parsed.semantic_tokens.iter().any(|token| {
+        &line[token.start..token.end] == "clear" && token.kind == SemanticKind::Asset
+    }));
+}
+
+#[test]
+fn surface_document_collects_parser_owned_effect_nodes() {
+    let source = r#"
+scene title
+view
+title game.title
+end
+button "Play" -> start levels in playing
+end
+
+puzzle main
+rules
+[ Player ] -> [ Player ] sfx bump
+end
+end
+"#;
+    let surface = parse_surface_document(source);
+    let scene_name_start = source.find("scene title").unwrap() + "scene ".len();
+    let component_title_start = source.rfind("title game.title").unwrap();
+
+    assert!(surface.semantic_tokens.iter().any(|token| {
+        &source[token.span.start..token.span.end] == "scene"
+            && token.kind == SurfaceSemanticKind::Keyword
+    }));
+    assert!(surface.semantic_tokens.iter().any(|token| {
+        token.span.start == scene_name_start
+            && &source[token.span.start..token.span.end] == "title"
+            && token.kind == SurfaceSemanticKind::Scene
+    }));
+    assert!(surface.semantic_tokens.iter().any(|token| {
+        token.span.start == component_title_start
+            && &source[token.span.start..token.span.end] == "title"
+            && token.kind == SurfaceSemanticKind::Keyword
+    }));
+    assert!(surface.nodes.iter().any(|node| {
+        node.kind == SurfaceNodeKind::SceneEffect
+            && &source[node.span.start..node.span.end] == "start levels in playing"
+    }));
+    assert!(surface.nodes.iter().any(|node| {
+        node.kind == SurfaceNodeKind::RewriteEffect
+            && &source[node.span.start..node.span.end] == "sfx bump"
+    }));
+    assert!(surface.semantic_tokens.iter().any(|token| {
+        &source[token.span.start..token.span.end] == "start"
+            && token.kind == SurfaceSemanticKind::Effect
+    }));
+    assert!(surface.semantic_tokens.iter().any(|token| {
+        &source[token.span.start..token.span.end] == "bump"
+            && token.kind == SurfaceSemanticKind::Asset
+    }));
+}
+
+#[test]
 #[ignore = "non-canonical legacy syntax; migrate before re-enabling"]
 fn persistent_vars_and_clear_history_parse() {
     let source = r#"
@@ -7202,6 +7406,56 @@ level start
 }
 
 #[test]
+fn condition_blocks_lower_none_function_to_short_circuit_query() {
+    let source = r#"
+title none_condition_fixture
+puzzle default {
+objects {
+layer {
+Goal G
+}
+layer {
+Box B
+}
+}
+legend {
+. = empty
+* = Goal Box
+}
+win_conditions {
+exists(Goal)
+none([ Goal no Box ])
+}
+rules {
+
+}
+levels {
+level start
+*
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    let goal = loaded.goal.as_ref().unwrap();
+
+    assert!(loaded.is_goal_complete(&loaded.levels[0].initial_state));
+    let GoalExpr::All(exprs) = &goal.expr else {
+        panic!("win_conditions with two rows should lower to all expression");
+    };
+    assert!(
+        exprs.iter().any(|expr| matches!(
+            expr,
+            GoalExpr::Clause(GoalClause {
+                value: GoalValue::QueryValue(QueryKind::NoneMatches(_)),
+                op: ComparisonOp::NotEq,
+                expected: 0,
+            })
+        )),
+        "none(pattern) should stay a NoneMatches query, not lower to count(pattern) == 0"
+    );
+}
+
+#[test]
 #[ignore = "non-canonical legacy syntax; migrate before re-enabling"]
 fn low_level_numeric_offsets_rotate_when_guard_uses_dir() {
     let source = r#"
@@ -7588,7 +7842,7 @@ fn star_selector_matches_all_schema_variants() {
     let source = r#"
 title star_selector
 
-model puzzle default {
+puzzle default {
 layers 2
 empty .
 
@@ -7628,7 +7882,7 @@ fn underscore_selector_wildcard_is_rejected() {
     let source = r#"
 title underscore_selector
 
-model puzzle default {
+puzzle default {
 layers 2
 empty .
 
@@ -7661,7 +7915,7 @@ fn bare_schema_family_selector_is_rejected() {
     let source = r#"
 title bare_schema_selector
 
-model puzzle default {
+puzzle default {
 layers 2
 empty .
 
@@ -7693,7 +7947,7 @@ fn star_selector_fills_unconstrained_variant_slots() {
     let source = r#"
 title star_selector_slots
 
-model puzzle default {
+puzzle default {
 layers 2
 empty .
 
@@ -9298,6 +9552,80 @@ end
 }
 
 #[test]
+fn none_query_is_first_class_boolean_query() {
+    let source = r#"
+title none_query
+
+puzzle default {
+layers {
+floor = Button
+solid = Box Door OpenDoor
+}
+legend {
+. = empty
+B = Button
+D = Door
+O = OpenDoor
+}
+
+query no_pressed_buttons = none([ Button Box ])
+
+rules {
+if no_pressed_buttons {
+once [ Door ] -> [ OpenDoor ]
+}
+}
+
+levels {
+level start
+BD
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    let moved =
+        transition_state(&loaded.game, &loaded.levels[0].initial_state, InputId(0)).unwrap();
+    let open_door = object_named(&loaded, "OpenDoor");
+
+    assert!(moved.has_object(&loaded.game, 1, 0, open_door));
+}
+
+#[test]
+fn win_conditions_accept_exists_and_none_as_canonical_queries() {
+    let source = r#"
+title canonical_query_goal
+
+puzzle default {
+layers {
+target = Goal
+solid = Box
+}
+legend {
+. = empty
+* = Goal Box
+G = Goal
+}
+win_conditions {
+exists(Goal)
+none([ Goal no Box ])
+}
+rules {
+
+}
+levels {
+level start
+*
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    let goal = loaded.goal.as_ref().unwrap();
+
+    assert_eq!(goal.description, "exists(Goal) and none([ Goal no Box ])");
+    assert!(loaded.is_goal_complete(&loaded.levels[0].initial_state));
+}
+
+#[test]
 #[ignore = "non-canonical legacy syntax; migrate before re-enabling"]
 fn repeat_until_can_stop_on_oriented_no_pattern() {
     let source = r#"
@@ -10057,7 +10385,8 @@ fn spec_2d_display_floor_is_a_non_colliding_projection_layer() {
     )
     .unwrap();
 
-    assert!(displayed.has_object(&loaded.game, 5, 1, goal));
+    assert!(displayed.has_object(&loaded.game, 2, 1, goal));
+    assert!(displayed.has_object(&loaded.game, 2, 1, floor));
     assert!(displayed.has_object(&loaded.game, 5, 1, floor));
 }
 
@@ -10479,7 +10808,7 @@ level start
 fn puzzle3_parser_is_available_through_lang_crate() {
     let parsed = crate::parse_puzzle3d(
         r#"
-model puzzle3 push3 {
+puzzle3 push3 {
   layers {
     floor = Floor
     actor = Player Box Wall
@@ -10531,7 +10860,7 @@ subtitle "Flat puzzle"
 author Tester
 homepage "https://example.com/2d"
 
-model puzzle default {
+puzzle default {
 layers 1
 empty .
 object Player 0
@@ -10558,10 +10887,7 @@ P
     assert_eq!(document.subtitle.as_deref(), Some("Flat puzzle"));
     assert_eq!(document.author.as_deref(), Some("Tester"));
     assert_eq!(document.homepage.as_deref(), Some("https://example.com/2d"));
-    assert!(matches!(
-        document.scenes.as_slice(),
-        [LoadedDocumentScene::Puzzle2d(_)]
-    ));
+    assert!(matches!(document.scenes.as_slice(), [scene] if scene.name == "playing"));
     assert_eq!(name, "default");
     assert_eq!(game.levels.len(), 1);
 }
@@ -10585,7 +10911,7 @@ assets {
   css "game.css"
 }
 
-model puzzle3 push3 {
+puzzle3 push3 {
   layers {
     floor = Floor
     actor = Player Box Wall
@@ -10618,7 +10944,7 @@ levels3 demo of push3 {
 }
 
 scene title {
-  view size 720 540 {
+  view size 4 3 {
     title "Three Dee"
     button "Play" -> start demo in playing
     button "Level Select" -> goto level_select
@@ -10648,10 +10974,10 @@ scene level_select {
     assert_eq!(document.assets.entries[0].path, "game.css");
     assert!(matches!(
         document.scenes.as_slice(),
-        [LoadedDocumentScene::Puzzle3d(title), LoadedDocumentScene::Puzzle3d(level_select)]
+        [title, level_select]
             if title.name == "title"
-                && title.layout.size.unwrap().width == 720
-                && title.layout.size.unwrap().height == 540
+                && title.layout.size.unwrap().width == 4
+                && title.layout.size.unwrap().height == 3
                 && level_select.name == "level_select"
     ));
     assert_eq!(name, "push3");
@@ -10661,33 +10987,141 @@ scene level_select {
     assert!(fixture_json.contains("\"title\": \"Three Dee\""));
     assert!(fixture_json.contains("\"currentScene\": \"title\""));
     assert!(fixture_json.contains("\"layout\": {"));
-    assert!(fixture_json.contains("\"width\": 720"));
+    assert!(fixture_json.contains("\"width\": 4"));
     assert!(fixture_json.contains("\"kind\": \"level_menu\""));
 }
 
 #[test]
-fn parse_game_rejects_mixed_2d_and_3d_documents_for_now() {
+fn parse_game_rejects_old_model_prefix_for_2d_puzzles() {
     let error = super::parse_game(
         r#"
+title Old Model Prefix
+
 model puzzle default {
 layers 1
 empty .
 object Player 0
-legend P = Player
+
 rules {
 
 }
+}
+
+levels {
+legend P = Player
 level start {
 P
 }
-}
-
-levels3 demo {
 }
 "#,
     )
     .unwrap_err()
     .to_string();
 
-    assert!(error.contains("mixed 2D and 3D game documents are not supported"));
+    assert!(error.contains("top-level puzzle definition must be: puzzle <name>"));
+}
+
+#[test]
+fn puzzle3_parser_rejects_old_model_prefix() {
+    let error = crate::parse_puzzle3d(
+        r#"
+model puzzle3 push3 {
+  layers {
+    actor = Player
+  }
+
+  rules {
+  }
+}
+"#,
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        ParseError3::Message(message)
+            if message.contains("top-level 3D puzzle definition must be: puzzle3 <name>")
+    ));
+}
+
+#[test]
+fn parse_game_returns_document_for_mixed_2d_and_3d_models() {
+    let document = super::parse_game(
+        r#"
+title Mixed Game
+
+puzzle flat {
+layers 1
+empty .
+object Player 0
+rules {
+
+}
+}
+
+levels flat_levels of flat {
+legend P = Player
+level start {
+P
+}
+}
+
+puzzle3 cube {
+  layers {
+    actor = Player Box Wall
+  }
+
+  group solid = Player Box Wall
+
+  rules {
+
+  }
+}
+
+levels3 cube_levels of cube {
+  legend {
+    _ = empty
+    P = Player
+  }
+
+  level start {
+    P
+  }
+}
+
+scene mixed_play {
+  state {
+    flat_board = puzzle flat
+    cube_board = puzzle3 cube
+  }
+  view {
+    puzzle flat_board
+    puzzle3 cube_board
+  }
+}
+"#,
+    )
+    .unwrap();
+
+    assert_eq!(document.title, "Mixed Game");
+    assert_eq!(document.models.len(), 2);
+    assert!(matches!(
+        &document.models[0],
+        LoadedDocumentModel::Puzzle2d { name, game } if name == "flat" && game.levels.len() == 1
+    ));
+    assert!(matches!(
+        &document.models[1],
+        LoadedDocumentModel::Puzzle3d { name, puzzle }
+            if name == "cube" && puzzle.level_bundle.as_ref().unwrap().level_count() == 1
+    ));
+    assert!(matches!(
+        document.scenes.as_slice(),
+        [scene]
+            if scene.name == "mixed_play"
+                && scene.state.puzzles.len() == 2
+                && scene.state.puzzles[0].name == "flat_board"
+                && scene.state.puzzles[0].kind == "puzzle"
+                && scene.state.puzzles[1].name == "cube_board"
+                && scene.state.puzzles[1].kind == "puzzle3"
+    ));
 }
