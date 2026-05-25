@@ -121,6 +121,25 @@ the event means:
 
 Do not make `on` a grab bag for unrelated command shortcuts.
 
+## Generated Artifacts
+
+Treat root `editor.html` as a generated artifact, not a source file. Do not edit
+it directly. If editor behavior, layout, styling, preview behavior, or embedded
+runtime behavior needs to change, edit the source owner instead, such as
+`crates/html_editor/static/*`, `crates/html_play/static/*`, Rust export code, or
+the relevant `.puzzle` input, then regenerate the artifact.
+
+Before regenerating or overwriting a tracked generated artifact such as
+`editor.html`, run a targeted status check such as:
+
+```bash
+git status --short -- editor.html
+```
+
+If the output path is dirty, do not overwrite it without explicit user
+confirmation. First tell the user that the generated artifact already has local
+changes and that regenerating it may destroy those changes.
+
 ## Layer Separation
 
 Preserve the major package boundaries:

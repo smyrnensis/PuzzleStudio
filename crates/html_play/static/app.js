@@ -347,6 +347,7 @@ function render(state) {
     state.waitEvents = [];
   }
   renderSceneStack(state);
+  scheduleSelectedLevelMenuScroll();
   scheduleScreenScaleSync(3);
   notifyPreviewState(state);
   focusShell();
@@ -846,6 +847,8 @@ function puzzle3FrameSrcdoc(sceneName) {
   const fixture = JSON.parse(JSON.stringify(window.Puzzle3DFrameFixture || {}));
   fixture.currentScene = sceneName || fixture.currentScene || fixture.scenes?.[0]?.name || "playing";
   const fixtureJson = puzzle3SafeScriptJson(fixture);
+  const sourceJson = puzzle3SafeScriptJson(assets.source || "");
+  const puzzlePathJson = puzzle3SafeScriptJson(assets.puzzlePath || "game.puzzle");
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -860,8 +863,7 @@ function puzzle3FrameSrcdoc(sceneName) {
     <canvas id="view" width="960" height="640" aria-label="Puzzle3 component"></canvas>
   </div>
 </main>
-<script>window.Puzzle3DComponentEmbed=true;window.Puzzle3DFixture=${fixtureJson};</script>
-<script>${puzzle3SafeScriptText(assets.runtimeJs || "")}</script>
+<script>window.Puzzle3DComponentEmbed=true;window.Puzzle3DFixture=${fixtureJson};window.Puzzle3DSource=${sourceJson};window.Puzzle3DPath=${puzzlePathJson};${puzzle3SafeScriptText(assets.embeddedWasmJs || "")}</script>
 <script>${puzzle3SafeScriptText(assets.visualCoreJs || "")}</script>
 <script>${puzzle3SafeScriptText(assets.appJs || "")}</script>
 </body>
@@ -1034,6 +1036,9 @@ function selectedLevelMenuElement() {
 function renderContainer(component, scope = {}) {
   const container = document.createElement("div");
   container.className = `view-${component.kind}`;
+  if (component.layout?.scroll) {
+    container.classList.add("is-scroll");
+  }
   applySceneLayout(container, component.layout);
   renderSurfaceComponents(component.children || [], container, scope);
   return container;
@@ -1134,7 +1139,9 @@ function viewItems(component, scope = {}) {
     return sceneLevelEntries(scope.__sceneDef).map(({ level, index }, position) => ({
       index,
       position,
+      num: position + 1,
       number: position + 1,
+      title: level.title || level.label || level.name || `Level ${index + 1}`,
       name: level.name || `Level ${index + 1}`,
       label: level.label || level.name || `Level ${index + 1}`,
       current: index === currentState.levelIndex,
@@ -1238,6 +1245,9 @@ function resolveLabel(label, scope = {}) {
     return String(resolveViewPath(label.path, scope) ?? "");
   }
   if (label.kind === "call") {
+    if (label.name === "join") {
+      return (label.args || []).map((arg) => resolveLabel(arg, scope)).join("");
+    }
     return exprSource(label, scope);
   }
   return "";
@@ -1246,6 +1256,7 @@ function resolveLabel(label, scope = {}) {
 function renderLevelMenu(state, component = {}, scope = {}) {
   const list = document.createElement("ul");
   list.className = "view-list level-menu";
+  list.setAttribute("role", "listbox");
   applySceneLayout(list, component.layout);
   const columns = Number(component.columns || 0);
   if (columns > 0) {
@@ -1255,7 +1266,10 @@ function renderLevelMenu(state, component = {}, scope = {}) {
   const levels = sceneLevelEntries(scope.__sceneDef);
   for (const [position, { level, index }] of levels.entries()) {
     const item = document.createElement("li");
+    item.setAttribute("role", "option");
+    item.dataset.levelMenuPosition = String(position);
     item.classList.toggle("is-selected", index === state.selectedLevelIndex);
+    item.setAttribute("aria-selected", index === state.selectedLevelIndex ? "true" : "false");
 
     if (component.showCleared) {
       const cleared = document.createElement("span");
@@ -1277,7 +1291,10 @@ function renderLevelMenu(state, component = {}, scope = {}) {
     const index = state.levelCount + commandIndex;
     const item = document.createElement("li");
     item.className = "level-menu-button";
+    item.setAttribute("role", "option");
+    item.dataset.levelMenuPosition = String(position);
     item.classList.toggle("is-selected", index === state.selectedLevelIndex);
+    item.setAttribute("aria-selected", index === state.selectedLevelIndex ? "true" : "false");
     if (component.showCleared) {
       const cleared = document.createElement("span");
       cleared.className = "level-clear-mark";
@@ -1290,6 +1307,27 @@ function renderLevelMenu(state, component = {}, scope = {}) {
     list.append(item);
   }
   return list;
+}
+
+function scheduleSelectedLevelMenuScroll() {
+  requestAnimationFrame(scrollSelectedLevelMenuItemIntoView);
+}
+
+function scrollSelectedLevelMenuItemIntoView() {
+  const item = selectedLevelMenuElement();
+  const list = item?.closest(".level-menu");
+  if (!item || !list) {
+    return;
+  }
+  const itemTop = item.offsetTop;
+  const itemBottom = itemTop + item.offsetHeight;
+  const visibleTop = list.scrollTop;
+  const visibleBottom = visibleTop + list.clientHeight;
+  if (itemTop < visibleTop) {
+    list.scrollTop = itemTop;
+  } else if (itemBottom > visibleBottom) {
+    list.scrollTop = itemBottom - list.clientHeight;
+  }
 }
 
 function focusShell() {

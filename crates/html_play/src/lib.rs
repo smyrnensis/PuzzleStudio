@@ -58,7 +58,6 @@ const PUZZLE_WASM_JS: &str = include_str!("../../html_editor/static/wasm/puzzle_
 #[cfg(not(target_arch = "wasm32"))]
 const PUZZLE_WASM_BG: &[u8] = include_bytes!("../../html_editor/static/wasm/puzzle_wasm_bg.wasm");
 const PUZZLE3_STYLE_CSS: &str = include_str!("../static/puzzle3.css");
-const PUZZLE3_RUNTIME_JS: &str = include_str!("../static/puzzle3_runtime.js");
 const PUZZLE3_VISUAL_CORE_JS: &str = include_str!("../static/puzzle3_visual_core.js");
 const PUZZLE3_APP_JS: &str = include_str!("../static/puzzle3_app.js");
 const SEEDED_SFX_JS: &str = include_str!("../../../tools/music_generator/seeded_sfx.mjs");
@@ -92,7 +91,9 @@ fn run(args: impl IntoIterator<Item = String>) -> Result<(), AppError> {
         let game_css = load_asset_css(&config.puzzle_path, &document.assets)?;
         let output_path = config.output_path();
         let html = if document.models.len() == 1 {
-            export_puzzle3_document_html(&document, &game_css).map_err(AppError::Config)?
+            let puzzle_path = config.puzzle_path.display().to_string();
+            export_puzzle3_document_html(&document, &source, &puzzle_path, &game_css)
+                .map_err(AppError::Config)?
         } else {
             let loaded = mixed_document_loaded_game(&document).map_err(AppError::Config)?;
             let game_visuals_js = load_game_visuals_js(&config.puzzle_path, &loaded)?;
@@ -1278,7 +1279,33 @@ fn embedded_standalone_wasm_script() -> String {
         let module_source = escape_script_json(PUZZLE_WASM_JS);
         let wasm_base64 = base64_encode(PUZZLE_WASM_BG);
         format!(
-            "window.PuzzleStandaloneEmbeddedWasm = {{ moduleSource: \"{module_source}\", wasmBase64: \"{wasm_base64}\" }};"
+            r#"window.PuzzleStandaloneEmbeddedWasm = {{ moduleSource: "{module_source}", wasmBase64: "{wasm_base64}" }};
+window.PuzzleRuntimeWasmLoader = window.PuzzleRuntimeWasmLoader || (() => {{
+  let modulePromise = null;
+  function base64ToUint8Array(value) {{
+    const binary = atob(value);
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) {{
+      bytes[index] = binary.charCodeAt(index);
+    }}
+    return bytes;
+  }}
+  return {{
+    async load(version = "embedded") {{
+      if (!modulePromise) {{
+        const embedded = window.PuzzleStandaloneEmbeddedWasm;
+        const moduleUrl = URL.createObjectURL(new Blob([embedded.moduleSource], {{ type: "text/javascript" }}));
+        modulePromise = import(`${{moduleUrl}}#${{encodeURIComponent(String(version))}}`)
+          .then(async (module) => {{
+            await module.default(base64ToUint8Array(embedded.wasmBase64));
+            return module;
+          }})
+          .finally(() => URL.revokeObjectURL(moduleUrl));
+      }}
+      return modulePromise;
+    }},
+  }};
+}})();"#
         )
     }
     #[cfg(target_arch = "wasm32")]
@@ -1345,11 +1372,18 @@ fn escape_html_attr(value: &str) -> String {
         .replace('>', "&gt;")
 }
 
-fn export_puzzle3_html(fixture_json: &str, game_css: &str) -> String {
+fn export_puzzle3_html(
+    fixture_json: &str,
+    source: &str,
+    puzzle_path: &str,
+    game_css: &str,
+) -> String {
     let fixture_json = escape_script_json(fixture_json);
+    let source_json = escape_script_json(source);
+    let puzzle_path_json = escape_script_json(puzzle_path);
     let puzzle3_style_css = escape_style(PUZZLE3_STYLE_CSS);
     let game_css = escape_style(game_css);
-    let puzzle3_runtime_js = escape_script(PUZZLE3_RUNTIME_JS);
+    let embedded_wasm_js = embedded_standalone_wasm_script();
     let puzzle3_visual_core_js = escape_script(PUZZLE3_VISUAL_CORE_JS);
     let puzzle3_app_js = escape_script(PUZZLE3_APP_JS);
 
@@ -1375,9 +1409,9 @@ fn export_puzzle3_html(fixture_json: &str, game_css: &str) -> String {
     </main>
     <script>
 window.Puzzle3DFixture = JSON.parse("{fixture_json}");
-    </script>
-    <script>
-{puzzle3_runtime_js}
+window.Puzzle3DSource = JSON.parse("{source_json}");
+window.Puzzle3DPath = JSON.parse("{puzzle_path_json}");
+{embedded_wasm_js}
     </script>
     <script>
 {puzzle3_visual_core_js}
@@ -1392,11 +1426,18 @@ window.Puzzle3DFixture = JSON.parse("{fixture_json}");
 
 fn export_puzzle3_document_html(
     document: &puzzle_lang::LoadedDocument,
+    source: &str,
+    puzzle_path: &str,
     game_css: &str,
 ) -> Result<String, String> {
     let fixture_json = puzzle_lang::export_loaded_document_visual_fixture_json(document)
         .map_err(|error| error.to_string())?;
-    Ok(export_puzzle3_html(&fixture_json, game_css))
+    Ok(export_puzzle3_html(
+        &fixture_json,
+        source,
+        puzzle_path,
+        game_css,
+    ))
 }
 
 fn export_mixed_document_html(
@@ -1409,6 +1450,8 @@ fn export_mixed_document_html(
     solver: SolverConfig,
 ) -> Result<String, String> {
     let fixture_json = mixed_document_puzzle3_fixture_json(document)?;
+    let puzzle3_source = source.clone();
+    let puzzle3_path = puzzle_path.clone();
     let state = ServerState::new(
         loaded,
         source,
@@ -1420,6 +1463,8 @@ fn export_mixed_document_html(
     Ok(inject_puzzle3_frame_assets(
         export_html(&state),
         &fixture_json,
+        &puzzle3_source,
+        &puzzle3_path,
     ))
 }
 
@@ -1500,17 +1545,18 @@ fn mixed_document_puzzle3_fixture_json(
         .map_err(|error| error.to_string())
 }
 
-fn inject_puzzle3_frame_assets(html: String, fixture_json: &str) -> String {
+fn inject_puzzle3_frame_assets(
+    html: String,
+    fixture_json: &str,
+    source: &str,
+    puzzle_path: &str,
+) -> String {
     let puzzle3_style_css = escape_style(PUZZLE3_STYLE_CSS);
     let mut assets = String::new();
     assets.push('{');
     push_json_string(&mut assets, "styleCss");
     assets.push(':');
     push_json_string(&mut assets, PUZZLE3_STYLE_CSS);
-    assets.push(',');
-    push_json_string(&mut assets, "runtimeJs");
-    assets.push(':');
-    push_json_string(&mut assets, PUZZLE3_RUNTIME_JS);
     assets.push(',');
     push_json_string(&mut assets, "visualCoreJs");
     assets.push(':');
@@ -1519,6 +1565,18 @@ fn inject_puzzle3_frame_assets(html: String, fixture_json: &str) -> String {
     push_json_string(&mut assets, "appJs");
     assets.push(':');
     push_json_string(&mut assets, PUZZLE3_APP_JS);
+    assets.push(',');
+    push_json_string(&mut assets, "embeddedWasmJs");
+    assets.push(':');
+    push_json_string(&mut assets, &embedded_standalone_wasm_script());
+    assets.push(',');
+    push_json_string(&mut assets, "source");
+    assets.push(':');
+    push_json_string(&mut assets, source);
+    assets.push(',');
+    push_json_string(&mut assets, "puzzlePath");
+    assets.push(':');
+    push_json_string(&mut assets, puzzle_path);
     assets.push('}');
     let assets = escape_script(&assets);
     let fixture_json = escape_script_json(fixture_json);
@@ -1608,7 +1666,7 @@ pub fn export_html_from_source(
             Ok(export_html(&state))
         }
         Some(LoadedDocumentModel::Puzzle3d { .. }) => {
-            export_puzzle3_document_html(&document, game_css)
+            export_puzzle3_document_html(&document, source, puzzle_path, game_css)
         }
         None => Err("HTML export requires a single puzzle model".to_string()),
     }
@@ -1656,9 +1714,12 @@ pub fn export_html_file(path: impl AsRef<Path>) -> Result<String, String> {
             );
             Ok(export_html(&state))
         }
-        Some(LoadedDocumentModel::Puzzle3d { .. }) => {
-            export_puzzle3_document_html(&document, &game_css)
-        }
+        Some(LoadedDocumentModel::Puzzle3d { .. }) => export_puzzle3_document_html(
+            &document,
+            &source,
+            &puzzle_path.display().to_string(),
+            &game_css,
+        ),
         None => Err("HTML export requires a single puzzle model".to_string()),
     }
 }
@@ -1714,6 +1775,53 @@ impl CoreRuntimeBridge {
     }
 }
 
+pub struct Puzzle3RuntimeBridge {
+    parsed: ParsedPuzzle3,
+}
+
+impl Puzzle3RuntimeBridge {
+    pub fn from_source(source: &str) -> Result<Self, String> {
+        if let Ok(parsed) = puzzle3d_model::parse_puzzle3d(source) {
+            return Ok(Self { parsed });
+        }
+        let document = puzzle_lang::parse_game(source).map_err(|error| error.to_string())?;
+        let parsed = document
+            .models
+            .iter()
+            .find_map(|model| match model {
+                LoadedDocumentModel::Puzzle3d { puzzle, .. } => Some(puzzle.clone()),
+                LoadedDocumentModel::Puzzle2d { .. } => None,
+            })
+            .ok_or_else(|| "3D runtime source does not contain a puzzle3 model".to_string())?;
+        Ok(Self { parsed })
+    }
+
+    pub fn transition_program_outcome_json(
+        &self,
+        program_key: &str,
+        state_json: &str,
+        input: u16,
+    ) -> Result<String, String> {
+        transition_program3_outcome_json_inner(
+            &self.parsed,
+            program_key,
+            state_json,
+            InputId3(input),
+        )
+        .map_err(|error| error.to_string())
+    }
+
+    pub fn is_complete_json(&self, state_json: &str) -> Result<bool, String> {
+        let state =
+            state3_from_json(&self.parsed.game, state_json).map_err(|error| error.to_string())?;
+        Ok(self
+            .parsed
+            .win_condition
+            .as_ref()
+            .is_some_and(|condition| condition.is_met(&self.parsed.game, &state)))
+    }
+}
+
 pub fn transition_program_outcome_json_from_source(
     source: &str,
     program_key: &str,
@@ -1730,6 +1838,39 @@ pub fn transition_program_outcome_json_from_source(
         InputId(input),
     )
     .map_err(|error| error.to_string())
+}
+
+fn transition_program3_outcome_json_inner(
+    parsed: &ParsedPuzzle3,
+    program_key: &str,
+    state_json: &str,
+    input: InputId3,
+) -> Result<String, AppError> {
+    let state = state3_from_json(&parsed.game, state_json)?;
+    let next_state = match program_key {
+        "main" => transition_program3(&parsed.game, &state, &parsed.rules, input),
+        "level_start" => {
+            transition_program_without_input(&parsed.game, &state, &parsed.lifecycle.on_level_start)
+        }
+        other => {
+            return Err(AppError::Config(format!(
+                "unknown 3D transition program selector: {other}"
+            )));
+        }
+    }
+    .map_err(|error| AppError::Config(format!("{error:?}")))?;
+    let completed = parsed
+        .win_condition
+        .as_ref()
+        .is_some_and(|condition| condition.is_met(&parsed.game, &next_state));
+    let mut out = String::new();
+    out.push('{');
+    out.push_str("\"state\":");
+    push_state3_data(&mut out, &next_state);
+    out.push(',');
+    push_json_bool(&mut out, "completed", completed);
+    out.push_str(",\"commands\":[]}");
+    Ok(out)
 }
 
 fn transition_program_outcome_json_inner(
@@ -1863,6 +2004,29 @@ pub fn solve_state_json_from_source(
         max_ms,
     )
     .map_err(|error| error.to_string())
+}
+
+pub fn solve_state_json_from_source_with_progress(
+    source: &str,
+    puzzle_path: &str,
+    state_json: &str,
+    max_depth: u32,
+    max_nodes: usize,
+    max_ms: u64,
+    _progress_interval_ms: u64,
+    mut on_progress: impl FnMut(String),
+) -> Result<String, String> {
+    on_progress("{\"phase\":\"started\"}".to_string());
+    let result = solve_state_json_from_source(
+        source,
+        puzzle_path,
+        state_json,
+        max_depth,
+        max_nodes,
+        max_ms,
+    );
+    on_progress("{\"phase\":\"finished\"}".to_string());
+    result
 }
 
 fn solve_state_json_from_source_inner(
@@ -2731,6 +2895,37 @@ fn push_state_data(out: &mut String, state: &State) {
             out.push(',');
         }
         out.push_str(&value.to_string());
+    }
+    out.push_str("],");
+    out.push_str("\"levelFiredRules\":[");
+    for (index, rule) in state.level_fired_rules().iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        out.push_str(&rule.0.to_string());
+    }
+    out.push(']');
+    out.push('}');
+}
+
+fn push_state3_data(out: &mut String, state: &State3) {
+    out.push('{');
+    push_json_pair(out, "kind", "puzzle3d");
+    out.push(',');
+    push_json_number(out, "width", state.size.width as u64);
+    out.push(',');
+    push_json_number(out, "depth", state.size.depth as u64);
+    out.push(',');
+    push_json_number(out, "height", state.size.height as u64);
+    out.push(',');
+    push_json_number(out, "layerCount", state.layer_count as u64);
+    out.push(',');
+    out.push_str("\"slots\":[");
+    for (index, object) in state.slots().iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        out.push_str(&object.0.to_string());
     }
     out.push_str("],");
     out.push_str("\"levelFiredRules\":[");
@@ -4947,6 +5142,13 @@ fn push_scene_layout(out: &mut String, layout: &SceneLayoutDef) {
             },
         );
         out.push('}');
+        wrote = true;
+    }
+    if layout.scroll {
+        if wrote {
+            out.push(',');
+        }
+        push_json_bool(out, "scroll", true);
     }
     out.push('}');
 }
@@ -5666,7 +5868,7 @@ mod tests {
     }
 
     #[test]
-    fn puzzle3_runtime_exposes_editor_preview_update_contract() {
+    fn puzzle3_app_exposes_editor_preview_update_contract() {
         assert!(PUZZLE3_APP_JS.contains("function applyPuzzle3PreviewUpdate(update = {})"));
         assert!(PUZZLE3_APP_JS.contains("PuzzleStudioUpdatePuzzle3Preview"));
         assert!(PUZZLE3_APP_JS.contains("PuzzleStudioRenderPuzzle3ModelComponent"));
@@ -5750,6 +5952,7 @@ scene mixed_play {
   }
 }
 "#;
+        Puzzle3RuntimeBridge::from_source(source).expect("mixed source should expose a 3D runtime");
         let document = puzzle_lang::parse_game(source).unwrap();
         let loaded = mixed_document_loaded_game(&document).unwrap();
         let mixed_scene = loaded
@@ -5778,18 +5981,11 @@ scene mixed_play {
     }
 
     #[test]
-    fn puzzle3_runtime_camera_pitch_allows_vertical_view() {
+    fn puzzle3_app_camera_pitch_allows_vertical_view() {
         assert!(PUZZLE3_APP_JS.contains("const PUZZLE3_APP_CAMERA_MIN_PITCH_DEGREES = -90;"));
         assert!(PUZZLE3_APP_JS.contains("const PUZZLE3_APP_CAMERA_MAX_PITCH_DEGREES = 90;"));
-        assert!(PUZZLE3_RUNTIME_JS.contains("const PUZZLE3_CAMERA_MIN_PITCH_DEGREES = -90;"));
-        assert!(PUZZLE3_RUNTIME_JS.contains("const PUZZLE3_CAMERA_MAX_PITCH_DEGREES = 90;"));
         assert!(PUZZLE3_APP_JS.contains("PUZZLE3_APP_CAMERA_MAX_PITCH_DEGREES"));
-        assert!(PUZZLE3_RUNTIME_JS.contains("PUZZLE3_CAMERA_MAX_PITCH_DEGREES"));
         assert!(!PUZZLE3_APP_JS.contains("camera.pitchDegrees - deltaY * 0.25, -80, 80"));
-        assert!(!PUZZLE3_RUNTIME_JS.contains(
-            r#""pitch") {
-        this.camera.pitchDegrees = clamp(Number(effect.value) || 0, -80, 80);"#
-        ));
     }
 
     #[test]
@@ -6269,7 +6465,8 @@ rules {
         .expect("export puzzle3 document");
 
         assert!(html.contains("window.Puzzle3DFixture"));
-        assert!(html.contains("Puzzle3DTestRuntime"));
+        assert!(html.contains("WasmPuzzle3Runtime"));
+        assert!(!html.contains("Puzzle3DTestRuntime"));
         assert!(html.contains("Microban Basic 3D"));
         assert!(html.contains("--accent: #123456"));
     }

@@ -1,6 +1,6 @@
 use crate::budget::SearchBudget;
 use crate::domain::SearchDomain;
-use crate::report::{SearchFailure, SearchOutcome, SearchStats, Witness};
+use crate::report::{SearchFailure, SearchOutcome, SearchProgress, SearchStats, Witness};
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap};
 use std::time::Instant;
@@ -54,13 +54,30 @@ pub fn best_first_with_dead_states<D, F, P>(
     domain: &mut D,
     initial: D::State,
     budget: SearchBudget,
-    mut score: F,
-    mut is_dead: P,
+    score: F,
+    is_dead: P,
 ) -> SearchOutcome<D::Action, D::Error>
 where
     D: SearchDomain,
     F: FnMut(&D::State) -> i64,
     P: FnMut(&D::State) -> bool,
+{
+    best_first_with_dead_states_and_progress(domain, initial, budget, score, is_dead, |_, _| {})
+}
+
+pub fn best_first_with_dead_states_and_progress<D, F, P, O>(
+    domain: &mut D,
+    initial: D::State,
+    budget: SearchBudget,
+    mut score: F,
+    mut is_dead: P,
+    mut on_progress: O,
+) -> SearchOutcome<D::Action, D::Error>
+where
+    D: SearchDomain,
+    F: FnMut(&D::State) -> i64,
+    P: FnMut(&D::State) -> bool,
+    O: FnMut(&D::State, SearchProgress),
 {
     let started_at = budget.max_duration.map(|_| Instant::now());
     let initial_key = domain.key(&initial);
@@ -128,6 +145,16 @@ where
         }
 
         expanded += 1;
+        on_progress(
+            &nodes[current_index].state,
+            SearchProgress {
+                visited: visited.len(),
+                expanded,
+                frontier: frontier.len(),
+                max_depth_reached,
+                depth: current_depth,
+            },
+        );
         let current_key = domain.key(&nodes[current_index].state);
         let actions = domain.actions(&nodes[current_index].state).to_vec();
         for action in actions {
@@ -247,5 +274,67 @@ fn stats(
         frontier,
         max_depth_reached,
         elapsed,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct LineDomain {
+        actions: [u8; 1],
+    }
+
+    impl SearchDomain for LineDomain {
+        type State = u8;
+        type Action = u8;
+        type Key = u8;
+        type Error = ();
+
+        fn key(&self, state: &Self::State) -> Self::Key {
+            *state
+        }
+
+        fn actions(&self, _state: &Self::State) -> &[Self::Action] {
+            &self.actions
+        }
+
+        fn step(
+            &mut self,
+            state: &Self::State,
+            action: &Self::Action,
+        ) -> Result<Self::State, Self::Error> {
+            Ok(state.saturating_add(*action))
+        }
+
+        fn is_goal(&self, state: &Self::State) -> bool {
+            *state >= 3
+        }
+    }
+
+    #[test]
+    fn reports_expanded_state_progress() {
+        let mut domain = LineDomain { actions: [1] };
+        let mut observed = Vec::new();
+
+        let outcome = best_first_with_dead_states_and_progress(
+            &mut domain,
+            0,
+            SearchBudget {
+                max_depth: Some(8),
+                max_nodes: Some(32),
+                max_frontier: None,
+                max_duration: None,
+            },
+            |state| i64::from(3_u8.saturating_sub(*state)),
+            |_| false,
+            |state, progress| {
+                observed.push((*state, progress.expanded, progress.depth));
+            },
+        );
+
+        assert!(matches!(outcome, SearchOutcome::Solved(_)));
+        assert_eq!(observed[0], (0, 1, 0));
+        assert!(observed.iter().any(|(_, _, depth)| *depth > 0));
     }
 }

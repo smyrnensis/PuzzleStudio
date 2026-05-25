@@ -1644,6 +1644,24 @@ P
     }
 
     #[test]
+    fn highlights_scene_step_rule_directive() {
+        let highlighted = highlight_source(
+            r#"
+title scene_step_highlight
+
+scene playing {
+rules {
+step board
+}
+}
+"#,
+        );
+
+        assert!(highlighted.html.contains("syntax-keyword\">step"));
+        assert!(highlighted.html.contains("syntax-state\">board"));
+    }
+
+    #[test]
     fn highlights_section_header_sugar() {
         let highlighted = highlight_source(
             r#"
@@ -1717,7 +1735,7 @@ steps = int
 legend P = Player
 legend B = Box:red
 main {
-once [ Player{mark} | Box:red ] -> [ @Cursor | Box:blue{shade} ]
+once [ Player{mark} | Box:red ] -> [ @Cursor | Box:blue{shade:blue} ]
 }
 level start {
 PB
@@ -1771,8 +1789,8 @@ sfx bump seed=hit type=jump
 scene title {
 button "Play" -> start levels in playing
 button "Continue" -> continue levels in playing
-transitions {
-start -> goto playing
+rules {
+input start -> goto playing
 }
 }
 scene playing {
@@ -2139,13 +2157,13 @@ light_green dark_green
 title key_highlight
 
 scene pause {
-keys {
-Escape Enter Space = resume
-q = quit
+inputs {
+resume <- Escape Enter Space
+quit <- q
 }
-transitions {
-quit -> goto title
-resume -> back
+rules {
+input quit -> goto title
+input resume -> back
 }
 }
 "#,
@@ -2223,11 +2241,8 @@ text "Start"
 button "Start" -> playing.goto first
 button "Menu" -> enter menu
 button "Toggle" -> toggle menu
-main {
-enter -> emit choose_level(cursor.value)
-}
-transitions {
-choose_level:level -> playing.goto level
+rules {
+input start -> playing.goto first
 }
 }
 
@@ -2263,7 +2278,7 @@ scene menu {
                 .html
                 .contains("syntax-effect\">toggle</span> <span class=\"syntax-scene\">menu")
         );
-        assert!(highlighted.html.contains("choose_level"));
+        assert!(highlighted.html.contains("syntax-input\">start"));
     }
 
     #[test]
@@ -2737,8 +2752,8 @@ level microban_01 {
         let source = include_str!("../../../games/spec_3d.puzzle");
         let highlighted = highlight_source(source);
 
-        assert!(highlighted.html.contains("\n    ,,G,,,\n"));
-        assert!(highlighted.html.contains("\n    ,G,,,,\n"));
+        assert!(highlighted.html.contains("\n,,G,,,\n"));
+        assert!(highlighted.html.contains("\n,G,,,,\n"));
         assert!(
             !highlighted
                 .html
@@ -2865,6 +2880,26 @@ level start {
         assert!(highlighted.html.contains("syntax-keyword\">rule"));
         assert!(highlighted.html.contains("syntax-effect\">move_player"));
         assert!(highlighted.html.contains("syntax-effect\">paint"));
+    }
+
+    #[test]
+    fn highlights_standard_move_routine_call() {
+        let highlighted = highlight_source(
+            r#"
+title standard_move_highlight
+
+puzzle board {
+layers {
+actor = Player
+}
+rules {
+move
+}
+}
+"#,
+        );
+
+        assert!(highlighted.html.contains("syntax-effect\">move</span>"));
     }
 
     #[test]

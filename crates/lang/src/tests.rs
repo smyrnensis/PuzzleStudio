@@ -2204,6 +2204,68 @@ button "Resume" -> resume
 }
 
 #[test]
+fn view_for_can_project_levels_into_scrollable_column() {
+    let source = r#"
+title level_projection_view
+
+puzzle board {
+layers {
+actor = Player
+}
+legend {
+. = empty
+P = Player
+}
+rules {
+
+[ Player ] -> [ Player ]
+}
+levels {
+level first {
+P
+}
+level second {
+P
+}
+}
+}
+
+scene level_select {
+view {
+column scroll=true {
+for level in levels {
+button join(level.num, ". ", level.title) -> goto playing(level)
+}
+}
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    let SceneComponent::Column(column) = &loaded.scenes[0].components[0] else {
+        panic!("expected scrollable column");
+    };
+    assert!(column.layout.scroll);
+
+    let SceneComponent::For(for_view) = &column.children[0] else {
+        panic!("expected level projection");
+    };
+    assert!(matches!(for_view.source, ForSource::Levels));
+
+    let SceneComponent::Button(button) = &for_view.children[0] else {
+        panic!("expected level button");
+    };
+    assert!(matches!(&button.label, SceneExpr::Call { name, .. } if name == "join"));
+    assert!(matches!(
+        &button.effect,
+        SceneEffect::Goto { scene, params }
+            if scene == "playing"
+                && params.len() == 1
+                && params[0].name == "level"
+                && matches!(&params[0].value, SceneExpr::Path(path) if path == &vec!["level".to_string()])
+    ));
+}
+
+#[test]
 fn typed_level_menu_scene_accepts_canonical_options() {
     let source = r#"
 title typed_level_menu
@@ -3950,7 +4012,7 @@ end
 #[test]
 #[ignore = "non-canonical legacy syntax; migrate before re-enabling"]
 fn parses_sample_game() {
-    let source = include_str!("../../../games/spec_2d/game.puzzle");
+    let source = include_str!("../../../games/spec_2d.puzzle");
     let loaded = super::parse_game2d(source).unwrap();
 
     assert!(loaded.game.object_count() >= 10);
@@ -4410,7 +4472,7 @@ fn folder_without_game_prelude_is_not_auto_resolved() {
 fn parses_spec_2d_display_floor_object() {
     let loaded = super::parse_game2d_file(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../games/spec_2d/game.puzzle"
+        "/../../games/spec_2d.puzzle"
     ))
     .unwrap();
 
@@ -10431,7 +10493,7 @@ P
 
 #[test]
 fn spec_2d_display_floor_is_a_non_colliding_projection_layer() {
-    let source = include_str!("../../../games/spec_2d/game.puzzle");
+    let source = include_str!("../../../games/spec_2d.puzzle");
     let loaded = parse_game(source).unwrap();
     let goal = object_named(&loaded, "Goal");
     let floor = object_named(&loaded, "@Floor");
@@ -11012,7 +11074,11 @@ scene title {
 scene level_select {
   view {
     title "Select Level"
-    level_menu demo -> start demo in playing
+    column scroll=true {
+      for level in levels {
+        button join(level.num, ". ", level.title) -> goto playing(level)
+      }
+    }
   }
 }
 "#,
@@ -11046,7 +11112,26 @@ scene level_select {
     assert!(fixture_json.contains("\"currentScene\": \"title\""));
     assert!(fixture_json.contains("\"layout\": {"));
     assert!(fixture_json.contains("\"width\": 4"));
-    assert!(fixture_json.contains("\"kind\": \"level_menu\""));
+    assert!(fixture_json.contains("\"kind\": \"for\""));
+    assert!(fixture_json.contains("\"scroll\": true"));
+    assert!(!fixture_json.contains("\"kind\": \"level_menu\""));
+}
+
+#[test]
+fn spec_3d_exports_playable_puzzle_scene() {
+    let document = super::parse_game(include_str!("../../../games/spec_3d.puzzle")).unwrap();
+    let fixture_json = crate::export_loaded_document_visual_fixture_json(&document).unwrap();
+
+    assert!(fixture_json.contains("\"currentScene\": \"title\""));
+    assert!(fixture_json.contains("\"name\": \"sokoban\""));
+    assert!(fixture_json.contains("\"slot\": \"board\""));
+    assert!(fixture_json.contains("\"model\": \"sokoban\""));
+    assert!(fixture_json.contains("\"kind\": \"puzzle3\""));
+    assert!(fixture_json.contains("\"source\": \"board\""));
+    assert!(fixture_json.contains("\"kind\": \"for\""));
+    assert!(fixture_json.contains("\"scroll\": true"));
+    assert!(fixture_json.contains("\"microban\": [0, 1, 2]"));
+    assert!(!fixture_json.contains("\"kind\": \"level_menu\""));
 }
 
 #[test]

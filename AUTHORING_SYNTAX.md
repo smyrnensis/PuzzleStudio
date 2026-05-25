@@ -84,7 +84,7 @@ step sokoban
 }
 }
 
-scene level_menu {
+scene level_menu level_select {
 show_index = true
 button "Back" -> back
 }
@@ -1748,21 +1748,24 @@ button level.label -> playing.goto level
 
 `box` / `row` / `column` は view component を入れ子にする layout primitive。`box` は純粋な配置用の矩形で、背景・枠線・装飾をデフォルトでは持たない。renderer はこれを HTML 固有の DOM ではなく、構造化された view tree として受け取る。`panel` は layout primitive ではなく、canonical syntax では使わない。`view` / `box` / `row` / `column` は共通の layout header attribute として `size <w> <h>`、`gap <n>`、`align <x> [y]` を読める。scene root の標準サイズ指定は `view size 4 3 { ... }`。`left` / `center` / `right` と `top` / `center` / `bottom` を組み合わせられ、指定しない場合は中央揃えになる。
 
-`for` は scene state collection の各 item から view node を生成する projection primitive。固定 component を並べる場合も、collection を表示する場合も、最終的には `row` / `column` の children として扱われる。level list には使わず、`level_menu` を使う。
+`for` は collection の各 item から view node を生成する projection primitive。固定 component を並べる場合も、collection を表示する場合も、最終的には `row` / `column` の children として扱われる。`for` 自体は cursor、enter、scroll を所有しない。
+
+level list の基本形は `scene level_menu level_select { ... }`。見出しや追加説明などが必要な場合だけ、通常の `scene` の `view` に `level_menu { ... }` を置く。どちらの場合も component が cursor 移動、enter、locked 表示、多すぎる項目の scroll を所有する。
 
 ```txt
-column {
-for item in items {
-text item.label
+scene level_menu level_select {
+level_menu {
+show_index = true
+show_solved = true
+button "Back" -> back
 }
 }
 ```
 
-level list は `level_menu` で表す。component が cursor 移動、enter、locked 表示などを所有する。
-
 ```txt
 scene level_select {
 view {
+text "Select a level"
 level_menu {
 show_index = true
 show_solved = true
@@ -1772,7 +1775,7 @@ button "Back" -> back
 }
 ```
 
-`level_menu` は level 選択用 component なので、`up` / `down` / `left` / `right` / `enter` の cursor 動作を所有する。通常は key binding を書かなくてよい。既定では `w/a/s/d` と arrow keys が移動、Enter/Space が `enter`、Escape/q が `back` になる。enter 時は選択 level を開始する。これは `level_menu` template の主動作なので、通常 `choose_level` transition のような中継は書かない。
+`level_menu` は level 選択用 component なので、`up` / `down` / `left` / `right` / `enter` の cursor 動作と、多すぎる項目の scroll を所有する。通常は key binding を書かなくてよい。既定では `w/a/s/d` と arrow keys が移動、Enter/Space が `enter`、Escape/q が `back` になる。enter 時は選択 level を開始する。これは `level_menu` template の主動作なので、通常 `choose_level` transition のような中継は書かない。
 
 この構文では旧 `show index`、`columns <n>`、裸の `wrap`、`action <name>` は読まない。`level_menu` を選んだ時点で enter は選択 level 開始を意味する。
 

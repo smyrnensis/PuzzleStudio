@@ -1,8 +1,22 @@
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen(typescript_type = "Function")]
+    pub type JsFunction;
+
+    #[wasm_bindgen(method, catch, structural, js_name = call)]
+    fn call1(this: &JsFunction, this_arg: &JsValue, arg: &JsValue) -> Result<JsValue, JsValue>;
+}
+
+#[wasm_bindgen]
 pub struct WasmCoreRuntime {
     inner: html_play::CoreRuntimeBridge,
+}
+
+#[wasm_bindgen]
+pub struct WasmPuzzle3Runtime {
+    inner: html_play::Puzzle3RuntimeBridge,
 }
 
 #[wasm_bindgen]
@@ -25,6 +39,35 @@ impl WasmCoreRuntime {
     ) -> Result<String, JsValue> {
         self.inner
             .transition_program_outcome_json(program_key, level_index, state_json, input)
+            .map_err(|error| JsValue::from_str(&error))
+    }
+}
+
+#[wasm_bindgen]
+impl WasmPuzzle3Runtime {
+    #[wasm_bindgen(constructor)]
+    pub fn new(source: &str, puzzle_path: &str) -> Result<WasmPuzzle3Runtime, JsValue> {
+        let _ = puzzle_path;
+        Ok(Self {
+            inner: html_play::Puzzle3RuntimeBridge::from_source(source)
+                .map_err(|error| JsValue::from_str(&error))?,
+        })
+    }
+
+    pub fn transition_program_outcome(
+        &self,
+        program_key: &str,
+        state_json: &str,
+        input: u16,
+    ) -> Result<String, JsValue> {
+        self.inner
+            .transition_program_outcome_json(program_key, state_json, input)
+            .map_err(|error| JsValue::from_str(&error))
+    }
+
+    pub fn is_complete(&self, state_json: &str) -> Result<bool, JsValue> {
+        self.inner
+            .is_complete_json(state_json)
             .map_err(|error| JsValue::from_str(&error))
     }
 }
@@ -110,6 +153,32 @@ pub fn solve_state(
         max_depth,
         max_nodes as usize,
         u64::from(max_ms),
+    )
+    .map_err(|error| JsValue::from_str(&error))
+}
+
+#[wasm_bindgen]
+pub fn solve_state_with_progress(
+    source: &str,
+    puzzle_path: &str,
+    state_json: &str,
+    max_depth: u32,
+    max_nodes: u32,
+    max_ms: u32,
+    progress_interval_ms: u32,
+    progress_callback: JsFunction,
+) -> Result<String, JsValue> {
+    html_play::solve_state_json_from_source_with_progress(
+        source,
+        puzzle_path,
+        state_json,
+        max_depth,
+        max_nodes as usize,
+        u64::from(max_ms),
+        u64::from(progress_interval_ms),
+        |progress_json| {
+            let _ = progress_callback.call1(&JsValue::NULL, &JsValue::from_str(&progress_json));
+        },
     )
     .map_err(|error| JsValue::from_str(&error))
 }

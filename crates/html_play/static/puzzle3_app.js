@@ -35,6 +35,10 @@ const fallbackSnapshot = {
     pitchDegrees: 55,
     zoom: 1,
   },
+  view: {
+    zoom: 1,
+    target: { x: 0, y: 0, z: 0 },
+  },
   settings: {
     interactiveLook: false,
     interactiveZoom: false,
@@ -141,7 +145,7 @@ const view = {
   projectionHeight: 0,
 };
 let snapshot = fallbackSnapshot;
-let runtime = window.Puzzle3DTestRuntime.create(fallbackSnapshot);
+let runtime = null;
 let initialCamera = cloneCamera(fallbackSnapshot.camera);
 let currentSceneName = initialSceneName(fallbackSnapshot);
 let editorModelComponentPreview = null;
@@ -166,15 +170,15 @@ async function loadSnapshot() {
   } catch {
     nextSnapshot = fallbackSnapshot;
   }
-  loadSnapshotData(nextSnapshot);
+  await loadSnapshotData(nextSnapshot);
   if (window.PuzzleStudioInitialModelComponentPreview?.type === "PuzzleStudioRenderPuzzle3ModelComponent") {
     applyPuzzle3ModelComponentPreviewUpdate(window.PuzzleStudioInitialModelComponentPreview);
   }
 }
 
-function loadSnapshotData(source, options = {}) {
+async function loadSnapshotData(source, options = {}) {
   snapshot = normalizeSnapshot(source || fallbackSnapshot);
-  runtime = window.Puzzle3DTestRuntime.create(snapshot);
+  runtime = await createPuzzle3Runtime(snapshot);
   snapshot = runtime.snapshot();
   editorModelComponentPreview = options.modelComponentPreview || null;
   document.title = snapshot.title || "Puzzle3";
@@ -187,9 +191,191 @@ function loadSnapshotData(source, options = {}) {
   renderScene();
 }
 
+async function createPuzzle3Runtime(initialSnapshot) {
+  const source = String(window.Puzzle3DSource || initialSnapshot.source || "");
+  const puzzlePath = String(window.Puzzle3DPath || initialSnapshot.puzzlePath || "game.puzzle");
+  const module = await window.PuzzleRuntimeWasmLoader.load(source.length || Date.now());
+  if (typeof module.WasmPuzzle3Runtime !== "function") {
+    throw new Error("Puzzle3 WASM runtime is unavailable.");
+  }
+  return new Puzzle3SessionRuntime(initialSnapshot, new module.WasmPuzzle3Runtime(source, puzzlePath));
+}
+
+class Puzzle3SessionRuntime {
+  constructor(initialSnapshot, coreRuntime) {
+    this.base = cloneRuntimeSnapshot(initialSnapshot);
+    this.coreRuntime = coreRuntime;
+    this.camera = cloneCamera(initialSnapshot.camera);
+    this.levels = cloneRuntimeLevels(initialSnapshot.levels?.length
+      ? initialSnapshot.levels
+      : [runtimeSnapshotLevel(initialSnapshot)]);
+    this.levelIndex = clampIndex(initialSnapshot.levelIndex || 0, this.levels.length);
+    this.undoStack = [];
+    this.moveCount = 0;
+    this.state = null;
+    this.completed = false;
+    this.loadLevel(this.levelIndex);
+  }
+
+  snapshot() {
+    const level = this.currentLevel();
+    return {
+      ...this.base,
+      size: { ...level.size },
+      camera: cloneCamera(this.camera),
+      cells: cellsFromRuntimeState(this, this.state),
+      levelIndex: this.levelIndex,
+      levelCount: this.levels.length,
+      levelName: level.name,
+      levelLabel: level.label || level.name,
+      hasNextLevel: this.hasNextLevel(),
+      hasPreviousLevel: this.hasPreviousLevel(),
+      moveCount: this.moveCount,
+      completed: this.completed,
+    };
+  }
+
+  applyInput(inputName) {
+    const inputId = this.inputIdForName(inputName);
+    if (inputId === undefined) {
+      return false;
+    }
+    const before = this.historyEntry();
+    const outcome = this.transition("main", this.state, inputId);
+    if (runtimeStateKey(outcome.state) === runtimeStateKey(this.state)) {
+      return false;
+    }
+    this.undoStack.push(before);
+    this.state = outcome.state;
+    this.moveCount += 1;
+    const wasCompleted = this.completed;
+    this.completed = outcome.completed === true;
+    if (!wasCompleted && this.completed) {
+      this.runLevelClearLifecycle();
+    }
+    return true;
+  }
+
+  setCamera(camera) {
+    this.camera = cloneCamera(camera || this.camera);
+  }
+
+  undo() {
+    const previous = this.undoStack.pop();
+    if (!previous) {
+      return false;
+    }
+    this.state = cloneRuntimeState(previous.state);
+    this.moveCount = previous.moveCount;
+    this.completed = previous.completed;
+    return true;
+  }
+
+  restart() {
+    const initialState = this.initialStateForCurrentLevel();
+    const changed = runtimeStateKey(this.state) !== runtimeStateKey(initialState)
+      || this.moveCount !== 0
+      || this.completed
+      || this.undoStack.length > 0;
+    if (!changed) {
+      return false;
+    }
+    this.undoStack.push(this.historyEntry());
+    this.state = initialState;
+    this.moveCount = 0;
+    this.completed = this.isComplete(this.state);
+    return true;
+  }
+
+  historyEntry() {
+    return {
+      state: cloneRuntimeState(this.state),
+      moveCount: this.moveCount,
+      completed: this.completed,
+    };
+  }
+
+  nextLevel() {
+    if (!this.hasNextLevel()) {
+      return false;
+    }
+    this.loadLevel(this.levelIndex + 1);
+    return true;
+  }
+
+  previousLevel() {
+    if (!this.hasPreviousLevel()) {
+      return false;
+    }
+    this.loadLevel(this.levelIndex - 1);
+    return true;
+  }
+
+  hasNextLevel() {
+    return this.levelIndex + 1 < this.levels.length;
+  }
+
+  hasPreviousLevel() {
+    return this.levelIndex > 0;
+  }
+
+  loadLevel(levelIndex) {
+    this.levelIndex = clampIndex(levelIndex, this.levels.length);
+    this.state = this.initialStateForCurrentLevel();
+    this.undoStack = [];
+    this.moveCount = 0;
+    this.completed = this.isComplete(this.state);
+  }
+
+  initialStateForCurrentLevel() {
+    const raw = stateFromRuntimeCells(this, this.currentLevel().cells, this.currentLevel().size);
+    return this.transition("level_start", raw, 0).state;
+  }
+
+  currentLevel() {
+    return this.levels[this.levelIndex];
+  }
+
+  runLevelClearLifecycle() {
+    for (const command of this.base.lifecycle?.onLevelClear || []) {
+      if (command === "next_level") {
+        this.nextLevel();
+      }
+    }
+  }
+
+  transition(programKey, state, inputId) {
+    const raw = this.coreRuntime.transition_program_outcome(
+      programKey,
+      JSON.stringify(state),
+      Number(inputId || 0),
+    );
+    return JSON.parse(raw);
+  }
+
+  isComplete(state) {
+    return this.coreRuntime.is_complete(JSON.stringify(state)) === true;
+  }
+
+  inputIdForName(inputName) {
+    const input = (this.base.inputs || []).find((candidate) => candidate.name === inputName);
+    return input ? Number(input.id) : undefined;
+  }
+
+  objectForId(objectId) {
+    const object = Object.values(this.base.objects || {}).find((candidate) => candidate.id === Number(objectId));
+    return object ? { ...object } : { id: Number(objectId), name: `Object ${objectId}`, sprite: `Object ${objectId}` };
+  }
+
+  objectLayer(objectId) {
+    const object = Object.values(this.base.objects || {}).find((candidate) => candidate.id === Number(objectId));
+    return Number(object?.layer ?? 0);
+  }
+}
+
 function applyPuzzle3PreviewUpdate(update = {}) {
   const next = puzzle3PreviewSnapshot(update);
-  loadSnapshotData(next, {
+  void loadSnapshotData(next, {
     scene: update.scene,
     preferPuzzleScene: update.preferPuzzleScene !== false,
   });
@@ -197,7 +383,7 @@ function applyPuzzle3PreviewUpdate(update = {}) {
 
 function applyPuzzle3ModelComponentPreviewUpdate(update = {}) {
   const next = puzzle3PreviewSnapshot(update);
-  loadSnapshotData(next, {
+  void loadSnapshotData(next, {
     modelComponentPreview: {
       sceneName: update.scene || "__editor_model_preview__",
       component: puzzle3ModelPreviewComponent(update),
@@ -246,6 +432,9 @@ function puzzle3PreviewSnapshot(update = {}) {
   }
   if (update.camera) {
     next.camera = cloneCamera(update.camera);
+  }
+  if (update.view) {
+    next.view = clonePuzzle3PreviewView(update.view);
   }
   if (update.settings) {
     next.settings = mergePuzzle3PreviewSettings(next.settings || {}, update.settings);
@@ -336,16 +525,20 @@ function renderScene() {
   root.className = "scene-layout-root";
   root.style.width = `${measured.width * scale}px`;
   root.style.height = `${measured.height * scale}px`;
-  renderSceneNode(rootComponent, root, { x: 0, y: 0, width: measured.width, height: measured.height }, scale, scene?.name || currentSceneName || "default");
+  renderSceneNode(rootComponent, root, { x: 0, y: 0, width: measured.width, height: measured.height }, scale, scene?.name || currentSceneName || "default", {});
   screenView.replaceChildren(root);
   if (puzzle3ComponentFor(scene)) {
     requestAnimationFrame(() => puzzle3Component.handleResize());
   }
 }
 
-function renderSceneNode(component, parent, rect, scale, sceneName) {
+function renderSceneNode(component, parent, rect, scale, sceneName, scope = {}) {
   if (component.kind === "row" || component.kind === "column" || component.kind === "box") {
-    renderSceneContainer(component, parent, rect, scale, sceneName);
+    renderSceneContainer(component, parent, rect, scale, sceneName, scope);
+    return;
+  }
+  if (component.kind === "for") {
+    renderSceneFor(component, parent, rect, scale, sceneName, scope);
     return;
   }
   const node = sceneNodeElement(component, rect, scale);
@@ -358,7 +551,7 @@ function renderSceneNode(component, parent, rect, scale, sceneName) {
     const buttons = sceneButtonComponents();
     const currentIndex = buttons.indexOf(component);
     const levelMenuOwnsCursor = Boolean(activeLevelMenuComponent());
-    node.append(sceneButton(component.label, () => applySceneAction(component.action), {
+    node.append(sceneButton(resolveSceneLabel(component.label, scope), () => applySceneAction(component.action, scope), {
       selected: !levelMenuOwnsCursor && currentIndex === sceneButtonCursor,
     }));
   } else if (component.kind === "level_menu") {
@@ -382,7 +575,7 @@ function renderSceneNode(component, parent, rect, scale, sceneName) {
   parent.append(node);
 }
 
-function renderSceneContainer(component, parent, rect, scale, sceneName) {
+function renderSceneContainer(component, parent, rect, scale, sceneName, scope = {}) {
   const node = sceneNodeElement(component, rect, scale);
   node.classList.add(`scene-${component.kind}-node`);
   parent.append(node);
@@ -393,25 +586,43 @@ function renderSceneContainer(component, parent, rect, scale, sceneName) {
   const layout = sceneLayout(component);
   const gap = sceneGap(component);
   if (component.kind === "row") {
-    const measured = children.map(measureSceneNode);
+    const measured = children.map((child) => measureSceneNode(child, scope));
     const totalWidth = measured.reduce((total, child) => total + child.width, 0) + gap * Math.max(0, children.length - 1);
     let x = alignOffset(rect.width, totalWidth, layout.align?.x);
     for (let index = 0; index < children.length; index += 1) {
       const child = measured[index];
       const y = alignOffset(rect.height, child.height, layout.align?.y);
-      renderSceneNode(children[index], node, { x, y, width: child.width, height: child.height }, scale, sceneName);
+      renderSceneNode(children[index], node, { x, y, width: child.width, height: child.height }, scale, sceneName, scope);
       x += child.width + gap;
     }
     return;
   }
-  const measured = children.map(measureSceneNode);
+  const measured = children.map((child) => measureSceneNode(child, scope));
   const totalHeight = measured.reduce((total, child) => total + child.height, 0) + gap * Math.max(0, children.length - 1);
   let y = alignOffset(rect.height, totalHeight, layout.align?.y);
   for (let index = 0; index < children.length; index += 1) {
     const child = measured[index];
     const x = alignOffset(rect.width, child.width, layout.align?.x);
-    renderSceneNode(children[index], node, { x, y, width: child.width, height: child.height }, scale, sceneName);
+    renderSceneNode(children[index], node, { x, y, width: child.width, height: child.height }, scale, sceneName, scope);
     y += child.height + gap;
+  }
+}
+
+function renderSceneFor(component, parent, rect, scale, sceneName, scope = {}) {
+  const node = sceneNodeElement(component, rect, scale);
+  node.classList.add("scene-for-node");
+  parent.append(node);
+  const children = expandedForChildren(component, scope);
+  const measured = children.map(({ child, scope: childScope }) => measureSceneNode(child, childScope));
+  const gap = sceneGap(component);
+  const totalHeight = measured.reduce((total, child) => total + child.height, 0) + gap * Math.max(0, children.length - 1);
+  let y = alignOffset(rect.height, totalHeight, sceneLayout(component).align?.y);
+  for (let index = 0; index < children.length; index += 1) {
+    const { child, scope: childScope } = children[index];
+    const size = measured[index];
+    const x = alignOffset(rect.width, size.width, sceneLayout(component).align?.x);
+    renderSceneNode(child, node, { x, y, width: size.width, height: size.height }, scale, sceneName, childScope);
+    y += size.height + gap;
   }
 }
 
@@ -425,7 +636,7 @@ function sceneNodeElement(component, rect, scale) {
   return node;
 }
 
-function measureSceneNode(component) {
+function measureSceneNode(component, scope = {}) {
   const explicit = component.layout?.size;
   if (explicit) {
     return {
@@ -434,14 +645,14 @@ function measureSceneNode(component) {
     };
   }
   if (component.kind === "row") {
-    const children = (component.children || []).map(measureSceneNode);
+    const children = (component.children || []).map((child) => measureSceneNode(child, scope));
     return {
       width: Math.max(1, children.reduce((total, child) => total + child.width, 0) + sceneGap(component) * Math.max(0, children.length - 1)),
       height: Math.max(1, children.reduce((height, child) => Math.max(height, child.height), 0)),
     };
   }
   if (component.kind === "column" || component.kind === "box") {
-    const children = (component.children || []).map(measureSceneNode);
+    const children = (component.children || []).map((child) => measureSceneNode(child, scope));
     return {
       width: Math.max(1, children.reduce((width, child) => Math.max(width, child.width), 0)),
       height: Math.max(1, children.reduce((total, child) => total + child.height, 0) + sceneGap(component) * Math.max(0, children.length - 1)),
@@ -454,12 +665,64 @@ function measureSceneNode(component) {
     return { width: 5, height: Math.max(1, puzzle3Component.levelEntries(component.levels).length) };
   }
   if (component.kind === "button") {
-    return { width: Math.max(4, Math.ceil(String(component.label || "").length / 3)), height: 1 };
+    return { width: Math.max(4, Math.ceil(resolveSceneLabel(component.label, scope).length / 3)), height: 1 };
   }
   if (component.kind === "title") {
     return { width: Math.max(6, Math.ceil(String(component.text || "").length / 3)), height: 1 };
   }
   return { width: 1, height: 1 };
+}
+
+function expandedForChildren(component, scope = {}) {
+  const items = component.source === "levels"
+    ? levelIndexesForBundle("levels").map((index, position) => {
+      const level = snapshot.levels?.[index] || {};
+      return {
+        index,
+        position,
+        num: position + 1,
+        number: position + 1,
+        title: level.title || level.label || level.name || `Level ${index + 1}`,
+        name: level.name || `Level ${index + 1}`,
+        label: level.label || level.name || `Level ${index + 1}`,
+      };
+    })
+    : [];
+  return items.flatMap((item) => (component.children || []).map((child) => ({
+    child,
+    scope: { ...scope, [component.binding]: item },
+  })));
+}
+
+function resolveSceneLabel(label, scope = {}) {
+  if (label === undefined || label === null) {
+    return "";
+  }
+  if (typeof label === "string") {
+    return label;
+  }
+  if (label.kind === "text") {
+    return String(label.value || "");
+  }
+  if (label.kind === "int" || label.kind === "bool") {
+    return String(label.value);
+  }
+  if (label.kind === "path") {
+    return String(resolveScenePath(label.path, scope) ?? "");
+  }
+  if (label.kind === "call" && label.name === "join") {
+    return (label.args || []).map((arg) => resolveSceneLabel(arg, scope)).join("");
+  }
+  return "";
+}
+
+function resolveScenePath(path, scope = {}) {
+  const parts = String(path || "").split(".").filter(Boolean);
+  let value = scope[parts[0]];
+  for (const part of parts.slice(1)) {
+    value = value?.[part];
+  }
+  return value;
 }
 
 function currentPuzzle3IntrinsicSize() {
@@ -597,12 +860,34 @@ function applySelectedSceneButton() {
   }
 }
 
-function applySceneAction(action) {
+function applySceneAction(action, scope = {}) {
   if (action?.kind === "goto" && action.scene) {
+    const levelParam = (action.params || []).find((param) => param.name === "level");
+    if (levelParam) {
+      const levelValue = resolveSceneActionValue(levelParam.value, scope);
+      const levelIndex = typeof levelValue === "object" ? levelValue.index : puzzle3LevelIndex(levelValue);
+      if (Number.isInteger(levelIndex)) {
+        runtime.loadLevel(levelIndex);
+        snapshot = runtime.snapshot();
+      }
+    }
     gotoScene(action.scene);
   } else if (action?.kind === "start_levels" && action.scene) {
     applyStartLevels(action, 0);
   }
+}
+
+function resolveSceneActionValue(value, scope = {}) {
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  if (value.kind === "path") {
+    return resolveScenePath(value.path, scope);
+  }
+  if (value.kind === "text" || value.kind === "int" || value.kind === "bool") {
+    return value.value;
+  }
+  return resolveSceneLabel(value, scope);
 }
 
 function applyStartLevels(action, levelIndex) {
@@ -811,18 +1096,19 @@ function syncCanvasSize() {
 function updateProjectionFit(rect) {
   const size = snapshot.size || fallbackSnapshot.size;
   const camera = snapshot.camera || fallbackSnapshot.camera;
+  const previewView = puzzle3PreviewView();
   if (!shouldAutoFitFiniteStage(size)) {
     return;
   }
   const width = Math.max(1, Number(rect.width) || 1);
   const height = Math.max(1, Number(rect.height) || 1);
-  const zoom = projectionZoom(camera);
+  const zoom = projectionZoom(camera, previewView);
   const bounds = projectedSceneBoundsUnit(size, camera);
   const boundsWidth = Math.max(0.001, bounds.maxX - bounds.minX);
   const boundsHeight = Math.max(0.001, bounds.maxY - bounds.minY);
   const padding = 0.72;
   const scale = Math.min(width / boundsWidth, height / boundsHeight) * padding;
-  view.cellScale = Math.max(0.0001, scale / zoom);
+  view.cellScale = Math.max(0.0001, scale);
   const effectiveScale = view.cellScale * zoom;
   view.originX = width / 2 - ((bounds.minX + bounds.maxX) / 2) * effectiveScale;
   view.originY = height / 2 - ((bounds.minY + bounds.maxY) / 2) * effectiveScale;
@@ -870,8 +1156,42 @@ function projectionFitKey(size, camera) {
   ].join(":");
 }
 
-function projectionZoom(camera) {
-  return Math.max(0.1, Number(camera?.zoom ?? 1) || 1);
+function projectionZoom(camera, previewView = puzzle3PreviewView()) {
+  const cameraZoom = Math.max(0.1, Number(camera?.zoom ?? 1) || 1);
+  const viewZoom = Math.max(0.1, Number(previewView?.zoom ?? 1) || 1);
+  return cameraZoom * viewZoom;
+}
+
+function puzzle3PreviewView(source = snapshot) {
+  return clonePuzzle3PreviewView(source?.view || fallbackSnapshot.view);
+}
+
+function clonePuzzle3PreviewView(source) {
+  const target = source?.target || source?.origin || {};
+  return {
+    zoom: Math.max(0.1, Number(source?.zoom ?? 1) || 1),
+    target: {
+      x: Number(target.x ?? 0) || 0,
+      y: Number(target.y ?? 0) || 0,
+      z: Number(target.z ?? 0) || 0,
+    },
+  };
+}
+
+function puzzle3ProjectionCamera(camera, previewView = puzzle3PreviewView()) {
+  return {
+    ...camera,
+    zoom: projectionZoom(camera, previewView),
+  };
+}
+
+function puzzle3ProjectionCenter(size, previewView = puzzle3PreviewView()) {
+  const target = previewView?.target || {};
+  return {
+    x: (Math.max(1, Number(size.width) || 1) - 1) / 2 + (Number(target.x) || 0),
+    y: (Math.max(1, Number(size.depth) || 1) - 1) / 2 + (Number(target.y) || 0),
+    z: (Math.max(1, Number(size.height) || 1) - 1) / 2 + (Number(target.z) || 0),
+  };
 }
 
 function projectedSceneBoundsUnit(size, camera) {
@@ -981,13 +1301,11 @@ function clamp(value, min, max) {
 
 function projectWithDepth(position) {
   const camera = snapshot.camera || fallbackSnapshot.camera;
+  const size = snapshot.size || fallbackSnapshot.size;
+  const previewView = puzzle3PreviewView();
   return Puzzle3VisualCore.projectOrthographic(position, {
-    camera,
-    center: {
-      x: (snapshot.size.width - 1) / 2,
-      y: (snapshot.size.depth - 1) / 2,
-      z: (snapshot.size.height - 1) / 2,
-    },
+    camera: puzzle3ProjectionCamera(camera, previewView),
+    center: puzzle3ProjectionCenter(size, previewView),
     origin: { x: view.originX, y: view.originY },
     scale: view.cellScale,
   });
@@ -1162,6 +1480,7 @@ function notifyPuzzle3View(width, height) {
   }
   const size = snapshot.size || fallbackSnapshot.size;
   const camera = snapshot.camera || fallbackSnapshot.camera;
+  const previewView = puzzle3PreviewView();
   const canvasRect = canvas.getBoundingClientRect();
   window.parent.postMessage({
     type: "PuzzleStudioPuzzle3View",
@@ -1183,13 +1502,10 @@ function notifyPuzzle3View(width, height) {
       coordinateSpace: "canvas-css-px",
       originX: view.originX,
       originY: view.originY,
-      scale: view.cellScale * projectionZoom(camera),
-      center: {
-        x: (Math.max(1, Number(size.width) || 1) - 1) / 2,
-        y: (Math.max(1, Number(size.depth) || 1) - 1) / 2,
-        z: (Math.max(1, Number(size.height) || 1) - 1) / 2,
-      },
+      scale: view.cellScale * projectionZoom(camera, previewView),
+      center: puzzle3ProjectionCenter(size, previewView),
       camera: cloneCamera(camera),
+      editorView: previewView,
       size: {
         width: Math.max(1, Number(size.width) || 1),
         depth: Math.max(1, Number(size.depth) || 1),
@@ -2166,7 +2482,7 @@ window.addEventListener("message", (event) => {
 
   if (event.data?.type === "PuzzleStudioSetPuzzle3Snapshot") {
     setEditorComponentEmbedMode(event.data.componentEmbed === true);
-    loadSnapshotData(event.data.snapshot, {
+    void loadSnapshotData(event.data.snapshot, {
       scene: event.data.scene,
       preferPuzzleScene: Boolean(event.data.preferPuzzleScene),
     });
@@ -2349,6 +2665,176 @@ function applySceneRawInput(raw) {
 resizeCanvas();
 loadSnapshot();
 
+function cloneRuntimeSnapshot(source) {
+  return {
+    ...source,
+    size: { ...source.size },
+    camera: cloneCamera(source.camera),
+    settings: { ...(source.settings || {}) },
+    directions: cloneRuntimeRecord(source.directions || {}),
+    directionSets: cloneRuntimeRecord(source.directionSets || {}),
+    controls: {
+      keys: { ...(source.controls?.keys || {}) },
+    },
+    inputs: JSON.parse(JSON.stringify(source.inputs || [])),
+    rules: JSON.parse(JSON.stringify(source.rules || [])),
+    winCondition: source.winCondition ? JSON.parse(JSON.stringify(source.winCondition)) : undefined,
+    lifecycle: {
+      onLevelStart: JSON.parse(JSON.stringify(source.lifecycle?.onLevelStart || [])),
+      onLevelClear: [...(source.lifecycle?.onLevelClear || [])],
+    },
+    objects: cloneRuntimeObjects(source.objects || {}),
+    sprites: cloneRuntimeSprites(source.sprites || {}),
+    cells: cloneRuntimeCells(source.cells || []),
+    levels: cloneRuntimeLevels(source.levels || []),
+    levelBundles: cloneRuntimeLevelBundles(source.levelBundles || {}),
+  };
+}
+
+function cloneRuntimeRecord(record) {
+  return Object.fromEntries(
+    Object.entries(record).map(([key, value]) => [
+      key,
+      Array.isArray(value) ? [...value] : { ...value },
+    ]),
+  );
+}
+
+function cloneRuntimeObjects(objects) {
+  return Object.fromEntries(
+    Object.entries(objects).map(([name, object]) => [name, { ...object }]),
+  );
+}
+
+function cloneRuntimeSprites(sprites) {
+  return Object.fromEntries(
+    Object.entries(sprites).map(([name, sprite]) => [
+      name,
+      {
+        ...sprite,
+        palette: { ...(sprite.palette || {}) },
+        bitmap: [...(sprite.bitmap || [])],
+      },
+    ]),
+  );
+}
+
+function cloneRuntimeCells(cells) {
+  return cells.map((cell) => ({
+    position: { ...cell.position },
+    objects: (cell.objects || []).map((object) => ({ ...object })),
+  }));
+}
+
+function cloneRuntimeLevels(levels) {
+  return levels.map((level, index) => ({
+    name: level.name || `level_${index + 1}`,
+    label: level.label || level.name || `Level ${index + 1}`,
+    size: { ...level.size },
+    cells: cloneRuntimeCells(level.cells || []),
+  }));
+}
+
+function cloneRuntimeLevelBundles(levelBundles) {
+  return Object.fromEntries(
+    Object.entries(levelBundles).map(([name, indexes]) => [
+      name,
+      Array.isArray(indexes) ? indexes.map((index) => Number(index)) : [],
+    ]),
+  );
+}
+
+function runtimeSnapshotLevel(source) {
+  return {
+    name: source.levelName || "level_1",
+    label: source.levelLabel || source.levelName || "Level 1",
+    size: { ...source.size },
+    cells: cloneRuntimeCells(source.cells || []),
+  };
+}
+
+function stateFromRuntimeCells(runtime, cells, size) {
+  const layerCount = Number(runtime.base.layerCount || 1);
+  const width = Number(size.width || 1);
+  const depth = Number(size.depth || 1);
+  const height = Number(size.height || 1);
+  const slots = new Array(width * depth * height * layerCount).fill(0);
+  for (const cell of cells || []) {
+    const position = cell.position || {};
+    const x = Number(position.x || 0);
+    const y = Number(position.y || 0);
+    const z = Number(position.z || 0);
+    if (x < 0 || x >= width || y < 0 || y >= depth || z < 0 || z >= height) {
+      continue;
+    }
+    for (const object of cell.objects || []) {
+      const objectId = Number(object.id || 0);
+      if (!objectId) {
+        continue;
+      }
+      const layer = runtime.objectLayer(objectId);
+      slots[runtimeSlotIndex(width, depth, layerCount, x, y, z, layer)] = objectId;
+    }
+  }
+  return {
+    kind: "puzzle3d",
+    width,
+    depth,
+    height,
+    layerCount,
+    slots,
+    levelFiredRules: [],
+  };
+}
+
+function cellsFromRuntimeState(runtime, state) {
+  const cells = [];
+  const width = Number(state.width || 1);
+  const depth = Number(state.depth || 1);
+  const height = Number(state.height || 1);
+  const layerCount = Number(state.layerCount || runtime.base.layerCount || 1);
+  for (let z = 0; z < height; z += 1) {
+    for (let y = 0; y < depth; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        const objects = [];
+        for (let layer = 0; layer < layerCount; layer += 1) {
+          const objectId = Number(state.slots?.[runtimeSlotIndex(width, depth, layerCount, x, y, z, layer)] || 0);
+          if (objectId) {
+            objects.push(runtime.objectForId(objectId));
+          }
+        }
+        if (objects.length) {
+          cells.push({ position: { x, y, z }, objects });
+        }
+      }
+    }
+  }
+  return cells;
+}
+
+function runtimeSlotIndex(width, depth, layerCount, x, y, z, layer) {
+  return ((((z * depth) + y) * width + x) * layerCount) + layer;
+}
+
+function cloneRuntimeState(state) {
+  return {
+    ...state,
+    slots: [...(state.slots || [])],
+    levelFiredRules: [...(state.levelFiredRules || [])],
+  };
+}
+
+function runtimeStateKey(state) {
+  return JSON.stringify({
+    width: state.width,
+    depth: state.depth,
+    height: state.height,
+    layerCount: state.layerCount,
+    slots: state.slots || [],
+    levelFiredRules: state.levelFiredRules || [],
+  });
+}
+
 function normalizeSnapshot(source) {
   if (Array.isArray(source.levels) && source.levels.length > 0) {
     const levels = source.levels.map((level, index) => normalizeLevel(source, level, index));
@@ -2506,3 +2992,10 @@ function sizeFromSlices(slices) {
 function clampIndex(index, length) {
   return Math.max(0, Math.min(Math.max(0, length - 1), index));
 }
+  if (component.kind === "for") {
+    const children = expandedForChildren(component, scope).map(({ child, scope: childScope }) => measureSceneNode(child, childScope));
+    return {
+      width: Math.max(1, children.reduce((width, child) => Math.max(width, child.width), 0)),
+      height: Math.max(1, children.reduce((total, child) => total + child.height, 0) + sceneGap(component) * Math.max(0, children.length - 1)),
+    };
+  }

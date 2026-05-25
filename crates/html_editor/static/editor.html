@@ -188,6 +188,21 @@
               <span id="gamePaneTitle">Preview</span>
             </div>
             <div class="pane-actions">
+              <button id="previewRefreshButton" class="pane-header-icon-button preview-refresh-button" type="button" aria-label="Refresh preview" title="Refresh preview">
+                <svg viewBox="0 0 24 24" aria-hidden="true" class="lucide lucide-refresh-cw-icon lucide-refresh-cw">
+                  <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"></path>
+                  <path d="M21 3v5h-5"></path>
+                  <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"></path>
+                  <path d="M8 16H3v5"></path>
+                </svg>
+              </button>
+              <button id="previewSolveButton" class="pane-header-icon-button preview-solve-button" type="button" aria-label="Solve current preview state" title="Solve current preview state">
+                <svg viewBox="0 0 24 24" aria-hidden="true" class="solve-level-icon">
+                  <circle cx="6" cy="19" r="3"></circle>
+                  <path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"></path>
+                  <circle cx="18" cy="5" r="3"></circle>
+                </svg>
+              </button>
               <button class="pane-close-button" type="button" data-pane-close="active-preview" aria-label="Hide current tool pane" title="Hide current tool pane">
                 <svg viewBox="0 0 24 24" aria-hidden="true">
                   <path d="M18 6 6 18"></path>
@@ -378,6 +393,17 @@
                   <rect x="7" y="7" width="10" height="10" rx="1"></rect>
                 </svg>
               </button>
+              <button id="levelSolveShortcutButton" class="source-action-button level-solve-shortcut-button" type="button" aria-label="Solve level" title="Solve level">
+                <svg class="solve-level-icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <circle cx="6" cy="19" r="3"></circle>
+                  <path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"></path>
+                  <circle cx="18" cy="5" r="3"></circle>
+                </svg>
+                <svg class="cancel-solve-icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M6 6l12 12"></path>
+                  <path d="M18 6 6 18"></path>
+                </svg>
+              </button>
               <button id="copyLevelButton" class="source-action-button source-copy-button" type="button" aria-label="Copy level source" title="Copy level source">
                 <svg viewBox="0 0 24 24" aria-hidden="true">
                   <rect x="8" y="8" width="14" height="14" rx="2"></rect>
@@ -405,6 +431,12 @@
           </div>
           <div id="solverPanel" class="solver-panel" hidden>
             <div class="tool-pane-scroll">
+              <div class="solver-level-strip">
+                <label class="solver-level-control">
+                <span>Level</span>
+                <select id="solverLevelSelect" aria-label="Solver level" title="Solver level"></select>
+                </label>
+              </div>
               <div class="solver-controls">
               <span class="solver-action-buttons" aria-label="Solver controls">
                 <button id="solveLevelButton" type="button" aria-label="Solve level" title="Solve level">
@@ -812,13 +844,20 @@
               <div id="level3dPalette" class="level-palette level3d-palette" aria-label="3D level palette"></div>
               <div class="level3d-workspace">
               <div class="level3d-runtime-wrap">
+                <iframe
+                  id="level3dRuntimeFrame"
+                  class="level3d-runtime-frame"
+                  title="3D level runtime preview"
+                  sandbox="allow-scripts"
+                  scrolling="no"
+                ></iframe>
                 <canvas
                   id="level3dStageCanvas"
                   class="level3d-stage-canvas"
                   width="960"
                   height="620"
                   tabindex="0"
-                  aria-label="3D level stage preview"
+                  aria-label="3D level placement surface"
                 ></canvas>
                 <div class="sprite3d-camera-controls level3d-preview-controls" aria-label="3D level preview controls">
                   <label>
@@ -895,6 +934,25 @@
               </div>
               <div class="level3d-source-panel">
                 <div class="source-action-group source-preview-actions level3d-source-actions" role="group" aria-label="3D level source actions">
+                  <button id="level3dPlaytestButton" class="source-action-button level-playtest-button" type="button" aria-label="Play 3D level" title="Play 3D level">
+                    <svg class="level-play-icon" viewBox="0 0 24 24" aria-hidden="true">
+                      <polygon points="8 5 19 12 8 19 8 5"></polygon>
+                    </svg>
+                  <svg class="level-stop-icon" viewBox="0 0 24 24" aria-hidden="true">
+                      <rect x="7" y="7" width="10" height="10" rx="1"></rect>
+                    </svg>
+                  </button>
+                  <button id="level3dSolveShortcutButton" class="source-action-button level-solve-shortcut-button" type="button" aria-label="Solve 3D level" title="Solve 3D level">
+                    <svg class="solve-level-icon" viewBox="0 0 24 24" aria-hidden="true">
+                      <circle cx="6" cy="19" r="3"></circle>
+                      <path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"></path>
+                      <circle cx="18" cy="5" r="3"></circle>
+                    </svg>
+                    <svg class="cancel-solve-icon" viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M6 6l12 12"></path>
+                      <path d="M18 6 6 18"></path>
+                    </svg>
+                  </button>
                   <button id="copyLevel3dButton" class="source-action-button source-copy-button" type="button" aria-label="Copy 3D level" title="Copy 3D level">
                     <svg viewBox="0 0 24 24" aria-hidden="true">
                       <rect x="8" y="8" width="14" height="14" rx="2"></rect>
@@ -1071,8 +1129,10 @@
     <script src="/sound-generator.js"></script>
     <script src="/editor_theme_imports.js"></script>
     <script src="/editor_dom.js"></script>
+    <script src="/editor_workspace.js"></script>
     <script src="/editor_source.js"></script>
     <script src="/editor_level3d.js"></script>
+    <script src="/editor_workbench.js"></script>
     <script src="/editor.js"></script>
     <script src="/editor_sprite.js"></script>
     <script src="/puzzle3_visual_core.js"></script>

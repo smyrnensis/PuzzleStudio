@@ -3,6 +3,7 @@ pub struct SceneLayout {
     pub size: Option<SceneSize>,
     pub gap: Option<u16>,
     pub align: SceneAlign,
+    pub scroll: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -407,6 +408,18 @@ pub fn parse_scene_layout_attrs(tokens: &[&str]) -> Result<SceneLayout, SceneLay
                     2
                 };
             }
+            "scroll" => {
+                layout.scroll = true;
+                index += 1;
+            }
+            "scroll=true" => {
+                layout.scroll = true;
+                index += 1;
+            }
+            "scroll=false" => {
+                layout.scroll = false;
+                index += 1;
+            }
             other => {
                 return Err(SceneLayoutParseError::new(format!(
                     "unknown scene layout attribute: {other}"
@@ -778,12 +791,14 @@ mod tests {
         });
 
         component.layout_mut().unwrap().size = Some(SceneSize::new(4, 3));
+        component.layout_mut().unwrap().scroll = true;
 
         assert_eq!(component.kind(), SceneComponentKind::Frame);
         assert_eq!(
             component.layout().and_then(|layout| layout.size),
             Some(SceneSize::new(4, 3))
         );
+        assert!(component.layout().is_some_and(|layout| layout.scroll));
 
         let menu = SceneComponent::<SceneCommand>::Menu(MenuInstance {
             name: "main".to_string(),

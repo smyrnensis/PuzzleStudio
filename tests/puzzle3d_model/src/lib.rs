@@ -2063,7 +2063,7 @@ row gap 1 align center {
 box size 8 8 align right bottom {
 puzzle3 board size 7 4 align left top
 }
-column gap 2 {
+column gap 2 scroll=true {
 title "Stats" size 5 1
 button "Restart" size 4 1 -> goto playing
 }
@@ -2109,6 +2109,14 @@ button "Restart" size 4 1 -> goto playing
                 },
             }]
         );
+        let SceneComponent3::Column {
+            layout: column_layout,
+            ..
+        } = &children[1]
+        else {
+            panic!("expected a column child");
+        };
+        assert!(column_layout.scroll);
 
         let fixture_json = export_visual_fixture_json(&parsed).unwrap();
         assert!(
@@ -2118,6 +2126,7 @@ button "Restart" size 4 1 -> goto playing
         assert!(fixture_json.contains("\"kind\": \"row\""));
         assert!(fixture_json.contains("\"kind\": \"box\""));
         assert!(fixture_json.contains("\"gap\": 1"));
+        assert!(fixture_json.contains("\"scroll\": true"));
         assert!(fixture_json.contains("\"width\": 7"));
     }
 

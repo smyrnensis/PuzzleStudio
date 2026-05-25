@@ -8,6 +8,14 @@ export class WasmCoreRuntime {
     transition_program_outcome(program_key: string, level_index: number, state_json: string, input: number): string;
 }
 
+export class WasmPuzzle3Runtime {
+    free(): void;
+    [Symbol.dispose](): void;
+    is_complete(state_json: string): boolean;
+    constructor(source: string, puzzle_path: string);
+    transition_program_outcome(program_key: string, state_json: string, input: number): string;
+}
+
 export function compile_preview(source: string, puzzle_path: string, game_css: string, game_visuals_js: string): string;
 
 export function generate_visuals_js(source: string, base_visuals_js: string): string;
@@ -17,6 +25,8 @@ export function highlight_source_html(source: string): string;
 export function resolve_source_target(source: string, cursor_offset: number): string;
 
 export function solve_state(source: string, puzzle_path: string, state_json: string, max_depth: number, max_nodes: number, max_ms: number): string;
+
+export function solve_state_with_progress(source: string, puzzle_path: string, state_json: string, max_depth: number, max_nodes: number, max_ms: number, progress_interval_ms: number, progress_callback: Function): string;
 
 export function suggest_source_completions(source: string, cursor_offset: number): string;
 
@@ -29,16 +39,23 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly __wbg_wasmcoreruntime_free: (a: number, b: number) => void;
+    readonly __wbg_wasmpuzzle3runtime_free: (a: number, b: number) => void;
     readonly compile_preview: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
     readonly generate_visuals_js: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly highlight_source_html: (a: number, b: number) => [number, number];
     readonly resolve_source_target: (a: number, b: number, c: number) => [number, number];
     readonly solve_state: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => [number, number, number, number];
+    readonly solve_state_with_progress: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: any) => [number, number, number, number];
     readonly suggest_source_completions: (a: number, b: number, c: number) => [number, number];
     readonly transition_program_outcome: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
     readonly translate_puzzlescript: (a: number, b: number) => [number, number, number, number];
     readonly wasmcoreruntime_new: (a: number, b: number, c: number, d: number) => [number, number, number];
     readonly wasmcoreruntime_transition_program_outcome: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
+    readonly wasmpuzzle3runtime_is_complete: (a: number, b: number, c: number) => [number, number, number];
+    readonly wasmpuzzle3runtime_new: (a: number, b: number, c: number, d: number) => [number, number, number];
+    readonly wasmpuzzle3runtime_transition_program_outcome: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
+    readonly __wbindgen_exn_store: (a: number) => void;
+    readonly __externref_table_alloc: () => number;
     readonly __wbindgen_externrefs: WebAssembly.Table;
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;

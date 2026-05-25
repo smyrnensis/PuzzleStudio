@@ -7,6 +7,12 @@ const sourceCompletionPopover = createSourceCompletionPopover();
 const sourceCompletionTextEncoder = new TextEncoder();
 const sourceBlockSelectionLayer = createSourceBlockSelectionLayer();
 const sourceCaretLayer = createSourceCaretLayer();
+const sourceFindMatchLayer = createSourceFindMatchLayer();
+const sourceFindPanel = createSourceFindPanel();
+const sourceFindInput = sourceFindPanel?.querySelector("[data-source-find-input]");
+const sourceReplaceInput = sourceFindPanel?.querySelector("[data-source-replace-input]");
+const sourceFindStatus = sourceFindPanel?.querySelector("[data-source-find-status]");
+const sourceFindCaseButton = sourceFindPanel?.querySelector("[data-source-find-case]");
 const sourceImportLinkFrame = createSourceImportLinkFrame();
 const sourceTargetHintLayer = createSourceTargetHintLayer();
 const SOURCE_EDITABLE_TARGETS = [
@@ -57,6 +63,12 @@ let sourceEditorKillRing = "";
 let sourceEditorBlockSelection = null;
 let sourceEditorRangeDrag = null;
 let sourceEditorPreferredCaretX = null;
+let sourceFindState = {
+  matches: [],
+  selectedIndex: -1,
+  matchCase: false,
+  replaceVisible: false,
+};
 let suppressNextSourceClickSelection = false;
 let sourceUndoStack = [];
 let sourceRedoStack = [];
@@ -250,6 +262,7 @@ function syncSourceHighlightScroll() {
   }
   syncSourceHighlightMetrics();
   sourceHighlight.style.transform = `translate(${-sourceEditor.scrollLeft}px, ${-sourceEditor.scrollTop}px)`;
+  renderSourceFindMatches();
   renderSourceCaret();
   renderSourceBlockSelection();
   if (sourceTargetHintActive) {
@@ -405,6 +418,49 @@ function createSourceCaretLayer() {
   return layer;
 }
 
+function createSourceFindMatchLayer() {
+  if (!sourceEditorWrap) {
+    return null;
+  }
+  const layer = document.createElement("div");
+  layer.className = "source-find-match-layer";
+  layer.hidden = true;
+  sourceEditorWrap.append(layer);
+  return layer;
+}
+
+function createSourceFindPanel() {
+  if (!sourceEditorWrap) {
+    return null;
+  }
+  const panel = document.createElement("div");
+  panel.className = "source-find-panel";
+  panel.hidden = true;
+  panel.innerHTML = `
+    <div class="source-find-row">
+      <input class="source-find-input" data-source-find-input type="search" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Find" aria-label="Find in source">
+      <button class="source-find-icon-button" data-source-find-case type="button" aria-label="Match case" title="Match case" aria-pressed="false">Aa</button>
+      <button class="source-find-icon-button" data-source-find-previous type="button" aria-label="Previous match" title="Previous match">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m18 15-6-6-6 6"></path></svg>
+      </button>
+      <button class="source-find-icon-button" data-source-find-next type="button" aria-label="Next match" title="Next match">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg>
+      </button>
+      <button class="source-find-icon-button" data-source-find-close type="button" aria-label="Close find" title="Close">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg>
+      </button>
+    </div>
+    <div class="source-find-row source-replace-row">
+      <input class="source-find-input" data-source-replace-input type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Replace" aria-label="Replace with">
+      <button class="source-find-command-button" data-source-replace-current type="button">Replace</button>
+      <button class="source-find-command-button" data-source-replace-all type="button">All</button>
+    </div>
+    <div class="source-find-status" data-source-find-status aria-live="polite">No query</div>
+  `;
+  sourceEditorWrap.append(panel);
+  return panel;
+}
+
 function scheduleSourceCompletion(immediate = false) {
   window.clearTimeout(sourceCompletionTimer);
   sourceCompletionTimer = window.setTimeout(() => {
@@ -550,6 +606,289 @@ function positionSourceCompletionPopover() {
   sourceCompletionPopover.style.left = `${Math.max(8, Math.min(maxLeft, left))}px`;
   sourceCompletionPopover.style.top = `${top}px`;
   sourceCompletionPopover.style.maxHeight = `${Math.min(216, availableBelow)}px`;
+}
+
+function sourceFindShortcutRequested(event) {
+  const modifier = (event.metaKey && !event.ctrlKey) || (event.ctrlKey && !event.metaKey);
+  if (!modifier || event.shiftKey) {
+    return false;
+  }
+  const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
+  return key === "f" || event.code === "KeyF";
+}
+
+function handleSourceFindShortcut(event) {
+  if (!sourceFindShortcutRequested(event) || !isTextDocument(documents[currentDocumentIndex])) {
+    return false;
+  }
+  event.preventDefault();
+  event.stopPropagation();
+  event.stopImmediatePropagation?.();
+  openSourceFindPanel({ replace: event.altKey });
+  return true;
+}
+
+function isSourceFindPanelOpen() {
+  return Boolean(sourceFindPanel && !sourceFindPanel.hidden);
+}
+
+function openSourceFindPanel(options = {}) {
+  if (!sourceFindPanel || !sourceFindInput || !isTextDocument(documents[currentDocumentIndex])) {
+    return false;
+  }
+  hideSourceColorEditor();
+  hideSourceCompletions();
+  setSourceFindReplaceVisible(Boolean(options.replace) || sourceFindState.replaceVisible);
+  const selected = sourceFindSeedFromSelection();
+  if (selected) {
+    sourceFindInput.value = selected;
+  }
+  sourceFindPanel.hidden = false;
+  syncSourceFindMatches({ select: Boolean(sourceFindInput.value), anchor: sourceEditor.selectionStart });
+  window.setTimeout(() => {
+    sourceFindInput.focus();
+    sourceFindInput.select();
+  }, 0);
+  return true;
+}
+
+function closeSourceFindPanel(options = {}) {
+  if (!sourceFindPanel) {
+    return;
+  }
+  sourceFindPanel.hidden = true;
+  sourceFindState.matches = [];
+  sourceFindState.selectedIndex = -1;
+  renderSourceFindMatches();
+  if (options.focusEditor !== false) {
+    sourceEditor.focus({ preventScroll: true });
+  }
+}
+
+function sourceFindSeedFromSelection() {
+  const start = Math.min(sourceEditor.selectionStart, sourceEditor.selectionEnd);
+  const end = Math.max(sourceEditor.selectionStart, sourceEditor.selectionEnd);
+  const value = sourceEditor.value.slice(start, end);
+  if (!value || value.length > 160 || value.includes("\n")) {
+    return "";
+  }
+  return value;
+}
+
+function setSourceFindReplaceVisible(visible) {
+  sourceFindState.replaceVisible = Boolean(visible);
+  sourceFindPanel?.classList.toggle("has-replace", sourceFindState.replaceVisible);
+  if (sourceFindState.replaceVisible) {
+    sourceReplaceInput?.removeAttribute("tabindex");
+  } else {
+    sourceReplaceInput?.setAttribute("tabindex", "-1");
+  }
+}
+
+function syncSourceFindMatches(options = {}) {
+  if (!isSourceFindPanelOpen() || !sourceFindInput) {
+    return;
+  }
+  const query = sourceFindInput.value || "";
+  sourceFindState.matches = findSourceMatches(query, sourceFindState.matchCase);
+  if (!query) {
+    sourceFindState.selectedIndex = -1;
+    setSourceFindStatus("No query");
+    renderSourceFindMatches();
+    return;
+  }
+  if (!sourceFindState.matches.length) {
+    sourceFindState.selectedIndex = -1;
+    setSourceFindStatus("No results");
+    renderSourceFindMatches();
+    return;
+  }
+
+  const exactIndex = sourceFindState.matches.findIndex((match) =>
+    match.start === sourceEditor.selectionStart && match.end === sourceEditor.selectionEnd
+  );
+  if (exactIndex >= 0) {
+    sourceFindState.selectedIndex = exactIndex;
+  } else if (options.keepIndex && sourceFindState.matches[sourceFindState.selectedIndex]) {
+    sourceFindState.selectedIndex = Math.max(0, Math.min(sourceFindState.matches.length - 1, sourceFindState.selectedIndex));
+  } else {
+    const anchor = Number.isInteger(options.anchor) ? options.anchor : sourceEditor.selectionEnd;
+    const nextIndex = sourceFindState.matches.findIndex((match) => match.start >= anchor);
+    sourceFindState.selectedIndex = nextIndex >= 0 ? nextIndex : 0;
+  }
+
+  if (options.select !== false) {
+    selectSourceFindMatch(sourceFindState.selectedIndex, { focusEditor: false });
+  }
+  updateSourceFindStatus();
+  renderSourceFindMatches();
+}
+
+function findSourceMatches(query, matchCase) {
+  const needle = String(query || "");
+  if (!needle) {
+    return [];
+  }
+  const source = sourceEditor.value || "";
+  const haystack = matchCase ? source : source.toLocaleLowerCase();
+  const normalizedNeedle = matchCase ? needle : needle.toLocaleLowerCase();
+  const matches = [];
+  let index = haystack.indexOf(normalizedNeedle);
+  while (index >= 0) {
+    matches.push({ start: index, end: index + needle.length });
+    index = haystack.indexOf(normalizedNeedle, index + Math.max(1, needle.length));
+  }
+  return matches;
+}
+
+function selectSourceFindMatch(index, options = {}) {
+  const match = sourceFindState.matches[index];
+  if (!match) {
+    return false;
+  }
+  sourceFindState.selectedIndex = index;
+  sourceEditor.setSelectionRange(match.start, match.end);
+  scrollSourceOffsetIntoView(match.start);
+  if (options.focusEditor) {
+    sourceEditor.focus({ preventScroll: true });
+  }
+  updateSourceFindStatus();
+  renderSourceBlockSelection();
+  renderSourceFindMatches();
+  return true;
+}
+
+function moveSourceFindSelection(delta) {
+  if (!isSourceFindPanelOpen()) {
+    openSourceFindPanel();
+  }
+  syncSourceFindMatches({ select: false });
+  if (!sourceFindState.matches.length) {
+    return false;
+  }
+  const count = sourceFindState.matches.length;
+  const current = sourceFindState.selectedIndex >= 0 ? sourceFindState.selectedIndex : 0;
+  return selectSourceFindMatch((current + delta + count) % count, { focusEditor: false });
+}
+
+function replaceCurrentSourceFindMatch() {
+  if (!isSourceFindPanelOpen() || !sourceReplaceInput) {
+    return false;
+  }
+  syncSourceFindMatches({ select: false });
+  const match = sourceFindState.matches[sourceFindState.selectedIndex];
+  if (!match) {
+    return false;
+  }
+  const replacement = sourceReplaceInput.value || "";
+  sourceEditor.setRangeText(replacement, match.start, match.end, "select");
+  const nextAnchor = match.start + replacement.length;
+  sourceEditor.setSelectionRange(match.start, nextAnchor);
+  sourceEditorContentChanged();
+  syncSourceFindMatches({ anchor: nextAnchor });
+  return true;
+}
+
+function replaceAllSourceFindMatches() {
+  if (!isSourceFindPanelOpen() || !sourceReplaceInput || !sourceFindState.matches.length) {
+    return false;
+  }
+  const matches = [...sourceFindState.matches];
+  const replacement = sourceReplaceInput.value || "";
+  const source = sourceEditor.value || "";
+  let output = "";
+  let cursor = 0;
+  for (const match of matches) {
+    output += source.slice(cursor, match.start);
+    output += replacement;
+    cursor = match.end;
+  }
+  output += source.slice(cursor);
+  const firstStart = matches[0]?.start ?? 0;
+  const firstEnd = firstStart + replacement.length;
+  sourceEditor.value = output;
+  sourceEditor.setSelectionRange(firstStart, firstEnd);
+  sourceEditorContentChanged();
+  syncSourceFindMatches({ anchor: firstEnd, select: false });
+  setSourceFindStatus(`Replaced ${matches.length}`);
+  renderSourceFindMatches();
+  return true;
+}
+
+function refreshSourceFindAfterSourceChange() {
+  if (!isSourceFindPanelOpen()) {
+    return;
+  }
+  syncSourceFindMatches({ keepIndex: true, select: false });
+}
+
+function syncSourceFindIndexFromSelection() {
+  if (!isSourceFindPanelOpen() || !sourceFindState.matches.length) {
+    return;
+  }
+  const index = sourceFindState.matches.findIndex((match) =>
+    match.start === sourceEditor.selectionStart && match.end === sourceEditor.selectionEnd
+  );
+  if (index < 0 || index === sourceFindState.selectedIndex) {
+    return;
+  }
+  sourceFindState.selectedIndex = index;
+  updateSourceFindStatus();
+  renderSourceFindMatches();
+}
+
+function updateSourceFindStatus() {
+  const count = sourceFindState.matches.length;
+  const index = sourceFindState.selectedIndex;
+  setSourceFindStatus(count ? `${index + 1} / ${count}` : "No results");
+}
+
+function setSourceFindStatus(text) {
+  if (sourceFindStatus) {
+    sourceFindStatus.textContent = text;
+  }
+}
+
+function renderSourceFindMatches() {
+  if (!sourceFindMatchLayer) {
+    return;
+  }
+  sourceFindMatchLayer.replaceChildren();
+  if (!isSourceFindPanelOpen() || !sourceFindState.matches.length || !isTextDocument(activeDocument())) {
+    sourceFindMatchLayer.hidden = true;
+    return;
+  }
+  sourceFindState.matches.slice(0, 600).forEach((match, index) => {
+    for (const item of sourceSelectionRectsForOffsets(match.start, match.end)) {
+      const rect = document.createElement("div");
+      rect.className = `source-find-match${index === sourceFindState.selectedIndex ? " is-current" : ""}`;
+      rect.style.left = `${item.left}px`;
+      rect.style.top = `${item.top}px`;
+      rect.style.width = `${item.width}px`;
+      rect.style.height = `${item.height}px`;
+      sourceFindMatchLayer.append(rect);
+    }
+  });
+  sourceFindMatchLayer.hidden = sourceFindMatchLayer.childElementCount === 0;
+}
+
+function scrollSourceOffsetIntoView(offset) {
+  const rect = sourceCaretRectForOffset(offset);
+  if (!rect) {
+    return;
+  }
+  const margin = 32;
+  if (rect.top < margin) {
+    sourceEditor.scrollTop = Math.max(0, sourceEditor.scrollTop + rect.top - margin);
+  } else if (rect.top + rect.height > sourceEditor.clientHeight - margin) {
+    sourceEditor.scrollTop += rect.top + rect.height - sourceEditor.clientHeight + margin;
+  }
+  if (rect.left < margin) {
+    sourceEditor.scrollLeft = Math.max(0, sourceEditor.scrollLeft + rect.left - margin);
+  } else if (rect.left > sourceEditor.clientWidth - margin) {
+    sourceEditor.scrollLeft += rect.left - sourceEditor.clientWidth + margin;
+  }
+  syncSourceHighlightScroll();
 }
 
 function sourceVisualCaretPoint(offset) {
@@ -1300,6 +1639,7 @@ sourceEditor.addEventListener("input", () => {
   recordSourceUndoSnapshot();
   updateSourceMeta();
   refreshSourceColorEditor();
+  refreshSourceFindAfterSourceChange();
   scheduleSourceHighlight();
   scheduleSourceCompletion();
   if (documents[currentDocumentIndex]) {
@@ -1363,9 +1703,56 @@ document.addEventListener("selectionchange", () => {
     return;
   }
   syncPreviewModeFromSourceCursor();
+  syncSourceFindIndexFromSelection();
   renderSourceCaret();
   renderSourceBlockSelection();
 });
+document.addEventListener("keydown", (event) => {
+  if (event.defaultPrevented) {
+    return;
+  }
+  handleSourceFindShortcut(event);
+}, true);
+sourceFindPanel?.addEventListener("mousedown", (event) => {
+  if (event.target.closest("button")) {
+    event.preventDefault();
+  }
+  event.stopPropagation();
+});
+sourceFindInput?.addEventListener("input", () => syncSourceFindMatches({ anchor: sourceEditor.selectionStart }));
+sourceFindInput?.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    event.preventDefault();
+    closeSourceFindPanel();
+    return;
+  }
+  if (event.key === "Enter") {
+    event.preventDefault();
+    moveSourceFindSelection(event.shiftKey ? -1 : 1);
+  }
+});
+sourceReplaceInput?.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    event.preventDefault();
+    closeSourceFindPanel();
+    return;
+  }
+  if (event.key === "Enter") {
+    event.preventDefault();
+    replaceCurrentSourceFindMatch();
+  }
+});
+sourceFindCaseButton?.addEventListener("click", () => {
+  sourceFindState.matchCase = !sourceFindState.matchCase;
+  sourceFindCaseButton.classList.toggle("is-active", sourceFindState.matchCase);
+  sourceFindCaseButton.setAttribute("aria-pressed", String(sourceFindState.matchCase));
+  syncSourceFindMatches({ anchor: sourceEditor.selectionStart });
+});
+sourceFindPanel?.querySelector("[data-source-find-previous]")?.addEventListener("click", () => moveSourceFindSelection(-1));
+sourceFindPanel?.querySelector("[data-source-find-next]")?.addEventListener("click", () => moveSourceFindSelection(1));
+sourceFindPanel?.querySelector("[data-source-find-close]")?.addEventListener("click", () => closeSourceFindPanel());
+sourceFindPanel?.querySelector("[data-source-replace-current]")?.addEventListener("click", replaceCurrentSourceFindMatch);
+sourceFindPanel?.querySelector("[data-source-replace-all]")?.addEventListener("click", replaceAllSourceFindMatches);
 }
 
 function handleSourceEditorEmacsBinding(event) {
@@ -1996,6 +2383,7 @@ function sourceEditorContentChanged() {
   recordSourceUndoSnapshot();
   updateSourceMeta();
   refreshSourceColorEditor();
+  refreshSourceFindAfterSourceChange();
   if (documents[currentDocumentIndex]) {
     documents[currentDocumentIndex].source = sourceEditor.value;
   }
@@ -3098,6 +3486,15 @@ function applySourceBlockSelectionReplacement(replacer, options = {}) {
 
 sourceEditor.addEventListener("keydown", (event) => {
   if (!isTextDocument(documents[currentDocumentIndex])) {
+    return;
+  }
+  if (handleSourceFindShortcut(event)) {
+    return;
+  }
+  if (event.key === "Escape" && isSourceFindPanelOpen()) {
+    event.preventDefault();
+    event.stopPropagation();
+    closeSourceFindPanel();
     return;
   }
   if (handleSourceUndoShortcut(event)) {

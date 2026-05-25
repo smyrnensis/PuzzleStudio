@@ -1,304 +1,308 @@
-title "Microban Basic 3D"
+title "Microban 3D"
+author "Levels by David Skinner"
 
-puzzle3 sokoban_literally_in_3d {
-  render {
-    camera {
-      yaw = 15
-      pitch = 55
-      zoom = 1.1
-      interactive_look = true
-      interactive_zoom = true
-    }
-    grid {
-      occupied_cells = true
-    }
+puzzle3 sokoban {
+render {
+  camera {
+    yaw = 15
+    pitch = 55
+    zoom = 1.1
+    interactive_look = true
+    interactive_zoom = true
   }
-
-  layers {
-    floor = Floor
-    target = Goal
-    solid = Player Box Wall
+  grid {
+    occupied_cells = true
   }
+}
 
-  group solid = Player Box Wall
+layers {
+  floor = Floor
+  target = Goal
+  solid = Player Box Wall
+}
 
-  rules {
-    input horizontal [ Player | Box | no solid ] -> [ | Player | Box ]
-    input horizontal [ Player | no solid ] -> [ | Player ]
-  }
+group {
+  solid = Player Box Wall
+}
 
-  win_conditions {
-    some Goal
-    no down [ no Box | Goal ]
-  }
+rules {
+  input horizontal [ Player | Box | no solid ] -> [ | Player | Box ]
+  input horizontal [ Player | no solid ] -> [ | Player ]
+}
 
-  on_level_clear {
-    if win_conditions -> next_level
-  }
+win_conditions {
+  some Goal
+  no down [ no Box | Goal ]
+}
+
+on_level_clear {
+  if win_conditions -> next_level
+}
 }
 
 scene title {
-  view {
-    title "Microban Basic 3D"
-    button "New Game" -> start microban in playing
-    button "Level Select" -> goto level_select
+view {
+  title "Microban 3D"
+  button "New Game" -> start microban in sokoban
+  button "Level Select" -> goto level_select
+}
+}
+
+scene sokoban {
+state {
+  board = puzzle3 sokoban
+}
+
+inputs {
+  level_select <- q Escape
+}
+
+rules {
+  board.rules
+  if input == level_select -> goto level_select
+}
+
+view {
+  row {
+    title "Microban 3D"
   }
+  puzzle3 board size 8 8
+}
 }
 
 scene level_select {
-  state {
-    board = puzzle3 sokoban_literally_in_3d
-  }
-
-  view {
-    title "Select Level"
-    level_menu microban -> start microban in playing
-    button "Back" -> goto title
-  }
-}
-
-scene playing {
-  state {
-    board = puzzle3 sokoban_literally_in_3d
-  }
-
-  keys {
-    q = goto level_select
-    Escape = goto level_select
-  }
-
-  rules {
-    board.rules
-  }
-
-  view {
-    box size 4 3 {
-      puzzle3 board size 4 3
+view {
+  title "Select Level"
+  column scroll=true {
+    for level in levels {
+      button join(level.num, ". ", level.title) -> goto sokoban(level)
     }
   }
+  button "Exit" -> goto title
+}
 }
 
-levels3 microban of sokoban_literally_in_3d {
-  legend {
-    . = empty
-    , = Floor
-    G = Floor Goal
-    P = Player
-    B = Box
-    # = Wall
-  }
-
-  level microban_01 {
-    ####..
-    #..#..
-    #..###
-    #BP..#
-    #..B.#
-    #..###
-    ####..
-
-    ,,,,,,
-    ,,G,,,
-    ,,,,,,
-    ,G,,,,
-    ,,,,,,
-    ,,,,,,
-    ,,,,,,
-  }
-
-  level microban_02 {
-    ######
-    #....#
-    #.#P.#
-    #.BB.#
-    #..B.#
-    #....#
-    ######
-
-    ,,,,,,
-    ,,,,,,
-    ,,,,,,
-    ,,,G,,
-    ,,GG,,
-    ,,,,,,
-    ,,,,,,
-  }
-
-  level microban_03 {
-    ..####...
-    ###..####
-    #.....B.#
-    #.#..#B.#
-    #....#P.#
-    #########
-
-    ,,,,,,,,,
-    ,,,,,,,,,
-    ,,,,,,,,,
-    ,,,,,,,,,
-    ,,G,G,,,,
-    ,,,,,,,,,
-  }
+levels3 microban of sokoban {
+legend {
+. = empty
+, = Floor
+G = Floor Goal
+P = Player
+B = Box
+# = Wall
 }
 
-sprites3 basic of sokoban_literally_in_3d {
-  Floor
-  #90ee90 #008000
-  11111
-  01111
-  11101
-  11111
-  10111
+level microban_01 {
+####..
+#..#..
+#..###
+#BP..#
+#..B.#
+#..###
+####..
 
-  .....
-  .....
-  .....
-  .....
-  .....
+,,,,,,
+,,G,,,
+,,,,,,
+,G,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+}
 
-  .....
-  .....
-  .....
-  .....
-  .....
+level microban_02 {
+######
+#....#
+#.#P.#
+#.BB.#
+#..B.#
+#....#
+######
 
-  .....
-  .....
-  .....
-  .....
-  .....
+,,,,,,
+,,,,,,
+,,,,,,
+,,,G,,
+,,GG,,
+,,,,,,
+,,,,,,
+}
 
-  .....
-  .....
-  .....
-  .....
-  .....
+level microban_03 {
+..####...
+###..####
+#.....B.#
+#.#..#B.#
+#....#P.#
+#########
 
-  Goal
-  #00008b
-  .....
-  .000.
-  .0.0.
-  .000.
-  .....
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,G,G,,,,
+,,,,,,,,,
+}
+}
 
-  .....
-  .....
-  .....
-  .....
-  .....
+sprites3 basic of sokoban {
+Floor
+#90ee90 #008000
+11111
+01111
+11101
+11111
+10111
 
-  .....
-  .....
-  .....
-  .....
-  .....
+.....
+.....
+.....
+.....
+.....
 
-  .....
-  .....
-  .....
-  .....
-  .....
+.....
+.....
+.....
+.....
+.....
 
-  .....
-  .....
-  .....
-  .....
-  .....
+.....
+.....
+.....
+.....
+.....
 
-  Player
-  #000000 #ffa500 #ffffff #0000ff
-  .....
-  .....
-  .000.
-  .....
-  .....
+.....
+.....
+.....
+.....
+.....
 
-  .....
-  .....
-  .111.
-  .....
-  .....
+Goal
+#00008b
+.....
+.000.
+.0.0.
+.000.
+.....
 
-  .....
-  .....
-  22222
-  .....
-  .....
+.....
+.....
+.....
+.....
+.....
 
-  .....
-  .....
-  .333.
-  .....
-  .....
+.....
+.....
+.....
+.....
+.....
 
-  .....
-  .....
-  .3.3.
-  .....
-  .....
+.....
+.....
+.....
+.....
+.....
 
-  Box
-  #ffa500
-  00000
-  0...0
-  0...0
-  0...0
-  00000
+.....
+.....
+.....
+.....
+.....
 
-  0...0
-  .....
-  .....
-  .....
-  0...0
+Player
+#000000 #ffa500 #ffffff #0000ff
+.....
+.....
+.000.
+.....
+.....
 
-  0...0
-  .....
-  .....
-  .....
-  0...0
+.....
+.....
+.111.
+.....
+.....
 
-  0...0
-  .....
-  .....
-  .....
-  0...0
+.....
+.....
+22222
+.....
+.....
 
-  00000
-  0...0
-  0...0
-  0...0
-  00000
+.....
+.....
+.333.
+.....
+.....
 
-  Wall
-  #a46322 #493c2b
-  .....
-  .....
-  .....
-  .....
-  .....
+.....
+.....
+.3.3.
+.....
+.....
 
-  .....
-  .....
-  .....
-  .....
-  .....
+Box
+#ffa500
+00000
+0...0
+0...0
+0...0
+00000
 
-  00010
-  11111
-  01000
-  11111
-  00010
+0...0
+.....
+.....
+.....
+0...0
 
-  11111
-  00010
-  11111
-  01000
-  11111
+0...0
+.....
+.....
+.....
+0...0
 
-  00010
-  11111
-  01000
-  11111
-  00010
+0...0
+.....
+.....
+.....
+0...0
+
+00000
+0...0
+0...0
+0...0
+00000
+
+Wall
+#a46322 #493c2b
+.....
+.....
+.....
+.....
+.....
+
+.....
+.....
+.....
+.....
+.....
+
+00010
+11111
+01000
+11111
+00010
+
+11111
+00010
+11111
+01000
+11111
+
+00010
+11111
+01000
+11111
+00010
 }

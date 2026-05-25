@@ -271,6 +271,26 @@ button:disabled {
   min-width: 0;
 }
 
+.view-row.is-scroll,
+.view-column.is-scroll,
+.view-box.is-scroll {
+  max-height: min(100%, calc(var(--screen-virtual-height, 100vh) - 96px));
+  max-width: 100%;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.view-row.is-scroll {
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.view-column.is-scroll,
+.view-box.is-scroll {
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
 .view-list {
   margin: 0;
   padding: 0;
@@ -285,6 +305,11 @@ button:disabled {
 
 .level-menu {
   width: min(100%, 420px);
+  max-height: min(100%, calc(var(--screen-virtual-height, 100vh) - 96px));
+  padding-right: 4px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
   text-align: left;
 }
 
@@ -303,6 +328,7 @@ button:disabled {
   color: var(--ink);
   font-weight: 700;
   box-shadow: none;
+  cursor: pointer;
   text-align: left;
 }
 

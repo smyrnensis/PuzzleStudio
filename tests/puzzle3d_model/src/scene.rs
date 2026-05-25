@@ -165,53 +165,11 @@ pub enum SceneComponent3 {
     },
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct SceneLayout3 {
-    pub size: Option<SceneSize3>,
-    pub gap: Option<u16>,
-    pub align: SceneAlign3,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct SceneSize3 {
-    pub width: u16,
-    pub height: u16,
-}
-
-impl SceneSize3 {
-    pub fn new(width: u16, height: u16) -> Self {
-        Self { width, height }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct SceneAlign3 {
-    pub x: SceneAlignX3,
-    pub y: SceneAlignY3,
-}
-
-impl Default for SceneAlign3 {
-    fn default() -> Self {
-        Self {
-            x: SceneAlignX3::Center,
-            y: SceneAlignY3::Center,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SceneAlignX3 {
-    Left,
-    Center,
-    Right,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SceneAlignY3 {
-    Top,
-    Center,
-    Bottom,
-}
+pub type SceneLayout3 = puzzle_scene::SceneLayout;
+pub type SceneSize3 = puzzle_scene::SceneSize;
+pub type SceneAlign3 = puzzle_scene::SceneAlign;
+pub type SceneAlignX3 = puzzle_scene::SceneAlignX;
+pub type SceneAlignY3 = puzzle_scene::SceneAlignY;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SceneAction3 {

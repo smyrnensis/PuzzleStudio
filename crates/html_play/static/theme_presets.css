@@ -442,7 +442,6 @@ body.theme-puzzlescript {
 }
 
 .theme-puzzlescript .screen-view {
-  width: min(100%, 820px);
   gap: 16px;
 }
 

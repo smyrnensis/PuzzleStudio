@@ -131,7 +131,7 @@ mod tests {
 
     #[test]
     fn solves_first_sokoban_level_and_replays_to_goal() {
-        let source = include_str!("../../../games/spec_2d/game.puzzle");
+        let source = include_str!("../../../games/spec_2d.puzzle");
         let loaded = parse_game(source).unwrap();
         let inputs = ["w", "a", "s", "d"]
             .into_iter()
@@ -166,7 +166,7 @@ mod tests {
 
     #[test]
     fn reports_depth_budget() {
-        let source = include_str!("../../../games/spec_2d/game.puzzle");
+        let source = include_str!("../../../games/spec_2d.puzzle");
         let loaded = parse_game(source).unwrap();
         let inputs = ["w", "a", "s", "d"]
             .into_iter()
