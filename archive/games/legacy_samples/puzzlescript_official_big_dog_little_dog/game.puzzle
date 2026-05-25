@@ -1,0 +1,439 @@
+title "Big dog and little dog (test version)"
+author increpare
+homepage "www.increpare.com"
+
+theme puzzlescript {
+  background_color #008000
+}
+
+audio {
+  sfx dog_angry_create seed=98923704 type=puzzlescript
+  sfx dog_angry_move seed=98923704 type=puzzlescript
+  sfx adult_move seed=98218307 type=puzzlescript
+  sfx blood_create seed=13851102 type=puzzlescript
+}
+
+model puzzle main {
+layers {
+  layer_1 = Background
+  layer_2 = blank
+  layer_3 = blood
+  layer_4 = Baby wall Adult_Head Adult_body Dog dog_angry_u dog_angry_d dog_angry_l dog_angry_r
+  layer_5 = look_token
+}
+
+inputs {
+  up <- w ArrowUp
+  down <- s ArrowDown
+  left <- a ArrowLeft
+  right <- d ArrowRight
+  restart <- r
+}
+
+group {
+  adult = Adult_Head Adult_body
+  pushable = Dog adult Baby
+  pusher = Dog adult Baby
+  dog_angry = dog_angry_u dog_angry_d dog_angry_l dog_angry_r
+  Player = Dog dog_angry
+  obstacle = wall Dog adult Baby
+  sightblocker = wall
+}
+
+sprites {
+  blank
+    #008000
+
+  Background
+    #90ee90 #008000
+    11111
+    11111
+    11011
+    11111
+    11111
+
+  wall
+    #006400 #a46322 #00008b
+    .000.
+    00000
+    20000
+    .202.
+    ..1..
+
+  Baby
+    #a46322
+    .....
+    00...
+    .000.
+    .0.0.
+    .....
+
+  Adult_Head
+    #a46322 #ffff00 #0000ff #ff0000
+    00000
+    12121
+    11111
+    .111.
+    33333
+
+  Adult_body
+    #ff0000 #00008b #ffff00 #000000
+    00000
+    20002
+    11111
+    11.11
+    33.33
+
+  Dog
+    #c0c0c0 #808080 #ffc0cb #a46322
+    ..30.
+    ..002
+    03000
+    .0.0.
+    .0.0.
+
+  dog_angry_u
+    #c0c0c0 #808080 #ffc0cb #a46322 #ffffff #ff0000
+    4.4..
+    4.400
+    200..
+    0.300
+    ..0..
+
+  dog_angry_d
+    #c0c0c0 #808080 #ffc0cb #a46322 #ffffff #ff0000
+    ..0..
+    003.0
+    ..002
+    004.4
+    ..4.4
+
+  dog_angry_l
+    #c0c0c0 #808080 #ffc0cb #a46322 #ffffff #ff0000
+    4420.
+    ..0..
+    44030
+    .0.0.
+    .0.0.
+
+  dog_angry_r
+    #c0c0c0 #808080 #ffc0cb #a46322 #ffffff #ff0000
+    .0244
+    ..0..
+    03044
+    .0.0.
+    .0.0.
+
+  look_token
+    #ffff00
+
+  blood
+    #ff0000
+    .00..
+    0000.
+    00000
+    00000
+    .000.
+}
+
+win_conditions {
+  no Baby
+  some Dog
+}
+
+scratch {
+  __ps_sound_existing_dog_angry
+  __ps_sound_existing_blood
+}
+
+routine __ps_sound_mark_existing once {
+  once_all [ dog_angry ] -> [ dog_angry{__ps_sound_existing_dog_angry} ]
+  once_all [ blood ] -> [ blood{__ps_sound_existing_blood} ]
+}
+
+routine __ps_sound_emit_events once {
+  once [ dog_angry{no __ps_sound_existing_dog_angry} ] -> sfx dog_angry_create
+  once [ blood{no __ps_sound_existing_blood} ] -> sfx blood_create
+}
+
+routine __ps_main once {
+  __ps_sound_mark_existing
+  [ dog_angry{>} ] -> [ Dog{>} ]
+  [ Player{>} ] -> [ Player{>} ] again
+  [ dog_angry_u ] -> [ dog_angry_u{up} ] again
+  [ dog_angry_d ] -> [ dog_angry_d{down} ] again
+  [ dog_angry_l ] -> [ dog_angry_l{left} ] again
+  [ dog_angry_r ] -> [ dog_angry_r{right} ] again
+  [ dog_angry{>} | adult ] -> [ dog_angry{>} | adult{>} ]
+  [ dog_angry{>} | wall ] -> [ Dog | wall ]
+  repeat {
+    [ pusher{>} | pushable ] -> [ pusher{>} | pushable{>} ]
+    down [ Adult_Head{up} | Adult_body ] -> [ Adult_Head{up} | Adult_body{up} ]
+    down [ Adult_Head{down} | Adult_body ] -> [ Adult_Head{down} | Adult_body{down} ]
+    down [ Adult_Head{left} | Adult_body ] -> [ Adult_Head{left} | Adult_body{left} ]
+    down [ Adult_Head{right} | Adult_body ] -> [ Adult_Head{right} | Adult_body{right} ]
+    down [ Adult_Head | Adult_body{up} ] -> [ Adult_Head{up} | Adult_body{up} ]
+    down [ Adult_Head | Adult_body{down} ] -> [ Adult_Head{down} | Adult_body{down} ]
+    down [ Adult_Head | Adult_body{left} ] -> [ Adult_Head{left} | Adult_body{left} ]
+    down [ Adult_Head | Adult_body{right} ] -> [ Adult_Head{right} | Adult_body{right} ]
+  }
+  [ dog_angry ] [ pushable{>} | obstacle{no directions} ] -> [ dog_angry ] [ pushable | obstacle ]
+  [ Player{no directions} ] [ pushable{>} ] -> [ Player ] [ pushable ]
+  [ Player{no directions} | no sightblocker ] -> [ Dog | look_token{>} ]
+  up [ Dog | Baby ] -> [ | Dog blood ] again
+  down [ Dog | Baby ] -> [ | Dog blood ] again
+  left [ Dog | Baby ] -> [ | Dog blood ] again
+  right [ Dog | Baby ] -> [ | Dog blood ] again
+  repeat {
+    up [ Dog ] [ look_token{up} | Baby ] -> [ dog_angry_u{up} ] [ | Baby ] again
+    down [ Dog ] [ look_token{down} | Baby ] -> [ dog_angry_d{down} ] [ | Baby ] again
+    left [ Dog ] [ look_token{left} | Baby ] -> [ dog_angry_l{left} ] [ | Baby ] again
+    right [ Dog ] [ look_token{right} | Baby ] -> [ dog_angry_r{right} ] [ | Baby ] again
+    [ look_token{>} | no sightblocker no Baby ] -> [ | look_token{>} ]
+    [ look_token{>} | sightblocker ] -> [ | sightblocker ]
+  }
+  [ look_token ] -> [ ]
+  [ dog_angry{>} | Baby ] -> [ | Dog blood ]
+  move
+  down [ Adult_Head | no Adult_body ] -> cancel
+  __ps_sound_emit_events
+}
+
+on_level_start {
+  once_all [ no Background ] -> [ Background ]
+  __ps_main
+}
+
+rules {
+  input directions [ Player ] -> [ Player{>} ]
+  __ps_main
+}
+
+levels {
+  legend {
+    . = Background
+    , = blank
+    # = wall
+    p = Dog
+    * = Adult_Head
+    & = Adult_body
+    w = dog_angry_u
+    s = dog_angry_d
+    a = dog_angry_l
+    d = dog_angry_r
+    b = Baby
+    _ = empty
+  }
+
+  message "level 1 of 4"
+  ###############
+  #........#....#
+  #........#....#
+  #.....*..#....#
+  #.....&....b..#
+  #....##########
+  #........#,,,,,
+  #..p..*..#,,,,,
+  #.....&..#,,,,,
+  #........#,,,,,
+  ##########,,,,,
+
+  message "level 2 of 4"
+  ##########.
+  #......*.#.
+  #......&.#.
+  #......*##.
+  #......&###
+  #......*..#
+  #......&.b#
+  #.......###
+  #..*.*..#,,
+  #..&.&..#,,
+  #...p...#,,
+  #.......#,,
+  #########,,
+
+  message "level 3 of 4"
+  ##############
+  #............#
+  #.####.......#
+  #b*..........#
+  #b&..........#
+  #b*..........#
+  #b&..........#
+  ######.......#
+  ,,,,,#.*.*.*.#
+  ,,,,,#.&.&.&.#
+  ,,,,,#.......#
+  ,,,,,#.*...*.#
+  ,,,,,#.&.p.&.#
+  ,,,,,#.......#
+  ,,,,,#########
+
+  message "level 4 of 4"
+  ###################
+  #.................#
+  #.####.......####.#
+  #.*.............*b#
+  #b&.............&.#
+  #.*.............*b#
+  #b&.............&.#
+  ######.......######
+  ,,,,,#.*.*.*.#,,,,,
+  ,,,,,#.&.&.&.#,,,,,
+  ,,,,,#.......#,,,,,
+  ,,,,,#.*...*.#,,,,,
+  ,,,,,#.&.p.&.#,,,,,
+  ,,,,,#.......#,,,,,
+  ,,,,,#########,,,,,
+
+  message "that's it for now"
+  #######
+  #.....#
+  #.....#
+  #.....#
+  #.....#
+  #.....#
+  #######
+
+  #######
+  #.....#
+  #.....#
+  #.....#
+  #.....#
+  #.....#
+  #.....#
+  #.....#
+  #.....#
+  #######
+
+  ########
+  #......#
+  #......#
+  #......#
+  #......#
+  #......#
+  ########
+
+  ##########
+  #........#
+  #........#
+  #........#
+  #........#
+  #........#
+  #........#
+  #........#
+  #........#
+  ##########
+
+  #########
+  #.......#
+  #...*.#.#
+  #...&..b#
+  #.p.....#
+  #.......#
+  #########
+
+  #######
+  #...p.#
+  #.*..##
+  #.&.#b#
+  #.....#
+  #.....#
+  #######
+
+  ##########
+  #........#
+  #.p.*....#
+  #...&.#..#
+  #........#
+  #........#
+  #########b
+
+  ##########
+  #........#
+  #........#
+  #........#
+  #........#
+  #........#
+  ##########
+
+  ########
+  #......#
+  #....#b#
+  #p*....#
+  #.&...##
+  #..#...#
+  ########
+
+  ########,,,
+  #......#,,,
+  #..*.p.#,,,
+  #..&...#,,,
+  #####.#####
+  #.....*.*.#
+  #.....&b&.#
+  ##.##.##.##
+  #..........
+  #..........
+  #.......#..
+  #.......#..
+  #########..
+
+  ########...
+  #......#...
+  #..*.p.#...
+  #..&...#...
+  #####.#####
+  #.....*.*.#
+  #.....&b&.#
+  ##.#..##.##
+  #.........#
+  ###########
+
+  .########......
+  .#......#......
+  .#..*.p.#......
+  .#.*&...#......
+  ###&##.######..
+  #......*.*.##..
+  #......&b&..#..
+  ###.#..####.#..
+  .#..........#..
+  .############..
+}
+}
+
+scene title {
+  title "Big dog and little dog (test version)"
+  subtitle "by increpare"
+  inputs {
+    confirm <- Enter Space x
+  }
+  button "Play" -> input confirm
+  rules {
+    if input == confirm -> start levels in playing
+  }
+}
+
+scene playing {
+  state {
+    board = puzzle main
+  }
+  view {
+    row {
+      title "Big dog and little dog (test version)"
+    }
+    puzzle board
+  }
+  inputs {
+    back <- Escape q
+  }
+  rules {
+    board.rules
+    if input == back -> goto title
+    if board.win_conditions -> {
+      board.next_level
+    }
+  }
+}

@@ -1,0 +1,78 @@
+:root {
+  --wall: #2f3a40;
+  --target: #d6a525;
+  --portal: #6f5bd6;
+  --box: #b86f3c;
+  --player: #2f7ebc;
+  --accent: var(--player);
+}
+
+.board {
+  gap: 0;
+}
+
+.cell {
+  border: 1px solid #cdd4d8;
+  border-radius: 0;
+  background: var(--board-bg);
+}
+
+.sprite.Wall {
+  inset: -1px;
+  background: linear-gradient(135deg, #42515a, var(--wall));
+  box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.05);
+}
+
+.sprite.Target,
+.sprite.Portal-1,
+.sprite.Portal-2,
+.sprite.Portal-3 {
+  width: 76%;
+  aspect-ratio: 1;
+  border-radius: 5px;
+  background: rgba(111, 91, 214, 0.1);
+}
+
+.sprite.Target {
+  border: 3px solid var(--target);
+  background: rgba(214, 165, 37, 0.12);
+}
+
+.sprite.Portal-1,
+.sprite.Portal-2,
+.sprite.Portal-3 {
+  border: 3px solid var(--portal);
+}
+
+.sprite.Portal-1::after,
+.sprite.Portal-2::after,
+.sprite.Portal-3::after {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  color: var(--portal);
+  font: 800 14px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.sprite.Portal-1::after { content: "1"; }
+.sprite.Portal-2::after { content: "2"; }
+.sprite.Portal-3::after { content: "3"; }
+
+.sprite.Box {
+  width: 62%;
+  aspect-ratio: 1;
+  border-radius: 5px;
+  background: linear-gradient(135deg, #d59058, var(--box));
+  border: 2px solid #884d2d;
+  box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.18);
+}
+
+.sprite.Player {
+  width: 54%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #5aa3d8, var(--player));
+  border: 2px solid #1b5d8f;
+  box-shadow: 0 5px 12px rgba(47, 126, 188, 0.25);
+}

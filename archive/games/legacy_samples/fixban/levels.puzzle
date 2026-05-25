@@ -1,0 +1,89 @@
+levels {
+legend {
+. = empty
+a = Target:A
+b = Target:B
+c = Target:C
+p = Target:P
+A = Box:A
+B = Box:B
+C = Box:C
+P = Box:P
+# = Wall
+1 = Box:A Target:B
+2 = Box:B Target:A
+}
+
+level level_1
+########
+##.a####
+##A.####
+##a...##
+##..A.##
+##P.####
+########
+
+level level_2
+########
+#...####
+#P.AA..#
+###Aa..#
+##.....#
+##a.a.##
+########
+
+level level_3
+#######
+###..##
+#.AB..#
+#.#.P.#
+#.ab.##
+#######
+
+level level_4
+#########
+###..####
+###A.####
+##.bBa.##
+##.P...##
+###..####
+#########
+
+level level_5
+#######
+###..##
+#Pb..##
+#.#BBb#
+#..aA.#
+#....##
+#######
+
+level level_6
+########
+#......#
+#.2..1.#
+#.#.P#.#
+#.#2.1.#
+#......#
+########
+
+level level_7
+########
+#....#p#
+#.B.Bb.#
+##.Aa..#
+###.b.P#
+########
+
+level level_8
+########
+####...#
+#PA.b2.#
+#.1p.B.#
+#...a..#
+########
+
+level level_9
+##
+##
+}

@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>PuzzleStudio HTML Play</title>
+    <link rel="stylesheet" href="/app.css">
+    <link rel="stylesheet" href="/theme-presets.css">
+    <link rel="stylesheet" href="/renderer.css">
+    <link rel="stylesheet" href="/game.css">
+  </head>
+  <body>
+    <main id="shell" class="shell" tabindex="0" autofocus>
+      <section class="play-surface" aria-label="Puzzle board">
+        <div id="screenFrame" class="screen-frame">
+          <div id="screenView" class="screen-view">
+            <div id="board" class="board"></div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <script src="/game.visuals.js"></script>
+    <script src="/sound-generator.js"></script>
+    <script src="/renderer.js"></script>
+    <script src="/app.js"></script>
+  </body>
+</html>

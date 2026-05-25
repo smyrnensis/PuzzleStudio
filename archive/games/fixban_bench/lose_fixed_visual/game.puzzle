@@ -1,0 +1,409 @@
+name Fixban
+
+puzzle fixban {
+kind = A B C P
+shade_kind = base
+
+map rotate directions {
+up -> right
+right -> down
+down -> left
+left -> up
+}
+
+level_start {
+fix_board
+refresh_board
+}
+
+objects {
+Target:kind
+Box:kind Wall Moment
+target = Target
+pushable = Box
+solid = pushable Wall
+object = Box Wall
+}
+
+display_objects {
+Shade:shade_kind
+LightBase Light:kind
+Boundary:directions
+Corner:directions
+light = LightBase Light:kind
+shade = Shade:shade_kind
+wall_visual = Boundary Corner
+}
+
+layers {
+target_layer = Target:kind
+Shade:shade_kind
+LightBase Light:kind
+actor = Box:kind
+wall = Wall
+moment = Moment
+each Boundary:directions
+each Corner:directions
+}
+
+legend {
+. = empty
+a = Target:A
+b = Target:B
+c = Target:C
+p = Target:P
+A = Box:A
+B = Box:B
+C = Box:C
+P = Box:P
+# = Wall
+1 = Box:A Target:B
+2 = Box:B Target:A
+}
+
+win_conditions {
+for k in kind {
+all Target:k on Box:k
+}
+}
+lose_conditions any {
+exists([ Wall | ; Box:A no Target:A | Wall ])
+exists([ Wall | ; Box:B no Target:B | Wall ])
+exists([ Wall | ; Box:C no Target:C | Wall ])
+}
+
+sprites {
+shape mark:kind {
+A {
+00000
+01010
+00100
+01010
+00000
+}
+B {
+00000
+00100
+01010
+00100
+00000
+}
+C {
+00000
+00100
+00100
+00100
+00000
+}
+P {
+00000
+00000
+01010
+00000
+00000
+}
+}
+
+shape edge:directions rotate from up {
+11111
+00000
+00000
+00000
+00000
+}
+
+shape corner:directions rotate from up {
+00001
+00000
+00000
+00000
+00000
+}
+
+shape fill:kind {
+A {
+00000
+00000
+00000
+00000
+00000
+}
+B {
+00000
+00000
+00000
+00000
+00000
+}
+C {
+00000
+00000
+00000
+00000
+00000
+}
+P {
+00000
+00000
+00000
+00000
+00000
+}
+}
+
+shape shade_fill:shade_kind {
+base {
+00000
+00000
+00000
+.....
+.....
+}
+}
+
+colors piece_color:kind {
+A = #4a4
+B = #a4a
+C = #46c
+P = #000
+}
+
+Box:kind = ascii mark:kind {
+0 = piece_color:kind
+1 = transparent
+}
+
+Target:kind = ascii mark:kind {
+0 = transparent
+1 = piece_color:kind
+}
+
+Boundary:directions = ascii edge:directions {
+0 = transparent
+1 = #555
+}
+
+Corner:directions = ascii corner:directions {
+0 = transparent
+1 = #555
+}
+
+Shade:shade_kind = ascii shade_fill:shade_kind {
+0 = #0002
+. = transparent
+}
+
+LightBase = solid #fff
+Light:kind = ascii fill:kind {
+0 = piece_color:kind
+}
+Wall = solid #444
+}
+
+rule display wall_edges repeat {
+for d in directions {
+d [ Wall no Boundary:d | no Wall ] -> [ Wall Boundary:d | ]
+}
+}
+
+rule display wall_corners_270 repeat {
+for d in directions {
+d [ Wall no Corner:d | Wall ; Wall | no Wall ] -> [ Wall Corner:d | Wall ; Wall | ]
+}
+}
+
+rule fix_board repeat {
+for k in kind {
+repeat [ Box:k Target:k no Wall ] -> [ Box:k Target:k Wall ]
+}
+}
+
+rule display refresh_board once {
+repeat [ wall_visual ] -> []
+wall_edges
+wall_corners_270
+
+repeat [ light ] -> []
+repeat [ shade ] -> []
+repeat [ object no light ] -> [ object LightBase ]
+repeat down [ object | no solid no shade ] -> [ object | shade ]
+for k in kind {
+repeat [ LightBase Target:k ] -> [ Light:k Target:k ]
+}
+}
+
+main {
+once input [ Box:P no Target:P ] -> [ Box:P Moment ]
+repeat {
+for k in kind {
+input [ Box:kind Moment | Box:k no Target:k no Moment ] -> [ Box:kind Moment | Box:k Moment ]
+}
+}
+repeat {
+for k in kind {
+input [ Box:k Moment no Target:k | no solid ] -> [ | Box:k ]
+}
+}
+input [ pushable Moment ] -> [ pushable ]
+fix_board
+display refresh_board
+}
+
+levels {
+level_1 {
+########
+##.a####
+##A.####
+##a...##
+##..A.##
+##P.####
+########
+}
+
+level_2 {
+########
+#...####
+#P.AA..#
+###Aa..#
+##.....#
+##a.a.##
+########
+}
+
+level_3 {
+#######
+###..##
+#.AB..#
+#.#.P.#
+#.ab.##
+#######
+}
+
+level_4 {
+#########
+###..####
+###A.####
+##.bBa.##
+##.P...##
+###..####
+#########
+}
+
+level_5 {
+#######
+###..##
+#Pb..##
+#.#BBb#
+#..aA.#
+#....##
+#######
+}
+
+level_6 {
+########
+#......#
+#.2..1.#
+#.#.P#.#
+#.#2.1.#
+#......#
+########
+}
+
+level_7 {
+########
+#....#p#
+#.B.Bb.#
+##.Aa..#
+###.b.P#
+########
+}
+
+level_8 {
+########
+####...#
+#PA.b2.#
+#.1p.B.#
+#...a..#
+########
+}
+}
+}
+
+scene playing {
+layers {
+row {
+title game.title
+subtitle join level.number, ". ", level.label
+}
+board = puzzle fixban
+}
+keys {
+q = quit
+Escape = open_menu
+}
+transitions {
+board.main
+quit -> goto level_select
+open_menu -> enter menu
+if board.win_conditions and level.last -> goto level_select
+if board.win_conditions -> board.next_level
+}
+}
+
+scene level_clear {
+layers {
+board = puzzle fixban current_level
+message = "Stage clear"
+panel {
+text message
+button "Next Level" -> goto playing with level = next(level)
+button "Restart" -> restart
+button "Level Select" -> goto level_select
+}
+}
+keys {
+Enter Space = next_level
+q = quit
+}
+transitions {
+next_level -> board.next_level
+quit -> goto level_select
+}
+}
+
+scene menu {
+layers {
+text "Menu"
+column {
+button "Resume" -> back
+button "Restart" -> restart
+button "Level Select" -> goto level_select
+}
+}
+keys {
+Escape Enter Space = resume
+q = quit
+}
+transitions {
+resume -> back
+quit -> goto level_select
+}
+}
+
+scene level_select {
+layers {
+message = "Select a stage"
+text message
+level_menu {
+show index
+show cleared
+button "Back" -> back
+}
+}
+keys {
+w ArrowUp = menu_up
+s ArrowDown = menu_down
+Enter Space = confirm
+Escape q = back
+}
+}

@@ -1,0 +1,656 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Function Music Lab</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: #0c0f0c;
+        color: #eef4e8;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        justify-items: center;
+        align-items: start;
+        box-sizing: border-box;
+        padding: 20px 0;
+      }
+
+      main {
+        width: min(760px, calc(100vw - 24px));
+        display: grid;
+        gap: 12px;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: 18px;
+        font-weight: 700;
+        letter-spacing: 0;
+      }
+
+      header {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        align-items: center;
+      }
+
+      nav {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: end;
+        gap: 12px;
+      }
+
+      a {
+        color: #a7d983;
+        font-size: 13px;
+        text-decoration: none;
+      }
+
+      .panel {
+        border: 1px solid #293329;
+        border-radius: 8px;
+        background: #151a14;
+        overflow: visible;
+        box-shadow: 0 18px 60px rgba(0, 0, 0, 0.28);
+      }
+
+      .player {
+        padding: 14px;
+        display: grid;
+        grid-template-columns: auto 1fr;
+        gap: 14px;
+        align-items: center;
+      }
+
+      .transport {
+        display: flex;
+        gap: 8px;
+      }
+
+      button {
+        width: 40px;
+        height: 40px;
+        display: inline-grid;
+        place-items: center;
+        border: 0;
+        border-radius: 999px;
+        background: #a7d983;
+        color: #0c0f0c;
+        cursor: pointer;
+      }
+
+      button svg {
+        width: 18px;
+        height: 18px;
+        stroke: currentColor;
+        stroke-width: 2;
+        fill: none;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+
+      .timeline {
+        display: grid;
+        gap: 7px;
+        min-width: 0;
+      }
+
+      .progress {
+        height: 8px;
+        border-radius: 999px;
+        background: #293024;
+        cursor: pointer;
+        position: relative;
+      }
+
+      .progress span {
+        display: block;
+        width: calc(var(--progress, 0) * 100%);
+        height: 100%;
+        border-radius: inherit;
+        background: #a7d983;
+      }
+
+      .progress::after {
+        content: "";
+        position: absolute;
+        top: 50%;
+        left: calc(var(--progress, 0) * 100%);
+        width: 16px;
+        height: 16px;
+        border-radius: 50%;
+        background: #a7d983;
+        transform: translate(-50%, -50%);
+      }
+
+      .controls {
+        padding: 0 14px 14px;
+        display: grid;
+        gap: 14px;
+      }
+
+      .field {
+        display: grid;
+        gap: 8px;
+      }
+
+      .field-head {
+        display: flex;
+        justify-content: space-between;
+        gap: 10px;
+        align-items: baseline;
+      }
+
+      .label {
+        color: #9ba994;
+        font-size: 12px;
+      }
+
+      .value {
+        font-size: 13px;
+        font-weight: 700;
+      }
+
+      input[type="text"] {
+        min-width: 0;
+        border: 1px solid #303b2b;
+        border-radius: 999px;
+        background: #0f130e;
+        color: #eef4e8;
+        padding: 10px 14px;
+        font: inherit;
+      }
+
+      .segmented {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 6px;
+      }
+
+      .segment {
+        min-height: 34px;
+        display: grid;
+        place-items: center;
+        border: 1px solid #303b2b;
+        border-radius: 999px;
+        background: #0f130e;
+        color: #9ba994;
+        font-size: 13px;
+        font-weight: 700;
+        cursor: pointer;
+      }
+
+      .segment input {
+        position: absolute;
+        opacity: 0;
+        pointer-events: none;
+      }
+
+      .segment:has(input:checked) {
+        border-color: #a7d983;
+        background: #a7d983;
+        color: #0c0f0c;
+      }
+
+      .range-row {
+        display: grid;
+        grid-template-columns: 52px minmax(0, 1fr) 64px;
+        gap: 8px;
+        align-items: center;
+      }
+
+      .range-row span {
+        color: #7f8c78;
+        font-size: 11px;
+      }
+
+      .range-row span:first-child {
+        text-align: right;
+      }
+
+      input[type="range"] {
+        width: 100%;
+        height: 18px;
+        appearance: none;
+        background: transparent;
+        cursor: pointer;
+      }
+
+      input[type="range"]::-webkit-slider-runnable-track {
+        height: 8px;
+        border-radius: 999px;
+        background: linear-gradient(to right, #a7d983 0%, #a7d983 calc(var(--value, 0) * 100%), #293024 calc(var(--value, 0) * 100%), #293024 100%);
+      }
+
+      input[type="range"]::-webkit-slider-thumb {
+        appearance: none;
+        width: 16px;
+        height: 16px;
+        margin-top: -4px;
+        border-radius: 50%;
+        background: #a7d983;
+        border: 0;
+      }
+
+      input[type="range"]::-moz-range-track {
+        height: 8px;
+        border-radius: 999px;
+        background: linear-gradient(to right, #a7d983 0%, #a7d983 calc(var(--value, 0) * 100%), #293024 calc(var(--value, 0) * 100%), #293024 100%);
+      }
+
+      input[type="range"]::-moz-range-thumb {
+        width: 16px;
+        height: 16px;
+        border-radius: 50%;
+        background: #a7d983;
+        border: 0;
+      }
+
+      .obligations {
+        display: grid;
+        overflow: hidden;
+      }
+
+      .obligation {
+        display: grid;
+        grid-template-columns: 96px minmax(120px, 1fr) minmax(160px, 1.4fr) minmax(120px, 0.9fr);
+        gap: 10px;
+        padding: 10px 12px;
+        border-top: 1px solid #293329;
+        align-items: baseline;
+      }
+
+      .obligation:first-child {
+        border-top: 0;
+      }
+
+      .name {
+        font-weight: 700;
+      }
+
+      .meta {
+        color: #9ba994;
+        font-size: 12px;
+        overflow-wrap: anywhere;
+      }
+
+      pre {
+        margin: 0;
+        padding: 12px;
+        max-height: min(42vh, 460px);
+        overflow: auto;
+        border: 1px solid #293329;
+        border-radius: 8px;
+        background: #11150f;
+        color: #cbd6c3;
+        font-size: 12px;
+        line-height: 1.45;
+      }
+
+      @media (max-width: 680px) {
+        .player {
+          grid-template-columns: 1fr;
+        }
+
+        .obligation {
+          grid-template-columns: 1fr;
+          gap: 4px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <script>
+      if (location.protocol === "file:") {
+        location.replace("http://localhost:8875/function_music_lab.html");
+      }
+    </script>
+    <main>
+      <header>
+        <h1>Function Music Lab</h1>
+        <nav>
+          <a href="./timbre_distribution_lab.html">Distribution Lab</a>
+          <a href="./transient_distribution_lab.html">Transient Lab</a>
+          <a href="./timbre_axis_lab.html">Axis Lab</a>
+          <a href="./music_lab.html">Music Lab</a>
+          <a href="./timbre_lab.html">Timbre Lab</a>
+        </nav>
+      </header>
+      <section class="panel">
+        <div class="player">
+          <div class="transport">
+            <button id="play" aria-label="Play" title="Play">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><polygon points="8 5 19 12 8 19 8 5"></polygon></svg>
+            </button>
+            <button id="random" aria-label="Random seed" title="Random seed">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 3h5v5"></path><path d="M4 20 21 3"></path><path d="M21 16v5h-5"></path><path d="M15 15l6 6"></path><path d="M4 4l5 5"></path></svg>
+            </button>
+          </div>
+          <div class="timeline">
+            <div id="progress" class="progress" role="slider" aria-label="Playhead" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" tabindex="0"><span id="progress-bar"></span></div>
+          </div>
+        </div>
+
+        <div class="controls">
+          <div class="field">
+            <span class="label">Seed</span>
+            <input id="seed" type="text" value="" aria-label="Music seed">
+          </div>
+
+          <div class="field">
+            <div class="field-head">
+              <span class="label">Bars</span>
+              <span id="bars-value" class="value">64 bars</span>
+            </div>
+            <div class="segmented" role="radiogroup" aria-label="Music bars">
+              <label class="segment"><input type="radio" name="bars" value="8">8</label>
+              <label class="segment"><input type="radio" name="bars" value="16">16</label>
+              <label class="segment"><input type="radio" name="bars" value="32">32</label>
+              <label class="segment"><input type="radio" name="bars" value="64" checked>64</label>
+            </div>
+          </div>
+
+          <div class="field">
+            <div class="field-head">
+              <span class="label">Height</span>
+              <span id="height-value" class="value">0</span>
+            </div>
+            <div class="range-row">
+              <span>Lower</span>
+              <input id="height" type="range" min="0" max="1" step="0.01" value="0.50" aria-label="Music height">
+              <span>Higher</span>
+            </div>
+          </div>
+
+          <div class="field">
+            <div class="field-head">
+              <span class="label">BPM</span>
+              <span id="bpm-value" class="value">110 BPM</span>
+            </div>
+            <div class="range-row">
+              <span>Slow</span>
+              <input id="bpm" type="range" min="40" max="180" step="1" value="110" aria-label="Music BPM">
+              <span>Fast</span>
+            </div>
+          </div>
+
+          <div class="field">
+            <div class="field-head">
+              <span class="label">Volume</span>
+              <span id="volume-value" class="value">50%</span>
+            </div>
+            <div class="range-row">
+              <span>Quiet</span>
+              <input id="volume" type="range" min="0" max="1" step="0.01" value="0.5" aria-label="Music volume">
+              <span>Loud</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="obligations" class="panel obligations"></section>
+      <pre id="json"></pre>
+    </main>
+
+    <script type="module">
+      import { exportMusicLoop } from "./audio_export.mjs?v=function-4";
+      import { createPlayer } from "./seeded_music_lab.mjs?v=lab-5";
+      import { generateFunctionalSong, randomFunctionalPreset } from "./seeded_music_functional.mjs?v=function-19";
+
+      const playIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><polygon points="8 5 19 12 8 19 8 5"></polygon></svg>';
+      const pauseIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14"></path><path d="M16 5v14"></path></svg>';
+      const functionNames = ["identity", "time", "tone", "motion", "color", "boundary"];
+      const seedInput = document.querySelector("#seed");
+      const barInputs = [...document.querySelectorAll('input[name="bars"]')];
+      const heightInput = document.querySelector("#height");
+      const bpmInput = document.querySelector("#bpm");
+      const volumeInput = document.querySelector("#volume");
+      const barsValue = document.querySelector("#bars-value");
+      const heightValue = document.querySelector("#height-value");
+      const bpmValue = document.querySelector("#bpm-value");
+      const volumeValue = document.querySelector("#volume-value");
+      const progress = document.querySelector("#progress");
+      const progressBar = document.querySelector("#progress-bar");
+      const playButton = document.querySelector("#play");
+      const obligations = document.querySelector("#obligations");
+      const json = document.querySelector("#json");
+      let audioContext = null;
+      let player = null;
+      let isPlaying = false;
+      let pausedProgress = 0;
+      let restartTimer = null;
+      let progressFrame = null;
+
+      function song() {
+        return generateFunctionalSong(seedInput.value, {
+          bars: currentBars(),
+          height: Number(heightInput.value),
+          bpm: Number(bpmInput.value),
+          volume: Number(volumeInput.value),
+        });
+      }
+
+      function render() {
+        const current = song();
+        updateRangeFill(heightInput);
+        updateRangeFill(bpmInput);
+        updateRangeFill(volumeInput);
+        barsValue.textContent = `${current.playbackScore.transport.bars} bars`;
+        heightValue.textContent = `${current.playbackScore.mix.playbackTone.pitchShift > 0 ? "+" : ""}${current.playbackScore.mix.playbackTone.pitchShift}`;
+        bpmValue.textContent = `${current.playbackScore.transport.bpm} BPM`;
+        volumeValue.textContent = `${Math.round(current.playbackScore.mix.volume * 100)}%`;
+        renderObligations(current);
+        json.textContent = JSON.stringify({
+          export: exportMusicLoop(current),
+          debug: {
+            form: current.debug.form,
+            sectionPlan: current.debug.sectionPlan,
+            obligations: current.debug.obligations,
+            trackMapping: current.debug.trackMapping,
+            timbres: current.debug.timbres,
+            playbackTimbres: current.playbackScore.timbres,
+            progression: current.debug.progression,
+            scale: current.debug.scale,
+            key: current.debug.key,
+          },
+        }, null, 2);
+      }
+
+      function renderObligations(current) {
+        obligations.innerHTML = "";
+        for (const name of functionNames) {
+          const obligation = current.debug.obligations[name];
+          const mapping = current.debug.trackMapping[name];
+          const row = document.createElement("div");
+          row.className = "obligation";
+          row.innerHTML = `
+            <div class="name">${name}</div>
+            <div class="meta">${obligation.carrier}</div>
+            <div class="meta">${obligation.purpose}</div>
+            <div class="meta">${mapping.playbackTracks.join(", ") || "implicit"}</div>
+          `;
+          obligations.append(row);
+        }
+      }
+
+      function updateRangeFill(input) {
+        const min = Number(input.min);
+        const max = Number(input.max);
+        const value = Number(input.value);
+        input.style.setProperty("--value", ((value - min) / (max - min)).toFixed(4));
+      }
+
+      function currentBars() {
+        return Number(barInputs.find((input) => input.checked)?.value ?? 64);
+      }
+
+      function setBars(value) {
+        const nextValue = String(value);
+        for (const input of barInputs) {
+          input.checked = input.value === nextValue;
+        }
+      }
+
+      async function ensureAudioContext() {
+        audioContext ??= new AudioContext();
+        await audioContext.resume();
+      }
+
+      async function togglePlay() {
+        if (isPlaying) {
+          pause();
+          return;
+        }
+        await ensureAudioContext();
+        player?.stop();
+        player = createPlayer(audioContext, song().playbackScore);
+        player.start(pausedProgress);
+        setPlaying(true);
+        startProgress();
+        render();
+      }
+
+      function pause() {
+        clearTimeout(restartTimer);
+        restartTimer = null;
+        pausedProgress = player?.loopProgress() ?? pausedProgress;
+        player?.stop();
+        player = null;
+        setPlaying(false);
+        cancelAnimationFrame(progressFrame);
+        progressFrame = null;
+        setProgress(pausedProgress);
+      }
+
+      function setPlaying(nextIsPlaying) {
+        isPlaying = nextIsPlaying;
+        playButton.innerHTML = nextIsPlaying ? pauseIcon : playIcon;
+        playButton.setAttribute("aria-label", nextIsPlaying ? "Pause" : "Play");
+        playButton.title = nextIsPlaying ? "Pause" : "Play";
+      }
+
+      function updateMusic() {
+        render();
+        if (isPlaying && audioContext) {
+          clearTimeout(restartTimer);
+          restartTimer = setTimeout(() => {
+            const value = player?.loopProgress() ?? pausedProgress;
+            player?.stop();
+            player = createPlayer(audioContext, song().playbackScore);
+            player.start(value);
+            startProgress();
+          }, 180);
+        }
+      }
+
+      function setProgress(value) {
+        pausedProgress = clamp(value, 0, 0.9999);
+        progress.style.setProperty("--progress", pausedProgress.toFixed(4));
+        progressBar.style.setProperty("--progress", pausedProgress.toFixed(4));
+        progress.setAttribute("aria-valuenow", Math.round(pausedProgress * 100).toString());
+      }
+
+      function seekTo(value) {
+        setProgress(value);
+        if (isPlaying && audioContext) {
+          clearTimeout(restartTimer);
+          player?.stop();
+          player = createPlayer(audioContext, song().playbackScore);
+          player.start(pausedProgress);
+          startProgress();
+        }
+      }
+
+      function progressFromPointer(event) {
+        const rect = progress.getBoundingClientRect();
+        return (event.clientX - rect.left) / rect.width;
+      }
+
+      function startProgress() {
+        cancelAnimationFrame(progressFrame);
+        const tick = () => {
+          if (player && isPlaying) {
+            const value = player.loopProgress();
+            progress.style.setProperty("--progress", value.toFixed(4));
+            progressBar.style.setProperty("--progress", value.toFixed(4));
+            progress.setAttribute("aria-valuenow", Math.round(value * 100).toString());
+          }
+          progressFrame = requestAnimationFrame(tick);
+        };
+        tick();
+      }
+
+      function clamp(value, min, max) {
+        return Math.min(max, Math.max(min, value));
+      }
+
+      playButton.addEventListener("click", togglePlay);
+      document.querySelector("#random").addEventListener("click", () => {
+        const preset = randomFunctionalPreset(`${Date.now()}:${Math.random()}`);
+        seedInput.value = preset.seed;
+        setBars(preset.bars);
+        heightInput.value = preset.height;
+        bpmInput.value = preset.bpm;
+        setProgress(0);
+        updateMusic();
+      });
+
+      seedInput.addEventListener("input", updateMusic);
+      for (const input of barInputs) {
+        input.addEventListener("change", () => {
+          setProgress(0);
+          updateMusic();
+        });
+      }
+      heightInput.addEventListener("input", updateMusic);
+      bpmInput.addEventListener("input", updateMusic);
+      volumeInput.addEventListener("input", updateMusic);
+
+      progress.addEventListener("pointerdown", (event) => {
+        progress.setPointerCapture(event.pointerId);
+        seekTo(progressFromPointer(event));
+      });
+
+      progress.addEventListener("pointermove", (event) => {
+        if (event.buttons === 1) {
+          seekTo(progressFromPointer(event));
+        }
+      });
+
+      progress.addEventListener("keydown", (event) => {
+        if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+          event.preventDefault();
+          seekTo(pausedProgress + (event.key === "ArrowRight" ? 0.025 : -0.025));
+        }
+        if (event.key === "Home") {
+          event.preventDefault();
+          seekTo(0);
+        }
+        if (event.key === "End") {
+          event.preventDefault();
+          seekTo(0.9999);
+        }
+      });
+
+      const preset = randomFunctionalPreset(`${Date.now()}:${Math.random()}`);
+      seedInput.value = preset.seed;
+      setBars(preset.bars);
+      heightInput.value = preset.height;
+      bpmInput.value = preset.bpm;
+      updateRangeFill(heightInput);
+      updateRangeFill(bpmInput);
+      updateRangeFill(volumeInput);
+      setProgress(0);
+      render();
+    </script>
+  </body>
+</html>

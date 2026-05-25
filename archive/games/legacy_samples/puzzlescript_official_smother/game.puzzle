@@ -1,0 +1,422 @@
+title Smother
+author "Team Borse"
+
+theme puzzlescript {
+  background_color #9CBD0F
+  text_color #0F380F
+}
+
+audio {
+  sfx startgame seed=83279102 type=puzzlescript
+  sfx CloseMessage seed=123434 type=puzzlescript
+  sfx ShowMessage seed=123434 type=puzzlescript
+  sfx sfx0 seed=8545502 type=puzzlescript
+  sfx sfx1 seed=26 type=puzzlescript
+}
+
+model puzzle main {
+layers {
+  layer_1 = Background
+  layer_2 = LaserV LaserH LaserB
+  layer_3 = Exit
+  layer_4 = ProtectorSolo Heart Wall
+  layer_5 = PlayerFull Protector ProtectorSolo victimSolo Wall PlayerDead LaserGV LaserGH pushBlock
+}
+
+group {
+  Player = PlayerFull Protector ProtectorSolo victimSolo
+  PlayerWin = PlayerFull PlayerDead Protector victimSolo
+  Laser = LaserV LaserH LaserB
+  LaserBlock = Wall Player PlayerDead Exit
+}
+
+sprites {
+  Background
+    #9CBD0F
+
+  LaserGV
+    #9CBD0F #8CAD0F #306230 #0F380F
+    22222
+    .222.
+    ..3..
+    ..3..
+    .....
+
+  LaserGH
+    #9CBD0F #8CAD0F #306230 #0F380F
+    2....
+    22...
+    2233.
+    22...
+    2....
+
+  LaserV
+    #9CBD0F #8CAD0F #306230 #0F380F
+    .....
+    ..3..
+    ..3..
+    ..3..
+    .....
+
+  LaserH
+    #9CBD0F #8CAD0F #306230 #0F380F
+    .....
+    .....
+    .333.
+    .....
+    .....
+
+  LaserB
+    #9CBD0F #8CAD0F #306230 #0F380F
+    .....
+    ..3..
+    .333.
+    ..3..
+    .....
+
+  Exit
+    #9CBD0F #8CAD0F #306230 #0F380F
+    2...2
+    2...2
+    2...2
+    2...2
+    2.2.2
+
+  Wall
+    #9CBD0F #8CAD0F #306230 #0F380F
+    33333
+    31223
+    32123
+    32223
+    33333
+
+  Heart
+    #9CBD0F #8CAD0F #306230 #0F380F
+    .2.2.
+    22222
+    .222.
+    ..2..
+    .....
+
+  PlayerFull
+    #9CBD0F #8CAD0F #306230 #0F380F
+    .222.
+    .323.
+    .222.
+    .222.
+    .2.2.
+
+  Protector
+    #9CBD0F #8CAD0F #306230 #0F380F
+    .333.
+    .232.
+    .333.
+    .333.
+    .3.3.
+
+  ProtectorSolo
+    #9CBD0F #8CAD0F #306230 #0F380F
+    .333.
+    .232.
+    .333.
+    .333.
+    .3.3.
+
+  victimSolo
+    #9CBD0F #8CAD0F #306230 #0F380F
+    .222.
+    .323.
+    .222.
+    .222.
+    .2.2.
+
+  PlayerDead
+    #9CBD0F #8CAD0F #306230 #0F380F
+    .222.
+    22222
+    2.2.2
+    .222.
+    .222.
+
+  pushBlock
+    #9CBD0F #8CAD0F #306230 #0F380F
+    33333
+    31113
+    31113
+    31113
+    33333
+}
+
+legend {
+  . = Background
+  # = Wall
+  g = LaserGV
+  h = LaserGH
+  P = PlayerFull
+  p = PlayerFull
+  n = Protector
+  q = ProtectorSolo
+  k = victimSolo
+  O = Exit
+  o = Exit
+  l = Heart
+  b = pushBlock
+  _ = empty
+}
+
+win_conditions {
+  all PlayerWin on Exit
+  no Heart
+}
+
+routine __ps_main once {
+  [ victimSolo{>} | pushBlock ] -> [ victimSolo{>} | pushBlock{>} ]
+  [ pushBlock Laser ] -> [ Wall ]
+  [ ProtectorSolo{>} | ... | Heart ] -> [ | ... | ProtectorSolo ] sfx sfx1
+  [ ProtectorSolo{>} ] -> [ ProtectorSolo ]
+  move
+  [ Laser ] -> [ ]
+  down [ LaserGV | no Laser ] -> [ LaserGV | LaserV ]
+  right [ LaserGH | no Laser ] -> [ LaserGH | LaserH ]
+  down [ LaserV no LaserBlock | ] -> [ LaserV | LaserV ]
+  right [ LaserH no LaserBlock | ] -> [ LaserH | LaserH ]
+  down [ LaserV no LaserBlock | LaserH ] -> [ LaserV | LaserB ]
+  down [ LaserGV no LaserBlock | LaserH ] -> [ LaserGV | LaserB ]
+  right [ LaserH no LaserBlock | LaserV ] -> [ LaserH | LaserB ]
+  right [ LaserGH no LaserBlock | LaserV ] -> [ LaserGH | LaserB ]
+  right [ LaserB no LaserBlock | no Laser ] -> [ LaserB | LaserH ]
+  right [ LaserH no LaserBlock | no Laser ] -> [ LaserH | LaserH ]
+  down [ LaserB no LaserBlock | no Laser ] -> [ LaserB | LaserV ]
+  down [ LaserV no LaserBlock | no Laser ] -> [ LaserV | LaserV ]
+  [ PlayerFull Laser ] -> [ PlayerDead Laser ] sfx sfx0
+  [ victimSolo Laser ] -> [ PlayerDead Laser ] sfx sfx0
+}
+
+on_level_start {
+  once_all [ no Background ] -> [ Background ]
+  __ps_main
+}
+
+rules {
+  input directions [ Player ] -> [ Player{>} ]
+  __ps_main
+}
+
+levels {
+  message "then..."
+  message "I PROTECT YOU"
+  ###g###g###
+  #.........#
+  #n.......o#
+  #........o#
+  #p...#....#
+  #.........#
+  ###########
+
+  message "YOU SMOTHER ME"
+  ###########
+  #n........#
+  #......#..#
+  h..#h..#..#
+  #p.....#..#
+  #......#oo#
+  ###########
+
+  message "I DEFEND YOU"
+  #####g#####
+  #.P.....n.#
+  #.........#
+  #..#...#..#
+  #.........#
+  #......oo.#
+  ###########
+
+  message "YOU SPEAK FOR ME"
+  #####g#####
+  #n.......o#
+  #....#h...#
+  h....g....#
+  #.....#..o#
+  #p......#.#
+  ###########
+
+  message "WE ARE CARE FREE"
+  #P####g##g###
+  #.#..#.#....#
+  #..........o#
+  h...........#
+  #.#h..#..#.o#
+  #.....#....n#
+  #############
+
+  message "I CARRY OUR BURDENS"
+  message "before..."
+  message "I AM ALWAYS SEARCHING"
+  ###########
+  #l...l....#
+  #....l....#
+  #.........#
+  #q..l.....#
+  #l..l.....#
+  ###########
+
+  message "I NEVER SEE A FUTURE"
+  ###########
+  #.........#
+  #..l..q.l.#
+  #.l....l..#
+  #.ll...l.l#
+  #l.l...l..#
+  ###########
+
+  message "I NEVER FEEL COMFORTABLE"
+  ###########
+  #....l....#
+  #lq..l..l.#
+  #.l..l....#
+  #.l.....l.#
+  #....l....#
+  ###########
+
+  message "NO ONE GETS ME"
+  ###########l##l#####
+  #l.l...............#
+  #.....ll...........#
+  #l..l..............#
+  #..q..l.......l....#
+  #..ll..l......l....#
+  ###########........#
+  ###########l....l..#
+  ###########........#
+  ###########.l.l.l..#
+  ####################
+
+  message "I NEED CONTACT"
+  ###################
+  #.l...l############
+  #......############
+  #l.l..l##########l#
+  #l.......l.....l#.#
+  #....l............#
+  #ll..q.........l.l#
+  #..l.....l.......l#
+  #.l..l............#
+  ###################
+
+  message "I NEED VALIDATION"
+  message "before..."
+  message "I AM INDEPENDENT"
+  ###########
+  #.k.g.....#
+  #.......b.#
+  #.b...###.#
+  #.#.......#
+  #...h.....#
+  #...#...O.#
+  ###########
+
+  message "I AM STRONG"
+  ###g##g##
+  #.......#
+  #kb.b...#
+  #.......#
+  h.....#.#
+  #..#b#h.#
+  #....#..#
+  h....#o.#
+  #.......#
+  #########
+
+  message "I NEED NO ONE"
+  ###g#######
+  #.o.......#
+  #...#.##..#
+  #.#..bkb.##
+  h...#.#.b.#
+  #.......#.#
+  #.....#...#
+  ###########
+
+  message "I ENJOY MY COMPANY"
+  #####g#####g#####g######
+  #.k.....b...........o..#
+  #..b....#.#.......##...#
+  #.........b...#b..#g...#
+  h..........#......#....#
+  ##.###.#######.####.#.##
+  h..............#h......#
+  ####.#####.###.##.#.#.##
+  ###.b.#....#........#..#
+  ###.#....#b#.........b.#
+  ##.........#.......#...#
+  ########################
+
+  message "I AM FEARLESS"
+  ##g##g#g####
+  #o..#.#....#
+  #...#.#.#..#
+  #..........#
+  #.....#..b.#
+  #........b.#
+  #..#.##.#b.#
+  #..#......k#
+  ############
+
+  message "I AM ALONE"
+  message "now..."
+  ###########
+  #...o.o...#
+  #.........#
+  #.........#
+  #.........#
+  #...n.p...#
+  ###########
+  message "WE DON'T SEE THINGS AS THEY ARE, WE SEE THEM AS WE ARE"
+  message "Credits"
+  message "Concept/Design/Programming/Graphics - Steven McStravog"
+  message "Design/Programming/Graphics - Darragh McLernon"
+  message "Porting/Design/Programming - Rachel Gawley"
+  message "Artwork - Ricky Woodside"
+}
+}
+
+scene title {
+  title "Smother"
+  subtitle "by Team Borse"
+  button "Play" ->
+    sfx startgame
+    start levels in playing
+  end
+  keys {
+    Enter Space x ->
+      sfx startgame
+      start levels in playing
+    end
+  }
+}
+
+scene playing {
+  state {
+    board = puzzle main
+  }
+  view {
+    row {
+      title "Smother"
+    }
+    puzzle board
+  }
+  keys {
+    w ArrowUp -> input up
+    s ArrowDown -> input down
+    a ArrowLeft -> input left
+    d ArrowRight -> input right
+    r -> board.restart
+    Escape -> goto title
+  }
+  rules {
+    board.rules
+    if board.win_conditions -> {
+      board.next_level
+    }
+  }
+}

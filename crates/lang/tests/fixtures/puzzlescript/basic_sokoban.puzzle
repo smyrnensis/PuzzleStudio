@@ -1,0 +1,125 @@
+title "Basic PS Sokoban"
+
+theme puzzlescript
+
+model puzzle main {
+layers {
+  layer_1 = Background
+  layer_2 = Target
+  layer_3 = Player Wall Crate
+}
+
+inputs {
+  up <- w ArrowUp
+  down <- s ArrowDown
+  left <- a ArrowLeft
+  right <- d ArrowRight
+  restart <- r
+}
+
+sprites {
+  Background
+    #000000
+    .....
+    .....
+    .....
+    .....
+    .....
+
+  Target
+    #ffff00
+    .....
+    .000.
+    .0.0.
+    .000.
+    .....
+
+  Wall
+    #808080
+    00000
+    00000
+    00000
+    00000
+    00000
+
+  Crate
+    #a06020
+    00000
+    0...0
+    0...0
+    0...0
+    00000
+
+  Player
+    #0000ff
+    .000.
+    .0.0.
+    .000.
+    ..0..
+    .0.0.
+}
+
+win_conditions {
+  all Target on Crate
+}
+
+on_level_start {
+  once_all [ no Background ] -> [ Background ]
+}
+
+rules {
+  input directions [ Player ] -> [ Player{>} ]
+  [ Player{>} | Crate ] -> [ Player{>} | Crate{>} ]
+  move
+}
+
+levels {
+  legend {
+    . = Background
+    # = Wall
+    P = Player
+    B = Crate
+    T = Target
+    * = Crate Target
+    _ = empty
+  }
+
+  #######
+  #P.BT.#
+  #..*..#
+  #######
+}
+}
+
+scene title {
+  title "Basic PS Sokoban"
+  inputs {
+    confirm <- Enter Space x
+  }
+  button "Play" -> input confirm
+  rules {
+    if input == confirm -> start levels in playing
+  }
+}
+
+scene playing {
+  state {
+    board = puzzle main
+  }
+  view {
+    row {
+      title "Basic PS Sokoban"
+    }
+    puzzle board
+  }
+  inputs {
+    back <- Escape q
+  }
+  rules {
+    board.rules
+    if input == back -> goto title
+    if board.win_conditions -> {
+      board.next_level
+    }
+  }
+}

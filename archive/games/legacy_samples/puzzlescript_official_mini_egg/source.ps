@@ -1,0 +1,175 @@
+title Mini-EGG
+author increpare
+homepage www.increpare.net
+
+========
+OBJECTS
+========
+
+Background
+LIGHTGREEN GREEN
+11111
+01111
+11101
+11111
+10111
+
+
+Target
+DarkBlue
+.....
+.000.
+.0.0.
+.000.
+.....
+
+Wall
+BROWN DARKBROWN
+00010
+11111
+01000
+11111
+00010
+
+
+Crate
+lightblue
+00000
+0...0
+0...0
+0...0
+00000
+
+Player_u
+orange brown
+..0..
+.000.
+10000
+11000
+.111.
+
+Player_d
+orange brown
+.000.
+10000
+11000
+.110.
+..1..
+
+Player_l
+orange brown
+..00.
+.0000
+00000
+.1111
+..11.
+
+Player_r
+orange brown
+.00..
+0000.
+00000
+1111.
+.11..
+
+
+player_c
+orange brown
+..0..
+.000.
+11000
+.110.
+..1..
+
+processed
+red
+
+=======
+LEGEND
+=======
+
+player = Player_u or Player_d or Player_l or Player_r or player_c
+. = Background
+# = Wall
+P = Player_c
+* = Crate
+@ = Crate and Target
+O = Target
+
+obstacle = crate or wall
+
+=======
+SOUNDS
+=======
+
+================
+COLLISIONLAYERS
+================
+
+Background
+Target
+Player, Wall, Crate
+processed
+
+======
+RULES
+======
+
+[ > player | wall ] -> cancel
+[ > player | crate | obstacle ] -> cancel
+
+[ up player_u no processed ] -> cancel
+[ down player_u no processed ] -> [ down player_c processed ]
+[ left player_u no processed ] -> [ left player_u processed ]
+[ right player_u no processed ] -> [ right player_u processed ]
+
+[ up player_d no processed ] -> [ up player_c processed ]
+[ down player_d no processed ] -> cancel
+[ left player_d no processed ] -> [ left player_d processed ]
+[ right player_d no processed ] -> [ right player_d processed ]
+
+[ up player_l no processed ] -> [ up player_l processed ]
+[ down player_l no processed ] -> [ down player_l processed ]
+[ left player_l no processed ] -> cancel
+[ right player_l no processed ] -> [ right player_c processed ]
+
+[ up player_r no processed ] -> [ up player_r processed ]
+[ down player_r no processed ] -> [ down player_r processed ]
+[ left player_r no processed ] -> [ left player_c processed ]
+[ right player_r no processed ] -> cancel
+
+[ up player_c no processed ] -> [ up player_u processed ]
+[ down player_c no processed ] -> [ down player_d processed ]
+[ left player_c no processed ] -> [ left player_l processed ]
+[ right player_c no processed ] -> [ right player_r processed ]
+
+
+
+[ > Player | Crate ] -> [ > Player | > Crate ]
+
+
+[ processed ]->[]
+
+==============
+WINCONDITIONS
+==============
+
+all Target on Crate
+
+=======
+LEVELS
+=======
+
+
+
+message level 1 of 1
+
+####..
+#.O#..
+#..###
+#@P..#
+#..*.#
+#..###
+####..
+
+message EGG!

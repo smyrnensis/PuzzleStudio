@@ -1,0 +1,765 @@
+const soundPlayIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><polygon points="8 5 19 12 8 19 8 5"></polygon></svg>';
+const soundPauseIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14"></path><path d="M16 5v14"></path></svg>';
+
+function soundsApi() {
+  return window.PuzzleSoundGenerator || window.PuzzleSoundTools || null;
+}
+
+function resetSoundsBuilder() {
+  const api = soundsApi();
+  if (!api) {
+    soundsOutput.textContent = "Sounds generator unavailable.";
+    return;
+  }
+  if (!sounds.initialized) {
+    for (const type of api.SFX_TYPE_OPTIONS || []) {
+      const option = document.createElement("option");
+      option.value = type;
+      option.textContent = soundLabelForType(type);
+      soundsSfxTypeSelect.append(option);
+    }
+    const sfxPreset = api.randomSfxPreset(`${Date.now()}:${Math.random()}`);
+    const musicPreset = api.randomPreset(`${Date.now()}:${Math.random()}`);
+    soundsSfxSeedInput.value = sfxPreset.seed;
+    soundsSfxTypeSelect.value = sfxPreset.type;
+    soundsMusicSeedInput.value = musicPreset.seed;
+    soundsMusicToneInput.value = musicPreset.tone;
+    soundsMusicBpmInput.value = musicPreset.bpm;
+    sounds.initialized = true;
+  }
+  setSoundProgress(0);
+  renderSoundsBuilder();
+}
+
+function renderSoundsBuilder() {
+  const api = soundsApi();
+  if (!api) {
+    soundsOutput.textContent = "Sounds generator unavailable.";
+    return;
+  }
+  const sfxMode = sounds.mode === "sfx";
+  soundsSfxModeButton.classList.toggle("is-active", sfxMode);
+  soundsMusicModeButton.classList.toggle("is-active", !sfxMode);
+  soundsTopbarButton.classList.toggle("is-active", currentPreviewMode === "sounds");
+  soundsSfxModeButton.setAttribute("aria-pressed", String(sfxMode));
+  soundsMusicModeButton.setAttribute("aria-pressed", String(!sfxMode));
+  soundsSfxPanel.hidden = !sfxMode;
+  soundsMusicPanel.hidden = sfxMode;
+  soundsSfxSourceActions.hidden = !sfxMode;
+  soundsMusicSourceActions.hidden = sfxMode;
+  if (currentPreviewMode === "sounds") {
+    gamePaneTitle.textContent = "Sound";
+  }
+  if (sfxMode) {
+    renderSoundSfx();
+  } else {
+    renderSoundMusic();
+  }
+}
+
+function selectSoundMode(mode) {
+  const nextMode = mode === "music" ? "music" : "sfx";
+  if (sounds.mode === nextMode) {
+    renderSoundsBuilder();
+    return;
+  }
+  sounds.mode = nextMode;
+  if (nextMode === "sfx") {
+    pauseSoundMusic();
+  } else {
+    sounds.sfxPlayer?.stop();
+    sounds.sfxPlayer = null;
+  }
+  renderSoundsBuilder();
+}
+
+function soundSfxEffect() {
+  return soundsApi().generateSoundEffect(soundsSfxSeedInput.value, { type: soundsSfxTypeSelect.value });
+}
+
+function soundMusicSong() {
+  return soundsApi().generateSong(soundsMusicSeedInput.value, {
+    tone: Number(soundsMusicToneInput.value),
+    bpm: Number(soundsMusicBpmInput.value),
+    volume: Number(soundsMusicVolumeInput.value),
+  });
+}
+
+function renderSoundSfx() {
+  soundsOutput.textContent = soundCurrentLine();
+}
+
+function renderSoundMusic() {
+  const song = soundMusicSong();
+  soundsMusicToneValue.textContent = song.input.tone.toFixed(2);
+  soundsMusicBpmValue.textContent = `${song.playbackScore.transport.bpm}`;
+  soundsMusicVolumeValue.textContent = `${Math.round(song.playbackScore.mix.volume * 100)}%`;
+  updateSoundRangeFills();
+  soundsOutput.textContent = soundCurrentLine();
+}
+
+function soundCurrentLine() {
+  const definition = soundCurrentDefinition();
+  return definition ? definition.line : "";
+}
+
+function soundCurrentDefinition(options = {}) {
+  if (sounds.mode === "music") {
+    const song = soundMusicSong();
+    const requestedName = soundIdentifierAtom(soundsMusicTitleInput.value, "");
+    const name = options.uniqueForInsert
+      ? nextSoundsDefinitionName("music", requestedName || "music", options.source)
+      : requestedName || "music";
+    return {
+      kind: "music",
+      name,
+      line: `music ${name} seed=${soundAtom(song.input.seed, "123456")} tone=${song.input.tone.toFixed(2)} bpm=${song.playbackScore.transport.bpm} volume=${song.playbackScore.mix.volume.toFixed(2)}`,
+    };
+  }
+  const effect = soundSfxEffect();
+  const type = soundAtom(effect.type, "random");
+  const requestedName = soundIdentifierAtom(soundsSfxTitleInput.value, "");
+  const name = options.uniqueForInsert
+    ? nextSoundsDefinitionName("sfx", requestedName || "sfx", options.source)
+    : requestedName || "sfx";
+  return {
+    kind: "sfx",
+    name,
+    line: `sfx ${name} seed=${soundAtom(soundsSfxSeedInput.value, "123456")} type=${type}`,
+  };
+}
+
+async function ensureAudioContext() {
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextClass) {
+    throw new Error("WebAudio is not available");
+  }
+  sounds.context ??= new AudioContextClass();
+  await sounds.context.resume();
+}
+
+async function playSoundSfx() {
+  const api = soundsApi();
+  if (!api) {
+    return;
+  }
+  await ensureAudioContext();
+  sounds.sfxPlayer?.stop();
+  sounds.sfxPlayer = api.createSfxPlayer(sounds.context, soundSfxEffect());
+  sounds.sfxPlayer.start();
+  renderSoundSfx();
+}
+
+async function toggleSoundMusic() {
+  const api = soundsApi();
+  if (!api) {
+    return;
+  }
+  if (sounds.musicPlaying) {
+    pauseSoundMusic();
+    return;
+  }
+  await ensureAudioContext();
+  sounds.musicPlayer?.stop();
+  sounds.musicPlayer = api.createPlayer(sounds.context, soundMusicSong().playbackScore);
+  sounds.musicPlayer.start(sounds.musicProgress);
+  setSoundMusicPlaying(true);
+  startSoundProgress();
+  renderSoundMusic();
+}
+
+function updateSoundMusic(options = {}) {
+  renderSoundMusic();
+  if (!sounds.musicPlaying || !sounds.context) {
+    return;
+  }
+  window.clearTimeout(sounds.musicRestartTimer);
+  sounds.musicRestartTimer = window.setTimeout(() => {
+    const progress = Number.isFinite(options.restartProgress)
+      ? soundClamp(options.restartProgress, 0, 0.9999)
+      : sounds.musicPlayer?.loopProgress() ?? sounds.musicProgress;
+    sounds.musicPlayer?.stop();
+    sounds.musicProgress = progress;
+    soundsMusicProgress.value = sounds.musicProgress.toFixed(4);
+    updateSoundRangeFill(soundsMusicProgress);
+    sounds.musicPlayer = soundsApi().createPlayer(sounds.context, soundMusicSong().playbackScore);
+    sounds.musicPlayer.start(sounds.musicProgress);
+    startSoundProgress();
+  }, 180);
+}
+
+function pauseSoundMusic() {
+  window.clearTimeout(sounds.musicRestartTimer);
+  sounds.musicRestartTimer = 0;
+  sounds.musicProgress = sounds.musicPlayer?.loopProgress() ?? sounds.musicProgress;
+  sounds.musicPlayer?.stop();
+  sounds.musicPlayer = null;
+  setSoundMusicPlaying(false);
+  cancelAnimationFrame(sounds.progressFrame);
+  sounds.progressFrame = 0;
+  setSoundProgress(sounds.musicProgress);
+}
+
+function stopSoundPlayback() {
+  sounds.sfxPlayer?.stop();
+  sounds.sfxPlayer = null;
+  pauseSoundMusic();
+}
+
+function setSoundMusicPlaying(nextPlaying) {
+  sounds.musicPlaying = nextPlaying;
+  soundsMusicPlayButton.innerHTML = nextPlaying ? soundPauseIcon : soundPlayIcon;
+  soundsMusicPlayButton.setAttribute("aria-label", nextPlaying ? "Pause music" : "Play music");
+  soundsMusicPlayButton.title = nextPlaying ? "Pause music" : "Play music";
+}
+
+function setSoundProgress(value) {
+  sounds.musicProgress = soundClamp(value, 0, 0.9999);
+  soundsMusicProgress.value = sounds.musicProgress.toFixed(4);
+  updateSoundRangeFill(soundsMusicProgress);
+}
+
+function startSoundProgress() {
+  cancelAnimationFrame(sounds.progressFrame);
+  const tick = () => {
+    if (sounds.musicPlayer && sounds.musicPlaying) {
+      const value = sounds.musicPlayer.loopProgress();
+      sounds.musicProgress = soundClamp(value, 0, 0.9999);
+      soundsMusicProgress.value = sounds.musicProgress.toFixed(4);
+      updateSoundRangeFill(soundsMusicProgress);
+    }
+    sounds.progressFrame = requestAnimationFrame(tick);
+  };
+  tick();
+}
+
+function seekSoundMusic(value) {
+  setSoundProgress(value);
+  if (!sounds.musicPlaying || !sounds.context) {
+    return;
+  }
+  sounds.musicPlayer?.stop();
+  sounds.musicPlayer = soundsApi().createPlayer(sounds.context, soundMusicSong().playbackScore);
+  sounds.musicPlayer.start(sounds.musicProgress);
+  startSoundProgress();
+}
+
+async function copySoundLine() {
+  const text = soundCurrentLine();
+  if (!text) {
+    return;
+  }
+  await copyTextToClipboard(text);
+  setStatus("Copied sounds definition", "is-ok");
+}
+
+function insertSoundsDefinition() {
+  const document = activeSoundEditDocument();
+  if (!document || !isTextDocument(document)) {
+    return;
+  }
+  const source = activeSoundEditSource();
+  const definition = soundCurrentDefinition({ uniqueForInsert: true, source });
+  if (!definition) {
+    return;
+  }
+  const insertion = insertSoundsDefinitionIntoSource(source, definition.line);
+  document.source = insertion.source;
+  if (document.id === activeDocument()?.id) {
+    setSourceEditorText(insertion.source, insertion.selectionStart, insertion.selectionEnd);
+  }
+  scheduleLocalSave();
+  schedulePreview();
+  sourceEditor.focus();
+  renderSoundsBuilder();
+  setStatus(`Added ${definition.kind} ${definition.name}`, "is-ok");
+}
+
+function updateSoundsDefinition() {
+  const definition = soundCurrentDefinition();
+  const document = activeSoundEditDocument();
+  if (!definition || !document || !isTextDocument(document)) {
+    return;
+  }
+  const replacement = replaceSoundsDefinitionInSource(activeSoundEditSource(), definition);
+  if (!replacement) {
+    setStatus(`No ${definition.kind} named ${definition.name}`, "is-error");
+    return;
+  }
+  document.source = replacement.source;
+  if (document.id === activeDocument()?.id) {
+    setSourceEditorText(replacement.source, replacement.selectionStart, replacement.selectionEnd);
+  }
+  scheduleLocalSave();
+  schedulePreview();
+  sourceEditor.focus();
+  renderSoundsBuilder();
+  setStatus(`Updated ${definition.kind} ${definition.name}`, "is-ok");
+}
+
+function activeSoundEditDocument() {
+  const document = activeDocument();
+  if (document && isTextDocument(document) && isPuzzleDocument(document)) {
+    return document;
+  }
+  return activePreviewDocument();
+}
+
+function activeSoundEditSource() {
+  const document = activeSoundEditDocument();
+  if (!document || !isTextDocument(document)) {
+    return "";
+  }
+  return document.id === activeDocument()?.id ? sourceEditor.value : document.source || "";
+}
+
+function loadSoundFromSourcePosition(position, options = {}) {
+  if (!isPuzzleDocument(activeDocument()) || !isTextDocument(activeDocument())) {
+    return null;
+  }
+  const source = sourceEditor.value || "";
+  const entry = findSoundsDefinitionAtPosition(source, position);
+  if (!entry) {
+    return null;
+  }
+  if (options.recordHistory && typeof pushSourceNavigationHistory === "function") {
+    pushSourceNavigationHistory();
+  }
+  if (entry.kind === "music") {
+    sounds.mode = "music";
+    soundsMusicTitleInput.value = entry.name;
+    soundsMusicSeedInput.value = entry.params.seed || soundsMusicSeedInput.value;
+    if (entry.params.tone !== undefined) {
+      soundsMusicToneInput.value = entry.params.tone;
+    }
+    if (entry.params.bpm !== undefined) {
+      soundsMusicBpmInput.value = entry.params.bpm;
+    }
+    if (entry.params.volume !== undefined) {
+      soundsMusicVolumeInput.value = entry.params.volume;
+    }
+    setSoundProgress(0);
+  } else {
+    sounds.mode = "sfx";
+    soundsSfxTitleInput.value = entry.name;
+    soundsSfxSeedInput.value = entry.params.seed || soundsSfxSeedInput.value;
+    if (entry.params.type !== undefined) {
+      soundsSfxTypeSelect.value = entry.params.type;
+    }
+  }
+  if (options.switchMode && currentPreviewMode !== "sounds") {
+    setPreviewMode("sounds");
+  } else {
+    renderSoundsBuilder();
+  }
+  if (!options.silent) {
+    setStatus(`Loaded ${entry.kind} ${entry.name}`, "is-ok");
+  }
+  return `sounds:${entry.kind}:${entry.name}:${entry.start}`;
+}
+
+function loadSoundSourceTarget(target, options = {}) {
+  if (!isPuzzleDocument(activeDocument()) || !isTextDocument(activeDocument())) {
+    return null;
+  }
+  const entry = {
+    kind: target.soundKind,
+    name: target.name,
+    params: target.params || {},
+    start: target.start,
+  };
+  if (!entry.kind || !entry.name) {
+    return null;
+  }
+  if (options.recordHistory && typeof pushSourceNavigationHistory === "function") {
+    pushSourceNavigationHistory();
+  }
+  if (entry.kind === "music") {
+    sounds.mode = "music";
+    soundsMusicTitleInput.value = entry.name;
+    soundsMusicSeedInput.value = entry.params.seed || soundsMusicSeedInput.value;
+    if (entry.params.tone !== undefined) {
+      soundsMusicToneInput.value = entry.params.tone;
+    }
+    if (entry.params.bpm !== undefined) {
+      soundsMusicBpmInput.value = entry.params.bpm;
+    }
+    if (entry.params.volume !== undefined) {
+      soundsMusicVolumeInput.value = entry.params.volume;
+    }
+    setSoundProgress(0);
+  } else {
+    sounds.mode = "sfx";
+    soundsSfxTitleInput.value = entry.name;
+    soundsSfxSeedInput.value = entry.params.seed || soundsSfxSeedInput.value;
+    if (entry.params.type !== undefined) {
+      soundsSfxTypeSelect.value = entry.params.type;
+    }
+  }
+  if (options.switchMode && currentPreviewMode !== "sounds") {
+    setPreviewMode("sounds");
+  } else {
+    renderSoundsBuilder();
+  }
+  if (!options.silent) {
+    setStatus(`Loaded ${entry.kind} ${entry.name}`, "is-ok");
+  }
+  return `sounds:${entry.kind}:${entry.name}:${entry.start}`;
+}
+
+function soundAtom(value, fallback) {
+  const atom = String(value || "").trim().replace(/[^\w.-]+/g, "_").replace(/^_+|_+$/g, "");
+  return atom || fallback;
+}
+
+function soundIdentifierAtom(value, fallback) {
+  let atom = String(value || "").trim().replace(/[^A-Za-z0-9_]+/g, "_").replace(/^_+|_+$/g, "");
+  if (!atom || /^[0-9]/.test(atom)) {
+    atom = fallback;
+  }
+  return atom;
+}
+
+function nextSoundsDefinitionName(kind, baseName, sourceOverride = null) {
+  const source = sourceOverride !== null
+    ? String(sourceOverride || "")
+    : isTextDocument(documents[currentDocumentIndex])
+      ? sourceEditor.value
+      : "";
+  const names = existingSoundsDefinitionNames(source, kind);
+  const base = soundIdentifierAtom(baseName, kind === "music" ? "music" : "sfx");
+  if (!names.has(base)) {
+    return base;
+  }
+  const sequence = soundDefinitionNameSequence(base);
+  for (let index = sequence.nextIndex; index < 1000; index += 1) {
+    const candidate = `${sequence.root}_${index}`;
+    if (!names.has(candidate)) {
+      return candidate;
+    }
+  }
+  return `${sequence.root}_${Date.now()}`;
+}
+
+function soundDefinitionNameSequence(name) {
+  const match = String(name || "").match(/^(.+)_([1-9][0-9]*)$/);
+  if (!match) {
+    return { root: name, nextIndex: 2 };
+  }
+  return {
+    root: match[1],
+    nextIndex: Number(match[2]) + 1,
+  };
+}
+
+function existingSoundsDefinitionNames(source, kind) {
+  const names = new Set();
+  const pattern = new RegExp(`^\\s*${kind}\\s+([A-Za-z_][A-Za-z0-9_]*)\\b`);
+  for (const line of String(source || "").split("\n")) {
+    const match = stripLineComment(line).match(pattern);
+    if (match) {
+      names.add(match[1]);
+    }
+  }
+  return names;
+}
+
+function findSoundsDefinitionAtPosition(source, position) {
+  const text = String(source || "");
+  const lines = sourceLinesWithOffsets(text);
+  const soundsBlock = findTopLevelSoundsBlock(lines);
+  if (!soundsBlock || position < soundsBlock.bodyStart || position > soundsBlock.bodyEnd) {
+    return null;
+  }
+  for (let index = soundsBlock.startLine + 1; index < soundsBlock.endLine; index += 1) {
+    const line = lines[index];
+    if (!line || position < line.start || position > line.end) {
+      continue;
+    }
+    const parsed = parseSoundsDefinitionLine(line.text);
+    if (!parsed) {
+      return null;
+    }
+    return {
+      ...parsed,
+      start: line.start,
+      end: line.end,
+    };
+  }
+  return null;
+}
+
+function parseSoundsDefinitionLine(line) {
+  const code = stripLineComment(line).trim();
+  const match = code.match(/^(sfx|music)\s+([A-Za-z_][A-Za-z0-9_]*)\b(.*)$/);
+  if (!match) {
+    return null;
+  }
+  const params = {};
+  const tail = match[3] || "";
+  for (const param of tail.matchAll(/\b([A-Za-z_][A-Za-z0-9_]*)=("[^"]*"|'[^']*'|[^\s]+)/g)) {
+    const raw = param[2] || "";
+    params[param[1]] = raw.replace(/^["']|["']$/g, "");
+  }
+  return {
+    kind: match[1],
+    name: match[2],
+    params,
+  };
+}
+
+function insertSoundsDefinitionIntoSource(source, line) {
+  const text = String(source || "");
+  const lines = sourceLinesWithOffsets(text);
+  const soundsBlock = findTopLevelSoundsBlock(lines);
+  if (soundsBlock) {
+    const entryIndent = soundsBlock.entryIndent || `${soundsBlock.indent}\t`;
+    const insertText = `${entryIndent}${line}\n`;
+    const nextSource = `${text.slice(0, soundsBlock.insertIndex)}${insertText}${text.slice(soundsBlock.insertIndex)}`;
+    const selectionStart = soundsBlock.insertIndex + insertText.length;
+    return { source: nextSource, selectionStart, selectionEnd: selectionStart };
+  }
+
+  const block = `sounds {\n\t${line}\n}\n`;
+  const afterName = findTopLevelNameInsertionIndex(lines);
+  if (afterName > 0) {
+    const prefix = text[afterName - 1] === "\n" ? "\n" : "\n\n";
+    const insertText = `${prefix}${block}`;
+    const nextSource = `${text.slice(0, afterName)}${insertText}${text.slice(afterName)}`;
+    const selectionStart = afterName + insertText.length;
+    return { source: nextSource, selectionStart, selectionEnd: selectionStart };
+  }
+
+  const suffix = text && !text.endsWith("\n") ? "\n\n" : text ? "\n" : "";
+  const insertText = `${suffix}${block}`;
+  const nextSource = `${text}${insertText}`;
+  const selectionStart = nextSource.length;
+  return { source: nextSource, selectionStart, selectionEnd: selectionStart };
+}
+
+function replaceSoundsDefinitionInSource(source, definition) {
+  const text = String(source || "");
+  const lines = sourceLinesWithOffsets(text);
+  const soundsBlock = findTopLevelSoundsBlock(lines);
+  if (!soundsBlock) {
+    return null;
+  }
+  for (let index = soundsBlock.startLine + 1; index < soundsBlock.endLine; index += 1) {
+    const line = lines[index];
+    const parsed = parseSoundsDefinitionLine(line?.text || "");
+    if (!parsed || parsed.kind !== definition.kind || parsed.name !== definition.name) {
+      continue;
+    }
+    const indent = line.text.match(/^\s*/)?.[0] || soundsBlock.entryIndent || `${soundsBlock.indent}\t`;
+    const hasNewline = line.text.endsWith("\n");
+    const replacement = `${indent}${definition.line}${hasNewline ? "\n" : ""}`;
+    const nextSource = `${text.slice(0, line.start)}${replacement}${text.slice(line.end)}`;
+    const selectionStart = line.start + replacement.length;
+    return { source: nextSource, selectionStart, selectionEnd: selectionStart };
+  }
+  return null;
+}
+
+function sourceLinesWithOffsets(source) {
+  const lines = [];
+  let start = 0;
+  while (start <= source.length) {
+    const newline = source.indexOf("\n", start);
+    const end = newline === -1 ? source.length : newline + 1;
+    lines.push({ text: source.slice(start, end), start, end });
+    if (newline === -1) {
+      break;
+    }
+    start = newline + 1;
+  }
+  return lines;
+}
+
+function findTopLevelSoundsBlock(lines) {
+  let depth = 0;
+  for (let index = 0; index < lines.length; index += 1) {
+    const entry = lines[index];
+    const code = stripLineComment(entry.text).trim();
+    if (depth === 0 && (code === "sounds" || code === "sounds {")) {
+      const braceStyle = code.endsWith("{");
+      const end = findSoundsBlockEnd(lines, index, braceStyle);
+      if (!end) {
+        return null;
+      }
+      return {
+        startLine: index,
+        endLine: end.index,
+        bodyStart: lines[index].end,
+        bodyEnd: end.entry.start,
+        insertIndex: end.entry.start,
+        indent: entry.text.match(/^\s*/)?.[0] || "",
+        entryIndent: inferSoundsEntryIndent(lines, index + 1, end.index),
+      };
+    }
+    depth = Math.max(0, depth + braceDelta(code));
+  }
+  return null;
+}
+
+function findSoundsBlockEnd(lines, headerIndex, braceStyle) {
+  if (!braceStyle) {
+    for (let index = headerIndex + 1; index < lines.length; index += 1) {
+      const code = stripLineComment(lines[index].text).trim();
+      if (code === "end") {
+        return { index, entry: lines[index] };
+      }
+    }
+    return null;
+  }
+
+  let depth = 1;
+  for (let index = headerIndex + 1; index < lines.length; index += 1) {
+    const code = stripLineComment(lines[index].text).trim();
+    depth += braceDelta(code);
+    if (depth <= 0) {
+      return { index, entry: lines[index] };
+    }
+  }
+  return null;
+}
+
+function inferSoundsEntryIndent(lines, start, end) {
+  for (let index = start; index < end; index += 1) {
+    const code = stripLineComment(lines[index].text).trim();
+    if (/^(sfx|music)\s+/.test(code)) {
+      return lines[index].text.match(/^\s*/)?.[0] || "";
+    }
+  }
+  return "";
+}
+
+function findTopLevelNameInsertionIndex(lines) {
+  let depth = 0;
+  for (const line of lines) {
+    const code = stripLineComment(line.text).trim();
+    if (depth === 0 && /^name\s+\S+/.test(code)) {
+      return line.end;
+    }
+    depth = Math.max(0, depth + braceDelta(code));
+  }
+  return -1;
+}
+
+function braceDelta(code) {
+  let delta = 0;
+  for (const ch of code) {
+    if (ch === "{") {
+      delta += 1;
+    } else if (ch === "}") {
+      delta -= 1;
+    }
+  }
+  return delta;
+}
+
+function stripLineComment(line) {
+  return String(line || "").split("//", 1)[0];
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function randomizeSoundSfx() {
+  const preset = soundsApi().randomSfxPreset(`${Date.now()}:${Math.random()}`, soundsSfxTypeSelect.value);
+  soundsSfxSeedInput.value = preset.seed;
+  soundsSfxTypeSelect.value = preset.type;
+  playSoundSfx().catch((error) => setStatus(`Sounds failed: ${error?.message || error}`, "is-error"));
+}
+
+function randomizeSoundMusic() {
+  const preset = soundsApi().randomPreset(`${Date.now()}:${Math.random()}`);
+  soundsMusicSeedInput.value = preset.seed;
+  soundsMusicToneInput.value = preset.tone;
+  soundsMusicBpmInput.value = preset.bpm;
+  setSoundProgress(0);
+  updateSoundMusic({ restartProgress: 0 });
+}
+
+function soundLabelForType(type) {
+  return String(type || "")
+    .replace(/[-_]+/g, " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function soundClamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function updateSoundRangeFills() {
+  updateSoundRangeFill(soundsMusicProgress);
+  updateSoundRangeFill(soundsMusicToneInput);
+  updateSoundRangeFill(soundsMusicBpmInput);
+  updateSoundRangeFill(soundsMusicVolumeInput);
+}
+
+function updateSoundRangeFill(input) {
+  if (!input) {
+    return;
+  }
+  const min = Number(input.min || 0);
+  const max = Number(input.max || 100);
+  const value = Number(input.value || 0);
+  const denominator = max - min;
+  const progress = denominator > 0 ? soundClamp((value - min) / denominator, 0, 1) : 0;
+  input.style.setProperty("--sounds-range-progress", `${(progress * 100).toFixed(2)}%`);
+}
+
+soundsSfxModeButton.addEventListener("click", () => {
+  selectSoundMode("sfx");
+  if (typeof syncSourceFromPreviewPane === "function") {
+    syncSourceFromPreviewPane("sounds");
+  }
+});
+soundsMusicModeButton.addEventListener("click", () => {
+  selectSoundMode("music");
+  if (typeof syncSourceFromPreviewPane === "function") {
+    syncSourceFromPreviewPane("sounds");
+  }
+});
+soundsSfxPlayButton.addEventListener("click", () => {
+  playSoundSfx().catch((error) => setStatus(`Sounds failed: ${error?.message || error}`, "is-error"));
+});
+soundsSfxRandomButton.addEventListener("click", randomizeSoundSfx);
+soundsSfxTitleInput.addEventListener("input", renderSoundSfx);
+soundsSfxSeedInput.addEventListener("input", renderSoundSfx);
+soundsSfxTypeSelect.addEventListener("change", renderSoundSfx);
+soundsSfxCopyButton.addEventListener("click", () => {
+  copySoundLine().catch((error) => setStatus(`Could not copy sounds: ${error?.message || error}`, "is-error"));
+});
+soundsSfxInsertButton.addEventListener("click", insertSoundsDefinition);
+soundsSfxUpdateButton.addEventListener("click", updateSoundsDefinition);
+soundsMusicPlayButton.addEventListener("click", () => {
+  toggleSoundMusic().catch((error) => setStatus(`Sounds failed: ${error?.message || error}`, "is-error"));
+});
+soundsMusicRandomButton.addEventListener("click", randomizeSoundMusic);
+soundsMusicTitleInput.addEventListener("input", updateSoundMusic);
+soundsMusicSeedInput.addEventListener("input", updateSoundMusic);
+soundsMusicToneInput.addEventListener("input", updateSoundMusic);
+soundsMusicBpmInput.addEventListener("input", updateSoundMusic);
+soundsMusicVolumeInput.addEventListener("input", updateSoundMusic);
+soundsMusicCopyButton.addEventListener("click", () => {
+  copySoundLine().catch((error) => setStatus(`Could not copy sounds: ${error?.message || error}`, "is-error"));
+});
+soundsMusicInsertButton.addEventListener("click", insertSoundsDefinition);
+soundsMusicUpdateButton.addEventListener("click", updateSoundsDefinition);
+soundsMusicProgress.addEventListener("input", () => seekSoundMusic(Number(soundsMusicProgress.value)));
+soundsMusicProgress.addEventListener("keydown", (event) => {
+  if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+    event.preventDefault();
+    seekSoundMusic(sounds.musicProgress + (event.key === "ArrowRight" ? 0.025 : -0.025));
+  } else if (event.key === "Home") {
+    event.preventDefault();
+    seekSoundMusic(0);
+  } else if (event.key === "End") {
+    event.preventDefault();
+    seekSoundMusic(0.9999);
+  }
+});
+
+resetSoundsBuilder();

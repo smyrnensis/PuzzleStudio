@@ -1,0 +1,145 @@
+name sokoban_multi_push
+
+puzzle sokoban_multi_push {
+
+objects {
+layers {
+floor = Goal
+actor = Player Box Wall
+marker = Moment
+}
+
+group {
+pushable = Player Box
+solid = actor
+}
+}
+
+legend {
+. = empty
+G = Goal
+# = Wall
+* = Goal Box
++ = Goal Player
+B = Box Moment
+P = Player Moment
+}
+
+win_conditions {
+some Goal
+all Goal on Box
+}
+
+// Moment marks the player and every contiguous pushed box.
+// The marked chain then shifts outward from the free end.
+
+main {
+once input [ Player ] -> [ Player Moment ]
+input [ pushable Moment | Box no Moment ] -> [ pushable Moment | Box Moment ]
+input [ pushable Moment | no solid ] -> [ | pushable ]
+input [ pushable Moment ] -> [ pushable ]
+}
+
+
+
+
+
+level train {
+###########
+#PBBB.GGG.#
+#.........#
+###########
+}
+
+level blocked_train {
+###########
+#PBBB#GGG.#
+#.........#
+###########
+}
+
+level vertical {
+#######
+#..G..#
+#..G..#
+#..G..#
+#..B..#
+#..B..#
+#..B..#
+#..P..#
+#.....#
+#######
+}
+
+level long_train {
+################
+#PBBBBBBBBB.GGG#
+#..............#
+################
+}
+}
+scene playing {
+view {
+board = puzzle sokoban_multi_push
+}
+keys {
+q = quit
+Escape = open_menu
+}
+transitions {
+board.main
+quit -> goto level_select
+open_menu -> enter menu
+if board.win_conditions -> board.next_level
+}
+}
+
+scene level_clear {
+view {
+board = puzzle sokoban_multi_push current_level
+message = "Stage clear"
+panel {
+text message
+button "Next Level" -> playing.next_level
+button "Restart" -> playing.restart
+button "Level Select" -> goto level_select
+}
+}
+keys {
+Enter Space = playing.next_level
+q = quit
+}
+transitions {
+quit -> goto level_select
+}
+}
+
+scene menu {
+view {
+text "Menu"
+column {
+button "Resume" -> back
+button "Restart" -> playing.restart
+button "Level Select" -> goto level_select
+}
+}
+keys {
+Escape Enter Space = resume
+q = quit
+}
+transitions {
+resume -> back
+quit -> goto level_select
+}
+}
+
+scene level_select {
+view {
+message = "Select a stage"
+text message
+level_menu {
+index on
+button "Back" -> back
+}
+}
+}

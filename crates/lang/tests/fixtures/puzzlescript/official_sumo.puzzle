@@ -1,0 +1,117 @@
+title "Multiple Patterns"
+author increpare
+homepage "www.puzzlescript.net"
+
+theme puzzlescript
+
+sounds {
+  sfx sumo_move seed=48878907 type=puzzlescript
+}
+
+model puzzle main {
+layers {
+  layer_1 = Background
+  layer_2 = Player Wall Sumo
+}
+
+inputs {
+  up <- w ArrowUp
+  down <- s ArrowDown
+  left <- a ArrowLeft
+  right <- d ArrowRight
+  restart <- r
+}
+
+sprites {
+  Background
+    #90ee90 #008000
+    11111
+    01111
+    11101
+    11111
+    10111
+
+  Wall
+    #a46322 #493c2b
+    00010
+    11111
+    01000
+    11111
+    00010
+
+  Player
+    #000000 #ffa500 #ffffff #0000ff
+    .000.
+    .111.
+    22222
+    .333.
+    .3.3.
+
+  Sumo
+    #ffc0cb #ffffff
+    ..0..
+    00000
+    .000.
+    .111.
+    .0.0.
+}
+
+on_level_start {
+  once_all [ no Background ] -> [ Background ]
+}
+
+rules {
+  input directions [ Player ] -> [ Player{>} ]
+  [ Player{>} ] [ Sumo ] -> [ Player{>} ] [ Sumo{>} ]
+  move
+}
+
+levels {
+  legend {
+    . = Background
+    # = Wall
+    P = Player
+    S = Sumo
+    _ = empty
+  }
+
+  ########
+  #......#
+  #......#
+  #.P..S.#
+  #......#
+  #......#
+  ########
+}
+}
+
+scene title {
+  title "Multiple Patterns"
+  subtitle "by increpare"
+  inputs {
+    confirm <- Enter Space x
+  }
+  button "Play" -> input confirm
+  rules {
+    if input == confirm -> start levels in playing
+  }
+}
+
+scene playing {
+  state {
+    board = puzzle main
+  }
+  view {
+    row {
+      title "Multiple Patterns"
+    }
+    puzzle board
+  }
+  inputs {
+    back <- Escape q
+  }
+  rules {
+    board.rules
+    if input == back -> goto title
+  }
+}

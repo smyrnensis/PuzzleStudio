@@ -1,0 +1,126 @@
+model puzzle3 from_puzzle_sokoban_3d {
+  layers {
+    floor = Floor
+    target = Goal
+    solid = Player Box Wall
+  }
+
+  group solid = Player Box Wall
+
+  rules {
+    input horizontal [ Player | Box | no solid ] -> [ | Player | Box ]
+    input horizontal [ Player | no solid ] -> [ | Player ]
+  }
+
+  win_conditions {
+    some Goal
+    all Goal on down [ Box | Goal ]
+  }
+
+  on_level_clear {
+    if win_conditions -> next_level
+  }
+}
+
+levels3 handmade of from_puzzle_sokoban_3d {
+  legend {
+    _ = empty
+    . = Floor
+    G = Floor Goal
+    P = Player
+    B = Box
+    # = Wall
+  }
+
+  level push_once {
+    #####
+    #___#
+    #PB_#
+    #___#
+    #####
+
+    .....
+    .....
+    ...G.
+    .....
+    .....
+  }
+
+  level corner_lift {
+    #####
+    #___#
+    #_B_#
+    #_P_#
+    #####
+
+    .....
+    ..G..
+    .....
+    .....
+    .....
+  }
+}
+
+sprites3 compact of from_puzzle_sokoban_3d {
+  Floor
+  #93c47d #38761d
+  111
+  101
+  111
+
+  Goal
+  #1c4587
+  000
+  0.0
+  000
+
+  Player
+  #111111 #f6b26b #ffffff
+  .0.
+  111
+  2.2
+
+  Box
+  #cc7a00 #ffd966
+  00
+  01
+
+  10
+  00
+
+  Wall
+  #7f6000 #4f3000
+  010
+  111
+  010
+}
+
+scene title {
+  view {
+    title "Sokoban Literally in 3D"
+    button "Start" -> start handmade in playing
+    button "Level Select" -> goto level_select
+  }
+}
+
+scene level_select {
+  state {
+    board = puzzle3 from_puzzle_sokoban_3d
+  }
+
+  view {
+    title "Select Level"
+    level_menu handmade -> start handmade in playing
+    button "Back" -> goto title
+  }
+}
+
+scene playing {
+  state {
+    board = puzzle3 from_puzzle_sokoban_3d
+  }
+
+  view {
+    puzzle3 board
+  }
+}
