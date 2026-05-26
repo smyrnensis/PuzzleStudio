@@ -2903,6 +2903,10 @@ function findVisualAssetBlock(source, spritesBlock, name) {
   return null;
 }
 
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function ensureSpriteColorDefinition(source, name, color) {
   const spritesBlock = findSpritesBlock(source);
   if (!spritesBlock) {

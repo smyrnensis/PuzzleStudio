@@ -12,6 +12,48 @@ export class WasmCoreRuntime {
         wasm.__wbg_wasmcoreruntime_free(ptr, 0);
     }
     /**
+     * @returns {string}
+     */
+    current_cells() {
+        let deferred2_0;
+        let deferred2_1;
+        try {
+            const ret = wasm.wasmcoreruntime_current_cells(this.__wbg_ptr);
+            var ptr1 = ret[0];
+            var len1 = ret[1];
+            if (ret[3]) {
+                ptr1 = 0; len1 = 0;
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            deferred2_0 = ptr1;
+            deferred2_1 = len1;
+            return getStringFromWasm0(ptr1, len1);
+        } finally {
+            wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+        }
+    }
+    /**
+     * @returns {string}
+     */
+    current_state() {
+        let deferred2_0;
+        let deferred2_1;
+        try {
+            const ret = wasm.wasmcoreruntime_current_state(this.__wbg_ptr);
+            var ptr1 = ret[0];
+            var len1 = ret[1];
+            if (ret[3]) {
+                ptr1 = 0; len1 = 0;
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            deferred2_0 = ptr1;
+            deferred2_1 = len1;
+            return getStringFromWasm0(ptr1, len1);
+        } finally {
+            wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+        }
+    }
+    /**
      * @param {string} source
      * @param {string} puzzle_path
      */
@@ -27,6 +69,62 @@ export class WasmCoreRuntime {
         this.__wbg_ptr = ret[0];
         WasmCoreRuntimeFinalization.register(this, this.__wbg_ptr, this);
         return this;
+    }
+    /**
+     * @param {number} handle
+     */
+    restore_saved_state(handle) {
+        const ret = wasm.wasmcoreruntime_restore_saved_state(this.__wbg_ptr, handle);
+        if (ret[1]) {
+            throw takeFromExternrefTable0(ret[0]);
+        }
+    }
+    /**
+     * @returns {number}
+     */
+    save_current_state() {
+        const ret = wasm.wasmcoreruntime_save_current_state(this.__wbg_ptr);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return ret[0] >>> 0;
+    }
+    /**
+     * @param {string} state_json
+     */
+    set_state(state_json) {
+        const ptr0 = passStringToWasm0(state_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.wasmcoreruntime_set_state(this.__wbg_ptr, ptr0, len0);
+        if (ret[1]) {
+            throw takeFromExternrefTable0(ret[0]);
+        }
+    }
+    /**
+     * @param {string} program_key
+     * @param {number} level_index
+     * @param {number} input
+     * @returns {string}
+     */
+    transition_current_outcome(program_key, level_index, input) {
+        let deferred3_0;
+        let deferred3_1;
+        try {
+            const ptr0 = passStringToWasm0(program_key, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len0 = WASM_VECTOR_LEN;
+            const ret = wasm.wasmcoreruntime_transition_current_outcome(this.__wbg_ptr, ptr0, len0, level_index, input);
+            var ptr2 = ret[0];
+            var len2 = ret[1];
+            if (ret[3]) {
+                ptr2 = 0; len2 = 0;
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            deferred3_0 = ptr2;
+            deferred3_1 = len2;
+            return getStringFromWasm0(ptr2, len2);
+        } finally {
+            wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+        }
     }
     /**
      * @param {string} program_key
@@ -72,6 +170,48 @@ export class WasmPuzzle3Runtime {
         wasm.__wbg_wasmpuzzle3runtime_free(ptr, 0);
     }
     /**
+     * @returns {string}
+     */
+    current_cells() {
+        let deferred2_0;
+        let deferred2_1;
+        try {
+            const ret = wasm.wasmpuzzle3runtime_current_cells(this.__wbg_ptr);
+            var ptr1 = ret[0];
+            var len1 = ret[1];
+            if (ret[3]) {
+                ptr1 = 0; len1 = 0;
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            deferred2_0 = ptr1;
+            deferred2_1 = len1;
+            return getStringFromWasm0(ptr1, len1);
+        } finally {
+            wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+        }
+    }
+    /**
+     * @returns {string}
+     */
+    current_state() {
+        let deferred2_0;
+        let deferred2_1;
+        try {
+            const ret = wasm.wasmpuzzle3runtime_current_state(this.__wbg_ptr);
+            var ptr1 = ret[0];
+            var len1 = ret[1];
+            if (ret[3]) {
+                ptr1 = 0; len1 = 0;
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            deferred2_0 = ptr1;
+            deferred2_1 = len1;
+            return getStringFromWasm0(ptr1, len1);
+        } finally {
+            wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+        }
+    }
+    /**
      * @param {string} state_json
      * @returns {boolean}
      */
@@ -79,6 +219,16 @@ export class WasmPuzzle3Runtime {
         const ptr0 = passStringToWasm0(state_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         const ret = wasm.wasmpuzzle3runtime_is_complete(this.__wbg_ptr, ptr0, len0);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return ret[0] !== 0;
+    }
+    /**
+     * @returns {boolean}
+     */
+    is_current_complete() {
+        const ret = wasm.wasmpuzzle3runtime_is_current_complete(this.__wbg_ptr);
         if (ret[2]) {
             throw takeFromExternrefTable0(ret[1]);
         }
@@ -100,6 +250,61 @@ export class WasmPuzzle3Runtime {
         this.__wbg_ptr = ret[0];
         WasmPuzzle3RuntimeFinalization.register(this, this.__wbg_ptr, this);
         return this;
+    }
+    /**
+     * @param {number} handle
+     */
+    restore_saved_state(handle) {
+        const ret = wasm.wasmpuzzle3runtime_restore_saved_state(this.__wbg_ptr, handle);
+        if (ret[1]) {
+            throw takeFromExternrefTable0(ret[0]);
+        }
+    }
+    /**
+     * @returns {number}
+     */
+    save_current_state() {
+        const ret = wasm.wasmpuzzle3runtime_save_current_state(this.__wbg_ptr);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return ret[0] >>> 0;
+    }
+    /**
+     * @param {string} state_json
+     */
+    set_state(state_json) {
+        const ptr0 = passStringToWasm0(state_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.wasmpuzzle3runtime_set_state(this.__wbg_ptr, ptr0, len0);
+        if (ret[1]) {
+            throw takeFromExternrefTable0(ret[0]);
+        }
+    }
+    /**
+     * @param {string} program_key
+     * @param {number} input
+     * @returns {string}
+     */
+    transition_current_outcome(program_key, input) {
+        let deferred3_0;
+        let deferred3_1;
+        try {
+            const ptr0 = passStringToWasm0(program_key, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len0 = WASM_VECTOR_LEN;
+            const ret = wasm.wasmpuzzle3runtime_transition_current_outcome(this.__wbg_ptr, ptr0, len0, input);
+            var ptr2 = ret[0];
+            var len2 = ret[1];
+            if (ret[3]) {
+                ptr2 = 0; len2 = 0;
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            deferred3_0 = ptr2;
+            deferred3_1 = len2;
+            return getStringFromWasm0(ptr2, len2);
+        } finally {
+            wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+        }
     }
     /**
      * @param {string} program_key
