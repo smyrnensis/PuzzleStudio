@@ -40,7 +40,7 @@ puzzle3 sokoban_literally_in_3d {
 scene title {
   view {
     title "Microban Basic 3D"
-    button "Start" -> start microban in playing
+    button "Start" -> goto playing
     button "Level Select" -> goto level_select
   }
 }
@@ -52,7 +52,7 @@ scene level_select {
 
   view {
     title "Select Level"
-    level_menu microban -> start microban in playing
+    level_menu microban -> goto playing(level)
     button "Back" -> goto title
   }
 }
@@ -63,8 +63,8 @@ scene playing {
   }
 
   keys {
-    q = goto level_select
-    Escape = goto level_select
+    q -> goto level_select
+    Escape -> goto level_select
   }
 
   view {

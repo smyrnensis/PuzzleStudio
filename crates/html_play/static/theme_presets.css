@@ -35,8 +35,6 @@ body.theme-clean {
   --menu-item-ring: rgba(47, 126, 188, 0.24);
   --panel-bg: rgba(255, 255, 255, 0.94);
   --popup-bg: rgba(255, 255, 255, 0.96);
-  --backdrop: rgba(245, 243, 239, 0.72);
-  --scrim: rgba(29, 31, 34, 0.24);
   --radius-control: 6px;
   --radius-panel: 8px;
   --ok: #257a59;
@@ -79,8 +77,6 @@ body.theme-terminal {
   --menu-item-ring: #ffffff;
   --panel-bg: #000000;
   --popup-bg: #000000;
-  --backdrop: rgba(0, 0, 0, 0.88);
-  --scrim: rgba(0, 0, 0, 0.72);
   --radius-control: 0px;
   --radius-panel: 0px;
   --ok: #ffffff;
@@ -196,8 +192,6 @@ body.theme-paper {
   --menu-item-ring: rgba(141, 93, 42, 0.34);
   --panel-bg: rgba(255, 250, 240, 0.96);
   --popup-bg: #fff9ec;
-  --backdrop: rgba(244, 236, 217, 0.78);
-  --scrim: rgba(43, 36, 25, 0.30);
   --radius-control: 4px;
   --radius-panel: 6px;
   --ok: #8d5d2a;
@@ -288,8 +282,6 @@ body.theme-pixel {
   --menu-item-ring: #f8f8f8;
   --panel-bg: #08080c;
   --popup-bg: #08080c;
-  --backdrop: rgba(8, 8, 12, 0.88);
-  --scrim: rgba(0, 0, 0, 0.72);
   --radius-control: 0px;
   --radius-panel: 0px;
   --ok: #f8f8f8;
@@ -399,6 +391,7 @@ body.theme-pixel {
 
 body.theme-puzzlescript {
   color-scheme: dark;
+  --ps-terminal-control-width: 36ch;
   --bg: #000000;
   --ink: #ffffff;
   --muted: #ffffff;
@@ -413,8 +406,6 @@ body.theme-puzzlescript {
   --menu-item-ring: #ffffff;
   --panel-bg: transparent;
   --popup-bg: transparent;
-  --backdrop: var(--bg);
-  --scrim: rgba(0, 0, 0, 0.72);
   --radius-control: 0px;
   --radius-panel: 0px;
   --ok: #ffffff;
@@ -496,12 +487,17 @@ body.theme-puzzlescript {
   text-shadow: none;
   text-transform: none;
   transform: none;
+  white-space: nowrap;
 }
 
 .theme-puzzlescript button,
 .theme-puzzlescript .level-menu {
-  width: auto;
-  max-width: min(100%, 36ch);
+  width: min(100%, var(--ps-terminal-control-width));
+  max-width: min(100%, var(--ps-terminal-control-width));
+}
+
+.theme-puzzlescript button {
+  overflow: hidden;
 }
 
 .theme-puzzlescript button:hover {
@@ -593,8 +589,6 @@ body.theme-candy {
   --menu-item-ring: rgba(159, 76, 112, 0.32);
   --panel-bg: rgba(255, 255, 255, 0.96);
   --popup-bg: #ffffff;
-  --backdrop: rgba(255, 245, 251, 0.78);
-  --scrim: rgba(36, 48, 58, 0.22);
   --radius-control: 999px;
   --radius-panel: 18px;
   --ok: #1f9f72;
@@ -699,8 +693,6 @@ body.theme-blueprint {
   --menu-item-ring: rgba(255, 209, 102, 0.42);
   --panel-bg: rgba(11, 42, 64, 0.94);
   --popup-bg: #0b2a40;
-  --backdrop: rgba(13, 51, 78, 0.82);
-  --scrim: rgba(4, 14, 22, 0.56);
   --radius-control: 4px;
   --radius-panel: 4px;
   --ok: #8cffc1;
@@ -790,8 +782,6 @@ body.theme-noir {
   --menu-item-ring: rgba(242, 193, 78, 0.40);
   --panel-bg: rgba(24, 24, 24, 0.96);
   --popup-bg: #181818;
-  --backdrop: rgba(16, 16, 16, 0.84);
-  --scrim: rgba(0, 0, 0, 0.66);
   --radius-control: 2px;
   --radius-panel: 2px;
   --ok: #9fd67a;

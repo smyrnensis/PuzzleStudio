@@ -16,8 +16,6 @@
   --menu-item-ring: rgba(47, 126, 188, 0.22);
   --panel-bg: rgba(255, 255, 255, 0.94);
   --popup-bg: rgba(255, 255, 255, 0.96);
-  --backdrop: rgba(245, 243, 239, 0.72);
-  --scrim: rgba(29, 31, 34, 0.24);
   --radius-control: 6px;
   --radius-panel: 8px;
   --ok: #257a59;
@@ -178,41 +176,28 @@ button:disabled {
   grid-area: 1 / 1;
   width: 100%;
   height: 100%;
-  display: grid;
-  place-items: center;
-  place-content: center;
-  grid-auto-rows: max-content;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
   gap: 14px;
-}
-
-.scene-layer.has-single-frame-component {
-  grid-template: minmax(0, 1fr) / minmax(0, 1fr);
-  grid-auto-rows: minmax(0, 1fr);
-  place-items: stretch;
-  place-content: stretch;
-}
-
-.scene-layer.has-single-frame-component > [data-frame-component="true"] {
   min-width: 0;
   min-height: 0;
 }
 
-.scene-layer.has-single-frame-component > .board[data-frame-component="true"] {
-  align-self: center;
-  justify-self: center;
+.scene-layer.has-single-frame-component {
+  align-items: stretch;
+  justify-content: stretch;
 }
 
-.scene-layer.has-single-frame-component > iframe[data-frame-component="true"] {
-  align-self: stretch;
-  justify-self: stretch;
+.scene-layer.has-ratio-content {
+  align-items: stretch;
 }
 
-.scene-overlay-layer {
-  align-self: stretch;
-  justify-self: stretch;
-  padding: 24px;
-  background: var(--backdrop);
-  backdrop-filter: blur(2px);
+.scene-layer.has-single-frame-component > [data-frame-component="true"] {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
 }
 
 .message-popup-backdrop {
@@ -223,6 +208,10 @@ button:disabled {
   place-items: center;
   padding: 24px;
   background: var(--bg);
+}
+
+.message-popup-backdrop:focus {
+  outline: none;
 }
 
 .message-popup {
@@ -242,17 +231,19 @@ button:disabled {
 .view-row,
 .view-column,
 .view-box {
-  display: grid;
+  display: flex;
   gap: 8px;
-  place-content: center;
-  justify-items: center;
+  align-items: center;
+  justify-content: center;
   max-width: 100%;
   max-height: 100%;
+  min-width: 0;
+  min-height: 0;
 }
 
 .view-column,
 .view-box {
-  grid-auto-rows: max-content;
+  flex-direction: column;
 }
 
 .has-layout-size {
@@ -261,14 +252,60 @@ button:disabled {
 }
 
 .view-row {
-  grid-auto-flow: column;
-  grid-auto-columns: max-content;
-  justify-content: center;
-  align-items: center;
+  flex-direction: row;
+  flex-wrap: wrap;
 }
 
 .view-row > * {
   min-width: 0;
+}
+
+.scene-flow {
+  flex: 0 0 auto;
+  max-width: min(100%, 42rem);
+}
+
+.scene-container,
+.scene-collection {
+  flex: 0 1 auto;
+}
+
+.view-column.has-ratio-content,
+.view-box.has-ratio-content {
+  flex: 1 1 auto;
+  align-self: stretch;
+}
+
+.view-row.has-ratio-content {
+  flex: 1 1 auto;
+  align-self: stretch;
+}
+
+.scene-ratio-slot {
+  flex: 1 1 auto;
+  align-self: stretch;
+  min-width: 0;
+  min-height: 0;
+  max-width: 100%;
+  max-height: 100%;
+  display: grid;
+  place-items: center;
+}
+
+.view-row > .scene-ratio-slot {
+  align-self: stretch;
+  min-width: min(18rem, 100%);
+}
+
+.scene-ratio-slot > [data-frame-component="true"] {
+  max-width: 100%;
+  max-height: 100%;
+}
+
+.scene-ratio-slot > iframe[data-frame-component="true"] {
+  width: 100%;
+  height: 100%;
+  border: 0;
 }
 
 .view-row.is-scroll,
@@ -362,7 +399,8 @@ button:disabled {
 }
 
 .level-menu li.is-selected,
-.is-menu-scene button.is-selected {
+.is-menu-scene button.is-selected,
+button.standard-choice.is-selected {
   background: var(--menu-item-bg-selected);
   box-shadow: inset 0 0 0 2px var(--menu-item-ring);
 }

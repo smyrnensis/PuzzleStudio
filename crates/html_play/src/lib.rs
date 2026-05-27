@@ -11,38 +11,43 @@ use std::io::{self, Read, Write};
 use std::net::{TcpListener, TcpStream};
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::{Path, PathBuf};
+#[cfg(not(target_arch = "wasm32"))]
+use std::process::{Command, Stdio};
 use std::sync::Arc;
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::Mutex;
 use std::time::Duration;
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Instant;
 
+use puzzle3d_model::{
+    transition_program as transition_program3,
+    transition_program_with_local_frame as transition_program_with_local_frame3,
+    transition_program_without_input_with_local_frame, Coord3, Game3, InputId3, LifecycleCommand3,
+    ObjectId as ObjectId3, ParsedPuzzle3, Rule3, RuleId3, Size3, State3, WinCondition3,
+};
 use puzzle_core::{
+    transition_program, transition_program_outcome, transition_program_trace, transition_state,
     ComparisonOp, CompiledGame, Effect, GlobalUpdateOp, Guard, InputId, LayerId, ObjectId, Offset,
-    Pattern, QueryKind, Rule, RuleApplication, RuleCondition, RuleId, RuleStep, ScratchPattern,
-    ScratchValueMatch, State, TransitionCommand, WriteOp, transition_program,
-    transition_program_outcome, transition_state,
+    Patch, PatchOp, Pattern, QueryKind, Rule, RuleApplication, RuleCondition, RuleId, RuleStep,
+    ScratchPattern, ScratchValueMatch, State, TransitionCommand, WriteOp,
 };
 use puzzle_lang::AssetKind;
 #[cfg(not(target_arch = "wasm32"))]
 use puzzle_lang::AssetsDef;
-use puzzle_lang::{
-    ArrowKey, GoalCondition, GoalExpr, GoalValue, KeyTrigger, Level, LoadedDocumentModel,
-    LoadedGame, MenuComponent, ResourceSelection, RuleEmission, SceneAlignXDef, SceneAlignYDef,
-    SceneComponent, SceneDef, SceneEffect, SceneExpr, SceneLayoutDef, ScenePuzzleInitializer,
-    SceneTextContent, SceneTransitionTrigger, SceneValue, SoundsDef, ThemeDef, VisualSpriteKind,
-    parse_game2d as parse_game,
-};
 #[cfg(not(target_arch = "wasm32"))]
 use puzzle_lang::{discover_game_entries, expand_game_imports_for_file, resolve_game_entry};
-use puzzle_play::{GameSession, MessageEvent, SoundEvent, WaitEvent};
-use puzzle_solver::{
-    Puzzle3Domain, PuzzleDomain, SearchBudget, SearchOutcome, SearchStats,
-    best_first_with_dead_states,
+use puzzle_lang::{
+    parse_game2d as parse_game, ArrowKey, GoalCondition, GoalExpr, GoalValue, KeyTrigger, Level,
+    LoadedDocumentModel, LoadedGame, MenuComponent, ResourceSelection, RuleAnimationTrigger,
+    RuleEffect, RuleEmission, SceneAlignXDef, SceneAlignYDef, SceneComponent, SceneDef,
+    SceneEffect, SceneExpr, SceneLayoutDef, ScenePuzzleInitializer, SceneTextContent,
+    SceneTransitionTrigger, SceneValue, SoundsDef, ThemeDef, VisualSpriteKind,
 };
-use puzzle3d_model::{
-    Coord3, Game3, InputId3, LifecycleCommand3, ObjectId as ObjectId3, ParsedPuzzle3, Rule3,
-    RuleId3, Size3, State3, WinCondition3, transition_program as transition_program3,
-    transition_program_without_input,
+use puzzle_play::{AnimationEvent, GameSession, MessageEvent, SoundEvent, WaitEvent};
+use puzzle_solver::{
+    best_first_with_dead_states, Puzzle3Domain, PuzzleDomain, SearchBudget, SearchOutcome,
+    SearchStats,
 };
 
 const INDEX_HTML: &str = include_str!("../static/index.html");
@@ -108,6 +113,15 @@ fn run(args: impl IntoIterator<Item = String>) -> Result<(), AppError> {
             )
             .map_err(AppError::Config)?
         };
+        if let Some(screenshot) = &config.screenshot {
+            let scene = screenshot
+                .scene
+                .clone()
+                .or_else(|| default_puzzle3_screenshot_scene(&document));
+            capture_html_screenshot(&html, &screenshot.output_path, scene.as_deref(), screenshot)?;
+            println!("screenshot {}", screenshot.output_path.display());
+            return Ok(());
+        }
         if !config.serve {
             fs::write(&output_path, html)?;
             println!("exported {}", output_path.display());
@@ -130,6 +144,16 @@ fn run(args: impl IntoIterator<Item = String>) -> Result<(), AppError> {
             game_visuals_js,
             config.solver,
         );
+        if let Some(screenshot) = &config.screenshot {
+            capture_html_screenshot(
+                &export_html(&state),
+                &screenshot.output_path,
+                screenshot.scene.as_deref(),
+                screenshot,
+            )?;
+            println!("screenshot {}", screenshot.output_path.display());
+            return Ok(());
+        }
         let output_path = config.output_path();
         fs::write(&output_path, export_html(&state))?;
         println!("exported {}", output_path.display());
@@ -174,6 +198,18 @@ struct Config {
     serve: bool,
     port: u16,
     solver: SolverConfig,
+    screenshot: Option<ScreenshotConfig>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Debug)]
+struct ScreenshotConfig {
+    output_path: PathBuf,
+    scene: Option<String>,
+    width: u32,
+    height: u32,
+    timeout_ms: u64,
+    browser_path: Option<PathBuf>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -184,6 +220,12 @@ impl Config {
         let mut serve = false;
         let mut port = 7878;
         let mut solver = SolverConfig::default();
+        let mut screenshot = None::<ScreenshotConfig>;
+        let mut screenshot_scene = None::<String>;
+        let mut screenshot_width = 1280_u32;
+        let mut screenshot_height = 720_u32;
+        let mut screenshot_timeout_ms = 5000_u64;
+        let mut screenshot_browser_path = None::<PathBuf>;
         let mut args = args.into_iter();
 
         while let Some(arg) = args.next() {
@@ -216,13 +258,76 @@ impl Config {
                     let milliseconds: u64 = parse_arg(&mut args, "--solver-ms")?;
                     solver.max_duration = Duration::from_millis(milliseconds);
                 }
+                "--screenshot" => {
+                    let Some(value) = args.next() else {
+                        return Err(AppError::Config(
+                            "--screenshot requires a PNG output path".to_string(),
+                        ));
+                    };
+                    screenshot = Some(ScreenshotConfig {
+                        output_path: PathBuf::from(value),
+                        scene: None,
+                        width: screenshot_width,
+                        height: screenshot_height,
+                        timeout_ms: screenshot_timeout_ms,
+                        browser_path: screenshot_browser_path.clone(),
+                    });
+                }
+                "--scene" => {
+                    let Some(value) = args.next() else {
+                        return Err(AppError::Config(
+                            "--scene requires a scene name".to_string(),
+                        ));
+                    };
+                    screenshot_scene = Some(value);
+                }
+                "--width" => {
+                    screenshot_width = parse_arg(&mut args, "--width")?;
+                }
+                "--height" => {
+                    screenshot_height = parse_arg(&mut args, "--height")?;
+                }
+                "--screenshot-timeout-ms" => {
+                    screenshot_timeout_ms = parse_arg(&mut args, "--screenshot-timeout-ms")?;
+                }
+                "--browser" => {
+                    let Some(value) = args.next() else {
+                        return Err(AppError::Config(
+                            "--browser requires a browser executable path".to_string(),
+                        ));
+                    };
+                    screenshot_browser_path = Some(PathBuf::from(value));
+                }
                 "--help" | "-h" => {
                     return Err(AppError::Config(
-                        "usage: html-play [path/to/game-folder-or-game.puzzle] [-o game.html] [--serve] [--port 7878] [--solver-depth 128] [--solver-nodes 1000000] [--solver-ms 5000]".to_string(),
+                        "usage: html-play [path/to/game-folder-or-game.puzzle] [-o game.html] [--serve] [--port 7878] [--screenshot out.png] [--scene name] [--width 1280] [--height 720] [--browser path] [--solver-depth 128] [--solver-nodes 1000000] [--solver-ms 5000]".to_string(),
                     ));
                 }
                 value => puzzle_path = Some(PathBuf::from(value)),
             }
+        }
+
+        if screenshot_width == 0 || screenshot_height == 0 {
+            return Err(AppError::Config(
+                "screenshot width and height must be positive".to_string(),
+            ));
+        }
+        if screenshot_timeout_ms == 0 {
+            return Err(AppError::Config(
+                "screenshot timeout must be positive".to_string(),
+            ));
+        }
+        if let Some(config) = screenshot.as_mut() {
+            config.scene = screenshot_scene;
+            config.width = screenshot_width;
+            config.height = screenshot_height;
+            config.timeout_ms = screenshot_timeout_ms;
+            config.browser_path = screenshot_browser_path;
+            serve = false;
+        } else if screenshot_scene.is_some() || screenshot_browser_path.is_some() {
+            return Err(AppError::Config(
+                "--scene and --browser are only valid with --screenshot".to_string(),
+            ));
         }
 
         let puzzle_path = match puzzle_path {
@@ -238,6 +343,7 @@ impl Config {
             serve,
             port,
             solver,
+            screenshot,
         })
     }
 
@@ -248,6 +354,215 @@ impl Config {
                 .unwrap_or_else(|| Path::new("."))
                 .join("game.html")
         })
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn capture_html_screenshot(
+    html: &str,
+    output_path: &Path,
+    scene: Option<&str>,
+    config: &ScreenshotConfig,
+) -> Result<(), AppError> {
+    let browser_path = resolve_screenshot_browser(config.browser_path.as_deref())?;
+    if let Some(parent) = output_path
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+    {
+        fs::create_dir_all(parent)?;
+    }
+    if output_path.exists() {
+        fs::remove_file(output_path)?;
+    }
+
+    let temp_root = env::temp_dir();
+    let stem = format!("puzzlestudio-screenshot-{}", std::process::id());
+    let html_path = temp_root.join(format!("{stem}.html"));
+    let profile_path = temp_root.join(format!("{stem}-chrome-profile"));
+    if profile_path.exists() {
+        let _ = fs::remove_dir_all(&profile_path);
+    }
+    fs::create_dir_all(&profile_path)?;
+    fs::write(&html_path, html)?;
+
+    let mut url = file_url(&html_path);
+    if let Some(scene) = scene.filter(|scene| !scene.is_empty()) {
+        url.push_str("?scene=");
+        url.push_str(&url_query_value(scene));
+    }
+
+    let screenshot_arg = format!("--screenshot={}", output_path.display());
+    let user_data_arg = format!("--user-data-dir={}", profile_path.display());
+    let window_size_arg = format!("--window-size={},{}", config.width, config.height);
+    let timeout_arg = format!("--timeout={}", config.timeout_ms);
+    let mut child = Command::new(&browser_path)
+        .arg("--headless=new")
+        .arg("--disable-gpu")
+        .arg("--no-first-run")
+        .arg("--no-default-browser-check")
+        .arg("--disable-background-networking")
+        .arg("--disable-component-update")
+        .arg("--disable-sync")
+        .arg("--disable-extensions")
+        .arg("--disable-features=MediaRouter,OptimizationHints")
+        .arg(user_data_arg)
+        .arg(window_size_arg)
+        .arg(timeout_arg)
+        .arg(screenshot_arg)
+        .arg(url)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| {
+            AppError::Config(format!(
+                "failed to launch screenshot browser {}: {error}",
+                browser_path.display()
+            ))
+        })?;
+
+    let deadline = Instant::now() + Duration::from_millis(config.timeout_ms + 10_000);
+    let mut result = Err(AppError::Config(format!(
+        "screenshot timed out before writing {}",
+        output_path.display()
+    )));
+    loop {
+        if output_path
+            .metadata()
+            .map(|metadata| metadata.len() > 0)
+            .unwrap_or(false)
+        {
+            std::thread::sleep(Duration::from_millis(200));
+            result = Ok(());
+            break;
+        }
+        if let Some(status) = child.try_wait()? {
+            result = Err(AppError::Config(format!(
+                "screenshot browser exited with {status} before writing {}",
+                output_path.display()
+            )));
+            break;
+        }
+        if Instant::now() >= deadline {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    if child.try_wait()?.is_none() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    let _ = fs::remove_file(&html_path);
+    let _ = fs::remove_dir_all(&profile_path);
+    result
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn resolve_screenshot_browser(explicit: Option<&Path>) -> Result<PathBuf, AppError> {
+    if let Some(path) = explicit {
+        if path.exists() {
+            return Ok(path.to_path_buf());
+        }
+        return Err(AppError::Config(format!(
+            "screenshot browser not found: {}",
+            path.display()
+        )));
+    }
+    if let Ok(value) = env::var("PUZZLESTUDIO_CHROME") {
+        let path = PathBuf::from(value);
+        if path.exists() {
+            return Ok(path);
+        }
+    }
+    for path in [
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+        "/Applications/Chromium.app/Contents/MacOS/Chromium",
+    ] {
+        let path = PathBuf::from(path);
+        if path.exists() {
+            return Ok(path);
+        }
+    }
+    for command in ["google-chrome", "chromium", "chromium-browser", "chrome"] {
+        if let Some(path) = find_command_on_path(command) {
+            return Ok(path);
+        }
+    }
+    Err(AppError::Config(
+        "screenshot requires Chrome or Chromium; install one, pass --browser, or set PUZZLESTUDIO_CHROME"
+            .to_string(),
+    ))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn find_command_on_path(command: &str) -> Option<PathBuf> {
+    let paths = env::var_os("PATH")?;
+    env::split_paths(&paths)
+        .map(|path| path.join(command))
+        .find(|path| path.is_file())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn file_url(path: &Path) -> String {
+    let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let mut out = String::from("file://");
+    for byte in path.to_string_lossy().as_bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(*byte, b'/' | b'-' | b'_' | b'.' | b'~') {
+            out.push(*byte as char);
+        } else {
+            out.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    out
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn url_query_value(value: &str) -> String {
+    let mut out = String::new();
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
+            out.push(byte as char);
+        } else {
+            out.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    out
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn default_puzzle3_screenshot_scene(document: &puzzle_lang::LoadedDocument) -> Option<String> {
+    document
+        .scenes
+        .iter()
+        .find(|scene| {
+            scene
+                .components
+                .iter()
+                .any(component_contains_puzzle3_frame)
+        })
+        .map(|scene| scene.name.clone())
+}
+
+fn component_contains_puzzle3_frame(component: &SceneComponent) -> bool {
+    match component {
+        SceneComponent::Frame(frame) => frame.kind == "puzzle3",
+        SceneComponent::Row(container)
+        | SceneComponent::Column(container)
+        | SceneComponent::Box(container) => container
+            .children
+            .iter()
+            .any(component_contains_puzzle3_frame),
+        SceneComponent::Conditional(conditional) => conditional
+            .children
+            .iter()
+            .chain(conditional.else_children.iter())
+            .any(component_contains_puzzle3_frame),
+        SceneComponent::For(component) => component
+            .children
+            .iter()
+            .any(component_contains_puzzle3_frame),
+        _ => false,
     }
 }
 
@@ -643,6 +958,7 @@ impl ServerState {
         let sound_events = self.session.take_sound_events();
         let message_events = self.session.take_message_events();
         let wait_events = self.session.take_wait_events();
+        let animation_events = self.session.take_animation_events();
         let mut out = String::new();
         out.push('{');
         push_game_context(&mut out, &self.loaded);
@@ -653,7 +969,9 @@ impl ServerState {
         out.push(',');
         push_json_number(&mut out, "defaultWaitMs", self.loaded.default_wait_ms);
         out.push(',');
-        push_json_number(&mut out, "defaultAgainMs", 120);
+        push_json_number(&mut out, "defaultAgainMs", self.loaded.default_again_ms);
+        out.push(',');
+        push_export_animation(&mut out, &self.loaded);
         out.push(',');
         push_sound_events(&mut out, &sound_events);
         out.push(',');
@@ -661,7 +979,14 @@ impl ServerState {
         out.push(',');
         push_wait_events(&mut out, &wait_events);
         out.push(',');
-        push_level_context(&mut out, &self.loaded, self.session.active_level_index());
+        push_animation_events(&mut out, &animation_events);
+        out.push(',');
+        push_level_context(
+            &mut out,
+            &self.loaded,
+            self.session.cleared_levels(),
+            self.session.active_level_index(),
+        );
         out.push(',');
         out.push_str("\"levelIndex\":");
         if let Some(level_index) = self.session.active_level_index() {
@@ -684,11 +1009,11 @@ impl ServerState {
         out.push(',');
         push_visible_scenes(&mut out, self.session.visible_scenes());
         out.push(',');
-        push_session_state(&mut out, self.session.session_values());
+        push_session_state(&mut out, &self.loaded, &self.session);
         out.push(',');
-        push_scene_state_compat(&mut out, self.session.scene_state());
+        push_scene_state_compat(&mut out, &self.loaded, &self.session);
         out.push(',');
-        push_scene_state(&mut out, self.session.scene_state());
+        push_scene_state(&mut out, &self.loaded, &self.session);
         out.push(',');
         push_scene_puzzles_compat(&mut out, self.session.scene_state());
         out.push(',');
@@ -1297,7 +1622,7 @@ window.PuzzleRuntimeWasmLoader = window.PuzzleRuntimeWasmLoader || (() => {{
         const moduleUrl = URL.createObjectURL(new Blob([embedded.moduleSource], {{ type: "text/javascript" }}));
         modulePromise = import(`${{moduleUrl}}#${{encodeURIComponent(String(version))}}`)
           .then(async (module) => {{
-            await module.default(base64ToUint8Array(embedded.wasmBase64));
+            await module.default({{ module_or_path: base64ToUint8Array(embedded.wasmBase64) }});
             return module;
           }})
           .finally(() => URL.revokeObjectURL(moduleUrl));
@@ -1409,8 +1734,8 @@ fn export_puzzle3_html(
     </main>
     <script>
 window.Puzzle3DFixture = JSON.parse("{fixture_json}");
-window.Puzzle3DSource = JSON.parse("{source_json}");
-window.Puzzle3DPath = JSON.parse("{puzzle_path_json}");
+window.Puzzle3DSource = "{source_json}";
+window.Puzzle3DPath = "{puzzle_path_json}";
 {embedded_wasm_js}
     </script>
     <script>
@@ -1484,6 +1809,7 @@ fn mixed_document_loaded_game(
     loaded.author = document.author.clone();
     loaded.homepage = document.homepage.clone();
     loaded.default_wait_ms = document.default_wait_ms;
+    loaded.default_again_ms = document.default_again_ms;
     loaded.sounds = document.sounds.clone();
     loaded.theme = document.theme.clone();
     loaded.assets = document.assets.clone();
@@ -1532,6 +1858,8 @@ fn mixed_document_puzzle3_fixture_json(
         author: document.author.clone(),
         homepage: document.homepage.clone(),
         default_wait_ms: document.default_wait_ms,
+        default_again_ms: document.default_again_ms,
+        animation: document.animation.clone(),
         sounds: document.sounds.clone(),
         theme: document.theme.clone(),
         assets: document.assets.clone(),
@@ -1748,12 +2076,16 @@ pub fn export_visuals_js_from_source(
 
 pub struct CoreRuntimeBridge {
     loaded: LoadedGame,
+    current_state: Option<State>,
+    saved_states: SavedStateStore<State>,
 }
 
 impl CoreRuntimeBridge {
     pub fn from_source(source: &str) -> Result<Self, String> {
         Ok(Self {
             loaded: parse_game(source).map_err(|error| error.to_string())?,
+            current_state: None,
+            saved_states: SavedStateStore::new(),
         })
     }
 
@@ -1773,16 +2105,124 @@ impl CoreRuntimeBridge {
         )
         .map_err(|error| error.to_string())
     }
+
+    pub fn set_state_json(&mut self, state_json: &str) -> Result<(), String> {
+        let state = state_from_json(&self.loaded, state_json).map_err(|error| error.to_string())?;
+        self.current_state = Some(state);
+        Ok(())
+    }
+
+    pub fn current_state_json(&self) -> Result<String, String> {
+        let state = self
+            .current_state
+            .as_ref()
+            .ok_or_else(|| "2D runtime current state has not been initialized".to_string())?;
+        let mut out = String::new();
+        push_state_data(&mut out, state);
+        Ok(out)
+    }
+
+    pub fn current_state_hash_json(&self) -> Result<String, String> {
+        let state = self
+            .current_state
+            .as_ref()
+            .ok_or_else(|| "2D runtime current state has not been initialized".to_string())?;
+        Ok(state.hash().to_string())
+    }
+
+    pub fn current_cells_json(&self) -> Result<String, String> {
+        let state = self
+            .current_state
+            .as_ref()
+            .ok_or_else(|| "2D runtime current state has not been initialized".to_string())?;
+        let mut out = String::new();
+        push_state2_cells(&mut out, state, None);
+        Ok(out)
+    }
+
+    pub fn save_current_state(&mut self) -> Result<u32, String> {
+        let state = self
+            .current_state
+            .as_ref()
+            .ok_or_else(|| "2D runtime current state has not been initialized".to_string())?;
+        Ok(self.saved_states.save(state.clone()))
+    }
+
+    pub fn restore_saved_state(&mut self, handle: u32) -> Result<(), String> {
+        self.current_state = Some(self.saved_states.restore(handle)?.clone());
+        Ok(())
+    }
+
+    pub fn transition_current_outcome_json(
+        &mut self,
+        program_key: &str,
+        level_index: i32,
+        input: u16,
+    ) -> Result<String, String> {
+        self.transition_current_outcome_json_inner(program_key, level_index, input, false)
+    }
+
+    pub fn transition_current_state_outcome_json(
+        &mut self,
+        program_key: &str,
+        level_index: i32,
+        input: u16,
+    ) -> Result<String, String> {
+        self.transition_current_outcome_json_inner(program_key, level_index, input, true)
+    }
+
+    fn transition_current_outcome_json_inner(
+        &mut self,
+        program_key: &str,
+        level_index: i32,
+        input: u16,
+        include_state: bool,
+    ) -> Result<String, String> {
+        let state = self
+            .current_state
+            .as_ref()
+            .ok_or_else(|| "2D runtime current state has not been initialized".to_string())?;
+        let program = selected_rule_program(&self.loaded, program_key, level_index)
+            .map_err(|error| error.to_string())?;
+        let outcome = transition_program_trace(&self.loaded.game, program, state, InputId(input))
+            .map_err(|error| format!("{error:?}"))?;
+        let before = state.clone();
+        let previous_state_handle = if program_key == "main" && before != outcome.next_state {
+            Some(self.saved_states.save(before.clone()))
+        } else {
+            None
+        };
+        self.current_state = Some(outcome.next_state.clone());
+        let mut out = String::new();
+        push_transition_current_outcome_json(
+            &mut out,
+            &outcome.next_state,
+            Some(&before),
+            previous_state_handle,
+            outcome.cancelled,
+            &outcome.commands,
+            &outcome.fired_rules,
+            &outcome.patches,
+            include_state,
+        );
+        Ok(out)
+    }
 }
 
 pub struct Puzzle3RuntimeBridge {
     parsed: ParsedPuzzle3,
+    current_state: Option<State3>,
+    saved_states: SavedStateStore<State3>,
 }
 
 impl Puzzle3RuntimeBridge {
     pub fn from_source(source: &str) -> Result<Self, String> {
         if let Ok(parsed) = puzzle3d_model::parse_puzzle3d(source) {
-            return Ok(Self { parsed });
+            return Ok(Self {
+                parsed,
+                current_state: None,
+                saved_states: SavedStateStore::new(),
+            });
         }
         let document = puzzle_lang::parse_game(source).map_err(|error| error.to_string())?;
         let parsed = document
@@ -1793,7 +2233,11 @@ impl Puzzle3RuntimeBridge {
                 LoadedDocumentModel::Puzzle2d { .. } => None,
             })
             .ok_or_else(|| "3D runtime source does not contain a puzzle3 model".to_string())?;
-        Ok(Self { parsed })
+        Ok(Self {
+            parsed,
+            current_state: None,
+            saved_states: SavedStateStore::new(),
+        })
     }
 
     pub fn transition_program_outcome_json(
@@ -1819,6 +2263,116 @@ impl Puzzle3RuntimeBridge {
             .win_condition
             .as_ref()
             .is_some_and(|condition| condition.is_met(&self.parsed.game, &state)))
+    }
+
+    pub fn set_state_json(&mut self, state_json: &str) -> Result<(), String> {
+        let state =
+            state3_from_json(&self.parsed.game, state_json).map_err(|error| error.to_string())?;
+        self.current_state = Some(state);
+        Ok(())
+    }
+
+    pub fn current_state_json(&self) -> Result<String, String> {
+        let state = self
+            .current_state
+            .as_ref()
+            .ok_or_else(|| "3D runtime current state has not been initialized".to_string())?;
+        let mut out = String::new();
+        push_state3_data(&mut out, state);
+        Ok(out)
+    }
+
+    pub fn current_cells_json(&self) -> Result<String, String> {
+        let state = self
+            .current_state
+            .as_ref()
+            .ok_or_else(|| "3D runtime current state has not been initialized".to_string())?;
+        let mut out = String::new();
+        push_state3_cells(&mut out, state, None);
+        Ok(out)
+    }
+
+    pub fn save_current_state(&mut self) -> Result<u32, String> {
+        let state = self
+            .current_state
+            .as_ref()
+            .ok_or_else(|| "3D runtime current state has not been initialized".to_string())?;
+        Ok(self.saved_states.save(state.clone()))
+    }
+
+    pub fn restore_saved_state(&mut self, handle: u32) -> Result<(), String> {
+        self.current_state = Some(self.saved_states.restore(handle)?.clone());
+        Ok(())
+    }
+
+    pub fn transition_current_outcome_json(
+        &mut self,
+        program_key: &str,
+        input: u16,
+    ) -> Result<String, String> {
+        let state = self
+            .current_state
+            .as_ref()
+            .ok_or_else(|| "3D runtime current state has not been initialized".to_string())?;
+        let before = state.clone();
+        let next_state =
+            transition_selected_program3(&self.parsed, program_key, state, InputId3(input))
+                .map_err(|error| error.to_string())?;
+        let completed = self
+            .parsed
+            .win_condition
+            .as_ref()
+            .is_some_and(|condition| condition.is_met(&self.parsed.game, &next_state));
+        self.current_state = Some(next_state.clone());
+        let mut out = String::new();
+        out.push('{');
+        push_json_bool(&mut out, "changed", before != next_state);
+        out.push(',');
+        push_json_bool(&mut out, "completed", completed);
+        out.push_str(",\"stateHash\":");
+        out.push_str(&next_state.hash().to_string());
+        out.push_str(",\"changedCells\":");
+        push_state3_cells(&mut out, &next_state, Some(&before));
+        out.push_str(",\"commands\":[]}");
+        Ok(out)
+    }
+
+    pub fn is_current_complete(&self) -> Result<bool, String> {
+        let state = self
+            .current_state
+            .as_ref()
+            .ok_or_else(|| "3D runtime current state has not been initialized".to_string())?;
+        Ok(self
+            .parsed
+            .win_condition
+            .as_ref()
+            .is_some_and(|condition| condition.is_met(&self.parsed.game, state)))
+    }
+}
+
+struct SavedStateStore<T> {
+    states: Vec<Option<T>>,
+}
+
+impl<T> SavedStateStore<T> {
+    fn new() -> Self {
+        Self { states: Vec::new() }
+    }
+
+    fn save(&mut self, state: T) -> u32 {
+        if let Some(index) = self.states.iter().position(Option::is_none) {
+            self.states[index] = Some(state);
+            return index as u32;
+        }
+        self.states.push(Some(state));
+        (self.states.len() - 1) as u32
+    }
+
+    fn restore(&self, handle: u32) -> Result<&T, String> {
+        self.states
+            .get(handle as usize)
+            .and_then(Option::as_ref)
+            .ok_or_else(|| format!("saved state handle {handle} does not exist"))
     }
 }
 
@@ -1847,18 +2401,7 @@ fn transition_program3_outcome_json_inner(
     input: InputId3,
 ) -> Result<String, AppError> {
     let state = state3_from_json(&parsed.game, state_json)?;
-    let next_state = match program_key {
-        "main" => transition_program3(&parsed.game, &state, &parsed.rules, input),
-        "level_start" => {
-            transition_program_without_input(&parsed.game, &state, &parsed.lifecycle.on_level_start)
-        }
-        other => {
-            return Err(AppError::Config(format!(
-                "unknown 3D transition program selector: {other}"
-            )));
-        }
-    }
-    .map_err(|error| AppError::Config(format!("{error:?}")))?;
+    let next_state = transition_selected_program3(parsed, program_key, &state, input)?;
     let completed = parsed
         .win_condition
         .as_ref()
@@ -1873,6 +2416,35 @@ fn transition_program3_outcome_json_inner(
     Ok(out)
 }
 
+fn transition_selected_program3(
+    parsed: &ParsedPuzzle3,
+    program_key: &str,
+    state: &State3,
+    input: InputId3,
+) -> Result<State3, AppError> {
+    match program_key {
+        "main" => transition_program_with_local_frame3(
+            &parsed.game,
+            state,
+            &parsed.rules,
+            input,
+            parsed.local_frame.as_ref(),
+        ),
+        "level_start" => transition_program_without_input_with_local_frame(
+            &parsed.game,
+            state,
+            &parsed.lifecycle.on_level_start,
+            parsed.lifecycle.on_level_start_local_frame.as_ref(),
+        ),
+        other => {
+            return Err(AppError::Config(format!(
+                "unknown 3D transition program selector: {other}"
+            )));
+        }
+    }
+    .map_err(|error| AppError::Config(format!("{error:?}")))
+}
+
 fn transition_program_outcome_json_inner(
     loaded: &LoadedGame,
     program_key: &str,
@@ -1882,7 +2454,7 @@ fn transition_program_outcome_json_inner(
 ) -> Result<String, AppError> {
     let state = state_from_json(loaded, state_json)?;
     let program = selected_rule_program(loaded, program_key, level_index)?;
-    let outcome = transition_program_outcome(&loaded.game, program, &state, input)?;
+    let outcome = transition_program_trace(&loaded.game, program, &state, input)?;
     let mut out = String::new();
     push_transition_outcome_json(
         &mut out,
@@ -1890,6 +2462,7 @@ fn transition_program_outcome_json_inner(
         outcome.cancelled,
         &outcome.commands,
         &outcome.fired_rules,
+        &outcome.patches,
     );
     Ok(out)
 }
@@ -1938,6 +2511,7 @@ fn push_transition_outcome_json(
     cancelled: bool,
     commands: &[TransitionCommand],
     fired_rules: &[RuleId],
+    patches: &[Patch],
 ) {
     out.push('{');
     out.push_str("\"state\":");
@@ -1959,6 +2533,8 @@ fn push_transition_outcome_json(
                 TransitionCommand::Restart => "restart",
                 TransitionCommand::NextLevel => "next_level",
                 TransitionCommand::Again => "again",
+                TransitionCommand::Checkpoint => "checkpoint",
+                TransitionCommand::ClearCheckpoint => "clear_checkpoint",
             },
         );
         out.push('}');
@@ -1973,7 +2549,197 @@ fn push_transition_outcome_json(
         out.push_str(&rule.0.to_string());
     }
     out.push(']');
+    out.push_str(",\"patches\":");
+    push_transition_patches(out, patches);
     out.push('}');
+}
+
+fn push_transition_current_outcome_json(
+    out: &mut String,
+    state: &State,
+    before: Option<&State>,
+    previous_state_handle: Option<u32>,
+    cancelled: bool,
+    commands: &[TransitionCommand],
+    fired_rules: &[RuleId],
+    patches: &[Patch],
+    include_state: bool,
+) {
+    out.push('{');
+    push_json_bool(out, "cancelled", cancelled);
+    out.push(',');
+    push_json_bool(out, "changed", before.is_some_and(|before| before != state));
+    if include_state {
+        out.push_str(",\"state\":");
+        push_state_data(out, state);
+    }
+    out.push(',');
+    out.push_str("\"commands\":[");
+    for (index, command) in commands.iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        out.push('{');
+        push_json_pair(
+            out,
+            "kind",
+            match command {
+                TransitionCommand::Win => "win",
+                TransitionCommand::Restart => "restart",
+                TransitionCommand::NextLevel => "next_level",
+                TransitionCommand::Again => "again",
+                TransitionCommand::Checkpoint => "checkpoint",
+                TransitionCommand::ClearCheckpoint => "clear_checkpoint",
+            },
+        );
+        out.push('}');
+    }
+    out.push(']');
+    out.push(',');
+    out.push_str("\"firedRules\":[");
+    for (index, rule) in fired_rules.iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        out.push_str(&rule.0.to_string());
+    }
+    out.push(']');
+    out.push_str(",\"patches\":");
+    push_transition_patches(out, patches);
+    out.push_str(",\"stateHash\":");
+    out.push_str(&state.hash().to_string());
+    out.push_str(",\"stateHashKey\":\"");
+    out.push_str(&state.hash().to_string());
+    out.push('"');
+    if let Some(handle) = previous_state_handle {
+        out.push_str(",\"previousStateHandle\":");
+        out.push_str(&handle.to_string());
+    }
+    out.push_str(",\"changedCells\":");
+    push_state2_cells(out, state, before);
+    out.push_str(",\"globals\":[");
+    for (index, value) in state.visible_globals().iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        out.push_str(&value.to_string());
+    }
+    out.push_str("],\"levelFiredRules\":[");
+    for (index, rule) in state.level_fired_rules().iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        out.push_str(&rule.0.to_string());
+    }
+    out.push_str("]}");
+}
+
+fn push_transition_patches(out: &mut String, patches: &[Patch]) {
+    out.push('[');
+    for (patch_index, patch) in patches.iter().enumerate() {
+        if patch_index > 0 {
+            out.push(',');
+        }
+        out.push('[');
+        for (op_index, op) in patch.ops.iter().enumerate() {
+            if op_index > 0 {
+                out.push(',');
+            }
+            out.push('{');
+            match op {
+                PatchOp::Move {
+                    from_x,
+                    from_y,
+                    to_x,
+                    to_y,
+                    object,
+                } => {
+                    push_json_pair(out, "kind", "move");
+                    out.push(',');
+                    push_json_number(out, "fromX", *from_x as u64);
+                    out.push(',');
+                    push_json_number(out, "fromY", *from_y as u64);
+                    out.push(',');
+                    push_json_number(out, "toX", *to_x as u64);
+                    out.push(',');
+                    push_json_number(out, "toY", *to_y as u64);
+                    out.push(',');
+                    push_json_number(out, "objectId", object.0 as u64);
+                }
+                PatchOp::RemoveScratch {
+                    x,
+                    y,
+                    object,
+                    scratch,
+                    ..
+                } => {
+                    push_json_pair(out, "kind", "remove_scratch");
+                    out.push(',');
+                    push_json_number(out, "x", *x as u64);
+                    out.push(',');
+                    push_json_number(out, "y", *y as u64);
+                    out.push(',');
+                    push_json_number(out, "objectId", object.0 as u64);
+                    out.push(',');
+                    push_json_number(out, "scratch", scratch.0 as u64);
+                }
+                PatchOp::Add { x, y, object } => {
+                    push_json_pair(out, "kind", "add");
+                    out.push(',');
+                    push_json_number(out, "x", *x as u64);
+                    out.push(',');
+                    push_json_number(out, "y", *y as u64);
+                    out.push(',');
+                    push_json_number(out, "objectId", object.0 as u64);
+                }
+                PatchOp::Remove { x, y, object } => {
+                    push_json_pair(out, "kind", "remove");
+                    out.push(',');
+                    push_json_number(out, "x", *x as u64);
+                    out.push(',');
+                    push_json_number(out, "y", *y as u64);
+                    out.push(',');
+                    push_json_number(out, "objectId", object.0 as u64);
+                }
+                PatchOp::Replace { x, y, remove, add } => {
+                    push_json_pair(out, "kind", "replace");
+                    out.push(',');
+                    push_json_number(out, "x", *x as u64);
+                    out.push(',');
+                    push_json_number(out, "y", *y as u64);
+                    out.push(',');
+                    push_json_number(out, "remove", remove.0 as u64);
+                    out.push(',');
+                    push_json_number(out, "add", add.0 as u64);
+                }
+                PatchOp::SetScratch {
+                    x,
+                    y,
+                    object,
+                    scratch,
+                    ..
+                } => {
+                    push_json_pair(out, "kind", "set_scratch");
+                    out.push(',');
+                    push_json_number(out, "x", *x as u64);
+                    out.push(',');
+                    push_json_number(out, "y", *y as u64);
+                    out.push(',');
+                    push_json_number(out, "objectId", object.0 as u64);
+                    out.push(',');
+                    push_json_number(out, "scratch", scratch.0 as u64);
+                }
+                PatchOp::UpdateGlobal { global, .. } => {
+                    push_json_pair(out, "kind", "update_global");
+                    out.push(',');
+                    push_json_number(out, "global", global.0 as u64);
+                }
+            }
+            out.push('}');
+        }
+        out.push(']');
+    }
+    out.push(']');
 }
 
 fn source_looks_puzzle3d(source: &str) -> bool {
@@ -2294,8 +3060,13 @@ fn materialize_level_start_state3(
     parsed: &ParsedPuzzle3,
     state: State3,
 ) -> Result<State3, AppError> {
-    transition_program_without_input(&parsed.game, &state, &parsed.lifecycle.on_level_start)
-        .map_err(|error| AppError::Config(format!("{error:?}")))
+    transition_program_without_input_with_local_frame(
+        &parsed.game,
+        &state,
+        &parsed.lifecycle.on_level_start,
+        parsed.lifecycle.on_level_start_local_frame.as_ref(),
+    )
+    .map_err(|error| AppError::Config(format!("{error:?}")))
 }
 
 fn json_u64_field(source: &str, key: &str) -> Option<u64> {
@@ -2419,7 +3190,9 @@ fn push_export_data(out: &mut String, state: &ServerState) {
     out.push(',');
     push_json_number(out, "defaultWaitMs", state.loaded.default_wait_ms);
     out.push(',');
-    push_json_number(out, "defaultAgainMs", 120);
+    push_json_number(out, "defaultAgainMs", state.loaded.default_again_ms);
+    out.push(',');
+    push_export_animation(out, &state.loaded);
     out.push(',');
     push_export_goal(out, "goal", state.loaded.goal.as_ref());
     out.push(',');
@@ -2534,6 +3307,16 @@ fn push_export_sounds(out: &mut String, sounds: &SoundsDef) {
     out.push('}');
 }
 
+fn push_export_animation(out: &mut String, loaded: &LoadedGame) {
+    out.push_str("\"animation\":{");
+    out.push_str("\"tween\":{");
+    push_json_bool(out, "enabled", loaded.animation.tween.enabled);
+    out.push(',');
+    push_json_number(out, "intervalMs", loaded.animation.tween.interval_ms);
+    out.push('}');
+    out.push('}');
+}
+
 fn push_sound_events(out: &mut String, events: &[SoundEvent]) {
     out.push_str("\"soundEvents\":[");
     for (index, event) in events.iter().enumerate() {
@@ -2620,6 +3403,58 @@ fn push_wait_events(out: &mut String, events: &[WaitEvent]) {
                 out.push(',');
                 push_json_number(out, "milliseconds", *milliseconds);
             }
+            WaitEvent::ContinueEffects { milliseconds } => {
+                push_json_pair(out, "kind", "continue_effects");
+                out.push(',');
+                push_json_number(out, "milliseconds", *milliseconds);
+            }
+        }
+        out.push('}');
+    }
+    out.push(']');
+}
+
+fn push_animation_events(out: &mut String, events: &[AnimationEvent]) {
+    out.push_str("\"animationEvents\":[");
+    for (index, event) in events.iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        out.push('{');
+        match event {
+            AnimationEvent::Move {
+                name,
+                object,
+                from_x,
+                from_y,
+                to_x,
+                to_y,
+            } => {
+                push_json_pair(out, "kind", "move");
+                out.push(',');
+                push_json_pair(out, "name", name);
+                out.push(',');
+                push_json_number(out, "objectId", object.0 as u64);
+                out.push(',');
+                push_json_number(out, "fromX", *from_x as u64);
+                out.push(',');
+                push_json_number(out, "fromY", *from_y as u64);
+                out.push(',');
+                push_json_number(out, "toX", *to_x as u64);
+                out.push(',');
+                push_json_number(out, "toY", *to_y as u64);
+            }
+            AnimationEvent::CantMove { name, object, x, y } => {
+                push_json_pair(out, "kind", "cantmove");
+                out.push(',');
+                push_json_pair(out, "name", name);
+                out.push(',');
+                push_json_number(out, "objectId", object.0 as u64);
+                out.push(',');
+                push_json_number(out, "x", *x as u64);
+                out.push(',');
+                push_json_number(out, "y", *y as u64);
+            }
         }
         out.push('}');
     }
@@ -2667,6 +3502,8 @@ fn push_export_engine(out: &mut String, loaded: &LoadedGame) {
     out.push(',');
     push_rule_emissions(out, loaded);
     out.push(',');
+    push_rule_effects(out, loaded);
+    out.push(',');
     out.push_str("\"program\":[");
     for (index, step) in loaded.game.program().iter().enumerate() {
         if index > 0 {
@@ -2700,6 +3537,58 @@ fn push_export_engine(out: &mut String, loaded: &LoadedGame) {
     out.push('}');
 }
 
+fn push_rule_effects(out: &mut String, loaded: &LoadedGame) {
+    out.push_str("\"ruleEffects\":{");
+    let mut entries = loaded.rule_effects.iter().collect::<Vec<_>>();
+    entries.sort_by_key(|(rule, _)| rule.0);
+    for (index, (rule, effects)) in entries.into_iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        push_json_string(out, &rule.0.to_string());
+        out.push(':');
+        out.push('[');
+        for (effect_index, effect) in effects.iter().enumerate() {
+            if effect_index > 0 {
+                out.push(',');
+            }
+            push_ordered_rule_effect(out, effect);
+        }
+        out.push(']');
+    }
+    out.push('}');
+}
+
+fn push_ordered_rule_effect(out: &mut String, effect: &RuleEffect) {
+    out.push('{');
+    match effect {
+        RuleEffect::Win => push_json_pair(out, "kind", "win"),
+        RuleEffect::Restart => push_json_pair(out, "kind", "restart"),
+        RuleEffect::NextLevel => push_json_pair(out, "kind", "next_level"),
+        RuleEffect::Again => push_json_pair(out, "kind", "again"),
+        RuleEffect::Checkpoint => push_json_pair(out, "kind", "checkpoint"),
+        RuleEffect::ClearCheckpoint => push_json_pair(out, "kind", "clear_checkpoint"),
+        RuleEffect::PlaySfx { name } => {
+            push_json_pair(out, "kind", "play_sfx");
+            out.push(',');
+            push_json_pair(out, "name", name);
+        }
+        RuleEffect::Wait { milliseconds } => {
+            push_json_pair(out, "kind", "wait");
+            out.push(',');
+            push_json_number(out, "milliseconds", *milliseconds);
+        }
+        RuleEffect::Message { text, literal } => {
+            push_json_pair(out, "kind", "message");
+            out.push(',');
+            push_json_pair(out, "text", text);
+            out.push(',');
+            push_json_bool(out, "literal", *literal);
+        }
+    }
+    out.push('}');
+}
+
 fn push_rule_emissions(out: &mut String, loaded: &LoadedGame) {
     out.push_str("\"ruleEmissions\":{");
     let mut entries = loaded.rule_emissions.iter().collect::<Vec<_>>();
@@ -2729,6 +3618,33 @@ fn push_rule_emission(out: &mut String, emission: &RuleEmission) {
             push_json_pair(out, "kind", "play_sfx");
             out.push(',');
             push_json_pair(out, "name", name);
+        }
+        RuleEmission::Animate {
+            trigger,
+            name,
+            objects,
+        } => {
+            push_json_pair(out, "kind", "animate");
+            out.push(',');
+            push_json_pair(
+                out,
+                "trigger",
+                match trigger {
+                    RuleAnimationTrigger::Move => "move",
+                    RuleAnimationTrigger::CantMove => "cantmove",
+                },
+            );
+            out.push(',');
+            push_json_pair(out, "name", name);
+            out.push(',');
+            out.push_str("\"objects\":[");
+            for (index, object) in objects.iter().enumerate() {
+                if index > 0 {
+                    out.push(',');
+                }
+                out.push_str(&object.0.to_string());
+            }
+            out.push(']');
         }
         RuleEmission::Wait { milliseconds } => {
             push_json_pair(out, "kind", "wait");
@@ -2908,6 +3824,59 @@ fn push_state_data(out: &mut String, state: &State) {
     out.push('}');
 }
 
+fn push_state2_cells(out: &mut String, state: &State, before: Option<&State>) {
+    out.push('[');
+    let mut first = true;
+    for y in 0..state.height {
+        for x in 0..state.width {
+            let cell = usize::from(y) * usize::from(state.width) + usize::from(x);
+            if before.is_some_and(|before| state2_cell_slots_equal(before, state, cell)) {
+                continue;
+            }
+            let mut objects = Vec::new();
+            for layer in 0..state.layer_count {
+                let slot = (cell * usize::from(state.layer_count)) + usize::from(layer);
+                let object = state.slots()[slot];
+                if !object.is_empty() {
+                    objects.push(object.0);
+                }
+            }
+            if before.is_none() && objects.is_empty() {
+                continue;
+            }
+            if !first {
+                out.push(',');
+            }
+            first = false;
+            out.push('{');
+            push_json_number(out, "x", x as u64);
+            out.push(',');
+            push_json_number(out, "y", y as u64);
+            out.push_str(",\"objects\":[");
+            for (index, object) in objects.iter().enumerate() {
+                if index > 0 {
+                    out.push(',');
+                }
+                out.push_str(&object.to_string());
+            }
+            out.push_str("]}");
+        }
+    }
+    out.push(']');
+}
+
+fn state2_cell_slots_equal(before: &State, after: &State, cell: usize) -> bool {
+    if before.width != after.width
+        || before.height != after.height
+        || before.layer_count != after.layer_count
+    {
+        return false;
+    }
+    let layer_count = usize::from(after.layer_count);
+    let start = cell * layer_count;
+    before.slots()[start..start + layer_count] == after.slots()[start..start + layer_count]
+}
+
 fn push_state3_data(out: &mut String, state: &State3) {
     out.push('{');
     push_json_pair(out, "kind", "puzzle3d");
@@ -2937,6 +3906,63 @@ fn push_state3_data(out: &mut String, state: &State3) {
     }
     out.push(']');
     out.push('}');
+}
+
+fn push_state3_cells(out: &mut String, state: &State3, before: Option<&State3>) {
+    out.push('[');
+    let mut first = true;
+    for z in 0..state.size.height {
+        for y in 0..state.size.depth {
+            for x in 0..state.size.width {
+                let cell = ((usize::from(z) * usize::from(state.size.depth)) + usize::from(y))
+                    * usize::from(state.size.width)
+                    + usize::from(x);
+                if before.is_some_and(|before| state3_cell_slots_equal(before, state, cell)) {
+                    continue;
+                }
+                let mut objects = Vec::new();
+                for layer in 0..state.layer_count {
+                    let slot = (cell * usize::from(state.layer_count)) + usize::from(layer);
+                    let object = state.slots()[slot];
+                    if !object.is_empty() {
+                        objects.push(object.0);
+                    }
+                }
+                if before.is_none() && objects.is_empty() {
+                    continue;
+                }
+                if !first {
+                    out.push(',');
+                }
+                first = false;
+                out.push('{');
+                out.push_str("\"position\":{");
+                push_json_number(out, "x", x as u64);
+                out.push(',');
+                push_json_number(out, "y", y as u64);
+                out.push(',');
+                push_json_number(out, "z", z as u64);
+                out.push_str("},\"objects\":[");
+                for (index, object) in objects.iter().enumerate() {
+                    if index > 0 {
+                        out.push(',');
+                    }
+                    out.push_str(&object.to_string());
+                }
+                out.push_str("]}");
+            }
+        }
+    }
+    out.push(']');
+}
+
+fn state3_cell_slots_equal(before: &State3, after: &State3, cell: usize) -> bool {
+    if before.size != after.size || before.layer_count != after.layer_count {
+        return false;
+    }
+    let layer_count = usize::from(after.layer_count);
+    let start = cell * layer_count;
+    before.slots()[start..start + layer_count] == after.slots()[start..start + layer_count]
 }
 
 fn push_rule_step(out: &mut String, step: &RuleStep) {
@@ -2986,8 +4012,49 @@ fn push_rule_step(out: &mut String, step: &RuleStep) {
             }
             out.push(']');
         }
+        RuleStep::LocalFrame { frame, steps } => {
+            push_json_pair(out, "kind", "local_frame");
+            out.push(',');
+            out.push_str("\"frame\":{");
+            push_json_local_frame_extent(out, "x", frame.x);
+            out.push(',');
+            push_json_local_frame_extent(out, "y", frame.y);
+            out.push(',');
+            push_json_local_frame_extent(out, "z", frame.z);
+            out.push(',');
+            out.push_str("\"focusObjects\":[");
+            for (index, object) in frame.focus_objects.iter().enumerate() {
+                if index > 0 {
+                    out.push(',');
+                }
+                out.push_str(&object.0.to_string());
+            }
+            out.push_str("]},");
+            out.push_str("\"steps\":[");
+            for (index, step) in steps.iter().enumerate() {
+                if index > 0 {
+                    out.push(',');
+                }
+                push_rule_step(out, step);
+            }
+            out.push(']');
+        }
     }
     out.push('}');
+}
+
+fn push_json_local_frame_extent(
+    out: &mut String,
+    key: &str,
+    extent: puzzle_core::LocalFrameExtent,
+) {
+    out.push('"');
+    out.push_str(key);
+    out.push_str("\":");
+    match extent {
+        puzzle_core::LocalFrameExtent::Radius(radius) => out.push_str(&radius.to_string()),
+        puzzle_core::LocalFrameExtent::Full => out.push_str("\"full\""),
+    }
 }
 
 fn push_rule_condition(out: &mut String, condition: &RuleCondition) {
@@ -3357,6 +4424,12 @@ fn push_rule_effect(out: &mut String, effect: &Effect) {
         }
         Effect::Again => {
             push_json_pair(out, "kind", "again");
+        }
+        Effect::Checkpoint => {
+            push_json_pair(out, "kind", "checkpoint");
+        }
+        Effect::ClearCheckpoint => {
+            push_json_pair(out, "kind", "clear_checkpoint");
         }
         Effect::UpdateGlobal { global, op, value } => {
             push_json_pair(out, "kind", "update_global");
@@ -4183,8 +5256,9 @@ fn push_search_stats(out: &mut String, stats: &puzzle_solver::SearchStats) {
     out.push('}');
 }
 
-fn push_scene_state_compat(out: &mut String, state: Option<&puzzle_play::SceneRuntimeState>) {
+fn push_scene_state_compat(out: &mut String, loaded: &LoadedGame, session: &GameSession) {
     out.push_str("\"screenState\":{");
+    let state = session.scene_state();
     let Some(state) = state else {
         out.push('}');
         return;
@@ -4197,13 +5271,14 @@ fn push_scene_state_compat(out: &mut String, state: Option<&puzzle_play::SceneRu
         }
         push_json_string(out, name);
         out.push(':');
-        push_scene_value(out, value);
+        push_scene_value(out, loaded, session, session.focused_scene(), value);
     }
     out.push('}');
 }
 
-fn push_session_state(out: &mut String, values: &std::collections::HashMap<String, SceneValue>) {
+fn push_session_state(out: &mut String, loaded: &LoadedGame, session: &GameSession) {
     out.push_str("\"gameState\":{");
+    let values = session.session_values();
     let mut entries = values.iter().collect::<Vec<_>>();
     entries.sort_by(|(left, _), (right, _)| left.cmp(right));
     for (index, (name, value)) in entries.into_iter().enumerate() {
@@ -4212,7 +5287,7 @@ fn push_session_state(out: &mut String, values: &std::collections::HashMap<Strin
         }
         push_json_string(out, name);
         out.push(':');
-        push_scene_value(out, value);
+        push_scene_value(out, loaded, session, session.focused_scene(), value);
     }
     out.push('}');
 }
@@ -4234,7 +5309,23 @@ fn push_scene_puzzles_compat(out: &mut String, state: Option<&puzzle_play::Scene
     out.push(']');
 }
 
-fn push_scene_state(out: &mut String, state: Option<&puzzle_play::SceneRuntimeState>) {
+fn push_scene_state(out: &mut String, loaded: &LoadedGame, session: &GameSession) {
+    push_scene_state_for(
+        out,
+        loaded,
+        session,
+        session.focused_scene(),
+        session.scene_state(),
+    );
+}
+
+fn push_scene_state_for(
+    out: &mut String,
+    loaded: &LoadedGame,
+    session: &GameSession,
+    scene_name: &str,
+    state: Option<&puzzle_play::SceneRuntimeState>,
+) {
     out.push_str("\"sceneState\":{");
     let Some(state) = state else {
         out.push('}');
@@ -4248,7 +5339,7 @@ fn push_scene_state(out: &mut String, state: Option<&puzzle_play::SceneRuntimeSt
         }
         push_json_string(out, name);
         out.push(':');
-        push_scene_value(out, value);
+        push_scene_value(out, loaded, session, scene_name, value);
     }
     out.push('}');
 }
@@ -4290,7 +5381,13 @@ fn push_scene_puzzle_state(out: &mut String, loaded: &LoadedGame, session: &Game
             .and_then(|puzzle| puzzle.level_index)
         {
             out.push_str("\"level\":");
-            push_level_ref(out, loaded, session.focused_scene(), level_index);
+            push_level_ref(
+                out,
+                loaded,
+                session.cleared_levels(),
+                session.focused_scene(),
+                level_index,
+            );
         } else {
             out.push_str("\"level\":null");
         }
@@ -4299,7 +5396,13 @@ fn push_scene_puzzle_state(out: &mut String, loaded: &LoadedGame, session: &Game
     out.push('}');
 }
 
-fn push_level_ref(out: &mut String, loaded: &LoadedGame, scene_name: &str, level_index: usize) {
+fn push_level_ref(
+    out: &mut String,
+    loaded: &LoadedGame,
+    cleared_levels: &[bool],
+    scene_name: &str,
+    level_index: usize,
+) {
     out.push('{');
     push_json_number(out, "index", level_index as u64);
     if let Some(level) = loaded.levels.get(level_index) {
@@ -4316,6 +5419,18 @@ fn push_level_ref(out: &mut String, loaded: &LoadedGame, scene_name: &str, level
             out.push_str("\"pack\":null");
         }
     }
+    out.push(',');
+    push_json_bool(
+        out,
+        "cleared",
+        cleared_levels.get(level_index).copied().unwrap_or(false),
+    );
+    out.push(',');
+    push_json_bool(
+        out,
+        "solved",
+        cleared_levels.get(level_index).copied().unwrap_or(false),
+    );
     out.push(',');
     push_json_bool(
         out,
@@ -4388,11 +5503,20 @@ fn push_visible_scenes(out: &mut String, scenes: &[String]) {
     out.push(']');
 }
 
-fn push_scene_value(out: &mut String, value: &SceneValue) {
+fn push_scene_value(
+    out: &mut String,
+    loaded: &LoadedGame,
+    session: &GameSession,
+    scene_name: &str,
+    value: &SceneValue,
+) {
     match value {
         SceneValue::Bool(value) => out.push_str(if *value { "true" } else { "false" }),
         SceneValue::Int(value) => out.push_str(&value.to_string()),
         SceneValue::Text(value) | SceneValue::Symbol(value) => push_json_string(out, value),
+        SceneValue::LevelRef(index) => {
+            push_level_ref(out, loaded, session.cleared_levels(), scene_name, *index)
+        }
     }
 }
 
@@ -4408,7 +5532,7 @@ fn push_scene_layers(out: &mut String, loaded: &LoadedGame, session: &GameSessio
         out.push(',');
         push_json_bool(out, "focused", name == session.focused_scene());
         out.push(',');
-        push_scene_state(out, state);
+        push_scene_state_for(out, loaded, session, name, state);
         out.push(',');
         push_scene_puzzles(out, state);
         out.push(',');
@@ -4480,6 +5604,14 @@ fn first_puzzle_component(components: &[SceneComponent]) -> Option<&str> {
                     return Some(name);
                 }
             }
+            SceneComponent::Conditional(conditional) => {
+                if let Some(name) = first_puzzle_component(&conditional.children) {
+                    return Some(name);
+                }
+                if let Some(name) = first_puzzle_component(&conditional.else_children) {
+                    return Some(name);
+                }
+            }
             SceneComponent::For(for_view) => {
                 if let Some(name) = first_puzzle_component(&for_view.children) {
                     return Some(name);
@@ -4518,6 +5650,8 @@ fn push_scene_object(
     out.push(',');
     push_json_number(out, "layerCount", state.layer_count as u64);
     out.push(',');
+    push_puzzle_settings(out, loaded);
+    out.push(',');
     push_puzzle_screen(out, loaded);
     out.push(',');
     out.push_str("\"resources\":");
@@ -4532,6 +5666,28 @@ fn push_scene_object(
     push_scene_regions(out, level);
     out.push(',');
     push_cells(out, loaded, state);
+    out.push('}');
+}
+
+fn push_puzzle_settings(out: &mut String, loaded: &LoadedGame) {
+    out.push_str("\"settings\":{");
+    out.push_str("\"grid\":{");
+    let occupied_cells = loaded.render.grid.occupied_cells;
+    let all_cells = loaded.render.grid.all_cells;
+    push_json_number(out, "visibility", u64::from(occupied_cells || all_cells));
+    out.push(',');
+    push_json_bool(out, "occupied_cells", occupied_cells);
+    out.push(',');
+    push_json_bool(out, "all_cells", all_cells);
+    out.push('}');
+    out.push(',');
+    out.push_str("\"animation\":{");
+    out.push_str("\"tween\":{");
+    push_json_bool(out, "enabled", loaded.animation.tween.enabled);
+    out.push(',');
+    push_json_number(out, "intervalMs", loaded.animation.tween.interval_ms);
+    out.push('}');
+    out.push('}');
     out.push('}');
 }
 
@@ -4790,10 +5946,17 @@ fn push_game_context(out: &mut String, loaded: &LoadedGame) {
     } else {
         out.push_str("null");
     }
+    out.push(',');
+    push_json_bool(out, "has_progress_save", false);
     out.push('}');
 }
 
-fn push_level_context(out: &mut String, loaded: &LoadedGame, level_index: Option<usize>) {
+fn push_level_context(
+    out: &mut String,
+    loaded: &LoadedGame,
+    cleared_levels: &[bool],
+    level_index: Option<usize>,
+) {
     let Some(level_index) = level_index else {
         out.push_str("\"level\":null");
         return;
@@ -4820,6 +5983,18 @@ fn push_level_context(out: &mut String, loaded: &LoadedGame, level_index: Option
     } else {
         out.push_str("\"pack\":null");
     }
+    out.push(',');
+    push_json_bool(
+        out,
+        "cleared",
+        cleared_levels.get(level_index).copied().unwrap_or(false),
+    );
+    out.push(',');
+    push_json_bool(
+        out,
+        "solved",
+        cleared_levels.get(level_index).copied().unwrap_or(false),
+    );
     out.push('}');
 }
 
@@ -5083,7 +6258,7 @@ fn push_scene_var_def(out: &mut String, variable: &puzzle_lang::SceneVarDef) {
     push_json_pair(out, "name", &variable.name);
     out.push(',');
     out.push_str("\"default\":");
-    push_scene_value(out, &variable.default);
+    push_scene_default_value(out, &variable.default);
     out.push(',');
     push_json_pair(
         out,
@@ -5097,6 +6272,15 @@ fn push_scene_var_def(out: &mut String, variable: &puzzle_lang::SceneVarDef) {
     out.push(',');
     push_json_bool(out, "mutable", variable.mutable);
     out.push('}');
+}
+
+fn push_scene_default_value(out: &mut String, value: &SceneValue) {
+    match value {
+        SceneValue::Bool(value) => out.push_str(if *value { "true" } else { "false" }),
+        SceneValue::Int(value) => out.push_str(&value.to_string()),
+        SceneValue::Text(value) | SceneValue::Symbol(value) => push_json_string(out, value),
+        SceneValue::LevelRef(index) => out.push_str(&index.to_string()),
+    }
 }
 
 fn push_scene_layout(out: &mut String, layout: &SceneLayoutDef) {
@@ -5196,6 +6380,13 @@ fn push_scene_component(out: &mut String, component: &SceneComponent) {
             out.push(',');
             push_json_effect(out, &button.effect);
         }
+        SceneComponent::Choice(choice) => {
+            push_json_pair(out, "kind", "choice");
+            out.push(',');
+            push_json_expr_named(out, "label", &choice.label);
+            out.push(',');
+            push_json_effect(out, &choice.effect);
+        }
         SceneComponent::Row(container) => {
             push_json_pair(out, "kind", "row");
             out.push(',');
@@ -5216,6 +6407,16 @@ fn push_scene_component(out: &mut String, component: &SceneComponent) {
             push_scene_layout(out, &container.layout);
             out.push(',');
             push_scene_children(out, &container.children);
+        }
+        SceneComponent::Conditional(conditional) => {
+            push_json_pair(out, "kind", "conditional");
+            out.push(',');
+            push_json_pair(out, "condition", &conditional.condition);
+            out.push(',');
+            push_scene_children(out, &conditional.children);
+            out.push(',');
+            out.push_str("\"elseChildren\":");
+            push_scene_component_list(out, &conditional.else_children);
         }
         SceneComponent::For(for_view) => {
             push_json_pair(out, "kind", "for");
@@ -5438,24 +6639,6 @@ fn push_json_effect_fields(out: &mut String, effect: &SceneEffect) {
             out.push(',');
             push_json_pair(out, "scene", scene);
         }
-        SceneEffect::StartLevel { scene, scope } => {
-            push_json_pair(out, "kind", "start_level");
-            out.push(',');
-            push_json_pair(out, "scene", scene);
-            if let Some(scope) = scope {
-                out.push(',');
-                push_json_pair(out, "scope", scope);
-            }
-        }
-        SceneEffect::ContinueLevel { scene, scope } => {
-            push_json_pair(out, "kind", "continue_level");
-            out.push(',');
-            push_json_pair(out, "scene", scene);
-            if let Some(scope) = scope {
-                out.push(',');
-                push_json_pair(out, "scope", scope);
-            }
-        }
         SceneEffect::PuzzleNextLevel { target } => {
             push_json_pair(out, "kind", "puzzle_next_level");
             out.push(',');
@@ -5510,8 +6693,31 @@ fn push_json_effect_fields(out: &mut String, effect: &SceneEffect) {
             out.push(',');
             push_json_pair(out, "target", target);
         }
-        SceneEffect::ClearHistory => {
-            push_json_pair(out, "kind", "clear_history");
+        SceneEffect::ClearUndoHistory => {
+            push_json_pair(out, "kind", "clear_undo_history");
+        }
+        SceneEffect::ClearGameProgress => {
+            push_json_pair(out, "kind", "clear_game_progress");
+        }
+        SceneEffect::SetCurrentLevel { level } => {
+            push_json_pair(out, "kind", "set_current_level");
+            out.push(',');
+            push_json_expr_named(out, "level", level);
+        }
+        SceneEffect::ClearCurrentLevel => {
+            push_json_pair(out, "kind", "clear_current_level");
+        }
+        SceneEffect::SetLevelCleared { level, cleared } => {
+            push_json_pair(out, "kind", "set_level_cleared");
+            out.push(',');
+            push_json_bool(out, "cleared", *cleared);
+            if let Some(level) = level {
+                out.push(',');
+                push_json_expr_named(out, "level", level);
+            }
+        }
+        SceneEffect::ResetPersistentVars => {
+            push_json_pair(out, "kind", "reset_persistent_vars");
         }
         SceneEffect::Sequence(effects) => {
             push_json_pair(out, "kind", "sequence");
@@ -5603,7 +6809,12 @@ fn push_json_expr_fields(out: &mut String, expr: &SceneExpr) {
 }
 
 fn push_scene_children(out: &mut String, children: &[SceneComponent]) {
-    out.push_str("\"children\":[");
+    out.push_str("\"children\":");
+    push_scene_component_list(out, children);
+}
+
+fn push_scene_component_list(out: &mut String, children: &[SceneComponent]) {
+    out.push('[');
     for (index, child) in children.iter().enumerate() {
         if index > 0 {
             out.push(',');
@@ -5818,9 +7029,171 @@ mod tests {
     use super::*;
 
     #[test]
+    fn stateful_core_runtime_exposes_changed_cells_for_2d() {
+        let source = r#"
+puzzle board {
+  layers {
+    actor = Player
+  }
+  empty .
+  rules {
+    [ Player | no Player ] -> [ | Player ]
+  }
+}
+
+levels default of board {
+  legend P = Player
+  level one {
+    P.
+  }
+}
+"#;
+        let mut runtime = CoreRuntimeBridge::from_source(source).expect("load 2D runtime");
+        let mut state_json = String::new();
+        push_state_data(&mut state_json, &runtime.loaded.levels[0].initial_state);
+        runtime
+            .set_state_json(&state_json)
+            .expect("set current state");
+        let saved = runtime.save_current_state().expect("save current state");
+
+        let outcome = runtime
+            .transition_current_outcome_json("main", -1, 4)
+            .expect("transition current state");
+
+        assert!(outcome.contains(
+            r#""changedCells":[{"x":0,"y":0,"objects":[]},{"x":1,"y":0,"objects":[1]}]"#
+        ));
+        assert!(!outcome.contains(r#""state":"#));
+        assert!(outcome.contains(r#""previousStateHandle":"#));
+        assert!(outcome.contains(r#""globals":[]"#));
+        assert!(outcome.contains(r#""levelFiredRules":["#));
+        runtime
+            .restore_saved_state(saved)
+            .expect("restore saved current state");
+        assert_eq!(runtime.current_state_json().unwrap(), state_json);
+
+        let state_outcome = runtime
+            .transition_current_state_outcome_json("main", -1, 4)
+            .expect("transition current state with state payload");
+        assert!(state_outcome.contains(r#""state":{"width":2,"height":1,"#));
+        assert!(state_outcome.contains(
+            r#""changedCells":[{"x":0,"y":0,"objects":[]},{"x":1,"y":0,"objects":[1]}]"#
+        ));
+    }
+
+    #[test]
+    fn stateful_puzzle3_runtime_exposes_changed_cells_without_state_payload() {
+        let source = r#"
+puzzle3 board {
+  layers {
+    actor = Player
+  }
+  rules {
+    horizontal [ Player | no Player ] -> [ | Player ]
+  }
+}
+
+levels3 default of board {
+  legend {
+    . = empty
+    P = Player
+  }
+  level one {
+    P.
+  }
+}
+"#;
+        let mut runtime = Puzzle3RuntimeBridge::from_source(source).expect("load 3D runtime");
+        let state = runtime
+            .parsed
+            .level_bundle
+            .as_ref()
+            .expect("level bundle")
+            .levels[0]
+            .level
+            .build_state(&runtime.parsed.game)
+            .expect("build state");
+        let mut state_json = String::new();
+        push_state3_data(&mut state_json, &state);
+        runtime
+            .set_state_json(&state_json)
+            .expect("set current state");
+
+        let outcome = runtime
+            .transition_current_outcome_json("main", 4)
+            .expect("transition current state");
+
+        assert!(outcome.contains(r#""changed":true"#));
+        assert!(!outcome.contains(r#""state":{"#));
+        assert!(outcome.contains(
+            r#""changedCells":[{"position":{"x":0,"y":0,"z":0},"objects":[]},{"position":{"x":1,"y":0,"z":0},"objects":[1]}]"#
+        ));
+        assert!(PUZZLE3_APP_JS.contains("this.applyRuntimeCells(outcome.changedCells || []);"));
+    }
+
+    #[test]
     fn renderer_board_floor_is_transparent_by_default() {
         assert!(RENDERER_CSS.contains("--cell-background: transparent;"));
         assert!(RENDERER_JS.contains("floorColor && floorColor !== \"transparent\""));
+    }
+
+    #[test]
+    fn renderer_paints_tween_layers_after_static_board_layers() {
+        assert!(RENDERER_JS.contains("const animatedLayers = [];"));
+        assert!(RENDERER_JS.contains("animatedLayers.push({ layer, x, y, animation });"));
+        assert!(RENDERER_JS.contains("for (const item of animatedLayers)"));
+        assert!(RENDERER_JS.contains(
+            "this.paintCanvasLayer(context, item.layer, item.x, item.y, unit, item.animation, progress);"
+        ));
+        assert!(!RENDERER_JS.contains("animationForVisualCompanion"));
+    }
+
+    #[test]
+    fn renderer_consumes_2d_render_grid_settings() {
+        let source = r#"
+title grid_render
+puzzle default {
+layers 1
+empty .
+object Player 0
+render {
+grid {
+occupied_cells = true
+all_cells = true
+}
+}
+rules {
+
+}
+levels {
+legend P = Player
+level start {
+P
+}
+}
+}
+"#;
+        let loaded = puzzle_lang::parse_game2d(source).expect("parse 2D grid render settings");
+        let mut scene = String::new();
+        push_scene_object(
+            &mut scene,
+            &loaded,
+            &loaded.levels[0].initial_state,
+            Some(&loaded.levels[0]),
+            None,
+        );
+
+        assert!(scene.contains(
+            r#""settings":{"grid":{"visibility":1,"occupied_cells":true,"all_cells":true},"animation":{"tween":{"enabled":false,"intervalMs":250}}}"#
+        ));
+        assert!(RENDERER_JS.contains("gridSettings(scene)"));
+        assert!(RENDERER_JS.contains("scene.settings?.grid"));
+        assert!(RENDERER_JS.contains("has-occupied-cell-grid"));
+        assert!(RENDERER_JS.contains("has-all-cell-grid"));
+        assert!(RENDERER_JS.contains("raw.all_cells ?? raw.allCells"));
+        assert!(RENDERER_JS.contains("!grid.allCells && !cell.layers?.length"));
+        assert!(RENDERER_CSS.contains(".board.has-occupied-cell-grid .cell.has-objects"));
+        assert!(RENDERER_CSS.contains(".board.has-all-cell-grid .cell"));
     }
 
     #[test]
@@ -5837,18 +7210,21 @@ mod tests {
         assert!(APP_JS.contains("screenFrame.style.width"));
         assert!(APP_JS.contains("screenFrame.style.height"));
         assert!(APP_CSS.contains("transform: scale(var(--screen-scale, 1));"));
-        assert!(APP_CSS.contains("grid-auto-rows: max-content;"));
-        assert!(APP_CSS.contains("place-content: center;"));
         assert!(APP_CSS.contains("justify-content: center;"));
+        assert!(APP_CSS.contains("display: flex;"));
+        assert!(APP_CSS.contains("flex-direction: column;"));
+        assert!(APP_JS.contains("function componentSizingKind(component)"));
+        assert!(APP_JS.contains("function componentContainsSizingKind(component, sizing)"));
+        assert!(APP_JS.contains("function renderRatioComponent(component, scope = {})"));
         assert!(APP_JS.contains("function markSingleFrameComponentLayer("));
         assert!(APP_JS.contains("function fitPuzzleFrameComponents("));
         assert!(APP_JS.contains("Math.min(frame.width / cols, frame.height / rows)"));
         assert!(APP_JS.contains(r#"root.dataset.frameComponent = "true";"#));
+        assert!(APP_JS.contains(r#"slot.dataset.sceneSizing = "ratio";"#));
         assert!(APP_CSS.contains(".scene-layer.has-single-frame-component"));
-        assert!(APP_CSS.contains("grid-template: minmax(0, 1fr) / minmax(0, 1fr);"));
-        assert!(APP_CSS.contains(
-            ".scene-layer.has-single-frame-component > .board[data-frame-component=\"true\"]"
-        ));
+        assert!(APP_CSS.contains(".scene-ratio-slot"));
+        assert!(APP_CSS.contains("flex: 1 1 auto;"));
+        assert!(APP_CSS.contains(".scene-flow"));
         assert!(!APP_JS.contains(r#""has-puzzle-scene""#));
         assert!(!APP_CSS.contains(".scene-layer.has-puzzle-scene"));
         assert!(!APP_CSS.contains("justify-content: space-between;"));
@@ -5868,31 +7244,304 @@ mod tests {
     }
 
     #[test]
+    fn html_play_standard_choice_focus_uses_logical_grid() {
+        assert!(APP_JS.contains("function standardChoiceFocusCells(scene = currentSceneDef())"));
+        assert!(APP_JS.contains("function componentRowFootprint(components, context = {})"));
+        assert!(APP_JS.contains("function componentColumnFootprint(components, context = {})"));
+        assert!(APP_JS.contains("component.kind === \"choice\" && !context.insideFor"));
+        assert!(APP_JS.contains("component.kind === \"conditional\""));
+        assert!(APP_JS.contains("return emptyCellFootprint();"));
+        assert!(
+            APP_JS.contains("function standardChoiceDirectionalTarget(cells, cursor, direction)")
+        );
+        assert!(APP_JS.contains("cell.y === current.y && cell.x > current.x"));
+        assert!(APP_JS.contains("cell.x === current.x && cell.y > current.y"));
+        assert!(APP_JS.contains("if (candidates.length === 0)"));
+        assert!(APP_JS.contains("return null;"));
+        assert!(
+            APP_JS.contains("effects.push({ kind: \"standard_choice\", input: standardInput });")
+        );
+        assert!(APP_CSS.contains("button.standard-choice.is-selected"));
+    }
+
+    #[test]
+    fn puzzlescript_theme_reserves_terminal_button_width_for_confirm_glyphs() {
+        assert!(APP_JS.contains("const puzzlescriptTerminalWidth = 34;"));
+        assert!(THEME_PRESETS_CSS.contains("--ps-terminal-control-width: 36ch;"));
+        assert!(THEME_PRESETS_CSS.contains("width: min(100%, var(--ps-terminal-control-width));"));
+        assert!(THEME_PRESETS_CSS.contains("white-space: nowrap;"));
+        assert!(THEME_PRESETS_CSS.contains(".theme-puzzlescript button {\n  overflow: hidden;\n}"));
+    }
+
+    #[test]
+    fn html_play_commits_snapshot_before_showing_message_events() {
+        let render_start = APP_JS.find("function render(state) {").unwrap();
+        let render_body = &APP_JS[render_start..];
+        let scene_index = render_body.find("renderSceneStack(state);").unwrap();
+        let message_index = render_body
+            .find("applyMessageEvents(state?.messageEvents || []);")
+            .unwrap();
+        assert!(scene_index < message_index);
+    }
+
+    #[test]
+    fn html_play_queues_busy_inputs_instead_of_dropping_them() {
+        assert!(APP_JS.contains("pendingCommandQueue.push(command);"));
+        assert!(APP_JS.contains("currentState?.busy || clientPendingWaits > 0"));
+        assert!(
+            !APP_JS.contains("if (currentState.busy) {\n    return;\n  }\n  broadcastPuzzle3Key")
+        );
+        assert!(!APP_JS.contains("clientPendingAnimations"));
+        assert!(!APP_JS.contains("clientPendingCommands"));
+    }
+
+    #[test]
+    fn html_play_message_popup_uses_explicit_default_dismiss_keys() {
+        assert!(APP_JS.contains("function isMessageDismissKey(event)"));
+        assert!(APP_JS.contains("rawKey === \"Enter\""));
+        assert!(APP_JS.contains("rawKey === \" \""));
+        assert!(APP_JS.contains("key === \"x\""));
+        assert!(APP_JS.contains("if (messagePopup) {\n    event.preventDefault();\n    if (isMessageDismissKey(event)) {\n      closeMessagePopup();\n    }\n    return;\n  }"));
+        assert!(!APP_JS.contains("backdrop.addEventListener(\"click\", closeMessagePopup);"));
+        assert!(APP_CSS.contains(".message-popup-backdrop:focus {\n  outline: none;\n}"));
+    }
+
+    #[test]
+    fn html_play_consumes_sound_events_during_render() {
+        let render_start = APP_JS.find("function render(state) {").unwrap();
+        let render_body = &APP_JS[render_start..];
+        let sound_index = render_body
+            .find("soundRuntime.applyEvents(state?.soundEvents || []);")
+            .unwrap();
+        let clear_index = render_body.find("state.soundEvents = [];").unwrap();
+        assert!(sound_index < clear_index);
+    }
+
+    #[test]
+    fn html_play_serializes_level_refs_as_quoted_scene_args() {
+        assert!(APP_JS.contains("function exprValueSource(value)"));
+        assert!(APP_JS.contains("value?.kind === \"level\""));
+        assert!(APP_JS.contains("return JSON.stringify(value.name);"));
+    }
+
+    #[test]
     fn puzzle3_app_exposes_editor_preview_update_contract() {
         assert!(PUZZLE3_APP_JS.contains("function applyPuzzle3PreviewUpdate(update = {})"));
         assert!(PUZZLE3_APP_JS.contains("PuzzleStudioUpdatePuzzle3Preview"));
         assert!(PUZZLE3_APP_JS.contains("PuzzleStudioRenderPuzzle3ModelComponent"));
         assert!(PUZZLE3_APP_JS.contains("PuzzleStudioInitialModelComponentPreview"));
-        assert!(
-            PUZZLE3_APP_JS
-                .contains("function applyPuzzle3ModelComponentPreviewUpdate(update = {})")
-        );
+        assert!(PUZZLE3_APP_JS
+            .contains("function applyPuzzle3ModelComponentPreviewUpdate(update = {})"));
+        assert!(PUZZLE3_APP_JS.contains(
+            "const initialModelPreview = window.PuzzleStudioInitialModelComponentPreview;"
+        ));
+        assert!(PUZZLE3_APP_JS.contains(
+            "await loadSnapshotData(next, puzzle3ModelComponentPreviewLoadOptions(initialModelPreview));"
+        ));
+        assert!(PUZZLE3_APP_JS
+            .contains("window.PuzzleStudioInitialModelComponentPreviewConsumed = true;"));
+        assert!(PUZZLE3_APP_JS.contains(
+            "function puzzle3PreviewSnapshot(update = {}, source = snapshot || fallbackSnapshot)"
+        ));
+        assert!(!PUZZLE3_APP_JS.contains(
+            "await loadSnapshotData(nextSnapshot);\n  if (window.PuzzleStudioInitialModelComponentPreview"
+        ));
         assert!(PUZZLE3_APP_JS.contains("modelComponentPreview: {"));
         assert!(PUZZLE3_APP_JS.contains("if (editorModelComponentPreview)"));
         assert!(PUZZLE3_APP_JS.contains("mergePuzzle3PreviewSettings"));
-        assert!(
-            PUZZLE3_APP_JS
-                .contains("applyPuzzle3PreviewResources(next, update.resources || update)")
-        );
+        assert!(PUZZLE3_APP_JS
+            .contains("applyPuzzle3PreviewResources(next, update.resources || update)"));
         assert!(PUZZLE3_APP_JS.contains("function applyPuzzle3PreviewResources"));
-        assert!(
-            PUZZLE3_APP_JS
-                .contains("target.sprites = JSON.parse(JSON.stringify(resources.sprites));")
-        );
+        assert!(PUZZLE3_APP_JS
+            .contains("target.sprites = JSON.parse(JSON.stringify(resources.sprites));"));
         assert!(PUZZLE3_APP_JS.contains("next.levels[levelIndex]"));
         assert!(PUZZLE3_APP_JS.contains("next.camera = cloneCamera(update.camera);"));
         assert!(PUZZLE3_APP_JS.contains("next.settings = mergePuzzle3PreviewSettings"));
         assert!(PUZZLE3_APP_JS.contains(r#"coordinateSpace: "canvas-css-px""#));
+        assert!(PUZZLE3_APP_JS.contains(
+            "const target = source?.target || source?.origin || modelCenterForSize(size);"
+        ));
+        assert!(PUZZLE3_APP_JS.contains("function modelCenterForSize(size)"));
+        assert!(PUZZLE3_APP_JS.contains("view.originX = width / 2;"));
+        assert!(!PUZZLE3_APP_JS.contains(") / 2 + (Number(target.x) || 0)"));
+    }
+
+    #[test]
+    fn puzzle3_app_supports_focus_relative_viewport_framing() {
+        assert!(PUZZLE3_APP_JS
+            .contains("function fitProjectionToViewport(renderContext, options = {})"));
+        assert!(PUZZLE3_APP_JS.contains(
+            "function viewportFramingProjectionBounds(size, camera, viewport, focusCell)"
+        ));
+        assert!(PUZZLE3_APP_JS.contains("viewport.framingBox.height === \"full\""));
+        assert!(PUZZLE3_APP_JS.contains("function scheduleViewportAnimation()"));
+        assert!(PUZZLE3_APP_JS.contains("target.follow !== \"smooth\" || view.viewportSnapNext"));
+        assert!(PUZZLE3_APP_JS.contains("function smoothViewportOrigin(nextX, nextY, target)"));
+        assert!(PUZZLE3_APP_JS.contains("function smoothViewportMaxLag(target)"));
+        assert!(PUZZLE3_APP_JS.contains("const amount = 0.12;"));
+        assert!(PUZZLE3_APP_JS.contains("function requestSceneViewportDraw()"));
+        assert!(PUZZLE3_APP_JS.contains("if (smoothViewportActive())"));
+        assert!(PUZZLE3_APP_JS.contains("function smoothViewportActive()"));
+        assert!(PUZZLE3_APP_JS.contains("requestSceneViewportDraw();"));
+        assert!(
+            PUZZLE3_APP_JS.contains("const advanceViewport = options.advanceViewport !== false;")
+        );
+        assert!(
+            PUZZLE3_APP_JS.contains("fitProjectionToViewport(renderContext, { advanceViewport })")
+        );
+        assert!(PUZZLE3_APP_JS.contains("if (options.advanceViewport === false)"));
+        assert!(PUZZLE3_APP_JS.contains("target.cellScale * projectionZoom(camera) * 3.5"));
+        assert!(PUZZLE3_APP_JS.contains("const SCENE_DEFAULT_WIDTH = 16;"));
+        assert!(PUZZLE3_APP_JS.contains("const SCENE_DEFAULT_HEIGHT = 12;"));
+        assert!(PUZZLE3_APP_JS.contains("function puzzle3SceneDisplaySize()"));
+        assert!(PUZZLE3_APP_JS.contains("return puzzle3SceneDisplaySize();"));
+        assert!(!PUZZLE3_APP_JS.contains("function currentPuzzle3IntrinsicSize()"));
+        assert!(PUZZLE3_APP_JS.contains(
+            "function viewportFitForFrame(frame, viewportBounds, centerPoint = null, zoom = 1, follow = \"snap\")"
+        ));
+        assert!(!PUZZLE3_APP_JS.contains("function viewportFramingProjectionCenter"));
+        assert!(PUZZLE3_APP_JS
+            .contains("function viewportFocusProjectionAnchor(size, camera, viewport, focusCell)"));
+        assert!(PUZZLE3_APP_JS.contains(
+            "function viewportFocusVisualProjectionAnchor(size, camera, viewport, focusCell)"
+        ));
+        assert!(PUZZLE3_APP_JS.contains(
+            "for (const voxel of objectVoxels(focusCell.position || {}, object, sourceKey))"
+        ));
+        assert!(
+            PUZZLE3_APP_JS.contains("function viewportFramingRanges(size, viewport, focusCell)")
+        );
+        assert!(PUZZLE3_APP_JS.contains("function virtualCenteredCellRange(center, span)"));
+        assert!(PUZZLE3_APP_JS.contains(
+            "const xRange = virtualCenteredCellRange(Number(position.x) || 0, viewport.framingBox.width);"
+        ));
+        assert!(PUZZLE3_APP_JS.contains(
+            "const yRange = virtualCenteredCellRange(Number(position.y) || 0, viewport.framingBox.depth);"
+        ));
+        assert!(PUZZLE3_APP_JS.contains(
+            ": virtualCenteredCellRange(Number(position.z) || 0, viewport.framingBox.height);"
+        ));
+        assert!(!PUZZLE3_APP_JS.contains("function centeredCellRange(center, span, limit)"));
+        assert!(PUZZLE3_APP_JS.contains(
+            "const anchorPoint = viewportFocusProjectionAnchor(size, camera, viewport, focus);"
+        ));
+        assert!(PUZZLE3_APP_JS
+            .contains("const anchorX = Number.isFinite(centerX) ? centerX : (minX + maxX) / 2;"));
+        assert!(PUZZLE3_APP_JS.contains("originY: frameHeight / 2 - anchorY * effectiveScale"));
+        assert!(PUZZLE3_APP_JS.contains("viewportFitForFrame("));
+        assert!(PUZZLE3_APP_JS.contains("function puzzle3RenderContext(width = canvas.clientWidth, height = canvas.clientHeight)"));
+        assert!(PUZZLE3_APP_JS.contains("function normalizeFrame(frame)"));
+        assert!(PUZZLE3_APP_JS.contains("function normalizeModelSize(size)"));
+        assert!(PUZZLE3_APP_JS
+            .contains("function fitScaleForProjectedBounds(frame, bounds, margin = 0)"));
+        assert!(PUZZLE3_APP_JS.contains("const candidates = renderCellCandidates(renderContext);"));
+        assert!(PUZZLE3_APP_JS
+            .contains("function renderCellCandidates(renderContext = puzzle3RenderContext())"));
+        assert!(PUZZLE3_APP_JS.contains("function viewportRenderCullingEnabled(renderContext)"));
+        assert!(!PUZZLE3_APP_JS.contains("function viewportRenderPixelMargin"));
+        assert!(!PUZZLE3_APP_JS.contains("function projectedCellPixelMargin"));
+        assert!(PUZZLE3_APP_JS.contains("function cellProjectsIntoFrame(position, frame)"));
+        assert!(PUZZLE3_APP_JS
+            .contains("cellProjectsIntoFrame(cell.position || {}, renderContext.frame)"));
+        assert!(PUZZLE3_APP_JS.contains("bounds.maxX >= 0"));
+        assert!(PUZZLE3_APP_JS.contains("bounds.minX <= frame.width"));
+        assert!(PUZZLE3_APP_JS.contains("bounds.maxY >= 0"));
+        assert!(PUZZLE3_APP_JS.contains("bounds.minY <= frame.height"));
+        assert!(PUZZLE3_APP_JS.contains("cellHasRenderableVoxels(cell)"));
+        assert!(PUZZLE3_APP_JS
+            .contains("const effectiveScale = baseScale * Math.max(0.1, Number(zoom) || 1);"));
+        assert!(PUZZLE3_APP_JS.contains("cellScale: baseScale"));
+    }
+
+    #[test]
+    fn app_gates_puzzle3_key_forwarding_while_busy_like_2d_inputs() {
+        assert!(APP_JS.contains(
+            "if (currentState.busy) {\n    return;\n  }\n  broadcastPuzzle3Key(event, \"down\");"
+        ));
+        assert!(APP_JS.contains("document.addEventListener(\"keyup\", (event) => {"));
+        assert!(APP_JS.contains("broadcastPuzzle3Key(event, \"up\");"));
+        assert!(PUZZLE3_APP_JS.contains("function handleComponentEmbedKeydown(event)"));
+        assert!(PUZZLE3_APP_JS
+            .contains("window.addEventListener(\"keydown\", handleComponentEmbedKeydown);"));
+        assert!(PUZZLE3_APP_JS.contains("function handleComponentEmbedKeyup(event)"));
+        assert!(PUZZLE3_APP_JS
+            .contains("window.addEventListener(\"keyup\", handleComponentEmbedKeyup);"));
+        assert!(PUZZLE3_APP_JS.contains("function startHeldSceneInput(holdId, input)"));
+        assert!(PUZZLE3_APP_JS.contains("heldSceneInputs.set(holdId, input);"));
+        assert!(!PUZZLE3_APP_JS.contains("SCENE_INPUT_REPEAT_INTERVAL_MS"));
+        assert!(!PUZZLE3_APP_JS.contains("setInterval(() => enqueueSceneInput"));
+    }
+
+    #[test]
+    fn puzzle3_app_does_not_render_missing_sprite_fallback_cube() {
+        assert!(PUZZLE3_APP_JS.contains("if (!object.sprite) {\n    return [];\n  }"));
+        assert!(PUZZLE3_APP_JS.contains("if (!template) {\n    return [];\n  }"));
+        assert!(PUZZLE3_APP_JS.contains("if (!sprite) {\n    return null;\n  }"));
+        assert!(!PUZZLE3_APP_JS.contains("cssVar(\"--top\") || \"#ffde8a\""));
+    }
+
+    #[test]
+    fn puzzle3_app_culls_only_opaque_internal_voxel_faces_across_cells() {
+        assert!(PUZZLE3_APP_JS.contains("function renderOpaqueOcclusion(renderContext)"));
+        assert!(PUZZLE3_APP_JS.contains("for (const cell of snapshot.cells || [])"));
+        assert!(PUZZLE3_APP_JS.contains("renderContext.opaqueOcclusion = occupied;"));
+        assert!(PUZZLE3_APP_JS
+            .contains("function cellVisibleVoxelsForRender(cell, renderContext = null)"));
+        assert!(PUZZLE3_APP_JS.contains("renderContext.visibleVoxelCells = new Map();"));
+        assert!(PUZZLE3_APP_JS.contains("function isVoxelFaceOccluded(voxel, offset, occupied)"));
+        assert!(PUZZLE3_APP_JS
+            .contains("if (voxel.opaque !== false && occupied.opaque.has(adjacentKey))"));
+        assert!(PUZZLE3_APP_JS.contains("occupied.bySource.has(`${sourceKey}|${adjacentKey}`)"));
+    }
+
+    #[test]
+    fn puzzle3_app_preserves_alpha_voxel_layers_for_depth_sorting() {
+        assert!(PUZZLE3_APP_JS.contains("function visibleVoxelStack(stack)"));
+        assert!(PUZZLE3_APP_JS.contains("const visible = [];"));
+        assert!(PUZZLE3_APP_JS.contains("opaque: source.a >= 0.999"));
+        assert!(PUZZLE3_APP_JS.contains("if (renderVoxel.opaque) {\n      visible.length = 0;"));
+        assert!(PUZZLE3_APP_JS.contains("visible.push(renderVoxel);"));
+        assert!(PUZZLE3_APP_JS.contains("voxels.push(...visibleStack);"));
+        assert!(!PUZZLE3_APP_JS.contains("function compositeVoxelStack(stack)"));
+        assert!(!PUZZLE3_APP_JS.contains("function compositeColor(source, destination)"));
+    }
+
+    #[test]
+    fn puzzle3_app_caches_static_sprite_voxel_templates() {
+        assert!(PUZZLE3_APP_JS.contains("const spriteVoxelTemplateCache = new WeakMap();"));
+        assert!(PUZZLE3_APP_JS.contains("function spriteVoxelTemplate(spriteName)"));
+        assert!(PUZZLE3_APP_JS.contains("function buildSpriteVoxelTemplate(sprite)"));
+        assert!(PUZZLE3_APP_JS.contains("function instantiateSpriteVoxelTemplate(position, template, sourceKey = null, objectOrder = 0)"));
+        assert!(PUZZLE3_APP_JS.contains("spriteVoxelTemplateCache.get(sprite)"));
+        assert!(PUZZLE3_APP_JS.contains("spriteVoxelTemplateCache.set(sprite, template)"));
+        assert!(PUZZLE3_APP_JS.contains("localBounds: voxelBounds(localPosition, scale)"));
+        assert!(PUZZLE3_APP_JS.contains("const source = voxel.color || parseColor(voxel.fill);"));
+    }
+
+    #[test]
+    fn puzzle3_app_caches_render_geometry_by_dirty_cells() {
+        assert!(PUZZLE3_APP_JS.contains("const renderGeometryCache = createRenderGeometryCache();"));
+        assert!(PUZZLE3_APP_JS.contains("function syncRenderGeometryCache(renderContext = null)"));
+        assert!(PUZZLE3_APP_JS.contains("function renderCellSignature(cell)"));
+        assert!(PUZZLE3_APP_JS.contains("function expandDirtyCellKeys(keys)"));
+        assert!(PUZZLE3_APP_JS.contains("for (const offset of faceNeighborOffsets())"));
+        assert!(
+            PUZZLE3_APP_JS.contains("function rebuildVisibleCellGeometry(key, cell, signature)")
+        );
+        assert!(PUZZLE3_APP_JS.contains("function rebuildCachedCellFaces(key, cell)"));
+        assert!(PUZZLE3_APP_JS
+            .contains("renderGeometryCache.occupied = renderCachedOpaqueOcclusion();"));
+        assert!(PUZZLE3_APP_JS
+            .contains("function cellFaceGeometriesForRender(cell, renderContext = null)"));
+        assert!(PUZZLE3_APP_JS.contains("faces.push(...cellFaceGeometriesForRender(cell, renderContext).map(projectFaceGeometry));"));
+        assert!(PUZZLE3_APP_JS.contains("face: (group, rect) => faceGeometry("));
+        assert!(PUZZLE3_APP_JS.contains("function projectFaceGeometry(geometry)"));
+        assert!(PUZZLE3_APP_JS.contains("const primitive = geometry.primitive || {"));
+        assert!(PUZZLE3_APP_JS.contains("geometry.primitive = primitive;"));
+        assert!(PUZZLE3_APP_JS
+            .contains("primitive.ownerCell = projectCellRenderOwner(geometry.ownerCell);"));
+        assert!(!PUZZLE3_APP_JS.contains("compoundFace:"));
+        assert!(!PUZZLE3_APP_JS.contains("function compoundPolygonPaths(paths, fill)"));
     }
 
     #[test]
@@ -5993,12 +7642,39 @@ scene mixed_play {
         assert!(PUZZLE3_VISUAL_CORE_JS.contains("function comparePrimitiveOrder(a, b)"));
         assert!(PUZZLE3_VISUAL_CORE_JS.contains("function faceGridOrder(corners, view)"));
         assert!(PUZZLE3_VISUAL_CORE_JS.contains("function directionDepth(vector, view)"));
-        assert!(PUZZLE3_APP_JS.contains("primitives.sort(comparePrimitiveOrder);"));
+        assert!(PUZZLE3_VISUAL_CORE_JS.contains("function cameraOrderKey(view)"));
+        assert!(PUZZLE3_VISUAL_CORE_JS.contains("function cameraOrderBasis(view)"));
+        assert!(PUZZLE3_VISUAL_CORE_JS.contains("plane: signed.x + signed.y + signed.z"));
+        assert!(PUZZLE3_VISUAL_CORE_JS.contains("const axes = [\"x\", \"y\", \"z\"].sort"));
+        assert!(!PUZZLE3_VISUAL_CORE_JS.contains("adapter.compoundFace"));
+        assert!(!PUZZLE3_VISUAL_CORE_JS.contains("const depthDiff ="));
+        assert!(PUZZLE3_APP_JS.contains("primitives = orderScenePrimitives(primitives);"));
         assert!(PUZZLE3_APP_JS.contains("return Puzzle3VisualCore.comparePrimitiveOrder(a, b);"));
+        assert!(PUZZLE3_APP_JS.contains("function orderScenePrimitives(primitives)"));
+        assert!(PUZZLE3_APP_JS
+            .contains("view.primitiveSortCacheOrder.map((index) => primitives[index])"));
+        assert!(PUZZLE3_APP_JS.contains("function primitiveSortCacheKey(primitives)"));
+        assert!(PUZZLE3_APP_JS.contains("cameraOrderKey(),"));
+        assert!(PUZZLE3_APP_JS
+            .contains("return Puzzle3VisualCore.cameraOrderKey(puzzle3VisualView());"));
+        assert!(PUZZLE3_APP_JS
+            .contains("return Puzzle3VisualCore.faceGridOrder(corners, puzzle3VisualView());"));
+    }
+
+    #[test]
+    fn puzzle3_app_applies_pixelate_as_canvas_postprocess() {
         assert!(
-            PUZZLE3_APP_JS
-                .contains("return Puzzle3VisualCore.faceGridOrder(corners, puzzle3VisualView());")
+            PUZZLE3_APP_JS.contains("const pixelateBuffer = document.createElement(\"canvas\");")
         );
+        assert!(PUZZLE3_APP_JS.contains("applyPixelatePostprocess();"));
+        assert!(PUZZLE3_APP_JS.contains("function pixelateSettings()"));
+        assert!(PUZZLE3_APP_JS.contains(
+            "const raw = snapshot.settings?.pixelate ?? snapshot.settings?.pixel ?? false;"
+        ));
+        assert!(PUZZLE3_APP_JS.contains("function applyPixelatePostprocess()"));
+        assert!(PUZZLE3_APP_JS.contains("bufferCtx.imageSmoothingEnabled = settings.smoothing;"));
+        assert!(PUZZLE3_APP_JS.contains("ctx.imageSmoothingEnabled = false;"));
+        assert!(PUZZLE3_APP_JS.contains("ctx.setTransform(1, 0, 0, 1, 0, 0);"));
     }
 
     #[test]
@@ -6018,15 +7694,22 @@ scene mixed_play {
 
     #[test]
     fn standalone_again_turns_are_scheduled_between_snapshots() {
-        assert!(
-            STANDALONE_JS
-                .contains("this.defaultAgainMs = Number(exportData.defaultAgainMs ?? 120);")
-        );
+        assert!(STANDALONE_JS
+            .contains("this.defaultAgainMs = Number(exportData.defaultAgainMs ?? 120);"));
         assert!(STANDALONE_JS.contains("this.scheduleAgainTurn(target, 0, token);"));
         assert!(STANDALONE_JS.contains("setTimeout(() => {"));
         assert!(STANDALONE_JS.contains("this.notifyStateChanged();"));
         assert!(STANDALONE_JS.contains("this.runAgainTurn(target);"));
         assert!(STANDALONE_JS.contains("(this.pendingAgainTurns || 0) > 0"));
+    }
+
+    #[test]
+    fn standalone_runtime_accepts_parenthesized_level_goto_commands() {
+        assert!(STANDALONE_JS.contains("parseRuntimeSceneTarget(value)"));
+        assert!(STANDALONE_JS.contains("const argsStart = value.indexOf(\"(\");"));
+        assert!(STANDALONE_JS.contains("!args.includes(\"=\") && !args.includes(\",\")"));
+        assert!(STANDALONE_JS.contains("params: [{ name: \"level\""));
+        assert!(STANDALONE_JS.contains("value: this.parseRuntimeExpr(args)"));
     }
 
     #[test]
@@ -6036,34 +7719,25 @@ scene mixed_play {
         assert!(STANDALONE_JS.contains("return this.cloneState(state);"));
         assert!(STANDALONE_JS.contains("const presentation = focusedPuzzle"));
         assert!(STANDALONE_JS.contains("presentationSnapshotForState(state, options = {})"));
-        assert!(
-            APP_JS.contains("screenHasPuzzle: currentSceneHasPuzzle() || Boolean(state.scene)")
-        );
-        assert!(APP_JS.contains("if (!currentSceneHasPuzzle() && !currentState.scene)"));
+        assert!(APP_JS.contains("screenHasPuzzle: currentSceneHasPuzzle() || Boolean(state.scene)"));
+        assert!(APP_JS.contains("if (input && (currentSceneHasPuzzle() || currentState.scene))"));
         assert!(APP_JS.contains("acceptModelInput: event.data.acceptModelInput === true"));
         assert!(APP_JS.contains("function applyStandaloneEditorInput(command)"));
-        assert!(
-            APP_JS.contains(
-                "const acceptsEditorInput = standaloneRuntime?.editorPreviewInputEnabled"
-            )
-        );
+        assert!(APP_JS
+            .contains("const acceptsEditorInput = standaloneRuntime?.editorPreviewInputEnabled"));
         assert!(APP_JS.contains("standaloneRuntime?.inputIdsByName?.has(command)"));
         assert!(APP_JS.contains("standaloneRuntime.applyInputName(command);"));
         assert!(STANDALONE_JS.contains("this.editorPreviewInputEnabled = false;"));
-        assert!(
-            STANDALONE_JS
-                .contains("this.currentSceneAcceptsModelInput() || this.editorPreviewInputEnabled")
-        );
+        assert!(STANDALONE_JS
+            .contains("this.currentSceneAcceptsModelInput() || this.editorPreviewInputEnabled"));
         assert!(STANDALONE_JS.contains(
             "(options.materializeDisplay || options.materializeTurnStart) && options.acceptModelInput !== true"
         ));
         assert!(STANDALONE_JS.contains(
             "this.materializeDisplayProgram(displayProgram, state, \"display_level_clear\")"
         ));
-        assert!(
-            STANDALONE_JS
-                .contains("this.materializeDisplayProgram(displayProgram, state, \"display\")")
-        );
+        assert!(STANDALONE_JS
+            .contains("this.materializeDisplayProgram(displayProgram, state, \"display\")"));
     }
 
     #[test]
@@ -6294,7 +7968,8 @@ scene playing {
     #[test]
     fn standalone_export_embeds_core_wasm_runtime() {
         let source = r#"
-title Wasm Export
+	title Wasm Export
+again_interval = 90ms
 
 puzzle board {
   layers {
@@ -6324,6 +7999,7 @@ scene playing {
             .expect("export should succeed");
 
         assert!(html.contains("window.PuzzleStandaloneEmbeddedWasm"));
+        assert!(html.contains("\\\"defaultAgainMs\\\":90"));
         assert!(html.contains("WasmCoreRuntime"));
         assert!(STANDALONE_JS.contains("coreTransitionProgramOutcome("));
         assert!(STANDALONE_JS.contains("transition_program_outcome("));
@@ -6375,6 +8051,63 @@ scene playing {
         assert_eq!(data.matches("\"scenes\":[").count(), 1);
         assert_eq!(data.matches("\"screens\":[").count(), 1);
         assert!(data.contains("\"persistentVars\":["));
+    }
+
+    #[test]
+    fn standalone_export_includes_progress_savedata_contract() {
+        let source = r#"
+title Progress Export
+
+puzzle default {
+persistent var bonus = 0
+
+layers 1
+empty .
+object Player 0
+
+levels {
+    legend P = Player
+
+    level one
+    P
+
+    level two
+    P
+}
+
+rules {
+    [ Player ] -> [ Player ] set bonus = 1
+}
+}
+"#;
+        let loaded = parse_game(source).unwrap();
+        let state = ServerState::new(
+            loaded,
+            source.to_string(),
+            "games/progress_export/game.puzzle".to_string(),
+            String::new(),
+            String::new(),
+            SolverConfig::default(),
+        );
+        let mut data = String::new();
+        push_export_data(&mut data, &state);
+
+        assert!(data.contains(r#""saveKey":"Progress Export:"#));
+        assert!(data.contains(r#""progressSaveVersion":1"#));
+        assert!(data.contains(r#""globals":[{"id":0,"name":"bonus"}]"#));
+        assert!(data.contains(r#""persistentVars":[0]"#));
+        assert!(STANDALONE_JS.contains("progressSaveData()"));
+        assert!(STANDALONE_JS.contains("restoreProgressSave()"));
+        assert!(STANDALONE_JS.contains("writeProgressSave()"));
+        assert!(STANDALONE_JS.contains("hasProgressSaveData()"));
+        assert!(STANDALONE_JS.contains("has_progress_save: this.hasProgressSaveData()"));
+        assert!(STANDALONE_JS.contains("window.localStorage?.setItem"));
+        assert!(STANDALONE_JS.contains("window.localStorage?.getItem"));
+        assert!(STANDALONE_JS.contains("cleared: this.clearedLevels[index] === true"));
+        assert!(STANDALONE_JS.contains("currentLevel: this.currentSaveLevelName()"));
+        assert!(STANDALONE_JS.contains("persistentVars: this.persistentVarSaveData()"));
+        assert!(STANDALONE_JS.contains("const selected = this.selectedLevelIndex;"));
+        assert!(STANDALONE_JS.contains("this.sceneAcceptsLevel(name, selected)"));
     }
 
     #[test]
@@ -6469,6 +8202,77 @@ rules {
         assert!(!html.contains("Puzzle3DTestRuntime"));
         assert!(html.contains("Microban Basic 3D"));
         assert!(html.contains("--accent: #123456"));
+    }
+
+    #[test]
+    fn puzzle3_export_embeds_source_as_string_not_json() {
+        let html = export_puzzle3_html(
+            r#"{"title":"Tiny"}"#,
+            "title \"Tiny\"\n",
+            "games/tiny.puzzle",
+            "",
+        );
+
+        assert!(html.contains("window.Puzzle3DFixture = JSON.parse"));
+        assert!(html.contains("window.Puzzle3DSource = \"title \\\"Tiny\\\"\\n\";"));
+        assert!(html.contains("window.Puzzle3DPath = \"games/tiny.puzzle\";"));
+        assert!(!html.contains("window.Puzzle3DSource = JSON.parse"));
+        assert!(!html.contains("window.Puzzle3DPath = JSON.parse"));
+    }
+
+    #[test]
+    fn puzzle3_screenshot_default_scene_prefers_model_component_scene() {
+        let source = r#"
+title "Screenshot"
+
+puzzle3 cube {
+  layers {
+    actor = Player
+  }
+  rules {
+  }
+}
+
+scene title {
+  view {
+    title "Screenshot"
+    button "Play" -> goto playing
+  }
+}
+
+scene playing {
+  state {
+    board = puzzle3 cube
+  }
+  view {
+    puzzle3 board
+  }
+}
+
+levels3 basic of cube {
+  legend {
+    P = Player
+  }
+  level one {
+    P
+  }
+}
+"#;
+        let document = puzzle_lang::parse_game(source).expect("parse puzzle3 document");
+        assert_eq!(
+            default_puzzle3_screenshot_scene(&document).as_deref(),
+            Some("playing")
+        );
+    }
+
+    #[test]
+    fn screenshot_file_url_encodes_path_for_browser() {
+        let path = Path::new("/tmp/Puzzle Studio/screen one.html");
+        assert_eq!(
+            file_url(path),
+            "file:///tmp/Puzzle%20Studio/screen%20one.html"
+        );
+        assert_eq!(url_query_value("level one"), "level%20one");
     }
 }
 

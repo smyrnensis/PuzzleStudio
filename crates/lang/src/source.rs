@@ -312,6 +312,7 @@ fn canonical_section_block(normalized: &str) -> Option<&'static str> {
         "on_display" => Some("on_display"),
         "on_level_start" => Some("on_level_start"),
         "on_level_clear" => Some("on_level_clear"),
+        "on_last_level_clear" => Some("on_last_level_clear"),
         "on_scene_start" => Some("on_scene_start"),
         "state" => Some("state"),
         "keys" => Some("keys"),
@@ -348,6 +349,7 @@ fn starts_puzzle_section(tokens: &[&str]) -> bool {
         ["map", ..]
             | ["on_level_start"]
             | ["on_level_clear"]
+            | ["on_last_level_clear"]
             | ["on_display"]
             | ["objects"]
             | ["display_objects"]
@@ -409,6 +411,7 @@ fn starts_inline_block(tokens: &[&str], line: &str) -> bool {
         ["map", ..]
             | ["on_level_start"]
             | ["on_level_clear"]
+            | ["on_last_level_clear"]
             | ["on_display"]
             | ["objects"]
             | ["display_objects"]
@@ -437,7 +440,6 @@ fn starts_inline_block(tokens: &[&str], line: &str) -> bool {
             | ["keys"]
             | ["resources"]
             | ["on_scene_start"]
-            | ["command", ..]
             | ["input", ..]
             | ["action", ..]
             | ["if", ..]
@@ -855,7 +857,6 @@ fn source_opens_block(line: &str, tokens: &[&str], current: Option<SourceScope>)
                 | ["state"]
                 | ["rules"]
                 | ["on_scene_start"]
-                | ["command", ..]
                 | ["input", ..]
                 | ["action", ..]
                 | ["if", ..]
@@ -1016,7 +1017,7 @@ mod tests {
 
     #[test]
     fn source_context_preserves_token_spans_before_comments() {
-        let source = "scene title {\n  button \"Play\" -> start levels in playing // comment\n}\n";
+        let source = "scene title {\n  button \"Play\" -> goto playing // comment\n}\n";
         let context = scan_source_context(source);
         let button_line = context
             .lines

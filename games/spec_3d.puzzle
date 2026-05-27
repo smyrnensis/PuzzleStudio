@@ -7,11 +7,6 @@ render {
     yaw = 15
     pitch = 55
     zoom = 1.1
-    interactive_look = true
-    interactive_zoom = true
-  }
-  grid {
-    occupied_cells = true
   }
 }
 
@@ -43,23 +38,20 @@ on_level_clear {
 scene title {
 view {
   title "Microban 3D"
-  button "New Game" -> start microban in sokoban
+  button "New Game" -> goto sokoban
   button "Level Select" -> goto level_select
 }
 }
 
 scene sokoban {
 state {
-  board = puzzle3 sokoban
+  puzzle3 sokoban
 }
-
-inputs {
-  level_select <- q Escape
+keys {
+q Escape -> goto level_select	
 }
-
 rules {
-  board.rules
-  if input == level_select -> goto level_select
+  step sokoban
 }
 
 view {
@@ -75,7 +67,7 @@ view {
   title "Select Level"
   column scroll=true {
     for level in levels {
-      button join(level.num, ". ", level.title) -> goto sokoban(level)
+      choice join(level.num, ". ", level.title) -> goto sokoban(level)
     }
   }
   button "Exit" -> goto title

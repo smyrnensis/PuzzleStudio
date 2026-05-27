@@ -2,9 +2,10 @@ use std::collections::BTreeMap;
 use std::fmt::Write;
 
 use crate::{
-    Direction3, Guard3, Lifecycle3, LifecycleCommand3, MatchCell3, ObjectId, ParsedPuzzle3,
-    Pattern3, Rule3, RuleApplication3, RuleEffect3, SelectorCatalog3, Size3, SpriteColor3,
-    SpriteSet3, WinCondition3, WriteOp3,
+    Direction3, Guard3, Lifecycle3, LifecycleCommand3, MatchCell3, ObjectId, ObjectSelector3,
+    ParsedPuzzle3, Pattern3, Rule3, RuleApplication3, RuleEffect3, SelectorCatalog3, SelectorTag3,
+    Size3, SpriteColor3, SpriteSet3, ViewportFollow3, ViewportHeight3, ViewportMode3,
+    WinCondition3, WriteOp3,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -48,6 +49,7 @@ pub fn export_visual_fixture_json_with_title_and_scenes(
     write_size_field(&mut out, 1, "size", bundle.levels[0].level.size, true);
     write_camera(&mut out, parsed);
     write_settings(&mut out, parsed);
+    write_viewport(&mut out, parsed);
     write_directions(&mut out);
     write_direction_sets(&mut out);
     write_controls(&mut out, parsed);
@@ -79,9 +81,10 @@ fn write_camera(out: &mut String, parsed: &ParsedPuzzle3) {
 
 fn write_settings(out: &mut String, parsed: &ParsedPuzzle3) {
     let camera = &parsed.settings.camera;
+    let pixelate = &parsed.settings.pixelate;
     let _ = writeln!(
         out,
-        "  \"settings\": {{ \"interactiveLook\": {}, \"interactiveZoom\": {}, \"grid\": {{ \"visibility\": {}, \"occupied_cells\": {} }}, \"shade\": {} }},",
+        "  \"settings\": {{ \"interactiveLook\": {}, \"interactiveZoom\": {}, \"grid\": {{ \"visibility\": {}, \"occupied_cells\": {} }}, \"shade\": {}, \"pixelate\": {{ \"enabled\": {}, \"scale\": {}, \"smoothing\": {} }} }},",
         camera.interactive_look,
         camera.interactive_zoom,
         if parsed.settings.grid.occupied_cells {
@@ -91,7 +94,90 @@ fn write_settings(out: &mut String, parsed: &ParsedPuzzle3) {
         },
         parsed.settings.grid.occupied_cells,
         parsed.settings.sprite.shade,
+        pixelate.enabled,
+        pixelate.scale,
+        pixelate.smoothing,
     );
+}
+
+fn write_viewport(out: &mut String, parsed: &ParsedPuzzle3) {
+    let viewport = &parsed.settings.viewport;
+    let Some(framing) = viewport.framing else {
+        return;
+    };
+    let mode = match viewport.mode {
+        ViewportMode3::Full => "full",
+        ViewportMode3::Centered => "centered",
+    };
+    let follow = match viewport.follow {
+        ViewportFollow3::Snap => "snap",
+        ViewportFollow3::Smooth => "smooth",
+    };
+    out.push_str("  \"viewport\": { ");
+    let _ = write!(
+        out,
+        "\"mode\": {}, \"follow\": {}, \"focus\": {}, \"focusObjects\": [",
+        json_string(mode),
+        json_string(follow),
+        json_string(&viewport.focus),
+    );
+    for (index, object) in viewport_focus_objects(parsed).iter().enumerate() {
+        if index > 0 {
+            out.push_str(", ");
+        }
+        let _ = write!(out, "{}", object.0);
+    }
+    out.push_str("], \"framingBox\": { ");
+    let _ = write!(
+        out,
+        "\"width\": {}, \"depth\": {}, \"height\": ",
+        framing.width, framing.depth,
+    );
+    match framing.height {
+        ViewportHeight3::Full => out.push_str("\"full\""),
+        ViewportHeight3::Size(height) => {
+            let _ = write!(out, "{height}");
+        }
+    }
+    out.push_str(" } },\n");
+}
+
+fn viewport_focus_objects(parsed: &ParsedPuzzle3) -> Vec<ObjectId> {
+    let focus = &parsed.settings.viewport.focus;
+    let selector = viewport_focus_selector(focus, &parsed.catalog);
+    let mut objects = selector
+        .and_then(|selector| parsed.catalog.resolve(&selector).ok())
+        .map(|resolved| resolved.alternatives)
+        .unwrap_or_default();
+    objects.sort_by_key(|object| object.0);
+    objects.dedup();
+    objects
+}
+
+fn viewport_focus_selector(focus: &str, catalog: &SelectorCatalog3) -> Option<ObjectSelector3> {
+    let parts = focus.split(':').collect::<Vec<_>>();
+    if parts.len() > 1 {
+        return Some(ObjectSelector3::variant(
+            parts[0],
+            parts[1..]
+                .iter()
+                .map(|part| {
+                    if *part == "*" {
+                        SelectorTag3::any()
+                    } else {
+                        SelectorTag3::value(*part)
+                    }
+                })
+                .collect(),
+        ));
+    }
+    if catalog.groups.iter().any(|group| group.name == focus) {
+        return Some(ObjectSelector3::group(focus));
+    }
+    if catalog.objects.iter().any(|object| object.name == focus) {
+        return Some(ObjectSelector3::object(focus));
+    }
+    None
 }
 
 fn format_zoom(zoom_milli: u16) -> String {
@@ -181,7 +267,7 @@ fn write_directions(out: &mut String) {
 
 fn write_direction_sets(out: &mut String) {
     out.push_str("  \"directionSets\": {\n");
-    out.push_str("    \"horizontal\": [\"left\", \"right\", \"forward\", \"backward\"],\n");
+    out.push_str("    \"horizontal\": [\"left\", \"right\", \"front\", \"back\"],\n");
     out.push_str("    \"vertical\": [\"up\", \"down\"]\n");
     out.push_str("  },\n");
 }
@@ -192,20 +278,20 @@ fn write_controls(out: &mut String, parsed: &ParsedPuzzle3) {
     let default_keys = [
         ("ArrowLeft", "left"),
         ("ArrowRight", "right"),
-        ("ArrowUp", "forward"),
-        ("ArrowDown", "backward"),
+        ("ArrowUp", "front"),
+        ("ArrowDown", "back"),
         ("KeyA", "left"),
         ("KeyD", "right"),
-        ("KeyW", "forward"),
-        ("KeyS", "backward"),
+        ("KeyW", "front"),
+        ("KeyS", "back"),
         ("a", "left"),
         ("d", "right"),
-        ("w", "forward"),
-        ("s", "backward"),
+        ("w", "front"),
+        ("s", "back"),
         ("Left", "left"),
         ("Right", "right"),
-        ("Up", "forward"),
-        ("Down", "backward"),
+        ("Up", "front"),
+        ("Down", "back"),
     ];
     let mut keys = Vec::<(&str, &str)>::new();
     if parsed
@@ -554,7 +640,7 @@ fn write_objects(
             json_string(name),
             object.0,
             json_string(name),
-            json_string(name),
+            fixture_sprite_value(parsed, name),
             layer,
             comma
         )
@@ -603,12 +689,26 @@ fn write_levels(
         write_json_string_field(out, 3, "name", &entry.name, true);
         write_json_string_field(out, 3, "label", &level_label(&entry.name), true);
         write_size_field(out, 3, "size", entry.level.size, true);
-        write_cells_field(out, 3, "cells", &entry.level.cells, names)?;
+        write_cells_field(
+            out,
+            3,
+            "cells",
+            &entry.level.cells,
+            names,
+            parsed.sprite_set.as_ref(),
+        )?;
         out.push('\n');
         writeln!(out, "    }}{}", comma).unwrap();
     }
     out.push_str("  ],\n");
-    write_cells_field(out, 1, "cells", &bundle.levels[0].level.cells, names)?;
+    write_cells_field(
+        out,
+        1,
+        "cells",
+        &bundle.levels[0].level.cells,
+        names,
+        parsed.sprite_set.as_ref(),
+    )?;
     out.push_str(",\n");
     Ok(())
 }
@@ -661,6 +761,7 @@ fn write_cells_field(
     name: &str,
     cells: &[crate::LevelCell3],
     names: &BTreeMap<ObjectId, String>,
+    sprite_set: Option<&SpriteSet3>,
 ) -> Result<(), VisualFixtureExportError3> {
     write_indent(out, indent);
     writeln!(out, "{}: [", json_string(name)).unwrap();
@@ -687,7 +788,7 @@ fn write_cells_field(
                 "{{ \"id\": {}, \"name\": {}, \"sprite\": {} }}",
                 object.0,
                 json_string(object_name),
-                json_string(object_name)
+                fixture_sprite_value_from_set(sprite_set, object_name)
             )
             .unwrap();
         }
@@ -696,6 +797,17 @@ fn write_cells_field(
     write_indent(out, indent);
     out.push(']');
     Ok(())
+}
+
+fn fixture_sprite_value(parsed: &ParsedPuzzle3, object_name: &str) -> String {
+    fixture_sprite_value_from_set(parsed.sprite_set.as_ref(), object_name)
+}
+
+fn fixture_sprite_value_from_set(sprite_set: Option<&SpriteSet3>, object_name: &str) -> String {
+    sprite_set
+        .and_then(|sprites| sprites.sprite(object_name))
+        .map(|sprite| json_string(&sprite.name))
+        .unwrap_or_else(|| "null".to_string())
 }
 
 fn write_sprites(out: &mut String, sprite_set: Option<&SpriteSet3>) {

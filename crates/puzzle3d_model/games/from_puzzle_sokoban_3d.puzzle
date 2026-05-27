@@ -98,7 +98,7 @@ sprites3 compact of from_puzzle_sokoban_3d {
 scene title {
   view {
     title "Sokoban Literally in 3D"
-    button "Start" -> start handmade in playing
+    button "Start" -> goto playing
     button "Level Select" -> goto level_select
   }
 }
@@ -110,7 +110,7 @@ scene level_select {
 
   view {
     title "Select Level"
-    level_menu handmade -> start handmade in playing
+    level_menu handmade -> goto playing(level)
     button "Back" -> goto title
   }
 }

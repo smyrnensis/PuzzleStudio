@@ -123,22 +123,30 @@ Do not make `on` a grab bag for unrelated command shortcuts.
 
 ## Generated Artifacts
 
-Treat root `editor.html` as a generated artifact, not a source file. Do not edit
-it directly. If editor behavior, layout, styling, preview behavior, or embedded
-runtime behavior needs to change, edit the source owner instead, such as
-`crates/html_editor/static/*`, `crates/html_play/static/*`, Rust export code, or
-the relevant `.puzzle` input, then regenerate the artifact.
+Root `editor.html` is a generated artifact and must never be edited directly.
+Do not patch it with `apply_patch`, scripts, search-and-replace, or manual
+HTML/JS/CSS edits. Direct edits to root `editor.html` hide the real owner of the
+behavior and make the generated file diverge from its sources.
 
-Before regenerating or overwriting a tracked generated artifact such as
-`editor.html`, run a targeted status check such as:
+If editor behavior, layout, styling, preview behavior, embedded runtime
+behavior, seed data, or exported assets need to change, edit the source owner
+instead, such as `crates/html_editor/static/*`, `crates/html_play/static/*`,
+Rust export code, the relevant `.puzzle` input, or another documented generator
+input. Then regenerate `editor.html` through the normal export command.
+
+Before regenerating a tracked generated artifact such as `editor.html`, run a
+targeted status check such as:
 
 ```bash
 git status --short -- editor.html
 ```
 
-If the output path is dirty, do not overwrite it without explicit user
-confirmation. First tell the user that the generated artifact already has local
-changes and that regenerating it may destroy those changes.
+If the output path is dirty, treat those changes as generated output that may be
+replaced by regeneration, not as a place to apply follow-up edits. When user
+intent is not already clear, tell the user that regeneration will replace the
+current generated output and ask before running it. If the user has explicitly
+asked to regenerate or approved regeneration, regenerate the file instead of
+editing it directly.
 
 ## Layer Separation
 

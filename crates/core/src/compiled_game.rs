@@ -1,4 +1,7 @@
 use crate::ids::{GlobalId, InputId, LayerId, ObjectId, QueryId, RuleId, ScratchId};
+pub use puzzle_kernel::{
+    GlobalUpdateOp, LocalFrame, LocalFrameExtent, ScratchKind, ScratchValueMatch,
+};
 
 #[derive(Clone, Debug)]
 pub struct CompiledGame {
@@ -190,6 +193,7 @@ fn collect_rules(program: &[RuleStep], rules: &mut Vec<Rule>) {
             RuleStep::Rule(rule) => rules.push(rule.clone()),
             RuleStep::ConditionalBlock { steps, .. } => collect_rules(steps, rules),
             RuleStep::Block { steps, .. } => collect_rules(steps, rules),
+            RuleStep::LocalFrame { steps, .. } => collect_rules(steps, rules),
         }
     }
 }
@@ -226,6 +230,13 @@ fn filter_visual_step(step: &RuleStep, visual_rules: &[RuleId]) -> Option<RuleSt
                 steps,
             })
         }
+        RuleStep::LocalFrame { frame, steps } => {
+            let steps = filter_visual_steps(steps, visual_rules);
+            (!steps.is_empty()).then(|| RuleStep::LocalFrame {
+                frame: frame.clone(),
+                steps,
+            })
+        }
     }
 }
 
@@ -240,14 +251,6 @@ pub struct ScratchDef {
     pub id: ScratchId,
     pub kind: ScratchKind,
     pub values: Vec<String>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ScratchKind {
-    Marker,
-    Bool,
-    Int,
-    Enum,
 }
 
 #[derive(Clone, Debug)]
@@ -270,6 +273,10 @@ pub enum RuleStep {
     Block {
         application: RuleApplication,
         stop_condition: Option<RuleCondition>,
+        steps: Vec<RuleStep>,
+    },
+    LocalFrame {
+        frame: LocalFrame<ObjectId>,
         steps: Vec<RuleStep>,
     },
 }
@@ -326,12 +333,6 @@ pub struct ScratchPattern {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ScratchValueMatch {
-    Any,
-    Exact,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ComparisonOp {
     Eq,
     NotEq,
@@ -348,21 +349,13 @@ pub enum Effect {
     Restart,
     NextLevel,
     Again,
+    Checkpoint,
+    ClearCheckpoint,
     UpdateGlobal {
         global: GlobalId,
         op: GlobalUpdateOp,
         value: i64,
     },
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum GlobalUpdateOp {
-    Set,
-    Add,
-    Subtract,
-    Multiply,
-    Divide,
-    Remainder,
 }
 
 #[derive(Clone, Debug)]
@@ -371,18 +364,7 @@ pub struct QueryDef {
     pub kind: QueryKind,
 }
 
-#[derive(Clone, Debug)]
-pub enum QueryKind {
-    CountObjects(Vec<ObjectId>),
-    ExistsObjects(Vec<ObjectId>),
-    NoneObjects(Vec<ObjectId>),
-    CountMatches(Vec<Pattern>),
-    ExistsMatches(Vec<Pattern>),
-    NoneMatches(Vec<Pattern>),
-    CountInputMatches(Vec<(InputId, Pattern)>),
-    ExistsInputMatches(Vec<(InputId, Pattern)>),
-    NoneInputMatches(Vec<(InputId, Pattern)>),
-}
+pub type QueryKind = puzzle_kernel::QueryKind<ObjectId, Pattern, InputId>;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum RuleApplication {

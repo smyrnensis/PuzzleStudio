@@ -276,7 +276,7 @@ fn render_component(
             out.push_str(&eval_text(loaded, session, &text.content, scope));
             out.push('\n');
         }
-        SceneComponent::Button(button) => {
+        SceneComponent::Button(button) | SceneComponent::Choice(button) => {
             let current_button = *button_index;
             *button_index += 1;
             let marker = if current_button == ui_state.button_cursor(&scope.scene_name) {
@@ -296,6 +296,17 @@ fn render_component(
                 loaded,
                 session,
                 &container.children,
+                scope,
+                ui_state,
+                button_index,
+                out,
+            );
+        }
+        SceneComponent::Conditional(conditional) => {
+            render_components(
+                loaded,
+                session,
+                &conditional.children,
                 scope,
                 ui_state,
                 button_index,
@@ -1024,7 +1035,8 @@ fn resolve_path(
             .unwrap_or_else(|| name.clone()),
         [root, field] if root == "level" => current_level_field(loaded, session, field),
         [root, field] => scope
-            .level_field(root, field, loaded)
+            .level_field(root, field, loaded, session)
+            .or_else(|| scene_value_field(session, &scope.scene_name, root, field, loaded))
             .or_else(|| scene_value(session, &scope.scene_name, root))
             .unwrap_or_else(|| path.join(".")),
         _ => path.join("."),
@@ -1036,6 +1048,12 @@ fn current_level_field(loaded: &LoadedGame, session: &GameSession, field: &str) 
         "index" => session.level_index().to_string(),
         "number" => (session.level_index() + 1).to_string(),
         "name" | "label" => session.current_level(loaded).name.clone(),
+        "cleared" | "solved" => session
+            .cleared_levels()
+            .get(session.level_index())
+            .copied()
+            .unwrap_or(false)
+            .to_string(),
         _ => String::new(),
     }
 }
@@ -1047,11 +1065,52 @@ fn scene_value(session: &GameSession, scene_name: &str, name: &str) -> Option<St
         .map(scene_value_to_string)
 }
 
+fn scene_value_field(
+    session: &GameSession,
+    scene_name: &str,
+    name: &str,
+    field: &str,
+    loaded: &LoadedGame,
+) -> Option<String> {
+    let value = session
+        .scene_state_for(scene_name)
+        .and_then(|state| state.values.get(name))
+        .or_else(|| session.session_values().get(name))?;
+    match value {
+        SceneValue::LevelRef(index) => level_ref_field(loaded, session, *index, field),
+        _ => None,
+    }
+}
+
 fn scene_value_to_string(value: &SceneValue) -> String {
     match value {
         SceneValue::Bool(value) => value.to_string(),
         SceneValue::Int(value) => value.to_string(),
         SceneValue::Text(value) | SceneValue::Symbol(value) => value.clone(),
+        SceneValue::LevelRef(index) => index.to_string(),
+    }
+}
+
+fn level_ref_field(
+    loaded: &LoadedGame,
+    session: &GameSession,
+    index: usize,
+    field: &str,
+) -> Option<String> {
+    let level = loaded.levels.get(index)?;
+    match field {
+        "index" => Some(index.to_string()),
+        "num" | "number" => Some((index + 1).to_string()),
+        "name" | "label" | "title" => Some(level.name.clone()),
+        "cleared" | "solved" => Some(
+            session
+                .cleared_levels()
+                .get(index)
+                .copied()
+                .unwrap_or(false)
+                .to_string(),
+        ),
+        _ => None,
     }
 }
 
@@ -1095,13 +1154,27 @@ impl RenderScope {
         loaded.levels.get(index).map(|_| index.to_string())
     }
 
-    fn level_field(&self, binding: &str, field: &str, loaded: &LoadedGame) -> Option<String> {
+    fn level_field(
+        &self,
+        binding: &str,
+        field: &str,
+        loaded: &LoadedGame,
+        session: &GameSession,
+    ) -> Option<String> {
         let index = *self.levels.get(binding)?;
         let level = loaded.levels.get(index)?;
         match field {
             "index" => Some(index.to_string()),
             "number" => Some((index + 1).to_string()),
             "name" | "label" => Some(level.name.clone()),
+            "cleared" | "solved" => Some(
+                session
+                    .cleared_levels()
+                    .get(index)
+                    .copied()
+                    .unwrap_or(false)
+                    .to_string(),
+            ),
             _ => None,
         }
     }
@@ -1318,13 +1391,16 @@ fn collect_button_commands(
 ) {
     for component in components {
         match component {
-            SceneComponent::Button(button) => {
+            SceneComponent::Button(button) | SceneComponent::Choice(button) => {
                 commands.push(effect_to_command(loaded, session, &button.effect, scope));
             }
             SceneComponent::Row(container)
             | SceneComponent::Column(container)
             | SceneComponent::Box(container) => {
                 collect_button_commands(loaded, session, &container.children, scope, commands);
+            }
+            SceneComponent::Conditional(conditional) => {
+                collect_button_commands(loaded, session, &conditional.children, scope, commands);
             }
             SceneComponent::For(for_view) => {
                 if for_view.source.is_levels() {
@@ -1404,6 +1480,14 @@ fn first_menu_instance(components: &[SceneComponent]) -> Option<&puzzle_lang::Me
                     return Some(instance);
                 }
             }
+            SceneComponent::Conditional(conditional) => {
+                if let Some(instance) = first_menu_instance(&conditional.children) {
+                    return Some(instance);
+                }
+                if let Some(instance) = first_menu_instance(&conditional.else_children) {
+                    return Some(instance);
+                }
+            }
             SceneComponent::For(for_view) => {
                 if let Some(instance) = first_menu_instance(&for_view.children) {
                     return Some(instance);
@@ -1423,6 +1507,14 @@ fn first_level_menu(components: &[SceneComponent]) -> Option<&puzzle_lang::Level
             | SceneComponent::Column(container)
             | SceneComponent::Box(container) => {
                 if let Some(menu) = first_level_menu(&container.children) {
+                    return Some(menu);
+                }
+            }
+            SceneComponent::Conditional(conditional) => {
+                if let Some(menu) = first_level_menu(&conditional.children) {
+                    return Some(menu);
+                }
+                if let Some(menu) = first_level_menu(&conditional.else_children) {
                     return Some(menu);
                 }
             }
@@ -1524,14 +1616,6 @@ fn effect_to_command(
         SceneEffect::Hide { scene } => Some(format!("hide {scene}")),
         SceneEffect::Toggle { scene } => Some(format!("toggle {scene}")),
         SceneEffect::Focus { scene } => Some(format!("focus {scene}")),
-        SceneEffect::StartLevel { scene, scope } => scope
-            .as_ref()
-            .map(|scope| format!("start levels {scope} in {scene}"))
-            .or_else(|| Some(format!("start levels in {scene}"))),
-        SceneEffect::ContinueLevel { scene, scope } => scope
-            .as_ref()
-            .map(|scope| format!("continue levels {scope} in {scene}"))
-            .or_else(|| Some(format!("continue levels in {scene}"))),
         SceneEffect::PuzzleNextLevel { target } => Some(format!("{target}.next_level")),
         SceneEffect::PuzzlePreviousLevel { target } => Some(format!("{target}.previous_level")),
         SceneEffect::GotoLevel { target, level } => Some(format!(
@@ -1541,7 +1625,23 @@ fn effect_to_command(
         SceneEffect::ResetPuzzle { target } => Some(format!("{target}.restart")),
         SceneEffect::LoadPuzzle { target, source } => Some(format!("load {target} from {source}")),
         SceneEffect::Copy { source, target } => Some(format!("copy {source} to {target}")),
-        SceneEffect::ClearHistory => Some("clear_history".to_string()),
+        SceneEffect::ClearUndoHistory => Some("clear_undo_history".to_string()),
+        SceneEffect::ClearGameProgress => Some("clear_game_progress".to_string()),
+        SceneEffect::SetCurrentLevel { level } => Some(format!(
+            "set current_level = {}",
+            expr_source(loaded, session, level, scope)
+        )),
+        SceneEffect::ClearCurrentLevel => Some("clear current_level".to_string()),
+        SceneEffect::SetLevelCleared { level, cleared } => level
+            .as_ref()
+            .map(|level| {
+                format!(
+                    "set level({}).cleared = {cleared}",
+                    expr_source(loaded, session, level, scope)
+                )
+            })
+            .or_else(|| Some(format!("set level.cleared = {cleared}"))),
+        SceneEffect::ResetPersistentVars => Some("reset persistent_vars".to_string()),
         SceneEffect::Apply { args, .. } => args
             .first()
             .map(|arg| eval_expr(loaded, session, arg, scope))
@@ -1644,6 +1744,9 @@ impl TerminalEvents {
         for event in session.take_wait_events() {
             match event {
                 WaitEvent::Wait { milliseconds } => lines.push(format!("wait: {milliseconds}ms")),
+                WaitEvent::ContinueEffects { milliseconds } => {
+                    lines.push(format!("continue effects after: {milliseconds}ms"))
+                }
             }
         }
         Self { lines }

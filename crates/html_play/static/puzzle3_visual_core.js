@@ -41,21 +41,55 @@
   }
 
   function gridOrder(position, view) {
-    const signs = cameraGridSigns(view);
+    const basis = cameraOrderBasis(view);
+    const signed = {
+      x: basis.signs.x * position.x,
+      y: basis.signs.y * position.y,
+      z: basis.signs.z * position.z,
+    };
     return {
-      x: signs.x * position.x,
-      y: signs.y * position.y,
-      z: signs.z * position.z,
+      ...signed,
+      plane: signed.x + signed.y + signed.z,
+      axes: basis.axes,
     };
   }
 
   function cameraGridSigns(view) {
+    return cameraOrderBasis(view).signs;
+  }
+
+  function cameraOrderKey(view) {
+    const basis = cameraOrderBasis(view);
+    return [
+      basis.signs.x,
+      basis.signs.y,
+      basis.signs.z,
+      ...basis.axes,
+    ].join(":");
+  }
+
+  function cameraOrderBasis(view) {
     const yaw = degreesToRadians(view.camera?.yawDegrees ?? 0);
     const pitch = degreesToRadians(view.camera?.pitchDegrees ?? 35);
+    const coefficients = {
+      x: -Math.sin(yaw) * Math.cos(pitch),
+      y: -Math.cos(yaw) * Math.cos(pitch),
+      z: Math.sin(pitch),
+    };
+    const axes = ["x", "y", "z"].sort((left, right) => {
+      const magnitudeComparison = Math.abs(coefficients[right]) - Math.abs(coefficients[left]);
+      if (Math.abs(magnitudeComparison) > 0.000001) {
+        return magnitudeComparison;
+      }
+      return left < right ? -1 : (left > right ? 1 : 0);
+    });
     return {
-      x: signedAxis(-Math.sin(yaw) * Math.cos(pitch)),
-      y: signedAxis(-Math.cos(yaw) * Math.cos(pitch)),
-      z: signedAxis(Math.sin(pitch)),
+      signs: {
+        x: signedAxis(coefficients.x),
+        y: signedAxis(coefficients.y),
+        z: signedAxis(coefficients.z),
+      },
+      axes,
     };
   }
 
@@ -71,52 +105,67 @@
     if (ownerComparison !== 0) {
       return ownerComparison;
     }
-    const localPriorityComparison = compareLocalRenderPriority(a, b);
-    if (localPriorityComparison !== 0) {
-      return localPriorityComparison;
+    const gridDominanceComparison = compareGridDominance(a.gridOrder, b.gridOrder);
+    if (gridDominanceComparison !== 0) {
+      return gridDominanceComparison;
     }
     const gridComparison = compareGridOrder(a.gridOrder, b.gridOrder);
     if (gridComparison !== 0) {
       return gridComparison;
     }
-    const depthDiff = (a.depth ?? 0) - (b.depth ?? 0);
-    if (Math.abs(depthDiff) > 0.000001) {
-      return depthDiff;
+    const priorityComparison = compareNumber(a.renderPriority, b.renderPriority);
+    if (priorityComparison !== 0) {
+      return priorityComparison;
     }
-    return (a.renderPriority ?? 0) - (b.renderPriority ?? 0);
+    const objectComparison = compareNumber(a.objectOrder, b.objectOrder);
+    if (objectComparison !== 0) {
+      return objectComparison;
+    }
+    return compareStablePrimitiveOrder(a, b);
   }
 
   function compareOwnerCellOrder(a, b) {
     if (!a.ownerCell || !b.ownerCell || a.ownerCell.key === b.ownerCell.key) {
       return 0;
     }
+    const gridDominanceComparison = compareGridDominance(a.ownerCell.order, b.ownerCell.order);
+    if (gridDominanceComparison !== 0) {
+      return gridDominanceComparison;
+    }
     const gridComparison = compareGridOrder(a.ownerCell.order, b.ownerCell.order);
     if (gridComparison !== 0) {
       return gridComparison;
     }
-    const depthDiff = a.ownerCell.depth - b.ownerCell.depth;
-    if (Math.abs(depthDiff) > 0.000001) {
-      return depthDiff;
+    const priorityComparison = compareNumber(a.ownerCell.renderPriority, b.ownerCell.renderPriority);
+    if (priorityComparison !== 0) {
+      return priorityComparison;
     }
-    return 0;
-  }
-
-  function compareLocalRenderPriority(a, b) {
-    if (!a.ownerCell || !b.ownerCell || a.ownerCell.key !== b.ownerCell.key) {
-      return 0;
-    }
-    const priorityDiff = (a.renderPriority ?? 0) - (b.renderPriority ?? 0);
-    if (Math.abs(priorityDiff) > 0.000001) {
-      return priorityDiff;
-    }
-    return 0;
+    return compareStableKey(a.ownerCell.key, b.ownerCell.key);
   }
 
   function compareGridOrder(a, b) {
     if (!a || !b) {
       return 0;
     }
-    const diffs = [a.x - b.x, a.y - b.y, a.z - b.z];
+    const planeComparison = compareNumber(a.plane, b.plane);
+    if (planeComparison !== 0) {
+      return planeComparison;
+    }
+    const axes = a.axes || b.axes || ["x", "y", "z"];
+    for (const axis of axes) {
+      const comparison = compareNumber(a[axis], b[axis]);
+      if (comparison !== 0) {
+        return comparison;
+      }
+    }
+    return 0;
+  }
+
+  function compareGridDominance(a, b) {
+    if (!a || !b) {
+      return 0;
+    }
+    const diffs = [numberOrZero(a.x) - numberOrZero(b.x), numberOrZero(a.y) - numberOrZero(b.y), numberOrZero(a.z) - numberOrZero(b.z)];
     const hasPositive = diffs.some((diff) => diff > 0.000001);
     const hasNegative = diffs.some((diff) => diff < -0.000001);
     if (hasPositive && !hasNegative) {
@@ -126,6 +175,34 @@
       return -1;
     }
     return 0;
+  }
+
+  function compareStablePrimitiveOrder(a, b) {
+    const primitiveOrderComparison = compareNumber(a.primitiveOrder, b.primitiveOrder);
+    if (primitiveOrderComparison !== 0) {
+      return primitiveOrderComparison;
+    }
+    const keyComparison = compareStableKey(a.key, b.key);
+    if (keyComparison !== 0) {
+      return keyComparison;
+    }
+    return compareStableKey(a.kind, b.kind);
+  }
+
+  function compareNumber(a, b) {
+    const diff = numberOrZero(a) - numberOrZero(b);
+    return Math.abs(diff) > 0.000001 ? diff : 0;
+  }
+
+  function numberOrZero(value) {
+    const number = Number(value);
+    return Number.isFinite(number) ? number : 0;
+  }
+
+  function compareStableKey(a, b) {
+    const left = String(a ?? "");
+    const right = String(b ?? "");
+    return left < right ? -1 : (left > right ? 1 : 0);
   }
 
   function stageFrameEdges(size) {
@@ -226,6 +303,7 @@
   }
 
   global.Puzzle3VisualCore = {
+    cameraOrderKey,
     compareGridOrder,
     comparePrimitiveOrder,
     directionDepth,

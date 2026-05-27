@@ -5,4 +5,5 @@ edition = "2024"
 license = "UNLICENSED"
 
 [dependencies]
+puzzle-kernel = { path = "../kernel" }
 puzzle-scene = { path = "../scene" }

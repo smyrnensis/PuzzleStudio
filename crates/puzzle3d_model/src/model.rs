@@ -1,11 +1,13 @@
+use crate::RuleId3;
 use crate::{InputId3, LayerId, ObjectId};
+use puzzle_kernel::ObjectRoleSet;
 use std::collections::BTreeSet;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Coord3 {
     /// Horizontal X axis. `left` is -X and `right` is +X.
     pub x: u16,
-    /// Horizontal depth axis. `backward` is -Y and `forward` is +Y.
+    /// Horizontal depth axis. `back` is -Y and `front` is +Y.
     pub y: u16,
     /// Height axis. `down` is -Z and `up` is +Z.
     pub z: u16,
@@ -112,11 +114,11 @@ impl Direction3 {
         offset: Offset3::new(1, 0, 0),
     };
     pub const FORWARD: Self = Self {
-        name: "forward",
+        name: "front",
         offset: Offset3::new(0, 1, 0),
     };
     pub const BACKWARD: Self = Self {
-        name: "backward",
+        name: "back",
         offset: Offset3::new(0, -1, 0),
     };
 
@@ -140,7 +142,7 @@ impl Direction3 {
     }
 
     pub fn is_horizontal(self) -> bool {
-        matches!(self.name, "left" | "right" | "forward" | "backward")
+        matches!(self.name, "left" | "right" | "front" | "back")
     }
 
     pub fn is_vertical(self) -> bool {
@@ -163,13 +165,18 @@ impl Direction3 {
             "down" => Self::UP,
             "left" => Self::RIGHT,
             "right" => Self::LEFT,
-            "forward" => Self::BACKWARD,
-            "backward" => Self::FORWARD,
+            "front" => Self::BACKWARD,
+            "back" => Self::FORWARD,
             _ => unreachable!("built-in directions are exhaustive"),
         }
     }
 
     pub fn by_name(name: &str) -> Option<Self> {
+        match name {
+            "forward" => return Some(Self::FORWARD),
+            "backward" => return Some(Self::BACKWARD),
+            _ => {}
+        }
         Self::directions()
             .into_iter()
             .find(|direction| direction.name == name)
@@ -403,8 +410,8 @@ fn canonical_depth(primary: Direction3, secondary: Direction3) -> Result<Directi
         });
     }
 
-    // Engine chirality is defined so the shorthand right:backward resolves to
-    // right:backward:down in z-up world coordinates.
+    // Engine chirality is defined so the shorthand right:back resolves to
+    // right:back:down in z-up world coordinates.
     let cross = cross(primary.offset, secondary.offset);
     let depth = Direction3::directions()
         .into_iter()
@@ -554,6 +561,8 @@ pub struct Game3 {
     pub layer_count: u16,
     pub objects: Vec<ObjectDef3>,
     pub inputs: Vec<InputDef3>,
+    visual_objects: ObjectRoleSet<ObjectId>,
+    visual_rules: ObjectRoleSet<RuleId3>,
 }
 
 impl Game3 {
@@ -562,6 +571,8 @@ impl Game3 {
             layer_count,
             objects,
             inputs: Vec::new(),
+            visual_objects: ObjectRoleSet::default(),
+            visual_rules: ObjectRoleSet::default(),
         }
     }
 
@@ -574,6 +585,24 @@ impl Game3 {
             layer_count,
             objects,
             inputs,
+            visual_objects: ObjectRoleSet::default(),
+            visual_rules: ObjectRoleSet::default(),
+        }
+    }
+
+    pub fn new_with_inputs_and_roles(
+        layer_count: u16,
+        objects: Vec<ObjectDef3>,
+        inputs: Vec<InputDef3>,
+        visual_objects: Vec<ObjectId>,
+        visual_rules: Vec<RuleId3>,
+    ) -> Self {
+        Self {
+            layer_count,
+            objects,
+            inputs,
+            visual_objects: ObjectRoleSet::new(visual_objects),
+            visual_rules: ObjectRoleSet::new(visual_rules),
         }
     }
 
@@ -648,6 +677,22 @@ impl Game3 {
 
     pub fn direction_for_input(&self, input: InputId3) -> Option<Direction3> {
         self.input(input).and_then(|def| def.direction)
+    }
+
+    pub fn is_visual_object(&self, object: ObjectId) -> bool {
+        self.visual_objects.contains(object)
+    }
+
+    pub fn visual_objects(&self) -> &[ObjectId] {
+        self.visual_objects.as_slice()
+    }
+
+    pub fn is_visual_rule(&self, rule: RuleId3) -> bool {
+        self.visual_rules.contains(rule)
+    }
+
+    pub fn visual_rules(&self) -> &[RuleId3] {
+        self.visual_rules.as_slice()
     }
 }
 

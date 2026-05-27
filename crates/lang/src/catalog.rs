@@ -73,10 +73,16 @@ impl Default for Catalog {
             kind: ScratchKind::Bool,
             values: Vec::new(),
         };
+        let move_collision = ScratchDef {
+            id: ScratchId(4),
+            kind: ScratchKind::Bool,
+            values: Vec::new(),
+        };
 
         let mut scratch_names = HashMap::new();
         scratch_names.insert("__move".to_string(), anonymous_movement.clone());
         scratch_names.insert("__action".to_string(), action.clone());
+        scratch_names.insert("__move_collision".to_string(), move_collision.clone());
 
         Self {
             value_sets,
@@ -89,7 +95,13 @@ impl Default for Catalog {
             object_layers: HashMap::new(),
             object_defs: Vec::new(),
             visual_objects: Vec::new(),
-            scratch_defs: vec![anonymous_movement, anonymous_bool, anonymous_int, action],
+            scratch_defs: vec![
+                anonymous_movement,
+                anonymous_bool,
+                anonymous_int,
+                action,
+                move_collision,
+            ],
             scratch_names,
             render_chars: HashMap::new(),
             char_objects: HashMap::new(),

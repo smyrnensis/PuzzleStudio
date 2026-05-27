@@ -1,13 +1,15 @@
-title parabox_room_test
+title "parabox_test"
 
 assets {
 	css "game.css"
 	script "visuals.js"
 }
 
-model puzzle parabox_room_test {
-	kind = A B C
-
+puzzle parabox_room_test {
+	tags {
+		kind = A B C	
+	}
+	
 	map reverse directions {
 		up -> down
 		down -> up
@@ -158,8 +160,9 @@ model puzzle parabox_room_test {
 		[ Room:C ] -> [ Room:C{enter:left} ]
 		left [ no Exit:C | Room:C{enter:left} ] -> [ Exit:C | Room:C{enter:left} ]
 	}
+	
 
-	level focus_rooms {
+level focus_rooms {
 aaaaaaabbbTbbbccccccc
 a...G.ab.....bc.....c
 a.....ab..X..bc.....c
@@ -167,7 +170,8 @@ SP.B..ab..C..bc..A..V
 a.....ab.....bc.....c
 a.....ab.....bc.....c
 aaaaaaabbbbbbbccccccc
-	}
+}
+
 }
 
 scene playing {

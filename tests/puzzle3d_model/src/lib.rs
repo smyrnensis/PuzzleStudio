@@ -21,24 +21,25 @@ pub use model::{
     FrameSet3, FrameSlot3, Game3, GameError3, InputDef3, ObjectDef3, Offset3, Size3,
 };
 pub use parser::{
-    parse_puzzle3d, CameraSettings3, GridSettings3, ModelSettings3, ParseError3, ParsedPuzzle3,
+    CameraSettings3, GridSettings3, ModelSettings3, ParseError3, ParsedPuzzle3, parse_puzzle3d,
 };
 pub use patch::{Patch3, PatchError3, PatchOp3};
 pub use scene::{
-    ComponentInputBinding3, Scene3, SceneAction3, SceneAlign3, SceneAlignX3, SceneAlignY3,
-    SceneComponent3, SceneControl3, SceneControlTarget3, SceneInputMap3, SceneKeyBinding3,
-    SceneLayout3, ScenePuzzle3, SceneRuleCall3, SceneSize3,
+    Scene, SceneAction, SceneAlign3, SceneAlignX3, SceneAlignY3, SceneComponent, SceneControl,
+    SceneControlTarget, SceneInputBinding, SceneInputMap, SceneKeyBinding, SceneLayout3,
+    ScenePuzzle3, SceneRuleCall, SceneSize3,
 };
 pub use selector::{
-    lower_dense_pattern, lower_dense_pattern_set, lower_dense_pattern_set_to_patterns,
-    lower_dense_pattern_to_patterns, lower_dense_rule_template, lower_line_rule_template,
-    lower_pattern_template, lower_rule_template, ConcreteObject3, DenseCell3, DensePattern3,
-    DenseRow3, DenseRuleTemplate3, DenseSlice3, FrameOrientation3, LineMatchCellTemplate3,
-    LineOrientation3, LinePatternTemplate3, LineRuleTemplate3, LineWriteOpTemplate3,
-    LocalWriteOpTemplate3, MatchCellTemplate3, ObjectFamily3, ObjectSelector3, ObjectVariant3,
-    PatternLoweringError3, PatternTemplate3, ResolvedSelector3, RuleLoweringError3, RuleTemplate3,
-    SelectorCatalog3, SelectorCatalogError3, SelectorError3, SelectorGroup3, SelectorScratch3,
-    SelectorTag3, SelectorTransform3, VariantAxis3, VariantValueSet3, WriteOpTemplate3,
+    ConcreteObject3, DenseCell3, DensePattern3, DenseRow3, DenseRuleTemplate3, DenseSlice3,
+    FrameOrientation3, LineMatchCellTemplate3, LineOrientation3, LinePatternTemplate3,
+    LineRuleTemplate3, LineWriteOpTemplate3, LocalWriteOpTemplate3, MatchCellTemplate3,
+    ObjectFamily3, ObjectSelector3, ObjectVariant3, PatternLoweringError3, PatternTemplate3,
+    ResolvedSelector3, RuleLoweringError3, RuleTemplate3, SelectorCatalog3, SelectorCatalogError3,
+    SelectorError3, SelectorGroup3, SelectorScratch3, SelectorTag3, SelectorTransform3,
+    VariantAxis3, VariantValueSet3, WriteOpTemplate3, lower_dense_pattern, lower_dense_pattern_set,
+    lower_dense_pattern_set_to_patterns, lower_dense_pattern_to_patterns,
+    lower_dense_rule_template, lower_line_rule_template, lower_pattern_template,
+    lower_rule_template,
 };
 pub use session::{
     GameSession3, GameSessionError3, Lifecycle3, LifecycleCommand3, SessionLifecycleResult3,
@@ -47,14 +48,14 @@ pub use snapshot::{BoardCell3, BoardSnapshot3};
 pub use sprite::{Sprite3, SpriteColor3, SpriteSet3, SpriteVoxels3};
 pub use state::{CellView3, State3, StateError3};
 pub use transition::{
+    Guard3, MatchCell3, Pattern3, Rule3, RuleApplication3, TransitionError3, WriteOp3,
     count_pattern_matches, has_pattern_match, transition_once, transition_once_all,
     transition_once_per_level, transition_once_with_input, transition_program,
-    transition_program_without_input, transition_repeated, Guard3, MatchCell3, Pattern3, Rule3,
-    RuleApplication3, TransitionError3, WriteOp3,
+    transition_program_without_input, transition_repeated,
 };
 pub use visual::{ObjectVisual3, VisualCell3, VisualObject3, VisualSnapshot3};
 pub use visual_fixture::{
-    export_visual_fixture_json, export_visual_fixture_json_with_title, VisualFixtureExportError3,
+    VisualFixtureExportError3, export_visual_fixture_json, export_visual_fixture_json_with_title,
 };
 pub use win::WinCondition3;
 
@@ -84,6 +85,42 @@ mod tests {
     const MICROBAN_PLAYER: ObjectId = ObjectId(3);
     const MICROBAN_BOX: ObjectId = ObjectId(4);
     const MICROBAN_WALL: ObjectId = ObjectId(5);
+
+    fn title_component(text: &str) -> SceneComponent {
+        SceneComponent::Title(puzzle_scene::SceneTextComponent {
+            content: text.to_string(),
+            layout: SceneLayout3::default(),
+        })
+    }
+
+    fn button_component(label: &str, action: SceneAction) -> SceneComponent {
+        SceneComponent::Button(puzzle_scene::SceneButton {
+            label: label.to_string(),
+            effect: action,
+            layout: SceneLayout3::default(),
+        })
+    }
+
+    fn level_menu_component(levels: &str, action: SceneAction) -> SceneComponent {
+        SceneComponent::LevelMenu(puzzle_scene::LevelMenuComponent {
+            source: Some(levels.to_string()),
+            action: Some(action),
+            ..puzzle_scene::LevelMenuComponent::default()
+        })
+    }
+
+    fn puzzle3_component(
+        source: &str,
+        inputs: Vec<SceneInputBinding>,
+        layout: SceneLayout3,
+    ) -> SceneComponent {
+        SceneComponent::Frame(puzzle_scene::FrameComponent {
+            kind: "puzzle3".to_string(),
+            source: source.to_string(),
+            inputs,
+            layout,
+        })
+    }
 
     fn game() -> Game3 {
         Game3::new_with_inputs(
@@ -615,11 +652,9 @@ horizontal [ Player | no solid ] -> [ | Player ]
             FrameSlot3::CompleteCanonical,
         );
 
-        let expected =
-            vec![
-                Frame3::explicit(Direction3::RIGHT, Direction3::BACKWARD, Direction3::DOWN)
-                    .unwrap(),
-            ];
+        let expected = vec![
+            Frame3::explicit(Direction3::RIGHT, Direction3::BACKWARD, Direction3::DOWN).unwrap(),
+        ];
         assert_eq!(missing_primary.expand(), expected);
         assert_eq!(missing_secondary.expand(), expected);
         assert_eq!(missing_depth.expand(), expected);
@@ -1024,9 +1059,10 @@ horizontal [ Player | no solid ] -> [ | Player ]
     #[test]
     fn pattern_template_collects_forbidden_selector_alternatives() {
         let catalog = selector_catalog();
-        let template =
-            PatternTemplate3::new(vec![MatchCellTemplate3::new(Direction3::RIGHT.offset)
-                .forbid(ObjectSelector3::group("solid"))]);
+        let template = PatternTemplate3::new(vec![
+            MatchCellTemplate3::new(Direction3::RIGHT.offset)
+                .forbid(ObjectSelector3::group("solid")),
+        ]);
 
         let patterns = lower_pattern_template(&catalog, &template).unwrap();
 
@@ -1151,7 +1187,7 @@ horizontal [ Player | no solid ] -> [ | Player ]
     fn rule_template_allows_unassigned_singleton_write_selector() {
         let catalog = selector_catalog();
         let pattern = PatternTemplate3::new(vec![
-            MatchCellTemplate3::new(Offset3::ZERO).require(ObjectSelector3::object("Player"))
+            MatchCellTemplate3::new(Offset3::ZERO).require(ObjectSelector3::object("Player")),
         ]);
         let rule = RuleTemplate3::once(
             pattern,
@@ -1177,7 +1213,7 @@ horizontal [ Player | no solid ] -> [ | Player ]
     fn rule_template_rejects_ambiguous_unassigned_write_selector() {
         let catalog = selector_catalog();
         let pattern = PatternTemplate3::new(vec![
-            MatchCellTemplate3::new(Offset3::ZERO).require(ObjectSelector3::object("Player"))
+            MatchCellTemplate3::new(Offset3::ZERO).require(ObjectSelector3::object("Player")),
         ]);
         let rule = RuleTemplate3::once(
             pattern,
@@ -2074,32 +2110,28 @@ button "Restart" size 4 1 -> goto playing
         )
         .unwrap();
 
-        let [SceneComponent3::Row {
-            children,
-            layout: row_layout,
-        }] = parsed.scenes[0].components.as_slice()
-        else {
+        let [SceneComponent::Row(row)] = parsed.scenes[0].components.as_slice() else {
             panic!("expected a row layout root");
         };
+        let children = &row.children;
+        let row_layout = &row.layout;
         assert_eq!(row_layout.gap, Some(1));
         assert_eq!(children.len(), 2);
 
-        let SceneComponent3::Box {
-            children: box_children,
-            layout: box_layout,
-        } = &children[0]
-        else {
+        let SceneComponent::Box(box_component) = &children[0] else {
             panic!("expected a box child");
         };
+        let box_children = &box_component.children;
+        let box_layout = &box_component.layout;
         assert_eq!(box_layout.size, Some(SceneSize3::new(8, 8)));
         assert_eq!(box_layout.align.x, SceneAlignX3::Right);
         assert_eq!(box_layout.align.y, SceneAlignY3::Bottom);
         assert_eq!(
             box_children,
-            &vec![SceneComponent3::Puzzle3 {
-                source: "board".to_string(),
-                inputs: Vec::new(),
-                layout: SceneLayout3 {
+            &vec![puzzle3_component(
+                "board",
+                Vec::new(),
+                SceneLayout3 {
                     size: Some(SceneSize3::new(7, 4)),
                     align: SceneAlign3 {
                         x: SceneAlignX3::Left,
@@ -2107,16 +2139,12 @@ button "Restart" size 4 1 -> goto playing
                     },
                     ..SceneLayout3::default()
                 },
-            }]
+            )]
         );
-        let SceneComponent3::Column {
-            layout: column_layout,
-            ..
-        } = &children[1]
-        else {
+        let SceneComponent::Column(column) = &children[1] else {
             panic!("expected a column child");
         };
-        assert!(column_layout.scroll);
+        assert!(column.layout.scroll);
 
         let fixture_json = export_visual_fixture_json(&parsed).unwrap();
         assert!(
@@ -2157,7 +2185,7 @@ scene playing {
   }
 
   rules {
-    board.rules
+    step board
   }
 
   view {
@@ -2175,29 +2203,115 @@ scene playing {
 
         assert_eq!(
             parsed.scenes[0].rules,
-            vec![SceneRuleCall3::new("board", "rules", Vec::new())]
+            vec![SceneRuleCall::new("board", "rules", Vec::new())]
         );
         assert_eq!(
             parsed.scenes[0].components,
-            vec![SceneComponent3::Puzzle3 {
-                source: "board".to_string(),
-                inputs: vec![
-                    ComponentInputBinding3::new(
-                        "forward",
-                        vec!["KeyW".to_string(), "ArrowUp".to_string()],
-                    ),
-                    ComponentInputBinding3::new(
-                        "backward",
-                        vec!["KeyS".to_string(), "ArrowDown".to_string()],
-                    ),
+            vec![puzzle3_component(
+                "board",
+                vec![
+                    SceneInputBinding {
+                        input: "forward".to_string(),
+                        keys: vec!["KeyW".to_string(), "ArrowUp".to_string()],
+                    },
+                    SceneInputBinding {
+                        input: "backward".to_string(),
+                        keys: vec!["KeyS".to_string(), "ArrowDown".to_string()],
+                    },
                 ],
-                layout: SceneLayout3::default(),
-            }]
+                SceneLayout3::default(),
+            )]
         );
 
         let fixture_json = export_visual_fixture_json(&parsed).unwrap();
         assert!(fixture_json.contains("\"inputs\": {\"forward\": [\"KeyW\", \"ArrowUp\"]"));
         assert!(fixture_json.contains("\"rules\": [{ \"kind\": \"component_rules\""));
+    }
+
+    #[test]
+    fn parser_rejects_scene_component_rules_path() {
+        let error = parse_puzzle3d(
+            r#"
+title old_scene_rule_path
+
+puzzle3 control_test {
+layers {
+actor = Player
+}
+}
+
+levels3 basic of control_test {
+legend {
+. = empty
+P = Player
+}
+
+level one {
+P
+}
+}
+
+scene playing {
+  state {
+    board = puzzle3 control_test
+  }
+
+  rules {
+    board.rules
+  }
+}
+"#,
+        )
+        .unwrap_err();
+
+        let ParseError3::Message(message) = error;
+        assert!(
+            message.contains("scene rules do not call component rules by path"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn parser_accepts_multiple_scene_keys_per_row() {
+        let parsed = parse_puzzle3d(
+            r#"
+title multiple_scene_keys
+
+puzzle3 control_test {
+layers {
+actor = Player
+}
+}
+
+levels3 basic of control_test {
+legend {
+. = empty
+P = Player
+}
+
+level one {
+P
+}
+}
+
+scene playing {
+  keys {
+    q Escape -> goto level_select
+  }
+}
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            parsed.scenes[0].keys,
+            vec![SceneKeyBinding::from_keys(
+                vec!["q".to_string(), "Escape".to_string()],
+                SceneAction::Goto {
+                    scene: "level_select".to_string()
+                }
+            )]
+        );
     }
 
     #[test]
@@ -2222,41 +2336,33 @@ scene playing {
         assert_eq!(parsed.scenes[2].controls, Vec::new());
         assert_eq!(
             parsed.scenes[2].keys,
-            vec![
-                SceneKeyBinding3::new(
-                    "q",
-                    SceneAction3::Goto {
-                        scene: "level_select".to_string()
-                    }
-                ),
-                SceneKeyBinding3::new(
-                    "Escape",
-                    SceneAction3::Goto {
-                        scene: "level_select".to_string()
-                    }
-                )
-            ]
+            vec![SceneKeyBinding::from_keys(
+                vec!["q".to_string(), "Escape".to_string()],
+                SceneAction::Goto {
+                    scene: "level_select".to_string()
+                }
+            )]
         );
         assert_eq!(
             parsed.scenes[2].rules,
-            vec![SceneRuleCall3::new("board", "rules", Vec::new())]
+            vec![SceneRuleCall::new("board", "rules", Vec::new())]
         );
         assert_eq!(
             parsed.scenes[2].components,
-            vec![SceneComponent3::Box {
+            vec![SceneComponent::Box(puzzle_scene::SceneContainer {
                 layout: SceneLayout3 {
                     size: Some(SceneSize3::new(8, 8)),
                     ..SceneLayout3::default()
                 },
-                children: vec![SceneComponent3::Puzzle3 {
-                    source: "board".to_string(),
-                    inputs: Vec::new(),
-                    layout: SceneLayout3 {
+                children: vec![puzzle3_component(
+                    "board",
+                    Vec::new(),
+                    SceneLayout3 {
                         size: Some(SceneSize3::new(7, 7)),
                         ..SceneLayout3::default()
                     },
-                }],
-            }]
+                )],
+            })]
         );
         let sprites = parsed.sprite_set.as_ref().expect("sprite set exists");
         assert_eq!(sprites.name, "basic");
@@ -2352,34 +2458,44 @@ scene playing {
             Direction3::FORWARD,
         ];
         for direction in solution {
-            assert!(session
-                .move_direction_with_win_condition(bundle, &parsed.rules, direction, win)
-                .unwrap());
+            assert!(
+                session
+                    .move_direction_with_win_condition(bundle, &parsed.rules, direction, win)
+                    .unwrap()
+            );
         }
 
         assert!(session.completed());
         assert_eq!(session.move_count(), 33);
-        assert!(session
-            .state()
-            .has_object(&bundle.game, Coord3::new(2, 5, 1), ObjectId(4)));
-        assert!(session
-            .state()
-            .has_object(&bundle.game, Coord3::new(1, 3, 1), ObjectId(4)));
+        assert!(
+            session
+                .state()
+                .has_object(&bundle.game, Coord3::new(2, 5, 1), ObjectId(4))
+        );
+        assert!(
+            session
+                .state()
+                .has_object(&bundle.game, Coord3::new(1, 3, 1), ObjectId(4))
+        );
 
         assert!(session.has_next_level(bundle));
         assert!(session.next_level(bundle).unwrap());
         assert_eq!(session.current_level_index(), 1);
         assert_eq!(session.move_count(), 0);
         assert!(!session.completed());
-        assert!(session
-            .state()
-            .has_object(&bundle.game, Coord3::new(3, 4, 1), ObjectId(3)));
+        assert!(
+            session
+                .state()
+                .has_object(&bundle.game, Coord3::new(3, 4, 1), ObjectId(3))
+        );
         assert!(session.has_next_level(bundle));
         assert!(session.next_level(bundle).unwrap());
         assert_eq!(session.current_level_index(), 2);
-        assert!(session
-            .state()
-            .has_object(&bundle.game, Coord3::new(6, 1, 1), ObjectId(3)));
+        assert!(
+            session
+                .state()
+                .has_object(&bundle.game, Coord3::new(6, 1, 1), ObjectId(3))
+        );
         assert!(!session.has_next_level(bundle));
 
         let mut lifecycle_session = GameSession3::new_with_lifecycle(bundle, &parsed.lifecycle)
@@ -2420,60 +2536,50 @@ scene playing {
         assert_eq!(
             parsed.scenes[0].components,
             vec![
-                SceneComponent3::Title {
-                    text: "Sokoban Literally in 3D".to_string(),
-                    layout: SceneLayout3::default(),
-                },
-                SceneComponent3::Button {
-                    label: "Start".to_string(),
-                    action: SceneAction3::StartLevels {
+                title_component("Sokoban Literally in 3D"),
+                button_component(
+                    "Start",
+                    SceneAction::StartLevels {
                         levels: "handmade".to_string(),
                         scene: "playing".to_string()
-                    },
-                    layout: SceneLayout3::default(),
-                },
-                SceneComponent3::Button {
-                    label: "Level Select".to_string(),
-                    action: SceneAction3::Goto {
+                    }
+                ),
+                button_component(
+                    "Level Select",
+                    SceneAction::Goto {
                         scene: "level_select".to_string()
-                    },
-                    layout: SceneLayout3::default(),
-                }
+                    }
+                )
             ]
         );
         assert_eq!(parsed.scenes[1].name, "level_select");
         assert_eq!(
             parsed.scenes[1].components,
             vec![
-                SceneComponent3::Title {
-                    text: "Select Level".to_string(),
-                    layout: SceneLayout3::default(),
-                },
-                SceneComponent3::LevelMenu {
-                    levels: "handmade".to_string(),
-                    action: SceneAction3::StartLevels {
+                title_component("Select Level"),
+                level_menu_component(
+                    "handmade",
+                    SceneAction::StartLevels {
                         levels: "handmade".to_string(),
                         scene: "playing".to_string()
-                    },
-                    layout: SceneLayout3::default(),
-                },
-                SceneComponent3::Button {
-                    label: "Back".to_string(),
-                    action: SceneAction3::Goto {
+                    }
+                ),
+                button_component(
+                    "Back",
+                    SceneAction::Goto {
                         scene: "title".to_string()
-                    },
-                    layout: SceneLayout3::default(),
-                }
+                    }
+                )
             ]
         );
         assert_eq!(parsed.scenes[2].name, "playing");
         assert_eq!(
             parsed.scenes[2].components,
-            vec![SceneComponent3::Puzzle3 {
-                source: "board".to_string(),
-                inputs: Vec::new(),
-                layout: SceneLayout3::default(),
-            }]
+            vec![puzzle3_component(
+                "board",
+                Vec::new(),
+                SceneLayout3::default(),
+            )]
         );
         assert_eq!(
             sprites.sprite("Floor").unwrap().voxels.size,
@@ -2559,14 +2665,18 @@ scene playing {
             assert_eq!(sprite.size, Size3::new(5, 5, 5));
             assert_eq!(sprite.layers.len(), 5);
             assert!(sprite.layers.iter().all(|layer| layer.len() == 5));
-            assert!(sprite
-                .layers
-                .iter()
-                .all(|layer| layer.iter().all(|row| row.chars().count() == 5)));
-            assert!(sprite.layers[1..]
-                .iter()
-                .flatten()
-                .all(|row| *row == "....."));
+            assert!(
+                sprite
+                    .layers
+                    .iter()
+                    .all(|layer| layer.iter().all(|row| row.chars().count() == 5))
+            );
+            assert!(
+                sprite.layers[1..]
+                    .iter()
+                    .flatten()
+                    .all(|row| *row == ".....")
+            );
         }
 
         let player = sprites

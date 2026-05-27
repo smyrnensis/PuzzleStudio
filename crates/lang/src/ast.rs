@@ -134,6 +134,8 @@ pub(crate) enum EffectAst {
     Restart,
     NextLevel,
     Again,
+    Checkpoint,
+    ClearCheckpoint,
     PlaySfx {
         name: String,
     },

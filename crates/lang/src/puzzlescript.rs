@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{AppError, source::strip_line_comment};
 
@@ -76,6 +76,7 @@ pub fn translate_puzzlescript_to_canonical(source: &str) -> Result<String, AppEr
     let author = parse_author(&sections.prelude);
     let homepage = parse_homepage(&sections.prelude);
     let run_rules_on_level_start = parse_run_rules_on_level_start(&sections.prelude);
+    let again_interval = parse_again_interval(&sections.prelude);
     let theme_colors = parse_theme_colors(&sections.prelude);
     let viewport_size = parse_viewport_size(&sections.prelude);
     let sounds = parse_sound_defs(&sections.sounds);
@@ -92,6 +93,9 @@ pub fn translate_puzzlescript_to_canonical(source: &str) -> Result<String, AppEr
     }
     if let Some(homepage) = &homepage {
         out.push(format!("homepage {}", canonical_metadata_text(homepage)));
+    }
+    if let Some(seconds) = &again_interval {
+        out.push(format!("again_interval = {seconds}s"));
     }
     out.push(String::new());
     push_theme_colors(&mut out, &theme_colors);
@@ -247,6 +251,18 @@ fn parse_run_rules_on_level_start(prelude: &[String]) -> bool {
     prelude
         .iter()
         .any(|line| line.trim().eq_ignore_ascii_case("run_rules_on_level_start"))
+}
+
+fn parse_again_interval(prelude: &[String]) -> Option<String> {
+    prelude.iter().find_map(|line| {
+        let tokens = line.split_whitespace().collect::<Vec<_>>();
+        let [command, seconds] = tokens.as_slice() else {
+            return None;
+        };
+        command
+            .eq_ignore_ascii_case("again_interval")
+            .then(|| (*seconds).to_string())
+    })
 }
 
 fn parse_theme_colors(prelude: &[String]) -> Vec<(String, String)> {
@@ -820,11 +836,12 @@ fn push_legend(
     level_lines: &[String],
     objects: &[PsObjectDef],
     aliases: &[PsAliasDef],
-) {
+) -> BTreeMap<char, char> {
     out.push("legend {".to_string());
     let mut has_empty = false;
     let mut defined_chars = BTreeSet::<char>::new();
     let used_chars = level_chars(level_lines);
+    let char_map = ps_level_char_map(lines, &used_chars);
 
     for object in objects {
         let Some(ch) = object.shorthand else {
@@ -841,20 +858,21 @@ fn push_legend(
         let Some(ch) = ch.chars().next() else {
             continue;
         };
+        let output_ch = char_map.get(&ch).copied().unwrap_or(ch);
         let terms = split_ps_relation(rhs)
             .into_iter()
             .filter_map(|term| resolve_name(term, objects, aliases))
             .collect::<Vec<_>>();
         if terms == ["empty"] {
-            out.push(format!("  {ch} = empty"));
+            out.push(format!("  {output_ch} = empty"));
             has_empty = true;
         } else if !terms.is_empty() {
-            out.push(format!("  {ch} = {}", terms.join(" ")));
+            out.push(format!("  {output_ch} = {}", terms.join(" ")));
         }
         if !terms.is_empty() {
-            defined_chars.insert(ch);
-            if ch.is_ascii_uppercase() {
-                let lower = ch.to_ascii_lowercase();
+            defined_chars.insert(output_ch);
+            if output_ch.is_ascii_uppercase() {
+                let lower = output_ch.to_ascii_lowercase();
                 if used_chars.contains(&lower) && !defined_chars.contains(&lower) {
                     if terms == ["empty"] {
                         out.push(format!("  {lower} = empty"));
@@ -872,6 +890,7 @@ fn push_legend(
     }
     out.push("}".to_string());
     out.push(String::new());
+    char_map
 }
 
 fn ps_background_object(objects: &[PsObjectDef]) -> Option<String> {
@@ -892,6 +911,45 @@ fn choose_empty_legend_char(defined_chars: &BTreeSet<char>, used_chars: &BTreeSe
         .unwrap_or('_')
 }
 
+fn ps_level_char_map(lines: &[String], used_chars: &BTreeSet<char>) -> BTreeMap<char, char> {
+    let mut defined_chars = BTreeSet::<char>::new();
+    for line in lines.iter().filter(|line| !line.trim().is_empty()) {
+        let Some((ch, _)) = parse_legend_row(line) else {
+            continue;
+        };
+        if let Some(ch) = ch.chars().next() {
+            defined_chars.insert(ch);
+        }
+    }
+
+    let mut remapped = BTreeMap::new();
+    let mut reserved = used_chars
+        .union(&defined_chars)
+        .copied()
+        .collect::<BTreeSet<_>>();
+    for ch in defined_chars
+        .iter()
+        .copied()
+        .filter(|ch| is_canonical_legend_syntax_char(*ch))
+    {
+        let replacement = choose_ps_level_char_replacement(&reserved);
+        remapped.insert(ch, replacement);
+        reserved.insert(replacement);
+    }
+    remapped
+}
+
+fn is_canonical_legend_syntax_char(ch: char) -> bool {
+    matches!(ch, '{' | '}' | '"')
+}
+
+fn choose_ps_level_char_replacement(reserved: &BTreeSet<char>) -> char {
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789;,:!?'`~@^&=<>"
+        .chars()
+        .find(|ch| !reserved.contains(ch) && !is_canonical_legend_syntax_char(*ch))
+        .unwrap_or('§')
+}
+
 fn parse_legend_row(line: &str) -> Option<(&str, &str)> {
     let (left, right) = line.split_once('=')?;
     let ch = left.trim();
@@ -899,6 +957,15 @@ fn parse_legend_row(line: &str) -> Option<(&str, &str)> {
         return None;
     }
     Some((ch, right.trim()))
+}
+
+fn remap_ps_level_line(line: &str, char_map: &BTreeMap<char, char>) -> String {
+    if char_map.is_empty() || is_level_message(line) {
+        return line.to_string();
+    }
+    line.chars()
+        .map(|ch| char_map.get(&ch).copied().unwrap_or(ch))
+        .collect()
 }
 
 fn level_chars(lines: &[String]) -> BTreeSet<char> {
@@ -984,14 +1051,9 @@ fn push_rules(
     sounds: &[PsSoundDef],
 ) {
     let player_selector = ps_player_selector(objects, aliases);
-    let has_again = ps_rules_have_again(lines);
-    if has_again {
-        out.push("var __ps_again = false".to_string());
-        out.push(String::new());
-    }
     if run_rules_on_level_start {
         out.push("routine __ps_main once {".to_string());
-        push_ps_main_rule_body(out, lines, objects, aliases, sounds, "  ", has_again);
+        push_ps_main_rule_body(out, lines, objects, aliases, sounds, "  ");
         out.push("}".to_string());
         out.push(String::new());
 
@@ -1022,29 +1084,17 @@ fn push_rules(
     out.push(format!(
         "  input directions [ {player_selector} ] -> [ {player_selector}{{>}} ]"
     ));
-    push_ps_main_rule_body(out, lines, objects, aliases, sounds, "  ", has_again);
+    push_ps_main_rule_body(out, lines, objects, aliases, sounds, "  ");
     out.push("}".to_string());
     out.push(String::new());
-}
-
-fn ps_rules_have_again(lines: &[String]) -> bool {
-    lines.iter().any(|line| {
-        line.split_whitespace()
-            .any(|token| token.eq_ignore_ascii_case("again"))
-    })
 }
 
 fn push_ps_level_clear(out: &mut Vec<String>) {
     out.push("on_level_clear {".to_string());
+    out.push("  wait 0.3s".to_string());
     out.push("  next_level".to_string());
     out.push("}".to_string());
     out.push(String::new());
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum PsAgainLowering {
-    Command,
-    LoopFlag,
 }
 
 fn push_ps_background_fill(out: &mut Vec<String>, background_object: Option<&str>, indent: &str) {
@@ -1063,34 +1113,8 @@ fn push_ps_main_rule_body(
     aliases: &[PsAliasDef],
     sounds: &[PsSoundDef],
     indent: &str,
-    use_loop_flag_for_again: bool,
 ) {
-    if use_loop_flag_for_again {
-        out.push(format!("{indent}set __ps_again = true"));
-        out.push(format!("{indent}repeat until __ps_again == false {{"));
-        out.push(format!("{indent}  set __ps_again = false"));
-        push_ps_main_rule_body_steps(
-            out,
-            lines,
-            objects,
-            aliases,
-            sounds,
-            &format!("{indent}  "),
-            PsAgainLowering::LoopFlag,
-        );
-        out.push(format!("{indent}}}"));
-        out.push(format!("{indent}set __ps_again = false"));
-        return;
-    }
-    push_ps_main_rule_body_steps(
-        out,
-        lines,
-        objects,
-        aliases,
-        sounds,
-        indent,
-        PsAgainLowering::Command,
-    );
+    push_ps_main_rule_body_steps(out, lines, objects, aliases, sounds, indent);
 }
 
 fn push_ps_main_rule_body_steps(
@@ -1100,7 +1124,6 @@ fn push_ps_main_rule_body_steps(
     aliases: &[PsAliasDef],
     sounds: &[PsSoundDef],
     indent: &str,
-    again_lowering: PsAgainLowering,
 ) {
     push_ps_sound_call(out, sounds, indent, "__ps_sound_mark_existing");
     push_canonical_rule_rows(
@@ -1113,7 +1136,6 @@ fn push_ps_main_rule_body_steps(
         objects,
         aliases,
         indent,
-        again_lowering,
     );
     out.push(format!("{indent}move"));
     push_canonical_rule_rows(
@@ -1126,7 +1148,6 @@ fn push_ps_main_rule_body_steps(
         objects,
         aliases,
         indent,
-        again_lowering,
     );
     push_ps_sound_call(out, sounds, indent, "__ps_sound_emit_events");
 }
@@ -1137,7 +1158,6 @@ fn push_canonical_rule_rows<'a>(
     objects: &[PsObjectDef],
     aliases: &[PsAliasDef],
     indent: &str,
-    again_lowering: PsAgainLowering,
 ) {
     let mut group = Vec::<String>::new();
     for line in lines {
@@ -1145,7 +1165,7 @@ fn push_canonical_rule_rows<'a>(
         if !is_continuation {
             flush_canonical_rule_group(out, &mut group, indent);
         }
-        if let Some(rule) = canonical_rule_row(line, objects, aliases, again_lowering) {
+        if let Some(rule) = canonical_rule_row(line, objects, aliases) {
             group.push(rule);
         }
     }
@@ -1181,7 +1201,6 @@ fn canonical_rule_row(
     line: &str,
     objects: &[PsObjectDef],
     aliases: &[PsAliasDef],
-    again_lowering: PsAgainLowering,
 ) -> Option<String> {
     let trimmed = line.trim().trim_start_matches('+').trim();
     if !trimmed.contains("->") {
@@ -1201,129 +1220,12 @@ fn canonical_rule_row(
         .into_iter()
         .map(|token| resolve_rule_token(&token, objects, aliases))
         .collect::<Vec<_>>();
-    let mut tokens = expand_ps_sfx_effect_tokens(tokens);
-    if has_again && again_lowering == PsAgainLowering::LoopFlag {
-        tokens = add_ps_again_idempotence_guards(tokens);
-    }
+    let tokens = expand_ps_sfx_effect_tokens(tokens);
     let mut row = tokens.join(" ");
     if has_again {
-        match again_lowering {
-            PsAgainLowering::Command => row.push_str(" again"),
-            PsAgainLowering::LoopFlag => row.push_str(" set __ps_again = true"),
-        }
+        row.push_str(" again");
     }
     Some(row)
-}
-
-fn add_ps_again_idempotence_guards(tokens: Vec<String>) -> Vec<String> {
-    let Some(arrow) = tokens.iter().position(|token| token == "->") else {
-        return tokens;
-    };
-    let before_cells = bracket_cell_ranges(&tokens, 0, arrow);
-    let after_cells = bracket_cell_ranges(&tokens, arrow + 1, tokens.len());
-    let mut insertions = Vec::<(usize, Vec<String>)>::new();
-
-    for ((before_start, before_end), (after_start, after_end)) in
-        before_cells.iter().zip(after_cells.iter())
-    {
-        let guards = ps_again_guards_for_cell(
-            &tokens[before_start + 1..*before_end],
-            &tokens[after_start + 1..*after_end],
-        );
-        if !guards.is_empty() {
-            insertions.push((*before_end, guards));
-        }
-    }
-
-    if insertions.is_empty() {
-        return tokens;
-    }
-    let mut out = tokens;
-    for (index, guards) in insertions.into_iter().rev() {
-        for guard in guards.into_iter().rev() {
-            out.insert(index, guard);
-        }
-    }
-    remove_redundant_base_before_movement_guards(out)
-}
-
-fn bracket_cell_ranges(tokens: &[String], start: usize, end: usize) -> Vec<(usize, usize)> {
-    let mut ranges = Vec::new();
-    let mut open = None::<usize>;
-    for index in start..end {
-        match tokens[index].as_str() {
-            "[" => open = Some(index),
-            "]" => {
-                if let Some(start) = open.take() {
-                    ranges.push((start, index));
-                }
-            }
-            _ => {}
-        }
-    }
-    ranges
-}
-
-fn ps_again_guards_for_cell(before: &[String], after: &[String]) -> Vec<String> {
-    let mut guards = Vec::new();
-    for token in after {
-        if matches!(token.as_str(), "|" | "...") || token == "no" {
-            continue;
-        }
-        if let Some((base, value)) = movement_token_parts(token) {
-            if before.iter().any(|existing| existing == token) {
-                continue;
-            }
-            if before.iter().any(|existing| {
-                existing == base
-                    || movement_token_parts(existing)
-                        .is_some_and(|(existing_base, _)| existing_base == base)
-            }) {
-                let guard = format!("{base}{{no {value}}}");
-                if !before.iter().any(|existing| existing == &guard)
-                    && !guards.iter().any(|existing| existing == &guard)
-                {
-                    guards.push(guard);
-                }
-            }
-            continue;
-        }
-    }
-    guards
-}
-
-fn movement_token_parts(token: &str) -> Option<(&str, &str)> {
-    let (base, rest) = token.split_once('{')?;
-    let value = rest.strip_suffix('}')?;
-    if matches!(value, "up" | "down" | "left" | "right") {
-        Some((base, value))
-    } else {
-        None
-    }
-}
-
-fn movement_no_token_parts(token: &str) -> Option<(&str, &str)> {
-    let (base, rest) = token.split_once('{')?;
-    let value = rest.strip_suffix('}')?.strip_prefix("no ")?;
-    if matches!(value, "up" | "down" | "left" | "right") {
-        Some((base, value))
-    } else {
-        None
-    }
-}
-
-fn remove_redundant_base_before_movement_guards(mut tokens: Vec<String>) -> Vec<String> {
-    let mut index = 1;
-    while index < tokens.len() {
-        if let Some((base, _)) = movement_no_token_parts(&tokens[index]) {
-            if tokens[index - 1] == base {
-                tokens.remove(index - 1);
-                continue;
-            }
-        }
-        index += 1;
-    }
-    tokens
 }
 
 fn expand_ps_sfx_effect_tokens(tokens: Vec<String>) -> Vec<String> {
@@ -1357,12 +1259,12 @@ fn attach_direction_prefixes(
     let mut attached = Vec::new();
     let mut i = 0usize;
     while i < tokens.len() {
-        if is_direction_token(&tokens[i])
+        if let Some(direction) = canonical_direction_token(&tokens[i])
             && let Some(selector) = tokens
                 .get(i + 1)
                 .filter(|selector| resolve_name(selector, objects, aliases).is_some())
         {
-            attached.push(append_scratch_to_selector(selector, &tokens[i]));
+            attached.push(append_scratch_to_selector(selector, direction));
             i += 2;
             continue;
         }
@@ -1535,10 +1437,10 @@ fn is_standalone_direction_char(ch: char, next: Option<char>) -> bool {
 }
 
 fn resolve_rule_token(token: &str, objects: &[PsObjectDef], aliases: &[PsAliasDef]) -> String {
-    if matches!(
-        token,
-        "[" | "]" | "|" | ">" | "<" | "^" | "v" | "->" | "up" | "down" | "left" | "right"
-    ) {
+    if let Some(direction) = canonical_direction_token(token) {
+        return direction.to_string();
+    }
+    if matches!(token, "[" | "]" | "|" | ">" | "<" | "^" | "v" | "->") {
         return token.to_string();
     }
     if let Some((base, scratch)) = token.split_once('{') {
@@ -1549,11 +1451,18 @@ fn resolve_rule_token(token: &str, objects: &[PsObjectDef], aliases: &[PsAliasDe
     resolve_name(token, objects, aliases).unwrap_or_else(|| token.to_string())
 }
 
-fn is_direction_token(token: &str) -> bool {
-    matches!(
-        token,
-        ">" | "<" | "^" | "v" | "up" | "down" | "left" | "right"
-    )
+fn canonical_direction_token(token: &str) -> Option<&'static str> {
+    match token.to_ascii_lowercase().as_str() {
+        ">" => Some(">"),
+        "<" => Some("<"),
+        "^" => Some("^"),
+        "v" => Some("v"),
+        "up" => Some("up"),
+        "down" => Some("down"),
+        "left" => Some("left"),
+        "right" => Some("right"),
+        _ => None,
+    }
 }
 
 fn push_levels(
@@ -1565,7 +1474,7 @@ fn push_levels(
 ) {
     out.push("levels {".to_string());
     let mut legend = Vec::new();
-    push_legend(&mut legend, legend_lines, lines, objects, aliases);
+    let char_map = push_legend(&mut legend, legend_lines, lines, objects, aliases);
     for line in legend {
         if line.is_empty() {
             continue;
@@ -1578,7 +1487,7 @@ fn push_levels(
             out.push(String::new());
         }
         for line in chunk {
-            out.push(format!("  {line}"));
+            out.push(format!("  {}", remap_ps_level_line(line, &char_map)));
         }
     }
     out.push("}".to_string());
@@ -1592,16 +1501,28 @@ fn push_playing_scene(
     viewport_size: Option<PsViewportSize>,
 ) {
     out.push("scene title {".to_string());
-    out.push(format!("  title \"{}\"", escape_scene_text(title)));
+    out.push("  view {".to_string());
+    out.push(format!("    title \"{}\"", escape_scene_text(title)));
     if let Some(author) = author {
-        out.push(format!("  subtitle \"by {}\"", escape_scene_text(author)));
+        out.push(format!("    subtitle \"by {}\"", escape_scene_text(author)));
     }
-    out.push("  inputs {".to_string());
-    out.push("    confirm <- Enter Space x".to_string());
+    out.push("    if game.has_progress_save {".to_string());
+    out.push("      choice \"Continue\" -> input continue_game".to_string());
+    out.push("    }".to_string());
+    out.push("    choice \"New Game\" -> input new_game".to_string());
     out.push("  }".to_string());
-    out.push("  button \"Play\" -> input confirm".to_string());
+    out.push("  inputs {".to_string());
+    out.push("    continue_game <- Enter Space x".to_string());
+    out.push("    new_game <- n".to_string());
+    out.push("  }".to_string());
     out.push("  rules {".to_string());
-    push_confirm_start_rule(out, startgame_sfx);
+    push_title_start_rule(out, "continue_game", &["goto playing"], startgame_sfx);
+    push_title_start_rule(
+        out,
+        "new_game",
+        &["clear_game_progress", "goto playing(0)"],
+        startgame_sfx,
+    );
     out.push("  }".to_string());
     out.push("}".to_string());
     out.push(String::new());
@@ -1626,21 +1547,34 @@ fn push_playing_scene(
     out.push("    back <- Escape q".to_string());
     out.push("  }".to_string());
     out.push("  rules {".to_string());
-    out.push("    board.rules".to_string());
+    out.push("    step board".to_string());
     out.push("    if input == back -> goto title".to_string());
     out.push("  }".to_string());
     out.push("}".to_string());
     out.push(String::new());
 }
 
-fn push_confirm_start_rule(out: &mut Vec<String>, startgame_sfx: Option<&str>) {
+fn push_title_start_rule(
+    out: &mut Vec<String>,
+    input_name: &str,
+    effects: &[&str],
+    startgame_sfx: Option<&str>,
+) {
     if let Some(name) = startgame_sfx {
-        out.push("    if input == confirm -> {".to_string());
+        out.push(format!("    if input == {input_name} -> {{"));
         out.push(format!("      sfx {name}"));
-        out.push("      start levels in playing".to_string());
+        for effect in effects {
+            out.push(format!("      {effect}"));
+        }
         out.push("    }".to_string());
+    } else if let [effect] = effects {
+        out.push(format!("    if input == {input_name} -> {effect}"));
     } else {
-        out.push("    if input == confirm -> start levels in playing".to_string());
+        out.push(format!("    if input == {input_name} -> {{"));
+        for effect in effects {
+            out.push(format!("      {effect}"));
+        }
+        out.push("    }".to_string());
     }
 }
 

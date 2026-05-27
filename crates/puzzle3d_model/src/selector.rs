@@ -36,6 +36,7 @@ impl SelectorCatalog3 {
         let alternatives = match selector {
             ObjectSelector3::Object(name) => self.resolve_object(name)?,
             ObjectSelector3::Group(name) => self.resolve_group(name, &mut Vec::new())?,
+            ObjectSelector3::Labeled { selector, .. } => self.resolve(selector)?.alternatives,
             ObjectSelector3::Variant { family, tags } => self.resolve_variant(family, tags)?,
         };
         let token = selector.token();
@@ -86,6 +87,7 @@ impl SelectorCatalog3 {
             let alternatives = match selector {
                 ObjectSelector3::Object(name) => self.resolve_object(name)?,
                 ObjectSelector3::Group(name) => self.resolve_group(name, stack)?,
+                ObjectSelector3::Labeled { selector, .. } => self.resolve(selector)?.alternatives,
                 ObjectSelector3::Variant { family, tags } => self.resolve_variant(family, tags)?,
             };
             for object in alternatives {
@@ -726,6 +728,8 @@ fn lower_pattern_template_with_assignments(
     catalog: &SelectorCatalog3,
     template: &PatternTemplate3,
 ) -> Result<Vec<PatternPartial3>, PatternLoweringError3> {
+    reject_duplicate_labeled_selectors(template)?;
+    let has_labeled_selectors = pattern_template_has_labeled_selectors(template);
     let mut partials = vec![PatternPartial3 {
         cells: Vec::new(),
         assignments: Vec::new(),
@@ -739,7 +743,37 @@ fn lower_pattern_template_with_assignments(
         partials = next_partials;
     }
 
+    if has_labeled_selectors {
+        partials.reverse();
+    }
     Ok(partials)
+}
+
+fn pattern_template_has_labeled_selectors(template: &PatternTemplate3) -> bool {
+    template.cells.iter().any(|cell| {
+        cell.require
+            .iter()
+            .any(ObjectSelector3::has_occurrence_label)
+    })
+}
+
+fn reject_duplicate_labeled_selectors(
+    template: &PatternTemplate3,
+) -> Result<(), PatternLoweringError3> {
+    let mut seen = Vec::<String>::new();
+    for cell in &template.cells {
+        for selector in &cell.require {
+            if !selector.has_occurrence_label() {
+                continue;
+            }
+            let token = selector.token();
+            if seen.contains(&token) {
+                return Err(PatternLoweringError3::DuplicateSelectorOccurrenceLabel { token });
+            }
+            seen.push(token);
+        }
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -863,6 +897,10 @@ fn write_object(
         .map(|assignment| assignment.object)
     {
         return Ok(object);
+    }
+
+    if selector.has_occurrence_label() {
+        return Err(RuleLoweringError3::UnboundSelectorOccurrenceLabel { token });
     }
 
     let resolved = catalog.resolve(selector)?;
@@ -1027,6 +1065,10 @@ impl ObjectVariant3 {
 pub enum ObjectSelector3 {
     Object(String),
     Group(String),
+    Labeled {
+        token: String,
+        selector: Box<ObjectSelector3>,
+    },
     Variant {
         family: String,
         tags: Vec<SelectorTag3>,
@@ -1042,6 +1084,13 @@ impl ObjectSelector3 {
         Self::Group(name.into())
     }
 
+    pub fn labeled(token: impl Into<String>, selector: ObjectSelector3) -> Self {
+        Self::Labeled {
+            token: token.into(),
+            selector: Box::new(selector),
+        }
+    }
+
     pub fn variant(family: impl Into<String>, tags: Vec<SelectorTag3>) -> Self {
         Self::Variant {
             family: family.into(),
@@ -1052,6 +1101,7 @@ impl ObjectSelector3 {
     pub fn token(&self) -> String {
         match self {
             Self::Object(name) | Self::Group(name) => name.clone(),
+            Self::Labeled { token, .. } => token.clone(),
             Self::Variant { family, tags } => {
                 let mut token = family.clone();
                 for tag in tags {
@@ -1061,6 +1111,10 @@ impl ObjectSelector3 {
                 token
             }
         }
+    }
+
+    pub fn has_occurrence_label(&self) -> bool {
+        matches!(self, Self::Labeled { .. })
     }
 }
 
@@ -1137,6 +1191,7 @@ pub enum SelectorError3 {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PatternLoweringError3 {
     Selector(SelectorError3),
+    DuplicateSelectorOccurrenceLabel { token: String },
 }
 
 impl From<SelectorError3> for PatternLoweringError3 {
@@ -1149,6 +1204,9 @@ impl From<SelectorError3> for PatternLoweringError3 {
 pub enum RuleLoweringError3 {
     Pattern(PatternLoweringError3),
     Selector(SelectorError3),
+    UnboundSelectorOccurrenceLabel {
+        token: String,
+    },
     AmbiguousWriteSelector {
         token: String,
         alternatives: Vec<ObjectId>,

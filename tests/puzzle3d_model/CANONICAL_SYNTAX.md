@@ -262,7 +262,7 @@ scene playing {
   }
 
   rules {
-    board.rules
+    step board
   }
 
   view {
@@ -278,7 +278,7 @@ scene playing {
 }
 ```
 
-`board.rules` means "step the `board` component with the current raw input
+`step board` means "step the `board` component with the current raw input
 context". The component then interprets that raw input through its `inputs`
 block and calls the model with the resulting local input.
 
@@ -294,10 +294,10 @@ as `up`.
 Undo and restart are not component inputs. They are stronger play/session
 operations owned by the parent runtime or scene.
 
-Prototype-only scene `keys { ... }` blocks are compatibility syntax and should
-not appear in new canonical examples. The migration target is
-`inputs { <input> <- <key...> }`, with model-specific interpretation owned by the
-`puzzle3` component or 3D model runtime.
+Scene `keys { ... }` blocks are shortcuts and use
+`<key...> -> <scene action>`. Use `inputs { <input> <- <key...> }` when the
+semantic input should be named before routing, with model-specific interpretation
+owned by the `puzzle3` component or 3D model runtime.
 
 ## Minimal example
 

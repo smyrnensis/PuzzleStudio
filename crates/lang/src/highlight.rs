@@ -141,6 +141,9 @@ fn collect_loaded_game_symbols(
     for name in game.object_labels.values() {
         symbols.insert(name.clone(), HighlightKind::Object);
     }
+    for name in game.object_groups.keys() {
+        insert_source_symbol(symbols, name, HighlightKind::Group);
+    }
     for name in game.input_labels.values() {
         symbols.insert(name.clone(), HighlightKind::Input);
     }
@@ -195,7 +198,7 @@ fn collect_puzzle3_symbols(
         }
     }
     for group in &puzzle.catalog.groups {
-        symbols.insert(group.name.clone(), HighlightKind::Group);
+        insert_source_symbol(symbols, &group.name, HighlightKind::Group);
     }
     for input in &puzzle.game.inputs {
         symbols.insert(input.name.clone(), HighlightKind::Input);
@@ -430,7 +433,7 @@ fn collect_line_symbols(
         ["routine", name, ..] | ["rule", name, ..] => {
             insert_source_symbol(symbols, name, HighlightKind::Effect);
         }
-        ["command" | "input", name, ..] | ["direction", name, ..] => {
+        ["input", name, ..] | ["direction", name, ..] => {
             insert_source_symbol(symbols, name, HighlightKind::Input);
         }
         ["query", name, ..] => {
@@ -473,7 +476,7 @@ fn collect_line_symbols(
             family_axes,
             family_axis_names,
         ),
-        ["var" | "const" | "global", name, "=", ..]
+        ["var" | "const", name, "=", ..]
         | ["persistent", "var" | "const", name, "=", ..]
         | ["persistent", name, "=", ..] => {
             insert_source_symbol(symbols, name, HighlightKind::State);
@@ -488,15 +491,15 @@ fn collect_line_symbols(
         }
         [
             "layer" | "layers" | "collision_layers",
-            _name,
+            name,
             "=",
             selectors @ ..,
         ] if scope == Some(SourceScope::Objects) => {
-            collect_selector_specs(selectors, symbols);
+            collect_layer_selector_specs(name, selectors, symbols);
         }
         [name, "=", selectors @ ..] if scope == Some(SourceScope::Layers) => {
             insert_source_symbol(symbols, name, HighlightKind::Group);
-            collect_selector_specs(selectors, symbols);
+            collect_layer_selector_specs(name, selectors, symbols);
         }
         ["each", spec, ..] if scope == Some(SourceScope::Layers) => {
             collect_object_spec(spec, symbols);
@@ -582,8 +585,49 @@ fn collect_selector_specs(specs: &[&str], symbols: &mut HashMap<String, Highligh
         if matches!(*spec, "=" | "display" | "each") || parser_keyword(spec) {
             continue;
         }
-        collect_object_spec(spec, symbols);
+        collect_selector_spec(spec, symbols);
     }
+}
+
+fn collect_layer_selector_specs(
+    layer_name: &str,
+    specs: &[&str],
+    symbols: &mut HashMap<String, HighlightKind>,
+) {
+    for spec in specs {
+        if matches!(*spec, "=" | "display" | "each") || parser_keyword(spec) {
+            continue;
+        }
+        collect_layer_selector_spec(layer_name, spec, symbols);
+    }
+}
+
+fn collect_selector_spec(spec: &str, symbols: &mut HashMap<String, HighlightKind>) {
+    let cleaned = clean_object_spec(spec);
+    let mut parts = cleaned.split(':');
+    let Some(base) = parts.next() else {
+        return;
+    };
+    if matches!(symbols.get(base), Some(HighlightKind::Group)) {
+        return;
+    }
+    collect_object_spec(spec, symbols);
+}
+
+fn collect_layer_selector_spec(
+    layer_name: &str,
+    spec: &str,
+    symbols: &mut HashMap<String, HighlightKind>,
+) {
+    let cleaned = clean_object_spec(spec);
+    let mut parts = cleaned.split(':');
+    let Some(base) = parts.next() else {
+        return;
+    };
+    if base != layer_name && matches!(symbols.get(base), Some(HighlightKind::Group)) {
+        return;
+    }
+    collect_object_spec(spec, symbols);
 }
 
 fn collect_object_declaration_specs(
@@ -653,9 +697,17 @@ fn collect_scratch_spec(
     ty: Option<&str>,
     symbols: &mut HashMap<String, HighlightKind>,
 ) {
-    insert_source_symbol(symbols, name, HighlightKind::Scratch);
+    insert_scratch_symbol(symbols, name);
     if let Some(ty) = ty.filter(|ty| !matches!(*ty, "bool" | "int")) {
         insert_source_symbol(symbols, ty, HighlightKind::Variant);
+    }
+}
+
+fn insert_scratch_symbol(symbols: &mut HashMap<String, HighlightKind>, name: &str) {
+    if is_source_symbol_name(name) {
+        insert_source_symbol(symbols, name, HighlightKind::Scratch);
+    } else if is_source_qualified_identifier(name) && !parser_literal(name) {
+        symbols.insert(name.to_string(), HighlightKind::Scratch);
     }
 }
 
@@ -715,6 +767,21 @@ fn is_source_identifier(name: &str) -> bool {
         && chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
 }
 
+fn is_source_qualified_identifier(name: &str) -> bool {
+    let mut parts = name.split(':');
+    let Some(first) = parts.next() else {
+        return false;
+    };
+    is_source_identifier(first) && parts.all(is_source_value_atom)
+}
+
+fn is_source_value_atom(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .chars()
+            .all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
+}
+
 fn classify_bare_word(
     token: &str,
     symbols: &HashMap<String, HighlightKind>,
@@ -758,6 +825,11 @@ fn push_word(
     binding_ranges: &[BindingRange],
     semantic_ranges: &[SemanticToken],
 ) {
+    if matches!(symbols.get(token), Some(HighlightKind::Scratch)) {
+        push_span(out, HighlightKind::Scratch, token);
+        return;
+    }
+
     let parts = split_highlight_word(token);
     let supplied_axes = token.matches(':').count();
     let use_schema_selector_coloring = token.contains(':') && !token.contains('.');
@@ -1291,7 +1363,6 @@ fn parser_keyword(token: &str) -> bool {
             | "button"
             | "camera"
             | "column"
-            | "command"
             | "component_effect"
             | "const"
             | "colors"
@@ -1299,6 +1370,7 @@ fn parser_keyword(token: &str) -> bool {
             | "css"
             | "direction"
             | "default_wait_time"
+            | "again_interval"
             | "display"
             | "effect"
             | "each"
@@ -1309,7 +1381,6 @@ fn parser_keyword(token: &str) -> bool {
             | "gap"
             | "screen_focus"
             | "from"
-            | "global"
             | "grid"
             | "homepage"
             | "puzzle"
@@ -1644,6 +1715,21 @@ P
     }
 
     #[test]
+    fn removed_global_syntax_is_not_highlighted_as_keyword_or_state() {
+        let highlighted = highlight_source(
+            r#"
+title no_global_highlight
+puzzle board {
+global moved = false
+}
+"#,
+        );
+
+        assert!(!highlighted.html.contains("syntax-keyword\">global"));
+        assert!(!highlighted.html.contains("syntax-state\">moved"));
+    }
+
+    #[test]
     fn highlights_scene_step_rule_directive() {
         let highlighted = highlight_source(
             r#"
@@ -1787,8 +1873,8 @@ sfx bump seed=hit type=jump
 }
 
 scene title {
-button "Play" -> start levels in playing
-button "Continue" -> continue levels in playing
+button "Play" -> goto playing
+button "Continue" -> goto playing
 rules {
 input start -> goto playing
 }
@@ -1807,8 +1893,8 @@ scene playing {
         assert!(highlighted.html.contains("syntax-input\">jump"));
         assert!(highlighted.html.contains("syntax-query\">blocked"));
         assert!(highlighted.html.contains("syntax-asset\">bump"));
-        assert!(highlighted.html.contains("syntax-effect\">start"));
-        assert!(highlighted.html.contains("syntax-effect\">continue"));
+        assert!(highlighted.html.contains("syntax-input\">start"));
+        assert!(highlighted.html.contains("syntax-effect\">goto"));
         assert!(highlighted.html.contains("syntax-scene\">playing"));
     }
 
@@ -2032,6 +2118,45 @@ P
         assert!(highlighted.html.contains("syntax-group\">blocked"));
         assert!(highlighted.html.contains("syntax-object\">Goal"));
         assert!(highlighted.html.contains("syntax-object\">Player"));
+    }
+
+    #[test]
+    fn highlights_solid_layer_name_as_group_not_object() {
+        let highlighted = highlight_source(
+            r#"
+title solid_layer_highlight
+
+puzzle board {
+layers {
+solid = Player Box Wall
+}
+group {
+blocked = solid
+}
+rules {
+once [ Player | no solid ] -> [ | Player ]
+}
+level start {
+.
+}
+}
+"#,
+        );
+
+        assert!(
+            highlighted
+                .html
+                .contains("syntax-group\">solid</span> <span class=\"syntax-operator\">=</span>")
+        );
+        assert!(highlighted.html.contains(
+            "syntax-group\">blocked</span> <span class=\"syntax-operator\">=</span> <span class=\"syntax-group\">solid"
+        ));
+        assert!(
+            highlighted
+                .html
+                .contains("syntax-literal\">no</span> <span class=\"syntax-group\">solid")
+        );
+        assert!(!highlighted.html.contains("syntax-object\">solid"));
     }
 
     #[test]
@@ -2339,7 +2464,7 @@ column gap 1 align center top {
 puzzle3 board
 row gap 1 {
 button "Restart" -> board.restart
-button "Levels" -> start levels basic in level_select
+button "Levels" -> goto level_select
 }
 }
 }
@@ -2367,7 +2492,7 @@ button "Levels" -> start levels basic in level_select
         assert!(highlighted.html.contains("syntax-keyword\">align"));
         assert!(highlighted.html.contains("syntax-literal\">center"));
         assert!(highlighted.html.contains("syntax-literal\">top"));
-        assert!(highlighted.html.contains("syntax-effect\">start"));
+        assert!(highlighted.html.contains("syntax-effect\">goto"));
         assert!(highlighted.html.contains("syntax-scene\">level_select"));
         assert!(highlighted.html.contains("\n.P.B.\n"));
         assert!(
@@ -2986,6 +3111,40 @@ level start {
         assert!(highlighted.html.contains("syntax-scratch\">flag</span>"));
         assert!(!highlighted.html.contains("syntax-literal\">flag</span>"));
         assert!(!highlighted.html.contains("syntax-keyword\">flag</span>"));
+    }
+
+    #[test]
+    fn qualified_scratch_names_keep_scratch_color() {
+        let highlighted = highlight_source(
+            r#"
+title qualified_scratch_highlight
+
+puzzle board {
+layers 2
+legend . = empty
+objects {
+Player
+}
+scratch {
+enter:directions = bool
+count:3
+}
+rules {
+[ Player ] -> [ Player{enter:directions count:3} ]
+}
+level start {
+.
+}
+}
+"#,
+        );
+
+        assert!(
+            highlighted
+                .html
+                .contains("syntax-scratch\">enter:directions</span>")
+        );
+        assert!(highlighted.html.contains("syntax-scratch\">count:3</span>"));
     }
 
     #[test]

@@ -41,6 +41,64 @@ impl WasmCoreRuntime {
             .transition_program_outcome_json(program_key, level_index, state_json, input)
             .map_err(|error| JsValue::from_str(&error))
     }
+
+    pub fn set_state(&mut self, state_json: &str) -> Result<(), JsValue> {
+        self.inner
+            .set_state_json(state_json)
+            .map_err(|error| JsValue::from_str(&error))
+    }
+
+    pub fn current_state(&self) -> Result<String, JsValue> {
+        self.inner
+            .current_state_json()
+            .map_err(|error| JsValue::from_str(&error))
+    }
+
+    pub fn current_state_hash(&self) -> Result<String, JsValue> {
+        self.inner
+            .current_state_hash_json()
+            .map_err(|error| JsValue::from_str(&error))
+    }
+
+    pub fn current_cells(&self) -> Result<String, JsValue> {
+        self.inner
+            .current_cells_json()
+            .map_err(|error| JsValue::from_str(&error))
+    }
+
+    pub fn save_current_state(&mut self) -> Result<u32, JsValue> {
+        self.inner
+            .save_current_state()
+            .map_err(|error| JsValue::from_str(&error))
+    }
+
+    pub fn restore_saved_state(&mut self, handle: u32) -> Result<(), JsValue> {
+        self.inner
+            .restore_saved_state(handle)
+            .map_err(|error| JsValue::from_str(&error))
+    }
+
+    pub fn transition_current_outcome(
+        &mut self,
+        program_key: &str,
+        level_index: i32,
+        input: u16,
+    ) -> Result<String, JsValue> {
+        self.inner
+            .transition_current_outcome_json(program_key, level_index, input)
+            .map_err(|error| JsValue::from_str(&error))
+    }
+
+    pub fn transition_current_state_outcome(
+        &mut self,
+        program_key: &str,
+        level_index: i32,
+        input: u16,
+    ) -> Result<String, JsValue> {
+        self.inner
+            .transition_current_state_outcome_json(program_key, level_index, input)
+            .map_err(|error| JsValue::from_str(&error))
+    }
 }
 
 #[wasm_bindgen]
@@ -65,9 +123,55 @@ impl WasmPuzzle3Runtime {
             .map_err(|error| JsValue::from_str(&error))
     }
 
+    pub fn set_state(&mut self, state_json: &str) -> Result<(), JsValue> {
+        self.inner
+            .set_state_json(state_json)
+            .map_err(|error| JsValue::from_str(&error))
+    }
+
+    pub fn current_state(&self) -> Result<String, JsValue> {
+        self.inner
+            .current_state_json()
+            .map_err(|error| JsValue::from_str(&error))
+    }
+
+    pub fn current_cells(&self) -> Result<String, JsValue> {
+        self.inner
+            .current_cells_json()
+            .map_err(|error| JsValue::from_str(&error))
+    }
+
+    pub fn save_current_state(&mut self) -> Result<u32, JsValue> {
+        self.inner
+            .save_current_state()
+            .map_err(|error| JsValue::from_str(&error))
+    }
+
+    pub fn restore_saved_state(&mut self, handle: u32) -> Result<(), JsValue> {
+        self.inner
+            .restore_saved_state(handle)
+            .map_err(|error| JsValue::from_str(&error))
+    }
+
+    pub fn transition_current_outcome(
+        &mut self,
+        program_key: &str,
+        input: u16,
+    ) -> Result<String, JsValue> {
+        self.inner
+            .transition_current_outcome_json(program_key, input)
+            .map_err(|error| JsValue::from_str(&error))
+    }
+
     pub fn is_complete(&self, state_json: &str) -> Result<bool, JsValue> {
         self.inner
             .is_complete_json(state_json)
+            .map_err(|error| JsValue::from_str(&error))
+    }
+
+    pub fn is_current_complete(&self) -> Result<bool, JsValue> {
+        self.inner
+            .is_current_complete()
             .map_err(|error| JsValue::from_str(&error))
     }
 }

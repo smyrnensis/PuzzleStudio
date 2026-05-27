@@ -31,25 +31,26 @@ pub use error::AppError;
 pub use highlight::{HighlightedSource, highlight_source};
 use level::{LevelBlock, parse_level};
 pub use loaded::{
-    ArrowKey, AsciiLegend, AssetDef, AssetKind, AssetsDef, Controls, ForSource, GoalClause,
-    GoalCondition, GoalExpr, GoalValue, KeyBinding, KeyTrigger, Level, LevelMenuDef,
+    AnimationDef, ArrowKey, AsciiLegend, AssetDef, AssetKind, AssetsDef, Controls, ForSource,
+    GoalClause, GoalCondition, GoalExpr, GoalValue, KeyBinding, KeyTrigger, Level, LevelMenuDef,
     LevelMenuLocked, LevelRegionDef, LoadedDocument, LoadedDocumentModel, LoadedGame,
     MenuButtonDef, MenuCommand, MenuCommandBinding, MenuComponent, MenuContainerDef,
     MenuDataBinding, MenuDataDef, MenuDef, MenuEmit, MenuForDef, MenuInstanceDef, MenuValueExpr,
-    MusicSoundDef, PuzzleScreenDef, PuzzleViewDef, ResourceSelection, RuleEmission, SceneAlignDef,
-    SceneAlignXDef, SceneAlignYDef, SceneButtonDef, SceneComponent, SceneContainerDef, SceneDef,
-    SceneEffect, SceneEffectParam, SceneExpr, SceneForDef, SceneLayoutDef, ScenePuzzleDef,
-    ScenePuzzleInitializer, ScenePuzzleRule, SceneResources, SceneSizeDef, SceneStateDef,
-    SceneStateLifetime, SceneTextContent, SceneTextDef, SceneTitleDef, SceneTransition,
-    SceneTransitionTrigger, SceneValue, SceneVarDef, SfxSoundDef, SoundsDef, ThemeDef,
-    ThemeVariableDef, ViewportModeDef, ViewportSizeDef, VisualAliasDef, VisualColorDef,
-    VisualSpriteDef, VisualSpriteKind, VisualsDef,
+    MusicSoundDef, PuzzleGridRenderDef, PuzzleRenderDef, PuzzleScreenDef, PuzzleViewDef,
+    ResourceSelection, RuleAnimationTrigger, RuleEffect, RuleEmission, SceneAlignDef,
+    SceneAlignXDef, SceneAlignYDef, SceneButtonDef, SceneComponent, SceneConditionalDef,
+    SceneContainerDef, SceneDef, SceneEffect, SceneEffectParam, SceneExpr, SceneForDef,
+    SceneLayoutDef, ScenePuzzleDef, ScenePuzzleInitializer, ScenePuzzleRule, SceneResources,
+    SceneSizeDef, SceneStateDef, SceneStateLifetime, SceneTextContent, SceneTextDef, SceneTitleDef,
+    SceneTransition, SceneTransitionTrigger, SceneValue, SceneVarDef, SfxSoundDef, SoundsDef,
+    ThemeDef, ThemeVariableDef, TweenAnimationDef, ViewportModeDef, ViewportSizeDef,
+    VisualAliasDef, VisualColorDef, VisualSpriteDef, VisualSpriteKind, VisualsDef,
 };
 use puzzle_core::{
     ComparisonOp, CompiledGame, Effect, GapTerm, GlobalId, GlobalUpdateOp, Guard, InputId, LayerId,
-    MatchCell, ObjectDef, ObjectId, Offset, Pattern, PatternComponent, QueryDef, QueryId,
-    QueryKind, Rule, RuleApplication, RuleCondition, RuleId, RuleStep, ScratchDef, ScratchId,
-    ScratchKind, ScratchPattern, ScratchValueMatch, WriteOp,
+    LocalFrame, LocalFrameExtent, MatchCell, ObjectDef, ObjectId, Offset, Pattern,
+    PatternComponent, QueryDef, QueryId, QueryKind, Rule, RuleApplication, RuleCondition, RuleId,
+    RuleStep, ScratchDef, ScratchId, ScratchKind, ScratchPattern, ScratchValueMatch, WriteOp,
 };
 pub use puzzle3d_model::{
     ParseError3, ParsedPuzzle3, VisualFixtureExportError3, export_visual_fixture_json,
@@ -98,7 +99,7 @@ pub fn parse_game(source: &str) -> Result<LoadedDocument, AppError> {
 
 pub fn parse_game2d(source: &str) -> Result<LoadedGame, AppError> {
     let _surface = parse_surface_document(source);
-    parse_game2d_expanded(source)
+    parse_game2d_document(source)
 }
 
 pub(crate) fn parse_surface_document(source: &str) -> SurfaceDocument {
@@ -205,7 +206,7 @@ fn record_scene_surface_line(
         sink.extend(scene_effect_surface_document(&tokens[arrow + 1..]));
         return;
     }
-    if first.text == "button" || scope == Some(SourceScope::LevelMenu) {
+    if first.text == "button" || first.text == "choice" || scope == Some(SourceScope::LevelMenu) {
         return;
     }
     sink.extend(scene_effect_surface_document(tokens));
@@ -295,41 +296,73 @@ pub fn parse_game2d_file(path: impl AsRef<Path>) -> Result<LoadedGame, AppError>
     let source = fs::read_to_string(path)
         .map_err(|error| AppError::Parse(format!("failed to read {}: {error}", path.display())))?;
     let expanded = expand_game_imports_for_file(&source, path)?;
-    parse_game2d_expanded(&expanded)
+    parse_game2d_document(&expanded)
+}
+
+fn parse_game2d_document(source: &str) -> Result<LoadedGame, AppError> {
+    let parts = parse_document_source_parts(source)?;
+    parse_game2d_from_document_parts(parts)
+}
+
+fn parse_game2d_from_document_parts(parts: DocumentSourceParts) -> Result<LoadedGame, AppError> {
+    let mut scenes = parts.scenes;
+    let model_names = all_model_names(&parts.model_source, "puzzle");
+    let mut game =
+        parse_game2d_expanded_with_shell(&parts.model_source_without_shell, &parts.shell)?;
+    resolve_default_wait_in_scenes(&mut scenes, game.default_wait_ms);
+    game.scenes =
+        add_implicit_model_scenes(scenes, model_names.iter().map(|name| ("puzzle", name)));
+    Ok(game)
 }
 
 fn parse_game_document(source: &str) -> Result<LoadedDocument, AppError> {
     match detect_game_document_kind(source)? {
         GameDocumentKind::Puzzle2d => {
-            let name = first_model_name(source, "puzzle").unwrap_or_else(|| "default".to_string());
-            let game = parse_game2d(source)?;
-            let document = loaded_game_document_shell(
-                &game,
-                vec![LoadedDocumentModel::Puzzle2d {
-                    name,
-                    game: game.clone(),
-                }],
-            );
-            Ok(document)
-        }
-        GameDocumentKind::Puzzle3d => {
-            let shell = parse_document_shell(source)?;
-            let model_source = strip_document_shell_source(source);
-            let name =
-                first_model_name(&model_source, "puzzle3").unwrap_or_else(|| "default".to_string());
-            let puzzle = parse_puzzle3d(&model_source).map_err(|error| match error {
-                ParseError3::Message(message) => AppError::Parse(message),
-            })?;
-            let scenes = default_3d_scenes_if_empty(parse_document_scenes(source)?, &name);
+            let parts = parse_document_source_parts(source)?;
+            let name = first_model_name(&parts.model_source, "puzzle")
+                .unwrap_or_else(|| "default".to_string());
+            let shell = parts.shell.clone();
+            let game = parse_game2d_from_document_parts(parts)?;
             Ok(LoadedDocument {
                 title: shell.title,
                 subtitle: shell.subtitle,
                 author: shell.author,
                 homepage: shell.homepage,
                 default_wait_ms: shell.default_wait_ms,
+                default_again_ms: shell.default_again_ms,
+                animation: shell.animation,
                 sounds: shell.sounds,
                 theme: shell.theme,
                 assets: shell.assets,
+                scenes: game.scenes.clone(),
+                models: vec![LoadedDocumentModel::Puzzle2d {
+                    name,
+                    game: game.clone(),
+                }],
+            })
+        }
+        GameDocumentKind::Puzzle3d => {
+            let parts = parse_document_source_parts(source)?;
+            let name = first_model_name(&parts.raw_model_source_without_shell, "puzzle3")
+                .unwrap_or_else(|| "default".to_string());
+            let puzzle = parse_puzzle3d(&parts.raw_model_source_without_shell).map_err(
+                |error| match error {
+                    ParseError3::Message(message) => AppError::Parse(message),
+                },
+            )?;
+            let scenes =
+                add_implicit_model_scenes(parts.scenes, std::iter::once(("puzzle3", &name)));
+            Ok(LoadedDocument {
+                title: parts.shell.title,
+                subtitle: parts.shell.subtitle,
+                author: parts.shell.author,
+                homepage: parts.shell.homepage,
+                default_wait_ms: parts.shell.default_wait_ms,
+                default_again_ms: parts.shell.default_again_ms,
+                animation: parts.shell.animation,
+                sounds: parts.shell.sounds,
+                theme: parts.shell.theme,
+                assets: parts.shell.assets,
                 scenes,
                 models: vec![LoadedDocumentModel::Puzzle3d { name, puzzle }],
             })
@@ -339,29 +372,34 @@ fn parse_game_document(source: &str) -> Result<LoadedDocument, AppError> {
 }
 
 fn parse_mixed_game_document(source: &str) -> Result<LoadedDocument, AppError> {
-    let shell = parse_document_shell(source)?;
+    let parts = parse_document_source_parts(source)?;
     let sources = split_mixed_game_document_source(source)?;
     let model_2d_name =
         first_model_name(&sources.puzzle2d, "puzzle").unwrap_or_else(|| "default".to_string());
-    let game_2d = parse_game2d(&sources.puzzle2d)?;
+    let game_2d_source = strip_document_shell_source(&sources.puzzle2d)?;
+    let game_2d = parse_game2d_expanded_with_shell(&game_2d_source, &parts.shell)?;
     let model_3d_name =
         first_model_name(&sources.puzzle3d, "puzzle3").unwrap_or_else(|| "default".to_string());
-    let puzzle_3d = parse_puzzle3d(&sources.puzzle3d).map_err(|error| match error {
+    let puzzle_3d_source = strip_document_shell_source_raw(&sources.puzzle3d);
+    let puzzle_3d = parse_puzzle3d(&puzzle_3d_source).map_err(|error| match error {
         ParseError3::Message(message) => AppError::Parse(message),
     })?;
 
-    let scenes = parse_document_scenes(source)?;
-
     Ok(LoadedDocument {
-        title: shell.title,
-        subtitle: shell.subtitle,
-        author: shell.author,
-        homepage: shell.homepage,
-        default_wait_ms: shell.default_wait_ms,
-        sounds: shell.sounds,
-        theme: shell.theme,
-        assets: shell.assets,
-        scenes,
+        title: parts.shell.title,
+        subtitle: parts.shell.subtitle,
+        author: parts.shell.author,
+        homepage: parts.shell.homepage,
+        default_wait_ms: parts.shell.default_wait_ms,
+        default_again_ms: parts.shell.default_again_ms,
+        animation: parts.shell.animation,
+        sounds: parts.shell.sounds,
+        theme: parts.shell.theme,
+        assets: parts.shell.assets,
+        scenes: add_implicit_model_scenes(
+            parts.scenes,
+            [("puzzle", &model_2d_name), ("puzzle3", &model_3d_name)].into_iter(),
+        ),
         models: vec![
             LoadedDocumentModel::Puzzle2d {
                 name: model_2d_name,
@@ -409,6 +447,7 @@ fn split_mixed_game_document_source(source: &str) -> Result<MixedDocumentSources
             | ["author", ..]
             | ["homepage", ..]
             | ["default_wait_time", ..]
+            | ["again_interval", ..]
             | ["sounds", ..]
             | ["theme", ..]
             | ["assets", ..] => MixedSectionTarget::Shared,
@@ -424,15 +463,45 @@ fn split_mixed_game_document_source(source: &str) -> Result<MixedDocumentSources
             ["var", ..] | ["const", ..] | ["persistent", ..] => MixedSectionTarget::Puzzle2d,
             _ => MixedSectionTarget::Puzzle2d,
         };
-        let next = if mixed_section_is_block(trimmed, tokens.as_slice()) {
+        let is_block = mixed_section_is_block(trimmed, tokens.as_slice());
+        let next = if is_block {
             skip_raw_top_level_block(&raw_lines, index)
         } else {
             index + 1
         };
-        push_raw_block(&raw_lines, index, next, target, &mut sources);
+        if is_block && matches!(tokens.as_slice(), ["puzzle", ..] | ["puzzle3", ..]) {
+            push_raw_model_block_without_default_scene_views(
+                &raw_lines,
+                index,
+                target,
+                &mut sources,
+            );
+        } else {
+            push_raw_block(&raw_lines, index, next, target, &mut sources);
+        }
         index = next;
     }
     Ok(sources)
+}
+
+fn push_raw_model_block_without_default_scene_views(
+    raw_lines: &[&str],
+    start: usize,
+    target: MixedSectionTarget,
+    sources: &mut MixedDocumentSources,
+) {
+    let mut stripped = Vec::new();
+    push_raw_model_without_default_scene_views(raw_lines, start, &mut stripped);
+    for line in stripped {
+        match target {
+            MixedSectionTarget::Puzzle2d => push_raw_line(&mut sources.puzzle2d, line),
+            MixedSectionTarget::Puzzle3d => push_raw_line(&mut sources.puzzle3d, line),
+            MixedSectionTarget::Shared => {
+                push_raw_line(&mut sources.puzzle2d, line);
+                push_raw_line(&mut sources.puzzle3d, line);
+            }
+        }
+    }
 }
 
 fn mixed_section_is_block(trimmed: &str, tokens: &[&str]) -> bool {
@@ -480,74 +549,47 @@ fn push_raw_line(target: &mut String, line: &str) {
     target.push_str(line);
 }
 
-fn loaded_game_document_shell(
-    game: &LoadedGame,
-    models: Vec<LoadedDocumentModel>,
-) -> LoadedDocument {
-    LoadedDocument {
-        title: game.title.clone(),
-        subtitle: game.subtitle.clone(),
-        author: game.author.clone(),
-        homepage: game.homepage.clone(),
-        default_wait_ms: game.default_wait_ms,
-        sounds: game.sounds.clone(),
-        theme: game.theme.clone(),
-        assets: game.assets.clone(),
-        scenes: game.scenes.clone(),
-        models,
-    }
-}
-
-fn parse_document_scenes(source: &str) -> Result<Vec<SceneDef>, AppError> {
-    let lines = logical_lines(source)?;
-    let mut scenes = Vec::new();
-    let mut i = 0;
-    while i < lines.len() {
-        let tokens = split_tokens(&lines[i]);
-        if matches!(tokens.as_slice(), ["scene", ..]) {
-            let (scene, next_i) = parse_scene_definition_with_options(
-                &lines,
-                i,
-                SceneParseOptions {
-                    allow_legacy_keys: true,
-                },
-            )?;
-            scenes.push(scene);
-            i = next_i;
-        } else {
-            i += 1;
+fn add_implicit_model_scenes<'a>(
+    mut scenes: Vec<SceneDef>,
+    models: impl IntoIterator<Item = (&'a str, &'a String)>,
+) -> Vec<SceneDef> {
+    let mut existing = scenes
+        .iter()
+        .map(|scene| scene.name.clone())
+        .collect::<HashSet<_>>();
+    for (kind, model_name) in models {
+        if existing.contains(model_name) {
+            continue;
         }
+        scenes.push(implicit_model_scene(kind, model_name));
+        existing.insert(model_name.clone());
     }
-    Ok(scenes)
+    scenes
 }
 
-fn default_3d_scenes_if_empty(mut scenes: Vec<SceneDef>, model_name: &str) -> Vec<SceneDef> {
-    if !scenes.is_empty() {
-        return scenes;
-    }
-    scenes.push(SceneDef {
-        name: "playing".to_string(),
+fn implicit_model_scene(kind: &str, model_name: &str) -> SceneDef {
+    SceneDef {
+        name: model_name.to_string(),
         layout: SceneLayoutDef::default(),
         resources: SceneResources::default(),
         state: SceneStateDef {
             variables: Vec::new(),
             puzzles: vec![ScenePuzzleDef {
-                name: "board".to_string(),
-                kind: "puzzle3".to_string(),
+                name: model_name.to_string(),
+                kind: kind.to_string(),
                 model: model_name.to_string(),
                 initializer: ScenePuzzleInitializer::CurrentLevel,
                 lifetime: SceneStateLifetime::Instance,
             }],
         },
-        components: vec![scene_frame_component("puzzle3", "board")],
+        components: vec![scene_frame_component(kind, model_name)],
         key_bindings: Vec::new(),
         transitions: Vec::new(),
         puzzle_rule: Some(ScenePuzzleRule {
-            target: "board".to_string(),
+            target: model_name.to_string(),
             rule: "rules".to_string(),
         }),
-    });
-    scenes
+    }
 }
 
 fn puzzle3_scene_fixture_fields(document: &LoadedDocument) -> (Option<String>, Vec<String>) {
@@ -655,10 +697,15 @@ fn puzzle3_scene_component_json(
             out.push_str(" }");
             Some(out)
         }
-        SceneComponent::Button(button) => {
+        SceneComponent::Button(button) | SceneComponent::Choice(button) => {
             let action = puzzle3_scene_action_json(&button.effect, level_bundle_names)?;
+            let kind = match component {
+                SceneComponent::Choice(_) => "choice",
+                _ => "button",
+            };
             let mut out = format!(
-                "{{ \"kind\": \"button\", \"label\": {}, \"action\": {}",
+                "{{ \"kind\": {}, \"label\": {}, \"action\": {}",
+                json_string(kind),
                 puzzle3_scene_expr_json(&button.label),
                 action
             );
@@ -674,10 +721,7 @@ fn puzzle3_scene_component_json(
                 .as_ref()
                 .and_then(|effect| puzzle3_scene_action_json(effect, level_bundle_names))
                 .unwrap_or_else(|| {
-                    format!(
-                        "{{ \"kind\": \"start_levels\", \"levels\": {}, \"scene\": \"playing\" }}",
-                        json_string(levels)
-                    )
+                    "{ \"kind\": \"goto\", \"scene\": \"playing\", \"params\": [{ \"name\": \"level\", \"value\": { \"kind\": \"path\", \"path\": \"level\" } }] }".to_string()
                 });
             let mut out = format!(
                 "{{ \"kind\": \"level_menu\", \"levels\": {}, \"action\": {}",
@@ -706,6 +750,35 @@ fn puzzle3_scene_component_json(
             &container.layout,
             level_bundle_names,
         ),
+        SceneComponent::Conditional(conditional) => {
+            let mut out = format!(
+                "{{ \"kind\": \"conditional\", \"condition\": {}, \"children\": [",
+                json_string(&conditional.condition)
+            );
+            let mut wrote = false;
+            for child in &conditional.children {
+                if let Some(child_json) = puzzle3_scene_component_json(child, level_bundle_names) {
+                    if wrote {
+                        out.push_str(", ");
+                    }
+                    wrote = true;
+                    out.push_str(&child_json);
+                }
+            }
+            out.push_str("], \"elseChildren\": [");
+            wrote = false;
+            for child in &conditional.else_children {
+                if let Some(child_json) = puzzle3_scene_component_json(child, level_bundle_names) {
+                    if wrote {
+                        out.push_str(", ");
+                    }
+                    wrote = true;
+                    out.push_str(&child_json);
+                }
+            }
+            out.push_str("] }");
+            Some(out)
+        }
         SceneComponent::For(for_view) => {
             let mut out = format!(
                 "{{ \"kind\": \"for\", \"binding\": {}, \"source\": {}, \"children\": [",
@@ -754,7 +827,7 @@ fn puzzle3_container_json(
 
 fn puzzle3_scene_action_json(
     effect: &SceneEffect,
-    level_bundle_names: &mut Vec<String>,
+    _level_bundle_names: &mut Vec<String>,
 ) -> Option<String> {
     match effect {
         SceneEffect::Goto { scene, params } => {
@@ -775,15 +848,6 @@ fn puzzle3_scene_action_json(
             }
             out.push_str(" }");
             Some(out)
-        }
-        SceneEffect::StartLevel { scene, scope } => {
-            let levels = scope.as_deref().unwrap_or("levels");
-            push_unique_string(level_bundle_names, levels);
-            Some(format!(
-                "{{ \"kind\": \"start_levels\", \"levels\": {}, \"scene\": {} }}",
-                json_string(levels),
-                json_string(scene)
-            ))
         }
         _ => None,
     }
@@ -926,9 +990,20 @@ struct DocumentShell {
     author: Option<String>,
     homepage: Option<String>,
     default_wait_ms: u64,
+    default_again_ms: u64,
+    animation: AnimationDef,
     sounds: SoundsDef,
     theme: ThemeDef,
     assets: AssetsDef,
+}
+
+#[derive(Clone, Debug)]
+struct DocumentSourceParts {
+    shell: DocumentShell,
+    model_source: String,
+    model_source_without_shell: String,
+    raw_model_source_without_shell: String,
+    scenes: Vec<SceneDef>,
 }
 
 impl Default for DocumentShell {
@@ -939,6 +1014,8 @@ impl Default for DocumentShell {
             author: None,
             homepage: None,
             default_wait_ms: DEFAULT_WAIT_MS,
+            default_again_ms: DEFAULT_AGAIN_MS,
+            animation: AnimationDef::default(),
             sounds: SoundsDef::default(),
             theme: ThemeDef::default(),
             assets: AssetsDef::default(),
@@ -946,79 +1023,178 @@ impl Default for DocumentShell {
     }
 }
 
+fn parse_document_source_parts(source: &str) -> Result<DocumentSourceParts, AppError> {
+    let shell = parse_document_shell(source)?;
+    let (model_source, scenes) = split_document_scene_source(source)?;
+    let shell_stripped_source = strip_document_shell_source(source)?;
+    let (model_source_without_shell, _) = split_document_scene_source(&shell_stripped_source)?;
+    let raw_model_source_without_shell =
+        strip_document_scene_source_raw(&strip_document_shell_source_raw(source));
+    Ok(DocumentSourceParts {
+        shell,
+        model_source,
+        model_source_without_shell,
+        raw_model_source_without_shell,
+        scenes,
+    })
+}
+
 fn parse_document_shell(source: &str) -> Result<DocumentShell, AppError> {
     let mut shell = DocumentShell::default();
-    let raw_lines = source.lines().collect::<Vec<_>>();
+    let lines = logical_lines(source)?;
     let mut index = 0;
-    let mut brace_depth = 0i32;
-    while index < raw_lines.len() {
-        let line = raw_lines[index];
-        let trimmed = strip_line_comment(line).trim();
-        if brace_depth == 0 {
-            let tokens = split_tokens(trimmed);
-            match tokens.as_slice() {
-                ["title", ..] => {
-                    shell.title = parse_metadata_text(trimmed, "title")?;
-                    index += 1;
-                    continue;
+    while index < lines.len() {
+        let tokens = split_tokens(&lines[index]);
+        match tokens.as_slice() {
+            ["title", ..] => {
+                shell.title = parse_metadata_text(&lines[index], "title")?;
+                index += 1;
+            }
+            ["subtitle", ..] => {
+                shell.subtitle = Some(parse_metadata_text(&lines[index], "subtitle")?);
+                index += 1;
+            }
+            ["author", ..] => {
+                shell.author = Some(parse_metadata_text(&lines[index], "author")?);
+                index += 1;
+            }
+            ["homepage", ..] => {
+                shell.homepage = Some(parse_metadata_text(&lines[index], "homepage")?);
+                index += 1;
+            }
+            ["default_wait_time", ..] => {
+                shell.default_wait_ms = parse_default_wait_time_directive(&tokens, &lines[index])?;
+                index += 1;
+            }
+            ["again_interval", ..] => {
+                shell.default_again_ms = parse_again_interval_directive(&tokens, &lines[index])?;
+                index += 1;
+            }
+            ["animation", ..] => {
+                index = parse_animation_block(&lines, index, &mut shell.animation)?;
+            }
+            ["sounds"] => {
+                if model_sounds_block_starts(&lines, index) {
+                    index = skip_logical_block(&lines, index);
+                } else {
+                    index = parse_sounds_block(&lines, index, &mut shell.sounds)?;
                 }
-                ["subtitle", ..] => {
-                    shell.subtitle = Some(parse_metadata_text(trimmed, "subtitle")?);
-                    index += 1;
-                    continue;
-                }
-                ["author", ..] => {
-                    shell.author = Some(parse_metadata_text(trimmed, "author")?);
-                    index += 1;
-                    continue;
-                }
-                ["homepage", ..] => {
-                    shell.homepage = Some(parse_metadata_text(trimmed, "homepage")?);
-                    index += 1;
-                    continue;
-                }
-                ["default_wait_time", ..] => {
-                    shell.default_wait_ms = parse_default_wait_time_directive(&tokens, trimmed)?;
-                    index += 1;
-                    continue;
-                }
-                ["sounds"] | ["sounds", "{"] => {
-                    let next = skip_raw_top_level_block(&raw_lines, index);
-                    let block = logical_lines(&raw_lines[index..next].join("\n"))?;
-                    parse_sounds_block(&block, 0, &mut shell.sounds)?;
-                    index = next;
-                    continue;
-                }
-                ["theme", name] if !trimmed.ends_with('{') => {
-                    parse_theme_name_directive(trimmed, name, &mut shell.theme)?;
-                    index += 1;
-                    continue;
-                }
-                ["theme"] | ["theme", ..] => {
-                    let next = skip_raw_top_level_block(&raw_lines, index);
-                    let block = logical_lines(&raw_lines[index..next].join("\n"))?;
-                    parse_theme_block(&block, 0, &mut shell.theme)?;
-                    index = next;
-                    continue;
-                }
-                ["assets"] | ["assets", "{"] => {
-                    let next = skip_raw_top_level_block(&raw_lines, index);
-                    let block = logical_lines(&raw_lines[index..next].join("\n"))?;
-                    parse_assets_block(&block, 0, &mut shell.assets)?;
-                    index = next;
-                    continue;
-                }
-                _ => {}
+            }
+            ["theme", name] if next_line_is_not_block_body(&lines, index) => {
+                parse_theme_name_directive(&lines[index], name, &mut shell.theme)?;
+                index += 1;
+            }
+            ["theme"] | ["theme", ..] => {
+                index = parse_theme_statement(&lines, index, &mut shell.theme)?;
+            }
+            ["assets"] => {
+                index = parse_assets_block(&lines, index, &mut shell.assets)?;
+            }
+            _ if logical_line_opens_block(tokens.as_slice()) => {
+                index = skip_logical_block(&lines, index);
+            }
+            _ => {
+                index += 1;
             }
         }
-        brace_depth += raw_brace_delta(trimmed);
-        brace_depth = brace_depth.max(0);
-        index += 1;
     }
     Ok(shell)
 }
 
-fn strip_document_shell_source(source: &str) -> String {
+fn strip_document_shell_source(source: &str) -> Result<String, AppError> {
+    let context = scan_source_context(source);
+    let mut out = Vec::new();
+    let mut index = 0;
+    let mut shell_prefix = true;
+    while index < context.lines.len() {
+        let line = &context.lines[index];
+        let tokens = line.tokens.iter().map(String::as_str).collect::<Vec<_>>();
+        if shell_prefix && line.scope.is_none() {
+            match tokens.as_slice() {
+                ["title", ..]
+                | ["subtitle", ..]
+                | ["author", ..]
+                | ["homepage", ..]
+                | ["default_wait_time", ..]
+                | ["again_interval", ..] => {
+                    index += 1;
+                    continue;
+                }
+                ["animation", ..] | ["sounds", ..] | ["assets", ..] => {
+                    index = skip_context_shell_block_by_syntax(&context, index);
+                    continue;
+                }
+                ["theme", ..] => {
+                    index = if context_theme_line_is_block(&context, index) {
+                        skip_context_shell_block_by_syntax(&context, index)
+                    } else {
+                        index + 1
+                    };
+                    continue;
+                }
+                _ => {}
+            }
+            if !matches!(
+                tokens.as_slice(),
+                [] | ["var", ..]
+                    | ["const", ..]
+                    | ["persistent", "var", ..]
+                    | ["title", ..]
+                    | ["subtitle", ..]
+                    | ["author", ..]
+                    | ["homepage", ..]
+                    | ["default_wait_time", ..]
+                    | ["again_interval", ..]
+                    | ["animation", ..]
+                    | ["sounds", ..]
+                    | ["assets", ..]
+                    | ["theme", ..]
+            ) {
+                shell_prefix = false;
+            }
+        }
+
+        out.push(line.content.clone());
+        index += 1;
+    }
+    Ok(out.join("\n"))
+}
+
+fn skip_context_shell_block_by_syntax(context: &source::SourceContext, index: usize) -> usize {
+    let trimmed = strip_line_comment(&context.lines[index].content).trim();
+    let mut next = index + 1;
+    let mut brace_depth = raw_brace_delta(trimmed);
+    if brace_depth > 0 {
+        while next < context.lines.len() && brace_depth > 0 {
+            let trimmed = strip_line_comment(&context.lines[next].content).trim();
+            brace_depth += raw_brace_delta(trimmed);
+            next += 1;
+        }
+        return next;
+    }
+
+    while next < context.lines.len() {
+        let trimmed = strip_line_comment(&context.lines[next].content).trim();
+        next += 1;
+        if trimmed == "end" {
+            break;
+        }
+    }
+    next
+}
+
+fn context_theme_line_is_block(context: &source::SourceContext, index: usize) -> bool {
+    let trimmed = strip_line_comment(&context.lines[index].content).trim();
+    if raw_brace_delta(trimmed) > 0 {
+        return true;
+    }
+    context.lines.get(index + 1).is_some_and(|next| {
+        let trimmed = strip_line_comment(&next.content).trim();
+        trimmed == "end" || is_theme_setting_line(trimmed)
+    })
+}
+
+fn strip_document_shell_source_raw(source: &str) -> String {
     let raw_lines = source.lines().collect::<Vec<_>>();
     let mut out = Vec::new();
     let mut index = 0;
@@ -1033,7 +1209,8 @@ fn strip_document_shell_source(source: &str) -> String {
                 | ["subtitle", ..]
                 | ["author", ..]
                 | ["homepage", ..]
-                | ["default_wait_time", ..] => {
+                | ["default_wait_time", ..]
+                | ["again_interval", ..] => {
                     index += 1;
                     continue;
                 }
@@ -1058,6 +1235,285 @@ fn strip_document_shell_source(source: &str) -> String {
         index += 1;
     }
     out.join("\n")
+}
+
+fn next_line_is_not_block_body(lines: &[String], index: usize) -> bool {
+    let Some(next) = lines.get(index + 1) else {
+        return true;
+    };
+    if next == "end" {
+        return true;
+    }
+    let tokens = split_tokens(next);
+    logical_line_starts_document_boundary(tokens.as_slice())
+}
+
+fn logical_line_starts_document_boundary(tokens: &[&str]) -> bool {
+    matches!(
+        tokens,
+        ["title", ..]
+            | ["subtitle", ..]
+            | ["author", ..]
+            | ["homepage", ..]
+            | ["default_wait_time", ..]
+            | ["again_interval", ..]
+            | ["puzzle", ..]
+            | ["puzzle3", ..]
+            | ["levels", ..]
+            | ["levels3", ..]
+            | ["sprites", ..]
+            | ["sprites3", ..]
+            | ["scene", ..]
+            | ["sounds"]
+            | ["theme", ..]
+            | ["assets"]
+    )
+}
+
+fn logical_line_opens_block(tokens: &[&str]) -> bool {
+    matches!(
+        tokens,
+        ["puzzle", ..]
+            | ["puzzle3", ..]
+            | ["levels", ..]
+            | ["levels3", ..]
+            | ["sprites", ..]
+            | ["sprites3", ..]
+            | ["scene", ..]
+            | ["state", ..]
+            | ["view", ..]
+            | ["row", ..]
+            | ["column", ..]
+            | ["box", ..]
+            | ["layers", ..]
+            | ["tags", ..]
+            | ["map", ..]
+            | ["scratch", ..]
+            | ["group", ..]
+            | ["legend", ..]
+            | ["win_conditions", ..]
+            | ["lose_conditions", ..]
+            | ["routine", ..]
+            | ["rules", ..]
+            | ["on_display", ..]
+            | ["on_level_start", ..]
+            | ["on_level_clear", ..]
+            | ["on_last_level_clear", ..]
+            | ["inputs", ..]
+            | ["transitions", ..]
+            | ["on_scene_start", ..]
+            | ["if", ..]
+            | ["sounds"]
+            | ["theme", ..]
+            | ["assets"]
+    )
+}
+
+fn skip_logical_block(lines: &[String], start: usize) -> usize {
+    let mut depth = 1usize;
+    let mut index = start + 1;
+    while index < lines.len() {
+        let tokens = split_tokens(&lines[index]);
+        if lines[index] == "end" {
+            depth = depth.saturating_sub(1);
+            index += 1;
+            if depth == 0 {
+                break;
+            }
+            continue;
+        }
+        if logical_line_opens_block(tokens.as_slice()) && !logical_line_is_inline_if(&lines[index])
+        {
+            depth += 1;
+        }
+        index += 1;
+    }
+    index
+}
+
+fn logical_line_is_inline_if(line: &str) -> bool {
+    split_tokens(line).first().copied() == Some("if") && line.contains("->")
+}
+
+fn strip_document_scene_source_raw(source: &str) -> String {
+    let raw_lines = source.lines().collect::<Vec<_>>();
+    let mut out = Vec::new();
+    let mut index = 0;
+    let mut brace_depth = 0i32;
+    while index < raw_lines.len() {
+        let line = raw_lines[index];
+        let trimmed = strip_line_comment(line).trim();
+        if brace_depth == 0 {
+            let tokens = split_tokens(trimmed);
+            if matches!(tokens.as_slice(), ["scene", ..]) {
+                index = skip_raw_top_level_block(&raw_lines, index);
+                continue;
+            }
+            if matches!(tokens.as_slice(), ["puzzle", ..] | ["puzzle3", ..])
+                && trimmed.ends_with('{')
+            {
+                index = push_raw_model_without_default_scene_views(&raw_lines, index, &mut out);
+                continue;
+            }
+        }
+        out.push(line);
+        brace_depth += raw_brace_delta(trimmed);
+        brace_depth = brace_depth.max(0);
+        index += 1;
+    }
+    out.join("\n")
+}
+
+fn push_raw_model_without_default_scene_views<'a>(
+    raw_lines: &[&'a str],
+    start: usize,
+    out: &mut Vec<&'a str>,
+) -> usize {
+    out.push(raw_lines[start]);
+    let mut index = start + 1;
+    let mut depth = raw_brace_delta(strip_line_comment(raw_lines[start]).trim());
+    while index < raw_lines.len() && depth > 0 {
+        let line = raw_lines[index];
+        let trimmed = strip_line_comment(line).trim();
+        if depth == 1 && matches!(split_tokens(trimmed).as_slice(), ["view", ..]) {
+            index = skip_raw_top_level_block(raw_lines, index);
+            continue;
+        }
+        out.push(line);
+        depth += raw_brace_delta(trimmed);
+        index += 1;
+    }
+    index
+}
+
+fn split_document_scene_source(source: &str) -> Result<(String, Vec<SceneDef>), AppError> {
+    let lines = logical_lines(source)?;
+    let mut model_lines = Vec::new();
+    let mut scenes = Vec::new();
+    let mut i = 0;
+    while i < lines.len() {
+        let tokens = split_tokens(&lines[i]);
+        if matches!(tokens.as_slice(), ["scene", ..]) {
+            let (scene, _) = parse_scene_definition(&lines, i)?;
+            scenes.push(scene);
+            i = skip_logical_block(&lines, i);
+        } else if let Some((kind, name)) = model_header_name(tokens.as_slice()) {
+            let (entry, default_scene, next_i) =
+                extract_default_model_scene(&lines, i, kind, name)?;
+            model_lines.extend(entry);
+            if let Some(scene) = default_scene {
+                scenes.push(scene);
+            }
+            i = next_i;
+        } else {
+            model_lines.push(lines[i].clone());
+            i += 1;
+        }
+    }
+    Ok((model_lines.join("\n"), scenes))
+}
+
+fn model_header_name<'a>(tokens: &'a [&'a str]) -> Option<(&'a str, &'a str)> {
+    match tokens {
+        ["puzzle", name, ..] | ["puzzle3", name, ..] => Some((tokens[0], *name)),
+        _ => None,
+    }
+}
+
+fn extract_default_model_scene(
+    lines: &[String],
+    start: usize,
+    kind: &str,
+    name: &str,
+) -> Result<(Vec<String>, Option<SceneDef>, usize), AppError> {
+    let mut entry = vec![lines[start].clone()];
+    let mut default_scene = None;
+    let mut depth = 1usize;
+    let mut i = start + 1;
+    while i < lines.len() {
+        let line = &lines[i];
+        let tokens = split_tokens(line);
+        if tokens.first().copied() == Some("end") {
+            depth = depth.saturating_sub(1);
+            entry.push(line.clone());
+            i += 1;
+            if depth == 0 {
+                return Ok((entry, default_scene, i));
+            }
+            continue;
+        }
+        if depth == 1 && matches!(tokens.as_slice(), ["view", ..]) {
+            if default_scene.is_some() {
+                return Err(parse_error(
+                    line,
+                    "model default scene has duplicate view block",
+                ));
+            }
+            let next_i = skip_scene_view_block(lines, i)?;
+            default_scene = Some(parse_default_model_scene(lines, i, next_i, kind, name)?);
+            i = next_i;
+            continue;
+        }
+        if starts_model_nested_block(tokens.as_slice(), line) {
+            depth += 1;
+        }
+        entry.push(line.clone());
+        i += 1;
+    }
+    Ok((vec![lines[start].clone()], None, start + 1))
+}
+
+fn skip_scene_view_block(lines: &[String], start: usize) -> Result<usize, AppError> {
+    let mut depth = 1usize;
+    let mut i = start + 1;
+    while i < lines.len() {
+        let line = &lines[i];
+        let tokens = split_tokens(line);
+        if tokens.first().copied() == Some("end") {
+            depth = depth.saturating_sub(1);
+            i += 1;
+            if depth == 0 {
+                return Ok(i);
+            }
+            continue;
+        }
+        if starts_authoring_block(tokens.as_slice(), line) || line.trim_end().ends_with("->") {
+            depth += 1;
+        }
+        i += 1;
+    }
+    Err(parse_error(&lines[start], "view missing end"))
+}
+
+fn starts_model_nested_block(tokens: &[&str], line: &str) -> bool {
+    logical_line_opens_block(tokens) && !logical_line_is_inline_if(line)
+}
+
+fn parse_default_model_scene(
+    lines: &[String],
+    start: usize,
+    end: usize,
+    kind: &str,
+    name: &str,
+) -> Result<SceneDef, AppError> {
+    let mut view_lines = lines[start..end].to_vec();
+    rewrite_default_model_view_components(&mut view_lines, kind, name);
+    let (view, next_i) = parse_screen_view_block(&view_lines, 0)?;
+    debug_assert_eq!(next_i, view_lines.len());
+    let mut scene = implicit_model_scene(kind, name);
+    scene.layout = view.layout;
+    scene.state.variables.extend(view.state.variables);
+    scene.state.puzzles.extend(view.state.puzzles);
+    scene.components = view.components;
+    Ok(scene)
+}
+
+fn rewrite_default_model_view_components(lines: &mut [String], kind: &str, name: &str) {
+    for line in lines {
+        if split_tokens(line).as_slice() == [kind] {
+            *line = format!("{kind} {name}");
+        }
+    }
 }
 
 fn skip_raw_top_level_block(raw_lines: &[&str], start: usize) -> usize {
@@ -1117,19 +1573,25 @@ fn detect_game_document_kind(source: &str) -> Result<GameDocumentKind, AppError>
 }
 
 fn first_model_name(source: &str, kind: &str) -> Option<String> {
+    all_model_names(source, kind).into_iter().next()
+}
+
+fn all_model_names(source: &str, kind: &str) -> Vec<String> {
     let context = scan_source_context(source);
-    context.lines.iter().find_map(|line| {
+    let mut names = Vec::new();
+    for line in &context.lines {
         if line.scope.is_some() {
-            return None;
+            continue;
         }
         let tokens = line.tokens.iter().map(String::as_str).collect::<Vec<_>>();
-        match tokens.as_slice() {
-            [model_kind, name, ..] if line.scope.is_none() && *model_kind == kind => {
-                Some((*name).to_string())
-            }
-            _ => None,
+        if let [model_kind, name, ..] = tokens.as_slice()
+            && *model_kind == kind
+            && !names.iter().any(|existing| existing == name)
+        {
+            names.push((*name).to_string());
         }
-    })
+    }
+    names
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1321,12 +1783,15 @@ pub fn expand_game_imports_for_file_under_root(
     expand_game_imports(source, base_dir, &mut import_stack, Some(&root))
 }
 
-fn parse_game2d_expanded(source: &str) -> Result<LoadedGame, AppError> {
+fn parse_game2d_expanded_with_shell(
+    source: &str,
+    shell: &DocumentShell,
+) -> Result<LoadedGame, AppError> {
     let lines = logical_lines(source)?;
-    let mut title = "ASCII play".to_string();
-    let mut subtitle = None::<String>;
-    let mut author = None::<String>;
-    let mut homepage = None::<String>;
+    let mut title = shell.title.clone();
+    let mut subtitle = shell.subtitle.clone();
+    let mut author = shell.author.clone();
+    let mut homepage = shell.homepage.clone();
     let mut layer_count = None;
     let mut empty_char = None;
     let mut named_layers = HashMap::<String, u16>::new();
@@ -1336,12 +1801,16 @@ fn parse_game2d_expanded(source: &str) -> Result<LoadedGame, AppError> {
     let mut directions = Vec::<Direction>::new();
     let mut rule_definitions = Vec::<RuleDefinitionAst>::new();
     let mut main_statements = None;
+    let mut main_local_frame = None;
     let mut level_start_statements = None;
+    let mut level_start_local_frame = None;
     let mut level_clear_statements = None;
+    let mut level_clear_local_frame = None;
+    let mut last_level_clear_statements = None;
+    let mut last_level_clear_local_frame = None;
     let mut display_statements = None;
     let mut level_blocks = Vec::<LevelBlock>::new();
     let mut puzzle_models = Vec::<String>::new();
-    let mut scenes = Vec::<SceneDef>::new();
     let menus = Vec::<MenuDef>::new();
     let mut variables = Vec::<SceneVarDef>::new();
     let mut render_overlays = Vec::<(Vec<ObjectId>, char)>::new();
@@ -1349,11 +1818,14 @@ fn parse_game2d_expanded(source: &str) -> Result<LoadedGame, AppError> {
     let mut named_conditions = HashMap::<String, (String, ConditionAst)>::new();
     let mut run_rules_on_level_start = false;
     let mut visuals = VisualsDef::default();
-    let mut sounds = SoundsDef::default();
-    let mut theme = ThemeDef::default();
-    let mut assets = AssetsDef::default();
+    let mut render = PuzzleRenderDef::default();
+    let mut animation = shell.animation.clone();
+    let mut sounds = shell.sounds.clone();
+    let mut theme = shell.theme.clone();
+    let mut assets = shell.assets.clone();
     let mut puzzle_screen = PuzzleScreenDef::default();
-    let mut default_wait_ms = DEFAULT_WAIT_MS;
+    let mut default_wait_ms = shell.default_wait_ms;
+    let mut default_again_ms = shell.default_again_ms;
 
     let mut i = 0;
     while i < lines.len() {
@@ -1378,8 +1850,13 @@ fn parse_game2d_expanded(source: &str) -> Result<LoadedGame, AppError> {
                     &mut directions,
                     &mut rule_definitions,
                     &mut main_statements,
+                    &mut main_local_frame,
                     &mut level_start_statements,
+                    &mut level_start_local_frame,
                     &mut level_clear_statements,
+                    &mut level_clear_local_frame,
+                    &mut last_level_clear_statements,
+                    &mut last_level_clear_local_frame,
                     &mut display_statements,
                     &mut level_blocks,
                     &mut render_overlays,
@@ -1387,6 +1864,8 @@ fn parse_game2d_expanded(source: &str) -> Result<LoadedGame, AppError> {
                     &mut named_conditions,
                     &mut run_rules_on_level_start,
                     &mut visuals,
+                    &mut render,
+                    &mut animation,
                     &mut puzzle_screen,
                 )?;
                 puzzle_models.push(puzzle_name);
@@ -1431,10 +1910,18 @@ fn parse_game2d_expanded(source: &str) -> Result<LoadedGame, AppError> {
                 default_wait_ms = parse_default_wait_time_directive(&tokens, line)?;
                 i += 1;
             }
+            "again_interval" => {
+                default_again_ms = parse_again_interval_directive(&tokens, line)?;
+                i += 1;
+            }
+            "animation" => {
+                i = parse_animation_block(&lines, i, &mut animation)?;
+            }
             "scene" => {
-                let (screen, next_i) = parse_scene_definition(&lines, i)?;
-                scenes.push(screen);
-                i = next_i;
+                return Err(parse_error(
+                    line,
+                    "scene blocks are document-level syntax and must be parsed before the 2D model",
+                ));
             }
             "menu" => {
                 return Err(parse_error(
@@ -1443,13 +1930,20 @@ fn parse_game2d_expanded(source: &str) -> Result<LoadedGame, AppError> {
                 ));
             }
             "sounds" => {
-                i = parse_sounds_block(&lines, i, &mut sounds)?;
+                if model_sounds_block_starts(&lines, i) {
+                    i = parse_model_sounds_block(&lines, i, &catalog, &mut model_sound_triggers)?;
+                } else {
+                    i = parse_sounds_block(&lines, i, &mut sounds)?;
+                }
             }
             "theme" => {
                 i = parse_theme_statement(&lines, i, &mut theme)?;
             }
             "assets" => {
                 i = parse_assets_block(&lines, i, &mut assets)?;
+            }
+            "end" => {
+                i += 1;
             }
             "sprites" => {
                 i = parse_visuals_block(&lines, i, &mut catalog, &mut visuals)?;
@@ -1474,14 +1968,12 @@ fn parse_game2d_expanded(source: &str) -> Result<LoadedGame, AppError> {
                 return Err(parse_error(
                     line,
                     &format!(
-                        "top-level directive must be title, subtitle, author, homepage, var, const, default_wait_time, puzzle, levels, sprites, menu, scene, sounds, theme, or assets; found {other}"
+                        "top-level directive must be title, subtitle, author, homepage, var, const, default_wait_time, again_interval, animation, puzzle, levels, sprites, menu, sounds, theme, or assets; found {other}"
                     ),
                 ));
             }
         }
     }
-
-    resolve_default_wait_in_scenes(&mut scenes, default_wait_ms);
 
     let empty_char = empty_char.ok_or_else(|| {
         AppError::Parse("missing empty char; use `levels { legend { . = empty } }`".to_string())
@@ -1592,6 +2084,8 @@ fn parse_game2d_expanded(source: &str) -> Result<LoadedGame, AppError> {
         &mut rule_definitions,
         &catalog.object_names,
         &catalog.object_schemas,
+        &catalog.object_layers,
+        &catalog.visual_objects,
         &value_sets,
         &catalog.maps,
         &catalog.object_groups,
@@ -1603,8 +2097,13 @@ fn parse_game2d_expanded(source: &str) -> Result<LoadedGame, AppError> {
     let programs = lower_programs(
         rule_definitions,
         main_statements,
+        main_local_frame,
         level_start_statements,
+        level_start_local_frame,
         level_clear_statements,
+        level_clear_local_frame,
+        last_level_clear_statements,
+        last_level_clear_local_frame,
         display_statements,
         &prepared_level_bodies,
         &catalog.object_layers,
@@ -1616,6 +2115,7 @@ fn parse_game2d_expanded(source: &str) -> Result<LoadedGame, AppError> {
         &visual_query_reads,
         &catalog.scratch_names,
         &model_sound_triggers,
+        &animation,
         &value_sets,
         &effective_directions,
         default_wait_ms,
@@ -1672,10 +2172,14 @@ fn parse_game2d_expanded(source: &str) -> Result<LoadedGame, AppError> {
         game,
         warnings,
         default_wait_ms,
+        default_again_ms,
+        animation: animation.clone(),
         rule_emissions: programs.rule_emissions,
+        rule_effects: programs.rule_effects,
         level_start_program: programs.level_start,
         display_level_start_program: None,
         level_clear_program: programs.level_clear,
+        last_level_clear_program: programs.last_level_clear,
         display_level_clear_program: None,
         display_program: programs.display,
         levels,
@@ -1683,7 +2187,7 @@ fn parse_game2d_expanded(source: &str) -> Result<LoadedGame, AppError> {
         legend,
         controls,
         variables,
-        scenes: default_scenes_if_empty(scenes),
+        scenes: Vec::new(),
         menus,
         object_labels: catalog.object_labels,
         object_groups: catalog.object_groups,
@@ -1698,6 +2202,7 @@ fn parse_game2d_expanded(source: &str) -> Result<LoadedGame, AppError> {
         theme,
         assets,
         visuals,
+        render,
         screen: puzzle_screen,
     })
 }
@@ -1932,12 +2437,14 @@ fn scene_entry_is_component(tokens: &[&str]) -> bool {
     };
     match kind {
         puzzle_scene::SceneComponentKind::Button
+        | puzzle_scene::SceneComponentKind::Choice
         | puzzle_scene::SceneComponentKind::Text
         | puzzle_scene::SceneComponentKind::Title
         | puzzle_scene::SceneComponentKind::Subtitle
         | puzzle_scene::SceneComponentKind::Row
         | puzzle_scene::SceneComponentKind::Column
         | puzzle_scene::SceneComponentKind::Box
+        | puzzle_scene::SceneComponentKind::Conditional
         | puzzle_scene::SceneComponentKind::For
         | puzzle_scene::SceneComponentKind::Menu => true,
         puzzle_scene::SceneComponentKind::LevelMenu => true,
@@ -2022,6 +2529,7 @@ fn starts_authoring_block(tokens: &[&str], line: &str) -> bool {
         ["map", ..]
         | ["on_level_start"]
         | ["on_level_clear"]
+        | ["on_last_level_clear"]
         | ["on_display"]
         | ["objects"]
         | ["display_objects"]
@@ -2054,6 +2562,7 @@ fn starts_authoring_block(tokens: &[&str], line: &str) -> bool {
         ["menu", _] => true,
         ["menu", _, "=", _, "with"] => true,
         ["button", ..] if line.trim_end().ends_with(" with") => true,
+        ["choice", ..] if line.trim_end().ends_with(" with") => true,
         _ => false,
     }
 }
@@ -2145,8 +2654,21 @@ fn parse_sounds_block(
 
 #[derive(Clone, Debug)]
 struct ModelSoundTrigger {
+    kind: ModelSoundTriggerKind,
     objects: Vec<ObjectId>,
     sfx_name: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ModelSoundTriggerKind {
+    Move,
+    CantMove,
+}
+
+fn model_sounds_block_starts(lines: &[String], start: usize) -> bool {
+    lines
+        .get(start + 1)
+        .is_some_and(|first| matches!(split_tokens(first).as_slice(), ["move" | "cantmove", ..]))
 }
 
 fn parse_model_sounds_block(
@@ -2170,8 +2692,13 @@ fn parse_model_sounds_block(
             return Ok(i + 1);
         }
         let tokens = split_tokens(line);
-        match tokens.as_slice() {
-            ["on", "move", selector, "->", "sfx", name] => {
+        let trigger_kind = match tokens.as_slice() {
+            ["move", ..] => Some(ModelSoundTriggerKind::Move),
+            ["cantmove", ..] => Some(ModelSoundTriggerKind::CantMove),
+            _ => None,
+        };
+        match (trigger_kind, tokens.as_slice()) {
+            (Some(kind), [_, selector, "->", "sfx", name]) => {
                 validate_qualified_identifier(name, line, "sfx name")?;
                 let selector = resolve_object_selector(
                     selector,
@@ -2193,6 +2720,7 @@ fn parse_model_sounds_block(
                     ));
                 }
                 triggers.push(ModelSoundTrigger {
+                    kind,
                     objects: selector.alternatives,
                     sfx_name: (*name).to_string(),
                 });
@@ -2200,7 +2728,7 @@ fn parse_model_sounds_block(
             _ => {
                 return Err(parse_error(
                     line,
-                    "model sounds entry must be: on move <object-selector> -> sfx <name>",
+                    "model sounds entry must be: move <object-selector> -> sfx <name> | cantmove <object-selector> -> sfx <name>",
                 ));
             }
         }
@@ -2478,8 +3006,13 @@ fn parse_puzzle_definition(
     directions: &mut Vec<Direction>,
     rule_definitions: &mut Vec<RuleDefinitionAst>,
     main_statements: &mut Option<Vec<StatementAst>>,
+    main_local_frame: &mut Option<LocalFrame<ObjectId>>,
     level_start_statements: &mut Option<Vec<StatementAst>>,
+    level_start_local_frame: &mut Option<LocalFrame<ObjectId>>,
     level_clear_statements: &mut Option<Vec<StatementAst>>,
+    level_clear_local_frame: &mut Option<LocalFrame<ObjectId>>,
+    last_level_clear_statements: &mut Option<Vec<StatementAst>>,
+    last_level_clear_local_frame: &mut Option<LocalFrame<ObjectId>>,
     display_statements: &mut Option<Vec<StatementAst>>,
     level_blocks: &mut Vec<LevelBlock>,
     render_overlays: &mut OverlayDefs,
@@ -2487,6 +3020,8 @@ fn parse_puzzle_definition(
     named_conditions: &mut HashMap<String, (String, ConditionAst)>,
     run_rules_on_level_start: &mut bool,
     visuals: &mut VisualsDef,
+    render: &mut PuzzleRenderDef,
+    animation: &mut AnimationDef,
     puzzle_screen: &mut PuzzleScreenDef,
 ) -> Result<(usize, String), AppError> {
     let header = split_tokens(&lines[start]);
@@ -2539,16 +3074,12 @@ fn parse_puzzle_definition(
                 *run_rules_on_level_start = true;
                 i += 1;
             }
-            "on_level_start" | "on_level_clear" => {
-                if tokens.len() != 1 {
-                    return Err(parse_error(
-                        line,
-                        "lifecycle block header must be: on_level_start | on_level_clear",
-                    ));
-                }
+            "on_level_start" | "on_level_clear" | "on_last_level_clear" => {
+                let local_frame = parse_program_local_frame_modifier(&tokens[1..], line, catalog)?;
                 let lifecycle = match tokens[0] {
                     "on_level_start" => "level_start",
                     "on_level_clear" => "level_clear",
+                    "on_last_level_clear" => "last_level_clear",
                     _ => unreachable!(),
                 };
                 let (event, statements, next_i) =
@@ -2562,6 +3093,7 @@ fn parse_puzzle_definition(
                             ));
                         }
                         *level_start_statements = Some(statements);
+                        *level_start_local_frame = local_frame;
                     }
                     "level_clear" => {
                         if level_clear_statements.is_some() {
@@ -2571,6 +3103,17 @@ fn parse_puzzle_definition(
                             ));
                         }
                         *level_clear_statements = Some(statements);
+                        *level_clear_local_frame = local_frame;
+                    }
+                    "last_level_clear" => {
+                        if last_level_clear_statements.is_some() {
+                            return Err(parse_error(
+                                line,
+                                "multiple last_level_clear blocks are not supported",
+                            ));
+                        }
+                        *last_level_clear_statements = Some(statements);
+                        *last_level_clear_local_frame = local_frame;
                     }
                     _ => unreachable!("matched lifecycle event"),
                 }
@@ -2644,9 +3187,6 @@ fn parse_puzzle_definition(
             }
             "inputs" => {
                 i = parse_model_inputs_block(lines, i, catalog, controls)?;
-            }
-            "command" => {
-                return Err(parse_error(line, "`command` was removed; use `input`"));
             }
             "var" | "const" | "persistent" => {
                 parse_global_directive(
@@ -2734,6 +3274,12 @@ fn parse_puzzle_definition(
             "sprites" => {
                 i = parse_visuals_block(lines, i, catalog, visuals)?;
             }
+            "render" => {
+                i = parse_puzzle_render_block(lines, i, render)?;
+            }
+            "animation" => {
+                i = parse_animation_block(lines, i, animation)?;
+            }
             "sounds" => {
                 i = parse_model_sounds_block(lines, i, catalog, model_sound_triggers)?;
             }
@@ -2770,9 +3316,7 @@ fn parse_puzzle_definition(
                 return Err(parse_error(line, "`rule` was removed; use `routine`"));
             }
             "rules" => {
-                if tokens.len() != 1 {
-                    return Err(parse_error(line, "puzzle rules header must be: rules"));
-                }
+                let local_frame = parse_program_local_frame_modifier(&tokens[1..], line, catalog)?;
                 if main_statements.is_some() {
                     return Err(parse_error(
                         line,
@@ -2795,6 +3339,7 @@ fn parse_puzzle_definition(
                     &[],
                 )?;
                 *main_statements = Some(statements);
+                *main_local_frame = local_frame;
                 i = next_i;
             }
             "main" | "transitions" => {
@@ -2868,6 +3413,60 @@ fn parse_puzzle_definition(
     validate_puzzle_screen(puzzle_screen, &lines[start])?;
 
     Ok((i + 1, name.to_string()))
+}
+
+fn parse_program_local_frame_modifier(
+    tokens: &[&str],
+    line: &str,
+    catalog: &Catalog,
+) -> Result<Option<LocalFrame<ObjectId>>, AppError> {
+    if tokens.is_empty() {
+        return Ok(None);
+    }
+    let focus_objects = default_local_frame_focus_objects(catalog, line)?;
+    match tokens {
+        ["local_radius", radius] => {
+            let radius = parse_u16(Some(radius), line, "missing local radius")?;
+            Ok(Some(LocalFrame::new(
+                LocalFrameExtent::Radius(radius),
+                LocalFrameExtent::Radius(radius),
+                LocalFrameExtent::Full,
+                focus_objects,
+            )))
+        }
+        ["local_frame", x, y] => Ok(Some(LocalFrame::new(
+            parse_local_frame_extent(x, line)?,
+            parse_local_frame_extent(y, line)?,
+            LocalFrameExtent::Full,
+            focus_objects,
+        ))),
+        _ => Err(parse_error(
+            line,
+            "transition block header must be: rules [local_radius <n> | local_frame <x> <y>] | on_level_start [local_radius <n> | local_frame <x> <y>] | on_level_clear [local_radius <n> | local_frame <x> <y>]",
+        )),
+    }
+}
+
+fn parse_local_frame_extent(token: &str, line: &str) -> Result<LocalFrameExtent, AppError> {
+    if token == "full" {
+        return Ok(LocalFrameExtent::Full);
+    }
+    parse_u16(Some(&token), line, "missing local frame extent").map(LocalFrameExtent::Radius)
+}
+
+fn default_local_frame_focus_objects(
+    catalog: &Catalog,
+    line: &str,
+) -> Result<Vec<ObjectId>, AppError> {
+    for name in ["Player", "player"] {
+        if let Some(object) = catalog.object_names.get(name) {
+            return Ok(vec![*object]);
+        }
+    }
+    Err(parse_error(
+        line,
+        "local_frame/local_radius requires an object named Player",
+    ))
 }
 
 fn parse_level_block(
@@ -3270,6 +3869,154 @@ fn parse_puzzle_screen_block(
     validate_puzzle_screen(&parsed, &lines[start])?;
     *puzzle_screen = parsed;
     Ok(i + 1)
+}
+
+fn parse_puzzle_render_block(
+    lines: &[String],
+    start: usize,
+    render: &mut PuzzleRenderDef,
+) -> Result<usize, AppError> {
+    let mut parsed = render.clone();
+    let mut i = start + 1;
+    while i < lines.len() && lines[i] != "end" {
+        let line = &lines[i];
+        let tokens = split_tokens(line);
+        match tokens.as_slice() {
+            [] => i += 1,
+            ["grid"] => {
+                i = parse_puzzle_render_grid_block(lines, i, &mut parsed.grid)?;
+            }
+            [other, ..] => {
+                return Err(parse_error(
+                    line,
+                    &format!("unknown render directive {other}"),
+                ));
+            }
+        }
+    }
+    if i >= lines.len() {
+        return Err(parse_error(&lines[start], "render block missing end"));
+    }
+    *render = parsed;
+    Ok(i + 1)
+}
+
+fn parse_animation_block(
+    lines: &[String],
+    start: usize,
+    animation: &mut AnimationDef,
+) -> Result<usize, AppError> {
+    let header = split_tokens(&lines[start]);
+    if !matches!(header.as_slice(), ["animation"] | ["animation", "{"]) {
+        return Err(parse_error(
+            &lines[start],
+            "animation header must be: animation",
+        ));
+    }
+
+    let mut parsed = animation.clone();
+    let mut i = start + 1;
+    while i < lines.len() && lines[i] != "end" {
+        let line = &lines[i];
+        let tokens = split_tokens(line);
+        match tokens.as_slice() {
+            [] => i += 1,
+            ["tween"] | ["tween", "{"] => {
+                i = parse_animation_tween_block(lines, i, &mut parsed.tween)?;
+            }
+            [other, ..] => {
+                return Err(parse_error(
+                    line,
+                    &format!("unknown animation directive {other}"),
+                ));
+            }
+        }
+    }
+    if i >= lines.len() {
+        return Err(parse_error(&lines[start], "animation block missing end"));
+    }
+    *animation = parsed;
+    Ok(i + 1)
+}
+
+fn parse_animation_tween_block(
+    lines: &[String],
+    start: usize,
+    tween: &mut TweenAnimationDef,
+) -> Result<usize, AppError> {
+    let mut parsed = tween.clone();
+    let mut i = start + 1;
+    while i < lines.len() && lines[i] != "end" {
+        let line = &lines[i];
+        let tokens = split_tokens(line);
+        match tokens.as_slice() {
+            [] => i += 1,
+            ["enabled", "=", value] | ["enabled", value] => {
+                parsed.enabled = parse_bool_literal(value, line, "tween enabled")?;
+                i += 1;
+            }
+            ["interval", "=", value] | ["interval", value] => {
+                parsed.interval_ms = parse_animation_interval_ms(value, line)?;
+                i += 1;
+            }
+            [other, ..] => {
+                return Err(parse_error(line, &format!("unknown tween setting {other}")));
+            }
+        }
+    }
+    if i >= lines.len() {
+        return Err(parse_error(&lines[start], "tween block missing end"));
+    }
+    *tween = parsed;
+    Ok(i + 1)
+}
+
+fn parse_animation_interval_ms(value: &str, line: &str) -> Result<u64, AppError> {
+    let milliseconds = parse_wait_duration_ms(value, line)?;
+    if milliseconds == 0 {
+        return Err(parse_error(line, "tween interval must be greater than 0"));
+    }
+    Ok(milliseconds)
+}
+
+fn parse_puzzle_render_grid_block(
+    lines: &[String],
+    start: usize,
+    grid: &mut PuzzleGridRenderDef,
+) -> Result<usize, AppError> {
+    let mut parsed = grid.clone();
+    let mut i = start + 1;
+    while i < lines.len() && lines[i] != "end" {
+        let line = &lines[i];
+        let tokens = split_tokens(line);
+        match tokens.as_slice() {
+            [] => i += 1,
+            ["occupied_cells", "=", value] | ["occupied_cells", value] => {
+                parsed.occupied_cells = parse_bool_literal(value, line, "occupied_cells")?;
+                i += 1;
+            }
+            ["all_cells", "=", value] | ["all_cells", value] => {
+                parsed.all_cells = parse_bool_literal(value, line, "all_cells")?;
+                i += 1;
+            }
+            [other, ..] => {
+                return Err(parse_error(line, &format!("unknown grid setting {other}")));
+            }
+        }
+    }
+    if i >= lines.len() {
+        return Err(parse_error(&lines[start], "grid block missing end"));
+    }
+    *grid = parsed;
+    Ok(i + 1)
+}
+
+fn parse_bool_literal(value: &str, line: &str, label: &str) -> Result<bool, AppError> {
+    match value {
+        "true" => Ok(true),
+        "false" => Ok(false),
+        _ => Err(parse_error(line, &format!("{label} must be true or false"))),
+    }
 }
 
 fn parse_puzzle_screen_directive(
@@ -4151,7 +4898,7 @@ fn parse_scratch_directive(
     catalog: &mut Catalog,
 ) -> Result<(), AppError> {
     let (name, kind, values) = if let Some(ty) = ty {
-        validate_identifier(name, line, "scratch name")?;
+        validate_scratch_name(name, line)?;
         if ty.is_empty() {
             return Err(parse_error(line, "scratch type must not be empty"));
         }
@@ -4175,7 +4922,7 @@ fn parse_scratch_directive(
             _ => return Err(parse_error(line, "unknown scratch type")),
         }
     } else {
-        validate_identifier(name, line, "scratch name")?;
+        validate_scratch_name(name, line)?;
         (name, ScratchKind::Bool, Vec::new())
     };
     if catalog.scratch_names.contains_key(name) {
@@ -4799,8 +5546,8 @@ fn parse_command_definition(
     catalog: &mut Catalog,
 ) -> Result<(Option<Direction>, usize), AppError> {
     let header = split_tokens(&lines[start]);
-    let keyword = header.first().copied().unwrap_or("command");
-    let name = expect(header.get(1), &lines[start], "missing command name")?;
+    let keyword = header.first().copied().unwrap_or("input");
+    let name = expect(header.get(1), &lines[start], "missing input name")?;
     let input = if let Some(input) = catalog.input_names.get(name).copied() {
         input
     } else {
@@ -4808,7 +5555,7 @@ fn parse_command_definition(
     };
 
     match header.as_slice() {
-        ["command", _] | ["input", _] => {
+        ["input", _] => {
             let next = start + 1;
             if next >= lines.len() || lines[next] == "end" {
                 return Ok((None, next));
@@ -4824,13 +5571,9 @@ fn parse_command_definition(
                 i += 1;
             }
             if i >= lines.len() {
-                return Err(parse_error(&lines[start], "command missing end"));
+                return Err(parse_error(&lines[start], "input missing end"));
             }
             Ok((direction, i + 1))
-        }
-        ["command", _, "=", "direction", value] => {
-            let (dx, dy) = named_direction_vector(value, &lines[start])?;
-            Ok((Some(Direction { input, dx, dy }), start + 1))
         }
         ["input", _, "direction", value] => {
             let (dx, dy) = named_direction_vector(value, &lines[start])?;
@@ -4838,7 +5581,7 @@ fn parse_command_definition(
         }
         _ => Err(parse_error(
             &lines[start],
-            &format!("{keyword} must be: command <name> [= direction <up|down|left|right>]"),
+            &format!("{keyword} must be: input <name> [direction <up|down|left|right>]"),
         )),
     }
 }
@@ -4872,19 +5615,6 @@ fn named_direction_vector(value: &str, line: &str) -> Result<(i16, i16), AppErro
 }
 
 fn parse_scene_definition(lines: &[String], start: usize) -> Result<(SceneDef, usize), AppError> {
-    parse_scene_definition_with_options(lines, start, SceneParseOptions::default())
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-struct SceneParseOptions {
-    allow_legacy_keys: bool,
-}
-
-fn parse_scene_definition_with_options(
-    lines: &[String],
-    start: usize,
-    options: SceneParseOptions,
-) -> Result<(SceneDef, usize), AppError> {
     let header = split_tokens(&lines[start]);
     let (name, level_menu_scene) = match header.as_slice() {
         ["scene", "level_menu"] => ("level_select", true),
@@ -4893,19 +5623,14 @@ fn parse_scene_definition_with_options(
         _ => {
             return Err(parse_error(
                 &lines[start],
-                "scene header must be: scene <name> | scene level_menu [name]",
+                "scene header must be: scene <name>[(param...)] | scene level_menu [name]",
             ));
         }
     };
-    if !is_qualified_identifier(name) {
-        return Err(parse_error(
-            &lines[start],
-            "scene name must be a qualified identifier",
-        ));
-    }
+    let (name, _params) = parse_scene_name_and_params(name, &lines[start])?;
 
     let mut screen = SceneDef {
-        name: (*name).to_string(),
+        name: name.clone(),
         layout: SceneLayoutDef::default(),
         resources: SceneResources::default(),
         state: SceneStateDef::default(),
@@ -4921,12 +5646,11 @@ fn parse_scene_definition_with_options(
     }
     let mut handler = Scene2dBlockHandler {
         screen: &mut screen,
-        options,
     };
     let next = puzzle_scene::parse_scene_block_with_handler(
         lines,
         start + 1,
-        name,
+        &name,
         puzzle_scene::SceneBlockSyntax::End,
         &mut handler,
     )?;
@@ -4934,9 +5658,32 @@ fn parse_scene_definition_with_options(
     Ok((screen, next))
 }
 
+fn parse_scene_name_and_params(value: &str, line: &str) -> Result<(String, Vec<String>), AppError> {
+    let Some((name, params)) = value.split_once('(') else {
+        validate_qualified_identifier(value, line, "scene name")?;
+        return Ok((value.to_string(), Vec::new()));
+    };
+    validate_qualified_identifier(name, line, "scene name")?;
+    let params = params
+        .strip_suffix(')')
+        .ok_or_else(|| parse_error(line, "scene params must end with )"))?;
+    let params = if params.trim().is_empty() {
+        Vec::new()
+    } else {
+        params
+            .split(',')
+            .map(str::trim)
+            .map(|param| {
+                validate_identifier(param, line, "scene param")?;
+                Ok(param.to_string())
+            })
+            .collect::<Result<Vec<_>, AppError>>()?
+    };
+    Ok((name.to_string(), params))
+}
+
 struct Scene2dBlockHandler<'a> {
     screen: &'a mut SceneDef,
-    options: SceneParseOptions,
 }
 
 impl puzzle_scene::SceneBlockHandler for Scene2dBlockHandler<'_> {
@@ -4965,15 +5712,9 @@ impl puzzle_scene::SceneBlockHandler for Scene2dBlockHandler<'_> {
     }
 
     fn parse_keys_block(&mut self, lines: &[String], start: usize) -> Result<usize, AppError> {
-        if self.options.allow_legacy_keys {
-            let (bindings, next_i) = parse_scene_legacy_keys_block(lines, start)?;
-            self.screen.key_bindings.extend(bindings);
-            return Ok(next_i);
-        }
-        Err(parse_error(
-            &lines[start],
-            "`keys` was removed; use scene `inputs { <input> <- <key...> }` or model `inputs { <input> <- <key...> }`",
-        ))
+        let (bindings, next_i) = parse_scene_keys_block(lines, start)?;
+        self.screen.key_bindings.extend(bindings);
+        Ok(next_i)
     }
 
     fn parse_rules_block(&mut self, lines: &[String], start: usize) -> Result<usize, AppError> {
@@ -5020,9 +5761,9 @@ impl puzzle_scene::SceneBlockHandler for Scene2dBlockHandler<'_> {
                 }
                 Ok(start + 1)
             }
-            ["on_level_start"] => Err(parse_error(
+            ["on_level_start" | "on_level_clear" | "on_last_level_clear"] => Err(parse_error(
                 &lines[start],
-                "on_level_start belongs inside puzzle; scene lifecycle block must be on_scene_start",
+                "level lifecycle blocks belong inside puzzle; scene lifecycle block must be on_scene_start",
             )),
             ["input", ..] => Err(parse_error(
                 &lines[start],
@@ -5153,6 +5894,12 @@ fn parse_screen_view_like_block(
         if matches!(tokens.as_slice(), ["panel", ..]) {
             return Err(parse_error(&lines[i], "unknown view directive panel"));
         }
+        if matches!(tokens.as_slice(), ["if", ..]) {
+            let (component, next_i) = parse_view_if_component(lines, i)?;
+            components.push(component);
+            i = next_i;
+            continue;
+        }
         if scene_entry_is_component(&tokens) || matches!(tokens.as_slice(), ["puzzle", ..]) {
             let (component, next_i) = parse_screen_component(lines, i)?;
             components.push(component);
@@ -5227,6 +5974,7 @@ fn scene_frame_component_with_layout(
     SceneComponent::Frame(puzzle_scene::FrameComponent {
         kind: kind.into(),
         source: source.into(),
+        inputs: Vec::new(),
         layout,
     })
 }
@@ -5367,6 +6115,8 @@ fn parse_screen_leaf_component(
         ["title", ..] => Ok((parse_title_component(&lines[start], true)?, start + 1)),
         ["subtitle", ..] => Ok((parse_title_component(&lines[start], false)?, start + 1)),
         ["button", ..] => parse_button_component(lines, start),
+        ["choice", ..] => parse_choice_component(lines, start),
+        ["if", ..] => parse_view_if_component(lines, start),
         ["for", ..] => parse_for_component(lines, start),
         ["level_menu"] => {
             let (menu, next_i) = parse_level_menu_component(lines, start)?;
@@ -5439,26 +6189,30 @@ fn parse_text_component(line: &str) -> Result<SceneComponent, AppError> {
     ))
 }
 
-fn parse_button_def(lines: &[String], start: usize) -> Result<(SceneButtonDef, usize), AppError> {
+fn parse_button_like_def(
+    lines: &[String],
+    start: usize,
+    keyword: &str,
+) -> Result<(SceneButtonDef, usize), AppError> {
     let line = &lines[start];
-    let Some(rest) = line.strip_prefix("button") else {
+    let Some(rest) = line.strip_prefix(keyword) else {
         return Err(parse_error(
             line,
-            "button must be: button \"<label>\" -> <command>",
+            &format!("{keyword} must be: {keyword} \"<label>\" -> <command>"),
         ));
     };
     let rest = rest.trim();
     if rest.is_empty() {
         return Err(parse_error(
             line,
-            "button must be: button \"<label>\" -> <command>",
+            &format!("{keyword} must be: {keyword} \"<label>\" -> <command>"),
         ));
     }
 
     let (label, effect, next_i) = if rest.contains('=') {
         return Err(parse_error(
             line,
-            "button command must use `->`; `=` action assignment was removed",
+            &format!("{keyword} command must use `->`; `=` action assignment was removed"),
         ));
     } else if let Some((label, effect)) = rest.split_once("->") {
         let effect_text = effect.trim();
@@ -5467,7 +6221,7 @@ fn parse_button_def(lines: &[String], start: usize) -> Result<(SceneButtonDef, u
     } else {
         return Err(parse_error(
             line,
-            "button must be: button \"<label>\" -> <command>",
+            &format!("{keyword} must be: {keyword} \"<label>\" -> <command>"),
         ));
     };
 
@@ -5481,12 +6235,112 @@ fn parse_button_def(lines: &[String], start: usize) -> Result<(SceneButtonDef, u
     ))
 }
 
+fn parse_button_def(lines: &[String], start: usize) -> Result<(SceneButtonDef, usize), AppError> {
+    parse_button_like_def(lines, start, "button")
+}
+
 fn parse_button_component(
     lines: &[String],
     start: usize,
 ) -> Result<(SceneComponent, usize), AppError> {
     let (button, next_i) = parse_button_def(lines, start)?;
     Ok((SceneComponent::Button(button), next_i))
+}
+
+fn parse_choice_component(
+    lines: &[String],
+    start: usize,
+) -> Result<(SceneComponent, usize), AppError> {
+    let (choice, next_i) = parse_button_like_def(lines, start, "choice")?;
+    Ok((SceneComponent::Choice(choice), next_i))
+}
+
+fn parse_view_if_component(
+    lines: &[String],
+    start: usize,
+) -> Result<(SceneComponent, usize), AppError> {
+    let line = &lines[start];
+    let condition = line
+        .strip_prefix("if ")
+        .ok_or_else(|| parse_error(line, "view condition must be: if <condition>"))?
+        .trim();
+    validate_screen_condition(condition, line)?;
+    let (entry, next_i) = collect_authoring_entry(lines, start)?;
+    let body = &entry[1..entry.len().saturating_sub(1)];
+    let (then_body, else_body) = split_view_if_body(body, line)?;
+    if then_body.is_empty() {
+        return Err(parse_error(
+            line,
+            "view condition requires at least one component",
+        ));
+    }
+    let children = parse_screen_component_body(then_body, "if")?;
+    let else_children = if else_body.is_empty() {
+        Vec::new()
+    } else {
+        parse_screen_component_body(else_body, "else")?
+    };
+    Ok((
+        SceneComponent::Conditional(SceneConditionalDef {
+            condition: condition.to_string(),
+            children,
+            else_children,
+        }),
+        next_i,
+    ))
+}
+
+fn split_view_if_body<'a>(
+    body: &'a [String],
+    header_line: &str,
+) -> Result<(&'a [String], &'a [String]), AppError> {
+    let mut depth = 0usize;
+    for (index, line) in body.iter().enumerate() {
+        let tokens = split_tokens(line);
+        if matches!(tokens.as_slice(), ["else"]) && depth == 0 {
+            return Ok((&body[..index], &body[index + 1..]));
+        }
+        if tokens.first().copied() == Some("end") {
+            if depth == 0 {
+                return Err(parse_error(line, "end without view block"));
+            }
+            depth -= 1;
+            continue;
+        }
+        if starts_authoring_block(&tokens, line) || line.trim_end().ends_with("->") {
+            depth += 1;
+        }
+    }
+    if depth != 0 {
+        return Err(parse_error(
+            header_line,
+            "view condition block is unbalanced",
+        ));
+    }
+    Ok((body, &[]))
+}
+
+fn parse_screen_component_body(
+    body: &[String],
+    block_name: &str,
+) -> Result<Vec<SceneComponent>, AppError> {
+    let mut lines = body.to_vec();
+    lines.push("end".to_string());
+    let mut parse_leaf =
+        |lines: &[String], index: usize| -> Result<(usize, SceneComponent), AppError> {
+            let (component, next) = parse_screen_leaf_component(lines, index)?;
+            Ok((next, component))
+        };
+    let (next, components) = puzzle_scene::parse_scene_component_block(
+        &lines,
+        0,
+        block_name,
+        puzzle_scene::SceneBlockSyntax::End,
+        &mut parse_leaf,
+        &build_scene_container_component,
+    )?;
+    debug_assert_eq!(next, lines.len());
+    Ok(components)
 }
 
 fn parse_for_component(
@@ -5551,14 +6405,24 @@ pub(crate) fn scene_effect_command_syntax(token: &str) -> Option<SceneEffectComm
     match token {
         "input" => Some(SceneEffectCommandSyntax::InputTarget),
         "component_effect" => Some(SceneEffectCommandSyntax::ComponentEffectTarget),
-        "goto" | "enter" | "create" | "reset" | "delete" | "show" | "hide" | "toggle" | "focus" => {
-            Some(SceneEffectCommandSyntax::SceneTarget)
-        }
+        "goto" | "resume" | "enter" | "open" | "start" | "create" | "reset" | "delete" | "show"
+        | "hide" | "toggle" | "focus" => Some(SceneEffectCommandSyntax::SceneTarget),
         "sfx" | "play_music" => Some(SceneEffectCommandSyntax::AssetTarget),
         "pause_music" | "resume_music" | "stop_music" => {
             Some(SceneEffectCommandSyntax::OptionalAssetTarget)
         }
-        "apply" | "back" | "clear_history" | "continue" | "copy" | "load" | "message" | "start"
+        "apply"
+        | "back"
+        | "close"
+        | "clear_history"
+        | "clear_undo_history"
+        | "clear_game_progress"
+        | "continue"
+        | "clear"
+        | "copy"
+        | "load"
+        | "message"
+        | "set"
         | "wait" => Some(SceneEffectCommandSyntax::Plain),
         _ => None,
     }
@@ -5905,6 +6769,8 @@ impl EffectAst {
             | EffectAst::Restart
             | EffectAst::NextLevel
             | EffectAst::Again
+            | EffectAst::Checkpoint
+            | EffectAst::ClearCheckpoint
             | EffectAst::UpdateGlobal { .. } => RewriteEffectCommandSyntax::Effect,
         }
     }
@@ -5912,7 +6778,8 @@ impl EffectAst {
 
 pub(crate) fn rewrite_effect_command_syntax(token: &str) -> Option<RewriteEffectCommandSyntax> {
     let probe = match token {
-        "again" | "cancel" | "win" | "restart" | "next_level" | "wait" => token.to_string(),
+        "again" | "cancel" | "win" | "restart" | "next_level" | "checkpoint"
+        | "clear_checkpoint" | "wait" => token.to_string(),
         "message" => "message \"text\"".to_string(),
         "sfx" => "sfx __highlight_probe".to_string(),
         "set" => "set __highlight_probe = 0".to_string(),
@@ -5997,7 +6864,9 @@ fn add_rewrite_effect_semantic_tokens(tokens: &[SourceToken], sink: &mut Surface
             add_scene_effect_token_range(sink, asset, SurfaceSemanticKind::Asset);
             true
         }
-        [command, name, equals, value] if command.text == "set" && equals.text == "=" => {
+        [command, name, op, value]
+            if command.text == "set" && is_global_update_operator(&op.text) =>
+        {
             add_scene_effect_token_range(sink, command, SurfaceSemanticKind::Effect);
             add_scene_effect_token_range(sink, name, SurfaceSemanticKind::State);
             add_scene_effect_token_range(sink, value, SurfaceSemanticKind::Number);
@@ -6020,7 +6889,8 @@ fn add_simple_rewrite_effect_semantic_tokens(
     let mut parsed_any = false;
     while index < tokens.len() {
         match tokens[index].text.to_ascii_lowercase().as_str() {
-            "cancel" | "win" | "restart" | "next_level" | "again" => {
+            "cancel" | "win" | "restart" | "next_level" | "again" | "checkpoint"
+            | "clear_checkpoint" => {
                 add_scene_effect_token_range(sink, &tokens[index], SurfaceSemanticKind::Effect);
                 index += 1;
                 parsed_any = true;
@@ -6208,7 +7078,7 @@ fn level_property_syntax(property: &str) -> Option<LevelPathPartSyntax> {
     match property {
         "name" | "label" => Some(LevelPathPartSyntax::TextProperty),
         "index" => Some(LevelPathPartSyntax::NumberProperty),
-        "last" | "has_next" => Some(LevelPathPartSyntax::ConditionProperty),
+        "cleared" | "solved" | "last" | "has_next" => Some(LevelPathPartSyntax::ConditionProperty),
         _ => None,
     }
 }
@@ -6238,17 +7108,7 @@ fn parse_scene_effect_with_optional_block(
         return Ok((parse_scene_handler_effects(&body, line)?, i + 1));
     }
 
-    let tokens = split_tokens(value);
-    let [command @ ("goto" | "enter"), screen, "with"] = tokens.as_slice() else {
-        return Ok((parse_scene_effect(value, line)?, start + 1));
-    };
-    validate_qualified_identifier(screen, line, "scene name")?;
-    Err(parse_error(
-        line,
-        &format!(
-            "{command} cannot use with; call a target-qualified command such as `{screen}.goto <level>` instead"
-        ),
-    ))
+    Ok((parse_scene_effect(value, line)?, start + 1))
 }
 
 #[derive(Clone, Debug)]
@@ -6300,6 +7160,54 @@ fn parse_scene_effect_value(value: &str, line: &str) -> Result<SceneEffect, AppE
             text: parse_scene_expr(text.trim(), line)?,
         });
     }
+    if let Some(rest) = value.strip_prefix("set current_level = ") {
+        return Ok(SceneEffect::SetCurrentLevel {
+            level: parse_scene_expr(rest.trim(), line)?,
+        });
+    }
+    if let Some(rest) = value.strip_prefix("set level.cleared = ") {
+        return Ok(SceneEffect::SetLevelCleared {
+            level: None,
+            cleared: parse_scene_effect_bool(rest.trim(), line)?,
+        });
+    }
+    if let Some(rest) = value.strip_prefix("set level(") {
+        if let Some((level, cleared)) = rest.split_once(").cleared = ") {
+            return Ok(SceneEffect::SetLevelCleared {
+                level: Some(parse_scene_expr(level.trim(), line)?),
+                cleared: parse_scene_effect_bool(cleared.trim(), line)?,
+            });
+        }
+    }
+    if let Some(rest) = value
+        .strip_prefix("goto ")
+        .or_else(|| value.strip_prefix("resume "))
+    {
+        let (scene, params) = parse_scene_target_params(rest, line)?;
+        return Ok(SceneEffect::Goto { scene, params });
+    }
+    if let Some(rest) = value
+        .strip_prefix("enter ")
+        .or_else(|| value.strip_prefix("open "))
+    {
+        let (scene, params) = parse_scene_target_params(rest, line)?;
+        return Ok(SceneEffect::Enter { scene, params });
+    }
+    if value == "close" {
+        return Ok(SceneEffect::Back);
+    }
+    if let Some(rest) = value.strip_prefix("start ") {
+        if rest.starts_with("levels ") || rest.contains(" in ") {
+            return Err(legacy_start_levels_error(line));
+        }
+        let (scene, params) = parse_scene_target_params(rest, line)?;
+        return Ok(SceneEffect::Sequence(vec![
+            SceneEffect::Reset {
+                scene: scene.clone(),
+            },
+            SceneEffect::Goto { scene, params },
+        ]));
+    }
 
     let tokens = split_tokens(value);
     match tokens.as_slice() {
@@ -6345,8 +7253,11 @@ fn parse_scene_effect_value(value: &str, line: &str) -> Result<SceneEffect, AppE
         ["wait", duration] => Ok(SceneEffect::Wait {
             milliseconds: Some(parse_wait_duration_ms(duration, line)?),
         }),
-        ["back"] => Ok(SceneEffect::Back),
-        ["clear_history"] => Ok(SceneEffect::ClearHistory),
+        ["back"] | ["close"] => Ok(SceneEffect::Back),
+        ["clear_undo_history"] | ["clear_history"] => Ok(SceneEffect::ClearUndoHistory),
+        ["clear_game_progress"] => Ok(SceneEffect::ClearGameProgress),
+        ["clear", "current_level"] => Ok(SceneEffect::ClearCurrentLevel),
+        ["reset", "persistent_vars"] => Ok(SceneEffect::ResetPersistentVars),
         ["sfx", name] => {
             validate_qualified_identifier(name, line, "sfx sounds name")?;
             Ok(SceneEffect::PlaySfx {
@@ -6416,81 +7327,8 @@ fn parse_scene_effect_value(value: &str, line: &str) -> Result<SceneEffect, AppE
                 _ => unreachable!(),
             }
         }
-        ["goto", screen] => {
-            if let Some((scene, params)) = parse_scene_call_params(screen, line)? {
-                return Ok(SceneEffect::Goto { scene, params });
-            }
-            validate_qualified_identifier(screen, line, "scene name")?;
-            Ok(SceneEffect::Goto {
-                scene: (*screen).to_string(),
-                params: Vec::new(),
-            })
-        }
-        ["goto", screen, "with", ..] => {
-            validate_qualified_identifier(screen, line, "scene name")?;
-            Err(parse_error(
-                line,
-                &format!(
-                    "goto cannot use with; call a target-qualified command such as `{screen}.goto <level>` instead"
-                ),
-            ))
-        }
-        ["enter", screen] => {
-            if let Some((scene, params)) = parse_scene_call_params(screen, line)? {
-                return Ok(SceneEffect::Enter { scene, params });
-            }
-            validate_qualified_identifier(screen, line, "scene name")?;
-            Ok(SceneEffect::Enter {
-                scene: (*screen).to_string(),
-                params: Vec::new(),
-            })
-        }
-        ["start", "levels", "in", scene] => {
-            validate_qualified_identifier(scene, line, "scene name")?;
-            Ok(SceneEffect::StartLevel {
-                scene: (*scene).to_string(),
-                scope: None,
-            })
-        }
-        ["start", "levels", scope, "in", scene] => {
-            validate_qualified_identifier(scope, line, "level scope")?;
-            validate_qualified_identifier(scene, line, "scene name")?;
-            Ok(SceneEffect::StartLevel {
-                scene: (*scene).to_string(),
-                scope: Some((*scope).to_string()),
-            })
-        }
-        ["start", scope, "in", scene] => {
-            validate_qualified_identifier(scope, line, "level scope")?;
-            validate_qualified_identifier(scene, line, "scene name")?;
-            Ok(SceneEffect::StartLevel {
-                scene: (*scene).to_string(),
-                scope: Some((*scope).to_string()),
-            })
-        }
-        ["continue", "levels", "in", scene] => {
-            validate_qualified_identifier(scene, line, "scene name")?;
-            Ok(SceneEffect::ContinueLevel {
-                scene: (*scene).to_string(),
-                scope: None,
-            })
-        }
-        ["continue", "levels", scope, "in", scene] => {
-            validate_qualified_identifier(scope, line, "level scope")?;
-            validate_qualified_identifier(scene, line, "scene name")?;
-            Ok(SceneEffect::ContinueLevel {
-                scene: (*scene).to_string(),
-                scope: Some((*scope).to_string()),
-            })
-        }
-        ["enter", screen, "with", ..] => {
-            validate_qualified_identifier(screen, line, "scene name")?;
-            Err(parse_error(
-                line,
-                &format!(
-                    "enter cannot use with; call a target-qualified command such as `{screen}.goto <level>` instead"
-                ),
-            ))
+        ["start", "levels", ..] | ["start", _, "in", _] | ["continue", "levels", ..] => {
+            Err(legacy_start_levels_error(line))
         }
         [target_command, level] => {
             if let Some((target, command)) = parse_puzzle_command(target_command, line)? {
@@ -6503,7 +7341,7 @@ fn parse_scene_effect_value(value: &str, line: &str) -> Result<SceneEffect, AppE
             }
             Err(parse_error(
                 line,
-                "effect must be: input <name> | component_effect <name> | back | clear_history | message <text> | wait <duration> | sfx <name> | play_music <name> | pause_music [name] | resume_music [name] | stop_music [name] | goto <scene> | enter <scene> | <scene>.goto <level> | copy <puzzle> to <puzzle> | show <scene> | hide <scene> | focus <scene>",
+                "effect must be: input <name> | component_effect <name> | close | clear_undo_history | clear_game_progress | message <text> | wait <duration> | sfx <name> | play_music <name> | pause_music [name] | resume_music [name] | stop_music [name] | resume <scene> | resume <scene> with <param> = <value> | open <scene> | start <scene> | <scene>.goto <level> | copy <puzzle> to <puzzle> | show <scene> | hide <scene> | focus <scene>",
             ))
         }
         ["input"] => Err(parse_error(line, "input effect must name an input")),
@@ -6530,12 +7368,31 @@ fn parse_scene_effect_value(value: &str, line: &str) -> Result<SceneEffect, AppE
         }
         _ => Err(parse_error(
             line,
-            "effect must be: input <name> | component_effect <name> | back | clear_history | message <text> | wait <duration> | sfx <name> | play_music <name> | pause_music [name] | resume_music [name] | stop_music [name] | goto <scene> | enter <scene> | copy <puzzle> to <puzzle> | show <scene> | hide <scene> | focus <scene>",
+            "effect must be: input <name> | component_effect <name> | close | clear_undo_history | clear_game_progress | message <text> | wait <duration> | sfx <name> | play_music <name> | pause_music [name] | resume_music [name] | stop_music [name] | resume <scene> | resume <scene> with <param> = <value> | open <scene> | start <scene> | copy <puzzle> to <puzzle> | show <scene> | hide <scene> | focus <scene>",
         )),
     }
 }
 
+fn parse_scene_effect_bool(value: &str, line: &str) -> Result<bool, AppError> {
+    match value {
+        "true" => Ok(true),
+        "false" => Ok(false),
+        _ => Err(parse_error(
+            line,
+            "boolean progress value must be true or false",
+        )),
+    }
+}
+
+fn legacy_start_levels_error(line: &str) -> AppError {
+    parse_error(
+        line,
+        "`start levels ... in <scene>` and `continue levels ... in <scene>` are no longer supported; use `goto <puzzle>` for the default playable scene, `goto <puzzle>(<level>)` for a specific level, or `goto <scene>(<level>)` for an explicit level scene",
+    )
+}
+
 const DEFAULT_WAIT_MS: u64 = 200;
+const DEFAULT_AGAIN_MS: u64 = 120;
 
 fn resolve_default_wait_in_scenes(scenes: &mut [SceneDef], default_wait_ms: u64) {
     for scene in scenes {
@@ -6553,13 +7410,18 @@ fn resolve_default_wait_in_scenes(scenes: &mut [SceneDef], default_wait_ms: u64)
 
 fn resolve_default_wait_in_component(component: &mut SceneComponent, default_wait_ms: u64) {
     match component {
-        SceneComponent::Button(button) => {
+        SceneComponent::Button(button) | SceneComponent::Choice(button) => {
             resolve_default_wait_in_effect(&mut button.effect, default_wait_ms);
         }
         SceneComponent::Row(container)
         | SceneComponent::Column(container)
         | SceneComponent::Box(container) => {
             for child in &mut container.children {
+                resolve_default_wait_in_component(child, default_wait_ms);
+            }
+        }
+        SceneComponent::Conditional(conditional) => {
+            for child in &mut conditional.children {
                 resolve_default_wait_in_component(child, default_wait_ms);
             }
         }
@@ -6618,12 +7480,15 @@ fn resolve_default_wait_in_effect(effect: &mut SceneEffect, default_wait_ms: u64
         | SceneEffect::PuzzlePreviousLevel { .. }
         | SceneEffect::GotoLevel { .. }
         | SceneEffect::ResetPuzzle { .. }
-        | SceneEffect::StartLevel { .. }
-        | SceneEffect::ContinueLevel { .. }
         | SceneEffect::LoadPuzzle { .. }
         | SceneEffect::Apply { .. }
         | SceneEffect::Copy { .. }
-        | SceneEffect::ClearHistory => {}
+        | SceneEffect::ClearUndoHistory
+        | SceneEffect::ClearGameProgress
+        | SceneEffect::SetCurrentLevel { .. }
+        | SceneEffect::ClearCurrentLevel
+        | SceneEffect::SetLevelCleared { .. }
+        | SceneEffect::ResetPersistentVars => {}
     }
 }
 
@@ -6737,24 +7602,43 @@ fn parse_scene_call_params(
             value: parse_scene_expr(parts[0], line)?,
         }]
     } else {
-        let mut params = Vec::new();
-        for part in parts {
-            let (name, value) = part.split_once('=').ok_or_else(|| {
-                parse_error(
-                    line,
-                    "scene call params must be positional `<level>` or named `<name> = <expr>`",
-                )
-            })?;
-            let name = name.trim();
-            validate_identifier(name, line, "scene param name")?;
-            params.push(SceneEffectParam {
-                name: name.to_string(),
-                value: parse_scene_expr(value.trim(), line)?,
-            });
-        }
-        params
+        parse_scene_named_params(&parts, line)?
     };
     Ok(Some((scene.to_string(), params)))
+}
+
+fn parse_scene_target_params(
+    value: &str,
+    line: &str,
+) -> Result<(String, Vec<SceneEffectParam>), AppError> {
+    let value = value.trim();
+    if let Some((scene, params)) = value.split_once(" with ") {
+        let scene = scene.trim();
+        validate_qualified_identifier(scene, line, "scene name")?;
+        let parts = params.split(',').map(str::trim).collect::<Vec<_>>();
+        return Ok((scene.to_string(), parse_scene_named_params(&parts, line)?));
+    }
+    if let Some((scene, params)) = parse_scene_call_params(value, line)? {
+        return Ok((scene, params));
+    }
+    validate_qualified_identifier(value, line, "scene name")?;
+    Ok((value.to_string(), Vec::new()))
+}
+
+fn parse_scene_named_params(parts: &[&str], line: &str) -> Result<Vec<SceneEffectParam>, AppError> {
+    let mut params = Vec::new();
+    for part in parts {
+        let (name, value) = part
+            .split_once('=')
+            .ok_or_else(|| parse_error(line, "scene params must be named `<name> = <expr>`"))?;
+        let name = name.trim();
+        validate_identifier(name, line, "scene param name")?;
+        params.push(SceneEffectParam {
+            name: name.to_string(),
+            value: parse_scene_expr(value.trim(), line)?,
+        });
+    }
+    Ok(params)
 }
 
 fn parse_scene_expr(value: &str, line: &str) -> Result<SceneExpr, AppError> {
@@ -6958,6 +7842,23 @@ fn parse_implicit_scene_puzzle_state_entry(
     line: &str,
     lifetime: SceneStateLifetime,
 ) -> Result<Option<ScenePuzzleDef>, AppError> {
+    if let Some((puzzle_name, param)) = parse_scene_puzzle_state_call(line) {
+        validate_qualified_identifier(puzzle_name, line, "puzzle name")?;
+        validate_identifier(param, line, "scene level param")?;
+        if param != "level" {
+            return Err(parse_error(
+                line,
+                "scene puzzle state call must be `<puzzle>(level)`",
+            ));
+        }
+        return Ok(Some(ScenePuzzleDef {
+            name: puzzle_name.to_string(),
+            kind: "puzzle".to_string(),
+            model: puzzle_name.to_string(),
+            initializer: ScenePuzzleInitializer::CurrentLevel,
+            lifetime,
+        }));
+    }
     let tokens = split_tokens(line);
     match tokens.as_slice() {
         ["puzzle", puzzle_name] => {
@@ -6987,6 +7888,17 @@ fn parse_implicit_scene_puzzle_state_entry(
         )),
         _ => Ok(None),
     }
+}
+
+fn parse_scene_puzzle_state_call(line: &str) -> Option<(&str, &str)> {
+    let (name, rest) = line.split_once('(')?;
+    let param = rest.strip_suffix(')')?;
+    let name = name.trim();
+    let param = param.trim();
+    if name.is_empty() || param.is_empty() || param.contains(',') {
+        return None;
+    }
+    Some((name, param))
 }
 
 fn parse_top_level_var_directive(_tokens: &[&str], line: &str) -> Result<SceneVarDef, AppError> {
@@ -7030,6 +7942,17 @@ fn parse_default_wait_time_directive(tokens: &[&str], line: &str) -> Result<u64,
         ));
     };
     parse_wait_duration_ms(duration, line)
+}
+
+fn parse_again_interval_directive(tokens: &[&str], line: &str) -> Result<u64, AppError> {
+    match tokens {
+        ["again_interval", "=", duration] => parse_wait_duration_ms(duration, line),
+        ["again_interval", seconds] => parse_seconds_duration_ms(seconds, line),
+        _ => Err(parse_error(
+            line,
+            "again_interval must be: again_interval = <duration> or again_interval <seconds>",
+        )),
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -7157,18 +8080,11 @@ fn parse_screen_transitions_block(
                     rule: "rules".to_string(),
                 });
             }
-            [rule] => {
-                if let Some((target, rule)) = parse_puzzle_command(rule, &lines[i])? {
-                    puzzle_rule = Some(ScenePuzzleRule {
-                        target,
-                        rule: rule.to_string(),
-                    });
-                } else {
-                    return Err(parse_error(
-                        &lines[i],
-                        "transitions row must be: step <puzzle> | <puzzle>.<rule> | if <condition> -> <command>",
-                    ));
-                }
+            [rule] if rule.contains('.') => {
+                return Err(parse_error(
+                    &lines[i],
+                    "scene rules do not call component rules by path; use `step <puzzle>`",
+                ));
             }
             _ if lines[i].contains("->") => {
                 let (transition, next_i) = parse_transition_row(lines, i)?;
@@ -7179,7 +8095,7 @@ fn parse_screen_transitions_block(
             _ => {
                 return Err(parse_error(
                     &lines[i],
-                    "transitions row must be: step <puzzle> | <rule> | if <condition> -> <command>",
+                    "transitions row must be: step <puzzle> | <input> -> <command> | if <condition> -> <command>",
                 ));
             }
         }
@@ -7369,10 +8285,13 @@ fn parse_transition_trigger(value: &str, line: &str) -> Result<SceneTransitionTr
             "level_start is a puzzle lifecycle block; put `on_level_start { ... }` inside puzzle",
         ));
     }
-    if value == "on_level_start" {
+    if matches!(
+        value,
+        "on_level_start" | "on_level_clear" | "on_last_level_clear"
+    ) {
         return Err(parse_error(
             line,
-            "on_level_start is a puzzle lifecycle block; put `on_level_start { ... }` inside puzzle",
+            "level lifecycle blocks belong inside puzzle",
         ));
     }
     if let Some(condition) = value.strip_prefix("if ") {
@@ -7381,7 +8300,7 @@ fn parse_transition_trigger(value: &str, line: &str) -> Result<SceneTransitionTr
         return Ok(SceneTransitionTrigger::Condition(condition.to_string()));
     }
     let tokens = split_tokens(value);
-    if let ["input", input] = tokens.as_slice() {
+    if let [input] = tokens.as_slice() {
         let input = parse_input_name(input, line)?;
         return Ok(SceneTransitionTrigger::Condition(format!(
             "input == {input}"
@@ -7389,7 +8308,7 @@ fn parse_transition_trigger(value: &str, line: &str) -> Result<SceneTransitionTr
     }
     Err(parse_error(
         line,
-        "scene transition triggers must be `if <condition>` or `input <name>`",
+        "scene transition triggers must be `<input>` or `if <condition>`",
     ))
 }
 
@@ -7643,24 +8562,42 @@ fn parse_scene_inputs_block(
     Ok((bindings, i + 1))
 }
 
-fn parse_scene_legacy_keys_block(
+fn parse_scene_keys_block(
     lines: &[String],
     start: usize,
 ) -> Result<(Vec<KeyBinding>, usize), AppError> {
     let mut bindings = Vec::<KeyBinding>::new();
     let mut i = start + 1;
     while i < lines.len() && lines[i] != "end" {
-        let Some((key, effect)) = lines[i].split_once('=') else {
+        if lines[i].contains('=') {
             return Err(parse_error(
                 &lines[i],
-                "keys row must be: <key> = <scene command>",
+                "keys row must use `->`: <key...> -> <scene command-or-input>",
+            ));
+        }
+        let Some((key, effect)) = lines[i].split_once("->") else {
+            return Err(parse_error(
+                &lines[i],
+                "keys row must be: <key...> -> <scene command-or-input>",
             ));
         };
-        let trigger = parse_key_trigger(key.trim(), &lines[i])?;
-        validate_key_trigger_supported(&trigger, &lines[i])?;
+        let key_tokens = key.split_whitespace().collect::<Vec<_>>();
+        if key_tokens.is_empty() {
+            return Err(parse_error(
+                &lines[i],
+                "keys row must name at least one key",
+            ));
+        }
+        let mut triggers = Vec::new();
+        for key in key_tokens {
+            let trigger = parse_key_trigger(key, &lines[i])?;
+            validate_key_trigger_supported(&trigger, &lines[i])?;
+            triggers.push(trigger);
+        }
+        let effect = parse_scene_key_effect(effect.trim(), &lines[i])?;
         bindings.push(KeyBinding {
-            keys: vec![trigger],
-            effect: parse_scene_effect(effect.trim(), &lines[i])?,
+            keys: triggers,
+            effect,
         });
         i += 1;
     }
@@ -7668,6 +8605,21 @@ fn parse_scene_legacy_keys_block(
         return Err(parse_error(&lines[start], "keys missing end"));
     }
     Ok((bindings, i + 1))
+}
+
+fn parse_scene_key_effect(value: &str, line: &str) -> Result<SceneEffect, AppError> {
+    match parse_scene_effect(value, line) {
+        Ok(effect) => Ok(effect),
+        Err(error) => {
+            let tokens = split_tokens(value);
+            if let [input] = tokens.as_slice() {
+                return Ok(SceneEffect::Input(
+                    parse_input_name(input, line)?.to_string(),
+                ));
+            }
+            Err(error)
+        }
+    }
 }
 
 fn add_key_trigger_to_controls(
@@ -7744,35 +8696,6 @@ fn named_key_to_arrow(name: &str) -> Option<ArrowKey> {
         "ArrowRight" | "arrow_right" => Some(ArrowKey::Right),
         _ => None,
     }
-}
-
-fn default_scenes_if_empty(scenes: Vec<SceneDef>) -> Vec<SceneDef> {
-    if !scenes.is_empty() {
-        return scenes;
-    }
-
-    vec![SceneDef {
-        name: "playing".to_string(),
-        layout: SceneLayoutDef::default(),
-        resources: SceneResources::default(),
-        state: SceneStateDef {
-            variables: Vec::new(),
-            puzzles: vec![ScenePuzzleDef {
-                name: "board".to_string(),
-                kind: "puzzle".to_string(),
-                model: "default".to_string(),
-                initializer: ScenePuzzleInitializer::CurrentLevel,
-                lifetime: SceneStateLifetime::Instance,
-            }],
-        },
-        components: vec![scene_puzzle_component("board")],
-        key_bindings: Vec::new(),
-        transitions: Vec::new(),
-        puzzle_rule: Some(ScenePuzzleRule {
-            target: "board".to_string(),
-            rule: "transitions".to_string(),
-        }),
-    }]
 }
 
 fn parse_object_directive(
@@ -8817,6 +9740,7 @@ fn starts_visual_outer_section(tokens: &[&str]) -> bool {
         ["map", ..]
             | ["on_level_start"]
             | ["on_level_clear"]
+            | ["on_last_level_clear"]
             | ["on_display"]
             | ["objects"]
             | ["display_objects"]
@@ -8828,6 +9752,7 @@ fn starts_visual_outer_section(tokens: &[&str]) -> bool {
             | ["win_conditions", ..]
             | ["lose_conditions", ..]
             | ["sprites"]
+            | ["sounds"]
             | ["screen"]
             | ["view", ..]
             | ["routine", ..]
@@ -10145,6 +11070,8 @@ fn add_standard_move_rule_if_missing(
     definitions: &mut Vec<RuleDefinitionAst>,
     object_names: &HashMap<String, ObjectId>,
     object_schemas: &HashMap<String, ObjectSchema>,
+    object_layers: &HashMap<ObjectId, LayerId>,
+    visual_objects: &[ObjectId],
     value_sets: &HashMap<String, Vec<String>>,
     maps: &HashMap<String, ValueMap>,
     object_groups: &HashMap<String, Vec<ObjectId>>,
@@ -10158,20 +11085,49 @@ fn add_standard_move_rule_if_missing(
     {
         return Ok(());
     }
-    if value_sets.get("layers").is_none_or(Vec::is_empty) {
-        return Ok(());
+    let mut move_layer_groups = object_layers
+        .iter()
+        .filter_map(|(object, layer)| {
+            (!visual_objects.contains(object)).then_some((*layer, *object))
+        })
+        .collect::<Vec<_>>();
+    move_layer_groups.sort_by_key(|(layer, object)| (layer.0, object.0));
+
+    let mut generated_groups = object_groups.clone();
+    let mut generated_layer_names = Vec::new();
+    let mut i = 0;
+    while i < move_layer_groups.len() {
+        let layer = move_layer_groups[i].0;
+        let group_name = format!("__move_layer_{}", layer.0);
+        let mut objects = Vec::new();
+        while i < move_layer_groups.len() && move_layer_groups[i].0 == layer {
+            objects.push(move_layer_groups[i].1);
+            i += 1;
+        }
+        generated_groups.insert(group_name.clone(), objects);
+        generated_layer_names.push(group_name);
     }
 
+    if generated_layer_names.is_empty() {
+        return Ok(());
+    }
+    let mut generated_value_sets = value_sets.clone();
+    generated_value_sets.insert("__move_layers".to_string(), generated_layer_names);
+
     let lines = vec![
+        "for l in __move_layers".to_string(),
         "for d in directions".to_string(),
-        "for l in layers".to_string(),
-        "d [ d l | no l ] -> [ | l{no directions} ]".to_string(),
-        "end".to_string(),
+        "once_all d [ d l | | < l ] -> [ l | {__move_collision} | l ]".to_string(),
+        "once_all d [ d l | ; | ^ l ] -> [ l | {__move_collision} ; | l ]".to_string(),
+        "once_all d [ | v l ; d l | ] -> [ | l ; l | {__move_collision} ]".to_string(),
         "end".to_string(),
         "for d in directions".to_string(),
-        "for l in layers".to_string(),
+        "d [ d l | no l no {__move_collision} ] -> [ | l{no directions} ]".to_string(),
+        "end".to_string(),
+        "for d in directions".to_string(),
         "once_all d [ d l ] -> [ l ]".to_string(),
         "end".to_string(),
+        "once_all [ {__move_collision} ] -> [ ]".to_string(),
         "end".to_string(),
         "end".to_string(),
     ];
@@ -10181,9 +11137,9 @@ fn add_standard_move_rule_if_missing(
         &["end"],
         object_names,
         object_schemas,
-        value_sets,
+        &generated_value_sets,
         maps,
-        object_groups,
+        &generated_groups,
         input_names,
         global_names,
         query_names,
@@ -10610,6 +11566,112 @@ fn for_expansion_values(
     None
 }
 
+fn collect_multiline_rewrite_statement(
+    lines: &[String],
+    start: usize,
+) -> Result<Option<(String, usize)>, AppError> {
+    let line = lines[start].trim();
+    let Some(trailing) = rewrite_lhs_trailing(line) else {
+        return Ok(None);
+    };
+
+    if trailing.is_empty() {
+        let Some(next_line) = lines.get(start + 1).map(|line| line.trim()) else {
+            return Ok(None);
+        };
+        let Some(rhs) = next_line.strip_prefix("->").map(str::trim_start) else {
+            return Ok(None);
+        };
+        validate_rewrite_rhs_continuation(rhs, next_line)?;
+        return Ok(Some((format!("{line} -> {rhs}"), start + 2)));
+    }
+
+    if trailing == "->" {
+        let Some(rhs) = lines.get(start + 1).map(|line| line.trim()) else {
+            return Ok(None);
+        };
+        validate_rewrite_rhs_continuation(rhs, line)?;
+        return Ok(Some((format!("{line} {rhs}"), start + 2)));
+    }
+
+    Ok(None)
+}
+
+fn validate_rewrite_rhs_continuation(rhs: &str, line: &str) -> Result<(), AppError> {
+    if rhs.is_empty() || !rhs.starts_with('[') {
+        return Err(parse_error(
+            line,
+            "rewrite continuation after -> must start with a pattern",
+        ));
+    }
+    if rhs.contains("->") {
+        return Err(parse_error(
+            line,
+            "rewrite continuation rhs cannot contain another ->",
+        ));
+    }
+    Ok(())
+}
+
+fn rewrite_lhs_trailing(line: &str) -> Option<&str> {
+    let open_index = line.find('[')?;
+    let prefix = line[..open_index].trim();
+    if !can_start_rewrite_lhs(prefix) {
+        return None;
+    }
+    let lhs_end = open_index + pattern_side_syntax_end(&line[open_index..])?;
+    Some(line[lhs_end..].trim())
+}
+
+fn can_start_rewrite_lhs(prefix: &str) -> bool {
+    let tokens = split_tokens(prefix);
+    match tokens.as_slice() {
+        [] => true,
+        ["input", axis] => is_identifier(axis),
+        [application] if is_rewrite_application_prefix(application) => true,
+        [application, "input", axis] if is_rewrite_application_prefix(application) => {
+            is_identifier(axis)
+        }
+        [application, orientation]
+            if is_rewrite_application_prefix(application) && is_identifier(orientation) =>
+        {
+            true
+        }
+        [orientation] if !is_non_rewrite_statement_prefix(orientation) => {
+            is_identifier(orientation)
+        }
+        _ => false,
+    }
+}
+
+fn is_rewrite_application_prefix(token: &str) -> bool {
+    matches!(token, "once" | "once_all" | "once_per_level" | "repeat")
+}
+
+fn is_non_rewrite_statement_prefix(token: &str) -> bool {
+    matches!(
+        token,
+        "for" | "fix" | "if" | "else" | "when" | "action" | "emit" | "do" | "display"
+    )
+}
+
+fn pattern_side_syntax_end(value: &str) -> Option<usize> {
+    let mut index = 0;
+    let mut found_block = false;
+    while index < value.len() {
+        let after_space = value[index..].trim_start();
+        index = value.len() - after_space.len();
+        if !value[index..].starts_with('[') {
+            break;
+        }
+        let after_open = index + 1;
+        let close_offset = value[after_open..].find(']')?;
+        index = after_open + close_offset + 1;
+        found_block = true;
+    }
+    found_block.then_some(index)
+}
+
 fn parse_statement_block(
     lines: &[String],
     start: usize,
@@ -10634,6 +11696,15 @@ fn parse_statement_block(
             return Ok((statements, i + 1));
         }
 
+        let mut next_statement_i = i + 1;
+        let joined_line;
+        let line = if let Some((joined, next_i)) = collect_multiline_rewrite_statement(lines, i)? {
+            next_statement_i = next_i;
+            joined_line = joined;
+            joined_line.as_str()
+        } else {
+            line.as_str()
+        };
         let tokens = split_tokens(line);
         match tokens.first().copied() {
             Some("for") => {
@@ -10940,7 +12011,7 @@ fn parse_statement_block(
                         object_groups,
                     )?));
                 }
-                i += 1;
+                i = next_statement_i;
             }
             Some("once") => {
                 if tokens.len() == 1 {
@@ -10978,7 +12049,7 @@ fn parse_statement_block(
                             object_groups,
                         )?,
                     ));
-                    i += 1;
+                    i = next_statement_i;
                 }
             }
             Some("once_all") => {
@@ -11017,7 +12088,7 @@ fn parse_statement_block(
                             object_groups,
                         )?,
                     ));
-                    i += 1;
+                    i = next_statement_i;
                 }
             }
             Some("once_per_level") => {
@@ -11056,7 +12127,7 @@ fn parse_statement_block(
                             object_groups,
                         )?,
                     ));
-                    i += 1;
+                    i = next_statement_i;
                 }
             }
             Some("repeat") => {
@@ -11140,7 +12211,7 @@ fn parse_statement_block(
                             object_groups,
                         )?,
                     ));
-                    i += 1;
+                    i = next_statement_i;
                 }
             }
             Some(_) if line.starts_with('[') => {
@@ -11166,7 +12237,7 @@ fn parse_statement_block(
                         object_groups,
                     )?));
                 }
-                i += 1;
+                i = next_statement_i;
             }
             Some("display") => {
                 if tokens.len() == 1 {
@@ -11225,7 +12296,7 @@ fn parse_statement_block(
                         object_groups,
                     )?));
                 }
-                i += 1;
+                i = next_statement_i;
             }
             Some(call) if tokens.len() == 1 && is_qualified_identifier(call) => {
                 statements.push(StatementAst::Call(call.to_string()));
@@ -12049,6 +13120,7 @@ struct ProgramLowerer<'a> {
     visual_query_reads: &'a HashSet<QueryId>,
     scratch_names: &'a HashMap<String, ScratchDef>,
     model_sound_triggers: &'a [ModelSoundTrigger],
+    animation: &'a AnimationDef,
     value_sets: &'a HashMap<String, Vec<String>>,
     directions: &'a [Direction],
     visual_objects: &'a [ObjectId],
@@ -12056,6 +13128,7 @@ struct ProgramLowerer<'a> {
     next_rule_id: u16,
     visual_rules: Vec<RuleId>,
     rule_emissions: HashMap<RuleId, Vec<RuleEmission>>,
+    rule_effects: HashMap<RuleId, Vec<RuleEffect>>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -12074,24 +13147,32 @@ struct LoweredPrograms {
     main: Vec<RuleStep>,
     level_start: Option<Vec<RuleStep>>,
     level_clear: Option<Vec<RuleStep>>,
+    last_level_clear: Option<Vec<RuleStep>>,
     level_starts: Vec<Option<Vec<RuleStep>>>,
     level_clears: Vec<Option<Vec<RuleStep>>>,
     display: Option<Vec<RuleStep>>,
     visual_rules: Vec<RuleId>,
     rule_emissions: HashMap<RuleId, Vec<RuleEmission>>,
+    rule_effects: HashMap<RuleId, Vec<RuleEffect>>,
 }
 
 #[derive(Clone, Debug, Default)]
 struct LoweredEffects {
     core: Vec<Effect>,
     emissions: Vec<RuleEmission>,
+    ordered: Vec<RuleEffect>,
 }
 
 fn lower_programs(
     definitions: Vec<RuleDefinitionAst>,
     main_statements: Option<Vec<StatementAst>>,
+    main_local_frame: Option<LocalFrame<ObjectId>>,
     level_start_statements: Option<Vec<StatementAst>>,
+    level_start_local_frame: Option<LocalFrame<ObjectId>>,
     level_clear_statements: Option<Vec<StatementAst>>,
+    level_clear_local_frame: Option<LocalFrame<ObjectId>>,
+    last_level_clear_statements: Option<Vec<StatementAst>>,
+    last_level_clear_local_frame: Option<LocalFrame<ObjectId>>,
     display_statements: Option<Vec<StatementAst>>,
     level_bodies: &[PreparedLevelBody],
     object_layers: &HashMap<ObjectId, LayerId>,
@@ -12103,6 +13184,7 @@ fn lower_programs(
     visual_query_reads: &HashSet<QueryId>,
     scratch_names: &HashMap<String, ScratchDef>,
     model_sound_triggers: &[ModelSoundTrigger],
+    animation: &AnimationDef,
     value_sets: &HashMap<String, Vec<String>>,
     directions: &[Direction],
     default_wait_ms: u64,
@@ -12130,6 +13212,7 @@ fn lower_programs(
         visual_query_reads,
         scratch_names,
         model_sound_triggers,
+        animation,
         value_sets,
         directions,
         visual_objects,
@@ -12137,15 +13220,22 @@ fn lower_programs(
         next_rule_id: 1,
         visual_rules: Vec::new(),
         rule_emissions: HashMap::new(),
+        rule_effects: HashMap::new(),
     };
     let mut context = StatementLoweringContext::default();
     context.input_allowed = true;
-    let program = lowerer.lower_statements(&main_statements, &context)?;
+    let program = wrap_program_local_frame(
+        lowerer.lower_statements(&main_statements, &context)?,
+        main_local_frame,
+    );
     let level_start = if let Some(statements) = level_start_statements {
         let mut context = StatementLoweringContext::default();
         context.input_allowed = false;
         context.input_forbidden_context = Some("on_level_start");
-        Some(lowerer.lower_statements(&statements, &context)?)
+        Some(wrap_program_local_frame(
+            lowerer.lower_statements(&statements, &context)?,
+            level_start_local_frame,
+        ))
     } else {
         None
     };
@@ -12153,7 +13243,21 @@ fn lower_programs(
         let mut context = StatementLoweringContext::default();
         context.input_allowed = false;
         context.input_forbidden_context = Some("on_level_clear");
-        Some(lowerer.lower_statements(&statements, &context)?)
+        Some(wrap_program_local_frame(
+            lowerer.lower_statements(&statements, &context)?,
+            level_clear_local_frame,
+        ))
+    } else {
+        None
+    };
+    let last_level_clear = if let Some(statements) = last_level_clear_statements {
+        let mut context = StatementLoweringContext::default();
+        context.input_allowed = false;
+        context.input_forbidden_context = Some("on_last_level_clear");
+        Some(wrap_program_local_frame(
+            lowerer.lower_statements(&statements, &context)?,
+            last_level_clear_local_frame,
+        ))
     } else {
         None
     };
@@ -12191,12 +13295,24 @@ fn lower_programs(
         main: program,
         level_start,
         level_clear,
+        last_level_clear,
         level_starts,
         level_clears,
         display,
         visual_rules: lowerer.visual_rules,
         rule_emissions: lowerer.rule_emissions,
+        rule_effects: lowerer.rule_effects,
     })
+}
+
+fn wrap_program_local_frame(
+    steps: Vec<RuleStep>,
+    local_frame: Option<LocalFrame<ObjectId>>,
+) -> Vec<RuleStep> {
+    match local_frame {
+        Some(frame) => vec![RuleStep::LocalFrame { frame, steps }],
+        None => steps,
+    }
 }
 
 fn input_dependency_error(context: &StatementLoweringContext) -> AppError {
@@ -12892,7 +14008,10 @@ impl<'a> ProgramLowerer<'a> {
             self.visual_rules.push(id);
         }
         if !effects.emissions.is_empty() {
-            self.rule_emissions.insert(id, effects.emissions);
+            self.rule_emissions.insert(id, effects.emissions.clone());
+        }
+        if !effects.ordered.is_empty() {
+            self.rule_effects.insert(id, effects.ordered.clone());
         }
         Ok(vec![RuleStep::Rule(Rule {
             id,
@@ -13678,6 +14797,7 @@ impl<'a> ProgramLowerer<'a> {
                             context.guards.clone(),
                             effects.core.clone(),
                             effects.emissions.clone(),
+                            effects.ordered.clone(),
                             application,
                             context.role,
                         )?);
@@ -13691,6 +14811,7 @@ impl<'a> ProgramLowerer<'a> {
                     context.guards.clone(),
                     effects.core,
                     effects.emissions,
+                    effects.ordered,
                     application,
                     context.role,
                 )
@@ -13719,6 +14840,7 @@ impl<'a> ProgramLowerer<'a> {
                         guards,
                         effects.core.clone(),
                         effects.emissions.clone(),
+                        effects.ordered.clone(),
                         application,
                         context.role,
                     )?);
@@ -13751,6 +14873,7 @@ impl<'a> ProgramLowerer<'a> {
                         guards,
                         effects.core.clone(),
                         effects.emissions.clone(),
+                        effects.ordered.clone(),
                         application,
                         context.role,
                     )?);
@@ -13780,6 +14903,7 @@ impl<'a> ProgramLowerer<'a> {
                         context.guards.clone(),
                         effects.core.clone(),
                         effects.emissions.clone(),
+                        effects.ordered.clone(),
                         application,
                         context.role,
                     )?);
@@ -13803,21 +14927,52 @@ impl<'a> ProgramLowerer<'a> {
         for effect in effects {
             match effect {
                 EffectAst::Cancel => lowered.core.push(Effect::Cancel),
-                EffectAst::Win => lowered.core.push(Effect::Win),
-                EffectAst::Restart => lowered.core.push(Effect::Restart),
-                EffectAst::NextLevel => lowered.core.push(Effect::NextLevel),
-                EffectAst::Again => lowered.core.push(Effect::Again),
-                EffectAst::PlaySfx { name } => lowered
-                    .emissions
-                    .push(RuleEmission::PlaySfx { name: name.clone() }),
-                EffectAst::Wait { milliseconds } => lowered.emissions.push(RuleEmission::Wait {
-                    milliseconds: milliseconds.unwrap_or(self.default_wait_ms),
-                }),
+                EffectAst::Win => {
+                    lowered.core.push(Effect::Win);
+                    lowered.ordered.push(RuleEffect::Win);
+                }
+                EffectAst::Restart => {
+                    lowered.core.push(Effect::Restart);
+                    lowered.ordered.push(RuleEffect::Restart);
+                }
+                EffectAst::NextLevel => {
+                    lowered.core.push(Effect::NextLevel);
+                    lowered.ordered.push(RuleEffect::NextLevel);
+                }
+                EffectAst::Again => {
+                    lowered.core.push(Effect::Again);
+                    lowered.ordered.push(RuleEffect::Again);
+                }
+                EffectAst::Checkpoint => {
+                    lowered.core.push(Effect::Checkpoint);
+                    lowered.ordered.push(RuleEffect::Checkpoint);
+                }
+                EffectAst::ClearCheckpoint => {
+                    lowered.core.push(Effect::ClearCheckpoint);
+                    lowered.ordered.push(RuleEffect::ClearCheckpoint);
+                }
+                EffectAst::PlaySfx { name } => {
+                    lowered
+                        .emissions
+                        .push(RuleEmission::PlaySfx { name: name.clone() });
+                    lowered
+                        .ordered
+                        .push(RuleEffect::PlaySfx { name: name.clone() });
+                }
+                EffectAst::Wait { milliseconds } => {
+                    let milliseconds = milliseconds.unwrap_or(self.default_wait_ms);
+                    lowered.emissions.push(RuleEmission::Wait { milliseconds });
+                    lowered.ordered.push(RuleEffect::Wait { milliseconds });
+                }
                 EffectAst::Message { text, literal } => {
                     lowered.emissions.push(RuleEmission::Message {
                         text: text.clone(),
                         literal: *literal,
-                    })
+                    });
+                    lowered.ordered.push(RuleEffect::Message {
+                        text: text.clone(),
+                        literal: *literal,
+                    });
                 }
                 EffectAst::UpdateGlobal { name, op, value } => {
                     let global = *self.global_names.get(name).ok_or_else(|| {
@@ -13845,17 +15000,28 @@ impl<'a> ProgramLowerer<'a> {
         guards: Vec<Guard>,
         effects: Vec<Effect>,
         emissions: Vec<RuleEmission>,
+        ordered_effects: Vec<RuleEffect>,
         application: RuleApplication,
         role: RuleRole,
     ) -> Result<Vec<RuleStep>, AppError> {
         let mut rules = Vec::with_capacity(alternatives.len());
         for alternative in alternatives {
             let mut rule_emissions = emissions.clone();
+            let mut rule_effects = ordered_effects.clone();
             append_move_sound_emissions(
+                &alternative.components,
                 &alternative.writes,
                 self.model_sound_triggers,
                 &mut rule_emissions,
+                &mut rule_effects,
             );
+            if role != RuleRole::Visual {
+                append_tween_animation_emissions(
+                    &alternative.writes,
+                    self.animation,
+                    &mut rule_emissions,
+                );
+            }
             let compiled_components = alternative
                 .components
                 .iter()
@@ -13912,6 +15078,9 @@ impl<'a> ProgramLowerer<'a> {
             }
             if !rule_emissions.is_empty() {
                 self.rule_emissions.insert(id, rule_emissions);
+            }
+            if !rule_effects.is_empty() {
+                self.rule_effects.insert(id, rule_effects);
             }
             rules.push(RuleStep::Rule(Rule {
                 id,
@@ -13990,30 +15159,101 @@ struct RuleBodyAlternative {
 }
 
 fn append_move_sound_emissions(
+    components: &[PatternComponentTemplate],
     writes: &[WriteOpTemplate],
     triggers: &[ModelSoundTrigger],
     emissions: &mut Vec<RuleEmission>,
+    ordered_effects: &mut Vec<RuleEffect>,
 ) {
     if triggers.is_empty() {
         return;
     }
     for trigger in triggers {
-        let matches_move = writes.iter().any(|write| {
+        let moves_trigger_object = writes.iter().any(|write| {
             matches!(
                 write,
                 WriteOpTemplate::Move { object, .. } if trigger.objects.contains(object)
             )
         });
-        if matches_move
-            && !emissions.iter().any(|emission| {
-                matches!(emission, RuleEmission::PlaySfx { name } if name == &trigger.sfx_name)
-            })
-        {
-            emissions.push(RuleEmission::PlaySfx {
-                name: trigger.sfx_name.clone(),
+        let matches_trigger = writes.iter().any(|write| match (trigger.kind, write) {
+            (ModelSoundTriggerKind::Move, WriteOpTemplate::Move { object, .. }) => {
+                trigger.objects.contains(object)
+            }
+            (
+                ModelSoundTriggerKind::CantMove,
+                WriteOpTemplate::RemoveScratch {
+                    object, scratch, ..
+                },
+            ) => {
+                !moves_trigger_object
+                    && *scratch == ScratchId(0)
+                    && (object.is_empty() || trigger.objects.contains(object))
+            }
+            _ => false,
+        });
+        let matches_cantmove_intent = trigger.kind == ModelSoundTriggerKind::CantMove
+            && !moves_trigger_object
+            && components.iter().any(|component| {
+                component.cells.iter().any(|cell| {
+                    cell.require_scratch.iter().any(|scratch| {
+                        scratch.scratch == ScratchId(0)
+                            && (scratch.object.is_empty()
+                                || trigger.objects.contains(&scratch.object))
+                    })
+                })
             });
+        let matches_trigger = matches_trigger || matches_cantmove_intent;
+        if !matches_trigger {
+            continue;
+        }
+        let name = &trigger.sfx_name;
+        if !emissions
+            .iter()
+            .any(|emission| matches!(emission, RuleEmission::PlaySfx { name: existing } if existing == name))
+        {
+            emissions.push(RuleEmission::PlaySfx { name: name.clone() });
+            ordered_effects.push(RuleEffect::PlaySfx { name: name.clone() });
         }
     }
+}
+
+fn append_tween_animation_emissions(
+    writes: &[WriteOpTemplate],
+    animation: &AnimationDef,
+    emissions: &mut Vec<RuleEmission>,
+) {
+    if !animation.tween.enabled {
+        return;
+    }
+    let mut objects = Vec::new();
+    for write in writes {
+        let WriteOpTemplate::Move { object, .. } = write else {
+            continue;
+        };
+        if !objects.contains(object) {
+            objects.push(*object);
+        }
+    }
+    if objects.is_empty() {
+        return;
+    }
+    if emissions.iter().any(|emission| {
+        matches!(
+            emission,
+            RuleEmission::Animate {
+                trigger: RuleAnimationTrigger::Move,
+                name,
+                objects: existing,
+            } if name == "tween" && existing == &objects
+        )
+    }) {
+        return;
+    }
+    emissions.push(RuleEmission::Animate {
+        trigger: RuleAnimationTrigger::Move,
+        name: "tween".to_string(),
+        objects,
+    });
 }
 
 fn parse_inline_rewrite(
@@ -14142,6 +15382,10 @@ fn parse_rewrite_effect_value(suffix: &str, line: &str) -> Result<Vec<EffectAst>
         [command] if command.eq_ignore_ascii_case("restart") => Ok(vec![EffectAst::Restart]),
         [command] if command.eq_ignore_ascii_case("next_level") => Ok(vec![EffectAst::NextLevel]),
         [command] if command.eq_ignore_ascii_case("again") => Ok(vec![EffectAst::Again]),
+        [command] if command.eq_ignore_ascii_case("checkpoint") => Ok(vec![EffectAst::Checkpoint]),
+        [command] if command.eq_ignore_ascii_case("clear_checkpoint") => {
+            Ok(vec![EffectAst::ClearCheckpoint])
+        }
         tokens
             if tokens.len() > 2
                 && tokens
@@ -14160,11 +15404,13 @@ fn parse_rewrite_effect_value(suffix: &str, line: &str) -> Result<Vec<EffectAst>
                 name: (*name).to_string(),
             }])
         }
-        ["set", name, "=", value] => Ok(vec![EffectAst::UpdateGlobal {
-            name: (*name).to_string(),
-            op: GlobalUpdateOp::Set,
-            value: parse_global_value(value, line)?,
-        }]),
+        ["set", name, op, value] if is_global_update_operator(op) => {
+            Ok(vec![EffectAst::UpdateGlobal {
+                name: (*name).to_string(),
+                op: parse_global_update_op(op, line)?,
+                value: parse_global_value(value, line)?,
+            }])
+        }
         [name, op, value] if is_global_update_operator(op) => Ok(vec![EffectAst::UpdateGlobal {
             name: (*name).to_string(),
             op: parse_global_update_op(op, line)?,
@@ -14172,7 +15418,7 @@ fn parse_rewrite_effect_value(suffix: &str, line: &str) -> Result<Vec<EffectAst>
         }]),
         _ => Err(parse_error(
             line,
-            "rewrite effect must be: cancel, win, restart, next_level, again, sfx <name>, wait [duration], message <text>, set <global> = <value>, or <global> <op> <value>",
+            "rewrite effect must be: cancel, win, restart, next_level, again, checkpoint, clear_checkpoint, sfx <name>, wait [duration], message <text>, set <global> <op> <value>, or <global> <op> <value> without set",
         )),
     }
 }
@@ -14202,6 +15448,14 @@ fn parse_simple_rewrite_effects(tokens: &[&str], line: &str) -> Result<Vec<Effec
                 effects.push(EffectAst::Again);
                 index += 1;
             }
+            "checkpoint" => {
+                effects.push(EffectAst::Checkpoint);
+                index += 1;
+            }
+            "clear_checkpoint" => {
+                effects.push(EffectAst::ClearCheckpoint);
+                index += 1;
+            }
             "wait" => {
                 if index + 1 < tokens.len() && !is_rewrite_effect_command_token(tokens[index + 1]) {
                     effects.push(EffectAst::Wait {
@@ -14224,25 +15478,25 @@ fn parse_simple_rewrite_effects(tokens: &[&str], line: &str) -> Result<Vec<Effec
                 index += 2;
             }
             "set" => {
-                let (Some(name), Some(equals), Some(value)) = (
+                let (Some(name), Some(op), Some(value)) = (
                     tokens.get(index + 1),
                     tokens.get(index + 2),
                     tokens.get(index + 3),
                 ) else {
                     return Err(parse_error(
                         line,
-                        "set effect must be: set <global> = <value>",
+                        "set effect must be: set <global> <op> <value>",
                     ));
                 };
-                if *equals != "=" {
+                if !is_global_update_operator(op) {
                     return Err(parse_error(
                         line,
-                        "set effect must be: set <global> = <value>",
+                        "set effect must be: set <global> <op> <value>",
                     ));
                 }
                 effects.push(EffectAst::UpdateGlobal {
                     name: (*name).to_string(),
-                    op: GlobalUpdateOp::Set,
+                    op: parse_global_update_op(op, line)?,
                     value: parse_global_value(value, line)?,
                 });
                 index += 4;
@@ -14258,7 +15512,7 @@ fn parse_simple_rewrite_effects(tokens: &[&str], line: &str) -> Result<Vec<Effec
             _ => {
                 return Err(parse_error(
                     line,
-                    "rewrite effect must be: cancel, win, restart, next_level, again, sfx <name>, wait [duration], message <text>, set <global> = <value>, or <global> <op> <value>",
+                    "rewrite effect must be: cancel, win, restart, next_level, again, checkpoint, clear_checkpoint, sfx <name>, wait [duration], message <text>, set <global> <op> <value>, or <global> <op> <value> without set",
                 ));
             }
         }
@@ -14269,7 +15523,16 @@ fn parse_simple_rewrite_effects(tokens: &[&str], line: &str) -> Result<Vec<Effec
 fn is_rewrite_effect_command_token(token: &str) -> bool {
     matches!(
         token.to_ascii_lowercase().as_str(),
-        "cancel" | "win" | "restart" | "next_level" | "again" | "wait" | "sfx" | "set"
+        "cancel"
+            | "win"
+            | "restart"
+            | "next_level"
+            | "again"
+            | "checkpoint"
+            | "clear_checkpoint"
+            | "wait"
+            | "sfx"
+            | "set"
     )
 }
 
@@ -14280,11 +15543,10 @@ fn is_builtin_rewrite_effect_text(suffix: &str) -> bool {
     let tokens = split_tokens(suffix);
     matches!(
         tokens.as_slice(),
-        [command] if command.eq_ignore_ascii_case("cancel") || command.eq_ignore_ascii_case("win") || command.eq_ignore_ascii_case("restart") || command.eq_ignore_ascii_case("next_level") || command.eq_ignore_ascii_case("again")
-    ) || matches!(
-        tokens.as_slice(),
-        ["sfx", _] | ["wait"] | ["wait", _] | ["set", _, "=", _]
-    ) || matches!(tokens.as_slice(), [_, op, _] if is_global_update_operator(op))
+        [command] if command.eq_ignore_ascii_case("cancel") || command.eq_ignore_ascii_case("win") || command.eq_ignore_ascii_case("restart") || command.eq_ignore_ascii_case("next_level") || command.eq_ignore_ascii_case("again") || command.eq_ignore_ascii_case("checkpoint") || command.eq_ignore_ascii_case("clear_checkpoint")
+    ) || matches!(tokens.as_slice(), ["sfx", _] | ["wait"] | ["wait", _])
+        || matches!(tokens.as_slice(), [_, op, _] if is_global_update_operator(op))
+        || matches!(tokens.as_slice(), ["set", _, op, _] if is_global_update_operator(op))
 }
 
 fn is_global_update_operator(op: &str) -> bool {
@@ -14455,6 +15717,7 @@ struct ObjectSelector {
     alternatives: Vec<ObjectId>,
     transform: Option<SelectorTransform>,
     scratch: Vec<ParsedScratch>,
+    occurrence_label: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -14468,6 +15731,7 @@ struct ResolvedObjectOccurrence {
     token: String,
     object: ObjectId,
     key: Option<OccurrenceKey>,
+    from_multi_selector: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -14874,24 +16138,28 @@ fn resolve_object_selector(
     object_groups: &HashMap<String, Vec<ObjectId>>,
 ) -> Result<ObjectSelector, AppError> {
     let (selector, scratch) = split_selector_scratch(selector, line)?;
+    let (selector, occurrence_label) = split_selector_occurrence_label(selector, line)?;
+    let token = labeled_selector_token(selector, occurrence_label.as_deref());
     let selector_base = selector.split_once(':').map_or(selector, |(base, _)| base);
     if !object_schemas.contains_key(selector_base) {
         if let Some(object) = object_names.get(selector).copied() {
             return Ok(ObjectSelector {
-                token: selector.to_string(),
+                token,
                 alternatives: vec![object],
                 transform: None,
                 scratch,
+                occurrence_label,
             });
         }
     }
 
     if let Some(objects) = object_groups.get(selector) {
         return Ok(ObjectSelector {
-            token: selector.to_string(),
+            token,
             alternatives: objects.clone(),
             transform: None,
             scratch,
+            occurrence_label,
         });
     }
 
@@ -14996,7 +16264,10 @@ fn resolve_object_selector(
         .iter()
         .any(|constraint| matches!(constraint, Some(SelectorConstraint::Mapped { .. })))
     {
-        let source_token = format!("{}:{}", parts[0], source_token_parts.join(":"));
+        let source_token = labeled_selector_token(
+            &format!("{}:{}", parts[0], source_token_parts.join(":")),
+            occurrence_label.as_deref(),
+        );
         let mut mapped_objects = HashMap::new();
         let mut target_objects = Vec::new();
         for source in &schema.variants {
@@ -15021,22 +16292,56 @@ fn resolve_object_selector(
             }
         }
         return Ok(ObjectSelector {
-            token: selector.to_string(),
+            token,
             alternatives: target_objects,
             transform: Some(SelectorTransform {
                 source_token,
                 mapped_objects,
             }),
             scratch,
+            occurrence_label,
         });
     }
 
     Ok(ObjectSelector {
-        token: selector.to_string(),
+        token,
         alternatives,
         transform: None,
         scratch,
+        occurrence_label,
     })
+}
+
+fn split_selector_occurrence_label<'a>(
+    selector: &'a str,
+    line: &str,
+) -> Result<(&'a str, Option<String>), AppError> {
+    let Some((base, label)) = selector.split_once('#') else {
+        return Ok((selector, None));
+    };
+    if base.is_empty() || label.is_empty() || label.contains('#') {
+        return Err(parse_error(
+            line,
+            "selector occurrence label must be: selector#label",
+        ));
+    }
+    if !label
+        .chars()
+        .all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
+    {
+        return Err(parse_error(
+            line,
+            "selector occurrence label may only contain letters, numbers, and _",
+        ));
+    }
+    Ok((base, Some(label.to_string())))
+}
+
+fn labeled_selector_token(selector: &str, occurrence_label: Option<&str>) -> String {
+    match occurrence_label {
+        Some(label) => format!("{selector}#{label}"),
+        None => selector.to_string(),
+    }
 }
 
 fn split_selector_scratch<'a>(
@@ -15079,13 +16384,30 @@ fn parse_selector_scratch(attrs: &str, line: &str) -> Result<Vec<ParsedScratch>,
         let (name, value) = spec
             .split_once('=')
             .map_or((spec, None), |(name, value)| (name, Some(value)));
-        validate_identifier(name, line, "scratch name")?;
+        validate_scratch_name(name, line)?;
         if value.is_some_and(str::is_empty) {
             return Err(parse_error(line, "scratch value must not be empty"));
         }
         parsed.push(ParsedScratch::named(name, value, negated));
     }
     Ok(parsed)
+}
+
+fn validate_scratch_name(value: &str, line: &str) -> Result<(), AppError> {
+    let mut parts = value.split(':');
+    let Some(first) = parts.next() else {
+        return Err(parse_error(
+            line,
+            "scratch name must start with an identifier and may use :value parts",
+        ));
+    };
+    if !is_identifier(first) || !parts.all(is_value_atom) {
+        return Err(parse_error(
+            line,
+            "scratch name must start with an identifier and may use :value parts",
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug)]
@@ -15218,9 +16540,17 @@ fn compile_before_after_blocks(
 
     for (before, after) in expanded_blocks {
         let before_occurrences = collect_before_occurrences(&before);
-        let assignments = expand_selector_assignments(&before_occurrences);
+        reject_duplicate_labeled_occurrences(&before_occurrences, line)?;
+        let mut assignments =
+            expand_selector_assignments(&before_occurrences, object_layers, line)?;
+        if before_occurrences
+            .iter()
+            .any(|occurrence| occurrence.occurrence_label.is_some())
+        {
+            assignments.reverse();
+        }
         let before_by_token = before_occurrences_by_token(&before_occurrences);
-        for assignment in assignments {
+        'assignment_loop: for assignment in assignments {
             let mut components = Vec::new();
             let mut writes = Vec::new();
             let mut before_token_counts = HashMap::<String, usize>::new();
@@ -15293,21 +16623,25 @@ fn compile_before_after_blocks(
                             &before_occurrences,
                             &mut after_occurrences,
                         );
-                        reject_same_layer_cell_occurrences(
+                        if !validate_same_layer_cell_occurrences(
                             &before_occurrences,
                             object_layers,
                             line,
-                        )?;
-                        reject_same_layer_cell_occurrences(
+                        )? {
+                            continue 'assignment_loop;
+                        }
+                        if !validate_same_layer_cell_occurrences(
                             &after_occurrences,
                             object_layers,
                             line,
-                        )?;
-                        let before_objects = before_occurrences
+                        )? {
+                            continue 'assignment_loop;
+                        }
+                        let mut before_objects = before_occurrences
                             .iter()
                             .map(|occurrence| occurrence.object)
                             .collect::<Vec<_>>();
-                        let after_objects = after_occurrences
+                        let mut after_objects = after_occurrences
                             .iter()
                             .map(|occurrence| occurrence.object)
                             .collect::<Vec<_>>();
@@ -15315,6 +16649,8 @@ fn compile_before_after_blocks(
                             block_cell_scratch(before_cell, &before_objects, scratch_names, line)?;
                         let after_scratch =
                             block_cell_scratch(after_cell, &after_objects, scratch_names, line)?;
+                        dedup_objects(&mut before_objects);
+                        dedup_objects(&mut after_objects);
 
                         for occurrence in &before_occurrences {
                             if let Some(key) = &occurrence.key {
@@ -15663,16 +16999,26 @@ fn prefer_same_cell_occurrence_keys(
         let Some(key) = before.key.clone() else {
             continue;
         };
-        let Some((after_index, after)) = after_occurrences
-            .iter_mut()
-            .enumerate()
-            .find(|(index, after)| !used_after.contains(index) && after.object == before.object)
+        let Some((after_index, after)) =
+            after_occurrences
+                .iter_mut()
+                .enumerate()
+                .find(|(index, after)| {
+                    !used_after.contains(index)
+                        && after.object == before.object
+                        && !occurrence_key_has_label(&key)
+                        && !after.key.as_ref().is_some_and(occurrence_key_has_label)
+                })
         else {
             continue;
         };
         after.key = Some(key);
         used_after.push(after_index);
     }
+}
+
+fn occurrence_key_has_label(key: &OccurrenceKey) -> bool {
+    key.token.contains('#')
 }
 
 fn preserve_moved_occurrence_scratch(
@@ -15802,9 +17148,21 @@ fn block_cell_scratch(
             }
         }
     }
+    dedup_scratch_patterns(&mut out.require);
+    dedup_scratch_patterns(&mut out.forbid);
     reject_duplicate_scratch_patterns(&out.require, line)?;
     reject_duplicate_scratch_patterns(&out.forbid, line)?;
     Ok(out)
+}
+
+fn dedup_scratch_patterns(patterns: &mut Vec<ScratchPatternTemplate>) {
+    let mut deduped = Vec::with_capacity(patterns.len());
+    for pattern in patterns.drain(..) {
+        if !deduped.contains(&pattern) {
+            deduped.push(pattern);
+        }
+    }
+    *patterns = deduped;
 }
 
 fn parsed_scratch_pattern(
@@ -16045,10 +17403,13 @@ fn dedup_objects(objects: &mut Vec<ObjectId>) {
 struct SelectorOccurrence {
     token: String,
     alternatives: Vec<ObjectId>,
+    occurrence_label: Option<String>,
+    cell_index: usize,
 }
 
 fn collect_before_occurrences(block: &PatternBlock) -> Vec<SelectorOccurrence> {
     let mut occurrences = Vec::new();
+    let mut cell_index = 0usize;
     for component in &block.components {
         for row in &component.rows {
             for part in row {
@@ -16057,8 +17418,11 @@ fn collect_before_occurrences(block: &PatternBlock) -> Vec<SelectorOccurrence> {
                         occurrences.push(SelectorOccurrence {
                             token: selector.token.clone(),
                             alternatives: selector.alternatives.clone(),
+                            occurrence_label: selector.occurrence_label.clone(),
+                            cell_index,
                         });
                     }
+                    cell_index += 1;
                 }
             }
         }
@@ -16066,12 +17430,46 @@ fn collect_before_occurrences(block: &PatternBlock) -> Vec<SelectorOccurrence> {
     occurrences
 }
 
-fn expand_selector_assignments(occurrences: &[SelectorOccurrence]) -> Vec<Vec<ObjectId>> {
-    let mut assignments = vec![Vec::<ObjectId>::new()];
+fn reject_duplicate_labeled_occurrences(
+    occurrences: &[SelectorOccurrence],
+    line: &str,
+) -> Result<(), AppError> {
+    let mut seen = Vec::<String>::new();
     for occurrence in occurrences {
+        if occurrence.occurrence_label.is_none() {
+            continue;
+        }
+        if seen.contains(&occurrence.token) {
+            return Err(parse_error(
+                line,
+                "selector occurrence label must be unique within the before pattern",
+            ));
+        }
+        seen.push(occurrence.token.clone());
+    }
+    Ok(())
+}
+
+fn expand_selector_assignments(
+    occurrences: &[SelectorOccurrence],
+    object_layers: &HashMap<ObjectId, LayerId>,
+    line: &str,
+) -> Result<Vec<Vec<ObjectId>>, AppError> {
+    let mut assignments = vec![Vec::<ObjectId>::new()];
+    for (index, occurrence) in occurrences.iter().enumerate() {
         let mut next = Vec::new();
         for prefix in &assignments {
             for object in &occurrence.alternatives {
+                if !selector_assignment_object_is_possible(
+                    occurrences,
+                    prefix,
+                    index,
+                    *object,
+                    object_layers,
+                    line,
+                )? {
+                    continue;
+                }
                 let mut assignment = prefix.clone();
                 assignment.push(*object);
                 next.push(assignment);
@@ -16079,7 +17477,47 @@ fn expand_selector_assignments(occurrences: &[SelectorOccurrence]) -> Vec<Vec<Ob
         }
         assignments = next;
     }
-    assignments
+    Ok(assignments)
+}
+
+fn selector_assignment_object_is_possible(
+    occurrences: &[SelectorOccurrence],
+    prefix: &[ObjectId],
+    index: usize,
+    object: ObjectId,
+    object_layers: &HashMap<ObjectId, LayerId>,
+    line: &str,
+) -> Result<bool, AppError> {
+    let occurrence = &occurrences[index];
+    let Some(layer) = object_layers.get(&object) else {
+        return Ok(true);
+    };
+    for (previous_index, previous_object) in prefix.iter().enumerate() {
+        let previous = &occurrences[previous_index];
+        if previous.cell_index != occurrence.cell_index {
+            continue;
+        }
+        let Some(previous_layer) = object_layers.get(previous_object) else {
+            continue;
+        };
+        if previous_layer != layer {
+            continue;
+        }
+        if previous.alternatives.len() > 1 || occurrence.alternatives.len() > 1 {
+            return Ok(false);
+        }
+        if *previous_object == object {
+            continue;
+        }
+        return Err(parse_error(
+            line,
+            &format!(
+                "cell pattern cannot contain both `{}` and `{}` because they are in the same collision layer",
+                previous.token, occurrence.token
+            ),
+        ));
+    }
+    Ok(true)
 }
 
 fn before_occurrences_by_token(occurrences: &[SelectorOccurrence]) -> HashMap<String, Vec<usize>> {
@@ -16127,6 +17565,7 @@ fn block_cell_object_occurrences(
                         token: selector.token.clone(),
                         object,
                         key: None,
+                        from_multi_selector: selector.alternatives.len() > 1,
                     })
                     .ok_or_else(|| parse_error(line, "mapped selector source object missing"));
             }
@@ -16142,15 +17581,23 @@ fn block_cell_object_occurrences(
                                 token: selector.token.clone(),
                                 ordinal,
                             }),
+                            from_multi_selector: selector.alternatives.len() > 1,
                         })
                         .ok_or_else(|| parse_error(line, "internal selector assignment missing"));
                 }
             }
             if selector.alternatives.len() == 1 {
+                if selector.occurrence_label.is_some() {
+                    return Err(parse_error(
+                        line,
+                        "after selector with an occurrence label must also appear in before",
+                    ));
+                }
                 Ok(ResolvedObjectOccurrence {
                     token: selector.token.clone(),
                     object: selector.alternatives[0],
                     key: None,
+                    from_multi_selector: false,
                 })
             } else {
                 Err(parse_error(
@@ -16162,11 +17609,11 @@ fn block_cell_object_occurrences(
         .collect()
 }
 
-fn reject_same_layer_cell_occurrences(
+fn validate_same_layer_cell_occurrences(
     occurrences: &[ResolvedObjectOccurrence],
     object_layers: &HashMap<ObjectId, LayerId>,
     line: &str,
-) -> Result<(), AppError> {
+) -> Result<bool, AppError> {
     let mut seen = Vec::<(LayerId, &ResolvedObjectOccurrence)>::new();
     for occurrence in occurrences {
         let Some(layer) = object_layers.get(&occurrence.object).copied() else {
@@ -16176,6 +17623,12 @@ fn reject_same_layer_cell_occurrences(
             .iter()
             .find(|(existing_layer, _)| *existing_layer == layer)
         {
+            if existing.from_multi_selector || occurrence.from_multi_selector {
+                return Ok(false);
+            }
+            if existing.object == occurrence.object {
+                continue;
+            }
             return Err(parse_error(
                 line,
                 &format!(
@@ -16186,7 +17639,7 @@ fn reject_same_layer_cell_occurrences(
         }
         seen.push((layer, occurrence));
     }
-    Ok(())
+    Ok(true)
 }
 
 fn direction_by_name(

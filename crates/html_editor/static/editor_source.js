@@ -928,28 +928,11 @@ function sourceEditorCaretPoint(offset) {
 }
 
 function renderSourceCaret() {
-  if (!sourceCaretLayer || !sourceEditor || !sourceHighlight) {
+  if (!sourceCaretLayer) {
     return;
   }
   sourceCaretLayer.replaceChildren();
-  const hasFocus = document.activeElement === sourceEditor;
-  const hasSelection = sourceEditor.selectionStart !== sourceEditor.selectionEnd;
-  if (!hasFocus || hasSelection || !isTextDocument(activeDocument())) {
-    sourceCaretLayer.hidden = true;
-    return;
-  }
-  const rect = sourceCaretRectForOffset(sourceEditor.selectionStart);
-  if (!rect) {
-    sourceCaretLayer.hidden = true;
-    return;
-  }
-  const caret = document.createElement("div");
-  caret.className = "source-caret";
-  caret.style.left = `${rect.left}px`;
-  caret.style.top = `${rect.top}px`;
-  caret.style.height = `${rect.height}px`;
-  sourceCaretLayer.append(caret);
-  sourceCaretLayer.hidden = false;
+  sourceCaretLayer.hidden = true;
 }
 
 function sourceCaretRectForOffset(offset) {
@@ -1070,6 +1053,8 @@ function sourceVisualOffsetFromPoint(clientX, clientY) {
   const range = document.createRange();
   let sourceOffset = 0;
   let best = null;
+  let lineHit = null;
+  let bestInLine = null;
 
   for (let node = walker.nextNode(); node; node = walker.nextNode()) {
     const text = node.nodeValue || "";
@@ -1089,7 +1074,10 @@ function sourceVisualOffsetFromPoint(clientX, clientY) {
             ? clientY - rect.bottom
             : 0;
         const midX = rect.left + (rect.width / 2);
-        const boundary = clientX <= midX ? sourceOffset + index : sourceOffset + index + 1;
+        const char = text[index];
+        const charStart = sourceOffset + index;
+        const charEnd = char === "\n" ? charStart : charStart + 1;
+        const boundary = clientX <= midX ? charStart : charEnd;
         const horizontalDistance = clientX < rect.left
           ? rect.left - clientX
           : clientX > rect.right
@@ -1099,15 +1087,40 @@ function sourceVisualOffsetFromPoint(clientX, clientY) {
         if (!best || score < best.score) {
           best = { offset: boundary, score };
         }
-        if (lineDistance === 0 && clientX >= rect.left && clientX <= rect.right) {
-          range.detach?.();
-          return Math.max(0, Math.min(source.length, boundary));
+        if (lineDistance === 0 && char !== "\n") {
+          if (!lineHit) {
+            lineHit = {
+              left: rect.left,
+              right: rect.right,
+              startOffset: charStart,
+              endOffset: charEnd,
+            };
+          } else {
+            lineHit.left = Math.min(lineHit.left, rect.left);
+            lineHit.right = Math.max(lineHit.right, rect.right);
+            lineHit.startOffset = Math.min(lineHit.startOffset, charStart);
+            lineHit.endOffset = Math.max(lineHit.endOffset, charEnd);
+          }
+          if (!bestInLine || horizontalDistance < bestInLine.score) {
+            bestInLine = { offset: boundary, score: horizontalDistance };
+          }
         }
       }
     }
     sourceOffset += text.length;
   }
   range.detach?.();
+  if (lineHit) {
+    if (clientX <= lineHit.left) {
+      return Math.max(0, Math.min(source.length, lineHit.startOffset));
+    }
+    if (clientX >= lineHit.right) {
+      return Math.max(0, Math.min(source.length, lineHit.endOffset));
+    }
+    if (bestInLine) {
+      return Math.max(0, Math.min(source.length, bestInLine.offset));
+    }
+  }
   return best ? Math.max(0, Math.min(source.length, best.offset)) : null;
 }
 
@@ -1661,12 +1674,10 @@ sourceEditor.addEventListener("click", (event) => {
   if (openSourceImportLinkFromPointer(event)) {
     return;
   }
-  syncSourceSelectionFromPointer(event);
   window.setTimeout(() => showSourceColorEditor(), 40);
   window.setTimeout(() => showSourceCompletions({ manual: false }), 0);
   syncPreviewModeFromSourcePointer(event);
 });
-sourceEditor.addEventListener("mousedown", handleSourceVisualMouseDown);
 sourceEditor.addEventListener("pointerdown", handleSourceBlockSelectionPointerDown);
 sourceEditor.addEventListener("mousemove", updateSourceImportLinkFromPointer);
 sourceEditor.addEventListener("mouseleave", handleSourceImportEditorMouseLeave);
@@ -3284,16 +3295,7 @@ function renderSourceBlockSelection() {
     sourceBlockSelectionLayer.hidden = sourceBlockSelectionLayer.childElementCount === 0;
     return;
   }
-  if (
-    document.activeElement !== sourceEditor
-    || sourceEditor.selectionStart === sourceEditor.selectionEnd
-    || !isTextDocument(activeDocument())
-  ) {
-    sourceBlockSelectionLayer.hidden = true;
-    return;
-  }
-  appendSourceSelectionRects(sourceEditor.selectionStart, sourceEditor.selectionEnd);
-  sourceBlockSelectionLayer.hidden = sourceBlockSelectionLayer.childElementCount === 0;
+  sourceBlockSelectionLayer.hidden = true;
 }
 
 function appendSourceSelectionRects(start, end) {
@@ -3550,9 +3552,6 @@ sourceEditor.addEventListener("keydown", (event) => {
     return;
   }
   if (handleSourceEditorVsCodeShortcut(event)) {
-    return;
-  }
-  if (handleSourceEditorArrowNavigation(event)) {
     return;
   }
   if (handleSourceBraceAssist(event)) {

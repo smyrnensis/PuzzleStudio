@@ -37,7 +37,6 @@ const fallbackSnapshot = {
   },
   view: {
     zoom: 1,
-    target: { x: 0, y: 0, z: 0 },
   },
   settings: {
     interactiveLook: false,
@@ -48,21 +47,21 @@ const fallbackSnapshot = {
   directions: {
     left: { dx: -1, dy: 0, dz: 0 },
     right: { dx: 1, dy: 0, dz: 0 },
-    forward: { dx: 0, dy: 1, dz: 0 },
-    backward: { dx: 0, dy: -1, dz: 0 },
+    front: { dx: 0, dy: 1, dz: 0 },
+    back: { dx: 0, dy: -1, dz: 0 },
     up: { dx: 0, dy: 0, dz: 1 },
     down: { dx: 0, dy: 0, dz: -1 },
   },
   directionSets: {
-    horizontal: ["left", "right", "forward", "backward"],
+    horizontal: ["left", "right", "front", "back"],
     vertical: ["up", "down"],
   },
   controls: {
     keys: {
       ArrowLeft: "left",
       ArrowRight: "right",
-      ArrowUp: "forward",
-      ArrowDown: "backward",
+      ArrowUp: "front",
+      ArrowDown: "back",
     },
   },
   sprites: {
@@ -143,6 +142,10 @@ const view = {
   projectionFitKey: "",
   projectionWidth: 0,
   projectionHeight: 0,
+  viewportSnapNext: true,
+  viewportAnimationFrame: 0,
+  primitiveSortCacheKey: "",
+  primitiveSortCacheOrder: [],
 };
 let snapshot = fallbackSnapshot;
 let runtime = null;
@@ -151,8 +154,18 @@ let currentSceneName = initialSceneName(fallbackSnapshot);
 let editorModelComponentPreview = null;
 let levelMenuCursor = 0;
 let sceneButtonCursor = 0;
+let queuedSceneInputs = [];
+let queuedSceneInputFrame = 0;
+const heldSceneInputs = new Map();
+const SCENE_BUTTON_DEFAULT_WIDTH = 5;
+const SCENE_DEFAULT_WIDTH = 16;
+const SCENE_DEFAULT_HEIGHT = 12;
+const spriteVoxelTemplateCache = new WeakMap();
+const renderGeometryCache = createRenderGeometryCache();
+const pixelateBuffer = document.createElement("canvas");
 let mountedPuzzle3Component = null;
 let pendingResizeFrame = 0;
+let pendingSceneLayoutRender = false;
 const puzzle3Component = createPuzzle3Component();
 
 async function loadSnapshot() {
@@ -170,10 +183,14 @@ async function loadSnapshot() {
   } catch {
     nextSnapshot = fallbackSnapshot;
   }
-  await loadSnapshotData(nextSnapshot);
-  if (window.PuzzleStudioInitialModelComponentPreview?.type === "PuzzleStudioRenderPuzzle3ModelComponent") {
-    applyPuzzle3ModelComponentPreviewUpdate(window.PuzzleStudioInitialModelComponentPreview);
+  const initialModelPreview = window.PuzzleStudioInitialModelComponentPreview;
+  if (initialModelPreview?.type === "PuzzleStudioRenderPuzzle3ModelComponent") {
+    window.PuzzleStudioInitialModelComponentPreviewConsumed = true;
+    const next = puzzle3PreviewSnapshot(initialModelPreview, nextSnapshot);
+    await loadSnapshotData(next, puzzle3ModelComponentPreviewLoadOptions(initialModelPreview));
+    return;
   }
+  await loadSnapshotData(nextSnapshot);
 }
 
 async function loadSnapshotData(source, options = {}) {
@@ -188,6 +205,9 @@ async function loadSnapshotData(source, options = {}) {
     || initialSceneName(snapshot);
   levelMenuCursor = snapshot.levelIndex || 0;
   initialCamera = cloneCamera(snapshot.camera || fallbackSnapshot.camera);
+  view.projectionFitKey = "";
+  resetRenderGeometryCache();
+  resetViewportMotion();
   renderScene();
 }
 
@@ -212,7 +232,9 @@ class Puzzle3SessionRuntime {
     this.levelIndex = clampIndex(initialSnapshot.levelIndex || 0, this.levels.length);
     this.undoStack = [];
     this.moveCount = 0;
-    this.state = null;
+    this.cellsByKey = new Map();
+    this.cells = [];
+    this.initialStateHandle = null;
     this.completed = false;
     this.loadLevel(this.levelIndex);
   }
@@ -223,7 +245,10 @@ class Puzzle3SessionRuntime {
       ...this.base,
       size: { ...level.size },
       camera: cloneCamera(this.camera),
-      cells: cellsFromRuntimeState(this, this.state),
+      cells: this.cells.map((cell) => ({
+        position: { ...cell.position },
+        objects: cell.objects.map((object) => ({ ...object })),
+      })),
       levelIndex: this.levelIndex,
       levelCount: this.levels.length,
       levelName: level.name,
@@ -241,12 +266,12 @@ class Puzzle3SessionRuntime {
       return false;
     }
     const before = this.historyEntry();
-    const outcome = this.transition("main", this.state, inputId);
-    if (runtimeStateKey(outcome.state) === runtimeStateKey(this.state)) {
+    const outcome = this.transitionCurrent("main", inputId);
+    if (outcome.changed !== true) {
       return false;
     }
     this.undoStack.push(before);
-    this.state = outcome.state;
+    this.applyRuntimeCells(outcome.changedCells || []);
     this.moveCount += 1;
     const wasCompleted = this.completed;
     this.completed = outcome.completed === true;
@@ -265,31 +290,31 @@ class Puzzle3SessionRuntime {
     if (!previous) {
       return false;
     }
-    this.state = cloneRuntimeState(previous.state);
+    this.coreRuntime.restore_saved_state(Number(previous.handle));
+    this.loadCellsFromRuntime();
     this.moveCount = previous.moveCount;
     this.completed = previous.completed;
     return true;
   }
 
   restart() {
-    const initialState = this.initialStateForCurrentLevel();
-    const changed = runtimeStateKey(this.state) !== runtimeStateKey(initialState)
-      || this.moveCount !== 0
+    const changed = this.moveCount !== 0
       || this.completed
       || this.undoStack.length > 0;
     if (!changed) {
       return false;
     }
     this.undoStack.push(this.historyEntry());
-    this.state = initialState;
+    this.coreRuntime.restore_saved_state(Number(this.initialStateHandle));
+    this.loadCellsFromRuntime();
     this.moveCount = 0;
-    this.completed = this.isComplete(this.state);
+    this.completed = this.coreRuntime.is_current_complete() === true;
     return true;
   }
 
   historyEntry() {
     return {
-      state: cloneRuntimeState(this.state),
+      handle: this.coreRuntime.save_current_state(),
       moveCount: this.moveCount,
       completed: this.completed,
     };
@@ -321,15 +346,23 @@ class Puzzle3SessionRuntime {
 
   loadLevel(levelIndex) {
     this.levelIndex = clampIndex(levelIndex, this.levels.length);
-    this.state = this.initialStateForCurrentLevel();
+    this.loadInitialStateForCurrentLevel();
     this.undoStack = [];
     this.moveCount = 0;
-    this.completed = this.isComplete(this.state);
+    this.completed = this.coreRuntime.is_current_complete() === true;
+    this.initialStateHandle = this.coreRuntime.save_current_state();
   }
 
-  initialStateForCurrentLevel() {
-    const raw = stateFromRuntimeCells(this, this.currentLevel().cells, this.currentLevel().size);
-    return this.transition("level_start", raw, 0).state;
+  loadInitialStateForCurrentLevel() {
+    const level = this.currentLevel();
+    const raw = stateFromRuntimeCells(this, level.cells, level.size);
+    this.coreRuntime.set_state(JSON.stringify(raw));
+    this.cellsByKey.clear();
+    this.cells = [];
+    this.applyRuntimeCells(level.cells);
+    const outcome = this.transitionCurrent("level_start", 0);
+    this.applyRuntimeCells(outcome.changedCells || []);
+    this.completed = outcome.completed === true;
   }
 
   currentLevel() {
@@ -344,21 +377,45 @@ class Puzzle3SessionRuntime {
     }
   }
 
-  transition(programKey, state, inputId) {
-    const raw = this.coreRuntime.transition_program_outcome(
+  transitionCurrent(programKey, inputId) {
+    const raw = this.coreRuntime.transition_current_outcome(
       programKey,
-      JSON.stringify(state),
       Number(inputId || 0),
     );
     return JSON.parse(raw);
   }
 
-  isComplete(state) {
-    return this.coreRuntime.is_complete(JSON.stringify(state)) === true;
+  loadCellsFromRuntime() {
+    this.cellsByKey.clear();
+    this.cells = [];
+    this.applyRuntimeCells(JSON.parse(this.coreRuntime.current_cells()));
+  }
+
+  applyRuntimeCells(cells) {
+    for (const cell of cells || []) {
+      const position = cell.position || {};
+      const normalized = {
+        x: Number(position.x || 0),
+        y: Number(position.y || 0),
+        z: Number(position.z || 0),
+      };
+      const key = cellKey(normalized);
+      const objects = (cell.objects || [])
+        .map((object) => this.objectForId(Number(object?.id ?? object ?? 0)))
+        .filter((object) => object.id);
+      if (!objects.length) {
+        this.cellsByKey.delete(key);
+        continue;
+      }
+      this.cellsByKey.set(key, { position: normalized, objects });
+    }
+    this.cells = Array.from(this.cellsByKey.values());
   }
 
   inputIdForName(inputName) {
-    const input = (this.base.inputs || []).find((candidate) => candidate.name === inputName);
+    const canonicalName = canonicalPuzzle3InputName(inputName);
+    const input = (this.base.inputs || [])
+      .find((candidate) => canonicalPuzzle3InputName(candidate.name) === canonicalName);
     return input ? Number(input.id) : undefined;
   }
 
@@ -383,16 +440,20 @@ function applyPuzzle3PreviewUpdate(update = {}) {
 
 function applyPuzzle3ModelComponentPreviewUpdate(update = {}) {
   const next = puzzle3PreviewSnapshot(update);
-  void loadSnapshotData(next, {
+  void loadSnapshotData(next, puzzle3ModelComponentPreviewLoadOptions(update));
+}
+
+function puzzle3ModelComponentPreviewLoadOptions(update = {}) {
+  return {
     modelComponentPreview: {
       sceneName: update.scene || "__editor_model_preview__",
       component: puzzle3ModelPreviewComponent(update),
     },
-  });
+  };
 }
 
-function puzzle3PreviewSnapshot(update = {}) {
-  const next = JSON.parse(JSON.stringify(snapshot || fallbackSnapshot));
+function puzzle3PreviewSnapshot(update = {}, source = snapshot || fallbackSnapshot) {
+  const next = JSON.parse(JSON.stringify(source || fallbackSnapshot));
   applyPuzzle3PreviewResources(next, update.resources || update);
   const rawLevelIndex = update.levelIndex ?? next.levelIndex ?? 0;
   const levelCount = Array.isArray(next.levels) && next.levels.length ? next.levels.length : 1;
@@ -434,7 +495,7 @@ function puzzle3PreviewSnapshot(update = {}) {
     next.camera = cloneCamera(update.camera);
   }
   if (update.view) {
-    next.view = clonePuzzle3PreviewView(update.view);
+    next.view = clonePuzzle3PreviewView(update.view, next.size || fallbackSnapshot.size);
   }
   if (update.settings) {
     next.settings = mergePuzzle3PreviewSettings(next.settings || {}, update.settings);
@@ -509,7 +570,7 @@ function renderScene() {
   const components = scene?.components?.length
     ? scene.components
     : [{ kind: "title", text: snapshot.title || "Puzzle3" }];
-  sceneButtonCursor = clamp(sceneButtonCursor, 0, Math.max(0, sceneButtonComponents(scene).length - 1));
+  sceneButtonCursor = clamp(sceneButtonCursor, 0, Math.max(0, sceneButtonInstances(scene).length - 1));
   const rootComponent = {
     kind: "column",
     children: components,
@@ -527,7 +588,8 @@ function renderScene() {
   root.style.height = `${measured.height * scale}px`;
   renderSceneNode(rootComponent, root, { x: 0, y: 0, width: measured.width, height: measured.height }, scale, scene?.name || currentSceneName || "default", {});
   screenView.replaceChildren(root);
-  if (puzzle3ComponentFor(scene)) {
+  if (embeddedPuzzle3Component) {
+    puzzle3Component.handleResize();
     requestAnimationFrame(() => puzzle3Component.handleResize());
   }
 }
@@ -548,8 +610,7 @@ function renderSceneNode(component, parent, rect, scale, sceneName, scope = {}) 
     title.textContent = component.text;
     node.append(title);
   } else if (component.kind === "button") {
-    const buttons = sceneButtonComponents();
-    const currentIndex = buttons.indexOf(component);
+    const currentIndex = sceneButtonInstanceIndex(component, scope);
     const levelMenuOwnsCursor = Boolean(activeLevelMenuComponent());
     node.append(sceneButton(resolveSceneLabel(component.label, scope), () => applySceneAction(component.action, scope), {
       selected: !levelMenuOwnsCursor && currentIndex === sceneButtonCursor,
@@ -558,16 +619,11 @@ function renderSceneNode(component, parent, rect, scale, sceneName, scope = {}) 
     node.append(renderLevelMenu(component));
   } else if (component.kind === "puzzle3") {
     node.classList.add("scene-puzzle3-node");
-    const inner = containRect(
-      { x: 0, y: 0, width: rect.width, height: rect.height },
-      currentPuzzle3IntrinsicSize(),
-      sceneLayout(component),
-    );
     puzzle3Frame.style.position = "absolute";
-    puzzle3Frame.style.left = `${inner.x * scale}px`;
-    puzzle3Frame.style.top = `${inner.y * scale}px`;
-    puzzle3Frame.style.width = `${inner.width * scale}px`;
-    puzzle3Frame.style.height = `${inner.height * scale}px`;
+    puzzle3Frame.style.left = "0";
+    puzzle3Frame.style.top = "0";
+    puzzle3Frame.style.width = `${rect.width * scale}px`;
+    puzzle3Frame.style.height = `${rect.height * scale}px`;
     node.append(puzzle3Frame);
     applySceneComponentMetadata(component, sceneName);
     updateCameraInteractionState();
@@ -658,14 +714,21 @@ function measureSceneNode(component, scope = {}) {
       height: Math.max(1, children.reduce((total, child) => total + child.height, 0) + sceneGap(component) * Math.max(0, children.length - 1)),
     };
   }
+  if (component.kind === "for") {
+    const children = expandedForChildren(component, scope).map(({ child, scope: childScope }) => measureSceneNode(child, childScope));
+    return {
+      width: Math.max(1, children.reduce((width, child) => Math.max(width, child.width), 0)),
+      height: Math.max(1, children.reduce((total, child) => total + child.height, 0) + sceneGap(component) * Math.max(0, children.length - 1)),
+    };
+  }
   if (component.kind === "puzzle3") {
-    return currentPuzzle3IntrinsicSize();
+    return puzzle3SceneDisplaySize();
   }
   if (component.kind === "level_menu") {
-    return { width: 5, height: Math.max(1, puzzle3Component.levelEntries(component.levels).length) };
+    return { width: SCENE_BUTTON_DEFAULT_WIDTH, height: Math.max(1, puzzle3Component.levelEntries(component.levels).length) };
   }
   if (component.kind === "button") {
-    return { width: Math.max(4, Math.ceil(resolveSceneLabel(component.label, scope).length / 3)), height: 1 };
+    return { width: SCENE_BUTTON_DEFAULT_WIDTH, height: 1 };
   }
   if (component.kind === "title") {
     return { width: Math.max(6, Math.ceil(String(component.text || "").length / 3)), height: 1 };
@@ -725,11 +788,10 @@ function resolveScenePath(path, scope = {}) {
   return value;
 }
 
-function currentPuzzle3IntrinsicSize() {
-  const size = snapshot.size || fallbackSnapshot.size;
+function puzzle3SceneDisplaySize() {
   return {
-    width: Math.max(1, Number(size.width) || 1),
-    height: Math.max(1, Number(size.depth) || Number(size.height) || 1),
+    width: SCENE_DEFAULT_WIDTH,
+    height: SCENE_DEFAULT_HEIGHT,
   };
 }
 
@@ -750,18 +812,6 @@ function alignOffset(outer, inner, align) {
     return space;
   }
   return space / 2;
-}
-
-function containRect(box, intrinsic, layout) {
-  const scale = Math.min(box.width / intrinsic.width, box.height / intrinsic.height);
-  const width = intrinsic.width * scale;
-  const height = intrinsic.height * scale;
-  return {
-    x: box.x + alignOffset(box.width, width, layout.align?.x),
-    y: box.y + alignOffset(box.height, height, layout.align?.y),
-    width,
-    height,
-  };
 }
 
 function findSceneComponent(components, predicate) {
@@ -833,30 +883,95 @@ function renderLevelMenu(component) {
   const menu = document.createElement("div");
   menu.className = "level-menu";
   menu.dataset.levels = component.levels || "levels";
-  const levels = puzzle3Component.levelEntries(component.levels);
+  const levels = levelMenuEntries(component.levels);
   levelMenuCursor = clamp(levelMenuCursor, 0, Math.max(0, levels.length - 1));
-  levels.forEach((level, index) => {
-    const label = level.label || level.name || `Level ${index + 1}`;
-    const button = sceneButton(label, () => applyStartLevels(component.action, index));
-    button.classList.toggle("is-selected", index === levelMenuCursor);
-    button.setAttribute("aria-current", index === levelMenuCursor ? "true" : "false");
+  levels.forEach((entry, position) => {
+    const label = entry.label || entry.name || `Level ${position + 1}`;
+    const button = sceneButton(label, () => applyLevelMenuSelection(component, position));
+    button.classList.toggle("is-selected", position === levelMenuCursor);
+    button.setAttribute("aria-current", position === levelMenuCursor ? "true" : "false");
     menu.append(button);
   });
   return menu;
+}
+
+function applyLevelMenuSelection(component, position) {
+  const entry = levelMenuEntries(component.levels)[position];
+  if (!entry) {
+    return;
+  }
+  applySceneAction(component.action, { level: entry });
+}
+
+function levelMenuEntries(levelsName) {
+  return levelIndexesForBundle(levelsName)
+    .map((globalIndex, position) => levelScopeItem(snapshot.levels?.[globalIndex] || {}, globalIndex, position));
+}
+
+function levelScopeItem(level, index, position) {
+  return {
+    kind: "level",
+    ...level,
+    index,
+    position,
+    num: position + 1,
+    number: position + 1,
+    title: level.title || level.label || level.name || `Level ${position + 1}`,
+    name: level.name || `Level ${position + 1}`,
+    label: level.label || level.name || `Level ${position + 1}`,
+    cleared: level.cleared === true,
+    solved: level.cleared === true,
+  };
 }
 
 function activeLevelMenuComponent() {
   return findSceneComponent(currentScene()?.components || [], (component) => component.kind === "level_menu");
 }
 
-function sceneButtonComponents(scene = currentScene()) {
-  return collectSceneComponents(scene?.components || [], (component) => component.kind === "button");
+function sceneButtonInstances(scene = currentScene()) {
+  return collectSceneButtonInstances(scene?.components || [], {});
+}
+
+function collectSceneButtonInstances(components, scope = {}, out = []) {
+  for (const component of components || []) {
+    if (component.kind === "button") {
+      out.push({ component, scope });
+    } else if (component.kind === "for") {
+      for (const { child, scope: childScope } of expandedForChildren(component, scope)) {
+        collectSceneButtonInstances([child], childScope, out);
+      }
+    } else if (component.children) {
+      collectSceneButtonInstances(component.children, scope, out);
+    }
+  }
+  return out;
+}
+
+function sceneButtonInstanceIndex(component, scope = {}) {
+  const scopeKey = sceneScopeKey(scope);
+  return sceneButtonInstances().findIndex((button) => (
+    button.component === component && sceneScopeKey(button.scope) === scopeKey
+  ));
+}
+
+function sceneScopeKey(scope = {}) {
+  return JSON.stringify(Object.keys(scope).sort().map((key) => {
+    const value = scope[key];
+    return [key, sceneScopeValueKey(value)];
+  }));
+}
+
+function sceneScopeValueKey(value) {
+  if (value && typeof value === "object") {
+    return JSON.stringify(value);
+  }
+  return value ?? "";
 }
 
 function applySelectedSceneButton() {
-  const button = sceneButtonComponents()[sceneButtonCursor];
+  const button = sceneButtonInstances()[sceneButtonCursor];
   if (button) {
-    applySceneAction(button.action);
+    applySceneAction(button.component.action, button.scope);
   }
 }
 
@@ -872,8 +987,6 @@ function applySceneAction(action, scope = {}) {
       }
     }
     gotoScene(action.scene);
-  } else if (action?.kind === "start_levels" && action.scene) {
-    applyStartLevels(action, 0);
   }
 }
 
@@ -888,12 +1001,6 @@ function resolveSceneActionValue(value, scope = {}) {
     return value.value;
   }
   return resolveSceneLabel(value, scope);
-}
-
-function applyStartLevels(action, levelIndex) {
-  puzzle3Component.startLevel(action?.levels, levelIndex);
-  currentSceneName = action?.scene || puzzleSceneName() || currentSceneName;
-  renderScene();
 }
 
 function gotoScene(sceneName) {
@@ -926,10 +1033,6 @@ function createPuzzle3Component() {
       resizeCanvas();
       draw();
     },
-    startLevel(levelsName, levelIndex) {
-      runtime.loadLevel(globalLevelIndexForBundle(levelsName, levelIndex));
-      snapshot = runtime.snapshot();
-    },
     currentLevelIndex(levelsName) {
       return relativeLevelIndexForBundle(levelsName, snapshot.levelIndex || 0);
     },
@@ -944,6 +1047,7 @@ function createPuzzle3Component() {
     },
     applyInput(input) {
       runtime.setCamera(snapshot.camera);
+      const beforeLevelIndex = snapshot.levelIndex || 0;
       if (input === "undo") {
         if (!runtime.undo()) {
           return false;
@@ -952,11 +1056,15 @@ function createPuzzle3Component() {
         if (!runtime.restart()) {
           return false;
         }
+        resetViewportMotion();
       } else if (!runtime.applyInput(input)) {
         return false;
       }
       snapshot = runtime.snapshot();
-      draw();
+      if ((snapshot.levelIndex || 0) !== beforeLevelIndex) {
+        resetViewportMotion();
+      }
+      requestSceneViewportDraw();
       return true;
     },
     nextLevel() {
@@ -964,6 +1072,7 @@ function createPuzzle3Component() {
         return false;
       }
       snapshot = runtime.snapshot();
+      resetViewportMotion();
       draw();
       return true;
     },
@@ -972,6 +1081,7 @@ function createPuzzle3Component() {
         return false;
       }
       snapshot = runtime.snapshot();
+      resetViewportMotion();
       draw();
       return true;
     },
@@ -982,6 +1092,7 @@ function createPuzzle3Component() {
       }
       runtime.loadLevel(index);
       snapshot = runtime.snapshot();
+      resetViewportMotion();
       draw();
       return true;
     },
@@ -996,8 +1107,7 @@ function createPuzzle3Component() {
         return false;
       }
       event.preventDefault();
-      this.applyInput(input);
-      return true;
+      return startHeldSceneInput(rawInputHoldId({ key: event.key, code: event.code }), input);
     },
   };
 }
@@ -1069,16 +1179,19 @@ function resizeCanvas() {
   return changed;
 }
 
-function schedulePuzzle3Resize() {
+function schedulePuzzle3Resize(renderLayout = false) {
+  pendingSceneLayoutRender = pendingSceneLayoutRender || Boolean(renderLayout);
   if (pendingResizeFrame) {
     return;
   }
   pendingResizeFrame = requestAnimationFrame(() => {
+    const shouldRenderLayout = pendingSceneLayoutRender;
     pendingResizeFrame = 0;
-    if (effectiveComponentEmbedMode() && puzzle3ComponentFor(currentScene())) {
-      puzzle3Component.handleResize();
-    } else {
+    pendingSceneLayoutRender = false;
+    if (shouldRenderLayout || !puzzle3ComponentFor(currentScene())) {
       renderScene();
+    } else {
+      puzzle3Component.handleResize();
     }
   });
 }
@@ -1096,22 +1209,22 @@ function syncCanvasSize() {
 function updateProjectionFit(rect) {
   const size = snapshot.size || fallbackSnapshot.size;
   const camera = snapshot.camera || fallbackSnapshot.camera;
-  const previewView = puzzle3PreviewView();
+  if (activeViewportFocusCell()) {
+    return;
+  }
   if (!shouldAutoFitFiniteStage(size)) {
     return;
   }
   const width = Math.max(1, Number(rect.width) || 1);
   const height = Math.max(1, Number(rect.height) || 1);
-  const zoom = projectionZoom(camera, previewView);
   const bounds = projectedSceneBoundsUnit(size, camera);
   const boundsWidth = Math.max(0.001, bounds.maxX - bounds.minX);
   const boundsHeight = Math.max(0.001, bounds.maxY - bounds.minY);
   const padding = 0.72;
   const scale = Math.min(width / boundsWidth, height / boundsHeight) * padding;
   view.cellScale = Math.max(0.0001, scale);
-  const effectiveScale = view.cellScale * zoom;
-  view.originX = width / 2 - ((bounds.minX + bounds.maxX) / 2) * effectiveScale;
-  view.originY = height / 2 - ((bounds.minY + bounds.maxY) / 2) * effectiveScale;
+  view.originX = width / 2;
+  view.originY = height / 2;
   view.projectionWidth = width;
   view.projectionHeight = height;
   view.projectionFitKey = projectionFitKey(size, camera);
@@ -1120,6 +1233,9 @@ function updateProjectionFit(rect) {
 function ensureProjectionFit() {
   const rect = canvas.getBoundingClientRect();
   const size = snapshot.size || fallbackSnapshot.size;
+  if (activeViewportFocusCell()) {
+    return;
+  }
   if (!shouldAutoFitFiniteStage(size)) {
     return;
   }
@@ -1163,11 +1279,12 @@ function projectionZoom(camera, previewView = puzzle3PreviewView()) {
 }
 
 function puzzle3PreviewView(source = snapshot) {
-  return clonePuzzle3PreviewView(source?.view || fallbackSnapshot.view);
+  const size = source?.size || snapshot?.size || fallbackSnapshot.size;
+  return clonePuzzle3PreviewView(source?.view || fallbackSnapshot.view, size);
 }
 
-function clonePuzzle3PreviewView(source) {
-  const target = source?.target || source?.origin || {};
+function clonePuzzle3PreviewView(source, size = snapshot?.size || fallbackSnapshot.size) {
+  const target = source?.target || source?.origin || modelCenterForSize(size);
   return {
     zoom: Math.max(0.1, Number(source?.zoom ?? 1) || 1),
     target: {
@@ -1186,18 +1303,25 @@ function puzzle3ProjectionCamera(camera, previewView = puzzle3PreviewView()) {
 }
 
 function puzzle3ProjectionCenter(size, previewView = puzzle3PreviewView()) {
-  const target = previewView?.target || {};
+  const target = previewView?.target || modelCenterForSize(size);
   return {
-    x: (Math.max(1, Number(size.width) || 1) - 1) / 2 + (Number(target.x) || 0),
-    y: (Math.max(1, Number(size.depth) || 1) - 1) / 2 + (Number(target.y) || 0),
-    z: (Math.max(1, Number(size.height) || 1) - 1) / 2 + (Number(target.z) || 0),
+    x: Number(target.x) || 0,
+    y: Number(target.y) || 0,
+    z: Number(target.z) || 0,
+  };
+}
+
+function modelCenterForSize(size) {
+  const normalized = normalizeModelSize(size);
+  return {
+    x: (normalized.width - 1) / 2,
+    y: (normalized.depth - 1) / 2,
+    z: (normalized.height - 1) / 2,
   };
 }
 
 function projectedSceneBoundsUnit(size, camera) {
-  const width = Math.max(1, Number(size.width) || 1);
-  const depth = Math.max(1, Number(size.depth) || 1);
-  const height = Math.max(1, Number(size.height) || 1);
+  const { width, depth, height } = normalizeModelSize(size);
   const corners = [];
   for (const x of [-0.5, width - 0.5]) {
     for (const y of [-0.5, depth - 0.5]) {
@@ -1206,15 +1330,15 @@ function projectedSceneBoundsUnit(size, camera) {
       }
     }
   }
-  return corners.reduce(
-    (bounds, point) => ({
-      minX: Math.min(bounds.minX, point.x),
-      maxX: Math.max(bounds.maxX, point.x),
-      minY: Math.min(bounds.minY, point.y),
-      maxY: Math.max(bounds.maxY, point.y),
-    }),
-    { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity },
-  );
+  return projectedPointBounds(corners);
+}
+
+function normalizeModelSize(size) {
+  return {
+    width: Math.max(1, Number(size?.width) || 1),
+    depth: Math.max(1, Number(size?.depth) || 1),
+    height: Math.max(1, Number(size?.height) || 1),
+  };
 }
 
 function projectScenePointUnit(position, size, camera) {
@@ -1247,6 +1371,7 @@ function cloneCamera(camera) {
 function resetCamera() {
   snapshot.camera = cloneCamera(initialCamera);
   runtime.setCamera(snapshot.camera);
+  resetViewportMotion();
 }
 
 function cameraLookEnabled() {
@@ -1315,18 +1440,23 @@ function degreesToRadians(value) {
   return (value * Math.PI) / 180;
 }
 
-function draw() {
+function draw(options = {}) {
+  const advanceViewport = options.advanceViewport !== false;
   syncCanvasSize();
   ensureProjectionFit();
   const width = canvas.clientWidth;
   const height = canvas.clientHeight;
   ctx.clearRect(0, 0, width, height);
 
-  let primitives = scenePrimitives();
-  if (fitProjectionToContent(primitives, width, height)) {
-    primitives = scenePrimitives();
+  const renderContext = puzzle3RenderContext(width, height);
+  const viewportFit = fitProjectionToViewport(renderContext, { advanceViewport });
+  let primitives = scenePrimitives(renderContext);
+  if (!viewportFit && fitProjectionToContent(primitives, width, height)) {
+    resetRenderContextCandidates(renderContext);
+    primitives = scenePrimitives(renderContext);
   }
-  primitives.sort(comparePrimitiveOrder);
+  assignPrimitiveOrder(primitives);
+  primitives = orderScenePrimitives(primitives);
   for (const primitive of primitives) {
     if (primitive.kind === "line") {
       lineSegment(primitive.from, primitive.to, primitive.stroke, primitive.width, primitive.alpha);
@@ -1334,13 +1464,349 @@ function draw() {
       polygonPoints(primitive.points, primitive.fill);
     }
   }
+  applyPixelatePostprocess();
   notifyPuzzle3View(width, height);
 }
 
-function scenePrimitives() {
-  const primitives = [...sceneFaces(), ...gridLines(gridSettings())];
+function resetViewportMotion() {
+  view.viewportSnapNext = true;
+}
+
+function requestSceneViewportDraw() {
+  if (smoothViewportActive()) {
+    scheduleViewportAnimation();
+  } else {
+    draw();
+  }
+}
+
+function smoothViewportActive() {
+  const viewport = puzzle3ViewportSettings();
+  return viewport?.mode === "centered"
+    && viewport.follow === "smooth"
+    && Boolean(viewportFocusCell(viewport));
+}
+
+function puzzle3RenderContext(width = canvas.clientWidth, height = canvas.clientHeight) {
+  const frame = normalizeFrame({ width, height });
+  const viewport = puzzle3ViewportSettings();
+  const focusCell = viewport?.mode === "centered" ? viewportFocusCell(viewport) : null;
+  return {
+    frame,
+    viewport,
+    focusCell,
+    renderCells: null,
+    opaqueOcclusion: null,
+    visibleVoxelCells: null,
+  };
+}
+
+function createRenderGeometryCache() {
+  return {
+    cellsSource: null,
+    spritesSource: null,
+    settingsKey: "",
+    cells: new Map(),
+    cellSignatures: new Map(),
+    occupied: emptyVoxelOccupancy(),
+    allDirty: true,
+    revision: 0,
+  };
+}
+
+function resetRenderGeometryCache() {
+  renderGeometryCache.cellsSource = null;
+  renderGeometryCache.spritesSource = null;
+  renderGeometryCache.settingsKey = "";
+  renderGeometryCache.cells.clear();
+  renderGeometryCache.cellSignatures.clear();
+  renderGeometryCache.occupied = emptyVoxelOccupancy();
+  renderGeometryCache.allDirty = true;
+  renderGeometryCache.revision += 1;
+  view.primitiveSortCacheKey = "";
+  view.primitiveSortCacheOrder = [];
+}
+
+function normalizeFrame(frame) {
+  return {
+    width: Math.max(1, Number(frame?.width) || 1),
+    height: Math.max(1, Number(frame?.height) || 1),
+  };
+}
+
+function resetRenderContextCandidates(renderContext) {
+  if (renderContext) {
+    renderContext.renderCells = null;
+  }
+}
+
+function fitProjectionToViewport(renderContext, options = {}) {
+  const target = viewportProjectionFitTarget(renderContext);
+  if (!target) {
+    return false;
+  }
+  const snap = target.follow !== "smooth" || view.viewportSnapNext;
+  if (snap) {
+    view.cellScale = target.cellScale;
+    view.originX = target.originX;
+    view.originY = target.originY;
+    view.viewportSnapNext = false;
+    return true;
+  }
+  if (options.advanceViewport === false) {
+    scheduleViewportAnimation();
+    return true;
+  }
+  const amount = 0.12;
+  view.cellScale = lerp(view.cellScale, target.cellScale, amount);
+  const origin = smoothViewportOrigin(
+    lerp(view.originX, target.originX, amount),
+    lerp(view.originY, target.originY, amount),
+    target,
+  );
+  view.originX = origin.x;
+  view.originY = origin.y;
+  if (
+    Math.abs(view.cellScale - target.cellScale) > 0.001
+    || Math.abs(view.originX - target.originX) > 0.5
+    || Math.abs(view.originY - target.originY) > 0.5
+  ) {
+    scheduleViewportAnimation();
+  }
+  return true;
+}
+
+function scheduleViewportAnimation() {
+  if (view.viewportAnimationFrame) {
+    return;
+  }
+  view.viewportAnimationFrame = requestAnimationFrame(() => {
+    view.viewportAnimationFrame = 0;
+    draw();
+  });
+}
+
+function lerp(from, to, amount) {
+  return from + (to - from) * amount;
+}
+
+function smoothViewportOrigin(nextX, nextY, target) {
+  const dx = target.originX - nextX;
+  const dy = target.originY - nextY;
+  const distance = Math.hypot(dx, dy);
+  const maxLag = smoothViewportMaxLag(target);
+  if (!Number.isFinite(distance) || distance <= maxLag) {
+    return { x: nextX, y: nextY };
+  }
+  const catchUp = (distance - maxLag) / distance;
+  return {
+    x: nextX + dx * catchUp,
+    y: nextY + dy * catchUp,
+  };
+}
+
+function smoothViewportMaxLag(target) {
+  const camera = snapshot.camera || fallbackSnapshot.camera;
+  return Math.max(16, target.cellScale * projectionZoom(camera) * 3.5);
+}
+
+function viewportProjectionFitTarget(renderContext) {
+  const viewport = renderContext?.viewport || null;
+  if (!viewport || viewport.mode !== "centered") {
+    return null;
+  }
+  const size = snapshot.size || fallbackSnapshot.size;
+  const camera = snapshot.camera || fallbackSnapshot.camera;
+  const focus = renderContext?.focusCell || null;
+  if (!focus) {
+    return null;
+  }
+  const bounds = viewportFramingProjectionBounds(size, camera, viewport, focus);
+  const anchorPoint = viewportFocusProjectionAnchor(size, camera, viewport, focus);
+  return viewportFitForFrame(
+    renderContext.frame,
+    bounds,
+    anchorPoint,
+    projectionZoom(camera),
+    viewport.follow,
+  );
+}
+
+function viewportFitForFrame(frame, viewportBounds, centerPoint = null, zoom = 1, follow = "snap") {
+  const { width: frameWidth, height: frameHeight } = normalizeFrame(frame);
+  const minX = Number(viewportBounds?.minX ?? 0) || 0;
+  const maxX = Number(viewportBounds?.maxX ?? 0) || 0;
+  const minY = Number(viewportBounds?.minY ?? 0) || 0;
+  const maxY = Number(viewportBounds?.maxY ?? 0) || 0;
+  const centerX = Number(centerPoint?.x);
+  const centerY = Number(centerPoint?.y);
+  const anchorX = Number.isFinite(centerX) ? centerX : (minX + maxX) / 2;
+  const anchorY = Number.isFinite(centerY) ? centerY : (minY + maxY) / 2;
+  const halfWidth = Math.max(0.001, Math.max(Math.abs(minX - anchorX), Math.abs(maxX - anchorX)));
+  const halfHeight = Math.max(0.001, Math.max(Math.abs(minY - anchorY), Math.abs(maxY - anchorY)));
+  const baseScale = Math.max(0.0001, Math.min(frameWidth / (halfWidth * 2), frameHeight / (halfHeight * 2)));
+  const effectiveScale = baseScale * Math.max(0.1, Number(zoom) || 1);
+  return {
+    follow,
+    cellScale: baseScale,
+    originX: frameWidth / 2 - anchorX * effectiveScale,
+    originY: frameHeight / 2 - anchorY * effectiveScale,
+  };
+}
+
+function puzzle3ViewportSettings(source = snapshot) {
+  const raw = source?.viewport;
+  if (!raw || raw === true || raw === false) {
+    return null;
+  }
+  const framing = raw.framingBox || raw.framing || {};
+  const widthRaw = Number(framing.width);
+  const depthRaw = Number(framing.depth);
+  if (!Number.isFinite(widthRaw) || widthRaw <= 0 || !Number.isFinite(depthRaw) || depthRaw <= 0) {
+    return null;
+  }
+  const width = Math.max(1, widthRaw);
+  const depth = Math.max(1, depthRaw);
+  return {
+    mode: String(raw.mode || "centered"),
+    follow: String(raw.follow || "snap"),
+    focus: String(raw.focus || "Player"),
+    focusObjects: Array.isArray(raw.focusObjects)
+      ? raw.focusObjects.map((objectId) => Number(objectId)).filter((objectId) => Number.isFinite(objectId) && objectId > 0)
+      : [],
+    framingBox: {
+      width,
+      depth,
+      height: framing.height === "full" || framing.height === undefined
+        ? "full"
+        : Math.max(1, Number(framing.height) || 1),
+    },
+  };
+}
+
+function viewportFocusCell(viewport) {
+  const focusObjects = new Set(viewport.focusObjects || []);
+  for (const cell of snapshot.cells || []) {
+    if ((cell.objects || []).some((object) => viewportObjectMatches(object, viewport, focusObjects))) {
+      return cell;
+    }
+  }
+  return null;
+}
+
+function activeViewportFocusCell() {
+  const viewport = puzzle3ViewportSettings();
+  return viewport?.mode === "centered" ? viewportFocusCell(viewport) : null;
+}
+
+function viewportObjectMatches(object, viewport, focusObjects) {
+  const objectId = Number(object.id || 0);
+  return (
+    (focusObjects.size > 0 && focusObjects.has(objectId))
+    || object.name === viewport.focus
+    || object.sprite === viewport.focus
+  );
+}
+
+function viewportFramingProjectionBounds(size, camera, viewport, focusCell) {
+  const { width, depth, height } = normalizeModelSize(size);
+  const ranges = viewportFramingRanges({ width, depth, height }, viewport, focusCell);
+  const points = [];
+  for (const x of [ranges.x.min, ranges.x.max]) {
+    for (const y of [ranges.y.min, ranges.y.max]) {
+      for (const z of [ranges.z.min, ranges.z.max]) {
+        points.push(projectScenePointUnit({ x, y, z }, { width, depth, height }, camera));
+      }
+    }
+  }
+  return projectedPointBounds(points);
+}
+
+function viewportFramingRanges(size, viewport, focusCell) {
+  const { width, depth, height } = normalizeModelSize(size);
+  const position = focusCell.position || {};
+  const xRange = virtualCenteredCellRange(Number(position.x) || 0, viewport.framingBox.width);
+  const yRange = virtualCenteredCellRange(Number(position.y) || 0, viewport.framingBox.depth);
+  const zRange = viewport.framingBox.height === "full"
+    ? { min: -0.5, max: height - 0.5 }
+    : virtualCenteredCellRange(Number(position.z) || 0, viewport.framingBox.height);
+  return { x: xRange, y: yRange, z: zRange };
+}
+
+function viewportFocusProjectionAnchor(size, camera, viewport, focusCell) {
+  const visualAnchor = viewportFocusVisualProjectionAnchor(size, camera, viewport, focusCell);
+  if (visualAnchor) {
+    return visualAnchor;
+  }
+  const { width, depth, height } = normalizeModelSize(size);
+  const position = focusCell.position || {};
+  return projectScenePointUnit(
+    {
+      x: Number(position.x) || 0,
+      y: Number(position.y) || 0,
+      z: Number(position.z) || 0,
+    },
+    { width, depth, height },
+    camera,
+  );
+}
+
+function viewportFocusVisualProjectionAnchor(size, camera, viewport, focusCell) {
+  const { width, depth, height } = normalizeModelSize(size);
+  const focusObjects = new Set(viewport?.focusObjects || []);
+  const points = [];
+  for (const [objectIndex, object] of (focusCell.objects || []).entries()) {
+    if (!viewportObjectMatches(object, viewport, focusObjects)) {
+      continue;
+    }
+    const sourceKey = `${cellKey(focusCell.position)}:${objectIndex}`;
+    for (const voxel of objectVoxels(focusCell.position || {}, object, sourceKey)) {
+      const { x0, x1, y0, y1, z0, z1 } = voxel.bounds;
+      for (const x of [x0, x1]) {
+        for (const y of [y0, y1]) {
+          for (const z of [z0, z1]) {
+            points.push(projectScenePointUnit({ x, y, z }, { width, depth, height }, camera));
+          }
+        }
+      }
+    }
+  }
+  if (!points.length) {
+    return null;
+  }
+  const bounds = projectedPointBounds(points);
+  return {
+    x: (bounds.minX + bounds.maxX) / 2,
+    y: (bounds.minY + bounds.maxY) / 2,
+  };
+}
+
+function virtualCenteredCellRange(center, span) {
+  const safeSpan = Math.max(1, Number(span) || 1);
+  const safeCenter = Number(center) || 0;
+  return {
+    min: safeCenter - safeSpan / 2,
+    max: safeCenter + safeSpan / 2,
+  };
+}
+
+function projectedPointBounds(points) {
+  return points.reduce(
+    (bounds, point) => ({
+      minX: Math.min(bounds.minX, point.x),
+      maxX: Math.max(bounds.maxX, point.x),
+      minY: Math.min(bounds.minY, point.y),
+      maxY: Math.max(bounds.maxY, point.y),
+    }),
+    { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity },
+  );
+}
+
+function scenePrimitives(renderContext) {
+  const candidates = renderCellCandidates(renderContext);
+  const primitives = [...sceneFaces(candidates, renderContext), ...gridLines(gridSettings(), candidates)];
   if (view.shadowsEnabled) {
-    primitives.push(...shadowFaces());
+    primitives.push(...shadowFaces(candidates));
   }
   return primitives;
 }
@@ -1363,23 +1829,16 @@ function fitProjectionToContent(primitives, width, height) {
   if (!points.length) {
     return false;
   }
-  const minX = Math.min(...points.map((point) => point.x));
-  const maxX = Math.max(...points.map((point) => point.x));
-  const minY = Math.min(...points.map((point) => point.y));
-  const maxY = Math.max(...points.map((point) => point.y));
-  const contentWidth = Math.max(0.001, maxX - minX);
-  const contentHeight = Math.max(0.001, maxY - minY);
-  const margin = Math.max(0, Number(fit.margin) || 0);
-  const availableWidth = Math.max(1, width - margin * 2);
-  const availableHeight = Math.max(1, height - margin * 2);
-  const multiplier = Math.min(availableWidth / contentWidth, availableHeight / contentHeight);
+  const multiplier = fitScaleForProjectedBounds(
+    { width, height },
+    projectedPointBounds(points),
+    fit.margin,
+  );
   if (!Number.isFinite(multiplier) || multiplier <= 0 || Math.abs(multiplier - 1) < 0.0001) {
     return false;
   }
-  const centerX = (minX + maxX) / 2;
-  const centerY = (minY + maxY) / 2;
-  view.originX = width / 2 + (view.originX - centerX) * multiplier;
-  view.originY = height / 2 + (view.originY - centerY) * multiplier;
+  view.originX = width / 2;
+  view.originY = height / 2;
   view.cellScale *= multiplier;
   return true;
 }
@@ -1387,16 +1846,11 @@ function fitProjectionToContent(primitives, width, height) {
 function fitProjectionToXYStageBounds(width, height, fit) {
   const size = snapshot.size || fallbackSnapshot.size;
   const camera = snapshot.camera || fallbackSnapshot.camera;
-  const margin = Math.max(0, Number(fit.margin) || 0);
-  const availableWidth = Math.max(1, width - margin * 2);
-  const availableHeight = Math.max(1, height - margin * 2);
   const bounds = stageProjectionUnitBounds(size, camera, "xy");
-  const boundsWidth = Math.max(0.001, bounds.maxX - bounds.minX);
-  const boundsHeight = Math.max(0.001, bounds.maxY - bounds.minY);
-  const effectiveScale = Math.max(0.0001, Math.min(availableWidth / boundsWidth, availableHeight / boundsHeight));
+  const effectiveScale = fitScaleForProjectedBounds({ width, height }, bounds, fit.margin);
   const nextCellScale = effectiveScale / projectionZoom(camera);
-  const nextOriginX = width / 2 - ((bounds.minX + bounds.maxX) / 2) * effectiveScale;
-  const nextOriginY = height / 2 - ((bounds.minY + bounds.maxY) / 2) * effectiveScale;
+  const nextOriginX = width / 2;
+  const nextOriginY = height / 2;
   const changed = Math.abs(view.cellScale - nextCellScale) > 0.0001
     || Math.abs(view.originX - nextOriginX) > 0.0001
     || Math.abs(view.originY - nextOriginY) > 0.0001;
@@ -1409,16 +1863,11 @@ function fitProjectionToXYStageBounds(width, height, fit) {
 function fitProjectionToStageBounds(width, height, fit) {
   const size = snapshot.size || fallbackSnapshot.size;
   const camera = snapshot.camera || fallbackSnapshot.camera;
-  const margin = Math.max(0, Number(fit.margin) || 0);
-  const availableWidth = Math.max(1, width - margin * 2);
-  const availableHeight = Math.max(1, height - margin * 2);
   const bounds = stageProjectionUnitBounds(size, camera, fit.mode);
-  const boundsWidth = Math.max(0.001, bounds.maxX - bounds.minX);
-  const boundsHeight = Math.max(0.001, bounds.maxY - bounds.minY);
-  const effectiveScale = Math.max(0.0001, Math.min(availableWidth / boundsWidth, availableHeight / boundsHeight));
+  const effectiveScale = fitScaleForProjectedBounds({ width, height }, bounds, fit.margin);
   const nextCellScale = effectiveScale / projectionZoom(camera);
-  const nextOriginX = width / 2 - ((bounds.minX + bounds.maxX) / 2) * effectiveScale;
-  const nextOriginY = height / 2 - ((bounds.minY + bounds.maxY) / 2) * effectiveScale;
+  const nextOriginX = width / 2;
+  const nextOriginY = height / 2;
   const changed = Math.abs(view.cellScale - nextCellScale) > 0.0001
     || Math.abs(view.originX - nextOriginX) > 0.0001
     || Math.abs(view.originY - nextOriginY) > 0.0001;
@@ -1428,10 +1877,26 @@ function fitProjectionToStageBounds(width, height, fit) {
   return changed;
 }
 
+function fitScaleForProjectedBounds(frame, bounds, margin = 0) {
+  const { width, height } = normalizeFrame(frame);
+  const padding = Math.max(0, Number(margin) || 0);
+  const availableWidth = Math.max(1, width - padding * 2);
+  const availableHeight = Math.max(1, height - padding * 2);
+  const minX = Number(bounds?.minX);
+  const maxX = Number(bounds?.maxX);
+  const minY = Number(bounds?.minY);
+  const maxY = Number(bounds?.maxY);
+  const boundsWidth = Number.isFinite(minX) && Number.isFinite(maxX)
+    ? Math.max(0.001, maxX - minX)
+    : 1;
+  const boundsHeight = Number.isFinite(minY) && Number.isFinite(maxY)
+    ? Math.max(0.001, maxY - minY)
+    : 1;
+  return Math.max(0.0001, Math.min(availableWidth / boundsWidth, availableHeight / boundsHeight));
+}
+
 function stageProjectionUnitBounds(size, camera, mode = "stage") {
-  const width = Math.max(1, Number(size.width) || 1);
-  const depth = Math.max(1, Number(size.depth) || 1);
-  const height = Math.max(1, Number(size.height) || 1);
+  const { width, depth, height } = normalizeModelSize(size);
   const zValues = mode === "xy" ? [0] : [-0.5, height - 0.5];
   const points = [];
   for (const x of [-0.5, width - 0.5]) {
@@ -1441,15 +1906,7 @@ function stageProjectionUnitBounds(size, camera, mode = "stage") {
       }
     }
   }
-  return points.reduce(
-    (bounds, point) => ({
-      minX: Math.min(bounds.minX, point.x),
-      maxX: Math.max(bounds.maxX, point.x),
-      minY: Math.min(bounds.minY, point.y),
-      maxY: Math.max(bounds.maxY, point.y),
-    }),
-    { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity },
-  );
+  return projectedPointBounds(points);
 }
 
 function projectionContentFitSettings() {
@@ -1479,6 +1936,7 @@ function notifyPuzzle3View(width, height) {
     return;
   }
   const size = snapshot.size || fallbackSnapshot.size;
+  const normalizedSize = normalizeModelSize(size);
   const camera = snapshot.camera || fallbackSnapshot.camera;
   const previewView = puzzle3PreviewView();
   const canvasRect = canvas.getBoundingClientRect();
@@ -1507,13 +1965,80 @@ function notifyPuzzle3View(width, height) {
       camera: cloneCamera(camera),
       editorView: previewView,
       size: {
-        width: Math.max(1, Number(size.width) || 1),
-        depth: Math.max(1, Number(size.depth) || 1),
-        height: Math.max(1, Number(size.height) || 1),
+        width: normalizedSize.width,
+        depth: normalizedSize.depth,
+        height: normalizedSize.height,
       },
       cellFootprints: projectedStageCellFootprints(size),
     },
   }, "*");
+}
+
+function puzzle3InspectState() {
+  const frame = normalizeFrame({ width: canvas.clientWidth, height: canvas.clientHeight });
+  const renderContext = puzzle3RenderContext(frame.width, frame.height);
+  const focusCell = renderContext.focusCell || null;
+  const target = viewportProjectionFitTarget(renderContext);
+  const projectedFocus = focusCell ? projectWithDepth(focusCell.position || {}) : null;
+  const projectedFocusVisual = focusCell
+    ? viewportFocusVisualScreenAnchor(renderContext.viewport, focusCell)
+    : null;
+  return {
+    scene: currentSceneName,
+    source: canvas.dataset.source || "",
+    frame,
+    canvas: {
+      clientWidth: canvas.clientWidth,
+      clientHeight: canvas.clientHeight,
+      width: canvas.width,
+      height: canvas.height,
+    },
+    viewport: renderContext.viewport,
+    focusCell,
+    projectedFocus,
+    projectedFocusVisual,
+    target,
+    view: {
+      originX: view.originX,
+      originY: view.originY,
+      cellScale: view.cellScale,
+      effectiveScale: view.cellScale * projectionZoom(snapshot.camera || fallbackSnapshot.camera),
+    },
+    renderCellCount: renderCellCandidates(renderContext).length,
+    cellCount: (snapshot.cells || []).length,
+  };
+}
+
+window.Puzzle3DInspect = puzzle3InspectState;
+
+function viewportFocusVisualScreenAnchor(viewport, focusCell) {
+  const focusObjects = new Set(viewport?.focusObjects || []);
+  const points = [];
+  for (const [objectIndex, object] of (focusCell.objects || []).entries()) {
+    if (!viewportObjectMatches(object, viewport, focusObjects)) {
+      continue;
+    }
+    const sourceKey = `${cellKey(focusCell.position)}:${objectIndex}`;
+    for (const voxel of objectVoxels(focusCell.position || {}, object, sourceKey)) {
+      const { x0, x1, y0, y1, z0, z1 } = voxel.bounds;
+      for (const x of [x0, x1]) {
+        for (const y of [y0, y1]) {
+          for (const z of [z0, z1]) {
+            points.push(projectWithDepth({ x, y, z }));
+          }
+        }
+      }
+    }
+  }
+  if (!points.length) {
+    return null;
+  }
+  const bounds = projectedPointBounds(points);
+  return {
+    x: (bounds.minX + bounds.maxX) / 2,
+    y: (bounds.minY + bounds.maxY) / 2,
+    bounds,
+  };
 }
 
 function projectedStageCellFootprints(size) {
@@ -1581,7 +2106,23 @@ function spriteRenderSettings() {
   };
 }
 
-function gridLines(grid) {
+function pixelateSettings() {
+  const raw = snapshot.settings?.pixelate ?? snapshot.settings?.pixel ?? false;
+  if (!raw) {
+    return { enabled: false, scale: 1, smoothing: true };
+  }
+  if (raw === true) {
+    return { enabled: true, scale: 4, smoothing: true };
+  }
+  const scale = Math.max(1, Math.trunc(Number(raw.scale ?? raw.size ?? 4) || 4));
+  return {
+    enabled: raw.enabled !== false,
+    scale,
+    smoothing: raw.smoothing !== false,
+  };
+}
+
+function gridLines(grid, renderCells) {
   if (!grid.visibility) {
     return [];
   }
@@ -1592,7 +2133,7 @@ function gridLines(grid) {
   if (grid.occupiedCells) {
     const occupiedCells = occupiedCellSet(snapshot.cells || []);
     const edgeLines = new Map();
-    for (const cell of snapshot.cells || []) {
+    for (const cell of renderCells) {
       if (!cell.objects?.length) {
         continue;
       }
@@ -1732,8 +2273,10 @@ function faceGridOrder(corners) {
 function projectGridLine(from, to, kind, grid, gridOrderOverride = null, ownerCell = null) {
   const a = projectWithDepth(from);
   const b = projectWithDepth(to);
+  const key = `${kind}:line:${edgeKey(from, to)}:${ownerCell?.key || ""}`;
   return {
     kind: "line",
+    key,
     from: a,
     to: b,
     gridOrder: gridOrderOverride ?? gridOrder(midpoint3(from, to)),
@@ -1750,6 +2293,33 @@ function comparePrimitiveOrder(a, b) {
   return Puzzle3VisualCore.comparePrimitiveOrder(a, b);
 }
 
+function assignPrimitiveOrder(primitives) {
+  for (const [index, primitive] of primitives.entries()) {
+    if (primitive.primitiveOrder === undefined) {
+      primitive.primitiveOrder = index;
+    }
+  }
+}
+
+function orderScenePrimitives(primitives) {
+  const cacheKey = primitiveSortCacheKey(primitives);
+  if (cacheKey === view.primitiveSortCacheKey && view.primitiveSortCacheOrder.length === primitives.length) {
+    return view.primitiveSortCacheOrder.map((index) => primitives[index]).filter(Boolean);
+  }
+  primitives.sort(comparePrimitiveOrder);
+  view.primitiveSortCacheKey = cacheKey;
+  view.primitiveSortCacheOrder = primitives.map((primitive) => primitive.primitiveOrder);
+  return primitives;
+}
+
+function primitiveSortCacheKey(primitives) {
+  return [
+    cameraOrderKey(),
+    primitives.length,
+    primitives.map((primitive) => primitive.key || primitive.primitiveOrder).join("\n"),
+  ].join("|");
+}
+
 function midpoint3(a, b) {
   return {
     x: (a.x + b.x) / 2,
@@ -1760,6 +2330,10 @@ function midpoint3(a, b) {
 
 function gridOrder(position) {
   return Puzzle3VisualCore.gridOrder(position, puzzle3VisualView());
+}
+
+function cameraOrderKey() {
+  return Puzzle3VisualCore.cameraOrderKey(puzzle3VisualView());
 }
 
 function puzzle3VisualView() {
@@ -1773,20 +2347,27 @@ function gridStroke(kind, grid) {
   return grid.color || "rgba(31, 36, 40, 0.62)";
 }
 
-function sceneFaces() {
+function sceneFaces(renderCells, renderContext = null) {
+  syncRenderGeometryCache(renderContext);
   const faces = [];
-  for (const cell of snapshot.cells) {
-    const { voxels, occupied } = cellVisibleVoxels(cell);
-    faces.push(...mergedVoxelFaces(voxels, occupied, cellRenderOwner(cell.position)));
+  for (const cell of renderCells) {
+    if (!cellHasRenderableVoxels(cell)) {
+      continue;
+    }
+    faces.push(...cellFaceGeometriesForRender(cell, renderContext).map(projectFaceGeometry));
   }
   return faces;
 }
 
-function shadowFaces() {
+function shadowFaces(renderCells) {
   const faces = [];
-  for (const cell of snapshot.cells) {
+  for (const cell of renderCells) {
+    if (!cellHasRenderableVoxels(cell)) {
+      continue;
+    }
     const point = projectWithDepth({ x: cell.position.x, y: cell.position.y, z: -0.48 });
     faces.push({
+      key: `shadow:${cellKey(cell.position)}`,
       points: [
         { x: point.x - 22, y: point.y - 8 },
         { x: point.x + 22, y: point.y - 8 },
@@ -1801,11 +2382,56 @@ function shadowFaces() {
   return faces;
 }
 
+function renderCellCandidates(renderContext = puzzle3RenderContext()) {
+  if (renderContext.renderCells) {
+    return renderContext.renderCells;
+  }
+  const cells = snapshot.cells || [];
+  if (!viewportRenderCullingEnabled(renderContext)) {
+    renderContext.renderCells = cells;
+    return renderContext.renderCells;
+  }
+  renderContext.renderCells = cells.filter((cell) => cellProjectsIntoFrame(cell.position || {}, renderContext.frame));
+  return renderContext.renderCells;
+}
+
+function viewportRenderCullingEnabled(renderContext) {
+  const viewport = renderContext?.viewport || null;
+  if (!viewport || viewport.mode !== "centered") {
+    return false;
+  }
+  return Boolean(renderContext?.focusCell);
+}
+
+function cellProjectsIntoFrame(position, frame) {
+  const x = Number(position.x) || 0;
+  const y = Number(position.y) || 0;
+  const z = Number(position.z) || 0;
+  const points = [];
+  for (const px of [x - 0.5, x + 0.5]) {
+    for (const py of [y - 0.5, y + 0.5]) {
+      for (const pz of [z - 0.5, z + 0.5]) {
+        points.push(projectWithDepth({ x: px, y: py, z: pz }));
+      }
+    }
+  }
+  const bounds = projectedPointBounds(points);
+  return bounds.maxX >= 0
+    && bounds.minX <= frame.width
+    && bounds.maxY >= 0
+    && bounds.minY <= frame.height;
+}
+
+function cellHasRenderableVoxels(cell) {
+  return (cell.objects || []).some((object) => object.sprite && snapshot.sprites?.[object.sprite]);
+}
+
 function cellVisibleVoxels(cell) {
   const stacks = new Map();
   for (const [objectIndex, object] of cell.objects.entries()) {
     const sourceKey = `${cellKey(cell.position)}:${objectIndex}`;
-    for (const voxel of objectVoxels(cell.position, object, sourceKey)) {
+    const objectOrder = objectRenderOrder(object, objectIndex);
+    for (const voxel of objectVoxels(cell.position, object, sourceKey, objectOrder)) {
       const key = voxelGeometryKey(voxel);
       const stack = stacks.get(key) || [];
       stack.push(voxel);
@@ -1813,18 +2439,17 @@ function cellVisibleVoxels(cell) {
     }
   }
   const voxels = [];
-  const occupied = {
-    opaque: new Set(),
-    bySource: new Set(),
-  };
+  const occupied = emptyVoxelOccupancy();
   for (const [key, stack] of stacks) {
-    const voxel = compositeVoxelStack(stack);
-    if (voxel) {
-      voxels.push(voxel);
-      for (const sourceKey of voxel.sourceKeys || []) {
-        occupied.bySource.add(`${sourceKey}|${key}`);
+    const visibleStack = visibleVoxelStack(stack);
+    if (visibleStack.length > 0) {
+      voxels.push(...visibleStack);
+      for (const voxel of visibleStack) {
+        for (const sourceKey of voxel.sourceKeys || []) {
+          occupied.bySource.add(`${sourceKey}|${key}`);
+        }
       }
-      if (isOpaqueFill(voxel.fill)) {
+      if (visibleStack.some((candidate) => candidate.opaque === true || (candidate.opaque === undefined && isOpaqueFill(candidate.fill)))) {
         occupied.opaque.add(key);
       }
     } else {
@@ -1834,44 +2459,337 @@ function cellVisibleVoxels(cell) {
   return { voxels, occupied };
 }
 
-function compositeVoxelStack(stack) {
-  let color = { r: 0, g: 0, b: 0, a: 0 };
-  let geometry = null;
-  const sourceKeys = new Set();
-  for (const voxel of stack) {
-    const source = parseColor(voxel.fill);
+function emptyVoxelOccupancy() {
+  return {
+    opaque: new Set(),
+    bySource: new Set(),
+  };
+}
+
+function expandDirtyCellKeys(keys) {
+  const expanded = new Set();
+  for (const key of keys) {
+    const position = positionFromCellKey(key);
+    if (!position) {
+      continue;
+    }
+    expanded.add(key);
+    for (const offset of faceNeighborOffsets()) {
+      expanded.add(cellKey({
+        x: position.x + offset.x,
+        y: position.y + offset.y,
+        z: position.z + offset.z,
+      }));
+    }
+  }
+  return expanded;
+}
+
+function positionFromCellKey(key) {
+  const parts = String(key).split(",").map((part) => Number(part));
+  if (parts.length !== 3 || parts.some((part) => !Number.isFinite(part))) {
+    return null;
+  }
+  return { x: parts[0], y: parts[1], z: parts[2] };
+}
+
+function faceNeighborOffsets() {
+  return [
+    { x: -1, y: 0, z: 0 },
+    { x: 1, y: 0, z: 0 },
+    { x: 0, y: -1, z: 0 },
+    { x: 0, y: 1, z: 0 },
+    { x: 0, y: 0, z: -1 },
+    { x: 0, y: 0, z: 1 },
+  ];
+}
+
+function renderOpaqueOcclusion(renderContext) {
+  syncRenderGeometryCache(renderContext);
+  const occupied = renderGeometryCache.occupied;
+  if (renderContext) {
+    renderContext.opaqueOcclusion = occupied;
+  }
+  return occupied;
+}
+
+function syncRenderGeometryCache(renderContext = null) {
+  const cells = snapshot.cells || [];
+  const settingsKey = renderGeometrySettingsKey();
+  const sourcesUnchanged = renderGeometryCache.cellsSource === cells
+    && renderGeometryCache.spritesSource === snapshot.sprites
+    && renderGeometryCache.settingsKey === settingsKey
+    && !renderGeometryCache.allDirty;
+  if (sourcesUnchanged) {
+    if (renderContext) {
+      renderContext.opaqueOcclusion = renderGeometryCache.occupied;
+    }
+    return;
+  }
+
+  const previousSignatures = renderGeometryCache.cellSignatures;
+  const nextSignatures = new Map();
+  const cellsByKey = new Map();
+  const dirtyCellKeys = new Set();
+  const fullRebuild = renderGeometryCache.allDirty
+    || renderGeometryCache.spritesSource !== snapshot.sprites
+    || renderGeometryCache.settingsKey !== settingsKey;
+
+  for (const cell of cells) {
+    const key = cellKey(cell.position);
+    const signature = renderCellSignature(cell);
+    cellsByKey.set(key, cell);
+    nextSignatures.set(key, signature);
+    if (fullRebuild || previousSignatures.get(key) !== signature) {
+      dirtyCellKeys.add(key);
+    }
+  }
+  for (const key of previousSignatures.keys()) {
+    if (!nextSignatures.has(key)) {
+      dirtyCellKeys.add(key);
+      renderGeometryCache.cells.delete(key);
+    }
+  }
+
+  const rebuildCellKeys = fullRebuild ? new Set(cellsByKey.keys()) : expandDirtyCellKeys(dirtyCellKeys);
+  for (const key of dirtyCellKeys) {
+    const cell = cellsByKey.get(key);
+    if (cell) {
+      rebuildVisibleCellGeometry(key, cell, nextSignatures.get(key));
+    }
+  }
+  if (fullRebuild) {
+    for (const [key, cell] of cellsByKey) {
+      if (!dirtyCellKeys.has(key)) {
+        rebuildVisibleCellGeometry(key, cell, nextSignatures.get(key));
+      }
+    }
+  }
+
+  renderGeometryCache.occupied = renderCachedOpaqueOcclusion();
+  for (const key of rebuildCellKeys) {
+    const cell = cellsByKey.get(key);
+    if (cell) {
+      rebuildCachedCellFaces(key, cell);
+    }
+  }
+
+  renderGeometryCache.cellsSource = cells;
+  renderGeometryCache.spritesSource = snapshot.sprites;
+  renderGeometryCache.settingsKey = settingsKey;
+  renderGeometryCache.cellSignatures = nextSignatures;
+  renderGeometryCache.allDirty = false;
+  renderGeometryCache.revision += 1;
+  if (renderContext) {
+    renderContext.opaqueOcclusion = renderGeometryCache.occupied;
+  }
+}
+
+function renderGeometrySettingsKey() {
+  return JSON.stringify(spriteRenderSettings());
+}
+
+function renderCellSignature(cell) {
+  const position = cell?.position || {};
+  const objects = (cell?.objects || []).map((object) => [
+    object?.id ?? "",
+    object?.sprite ?? "",
+    objectRenderOrder(object),
+  ].join(":"));
+  return `${cellKey(position)}|${objects.join(";")}`;
+}
+
+function rebuildVisibleCellGeometry(key, cell, signature) {
+  const visible = cellHasRenderableVoxels(cell)
+    ? cellVisibleVoxels(cell)
+    : { voxels: [], occupied: emptyVoxelOccupancy() };
+  const entry = renderGeometryCache.cells.get(key) || {};
+  entry.key = key;
+  entry.cell = cell;
+  entry.signature = signature;
+  entry.visible = visible;
+  entry.faceGeometries = entry.faceGeometries || [];
+  renderGeometryCache.cells.set(key, entry);
+}
+
+function rebuildCachedCellFaces(key, cell) {
+  const entry = renderGeometryCache.cells.get(key);
+  if (!entry) {
+    return;
+  }
+  entry.cell = cell;
+  entry.faceGeometries = cellHasRenderableVoxels(cell)
+    ? mergedVoxelFaces(entry.visible.voxels, renderGeometryCache.occupied, cellRenderOwnerGeometry(cell.position))
+    : [];
+}
+
+function renderCachedOpaqueOcclusion() {
+  const occupied = emptyVoxelOccupancy();
+  for (const entry of renderGeometryCache.cells.values()) {
+    if (!entry.visible) {
+      continue;
+    }
+    for (const key of entry.visible.occupied.opaque) {
+      occupied.opaque.add(key);
+    }
+    for (const key of entry.visible.occupied.bySource) {
+      occupied.bySource.add(key);
+    }
+  }
+  return occupied;
+}
+
+function cellFaceGeometriesForRender(cell, renderContext = null) {
+  syncRenderGeometryCache(renderContext);
+  return renderGeometryCache.cells.get(cellKey(cell.position))?.faceGeometries || [];
+}
+
+function cellVisibleVoxelsForRender(cell, renderContext = null) {
+  if (!renderContext) {
+    return cellVisibleVoxels(cell);
+  }
+  if (!renderContext.visibleVoxelCells) {
+    renderContext.visibleVoxelCells = new Map();
+  }
+  let cached = renderContext.visibleVoxelCells.get(cell);
+  if (!cached) {
+    cached = cellVisibleVoxels(cell);
+    renderContext.visibleVoxelCells.set(cell, cached);
+  }
+  return cached;
+}
+
+function visibleVoxelStack(stack) {
+  const visible = [];
+  const ordered = [...stack].sort((left, right) => objectVoxelOrder(left) - objectVoxelOrder(right));
+  for (const voxel of ordered) {
+    const source = voxel.color || parseColor(voxel.fill);
     if (!source || source.a <= 0) {
       continue;
     }
-    color = compositeColor(source, color);
-    geometry = voxel;
-    if (voxel.sourceKey) {
-      sourceKeys.add(voxel.sourceKey);
+    const renderVoxel = {
+      ...voxel,
+      color: source,
+      opaque: source.a >= 0.999,
+      fill: formatColor(source),
+      sourceKeys: voxel.sourceKey ? [voxel.sourceKey] : [],
+    };
+    if (renderVoxel.opaque) {
+      visible.length = 0;
     }
+    visible.push(renderVoxel);
   }
-  if (!geometry || color.a <= 0.001) {
+  return visible;
+}
+
+function objectRenderOrder(object, fallbackIndex = 0) {
+  const layer = Number(object?.layer);
+  if (Number.isFinite(layer)) {
+    return layer;
+  }
+  return Number(fallbackIndex) || 0;
+}
+
+function objectVoxelOrder(voxel) {
+  const order = Number(voxel?.objectOrder);
+  return Number.isFinite(order) ? order : 0;
+}
+
+function objectVoxels(position, object, sourceKey, objectOrder = 0) {
+  if (!object.sprite) {
+    return [];
+  }
+  const template = spriteVoxelTemplate(object.sprite);
+  if (!template) {
+    return [];
+  }
+  return instantiateSpriteVoxelTemplate(position, template, sourceKey, objectOrder);
+}
+
+function spriteVoxelTemplate(spriteName) {
+  const sprite = snapshot.sprites?.[spriteName];
+  if (!sprite) {
     return null;
   }
-  return { ...geometry, fill: formatColor(color), sourceKeys: [...sourceKeys] };
-}
-
-function objectVoxels(position, object, sourceKey) {
-  const sprite = snapshot.sprites?.[object.sprite];
-  if (!sprite) {
-    return [{
-      fill: cssVar("--top") || "#ffde8a",
-      scale: 1,
-      grid: { x: 0, y: 0, z: 0 },
-      position: { ...position },
-      bounds: voxelBounds(position, 1),
-      sourceKey,
-    }];
+  const cached = spriteVoxelTemplateCache.get(sprite);
+  if (cached) {
+    return cached;
   }
-  const blocks = bitmapBlocks(sprite.bitmap || []);
-  return spriteVoxels(position, blocks, sprite.palette || {}, sourceKey).voxels;
+  const template = buildSpriteVoxelTemplate(sprite);
+  spriteVoxelTemplateCache.set(sprite, template);
+  return template;
 }
 
-function spriteVoxels(position, blocks, palette, sourceKey = null) {
+function buildSpriteVoxelTemplate(sprite) {
+  const blocks = bitmapBlocks(sprite.bitmap || []);
+  const height = Math.max(1, blocks.length);
+  const depth = Math.max(1, ...blocks.map((rows) => rows.length));
+  const width = Math.max(1, ...blocks.flatMap((rows) => rows.map((row) => row.length)));
+  const scale = 1 / Math.max(width, depth, height);
+  const voxels = [];
+  const palette = sprite.palette || {};
+
+  for (let z = 0; z < blocks.length; z += 1) {
+    const rows = blocks[z];
+    for (let row = 0; row < rows.length; row += 1) {
+      for (let col = 0; col < rows[row].length; col += 1) {
+        const key = rows[row][col];
+        const fill = palette[key];
+        const color = parseColor(fill);
+        if (!fill || color?.a <= 0) {
+          continue;
+        }
+        const grid = standardSpriteGridPosition({ width, depth, height }, col, row, z);
+        const localPosition = {
+          x: (grid.x + 0.5) * scale - 0.5,
+          y: (grid.y + 0.5) * scale - 0.5,
+          z: (grid.z + 0.5) * scale - 0.5,
+        };
+        voxels.push({
+          fill,
+          color,
+          opaque: !color || color.a >= 0.999,
+          scale,
+          grid,
+          localPosition,
+          localBounds: voxelBounds(localPosition, scale),
+        });
+      }
+    }
+  }
+
+  return { voxels };
+}
+
+function instantiateSpriteVoxelTemplate(position, template, sourceKey = null, objectOrder = 0) {
+  const x = Number(position?.x) || 0;
+  const y = Number(position?.y) || 0;
+  const z = Number(position?.z) || 0;
+  return template.voxels.map((voxel) => ({
+    fill: voxel.fill,
+    color: voxel.color,
+    opaque: voxel.opaque,
+    scale: voxel.scale,
+    grid: voxel.grid,
+    position: {
+      x: x + voxel.localPosition.x,
+      y: y + voxel.localPosition.y,
+      z: z + voxel.localPosition.z,
+    },
+    bounds: {
+      x0: x + voxel.localBounds.x0,
+      x1: x + voxel.localBounds.x1,
+      y0: y + voxel.localBounds.y0,
+      y1: y + voxel.localBounds.y1,
+      z0: z + voxel.localBounds.z0,
+      z1: z + voxel.localBounds.z1,
+    },
+    sourceKey,
+    objectOrder,
+  }));
+}
+
+function spriteVoxels(position, blocks, palette, sourceKey = null, objectOrder = 0) {
   const height = Math.max(1, blocks.length);
   const depth = Math.max(1, ...blocks.map((rows) => rows.length));
   const width = Math.max(1, ...blocks.flatMap((rows) => rows.map((row) => row.length)));
@@ -1898,11 +2816,14 @@ function spriteVoxels(position, blocks, palette, sourceKey = null) {
         };
         voxels.push({
           fill,
+          color,
+          opaque: !color || color.a >= 0.999,
           scale,
           grid,
           position: voxelPosition,
           bounds: voxelBounds(voxelPosition, scale),
           sourceKey,
+          objectOrder,
         });
       }
     }
@@ -1921,6 +2842,7 @@ function mergedVoxelFaces(voxels, occupied, ownerCell) {
       const info = voxelFaceGroupInfo(voxel, face.side);
       const groupKey = [
         ownerCell?.key || "",
+        quantizeGeometryValue(voxel.objectOrder),
         face.side,
         quantizeGeometryValue(info.origin.x),
         quantizeGeometryValue(info.origin.y),
@@ -1934,7 +2856,9 @@ function mergedVoxelFaces(voxels, occupied, ownerCell) {
         u: info.u,
         v: info.v,
         group: {
+          key: groupKey,
           ownerCell,
+          objectOrder: voxel.objectOrder,
           side: face.side,
           origin: info.origin,
           scale: voxel.scale,
@@ -1943,13 +2867,13 @@ function mergedVoxelFaces(voxels, occupied, ownerCell) {
         },
       };
     },
-    face: (group, rect) => projectFace(mergedVoxelFaceCorners(group, rect), group.fill, group.ownerCell),
+    face: (group, rect) => faceGeometry(mergedVoxelFaceCorners(group, rect), group.fill, group.ownerCell, group.objectOrder, `${group.key}:${rect.u0},${rect.u1},${rect.v0},${rect.v1}`),
   });
 }
 
 function isVoxelFaceOccluded(voxel, offset, occupied) {
   const adjacentKey = adjacentVoxelGeometryKey(voxel, offset);
-  if (occupied.opaque.has(adjacentKey)) {
+  if (voxel.opaque !== false && occupied.opaque.has(adjacentKey)) {
     return true;
   }
   for (const sourceKey of voxel.sourceKeys || []) {
@@ -2114,17 +3038,37 @@ function axisValue(origin, axis, index, scale) {
   return origin[axis] + index * scale;
 }
 
-function projectFace(corners, fill, ownerCell = null) {
-  const projected = corners.map(projectWithDepth);
+function faceGeometry(corners, fill, ownerCell = null, objectOrder = 0, key = "") {
   return {
-    kind: "face",
-    points: projected.map(({ x, y }) => ({ x, y })),
-    depth: projected.reduce((total, point) => total + point.depth, 0) / projected.length,
-    gridOrder: faceGridOrder(corners),
-    ownerCell,
-    renderPriority: 0,
+    kind: "faceGeometry",
+    key,
+    corners,
     fill,
+    ownerCell,
+    objectOrder,
   };
+}
+
+function projectFace(corners, fill, ownerCell = null, objectOrder = 0, key = "") {
+  return projectFaceGeometry(faceGeometry(corners, fill, ownerCell, objectOrder, key));
+}
+
+function projectFaceGeometry(geometry) {
+  const corners = geometry.corners || [];
+  const projected = corners.map(projectWithDepth);
+  const primitive = geometry.primitive || {
+    kind: "face",
+    key: geometry.key,
+    renderPriority: 0,
+  };
+  primitive.points = projected.map(({ x, y }) => ({ x, y }));
+  primitive.depth = projected.reduce((total, point) => total + point.depth, 0) / projected.length;
+  primitive.gridOrder = faceGridOrder(corners);
+  primitive.ownerCell = projectCellRenderOwner(geometry.ownerCell);
+  primitive.objectOrder = geometry.objectOrder;
+  primitive.fill = geometry.fill;
+  geometry.primitive = primitive;
+  return primitive;
 }
 
 function voxelBounds(position, scale) {
@@ -2176,6 +3120,31 @@ function cellRenderOwner(position) {
     key: cellKey(position),
     order: gridOrder(position),
     depth: projectWithDepth(position).depth,
+  };
+}
+
+function cellRenderOwnerGeometry(position) {
+  return {
+    key: cellKey(position),
+    position: {
+      x: Number(position?.x) || 0,
+      y: Number(position?.y) || 0,
+      z: Number(position?.z) || 0,
+    },
+  };
+}
+
+function projectCellRenderOwner(ownerCell) {
+  if (!ownerCell) {
+    return null;
+  }
+  if (!ownerCell.position) {
+    return ownerCell;
+  }
+  return {
+    key: ownerCell.key,
+    order: gridOrder(ownerCell.position),
+    depth: projectWithDepth(ownerCell.position).depth,
   };
 }
 
@@ -2250,19 +3219,6 @@ function isOpaqueFill(fill) {
   return !color || color.a >= 0.999;
 }
 
-function compositeColor(source, destination) {
-  const alpha = source.a + destination.a * (1 - source.a);
-  if (alpha <= 0) {
-    return { r: 0, g: 0, b: 0, a: 0 };
-  }
-  return {
-    r: (source.r * source.a + destination.r * destination.a * (1 - source.a)) / alpha,
-    g: (source.g * source.a + destination.g * destination.a * (1 - source.a)) / alpha,
-    b: (source.b * source.a + destination.b * destination.a * (1 - source.a)) / alpha,
-    a: alpha,
-  };
-}
-
 function formatColor(color) {
   const r = clampColorChannel(color.r);
   const g = clampColorChannel(color.g);
@@ -2286,6 +3242,9 @@ function lightenChannel(value, light) {
 }
 
 function polygonPoints(points, fill) {
+  if (!points?.length) {
+    return;
+  }
   ctx.fillStyle = fill;
   const expanded = expandPolygon(points, 0.35);
   ctx.beginPath();
@@ -2308,6 +3267,33 @@ function lineSegment(from, to, stroke, width, alpha = 1) {
   ctx.moveTo(from.x, from.y);
   ctx.lineTo(to.x, to.y);
   ctx.stroke();
+  ctx.restore();
+}
+
+function applyPixelatePostprocess() {
+  const settings = pixelateSettings();
+  if (!settings.enabled || settings.scale <= 1) {
+    return;
+  }
+  const width = canvas.width;
+  const height = canvas.height;
+  if (width <= 1 || height <= 1) {
+    return;
+  }
+  const targetWidth = Math.max(1, Math.ceil(width / settings.scale));
+  const targetHeight = Math.max(1, Math.ceil(height / settings.scale));
+  pixelateBuffer.width = targetWidth;
+  pixelateBuffer.height = targetHeight;
+  const bufferCtx = pixelateBuffer.getContext("2d");
+  bufferCtx.imageSmoothingEnabled = settings.smoothing;
+  bufferCtx.clearRect(0, 0, targetWidth, targetHeight);
+  bufferCtx.drawImage(canvas, 0, 0, width, height, 0, 0, targetWidth, targetHeight);
+
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.imageSmoothingEnabled = false;
+  ctx.clearRect(0, 0, width, height);
+  ctx.drawImage(pixelateBuffer, 0, 0, targetWidth, targetHeight, 0, 0, width, height);
   ctx.restore();
 }
 
@@ -2388,10 +3374,12 @@ canvas.addEventListener("wheel", (event) => {
   draw();
 }, { passive: false });
 
-window.addEventListener("resize", schedulePuzzle3Resize);
+window.addEventListener("resize", () => schedulePuzzle3Resize(true));
 
 if (window.ResizeObserver) {
-  const resizeObserver = new ResizeObserver(schedulePuzzle3Resize);
+  const resizeObserver = new ResizeObserver((entries) => {
+    schedulePuzzle3Resize(entries.some((entry) => entry.target === screenView));
+  });
   resizeObserver.observe(screenView);
   resizeObserver.observe(puzzle3Frame);
   resizeObserver.observe(canvas);
@@ -2425,11 +3413,11 @@ function handleStandaloneKeydown(event) {
     }
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
-      applyStartLevels(levelMenu.action, levelMenuCursor);
+      applyLevelMenuSelection(levelMenu, levelMenuCursor);
       return;
     }
   } else if (!puzzle3ComponentFor(currentScene())) {
-    const buttons = sceneButtonComponents();
+    const buttons = sceneButtonInstances();
     if (buttons.length > 0 && (event.key === "ArrowUp" || event.key === "ArrowLeft")) {
       event.preventDefault();
       sceneButtonCursor = Math.max(0, sceneButtonCursor - 1);
@@ -2463,9 +3451,45 @@ function handleStandaloneKeydown(event) {
   }
 }
 
+function handleComponentEmbedKeydown(event) {
+  if (!puzzle3ComponentFor(currentScene())) {
+    return;
+  }
+  if (event.code === "KeyZ") {
+    event.preventDefault();
+    puzzle3Component.applyInput("undo");
+    return;
+  }
+  if (event.code === "KeyR") {
+    event.preventDefault();
+    puzzle3Component.applyInput("restart");
+    return;
+  }
+  const input = inputForRawInput({ key: event.key, code: event.code }, puzzle3ComponentFor(currentScene()));
+  if (!input) {
+    return;
+  }
+  event.preventDefault();
+  startHeldSceneInput(rawInputHoldId({ key: event.key, code: event.code }), input);
+}
+
+function handleStandaloneKeyup(event) {
+  stopSceneRawInput({ key: event.key, code: event.code });
+}
+
+function handleComponentEmbedKeyup(event) {
+  stopSceneRawInput({ key: event.key, code: event.code });
+}
+
 if (!effectiveComponentEmbedMode()) {
   window.addEventListener("keydown", handleStandaloneKeydown);
+  window.addEventListener("keyup", handleStandaloneKeyup);
+} else {
+  window.addEventListener("keydown", handleComponentEmbedKeydown);
+  window.addEventListener("keyup", handleComponentEmbedKeyup);
 }
+
+window.addEventListener("blur", stopAllHeldSceneInputs);
 
 window.addEventListener("message", (event) => {
   if (event.data?.type === "PuzzleStudioUpdatePuzzle3Preview") {
@@ -2514,10 +3538,15 @@ window.addEventListener("message", (event) => {
     if (!puzzle3ComponentFor(currentScene())) {
       return;
     }
-    applySceneRawInput({
+    const raw = {
       key: String(event.data.key || ""),
       code: String(event.data.code || ""),
-    });
+    };
+    if (event.data.action === "up") {
+      stopSceneRawInput(raw);
+    } else {
+      enqueueSceneRawInput(raw);
+    }
     return;
   }
 
@@ -2604,9 +3633,19 @@ function defaultPuzzle3Inputs() {
   return {
     left: ["KeyA", "ArrowLeft"],
     right: ["KeyD", "ArrowRight"],
-    forward: ["KeyW", "ArrowUp"],
-    backward: ["KeyS", "ArrowDown"],
+    front: ["KeyW", "ArrowUp"],
+    back: ["KeyS", "ArrowDown"],
   };
+}
+
+function canonicalPuzzle3InputName(inputName) {
+  if (inputName === "forward") {
+    return "front";
+  }
+  if (inputName === "backward") {
+    return "back";
+  }
+  return inputName;
 }
 
 function sceneControlForEvent(event) {
@@ -2652,6 +3691,74 @@ function applySceneInput(input) {
     changed = puzzle3Component.applyInput(componentInput) || changed;
   }
   return changed;
+}
+
+function enqueueSceneInput(input) {
+  if (!input) {
+    return false;
+  }
+  queuedSceneInputs.push(input);
+  if (queuedSceneInputs.length > 4) {
+    queuedSceneInputs = queuedSceneInputs.slice(-4);
+  }
+  scheduleQueuedSceneInput();
+  return true;
+}
+
+function startHeldSceneInput(holdId, input) {
+  if (!holdId || !input) {
+    return false;
+  }
+  heldSceneInputs.set(holdId, input);
+  return enqueueSceneInput(input);
+}
+
+function stopHeldSceneInput(holdId) {
+  if (!heldSceneInputs.has(holdId)) {
+    return false;
+  }
+  heldSceneInputs.delete(holdId);
+  return true;
+}
+
+function stopAllHeldSceneInputs() {
+  for (const holdId of [...heldSceneInputs.keys()]) {
+    stopHeldSceneInput(holdId);
+  }
+}
+
+function enqueueSceneRawInput(raw) {
+  const input = inputForRawInput(raw, puzzle3ComponentFor(currentScene()));
+  if (!input) {
+    return false;
+  }
+  return startHeldSceneInput(rawInputHoldId(raw), input);
+}
+
+function stopSceneRawInput(raw) {
+  return stopHeldSceneInput(rawInputHoldId(raw));
+}
+
+function rawInputHoldId(raw) {
+  const code = String(raw?.code || "");
+  const key = String(raw?.key || "");
+  return code || key;
+}
+
+function scheduleQueuedSceneInput() {
+  if (queuedSceneInputFrame) {
+    return;
+  }
+  queuedSceneInputFrame = requestAnimationFrame(() => {
+    queuedSceneInputFrame = 0;
+    const input = queuedSceneInputs.shift();
+    if (input) {
+      applySceneInput(input);
+    }
+    if (queuedSceneInputs.length > 0) {
+      scheduleQueuedSceneInput();
+    }
+  });
 }
 
 function applySceneRawInput(raw) {
@@ -2992,10 +4099,3 @@ function sizeFromSlices(slices) {
 function clampIndex(index, length) {
   return Math.max(0, Math.min(Math.max(0, length - 1), index));
 }
-  if (component.kind === "for") {
-    const children = expandedForChildren(component, scope).map(({ child, scope: childScope }) => measureSceneNode(child, childScope));
-    return {
-      width: Math.max(1, children.reduce((width, child) => Math.max(width, child.width), 0)),
-      height: Math.max(1, children.reduce((total, child) => total + child.height, 0) + sceneGap(component) * Math.max(0, children.length - 1)),
-    };
-  }

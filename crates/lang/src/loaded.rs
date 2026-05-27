@@ -7,9 +7,10 @@ use puzzle_core::{
 pub use puzzle_scene::{
     LevelMenuLocked, SceneAlign as SceneAlignDef, SceneAlignX as SceneAlignXDef,
     SceneAlignY as SceneAlignYDef, SceneButton as SharedSceneButton,
-    SceneComponent as SharedSceneComponent, SceneContainer as SharedSceneContainer,
-    SceneFor as SharedSceneFor, SceneForSource as ForSource, SceneLayout as SceneLayoutDef,
-    SceneSize as SceneSizeDef, SceneTextComponent as SharedSceneTextComponent,
+    SceneComponent as SharedSceneComponent, SceneConditional as SharedSceneConditional,
+    SceneContainer as SharedSceneContainer, SceneFor as SharedSceneFor,
+    SceneForSource as ForSource, SceneLayout as SceneLayoutDef, SceneSize as SceneSizeDef,
+    SceneTextComponent as SharedSceneTextComponent,
 };
 use puzzle3d_model::ParsedPuzzle3;
 
@@ -20,6 +21,8 @@ pub struct LoadedDocument {
     pub author: Option<String>,
     pub homepage: Option<String>,
     pub default_wait_ms: u64,
+    pub default_again_ms: u64,
+    pub animation: AnimationDef,
     pub sounds: SoundsDef,
     pub theme: ThemeDef,
     pub assets: AssetsDef,
@@ -51,10 +54,14 @@ pub struct LoadedGame {
     pub game: CompiledGame,
     pub warnings: Vec<String>,
     pub default_wait_ms: u64,
+    pub default_again_ms: u64,
+    pub animation: AnimationDef,
     pub rule_emissions: HashMap<RuleId, Vec<RuleEmission>>,
+    pub rule_effects: HashMap<RuleId, Vec<RuleEffect>>,
     pub level_start_program: Option<Vec<RuleStep>>,
     pub display_level_start_program: Option<Vec<RuleStep>>,
     pub level_clear_program: Option<Vec<RuleStep>>,
+    pub last_level_clear_program: Option<Vec<RuleStep>>,
     pub display_level_clear_program: Option<Vec<RuleStep>>,
     pub display_program: Option<Vec<RuleStep>>,
     pub levels: Vec<Level>,
@@ -77,11 +84,71 @@ pub struct LoadedGame {
     pub theme: ThemeDef,
     pub assets: AssetsDef,
     pub visuals: VisualsDef,
+    pub render: PuzzleRenderDef,
     pub screen: PuzzleScreenDef,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RuleEmission {
+    PlaySfx {
+        name: String,
+    },
+    Animate {
+        trigger: RuleAnimationTrigger,
+        name: String,
+        objects: Vec<ObjectId>,
+    },
+    Wait {
+        milliseconds: u64,
+    },
+    Message {
+        text: String,
+        literal: bool,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RuleAnimationTrigger {
+    Move,
+    CantMove,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AnimationDef {
+    pub tween: TweenAnimationDef,
+}
+
+impl Default for AnimationDef {
+    fn default() -> Self {
+        Self {
+            tween: TweenAnimationDef::default(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TweenAnimationDef {
+    pub enabled: bool,
+    pub interval_ms: u64,
+}
+
+impl Default for TweenAnimationDef {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            interval_ms: 250,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RuleEffect {
+    Win,
+    Restart,
+    NextLevel,
+    Again,
+    Checkpoint,
+    ClearCheckpoint,
     PlaySfx { name: String },
     Wait { milliseconds: u64 },
     Message { text: String, literal: bool },
@@ -181,6 +248,17 @@ pub enum VisualSpriteKind {
 pub struct VisualColorDef {
     pub token: char,
     pub color: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PuzzleRenderDef {
+    pub grid: PuzzleGridRenderDef,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PuzzleGridRenderDef {
+    pub occupied_cells: bool,
+    pub all_cells: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -327,6 +405,7 @@ pub enum SceneValue {
     Int(i64),
     Text(String),
     Symbol(String),
+    LevelRef(usize),
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -354,6 +433,8 @@ pub enum SceneTextContent {
 }
 
 pub type SceneButtonDef = SharedSceneButton<SceneEffect, SceneExpr>;
+
+pub type SceneConditionalDef = SharedSceneConditional<SceneEffect, SceneExpr, SceneTextContent>;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SceneEffect {
@@ -414,14 +495,6 @@ pub enum SceneEffect {
     Focus {
         scene: String,
     },
-    StartLevel {
-        scene: String,
-        scope: Option<String>,
-    },
-    ContinueLevel {
-        scene: String,
-        scope: Option<String>,
-    },
     PuzzleNextLevel {
         target: String,
     },
@@ -448,7 +521,17 @@ pub enum SceneEffect {
         source: String,
         target: String,
     },
-    ClearHistory,
+    ClearUndoHistory,
+    ClearGameProgress,
+    SetCurrentLevel {
+        level: SceneExpr,
+    },
+    ClearCurrentLevel,
+    SetLevelCleared {
+        level: Option<SceneExpr>,
+        cleared: bool,
+    },
+    ResetPersistentVars,
     Sequence(Vec<SceneEffect>),
 }
 

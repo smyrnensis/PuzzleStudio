@@ -18,10 +18,17 @@ At the moment, the repository provides:
 
 ## Quick Start
 
-Install or refresh the local CLI:
+Install or refresh the local CLI for source validation:
 
 ```bash
 cargo install --path crates/cli
+```
+
+Install the full CLI façade, including adapter commands such as terminal play,
+HTML preview, and editor export:
+
+```bash
+cargo install --path crates/cli --features adapters
 ```
 
 Run the main validation command:
@@ -42,6 +49,15 @@ Export a standalone HTML build:
 puzzlestudio export-html games/spec_2d.puzzle -o /tmp/spec_2d.html
 ```
 
+Capture a browser-rendered PNG screenshot:
+
+```bash
+puzzlestudio screenshot games/spec_3d.puzzle -o /tmp/spec_3d.png
+```
+
+Screenshot capture uses Chrome/Chromium headless. If it is not auto-detected,
+pass `--browser <path>` or set `PUZZLESTUDIO_CHROME`.
+
 Serve the browser player locally:
 
 ```bash
@@ -49,6 +65,11 @@ puzzlestudio preview games/spec_2d.puzzle
 ```
 
 The server prints a `http://127.0.0.1:<port>` URL after it starts.
+
+During repository development, prefer `cargo run -p ... -- ...` when checking
+changes you just made. The installed `puzzlestudio` command and
+`target/debug/puzzlestudio` are build artifacts; static CSS, JS, and WASM are
+embedded at Rust build time and can be stale after asset edits.
 
 ## Player Controls
 
@@ -121,16 +142,38 @@ The `puzzlestudio-cli` package installs a `puzzlestudio` binary with:
 
 ```bash
 puzzlestudio check <path> [--json]
+puzzlestudio import-puzzlescript <source.txt> -o <game.puzzle>
+```
+
+Adapter façade commands are included when the CLI is built with
+`--features adapters`:
+
+```bash
 puzzlestudio play [path]
 puzzlestudio preview [path] [--port 7878]
 puzzlestudio editor [path] [--port 8787]
 puzzlestudio export-html <path> -o <output.html>
 puzzlestudio export-editor [path] -o <editor.html>
-puzzlestudio import-puzzlescript <source.txt> -o <game.puzzle>
+puzzlestudio screenshot <path> -o <output.png> [--scene name] [--width 1280] [--height 720]
 ```
 
 `<path>` can be a game folder or a `.puzzle` file. Folder paths resolve to the
 best game entry in that folder.
+
+The CLI is the stable product / automation façade: command names, exit codes,
+diagnostics, JSON output, and explicit output policy belong there. It is not the
+only development entry point. The default source build keeps `check` independent
+from adapter crates so parser validation is not blocked by terminal or browser
+adapter build errors. For adapter-owned work, use the owner-local
+commands directly:
+
+```bash
+cargo run -p html-play -- games/spec_2d.puzzle --serve
+cargo run -p html-play -- games/spec_2d.puzzle -o /tmp/spec_2d.html
+cargo run -p html-play -- games/spec_3d.puzzle --screenshot /tmp/spec_3d.png
+cargo run -p html-editor -- games/spec_2d.puzzle --serve
+cargo run -p ascii-play -- games/spec_2d.puzzle
+```
 
 ## Game Entries And Imports
 

@@ -39,7 +39,7 @@
             <button id="spriteModeButton" type="button">Sprite</button>
             <button id="soundsTopbarButton" type="button">Sound</button>
             <button id="psImportTopbarButton" type="button">PS Import</button>
-            <button id="docsTopbarButton" type="button">Docs</button>
+            <button id="docsTopbarButton" type="button">Documents</button>
           </div>
         </div>
         <div class="toolbar" aria-label="Editor utilities">
@@ -114,7 +114,8 @@
               </button>
               <div id="fileActionsMenu" class="file-actions-menu" role="menu" hidden>
                 <button id="newFolderButton" type="button" role="menuitem">New folder</button>
-                <button id="openProjectMenuButton" type="button" role="menuitem" data-open-project hidden>Open folder</button>
+                <button id="openFileMenuButton" type="button" role="menuitem" data-open-workspace="file" hidden>Open file</button>
+                <button id="openProjectMenuButton" type="button" role="menuitem" data-open-workspace="folder" hidden>Open folder</button>
                 <button id="importButton" type="button" role="menuitem">Import files</button>
                 <button id="importFolderButton" type="button" role="menuitem">Import folder</button>
               </div>
@@ -273,72 +274,7 @@
             <span id="psImportStatus" class="ps-import-status tool-feedback-bar" aria-live="polite"></span>
           </div>
           <div id="docsPanel" class="docs-panel" hidden>
-            <div class="docs-toolbar">
-              <label class="docs-search">
-                <span>Search</span>
-                <input id="docsSearchInput" type="search" placeholder="Find syntax, rules, scenes" autocomplete="off">
-              </label>
-              <div class="docs-filter-tabs" role="group" aria-label="Documentation sections">
-                <button class="is-active" type="button">Guide</button>
-                <button type="button">Syntax</button>
-                <button type="button">Workflow</button>
-              </div>
-            </div>
-            <div class="docs-layout">
-              <nav class="docs-nav" aria-label="Documentation outline">
-                <button class="docs-nav-item is-active" type="button">
-                  <span class="docs-nav-kicker">Start</span>
-                  <span>Getting Started</span>
-                </button>
-                <button class="docs-nav-item" type="button">
-                  <span class="docs-nav-kicker">Core</span>
-                  <span>Rules and Patterns</span>
-                </button>
-                <button class="docs-nav-item" type="button">
-                  <span class="docs-nav-kicker">Model</span>
-                  <span>Layers and Levels</span>
-                </button>
-                <button class="docs-nav-item" type="button">
-                  <span class="docs-nav-kicker">Flow</span>
-                  <span>Scenes and Menus</span>
-                </button>
-              </nav>
-              <article class="docs-article">
-                <header class="docs-hero">
-                  <p class="docs-eyebrow">PuzzleStudio Docs</p>
-                  <h2>Authoring Reference</h2>
-                  <p>Compact notes for writing, previewing, and shipping `.puzzle` games from inside the editor.</p>
-                </header>
-                <section class="docs-section-grid" aria-label="Documentation overview">
-                  <a class="docs-card is-primary" href="#docs-tutorial">
-                    <span class="docs-card-label">Tutorial</span>
-                    <strong>Build a small Sokoban</strong>
-                    <span>Objects, layers, rules, levels, and win checks in one path.</span>
-                  </a>
-                  <a class="docs-card" href="#docs-rules">
-                    <span class="docs-card-label">Rules</span>
-                    <strong>Pattern rewrites</strong>
-                    <span>Read cells, match directions, and apply state changes.</span>
-                  </a>
-                  <a class="docs-card" href="#docs-scenes">
-                    <span class="docs-card-label">Scenes</span>
-                    <strong>Menus and flow</strong>
-                    <span>Title screens, level select, embedded boards, and buttons.</span>
-                  </a>
-                </section>
-                <section id="docs-tutorial" class="docs-section">
-                  <div>
-                    <p class="docs-section-label">Current Page</p>
-                    <h3>Getting Started</h3>
-                  </div>
-                  <p>The final text will live here. This pass fixes spacing, scan rhythm, code blocks, and navigation density before the full documentation is written.</p>
-                  <pre><code>rules {
-  once input directions [ Player | Box | no solid ] -> [ | Player | Box ]
-  once input directions [ Player | no solid ] -> [ | Player ]
-}</code></pre>
-                </section>
-              </article>
-            </div>
+            <!-- PUZZLESTUDIO_EDITOR_DOCS -->
           </div>
           <div id="levelBuilder" class="level-builder" hidden>
             <div class="level-controls">
@@ -383,6 +319,68 @@
               </div>
               </div>
               <span id="levelSizeLabel" class="level-size">9 × 5</span>
+            </div>
+            <div class="level-toolbar sprite-toolbar" role="toolbar" aria-label="Level edit actions">
+              <button id="levelExpandButton" class="sprite-icon-button level-expand-button" type="button" aria-label="Toggle level expansion" aria-pressed="false" title="Expand level">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="m15 15 6 6"></path>
+                  <path d="m15 9 6-6"></path>
+                  <path d="M21 16v5h-5"></path>
+                  <path d="M21 8V3h-5"></path>
+                  <path d="M3 16v5h5"></path>
+                  <path d="m3 21 6-6"></path>
+                  <path d="M3 8V3h5"></path>
+                  <path d="M9 9 3 3"></path>
+                </svg>
+              </button>
+              <button id="levelShrinkButton" class="sprite-icon-button level-shrink-button" type="button" aria-label="Toggle level shrinking" aria-pressed="false" title="Shrink level">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="m15 15 6 6m-6-6v4.8m0-4.8h4.8"></path>
+                  <path d="M9 19.8V15m0 0H4.2M9 15l-6 6"></path>
+                  <path d="M15 4.2V9m0 0h4.8M15 9l6-6"></path>
+                  <path d="M9 4.2V9m0 0H4.2M9 9 3 3"></path>
+                </svg>
+              </button>
+              <button id="levelRotateLeftButton" class="sprite-icon-button" type="button" aria-label="Rotate level left" title="Rotate level left">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M3 12a9 9 0 1 0 2.64-6.36L3 8"></path>
+                  <path d="M3 3v5h5"></path>
+                </svg>
+              </button>
+              <button id="levelRotateRightButton" class="sprite-icon-button" type="button" aria-label="Rotate level right" title="Rotate level right">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M21 12a9 9 0 1 1-2.64-6.36L21 8"></path>
+                  <path d="M21 3v5h-5"></path>
+                </svg>
+              </button>
+              <button id="levelFlipHorizontalButton" class="sprite-icon-button" type="button" aria-label="Flip level horizontal" title="Flip level horizontal">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M8 3H5a2 2 0 0 0-2 2v14c0 1.1.9 2 2 2h3"></path>
+                  <path d="M16 3h3a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-3"></path>
+                  <path d="M12 20v2"></path>
+                  <path d="M12 14v2"></path>
+                  <path d="M12 8v2"></path>
+                  <path d="M12 2v2"></path>
+                </svg>
+              </button>
+              <button id="levelFlipVerticalButton" class="sprite-icon-button" type="button" aria-label="Flip level vertical" title="Flip level vertical">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M21 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v3"></path>
+                  <path d="M21 16v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-3"></path>
+                  <path d="M4 12H2"></path>
+                  <path d="M10 12H8"></path>
+                  <path d="M16 12h-2"></path>
+                  <path d="M22 12h-2"></path>
+                </svg>
+              </button>
+              <button id="levelFillButton" class="sprite-fill-button sprite-icon-button" type="button" aria-label="Bucket fill connected area" aria-pressed="false" title="Bucket fill connected area">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="m19 11-8-8-8.6 8.6a2 2 0 0 0 0 2.8l5.2 5.2a2 2 0 0 0 2.8 0L19 11Z"></path>
+                  <path d="m5 2 5 5"></path>
+                  <path d="M2 13h15"></path>
+                  <path d="M22 20a2 2 0 1 1-4 0c0-1.6 1.7-2.4 2-4 .3 1.6 2 2.4 2 4Z"></path>
+                </svg>
+              </button>
             </div>
             <div class="source-action-group source-preview-actions" role="group" aria-label="Level source actions">
               <button id="levelPlaytestButton" class="source-action-button level-playtest-button" type="button" aria-label="Play level" title="Play level">
@@ -844,57 +842,59 @@
               <div id="level3dPalette" class="level-palette level3d-palette" aria-label="3D level palette"></div>
               <div class="level3d-workspace">
               <div class="level3d-runtime-wrap">
-                <iframe
-                  id="level3dRuntimeFrame"
-                  class="level3d-runtime-frame"
-                  title="3D level runtime preview"
-                  sandbox="allow-scripts"
-                  scrolling="no"
-                ></iframe>
-                <canvas
-                  id="level3dStageCanvas"
-                  class="level3d-stage-canvas"
-                  width="960"
-                  height="620"
-                  tabindex="0"
-                  aria-label="3D level placement surface"
-                ></canvas>
-                <div class="sprite3d-camera-controls level3d-preview-controls" aria-label="3D level preview controls">
-                  <label>
-                    <span title="yaw">Y</span>
-                    <button id="level3dCameraYawScrub" class="sprite3d-camera-scrub level3d-preview-scrub" type="button" data-level3d-preview="yaw" aria-label="Drag vertically to adjust yaw" title="Drag vertically to adjust yaw">15</button>
-                  </label>
-                  <label>
-                    <span title="pitch">P</span>
-                    <button id="level3dCameraPitchScrub" class="sprite3d-camera-scrub level3d-preview-scrub" type="button" data-level3d-preview="pitch" aria-label="Drag vertically to adjust pitch" title="Drag vertically to adjust pitch">55</button>
-                  </label>
-                  <label>
-                    <span title="zoom">Z</span>
-                    <button id="level3dCameraZoomScrub" class="sprite3d-camera-scrub level3d-preview-scrub" type="button" data-level3d-preview="zoom" aria-label="Drag vertically to adjust zoom" title="Drag vertically to adjust zoom">1</button>
-                  </label>
-                  <span class="level3d-preview-control-separator" aria-hidden="true"></span>
-                  <label>
-                    <span title="origin x">X</span>
-                    <button id="level3dOriginXScrub" class="sprite3d-camera-scrub level3d-preview-scrub" type="button" data-level3d-preview="originX" aria-label="Drag vertically to adjust origin x" title="Drag vertically to adjust origin x">0</button>
-                  </label>
-                  <label>
-                    <span title="origin y">Y</span>
-                    <button id="level3dOriginYScrub" class="sprite3d-camera-scrub level3d-preview-scrub" type="button" data-level3d-preview="originY" aria-label="Drag vertically to adjust origin y" title="Drag vertically to adjust origin y">0</button>
-                  </label>
-                  <label>
-                    <span title="origin z">Z</span>
-                    <button id="level3dOriginZScrub" class="sprite3d-camera-scrub level3d-preview-scrub" type="button" data-level3d-preview="originZ" aria-label="Drag vertically to adjust origin z" title="Drag vertically to adjust origin z">0</button>
-                  </label>
-                  <button id="level3dResetPreviewButton" class="sprite3d-preview-reset-button sprite-icon-button" type="button" aria-label="Reset 3D level preview view" title="Reset preview view">
-                    <svg viewBox="0 0 24 24" aria-hidden="true">
-                      <path d="M21 12a9 9 0 0 1-15.4 6.36"></path>
-                      <path d="M3 12a9 9 0 0 1 15.4-6.36"></path>
-                      <path d="M18 2v4h-4"></path>
-                      <path d="M6 22v-4h4"></path>
-                    </svg>
-                  </button>
+                <div class="level3d-frame-surface">
+                  <iframe
+                    id="level3dRuntimeFrame"
+                    class="level3d-runtime-frame"
+                    title="3D level runtime preview"
+                    sandbox="allow-scripts"
+                    scrolling="no"
+                  ></iframe>
+                  <canvas
+                    id="level3dStageCanvas"
+                    class="level3d-stage-canvas"
+                    width="960"
+                    height="720"
+                    tabindex="0"
+                    aria-label="3D level placement surface"
+                  ></canvas>
+                  <div class="sprite3d-camera-controls level3d-preview-controls" aria-label="3D level preview controls">
+                    <label>
+                      <span title="yaw">Y</span>
+                      <button id="level3dCameraYawScrub" class="sprite3d-camera-scrub level3d-preview-scrub" type="button" data-level3d-preview="yaw" aria-label="Drag vertically to adjust yaw" title="Drag vertically to adjust yaw">15</button>
+                    </label>
+                    <label>
+                      <span title="pitch">P</span>
+                      <button id="level3dCameraPitchScrub" class="sprite3d-camera-scrub level3d-preview-scrub" type="button" data-level3d-preview="pitch" aria-label="Drag vertically to adjust pitch" title="Drag vertically to adjust pitch">55</button>
+                    </label>
+                    <label>
+                      <span title="zoom">Z</span>
+                      <button id="level3dCameraZoomScrub" class="sprite3d-camera-scrub level3d-preview-scrub" type="button" data-level3d-preview="zoom" aria-label="Drag vertically to adjust zoom" title="Drag vertically to adjust zoom">1</button>
+                    </label>
+                    <span class="level3d-preview-control-separator" aria-hidden="true"></span>
+                    <label>
+                      <span title="origin x">X</span>
+                      <button id="level3dOriginXScrub" class="sprite3d-camera-scrub level3d-preview-scrub" type="button" data-level3d-preview="originX" aria-label="Drag vertically to adjust origin x" title="Drag vertically to adjust origin x">0</button>
+                    </label>
+                    <label>
+                      <span title="origin y">Y</span>
+                      <button id="level3dOriginYScrub" class="sprite3d-camera-scrub level3d-preview-scrub" type="button" data-level3d-preview="originY" aria-label="Drag vertically to adjust origin y" title="Drag vertically to adjust origin y">0</button>
+                    </label>
+                    <label>
+                      <span title="origin z">Z</span>
+                      <button id="level3dOriginZScrub" class="sprite3d-camera-scrub level3d-preview-scrub" type="button" data-level3d-preview="originZ" aria-label="Drag vertically to adjust origin z" title="Drag vertically to adjust origin z">0</button>
+                    </label>
+                    <button id="level3dResetPreviewButton" class="sprite3d-preview-reset-button sprite-icon-button" type="button" aria-label="Reset 3D level preview view" title="Reset preview view">
+                      <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M21 12a9 9 0 0 1-15.4 6.36"></path>
+                        <path d="M3 12a9 9 0 0 1 15.4-6.36"></path>
+                        <path d="M18 2v4h-4"></path>
+                        <path d="M6 22v-4h4"></path>
+                      </svg>
+                    </button>
+                  </div>
+                  <span id="level3dSizeLabel" class="level-size">0 × 0 × 0</span>
                 </div>
-                <span id="level3dSizeLabel" class="level-size">0 × 0 × 0</span>
               </div>
               <div class="level3d-layer-editor" aria-label="Editable 3D level layer">
                 <div class="level3d-layer-toolbar sprite3d-slice-axis-control" role="group" aria-label="3D level slice controls">
@@ -915,21 +915,23 @@
                     </svg>
                   </button>
                 </div>
-                <div id="level3dLayerBoard" class="level3d-layer-board" tabindex="0" aria-label="Editable top-down 3D level layer">
-                  <iframe
-                    id="level3dLayerFrame"
-                    class="level3d-layer-frame"
-                    title="Top-down 3D level layer"
-                    sandbox="allow-scripts"
-                    scrolling="no"
-                  ></iframe>
-                  <canvas
-                    id="level3dLayerOverlay"
-                    class="level3d-layer-overlay"
-                    width="960"
-                    height="520"
-                    aria-hidden="true"
-                  ></canvas>
+                <div class="level3d-layer-frame-viewport">
+                  <div id="level3dLayerBoard" class="level3d-layer-board" tabindex="0" aria-label="Editable top-down 3D level layer">
+                    <iframe
+                      id="level3dLayerFrame"
+                      class="level3d-layer-frame"
+                      title="Top-down 3D level layer"
+                      sandbox="allow-scripts"
+                      scrolling="no"
+                    ></iframe>
+                    <canvas
+                      id="level3dLayerOverlay"
+                      class="level3d-layer-overlay"
+                      width="960"
+                      height="720"
+                      aria-hidden="true"
+                    ></canvas>
+                  </div>
                 </div>
               </div>
               <div class="level3d-source-panel">

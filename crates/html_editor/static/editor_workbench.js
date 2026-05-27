@@ -139,7 +139,7 @@ function toolPaneTitle(paneId) {
     sprite: "Sprite",
     sounds: "Sound",
     psimport: "PuzzleScript import",
-    docs: "Docs",
+    docs: "Documents",
   }[paneId] || paneId;
 }
 

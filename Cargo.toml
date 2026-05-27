@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "crates/kernel",
     "crates/core",
     "crates/scene",
     "crates/puzzle3d_model",

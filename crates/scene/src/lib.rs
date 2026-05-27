@@ -48,18 +48,126 @@ pub enum SceneAlignY {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Scene<Effect = SceneCommand, LabelExpr = SceneTextExpr, TextExpr = SceneTextExpr> {
+pub struct Scene<
+    State = (),
+    Component = SceneComponent<SceneCommand, SceneTextExpr, SceneTextExpr>,
+    Action = SceneCommand,
+    Rule = (),
+> {
     pub name: String,
     pub layout: SceneLayout,
-    pub components: Vec<SceneComponent<Effect, LabelExpr, TextExpr>>,
+    pub state: Vec<State>,
+    pub components: Vec<Component>,
     pub inputs: Vec<SceneInputBinding>,
-    pub transitions: Vec<SceneTransition<Effect>>,
+    pub keys: Vec<SceneKeyBinding<Action>>,
+    pub controls: Vec<SceneControl<Action>>,
+    pub rules: Vec<Rule>,
+    pub transitions: Vec<SceneTransition<Action>>,
+}
+
+impl<State, Component, Action, Rule> Scene<State, Component, Action, Rule> {
+    pub fn new(
+        name: impl Into<String>,
+        state: Vec<State>,
+        keys: Vec<SceneKeyBinding<Action>>,
+        controls: Vec<SceneControl<Action>>,
+        rules: Vec<Rule>,
+        components: Vec<Component>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            layout: SceneLayout::default(),
+            state,
+            components,
+            inputs: Vec::new(),
+            keys,
+            controls,
+            rules,
+            transitions: Vec::new(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SceneInputBinding {
     pub input: String,
     pub keys: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SceneKeyBinding<Action = SceneCommand> {
+    pub keys: Vec<String>,
+    pub action: Action,
+}
+
+impl<Action> SceneKeyBinding<Action> {
+    pub fn new(key: impl Into<String>, action: Action) -> Self {
+        Self {
+            keys: vec![key.into()],
+            action,
+        }
+    }
+
+    pub fn from_keys(keys: Vec<String>, action: Action) -> Self {
+        Self { keys, action }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SceneControl<Action = SceneCommand> {
+    pub key: String,
+    pub target: SceneControlTarget<Action>,
+}
+
+impl<Action> SceneControl<Action> {
+    pub fn new(key: impl Into<String>, target: SceneControlTarget<Action>) -> Self {
+        Self {
+            key: key.into(),
+            target,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SceneControlTarget<Action = SceneCommand> {
+    Input(String),
+    Action(Action),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SceneRuleCall {
+    pub target: String,
+    pub rule: String,
+    pub input_map: Vec<SceneInputMap>,
+}
+
+impl SceneRuleCall {
+    pub fn new(
+        target: impl Into<String>,
+        rule: impl Into<String>,
+        input_map: Vec<SceneInputMap>,
+    ) -> Self {
+        Self {
+            target: target.into(),
+            rule: rule.into(),
+            input_map,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SceneInputMap {
+    pub from: String,
+    pub to: String,
+}
+
+impl SceneInputMap {
+    pub fn new(from: impl Into<String>, to: impl Into<String>) -> Self {
+        Self {
+            from: from.into(),
+            to: to.into(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -82,9 +190,11 @@ pub enum SceneComponent<Effect = SceneCommand, LabelExpr = SceneTextExpr, TextEx
     Subtitle(SceneTextComponent<LabelExpr>),
     Text(SceneTextComponent<TextExpr>),
     Button(SceneButton<Effect, LabelExpr>),
+    Choice(SceneButton<Effect, LabelExpr>),
     Row(SceneContainer<Effect, LabelExpr, TextExpr>),
     Column(SceneContainer<Effect, LabelExpr, TextExpr>),
     Box(SceneContainer<Effect, LabelExpr, TextExpr>),
+    Conditional(SceneConditional<Effect, LabelExpr, TextExpr>),
     For(SceneFor<Effect, LabelExpr, TextExpr>),
     LevelMenu(LevelMenuComponent<Effect, LabelExpr>),
     Menu(MenuInstance<LabelExpr>),
@@ -98,9 +208,11 @@ impl<Effect, LabelExpr, TextExpr> SceneComponent<Effect, LabelExpr, TextExpr> {
             Self::Subtitle(_) => SceneComponentKind::Subtitle,
             Self::Text(_) => SceneComponentKind::Text,
             Self::Button(_) => SceneComponentKind::Button,
+            Self::Choice(_) => SceneComponentKind::Choice,
             Self::Row(_) => SceneComponentKind::Row,
             Self::Column(_) => SceneComponentKind::Column,
             Self::Box(_) => SceneComponentKind::Box,
+            Self::Conditional(_) => SceneComponentKind::Conditional,
             Self::For(_) => SceneComponentKind::For,
             Self::LevelMenu(_) => SceneComponentKind::LevelMenu,
             Self::Menu(_) => SceneComponentKind::Menu,
@@ -112,6 +224,7 @@ impl<Effect, LabelExpr, TextExpr> SceneComponent<Effect, LabelExpr, TextExpr> {
             Self::Row(container) | Self::Column(container) | Self::Box(container) => {
                 &container.children
             }
+            Self::Conditional(conditional) => &conditional.children,
             Self::For(for_component) => &for_component.children,
             _ => &[],
         }
@@ -124,6 +237,7 @@ impl<Effect, LabelExpr, TextExpr> SceneComponent<Effect, LabelExpr, TextExpr> {
             Self::Row(container) | Self::Column(container) | Self::Box(container) => {
                 Some(&mut container.children)
             }
+            Self::Conditional(conditional) => Some(&mut conditional.children),
             Self::For(for_component) => Some(&mut for_component.children),
             _ => None,
         }
@@ -132,28 +246,28 @@ impl<Effect, LabelExpr, TextExpr> SceneComponent<Effect, LabelExpr, TextExpr> {
     pub fn layout(&self) -> Option<&SceneLayout> {
         match self {
             Self::Frame(component) => Some(&component.layout),
-            Self::Button(button) => Some(&button.layout),
+            Self::Button(button) | Self::Choice(button) => Some(&button.layout),
             Self::Row(container) | Self::Column(container) | Self::Box(container) => {
                 Some(&container.layout)
             }
             Self::LevelMenu(menu) => Some(&menu.layout),
             Self::Title(text) | Self::Subtitle(text) => Some(&text.layout),
             Self::Text(text) => Some(&text.layout),
-            Self::For(_) | Self::Menu(_) => None,
+            Self::Conditional(_) | Self::For(_) | Self::Menu(_) => None,
         }
     }
 
     pub fn layout_mut(&mut self) -> Option<&mut SceneLayout> {
         match self {
             Self::Frame(component) => Some(&mut component.layout),
-            Self::Button(button) => Some(&mut button.layout),
+            Self::Button(button) | Self::Choice(button) => Some(&mut button.layout),
             Self::Row(container) | Self::Column(container) | Self::Box(container) => {
                 Some(&mut container.layout)
             }
             Self::LevelMenu(menu) => Some(&mut menu.layout),
             Self::Title(text) | Self::Subtitle(text) => Some(&mut text.layout),
             Self::Text(text) => Some(&mut text.layout),
-            Self::For(_) | Self::Menu(_) => None,
+            Self::Conditional(_) | Self::For(_) | Self::Menu(_) => None,
         }
     }
 }
@@ -165,9 +279,11 @@ pub enum SceneComponentKind {
     Subtitle,
     Text,
     Button,
+    Choice,
     Row,
     Column,
     Box,
+    Conditional,
     For,
     LevelMenu,
     Menu,
@@ -181,9 +297,11 @@ impl SceneComponentKind {
             Self::Subtitle => "subtitle",
             Self::Text => "text",
             Self::Button => "button",
+            Self::Choice => "choice",
             Self::Row => "row",
             Self::Column => "column",
             Self::Box => "box",
+            Self::Conditional => "if",
             Self::For => "for",
             Self::LevelMenu => "level_menu",
             Self::Menu => "menu",
@@ -197,9 +315,11 @@ impl SceneComponentKind {
             "subtitle" => Self::Subtitle,
             "text" => Self::Text,
             "button" => Self::Button,
+            "choice" => Self::Choice,
             "row" => Self::Row,
             "column" => Self::Column,
             "box" => Self::Box,
+            "if" => Self::Conditional,
             "for" => Self::For,
             "level_menu" => Self::LevelMenu,
             "menu" => Self::Menu,
@@ -217,6 +337,7 @@ pub const GENERIC_SCENE_COMPONENT_KINDS: &[SceneComponentKind] = &[
     SceneComponentKind::Subtitle,
     SceneComponentKind::Text,
     SceneComponentKind::Button,
+    SceneComponentKind::Choice,
     SceneComponentKind::Row,
     SceneComponentKind::Column,
     SceneComponentKind::Box,
@@ -229,6 +350,7 @@ pub const GENERIC_SCENE_COMPONENT_KINDS: &[SceneComponentKind] = &[
 pub struct FrameComponent {
     pub kind: String,
     pub source: String,
+    pub inputs: Vec<SceneInputBinding>,
     pub layout: SceneLayout,
 }
 
@@ -259,6 +381,17 @@ pub struct SceneContainer<
 > {
     pub children: Vec<SceneComponent<Effect, LabelExpr, TextExpr>>,
     pub layout: SceneLayout,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SceneConditional<
+    Effect = SceneCommand,
+    LabelExpr = SceneTextExpr,
+    TextExpr = SceneTextExpr,
+> {
+    pub condition: String,
+    pub children: Vec<SceneComponent<Effect, LabelExpr, TextExpr>>,
+    pub else_children: Vec<SceneComponent<Effect, LabelExpr, TextExpr>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -340,6 +473,11 @@ pub struct MenuDataBinding<Expr = SceneTextExpr> {
 pub struct SceneCommand {
     pub name: String,
     pub args: Vec<SceneCommandArg>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SceneAction {
+    Goto { scene: String },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -787,6 +925,7 @@ mod tests {
         let mut component = SceneComponent::<SceneCommand>::Frame(FrameComponent {
             kind: "puzzle3".to_string(),
             source: "board".to_string(),
+            inputs: Vec::new(),
             layout: SceneLayout::default(),
         });
 

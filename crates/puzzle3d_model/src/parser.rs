@@ -1,21 +1,25 @@
 use std::collections::BTreeMap;
 
 use crate::{
-    DenseCell3, DensePattern3, DenseRow3, DenseRuleTemplate3, DenseSlice3, Direction3,
-    DirectionSet3, FrameOrientation3, FrameSlot3, Game3, InputDef3, InputId3, LayerId, Level3,
-    LevelBundle3, LevelCell3, LevelEntry3, Lifecycle3, LifecycleCommand3, LineMatchCellTemplate3,
-    LineOrientation3, LinePatternTemplate3, LineRuleTemplate3, LineWriteOpTemplate3,
-    LocalWriteOpTemplate3, MatchCell3, ObjectDef3, ObjectFamily3, ObjectId, ObjectSelector3,
-    ObjectVariant3, Offset3, Pattern3, Rule3, RuleEffect3, SelectorCatalog3, SelectorGroup3,
-    SelectorTag3, Size3, Sprite3, SpriteColor3, SpriteSet3, SpriteVoxels3, VariantAxis3,
-    WinCondition3, lower_dense_rule_template, lower_line_rule_template,
+    lower_dense_rule_template, lower_line_rule_template, DenseCell3, DensePattern3, DenseRow3,
+    DenseRuleTemplate3, DenseSlice3, Direction3, DirectionSet3, FrameOrientation3, FrameSlot3,
+    Game3, InputDef3, InputId3, LayerId, Level3, LevelBundle3, LevelCell3, LevelEntry3, Lifecycle3,
+    LifecycleCommand3, LineMatchCellTemplate3, LineOrientation3, LinePatternTemplate3,
+    LineRuleTemplate3, LineWriteOpTemplate3, LocalWriteOpTemplate3, MatchCell3, ObjectDef3,
+    ObjectFamily3, ObjectId, ObjectSelector3, ObjectVariant3, Offset3, Pattern3, Rule3,
+    RuleEffect3, SelectorCatalog3, SelectorGroup3, SelectorTag3, Size3, Sprite3, SpriteColor3,
+    SpriteSet3, SpriteVoxels3, VariantAxis3, WinCondition3,
 };
+use puzzle_kernel::{LocalFrame, LocalFrameExtent};
+
+const DEFAULT_LINE_GAP_LIMIT3: u16 = 64;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ParsedPuzzle3 {
     pub game: Game3,
     pub catalog: SelectorCatalog3,
     pub settings: ModelSettings3,
+    pub local_frame: Option<LocalFrame<ObjectId>>,
     pub rules: Vec<Rule3>,
     pub level_bundle: Option<LevelBundle3>,
     pub win_condition: Option<WinCondition3>,
@@ -28,6 +32,8 @@ pub struct ModelSettings3 {
     pub camera: CameraSettings3,
     pub grid: GridSettings3,
     pub sprite: SpriteRenderSettings3,
+    pub viewport: ViewportSettings3,
+    pub pixelate: PixelateRenderSettings3,
 }
 
 impl Default for ModelSettings3 {
@@ -36,6 +42,8 @@ impl Default for ModelSettings3 {
             camera: CameraSettings3::default(),
             grid: GridSettings3::default(),
             sprite: SpriteRenderSettings3::default(),
+            viewport: ViewportSettings3::default(),
+            pixelate: PixelateRenderSettings3::default(),
         }
     }
 }
@@ -78,6 +86,67 @@ impl Default for SpriteRenderSettings3 {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PixelateRenderSettings3 {
+    pub enabled: bool,
+    pub scale: u16,
+    pub smoothing: bool,
+}
+
+impl Default for PixelateRenderSettings3 {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            scale: 4,
+            smoothing: true,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ViewportSettings3 {
+    pub mode: ViewportMode3,
+    pub follow: ViewportFollow3,
+    pub framing: Option<ViewportFraming3>,
+    pub focus: String,
+}
+
+impl Default for ViewportSettings3 {
+    fn default() -> Self {
+        Self {
+            mode: ViewportMode3::Full,
+            follow: ViewportFollow3::Snap,
+            framing: None,
+            focus: "Player".to_string(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ViewportMode3 {
+    Full,
+    Centered,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ViewportFollow3 {
+    Snap,
+    Smooth,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ViewportFraming3 {
+    pub width: u16,
+    pub depth: u16,
+    pub height: ViewportHeight3,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ViewportHeight3 {
+    Full,
+    Size(u16),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ParseError3 {
     Message(String),
 }
@@ -102,7 +171,9 @@ struct Parser3 {
     legend_specs: Vec<LegendSpec3>,
     level_specs: Vec<LevelSpec3>,
     rule_lines: Vec<String>,
+    local_frame_modifier: Option<String>,
     on_level_start_lines: Vec<String>,
+    on_level_start_local_frame_modifier: Option<String>,
     on_level_clear_lines: Vec<String>,
     win_condition_lines: Vec<String>,
     settings: ModelSettings3,
@@ -126,7 +197,9 @@ impl Parser3 {
             legend_specs: Vec::new(),
             level_specs: Vec::new(),
             rule_lines: Vec::new(),
+            local_frame_modifier: None,
             on_level_start_lines: Vec::new(),
+            on_level_start_local_frame_modifier: None,
             on_level_clear_lines: Vec::new(),
             win_condition_lines: Vec::new(),
             settings: ModelSettings3::default(),
@@ -167,9 +240,21 @@ impl Parser3 {
             } else if let Some(name) = parse_scene_header(&line) {
                 let _ = name;
                 index = skip_braced_block(&self.lines, index + 1)?;
-            } else if line == "rules {" {
+            } else if let Some(rest) = line
+                .strip_prefix("rules ")
+                .and_then(|head| head.strip_suffix(" {"))
+                .or_else(|| (line == "rules {").then_some(""))
+            {
+                self.local_frame_modifier =
+                    (!rest.trim().is_empty()).then(|| rest.trim().to_string());
                 index = self.parse_rules_block(index + 1)?;
-            } else if line == "on_level_start {" {
+            } else if let Some(rest) = line
+                .strip_prefix("on_level_start ")
+                .and_then(|head| head.strip_suffix(" {"))
+                .or_else(|| (line == "on_level_start {").then_some(""))
+            {
+                self.on_level_start_local_frame_modifier =
+                    (!rest.trim().is_empty()).then(|| rest.trim().to_string());
                 index = self.parse_on_level_start_block(index + 1)?;
             } else if line == "on_level_clear {" {
                 index = self.parse_on_level_clear_block(index + 1)?;
@@ -207,25 +292,37 @@ impl Parser3 {
             object_defs,
             inputs_from_specs(self.input_specs)?,
         );
+        let local_frame =
+            parse_optional_program_local_frame(self.local_frame_modifier.as_deref(), &catalog)?;
+        let on_level_start_local_frame = parse_optional_program_local_frame(
+            self.on_level_start_local_frame_modifier.as_deref(),
+            &catalog,
+        )?;
 
+        let line_gap_limit = line_gap_limit_from_levels(&self.level_specs);
         let mut rules = Vec::new();
         for line in &self.rule_lines {
-            rules.extend(parse_rule_line(line, &catalog)?);
+            rules.extend(parse_rule_line(line, &catalog, line_gap_limit)?);
         }
         let mut on_level_start = Vec::new();
         for line in &self.on_level_start_lines {
-            on_level_start.extend(parse_rule_line(line, &catalog)?);
+            on_level_start.extend(parse_rule_line(line, &catalog, line_gap_limit)?);
         }
         let on_level_clear = self
             .on_level_clear_lines
             .iter()
             .map(|line| parse_lifecycle_command_line(line))
             .collect::<Result<Vec<_>, ParseError3>>()?;
-        let lifecycle = Lifecycle3::new(on_level_start, on_level_clear);
+        let mut lifecycle = Lifecycle3::new(on_level_start, on_level_clear);
+        lifecycle.on_level_start_local_frame = on_level_start_local_frame;
         let win_condition = if self.win_condition_lines.is_empty() {
             None
         } else {
-            Some(lower_win_conditions(&catalog, &self.win_condition_lines)?)
+            Some(lower_win_conditions(
+                &catalog,
+                &self.win_condition_lines,
+                line_gap_limit,
+            )?)
         };
         let level_bundle = if self.level_specs.is_empty() {
             None
@@ -242,6 +339,7 @@ impl Parser3 {
             game,
             catalog,
             settings: self.settings,
+            local_frame,
             rules,
             level_bundle,
             win_condition,
@@ -266,9 +364,21 @@ impl Parser3 {
                 index = self.parse_inputs_block(index + 1)?;
             } else if line == "groups {" || line == "group {" {
                 index = self.parse_groups_block(index + 1)?;
-            } else if line == "rules {" {
+            } else if let Some(rest) = line
+                .strip_prefix("rules ")
+                .and_then(|head| head.strip_suffix(" {"))
+                .or_else(|| (line == "rules {").then_some(""))
+            {
+                self.local_frame_modifier =
+                    (!rest.trim().is_empty()).then(|| rest.trim().to_string());
                 index = self.parse_rules_block(index + 1)?;
-            } else if line == "on_level_start {" {
+            } else if let Some(rest) = line
+                .strip_prefix("on_level_start ")
+                .and_then(|head| head.strip_suffix(" {"))
+                .or_else(|| (line == "on_level_start {").then_some(""))
+            {
+                self.on_level_start_local_frame_modifier =
+                    (!rest.trim().is_empty()).then(|| rest.trim().to_string());
                 index = self.parse_on_level_start_block(index + 1)?;
             } else if line == "on_level_clear {" {
                 index = self.parse_on_level_clear_block(index + 1)?;
@@ -309,6 +419,9 @@ impl Parser3 {
             ModelSetting3::InteractiveZoom(value) => self.settings.camera.interactive_zoom = value,
             ModelSetting3::OccupiedCellGrid(value) => self.settings.grid.occupied_cells = value,
             ModelSetting3::SpriteShade(value) => self.settings.sprite.shade = value,
+            ModelSetting3::PixelateEnabled(value) => self.settings.pixelate.enabled = value,
+            ModelSetting3::PixelateScale(value) => self.settings.pixelate.scale = value,
+            ModelSetting3::PixelateSmoothing(value) => self.settings.pixelate.smoothing = value,
         }
     }
 
@@ -324,6 +437,11 @@ impl Parser3 {
                 index = self.parse_camera_block(index + 1)?;
             } else if line == "grid {" {
                 index = self.parse_grid_block(index + 1)?;
+            } else if line == "pixelate {" {
+                self.settings.pixelate.enabled = true;
+                index = self.parse_pixelate_block(index + 1)?;
+            } else if line == "viewport {" {
+                index = self.parse_viewport_block(index + 1)?;
             } else {
                 let setting = parse_render_setting_line(&line)?;
                 self.apply_model_setting(setting);
@@ -350,6 +468,22 @@ impl Parser3 {
         Err(message("camera block missing }"))
     }
 
+    fn parse_viewport_block(&mut self, mut index: usize) -> Result<usize, ParseError3> {
+        while index < self.lines.len() {
+            let line = self.lines[index].clone();
+            if line == "}" {
+                return Ok(index + 1);
+            }
+            if line.is_empty() {
+                index += 1;
+                continue;
+            }
+            parse_viewport_directive(&line, &mut self.settings.viewport)?;
+            index += 1;
+        }
+        Err(message("viewport block missing }"))
+    }
+
     fn parse_grid_block(&mut self, mut index: usize) -> Result<usize, ParseError3> {
         while index < self.lines.len() {
             let line = self.lines[index].clone();
@@ -365,6 +499,23 @@ impl Parser3 {
             index += 1;
         }
         Err(message("grid block missing }"))
+    }
+
+    fn parse_pixelate_block(&mut self, mut index: usize) -> Result<usize, ParseError3> {
+        while index < self.lines.len() {
+            let line = self.lines[index].clone();
+            if line == "}" {
+                return Ok(index + 1);
+            }
+            if line.is_empty() {
+                index += 1;
+                continue;
+            }
+            let setting = parse_pixelate_setting_line(&line)?;
+            self.apply_model_setting(setting);
+            index += 1;
+        }
+        Err(message("pixelate block missing }"))
     }
 
     fn parse_sprites3_block(
@@ -479,6 +630,7 @@ impl Parser3 {
             if layer.is_empty() {
                 return Err(message("layer declaration must name a layer before ="));
             }
+            reject_occurrence_label_marker_in_name(layer, "layer name")?;
             self.layers.push(layer.to_string());
             for object in objects.split_whitespace() {
                 self.object_specs
@@ -486,8 +638,10 @@ impl Parser3 {
             }
             return Ok(());
         }
-        self.layers
-            .extend(line.split_whitespace().map(str::to_string));
+        for layer in line.split_whitespace() {
+            reject_occurrence_label_marker_in_name(layer, "layer name")?;
+            self.layers.push(layer.to_string());
+        }
         Ok(())
     }
 
@@ -687,6 +841,21 @@ struct LevelSpec3 {
     rows: Vec<String>,
 }
 
+fn line_gap_limit_from_levels(level_specs: &[LevelSpec3]) -> u16 {
+    level_specs
+        .iter()
+        .filter_map(|spec| split_level_slices(&spec.rows).ok())
+        .filter_map(|slices| {
+            let height = slices.len();
+            let depth = slices.first()?.len();
+            let width = slices.first()?.first()?.chars().count();
+            [width, depth, height].into_iter().max()
+        })
+        .max()
+        .and_then(|value| u16::try_from(value.saturating_sub(1)).ok())
+        .unwrap_or(DEFAULT_LINE_GAP_LIMIT3)
+}
+
 struct CatalogBuild3 {
     value_sets: Vec<(String, Vec<String>)>,
     layers: Vec<String>,
@@ -823,6 +992,9 @@ enum ModelSetting3 {
     InteractiveZoom(bool),
     OccupiedCellGrid(bool),
     SpriteShade(bool),
+    PixelateEnabled(bool),
+    PixelateScale(u16),
+    PixelateSmoothing(bool),
 }
 
 fn parse_model_setting_line(line: &str) -> Result<Option<ModelSetting3>, ParseError3> {
@@ -880,12 +1052,119 @@ fn parse_grid_setting_line(line: &str) -> Result<ModelSetting3, ParseError3> {
     }
 }
 
+fn parse_pixelate_setting_line(line: &str) -> Result<ModelSetting3, ParseError3> {
+    let (name, value) = parse_setting_assignment(line, "pixelate setting")?;
+    match name {
+        "enabled" => Ok(ModelSetting3::PixelateEnabled(parse_bool_setting(
+            value, name,
+        )?)),
+        "scale" => Ok(ModelSetting3::PixelateScale(parse_viewport_size_value(
+            value,
+            "pixelate scale",
+        )?)),
+        "smoothing" => Ok(ModelSetting3::PixelateSmoothing(parse_bool_setting(
+            value, name,
+        )?)),
+        _ => Err(message(format!("unknown pixelate setting: {name}"))),
+    }
+}
+
 fn parse_render_setting_line(line: &str) -> Result<ModelSetting3, ParseError3> {
     let (name, value) = parse_setting_assignment(line, "render setting")?;
     match name {
         "shade" => Ok(ModelSetting3::SpriteShade(parse_bool_setting(value, name)?)),
         _ => Err(message(format!("unknown render setting: {name}"))),
     }
+}
+
+fn parse_viewport_directive(
+    line: &str,
+    viewport: &mut ViewportSettings3,
+) -> Result<(), ParseError3> {
+    let tokens = line.split_whitespace().collect::<Vec<_>>();
+    match tokens.as_slice() {
+        ["zoomscreen", width, depth] => parse_centered_viewport_directive(
+            viewport,
+            "zoomscreen",
+            ViewportFollow3::Snap,
+            width,
+            depth,
+            None,
+        )?,
+        ["zoomscreen", width, depth, height] => parse_centered_viewport_directive(
+            viewport,
+            "zoomscreen",
+            ViewportFollow3::Snap,
+            width,
+            depth,
+            Some(height),
+        )?,
+        ["smoothscreen", width, depth] => parse_centered_viewport_directive(
+            viewport,
+            "smoothscreen",
+            ViewportFollow3::Smooth,
+            width,
+            depth,
+            None,
+        )?,
+        ["smoothscreen", width, depth, height] => parse_centered_viewport_directive(
+            viewport,
+            "smoothscreen",
+            ViewportFollow3::Smooth,
+            width,
+            depth,
+            Some(height),
+        )?,
+        ["focus", selector] => {
+            viewport.focus = (*selector).to_string();
+        }
+        [other, ..] => {
+            return Err(message(format!("unknown viewport directive: {other}")));
+        }
+        [] => {}
+    }
+    Ok(())
+}
+
+fn parse_centered_viewport_directive(
+    viewport: &mut ViewportSettings3,
+    directive: &str,
+    follow: ViewportFollow3,
+    width: &str,
+    depth: &str,
+    height: Option<&str>,
+) -> Result<(), ParseError3> {
+    viewport.mode = ViewportMode3::Centered;
+    viewport.follow = follow;
+    viewport.framing = Some(ViewportFraming3 {
+        width: parse_viewport_size_value(width, &format!("{directive} width"))?,
+        depth: parse_viewport_size_value(depth, &format!("{directive} depth"))?,
+        height: match height {
+            Some(value) => parse_viewport_height_value(value)?,
+            None => ViewportHeight3::Full,
+        },
+    });
+    Ok(())
+}
+
+fn parse_viewport_height_value(value: &str) -> Result<ViewportHeight3, ParseError3> {
+    if value == "full" {
+        return Ok(ViewportHeight3::Full);
+    }
+    Ok(ViewportHeight3::Size(parse_viewport_size_value(
+        value,
+        "viewport height",
+    )?))
+}
+
+fn parse_viewport_size_value(value: &str, name: &str) -> Result<u16, ParseError3> {
+    let size = value
+        .parse::<u16>()
+        .map_err(|_| message(format!("{name} must be a positive integer")))?;
+    if size == 0 {
+        return Err(message(format!("{name} must be greater than zero")));
+    }
+    Ok(size)
 }
 
 fn parse_setting_assignment<'a>(
@@ -994,6 +1273,7 @@ fn parse_layer_object_spec(token: &str, layer: &str) -> Result<ObjectSpec3, Pars
         .filter(|name| !name.is_empty())
         .ok_or_else(|| message("layer object must be Object[:axis...]"))?
         .to_string();
+    reject_occurrence_label_marker_in_name(&base, "object name")?;
     Ok(ObjectSpec3 {
         name: base,
         axes: name_parts.map(str::to_string).collect(),
@@ -1012,10 +1292,19 @@ fn parse_group_spec(line: &str) -> Result<GroupSpec3, ParseError3> {
     if selectors.is_empty() {
         return Err(message("group must contain at least one selector"));
     }
+    let name = name.trim();
+    reject_occurrence_label_marker_in_name(name, "group name")?;
     Ok(GroupSpec3 {
-        name: name.trim().to_string(),
+        name: name.to_string(),
         selectors,
     })
+}
+
+fn reject_occurrence_label_marker_in_name(name: &str, label: &str) -> Result<(), ParseError3> {
+    if name.contains('#') {
+        return Err(message(format!("{label} must not contain #")));
+    }
+    Ok(())
 }
 
 fn parse_legend_spec(line: &str) -> Result<LegendSpec3, ParseError3> {
@@ -1370,15 +1659,76 @@ fn parse_lifecycle_command_line(line: &str) -> Result<LifecycleCommand3, ParseEr
     }
 }
 
-fn parse_rule_line(line: &str, catalog: &SelectorCatalog3) -> Result<Vec<Rule3>, ParseError3> {
+fn parse_optional_program_local_frame(
+    modifier: Option<&str>,
+    catalog: &SelectorCatalog3,
+) -> Result<Option<LocalFrame<ObjectId>>, ParseError3> {
+    let Some(modifier) = modifier else {
+        return Ok(None);
+    };
+    let tokens = modifier.split_whitespace().collect::<Vec<_>>();
+    let focus_objects = default_local_frame_focus_objects(catalog)?;
+    match tokens.as_slice() {
+        ["local_radius", radius] => {
+            let radius = parse_u16_token(radius, "local_radius")?;
+            Ok(Some(LocalFrame::new(
+                LocalFrameExtent::Radius(radius),
+                LocalFrameExtent::Radius(radius),
+                LocalFrameExtent::Radius(radius),
+                focus_objects,
+            )))
+        }
+        ["local_frame", x, y, z] => Ok(Some(LocalFrame::new(
+            parse_local_frame_extent3(x)?,
+            parse_local_frame_extent3(y)?,
+            parse_local_frame_extent3(z)?,
+            focus_objects,
+        ))),
+        _ => Err(message(
+            "transition block header must use local_radius <n> or local_frame <x> <y> <z>",
+        )),
+    }
+}
+
+fn parse_local_frame_extent3(token: &str) -> Result<LocalFrameExtent, ParseError3> {
+    if token == "full" {
+        return Ok(LocalFrameExtent::Full);
+    }
+    parse_u16_token(token, "local_frame").map(LocalFrameExtent::Radius)
+}
+
+fn parse_u16_token(token: &str, context: &str) -> Result<u16, ParseError3> {
+    token
+        .parse::<u16>()
+        .map_err(|_| message(format!("{context} value must be a non-negative integer")))
+}
+
+fn default_local_frame_focus_objects(
+    catalog: &SelectorCatalog3,
+) -> Result<Vec<ObjectId>, ParseError3> {
+    for name in ["Player", "player"] {
+        if let Some(object) = catalog.objects.iter().find(|object| object.name == name) {
+            return Ok(vec![object.id]);
+        }
+    }
+    Err(message(
+        "local_frame/local_radius requires an object named Player",
+    ))
+}
+
+fn parse_rule_line(
+    line: &str,
+    catalog: &SelectorCatalog3,
+    line_gap_limit: u16,
+) -> Result<Vec<Rule3>, ParseError3> {
     if let Some(effect) = parse_camera_rule_effect_line(line)? {
         return Ok(vec![
-            Rule3::once(Pattern3::new(Vec::new()), Vec::new()).with_effects(vec![effect]),
+            Rule3::once(Pattern3::new(Vec::new()), Vec::new()).with_effects(vec![effect])
         ]);
     }
 
     if let Some(rest) = line.strip_prefix("input ") {
-        return parse_input_rule_line(rest.trim(), catalog);
+        return parse_input_rule_line(rest.trim(), catalog, line_gap_limit);
     }
 
     let (prefix, rest) = line
@@ -1399,13 +1749,8 @@ fn parse_rule_line(line: &str, catalog: &SelectorCatalog3) -> Result<Vec<Rule3>,
     }
 
     let orientation = parse_line_orientation(prefix)?;
-    let rule = LineRuleTemplate3::once(
-        orientation,
-        parse_line_pattern(lhs, catalog)?,
-        infer_line_writes(lhs, rhs, catalog)?,
-    );
-    let mut rules = lower_line_rule_template(catalog, &rule)
-        .map_err(|error| message(format!("failed to lower line rule: {error:?}")))?;
+    let mut rules = lower_line_rewrite(catalog, orientation, lhs, rhs, line_gap_limit)
+        .map_err(|error| message(format!("failed to lower line rule: {error}")))?;
     attach_rule_effects(&mut rules, &effects);
     Ok(rules)
 }
@@ -1422,8 +1767,9 @@ fn attach_rule_effects(rules: &mut [Rule3], effects: &[RuleEffect3]) {
 fn parse_input_rule_line(
     line: &str,
     catalog: &SelectorCatalog3,
+    line_gap_limit: u16,
 ) -> Result<Vec<Rule3>, ParseError3> {
-    let mut rules = parse_rule_line(line, catalog)?;
+    let mut rules = parse_rule_line(line, catalog, line_gap_limit)?;
     for rule in &mut rules {
         let direction = infer_input_direction(rule).ok_or_else(|| {
             message(format!(
@@ -1490,8 +1836,8 @@ fn input_for_direction(direction: Direction3) -> InputId3 {
         "right" => InputId3(1),
         "up" => InputId3(2),
         "down" => InputId3(3),
-        "forward" => InputId3(4),
-        "backward" => InputId3(5),
+        "front" => InputId3(4),
+        "back" => InputId3(5),
         _ => unreachable!("built-in directions are exhaustive"),
     }
 }
@@ -1499,10 +1845,11 @@ fn input_for_direction(direction: Direction3) -> InputId3 {
 fn lower_win_conditions(
     catalog: &SelectorCatalog3,
     lines: &[String],
+    line_gap_limit: u16,
 ) -> Result<WinCondition3, ParseError3> {
     let conditions = lines
         .iter()
-        .map(|line| parse_win_condition_line(line, catalog))
+        .map(|line| parse_win_condition_line(line, catalog, line_gap_limit))
         .collect::<Result<Vec<_>, ParseError3>>()?;
     if conditions.is_empty() {
         return Err(message(
@@ -1519,19 +1866,20 @@ fn lower_win_conditions(
 fn parse_win_condition_line(
     line: &str,
     catalog: &SelectorCatalog3,
+    line_gap_limit: u16,
 ) -> Result<WinCondition3, ParseError3> {
     if let Some((name, arg)) = parse_win_condition_call(line)? {
         return match name {
-            "exists" | "some" => parse_some_condition(arg, catalog),
-            "none" => parse_no_condition(arg, catalog),
+            "exists" | "some" => parse_some_condition(arg, catalog, line_gap_limit),
+            "none" => parse_no_condition(arg, catalog, line_gap_limit),
             _ => Err(message(format!("unknown win condition function: {name}"))),
         };
     }
     if let Some(rest) = line.strip_prefix("some ") {
-        return parse_some_condition(rest.trim(), catalog);
+        return parse_some_condition(rest.trim(), catalog, line_gap_limit);
     }
     if let Some(rest) = line.strip_prefix("no ") {
-        return parse_no_condition(rest.trim(), catalog);
+        return parse_no_condition(rest.trim(), catalog, line_gap_limit);
     }
     if let Some(rest) = line.strip_prefix("all ") {
         return parse_all_on_condition(rest.trim(), catalog);
@@ -1560,9 +1908,10 @@ fn parse_win_condition_call<'a>(line: &'a str) -> Result<Option<(&'a str, &'a st
 fn parse_some_condition(
     rest: &str,
     catalog: &SelectorCatalog3,
+    line_gap_limit: u16,
 ) -> Result<WinCondition3, ParseError3> {
     if rest.contains('[') {
-        return pattern_conditions(rest, catalog, WinCondition3::SomePattern);
+        return pattern_conditions(rest, catalog, line_gap_limit, WinCondition3::SomePattern);
     }
     let objects = resolve_selector_objects(catalog, rest)?;
     Ok(any_object_condition(objects, WinCondition3::SomeObject))
@@ -1571,9 +1920,10 @@ fn parse_some_condition(
 fn parse_no_condition(
     rest: &str,
     catalog: &SelectorCatalog3,
+    line_gap_limit: u16,
 ) -> Result<WinCondition3, ParseError3> {
     if rest.contains('[') {
-        return pattern_conditions(rest, catalog, WinCondition3::NoPattern);
+        return pattern_conditions(rest, catalog, line_gap_limit, WinCondition3::NoPattern);
     }
     let objects = resolve_selector_objects(catalog, rest)?;
     Ok(all_object_condition(objects, WinCondition3::NoObject))
@@ -1603,9 +1953,10 @@ fn parse_all_on_condition(
 fn pattern_conditions(
     rest: &str,
     catalog: &SelectorCatalog3,
+    line_gap_limit: u16,
     wrap: fn(Pattern3) -> WinCondition3,
 ) -> Result<WinCondition3, ParseError3> {
-    let patterns = parse_oriented_patterns(rest, catalog)?;
+    let patterns = parse_oriented_patterns(rest, catalog, line_gap_limit)?;
     if patterns.len() == 1 {
         Ok(wrap(patterns.into_iter().next().unwrap()))
     } else {
@@ -1662,6 +2013,7 @@ fn resolve_single_selector_object(
 fn parse_oriented_patterns(
     value: &str,
     catalog: &SelectorCatalog3,
+    line_gap_limit: u16,
 ) -> Result<Vec<Pattern3>, ParseError3> {
     let (prefix, rest) = value
         .split_once(' ')
@@ -1679,11 +2031,9 @@ fn parse_oriented_patterns(
             .map_err(|error| message(format!("failed to lower win pattern: {error:?}")));
     }
     let orientation = parse_line_orientation(prefix)?;
-    let rule =
-        LineRuleTemplate3::once(orientation, parse_line_pattern(inner, catalog)?, Vec::new());
-    lower_line_rule_template(catalog, &rule)
+    lower_line_patterns(catalog, orientation, inner, line_gap_limit)
         .map(|rules| rules.into_iter().map(|rule| rule.pattern).collect())
-        .map_err(|error| message(format!("failed to lower win pattern: {error:?}")))
+        .map_err(|error| message(format!("failed to lower win pattern: {error}")))
 }
 
 fn parse_rewrite(rest: &str) -> Result<(&str, &str, Vec<RuleEffect3>), ParseError3> {
@@ -1801,24 +2151,258 @@ fn parse_direction_set(value: &str) -> Result<DirectionSet3, ParseError3> {
     }
 }
 
-fn parse_line_pattern(
+fn lower_line_patterns(
+    catalog: &SelectorCatalog3,
+    orientation: LineOrientation3,
+    inner: &str,
+    line_gap_limit: u16,
+) -> Result<Vec<Rule3>, String> {
+    let pattern = parse_line_pattern_with_gaps(inner, catalog).map_err(parse_error_message)?;
+    let mut rules = Vec::new();
+    for gaps in line_gap_assignments(pattern.gap_count, line_gap_limit) {
+        let rule = LineRuleTemplate3::once(
+            orientation.clone(),
+            pattern.materialize(&gaps).map_err(parse_error_message)?,
+            Vec::new(),
+        );
+        rules.extend(
+            lower_line_rule_template(catalog, &rule).map_err(|error| format!("{error:?}"))?,
+        );
+    }
+    Ok(rules)
+}
+
+fn parse_error_message(error: ParseError3) -> String {
+    match error {
+        ParseError3::Message(message) => message,
+    }
+}
+
+fn lower_line_rewrite(
+    catalog: &SelectorCatalog3,
+    orientation: LineOrientation3,
+    lhs: &str,
+    rhs: &str,
+    line_gap_limit: u16,
+) -> Result<Vec<Rule3>, String> {
+    let before = parse_line_pattern_with_gaps(lhs, catalog).map_err(parse_error_message)?;
+    let after = parse_line_pattern_with_gaps(rhs, catalog).map_err(parse_error_message)?;
+    if before.gap_count != after.gap_count {
+        return Err("line rewrite sides must contain the same number of ... gaps".to_string());
+    }
+    let writes = infer_line_writes_from_patterns(&before, &after);
+    let mut rules = Vec::new();
+    for gaps in line_gap_assignments(before.gap_count, line_gap_limit) {
+        let rule = LineRuleTemplate3::once(
+            orientation.clone(),
+            before.materialize(&gaps).map_err(parse_error_message)?,
+            materialize_line_writes(&writes, &gaps).map_err(parse_error_message)?,
+        );
+        rules.extend(
+            lower_line_rule_template(catalog, &rule).map_err(|error| format!("{error:?}"))?,
+        );
+    }
+    Ok(rules)
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct LinePatternWithGaps3 {
+    cells: Vec<LineCellWithGapStep3>,
+    gap_count: u16,
+}
+
+impl LinePatternWithGaps3 {
+    fn materialize(&self, gaps: &[u16]) -> Result<LinePatternTemplate3, ParseError3> {
+        Ok(LinePatternTemplate3::new(
+            self.cells
+                .iter()
+                .map(|cell| {
+                    Ok(LineMatchCellTemplate3 {
+                        step: cell.step.materialize(gaps)?,
+                        require: cell.require.clone(),
+                        forbid: cell.forbid.clone(),
+                    })
+                })
+                .collect::<Result<Vec<_>, ParseError3>>()?,
+        ))
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct LineCellWithGapStep3 {
+    step: LineStepExpr3,
+    require: Vec<ObjectSelector3>,
+    forbid: Vec<ObjectSelector3>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct LineStepExpr3 {
+    base: i16,
+    gap_terms: Vec<u16>,
+}
+
+impl LineStepExpr3 {
+    fn materialize(&self, gaps: &[u16]) -> Result<i16, ParseError3> {
+        let mut step = i32::from(self.base);
+        for gap_index in &self.gap_terms {
+            let gap = gaps
+                .get(usize::from(*gap_index))
+                .ok_or_else(|| message("internal 3D gap index out of bounds"))?;
+            step += i32::from(*gap);
+        }
+        i16::try_from(step).map_err(|_| message("3D line gap offset is too large"))
+    }
+}
+
+fn parse_line_pattern_with_gaps(
     inner: &str,
     catalog: &SelectorCatalog3,
-) -> Result<LinePatternTemplate3, ParseError3> {
-    Ok(LinePatternTemplate3::new(
-        split_line_cells(inner)
-            .into_iter()
+) -> Result<LinePatternWithGaps3, ParseError3> {
+    let mut cells = Vec::new();
+    let mut visible_step = 0_i16;
+    let mut gap_count = 0_u16;
+    for cell in split_line_cells(inner) {
+        if cell == "..." {
+            gap_count = gap_count
+                .checked_add(1)
+                .ok_or_else(|| message("too many 3D line gaps"))?;
+            continue;
+        }
+        let parsed = parse_cell(cell, catalog)?;
+        cells.push(LineCellWithGapStep3 {
+            step: LineStepExpr3 {
+                base: visible_step,
+                gap_terms: (0..gap_count).collect(),
+            },
+            require: parsed.require,
+            forbid: parsed.forbid,
+        });
+        visible_step = visible_step
+            .checked_add(1)
+            .ok_or_else(|| message("3D line pattern is too long"))?;
+    }
+    Ok(LinePatternWithGaps3 { cells, gap_count })
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum LineWriteWithGapStep3 {
+    Add {
+        to: LineStepExpr3,
+        object: ObjectSelector3,
+    },
+    Remove {
+        from: LineStepExpr3,
+        object: ObjectSelector3,
+    },
+    Move {
+        from: LineStepExpr3,
+        to: LineStepExpr3,
+        object: ObjectSelector3,
+    },
+}
+
+fn infer_line_writes_from_patterns(
+    before: &LinePatternWithGaps3,
+    after: &LinePatternWithGaps3,
+) -> Vec<LineWriteWithGapStep3> {
+    let before = positive_line_cells_from_pattern(before);
+    let after = positive_line_cells_from_pattern(after);
+    let mut writes = Vec::new();
+    let mut used_after = vec![false; after.len()];
+    for (from, object) in &before {
+        let token = object.token();
+        let Some(index) = after
+            .iter()
             .enumerate()
-            .map(|(step, cell)| {
-                let parsed = parse_cell(cell, catalog)?;
-                Ok(LineMatchCellTemplate3 {
-                    step: step as i16,
-                    require: parsed.require,
-                    forbid: parsed.forbid,
-                })
+            .find_map(|(index, (_, after_object))| {
+                (!used_after[index] && after_object.token() == token).then_some(index)
             })
-            .collect::<Result<Vec<_>, ParseError3>>()?,
-    ))
+        else {
+            writes.push(LineWriteWithGapStep3::Remove {
+                from: from.clone(),
+                object: object.clone(),
+            });
+            continue;
+        };
+        used_after[index] = true;
+        let to = after[index].0.clone();
+        if *from != to {
+            writes.push(LineWriteWithGapStep3::Move {
+                from: from.clone(),
+                to,
+                object: object.clone(),
+            });
+        }
+    }
+    for (index, (to, object)) in after.into_iter().enumerate() {
+        if !used_after[index] {
+            writes.push(LineWriteWithGapStep3::Add { to, object });
+        }
+    }
+    writes
+}
+
+fn positive_line_cells_from_pattern(
+    pattern: &LinePatternWithGaps3,
+) -> Vec<(LineStepExpr3, ObjectSelector3)> {
+    let mut out = Vec::new();
+    for cell in &pattern.cells {
+        for selector in &cell.require {
+            out.push((cell.step.clone(), selector.clone()));
+        }
+    }
+    out
+}
+
+fn materialize_line_writes(
+    writes: &[LineWriteWithGapStep3],
+    gaps: &[u16],
+) -> Result<Vec<LineWriteOpTemplate3>, ParseError3> {
+    writes
+        .iter()
+        .map(|write| match write {
+            LineWriteWithGapStep3::Add { to, object } => Ok(LineWriteOpTemplate3::Add {
+                step: to.materialize(gaps)?,
+                object: object.clone(),
+            }),
+            LineWriteWithGapStep3::Remove { from, object } => Ok(LineWriteOpTemplate3::Remove {
+                step: from.materialize(gaps)?,
+                object: object.clone(),
+            }),
+            LineWriteWithGapStep3::Move { from, to, object } => Ok(LineWriteOpTemplate3::Move {
+                from_step: from.materialize(gaps)?,
+                to_step: to.materialize(gaps)?,
+                object: object.clone(),
+            }),
+        })
+        .collect()
+}
+
+fn line_gap_assignments(gap_count: u16, line_gap_limit: u16) -> Vec<Vec<u16>> {
+    if gap_count == 0 {
+        return vec![Vec::new()];
+    }
+    let mut out = Vec::new();
+    let mut current = Vec::with_capacity(usize::from(gap_count));
+    collect_line_gap_assignments(gap_count, line_gap_limit, &mut current, &mut out);
+    out
+}
+
+fn collect_line_gap_assignments(
+    gap_count: u16,
+    remaining: u16,
+    current: &mut Vec<u16>,
+    out: &mut Vec<Vec<u16>>,
+) {
+    if current.len() == usize::from(gap_count) {
+        out.push(current.clone());
+        return;
+    }
+    for gap in 0..=remaining {
+        current.push(gap);
+        collect_line_gap_assignments(gap_count, remaining - gap, current, out);
+        current.pop();
+    }
 }
 
 fn parse_dense_pattern(
@@ -1892,32 +2476,6 @@ fn parse_cell(cell: &str, catalog: &SelectorCatalog3) -> Result<ParsedCell3, Par
         }
     }
     Ok(ParsedCell3 { require, forbid })
-}
-
-fn infer_line_writes(
-    lhs: &str,
-    rhs: &str,
-    catalog: &SelectorCatalog3,
-) -> Result<Vec<LineWriteOpTemplate3>, ParseError3> {
-    let before = parse_positive_line_cells(lhs, catalog)?;
-    let after = parse_positive_line_cells(rhs, catalog)?;
-    infer_moves(before, after)
-        .into_iter()
-        .map(|write| match write {
-            InferredWrite3::Add { to, object } => {
-                Ok(LineWriteOpTemplate3::Add { step: to.0, object })
-            }
-            InferredWrite3::Remove { from, object } => Ok(LineWriteOpTemplate3::Remove {
-                step: from.0,
-                object,
-            }),
-            InferredWrite3::Move { from, to, object } => Ok(LineWriteOpTemplate3::Move {
-                from_step: from.0,
-                to_step: to.0,
-                object,
-            }),
-        })
-        .collect()
 }
 
 fn infer_dense_writes(
@@ -2005,19 +2563,6 @@ fn infer_moves(
     writes
 }
 
-fn parse_positive_line_cells(
-    inner: &str,
-    catalog: &SelectorCatalog3,
-) -> Result<Vec<(LinePos3, ObjectSelector3)>, ParseError3> {
-    let mut parsed = Vec::new();
-    for (step, cell) in split_line_cells(inner).into_iter().enumerate() {
-        for selector in parse_cell(cell, catalog)?.require {
-            parsed.push(((step as i16, Offset3::new(step as i16, 0, 0)), selector));
-        }
-    }
-    Ok(parsed)
-}
-
 fn parse_positive_dense_cells(
     inner: &str,
     catalog: &SelectorCatalog3,
@@ -2041,9 +2586,10 @@ fn parse_selector(
     families: &[ObjectFamily3],
     groups: &[SelectorGroup3],
 ) -> Result<ObjectSelector3, ParseError3> {
-    let parts = token.split(':').collect::<Vec<_>>();
-    if parts.len() > 1 {
-        return Ok(ObjectSelector3::variant(
+    let (selector, occurrence_label) = split_selector_occurrence_label3(token)?;
+    let parts = selector.split(':').collect::<Vec<_>>();
+    let parsed = if parts.len() > 1 {
+        ObjectSelector3::variant(
             parts[0],
             parts[1..]
                 .iter()
@@ -2055,17 +2601,41 @@ fn parse_selector(
                     }
                 })
                 .collect(),
+        )
+    } else {
+        if families.iter().any(|family| family.name == selector) {
+            return Err(message(format!(
+                "variant selector must use explicit tags: {selector}"
+            )));
+        }
+        if groups.iter().any(|group| group.name == selector) {
+            ObjectSelector3::group(selector)
+        } else {
+            ObjectSelector3::object(selector)
+        }
+    };
+    Ok(match occurrence_label {
+        Some(label) => ObjectSelector3::labeled(format!("{selector}#{label}"), parsed),
+        None => parsed,
+    })
+}
+
+fn split_selector_occurrence_label3(selector: &str) -> Result<(&str, Option<String>), ParseError3> {
+    let Some((base, label)) = selector.split_once('#') else {
+        return Ok((selector, None));
+    };
+    if base.is_empty() || label.is_empty() || label.contains('#') {
+        return Err(message("selector occurrence label must be: selector#label"));
+    }
+    if !label
+        .chars()
+        .all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
+    {
+        return Err(message(
+            "selector occurrence label may only contain letters, numbers, and _",
         ));
     }
-    if families.iter().any(|family| family.name == token) {
-        return Err(message(format!(
-            "variant selector must use explicit tags: {token}"
-        )));
-    }
-    if groups.iter().any(|group| group.name == token) {
-        return Ok(ObjectSelector3::group(token));
-    }
-    Ok(ObjectSelector3::object(token))
+    Ok((base, Some(label.to_string())))
 }
 
 fn cartesian_values(axes: &[Vec<String>]) -> Vec<Vec<String>> {
@@ -2097,9 +2667,17 @@ fn default_inputs() -> Vec<InputDef3> {
         InputDef3::directional(InputId3(1), "right", Direction3::RIGHT),
         InputDef3::directional(InputId3(2), "up", Direction3::UP),
         InputDef3::directional(InputId3(3), "down", Direction3::DOWN),
-        InputDef3::directional(InputId3(4), "forward", Direction3::FORWARD),
-        InputDef3::directional(InputId3(5), "backward", Direction3::BACKWARD),
+        InputDef3::directional(InputId3(4), "front", Direction3::FORWARD),
+        InputDef3::directional(InputId3(5), "back", Direction3::BACKWARD),
     ]
+}
+
+fn canonical_input_name3(name: &str) -> &str {
+    match name {
+        "forward" => "front",
+        "backward" => "back",
+        _ => name,
+    }
 }
 
 fn inputs_from_specs(specs: Vec<InputSpec3>) -> Result<Vec<InputDef3>, ParseError3> {
@@ -2116,19 +2694,21 @@ fn inputs_from_specs(specs: Vec<InputSpec3>) -> Result<Vec<InputDef3>, ParseErro
         .saturating_add(1);
     let mut inputs = Vec::new();
     for spec in specs {
+        let canonical_name = canonical_input_name3(&spec.name);
         if inputs
             .iter()
-            .any(|input: &InputDef3| input.name == spec.name)
+            .any(|input: &InputDef3| input.name == canonical_name)
         {
             return Err(message(format!("duplicate input: {}", spec.name)));
         }
-        let input = if let Some(default) = defaults.iter().find(|input| input.name == spec.name) {
-            default.clone().with_keys(spec.keys)
-        } else {
-            let id = InputId3(next_id);
-            next_id = next_id.saturating_add(1);
-            InputDef3::action(id, spec.name).with_keys(spec.keys)
-        };
+        let input =
+            if let Some(default) = defaults.iter().find(|input| input.name == canonical_name) {
+                default.clone().with_keys(spec.keys)
+            } else {
+                let id = InputId3(next_id);
+                next_id = next_id.saturating_add(1);
+                InputDef3::action(id, spec.name).with_keys(spec.keys)
+            };
         inputs.push(input);
     }
     Ok(inputs)

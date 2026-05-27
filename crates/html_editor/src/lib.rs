@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 const EDITOR_HTML: &str = include_str!("../static/editor.html");
+const EDITOR_DOCS_MARKDOWN: &str = include_str!("../docs/editor.md");
 const EDITOR_CSS: &str = include_str!("../static/editor.css");
 const EDITOR_BOOT_JS: &str = include_str!("../static/editor_boot.js");
 const EDITOR_THEME_IMPORTS_JS: &str = include_str!("../static/editor_theme_imports.js");
@@ -192,6 +193,14 @@ impl EditorService {
         &self.state
     }
 
+    pub fn workspace_root(&self) -> &str {
+        &self.state.workspace_root
+    }
+
+    pub fn puzzle_path(&self) -> &str {
+        &self.state.puzzle_path
+    }
+
     pub fn source_json(&self) -> String {
         source_json(&self.state)
     }
@@ -241,9 +250,20 @@ impl EditorService {
         create_source_file(request, &self.state)
     }
 
+    pub fn create_source_folder(
+        &self,
+        request: &CreateSourceFolderRequest,
+    ) -> Result<PathBuf, AppError> {
+        create_source_folder(request, &self.state)
+    }
+
     pub fn export_editor_html(&self) -> Result<String, AppError> {
         export_editor_html(&self.state)
     }
+}
+
+pub fn sound_tools_script() -> String {
+    sound_tools_js()
 }
 
 #[derive(Debug)]
@@ -845,7 +865,8 @@ fn parse_content_length(header: &[u8]) -> usize {
 fn route(request: &HttpRequest, service: &EditorService) -> Vec<u8> {
     match (request.method.as_str(), request.path.as_str()) {
         ("GET", "/") | ("GET", "/editor") | ("GET", "/editor.html") => {
-            http_ok("text/html; charset=utf-8", EDITOR_HTML)
+            let html = editor_html_with_docs();
+            http_ok("text/html; charset=utf-8", &html)
         }
         ("GET", "/favicon.svg") => http_ok("image/svg+xml", FAVICON_SVG),
         ("GET", "/editor.css") => http_ok("text/css; charset=utf-8", EDITOR_CSS),
@@ -920,6 +941,18 @@ fn route(request: &HttpRequest, service: &EditorService) -> Vec<u8> {
             match service.create_source_file(&create) {
                 Ok(path) => {
                     let mut body = String::from("{\"ok\":true,\"puzzlePath\":");
+                    push_json_string(&mut body, &path.display().to_string());
+                    body.push('}');
+                    http_ok("application/json; charset=utf-8", &body)
+                }
+                Err(error) => http_error(400, &error.to_string()),
+            }
+        }
+        ("POST", "/api/create-source-folder") => {
+            let create = CreateSourceFolderRequest::from_body(&request.body);
+            match service.create_source_folder(&create) {
+                Ok(path) => {
+                    let mut body = String::from("{\"ok\":true,\"folderPath\":");
                     push_json_string(&mut body, &path.display().to_string());
                     body.push('}');
                     http_ok("application/json; charset=utf-8", &body)
@@ -1023,6 +1056,24 @@ impl CreateSourceFileRequest {
     }
 }
 
+pub struct CreateSourceFolderRequest {
+    pub folder_path: String,
+}
+
+impl CreateSourceFolderRequest {
+    pub fn new(folder_path: impl Into<String>) -> Self {
+        Self {
+            folder_path: folder_path.into(),
+        }
+    }
+
+    pub fn from_body(body: &str) -> Self {
+        Self {
+            folder_path: json_string_field(body, "folderPath").unwrap_or_default(),
+        }
+    }
+}
+
 fn save_source_file(request: &SaveRequest, state: &EditorState) -> Result<(), AppError> {
     let workspace_root_path = PathBuf::from(&state.workspace_root);
     let workspace_root = workspace_root_path.canonicalize()?;
@@ -1077,6 +1128,34 @@ fn create_source_file(
         )));
     }
     fs::write(&requested_path, &request.source)?;
+    requested_path.canonicalize().map_err(AppError::Io)
+}
+
+fn create_source_folder(
+    request: &CreateSourceFolderRequest,
+    state: &EditorState,
+) -> Result<PathBuf, AppError> {
+    let workspace_root_path = PathBuf::from(&state.workspace_root);
+    let workspace_root = workspace_root_path.canonicalize()?;
+    let requested_path =
+        resolve_workspace_request_path(&request.folder_path, &workspace_root_path)?;
+    if requested_path.exists() {
+        return Err(AppError::Config(format!(
+            "folder already exists: {}",
+            requested_path.display()
+        )));
+    }
+    let parent = requested_path
+        .parent()
+        .ok_or_else(|| AppError::Config("new folder needs a parent folder".to_string()))?
+        .canonicalize()?;
+    if !parent.starts_with(&workspace_root) {
+        return Err(AppError::Config(format!(
+            "can only create folders under {}",
+            workspace_root.display()
+        )));
+    }
+    fs::create_dir(&requested_path)?;
     requested_path.canonicalize().map_err(AppError::Io)
 }
 
@@ -1189,7 +1268,9 @@ fn export_editor_html(state: &EditorState) -> Result<String, AppError> {
     let embedded_wasm_js = embedded_wasm_script();
     let favicon_data_uri = svg_data_uri(FAVICON_SVG);
 
-    Ok(EDITOR_HTML
+    let editor_html = editor_html_with_docs();
+
+    Ok(editor_html
         .replace(
             r#"<link rel="icon" type="image/svg+xml" href="/favicon.svg">"#,
             &format!(r#"<link rel="icon" type="image/svg+xml" href="{favicon_data_uri}">"#),
@@ -1268,6 +1349,130 @@ fn export_editor_html(state: &EditorState) -> Result<String, AppError> {
             r#"<script src="/editor_sounds.js"></script>"#,
             &format!("<script>\n{editor_sounds_js}\n</script>"),
         ))
+}
+
+fn editor_html_with_docs() -> String {
+    EDITOR_HTML.replace(
+        "<!-- PUZZLESTUDIO_EDITOR_DOCS -->",
+        &render_editor_docs_markdown(EDITOR_DOCS_MARKDOWN),
+    )
+}
+
+fn render_editor_docs_markdown(markdown: &str) -> String {
+    let mut out = String::from("<article class=\"docs-article\">\n");
+    let mut paragraph = Vec::new();
+    let mut in_header = false;
+    let mut header_closed = false;
+    let mut in_section = false;
+    let mut in_code = false;
+
+    for line in markdown.lines() {
+        if in_code {
+            if line.trim_start().starts_with("```") {
+                out.push_str("</code></pre>\n");
+                in_code = false;
+            } else {
+                out.push_str(&escape_html(line));
+                out.push('\n');
+            }
+            continue;
+        }
+
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            flush_docs_paragraph(&mut out, &mut paragraph);
+            continue;
+        }
+
+        if trimmed.starts_with("```") {
+            flush_docs_paragraph(&mut out, &mut paragraph);
+            close_docs_header(&mut out, &mut in_header, &mut header_closed);
+            out.push_str("<pre><code>");
+            in_code = true;
+            continue;
+        }
+
+        if let Some(title) = trimmed.strip_prefix("# ") {
+            flush_docs_paragraph(&mut out, &mut paragraph);
+            close_docs_section(&mut out, &mut in_section);
+            close_docs_header(&mut out, &mut in_header, &mut header_closed);
+            out.push_str("<header class=\"docs-header\">\n");
+            out.push_str("<p class=\"docs-kicker\">PuzzleStudio Documents</p>\n");
+            out.push_str("<h2>");
+            out.push_str(&render_docs_inline(title));
+            out.push_str("</h2>\n");
+            in_header = true;
+            header_closed = false;
+            continue;
+        }
+
+        if let Some(title) = trimmed.strip_prefix("## ") {
+            flush_docs_paragraph(&mut out, &mut paragraph);
+            close_docs_header(&mut out, &mut in_header, &mut header_closed);
+            close_docs_section(&mut out, &mut in_section);
+            let notes_class = if title == "What matters first" {
+                " docs-notes"
+            } else {
+                ""
+            };
+            out.push_str(&format!("<section class=\"docs-section{notes_class}\">\n"));
+            out.push_str("<h3>");
+            out.push_str(&render_docs_inline(title));
+            out.push_str("</h3>\n");
+            in_section = true;
+            continue;
+        }
+
+        paragraph.push(trimmed.to_string());
+    }
+
+    if in_code {
+        out.push_str("</code></pre>\n");
+    }
+    flush_docs_paragraph(&mut out, &mut paragraph);
+    close_docs_header(&mut out, &mut in_header, &mut header_closed);
+    close_docs_section(&mut out, &mut in_section);
+    out.push_str("</article>");
+    out
+}
+
+fn flush_docs_paragraph(out: &mut String, paragraph: &mut Vec<String>) {
+    if paragraph.is_empty() {
+        return;
+    }
+    out.push_str("<p>");
+    out.push_str(&render_docs_inline(&paragraph.join(" ")));
+    out.push_str("</p>\n");
+    paragraph.clear();
+}
+
+fn close_docs_header(out: &mut String, in_header: &mut bool, header_closed: &mut bool) {
+    if *in_header && !*header_closed {
+        out.push_str("</header>\n");
+        *header_closed = true;
+        *in_header = false;
+    }
+}
+
+fn close_docs_section(out: &mut String, in_section: &mut bool) {
+    if *in_section {
+        out.push_str("</section>\n");
+        *in_section = false;
+    }
+}
+
+fn render_docs_inline(value: &str) -> String {
+    let mut out = String::new();
+    for (index, part) in value.split('`').enumerate() {
+        if index % 2 == 0 {
+            out.push_str(&escape_html(part));
+        } else {
+            out.push_str("<code>");
+            out.push_str(&escape_html(part));
+            out.push_str("</code>");
+        }
+    }
+    out
 }
 
 fn embedded_wasm_script() -> String {
@@ -1367,6 +1572,8 @@ fn push_editor_documents_json(out: &mut String, state: &EditorState) {
         first = false;
         out.push('{');
         push_json_pair(out, "puzzlePath", &document.puzzle_path);
+        out.push(',');
+        push_json_pair(out, "workspaceRoot", &state.workspace_root);
         out.push(',');
         push_json_pair(out, "encoding", &document.encoding);
         out.push(',');
@@ -1592,7 +1799,7 @@ view {{
 puzzle board
 }}
 rules {{
-board.rules
+step board
 }}
 }}
 "#
@@ -1831,10 +2038,13 @@ board.rules
         assert!(EDITOR_HTML.contains(r#"id="levelBoard" class="level-board board" tabindex="0""#));
         assert!(EDITOR_JS.contains("let levelPlaytestActive = false;"));
         assert!(EDITOR_JS.contains("let levelPlaytestStateData = null;"));
+        assert!(EDITOR_JS.contains("let levelPlaytestRuntime = null;"));
         assert!(EDITOR_JS.contains("function startLevelPlaytest()"));
         assert!(EDITOR_JS.contains("function stopLevelPlaytest(options = {})"));
         assert!(EDITOR_JS.contains("function focusLevelInputTarget()"));
         assert!(EDITOR_JS.contains("function transitionPlaytestProgram("));
+        assert!(EDITOR_JS.contains("function levelPlaytestCoreRuntime("));
+        assert!(EDITOR_JS.contains("transition_current_state_outcome"));
         assert!(EDITOR_JS.contains("function applyLevelPlaytestKey(event)"));
         assert!(EDITOR_JS.contains("acceptModelInput: true"));
         assert!(EDITOR_JS.contains(
@@ -1890,6 +2100,16 @@ board.rules
     }
 
     #[test]
+    fn level_source_previews_do_not_indent_map_rows() {
+        assert!(EDITOR_JS.contains(
+            "levelDefinitionSource(levelName, levelSourceData(), \"\", { leadingBlank: false, bodyIndent: \"\" })"
+        ));
+        assert!(EDITOR_LEVEL3D_JS.contains(
+            "level3dSourcePreview.textContent = level3dSnippetSource(levelName, sourceData, \"\", { bodyIndent: \"\" });"
+        ));
+    }
+
+    #[test]
     fn solver_pane_has_level_selector() {
         assert!(EDITOR_HTML.contains(r#"id="solverLevelSelect""#));
         assert!(EDITOR_DOM_JS.contains("const solverLevelSelect = document.querySelector"));
@@ -1899,6 +2119,9 @@ board.rules
         assert!(EDITOR_JS.contains("function setSolverTargetFromState("));
         assert!(EDITOR_JS.contains("function compiledLevelStateData("));
         assert!(EDITOR_JS.contains("function solverPuzzle3dPreviewSnapshot("));
+        assert!(EDITOR_JS.contains("function solveLevelInMainThread("));
+        assert!(EDITOR_JS.contains("backend: \"wasm-main\""));
+        assert!(EDITOR_JS.contains("Solving in this browser tab"));
         assert!(EDITOR_JS.contains("return currentPreviewMode === \"edit\";"));
         assert!(!EDITOR_JS.contains("requestFocusedPreviewState();"));
         assert!(
@@ -1937,14 +2160,33 @@ board.rules
         assert!(EDITOR_LEVEL3D_JS.contains("const LEVEL3D_MODEL_COMPONENT_PREVIEW_MESSAGE = \"PuzzleStudioRenderPuzzle3ModelComponent\";"));
         assert!(EDITOR_LEVEL3D_JS.contains("type: LEVEL3D_MODEL_COMPONENT_PREVIEW_MESSAGE"));
         assert!(EDITOR_LEVEL3D_JS.contains("function level3dRuntimePreviewDocument(update)"));
-        assert!(EDITOR_LEVEL3D_JS.contains("window.PuzzleStudioInitialModelComponentPreview="));
+        assert!(
+            EDITOR_LEVEL3D_JS.contains("window.PuzzleStudioInitialModelComponentPreview = update;")
+        );
+        assert!(
+            EDITOR_LEVEL3D_JS
+                .contains("window.PuzzleStudioModelComponentPreviewFixture = function")
+        );
+        assert!(EDITOR_LEVEL3D_JS.contains("Object.defineProperty(window, \"Puzzle3DFixture\""));
+        assert!(EDITOR_LEVEL3D_JS.contains("next.currentScene = sceneName;"));
         assert!(EDITOR_LEVEL3D_JS.contains("puzzle-studio-initial-model-preview-boot"));
+        assert!(
+            EDITOR_LEVEL3D_JS
+                .contains("window.PuzzleStudioInitialModelComponentPreviewConsumed === true")
+        );
         assert!(!EDITOR_LEVEL3D_JS.contains("type: \"PuzzleStudioSetPuzzle3Snapshot\""));
         assert!(EDITOR_LEVEL3D_JS.contains("level: {"));
         assert!(EDITOR_LEVEL3D_JS.contains("component: level3dModelPreviewComponent()"));
         assert!(EDITOR_LEVEL3D_JS.contains("const snapshot = level3dRuntimeSnapshot();"));
         assert!(EDITOR_LEVEL3D_JS.contains("resources: level3dRuntimePreviewResources(snapshot)"));
         assert!(EDITOR_LEVEL3D_JS.contains("function showBlankLevel3dRuntimeFrame(frame)"));
+        assert!(EDITOR_LEVEL3D_JS.contains("function level3dDefaultPreviewTarget("));
+        assert!(
+            EDITOR_LEVEL3D_JS
+                .contains("level3dPreviewOrigin = level3dDefaultPreviewTarget(source);")
+        );
+        assert!(EDITOR_LEVEL3D_JS.contains("x: Number(previewOrigin.x) || 0,"));
+        assert!(EDITOR_LEVEL3D_JS.contains("x: width / 2,"));
         assert!(EDITOR_HTML.contains("id=\"level3dRuntimeFrame\""));
         assert!(EDITOR_CSS.contains(".level3d-runtime-frame"));
         assert!(EDITOR_LEVEL3D_JS.contains("showBlankLevel3dRuntimeFrame(level3dLayerFrame);"));
@@ -2083,6 +2325,18 @@ board.rules
         assert!(
             EDITOR_SOURCE_JS
                 .contains("sourceEditor.setRangeText(\"\", removeStart, start, \"start\")")
+        );
+    }
+
+    #[test]
+    fn source_editor_clicks_right_of_text_stay_on_visual_line_end() {
+        assert!(EDITOR_SOURCE_JS.contains("let lineHit = null;"));
+        assert!(EDITOR_SOURCE_JS.contains("let bestInLine = null;"));
+        assert!(EDITOR_SOURCE_JS.contains("if (lineDistance === 0 && char !== \"\\n\")"));
+        assert!(EDITOR_SOURCE_JS.contains("if (clientX >= lineHit.right)"));
+        assert!(
+            EDITOR_SOURCE_JS
+                .contains("return Math.max(0, Math.min(source.length, lineHit.endOffset));")
         );
     }
 
@@ -2320,6 +2574,27 @@ board.rules
     }
 
     #[test]
+    fn browser_compiled_preview_embeds_standalone_runtime_loader() {
+        assert!(EDITOR_JS.contains("function embedStandaloneRuntimeWasm(html)"));
+        assert!(
+            EDITOR_JS
+                .contains("window.PuzzleRuntimeWasmLoader = window.PuzzleRuntimeWasmLoader ||")
+        );
+        assert!(EDITOR_JS.contains("\"window.Puzzle3DFixture = JSON.parse(\""));
+        assert!(EDITOR_JS.contains("window.Puzzle3DFrameAssets.embeddedWasmJs"));
+    }
+
+    #[test]
+    fn sound_tools_script_exposes_editor_sound_api() {
+        let script = sound_tools_script();
+        assert!(script.contains("window.PuzzleSoundGenerator"));
+        assert!(script.contains("generateSoundEffect"));
+        assert!(script.contains("generateSong"));
+        assert!(script.contains("exportSoundEffect"));
+        assert!(script.contains("PuzzleSoundToolsReady"));
+    }
+
+    #[test]
     fn sprite3d_preview_uses_runtime_visual_ordering_contract() {
         assert!(PUZZLE3_VISUAL_CORE_JS.contains("function comparePrimitiveOrder(a, b)"));
         assert!(PUZZLE3_VISUAL_CORE_JS.contains("function faceGridOrder(corners, view)"));
@@ -2338,6 +2613,14 @@ board.rules
     }
 
     #[test]
+    fn sprite3d_preview_slice_selection_uses_ray_hits_before_height_fallback() {
+        assert!(EDITOR_SPRITE3D_JS.contains("function sprite3dPreviewRay(point, view)"));
+        assert!(EDITOR_SPRITE3D_JS.contains("function sprite3dRaycastOccupiedVoxel(ray)"));
+        assert!(EDITOR_SPRITE3D_JS.contains("const voxelHit = sprite3dRaycastOccupiedVoxel(ray);"));
+        assert!(EDITOR_SPRITE3D_JS.contains("return sprite3dApproximateSliceFromRay(ray);"));
+    }
+
+    #[test]
     fn visual_editors_allow_vertical_camera_pitch() {
         assert!(EDITOR_LEVEL3D_JS.contains("const LEVEL3D_CAMERA_MIN_PITCH_DEGREES = -90;"));
         assert!(EDITOR_LEVEL3D_JS.contains("const LEVEL3D_CAMERA_MAX_PITCH_DEGREES = 90;"));
@@ -2347,6 +2630,12 @@ board.rules
         assert!(EDITOR_SPRITE3D_JS.contains("SPRITE3D_CAMERA_MAX_PITCH_DEGREES"));
         assert!(!EDITOR_LEVEL3D_JS.contains("level3dClampNumber(value, -80, 80)"));
         assert!(!EDITOR_SPRITE3D_JS.contains("sprite3dClampNumber(value, -80, 80)"));
+    }
+
+    #[test]
+    fn sprite3d_camera_default_starts_at_y15_p30() {
+        assert!(EDITOR_SPRITE3D_JS.contains("yawDegrees: 15,"));
+        assert!(EDITOR_SPRITE3D_JS.contains("pitchDegrees: 30,"));
     }
 
     #[test]

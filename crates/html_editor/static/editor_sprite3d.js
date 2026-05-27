@@ -8,8 +8,8 @@ const SPRITE3D_SLICE_SCRUB_STEP_PX = 18;
 const SPRITE3D_CAMERA_MIN_PITCH_DEGREES = -90;
 const SPRITE3D_CAMERA_MAX_PITCH_DEGREES = 90;
 const SPRITE3D_CAMERA_DEFAULT = {
-  yawDegrees: 340,
-  pitchDegrees: 28,
+  yawDegrees: 15,
+  pitchDegrees: 30,
   zoom: 1,
 };
 
@@ -448,8 +448,6 @@ function renderSprite3dPreview() {
   const size = sprite3d.size;
   const view = sprite3dPreviewView(width, height, size);
   drawSprite3dBounds(ctx, view);
-  const sliceHitPlanes = sprite3dSliceHitPlanes(view);
-  const sliceHitEdges = sprite3dSliceHitEdges(view);
 
   const occupied = sprite3dOccupancyMap();
   const faces = sprite3dMergedVoxelFaces(occupied, view);
@@ -461,6 +459,9 @@ function renderSprite3dPreview() {
     ...sprite3dSliceSurfaceFaces(sprite3d.slice, view, "active", occupied, 2)
       .map((face) => ({ ...face, ownerCell: previewOwner })),
   ];
+  sceneFaces.forEach((face, index) => {
+    face.primitiveOrder = index;
+  });
   sceneFaces.sort(Puzzle3VisualCore.comparePrimitiveOrder);
   for (const face of sceneFaces) {
     if (face.kind === "slice") {
@@ -469,8 +470,7 @@ function renderSprite3dPreview() {
       drawSprite3dFace(ctx, face);
     }
   }
-  sprite3dPreviewCanvas._sprite3dSliceHitPlanes = sliceHitPlanes;
-  sprite3dPreviewCanvas._sprite3dSliceHitEdges = sliceHitEdges;
+  sprite3dPreviewCanvas._sprite3dPreviewView = view;
   renderSprite3dCameraControls();
 }
 
@@ -2836,9 +2836,9 @@ function stopSprite3dPreviewDrag(event) {
   const wasClick = !sprite3dPreviewDrag.moved;
   sprite3dPreviewDrag = null;
   sprite3dPreviewCanvas.classList.remove("is-dragging");
-  setSprite3dHoverSliceFromEvent(event);
-  if (wasClick && Number.isInteger(sprite3d.hoverSlice)) {
-    setSprite3dSlice(sprite3d.hoverSlice);
+  const hitSlice = setSprite3dHoverSliceFromEvent(event);
+  if (wasClick && Number.isInteger(hitSlice)) {
+    setSprite3dSlice(hitSlice);
   }
 }
 
@@ -2851,22 +2851,137 @@ function sprite3dNormalizeDegrees(value) {
 }
 
 function setSprite3dHoverSliceFromEvent(event) {
+  const next = sprite3dSliceFromPreviewEvent(event);
+  if (sprite3d.hoverSlice !== next) {
+    sprite3d.hoverSlice = next;
+    renderSprite3dPreview();
+  }
+  return next;
+}
+
+function sprite3dSliceFromPreviewEvent(event) {
   const rect = sprite3dPreviewCanvas.getBoundingClientRect();
   const x = event.clientX - rect.left;
   const y = event.clientY - rect.top;
   const point = { x, y };
-  const edgeHit = sprite3dNearestSliceEdgeHit(point, sprite3dPreviewCanvas._sprite3dSliceHitEdges || []);
-  const hitPlanes = sprite3dPreviewCanvas._sprite3dSliceHitPlanes || [];
-  const hit = hitPlanes
-    .filter((plane) => sprite3dPointInPolygon(point, plane.points))
-    .sort((a, b) => a.index - b.index)
-    .at(-1);
-  const next = edgeHit?.index ?? hit?.index ?? null;
-  if (sprite3d.hoverSlice === next) {
-    return;
+  const view = sprite3dPreviewCanvas._sprite3dPreviewView
+    || sprite3dPreviewView(Math.max(1, Math.round(rect.width)), Math.max(1, Math.round(rect.height)), sprite3d.size);
+  const ray = sprite3dPreviewRay(point, view);
+  const voxelHit = sprite3dRaycastOccupiedVoxel(ray);
+  if (voxelHit) {
+    return sprite3dSliceIndexForVoxel(voxelHit.grid);
   }
-  sprite3d.hoverSlice = next;
-  renderSprite3dPreview();
+  return sprite3dApproximateSliceFromRay(ray);
+}
+
+function sprite3dPreviewRay(point, view) {
+  const camera = sprite3dCamera();
+  const yaw = sprite3dDegreesToRadians(camera.yawDegrees ?? 0);
+  const pitch = sprite3dDegreesToRadians(camera.pitchDegrees ?? 0);
+  const scale = Math.max(0.000001, view.cellScale * (camera.zoom ?? 1));
+  const screenU = (point.x - view.originX) / scale;
+  const screenV = (point.y - view.originY) / scale;
+  const sinYaw = Math.sin(yaw);
+  const cosYaw = Math.cos(yaw);
+  const sinPitch = Math.sin(pitch);
+  const cosPitch = Math.cos(pitch);
+  const yawYAtDepthZero = -sinPitch * screenV;
+  const center = (view.size - 1) / 2;
+  return {
+    origin: {
+      x: center + screenU * cosYaw + yawYAtDepthZero * sinYaw,
+      y: center - screenU * sinYaw + yawYAtDepthZero * cosYaw,
+      z: center - cosPitch * screenV,
+    },
+    direction: {
+      x: -sinYaw * cosPitch,
+      y: -cosYaw * cosPitch,
+      z: sinPitch,
+    },
+  };
+}
+
+function sprite3dRaycastOccupiedVoxel(ray) {
+  let best = null;
+  for (let z = 0; z < sprite3d.size; z += 1) {
+    for (let y = 0; y < sprite3d.size; y += 1) {
+      for (let x = 0; x < sprite3d.size; x += 1) {
+        if (!validSprite3dColorIndex(sprite3d.cells[sprite3dCellIndex(x, y, z)])) {
+          continue;
+        }
+        const hit = sprite3dRayAabbInterval(ray, {
+          min: { x: x - 0.5, y: y - 0.5, z: z - 0.5 },
+          max: { x: x + 0.5, y: y + 0.5, z: z + 0.5 },
+        });
+        if (!hit) {
+          continue;
+        }
+        if (!best || hit.tMax > best.tMax + 0.000001) {
+          best = { grid: { x, y, z }, tMax: hit.tMax };
+        }
+      }
+    }
+  }
+  return best;
+}
+
+function sprite3dApproximateSliceFromRay(ray) {
+  const bounds = {
+    min: { x: -0.5, y: -0.5, z: -0.5 },
+    max: { x: sprite3d.size - 0.5, y: sprite3d.size - 0.5, z: sprite3d.size - 0.5 },
+  };
+  const hit = sprite3dRayAabbInterval(ray, bounds);
+  if (!hit) {
+    return null;
+  }
+  const point = {
+    x: ray.origin.x + ray.direction.x * hit.tMax,
+    y: ray.origin.y + ray.direction.y * hit.tMax,
+    z: ray.origin.z + ray.direction.z * hit.tMax,
+  };
+  return sprite3dSliceIndexForWorldPoint(point);
+}
+
+function sprite3dRayAabbInterval(ray, bounds) {
+  let tMin = -Infinity;
+  let tMax = Infinity;
+  for (const axis of ["x", "y", "z"]) {
+    const origin = ray.origin[axis];
+    const direction = ray.direction[axis];
+    if (Math.abs(direction) < 0.000001) {
+      if (origin < bounds.min[axis] || origin > bounds.max[axis]) {
+        return null;
+      }
+      continue;
+    }
+    const t1 = (bounds.min[axis] - origin) / direction;
+    const t2 = (bounds.max[axis] - origin) / direction;
+    tMin = Math.max(tMin, Math.min(t1, t2));
+    tMax = Math.min(tMax, Math.max(t1, t2));
+    if (tMin > tMax) {
+      return null;
+    }
+  }
+  return { tMin, tMax };
+}
+
+function sprite3dSliceIndexForVoxel(grid) {
+  return sprite3dSliceIndexForWorldPoint(grid);
+}
+
+function sprite3dSliceIndexForWorldPoint(point) {
+  const max = sprite3d.size - 1;
+  if (sprite3d.axis === "x") {
+    return sprite3dClamp(Math.round(point.x), 0, max);
+  }
+  if (sprite3d.axis === "y") {
+    return sprite3dClamp(max - Math.round(point.y), 0, max);
+  }
+  return sprite3dClamp(max - Math.round(point.z), 0, max);
+}
+
+function sprite3dDegreesToRadians(value) {
+  return (Number(value) * Math.PI) / 180;
 }
 
 function clearSprite3dHoverSlice() {

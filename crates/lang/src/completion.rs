@@ -258,7 +258,7 @@ fn collect_line_symbols(
         ["routine", name, ..] | ["rule", name, ..] => {
             insert_identifier(&mut symbols.routines, name);
         }
-        ["command" | "input", name, ..] | ["direction", name, ..] => {
+        ["input", name, ..] | ["direction", name, ..] => {
             insert_identifier(&mut symbols.inputs, name);
         }
         ["query", name, ..] => {
@@ -277,7 +277,7 @@ fn collect_line_symbols(
             }
         }
         ["object", spec, ..] if *spec != "=" => collect_object_spec(spec, symbols),
-        ["var" | "const" | "global", name, ..]
+        ["var" | "const", name, ..]
         | ["persistent", "var" | "const", name, ..]
         | ["persistent", name, ..] => {
             insert_identifier(&mut symbols.states, name);
@@ -990,6 +990,52 @@ rules {
                 .items
                 .iter()
                 .any(|item| item.label == "next_level" && item.kind == CompletionKind::Command)
+        );
+    }
+
+    #[test]
+    fn does_not_suggest_removed_command_keyword() {
+        let source = r#"
+title complete_removed_command
+puzzle board {
+co
+}
+"#;
+        let cursor = source.find("co").unwrap() + "co".len();
+        let list = suggest_source_completions(source, cursor);
+
+        assert!(
+            !list
+                .items
+                .iter()
+                .any(|item| item.label == "command" && item.kind == CompletionKind::Keyword)
+        );
+    }
+
+    #[test]
+    fn does_not_suggest_removed_global_keyword() {
+        let top_level = "g";
+        let top_level_list = suggest_source_completions(top_level, top_level.len());
+        assert!(
+            !top_level_list
+                .items
+                .iter()
+                .any(|item| item.label == "global" && item.kind == CompletionKind::Keyword)
+        );
+
+        let puzzle_source = r#"
+title complete_removed_global
+puzzle board {
+g
+}
+"#;
+        let puzzle_cursor = puzzle_source.find("\ng").unwrap() + "\ng".len();
+        let puzzle_list = suggest_source_completions(puzzle_source, puzzle_cursor);
+        assert!(
+            !puzzle_list
+                .items
+                .iter()
+                .any(|item| item.label == "global" && item.kind == CompletionKind::Keyword)
         );
     }
 

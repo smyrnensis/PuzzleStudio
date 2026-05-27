@@ -67,6 +67,7 @@ rules {
 }
 
 on_level_clear {
+  wait 0.3s
   next_level
 }
 
@@ -90,14 +91,24 @@ levels {
 }
 
 scene title {
-  title "Multiple Patterns"
-  subtitle "by increpare"
-  inputs {
-    confirm <- Enter Space x
+  view {
+    title "Multiple Patterns"
+    subtitle "by increpare"
+    if game.has_progress_save {
+      choice "Continue" -> input continue_game
+    }
+    choice "New Game" -> input new_game
   }
-  button "Play" -> input confirm
+  inputs {
+    continue_game <- Enter Space x
+    new_game <- n
+  }
   rules {
-    if input == confirm -> start levels in playing
+    if input == continue_game -> goto playing
+    if input == new_game -> {
+      clear_game_progress
+      goto playing(0)
+    }
   }
 }
 
@@ -115,7 +126,7 @@ scene playing {
     back <- Escape q
   }
   rules {
-    board.rules
+    step board
     if input == back -> goto title
   }
 }
