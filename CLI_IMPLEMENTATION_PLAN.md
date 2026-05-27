@@ -27,6 +27,15 @@ CLI が特に支える対象:
 - shell script による一括変換や検証
 - GUI を開かずに行う authoring / export / regression check
 
+CLI は唯一の入口ではない。`ascii-play`、`html-play`、`html-editor` などの
+adapter binary は、各 adapter の開発・表示確認・static asset 変更確認における
+first-class entry であり続ける。
+
+CLI は product / automation 向けの安定 façade である。adapter の内部挙動、
+CSS、JS、WASM、server behavior を検査するときに、CLI 経由で包む必要はない。
+むしろ owner が adapter にある変更では、その adapter の直コマンドを使うほうが
+正しい。
+
 ## 2. Ownership Boundary
 
 CLI は新しい挙動の所有者ではない。既存の各層を呼び出す薄い adapter として実装する。
@@ -38,6 +47,37 @@ CLI は新しい挙動の所有者ではない。既存の各層を呼び出す�
 - filesystem traversal、stdout/stderr、exit code、JSON output は CLI adapter が所有する
 
 同じ入力に対して、CLI、HTML editor server mode、Tauri shell、WASM editor が異なる compile / preview / save semantics を持たないようにする。
+
+CLI が所有してよいもの:
+
+- command naming and argument parsing
+- shell / CI 向けの exit code
+- human-readable diagnostics と `--json` output contract
+- explicit output path policy and accidental-write prevention
+- batch traversal and report aggregation
+
+CLI が所有してはいけないもの:
+
+- parser/compiler/runtime の意味
+- `html-play` / `html-editor` の layout、theme、asset embedding、server behavior
+- terminal adapter の key handling / rendering semantics
+- editor service の workspace root、save、preview、highlight semantics
+- adapter 開発時の canonical verification path
+
+開発中の注意:
+
+- `target/debug/puzzlestudio` は単なるビルド成果物であり、現在の source tree を代表しない。
+- Rust の `include_str!` / `include_bytes!` で埋め込まれる CSS、JS、WASM を変更した後は、
+  `target/debug/*` を直接実行すると stale asset を検証してしまうことがある。
+- source tree に対する確認は、必要な package を rebuild する `cargo run -p ... -- ...`
+  か、明示的に rebuild 済みの binary で行う。
+- `cargo run -p puzzlestudio -- check ...` は既定で adapter crate をビルドしない。
+  terminal / browser adapter のビルド失敗で syntax / validation check が止まってはいけない。
+  CLI adapter façade 自体を確認するときは `cargo run -p puzzlestudio --features adapters -- ...`
+  を使う。
+- adapter 変更の smoke test は `cargo run -p html-play -- ...`、
+  `cargo run -p html-editor -- ...`、`cargo run -p ascii-play -- ...` を優先してよい。
+- CLI の smoke test は、CLI façade 自体の contract を確認したいときに行う。
 
 ## 3. Proposed Package
 
@@ -57,8 +97,14 @@ puzzlestudio
 
 既存の `ascii-play`、`html-play`、`html-editor` binary は当面残す。CLI が安定した後、共通コマンドからそれらの体験を呼べるようにしてもよい。
 
-現在は `puzzlestudio play` / `preview` / `editor` がそれぞれ既存 adapter の
-実装を薄く呼び出す。既存 binary は開発・後方互換用に残す。
+既定の `puzzlestudio` build は `check` / `import-puzzlescript` を parser / import
+owner だけで実行できるようにし、adapter crate へ静的依存しない。
+`puzzlestudio play` / `preview` / `editor` / export 系は `--features adapters`
+で有効化したときだけ既存 adapter の実装を薄く呼び出す。既存 binary は開発・後方互換用に残す。
+
+CLI が安定しても、既存 binary は「古い入口」ではなく owner-local entry として残す。
+CLI はそれらを便利に集約するが、adapter 開発者や agent が直コマンドを使うことを
+非推奨にしない。
 
 ## 4. Initial Command Surface
 
@@ -94,6 +140,12 @@ Expected behavior:
 - asset path resolution は game folder 基準にする
 - output path が未指定なら安全な default を使うか、明示指定を要求するかを実装前に決める
 
+Development note:
+
+- HTML runtime / theme / asset の変更確認では、直に
+  `cargo run -p html-play -- <path> -o <output.html>` を使ってよい。
+- `puzzlestudio export-html` は standalone export façade の contract を確認するときに使う。
+
 ### `puzzlestudio preview`
 
 ローカル preview server を起動する。
@@ -107,6 +159,11 @@ Expected behavior:
 - 既存の editor / html preview server behavior を共有する
 - 起動時に URL を stdout に出す
 - file watching は初期実装では必須にしない
+
+Development note:
+
+- Browser player の layout、theme、input dispatch、server route を調べる場合は、
+  `cargo run -p html-play -- <path> --serve` が owner-local verification path である。
 
 ### `puzzlestudio play`
 
@@ -122,6 +179,11 @@ Expected behavior:
 - 2D / prototype 3D document の single model を実行する
 - terminal 固有の key handling と表示だけを adapter が所有する
 
+Development note:
+
+- terminal adapter の表示や input を変更した場合は、
+  `cargo run -p ascii-play -- <path>` を優先する。
+
 ### `puzzlestudio editor`
 
 local editor server を起動する。
@@ -135,6 +197,11 @@ Expected behavior:
 - 既存の `html-editor` service を共有する
 - 起動時に editor URL を stdout に出す
 - save / preview / workspace root semantics は editor service が所有する
+
+Development note:
+
+- editor frame、workspace、preview、highlight、save semantics の確認では、
+  `cargo run -p html-editor -- <path> --serve` が owner-local verification path である。
 
 ### `puzzlestudio simulate`
 
@@ -289,8 +356,11 @@ Before implementing each command, check the owner of the behavior:
 - Would HTML editor, Tauri, WASM editor, and CLI agree on the result?
 - Does the command need a JSON contract for AI / CI?
 - Does it have deterministic exit codes?
+- Is this a product / automation façade check, or an adapter-owner smoke check?
+- Would using CLI here hide stale embedded assets or adapter-specific behavior?
 
 Do not make the CLI a parallel implementation of parser, runtime, preview, or project loading semantics.
+Do not make the CLI mandatory for local adapter verification when a direct owner command exists.
 
 ## 8. Open Questions
 

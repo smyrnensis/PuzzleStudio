@@ -14,11 +14,13 @@ export const transition_program_outcome: (a: number, b: number, c: number, d: nu
 export const translate_puzzlescript: (a: number, b: number) => [number, number, number, number];
 export const wasmcoreruntime_current_cells: (a: number) => [number, number, number, number];
 export const wasmcoreruntime_current_state: (a: number) => [number, number, number, number];
+export const wasmcoreruntime_current_state_hash: (a: number) => [number, number, number, number];
 export const wasmcoreruntime_new: (a: number, b: number, c: number, d: number) => [number, number, number];
 export const wasmcoreruntime_restore_saved_state: (a: number, b: number) => [number, number];
 export const wasmcoreruntime_save_current_state: (a: number) => [number, number, number];
 export const wasmcoreruntime_set_state: (a: number, b: number, c: number) => [number, number];
 export const wasmcoreruntime_transition_current_outcome: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
+export const wasmcoreruntime_transition_current_state_outcome: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
 export const wasmcoreruntime_transition_program_outcome: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
 export const wasmpuzzle3runtime_current_cells: (a: number) => [number, number, number, number];
 export const wasmpuzzle3runtime_current_state: (a: number) => [number, number, number, number];

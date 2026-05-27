@@ -1,6 +1,6 @@
 use crate::{
-    transition_program, transition_program_without_input, Direction3, InputId3, LevelBundle3,
-    LevelBundleError3, Rule3, State3, TransitionError3, WinCondition3,
+    Direction3, InputId3, LevelBundle3, LevelBundleError3, Rule3, State3, TransitionError3,
+    WinCondition3, transition_program, transition_program_without_input,
 };
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -550,9 +550,11 @@ mod tests {
         assert_eq!(session.current_level_index(), 0);
         assert_eq!(session.move_count(), 0);
         assert!(!session.completed());
-        assert!(session
-            .state()
-            .has_object(&bundle.game, Coord3::new(0, 0, 0), PLAYER));
+        assert!(
+            session
+                .state()
+                .has_object(&bundle.game, Coord3::new(0, 0, 0), PLAYER)
+        );
     }
 
     #[test]
@@ -564,16 +566,20 @@ mod tests {
         assert!(session.apply_input(&bundle, &rules, INPUT_RIGHT).unwrap());
         assert_eq!(session.move_count(), 1);
         assert!(session.can_undo());
-        assert!(session
-            .state()
-            .has_object(&bundle.game, Coord3::new(1, 0, 0), PLAYER));
+        assert!(
+            session
+                .state()
+                .has_object(&bundle.game, Coord3::new(1, 0, 0), PLAYER)
+        );
 
         assert!(session.undo());
         assert_eq!(session.move_count(), 0);
         assert!(!session.can_undo());
-        assert!(session
-            .state()
-            .has_object(&bundle.game, Coord3::new(0, 0, 0), PLAYER));
+        assert!(
+            session
+                .state()
+                .has_object(&bundle.game, Coord3::new(0, 0, 0), PLAYER)
+        );
     }
 
     #[test]
@@ -601,9 +607,11 @@ mod tests {
         assert_eq!(session.move_count(), 0);
         assert!(!session.completed());
         assert!(!session.can_undo());
-        assert!(session
-            .state()
-            .has_object(&bundle.game, Coord3::new(0, 0, 0), PLAYER));
+        assert!(
+            session
+                .state()
+                .has_object(&bundle.game, Coord3::new(0, 0, 0), PLAYER)
+        );
     }
 
     #[test]
@@ -613,9 +621,11 @@ mod tests {
 
         assert!(session.next_level(&bundle).unwrap());
         assert_eq!(session.current_level_index(), 1);
-        assert!(session
-            .state()
-            .has_object(&bundle.game, Coord3::new(2, 0, 0), PLAYER));
+        assert!(
+            session
+                .state()
+                .has_object(&bundle.game, Coord3::new(2, 0, 0), PLAYER)
+        );
         assert!(!session.next_level(&bundle).unwrap());
 
         assert!(session.previous_level(&bundle).unwrap());
@@ -628,13 +638,17 @@ mod tests {
         let rules = vec![move_right_rule()];
         let mut session = GameSession3::new(&bundle).unwrap();
 
-        assert!(session
-            .move_direction(&bundle, &rules, Direction3::RIGHT)
-            .unwrap());
+        assert!(
+            session
+                .move_direction(&bundle, &rules, Direction3::RIGHT)
+                .unwrap()
+        );
 
-        assert!(session
-            .state()
-            .has_object(&bundle.game, Coord3::new(1, 0, 0), PLAYER));
+        assert!(
+            session
+                .state()
+                .has_object(&bundle.game, Coord3::new(1, 0, 0), PLAYER)
+        );
     }
 
     #[test]
@@ -646,16 +660,22 @@ mod tests {
 
         assert!(!session.completed());
 
-        assert!(session
-            .move_direction_with_win_condition(&bundle, &rules, Direction3::RIGHT, &win)
-            .unwrap());
+        assert!(
+            session
+                .move_direction_with_win_condition(&bundle, &rules, Direction3::RIGHT, &win)
+                .unwrap()
+        );
 
         assert!(session.completed());
-        assert!(session
-            .state()
-            .has_object(&bundle.game, Coord3::new(2, 0, 1), BOX));
-        assert!(session
-            .state()
-            .has_object(&bundle.game, Coord3::new(2, 0, 0), GOAL));
+        assert!(
+            session
+                .state()
+                .has_object(&bundle.game, Coord3::new(2, 0, 1), BOX)
+        );
+        assert!(
+            session
+                .state()
+                .has_object(&bundle.game, Coord3::new(2, 0, 0), GOAL)
+        );
     }
 }

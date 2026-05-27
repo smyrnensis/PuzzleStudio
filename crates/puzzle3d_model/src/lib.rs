@@ -13,44 +13,49 @@ mod visual;
 mod visual_fixture;
 mod win;
 
-pub use ids::{InputId3, LayerId, ObjectId, RuleId3};
+pub use ids::{GlobalId3, InputId3, LayerId, ObjectId, RuleId3, ScratchId3};
 pub use level::{Level3, LevelBundle3, LevelBundleError3, LevelCell3, LevelEntry3, LevelError3};
 pub use model::{
     Axis3, Coord3, Direction3, DirectionSet3, Frame3, FrameChirality3, FrameError3, FrameExpr3,
     FrameSet3, FrameSlot3, Game3, GameError3, InputDef3, ObjectDef3, Offset3, Size3,
 };
 pub use parser::{
-    CameraSettings3, GridSettings3, ModelSettings3, ParseError3, ParsedPuzzle3, parse_puzzle3d,
+    parse_puzzle3d, CameraSettings3, GridSettings3, ModelSettings3, ParseError3, ParsedPuzzle3,
+    ViewportFollow3, ViewportFraming3, ViewportHeight3, ViewportMode3, ViewportSettings3,
 };
 pub use patch::{Patch3, PatchError3, PatchOp3};
+pub use puzzle_kernel::{
+    GlobalUpdateOp, LocalFrame, LocalFrameExtent, ScratchKind, ScratchValueMatch,
+};
 pub use selector::{
-    ConcreteObject3, DenseCell3, DensePattern3, DenseRow3, DenseRuleTemplate3, DenseSlice3,
-    FrameOrientation3, LineMatchCellTemplate3, LineOrientation3, LinePatternTemplate3,
-    LineRuleTemplate3, LineWriteOpTemplate3, LocalWriteOpTemplate3, MatchCellTemplate3,
-    ObjectFamily3, ObjectSelector3, ObjectVariant3, PatternLoweringError3, PatternTemplate3,
-    ResolvedSelector3, RuleLoweringError3, RuleTemplate3, SelectorCatalog3, SelectorCatalogError3,
-    SelectorError3, SelectorGroup3, SelectorScratch3, SelectorTag3, SelectorTransform3,
-    VariantAxis3, VariantValueSet3, WriteOpTemplate3, lower_dense_pattern, lower_dense_pattern_set,
-    lower_dense_pattern_set_to_patterns, lower_dense_pattern_to_patterns,
-    lower_dense_rule_template, lower_line_rule_template, lower_pattern_template,
-    lower_rule_template,
+    lower_dense_pattern, lower_dense_pattern_set, lower_dense_pattern_set_to_patterns,
+    lower_dense_pattern_to_patterns, lower_dense_rule_template, lower_line_rule_template,
+    lower_pattern_template, lower_rule_template, ConcreteObject3, DenseCell3, DensePattern3,
+    DenseRow3, DenseRuleTemplate3, DenseSlice3, FrameOrientation3, LineMatchCellTemplate3,
+    LineOrientation3, LinePatternTemplate3, LineRuleTemplate3, LineWriteOpTemplate3,
+    LocalWriteOpTemplate3, MatchCellTemplate3, ObjectFamily3, ObjectSelector3, ObjectVariant3,
+    PatternLoweringError3, PatternTemplate3, ResolvedSelector3, RuleLoweringError3, RuleTemplate3,
+    SelectorCatalog3, SelectorCatalogError3, SelectorError3, SelectorGroup3, SelectorScratch3,
+    SelectorTag3, SelectorTransform3, VariantAxis3, VariantValueSet3, WriteOpTemplate3,
 };
 pub use session::{
     GameSession3, GameSessionError3, Lifecycle3, LifecycleCommand3, SessionLifecycleResult3,
 };
 pub use snapshot::{BoardCell3, BoardSnapshot3};
 pub use sprite::{Sprite3, SpriteColor3, SpriteSet3, SpriteVoxels3};
-pub use state::{CellView3, State3, StateError3};
+pub use state::{CellView3, SlotScratch3, State3, StateError3};
 pub use transition::{
-    Guard3, MatchCell3, Pattern3, Rule3, RuleApplication3, RuleEffect3, TransitionError3, WriteOp3,
-    count_pattern_matches, has_pattern_match, transition_once, transition_once_all,
-    transition_once_per_level, transition_once_with_input, transition_program,
-    transition_program_without_input, transition_repeated,
+    count_pattern_matches, eval_query_kind, has_pattern_match, transition_once,
+    transition_once_all, transition_once_per_level, transition_once_with_input, transition_program,
+    transition_program_with_local_frame, transition_program_without_input,
+    transition_program_without_input_with_local_frame, transition_repeated,
+    transition_solver_program, Guard3, MatchCell3, Pattern3, QueryKind3, Rule3, RuleApplication3,
+    RuleEffect3, ScratchPattern3, TransitionError3, WriteOp3,
 };
 pub use visual::{ObjectVisual3, VisualCell3, VisualObject3, VisualSnapshot3};
 pub use visual_fixture::{
-    VisualFixtureExportError3, export_visual_fixture_json, export_visual_fixture_json_with_title,
-    export_visual_fixture_json_with_title_and_scenes,
+    export_visual_fixture_json, export_visual_fixture_json_with_title,
+    export_visual_fixture_json_with_title_and_scenes, VisualFixtureExportError3,
 };
 pub use win::WinCondition3;
 
@@ -103,8 +108,8 @@ mod tests {
                 InputDef3::directional(INPUT_RIGHT, "right", Direction3::RIGHT),
                 InputDef3::directional(INPUT_UP, "up", Direction3::UP),
                 InputDef3::directional(InputId3(3), "down", Direction3::DOWN),
-                InputDef3::directional(InputId3(4), "forward", Direction3::FORWARD),
-                InputDef3::directional(INPUT_BACKWARD, "backward", Direction3::BACKWARD),
+                InputDef3::directional(InputId3(4), "front", Direction3::FORWARD),
+                InputDef3::directional(INPUT_BACKWARD, "back", Direction3::BACKWARD),
                 InputDef3::action(InputId3(6), "restart"),
             ],
         )
@@ -150,8 +155,8 @@ mod tests {
                 vec![
                     ObjectVariant3::new(MARKER_LEFT, vec!["left"]),
                     ObjectVariant3::new(MARKER_RIGHT, vec!["right"]),
-                    ObjectVariant3::new(MARKER_FORWARD, vec!["forward"]),
-                    ObjectVariant3::new(MARKER_BACKWARD, vec!["backward"]),
+                    ObjectVariant3::new(MARKER_FORWARD, vec!["front"]),
+                    ObjectVariant3::new(MARKER_BACKWARD, vec!["back"]),
                     ObjectVariant3::new(MARKER_UP, vec!["up"]),
                     ObjectVariant3::new(MARKER_DOWN, vec!["down"]),
                 ],
@@ -380,7 +385,7 @@ horizontal [ Player | no solid ] -> [ | Player ]
         let directions = Direction3::directions();
         assert_eq!(
             directions.map(|direction| direction.name),
-            ["up", "down", "left", "right", "forward", "backward"]
+            ["up", "down", "left", "right", "front", "back"]
         );
         assert_eq!(Direction3::UP.offset, Offset3::new(0, 0, 1));
         assert_eq!(Direction3::DOWN.offset, Offset3::new(0, 0, -1));
@@ -391,7 +396,7 @@ horizontal [ Player | no solid ] -> [ | Player ]
 
         assert_eq!(
             Direction3::horizontal().map(|direction| direction.name),
-            ["left", "right", "forward", "backward"]
+            ["left", "right", "front", "back"]
         );
         assert_eq!(
             Direction3::vertical().map(|direction| direction.name),
@@ -482,10 +487,10 @@ horizontal [ Player | no solid ] -> [ | Player ]
                 .map(|frame| (frame.primary.name, frame.secondary.name, frame.depth.name))
                 .collect::<Vec<_>>(),
             vec![
-                ("left", "up", "forward"),
-                ("right", "up", "backward"),
-                ("forward", "up", "right"),
-                ("backward", "up", "left"),
+                ("left", "up", "front"),
+                ("right", "up", "back"),
+                ("front", "up", "right"),
+                ("back", "up", "left"),
             ]
         );
     }
@@ -570,10 +575,10 @@ horizontal [ Player | no solid ] -> [ | Player ]
                 .map(|frame| (frame.primary.name, frame.secondary.name, frame.depth.name))
                 .collect::<Vec<_>>(),
             vec![
-                ("left", "backward", "up"),
-                ("right", "forward", "up"),
-                ("forward", "left", "up"),
-                ("backward", "right", "up"),
+                ("left", "back", "up"),
+                ("right", "front", "up"),
+                ("front", "left", "up"),
+                ("back", "right", "up"),
             ]
         );
     }
@@ -611,9 +616,11 @@ horizontal [ Player | no solid ] -> [ | Player ]
             FrameSlot3::CompleteCanonical,
         );
 
-        let expected = vec![
-            Frame3::explicit(Direction3::RIGHT, Direction3::BACKWARD, Direction3::DOWN).unwrap(),
-        ];
+        let expected =
+            vec![
+                Frame3::explicit(Direction3::RIGHT, Direction3::BACKWARD, Direction3::DOWN)
+                    .unwrap(),
+            ];
         assert_eq!(missing_primary.expand(), expected);
         assert_eq!(missing_secondary.expand(), expected);
         assert_eq!(missing_depth.expand(), expected);
@@ -902,7 +909,7 @@ horizontal [ Player | no solid ] -> [ | Player ]
                 )],
                 vec![
                     ObjectVariant3::new(MARKER_LEFT, vec!["left"]),
-                    ObjectVariant3::new(MARKER_FORWARD, vec!["forward"]),
+                    ObjectVariant3::new(MARKER_FORWARD, vec!["front"]),
                 ],
             )],
             Vec::new(),
@@ -1018,10 +1025,9 @@ horizontal [ Player | no solid ] -> [ | Player ]
     #[test]
     fn pattern_template_collects_forbidden_selector_alternatives() {
         let catalog = selector_catalog();
-        let template = PatternTemplate3::new(vec![
-            MatchCellTemplate3::new(Direction3::RIGHT.offset)
-                .forbid(ObjectSelector3::group("solid")),
-        ]);
+        let template =
+            PatternTemplate3::new(vec![MatchCellTemplate3::new(Direction3::RIGHT.offset)
+                .forbid(ObjectSelector3::group("solid"))]);
 
         let patterns = lower_pattern_template(&catalog, &template).unwrap();
 
@@ -1146,7 +1152,7 @@ horizontal [ Player | no solid ] -> [ | Player ]
     fn rule_template_allows_unassigned_singleton_write_selector() {
         let catalog = selector_catalog();
         let pattern = PatternTemplate3::new(vec![
-            MatchCellTemplate3::new(Offset3::ZERO).require(ObjectSelector3::object("Player")),
+            MatchCellTemplate3::new(Offset3::ZERO).require(ObjectSelector3::object("Player"))
         ]);
         let rule = RuleTemplate3::once(
             pattern,
@@ -1172,7 +1178,7 @@ horizontal [ Player | no solid ] -> [ | Player ]
     fn rule_template_rejects_ambiguous_unassigned_write_selector() {
         let catalog = selector_catalog();
         let pattern = PatternTemplate3::new(vec![
-            MatchCellTemplate3::new(Offset3::ZERO).require(ObjectSelector3::object("Player")),
+            MatchCellTemplate3::new(Offset3::ZERO).require(ObjectSelector3::object("Player"))
         ]);
         let rule = RuleTemplate3::once(
             pattern,
@@ -1491,6 +1497,45 @@ horizontal [ Player | no solid ] -> [ | Player ]
     }
 
     #[test]
+    fn parser_lowers_3d_line_gap_rules_against_level_extent() {
+        let parsed = parse_puzzle3d(
+            r#"
+puzzle3 gap3 {
+layers {
+floor = Goal
+actor = Player
+}
+
+rules {
+right [ Player | ... | Goal ] -> [ | ... | Player Goal ]
+}
+}
+
+levels3 basic of gap3 {
+legend {
+. = empty
+P = Player
+G = Goal
+}
+
+level start {
+P..G
+}
+}
+"#,
+        )
+        .unwrap();
+        let game = &parsed.game;
+        let bundle = parsed.level_bundle.as_ref().unwrap();
+        let state = bundle.build_level_state(0).unwrap();
+
+        let next = transition_program(game, &state, &parsed.rules, InputId3(0)).unwrap();
+
+        assert!(!next.has_object(game, Coord3::new(0, 0, 0), ObjectId(2)));
+        assert!(next.has_object(game, Coord3::new(3, 0, 0), ObjectId(2)));
+    }
+
+    #[test]
     fn parser_keeps_render_settings_as_model_owned_display_state() {
         let parsed = parse_puzzle3d(
             r#"
@@ -1503,11 +1548,15 @@ render {
 	    interactive_look = true
 	    interactive_zoom = true
 	  }
-	  grid {
-	    occupied_cells = true
-	  }
-	  shade = false
-	}
+		  grid {
+		    occupied_cells = true
+		  }
+          pixelate {
+            scale = 4
+            smoothing = true
+          }
+		  shade = false
+		}
 
 layers {
 actor
@@ -1528,6 +1577,9 @@ Player actor
         assert!(parsed.settings.camera.interactive_zoom);
         assert!(parsed.settings.grid.occupied_cells);
         assert!(!parsed.settings.sprite.shade);
+        assert!(parsed.settings.pixelate.enabled);
+        assert_eq!(parsed.settings.pixelate.scale, 4);
+        assert!(parsed.settings.pixelate.smoothing);
     }
 
     #[test]
@@ -1552,6 +1604,193 @@ Player actor
         assert_eq!(parsed.settings.camera.zoom_milli, 1100);
         assert!(!parsed.settings.grid.occupied_cells);
         assert!(parsed.settings.sprite.shade);
+        assert!(!parsed.settings.pixelate.enabled);
+        assert_eq!(parsed.settings.pixelate.scale, 4);
+        assert!(parsed.settings.pixelate.smoothing);
+    }
+
+    #[test]
+    fn parser_defaults_3d_zoomscreen_height_to_full() {
+        let parsed = parse_puzzle3d(
+            r#"
+puzzle3 viewport_test {
+render {
+  viewport {
+    zoomscreen 7 5
+    focus Player
+  }
+}
+
+layers {
+actor
+}
+
+objects {
+Player actor
+}
+}
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(parsed.settings.viewport.mode, ViewportMode3::Centered);
+        assert_eq!(parsed.settings.viewport.follow, ViewportFollow3::Snap);
+        assert_eq!(parsed.settings.viewport.focus, "Player");
+        assert_eq!(
+            parsed.settings.viewport.framing,
+            Some(ViewportFraming3 {
+                width: 7,
+                depth: 5,
+                height: ViewportHeight3::Full,
+            })
+        );
+    }
+
+    #[test]
+    fn parser_lowers_3d_local_radius_to_cubic_local_frame() {
+        let parsed = parse_puzzle3d(
+            r#"
+puzzle3 local_radius_test {
+layers {
+actor
+}
+
+objects {
+Player actor
+Box actor
+}
+
+rules local_radius 6 {
+right [ Player | Box ] -> [ | Player ]
+}
+}
+"#,
+        )
+        .unwrap();
+
+        let frame = parsed.local_frame.unwrap();
+        assert_eq!(frame.x, LocalFrameExtent::Radius(6));
+        assert_eq!(frame.y, LocalFrameExtent::Radius(6));
+        assert_eq!(frame.z, LocalFrameExtent::Radius(6));
+        assert_eq!(frame.focus_objects, vec![PLAYER]);
+    }
+
+    #[test]
+    fn parser_keeps_smoothscreen_as_smooth_centered_viewport() {
+        let parsed = parse_puzzle3d(
+            r#"
+puzzle3 viewport_test {
+render {
+  viewport {
+    smoothscreen 9 7 3
+    focus actor
+  }
+}
+
+layers {
+actor
+}
+
+objects {
+Player actor
+Box actor
+}
+
+group actor = Player Box
+}
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(parsed.settings.viewport.mode, ViewportMode3::Centered);
+        assert_eq!(parsed.settings.viewport.follow, ViewportFollow3::Smooth);
+        assert_eq!(parsed.settings.viewport.focus, "actor");
+        assert_eq!(
+            parsed.settings.viewport.framing,
+            Some(ViewportFraming3 {
+                width: 9,
+                depth: 7,
+                height: ViewportHeight3::Size(3),
+            })
+        );
+    }
+
+    #[test]
+    fn visual_fixture_exports_3d_viewport_contract() {
+        let parsed = parse_puzzle3d(
+            r#"
+puzzle3 viewport_test {
+render {
+  viewport {
+    smoothscreen 7 7
+    focus actor
+  }
+}
+
+layers {
+actor
+floor
+}
+
+objects {
+Player actor
+Box actor
+Floor floor
+}
+
+group actor = Player Box
+}
+
+levels3 test of viewport_test {
+legend {
+. = empty
+P = Player
+}
+
+level one {
+P
+}
+}
+"#,
+        )
+        .unwrap();
+        let fixture = export_visual_fixture_json(&parsed).unwrap();
+
+        assert!(fixture.contains(
+            r#""viewport": { "mode": "centered", "follow": "smooth", "focus": "actor", "focusObjects": [1, 2], "framingBox": { "width": 7, "depth": 7, "height": "full" } }"#
+        ));
+    }
+
+    #[test]
+    fn visual_fixture_does_not_assign_implicit_sprites() {
+        let parsed = parse_puzzle3d(
+            r#"
+puzzle3 no_sprites {
+layers {
+actor
+}
+
+objects {
+Player actor
+}
+}
+
+levels3 test of no_sprites {
+legend {
+P = Player
+}
+
+level one {
+P
+}
+}
+"#,
+        )
+        .unwrap();
+        let fixture = export_visual_fixture_json(&parsed).unwrap();
+
+        assert!(fixture.contains(r#""Player": { "id": 1, "name": "Player", "sprite": null"#));
+        assert!(fixture.contains(r#"{ "id": 1, "name": "Player", "sprite": null }"#));
     }
 
     #[test]
@@ -1685,6 +1924,63 @@ directions [ Marker:* | ] -> [ | Marker:* ]
                     _ => ObjectId::EMPTY,
                 }
         }));
+    }
+
+    #[test]
+    fn parser_lowers_selector_occurrence_labels_for_group_swap() {
+        let parsed = parse_puzzle3d(
+            r#"
+layers {
+actor = Box Crate
+}
+
+group solid = Box Crate
+
+rules {
+right [ solid#1 | solid#2 ] -> [ solid#2 | solid#1 ]
+}
+"#,
+        )
+        .unwrap();
+
+        assert!(parsed.rules.iter().any(|rule| {
+            rule.pattern.cells[0].require_objects == vec![ObjectId(1)]
+                && rule.pattern.cells[1].require_objects == vec![ObjectId(2)]
+                && rule.writes.contains(&WriteOp3::Move {
+                    from_offset: Offset3::ZERO,
+                    to_offset: Direction3::RIGHT.offset,
+                    object: ObjectId(1),
+                })
+                && rule.writes.contains(&WriteOp3::Move {
+                    from_offset: Direction3::RIGHT.offset,
+                    to_offset: Offset3::ZERO,
+                    object: ObjectId(2),
+                })
+        }));
+    }
+
+    #[test]
+    fn parser_rejects_duplicate_selector_occurrence_labels() {
+        let err = parse_puzzle3d(
+            r#"
+layers {
+actor = Box Crate
+}
+
+group solid = Box Crate
+
+rules {
+right [ solid#1 | solid#1 ] -> [ solid#1 | solid#1 ]
+}
+"#,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            ParseError3::Message(message)
+                if message.contains("DuplicateSelectorOccurrenceLabel")
+        ));
     }
 
     #[test]
@@ -2114,6 +2410,8 @@ actor = Player
         assert!(fixture_json.contains("\"title\": \"Sokoban Literally in 3D\""));
         assert!(fixture_json.contains("\"grid\": { \"visibility\": 1, \"occupied_cells\": true }"));
         assert!(fixture_json.contains("\"shade\": true"));
+        assert!(fixture_json
+            .contains("\"pixelate\": { \"enabled\": false, \"scale\": 4, \"smoothing\": true }"));
         assert!(fixture_json.contains("\"rules\": ["));
         assert!(fixture_json.contains("\"onLevelClear\": [\"next_level\"]"));
         assert!(fixture_json.contains("\"kind\": \"no_pattern\""));
@@ -2184,44 +2482,34 @@ actor = Player
             Direction3::FORWARD,
         ];
         for direction in solution {
-            assert!(
-                session
-                    .move_direction_with_win_condition(bundle, &parsed.rules, direction, win)
-                    .unwrap()
-            );
+            assert!(session
+                .move_direction_with_win_condition(bundle, &parsed.rules, direction, win)
+                .unwrap());
         }
 
         assert!(session.completed());
         assert_eq!(session.move_count(), 33);
-        assert!(
-            session
-                .state()
-                .has_object(&bundle.game, Coord3::new(2, 5, 1), ObjectId(4))
-        );
-        assert!(
-            session
-                .state()
-                .has_object(&bundle.game, Coord3::new(1, 3, 1), ObjectId(4))
-        );
+        assert!(session
+            .state()
+            .has_object(&bundle.game, Coord3::new(2, 5, 1), ObjectId(4)));
+        assert!(session
+            .state()
+            .has_object(&bundle.game, Coord3::new(1, 3, 1), ObjectId(4)));
 
         assert!(session.has_next_level(bundle));
         assert!(session.next_level(bundle).unwrap());
         assert_eq!(session.current_level_index(), 1);
         assert_eq!(session.move_count(), 0);
         assert!(!session.completed());
-        assert!(
-            session
-                .state()
-                .has_object(&bundle.game, Coord3::new(3, 4, 1), ObjectId(3))
-        );
+        assert!(session
+            .state()
+            .has_object(&bundle.game, Coord3::new(3, 4, 1), ObjectId(3)));
         assert!(session.has_next_level(bundle));
         assert!(session.next_level(bundle).unwrap());
         assert_eq!(session.current_level_index(), 2);
-        assert!(
-            session
-                .state()
-                .has_object(&bundle.game, Coord3::new(2, 4, 1), ObjectId(3))
-        );
+        assert!(session
+            .state()
+            .has_object(&bundle.game, Coord3::new(2, 4, 1), ObjectId(3)));
         assert!(!session.has_next_level(bundle));
 
         let mut lifecycle_session = GameSession3::new_with_lifecycle(bundle, &parsed.lifecycle)
@@ -2340,18 +2628,14 @@ actor = Player
             assert_eq!(sprite.size, Size3::new(5, 5, 5));
             assert_eq!(sprite.layers.len(), 5);
             assert!(sprite.layers.iter().all(|layer| layer.len() == 5));
-            assert!(
-                sprite
-                    .layers
-                    .iter()
-                    .all(|layer| layer.iter().all(|row| row.chars().count() == 5))
-            );
-            assert!(
-                sprite.layers[1..]
-                    .iter()
-                    .flatten()
-                    .all(|row| *row == ".....")
-            );
+            assert!(sprite
+                .layers
+                .iter()
+                .all(|layer| layer.iter().all(|row| row.chars().count() == 5)));
+            assert!(sprite.layers[1..]
+                .iter()
+                .flatten()
+                .all(|row| *row == "....."));
         }
 
         let player = sprites
@@ -2419,6 +2703,113 @@ input right [ Player | ] -> [ | Player ]
         let restart = parsed.game.input_by_name("restart").unwrap();
         assert_eq!(restart.direction, None);
         assert_eq!(restart.keys, vec!["r"]);
+    }
+
+    #[test]
+    fn parser_accepts_front_back_as_canonical_3d_directions() {
+        let parsed = parse_puzzle3d(
+            r#"
+puzzle3 front_back {
+layers {
+solid = Player
+}
+
+inputs {
+front <- w ArrowUp
+back <- s ArrowDown
+}
+
+rules {
+front [ Player | ] -> [ | Player ]
+back [ Player | ] -> [ | Player ]
+input front [ Player | ] -> [ | Player ]
+input back [ Player | ] -> [ | Player ]
+}
+}
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            parsed.game.input_by_name("front").map(|input| input.id),
+            Some(INPUT_FORWARD)
+        );
+        assert_eq!(
+            parsed.game.input_by_name("back").map(|input| input.id),
+            Some(INPUT_BACKWARD)
+        );
+        assert_eq!(parsed.rules.len(), 4);
+        assert_eq!(parsed.rules[0].pattern.cells[0].offset, Offset3::ZERO);
+        assert_eq!(
+            parsed.rules[0].pattern.cells[1].offset,
+            Direction3::FORWARD.offset
+        );
+        assert_eq!(
+            parsed.rules[1].pattern.cells[1].offset,
+            Direction3::BACKWARD.offset
+        );
+        assert_eq!(parsed.rules[2].guards, vec![Guard3::InputIs(INPUT_FORWARD)]);
+        assert_eq!(
+            parsed.rules[3].guards,
+            vec![Guard3::InputIs(INPUT_BACKWARD)]
+        );
+    }
+
+    #[test]
+    fn parser_keeps_forward_backward_as_3d_direction_aliases() {
+        let parsed = parse_puzzle3d(
+            r#"
+puzzle3 legacy_forward_backward {
+layers {
+solid = Player
+}
+
+inputs {
+forward <- w ArrowUp
+backward <- s ArrowDown
+}
+
+rules {
+forward [ Player | ] -> [ | Player ]
+backward [ Player | ] -> [ | Player ]
+input forward [ Player | ] -> [ | Player ]
+input backward [ Player | ] -> [ | Player ]
+}
+}
+"#,
+        )
+        .unwrap();
+
+        assert!(parsed.game.input_by_name("forward").is_none());
+        assert!(parsed.game.input_by_name("backward").is_none());
+        assert_eq!(
+            parsed
+                .game
+                .input_by_name("front")
+                .map(|input| input.keys.clone()),
+            Some(vec!["w".to_string(), "ArrowUp".to_string()])
+        );
+        assert_eq!(
+            parsed
+                .game
+                .input_by_name("back")
+                .map(|input| input.keys.clone()),
+            Some(vec!["s".to_string(), "ArrowDown".to_string()])
+        );
+        assert_eq!(parsed.rules.len(), 4);
+        assert_eq!(
+            parsed.rules[0].pattern.cells[1].offset,
+            Direction3::FORWARD.offset
+        );
+        assert_eq!(
+            parsed.rules[1].pattern.cells[1].offset,
+            Direction3::BACKWARD.offset
+        );
+        assert_eq!(parsed.rules[2].guards, vec![Guard3::InputIs(INPUT_FORWARD)]);
+        assert_eq!(
+            parsed.rules[3].guards,
+            vec![Guard3::InputIs(INPUT_BACKWARD)]
+        );
     }
 
     #[test]
@@ -3104,6 +3495,156 @@ input right [ Player | ] -> [ | Player ]
     }
 
     #[test]
+    fn patch_can_update_3d_visible_globals_and_scratch() {
+        let game = game();
+        let mut state = State3::empty_with_globals(Size3::new(1, 1, 1), 1, vec![2]).unwrap();
+        state
+            .place_object(&game, Coord3::new(0, 0, 0), PLAYER)
+            .unwrap();
+
+        let patch = Patch3 {
+            ops: vec![
+                PatchOp3::UpdateGlobal {
+                    global: GlobalId3(0),
+                    op: GlobalUpdateOp::Add,
+                    value: 3,
+                },
+                PatchOp3::SetScratch {
+                    position: Coord3::new(0, 0, 0),
+                    object: PLAYER,
+                    scratch: ScratchId3(1),
+                    value: Some(7),
+                },
+                PatchOp3::SetScratch {
+                    position: Coord3::new(0, 0, 0),
+                    object: ObjectId::EMPTY,
+                    scratch: ScratchId3(2),
+                    value: None,
+                },
+            ],
+        };
+
+        patch.apply(&game, &mut state).unwrap();
+
+        assert_eq!(state.global_value(GlobalId3(0)), Some(5));
+        assert!(state.has_scratch(&game, Coord3::new(0, 0, 0), PLAYER, ScratchId3(1), Some(7)));
+        assert!(state.has_cell_scratch_key(Coord3::new(0, 0, 0), ScratchId3(2)));
+    }
+
+    #[test]
+    fn move_patch_preserves_3d_slot_scratch() {
+        let game = game();
+        let mut state = empty_state(2, 1, 1);
+        state
+            .place_object(&game, Coord3::new(0, 0, 0), PLAYER)
+            .unwrap();
+        Patch3 {
+            ops: vec![PatchOp3::SetScratch {
+                position: Coord3::new(0, 0, 0),
+                object: PLAYER,
+                scratch: ScratchId3(1),
+                value: Some(9),
+            }],
+        }
+        .apply(&game, &mut state)
+        .unwrap();
+
+        Patch3 {
+            ops: vec![PatchOp3::Move {
+                from: Coord3::new(0, 0, 0),
+                to: Coord3::new(1, 0, 0),
+                object: PLAYER,
+            }],
+        }
+        .apply(&game, &mut state)
+        .unwrap();
+
+        assert!(!state.has_scratch(&game, Coord3::new(0, 0, 0), PLAYER, ScratchId3(1), Some(9)));
+        assert!(state.has_scratch(&game, Coord3::new(1, 0, 0), PLAYER, ScratchId3(1), Some(9)));
+    }
+
+    #[test]
+    fn query_kind_evaluates_3d_objects_and_patterns() {
+        let game = game();
+        let mut state = empty_state(2, 1, 1);
+        state
+            .place_object(&game, Coord3::new(0, 0, 0), PLAYER)
+            .unwrap();
+        state
+            .place_object(&game, Coord3::new(1, 0, 0), BOX)
+            .unwrap();
+        let push_pattern = Pattern3::new(vec![
+            MatchCell3::new(Offset3::ZERO).require(PLAYER),
+            MatchCell3::new(Direction3::RIGHT.offset).require(BOX),
+        ]);
+
+        assert_eq!(
+            eval_query_kind(
+                &game,
+                &state,
+                &QueryKind3::CountObjects(vec![PLAYER, BOX]),
+                None
+            ),
+            2
+        );
+        assert_eq!(
+            eval_query_kind(
+                &game,
+                &state,
+                &QueryKind3::ExistsMatches(vec![push_pattern.clone()]),
+                None
+            ),
+            1
+        );
+        assert_eq!(
+            eval_query_kind(
+                &game,
+                &state,
+                &QueryKind3::CountInputMatches(vec![(INPUT_RIGHT, push_pattern)]),
+                Some(INPUT_RIGHT)
+            ),
+            1
+        );
+    }
+
+    #[test]
+    fn transition_solver_program_skips_visual_rules_and_objects() {
+        let game = Game3::new_with_inputs_and_roles(
+            1,
+            vec![
+                ObjectDef3 {
+                    id: PLAYER,
+                    layer_id: ACTOR,
+                },
+                ObjectDef3 {
+                    id: BOX,
+                    layer_id: ACTOR,
+                },
+            ],
+            vec![InputDef3::directional(
+                INPUT_RIGHT,
+                "right",
+                Direction3::RIGHT,
+            )],
+            vec![BOX],
+            vec![RuleId3(99)],
+        );
+        let mut state = empty_state(3, 1, 1);
+        state
+            .place_object(&game, Coord3::new(0, 0, 0), PLAYER)
+            .unwrap();
+        state
+            .place_object(&game, Coord3::new(1, 0, 0), BOX)
+            .unwrap();
+        let visual_move = move_rule(Direction3::RIGHT).with_id(RuleId3(99));
+
+        let next = transition_solver_program(&game, &state, &[visual_move], INPUT_RIGHT).unwrap();
+
+        assert!(next.has_object(&game, Coord3::new(0, 0, 0), PLAYER));
+        assert!(!next.has_object(&game, Coord3::new(1, 0, 0), BOX));
+    }
+
+    #[test]
     fn visual_snapshot_extracts_only_visible_non_empty_cells() {
         let game = game();
         let mut state = empty_state(3, 3, 3);
@@ -3126,5 +3667,41 @@ input right [ Player | ] -> [ | Player ]
         assert_eq!(snapshot.cells[0].objects[0].id, PLAYER);
         assert_eq!(snapshot.cells[0].objects[0].name, "Player");
         assert_eq!(snapshot.cells[0].objects[0].sprite, "cube");
+    }
+
+    #[test]
+    fn local_frame_full_height_limits_3d_rules_by_horizontal_frame_only() {
+        let game = game();
+        let mut state = empty_state(4, 1, 3);
+        state
+            .place_object(&game, Coord3::new(0, 0, 0), PLAYER)
+            .unwrap();
+        state
+            .place_object(&game, Coord3::new(1, 0, 2), BOX)
+            .unwrap();
+        state
+            .place_object(&game, Coord3::new(3, 0, 0), BOX)
+            .unwrap();
+        let rule = Rule3::once_all(
+            Pattern3::new(vec![MatchCell3::new(Offset3::ZERO).require(BOX)]),
+            vec![WriteOp3::Replace {
+                offset: Offset3::ZERO,
+                remove: BOX,
+                add: WALL,
+            }],
+        );
+        let frame = LocalFrame::new(
+            LocalFrameExtent::Radius(1),
+            LocalFrameExtent::Radius(1),
+            LocalFrameExtent::Full,
+            vec![PLAYER],
+        );
+
+        let next =
+            transition_program_with_local_frame(&game, &state, &[rule], INPUT_RIGHT, Some(&frame))
+                .unwrap();
+
+        assert!(next.has_object(&game, Coord3::new(1, 0, 2), WALL));
+        assert!(next.has_object(&game, Coord3::new(3, 0, 0), BOX));
     }
 }

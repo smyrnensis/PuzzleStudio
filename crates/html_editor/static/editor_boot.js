@@ -12,6 +12,16 @@
     return window.__TAURI__?.core?.invoke || window.__TAURI__?.tauri?.invoke || null;
   }
 
+  function tauriListen(eventName, handler) {
+    if (window.__TAURI__?.event?.listen) {
+      return window.__TAURI__.event.listen(eventName, handler);
+    }
+    if (window.__TAURI__?.core?.listen) {
+      return window.__TAURI__.core.listen(eventName, handler);
+    }
+    return null;
+  }
+
   function serverBackendAvailable() {
     return window.location.protocol === "http:" || window.location.protocol === "https:";
   }
@@ -65,12 +75,45 @@
       }
       return fetchJson("/api/source");
     },
-    async openProject() {
+    async openWorkspace(payload = {}) {
       const invoke = tauriInvoke();
       if (!invoke) {
-        throw new Error("Open project is only available in the desktop app.");
+        throw new Error("Open workspace is only available in the desktop app.");
       }
-      return invoke("open_project", { request: {} });
+      return invoke("open_workspace", { request: payload });
+    },
+    async openProject() {
+      return this.openWorkspace({ kind: "folder" });
+    },
+    async recentWorkspaces() {
+      const invoke = tauriInvoke();
+      if (!invoke) {
+        return [];
+      }
+      return invoke("recent_workspaces");
+    },
+    async openRecentWorkspace(payload) {
+      const invoke = tauriInvoke();
+      if (!invoke) {
+        throw new Error("Open recent is only available in the desktop app.");
+      }
+      return invoke("open_recent_workspace", { request: payload });
+    },
+    async removeWorkspace(payload) {
+      const invoke = tauriInvoke();
+      if (!invoke) {
+        throw new Error("Remove workspace is only available in the desktop app.");
+      }
+      return invoke("remove_workspace", { request: payload });
+    },
+    async listenWorkspaceChanged(handler) {
+      const listen = tauriListen("puzzlestudio-workspace-changed", (event) => {
+        handler(event?.payload || {});
+      });
+      if (!listen) {
+        return () => {};
+      }
+      return listen;
     },
     async preview(payload, options = {}) {
       const invoke = tauriInvoke();
@@ -102,6 +145,16 @@
         signal: options.signal,
       });
     },
+    async soundTools() {
+      const invoke = tauriInvoke();
+      if (invoke) {
+        return invoke("sound_tools");
+      }
+      if (!serverBackendAvailable()) {
+        throw backendUnavailableError();
+      }
+      return fetchText("/sound-tools.js");
+    },
     async save(payload) {
       const invoke = tauriInvoke();
       if (invoke) {
@@ -125,6 +178,20 @@
         throw backendUnavailableError();
       }
       return fetchJson("/api/create-source-file", {
+        method: "POST",
+        headers: { "Content-Type": "application/json; charset=utf-8" },
+        body: JSON.stringify(payload),
+      });
+    },
+    async createSourceFolder(payload) {
+      const invoke = tauriInvoke();
+      if (invoke) {
+        return invoke("create_source_folder", { request: payload });
+      }
+      if (!serverBackendAvailable()) {
+        throw backendUnavailableError();
+      }
+      return fetchJson("/api/create-source-folder", {
         method: "POST",
         headers: { "Content-Type": "application/json; charset=utf-8" },
         body: JSON.stringify(payload),

@@ -237,7 +237,7 @@ Validation:
 - `cargo test -p puzzle-lang` focused scene tests.
 - `cargo check -p html-play`.
 
-### Package E: Migrate 3D Scene3 To Shared Shape
+### Package E: Migrate 3D Scenes To Shared Shape
 
 Owner: `puzzle3d-model`.
 
@@ -245,8 +245,9 @@ Goal: stop representing 3D scenes as a separate scene/component hierarchy.
 
 Tasks:
 
-- Replace `Scene3.components: Vec<SceneComponent3>` with shared components, or
-  add a compatibility conversion layer as a temporary step.
+- Replace the former 3D-only scene wrapper with `puzzle_scene::Scene`.
+- Replace `SceneComponent3` with shared components; `puzzle3 <slot>` lowers to a
+  shared `FrameComponent` whose `inputs` are component-local window config.
 - Convert `puzzle3 <slot>` into shared `ModelWindow { model_kind: Puzzle3d }`.
 - Move scene root layout to the shared `Scene`.
 - Decide whether 3D `keys { ... }` is immediately migrated to `inputs { ... }`

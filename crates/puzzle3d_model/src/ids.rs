@@ -1,3 +1,5 @@
+use puzzle_kernel::KernelId;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ObjectId(pub u16);
 
@@ -17,3 +19,21 @@ pub struct InputId3(pub u16);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct RuleId3(pub u16);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct GlobalId3(pub u16);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ScratchId3(pub u16);
+
+impl KernelId for GlobalId3 {
+    fn raw(self) -> u16 {
+        self.0
+    }
+}
+
+impl KernelId for ScratchId3 {
+    fn raw(self) -> u16 {
+        self.0
+    }
+}

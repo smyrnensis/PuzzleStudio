@@ -91,7 +91,10 @@ pub(crate) fn semantic_completion_context(
     let contextual_slots = contextual_completion_slots(source, &context, &token, scope);
     let slots = if let Some(slots) = contextual_slots {
         slots
-    } else if previous.as_deref() == Some("goto") {
+    } else if matches!(
+        previous.as_deref(),
+        Some("goto" | "resume" | "enter" | "open" | "start")
+    ) {
         vec![SemanticCompletionSlot::Scenes]
     } else if previous.as_deref() == Some("of") {
         vec![SemanticCompletionSlot::Puzzles]
@@ -206,7 +209,12 @@ pub(crate) fn semantic_builtin_effect_commands() -> Vec<(&'static str, SemanticK
         "again",
         "back",
         "cancel",
+        "checkpoint",
+        "clear_checkpoint",
+        "close",
         "clear_history",
+        "clear_undo_history",
+        "clear_game_progress",
         "continue",
         "copy",
         "create",
@@ -220,10 +228,12 @@ pub(crate) fn semantic_builtin_effect_commands() -> Vec<(&'static str, SemanticK
         "load",
         "message",
         "next_level",
+        "open",
         "pause_music",
         "play_music",
         "reset",
         "restart",
+        "resume",
         "resume_music",
         "set",
         "sfx",
@@ -399,11 +409,11 @@ fn is_completion_char(ch: char) -> bool {
 }
 
 const TOP_LEVEL_COMPLETION_KEYWORDS: &[&str] = &[
+    "again_interval",
     "assets",
     "author",
     "sounds",
     "const",
-    "global",
     "homepage",
     "import",
     "levels",
@@ -428,11 +438,9 @@ const ASSET_COMPLETION_KEYWORDS: &[&str] = &["css"];
 
 const PUZZLE_COMPLETION_KEYWORDS: &[&str] = &[
     "collision_layers",
-    "command",
     "const",
     "display_objects",
     "for",
-    "global",
     "group",
     "if",
     "input",
@@ -471,8 +479,8 @@ const OBJECT_COMPLETION_KEYWORDS: &[&str] = &["display", "each"];
 const TAG_COMPLETION_KEYWORDS: &[&str] = &[];
 const GROUP_COMPLETION_KEYWORDS: &[&str] = &["display", "each"];
 const LAYER_COMPLETION_KEYWORDS: &[&str] = &["display", "each"];
-const SCRATCH_COMPLETION_KEYWORDS: &[&str] = &["const", "global", "persistent", "var"];
-const KEY_COMPLETION_KEYWORDS: &[&str] = &["command", "direction", "input"];
+const SCRATCH_COMPLETION_KEYWORDS: &[&str] = &["const", "persistent", "var"];
+const KEY_COMPLETION_KEYWORDS: &[&str] = &["direction", "input"];
 const LEGEND_COMPLETION_KEYWORDS: &[&str] = &["empty"];
 const LEVEL_COMPLETION_KEYWORDS: &[&str] = &["legend", "level", "of"];
 
@@ -505,12 +513,12 @@ const SCENE_COMPLETION_KEYWORDS: &[&str] = &[
 const VISUAL_COMPLETION_KEYWORDS: &[&str] = &["colors", "shape", "sprite"];
 
 const COMPLETION_KEYWORDS: &[&str] = &[
+    "again_interval",
     "assets",
     "author",
     "sounds",
     "button",
     "column",
-    "command",
     "const",
     "colors",
     "collision_layers",
@@ -523,7 +531,6 @@ const COMPLETION_KEYWORDS: &[&str] = &[
     "else",
     "for",
     "from",
-    "global",
     "group",
     "homepage",
     "if",

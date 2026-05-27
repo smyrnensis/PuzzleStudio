@@ -15,22 +15,21 @@ theme clean {
 }
 
 sounds {
-	sfx push seed=boxpush01 type=hit
-	sfx clear seed=clear01 type=jump
+	sfx push seed=push type=hit
+	sfx bump seed=bump type=hit
+	sfx clear seed=clear type=jump
 	music music_name seed=test1 tone=0 bpm=105 volume=0.5
 }
 
 puzzle sokoban {
-	var box_moved = false
-
 	layers {
-		display_floor = @Floor
+		floor = Floor
 		target = Goal
 		solid = Player Box Wall
 	}
 
 	sprites {
-		@Floor {
+		Floor {
 			#90ee90 #008000
 			11111
 			01111
@@ -76,27 +75,39 @@ puzzle sokoban {
 		}
 	}
 
+	sounds {
+		move Box -> sfx push
+		cantmove Box -> sfx bump
+	}
+
 	win_conditions {
 		some Goal
 		all Goal on Box
 	}
 
-	routine @fill_floor repeat {
-		[ no @Floor ] -> [ @Floor ]
+	routine fill_floor repeat {
+		[ no Floor ] -> [ Floor ]
 	}
 
-	on_display {
-		@fill_floor
+	on_level_start {
+		fill_floor
+	}
+
+	on_level_clear {
+		sfx clear
+		wait 0.35s
+		next_level
+	}
+
+	on_last_level_clear {
+		sfx clear
+		message final_message
 	}
 
 	rules {
-		once [ Player ] -> set box_moved = false
-		for d in directions {
-			if input == d {
-				once d [ Player | Box | no solid ] -> [ | Player | Box ] set box_moved = true
-				once d [ Player | no solid ] -> [ | Player ]
-			}
-		}
+		input directions [ Player ] -> [ > Player ]
+		[ > Player | Box ] -> [ > Player | > Box ]
+		move
 	}
 }
 
@@ -200,11 +211,17 @@ levels microban of sokoban {
 scene title {
 	title
 	subtitle
-	button "Continue" -> continue levels in playing
-	button "New Game" -> start levels in playing
-	button "Level Select" -> goto level_select
+	choice "Continue" -> goto playing
+	choice "New Game" -> input new_game
+	choice "Level Select" -> goto level_select
 	on_scene_start {
 		stop_music music_name
+	}
+	rules {
+		new_game -> {
+			clear_game_progress
+			goto playing("microban.1")
+		}
 	}
 }
 
@@ -229,23 +246,15 @@ scene playing {
 	}
 	rules {
 		step board
-		input open_menu -> enter menu
-		input level_select -> {
+		open_menu -> enter menu
+		level_select -> {
 			stop_music music_name
 			goto level_select
 		}
 		if board.win_conditions and board.level.last -> {
-			sfx clear
-			message final_message
 			stop_music music_name
 			goto level_select
 		}
-		if board.win_conditions -> {
-			sfx clear
-			wait 0.35s
-			board.next_level
-		}
-		if board.box_moved -> sfx push
 	}
 }
 
@@ -253,9 +262,9 @@ scene menu {
 	view {
 		text "Menu"
 		column {
-			button "Resume" -> input resume
-			button "Restart" -> playing.restart
-			button "Level Select" -> goto level_select
+			choice "Resume" -> input resume
+			choice "Restart" -> playing.restart
+			choice "Level Select" -> goto level_select
 		}
 	}
 	inputs {
@@ -263,11 +272,11 @@ scene menu {
 		level_select <- q
 	}
 	rules {
-		input resume -> {
+		resume -> {
 			resume_music music_name
 			back
 		}
-		input level_select -> {
+		level_select -> {
 			stop_music music_name
 			goto level_select
 		}
@@ -277,7 +286,7 @@ scene menu {
 	scene level_select {
 			view {
 				text "Select a level"
-				level_menu microban -> start microban in playing
+				level_menu microban -> goto playing(level)
 				button "Back" -> goto title
 			}
 		inputs {
@@ -287,6 +296,6 @@ scene menu {
 		stop_music music_name
 	}
 	rules {
-		input back_to_title -> goto title
+		back_to_title -> goto title
 	}
 }

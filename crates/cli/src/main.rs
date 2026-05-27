@@ -29,6 +29,7 @@ fn run() -> Result<(), CliError> {
         "export-html" => export_html_command(&args),
         "export-editor" => export_editor_command(&args),
         "import-puzzlescript" => import_puzzlescript_command(&args),
+        "screenshot" => screenshot_command(&args),
         "play" => play_command(&args),
         "preview" => preview_command(&args),
         "editor" | "edit" => editor_command(&args),
@@ -41,36 +42,146 @@ fn run() -> Result<(), CliError> {
 }
 
 fn play_command(args: &[String]) -> Result<(), CliError> {
-    if args.iter().any(|arg| arg == "--help" || arg == "-h") {
-        print_play_usage();
-        return Ok(());
+    #[cfg(feature = "play")]
+    {
+        if args.iter().any(|arg| arg == "--help" || arg == "-h") {
+            print_play_usage();
+            return Ok(());
+        }
+        ascii_play::run_terminal_from_args(args.iter().cloned())
+            .map_err(|error| CliError::Config(error.to_string()))
     }
-    ascii_play::run_terminal_from_args(args.iter().cloned())
-        .map_err(|error| CliError::Config(error.to_string()))
+    #[cfg(not(feature = "play"))]
+    {
+        let _ = args;
+        Err(disabled_adapter_command("play", "play"))
+    }
 }
 
 fn preview_command(args: &[String]) -> Result<(), CliError> {
-    if args.iter().any(|arg| arg == "--help" || arg == "-h") {
-        print_preview_usage();
-        return Ok(());
+    #[cfg(feature = "preview")]
+    {
+        if args.iter().any(|arg| arg == "--help" || arg == "-h") {
+            print_preview_usage();
+            return Ok(());
+        }
+        let mut forwarded = args.to_vec();
+        if !forwarded.iter().any(|arg| arg == "--serve") {
+            forwarded.push("--serve".to_string());
+        }
+        html_play::run_cli_with_args(forwarded).map_err(CliError::Config)
     }
-    let mut forwarded = args.to_vec();
-    if !forwarded.iter().any(|arg| arg == "--serve") {
-        forwarded.push("--serve".to_string());
+    #[cfg(not(feature = "preview"))]
+    {
+        let _ = args;
+        Err(disabled_adapter_command("preview", "preview"))
     }
-    html_play::run_cli_with_args(forwarded).map_err(CliError::Config)
 }
 
 fn editor_command(args: &[String]) -> Result<(), CliError> {
-    if args.iter().any(|arg| arg == "--help" || arg == "-h") {
-        print_editor_usage();
-        return Ok(());
+    #[cfg(feature = "editor")]
+    {
+        if args.iter().any(|arg| arg == "--help" || arg == "-h") {
+            print_editor_usage();
+            return Ok(());
+        }
+        let mut forwarded = args.to_vec();
+        if !forwarded.iter().any(|arg| arg == "--serve") {
+            forwarded.push("--serve".to_string());
+        }
+        html_editor::run_cli_with_args(forwarded)
+            .map_err(|error| CliError::Config(error.to_string()))
     }
-    let mut forwarded = args.to_vec();
-    if !forwarded.iter().any(|arg| arg == "--serve") {
-        forwarded.push("--serve".to_string());
+    #[cfg(not(feature = "editor"))]
+    {
+        let _ = args;
+        Err(disabled_adapter_command("editor", "editor"))
     }
-    html_editor::run_cli_with_args(forwarded).map_err(|error| CliError::Config(error.to_string()))
+}
+
+fn screenshot_command(args: &[String]) -> Result<(), CliError> {
+    #[cfg(feature = "screenshot")]
+    {
+        if args.iter().any(|arg| arg == "--help" || arg == "-h") {
+            print_screenshot_usage();
+            return Ok(());
+        }
+        html_play::run_cli_with_args(screenshot_forwarded_args(args)?).map_err(CliError::Config)
+    }
+    #[cfg(not(feature = "screenshot"))]
+    {
+        let _ = args;
+        Err(disabled_adapter_command("screenshot", "screenshot"))
+    }
+}
+
+#[cfg(feature = "screenshot")]
+fn screenshot_forwarded_args(args: &[String]) -> Result<Vec<String>, CliError> {
+    let mut forwarded = Vec::new();
+    let mut output_path = None::<String>;
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "-o" | "--output" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return Err(CliError::Usage(format!(
+                        "{} requires a value",
+                        args[index - 1]
+                    )));
+                };
+                output_path = Some(value.clone());
+            }
+            value => forwarded.push(value.to_string()),
+        }
+        index += 1;
+    }
+    let Some(output_path) = output_path else {
+        return Err(CliError::Usage(
+            "screenshot requires -o/--output <output.png>".to_string(),
+        ));
+    };
+    forwarded.push("--screenshot".to_string());
+    forwarded.push(output_path);
+    Ok(forwarded)
+}
+
+#[cfg(not(all(
+    feature = "play",
+    feature = "preview",
+    feature = "editor",
+    feature = "export-html",
+    feature = "export-editor",
+    feature = "screenshot"
+)))]
+fn disabled_adapter_command(command: &str, feature: &str) -> CliError {
+    CliError::Config(format!(
+        "puzzlestudio {command} is not included in this build; rebuild with --features {feature} or --features adapters"
+    ))
+}
+
+#[cfg(any(
+    feature = "play",
+    feature = "preview",
+    feature = "editor",
+    feature = "export-html",
+    feature = "export-editor",
+    feature = "screenshot"
+))]
+fn adapter_feature_note() -> &'static str {
+    ""
+}
+
+#[cfg(not(any(
+    feature = "play",
+    feature = "preview",
+    feature = "editor",
+    feature = "export-html",
+    feature = "export-editor",
+    feature = "screenshot"
+)))]
+fn adapter_feature_note() -> &'static str {
+    "\n\nadapter commands require --features adapters when building from source"
 }
 
 fn check_command(args: &[String]) -> Result<(), CliError> {
@@ -150,74 +261,92 @@ fn write_check_failure(json: bool, diagnostics: &[Diagnostic]) {
 }
 
 fn export_html_command(args: &[String]) -> Result<(), CliError> {
-    let mut input_path = None::<PathBuf>;
-    let mut output_path = None::<PathBuf>;
-
-    let mut index = 0;
-    while index < args.len() {
-        match args[index].as_str() {
-            "-o" | "--output" => {
-                index += 1;
-                let Some(value) = args.get(index) else {
-                    return Err(CliError::Usage(format!(
-                        "{} requires a value",
-                        args[index - 1]
-                    )));
-                };
-                output_path = Some(PathBuf::from(value));
-            }
-            "--help" | "-h" => {
-                print_export_html_usage();
-                return Ok(());
-            }
-            value if value.starts_with('-') => {
-                return Err(CliError::Usage(format!(
-                    "unknown export-html option: {value}"
-                )));
-            }
-            value => {
-                if input_path.is_some() {
-                    return Err(CliError::Usage(
-                        "export-html accepts exactly one input path".to_string(),
-                    ));
-                }
-                input_path = Some(PathBuf::from(value));
-            }
-        }
-        index += 1;
-    }
-
-    let Some(input_path) = input_path else {
-        return Err(CliError::Usage(
-            "export-html requires an input path".to_string(),
-        ));
-    };
-    let Some(output_path) = output_path else {
-        return Err(CliError::Usage(
-            "export-html requires -o/--output to avoid accidental writes".to_string(),
-        ));
-    };
-
-    let entry = puzzle_lang::resolve_game_entry(&input_path)?;
-    let html = html_play::export_html_file(&entry).map_err(CliError::Config)?;
-    if let Some(parent) = output_path
-        .parent()
-        .filter(|path| !path.as_os_str().is_empty())
+    #[cfg(not(feature = "export-html"))]
     {
-        fs::create_dir_all(parent)?;
+        let _ = args;
+        return Err(disabled_adapter_command("export-html", "export-html"));
     }
-    fs::write(&output_path, html)?;
-    println!("exported {}", output_path.display());
-    Ok(())
+
+    #[cfg(feature = "export-html")]
+    {
+        let mut input_path = None::<PathBuf>;
+        let mut output_path = None::<PathBuf>;
+
+        let mut index = 0;
+        while index < args.len() {
+            match args[index].as_str() {
+                "-o" | "--output" => {
+                    index += 1;
+                    let Some(value) = args.get(index) else {
+                        return Err(CliError::Usage(format!(
+                            "{} requires a value",
+                            args[index - 1]
+                        )));
+                    };
+                    output_path = Some(PathBuf::from(value));
+                }
+                "--help" | "-h" => {
+                    print_export_html_usage();
+                    return Ok(());
+                }
+                value if value.starts_with('-') => {
+                    return Err(CliError::Usage(format!(
+                        "unknown export-html option: {value}"
+                    )));
+                }
+                value => {
+                    if input_path.is_some() {
+                        return Err(CliError::Usage(
+                            "export-html accepts exactly one input path".to_string(),
+                        ));
+                    }
+                    input_path = Some(PathBuf::from(value));
+                }
+            }
+            index += 1;
+        }
+
+        let Some(input_path) = input_path else {
+            return Err(CliError::Usage(
+                "export-html requires an input path".to_string(),
+            ));
+        };
+        let Some(output_path) = output_path else {
+            return Err(CliError::Usage(
+                "export-html requires -o/--output to avoid accidental writes".to_string(),
+            ));
+        };
+
+        let entry = puzzle_lang::resolve_game_entry(&input_path)?;
+        let html = html_play::export_html_file(&entry).map_err(CliError::Config)?;
+        if let Some(parent) = output_path
+            .parent()
+            .filter(|path| !path.as_os_str().is_empty())
+        {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(&output_path, html)?;
+        println!("exported {}", output_path.display());
+        Ok(())
+    }
 }
 
 fn export_editor_command(args: &[String]) -> Result<(), CliError> {
-    if args.iter().any(|arg| arg == "--help" || arg == "-h") {
-        print_export_editor_usage();
-        return Ok(());
+    #[cfg(not(feature = "export-editor"))]
+    {
+        let _ = args;
+        return Err(disabled_adapter_command("export-editor", "export-editor"));
     }
-    html_editor::run_cli_with_args(args.iter().cloned())
-        .map_err(|error| CliError::Config(error.to_string()))
+
+    #[cfg(feature = "export-editor")]
+    {
+        if args.iter().any(|arg| arg == "--help" || arg == "-h") {
+            print_export_editor_usage();
+            return Ok(());
+        }
+        html_editor::run_cli_with_args(args.iter().cloned())
+            .map_err(|error| CliError::Config(error.to_string()))
+    }
 }
 
 fn import_puzzlescript_command(args: &[String]) -> Result<(), CliError> {
@@ -401,7 +530,8 @@ fn escape_json(value: &str) -> String {
 
 fn print_usage() {
     eprintln!(
-        "usage:\n  puzzlestudio check <path> [--json]\n  puzzlestudio play [path]\n  puzzlestudio preview [path] [--port 7878] [--solver-depth N] [--solver-nodes N] [--solver-ms N]\n  puzzlestudio editor [path] [--port 8787]\n  puzzlestudio export-html <path> -o <output.html>\n  puzzlestudio export-editor [path] -o <editor.html>\n  puzzlestudio import-puzzlescript <source.txt> -o <game.puzzle>"
+        "usage:\n  puzzlestudio check <path> [--json]\n  puzzlestudio play [path]\n  puzzlestudio preview [path] [--port 7878] [--solver-depth N] [--solver-nodes N] [--solver-ms N]\n  puzzlestudio editor [path] [--port 8787]\n  puzzlestudio export-html <path> -o <output.html>\n  puzzlestudio export-editor [path] -o <editor.html>\n  puzzlestudio screenshot <path> -o <output.png> [--scene name] [--width 1280] [--height 720] [--browser path]\n  puzzlestudio import-puzzlescript <source.txt> -o <game.puzzle>{}",
+        adapter_feature_note()
     );
 }
 
@@ -409,29 +539,41 @@ fn print_check_usage() {
     eprintln!("usage: puzzlestudio check <path/to/game-folder-or-game.puzzle> [--json]");
 }
 
+#[cfg(feature = "export-html")]
 fn print_export_html_usage() {
     eprintln!(
         "usage: puzzlestudio export-html <path/to/game-folder-or-game.puzzle> -o <output.html>"
     );
 }
 
+#[cfg(feature = "play")]
 fn print_play_usage() {
     eprintln!("usage: puzzlestudio play [path/to/game-folder-or-game.puzzle]");
 }
 
+#[cfg(feature = "preview")]
 fn print_preview_usage() {
     eprintln!(
         "usage: puzzlestudio preview [path/to/game-folder-or-game.puzzle] [--port 7878] [--solver-depth N] [--solver-nodes N] [--solver-ms N]"
     );
 }
 
+#[cfg(feature = "editor")]
 fn print_editor_usage() {
     eprintln!("usage: puzzlestudio editor [path/to/game-folder-or-game.puzzle] [--port 8787]");
 }
 
+#[cfg(feature = "export-editor")]
 fn print_export_editor_usage() {
     eprintln!(
         "usage: puzzlestudio export-editor [path/to/game-folder-or-game.puzzle] -o <editor.html>"
+    );
+}
+
+#[cfg(feature = "screenshot")]
+fn print_screenshot_usage() {
+    eprintln!(
+        "usage: puzzlestudio screenshot <path/to/game-folder-or-game.puzzle> -o <output.png> [--scene name] [--width 1280] [--height 720] [--screenshot-timeout-ms 5000] [--browser path]"
     );
 }
 

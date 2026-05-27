@@ -2,6 +2,7 @@ use std::{env, fs, path::PathBuf};
 
 fn main() {
     println!("cargo:rerun-if-changed=static/editor.html");
+    println!("cargo:rerun-if-changed=docs/editor.md");
     println!("cargo:rerun-if-changed=static/editor_boot.js");
     println!("cargo:rerun-if-changed=static/editor_theme_imports.js");
     println!("cargo:rerun-if-changed=static/editor_dom.js");

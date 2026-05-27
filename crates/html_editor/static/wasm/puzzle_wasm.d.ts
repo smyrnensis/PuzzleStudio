@@ -6,11 +6,13 @@ export class WasmCoreRuntime {
     [Symbol.dispose](): void;
     current_cells(): string;
     current_state(): string;
+    current_state_hash(): string;
     constructor(source: string, puzzle_path: string);
     restore_saved_state(handle: number): void;
     save_current_state(): number;
     set_state(state_json: string): void;
     transition_current_outcome(program_key: string, level_index: number, input: number): string;
+    transition_current_state_outcome(program_key: string, level_index: number, input: number): string;
     transition_program_outcome(program_key: string, level_index: number, state_json: string, input: number): string;
 }
 
@@ -64,11 +66,13 @@ export interface InitOutput {
     readonly translate_puzzlescript: (a: number, b: number) => [number, number, number, number];
     readonly wasmcoreruntime_current_cells: (a: number) => [number, number, number, number];
     readonly wasmcoreruntime_current_state: (a: number) => [number, number, number, number];
+    readonly wasmcoreruntime_current_state_hash: (a: number) => [number, number, number, number];
     readonly wasmcoreruntime_new: (a: number, b: number, c: number, d: number) => [number, number, number];
     readonly wasmcoreruntime_restore_saved_state: (a: number, b: number) => [number, number];
     readonly wasmcoreruntime_save_current_state: (a: number) => [number, number, number];
     readonly wasmcoreruntime_set_state: (a: number, b: number, c: number) => [number, number];
     readonly wasmcoreruntime_transition_current_outcome: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
+    readonly wasmcoreruntime_transition_current_state_outcome: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
     readonly wasmcoreruntime_transition_program_outcome: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
     readonly wasmpuzzle3runtime_current_cells: (a: number) => [number, number, number, number];
     readonly wasmpuzzle3runtime_current_state: (a: number) => [number, number, number, number];

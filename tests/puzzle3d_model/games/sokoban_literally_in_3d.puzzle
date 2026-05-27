@@ -63,12 +63,11 @@ scene playing {
   }
 
   keys {
-    q = goto level_select
-    Escape = goto level_select
+    q Escape -> goto level_select
   }
 
   rules {
-    board.rules
+    step board
   }
 
   view {

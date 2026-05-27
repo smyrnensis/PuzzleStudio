@@ -117,7 +117,7 @@ scene playing {
   }
 
   rules {
-    board.rules
+    step board
     if board.win_conditions -> board.next_level
   }
 }

@@ -10,6 +10,7 @@ let level3dLayerHover = null;
 let level3dLayerRendererView = null;
 let level3dStageOverlay = null;
 let level3dStageHit = null;
+let level3dStageRendererView = null;
 let level3dLayerPaintDrag = null;
 let level3dPreviewScrubDrag = null;
 let level3dSliceScrubDrag = null;
@@ -20,17 +21,24 @@ let level3dPreviewOrigin = { x: 0, y: 0, z: 0 };
 let level3dSurfaceResizeFrame = 0;
 const LEVEL3D_EDITOR_MAX_SIZE = 256;
 const LEVEL3D_PALETTE_PREVIEW_SIZE = 42;
+const LEVEL3D_FRAME_VIRTUAL_WIDTH = 960;
+const LEVEL3D_FRAME_VIRTUAL_HEIGHT = 720;
+const LEVEL3D_FRAME_MIN_WIDTH = 320;
+const LEVEL3D_FRAME_MAX_WIDTH = 960;
+const LEVEL3D_FRAME_GAP = 12;
 const LEVEL3D_SLICE_SCRUB_STEP_PX = 18;
 const LEVEL3D_CAMERA_MIN_PITCH_DEGREES = -90;
 const LEVEL3D_CAMERA_MAX_PITCH_DEGREES = 90;
 const LEVEL3D_MODEL_COMPONENT_PREVIEW_MESSAGE = "PuzzleStudioRenderPuzzle3ModelComponent";
 const LEVEL3D_EMPTY_CHAR = ".";
+const LEVEL3D_LEGEND_CHAR_CANDIDATES = "xyzabcdefghijklmnopqrstuvwABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789@$%&?!~^:;,_+-*/";
 let level3d = {
   width: 0,
   depth: 0,
   height: 0,
   slice: 0,
   selectedChar: LEVEL3D_EMPTY_CHAR,
+  editMode: "replace",
   stageResizeMode: null,
   stageExpandMode: false,
   previewFrames: false,
@@ -45,6 +53,7 @@ function renderLevel3dBuilder() {
   if (!level3dBuilder) {
     return;
   }
+  syncLevel3dFrameLayout();
   syncLevel3dControlsFromPreview();
   renderLevel3dPalette();
   renderLevel3dPreviewControls();
@@ -54,6 +63,64 @@ function renderLevel3dBuilder() {
   renderLevel3dRuntime();
   renderLevel3dStageOverlay();
   updateLevel3dPlaytestControls();
+}
+
+function syncLevel3dFrameLayout() {
+  if (!level3dBuilder) {
+    return;
+  }
+  const workspace = level3dBuilder.querySelector(".level3d-workspace");
+  const container = level3dBuilder.querySelector(".tool-pane-scroll") || level3dBuilder;
+  const availableWidth = Math.max(1, Math.floor(level3dContentInlineSize(container)));
+  const canFitSideBySide = availableWidth >= LEVEL3D_FRAME_MIN_WIDTH * 2 + LEVEL3D_FRAME_GAP;
+  const maxFrameWidth = Math.max(
+    LEVEL3D_FRAME_MIN_WIDTH,
+    Math.min(LEVEL3D_FRAME_MAX_WIDTH, canFitSideBySide
+      ? Math.floor((availableWidth - LEVEL3D_FRAME_GAP) / 2)
+      : availableWidth),
+  );
+  const frameWidth = Math.max(LEVEL3D_FRAME_MIN_WIDTH, maxFrameWidth);
+  const scale = frameWidth / LEVEL3D_FRAME_VIRTUAL_WIDTH;
+  const frameHeight = Math.max(1, Math.round(LEVEL3D_FRAME_VIRTUAL_HEIGHT * scale));
+  level3dBuilder.style.setProperty("--level3d-frame-virtual-width", `${LEVEL3D_FRAME_VIRTUAL_WIDTH}px`);
+  level3dBuilder.style.setProperty("--level3d-frame-virtual-height", `${LEVEL3D_FRAME_VIRTUAL_HEIGHT}px`);
+  level3dBuilder.style.setProperty("--level3d-frame-width", `${frameWidth}px`);
+  level3dBuilder.style.setProperty("--level3d-frame-height", `${frameHeight}px`);
+  level3dBuilder.style.setProperty("--level3d-frame-scale", String(scale));
+  level3dBuilder.style.setProperty("--level3d-frame-gap", `${LEVEL3D_FRAME_GAP}px`);
+  workspace?.classList.toggle("is-stacked", !canFitSideBySide);
+}
+
+function level3dContentInlineSize(element) {
+  if (!element) {
+    return 0;
+  }
+  const style = window.getComputedStyle(element);
+  const padding = (parseFloat(style.paddingLeft) || 0) + (parseFloat(style.paddingRight) || 0);
+  return Math.max(0, element.clientWidth - padding);
+}
+
+function level3dScaledSurfaceMetrics(element) {
+  const rect = element?.getBoundingClientRect?.() || { left: 0, top: 0, width: 0, height: 0 };
+  const width = Math.max(1, Math.round(element?.offsetWidth || LEVEL3D_FRAME_VIRTUAL_WIDTH));
+  const height = Math.max(1, Math.round(element?.offsetHeight || LEVEL3D_FRAME_VIRTUAL_HEIGHT));
+  return {
+    rect,
+    width,
+    height,
+    scaleX: Math.max(0.0001, (Number(rect.width) || width) / width),
+    scaleY: Math.max(0.0001, (Number(rect.height) || height) / height),
+  };
+}
+
+function level3dEventPointInScaledSurface(event, element) {
+  const metrics = level3dScaledSurfaceMetrics(element);
+  return {
+    x: (event.clientX - metrics.rect.left) / metrics.scaleX,
+    y: (event.clientY - metrics.rect.top) / metrics.scaleY,
+    width: metrics.width,
+    height: metrics.height,
+  };
 }
 
 function syncLevel3dControlsFromPreview() {
@@ -168,6 +235,7 @@ function clearLoadedLevel3dState(source, document = level3dSourceDocument()) {
     height: 0,
     slice: 0,
     selectedChar: level3dSelectedCharForPalette(palette, level3d.selectedChar),
+    editMode: level3dEditMode(),
     stageResizeMode: null,
     stageExpandMode: false,
     previewFrames: level3d.previewFrames,
@@ -253,6 +321,7 @@ function normalizedLevel3dLegendEntries(entries) {
     unique.push({
       char: ch,
       objects: Array.isArray(entry.objects) ? entry.objects.filter(Boolean) : [],
+      temporary: entry.temporary === true,
     });
     chars.add(ch);
   }
@@ -654,7 +723,12 @@ function loadSelectedLevel3dNameFromInput() {
 }
 
 function isPuzzle3dExport(exportData) {
-  return Boolean(exportData?.__kind === "puzzle3d" || exportData?.directions?.forward || exportData?.levelBundles);
+  return Boolean(
+    exportData?.__kind === "puzzle3d"
+      || exportData?.directions?.front
+      || exportData?.directions?.forward
+      || exportData?.levelBundles,
+  );
 }
 
 function renderLevel3dSourcePreview() {
@@ -664,7 +738,7 @@ function renderLevel3dSourcePreview() {
   syncLevel3dNameOptions();
   const levelName = sanitizeLevel3dName(level3dNameInput?.value || currentLevel3dEntry()?.name || "level_1");
   const sourceData = level3dSourceData();
-  level3dSourcePreview.textContent = levelDefinition3dSource(levelName, sourceData, "");
+  level3dSourcePreview.textContent = level3dSnippetSource(levelName, sourceData, "", { bodyIndent: "" });
 }
 
 function level3dSourceData(source = level3dEditorSource(), exportData = previewExport || extractPreviewExport(latestHtml)) {
@@ -721,6 +795,16 @@ function level3dRowsForEntry(entry, legendEntries) {
     }
   }
   return { rows, unknownCells };
+}
+
+function normalizeLevel3dSourceData(levelData) {
+  if (Array.isArray(levelData)) {
+    return { rows: levelData, unknownCells: 0 };
+  }
+  return {
+    rows: Array.isArray(levelData?.rows) ? levelData.rows : [],
+    unknownCells: Number(levelData?.unknownCells) || 0,
+  };
 }
 
 function sourceLevel3dLegendEntries(source) {
@@ -851,6 +935,8 @@ function renderLevel3dPalette() {
   level3dPalette.append(level3dFrameToggleButton());
   level3dPalette.append(level3dExpandModeButton());
   level3dPalette.append(level3dShrinkModeButton());
+  level3dPalette.append(level3dEditModeButton("add"));
+  level3dPalette.append(level3dEditModeButton("replace"));
   for (const entry of level3d.palette) {
     const button = document.createElement("button");
     button.type = "button";
@@ -886,6 +972,49 @@ function renderLevel3dPalette() {
 
 function level3dPaintSelectionActive() {
   return !level3dStageResizeMode();
+}
+
+function level3dEditMode() {
+  return level3d.editMode === "add" ? "add" : "replace";
+}
+
+function setLevel3dEditMode(mode) {
+  level3d.editMode = mode === "add" ? "add" : "replace";
+}
+
+function level3dEditModeButton(mode) {
+  const active = level3dEditMode() === mode;
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = `source-action-button level3d-edit-mode-button level3d-${mode}-button`;
+  button.classList.toggle("is-selected", active);
+  button.dataset.label = mode === "add" ? "Add tile" : "Replace tile";
+  button.title = mode === "add" ? "Add tile" : "Replace tile";
+  button.setAttribute("aria-label", mode === "add" ? "Use add tile mode" : "Use replace tile mode");
+  button.setAttribute("aria-pressed", active ? "true" : "false");
+  button.disabled = level3dPlaytestActive;
+  button.innerHTML = mode === "add"
+    ? `
+      <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-square-plus-icon lucide-square-plus" aria-hidden="true">
+        <rect width="18" height="18" x="3" y="3" rx="2"></rect>
+        <path d="M8 12h8"></path>
+        <path d="M12 8v8"></path>
+      </svg>
+    `
+    : `
+      <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-square-pen-icon lucide-square-pen" aria-hidden="true">
+        <path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+        <path d="M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852z"></path>
+      </svg>
+    `;
+  button.addEventListener("click", () => {
+    setLevel3dStageResizeMode(null);
+    setLevel3dEditMode(mode);
+    level3dStageHit = null;
+    renderLevel3dPalette();
+    renderLevel3dStageOverlay();
+  });
+  return button;
 }
 
 function level3dStageResizeMode() {
@@ -1307,6 +1436,7 @@ function paintLevel3dCellAtPosition(position, ch = level3d.selectedChar) {
   if (level3dPlaytestActive) {
     return false;
   }
+  const exportData = previewExport || extractPreviewExport(latestHtml);
   const x = Math.trunc(Number(position?.x));
   const y = Math.trunc(Number(position?.y));
   const z = Math.trunc(Number(position?.z));
@@ -1319,8 +1449,13 @@ function paintLevel3dCellAtPosition(position, ch = level3d.selectedChar) {
   if (!slice) {
     return false;
   }
-  const nextChar = String(ch || level3dEmptyChar()).charAt(0);
+  const paintChar = String(ch || level3dEmptyChar()).charAt(0);
   const current = String(slice[row] || "").padEnd(level3d.width, level3dEmptyChar()).slice(0, level3d.width);
+  const nextChar = level3dLayerMergedChar(current[x], paintChar, exportData);
+  if (!nextChar) {
+    setLevel3dActionStatus("No available legend char for merged layer tile", "is-error");
+    return false;
+  }
   if (current[x] === nextChar) {
     return false;
   }
@@ -1330,6 +1465,65 @@ function paintLevel3dCellAtPosition(position, ch = level3d.selectedChar) {
   renderLevel3dStageOverlay();
   refreshLevel3dRuntimePreviews();
   return true;
+}
+
+function level3dLayerMergedChar(currentChar, paintChar, exportData = previewExport || extractPreviewExport(latestHtml)) {
+  const nextChar = String(paintChar || level3dEmptyChar()).charAt(0);
+  const emptyChar = level3dEmptyChar();
+  const paintEntry = level3d.palette.find((entry) => entry.char === nextChar);
+  if (!paintEntry?.objects?.length) {
+    return emptyChar;
+  }
+  const currentEntry = level3d.palette.find((entry) => entry.char === currentChar)
+    || level3d.palette.find((entry) => entry.char === emptyChar)
+    || { objects: [] };
+  const paintLayers = new Set(
+    paintEntry.objects
+      .map((name) => level3dObjectLayer(name, exportData))
+      .filter((layer) => layer !== null),
+  );
+  if (!paintLayers.size) {
+    return nextChar;
+  }
+  const mergedObjects = [
+    ...(currentEntry.objects || []).filter((name) => !paintLayers.has(level3dObjectLayer(name, exportData))),
+    ...paintEntry.objects,
+  ];
+  return level3dEnsureCharForObjectNames(mergedObjects);
+}
+
+function level3dObjectLayer(name, exportData = previewExport || extractPreviewExport(latestHtml)) {
+  const layer = Number(level3dObjectDescriptor(name, exportData)?.layer);
+  return Number.isFinite(layer) ? layer : null;
+}
+
+function level3dCharForObjectNames(objects) {
+  const key = level3dObjectSetKey((objects || []).filter(Boolean));
+  return level3d.palette.find((entry) => level3dObjectSetKey(entry.objects || []) === key)?.char || null;
+}
+
+function level3dEnsureCharForObjectNames(objects) {
+  const cleanObjects = (objects || []).filter(Boolean);
+  const existing = level3dCharForObjectNames(cleanObjects);
+  if (existing) {
+    return existing;
+  }
+  const ch = nextTemporaryLevel3dLegendChar();
+  if (!ch) {
+    return null;
+  }
+  level3d.palette.push({ char: ch, objects: [...cleanObjects], temporary: true });
+  renderLevel3dPalette();
+  return ch;
+}
+
+function nextTemporaryLevel3dLegendChar(extraUsed = []) {
+  const used = new Set([
+    LEVEL3D_EMPTY_CHAR,
+    ...level3d.palette.map((entry) => entry.char),
+    ...extraUsed,
+  ]);
+  return [...LEVEL3D_LEGEND_CHAR_CANDIDATES].find((candidate) => !used.has(candidate)) || "";
 }
 
 function level3dPositionInBounds(position) {
@@ -1344,14 +1538,61 @@ function level3dPositionInBounds(position) {
     && position.z < Math.max(1, level3d.height || 1);
 }
 
+function level3dSnippetSource(name, levelData, indent = "", options = {}) {
+  const legendLines = level3dTemporaryLegendSourceLines(levelData, indent);
+  const levelSource = levelDefinition3dSource(name, levelData, indent, options).trimEnd();
+  return legendLines.length
+    ? `${legendLines.join("\n")}\n\n${levelSource}\n`
+    : `${levelSource}\n`;
+}
+
 function levelDefinition3dSource(name, levelData, indent = "", options = {}) {
-  const rows = Array.isArray(levelData?.rows) ? levelData.rows : [];
+  const { rows } = normalizeLevel3dSourceData(levelData);
   const bodyIndent = options.bodyIndent || `${indent}  `;
   return [
     `${indent}level ${sanitizeLevel3dName(name)} {`,
     ...rows.map((row) => String(row || "").length ? `${bodyIndent}${row}` : ""),
     `${indent}}`,
   ].join("\n") + (options.trailingNewline === false ? "" : "\n");
+}
+
+function level3dTemporaryLegendSourceLines(levelData, indent) {
+  const entries = level3dTemporaryLegendEntriesForLevelData(levelData);
+  if (!entries.length) {
+    return [];
+  }
+  const bodyIndent = `${indent}  `;
+  return [
+    `${indent}legend {`,
+    ...entries.map((entry) => `${bodyIndent}${entry.char} = ${entry.objects.join(" ")}`),
+    `${indent}}`,
+  ];
+}
+
+function level3dTemporaryLegendEntriesForLevelData(levelData) {
+  const { rows } = normalizeLevel3dSourceData(levelData);
+  const used = level3dUsedCharsInRows(rows);
+  const seenChars = new Set();
+  const entries = [];
+  for (const entry of level3d.palette || []) {
+    const ch = String(entry.char || "").charAt(0);
+    if (!entry.temporary || !ch || !used.has(ch) || seenChars.has(ch)) {
+      continue;
+    }
+    entries.push({ char: ch, objects: Array.isArray(entry.objects) ? entry.objects.filter(Boolean) : [] });
+    seenChars.add(ch);
+  }
+  return entries;
+}
+
+function level3dUsedCharsInRows(rows) {
+  const used = new Set();
+  for (const row of rows || []) {
+    for (const ch of String(row || "")) {
+      used.add(ch);
+    }
+  }
+  return used;
 }
 
 function sanitizeLevel3dName(value) {
@@ -1481,15 +1722,25 @@ function findLevels3InsertionRange(source, bundle = "") {
 }
 
 function insertLevel3d(source, name, levelData, bundle = "") {
-  const range = findLevels3InsertionRange(source, bundle);
+  let workingSource = String(source || "");
+  let range = findLevels3InsertionRange(workingSource, bundle);
   if (!range) {
     return "";
   }
-  const definitions = findLevel3dDefinitions(source, range);
+  const prepared = prepareLevel3dLegendSourceForWrite(workingSource, range, levelData);
+  if (!prepared) {
+    return "";
+  }
+  workingSource = prepared.source;
+  range = findLevels3InsertionRange(workingSource, bundle);
+  if (!range) {
+    return "";
+  }
+  const definitions = findLevel3dDefinitions(workingSource, range);
   const indent = definitions[0]?.indent || `${range.indent || ""}  `;
   const bodyIndent = definitions[0]?.bodyIndent || `${indent}  `;
-  const levelSource = levelDefinition3dSource(name, levelData, indent, { bodyIndent }).trimEnd();
-  return `${source.slice(0, range.bodyEnd).trimEnd()}\n\n${levelSource}\n${source.slice(range.bodyEnd)}`;
+  const levelSource = levelDefinition3dSource(name, prepared.levelData, indent, { bodyIndent }).trimEnd();
+  return `${workingSource.slice(0, range.bodyEnd).trimEnd()}\n\n${levelSource}\n${workingSource.slice(range.bodyEnd)}`;
 }
 
 function replaceLevel3dByName(source, name, levelData, bundle = "") {
@@ -1503,12 +1754,131 @@ function replaceLevel3dByName(source, name, levelData, bundle = "") {
     if (!entry) {
       continue;
     }
-    const replacement = levelDefinition3dSource(requested, levelData, entry.indent, { bodyIndent: entry.bodyIndent }).trimEnd();
+    const prepared = prepareLevel3dLegendSourceForWrite(source, range, levelData);
+    if (!prepared) {
+      return null;
+    }
+    const updatedRange = findLevels3Ranges(prepared.source).find((candidate) => (
+      candidate.bundle === range.bundle
+      && candidate.model === range.model
+    ));
+    const updatedEntry = updatedRange
+      ? findLevel3dDefinitions(prepared.source, updatedRange).find((candidate) => candidate.name === requested)
+      : null;
+    if (!updatedEntry) {
+      return null;
+    }
+    const replacement = levelDefinition3dSource(requested, prepared.levelData, updatedEntry.indent, { bodyIndent: updatedEntry.bodyIndent }).trimEnd();
     return {
-      source: replaceEditorSourceRangePreservingLineBoundary(source, entry.start, entry.end, replacement),
+      source: replaceEditorSourceRangePreservingLineBoundary(prepared.source, updatedEntry.start, updatedEntry.end, replacement),
     };
   }
   return null;
+}
+
+function prepareLevel3dLegendSourceForWrite(source, range, levelData) {
+  const prepared = level3dReconciledTemporaryLegendEntries(source, range, levelData);
+  if (!prepared) {
+    return null;
+  }
+  return {
+    source: insertLevel3dLegendEntries(source, range, prepared.entries),
+    levelData: prepared.levelData,
+  };
+}
+
+function level3dReconciledTemporaryLegendEntries(source, range, levelData) {
+  let { rows } = normalizeLevel3dSourceData(levelData);
+  rows = [...rows];
+  const existingEntries = sourceLevel3dLegendEntriesForRange(source, range);
+  const existingByChar = new Map(existingEntries.map((entry) => [entry.char, entry]));
+  const existingByObjects = new Map(existingEntries.map((entry) => [level3dObjectSetKey(entry.objects || []), entry.char]));
+  const usedChars = new Set([
+    LEVEL3D_EMPTY_CHAR,
+    ...sourceLevel3dLegendEntries(source).map((entry) => entry.char),
+    ...level3dUsedCharsInRows(rows),
+  ]);
+  const entries = [];
+  for (const entry of level3dTemporaryLegendEntriesForLevelData({ rows })) {
+    const objects = Array.isArray(entry.objects) ? entry.objects.filter(Boolean) : [];
+    const key = level3dObjectSetKey(objects);
+    const existingCharForObjects = existingByObjects.get(key);
+    if (existingCharForObjects) {
+      rows = replaceLevel3dRowsChar(rows, entry.char, existingCharForObjects);
+      continue;
+    }
+    let ch = entry.char;
+    const existingForChar = existingByChar.get(ch);
+    if (existingForChar && level3dObjectSetKey(existingForChar.objects || []) !== key) {
+      ch = nextTemporaryLevel3dLegendChar([...usedChars]);
+      if (!ch) {
+        return null;
+      }
+      rows = replaceLevel3dRowsChar(rows, entry.char, ch);
+    }
+    entries.push({ char: ch, objects });
+    existingByChar.set(ch, { char: ch, objects });
+    existingByObjects.set(key, ch);
+    usedChars.add(ch);
+  }
+  return { entries, levelData: { ...normalizeLevel3dSourceData(levelData), rows } };
+}
+
+function replaceLevel3dRowsChar(rows, from, to) {
+  if (!from || from === to) {
+    return rows;
+  }
+  return rows.map((row) => String(row || "").split(from).join(to));
+}
+
+function insertLevel3dLegendEntries(source, range, entries) {
+  if (!entries.length) {
+    return source;
+  }
+  const legend = findLevel3dLegendBlock(source, range);
+  if (legend) {
+    const lines = entries.map((entry) => `${legend.bodyIndent}${entry.char} = ${entry.objects.join(" ")}`);
+    return `${source.slice(0, legend.closeStart)}${lines.join("\n")}\n${source.slice(legend.closeStart)}`;
+  }
+  const indent = `${range.indent || ""}  `;
+  const bodyIndent = `${indent}  `;
+  const lines = [
+    `${indent}legend {`,
+    ...entries.map((entry) => `${bodyIndent}${entry.char} = ${entry.objects.join(" ")}`),
+    `${indent}}`,
+    "",
+  ];
+  return `${source.slice(0, range.bodyStart)}${lines.join("\n")}\n${source.slice(range.bodyStart)}`;
+}
+
+function findLevel3dLegendBlock(source, range) {
+  const block = String(source || "").slice(range?.bodyStart || 0, range?.bodyEnd || 0);
+  const match = /(^|\n)([\t ]*)legend\s*\{\n([\s\S]*?)\n\2\}/m.exec(block);
+  if (!match) {
+    return null;
+  }
+  const closeToken = `\n${match[2]}}`;
+  const closeOffset = match[0].lastIndexOf(closeToken);
+  if (closeOffset < 0) {
+    return null;
+  }
+  const closeStart = (range?.bodyStart || 0) + match.index + closeOffset + 1;
+  const bodyIndent = level3dLegendBodyIndent(match[3], match[2]);
+  return { closeStart, bodyIndent };
+}
+
+function level3dLegendBodyIndent(body, indent) {
+  for (const line of String(body || "").split("\n")) {
+    if (!level3dScannerCode(line)) {
+      continue;
+    }
+    const rowIndent = lineIndent(line);
+    if (rowIndent.length > indent.length) {
+      return rowIndent;
+    }
+    break;
+  }
+  return `${indent}  `;
 }
 
 function level3dDefinitionBodyIndent(lines, headerIndex, closeIndex, indent) {
@@ -1650,12 +2020,14 @@ function renderLevel3dRuntime() {
     showBlankLevel3dRuntimeFrame(level3dRuntimeFrame);
     level3dRuntimeFrameLoaded = false;
     level3dRuntimeFrameKey = "";
+    level3dStageRendererView = null;
     setLevel3dActionStatus(latestHtml ? "Load a 3D level first" : "Run Preview first", "");
     return;
   }
   const key = `${activePreviewDocument()?.id || ""}:${latestHtml.length}:${currentEditableLevelIndex()}`;
   if (level3dRuntimeFrameKey !== key) {
     level3dRuntimeFrameLoaded = false;
+    level3dStageRendererView = null;
     level3dRuntimeFrameKey = key;
     level3dRuntimeFrame.addEventListener("load", () => {
       level3dRuntimeFrameLoaded = true;
@@ -1686,6 +2058,7 @@ function sendLevel3dSnapshotToRuntime() {
 }
 
 function refreshLevel3dRuntimePreviews() {
+  level3dStageRendererView = null;
   sendLevel3dSnapshotToRuntime();
   sendLevel3dLayerSnapshotToRuntime();
 }
@@ -2067,10 +2440,10 @@ function renderLevel3dLayerOverlay() {
   if (!(level3dLayerOverlay instanceof HTMLCanvasElement) || !level3dLayerBoard) {
     return;
   }
-  const rect = level3dLayerSurfaceRect();
+  const metrics = level3dScaledSurfaceMetrics(level3dLayerOverlay);
   const scale = window.devicePixelRatio || 1;
-  const width = Math.max(1, Math.floor(rect.width * scale));
-  const height = Math.max(1, Math.floor(rect.height * scale));
+  const width = Math.max(1, Math.floor(metrics.width * scale));
+  const height = Math.max(1, Math.floor(metrics.height * scale));
   if (level3dLayerOverlay.width !== width || level3dLayerOverlay.height !== height) {
     level3dLayerOverlay.width = width;
     level3dLayerOverlay.height = height;
@@ -2080,8 +2453,8 @@ function renderLevel3dLayerOverlay() {
     return;
   }
   ctx.setTransform(scale, 0, 0, scale, 0, 0);
-  ctx.clearRect(0, 0, rect.width, rect.height);
-  drawLevel3dLayerHover(ctx, rect.width, rect.height);
+  ctx.clearRect(0, 0, metrics.width, metrics.height);
+  drawLevel3dLayerHover(ctx, metrics.width, metrics.height);
 }
 
 function drawLevel3dLayerHover(ctx, width, height) {
@@ -2124,15 +2497,11 @@ function level3dLayerPositionFromEvent(event) {
   if (!level3dLayerBoard) {
     return null;
   }
-  const rect = level3dLayerSurfaceRect();
-  return level3dLayerPositionAt(event.clientX - rect.left, event.clientY - rect.top, rect.width, rect.height);
-}
-
-function level3dLayerSurfaceRect() {
   const surface = level3dLayerOverlay instanceof HTMLCanvasElement
     ? level3dLayerOverlay
     : (level3dLayerFrame || level3dLayerBoard);
-  return surface.getBoundingClientRect();
+  const point = level3dEventPointInScaledSurface(event, surface);
+  return level3dLayerPositionAt(point.x, point.y, point.width, point.height);
 }
 
 function level3dLayerPositionAt(x, y, width, height) {
@@ -2342,6 +2711,58 @@ function handleLevel3dLayerRendererViewMessage(event) {
   renderLevel3dLayerOverlay();
 }
 
+function handleLevel3dStageRendererViewMessage(event) {
+  if (event.source !== level3dRuntimeFrame?.contentWindow) {
+    return;
+  }
+  if (event.data?.type !== "PuzzleStudioPuzzle3View") {
+    return;
+  }
+  const normalized = level3dNormalizeRuntimeProjectionView(event.data.view);
+  if (!normalized) {
+    return;
+  }
+  level3dStageRendererView = normalized;
+  renderLevel3dStageOverlay();
+}
+
+function level3dNormalizeRuntimeProjectionView(view) {
+  const scale = Number(view?.scale);
+  const width = Number(view?.width);
+  const height = Number(view?.height);
+  if (!Number.isFinite(scale) || scale <= 0 || !Number.isFinite(width) || !Number.isFinite(height)) {
+    return null;
+  }
+  return {
+    width: Math.max(1, width),
+    height: Math.max(1, height),
+    coordinateSpace: view.coordinateSpace === "canvas-css-px" ? "canvas-css-px" : "",
+    viewport: {
+      width: Math.max(1, Number(view.viewport?.width) || width),
+      height: Math.max(1, Number(view.viewport?.height) || height),
+    },
+    canvasRect: {
+      x: Number(view.canvasRect?.x) || 0,
+      y: Number(view.canvasRect?.y) || 0,
+      width: Math.max(1, Number(view.canvasRect?.width) || width),
+      height: Math.max(1, Number(view.canvasRect?.height) || height),
+    },
+    originX: Number(view.originX) || 0,
+    originY: Number(view.originY) || 0,
+    scale,
+    center: {
+      x: Number(view.center?.x) || 0,
+      y: Number(view.center?.y) || 0,
+      z: Number(view.center?.z) || 0,
+    },
+    camera: {
+      yawDegrees: Number(view.camera?.yawDegrees ?? 0),
+      pitchDegrees: Number(view.camera?.pitchDegrees ?? 35),
+      zoom: 1,
+    },
+  };
+}
+
 function level3dNormalizeLayerCellFootprints(raw) {
   if (!Array.isArray(raw)) {
     return [];
@@ -2415,10 +2836,10 @@ function renderLevel3dStageOverlay() {
   overlay.classList.toggle("is-stage-resize-mode", Boolean(resizeMode));
   overlay.classList.toggle("is-stage-expand-mode", resizeMode === "expand");
   overlay.classList.toggle("is-stage-shrink-mode", resizeMode === "shrink");
-  const rect = overlay.getBoundingClientRect();
+  const metrics = level3dScaledSurfaceMetrics(overlay);
   const scale = window.devicePixelRatio || 1;
-  const width = Math.max(1, Math.floor(rect.width * scale));
-  const height = Math.max(1, Math.floor(rect.height * scale));
+  const width = Math.max(1, Math.floor(metrics.width * scale));
+  const height = Math.max(1, Math.floor(metrics.height * scale));
   if (overlay.width !== width || overlay.height !== height) {
     overlay.width = width;
     overlay.height = height;
@@ -2428,12 +2849,12 @@ function renderLevel3dStageOverlay() {
     return;
   }
   ctx.setTransform(scale, 0, 0, scale, 0, 0);
-  ctx.clearRect(0, 0, rect.width, rect.height);
+  ctx.clearRect(0, 0, metrics.width, metrics.height);
   if (!level3dStageHit?.polygon?.length) {
     return;
   }
   if (level3dIsStageResizeHit(level3dStageHit)) {
-    drawLevel3dStageResizeHint(ctx, level3dStageHit, rect.width, rect.height);
+    drawLevel3dStageResizeHint(ctx, level3dStageHit, metrics.width, metrics.height);
     return;
   }
   ctx.save();
@@ -2457,6 +2878,8 @@ function scheduleLevel3dSurfaceResize() {
   }
   level3dSurfaceResizeFrame = requestAnimationFrame(() => {
     level3dSurfaceResizeFrame = 0;
+    syncLevel3dFrameLayout();
+    level3dStageRendererView = null;
     level3dLayerRendererView = null;
     renderLevel3dStageOverlay();
     renderLevel3dLayerOverlay();
@@ -2518,7 +2941,7 @@ function applyLevel3dStageHit(hit) {
   }
   const selected = level3dSelectedEntry();
   const selectedChar = selected?.char || level3d.selectedChar || level3dEmptyChar();
-  const target = selected?.objects?.length ? hit.place : hit.remove;
+  const target = level3dStagePaintTarget(hit, selected);
   if (!target) {
     return;
   }
@@ -2527,6 +2950,18 @@ function applyLevel3dStageHit(hit) {
     setLevel3dActionStatus(level3dCellLabel(selectedChar), "is-ok");
     renderLevel3dStageOverlay();
   }
+}
+
+function level3dStagePaintTarget(hit, selected = level3dSelectedEntry()) {
+  if (!hit) {
+    return null;
+  }
+  if (!selected?.objects?.length) {
+    return hit.remove || null;
+  }
+  return level3dEditMode() === "add"
+    ? hit.place || null
+    : hit.replace || hit.remove || hit.place || null;
 }
 
 function level3dIsStageResizeHit(hit) {
@@ -2577,11 +3012,78 @@ function level3dRuntimePreviewDocument(update) {
     .replace(/</g, "\\u003c")
     .replace(/\u2028/g, "\\u2028")
     .replace(/\u2029/g, "\\u2029");
-  const seedScript = `<script id="puzzle-studio-initial-model-preview">window.PuzzleStudioInitialModelComponentPreview=${json};<\/script>`;
+  const seedScript = `<script id="puzzle-studio-initial-model-preview">
+(() => {
+  const update = ${json};
+  window.PuzzleStudioInitialModelComponentPreview = update;
+  window.PuzzleStudioModelComponentPreviewFixture = function(source, incoming = update) {
+    const next = JSON.parse(JSON.stringify(source || {}));
+    const resources = incoming.resources || incoming;
+    if (resources.layerCount != null) {
+      next.layerCount = Math.max(1, Math.trunc(Number(resources.layerCount) || 1));
+    }
+    if (resources.objects && typeof resources.objects === "object") {
+      next.objects = JSON.parse(JSON.stringify(resources.objects));
+    }
+    if (resources.sprites && typeof resources.sprites === "object") {
+      next.sprites = JSON.parse(JSON.stringify(resources.sprites));
+    }
+    const level = incoming.level || {};
+    const size = level.size || incoming.size || next.size || {};
+    const cells = Array.isArray(level.cells) ? level.cells : Array.isArray(incoming.cells) ? incoming.cells : next.cells || [];
+    const rawLevelIndex = incoming.levelIndex ?? next.levelIndex ?? 0;
+    const levels = Array.isArray(next.levels) && next.levels.length ? next.levels : [{}];
+    const levelIndex = Math.max(0, Math.min(levels.length - 1, Math.trunc(Number(rawLevelIndex) || 0)));
+    const target = levels[levelIndex] || {};
+    levels[levelIndex] = {
+      ...target,
+      name: level.name || target.name || "level_1",
+      label: level.label || target.label || level.name || target.name || "Level 1",
+      size: { ...size },
+      cells: JSON.parse(JSON.stringify(cells)),
+    };
+    next.levels = levels;
+    next.levelIndex = levelIndex;
+    next.size = { ...size };
+    next.cells = JSON.parse(JSON.stringify(cells));
+    if (incoming.camera) {
+      next.camera = JSON.parse(JSON.stringify(incoming.camera));
+    }
+    if (incoming.view) {
+      next.view = JSON.parse(JSON.stringify(incoming.view));
+    }
+    if (incoming.settings) {
+      next.settings = { ...(next.settings || {}), ...JSON.parse(JSON.stringify(incoming.settings)) };
+    }
+    const sceneName = incoming.scene || "__editor_model_preview__";
+    next.scenes = [{
+      name: sceneName,
+      components: [incoming.component || { kind: "puzzle3", source: "__editor_model_preview__" }],
+    }];
+    next.currentScene = sceneName;
+    return next;
+  };
+  let fixtureValue = typeof window.Puzzle3DFixture === "undefined"
+    ? undefined
+    : window.PuzzleStudioModelComponentPreviewFixture(window.Puzzle3DFixture, update);
+  Object.defineProperty(window, "Puzzle3DFixture", {
+    configurable: true,
+    get() {
+      return fixtureValue;
+    },
+    set(value) {
+      fixtureValue = window.PuzzleStudioModelComponentPreviewFixture(value, update);
+    },
+  });
+})();
+<\/script>`;
   const bootScript = `<script id="puzzle-studio-initial-model-preview-boot">
 (() => {
   const update = window.PuzzleStudioInitialModelComponentPreview;
   if (!update || update.type !== "${LEVEL3D_MODEL_COMPONENT_PREVIEW_MESSAGE}") {
+    return;
+  }
+  if (window.PuzzleStudioInitialModelComponentPreviewConsumed === true) {
     return;
   }
   if (typeof window.applyPuzzle3ModelComponentPreviewUpdate === "function") {
@@ -2591,44 +3093,9 @@ function level3dRuntimePreviewDocument(update) {
   if (typeof window.loadSnapshotData !== "function") {
     return;
   }
-  const source = JSON.parse(JSON.stringify(window.Puzzle3DFixture || {}));
-  const resources = update.resources || update;
-  if (resources.layerCount != null) {
-    source.layerCount = Math.max(1, Math.trunc(Number(resources.layerCount) || 1));
-  }
-  if (resources.objects && typeof resources.objects === "object") {
-    source.objects = JSON.parse(JSON.stringify(resources.objects));
-  }
-  if (resources.sprites && typeof resources.sprites === "object") {
-    source.sprites = JSON.parse(JSON.stringify(resources.sprites));
-  }
-  const level = update.level || {};
-  const size = level.size || update.size || source.size || {};
-  const cells = Array.isArray(level.cells) ? level.cells : Array.isArray(update.cells) ? update.cells : source.cells || [];
-  const levelIndex = Math.max(0, Math.trunc(Number(update.levelIndex ?? source.levelIndex) || 0));
-  const levels = Array.isArray(source.levels) && source.levels.length ? source.levels : [{}];
-  const target = levels[Math.min(levelIndex, levels.length - 1)] || {};
-  levels[Math.min(levelIndex, levels.length - 1)] = {
-    ...target,
-    name: level.name || target.name || "level_1",
-    label: level.label || target.label || level.name || target.name || "Level 1",
-    size: { ...size },
-    cells: JSON.parse(JSON.stringify(cells)),
-  };
-  source.levels = levels;
-  source.levelIndex = Math.min(levelIndex, levels.length - 1);
-  source.size = { ...size };
-  source.cells = JSON.parse(JSON.stringify(cells));
-  if (update.camera) {
-    source.camera = JSON.parse(JSON.stringify(update.camera));
-  }
-  if (update.settings) {
-    source.settings = { ...(source.settings || {}), ...JSON.parse(JSON.stringify(update.settings)) };
-  }
-  source.scenes = [{
-    name: update.scene || "__editor_model_preview__",
-    components: [update.component || { kind: "puzzle3", source: "__editor_model_preview__" }],
-  }];
+  const source = typeof window.PuzzleStudioModelComponentPreviewFixture === "function"
+    ? window.PuzzleStudioModelComponentPreviewFixture(window.Puzzle3DFixture || {}, update)
+    : JSON.parse(JSON.stringify(window.Puzzle3DFixture || {}));
   window.loadSnapshotData(source, { scene: source.scenes[0].name, preferPuzzleScene: false });
 })();
 <\/script>`;
@@ -2651,8 +3118,8 @@ function level3dStageHitFromEvent(event) {
   if (!overlay) {
     return null;
   }
-  const rect = overlay.getBoundingClientRect();
-  return level3dStageHitAt(event.clientX - rect.left, event.clientY - rect.top, rect.width, rect.height);
+  const point = level3dEventPointInScaledSurface(event, overlay);
+  return level3dStageHitAt(point.x, point.y, point.width, point.height);
 }
 
 function level3dStageHitKey(hit) {
@@ -2777,8 +3244,7 @@ function renderPuzzle3dSolverPreview() {
   if (solverBoard) {
     solverBoard.hidden = true;
   }
-  const mode = levelSolutionPreview?.kind === "puzzle3d" ? `solution:${levelSolutionPreview.index || 0}` : "level";
-  const key = `${activePreviewDocument()?.id || ""}:${latestHtml.length}:solver3d:${mode}:${update.levelIndex}`;
+  const key = `${activePreviewDocument()?.id || ""}:${latestHtml.length}:solver3d`;
   if (level3dSolverFrameKey !== key) {
     level3dSolverFrameLoaded = false;
     level3dSolverFrameKey = key;
@@ -3085,17 +3551,28 @@ function level3dStageHitAt(x, y, width, height) {
   if (!snapshot || !level3d.slices.length) {
     return null;
   }
-  const view = level3dPreviewView(snapshot, width, height, level3dStageViewOptions());
+  const view = level3dStagePreviewView(snapshot, width, height);
   const resizeMode = level3dStageResizeMode();
   if (resizeMode) {
     const resizeFaces = level3dStageResizeFaces(snapshot, view, resizeMode);
     return resizeFaces.find((face) => pointInLevel3dPolygon({ x, y }, face.polygon))
       || nearestLevel3dStageResizeFace({ x, y }, resizeFaces, view);
   }
-  const faces = level3dPlacementFaces(snapshot, view);
+  const faces = level3dUsablePlacementFaces(level3dPlacementFaces(snapshot, view));
   faces.sort((left, right) => level3dPrimitiveOrder(right) - level3dPrimitiveOrder(left));
   return faces.find((face) => pointInLevel3dPolygon({ x, y }, face.polygon))
     || nearestLevel3dPlacementFace({ x, y }, faces, view);
+}
+
+function level3dUsablePlacementFaces(faces) {
+  const selected = level3dSelectedEntry();
+  if (!selected?.objects?.length) {
+    return faces.filter((face) => face.remove);
+  }
+  if (level3dEditMode() === "add") {
+    return faces.filter((face) => face.place);
+  }
+  return faces.filter((face) => face.replace);
 }
 
 function level3dPlacementFaces(snapshot, view) {
@@ -3131,6 +3608,7 @@ function level3dPlacementFaces(snapshot, view) {
       faces.push(level3dPlacementFace(face.side, cell.position, view, {
         kind: "occupied",
         place,
+        replace: { ...cell.position },
         remove: { ...cell.position },
       }));
     }
@@ -3202,22 +3680,22 @@ function level3dStageResizeSliceSpecs(width, depth, height, mode) {
     {
       dimension: "depth",
       axis: "y",
-      edge: "forward",
+      edge: "front",
       resizeEdge: "front",
       faceCorners: expand
         ? level3dBoundsBottomFace({ x0: -0.5, x1: width - 0.5, y0: -1.5, y1: -0.5, z: -0.5 })
         : level3dBoundsSideFace("yNeg", { y: -0.5, x0: -0.5, x1: width - 0.5, z0: -0.5, z1: height - 0.5 }),
-      frameBounds: level3dResizeSliceFrameBounds({ width, depth, height }, "depth", "forward", mode),
+      frameBounds: level3dResizeSliceFrameBounds({ width, depth, height }, "depth", "front", mode),
     },
     {
       dimension: "depth",
       axis: "y",
-      edge: "backward",
+      edge: "back",
       resizeEdge: "back",
       faceCorners: expand
         ? level3dBoundsBottomFace({ x0: -0.5, x1: width - 0.5, y0: depth - 0.5, y1: depth + 0.5, z: -0.5 })
         : level3dBoundsSideFace("yPos", { y: depth - 0.5, x0: -0.5, x1: width - 0.5, z0: -0.5, z1: height - 0.5 }),
-      frameBounds: level3dResizeSliceFrameBounds({ width, depth, height }, "depth", "backward", mode),
+      frameBounds: level3dResizeSliceFrameBounds({ width, depth, height }, "depth", "back", mode),
     },
     {
       dimension: "height",
@@ -3320,10 +3798,10 @@ function level3dExpandedSliceFrameBounds(size, dimension, edge) {
   } else if (dimension === "width" && edge === "right") {
     bounds.x0 = bounds.x1;
     bounds.x1 += 1;
-  } else if (dimension === "depth" && edge === "forward") {
+  } else if (dimension === "depth" && (edge === "front" || edge === "forward")) {
     bounds.y1 = bounds.y0;
     bounds.y0 -= 1;
-  } else if (dimension === "depth" && edge === "backward") {
+  } else if (dimension === "depth" && (edge === "back" || edge === "backward")) {
     bounds.y0 = bounds.y1;
     bounds.y1 += 1;
   } else if (dimension === "height" && edge === "down") {
@@ -3342,9 +3820,9 @@ function level3dSliceFrameBounds(size, dimension, edge) {
     bounds.x1 = bounds.x0 + 1;
   } else if (dimension === "width" && edge === "right") {
     bounds.x0 = bounds.x1 - 1;
-  } else if (dimension === "depth" && edge === "forward") {
+  } else if (dimension === "depth" && (edge === "front" || edge === "forward")) {
     bounds.y1 = bounds.y0 + 1;
-  } else if (dimension === "depth" && edge === "backward") {
+  } else if (dimension === "depth" && (edge === "back" || edge === "backward")) {
     bounds.y0 = bounds.y1 - 1;
   } else if (dimension === "height" && edge === "down") {
     bounds.z1 = bounds.z0 + 1;
@@ -3385,11 +3863,9 @@ function level3dPlacementFace(side, position, view, metadata, zOffset = 0) {
 }
 
 function nearestLevel3dPlacementFace(point, faces, view) {
-  const selected = level3dSelectedEntry();
-  const usableFaces = selected?.objects?.length ? faces.filter((face) => face.place) : faces.filter((face) => face.remove);
   let nearest = null;
   let nearestDistance = Infinity;
-  for (const face of usableFaces) {
+  for (const face of faces) {
     const dx = point.x - face.center.x;
     const dy = point.y - face.center.y;
     const distance = Math.hypot(dx, dy);
@@ -3646,7 +4122,7 @@ function drawLevel3dStageResizeHint(ctx, hit, width, height) {
     return;
   }
   const mode = hit?.mode || (hit?.kind?.startsWith("shrink-") ? "shrink" : "expand");
-  const view = level3dPreviewView(snapshot, width, height, level3dStageViewOptions());
+  const view = level3dStagePreviewView(snapshot, width, height);
   const ghostFace = level3dStageResizeFaces(snapshot, view, mode)
     .find((face) => face.kind === hit.kind && face.edge === hit.edge);
   const isShrink = mode === "shrink";
@@ -3741,6 +4217,29 @@ function level3dStageViewOptions() {
   return { padding: 0.56 };
 }
 
+function level3dStagePreviewView(snapshot, width, height) {
+  const runtimeView = level3dStageRendererViewForSurface(snapshot, width, height);
+  return runtimeView || level3dPreviewView(snapshot, width, height, level3dStageViewOptions());
+}
+
+function level3dStageRendererViewForSurface(snapshot, width, height) {
+  if (!level3dStageRendererView || level3dStageRendererView.coordinateSpace !== "canvas-css-px") {
+    return null;
+  }
+  const size = snapshot?.size || {};
+  const sameSize = Math.max(1, Math.trunc(Number(size.width) || 1)) === Math.max(1, Math.trunc(Number(level3d.width) || 1))
+    && Math.max(1, Math.trunc(Number(size.depth) || 1)) === Math.max(1, Math.trunc(Number(level3d.depth) || 1))
+    && Math.max(1, Math.trunc(Number(size.height) || 1)) === Math.max(1, Math.trunc(Number(level3d.height) || 1));
+  if (!sameSize) {
+    return null;
+  }
+  return {
+    ...level3dStageRendererView,
+    surfaceWidth: Math.max(1, Number(width) || level3dStageRendererView.viewport.width),
+    surfaceHeight: Math.max(1, Number(height) || level3dStageRendererView.viewport.height),
+  };
+}
+
 function level3dObjectPreviewFaces(position, object, snapshot, view) {
   const voxels = level3dObjectPreviewVoxels(position, object, snapshot);
   const occupied = new Set(voxels.map((voxel) => level3dVoxelGeometryKey(voxel.position, voxel.scale)));
@@ -3831,13 +4330,13 @@ function level3dPreviewView(snapshot, width, height, options = {}) {
   return {
     camera,
     center: {
-      x: (Math.max(1, Number(size.width) || 1) - 1) / 2 + (Number(previewOrigin.x) || 0),
-      y: (Math.max(1, Number(size.depth) || 1) - 1) / 2 + (Number(previewOrigin.y) || 0),
-      z: (Math.max(1, Number(size.height) || 1) - 1) / 2 + (Number(previewOrigin.z) || 0),
+      x: Number(previewOrigin.x) || 0,
+      y: Number(previewOrigin.y) || 0,
+      z: Number(previewOrigin.z) || 0,
     },
     origin: {
-      x: width / 2 - ((bounds.minX + bounds.maxX) / 2) * scale,
-      y: height / 2 - ((bounds.minY + bounds.maxY) / 2) * scale,
+      x: width / 2,
+      y: height / 2,
     },
     scale,
   };
@@ -3905,6 +4404,9 @@ function level3dProjectedBoundsUnit(size, camera) {
 }
 
 function level3dProjectPoint(position, view) {
+  if (level3dUsesRuntimeProjectionView(view)) {
+    return level3dProjectRuntimeSurfacePoint(position, view);
+  }
   const yaw = level3dDegreesToRadians(view.camera?.yawDegrees ?? 0);
   const pitch = level3dDegreesToRadians(view.camera?.pitchDegrees ?? 35);
   const zoom = view.camera?.zoom ?? 1;
@@ -3918,6 +4420,77 @@ function level3dProjectPoint(position, view) {
     x: view.origin.x + yawX * scale,
     y: view.origin.y + (-yawY * Math.sin(pitch) - z * Math.cos(pitch)) * scale,
     depth: -yawY * Math.cos(pitch) + z * Math.sin(pitch),
+  };
+}
+
+function level3dUsesRuntimeProjectionView(view) {
+  return view?.coordinateSpace === "canvas-css-px";
+}
+
+function level3dProjectRuntimeSurfacePoint(position, view) {
+  const projected = level3dProjectRuntimeCanvasPoint(position, view);
+  return level3dRuntimeCanvasPointToSurface(projected, view);
+}
+
+function level3dProjectRuntimeCanvasPoint(position, view) {
+  const projectionView = {
+    camera: {
+      yawDegrees: Number(view.camera?.yawDegrees ?? 0),
+      pitchDegrees: Number(view.camera?.pitchDegrees ?? 35),
+      zoom: 1,
+    },
+    center: view.center || { x: 0, y: 0, z: 0 },
+    origin: {
+      x: Number(view.originX) || 0,
+      y: Number(view.originY) || 0,
+    },
+    scale: Math.max(0.0001, Number(view.scale) || 1),
+  };
+  if (window.Puzzle3VisualCore?.projectOrthographic) {
+    return Puzzle3VisualCore.projectOrthographic(position, projectionView);
+  }
+  const yaw = level3dDegreesToRadians(projectionView.camera.yawDegrees);
+  const pitch = level3dDegreesToRadians(projectionView.camera.pitchDegrees);
+  const x = position.x - projectionView.center.x;
+  const y = position.y - projectionView.center.y;
+  const z = position.z - projectionView.center.z;
+  const yawX = x * Math.cos(yaw) - y * Math.sin(yaw);
+  const yawY = x * Math.sin(yaw) + y * Math.cos(yaw);
+  return {
+    x: projectionView.origin.x + yawX * projectionView.scale,
+    y: projectionView.origin.y + (-yawY * Math.sin(pitch) - z * Math.cos(pitch)) * projectionView.scale,
+    depth: -yawY * Math.cos(pitch) + z * Math.sin(pitch),
+  };
+}
+
+function level3dRuntimeCanvasPointToSurface(point, view) {
+  const sourceWidth = Math.max(1, Number(view.width) || 1);
+  const sourceHeight = Math.max(1, Number(view.height) || 1);
+  const viewportWidth = Math.max(1, Number(view.viewport?.width) || Number(view.canvasRect?.width) || sourceWidth);
+  const viewportHeight = Math.max(1, Number(view.viewport?.height) || Number(view.canvasRect?.height) || sourceHeight);
+  const targetWidth = Math.max(1, Number(view.surfaceWidth) || viewportWidth);
+  const targetHeight = Math.max(1, Number(view.surfaceHeight) || viewportHeight);
+  const canvasRect = level3dRuntimeCanvasRect(view, viewportWidth, viewportHeight);
+  const viewportPoint = {
+    x: canvasRect.x + Number(point.x) * canvasRect.width / sourceWidth,
+    y: canvasRect.y + Number(point.y) * canvasRect.height / sourceHeight,
+  };
+  return {
+    x: viewportPoint.x * targetWidth / viewportWidth,
+    y: viewportPoint.y * targetHeight / viewportHeight,
+    depth: point.depth,
+  };
+}
+
+function level3dRuntimeCanvasRect(view, viewportWidth, viewportHeight) {
+  const rect = view?.canvasRect || {};
+  const width = Math.max(1, Number(rect.width) || Number(view?.width) || viewportWidth || 1);
+  const height = Math.max(1, Number(rect.height) || Number(view?.height) || viewportHeight || 1);
+  return {
+    x: Number.isFinite(Number(rect.x)) ? Number(rect.x) : 0,
+    y: Number.isFinite(Number(rect.y)) ? Number(rect.y) : 0,
+    width,
+    height,
   };
 }
 
@@ -4100,7 +4673,7 @@ function level3dClampNumber(value, min, max) {
 
 async function copyLevel3dToClipboard() {
   const levelName = sanitizeLevel3dName(level3dNameInput?.value || currentLevel3dEntry()?.name || "level_1");
-  await copyTextToClipboard(levelDefinition3dSource(levelName, level3dSourceData(), ""));
+  await copyTextToClipboard(level3dSnippetSource(levelName, level3dSourceData(), "", { bodyIndent: "" }));
   setLevel3dActionStatus("Copied 3D level", "is-ok");
 }
 
@@ -4165,7 +4738,18 @@ function resetLevel3dPreviewView() {
 
 function resetLevel3dPreviewState(source = previewExport || extractPreviewExport(latestHtml)) {
   level3dPreviewCameraState = level3dBasePreviewCamera(source);
-  level3dPreviewOrigin = { x: 0, y: 0, z: 0 };
+  level3dPreviewOrigin = level3dDefaultPreviewTarget(source);
+}
+
+function level3dDefaultPreviewTarget(source = previewExport || extractPreviewExport(latestHtml)) {
+  const size = level3d.slices.length
+    ? { width: level3d.width, depth: level3d.depth, height: level3d.height }
+    : source?.size || level3dRuntimeSnapshot()?.size || {};
+  return {
+    x: (Math.max(1, Number(size.width) || 1) - 1) / 2,
+    y: (Math.max(1, Number(size.depth) || 1) - 1) / 2,
+    z: (Math.max(1, Number(size.height) || 1) - 1) / 2,
+  };
 }
 
 function level3dPreviewScrubTarget(event) {
@@ -4469,6 +5053,7 @@ level3dLayerBoard?.addEventListener("pointerleave", () => {
   renderLevel3dLayerOverlay();
 });
 window.addEventListener("message", handleLevel3dLayerRendererViewMessage);
+window.addEventListener("message", handleLevel3dStageRendererViewMessage);
 window.addEventListener("message", handleLevel3dPlaytestStateMessage);
 window.addEventListener("resize", scheduleLevel3dSurfaceResize);
 document.addEventListener("keydown", (event) => {
@@ -4480,6 +5065,13 @@ document.addEventListener("keydown", (event) => {
 });
 if (window.ResizeObserver) {
   const level3dSurfaceObserver = new ResizeObserver(scheduleLevel3dSurfaceResize);
+  if (level3dBuilder) {
+    level3dSurfaceObserver.observe(level3dBuilder);
+  }
+  const level3dScrollSurface = level3dBuilder?.querySelector?.(".tool-pane-scroll");
+  if (level3dScrollSurface) {
+    level3dSurfaceObserver.observe(level3dScrollSurface);
+  }
   if (level3dStageCanvas) {
     level3dSurfaceObserver.observe(level3dStageCanvas);
   }

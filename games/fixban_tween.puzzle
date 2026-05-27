@@ -1,0 +1,440 @@
+title "Fixban Tween"
+subtitle "Canonical Fixban with movement tween"
+author "PuzzleStudio"
+
+default_wait_time = 100ms
+
+animation {
+	tween {
+		enabled = true
+		interval = 160ms
+	}
+}
+
+puzzle fixban {
+	tags {
+		kind = A B C P
+		box_kind = A B C
+	}
+
+	map rotate directions {
+		up -> right
+		right -> down
+		down -> left
+		left -> up
+	}
+
+	layers {
+		floor = @Floor
+		shade = @Shade
+		target_layer = Target:kind
+		each Safe:kind
+		light = @LightBase @Light:kind
+		actor = Box:kind Wall
+		each @Boundary:directions
+		each @Corner:directions
+	}
+
+	scratch {
+		moment
+		can_move
+	}
+
+	group {
+		target = Target:*
+		pushable = Box:*
+		solid = pushable Wall
+		object = Box:* Wall
+		wall_visual = @Boundary:* @Corner:*
+	}
+
+	win_conditions {
+		count(target) == 0
+	}
+
+	lose_conditions any {
+		some [ Wall | ; Box:* no Box:P | Wall ]
+		for k in box_kind {
+			some [ Box:k no Safe:k ]
+		}
+	}
+
+	routine display @fill_floor repeat {
+		[ no @Floor ] -> [ @Floor ]
+	}
+
+	routine display @wall_edges repeat {
+		for d in directions {
+			d [ Wall no @Boundary:d | no Wall ] -> [ Wall @Boundary:d | ]
+		}
+	}
+
+	routine display @wall_corners_270 repeat {
+		for d in directions {
+			d [ Wall no @Corner:d | Wall ; Wall | no Wall ] -> [ Wall @Corner:d | Wall ; Wall | ]
+		}
+	}
+
+	routine mark_safe once {
+		repeat [ Safe:* ] -> []
+
+		for k in box_kind {
+			repeat [ Target:k no Safe:k ] -> [ Target:k Safe:k ]
+			repeat {
+				[ no Wall | no Wall no Safe:k | Safe:k ] -> [ | Safe:k | Safe:k ]
+			}
+		}
+	}
+
+	routine display @refresh_board once {
+		repeat [ wall_visual ] -> []
+		repeat [ light ] -> []
+		repeat [ @Shade ] -> []
+		repeat [ object no light ] -> [ object @LightBase ]
+		repeat down [ object | no @Shade ] -> [ object | @Shade ]
+		for k in kind {
+			repeat [ @LightBase Target:k ] -> [ @Light:k Target:k ]
+		}
+		@wall_edges
+		@wall_corners_270
+	}
+
+	on_level_start {
+		mark_safe
+	}
+
+	on_display {
+		display @fill_floor
+		display @refresh_board
+	}
+
+	rules {
+		repeat {
+			once input directions [ Box:P ] -> [ Box:P{moment} ]
+			input directions [ Box:kind{moment} | pushable{no moment} ] -> [ Box:kind{moment} | pushable{moment} ]
+		}
+		input directions [ pushable{moment} | no solid ] -> [ pushable{moment can_move} | no solid ]
+		repeat input directions [ pushable{moment no can_move} | pushable{can_move} ] -> [ pushable{moment can_move} | pushable{can_move} ]
+		input directions [ pushable{can_move} ] -> [ pushable{> can_move} ]
+		move
+
+		for k in kind {
+			[ Box:k Target:k ] -> [ Wall ]
+		}
+	}
+
+	sprites {
+		colors {
+			clear = #00000000
+			edge = #555
+			floor_a = #cfcfcf
+			floor_b = #c5c5c5
+			shade = #0002
+			light = #fff
+			wall = #444
+
+			piece_color:kind {
+				A = #4a4
+				B = #a4a
+				C = #46c
+				P = #000
+			}
+		}
+
+		palettes {
+			floor = floor_a floor_b
+			shade = shade
+			light = light
+			wall = wall
+			safe = clear
+			piece_fg:kind {
+				A = piece_color:A clear
+				B = piece_color:B clear
+				C = piece_color:C clear
+				P = piece_color:P clear
+			}
+
+			piece_bg:kind {
+				A = clear piece_color:A
+				B = clear piece_color:B
+				C = clear piece_color:C
+				P = clear piece_color:P
+			}
+
+			light_piece:kind {
+				A = piece_color:A
+				B = piece_color:B
+				C = piece_color:C
+				P = piece_color:P
+			}
+
+			edge = clear edge
+		}
+
+		shapes {
+			mark:kind {
+				A {
+					00000
+					01010
+					00100
+					01010
+					00000
+				}
+				B {
+					00000
+					00100
+					01010
+					00100
+					00000
+				}
+				C {
+					00000
+					00100
+					00100
+					00100
+					00000
+				}
+				P {
+					00000
+					00000
+					01010
+					00000
+					00000
+				}
+			}
+
+			edge:directions rotate from up {
+				11111
+				00000
+				00000
+				00000
+				00000
+			}
+
+			corner:directions rotate from up {
+				00001
+				00000
+				00000
+				00000
+				00000
+			}
+
+			floor {
+				00000
+				00000
+				00100
+				00000
+				00000
+			}
+
+			shade {
+				00000
+				00000
+				00000
+				.....
+				.....
+			}
+		}
+
+		@Floor {
+			palette floor
+			shape floor
+		}
+
+		@Shade {
+			palette shade
+			shape shade
+		}
+
+		Box:kind {
+			palette piece_fg:kind
+			shape mark:kind
+		}
+
+		Target:kind {
+			palette piece_bg:kind
+			shape mark:kind
+		}
+
+		Safe:kind {
+			palette safe
+		}
+
+		@LightBase {
+			palette light
+		}
+
+		@Light:kind {
+			palette light_piece:kind
+		}
+
+		@Boundary:directions {
+			palette edge
+			shape edge:directions
+		}
+
+		@Corner:directions {
+			palette edge
+			shape corner:directions
+		}
+
+		Wall {
+			palette wall
+		}
+	}
+}
+
+levels fixban of fixban {
+	legend {
+		. = empty
+		a = Target:A
+		b = Target:B
+		c = Target:C
+		p = Target:P
+		A = Box:A
+		B = Box:B
+		C = Box:C
+		P = Box:P
+		# = Wall
+		1 = Box:A Target:B
+		2 = Box:B Target:A
+	}
+
+	level level_1
+	########
+	##.a####
+	##A.####
+	##a...##
+	##..A.##
+	##P.####
+	########
+
+	level level_2
+	########
+	#...####
+	#P.AA..#
+	###Aa..#
+	##.....#
+	##a.a.##
+	########
+
+	level level_3
+	#######
+	###..##
+	#.AB..#
+	#.#.P.#
+	#.ab.##
+	#######
+
+	level level_4
+	#########
+	###..####
+	###A.####
+	##.bBa.##
+	##.P...##
+	###..####
+	#########
+
+	level level_5
+	#######
+	###..##
+	#Pb..##
+	#.#BBb#
+	#..aA.#
+	#....##
+	#######
+
+	level level_6
+	########
+	#......#
+	#.2..1.#
+	#.#.P#.#
+	#.#2.1.#
+	#......#
+	########
+
+	level level_7
+	########
+	#....#p#
+	#.B.Bb.#
+	##.Aa..#
+	###.b.P#
+	########
+
+	level level_8
+	########
+	####...#
+	#PA.b2.#
+	#.1p.B.#
+	#...a..#
+	########
+}
+
+scene title {
+	title
+	subtitle
+	choice "Continue" -> goto playing
+	choice "New Game" -> input new_game
+	choice "Level Select" -> goto level_select
+	rules {
+		new_game -> {
+			clear_game_progress
+			goto playing(fixban.level_1)
+		}
+	}
+}
+
+scene playing {
+	state {
+		board = puzzle fixban
+	}
+	view {
+		row {
+			title
+			subtitle level.label
+		}
+		puzzle
+	}
+	inputs {
+		open_menu <- Escape
+		level_select <- q
+	}
+	rules {
+		step board
+		open_menu -> enter menu
+		level_select -> goto level_select
+	}
+}
+
+scene menu {
+	view {
+		text "Menu"
+		column {
+			button "Resume" -> back
+			button "Restart" -> playing.restart
+			button "Level Select" -> goto level_select
+		}
+	}
+	inputs {
+		resume <- Escape Enter Space
+		level_select <- q
+	}
+	rules {
+		resume -> back
+		level_select -> goto level_select
+	}
+}
+
+scene level_select {
+	view {
+		text "Select a level"
+		level_menu fixban -> goto playing(level)
+		button "Back" -> goto title
+	}
+	inputs {
+		back_to_title <- q Escape
+	}
+	rules {
+		back_to_title -> goto title
+	}
+}

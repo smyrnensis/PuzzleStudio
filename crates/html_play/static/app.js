@@ -266,12 +266,14 @@ let swipeStart = null;
 const puzzleViewports = new Map();
 const puzzle3FrameIframes = new Map();
 const activeSolveRequests = new Map();
-const standardMenuCursors = new Map();
+const standardChoiceCursors = new Map();
 let wasmSolverPromise = null;
 let screenScaleSyncFrame = 0;
 let screenScaleSyncPasses = 0;
 const defaultSceneLogicalSize = { width: 4, height: 3 };
 const defaultSceneLayoutUnit = 180;
+const pendingCommandQueue = [];
+let drainingCommandQueue = false;
 
 async function requestJson(url, options = {}) {
   if (standaloneRuntime) {
@@ -289,7 +291,7 @@ async function loadWasmSolver() {
   if (!wasmSolverPromise) {
     wasmSolverPromise = import("./wasm/puzzle_wasm.js")
       .then(async (module) => {
-        await module.default("./wasm/puzzle_wasm_bg.wasm");
+        await module.default({ module_or_path: "./wasm/puzzle_wasm_bg.wasm" });
         if (typeof module.solve_state !== "function") {
           throw new Error("Solver is not available");
         }
@@ -340,17 +342,30 @@ function render(state) {
   applyTheme(state?.theme || window.PuzzleExport?.theme || null);
   soundRuntime.configure(state?.sounds || window.PuzzleExport?.sounds || { sfx: [], music: [] });
   soundRuntime.applyEvents(state?.soundEvents || []);
-  applyMessageEvents(state?.messageEvents || []);
+  if (state) {
+    state.soundEvents = [];
+  }
   applyWaitEvents(state?.waitEvents || []);
   if (state) {
     state.busy = state.busy === true || clientPendingWaits > 0;
     state.waitEvents = [];
+    const animationEvents = Array.isArray(state.animationEvents) ? state.animationEvents : [];
+    if (state.scene && Array.isArray(animationEvents)) {
+      state.scene.animationEvents = animationEvents;
+    }
+    if (Array.isArray(state.sceneLayers) && Array.isArray(animationEvents)) {
+      const focusedLayer = state.sceneLayers.find((layer) => layer?.focused === true) || state.sceneLayers[0];
+      if (focusedLayer?.scene) {
+        focusedLayer.scene.animationEvents = animationEvents;
+      }
+    }
   }
   renderSceneStack(state);
   scheduleSelectedLevelMenuScroll();
   scheduleScreenScaleSync(3);
   notifyPreviewState(state);
   focusShell();
+  applyMessageEvents(state?.messageEvents || []);
 }
 
 function scheduleScreenScaleSync(passes = 2) {
@@ -532,7 +547,11 @@ function showNextMessage() {
   panel.append(body);
   backdrop.append(panel);
   backdrop.tabIndex = -1;
-  backdrop.addEventListener("click", closeMessagePopup);
+  backdrop.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    backdrop.focus({ preventScroll: true });
+  });
   shell.append(backdrop);
   messagePopup = backdrop;
   backdrop.focus();
@@ -586,14 +605,14 @@ function renderSceneStack(state) {
       __sceneDef: sceneDef,
       __sceneState: layer.sceneState || layer.state || {},
       __sceneMenuLike: isMenuScene,
-      __standardMenuButtonCounter: { value: 0 },
+      __standardChoiceCounter: { value: 0 },
     };
 
     const layerEl = document.createElement("div");
     layerEl.className = "scene-layer";
     layerEl.classList.toggle("is-focused", layer.focused === true);
-    layerEl.classList.toggle("scene-overlay-layer", index > 0);
     layerEl.classList.toggle("is-menu-scene", isMenuScene);
+    layerEl.classList.toggle("has-ratio-content", components.some((component) => componentContainsSizingKind(component, "ratio")));
     layerEl.style.zIndex = String(10 + index);
     applySceneLayout(layerEl, sceneDef?.layout, { root: true });
     renderSurfaceComponents(components, layerEl, scope);
@@ -644,7 +663,7 @@ function renderEmbeddedPuzzleComponent(layers) {
     __sceneDef: sceneDef,
     __sceneState: layer.sceneState || layer.state || {},
     __sceneMenuLike: false,
-    __standardMenuButtonCounter: { value: 0 },
+    __standardChoiceCounter: { value: 0 },
   };
   screenView.classList.remove("has-scene-stack");
   screenView.append(renderPuzzle(component, scope));
@@ -687,7 +706,62 @@ function componentHasKind(component, kind) {
   if (component.kind === kind) {
     return true;
   }
-  return Boolean(component.children?.some((child) => componentHasKind(child, kind)));
+  return Boolean(component.children?.some((child) => componentHasKind(child, kind))
+    || component.elseChildren?.some((child) => componentHasKind(child, kind)));
+}
+
+function componentSizingKind(component) {
+  switch (component?.kind) {
+    case "frame":
+    case "puzzle":
+    case "puzzle3":
+      return "ratio";
+    case "title":
+    case "subtitle":
+    case "text":
+    case "button":
+    case "choice":
+      return "flow";
+    case "level_menu":
+    case "menu":
+    case "for":
+      return "collection";
+    case "box":
+    case "row":
+    case "column":
+      return "container";
+    default:
+      return "unknown";
+  }
+}
+
+function componentContainsSizingKind(component, sizing) {
+  if (componentSizingKind(component) === sizing) {
+    return true;
+  }
+  return Boolean(component?.children?.some((child) => componentContainsSizingKind(child, sizing))
+    || component?.elseChildren?.some((child) => componentContainsSizingKind(child, sizing)));
+}
+
+function applySizingKind(element, component) {
+  const sizing = componentSizingKind(component);
+  element.dataset.sceneSizing = sizing;
+  if (sizing !== "unknown") {
+    element.classList.add(`scene-${sizing}`);
+  }
+}
+
+function renderRatioComponent(component, scope = {}) {
+  const slot = document.createElement("div");
+  slot.className = "scene-ratio-slot";
+  slot.dataset.sceneSizing = "ratio";
+  slot.dataset.frameComponent = "true";
+  slot.dataset.frameKind = component.kind || "frame";
+  applySceneLayout(slot, component.layout);
+  slot.append(component.kind === "puzzle3"
+    ? renderPuzzle3Frame(component, scope)
+    : renderPuzzle(component, scope));
+  return slot;
 }
 
 function findComponentByKind(components, kind) {
@@ -698,6 +772,10 @@ function findComponentByKind(components, kind) {
     const found = findComponentByKind(component.children || [], kind);
     if (found) {
       return found;
+    }
+    const elseFound = findComponentByKind(component.elseChildren || [], kind);
+    if (elseFound) {
+      return elseFound;
     }
   }
   return null;
@@ -737,9 +815,8 @@ function renderComponent(component, scope = {}) {
   switch (component.kind) {
     case "frame":
     case "puzzle":
-      return renderPuzzle(component, scope);
     case "puzzle3":
-      return renderPuzzle3Frame(component, scope);
+      return renderRatioComponent(component, scope);
     case "title":
       return renderTitle(component, "view-title", scope);
     case "subtitle":
@@ -748,10 +825,14 @@ function renderComponent(component, scope = {}) {
       return renderText(component, scope);
     case "button":
       return renderButton(component, scope);
+    case "choice":
+      return renderChoice(component, scope);
     case "box":
     case "row":
     case "column":
       return renderContainer(component, scope);
+    case "conditional":
+      return renderConditional(component, scope);
     case "for":
       return renderFor(component, scope);
     case "level_menu":
@@ -770,6 +851,7 @@ function renderMenuInstance(component, scope = {}) {
   const menu = currentState?.menus?.find((candidate) => candidate.name === component.menu);
   const container = document.createElement("div");
   container.className = "view-menu";
+  applySizingKind(container, component);
   if (!menu) {
     container.hidden = true;
     return container;
@@ -789,6 +871,7 @@ function renderTitle(component, className, scope = {}) {
   const title = document.createElement("p");
   title.className = className;
   title.textContent = resolveLabel(component.content, scope);
+  applySizingKind(title, component);
   applySceneLayout(title, component.layout);
   return title;
 }
@@ -813,7 +896,6 @@ function renderPuzzle(component, scope = {}) {
   renderer.viewport = puzzleViewports.get(key);
   renderer.render(scene);
   puzzleViewports.set(key, renderer.viewport);
-  applySceneLayout(root, component.layout);
   return root;
 }
 
@@ -838,7 +920,6 @@ function renderPuzzle3Frame(component, scope = {}) {
     frame.srcdoc = puzzle3FrameSrcdoc(sceneName);
     puzzle3FrameIframes.set(key, frame);
   }
-  applySceneLayout(frame, component.layout);
   return frame;
 }
 
@@ -889,6 +970,7 @@ function renderText(component, scope = {}) {
   } else {
     text.textContent = component.value || "";
   }
+  applySizingKind(text, component);
   applySceneLayout(text, component.layout);
   return text;
 }
@@ -903,22 +985,35 @@ function renderButton(component, scope = {}) {
     counter.value += 1;
     button.classList.toggle("is-selected", index === scope.__menuCursor);
     button.addEventListener("click", () => runActivationConfirm(button, () => sendCommand(`${scope.__menuInstance}.enter:${index}`)));
-  } else if (scope.__sceneMenuLike && !scope.__insideFor) {
-    const counter = scope.__standardMenuButtonCounter || { value: 0 };
-    scope.__standardMenuButtonCounter = counter;
-    const index = counter.value;
-    counter.value += 1;
-    button.classList.add("standard-menu-button");
-    button.classList.toggle("is-selected", index === standardMenuCursor(scope.__sceneDef));
-    button.addEventListener("click", () => {
-      standardMenuCursors.set(scope.__sceneDef.name, index);
-      runEffectActivationConfirm(button, component.effect, scope);
-    });
   } else {
     button.addEventListener("click", () => runEffectActivationConfirm(button, component.effect, scope));
   }
+  applySizingKind(button, component);
   applySceneLayout(button, component.layout);
   return button;
+}
+
+function renderChoice(component, scope = {}) {
+  const choice = document.createElement("button");
+  choice.type = "button";
+  choice.textContent = resolveLabel(component.label, scope) || sceneTitle(effectLabel(component.effect));
+  choice.classList.add("standard-choice");
+  if (!scope.__insideFor) {
+    const counter = scope.__standardChoiceCounter || { value: 0 };
+    scope.__standardChoiceCounter = counter;
+    const index = counter.value;
+    counter.value += 1;
+    choice.classList.toggle("is-selected", index === standardChoiceCursor(scope.__sceneDef));
+    choice.addEventListener("click", () => {
+      standardChoiceCursors.set(scope.__sceneDef.name, index);
+      runEffectActivationConfirm(choice, component.effect, scope);
+    });
+  } else {
+    choice.addEventListener("click", () => runEffectActivationConfirm(choice, component.effect, scope));
+  }
+  applySizingKind(choice, component);
+  applySceneLayout(choice, component.layout);
+  return choice;
 }
 
 function runEffectActivationConfirm(control, effect, scope = {}) {
@@ -1036,12 +1131,23 @@ function selectedLevelMenuElement() {
 function renderContainer(component, scope = {}) {
   const container = document.createElement("div");
   container.className = `view-${component.kind}`;
+  applySizingKind(container, component);
+  container.classList.toggle("has-ratio-content", componentContainsSizingKind(component, "ratio"));
   if (component.layout?.scroll) {
     container.classList.add("is-scroll");
   }
   applySceneLayout(container, component.layout);
   renderSurfaceComponents(component.children || [], container, scope);
   return container;
+}
+
+function renderConditional(component, scope = {}) {
+  const fragment = document.createDocumentFragment();
+  const children = isSceneConditionTrue(component.condition)
+    ? component.children || []
+    : component.elseChildren || [];
+  renderSurfaceComponents(children, fragment, scope);
+  return fragment;
 }
 
 function applySceneLayout(element, layout, options = {}) {
@@ -1066,13 +1172,46 @@ function applySceneLayout(element, layout, options = {}) {
     element.style.gap = `calc(${Math.max(0, Number(layout.gap) || 0)} * var(--scene-layout-gap-unit))`;
   }
   const align = layout.align || {};
-  if (align.x) {
-    element.style.justifyItems = sceneLayoutAlignCss(align.x);
-    element.style.justifyContent = sceneLayoutAlignCss(align.x);
+  applySceneAlignment(element, align);
+}
+
+function applySceneAlignment(element, align = {}) {
+  const x = align.x ? sceneLayoutAlignCss(align.x) : "";
+  const y = align.y ? sceneLayoutAlignCss(align.y) : "";
+  if (x) {
+    element.style.justifyItems = x;
   }
-  if (align.y) {
-    element.style.alignItems = sceneLayoutAlignCss(align.y);
-    element.style.alignContent = sceneLayoutAlignCss(align.y);
+  if (y) {
+    element.style.alignContent = y;
+  }
+  const isColumnFlex =
+    element.classList.contains("scene-layer")
+    || element.classList.contains("view-column")
+    || element.classList.contains("view-box");
+  const isRowFlex = element.classList.contains("view-row");
+  if (isColumnFlex) {
+    if (x) {
+      element.style.alignItems = x;
+    }
+    if (y) {
+      element.style.justifyContent = y;
+    }
+    return;
+  }
+  if (isRowFlex) {
+    if (x) {
+      element.style.justifyContent = x;
+    }
+    if (y) {
+      element.style.alignItems = y;
+    }
+    return;
+  }
+  if (x) {
+    element.style.justifyContent = x;
+  }
+  if (y) {
+    element.style.alignItems = y;
   }
 }
 
@@ -1116,6 +1255,7 @@ function sceneLayoutAlignCss(value) {
 function renderFor(component, scope = {}) {
   const list = document.createElement("ul");
   list.className = "view-list";
+  applySizingKind(list, component);
 
   for (const item of viewItems(component, scope)) {
     const row = document.createElement("li");
@@ -1137,6 +1277,7 @@ function renderFor(component, scope = {}) {
 function viewItems(component, scope = {}) {
   if (component.source === "levels") {
     return sceneLevelEntries(scope.__sceneDef).map(({ level, index }, position) => ({
+      kind: "level",
       index,
       position,
       num: position + 1,
@@ -1144,6 +1285,8 @@ function viewItems(component, scope = {}) {
       title: level.title || level.label || level.name || `Level ${index + 1}`,
       name: level.name || `Level ${index + 1}`,
       label: level.label || level.name || `Level ${index + 1}`,
+      cleared: level.cleared === true,
+      solved: level.cleared === true,
       current: index === currentState.levelIndex,
       selected: index === currentState.selectedLevelIndex,
     }));
@@ -1183,6 +1326,10 @@ function findComponent(components, predicate) {
     const found = findComponent(component.children || [], predicate);
     if (found) {
       return found;
+    }
+    const elseFound = findComponent(component.elseChildren || [], predicate);
+    if (elseFound) {
+      return elseFound;
     }
   }
   return null;
@@ -1257,6 +1404,7 @@ function renderLevelMenu(state, component = {}, scope = {}) {
   const list = document.createElement("ul");
   list.className = "view-list level-menu";
   list.setAttribute("role", "listbox");
+  applySizingKind(list, { kind: "level_menu" });
   applySceneLayout(list, component.layout);
   const columns = Number(component.columns || 0);
   if (columns > 0) {
@@ -1337,29 +1485,38 @@ function focusShell() {
   shell.focus({ preventScroll: true });
 }
 
-function commandForKey(event) {
+function isMessageDismissKey(event) {
+  const rawKey = String(event.key || "");
+  const rawCode = String(event.code || "");
+  const key = normalizedKeyName(rawKey, rawCode);
+  return rawKey === "Enter"
+    || rawKey === " "
+    || rawCode === "Enter"
+    || rawCode === "Space"
+    || key === "x"
+    || rawCode === "KeyX";
+}
+
+function effectsForKey(event) {
   if (!currentState) {
-    return null;
+    return [];
   }
+  const effects = [];
   const rawKey = String(event.key || "");
   const rawCode = String(event.code || "");
   const key = normalizedKeyName(rawKey, rawCode);
   const keyTokens = rawKeyTokens(rawKey, rawCode);
   const scene = currentSceneDef();
-  const standardInput = standardMenuInputForKey(key, key, rawCode);
-  if (standardInput && standardMenuButtons(scene).length > 0) {
-    return { kind: "standard_menu", input: standardInput };
-  }
   const binding = scene?.keys?.find((binding) => binding.keys.some((candidate) => keyTokens.includes(candidate)));
   if (binding) {
-    return binding.effect || { kind: "command", name: binding.command };
+    effects.push(binding.effect || { kind: "command", name: binding.command });
   }
 
   const menu = menuInstanceComponent(scene);
   if (menu) {
     const menuInput = menuInputForKey(key, key, rawCode);
     if (menuInput) {
-      return { kind: "command", name: `${menu.name}.${menuInput}` };
+      effects.push({ kind: "command", name: `${menu.name}.${menuInput}` });
     }
   }
 
@@ -1374,26 +1531,36 @@ function commandForKey(event) {
         enter: "enter",
         back: "back",
       }[menuInput];
-      return command ? { kind: "command", name: command } : null;
+      if (command) {
+        effects.push({ kind: "command", name: command });
+      }
     }
   }
 
-  if (key === "z") {
-    return { kind: "command", name: "undo" };
-  }
-  if (key === "y") {
-    return { kind: "command", name: "redo" };
-  }
-  if (!currentSceneHasPuzzle() && !currentState.scene) {
-    return null;
-  }
-
-  const input = currentState.inputs.find((input) =>
+  const input = (currentState.inputs || []).find((input) =>
     keyTokens.includes(input.key)
     || keyTokens.includes(input.arrow)
     || (input.keys || []).some((candidate) => keyTokens.includes(candidate))
   );
-  return input ? { kind: "command", name: input.name } : null;
+  const standardInput = standardChoiceInputForKey(key, key, rawCode);
+  if (standardInput && standardChoiceComponents(scene).length > 0) {
+    effects.push({ kind: "standard_choice", input: standardInput });
+  }
+
+  if (key === "z") {
+    effects.push({ kind: "command", name: "undo" });
+  }
+  if (key === "y") {
+    effects.push({ kind: "command", name: "redo" });
+  }
+  if (input && (currentSceneHasPuzzle() || currentState.scene)) {
+    effects.push({ kind: "command", name: input.name });
+  }
+  return effects;
+}
+
+function commandForKey(event) {
+  return effectsForKey(event)[0] || null;
 }
 
 function normalizedKeyName(key, code = "") {
@@ -1419,12 +1586,18 @@ function codeToLetterName(code) {
   return code.startsWith("Key") && code.length === 4 ? code.slice(3).toLowerCase() : "";
 }
 
-function standardMenuInputForKey(key, rawKey, code = "") {
-  if (key === "w" || rawKey === "ArrowUp" || code === "ArrowUp" || key === "a" || rawKey === "ArrowLeft" || code === "ArrowLeft") {
-    return "prev";
+function standardChoiceInputForKey(key, rawKey, code = "") {
+  if (key === "w" || rawKey === "ArrowUp" || code === "ArrowUp") {
+    return "up";
   }
-  if (key === "s" || rawKey === "ArrowDown" || code === "ArrowDown" || key === "d" || rawKey === "ArrowRight" || code === "ArrowRight") {
-    return "next";
+  if (key === "s" || rawKey === "ArrowDown" || code === "ArrowDown") {
+    return "down";
+  }
+  if (key === "a" || rawKey === "ArrowLeft" || code === "ArrowLeft") {
+    return "left";
+  }
+  if (key === "d" || rawKey === "ArrowRight" || code === "ArrowRight") {
+    return "right";
   }
   if (isStandardMenuConfirmKey(key, rawKey, code)) {
     return "enter";
@@ -1528,8 +1701,8 @@ function sceneConditionValue(value) {
 }
 
 async function sendEffect(effect, scope = {}) {
-  if (effect?.kind === "standard_menu") {
-    handleStandardMenuInput(effect.input);
+  if (effect?.kind === "standard_choice") {
+    handleStandardChoiceInput(effect.input);
     return;
   }
   if (effect?.kind === "wait") {
@@ -1561,7 +1734,7 @@ function waitForEffect(effect) {
 
 function applyWaitEvents(events) {
   for (const event of events || []) {
-    if (event.kind !== "wait") {
+    if (event.kind !== "wait" && event.kind !== "continue_effects") {
       continue;
     }
     clientPendingWaits += 1;
@@ -1573,14 +1746,24 @@ function applyWaitEvents(events) {
       if (currentState) {
         currentState.busy = clientPendingWaits > 0;
       }
+      if (event.kind === "continue_effects") {
+        sendCommandNow("__continue_effects").then(drainQueuedCommands);
+      } else {
+        drainQueuedCommands();
+      }
     }, Math.max(0, Number(event.milliseconds || event.ms || 0)));
   }
 }
 
 function sendCommand(command) {
-  if (currentState?.busy) {
+  if (currentState?.busy || clientPendingWaits > 0) {
+    pendingCommandQueue.push(command);
     return undefined;
   }
+  return sendCommandNow(command);
+}
+
+async function sendCommandNow(command) {
   if (sendPuzzle3Command(command)) {
     return undefined;
   }
@@ -1594,6 +1777,21 @@ function sendCommand(command) {
     return post(`/api/input/${encodeURIComponent(command)}`);
   }
   return post(`/api/command/${encodeURIComponent(command)}`);
+}
+
+async function drainQueuedCommands() {
+  if (drainingCommandQueue || clientPendingWaits > 0 || currentState?.busy) {
+    return;
+  }
+  drainingCommandQueue = true;
+  try {
+    while (pendingCommandQueue.length > 0 && clientPendingWaits === 0 && !currentState?.busy) {
+      const command = pendingCommandQueue.shift();
+      await sendCommandNow(command);
+    }
+  } finally {
+    drainingCommandQueue = false;
+  }
 }
 
 function sendPuzzle3Command(command) {
@@ -1659,57 +1857,162 @@ function isLevelMenuCommandName(command) {
   ].includes(name);
 }
 
-function standardMenuButtons(scene = currentSceneDef()) {
-  if (!scene || !sceneIsMenuLike(scene)) {
+function standardChoiceComponents(scene = currentSceneDef()) {
+  return standardChoiceFocusCells(scene).map((cell) => cell.component);
+}
+
+function standardChoiceFocusCells(scene = currentSceneDef()) {
+  if (!scene) {
     return [];
   }
-  const buttons = [];
-  collectStandardMenuButtons(scene.components || [], buttons, false);
-  return buttons;
+  const footprint = componentColumnFootprint(scene.components || [], { insideFor: false });
+  return footprint.cells.map((cell, index) => ({ ...cell, index }));
 }
 
-function collectStandardMenuButtons(components, out, insideFor) {
-  for (const component of components || []) {
-    if (component.kind === "for") {
-      collectStandardMenuButtons(component.children || [], out, true);
-      continue;
-    }
-    if (component.kind === "menu" || component.kind === "level_menu") {
-      continue;
-    }
-    if (component.kind === "button" && !insideFor) {
-      out.push(component);
-      continue;
-    }
-    collectStandardMenuButtons(component.children || [], out, insideFor);
+function componentFootprint(component, context = {}) {
+  if (!component) {
+    return emptyFootprint();
   }
+  if (component.kind === "choice" && !context.insideFor) {
+    return {
+      width: 1,
+      height: 1,
+      cells: [{ x: 0, y: 0, component }],
+    };
+  }
+  if (["title", "subtitle", "text", "frame", "puzzle", "puzzle3"].includes(component.kind)) {
+    return emptyCellFootprint();
+  }
+  if (component.kind === "row") {
+    return componentRowFootprint(component.children || [], context);
+  }
+  if (component.kind === "column" || component.kind === "box") {
+    return componentColumnFootprint(component.children || [], context);
+  }
+  if (component.kind === "conditional") {
+    return componentColumnFootprint(
+      isSceneConditionTrue(component.condition)
+        ? component.children || []
+        : component.elseChildren || [],
+      context,
+    );
+  }
+  if (component.kind === "for") {
+    return componentColumnFootprint(component.children || [], { ...context, insideFor: true });
+  }
+  return emptyCellFootprint();
 }
 
-function standardMenuCursor(scene = currentSceneDef()) {
-  const buttons = standardMenuButtons(scene);
-  const max = Math.max(0, buttons.length - 1);
-  const cursor = Number(standardMenuCursors.get(scene?.name) || 0);
+function componentRowFootprint(components, context = {}) {
+  let width = 0;
+  let height = 0;
+  const cells = [];
+  for (const component of components || []) {
+    const child = componentFootprint(component, context);
+    for (const cell of child.cells) {
+      cells.push({ ...cell, x: cell.x + width });
+    }
+    width += child.width;
+    height = Math.max(height, child.height);
+  }
+  return {
+    width: Math.max(1, width),
+    height: Math.max(1, height),
+    cells,
+  };
+}
+
+function componentColumnFootprint(components, context = {}) {
+  let width = 0;
+  let height = 0;
+  const cells = [];
+  for (const component of components || []) {
+    const child = componentFootprint(component, context);
+    for (const cell of child.cells) {
+      cells.push({ ...cell, y: cell.y + height });
+    }
+    width = Math.max(width, child.width);
+    height += child.height;
+  }
+  return {
+    width: Math.max(1, width),
+    height: Math.max(1, height),
+    cells,
+  };
+}
+
+function emptyFootprint() {
+  return { width: 0, height: 0, cells: [] };
+}
+
+function emptyCellFootprint() {
+  return { width: 1, height: 1, cells: [] };
+}
+
+function standardChoiceCursor(scene = currentSceneDef()) {
+  const cells = standardChoiceFocusCells(scene);
+  const max = Math.max(0, cells.length - 1);
+  const cursor = Number(standardChoiceCursors.get(scene?.name) || 0);
   return Math.max(0, Math.min(max, cursor));
 }
 
-function handleStandardMenuInput(input) {
+function handleStandardChoiceInput(input) {
   const scene = currentSceneDef();
-  const buttons = standardMenuButtons(scene);
-  if (!scene || buttons.length === 0) {
+  const cells = standardChoiceFocusCells(scene);
+  if (!scene || cells.length === 0) {
     return;
   }
-  const cursor = standardMenuCursor(scene);
-  if (input === "prev" || input === "next") {
-    const delta = input === "prev" ? -1 : 1;
-    const next = (cursor + delta + buttons.length) % buttons.length;
-    standardMenuCursors.set(scene.name, next);
-    render(currentState);
+  const cursor = standardChoiceCursor(scene);
+  if (["up", "down", "left", "right"].includes(input)) {
+    const next = standardChoiceDirectionalTarget(cells, cursor, input);
+    if (next !== null) {
+      standardChoiceCursors.set(scene.name, next);
+      render(currentState);
+    }
     return;
   }
   if (input === "enter") {
-    const selectedButton = document.querySelector(".standard-menu-button.is-selected");
-    runEffectActivationConfirm(selectedButton, buttons[cursor]?.effect || null, { __sceneDef: scene });
+    const selectedChoice = document.querySelector(".standard-choice.is-selected");
+    runEffectActivationConfirm(selectedChoice, cells[cursor]?.component?.effect || null, { __sceneDef: scene });
   }
+}
+
+function standardChoiceDirectionalTarget(cells, cursor, direction) {
+  const current = cells[cursor];
+  if (!current) {
+    return null;
+  }
+  const candidates = cells.filter((cell) => {
+    if (direction === "left") {
+      return cell.y === current.y && cell.x < current.x;
+    }
+    if (direction === "right") {
+      return cell.y === current.y && cell.x > current.x;
+    }
+    if (direction === "up") {
+      return cell.x === current.x && cell.y < current.y;
+    }
+    if (direction === "down") {
+      return cell.x === current.x && cell.y > current.y;
+    }
+    return false;
+  });
+  if (candidates.length === 0) {
+    return null;
+  }
+  candidates.sort((left, right) => {
+    if (direction === "left") {
+      return right.x - left.x;
+    }
+    if (direction === "right") {
+      return left.x - right.x;
+    }
+    if (direction === "up") {
+      return right.y - left.y;
+    }
+    return left.y - right.y;
+  });
+  return candidates[0].index;
 }
 
 function effectLabel(effect) {
@@ -1741,10 +2044,10 @@ function effectLabel(effect) {
     return effectCommandName(effect);
   }
   if (effect.kind === "start_level") {
-    return effect.scope ? `start levels ${effect.scope} in ${effect.scene}` : `start levels in ${effect.scene}`;
+    return `goto ${effect.scene}`;
   }
   if (effect.kind === "continue_level") {
-    return effect.scope ? `continue levels ${effect.scope} in ${effect.scene}` : `continue levels in ${effect.scene}`;
+    return `goto ${effect.scene}`;
   }
   if (effect.kind === "puzzle_next_level") {
     return `${effect.target}.next_level`;
@@ -1810,10 +2113,10 @@ function effectToCommand(effect, scope = {}) {
     return effectCommand(effect, scope);
   }
   if (effect.kind === "start_level") {
-    return effect.scope ? `start levels ${effect.scope} in ${effect.scene}` : `start levels in ${effect.scene}`;
+    return `goto ${effect.scene}`;
   }
   if (effect.kind === "continue_level") {
-    return effect.scope ? `continue levels ${effect.scope} in ${effect.scene}` : `continue levels in ${effect.scene}`;
+    return `goto ${effect.scene}`;
   }
   if (effect.kind === "puzzle_next_level") {
     return `${effect.target}.next_level`;
@@ -1858,6 +2161,9 @@ function effectCommand(effect, scope = {}) {
   if (!screen) {
     return "";
   }
+  if ((effect.kind === "goto" || effect.kind === "enter") && (effect.params || []).length === 1 && effect.params[0]?.name === "level") {
+    return `${effect.kind} ${screen}(${exprSource(effect.params[0].value, scope)})`;
+  }
   const params = (effect.params || []).map((param) => `${param.name} = ${exprSource(param.value, scope)}`);
   const base = `${effect.kind} ${screen}`;
   return params.length ? `${base} with ${params.join(", ")}` : base;
@@ -1875,12 +2181,19 @@ function exprSource(expr, scope = {}) {
   }
   if (expr.kind === "path") {
     const resolved = resolveViewPath(expr.path, scope);
-    return resolved === undefined || resolved === null ? expr.path : commandPayload(resolved);
+    return resolved === undefined || resolved === null ? expr.path : exprValueSource(resolved);
   }
   if (expr.kind === "call") {
     return `${expr.name}(${(expr.args || []).map((arg) => exprSource(arg, scope)).join(", ")})`;
   }
   return "";
+}
+
+function exprValueSource(value) {
+  if (typeof value === "object" && value?.kind === "level" && value.name !== undefined) {
+    return JSON.stringify(value.name);
+  }
+  return commandPayload(value);
 }
 
 function commandWithScope(command, scope = {}) {
@@ -1916,35 +2229,47 @@ document.addEventListener("keydown", (event) => {
   }
   if (messagePopup) {
     event.preventDefault();
-    closeMessagePopup();
+    if (isMessageDismissKey(event)) {
+      closeMessagePopup();
+    }
     return;
   }
 
-  const command = commandForKey(event);
   if (!currentState) {
     return;
   }
-  broadcastPuzzle3Key(event);
+  broadcastPuzzle3Key(event, "down");
 
-  if (command) {
+  const effects = effectsForKey(event);
+  if (effects.length > 0) {
     event.preventDefault();
-    const confirmTarget = activationConfirmTargetForCommand(command);
-    if (confirmTarget) {
-      runEffectActivationConfirm(confirmTarget, command);
-    } else {
-      sendEffect(command);
+    for (const effect of effects) {
+      const confirmTarget = activationConfirmTargetForCommand(effect);
+      if (confirmTarget) {
+        runEffectActivationConfirm(confirmTarget, effect);
+      } else {
+        sendEffect(effect);
+      }
     }
     return;
   }
 });
 
-function broadcastPuzzle3Key(event) {
+document.addEventListener("keyup", (event) => {
+  if (componentEmbedMode) {
+    return;
+  }
+  broadcastPuzzle3Key(event, "up");
+});
+
+function broadcastPuzzle3Key(event, action = "down") {
   if (!currentSceneHasPuzzle3()) {
     return;
   }
   for (const frame of document.querySelectorAll("iframe.puzzle3-frame")) {
     frame.contentWindow?.postMessage({
       type: "PuzzleStudioKey",
+      action,
       key: String(event.key || ""),
       code: String(event.code || ""),
     }, "*");
@@ -2041,9 +2366,8 @@ window.addEventListener("message", async (event) => {
       code: String(event.data.code || ""),
     };
     broadcastPuzzle3Key(keyEvent);
-    const command = commandForKey(keyEvent);
-    if (command) {
-      sendEffect(command);
+    for (const effect of effectsForKey(keyEvent)) {
+      sendEffect(effect);
     }
     return;
   }

@@ -766,4 +766,13 @@ registerSourceEditableTarget?.("sounds", {
   load: loadSoundFromSourcePosition,
 });
 
+window.addEventListener("PuzzleSoundToolsReady", () => {
+  resetSoundsBuilder();
+});
+
+window.addEventListener("PuzzleSoundToolsError", (event) => {
+  const message = event.detail?.message || "unknown error";
+  soundsOutput.textContent = `Sounds generator unavailable: ${message}`;
+});
+
 resetSoundsBuilder();

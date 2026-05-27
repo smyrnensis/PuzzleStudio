@@ -25,6 +25,8 @@ let openTabIds = [];
 let draftEntry = null;
 let renameEntry = null;
 let draggedNodeId = "";
+let workspaceChangeUnlisten = null;
+let recentWorkspaces = [];
 
 function configureFolderImport() {
   if (!importFolderInput || !importFolderButton || "webkitdirectory" in importFolderInput) {
@@ -39,9 +41,24 @@ function configureFolderImport() {
 }
 
 function configureDesktopHost() {
-  if (openProjectMenuButton) {
-    openProjectMenuButton.hidden = !isDesktopHost();
+  const desktop = isDesktopHost();
+  if (openFileMenuButton) {
+    openFileMenuButton.hidden = !desktop;
   }
+  if (openProjectMenuButton) {
+    openProjectMenuButton.hidden = !desktop;
+    openProjectMenuButton.textContent = "Open folder";
+  }
+  if (importButton) {
+    importButton.hidden = desktop;
+  }
+  if (importFolderButton) {
+    importFolderButton.hidden = desktop;
+  }
+  renderRecentWorkspaceMenu();
+  updateFileCreationAvailability();
+  configureWorkspaceChangeListener();
+  refreshRecentWorkspaces();
 }
 
 function isDesktopHost() {
@@ -49,13 +66,40 @@ function isDesktopHost() {
 }
 
 function openProjectActionButtons() {
-  return Array.from(document.querySelectorAll("[data-open-project]"));
+  return Array.from(document.querySelectorAll("[data-open-project], [data-open-workspace], [data-open-recent-workspace]"));
 }
 
 function setOpenProjectButtonsDisabled(disabled) {
   for (const button of openProjectActionButtons()) {
     button.disabled = disabled;
   }
+}
+
+function updateFileCreationAvailability() {
+  const disabled = isDesktopHost() && !documents.length;
+  if (newDocumentButton) {
+    newDocumentButton.disabled = disabled;
+    newDocumentButton.title = disabled ? "Open a workspace before creating files" : "New puzzle";
+  }
+  if (newFolderButton) {
+    newFolderButton.disabled = disabled;
+  }
+}
+
+function configureWorkspaceChangeListener() {
+  if (!isDesktopHost() || workspaceChangeUnlisten || typeof window.PuzzleStudioHost.listenWorkspaceChanged !== "function") {
+    return;
+  }
+  window.PuzzleStudioHost.listenWorkspaceChanged((payload) => {
+    applyWorkspaceChangedPayload(payload).catch((error) => {
+      console.error(error);
+      setEditorStatus("External reload failed", "is-error");
+    });
+  }).then((unlisten) => {
+    workspaceChangeUnlisten = typeof unlisten === "function" ? unlisten : null;
+  }).catch((error) => {
+    console.error(error);
+  });
 }
 
 async function loadSource() {
@@ -87,6 +131,7 @@ async function loadSource() {
 }
 
 async function applyLoadedSourcePayload(payload) {
+  applyRecentWorkspacesPayload(payload);
   workspaceRoot = payload.workspaceRoot || "";
   const sourceDocuments = Array.isArray(payload.documents) && payload.documents.length
     ? payload.documents
@@ -99,7 +144,7 @@ async function applyLoadedSourcePayload(payload) {
         gameCss: payload.gameCss || "",
         gameVisualsJs: payload.gameVisualsJs || "",
       }];
-  fileTree = treeFromDocuments(sourceDocuments);
+  fileTree = treeFromDocuments(sourceDocuments, { workspaceRoot });
   syncDocumentsFromTree();
   activeFileId = documents[0]?.id || "";
   openTabIds = [];
@@ -127,20 +172,261 @@ async function applyLoadedSourcePayload(payload) {
   }
 }
 
-async function openProjectFromDesktop() {
+async function appendLoadedWorkspacePayload(payload) {
+  if (!payload || payload.empty) {
+    return;
+  }
+  applyRecentWorkspacesPayload(payload);
+  const root = payload.workspaceRoot || "";
+  workspaceRoot = root || workspaceRoot;
+  const sourceDocuments = Array.isArray(payload.documents) && payload.documents.length
+    ? payload.documents
+    : [{
+      puzzlePath: payload.puzzlePath || "Untitled puzzle",
+      workspaceRoot: root,
+      source: payload.source || "",
+      previewHtml: "",
+      gameCss: payload.gameCss || "",
+      gameVisualsJs: payload.gameVisualsJs || "",
+    }];
+  if (!fileTree) {
+    fileTree = treeFromDocuments([]);
+  }
+  removeWorkspaceTree(root);
+  const workspaceTree = treeFromDocuments(sourceDocuments, { workspaceRoot: root });
+  const workspaceFolder = makeFolder(uniqueWorkspaceFolderName(root), workspaceTree.children, {
+    workspaceRoot: root,
+    isWorkspaceRoot: true,
+  });
+  workspaceFolder.expanded = true;
+  fileTree.children.push(workspaceFolder);
+  syncDocumentsFromTree();
+  activeFileId = documents.find((document) => document.workspaceRoot === root && isPuzzleDocument(document))?.id
+    || documents.find((document) => document.workspaceRoot === root)?.id
+    || documents[0]?.id
+    || "";
+  selectedTreeId = activeFileId || workspaceFolder.id;
+  selectedFolderId = activeFileId ? findParentFolder(fileTree, activeFileId)?.id || workspaceFolder.id : workspaceFolder.id;
+  currentDocumentIndex = activeDocumentIndex();
+  openDocumentTab(activeFileId);
+  if (activeFileId) {
+    loadEmbeddedDocument(currentDocumentIndex);
+  } else {
+    renderDocumentSelect();
+  }
+  setEditorStatus("Opened workspace", "is-ok");
+}
+
+function applyRecentWorkspacesPayload(payload) {
+  if (!Array.isArray(payload?.recentWorkspaces)) {
+    return;
+  }
+  setRecentWorkspaces(payload.recentWorkspaces);
+}
+
+function setRecentWorkspaces(entries) {
+  recentWorkspaces = (Array.isArray(entries) ? entries : [])
+    .filter((entry) => entry && entry.workspaceRoot)
+    .slice(0, 8);
+  renderRecentWorkspaceMenu();
+  if (fileTree && !documents.length) {
+    renderDocumentSelect();
+  }
+}
+
+async function refreshRecentWorkspaces() {
+  if (!isDesktopHost() || typeof window.PuzzleStudioHost.recentWorkspaces !== "function") {
+    return;
+  }
+  try {
+    setRecentWorkspaces(await window.PuzzleStudioHost.recentWorkspaces());
+  } catch (error) {
+    console.error(error);
+  }
+}
+
+async function openRecentWorkspaceFromDesktop(workspaceRoot) {
+  if (!isDesktopHost() || !workspaceRoot) {
+    return;
+  }
+  setOpenProjectButtonsDisabled(true);
+  setEditorStatus("Opening recent folder", "");
+  try {
+    const payload = await window.PuzzleStudioHost.openRecentWorkspace({ workspaceRoot });
+    await appendLoadedWorkspacePayload(payload);
+  } catch (error) {
+    console.error(error);
+    setEditorStatus("Open recent failed", "is-error");
+    refreshRecentWorkspaces();
+  } finally {
+    setOpenProjectButtonsDisabled(false);
+  }
+}
+
+function renderRecentWorkspaceMenu() {
+  const existing = fileActionsMenu?.querySelector("[data-recent-workspaces-section]");
+  existing?.remove();
+  if (!fileActionsMenu || !isDesktopHost() || !recentWorkspaces.length) {
+    return;
+  }
+  const section = document.createElement("div");
+  section.className = "file-actions-section";
+  section.dataset.recentWorkspacesSection = "true";
+  const heading = document.createElement("div");
+  heading.className = "file-actions-menu-heading";
+  heading.textContent = "Recent folders";
+  section.append(heading);
+  for (const entry of recentWorkspaces.slice(0, 6)) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.setAttribute("role", "menuitem");
+    button.dataset.openRecentWorkspace = entry.workspaceRoot;
+    button.title = entry.workspaceRoot;
+    button.textContent = entry.name || entry.workspaceRoot;
+    section.append(button);
+  }
+  if (openProjectMenuButton) {
+    openProjectMenuButton.after(section);
+  } else {
+    fileActionsMenu.prepend(section);
+  }
+}
+
+function uniqueWorkspaceFolderName(root) {
+  const base = fileName(root) || "Workspace";
+  if (!fileTree?.children?.some((child) => child.name === base)) {
+    return base;
+  }
+  return uniqueChildName(fileTree, base);
+}
+
+function removeWorkspaceTree(root) {
+  if (!root || !fileTree?.children) {
+    return false;
+  }
+  const normalizedRoot = normalizePath(root);
+  const before = fileTree.children.length;
+  fileTree.children = fileTree.children.filter((child) =>
+    !(child.kind === "folder" && child.isWorkspaceRoot && normalizePath(child.workspaceRoot) === normalizedRoot),
+  );
+  return before !== fileTree.children.length;
+}
+
+async function applyWorkspaceChangedPayload(payload) {
+  if (!payload || !payload.external) {
+    return;
+  }
+  if (payload.error) {
+    setEditorStatus("External reload failed", "is-error");
+    return;
+  }
+  const root = payload.workspaceRoot || "";
+  if (!root) {
+    return;
+  }
+  persistCurrentDocument();
+  const activeKey = activeDocument() ? documentIdentityKey(activeDocument()) : "";
+  const previousByKey = new Map(documents.map((document) => [documentIdentityKey(document), document]));
+  const sourceDocuments = Array.isArray(payload.documents) && payload.documents.length
+    ? payload.documents
+    : [{
+      puzzlePath: payload.puzzlePath || "Untitled puzzle",
+      workspaceRoot: root,
+      source: payload.source || "",
+      previewHtml: "",
+      gameCss: payload.gameCss || "",
+      gameVisualsJs: payload.gameVisualsJs || "",
+    }];
+  let conflicts = 0;
+  const mergedDocuments = sourceDocuments.map((document) => {
+    const normalized = normalizeDocument(document, { workspaceRoot: root });
+    const previous = previousByKey.get(documentIdentityKey(normalized));
+    if (!previous) {
+      normalized.syncedSource = normalized.source || "";
+      return normalized;
+    }
+    normalized.id = previous.id;
+    if (isTextDocument(normalized) && isTextDocument(previous)) {
+      const localSource = currentSourceForDocument(previous);
+      const syncedSource = previous.syncedSource ?? previous.source ?? "";
+      const externalSource = normalized.source || "";
+      if (localSource !== syncedSource) {
+        normalized.source = localSource;
+        normalized.syncedSource = syncedSource;
+        if (externalSource !== syncedSource) {
+          normalized.externalDirty = true;
+          normalized.externalSource = externalSource;
+          conflicts += 1;
+        }
+      } else {
+        normalized.syncedSource = externalSource;
+        normalized.externalDirty = false;
+        normalized.externalSource = "";
+      }
+    }
+    return normalized;
+  });
+
+  if (!fileTree) {
+    fileTree = treeFromDocuments([]);
+  }
+  removeWorkspaceTree(root);
+  const workspaceTree = treeFromDocuments(mergedDocuments, { workspaceRoot: root });
+  const workspaceFolder = makeFolder(uniqueWorkspaceFolderName(root), workspaceTree.children, {
+    workspaceRoot: root,
+    isWorkspaceRoot: true,
+  });
+  workspaceFolder.expanded = true;
+  fileTree.children.push(workspaceFolder);
+  syncDocumentsFromTree();
+  openTabIds = openTabIds.filter((id) => documents.some((document) => document.id === id));
+  const activeAfter = documents.find((document) => documentIdentityKey(document) === activeKey);
+  activeFileId = activeAfter?.id || activeFileId;
+  if (!findNode(fileTree, activeFileId)) {
+    activeFileId = documents.find((document) => document.workspaceRoot === root && isPuzzleDocument(document))?.id
+      || documents.find((document) => document.workspaceRoot === root)?.id
+      || documents[0]?.id
+      || "";
+  }
+  selectedTreeId = activeFileId;
+  selectedFolderId = activeFileId ? findParentFolder(fileTree, activeFileId)?.id || selectedFolderId : selectedFolderId;
+  currentDocumentIndex = activeDocumentIndex();
+  if (activeFileId) {
+    loadEmbeddedDocument(currentDocumentIndex);
+  } else {
+    renderDocumentSelect();
+  }
+  saveDocumentStore(false);
+  if (conflicts > 0) {
+    setEditorStatus("External change held: unsaved edits", "is-error");
+  } else {
+    setEditorStatus("Reloaded external changes", "is-ok");
+  }
+}
+
+function documentIdentityKey(document) {
+  return `${normalizePath(document?.workspaceRoot || workspaceRoot || "")}\n${normalizePath(document?.puzzlePath || "")}`;
+}
+
+function currentSourceForDocument(document) {
+  return document?.id === activeDocument()?.id && isTextDocument(document)
+    ? sourceEditor.value
+    : document?.source || "";
+}
+
+async function openProjectFromDesktop(kind = "folder") {
   if (!isDesktopHost()) {
     return;
   }
   setOpenProjectButtonsDisabled(true);
-  setEditorStatus("Opening project", "");
+  setEditorStatus(kind === "file" ? "Opening file" : "Opening folder", "");
   try {
-    const payload = await window.PuzzleStudioHost.openProject();
+    const payload = await window.PuzzleStudioHost.openWorkspace({ kind });
     if (payload?.canceled) {
       setEditorStatus("Open canceled", "");
       return;
     }
-    await applyLoadedSourcePayload(payload);
-    setEditorStatus("Opened project", "is-ok");
+    await appendLoadedWorkspacePayload(payload);
   } catch (error) {
     console.error(error);
     setEditorStatus("Open failed", "is-error");
@@ -175,15 +461,18 @@ function embeddedSeedKey(seedDocuments) {
 
 function normalizeDocument(document, fallback = {}) {
   const path = document.puzzlePath || fallback.puzzlePath || document.name || "Embedded puzzle";
-  const editorPath = editorPathForHostPath(path);
+  const documentWorkspaceRoot = document.workspaceRoot || fallback.workspaceRoot || workspaceRoot;
+  const editorPath = editorPathForHostPath(path, documentWorkspaceRoot);
   const encoding = document.encoding || (document.dataUrl ? "data_url" : "text");
   return {
     id: document.id || createDocumentId(),
     name: document.name || fileName(editorPath),
     puzzlePath: editorPath,
+    workspaceRoot: documentWorkspaceRoot,
     encoding,
     mimeType: document.mimeType || mimeTypeForPath(editorPath),
     source: document.source || "",
+    syncedSource: document.syncedSource ?? document.source ?? "",
     dataUrl: document.dataUrl || "",
     previewHtml: document.previewHtml || "",
     gameCss: document.gameCss ?? fallback.gameCss ?? "",
@@ -191,9 +480,9 @@ function normalizeDocument(document, fallback = {}) {
   };
 }
 
-function editorPathForHostPath(path) {
+function editorPathForHostPath(path, rootOverride = workspaceRoot) {
   const normalized = normalizePath(path);
-  const root = normalizePath(workspaceRoot);
+  const root = normalizePath(rootOverride);
   if (!root || !normalized) {
     return normalized;
   }
@@ -217,11 +506,13 @@ function createDocumentId() {
   return `doc-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
-function makeFolder(name, children = []) {
+function makeFolder(name, children = [], fallback = {}) {
   return {
     id: createDocumentId(),
     kind: "folder",
     name,
+    workspaceRoot: fallback.workspaceRoot || "",
+    isWorkspaceRoot: fallback.isWorkspaceRoot === true,
     expanded: false,
     children,
   };
@@ -234,6 +525,7 @@ function makeFile(name, source = "", fallback = {}) {
       kind: "file",
       name,
       puzzlePath: joinPath(fallback.parentPath || "", name),
+      workspaceRoot: fallback.workspaceRoot || workspaceRoot,
       encoding: "text",
       source,
       dataUrl: "",
@@ -245,17 +537,17 @@ function makeFile(name, source = "", fallback = {}) {
   };
 }
 
-function treeFromDocuments(sourceDocuments) {
+function treeFromDocuments(sourceDocuments, fallback = {}) {
   const root = makeFolder("Files", []);
   for (const document of sourceDocuments) {
-    const normalized = normalizeDocument(document);
+    const normalized = normalizeDocument(document, fallback);
     const parts = String(normalized.puzzlePath || normalized.name)
       .split(/[\\/]/)
       .filter(Boolean);
     const fileNameValue = parts.pop() || normalized.name || "puzzle.puzzle";
     let folder = root;
     for (const part of parts) {
-      folder = childFolder(folder, part);
+      folder = childFolder(folder, part, normalized.workspaceRoot);
     }
     folder.children.push({
       ...normalized,
@@ -297,10 +589,10 @@ function mergeEmbeddedFallbacks(node, fallbackByPath) {
   };
 }
 
-function childFolder(parent, name) {
+function childFolder(parent, name, childWorkspaceRoot = "") {
   let folder = parent.children.find((child) => child.kind === "folder" && child.name === name);
   if (!folder) {
-    folder = makeFolder(name, []);
+    folder = makeFolder(name, [], { workspaceRoot: childWorkspaceRoot || parent.workspaceRoot || "" });
     parent.children.push(folder);
   }
   return folder;
@@ -313,14 +605,17 @@ function normalizeTree(node, parentPath = "") {
   const folder = makeFolder(node.name || "Files", []);
   folder.id = node.id || createDocumentId();
   folder.expanded = node.expanded === true;
+  folder.workspaceRoot = node.workspaceRoot || "";
+  folder.isWorkspaceRoot = node.isWorkspaceRoot === true;
   for (const child of Array.isArray(node.children) ? node.children : []) {
     if (child.kind === "folder") {
       folder.children.push(normalizeTree(child, joinPath(parentPath, child.name || "folder")));
     } else {
-      const file = normalizeDocument(child);
+      const file = normalizeDocument(child, { workspaceRoot: folder.workspaceRoot || child.workspaceRoot || "" });
       file.kind = "file";
       file.name = child.name || fileName(file.puzzlePath);
       file.puzzlePath = joinPath(parentPath, file.name);
+      file.workspaceRoot = child.workspaceRoot || folder.workspaceRoot || "";
       folder.children.push(file);
     }
   }
@@ -341,8 +636,11 @@ function collectFiles(node, parentPath) {
     documents.push(node);
     return;
   }
+  const nextParent = node.name === "Files" || node.isWorkspaceRoot
+    ? parentPath
+    : joinPath(parentPath, node.name);
   for (const child of node.children || []) {
-    collectFiles(child, node.name === "Files" ? parentPath : joinPath(parentPath, node.name));
+    collectFiles(child, nextParent);
   }
 }
 
@@ -394,6 +692,7 @@ function storeDocument(document) {
   return {
     id: document.id || createDocumentId(),
     puzzlePath: document.puzzlePath || "puzzle.puzzle",
+    workspaceRoot: document.workspaceRoot || "",
     encoding: document.encoding || "text",
     mimeType: document.mimeType || mimeTypeForPath(document.puzzlePath),
     source: document.source || "",
@@ -410,6 +709,8 @@ function storeTree(node) {
       id: node.id || createDocumentId(),
       kind: "folder",
       name: node.name || "folder",
+      workspaceRoot: node.workspaceRoot || "",
+      isWorkspaceRoot: node.isWorkspaceRoot === true,
       expanded: node.expanded !== false,
       children: (node.children || []).map((child) => storeTree(child)),
     };
@@ -418,6 +719,7 @@ function storeTree(node) {
     ...storeDocument(node),
     kind: "file",
     name: node.name || fileName(node.puzzlePath),
+    workspaceRoot: node.workspaceRoot || "",
   };
 }
 
@@ -467,7 +769,11 @@ async function saveCurrentDocument(showStatus = true) {
     await window.PuzzleStudioHost.save({
       source: document.source || "",
       puzzlePath: document.puzzlePath || "",
+      workspaceRoot: document.workspaceRoot || workspaceRoot || "",
     });
+    document.syncedSource = document.source || "";
+    document.externalDirty = false;
+    document.externalSource = "";
     if (showStatus) {
       setEditorStatus("Saved file", "is-ok");
     }
@@ -902,6 +1208,7 @@ function renderDocumentSelect() {
   documentList.replaceChildren();
   renderTreeNode(fileTree, documentList, 0);
   renderExplorerEmptyState();
+  updateFileCreationAvailability();
   focusDraftInput();
   focusRenameInput();
   renderDocumentTabs();
@@ -917,11 +1224,45 @@ function renderExplorerEmptyState() {
   const button = document.createElement("button");
   button.className = "explorer-empty-open-button";
   button.type = "button";
-  button.dataset.openProject = "true";
+  button.dataset.openWorkspace = "folder";
   button.textContent = "Open folder";
   empty.append(button);
+  if (recentWorkspaces.length) {
+    const recent = document.createElement("div");
+    recent.className = "explorer-empty-recent";
+    const heading = document.createElement("div");
+    heading.className = "explorer-empty-recent-heading";
+    heading.textContent = "Recent folders";
+    recent.append(heading);
+    for (const entry of recentWorkspaces.slice(0, 5)) {
+      const recentButton = document.createElement("button");
+      recentButton.className = "explorer-empty-recent-button";
+      recentButton.type = "button";
+      recentButton.dataset.openRecentWorkspace = entry.workspaceRoot;
+      recentButton.title = entry.workspaceRoot;
+      recentButton.textContent = entry.name || entry.workspaceRoot;
+      recent.append(recentButton);
+    }
+    empty.append(recent);
+  }
   documentList.append(empty);
 }
+
+document.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-open-recent-workspace]");
+  if (!button) {
+    return;
+  }
+  event.preventDefault();
+  if (typeof setFileActionsMenuOpen === "function") {
+    setFileActionsMenuOpen(false);
+  }
+  openRecentWorkspaceFromDesktop(button.dataset.openRecentWorkspace).catch((error) => {
+    console.error(error);
+    setEditorStatus("Open recent failed", "is-error");
+    setOpenProjectButtonsDisabled(false);
+  });
+});
 
 function renderTreeNode(node, parent, depth) {
   if (!node) {
@@ -942,7 +1283,7 @@ function renderTreeNode(node, parent, depth) {
       row.classList.toggle("is-selected-folder", node.id === selectedFolderId);
       row.classList.toggle("is-active-tree", node.id === selectedTreeId);
       row.classList.toggle("is-renaming", renameEntry?.nodeId === node.id);
-      row.innerHTML = `${folderChevronSvg(node.expanded !== false)}${folderIconSvg()}${treeNameHtml(node)}${treeActionsHtml("folder")}`;
+      row.innerHTML = `${folderChevronSvg(node.expanded !== false)}${folderIconSvg(node.isWorkspaceRoot)}${treeNameHtml(node)}${treeActionsHtml(node.isWorkspaceRoot ? "workspace" : "folder")}`;
       setTreeName(row, node);
       parent.append(row);
     }
@@ -978,8 +1319,11 @@ function folderChevronSvg(expanded) {
     : `<svg class="tree-chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 4l4 4-4 4"></path></svg>`;
 }
 
-function folderIconSvg() {
-  return `<svg class="tree-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7l-2-2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2z"></path></svg>`;
+function folderIconSvg(workspace = false) {
+  if (workspace) {
+    return `<svg class="tree-icon lucide lucide-folder-open" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6A2 2 0 0 1 18.46 20H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2A2 2 0 0 0 12.07 6H18a2 2 0 0 1 2 2v2"></path></svg>`;
+  }
+  return `<svg class="tree-icon lucide lucide-folder" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"></path></svg>`;
 }
 
 function fileIconSvg() {
@@ -1014,6 +1358,11 @@ function setTreeName(row, node) {
 }
 
 function treeActionsHtml(kind) {
+  if (kind === "workspace") {
+    return `<span class="tree-actions" aria-label="Workspace actions">
+      <button class="tree-action-button" type="button" data-tree-action="remove-workspace" aria-label="Remove workspace" title="Remove workspace">${deleteIconSvg()}</button>
+    </span>`;
+  }
   const label = kind === "folder" ? "Folder actions" : "File actions";
   return `<span class="tree-actions" aria-label="${label}">
     <button class="tree-action-button" type="button" data-tree-action="rename" aria-label="Rename" title="Rename">${renameIconSvg()}</button>
@@ -1042,7 +1391,11 @@ function renderDraftEntry(parentFolder, parent, depth) {
   input.dataset.draftInput = "true";
   row.addEventListener("submit", (event) => {
     event.preventDefault();
-    commitDraftEntry(input.value);
+    commitDraftEntry(input.value).catch((error) => {
+      console.error(error);
+      setEditorStatus("Create failed", "is-error");
+      renderDocumentSelect();
+    });
   });
   input.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
@@ -1050,7 +1403,13 @@ function renderDraftEntry(parentFolder, parent, depth) {
       renderDocumentSelect();
     }
   });
-  input.addEventListener("blur", () => commitDraftEntry(input.value));
+  input.addEventListener("blur", () => {
+    commitDraftEntry(input.value).catch((error) => {
+      console.error(error);
+      setEditorStatus("Create failed", "is-error");
+      renderDocumentSelect();
+    });
+  });
   parent.append(row);
 }
 
@@ -1136,10 +1495,13 @@ function mimeTypeForPath(path) {
   }[ext] || "application/octet-stream";
 }
 
-function workspaceAssetMap() {
+function workspaceAssetMap(root = "") {
   const assets = new Map();
   for (const document of documents) {
     if (!document?.puzzlePath) {
+      continue;
+    }
+    if (root && document.workspaceRoot && normalizePath(document.workspaceRoot) !== normalizePath(root)) {
       continue;
     }
     assets.set(normalizePath(document.puzzlePath), document);
@@ -1151,10 +1513,11 @@ function normalizePath(path) {
   return String(path || "").replaceAll("\\", "/").replace(/^\.\/+/, "");
 }
 
-function assetUrlForPath(path, baseDir = "") {
+function assetUrlForPath(path, baseDir = "", root = workspaceRoot) {
   const normalized = normalizePath(path);
   const fullPath = normalizePath(baseDir ? joinPath(baseDir, normalized) : normalized);
-  const asset = workspaceAssetMap().get(fullPath) || workspaceAssetMap().get(normalized);
+  const assets = workspaceAssetMap(root);
+  const asset = assets.get(fullPath) || assets.get(normalized);
   if (!asset) {
     return "";
   }
@@ -1164,13 +1527,16 @@ function assetUrlForPath(path, baseDir = "") {
   return `data:${asset.mimeType || mimeTypeForPath(asset.puzzlePath)};charset=utf-8,${encodeURIComponent(asset.source || "")}`;
 }
 
-function assetResolverScript(baseDir = "") {
+function assetResolverScript(baseDir = "", root = workspaceRoot) {
   const entries = {};
   for (const document of documents) {
     if (isPuzzleDocument(document)) {
       continue;
     }
-    const url = assetUrlForPath(document.puzzlePath);
+    if (root && document.workspaceRoot && normalizePath(document.workspaceRoot) !== normalizePath(root)) {
+      continue;
+    }
+    const url = assetUrlForPath(document.puzzlePath, "", root);
     if (url) {
       const normalizedPath = normalizePath(document.puzzlePath);
       const normalizedBase = normalizePath(baseDir);
@@ -1185,13 +1551,13 @@ function assetResolverScript(baseDir = "") {
   return `window.PuzzleAssets = { files: ${JSON.stringify(entries)}, url(path) { return this.files[String(path || "").replaceAll("\\\\", "/")] || String(path || ""); } };`;
 }
 
-function rewriteCssAssetUrls(css, baseDir = "") {
+function rewriteCssAssetUrls(css, baseDir = "", root = workspaceRoot) {
   return String(css || "").replace(/url\(([^)]+)\)/g, (match, raw) => {
     const value = raw.trim().replace(/^['"]|['"]$/g, "");
     if (!value || /^(data:|https?:|blob:|#)/i.test(value)) {
       return match;
     }
-    const url = assetUrlForPath(value, baseDir);
+    const url = assetUrlForPath(value, baseDir, root);
     return url ? `url("${url}")` : match;
   });
 }
@@ -1208,7 +1574,7 @@ function effectiveGameCss(document) {
     const cssDocument = documentByPath(normalizePath(joinPath(baseDir, path)));
     const source = cssDocument?.source || "";
     if (source) {
-      parts.push(rewriteCssAssetUrls(source, directoryName(cssDocument.puzzlePath)));
+      parts.push(rewriteCssAssetUrls(source, directoryName(cssDocument.puzzlePath), document.workspaceRoot || workspaceRoot));
     } else {
       missingDeclaredAsset = true;
     }
@@ -1307,7 +1673,7 @@ function effectiveGameVisualsJs(document) {
   }
   const baseDir = directoryName(document.puzzlePath);
   const declaredScriptPaths = declaredAssetPaths(document, "script");
-  const scripts = [assetResolverScript(baseDir)];
+  const scripts = [assetResolverScript(baseDir, document.workspaceRoot || workspaceRoot)];
   for (const path of declaredScriptPaths) {
     const scriptDocument = documentByPath(normalizePath(joinPath(baseDir, path)));
     if (scriptDocument?.source) {
@@ -1388,6 +1754,7 @@ function loadEmbeddedDocument(index) {
   showWorkPane(SOURCE_WORK_PANE_ID);
   currentDocumentIndex = index;
   activeFileId = document.id;
+  workspaceRoot = document.workspaceRoot || workspaceRoot || "";
   selectedTreeId = document.id;
   selectedFolderId = findParentFolder(fileTree, document.id)?.id || selectedFolderId;
   openDocumentTab(document.id);
@@ -1417,7 +1784,7 @@ function loadEmbeddedDocument(index) {
     setPreviewFrameHtml(editorPreviewDocument(latestHtml));
   } else {
     setPreviewFrameHtml(emptyPreviewDocument());
-    appendPreviewLog("error", "No embedded preview.");
+    appendPreviewLog("error", "No embedded preview.", { source: "workspace" });
   }
   downloadButton.disabled = !latestHtml;
   resetLevelBuilderFromPreviewSource();
@@ -1462,7 +1829,7 @@ function loadFolderPreview(folder) {
     setPreviewFrameHtml(editorPreviewDocument(latestHtml));
   } else {
     setPreviewFrameHtml(emptyPreviewDocument());
-    appendPreviewLog("error", previewDocument ? "No embedded preview." : "No game entry for preview.");
+    appendPreviewLog("error", previewDocument ? "No embedded preview." : "No game entry for preview.", { source: "workspace" });
   }
   downloadButton.disabled = !latestHtml;
   updateSourceMeta();
@@ -1488,12 +1855,28 @@ function ensurePreviewTargetsActiveDocument() {
   loadEmbeddedDocument(activeDocumentIndex());
   return true;
 }
-function hostPathForEditorPath(path) {
+function workspaceRootForNode(node) {
+  if (!node) {
+    return workspaceRoot || "";
+  }
+  if (node.workspaceRoot) {
+    return node.workspaceRoot;
+  }
+  const parent = findParentFolder(fileTree, node.id);
+  return parent ? workspaceRootForNode(parent) : workspaceRoot || "";
+}
+
+function workspaceRootForFolder(folder) {
+  return workspaceRootForNode(folder);
+}
+
+function hostPathForEditorPath(path, rootOverride = workspaceRoot) {
   const normalized = normalizePath(path);
-  if (!workspaceRoot || normalized.startsWith("/") || /^[A-Za-z]:\//.test(normalized)) {
+  const rootValue = rootOverride || workspaceRoot;
+  if (!rootValue || normalized.startsWith("/") || /^[A-Za-z]:\//.test(normalized)) {
     return normalized;
   }
-  const root = normalizePath(workspaceRoot);
+  const root = normalizePath(rootValue);
   const rootWithoutSlash = root.replace(/^\/+/, "");
   if (root.startsWith("/") && rootWithoutSlash && (normalized === rootWithoutSlash || normalized.startsWith(`${rootWithoutSlash}/`))) {
     return `/${normalized}`;
@@ -1520,7 +1903,7 @@ function startDraftEntry(kind) {
   renderDocumentSelect();
 }
 
-function commitDraftEntry(rawName) {
+async function commitDraftEntry(rawName) {
   if (!draftEntry) {
     return;
   }
@@ -1537,6 +1920,14 @@ function commitDraftEntry(rawName) {
   persistCurrentDocument();
   if (kind === "folder") {
     const folder = makeFolder(uniqueChildName(parent, name), []);
+    folder.workspaceRoot = workspaceRootForFolder(parent);
+    const folderPathValue = joinPath(folderPath(parent), folder.name);
+    if (!editorSeed && isDesktopHost() && typeof window.PuzzleStudioHost.createSourceFolder === "function") {
+      await window.PuzzleStudioHost.createSourceFolder({
+        folderPath: hostPathForEditorPath(folderPathValue, folder.workspaceRoot),
+        workspaceRoot: folder.workspaceRoot,
+      });
+    }
     parent.children.push(folder);
     parent.expanded = true;
     selectedFolderId = folder.id;
@@ -1548,9 +1939,17 @@ function commitDraftEntry(rawName) {
   const fileNameValue = uniqueChildName(parent, name);
   const file = makeFile(fileNameValue, starterPuzzleSource(fileNameValue), {
     parentPath: folderPath(parent),
+    workspaceRoot: workspaceRootForFolder(parent),
     gameCss: current.gameCss || editorSeed?.gameCss || "",
     gameVisualsJs: current.gameVisualsJs || editorSeed?.gameVisualsJs || "",
   });
+  if (!editorSeed && isDesktopHost() && typeof window.PuzzleStudioHost.createSourceFile === "function") {
+    await window.PuzzleStudioHost.createSourceFile({
+      source: file.source || "",
+      puzzlePath: hostPathForEditorPath(file.puzzlePath, file.workspaceRoot),
+      workspaceRoot: file.workspaceRoot,
+    });
+  }
   parent.children.push(file);
   activeFileId = file.id;
   syncDocumentsFromTree();
@@ -1568,6 +1967,9 @@ function moveNodeToFolder(nodeId, targetFolderId) {
     return false;
   }
   if (source.node === fileTree || source.parent === targetFolder) {
+    return false;
+  }
+  if (source.node.isWorkspaceRoot || targetFolder.isWorkspaceRoot && source.node.workspaceRoot && source.node.workspaceRoot !== targetFolder.workspaceRoot) {
     return false;
   }
   if (source.node.kind === "folder" && containsNode(source.node, targetFolder.id)) {
@@ -1611,6 +2013,9 @@ function canDropNodeOnFolder(nodeId, targetFolderId) {
     return false;
   }
   if (source.parent === targetFolder) {
+    return false;
+  }
+  if (source.node.isWorkspaceRoot || targetFolder.isWorkspaceRoot && source.node.workspaceRoot && source.node.workspaceRoot !== targetFolder.workspaceRoot) {
     return false;
   }
   if (source.node.kind === "folder" && containsNode(source.node, targetFolder.id)) {
@@ -1738,6 +2143,45 @@ function deleteTreeNode(nodeId) {
   setEditorStatus("Deleted", "is-ok");
 }
 
+async function removeWorkspaceNode(nodeId) {
+  persistCurrentDocument();
+  const target = findNodeWithParent(fileTree, nodeId);
+  if (!target?.node || !target.parent || !target.node.isWorkspaceRoot) {
+    return;
+  }
+  const removedRoot = target.node.workspaceRoot || "";
+  if (isDesktopHost() && removedRoot && typeof window.PuzzleStudioHost.removeWorkspace === "function") {
+    await window.PuzzleStudioHost.removeWorkspace({ workspaceRoot: removedRoot });
+  }
+  const removedActive = containsNode(target.node, activeFileId);
+  target.parent.children = target.parent.children.filter((child) => child.id !== target.node.id);
+  renameEntry = null;
+  draftEntry = null;
+  syncDocumentsFromTree();
+  openTabIds = openTabIds.filter((id) => documents.some((document) => document.id === id));
+  if (removedActive || !findNode(fileTree, activeFileId)) {
+    activeFileId = documents[0]?.id || "";
+  }
+  selectedTreeId = activeFileId || "";
+  selectedFolderId = activeFileId ? findParentFolder(fileTree, activeFileId)?.id || "" : "";
+  currentDocumentIndex = activeDocumentIndex();
+  saveDocumentStore(false);
+  if (activeFileId) {
+    loadEmbeddedDocument(currentDocumentIndex);
+  } else {
+    renderDocumentSelect();
+    latestHtml = "";
+    previewExport = null;
+    latestPreviewState = null;
+    setPreviewDocumentLoaded(false);
+    setPreviewFrameHtml(emptyPreviewDocument());
+    resetPreviewLog("No project open");
+    runButton.disabled = true;
+    downloadButton.disabled = true;
+  }
+  setEditorStatus("Removed workspace", "is-ok");
+}
+
 function starterPuzzleSource(name) {
   const title = name.replace(/\.puzzle$/i, "").replace(/[^\w]+/g, " ").trim() || "New Puzzle";
   return `title ${JSON.stringify(title)}\n\npuzzle main {\n\tlayers {\n\t\tfloor = Goal\n\t\tsolid = Player Wall\n\t}\n\n\tinputs {\n\t\tup <- w ArrowUp\n\t\tdown <- s ArrowDown\n\t\tleft <- a ArrowLeft\n\t\tright <- d ArrowRight\n\t\trestart <- r\n\t}\n\n\twin_conditions {\n\t\texists(Goal)\n\t\tnone([ Goal no Player ])\n\t}\n\n\trules {\n\t\tfor d in directions {\n\t\t\tif input == d {\n\t\t\t\tonce d [ Player | no solid ] -> [ | Player ]\n\t\t\t}\n\t\t}\n\t}\n\n\tlevels {\n\t\tlegend {\n\t\t\t. = empty\n\t\t\t# = Wall\n\t\t\tP = Player\n\t\t\tG = Goal\n\t\t\t+ = Player Goal\n\t\t}\n\n\t\tlevel level_1\n\t\t\t#######\n\t\t\t#P...G#\n\t\t\t#######\n\n\t\tlevel level_2\n\t\t\t#######\n\t\t\t#P....#\n\t\t\t#..G..#\n\t\t\t#######\n\t}\n}\n\nscene playing {\n\tstate {\n\t\tpuzzle main\n\t}\n\tview size 4 3 {\n\t\tcolumn gap 1 align center top {\n\t\t\ttitle\n\t\t\tmain\n\t\t}\n\t}\n\trules {\n\t\tstep main\n\t}\n}\n`;
@@ -1795,7 +2239,9 @@ function folderPath(target) {
   if (!folderPathVisit(fileTree, target?.id, path)) {
     return "";
   }
-  return path.filter((part) => part !== "Files").join("/");
+  return path
+    .filter((part) => part && part !== "Files" && !part.startsWith("\0"))
+    .join("/");
 }
 
 function folderPathVisit(node, targetId, path) {
@@ -1803,7 +2249,7 @@ function folderPathVisit(node, targetId, path) {
     return false;
   }
   if (node.kind === "folder") {
-    path.push(node.name);
+    path.push(node.isWorkspaceRoot ? "\0workspace" : node.name);
     if (node.id === targetId) {
       return true;
     }

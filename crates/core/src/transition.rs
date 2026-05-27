@@ -1,8 +1,8 @@
 use crate::compiled_game::{
-    CompiledGame, Effect, Guard, MatchCell, Offset, Pattern, PatternComponent, QueryKind, Rule,
-    RuleApplication, RuleCondition, RuleStep, ScratchValueMatch, WriteOp,
+    CompiledGame, Effect, Guard, LocalFrame, MatchCell, Offset, Pattern, PatternComponent,
+    QueryKind, Rule, RuleApplication, RuleCondition, RuleStep, ScratchValueMatch, WriteOp,
 };
-use crate::ids::{InputId, QueryId, RuleId};
+use crate::ids::{InputId, ObjectId, QueryId, RuleId};
 use crate::patch::{Patch, PatchError, PatchOp};
 use crate::state::State;
 use std::collections::{BTreeMap, BTreeSet};
@@ -49,6 +49,8 @@ pub enum TransitionCommand {
     Restart,
     NextLevel,
     Again,
+    Checkpoint,
+    ClearCheckpoint,
 }
 
 pub fn transition_state(
@@ -121,6 +123,15 @@ pub fn transition_program_outcome(
     })
 }
 
+pub fn transition_program_trace(
+    game: &CompiledGame,
+    program: &[RuleStep],
+    state: &State,
+    input: InputId,
+) -> TransitionResult<StepTrace> {
+    run_program_transition(game, program, state, input, true, false)
+}
+
 fn run_program_transition(
     game: &CompiledGame,
     program: &[RuleStep],
@@ -135,7 +146,11 @@ fn run_program_transition(
     let mut fired_rules = Vec::new();
     let mut patches = Vec::new();
     let mut commands = Vec::new();
-    let context = TransitionContext { game, input };
+    let context = TransitionContext {
+        game,
+        input,
+        local_frame: None,
+    };
 
     for step in program {
         let outcome = apply_step(
@@ -248,6 +263,23 @@ fn apply_step(
                 skip_visual_rules,
             ),
         },
+        RuleStep::LocalFrame { frame, steps } => {
+            let scoped_context = TransitionContext {
+                local_frame: Some(frame),
+                ..*context
+            };
+            apply_block_once(
+                game,
+                steps,
+                &scoped_context,
+                current,
+                fired_rules,
+                patches,
+                commands,
+                collect_trace,
+                skip_visual_rules,
+            )
+        }
     }
 }
 
@@ -260,15 +292,17 @@ fn condition_accepts(
     match condition {
         RuleCondition::AnyMatches(patterns) => patterns
             .iter()
-            .any(|pattern| has_pattern_match(game, state, pattern)),
+            .any(|pattern| has_pattern_match_in_scope(game, state, pattern, context.local_frame)),
         RuleCondition::NoMatches(patterns) => patterns
             .iter()
-            .all(|pattern| !has_pattern_match(game, state, pattern)),
+            .all(|pattern| !has_pattern_match_in_scope(game, state, pattern, context.local_frame)),
         RuleCondition::AnyInputMatches(patterns) => patterns.iter().any(|(input, pattern)| {
-            *input == context.input && has_pattern_match(game, state, pattern)
+            *input == context.input
+                && has_pattern_match_in_scope(game, state, pattern, context.local_frame)
         }),
         RuleCondition::NoInputMatches(patterns) => patterns.iter().all(|(input, pattern)| {
-            *input != context.input || !has_pattern_match(game, state, pattern)
+            *input != context.input
+                || !has_pattern_match_in_scope(game, state, pattern, context.local_frame)
         }),
         RuleCondition::GuardBranches(branches) => branches.iter().any(|branch| {
             branch
@@ -296,6 +330,7 @@ fn apply_rule_step(
         RuleApplication::Once => apply_rule_once(
             game,
             rule,
+            context.local_frame,
             current,
             fired_rules,
             patches,
@@ -305,6 +340,7 @@ fn apply_rule_step(
         RuleApplication::OnceAll => apply_rule_once_all(
             game,
             rule,
+            context.local_frame,
             current,
             fired_rules,
             patches,
@@ -314,6 +350,7 @@ fn apply_rule_step(
         RuleApplication::OncePerLevel => apply_rule_once_per_level(
             game,
             rule,
+            context.local_frame,
             current,
             fired_rules,
             patches,
@@ -323,6 +360,7 @@ fn apply_rule_step(
         RuleApplication::UntilStable => apply_until_stable(
             game,
             rule,
+            context.local_frame,
             current,
             fired_rules,
             patches,
@@ -455,33 +493,38 @@ impl StateHistory {
 fn apply_rule_once(
     game: &CompiledGame,
     rule: &Rule,
+    local_frame: Option<&LocalFrame<crate::ids::ObjectId>>,
     current: &mut State,
     fired_rules: &mut Vec<RuleId>,
     patches: &mut Vec<Patch>,
     commands: &mut Vec<TransitionCommand>,
     collect_trace: bool,
 ) -> TransitionResult<ApplyOutcome> {
-    let Some(placement) = find_first_match(game, current, rule) else {
+    let scope = LocalFrameScope2::new(current, local_frame);
+    let Some(placement) = find_first_match(game, current, rule, &scope) else {
         return Ok(ApplyOutcome::idle());
     };
 
     let patch = build_patch(rule, &placement)?;
-    let next = patch.apply(game, current)?;
+    let cancels = rule
+        .effects
+        .iter()
+        .any(|effect| matches!(effect, Effect::Cancel));
+    if cancels {
+        patch.validate(game, current)?;
+    } else {
+        patch.apply_in_place(game, current)?;
+    }
     fired_rules.push(rule.id);
     if collect_trace {
         patches.push(patch);
     }
-    if rule
-        .effects
-        .iter()
-        .any(|effect| matches!(effect, Effect::Cancel))
-    {
+    if cancels {
         return Ok(ApplyOutcome {
             fired: true,
             cancelled: true,
         });
     }
-    *current = next;
     push_rule_commands(rule, commands);
     Ok(ApplyOutcome {
         fired: true,
@@ -492,46 +535,60 @@ fn apply_rule_once(
 fn apply_rule_once_all(
     game: &CompiledGame,
     rule: &Rule,
+    local_frame: Option<&LocalFrame<crate::ids::ObjectId>>,
     current: &mut State,
     fired_rules: &mut Vec<RuleId>,
     patches: &mut Vec<Patch>,
     commands: &mut Vec<TransitionCommand>,
     collect_trace: bool,
 ) -> TransitionResult<ApplyOutcome> {
-    let placements = find_all_matches(game, current, rule);
+    let scope = LocalFrameScope2::new(current, local_frame);
+    let placements = find_all_matches(game, current, rule, &scope);
     if placements.is_empty() {
         return Ok(ApplyOutcome::idle());
     }
 
     let mut fired = false;
+    let mut current_scope = LocalFrameScope2::new(current, local_frame);
     for placement in placements {
-        if !placement_matches(game, current, rule, &placement) {
+        if !placement_matches(game, current, rule, &placement, &current_scope) {
             continue;
         }
 
         let patch = build_patch(rule, &placement)?;
-        let next = match patch.apply(game, current) {
-            Ok(next) => next,
-            Err(error) if once_all_patch_became_stale(&error) => continue,
-            Err(error) => return Err(error.into()),
+        let cancels = rule
+            .effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::Cancel));
+        let applied = if cancels {
+            match patch.validate(game, current) {
+                Ok(_) => true,
+                Err(error) if once_all_patch_became_stale(&error) => false,
+                Err(error) => return Err(error.into()),
+            }
+        } else {
+            match patch.apply_in_place(game, current) {
+                Ok(_) => true,
+                Err(error) if once_all_patch_became_stale(&error) => false,
+                Err(error) => return Err(error.into()),
+            }
         };
+        if !applied {
+            continue;
+        }
 
         fired = true;
         fired_rules.push(rule.id);
         if collect_trace {
             patches.push(patch);
         }
-        if rule
-            .effects
-            .iter()
-            .any(|effect| matches!(effect, Effect::Cancel))
-        {
+        if cancels {
             return Ok(ApplyOutcome {
                 fired: true,
                 cancelled: true,
             });
         }
-        *current = next;
+        current_scope = LocalFrameScope2::new(current, local_frame);
     }
 
     if !fired {
@@ -555,6 +612,7 @@ fn once_all_patch_became_stale(error: &PatchError) -> bool {
 fn apply_rule_once_per_level(
     game: &CompiledGame,
     rule: &Rule,
+    local_frame: Option<&LocalFrame<crate::ids::ObjectId>>,
     current: &mut State,
     fired_rules: &mut Vec<RuleId>,
     patches: &mut Vec<Patch>,
@@ -567,6 +625,7 @@ fn apply_rule_once_per_level(
     let outcome = apply_rule_once(
         game,
         rule,
+        local_frame,
         current,
         fired_rules,
         patches,
@@ -606,6 +665,8 @@ fn push_rule_commands(rule: &Rule, commands: &mut Vec<TransitionCommand>) {
             Effect::Restart => commands.push(TransitionCommand::Restart),
             Effect::NextLevel => commands.push(TransitionCommand::NextLevel),
             Effect::Again => commands.push(TransitionCommand::Again),
+            Effect::Checkpoint => commands.push(TransitionCommand::Checkpoint),
+            Effect::ClearCheckpoint => commands.push(TransitionCommand::ClearCheckpoint),
             Effect::Cancel | Effect::UpdateGlobal { .. } => {}
         }
     }
@@ -615,6 +676,7 @@ fn push_rule_commands(rule: &Rule, commands: &mut Vec<TransitionCommand>) {
 struct TransitionContext<'a> {
     game: &'a CompiledGame,
     input: InputId,
+    local_frame: Option<&'a LocalFrame<crate::ids::ObjectId>>,
 }
 
 fn guards_accept(rule: &Rule, context: &TransitionContext, state: &State) -> bool {
@@ -683,23 +745,28 @@ fn eval_query_kind(context: &TransitionContext, state: &State, kind: &QueryKind)
         }
         QueryKind::CountMatches(patterns) => patterns
             .iter()
-            .map(|pattern| i64::from(count_pattern_matches(context.game, state, pattern)))
+            .map(|pattern| {
+                i64::from(count_pattern_matches_in_scope(
+                    context.game,
+                    state,
+                    pattern,
+                    context.local_frame,
+                ))
+            })
             .sum(),
         QueryKind::ExistsMatches(patterns) => {
-            if patterns
-                .iter()
-                .any(|pattern| has_pattern_match(context.game, state, pattern))
-            {
+            if patterns.iter().any(|pattern| {
+                has_pattern_match_in_scope(context.game, state, pattern, context.local_frame)
+            }) {
                 1
             } else {
                 0
             }
         }
         QueryKind::NoneMatches(patterns) => {
-            if patterns
-                .iter()
-                .any(|pattern| has_pattern_match(context.game, state, pattern))
-            {
+            if patterns.iter().any(|pattern| {
+                has_pattern_match_in_scope(context.game, state, pattern, context.local_frame)
+            }) {
                 0
             } else {
                 1
@@ -708,11 +775,19 @@ fn eval_query_kind(context: &TransitionContext, state: &State, kind: &QueryKind)
         QueryKind::CountInputMatches(patterns) => patterns
             .iter()
             .filter(|(input, _)| *input == context.input)
-            .map(|(_, pattern)| i64::from(count_pattern_matches(context.game, state, pattern)))
+            .map(|(_, pattern)| {
+                i64::from(count_pattern_matches_in_scope(
+                    context.game,
+                    state,
+                    pattern,
+                    context.local_frame,
+                ))
+            })
             .sum(),
         QueryKind::ExistsInputMatches(patterns) => {
             if patterns.iter().any(|(input, pattern)| {
-                *input == context.input && has_pattern_match(context.game, state, pattern)
+                *input == context.input
+                    && has_pattern_match_in_scope(context.game, state, pattern, context.local_frame)
             }) {
                 1
             } else {
@@ -721,7 +796,8 @@ fn eval_query_kind(context: &TransitionContext, state: &State, kind: &QueryKind)
         }
         QueryKind::NoneInputMatches(patterns) => {
             if patterns.iter().any(|(input, pattern)| {
-                *input == context.input && has_pattern_match(context.game, state, pattern)
+                *input == context.input
+                    && has_pattern_match_in_scope(context.game, state, pattern, context.local_frame)
             }) {
                 0
             } else {
@@ -732,6 +808,15 @@ fn eval_query_kind(context: &TransitionContext, state: &State, kind: &QueryKind)
 }
 
 pub fn count_pattern_matches(game: &CompiledGame, state: &State, pattern: &Pattern) -> u32 {
+    count_pattern_matches_in_scope(game, state, pattern, None)
+}
+
+fn count_pattern_matches_in_scope(
+    game: &CompiledGame,
+    state: &State,
+    pattern: &Pattern,
+    local_frame: Option<&LocalFrame<crate::ids::ObjectId>>,
+) -> u32 {
     if pattern.components.is_empty() {
         return 0;
     }
@@ -745,8 +830,9 @@ pub fn count_pattern_matches(game: &CompiledGame, state: &State, pattern: &Patte
         effects: Vec::new(),
     };
     let mut count = 0;
-    for (x, y) in component_candidate_origins(game, state, &rule.pattern.components[0]) {
-        if match_from_first_origin(game, state, &rule, x, y).is_some() {
+    let scope = LocalFrameScope2::new(state, local_frame);
+    for (x, y) in component_candidate_origins(game, state, &rule.pattern.components[0], &scope) {
+        if match_from_first_origin(game, state, &rule, x, y, &scope).is_some() {
             count += 1;
         }
     }
@@ -754,6 +840,15 @@ pub fn count_pattern_matches(game: &CompiledGame, state: &State, pattern: &Patte
 }
 
 pub fn has_pattern_match(game: &CompiledGame, state: &State, pattern: &Pattern) -> bool {
+    has_pattern_match_in_scope(game, state, pattern, None)
+}
+
+fn has_pattern_match_in_scope(
+    game: &CompiledGame,
+    state: &State,
+    pattern: &Pattern,
+    local_frame: Option<&LocalFrame<crate::ids::ObjectId>>,
+) -> bool {
     if pattern.components.is_empty() {
         return false;
     }
@@ -766,9 +861,10 @@ pub fn has_pattern_match(game: &CompiledGame, state: &State, pattern: &Pattern) 
         writes: Vec::new(),
         effects: Vec::new(),
     };
-    component_candidate_origins(game, state, &rule.pattern.components[0])
+    let scope = LocalFrameScope2::new(state, local_frame);
+    component_candidate_origins(game, state, &rule.pattern.components[0], &scope)
         .into_iter()
-        .any(|(x, y)| match_from_first_origin(game, state, &rule, x, y).is_some())
+        .any(|(x, y)| match_from_first_origin(game, state, &rule, x, y, &scope).is_some())
 }
 
 #[derive(Clone, Debug)]
@@ -783,18 +879,26 @@ struct ComponentPlacement {
     gaps: Vec<u16>,
 }
 
-fn find_first_match(game: &CompiledGame, state: &State, rule: &Rule) -> Option<MatchPlacement> {
+fn find_first_match(
+    game: &CompiledGame,
+    state: &State,
+    rule: &Rule,
+    scope: &LocalFrameScope2<'_>,
+) -> Option<MatchPlacement> {
     if rule.pattern.components.is_empty() {
         return Some(MatchPlacement {
             components: Vec::new(),
         });
     }
 
-    for (x, y) in component_candidate_origins(game, state, &rule.pattern.components[0]) {
-        if let Some(first) = component_placement_at(game, state, &rule.pattern.components[0], x, y)
+    for (x, y) in component_candidate_origins(game, state, &rule.pattern.components[0], scope) {
+        if let Some(first) =
+            component_placement_at(game, state, &rule.pattern.components[0], x, y, scope)
         {
             let mut components = vec![first];
-            if complete_component_placements(game, state, rule, 1, &mut components) {
+            if complete_component_placements(game, state, rule, 1, &mut components, scope)
+                && placement_writes_within_local_frame(rule, &components, scope)
+            {
                 return Some(MatchPlacement { components });
             }
         }
@@ -802,7 +906,12 @@ fn find_first_match(game: &CompiledGame, state: &State, rule: &Rule) -> Option<M
     None
 }
 
-fn find_all_matches(game: &CompiledGame, state: &State, rule: &Rule) -> Vec<MatchPlacement> {
+fn find_all_matches(
+    game: &CompiledGame,
+    state: &State,
+    rule: &Rule,
+    scope: &LocalFrameScope2<'_>,
+) -> Vec<MatchPlacement> {
     if rule.pattern.components.is_empty() {
         return vec![MatchPlacement {
             components: Vec::new(),
@@ -810,11 +919,20 @@ fn find_all_matches(game: &CompiledGame, state: &State, rule: &Rule) -> Vec<Matc
     }
 
     let mut matches = Vec::new();
-    for (x, y) in component_candidate_origins(game, state, &rule.pattern.components[0]) {
-        if let Some(first) = component_placement_at(game, state, &rule.pattern.components[0], x, y)
+    for (x, y) in component_candidate_origins(game, state, &rule.pattern.components[0], scope) {
+        if let Some(first) =
+            component_placement_at(game, state, &rule.pattern.components[0], x, y, scope)
         {
             let mut components = vec![first];
-            collect_component_placements(game, state, rule, 1, &mut components, &mut matches);
+            collect_component_placements(
+                game,
+                state,
+                rule,
+                1,
+                &mut components,
+                &mut matches,
+                scope,
+            );
         }
     }
     matches
@@ -826,16 +944,24 @@ fn complete_component_placements(
     rule: &Rule,
     component_index: usize,
     components: &mut Vec<ComponentPlacement>,
+    scope: &LocalFrameScope2<'_>,
 ) -> bool {
     if component_index == rule.pattern.components.len() {
         return true;
     }
 
     let component = &rule.pattern.components[component_index];
-    for (x, y) in component_candidate_origins(game, state, component) {
-        if let Some(placement) = component_placement_at(game, state, component, x, y) {
+    for (x, y) in component_candidate_origins(game, state, component, scope) {
+        if let Some(placement) = component_placement_at(game, state, component, x, y, scope) {
             components.push(placement);
-            if complete_component_placements(game, state, rule, component_index + 1, components) {
+            if complete_component_placements(
+                game,
+                state,
+                rule,
+                component_index + 1,
+                components,
+                scope,
+            ) {
                 return true;
             }
             components.pop();
@@ -852,17 +978,20 @@ fn collect_component_placements(
     component_index: usize,
     components: &mut Vec<ComponentPlacement>,
     matches: &mut Vec<MatchPlacement>,
+    scope: &LocalFrameScope2<'_>,
 ) {
     if component_index == rule.pattern.components.len() {
-        matches.push(MatchPlacement {
-            components: components.clone(),
-        });
+        if placement_writes_within_local_frame(rule, components, scope) {
+            matches.push(MatchPlacement {
+                components: components.clone(),
+            });
+        }
         return;
     }
 
     let component = &rule.pattern.components[component_index];
-    for (x, y) in component_candidate_origins(game, state, component) {
-        if let Some(placement) = component_placement_at(game, state, component, x, y) {
+    for (x, y) in component_candidate_origins(game, state, component, scope) {
+        if let Some(placement) = component_placement_at(game, state, component, x, y, scope) {
             components.push(placement);
             collect_component_placements(
                 game,
@@ -871,6 +1000,7 @@ fn collect_component_placements(
                 component_index + 1,
                 components,
                 matches,
+                scope,
             );
             components.pop();
         }
@@ -880,6 +1010,7 @@ fn collect_component_placements(
 fn apply_until_stable(
     game: &CompiledGame,
     rule: &Rule,
+    local_frame: Option<&LocalFrame<crate::ids::ObjectId>>,
     current: &mut State,
     fired_rules: &mut Vec<RuleId>,
     patches: &mut Vec<Patch>,
@@ -887,18 +1018,18 @@ fn apply_until_stable(
     collect_trace: bool,
 ) -> TransitionResult<ApplyOutcome> {
     let dirty_origin_deltas = dirty_origin_deltas(rule);
-    let mut candidates = first_component_candidate_origin_set(game, current, rule);
+    let mut scope = LocalFrameScope2::new(current, local_frame);
+    let mut candidates = first_component_candidate_origin_set(game, current, rule, &scope);
     let mut seen_states = StateHistory::from_current(current);
     let mut fired = false;
     let mut repeat_count = 0;
 
     while let Some((y, x)) = pop_first_origin(&mut candidates) {
-        let Some(placement) = match_from_first_origin(game, current, rule, x, y) else {
+        let Some(placement) = match_from_first_origin(game, current, rule, x, y, &scope) else {
             continue;
         };
 
         let patch = build_patch(rule, &placement)?;
-        let next = patch.apply(game, current)?;
         let cancels = rule
             .effects
             .iter()
@@ -906,10 +1037,20 @@ fn apply_until_stable(
         let has_transition_command = rule.effects.iter().any(|effect| {
             matches!(
                 effect,
-                Effect::Win | Effect::Restart | Effect::NextLevel | Effect::Again
+                Effect::Win
+                    | Effect::Restart
+                    | Effect::NextLevel
+                    | Effect::Again
+                    | Effect::Checkpoint
+                    | Effect::ClearCheckpoint
             )
         });
-        if next == *current {
+        let changed = if cancels {
+            patch.validate(game, current)?
+        } else {
+            patch.apply_in_place(game, current)?
+        };
+        if !changed {
             if cancels {
                 fired_rules.push(rule.id);
                 if collect_trace {
@@ -941,7 +1082,7 @@ fn apply_until_stable(
                 cancelled: true,
             });
         }
-        *current = next;
+        scope = LocalFrameScope2::new(current, local_frame);
         push_rule_commands(rule, commands);
         if !seen_states.insert(current) {
             break;
@@ -953,7 +1094,7 @@ fn apply_until_stable(
         if let Some(dirty_origin_deltas) = &dirty_origin_deltas {
             enqueue_dirty_origins(&mut candidates, x, y, dirty_origin_deltas, current);
         } else {
-            candidates = first_component_candidate_origin_set(game, current, rule);
+            candidates = first_component_candidate_origin_set(game, current, rule, &scope);
         }
     }
 
@@ -969,15 +1110,24 @@ fn match_from_first_origin(
     rule: &Rule,
     origin_x: u16,
     origin_y: u16,
+    scope: &LocalFrameScope2<'_>,
 ) -> Option<MatchPlacement> {
     if rule.pattern.components.is_empty() {
         return None;
     }
 
-    let first =
-        component_placement_at(game, state, &rule.pattern.components[0], origin_x, origin_y)?;
+    let first = component_placement_at(
+        game,
+        state,
+        &rule.pattern.components[0],
+        origin_x,
+        origin_y,
+        scope,
+    )?;
     let mut components = vec![first];
-    if complete_component_placements(game, state, rule, 1, &mut components) {
+    if complete_component_placements(game, state, rule, 1, &mut components, scope)
+        && placement_writes_within_local_frame(rule, &components, scope)
+    {
         Some(MatchPlacement { components })
     } else {
         None
@@ -989,6 +1139,7 @@ fn placement_matches(
     state: &State,
     rule: &Rule,
     placement: &MatchPlacement,
+    scope: &LocalFrameScope2<'_>,
 ) -> bool {
     if placement.components.len() != rule.pattern.components.len() {
         return false;
@@ -1006,13 +1157,66 @@ fn placement_matches(
                 placement.origin_x,
                 placement.origin_y,
                 &placement.gaps,
+                scope,
             )
         })
+        && placement_writes_within_local_frame(rule, &placement.components, scope)
+}
+
+struct LocalFrameScope2<'a> {
+    frame: Option<&'a LocalFrame<ObjectId>>,
+    focus_cells: Vec<(u16, u16)>,
+}
+
+impl<'a> LocalFrameScope2<'a> {
+    fn new(state: &State, frame: Option<&'a LocalFrame<ObjectId>>) -> Self {
+        let focus_cells = frame
+            .map(|frame| local_frame_focus_cells(state, frame))
+            .unwrap_or_default();
+        Self { frame, focus_cells }
+    }
+
+    fn contains_cell(&self, x: u16, y: u16) -> bool {
+        let Some(frame) = self.frame else {
+            return true;
+        };
+        self.focus_cells.iter().any(|(focus_x, focus_y)| {
+            let dx = i32::from(x) - i32::from(*focus_x);
+            let dy = i32::from(y) - i32::from(*focus_y);
+            frame.contains_delta_2d(dx, dy)
+        })
+    }
+
+    fn origin_candidates(&self, state: &State) -> Option<Vec<(u16, u16)>> {
+        let frame = self.frame?;
+        let mut origins = BTreeSet::new();
+        for (focus_x, focus_y) in &self.focus_cells {
+            let (x_range, y_range) = frame.ranges_2d(*focus_x, *focus_y, state.width, state.height);
+            for y in y_range {
+                for x in x_range.clone() {
+                    origins.insert((y, x));
+                }
+            }
+        }
+        Some(origins.into_iter().map(|(y, x)| (x, y)).collect())
+    }
+}
+
+fn local_frame_focus_cells(state: &State, local_frame: &LocalFrame<ObjectId>) -> Vec<(u16, u16)> {
+    let mut cells = Vec::new();
+    for object in &local_frame.focus_objects {
+        for slot in state.object_positions(*object) {
+            if let Some(position) = state.slot_position(*slot) {
+                cells.push(position);
+            }
+        }
+    }
+    cells
 }
 
 #[derive(Clone, Copy, Debug)]
 struct ComponentAnchor {
-    object: crate::ids::ObjectId,
+    object: ObjectId,
     dx: i16,
     dy: i16,
 }
@@ -1021,11 +1225,12 @@ fn first_component_candidate_origin_set(
     game: &CompiledGame,
     state: &State,
     rule: &Rule,
+    scope: &LocalFrameScope2<'_>,
 ) -> BTreeSet<(u16, u16)> {
     let Some(component) = rule.pattern.components.first() else {
         return BTreeSet::new();
     };
-    component_candidate_origins(game, state, component)
+    component_candidate_origins(game, state, component, scope)
         .into_iter()
         .map(|(x, y)| (y, x))
         .collect()
@@ -1035,12 +1240,13 @@ fn component_candidate_origins(
     game: &CompiledGame,
     state: &State,
     component: &PatternComponent,
+    scope: &LocalFrameScope2<'_>,
 ) -> Vec<(u16, u16)> {
     let Some(anchor) = component_anchor(game, state, component) else {
-        return all_origin_vec(state);
+        return all_origin_vec(state, scope);
     };
     if game.object_layer(anchor.object).is_none() {
-        return all_origin_vec(state);
+        return all_origin_vec(state, scope);
     }
 
     let mut origins = BTreeSet::new();
@@ -1051,7 +1257,10 @@ fn component_candidate_origins(
         let Some((origin_x, origin_y)) = offset_pos(x, y, -anchor.dx, -anchor.dy) else {
             continue;
         };
-        if origin_x < state.width && origin_y < state.height {
+        if origin_x < state.width
+            && origin_y < state.height
+            && scope.contains_cell(origin_x, origin_y)
+        {
             origins.insert((origin_y, origin_x));
         }
     }
@@ -1059,7 +1268,10 @@ fn component_candidate_origins(
     origins.into_iter().map(|(y, x)| (x, y)).collect()
 }
 
-fn all_origin_vec(state: &State) -> Vec<(u16, u16)> {
+fn all_origin_vec(state: &State, scope: &LocalFrameScope2<'_>) -> Vec<(u16, u16)> {
+    if let Some(origins) = scope.origin_candidates(state) {
+        return origins;
+    }
     let mut origins =
         Vec::with_capacity(usize::from(state.width).saturating_mul(usize::from(state.height)));
     for y in 0..state.height {
@@ -1075,10 +1287,6 @@ fn component_anchor(
     state: &State,
     component: &PatternComponent,
 ) -> Option<ComponentAnchor> {
-    if component.gap_count != 0 {
-        return None;
-    }
-
     let mut best = None;
     for cell in &component.cells {
         let Offset::Fixed { dx, dy } = cell.offset else {
@@ -1112,6 +1320,64 @@ fn pop_first_origin(origins: &mut BTreeSet<(u16, u16)>) -> Option<(u16, u16)> {
     let origin = origins.iter().next().copied()?;
     origins.remove(&origin);
     Some(origin)
+}
+
+fn placement_writes_within_local_frame(
+    rule: &Rule,
+    components: &[ComponentPlacement],
+    scope: &LocalFrameScope2<'_>,
+) -> bool {
+    if scope.frame.is_none() {
+        return true;
+    }
+    for write in &rule.writes {
+        match write {
+            WriteOp::Add {
+                component, offset, ..
+            }
+            | WriteOp::Remove {
+                component, offset, ..
+            }
+            | WriteOp::Replace {
+                component, offset, ..
+            }
+            | WriteOp::SetScratch {
+                component, offset, ..
+            }
+            | WriteOp::RemoveScratch {
+                component, offset, ..
+            } => {
+                let Some((x, y)) = write_position_for_components(components, *component, offset)
+                else {
+                    return false;
+                };
+                if !scope.contains_cell(x, y) {
+                    return false;
+                }
+            }
+            WriteOp::Move {
+                component,
+                from_offset,
+                to_offset,
+                ..
+            } => {
+                let Some((from_x, from_y)) =
+                    write_position_for_components(components, *component, from_offset)
+                else {
+                    return false;
+                };
+                let Some((to_x, to_y)) =
+                    write_position_for_components(components, *component, to_offset)
+                else {
+                    return false;
+                };
+                if !scope.contains_cell(from_x, from_y) || !scope.contains_cell(to_x, to_y) {
+                    return false;
+                }
+            }
+        }
+    }
+    true
 }
 
 fn dirty_origin_deltas(rule: &Rule) -> Option<BTreeSet<(i32, i32)>> {
@@ -1190,10 +1456,11 @@ fn component_placement_at(
     component: &PatternComponent,
     origin_x: u16,
     origin_y: u16,
+    scope: &LocalFrameScope2<'_>,
 ) -> Option<ComponentPlacement> {
     if component.gap_count == 0 {
         let gaps = Vec::new();
-        if component_matches_with_gaps(game, state, component, origin_x, origin_y, &gaps) {
+        if component_matches_with_gaps(game, state, component, origin_x, origin_y, &gaps, scope) {
             return Some(ComponentPlacement {
                 origin_x,
                 origin_y,
@@ -1207,7 +1474,7 @@ fn component_placement_at(
     for total_gap in 0..=max_gap.saturating_mul(component.gap_count) {
         let mut gaps = Vec::with_capacity(usize::from(component.gap_count));
         if find_gap_assignment(
-            game, state, component, origin_x, origin_y, max_gap, total_gap, &mut gaps,
+            game, state, component, origin_x, origin_y, max_gap, total_gap, &mut gaps, scope,
         ) {
             return Some(ComponentPlacement {
                 origin_x,
@@ -1229,10 +1496,13 @@ fn find_gap_assignment(
     max_gap: u16,
     remaining_total: u16,
     gaps: &mut Vec<u16>,
+    scope: &LocalFrameScope2<'_>,
 ) -> bool {
     if gaps.len() == usize::from(component.gap_count) {
         return remaining_total == 0
-            && component_matches_with_gaps(game, state, component, origin_x, origin_y, gaps);
+            && component_matches_with_gaps(
+                game, state, component, origin_x, origin_y, gaps, scope,
+            );
     }
 
     for gap in 0..=max_gap.min(remaining_total) {
@@ -1246,6 +1516,7 @@ fn find_gap_assignment(
             max_gap,
             remaining_total - gap,
             gaps,
+            scope,
         ) {
             return true;
         }
@@ -1262,11 +1533,12 @@ fn component_matches_with_gaps(
     origin_x: u16,
     origin_y: u16,
     gaps: &[u16],
+    scope: &LocalFrameScope2<'_>,
 ) -> bool {
     component
         .cells
         .iter()
-        .all(|cell| match_cell(game, state, origin_x, origin_y, gaps, cell))
+        .all(|cell| match_cell(game, state, origin_x, origin_y, gaps, cell, scope))
 }
 
 fn match_cell(
@@ -1276,6 +1548,7 @@ fn match_cell(
     origin_y: u16,
     gaps: &[u16],
     cell: &MatchCell,
+    scope: &LocalFrameScope2<'_>,
 ) -> bool {
     let Some((dx, dy)) = resolve_offset(&cell.offset, gaps) else {
         return false;
@@ -1286,10 +1559,19 @@ fn match_cell(
     if x >= state.width || y >= state.height {
         return false;
     }
+    if !scope.contains_cell(x, y) {
+        return false;
+    }
 
     for object in &cell.require_objects {
-        if !state.has_object(game, x, y, *object) {
-            return false;
+        match state.cell_has_object_masked(x, y, *object) {
+            Some(true) => {}
+            Some(false) => return false,
+            None => {
+                if !state.has_object(game, x, y, *object) {
+                    return false;
+                }
+            }
         }
     }
 
@@ -1308,8 +1590,14 @@ fn match_cell(
     }
 
     for object in &cell.forbid_objects {
-        if state.has_object(game, x, y, *object) {
-            return false;
+        match state.cell_has_object_masked(x, y, *object) {
+            Some(true) => return false,
+            Some(false) => {}
+            None => {
+                if state.has_object(game, x, y, *object) {
+                    return false;
+                }
+            }
         }
     }
 
@@ -1428,7 +1716,12 @@ fn build_patch(rule: &Rule, placement: &MatchPlacement) -> TransitionResult<Patc
     for effect in &rule.effects {
         match effect {
             Effect::Cancel => {}
-            Effect::Win | Effect::Restart | Effect::NextLevel | Effect::Again => {}
+            Effect::Win
+            | Effect::Restart
+            | Effect::NextLevel
+            | Effect::Again
+            | Effect::Checkpoint
+            | Effect::ClearCheckpoint => {}
             Effect::UpdateGlobal { global, op, value } => {
                 patch.ops.push(PatchOp::UpdateGlobal {
                     global: *global,
@@ -1447,14 +1740,18 @@ fn write_position(
     component: u16,
     offset: &Offset,
 ) -> TransitionResult<(u16, u16)> {
-    let placement = placement
-        .components
-        .get(usize::from(component))
-        .ok_or(TransitionError::OffsetOutOfBounds)?;
-    let (dx, dy) =
-        resolve_offset(offset, &placement.gaps).ok_or(TransitionError::OffsetOutOfBounds)?;
-    offset_pos(placement.origin_x, placement.origin_y, dx, dy)
+    write_position_for_components(&placement.components, component, offset)
         .ok_or(TransitionError::OffsetOutOfBounds)
+}
+
+fn write_position_for_components(
+    components: &[ComponentPlacement],
+    component: u16,
+    offset: &Offset,
+) -> Option<(u16, u16)> {
+    let placement = components.get(usize::from(component))?;
+    let (dx, dy) = resolve_offset(offset, &placement.gaps)?;
+    offset_pos(placement.origin_x, placement.origin_y, dx, dy)
 }
 
 fn fixed_offset(offset: &Offset) -> Option<(i16, i16)> {

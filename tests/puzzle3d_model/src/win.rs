@@ -1,6 +1,6 @@
 use crate::{
-    count_pattern_matches, has_pattern_match, Game3, MatchCell3, ObjectId, Offset3, Pattern3,
-    State3,
+    Game3, MatchCell3, ObjectId, Offset3, Pattern3, State3, count_pattern_matches,
+    has_pattern_match,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]

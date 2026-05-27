@@ -1,5 +1,6 @@
 (function () {
   const UNTIL_STABLE_REPEAT_LIMIT = 200;
+  const CORE_STATE_HASH_PROPERTY = "__puzzleCoreStateHash";
 
   class PuzzleStandaloneRuntime {
     constructor(exportData) {
@@ -18,11 +19,13 @@
       this.persistentVarIds = [...(this.engine.persistentVars || [])];
       this.levelIndex = null;
       this.state = this.neutralState();
-      this.persistentVars = new Array(this.persistentVarIds.length).fill(0);
+      this.levelCheckpointState = null;
+      this.persistentVars = this.persistentVarIds.map((varId) => this.persistentVarDefaultValue(varId));
       this.undoStack = [];
       this.redoStack = [];
       this.clearedLevels = new Array(this.data.levels.length).fill(false);
       this.restoredLevelIndex = null;
+      this.hasProgressSave = false;
       this.restoreProgressSave();
       this.focusedScene = this.initialSceneName();
       this.visibleScenes = [this.focusedScene];
@@ -35,6 +38,7 @@
       }
       this.soundEvents = [];
       this.messageEvents = [];
+      this.animationEvents = [];
       this.pendingWaits = 0;
       this.pendingAgainTurns = 0;
       this.againRunToken = 0;
@@ -43,6 +47,7 @@
       this.currentTurnSfx = null;
       this.maxAgainTurnsPerInput = 256;
       this.coreRuntime = null;
+      this.coreRuntimeStateHash = null;
       this.editorPreviewSceneEnabled = false;
       this.editorPreviewInputEnabled = false;
       this.initialized = false;
@@ -110,27 +115,40 @@
 
     async loadCoreRuntime() {
       const version = String(this.data?.engineVersion || Date.now());
-      const module = await window.PuzzleRuntimeWasmLoader.load(version);
-      if (typeof module.WasmCoreRuntime !== "function") {
-        throw new Error("Puzzle core WASM runtime is unavailable.");
+      try {
+        const module = await window.PuzzleRuntimeWasmLoader.load(version);
+        if (typeof module.WasmCoreRuntime !== "function") {
+          throw new Error("Puzzle core WASM runtime is unavailable.");
+        }
+        this.coreRuntime = new module.WasmCoreRuntime(this.data.source || "", this.data.puzzlePath || "game.puzzle");
+        this.coreRuntimeStateHash = null;
+      } catch (error) {
+        console.warn("Puzzle core WASM runtime is unavailable; using JavaScript transition fallback.", error);
+        this.coreRuntime = null;
+        this.coreRuntimeStateHash = null;
       }
-      this.coreRuntime = new module.WasmCoreRuntime(this.data.source || "", this.data.puzzlePath || "game.puzzle");
     }
 
     snapshot() {
       const soundEvents = this.soundEvents.splice(0);
       const messageEvents = this.messageEvents.splice(0);
+      const animationEvents = this.animationEvents.splice(0);
       const focusedPuzzle = this.scenePuzzleState(this.focusedScene);
       const presentation = focusedPuzzle
         ? this.presentationSnapshotForPuzzle(focusedPuzzle)
         : this.editorPresentationSnapshot();
+      if (presentation?.scene) {
+        presentation.scene.animationEvents = animationEvents;
+      }
       return {
         game: {
           title: this.data.title,
+          has_progress_save: this.hasProgressSaveData(),
         },
         sounds: this.data.sounds || { sfx: [], music: [] },
         soundEvents,
         messageEvents,
+        animationEvents,
         level: this.levelContext(),
         levelIndex: this.levelIndex,
         levelCount: this.data.levels.length,
@@ -159,6 +177,7 @@
           index,
           name: level.name,
           cleared: this.clearedLevels[index] === true,
+          solved: this.clearedLevels[index] === true,
         })),
         scenes: this.data.scenes,
         screens: this.data.screens,
@@ -257,8 +276,12 @@
       const state = this.cloneState(this.state);
       this.applyPersistentVars(state);
       const outcome = this.transitionOutcome(state, input);
-      this.replaceStateIfChanged(outcome.state);
+      this.replaceStateIfChanged(outcome.state, {
+        previousStateHandle: outcome.previousStateHandle,
+        changed: outcome.changed,
+      });
       this.syncCurrentLevelPuzzles();
+      this.animationEvents.push(...(outcome.animations || []));
       return {
         cancelled: !!outcome.cancelled,
         commands: this.queueTransitionCommands(null, outcome.commands || []),
@@ -274,8 +297,12 @@
         const state = this.cloneState(this.state);
         this.applyPersistentVars(state);
         const outcome = this.transitionOutcome(state, input);
-        this.replaceStateIfChanged(outcome.state);
+        this.replaceStateIfChanged(outcome.state, {
+          previousStateHandle: outcome.previousStateHandle,
+          changed: outcome.changed,
+        });
         this.syncCurrentLevelPuzzles();
+        this.animationEvents.push(...(outcome.animations || []));
         return {
           cancelled: !!outcome.cancelled,
           commands: this.queueTransitionCommands(null, outcome.commands || []),
@@ -290,8 +317,12 @@
         const state = this.cloneState(this.state);
         this.applyPersistentVars(state);
         const outcome = this.transitionOutcome(state, input);
-        this.replaceStateIfChanged(outcome.state);
+        this.replaceStateIfChanged(outcome.state, {
+          previousStateHandle: outcome.previousStateHandle,
+          changed: outcome.changed,
+        });
         this.syncCurrentLevelPuzzles();
+        this.animationEvents.push(...(outcome.animations || []));
         return {
           cancelled: !!outcome.cancelled,
           commands: this.queueTransitionCommands(null, outcome.commands || []),
@@ -311,10 +342,11 @@
       this.applyPersistentVars(next);
       puzzle.state = next;
       if (initializer.initializer === "current_level" && sceneName === this.focusedScene) {
-        this.replaceStateIfChanged(this.cloneState(next));
+        this.replaceStateIfChanged(this.cloneState(next), { changed: outcome.changed });
       } else {
         this.syncPersistentVarsToStates();
       }
+      this.animationEvents.push(...(outcome.animations || []));
       return {
         cancelled: !!outcome.cancelled,
         commands: this.queueTransitionCommands(target, outcome.commands || []),
@@ -339,7 +371,9 @@
       const pendingNextLevel = { queued: false, target: null };
       const pendingAgain = { queued: false, target: null };
       const pendingRestart = { queued: false, target: null };
-      for (const queued of commands || []) {
+      const queue = commands || [];
+      for (let index = 0; index < queue.length; index += 1) {
+        const queued = queue[index];
         const command = queued?.command;
         if (command === "win" || command?.kind === "win") {
           continue;
@@ -359,13 +393,26 @@
           this.queueAgain(pendingAgain, queued?.target ?? null);
           continue;
         }
+        if (command === "checkpoint" || command?.kind === "checkpoint") {
+          this.saveCheckpoint(queued?.target ?? null);
+          continue;
+        }
+        if (command === "clear_checkpoint" || command?.kind === "clear_checkpoint") {
+          this.clearCheckpoint(queued?.target ?? null);
+          continue;
+        }
         if (command?.kind === "play_sfx") {
           this.emitTurnSfx(command.name);
           continue;
         }
         if (command?.kind === "wait") {
-          this.queueWait(command.milliseconds || command.ms || 0);
-          continue;
+          const remaining = queue.slice(index + 1);
+          if (remaining.length || conditionEffect) {
+            this.queueEffectContinuation(command.milliseconds || command.ms || 0, remaining, conditionEffect);
+          } else {
+            this.queueWait(command.milliseconds || command.ms || 0);
+          }
+          return this.resolvePendingTurnCommands(pendingRestart, pendingNextLevel, pendingAgain, null);
         }
         if (command?.kind === "message") {
           this.messageEvents.push({
@@ -374,6 +421,10 @@
           });
         }
       }
+      this.resolvePendingTurnCommands(pendingRestart, pendingNextLevel, pendingAgain, conditionEffect);
+    }
+
+    resolvePendingTurnCommands(pendingRestart, pendingNextLevel, pendingAgain, conditionEffect) {
       if (pendingRestart.queued) {
         if (pendingRestart.target) {
           this.restartLevelTarget(pendingRestart.target);
@@ -394,6 +445,18 @@
       } else if (pendingAgain.queued) {
         this.applyAgainTurns(pendingAgain.target || null);
       }
+    }
+
+    queueEffectContinuation(milliseconds, commands, conditionEffect) {
+      this.pendingWaits += 1;
+      setTimeout(() => {
+        try {
+          this.resolveTurnCommands(commands, conditionEffect || null);
+        } finally {
+          this.pendingWaits = Math.max(0, this.pendingWaits - 1);
+          this.notifyStateChanged();
+        }
+      }, Math.max(0, Number(milliseconds || 0)));
     }
 
     queueNextLevel(pendingNextLevel, target) {
@@ -574,7 +637,7 @@
     }
 
     transitionProgramOutcome(program, initialState, input, programKey = "custom", levelIndex = -1) {
-      if (programKey !== "custom") {
+      if (programKey !== "custom" && this.coreRuntime) {
         return this.coreTransitionProgramOutcome(programKey, levelIndex, initialState, input);
       }
       const original = this.cloneState(initialState);
@@ -598,6 +661,29 @@
       if (!this.coreRuntime) {
         throw new Error("Puzzle core WASM runtime has not been initialized.");
       }
+      if (typeof this.coreRuntime.transition_current_outcome === "function"
+        && typeof this.coreRuntime.set_state === "function") {
+        this.syncCoreRuntimeState(initialState);
+        const raw = this.coreRuntime.transition_current_outcome(
+          programKey,
+          Number.isFinite(levelIndex) ? Math.trunc(levelIndex) : -1,
+          Number(input || 0),
+        );
+        const outcome = JSON.parse(raw);
+        const nextState = outcome.state || this.applyCoreOutcomeToState(initialState, outcome);
+        this.coreRuntimeStateHash = this.coreHashKey(outcome.stateHashKey ?? outcome.stateHash);
+        this.setCoreStateHash(nextState, this.coreRuntimeStateHash);
+        return {
+          state: nextState,
+          previousStateHandle: Number.isFinite(Number(outcome.previousStateHandle))
+            ? Number(outcome.previousStateHandle)
+            : undefined,
+          changed: outcome.changed === true,
+          cancelled: outcome.cancelled === true,
+          commands: this.commandsForCoreOutcome(outcome),
+          animations: this.animationsForCoreOutcome(outcome, nextState),
+        };
+      }
       const raw = this.coreRuntime.transition_program_outcome(
         programKey,
         Number.isFinite(levelIndex) ? Math.trunc(levelIndex) : -1,
@@ -607,17 +693,149 @@
       const outcome = JSON.parse(raw);
       return {
         state: outcome.state,
+        previousStateHandle: undefined,
+        changed: undefined,
         cancelled: outcome.cancelled === true,
         commands: this.commandsForCoreOutcome(outcome),
+        animations: this.animationsForCoreOutcome(outcome, outcome.state),
       };
     }
 
+    animationsForCoreOutcome(outcome, nextState) {
+      const animations = [];
+      const firedRules = outcome.firedRules || [];
+      const patches = outcome.patches || [];
+      for (let index = 0; index < Math.min(firedRules.length, patches.length); index += 1) {
+        const emissions = this.engine.ruleEmissions?.[String(firedRules[index])]
+          || this.engine.ruleEmissions?.[firedRules[index]]
+          || [];
+        const animateEmissions = emissions.filter((emission) => emission?.kind === "animate");
+        if (!animateEmissions.length) {
+          continue;
+        }
+        for (const emission of animateEmissions) {
+          const objects = new Set((emission.objects || []).map((object) => Number(object)));
+          if (emission.trigger === "move") {
+            for (const op of patches[index] || []) {
+              if (op.kind !== "move" || !objects.has(Number(op.objectId))) {
+                continue;
+              }
+              this.pushUniqueAnimation(animations, {
+                kind: "move",
+                name: emission.name,
+                objectId: Number(op.objectId),
+                fromX: Number(op.fromX),
+                fromY: Number(op.fromY),
+                toX: Number(op.toX),
+                toY: Number(op.toY),
+              });
+            }
+          } else if (emission.trigger === "cantmove") {
+            for (const op of patches[index] || []) {
+              if (op.kind !== "remove_scratch" || Number(op.scratch) !== 0) {
+                continue;
+              }
+              const objectId = Number(op.objectId);
+              if (objectId > 0) {
+                if (objects.has(objectId)) {
+                  this.pushUniqueAnimation(animations, {
+                    kind: "cantmove",
+                    name: emission.name,
+                    objectId,
+                    x: Number(op.x),
+                    y: Number(op.y),
+                  });
+                }
+                continue;
+              }
+              for (const candidate of objects) {
+                if (this.hasObject(nextState, Number(op.x), Number(op.y), candidate)) {
+                  this.pushUniqueAnimation(animations, {
+                    kind: "cantmove",
+                    name: emission.name,
+                    objectId: candidate,
+                    x: Number(op.x),
+                    y: Number(op.y),
+                  });
+                }
+              }
+            }
+          }
+        }
+      }
+      return animations;
+    }
+
+    pushUniqueAnimation(animations, event) {
+      const key = JSON.stringify(event);
+      if (!animations.some((existing) => JSON.stringify(existing) === key)) {
+        animations.push(event);
+      }
+    }
+
+    syncCoreRuntimeState(state) {
+      const hash = this.coreStateHash(state);
+      if (hash !== null && this.coreRuntimeStateHash !== null && this.coreRuntimeStateHash === hash) {
+        return;
+      }
+      this.coreRuntime.set_state(JSON.stringify(state));
+      this.coreRuntimeStateHash = typeof this.coreRuntime.current_state_hash === "function"
+        ? this.coreHashKey(this.coreRuntime.current_state_hash())
+        : null;
+      this.setCoreStateHash(state, this.coreRuntimeStateHash);
+    }
+
+    applyCoreOutcomeToState(state, outcome) {
+      this.clearScratch(state);
+      if (Array.isArray(outcome.changedCells)) {
+        for (const cell of outcome.changedCells) {
+          this.applyChangedCell(state, cell);
+        }
+      }
+      if (Array.isArray(outcome.globals)) {
+        state.globals = [...outcome.globals];
+      }
+      if (Array.isArray(outcome.levelFiredRules)) {
+        state.levelFiredRules = [...outcome.levelFiredRules];
+      }
+      return state;
+    }
+
+    applyChangedCell(state, cell) {
+      const x = Math.trunc(Number(cell?.x) || 0);
+      const y = Math.trunc(Number(cell?.y) || 0);
+      if (x < 0 || y < 0 || x >= state.width || y >= state.height) {
+        return;
+      }
+      this.clearCoreStateHash(state);
+      const cellIndex = this.cellIndex(state, x, y);
+      const start = cellIndex * state.layerCount;
+      for (let layer = 0; layer < state.layerCount; layer += 1) {
+        state.slots[start + layer] = 0;
+      }
+      for (const object of cell?.objects || []) {
+        const objectId = Number(object || 0);
+        const layer = this.objectLayers.get(objectId);
+        if (layer === undefined || layer < 0 || layer >= state.layerCount) {
+          continue;
+        }
+        state.slots[start + layer] = objectId;
+      }
+    }
+
     commandsForCoreOutcome(outcome) {
-      const commands = [...(outcome.commands || [])];
+      const commands = [];
       for (const ruleId of outcome.firedRules || []) {
-        commands.push(...this.ruleEmissionCommands(ruleId));
+        commands.push(...this.ruleEffectCommands(ruleId));
+      }
+      if (!commands.length) {
+        commands.push(...(outcome.commands || []));
       }
       return commands;
+    }
+
+    ruleEffectCommands(ruleId) {
+      return [...(this.engine.ruleEffects?.[String(ruleId)] || this.engine.ruleEffects?.[ruleId] || [])];
     }
 
     ruleEmissionCommands(ruleId) {
@@ -868,9 +1086,9 @@
     }
 
     ruleCommands(rule) {
-      const emissions = this.engine.ruleEmissions?.[String(rule.id)] || this.engine.ruleEmissions?.[rule.id] || [];
-      return [...(rule.effects || []), ...emissions]
-        .filter((effect) => effect.kind === "win" || effect.kind === "restart" || effect.kind === "next_level" || effect.kind === "again" || effect.kind === "message" || effect.kind === "play_sfx" || effect.kind === "wait")
+      const ordered = this.engine.ruleEffects?.[String(rule.id)] || this.engine.ruleEffects?.[rule.id] || null;
+      return [...(ordered || [...(rule.effects || []), ...(this.engine.ruleEmissions?.[String(rule.id)] || this.engine.ruleEmissions?.[rule.id] || [])])]
+        .filter((effect) => effect.kind === "win" || effect.kind === "restart" || effect.kind === "next_level" || effect.kind === "again" || effect.kind === "checkpoint" || effect.kind === "clear_checkpoint" || effect.kind === "message" || effect.kind === "play_sfx" || effect.kind === "wait")
         .map((effect) => {
           if (effect.kind === "message") {
             return {
@@ -890,6 +1108,12 @@
           }
           if (effect.kind === "win") {
             return { kind: "win" };
+          }
+          if (effect.kind === "checkpoint") {
+            return { kind: "checkpoint" };
+          }
+          if (effect.kind === "clear_checkpoint") {
+            return { kind: "clear_checkpoint" };
           }
           if (effect.kind === "restart") {
             return { kind: "restart" };
@@ -1111,6 +1335,7 @@
 
     applyWrites(state, rule, placement) {
       const next = this.cloneState(state);
+      this.clearCoreStateHash(next);
       this.applyMoveWrites(next, rule.writes || [], placement);
       for (const write of rule.writes) {
         if (write.kind === "add") {
@@ -1151,6 +1376,7 @@
 
     applyWritesOnceAll(state, rule, placements) {
       const next = this.cloneState(state);
+      this.clearCoreStateHash(next);
       const objectProposals = new Map();
       const deferredWrites = [];
       const deferredEffects = [];
@@ -1254,6 +1480,9 @@
         }
       }
 
+      if (moves.length) {
+        this.clearCoreStateHash(state);
+      }
       const moved = moves.map((move) => {
         const fromIndex = this.slotIndex(state, move.fromX, move.fromY, move.layer);
         const scratch = state.scratch?.[fromIndex]?.length
@@ -1698,9 +1927,21 @@
         const name = effect.scene || effect.screen;
         if (this.sceneDef(name)) {
           this.resetSceneState(name);
-        } else {
+        } else if (!this.resetPersistentVar(name)) {
           this.resetPuzzleState(name);
         }
+      } else if (effect.kind === "clear_undo_history" || effect.kind === "clear_history") {
+        this.clearUndoHistory();
+      } else if (effect.kind === "clear_game_progress") {
+        this.clearGameProgress();
+      } else if (effect.kind === "set_current_level") {
+        this.setCurrentLevelProgress(effect.level, bindings);
+      } else if (effect.kind === "clear_current_level") {
+        this.clearCurrentLevelProgress();
+      } else if (effect.kind === "set_level_cleared") {
+        this.setLevelClearedProgress(effect.level, effect.cleared === true, bindings);
+      } else if (effect.kind === "reset_persistent_vars") {
+        this.resetPersistentVars();
       } else if (effect.kind === "delete") {
         this.deleteScene(effect.scene || effect.screen);
       } else if (effect.kind === "show") {
@@ -1737,9 +1978,6 @@
         }
       } else if (effect.kind === "copy") {
         this.copyPuzzleState(effect.source, effect.target);
-      } else if (effect.kind === "clear_history") {
-        this.undoStack = [];
-        this.redoStack = [];
       } else if (effect.kind === "sequence") {
         this.applySceneEffectSequence(effect.effects || [], bindings, 0);
       }
@@ -1783,19 +2021,16 @@
     applySceneParams(sceneName, params, bindings) {
       let levelChanged = false;
       for (const param of params) {
-        const value = this.evalEffectString(param.value, bindings);
+        const value = this.evalEffectValue(param.value, bindings);
         if (value === undefined) {
           continue;
         }
-        if (param.name === "level") {
-          const index = this.levelIndexFromValue(value);
-          if (index !== undefined && this.sceneAcceptsLevel(sceneName, index)) {
-            this.activateLevel(index, true);
-            this.undoStack = [];
-            this.redoStack = [];
-            levelChanged = true;
-          }
-          continue;
+        const index = this.levelIndexFromValue(value);
+        if (this.isLevelRef(value) && index !== undefined && this.sceneAcceptsLevel(sceneName, index)) {
+          this.activateLevel(index, true);
+          this.undoStack = [];
+          this.redoStack = [];
+          levelChanged = true;
         }
         this.createScene(sceneName);
         const variable = (this.sceneDef(sceneName)?.state?.variables || []).find((entry) => entry.name === param.name);
@@ -1810,11 +2045,16 @@
     }
 
     evalEffectString(expr, bindings) {
+      const value = this.evalEffectValue(expr, bindings);
+      return value === undefined ? undefined : this.sceneValueStringValue(value);
+    }
+
+    evalEffectValue(expr, bindings) {
       if (!expr) {
         return undefined;
       }
       if (expr.kind === "bool" || expr.kind === "int") {
-        return String(expr.value);
+        return expr.value;
       }
       if (expr.kind === "text") {
         return expr.value || "";
@@ -1822,23 +2062,30 @@
       if (expr.kind === "path") {
         const parts = String(expr.path || "").split(".").filter(Boolean);
         if (parts.length === 1) {
-          return bindings[parts[0]]
-            ?? (parts[0] === "level" && this.levelIndex !== null && this.levelIndex !== undefined
-              ? String(this.levelIndex)
-              : undefined)
-            ?? this.sceneValueString(parts[0])
+          const bound = bindings[parts[0]];
+          if (bound !== undefined) {
+            return this.levelValueFromAtom(bound);
+          }
+          if (parts[0] === "level" && this.levelIndex !== null && this.levelIndex !== undefined) {
+            return this.levelRef(this.focusedScene, this.levelIndex);
+          }
+          return this.sceneValue(parts[0])
             ?? parts[0];
+        }
+        if (parts.length === 2) {
+          const receiver = this.evalEffectValue({ kind: "path", path: parts[0] }, bindings);
+          return this.sceneValueField(receiver, parts[1]);
         }
         const levelValue = this.levelPathValue(expr.path);
         if (levelValue !== undefined && levelValue !== null) {
-          return String(levelValue);
+          return levelValue;
         }
         return parts.join(".");
       }
       if (expr.kind === "call" && expr.name === "next" && expr.args?.length === 1) {
-        const level = this.evalEffectString(expr.args[0], bindings);
+        const level = this.evalEffectValue(expr.args[0], bindings);
         const index = this.levelIndexFromValue(level);
-        return index === undefined ? undefined : String(Math.min(index + 1, this.data.levels.length - 1));
+        return index === undefined ? undefined : this.levelRef(this.focusedScene, Math.min(index + 1, this.data.levels.length - 1));
       }
       return undefined;
     }
@@ -1851,16 +2098,46 @@
     }
 
     sceneValueString(name) {
+      const value = this.sceneValue(name);
+      return value === undefined ? undefined : this.sceneValueStringValue(value);
+    }
+
+    sceneValue(name) {
       const value = this.focusedSceneRuntime()?.values?.[name] ?? this.sessionValues?.[name];
       if (value === undefined || value === null) {
         return undefined;
       }
+      return value;
+    }
+
+    sceneValueStringValue(value) {
+      if (this.isLevelRef(value)) {
+        return String(value.index);
+      }
       return String(value);
+    }
+
+    sceneValueField(value, field) {
+      if (this.isLevelRef(value)) {
+        return value[field];
+      }
+      return undefined;
+    }
+
+    isLevelRef(value) {
+      return Boolean(value && typeof value === "object" && value.kind === "level");
     }
 
     restartLevel() {
       const level = this.currentLevel();
       if (!level) {
+        return;
+      }
+      if (this.levelCheckpointState) {
+        const next = this.cloneState(this.levelCheckpointState);
+        this.applyPersistentVars(next);
+        this.replaceStateIfChanged(next);
+        this.syncCurrentLevelPuzzles();
         return;
       }
       const next = this.cloneState(level.initialState);
@@ -1948,6 +2225,7 @@
       }
       this.levelIndex = levelIndex;
       this.selectedLevelIndex = levelIndex;
+      this.levelCheckpointState = null;
       this.state = this.cloneState(this.data.levels[levelIndex].initialState);
       this.applyPersistentVars(this.state);
       this.applyModelLevelStart(emitEvents);
@@ -2004,6 +2282,7 @@
       const level = this.currentLevel();
       if (level) {
         level.initialState = this.cloneState(state);
+        this.levelCheckpointState = null;
         if (Array.isArray(options.regions)) {
           level.regions = options.regions.map((region, index) => ({
             index: Number.isInteger(region?.index) ? region.index : index,
@@ -2169,8 +2448,8 @@
       if (!previous) {
         return;
       }
-      this.redoStack.push(this.cloneState(this.state));
-      this.state = previous;
+      this.redoStack.push(this.saveCurrentHistoryEntry());
+      this.state = this.restoreHistoryEntry(previous);
       this.applyPersistentVars(this.state);
       this.syncCurrentLevelPuzzles();
     }
@@ -2183,28 +2462,64 @@
       if (!next) {
         return;
       }
-      this.undoStack.push(this.cloneState(this.state));
-      this.state = next;
+      this.undoStack.push(this.saveCurrentHistoryEntry());
+      this.state = this.restoreHistoryEntry(next);
       this.applyPersistentVars(this.state);
       this.syncCurrentLevelPuzzles();
     }
 
-    replaceStateIfChanged(next) {
+    replaceStateIfChanged(next, options = {}) {
       if (this.levelIndex === null || this.levelIndex === undefined) {
         this.state = this.cloneState(next);
         return;
       }
       this.capturePersistentVars(next);
       this.applyPersistentVars(next);
-      if (this.stateKeyIgnoringPersistent(next) === this.stateKeyIgnoringPersistent(this.state)) {
+      const hasAuthoritativeChanged = typeof options.changed === "boolean" && !this.persistentVarIds.length;
+      const changed = hasAuthoritativeChanged
+        ? options.changed
+        : this.stateKeyIgnoringPersistent(next) !== this.stateKeyIgnoringPersistent(this.state);
+      if (!changed) {
         this.state = next;
         this.syncPersistentVarsToStates();
         return;
       }
-      this.undoStack.push(this.cloneState(this.state));
+      this.undoStack.push(this.historyEntryForCurrentState(options.previousStateHandle));
       this.state = next;
       this.redoStack = [];
       this.syncPersistentVarsToStates();
+    }
+
+    historyEntryForCurrentState(handle) {
+      const numericHandle = Number(handle);
+      if (Number.isInteger(numericHandle) && numericHandle >= 0) {
+        return { handle: numericHandle };
+      }
+      return this.cloneState(this.state);
+    }
+
+    saveCurrentHistoryEntry() {
+      if (!this.coreRuntime || typeof this.coreRuntime.save_current_state !== "function") {
+        return this.cloneState(this.state);
+      }
+      this.syncCoreRuntimeState(this.state);
+      return { handle: this.coreRuntime.save_current_state() };
+    }
+
+    restoreHistoryEntry(entry) {
+      if (entry?.handle !== undefined
+        && this.coreRuntime
+        && typeof this.coreRuntime.restore_saved_state === "function"
+        && typeof this.coreRuntime.current_state === "function") {
+        this.coreRuntime.restore_saved_state(Number(entry.handle));
+        const state = JSON.parse(this.coreRuntime.current_state());
+        this.coreRuntimeStateHash = typeof this.coreRuntime.current_state_hash === "function"
+          ? this.coreHashKey(this.coreRuntime.current_state_hash())
+          : null;
+        this.setCoreStateHash(state, this.coreRuntimeStateHash);
+        return state;
+      }
+      return this.cloneState(entry);
     }
 
     gotoScene(name) {
@@ -2256,7 +2571,10 @@
       if (this.levelIndex !== null && this.levelIndex !== undefined && this.sceneAcceptsLevel(name, this.levelIndex)) {
         return;
       }
-      const index = this.firstLevelIndexForScene(name, null);
+      const selected = this.selectedLevelIndex;
+      const index = Number.isInteger(selected) && this.sceneAcceptsLevel(name, selected)
+        ? selected
+        : this.firstLevelIndexForScene(name, null);
       if (index !== undefined) {
         this.activateLevel(index, emitEvents);
       }
@@ -2332,6 +2650,9 @@
         return;
       }
       puzzle.state = this.cloneState(puzzle.initialState);
+      if (puzzle.checkpointState) {
+        puzzle.state = this.cloneState(puzzle.checkpointState);
+      }
       this.applyPersistentVars(puzzle.state);
       if (this.scenePuzzleInitializer(resolved.sceneName, resolved.puzzleName)?.initializer === "current_level") {
         this.replaceStateIfChanged(this.cloneState(puzzle.state));
@@ -2341,6 +2662,57 @@
           this.levelIndex = puzzle.levelIndex;
           this.selectedLevelIndex = puzzle.levelIndex;
         }
+        this.syncCurrentLevelPuzzles(resolved.sceneName);
+      }
+    }
+
+    saveCheckpoint(target = null) {
+      if (!target) {
+        if (this.levelIndex !== null && this.levelIndex !== undefined) {
+          this.levelCheckpointState = this.cloneState(this.state);
+          this.syncCurrentLevelPuzzles();
+        }
+        return;
+      }
+      const resolved = this.resolvePuzzleTarget(target);
+      if (!resolved) {
+        if (this.levelIndex !== null && this.levelIndex !== undefined) {
+          this.levelCheckpointState = this.cloneState(this.state);
+          this.syncCurrentLevelPuzzles();
+        }
+        return;
+      }
+      this.createScene(resolved.sceneName);
+      const puzzle = this.sceneStates.get(resolved.sceneName)?.puzzles?.[resolved.puzzleName];
+      if (!puzzle) {
+        return;
+      }
+      puzzle.checkpointState = this.cloneState(puzzle.state);
+      if (this.scenePuzzleInitializer(resolved.sceneName, resolved.puzzleName)?.initializer === "current_level") {
+        this.levelCheckpointState = this.cloneState(puzzle.state);
+        this.syncCurrentLevelPuzzles(resolved.sceneName);
+      }
+    }
+
+    clearCheckpoint(target = null) {
+      if (!target) {
+        this.levelCheckpointState = null;
+        this.syncCurrentLevelPuzzles();
+        return;
+      }
+      const resolved = this.resolvePuzzleTarget(target);
+      if (!resolved) {
+        this.levelCheckpointState = null;
+        this.syncCurrentLevelPuzzles();
+        return;
+      }
+      this.createScene(resolved.sceneName);
+      const puzzle = this.sceneStates.get(resolved.sceneName)?.puzzles?.[resolved.puzzleName];
+      if (puzzle) {
+        puzzle.checkpointState = null;
+      }
+      if (this.scenePuzzleInitializer(resolved.sceneName, resolved.puzzleName)?.initializer === "current_level") {
+        this.levelCheckpointState = null;
         this.syncCurrentLevelPuzzles(resolved.sceneName);
       }
     }
@@ -2359,9 +2731,11 @@
       this.sceneStates.get(resolved.sceneName).puzzles[resolved.puzzleName] = {
         state: this.cloneState(state),
         initialState: this.cloneState(state),
+        checkpointState: null,
         levelIndex,
       };
       if (this.scenePuzzleInitializer(resolved.sceneName, resolved.puzzleName)?.initializer === "current_level") {
+        this.levelCheckpointState = null;
         this.levelIndex = levelIndex;
         this.selectedLevelIndex = levelIndex;
         this.state = this.cloneState(state);
@@ -2419,6 +2793,9 @@
           puzzles[puzzle.name] = {
             state,
             initialState: levelIndex === undefined ? this.neutralState() : this.materializedLevelInitialState(levelIndex),
+            checkpointState: this.levelIndex === levelIndex && this.levelCheckpointState
+              ? this.cloneState(this.levelCheckpointState)
+              : null,
             levelIndex,
           };
         } else if (puzzle.initializer === "level") {
@@ -2429,6 +2806,7 @@
           puzzles[puzzle.name] = {
             state,
             initialState: this.cloneState(state),
+            checkpointState: null,
             levelIndex: index,
           };
         }
@@ -2517,6 +2895,7 @@
             runtime.puzzles[puzzle.name] = {
               state: this.cloneState(this.state),
               initialState,
+              checkpointState: this.levelCheckpointState ? this.cloneState(this.levelCheckpointState) : null,
               levelIndex: this.levelIndex,
             };
           }
@@ -2707,11 +3086,36 @@
 
     parseRuntimeCommand(command) {
       const trimmed = String(command || "").trim();
-      if (trimmed === "back") {
+      if (trimmed === "back" || trimmed === "close") {
         return { kind: "back" };
       }
-      if (trimmed === "clear_history") {
-        return { kind: "clear_history" };
+      if (trimmed === "clear_undo_history" || trimmed === "clear_history") {
+        return { kind: "clear_undo_history" };
+      }
+      if (trimmed === "clear_game_progress") {
+        return { kind: "clear_game_progress" };
+      }
+      if (trimmed === "clear current_level") {
+        return { kind: "clear_current_level" };
+      }
+      if (trimmed === "reset persistent_vars") {
+        return { kind: "reset_persistent_vars" };
+      }
+      const setCurrentLevelMatch = trimmed.match(/^set\s+current_level\s*=\s*(.+)$/);
+      if (setCurrentLevelMatch) {
+        return { kind: "set_current_level", level: this.parseRuntimeExpr(setCurrentLevelMatch[1].trim()) };
+      }
+      const setCurrentLevelClearedMatch = trimmed.match(/^set\s+level\.cleared\s*=\s*(true|false)$/);
+      if (setCurrentLevelClearedMatch) {
+        return { kind: "set_level_cleared", cleared: setCurrentLevelClearedMatch[1] === "true" };
+      }
+      const setLevelClearedMatch = trimmed.match(/^set\s+level\((.+)\)\.cleared\s*=\s*(true|false)$/);
+      if (setLevelClearedMatch) {
+        return {
+          kind: "set_level_cleared",
+          level: this.parseRuntimeExpr(setLevelClearedMatch[1].trim()),
+          cleared: setLevelClearedMatch[2] === "true",
+        };
       }
       const messageMatch = trimmed.match(/^message\s+(.+)$/);
       if (messageMatch) {
@@ -2756,16 +3160,73 @@
       if (continueMatch) {
         return { kind: "continue_level", scope: continueMatch[1] ?? null, scene: continueMatch[2] };
       }
-      const match = trimmed.match(/^(goto|enter|create|reset|delete|show|hide|toggle|focus)\s+([A-Za-z_][A-Za-z0-9_]*)(?:\s+with\s+(.+))?$/);
+      const match = trimmed.match(/^(goto|resume|enter|open|start|create|reset|delete|show|hide|toggle|focus)\s+(.+)$/);
       if (!match) {
         return null;
       }
-      const [, kind, screen, params] = match;
-      const parsedParams = params ? this.parseRuntimeParams(params) : [];
+      let [, kind, targetText] = match;
+      const target = this.parseRuntimeSceneTarget(targetText.trim());
+      if (!target) {
+        return null;
+      }
+      const { screen, params: parsedParams } = target;
       if (["create", "reset", "delete", "show", "hide", "toggle", "focus"].includes(kind) && parsedParams.length) {
         return null;
       }
+      if (kind === "resume") {
+        kind = "goto";
+      } else if (kind === "open") {
+        kind = "enter";
+      } else if (kind === "start") {
+        return {
+          kind: "sequence",
+          effects: [
+            { kind: "reset", screen },
+            { kind: "goto", screen, params: parsedParams },
+          ],
+        };
+      }
       return { kind, screen, params: parsedParams };
+    }
+
+    parseRuntimeSceneTarget(value) {
+      const identifier = /^[A-Za-z_][A-Za-z0-9_]*$/;
+      const withIndex = value.indexOf(" with ");
+      if (withIndex >= 0) {
+        const screen = value.slice(0, withIndex).trim();
+        if (!identifier.test(screen)) {
+          return null;
+        }
+        return {
+          screen,
+          params: this.parseRuntimeParams(value.slice(withIndex + " with ".length).trim()),
+        };
+      }
+      const argsStart = value.indexOf("(");
+      if (argsStart >= 0) {
+        if (!value.endsWith(")")) {
+          return null;
+        }
+        const screen = value.slice(0, argsStart).trim();
+        if (!identifier.test(screen)) {
+          return null;
+        }
+        const args = value.slice(argsStart + 1, -1).trim();
+        if (!args) {
+          return { screen, params: [] };
+        }
+        if (!args.includes("=") && !args.includes(",")) {
+          return {
+            screen,
+            params: [{ name: "level", value: this.parseRuntimeExpr(args) }],
+          };
+        }
+        return { screen, params: this.parseRuntimeParams(args) };
+      }
+      if (!identifier.test(value)) {
+        return null;
+      }
+      return { screen: value, params: [] };
     }
 
     parseWaitMilliseconds(value) {
@@ -2840,6 +3301,81 @@
       }
     }
 
+    clearUndoHistory() {
+      this.undoStack = [];
+      this.redoStack = [];
+    }
+
+    clearGameProgress() {
+      this.clearedLevels = new Array(this.data.levels.length).fill(false);
+      this.selectedLevelIndex = 0;
+      this.restoredLevelIndex = null;
+      this.hasProgressSave = false;
+      this.resetPersistentVars({ write: false });
+      this.clearUndoHistory();
+      try {
+        window.localStorage?.removeItem(this.progressSaveStorageKey());
+      } catch (_error) {
+        // Ignore storage failures; the in-memory progress was already cleared.
+      }
+    }
+
+    clearCurrentLevelProgress() {
+      this.selectedLevelIndex = 0;
+      this.restoredLevelIndex = null;
+      this.writeProgressSave();
+    }
+
+    setCurrentLevelProgress(level, bindings = {}) {
+      const value = this.evalEffectString(level, bindings);
+      const index = this.levelIndexFromValue(value);
+      if (index === undefined) {
+        return;
+      }
+      this.selectedLevelIndex = index;
+      this.restoredLevelIndex = index;
+      this.writeProgressSave();
+    }
+
+    setLevelClearedProgress(level, cleared, bindings = {}) {
+      const index = level === undefined || level === null
+        ? (this.levelIndex ?? this.selectedLevelIndex)
+        : this.levelIndexFromValue(this.evalEffectString(level, bindings));
+      if (index === undefined || index < 0 || index >= this.clearedLevels.length) {
+        return;
+      }
+      this.clearedLevels[index] = cleared === true;
+      this.writeProgressSave();
+    }
+
+    resetPersistentVars(options = {}) {
+      this.persistentVars = this.persistentVarIds.map((varId) => this.persistentVarDefaultValue(varId));
+      this.syncPersistentVarsToStates();
+      if (options.write !== false) {
+        this.writeProgressSave();
+      }
+    }
+
+    resetPersistentVar(name, options = {}) {
+      const varId = this.globalIdsByName.get(name);
+      const index = this.persistentVarIds.indexOf(varId);
+      if (index < 0) {
+        return false;
+      }
+      this.persistentVars[index] = this.persistentVarDefaultValue(varId);
+      this.syncPersistentVarsToStates();
+      if (options.write !== false) {
+        this.writeProgressSave();
+      }
+      return true;
+    }
+
+    persistentVarDefaultValue(varId) {
+      const state = this.data.levels?.[0]?.initialState;
+      const value = state?.globals?.[varId];
+      return Number.isFinite(Number(value)) ? Math.trunc(Number(value)) : 0;
+    }
+
     progressSaveVersion() {
       return Number(this.data.progressSaveVersion || 1);
     }
@@ -2895,6 +3431,7 @@
       if (!save || Number(save.version) !== this.progressSaveVersion() || !Array.isArray(save.levels)) {
         return;
       }
+      this.hasProgressSave = true;
 
       const levelIndexByName = new Map(this.data.levels.map((level, index) => [level.name, index]));
       for (const entry of save.levels) {
@@ -2925,20 +3462,18 @@
     writeProgressSave() {
       try {
         window.localStorage?.setItem(this.progressSaveStorageKey(), JSON.stringify(this.progressSaveData()));
+        this.hasProgressSave = true;
       } catch (_error) {
         // Browsers can deny storage for local files, private windows, or quota limits.
       }
     }
 
+    hasProgressSaveData() {
+      return this.hasProgressSave === true;
+    }
+
     clearProgressSave() {
-      this.clearedLevels = new Array(this.data.levels.length).fill(false);
-      this.persistentVars = new Array(this.persistentVarIds.length).fill(0);
-      this.restoredLevelIndex = null;
-      try {
-        window.localStorage?.removeItem(this.progressSaveStorageKey());
-      } catch (_error) {
-        // Ignore storage failures; the in-memory progress was already cleared.
-      }
+      this.clearGameProgress();
     }
 
     clampLevelIndex(index) {
@@ -2982,9 +3517,15 @@
       const level = this.data.levels[levelIndex];
       const hasNext = this.hasNextLevelInScene(sceneName, levelIndex);
       return {
+        kind: "level",
         index: levelIndex,
+        num: levelIndex + 1,
+        number: levelIndex + 1,
         name: level?.name,
         label: level?.label || level?.name,
+        title: level?.title || level?.label || level?.name,
+        cleared: this.clearedLevels[levelIndex] === true,
+        solved: this.clearedLevels[levelIndex] === true,
         has_next: hasNext,
         last: !hasNext,
       };
@@ -3058,12 +3599,20 @@
     }
 
     levelIndexFromValue(value) {
+      if (this.isLevelRef(value)) {
+        return value.index;
+      }
       if (/^\d+$/.test(String(value))) {
         const index = Number(value);
         return index < this.data.levels.length ? index : undefined;
       }
       const found = this.data.levels.findIndex((level) => level.name === value);
       return found >= 0 ? found : undefined;
+    }
+
+    levelValueFromAtom(value) {
+      const index = this.levelIndexFromValue(value);
+      return index === undefined ? value : this.levelRef(this.focusedScene, index);
     }
 
     splitCommandValue(command) {
@@ -3077,7 +3626,7 @@
     }
 
     cloneState(state) {
-      return {
+      const cloned = {
         width: state.width,
         height: state.height,
         layerCount: state.layerCount,
@@ -3087,6 +3636,45 @@
         globals: [...(state.globals || [])],
         levelFiredRules: [...(state.levelFiredRules || [])],
       };
+      this.setCoreStateHash(cloned, this.coreStateHash(state));
+      return cloned;
+    }
+
+    coreHashKey(value) {
+      if (value === undefined || value === null) {
+        return null;
+      }
+      return String(value);
+    }
+
+    coreStateHash(state) {
+      if (!state || !Object.prototype.hasOwnProperty.call(state, CORE_STATE_HASH_PROPERTY)) {
+        return null;
+      }
+      return this.coreHashKey(state[CORE_STATE_HASH_PROPERTY]);
+    }
+
+    setCoreStateHash(state, hash) {
+      if (!state) {
+        return;
+      }
+      const key = this.coreHashKey(hash);
+      if (key === null) {
+        this.clearCoreStateHash(state);
+        return;
+      }
+      Object.defineProperty(state, CORE_STATE_HASH_PROPERTY, {
+        value: key,
+        enumerable: false,
+        configurable: true,
+        writable: true,
+      });
+    }
+
+    clearCoreStateHash(state) {
+      if (state && Object.prototype.hasOwnProperty.call(state, CORE_STATE_HASH_PROPERTY)) {
+        delete state[CORE_STATE_HASH_PROPERTY];
+      }
     }
 
     neutralState() {
@@ -3144,17 +3732,31 @@
         return;
       }
       state.globals = [...(state.globals || [])];
+      let changed = false;
       this.persistentVarIds.forEach((varId, index) => {
-        state.globals[varId] = this.persistentVars[index] ?? 0;
+        const value = this.persistentVars[index] ?? 0;
+        if (state.globals[varId] !== value) {
+          changed = true;
+          state.globals[varId] = value;
+        }
       });
+      if (changed) {
+        this.clearCoreStateHash(state);
+      }
     }
 
     syncPersistentVarsToStates() {
       this.applyPersistentVars(this.state);
+      if (this.levelCheckpointState) {
+        this.applyPersistentVars(this.levelCheckpointState);
+      }
       for (const runtime of this.sceneStates.values()) {
         for (const puzzle of Object.values(runtime.puzzles || {})) {
           this.applyPersistentVars(puzzle.state);
           this.applyPersistentVars(puzzle.initialState);
+          if (puzzle.checkpointState) {
+            this.applyPersistentVars(puzzle.checkpointState);
+          }
         }
       }
     }
@@ -3227,6 +3829,7 @@
       if (existing) {
         throw this.patchError("layer_occupied", `layer occupied at ${x},${y}`);
       }
+      this.clearCoreStateHash(state);
       state.slots[index] = object;
       if (state.scratch?.[index]?.length) {
         state.scratch[index] = [];
@@ -3242,6 +3845,7 @@
       if (state.slots[index] !== object) {
         throw this.patchError("expected_object", `expected object ${object} at ${x},${y}`);
       }
+      this.clearCoreStateHash(state);
       state.slots[index] = 0;
       if (state.scratch?.[index]?.length) {
         state.scratch[index] = [];
@@ -3255,6 +3859,7 @@
       if (state.slots[fromIndex] !== object) {
         return;
       }
+      this.clearCoreStateHash(state);
       state.slots[fromIndex] = 0;
       state.slots[toIndex] = object;
       const scratch = state.scratch?.[fromIndex] || [];
@@ -3270,6 +3875,7 @@
     setScratch(state, x, y, object, scratch, value) {
       if (!object) {
         const index = this.cellIndex(state, x, y);
+        this.clearCoreStateHash(state);
         state.cellScratch = state.cellScratch || [];
         const attrs = state.cellScratch[index] || [];
         const found = attrs.find((entry) => entry.scratch === scratch);
@@ -3297,6 +3903,7 @@
       if (state.slots[index] !== object) {
         throw this.patchError("expected_object", `expected object ${object} at ${x},${y}`);
       }
+      this.clearCoreStateHash(state);
       state.scratch = state.scratch || [];
       const attrs = state.scratch[index] || [];
       const found = attrs.find((entry) => entry.scratch === scratch);
@@ -3323,6 +3930,7 @@
         if (!attrs.length) {
           return;
         }
+        this.clearCoreStateHash(state);
         state.cellScratch[index] = attrs.filter((entry) => {
           if (entry.scratch !== scratch) {
             return true;
@@ -3346,6 +3954,7 @@
       if (!attrs.length) {
         return;
       }
+      this.clearCoreStateHash(state);
       state.scratch[index] = attrs.filter((entry) => {
         if (entry.scratch !== scratch) {
           return true;
@@ -3358,6 +3967,10 @@
     }
 
     clearScratch(state) {
+      if (state?.cellScratch?.some((attrs) => attrs?.length)
+        || state?.scratch?.some((attrs) => attrs?.length)) {
+        this.clearCoreStateHash(state);
+      }
       state.cellScratch = [];
       state.scratch = [];
     }
@@ -3397,6 +4010,10 @@
         width: state.width,
         height: state.height,
         layerCount: state.layerCount,
+        settings: {
+          animation: this.data.animation || null,
+        },
+        animation: this.data.animation || null,
         screen: this.data.screen,
         regions: this.data.levels[levelIndex]?.regions || [],
         cells,

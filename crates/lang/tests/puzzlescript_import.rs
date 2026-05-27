@@ -1,8 +1,53 @@
 use puzzle_core::{InputId, ObjectId, transition_program, transition_state};
 use puzzle_lang::{
-    SceneComponent, SceneEffect, VisualSpriteKind, parse_game2d as parse_game,
+    LoadedGame, SceneComponent, SceneEffect, VisualSpriteKind, parse_game2d as parse_game,
     translate_puzzlescript_to_canonical,
 };
+
+fn find_choice_by_label<'a>(
+    components: &'a [SceneComponent],
+    label: &str,
+) -> Option<&'a puzzle_lang::SceneButtonDef> {
+    for component in components {
+        match component {
+            SceneComponent::Choice(choice)
+                if choice.label == puzzle_lang::SceneExpr::Text(label.to_string()) =>
+            {
+                return Some(choice);
+            }
+            SceneComponent::Row(container)
+            | SceneComponent::Column(container)
+            | SceneComponent::Box(container) => {
+                if let Some(choice) = find_choice_by_label(&container.children, label) {
+                    return Some(choice);
+                }
+            }
+            SceneComponent::Conditional(conditional) => {
+                if let Some(choice) = find_choice_by_label(&conditional.children, label) {
+                    return Some(choice);
+                }
+                if let Some(choice) = find_choice_by_label(&conditional.else_children, label) {
+                    return Some(choice);
+                }
+            }
+            SceneComponent::For(for_view) => {
+                if let Some(choice) = find_choice_by_label(&for_view.children, label) {
+                    return Some(choice);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn object_id_by_label(loaded: &LoadedGame, label: &str) -> ObjectId {
+    loaded
+        .object_labels
+        .iter()
+        .find_map(|(id, existing)| (existing == label).then_some(*id))
+        .unwrap_or_else(|| panic!("expected object `{label}`"))
+}
 
 #[test]
 fn translates_basic_vanilla_puzzlescript_to_canonical_fixture() {
@@ -17,11 +62,17 @@ fn translates_basic_vanilla_puzzlescript_to_canonical_fixture() {
     assert!(!translated.contains("Player {"));
     assert!(!translated.contains("level imported_1 {"));
     assert!(!translated.contains("-> effect "));
-    assert!(translated.contains("button \"Play\" -> input confirm"));
-    assert!(translated.contains("confirm <- Enter Space x"));
+    assert!(
+        translated.contains(
+            "if game.has_progress_save {\n      choice \"Continue\" -> input continue_game"
+        )
+    );
+    assert!(translated.contains("choice \"New Game\" -> input new_game"));
+    assert!(translated.contains("continue_game <- Enter Space x"));
+    assert!(translated.contains("new_game <- n"));
     assert!(translated.contains("back <- Escape q"));
     assert!(!translated.contains("\n  keys {"));
-    assert!(translated.contains("on_level_clear {\n  next_level\n}"));
+    assert!(translated.contains("on_level_clear {\n  wait 0.3s\n  next_level\n}"));
     assert!(!translated.contains("board.next_level"));
     assert!(!translated.contains("board.level.has_next"));
 }
@@ -42,22 +93,19 @@ fn translated_basic_vanilla_puzzlescript_parses_as_loaded_game() {
         loaded.scenes[0]
             .components
             .iter()
-            .any(|component| matches!(component, SceneComponent::Button(_)))
+            .any(|component| matches!(component, SceneComponent::Choice(_)))
     );
-    let play_button = loaded.scenes[0]
-        .components
-        .iter()
-        .find_map(|component| {
-            if let SceneComponent::Button(button) = component {
-                Some(button)
-            } else {
-                None
-            }
-        })
-        .expect("expected title play button");
+    let continue_button = find_choice_by_label(&loaded.scenes[0].components, "Continue")
+        .expect("expected title continue choice");
     assert_eq!(
-        play_button.effect,
-        SceneEffect::Input("confirm".to_string())
+        continue_button.effect,
+        SceneEffect::Input("continue_game".to_string())
+    );
+    let new_game_button = find_choice_by_label(&loaded.scenes[0].components, "New Game")
+        .expect("expected title new game choice");
+    assert_eq!(
+        new_game_button.effect,
+        SceneEffect::Input("new_game".to_string())
     );
     assert!(loaded.scenes[1].components.iter().any(|component| matches!(
         component,
@@ -81,6 +129,93 @@ fn translated_basic_vanilla_puzzlescript_parses_as_loaded_game() {
         loaded.goal.as_ref().map(|goal| goal.description.as_str()),
         Some("all Target on Crate")
     );
+}
+
+#[test]
+fn puzzlescript_again_interval_lowers_to_canonical_default_again_ms() {
+    let source = r#"
+Again Interval
+again_interval 0.1
+
+OBJECTS
+Player
+red
+
+LEGEND
+P = Player
+
+COLLISIONLAYERS
+Player
+
+RULES
+
+WINCONDITIONS
+some Player
+
+LEVELS
+P
+"#;
+
+    let translated = translate_puzzlescript_to_canonical(source).unwrap();
+    assert!(translated.contains("again_interval = 0.1s"));
+
+    let loaded = parse_game(&translated).unwrap();
+    assert_eq!(loaded.default_again_ms, 100);
+}
+
+#[test]
+fn group_selector_intersection_filters_impossible_same_layer_tuples() {
+    let source = r#"
+title "Group Intersection"
+
+puzzle main {
+layers {
+  floor = Background
+  actor = A B
+  payload = C
+}
+
+group {
+  G = A C
+  H = A B
+}
+
+levels {
+legend {
+  . = empty
+}
+.
+}
+
+rules {
+[ G H ] -> [ ]
+}
+}
+"#;
+
+    let loaded = parse_game(source).unwrap();
+    let a = object_id_by_label(&loaded, "A");
+    let b = object_id_by_label(&loaded, "B");
+    let c = object_id_by_label(&loaded, "C");
+
+    let requirements = loaded
+        .game
+        .rules()
+        .iter()
+        .filter_map(|rule| {
+            rule.pattern
+                .components
+                .first()
+                .and_then(|component| component.cells.first())
+                .map(|cell| cell.require_objects.clone())
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(requirements.len(), 2);
+    assert!(requirements.iter().any(|objects| objects == &[c, a]));
+    assert!(requirements.iter().any(|objects| objects == &[c, b]));
+    assert!(!requirements.iter().any(|objects| objects == &[a]));
+    assert!(!requirements.iter().any(|objects| objects == &[a, b]));
 }
 
 #[test]
@@ -270,30 +405,34 @@ P
 
     let translated = translate_puzzlescript_to_canonical(source).unwrap();
 
-    assert!(translated.contains("button \"Play\" -> input confirm"));
-    assert!(translated.contains("confirm <- Enter Space x"));
     assert!(
         translated.contains(
-            "if input == confirm -> {\n      sfx startgame\n      start levels in playing"
+            "if game.has_progress_save {\n      choice \"Continue\" -> input continue_game"
+        )
+    );
+    assert!(translated.contains("choice \"New Game\" -> input new_game"));
+    assert!(translated.contains("continue_game <- Enter Space x"));
+    assert!(translated.contains("new_game <- n"));
+    assert!(
+        translated
+            .contains("if input == continue_game -> {\n      sfx startgame\n      goto playing")
+    );
+    assert!(
+        translated.contains(
+            "if input == new_game -> {\n      sfx startgame\n      clear_game_progress\n      goto playing(0)"
         )
     );
 
     let loaded = parse_game(&translated).unwrap();
-    let button = loaded.scenes[0]
-        .components
-        .iter()
-        .find_map(|component| {
-            if let SceneComponent::Button(button) = component {
-                Some(button)
-            } else {
-                None
-            }
-        })
-        .expect("expected title play button");
-    assert_eq!(button.effect, SceneEffect::Input("confirm".to_string()));
+    let button = find_choice_by_label(&loaded.scenes[0].components, "Continue")
+        .expect("expected title continue choice");
+    assert_eq!(
+        button.effect,
+        SceneEffect::Input("continue_game".to_string())
+    );
     assert_eq!(
         loaded.scenes[0].key_bindings[0].effect,
-        SceneEffect::Input("confirm".to_string())
+        SceneEffect::Input("continue_game".to_string())
     );
     assert!(loaded.scenes[0].transitions.iter().any(|transition| {
         matches!(
@@ -303,8 +442,24 @@ P
                     effects.as_slice(),
                     [
                         SceneEffect::PlaySfx { name },
-                        SceneEffect::StartLevel { scene, scope: None }
-                    ] if name == "startgame" && scene == "playing"
+                        SceneEffect::Goto { scene, params }
+                    ] if name == "startgame" && scene == "playing" && params.is_empty()
+                )
+        )
+    }));
+    assert!(loaded.scenes[0].transitions.iter().any(|transition| {
+        matches!(
+            &transition.effect,
+            SceneEffect::Sequence(effects)
+                if matches!(
+                    effects.as_slice(),
+                    [
+                        SceneEffect::PlaySfx { name },
+                        SceneEffect::ClearGameProgress,
+                        SceneEffect::Goto { scene, params }
+                    ] if name == "startgame"
+                        && scene == "playing"
+                        && params.len() == 1
                 )
         )
     }));
@@ -547,7 +702,7 @@ P
     let translated = translate_puzzlescript_to_canonical(source).unwrap();
 
     assert!(!translated.contains("win_conditions {"));
-    assert!(translated.contains("on_level_clear {\n  next_level\n}"));
+    assert!(translated.contains("on_level_clear {\n  wait 0.3s\n  next_level\n}"));
     let loaded = parse_game(&translated).unwrap();
     assert!(loaded.level_clear_program.is_some());
 }
@@ -616,12 +771,18 @@ fn translates_official_sumo_demo_with_disconnected_pattern() {
     assert!(translated.contains("[ Player{>} ] [ Sumo ] -> [ Player{>} ] [ Sumo{>} ]"));
     assert!(!translated.contains("win_conditions {"));
     assert!(!translated.contains("-> effect "));
-    assert!(translated.contains("button \"Play\" -> input confirm"));
-    assert!(translated.contains("confirm <- Enter Space x"));
+    assert!(
+        translated.contains(
+            "if game.has_progress_save {\n      choice \"Continue\" -> input continue_game"
+        )
+    );
+    assert!(translated.contains("choice \"New Game\" -> input new_game"));
+    assert!(translated.contains("continue_game <- Enter Space x"));
+    assert!(translated.contains("new_game <- n"));
     assert!(translated.contains("back <- Escape q"));
     assert!(!translated.contains("\n  keys {"));
     assert!(!translated.contains("if board.win_conditions -> {"));
-    assert!(translated.contains("on_level_clear {\n  next_level\n}"));
+    assert!(translated.contains("on_level_clear {\n  wait 0.3s\n  next_level\n}"));
 
     let loaded = parse_game(&translated).unwrap();
     let right = input_named(&loaded, "right");
@@ -643,22 +804,20 @@ fn translates_official_simple_block_sliding_with_groups_and_again_effects() {
     assert!(translated.contains("group {\n  crate = Crate1 Crate2 Crate3"));
     assert!(translated.contains("  1 = Crate1"));
     assert!(translated.contains("  , = nospawn"));
-    assert!(translated.contains("var __ps_again = false"));
-    assert!(translated.contains("repeat until __ps_again == false"));
-    assert!(translated.contains("[ Player{up} ] -> [ Player{up} slideup ] set __ps_again = true"));
-    assert!(translated.contains(
-        "[ slideup ] [ crate{no up} ] -> [ slideup ] [ crate{up} ] set __ps_again = true"
-    ));
+    assert!(!translated.contains("var __ps_again"));
+    assert!(!translated.contains("repeat until __ps_again"));
+    assert!(translated.contains("[ Player{up} ] -> [ Player{up} slideup ] again"));
+    assert!(translated.contains("[ slideup ] [ crate ] -> [ slideup ] [ crate{up} ] again"));
     assert!(translated.contains("[ crate{>} | obs{no directions} ] -> [ crate | obs ]"));
     assert!(
         translated
             .contains("[ Crate1{directions} | Crate1{no directions} ] -> [ Crate1 | Crate1 ]")
     );
     assert!(
-        translated.contains("repeat {\n      [ crate{>} | obs{no directions} ] -> [ crate | obs ]")
+        translated.contains("repeat {\n    [ crate{>} | obs{no directions} ] -> [ crate | obs ]")
     );
-    assert!(translated.contains("    move\n    [ Target crate ] -> [ Target ]"));
-    assert!(!translated.contains(" again"));
+    assert!(translated.contains("  move\n  [ Target crate ] -> [ Target ]"));
+    assert!(translated.contains(" again"));
     assert!(!translated.contains("level imported_"));
     assert!(!translated.contains("\nobjects {"));
     assert!(!translated.contains("late ["));
