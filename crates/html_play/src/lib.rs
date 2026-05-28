@@ -1707,7 +1707,8 @@ fn export_html(state: &ServerState) -> String {
     let standalone_js = escape_script(STANDALONE_JS);
     let embedded_wasm_js = embedded_standalone_core_wasm_script();
     let sound_tools_js = escape_script(&sound_tools_js());
-    let app_js = escape_script(APP_JS);
+    let app_js_source = standalone_host_js(state);
+    let app_js = escape_script(&app_js_source);
 
     INDEX_HTML
         .replace("<title>PuzzleStudio HTML Play</title>", "<title>PuzzleStudio HTML Export</title>")
@@ -1746,6 +1747,58 @@ fn export_html(state: &ServerState) -> String {
             &format!("<script>\n{app_js}\n</script>"),
         )
         .replace("<body>", &format!("<body{body_theme_attributes}>"))
+}
+
+fn standalone_host_js(state: &ServerState) -> String {
+    let mut script = APP_JS.to_string();
+    script = strip_optional_host_blocks(&script, "solver");
+    script = strip_optional_host_blocks(&script, "studio-bridge");
+    script = strip_optional_host_blocks(&script, "scene-editor");
+    if !loaded_uses_puzzle3_frames(&state.loaded) {
+        script = strip_optional_host_blocks(&script, "puzzle3");
+    }
+    remove_optional_host_markers(&script)
+}
+
+fn loaded_uses_puzzle3_frames(loaded: &LoadedGame) -> bool {
+    loaded.scenes.iter().any(|scene| {
+        scene
+            .components
+            .iter()
+            .any(component_contains_puzzle3_frame)
+    })
+}
+
+fn strip_optional_host_blocks(source: &str, name: &str) -> String {
+    let start_marker = format!("/* puzzle-host:optional:{name}:start */");
+    let end_marker = format!("/* puzzle-host:optional:{name}:end */");
+    let mut output = String::with_capacity(source.len());
+    let mut rest = source;
+
+    while let Some(start) = rest.find(&start_marker) {
+        output.push_str(&rest[..start]);
+        let after_start = &rest[start + start_marker.len()..];
+        let Some(end) = after_start.find(&end_marker) else {
+            panic!("missing optional host end marker for {name}");
+        };
+        rest = &after_start[end + end_marker.len()..];
+    }
+
+    if rest.contains(&end_marker) {
+        panic!("missing optional host start marker for {name}");
+    }
+
+    output.push_str(rest);
+    output
+}
+
+fn remove_optional_host_markers(source: &str) -> String {
+    let mut script = source.to_string();
+    for name in ["solver", "studio-bridge", "scene-editor", "puzzle3"] {
+        script = script.replace(&format!("/* puzzle-host:optional:{name}:start */"), "");
+        script = script.replace(&format!("/* puzzle-host:optional:{name}:end */"), "");
+    }
+    script
 }
 
 fn embedded_standalone_wasm_script() -> String {
@@ -7783,6 +7836,16 @@ levels3 default of board {
     }
 
     #[test]
+    fn renderer_gives_dom_fallback_sprites_a_visible_shape() {
+        assert!(RENDERER_JS.contains("sprite fallback-sprite"));
+        assert!(RENDERER_JS.contains("sprite.style.backgroundColor = this.fallbackLayerColor(layer);"));
+        assert!(RENDERER_JS.contains("fallbackLayerColor(layer)"));
+        assert!(RENDERER_JS.contains("context.fillStyle = this.fallbackLayerColor(layer);"));
+        assert!(RENDERER_CSS.contains(".fallback-sprite"));
+        assert!(RENDERER_CSS.contains("inset: 18%;"));
+    }
+
+    #[test]
     fn renderer_consumes_2d_render_grid_settings() {
         let source = r#"
 title grid_render
@@ -8130,7 +8193,7 @@ P
     #[test]
     fn app_forwards_puzzle3_keys_while_busy_so_inputs_can_queue() {
         assert!(APP_JS.contains(
-            "if (!currentState) {\n    return;\n  }\n  broadcastPuzzle3Key(event, \"down\");"
+            "if (!currentState) {\n    return;\n  }\n  /* puzzle-host:optional:puzzle3:start */\n  broadcastPuzzle3Key(event, \"down\");"
         ));
         assert!(
             !APP_JS.contains("if (currentState.busy) {\n    return;\n  }\n  broadcastPuzzle3Key")
@@ -8970,6 +9033,12 @@ scene playing {
         assert!(html.contains("window.PuzzleStandaloneEmbeddedWasm"));
         assert!(html.contains("\\\"defaultAgainMs\\\":90"));
         assert!(html.contains("WasmCoreRuntime"));
+        assert!(!html.contains("PuzzleStudioSolve"));
+        assert!(!html.contains("PuzzleStudioPreviewState"));
+        assert!(!html.contains("PuzzleStudioScenePreview"));
+        assert!(!html.contains("loadWasmSolver"));
+        assert!(!html.contains("renderPuzzle3Frame"));
+        assert!(!html.contains("Puzzle3DFrameAssets"));
         assert!(STANDALONE_JS.contains("coreTransitionProgramOutcome("));
         assert!(STANDALONE_JS.contains("transition_program_outcome("));
     }
