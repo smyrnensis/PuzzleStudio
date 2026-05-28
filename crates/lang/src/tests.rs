@@ -1160,10 +1160,7 @@ fn top_level_animation_tween_parses_to_game_settings() {
         r#"
 title tween_fixture
 animation {
-tween {
-enabled = true
-interval = 90ms
-}
+tween duration=90ms
 }
 
 puzzle main {
@@ -1191,14 +1188,44 @@ P
 }
 
 #[test]
+fn animation_tween_rejects_old_enabled_assignment() {
+    let source = r#"
+title tween_fixture
+animation {
+tween {
+enabled = true
+}
+}
+
+puzzle main {
+layers {
+actor = Player
+}
+rules {
+
+}
+levels {
+legend {
+. = empty
+P = Player
+}
+level first
+P
+}
+}
+"#;
+
+    assert!(parse_game(source).is_err());
+}
+
+#[test]
 fn animation_tween_adds_move_animation_emission_without_sounds() {
     let loaded = parse_game(
         r#"
 title tween_emission_fixture
 animation {
 tween {
-enabled = true
-interval = 80ms
+duration = 80ms
 }
 }
 
@@ -2700,6 +2727,41 @@ index on
 "#;
     let error = parse_game(source).unwrap_err().to_string();
     assert!(error.contains("unknown scene directive index"));
+}
+
+#[test]
+fn level_menu_rejects_inline_source_and_effect() {
+    let source = r#"
+title old_level_menu_inline
+
+puzzle sokoban {
+layers {
+actor = Player
+}
+legend {
+. = empty
+P = Player
+}
+rules {
+
+[ Player ] -> [ Player ]
+}
+}
+
+levels microban of sokoban {
+level start {
+P
+}
+}
+
+scene level_select {
+view {
+level_menu microban -> goto playing(level)
+}
+}
+"#;
+    let error = parse_game(source).unwrap_err().to_string();
+    assert!(error.contains("level_menu takes no inline source or effect"));
 }
 
 #[test]
@@ -6298,6 +6360,37 @@ level start
 }
 
 #[test]
+fn input_prefix_without_set_is_directions_sugar() {
+    let source = r#"
+title input_directions_sugar
+
+puzzle default {
+objects {
+layer {
+Player P
+}
+}
+legend {
+. = empty
+}
+rules {
+once input [ Player | ] -> [ | Player ]
+}
+levels {
+level start
+.P.
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    let right = *loaded.controls.keys.get(&b'd').unwrap();
+    let moved = transition_state(&loaded.game, &loaded.levels[0].initial_state, right).unwrap();
+    let player = object_named(&loaded, "Player");
+
+    assert!(moved.has_object(&loaded.game, 2, 0, player));
+}
+
+#[test]
 fn input_directions_query_pattern_adds_input_guard_and_expands_orientation() {
     let source = r#"
 title input_directions_query
@@ -6336,6 +6429,46 @@ P#D
     let open_door = object_named(&loaded, "OpenDoor");
 
     assert!(moved_up.has_object(&loaded.game, 2, 0, door));
+    assert!(moved_right.has_object(&loaded.game, 2, 0, open_door));
+}
+
+#[test]
+fn input_query_pattern_without_set_is_directions_sugar() {
+    let source = r#"
+title input_query_directions_sugar
+
+puzzle default {
+objects {
+layer {
+Player P
+Wall #
+Door D
+OpenDoor O
+}
+}
+legend {
+. = empty
+}
+rules {
+if some(input [ Player | Wall ]) {
+once [ Door ] -> [ OpenDoor ]
+}
+}
+levels {
+level start
+P#D
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    let up = *loaded.controls.keys.get(&b'w').unwrap();
+    let right = *loaded.controls.keys.get(&b'd').unwrap();
+    let moved_up = transition_state(&loaded.game, &loaded.levels[0].initial_state, up).unwrap();
+    let moved_right =
+        transition_state(&loaded.game, &loaded.levels[0].initial_state, right).unwrap();
+    let open_door = object_named(&loaded, "OpenDoor");
+
+    assert!(!moved_up.has_object(&loaded.game, 2, 0, open_door));
     assert!(moved_right.has_object(&loaded.game, 2, 0, open_door));
 }
 
@@ -8998,10 +9131,7 @@ layers 1
 empty .
 
 render {
-grid {
-occupied_cells = true
-all_cells = true
-}
+grid occupied_cells all_cells
 }
 
 rules {
@@ -9017,6 +9147,34 @@ level start {
 
     assert!(loaded.render.grid.occupied_cells);
     assert!(loaded.render.grid.all_cells);
+}
+
+#[test]
+fn puzzle_render_rejects_old_boolean_grid_assignments() {
+    let source = r#"
+title grid_render
+
+puzzle default {
+layers 1
+empty .
+
+render {
+grid {
+occupied_cells = true
+}
+}
+
+rules {
+
+}
+
+level start {
+.
+}
+}
+"#;
+
+    assert!(parse_game(source).is_err());
 }
 
 #[test]
@@ -12106,14 +12264,110 @@ fn spec_3d_exports_playable_puzzle_scene() {
 
     assert!(fixture_json.contains("\"currentScene\": \"title\""));
     assert!(fixture_json.contains("\"name\": \"sokoban\""));
-    assert!(fixture_json.contains("\"slot\": \"board\""));
+    assert!(fixture_json.contains("\"slot\": \"sokoban\""));
     assert!(fixture_json.contains("\"model\": \"sokoban\""));
     assert!(fixture_json.contains("\"kind\": \"puzzle3\""));
-    assert!(fixture_json.contains("\"source\": \"board\""));
+    assert!(fixture_json.contains("\"source\": \"sokoban\""));
     assert!(fixture_json.contains("\"kind\": \"for\""));
     assert!(fixture_json.contains("\"scroll\": true"));
-    assert!(fixture_json.contains("\"microban\": [0, 1, 2]"));
+    assert!(fixture_json.contains("\"levels\": [0, 1, 2]"));
     assert!(!fixture_json.contains("\"kind\": \"level_menu\""));
+}
+
+#[test]
+fn scene_state_implicit_puzzle_slots_resolve_against_model_kind() {
+    let document = super::parse_game(
+        r#"
+title Implicit Slots
+
+puzzle flat {
+layers 1
+empty .
+object Player 0
+rules {
+}
+}
+
+levels flat_levels of flat {
+legend P = Player
+level start {
+P
+}
+}
+
+puzzle3 cube {
+layers {
+actor = Player
+}
+rules {
+}
+}
+
+levels3 cube_levels of cube {
+legend {
+P = Player
+}
+level start {
+P
+}
+}
+
+scene flat_play {
+state {
+flat
+}
+view {
+puzzle flat
+}
+}
+
+scene cube_play {
+state {
+puzzle3 cube
+}
+view {
+puzzle3 cube
+}
+}
+"#,
+    )
+    .unwrap();
+
+    let flat_play = document
+        .scenes
+        .iter()
+        .find(|scene| scene.name == "flat_play")
+        .unwrap();
+    assert!(matches!(
+        flat_play.state.puzzles.as_slice(),
+        [flat]
+            if flat.name == "flat"
+                && flat.kind == "puzzle"
+                && flat.model == "flat"
+    ));
+    let cube_play = document
+        .scenes
+        .iter()
+        .find(|scene| scene.name == "cube_play")
+        .unwrap();
+    assert!(matches!(
+        cube_play.state.puzzles.as_slice(),
+        [cube]
+            if cube.name == "cube"
+                && cube.kind == "puzzle3"
+                && cube.model == "cube"
+    ));
+    assert!(document.scenes.iter().any(|scene| {
+        scene.name == "cube"
+            && matches!(
+                scene.state.puzzles.as_slice(),
+                [puzzle] if puzzle.name == "cube" && puzzle.kind == "puzzle3" && puzzle.model == "cube"
+            )
+            && matches!(
+                scene.components.as_slice(),
+                [SceneComponent::Frame(frame)] if frame.kind == "puzzle3" && frame.source == "cube"
+            )
+    }));
 }
 
 #[test]

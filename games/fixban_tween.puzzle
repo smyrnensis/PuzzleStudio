@@ -6,8 +6,7 @@ default_wait_time = 100ms
 
 animation {
 	tween {
-		enabled = true
-		interval = 160ms
+		duration = 160ms
 	}
 }
 
@@ -428,7 +427,7 @@ scene menu {
 scene level_select {
 	view {
 		text "Select a level"
-		level_menu fixban -> goto playing(level)
+		level_menu
 		button "Back" -> goto title
 	}
 	inputs {

@@ -1,13 +1,18 @@
 # Agent Notes
 
-This file gives working rules for agents changing this repository.
+This file gives repository-wide rules for agents changing this project.
 Read `DESIGN_PRINCIPLES.md` for the project philosophy and `AGENT_HANDOFF.md`
-for the current implementation map.
+for the general implementation map before making changes.
+
+For area-specific rules, read the nearest `AGENTS.md` in the directory you are
+about to change. Root docs intentionally stay general; crate-, adapter-, sample-,
+and generated-artifact-specific guidance belongs beside the owner folder.
 
 ## Read First And Stay Honest
 
 Before changing this repository, read this file, `DESIGN_PRINCIPLES.md`, and
-`AGENT_HANDOFF.md`. Do not claim to have read or verified something unless you
+`AGENT_HANDOFF.md`. Then read the closest owner-specific `AGENTS.md` for the
+files you will touch. Do not claim to have read or verified something unless you
 actually did.
 
 Be explicit about capability and uncertainty:
@@ -26,10 +31,49 @@ behavior you are about to make true when the request could be interpreted in
 multiple ways, especially for syntax, lifecycle behavior, UI defaults, and
 cross-crate boundaries.
 
+## Context Budget And Repository Shape
+
+Before reading broad file contents, get a cheap shape of the repository. Prefer
+counts and sizes first:
+
+```bash
+git status --short
+find . \( -path ./.git -o -path ./target -o -path '*/target' \) -prune -o -type f -print | wc -l
+du -sh . .git target 2>/dev/null
+find . -maxdepth 2 \( -path ./.git -o -path ./target \) -prune -o -type d -print | sort
+```
+
+Treat repository size as a context-selection problem, not a signal to read more.
+The largest paths are usually generated artifacts, build output, or history.
+Do not inspect them unless the task specifically requires the generated result,
+binary artifact, or build cache.
+
+Default read order for implementation work:
+
+1. Root `AGENTS.md`, `DESIGN_PRINCIPLES.md`, and `AGENT_HANDOFF.md`.
+2. The nearest owner-specific `AGENTS.md`.
+3. The smallest owner crate, adapter, or content folder named by the task.
+4. Tests, fixtures, or sample `.puzzle` files that directly exercise that owner.
+5. Generated exports only after identifying their source owner and reading that
+   owner's guidance.
+
+Default skip list for context gathering:
+
+- version-control internals
+- build output directories
+- generated standalone exports
+- generated documentation exports
+- generated WebAssembly binaries
+- legacy archives, unless the task is about legacy samples or import behavior
+
+When a generated file looks relevant, first find the source that owns it instead
+of reading or patching the generated output. Owner-specific generated-artifact
+rules live in the corresponding folder `AGENTS.md`.
+
 ## Diagnose Briefly, Then Act
 
-Do not patch only the visible symptom. Before adding a prohibition, syntax
-case, runtime default, or UI shortcut, do a short cause check:
+Do not patch only the visible symptom. Before adding a prohibition, syntax case,
+runtime default, or UI shortcut, do a short cause check:
 
 - Treat the symptom as evidence. Ask what missing distinction, ownership
   boundary, validation gap, or feedback loop let the bad state look acceptable.
@@ -42,27 +86,24 @@ case, runtime default, or UI shortcut, do a short cause check:
 - Deduce one or two concrete consequences, then return to implementation. Do
   not keep abstracting once the next scoped action is clear.
 
-The goal is better aim, not slower motion. Use abstraction only until it
-changes what you will do next.
+The goal is better aim, not slower motion. Use abstraction only until it changes
+what you will do next.
 
 ## Boundary Discipline
 
-Many bugs in this project come from putting a useful default in the wrong
-scope. Before adding syntax, runtime behavior, or UI convenience, identify the
-owner of the behavior.
+Many bugs in this project come from putting a useful default in the wrong scope.
+Before adding syntax, runtime behavior, or UI convenience, identify the owner of
+the behavior.
 
-- Generic constructs must stay generic. `for level in levels` is a data loop,
-  not a level-select menu. It must not gain cursor movement, confirm behavior,
-  or screen-level shortcuts merely because its source is `levels`.
-- Component-specific behavior belongs to the component. A `level_menu` may own
-  selected-level state, next/previous movement, confirm, and its default start
-  behavior. Those defaults should not leak into `screen`, `for`, or unrelated
-  action handling.
+- Generic constructs must stay generic. They must not gain behavior merely
+  because one current use happens to be a menu, level list, editor affordance, or
+  adapter shortcut.
+- Component-specific behavior belongs to the component. Defaults should not leak
+  into screens, generic loops, or unrelated action handling.
 - Screen behavior belongs to the screen only when it is truly screen-wide:
   navigation, entering/leaving screens, modal flow, and explicit transitions.
-- Engine lifecycle behavior belongs to the puzzle/game lifecycle. For example,
-  `on_level_start` should initialize a raw level into its starting state; it
-  should not be modeled as a fake player input.
+- Engine lifecycle behavior belongs to the puzzle/game lifecycle. Lifecycle
+  setup should not be modeled as a fake player input.
 
 When a feature feels convenient, ask: "Would this behavior still be correct if
 the same syntax appeared in a different component or screen?" If not, the
@@ -75,89 +116,50 @@ owned by the smallest construct that can explain them.
 
 Good defaults:
 
-- `level_menu` can work with no configuration because it is explicitly a
-  levels-specific widget.
-- `on_level_start` can run once per level because the event name states the
-  lifecycle point.
-- Cardinal directions can be inferred because `up` / `down` / `left` / `right`
-  are standard semantic inputs with built-in direction mappings.
+- A domain-specific component can work with no configuration when its purpose
+  explicitly owns the default behavior.
+- A scoped lifecycle handler can run at the lifecycle point named by the event.
+- Standard semantic inputs can have built-in meanings when those meanings are
+  stable across the project.
 
 Bad defaults:
 
-- Any `for level in levels` loop automatically becoming navigable.
-- `menu_up`, `menu_down`, or `confirm` being globally meaningful because a
-  screen happens to render levels.
-- A setup rule running through puzzle `rules` with a sentinel input such as
-  `InputId(0)`.
+- A generic loop or container automatically becoming an interactive widget.
+- A semantic action becoming globally meaningful because one screen happens to
+  render content that can use it.
+- Runtime setup running through gameplay rules via a sentinel or fake input.
 
 ## Reserved Words And Surface Syntax
 
 Keep reserved words scarce. Prefer author-chosen action names and explicit
-payload bindings over special words such as `selected` or `start_level`.
+payload bindings over special words tied to one widget or adapter.
 
-For example, prefer a component emitting an ordinary action with a payload:
-
-```txt
-level_menu {
-action choose_level
-}
-
-transitions {
-choose_level:level -> goto playing with level = level
-}
-```
-
-over a menu-specific command language:
-
-```txt
-on confirm start_level selected
-```
-
-Use `on_*` only for scoped lifecycle handlers. The scope must determine what
-the event means:
-
-- `puzzle { on_level_start { ... } }` is a puzzle lifecycle event.
-- `level_menu { on_choose -> ... }`, if added, is a component event.
-
-Do not make `on` a grab bag for unrelated command shortcuts.
+Use `on_*` only for scoped lifecycle handlers. The scope must determine what the
+event means. Do not make `on` a grab bag for unrelated command shortcuts.
 
 ## Generated Artifacts
 
-Root `editor.html` is a generated artifact and must never be edited directly.
-Do not patch it with `apply_patch`, scripts, search-and-replace, or manual
-HTML/JS/CSS edits. Direct edits to root `editor.html` hide the real owner of the
-behavior and make the generated file diverge from its sources.
+Generated artifacts must not be edited directly. Patch the source owner and
+regenerate through the normal command only when regeneration is explicitly
+intended. Before regenerating a tracked generated artifact, check whether the
+output path is dirty and avoid overwriting unrelated user work without clear
+intent.
 
-If editor behavior, layout, styling, preview behavior, embedded runtime
-behavior, seed data, or exported assets need to change, edit the source owner
-instead, such as `crates/html_editor/static/*`, `crates/html_play/static/*`,
-Rust export code, the relevant `.puzzle` input, or another documented generator
-input. Then regenerate `editor.html` through the normal export command.
-
-Before regenerating a tracked generated artifact such as `editor.html`, run a
-targeted status check such as:
-
-```bash
-git status --short -- editor.html
-```
-
-If the output path is dirty, treat those changes as generated output that may be
-replaced by regeneration, not as a place to apply follow-up edits. When user
-intent is not already clear, tell the user that regeneration will replace the
-current generated output and ask before running it. If the user has explicitly
-asked to regenerate or approved regeneration, regenerate the file instead of
-editing it directly.
+Generated-artifact details, including which paths are generated and which source
+folders own them, belong in the nearest folder-specific `AGENTS.md`.
 
 ## Layer Separation
 
 Preserve the major package boundaries:
 
-- `puzzle-core`: deterministic state, rules, patches, transitions. No file IO,
-  parser concerns, rendering, or game-specific UI behavior.
-- `puzzle-lang`: `.puzzle` parsing, validation, authoring syntax, and lowering.
-- `puzzle-play`: session mechanics such as undo, restart, level advance, screen
-  flow, and component behavior.
-- `html-play`, `ascii-play`, editors: adapters and presentation.
+- deterministic state and transition logic own no file IO, parser concerns,
+  rendering, or game-specific UI behavior.
+- language processing owns `.puzzle` parsing, validation, authoring syntax, and
+  lowering.
+- play/session logic owns undo, restart, level advance, screen flow, and
+  component behavior.
+- adapters and editors own presentation, host IO, browser/terminal behavior, and
+  export surfaces.
 
-If a behavior is duplicated in Rust runtime and standalone JavaScript, update
-both or explicitly document why one side is intentionally different.
+If a behavior is duplicated across runtime/adapters, update each owned copy or
+explicitly document why one side is intentionally different.

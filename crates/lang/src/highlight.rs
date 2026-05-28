@@ -4,6 +4,7 @@ use crate::semantic::{SemanticKind, SemanticToken, semantic_tokens};
 use crate::source::{
     SourceScope, SourceSectionPart, scan_source_context, split_tokens, strip_line_comment,
 };
+use crate::syntax::is_parser_keyword;
 use crate::{
     LoadedDocumentModel, RewriteEffectCommandSyntax, is_visual_color_token,
     rewrite_effect_command_syntax, scene_effect_command_syntax, visual_color_token_for_index,
@@ -948,6 +949,7 @@ fn highlight_kind_for_semantic(kind: SemanticKind) -> HighlightKind {
         SemanticKind::Query => HighlightKind::Query,
         SemanticKind::Scene => HighlightKind::Scene,
         SemanticKind::Asset => HighlightKind::Asset,
+        SemanticKind::Option => HighlightKind::Keyword,
         SemanticKind::Number => HighlightKind::Number,
         SemanticKind::String => HighlightKind::String,
     }
@@ -1354,107 +1356,7 @@ fn opens_local_scope(first: &str, trimmed: &str) -> bool {
 // Parser-owned surface vocabulary. The browser editor consumes highlighted HTML
 // from this crate instead of carrying an independent .puzzle grammar table.
 fn parser_keyword(token: &str) -> bool {
-    matches!(
-        token,
-        "assets"
-            | "align"
-            | "author"
-            | "sounds"
-            | "button"
-            | "camera"
-            | "column"
-            | "component_effect"
-            | "const"
-            | "colors"
-            | "collision_layers"
-            | "css"
-            | "direction"
-            | "default_wait_time"
-            | "again_interval"
-            | "display"
-            | "effect"
-            | "each"
-            | "else"
-            | "end"
-            | "flickscreen"
-            | "for"
-            | "gap"
-            | "screen_focus"
-            | "from"
-            | "grid"
-            | "homepage"
-            | "puzzle"
-            | "group"
-            | "groups"
-            | "if"
-            | "in"
-            | "import"
-            | "input"
-            | "inputs"
-            | "interactive_look"
-            | "interactive_zoom"
-            | "keys"
-            | "layer"
-            | "layers"
-            | "legend"
-            | "level"
-            | "level_menu"
-            | "levels"
-            | "levels3"
-            | "lose_conditions"
-            | "map"
-            | "menu"
-            | "music"
-            | "name"
-            | "objects"
-            | "occupied_cells"
-            | "on"
-            | "on_display"
-            | "on_level_clear"
-            | "on_level_start"
-            | "on_scene_start"
-            | "of"
-            | "once"
-            | "once_all"
-            | "once_per_level"
-            | "box"
-            | "persistent"
-            | "pitch"
-            | "puzzle3"
-            | "query"
-            | "region"
-            | "repeat"
-            | "resources"
-            | "render"
-            | "row"
-            | "routine"
-            | "rule"
-            | "rules"
-            | "scene"
-            | "script"
-            | "scratch"
-            | "sfx"
-            | "shape"
-            | "show_index"
-            | "show_solved"
-            | "size"
-            | "sprite"
-            | "sprites"
-            | "sprites3"
-            | "state"
-            | "tags"
-            | "subtitle"
-            | "text"
-            | "theme"
-            | "title"
-            | "var"
-            | "view"
-            | "win_conditions"
-            | "with"
-            | "yaw"
-            | "zoom"
-            | "zoomscreen"
-    )
+    is_parser_keyword(token)
 }
 
 fn parser_literal(token: &str) -> bool {
@@ -1681,6 +1583,7 @@ fn escape_char_into(out: &mut String, ch: char) {
 #[cfg(test)]
 mod tests {
     use super::highlight_source;
+    use crate::syntax::PUZZLE_LIFECYCLE_BLOCKS;
 
     #[test]
     fn highlights_parser_symbols_from_a_valid_game() {
@@ -1712,6 +1615,111 @@ P
         assert!(highlighted.html.contains("syntax-keyword\">puzzle"));
         assert!(highlighted.html.contains("syntax-object\">Player"));
         assert!(highlighted.html.contains("syntax-arrow\">-&gt;</span>"));
+    }
+
+    #[test]
+    fn highlights_all_puzzle_lifecycle_blocks_from_shared_syntax() {
+        let source = r#"
+title lifecycle_highlight
+
+puzzle board {
+layers {
+actor = Player
+}
+rules {
+once [ Player ] -> [ Player ]
+}
+on_level_start {
+}
+on_level_clear {
+}
+on_last_level_clear {
+}
+}
+
+levels {
+legend {
+. = empty
+P = Player
+}
+level start
+P
+}
+"#;
+        let highlighted = highlight_source(source);
+
+        assert!(highlighted.parsed);
+        for keyword in PUZZLE_LIFECYCLE_BLOCKS {
+            assert!(
+                highlighted
+                    .html
+                    .contains(&format!("syntax-keyword\">{keyword}")),
+                "missing lifecycle highlight {keyword}"
+            );
+        }
+    }
+
+    #[test]
+    fn highlights_3d_render_option_names() {
+        let highlighted = highlight_source(
+            r#"
+title highlight_3d_render_options
+puzzle3 board {
+layers {
+actor
+}
+objects {
+Player actor
+}
+render {
+camera {
+yaw = 15
+interactive_look
+}
+}
+rules {
+}
+}
+"#,
+        );
+
+        assert!(highlighted.html.contains("syntax-keyword\">camera"));
+        assert!(highlighted.html.contains("syntax-keyword\">yaw"));
+        assert!(
+            highlighted
+                .html
+                .contains("syntax-keyword\">interactive_look")
+        );
+    }
+
+    #[test]
+    fn highlights_contextual_option_names() {
+        let highlighted = highlight_source(
+            r#"
+title highlight_contextual_options
+sounds {
+sfx click seed=click01
+music bgm tone=0.7
+}
+animation {
+tween {
+duration 90ms
+}
+}
+scene menu {
+view {
+level_menu {
+show_index = true
+}
+}
+}
+"#,
+        );
+
+        assert!(highlighted.html.contains("syntax-keyword\">seed"));
+        assert!(highlighted.html.contains("syntax-keyword\">tone"));
+        assert!(highlighted.html.contains("syntax-keyword\">duration"));
+        assert!(highlighted.html.contains("syntax-keyword\">show_index"));
     }
 
     #[test]

@@ -264,26 +264,33 @@ function renderSprite3dPalette() {
         }
         return;
       }
-      updateSelectedSprite3dColor(parsed);
+      updateSelectedSprite3dColor(parsed, {
+        deferHistory: !options.commitHistory,
+        commitHistory: Boolean(options.commitHistory),
+      });
     };
     let pendingEditMenu = null;
     if (!selectedIsTransparent) {
       currentButton.addEventListener("click", () => {
-        sprite3d.editPaletteOpen = !sprite3d.editPaletteOpen;
+        const opening = !sprite3d.editPaletteOpen;
+        if (!opening) {
+          commitSpriteColorEditHistory("sprite3d");
+        }
+        sprite3d.editPaletteOpen = opening;
         sprite3d.addPaletteOpen = false;
         sprite3d.addDraftColorIndex = null;
-        sprite3d.customColorOpen = true;
+        sprite3d.customColorOpen = opening;
         renderSprite3dPalette();
       });
       currentHexInput.addEventListener("input", () => applyCurrentHex());
-      currentHexInput.addEventListener("change", () => applyCurrentHex({ reportError: true }));
+      currentHexInput.addEventListener("change", () => applyCurrentHex({ reportError: true, commitHistory: true }));
       currentHexInput.addEventListener("keydown", (event) => {
         event.stopPropagation();
         if (event.key !== "Enter") {
           return;
         }
         event.preventDefault();
-        applyCurrentHex({ reportError: true });
+        applyCurrentHex({ reportError: true, commitHistory: true });
       });
     }
     currentWrap.append(currentButton, currentHexInput);
@@ -353,11 +360,11 @@ function renderSprite3dPalette() {
     colorInput.setAttribute("aria-label", `Edit 3D sprite color ${index + 1}`);
     colorInput.addEventListener("input", () => {
       sprite3d.selectedColorIndex = index;
-      updateSelectedSprite3dColor(colorInput.value);
+      updateSelectedSprite3dColor(colorInput.value, { deferHistory: true });
     });
     colorInput.addEventListener("change", () => {
       sprite3d.selectedColorIndex = index;
-      updateSelectedSprite3dColor(colorInput.value);
+      updateSelectedSprite3dColor(colorInput.value, { commitHistory: true });
     });
     item.append(colorInput);
     paletteGrid.append(item);
@@ -1245,6 +1252,7 @@ function sprite3dVoxelKey(x, y, z) {
 }
 
 function selectSprite3dColor(index) {
+  commitSpriteColorEditHistory("sprite3d");
   sprite3d.selectedColorIndex = validSprite3dColorIndex(index) ? index : null;
   sprite3d.addPaletteOpen = false;
   sprite3d.editPaletteOpen = false;
@@ -1254,6 +1262,7 @@ function selectSprite3dColor(index) {
 }
 
 function addSprite3dColor() {
+  commitSpriteColorEditHistory("sprite3d");
   const before = visualEditSnapshot("sprite3d");
   const draftIndex = validSprite3dColorIndex(sprite3d.addDraftColorIndex) ? sprite3d.addDraftColorIndex : null;
   if (draftIndex === null && sprite3dPaletteEntries().length >= SPRITE_COLOR_TOKENS.length) {
@@ -1275,6 +1284,7 @@ function addSprite3dColor() {
 }
 
 function toggleSprite3dAddPalette() {
+  commitSpriteColorEditHistory("sprite3d");
   const before = visualEditSnapshot("sprite3d");
   const opening = !sprite3d.addPaletteOpen;
   if (opening && sprite3dPaletteEntries().length >= SPRITE_COLOR_TOKENS.length) {
@@ -1300,7 +1310,10 @@ function toggleSprite3dAddPalette() {
 }
 
 function previewNewSprite3dColor(color, options = {}) {
-  const before = visualEditSnapshot("sprite3d");
+  const before = options.deferHistory ? null : visualEditSnapshot("sprite3d");
+  if (options.deferHistory) {
+    beginSpriteColorEditHistory("sprite3d");
+  }
   if (!validSprite3dColorIndex(sprite3d.addDraftColorIndex) && sprite3dPaletteEntries().length >= SPRITE_COLOR_TOKENS.length) {
     return;
   }
@@ -1321,11 +1334,17 @@ function previewNewSprite3dColor(color, options = {}) {
     sprite3d.addDraftColorIndex = null;
     renderSprite3dBuilder();
   }
+  if (options.deferHistory) {
+    return;
+  }
   pushVisualEditUndoSnapshot("sprite3d", before);
 }
 
 function updateSelectedSprite3dColor(value, options = {}) {
-  const before = visualEditSnapshot("sprite3d");
+  const before = options.deferHistory || options.commitHistory ? null : visualEditSnapshot("sprite3d");
+  if (options.deferHistory || options.commitHistory) {
+    beginSpriteColorEditHistory("sprite3d");
+  }
   if (!validSprite3dColorIndex(sprite3d.selectedColorIndex)) {
     sprite3d.selectedColorIndex = 0;
   }
@@ -1339,14 +1358,26 @@ function updateSelectedSprite3dColor(value, options = {}) {
     sprite3d.customColorOpen = false;
     sprite3d.addDraftColorIndex = null;
     renderSprite3dBuilder();
-    pushVisualEditUndoSnapshot("sprite3d", before);
+    if (options.deferHistory || options.commitHistory) {
+      commitSpriteColorEditHistory("sprite3d");
+    } else {
+      pushVisualEditUndoSnapshot("sprite3d", before);
+    }
     return;
   }
   renderSprite3dColorSurfaces();
+  if (options.deferHistory) {
+    return;
+  }
+  if (options.commitHistory) {
+    commitSpriteColorEditHistory("sprite3d");
+    return;
+  }
   pushVisualEditUndoSnapshot("sprite3d", before);
 }
 
 function closeSprite3dColorEditor() {
+  commitSpriteColorEditHistory("sprite3d");
   sprite3d.addPaletteOpen = false;
   sprite3d.editPaletteOpen = false;
   sprite3d.customColorOpen = false;
@@ -1355,6 +1386,7 @@ function closeSprite3dColorEditor() {
 }
 
 function cancelSprite3dColorAdd() {
+  discardSpriteColorEditHistory("sprite3d");
   const before = visualEditSnapshot("sprite3d");
   if (validSprite3dColorIndex(sprite3d.addDraftColorIndex)) {
     removeSprite3dPaletteColor(sprite3d.addDraftColorIndex);
@@ -1368,6 +1400,7 @@ function cancelSprite3dColorAdd() {
 }
 
 function removeSprite3dColor() {
+  commitSpriteColorEditHistory("sprite3d");
   const before = visualEditSnapshot("sprite3d");
   const deletedIndex = sprite3d.selectedColorIndex;
   const palette = sprite3dPaletteEntries();
@@ -2327,11 +2360,7 @@ function insertSprite3dDefinition(source) {
 }
 
 function replaceSprite3dDefinition(source) {
-  const block = findSprites3dBlock(source);
-  if (!block) {
-    return null;
-  }
-  const entry = findSprite3dDefinitionBlock(source, block, sprite3dObjectName());
+  const entry = findSprite3dDefinitionByName(source, sprite3dObjectName());
   if (!entry) {
     return null;
   }
@@ -2421,34 +2450,55 @@ function applyLoadedSprite3d(name, loaded) {
 }
 
 function findSprites3dBlock(source) {
-  const pattern = /(^|\n)([\t ]*)sprites3(?:\s+[^\n{]+)?\s*\{/m;
-  const match = pattern.exec(source);
-  if (!match) {
-    return null;
+  return findSprites3dBlocks(source)[0] || null;
+}
+
+function findSprites3dBlocks(source) {
+  const pattern = /(^|\n)([\t ]*)sprites3(?:\s+[^\n{]+)?\s*\{/gm;
+  const blocks = [];
+  let match = null;
+  while ((match = pattern.exec(source))) {
+    const start = match.index + match[1].length;
+    const openIndex = source.indexOf("{", start);
+    const closeIndex = findMatchingBrace(source, openIndex);
+    if (openIndex < 0 || closeIndex < 0) {
+      continue;
+    }
+    blocks.push({
+      start,
+      openIndex,
+      closeIndex,
+      indent: match[2] || "",
+      bodyStart: openIndex + 1,
+      bodyEnd: closeIndex,
+    });
+    pattern.lastIndex = closeIndex + 1;
   }
-  const start = match.index + match[1].length;
-  const openIndex = source.indexOf("{", start);
-  const closeIndex = findMatchingBrace(source, openIndex);
-  if (openIndex < 0 || closeIndex < 0) {
-    return null;
-  }
-  return {
-    start,
-    openIndex,
-    closeIndex,
-    indent: match[2] || "",
-    bodyStart: openIndex + 1,
-    bodyEnd: closeIndex,
-  };
+  return blocks;
 }
 
 function findSprite3dDefinitionAtPosition(source, position) {
-  const block = findSprites3dBlock(source);
-  if (!block || position < block.bodyStart || position > block.bodyEnd) {
-    return null;
+  for (const block of findSprites3dBlocks(source)) {
+    if (position < block.bodyStart || position > block.bodyEnd) {
+      continue;
+    }
+    const entry = findSprite3dDefinitions(source, block)
+      .find((candidate) => position >= candidate.start && position <= candidate.end);
+    if (entry) {
+      return entry;
+    }
   }
-  return findSprite3dDefinitions(source, block)
-    .find((entry) => position >= entry.start && position <= entry.end) || null;
+  return null;
+}
+
+function findSprite3dDefinitionByName(source, name) {
+  for (const block of findSprites3dBlocks(source)) {
+    const entry = findSprite3dDefinitionBlock(source, block, name);
+    if (entry) {
+      return entry;
+    }
+  }
+  return null;
 }
 
 function findSprite3dDefinitionBlock(source, block, name) {
@@ -3175,4 +3225,11 @@ registerSourceEditableTarget?.("sprite3d", {
   load: loadSprite3dFromSourcePosition,
 });
 
+function syncSprite3dBuilderAfterScriptLoad() {
+  if (currentPreviewMode === "sprite3d" && typeof loadFirstFocusedPuzzleEntry === "function") {
+    loadFirstFocusedPuzzleEntry("sprite", "sprite3d");
+  }
+}
+
 resetSprite3dBuilder();
+syncSprite3dBuilderAfterScriptLoad();

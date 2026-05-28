@@ -129,14 +129,14 @@ AI が生成したルールは、動いたというだけでは採用されな�
 エディタが必要とする操作面が明示されていなければ、エディタは結局 runtime fixture、scene JSON、renderer state などの内部表現を読みに行き、内部変更に追従する壊れやすい依存を作る。
 
 したがって、エディタが正当に変更したいものは public contract として外に出す。
-たとえば 3D preview では、level、camera、grid などの preview 設定は runtime が明示的な更新 API として受け取り、エディタは runtime fixture 全体や scene/component の内部 schema を再構成しない。
+たとえば preview では、表示対象、カメラ、グリッドなどの編集可能な設定は runtime が明示的な更新 API として受け取り、エディタは runtime fixture 全体や scene/component の内部 schema を再構成しない。
 
 これは runtime を editor から完全に独立させるという意味ではない。
 むしろ逆で、editor が触るべき面を runtime 側の責任で定義することで、runtime は内部表現を自由に変えられ、editor は公開された control surface だけに依存できる。
 
 この原則に反する兆候は次の通りである。
 
-- エディタが preview HTML から runtime fixture を抜き出し、編集 state として再解釈している。
+- エディタが preview runtime から内部 fixture を抜き出し、編集 state として再解釈している。
 - エディタが scene/component の renderer 向け JSON を書き換えて、preview の見た目を操作している。
 - runtime の内部 schema を変えると、編集対象の level や preview 設定まで壊れる。
 - 「内部だから直接触らないはず」という期待だけで、実際に使える public API がない。
@@ -178,6 +178,14 @@ scene の lifecycle と puzzle の lifecycle が違うなら、同じ `on_*` 系
 display routine と gameplay routine が違うなら、同じ routine 風の形を持っていても、読み書きできる state は違ってよい。
 
 重要なのは、ユーザーの直感が外れたときに「なぜここでは違うのか」を所有者境界や実行モデルから説明できることである。
+
+### 見た目から実行意味を推定しない
+
+実装は、表示結果の合成、隣接、重なり、命名、または現在のサンプルでの使われ方から、作者が書いていない連動関係を推定してはならない。
+
+ある object が別の object の見た目を補助しているように見えても、それだけで同じ移動、同じ衝突、同じアニメーション、同じ入力反応、同じ lifecycle を共有するとは扱わない。連動が必要なら、作者が `.puzzle` のルール、display routine、component contract、または明示的な設定として書くべきである。
+
+これは不便を残すためではなく、観測された見た目と実行意味を混同しないためである。見た目から暗黙の companion、owner、group、fallback を作ると、別のゲームで同じ構文が現れたときに、作者の意図しない副作用になる。便利な推定を追加したくなった場合は、まずそれを表す明示的な authoring surface が必要かを検討する。
 
 ### 特例化と hardcode の点検
 
@@ -287,7 +295,7 @@ Web 版は、ブラウザの制約に合わせて、フォルダ import、ブラ
 Web 版はユーザーのローカルフォルダを継続的な編集対象として直接所有しない。
 
 Desktop 版は、ユーザーが明示的に開いた project root だけを編集対象にする。
-起動時に `games/` やユーザーディレクトリを自動で読み込んではならない。
+起動時にサンプルフォルダ、リポジトリ全体、ユーザーディレクトリなどを自動で読み込んではならない。
 初期状態は空でよく、native open folder / open project によって初めてファイルシステム上のプロジェクトを持つ。
 
 Desktop 版で直接ファイルを編集する場合も、JavaScript に広いファイルシステム権限を渡すことを前提にしない。

@@ -3361,7 +3361,7 @@ fn transition_program_segment_outcome(
     })
 }
 
-fn animation_events_for_trace(
+pub fn animation_events_for_trace(
     game: &LoadedGame,
     fired_rules: &[puzzle_core::RuleId],
     patches: &[puzzle_core::Patch],
@@ -3961,8 +3961,7 @@ X
 title tween_runtime
 animation {
 tween {
-enabled = true
-interval = 80ms
+duration = 80ms
 }
 }
 

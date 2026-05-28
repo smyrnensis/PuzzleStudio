@@ -405,6 +405,8 @@ confirm -> resume playing
 
 `again` command も turn completion で解決される。`again` は入力 event の再送ではなく、同じ puzzle target の rule entrypoint を `InputId(0)` / no semantic input で再実行する follow-up turn request である。follow-up turn は現在の turn が commit され、message / sfx / wait / navigation command の収集が終わった後に予約される。follow-up turn 内で `again` が再び出ると次の no-input turn が予約される。runtime は 1 input から派生する automatic turn を最大 256 回に制限する。standalone HTML での follow-up turn 間隔は top-level `again_interval = 100ms` / `again_interval = 0.1s` で変更でき、PuzzleScript import 互換として `again_interval 0.1` も秒指定として受け入れる。
 
+Top-level `animation { tween duration=160ms }` は move write に対する tween animation を有効化する。`tween` を書くこと自体が有効化であり、`enabled = true` は受け付けない。block 形で書く場合も `tween { duration = 160ms }` とし、値を持つ option だけを assignment にする。`duration` 省略時は `250ms`。
+
 ## Scenes
 
 `scene` は puzzle transition の外側にある game-flow metadata。`screen <name>` は読まない。
@@ -487,44 +489,34 @@ button "Levels" -> resume level_select
 
 The examples differ only at the model slot initializer and model window component. The implicit vertical stack, buttons, and scene commands are shared scene concepts.
 
-2D puzzle の renderer 初期値は puzzle 内の `render` が所有する。現時点では `grid { occupied_cells = true }` / `grid { all_cells = true }` を受け付け、前者は object が存在する cell、後者は空 cell を含む全 cell の外周を表示する読み取り補助として扱う。これは floor、collision、rule、win condition、level data には影響しない。省略時は off。
+2D puzzle の renderer 初期値は puzzle 内の `render` が所有する。現時点では `grid occupied_cells` / `grid all_cells` を受け付け、前者は object が存在する cell、後者は空 cell を含む全 cell の外周を表示する読み取り補助として扱う。これは floor、collision、rule、win condition、level data には影響しない。省略時は表示しない。
 
 ```txt
 puzzle sokoban {
 render {
-grid {
-occupied_cells = true
-all_cells = false
-}
+grid occupied_cells
 }
 }
 ```
 
-3D puzzle の renderer 初期値は puzzle3 内の `render` が所有する。camera は scene layout や rule state ではないため、canonical syntax では puzzle3 top scope の個別設定ではなく `render { camera { ... } }` に包む。
+3D puzzle の renderer 初期値は puzzle3 内の `render` が所有する。camera は scene layout や rule state ではないため、canonical syntax では puzzle3 top scope の個別設定ではなく `render` 内の `camera` group に書く。設定 group は `camera yaw=34 pitch=38 interactive_look` の inline 形と、`camera { yaw = 34 ... }` の block 形を同じ意味として扱う。bare option は有効化、値を持つ option は `key=value` で書く。
 
 ```txt
 puzzle3 push3d {
 render {
-camera {
-yaw = 34
-pitch = 38
-zoom = 1
-interactive_look = true
-interactive_zoom = true
-}
-grid {
-occupied_cells = true
-}
+camera yaw=34 pitch=38 zoom=1 interactive_look interactive_zoom
+grid occupied_cells
 viewport {
 zoomscreen 7 7
 focus Player
 }
-shade = true
+pixelate scale=4
+shade
 }
 }
 ```
 
-`yaw` / `pitch` / `zoom` は初期 camera view、`interactive_look` は pointer drag による yaw/pitch 変更、`interactive_zoom` は wheel/pinch 系の zoom 変更を許す設定である。`zoom = 1` が `zoomscreen` / `smoothscreen` の通常倍率で、`zoom` や interactive zoom はその framing に対する上書き倍率として扱う。旧 `debug_camera` / `camera_yaw` / `camera_pitch` / `camera_zoom` は compatibility syntax で、新しい例では使わない。
+`yaw` / `pitch` / `zoom` は初期 camera view、`interactive_look` は pointer drag による yaw/pitch 変更、`interactive_zoom` は wheel/pinch 系の zoom 変更を許す設定である。`zoom = 1` が `zoomscreen` / `smoothscreen` の通常倍率で、`zoom` や interactive zoom はその framing に対する上書き倍率として扱う。旧 `debug_camera` / `camera_yaw` / `camera_pitch` / `camera_zoom` や `interactive_look = true` のような boolean assignment は受け付けない。
 
 3D `zoomscreen` / `smoothscreen` は `render { viewport { ... } }` が所有する focus-follow framing 設定である。`zoomscreen <w> <d>` は focus object を中心に `w x d x full` の仮想 world-space box を置き、その box を現在の camera yaw/pitch で投影して画面に収まる最大倍率にする。`full` は occupied height ではなく `level.size.height` を使う。`zoomscreen <w> <d> <h>` は高さも focus 周りの `h` cell として扱う。`smoothscreen` は同じ desired framing を作るが、描画用 view target / scale だけが遅れて追従する。どちらも culling ではなく framing であり、外側 object を消さない。`focus <selector>` は追従対象で、省略時は `Player`。
 
@@ -532,13 +524,15 @@ Scene layout は `puzzle3` を固定 4:3 display として扱う。`puzzle3` com
 
 3D model `rules` では `set yaw = <deg>` / `set pitch = <deg>` / `set zoom = <n>` を view-state emission として書ける。`reset_camera` は camera view を `render { camera { ... } }` の初期値に戻す。これらは `sfx` と同じく rule 発火に付随する presentation command であり、puzzle state、solver key、win condition には入らない。
 
-`grid { occupied_cells = true }` は object が存在する cell の外周 edge を表示する preview/debug 用の読み取り補助である。これは floor や volume を追加するものではなく、puzzle state、collision、win condition、level data には影響しない。省略時は off。
+`grid occupied_cells` は object が存在する cell の外周 edge を表示する preview/debug 用の読み取り補助である。これは floor や volume を追加するものではなく、puzzle state、collision、win condition、level data には影響しない。省略時は表示しない。
 
-`render { shade = false }` は sprite voxel の面ごとの明暗付けを無効にする renderer 設定である。色の表示だけを揃えたい preview 用であり、puzzle state、sprite voxel data、collision、win condition には影響しない。省略時は既存どおり on。
+`render { shade }` は sprite voxel の面ごとの明暗付けを有効にする renderer 設定である。これは puzzle state、sprite voxel data、collision、win condition には影響しない。省略時も on。
 
-3D object は `sprites3` に同名 sprite が定義されている場合だけ voxel sprite を描く。sprite 未指定の object に暗黙の cube や色は割り当てない。位置や占有を読みたい場合は `grid { occupied_cells = true }` などの debug 表示を使う。
+`pixelate` / `pixelate scale=4` は 3D canvas の描画後 pixel 化 postprocess を有効にする。`scale` は一度縮小する倍率で、省略時は `4`。省略時は pixel 化しない。
 
-`interactive_look` は semantic input ではない。親 scene は click/drag を 3D camera 用として特別扱いせず、raw input を通常どおり focused scene と layout/hit-test に従って component へ配信する。`puzzle3` component は、自分の表示 box 内で始まった pointer drag を取得してよい。`interactive_look = true` のときだけ、その gesture を camera yaw/pitch の view-state 更新として解釈する。これは model `rules` の `input` には渡らず、`if input == ...`、undo、restart、transition state、win condition には影響しない。
+3D object は `sprites3` に同名 sprite が定義されている場合だけ voxel sprite を描く。sprite 未指定の object に暗黙の cube や色は割り当てない。位置や占有を読みたい場合は `grid occupied_cells` などの debug 表示を使う。
+
+`interactive_look` は semantic input ではない。親 scene は click/drag を 3D camera 用として特別扱いせず、raw input を通常どおり focused scene と layout/hit-test に従って component へ配信する。`puzzle3` component は、自分の表示 box 内で始まった pointer drag を取得してよい。`interactive_look` を書いたときだけ、その gesture を camera yaw/pitch の view-state 更新として解釈する。これは model `rules` の `input` には渡らず、`if input == ...`、undo、restart、transition state、win condition には影響しない。
 
 pointer drag の所有者は開始点で決まる。pointer down が `puzzle3` の box 内なら、release/cancel まではその component が gesture を capture してよく、途中で pointer が box 外へ出ても同じ drag として継続する。例外は modal、disabled component、overlay、明示的な pointer capture、scene-level gesture など、より具体的な所有者がある場合だけである。
 
@@ -605,7 +599,7 @@ button "Back" -> back
 
 `level_menu` は level 選択専用 component。component が cursor と enter と多すぎる項目の scroll を所有する。通常は key binding を書かなくてよい。既定では `w/a/s/d` と arrow keys が移動、Enter/Space が `enter`、Escape/q が `back` になる。
 
-見出しなどを足す場合だけ、通常の `scene` の `view` に `level_menu { ... }` を置く。`level_menu` は level 選択専用 component なので、`up` / `down` / `left` / `right` / `enter` の cursor 動作と、多すぎる項目の scroll を所有する。enter 時は選択 level を開始する。これは `level_menu` template の主動作なので、`action goto_level` や `choose_level` transition は書かない。旧 `show index`、`columns <n>`、裸の `wrap`、`action <name>` は読まない。`show` / `hide` / `toggle` は scene visibility effect として残す。
+見出しなどを足す場合だけ、通常の `scene` の `view` に `level_menu { ... }` を置く。`level_menu` は level 選択専用 component なので、`up` / `down` / `left` / `right` / `enter` の cursor 動作と、多すぎる項目の scroll を所有する。enter 時は選択 level を開始する。これは `level_menu` template の主動作なので、`action goto_level` や `choose_level` transition は書かない。`level_menu` は inline source や `->` effect を取らない。表示する level の絞り込みは scene の `resources { levels ... }` が所有する。旧 `show index`、`columns <n>`、裸の `wrap`、`action <name>` は読まない。`show` / `hide` / `toggle` は scene visibility effect として残す。
 
 level の開始、読み込み、restart は level scene / puzzle slot に対する command として書ける。ただし通常の clear / advance / restart は level scene 内の model window component と puzzle lifecycle が所有する。scene からの target command は、title/menu から入る、button で明示 restart する、hub から特定 level に飛ぶ、通常 clear とは別の例外 flow に入る、などの介入だけに使う。canonical な開始は既存 state を使うなら `resume sokoban` または `resume sokoban(level_name)`、scene state を作り直すなら `start sokoban` または `start sokoban(level_name)`。独自 scene なら `scene playing(level) { state { sokoban(level) } view { sokoban } rules { step sokoban } }` として `resume playing(level)` で入る。旧 `start levels ... in <scene>` / `continue levels ... in <scene>` は読まない。`playing.restart` は playing scene の現在 level を初期状態に戻し、`playing.next_level` は playing scene を次 level で開始し、`playing.previous_level` は前 level で開始する。`playing.goto <level>` は指定 level で playing scene に移る。`board.restart` のように puzzle slot を target にした場合は、その puzzle state を初期状態に戻す。`board.next_level` はその puzzle を所有する level scene を進める。
 

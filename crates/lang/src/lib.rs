@@ -10,6 +10,7 @@ mod semantic;
 mod source;
 mod source_target;
 mod surface;
+mod syntax;
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 #[cfg(not(target_arch = "wasm32"))]
@@ -71,6 +72,7 @@ use surface::{
     SourceSpan, SurfaceDocument, SurfaceNodeKind, SurfaceRewriteEffect, SurfaceSceneEffect,
     SurfaceSemanticKind, SurfaceSemanticToken, SurfaceSink,
 };
+use syntax::puzzle_lifecycle_event;
 
 const ANONYMOUS_MOVEMENT_SCRATCH: ScratchId = ScratchId(0);
 const ANONYMOUS_BOOL_SCRATCH: ScratchId = ScratchId(1);
@@ -307,6 +309,10 @@ fn parse_game2d_document(source: &str) -> Result<LoadedGame, AppError> {
 fn parse_game2d_from_document_parts(parts: DocumentSourceParts) -> Result<LoadedGame, AppError> {
     let mut scenes = parts.scenes;
     let model_names = all_model_names(&parts.model_source, "puzzle");
+    resolve_inferred_scene_puzzle_slots(
+        &mut scenes,
+        model_names.iter().map(|name| ("puzzle", name)),
+    )?;
     let mut game =
         parse_game2d_expanded_with_shell(&parts.model_source_without_shell, &parts.shell)?;
     resolve_default_wait_in_scenes(&mut scenes, game.default_wait_ms);
@@ -345,13 +351,14 @@ fn parse_game_document(source: &str) -> Result<LoadedDocument, AppError> {
             let parts = parse_document_source_parts(source)?;
             let name = first_model_name(&parts.raw_model_source_without_shell, "puzzle3")
                 .unwrap_or_else(|| "default".to_string());
+            let mut scenes = parts.scenes;
+            resolve_inferred_scene_puzzle_slots(&mut scenes, std::iter::once(("puzzle3", &name)))?;
             let puzzle = parse_puzzle3d(&parts.raw_model_source_without_shell).map_err(
                 |error| match error {
                     ParseError3::Message(message) => AppError::Parse(message),
                 },
             )?;
-            let scenes =
-                add_implicit_model_scenes(parts.scenes, std::iter::once(("puzzle3", &name)));
+            let scenes = add_implicit_model_scenes(scenes, std::iter::once(("puzzle3", &name)));
             Ok(LoadedDocument {
                 title: parts.shell.title,
                 subtitle: parts.shell.subtitle,
@@ -384,6 +391,11 @@ fn parse_mixed_game_document(source: &str) -> Result<LoadedDocument, AppError> {
     let puzzle_3d = parse_puzzle3d(&puzzle_3d_source).map_err(|error| match error {
         ParseError3::Message(message) => AppError::Parse(message),
     })?;
+    let mut scenes = parts.scenes;
+    resolve_inferred_scene_puzzle_slots(
+        &mut scenes,
+        [("puzzle", &model_2d_name), ("puzzle3", &model_3d_name)].into_iter(),
+    )?;
 
     Ok(LoadedDocument {
         title: parts.shell.title,
@@ -397,7 +409,7 @@ fn parse_mixed_game_document(source: &str) -> Result<LoadedDocument, AppError> {
         theme: parts.shell.theme,
         assets: parts.shell.assets,
         scenes: add_implicit_model_scenes(
-            parts.scenes,
+            scenes,
             [("puzzle", &model_2d_name), ("puzzle3", &model_3d_name)].into_iter(),
         ),
         models: vec![
@@ -565,6 +577,50 @@ fn add_implicit_model_scenes<'a>(
         existing.insert(model_name.clone());
     }
     scenes
+}
+
+const INFERRED_SCENE_PUZZLE_KIND: &str = "__model__";
+
+fn resolve_inferred_scene_puzzle_slots<'a>(
+    scenes: &mut [SceneDef],
+    models: impl IntoIterator<Item = (&'a str, &'a String)>,
+) -> Result<(), AppError> {
+    let mut model_kinds = HashMap::<String, String>::new();
+    let mut ambiguous = HashSet::<String>::new();
+    for (kind, model_name) in models {
+        match model_kinds.get(model_name) {
+            Some(existing) if existing != kind => {
+                ambiguous.insert(model_name.clone());
+            }
+            Some(_) => {}
+            None => {
+                model_kinds.insert(model_name.clone(), kind.to_string());
+            }
+        }
+    }
+
+    for scene in scenes {
+        for puzzle in &mut scene.state.puzzles {
+            if puzzle.kind != INFERRED_SCENE_PUZZLE_KIND {
+                continue;
+            }
+            if ambiguous.contains(&puzzle.model) {
+                return Err(AppError::Parse(format!(
+                    "scene puzzle slot `{}` is ambiguous; use `puzzle <name>` or `puzzle3 <name>`",
+                    puzzle.model
+                )));
+            }
+            let Some(kind) = model_kinds.get(&puzzle.model) else {
+                return Err(AppError::Parse(format!(
+                    "scene puzzle slot `{}` does not match a puzzle model",
+                    puzzle.model
+                )));
+            };
+            puzzle.kind = kind.clone();
+        }
+    }
+
+    Ok(())
 }
 
 fn implicit_model_scene(kind: &str, model_name: &str) -> SceneDef {
@@ -1394,9 +1450,9 @@ fn split_document_scene_source(source: &str) -> Result<(String, Vec<SceneDef>), 
     while i < lines.len() {
         let tokens = split_tokens(&lines[i]);
         if matches!(tokens.as_slice(), ["scene", ..]) {
-            let (scene, _) = parse_scene_definition(&lines, i)?;
+            let (scene, next_i) = parse_scene_definition(&lines, i)?;
             scenes.push(scene);
-            i = skip_logical_block(&lines, i);
+            i = next_i;
         } else if let Some((kind, name)) = model_header_name(tokens.as_slice()) {
             let (entry, default_scene, next_i) =
                 extract_default_model_scene(&lines, i, kind, name)?;
@@ -3074,14 +3130,9 @@ fn parse_puzzle_definition(
                 *run_rules_on_level_start = true;
                 i += 1;
             }
-            "on_level_start" | "on_level_clear" | "on_last_level_clear" => {
+            lifecycle_block if puzzle_lifecycle_event(lifecycle_block).is_some() => {
                 let local_frame = parse_program_local_frame_modifier(&tokens[1..], line, catalog)?;
-                let lifecycle = match tokens[0] {
-                    "on_level_start" => "level_start",
-                    "on_level_clear" => "level_clear",
-                    "on_last_level_clear" => "last_level_clear",
-                    _ => unreachable!(),
-                };
+                let lifecycle = puzzle_lifecycle_event(lifecycle_block).unwrap();
                 let (event, statements, next_i) =
                     parse_lifecycle_block(lines, i, lifecycle, catalog)?;
                 match event.as_str() {
@@ -3883,8 +3934,12 @@ fn parse_puzzle_render_block(
         let tokens = split_tokens(line);
         match tokens.as_slice() {
             [] => i += 1,
-            ["grid"] => {
+            [name] if *name == PUZZLE_RENDER_BLOCK_OPTIONS[0] => {
                 i = parse_puzzle_render_grid_block(lines, i, &mut parsed.grid)?;
+            }
+            [name, options @ ..] if *name == PUZZLE_RENDER_BLOCK_OPTIONS[0] => {
+                parse_puzzle_render_grid_options(options, line, &mut parsed.grid)?;
+                i += 1;
             }
             [other, ..] => {
                 return Err(parse_error(
@@ -3900,6 +3955,11 @@ fn parse_puzzle_render_block(
     *render = parsed;
     Ok(i + 1)
 }
+
+pub(crate) const PUZZLE_RENDER_BLOCK_OPTIONS: &[&str] = &["grid"];
+pub(crate) const PUZZLE_RENDER_GRID_OPTIONS: &[&str] = &["occupied_cells", "all_cells"];
+pub(crate) const ANIMATION_BLOCK_OPTIONS: &[&str] = &["tween"];
+pub(crate) const ANIMATION_TWEEN_OPTIONS: &[&str] = &["duration"];
 
 fn parse_animation_block(
     lines: &[String],
@@ -3921,8 +3981,22 @@ fn parse_animation_block(
         let tokens = split_tokens(line);
         match tokens.as_slice() {
             [] => i += 1,
-            ["tween"] | ["tween", "{"] => {
+            [name] if *name == ANIMATION_BLOCK_OPTIONS[0] => {
+                parsed.tween.enabled = true;
+                if lines.get(i + 1).is_some_and(|next| next == "end") {
+                    i += 1;
+                } else {
+                    i = parse_animation_tween_block(lines, i, &mut parsed.tween)?;
+                }
+            }
+            [name, "{"] if *name == ANIMATION_BLOCK_OPTIONS[0] => {
+                parsed.tween.enabled = true;
                 i = parse_animation_tween_block(lines, i, &mut parsed.tween)?;
+            }
+            [name, options @ ..] if *name == ANIMATION_BLOCK_OPTIONS[0] => {
+                parsed.tween.enabled = true;
+                parse_animation_tween_options(options, line, &mut parsed.tween)?;
+                i += 1;
             }
             [other, ..] => {
                 return Err(parse_error(
@@ -3951,12 +4025,8 @@ fn parse_animation_tween_block(
         let tokens = split_tokens(line);
         match tokens.as_slice() {
             [] => i += 1,
-            ["enabled", "=", value] | ["enabled", value] => {
-                parsed.enabled = parse_bool_literal(value, line, "tween enabled")?;
-                i += 1;
-            }
-            ["interval", "=", value] | ["interval", value] => {
-                parsed.interval_ms = parse_animation_interval_ms(value, line)?;
+            [name, "=", value] | [name, value] if *name == ANIMATION_TWEEN_OPTIONS[0] => {
+                parsed.interval_ms = parse_animation_duration_ms(value, line)?;
                 i += 1;
             }
             [other, ..] => {
@@ -3971,10 +4041,41 @@ fn parse_animation_tween_block(
     Ok(i + 1)
 }
 
-fn parse_animation_interval_ms(value: &str, line: &str) -> Result<u64, AppError> {
+fn parse_animation_tween_options(
+    options: &[&str],
+    line: &str,
+    tween: &mut TweenAnimationDef,
+) -> Result<(), AppError> {
+    if options.is_empty() {
+        return Err(parse_error(
+            line,
+            "tween directive requires at least one option",
+        ));
+    }
+    for option in options {
+        let Some((name, value)) = option.split_once('=') else {
+            return Err(parse_error(
+                line,
+                "tween option must be name=value in inline form",
+            ));
+        };
+        match name {
+            name if name == ANIMATION_TWEEN_OPTIONS[0] && !value.is_empty() => {
+                tween.interval_ms = parse_animation_duration_ms(value, line)?;
+            }
+            name if name == ANIMATION_TWEEN_OPTIONS[0] => {
+                return Err(parse_error(line, "tween duration must not be empty"));
+            }
+            other => return Err(parse_error(line, &format!("unknown tween setting {other}"))),
+        }
+    }
+    Ok(())
+}
+
+fn parse_animation_duration_ms(value: &str, line: &str) -> Result<u64, AppError> {
     let milliseconds = parse_wait_duration_ms(value, line)?;
     if milliseconds == 0 {
-        return Err(parse_error(line, "tween interval must be greater than 0"));
+        return Err(parse_error(line, "tween duration must be greater than 0"));
     }
     Ok(milliseconds)
 }
@@ -3991,12 +4092,12 @@ fn parse_puzzle_render_grid_block(
         let tokens = split_tokens(line);
         match tokens.as_slice() {
             [] => i += 1,
-            ["occupied_cells", "=", value] | ["occupied_cells", value] => {
-                parsed.occupied_cells = parse_bool_literal(value, line, "occupied_cells")?;
+            [name] if *name == PUZZLE_RENDER_GRID_OPTIONS[0] => {
+                parsed.occupied_cells = true;
                 i += 1;
             }
-            ["all_cells", "=", value] | ["all_cells", value] => {
-                parsed.all_cells = parse_bool_literal(value, line, "all_cells")?;
+            [name] if *name == PUZZLE_RENDER_GRID_OPTIONS[1] => {
+                parsed.all_cells = true;
                 i += 1;
             }
             [other, ..] => {
@@ -4011,12 +4112,25 @@ fn parse_puzzle_render_grid_block(
     Ok(i + 1)
 }
 
-fn parse_bool_literal(value: &str, line: &str, label: &str) -> Result<bool, AppError> {
-    match value {
-        "true" => Ok(true),
-        "false" => Ok(false),
-        _ => Err(parse_error(line, &format!("{label} must be true or false"))),
+fn parse_puzzle_render_grid_options(
+    options: &[&str],
+    line: &str,
+    grid: &mut PuzzleGridRenderDef,
+) -> Result<(), AppError> {
+    if options.is_empty() {
+        return Err(parse_error(
+            line,
+            "grid directive requires at least one option",
+        ));
     }
+    for option in options {
+        match *option {
+            option if option == PUZZLE_RENDER_GRID_OPTIONS[0] => grid.occupied_cells = true,
+            option if option == PUZZLE_RENDER_GRID_OPTIONS[1] => grid.all_cells = true,
+            other => return Err(parse_error(line, &format!("unknown grid setting {other}"))),
+        }
+    }
+    Ok(())
 }
 
 fn parse_puzzle_screen_directive(
@@ -6104,13 +6218,6 @@ fn parse_screen_leaf_component(
                 start + 1,
             ))
         }
-        ["level_menu", source, "->", effect @ ..] if !effect.is_empty() => {
-            validate_qualified_identifier(source, &lines[start], "level source")?;
-            let mut menu = LevelMenuDef::default();
-            menu.source = Some((*source).to_string());
-            menu.action = Some(parse_scene_effect(&effect.join(" "), &lines[start])?);
-            Ok((SceneComponent::LevelMenu(menu), start + 1))
-        }
         ["text", ..] => Ok((parse_text_component(&lines[start])?, start + 1)),
         ["title", ..] => Ok((parse_title_component(&lines[start], true)?, start + 1)),
         ["subtitle", ..] => Ok((parse_title_component(&lines[start], false)?, start + 1)),
@@ -6122,6 +6229,10 @@ fn parse_screen_leaf_component(
             let (menu, next_i) = parse_level_menu_component(lines, start)?;
             Ok((SceneComponent::LevelMenu(menu), next_i))
         }
+        ["level_menu", ..] => Err(parse_error(
+            &lines[start],
+            "level_menu takes no inline source or effect; use scene resources to choose levels",
+        )),
         [state_name] if is_identifier(state_name) => Ok((
             scene_frame_component("puzzle", (*state_name).to_string()),
             start + 1,
@@ -6993,6 +7104,9 @@ pub(crate) fn sound_setting_value_syntax(key: &str) -> Option<SoundSettingValueS
     }
 }
 
+pub(crate) const SFX_SOUND_SETTING_OPTIONS: &[&str] = &["seed", "type"];
+pub(crate) const MUSIC_SOUND_SETTING_OPTIONS: &[&str] = &["seed", "tone", "bpm", "volume"];
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum MapHeaderTokenSyntax {
     Keyword,
@@ -7853,7 +7967,7 @@ fn parse_implicit_scene_puzzle_state_entry(
         }
         return Ok(Some(ScenePuzzleDef {
             name: puzzle_name.to_string(),
-            kind: "puzzle".to_string(),
+            kind: INFERRED_SCENE_PUZZLE_KIND.to_string(),
             model: puzzle_name.to_string(),
             initializer: ScenePuzzleInitializer::CurrentLevel,
             lifetime,
@@ -7861,6 +7975,13 @@ fn parse_implicit_scene_puzzle_state_entry(
     }
     let tokens = split_tokens(line);
     match tokens.as_slice() {
+        [puzzle_name] if is_qualified_identifier(puzzle_name) => Ok(Some(ScenePuzzleDef {
+            name: (*puzzle_name).to_string(),
+            kind: INFERRED_SCENE_PUZZLE_KIND.to_string(),
+            model: (*puzzle_name).to_string(),
+            initializer: ScenePuzzleInitializer::CurrentLevel,
+            lifetime,
+        })),
         ["puzzle", puzzle_name] => {
             validate_qualified_identifier(puzzle_name, line, "puzzle name")?;
             Ok(Some(ScenePuzzleDef {
@@ -7882,9 +8003,34 @@ fn parse_implicit_scene_puzzle_state_entry(
                 lifetime,
             }))
         }
+        ["puzzle3", puzzle_name] => {
+            validate_qualified_identifier(puzzle_name, line, "puzzle3 model name")?;
+            Ok(Some(ScenePuzzleDef {
+                name: (*puzzle_name).to_string(),
+                kind: "puzzle3".to_string(),
+                model: (*puzzle_name).to_string(),
+                initializer: ScenePuzzleInitializer::CurrentLevel,
+                lifetime,
+            }))
+        }
+        ["puzzle3", puzzle_name, "level", level_name] => {
+            validate_qualified_identifier(puzzle_name, line, "puzzle3 model name")?;
+            validate_qualified_identifier(level_name, line, "level name")?;
+            Ok(Some(ScenePuzzleDef {
+                name: (*puzzle_name).to_string(),
+                kind: "puzzle3".to_string(),
+                model: (*puzzle_name).to_string(),
+                initializer: ScenePuzzleInitializer::Level((*level_name).to_string()),
+                lifetime,
+            }))
+        }
         ["puzzle", ..] => Err(parse_error(
             line,
             "scene puzzle state must be: puzzle <name> | puzzle <name> level <level>",
+        )),
+        ["puzzle3", ..] => Err(parse_error(
+            line,
+            "scene puzzle3 state must be: puzzle3 <name> | puzzle3 <name> level <level>",
         )),
         _ => Ok(None),
     }
@@ -8405,6 +8551,15 @@ fn parse_level_menu_component(
     Ok((menu, i + 1))
 }
 
+pub(crate) const LEVEL_MENU_OPTIONS: &[&str] = &[
+    "show_index",
+    "show_solved",
+    "layout",
+    "columns",
+    "wrap",
+    "locked",
+];
+
 fn parse_level_menu_scene_options(
     lines: &[String],
     start: usize,
@@ -8443,7 +8598,6 @@ fn is_level_menu_option(tokens: &[&str]) -> bool {
             | ["columns", ..]
             | ["wrap", ..]
             | ["locked", ..]
-            | ["button", ..]
     )
 }
 
@@ -10923,10 +11077,7 @@ fn split_oriented_pattern_arg(
         }
         OrientationExpr::InputSet(axis.to_string())
     } else if orientation == "input" {
-        return Err(parse_error(
-            line,
-            "`input [ ... ]` was removed; use `input directions [ ... ]` or an explicit oriented pattern inside `if input == <name>`",
-        ));
+        OrientationExpr::InputSet("directions".to_string())
     } else if !is_identifier(orientation) {
         return Err(parse_error(
             line,
@@ -12788,10 +12939,10 @@ fn parse_oriented_rewrite_prefix<'a>(
         if let Some((axis, rewrite)) = parse_input_set_orientation_rewrite(rest) {
             return Ok((OrientationExpr::InputSet(axis.to_string()), rewrite));
         }
-        return Err(parse_error(
-            line,
-            "`input [ ... ]` was removed; use `input directions [ ... ]` or an explicit oriented rewrite inside `if input == <name>`",
-        ));
+        if rest.starts_with('[') {
+            return Ok((OrientationExpr::InputSet("directions".to_string()), rest));
+        }
+        return Err(parse_error(line, "missing input-oriented rewrite"));
     }
     if !rest.starts_with('[') {
         return Err(parse_error(line, "missing oriented rewrite"));

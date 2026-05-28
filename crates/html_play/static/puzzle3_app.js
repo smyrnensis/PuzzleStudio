@@ -64,70 +64,8 @@ const fallbackSnapshot = {
       ArrowDown: "back",
     },
   },
-  sprites: {
-    bumpy: {
-      palette: { 0: "#000000" },
-      bitmap: [
-        " 00 ",
-        "0000",
-        "0000",
-        " 00 ",
-        "",
-        "0000",
-        "0000",
-        "0000",
-        "000 ",
-        "",
-        " 000",
-        "0000",
-        "0000",
-        " 00 ",
-        "",
-        " 00 ",
-        "000 ",
-        " 00 ",
-        " 0  ",
-      ],
-    },
-    red_cube: {
-      palette: { r: "#d94132" },
-      bitmap: [
-        "rrrr",
-        "rrrr",
-        "rrrr",
-        "rrrr",
-        "",
-        "rrrr",
-        "rrrr",
-        "rrrr",
-        "rrrr",
-        "",
-        "rrrr",
-        "rrrr",
-        "rrrr",
-        "rrrr",
-        "",
-        "rrrr",
-        "rrrr",
-        "rrrr",
-        "rrrr",
-      ],
-    },
-  },
-  cells: [
-    {
-      position: { x: 1, y: 1, z: 1 },
-      objects: [{ id: 1, name: "Bumpy", sprite: "bumpy" }],
-    },
-    {
-      position: { x: 2, y: 1, z: 1 },
-      objects: [{ id: 2, name: "Red Cube", sprite: "red_cube" }],
-    },
-    {
-      position: { x: 0, y: 2, z: 1 },
-      objects: [{ id: 2, name: "Red Cube", sprite: "red_cube" }],
-    },
-  ],
+  sprites: {},
+  cells: [],
 };
 
 const view = {
@@ -2294,21 +2232,40 @@ function comparePrimitiveOrder(a, b) {
 }
 
 function assignPrimitiveOrder(primitives) {
+  const keyCounts = new Map();
   for (const [index, primitive] of primitives.entries()) {
-    if (primitive.primitiveOrder === undefined) {
-      primitive.primitiveOrder = index;
-    }
+    const baseKey = primitive.key
+      ? String(primitive.key)
+      : `${primitive.kind || "primitive"}:${index}`;
+    const occurrence = keyCounts.get(baseKey) || 0;
+    keyCounts.set(baseKey, occurrence + 1);
+    primitive.frameIndex = index;
+    primitive.stableKey = occurrence === 0 ? baseKey : `${baseKey}#${occurrence}`;
   }
 }
 
 function orderScenePrimitives(primitives) {
   const cacheKey = primitiveSortCacheKey(primitives);
   if (cacheKey === view.primitiveSortCacheKey && view.primitiveSortCacheOrder.length === primitives.length) {
-    return view.primitiveSortCacheOrder.map((index) => primitives[index]).filter(Boolean);
+    const byStableKey = new Map();
+    for (const primitive of primitives) {
+      if (!primitive.stableKey || byStableKey.has(primitive.stableKey)) {
+        return sortScenePrimitives(primitives, cacheKey);
+      }
+      byStableKey.set(primitive.stableKey, primitive);
+    }
+    const ordered = view.primitiveSortCacheOrder.map((stableKey) => byStableKey.get(stableKey));
+    if (ordered.every(Boolean)) {
+      return ordered;
+    }
   }
+  return sortScenePrimitives(primitives, cacheKey);
+}
+
+function sortScenePrimitives(primitives, cacheKey = primitiveSortCacheKey(primitives)) {
   primitives.sort(comparePrimitiveOrder);
   view.primitiveSortCacheKey = cacheKey;
-  view.primitiveSortCacheOrder = primitives.map((primitive) => primitive.primitiveOrder);
+  view.primitiveSortCacheOrder = primitives.map((primitive) => primitive.stableKey);
   return primitives;
 }
 
@@ -2316,7 +2273,7 @@ function primitiveSortCacheKey(primitives) {
   return [
     cameraOrderKey(),
     primitives.length,
-    primitives.map((primitive) => primitive.key || primitive.primitiveOrder).join("\n"),
+    primitives.map((primitive) => primitive.stableKey).join("\n"),
   ].join("|");
 }
 

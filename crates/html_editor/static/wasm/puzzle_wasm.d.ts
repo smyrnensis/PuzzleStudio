@@ -31,6 +31,20 @@ export class WasmPuzzle3Runtime {
     transition_program_outcome(program_key: string, state_json: string, input: number): string;
 }
 
+export class WasmStandaloneSession {
+    free(): void;
+    [Symbol.dispose](): void;
+    apply_command_name(command_name: string): void;
+    apply_input_name(input_name: string): void;
+    clear_progress_save(): void;
+    mark_progress_save_written(): void;
+    constructor(source: string, puzzle_path: string);
+    progress_save(): string;
+    request_json(method: string, url: string): string;
+    restore_progress_save(save_json: string): void;
+    snapshot(): string;
+}
+
 export function compile_preview(source: string, puzzle_path: string, game_css: string, game_visuals_js: string): string;
 
 export function generate_visuals_js(source: string, base_visuals_js: string): string;
@@ -55,6 +69,7 @@ export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly __wbg_wasmcoreruntime_free: (a: number, b: number) => void;
     readonly __wbg_wasmpuzzle3runtime_free: (a: number, b: number) => void;
+    readonly __wbg_wasmstandalonesession_free: (a: number, b: number) => void;
     readonly compile_preview: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
     readonly generate_visuals_js: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly highlight_source_html: (a: number, b: number) => [number, number];
@@ -84,6 +99,15 @@ export interface InitOutput {
     readonly wasmpuzzle3runtime_set_state: (a: number, b: number, c: number) => [number, number];
     readonly wasmpuzzle3runtime_transition_current_outcome: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly wasmpuzzle3runtime_transition_program_outcome: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
+    readonly wasmstandalonesession_apply_command_name: (a: number, b: number, c: number) => [number, number];
+    readonly wasmstandalonesession_apply_input_name: (a: number, b: number, c: number) => [number, number];
+    readonly wasmstandalonesession_clear_progress_save: (a: number) => void;
+    readonly wasmstandalonesession_mark_progress_save_written: (a: number) => void;
+    readonly wasmstandalonesession_new: (a: number, b: number, c: number, d: number) => [number, number, number];
+    readonly wasmstandalonesession_progress_save: (a: number) => [number, number];
+    readonly wasmstandalonesession_request_json: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
+    readonly wasmstandalonesession_restore_progress_save: (a: number, b: number, c: number) => [number, number];
+    readonly wasmstandalonesession_snapshot: (a: number) => [number, number];
     readonly __wbindgen_exn_store: (a: number) => void;
     readonly __externref_table_alloc: () => number;
     readonly __wbindgen_externrefs: WebAssembly.Table;

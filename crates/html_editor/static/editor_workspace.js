@@ -76,7 +76,7 @@ function setOpenProjectButtonsDisabled(disabled) {
 }
 
 function updateFileCreationAvailability() {
-  const disabled = isDesktopHost() && !documents.length;
+  const disabled = isDesktopHost() && !hasWritableWorkspace();
   if (newDocumentButton) {
     newDocumentButton.disabled = disabled;
     newDocumentButton.title = disabled ? "Open a workspace before creating files" : "New puzzle";
@@ -84,6 +84,16 @@ function updateFileCreationAvailability() {
   if (newFolderButton) {
     newFolderButton.disabled = disabled;
   }
+}
+
+function hasWritableWorkspace() {
+  if (!isDesktopHost()) {
+    return true;
+  }
+  if (documents.length) {
+    return true;
+  }
+  return Boolean(fileTree?.children?.some((child) => child?.kind === "folder" && child.isWorkspaceRoot));
 }
 
 function configureWorkspaceChangeListener() {
@@ -133,7 +143,7 @@ async function loadSource() {
 async function applyLoadedSourcePayload(payload) {
   applyRecentWorkspacesPayload(payload);
   workspaceRoot = payload.workspaceRoot || "";
-  const sourceDocuments = Array.isArray(payload.documents) && payload.documents.length
+  const sourceDocuments = Array.isArray(payload.documents)
     ? payload.documents
     : payload.empty
       ? []
@@ -144,22 +154,38 @@ async function applyLoadedSourcePayload(payload) {
         gameCss: payload.gameCss || "",
         gameVisualsJs: payload.gameVisualsJs || "",
       }];
-  fileTree = treeFromDocuments(sourceDocuments, { workspaceRoot });
+  fileTree = treeFromDocuments([]);
+  let workspaceFolder = null;
+  if (workspaceRoot) {
+    workspaceFolder = workspaceFolderFromDocuments(workspaceRoot, sourceDocuments);
+    fileTree.children.push(workspaceFolder);
+  } else {
+    fileTree = treeFromDocuments(sourceDocuments, { workspaceRoot });
+  }
   syncDocumentsFromTree();
-  activeFileId = documents[0]?.id || "";
+  activeFileId = workspaceRoot
+    ? documents.find((document) => document.workspaceRoot === workspaceRoot && isPuzzleDocument(document))?.id
+      || documents.find((document) => document.workspaceRoot === workspaceRoot)?.id
+      || documents[0]?.id
+      || ""
+    : documents[0]?.id || "";
   openTabIds = [];
-  selectedTreeId = activeFileId;
+  selectedTreeId = activeFileId || workspaceFolder?.id || "";
+  selectedFolderId = activeFileId
+    ? findParentFolder(fileTree, activeFileId)?.id || ""
+    : workspaceFolder?.id || "";
   currentDocumentIndex = activeDocumentIndex();
   openDocumentTab(activeFileId);
-  renderDocumentSelect();
-  renderDocumentTabs();
-  applyGameCss(payload.gameCss || "");
-  applyGameVisuals(payload.gameVisualsJs || "");
-  setSourceEditorValue(payload.source || "");
-  resetLevelBuilderFromSource();
-  if (documents.length) {
+  if (activeFileId) {
+    loadEmbeddedDocument(currentDocumentIndex);
     await renderPreview();
   } else {
+    renderDocumentSelect();
+    renderDocumentTabs();
+    applyGameCss(payload.gameCss || "");
+    applyGameVisuals(payload.gameVisualsJs || "");
+    setSourceEditorValue(payload.source || "");
+    resetLevelBuilderFromSource();
     latestHtml = "";
     previewExport = null;
     latestPreviewState = null;
@@ -179,7 +205,7 @@ async function appendLoadedWorkspacePayload(payload) {
   applyRecentWorkspacesPayload(payload);
   const root = payload.workspaceRoot || "";
   workspaceRoot = root || workspaceRoot;
-  const sourceDocuments = Array.isArray(payload.documents) && payload.documents.length
+  const sourceDocuments = Array.isArray(payload.documents)
     ? payload.documents
     : [{
       puzzlePath: payload.puzzlePath || "Untitled puzzle",
@@ -193,12 +219,7 @@ async function appendLoadedWorkspacePayload(payload) {
     fileTree = treeFromDocuments([]);
   }
   removeWorkspaceTree(root);
-  const workspaceTree = treeFromDocuments(sourceDocuments, { workspaceRoot: root });
-  const workspaceFolder = makeFolder(uniqueWorkspaceFolderName(root), workspaceTree.children, {
-    workspaceRoot: root,
-    isWorkspaceRoot: true,
-  });
-  workspaceFolder.expanded = true;
+  const workspaceFolder = workspaceFolderFromDocuments(root, sourceDocuments);
   fileTree.children.push(workspaceFolder);
   syncDocumentsFromTree();
   activeFileId = documents.find((document) => document.workspaceRoot === root && isPuzzleDocument(document))?.id
@@ -213,8 +234,26 @@ async function appendLoadedWorkspacePayload(payload) {
     loadEmbeddedDocument(currentDocumentIndex);
   } else {
     renderDocumentSelect();
+    latestHtml = "";
+    previewExport = null;
+    latestPreviewState = null;
+    setPreviewDocumentLoaded(false);
+    setPreviewFrameHtml(emptyPreviewDocument());
+    resetPreviewLog("No game entry for preview");
+    runButton.disabled = true;
+    downloadButton.disabled = true;
   }
   setEditorStatus("Opened workspace", "is-ok");
+}
+
+function workspaceFolderFromDocuments(root, sourceDocuments) {
+  const workspaceTree = treeFromDocuments(sourceDocuments, { workspaceRoot: root });
+  const workspaceFolder = makeFolder(uniqueWorkspaceFolderName(root), workspaceTree.children, {
+    workspaceRoot: root,
+    isWorkspaceRoot: true,
+  });
+  workspaceFolder.expanded = true;
+  return workspaceFolder;
 }
 
 function applyRecentWorkspacesPayload(payload) {
@@ -1215,7 +1254,7 @@ function renderDocumentSelect() {
 }
 
 function renderExplorerEmptyState() {
-  if (documents.length || draftEntry || !isDesktopHost() || editorSeed) {
+  if (documents.length || draftEntry || !isDesktopHost() || editorSeed || hasWritableWorkspace()) {
     return;
   }
   const empty = document.createElement("div");
@@ -1360,7 +1399,7 @@ function setTreeName(row, node) {
 function treeActionsHtml(kind) {
   if (kind === "workspace") {
     return `<span class="tree-actions" aria-label="Workspace actions">
-      <button class="tree-action-button" type="button" data-tree-action="remove-workspace" aria-label="Remove workspace" title="Remove workspace">${deleteIconSvg()}</button>
+      <button class="tree-action-button" type="button" data-tree-action="remove-workspace" aria-label="Close workspace" title="Close workspace">${closeIconSvg()}</button>
     </span>`;
   }
   const label = kind === "folder" ? "Folder actions" : "File actions";
@@ -1376,6 +1415,10 @@ function renameIconSvg() {
 
 function deleteIconSvg() {
   return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18"></path><path d="M8 6V4h8v2"></path><path d="M19 6l-1 14H6L5 6"></path><path d="M10 11v5"></path><path d="M14 11v5"></path></svg>`;
+}
+
+function closeIconSvg() {
+  return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg>`;
 }
 
 function renderDraftEntry(parentFolder, parent, depth) {
@@ -1763,6 +1806,7 @@ function loadEmbeddedDocument(index) {
   const previewDocument = activePreviewDocument();
   applyGameCss(previewDocument ? effectiveGameCss(previewDocument) : "");
   applyGameVisuals(previewDocument ? effectiveGameVisualsJs(previewDocument) : "");
+  runButton.disabled = !previewDocument;
   sourceEditor.readOnly = !isTextDocument(document);
   setSourceEditorValue(isTextDocument(document)
     ? document.source || ""
@@ -1774,6 +1818,7 @@ function loadEmbeddedDocument(index) {
   }
   syncPreviewViewportAspect();
   setPreviewDocumentLoaded(Boolean(latestHtml));
+  runButton.disabled = !previewDocument;
   if (latestHtml) {
     applyPreviewTheme(previewExport?.theme || null);
   }
@@ -1817,6 +1862,7 @@ function loadFolderPreview(folder) {
   previewExport = extractPreviewExport(latestHtml);
   syncPreviewViewportAspect();
   setPreviewDocumentLoaded(Boolean(latestHtml));
+  runButton.disabled = !previewDocument;
   if (latestHtml) {
     applyPreviewTheme(previewExport?.theme || null);
   }
@@ -2179,7 +2225,7 @@ async function removeWorkspaceNode(nodeId) {
     runButton.disabled = true;
     downloadButton.disabled = true;
   }
-  setEditorStatus("Removed workspace", "is-ok");
+  setEditorStatus("Closed workspace", "is-ok");
 }
 
 function starterPuzzleSource(name) {

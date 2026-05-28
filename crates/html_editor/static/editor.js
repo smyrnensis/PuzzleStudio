@@ -170,6 +170,7 @@ let psImportConvertTimer = 0;
 let levelPaintDrag = null;
 let levelBucketActive = false;
 let levelResizeMode = null;
+let levelGridVisible = false;
 let levelPlaytestActive = false;
 let levelPlaytestStateData = null;
 let levelPlaytestTransitionBusy = false;
@@ -182,6 +183,8 @@ let level = {
   width: 9,
   height: 5,
   selectedObjectId: 0,
+  editScope: "layer",
+  activeLayer: 0,
   paletteCollapsed: false,
   palette: [],
   regions: [],
@@ -280,6 +283,8 @@ function visualEditSnapshot(kind) {
       state: {
         width: level.width,
         height: level.height,
+        editScope: level.editScope,
+        activeLayer: level.activeLayer,
         regions: cloneVisualEditValue(level.regions || []),
         cells: cloneVisualEditValue(level.cells || []),
       },
@@ -384,6 +389,8 @@ function restoreVisualEditSnapshot(snapshot) {
   if (snapshot.kind === "level") {
     level.width = Math.max(1, Math.trunc(Number(state.width) || 1));
     level.height = Math.max(1, Math.trunc(Number(state.height) || 1));
+    level.editScope = state.editScope === "all" ? "all" : "layer";
+    level.activeLayer = Math.max(0, Math.trunc(Number(state.activeLayer) || 0));
     level.regions = cloneVisualEditValue(state.regions || []);
     level.cells = cloneVisualEditValue(state.cells || []);
     clearSolutionPreview();
@@ -453,6 +460,9 @@ function currentVisualEditKind() {
 }
 
 function undoVisualEdit(kind = currentVisualEditKind()) {
+  if ((kind === "sprite" || kind === "sprite3d") && typeof commitSpriteColorEditHistory === "function") {
+    commitSpriteColorEditHistory(kind);
+  }
   const history = visualEditHistories[kind];
   const snapshot = history?.undo.pop();
   if (!snapshot) {
@@ -932,6 +942,7 @@ async function renderPreview() {
   const document = activePreviewDocument();
   if (!isPuzzleDocument(document)) {
     setStatus("No game entry for preview", "is-error");
+    runButton.disabled = true;
     return;
   }
 
@@ -986,7 +997,7 @@ async function renderPreview() {
     if (activePreviewRequest === controller) {
       activePreviewRequest = null;
     }
-    runButton.disabled = false;
+    runButton.disabled = Boolean(activePreviewRequest) || !isPuzzleDocument(activePreviewDocument());
   }
 }
 
@@ -2801,14 +2812,17 @@ function firstFocusedPuzzleSprite2dStart(source) {
 }
 
 function firstFocusedPuzzleSprite3dEntry(source) {
-  if (typeof findSprites3dBlock !== "function" || typeof findSprite3dDefinitions !== "function") {
+  if (typeof findSprite3dDefinitions !== "function") {
     return null;
   }
-  const block = findSprites3dBlock(source);
-  if (!block) {
-    return null;
+  const blocks = typeof findSprites3dBlocks === "function"
+    ? findSprites3dBlocks(source)
+    : (typeof findSprites3dBlock === "function" ? [findSprites3dBlock(source)].filter(Boolean) : []);
+  const entries = [];
+  for (const block of blocks) {
+    entries.push(...(findSprite3dDefinitions(source, block) || []));
   }
-  return (findSprite3dDefinitions(source, block) || [])
+  return entries
     .filter((entry) => Number.isFinite(entry?.start))
     .sort((left, right) => left.start - right.start)[0] || null;
 }
@@ -3041,6 +3055,7 @@ function activePreviewModeAcceptsLevelState() {
 function resetLevelBuilderFromSource(resetCells = true) {
   levelDisplayCells = null;
   level.palette = levelPaletteFromExport(levelReferenceSource());
+  level.activeLayer = normalizedLevelActiveLayer(level.activeLayer);
   const size = initialLevelSize();
   if (resetCells) {
     level.width = size.width || level.width;
@@ -3083,7 +3098,7 @@ function levelPaletteFromExport(source) {
   const placeableObjects = sourcePlaceableObjectNames(source, previewExport);
   const objects = engineObjects().filter((object) => placeableObjects.has(object.name));
   return [
-    { id: 0, name: "Empty", layer: null, sprite: "empty" },
+    { id: 0, name: "Eraser", layer: null, sprite: "eraser" },
     ...objects,
   ];
 }
@@ -3691,8 +3706,12 @@ function currentSprite3dSourceLocation() {
   }
   for (const document of puzzleTextDocuments()) {
     const source = sourceForDocument(document);
-    const block = findSprites3dBlock(source);
-    const entry = block ? findSprite3dDefinitionBlock(source, block, name) : null;
+    const entry = typeof findSprite3dDefinitionByName === "function"
+      ? findSprite3dDefinitionByName(source, name)
+      : (() => {
+        const block = findSprites3dBlock(source);
+        return block ? findSprite3dDefinitionBlock(source, block, name) : null;
+      })();
     if (entry) {
       return {
         document,
@@ -4245,8 +4264,10 @@ function cloneCellSlots(slots, exportData = previewExport) {
 }
 
 function renderLevelPalette() {
+  const scopeToggle = levelScopeLayerButton?.closest?.(".level-scope-toggle");
   const toggleButton = levelPaletteCollapseButton;
-  levelPalette.replaceChildren(toggleButton);
+  const eraserButton = renderLevelEraserButton();
+  levelPalette.replaceChildren(...[scopeToggle, toggleButton, levelFillButton, eraserButton].filter(Boolean));
   levelPalette.classList.add("is-sprite-only");
   levelPalette.classList.toggle("is-collapsed", level.paletteCollapsed);
   levelPaletteCollapseButton.classList.toggle("is-active", level.paletteCollapsed);
@@ -4254,11 +4275,30 @@ function renderLevelPalette() {
   levelPaletteCollapseButton.setAttribute("aria-expanded", String(!level.paletteCollapsed));
   levelPaletteCollapseButton.setAttribute("aria-label", level.paletteCollapsed ? "Show palette" : "Hide palette");
   levelPaletteCollapseButton.title = level.paletteCollapsed ? "Show palette" : "Hide palette";
-  const mainObjects = level.palette.filter((object) => object.id === 0 || !isVisualObject(object));
+  const mainObjects = level.palette.filter((object) => object.id !== 0 && !isVisualObject(object));
   const visualObjects = level.palette.filter((object) => object.id !== 0 && isVisualObject(object));
   renderLevelPaletteGroup("", mainObjects);
   renderLevelPaletteGroup("Visual", visualObjects);
+  renderLevelScopeControl();
   updateLevelPlaytestControls();
+}
+
+function renderLevelEraserButton() {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "level-palette-tool-button sprite-icon-button level-eraser-button";
+  button.classList.toggle("is-active", level.selectedObjectId === 0);
+  button.setAttribute("aria-label", "Paint Eraser");
+  button.setAttribute("aria-pressed", String(level.selectedObjectId === 0));
+  button.title = "Eraser";
+  button.dataset.tooltip = "Eraser";
+  button.append(renderLevelEraserIcon());
+  button.addEventListener("click", () => {
+    level.selectedObjectId = 0;
+    setLevelActiveLayerForObject(0);
+    renderLevelPalette();
+  });
+  return button;
 }
 
 function renderLevelPaletteGroup(label, objects) {
@@ -4290,6 +4330,7 @@ function renderLevelPaletteGroup(label, objects) {
 
     button.addEventListener("click", () => {
       level.selectedObjectId = object.id;
+      setLevelActiveLayerForObject(object.id);
       renderLevelPalette();
     });
     group.append(button);
@@ -4300,10 +4341,12 @@ function renderLevelPaletteGroup(label, objects) {
 function renderLevelBoard() {
   updateLevelSizeLabel();
   syncLevelResizeControls();
+  renderLevelScopeControl();
   renderLevelSourcePreview();
   const cells = displayedLevelCells();
   if (levelRenderer) {
     levelRenderer.render(levelScene(cells));
+    syncLevelGridVisibility();
     levelBoard.querySelectorAll(".cell").forEach((cell, index) => {
       cell.dataset.index = String(index);
       cell.setAttribute("aria-label", cellLabel(cells[index]));
@@ -4319,6 +4362,29 @@ function renderLevelBoard() {
   syncLevelBoardScale();
   scheduleBoardScaleSync();
   renderSolverBoard();
+}
+
+function syncLevelGridVisibility() {
+  levelBoard?.classList.remove("has-occupied-cell-grid", "has-all-cell-grid");
+  levelBoard?.classList.toggle("has-all-cell-grid", levelGridVisible);
+  syncLevelGridButton();
+}
+
+function toggleLevelGrid() {
+  levelGridVisible = !levelGridVisible;
+  syncLevelGridVisibility();
+  setStatus(levelGridVisible ? "Level grid visible" : "Level grid hidden", "is-ok");
+}
+
+function syncLevelGridButton() {
+  if (!levelGridButton) {
+    return;
+  }
+  levelGridButton.classList.toggle("is-selected", levelGridVisible);
+  levelGridButton.setAttribute("aria-pressed", levelGridVisible ? "true" : "false");
+  levelGridButton.title = "Toggle grid";
+  levelGridButton.dataset.tooltip = "Toggle grid";
+  levelGridButton.setAttribute("aria-label", "Toggle level grid");
 }
 
 function renderSolverBoard() {
@@ -4371,6 +4437,7 @@ function syncLevelBoardScale() {
   syncBoardViewportScale(wrap, levelBoardViewport, levelBoard, boardFrameSize(levelBoard, level.width, level.height), {
     width: levelEditorEdgeSize * 2 + levelEditorGap * 2,
     height: levelEditorEdgeSize * 2 + levelEditorGap * 2,
+    availableHeight: editorRemainingContentBlockSize(levelBuilder, wrap),
   });
 }
 
@@ -4395,8 +4462,15 @@ function syncBoardViewportScale(wrap, viewport, board, frame, chrome = {}) {
   if (availableWidth <= 0) {
     return;
   }
+  const availableFrameHeight = Number.isFinite(chrome.availableHeight)
+    ? Math.max(0, Number(chrome.availableHeight) - elementBlockOuterSpacing(wrap) - chromeHeight)
+    : Number.POSITIVE_INFINITY;
   const maxCellSize = Math.max(1, Math.floor(editorPuzzleCellSize()));
-  const fitCellSize = Math.max(1, Math.min(maxCellSize, Math.floor(availableWidth / frameWidth)));
+  const fitCellSizeByWidth = Math.floor(availableWidth / frameWidth);
+  const fitCellSizeByHeight = Number.isFinite(availableFrameHeight) && availableFrameHeight > 0
+    ? Math.floor(availableFrameHeight / frameHeight)
+    : maxCellSize;
+  const fitCellSize = Math.max(1, Math.min(maxCellSize, fitCellSizeByWidth, fitCellSizeByHeight));
   const cellSize = quantizedEditorCellSize(fitCellSize, editorPuzzleQuantum(board));
   const boardWidth = frameWidth * cellSize;
   const boardHeight = frameHeight * cellSize;
@@ -4408,6 +4482,29 @@ function syncBoardViewportScale(wrap, viewport, board, frame, chrome = {}) {
   wrap.style.setProperty("--board-scale", "1");
   wrap.style.setProperty("--board-viewport-width", `${Math.ceil(naturalWidth)}px`);
   wrap.style.setProperty("--board-viewport-height", `${Math.ceil(naturalHeight)}px`);
+}
+
+function editorRemainingContentBlockSize(container, target) {
+  if (!container || !target || !container.contains(target)) {
+    return Number.POSITIVE_INFINITY;
+  }
+  const containerHeight = elementContentHeight(container);
+  if (containerHeight <= 0) {
+    return Number.POSITIVE_INFINITY;
+  }
+  const style = window.getComputedStyle(container);
+  const gap = Math.max(0, Number.parseFloat(style.rowGap || style.gap || "0") || 0);
+  const visibleChildren = [...container.children].filter((child) => {
+    if (child === target) {
+      return true;
+    }
+    return window.getComputedStyle(child).display !== "none";
+  });
+  const siblingHeight = visibleChildren
+    .filter((child) => child !== target)
+    .reduce((sum, child) => sum + elementOuterBlockSize(child), 0);
+  const gapHeight = Math.max(0, visibleChildren.length - 1) * gap;
+  return Math.max(1, containerHeight - siblingHeight - gapHeight);
 }
 
 function editorPuzzleCellSize() {
@@ -4655,6 +4752,9 @@ function objectIdForLayer(layer, exportData = previewExport) {
 }
 
 function renderObjectPreview(object) {
+  if (!object?.id) {
+    return renderLevelEraserPreview();
+  }
   const root = document.createElement("span");
   root.className = "game-preview-scope level-token-visual board";
   root.setAttribute("aria-hidden", "true");
@@ -4662,6 +4762,31 @@ function renderObjectPreview(object) {
     new window.PuzzleRenderer(root, { renderMode: "dom", themeRoot: root }).render(objectScene(object));
   }
   return root;
+}
+
+function renderLevelEraserPreview() {
+  const root = document.createElement("span");
+  root.className = "level-token-visual";
+  root.setAttribute("aria-hidden", "true");
+  root.append(renderLevelEraserIcon());
+  return root;
+}
+
+function renderLevelEraserIcon() {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("class", "level-token-eraser");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("aria-hidden", "true");
+  for (const d of [
+    "m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21",
+    "M22 21H7",
+    "m5 11 9 9",
+  ]) {
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("d", d);
+    svg.append(path);
+  }
+  return svg;
 }
 
 function objectScene(object) {
@@ -4899,7 +5024,8 @@ function syncLevelBucketButton() {
   levelFillButton.classList.toggle("is-active", levelBucketActive);
   levelFillButton.setAttribute("aria-pressed", String(levelBucketActive));
   levelFillButton.setAttribute("aria-label", "Bucket fill connected area");
-  levelFillButton.title = levelBucketActive ? "Bucket active: click a connected area" : "Bucket fill connected area";
+  levelFillButton.title = "Fill";
+  levelFillButton.dataset.tooltip = "Fill";
 }
 
 function toggleLevelBucketMode() {
@@ -5014,6 +5140,71 @@ function updateLevelSizeLabel() {
   levelSizeLabel.textContent = `${level.width} × ${level.height}`;
 }
 
+function levelEditScope() {
+  if (level.editScope !== "all") {
+    level.editScope = "layer";
+  }
+  return level.editScope;
+}
+
+function normalizedLevelActiveLayer(layer = level.activeLayer, exportData = previewExport) {
+  const count = Math.max(1, layerCount(exportData));
+  return Math.max(0, Math.min(count - 1, Math.trunc(Number(layer) || 0)));
+}
+
+function setLevelActiveLayerForObject(objectId) {
+  const object = engineObjectById(objectId);
+  if (object && Number.isInteger(object.layer)) {
+    level.activeLayer = normalizedLevelActiveLayer(object.layer);
+  } else {
+    level.activeLayer = normalizedLevelActiveLayer(level.activeLayer);
+  }
+}
+
+function levelPaintLayerForObject(objectId) {
+  const object = engineObjectById(objectId);
+  if (object && Number.isInteger(object.layer)) {
+    return normalizedLevelActiveLayer(object.layer);
+  }
+  return normalizedLevelActiveLayer(level.activeLayer);
+}
+
+function renderLevelScopeControl() {
+  const scope = levelEditScope();
+  const controls = [
+    {
+      button: levelScopeLayerButton,
+      scope: "layer",
+      label: "Edit scope: current layer",
+      title: "Mono layer",
+    },
+    {
+      button: levelScopeAllButton,
+      scope: "all",
+      label: "Edit scope: all layers",
+      title: "All layers",
+    },
+  ];
+  for (const item of controls) {
+    if (!item.button) {
+      continue;
+    }
+    const active = item.scope === scope;
+    item.button.classList.toggle("is-active", active);
+    item.button.setAttribute("aria-label", item.label);
+    item.button.setAttribute("aria-pressed", String(active));
+    item.button.title = item.title;
+    item.button.dataset.tooltip = item.title;
+    item.button.disabled = levelPlaytestActive;
+  }
+}
+
+function setLevelEditScope(scope) {
+  level.editScope = scope === "all" ? "all" : "layer";
+  renderLevelScopeControl();
+  setStatus(level.editScope === "all" ? "Level edits affect all layers" : "Level edits affect one layer", "is-ok");
+}
+
 function paintLevelCellFromElement(element) {
   const index = levelCellIndexFromElement(element);
   return paintLevelCellAtIndex(index, level.selectedObjectId);
@@ -5041,9 +5232,11 @@ function bucketFillLevelFromIndex(index) {
   }
   clearSolutionPreview();
   levelDisplayCells = null;
-  const replacement = paintCellSlots(level.cells[index], level.selectedObjectId);
+  const scope = levelEditScope();
+  const paintLayer = levelPaintLayerForObject(level.selectedObjectId);
+  const replacement = paintCellSlots(level.cells[index], level.selectedObjectId, { scope, layer: paintLayer });
   const target = cloneCellSlots(level.cells[index]);
-  if (sameCellSlots(target, replacement)) {
+  if (sameCellSlotsForLevelScope(target, replacement, scope, paintLayer)) {
     setStatus("Connected area already has that tile", "is-ok");
     return false;
   }
@@ -5053,7 +5246,7 @@ function bucketFillLevelFromIndex(index) {
   let changed = 0;
   while (stack.length) {
     const current = stack.pop();
-    if (visited[current] || !sameCellSlots(level.cells[current], target)) {
+    if (visited[current] || !sameCellSlotsForLevelScope(level.cells[current], target, scope, paintLayer)) {
       continue;
     }
     visited[current] = 1;
@@ -5079,11 +5272,11 @@ function bucketFillLevelFromIndex(index) {
   }
   setLevelSolveStatus("");
   renderLevelBoard();
-  setStatus(level.selectedObjectId ? "Filled connected area" : "Filled connected area with empty", "is-ok");
+  setStatus(level.selectedObjectId ? "Filled connected area" : "Erased connected area", "is-ok");
   return true;
 }
 
-function paintLevelCellAtIndex(index, objectId) {
+function paintLevelCellAtIndex(index, objectId, options = {}) {
   if (levelPlaytestActive) {
     return false;
   }
@@ -5092,7 +5285,9 @@ function paintLevelCellAtIndex(index, objectId) {
   if (!Number.isInteger(index) || index < 0 || index >= level.cells.length) {
     return false;
   }
-  const next = paintCellSlots(level.cells[index], objectId);
+  const scope = options.scope || levelEditScope();
+  const paintLayer = Number.isInteger(options.layer) ? options.layer : levelPaintLayerForObject(objectId);
+  const next = paintCellSlots(level.cells[index], objectId, { scope, layer: paintLayer });
   if (sameCellSlots(level.cells[index], next)) {
     return false;
   }
@@ -5131,6 +5326,8 @@ function startLevelPaint(event) {
   levelPaintDrag = {
     pointerId: event.pointerId,
     objectId,
+    scope: levelEditScope(),
+    layer: levelPaintLayerForObject(objectId),
     lastIndex: -1,
     beforeSnapshot: visualEditSnapshot("level"),
     changed: false,
@@ -5171,7 +5368,10 @@ function paintLevelDragIndex(index) {
     return;
   }
   levelPaintDrag.lastIndex = index;
-  if (paintLevelCellAtIndex(index, levelPaintDrag.objectId)) {
+  if (paintLevelCellAtIndex(index, levelPaintDrag.objectId, {
+    scope: levelPaintDrag.scope,
+    layer: levelPaintDrag.layer,
+  })) {
     levelPaintDrag.changed = true;
   }
 }
@@ -5185,7 +5385,7 @@ async function startLevelPlaytest() {
     setStatus("No level to play", "is-error");
     return;
   }
-  const stateData = solverStateData(exportData);
+  const stateData = levelStateData(exportData);
   if (!stateData) {
     setStatus("No level to play", "is-error");
     return;
@@ -5202,7 +5402,7 @@ async function startLevelPlaytest() {
   levelPlaytestActive = true;
   levelPlaytestStateData = playableState;
   levelPlaytestRuntimeStateData = playableState;
-  levelDisplayCells = null;
+  levelDisplayCells = stateDataToLevelCells(playableState, exportData);
   pendingPreviewKeyStateSync = 0;
   updateLevelPlaytestControls();
   renderLevelBoard();
@@ -5360,6 +5560,8 @@ async function applyLevelPlaytestKey(event) {
     const levelIndex = currentEditableLevelIndex(exportData);
     const outcome = transitionPlaytestProgram(compiler, exportData, "main", levelIndex, levelPlaytestStateData, inputId);
     levelPlaytestStateData = outcome.state || levelPlaytestStateData;
+    levelDisplayCells = stateDataToLevelCells(levelPlaytestStateData, exportData);
+    renderLevelBoard();
     sendLevelStateToPreview(levelIndex, levelPlaytestStateData, {
       acceptModelInput: true,
       materializeLevelStart: false,
@@ -5396,9 +5598,11 @@ function updateLevelPlaytestControls() {
   syncLevelResizeControls();
   if (levelPlaytestButton) {
     const label = levelPlaytestActive ? "Stop level playtest" : "Play level";
+    const tooltip = levelPlaytestActive ? "Stop" : "Play";
     levelPlaytestButton.classList.toggle("is-playing", levelPlaytestActive);
     levelPlaytestButton.setAttribute("aria-label", label);
-    levelPlaytestButton.title = label;
+    levelPlaytestButton.title = tooltip;
+    levelPlaytestButton.dataset.tooltip = tooltip;
   }
   for (const element of [
     levelNamespaceInput,
@@ -5407,6 +5611,8 @@ function updateLevelPlaytestControls() {
     addLevelButton,
     updateLevelButton,
     levelPaletteCollapseButton,
+    levelScopeLayerButton,
+    levelScopeAllButton,
     levelExpandButton,
     levelShrinkButton,
     levelRotateLeftButton,
@@ -5434,13 +5640,35 @@ function sameCellSlots(left, right) {
   return left.every((value, index) => value === right[index]);
 }
 
-function paintCellSlots(slots, objectId) {
+function sameCellSlotsForLevelScope(left, right, scope = levelEditScope(), layer = level.activeLayer) {
+  if (scope === "all") {
+    return sameCellSlots(left, right);
+  }
+  const normalizedLayer = normalizedLevelActiveLayer(layer);
+  const leftSlots = cloneCellSlots(left);
+  const rightSlots = cloneCellSlots(right);
+  return leftSlots[normalizedLayer] === rightSlots[normalizedLayer];
+}
+
+function paintCellSlots(slots, objectId, options = {}) {
+  const scope = options.scope || levelEditScope();
+  const targetLayer = normalizedLevelActiveLayer(options.layer);
   if (!objectId) {
-    return makeEmptyCell();
+    if (scope === "all") {
+      return makeEmptyCell();
+    }
+    const next = cloneCellSlots(slots);
+    next[targetLayer] = 0;
+    return next;
   }
   const object = engineObjectById(objectId);
   if (!object) {
     return cloneCellSlots(slots);
+  }
+  if (scope === "all") {
+    const next = makeEmptyCell();
+    next[object.layer] = object.id;
+    return next;
   }
   const next = cloneCellSlots(slots);
   next[object.layer] = object.id;
@@ -5740,7 +5968,8 @@ function setSolveLevelButtonState(isSolving) {
     }
     button.classList.toggle("is-solving", Boolean(isSolving));
     button.setAttribute("aria-label", label);
-    button.title = label;
+    button.title = visibleLabel;
+    button.dataset.tooltip = visibleLabel;
     const labelElement = button.querySelector(".solve-button-label");
     if (labelElement) {
       labelElement.textContent = visibleLabel;
@@ -5907,6 +6136,15 @@ function solutionMoves(solution) {
 function sceneCellsToSlots(scene, fallback = []) {
   const cells = (scene?.cells || []).map((cell) => cellSlotsFromLayers(cell.layers || []));
   return cells.length ? cells : fallback.map(cloneCellSlots);
+}
+
+function stateDataToLevelCells(stateData, exportData = previewExport) {
+  const scene = sceneFromStateData(stateData, {
+    regions: levelRegions(),
+    exportData,
+  });
+  const cells = sceneCellsToSlots(scene, []);
+  return cells.length === level.cells.length ? cells : null;
 }
 
 function setSolutionStep(index) {
@@ -6271,7 +6509,11 @@ function renderLevelSourcePreview() {
     return;
   }
   syncLevelNameOptions();
-  levelSourcePreview.textContent = levelSourceText();
+  try {
+    levelSourcePreview.textContent = levelSourceText();
+  } catch (error) {
+    levelSourcePreview.textContent = `Could not render level source: ${error?.message || error}`;
+  }
 }
 
 function levelSourceText() {
@@ -6288,7 +6530,13 @@ function addLevelToSource() {
   }
   const levelName = sanitizeLevelName(levelNameInput.value);
   const levelNamespace = sanitizeLevelNamespace(levelNamespaceInput.value);
-  const sourceData = levelSourceData();
+  let sourceData = null;
+  try {
+    sourceData = levelSourceData();
+  } catch (error) {
+    setStatus(`Could not create level source: ${error?.message || error}`, "is-error");
+    return;
+  }
   const nextSource = insertLevel(activePreviewSource(), levelName, sourceData, levelNamespace);
   if (!nextSource) {
     setStatus(levelNamespace ? `No levels named ${levelNamespace}` : "No levels block", "is-error");
@@ -6316,7 +6564,14 @@ function updateLevelInSource() {
   }
   const levelName = sanitizeLevelName(levelNameInput.value);
   const levelNamespace = sanitizeLevelNamespace(levelNamespaceInput.value);
-  const result = replaceLevelByName(activePreviewSource(), levelName, levelSourceData(), levelNamespace);
+  let sourceData = null;
+  try {
+    sourceData = levelSourceData();
+  } catch (error) {
+    setStatus(`Could not create level source: ${error?.message || error}`, "is-error");
+    return;
+  }
+  const result = replaceLevelByName(activePreviewSource(), levelName, sourceData, levelNamespace);
   if (!result) {
     setStatus(`No level named ${qualifiedLevelName(levelNamespace, levelName)}`, "is-error");
     return;
@@ -6720,7 +6975,7 @@ function levelRows() {
 
 function levelSourceData(source = levelReferenceSource(previewExport || extractPreviewExport(latestHtml)), exportData = previewExport || extractPreviewExport(latestHtml)) {
   const charEntries = sourceCharEntries(source, exportData);
-  const allocator = createLevelLegendAllocator(charEntries);
+  const allocator = createLevelLegendAllocator(charEntries, sourceReservedLegendChars(source));
   const visualObjects = visualObjectNameSet(exportData);
   const rows = [];
   const regions = levelRegions();
@@ -6739,11 +6994,14 @@ function levelSourceData(source = levelReferenceSource(previewExport || extractP
   return { rows, localLegends: allocator.localLegends };
 }
 
-function createLevelLegendAllocator(entries) {
-  const usedChars = new Set(entries.map((entry) => entry.char));
+function createLevelLegendAllocator(entries, reservedChars = []) {
+  const usedChars = new Set([
+    ...entries.map((entry) => entry.char),
+    ...reservedChars,
+  ]);
   const byObjects = new Map();
   const localLegends = [];
-  const candidates = "xyzabcdefghijklmnopqrstuvwABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789@$%&?!~^:;,_+-*/";
+  const candidates = levelLegendCandidateChars();
 
   return {
     localLegends,
@@ -6754,7 +7012,7 @@ function createLevelLegendAllocator(entries) {
       }
       const ch = [...candidates].find((candidate) => !usedChars.has(candidate));
       if (!ch) {
-        return ".";
+        throw new Error("No unused single-character legend symbol is available for generated level source");
       }
       usedChars.add(ch);
       byObjects.set(key, ch);
@@ -6762,6 +7020,30 @@ function createLevelLegendAllocator(entries) {
       return ch;
     },
   };
+}
+
+function levelLegendCandidateChars() {
+  const ascii = [..."xyzabcdefghijklmnopqrstuvwABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789@$%&?!~^:;,_+-*/<>|()[]"];
+  const ranges = [
+    [0x0391, 0x03A1],
+    [0x03A3, 0x03FF],
+    [0x0400, 0x04FF],
+    [0x2190, 0x21FF],
+    [0x2200, 0x22FF],
+    [0x2460, 0x24FF],
+    [0x2500, 0x257F],
+    [0x25A0, 0x25FF],
+    [0x2600, 0x26FF],
+    [0x2700, 0x27BF],
+  ];
+  const generated = ranges.flatMap(([start, end]) => {
+    const chars = [];
+    for (let codePoint = start; codePoint <= end; codePoint += 1) {
+      chars.push(String.fromCodePoint(codePoint));
+    }
+    return chars;
+  });
+  return [...new Set([...ascii, ...generated])].filter((char) => /\S/u.test(char));
 }
 
 function charForSourceCell(slots, entries, allocator, exportData = previewExport, _visualObjects = visualObjectNameSet(exportData)) {
@@ -6953,6 +7235,51 @@ function sourceCommonLegendRows(source) {
   return rows;
 }
 
+function sourceReservedLegendChars(source) {
+  const chars = new Set();
+  for (const row of sourceAllLegendRows(source)) {
+    const match = String(row || "").match(/^\s*(\S)\s*=/);
+    if (match) {
+      chars.add(match[1]);
+    }
+  }
+  return chars;
+}
+
+function sourceAllLegendRows(source) {
+  const lines = sourceLinesWithOffsets(source);
+  const rawLines = lines.map((line) => line.raw);
+  const rows = [];
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const section = sectionHeaderAtForWasm(rawLines, index);
+    if (section?.block === "legend") {
+      const result = collectSectionLegendRows(lines, rawLines, index + 3, []);
+      rows.push(...result.rows);
+      index = result.endIndex;
+      continue;
+    }
+
+    const code = levelScannerCode(lines[index].raw);
+    if (!code) {
+      continue;
+    }
+    if (/^legend(?:\s*\{)?\s*$/.test(code)) {
+      const result = collectLegendBlockRows(lines, index + 1, []);
+      rows.push(...result.rows);
+      index = result.endIndex;
+      continue;
+    }
+
+    const directive = code.match(/^legend\s+(.+)$/);
+    if (directive) {
+      rows.push(directive[1]);
+    }
+  }
+
+  return rows;
+}
+
 function collectSectionLegendRows(lines, rawLines, startIndex, levelRanges) {
   const rows = [];
   let endIndex = startIndex - 1;
@@ -7114,7 +7441,7 @@ function levelDefinitionSource(name, levelData, levelIndent, options = {}) {
   const lifecycle = options.lifecycle || {};
   const startLifecycleLines = Array.isArray(lifecycle.start) ? lifecycle.start : [];
   const clearLifecycleLines = Array.isArray(lifecycle.clear) ? lifecycle.clear : [];
-  const rowIndent = options.bodyIndent || `${levelIndent}\t`;
+  const rowIndent = Object.prototype.hasOwnProperty.call(options, "bodyIndent") ? options.bodyIndent : `${levelIndent}\t`;
   const hasRegionBreak = rows.some((row) => row.trim() === "");
   const hasLocalLegends = localLegends.length > 0;
   const hasLifecycle = startLifecycleLines.length > 0 || clearLifecycleLines.length > 0;
@@ -7906,11 +8233,14 @@ levelEdgeButtons.forEach((button) => {
 });
 levelExpandButton?.addEventListener("click", () => toggleLevelResizeMode("expand"));
 levelShrinkButton?.addEventListener("click", () => toggleLevelResizeMode("shrink"));
+levelGridButton?.addEventListener("click", toggleLevelGrid);
 levelRotateLeftButton?.addEventListener("click", rotateLevelLeft);
 levelRotateRightButton?.addEventListener("click", rotateLevelRight);
 levelFlipHorizontalButton?.addEventListener("click", flipLevelHorizontal);
 levelFlipVerticalButton?.addEventListener("click", flipLevelVertical);
 levelFillButton?.addEventListener("click", toggleLevelBucketMode);
+levelScopeLayerButton?.addEventListener("click", () => setLevelEditScope("layer"));
+levelScopeAllButton?.addEventListener("click", () => setLevelEditScope("all"));
 syncLevelResizeControls();
 levelNamespaceInput.addEventListener("input", () => {
   renderLevelSourcePreview();

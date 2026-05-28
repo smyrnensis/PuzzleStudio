@@ -142,7 +142,7 @@ scene playing {
 scene level_select {
 	view {
 		text "Select a level"
-		level_menu test -> goto playing(level)
+		level_menu
 		button "Back" -> goto title
 	}
 	inputs {

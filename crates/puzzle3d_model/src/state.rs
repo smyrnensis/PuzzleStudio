@@ -1,7 +1,7 @@
 use crate::{Coord3, Game3, GlobalId3, LayerId, ObjectId, RuleId3, ScratchId3, Size3};
 use puzzle_kernel::{
-    fnv_mix, FnvBuilder, GlobalUpdateOp, GlobalValueError, ObjectCellMask, ScratchSpace,
-    ScratchValue, VisibleGlobals,
+    FnvBuilder, GlobalUpdateOp, GlobalValueError, ObjectCellMask, ScratchSpace, ScratchValue,
+    VisibleGlobals, fnv_mix,
 };
 
 #[derive(Clone, Debug)]

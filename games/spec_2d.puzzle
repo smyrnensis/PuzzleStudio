@@ -286,7 +286,7 @@ scene menu {
 	scene level_select {
 			view {
 				text "Select a level"
-				level_menu microban -> goto playing(level)
+				level_menu
 				button "Back" -> goto title
 			}
 		inputs {

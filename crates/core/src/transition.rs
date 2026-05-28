@@ -2,7 +2,7 @@ use crate::compiled_game::{
     CompiledGame, Effect, Guard, LocalFrame, MatchCell, Offset, Pattern, PatternComponent,
     QueryKind, Rule, RuleApplication, RuleCondition, RuleStep, ScratchValueMatch, WriteOp,
 };
-use crate::ids::{InputId, ObjectId, QueryId, RuleId};
+use crate::ids::{InputId, ObjectId, QueryId, RuleId, ScratchId};
 use crate::patch::{Patch, PatchError, PatchOp};
 use crate::state::State;
 use std::collections::{BTreeMap, BTreeSet};
@@ -1216,9 +1216,23 @@ fn local_frame_focus_cells(state: &State, local_frame: &LocalFrame<ObjectId>) ->
 
 #[derive(Clone, Copy, Debug)]
 struct ComponentAnchor {
-    object: ObjectId,
+    kind: ComponentAnchorKind,
     dx: i16,
     dy: i16,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum ComponentAnchorKind {
+    Object(ObjectId),
+    SlotScratch {
+        object: ObjectId,
+        scratch: ScratchId,
+        value: Option<i64>,
+    },
+    CellScratch {
+        scratch: ScratchId,
+        value: Option<i64>,
+    },
 }
 
 fn first_component_candidate_origin_set(
@@ -1245,15 +1259,8 @@ fn component_candidate_origins(
     let Some(anchor) = component_anchor(game, state, component) else {
         return all_origin_vec(state, scope);
     };
-    if game.object_layer(anchor.object).is_none() {
-        return all_origin_vec(state, scope);
-    }
-
     let mut origins = BTreeSet::new();
-    for slot in state.object_positions(anchor.object) {
-        let Some((x, y)) = state.slot_position(*slot) else {
-            continue;
-        };
+    for (x, y) in anchor_positions(game, state, anchor) {
         let Some((origin_x, origin_y)) = offset_pos(x, y, -anchor.dx, -anchor.dy) else {
             continue;
         };
@@ -1266,6 +1273,44 @@ fn component_candidate_origins(
     }
 
     origins.into_iter().map(|(y, x)| (x, y)).collect()
+}
+
+fn anchor_positions(
+    game: &CompiledGame,
+    state: &State,
+    anchor: ComponentAnchor,
+) -> Vec<(u16, u16)> {
+    match anchor.kind {
+        ComponentAnchorKind::Object(object) => {
+            if game.object_layer(object).is_none() {
+                return Vec::new();
+            }
+            state
+                .object_positions(object)
+                .iter()
+                .filter_map(|slot| state.slot_position(*slot))
+                .collect()
+        }
+        ComponentAnchorKind::SlotScratch {
+            object,
+            scratch,
+            value,
+        } => {
+            if game.object_layer(object).is_none() {
+                return Vec::new();
+            }
+            state
+                .scratch_positions(object, scratch, value)
+                .iter()
+                .filter_map(|slot| state.slot_position(*slot))
+                .collect()
+        }
+        ComponentAnchorKind::CellScratch { scratch, value } => state
+            .scratch_positions(ObjectId::EMPTY, scratch, value)
+            .iter()
+            .filter_map(|cell| state.cell_position(*cell))
+            .collect(),
+    }
 }
 
 fn all_origin_vec(state: &State, scope: &LocalFrameScope2<'_>) -> Vec<(u16, u16)> {
@@ -1304,11 +1349,37 @@ fn component_anchor(
                 best = Some((
                     count,
                     ComponentAnchor {
-                        object: *object,
+                        kind: ComponentAnchorKind::Object(*object),
                         dx,
                         dy,
                     },
                 ));
+            }
+        }
+        for scratch in &cell.require_scratch {
+            if scratch.match_value != ScratchValueMatch::Exact {
+                continue;
+            }
+            let count = state
+                .scratch_positions(scratch.object, scratch.scratch, scratch.value)
+                .len() as u32;
+            if best
+                .as_ref()
+                .is_none_or(|(best_count, _)| count < *best_count)
+            {
+                let kind = if scratch.object.is_empty() {
+                    ComponentAnchorKind::CellScratch {
+                        scratch: scratch.scratch,
+                        value: scratch.value,
+                    }
+                } else {
+                    ComponentAnchorKind::SlotScratch {
+                        object: scratch.object,
+                        scratch: scratch.scratch,
+                        value: scratch.value,
+                    }
+                };
+                best = Some((count, ComponentAnchor { kind, dx, dy }));
             }
         }
     }
@@ -1803,13 +1874,14 @@ mod tests {
     use super::*;
     use crate::compiled_game::{
         GlobalUpdateOp, Guard, MatchCell, ObjectDef, Offset, Pattern, PatternComponent, Rule,
-        RuleApplication, WriteOp,
+        RuleApplication, ScratchDef, ScratchKind, ScratchPattern, WriteOp,
     };
     use crate::ids::{GlobalId, InputId, LayerId, ObjectId, RuleId};
 
     const PLAYER: ObjectId = ObjectId(1);
     const BOX: ObjectId = ObjectId(2);
     const WALL: ObjectId = ObjectId(3);
+    const MARK: ScratchId = ScratchId(1);
     const RIGHT: InputId = InputId(1);
 
     fn fixed(dx: i16, dy: i16) -> Offset {
@@ -1827,6 +1899,27 @@ mod tests {
             require_objects,
             forbid_objects,
             require_scratch: Vec::new(),
+            forbid_scratch: Vec::new(),
+        }
+    }
+
+    fn scratch_cell(
+        dx: i16,
+        dy: i16,
+        object: ObjectId,
+        scratch: ScratchId,
+        value: Option<i64>,
+    ) -> MatchCell {
+        MatchCell {
+            offset: fixed(dx, dy),
+            require_objects: Vec::new(),
+            forbid_objects: Vec::new(),
+            require_scratch: vec![ScratchPattern {
+                object,
+                scratch,
+                value,
+                match_value: ScratchValueMatch::Exact,
+            }],
             forbid_scratch: Vec::new(),
         }
     }
@@ -1934,6 +2027,84 @@ mod tests {
         };
 
         CompiledGame::new(2, objects, vec![push_right])
+    }
+
+    fn scratch_anchor_game() -> CompiledGame {
+        let objects = vec![
+            ObjectDef {
+                id: PLAYER,
+                layer_id: LayerId(1),
+            },
+            ObjectDef {
+                id: BOX,
+                layer_id: LayerId(2),
+            },
+        ];
+        let scratch = vec![ScratchDef {
+            id: MARK,
+            kind: ScratchKind::Marker,
+            values: Vec::new(),
+        }];
+        CompiledGame::new_with_scratch_queries_and_program(3, objects, scratch, Vec::new(), vec![])
+    }
+
+    #[test]
+    fn scratch_position_cache_tracks_slot_scratch_moves_and_clears() {
+        let game = scratch_anchor_game();
+        let mut state = State::empty(4, 1, game.layer_count, game.object_count()).unwrap();
+        state.place_object(&game, 1, 0, BOX).unwrap();
+
+        state.set_scratch_unchecked(1, 0, LayerId(2), MARK, Some(7));
+        assert_eq!(
+            state
+                .scratch_positions(BOX, MARK, Some(7))
+                .iter()
+                .filter_map(|slot| state.slot_position(*slot))
+                .collect::<Vec<_>>(),
+            vec![(1, 0)]
+        );
+
+        let scratch = state.take_slot_for_move_unchecked(1, 0, LayerId(2));
+        state.place_moved_slot_unchecked(3, 0, LayerId(2), BOX, scratch);
+        assert_eq!(
+            state
+                .scratch_positions(BOX, MARK, Some(7))
+                .iter()
+                .filter_map(|slot| state.slot_position(*slot))
+                .collect::<Vec<_>>(),
+            vec![(3, 0)]
+        );
+
+        state.remove_scratch_unchecked(3, 0, LayerId(2), MARK, Some(7));
+        assert!(state.scratch_positions(BOX, MARK, Some(7)).is_empty());
+
+        state.set_scratch_unchecked(3, 0, LayerId(2), MARK, Some(9));
+        state.clear_scratch();
+        assert!(state.scratch_positions(BOX, MARK, Some(9)).is_empty());
+    }
+
+    #[test]
+    fn component_candidates_anchor_on_rarest_required_exact_scratch() {
+        let game = scratch_anchor_game();
+        let mut state = State::empty(5, 1, game.layer_count, game.object_count()).unwrap();
+        state.place_object(&game, 0, 0, PLAYER).unwrap();
+        state.place_object(&game, 1, 0, PLAYER).unwrap();
+        state.place_object(&game, 3, 0, PLAYER).unwrap();
+        state.place_object(&game, 2, 0, BOX).unwrap();
+        state.set_scratch_unchecked(2, 0, LayerId(2), MARK, Some(1));
+
+        let component = PatternComponent {
+            cells: vec![
+                cell(0, 0, vec![PLAYER], Vec::new()),
+                scratch_cell(1, 0, BOX, MARK, Some(1)),
+            ],
+            gap_count: 0,
+        };
+        let scope = LocalFrameScope2::new(&state, None);
+
+        let origins = component_candidate_origins(&game, &state, &component, &scope);
+
+        assert_eq!(origins, vec![(1, 0)]);
     }
 
     #[test]

@@ -1,342 +1,136 @@
 # Agent Handoff
 
-この文書は、後続エージェントが現在の設計判断と実装状況を素早く把握するための要約である。
+This document is the general handoff for later agents. It intentionally avoids
+deep folder-specific notes. For concrete implementation details, read the nearest
+`AGENTS.md` in the folder you are changing.
 
 ## Current Goal
 
-高速で決定論的な transition core を保ちつつ、`.puzzle` 言語処理と play UI を分離して育てている。
+The project is growing a lightweight environment for turn-based, grid-based,
+rule-driven puzzle games while keeping deterministic transition logic separate
+from `.puzzle` language processing, play/session behavior, adapters, and editor
+hosts.
 
 ```txt
 .puzzle file
-  -> puzzle-lang parser/compiler
-  -> puzzle-core CompiledGame
-  -> puzzle-play session/render helpers
-  -> transition_state / transition_trace
+  -> language parser/compiler
+  -> deterministic compiled game/state model
+  -> play/session helpers
+  -> adapter/editor presentation
 ```
 
-## Run / Test
+## Repository Context
+
+This checkout contains large generated artifacts and build outputs. Do not start
+by reading raw file contents across the tree. First identify the owner boundary,
+then read the smallest source files and that folder's `AGENTS.md`.
+
+Measured on 2026-05-28:
+
+- Whole checkout: about `11G`
+- `.git`: about `9.0G`
+- root build output: about `1.1G`
+- some nested test/build outputs are large enough to distort context selection
+- Files excluding version-control and build outputs: `661`
+
+Largest context traps are generated exports, generated documentation,
+WebAssembly binaries, legacy archives, and build caches. Do not patch generated
+outputs directly. Patch the source owner and regenerate only when that is the
+explicit intent.
+
+## Owner Map
+
+Read the corresponding folder `AGENTS.md` before editing these areas:
+
+- `crates/`: shared crate boundaries and package-level commands.
+- `crates/core/`: deterministic state, patches, guards, transition application.
+- `crates/lang/`: `.puzzle` parsing, validation, authoring syntax, lowering,
+  semantic highlighting, and import compatibility.
+- `crates/play/`: loaded-game session mechanics, undo/restart/level flow, and
+  display helpers.
+- `crates/scene/`: shared scene/presentation metadata and component layout
+  contracts.
+- `crates/html_play/`: browser runtime, standalone export behavior, screenshots,
+  themes, audio, and generated HTML runtime surfaces.
+- `crates/html_editor/`: browser editor service/UI, preview compilation,
+  highlighting, workspace behavior, and editor-owned layout.
+- `crates/ascii_play/`: terminal adapter behavior.
+- `crates/cli/`: product/automation facade and command routing.
+- `crates/puzzle3d_model/`: 3D model parser/runtime experiment.
+- `src-tauri/`: desktop shell and host filesystem boundary.
+- `games/`: sample authoring inputs and generated standalone game exports.
+- `docs/`: generated web documentation exports and documentation source policy.
+- `archive/`: legacy/reference material.
+- `wasm/`: generated WebAssembly artifacts.
+
+## General Run / Test
+
+Use owner-local commands whenever possible. Broad commands are useful only when
+their full blast radius is intended.
 
 ```bash
 cargo test
 cargo run -p puzzlestudio -- check games/spec_2d.puzzle
-cargo run -p html-play -- games/spec_2d.puzzle --serve
-cargo run -p html-play -- games/spec_2d.puzzle -o /tmp/game.html
-cargo run -p html-play -- games/spec_3d.puzzle --screenshot /tmp/spec_3d.png
-cargo run -p ascii-play -- games/spec_2d.puzzle
 ```
 
-The default `puzzlestudio` build intentionally keeps `check` independent from
-adapter crates. Adapter façade commands such as `puzzlestudio play`,
-`puzzlestudio preview`, `puzzlestudio editor`, and export commands require
-building the CLI with `--features adapters`; use owner-local package commands
-for adapter verification during development.
+For standalone HTML artifacts that embed the WASM runtime, use the wrapper that
+matches the intended audience instead of calling the crate directly:
 
-`puzzlestudio screenshot <path> -o <output.png>` is also an adapter façade
-command behind `--features adapters`. It delegates to `html-play`, writes a
-temporary standalone HTML export, and asks Chrome/Chromium headless to capture
-the browser-rendered page. For 3D-only documents it defaults to the first scene
-that contains a `puzzle3` component, so screenshots capture the playable board
-rather than the title menu unless `--scene` is supplied. It needs Chrome or
-Chromium on the host; pass `--browser <path>` or set `PUZZLESTUDIO_CHROME` when
-auto-discovery is not enough.
-
-Use `puzzlestudio ...` only when the installed CLI façade itself is the thing
-being checked, or after explicitly refreshing it with `cargo install --path
-crates/cli`. Do not treat `target/debug/puzzlestudio` as authoritative during
-development: CSS/JS/WASM included with `include_str!` / `include_bytes!` can be
-stale if the binary was built before the asset change.
-
-CLI authority boundary: `puzzlestudio` is a product / automation façade for
-stable commands, exit codes, diagnostics, and JSON output. It is not the owner
-of parser/runtime/editor/browser behavior, and it is not mandatory for local
-adapter verification. For owner-local checks, use the direct package command:
-`html-play` for browser player/export/theme layout, `html-editor` for editor
-service/workspace/preview/highlight, and `ascii-play` for terminal display and
-input.
-
-Controls in ASCII play:
-
-- `w/a/s/d` or arrow keys: move
-- `r`: sends the standard non-direction `restart` input; it is not an automatic session restart effect
-- `q`: quit
-
-## Important Design Decisions
-
-### Core Independence
-
-`puzzle-core` must not depend on terminal rendering, file IO, `.puzzle` parsing, game-specific rules, or level formats.
-
-`puzzle-lang` owns `.puzzle` parsing, authoring syntax, validation, and lowering into `puzzle-core` IR.
-
-`puzzle-play` owns loaded-game session mechanics such as undo/restart/level advance and display helpers.
-
-`ascii-play` and `html-play` are adapters. They should not own parser/compiler behavior.
-
-### Editor Host Boundaries
-
-The HTML editor, server mode, and Tauri desktop shell should share the same editor service for source loading, preview compilation, highlighting, export, and saving semantics. Do not fork compile or preview logic for desktop.
-
-Web mode should keep the browser-shaped workflow: import folder or zip into browser/editor state, then download/export files. It should not assume durable direct access to a local folder.
-
-Tauri desktop mode may directly edit files, but only after the user explicitly opens a project folder or project entry. Startup should be empty and must not auto-load `games/`, the repository, or the user's home directory. File reads/writes should be owned by Rust-side host commands bounded by the opened project root; do not expose broad filesystem access to JavaScript unless a concrete feature requires it.
-
-Platform divergence should happen last, at the host adapter/file-access boundary, after the shared editor service behavior is aligned.
-
-Editor frame geometry is owned in one place. The workbench owns pane columns and splitter width through `syncWorkbenchGridLayout` plus the `--workbench-splitter-width` CSS variable. Tool panes must not rederive pane widths. Preview iframe fitting, level board fitting, and similar editor surfaces should ask the shared frame helpers in `crates/html_editor/static/editor.js` (`editorFrameAvailableSize`, `editorFrameContentInlineSize`, `fitEditorAspectFrame`) for the available rectangle, then apply only their own aspect ratio, virtual size, or tool chrome. The compiled game/runtime still owns scene aspect and internal layout; the editor owns only the outer device rectangle.
-
-3D level editor preview must use a public runtime control contract, not runtime fixture internals. The compiled preview HTML may initialize the runtime, but editor-originated changes must go through `PuzzleStudioUpdatePuzzle3Preview` / `PuzzleStudioRenderPuzzle3ModelComponent` with explicit `level`, `resources`, `camera`, `view`, and `settings` fields. `camera` is the orientation/runtime camera surface; editor viewport framing such as preview zoom and XYZ target/pan belongs in `view` so it affects the level preview without contaminating tile palette capture. `resources` carries the model/visual context needed to interpret a level patch, currently `layerCount`, `objects`, and `sprites`; without it the runtime can receive cells such as `Goal` while rendering every object as a fallback cube because the sprite table was never part of the update contract. Keep whole-fixture replacement such as `PuzzleStudioSetPuzzle3Snapshot` as compatibility/debug surface only; do not use it from the level editor. This is the boundary that lets runtime scene/component JSON evolve without forcing the editor to chase internal fixture schema, while still exposing the preview knobs the editor legitimately needs.
-
-Highlighting should be Rust-owned. The browser editor should use the host/server or WASM `highlight_source_html` path for syntax color, and its fallback should be plain escaped text rather than a second JavaScript `.puzzle` grammar. `scan_source_context` now preserves span-bearing source tokens for editor-facing semantic passes; continue migrating parser/highlight/completion toward that shared token/span pipeline instead of adding independent tokenization tables.
-
-Scene effect and rewrite effect highlighting have started moving into the parser-owned path through a minimal typed surface layer in `crates/lang/src/surface.rs`. That file now has the shared backbone types `SurfaceDocument`, `SurfaceNode`, `SurfaceSink`, and `SurfaceSemanticToken`; effect parsing records nodes and marks into a sink instead of treating `SemanticToken` as the parser-owned artifact. `parse_surface_scene_effect` builds `SurfaceSceneEffect { effect: SceneEffect, document: SurfaceDocument }`, and `parse_surface_rewrite_effect` builds `SurfaceRewriteEffect { effects: Vec<EffectAst>, document: SurfaceDocument }`. `SemanticToken` is a projection from `SurfaceDocument.semantic_tokens` for this effect slice. There is also a first whole-source `parse_surface_document(source)` entry that collects scene/rewrite effect surface nodes into one document, and `parse_game2d` now constructs that surface document before normal game parsing. The editor-facing semantic scanner still calls `scene_effect_semantic_tokens` / `rewrite_effect_semantic_tokens`, but those functions project from surface documents rather than maintaining separate effect vocabularies in `semantic.rs`. This is still not the final architecture: continue by making the normal parser carry one `SurfaceSink` through document parsing instead of pre-scanning, then move conditions/patterns/declarations into typed surface nodes and add checked semantics before converting lowering to a mechanical checked-semantics consumer.
-
-Current Tauri shell status: `src-tauri` opens the shared HTML editor from `crates/html_editor/static`, starts with no project loaded, and exposes Rust commands for `load_source`, `open_project`, `compile_preview`, `highlight_source`, and `save_source`. `open_project` uses Tauri's Rust-side native dialog plugin and does not accept frontend-supplied filesystem paths; it resolves the chosen folder through `EditorService::open_game_entry`. `EditorService::open_game_entry` scopes `workspace_root` to the selected project folder or selected entry `.puzzle` parent, while `save_source` and `compile_preview` go through that opened service and reject paths outside the workspace root. Desktop mode watches each opened workspace root from Rust and emits fresh editor snapshots when external files change; the frontend auto-applies clean files and preserves app-side unsaved edits on conflicts. `cargo tauri build --bundles app` produces a macOS `PuzzleStudio.app` bundle; signing/notarization and installer-style release packaging are still pending.
-
-### Runtime State
-
-`State` includes `width`, `height`, and `layer_count` for speed.
-
-Cell encoding:
-
-```txt
-slot_index = ((y * width + x) * layer_count + layer_id)
-slots[slot_index] = object_id | EMPTY
+```bash
+tools/dev_export_html.sh games/fixban_tween.puzzle -o games/fixban_tween.html
+tools/release_editor_html.sh games/fixban_tween.puzzle -o editor.html
 ```
 
-`EMPTY = ObjectId(0)`.
+`dev_export_html.sh` rebuilds WASM before game HTML export so local developer
+checks see the current Rust implementation. `release_editor_html.sh` rebuilds
+WASM before generating `editor.html`; the resulting editor keeps that embedded
+WASM fixed until the editor artifact is regenerated.
 
-### Cell Model
+Adapter checks, editor checks, screenshots, and desktop builds have
+owner-specific caveats; read the relevant folder `AGENTS.md` before treating a
+command as authoritative.
 
-Cell is a finite set of visible objects, constrained by layer slots.
+## General Design Boundaries
 
-```txt
-at most one object per (cell, layer)
-```
+Core logic must stay deterministic and independent from file IO, parser
+concerns, rendering, sound playback, browser timers, terminal rendering, and
+game-specific UI behavior.
 
-No invisible multiplicity. If count matters, model it visibly.
+Language processing owns surface syntax and lowering. Runtime/session layers
+should consume checked/compiled structures rather than reinterpreting source
+syntax.
 
-### Input
+Play/session logic owns loaded-game mechanics such as undo, restart, level
+advance, screen flow, component dispatch, and post-turn lifecycle behavior.
 
-`input` is not canonical state.
+Adapters own presentation and host integration. They should not become the
+source of parser/compiler semantics.
 
-It is a transition context value passed into:
+Shared scene metadata is presentation/flow structure, not ownership of 2D or 3D
+model internals. Components and model windows define their own behavior behind
+clear contracts.
 
-```txt
-transition(state, input)
-```
+Editor and desktop hosts should share service behavior as much as possible.
+Platform divergence should happen at the host adapter/file-access boundary, not
+by forking parser, compile, preview, or highlighting logic.
 
-Rules see it through guards:
-
-```txt
-if input == right
-```
-
-Core IR represents this as:
-
-```rust
-Guard::InputIs(InputId)
-```
-
-### Surface Syntax
-
-Surface syntax example:
-
-```txt
-rules {
-input directions [ Player ] -> [ Player{>} ]
-[ Player{>} | Box ] -> [ Player{>} | Box{>} ]
-move
-}
-```
-
-`directions` is a built-in ordered tag set whose values are `up` / `down` / `left` / `right`. Those four semantic inputs and direction mappings are provided by default. Inputs are the semantic names produced from physical keys or UI events; only inputs with direction mappings can act as rewrite orientations. `direction <alias> <up|down|left|right>` defines a direction/input-context alias such as `east -> right`. Numeric `direction <input_name> <dx> <dy>` is not public syntax.
-
-Canonical player movement marks movement intent with builtin movement scratch, then calls the standard `move` routine. The `input <set>` prefix means "only when the current input is a member of this direction set, use that member as the rewrite orientation." It is appropriate for assigning intent such as `Player{>}`; direct position rewrites like `[ Player | ] -> [ | Player ]` are valid but are not the recommended movement pattern. `directions [ ... ]`, `horizontal [ ... ]`, and `vertical [ ... ]` are orientation set prefixes without input guards.
-The standard `move` routine expands over gameplay objects by layer and excludes display-only objects, so display projection layers do not leak into main movement logic. Within each movement layer phase it uses a global internal `__move_collision` scratch marker to reject contested destinations before repeated movement commits; the marker is cleaned before the next layer phase, so collision state is global storage with layer-local lifetime.
-
-Puzzle `rules` is required. `routine` is a named statement list and does not run until called from puzzle `rules` or another routine. Legacy puzzle `transitions` / `main` blocks and `rule` declarations are rejected.
-
-`for d in directions { ... }` expands the statement list per direction and remains useful for non-input value expansion or advanced cases that need multiple statements per direction. It is not the canonical way to write ordinary player movement. `for d in directions ... end` is still accepted as legacy syntax.
-
-Prefixless spatial patterns are PuzzleScript-compatible cardinal patterns. A prefixless pattern with multiple cells, multiple rows, ellipsis, or relative direction movement scratch lowers to `up` / `down` / `left` / `right` variants. This applies uniformly to rewrites, pattern conditions, and query patterns such as `exists([ Player | Wall ])`. Prefixless single-cell patterns remain neutral.
-
-### Patch
-
-Rules do not mutate state directly.
-
-Transition builds a patch and applies it as a single unit.
-
-Patch updates derived cache such as `object_counts`.
-
-## Implemented Files
+## Documentation Split
 
 Top-level docs are split by audience:
 
-User-facing docs:
+- User-facing docs explain how authors write and run `.puzzle` projects.
+- Developer-facing docs explain ownership boundaries, syntax decisions,
+  lowering/runtime constraints, and implementation plans.
+- Folder `AGENTS.md` files carry operational handoff details for each owner.
 
-- `README.md`
-- `AUTHORING_SYNTAX.md`
+When a feature changes, update the user-facing explanation, developer-facing
+principle/spec, or owner-specific agent handoff according to the audience that
+needs the information.
 
-Developer-facing docs:
+## Known General Gaps
 
-- `DESIGN_PRINCIPLES.md`
-- `CURRENT_SPEC.md`
-- `IMPLEMENTATION_PLAN.md`
-- `CLI_IMPLEMENTATION_PLAN.md`
-- `SOLVER_DESIGN.md`
-- `AGENT_HANDOFF.md`
-
-Core:
-
-- `crates/core/src/ids.rs`
-- `crates/core/src/compiled_game.rs`
-- `crates/core/src/state.rs`
-- `crates/core/src/patch.rs`
-- `crates/core/src/transition.rs`
-
-Language:
-
-- `crates/lang/src/lib.rs`
-
-Play helpers:
-
-- `crates/play/src/lib.rs`
-
-Adapters:
-
-- `crates/ascii_play/src/main.rs`
-- `crates/ascii_play/src/lib.rs`
-- `crates/html_play/src/main.rs`
-- `crates/cli/src/main.rs`
-- `games/spec_2d.puzzle`
-
-## Current Implemented Capabilities
-
-`puzzle-core`:
-
-- ID newtypes
-- layer-slot state
-- object count derived cache
-- rule guards
-- required / forbidden object matching
-- add / remove / replace writes
-- all-or-nothing patch apply
-- `transition_state`
-- `transition_trace`
-
-`puzzle-lang`:
-
-- `.puzzle` file loading
-- game folder entry resolution is prelude-based: a `.puzzle` with top-level `title` / `subtitle` / `author` / `homepage` metadata is a game entry. Folder paths resolve to the best prelude-bearing `.puzzle` in that folder, preferring `game.puzzle`, `<folder>.puzzle`, then `main.puzzle`. Prelude-less fragments resolve by searching the same folder and then parent folders for a game entry.
-- initial vanilla PuzzleScript import via `translate_puzzlescript_to_canonical`; it translates a small Sokoban-oriented PS subset into canonical `.puzzle` instead of widening canonical syntax directly. The `ps_to_puzzle` helper binary writes translated files. The first pinned mapping lives in `crates/lang/tests/fixtures/puzzlescript/`.
-- objects / layers
-- top-level `title <text>` and optional `subtitle <text>` / `author <text>` / `homepage <text>` metadata. Top-level `name <text>` is intentionally rejected to avoid confusion with scene/model/level names. Scene/display expressions can read `game.title`, `game.subtitle`, `game.author`, and `game.homepage`.
-- compact named layer declarations with `layers { floor = Goal Button }`
-- named layers usable as selector tags
-- `legend <char> = <selector...>` for display, level chars, and overlays belongs directly inside `levels { ... }`; model-level `legend` is rejected
-- level bodies can contain level-local `legend` directives/blocks for parse-only chars scoped to that level. Braced `level { ... }` bodies can also contain level-local `on_level_start { ... }` / `on_level_clear { ... }` statement blocks. As sugar, `message` / `sfx` / `wait` before the first ASCII row lower to that level's `on_level_start`, and the same commands after the ASCII rows lower to that level's `on_level_clear`.
-- canonical `levels { ... }` entries use `level <name>` followed by rows, with blank lines separating unbraced levels; unnamed row chunks are accepted as unnamed levels, and braced `level <name> { ... }` / `{ ... }` forms are for multi-region levels that need blank lines inside the body
-- finite ordered tag sets declared with `tags { color = red blue }`
-- object schemas such as `object player:color 1`
-- schema selectors such as `player:*`, `player:red`, `player:color`, `player:left`; bare schema family names such as `player` are not all-variant selectors
-- render overlays
-- 2D `render { grid { occupied_cells = true } }` and `render { grid { all_cells = true } }` are model-owned renderer settings that outline occupied cells or all cells in HTML play without affecting state, rules, levels, or win conditions
-- input key and arrow mappings
-- condition/query primitives are matcher-centered: `exists(matcher)` / `none(matcher)` are boolean primitives evaluated with short-circuit semantics, while `count(matcher)` is the numeric full-count primitive. `some(...)` is an alias for `exists(...)`; `some <selector>`, `no <pattern>`, and `all <selector> on <selector>` are PuzzleScript-compatible sugar that lower to `Exists` / `None` query forms, not to `count(...)` comparisons.
-- `win_conditions = exists(A) and none([ A no B ])`
-- multiple levels
-- default cardinal directions from `up/down/left/right`
-- optional `direction <alias> <up|down|left|right>` for direction/input-context aliases
-- required puzzle `rules { ... }` entrypoint; legacy `transitions { ... }` / `main { ... }` are rejected
-- `routine display <name>` declares a display routine. `display <name>`, `display <rewrite>`, and statement-local `display { ... }` run display behavior at that exact point in puzzle `rules` / lifecycle blocks.
-- `on_display { display <routine> }` is a display-only snapshot hook for renderer/editor projection. It runs without input, can only contain display statements, and must not be used for gameplay state.
-- display-only state objects use `@Name` declarations in `layers`; parser compatibility for `display_objects { ... }` has been removed.
-- `scratch { ... }` for transition-local facts; value scratch uses `name = int` / `name = directions` declarations and `Object{name=value}` attributes, bool scratch keeps presence syntax such as `Object{flag}` / `Object{no flag}`, `{mark}` is cell-anchored, `Object{mark}` is occurrence-anchored, and all scratch is cleared before returned state / solver keys.
-- movement sugar such as `> Box` lowers to builtin occurrence scratch `__move`; `parallel` / `perpendicular` are relative movement scratch set sugar and expand to `<` / `>` or `^` / `v` alternatives during oriented lowering.
-- main and display objects share one layer namespace/order; canonical syntax declares object roles separately from puzzle-level `layers`
-- `layers { each A:tag_set }` expands selector alternatives into separate ordinary layers, preserving display order
-- display routines can read main objects and call-site transition input, but can only write display objects and cannot use effects
-- main routines and gameplay conditions cannot read or write display objects
-- sprite reuse is owned by `sprites` sub-blocks: `colors { ... }`, `palettes { ... }`, and `shapes { ... }`. Sprite entries reference them with `palette <ref>` and `shape <ref>`, and `shape <name>:<tag_set> rotate from <value>` inside `shapes` expands rotated ASCII variants via `map rotate <tag_set>`.
-- named statement lists with `routine <name> { ... }`
-- routine block application is `repeat` by default; use `routine <name> once` for single block pass
-- rewrite line application is also `repeat` by default; use `once <direction> ...` for first-match application, `once_all ...` for one pass over all current matches, and `once_per_level ...` for a rule that can fire once in the current level state
-- `repeat until <condition> { ... }` is a pre-check block loop; condition uses the same var / named condition / query / pattern condition language as rule `if`
-- `repeat`/until-stable cycle detection is progress-based: a sweep or rule application that leaves the exact state unchanged is stable/no progress, not a cycle. Reaching an earlier exact state after crossing at least one distinct state is a cycle; the runtime keeps the revisited current state and ends that repeat instead of rolling back to the repeat boundary. Non-cycling divergent repeats stop at the internal repeat limit of 200 and keep the last reached state. `cancel` still takes priority over repeat cycle / limit handling. Browser exports log a warning for cycle / limit diagnosis.
-- routine calls from puzzle `rules` or another routine
-- `for <binding> in directions|horizontal|vertical`
-- `if input == <binding>`
-- rule conditions and query pattern args can carry explicit orientation, e.g. `no down [ Rock | ]`, `some(down [ Rock | ])`, `none(down [ Rock | ])`, `count(down [ Rock | ])`, set-oriented `some(horizontal [ Rock | ])`, and input-guarded set-oriented `some(input horizontal [ Rock | ])`; `some(...)` is an alias for `exists(...)`, while `none(...)` is a boolean query primitive and must not be lowered to `count(...) == 0`; legacy input-relative patterns such as `some(input directions [ Rock | ])` still make non-direction inputs false
-- 3D win condition rows follow the same condition-shape split as 2D authoring: `exists(...)` / `none(...)` are the canonical function-style forms, `some <selector>` / `no <pattern>` are PuzzleScript-style sugar, and `all <selector> on <selector>` is same-cell selector coverage sugar only. For vertical support goals, prefer `exists(Goal)` plus `none(down [ no Box | Goal ])`; `all Goal on down [ Box | Goal ]` is rejected.
-- In `levels3` level bodies, `.` is the reserved empty cell character and does not need a `legend` entry. Do not use `_ = empty`, and do not map `.` to objects such as Floor; use another legend char for real objects, e.g. `, = Floor`.
-- puzzle screen viewport directives are author-facing `flickscreen <w> <h>` for paged movement and `zoomscreen <w> <h>` for centered follow movement. `screen_focus <selector>` sets the focus object. Internal parser/export names use `viewport_*`; removed `frame_*` directives are not canonical.
-- `inputs { <input> <- <key...> }` is owner-scoped. Model `inputs` maps raw keys to puzzle/model semantic inputs; scene `inputs` maps raw keys to scene-wide semantic inputs such as title `confirm` or playing `back`. Scene-level `keys { <key...> -> <input-or-scene-command> }` is also accepted for shortcuts; `keys` must use `->`, not `=`. Supported named key tokens include arrows plus `Enter`, `Space`, `Escape`, `Tab`, and `Backspace`. Prefer the mental model `raw key/button -> owner inputs/keys -> semantic input or explicit scene command -> rules/component behavior`; do not reintroduce author-facing `action` syntax.
-- `if` is the condition guard in both routine statement lists and scene transitions; `when` is not accepted
-- `var` / `const` are scoped by owner: top-level session value, scene instance value, or puzzle state slot; puzzle `global` is rejected
-- puzzle `const` can be read by guards but cannot be updated by rewrite effects; scene `const` cannot be overwritten by scene params
-- `persistent var` preserves values across that owner's normal reinitialization; legacy puzzle `persistent <name> = ...` is rejected
-- rule `if` accepts bare puzzle vars as truthy checks, and `else` lowers to negated guards
-- puzzle rule effects are written directly as statements at that statement position; accepted effects are the same rule effects as rewrite suffixes, not scene effects. Legacy `do <effect>` is obsolete and rejected.
-- model-local `sounds { on move <selector> -> sfx <name> }` attaches an SFX emission to lowered rule alternatives that contain a `Move` write for one of the selected objects. This is compile-time lowering over rewrite alternatives, not a core runtime event watcher. Explicit `sfx` suffixes and move-trigger SFX are deduped by SFX name within one turn; `again` follow-up turns have separate dedup scopes.
-- scene `<slot>.<name>` conditions resolve named conditions first, then fall back to truthy puzzle vars on that puzzle slot
-- lifecycle hooks are `on_level_start { ... }` / `on_level_clear { ... }`; legacy `level_start { ... }` / `level_clear { ... }` are still accepted, while two-word `on level_start` / `on level_clear` are not accepted. `on_level_start` is runtime lifecycle, not parser materialization: raw `Level.initial_state` remains the parsed map, and play runtimes apply the hook on level entry/restart/navigation while collecting rule emissions such as `message` and `sfx`.
-- component behavior is owned by the component; `level_menu` owns cursor movement and enter, so canonical authoring syntax does not expose `cursor.*`, `emit`, `selected`, or menu-specific action commands
-- `level_menu` starts the selected level on enter by default; use ordinary `button ... -> <scene-command>` entries only for extra commands such as Back
-- scene layout primitives are `row`, `column`, and `box`. `view` direct children are an implicit vertical `column`, so canonical examples should omit an extra `column { ... }` when simple newline order is enough. `box` is a pure transparent layout rectangle with no default border/background. `panel` was removed as a scene/layout primitive because its styled-container meaning conflicts with the ownership boundary; do not reintroduce it as compatibility syntax.
-- `choice` is the scene component for player-facing options selected by the standard UI cursor; `button` is for pointer/tap or explicitly key-bound auxiliary actions. The HTML adapter projects `view`/`row`/`column`/`box` recursively into a logical grid for choices only: `choice` is focusable, `button` is not, `text`/`title`/`subtitle` occupy non-focusable cells, `row` concatenates horizontally, and `column`/`box` concatenate vertically. Arrow keys and `w/a/s/d` move only to the next focusable choice in the same row or column; missing cells do not use diagonal/nearest fallback, and edges are no-op. Enter/Space activates the focused choice. Scene input is broadcast to component groups by default; each component reacts only to relevant input. `choice`/`button` use the normal `-> <scene-command-or-input>` RHS, not old `action` syntax.
-- Scene is shared presentation/flow metadata, not a 2D or 3D model owner. Scene layout should not know model internals: it places typed components and content slots, while the component/content owner defines behavior. `puzzle-scene` now represents embedded content placements as `FrameComponent { kind, source, layout }`; `kind` preserves the author-facing component name such as `puzzle`, `puzzle3`, or `frame`. `puzzle` and `puzzle3` are therefore ordinary component names, not scene-owned model semantics. `button`, `text`, `level_menu`, and other components may keep distinct typed payloads, but scene body parsing must not grow per-component dispatch lists; component parsing belongs behind a leaf/component handler or registry boundary. `view` is the scene root layout block, not a component.
-- Top-level model declarations own a small document-level sugar: `puzzle <name>` and `puzzle3 <name>` add a playable `scene <name>` when no explicit scene with that name exists. The generated scene uses a same-named model slot, same-named model window component, and `step <name>` rule call. An explicit `scene <name> { ... }` is an override and suppresses the generated scene.
-- Shared scene layout metadata lives in `puzzle-scene`, not separately in the 2D and 3D parsers. `view`, `row`, `column`, and `box` can still carry header attributes such as `size <w> <h>`, `gap <n>`, `align <x> [y]`, and `scroll` for compatibility, but new authoring should not make fine width/height tuning the normal path. The HTML renderer now treats components by sizing class: flow (`title` / `subtitle` / `text` / `button`), ratio (`puzzle` / `puzzle3` / `frame`), collection (`level_menu` / `menu` / `for`), and container (`view` / `row` / `column` / `box`). Root logical size, standard gaps, and control metrics are default/theme/runtime-owned; ratio components are placed into flexible slots and contained by aspect ratio.
-- The 2D scene component tree now uses the shared `puzzle-scene` component shape with 2D-specific `SceneEffect`, `SceneExpr`, and text content payloads. A 2D board component is represented as a shared `ModelWindow` with `ModelKind::Puzzle2d`, not as a separate 2D-only `PuzzleState` component variant.
-- Component embed mode is a model-window contract, not nested scene playback: when a model is embedded as a component, the parent scene owns the outer screen size and input dispatch, and the embedded runtime exposes only the model window inside that host area. The child runtime must not reinterpret its own scene `row` / `column` / `box` layout inside the component iframe.
-- In the component input model, the game has one raw input stream, raw input enters the focused scene, and mapping keys/buttons to named inputs is owned by the component/model. A `puzzle3` component may declare `inputs { front <- w ArrowUp }`; `front` / `back` are the canonical 3D depth-direction names, while `forward` / `backward` remain parser compatibility aliases. Compact authoring aliases lower to standard key values such as `w` / `ArrowUp`. The 2D HTML component path also accepts raw `PuzzleStudioKey { key, code }` messages and resolves them through its own loaded input table. Scene rules step a model slot with `step <slot>`; path-like rows such as `board.rules` are misleading and must not parse as component rule calls. Undo is session-level. Restart is both a semantic model input and a model effect; scene handling must use explicit target commands such as `board.restart`.
-- 3D scene-level `keys { ... }` uses the same shared scene shortcut contract as 2D: rows are `<key...> -> <input-or-scene-command>`, never `<key...> = ...`.
-- `parse_game` now treats `.puzzle` as one document format instead of rejecting mixed 2D/3D files. At the document level, top-level shared shell sections (`title`, `subtitle`, `author`, `homepage`, `default_wait_time`, `again_interval`, `sounds`, `theme`, `assets`) are parsed once for the returned `LoadedDocument`; model-owned sections are split by their owner keywords before invoking the existing model parsers: `puzzle` / `levels` / `sprites` go to the 2D parser, and `puzzle3` / `levels3` / `sprites3` go to the 3D parser. Scene blocks in mixed documents are routed by explicit content-slot syntax: `puzzle ...` / `= puzzle ...` routes to the 2D scene adapter, while `puzzle3 ...` / `= puzzle3 ...` routes to the 3D scene adapter. The 3D test model no longer has a `Scene3` wrapper or `SceneComponent3` hierarchy; its scenes use `puzzle_scene::Scene`, shared scene action/key/rule-call types, and shared `SceneComponent` with `FrameComponent { kind: "puzzle3", source, inputs, layout }` for model windows. A scene that contains both model kinds is still rejected at the loaded-document adapter boundary, so this is not yet a full merge of the 2D and 3D model parsers.
-- Scene block scanning has started moving into `puzzle-scene`: `parse_scene_block_with_handler` owns the common structural loop over `state`, `view`, `inputs` / `keys`, `rules`, lifecycle, and inline directives, and both the 2D lang parser and 3D model parser now call it with adapter-specific handlers. This is intentionally not "one giant scene enum" or "everything is a frame"; typed component payloads can stay distinct, while the scene body parser stops hardcoding each component keyword.
-- 3D camera/render options are model-owned renderer metadata. Canonical syntax wraps them as `render { camera { yaw = <deg> pitch = <deg> zoom = <n> interactive_look = <bool> interactive_zoom = <bool> } grid { occupied_cells = <bool> } shade = <bool> }` inside `puzzle3`; legacy top-level `debug_camera`, `camera_yaw`, `camera_pitch`, and `camera_zoom` are compatibility only. 3D model `rules` can emit camera view-state updates with `set yaw = <deg>`, `set pitch = <deg>`, `set zoom = <n>`, and `reset_camera`; these are presentation emissions like SFX, not puzzle state, solver key state, or win-condition state. `reset_camera` returns the camera view to the `render { camera { ... } }` initial value. `render { shade = false }` disables face-light shading for 3D sprite voxels without changing sprite data or puzzle state. `interactive_look` is not a semantic input: raw pointer input reaches `puzzle3` through normal focused-scene component dispatch, and a pointer drag that starts inside the component box may be captured by that component and used only for camera yaw/pitch view-state updates.
-- scene visibility effects `show <scene>`, `hide <scene>`, and `toggle <scene>` remain canonical scene-level effects
-- scene navigation words are state-oriented: `resume <scene>` reuses an existing scene instance and switches to it, `resume <scene> with <name> = <value>` passes data into mutable scene params before switching, `open <scene>` keeps the current scene underneath and focuses the target, `close` returns from the opened scene, and `start <scene>` resets the target scene state before switching. Legacy `goto`, `enter`, and `back` remain compatibility aliases for `resume`, `open`, and `close`, but new canonical examples should not use them.
-- level scene entry is canonicalized as scene calls: use `resume sokoban`, `resume sokoban(level_name)`, or an explicit scene such as `scene playing(level) { state { sokoban(level) } view { sokoban } rules { step sokoban } }` with `resume playing(level)`. Level-less `resume <level scene>` continues the saved/selected `current_level` when possible and falls back to the first accepted level. Use `start <level scene>` when the scene instance itself must be reinitialized before entry. Old `start levels ... in <scene>`, `continue levels ... in <scene>`, and `start <scope> in <scene>` commands are rejected with a canonical-syntax diagnostic. Restart / advance intervention remains target-qualified as `playing.restart`, `playing.next_level`, `playing.previous_level`, `playing.goto <level>`, or slot-targeted forms such as `board.restart`. Normal clear / advance / restart belongs to the model window component and puzzle lifecycle; scene target commands are for explicit intervention such as buttons, menus, hubs, debug, or exceptional flow.
-- game progress scene effects are primitive standalone commands for now: `clear_game_progress`, `set current_level = <level>`, `clear current_level`, `set level.cleared = true|false`, `set level(<level>).cleared = true|false`, `reset persistent_vars`, and `reset <persistent var>`. Use `clear_undo_history` for undo/redo history only; block forms such as `game_progress {}` and `undo_history {}` are intentionally not part of the surface.
-- scene conditions can read current level context: `level.name == <name>`, `level.name != <name>`, `level.label == <label>`, `level.label != <label>`, `level.last`, and `level.has_next`. Prefer `level.name` for authoring; do not introduce index/number level conditions as canonical syntax. Do not make scene conditions the standard owner of level progression.
-- top-level `sounds { ... }` defines named `sfx` and `music`; scene/component effects can emit `sfx <name>`, `play_music <name>`, `pause_music [name]`, `resume_music [name]`, `stop_music [name]`, popup `message <expr>`, and presentation wait `wait [duration]` such as `wait`, `wait 0.1s`, `wait 1s`, or `wait 100ms`; `play_sfx <name>` is rejected. Bare `wait` defaults to `0.2s` and top-level `default_wait_time = 500ms` can change that default. Top-level `again_interval = 100ms` / `again_interval = 0.1s` changes standalone HTML `again` follow-up turn spacing; PuzzleScript-compatible `again_interval 0.1` is accepted as seconds. Scene-level lifecycle is `on_scene_start { ... }`; `on_level_start { ... }` is puzzle lifecycle only and is rejected in scenes. Browser adapters play these events; `puzzle-core` remains sound-playback-free, timer-free, and message-state-free.
-- top-level `assets { ... }` declares external HTML build inputs with `css "..."` and `script "..."` entries. CSS and scripts are loaded only when declared here; same-folder `game.css` / `visuals.js` are no longer implicit. Asset paths are game-folder relative. Scripts are display helpers over rendered scene snapshots, not gameplay extensions.
-- top-level `theme <theme>` / `theme <theme> { ... }` declares HTML display theme metadata. Theme identity belongs to HTML CSS presets; `.puzzle` theme declarations select the preset name and, in the braced form, expose only a small override API (`accent_color`, `background_color`, `text_color`, `muted_text_color`, `line_color`, `board_color`, `ui_font`, `title_font`, `control_radius`, `panel_radius`). These lower to CSS custom properties in HTML adapters only; theme is not core state. The default theme name is `clean` when no theme declaration is provided.
-- Built-in theme imports currently include `clean`, `terminal`, `paper`, `pixel`, `puzzlescript`, `candy`, `blueprint`, and `noir`.
-- puzzle rule effects can emit `win`, `restart`, `next_level`, `checkpoint`, `clear_checkpoint`, `message`, and `sfx`; `win` is a clear outcome command that treats `win_conditions` as true for that turn, roughly like `set win_conditions = true` sugar without mutating the condition definition or board objects. `restart -> restart` is the canonical input/effect sugar and is added implicitly when no `restart` input handler is written. `[ Goal Box ] -> next_level` and `if win_conditions -> next_level` produce a core transition command that the owning model window component / runtime converts into level advance. `checkpoint` stores the post-commit puzzle state as that slot's restart anchor, and `clear_checkpoint` returns restart to the level-start anchor; level changes and explicit level loads clear the checkpoint. `[ Player Goal ] -> message "Found"` and `[ Player Box ] -> message hint` produce a presentation command that `puzzle-play` / standalone HTML convert into a popup. `[ Player | Box | ] -> [ | Player | Box ] sfx push` produces a named SFX command when the rule matches. `win_conditions` remains metadata, but a defined named condition can be referenced from puzzle rule `if`.
-- turn completion is owned by `puzzle-play` / standalone HTML, not `puzzle-core`: after puzzle rules run, runtime evaluates `win_conditions` on the post-rules/pre-navigation snapshot, runs model `on_level_clear` before navigation when clear, and resolves queued level navigation commands through the owning model window component/runtime. Scene condition transitions are for overlay, menu, hub, debug, or exceptional flow intervention, not the default owner of level progression.
-- scene command sequences use block form with one command per line; inline `then` is not accepted
-- rectangular inline rewrite blocks: `[ A | B ; C | D ] -> [ A | B ; C | E ]`
-- disconnected inline rewrite blocks: `[ A ] [ B ] -> [ A ] [ ]`
-- row ellipsis inside rewrite blocks: `[ A | ... | B ] -> [ A | ... | C ]`
-- application-prefixed inline rewrite: `once right [ A | B ] -> [ C | D ]`, `once_all [ A ] -> [ B ]`, `once_per_level [ Door ] -> [ OpenDoor ]`, `repeat right [ A | B ] -> [ C | D ]`
-- oriented inline rewrite: `<direction-or-binding> [ A | B ] -> [ C | D ]`
-- selector alternatives lower to concrete low-level rule variants
-
-`puzzle-play`:
-
-- session state
-- undo / redo
-- restart / level advance
-- progress save data for cleared levels, current level, and persistent puzzle vars; host storage belongs to adapters
-- ASCII legend rendering helper
-
-`ascii-play`:
-
-- terminal file selection
-- terminal key reading
-- terminal screen refresh
-
-## Known Gaps
-
-- PuzzleScript import is intentionally minimal: it currently covers title/author metadata, PS `again_interval`, PS `background_color` / `text_color` lowered to canonical `theme` overrides, PS special `Background` as a real object plus an `on_level_start` background fill (`once_all [ no Background ] -> [ Background ]`), PS `run_rules_on_level_start` lowered to canonical `routine __ps_main once` plus `on_level_start`, basic `OBJECTS` including PS-style color/pattern sprites and one-character object shorthand, `LEGEND` rows including property aliases lowered to `group`, `COLLISIONLAYERS`, directional `RULES`, `+` continuation rows lowered to a repeated rule group, PS `again` lowered to a generated `var __ps_again` / `repeat until` loop with duplicate movement scratch guards such as `crate{no up}`, `late` rules emitted after `move`, `sfx0`-style rule suffixes lowered to canonical `sfx sfx0`, simple `SOUNDS` named seed rows lowered to `sounds { sfx <name> seed=<seed> type=puzzlescript }`, `WINCONDITIONS`, and blank-line-separated `LEVELS`. PS import intentionally does not use canonical runtime `again` for PS `again`, because canonical movement scratch is transition-local and imported automatic repeats need to see scratch across repeated `move` phases. Author-written canonical `again` still means a no-input follow-up turn after the current turn commits. It emits a canonical `scene title` first, with default title/subtitle and `button "Play" -> input confirm`; the confirm rule now emits `goto playing`. It also emits `scene playing` with `state { board = puzzle main }` and `view { puzzle board }`. It relies on canonical prefixless `>` implicit cardinal expansion and the built-in `move` routine rather than generating ad hoc movement-resolution rules. `moving` / `stationary` qualifiers are currently approximated by movement scratch where possible. Synonyms, aggregates, event-based sounds such as object movement/create sounds, random rules, and checkpoints are still future work.
-- Rewrite blank cells are unspecified unless paired with before-side objects to remove; absence checks use `no <selector>`.
-- `group <name> = <selector...>` is supported for rule selectors.
-- No property matching beyond explicit groups yet.
-- No `for c in color` value binding yet.
-- No phases.
-- No visible var writes beyond the current `var` effect support.
-- No event emission.
-- No solver crate yet.
-- `transition_state` still clones state; hot path is not optimized.
-- Trace is minimal.
+- Some language/import compatibility paths are intentionally partial.
+- Solver work is still limited compared with parser/runtime/editor work.
+- Transition hot paths still have optimization opportunities.
+- Trace output is useful but not yet a complete debugging model.
+- Several adapter surfaces are still converging on shared contracts.

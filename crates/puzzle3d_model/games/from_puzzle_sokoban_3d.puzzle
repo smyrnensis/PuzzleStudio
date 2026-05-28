@@ -110,7 +110,7 @@ scene level_select {
 
   view {
     title "Select Level"
-    level_menu handmade -> goto playing(level)
+    level_menu
     button "Back" -> goto title
   }
 }

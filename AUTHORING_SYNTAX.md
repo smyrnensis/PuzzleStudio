@@ -1090,6 +1090,14 @@ if win_conditions -> next_level
 [ Dog | Baby ] -> [ | dog_angry ] again
 ```
 
+Move tween は top-level `animation` block に書く。`tween` を書くこと自体が有効化で、`enabled = true` は使わない。
+
+```txt
+animation {
+tween duration=160ms
+}
+```
+
 `checkpoint` は現在の turn が commit された後の puzzle state を、その puzzle slot の restart 先として保存する。`restart` は checkpoint があればそこへ戻り、なければ従来どおり level start state へ戻る。`clear_checkpoint` は保存された checkpoint を捨て、restart 先を level start state に戻す。level 移動や明示的な level load は checkpoint をリセットする。
 
 ```txt
@@ -1632,41 +1640,31 @@ button "Levels" -> resume level_select
 ```txt
 puzzle sokoban {
 render {
-grid {
-occupied_cells = true
-all_cells = false
-}
+grid occupied_cells
 }
 }
 ```
 
-`grid { occupied_cells = true }` は object が存在する cell の外周を表示する読み取り補助。`all_cells = true` にすると空セルも含めて全 cell に grid を表示する。どちらも floor や当たり判定を追加するものではなく、level、rule、win condition には影響しない。省略時は off。
+`grid occupied_cells` は object が存在する cell の外周を表示する読み取り補助。`grid all_cells` にすると空セルも含めて全 cell に grid を表示する。どちらも floor や当たり判定を追加するものではなく、level、rule、win condition には影響しない。省略時は表示しない。
 
 3D camera の初期 view と操作可否は scene ではなく 3D model の `render` block に書く。
 
 ```txt
 puzzle3 push3d {
 render {
-camera {
-yaw = 34
-pitch = 38
-zoom = 1
-interactive_look = true
-interactive_zoom = true
-}
-grid {
-occupied_cells = true
-}
+camera yaw=34 pitch=38 zoom=1 interactive_look interactive_zoom
+grid occupied_cells
 viewport {
 smoothscreen 7 7
 focus Player
 }
-shade = true
+pixelate scale=4
+shade
 }
 }
 ```
 
-`interactive_look` は pointer drag で視線方向を変える設定、`interactive_zoom` は wheel/pinch 系の zoom 操作を許す設定である。これは `input` 名ではなく、`puzzle3` component が自分の表示 box 内で始まった raw pointer gesture を camera view state に使ってよいという許可である。`zoom = 1` が `zoomscreen` / `smoothscreen` の通常倍率で、`zoom` や interactive zoom はその framing に対する上書き倍率として扱う。model `rules` の `if input == ...` には渡らず、undo/restart/transition state にも入らない。旧 `debug_camera` や `camera_yaw` 系は新しい例では使わない。
+`camera yaw=34 pitch=38 interactive_look` のような inline group は、`camera { yaw = 34; pitch = 38; interactive_look }` と同じ意味である。bare option は有効化、値を持つ option は `key=value` で書く。`interactive_look` は pointer drag で視線方向を変える設定、`interactive_zoom` は wheel/pinch 系の zoom 操作を許す設定である。これは `input` 名ではなく、`puzzle3` component が自分の表示 box 内で始まった raw pointer gesture を camera view state に使ってよいという許可である。`zoom = 1` が `zoomscreen` / `smoothscreen` の通常倍率で、`zoom` や interactive zoom はその framing に対する上書き倍率として扱う。model `rules` の `if input == ...` には渡らず、undo/restart/transition state にも入らない。旧 `debug_camera` や `camera_yaw` 系、`interactive_look = true` のような boolean assignment は受け付けない。
 
 `viewport { zoomscreen 7 7 }` は、親 scene から渡された display の `W x H` 枠に対して、focus object を中心にした `7 x 7 x full` の仮想 world-space box をどう描くかを決める。3D visual はその box を現在の camera yaw/pitch で投影し、与えられた display に収まる最大倍率にする。`full` は現在 level の全 height。`zoomscreen 7 7 3` と書くと高さも focus 周りの 3 cell として扱う。`smoothscreen` は同じ framing を目標にするが、描画用 view が遅れて追従する。`focus Player` は追従対象を指定する。これは描画 framing であり、外側 object の culling ではない。
 
@@ -1674,11 +1672,13 @@ Scene layout は `puzzle3` を固定 4:3 display として扱う。`puzzle3` は
 
 3D model `rules` では `set yaw = <deg>` / `set pitch = <deg>` / `set zoom = <n>` を、rule 発火時の camera view-state 更新として書ける。`reset_camera` は camera view を `render { camera { ... } }` の初期値に戻す。これは盤面 state ではなく表示 command なので、solver、win condition、undo/restart の state には入らない。
 
-`grid { occupied_cells = true }` は object が存在する cell の外周 edge を表示する読み取り補助。floor や volume の追加ではなく、level、collision、rule、win condition には影響しない。省略時は off。
+`grid occupied_cells` は object が存在する cell の外周 edge を表示する読み取り補助。floor や volume の追加ではなく、level、collision、rule、win condition には影響しない。省略時は表示しない。
 
-`render { shade = false }` は 3D sprite voxel の面ごとの明暗付けを無効にする表示設定。sprite data や puzzle state には影響しない。省略時は on。
+`pixelate` / `pixelate scale=4` は 3D canvas の描画後 pixel 化 postprocess を有効にする。`scale` は一度縮小する倍率で、省略時は `4`。省略時は pixel 化しない。
 
-3D object は `sprites3` に同名 sprite が定義されている場合だけ voxel sprite を描く。sprite 未指定の object に暗黙の cube や色は割り当てない。位置や占有を読みたい場合は `grid { occupied_cells = true }` などの debug 表示を使う。
+`render { shade }` は 3D sprite voxel の面ごとの明暗付けを有効にする表示設定。sprite data や puzzle state には影響しない。省略時も on。
+
+3D object は `sprites3` に同名 sprite が定義されている場合だけ voxel sprite を描く。sprite 未指定の object に暗黙の cube や色は割り当てない。位置や占有を読みたい場合は `grid occupied_cells` などの debug 表示を使う。
 
 Canonical な generic scene component は `title`、`subtitle`、`text`、`choice`、`button`、`row`、`column`、`box`、`for`、`level_menu`、`menu`。Model window component は `puzzle` と `puzzle3`。`view` は component ではなく scene root layout block。`panel` は component keyword ではない。
 
@@ -1818,7 +1818,7 @@ button "Back" -> back
 }
 ```
 
-`level_menu` は level 選択用 component なので、`up` / `down` / `left` / `right` / `enter` の cursor 動作と、多すぎる項目の scroll を所有する。通常は key binding を書かなくてよい。既定では `w/a/s/d` と arrow keys が移動、Enter/Space が `enter`、Escape/q が `back` になる。enter 時は選択 level を開始する。これは `level_menu` template の主動作なので、通常 `choose_level` transition のような中継は書かない。
+`level_menu` は level 選択用 component なので、`up` / `down` / `left` / `right` / `enter` の cursor 動作と、多すぎる項目の scroll を所有する。通常は key binding を書かなくてよい。既定では `w/a/s/d` と arrow keys が移動、Enter/Space が `enter`、Escape/q が `back` になる。enter 時は選択 level を開始する。これは `level_menu` template の主動作なので、通常 `choose_level` transition のような中継は書かない。`level_menu` は inline source や `->` effect を取らない。表示する level の絞り込みは scene の `resources { levels ... }` で指定する。
 
 この構文では旧 `show index`、`columns <n>`、裸の `wrap`、`action <name>` は読まない。`level_menu` を選んだ時点で enter は選択 level 開始を意味する。
 
