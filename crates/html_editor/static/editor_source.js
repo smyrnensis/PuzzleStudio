@@ -1679,7 +1679,6 @@ sourceEditor.addEventListener("click", (event) => {
   syncPreviewModeFromSourcePointer(event);
 });
 sourceEditor.addEventListener("pointerdown", handleSourceBlockSelectionPointerDown);
-sourceEditor.addEventListener("mousemove", updateSourceImportLinkFromPointer);
 sourceEditor.addEventListener("mouseleave", handleSourceImportEditorMouseLeave);
 sourceEditor.addEventListener("pointermove", updateSourceBlockSelectionDrag);
 sourceEditor.addEventListener("pointerup", finishSourceBlockSelectionDrag);
@@ -3124,10 +3123,7 @@ function openSourceImportLink() {
   }
   const target = documentByPath(link.resolvedPath);
   if (!target || !isTextDocument(target)) {
-    const builtin = link.kind === "import" && typeof builtinThemeImportSource === "function"
-      ? builtinThemeImportSource(link.resolvedPath)
-      : "";
-    setEditorStatus(builtin ? "Built-in import" : `${link.kind === "asset" ? "Asset" : "Import"} not found`, builtin ? "" : "is-error");
+    setEditorStatus(`${link.kind === "asset" ? "Asset" : "Import"} not found`, "is-error");
     hideSourceImportLinkFrame();
     return false;
   }

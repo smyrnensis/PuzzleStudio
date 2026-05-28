@@ -1,6 +1,6 @@
 title BlueprintThemeTest
 
-import "themes/blueprint.puzzle"
+theme blueprint
 
 const theme_title = "Blueprint Theme Test"
 const theme_subtitle = "Technical drawing layout"

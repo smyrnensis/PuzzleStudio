@@ -1,8 +1,9 @@
 use puzzle_core::{
     ComparisonOp, CompiledGame, Effect, GapTerm, GlobalId, GlobalUpdateOp, Guard, InputId, LayerId,
-    LocalFrame, LocalFrameExtent, MatchCell, ObjectDef, ObjectId, Offset, Pattern,
-    PatternComponent, QueryDef, QueryId, QueryKind, Rule, RuleApplication, RuleCondition, RuleId,
-    RuleStep, ScratchId, ScratchPattern, ScratchValueMatch, State, TransitionCommand, WriteOp,
+    LocalFrame, LocalFrameExtent, MatchCell, ObjectDef, ObjectId, ObjectSetMatcher,
+    ObjectSetScratchPattern, Offset, Pattern, PatternComponent, QueryDef, QueryId, QueryKind, Rule,
+    RuleApplication, RuleCondition, RuleId, RuleStep, ScratchId, ScratchPattern, ScratchValueMatch,
+    State, TransitionCommand, WriteOp,
 };
 use serde_json::Value;
 use wasm_bindgen::prelude::*;
@@ -73,26 +74,26 @@ impl WasmCompiledCoreRuntime {
             .program(program_key, level_index)
             .ok_or_else(|| JsValue::from_str(&format!("unknown program: {program_key}")))?;
         let before = state.clone();
-        let trace = puzzle_core::transition_program_trace(
+        let outcome = puzzle_core::transition_program_outcome(
             &self.engine.game,
             program,
             state,
             InputId(input),
         )
         .map_err(|error| JsValue::from_str(&format!("{error:?}")))?;
-        let previous_state_handle = if program_key == "main" && before != trace.next_state {
+        let previous_state_handle = if program_key == "main" && before != outcome.next_state {
             Some(save_state(&mut self.saved_states, before.clone()))
         } else {
             None
         };
-        self.current_state = Some(trace.next_state.clone());
+        self.current_state = Some(outcome.next_state.clone());
         Ok(encode_outcome(
-            &trace.next_state,
+            &outcome.next_state,
             Some(&before),
             previous_state_handle,
-            trace.cancelled,
-            &trace.commands,
-            &trace.fired_rules,
+            outcome.cancelled,
+            &outcome.commands,
+            &outcome.fired_rules,
         ))
     }
 }
@@ -436,9 +437,44 @@ fn decode_compact_match_cell(value: &Value) -> Result<MatchCell, String> {
     Ok(MatchCell {
         offset: decode_compact_offset(value_at(items, 0, "offset")?)?,
         require_objects: decode_compact_object_ids(value_at(items, 1, "require objects")?)?,
-        forbid_objects: decode_compact_object_ids(value_at(items, 2, "forbid objects")?)?,
-        require_scratch: decode_compact_scratch_patterns(value_at(items, 3, "require scratch")?)?,
-        forbid_scratch: decode_compact_scratch_patterns(value_at(items, 4, "forbid scratch")?)?,
+        require_object_sets: if items.len() >= 8 {
+            decode_compact_object_sets(value_at(items, 2, "require object sets")?)?
+        } else {
+            Vec::new()
+        },
+        forbid_objects: decode_compact_object_ids(value_at(
+            items,
+            if items.len() >= 8 { 3 } else { 2 },
+            "forbid objects",
+        )?)?,
+        require_scratch: decode_compact_scratch_patterns(value_at(
+            items,
+            if items.len() >= 8 { 4 } else { 3 },
+            "require scratch",
+        )?)?,
+        require_object_set_scratch: if items.len() >= 8 {
+            decode_compact_object_set_scratch_patterns(value_at(
+                items,
+                5,
+                "require object set scratch",
+            )?)?
+        } else {
+            Vec::new()
+        },
+        forbid_scratch: decode_compact_scratch_patterns(value_at(
+            items,
+            if items.len() >= 8 { 6 } else { 4 },
+            "forbid scratch",
+        )?)?,
+        forbid_object_set_scratch: if items.len() >= 8 {
+            decode_compact_object_set_scratch_patterns(value_at(
+                items,
+                7,
+                "forbid object set scratch",
+            )?)?
+        } else {
+            Vec::new()
+        },
     })
 }
 
@@ -508,6 +544,37 @@ fn decode_compact_write(value: &Value) -> Result<WriteOp, String> {
             value: optional_i64_at(items, 5, "scratch value")?,
             match_value: decode_compact_scratch_match(u16_at(items, 6, "scratch match")?)?,
         }),
+        6 => Ok(WriteOp::AddObjectSet {
+            component: u16_at(items, 1, "component")?,
+            offset: decode_compact_offset(value_at(items, 2, "offset")?)?,
+            binding: u16_at(items, 3, "binding")?,
+        }),
+        7 => Ok(WriteOp::RemoveObjectSet {
+            component: u16_at(items, 1, "component")?,
+            offset: decode_compact_offset(value_at(items, 2, "offset")?)?,
+            binding: u16_at(items, 3, "binding")?,
+        }),
+        8 => Ok(WriteOp::MoveObjectSet {
+            component: u16_at(items, 1, "component")?,
+            from_offset: decode_compact_offset(value_at(items, 2, "from offset")?)?,
+            to_offset: decode_compact_offset(value_at(items, 3, "to offset")?)?,
+            binding: u16_at(items, 4, "binding")?,
+        }),
+        9 => Ok(WriteOp::SetObjectSetScratch {
+            component: u16_at(items, 1, "component")?,
+            offset: decode_compact_offset(value_at(items, 2, "offset")?)?,
+            binding: u16_at(items, 3, "binding")?,
+            scratch: ScratchId(u16_at(items, 4, "scratch")?),
+            value: optional_i64_at(items, 5, "scratch value")?,
+        }),
+        10 => Ok(WriteOp::RemoveObjectSetScratch {
+            component: u16_at(items, 1, "component")?,
+            offset: decode_compact_offset(value_at(items, 2, "offset")?)?,
+            binding: u16_at(items, 3, "binding")?,
+            scratch: ScratchId(u16_at(items, 4, "scratch")?),
+            value: optional_i64_at(items, 5, "scratch value")?,
+            match_value: decode_compact_scratch_match(u16_at(items, 6, "scratch match")?)?,
+        }),
         tag => Err(format!("unknown compact write tag: {tag}")),
     }
 }
@@ -538,6 +605,37 @@ fn decode_compact_scratch_patterns(value: &Value) -> Result<Vec<ScratchPattern>,
             let entry = value_array(entry, "scratch pattern")?;
             Ok(ScratchPattern {
                 object: ObjectId(u16_at(entry, 0, "object")?),
+                scratch: ScratchId(u16_at(entry, 1, "scratch")?),
+                value: optional_i64_at(entry, 2, "value")?,
+                match_value: decode_compact_scratch_match(u16_at(entry, 3, "scratch match")?)?,
+            })
+        })
+        .collect()
+}
+
+fn decode_compact_object_sets(value: &Value) -> Result<Vec<ObjectSetMatcher>, String> {
+    value_array(value, "object sets")?
+        .iter()
+        .map(|entry| {
+            let entry = value_array(entry, "object set")?;
+            Ok(ObjectSetMatcher {
+                binding: u16_at(entry, 0, "binding")?,
+                layer: LayerId(u16_at(entry, 1, "layer")?),
+                objects: decode_compact_object_ids(value_at(entry, 2, "objects")?)?,
+            })
+        })
+        .collect()
+}
+
+fn decode_compact_object_set_scratch_patterns(
+    value: &Value,
+) -> Result<Vec<ObjectSetScratchPattern>, String> {
+    value_array(value, "object set scratch patterns")?
+        .iter()
+        .map(|entry| {
+            let entry = value_array(entry, "object set scratch pattern")?;
+            Ok(ObjectSetScratchPattern {
+                binding: u16_at(entry, 0, "binding")?,
                 scratch: ScratchId(u16_at(entry, 1, "scratch")?),
                 value: optional_i64_at(entry, 2, "value")?,
                 match_value: decode_compact_scratch_match(u16_at(entry, 3, "scratch match")?)?,

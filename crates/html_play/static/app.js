@@ -20,6 +20,7 @@ class PuzzleSoundRuntime {
     this.context = null;
     this.activeMusic = new Map();
     this.pausedMusic = new Map();
+    this.missingGeneratorWarnings = new Set();
   }
 
   configure(sounds) {
@@ -75,43 +76,7 @@ class PuzzleSoundRuntime {
       player.start();
       return;
     }
-    const seed = this.seedValue(def.seed);
-    const type = String(def.type || "random");
-    const now = context.currentTime;
-    const duration = 0.08 + ((seed % 90) / 1000);
-    const gain = context.createGain();
-    gain.gain.setValueAtTime(0.0001, now);
-    gain.gain.exponentialRampToValueAtTime(0.16, now + 0.008);
-    gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
-    gain.connect(context.destination);
-
-    if (type.includes("hit") || type.includes("step") || type.includes("noise")) {
-      const buffer = context.createBuffer(1, Math.max(1, Math.floor(context.sampleRate * duration)), context.sampleRate);
-      const data = buffer.getChannelData(0);
-      let random = this.seededRandom(seed);
-      for (let index = 0; index < data.length; index += 1) {
-        data[index] = (random() * 2 - 1) * (1 - index / data.length);
-      }
-      const source = context.createBufferSource();
-      const filter = context.createBiquadFilter();
-      filter.type = "bandpass";
-      filter.frequency.value = 400 + (seed % 2200);
-      source.buffer = buffer;
-      source.connect(filter).connect(gain);
-      source.start(now);
-      source.stop(now + duration);
-      return;
-    }
-
-    const oscillator = context.createOscillator();
-    oscillator.type = type.includes("jump") ? "square" : "triangle";
-    const startHz = 180 + (seed % 520);
-    const endHz = type.includes("jump") ? startHz * 1.75 : Math.max(80, startHz * 0.55);
-    oscillator.frequency.setValueAtTime(startHz, now);
-    oscillator.frequency.exponentialRampToValueAtTime(endHz, now + duration);
-    oscillator.connect(gain);
-    oscillator.start(now);
-    oscillator.stop(now + duration);
+    this.warnMissingGenerator(`sfx:${name}`, `Sound effect "${name}" was skipped because the sound generator is unavailable.`);
   }
 
   hasSfx(name) {
@@ -147,44 +112,7 @@ class PuzzleSoundRuntime {
       player.start(progress);
       return;
     }
-    const startIndex = typeof resume === "number" ? resume : Number(resume.index || 0);
-    const handle = { timers: [], sources: [], index: startIndex };
-    this.activeMusic.set(name, handle);
-    const bpm = Number(def.bpm || 104);
-    const step = 60 / Math.max(40, bpm);
-    const volume = Math.max(0, Math.min(1, Number(def.volume ?? 0.5))) * 0.08;
-    const seed = this.seedValue(def.seed);
-    const root = 48 + (seed % 12);
-    const scale = [0, 3, 5, 7, 10, 12, 15, 17];
-    const notes = scale.map((offset) => root + offset);
-    const schedule = () => {
-      if (!this.activeMusic.has(name)) {
-        return;
-      }
-      const note = notes[(handle.index + seed) % notes.length];
-      this.playMusicNote(context, handle, note, context.currentTime + 0.02, step * 0.85, volume, Number(def.tone ?? 0.62));
-      handle.index += 1;
-      handle.timers.push(window.setTimeout(schedule, step * 1000));
-    };
-    schedule();
-  }
-
-  playMusicNote(context, handle, midi, startsAt, duration, volume, tone) {
-    const oscillator = context.createOscillator();
-    const gain = context.createGain();
-    const filter = context.createBiquadFilter();
-    const hz = 440 * Math.pow(2, (midi - 69) / 12);
-    oscillator.type = tone > 0.68 ? "sine" : tone > 0.35 ? "triangle" : "square";
-    oscillator.frequency.value = hz;
-    filter.type = "lowpass";
-    filter.frequency.value = 600 + tone * 2400;
-    gain.gain.setValueAtTime(0.0001, startsAt);
-    gain.gain.exponentialRampToValueAtTime(Math.max(0.0001, volume), startsAt + 0.02);
-    gain.gain.exponentialRampToValueAtTime(0.0001, startsAt + duration);
-    oscillator.connect(filter).connect(gain).connect(context.destination);
-    oscillator.start(startsAt);
-    oscillator.stop(startsAt + duration + 0.02);
-    handle.sources.push(oscillator);
+    this.warnMissingGenerator(`music:${name}`, `Music "${name}" was skipped because the sound generator is unavailable.`);
   }
 
   stopMusic(name = null) {
@@ -232,28 +160,16 @@ class PuzzleSoundRuntime {
       } catch (_) {
       }
     }
-    for (const timer of handle.timers || []) {
-      window.clearTimeout(timer);
-    }
-    for (const source of handle.sources || []) {
-      try {
-        source.stop();
-      } catch (_) {
-      }
-    }
   }
 
-  seedValue(seed) {
-    return String(seed || "0").split("").reduce((value, ch) => ((value * 31) + ch.charCodeAt(0)) >>> 0, 2166136261);
+  warnMissingGenerator(key, message) {
+    if (this.missingGeneratorWarnings.has(key)) {
+      return;
+    }
+    this.missingGeneratorWarnings.add(key);
+    console.warn(message);
   }
 
-  seededRandom(seed) {
-    let value = seed >>> 0;
-    return () => {
-      value = (value * 1664525 + 1013904223) >>> 0;
-      return value / 4294967296;
-    };
-  }
 }
 
 const standaloneRuntime = window.PuzzleStandaloneRuntime
@@ -1183,8 +1099,9 @@ function puzzle3FrameSrcdoc(sceneName) {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<style>${puzzle3SafeScriptText(assets.themeCss || "")}</style>
 <style>${puzzle3SafeScriptText(assets.styleCss || "")}</style>
-<style>html,body,#screenView{width:100%;height:100%;margin:0;overflow:hidden;background:transparent;}body{display:block;}.puzzle3-component{width:100%;height:100%;}</style>
+<style>html,body,#screenView{width:100%;height:100%;margin:0;overflow:hidden;background:transparent;}body{display:block;}.puzzle3-component{width:100%;height:100%;}html.is-component-embed,body.is-component-embed,body.is-component-embed[class],body.is-component-embed #screenView,body.is-component-embed .scene,body.is-component-embed .puzzle3-component,body.is-component-embed canvas{background:transparent;}</style>
 </head>
 <body class="theme-clean is-component-embed">
 <main id="screenView" class="scene">
@@ -2637,15 +2554,17 @@ window.addEventListener("message", async (event) => {
       standaloneRuntime.setCurrentState(event.data.state, {
         levelIndex: event.data.levelIndex,
         regions: event.data.regions,
+        animationEvents: event.data.animationEvents,
         acceptModelInput: event.data.acceptModelInput === true,
         materializeLevelStart: event.data.materializeLevelStart === true,
         materializeDisplay: event.data.materializeDisplay === true,
         materializeTurnStart: event.data.materializeTurnStart === true,
       });
+      const snapshot = standaloneRuntime.snapshot({ forceJs: true });
       if (event.data.silent === true) {
-        notifyPreviewState(standaloneRuntime.snapshot());
+        notifyPreviewState(snapshot);
       } else {
-        loadState();
+        render(snapshot);
       }
     }
     return;
@@ -2660,15 +2579,17 @@ window.addEventListener("message", async (event) => {
         standaloneRuntime.setCurrentState(event.data.state, {
           levelIndex: event.data.levelIndex,
           regions: event.data.regions,
+          animationEvents: event.data.animationEvents,
           acceptModelInput: event.data.acceptModelInput === true,
           materializeLevelStart: event.data.materializeLevelStart === true,
           materializeDisplay: event.data.materializeDisplay === true,
           materializeTurnStart: event.data.materializeTurnStart === true,
         });
+        const snapshot = standaloneRuntime.snapshot({ forceJs: true });
         if (event.data.silent === true) {
-          notifyPreviewState(standaloneRuntime.snapshot());
+          notifyPreviewState(snapshot);
         } else {
-          await loadState();
+          render(snapshot);
         }
       }
       const solution = await solveStandaloneCurrentState(event.data.options || {});

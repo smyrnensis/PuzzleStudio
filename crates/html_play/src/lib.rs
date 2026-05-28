@@ -20,6 +20,8 @@ use std::sync::Mutex;
 use std::time::Duration;
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::SystemTime;
 
 use puzzle_core::{
     ComparisonOp, CompiledGame, Effect, GlobalUpdateOp, Guard, InputId, LayerId, ObjectId, Offset,
@@ -200,6 +202,7 @@ fn run(args: impl IntoIterator<Item = String>) -> Result<(), AppError> {
 
     println!("html-play serving http://127.0.0.1:{port}");
     println!("puzzle: {}", config.puzzle_path.display());
+    print_wasm_freshness_status();
 
     for stream in listener.incoming() {
         let stream = stream?;
@@ -215,6 +218,115 @@ fn run(args: impl IntoIterator<Item = String>) -> Result<(), AppError> {
 fn print_warnings(loaded: &LoadedGame) {
     for warning in &loaded.warnings {
         eprintln!("warning: {warning}");
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn print_wasm_freshness_status() {
+    print_wasm_artifact_status(
+        "puzzle_wasm",
+        &[
+            Path::new("crates/html_editor/static/wasm/puzzle_wasm.js"),
+            Path::new("crates/html_editor/static/wasm/puzzle_wasm_bg.wasm"),
+        ],
+        &[
+            Path::new("crates/wasm/src"),
+            Path::new("crates/wasm/Cargo.toml"),
+            Path::new("crates/html_play/src"),
+            Path::new("crates/core/src"),
+            Path::new("crates/lang/src"),
+            Path::new("crates/play/src"),
+            Path::new("crates/puzzle3d_model/src"),
+            Path::new("crates/scene/src"),
+            Path::new("crates/kernel/src"),
+            Path::new("crates/solver/src"),
+            Path::new("Cargo.lock"),
+        ],
+        "tools/build_wasm_editor.sh",
+    );
+    print_wasm_artifact_status(
+        "puzzle_core_wasm",
+        &[
+            Path::new("crates/wasm_core/static/puzzle_core_wasm.js"),
+            Path::new("crates/wasm_core/static/puzzle_core_wasm_bg.wasm"),
+        ],
+        &[
+            Path::new("crates/wasm_core/src"),
+            Path::new("crates/wasm_core/Cargo.toml"),
+            Path::new("crates/core/src"),
+            Path::new("crates/kernel/src"),
+            Path::new("Cargo.lock"),
+        ],
+        "tools/build_wasm_core.sh",
+    );
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn print_wasm_artifact_status(
+    name: &str,
+    artifacts: &[&Path],
+    sources: &[&Path],
+    rebuild_command: &str,
+) {
+    let Some(artifact_time) = oldest_existing_mtime(artifacts) else {
+        eprintln!("warning: wasm: {name} artifacts are missing; run `{rebuild_command}`");
+        return;
+    };
+    let Some(source_time) = newest_existing_mtime(sources) else {
+        println!("wasm: {name} current (source freshness unknown)");
+        return;
+    };
+    if source_time > artifact_time {
+        eprintln!("warning: wasm: {name} may be stale; run `{rebuild_command}`");
+    } else {
+        println!("wasm: {name} current");
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn oldest_existing_mtime(paths: &[&Path]) -> Option<SystemTime> {
+    let mut oldest = None;
+    for path in paths {
+        let modified = fs::metadata(path).ok()?.modified().ok()?;
+        oldest = Some(match oldest {
+            Some(current) if current < modified => current,
+            _ => modified,
+        });
+    }
+    oldest
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn newest_existing_mtime(paths: &[&Path]) -> Option<SystemTime> {
+    let mut newest = None;
+    for path in paths {
+        collect_newest_mtime(path, &mut newest);
+    }
+    newest
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn collect_newest_mtime(path: &Path, newest: &mut Option<SystemTime>) {
+    let Ok(metadata) = fs::metadata(path) else {
+        return;
+    };
+    if metadata.is_file() {
+        if let Ok(modified) = metadata.modified() {
+            *newest = Some(match *newest {
+                Some(current) if current > modified => current,
+                _ => modified,
+            });
+        }
+        return;
+    }
+    if !metadata.is_dir() {
+        return;
+    }
+    let Ok(entries) = fs::read_dir(path) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        collect_newest_mtime(&entry.path(), newest);
     }
 }
 
@@ -1823,6 +1935,7 @@ fn embedded_standalone_core_wasm_script() -> String {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn embedded_wasm_loader_script(module_source: &str, wasm: &[u8]) -> String {
     let module_source = escape_script_json(module_source);
     let wasm_base64 = base64_encode(wasm);
@@ -2116,6 +2229,10 @@ fn inject_puzzle3_frame_assets(
     let puzzle3_style_css = escape_style(PUZZLE3_STYLE_CSS);
     let mut assets = String::new();
     assets.push('{');
+    push_json_string(&mut assets, "themeCss");
+    assets.push(':');
+    push_json_string(&mut assets, THEME_PRESETS_CSS);
+    assets.push(',');
     push_json_string(&mut assets, "styleCss");
     assets.push(':');
     push_json_string(&mut assets, PUZZLE3_STYLE_CSS);
@@ -4709,11 +4826,56 @@ fn push_compact_match_cell(out: &mut String, cell: &puzzle_core::MatchCell) {
     out.push(',');
     push_compact_object_ids(out, &cell.require_objects);
     out.push(',');
+    push_compact_object_sets(out, &cell.require_object_sets);
+    out.push(',');
     push_compact_object_ids(out, &cell.forbid_objects);
     out.push(',');
     push_compact_scratch_patterns(out, &cell.require_scratch);
     out.push(',');
+    push_compact_object_set_scratch_patterns(out, &cell.require_object_set_scratch);
+    out.push(',');
     push_compact_scratch_patterns(out, &cell.forbid_scratch);
+    out.push(',');
+    push_compact_object_set_scratch_patterns(out, &cell.forbid_object_set_scratch);
+    out.push(']');
+}
+
+fn push_compact_object_sets(out: &mut String, object_sets: &[puzzle_core::ObjectSetMatcher]) {
+    out.push('[');
+    for (index, object_set) in object_sets.iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        out.push('[');
+        out.push_str(&object_set.binding.to_string());
+        out.push(',');
+        out.push_str(&object_set.layer.0.to_string());
+        out.push(',');
+        push_compact_object_ids(out, &object_set.objects);
+        out.push(']');
+    }
+    out.push(']');
+}
+
+fn push_compact_object_set_scratch_patterns(
+    out: &mut String,
+    scratch: &[puzzle_core::ObjectSetScratchPattern],
+) {
+    out.push('[');
+    for (index, pattern) in scratch.iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        out.push('[');
+        out.push_str(&pattern.binding.to_string());
+        out.push(',');
+        out.push_str(&pattern.scratch.0.to_string());
+        out.push(',');
+        push_compact_optional_i64(out, pattern.value);
+        out.push(',');
+        push_compact_scratch_match(out, pattern.match_value);
+        out.push(']');
+    }
     out.push(']');
 }
 
@@ -4792,6 +4954,19 @@ fn push_compact_write(out: &mut String, write: &WriteOp) {
             out.push(',');
             out.push_str(&object.0.to_string());
         }
+        WriteOp::AddObjectSet {
+            component,
+            offset,
+            binding,
+        } => {
+            out.push('6');
+            out.push(',');
+            out.push_str(&component.to_string());
+            out.push(',');
+            push_compact_offset(out, offset);
+            out.push(',');
+            out.push_str(&binding.to_string());
+        }
         WriteOp::Remove {
             component,
             offset,
@@ -4804,6 +4979,19 @@ fn push_compact_write(out: &mut String, write: &WriteOp) {
             push_compact_offset(out, offset);
             out.push(',');
             out.push_str(&object.0.to_string());
+        }
+        WriteOp::RemoveObjectSet {
+            component,
+            offset,
+            binding,
+        } => {
+            out.push('7');
+            out.push(',');
+            out.push_str(&component.to_string());
+            out.push(',');
+            push_compact_offset(out, offset);
+            out.push(',');
+            out.push_str(&binding.to_string());
         }
         WriteOp::Move {
             component,
@@ -4820,6 +5008,22 @@ fn push_compact_write(out: &mut String, write: &WriteOp) {
             push_compact_offset(out, to_offset);
             out.push(',');
             out.push_str(&object.0.to_string());
+        }
+        WriteOp::MoveObjectSet {
+            component,
+            from_offset,
+            to_offset,
+            binding,
+        } => {
+            out.push('8');
+            out.push(',');
+            out.push_str(&component.to_string());
+            out.push(',');
+            push_compact_offset(out, from_offset);
+            out.push(',');
+            push_compact_offset(out, to_offset);
+            out.push(',');
+            out.push_str(&binding.to_string());
         }
         WriteOp::Replace {
             component,
@@ -4856,6 +5060,25 @@ fn push_compact_write(out: &mut String, write: &WriteOp) {
             out.push(',');
             push_compact_optional_i64(out, *value);
         }
+        WriteOp::SetObjectSetScratch {
+            component,
+            offset,
+            binding,
+            scratch,
+            value,
+        } => {
+            out.push('9');
+            out.push(',');
+            out.push_str(&component.to_string());
+            out.push(',');
+            push_compact_offset(out, offset);
+            out.push(',');
+            out.push_str(&binding.to_string());
+            out.push(',');
+            out.push_str(&scratch.0.to_string());
+            out.push(',');
+            push_compact_optional_i64(out, *value);
+        }
         WriteOp::RemoveScratch {
             component,
             offset,
@@ -4871,6 +5094,28 @@ fn push_compact_write(out: &mut String, write: &WriteOp) {
             push_compact_offset(out, offset);
             out.push(',');
             out.push_str(&object.0.to_string());
+            out.push(',');
+            out.push_str(&scratch.0.to_string());
+            out.push(',');
+            push_compact_optional_i64(out, *value);
+            out.push(',');
+            push_compact_scratch_match(out, *match_value);
+        }
+        WriteOp::RemoveObjectSetScratch {
+            component,
+            offset,
+            binding,
+            scratch,
+            value,
+            match_value,
+        } => {
+            out.push_str("10");
+            out.push(',');
+            out.push_str(&component.to_string());
+            out.push(',');
+            push_compact_offset(out, offset);
+            out.push(',');
+            out.push_str(&binding.to_string());
             out.push(',');
             out.push_str(&scratch.0.to_string());
             out.push(',');
@@ -5396,6 +5641,7 @@ fn serve_static_html(html: String, puzzle_path: &Path, port: u16) -> Result<(), 
 
     println!("html-play serving http://127.0.0.1:{port}");
     println!("puzzle: {}", puzzle_path.display());
+    print_wasm_freshness_status();
 
     for stream in listener.incoming() {
         let stream = stream?;
@@ -8012,6 +8258,15 @@ P
     }
 
     #[test]
+    fn html_play_does_not_fallback_to_synthetic_sound_when_generator_is_missing() {
+        assert!(APP_JS.contains("warnMissingGenerator"));
+        assert!(APP_JS.contains("sound generator is unavailable"));
+        assert!(!APP_JS.contains("playMusicNote("));
+        assert!(!APP_JS.contains("this.seedValue("));
+        assert!(!APP_JS.contains("this.seededRandom("));
+    }
+
+    #[test]
     fn html_play_serializes_level_refs_as_quoted_scene_args() {
         assert!(APP_JS.contains("function exprValueSource(value)"));
         assert!(APP_JS.contains("value?.kind === \"level\""));
@@ -8383,6 +8638,7 @@ scene mixed_play {
         .unwrap();
         assert!(html.contains("window.Puzzle3DFrameFixture"));
         assert!(html.contains("window.Puzzle3DFrameAssets"));
+        assert!(html.contains("\"themeCss\""));
         assert!(html.contains("case \"puzzle3\""));
         assert!(html.contains("iframe.puzzle3-frame"));
         assert!(html.contains("\\\"kind\\\":\\\"puzzle3\\\""));
@@ -8589,6 +8845,7 @@ text level.title
         assert!(PUZZLE3_VISUAL_CORE_JS.contains("function cameraOrderBasis(view)"));
         assert!(PUZZLE3_VISUAL_CORE_JS.contains("plane: signed.x + signed.y + signed.z"));
         assert!(PUZZLE3_VISUAL_CORE_JS.contains("const axes = [\"x\", \"y\", \"z\"].sort"));
+        assert!(PUZZLE3_VISUAL_CORE_JS.contains("const faceRects = adapter.rectsFromCells || rectsFromCells;"));
         assert!(!PUZZLE3_VISUAL_CORE_JS.contains("adapter.compoundFace"));
         assert!(!PUZZLE3_VISUAL_CORE_JS.contains("const depthDiff ="));
         assert!(PUZZLE3_APP_JS.contains("primitives = orderScenePrimitives(primitives);"));
@@ -9139,6 +9396,10 @@ rules {
         assert!(STANDALONE_JS.contains("writeProgressSave()"));
         assert!(STANDALONE_JS.contains("WasmStandaloneSession"));
         assert!(STANDALONE_JS.contains("this.sessionRuntime.request_json(method, url)"));
+        assert!(STANDALONE_JS.contains("snapshot(options = {})"));
+        assert!(STANDALONE_JS.contains("options.forceJs !== true"));
+        assert!(APP_JS.contains("animationEvents: event.data.animationEvents"));
+        assert!(APP_JS.contains("standaloneRuntime.snapshot({ forceJs: true })"));
         assert!(STANDALONE_JS.contains("this.sessionRuntime.progress_save()"));
         assert!(STANDALONE_JS.contains("hasProgressSaveData()"));
         assert!(STANDALONE_JS.contains("has_progress_save: this.hasProgressSaveData()"));
@@ -9357,6 +9618,9 @@ levels3 default of cube {
 
         assert!(html.contains("window.Puzzle3DFrameFixture = JSON.parse"));
         assert!(html.contains("window.Puzzle3DFrameAssets = {"));
+        assert!(html.contains("\"themeCss\""));
+        assert!(APP_JS.contains("assets.themeCss"));
+        assert!(APP_JS.contains("body.is-component-embed[class]"));
         assert!(html.contains("iframe.puzzle3-frame"));
         assert!(html.contains("case \"choice\""));
         assert!(html.contains("\\\"kind\\\":\\\"choice\\\""));

@@ -1,6 +1,6 @@
 title PixelThemeTest
 
-import "themes/pixel.puzzle"
+theme pixel
 
 const theme_title = "Pixel Theme Test"
 const theme_subtitle = "Arcade menu density"

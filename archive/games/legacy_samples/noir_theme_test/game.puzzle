@@ -1,6 +1,6 @@
 title NoirThemeTest
 
-import "themes/noir.puzzle"
+theme noir
 
 const theme_title = "Noir Theme Test"
 const theme_subtitle = "Low light menu framing"

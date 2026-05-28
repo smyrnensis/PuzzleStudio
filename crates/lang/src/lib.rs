@@ -62,9 +62,10 @@ fn block_header_text(line: &str) -> &str {
 }
 use puzzle_core::{
     ComparisonOp, CompiledGame, Effect, GapTerm, GlobalId, GlobalUpdateOp, Guard, InputId, LayerId,
-    LocalFrame, LocalFrameExtent, MatchCell, ObjectDef, ObjectId, Offset, Pattern,
-    PatternComponent, QueryDef, QueryId, QueryKind, Rule, RuleApplication, RuleCondition, RuleId,
-    RuleStep, ScratchDef, ScratchId, ScratchKind, ScratchPattern, ScratchValueMatch, WriteOp,
+    LocalFrame, LocalFrameExtent, MatchCell, ObjectDef, ObjectId, ObjectSetMatcher,
+    ObjectSetScratchPattern, Offset, Pattern, PatternComponent, QueryDef, QueryId, QueryKind, Rule,
+    RuleApplication, RuleCondition, RuleId, RuleStep, ScratchDef, ScratchId, ScratchKind,
+    ScratchPattern, ScratchValueMatch, WriteOp,
 };
 pub use puzzle3d_model::{
     ParseError3, ParsedPuzzle3, VisualFixtureExportError3, export_visual_fixture_json,
@@ -91,22 +92,6 @@ const ANONYMOUS_MOVEMENT_SCRATCH: ScratchId = ScratchId(0);
 const ANONYMOUS_BOOL_SCRATCH: ScratchId = ScratchId(1);
 const ANONYMOUS_INT_SCRATCH: ScratchId = ScratchId(2);
 const UNASSIGNED_LAYER: u16 = u16::MAX;
-#[cfg(not(target_arch = "wasm32"))]
-const BUILTIN_THEME_CLEAN: &str = include_str!("../../../themes/clean.puzzle");
-#[cfg(not(target_arch = "wasm32"))]
-const BUILTIN_THEME_TERMINAL: &str = include_str!("../../../themes/terminal.puzzle");
-#[cfg(not(target_arch = "wasm32"))]
-const BUILTIN_THEME_PAPER: &str = include_str!("../../../themes/paper.puzzle");
-#[cfg(not(target_arch = "wasm32"))]
-const BUILTIN_THEME_PIXEL: &str = include_str!("../../../themes/pixel.puzzle");
-#[cfg(not(target_arch = "wasm32"))]
-const BUILTIN_THEME_PUZZLESCRIPT: &str = include_str!("../../../themes/puzzlescript.puzzle");
-#[cfg(not(target_arch = "wasm32"))]
-const BUILTIN_THEME_CANDY: &str = include_str!("../../../themes/candy.puzzle");
-#[cfg(not(target_arch = "wasm32"))]
-const BUILTIN_THEME_BLUEPRINT: &str = include_str!("../../../themes/blueprint.puzzle");
-#[cfg(not(target_arch = "wasm32"))]
-const BUILTIN_THEME_NOIR: &str = include_str!("../../../themes/noir.puzzle");
 
 pub fn parse_game(source: &str) -> Result<LoadedDocument, AppError> {
     parse_game_document(source)
@@ -2410,7 +2395,7 @@ fn read_import_expanded(
     let resolved = resolve_import_path(base_dir, path);
     let canonical = canonical_import_path(&resolved);
     if let Some(root) = root {
-        if !canonical.starts_with(root) && builtin_import_source(path).is_none() {
+        if !canonical.starts_with(root) {
             return Err(AppError::Parse(format!(
                 "can only import puzzle files under {}",
                 root.display()
@@ -2430,43 +2415,13 @@ fn read_import_expanded(
     }
     let source = match read_import_path(&resolved) {
         Ok(source) => source,
-        Err(error) => {
-            if let Some(source) =
-                builtin_import_source(path).or_else(|| builtin_import_source(&resolved))
-            {
-                source.to_string()
-            } else {
-                return Err(error);
-            }
-        }
+        Err(error) => return Err(error),
     };
     let nested_base = resolved.parent().unwrap_or(base_dir);
     import_stack.push(canonical);
     let expanded = expand_game_imports(&source, nested_base, import_stack, root);
     import_stack.pop();
     expanded
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn builtin_import_source(path: &Path) -> Option<&'static str> {
-    let file_name = path.file_name()?.to_str()?;
-    let under_themes = path
-        .components()
-        .any(|component| component.as_os_str().to_str() == Some("themes"));
-    if !under_themes {
-        return None;
-    }
-    match file_name {
-        "clean.puzzle" => Some(BUILTIN_THEME_CLEAN),
-        "terminal.puzzle" => Some(BUILTIN_THEME_TERMINAL),
-        "paper.puzzle" => Some(BUILTIN_THEME_PAPER),
-        "pixel.puzzle" => Some(BUILTIN_THEME_PIXEL),
-        "puzzlescript.puzzle" => Some(BUILTIN_THEME_PUZZLESCRIPT),
-        "candy.puzzle" => Some(BUILTIN_THEME_CANDY),
-        "blueprint.puzzle" => Some(BUILTIN_THEME_BLUEPRINT),
-        "noir.puzzle" => Some(BUILTIN_THEME_NOIR),
-        _ => None,
-    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -14024,6 +13979,7 @@ fn patterns_from_alternatives(
                                     line,
                                 )?,
                                 require_objects: cell.require_objects.clone(),
+                                require_object_sets: cell.require_object_sets.clone(),
                                 forbid_objects: cell.forbid_objects.clone(),
                                 require_scratch: resolve_scratch_patterns(
                                     cell.require_scratch.clone(),
@@ -14031,8 +13987,20 @@ fn patterns_from_alternatives(
                                     direction_expanded,
                                     line,
                                 )?,
+                                require_object_set_scratch: resolve_object_set_scratch_patterns(
+                                    cell.require_object_set_scratch.clone(),
+                                    *direction,
+                                    direction_expanded,
+                                    line,
+                                )?,
                                 forbid_scratch: resolve_scratch_patterns(
                                     cell.forbid_scratch.clone(),
+                                    *direction,
+                                    direction_expanded,
+                                    line,
+                                )?,
+                                forbid_object_set_scratch: resolve_object_set_scratch_patterns(
+                                    cell.forbid_object_set_scratch.clone(),
                                     *direction,
                                     direction_expanded,
                                     line,
@@ -14405,6 +14373,15 @@ fn write_template_touches_visual_object(
         WriteOpTemplate::Add { object, .. }
         | WriteOpTemplate::Remove { object, .. }
         | WriteOpTemplate::Move { object, .. } => object_is_visual(*object, visual_objects),
+        WriteOpTemplate::MoveObjectSet { objects, .. } => objects
+            .iter()
+            .any(|object| object_is_visual(*object, visual_objects)),
+        WriteOpTemplate::AddObjectSet { objects, .. }
+        | WriteOpTemplate::RemoveObjectSet { objects, .. } => objects
+            .iter()
+            .any(|object| object_is_visual(*object, visual_objects)),
+        WriteOpTemplate::SetObjectSetScratch { .. }
+        | WriteOpTemplate::RemoveObjectSetScratch { .. } => true,
         WriteOpTemplate::SetScratch { object, .. }
         | WriteOpTemplate::RemoveScratch { object, .. } => {
             !object.is_empty() && object_is_visual(*object, visual_objects)
@@ -14417,6 +14394,15 @@ fn write_template_touches_main_state(write: &WriteOpTemplate, visual_objects: &[
         WriteOpTemplate::Add { object, .. }
         | WriteOpTemplate::Remove { object, .. }
         | WriteOpTemplate::Move { object, .. } => !object_is_visual(*object, visual_objects),
+        WriteOpTemplate::MoveObjectSet { objects, .. } => objects
+            .iter()
+            .any(|object| !object_is_visual(*object, visual_objects)),
+        WriteOpTemplate::AddObjectSet { objects, .. }
+        | WriteOpTemplate::RemoveObjectSet { objects, .. } => objects
+            .iter()
+            .any(|object| !object_is_visual(*object, visual_objects)),
+        WriteOpTemplate::SetObjectSetScratch { .. }
+        | WriteOpTemplate::RemoveObjectSetScratch { .. } => true,
         WriteOpTemplate::SetScratch { object, .. }
         | WriteOpTemplate::RemoveScratch { object, .. } => {
             object.is_empty() || !object_is_visual(*object, visual_objects)
@@ -15544,6 +15530,7 @@ impl<'a> ProgramLowerer<'a> {
                                     "statement",
                                 )?,
                                 require_objects: cell.require_objects.clone(),
+                                require_object_sets: cell.require_object_sets.clone(),
                                 forbid_objects: cell.forbid_objects.clone(),
                                 require_scratch: resolve_scratch_patterns(
                                     cell.require_scratch.clone(),
@@ -15551,8 +15538,20 @@ impl<'a> ProgramLowerer<'a> {
                                     direction_expanded,
                                     "statement",
                                 )?,
+                                require_object_set_scratch: resolve_object_set_scratch_patterns(
+                                    cell.require_object_set_scratch.clone(),
+                                    direction,
+                                    direction_expanded,
+                                    "statement",
+                                )?,
                                 forbid_scratch: resolve_scratch_patterns(
                                     cell.forbid_scratch.clone(),
+                                    direction,
+                                    direction_expanded,
+                                    "statement",
+                                )?,
+                                forbid_object_set_scratch: resolve_object_set_scratch_patterns(
+                                    cell.forbid_object_set_scratch.clone(),
                                     direction,
                                     direction_expanded,
                                     "statement",
@@ -15630,6 +15629,11 @@ fn validate_visual_writes(writes: &[WriteOp], visual_objects: &[ObjectId]) -> Re
             | WriteOp::Move { object, .. } => {
                 ensure_visual_write_object(*object, visual_objects)?;
             }
+            WriteOp::AddObjectSet { .. }
+            | WriteOp::RemoveObjectSet { .. }
+            | WriteOp::MoveObjectSet { .. }
+            | WriteOp::SetObjectSetScratch { .. }
+            | WriteOp::RemoveObjectSetScratch { .. } => {}
             WriteOp::Replace { remove, add, .. } => {
                 ensure_visual_write_object(*remove, visual_objects)?;
                 ensure_visual_write_object(*add, visual_objects)?;
@@ -15677,11 +15681,20 @@ fn append_move_sound_emissions(
             matches!(
                 write,
                 WriteOpTemplate::Move { object, .. } if trigger.objects.contains(object)
+            ) || matches!(
+                write,
+                WriteOpTemplate::MoveObjectSet { objects, .. }
+                    if objects.iter().any(|object| trigger.objects.contains(object))
             )
         });
         let matches_trigger = writes.iter().any(|write| match (trigger.kind, write) {
             (ModelSoundTriggerKind::Move, WriteOpTemplate::Move { object, .. }) => {
                 trigger.objects.contains(object)
+            }
+            (ModelSoundTriggerKind::Move, WriteOpTemplate::MoveObjectSet { objects, .. }) => {
+                objects
+                    .iter()
+                    .any(|object| trigger.objects.contains(object))
             }
             (
                 ModelSoundTriggerKind::CantMove,
@@ -15693,6 +15706,10 @@ fn append_move_sound_emissions(
                     && *scratch == ScratchId(0)
                     && (object.is_empty() || trigger.objects.contains(object))
             }
+            (
+                ModelSoundTriggerKind::CantMove,
+                WriteOpTemplate::RemoveObjectSetScratch { scratch, .. },
+            ) => !moves_trigger_object && *scratch == ScratchId(0),
             _ => false,
         });
         let matches_cantmove_intent = trigger.kind == ModelSoundTriggerKind::CantMove
@@ -15703,7 +15720,10 @@ fn append_move_sound_emissions(
                         scratch.scratch == ScratchId(0)
                             && (scratch.object.is_empty()
                                 || trigger.objects.contains(&scratch.object))
-                    })
+                    }) || cell
+                        .require_object_set_scratch
+                        .iter()
+                        .any(|scratch| scratch.scratch == ScratchId(0))
                 })
             });
         let matches_trigger = matches_trigger || matches_cantmove_intent;
@@ -15731,11 +15751,23 @@ fn append_tween_animation_emissions(
     }
     let mut objects = Vec::new();
     for write in writes {
-        let WriteOpTemplate::Move { object, .. } = write else {
-            continue;
-        };
-        if !objects.contains(object) {
-            objects.push(*object);
+        match write {
+            WriteOpTemplate::Move { object, .. } => {
+                if !objects.contains(object) {
+                    objects.push(*object);
+                }
+            }
+            WriteOpTemplate::MoveObjectSet {
+                objects: moved_objects,
+                ..
+            } => {
+                for object in moved_objects {
+                    if !objects.contains(object) {
+                        objects.push(*object);
+                    }
+                }
+            }
+            _ => {}
         }
     }
     if objects.is_empty() {
@@ -16128,14 +16160,26 @@ struct PatternComponentTemplate {
 struct MatchCellTemplate {
     offset: OffsetTemplate,
     require_objects: Vec<ObjectId>,
+    require_object_sets: Vec<ObjectSetMatcher>,
     forbid_objects: Vec<ObjectId>,
     require_scratch: Vec<ScratchPatternTemplate>,
+    require_object_set_scratch: Vec<ObjectSetScratchPatternTemplate>,
     forbid_scratch: Vec<ScratchPatternTemplate>,
+    forbid_object_set_scratch: Vec<ObjectSetScratchPatternTemplate>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ScratchPatternTemplate {
     object: ObjectId,
+    scratch: ScratchId,
+    value: Option<ScratchValueTemplate>,
+    match_value: ScratchValueMatch,
+    is_marker: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ObjectSetScratchPatternTemplate {
+    binding: u16,
     scratch: ScratchId,
     value: Option<ScratchValueTemplate>,
     match_value: ScratchValueMatch,
@@ -16163,16 +16207,35 @@ enum WriteOpTemplate {
         offset: OffsetTemplate,
         object: ObjectId,
     },
+    AddObjectSet {
+        component: u16,
+        offset: OffsetTemplate,
+        binding: u16,
+        objects: Vec<ObjectId>,
+    },
     Remove {
         component: u16,
         offset: OffsetTemplate,
         object: ObjectId,
+    },
+    RemoveObjectSet {
+        component: u16,
+        offset: OffsetTemplate,
+        binding: u16,
+        objects: Vec<ObjectId>,
     },
     Move {
         component: u16,
         from_offset: OffsetTemplate,
         to_offset: OffsetTemplate,
         object: ObjectId,
+    },
+    MoveObjectSet {
+        component: u16,
+        from_offset: OffsetTemplate,
+        to_offset: OffsetTemplate,
+        binding: u16,
+        objects: Vec<ObjectId>,
     },
     SetScratch {
         component: u16,
@@ -16181,10 +16244,25 @@ enum WriteOpTemplate {
         scratch: ScratchId,
         value: Option<ScratchValueTemplate>,
     },
+    SetObjectSetScratch {
+        component: u16,
+        offset: OffsetTemplate,
+        binding: u16,
+        scratch: ScratchId,
+        value: Option<ScratchValueTemplate>,
+    },
     RemoveScratch {
         component: u16,
         offset: OffsetTemplate,
         object: ObjectId,
+        scratch: ScratchId,
+        value: Option<ScratchValueTemplate>,
+        match_value: ScratchValueMatch,
+    },
+    RemoveObjectSetScratch {
+        component: u16,
+        offset: OffsetTemplate,
+        binding: u16,
         scratch: ScratchId,
         value: Option<ScratchValueTemplate>,
         match_value: ScratchValueMatch,
@@ -16233,17 +16311,37 @@ struct OccurrenceKey {
 #[derive(Clone, Debug)]
 struct ResolvedObjectOccurrence {
     token: String,
-    object: ObjectId,
+    matched: ResolvedObjectMatch,
     key: Option<OccurrenceKey>,
     from_multi_selector: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ResolvedObjectMatch {
+    Object(ObjectId),
+    ObjectSet {
+        binding: u16,
+        layer: LayerId,
+        objects: Vec<ObjectId>,
+    },
+}
+
+impl ResolvedObjectMatch {
+    fn possible_objects(&self) -> Vec<ObjectId> {
+        match self {
+            ResolvedObjectMatch::Object(object) => vec![*object],
+            ResolvedObjectMatch::ObjectSet { objects, .. } => objects.clone(),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
 struct OccurrencePlacement {
     component: u16,
     offset: OffsetTemplate,
-    object: ObjectId,
+    matched: ResolvedObjectMatch,
     require_scratch: Vec<ScratchPatternTemplate>,
+    require_object_set_scratch: Vec<ObjectSetScratchPatternTemplate>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -17141,20 +17239,26 @@ fn compile_before_after_blocks(
                         )? {
                             continue 'assignment_loop;
                         }
-                        let mut before_objects = before_occurrences
-                            .iter()
-                            .map(|occurrence| occurrence.object)
-                            .collect::<Vec<_>>();
-                        let mut after_objects = after_occurrences
-                            .iter()
-                            .map(|occurrence| occurrence.object)
-                            .collect::<Vec<_>>();
-                        let before_scratch =
-                            block_cell_scratch(before_cell, &before_objects, scratch_names, line)?;
-                        let after_scratch =
-                            block_cell_scratch(after_cell, &after_objects, scratch_names, line)?;
+                        let mut before_objects =
+                            possible_objects_for_occurrences(&before_occurrences);
+                        let mut after_objects =
+                            possible_objects_for_occurrences(&after_occurrences);
+                        let before_scratch = block_cell_scratch(
+                            before_cell,
+                            &before_occurrences,
+                            scratch_names,
+                            line,
+                        )?;
+                        let after_scratch = block_cell_scratch(
+                            after_cell,
+                            &after_occurrences,
+                            scratch_names,
+                            line,
+                        )?;
                         dedup_objects(&mut before_objects);
                         dedup_objects(&mut after_objects);
+                        let require_objects = concrete_objects_for_occurrences(&before_occurrences);
+                        let require_object_sets = object_sets_for_occurrences(&before_occurrences);
 
                         for occurrence in &before_occurrences {
                             if let Some(key) = &occurrence.key {
@@ -17163,11 +17267,30 @@ fn compile_before_after_blocks(
                                     OccurrencePlacement {
                                         component: component_index,
                                         offset: offset.clone(),
-                                        object: occurrence.object,
+                                        matched: occurrence.matched.clone(),
                                         require_scratch: before_scratch
                                             .require
                                             .iter()
-                                            .filter(|attr| attr.object == occurrence.object)
+                                            .filter(|attr| {
+                                                occurrence
+                                                    .matched
+                                                    .possible_objects()
+                                                    .contains(&attr.object)
+                                            })
+                                            .cloned()
+                                            .collect(),
+                                        require_object_set_scratch: before_scratch
+                                            .require_object_set
+                                            .iter()
+                                            .filter(|attr| {
+                                                matches!(
+                                                    &occurrence.matched,
+                                                    ResolvedObjectMatch::ObjectSet {
+                                                        binding,
+                                                        ..
+                                                    } if *binding == attr.binding
+                                                )
+                                            })
                                             .cloned()
                                             .collect(),
                                     },
@@ -17181,11 +17304,30 @@ fn compile_before_after_blocks(
                                     OccurrencePlacement {
                                         component: component_index,
                                         offset: offset.clone(),
-                                        object: occurrence.object,
+                                        matched: occurrence.matched.clone(),
                                         require_scratch: after_scratch
                                             .require
                                             .iter()
-                                            .filter(|attr| attr.object == occurrence.object)
+                                            .filter(|attr| {
+                                                occurrence
+                                                    .matched
+                                                    .possible_objects()
+                                                    .contains(&attr.object)
+                                            })
+                                            .cloned()
+                                            .collect(),
+                                        require_object_set_scratch: after_scratch
+                                            .require_object_set
+                                            .iter()
+                                            .filter(|attr| {
+                                                matches!(
+                                                    &occurrence.matched,
+                                                    ResolvedObjectMatch::ObjectSet {
+                                                        binding,
+                                                        ..
+                                                    } if *binding == attr.binding
+                                                )
+                                            })
                                             .cloned()
                                             .collect(),
                                     },
@@ -17203,16 +17345,24 @@ fn compile_before_after_blocks(
 
                         component_cells.push(MatchCellTemplate {
                             offset: offset.clone(),
-                            require_objects: before_objects.clone(),
+                            require_objects,
+                            require_object_sets,
                             forbid_objects,
                             require_scratch: before_scratch.require.clone(),
+                            require_object_set_scratch: before_scratch.require_object_set.clone(),
                             forbid_scratch: before_scratch.forbid.clone(),
+                            forbid_object_set_scratch: before_scratch.forbid_object_set.clone(),
                         });
 
-                        for object in before_objects
-                            .iter()
-                            .filter(|object| !after_objects.contains(object))
-                        {
+                        let before_object_set_objects =
+                            object_set_objects_for_occurrences(&before_occurrences);
+                        let after_object_set_objects =
+                            object_set_objects_for_occurrences(&after_occurrences);
+
+                        for object in before_objects.iter().filter(|object| {
+                            !after_objects.contains(object)
+                                && !before_object_set_objects.contains(object)
+                        }) {
                             writes.push(WriteOpTemplate::Remove {
                                 component: component_index,
                                 offset: offset.clone(),
@@ -17220,16 +17370,23 @@ fn compile_before_after_blocks(
                             });
                         }
 
-                        for object in after_objects
-                            .iter()
-                            .filter(|object| !before_objects.contains(object))
-                        {
+                        for object in after_objects.iter().filter(|object| {
+                            !before_objects.contains(object)
+                                && !after_object_set_objects.contains(object)
+                        }) {
                             writes.push(WriteOpTemplate::Add {
                                 component: component_index,
                                 offset: offset.clone(),
                                 object: *object,
                             });
                         }
+                        append_object_set_presence_writes(
+                            component_index,
+                            &offset,
+                            &before_occurrences,
+                            &after_occurrences,
+                            &mut writes,
+                        );
 
                         for attr in
                             scratch_to_set(&after_scratch.require, &before_scratch.require, line)?
@@ -17238,6 +17395,19 @@ fn compile_before_after_blocks(
                                 component: component_index,
                                 offset: offset.clone(),
                                 object: attr.object,
+                                scratch: attr.scratch,
+                                value: attr.value.clone(),
+                            });
+                        }
+                        for attr in scratch_to_set_object_set(
+                            &after_scratch.require_object_set,
+                            &before_scratch.require_object_set,
+                            line,
+                        )? {
+                            writes.push(WriteOpTemplate::SetObjectSetScratch {
+                                component: component_index,
+                                offset: offset.clone(),
+                                binding: attr.binding,
                                 scratch: attr.scratch,
                                 value: attr.value.clone(),
                             });
@@ -17259,12 +17429,35 @@ fn compile_before_after_blocks(
                                 match_value: attr.match_value,
                             });
                         }
+                        for attr in scratch_to_remove_object_set(
+                            &before_scratch.require_object_set,
+                            &after_scratch.require_object_set,
+                        ) {
+                            writes.push(WriteOpTemplate::RemoveObjectSetScratch {
+                                component: component_index,
+                                offset: offset.clone(),
+                                binding: attr.binding,
+                                scratch: attr.scratch,
+                                value: attr.value.clone(),
+                                match_value: attr.match_value,
+                            });
+                        }
 
                         for attr in &after_scratch.forbid {
                             writes.push(WriteOpTemplate::RemoveScratch {
                                 component: component_index,
                                 offset: offset.clone(),
                                 object: attr.object,
+                                scratch: attr.scratch,
+                                value: attr.value.clone(),
+                                match_value: attr.match_value,
+                            });
+                        }
+                        for attr in &after_scratch.forbid_object_set {
+                            writes.push(WriteOpTemplate::RemoveObjectSetScratch {
+                                component: component_index,
+                                offset: offset.clone(),
+                                binding: attr.binding,
                                 scratch: attr.scratch,
                                 value: attr.value.clone(),
                                 match_value: attr.match_value,
@@ -17509,7 +17702,7 @@ fn prefer_same_cell_occurrence_keys(
                 .enumerate()
                 .find(|(index, after)| {
                     !used_after.contains(index)
-                        && after.object == before.object
+                        && after.matched == before.matched
                         && !occurrence_key_has_label(&key)
                         && !after.key.as_ref().is_some_and(occurrence_key_has_label)
                 })
@@ -17535,7 +17728,7 @@ fn preserve_moved_occurrence_scratch(
         .iter()
         .filter_map(|(key, before)| {
             let after = after_placements.get(key)?;
-            (before.object == after.object
+            (before.matched == after.matched
                 && before.component == after.component
                 && before.offset != after.offset)
                 .then_some((before, after))
@@ -17548,12 +17741,25 @@ fn preserve_moved_occurrence_scratch(
 
     let mut out = Vec::new();
     for (before, after) in &moves {
-        out.push(WriteOpTemplate::Move {
-            component: before.component,
-            from_offset: before.offset.clone(),
-            to_offset: after.offset.clone(),
-            object: before.object,
-        });
+        match &before.matched {
+            ResolvedObjectMatch::Object(object) => {
+                out.push(WriteOpTemplate::Move {
+                    component: before.component,
+                    from_offset: before.offset.clone(),
+                    to_offset: after.offset.clone(),
+                    object: *object,
+                });
+            }
+            ResolvedObjectMatch::ObjectSet { binding, .. } => {
+                out.push(WriteOpTemplate::MoveObjectSet {
+                    component: before.component,
+                    from_offset: before.offset.clone(),
+                    to_offset: after.offset.clone(),
+                    binding: *binding,
+                    objects: before.matched.possible_objects(),
+                });
+            }
+        }
 
         for attr in scratch_to_remove(&before.require_scratch, &after.require_scratch) {
             out.push(WriteOpTemplate::RemoveScratch {
@@ -17565,33 +17771,128 @@ fn preserve_moved_occurrence_scratch(
                 match_value: attr.match_value,
             });
         }
+        for attr in scratch_to_remove_object_set(
+            &before.require_object_set_scratch,
+            &after.require_object_set_scratch,
+        ) {
+            out.push(WriteOpTemplate::RemoveObjectSetScratch {
+                component: after.component,
+                offset: after.offset.clone(),
+                binding: attr.binding,
+                scratch: attr.scratch,
+                value: attr.value,
+                match_value: attr.match_value,
+            });
+        }
     }
 
     out.extend(writes.into_iter().filter(|write| {
         !moves.iter().any(|(before, after)| {
-            matches!(
-                write,
-                WriteOpTemplate::Remove {
-                    component,
-                    offset,
-                    object,
-                } if *component == before.component
-                    && offset == &before.offset
-                    && *object == before.object
-            ) || matches!(
-                write,
-                WriteOpTemplate::Add {
-                    component,
-                    offset,
-                    object,
-                } if *component == after.component
-                    && offset == &after.offset
-                    && *object == after.object
-            )
+            write_removes_match_at(write, before)
+                || write_adds_match_at(write, after)
+                || write_removes_moved_scratch_at_before(write, before)
         })
     }));
 
     Ok(out)
+}
+
+fn write_removes_moved_scratch_at_before(
+    write: &WriteOpTemplate,
+    placement: &OccurrencePlacement,
+) -> bool {
+    match (write, &placement.matched) {
+        (
+            WriteOpTemplate::RemoveObjectSetScratch {
+                component,
+                offset,
+                binding,
+                scratch,
+                ..
+            },
+            ResolvedObjectMatch::ObjectSet {
+                binding: placement_binding,
+                ..
+            },
+        ) => {
+            *component == placement.component
+                && offset == &placement.offset
+                && binding == placement_binding
+                && placement
+                    .require_object_set_scratch
+                    .iter()
+                    .any(|attr| attr.binding == *binding && attr.scratch == *scratch)
+        }
+        _ => false,
+    }
+}
+
+fn write_removes_match_at(write: &WriteOpTemplate, placement: &OccurrencePlacement) -> bool {
+    match (write, &placement.matched) {
+        (
+            WriteOpTemplate::Remove {
+                component,
+                offset,
+                object,
+            },
+            ResolvedObjectMatch::Object(placement_object),
+        ) => {
+            *component == placement.component
+                && offset == &placement.offset
+                && object == placement_object
+        }
+        (
+            WriteOpTemplate::RemoveObjectSet {
+                component,
+                offset,
+                binding,
+                ..
+            },
+            ResolvedObjectMatch::ObjectSet {
+                binding: placement_binding,
+                ..
+            },
+        ) => {
+            *component == placement.component
+                && offset == &placement.offset
+                && binding == placement_binding
+        }
+        _ => false,
+    }
+}
+
+fn write_adds_match_at(write: &WriteOpTemplate, placement: &OccurrencePlacement) -> bool {
+    match (write, &placement.matched) {
+        (
+            WriteOpTemplate::Add {
+                component,
+                offset,
+                object,
+            },
+            ResolvedObjectMatch::Object(placement_object),
+        ) => {
+            *component == placement.component
+                && offset == &placement.offset
+                && object == placement_object
+        }
+        (
+            WriteOpTemplate::AddObjectSet {
+                component,
+                offset,
+                binding,
+                ..
+            },
+            ResolvedObjectMatch::ObjectSet {
+                binding: placement_binding,
+                ..
+            },
+        ) => {
+            *component == placement.component
+                && offset == &placement.offset
+                && binding == placement_binding
+        }
+        _ => false,
+    }
 }
 
 fn block_shapes_match(before: &BlockComponent, after: &BlockComponent) -> bool {
@@ -17620,12 +17921,14 @@ fn block_cell_forbid_objects(cell: &BlockCell) -> Vec<ObjectId> {
 #[derive(Clone, Debug, Default)]
 struct BlockCellScratch {
     require: Vec<ScratchPatternTemplate>,
+    require_object_set: Vec<ObjectSetScratchPatternTemplate>,
     forbid: Vec<ScratchPatternTemplate>,
+    forbid_object_set: Vec<ObjectSetScratchPatternTemplate>,
 }
 
 fn block_cell_scratch(
     cell: &BlockCell,
-    objects: &[ObjectId],
+    occurrences: &[ResolvedObjectOccurrence],
     scratch_names: &HashMap<String, ScratchDef>,
     line: &str,
 ) -> Result<BlockCellScratch, AppError> {
@@ -17642,20 +17945,37 @@ fn block_cell_scratch(
         let pattern = parsed_scratch_pattern(ObjectId::EMPTY, scratch, scratch_names, line)?;
         out.forbid.push(pattern);
     }
-    for (selector, object) in cell.require.iter().zip(objects) {
+    for (selector, occurrence) in cell.require.iter().zip(occurrences) {
         for scratch in &selector.scratch {
-            let pattern = parsed_scratch_pattern(*object, scratch, scratch_names, line)?;
-            if scratch.negated {
-                out.forbid.push(pattern);
-            } else {
-                out.require.push(pattern);
+            match &occurrence.matched {
+                ResolvedObjectMatch::Object(object) => {
+                    let pattern = parsed_scratch_pattern(*object, scratch, scratch_names, line)?;
+                    if scratch.negated {
+                        out.forbid.push(pattern);
+                    } else {
+                        out.require.push(pattern);
+                    }
+                }
+                ResolvedObjectMatch::ObjectSet { binding, .. } => {
+                    let pattern =
+                        parsed_object_set_scratch_pattern(*binding, scratch, scratch_names, line)?;
+                    if scratch.negated {
+                        out.forbid_object_set.push(pattern);
+                    } else {
+                        out.require_object_set.push(pattern);
+                    }
+                }
             }
         }
     }
     dedup_scratch_patterns(&mut out.require);
     dedup_scratch_patterns(&mut out.forbid);
+    dedup_object_set_scratch_patterns(&mut out.require_object_set);
+    dedup_object_set_scratch_patterns(&mut out.forbid_object_set);
     reject_duplicate_scratch_patterns(&out.require, line)?;
     reject_duplicate_scratch_patterns(&out.forbid, line)?;
+    reject_duplicate_object_set_scratch_patterns(&out.require_object_set, line)?;
+    reject_duplicate_object_set_scratch_patterns(&out.forbid_object_set, line)?;
     Ok(out)
 }
 
@@ -17667,6 +17987,32 @@ fn dedup_scratch_patterns(patterns: &mut Vec<ScratchPatternTemplate>) {
         }
     }
     *patterns = deduped;
+}
+
+fn dedup_object_set_scratch_patterns(patterns: &mut Vec<ObjectSetScratchPatternTemplate>) {
+    let mut deduped = Vec::with_capacity(patterns.len());
+    for pattern in patterns.drain(..) {
+        if !deduped.contains(&pattern) {
+            deduped.push(pattern);
+        }
+    }
+    *patterns = deduped;
+}
+
+fn parsed_object_set_scratch_pattern(
+    binding: u16,
+    scratch: &ParsedScratch,
+    scratch_names: &HashMap<String, ScratchDef>,
+    line: &str,
+) -> Result<ObjectSetScratchPatternTemplate, AppError> {
+    let pattern = parsed_scratch_pattern(ObjectId::EMPTY, scratch, scratch_names, line)?;
+    Ok(ObjectSetScratchPatternTemplate {
+        binding,
+        scratch: pattern.scratch,
+        value: pattern.value,
+        match_value: pattern.match_value,
+        is_marker: pattern.is_marker,
+    })
 }
 
 fn parsed_scratch_pattern(
@@ -17839,6 +18185,24 @@ fn reject_duplicate_scratch_patterns(
     Ok(())
 }
 
+fn reject_duplicate_object_set_scratch_patterns(
+    scratch: &[ObjectSetScratchPatternTemplate],
+    line: &str,
+) -> Result<(), AppError> {
+    let mut seen = Vec::<(u16, ScratchId)>::new();
+    for attr in scratch {
+        let key = (attr.binding, attr.scratch);
+        if seen.contains(&key) {
+            return Err(parse_error(
+                line,
+                "same object occurrence cannot mention the same scratch twice",
+            ));
+        }
+        seen.push(key);
+    }
+    Ok(())
+}
+
 fn scratch_to_set(
     after: &[ScratchPatternTemplate],
     before: &[ScratchPatternTemplate],
@@ -17856,10 +18220,38 @@ fn scratch_to_set(
     Ok(writes)
 }
 
+fn scratch_to_set_object_set(
+    after: &[ObjectSetScratchPatternTemplate],
+    before: &[ObjectSetScratchPatternTemplate],
+    line: &str,
+) -> Result<Vec<ObjectSetScratchPatternTemplate>, AppError> {
+    let mut writes = Vec::new();
+    for attr in after {
+        if !attr.is_marker && attr.value.is_none() {
+            return Err(parse_error(line, "valued RHS scratch must specify a value"));
+        }
+        if !before.iter().any(|before| before == attr) {
+            writes.push(attr.clone());
+        }
+    }
+    Ok(writes)
+}
+
 fn scratch_to_remove(
     before: &[ScratchPatternTemplate],
     after: &[ScratchPatternTemplate],
 ) -> Vec<ScratchPatternTemplate> {
+    before
+        .iter()
+        .filter(|before| !after.iter().any(|after| after == *before))
+        .cloned()
+        .collect()
+}
+
+fn scratch_to_remove_object_set(
+    before: &[ObjectSetScratchPatternTemplate],
+    after: &[ObjectSetScratchPatternTemplate],
+) -> Vec<ObjectSetScratchPatternTemplate> {
     before
         .iter()
         .filter(|before| !after.iter().any(|after| after == *before))
@@ -17909,11 +18301,23 @@ struct SelectorOccurrence {
     alternatives: Vec<ObjectId>,
     occurrence_label: Option<String>,
     cell_index: usize,
+    binding: u16,
+}
+
+#[derive(Clone, Debug)]
+enum SelectorAssignmentValue {
+    Object(ObjectId),
+    ObjectSet {
+        binding: u16,
+        layer: LayerId,
+        objects: Vec<ObjectId>,
+    },
 }
 
 fn collect_before_occurrences(block: &PatternBlock) -> Vec<SelectorOccurrence> {
     let mut occurrences = Vec::new();
     let mut cell_index = 0usize;
+    let mut next_binding = 0u16;
     for component in &block.components {
         for row in &component.rows {
             for part in row {
@@ -17924,7 +18328,9 @@ fn collect_before_occurrences(block: &PatternBlock) -> Vec<SelectorOccurrence> {
                             alternatives: selector.alternatives.clone(),
                             occurrence_label: selector.occurrence_label.clone(),
                             cell_index,
+                            binding: next_binding,
                         });
+                        next_binding = next_binding.saturating_add(1);
                     }
                     cell_index += 1;
                 }
@@ -17958,9 +18364,39 @@ fn expand_selector_assignments(
     occurrences: &[SelectorOccurrence],
     object_layers: &HashMap<ObjectId, LayerId>,
     line: &str,
-) -> Result<Vec<Vec<ObjectId>>, AppError> {
-    let mut assignments = vec![Vec::<ObjectId>::new()];
+) -> Result<Vec<Vec<SelectorAssignmentValue>>, AppError> {
+    let mut assignments = vec![Vec::<SelectorAssignmentValue>::new()];
     for (index, occurrence) in occurrences.iter().enumerate() {
+        if occurrence.occurrence_label.is_none()
+            && !occurrence.token.contains('*')
+            && !occurrence.token.contains(':')
+            && let Some(layer) = same_layer_alternatives(&occurrence.alternatives, object_layers)
+            && selector_occurrence_can_use_object_set(occurrences, index, layer, object_layers)
+        {
+            let mut next = Vec::new();
+            for prefix in &assignments {
+                if !selector_assignment_value_is_possible(
+                    occurrences,
+                    prefix,
+                    index,
+                    layer,
+                    &occurrence.alternatives,
+                    object_layers,
+                    line,
+                )? {
+                    continue;
+                }
+                let mut assignment = prefix.clone();
+                assignment.push(SelectorAssignmentValue::ObjectSet {
+                    binding: occurrence.binding,
+                    layer,
+                    objects: occurrence.alternatives.clone(),
+                });
+                next.push(assignment);
+            }
+            assignments = next;
+            continue;
+        }
         let mut next = Vec::new();
         for prefix in &assignments {
             for object in &occurrence.alternatives {
@@ -17975,7 +18411,7 @@ fn expand_selector_assignments(
                     continue;
                 }
                 let mut assignment = prefix.clone();
-                assignment.push(*object);
+                assignment.push(SelectorAssignmentValue::Object(*object));
                 next.push(assignment);
             }
         }
@@ -17984,9 +18420,87 @@ fn expand_selector_assignments(
     Ok(assignments)
 }
 
+fn selector_occurrence_can_use_object_set(
+    occurrences: &[SelectorOccurrence],
+    index: usize,
+    layer: LayerId,
+    object_layers: &HashMap<ObjectId, LayerId>,
+) -> bool {
+    let occurrence = &occurrences[index];
+    !occurrences.iter().enumerate().any(|(other_index, other)| {
+        other_index != index
+            && other.cell_index == occurrence.cell_index
+            && other.alternatives.len() > 1
+            && (same_layer_alternatives(&other.alternatives, object_layers).is_none()
+                || same_layer_alternatives(&other.alternatives, object_layers) == Some(layer))
+    })
+}
+
+fn same_layer_alternatives(
+    alternatives: &[ObjectId],
+    object_layers: &HashMap<ObjectId, LayerId>,
+) -> Option<LayerId> {
+    if alternatives.len() <= 1 {
+        return None;
+    }
+    let mut layer = None;
+    for object in alternatives {
+        let object_layer = object_layers.get(object).copied()?;
+        if let Some(existing) = layer {
+            if existing != object_layer {
+                return None;
+            }
+        } else {
+            layer = Some(object_layer);
+        }
+    }
+    layer
+}
+
+fn selector_assignment_value_is_possible(
+    occurrences: &[SelectorOccurrence],
+    prefix: &[SelectorAssignmentValue],
+    index: usize,
+    layer: LayerId,
+    objects: &[ObjectId],
+    object_layers: &HashMap<ObjectId, LayerId>,
+    line: &str,
+) -> Result<bool, AppError> {
+    let occurrence = &occurrences[index];
+    for (previous_index, previous_value) in prefix.iter().enumerate() {
+        let previous = &occurrences[previous_index];
+        if previous.cell_index != occurrence.cell_index {
+            continue;
+        }
+        let previous_layer = match previous_value {
+            SelectorAssignmentValue::Object(object) => {
+                let Some(previous_layer) = object_layers.get(object).copied() else {
+                    continue;
+                };
+                previous_layer
+            }
+            SelectorAssignmentValue::ObjectSet { layer, .. } => *layer,
+        };
+        if previous_layer != layer {
+            continue;
+        }
+        if previous.alternatives.len() > 1 || objects.len() > 1 {
+            return Ok(false);
+        }
+        return Err(parse_error(
+            line,
+            &format!(
+                "cell pattern cannot contain both `{}` and `{}` because they are in the same collision layer",
+                previous.token, occurrence.token
+            ),
+        ));
+    }
+    Ok(true)
+}
+
 fn selector_assignment_object_is_possible(
     occurrences: &[SelectorOccurrence],
-    prefix: &[ObjectId],
+    prefix: &[SelectorAssignmentValue],
     index: usize,
     object: ObjectId,
     object_layers: &HashMap<ObjectId, LayerId>,
@@ -17996,21 +18510,28 @@ fn selector_assignment_object_is_possible(
     let Some(layer) = object_layers.get(&object) else {
         return Ok(true);
     };
-    for (previous_index, previous_object) in prefix.iter().enumerate() {
+    for (previous_index, previous_value) in prefix.iter().enumerate() {
         let previous = &occurrences[previous_index];
         if previous.cell_index != occurrence.cell_index {
             continue;
         }
-        let Some(previous_layer) = object_layers.get(previous_object) else {
-            continue;
+        let previous_layer = match previous_value {
+            SelectorAssignmentValue::Object(previous_object) => {
+                let Some(previous_layer) = object_layers.get(previous_object) else {
+                    continue;
+                };
+                *previous_layer
+            }
+            SelectorAssignmentValue::ObjectSet { layer, .. } => *layer,
         };
-        if previous_layer != layer {
+        if previous_layer != *layer {
             continue;
         }
         if previous.alternatives.len() > 1 || occurrence.alternatives.len() > 1 {
             return Ok(false);
         }
-        if *previous_object == object {
+        if matches!(previous_value, SelectorAssignmentValue::Object(previous_object) if *previous_object == object)
+        {
             continue;
         }
         return Err(parse_error(
@@ -18037,7 +18558,7 @@ fn before_occurrences_by_token(occurrences: &[SelectorOccurrence]) -> HashMap<St
 
 fn block_cell_object_occurrences(
     cell: &BlockCell,
-    assignment: &[ObjectId],
+    assignment: &[SelectorAssignmentValue],
     before_by_token: &HashMap<String, Vec<usize>>,
     token_counts: &mut HashMap<String, usize>,
     line: &str,
@@ -18059,7 +18580,7 @@ fn block_cell_object_occurrences(
                 })?;
                 let source_object = assignment
                     .get(*before_index)
-                    .copied()
+                    .and_then(assignment_concrete_object)
                     .ok_or_else(|| parse_error(line, "internal selector assignment missing"))?;
                 return transform
                     .mapped_objects
@@ -18067,7 +18588,7 @@ fn block_cell_object_occurrences(
                     .copied()
                     .map(|object| ResolvedObjectOccurrence {
                         token: selector.token.clone(),
-                        object,
+                        matched: ResolvedObjectMatch::Object(object),
                         key: None,
                         from_multi_selector: selector.alternatives.len() > 1,
                     })
@@ -18077,10 +18598,9 @@ fn block_cell_object_occurrences(
                 if let Some(before_index) = before_occurrences.get(ordinal) {
                     return assignment
                         .get(*before_index)
-                        .copied()
-                        .map(|object| ResolvedObjectOccurrence {
+                        .map(|value| ResolvedObjectOccurrence {
                             token: selector.token.clone(),
-                            object,
+                            matched: assignment_value_to_match(value),
                             key: Some(OccurrenceKey {
                                 token: selector.token.clone(),
                                 ordinal,
@@ -18099,7 +18619,7 @@ fn block_cell_object_occurrences(
                 }
                 Ok(ResolvedObjectOccurrence {
                     token: selector.token.clone(),
-                    object: selector.alternatives[0],
+                    matched: ResolvedObjectMatch::Object(selector.alternatives[0]),
                     key: None,
                     from_multi_selector: false,
                 })
@@ -18113,6 +18633,28 @@ fn block_cell_object_occurrences(
         .collect()
 }
 
+fn assignment_concrete_object(value: &SelectorAssignmentValue) -> Option<ObjectId> {
+    match value {
+        SelectorAssignmentValue::Object(object) => Some(*object),
+        SelectorAssignmentValue::ObjectSet { .. } => None,
+    }
+}
+
+fn assignment_value_to_match(value: &SelectorAssignmentValue) -> ResolvedObjectMatch {
+    match value {
+        SelectorAssignmentValue::Object(object) => ResolvedObjectMatch::Object(*object),
+        SelectorAssignmentValue::ObjectSet {
+            binding,
+            layer,
+            objects,
+        } => ResolvedObjectMatch::ObjectSet {
+            binding: *binding,
+            layer: *layer,
+            objects: objects.clone(),
+        },
+    }
+}
+
 fn validate_same_layer_cell_occurrences(
     occurrences: &[ResolvedObjectOccurrence],
     object_layers: &HashMap<ObjectId, LayerId>,
@@ -18120,8 +18662,14 @@ fn validate_same_layer_cell_occurrences(
 ) -> Result<bool, AppError> {
     let mut seen = Vec::<(LayerId, &ResolvedObjectOccurrence)>::new();
     for occurrence in occurrences {
-        let Some(layer) = object_layers.get(&occurrence.object).copied() else {
-            continue;
+        let layer = match &occurrence.matched {
+            ResolvedObjectMatch::Object(object) => {
+                let Some(layer) = object_layers.get(object).copied() else {
+                    continue;
+                };
+                layer
+            }
+            ResolvedObjectMatch::ObjectSet { layer, .. } => *layer,
         };
         if let Some((_, existing)) = seen
             .iter()
@@ -18130,7 +18678,7 @@ fn validate_same_layer_cell_occurrences(
             if existing.from_multi_selector || occurrence.from_multi_selector {
                 return Ok(false);
             }
-            if existing.object == occurrence.object {
+            if resolved_occurrences_may_be_same_object(existing, occurrence) {
                 continue;
             }
             return Err(parse_error(
@@ -18144,6 +18692,120 @@ fn validate_same_layer_cell_occurrences(
         seen.push((layer, occurrence));
     }
     Ok(true)
+}
+
+fn possible_objects_for_occurrences(occurrences: &[ResolvedObjectOccurrence]) -> Vec<ObjectId> {
+    let mut objects = occurrences
+        .iter()
+        .flat_map(|occurrence| occurrence.matched.possible_objects())
+        .collect::<Vec<_>>();
+    dedup_objects(&mut objects);
+    objects
+}
+
+fn concrete_objects_for_occurrences(occurrences: &[ResolvedObjectOccurrence]) -> Vec<ObjectId> {
+    let mut objects = occurrences
+        .iter()
+        .filter_map(|occurrence| match occurrence.matched {
+            ResolvedObjectMatch::Object(object) => Some(object),
+            ResolvedObjectMatch::ObjectSet { .. } => None,
+        })
+        .collect::<Vec<_>>();
+    dedup_objects(&mut objects);
+    objects
+}
+
+fn object_sets_for_occurrences(occurrences: &[ResolvedObjectOccurrence]) -> Vec<ObjectSetMatcher> {
+    let mut out = Vec::new();
+    for occurrence in occurrences {
+        let ResolvedObjectMatch::ObjectSet {
+            binding,
+            layer,
+            objects,
+        } = &occurrence.matched
+        else {
+            continue;
+        };
+        if out
+            .iter()
+            .any(|existing: &ObjectSetMatcher| existing.binding == *binding)
+        {
+            continue;
+        }
+        out.push(ObjectSetMatcher {
+            binding: *binding,
+            layer: *layer,
+            objects: objects.clone(),
+        });
+    }
+    out
+}
+
+fn object_set_objects_for_occurrences(occurrences: &[ResolvedObjectOccurrence]) -> Vec<ObjectId> {
+    let mut objects = occurrences
+        .iter()
+        .flat_map(|occurrence| match &occurrence.matched {
+            ResolvedObjectMatch::Object(_) => Vec::new(),
+            ResolvedObjectMatch::ObjectSet { objects, .. } => objects.clone(),
+        })
+        .collect::<Vec<_>>();
+    dedup_objects(&mut objects);
+    objects
+}
+
+fn append_object_set_presence_writes(
+    component: u16,
+    offset: &OffsetTemplate,
+    before_occurrences: &[ResolvedObjectOccurrence],
+    after_occurrences: &[ResolvedObjectOccurrence],
+    writes: &mut Vec<WriteOpTemplate>,
+) {
+    for before in before_occurrences {
+        let ResolvedObjectMatch::ObjectSet { binding, .. } = &before.matched else {
+            continue;
+        };
+        if before.key.is_some()
+            && after_occurrences
+                .iter()
+                .any(|after| after.key == before.key && after.matched == before.matched)
+        {
+            continue;
+        }
+        writes.push(WriteOpTemplate::RemoveObjectSet {
+            component,
+            offset: offset.clone(),
+            binding: *binding,
+            objects: before.matched.possible_objects(),
+        });
+    }
+    for after in after_occurrences {
+        let ResolvedObjectMatch::ObjectSet { binding, .. } = &after.matched else {
+            continue;
+        };
+        if after.key.is_some()
+            && before_occurrences
+                .iter()
+                .any(|before| before.key == after.key && before.matched == after.matched)
+        {
+            continue;
+        }
+        writes.push(WriteOpTemplate::AddObjectSet {
+            component,
+            offset: offset.clone(),
+            binding: *binding,
+            objects: after.matched.possible_objects(),
+        });
+    }
+}
+
+fn resolved_occurrences_may_be_same_object(
+    left: &ResolvedObjectOccurrence,
+    right: &ResolvedObjectOccurrence,
+) -> bool {
+    left.matched
+        .possible_objects()
+        .iter()
+        .any(|object| right.matched.possible_objects().contains(object))
 }
 
 fn direction_by_name(
@@ -18177,6 +18839,19 @@ fn resolve_write(
                 object: *object,
             })
         }
+        WriteOpTemplate::AddObjectSet {
+            component,
+            offset,
+            binding,
+            ..
+        } => {
+            let offset = resolve_offset(offset.clone(), direction, dir_any, line)?;
+            Ok(WriteOp::AddObjectSet {
+                component: *component,
+                offset,
+                binding: *binding,
+            })
+        }
         WriteOpTemplate::Remove {
             component,
             offset,
@@ -18187,6 +18862,19 @@ fn resolve_write(
                 component: *component,
                 offset,
                 object: *object,
+            })
+        }
+        WriteOpTemplate::RemoveObjectSet {
+            component,
+            offset,
+            binding,
+            ..
+        } => {
+            let offset = resolve_offset(offset.clone(), direction, dir_any, line)?;
+            Ok(WriteOp::RemoveObjectSet {
+                component: *component,
+                offset,
+                binding: *binding,
             })
         }
         WriteOpTemplate::Move {
@@ -18204,6 +18892,22 @@ fn resolve_write(
                 object: *object,
             })
         }
+        WriteOpTemplate::MoveObjectSet {
+            component,
+            from_offset,
+            to_offset,
+            binding,
+            ..
+        } => {
+            let from_offset = resolve_offset(from_offset.clone(), direction, dir_any, line)?;
+            let to_offset = resolve_offset(to_offset.clone(), direction, dir_any, line)?;
+            Ok(WriteOp::MoveObjectSet {
+                component: *component,
+                from_offset,
+                to_offset,
+                binding: *binding,
+            })
+        }
         WriteOpTemplate::SetScratch {
             component,
             offset,
@@ -18216,6 +18920,22 @@ fn resolve_write(
                 component: *component,
                 offset,
                 object: *object,
+                scratch: *scratch,
+                value: resolve_scratch_value(value.as_ref(), direction, dir_any, line)?,
+            })
+        }
+        WriteOpTemplate::SetObjectSetScratch {
+            component,
+            offset,
+            binding,
+            scratch,
+            value,
+        } => {
+            let offset = resolve_offset(offset.clone(), direction, dir_any, line)?;
+            Ok(WriteOp::SetObjectSetScratch {
+                component: *component,
+                offset,
+                binding: *binding,
                 scratch: *scratch,
                 value: resolve_scratch_value(value.as_ref(), direction, dir_any, line)?,
             })
@@ -18238,6 +18958,24 @@ fn resolve_write(
                 match_value: *match_value,
             })
         }
+        WriteOpTemplate::RemoveObjectSetScratch {
+            component,
+            offset,
+            binding,
+            scratch,
+            value,
+            match_value,
+        } => {
+            let offset = resolve_offset(offset.clone(), direction, dir_any, line)?;
+            Ok(WriteOp::RemoveObjectSetScratch {
+                component: *component,
+                offset,
+                binding: *binding,
+                scratch: *scratch,
+                value: resolve_scratch_value(value.as_ref(), direction, dir_any, line)?,
+                match_value: *match_value,
+            })
+        }
     }
 }
 
@@ -18252,6 +18990,30 @@ fn resolve_scratch_patterns(
         .map(|pattern| {
             Ok(ScratchPattern {
                 object: pattern.object,
+                scratch: pattern.scratch,
+                value: resolve_scratch_value(
+                    pattern.value.as_ref(),
+                    direction,
+                    direction_expanded,
+                    line,
+                )?,
+                match_value: pattern.match_value,
+            })
+        })
+        .collect()
+}
+
+fn resolve_object_set_scratch_patterns(
+    patterns: Vec<ObjectSetScratchPatternTemplate>,
+    direction: Direction,
+    direction_expanded: bool,
+    line: &str,
+) -> Result<Vec<ObjectSetScratchPattern>, AppError> {
+    patterns
+        .into_iter()
+        .map(|pattern| {
+            Ok(ObjectSetScratchPattern {
+                binding: pattern.binding,
                 scratch: pattern.scratch,
                 value: resolve_scratch_value(
                     pattern.value.as_ref(),

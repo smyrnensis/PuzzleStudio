@@ -6,7 +6,7 @@ default_wait_time = 100ms
 
 animation {
 	tween {
-		duration = 160ms
+		duration = 300ms
 	}
 }
 

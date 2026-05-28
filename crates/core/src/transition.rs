@@ -877,6 +877,13 @@ struct ComponentPlacement {
     origin_x: u16,
     origin_y: u16,
     gaps: Vec<u16>,
+    object_bindings: Vec<ObjectBinding>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ObjectBinding {
+    binding: u16,
+    object: ObjectId,
 }
 
 fn find_first_match(
@@ -1159,8 +1166,18 @@ fn placement_matches(
                 &placement.gaps,
                 scope,
             )
+            .is_some_and(|bindings| object_bindings_match(&bindings, &placement.object_bindings))
         })
         && placement_writes_within_local_frame(rule, &placement.components, scope)
+}
+
+fn object_bindings_match(left: &[ObjectBinding], right: &[ObjectBinding]) -> bool {
+    left.len() == right.len()
+        && left.iter().all(|binding| {
+            right.iter().any(|existing| {
+                existing.binding == binding.binding && existing.object == binding.object
+            })
+        })
 }
 
 struct LocalFrameScope2<'a> {
@@ -1214,16 +1231,19 @@ fn local_frame_focus_cells(state: &State, local_frame: &LocalFrame<ObjectId>) ->
     cells
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 struct ComponentAnchor {
     kind: ComponentAnchorKind,
     dx: i16,
     dy: i16,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 enum ComponentAnchorKind {
     Object(ObjectId),
+    ObjectSet {
+        objects: Vec<ObjectId>,
+    },
     SlotScratch {
         object: ObjectId,
         scratch: ScratchId,
@@ -1260,7 +1280,7 @@ fn component_candidate_origins(
         return all_origin_vec(state, scope);
     };
     let mut origins = BTreeSet::new();
-    for (x, y) in anchor_positions(game, state, anchor) {
+    for (x, y) in anchor_positions(game, state, &anchor) {
         let Some((origin_x, origin_y)) = offset_pos(x, y, -anchor.dx, -anchor.dy) else {
             continue;
         };
@@ -1278,35 +1298,49 @@ fn component_candidate_origins(
 fn anchor_positions(
     game: &CompiledGame,
     state: &State,
-    anchor: ComponentAnchor,
+    anchor: &ComponentAnchor,
 ) -> Vec<(u16, u16)> {
-    match anchor.kind {
+    match &anchor.kind {
         ComponentAnchorKind::Object(object) => {
-            if game.object_layer(object).is_none() {
+            if game.object_layer(*object).is_none() {
                 return Vec::new();
             }
             state
-                .object_positions(object)
+                .object_positions(*object)
                 .iter()
                 .filter_map(|slot| state.slot_position(*slot))
                 .collect()
+        }
+        ComponentAnchorKind::ObjectSet { objects, .. } => {
+            let mut positions = BTreeSet::new();
+            for object in objects {
+                if game.object_layer(*object).is_none() {
+                    continue;
+                }
+                for slot in state.object_positions(*object) {
+                    if let Some((x, y)) = state.slot_position(*slot) {
+                        positions.insert((y, x));
+                    }
+                }
+            }
+            positions.into_iter().map(|(y, x)| (x, y)).collect()
         }
         ComponentAnchorKind::SlotScratch {
             object,
             scratch,
             value,
         } => {
-            if game.object_layer(object).is_none() {
+            if game.object_layer(*object).is_none() {
                 return Vec::new();
             }
             state
-                .scratch_positions(object, scratch, value)
+                .scratch_positions(*object, *scratch, *value)
                 .iter()
                 .filter_map(|slot| state.slot_position(*slot))
                 .collect()
         }
         ComponentAnchorKind::CellScratch { scratch, value } => state
-            .scratch_positions(ObjectId::EMPTY, scratch, value)
+            .scratch_positions(ObjectId::EMPTY, *scratch, *value)
             .iter()
             .filter_map(|cell| state.cell_position(*cell))
             .collect(),
@@ -1350,6 +1384,28 @@ fn component_anchor(
                     count,
                     ComponentAnchor {
                         kind: ComponentAnchorKind::Object(*object),
+                        dx,
+                        dy,
+                    },
+                ));
+            }
+        }
+        for object_set in &cell.require_object_sets {
+            let count = object_set
+                .objects
+                .iter()
+                .map(|object| state.object_count(*object))
+                .sum();
+            if best
+                .as_ref()
+                .is_none_or(|(best_count, _)| count < *best_count)
+            {
+                best = Some((
+                    count,
+                    ComponentAnchor {
+                        kind: ComponentAnchorKind::ObjectSet {
+                            objects: object_set.objects.clone(),
+                        },
                         dx,
                         dy,
                     },
@@ -1406,7 +1462,13 @@ fn placement_writes_within_local_frame(
             WriteOp::Add {
                 component, offset, ..
             }
+            | WriteOp::AddObjectSet {
+                component, offset, ..
+            }
             | WriteOp::Remove {
+                component, offset, ..
+            }
+            | WriteOp::RemoveObjectSet {
                 component, offset, ..
             }
             | WriteOp::Replace {
@@ -1415,7 +1477,13 @@ fn placement_writes_within_local_frame(
             | WriteOp::SetScratch {
                 component, offset, ..
             }
+            | WriteOp::SetObjectSetScratch {
+                component, offset, ..
+            }
             | WriteOp::RemoveScratch {
+                component, offset, ..
+            }
+            | WriteOp::RemoveObjectSetScratch {
                 component, offset, ..
             } => {
                 let Some((x, y)) = write_position_for_components(components, *component, offset)
@@ -1427,6 +1495,12 @@ fn placement_writes_within_local_frame(
                 }
             }
             WriteOp::Move {
+                component,
+                from_offset,
+                to_offset,
+                ..
+            }
+            | WriteOp::MoveObjectSet {
                 component,
                 from_offset,
                 to_offset,
@@ -1455,7 +1529,7 @@ fn dirty_origin_deltas(rule: &Rule) -> Option<BTreeSet<(i32, i32)>> {
     if rule.pattern.components.len() != 1
         || rule.pattern.components[0].gap_count != 0
         || rule.writes.iter().any(|write| {
-            matches!(write, WriteOp::Move { .. })
+            matches!(write, WriteOp::Move { .. } | WriteOp::MoveObjectSet { .. })
                 || write_component(write) != 0
                 || fixed_write_offset(write).is_none()
         })
@@ -1486,10 +1560,15 @@ fn dirty_origin_deltas(rule: &Rule) -> Option<BTreeSet<(i32, i32)>> {
 fn write_component(write: &WriteOp) -> u16 {
     match write {
         WriteOp::Add { component, .. }
+        | WriteOp::AddObjectSet { component, .. }
         | WriteOp::Remove { component, .. }
+        | WriteOp::RemoveObjectSet { component, .. }
         | WriteOp::Move { component, .. }
+        | WriteOp::MoveObjectSet { component, .. }
         | WriteOp::Replace { component, .. }
         | WriteOp::SetScratch { component, .. }
+        | WriteOp::SetObjectSetScratch { component, .. }
+        | WriteOp::RemoveObjectSetScratch { component, .. }
         | WriteOp::RemoveScratch { component, .. } => *component,
     }
 }
@@ -1497,11 +1576,17 @@ fn write_component(write: &WriteOp) -> u16 {
 fn fixed_write_offset(write: &WriteOp) -> Option<(i16, i16)> {
     match write {
         WriteOp::Add { offset, .. }
+        | WriteOp::AddObjectSet { offset, .. }
         | WriteOp::Remove { offset, .. }
+        | WriteOp::RemoveObjectSet { offset, .. }
         | WriteOp::Replace { offset, .. }
         | WriteOp::SetScratch { offset, .. }
+        | WriteOp::SetObjectSetScratch { offset, .. }
+        | WriteOp::RemoveObjectSetScratch { offset, .. }
         | WriteOp::RemoveScratch { offset, .. } => fixed_offset(offset),
-        WriteOp::Move { to_offset, .. } => fixed_offset(to_offset),
+        WriteOp::Move { to_offset, .. } | WriteOp::MoveObjectSet { to_offset, .. } => {
+            fixed_offset(to_offset)
+        }
     }
 }
 
@@ -1531,11 +1616,14 @@ fn component_placement_at(
 ) -> Option<ComponentPlacement> {
     if component.gap_count == 0 {
         let gaps = Vec::new();
-        if component_matches_with_gaps(game, state, component, origin_x, origin_y, &gaps, scope) {
+        if let Some(object_bindings) =
+            component_matches_with_gaps(game, state, component, origin_x, origin_y, &gaps, scope)
+        {
             return Some(ComponentPlacement {
                 origin_x,
                 origin_y,
                 gaps,
+                object_bindings,
             });
         }
         return None;
@@ -1544,13 +1632,14 @@ fn component_placement_at(
     let max_gap = state.width.max(state.height);
     for total_gap in 0..=max_gap.saturating_mul(component.gap_count) {
         let mut gaps = Vec::with_capacity(usize::from(component.gap_count));
-        if find_gap_assignment(
+        if let Some(object_bindings) = find_gap_assignment(
             game, state, component, origin_x, origin_y, max_gap, total_gap, &mut gaps, scope,
         ) {
             return Some(ComponentPlacement {
                 origin_x,
                 origin_y,
                 gaps,
+                object_bindings,
             });
         }
     }
@@ -1568,17 +1657,18 @@ fn find_gap_assignment(
     remaining_total: u16,
     gaps: &mut Vec<u16>,
     scope: &LocalFrameScope2<'_>,
-) -> bool {
+) -> Option<Vec<ObjectBinding>> {
     if gaps.len() == usize::from(component.gap_count) {
-        return remaining_total == 0
-            && component_matches_with_gaps(
-                game, state, component, origin_x, origin_y, gaps, scope,
-            );
+        return (remaining_total == 0)
+            .then(|| {
+                component_matches_with_gaps(game, state, component, origin_x, origin_y, gaps, scope)
+            })
+            .flatten();
     }
 
     for gap in 0..=max_gap.min(remaining_total) {
         gaps.push(gap);
-        if find_gap_assignment(
+        if let Some(object_bindings) = find_gap_assignment(
             game,
             state,
             component,
@@ -1589,12 +1679,12 @@ fn find_gap_assignment(
             gaps,
             scope,
         ) {
-            return true;
+            return Some(object_bindings);
         }
         gaps.pop();
     }
 
-    false
+    None
 }
 
 fn component_matches_with_gaps(
@@ -1605,11 +1695,24 @@ fn component_matches_with_gaps(
     origin_y: u16,
     gaps: &[u16],
     scope: &LocalFrameScope2<'_>,
-) -> bool {
-    component
-        .cells
-        .iter()
-        .all(|cell| match_cell(game, state, origin_x, origin_y, gaps, cell, scope))
+) -> Option<Vec<ObjectBinding>> {
+    let mut object_bindings = Vec::new();
+    if component.cells.iter().all(|cell| {
+        match_cell(
+            game,
+            state,
+            origin_x,
+            origin_y,
+            gaps,
+            cell,
+            scope,
+            &mut object_bindings,
+        )
+    }) {
+        Some(object_bindings)
+    } else {
+        None
+    }
 }
 
 fn match_cell(
@@ -1620,6 +1723,7 @@ fn match_cell(
     gaps: &[u16],
     cell: &MatchCell,
     scope: &LocalFrameScope2<'_>,
+    object_bindings: &mut Vec<ObjectBinding>,
 ) -> bool {
     let Some((dx, dy)) = resolve_offset(&cell.offset, gaps) else {
         return false;
@@ -1646,6 +1750,18 @@ fn match_cell(
         }
     }
 
+    for object_set in &cell.require_object_sets {
+        let Ok(found) = state.get_layer(x, y, object_set.layer) else {
+            return false;
+        };
+        if found.is_empty() || !object_set.objects.contains(&found) {
+            return false;
+        }
+        if !bind_object(object_bindings, object_set.binding, found) {
+            return false;
+        }
+    }
+
     for scratch in &cell.require_scratch {
         let matched = match scratch.match_value {
             ScratchValueMatch::Any => {
@@ -1653,6 +1769,21 @@ fn match_cell(
             }
             ScratchValueMatch::Exact => {
                 state.has_scratch(game, x, y, scratch.object, scratch.scratch, scratch.value)
+            }
+        };
+        if !matched {
+            return false;
+        }
+    }
+
+    for scratch in &cell.require_object_set_scratch {
+        let Some(object) = bound_object(object_bindings, scratch.binding) else {
+            return false;
+        };
+        let matched = match scratch.match_value {
+            ScratchValueMatch::Any => state.has_scratch_key(game, x, y, object, scratch.scratch),
+            ScratchValueMatch::Exact => {
+                state.has_scratch(game, x, y, object, scratch.scratch, scratch.value)
             }
         };
         if !matched {
@@ -1669,6 +1800,21 @@ fn match_cell(
                     return false;
                 }
             }
+        }
+    }
+
+    for scratch in &cell.forbid_object_set_scratch {
+        let Some(object) = bound_object(object_bindings, scratch.binding) else {
+            return false;
+        };
+        let matched = match scratch.match_value {
+            ScratchValueMatch::Any => state.has_scratch_key(game, x, y, object, scratch.scratch),
+            ScratchValueMatch::Exact => {
+                state.has_scratch(game, x, y, object, scratch.scratch, scratch.value)
+            }
+        };
+        if matched {
+            return false;
         }
     }
 
@@ -1689,6 +1835,25 @@ fn match_cell(
     true
 }
 
+fn bind_object(bindings: &mut Vec<ObjectBinding>, binding: u16, object: ObjectId) -> bool {
+    if let Some(existing) = bindings
+        .iter()
+        .find(|existing| existing.binding == binding)
+        .map(|existing| existing.object)
+    {
+        return existing == object;
+    }
+    bindings.push(ObjectBinding { binding, object });
+    true
+}
+
+fn bound_object(bindings: &[ObjectBinding], binding: u16) -> Option<ObjectId> {
+    bindings
+        .iter()
+        .find(|existing| existing.binding == binding)
+        .map(|existing| existing.object)
+}
+
 fn build_patch(rule: &Rule, placement: &MatchPlacement) -> TransitionResult<Patch> {
     let mut patch = Patch::new();
 
@@ -1706,6 +1871,15 @@ fn build_patch(rule: &Rule, placement: &MatchPlacement) -> TransitionResult<Patc
                     object: *object,
                 });
             }
+            WriteOp::AddObjectSet {
+                component,
+                offset,
+                binding,
+            } => {
+                let (x, y) = write_position(placement, *component, offset)?;
+                let object = placement_object_binding(placement, *binding)?;
+                patch.ops.push(PatchOp::Add { x, y, object });
+            }
             WriteOp::Remove {
                 component,
                 offset,
@@ -1717,6 +1891,15 @@ fn build_patch(rule: &Rule, placement: &MatchPlacement) -> TransitionResult<Patc
                     y,
                     object: *object,
                 });
+            }
+            WriteOp::RemoveObjectSet {
+                component,
+                offset,
+                binding,
+            } => {
+                let (x, y) = write_position(placement, *component, offset)?;
+                let object = placement_object_binding(placement, *binding)?;
+                patch.ops.push(PatchOp::Remove { x, y, object });
             }
             WriteOp::Move {
                 component,
@@ -1732,6 +1915,23 @@ fn build_patch(rule: &Rule, placement: &MatchPlacement) -> TransitionResult<Patc
                     to_x,
                     to_y,
                     object: *object,
+                });
+            }
+            WriteOp::MoveObjectSet {
+                component,
+                from_offset,
+                to_offset,
+                binding,
+            } => {
+                let (from_x, from_y) = write_position(placement, *component, from_offset)?;
+                let (to_x, to_y) = write_position(placement, *component, to_offset)?;
+                let object = placement_object_binding(placement, *binding)?;
+                patch.ops.push(PatchOp::Move {
+                    from_x,
+                    from_y,
+                    to_x,
+                    to_y,
+                    object,
                 });
             }
             WriteOp::Replace {
@@ -1764,6 +1964,23 @@ fn build_patch(rule: &Rule, placement: &MatchPlacement) -> TransitionResult<Patc
                     value: *value,
                 });
             }
+            WriteOp::SetObjectSetScratch {
+                component,
+                offset,
+                binding,
+                scratch,
+                value,
+            } => {
+                let (x, y) = write_position(placement, *component, offset)?;
+                let object = placement_object_binding(placement, *binding)?;
+                patch.ops.push(PatchOp::SetScratch {
+                    x,
+                    y,
+                    object,
+                    scratch: *scratch,
+                    value: *value,
+                });
+            }
             WriteOp::RemoveScratch {
                 component,
                 offset,
@@ -1777,6 +1994,25 @@ fn build_patch(rule: &Rule, placement: &MatchPlacement) -> TransitionResult<Patc
                     x,
                     y,
                     object: *object,
+                    scratch: *scratch,
+                    value: *value,
+                    match_value: *match_value,
+                });
+            }
+            WriteOp::RemoveObjectSetScratch {
+                component,
+                offset,
+                binding,
+                scratch,
+                value,
+                match_value,
+            } => {
+                let (x, y) = write_position(placement, *component, offset)?;
+                let object = placement_object_binding(placement, *binding)?;
+                patch.ops.push(PatchOp::RemoveScratch {
+                    x,
+                    y,
+                    object,
                     scratch: *scratch,
                     value: *value,
                     match_value: *match_value,
@@ -1804,6 +2040,19 @@ fn build_patch(rule: &Rule, placement: &MatchPlacement) -> TransitionResult<Patc
     }
 
     Ok(patch)
+}
+
+fn placement_object_binding(
+    placement: &MatchPlacement,
+    binding: u16,
+) -> TransitionResult<ObjectId> {
+    placement
+        .components
+        .iter()
+        .flat_map(|component| &component.object_bindings)
+        .find(|object_binding| object_binding.binding == binding)
+        .map(|object_binding| object_binding.object)
+        .ok_or(TransitionError::OffsetOutOfBounds)
 }
 
 fn write_position(
@@ -1897,9 +2146,12 @@ mod tests {
         MatchCell {
             offset: fixed(dx, dy),
             require_objects,
+            require_object_sets: Vec::new(),
             forbid_objects,
             require_scratch: Vec::new(),
+            require_object_set_scratch: Vec::new(),
             forbid_scratch: Vec::new(),
+            forbid_object_set_scratch: Vec::new(),
         }
     }
 
@@ -1913,6 +2165,7 @@ mod tests {
         MatchCell {
             offset: fixed(dx, dy),
             require_objects: Vec::new(),
+            require_object_sets: Vec::new(),
             forbid_objects: Vec::new(),
             require_scratch: vec![ScratchPattern {
                 object,
@@ -1920,7 +2173,9 @@ mod tests {
                 value,
                 match_value: ScratchValueMatch::Exact,
             }],
+            require_object_set_scratch: Vec::new(),
             forbid_scratch: Vec::new(),
+            forbid_object_set_scratch: Vec::new(),
         }
     }
 

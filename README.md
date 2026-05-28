@@ -206,7 +206,6 @@ crates/wasm/            WASM bridge used by editor/player workflows
 crates/puzzle3d_model/  prototype 3D model parser/runtime
 src-tauri/              desktop shell for the shared editor
 games/                  current small specification/sample games
-themes/                 built-in HTML theme imports
 archive/games/          older experiments and compatibility samples
 tools/                  export scripts and authoring utilities
 ```

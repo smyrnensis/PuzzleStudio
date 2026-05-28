@@ -6,9 +6,9 @@ pub mod transition;
 
 pub use compiled_game::{
     ComparisonOp, CompiledGame, Effect, GapTerm, GlobalUpdateOp, Guard, LocalFrame,
-    LocalFrameExtent, MatchCell, ObjectDef, Offset, Pattern, PatternComponent, QueryDef, QueryKind,
-    Rule, RuleApplication, RuleCondition, RuleStep, ScratchDef, ScratchKind, ScratchPattern,
-    ScratchValueMatch, WriteOp,
+    LocalFrameExtent, MatchCell, ObjectDef, ObjectSetMatcher, ObjectSetScratchPattern, Offset,
+    Pattern, PatternComponent, QueryDef, QueryKind, Rule, RuleApplication, RuleCondition, RuleStep,
+    ScratchDef, ScratchKind, ScratchPattern, ScratchValueMatch, WriteOp,
 };
 pub use ids::{GlobalId, InputId, LayerId, ObjectId, QueryId, RuleId, ScratchId};
 pub use patch::{Patch, PatchError, PatchOp};

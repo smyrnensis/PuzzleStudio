@@ -465,9 +465,7 @@ function renderSprite3dPreview() {
     ...sprite3dSliceSurfaceFaces(sprite3d.slice, view, "active", occupied, 2)
       .map((face) => ({ ...face, ownerCell: previewOwner })),
   ];
-  sceneFaces.forEach((face, index) => {
-    face.primitiveOrder = index;
-  });
+  assignSprite3dPrimitiveOrder(sceneFaces);
   sceneFaces.sort(Puzzle3VisualCore.comparePrimitiveOrder);
   for (const face of sceneFaces) {
     if (face.kind === "slice") {
@@ -551,6 +549,19 @@ function sprite3dPreviewRenderOwner() {
     order: { x: 0, y: 0, z: 0 },
     depth: 0,
   };
+}
+
+function assignSprite3dPrimitiveOrder(primitives) {
+  const keyCounts = new Map();
+  for (const [index, primitive] of primitives.entries()) {
+    const baseKey = primitive.key
+      ? String(primitive.key)
+      : `${primitive.kind || "primitive"}:${index}`;
+    const occurrence = keyCounts.get(baseKey) || 0;
+    keyCounts.set(baseKey, occurrence + 1);
+    primitive.frameIndex = index;
+    primitive.stableKey = occurrence === 0 ? baseKey : `${baseKey}#${occurrence}`;
+  }
 }
 
 function renderSprite3dCameraControls() {
@@ -753,6 +764,7 @@ function sprite3dMergedSliceFaces(groups, view, fill, stroke, mode, order) {
     const projectedPoints = projectedPolygons.flat();
     faces.push({
       kind: "slice",
+      key: `slice:${mode}:${order}:${group.side}:${group.planeIndex}:${[...group.cells].sort().join(";")}`,
       mode,
       order,
       renderPriority: order,
@@ -979,16 +991,20 @@ function sprite3dMergedVoxelFaces(occupied, view) {
         u: info.u,
         v: info.v,
         group: {
+          key,
           side: face.side,
           planeIndex: info.planeIndex,
           fill,
         },
       };
     },
+    rectsFromCells: sprite3dUnitFaceRects,
     face: (group, rect) => {
       const corners = sprite3dMergedSliceFaceCorners(group.side, group.planeIndex, rect);
       const projected = corners.map((corner) => sprite3dProject(corner, view));
+      const key = `${group.key}:${rect.u0},${rect.u1},${rect.v0},${rect.v1}`;
       return {
+        key,
         points: projected.map(({ x, y }) => ({ x, y })),
         depth: projected.reduce((total, point) => total + point.depth, 0) / projected.length,
         gridOrder: sprite3dFaceGridOrder(corners),
@@ -998,6 +1014,15 @@ function sprite3dMergedVoxelFaces(occupied, view) {
       };
     },
   });
+}
+
+function sprite3dUnitFaceRects(cells) {
+  return [...cells]
+    .map((key) => {
+      const [u, v] = key.split(",").map(Number);
+      return { u0: u, u1: u, v0: v, v1: v };
+    })
+    .sort((left, right) => left.v0 - right.v0 || left.u0 - right.u0);
 }
 
 function sprite3dVoxelFaceOverlays(side, planeIndex, rect, view) {

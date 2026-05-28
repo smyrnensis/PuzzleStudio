@@ -34,21 +34,7 @@ Player
 scene title {
   layout {
     title "Wide Floor 3D"
-    button "Start" -> goto playing
-  }
-}
-
-scene playing {
-  state {
-    board = puzzle3 wide_floor
-  }
-
-  keys {
-    Escape -> goto title
-  }
-
-  layout {
-    puzzle3 board
+    button "Start" -> goto wide_floor
   }
 }
 
