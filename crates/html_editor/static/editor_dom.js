@@ -135,6 +135,7 @@ const solutionResetButton = document.querySelector("#solutionResetButton");
 const solutionExportButton = document.querySelector("#solutionExportButton");
 const levelEdgeButtons = document.querySelectorAll("[data-level-edge]");
 const spriteNameInput = document.querySelector("#spriteNameInput");
+const spriteShapeField = document.querySelector("#spriteShapeField");
 const spriteSizeInput = document.querySelector("#spriteSizeInput");
 const spriteScaleInput = document.querySelector("#spriteScaleInput");
 const spriteExportButton = document.querySelector("#spriteExportButton");

@@ -91,7 +91,7 @@ levels {
 }
 
 scene title {
-  view {
+  layout {
     title "Multiple Patterns"
     subtitle "by increpare"
     if game.has_progress_save {
@@ -116,7 +116,7 @@ scene playing {
   state {
     board = puzzle main
   }
-  view {
+  layout {
     row {
       title "Multiple Patterns"
     }

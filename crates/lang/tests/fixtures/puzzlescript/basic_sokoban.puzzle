@@ -97,7 +97,7 @@ levels {
 }
 
 scene title {
-  view {
+  layout {
     title "Basic PS Sokoban"
     if game.has_progress_save {
       choice "Continue" -> input continue_game
@@ -121,7 +121,7 @@ scene playing {
   state {
     board = puzzle main
   }
-  view {
+  layout {
     row {
       title "Basic PS Sokoban"
     }

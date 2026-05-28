@@ -23,19 +23,16 @@ puzzle3 wide_floor {
 sprites3 simple of wide_floor {
 FloorA
 #c8d7bd
-0
 
 FloorB
 #93ad86
-0
 
 Player
 #d94132
-0
 }
 
 scene title {
-  view {
+  layout {
     title "Wide Floor 3D"
     button "Start" -> goto playing
   }
@@ -50,7 +47,7 @@ scene playing {
     Escape -> goto title
   }
 
-  view {
+  layout {
     puzzle3 board
   }
 }

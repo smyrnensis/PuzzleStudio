@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use crate::{
     DenseCell3, DensePattern3, DenseRow3, DenseRuleTemplate3, DenseSlice3, Direction3,
@@ -548,6 +548,7 @@ impl Parser3 {
         }
         let (name, model) = parse_sprites3_header(header)?;
         let mut sprites = Vec::new();
+        let mut shapes = HashMap::<String, Vec<String>>::new();
         while index < self.lines.len() {
             let line = self.lines[index].clone();
             if line == "}" {
@@ -560,15 +561,25 @@ impl Parser3 {
             }
             if line.starts_with("sprite ") {
                 return Err(message(
-                    "sprites3 entries must use canonical form: <name>, palette row, voxel rows",
+                    "sprites3 entries must use canonical form: <name>, color row, voxel rows or shape ref",
                 ));
+            }
+            if let Some(shape_name) = parse_sprite3_shape_header(&line) {
+                if shapes.contains_key(shape_name) {
+                    return Err(message(format!("duplicate sprite3 shape: {shape_name}")));
+                }
+                let (next, rows) = parse_sprite3_shape_block(&self.lines, index + 1, shape_name)?;
+                shapes.insert(shape_name.to_string(), rows);
+                index = next;
+                continue;
             }
             if is_canonical_sprite_name(&line) {
                 let sprite_name = line.clone();
                 if sprites.iter().any(|sprite| sprite.name == sprite_name) {
                     return Err(message(format!("duplicate sprite: {sprite_name}")));
                 }
-                let (next, sprite) = self.parse_canonical_sprite(index + 1, sprite_name)?;
+                let (next, sprite) =
+                    self.parse_canonical_sprite(index + 1, sprite_name, &shapes)?;
                 sprites.push(sprite);
                 index = next;
                 continue;
@@ -582,18 +593,41 @@ impl Parser3 {
         &self,
         mut index: usize,
         name: String,
+        shapes: &HashMap<String, Vec<String>>,
     ) -> Result<(usize, Sprite3), ParseError3> {
         while index < self.lines.len() && self.lines[index].is_empty() {
             index += 1;
         }
         if index >= self.lines.len() || self.lines[index] == "}" {
-            return Err(message(format!("sprite {name} missing palette row")));
+            return Err(message(format!("sprite {name} missing color row")));
         }
         let palette = parse_canonical_sprite_palette_line(&self.lines[index])?;
         index += 1;
 
         while index < self.lines.len() && self.lines[index].is_empty() {
             index += 1;
+        }
+
+        if index < self.lines.len() {
+            let line = self.lines[index].clone();
+            if line == "}"
+                || self.is_canonical_sprite_start(index)
+                || parse_sprite3_shape_header(&line).is_some()
+            {
+                let rows = vec!["0".to_string()];
+                let voxels = parse_sprite_voxels(&name, &rows, &palette)?;
+                return Ok((index, Sprite3::new(name, palette, voxels)));
+            }
+            if let Some(rows) = shapes.get(&line) {
+                let voxels = parse_sprite_voxels(&name, rows, &palette)?;
+                return Ok((index + 1, Sprite3::new(name, palette, voxels)));
+            }
+            if let Some(rest) = line.strip_prefix("shape ") {
+                let shape_name = rest.trim();
+                if shapes.contains_key(shape_name) {
+                    return Err(message("sprite3 shape refs are bare; remove `shape`"));
+                }
+            }
         }
 
         let mut rows = Vec::new();
@@ -604,10 +638,13 @@ impl Parser3 {
             }
             if line.starts_with("sprite ") || line == "colors {" || line == "voxels {" {
                 return Err(message(
-                    "sprites3 entries must use canonical form: <name>, palette row, voxel rows",
+                    "sprites3 entries must use canonical form: <name>, color row, voxel rows or shape ref",
                 ));
             }
-            if !rows.is_empty() && self.is_canonical_sprite_start(index) {
+            if !rows.is_empty()
+                && (self.is_canonical_sprite_start(index)
+                    || parse_sprite3_shape_header(&line).is_some())
+            {
                 break;
             }
             rows.push(line);
@@ -1500,6 +1537,45 @@ fn parse_sprites3_header(line: &str) -> Result<(String, Option<String>), ParseEr
             "sprites3 header must be: sprites3 [name [of model]] {",
         )),
     }
+}
+
+fn parse_sprite3_shape_header(line: &str) -> Option<&str> {
+    let rest = line.strip_prefix("shape ")?;
+    let name = rest.strip_suffix(" {")?;
+    is_canonical_sprite_shape_name(name).then_some(name)
+}
+
+fn is_canonical_sprite_shape_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | ':' | '@'))
+}
+
+fn parse_sprite3_shape_block(
+    lines: &[String],
+    mut index: usize,
+    name: &str,
+) -> Result<(usize, Vec<String>), ParseError3> {
+    let mut rows = Vec::new();
+    while index < lines.len() {
+        let line = lines[index].clone();
+        if line == "}" {
+            if rows.is_empty() {
+                return Err(message(format!("sprite3 shape {name} requires voxel rows")));
+            }
+            split_level_slices(&rows)?;
+            return Ok((index + 1, rows));
+        }
+        if line.starts_with("sprite ") || line == "colors {" || line == "voxels {" {
+            return Err(message(
+                "sprites3 entries must use canonical form: <name>, color row, voxel rows or shape ref",
+            ));
+        }
+        rows.push(line);
+        index += 1;
+    }
+    Err(message(format!("sprite3 shape {name} missing }}")))
 }
 
 fn lower_level_bundle(

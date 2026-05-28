@@ -875,7 +875,7 @@ levels {
 }
 
 scene title {
-  view {
+  layout {
     title "Transition"
     subtitle "by NinaBirb"
     if game.has_progress_save {
@@ -900,7 +900,7 @@ scene playing {
   state {
     board = puzzle main
   }
-  view {
+  layout {
     puzzle board
   }
   inputs {

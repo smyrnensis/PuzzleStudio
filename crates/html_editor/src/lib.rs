@@ -330,6 +330,7 @@ pub struct EditorDocument {
     source: String,
     data_url: String,
     preview_html: String,
+    preview_error: String,
     game_css: String,
     game_visuals_js: String,
 }
@@ -545,7 +546,7 @@ fn load_editor_documents(
     for path in paths {
         if path.extension().and_then(|value| value.to_str()) == Some("puzzle") {
             let source = read_workspace_text_file(&path, workspace_root)?;
-            let (preview_html, game_css, game_visuals_js) = if let Some(entry_path) =
+            let (game_css, game_visuals_js) = if let Some(entry_path) =
                 preview_entry_for_document(&path, &source, &parent)
             {
                 let entry_source = if entry_path == path {
@@ -559,16 +560,9 @@ fn load_editor_documents(
                     .unwrap_or_else(|_| entry_source.clone());
                 let game_visuals_js = load_game_visuals_js(&expanded_source, &base_game_visuals_js)
                     .unwrap_or_else(|_| base_game_visuals_js.clone());
-                let preview_html = html_play::export_html_from_source(
-                    &expanded_source,
-                    &entry_path.display().to_string(),
-                    &game_css,
-                    &base_game_visuals_js,
-                )
-                .unwrap_or_else(|error| error_preview_html(&error));
-                (preview_html, game_css, game_visuals_js)
+                (game_css, game_visuals_js)
             } else {
-                (String::new(), String::new(), String::new())
+                (String::new(), String::new())
             };
             documents.push(EditorDocument {
                 puzzle_path: path.display().to_string(),
@@ -576,7 +570,8 @@ fn load_editor_documents(
                 mime_type: mime_type(&path).to_string(),
                 source,
                 data_url: String::new(),
-                preview_html,
+                preview_html: String::new(),
+                preview_error: String::new(),
                 game_css,
                 game_visuals_js,
             });
@@ -588,6 +583,7 @@ fn load_editor_documents(
                 source: read_workspace_text_file(&path, workspace_root)?,
                 data_url: String::new(),
                 preview_html: String::new(),
+                preview_error: String::new(),
                 game_css: String::new(),
                 game_visuals_js: String::new(),
             });
@@ -601,6 +597,7 @@ fn load_editor_documents(
                 source: String::new(),
                 data_url: format!("data:{mime_type};base64,{}", base64_encode(&bytes)),
                 preview_html: String::new(),
+                preview_error: String::new(),
                 game_css: String::new(),
                 game_visuals_js: String::new(),
             });
@@ -806,13 +803,6 @@ fn base64_encode(bytes: &[u8]) -> String {
         }
     }
     out
-}
-
-fn error_preview_html(error: &str) -> String {
-    format!(
-        "<!doctype html><html><head><meta charset=\"utf-8\"><style>body{{margin:0;min-height:100vh;display:puzzle;place-items:center;background:#f5f3ef;color:#1d242b;font-family:ui-sans-serif,system-ui,sans-serif}}main{{width:min(720px,calc(100vw - 32px));padding:24px;border:1px solid #d1d8df;border-radius:8px;background:#fff}}h1{{margin:0 0 12px;color:#b43b43;font-size:18px}}pre{{margin:0;white-space:pre-wrap;word-break:break-word}}</style></head><body><main><h1>Compile error</h1><pre>{}</pre></main></body></html>",
-        escape_html(error)
-    )
 }
 
 fn escape_html(value: &str) -> String {
@@ -1294,16 +1284,8 @@ fn json_string_field(source: &str, key: &str) -> Option<String> {
 }
 
 fn export_editor_html(state: &EditorState) -> Result<String, AppError> {
-    let expanded_source = expand_preview_source(&state.source, &PathBuf::from(&state.puzzle_path))?;
-    let preview_html = html_play::export_html_from_source(
-        &expanded_source,
-        &state.puzzle_path,
-        &state.game_css,
-        &state.base_game_visuals_js,
-    )
-    .map_err(AppError::Config)?;
     let mut data = String::new();
-    editor_seed_json(&mut data, state, &preview_html);
+    editor_seed_json(&mut data, state);
     let data = escape_script_json(&data);
     let editor_css = escape_style(EDITOR_CSS);
     let renderer_css = escape_style(RENDERER_CSS);
@@ -1604,7 +1586,7 @@ fn source_json(state: &EditorState) -> String {
     out
 }
 
-fn editor_seed_json(out: &mut String, state: &EditorState, preview_html: &str) {
+fn editor_seed_json(out: &mut String, state: &EditorState) {
     out.push('{');
     push_json_pair(out, "puzzlePath", &state.puzzle_path);
     out.push(',');
@@ -1612,7 +1594,7 @@ fn editor_seed_json(out: &mut String, state: &EditorState, preview_html: &str) {
     out.push(',');
     push_json_pair(out, "source", &state.source);
     out.push(',');
-    push_json_pair(out, "previewHtml", preview_html);
+    push_json_pair(out, "previewHtml", "");
     out.push(',');
     push_json_pair(out, "gameCss", &state.game_css);
     out.push(',');
@@ -1646,6 +1628,8 @@ fn push_editor_documents_json(out: &mut String, state: &EditorState) {
         push_json_pair(out, "dataUrl", &document.data_url);
         out.push(',');
         push_json_pair(out, "previewHtml", &document.preview_html);
+        out.push(',');
+        push_json_pair(out, "previewError", &document.preview_error);
         out.push(',');
         push_json_pair(out, "gameCss", &document.game_css);
         out.push(',');
@@ -1857,7 +1841,7 @@ scene playing {{
 state {{
 board = puzzle default
 }}
-view {{
+layout {{
 puzzle board
 }}
 rules {{
@@ -2063,21 +2047,45 @@ step board
         );
         let entry_doc = document_with_suffix(&state.documents, "games/custom_entry/arcade.puzzle");
         assert!(
-            !entry_doc.preview_html.is_empty(),
-            "prelude-bearing .puzzle files should be executable preview entries"
+            entry_doc.preview_html.is_empty(),
+            "workspace documents should not embed generated preview HTML before the browser needs it"
         );
         let fragment_doc = document_with_suffix(
             &state.documents,
             "games/custom_entry/fragments/levels.puzzle",
         );
         assert_eq!(
-            fragment_doc.preview_html, entry_doc.preview_html,
-            "fragment previews should resolve to the nearest containing prelude entry"
+            fragment_doc.preview_html, "",
+            "fragment documents should also defer preview generation"
         );
         assert_eq!(
             fragment_path.file_name().and_then(|value| value.to_str()),
             Some("levels.puzzle")
         );
+    }
+
+    #[test]
+    fn workspace_preview_generation_is_deferred_until_run() {
+        let workspace = TestWorkspace::new();
+        let game_path = workspace.write(
+            "games/broken/game.puzzle",
+            "title \"Broken\"\n\npuzzle main {\n",
+        );
+
+        let service = EditorService::open(&game_path).expect("open broken editor fixture");
+        let document = document_with_suffix(&service.state().documents, "games/broken/game.puzzle");
+
+        assert_eq!(
+            document.preview_html, "",
+            "workspace loading should not generate preview HTML"
+        );
+        assert_eq!(
+            document.preview_error, "",
+            "compile errors should be reported by the compile path, not while seeding the editor"
+        );
+        let source_json = service.source_json();
+        assert!(source_json.contains("\"previewHtml\":\"\""));
+        assert!(source_json.contains("\"previewError\":\"\""));
     }
 
     #[test]
@@ -2183,6 +2191,19 @@ step board
     }
 
     #[test]
+    fn source_run_button_opens_play_preview() {
+        assert!(EDITOR_HTML.contains(r#"id="runButton""#));
+        assert!(EDITOR_HTML.contains(r#"aria-label="Run preview""#));
+        assert!(EDITOR_HTML.contains("lucide-play"));
+        assert!(EDITOR_JS.contains("function runPreviewFromSourcePane()"));
+        assert!(EDITOR_JS.contains("openPreviewModePane(\"play\", { focus: false });"));
+        assert!(
+            EDITOR_JS.contains("runButton.addEventListener(\"click\", runPreviewFromSourcePane);")
+        );
+        assert!(EDITOR_WORKSPACE_JS.contains("runButton.title = \"Run preview\";"));
+    }
+
+    #[test]
     fn level_editor_grid_is_owned_by_editor_toggle() {
         assert!(EDITOR_HTML.contains(r#"id="levelGridButton""#));
         assert!(
@@ -2206,9 +2227,7 @@ step board
         assert!(
             EDITOR_JS.contains("levelGridButton?.addEventListener(\"click\", toggleLevelGrid);")
         );
-        assert!(EDITOR_CSS.contains(
-            ".level-board.board.has-all-cell-grid .cell::after"
-        ));
+        assert!(EDITOR_CSS.contains(".level-board.board.has-all-cell-grid .cell::after"));
         assert!(EDITOR_CSS.contains("z-index: 100;"));
     }
 
@@ -2237,13 +2256,18 @@ step board
         assert!(EDITOR_JS.contains("function stopLevelPlaytest(options = {})"));
         assert!(EDITOR_JS.contains("function focusLevelInputTarget()"));
         assert!(EDITOR_JS.contains("const stateData = levelStateData(exportData);"));
-        assert!(EDITOR_JS.contains("function stateDataToLevelCells(stateData, exportData = previewExport)"));
+        assert!(
+            EDITOR_JS
+                .contains("function stateDataToLevelCells(stateData, exportData = previewExport)")
+        );
         assert!(EDITOR_JS.contains("function transitionPlaytestProgram("));
         assert!(EDITOR_JS.contains("function levelPlaytestCoreRuntime("));
         assert!(EDITOR_JS.contains("transition_current_state_outcome"));
         assert!(EDITOR_JS.contains("function applyLevelPlaytestKey(event)"));
         assert!(EDITOR_JS.contains("acceptModelInput: true"));
-        assert!(EDITOR_JS.contains("levelDisplayCells = stateDataToLevelCells(levelPlaytestStateData, exportData);"));
+        assert!(EDITOR_JS.contains(
+            "levelDisplayCells = stateDataToLevelCells(levelPlaytestStateData, exportData);"
+        ));
         assert!(EDITOR_JS.contains(
             "return levelPlaytestActive && levelDisplayCells?.length === level.cells.length ? levelDisplayCells : level.cells;"
         ));
@@ -2355,6 +2379,34 @@ step board
     }
 
     #[test]
+    fn workbench_panes_can_be_maximized_without_replacing_normal_layout() {
+        assert!(EDITOR_HTML.contains(r#"data-pane-maximize="source""#));
+        assert!(EDITOR_HTML.contains(r#"data-pane-maximize="active-preview""#));
+        assert!(EDITOR_WORKBENCH_JS.contains("let maximizedWorkPaneId = \"\";"));
+        assert!(EDITOR_WORKBENCH_JS.contains("function toggleWorkPaneMaximized(paneId)"));
+        assert!(EDITOR_WORKBENCH_JS.contains("function isPaneDisplayed(paneId)"));
+        assert!(EDITOR_WORKBENCH_JS.contains("return [maximizedWorkPaneId];"));
+        assert!(
+            EDITOR_WORKBENCH_JS
+                .contains("maximizedWorkPaneId && maximizedWorkPaneId !== normalized")
+        );
+        assert!(EDITOR_CSS.contains(".workbench.is-pane-maximized .explorer-pane"));
+        assert!(
+            EDITOR_JS
+                .contains("const maximizeButton = event.target.closest(\"[data-pane-maximize]\");")
+        );
+    }
+
+    #[test]
+    fn source_pane_stays_left_when_tool_panes_open() {
+        assert!(EDITOR_WORKBENCH_JS.contains("next.splice(next.indexOf(SOURCE_WORK_PANE_ID), 1);"));
+        assert!(EDITOR_WORKBENCH_JS.contains("next.unshift(SOURCE_WORK_PANE_ID);"));
+        assert!(EDITOR_WORKBENCH_JS.contains(
+            "visibleWorkPanes = normalizeVisibleWorkPaneList([SOURCE_WORK_PANE_ID, normalized]);"
+        ));
+    }
+
+    #[test]
     fn level_editor_draft_edits_do_not_commit_preview_or_source() {
         assert!(EDITOR_JS.contains("function addLevelToSource()"));
         assert!(EDITOR_JS.contains("function updateLevelInSource()"));
@@ -2419,7 +2471,10 @@ step board
             "renderLevel3dLayerBoard();\n  renderLevel3dStageOverlay();\n  refreshLevel3dRuntimePreviews();\n  return true;"
         ));
         assert!(EDITOR_JS.contains("currentPreviewMode === \"level3d\" && typeof sendLevel3dSnapshotToRuntime === \"function\""));
-        assert!(EDITOR_JS.contains("const stateData = options.stateData || solverStateData(exportData);"));
+        assert!(
+            EDITOR_JS
+                .contains("const stateData = options.stateData || solverStateData(exportData);")
+        );
         assert!(EDITOR_JS.contains(
             "isPuzzle3dExport(exportData) && typeof sendLevel3dSnapshotToRuntime === \"function\""
         ));
@@ -2586,6 +2641,19 @@ step board
     }
 
     #[test]
+    fn source_editor_enter_inside_braces_keeps_cursor_on_inner_line() {
+        assert!(EDITOR_SOURCE_JS.contains("function insertSourceNewlineAtSelection()"));
+        assert!(
+            EDITOR_SOURCE_JS.contains("const cursorOffset = sourceNewlineCursorOffset(insert);")
+        );
+        assert!(EDITOR_SOURCE_JS.contains("const cursor = start + cursorOffset;"));
+        assert!(EDITOR_SOURCE_JS.contains("sourceEditor.setSelectionRange(cursor, cursor);"));
+        assert!(EDITOR_SOURCE_JS.contains(
+            "return firstNewline >= 0 && lastNewline > firstNewline ? lastNewline : null;"
+        ));
+    }
+
+    #[test]
     fn source_editor_clicks_right_of_text_stay_on_visual_line_end() {
         assert!(EDITOR_SOURCE_JS.contains("let lineHit = null;"));
         assert!(EDITOR_SOURCE_JS.contains("let bestInLine = null;"));
@@ -2605,7 +2673,7 @@ step board
         assert!(source.contains("exists(Goal)\n\t\tnone([ Goal no Player ])"));
         assert!(source.contains("for d in directions {\n\t\t\tif input == d {"));
         assert!(source.contains("once d [ Player | no solid ] -> [ | Player ]"));
-        assert!(source.contains("view size 4 3 {"));
+        assert!(source.contains("layout size 4 3 {"));
         assert!(source.contains("rules {\n\t\tstep main\n\t}"));
         assert!(!source.contains("all Goal on Player"));
         assert!(!source.contains("input directions"));

@@ -47,6 +47,19 @@ pub use loaded::{
     ThemeDef, ThemeVariableDef, TweenAnimationDef, ViewportModeDef, ViewportSizeDef,
     VisualAliasDef, VisualColorDef, VisualSpriteDef, VisualSpriteKind, VisualsDef,
 };
+
+const BLOCK_CLOSE: &str = "}";
+
+fn is_block_close_line(line: &str) -> bool {
+    line == BLOCK_CLOSE
+}
+
+fn block_header_text(line: &str) -> &str {
+    line.trim_end()
+        .strip_suffix('{')
+        .map(str::trim_end)
+        .unwrap_or(line)
+}
 use puzzle_core::{
     ComparisonOp, CompiledGame, Effect, GapTerm, GlobalId, GlobalUpdateOp, Guard, InputId, LayerId,
     LocalFrame, LocalFrameExtent, MatchCell, ObjectDef, ObjectId, Offset, Pattern,
@@ -168,7 +181,7 @@ fn is_scene_surface_scope(scope: Option<SourceScope>) -> bool {
         scope,
         Some(
             SourceScope::Scene
-                | SourceScope::SceneView
+                | SourceScope::SceneLayout
                 | SourceScope::SceneState
                 | SourceScope::SceneKeys
                 | SourceScope::SceneTransitions
@@ -233,7 +246,7 @@ fn scene_block_keyword(value: &str) -> bool {
             | "rules"
             | "state"
             | "transitions"
-            | "view"
+            | "layout"
     )
 }
 
@@ -482,7 +495,7 @@ fn split_mixed_game_document_source(source: &str) -> Result<MixedDocumentSources
             index + 1
         };
         if is_block && matches!(tokens.as_slice(), ["puzzle", ..] | ["puzzle3", ..]) {
-            push_raw_model_block_without_default_scene_views(
+            push_raw_model_block_without_default_scene_layouts(
                 &raw_lines,
                 index,
                 target,
@@ -496,14 +509,14 @@ fn split_mixed_game_document_source(source: &str) -> Result<MixedDocumentSources
     Ok(sources)
 }
 
-fn push_raw_model_block_without_default_scene_views(
+fn push_raw_model_block_without_default_scene_layouts(
     raw_lines: &[&str],
     start: usize,
     target: MixedSectionTarget,
     sources: &mut MixedDocumentSources,
 ) {
     let mut stripped = Vec::new();
-    push_raw_model_without_default_scene_views(raw_lines, start, &mut stripped);
+    push_raw_model_without_default_scene_layouts(raw_lines, start, &mut stripped);
     for line in stripped {
         match target {
             MixedSectionTarget::Puzzle2d => push_raw_line(&mut sources.puzzle2d, line),
@@ -1232,7 +1245,7 @@ fn skip_context_shell_block_by_syntax(context: &source::SourceContext, index: us
     while next < context.lines.len() {
         let trimmed = strip_line_comment(&context.lines[next].content).trim();
         next += 1;
-        if trimmed == "end" {
+        if trimmed == BLOCK_CLOSE {
             break;
         }
     }
@@ -1246,7 +1259,7 @@ fn context_theme_line_is_block(context: &source::SourceContext, index: usize) ->
     }
     context.lines.get(index + 1).is_some_and(|next| {
         let trimmed = strip_line_comment(&next.content).trim();
-        trimmed == "end" || is_theme_setting_line(trimmed)
+        trimmed == BLOCK_CLOSE || is_theme_setting_line(trimmed)
     })
 }
 
@@ -1297,7 +1310,7 @@ fn next_line_is_not_block_body(lines: &[String], index: usize) -> bool {
     let Some(next) = lines.get(index + 1) else {
         return true;
     };
-    if next == "end" {
+    if is_block_close_line(next) {
         return true;
     }
     let tokens = split_tokens(next);
@@ -1337,7 +1350,7 @@ fn logical_line_opens_block(tokens: &[&str]) -> bool {
             | ["sprites3", ..]
             | ["scene", ..]
             | ["state", ..]
-            | ["view", ..]
+            | ["layout", ..]
             | ["row", ..]
             | ["column", ..]
             | ["box", ..]
@@ -1370,7 +1383,7 @@ fn skip_logical_block(lines: &[String], start: usize) -> usize {
     let mut index = start + 1;
     while index < lines.len() {
         let tokens = split_tokens(&lines[index]);
-        if lines[index] == "end" {
+        if is_block_close_line(&lines[index]) {
             depth = depth.saturating_sub(1);
             index += 1;
             if depth == 0 {
@@ -1408,7 +1421,7 @@ fn strip_document_scene_source_raw(source: &str) -> String {
             if matches!(tokens.as_slice(), ["puzzle", ..] | ["puzzle3", ..])
                 && trimmed.ends_with('{')
             {
-                index = push_raw_model_without_default_scene_views(&raw_lines, index, &mut out);
+                index = push_raw_model_without_default_scene_layouts(&raw_lines, index, &mut out);
                 continue;
             }
         }
@@ -1420,7 +1433,7 @@ fn strip_document_scene_source_raw(source: &str) -> String {
     out.join("\n")
 }
 
-fn push_raw_model_without_default_scene_views<'a>(
+fn push_raw_model_without_default_scene_layouts<'a>(
     raw_lines: &[&'a str],
     start: usize,
     out: &mut Vec<&'a str>,
@@ -1431,7 +1444,7 @@ fn push_raw_model_without_default_scene_views<'a>(
     while index < raw_lines.len() && depth > 0 {
         let line = raw_lines[index];
         let trimmed = strip_line_comment(line).trim();
-        if depth == 1 && matches!(split_tokens(trimmed).as_slice(), ["view", ..]) {
+        if depth == 1 && matches!(split_tokens(trimmed).as_slice(), ["layout", ..]) {
             index = skip_raw_top_level_block(raw_lines, index);
             continue;
         }
@@ -1489,7 +1502,7 @@ fn extract_default_model_scene(
     while i < lines.len() {
         let line = &lines[i];
         let tokens = split_tokens(line);
-        if tokens.first().copied() == Some("end") {
+        if tokens.first().copied() == Some(BLOCK_CLOSE) || line == "}" {
             depth = depth.saturating_sub(1);
             entry.push(line.clone());
             i += 1;
@@ -1498,14 +1511,14 @@ fn extract_default_model_scene(
             }
             continue;
         }
-        if depth == 1 && matches!(tokens.as_slice(), ["view", ..]) {
+        if depth == 1 && matches!(tokens.as_slice(), ["layout", ..]) {
             if default_scene.is_some() {
                 return Err(parse_error(
                     line,
-                    "model default scene has duplicate view block",
+                    "model default scene has duplicate layout block",
                 ));
             }
-            let next_i = skip_scene_view_block(lines, i)?;
+            let next_i = skip_scene_layout_block(lines, i)?;
             default_scene = Some(parse_default_model_scene(lines, i, next_i, kind, name)?);
             i = next_i;
             continue;
@@ -1519,13 +1532,13 @@ fn extract_default_model_scene(
     Ok((vec![lines[start].clone()], None, start + 1))
 }
 
-fn skip_scene_view_block(lines: &[String], start: usize) -> Result<usize, AppError> {
+fn skip_scene_layout_block(lines: &[String], start: usize) -> Result<usize, AppError> {
     let mut depth = 1usize;
     let mut i = start + 1;
     while i < lines.len() {
         let line = &lines[i];
         let tokens = split_tokens(line);
-        if tokens.first().copied() == Some("end") {
+        if tokens.first().copied() == Some(BLOCK_CLOSE) {
             depth = depth.saturating_sub(1);
             i += 1;
             if depth == 0 {
@@ -1538,7 +1551,7 @@ fn skip_scene_view_block(lines: &[String], start: usize) -> Result<usize, AppErr
         }
         i += 1;
     }
-    Err(parse_error(&lines[start], "view missing end"))
+    Err(parse_error(&lines[start], "layout missing closing brace"))
 }
 
 fn starts_model_nested_block(tokens: &[&str], line: &str) -> bool {
@@ -1552,19 +1565,19 @@ fn parse_default_model_scene(
     kind: &str,
     name: &str,
 ) -> Result<SceneDef, AppError> {
-    let mut view_lines = lines[start..end].to_vec();
-    rewrite_default_model_view_components(&mut view_lines, kind, name);
-    let (view, next_i) = parse_screen_view_block(&view_lines, 0)?;
-    debug_assert_eq!(next_i, view_lines.len());
+    let mut layout_lines = lines[start..end].to_vec();
+    rewrite_default_model_layout_components(&mut layout_lines, kind, name);
+    let (layout_block, next_i) = parse_screen_layout_block(&layout_lines, 0)?;
+    debug_assert_eq!(next_i, layout_lines.len());
     let mut scene = implicit_model_scene(kind, name);
-    scene.layout = view.layout;
-    scene.state.variables.extend(view.state.variables);
-    scene.state.puzzles.extend(view.state.puzzles);
-    scene.components = view.components;
+    scene.layout = layout_block.layout;
+    scene.state.variables.extend(layout_block.state.variables);
+    scene.state.puzzles.extend(layout_block.state.puzzles);
+    scene.components = layout_block.components;
     Ok(scene)
 }
 
-fn rewrite_default_model_view_components(lines: &mut [String], kind: &str, name: &str) {
+fn rewrite_default_model_layout_components(lines: &mut [String], kind: &str, name: &str) {
     for line in lines {
         if split_tokens(line).as_slice() == [kind] {
             *line = format!("{kind} {name}");
@@ -1588,7 +1601,7 @@ fn skip_raw_top_level_block(raw_lines: &[&str], start: usize) -> usize {
         while index < raw_lines.len() {
             let trimmed = strip_line_comment(raw_lines[index]).trim();
             index += 1;
-            if trimmed == "end" {
+            if trimmed == BLOCK_CLOSE {
                 break;
             }
         }
@@ -1998,7 +2011,7 @@ fn parse_game2d_expanded_with_shell(
             "assets" => {
                 i = parse_assets_block(&lines, i, &mut assets)?;
             }
-            "end" => {
+            "}" => {
                 i += 1;
             }
             "sprites" => {
@@ -2035,6 +2048,7 @@ fn parse_game2d_expanded_with_shell(
         AppError::Parse("missing empty char; use `levels { legend { . = empty } }`".to_string())
     })?;
     assign_unlayered_objects_to_anonymous_layers(&mut named_layers, &mut layer_count, &mut catalog);
+    validate_layer_role_separation(&catalog, &named_layers)?;
     refresh_layer_tags_and_value_sets(&mut named_layers, &mut catalog);
     let layer_count = layer_count.ok_or_else(|| AppError::Parse("missing layers".to_string()))?;
     if level_blocks.is_empty() {
@@ -2528,7 +2542,7 @@ fn collect_authoring_entry(
         let line = &lines[i];
         if i != start {
             let tokens = split_tokens(line);
-            if tokens.first().copied() == Some("end") {
+            if tokens.first().copied() == Some(BLOCK_CLOSE) {
                 depth -= 1;
                 entry.push(line.clone());
                 if depth == 0 {
@@ -2544,7 +2558,7 @@ fn collect_authoring_entry(
         entry.push(line.clone());
         i += 1;
     }
-    Err(parse_error(first, "block missing end"))
+    Err(parse_error(first, "block missing closing brace"))
 }
 
 fn collect_levels_authoring_entry(
@@ -2558,7 +2572,7 @@ fn collect_levels_authoring_entry(
     while i < lines.len() {
         let line = &lines[i];
         let tokens = split_tokens(line);
-        if tokens.first().copied() == Some("end") {
+        if tokens.first().copied() == Some(BLOCK_CLOSE) {
             depth -= 1;
             entry.push(line.clone());
             if depth == 0 {
@@ -2577,7 +2591,7 @@ fn collect_levels_authoring_entry(
         entry.push(line.clone());
         i += 1;
     }
-    Err(parse_error(first, "levels block missing end"))
+    Err(parse_error(first, "levels block missing closing brace"))
 }
 
 fn starts_authoring_block(tokens: &[&str], line: &str) -> bool {
@@ -2597,7 +2611,7 @@ fn starts_authoring_block(tokens: &[&str], line: &str) -> bool {
         | ["sprites"]
         | ["sounds"]
         | ["screen"]
-        | ["view", ..]
+        | ["layout", ..]
         | ["routine", ..]
         | ["rules"]
         | ["levels", ..]
@@ -2636,7 +2650,7 @@ fn parse_sounds_block(
     let mut i = start + 1;
     while i < lines.len() {
         let line = &lines[i];
-        if line == "end" {
+        if is_block_close_line(line) {
             return Ok(i + 1);
         }
         let tokens = split_tokens(line);
@@ -2705,7 +2719,7 @@ fn parse_sounds_block(
         i += 1;
     }
 
-    Err(parse_error(&lines[start], "sounds missing end"))
+    Err(parse_error(&lines[start], "sounds missing closing brace"))
 }
 
 #[derive(Clone, Debug)]
@@ -2744,7 +2758,7 @@ fn parse_model_sounds_block(
     let mut i = start + 1;
     while i < lines.len() {
         let line = &lines[i];
-        if line == "end" {
+        if is_block_close_line(line) {
             return Ok(i + 1);
         }
         let tokens = split_tokens(line);
@@ -2791,7 +2805,10 @@ fn parse_model_sounds_block(
         i += 1;
     }
 
-    Err(parse_error(&lines[start], "model sounds missing end"))
+    Err(parse_error(
+        &lines[start],
+        "model sounds missing closing brace",
+    ))
 }
 
 fn parse_theme_block(
@@ -2815,7 +2832,7 @@ fn parse_theme_block(
     let mut i = start + 1;
     while i < lines.len() {
         let line = &lines[i];
-        if line == "end" {
+        if is_block_close_line(line) {
             return Ok(i + 1);
         }
         let tokens = split_tokens(line);
@@ -2832,7 +2849,7 @@ fn parse_theme_block(
         i += 1;
     }
 
-    Err(parse_error(&lines[start], "theme missing end"))
+    Err(parse_error(&lines[start], "theme missing closing brace"))
 }
 
 fn parse_theme_statement(
@@ -2849,7 +2866,7 @@ fn parse_theme_statement(
     };
     if lines
         .get(start + 1)
-        .is_some_and(|line| line == "end" || is_theme_setting_line(line))
+        .is_some_and(|line| is_block_close_line(line) || is_theme_setting_line(line))
     {
         return parse_theme_block(lines, start, theme);
     }
@@ -2888,7 +2905,7 @@ fn parse_assets_block(
     let mut i = start + 1;
     while i < lines.len() {
         let line = &lines[i];
-        if line == "end" {
+        if is_block_close_line(line) {
             return Ok(i + 1);
         }
         let tokens = split_tokens(line);
@@ -2910,7 +2927,7 @@ fn parse_assets_block(
         }
         i += 1;
     }
-    Err(parse_error(&lines[start], "assets missing end"))
+    Err(parse_error(&lines[start], "assets missing closing brace"))
 }
 
 fn parse_asset_path(token: &str, line: &str) -> Result<String, AppError> {
@@ -3093,7 +3110,7 @@ fn parse_puzzle_definition(
     validate_qualified_identifier(name, &lines[start], "puzzle name")?;
 
     let mut i = start + 1;
-    while i < lines.len() && lines[i] != "end" {
+    while i < lines.len() && !is_block_close_line(&lines[i]) {
         let line = &lines[i];
         let tokens = split_tokens(line);
         if tokens.is_empty() {
@@ -3286,6 +3303,7 @@ fn parse_puzzle_definition(
                         &catalog.object_schemas,
                         &catalog_value_sets(&catalog),
                         &catalog.maps,
+                        &catalog.visual_objects,
                         &mut catalog.object_groups,
                     )?;
                     i += 1;
@@ -3334,7 +3352,7 @@ fn parse_puzzle_definition(
             "sounds" => {
                 i = parse_model_sounds_block(lines, i, catalog, model_sound_triggers)?;
             }
-            "screen" | "view" => {
+            "screen" | "layout" => {
                 i = parse_puzzle_screen_block(lines, i, puzzle_screen)?;
             }
             "flickscreen" | "zoomscreen" | "screen_focus" => {
@@ -3377,7 +3395,7 @@ fn parse_puzzle_definition(
                 let (statements, next_i) = parse_statement_block(
                     lines,
                     i + 1,
-                    &["end"],
+                    &[BLOCK_CLOSE],
                     &catalog.object_names,
                     &catalog.object_schemas,
                     &catalog_value_sets(catalog),
@@ -3412,7 +3430,7 @@ fn parse_puzzle_definition(
                 let (statements, next_i) = parse_statement_block(
                     lines,
                     i + 1,
-                    &["end"],
+                    &[BLOCK_CLOSE],
                     &catalog.object_names,
                     &catalog.object_schemas,
                     &catalog_value_sets(catalog),
@@ -3459,7 +3477,7 @@ fn parse_puzzle_definition(
         }
     }
     if i >= lines.len() {
-        return Err(parse_error(&lines[start], "puzzle missing end"));
+        return Err(parse_error(&lines[start], "puzzle missing closing brace"));
     }
     validate_puzzle_screen(puzzle_screen, &lines[start])?;
 
@@ -3542,7 +3560,7 @@ fn parse_levels_block(
     let header = parse_levels_header(&lines[start], default_puzzle)?;
     let mut namespace_count = 0usize;
     let mut i = start + 1;
-    while i < lines.len() && lines[i] != "end" {
+    while i < lines.len() && !is_block_close_line(&lines[i]) {
         let tokens = split_tokens(&lines[i]);
         match tokens.as_slice() {
             ["legend"] => {
@@ -3616,7 +3634,7 @@ fn parse_levels_block(
         }
     }
     if i >= lines.len() {
-        return Err(parse_error(&lines[start], "levels missing end"));
+        return Err(parse_error(&lines[start], "levels missing closing brace"));
     }
 
     Ok(i + 1)
@@ -3691,10 +3709,7 @@ fn resolve_level_block_puzzles(
 }
 
 fn parse_level_header_name_or_auto(line: &str, auto_name: String) -> Result<String, AppError> {
-    let mut tokens = split_tokens(line);
-    if tokens.last().copied() == Some("{") {
-        tokens.pop();
-    }
+    let tokens = split_tokens(line);
     if tokens.len() == 1 {
         return Ok(auto_name);
     }
@@ -3705,14 +3720,11 @@ fn parse_level_header_name_or_auto(line: &str, auto_name: String) -> Result<Stri
 }
 
 fn is_braced_level_header(line: &str) -> bool {
-    matches!(split_tokens(line).as_slice(), ["level", .., "{"])
+    line.trim_end().ends_with('{') && matches!(split_tokens(line).as_slice(), ["level", ..])
 }
 
 fn parse_legacy_braced_level_header_name(line: &str) -> Result<String, AppError> {
-    let mut tokens = split_tokens(line);
-    if tokens.last().copied() == Some("{") {
-        tokens.pop();
-    }
+    let tokens = split_tokens(line);
     if tokens.is_empty() {
         return Err(parse_error(line, "level header must have a name"));
     }
@@ -3779,7 +3791,7 @@ fn parse_conditions_block(
     let mut conditions = Vec::new();
     let mut descriptions = Vec::new();
     let mut i = start + 1;
-    while i < lines.len() && lines[i] != "end" {
+    while i < lines.len() && !is_block_close_line(&lines[i]) {
         i = parse_condition_block_entry(
             lines,
             i,
@@ -3792,7 +3804,7 @@ fn parse_conditions_block(
     if i >= lines.len() {
         return Err(parse_error(
             &lines[start],
-            &format!("{condition_name} missing end"),
+            &format!("{condition_name} missing closing brace"),
         ));
     }
     if conditions.is_empty() {
@@ -3903,7 +3915,7 @@ fn parse_puzzle_screen_block(
 ) -> Result<usize, AppError> {
     let mut parsed = puzzle_screen.clone();
     let mut i = start + 1;
-    while i < lines.len() && lines[i] != "end" {
+    while i < lines.len() && !is_block_close_line(&lines[i]) {
         let line = &lines[i];
         let tokens = split_tokens(line);
         match tokens.as_slice() {
@@ -3915,7 +3927,10 @@ fn parse_puzzle_screen_block(
         }
     }
     if i >= lines.len() {
-        return Err(parse_error(&lines[start], "puzzle screen missing end"));
+        return Err(parse_error(
+            &lines[start],
+            "puzzle screen missing closing brace",
+        ));
     }
     validate_puzzle_screen(&parsed, &lines[start])?;
     *puzzle_screen = parsed;
@@ -3929,7 +3944,7 @@ fn parse_puzzle_render_block(
 ) -> Result<usize, AppError> {
     let mut parsed = render.clone();
     let mut i = start + 1;
-    while i < lines.len() && lines[i] != "end" {
+    while i < lines.len() && !is_block_close_line(&lines[i]) {
         let line = &lines[i];
         let tokens = split_tokens(line);
         match tokens.as_slice() {
@@ -3950,7 +3965,10 @@ fn parse_puzzle_render_block(
         }
     }
     if i >= lines.len() {
-        return Err(parse_error(&lines[start], "render block missing end"));
+        return Err(parse_error(
+            &lines[start],
+            "render block missing closing brace",
+        ));
     }
     *render = parsed;
     Ok(i + 1)
@@ -3976,14 +3994,17 @@ fn parse_animation_block(
 
     let mut parsed = animation.clone();
     let mut i = start + 1;
-    while i < lines.len() && lines[i] != "end" {
+    while i < lines.len() && !is_block_close_line(&lines[i]) {
         let line = &lines[i];
         let tokens = split_tokens(line);
         match tokens.as_slice() {
             [] => i += 1,
             [name] if *name == ANIMATION_BLOCK_OPTIONS[0] => {
                 parsed.tween.enabled = true;
-                if lines.get(i + 1).is_some_and(|next| next == "end") {
+                if lines
+                    .get(i + 1)
+                    .is_some_and(|next| is_block_close_line(next))
+                {
                     i += 1;
                 } else {
                     i = parse_animation_tween_block(lines, i, &mut parsed.tween)?;
@@ -4007,7 +4028,10 @@ fn parse_animation_block(
         }
     }
     if i >= lines.len() {
-        return Err(parse_error(&lines[start], "animation block missing end"));
+        return Err(parse_error(
+            &lines[start],
+            "animation block missing closing brace",
+        ));
     }
     *animation = parsed;
     Ok(i + 1)
@@ -4020,7 +4044,7 @@ fn parse_animation_tween_block(
 ) -> Result<usize, AppError> {
     let mut parsed = tween.clone();
     let mut i = start + 1;
-    while i < lines.len() && lines[i] != "end" {
+    while i < lines.len() && !is_block_close_line(&lines[i]) {
         let line = &lines[i];
         let tokens = split_tokens(line);
         match tokens.as_slice() {
@@ -4035,7 +4059,10 @@ fn parse_animation_tween_block(
         }
     }
     if i >= lines.len() {
-        return Err(parse_error(&lines[start], "tween block missing end"));
+        return Err(parse_error(
+            &lines[start],
+            "tween block missing closing brace",
+        ));
     }
     *tween = parsed;
     Ok(i + 1)
@@ -4087,7 +4114,7 @@ fn parse_puzzle_render_grid_block(
 ) -> Result<usize, AppError> {
     let mut parsed = grid.clone();
     let mut i = start + 1;
-    while i < lines.len() && lines[i] != "end" {
+    while i < lines.len() && !is_block_close_line(&lines[i]) {
         let line = &lines[i];
         let tokens = split_tokens(line);
         match tokens.as_slice() {
@@ -4106,7 +4133,10 @@ fn parse_puzzle_render_grid_block(
         }
     }
     if i >= lines.len() {
-        return Err(parse_error(&lines[start], "grid block missing end"));
+        return Err(parse_error(
+            &lines[start],
+            "grid block missing closing brace",
+        ));
     }
     *grid = parsed;
     Ok(i + 1)
@@ -4378,7 +4408,7 @@ fn parse_named_level_body(
     let mut i = start + 1;
     let mut nested_blocks = 0usize;
     while i < lines.len() {
-        if lines[i] == "end" {
+        if is_block_close_line(&lines[i]) {
             if nested_blocks == 0 {
                 break;
             }
@@ -4394,7 +4424,7 @@ fn parse_named_level_body(
         i += 1;
     }
     if i >= lines.len() {
-        return Err(parse_error(&lines[start], "level missing end"));
+        return Err(parse_error(&lines[start], "level missing closing brace"));
     }
 
     Ok((
@@ -4419,7 +4449,7 @@ fn parse_unbraced_level_body(
     let mut nested_blocks = 0usize;
     while i < lines.len() {
         let line = &lines[i];
-        if nested_blocks == 0 && (line.is_empty() || line == "end") {
+        if nested_blocks == 0 && (line.is_empty() || is_block_close_line(line)) {
             break;
         }
         let tokens = split_tokens(line);
@@ -4432,7 +4462,7 @@ fn parse_unbraced_level_body(
                 "unbraced levels must be separated by a blank line",
             ));
         }
-        if line == "end" {
+        if is_block_close_line(line) {
             nested_blocks = nested_blocks.saturating_sub(1);
             level_lines.push(line.clone());
             i += 1;
@@ -4511,7 +4541,7 @@ fn parse_level_body(
             let (statements, next_i) = parse_statement_block(
                 &level.lines,
                 i + 1,
-                &["end"],
+                &[BLOCK_CLOSE],
                 &catalog.object_names,
                 &catalog.object_schemas,
                 &catalog_value_sets(catalog),
@@ -4557,7 +4587,7 @@ fn parse_level_body(
 
         if tokens.len() == 1 {
             i += 1;
-            while i < level.lines.len() && level.lines[i] != "end" {
+            while i < level.lines.len() && !is_block_close_line(&level.lines[i]) {
                 parse_level_legend_block_row(
                     &level.lines[i],
                     catalog,
@@ -4567,7 +4597,7 @@ fn parse_level_body(
                 i += 1;
             }
             if i >= level.lines.len() {
-                return Err(parse_error(line, "level legend missing end"));
+                return Err(parse_error(line, "level legend missing closing brace"));
             }
             i += 1;
             continue;
@@ -4702,7 +4732,7 @@ fn parse_map_definition(
 
     let mut values = HashMap::new();
     let mut i = start + 1;
-    while i < lines.len() && lines[i] != "end" {
+    while i < lines.len() && !is_block_close_line(&lines[i]) {
         let tokens = split_tokens(&lines[i]);
         match tokens.as_slice() {
             [from, "->", to] => {
@@ -4729,7 +4759,7 @@ fn parse_map_definition(
         i += 1;
     }
     if i >= lines.len() {
-        return Err(parse_error(&lines[start], "map missing end"));
+        return Err(parse_error(&lines[start], "map missing closing brace"));
     }
 
     for value in value_set_values {
@@ -4754,7 +4784,7 @@ fn parse_tags_block(
     catalog: &mut Catalog,
 ) -> Result<usize, AppError> {
     let mut i = start + 1;
-    while i < lines.len() && lines[i] != "end" {
+    while i < lines.len() && !is_block_close_line(&lines[i]) {
         let line = &lines[i];
         let tokens = split_tokens(line);
         match tokens.as_slice() {
@@ -4769,7 +4799,7 @@ fn parse_tags_block(
         i += 1;
     }
     if i >= lines.len() {
-        return Err(parse_error(&lines[start], "tags missing end"));
+        return Err(parse_error(&lines[start], "tags missing closing brace"));
     }
     Ok(i + 1)
 }
@@ -4905,6 +4935,17 @@ fn is_display_role_token(token: &str) -> bool {
     is_identifier(base)
 }
 
+fn validate_selector_alias_name(value: &str, line: &str, label: &str) -> Result<(), AppError> {
+    if is_display_role_token(value) || is_qualified_identifier(value) {
+        Ok(())
+    } else {
+        Err(parse_error(
+            line,
+            &format!("{label} must be a qualified identifier or @name"),
+        ))
+    }
+}
+
 fn validate_rule_name(value: &str, line: &str) -> Result<(), AppError> {
     if is_display_role_token(value) || is_qualified_identifier(value) {
         Ok(())
@@ -4975,7 +5016,7 @@ fn parse_scratch_block(
     catalog: &mut Catalog,
 ) -> Result<usize, AppError> {
     let mut i = start + 1;
-    while i < lines.len() && lines[i] != "end" {
+    while i < lines.len() && !is_block_close_line(&lines[i]) {
         let line = &lines[i];
         let tokens = split_tokens(line);
         match tokens.as_slice() {
@@ -5000,7 +5041,7 @@ fn parse_scratch_block(
         }
     }
     if i >= lines.len() {
-        return Err(parse_error(&lines[start], "scratch missing end"));
+        return Err(parse_error(&lines[start], "scratch missing closing brace"));
     }
     Ok(i + 1)
 }
@@ -5057,7 +5098,7 @@ fn parse_layers_block(
     catalog: &mut Catalog,
 ) -> Result<usize, AppError> {
     let mut i = start;
-    while i < lines.len() && lines[i] != "end" {
+    while i < lines.len() && !is_block_close_line(&lines[i]) {
         let tokens = split_tokens(&lines[i]);
         if tokens.is_empty() {
             i += 1;
@@ -5074,7 +5115,7 @@ fn parse_layers_block(
                 for value in values {
                     let mut expanded_lines =
                         expand_for_binding_lines(&body_lines, binding, axis, value, &catalog.maps)?;
-                    expanded_lines.push("end".to_string());
+                    expanded_lines.push(BLOCK_CLOSE.to_string());
                     let parsed_i =
                         parse_layers_block(&expanded_lines, 0, named_layers, layer_count, catalog)?;
                     if parsed_i != expanded_lines.len() {
@@ -5102,7 +5143,15 @@ fn parse_layers_block(
             }
             [name, "=", selectors @ ..] => {
                 let layer = layer_id_for_name(name, &lines[i], named_layers, layer_count, catalog)?;
-                define_or_assign_terms_to_layer(selectors, &lines[i], layer, catalog, false)?;
+                let objects =
+                    define_or_assign_terms_to_layer(selectors, &lines[i], layer, catalog, false)?;
+                validate_named_selector_role(
+                    name,
+                    &objects,
+                    &catalog.visual_objects,
+                    &lines[i],
+                    "layer",
+                )?;
                 register_layer_tag_from_layer(name, layer, catalog);
             }
             _ => {
@@ -5118,7 +5167,10 @@ fn parse_layers_block(
         i += 1;
     }
     if i >= lines.len() {
-        return Err(parse_error(&lines[start - 1], "layers missing end"));
+        return Err(parse_error(
+            &lines[start - 1],
+            "layers missing closing brace",
+        ));
     }
     Ok(i + 1)
 }
@@ -5310,6 +5362,70 @@ fn register_layer_tag_from_layer(name: &str, layer: u16, catalog: &mut Catalog) 
     catalog.object_groups.insert(name.to_string(), objects);
 }
 
+fn validate_named_selector_role(
+    name: &str,
+    objects: &[ObjectId],
+    visual_objects: &[ObjectId],
+    line: &str,
+    kind: &str,
+) -> Result<(), AppError> {
+    let display_name = is_display_role_token(name);
+    let has_main = objects
+        .iter()
+        .any(|object| !object.is_empty() && !visual_objects.contains(object));
+    let has_display = objects.iter().any(|object| visual_objects.contains(object));
+    if display_name && has_main {
+        return Err(parse_error(
+            line,
+            &format!("@{kind} can only contain display objects"),
+        ));
+    }
+    if !display_name && has_display {
+        return Err(parse_error(
+            line,
+            &format!("{kind} containing display objects must use an @ name"),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_layer_role_separation(
+    catalog: &Catalog,
+    named_layers: &HashMap<String, u16>,
+) -> Result<(), AppError> {
+    let mut layer_roles = HashMap::<LayerId, (bool, bool)>::new();
+    for definition in &catalog.object_defs {
+        if definition.layer_id.0 == UNASSIGNED_LAYER || definition.id.is_empty() {
+            continue;
+        }
+        let visual = catalog.visual_objects.contains(&definition.id);
+        let entry = layer_roles
+            .entry(definition.layer_id)
+            .or_insert((false, false));
+        if visual {
+            entry.1 = true;
+        } else {
+            entry.0 = true;
+        }
+    }
+
+    for (layer, (has_main, has_visual)) in layer_roles {
+        if has_main && has_visual {
+            let name = named_layers
+                .iter()
+                .find_map(|(name, named_layer)| {
+                    (*named_layer == layer.0 && !name.starts_with("__anonymous_layer_"))
+                        .then_some(name.as_str())
+                })
+                .unwrap_or("<anonymous>");
+            return Err(AppError::Parse(format!(
+                "layers cannot mix gameplay objects and display objects in the same storage layer ({name}); put display objects in a separate layer"
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn refresh_layer_tags_and_value_sets(named_layers: &HashMap<String, u16>, catalog: &mut Catalog) {
     let mut layer_ids = catalog
         .object_defs
@@ -5369,7 +5485,7 @@ fn layer_id_for_name(
     layer_count: &mut Option<u16>,
     catalog: &Catalog,
 ) -> Result<u16, AppError> {
-    validate_qualified_identifier(name, line, "layer name")?;
+    validate_selector_alias_name(name, line, "layer name")?;
     if let Some(layer) = named_layers.get(name).copied() {
         return Ok(layer);
     }
@@ -5419,12 +5535,12 @@ fn parse_legend_block(
     empty_char: &mut Option<char>,
 ) -> Result<usize, AppError> {
     let mut i = start + 1;
-    while i < lines.len() && lines[i] != "end" {
+    while i < lines.len() && !is_block_close_line(&lines[i]) {
         parse_legend_block_row(&lines[i], catalog, render_overlays, empty_char)?;
         i += 1;
     }
     if i >= lines.len() {
-        return Err(parse_error(&lines[start], "legend missing end"));
+        return Err(parse_error(&lines[start], "legend missing closing brace"));
     }
 
     Ok(i + 1)
@@ -5671,7 +5787,7 @@ fn parse_command_definition(
     match header.as_slice() {
         ["input", _] => {
             let next = start + 1;
-            if next >= lines.len() || lines[next] == "end" {
+            if next >= lines.len() || is_block_close_line(&lines[next]) {
                 return Ok((None, next));
             }
             if !is_input_option(&split_tokens(&lines[next])) {
@@ -5680,12 +5796,12 @@ fn parse_command_definition(
 
             let mut direction = None;
             let mut i = next;
-            while i < lines.len() && lines[i] != "end" {
+            while i < lines.len() && !is_block_close_line(&lines[i]) {
                 direction = Some(parse_input_option(&lines[i], input)?);
                 i += 1;
             }
             if i >= lines.len() {
-                return Err(parse_error(&lines[start], "input missing end"));
+                return Err(parse_error(&lines[start], "input missing closing brace"));
             }
             Ok((direction, i + 1))
         }
@@ -5765,7 +5881,7 @@ fn parse_scene_definition(lines: &[String], start: usize) -> Result<(SceneDef, u
         lines,
         start + 1,
         &name,
-        puzzle_scene::SceneBlockSyntax::End,
+        puzzle_scene::SceneBlockSyntax::Braces,
         &mut handler,
     )?;
 
@@ -5810,12 +5926,15 @@ impl puzzle_scene::SceneBlockHandler for Scene2dBlockHandler<'_> {
         Ok(next_i)
     }
 
-    fn parse_view_block(&mut self, lines: &[String], start: usize) -> Result<usize, AppError> {
-        let (view, next_i) = parse_screen_view_block(lines, start)?;
-        self.screen.layout = view.layout;
-        self.screen.state.variables.extend(view.state.variables);
-        self.screen.state.puzzles.extend(view.state.puzzles);
-        self.screen.components.extend(view.components);
+    fn parse_layout_block(&mut self, lines: &[String], start: usize) -> Result<usize, AppError> {
+        let (layout_block, next_i) = parse_screen_layout_block(lines, start)?;
+        self.screen.layout = layout_block.layout;
+        self.screen
+            .state
+            .variables
+            .extend(layout_block.state.variables);
+        self.screen.state.puzzles.extend(layout_block.state.puzzles);
+        self.screen.components.extend(layout_block.components);
         Ok(next_i)
     }
 
@@ -5912,7 +6031,7 @@ fn parse_scene_resources_block(
     resources: &mut SceneResources,
 ) -> Result<usize, AppError> {
     let mut i = start + 1;
-    while i < lines.len() && lines[i] != "end" {
+    while i < lines.len() && !is_block_close_line(&lines[i]) {
         let tokens = split_tokens(&lines[i]);
         match tokens.as_slice() {
             ["levels", names @ ..] => {
@@ -5932,7 +6051,10 @@ fn parse_scene_resources_block(
         i += 1;
     }
     if i >= lines.len() {
-        return Err(parse_error(&lines[start], "resources missing end"));
+        return Err(parse_error(
+            &lines[start],
+            "resources missing closing brace",
+        ));
     }
     Ok(i + 1)
 }
@@ -5957,31 +6079,31 @@ fn parse_resource_selection(names: &[&str], line: &str) -> Result<ResourceSelect
     }
 }
 
-struct ParsedScreenViewBlock {
+struct ParsedScreenLayoutBlock {
     layout: SceneLayoutDef,
     state: ParsedScreenStateBlock,
     components: Vec<SceneComponent>,
 }
 
-fn parse_screen_view_block(
+fn parse_screen_layout_block(
     lines: &[String],
     start: usize,
-) -> Result<(ParsedScreenViewBlock, usize), AppError> {
-    parse_screen_view_like_block(lines, start, "view")
+) -> Result<(ParsedScreenLayoutBlock, usize), AppError> {
+    parse_screen_view_like_block(lines, start, "layout")
 }
 
 fn parse_screen_view_like_block(
     lines: &[String],
     start: usize,
     block_name: &str,
-) -> Result<(ParsedScreenViewBlock, usize), AppError> {
+) -> Result<(ParsedScreenLayoutBlock, usize), AppError> {
     let layout = parse_scene_layout_from_header(&lines[start], block_name)?;
     let mut variables = Vec::new();
     let mut puzzles = Vec::new();
     let mut components = Vec::new();
     let mut hidden = Vec::<String>::new();
     let mut i = start + 1;
-    while i < lines.len() && lines[i] != "end" {
+    while i < lines.len() && !is_block_close_line(&lines[i]) {
         if let Some((slot, visible)) = parse_layer_visibility(&lines[i])? {
             if visible {
                 hidden.retain(|name| name != &slot);
@@ -6006,7 +6128,7 @@ fn parse_screen_view_like_block(
 
         let tokens = split_tokens(&lines[i]);
         if matches!(tokens.as_slice(), ["panel", ..]) {
-            return Err(parse_error(&lines[i], "unknown view directive panel"));
+            return Err(parse_error(&lines[i], "unknown layout directive panel"));
         }
         if matches!(tokens.as_slice(), ["if", ..]) {
             let (component, next_i) = parse_view_if_component(lines, i)?;
@@ -6042,12 +6164,12 @@ fn parse_screen_view_like_block(
     if i >= lines.len() {
         return Err(parse_error(
             &lines[start],
-            &format!("{block_name} missing end"),
+            &format!("{block_name} missing closing brace"),
         ));
     }
 
     Ok((
-        ParsedScreenViewBlock {
+        ParsedScreenLayoutBlock {
             layout,
             state: ParsedScreenStateBlock { variables, puzzles },
             components,
@@ -6057,7 +6179,7 @@ fn parse_screen_view_like_block(
 }
 
 fn parse_scene_layout_from_header(line: &str, keyword: &str) -> Result<SceneLayoutDef, AppError> {
-    puzzle_scene::parse_scene_layout_header(line, keyword, puzzle_scene::SceneBlockSyntax::End)
+    puzzle_scene::parse_scene_layout_header(line, keyword, puzzle_scene::SceneBlockSyntax::Braces)
         .map_err(AppError::from)
 }
 
@@ -6118,7 +6240,7 @@ fn parse_screen_components_block(
         lines,
         start + 1,
         block_name,
-        puzzle_scene::SceneBlockSyntax::End,
+        puzzle_scene::SceneBlockSyntax::Braces,
         &mut parse_leaf,
         &build_scene_container_component,
     )?;
@@ -6137,7 +6259,7 @@ fn parse_screen_component(
     let (next, component) = puzzle_scene::parse_scene_component_at(
         lines,
         start,
-        puzzle_scene::SceneBlockSyntax::End,
+        puzzle_scene::SceneBlockSyntax::Braces,
         &mut parse_leaf,
         &build_scene_container_component,
     )?;
@@ -6239,9 +6361,9 @@ fn parse_screen_leaf_component(
         )),
         [other, ..] => Err(parse_error(
             &lines[start],
-            &format!("unknown view directive {other}"),
+            &format!("unknown layout directive {other}"),
         )),
-        [] => Err(parse_error(&lines[start], "empty view directive")),
+        [] => Err(parse_error(&lines[start], "empty layout directive")),
     }
 }
 
@@ -6371,9 +6493,9 @@ fn parse_view_if_component(
     start: usize,
 ) -> Result<(SceneComponent, usize), AppError> {
     let line = &lines[start];
-    let condition = line
+    let condition = block_header_text(line)
         .strip_prefix("if ")
-        .ok_or_else(|| parse_error(line, "view condition must be: if <condition>"))?
+        .ok_or_else(|| parse_error(line, "layout condition must be: if <condition>"))?
         .trim();
     validate_screen_condition(condition, line)?;
     let (entry, next_i) = collect_authoring_entry(lines, start)?;
@@ -6382,7 +6504,7 @@ fn parse_view_if_component(
     if then_body.is_empty() {
         return Err(parse_error(
             line,
-            "view condition requires at least one component",
+            "layout condition requires at least one component",
         ));
     }
     let children = parse_screen_component_body(then_body, "if")?;
@@ -6411,9 +6533,9 @@ fn split_view_if_body<'a>(
         if matches!(tokens.as_slice(), ["else"]) && depth == 0 {
             return Ok((&body[..index], &body[index + 1..]));
         }
-        if tokens.first().copied() == Some("end") {
+        if tokens.first().copied() == Some(BLOCK_CLOSE) {
             if depth == 0 {
-                return Err(parse_error(line, "end without view block"));
+                return Err(parse_error(line, "closing brace without layout block"));
             }
             depth -= 1;
             continue;
@@ -6425,7 +6547,7 @@ fn split_view_if_body<'a>(
     if depth != 0 {
         return Err(parse_error(
             header_line,
-            "view condition block is unbalanced",
+            "layout condition block is unbalanced",
         ));
     }
     Ok((body, &[]))
@@ -6436,7 +6558,7 @@ fn parse_screen_component_body(
     block_name: &str,
 ) -> Result<Vec<SceneComponent>, AppError> {
     let mut lines = body.to_vec();
-    lines.push("end".to_string());
+    lines.push(BLOCK_CLOSE.to_string());
     let mut parse_leaf =
         |lines: &[String], index: usize| -> Result<(usize, SceneComponent), AppError> {
             let (component, next) = parse_screen_leaf_component(lines, index)?;
@@ -6446,7 +6568,7 @@ fn parse_screen_component_body(
         &lines,
         0,
         block_name,
-        puzzle_scene::SceneBlockSyntax::End,
+        puzzle_scene::SceneBlockSyntax::Braces,
         &mut parse_leaf,
         &build_scene_container_component,
     )?;
@@ -6462,7 +6584,7 @@ fn parse_for_component(
     let ["for", binding, "in", source] = tokens.as_slice() else {
         return Err(parse_error(
             &lines[start],
-            "for view must be: for <item> in <source>",
+            "for layout must be: for <item> in <source>",
         ));
     };
     if !is_identifier(binding) {
@@ -6569,6 +6691,14 @@ fn project_surface_semantic_tokens(
 }
 
 fn scene_effect_surface_document(tokens: &[SourceToken]) -> SurfaceDocument {
+    if let Some(parts) = split_scene_effect_token_sequence(tokens) {
+        let mut sink = SurfaceSink::default();
+        for part in parts {
+            sink.extend(scene_effect_surface_document(part));
+        }
+        return sink.into_document();
+    }
+
     let mut sink = SurfaceSink::default();
     let Some(first) = tokens.first() else {
         return sink.into_document();
@@ -7204,14 +7334,20 @@ fn parse_scene_effect_with_optional_block(
 ) -> Result<(SceneEffect, usize), AppError> {
     let line = &lines[start];
     if value.is_empty() {
+        return Err(parse_error(
+            line,
+            "effect block must use `{ ... }`; `end` effect blocks were removed",
+        ));
+    }
+    if value == "{" {
         let mut i = start + 1;
         let mut body = Vec::new();
-        while i < lines.len() && lines[i] != "end" {
+        while i < lines.len() && !is_block_close_line(&lines[i]) {
             body.push(lines[i].clone());
             i += 1;
         }
         if i >= lines.len() {
-            return Err(parse_error(line, "effect block missing end"));
+            return Err(parse_error(line, "effect block missing closing brace"));
         }
         if body.is_empty() {
             return Err(parse_error(
@@ -7267,6 +7403,18 @@ fn parse_scene_effect_value(value: &str, line: &str) -> Result<SceneEffect, AppE
             line,
             "`then` effect sequences are not supported; use an effect block with one effect per line",
         ));
+    }
+
+    if let Some(parts) = split_scene_effect_sequence(value) {
+        let mut effects = Vec::new();
+        for part in parts {
+            effects.push(parse_scene_effect_value(part, line)?);
+        }
+        return match effects.len() {
+            0 => unreachable!("scene effect sequence splitter returned no effects"),
+            1 => Ok(effects.remove(0)),
+            _ => Ok(SceneEffect::Sequence(effects)),
+        };
     }
 
     if let Some(text) = value.strip_prefix("message ") {
@@ -7485,6 +7633,97 @@ fn parse_scene_effect_value(value: &str, line: &str) -> Result<SceneEffect, AppE
             "effect must be: input <name> | component_effect <name> | close | clear_undo_history | clear_game_progress | message <text> | wait <duration> | sfx <name> | play_music <name> | pause_music [name] | resume_music [name] | stop_music [name] | resume <scene> | resume <scene> with <param> = <value> | open <scene> | start <scene> | copy <puzzle> to <puzzle> | show <scene> | hide <scene> | focus <scene>",
         )),
     }
+}
+
+fn split_scene_effect_sequence(value: &str) -> Option<Vec<&str>> {
+    let stripped = strip_line_comment(value);
+    let tokens = source_line_tokens(stripped, 0);
+    let parts = split_scene_effect_token_sequence(&tokens)?;
+    Some(
+        parts
+            .into_iter()
+            .map(|part| stripped[part.first().unwrap().start..part.last().unwrap().end].trim())
+            .collect(),
+    )
+}
+
+fn split_scene_effect_token_sequence(tokens: &[SourceToken]) -> Option<Vec<&[SourceToken]>> {
+    let mut parts = Vec::new();
+    let mut index = 0;
+    while index < tokens.len() {
+        let length = scene_effect_token_length(&tokens[index..])?;
+        parts.push(&tokens[index..index + length]);
+        index += length;
+    }
+    (parts.len() > 1).then_some(parts)
+}
+
+fn scene_effect_token_length(tokens: &[SourceToken]) -> Option<usize> {
+    let first = tokens.first()?.text.as_str();
+    match first {
+        "input" | "component_effect" | "sfx" | "play_music" => (tokens.len() >= 2).then_some(2),
+        "pause_music" | "resume_music" | "stop_music" => {
+            if tokens
+                .get(1)
+                .is_some_and(|token| !is_scene_effect_command_start(&token.text))
+            {
+                Some(2)
+            } else {
+                Some(1)
+            }
+        }
+        "wait" => {
+            if tokens
+                .get(1)
+                .is_some_and(|token| !is_scene_effect_command_start(&token.text))
+            {
+                Some(2)
+            } else {
+                Some(1)
+            }
+        }
+        "back" | "close" | "clear_undo_history" | "clear_history" | "clear_game_progress" => {
+            Some(1)
+        }
+        "clear" => (tokens.get(1)?.text == "current_level").then_some(2),
+        "reset"
+            if tokens
+                .get(1)
+                .is_some_and(|token| token.text == "persistent_vars") =>
+        {
+            Some(2)
+        }
+        "reset" if tokens.get(1).is_some_and(|token| token.text.contains('.')) => Some(2),
+        "goto" | "resume" | "enter" | "open" | "start" => {
+            if tokens.get(2).is_some_and(|token| token.text == "with") {
+                None
+            } else {
+                (tokens.len() >= 2).then_some(2)
+            }
+        }
+        "create" | "reset" | "delete" | "show" | "hide" | "toggle" | "focus" => {
+            (tokens.len() >= 2).then_some(2)
+        }
+        _ if first.contains('.') => {
+            let command = first.rsplit_once('.').map(|(_, command)| command)?;
+            match command {
+                "goto" | "goto_level" => (tokens.len() >= 2).then_some(2),
+                "next_level" | "previous_level" | "restart" => Some(1),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+fn is_scene_effect_command_start(token: &str) -> bool {
+    scene_effect_command_syntax(token).is_some()
+        || token.rsplit_once('.').is_some_and(|(_, command)| {
+            matches!(
+                command,
+                "goto" | "goto_level" | "next_level" | "previous_level" | "restart"
+            )
+        })
 }
 
 fn parse_scene_effect_bool(value: &str, line: &str) -> Result<bool, AppError> {
@@ -7884,7 +8123,7 @@ fn parse_scene_state_block(
     let mut variables = Vec::new();
     let mut puzzles = Vec::new();
     let mut i = start + 1;
-    while i < lines.len() && lines[i] != "end" {
+    while i < lines.len() && !is_block_close_line(&lines[i]) {
         match parse_scene_state_entry(&lines[i], lifetime)? {
             ParsedSceneStateEntry::Variable(variable) => variables.push(variable),
             ParsedSceneStateEntry::Puzzle(puzzle) => puzzles.push(puzzle),
@@ -7892,7 +8131,7 @@ fn parse_scene_state_block(
         i += 1;
     }
     if i >= lines.len() {
-        return Err(parse_error(&lines[start], "state missing end"));
+        return Err(parse_error(&lines[start], "state missing closing brace"));
     }
     Ok((ParsedScreenStateBlock { variables, puzzles }, i + 1))
 }
@@ -8216,7 +8455,7 @@ fn parse_screen_transitions_block(
     let mut transitions = Vec::new();
     let mut puzzle_rule = None;
     let mut i = start + 1;
-    while i < lines.len() && lines[i] != "end" {
+    while i < lines.len() && !is_block_close_line(&lines[i]) {
         let tokens = split_tokens(&lines[i]);
         match tokens.as_slice() {
             ["step", target] => {
@@ -8248,7 +8487,10 @@ fn parse_screen_transitions_block(
         i += 1;
     }
     if i >= lines.len() {
-        return Err(parse_error(&lines[start], "transitions missing end"));
+        return Err(parse_error(
+            &lines[start],
+            "transitions missing closing brace",
+        ));
     }
 
     Ok((
@@ -8265,7 +8507,7 @@ fn parse_screen_condition_block(
     start: usize,
 ) -> Result<(SceneTransition, usize), AppError> {
     let line = &lines[start];
-    let condition = line
+    let condition = block_header_text(line)
         .strip_prefix("if ")
         .ok_or_else(|| parse_error(line, "condition block must be: if <condition>"))?
         .trim();
@@ -8382,14 +8624,17 @@ fn matching_effect_block_end(
             depth += 1;
             continue;
         }
-        if line == "end" {
+        if is_block_close_line(line) {
             if depth == 0 {
                 return Ok(i);
             }
             depth -= 1;
         }
     }
-    Err(parse_error(&lines[start], "if effect block missing end"))
+    Err(parse_error(
+        &lines[start],
+        "if effect block missing closing brace",
+    ))
 }
 
 fn parse_transition_row(
@@ -8509,7 +8754,7 @@ fn parse_level_menu_component(
 
     let mut menu = LevelMenuDef::default();
     let mut i = next;
-    while i < lines.len() && lines[i] != "end" {
+    while i < lines.len() && !is_block_close_line(&lines[i]) {
         let tokens = split_tokens(&lines[i]);
         match tokens.as_slice() {
             ["show_index", "=", value] => menu.show_index = parse_boolean_option(value, &lines[i])?,
@@ -8545,7 +8790,10 @@ fn parse_level_menu_component(
         i += 1;
     }
     if i >= lines.len() {
-        return Err(parse_error(&lines[start], "level_menu missing end"));
+        return Err(parse_error(
+            &lines[start],
+            "level_menu missing closing brace",
+        ));
     }
 
     Ok((menu, i + 1))
@@ -8566,7 +8814,7 @@ fn parse_level_menu_scene_options(
 ) -> Result<(LevelMenuDef, usize), AppError> {
     let mut body = vec!["level_menu".to_string()];
     let mut i = start + 1;
-    while i < lines.len() && lines[i] != "end" {
+    while i < lines.len() && !is_block_close_line(&lines[i]) {
         if matches!(split_tokens(&lines[i]).as_slice(), ["index", ..]) {
             return Err(parse_error(&lines[i], "unknown scene directive index"));
         }
@@ -8574,9 +8822,9 @@ fn parse_level_menu_scene_options(
         i += 1;
     }
     if i >= lines.len() {
-        return Err(parse_error(&lines[start], "scene missing end"));
+        return Err(parse_error(&lines[start], "scene missing closing brace"));
     }
-    body.push("end".to_string());
+    body.push(BLOCK_CLOSE.to_string());
     let (menu, parsed) = parse_level_menu_component(&body, 0)?;
     if parsed != body.len() {
         return Err(parse_error(&lines[start], "level_menu scene parse failed"));
@@ -8641,7 +8889,7 @@ fn parse_model_inputs_block(
 ) -> Result<usize, AppError> {
     let mut seen_keys = HashSet::<KeyTrigger>::new();
     let mut i = start + 1;
-    while i < lines.len() && lines[i] != "end" {
+    while i < lines.len() && !is_block_close_line(&lines[i]) {
         let tokens = split_tokens(&lines[i]);
         match tokens.as_slice() {
             [input_name, "<-", keys @ ..] if !keys.is_empty() => {
@@ -8669,7 +8917,7 @@ fn parse_model_inputs_block(
         i += 1;
     }
     if i >= lines.len() {
-        return Err(parse_error(&lines[start], "inputs missing end"));
+        return Err(parse_error(&lines[start], "inputs missing closing brace"));
     }
     Ok(i + 1)
 }
@@ -8681,7 +8929,7 @@ fn parse_scene_inputs_block(
     let mut seen_keys = HashSet::<KeyTrigger>::new();
     let mut bindings = Vec::<KeyBinding>::new();
     let mut i = start + 1;
-    while i < lines.len() && lines[i] != "end" {
+    while i < lines.len() && !is_block_close_line(&lines[i]) {
         let tokens = split_tokens(&lines[i]);
         match tokens.as_slice() {
             [input_name, "<-", keys @ ..] if !keys.is_empty() => {
@@ -8711,7 +8959,7 @@ fn parse_scene_inputs_block(
         i += 1;
     }
     if i >= lines.len() {
-        return Err(parse_error(&lines[start], "inputs missing end"));
+        return Err(parse_error(&lines[start], "inputs missing closing brace"));
     }
     Ok((bindings, i + 1))
 }
@@ -8722,7 +8970,7 @@ fn parse_scene_keys_block(
 ) -> Result<(Vec<KeyBinding>, usize), AppError> {
     let mut bindings = Vec::<KeyBinding>::new();
     let mut i = start + 1;
-    while i < lines.len() && lines[i] != "end" {
+    while i < lines.len() && !is_block_close_line(&lines[i]) {
         if lines[i].contains('=') {
             return Err(parse_error(
                 &lines[i],
@@ -8756,7 +9004,7 @@ fn parse_scene_keys_block(
         i += 1;
     }
     if i >= lines.len() {
-        return Err(parse_error(&lines[start], "keys missing end"));
+        return Err(parse_error(&lines[start], "keys missing closing brace"));
     }
     Ok((bindings, i + 1))
 }
@@ -9063,7 +9311,7 @@ fn parse_visuals_block(
     let mut colors = HashMap::<String, VisualColorTable>::new();
     let mut i = start + 1;
 
-    while i < lines.len() && lines[i] != "end" {
+    while i < lines.len() && !is_block_close_line(&lines[i]) {
         let line = &lines[i];
         let tokens = split_tokens(line);
         match tokens.as_slice() {
@@ -9161,9 +9409,9 @@ fn parse_visuals_block(
                     i += 2;
                     continue;
                 }
-                if ps_style_visual_sprite_uses_shape(lines, i) {
-                    let (shape_name, shape_value, color_exprs, next_i) =
-                        parse_ps_style_shape_sprite(lines, i, line)?;
+                if let Some((shape_name, shape_value, color_exprs, next_i)) =
+                    parse_ps_style_shape_sprite(lines, i, line, &plain_shapes, &shapes)?
+                {
                     if let Some(shape) = shapes.get(&shape_name) {
                         add_ascii_visuals(
                             selector,
@@ -9220,7 +9468,7 @@ fn parse_visuals_block(
         }
     }
     if i >= lines.len() {
-        return Err(parse_error(&lines[start], "sprites missing end"));
+        return Err(parse_error(&lines[start], "sprites missing closing brace"));
     }
     Ok(i + 1)
 }
@@ -9233,7 +9481,7 @@ fn parse_visual_colors_block(
     colors: &mut HashMap<String, VisualColorTable>,
 ) -> Result<usize, AppError> {
     let mut i = start + 1;
-    while i < lines.len() && lines[i] != "end" {
+    while i < lines.len() && !is_block_close_line(&lines[i]) {
         let line = &lines[i];
         let tokens = split_tokens(line);
         match tokens.as_slice() {
@@ -9260,7 +9508,7 @@ fn parse_visual_colors_block(
         }
     }
     if i >= lines.len() {
-        return Err(parse_error(&lines[start], "colors missing end"));
+        return Err(parse_error(&lines[start], "colors missing closing brace"));
     }
     Ok(i + 1)
 }
@@ -9272,7 +9520,7 @@ fn parse_visual_palettes_block(
     palettes: &mut HashMap<String, VisualPalette>,
 ) -> Result<usize, AppError> {
     let mut i = start + 1;
-    while i < lines.len() && lines[i] != "end" {
+    while i < lines.len() && !is_block_close_line(&lines[i]) {
         let line = &lines[i];
         let tokens = split_tokens(line);
         match tokens.as_slice() {
@@ -9297,7 +9545,7 @@ fn parse_visual_palettes_block(
                 })?;
                 let mut entries = HashMap::new();
                 i += 1;
-                while i < lines.len() && lines[i] != "end" {
+                while i < lines.len() && !is_block_close_line(&lines[i]) {
                     let row = &lines[i];
                     let row_tokens = split_tokens(row);
                     let [value, "=", colors @ ..] = row_tokens.as_slice() else {
@@ -9319,7 +9567,7 @@ fn parse_visual_palettes_block(
                     i += 1;
                 }
                 if i >= lines.len() {
-                    return Err(parse_error(line, "palette table missing end"));
+                    return Err(parse_error(line, "palette table missing closing brace"));
                 }
                 palettes.insert(name, VisualPalette::Table { axis, entries });
                 i += 1;
@@ -9333,7 +9581,7 @@ fn parse_visual_palettes_block(
         }
     }
     if i >= lines.len() {
-        return Err(parse_error(&lines[start], "palettes missing end"));
+        return Err(parse_error(&lines[start], "palettes missing closing brace"));
     }
     Ok(i + 1)
 }
@@ -9346,7 +9594,7 @@ fn parse_visual_shapes_block(
     shapes: &mut HashMap<String, VisualShapeTable>,
 ) -> Result<usize, AppError> {
     let mut i = start + 1;
-    while i < lines.len() && lines[i] != "end" {
+    while i < lines.len() && !is_block_close_line(&lines[i]) {
         let line = &lines[i];
         let tokens = split_tokens(line);
         match tokens.as_slice() {
@@ -9382,7 +9630,7 @@ fn parse_visual_shapes_block(
         }
     }
     if i >= lines.len() {
-        return Err(parse_error(&lines[start], "shapes missing end"));
+        return Err(parse_error(&lines[start], "shapes missing closing brace"));
     }
     Ok(i + 1)
 }
@@ -9404,7 +9652,7 @@ fn parse_palette_shape_sprite_entry(
     while i < lines.len() && lines[i].is_empty() {
         i += 1;
     }
-    if i >= lines.len() || lines[i] == "end" {
+    if i >= lines.len() || is_block_close_line(&lines[i]) {
         return Ok(None);
     }
 
@@ -9420,7 +9668,7 @@ fn parse_palette_shape_sprite_entry(
     let mut palette_ref = None::<String>;
     let mut shape_ref = None::<String>;
     let mut consumed_rows = 0usize;
-    while i < lines.len() && lines[i] != "end" {
+    while i < lines.len() && !is_block_close_line(&lines[i]) {
         let line = &lines[i];
         let tokens = split_tokens(line);
         if consumed_rows > 0 && starts_palette_shape_sprite_entry(lines, i, catalog) {
@@ -9496,7 +9744,7 @@ fn parse_palette_shape_sprite_entry(
             });
         }
     }
-    let next_i = if lines.get(i).map(String::as_str) == Some("end")
+    let next_i = if lines.get(i).map(String::as_str) == Some(BLOCK_CLOSE)
         && lines
             .get(i + 1)
             .is_some_and(|next| !starts_visual_outer_section(&split_tokens(next)))
@@ -9632,7 +9880,7 @@ fn parse_visual_plain_shape(
 ) -> Result<(Vec<String>, usize), AppError> {
     let mut pattern = Vec::new();
     let mut i = start + 1;
-    while i < lines.len() && lines[i] != "end" {
+    while i < lines.len() && !is_block_close_line(&lines[i]) {
         let row_tokens = split_tokens(&lines[i]);
         let [row] = row_tokens.as_slice() else {
             return Err(parse_error(
@@ -9644,40 +9892,28 @@ fn parse_visual_plain_shape(
         i += 1;
     }
     if i >= lines.len() {
-        return Err(parse_error(&lines[start], "visual shape missing end"));
+        return Err(parse_error(
+            &lines[start],
+            "visual shape missing closing brace",
+        ));
     }
     validate_visual_pattern(&pattern, &lines[start])?;
     Ok((pattern, i + 1))
-}
-
-fn ps_style_visual_sprite_uses_shape(lines: &[String], start: usize) -> bool {
-    let mut i = start + 1;
-    while i < lines.len() && lines[i].is_empty() {
-        i += 1;
-    }
-    i += 1;
-    while i < lines.len() && lines[i].is_empty() {
-        i += 1;
-    }
-    split_tokens(lines.get(i).map_or("", String::as_str))
-        .first()
-        .is_some_and(|token| *token == "ascii")
 }
 
 fn parse_ps_style_shape_sprite(
     lines: &[String],
     start: usize,
     line: &str,
-) -> Result<(String, ValueExpr, Vec<(char, String)>, usize), AppError> {
+    plain_shapes: &HashMap<String, Vec<String>>,
+    shapes: &HashMap<String, VisualShapeTable>,
+) -> Result<Option<(String, ValueExpr, Vec<(char, String)>, usize)>, AppError> {
     let mut i = start + 1;
     while i < lines.len() && lines[i].is_empty() {
         i += 1;
     }
-    if i >= lines.len() || lines[i] == "end" {
-        return Err(parse_error(
-            line,
-            "PS-style reusable sprite missing color row",
-        ));
+    if i >= lines.len() || is_block_close_line(&lines[i]) {
+        return Ok(None);
     }
     let colors = visual_colors_from_row(&lines[i])?;
     if colors.is_empty() {
@@ -9691,11 +9927,17 @@ fn parse_ps_style_shape_sprite(
         i += 1;
     }
     let tokens = split_tokens(lines.get(i).map_or("", String::as_str));
-    let ["ascii", shape_ref] = tokens.as_slice() else {
-        return Err(parse_error(
-            line,
-            "PS-style reusable sprite must contain: ascii <shape>",
-        ));
+    let shape_ref = match tokens.as_slice() {
+        [shape_ref] if visual_shape_ref_exists(shape_ref, plain_shapes, shapes, &lines[i])? => {
+            *shape_ref
+        }
+        ["ascii", _] => {
+            return Err(parse_error(
+                &lines[i],
+                "sprite shape refs are bare; remove `ascii`",
+            ));
+        }
+        _ => return Ok(None),
     };
     let shape_line_index = i;
     let (shape_name, shape_value) = parse_ps_style_shape_ref(shape_ref, &lines[shape_line_index])?;
@@ -9703,10 +9945,23 @@ fn parse_ps_style_shape_sprite(
     while next_i < lines.len() && lines[next_i].is_empty() {
         next_i += 1;
     }
-    if next_i >= lines.len() || lines[next_i] != "end" {
-        return Err(parse_error(line, "PS-style reusable sprite missing end"));
+    if next_i >= lines.len() || !is_block_close_line(&lines[next_i]) {
+        return Err(parse_error(
+            line,
+            "PS-style reusable sprite missing closing brace",
+        ));
     }
-    Ok((shape_name, shape_value, colors, next_i + 1))
+    Ok(Some((shape_name, shape_value, colors, next_i + 1)))
+}
+
+fn visual_shape_ref_exists(
+    shape_ref: &str,
+    plain_shapes: &HashMap<String, Vec<String>>,
+    shapes: &HashMap<String, VisualShapeTable>,
+    line: &str,
+) -> Result<bool, AppError> {
+    let (shape_name, _) = parse_ps_style_shape_ref(shape_ref, line)?;
+    Ok(plain_shapes.contains_key(&shape_name) || shapes.contains_key(&shape_name))
 }
 
 fn parse_ps_style_shape_ref(shape_ref: &str, line: &str) -> Result<(String, ValueExpr), AppError> {
@@ -9727,7 +9982,7 @@ fn parse_line_style_inline_sprite(
     while i < lines.len() && lines[i].is_empty() {
         i += 1;
     }
-    if i >= lines.len() || lines[i] == "end" {
+    if i >= lines.len() || is_block_close_line(&lines[i]) {
         return Err(parse_error(
             &lines[start],
             "PS-style sprite missing color row",
@@ -9741,7 +9996,7 @@ fn parse_line_style_inline_sprite(
 
     let mut pattern = Vec::new();
     i += 1;
-    while i < lines.len() && lines[i] != "end" {
+    while i < lines.len() && !is_block_close_line(&lines[i]) {
         if is_visual_entry_boundary(lines, i, catalog) {
             break;
         }
@@ -9756,7 +10011,10 @@ fn parse_line_style_inline_sprite(
         i += 1;
     }
     if i >= lines.len() {
-        return Err(parse_error(&lines[start], "PS-style sprite missing end"));
+        return Err(parse_error(
+            &lines[start],
+            "PS-style sprite missing closing brace",
+        ));
     }
     if !pattern.is_empty() {
         validate_visual_pattern(&pattern, &lines[start])?;
@@ -9863,7 +10121,7 @@ fn is_visual_entry_boundary(lines: &[String], index: usize, catalog: &Catalog) -
             let Some(next) = lines.get(index + 1) else {
                 return false;
             };
-            if next == "end" {
+            if is_block_close_line(next) {
                 return false;
             }
             let next_tokens = split_tokens(next);
@@ -9879,13 +10137,13 @@ fn is_visual_entry_boundary(lines: &[String], index: usize, catalog: &Catalog) -
 }
 
 fn visual_end_closes_sprite_entry(lines: &[String], index: usize) -> bool {
-    if !matches!(lines.get(index).map(String::as_str), Some("end")) {
+    if !matches!(lines.get(index).map(String::as_str), Some(BLOCK_CLOSE)) {
         return false;
     }
     let Some(next) = lines.get(index + 1) else {
         return false;
     };
-    next == "end" || !starts_visual_outer_section(&split_tokens(next))
+    is_block_close_line(next) || !starts_visual_outer_section(&split_tokens(next))
 }
 
 fn starts_visual_outer_section(tokens: &[&str]) -> bool {
@@ -9908,7 +10166,7 @@ fn starts_visual_outer_section(tokens: &[&str]) -> bool {
             | ["sprites"]
             | ["sounds"]
             | ["screen"]
-            | ["view", ..]
+            | ["layout", ..]
             | ["routine", ..]
             | ["rule", ..]
             | ["rules"]
@@ -9968,7 +10226,7 @@ fn parse_visual_shape_table(
     let mut i = start + 1;
     if let Some(rotation) = rotation {
         let mut pattern = Vec::new();
-        while i < lines.len() && lines[i] != "end" {
+        while i < lines.len() && !is_block_close_line(&lines[i]) {
             let row_tokens = split_tokens(&lines[i]);
             let [row] = row_tokens.as_slice() else {
                 return Err(parse_error(
@@ -9980,7 +10238,10 @@ fn parse_visual_shape_table(
             i += 1;
         }
         if i >= lines.len() {
-            return Err(parse_error(&lines[start], "visual shape missing end"));
+            return Err(parse_error(
+                &lines[start],
+                "visual shape missing closing brace",
+            ));
         }
         validate_visual_pattern(&pattern, &lines[i])?;
         entries.insert(rotation.from.clone(), pattern);
@@ -10000,8 +10261,8 @@ fn parse_visual_shape_table(
             i + 1,
         ));
     }
-    while i < lines.len() && lines[i] != "end" {
-        let value = lines[i].as_str();
+    while i < lines.len() && !is_block_close_line(&lines[i]) {
+        let value = block_header_text(&lines[i]);
         if !values.iter().any(|candidate| candidate == value) {
             return Err(parse_error(
                 &lines[i],
@@ -10010,7 +10271,7 @@ fn parse_visual_shape_table(
         }
         let mut pattern = Vec::new();
         i += 1;
-        while i < lines.len() && lines[i] != "end" {
+        while i < lines.len() && !is_block_close_line(&lines[i]) {
             let row_tokens = split_tokens(&lines[i]);
             let [row] = row_tokens.as_slice() else {
                 return Err(parse_error(
@@ -10022,7 +10283,10 @@ fn parse_visual_shape_table(
             i += 1;
         }
         if i >= lines.len() {
-            return Err(parse_error(&lines[start], "visual shape value missing end"));
+            return Err(parse_error(
+                &lines[start],
+                "visual shape value missing closing brace",
+            ));
         }
         validate_visual_pattern(&pattern, &lines[i])?;
         if entries.insert(value.to_string(), pattern).is_some() {
@@ -10031,7 +10295,10 @@ fn parse_visual_shape_table(
         i += 1;
     }
     if i >= lines.len() {
-        return Err(parse_error(&lines[start], "visual shape missing end"));
+        return Err(parse_error(
+            &lines[start],
+            "visual shape missing closing brace",
+        ));
     }
     Ok((
         VisualShapeTable {
@@ -10160,7 +10427,7 @@ fn parse_visual_color_table(
     })?;
     let mut entries = HashMap::new();
     let mut i = start + 1;
-    while i < lines.len() && lines[i] != "end" {
+    while i < lines.len() && !is_block_close_line(&lines[i]) {
         let tokens = split_tokens(&lines[i]);
         let [value, "=", color] = tokens.as_slice() else {
             return Err(parse_error(
@@ -10183,7 +10450,10 @@ fn parse_visual_color_table(
         i += 1;
     }
     if i >= lines.len() {
-        return Err(parse_error(&lines[start], "visual colors missing end"));
+        return Err(parse_error(
+            &lines[start],
+            "visual colors missing closing brace",
+        ));
     }
     Ok((
         VisualColorTable {
@@ -10598,6 +10868,7 @@ fn parse_group_directive(
     object_schemas: &HashMap<String, ObjectSchema>,
     value_sets: &HashMap<String, Vec<String>>,
     maps: &HashMap<String, ValueMap>,
+    visual_objects: &[ObjectId],
     object_groups: &mut HashMap<String, Vec<ObjectId>>,
 ) -> Result<(), AppError> {
     if tokens.len() < 4 || tokens.get(2).copied() != Some("=") {
@@ -10608,7 +10879,7 @@ fn parse_group_directive(
     }
 
     let name = tokens[1];
-    validate_qualified_identifier(name, line, "group name")?;
+    validate_selector_alias_name(name, line, "group name")?;
     if selector_name_conflicts_with(name, object_names, object_schemas, object_groups) {
         return Err(parse_error(
             line,
@@ -10636,6 +10907,7 @@ fn parse_group_directive(
     if objects.is_empty() {
         return Err(parse_error(line, "group must contain at least one object"));
     }
+    validate_named_selector_role(name, &objects, visual_objects, line, "group")?;
 
     object_groups.insert(name.to_string(), objects);
     Ok(())
@@ -10647,7 +10919,7 @@ fn parse_group_block(
     catalog: &mut Catalog,
 ) -> Result<usize, AppError> {
     let mut i = start + 1;
-    while i < lines.len() && lines[i] != "end" {
+    while i < lines.len() && !is_block_close_line(&lines[i]) {
         let tokens = split_tokens(&lines[i]);
         if tokens.is_empty() {
             i += 1;
@@ -10669,12 +10941,13 @@ fn parse_group_block(
             &catalog.object_schemas,
             &catalog_value_sets(catalog),
             &catalog.maps,
+            &catalog.visual_objects,
             &mut catalog.object_groups,
         )?;
         i += 1;
     }
     if i >= lines.len() {
-        return Err(parse_error(&lines[start], "group missing end"));
+        return Err(parse_error(&lines[start], "group missing closing brace"));
     }
 
     Ok(i + 1)
@@ -11192,7 +11465,7 @@ fn parse_rule_definition(
     let (statements, next_i) = parse_statement_block(
         lines,
         start + 1,
-        &["end"],
+        &[BLOCK_CLOSE],
         object_names,
         object_schemas,
         value_sets,
@@ -11271,21 +11544,21 @@ fn add_standard_move_rule_if_missing(
         "once_all d [ d l | | < l ] -> [ l | {__move_collision} | l ]".to_string(),
         "once_all d [ d l | ; | ^ l ] -> [ l | {__move_collision} ; | l ]".to_string(),
         "once_all d [ | v l ; d l | ] -> [ | l ; l | {__move_collision} ]".to_string(),
-        "end".to_string(),
+        BLOCK_CLOSE.to_string(),
         "for d in directions".to_string(),
         "d [ d l | no l no {__move_collision} ] -> [ | l{no directions} ]".to_string(),
-        "end".to_string(),
+        BLOCK_CLOSE.to_string(),
         "for d in directions".to_string(),
         "once_all d [ d l ] -> [ l ]".to_string(),
-        "end".to_string(),
+        BLOCK_CLOSE.to_string(),
         "once_all [ {__move_collision} ] -> [ ]".to_string(),
-        "end".to_string(),
-        "end".to_string(),
+        BLOCK_CLOSE.to_string(),
+        BLOCK_CLOSE.to_string(),
     ];
     let (statements, next_i) = parse_statement_block(
         &lines,
         0,
-        &["end"],
+        &[BLOCK_CLOSE],
         object_names,
         object_schemas,
         &generated_value_sets,
@@ -11345,7 +11618,7 @@ fn parse_lifecycle_block(
     let (statements, next_i) = parse_statement_block(
         lines,
         start + 1,
-        &["end"],
+        &[BLOCK_CLOSE],
         &catalog.object_names,
         &catalog.object_schemas,
         &catalog_value_sets(catalog),
@@ -11452,7 +11725,7 @@ fn collect_statement_block_lines(
     while i < lines.len() {
         let nested_line = &lines[i];
         let tokens = split_tokens(nested_line);
-        if tokens.first().copied() == Some("end") {
+        if tokens.first().copied() == Some(BLOCK_CLOSE) {
             depth -= 1;
             if depth == 0 {
                 return Ok((body, i + 1));
@@ -11464,7 +11737,7 @@ fn collect_statement_block_lines(
         body.push(nested_line.clone());
         i += 1;
     }
-    Err(parse_error(line, "for block missing end"))
+    Err(parse_error(line, "for block missing closing brace"))
 }
 
 fn starts_statement_block(tokens: &[&str]) -> bool {
@@ -11856,6 +12129,7 @@ fn parse_statement_block(
         } else {
             line.as_str()
         };
+        let line = block_header_text(line);
         let tokens = split_tokens(line);
         match tokens.first().copied() {
             Some("for") => {
@@ -11873,11 +12147,11 @@ fn parse_statement_block(
                     for value in &values {
                         let mut expanded_lines =
                             expand_for_binding_lines(&body_lines, binding, *axis, value, maps)?;
-                        expanded_lines.push("end".to_string());
+                        expanded_lines.push(BLOCK_CLOSE.to_string());
                         let (nested, parsed_i) = parse_statement_block(
                             &expanded_lines,
                             0,
-                            &["end"],
+                            &[BLOCK_CLOSE],
                             object_names,
                             object_schemas,
                             value_sets,
@@ -11904,7 +12178,7 @@ fn parse_statement_block(
                 let (nested, next_i) = parse_statement_block(
                     lines,
                     i + 1,
-                    &["end"],
+                    &[BLOCK_CLOSE],
                     object_names,
                     object_schemas,
                     value_sets,
@@ -11935,7 +12209,7 @@ fn parse_statement_block(
                         let (nested, next_i) = parse_statement_block(
                             lines,
                             i + 1,
-                            &["else", "end"],
+                            &["else", BLOCK_CLOSE],
                             object_names,
                             object_schemas,
                             value_sets,
@@ -11952,7 +12226,7 @@ fn parse_statement_block(
                                 let (else_statements, after_else_i) = parse_statement_block(
                                     lines,
                                     next_i,
-                                    &["end"],
+                                    &[BLOCK_CLOSE],
                                     object_names,
                                     object_schemas,
                                     value_sets,
@@ -12029,7 +12303,7 @@ fn parse_statement_block(
                 let (then_statements, next_i) = parse_statement_block(
                     lines,
                     i + 1,
-                    &["else", "end"],
+                    &["else", BLOCK_CLOSE],
                     object_names,
                     object_schemas,
                     value_sets,
@@ -12042,13 +12316,13 @@ fn parse_statement_block(
                     rule_params,
                 )?;
                 if next_i == 0 {
-                    return Err(parse_error(line, "if block missing end"));
+                    return Err(parse_error(line, "if block missing closing brace"));
                 }
                 if lines[next_i - 1] == "else" {
                     let (else_statements, after_else_i) = parse_statement_block(
                         lines,
                         next_i,
-                        &["end"],
+                        &[BLOCK_CLOSE],
                         object_names,
                         object_schemas,
                         value_sets,
@@ -12106,7 +12380,7 @@ fn parse_statement_block(
                     let (then_statements, next_i) = parse_statement_block(
                         lines,
                         i + 1,
-                        &["end"],
+                        &[BLOCK_CLOSE],
                         object_names,
                         object_schemas,
                         value_sets,
@@ -12169,7 +12443,7 @@ fn parse_statement_block(
                     let (nested, next_i) = parse_statement_block(
                         lines,
                         i + 1,
-                        &["end"],
+                        &[BLOCK_CLOSE],
                         object_names,
                         object_schemas,
                         value_sets,
@@ -12208,7 +12482,7 @@ fn parse_statement_block(
                     let (nested, next_i) = parse_statement_block(
                         lines,
                         i + 1,
-                        &["end"],
+                        &[BLOCK_CLOSE],
                         object_names,
                         object_schemas,
                         value_sets,
@@ -12247,7 +12521,7 @@ fn parse_statement_block(
                     let (nested, next_i) = parse_statement_block(
                         lines,
                         i + 1,
-                        &["end"],
+                        &[BLOCK_CLOSE],
                         object_names,
                         object_schemas,
                         value_sets,
@@ -12286,7 +12560,7 @@ fn parse_statement_block(
                     let (nested, next_i) = parse_statement_block(
                         lines,
                         i + 1,
-                        &["end"],
+                        &[BLOCK_CLOSE],
                         object_names,
                         object_schemas,
                         value_sets,
@@ -12331,7 +12605,7 @@ fn parse_statement_block(
                     let (nested, next_i) = parse_statement_block(
                         lines,
                         i + 1,
-                        &["end"],
+                        &[BLOCK_CLOSE],
                         object_names,
                         object_schemas,
                         value_sets,
@@ -12395,7 +12669,7 @@ fn parse_statement_block(
                     let (nested, next_i) = parse_statement_block(
                         lines,
                         i + 1,
-                        &["end"],
+                        &[BLOCK_CLOSE],
                         object_names,
                         object_schemas,
                         value_sets,
@@ -12467,7 +12741,10 @@ fn parse_statement_block(
         }
     }
 
-    Err(parse_error(&lines[start], "statement block missing end"))
+    Err(parse_error(
+        &lines[start],
+        "statement block missing closing brace",
+    ))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -13314,6 +13591,12 @@ struct LoweredEffects {
     ordered: Vec<RuleEffect>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ClassifiedRuleRole {
+    Main,
+    Visual,
+}
+
 fn lower_programs(
     definitions: Vec<RuleDefinitionAst>,
     main_statements: Option<Vec<StatementAst>>,
@@ -13469,13 +13752,6 @@ fn wrap_program_local_frame(
 fn input_dependency_error(context: &StatementLoweringContext) -> AppError {
     let scope = context.input_forbidden_context.unwrap_or("this program");
     AppError::Parse(format!("{scope} cannot depend on input"))
-}
-
-fn rule_role_label(role: RuleRole) -> &'static str {
-    match role {
-        RuleRole::Main => "main",
-        RuleRole::Visual => "display",
-    }
 }
 
 fn lower_queries(
@@ -14049,41 +14325,6 @@ fn selectors_read_visual_object(selectors: &[ObjectSelector], visual_objects: &[
     })
 }
 
-fn validate_non_visual_writes(
-    writes: &[WriteOp],
-    visual_objects: &[ObjectId],
-) -> Result<(), AppError> {
-    for write in writes {
-        match write {
-            WriteOp::Add { object, .. }
-            | WriteOp::Remove { object, .. }
-            | WriteOp::Move { object, .. } => {
-                ensure_non_visual_write_object(*object, visual_objects)?;
-            }
-            WriteOp::Replace { remove, add, .. } => {
-                ensure_non_visual_write_object(*remove, visual_objects)?;
-                ensure_non_visual_write_object(*add, visual_objects)?;
-            }
-            WriteOp::SetScratch { object, .. } | WriteOp::RemoveScratch { object, .. } => {
-                if !object.is_empty() {
-                    ensure_non_visual_write_object(*object, visual_objects)?;
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
-fn ensure_non_visual_write_object(
-    object: ObjectId,
-    visual_objects: &[ObjectId],
-) -> Result<(), AppError> {
-    if object_is_visual(object, visual_objects) {
-        return Err(main_visual_object_error("write"));
-    }
-    Ok(())
-}
-
 fn object_is_visual(object: ObjectId, visual_objects: &[ObjectId]) -> bool {
     visual_objects.contains(&object)
 }
@@ -14092,6 +14333,95 @@ fn main_visual_object_error(context: &str) -> AppError {
     AppError::Parse(format!(
         "main rules and conditions cannot read or write display objects ({context})"
     ))
+}
+
+fn classify_rewrite_role(
+    before: &PatternBlock,
+    alternatives: &[RuleBodyAlternative],
+    effects: &LoweredEffects,
+    visual_objects: &[ObjectId],
+    context: &StatementLoweringContext,
+) -> Result<ClassifiedRuleRole, AppError> {
+    let reads_visual = pattern_block_reads_visual_object(before, visual_objects);
+    let writes_visual = alternatives_write_visual_objects(alternatives, visual_objects);
+    let writes_main = alternatives_write_main_state(alternatives, visual_objects);
+    let has_effects =
+        !effects.core.is_empty() || !effects.emissions.is_empty() || !effects.ordered.is_empty();
+
+    if reads_visual && (writes_main || has_effects) {
+        return Err(AppError::Parse(
+            "display object matches cannot cause gameplay changes".to_string(),
+        ));
+    }
+
+    let role = if reads_visual {
+        ClassifiedRuleRole::Visual
+    } else if writes_main || has_effects {
+        ClassifiedRuleRole::Main
+    } else if writes_visual {
+        ClassifiedRuleRole::Visual
+    } else {
+        ClassifiedRuleRole::Main
+    };
+
+    if context.role == RuleRole::Visual && role == ClassifiedRuleRole::Main {
+        return Err(AppError::Parse(
+            "display routines and display blocks can only contain display rules".to_string(),
+        ));
+    }
+
+    Ok(role)
+}
+
+fn alternatives_write_visual_objects(
+    alternatives: &[RuleBodyAlternative],
+    visual_objects: &[ObjectId],
+) -> bool {
+    alternatives.iter().any(|alternative| {
+        alternative
+            .writes
+            .iter()
+            .any(|write| write_template_touches_visual_object(write, visual_objects))
+    })
+}
+
+fn alternatives_write_main_state(
+    alternatives: &[RuleBodyAlternative],
+    visual_objects: &[ObjectId],
+) -> bool {
+    alternatives.iter().any(|alternative| {
+        alternative
+            .writes
+            .iter()
+            .any(|write| write_template_touches_main_state(write, visual_objects))
+    })
+}
+
+fn write_template_touches_visual_object(
+    write: &WriteOpTemplate,
+    visual_objects: &[ObjectId],
+) -> bool {
+    match write {
+        WriteOpTemplate::Add { object, .. }
+        | WriteOpTemplate::Remove { object, .. }
+        | WriteOpTemplate::Move { object, .. } => object_is_visual(*object, visual_objects),
+        WriteOpTemplate::SetScratch { object, .. }
+        | WriteOpTemplate::RemoveScratch { object, .. } => {
+            !object.is_empty() && object_is_visual(*object, visual_objects)
+        }
+    }
+}
+
+fn write_template_touches_main_state(write: &WriteOpTemplate, visual_objects: &[ObjectId]) -> bool {
+    match write {
+        WriteOpTemplate::Add { object, .. }
+        | WriteOpTemplate::Remove { object, .. }
+        | WriteOpTemplate::Move { object, .. } => !object_is_visual(*object, visual_objects),
+        WriteOpTemplate::SetScratch { object, .. }
+        | WriteOpTemplate::RemoveScratch { object, .. } => {
+            object.is_empty() || !object_is_visual(*object, visual_objects)
+        }
+    }
 }
 
 impl<'a> ProgramLowerer<'a> {
@@ -14151,7 +14481,7 @@ impl<'a> ProgramLowerer<'a> {
     ) -> Result<Vec<RuleStep>, AppError> {
         let effects = self.lower_effects(effects)?;
         if context.role == RuleRole::Visual {
-            validate_visual_effects(&effects.core)?;
+            validate_visual_effects(&effects)?;
         }
         let id = RuleId(self.next_rule_id);
         self.next_rule_id += 1;
@@ -14265,14 +14595,10 @@ impl<'a> ProgramLowerer<'a> {
             .get(name)
             .cloned()
             .ok_or_else(|| AppError::Parse(format!("unknown routine call: {name}")))?;
-        if definition.role != context.role {
-            let expected = rule_role_label(context.role);
-            let actual = rule_role_label(definition.role);
-            return Err(AppError::Parse(format!(
-                "cannot call {actual} routine `{name}` as a {expected} routine"
-            )));
-        }
         let mut nested_context = context.clone();
+        if context.role == RuleRole::Visual || definition.role == RuleRole::Visual {
+            nested_context.role = RuleRole::Visual;
+        }
         nested_context.call_stack.push(name.to_string());
         nested_context.application = RuleApplication::UntilStable;
         nested_context.application_fixed = false;
@@ -14318,11 +14644,6 @@ impl<'a> ProgramLowerer<'a> {
             .get(name)
             .cloned()
             .ok_or_else(|| AppError::Parse(format!("unknown display routine call: {name}")))?;
-        if definition.role != RuleRole::Visual {
-            return Err(AppError::Parse(format!(
-                "display call requires a display routine: {name}"
-            )));
-        }
         let mut nested_context = context.clone();
         nested_context.role = RuleRole::Visual;
         nested_context.call_stack.push(name.to_string());
@@ -14907,9 +15228,6 @@ impl<'a> ProgramLowerer<'a> {
         rewrite: &OrientedRewriteAst,
         context: &StatementLoweringContext,
     ) -> Result<Vec<RuleStep>, AppError> {
-        if context.role == RuleRole::Main {
-            validate_non_visual_pattern_block(&rewrite.before, self.visual_objects)?;
-        }
         let effects = self.lower_effects(&rewrite.effects)?;
         let application = if effects
             .core
@@ -14920,9 +15238,6 @@ impl<'a> ProgramLowerer<'a> {
         } else {
             rewrite.application.unwrap_or(context.application)
         };
-        if context.role == RuleRole::Visual {
-            validate_visual_effects(&effects.core)?;
-        }
         let orientation = if matches!(rewrite.orientation, OrientationExpr::Neutral) {
             context.orientation.as_ref().unwrap_or(&rewrite.orientation)
         } else {
@@ -14938,6 +15253,16 @@ impl<'a> ProgramLowerer<'a> {
                     self.value_sets,
                     &rewrite.source_line,
                 )?;
+                let role = classify_rewrite_role(
+                    &rewrite.before,
+                    &alternatives,
+                    &effects,
+                    self.visual_objects,
+                    context,
+                )?;
+                if role == ClassifiedRuleRole::Visual {
+                    validate_visual_effects(&effects)?;
+                }
                 if rewrite_requires_implicit_cardinal_expansion(rewrite) {
                     let mut rules = Vec::new();
                     for direction in self.directions {
@@ -14950,7 +15275,7 @@ impl<'a> ProgramLowerer<'a> {
                             effects.emissions.clone(),
                             effects.ordered.clone(),
                             application,
-                            context.role,
+                            role,
                         )?);
                     }
                     return Ok(wrap_rewrite_steps(application, rules));
@@ -14964,7 +15289,7 @@ impl<'a> ProgramLowerer<'a> {
                     effects.emissions,
                     effects.ordered,
                     application,
-                    context.role,
+                    role,
                 )
                 .map(|rules| wrap_rewrite_steps(application, rules))
             }
@@ -14972,20 +15297,30 @@ impl<'a> ProgramLowerer<'a> {
                 if !context.input_allowed {
                     return Err(input_dependency_error(context));
                 }
+                let alternatives = compile_before_after_blocks(
+                    &rewrite.before,
+                    &rewrite.after,
+                    self.object_layers,
+                    self.scratch_names,
+                    self.value_sets,
+                    &rewrite.source_line,
+                )?;
+                let role = classify_rewrite_role(
+                    &rewrite.before,
+                    &alternatives,
+                    &effects,
+                    self.visual_objects,
+                    context,
+                )?;
+                if role == ClassifiedRuleRole::Visual {
+                    validate_visual_effects(&effects)?;
+                }
                 let mut rules = Vec::new();
                 for direction in self.directions {
                     let mut guards = context.guards.clone();
                     guards.push(Guard::InputIs(direction.input));
-                    let alternatives = compile_before_after_blocks(
-                        &rewrite.before,
-                        &rewrite.after,
-                        self.object_layers,
-                        self.scratch_names,
-                        self.value_sets,
-                        &rewrite.source_line,
-                    )?;
                     rules.extend(self.rules_from_alternatives(
-                        alternatives,
+                        alternatives.clone(),
                         *direction,
                         true,
                         guards,
@@ -14993,7 +15328,7 @@ impl<'a> ProgramLowerer<'a> {
                         effects.emissions.clone(),
                         effects.ordered.clone(),
                         application,
-                        context.role,
+                        role,
                     )?);
                 }
                 Ok(wrap_rewrite_steps(application, rules))
@@ -15005,20 +15340,30 @@ impl<'a> ProgramLowerer<'a> {
                 let directions = self.directions_for_orientation_name(axis)?.ok_or_else(|| {
                     AppError::Parse(format!("unknown input orientation set: {axis}"))
                 })?;
+                let alternatives = compile_before_after_blocks(
+                    &rewrite.before,
+                    &rewrite.after,
+                    self.object_layers,
+                    self.scratch_names,
+                    self.value_sets,
+                    &rewrite.source_line,
+                )?;
+                let role = classify_rewrite_role(
+                    &rewrite.before,
+                    &alternatives,
+                    &effects,
+                    self.visual_objects,
+                    context,
+                )?;
+                if role == ClassifiedRuleRole::Visual {
+                    validate_visual_effects(&effects)?;
+                }
                 let mut rules = Vec::new();
                 for direction in directions {
                     let mut guards = context.guards.clone();
                     guards.push(Guard::InputIs(direction.input));
-                    let alternatives = compile_before_after_blocks(
-                        &rewrite.before,
-                        &rewrite.after,
-                        self.object_layers,
-                        self.scratch_names,
-                        self.value_sets,
-                        &rewrite.source_line,
-                    )?;
                     rules.extend(self.rules_from_alternatives(
-                        alternatives,
+                        alternatives.clone(),
                         direction,
                         true,
                         guards,
@@ -15026,7 +15371,7 @@ impl<'a> ProgramLowerer<'a> {
                         effects.emissions.clone(),
                         effects.ordered.clone(),
                         application,
-                        context.role,
+                        role,
                     )?);
                 }
                 Ok(wrap_rewrite_steps(application, rules))
@@ -15045,6 +15390,16 @@ impl<'a> ProgramLowerer<'a> {
                     self.value_sets,
                     &rewrite.source_line,
                 )?;
+                let role = classify_rewrite_role(
+                    &rewrite.before,
+                    &alternatives,
+                    &effects,
+                    self.visual_objects,
+                    context,
+                )?;
+                if role == ClassifiedRuleRole::Visual {
+                    validate_visual_effects(&effects)?;
+                }
                 let mut rules = Vec::new();
                 for direction in directions {
                     rules.extend(self.rules_from_alternatives(
@@ -15056,7 +15411,7 @@ impl<'a> ProgramLowerer<'a> {
                         effects.emissions.clone(),
                         effects.ordered.clone(),
                         application,
-                        context.role,
+                        role,
                     )?);
                 }
                 Ok(wrap_rewrite_steps(application, rules))
@@ -15153,7 +15508,7 @@ impl<'a> ProgramLowerer<'a> {
         emissions: Vec<RuleEmission>,
         ordered_effects: Vec<RuleEffect>,
         application: RuleApplication,
-        role: RuleRole,
+        role: ClassifiedRuleRole,
     ) -> Result<Vec<RuleStep>, AppError> {
         let mut rules = Vec::with_capacity(alternatives.len());
         for alternative in alternatives {
@@ -15166,7 +15521,7 @@ impl<'a> ProgramLowerer<'a> {
                 &mut rule_emissions,
                 &mut rule_effects,
             );
-            if role != RuleRole::Visual {
+            if role != ClassifiedRuleRole::Visual {
                 append_tween_animation_emissions(
                     &alternative.writes,
                     self.animation,
@@ -15216,15 +15571,13 @@ impl<'a> ProgramLowerer<'a> {
                 .iter()
                 .map(|write| resolve_write(write, direction, direction_expanded, "statement"))
                 .collect::<Result<Vec<_>, AppError>>()?;
-            if role == RuleRole::Visual {
+            if role == ClassifiedRuleRole::Visual {
                 validate_visual_writes(&compiled_writes, self.visual_objects)?;
-            } else {
-                validate_non_visual_writes(&compiled_writes, self.visual_objects)?;
             }
 
             let id = RuleId(self.next_rule_id);
             self.next_rule_id += 1;
-            if role == RuleRole::Visual {
+            if role == ClassifiedRuleRole::Visual {
                 self.visual_rules.push(id);
             }
             if !rule_emissions.is_empty() {
@@ -15260,8 +15613,8 @@ fn wrap_rewrite_steps(application: RuleApplication, steps: Vec<RuleStep>) -> Vec
     }
 }
 
-fn validate_visual_effects(effects: &[Effect]) -> Result<(), AppError> {
-    if effects.is_empty() {
+fn validate_visual_effects(effects: &LoweredEffects) -> Result<(), AppError> {
+    if effects.core.is_empty() && effects.emissions.is_empty() && effects.ordered.is_empty() {
         return Ok(());
     }
     Err(AppError::Parse(

@@ -7,10 +7,24 @@ fn parse_game(source: &str) -> Result<LoadedGame, AppError> {
     super::parse_game2d(&modernize_test_source(source))
 }
 
+fn test_legacy_block_close(line: &str) -> bool {
+    line == "end" || is_block_close_line(line)
+}
+
 fn modernize_test_source(source: &str) -> String {
     let Ok(lines) = super::source::logical_lines(source) else {
         return source.to_string();
     };
+    let lines = lines
+        .into_iter()
+        .map(|line| {
+            if test_legacy_block_close(&line) {
+                BLOCK_CLOSE.to_string()
+            } else {
+                line
+            }
+        })
+        .collect::<Vec<_>>();
     let mut out = Vec::new();
     let mut i = 0;
     let mut in_keys = false;
@@ -28,9 +42,11 @@ fn modernize_test_source(source: &str) -> String {
         if in_levels {
             out.push(line.clone());
             i += 1;
-            if line == "end" {
+            if is_block_close_line(line) {
                 levels_depth = levels_depth.saturating_sub(1);
-            } else if matches!(tokens.as_slice(), ["legend"] | ["level", .., "{"] | ["{"]) {
+            } else if matches!(tokens.as_slice(), ["legend"] | ["{"])
+                || (matches!(tokens.as_slice(), ["level", ..]) && line.trim_end().ends_with('{'))
+            {
                 levels_depth += 1;
             }
             continue;
@@ -42,7 +58,7 @@ fn modernize_test_source(source: &str) -> String {
             i += 1;
             continue;
         }
-        if in_scene && line == "end" {
+        if in_scene && is_block_close_line(line) {
             scene_depth = scene_depth.saturating_sub(1);
             if in_keys {
                 in_keys = false;
@@ -111,20 +127,20 @@ fn modernize_test_source(source: &str) -> String {
             ["level", name, ..] => {
                 out.push("levels".to_string());
                 out.append(&mut pending_level_legend);
-                let braced_level = tokens.contains(&"{");
+                let braced_level = line.trim_end().ends_with('{');
                 if braced_level {
                     out.push(line.clone());
                 } else {
                     out.push(format!("level {name}"));
                 }
                 i += 1;
-                while i < lines.len() && lines[i] != "end" {
+                while i < lines.len() && !is_block_close_line(&lines[i]) {
                     out.push(lines[i].clone());
                     i += 1;
                 }
-                out.push("end".to_string());
+                out.push(BLOCK_CLOSE.to_string());
                 if braced_level {
-                    out.push("end".to_string());
+                    out.push(BLOCK_CLOSE.to_string());
                 }
             }
             _ => out.push(line.clone()),
@@ -145,12 +161,12 @@ fn collect_test_legend_entry(
     start: usize,
     aliases: &[(String, String)],
 ) -> (Vec<String>, usize) {
-    if lines[start] == "legend" {
-        let mut out = vec!["legend".to_string()];
+    if split_tokens(&lines[start]).as_slice() == ["legend"] {
+        let mut out = vec![lines[start].clone()];
         let mut i = start + 1;
         while i < lines.len() {
             out.push(rewrite_test_display_aliases(&lines[i], aliases));
-            if lines[i] == "end" {
+            if is_block_close_line(&lines[i]) {
                 return (out, i + 1);
             }
             i += 1;
@@ -179,7 +195,7 @@ fn test_puzzle_has_following_layers(lines: &[String], start: usize) -> bool {
                 | ["levels", ..]
         ) {
             depth += 1;
-        } else if lines[i] == "end" {
+        } else if is_block_close_line(&lines[i]) {
             depth = depth.saturating_sub(1);
         }
         i += 1;
@@ -214,14 +230,14 @@ fn modernize_test_objects_block(
     let mut i = start + 1;
     let mut layer_index = 0usize;
 
-    while i < lines.len() && lines[i] != "end" {
+    while i < lines.len() && !is_block_close_line(&lines[i]) {
         let tokens = split_tokens(&lines[i]);
         match tokens.as_slice() {
             ["layer"] | ["layer", _] => {
                 let explicit_name = tokens.get(1).copied().map(str::to_string);
                 i += 1;
                 let mut selectors = Vec::<String>::new();
-                while i < lines.len() && lines[i] != "end" {
+                while i < lines.len() && !is_block_close_line(&lines[i]) {
                     for (selector, legend) in modernize_test_object_row(&lines[i]) {
                         if display {
                             push_test_display_alias(&selector, &mut aliases);
@@ -236,20 +252,23 @@ fn modernize_test_objects_block(
                     }
                     i += 1;
                 }
-                let name = explicit_name.unwrap_or_else(|| format!("__test_layer_{layer_index}"));
+                let name = modernize_test_layer_name(
+                    &explicit_name.unwrap_or_else(|| format!("__test_layer_{layer_index}")),
+                    display,
+                );
                 layer_rows.push(format!("{name} = {}", selectors.join(" ")));
                 layer_index += 1;
-                if i < lines.len() && lines[i] == "end" {
+                if i < lines.len() && is_block_close_line(&lines[i]) {
                     i += 1;
                 }
             }
             ["group"] => {
                 i += 1;
-                while i < lines.len() && lines[i] != "end" {
+                while i < lines.len() && !is_block_close_line(&lines[i]) {
                     group_rows.push(lines[i].clone());
                     i += 1;
                 }
-                if i < lines.len() && lines[i] == "end" {
+                if i < lines.len() && is_block_close_line(&lines[i]) {
                     i += 1;
                 }
             }
@@ -271,8 +290,11 @@ fn modernize_test_objects_block(
                         ));
                     } else {
                         layer_rows.push(format!(
-                            "__test_layer_{} = {}",
-                            tokens[1],
+                            "{} = {}",
+                            modernize_test_layer_name(
+                                &format!("__test_layer_{}", tokens[1]),
+                                display
+                            ),
                             modernize_test_layer_term(&selector, display)
                         ));
                     }
@@ -299,7 +321,8 @@ fn modernize_test_objects_block(
                 }
                 if !selectors.is_empty() && !declarations_only {
                     layer_rows.push(format!(
-                        "__test_layer_{layer_index} = {}",
+                        "{} = {}",
+                        modernize_test_layer_name(&format!("__test_layer_{layer_index}"), display),
                         selectors.join(" ")
                     ));
                     layer_index += 1;
@@ -313,7 +336,7 @@ fn modernize_test_objects_block(
     if !layer_rows.is_empty() {
         out.push("layers".to_string());
         out.extend(layer_rows);
-        out.push("end".to_string());
+        out.push(BLOCK_CLOSE.to_string());
     }
     if !legend_rows.is_empty() {
         out.extend(legend_rows);
@@ -321,7 +344,7 @@ fn modernize_test_objects_block(
     if !group_rows.is_empty() {
         out.push("group".to_string());
         out.extend(group_rows);
-        out.push("end".to_string());
+        out.push(BLOCK_CLOSE.to_string());
     }
     (out, aliases, i + 1)
 }
@@ -356,6 +379,14 @@ fn modernize_test_layer_term(selector: &str, display: bool) -> String {
         format!("display @{selector}")
     } else {
         selector.to_string()
+    }
+}
+
+fn modernize_test_layer_name(name: &str, display: bool) -> String {
+    if display && !name.starts_with('@') {
+        format!("@{name}")
+    } else {
+        name.to_string()
     }
 }
 
@@ -640,8 +671,8 @@ title at_display
 puzzle board {
 layers {
 actor = Player
-cursor = @Cursor
-hint = display @Hint
+@cursor = @Cursor
+@hint = display @Hint
 }
 
 legend {
@@ -810,7 +841,7 @@ audio {
 }
 "#;
 
-    let error = parse_game(source).unwrap_err().to_string();
+    let error = parse_game_document(source).unwrap_err().to_string();
     assert!(error.contains("found audio"), "{error}");
 }
 
@@ -928,7 +959,7 @@ P
 }
 
 scene playing {
-view {
+layout {
 text "Playing"
 }
 on_scene_start {
@@ -975,7 +1006,7 @@ P
 }
 
 scene playing {
-view {
+layout {
 text "Playing"
 }
 on_scene_start {
@@ -1029,7 +1060,7 @@ P
 }
 
 scene title {
-view {
+layout {
 button "Start" -> input start
 }
 rules {
@@ -1044,7 +1075,7 @@ end
 }
 
 scene playing {
-view {
+layout {
 text "Playing"
 }
 }
@@ -1288,7 +1319,7 @@ P
 }
 
 scene playing {
-view {
+layout {
 text "Playing"
 }
 on_level_start {
@@ -1299,7 +1330,7 @@ message "no"
 
     let error = parse_game(source).unwrap_err().to_string();
 
-    assert!(error.contains("on_level_start belongs inside puzzle"));
+    assert!(error.contains("level lifecycle blocks belong inside puzzle"));
 }
 
 #[test]
@@ -1326,7 +1357,7 @@ P
 }
 
 scene playing {
-view {
+layout {
 board = puzzle current_level
 }
 }
@@ -1636,7 +1667,7 @@ P
 }
 
 scene playing {
-view {
+layout {
 text "Playing"
 }
 rules {
@@ -1717,7 +1748,7 @@ level start
 P.
 }
 
-view {
+layout {
 board = puzzle playing
 puzzle board
 }
@@ -1735,7 +1766,7 @@ goto level_clear
 }
 
 scene level_clear {
-view {
+layout {
 text "clear"
 }
 }
@@ -1769,7 +1800,7 @@ fn scene_puzzle_uses_explicit_puzzle_slot_as_primary() {
 title scene_puzzle_custom_slot
 
 scene puzzle playing {
-view {
+layout {
 playfield = puzzle playing
 }
 
@@ -1808,7 +1839,7 @@ goto level_clear
 }
 
 scene level_clear {
-view {
+layout {
 text "clear"
 }
 }
@@ -2121,7 +2152,7 @@ P
 }
 
 scene title {
-view {
+layout {
 title
 subtitle
 }
@@ -2166,7 +2197,7 @@ scene playing {
 state {
 puzzle sokoban
 }
-view {
+layout {
 sokoban
 }
 rules {
@@ -2212,7 +2243,7 @@ scene playing {
 state {
 board = puzzle board
 }
-view {
+layout {
 board
 }
 rules {
@@ -2250,7 +2281,7 @@ scene playing {
 state {
 board = puzzle board
 }
-view {
+layout {
 frame board
 }
 }
@@ -2288,7 +2319,7 @@ state {
 sokoban1 = puzzle sokoban
 sokoban2 = puzzle sokoban
 }
-view {
+layout {
 sokoban1
 sokoban2
 }
@@ -2393,7 +2424,7 @@ P
 }
 
 scene menu {
-view {
+layout {
 button "Resume" -> input resume
 }
 rules {
@@ -2438,7 +2469,7 @@ P
 }
 
 scene menu {
-view size 4 3 {
+layout size 4 3 {
 box size 3 2 gap 1 align left top {
 text "Ready"
 }
@@ -2460,7 +2491,7 @@ text "Ready"
     let rejected = source.replace("box size 3 2 gap 1 align left top {", "panel {");
     let error = parse_game(&rejected).unwrap_err();
     assert!(
-        error.to_string().contains("unknown view directive panel"),
+        error.to_string().contains("unknown layout directive panel"),
         "expected panel to be rejected, got {error}"
     );
 }
@@ -2582,7 +2613,7 @@ P
 }
 
 scene menu {
-view {
+layout {
 button "Resume" -> resume
 }
 }
@@ -2593,7 +2624,7 @@ button "Resume" -> resume
 }
 
 #[test]
-fn view_for_can_project_levels_into_scrollable_column() {
+fn layout_for_can_project_levels_into_scrollable_column() {
     let source = r#"
 title level_projection_view
 
@@ -2620,7 +2651,7 @@ P
 }
 
 scene level_select {
-view {
+layout {
 column scroll=true {
 for level in levels {
 button join(level.num, ". ", level.title, " ", level.solved) -> goto playing(level)
@@ -2755,7 +2786,7 @@ P
 }
 
 scene level_select {
-view {
+layout {
 level_menu microban -> goto playing(level)
 }
 }
@@ -2851,7 +2882,7 @@ button "Levels" -> goto level_select
 }
 
 scene playing {
-view {
+layout {
 board = puzzle default
 }
 }
@@ -3937,11 +3968,16 @@ fn level_start_rejects_input_dependent_rules() {
 title level_start_input
 
 puzzle default {
-layers 2
-empty .
-
-object Player 1
-legend P = Player
+layers {
+actor = Player
+}
+objects {
+Player actor
+}
+legend {
+. = empty
+P = Player
+}
 
 on_level_start {
 input directions [ Player | ] -> [ | Player ]
@@ -4085,9 +4121,7 @@ S
 "#;
     let error = parse_game(source).unwrap_err().to_string();
 
-    assert!(
-        error.contains("display block can read main objects but can only write display objects")
-    );
+    assert!(error.contains("display routines and display blocks can only contain display rules"));
 }
 
 #[test]
@@ -4096,11 +4130,16 @@ fn level_clear_rejects_input_dependent_rules() {
 title level_clear_input
 
 puzzle default {
-layers 2
-empty .
-
-object Player 1
-legend P = Player
+layers {
+actor = Player
+}
+objects {
+Player actor
+}
+legend {
+. = empty
+P = Player
+}
 
 on_level_clear {
 input directions [ Player | ] -> [ | Player ]
@@ -4174,7 +4213,7 @@ P
 }
 
 scene playing {
-view {
+layout {
 board = puzzle default
 }
 rules {
@@ -4209,7 +4248,7 @@ P
 }
 
 menu selector {
-view {
+layout {
 button "Only" value 0
 }
 rules {
@@ -4426,6 +4465,37 @@ end
 }
 
 #[test]
+fn end_is_allowed_as_user_defined_object_name() {
+    let source = r#"
+title end_name
+
+puzzle default {
+layers {
+end
+}
+rules {
+}
+}
+
+levels test of default {
+legend {
+. = empty
+E = end
+}
+E
+}
+"#;
+
+    let loaded = super::parse_game2d(source).unwrap();
+    let end = object_named(&loaded, "end");
+    assert!(
+        loaded.levels[0]
+            .initial_state
+            .has_object(&loaded.game, 0, 0, end)
+    );
+}
+
+#[test]
 fn bare_tag_set_assignment_is_not_canonical_syntax() {
     let source = r#"
 title old_tag_assignment
@@ -4602,7 +4672,7 @@ menu level_select {
 data {
 levels: list<level>
 }
-view {
+layout {
 column {
 button "Start" value 0
 }
@@ -4623,7 +4693,7 @@ import "sokoban.puzzle"
 import "level_select.puzzle"
 
 scene select {
-view {
+layout {
 menu selector = level_select with {
 levels = default.levels
 }
@@ -4714,7 +4784,7 @@ resources {
 levels worldA
 sprites Player
 }
-view {
+layout {
 level_menu
 }
 }
@@ -5734,9 +5804,6 @@ legend {
 . = empty
 }
 sprites {
-palettes {
-player = #e94f64 #2f80ed
-}
 shapes {
 player_shape {
 0.
@@ -5745,8 +5812,8 @@ player_shape {
 }
 
 Player {
-palette player
-shape player_shape
+#e94f64 #2f80ed
+player_shape
 }
 }
 rules {
@@ -6996,11 +7063,16 @@ fn scene_keys_define_action_bindings_and_puzzle_controls() {
 title scene_keys
 
 puzzle default {
-layers 2
-empty .
-
-object Player 1
-legend P = Player
+layers {
+actor = Player
+}
+objects {
+Player actor
+}
+legend {
+. = empty
+P = Player
+}
 
 rules {
 once input directions [ Player | ] -> [ | Player ]
@@ -7012,7 +7084,7 @@ P.
 }
 
 scene playing {
-view {
+layout {
 board = puzzle default
 message_visible = false
 moves = 0
@@ -7026,7 +7098,7 @@ menu <- Escape
 }
 
 scene level_select {
-view {
+layout {
 level_menu {
 show_index = true
 show_solved = true
@@ -7090,7 +7162,7 @@ P
 }
 
 scene select {
-view {
+layout {
 board = puzzle default
 column {
 button board.level.label -> playing.goto board.level.name
@@ -7106,7 +7178,7 @@ choose -> playing.goto board.level.name
 }
 
 scene playing {
-view {
+layout {
 board = puzzle default
 }
 }
@@ -7174,7 +7246,7 @@ P
 }
 
 scene playing {
-view {
+layout {
 board = puzzle default
 button "Restart Scene" -> playing.restart
 button "Restart Board" -> board.restart
@@ -7197,6 +7269,125 @@ button "Restart Board" -> board.restart
         &board_button.effect,
         SceneEffect::ResetPuzzle { target } if target == "board"
     ));
+}
+
+#[test]
+fn scene_effects_parse_inline_sequences_by_effect_vocabulary() {
+    let source = r#"
+title inline_effect_sequence
+
+sounds {
+music music seed=123456
+sfx click seed=746670 type=jump
+}
+
+puzzle default {
+layers 1
+empty .
+object Player 0
+legend P = Player
+
+rules {
+once [ Player ] -> [ Player ]
+}
+
+level start {
+P
+}
+}
+
+scene title {
+layout {
+button "New Game" -> goto playing play_music music
+button "Continue" -> sfx click wait 100ms goto playing
+}
+rules {
+start -> goto playing play_music music
+}
+}
+
+scene playing {
+layout {
+board = puzzle default
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    let SceneComponent::Button(new_game) = &loaded.scenes[0].components[0] else {
+        panic!("expected new game button");
+    };
+    assert!(matches!(
+        &new_game.effect,
+        SceneEffect::Sequence(effects)
+            if matches!(effects.as_slice(), [
+                SceneEffect::Goto { scene, .. },
+                SceneEffect::PlayMusic { name },
+            ] if scene == "playing" && name == "music")
+    ));
+
+    let SceneComponent::Button(continue_button) = &loaded.scenes[0].components[1] else {
+        panic!("expected continue button");
+    };
+    assert!(matches!(
+        &continue_button.effect,
+        SceneEffect::Sequence(effects)
+            if matches!(effects.as_slice(), [
+                SceneEffect::PlaySfx { name: sfx },
+                SceneEffect::Wait { milliseconds: Some(100) },
+                SceneEffect::Goto { scene, .. },
+            ] if sfx == "click" && scene == "playing")
+    ));
+
+    assert!(matches!(
+        &loaded.scenes[0].transitions[0].effect,
+        SceneEffect::Sequence(effects)
+            if matches!(effects.as_slice(), [
+                SceneEffect::Goto { scene, .. },
+                SceneEffect::PlayMusic { name },
+            ] if scene == "playing" && name == "music")
+    ));
+}
+
+#[test]
+fn scene_button_effect_blocks_reject_end_form() {
+    let source = r#"
+title old_button_effect_block
+
+scene title {
+layout {
+button "New Game" ->
+goto playing
+play_music music
+end
+}
+}
+
+scene playing {
+layout {
+board = puzzle default
+}
+}
+
+puzzle default {
+layers 1
+empty .
+object Player 0
+legend P = Player
+
+rules {
+once [ Player ] -> [ Player ]
+}
+
+level start {
+P
+}
+}
+"#;
+    let error = parse_game(source).unwrap_err().to_string();
+    assert!(
+        error.contains("effect block must use `{ ... }`"),
+        "unexpected error: {error}"
+    );
 }
 
 #[test]
@@ -7230,7 +7421,7 @@ scene title {
 	}
 
 scene playing {
-view {
+layout {
 board = puzzle default
 }
 }
@@ -7258,6 +7449,34 @@ fn scene_effect_parser_retains_semantic_tokens() {
     }));
     assert!(parsed.surface.document.nodes.iter().any(|node| {
         node.kind == SurfaceNodeKind::SceneEffect && &line[node.span.start..node.span.end] == line
+    }));
+}
+
+#[test]
+fn scene_effect_sequence_parser_retains_semantic_tokens() {
+    let line = "goto playing play_music music";
+    let parsed = parse_scene_effect_with_semantic_tokens(line, line).unwrap();
+    assert!(matches!(
+        parsed.surface.effect,
+        SceneEffect::Sequence(ref effects)
+            if matches!(effects.as_slice(), [
+                SceneEffect::Goto { scene, .. },
+                SceneEffect::PlayMusic { name },
+            ] if scene == "playing" && name == "music")
+    ));
+    assert!(parsed.semantic_tokens.iter().any(|token| {
+        &line[token.start..token.end] == "goto" && token.kind == SemanticKind::Effect
+    }));
+    assert!(parsed.semantic_tokens.iter().any(|token| {
+        &line[token.start..token.end] == "play_music" && token.kind == SemanticKind::Effect
+    }));
+    assert!(parsed.surface.document.nodes.iter().any(|node| {
+        node.kind == SurfaceNodeKind::SceneEffect
+            && &line[node.span.start..node.span.end] == "goto playing"
+    }));
+    assert!(parsed.surface.document.nodes.iter().any(|node| {
+        node.kind == SurfaceNodeKind::SceneEffect
+            && &line[node.span.start..node.span.end] == "play_music music"
     }));
 }
 
@@ -7316,18 +7535,18 @@ fn rewrite_effect_parser_retains_semantic_tokens() {
 #[test]
 fn surface_document_collects_parser_owned_effect_nodes() {
     let source = r#"
-scene title
-view
+scene title {
+layout {
 title game.title
-end
 button "Play" -> goto playing
-end
+}
+}
 
-puzzle main
-rules
+puzzle main {
+rules {
 [ Player ] -> [ Player ] sfx bump
-end
-end
+}
+}
 "#;
     let surface = parse_surface_document(source);
     let scene_name_start = source.find("scene title").unwrap() + "scene ".len();
@@ -7394,7 +7613,7 @@ P
 }
 
 scene playing {
-view {
+layout {
 board = puzzle default
 }
 rules {
@@ -7486,7 +7705,7 @@ P
 scene playing {
 var message = "Ready"
 persistent var last_tab = levels
-view {
+layout {
 board = puzzle default
 }
 }
@@ -7547,7 +7766,7 @@ level start {
 }
 
 scene playing {
-view {
+layout {
 board = puzzle default
 }
 inputs {
@@ -9580,7 +9799,7 @@ P.
 }
 
 scene playing {
-view {
+layout {
 board = puzzle default
 }
 inputs {
@@ -11144,7 +11363,7 @@ Trail
 
 layers {
 actor = Player
-marker = Trail
+@marker = Trail
 }
 
 legend {
@@ -11209,7 +11428,7 @@ Trail
 
 layers {
 actor = Player
-marker = Trail
+@marker = Trail
 }
 
 legend {
@@ -11268,8 +11487,8 @@ Glow
 
 layers {
 actor = Player
-trail = Trail
-glow = Glow
+@trail = Trail
+@glow = Glow
 }
 
 legend {
@@ -11328,7 +11547,7 @@ Trail
 
 layers {
 actor = Player
-marker = Trail
+@marker = Trail
 }
 
 legend {
@@ -11407,7 +11626,7 @@ Trail
 
 layers {
 actor = Player
-marker = Trail
+@marker = Trail
 }
 
 legend {
@@ -11477,7 +11696,7 @@ P
 }
 
 #[test]
-fn display_rule_requires_display_call_site() {
+fn main_routine_can_call_display_routine() {
     let source = r#"
 title display_call_site_guard
 
@@ -11492,7 +11711,7 @@ Trail
 
 layers {
 actor = Player
-marker = Trail
+@marker = Trail
 }
 
 legend {
@@ -11514,9 +11733,16 @@ P
 }
 }
 "#;
-    let error = parse_game(source).unwrap_err().to_string();
+    let loaded = parse_game(source).unwrap();
+    let trail = object_named(&loaded, "Trail");
+    let right = input_named(&loaded, "right");
+    let initial = &loaded.levels[0].initial_state;
 
-    assert!(error.contains("cannot call display routine `paint` as a main routine"));
+    let played = transition_state(&loaded.game, initial, right).unwrap();
+    assert!(played.has_object(&loaded.game, 0, 0, trail));
+
+    let solved = transition_solver_state(&loaded.game, initial, right).unwrap();
+    assert!(!solved.has_object(&loaded.game, 0, 0, trail));
 }
 
 #[test]
@@ -11535,7 +11761,7 @@ Trail
 
 layers {
 actor = Player
-marker = Trail
+@marker = Trail
 }
 
 legend {
@@ -11559,11 +11785,11 @@ P
 "#;
     let error = parse_game(source).unwrap_err().to_string();
 
-    assert!(error.contains("display block can read main objects"));
+    assert!(error.contains("display routines and display blocks can only contain display rules"));
 }
 
 #[test]
-fn main_block_cannot_read_display_objects() {
+fn display_match_cannot_change_main_objects() {
     let source = r#"
 title main_display_read_guard
 
@@ -11578,7 +11804,7 @@ Trail
 
 layers {
 actor = Player
-marker = Trail
+@marker = Trail
 }
 
 legend {
@@ -11587,7 +11813,7 @@ P = Player
 }
 
 rules {
-[ Trail ] -> [ Trail ]
+[ Trail ] -> [ Trail Player ]
 }
 
 levels {
@@ -11598,10 +11824,155 @@ P
 "#;
     let error = parse_game(source).unwrap_err().to_string();
 
-    assert!(
-        error.contains("main rules and conditions cannot read or write display objects")
-            || !error.is_empty()
-    );
+    assert!(error.contains("display object matches cannot cause gameplay changes"));
+}
+
+#[test]
+fn main_routine_can_contain_bare_display_rule() {
+    let source = r#"
+title bare_display_rule
+
+puzzle default {
+objects {
+Player
+}
+
+display_objects {
+Trail
+}
+
+layers {
+actor = Player
+@marker = Trail
+}
+
+legend {
+. = empty
+P = Player
+}
+
+routine paint once {
+[ Player no Trail ] -> [ Player Trail ]
+}
+
+rules {
+paint
+}
+
+levels {
+level start
+P
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    let trail = object_named(&loaded, "Trail");
+    let right = input_named(&loaded, "right");
+    let initial = &loaded.levels[0].initial_state;
+
+    let played = transition_state(&loaded.game, initial, right).unwrap();
+    assert!(played.has_object(&loaded.game, 0, 0, trail));
+
+    let solved = transition_solver_state(&loaded.game, initial, right).unwrap();
+    assert!(!solved.has_object(&loaded.game, 0, 0, trail));
+}
+
+#[test]
+fn normal_rule_can_have_display_effect() {
+    let source = r#"
+title composite_display_effect
+
+puzzle default {
+objects {
+Player
+}
+
+display_objects {
+Trail
+}
+
+layers {
+actor = Player
+@marker = Trail
+}
+
+legend {
+. = empty
+P = Player
+}
+
+input right direction right
+
+routine move once {
+input right [ Player | ] -> [ | Player Trail ]
+}
+
+rules {
+move
+}
+
+levels {
+level start
+P.
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    let player = object_named(&loaded, "Player");
+    let trail = object_named(&loaded, "Trail");
+    let right = input_named(&loaded, "right");
+    let initial = &loaded.levels[0].initial_state;
+
+    let played = transition_state(&loaded.game, initial, right).unwrap();
+    assert!(played.has_object(&loaded.game, 1, 0, player));
+    assert!(played.has_object(&loaded.game, 1, 0, trail));
+
+    let solved = transition_solver_state(&loaded.game, initial, right).unwrap();
+    assert!(solved.has_object(&loaded.game, 1, 0, player));
+    assert!(!solved.has_object(&loaded.game, 1, 0, trail));
+}
+
+#[test]
+fn display_routine_rejects_composite_normal_rule() {
+    let source = r#"
+title display_routine_composite_guard
+
+puzzle default {
+objects {
+Player
+}
+
+display_objects {
+Trail
+}
+
+layers {
+actor = Player
+@marker = Trail
+}
+
+legend {
+. = empty
+P = Player
+}
+
+routine @paint once {
+[ Player | ] -> [ | Player Trail ]
+}
+
+rules {
+@paint
+}
+
+levels {
+level start
+P.
+}
+}
+"#;
+    let error = parse_game(source).unwrap_err().to_string();
+
+    assert!(error.contains("display routines and display blocks can only contain display rules"));
 }
 
 #[test]
@@ -11611,7 +11982,7 @@ title standard_move_display_layers
 
 puzzle default {
 layers {
-display_floor = @Floor
+@display_floor = @Floor
 solid = Player Box Wall
 }
 
@@ -11668,7 +12039,7 @@ Trail
 
 layers {
 actor = Player
-marker = Trail
+@marker = Trail
 }
 
 legend {
@@ -11736,21 +12107,14 @@ level start
 }
 
 #[test]
-fn main_and_display_object_layers_share_declaration_order() {
+fn main_and_display_object_layers_keep_separate_storage_slots() {
     let source = r#"
 title mixed_layers
 
 puzzle default {
-objects {
-Floor Player
-}
-
-display_objects {
-Shadow Glow
-}
-
 layers {
-floor = Floor Shadow Glow
+floor = Floor
+@floor_visual = @Shadow @Glow
 actor = Player
 }
 
@@ -11781,24 +12145,231 @@ P
     assert_eq!(
         loaded
             .game
-            .object_layer(object_named(&loaded, "Shadow"))
+            .object_layer(object_named(&loaded, "@Shadow"))
             .unwrap(),
-        LayerId(0)
+        LayerId(1)
     );
     assert_eq!(
         loaded
             .game
-            .object_layer(object_named(&loaded, "Glow"))
+            .object_layer(object_named(&loaded, "@Glow"))
             .unwrap(),
-        LayerId(0)
+        LayerId(1)
     );
     assert_eq!(
         loaded
             .game
             .object_layer(object_named(&loaded, "Player"))
             .unwrap(),
-        LayerId(1)
+        LayerId(2)
     );
+}
+
+#[test]
+fn layer_cannot_mix_main_and_display_objects() {
+    let source = r#"
+title mixed_layer_rejected
+
+puzzle default {
+layers {
+floor = Floor @Shadow
+actor = Player
+}
+
+legend {
+. = empty
+P = Floor Player
+}
+
+rules {
+
+}
+
+levels {
+level start
+P
+}
+}
+"#;
+    let error = parse_game(source).unwrap_err().to_string();
+
+    assert!(error.contains("layer containing display objects must use an @ name"));
+}
+
+#[test]
+fn display_groups_can_use_at_names() {
+    let source = r#"
+title display_group
+
+puzzle default {
+layers {
+floor = Floor
+@marks = @Shadow @Glow
+actor = Player
+}
+
+group {
+@paint = @Shadow @Glow
+}
+
+routine @clear once {
+[ @paint ] -> [ ]
+}
+
+on_display {
+@clear
+}
+
+legend {
+. = empty
+P = Floor Player
+}
+
+rules {
+
+}
+
+levels {
+level start
+P
+}
+}
+"#;
+
+    parse_game(source).unwrap();
+}
+
+#[test]
+fn display_layer_name_can_only_contain_display_objects() {
+    let source = r#"
+title display_layer_rejected
+
+puzzle default {
+layers {
+@marks = Player @Shadow
+}
+
+legend {
+. = empty
+P = Player
+}
+
+rules {
+
+}
+
+levels {
+level start
+P
+}
+}
+"#;
+    let error = parse_game(source).unwrap_err().to_string();
+
+    assert!(error.contains("@layer can only contain display objects"));
+}
+
+#[test]
+fn main_layer_name_cannot_contain_display_objects() {
+    let source = r#"
+title main_layer_rejected
+
+puzzle default {
+layers {
+marks = @Shadow
+actor = Player
+}
+
+legend {
+. = empty
+P = Player
+}
+
+rules {
+
+}
+
+levels {
+level start
+P
+}
+}
+"#;
+    let error = parse_game(source).unwrap_err().to_string();
+
+    assert!(error.contains("layer containing display objects must use an @ name"));
+}
+
+#[test]
+fn display_group_name_can_only_contain_display_objects() {
+    let source = r#"
+title display_group_rejected
+
+puzzle default {
+layers {
+floor = Floor
+@marks = @Shadow
+actor = Player
+}
+
+group {
+@paint = Player @Shadow
+}
+
+legend {
+. = empty
+P = Floor Player
+}
+
+rules {
+
+}
+
+levels {
+level start
+P
+}
+}
+"#;
+    let error = parse_game(source).unwrap_err().to_string();
+
+    assert!(error.contains("@group can only contain display objects"));
+}
+
+#[test]
+fn main_group_name_cannot_contain_display_objects() {
+    let source = r#"
+title main_group_rejected
+
+puzzle default {
+layers {
+floor = Floor
+@marks = @Shadow
+actor = Player
+}
+
+group {
+paint = @Shadow
+}
+
+legend {
+. = empty
+P = Floor Player
+}
+
+rules {
+
+}
+
+levels {
+level start
+P
+}
+}
+"#;
+    let error = parse_game(source).unwrap_err().to_string();
+
+    assert!(error.contains("group containing display objects must use an @ name"));
 }
 
 #[test]
@@ -11977,7 +12548,7 @@ P
 }
 
 scene title {
-  view {
+  layout {
     title "Two Dee"
   }
 }
@@ -12038,7 +12609,7 @@ scene sokoban {
 }
 
 #[test]
-fn puzzle_model_view_block_lowers_to_default_scene() {
+fn puzzle_model_layout_block_lowers_to_default_scene() {
     let document = super::parse_game(
         r#"
 title Inline Scene
@@ -12049,7 +12620,7 @@ actor = Player
 }
 rules {
 }
-view {
+layout {
 text "Ready"
 puzzle
 }
@@ -12142,7 +12713,7 @@ levels3 demo of push3 {
 }
 
 scene title {
-  view size 4 3 {
+  layout size 4 3 {
     title "Three Dee"
     button "Play" -> goto push3(demo.start)
     button "Level Select" -> goto level_select
@@ -12150,7 +12721,7 @@ scene title {
 }
 
 scene level_select {
-  view {
+  layout {
     title "Select Level"
     column scroll=true {
       for level in levels {
@@ -12201,7 +12772,7 @@ scene level_select {
 }
 
 #[test]
-fn puzzle3_model_view_block_lowers_to_default_scene() {
+fn puzzle3_model_layout_block_lowers_to_default_scene() {
     let document = super::parse_game(
         r#"
 title Inline Scene 3D
@@ -12212,7 +12783,7 @@ actor = Player
 }
 rules {
 }
-view {
+layout {
 text "Ready"
 puzzle3
 }
@@ -12316,7 +12887,7 @@ scene flat_play {
 state {
 flat
 }
-view {
+layout {
 puzzle flat
 }
 }
@@ -12325,7 +12896,7 @@ scene cube_play {
 state {
 puzzle3 cube
 }
-view {
+layout {
 puzzle3 cube
 }
 }
@@ -12387,14 +12958,14 @@ rules {
 }
 
 scene title {
-  view {
+  layout {
     title "Level Menu 3D"
     button "Levels" -> goto level_select
   }
 }
 
 scene level_select {
-  view {
+  layout {
     level_menu
   }
 }
@@ -12403,7 +12974,7 @@ scene playing {
   state {
     board = puzzle3 demo
   }
-  view {
+  layout {
     puzzle3 board
   }
 }
@@ -12537,7 +13108,7 @@ scene mixed_play {
     flat_board = puzzle flat
     cube_board = puzzle3 cube
   }
-  view {
+  layout {
     puzzle flat_board
     puzzle3 cube_board
   }

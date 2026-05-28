@@ -24,27 +24,18 @@ puzzle fixban {
 	}
 
 	layers {
-		floor = @Floor
-		shade = @Shade
-		target_layer = Target:kind
+		@Floor
+		@Shade
+		target = Target:kind
 		each Safe:kind
-		light = @LightBase @Light:kind
-		actor = Box:kind Wall
+		@light = @LightBase @Light:kind
+		solid = Box:kind Wall
 		each @Boundary:directions
 		each @Corner:directions
 	}
 
-	scratch {
-		moment
-		can_move
-	}
-
 	group {
-		target = Target:*
-		pushable = Box:*
-		solid = pushable Wall
-		object = Box:* Wall
-		wall_visual = @Boundary:* @Corner:*
+		@wall_visual = @Boundary:directions @Corner:directions
 	}
 
 	win_conditions {
@@ -52,45 +43,42 @@ puzzle fixban {
 	}
 
 	lose_conditions any {
-		some [ Wall | ; Box:* no Box:P | Wall ]
+		some [ Wall | ; Box:kind no Box:P | Wall ]
 		for k in box_kind {
 			some [ Box:k no Safe:k ]
 		}
 	}
 
-	routine display @fill_floor repeat {
+	routine @fill_floor {
 		[ no @Floor ] -> [ @Floor ]
 	}
 
-	routine display @wall_edges repeat {
+	routine @wall_edges {
 		for d in directions {
 			d [ Wall no @Boundary:d | no Wall ] -> [ Wall @Boundary:d | ]
 		}
 	}
 
-	routine display @wall_corners_270 repeat {
+	routine @wall_corners_270 {
 		for d in directions {
 			d [ Wall no @Corner:d | Wall ; Wall | no Wall ] -> [ Wall @Corner:d | Wall ; Wall | ]
 		}
 	}
 
-	routine mark_safe once {
-		repeat [ Safe:* ] -> []
-
+	routine mark_safe {
+		[ Safe:kind ] -> []
 		for k in box_kind {
-			repeat [ Target:k no Safe:k ] -> [ Target:k Safe:k ]
-			repeat {
-				[ no Wall | no Wall no Safe:k | Safe:k ] -> [ | Safe:k | Safe:k ]
-			}
+			[ Target:k no Safe:k ] -> [ Target:k Safe:k ]
+			[ no Wall | no Wall no Safe:k | Safe:k ] -> [ | Safe:k | Safe:k ]
 		}
 	}
 
-	routine display @refresh_board once {
-		repeat [ wall_visual ] -> []
-		repeat [ light ] -> []
-		repeat [ @Shade ] -> []
-		repeat [ object no light ] -> [ object @LightBase ]
-		repeat down [ object | no @Shade ] -> [ object | @Shade ]
+	routine @refresh_board {
+		[ @wall_visual ] -> []
+		[ @light ] -> []
+		[ @Shade ] -> []
+		[ Box:kind no @light ] -> [ Box:kind @LightBase ]
+		down [ Box:kind | no @Shade ] -> [ Box:kind | @Shade ]
 		for k in kind {
 			repeat [ @LightBase Target:k ] -> [ @Light:k Target:k ]
 		}
@@ -103,20 +91,14 @@ puzzle fixban {
 	}
 
 	on_display {
-		display @fill_floor
-		display @refresh_board
+		@fill_floor
+		@refresh_board
 	}
 
 	rules {
-		repeat {
-			once input directions [ Box:P ] -> [ Box:P{moment} ]
-			input directions [ Box:kind{moment} | pushable{no moment} ] -> [ Box:kind{moment} | pushable{moment} ]
-		}
-		input directions [ pushable{moment} | no solid ] -> [ pushable{moment can_move} | no solid ]
-		repeat input directions [ pushable{moment no can_move} | pushable{can_move} ] -> [ pushable{moment can_move} | pushable{can_move} ]
-		input directions [ pushable{can_move} ] -> [ pushable{> can_move} ]
+		input directions [ Box:P ] -> [ > Box:P ]
+		[ > Box:kind | Box:kind ] -> [ > Box:kind | > Box:kind ]
 		move
-
 		for k in kind {
 			[ Box:k Target:k ] -> [ Wall ]
 		}
@@ -124,50 +106,12 @@ puzzle fixban {
 
 	sprites {
 		colors {
-			clear = #00000000
-			edge = #555
-			floor_a = #cfcfcf
-			floor_b = #c5c5c5
-			shade = #0002
-			light = #fff
-			wall = #444
-
 			piece_color:kind {
 				A = #4a4
 				B = #a4a
 				C = #46c
 				P = #000
 			}
-		}
-
-		palettes {
-			floor = floor_a floor_b
-			shade = shade
-			light = light
-			wall = wall
-			safe = clear
-			piece_fg:kind {
-				A = piece_color:A clear
-				B = piece_color:B clear
-				C = piece_color:C clear
-				P = piece_color:P clear
-			}
-
-			piece_bg:kind {
-				A = clear piece_color:A
-				B = clear piece_color:B
-				C = clear piece_color:C
-				P = clear piece_color:P
-			}
-
-			light_piece:kind {
-				A = piece_color:A
-				B = piece_color:B
-				C = piece_color:C
-				P = piece_color:P
-			}
-
-			edge = clear edge
 		}
 
 		shapes {
@@ -236,49 +180,49 @@ puzzle fixban {
 		}
 
 		@Floor {
-			palette floor
-			shape floor
+			#cfcfcf #c5c5c5
+			floor
 		}
 
 		@Shade {
-			palette shade
-			shape shade
+			#0002
+			shade
 		}
 
 		Box:kind {
-			palette piece_fg:kind
-			shape mark:kind
+			piece_color:kind #00000000
+			mark:kind
 		}
 
 		Target:kind {
-			palette piece_bg:kind
-			shape mark:kind
+			#00000000 piece_color:kind
+			mark:kind
 		}
 
 		Safe:kind {
-			palette safe
+			#00000000
 		}
 
 		@LightBase {
-			palette light
+			#fff
 		}
 
 		@Light:kind {
-			palette light_piece:kind
+			piece_color:kind
 		}
 
 		@Boundary:directions {
-			palette edge
-			shape edge:directions
+			#00000000 #555
+			edge:directions
 		}
 
 		@Corner:directions {
-			palette edge
-			shape corner:directions
+			#00000000 #555
+			corner:directions
 		}
 
 		Wall {
-			palette wall
+			#444
 		}
 	}
 }
@@ -372,13 +316,13 @@ levels fixban of fixban {
 scene title {
 	title
 	subtitle
-	choice "Continue" -> goto playing
+	choice "Continue" -> resume playing
 	choice "New Game" -> input new_game
-	choice "Level Select" -> goto level_select
+	choice "Level Select" -> resume level_select
 	rules {
 		new_game -> {
 			clear_game_progress
-			goto playing(fixban.level_1)
+			start playing(fixban.level_1)
 		}
 	}
 }
@@ -387,7 +331,7 @@ scene playing {
 	state {
 		board = puzzle fixban
 	}
-	view {
+	layout {
 		row {
 			title
 			subtitle level.label
@@ -400,18 +344,18 @@ scene playing {
 	}
 	rules {
 		step board
-		open_menu -> enter menu
-		level_select -> goto level_select
+		open_menu -> open menu
+		level_select -> resume level_select
 	}
 }
 
 scene menu {
-	view {
+	layout {
 		text "Menu"
 		column {
-			button "Resume" -> back
+			button "Resume" -> close
 			button "Restart" -> playing.restart
-			button "Level Select" -> goto level_select
+			button "Level Select" -> resume level_select
 		}
 	}
 	inputs {
@@ -419,21 +363,21 @@ scene menu {
 		level_select <- q
 	}
 	rules {
-		resume -> back
-		level_select -> goto level_select
+		resume -> close
+		level_select -> resume level_select
 	}
 }
 
 scene level_select {
-	view {
+	layout {
 		text "Select a level"
 		level_menu
-		button "Back" -> goto title
+		button "Back" -> resume title
 	}
 	inputs {
 		back_to_title <- q Escape
 	}
 	rules {
-		back_to_title -> goto title
+		back_to_title -> resume title
 	}
 }

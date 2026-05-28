@@ -28,7 +28,7 @@ puzzle sokoban {
 layers {
 floor = Goal Button
 actor = Player Box Wall
-overlay = @Cursor @Hint
+@overlay = @Cursor @Hint
 }
 
 group {
@@ -77,7 +77,7 @@ scene playing {
 state {
 puzzle sokoban
 }
-view {
+layout {
 sokoban
 }
 rules {
@@ -240,7 +240,7 @@ once [ box:color ] -> [ box:revert(color) ]
 ```txt
 for d in directions {
 @Edge:rotate(d) {
-ascii edge:d
+edge:d
 }
 }
 ```
@@ -248,7 +248,7 @@ ascii edge:d
 ```txt
 Boundary:rotate(directions) {
 transparent #555
-ascii edge:directions
+edge:directions
 }
 ```
 
@@ -265,11 +265,12 @@ once [ box:blue ] -> [ box:red ]
 layers {
 floor = Goal Button
 actor = Player Box Wall
-overlay = @Cursor @Hint
+@overlay = @Cursor @Hint
 }
 
 group {
 solid = actor
+@hints = @overlay
 }
 ```
 
@@ -283,7 +284,7 @@ layer 名はそのまま tag selector として使える。たとえば `floor =
 
 右辺は、未知の名前なら新しい object / schema として作られ、既存の object / schema / group / layer tag ならその selector をその layer に割り当てる。
 
-`@Name` は display object を表す。display object は main object と同じ layer namespace / layer order に入り込めるが、gameplay / solver の因果からは分離される。`display @Name` も互換・明示形として読める。
+`@Name` は display object を表す。display object は main object と同じ layer order 上に並ぶが、main object と同じ storage layer には入れない。`display @Name` も互換・明示形として読める。`@layer_name = ...` と `@group_name = ...` は display-only の alias であり、右辺に main object を含められない。`@` なしの layer / group は display object を含められない。
 
 ```txt
 color = red blue
@@ -292,11 +293,12 @@ layers {
 floor = Goal Button
 actor = Player Box Wall
 paint = Blob:color
-overlay = @Cursor:color
+@overlay = @Cursor:color
 }
 
 group {
 solid = actor
+@cursor_marks = @overlay
 }
 ```
 
@@ -723,7 +725,7 @@ move
 
 `routine` は名前付き statement list。定義しただけでは実行されない。puzzle `rules` や他の routine から名前を書いて呼び出す。旧 `rule` declaration は読まない。
 
-`routine @name` は display routine を定義する。display routine は `@name` で呼び出せる。`routine display <name>` / `display <name>` は明示形として読める。旧 `rule @name` / `rule display <name>` は読まない。
+`routine @name` は display-only assertion 付き routine を定義する。中に normal rule や normal rule with display effect が混ざるとエラーになる。`routine display <name>` は同じ意味の明示形。旧 `rule @name` / `rule display <name>` は読まない。
 
 routine block の application はデフォルトで `repeat`。
 
@@ -1227,20 +1229,21 @@ move
 ```txt
 layers {
 actor = Player Box
-overlay = @Shadow @Glow
-edge = @Edge:directions
+@overlay = @Shadow @Glow
+@edge = @Edge:directions
 }
 ```
 
 `@Name` は表示・読みやすさ・派生描画用の display object を定義または参照する。display object は solver から除外される。
 
-main object と display object は同じ layer namespace / layer order を共有する。描画順は layer の宣言順で決まる。
+main object と display object は同じ layer order に並ぶ。描画順は layer の宣言順で決まる。ただし、同じ storage layer に main object と display object を混ぜることはできない。
 
 ```txt
 layers {
-floor = Goal @Shadow @Glow
+floor = Goal
+@floor_overlay = @Shadow @Glow
 actor = Player Box Wall
-edge = @Edge:directions
+@edge = @Edge:directions
 }
 ```
 
@@ -1286,11 +1289,13 @@ display {
 }
 ```
 
-`@routine` は display routine をその場で実行する statement。`display @routine` / `display <routine>` は互換・明示形として読める。`display [ ... ] -> ...` は宣言なしの一行 display rewrite。`display { ... }` は宣言なしの複数行 display block。いずれも `rules`、`on_level_start`、`on_level_clear` などの statement block の中に置き、置いた位置で実行される。
+`@routine` は display-only assertion 付き routine をその場で実行する statement。`display @routine` / `display <routine>` は互換・明示形として読める。`display [ ... ] -> ...` は宣言なしの一行 display rewrite。`display { ... }` は宣言なしの複数行 display block。いずれも `rules`、`on_level_start`、`on_level_clear` などの statement block の中に置き、置いた位置で実行される。
 
 display statement は main object を pattern / condition で読める。ただし write できる object は `@Name` display object だけ。通常入力の transition 中に実行される display statement は、同じ transition context の `input` orientation や `if input == ...` を使える。`cancel` や var update などの effect は使えない。
 
-puzzle `rules`、`on_level_start`、`on_level_clear`、goal / condition などの gameplay 側は display object を読めない。display object に依存する派生表示は display statement 側に閉じる。bare routine call は同じ role の routine だけを呼べるため、`rules { refresh_board }` のような暗黙 display call は使えない。
+rule の role は routine 単位ではなく rewrite 単位で決まる。match に display object があり normal state を変えない rule、または match に display object がなく display object だけを書く rule は display rule。match に display object がある rule が normal state を変えようとするとエラー。match に display object がなく、normal state と display object を同時に変える rule は normal rule with display effect になる。
+
+puzzle `rules`、`on_level_start`、`on_level_clear`、goal / condition などの gameplay 側は display object を読めない。display object に依存する派生表示は display rule 側に閉じる。normal routine から display routine を bare call してもよい。
 
 solver は display statement 由来の rule を実行せず、display object を state key からも外す。
 
@@ -1351,7 +1356,7 @@ shape edge:directions rotate from up {
 
 Boundary:directions {
 transparent #555
-ascii edge:directions
+edge:directions
 }
 
 shape player_shape {
@@ -1363,7 +1368,7 @@ shape player_shape {
 
 Player {
 #e94f64 #2f80ed
-ascii player_shape
+player_shape
 }
 }
 ```
@@ -1374,7 +1379,7 @@ PS / PS Next 風の one-off sprite は、selector block の中に色行、ASCII 
 
 外部画像は `Box sprites/box.png` のように selector と画像パスを 1 行に書ける。パスは game folder からの相対パスとして HTML renderer に渡される。
 
-`ascii` の shape lookup は value expression を読める。たとえば `edge:rotate(directions)` は、selector で bind された `directions` 値を `rotate` map で置換してから shape table を引く。再利用したい pattern は `shape` と object block 内の色行 + `ascii <shape>` で分けて書く。
+shape lookup は value expression を読める。たとえば `edge:rotate(directions)` は、selector で bind された `directions` 値を `rotate` map で置換してから shape table を引く。再利用したい pattern は `shape` と object block 内の色行 + bare shape ref で分けて書く。
 
 `sprites` は HTML renderer 用の sprite alias と ASCII pattern を定義する。`shape <name>:<tag_set> rotate from <value>` は、同じ `<tag_set>` の `map rotate <tag_set>` を使って、`<value>` の pattern から時計回りに 90 度ずつ回転した pattern を生成する。
 
@@ -1504,7 +1509,7 @@ play_music loop
 
 scene / component RHS の canonical form は、`input <name>`、`component_effect <name>`、または direct scene command。`input <name>` は focus 中の scene transition または puzzle transition に渡る semantic input で、1 回の遷移中に必ず 1 つだけ存在する原因として扱う。`component_effect <name>` は `level_menu` の cursor 移動や enter のように component が所有する操作に使う。scene / presentation / lifecycle command は `effect` wrapper を付けずに直接書く。
 
-scene command は `sfx <name>`、`play_music <name>`、`pause_music [name]`、`resume_music [name]`、`stop_music [name]`、`resume <scene>`、`resume <scene> with <name> = <value>`、`open <scene>`、`close`、`start <scene>`、`clear_undo_history`、`clear_game_progress`、`<target>.restart`、`<target>.next_level` など。`resume` は既存 scene instance の state を再利用してそこへ切り替える。`open` は現在の scene を下に残して別 scene を開き、`close` は開いた scene を閉じて戻る。`start` は target scene state を初期化してから切り替える。level scene への入場は `resume sokoban`、`resume sokoban with level = level_name`、`resume playing(level)` のように scene call / param として書く。旧 `goto` / `enter` / `back` は互換として読むが、canonical examples では `resume` / `open` / `close` / `start` を使う。旧 `start levels ... in <scene>` / `continue levels ... in <scene>` は読まない。通常の clear / advance / restart は model window component と puzzle lifecycle の責務なので、scene からの target-qualified level command は button、menu、debug、hub、分岐演出などの明示的な介入に限る。`play_sfx <name>` と `effect <command>` wrapper は読まない。複数 command は `on_scene_start` / `if` block、または scene `rules` 内の block に 1 行ずつ書く。`then` による inline sequence は使わない。
+scene command は `sfx <name>`、`play_music <name>`、`pause_music [name]`、`resume_music [name]`、`stop_music [name]`、`resume <scene>`、`resume <scene> with <name> = <value>`、`open <scene>`、`close`、`start <scene>`、`clear_undo_history`、`clear_game_progress`、`<target>.restart`、`<target>.next_level` など。`resume` は既存 scene instance の state を再利用してそこへ切り替える。`open` は現在の scene を下に残して別 scene を開き、`close` は開いた scene を閉じて戻る。`start` は target scene state を初期化してから切り替える。level scene への入場は `resume sokoban`、`resume sokoban with level = level_name`、`resume playing(level)` のように scene call / param として書く。旧 `goto` / `enter` / `back` は互換として読むが、canonical examples では `resume` / `open` / `close` / `start` を使う。旧 `start levels ... in <scene>` / `continue levels ... in <scene>` は読まない。通常の clear / advance / restart は model window component と puzzle lifecycle の責務なので、scene からの target-qualified level command は button、menu、debug、hub、分岐演出などの明示的な介入に限る。`play_sfx <name>` と `effect <command>` wrapper は読まない。Effect は単体でも列でも同じ場所に書ける。列の分割は effect vocabulary が所有し、`button "New Game" -> resume playing play_music music` のように component 側は列を特別扱いしない。曖昧な引数を避けたい場合は `on_scene_start` / `if` block、または scene `rules` 内の block に 1 行ずつ書く。`then` による inline sequence は使わない。
 
 game progress は scene effect から明示的に操作できる。`clear_game_progress` は `level.cleared` を全 level で false にし、`current_level` を初期状態に戻し、`persistent var` を既定値に戻す。細かく操作する場合は `set current_level = <level>`、`clear current_level`、`set level.cleared = true|false`、`set level(<level>).cleared = true|false`、`reset persistent_vars`、`reset <persistent var>` を使う。undo/redo 履歴だけを捨てる場合は `clear_undo_history` を使う。
 
@@ -1516,7 +1521,7 @@ game progress は scene effect から明示的に操作できる。`clear_game_p
 var hint = "Push the box onto the goal"
 
 scene playing {
-view {
+layout {
 sokoban
 }
 on_scene_start {
@@ -1577,7 +1582,7 @@ scene playing {
 state {
 puzzle sokoban
 }
-view {
+layout {
 sokoban
 }
 rules {
@@ -1588,13 +1593,13 @@ step sokoban
 
 `scene` はゲーム全体の場面を定義する。renderer 固有の HTML ではなく、runtime が scene model に落とすための構造化 metadata である。`screen <name>` は読まない。`state { puzzle sokoban }` は scene slot と model 名を同じ `sokoban` にする標準形で、`step sokoban` はその slot を現在 input で 1 turn 進める。level clear / advance の通常処理は、scene の condition transition ではなく、puzzle rule effect と model window component の lifecycle に閉じる。
 
-top-level に `puzzle sokoban { ... }` を定義し、同名の `scene sokoban` がなければ、同じ名前の playable scene が自動で追加される。これは `state { puzzle sokoban }`、`view { sokoban }`、`rules { step sokoban }` を持つ scene と同等で、`resume sokoban(first)` のように直接入れる。`puzzle3 push3d { ... }` でも同じ規則で `puzzle3` window の scene が追加される。モデル block 内に `view { ... }` を書いた場合は、その `view` が同名 scene の view になり、bare `puzzle` / `puzzle3` はそのモデル自身の window を意味する。作者が `scene sokoban { ... }` を明示した場合は、その明示 scene が override であり、自動 scene は追加されない。
+top-level に `puzzle sokoban { ... }` を定義し、同名の `scene sokoban` がなければ、同じ名前の playable scene が自動で追加される。これは `state { puzzle sokoban }`、`layout { sokoban }`、`rules { step sokoban }` を持つ scene と同等で、`resume sokoban(first)` のように直接入れる。`puzzle3 push3d { ... }` でも同じ規則で `puzzle3` window の scene が追加される。モデル block 内に `layout { ... }` を書いた場合は、その `layout` が同名 scene の layout になり、bare `puzzle` / `puzzle3` はそのモデル自身の window を意味する。作者が `scene sokoban { ... }` を明示した場合は、その明示 scene が override であり、自動 scene は追加されない。
 
-`state` は scene-local な状態 slot を定義し、`view` はその表示 component tree を定義する。値は現時点では bool / integer / symbol / quoted text を読める。
+`state` は scene-local な状態 slot を定義し、`layout` はその表示 component tree を定義する。値は現時点では bool / integer / symbol / quoted text を読める。
 
 `puzzle sokoban` は scene-local な puzzle state slot を model と同じ名前で定義する。複数 instance が必要な場合は `sokoban1 = puzzle sokoban` のように明示名を付けられるが、これは advanced な形として扱う。
 
-scene は 2D / 3D model の違いを直接所有しない。scene が所有するのは root layout、component tree、入力、遷移で、model の違いは model window component に閉じる。`view { ... }` 直下に component を改行で並べる形は、暗黙の `column` として扱う。作者は通常、細かい幅・高さ・gap を書かず、どの component があり、どの選択肢が縦積み・横並び・matrix なのかを書く。root scene の論理サイズ、標準 gap、文字・button metrics は default / theme / renderer が持つ。
+scene は 2D / 3D model の違いを直接所有しない。scene が所有するのは root layout、component tree、入力、遷移で、model の違いは model window component に閉じる。`layout { ... }` 直下に component を改行で並べる形は、暗黙の `column` として扱う。作者は通常、細かい幅・高さ・gap を書かず、どの component があり、どの選択肢が縦積み・横並び・matrix なのかを書く。root scene の論理サイズ、標準 gap、文字・button metrics は default / theme / renderer が持つ。
 
 `choice` は方向キー・ゲームパッドで選ばれる主選択肢、`button` は click/tap や明示 key binding で押す補助操作である。標準 UI focus cursor に入るのは `choice` だけで、`button` は入らない。`text` / `title` / `subtitle` は cell を占有するが選択対象ではない。`row` は children を横に、`column` / `box` は縦に連結して論理 grid を作る。方向入力は同じ行または同じ列の次の `choice` にだけ移動し、欠けている cell へ斜めに補正しない。Enter/Space は focused choice を実行する。scene はデフォルトで input を component 群へ broadcast し、各 component が関係する input だけに反応する。これは UI focus であり、puzzle の cursor movement ではない。
 
@@ -1605,7 +1610,7 @@ scene playing {
 state {
 puzzle sokoban
 }
-view {
+layout {
 sokoban
 row {
 button "Restart" -> sokoban.restart
@@ -1618,14 +1623,14 @@ step sokoban
 }
 ```
 
-3D model window でも、scene / view / layout component の形は同じにする。違うのは state slot の initializer と model window component だけ。
+3D model window でも、scene / layout / component の形は同じにする。違うのは state slot の initializer と model window component だけ。
 
 ```txt
 scene playing3d {
 state {
 board = puzzle3 push3d
 }
-view {
+layout {
 puzzle3 board
 row {
 button "Restart" -> board.restart
@@ -1680,13 +1685,22 @@ Scene layout は `puzzle3` を固定 4:3 display として扱う。`puzzle3` は
 
 3D object は `sprites3` に同名 sprite が定義されている場合だけ voxel sprite を描く。sprite 未指定の object に暗黙の cube や色は割り当てない。位置や占有を読みたい場合は `grid occupied_cells` などの debug 表示を使う。
 
-Canonical な generic scene component は `title`、`subtitle`、`text`、`choice`、`button`、`row`、`column`、`box`、`for`、`level_menu`、`menu`。Model window component は `puzzle` と `puzzle3`。`view` は component ではなく scene root layout block。`panel` は component keyword ではない。
+`sprites3` の sprite entry は、object 名、色行、voxel rows の順に書く。色行だけなら 1x1x1 の filled cube sprite になる。再利用する voxel pattern は `shape <name> { ... }` で定義し、sprite entry 側では色行の次に bare shape ref だけを書く。
 
-`scene puzzle [name]` は puzzle state を主モデルに持つ playable scene を定義する。`name` を省略すると `playing` になる。中の `layers` は board/object layer、`view` は画面配置を意味する。scene-local な puzzle slot を明示しない場合は、`<name>` state slot が暗黙に `puzzle <name>` として用意される。`board` は予約 slot 名ではない。明示した slot がある場合はそれが primary puzzle slot になり、`update <slot>` で現在 input をその puzzle transition に渡せる。
+```txt
+sprites3 simple {
+Floor
+#90ee90
+}
+```
+
+Canonical な generic scene component は `title`、`subtitle`、`text`、`choice`、`button`、`row`、`column`、`box`、`for`、`level_menu`、`menu`。Model window component は `puzzle` と `puzzle3`。`layout` は component ではなく scene root layout block。`panel` は component keyword ではない。
+
+`scene puzzle [name]` は puzzle state を主モデルに持つ playable scene を定義する。`name` を省略すると `playing` になる。中の `layers` は board/object layer、`layout` は画面配置を意味する。scene-local な puzzle slot を明示しない場合は、`<name>` state slot が暗黙に `puzzle <name>` として用意される。`board` は予約 slot 名ではない。明示した slot がある場合はそれが primary puzzle slot になり、`update <slot>` で現在 input をその puzzle transition に渡せる。
 
 ```txt
 scene puzzle {
-view {
+layout {
 puzzle playing
 }
 
@@ -1736,7 +1750,7 @@ scene play_level {
 state {
 puzzle sokoban
 }
-view {
+layout {
 message = "Push the box"
 sokoban
 text message
@@ -1789,11 +1803,11 @@ button "Back" -> close
 button level.label -> playing.goto level
 ```
 
-`box` / `row` / `column` は view component を入れ子にする layout primitive。`box` は純粋な配置用の矩形で、背景・枠線・装飾をデフォルトでは持たない。renderer はこれを HTML 固有の DOM ではなく、構造化された view tree として受け取る。`panel` は layout primitive ではなく、canonical syntax では使わない。`view` 直下の改行並びは暗黙の `column` なので、縦積みだけなら `column { ... }` は省略してよい。`size <w> <h>`、`gap <n>`、`align <x> [y]` は既存ファイル向けに読めるが、canonical authoring では default / theme に任せ、選択肢の縦・横・matrix 構造を優先して書く。標準 UI focus は `choice` の論理構造から決まるため、細かい座標ではなく `row` / `column` の論理構造を書く。
+`box` / `row` / `column` は layout component を入れ子にする layout primitive。`box` は純粋な配置用の矩形で、背景・枠線・装飾をデフォルトでは持たない。renderer はこれを HTML 固有の DOM ではなく、構造化された layout tree として受け取る。`panel` は layout primitive ではなく、canonical syntax では使わない。`layout` 直下の改行並びは暗黙の `column` なので、縦積みだけなら `column { ... }` は省略してよい。`size <w> <h>`、`gap <n>`、`align <x> [y]` は既存ファイル向けに読めるが、canonical authoring では default / theme に任せ、選択肢の縦・横・matrix 構造を優先して書く。標準 UI focus は `choice` の論理構造から決まるため、細かい座標ではなく `row` / `column` の論理構造を書く。
 
-`for` は collection の各 item から view node を生成する projection primitive。固定 component を並べる場合も、collection を表示する場合も、最終的には `row` / `column` の children として扱われる。`for` 自体は cursor、enter、scroll を所有しない。
+`for` は collection の各 item から layout node を生成する projection primitive。固定 component を並べる場合も、collection を表示する場合も、最終的には `row` / `column` の children として扱われる。`for` 自体は cursor、enter、scroll を所有しない。
 
-level list の基本形は `scene level_menu level_select { ... }`。見出しや追加説明などが必要な場合だけ、通常の `scene` の `view` に `level_menu { ... }` を置く。どちらの場合も component が cursor 移動、enter、locked 表示、多すぎる項目の scroll を所有する。
+level list の基本形は `scene level_menu level_select { ... }`。見出しや追加説明などが必要な場合だけ、通常の `scene` の `layout` に `level_menu { ... }` を置く。どちらの場合も component が cursor 移動、enter、locked 表示、多すぎる項目の scroll を所有する。
 
 ```txt
 scene level_menu level_select {
@@ -1807,7 +1821,7 @@ button "Back" -> back
 
 ```txt
 scene level_select {
-view {
+layout {
 text "Select a level"
 level_menu {
 show_index = true
@@ -1822,7 +1836,7 @@ button "Back" -> back
 
 この構文では旧 `show index`、`columns <n>`、裸の `wrap`、`action <name>` は読まない。`level_menu` を選んだ時点で enter は選択 level 開始を意味する。
 
-level の開始、読み込み、restart は level scene / puzzle slot に対する command として書ける。ただし通常の clear / advance / restart は level scene 内の model window component と puzzle lifecycle が所有する。scene からの target command は、title/menu から入る、button で明示 restart する、hub から特定 level に飛ぶ、通常 clear とは別の例外 flow に入る、などの介入だけに使う。canonical な開始は既存 state を使うなら `resume sokoban` または `resume sokoban(level_name)`、scene state を作り直すなら `start sokoban` または `start sokoban(level_name)`。level 指定なしの `resume <level scene>` は保存済みまたは選択中の `current_level` を使い、なければ最初の level に入る。独自 scene なら `scene playing(level) { state { sokoban(level) } view { sokoban } rules { step sokoban } }` として `resume playing(level)` で入る。旧 `start levels ... in <scene>` / `continue levels ... in <scene>` は読まない。`playing.restart` は playing scene の現在 level を初期状態に戻し、`playing.next_level` は playing scene を次 level で開始し、`playing.previous_level` は前 level で開始する。`playing.goto <level>` は指定 level で playing scene に移る。`board.restart` のように puzzle slot を target にした場合は、その puzzle state を初期状態に戻す。`board.next_level` はその puzzle を所有する level scene を進める。
+level の開始、読み込み、restart は level scene / puzzle slot に対する command として書ける。ただし通常の clear / advance / restart は level scene 内の model window component と puzzle lifecycle が所有する。scene からの target command は、title/menu から入る、button で明示 restart する、hub から特定 level に飛ぶ、通常 clear とは別の例外 flow に入る、などの介入だけに使う。canonical な開始は既存 state を使うなら `resume sokoban` または `resume sokoban(level_name)`、scene state を作り直すなら `start sokoban` または `start sokoban(level_name)`。level 指定なしの `resume <level scene>` は保存済みまたは選択中の `current_level` を使い、なければ最初の level に入る。独自 scene なら `scene playing(level) { state { sokoban(level) } layout { sokoban } rules { step sokoban } }` として `resume playing(level)` で入る。旧 `start levels ... in <scene>` / `continue levels ... in <scene>` は読まない。`playing.restart` は playing scene の現在 level を初期状態に戻し、`playing.next_level` は playing scene を次 level で開始し、`playing.previous_level` は前 level で開始する。`playing.goto <level>` は指定 level で playing scene に移る。`board.restart` のように puzzle slot を target にした場合は、その puzzle state を初期状態に戻す。`board.next_level` はその puzzle を所有する level scene を進める。
 
 ### `inputs`
 
@@ -1867,14 +1881,14 @@ model `rules` の `<input> -> <effect>` と scene `rules` の `<input> -> <comma
 
 scene が level lifecycle に介入したい場合は、button や scene transition から `playing.restart` / `board.restart` のように target を明示する。これは通常進行の書き方ではなく、ユーザー操作や特殊 flow のための escape hatch である。
 
-クリア表示を標準の level advance から分離したい場合だけ、盤面 scene に別 scene を重ねる。`view` の中に盤面とパネルを並べて overlay を作るのではなく、盤面を持つ `playing` を残したまま明示的に `open level_clear` する。
+クリア表示を標準の level advance から分離したい場合だけ、盤面 scene に別 scene を重ねる。`layout` の中に盤面とパネルを並べて overlay を作るのではなく、盤面を持つ `playing` を残したまま明示的に `open level_clear` する。
 
 ```txt
 scene playing {
 state {
 puzzle sokoban
 }
-view {
+layout {
 sokoban
 }
 rules {
@@ -1884,7 +1898,7 @@ if sokoban.needs_manual_clear -> open level_clear
 }
 
 scene level_clear {
-view {
+layout {
 box {
 text "Level clear"
 button "Next Level" -> playing.next_level

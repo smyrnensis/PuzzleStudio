@@ -530,8 +530,7 @@ fn sprite_name(line: &SourceContextLine) -> Option<String> {
             Some(clean_table_name(table_ref))
         }
         [first, ..]
-            if first != "end"
-                && first != "}"
+            if first != "}"
                 && first != "{"
                 && !first.contains('=')
                 && (line.content.trim_end().ends_with('{') || is_unbraced_sprite_header(line)) =>

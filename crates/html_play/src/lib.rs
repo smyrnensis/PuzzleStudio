@@ -66,9 +66,33 @@ const STANDALONE_JS: &str = include_str!("../static/standalone.js");
 const PUZZLE_WASM_JS: &str = include_str!("../../html_editor/static/wasm/puzzle_wasm.js");
 #[cfg(not(target_arch = "wasm32"))]
 const PUZZLE_WASM_BG: &[u8] = include_bytes!("../../html_editor/static/wasm/puzzle_wasm_bg.wasm");
+#[cfg(not(target_arch = "wasm32"))]
+const PUZZLE_CORE_WASM_JS: &str = include_str!("../../wasm_core/static/puzzle_core_wasm.js");
+#[cfg(not(target_arch = "wasm32"))]
+const PUZZLE_CORE_WASM_BG: &[u8] =
+    include_bytes!("../../wasm_core/static/puzzle_core_wasm_bg.wasm");
 const PUZZLE3_STYLE_CSS: &str = include_str!("../static/puzzle3.css");
 const PUZZLE3_VISUAL_CORE_JS: &str = include_str!("../static/puzzle3_visual_core.js");
 const PUZZLE3_APP_JS: &str = include_str!("../static/puzzle3_app.js");
+const PUZZLE3_SCENE_HOST_SOURCE: &str = r#"
+title "__puzzle3_scene_host__"
+
+puzzle scene_host {
+layers 1
+empty .
+object Marker 0
+rules {
+
+}
+}
+
+levels scene_host_levels of scene_host {
+legend M = Marker
+level scene_host {
+M
+}
+}
+"#;
 const SEEDED_SFX_JS: &str = include_str!("../../../tools/music_generator/seeded_sfx.mjs");
 const SEEDED_MUSIC_JS: &str = include_str!("../../../tools/music_generator/seeded_music.mjs");
 
@@ -101,7 +125,7 @@ fn run(args: impl IntoIterator<Item = String>) -> Result<(), AppError> {
         let output_path = config.output_path();
         let html = if document.models.len() == 1 {
             let puzzle_path = config.puzzle_path.display().to_string();
-            export_puzzle3_document_html(&document, &source, &puzzle_path, &game_css)
+            export_puzzle3_document_html(&document, &source, &puzzle_path, &game_css, VISUALS_JS)
                 .map_err(AppError::Config)?
         } else {
             let loaded = mixed_document_loaded_game(&document).map_err(AppError::Config)?;
@@ -1681,7 +1705,7 @@ fn export_html(state: &ServerState) -> String {
     let game_visuals_js = escape_script(&state.game_visuals_js);
     let renderer_js = escape_script(RENDERER_JS);
     let standalone_js = escape_script(STANDALONE_JS);
-    let embedded_wasm_js = embedded_standalone_wasm_script();
+    let embedded_wasm_js = embedded_standalone_core_wasm_script();
     let sound_tools_js = escape_script(&sound_tools_js());
     let app_js = escape_script(APP_JS);
 
@@ -1727,10 +1751,30 @@ fn export_html(state: &ServerState) -> String {
 fn embedded_standalone_wasm_script() -> String {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let module_source = escape_script_json(PUZZLE_WASM_JS);
-        let wasm_base64 = base64_encode(PUZZLE_WASM_BG);
-        format!(
-            r#"window.PuzzleStandaloneEmbeddedWasm = {{ moduleSource: "{module_source}", wasmBase64: "{wasm_base64}" }};
+        embedded_wasm_loader_script(PUZZLE_WASM_JS, PUZZLE_WASM_BG)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        String::new()
+    }
+}
+
+fn embedded_standalone_core_wasm_script() -> String {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        embedded_wasm_loader_script(PUZZLE_CORE_WASM_JS, PUZZLE_CORE_WASM_BG)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        String::new()
+    }
+}
+
+fn embedded_wasm_loader_script(module_source: &str, wasm: &[u8]) -> String {
+    let module_source = escape_script_json(module_source);
+    let wasm_base64 = base64_encode(wasm);
+    format!(
+        r#"window.PuzzleStandaloneEmbeddedWasm = {{ moduleSource: "{module_source}", wasmBase64: "{wasm_base64}" }};
 window.PuzzleRuntimeWasmLoader = window.PuzzleRuntimeWasmLoader || (() => {{
   let modulePromise = null;
   function base64ToUint8Array(value) {{
@@ -1757,12 +1801,7 @@ window.PuzzleRuntimeWasmLoader = window.PuzzleRuntimeWasmLoader || (() => {{
     }},
   }};
 }})();"#
-        )
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-        String::new()
-    }
+    )
 }
 
 fn preview_body_theme_attributes(theme: &ThemeDef) -> String {
@@ -1823,72 +1862,82 @@ fn escape_html_attr(value: &str) -> String {
         .replace('>', "&gt;")
 }
 
-fn export_puzzle3_html(
-    fixture_json: &str,
-    source: &str,
-    puzzle_path: &str,
-    game_css: &str,
-) -> String {
-    let fixture_json = escape_script_json(fixture_json);
-    let source_json = escape_script_json(source);
-    let puzzle_path_json = escape_script_json(puzzle_path);
-    let puzzle3_style_css = escape_style(PUZZLE3_STYLE_CSS);
-    let game_css = escape_style(game_css);
-    let embedded_wasm_js = embedded_standalone_wasm_script();
-    let puzzle3_visual_core_js = escape_script(PUZZLE3_VISUAL_CORE_JS);
-    let puzzle3_app_js = escape_script(PUZZLE3_APP_JS);
-
-    format!(
-        r#"<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>PuzzleStudio HTML Export</title>
-    <style>
-{puzzle3_style_css}
-    </style>
-    <style>
-{game_css}
-    </style>
-  </head>
-  <body class="theme-clean">
-    <main id="screenView" class="scene">
-      <div class="puzzle3-component">
-        <canvas id="view" width="960" height="640" aria-label="Puzzle3 component"></canvas>
-      </div>
-    </main>
-    <script>
-window.Puzzle3DFixture = JSON.parse("{fixture_json}");
-window.Puzzle3DSource = "{source_json}";
-window.Puzzle3DPath = "{puzzle_path_json}";
-{embedded_wasm_js}
-    </script>
-    <script>
-{puzzle3_visual_core_js}
-    </script>
-    <script>
-{puzzle3_app_js}
-    </script>
-  </body>
-</html>"#
-    )
-}
-
 fn export_puzzle3_document_html(
     document: &puzzle_lang::LoadedDocument,
     source: &str,
     puzzle_path: &str,
     game_css: &str,
+    game_visuals_js: &str,
 ) -> Result<String, String> {
     let fixture_json = puzzle_lang::export_loaded_document_visual_fixture_json(document)
         .map_err(|error| error.to_string())?;
-    Ok(export_puzzle3_html(
+    let loaded = puzzle3_document_scene_host_loaded_game(document)?;
+    let state = ServerState::new(
+        loaded,
+        source.to_string(),
+        puzzle_path.to_string(),
+        game_css.to_string(),
+        game_visuals_js.to_string(),
+        SolverConfig::default(),
+    );
+    Ok(inject_puzzle3_frame_assets(
+        export_html(&state),
         &fixture_json,
         source,
         puzzle_path,
-        game_css,
     ))
+}
+
+fn puzzle3_document_scene_host_loaded_game(
+    document: &puzzle_lang::LoadedDocument,
+) -> Result<LoadedGame, String> {
+    let mut loaded = parse_game(PUZZLE3_SCENE_HOST_SOURCE).map_err(|error| error.to_string())?;
+    let prototype_level = loaded
+        .levels
+        .first()
+        .cloned()
+        .ok_or_else(|| "puzzle3 scene host must contain a prototype level".to_string())?;
+    let Some(LoadedDocumentModel::Puzzle3d { name, puzzle }) = document
+        .models
+        .iter()
+        .find(|model| matches!(model, LoadedDocumentModel::Puzzle3d { .. }))
+    else {
+        return Err("puzzle3 scene host requires a 3D puzzle model".to_string());
+    };
+    let Some(bundle) = puzzle.level_bundle.as_ref() else {
+        return Err("puzzle3 scene host requires 3D levels".to_string());
+    };
+
+    loaded.title = document.title.clone();
+    loaded.subtitle = document.subtitle.clone();
+    loaded.author = document.author.clone();
+    loaded.homepage = document.homepage.clone();
+    loaded.default_wait_ms = document.default_wait_ms;
+    loaded.default_again_ms = document.default_again_ms;
+    loaded.animation = document.animation.clone();
+    loaded.sounds = document.sounds.clone();
+    loaded.theme = document.theme.clone();
+    loaded.assets = document.assets.clone();
+    loaded.scenes = document
+        .scenes
+        .iter()
+        .cloned()
+        .map(scene_without_model_puzzle_state)
+        .collect();
+    loaded.levels = bundle
+        .levels
+        .iter()
+        .map(|entry| Level {
+            name: entry.name.clone(),
+            pack: None,
+            puzzle: name.clone(),
+            initial_state: prototype_level.initial_state.clone(),
+            regions: Vec::new(),
+            level_start_program: None,
+            level_clear_program: None,
+        })
+        .collect();
+    Ok(loaded)
 }
 
 fn export_mixed_document_html(
@@ -1965,6 +2014,12 @@ fn scene_with_only_2d_puzzle_state(mut scene: SceneDef) -> SceneDef {
             scene.puzzle_rule = None;
         }
     }
+    scene
+}
+
+fn scene_without_model_puzzle_state(mut scene: SceneDef) -> SceneDef {
+    scene.state.puzzles.clear();
+    scene.puzzle_rule = None;
     scene
 }
 
@@ -2120,7 +2175,7 @@ pub fn export_html_from_source(
             Ok(export_html(&state))
         }
         Some(LoadedDocumentModel::Puzzle3d { .. }) => {
-            export_puzzle3_document_html(&document, source, puzzle_path, game_css)
+            export_puzzle3_document_html(&document, source, puzzle_path, game_css, game_visuals_js)
         }
         None => Err("HTML export requires a single puzzle model".to_string()),
     }
@@ -2173,6 +2228,7 @@ pub fn export_html_file(path: impl AsRef<Path>) -> Result<String, String> {
             &source,
             &puzzle_path.display().to_string(),
             &game_css,
+            VISUALS_JS,
         ),
         None => Err("HTML export requires a single puzzle model".to_string()),
     }
@@ -3306,6 +3362,8 @@ fn push_export_data(out: &mut String, state: &ServerState) {
     out.push(',');
     push_export_engine(out, &state.loaded);
     out.push(',');
+    push_compiled_play_bundle(out, &state.loaded);
+    out.push(',');
     push_puzzle_screen(out, &state.loaded);
     out.push(',');
     push_export_levels(out, &state.loaded);
@@ -3727,17 +3785,10 @@ fn push_export_engine(out: &mut String, loaded: &LoadedGame) {
     out.push(',');
     push_rule_effects(out, loaded);
     out.push(',');
-    out.push_str("\"program\":[");
-    for (index, step) in loaded.game.program().iter().enumerate() {
-        if index > 0 {
-            out.push(',');
-        }
-        push_rule_step(out, step);
-    }
-    out.push(']');
+    out.push_str("\"program\":[]");
     out.push(',');
     out.push_str("\"levelStartProgram\":");
-    push_optional_rule_program(out, loaded.level_start_program.as_deref());
+    push_empty_rule_program(out);
     out.push(',');
     out.push_str("\"runRulesOnLevelStart\":");
     out.push_str(if loaded.run_rules_on_level_start {
@@ -3747,17 +3798,44 @@ fn push_export_engine(out: &mut String, loaded: &LoadedGame) {
     });
     out.push(',');
     out.push_str("\"displayLevelStartProgram\":");
-    push_optional_rule_program(out, loaded.display_level_start_program.as_deref());
+    push_empty_rule_program(out);
     out.push(',');
     out.push_str("\"levelClearProgram\":");
-    push_optional_rule_program(out, loaded.level_clear_program.as_deref());
+    push_empty_rule_program(out);
     out.push(',');
     out.push_str("\"displayLevelClearProgram\":");
-    push_optional_rule_program(out, loaded.display_level_clear_program.as_deref());
+    push_empty_rule_program(out);
     out.push(',');
     out.push_str("\"displayProgram\":");
-    push_optional_rule_program(out, loaded.display_program.as_deref());
+    push_empty_rule_program(out);
     out.push('}');
+}
+
+fn push_compiled_play_bundle(out: &mut String, loaded: &LoadedGame) {
+    out.push_str("\"compiledPlay\":{");
+    push_json_number(out, "version", 1);
+    out.push(',');
+    push_json_pair(out, "model", "grid2");
+    out.push_str(",\"transition\":[");
+    out.push_str(&loaded.game.layer_count.to_string());
+    out.push(',');
+    push_compact_objects(out, loaded);
+    out.push(',');
+    push_compact_queries(out, &loaded.game);
+    out.push(',');
+    out.push('[');
+    for (index, object) in loaded.game.visual_objects().iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        out.push_str(&object.0.to_string());
+    }
+    out.push(']');
+    out.push(',');
+    push_compact_transition_programs(out, loaded);
+    out.push(',');
+    push_compact_level_programs(out, loaded);
+    out.push_str("]}");
 }
 
 fn push_rule_effects(out: &mut String, loaded: &LoadedGame) {
@@ -3885,6 +3963,72 @@ fn push_rule_emission(out: &mut String, emission: &RuleEmission) {
     out.push('}');
 }
 
+fn push_compact_objects(out: &mut String, loaded: &LoadedGame) {
+    out.push('[');
+    for id in 1..=loaded.game.object_count() {
+        if id > 1 {
+            out.push(',');
+        }
+        let object_id = ObjectId(id as u16);
+        let def = loaded
+            .game
+            .object(object_id)
+            .expect("compiled object id should exist");
+        out.push('[');
+        out.push_str(&def.id.0.to_string());
+        out.push(',');
+        out.push_str(&def.layer_id.0.to_string());
+        out.push(']');
+    }
+    out.push(']');
+}
+
+fn push_compact_queries(out: &mut String, game: &CompiledGame) {
+    out.push('[');
+    for (index, query) in game.queries().iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        out.push('[');
+        out.push_str(&query.id.0.to_string());
+        out.push(',');
+        push_compact_query_kind(out, &query.kind);
+        out.push(']');
+    }
+    out.push(']');
+}
+
+fn push_compact_transition_programs(out: &mut String, loaded: &LoadedGame) {
+    out.push('[');
+    push_compact_rule_program(out, loaded.game.program());
+    out.push(',');
+    push_compact_optional_rule_program(out, loaded.level_start_program.as_deref());
+    out.push(',');
+    push_compact_optional_rule_program(out, loaded.level_clear_program.as_deref());
+    out.push(',');
+    push_compact_optional_rule_program(out, loaded.display_level_start_program.as_deref());
+    out.push(',');
+    push_compact_optional_rule_program(out, loaded.display_level_clear_program.as_deref());
+    out.push(',');
+    push_compact_optional_rule_program(out, loaded.display_program.as_deref());
+    out.push(']');
+}
+
+fn push_compact_level_programs(out: &mut String, loaded: &LoadedGame) {
+    out.push('[');
+    for (index, level) in loaded.levels.iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        out.push('[');
+        push_compact_optional_rule_program(out, level.level_start_program.as_deref());
+        out.push(',');
+        push_compact_optional_rule_program(out, level.level_clear_program.as_deref());
+        out.push(']');
+    }
+    out.push(']');
+}
+
 fn push_export_globals(out: &mut String, loaded: &LoadedGame) {
     out.push_str("\"globals\":[");
     let mut entries = loaded.global_labels.iter().collect::<Vec<_>>();
@@ -3902,17 +4046,8 @@ fn push_export_globals(out: &mut String, loaded: &LoadedGame) {
     out.push(']');
 }
 
-fn push_optional_rule_program(out: &mut String, program: Option<&[RuleStep]>) {
-    out.push('[');
-    if let Some(program) = program {
-        for (index, step) in program.iter().enumerate() {
-            if index > 0 {
-                out.push(',');
-            }
-            push_rule_step(out, step);
-        }
-    }
-    out.push(']');
+fn push_empty_rule_program(out: &mut String) {
+    out.push_str("[]");
 }
 
 fn push_export_objects(out: &mut String, loaded: &LoadedGame) {
@@ -3977,10 +4112,10 @@ fn push_export_levels(out: &mut String, loaded: &LoadedGame) {
         push_scene_regions(out, Some(level));
         out.push(',');
         out.push_str("\"levelStartProgram\":");
-        push_optional_rule_program(out, level.level_start_program.as_deref());
+        push_empty_rule_program(out);
         out.push(',');
         out.push_str("\"levelClearProgram\":");
-        push_optional_rule_program(out, level.level_clear_program.as_deref());
+        push_empty_rule_program(out);
         out.push(',');
         out.push_str("\"initialState\":");
         push_state_data(out, &level.initial_state);
@@ -4188,125 +4323,139 @@ fn state3_cell_slots_equal(before: &State3, after: &State3, cell: usize) -> bool
     before.slots()[start..start + layer_count] == after.slots()[start..start + layer_count]
 }
 
-fn push_rule_step(out: &mut String, step: &RuleStep) {
-    out.push('{');
+fn push_compact_optional_rule_program(out: &mut String, program: Option<&[RuleStep]>) {
+    match program {
+        Some(program) => push_compact_rule_program(out, program),
+        None => out.push_str("[]"),
+    }
+}
+
+fn push_compact_rule_program(out: &mut String, program: &[RuleStep]) {
+    out.push('[');
+    for (index, step) in program.iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        push_compact_rule_step(out, step);
+    }
+    out.push(']');
+}
+
+fn push_compact_rule_step(out: &mut String, step: &RuleStep) {
+    out.push('[');
     match step {
         RuleStep::Rule(rule) => {
-            push_json_pair(out, "kind", "rule");
+            out.push('0');
             out.push(',');
-            out.push_str("\"rule\":");
-            push_rule(out, rule);
+            push_compact_rule(out, rule);
         }
         RuleStep::ConditionalBlock { condition, steps } => {
-            push_json_pair(out, "kind", "conditional");
+            out.push('1');
             out.push(',');
-            push_rule_condition(out, condition);
+            push_compact_rule_condition(out, condition);
             out.push(',');
-            out.push_str("\"steps\":[");
-            for (index, step) in steps.iter().enumerate() {
-                if index > 0 {
-                    out.push(',');
-                }
-                push_rule_step(out, step);
-            }
-            out.push(']');
+            push_compact_rule_program(out, steps);
         }
         RuleStep::Block {
             application,
             stop_condition,
             steps,
         } => {
-            push_json_pair(out, "kind", "block");
+            out.push('2');
             out.push(',');
-            push_rule_application(out, "application", *application);
+            push_compact_rule_application(out, *application);
             out.push(',');
             if let Some(condition) = stop_condition {
-                push_rule_condition(out, condition);
+                push_compact_rule_condition(out, condition);
             } else {
-                out.push_str("\"condition\":null");
+                out.push_str("null");
             }
             out.push(',');
-            out.push_str("\"steps\":[");
-            for (index, step) in steps.iter().enumerate() {
-                if index > 0 {
-                    out.push(',');
-                }
-                push_rule_step(out, step);
-            }
-            out.push(']');
+            push_compact_rule_program(out, steps);
         }
         RuleStep::LocalFrame { frame, steps } => {
-            push_json_pair(out, "kind", "local_frame");
+            out.push('3');
             out.push(',');
-            out.push_str("\"frame\":{");
-            push_json_local_frame_extent(out, "x", frame.x);
+            push_compact_local_frame(out, frame);
             out.push(',');
-            push_json_local_frame_extent(out, "y", frame.y);
-            out.push(',');
-            push_json_local_frame_extent(out, "z", frame.z);
-            out.push(',');
-            out.push_str("\"focusObjects\":[");
-            for (index, object) in frame.focus_objects.iter().enumerate() {
-                if index > 0 {
-                    out.push(',');
-                }
-                out.push_str(&object.0.to_string());
-            }
-            out.push_str("]},");
-            out.push_str("\"steps\":[");
-            for (index, step) in steps.iter().enumerate() {
-                if index > 0 {
-                    out.push(',');
-                }
-                push_rule_step(out, step);
-            }
-            out.push(']');
+            push_compact_rule_program(out, steps);
         }
     }
-    out.push('}');
+    out.push(']');
 }
 
-fn push_json_local_frame_extent(
-    out: &mut String,
-    key: &str,
-    extent: puzzle_core::LocalFrameExtent,
-) {
-    out.push('"');
-    out.push_str(key);
-    out.push_str("\":");
-    match extent {
-        puzzle_core::LocalFrameExtent::Radius(radius) => out.push_str(&radius.to_string()),
-        puzzle_core::LocalFrameExtent::Full => out.push_str("\"full\""),
+fn push_compact_rule(out: &mut String, rule: &Rule) {
+    out.push('[');
+    out.push_str(&rule.id.0.to_string());
+    out.push(',');
+    push_compact_rule_application(out, rule.application);
+    out.push(',');
+    out.push('[');
+    for (index, guard) in rule.guards.iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        push_compact_guard(out, guard);
     }
+    out.push(']');
+    out.push(',');
+    push_compact_pattern(out, &rule.pattern);
+    out.push(',');
+    out.push('[');
+    for (index, write) in rule.writes.iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        push_compact_write(out, write);
+    }
+    out.push(']');
+    out.push(',');
+    out.push('[');
+    for (index, effect) in rule.effects.iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        push_compact_effect(out, effect);
+    }
+    out.push_str("]]");
 }
 
-fn push_rule_condition(out: &mut String, condition: &RuleCondition) {
-    out.push_str("\"condition\":{");
+fn push_compact_rule_application(out: &mut String, application: RuleApplication) {
+    out.push_str(match application {
+        RuleApplication::Once => "0",
+        RuleApplication::OnceAll => "1",
+        RuleApplication::OncePerLevel => "2",
+        RuleApplication::UntilStable => "3",
+    });
+}
+
+fn push_compact_rule_condition(out: &mut String, condition: &RuleCondition) {
+    out.push('[');
     match condition {
         RuleCondition::AnyMatches(patterns) => {
-            push_json_pair(out, "kind", "any_matches");
+            out.push('0');
             out.push(',');
-            push_patterns(out, patterns);
+            push_compact_patterns(out, patterns);
         }
         RuleCondition::NoMatches(patterns) => {
-            push_json_pair(out, "kind", "no_matches");
+            out.push('1');
             out.push(',');
-            push_patterns(out, patterns);
+            push_compact_patterns(out, patterns);
         }
         RuleCondition::AnyInputMatches(patterns) => {
-            push_json_pair(out, "kind", "any_input_matches");
+            out.push('2');
             out.push(',');
-            push_input_patterns(out, patterns);
+            push_compact_input_patterns(out, patterns);
         }
         RuleCondition::NoInputMatches(patterns) => {
-            push_json_pair(out, "kind", "no_input_matches");
+            out.push('3');
             out.push(',');
-            push_input_patterns(out, patterns);
+            push_compact_input_patterns(out, patterns);
         }
         RuleCondition::GuardBranches(branches) => {
-            push_json_pair(out, "kind", "guard_branches");
+            out.push('4');
             out.push(',');
-            out.push_str("\"branches\":[");
+            out.push('[');
             for (branch_index, branch) in branches.iter().enumerate() {
                 if branch_index > 0 {
                     out.push(',');
@@ -4316,140 +4465,458 @@ fn push_rule_condition(out: &mut String, condition: &RuleCondition) {
                     if guard_index > 0 {
                         out.push(',');
                     }
-                    push_guard(out, guard);
+                    push_compact_guard(out, guard);
                 }
                 out.push(']');
             }
             out.push(']');
         }
     }
-    out.push('}');
+    out.push(']');
 }
 
-fn push_rule(out: &mut String, rule: &Rule) {
-    out.push('{');
-    push_json_number(out, "id", rule.id.0 as u64);
-    out.push(',');
-    push_rule_application(out, "application", rule.application);
-    out.push(',');
-    out.push_str("\"guards\":[");
-    for (index, guard) in rule.guards.iter().enumerate() {
-        if index > 0 {
-            out.push(',');
-        }
-        push_guard(out, guard);
-    }
-    out.push(']');
-    out.push(',');
-    push_pattern(out, &rule.pattern);
-    out.push(',');
-    out.push_str("\"writes\":[");
-    for (index, write) in rule.writes.iter().enumerate() {
-        if index > 0 {
-            out.push(',');
-        }
-        push_write(out, write);
-    }
-    out.push(']');
-    out.push(',');
-    out.push_str("\"effects\":[");
-    for (index, effect) in rule.effects.iter().enumerate() {
-        if index > 0 {
-            out.push(',');
-        }
-        push_rule_effect(out, effect);
-    }
-    out.push(']');
-    out.push('}');
-}
-
-fn push_rule_application(out: &mut String, key: &str, application: RuleApplication) {
-    push_json_pair(
-        out,
-        key,
-        match application {
-            RuleApplication::Once => "once",
-            RuleApplication::OnceAll => "once_all",
-            RuleApplication::OncePerLevel => "once_per_level",
-            RuleApplication::UntilStable => "until_stable",
-        },
-    );
-}
-
-fn push_guard(out: &mut String, guard: &Guard) {
-    out.push('{');
+fn push_compact_guard(out: &mut String, guard: &Guard) {
+    out.push('[');
     match guard {
         Guard::InputIs(input) => {
-            push_json_pair(out, "kind", "input_is");
+            out.push('0');
             out.push(',');
-            push_json_number(out, "input", input.0 as u64);
+            out.push_str(&input.0.to_string());
         }
         Guard::GlobalEquals { global, value } => {
-            push_json_pair(out, "kind", "global_compare");
+            out.push('1');
             out.push(',');
-            push_json_number(out, "global", global.0 as u64);
+            out.push_str(&global.0.to_string());
             out.push(',');
-            push_comparison_op(out, "op", ComparisonOp::Eq);
+            push_compact_comparison(out, ComparisonOp::Eq);
             out.push(',');
-            push_json_i64(out, "value", *value);
+            out.push_str(&value.to_string());
         }
         Guard::GlobalCompare { global, op, value } => {
-            push_json_pair(out, "kind", "global_compare");
+            out.push('1');
             out.push(',');
-            push_json_number(out, "global", global.0 as u64);
+            out.push_str(&global.0.to_string());
             out.push(',');
-            push_comparison_op(out, "op", *op);
+            push_compact_comparison(out, *op);
             out.push(',');
-            push_json_i64(out, "value", *value);
+            out.push_str(&value.to_string());
         }
         Guard::QueryEquals { query, value } => {
-            push_json_pair(out, "kind", "query_compare");
+            out.push('2');
             out.push(',');
-            push_json_number(out, "query", query.0 as u64);
+            out.push_str(&query.0.to_string());
             out.push(',');
-            push_comparison_op(out, "op", ComparisonOp::Eq);
+            push_compact_comparison(out, ComparisonOp::Eq);
             out.push(',');
-            push_json_i64(out, "value", *value);
+            out.push_str(&value.to_string());
         }
         Guard::QueryNonZero(query) => {
-            push_json_pair(out, "kind", "query_nonzero");
+            out.push('3');
             out.push(',');
-            push_json_number(out, "query", query.0 as u64);
+            out.push_str(&query.0.to_string());
         }
         Guard::QueryCompare { query, op, value } => {
-            push_json_pair(out, "kind", "query_compare");
+            out.push('2');
             out.push(',');
-            push_json_number(out, "query", query.0 as u64);
+            out.push_str(&query.0.to_string());
             out.push(',');
-            push_comparison_op(out, "op", *op);
+            push_compact_comparison(out, *op);
             out.push(',');
-            push_json_i64(out, "value", *value);
+            out.push_str(&value.to_string());
         }
         Guard::QueryValue { kind, value } => {
-            push_json_pair(out, "kind", "query_value_compare");
+            out.push('4');
             out.push(',');
-            push_query_kind(out, kind);
+            push_compact_query_kind(out, kind);
             out.push(',');
-            push_comparison_op(out, "op", ComparisonOp::Eq);
+            push_compact_comparison(out, ComparisonOp::Eq);
             out.push(',');
-            push_json_i64(out, "value", *value);
+            out.push_str(&value.to_string());
         }
         Guard::QueryValueNonZero(kind) => {
-            push_json_pair(out, "kind", "query_value_nonzero");
+            out.push('5');
             out.push(',');
-            push_query_kind(out, kind);
+            push_compact_query_kind(out, kind);
         }
         Guard::QueryValueCompare { kind, op, value } => {
-            push_json_pair(out, "kind", "query_value_compare");
+            out.push('4');
             out.push(',');
-            push_query_kind(out, kind);
+            push_compact_query_kind(out, kind);
             out.push(',');
-            push_comparison_op(out, "op", *op);
+            push_compact_comparison(out, *op);
             out.push(',');
-            push_json_i64(out, "value", *value);
+            out.push_str(&value.to_string());
         }
     }
-    out.push('}');
+    out.push(']');
+}
+
+fn push_compact_query_kind(out: &mut String, kind: &QueryKind) {
+    out.push('[');
+    match kind {
+        QueryKind::CountObjects(objects) => {
+            out.push('0');
+            out.push(',');
+            push_compact_object_ids(out, objects);
+        }
+        QueryKind::ExistsObjects(objects) => {
+            out.push('1');
+            out.push(',');
+            push_compact_object_ids(out, objects);
+        }
+        QueryKind::NoneObjects(objects) => {
+            out.push('2');
+            out.push(',');
+            push_compact_object_ids(out, objects);
+        }
+        QueryKind::CountMatches(patterns) => {
+            out.push('3');
+            out.push(',');
+            push_compact_patterns(out, patterns);
+        }
+        QueryKind::ExistsMatches(patterns) => {
+            out.push('4');
+            out.push(',');
+            push_compact_patterns(out, patterns);
+        }
+        QueryKind::NoneMatches(patterns) => {
+            out.push('5');
+            out.push(',');
+            push_compact_patterns(out, patterns);
+        }
+        QueryKind::CountInputMatches(patterns) => {
+            out.push('6');
+            out.push(',');
+            push_compact_input_patterns(out, patterns);
+        }
+        QueryKind::ExistsInputMatches(patterns) => {
+            out.push('7');
+            out.push(',');
+            push_compact_input_patterns(out, patterns);
+        }
+        QueryKind::NoneInputMatches(patterns) => {
+            out.push('8');
+            out.push(',');
+            push_compact_input_patterns(out, patterns);
+        }
+    }
+    out.push(']');
+}
+
+fn push_compact_patterns(out: &mut String, patterns: &[Pattern]) {
+    out.push('[');
+    for (index, pattern) in patterns.iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        push_compact_pattern(out, pattern);
+    }
+    out.push(']');
+}
+
+fn push_compact_input_patterns(out: &mut String, patterns: &[(InputId, Pattern)]) {
+    out.push('[');
+    for (index, (input, pattern)) in patterns.iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        out.push('[');
+        out.push_str(&input.0.to_string());
+        out.push(',');
+        push_compact_pattern(out, pattern);
+        out.push(']');
+    }
+    out.push(']');
+}
+
+fn push_compact_pattern(out: &mut String, pattern: &Pattern) {
+    out.push('[');
+    for (component_index, component) in pattern.components.iter().enumerate() {
+        if component_index > 0 {
+            out.push(',');
+        }
+        out.push('[');
+        out.push_str(&component.gap_count.to_string());
+        out.push(',');
+        out.push('[');
+        for (cell_index, cell) in component.cells.iter().enumerate() {
+            if cell_index > 0 {
+                out.push(',');
+            }
+            push_compact_match_cell(out, cell);
+        }
+        out.push_str("]]");
+    }
+    out.push(']');
+}
+
+fn push_compact_match_cell(out: &mut String, cell: &puzzle_core::MatchCell) {
+    out.push('[');
+    push_compact_offset(out, &cell.offset);
+    out.push(',');
+    push_compact_object_ids(out, &cell.require_objects);
+    out.push(',');
+    push_compact_object_ids(out, &cell.forbid_objects);
+    out.push(',');
+    push_compact_scratch_patterns(out, &cell.require_scratch);
+    out.push(',');
+    push_compact_scratch_patterns(out, &cell.forbid_scratch);
+    out.push(']');
+}
+
+fn push_compact_scratch_patterns(out: &mut String, scratch: &[ScratchPattern]) {
+    out.push('[');
+    for (index, pattern) in scratch.iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        out.push('[');
+        out.push_str(&pattern.object.0.to_string());
+        out.push(',');
+        out.push_str(&pattern.scratch.0.to_string());
+        out.push(',');
+        push_compact_optional_i64(out, pattern.value);
+        out.push(',');
+        push_compact_scratch_match(out, pattern.match_value);
+        out.push(']');
+    }
+    out.push(']');
+}
+
+fn push_compact_offset(out: &mut String, offset: &Offset) {
+    out.push('[');
+    match offset {
+        Offset::Fixed { dx, dy } => {
+            out.push('0');
+            out.push(',');
+            out.push_str(&dx.to_string());
+            out.push(',');
+            out.push_str(&dy.to_string());
+        }
+        Offset::Variable {
+            base_dx,
+            base_dy,
+            gap_terms,
+        } => {
+            out.push('1');
+            out.push(',');
+            out.push_str(&base_dx.to_string());
+            out.push(',');
+            out.push_str(&base_dy.to_string());
+            out.push(',');
+            out.push('[');
+            for (index, term) in gap_terms.iter().enumerate() {
+                if index > 0 {
+                    out.push(',');
+                }
+                out.push('[');
+                out.push_str(&term.gap_index.to_string());
+                out.push(',');
+                out.push_str(&term.dx.to_string());
+                out.push(',');
+                out.push_str(&term.dy.to_string());
+                out.push(']');
+            }
+            out.push(']');
+        }
+    }
+    out.push(']');
+}
+
+fn push_compact_write(out: &mut String, write: &WriteOp) {
+    out.push('[');
+    match write {
+        WriteOp::Add {
+            component,
+            offset,
+            object,
+        } => {
+            out.push('0');
+            out.push(',');
+            out.push_str(&component.to_string());
+            out.push(',');
+            push_compact_offset(out, offset);
+            out.push(',');
+            out.push_str(&object.0.to_string());
+        }
+        WriteOp::Remove {
+            component,
+            offset,
+            object,
+        } => {
+            out.push('1');
+            out.push(',');
+            out.push_str(&component.to_string());
+            out.push(',');
+            push_compact_offset(out, offset);
+            out.push(',');
+            out.push_str(&object.0.to_string());
+        }
+        WriteOp::Move {
+            component,
+            from_offset,
+            to_offset,
+            object,
+        } => {
+            out.push('2');
+            out.push(',');
+            out.push_str(&component.to_string());
+            out.push(',');
+            push_compact_offset(out, from_offset);
+            out.push(',');
+            push_compact_offset(out, to_offset);
+            out.push(',');
+            out.push_str(&object.0.to_string());
+        }
+        WriteOp::Replace {
+            component,
+            offset,
+            remove,
+            add,
+        } => {
+            out.push('3');
+            out.push(',');
+            out.push_str(&component.to_string());
+            out.push(',');
+            push_compact_offset(out, offset);
+            out.push(',');
+            out.push_str(&remove.0.to_string());
+            out.push(',');
+            out.push_str(&add.0.to_string());
+        }
+        WriteOp::SetScratch {
+            component,
+            offset,
+            object,
+            scratch,
+            value,
+        } => {
+            out.push('4');
+            out.push(',');
+            out.push_str(&component.to_string());
+            out.push(',');
+            push_compact_offset(out, offset);
+            out.push(',');
+            out.push_str(&object.0.to_string());
+            out.push(',');
+            out.push_str(&scratch.0.to_string());
+            out.push(',');
+            push_compact_optional_i64(out, *value);
+        }
+        WriteOp::RemoveScratch {
+            component,
+            offset,
+            object,
+            scratch,
+            value,
+            match_value,
+        } => {
+            out.push('5');
+            out.push(',');
+            out.push_str(&component.to_string());
+            out.push(',');
+            push_compact_offset(out, offset);
+            out.push(',');
+            out.push_str(&object.0.to_string());
+            out.push(',');
+            out.push_str(&scratch.0.to_string());
+            out.push(',');
+            push_compact_optional_i64(out, *value);
+            out.push(',');
+            push_compact_scratch_match(out, *match_value);
+        }
+    }
+    out.push(']');
+}
+
+fn push_compact_effect(out: &mut String, effect: &Effect) {
+    out.push('[');
+    match effect {
+        Effect::Cancel => out.push('0'),
+        Effect::Win => out.push('1'),
+        Effect::Restart => out.push('2'),
+        Effect::NextLevel => out.push('3'),
+        Effect::Again => out.push('4'),
+        Effect::Checkpoint => out.push('5'),
+        Effect::ClearCheckpoint => out.push('6'),
+        Effect::UpdateGlobal { global, op, value } => {
+            out.push('7');
+            out.push(',');
+            out.push_str(&global.0.to_string());
+            out.push(',');
+            push_compact_global_update(out, *op);
+            out.push(',');
+            out.push_str(&value.to_string());
+        }
+    }
+    out.push(']');
+}
+
+fn push_compact_local_frame(out: &mut String, frame: &puzzle_core::LocalFrame<ObjectId>) {
+    out.push('[');
+    push_compact_local_frame_extent(out, frame.x);
+    out.push(',');
+    push_compact_local_frame_extent(out, frame.y);
+    out.push(',');
+    push_compact_local_frame_extent(out, frame.z);
+    out.push(',');
+    push_compact_object_ids(out, &frame.focus_objects);
+    out.push(']');
+}
+
+fn push_compact_local_frame_extent(out: &mut String, extent: puzzle_core::LocalFrameExtent) {
+    match extent {
+        puzzle_core::LocalFrameExtent::Radius(radius) => out.push_str(&radius.to_string()),
+        puzzle_core::LocalFrameExtent::Full => out.push_str("null"),
+    }
+}
+
+fn push_compact_object_ids(out: &mut String, objects: &[ObjectId]) {
+    out.push('[');
+    for (index, object) in objects.iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        out.push_str(&object.0.to_string());
+    }
+    out.push(']');
+}
+
+fn push_compact_scratch_match(out: &mut String, value: ScratchValueMatch) {
+    out.push_str(match value {
+        ScratchValueMatch::Any => "0",
+        ScratchValueMatch::Exact => "1",
+    });
+}
+
+fn push_compact_comparison(out: &mut String, op: ComparisonOp) {
+    out.push_str(match op {
+        ComparisonOp::Eq => "0",
+        ComparisonOp::NotEq => "1",
+        ComparisonOp::Greater => "2",
+        ComparisonOp::GreaterEq => "3",
+        ComparisonOp::Less => "4",
+        ComparisonOp::LessEq => "5",
+    });
+}
+
+fn push_compact_global_update(out: &mut String, op: GlobalUpdateOp) {
+    out.push_str(match op {
+        GlobalUpdateOp::Set => "0",
+        GlobalUpdateOp::Add => "1",
+        GlobalUpdateOp::Subtract => "2",
+        GlobalUpdateOp::Multiply => "3",
+        GlobalUpdateOp::Divide => "4",
+        GlobalUpdateOp::Remainder => "5",
+    });
+}
+
+fn push_compact_optional_i64(out: &mut String, value: Option<i64>) {
+    if let Some(value) = value {
+        out.push_str(&value.to_string());
+    } else {
+        out.push_str("null");
+    }
 }
 
 fn push_pattern(out: &mut String, pattern: &Pattern) {
@@ -4511,160 +4978,6 @@ fn push_scratch_patterns(out: &mut String, key: &str, scratch: &[ScratchPattern]
         out.push('}');
     }
     out.push(']');
-}
-
-fn push_write(out: &mut String, write: &WriteOp) {
-    out.push('{');
-    match write {
-        WriteOp::Add {
-            component,
-            offset,
-            object,
-        } => {
-            push_json_pair(out, "kind", "add");
-            out.push(',');
-            push_json_number(out, "component", *component as u64);
-            out.push(',');
-            push_offset_named(out, "offset", offset);
-            out.push(',');
-            push_json_number(out, "object", object.0 as u64);
-        }
-        WriteOp::Remove {
-            component,
-            offset,
-            object,
-        } => {
-            push_json_pair(out, "kind", "remove");
-            out.push(',');
-            push_json_number(out, "component", *component as u64);
-            out.push(',');
-            push_offset_named(out, "offset", offset);
-            out.push(',');
-            push_json_number(out, "object", object.0 as u64);
-        }
-        WriteOp::Move {
-            component,
-            from_offset,
-            to_offset,
-            object,
-        } => {
-            push_json_pair(out, "kind", "move");
-            out.push(',');
-            push_json_number(out, "component", *component as u64);
-            out.push(',');
-            push_offset_named(out, "fromOffset", from_offset);
-            out.push(',');
-            push_offset_named(out, "toOffset", to_offset);
-            out.push(',');
-            push_json_number(out, "object", object.0 as u64);
-        }
-        WriteOp::Replace {
-            component,
-            offset,
-            remove,
-            add,
-        } => {
-            push_json_pair(out, "kind", "replace");
-            out.push(',');
-            push_json_number(out, "component", *component as u64);
-            out.push(',');
-            push_offset_named(out, "offset", offset);
-            out.push(',');
-            push_json_number(out, "remove", remove.0 as u64);
-            out.push(',');
-            push_json_number(out, "add", add.0 as u64);
-        }
-        WriteOp::SetScratch {
-            component,
-            offset,
-            object,
-            scratch,
-            value,
-        } => {
-            push_json_pair(out, "kind", "set_scratch");
-            out.push(',');
-            push_json_number(out, "component", *component as u64);
-            out.push(',');
-            push_offset_named(out, "offset", offset);
-            out.push(',');
-            push_json_number(out, "object", object.0 as u64);
-            out.push(',');
-            push_json_number(out, "scratch", scratch.0 as u64);
-            if let Some(value) = value {
-                out.push(',');
-                push_json_i64(out, "value", *value);
-            }
-        }
-        WriteOp::RemoveScratch {
-            component,
-            offset,
-            object,
-            scratch,
-            value,
-            match_value,
-        } => {
-            push_json_pair(out, "kind", "remove_scratch");
-            out.push(',');
-            push_json_number(out, "component", *component as u64);
-            out.push(',');
-            push_offset_named(out, "offset", offset);
-            out.push(',');
-            push_json_number(out, "object", object.0 as u64);
-            out.push(',');
-            push_json_number(out, "scratch", scratch.0 as u64);
-            if let Some(value) = value {
-                out.push(',');
-                push_json_i64(out, "value", *value);
-            }
-            out.push(',');
-            push_json_pair(
-                out,
-                "match",
-                match match_value {
-                    ScratchValueMatch::Any => "any",
-                    ScratchValueMatch::Exact => "exact",
-                },
-            );
-        }
-    }
-    out.push('}');
-}
-
-fn push_rule_effect(out: &mut String, effect: &Effect) {
-    out.push('{');
-    match effect {
-        Effect::Cancel => {
-            push_json_pair(out, "kind", "cancel");
-        }
-        Effect::Win => {
-            push_json_pair(out, "kind", "win");
-        }
-        Effect::Restart => {
-            push_json_pair(out, "kind", "restart");
-        }
-        Effect::NextLevel => {
-            push_json_pair(out, "kind", "next_level");
-        }
-        Effect::Again => {
-            push_json_pair(out, "kind", "again");
-        }
-        Effect::Checkpoint => {
-            push_json_pair(out, "kind", "checkpoint");
-        }
-        Effect::ClearCheckpoint => {
-            push_json_pair(out, "kind", "clear_checkpoint");
-        }
-        Effect::UpdateGlobal { global, op, value } => {
-            push_json_pair(out, "kind", "update_global");
-            out.push(',');
-            push_json_number(out, "global", global.0 as u64);
-            out.push(',');
-            push_global_update_op(out, "op", *op);
-            out.push(',');
-            push_json_i64(out, "value", *value);
-        }
-    }
-    out.push('}');
 }
 
 fn push_query_kind(out: &mut String, kind: &QueryKind) {
@@ -4911,21 +5224,6 @@ fn push_comparison_op(out: &mut String, key: &str, op: ComparisonOp) {
             ComparisonOp::GreaterEq => "greater_eq",
             ComparisonOp::Less => "less",
             ComparisonOp::LessEq => "less_eq",
-        },
-    );
-}
-
-fn push_global_update_op(out: &mut String, key: &str, op: GlobalUpdateOp) {
-    push_json_pair(
-        out,
-        key,
-        match op {
-            GlobalUpdateOp::Set => "set",
-            GlobalUpdateOp::Add => "add",
-            GlobalUpdateOp::Subtract => "subtract",
-            GlobalUpdateOp::Multiply => "multiply",
-            GlobalUpdateOp::Divide => "divide",
-            GlobalUpdateOp::Remainder => "remainder",
         },
     );
 }
@@ -7708,6 +8006,26 @@ P
     }
 
     #[test]
+    fn puzzle3_app_does_not_own_scene_layout_rendering() {
+        assert!(
+            !PUZZLE3_APP_JS.contains("function renderSceneNode("),
+            "puzzle3_app.js must render a puzzle3 component, not own the generic scene layout renderer"
+        );
+        assert!(
+            !PUZZLE3_APP_JS.contains("function renderSceneContainer("),
+            "generic scene containers belong to the shared scene renderer"
+        );
+        assert!(
+            !PUZZLE3_APP_JS.contains("function measureSceneNode("),
+            "generic scene measurement belongs to the shared scene renderer"
+        );
+        assert!(
+            !PUZZLE3_APP_JS.contains("function renderSceneFor("),
+            "generic scene for-loops belong to the shared scene renderer"
+        );
+    }
+
+    #[test]
     fn puzzle3_app_supports_focus_relative_viewport_framing() {
         assert!(
             PUZZLE3_APP_JS
@@ -7737,7 +8055,6 @@ P
         assert!(PUZZLE3_APP_JS.contains("const SCENE_DEFAULT_WIDTH = 16;"));
         assert!(PUZZLE3_APP_JS.contains("const SCENE_DEFAULT_HEIGHT = 12;"));
         assert!(PUZZLE3_APP_JS.contains("function puzzle3SceneDisplaySize()"));
-        assert!(PUZZLE3_APP_JS.contains("return puzzle3SceneDisplaySize();"));
         assert!(!PUZZLE3_APP_JS.contains("function currentPuzzle3IntrinsicSize()"));
         assert!(PUZZLE3_APP_JS.contains(
             "function viewportFitForFrame(frame, viewportBounds, centerPoint = null, zoom = 1, follow = \"snap\")"
@@ -7972,7 +8289,7 @@ scene mixed_play {
     flat_board = puzzle flat
     cube_board = puzzle3 cube
   }
-  view size 4 3 {
+  layout size 4 3 {
     row {
       puzzle flat_board
       puzzle3 cube_board
@@ -8006,6 +8323,190 @@ scene mixed_play {
         assert!(html.contains("case \"puzzle3\""));
         assert!(html.contains("iframe.puzzle3-frame"));
         assert!(html.contains("\\\"kind\\\":\\\"puzzle3\\\""));
+    }
+
+    #[test]
+    fn mixed_microban_scene_metadata_stays_model_agnostic() {
+        let source = r#"
+title Mixed Microban
+
+puzzle microban2d {
+layers 1
+empty .
+object Player 0
+rules {
+
+}
+}
+
+levels microban of microban2d {
+legend P = Player
+
+level microban_01 {
+P.
+}
+
+level microban_02 {
+.P
+}
+}
+
+puzzle3 microban3d {
+layers {
+actor = Player
+}
+rules {
+
+}
+}
+
+levels3 microban of microban3d {
+legend {
+. = empty
+P = Player
+}
+
+level microban_03 {
+P.
+}
+
+level microban_04 {
+.P
+}
+}
+
+scene level_select {
+layout {
+title "Microban"
+column {
+for level in levels {
+choice join(level.num, ". ", level.title) -> goto playing(level)
+}
+}
+}
+}
+
+scene playing(level) {
+layout {
+text level.title
+}
+}
+"#;
+        let document = puzzle_lang::parse_game(source).unwrap();
+        assert_eq!(document.models.len(), 2);
+        assert!(matches!(
+            &document.models[0],
+            LoadedDocumentModel::Puzzle2d { name, game }
+                if name == "microban2d"
+                    && game.levels.iter().map(|level| level.name.as_str()).collect::<Vec<_>>()
+                        == ["microban.microban_01", "microban.microban_02"]
+        ));
+        assert!(matches!(
+            &document.models[1],
+            LoadedDocumentModel::Puzzle3d { name, puzzle }
+                if name == "microban3d"
+                    && puzzle.level_bundle.as_ref().is_some_and(|bundle| {
+                        bundle.level(0).is_some_and(|level| level.name == "microban_03")
+                            && bundle.level(1).is_some_and(|level| level.name == "microban_04")
+                    })
+        ));
+
+        let level_select = document
+            .scenes
+            .iter()
+            .find(|scene| scene.name == "level_select")
+            .expect("expected level_select scene");
+        assert!(level_select.state.puzzles.is_empty());
+        assert!(matches!(
+            level_select.components.as_slice(),
+            [
+                SceneComponent::Title(_),
+                SceneComponent::Column(column),
+            ] if matches!(
+                column.children.as_slice(),
+                [SceneComponent::For(for_view)]
+                    if for_view.source.as_str() == "levels"
+                        && matches!(
+                            for_view.children.as_slice(),
+                            [SceneComponent::Choice(_)]
+                        )
+            )
+        ));
+
+        let loaded = mixed_document_loaded_game(&document).unwrap();
+        assert_eq!(
+            loaded
+                .levels
+                .iter()
+                .map(|level| level.name.as_str())
+                .collect::<Vec<_>>(),
+            ["microban.microban_01", "microban.microban_02"]
+        );
+
+        let mut host_data = String::new();
+        push_export_data(
+            &mut host_data,
+            &ServerState::new(
+                loaded.clone(),
+                source.to_string(),
+                "mixed_microban.puzzle".to_string(),
+                String::new(),
+                VISUALS_JS.to_string(),
+                SolverConfig::default(),
+            ),
+        );
+        let host_json: Value = serde_json::from_str(&host_data).unwrap();
+        let host_level_select = host_json["scenes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|scene| scene["name"] == "level_select")
+            .expect("host export should keep level_select");
+        assert_eq!(
+            host_level_select["components"][1]["children"][0]["kind"],
+            "for"
+        );
+        assert_eq!(
+            host_level_select["components"][1]["children"][0]["children"][0]["kind"],
+            "choice"
+        );
+
+        let fixture_json = mixed_document_puzzle3_fixture_json(&document).unwrap();
+        let fixture: Value = serde_json::from_str(&fixture_json).unwrap();
+        assert_eq!(
+            fixture["levels"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|level| level["name"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["microban_03", "microban_04"]
+        );
+        let fixture_level_select = fixture["scenes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|scene| scene["name"] == "level_select")
+            .expect("3D fixture should keep level_select");
+        assert_eq!(
+            fixture_level_select["components"][1]["children"][0]["kind"],
+            "for"
+        );
+        assert_eq!(
+            fixture_level_select["components"][1]["children"][0]["children"][0]["kind"],
+            "choice"
+        );
+    }
+
+    #[test]
+    fn puzzle3_app_does_not_own_scene_component_rendering() {
+        assert!(!PUZZLE3_APP_JS.contains("function renderSceneNode("));
+        assert!(!PUZZLE3_APP_JS.contains("function renderSceneContainer("));
+        assert!(!PUZZLE3_APP_JS.contains("function renderSceneFor("));
+        assert!(!PUZZLE3_APP_JS.contains("function measureSceneNode("));
+        assert!(!PUZZLE3_APP_JS.contains("scene-component-"));
+        assert!(!PUZZLE3_APP_JS.contains("component.kind === \"button\""));
+        assert!(!PUZZLE3_APP_JS.contains("component.kind === \"choice\""));
     }
 
     #[test]
@@ -8139,10 +8640,11 @@ title display_solver
 puzzle board {
   layers {
     actor = Player
-    cursor = @Cursor
+    @cursor = @Cursor
   }
   empty .
   rules {
+    input right [ Player ] -> [ Player ]
     [ Player ] -> [ Player ]
   }
   routine @paint once {
@@ -8164,7 +8666,7 @@ levels default of board {
 }
 
 scene playing {
-  view {
+  layout {
     puzzle board
   }
 }
@@ -8219,7 +8721,7 @@ levels default of board {
 }
 
 scene playing {
-  view {
+  layout {
     puzzle board
   }
 }
@@ -8277,7 +8779,7 @@ levels default of board {
 }
 
 scene title {
-  view {
+  layout {
     choice "New Game" -> input new_game
   }
   inputs {
@@ -8298,7 +8800,7 @@ scene playing {
   rules {
     if input == back -> goto title
   }
-  view {
+  layout {
     puzzle board
   }
 }
@@ -8415,7 +8917,7 @@ levels default of board {
 }
 
 scene playing {
-  view {
+  layout {
     puzzle board
   }
 }
@@ -8455,7 +8957,7 @@ levels default of board {
 }
 
 scene playing {
-  view {
+  layout {
     puzzle board
   }
 }
@@ -8497,7 +8999,7 @@ scene playing {
     state {
         board = puzzle default
     }
-    view {
+    layout {
         puzzle board
     }
 }
@@ -8745,19 +9247,54 @@ rules {
     }
 
     #[test]
-    fn puzzle3_export_embeds_source_as_string_not_json() {
-        let html = export_puzzle3_html(
-            r#"{"title":"Tiny"}"#,
-            "title \"Tiny\"\n",
-            "games/tiny.puzzle",
-            "",
-        );
+    fn puzzle3_export_embeds_frame_source_and_path_as_strings() {
+        let source = r#"title "Tiny"
 
-        assert!(html.contains("window.Puzzle3DFixture = JSON.parse"));
-        assert!(html.contains("window.Puzzle3DSource = \"title \\\"Tiny\\\"\\n\";"));
-        assert!(html.contains("window.Puzzle3DPath = \"games/tiny.puzzle\";"));
-        assert!(!html.contains("window.Puzzle3DSource = JSON.parse"));
-        assert!(!html.contains("window.Puzzle3DPath = JSON.parse"));
+puzzle3 cube {
+  layers {
+    actor = Player
+  }
+  rules {
+  }
+}
+
+scene title {
+  layout {
+    choice "Play" -> goto playing
+  }
+}
+
+scene playing {
+  state {
+    board = puzzle3 cube
+  }
+  layout {
+    puzzle3 board
+  }
+}
+
+levels3 default of cube {
+  legend {
+    P = Player
+  }
+  level one {
+    P
+  }
+}
+"#;
+        let html = export_html_from_source(source, "games/tiny.puzzle", "", "")
+            .expect("export puzzle3 document");
+
+        assert!(html.contains("window.Puzzle3DFrameFixture = JSON.parse"));
+        assert!(html.contains("window.Puzzle3DFrameAssets = {"));
+        assert!(html.contains("iframe.puzzle3-frame"));
+        assert!(html.contains("case \"choice\""));
+        assert!(html.contains("\\\"kind\\\":\\\"choice\\\""));
+        assert!(html.contains("\\\"kind\\\":\\\"puzzle3\\\""));
+        assert!(html.contains("\"source\":\"title \\\"Tiny\\\"\\n"));
+        assert!(html.contains("\"puzzlePath\":\"games/tiny.puzzle\""));
+        assert!(!html.contains("window.Puzzle3DSource ="));
+        assert!(!html.contains("window.Puzzle3DPath ="));
     }
 
     #[test]
@@ -8774,7 +9311,7 @@ puzzle3 cube {
 }
 
 scene title {
-  view {
+  layout {
     title "Screenshot"
     button "Play" -> goto playing
   }
@@ -8784,7 +9321,7 @@ scene playing {
   state {
     board = puzzle3 cube
   }
-  view {
+  layout {
     puzzle3 board
   }
 }

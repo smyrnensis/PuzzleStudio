@@ -362,8 +362,8 @@ P
     assert!(
         translated.contains("puzzle main {\nflickscreen 13 13\nscreen_focus Player\n\nlayers {")
     );
-    assert!(translated.contains("  view {\n    puzzle board\n  }"));
-    assert!(!translated.contains("view size 13 13"));
+    assert!(translated.contains("  layout {\n    puzzle board\n  }"));
+    assert!(!translated.contains("layout size 13 13"));
     assert!(!translated.contains("puzzle board size 13 13"));
     assert!(!translated.contains("      title \"Flick Fit\""));
     parse_game(&translated).unwrap();

@@ -459,7 +459,7 @@ fn collect_line_symbols(
             family_axis_names.insert((*axis).to_string());
         }
         ["sfx", name, ..] | ["music", name, ..] if scope == Some(SourceScope::Sounds) => {
-            insert_source_symbol(symbols, name, HighlightKind::Asset);
+            insert_declared_source_symbol(symbols, name, HighlightKind::Asset);
         }
         ["shape", table, ..] | ["colors", table, ..] => {
             if let Some((name, axis)) = table.split_once(':') {
@@ -725,6 +725,22 @@ fn insert_source_symbol(
     kind: HighlightKind,
 ) {
     if !is_source_symbol_name(name) || parser_keyword(name) || parser_literal(name) {
+        return;
+    }
+    match symbols.get(name).copied() {
+        Some(existing) if symbol_priority(existing) > symbol_priority(kind) => {}
+        _ => {
+            symbols.insert(name.to_string(), kind);
+        }
+    }
+}
+
+fn insert_declared_source_symbol(
+    symbols: &mut HashMap<String, HighlightKind>,
+    name: &str,
+    kind: HighlightKind,
+) {
+    if !is_source_symbol_name(name) || parser_literal(name) {
         return;
     }
     match symbols.get(name).copied() {
@@ -1104,7 +1120,7 @@ fn visual_highlight_opening_scope(
 
 fn is_visual_closing_line(line: &crate::source::SourceContextLine) -> bool {
     let trimmed = strip_line_comment(&line.content).trim();
-    matches!(trimmed, "}" | "end")
+    trimmed == "}"
 }
 
 fn add_visual_named_color_references(
@@ -1155,6 +1171,7 @@ fn scan_visual_ascii_color_ranges(
 ) -> Vec<VisualAsciiColorRange> {
     let mut ranges = Vec::new();
     let mut in_sprites = false;
+    let mut in_sprites3 = false;
     let mut sprites_depth = 0i32;
     let mut pending_color_row = false;
     let mut palette = HashMap::<char, String>::new();
@@ -1170,6 +1187,7 @@ fn scan_visual_ascii_color_ranges(
         if !in_sprites {
             if matches!(tokens.as_slice(), ["sprites" | "sprites3", ..]) {
                 in_sprites = true;
+                in_sprites3 = matches!(tokens.first().copied(), Some("sprites3"));
                 sprites_depth = brace_delta(content).max(1);
             }
             offset = line_end;
@@ -1177,8 +1195,10 @@ fn scan_visual_ascii_color_ranges(
         }
 
         if trimmed.is_empty() {
-            pending_color_row = false;
-            palette.clear();
+            if !in_sprites3 {
+                pending_color_row = false;
+                palette.clear();
+            }
             offset = line_end;
             continue;
         }
@@ -1204,6 +1224,7 @@ fn scan_visual_ascii_color_ranges(
         sprites_depth += brace_delta(content);
         if sprites_depth <= 0 {
             in_sprites = false;
+            in_sprites3 = false;
             pending_color_row = false;
             palette.clear();
         }
@@ -1227,7 +1248,7 @@ fn visual_sprite_entry_header(tokens: &[&str], trimmed: &str) -> bool {
     };
     if matches!(
         first,
-        "shape" | "colors" | "ascii" | "sprites" | "sprites3" | "{" | "}" | "end"
+        "shape" | "colors" | "ascii" | "sprites" | "sprites3" | "{" | "}"
     ) || is_visual_color_token(first)
     {
         return false;
@@ -1314,11 +1335,11 @@ fn scan_for_binding_ranges(source: &str) -> Vec<BindingRange> {
         let trimmed = raw.trim();
         let tokens = split_tokens(trimmed);
 
-        if matches!(trimmed, "}" | "end") {
+        if trimmed == "}" {
             stack.pop();
         }
 
-        if !trimmed.is_empty() && !matches!(trimmed, "}" | "end") {
+        if !trimmed.is_empty() && trimmed != "}" {
             match tokens.as_slice() {
                 ["for", binding, "in", _source, ..] => {
                     stack.push(Some((*binding).to_string()));
@@ -1707,7 +1728,7 @@ duration 90ms
 }
 }
 scene menu {
-view {
+layout {
 level_menu {
 show_index = true
 }
@@ -2219,6 +2240,68 @@ level accidental {
     }
 
     #[test]
+    fn highlights_sprites3_pixels_across_blank_slice_separators() {
+        let highlighted = highlight_source(
+            r#"
+sprites3 {
+Player
+#000000 #ffa500 #ffffff #0000ff
+.....
+.....
+.000.
+.....
+.....
+
+.....
+.....
+.111.
+.....
+.....
+
+.....
+.....
+22222
+.....
+.....
+
+.....
+.....
+.333.
+.....
+.....
+
+.....
+.....
+.3.3.
+.....
+.....
+}
+"#,
+        );
+
+        assert!(
+            highlighted
+                .html
+                .contains("syntax-sprite-pixel\" style=\"--syntax-sprite-pixel-color: #000000\">0</span><span class=\"syntax-sprite-pixel\" style=\"--syntax-sprite-pixel-color: #000000\">0</span><span class=\"syntax-sprite-pixel\" style=\"--syntax-sprite-pixel-color: #000000\">0</span>")
+        );
+        assert!(
+            highlighted
+                .html
+                .contains("syntax-sprite-pixel\" style=\"--syntax-sprite-pixel-color: #ffa500\">1</span><span class=\"syntax-sprite-pixel\" style=\"--syntax-sprite-pixel-color: #ffa500\">1</span><span class=\"syntax-sprite-pixel\" style=\"--syntax-sprite-pixel-color: #ffa500\">1</span>")
+        );
+        assert!(
+            highlighted
+                .html
+                .contains("syntax-sprite-pixel\" style=\"--syntax-sprite-pixel-color: #ffffff\">2</span><span class=\"syntax-sprite-pixel\" style=\"--syntax-sprite-pixel-color: #ffffff\">2</span><span class=\"syntax-sprite-pixel\" style=\"--syntax-sprite-pixel-color: #ffffff\">2</span><span class=\"syntax-sprite-pixel\" style=\"--syntax-sprite-pixel-color: #ffffff\">2</span><span class=\"syntax-sprite-pixel\" style=\"--syntax-sprite-pixel-color: #ffffff\">2</span>")
+        );
+        assert!(
+            highlighted
+                .html
+                .contains("syntax-sprite-pixel\" style=\"--syntax-sprite-pixel-color: #0000ff\">3</span>.<span class=\"syntax-sprite-pixel\" style=\"--syntax-sprite-pixel-color: #0000ff\">3</span>")
+        );
+    }
+
+    #[test]
     fn highlights_registered_sprite_color_names_with_swatches() {
         let highlighted = highlight_source(
             r#"
@@ -2360,7 +2443,7 @@ level start {
 }
 
 scene title {
-view {
+layout {
 title
 subtitle
 row {
@@ -2387,7 +2470,7 @@ scene menu {
 "#,
         );
         assert!(highlighted.html.contains("syntax-scene\">title"));
-        assert!(highlighted.html.contains("syntax-keyword\">view"));
+        assert!(highlighted.html.contains("syntax-keyword\">layout"));
         assert!(
             highlighted
                 .html
@@ -2467,7 +2550,7 @@ scene playing3d {
 state {
 board = puzzle3 push3d
 }
-view size 4 3 {
+layout size 4 3 {
 column gap 1 align center top {
 puzzle3 board
 row gap 1 {
@@ -2569,7 +2652,7 @@ Floor
 }
 
 scene playing {
-view {
+layout {
 puzzle3 board {
 inputs {
 forward <- w ArrowUp
@@ -2635,6 +2718,32 @@ play_music music_name
             highlighted.html.contains(
                 "syntax-effect\">play_music</span> <span class=\"syntax-asset\">music_name"
             )
+        );
+    }
+
+    #[test]
+    fn highlights_keyword_named_music_asset_when_parse_fails() {
+        let highlighted = highlight_source(
+            r#"
+title keyword_named_music
+
+sounds {
+music music seed=bgm01
+}
+
+scene title {
+layout {
+button "New Game" -> goto playing play_music music
+}
+}
+"#,
+        );
+
+        assert!(!highlighted.parsed);
+        assert!(
+            highlighted
+                .html
+                .contains("syntax-effect\">play_music</span> <span class=\"syntax-asset\">music")
         );
     }
 

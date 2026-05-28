@@ -491,7 +491,7 @@ levels {
 }
 
 scene title {
-  view {
+  layout {
     title "Simple Block Sliding Game"
     subtitle "by increpare"
     if game.has_progress_save {
@@ -516,7 +516,7 @@ scene playing {
   state {
     board = puzzle main
   }
-  view {
+  layout {
     row {
       title "Simple Block Sliding Game"
     }

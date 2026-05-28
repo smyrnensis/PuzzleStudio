@@ -1839,7 +1839,7 @@ function handleSourceEditorEmacsBinding(event) {
       return true;
     }
     if (key === "m" || key === "j") {
-      insertAtSelection(nextLineIndent());
+      insertSourceNewlineAtSelection();
       event.preventDefault();
       event.stopPropagation();
       return true;
@@ -3581,7 +3581,7 @@ sourceEditor.addEventListener("keydown", (event) => {
   }
 
   event.preventDefault();
-  insertAtSelection(nextLineIndent());
+  insertSourceNewlineAtSelection();
 });
 sourceEditor.addEventListener("copy", (event) => {
   if (!sourceEditorBlockSelection?.ranges?.length) {
@@ -3689,6 +3689,25 @@ function nextLineIndent() {
     return `\n${currentIndent}${extraIndent}\n${currentIndent}`;
   }
   return `\n${currentIndent}${extraIndent}`;
+}
+
+function insertSourceNewlineAtSelection() {
+  const insert = nextLineIndent();
+  const start = sourceEditor.selectionStart;
+  const end = sourceEditor.selectionEnd;
+  const cursorOffset = sourceNewlineCursorOffset(insert);
+  sourceEditor.setRangeText(insert, start, end, "end");
+  if (cursorOffset !== null) {
+    const cursor = start + cursorOffset;
+    sourceEditor.setSelectionRange(cursor, cursor);
+  }
+  sourceEditorContentChanged();
+}
+
+function sourceNewlineCursorOffset(insert) {
+  const firstNewline = insert.indexOf("\n");
+  const lastNewline = insert.lastIndexOf("\n");
+  return firstNewline >= 0 && lastNewline > firstNewline ? lastNewline : null;
 }
 
 function sourceLevelNameControlEntries(config = {}) {

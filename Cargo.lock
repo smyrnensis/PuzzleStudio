@@ -2380,6 +2380,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "puzzle-wasm-core"
+version = "0.1.0"
+dependencies = [
+ "puzzle-core",
+ "serde_json",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "puzzle3d-model"
 version = "0.1.0"
 dependencies = [
