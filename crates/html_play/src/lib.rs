@@ -8589,7 +8589,9 @@ text level.title
 
     #[test]
     fn standalone_runtime_requires_wasm_core_for_transitions() {
-        assert!(STANDALONE_JS.contains("materializeDisplayProgram(program, state, programKey"));
+        assert!(
+            STANDALONE_JS.contains("materializeDisplayProgram(state, programKey, levelIndex = -1)")
+        );
         assert!(!STANDALONE_JS.contains("using JavaScript transition fallback"));
         assert!(!STANDALONE_JS.contains("projection failed; using source state"));
         assert!(STANDALONE_JS.contains("Puzzle core WASM runtime is unavailable."));
@@ -8624,11 +8626,10 @@ text level.title
             "(options.materializeDisplay || options.materializeTurnStart) && options.acceptModelInput !== true"
         ));
         assert!(STANDALONE_JS.contains(
-            "this.materializeDisplayProgram(displayProgram, state, \"display_level_clear\")"
+            "this.state = this.materializeDisplayProgram(state, \"display_level_clear\")"
         ));
         assert!(
-            STANDALONE_JS
-                .contains("this.materializeDisplayProgram(displayProgram, state, \"display\")")
+            STANDALONE_JS.contains("return this.materializeDisplayProgram(state, \"display\")")
         );
     }
 
