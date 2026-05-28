@@ -264,10 +264,14 @@ const soundRuntime = new PuzzleSoundRuntime();
 let currentState = null;
 let swipeStart = null;
 const puzzleViewports = new Map();
+/* puzzle-host:optional:puzzle3:start */
 const puzzle3FrameIframes = new Map();
+/* puzzle-host:optional:puzzle3:end */
+/* puzzle-host:optional:solver:start */
 const activeSolveRequests = new Map();
-const standardChoiceCursors = new Map();
 let wasmSolverPromise = null;
+/* puzzle-host:optional:solver:end */
+const standardChoiceCursors = new Map();
 let screenScaleSyncFrame = 0;
 let screenScaleSyncPasses = 0;
 const defaultSceneLogicalSize = { width: 4, height: 3 };
@@ -288,6 +292,7 @@ async function requestJson(url, options = {}) {
   return body;
 }
 
+/* puzzle-host:optional:solver:start */
 async function loadWasmSolver() {
   if (!wasmSolverPromise) {
     wasmSolverPromise = import("./wasm/puzzle_wasm.js")
@@ -323,6 +328,7 @@ async function solveStandaloneCurrentState(options = {}) {
     Number(options.maxMs ?? 0),
   ));
 }
+/* puzzle-host:optional:solver:end */
 
 async function loadState() {
   render(await requestJson("/api/state"));
@@ -574,6 +580,23 @@ function closeMessagePopup() {
   showNextMessage();
 }
 
+function notifyPreviewState(_state) {
+}
+
+function notifySceneEditorPreview(_requestId = "") {
+}
+
+function renderSceneEditorPreview(_config = {}) {
+}
+
+function annotateSceneEditorComponent(_element, _component, _scope = {}) {
+}
+
+function selectSceneEditorComponent(_component, _scope = {}) {
+  return false;
+}
+
+/* puzzle-host:optional:scene-editor:start */
 function notifyPreviewState(state) {
   if (window.parent === window) {
     return;
@@ -792,6 +815,7 @@ function sceneEditorComponentMeta(component, path, scope = {}) {
   }
   return meta;
 }
+/* puzzle-host:optional:scene-editor:end */
 
 function renderSceneStack(state) {
   screenView.replaceChildren();
@@ -965,10 +989,17 @@ function renderRatioComponent(component, scope = {}) {
   slot.dataset.frameComponent = "true";
   slot.dataset.frameKind = component.kind || "frame";
   applySceneLayout(slot, component.layout);
-  slot.append(component.kind === "puzzle3"
-    ? renderPuzzle3Frame(component, scope)
-    : renderPuzzle(component, scope));
+  slot.append(renderFrameComponent(component, scope));
   return slot;
+}
+
+function renderFrameComponent(component, scope = {}) {
+  /* puzzle-host:optional:puzzle3:start */
+  if (component.kind === "puzzle3") {
+    return renderPuzzle3Frame(component, scope);
+  }
+  /* puzzle-host:optional:puzzle3:end */
+  return renderPuzzle(component, scope);
 }
 
 function findComponentByKind(components, kind) {
@@ -1110,6 +1141,7 @@ function renderPuzzle(component, scope = {}) {
   return root;
 }
 
+/* puzzle-host:optional:puzzle3:start */
 function renderPuzzle3Frame(component, scope = {}) {
   if (!window.Puzzle3DFrameFixture || !window.Puzzle3DFrameAssets) {
     const empty = document.createElement("div");
@@ -1177,6 +1209,7 @@ function puzzle3SafeScriptJson(value) {
 function puzzle3SafeScriptText(value) {
   return String(value || "").replace(/<\/(script|style)/gi, "<\\/$1");
 }
+/* puzzle-host:optional:puzzle3:end */
 
 function renderText(component, scope = {}) {
   const text = document.createElement("p");
@@ -1252,6 +1285,7 @@ function renderChoice(component, scope = {}) {
   return choice;
 }
 
+/* puzzle-host:optional:scene-editor:start */
 function annotateSceneEditorComponent(element, component, scope = {}) {
   if (!sceneEditorPreview?.inspect?.enabled || !element) {
     return;
@@ -1288,6 +1322,7 @@ function selectSceneEditorComponent(component, scope = {}) {
 function sameSceneEditorPath(left, right) {
   return JSON.stringify(left || []) === JSON.stringify(right || []);
 }
+/* puzzle-host:optional:scene-editor:end */
 
 function runEffectActivationConfirm(control, effect, scope = {}) {
   if (!shouldDelayActivationConfirm()) {
@@ -2046,12 +2081,16 @@ function sendCommand(command) {
 }
 
 async function sendCommandNow(command) {
+  /* puzzle-host:optional:puzzle3:start */
   if (sendPuzzle3Command(command)) {
     return undefined;
   }
+  /* puzzle-host:optional:puzzle3:end */
+  /* puzzle-host:optional:scene-editor:start */
   if (applyStandaloneEditorInput(command)) {
     return undefined;
   }
+  /* puzzle-host:optional:scene-editor:end */
   if (currentSceneHasLevelMenu() && isLevelMenuCommandName(command)) {
     return post(`/api/command/${encodeURIComponent(command)}`);
   }
@@ -2076,6 +2115,7 @@ async function drainQueuedCommands() {
   }
 }
 
+/* puzzle-host:optional:puzzle3:start */
 function sendPuzzle3Command(command) {
   const parsed = parsePuzzle3Command(command);
   if (!parsed) {
@@ -2111,7 +2151,9 @@ function puzzle3FrameForTarget(target) {
     || frames.find((frame) => frame.dataset.source === target)
     || null;
 }
+/* puzzle-host:optional:puzzle3:end */
 
+/* puzzle-host:optional:scene-editor:start */
 function applyStandaloneEditorInput(command) {
   const acceptsEditorInput = standaloneRuntime?.editorPreviewInputEnabled
     || (standaloneRuntime?.editorPreviewSceneEnabled && currentState?.scene);
@@ -2126,6 +2168,7 @@ function applyStandaloneEditorInput(command) {
   }
   return true;
 }
+/* puzzle-host:optional:scene-editor:end */
 
 function isLevelMenuCommandName(command) {
   const name = String(command || "").split(":", 1)[0];
@@ -2520,7 +2563,9 @@ document.addEventListener("keydown", (event) => {
   if (!currentState) {
     return;
   }
+  /* puzzle-host:optional:puzzle3:start */
   broadcastPuzzle3Key(event, "down");
+  /* puzzle-host:optional:puzzle3:end */
 
   const effects = effectsForKey(event);
   if (effects.length > 0) {
@@ -2537,6 +2582,7 @@ document.addEventListener("keydown", (event) => {
   }
 });
 
+/* puzzle-host:optional:puzzle3:start */
 document.addEventListener("keyup", (event) => {
   if (componentEmbedMode) {
     return;
@@ -2557,6 +2603,7 @@ function broadcastPuzzle3Key(event, action = "down") {
     }, "*");
   }
 }
+/* puzzle-host:optional:puzzle3:end */
 
 if (standaloneRuntime) {
   window.addEventListener("PuzzleStandaloneStateChanged", () => {
@@ -2566,6 +2613,7 @@ if (standaloneRuntime) {
   });
 }
 
+/* puzzle-host:optional:studio-bridge:start */
 window.addEventListener("message", async (event) => {
   if (event.data?.type === "PuzzleStudioSetScenePreview") {
     renderSceneEditorPreview(event.data || {});
@@ -2672,6 +2720,7 @@ window.addEventListener("message", async (event) => {
     sendCommand(command);
   }
 });
+/* puzzle-host:optional:studio-bridge:end */
 
 playSurface.addEventListener("pointerdown", (event) => {
   if (!currentState || currentState.busy || !currentSceneHasPuzzle()) {
