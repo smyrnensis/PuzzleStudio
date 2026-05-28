@@ -19,6 +19,17 @@ git status --short -- editor.html
 This status check is for reporting and awareness. Do not hand-edit root
 `editor.html`; regenerate it from the source owner instead.
 
+When verifying generated `editor.html` in the Codex in-app browser, do not try
+to open it through `file://`. This environment's browser policy blocks local
+file URLs even though the browser tool may describe `file://` as generally
+supported. Serve the repository or generated file over `http://127.0.0.1:<port>/`
+and open that URL instead.
+
+For visual feedback, prefer the shortest human-visible loop: open the served
+editor for the user or capture a screenshot of the relevant viewport. DOM-only
+inspection is useful for state checks, but it is a poor substitute for checking
+layout, spacing, rendering, and first-load visual behavior.
+
 ## Editor Boundaries
 
 The HTML editor, server mode, and desktop shell should share the same editor

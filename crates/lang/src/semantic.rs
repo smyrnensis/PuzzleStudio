@@ -289,7 +289,7 @@ fn update_option_block_stack(
     stack: &mut Vec<OptionBlock>,
 ) {
     let trimmed = line.content.trim();
-    if matches!(trimmed, "}" | "end") {
+    if trimmed == "}" {
         stack.pop();
         return;
     }
@@ -477,7 +477,7 @@ fn completion_keywords_for_scope(scope: Option<SourceScope>) -> &'static [&'stat
         }
         Some(
             SourceScope::Scene
-            | SourceScope::SceneView
+            | SourceScope::SceneLayout
             | SourceScope::SceneState
             | SourceScope::SceneTransitions
             | SourceScope::LevelMenu,
@@ -666,7 +666,7 @@ const SCENE_COMPLETION_KEYWORDS: &[&str] = &[
     "state",
     "text",
     "title",
-    "view",
+    "layout",
     "with",
 ];
 
@@ -746,7 +746,7 @@ const COMPLETION_KEYWORDS: &[&str] = &[
     "theme",
     "title",
     "var",
-    "view",
+    "layout",
     "win_conditions",
     "with",
 ];
@@ -788,7 +788,7 @@ fn is_scene_semantic_scope(scope: Option<SourceScope>) -> bool {
         scope,
         Some(
             SourceScope::Scene
-                | SourceScope::SceneView
+                | SourceScope::SceneLayout
                 | SourceScope::SceneState
                 | SourceScope::SceneKeys
                 | SourceScope::SceneTransitions
@@ -1601,7 +1601,7 @@ step board
 title semantic_surface_roles
 
 scene title {
-view {
+layout {
 title
 }
 }

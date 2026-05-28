@@ -30,7 +30,7 @@ puzzle3 sokoban_literally_in_3d {
 }
 
 scene title {
-  view {
+  layout {
     title "Microban Basic 3D"
     button "Start" -> goto playing
     button "Level Select" -> goto level_select
@@ -42,7 +42,7 @@ scene level_select {
     board = puzzle3 sokoban_literally_in_3d
   }
 
-  view {
+  layout {
     title "Select Level"
     level_menu
     button "Back" -> goto title
@@ -59,7 +59,7 @@ scene playing {
     Escape -> goto level_select
   }
 
-  view {
+  layout {
     puzzle3 board
   }
 }

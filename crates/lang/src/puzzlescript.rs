@@ -1501,7 +1501,7 @@ fn push_playing_scene(
     viewport_size: Option<PsViewportSize>,
 ) {
     out.push("scene title {".to_string());
-    out.push("  view {".to_string());
+    out.push("  layout {".to_string());
     out.push(format!("    title \"{}\"", escape_scene_text(title)));
     if let Some(author) = author {
         out.push(format!("    subtitle \"by {}\"", escape_scene_text(author)));
@@ -1532,11 +1532,11 @@ fn push_playing_scene(
     out.push("    board = puzzle main".to_string());
     out.push("  }".to_string());
     if viewport_size.is_some() {
-        out.push("  view {".to_string());
+        out.push("  layout {".to_string());
         out.push("    puzzle board".to_string());
         out.push("  }".to_string());
     } else {
-        out.push("  view {".to_string());
+        out.push("  layout {".to_string());
         out.push("    row {".to_string());
         out.push(format!("      title \"{}\"", escape_scene_text(title)));
         out.push("    }".to_string());

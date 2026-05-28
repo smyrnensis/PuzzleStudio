@@ -44,7 +44,29 @@ cargo run -p html-play -- games/spec_2d.puzzle -o /tmp/spec_2d.html
 
 ## Generate `editor.html`
 
-Regenerate the root standalone editor artifact:
+Root `editor.html` is a generated standalone editor artifact. Do not edit it by
+hand. Regenerate it from the editor source and the current WASM runtime.
+
+Before regenerating, check whether the artifact is already dirty:
+
+```bash
+git status --short -- editor.html crates/html_editor/static/wasm
+```
+
+Pick a seed `.puzzle` file that passes the current checker. The usual sample is:
+
+```bash
+cargo run -p puzzlestudio -- check games/spec_2d.puzzle
+```
+
+If that fails because the worktree is in the middle of syntax or sample changes,
+use another checked sample instead. For example:
+
+```bash
+cargo run -p puzzlestudio -- check games/spec_3d.puzzle
+```
+
+Regenerate the root standalone editor artifact with the checked seed:
 
 ```bash
 tools/generate_editor.sh games/spec_2d.puzzle -o editor.html
@@ -58,6 +80,18 @@ tools/release_editor_html.sh games/spec_2d.puzzle -o editor.html
 
 Both wrapper scripts rebuild the editor WASM before exporting. The generated
 `editor.html` embeds that WASM and keeps it fixed until regenerated.
+
+If export fails with a parser or validation error, do not patch `editor.html`.
+Fix or choose a valid seed `.puzzle`, then rerun the wrapper. A successful
+regeneration should leave changes in `editor.html` and may also update the
+embedded editor WASM files under `crates/html_editor/static/wasm`.
+
+After regenerating, inspect the generated-artifact diff:
+
+```bash
+git status --short -- editor.html crates/html_editor/static/wasm
+git diff --stat -- editor.html crates/html_editor/static/wasm
+```
 
 For static web hosting output:
 

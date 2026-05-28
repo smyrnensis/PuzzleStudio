@@ -265,15 +265,14 @@ let currentState = null;
 let swipeStart = null;
 const puzzleViewports = new Map();
 const puzzle3FrameIframes = new Map();
-const activeSolveRequests = new Map();
 const standardChoiceCursors = new Map();
-let wasmSolverPromise = null;
 let screenScaleSyncFrame = 0;
 let screenScaleSyncPasses = 0;
 const defaultSceneLogicalSize = { width: 4, height: 3 };
 const defaultSceneLayoutUnit = 180;
 const pendingCommandQueue = [];
 let drainingCommandQueue = false;
+let sceneEditorPreview = null;
 
 async function requestJson(url, options = {}) {
   if (standaloneRuntime) {
@@ -285,42 +284,6 @@ async function requestJson(url, options = {}) {
     throw new Error(body.error || response.statusText);
   }
   return body;
-}
-
-async function loadWasmSolver() {
-  if (!wasmSolverPromise) {
-    wasmSolverPromise = import("./wasm/puzzle_wasm.js")
-      .then(async (module) => {
-        await module.default({ module_or_path: "./wasm/puzzle_wasm_bg.wasm" });
-        if (typeof module.solve_state !== "function") {
-          throw new Error("Solver is not available");
-        }
-        return module;
-      })
-      .catch((error) => {
-        wasmSolverPromise = null;
-        throw error;
-      });
-  }
-  return wasmSolverPromise;
-}
-
-async function solveStandaloneCurrentState(options = {}) {
-  if (!standaloneRuntime) {
-    return requestJson("/api/solve", { method: "POST" });
-  }
-  if (!window.PuzzleExport?.source) {
-    throw new Error("standalone solve requires PuzzleExport.source");
-  }
-  const solver = await loadWasmSolver();
-  return JSON.parse(solver.solve_state(
-    window.PuzzleExport.source,
-    window.PuzzleExport.puzzlePath || "game.puzzle",
-    JSON.stringify(standaloneRuntime.state),
-    Number(options.maxDepth ?? 512),
-    Number(options.maxNodes ?? 5_000_000),
-    Number(options.maxMs ?? 0),
-  ));
 }
 
 async function loadState() {
@@ -424,6 +387,9 @@ function syncScreenScale() {
 }
 
 function currentSceneLogicalSize() {
+  if (sceneEditorPreview?.layout?.size) {
+    return logicalSceneSize(sceneEditorPreview.layout.size);
+  }
   const layers = sceneLayers(currentState);
   const layer = layers.find((candidate) => candidate.focused === true) || layers[0];
   const sceneDef = sceneDefByName(layer?.name) || currentSceneDef();
@@ -584,6 +550,209 @@ function notifyPreviewState(state) {
     screenHasPuzzle: currentSceneHasPuzzle() || Boolean(state.scene),
     theme: state.theme || window.PuzzleExport?.theme || null,
   }, "*");
+}
+
+function notifySceneEditorPreview(requestId = sceneEditorPreview?.requestId || "") {
+  if (window.parent === window || !sceneEditorPreview) {
+    return;
+  }
+  const sceneName = sceneEditorPreview.sceneName || currentState?.currentScene || currentState?.screen || "";
+  const sceneDef = sceneDefByName(sceneName);
+  const layout = mergedScenePreviewLayout(sceneDef, sceneEditorPreview.layout);
+  window.parent.postMessage({
+    type: "PuzzleStudioScenePreview",
+    requestId,
+    scene: sceneName,
+    theme: sceneEditorPreview.theme || currentState?.theme || window.PuzzleExport?.theme || null,
+    layout,
+    logicalSize: logicalSceneSize(layout?.size),
+    components: sceneEditorComponentMetadata(sceneDef?.components || [], {
+      __sceneDef: sceneDef,
+      __sceneState: sceneEditorPreview.state || currentState?.sceneState || currentState?.screenState || {},
+      __standardChoiceCounter: { value: 0 },
+    }),
+    error: sceneDef ? null : `Unknown scene: ${sceneName}`,
+  }, "*");
+}
+
+function renderSceneEditorPreview(config = {}) {
+  const sceneName = String(config.scene?.name || config.sceneName || currentState?.currentScene || currentState?.screen || "").trim();
+  const sceneDef = sceneDefByName(sceneName);
+  sceneEditorPreview = {
+    requestId: String(config.requestId || ""),
+    sceneName,
+    theme: normalizeScenePreviewTheme(config.theme) || currentState?.theme || window.PuzzleExport?.theme || null,
+    layout: normalizeScenePreviewLayout(config.layout),
+    state: normalizeScenePreviewState(config.state),
+    inspect: config.inspect || {},
+  };
+  if (!sceneDef) {
+    notifySceneEditorPreview(sceneEditorPreview.requestId);
+    return;
+  }
+  const baseState = currentState || window.PuzzleExport || {};
+  const existingLayer = sceneLayers(baseState).find((layer) => layer.name === sceneName);
+  const previewState = {
+    ...baseState,
+    currentScene: sceneName,
+    screen: sceneName,
+    theme: sceneEditorPreview.theme,
+    sceneState: sceneEditorPreview.state || existingLayer?.sceneState || existingLayer?.state || baseState.sceneState || baseState.screenState || {},
+    screenState: sceneEditorPreview.state || existingLayer?.sceneState || existingLayer?.state || baseState.sceneState || baseState.screenState || {},
+    sceneLayers: [{
+      name: sceneName,
+      focused: true,
+      scene: existingLayer?.scene || baseState.scene || null,
+      sceneState: sceneEditorPreview.state || existingLayer?.sceneState || existingLayer?.state || baseState.sceneState || baseState.screenState || {},
+      scenePuzzles: existingLayer?.scenePuzzles || baseState.scenePuzzles || baseState.screenPuzzles || [],
+    }],
+  };
+  currentState = previewState;
+  window.__PuzzleCurrentState = previewState;
+  applyTheme(sceneEditorPreview.theme);
+  renderSceneEditorLayer(sceneDef, previewState);
+  scheduleScreenScaleSync(3);
+  notifySceneEditorPreview(sceneEditorPreview.requestId);
+}
+
+function renderSceneEditorLayer(sceneDef, state) {
+  screenView.replaceChildren();
+  const layer = state.sceneLayers[0];
+  const components = sceneDef?.components || [];
+  const hasPuzzle = sceneHasComponent(sceneDef, "puzzle") || sceneHasComponent(sceneDef, "frame");
+  const isMenuScene = sceneIsMenuLike(sceneDef, hasPuzzle);
+  const scope = {
+    __sceneLayer: layer,
+    __sceneDef: sceneDef,
+    __sceneState: layer.sceneState || layer.state || {},
+    __sceneMenuLike: isMenuScene,
+    __standardChoiceCounter: { value: 0 },
+    __componentPath: ["components"],
+  };
+  const layerEl = document.createElement("div");
+  layerEl.className = "scene-layer is-focused";
+  layerEl.classList.toggle("is-menu-scene", isMenuScene);
+  layerEl.classList.toggle("has-ratio-content", components.some((component) => componentContainsSizingKind(component, "ratio")));
+  layerEl.style.zIndex = "10";
+  applySceneLayout(layerEl, mergedScenePreviewLayout(sceneDef, sceneEditorPreview?.layout), { root: true });
+  renderSurfaceComponents(components, layerEl, scope);
+  markSingleFrameComponentLayer(layerEl);
+  screenView.append(layerEl);
+  fitPuzzleFrameComponents(screenView);
+}
+
+function mergedScenePreviewLayout(sceneDef, override) {
+  const base = cloneJson(sceneDef?.layout || {});
+  const next = { ...base, ...(override || {}) };
+  if (override?.size) {
+    next.size = { ...(base.size || {}), ...override.size };
+  }
+  if (override?.align) {
+    next.align = { ...(base.align || {}), ...override.align };
+  }
+  return next;
+}
+
+function normalizeScenePreviewTheme(theme) {
+  if (!theme) {
+    return null;
+  }
+  if (typeof theme === "string") {
+    return { name: theme, variables: {} };
+  }
+  const name = String(theme.name || "").trim();
+  const variables = {};
+  for (const [key, value] of Object.entries(theme.variables || {})) {
+    const normalized = normalizeThemeVariableName(key);
+    if (normalized) {
+      variables[normalized] = String(value);
+    }
+  }
+  return { name, variables };
+}
+
+function normalizeScenePreviewLayout(layout) {
+  if (!layout || typeof layout !== "object") {
+    return null;
+  }
+  const next = {};
+  if (layout.size) {
+    const width = Number(layout.size.width);
+    const height = Number(layout.size.height);
+    if (Number.isFinite(width) && width > 0 && Number.isFinite(height) && height > 0) {
+      next.size = { width, height };
+    }
+  }
+  if (layout.gap !== undefined && layout.gap !== null && layout.gap !== "") {
+    const gap = Number(layout.gap);
+    if (Number.isFinite(gap) && gap >= 0) {
+      next.gap = gap;
+    }
+  }
+  if (layout.align && typeof layout.align === "object") {
+    next.align = {};
+    if (layout.align.x) {
+      next.align.x = String(layout.align.x);
+    }
+    if (layout.align.y) {
+      next.align.y = String(layout.align.y);
+    }
+  }
+  return Object.keys(next).length ? next : null;
+}
+
+function normalizeScenePreviewState(state) {
+  return state && typeof state === "object" && !Array.isArray(state) ? cloneJson(state) : null;
+}
+
+function cloneJson(value) {
+  return value == null ? value : JSON.parse(JSON.stringify(value));
+}
+
+function sceneEditorComponentMetadata(components, scope = {}) {
+  const result = [];
+  for (const [index, component] of (components || []).entries()) {
+    const path = [...(scope.__componentPath || ["components"]), index];
+    result.push(sceneEditorComponentMeta(component, path, scope));
+    if (component.kind === "row" || component.kind === "column" || component.kind === "box") {
+      result.push(...sceneEditorComponentMetadata(component.children || [], {
+        ...scope,
+        __componentPath: [...path, "children"],
+      }));
+    } else if (component.kind === "conditional") {
+      result.push(...sceneEditorComponentMetadata(component.children || [], {
+        ...scope,
+        __componentPath: [...path, "children"],
+      }));
+      result.push(...sceneEditorComponentMetadata(component.elseChildren || [], {
+        ...scope,
+        __componentPath: [...path, "elseChildren"],
+      }));
+    } else if (component.kind === "for") {
+      result.push(...sceneEditorComponentMetadata(component.children || [], {
+        ...scope,
+        __componentPath: [...path, "children"],
+      }));
+    }
+  }
+  return result;
+}
+
+function sceneEditorComponentMeta(component, path, scope = {}) {
+  const meta = {
+    path,
+    kind: component.kind || "",
+    layout: component.layout || null,
+  };
+  if (component.kind === "button" || component.kind === "choice") {
+    meta.label = resolveLabel(component.label, scope) || sceneTitle(effectLabel(component.effect));
+    meta.effect = component.effect || null;
+  } else if (component.kind === "text" || component.kind === "title" || component.kind === "subtitle") {
+    meta.label = resolveLabel(component.content || component, scope);
+  } else if (component.source) {
+    meta.source = component.source;
+  }
+  return meta;
 }
 
 function renderSceneStack(state) {
@@ -806,8 +975,12 @@ function sceneTitle(name) {
 }
 
 function renderSurfaceComponents(components, parent = screenView, scope = {}) {
-  for (const component of components || []) {
-    parent.append(renderComponent(component, scope));
+  for (const [index, component] of (components || []).entries()) {
+    const path = [...(scope.__componentPath || ["components"]), index];
+    parent.append(renderComponent(component, {
+      ...scope,
+      __componentPath: path,
+    }));
   }
 }
 
@@ -927,6 +1100,11 @@ function puzzle3FrameSrcdoc(sceneName) {
   const assets = window.Puzzle3DFrameAssets || {};
   const fixture = JSON.parse(JSON.stringify(window.Puzzle3DFrameFixture || {}));
   fixture.currentScene = sceneName || fixture.currentScene || fixture.scenes?.[0]?.name || "playing";
+  if (Number.isInteger(currentState?.levelIndex)) {
+    fixture.levelIndex = currentState.levelIndex;
+  } else if (Number.isInteger(currentState?.selectedLevelIndex)) {
+    fixture.levelIndex = currentState.selectedLevelIndex;
+  }
   const fixtureJson = puzzle3SafeScriptJson(fixture);
   const sourceJson = puzzle3SafeScriptJson(assets.source || "");
   const puzzlePathJson = puzzle3SafeScriptJson(assets.puzzlePath || "game.puzzle");
@@ -979,14 +1157,25 @@ function renderButton(component, scope = {}) {
   const button = document.createElement("button");
   button.type = "button";
   button.textContent = resolveLabel(component.label, scope) || sceneTitle(effectLabel(component.effect));
+  annotateSceneEditorComponent(button, component, scope);
   if (scope.__menuInstance && component.value) {
     const counter = scope.__menuButtonCounter || { value: 0 };
     const index = counter.value;
     counter.value += 1;
     button.classList.toggle("is-selected", index === scope.__menuCursor);
-    button.addEventListener("click", () => runActivationConfirm(button, () => sendCommand(`${scope.__menuInstance}.enter:${index}`)));
+    button.addEventListener("click", () => {
+      if (selectSceneEditorComponent(component, scope)) {
+        return;
+      }
+      runActivationConfirm(button, () => sendCommand(`${scope.__menuInstance}.enter:${index}`));
+    });
   } else {
-    button.addEventListener("click", () => runEffectActivationConfirm(button, component.effect, scope));
+    button.addEventListener("click", () => {
+      if (selectSceneEditorComponent(component, scope)) {
+        return;
+      }
+      runEffectActivationConfirm(button, component.effect, scope);
+    });
   }
   applySizingKind(button, component);
   applySceneLayout(button, component.layout);
@@ -998,6 +1187,7 @@ function renderChoice(component, scope = {}) {
   choice.type = "button";
   choice.textContent = resolveLabel(component.label, scope) || sceneTitle(effectLabel(component.effect));
   choice.classList.add("standard-choice");
+  annotateSceneEditorComponent(choice, component, scope);
   if (!scope.__insideFor) {
     const counter = scope.__standardChoiceCounter || { value: 0 };
     scope.__standardChoiceCounter = counter;
@@ -1005,15 +1195,60 @@ function renderChoice(component, scope = {}) {
     counter.value += 1;
     choice.classList.toggle("is-selected", index === standardChoiceCursor(scope.__sceneDef));
     choice.addEventListener("click", () => {
+      if (selectSceneEditorComponent(component, scope)) {
+        return;
+      }
       standardChoiceCursors.set(scope.__sceneDef.name, index);
       runEffectActivationConfirm(choice, component.effect, scope);
     });
   } else {
-    choice.addEventListener("click", () => runEffectActivationConfirm(choice, component.effect, scope));
+    choice.addEventListener("click", () => {
+      if (selectSceneEditorComponent(component, scope)) {
+        return;
+      }
+      runEffectActivationConfirm(choice, component.effect, scope);
+    });
   }
   applySizingKind(choice, component);
   applySceneLayout(choice, component.layout);
   return choice;
+}
+
+function annotateSceneEditorComponent(element, component, scope = {}) {
+  if (!sceneEditorPreview?.inspect?.enabled || !element) {
+    return;
+  }
+  const path = scope.__componentPath || [];
+  element.dataset.sceneEditorPath = JSON.stringify(path);
+  element.dataset.sceneEditorKind = component.kind || "";
+  element.style.outline = "2px solid rgba(41, 126, 255, 0.42)";
+  element.style.outlineOffset = "2px";
+  if (sameSceneEditorPath(path, sceneEditorPreview.inspect.selectedPath)) {
+    element.style.outline = "3px solid rgba(255, 178, 48, 0.9)";
+  }
+}
+
+function selectSceneEditorComponent(component, scope = {}) {
+  if (!sceneEditorPreview?.inspect?.enabled) {
+    return false;
+  }
+  const path = scope.__componentPath || [];
+  sceneEditorPreview.inspect.selectedPath = path;
+  window.parent?.postMessage({
+    type: "PuzzleStudioSceneComponentSelected",
+    requestId: sceneEditorPreview.requestId || "",
+    scene: sceneEditorPreview.sceneName || "",
+    component: sceneEditorComponentMeta(component, path, {
+      ...scope,
+      __componentPath: path,
+    }),
+  }, "*");
+  renderSceneEditorPreview(sceneEditorPreview);
+  return true;
+}
+
+function sameSceneEditorPath(left, right) {
+  return JSON.stringify(left || []) === JSON.stringify(right || []);
 }
 
 function runEffectActivationConfirm(control, effect, scope = {}) {
@@ -1137,7 +1372,10 @@ function renderContainer(component, scope = {}) {
     container.classList.add("is-scroll");
   }
   applySceneLayout(container, component.layout);
-  renderSurfaceComponents(component.children || [], container, scope);
+  renderSurfaceComponents(component.children || [], container, {
+    ...scope,
+    __componentPath: [...(scope.__componentPath || []), "children"],
+  });
   return container;
 }
 
@@ -1146,7 +1384,10 @@ function renderConditional(component, scope = {}) {
   const children = isSceneConditionTrue(component.condition)
     ? component.children || []
     : component.elseChildren || [];
-  renderSurfaceComponents(children, fragment, scope);
+  renderSurfaceComponents(children, fragment, {
+    ...scope,
+    __componentPath: [...(scope.__componentPath || []), isSceneConditionTrue(component.condition) ? "children" : "elseChildren"],
+  });
   return fragment;
 }
 
@@ -1263,6 +1504,7 @@ function renderFor(component, scope = {}) {
     renderSurfaceComponents(component.children || [], row, {
       ...scope,
       __insideFor: true,
+      __componentPath: [...(scope.__componentPath || []), "children"],
       [component.binding]: item,
     });
     if (!row.childNodes.length) {
@@ -1643,13 +1885,15 @@ function inputByName(name) {
 }
 
 function currentSceneDef() {
-  const name = currentState?.currentScene || currentState?.screen || "playing";
-  const scenes = currentState?.scenes || currentState?.screens || [];
+  const source = currentState || window.PuzzleExport || {};
+  const name = source.currentScene || source.screen || "playing";
+  const scenes = source.scenes || source.screens || [];
   return scenes.find((scene) => scene.name === name) || null;
 }
 
 function sceneDefByName(name) {
-  const scenes = currentState?.scenes || currentState?.screens || [];
+  const source = currentState || window.PuzzleExport || {};
+  const scenes = source.scenes || source.screens || [];
   return scenes.find((scene) => scene.name === name) || null;
 }
 
@@ -2285,6 +2529,16 @@ if (standaloneRuntime) {
 }
 
 window.addEventListener("message", async (event) => {
+  if (event.data?.type === "PuzzleStudioSetScenePreview") {
+    renderSceneEditorPreview(event.data || {});
+    return;
+  }
+
+  if (event.data?.type === "PuzzleStudioRequestScenePreview") {
+    notifySceneEditorPreview(String(event.data.requestId || ""));
+    return;
+  }
+
   if (event.data?.type === "PuzzleStudioInput") {
     if (standaloneRuntime && event.data.input) {
       sendCommand(String(event.data.input));
@@ -2307,52 +2561,6 @@ window.addEventListener("message", async (event) => {
       } else {
         loadState();
       }
-    }
-    return;
-  }
-
-  if (event.data?.type === "PuzzleStudioSolve") {
-    const requestId = event.data.requestId;
-    const solveRequest = { cancelled: false };
-    activeSolveRequests.set(requestId, solveRequest);
-    try {
-      if (standaloneRuntime && event.data.state) {
-        standaloneRuntime.setCurrentState(event.data.state, {
-          levelIndex: event.data.levelIndex,
-          regions: event.data.regions,
-          acceptModelInput: event.data.acceptModelInput === true,
-          materializeLevelStart: event.data.materializeLevelStart === true,
-          materializeDisplay: event.data.materializeDisplay === true,
-          materializeTurnStart: event.data.materializeTurnStart === true,
-        });
-        if (event.data.silent === true) {
-          notifyPreviewState(standaloneRuntime.snapshot());
-        } else {
-          await loadState();
-        }
-      }
-      const solution = await solveStandaloneCurrentState(event.data.options || {});
-      window.parent.postMessage({
-        type: "PuzzleStudioSolveResult",
-        requestId,
-        solution,
-      }, "*");
-    } catch (error) {
-      window.parent.postMessage({
-        type: "PuzzleStudioSolveResult",
-        requestId,
-        error: String(error?.message || error),
-      }, "*");
-    } finally {
-      activeSolveRequests.delete(requestId);
-    }
-    return;
-  }
-
-  if (event.data?.type === "PuzzleStudioCancelSolve") {
-    const solveRequest = activeSolveRequests.get(event.data.requestId);
-    if (solveRequest) {
-      solveRequest.cancelled = true;
     }
     return;
   }

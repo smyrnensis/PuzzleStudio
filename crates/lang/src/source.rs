@@ -37,7 +37,7 @@ pub(crate) fn logical_lines(source: &str) -> Result<Vec<String>, AppError> {
         } else if is_levels_header(&tokens) {
             preserve_level_blanks = true;
             level_end_depth = Some(1);
-        } else if (is_braced_levels_header(&tokens) || matches!(tokens.as_slice(), ["level", ..]))
+        } else if (is_levels_header(&tokens) || matches!(tokens.as_slice(), ["level", ..]))
             && line.ends_with('{')
         {
             preserve_level_blanks = true;
@@ -45,10 +45,10 @@ pub(crate) fn logical_lines(source: &str) -> Result<Vec<String>, AppError> {
         }
         if let Some(depth) = &mut level_end_depth {
             if !is_levels_header(&tokens) {
-                if matches!(tokens.as_slice(), ["level", .., "{"] | ["{"] | ["legend"]) {
+                if line.ends_with('{') {
                     *depth += 1;
                 }
-                if line == "end" {
+                if line == "}" {
                     *depth = depth.saturating_sub(1);
                 }
             }
@@ -107,7 +107,7 @@ fn normalize_brace_blocks(lines: &[String]) -> Result<Vec<String>, AppError> {
 
     for line in lines {
         if line == "}" {
-            normalized.push("end".to_string());
+            normalized.push("}".to_string());
             if levels_brace_depth > 0 {
                 levels_brace_depth -= 1;
             }
@@ -153,6 +153,10 @@ fn normalize_brace_blocks(lines: &[String]) -> Result<Vec<String>, AppError> {
             let preserve_level_header = levels_brace_depth > 0
                 && !starts_inline_block(&header_tokens, header)
                 || matches!(header_tokens.as_slice(), ["level", ..]);
+            if header.ends_with("->") {
+                normalized.push(format!("{header} {{"));
+                continue;
+            }
             if preserve_level_header {
                 normalized.push(format!("{header} {{"));
                 if levels_brace_depth > 0 || is_levels_header {
@@ -160,7 +164,7 @@ fn normalize_brace_blocks(lines: &[String]) -> Result<Vec<String>, AppError> {
                 }
                 continue;
             }
-            normalized.push(header.to_string());
+            normalized.push(format!("{header} {{"));
             if levels_brace_depth > 0 || is_levels_header {
                 levels_brace_depth += 1;
             }
@@ -192,9 +196,9 @@ fn normalize_section_headers(lines: &[String]) -> Result<Vec<String>, AppError> 
                         "section header cannot appear inside a nested block",
                     ));
                 }
-                normalized.push("end".to_string());
+                normalized.push("}".to_string());
             }
-            normalized.push(section.block.to_string());
+            normalized.push(format!("{} {{", section.block));
             open_section = Some(section);
             i += 3;
             continue;
@@ -202,9 +206,9 @@ fn normalize_section_headers(lines: &[String]) -> Result<Vec<String>, AppError> 
 
         let line = &lines[i];
         if let Some(open) = &mut open_section {
-            if line == "end" {
+            if line == "}" {
                 if open.nested_depth == 0 {
-                    normalized.push("end".to_string());
+                    normalized.push("}".to_string());
                     open_section = None;
                     normalized.push(line.clone());
                 } else {
@@ -217,7 +221,7 @@ fn normalize_section_headers(lines: &[String]) -> Result<Vec<String>, AppError> 
 
             let tokens = split_tokens(line);
             if open.nested_depth == 0 && section_boundary(open.block, &tokens) {
-                normalized.push("end".to_string());
+                normalized.push("}".to_string());
                 open_section = None;
                 continue;
             }
@@ -233,11 +237,11 @@ fn normalize_section_headers(lines: &[String]) -> Result<Vec<String>, AppError> 
     if let Some(open) = open_section {
         if open.nested_depth != 0 {
             return Err(AppError::Parse(format!(
-                "{} section missing end for nested block",
+                "{} section missing closing brace for nested block",
                 open.block
             )));
         }
-        normalized.push("end".to_string());
+        normalized.push("}".to_string());
     }
 
     Ok(normalized)
@@ -307,7 +311,7 @@ fn canonical_section_block(normalized: &str) -> Option<&'static str> {
         "theme" | "themes" => Some("theme"),
         "asset" | "assets" => Some("assets"),
         "screen" => Some("screen"),
-        "view" => Some("view"),
+        "layout" => Some("layout"),
         "rule" | "rules" => Some("rules"),
         "level" | "levels" => Some("levels"),
         "on_display" => Some("on_display"),
@@ -365,7 +369,7 @@ fn starts_puzzle_section(tokens: &[&str]) -> bool {
             | ["theme", ..]
             | ["assets"]
             | ["screen"]
-            | ["view"]
+            | ["layout"]
             | ["rule", ..]
             | ["rules"]
             | ["main"]
@@ -379,7 +383,7 @@ fn starts_nested_block(block: &str, tokens: &[&str], line: &str) -> bool {
     match block {
         "legend" => false,
         "levels" => {
-            matches!(tokens, ["level", .., "{"])
+            (matches!(tokens, ["level", ..]) && line.ends_with('{'))
                 || matches!(tokens, ["{"])
                 || (!matches!(tokens, ["level", ..]) && starts_inline_block(tokens, line))
         }
@@ -396,13 +400,6 @@ fn is_levels_header(tokens: &[&str]) -> bool {
             | ["levels", "{"]
             | ["levels", "of", _, "{"]
             | ["levels", _, "of", _, "{"]
-    )
-}
-
-fn is_braced_levels_header(tokens: &[&str]) -> bool {
-    matches!(
-        tokens,
-        ["levels", "{"] | ["levels", "of", _, "{"] | ["levels", _, "of", _, "{"]
     )
 }
 
@@ -430,7 +427,7 @@ fn starts_inline_block(tokens: &[&str], line: &str) -> bool {
             | ["theme", ..]
             | ["assets"]
             | ["screen"]
-            | ["view"]
+            | ["layout"]
             | ["rule", ..]
             | ["rules"]
             | ["main"]
@@ -484,7 +481,11 @@ fn strip_inline_scratch_blocks(line: &str) -> Result<String, AppError> {
 }
 
 pub(crate) fn split_tokens(line: &str) -> Vec<&str> {
-    line.split_whitespace().collect()
+    let mut tokens = line.split_whitespace().collect::<Vec<_>>();
+    if tokens.len() > 1 && tokens.last().copied() == Some("{") {
+        tokens.pop();
+    }
+    tokens
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -493,7 +494,7 @@ pub(crate) enum SourceScope {
     Sounds,
     Assets,
     Scene,
-    SceneView,
+    SceneLayout,
     SceneState,
     SceneKeys,
     SceneTransitions,
@@ -608,7 +609,7 @@ pub(crate) fn scan_source_context(source: &str) -> SourceContext {
             close_blank_line(&mut block_stack);
         }
 
-        if !in_section_header && !trimmed.is_empty() && !matches!(trimmed, "}" | "end") {
+        if !in_section_header && !trimmed.is_empty() && trimmed != "}" {
             match source_line_role(current, trimmed, &tokens) {
                 SourceLineRole::Normal => {}
                 SourceLineRole::Raw => context.raw.push((offset, content_end)),
@@ -629,7 +630,7 @@ pub(crate) fn scan_source_context(source: &str) -> SourceContext {
             if skip_section_header_until.is_some_and(|header_end| line_end >= header_end) {
                 skip_section_header_until = None;
             }
-        } else if matches!(trimmed, "}" | "end") {
+        } else if trimmed == "}" {
             close_block_line(&mut block_stack);
         } else if source_opens_block(trimmed, &tokens, current)
             && let Some(opened) = opening_scope(trimmed, &tokens, current)
@@ -809,7 +810,7 @@ fn source_opens_block(line: &str, tokens: &[&str], current: Option<SourceScope>)
             ["state"] | ["keys"] | ["inputs"] | ["rules"] | ["on_scene_start"] => {
                 return true;
             }
-            ["view", ..] => return true,
+            ["layout", ..] => return true,
             ["row", ..]
             | ["column", ..]
             | ["box", ..]
@@ -854,7 +855,7 @@ fn source_opens_block(line: &str, tokens: &[&str], current: Option<SourceScope>)
                 | ["scene", ..]
                 | ["puzzle", ..]
                 | ["puzzle3", ..]
-                | ["view", ..]
+                | ["layout", ..]
                 | ["state"]
                 | ["rules"]
                 | ["on_scene_start"]
@@ -873,7 +874,7 @@ fn source_opens_block(line: &str, tokens: &[&str], current: Option<SourceScope>)
 fn opening_scope(line: &str, tokens: &[&str], current: Option<SourceScope>) -> Option<SourceScope> {
     if is_scene_scope(current) {
         match tokens {
-            ["view", ..]
+            ["layout", ..]
             | ["row", ..]
             | ["column", ..]
             | ["box", ..]
@@ -881,7 +882,7 @@ fn opening_scope(line: &str, tokens: &[&str], current: Option<SourceScope>) -> O
             | ["menu", ..]
             | ["puzzle", ..]
             | ["puzzle3", ..] => {
-                return Some(SourceScope::SceneView);
+                return Some(SourceScope::SceneLayout);
             }
             ["state"] => return Some(SourceScope::SceneState),
             ["keys"] | ["inputs"] => return Some(SourceScope::SceneKeys),
@@ -892,7 +893,7 @@ fn opening_scope(line: &str, tokens: &[&str], current: Option<SourceScope>) -> O
             _ => {}
         }
         if line.ends_with('{') {
-            return if current == Some(SourceScope::SceneView) && line.contains("->") {
+            return if current == Some(SourceScope::SceneLayout) && line.contains("->") {
                 Some(SourceScope::SceneTransitions)
             } else {
                 current
@@ -937,7 +938,7 @@ fn is_scene_scope(scope: Option<SourceScope>) -> bool {
         scope,
         Some(
             SourceScope::Scene
-                | SourceScope::SceneView
+                | SourceScope::SceneLayout
                 | SourceScope::SceneState
                 | SourceScope::SceneKeys
                 | SourceScope::SceneTransitions
@@ -1018,7 +1019,7 @@ mod tests {
 
     #[test]
     fn source_context_preserves_token_spans_before_comments() {
-        let source = "scene title {\n  button \"Play\" -> goto playing // comment\n}\n";
+        let source = "scene title {\n  button start -> goto playing // comment\n}\n";
         let context = scan_source_context(source);
         let button_line = context
             .lines

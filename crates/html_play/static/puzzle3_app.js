@@ -3,7 +3,9 @@ const componentEmbedMode = new URLSearchParams(window.location.search).get("comp
   || window.Puzzle3DComponentEmbed === true;
 let editorComponentEmbedMode = false;
 document.documentElement.classList.toggle("is-component-embed", componentEmbedMode);
-document.body.classList.add("theme-clean");
+let activeThemeClass = "";
+const activeThemeVariables = new Set();
+applyTheme({ name: "clean" });
 document.body.classList.toggle("is-component-embed", componentEmbedMode);
 const puzzle3Frame = ensurePuzzle3ComponentFrame();
 const canvas = puzzle3Frame.querySelector("#view");
@@ -90,12 +92,10 @@ let runtime = null;
 let initialCamera = cloneCamera(fallbackSnapshot.camera);
 let currentSceneName = initialSceneName(fallbackSnapshot);
 let editorModelComponentPreview = null;
-let levelMenuCursor = 0;
-let sceneButtonCursor = 0;
+let sceneEditorPreview = null;
 let queuedSceneInputs = [];
 let queuedSceneInputFrame = 0;
 const heldSceneInputs = new Map();
-const SCENE_BUTTON_DEFAULT_WIDTH = 5;
 const SCENE_DEFAULT_WIDTH = 16;
 const SCENE_DEFAULT_HEIGHT = 12;
 const spriteVoxelTemplateCache = new WeakMap();
@@ -141,12 +141,64 @@ async function loadSnapshotData(source, options = {}) {
     || options.scene
     || (options.preferPuzzleScene ? puzzleSceneName(snapshot) : "")
     || initialSceneName(snapshot);
-  levelMenuCursor = snapshot.levelIndex || 0;
+  applyTheme(snapshot.theme || { name: "clean" });
   initialCamera = cloneCamera(snapshot.camera || fallbackSnapshot.camera);
   view.projectionFitKey = "";
   resetRenderGeometryCache();
   resetViewportMotion();
   renderScene();
+}
+
+function applyTheme(theme) {
+  if (activeThemeClass) {
+    document.body.classList.remove(activeThemeClass);
+  }
+  for (const variable of activeThemeVariables) {
+    document.documentElement.style.removeProperty(variable);
+  }
+  activeThemeVariables.clear();
+  const name = normalizeScenePreviewTheme(theme)?.name || "clean";
+  activeThemeClass = `theme-${name}`;
+  document.body.classList.add(activeThemeClass);
+  const variables = theme && typeof theme === "object" ? theme.variables : null;
+  if (variables && typeof variables === "object") {
+    for (const [key, value] of Object.entries(variables)) {
+      if (!key.startsWith("--")) {
+        continue;
+      }
+      document.documentElement.style.setProperty(key, String(value));
+      activeThemeVariables.add(key);
+    }
+  }
+}
+
+function normalizeScenePreviewTheme(theme) {
+  if (!theme) {
+    return null;
+  }
+  if (typeof theme === "string") {
+    const name = normalizeThemeName(theme);
+    return name ? { name } : null;
+  }
+  if (typeof theme !== "object") {
+    return null;
+  }
+  const name = normalizeThemeName(theme.name || theme.id || "clean");
+  if (!name) {
+    return null;
+  }
+  return {
+    name,
+    variables: theme.variables && typeof theme.variables === "object" ? theme.variables : {},
+  };
+}
+
+function normalizeThemeName(name) {
+  return String(name || "")
+    .trim()
+    .replace(/^theme-/, "")
+    .replace(/[^a-zA-Z0-9_-]/g, "")
+    || "clean";
 }
 
 async function createPuzzle3Runtime(initialSnapshot) {
@@ -487,243 +539,58 @@ function currentScene() {
     || null;
 }
 
+function sceneByName(sceneName) {
+  return snapshot.scenes?.find((scene) => scene.name === sceneName) || null;
+}
+
 function puzzle3ComponentFor(scene) {
   return findSceneComponent(scene?.components || [], (component) => component.kind === "puzzle3");
 }
 
+function renderSceneEditorPreview(config = {}) {
+  const sceneName = String(config.scene?.name || config.sceneName || currentSceneName || initialSceneName(snapshot) || "").trim();
+  sceneEditorPreview = {
+    requestId: String(config.requestId || ""),
+    sceneName,
+    theme: normalizeScenePreviewTheme(config.theme) || normalizeScenePreviewTheme(snapshot.theme) || { name: "clean" },
+  };
+  applyTheme(sceneEditorPreview.theme);
+  currentSceneName = sceneName;
+  renderScene();
+  notifySceneEditorPreview(sceneEditorPreview.requestId);
+}
+
+function notifySceneEditorPreview(requestId = sceneEditorPreview?.requestId || "") {
+  if (window.parent === window || !sceneEditorPreview) {
+    return;
+  }
+  const sceneName = sceneEditorPreview.sceneName || currentSceneName || "";
+  const scene = sceneByName(sceneName);
+  window.parent.postMessage({
+    type: "PuzzleStudioScenePreview",
+    requestId,
+    scene: sceneName,
+    theme: sceneEditorPreview.theme || normalizeScenePreviewTheme(snapshot.theme) || { name: "clean" },
+    layout: scene?.layout || null,
+    logicalSize: null,
+    components: [],
+    error: scene ? null : `Unknown scene: ${sceneName}`,
+  }, "*");
+}
+
 function renderScene() {
+  let sceneName = currentSceneName || initialSceneName(snapshot) || "default";
+  let component = null;
   if (editorModelComponentPreview) {
-    const sceneName = editorModelComponentPreview.sceneName || "__editor_model_preview__";
-    screenView.className = `scene ${sceneName}`;
-    puzzle3Component.mount(editorModelComponentPreview.component || puzzle3ModelPreviewComponent(), sceneName);
-    return;
+    sceneName = editorModelComponentPreview.sceneName || "__editor_model_preview__";
+    component = editorModelComponentPreview.component || puzzle3ModelPreviewComponent();
+  } else {
+    const scene = currentScene();
+    sceneName = scene?.name || currentSceneName || "default";
+    component = puzzle3ComponentFor(scene) || puzzle3ModelPreviewComponent();
   }
-  const scene = currentScene();
-  screenView.className = `scene ${scene?.name || currentSceneName || "default"}`;
-  const embeddedPuzzle3Component = puzzle3ComponentFor(scene);
-  if (effectiveComponentEmbedMode() && embeddedPuzzle3Component) {
-    puzzle3Component.mount(embeddedPuzzle3Component, scene?.name || currentSceneName || "default");
-    return;
-  }
-  const components = scene?.components?.length
-    ? scene.components
-    : [{ kind: "title", text: snapshot.title || "Puzzle3" }];
-  sceneButtonCursor = clamp(sceneButtonCursor, 0, Math.max(0, sceneButtonInstances(scene).length - 1));
-  const rootComponent = {
-    kind: "column",
-    children: components,
-    layout: scene?.layout || { gap: 0, align: { x: "center", y: "center" } },
-  };
-  const measured = measureSceneNode(rootComponent);
-  const viewport = {
-    width: Math.max(1, screenView.clientWidth || window.innerWidth || 1),
-    height: Math.max(1, screenView.clientHeight || window.innerHeight || 1),
-  };
-  const scale = Math.max(0.0001, Math.min(viewport.width / measured.width, viewport.height / measured.height));
-  const root = document.createElement("section");
-  root.className = "scene-layout-root";
-  root.style.width = `${measured.width * scale}px`;
-  root.style.height = `${measured.height * scale}px`;
-  renderSceneNode(rootComponent, root, { x: 0, y: 0, width: measured.width, height: measured.height }, scale, scene?.name || currentSceneName || "default", {});
-  screenView.replaceChildren(root);
-  if (embeddedPuzzle3Component) {
-    puzzle3Component.handleResize();
-    requestAnimationFrame(() => puzzle3Component.handleResize());
-  }
-}
-
-function renderSceneNode(component, parent, rect, scale, sceneName, scope = {}) {
-  if (component.kind === "row" || component.kind === "column" || component.kind === "box") {
-    renderSceneContainer(component, parent, rect, scale, sceneName, scope);
-    return;
-  }
-  if (component.kind === "for") {
-    renderSceneFor(component, parent, rect, scale, sceneName, scope);
-    return;
-  }
-  const node = sceneNodeElement(component, rect, scale);
-  if (component.kind === "title") {
-    const title = document.createElement("h1");
-    title.className = "view-title";
-    title.textContent = component.text;
-    node.append(title);
-  } else if (component.kind === "button") {
-    const currentIndex = sceneButtonInstanceIndex(component, scope);
-    const levelMenuOwnsCursor = Boolean(activeLevelMenuComponent());
-    node.append(sceneButton(resolveSceneLabel(component.label, scope), () => applySceneAction(component.action, scope), {
-      selected: !levelMenuOwnsCursor && currentIndex === sceneButtonCursor,
-    }));
-  } else if (component.kind === "level_menu") {
-    node.append(renderLevelMenu(component));
-  } else if (component.kind === "puzzle3") {
-    node.classList.add("scene-puzzle3-node");
-    puzzle3Frame.style.position = "absolute";
-    puzzle3Frame.style.left = "0";
-    puzzle3Frame.style.top = "0";
-    puzzle3Frame.style.width = `${rect.width * scale}px`;
-    puzzle3Frame.style.height = `${rect.height * scale}px`;
-    node.append(puzzle3Frame);
-    applySceneComponentMetadata(component, sceneName);
-    updateCameraInteractionState();
-  }
-  parent.append(node);
-}
-
-function renderSceneContainer(component, parent, rect, scale, sceneName, scope = {}) {
-  const node = sceneNodeElement(component, rect, scale);
-  node.classList.add(`scene-${component.kind}-node`);
-  parent.append(node);
-  const children = component.children || [];
-  if (children.length === 0) {
-    return;
-  }
-  const layout = sceneLayout(component);
-  const gap = sceneGap(component);
-  if (component.kind === "row") {
-    const measured = children.map((child) => measureSceneNode(child, scope));
-    const totalWidth = measured.reduce((total, child) => total + child.width, 0) + gap * Math.max(0, children.length - 1);
-    let x = alignOffset(rect.width, totalWidth, layout.align?.x);
-    for (let index = 0; index < children.length; index += 1) {
-      const child = measured[index];
-      const y = alignOffset(rect.height, child.height, layout.align?.y);
-      renderSceneNode(children[index], node, { x, y, width: child.width, height: child.height }, scale, sceneName, scope);
-      x += child.width + gap;
-    }
-    return;
-  }
-  const measured = children.map((child) => measureSceneNode(child, scope));
-  const totalHeight = measured.reduce((total, child) => total + child.height, 0) + gap * Math.max(0, children.length - 1);
-  let y = alignOffset(rect.height, totalHeight, layout.align?.y);
-  for (let index = 0; index < children.length; index += 1) {
-    const child = measured[index];
-    const x = alignOffset(rect.width, child.width, layout.align?.x);
-    renderSceneNode(children[index], node, { x, y, width: child.width, height: child.height }, scale, sceneName, scope);
-    y += child.height + gap;
-  }
-}
-
-function renderSceneFor(component, parent, rect, scale, sceneName, scope = {}) {
-  const node = sceneNodeElement(component, rect, scale);
-  node.classList.add("scene-for-node");
-  parent.append(node);
-  const children = expandedForChildren(component, scope);
-  const measured = children.map(({ child, scope: childScope }) => measureSceneNode(child, childScope));
-  const gap = sceneGap(component);
-  const totalHeight = measured.reduce((total, child) => total + child.height, 0) + gap * Math.max(0, children.length - 1);
-  let y = alignOffset(rect.height, totalHeight, sceneLayout(component).align?.y);
-  for (let index = 0; index < children.length; index += 1) {
-    const { child, scope: childScope } = children[index];
-    const size = measured[index];
-    const x = alignOffset(rect.width, size.width, sceneLayout(component).align?.x);
-    renderSceneNode(child, node, { x, y, width: size.width, height: size.height }, scale, sceneName, childScope);
-    y += size.height + gap;
-  }
-}
-
-function sceneNodeElement(component, rect, scale) {
-  const node = document.createElement("div");
-  node.className = `scene-layout-node scene-component-${component.kind}`;
-  node.style.left = `${rect.x * scale}px`;
-  node.style.top = `${rect.y * scale}px`;
-  node.style.width = `${rect.width * scale}px`;
-  node.style.height = `${rect.height * scale}px`;
-  return node;
-}
-
-function measureSceneNode(component, scope = {}) {
-  const explicit = component.layout?.size;
-  if (explicit) {
-    return {
-      width: Math.max(1, Number(explicit.width) || 1),
-      height: Math.max(1, Number(explicit.height) || 1),
-    };
-  }
-  if (component.kind === "row") {
-    const children = (component.children || []).map((child) => measureSceneNode(child, scope));
-    return {
-      width: Math.max(1, children.reduce((total, child) => total + child.width, 0) + sceneGap(component) * Math.max(0, children.length - 1)),
-      height: Math.max(1, children.reduce((height, child) => Math.max(height, child.height), 0)),
-    };
-  }
-  if (component.kind === "column" || component.kind === "box") {
-    const children = (component.children || []).map((child) => measureSceneNode(child, scope));
-    return {
-      width: Math.max(1, children.reduce((width, child) => Math.max(width, child.width), 0)),
-      height: Math.max(1, children.reduce((total, child) => total + child.height, 0) + sceneGap(component) * Math.max(0, children.length - 1)),
-    };
-  }
-  if (component.kind === "for") {
-    const children = expandedForChildren(component, scope).map(({ child, scope: childScope }) => measureSceneNode(child, childScope));
-    return {
-      width: Math.max(1, children.reduce((width, child) => Math.max(width, child.width), 0)),
-      height: Math.max(1, children.reduce((total, child) => total + child.height, 0) + sceneGap(component) * Math.max(0, children.length - 1)),
-    };
-  }
-  if (component.kind === "puzzle3") {
-    return puzzle3SceneDisplaySize();
-  }
-  if (component.kind === "level_menu") {
-    return { width: SCENE_BUTTON_DEFAULT_WIDTH, height: Math.max(1, puzzle3Component.levelEntries(component.levels).length) };
-  }
-  if (component.kind === "button") {
-    return { width: SCENE_BUTTON_DEFAULT_WIDTH, height: 1 };
-  }
-  if (component.kind === "title") {
-    return { width: Math.max(6, Math.ceil(String(component.text || "").length / 3)), height: 1 };
-  }
-  return { width: 1, height: 1 };
-}
-
-function expandedForChildren(component, scope = {}) {
-  const items = component.source === "levels"
-    ? levelIndexesForBundle("levels").map((index, position) => {
-      const level = snapshot.levels?.[index] || {};
-      return {
-        index,
-        position,
-        num: position + 1,
-        number: position + 1,
-        title: level.title || level.label || level.name || `Level ${index + 1}`,
-        name: level.name || `Level ${index + 1}`,
-        label: level.label || level.name || `Level ${index + 1}`,
-      };
-    })
-    : [];
-  return items.flatMap((item) => (component.children || []).map((child) => ({
-    child,
-    scope: { ...scope, [component.binding]: item },
-  })));
-}
-
-function resolveSceneLabel(label, scope = {}) {
-  if (label === undefined || label === null) {
-    return "";
-  }
-  if (typeof label === "string") {
-    return label;
-  }
-  if (label.kind === "text") {
-    return String(label.value || "");
-  }
-  if (label.kind === "int" || label.kind === "bool") {
-    return String(label.value);
-  }
-  if (label.kind === "path") {
-    return String(resolveScenePath(label.path, scope) ?? "");
-  }
-  if (label.kind === "call" && label.name === "join") {
-    return (label.args || []).map((arg) => resolveSceneLabel(arg, scope)).join("");
-  }
-  return "";
-}
-
-function resolveScenePath(path, scope = {}) {
-  const parts = String(path || "").split(".").filter(Boolean);
-  let value = scope[parts[0]];
-  for (const part of parts.slice(1)) {
-    value = value?.[part];
-  }
-  return value;
+  screenView.className = `scene ${sceneName}`;
+  puzzle3Component.mount(component, sceneName);
 }
 
 function puzzle3SceneDisplaySize() {
@@ -731,25 +598,6 @@ function puzzle3SceneDisplaySize() {
     width: SCENE_DEFAULT_WIDTH,
     height: SCENE_DEFAULT_HEIGHT,
   };
-}
-
-function sceneLayout(component) {
-  return component.layout || { align: { x: "center", y: "center" } };
-}
-
-function sceneGap(component) {
-  return Math.max(0, Number(component.layout?.gap || 0));
-}
-
-function alignOffset(outer, inner, align) {
-  const space = Math.max(0, outer - inner);
-  if (align === "left" || align === "top") {
-    return 0;
-  }
-  if (align === "right" || align === "bottom") {
-    return space;
-  }
-  return space / 2;
 }
 
 function findSceneComponent(components, predicate) {
@@ -765,190 +613,6 @@ function findSceneComponent(components, predicate) {
     }
   }
   return null;
-}
-
-function collectSceneComponents(components, predicate, out = []) {
-  for (const component of components || []) {
-    if (predicate(component)) {
-      out.push(component);
-    }
-    if (component.children) {
-      collectSceneComponents(component.children, predicate, out);
-    }
-  }
-  return out;
-}
-
-function renderMenuScene(scene) {
-  const root = document.createElement("section");
-  root.className = "scene-menu is-menu-scene";
-  let buttonIndex = 0;
-  for (const component of scene?.components || []) {
-    if (component.kind === "title") {
-      const title = document.createElement("h1");
-      title.className = "view-title";
-      title.textContent = component.text;
-      root.append(title);
-    } else if (component.kind === "button") {
-      const currentIndex = buttonIndex;
-      root.append(sceneButton(component.label, () => applySceneAction(component.action), {
-        selected: !levelMenuOwnsCursor && currentIndex === sceneButtonCursor,
-      }));
-      buttonIndex += 1;
-    } else if (component.kind === "level_menu") {
-      root.append(renderLevelMenu(component));
-    }
-  }
-  if (!root.childElementCount) {
-    const title = document.createElement("h1");
-    title.textContent = snapshot.title || "Puzzle3";
-    root.append(title);
-  }
-  return root;
-}
-
-function sceneButton(label, onClick, options = {}) {
-  const button = document.createElement("button");
-  button.type = "button";
-  button.className = "scene-button";
-  button.classList.toggle("is-selected", Boolean(options.selected));
-  button.textContent = label;
-  button.addEventListener("click", onClick);
-  return button;
-}
-
-function renderLevelMenu(component) {
-  const menu = document.createElement("div");
-  menu.className = "level-menu";
-  menu.dataset.levels = component.levels || "levels";
-  const levels = levelMenuEntries(component.levels);
-  levelMenuCursor = clamp(levelMenuCursor, 0, Math.max(0, levels.length - 1));
-  levels.forEach((entry, position) => {
-    const label = entry.label || entry.name || `Level ${position + 1}`;
-    const button = sceneButton(label, () => applyLevelMenuSelection(component, position));
-    button.classList.toggle("is-selected", position === levelMenuCursor);
-    button.setAttribute("aria-current", position === levelMenuCursor ? "true" : "false");
-    menu.append(button);
-  });
-  return menu;
-}
-
-function applyLevelMenuSelection(component, position) {
-  const entry = levelMenuEntries(component.levels)[position];
-  if (!entry) {
-    return;
-  }
-  applySceneAction(component.action, { level: entry });
-}
-
-function levelMenuEntries(levelsName) {
-  return levelIndexesForBundle(levelsName)
-    .map((globalIndex, position) => levelScopeItem(snapshot.levels?.[globalIndex] || {}, globalIndex, position));
-}
-
-function levelScopeItem(level, index, position) {
-  return {
-    kind: "level",
-    ...level,
-    index,
-    position,
-    num: position + 1,
-    number: position + 1,
-    title: level.title || level.label || level.name || `Level ${position + 1}`,
-    name: level.name || `Level ${position + 1}`,
-    label: level.label || level.name || `Level ${position + 1}`,
-    cleared: level.cleared === true,
-    solved: level.cleared === true,
-  };
-}
-
-function activeLevelMenuComponent() {
-  return findSceneComponent(currentScene()?.components || [], (component) => component.kind === "level_menu");
-}
-
-function sceneButtonInstances(scene = currentScene()) {
-  return collectSceneButtonInstances(scene?.components || [], {});
-}
-
-function collectSceneButtonInstances(components, scope = {}, out = []) {
-  for (const component of components || []) {
-    if (component.kind === "button") {
-      out.push({ component, scope });
-    } else if (component.kind === "for") {
-      for (const { child, scope: childScope } of expandedForChildren(component, scope)) {
-        collectSceneButtonInstances([child], childScope, out);
-      }
-    } else if (component.children) {
-      collectSceneButtonInstances(component.children, scope, out);
-    }
-  }
-  return out;
-}
-
-function sceneButtonInstanceIndex(component, scope = {}) {
-  const scopeKey = sceneScopeKey(scope);
-  return sceneButtonInstances().findIndex((button) => (
-    button.component === component && sceneScopeKey(button.scope) === scopeKey
-  ));
-}
-
-function sceneScopeKey(scope = {}) {
-  return JSON.stringify(Object.keys(scope).sort().map((key) => {
-    const value = scope[key];
-    return [key, sceneScopeValueKey(value)];
-  }));
-}
-
-function sceneScopeValueKey(value) {
-  if (value && typeof value === "object") {
-    return JSON.stringify(value);
-  }
-  return value ?? "";
-}
-
-function applySelectedSceneButton() {
-  const button = sceneButtonInstances()[sceneButtonCursor];
-  if (button) {
-    applySceneAction(button.component.action, button.scope);
-  }
-}
-
-function applySceneAction(action, scope = {}) {
-  if (action?.kind === "goto" && action.scene) {
-    const levelParam = (action.params || []).find((param) => param.name === "level");
-    if (levelParam) {
-      const levelValue = resolveSceneActionValue(levelParam.value, scope);
-      const levelIndex = typeof levelValue === "object" ? levelValue.index : puzzle3LevelIndex(levelValue);
-      if (Number.isInteger(levelIndex)) {
-        runtime.loadLevel(levelIndex);
-        snapshot = runtime.snapshot();
-      }
-    }
-    gotoScene(action.scene);
-  }
-}
-
-function resolveSceneActionValue(value, scope = {}) {
-  if (!value || typeof value !== "object") {
-    return value;
-  }
-  if (value.kind === "path") {
-    return resolveScenePath(value.path, scope);
-  }
-  if (value.kind === "text" || value.kind === "int" || value.kind === "bool") {
-    return value.value;
-  }
-  return resolveSceneLabel(value, scope);
-}
-
-function gotoScene(sceneName) {
-  currentSceneName = sceneName;
-  sceneButtonCursor = 0;
-  const menu = activeLevelMenuComponent();
-  if (menu) {
-    levelMenuCursor = puzzle3Component.currentLevelIndex(menu.levels);
-  }
-  renderScene();
 }
 
 function createPuzzle3Component() {
@@ -3350,49 +3014,6 @@ function handleStandaloneKeydown(event) {
     return;
   }
 
-  const levelMenu = activeLevelMenuComponent();
-  if (levelMenu) {
-    if (event.key === "ArrowUp" || event.key === "ArrowLeft") {
-      event.preventDefault();
-      levelMenuCursor = Math.max(0, levelMenuCursor - 1);
-      renderScene();
-      return;
-    }
-    if (event.key === "ArrowDown" || event.key === "ArrowRight") {
-      event.preventDefault();
-      const levelCount = puzzle3Component.levelEntries(levelMenu.levels).length;
-      levelMenuCursor = Math.min(
-        Math.max(0, levelCount - 1),
-        levelMenuCursor + 1,
-      );
-      renderScene();
-      return;
-    }
-    if (event.key === "Enter" || event.key === " ") {
-      event.preventDefault();
-      applyLevelMenuSelection(levelMenu, levelMenuCursor);
-      return;
-    }
-  } else if (!puzzle3ComponentFor(currentScene())) {
-    const buttons = sceneButtonInstances();
-    if (buttons.length > 0 && (event.key === "ArrowUp" || event.key === "ArrowLeft")) {
-      event.preventDefault();
-      sceneButtonCursor = Math.max(0, sceneButtonCursor - 1);
-      renderScene();
-      return;
-    }
-    if (buttons.length > 0 && (event.key === "ArrowDown" || event.key === "ArrowRight")) {
-      event.preventDefault();
-      sceneButtonCursor = Math.min(buttons.length - 1, sceneButtonCursor + 1);
-      renderScene();
-      return;
-    }
-    if (buttons.length > 0 && (event.key === "Enter" || event.key === " ")) {
-      event.preventDefault();
-      applySelectedSceneButton();
-      return;
-    }
-  }
   if (event.code === "KeyZ") {
     event.preventDefault();
     puzzle3Component.applyInput("undo");
@@ -3449,6 +3070,16 @@ if (!effectiveComponentEmbedMode()) {
 window.addEventListener("blur", stopAllHeldSceneInputs);
 
 window.addEventListener("message", (event) => {
+  if (event.data?.type === "PuzzleStudioSetScenePreview") {
+    renderSceneEditorPreview(event.data || {});
+    return;
+  }
+
+  if (event.data?.type === "PuzzleStudioRequestScenePreview") {
+    notifySceneEditorPreview(String(event.data.requestId || ""));
+    return;
+  }
+
   if (event.data?.type === "PuzzleStudioUpdatePuzzle3Preview") {
     setEditorComponentEmbedMode(event.data.componentEmbed === true);
     applyPuzzle3PreviewUpdate(event.data);
@@ -3624,9 +3255,7 @@ function sceneControlForEvent(event) {
 function applySceneControl(control) {
   if (control.kind === "input") {
     applySceneInput(control.input);
-    return;
   }
-  applySceneAction(control);
 }
 
 function applySceneInput(input) {

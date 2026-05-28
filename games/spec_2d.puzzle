@@ -23,13 +23,13 @@ sounds {
 
 puzzle sokoban {
 	layers {
-		floor = Floor
+		@floor = @Floor
 		target = Goal
 		solid = Player Box Wall
 	}
 
 	sprites {
-		Floor {
+		@Floor {
 			#90ee90 #008000
 			11111
 			01111
@@ -85,12 +85,12 @@ puzzle sokoban {
 		all Goal on Box
 	}
 
-	routine fill_floor repeat {
-		[ no Floor ] -> [ Floor ]
+	routine @fill_floor repeat {
+		[ no @Floor ] -> [ @Floor ]
 	}
 
-	on_level_start {
-		fill_floor
+	on_display {
+		@fill_floor
 	}
 
 	on_level_clear {
@@ -229,7 +229,7 @@ scene playing {
 	state {
 		board = puzzle sokoban
 	}
-	view {
+	layout {
 		row {
 			title
 			subtitle
@@ -259,7 +259,7 @@ scene playing {
 }
 
 scene menu {
-	view {
+	layout {
 		text "Menu"
 		column {
 			choice "Resume" -> input resume
@@ -284,7 +284,7 @@ scene menu {
 }
 
 	scene level_select {
-			view {
+			layout {
 				text "Select a level"
 				level_menu
 				button "Back" -> goto title

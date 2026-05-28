@@ -7,6 +7,98 @@ const wasmCompilerAssetVersion = Date.now().toString(36);
 const solverProgressIntervalMs = 1000;
 const solverYieldEveryExpanded = 1;
 const solutionPlaybackBaseIntervalMs = 350;
+const WASM_SECTION_BLOCK_NAMES = Object.freeze({
+  objects: "objects",
+  display_object: "display_objects",
+  display_objects: "display_objects",
+  scratch: "scratch",
+  group: "group",
+  groups: "group",
+  layer: "layers",
+  layers: "layers",
+  legend: "legend",
+  legends: "legend",
+  win_condition: "win_conditions",
+  win_conditions: "win_conditions",
+  lose_condition: "lose_conditions",
+  lose_conditions: "lose_conditions",
+  sprite: "sprites",
+  sprites: "sprites",
+  asset: "assets",
+  assets: "assets",
+  screen: "screen",
+  view: "layout",
+  layout: "layout",
+  main: "main",
+  rule: "rules",
+  rules: "rules",
+  transition: "transitions",
+  transitions: "transitions",
+  level: "levels",
+  levels: "levels",
+  on_display: "on_display",
+  level_start: "on_level_start",
+  on_level_start: "on_level_start",
+  level_clear: "on_level_clear",
+  on_level_clear: "on_level_clear",
+  scene_start: "on_scene_start",
+  on_scene_start: "on_scene_start",
+  state: "state",
+  keys: "keys",
+  resources: "resources",
+  row: "row",
+  column: "column",
+  box: "box",
+  level_menu: "level_menu",
+});
+const WASM_SECTION_BOUNDARY_BLOCKS = new Set([
+  "map",
+  "on_level_start",
+  "on_level_clear",
+  "on_display",
+  "objects",
+  "display_objects",
+  "scratch",
+  "group",
+  "layers",
+  "collision_layers",
+  "legend",
+  "sprites",
+  "assets",
+  "screen",
+  "layout",
+  "effect",
+  "rules",
+  "main",
+  "transitions",
+  "levels",
+  "level",
+  "resources",
+  "win_conditions",
+  "lose_conditions",
+]);
+const WASM_INLINE_BLOCKS = new Set([
+  ...WASM_SECTION_BOUNDARY_BLOCKS,
+  "state",
+  "keys",
+  "on_scene_start",
+  "transition",
+  "input",
+  "component_effect",
+  "action",
+  "if",
+  "row",
+  "column",
+  "box",
+  "for",
+  "level_menu",
+  "fix",
+  "repeat",
+  "once",
+  "once_all",
+  "once_per_level",
+  "display",
+]);
 let previewVirtualHeight = previewMinimumHeight;
 let previewViewportAspect = previewDefaultLogicalWidth / previewDefaultLogicalHeight;
 let previewVirtualWidth = Math.round(previewVirtualHeight * previewViewportAspect);
@@ -166,6 +258,11 @@ let currentPreviewMode = "play";
 let currentEditorDimension = "2d";
 let currentLevelPaneMode = "edit";
 let currentSpritePaneMode = "sprite";
+let scenePreviewLoadId = 0;
+let scenePreviewRequestId = 0;
+let scenePreviewSnapshot = null;
+let selectedSceneButtonPath = [];
+let scenePreviewFrameLoaded = false;
 let psImportConvertTimer = 0;
 let levelPaintDrag = null;
 let levelBucketActive = false;
@@ -1001,6 +1098,11 @@ async function renderPreview() {
   }
 }
 
+function runPreviewFromSourcePane() {
+  openPreviewModePane("play", { focus: false });
+  renderPreview();
+}
+
 function applyCompiledPreviewHtml(html, document, source) {
   latestHtml = html;
   const previousLevelIndex = currentEditableLevelIndex(previewExport);
@@ -1015,6 +1117,9 @@ function applyCompiledPreviewHtml(html, document, source) {
   latestPreviewState = null;
   previewFrameHasEditorLevelState = false;
   setPreviewFrameHtml(editorPreviewDocument(html));
+  if (currentPreviewMode === "scene") {
+    renderScenePane();
+  }
   document.source = source;
   document.previewHtml = html;
   applyGameCss(effectiveGameCss(document));
@@ -1210,49 +1315,7 @@ function sectionBlockNameForWasm(title) {
   if (!normalized) {
     return "";
   }
-  return {
-    objects: "objects",
-    display_object: "display_objects",
-    display_objects: "display_objects",
-    scratch: "scratch",
-    group: "group",
-    groups: "group",
-    layer: "layers",
-    layers: "layers",
-    legend: "legend",
-    legends: "legend",
-    win_condition: "win_conditions",
-    win_conditions: "win_conditions",
-    lose_condition: "lose_conditions",
-    lose_conditions: "lose_conditions",
-    sprite: "sprites",
-    sprites: "sprites",
-    asset: "assets",
-    assets: "assets",
-    screen: "screen",
-    view: "view",
-    main: "main",
-    rule: "rules",
-    rules: "rules",
-    transition: "transitions",
-    transitions: "transitions",
-    level: "levels",
-    levels: "levels",
-    on_display: "on_display",
-    level_start: "on_level_start",
-    on_level_start: "on_level_start",
-    level_clear: "on_level_clear",
-    on_level_clear: "on_level_clear",
-    scene_start: "on_scene_start",
-    on_scene_start: "on_scene_start",
-    state: "state",
-    keys: "keys",
-    resources: "resources",
-    row: "row",
-    column: "column",
-    box: "box",
-    level_menu: "level_menu",
-  }[normalized] || "";
+  return WASM_SECTION_BLOCK_NAMES[normalized] || "";
 }
 
 function normalizeSectionTitleForWasm(title) {
@@ -1293,10 +1356,7 @@ function isLegendRowForWasm(tokens) {
 
 function startsPuzzleSectionForWasm(tokens) {
   const first = tokens[0] || "";
-  if (["map", "level_start", "on_level_start", "level_clear", "on_level_clear", "on_display", "objects", "display_objects", "scratch", "group", "layers", "collision_layers", "legend", "sprites", "assets", "screen", "view", "effect", "rule", "rules", "main", "transitions", "levels", "level", "resources"].includes(first)) {
-    return true;
-  }
-  return first === "win_conditions" || first === "lose_conditions";
+  return WASM_SECTION_BOUNDARY_BLOCKS.has(sectionBlockNameForWasm(first) || first);
 }
 
 function startsNestedBlockForWasm(block, tokens, line) {
@@ -1311,9 +1371,8 @@ function startsNestedBlockForWasm(block, tokens, line) {
 
 function startsInlineBlockForWasm(tokens, line) {
   const first = tokens[0] || "";
-  return ["map", "level_start", "on_level_start", "level_clear", "on_level_clear", "on_display", "objects", "display_objects", "scratch", "group", "layers", "collision_layers", "legend", "sprites", "assets", "screen", "view", "effect", "rule", "rules", "main", "transitions", "levels", "level", "state", "keys", "resources", "scene_start", "on_scene_start", "transition", "input", "component_effect", "action", "if", "row", "column", "box", "for", "level_menu", "fix", "repeat", "once", "once_all", "once_per_level", "display"].includes(first)
-    || first === "win_conditions"
-    || first === "lose_conditions"
+  const block = sectionBlockNameForWasm(first) || first;
+  return WASM_INLINE_BLOCKS.has(block)
     || (tokens[0] === "menu" && (tokens.length === 2 || (tokens.length === 5 && tokens[2] === "=" && tokens[4] === "with")))
     || (tokens[0] === "button" && line.trimEnd().endsWith(" with"));
 }
@@ -1703,55 +1762,6 @@ function renderPreviewLog() {
   previewLogOutput.scrollTop = previewLogOutput.scrollHeight;
 }
 
-function errorDocument(error) {
-  const theme = editorPreviewTheme();
-  return `<!doctype html>
-<html>
-  <head>
-    <meta charset="utf-8">
-    <style>
-      :root {
-        color-scheme: ${theme.colorScheme};
-      }
-      body {
-        margin: 0;
-        min-height: 100vh;
-        display: grid;
-        place-items: center;
-        background: ${theme.background.replaceAll("var(--preview-game-bg)", theme.bg)};
-        color: ${theme.ink};
-        font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      }
-      main {
-        width: min(720px, calc(100vw - 32px));
-        padding: 24px;
-        border: 1px solid ${theme.line};
-        border-radius: 8px;
-        background: ${theme.panelBg};
-      }
-      h1 {
-        margin: 0 0 12px;
-        color: ${theme.danger};
-        font-size: 18px;
-      }
-      pre {
-        margin: 0;
-        overflow: auto;
-        white-space: pre-wrap;
-        word-break: break-word;
-        font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-      }
-    </style>
-  </head>
-  <body>
-    <main>
-      <h1>Compile error</h1>
-      <pre>${escapeHtml(error.message || String(error))}</pre>
-    </main>
-  </body>
-</html>`;
-}
-
 function emptyPreviewDocument() {
   return `<!doctype html>
 <html>
@@ -1816,6 +1826,309 @@ function setPreviewFrameHtml(html) {
   }, { once: true });
 
   nextFrame.srcdoc = html;
+}
+
+function setScenePreviewFrameHtml(html) {
+  if (!scenePreviewFrame) {
+    return;
+  }
+  scenePreviewFrameLoaded = false;
+  const loadId = scenePreviewLoadId + 1;
+  scenePreviewLoadId = loadId;
+  scenePreviewFrame.addEventListener("load", () => {
+    if (loadId !== scenePreviewLoadId) {
+      return;
+    }
+    scenePreviewFrameLoaded = true;
+    sendScenePreviewRequest();
+    window.setTimeout(sendScenePreviewRequest, 100);
+    window.setTimeout(sendScenePreviewRequest, 350);
+  }, { once: true });
+  scenePreviewFrame.srcdoc = html || emptyPreviewDocument();
+}
+
+function renderScenePane() {
+  syncScenePreviewControls();
+  if (!latestHtml) {
+    setSceneStatus("Compiling preview", "");
+    renderPreview().catch((error) => {
+      setSceneStatus(error?.message || String(error), "is-error");
+    });
+    return;
+  }
+  setScenePreviewFrameHtml(editorPreviewDocument(latestHtml));
+}
+
+function syncScenePreviewControls() {
+  const scenes = previewExport?.scenes || previewExport?.screens || [];
+  if (scenePreviewSceneSelect) {
+    const previous = scenePreviewSceneSelect.value;
+    scenePreviewSceneSelect.replaceChildren(...scenes.map((scene) => {
+      const option = document.createElement("option");
+      option.value = scene.name || "";
+      option.textContent = scene.name || "(scene)";
+      return option;
+    }));
+    const current = previous && scenes.some((scene) => scene.name === previous)
+      ? previous
+      : (previewExport?.currentScene || previewExport?.screen || scenes[0]?.name || "");
+    scenePreviewSceneSelect.value = current;
+    if (!scenePreviewSceneSelect.value && scenePreviewSceneSelect.options.length) {
+      scenePreviewSceneSelect.selectedIndex = 0;
+    }
+  }
+  if (scenePreviewThemeSelect && !scenePreviewThemeSelect.childElementCount) {
+    scenePreviewThemeSelect.replaceChildren(...Object.keys(PREVIEW_THEME_PRESETS).map((name) => {
+      const option = document.createElement("option");
+      option.value = name;
+      option.textContent = name;
+      return option;
+    }));
+  }
+  if (scenePreviewThemeSelect) {
+    scenePreviewThemeSelect.value = previewThemePresetName(scenePreviewThemeSelect.value || previewExport?.theme?.name || "clean");
+  }
+  const scene = selectedScenePreviewDef();
+  const size = scene?.layout?.size || {};
+  if (scenePreviewWidthInput && !scenePreviewWidthInput.value) {
+    scenePreviewWidthInput.value = String(Number(size.width) || 4);
+  }
+  if (scenePreviewHeightInput && !scenePreviewHeightInput.value) {
+    scenePreviewHeightInput.value = String(Number(size.height) || 3);
+  }
+}
+
+function selectedScenePreviewDef() {
+  const scenes = previewExport?.scenes || previewExport?.screens || [];
+  const name = scenePreviewSceneSelect?.value || previewExport?.currentScene || previewExport?.screen || scenes[0]?.name || "";
+  return scenes.find((scene) => scene.name === name) || null;
+}
+
+function scenePreviewRequestPayload() {
+  const sceneName = scenePreviewSceneSelect?.value || selectedScenePreviewDef()?.name || (previewExport?.scenes || previewExport?.screens || [])[0]?.name || "";
+  const width = Number(scenePreviewWidthInput?.value || selectedScenePreviewDef()?.layout?.size?.width || 4);
+  const height = Number(scenePreviewHeightInput?.value || selectedScenePreviewDef()?.layout?.size?.height || 3);
+  const gap = scenePreviewGapInput?.value === "" ? null : Number(scenePreviewGapInput?.value);
+  const layout = {
+    size: {
+      width: Math.max(1, Math.trunc(width || 4)),
+      height: Math.max(1, Math.trunc(height || 3)),
+    },
+  };
+  if (Number.isFinite(gap) && gap >= 0) {
+    layout.gap = gap;
+  }
+  return {
+    type: "PuzzleStudioSetScenePreview",
+    requestId: `scene-${++scenePreviewRequestId}`,
+    scene: { name: sceneName },
+    theme: {
+      name: scenePreviewThemeSelect?.value || previewExport?.theme?.name || "clean",
+      variables: {},
+    },
+    layout,
+    inspect: {
+      enabled: true,
+      selectedPath: selectedSceneButtonPath,
+    },
+  };
+}
+
+function sendScenePreviewRequest() {
+  if (!scenePreviewFrameLoaded || !scenePreviewFrame?.contentWindow) {
+    return false;
+  }
+  scenePreviewFrame.contentWindow.postMessage(scenePreviewRequestPayload(), "*");
+  setSceneStatus("Scene preview requested", "");
+  return true;
+}
+
+function handleScenePreviewSnapshot(data) {
+  scenePreviewSnapshot = data || null;
+  if (data?.error) {
+    setSceneStatus(data.error, "is-error");
+  } else {
+    setSceneStatus(`Scene ${data?.scene || ""}`, "is-ok");
+  }
+  renderSceneButtonInspector();
+}
+
+function handleSceneComponentSelected(data) {
+  const component = data?.component || null;
+  selectedSceneButtonPath = Array.isArray(component?.path) ? component.path : [];
+  renderSceneButtonInspector();
+  sendScenePreviewRequest();
+}
+
+function renderSceneButtonInspector() {
+  if (!sceneButtonList || !sceneButtonEffectInput) {
+    return;
+  }
+  const buttons = (scenePreviewSnapshot?.components || []).filter((component) => component.kind === "button" || component.kind === "choice");
+  sceneButtonList.replaceChildren();
+  for (const component of buttons) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = component.label || component.kind;
+    button.classList.toggle("is-active", samePath(component.path, selectedSceneButtonPath));
+    button.addEventListener("click", () => {
+      selectedSceneButtonPath = Array.isArray(component.path) ? component.path : [];
+      sceneButtonEffectInput.value = effectSource(component.effect);
+      renderSceneButtonInspector();
+      sendScenePreviewRequest();
+    });
+    sceneButtonList.append(button);
+  }
+  const selected = buttons.find((component) => samePath(component.path, selectedSceneButtonPath)) || buttons[0] || null;
+  if (selected && !selectedSceneButtonPath.length) {
+    selectedSceneButtonPath = selected.path || [];
+  }
+  sceneButtonEffectInput.value = selected ? effectSource(selected.effect) : "";
+  sceneButtonEffectInput.disabled = !selected;
+  if (sceneApplyEffectButton) {
+    sceneApplyEffectButton.disabled = !selected;
+  }
+}
+
+function samePath(left, right) {
+  return JSON.stringify(left || []) === JSON.stringify(right || []);
+}
+
+function effectSource(effect) {
+  if (!effect) {
+    return "";
+  }
+  if (effect.kind === "input") {
+    return `input ${effect.name || ""}`.trim();
+  }
+  if (effect.kind === "component_effect") {
+    return `component_effect ${effect.name || ""}`.trim();
+  }
+  if (effect.kind === "goto") {
+    return `goto ${effect.scene || effect.screen || ""}`.trim();
+  }
+  if (effect.kind === "enter") {
+    return `open ${effect.scene || effect.screen || ""}`.trim();
+  }
+  if (effect.kind === "back") {
+    return "close";
+  }
+  if (effect.kind === "play_sfx") {
+    return `sfx ${effect.name || ""}`.trim();
+  }
+  if (effect.kind === "play_music") {
+    return `play_music ${effect.name || ""}`.trim();
+  }
+  if (effect.kind === "puzzle_restart") {
+    return `${effect.target || "playing"}.restart`;
+  }
+  if (effect.kind === "puzzle_next_level") {
+    return `${effect.target || "playing"}.next_level`;
+  }
+  if (effect.kind === "sequence") {
+    return (effect.effects || []).map((child) => effectSource(child.effect || child)).filter(Boolean).join(" ");
+  }
+  return effect.kind || "";
+}
+
+function applySceneButtonEffectToSource() {
+  const effect = String(sceneButtonEffectInput?.value || "").trim();
+  if (!effect) {
+    setSceneStatus("Effect is empty", "is-error");
+    return;
+  }
+  const selected = (scenePreviewSnapshot?.components || []).find((component) => samePath(component.path, selectedSceneButtonPath));
+  if (!selected) {
+    setSceneStatus("No button selected", "is-error");
+    return;
+  }
+  const previewDocument = activePreviewDocument();
+  if (!previewDocument || !isTextDocument(previewDocument)) {
+    setSceneStatus("No source document", "is-error");
+    return;
+  }
+  const result = replaceSceneButtonEffect(previewDocument.source || "", scenePreviewSnapshot.scene, selected.kind, selected.label, effect);
+  if (!result) {
+    setSceneStatus("Could not find matching button source", "is-error");
+    return;
+  }
+  previewDocument.source = result;
+  if (previewDocument.id === activeDocument()?.id) {
+    setSourceEditorValue(result, { resetUndo: false });
+  }
+  scheduleLocalSave();
+  setSceneStatus("Effect updated", "is-ok");
+  renderPreview().then(() => {
+    if (currentPreviewMode === "scene") {
+      renderScenePane();
+    }
+  }).catch((error) => {
+    setSceneStatus(error?.message || String(error), "is-error");
+  });
+}
+
+function replaceSceneButtonEffect(source, sceneName, kind, label, effect) {
+  const block = findSceneSourceBlock(source, sceneName);
+  if (!block) {
+    return null;
+  }
+  const lines = sourceLinesWithOffsets(source.slice(block.bodyStart, block.bodyEnd));
+  const escapedLabel = escapeRegExp(label || "");
+  const componentKind = kind === "choice" ? "choice" : "button";
+  const pattern = new RegExp(`^(\\s*${componentKind}\\s+\"${escapedLabel}\"\\s*)(?:->\\s*)?(.*)$`);
+  for (const line of lines) {
+    const match = pattern.exec(line.raw);
+    if (!match) {
+      continue;
+    }
+    const absoluteStart = block.bodyStart + line.start;
+    const absoluteEnd = block.bodyStart + line.end;
+    const arrowIndex = source.indexOf("->", absoluteStart);
+    if (arrowIndex >= 0 && arrowIndex < absoluteEnd) {
+      const afterArrow = arrowIndex + 2;
+      const nextText = source.slice(afterArrow, absoluteEnd).trimStart();
+      if (nextText.startsWith("{")) {
+        const open = source.indexOf("{", afterArrow);
+        const close = findMatchingBrace(source, open);
+        if (close > open) {
+          return `${source.slice(0, afterArrow)} ${effect}${source.slice(close + 1)}`;
+        }
+      }
+      return `${source.slice(0, afterArrow)} ${effect}${source.slice(absoluteEnd)}`;
+    }
+    return `${source.slice(0, absoluteEnd)} -> ${effect}${source.slice(absoluteEnd)}`;
+  }
+  return null;
+}
+
+function findSceneSourceBlock(source, sceneName) {
+  const name = escapeRegExp(sceneName || "");
+  const pattern = new RegExp(`(^|\\n)([\\t ]*)scene\\s+${name}\\s*\\{`, "m");
+  const match = pattern.exec(source);
+  if (!match) {
+    return null;
+  }
+  const openIndex = source.indexOf("{", match.index + match[0].lastIndexOf("scene"));
+  const closeIndex = findMatchingBrace(source, openIndex);
+  if (closeIndex < 0) {
+    return null;
+  }
+  return {
+    bodyStart: openIndex + 1,
+    bodyEnd: closeIndex,
+  };
+}
+
+function escapeRegExp(value) {
+  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function setSceneStatus(message, className = "") {
+  if (!sceneStatus) {
+    return;
+  }
+  sceneStatus.textContent = message || "";
+  sceneStatus.className = `tool-feedback-bar ${className}`.trim();
 }
 
 function editorPreviewDocument(html) {
@@ -2920,6 +3233,7 @@ function syncPreviewModeButtonState() {
   const spritePaneVisible = isPaneVisible("sprite");
   const dimensionLabel = editorDimensionLabel();
   playModeButton.classList.toggle("is-active", paneVisible && previewMode === "play");
+  sceneModeButton?.classList.toggle("is-active", paneVisible && previewMode === "scene");
   editModeButton.classList.toggle("is-active", isPaneVisible("level"));
   solverModeButton.classList.toggle("is-active", paneVisible && previewMode === "solver");
   spriteModeButton.classList.toggle("is-active", spritePaneVisible);
@@ -2967,6 +3281,7 @@ function setPreviewMode(mode, options = {}) {
   const editMode = previewMode === "edit";
   const level3dMode = previewMode === "level3d";
   const solverMode = previewMode === "solver";
+  const sceneMode = previewMode === "scene";
   const enteringLevelMode = (editMode || solverMode) && !wasLevelMode;
   const spriteMode = previewMode === "sprite";
   const sprite3dMode = previewMode === "sprite3d";
@@ -3028,6 +3343,9 @@ function setPreviewMode(mode, options = {}) {
   }
   if (previewMode === "play") {
     restoreCompiledGamePreview();
+  }
+  if (sceneMode) {
+    renderScenePane();
   }
 }
 
@@ -7716,7 +8034,7 @@ function findMatchingBrace(source, openIndex) {
   return -1;
 }
 
-runButton.addEventListener("click", renderPreview);
+runButton.addEventListener("click", runPreviewFromSourcePane);
 previewRefreshButton?.addEventListener("click", renderPreview);
 previewSolveButton?.addEventListener("click", solveCurrentPreviewState);
 clearPreviewLogButton?.addEventListener("click", clearPreviewLog);
@@ -7970,6 +8288,11 @@ paneToggleButtons.forEach((button) => {
   button.addEventListener("click", () => togglePaneVisibility(button.dataset.paneToggle));
 });
 workbench.addEventListener("click", (event) => {
+  const maximizeButton = event.target.closest("[data-pane-maximize]");
+  if (maximizeButton && workbench.contains(maximizeButton)) {
+    toggleWorkPaneMaximized(maximizeButton.dataset.paneMaximize);
+    return;
+  }
   const button = event.target.closest("[data-pane-close]");
   if (!button || !workbench.contains(button)) {
     return;
@@ -7999,6 +8322,14 @@ workbench.addEventListener("dragleave", (event) => {
 });
 window.addEventListener("message", (event) => {
   if (event.data?.type === "PuzzleStudioPreviewLayout") {
+    return;
+  }
+  if (event.data?.type === "PuzzleStudioScenePreview") {
+    handleScenePreviewSnapshot(event.data);
+    return;
+  }
+  if (event.data?.type === "PuzzleStudioSceneComponentSelected") {
+    handleSceneComponentSelected(event.data);
     return;
   }
   if (event.data?.type === "PuzzleStudioPreviewState") {
@@ -8091,6 +8422,10 @@ sourceEditor.addEventListener("click", loadLevelFromSourceClick);
 playModeButton.addEventListener("click", () => {
   openPreviewModePane("play");
 });
+sceneModeButton?.addEventListener("click", () => {
+  ensurePreviewTargetsActiveDocument();
+  openPreviewModePane("scene");
+});
 editModeButton.addEventListener("click", () => {
   openLevelPaneForCurrentDimension();
 });
@@ -8156,6 +8491,22 @@ docsTopbarButton?.addEventListener("click", () => {
   openPreviewModePane("docs");
   docsSearchInput?.focus();
 });
+sceneRefreshButton?.addEventListener("click", () => {
+  if (!latestHtml) {
+    renderPreview().then(renderScenePane).catch((error) => {
+      setSceneStatus(error?.message || String(error), "is-error");
+    });
+    return;
+  }
+  renderScenePane();
+});
+sceneApplyEffectButton?.addEventListener("click", applySceneButtonEffectToSource);
+for (const control of [scenePreviewSceneSelect, scenePreviewThemeSelect, scenePreviewWidthInput, scenePreviewHeightInput, scenePreviewGapInput]) {
+  control?.addEventListener("change", () => {
+    selectedSceneButtonPath = [];
+    sendScenePreviewRequest();
+  });
+}
 psImportSourceInput?.addEventListener("input", () => schedulePuzzleScriptImportConversion());
 psImportConvertButton?.addEventListener("click", () => {
   convertPuzzleScriptImport().catch((error) => {
@@ -8292,6 +8643,8 @@ applyPaneVisibility();
 
 loadSource().catch((error) => {
   setPreviewDocumentLoaded(false);
-  setPreviewFrameHtml(errorDocument(error));
+  setPreviewFrameHtml(emptyPreviewDocument());
+  resetPreviewLog("Load failed");
+  appendPreviewLog("error", error?.message || String(error), { source: "workspace" });
   setEditorStatus("Load error", "is-error");
 });

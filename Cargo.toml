@@ -12,6 +12,7 @@ members = [
     "crates/html_editor",
     "crates/cli",
     "crates/wasm",
+    "crates/wasm_core",
     "src-tauri",
 ]
 resolver = "3"

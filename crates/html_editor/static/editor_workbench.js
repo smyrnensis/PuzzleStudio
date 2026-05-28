@@ -10,6 +10,7 @@ const PREVIEW_WORK_PANE_ID = "preview";
 const WORK_PANE_IDS = [
   SOURCE_WORK_PANE_ID,
   PREVIEW_WORK_PANE_ID,
+  "scene",
   "level",
   "solver",
   "sprite",
@@ -25,6 +26,7 @@ const PANE_ID_ALIASES = {
 };
 const PREVIEW_MODE_TO_WORK_PANE_ID = {
   play: PREVIEW_WORK_PANE_ID,
+  scene: "scene",
   edit: "level",
   level3d: "level",
   solver: "solver",
@@ -40,6 +42,7 @@ const MAX_VISIBLE_WORK_PANES = 2;
 const WORK_PANE_DEFAULT_WIDTHS = {
   [SOURCE_WORK_PANE_ID]: "42%",
   [PREVIEW_WORK_PANE_ID]: "420px",
+  scene: "520px",
   level: "420px",
   solver: "420px",
   sprite: "520px",
@@ -50,6 +53,7 @@ const WORK_PANE_DEFAULT_WIDTHS = {
 const WORK_PANE_MIN_WIDTHS = {
   [SOURCE_WORK_PANE_ID]: 240,
   [PREVIEW_WORK_PANE_ID]: 300,
+  scene: 360,
   level: 300,
   solver: 300,
   sprite: 320,
@@ -61,6 +65,7 @@ const WORKBENCH_SPLITTER_COLUMN = "var(--workbench-splitter-width)";
 let explorerPaneVisible = true;
 let visibleWorkPanes = [SOURCE_WORK_PANE_ID, PREVIEW_WORK_PANE_ID];
 let focusedWorkPaneId = PREVIEW_WORK_PANE_ID;
+let maximizedWorkPaneId = "";
 let draggingSplitter = false;
 let draggingExplorerSplitter = false;
 let draggingPreviewLogSplitter = false;
@@ -105,6 +110,17 @@ function isPaneVisible(paneId) {
   return visibleWorkPanes.includes(normalized);
 }
 
+function isPaneDisplayed(paneId) {
+  const normalized = normalizePaneId(paneId);
+  if (normalized === EXPLORER_PANE_ID) {
+    return !maximizedWorkPaneId && explorerPaneVisible;
+  }
+  if (maximizedWorkPaneId) {
+    return normalized === maximizedWorkPaneId;
+  }
+  return isPaneVisible(normalized);
+}
+
 function normalizePreviewMode(mode) {
   return PREVIEW_MODE_IDS.includes(mode) ? mode : "play";
 }
@@ -132,7 +148,9 @@ function workPaneElementForPaneId(paneId) {
 
 function toolPaneTitle(paneId) {
   return {
+    [SOURCE_WORK_PANE_ID]: "Source",
     [PREVIEW_WORK_PANE_ID]: "Preview",
+    scene: "Scene",
     level: "Level",
     level3d: "3D Level",
     solver: "Solve",
@@ -146,6 +164,7 @@ function toolPaneTitle(paneId) {
 function toolPanePanelForPaneId(paneId) {
   return {
     [PREVIEW_WORK_PANE_ID]: playPreview,
+    scene: scenePanel,
     level: levelBuilder,
     level3d: level3dBuilder,
     solver: solverPanel,
@@ -167,6 +186,25 @@ function createPaneCloseButton(paneId) {
     <svg viewBox="0 0 24 24" aria-hidden="true">
       <path d="M18 6 6 18"></path>
       <path d="m6 6 12 12"></path>
+    </svg>
+  `;
+  return button;
+}
+
+function createPaneMaximizeButton(paneId) {
+  const button = document.createElement("button");
+  button.className = "pane-maximize-button";
+  button.type = "button";
+  button.dataset.paneMaximize = paneId;
+  button.setAttribute("aria-label", `Maximize ${toolPaneTitle(paneId)} pane`);
+  button.setAttribute("aria-pressed", "false");
+  button.title = `Maximize ${toolPaneTitle(paneId)} pane`;
+  button.innerHTML = `
+    <svg viewBox="0 0 24 24" aria-hidden="true" class="lucide lucide-maximize-icon lucide-maximize">
+      <path d="M8 3H5a2 2 0 0 0-2 2v3"></path>
+      <path d="M21 8V5a2 2 0 0 0-2-2h-3"></path>
+      <path d="M3 16v3a2 2 0 0 0 2 2h3"></path>
+      <path d="M16 21h3a2 2 0 0 0 2-2v-3"></path>
     </svg>
   `;
   return button;
@@ -197,6 +235,7 @@ function createToolPane(paneId, panel) {
   if (paneId === "sprite" && spritePaneModeSwitch) {
     title.append(spritePaneModeSwitch);
   }
+  actions.append(createPaneMaximizeButton(paneId));
   actions.append(createPaneCloseButton(paneId));
   header.append(title, actions);
   pane.append(header, panel);
@@ -282,6 +321,9 @@ function layoutPaneIdsFor(paneIds, previewMode = currentPreviewMode || "play", o
 }
 
 function layoutPaneIds() {
+  if (maximizedWorkPaneId && isWorkPaneId(maximizedWorkPaneId) && visibleWorkPanes.includes(maximizedWorkPaneId)) {
+    return [maximizedWorkPaneId];
+  }
   return layoutPaneIdsFor(visibleWorkPanes);
 }
 
@@ -293,10 +335,12 @@ function normalizeVisibleWorkPaneList(paneIds, options = {}) {
     if (isWorkPaneId(normalized) && !next.includes(normalized) && workPaneElementForPaneId(normalized)) {
       next.push(normalized);
     }
-    if (next.length >= limit) {
-      break;
-    }
   }
+  if (next.includes(SOURCE_WORK_PANE_ID)) {
+    next.splice(next.indexOf(SOURCE_WORK_PANE_ID), 1);
+    next.unshift(SOURCE_WORK_PANE_ID);
+  }
+  next.splice(limit);
   if (!next.length && !options.allowEmpty) {
     next.push(SOURCE_WORK_PANE_ID);
   }
@@ -360,7 +404,7 @@ function syncWorkbenchGridLayout() {
   const columns = [];
   let columnIndex = 1;
 
-  if (explorerPaneVisible) {
+  if (isPaneDisplayed(EXPLORER_PANE_ID)) {
     columns.push("var(--explorer-pane-width)");
     columns.push(WORKBENCH_SPLITTER_COLUMN);
     const explorer = workbench.querySelector(".explorer-pane");
@@ -420,6 +464,9 @@ function setVisibleWorkPanes(nextPaneIds) {
     return false;
   }
   visibleWorkPanes = next;
+  if (maximizedWorkPaneId && !visibleWorkPanes.includes(maximizedWorkPaneId)) {
+    maximizedWorkPaneId = "";
+  }
   return true;
 }
 
@@ -594,6 +641,9 @@ function closeWorkPane(paneId) {
     return false;
   }
   visibleWorkPanes = next;
+  if (maximizedWorkPaneId === normalized) {
+    maximizedWorkPaneId = "";
+  }
   selectFallbackPreviewPane(normalized);
   applyPaneVisibility();
   return true;
@@ -604,6 +654,9 @@ function showWorkPane(paneId, options = {}) {
   if (!isWorkPaneId(normalized)) {
     return false;
   }
+  if (maximizedWorkPaneId && maximizedWorkPaneId !== normalized) {
+    maximizedWorkPaneId = "";
+  }
   visibleWorkPanes = normalizeVisibleWorkPaneList(visibleWorkPanes);
   if (visibleWorkPanes.includes(normalized)) {
     if (options.focus !== false) {
@@ -612,10 +665,22 @@ function showWorkPane(paneId, options = {}) {
     applyPaneVisibility();
     return true;
   }
-  if (visibleWorkPanes.length < MAX_VISIBLE_WORK_PANES) {
+  if (normalized === SOURCE_WORK_PANE_ID) {
+    visibleWorkPanes = normalizeVisibleWorkPaneList([SOURCE_WORK_PANE_ID, ...visibleWorkPanes]);
+  } else if (visibleWorkPanes.includes(SOURCE_WORK_PANE_ID)) {
+    inheritReplacedPaneSlotWidth(
+      visibleWorkPanes.find((candidate) => candidate !== SOURCE_WORK_PANE_ID),
+      normalized,
+      1,
+      MAX_VISIBLE_WORK_PANES
+    );
+    visibleWorkPanes = normalizeVisibleWorkPaneList([SOURCE_WORK_PANE_ID, normalized]);
+  } else if (visibleWorkPanes.length < MAX_VISIBLE_WORK_PANES) {
     visibleWorkPanes.push(normalized);
   } else {
-    const replacePaneId = workPaneIdToReplaceForOpen(options);
+    const replacePaneId = options.replacePaneId
+      ? workPaneIdToReplaceForOpen(options)
+      : visibleWorkPanes[visibleWorkPanes.length - 1];
     const replaceIndex = visibleWorkPanes.indexOf(replacePaneId);
     if (replaceIndex < 0) {
       inheritReplacedPaneSlotWidth(visibleWorkPanes[visibleWorkPanes.length - 1], normalized, visibleWorkPanes.length - 1, visibleWorkPanes.length);
@@ -664,12 +729,16 @@ function setVisiblePanes(nextPanes) {
   if (!setVisibleWorkPanes(nextWorkPanes)) {
     return;
   }
+  maximizedWorkPaneId = "";
   explorerPaneVisible = nextExplorerVisible;
   applyPaneVisibility();
 }
 
 function applyPaneVisibility() {
   visibleWorkPanes = normalizeVisibleWorkPaneList(visibleWorkPanes);
+  if (maximizedWorkPaneId && !visibleWorkPanes.includes(maximizedWorkPaneId)) {
+    maximizedWorkPaneId = "";
+  }
   if (explorerPaneVisible && lastExplorerPaneWidth) {
     workbench.style.setProperty("--explorer-pane-width", lastExplorerPaneWidth);
   }
@@ -685,6 +754,8 @@ function applyPaneVisibility() {
   }
   workbench.dataset.activePreviewMode = currentPreviewMode || "play";
   workbench.dataset.activePreviewPane = workPaneIdForPreviewMode(currentPreviewMode || "play");
+  workbench.dataset.maximizedWorkPane = maximizedWorkPaneId || "";
+  workbench.classList.toggle("is-pane-maximized", Boolean(maximizedWorkPaneId));
   workbench.classList.toggle("is-explorer-hidden", !explorerPaneVisible);
   workbench.classList.toggle("is-code-hidden", !isPaneVisible(SOURCE_WORK_PANE_ID));
   workbench.classList.toggle("is-preview-hidden", !isPreviewHostVisible());
@@ -692,7 +763,7 @@ function applyPaneVisibility() {
   workbench.dataset.collapsingPreview = "false";
   for (const paneId of WORK_PANE_IDS) {
     const element = workPaneElementForPaneId(paneId);
-    const visible = isPaneVisible(paneId);
+    const visible = isPaneDisplayed(paneId);
     if (element) {
       element.hidden = !visible;
     }
@@ -743,20 +814,47 @@ function applyPaneVisibility() {
     button.disabled = disabled;
     button.setAttribute("aria-disabled", String(disabled));
   });
+  document.querySelectorAll("[data-pane-maximize]").forEach((button) => {
+    const paneId = button.dataset.paneMaximize === "active-preview"
+      ? activePreviewWorkPaneId()
+      : normalizePaneId(button.dataset.paneMaximize);
+    const active = Boolean(maximizedWorkPaneId) && maximizedWorkPaneId === paneId;
+    const title = active ? `Restore ${toolPaneTitle(paneId)} pane` : `Maximize ${toolPaneTitle(paneId)} pane`;
+    button.classList.toggle("is-active", active);
+    button.disabled = !isWorkPaneId(paneId) || !isPaneVisible(paneId);
+    button.setAttribute("aria-label", title);
+    button.setAttribute("aria-pressed", active ? "true" : "false");
+    button.title = title;
+  });
   syncPreviewModeButtonState();
   scheduleBoardScaleSync();
   requestAnimationFrame(syncPreviewViewportScale);
 }
 
+function toggleWorkPaneMaximized(paneId) {
+  const normalized = paneId === "active-preview" ? activePreviewWorkPaneId() : normalizePaneId(paneId);
+  if (!isWorkPaneId(normalized) || !isPaneVisible(normalized)) {
+    return false;
+  }
+  maximizedWorkPaneId = maximizedWorkPaneId === normalized ? "" : normalized;
+  focusWorkPane(normalized);
+  applyPaneVisibility();
+  return true;
+}
+
 function togglePaneVisibility(pane) {
   const normalized = normalizePaneId(pane);
   if (normalized === EXPLORER_PANE_ID) {
+    maximizedWorkPaneId = "";
     explorerPaneVisible = !explorerPaneVisible;
     applyPaneVisibility();
     return;
   }
   if (!isWorkPaneId(normalized)) {
     return;
+  }
+  if (maximizedWorkPaneId && maximizedWorkPaneId !== normalized) {
+    maximizedWorkPaneId = "";
   }
   if (normalized === PREVIEW_WORK_PANE_ID) {
     showPreviewModePane(currentPreviewMode);

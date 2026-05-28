@@ -872,7 +872,7 @@ scene playing {
         let source = r#"
 title complete_level_flow_effects
 scene title {
-view {
+layout {
 button "Play" -> st
 button "Continue" -> co
 }
@@ -988,7 +988,7 @@ animation {
 tween du
 }
 scene menu {
-view {
+layout {
 level_menu {
 show_
 }
@@ -1244,7 +1244,7 @@ for k in ki
 }
 }
 scene playing {
-view {
+layout {
 board = puzzle so
 }
 }

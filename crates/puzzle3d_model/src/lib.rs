@@ -2217,6 +2217,102 @@ Floor
     }
 
     #[test]
+    fn parser_lowers_canonical_sprites3_shape_refs() {
+        let parsed = parse_puzzle3d(
+            r##"
+layers {
+floor = Floor
+}
+
+sprites3 basic {
+shape flat {
+.....
+..1..
+.....
+
+00000
+0...0
+00000
+}
+
+Floor
+#90ee90 #008000
+flat
+}
+"##,
+        )
+        .unwrap();
+
+        let sprites = parsed.sprite_set.as_ref().expect("sprite set exists");
+        let floor = sprites.sprite("Floor").expect("Floor sprite exists");
+
+        assert_eq!(
+            floor.palette.get(&'0'),
+            Some(&SpriteColor3::Hex("#90ee90".to_string()))
+        );
+        assert_eq!(
+            floor.palette.get(&'1'),
+            Some(&SpriteColor3::Hex("#008000".to_string()))
+        );
+        assert_eq!(floor.voxels.size, Size3::new(5, 3, 2));
+    }
+
+    #[test]
+    fn parser_lowers_color_only_sprites3_entry_to_filled_cube() {
+        let parsed = parse_puzzle3d(
+            r##"
+layers {
+floor = Floor
+target = Goal
+}
+
+sprites3 basic {
+Floor
+#90ee90
+
+Goal
+#00008b
+}
+"##,
+        )
+        .unwrap();
+
+        let sprites = parsed.sprite_set.as_ref().expect("sprite set exists");
+        let floor = sprites.sprite("Floor").expect("Floor sprite exists");
+        let goal = sprites.sprite("Goal").expect("Goal sprite exists");
+
+        assert_eq!(floor.voxels.size, Size3::new(1, 1, 1));
+        assert_eq!(floor.voxels.slices.as_slice(), &[vec!["0".to_string()]]);
+        assert_eq!(goal.voxels.size, Size3::new(1, 1, 1));
+    }
+
+    #[test]
+    fn parser_rejects_prefixed_sprites3_shape_refs() {
+        let err = parse_puzzle3d(
+            r##"
+layers {
+floor = Floor
+}
+
+sprites3 basic {
+shape flat {
+0
+}
+
+Floor
+#90ee90
+shape flat
+}
+"##,
+        )
+        .unwrap_err();
+
+        assert!(
+            matches!(err, ParseError3::Message(message) if message.contains("shape refs are bare"))
+        );
+    }
+
+    #[test]
     fn parser_rejects_legacy_sprites3_blocks() {
         let err = parse_puzzle3d(
             r##"

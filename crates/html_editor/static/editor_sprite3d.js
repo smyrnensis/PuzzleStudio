@@ -38,7 +38,6 @@ function renderSprite3dBuilder() {
   renderSprite3dPalette();
   renderSprite3dSliceBoard();
   renderSprite3dPreview();
-  renderSprite3dTextPreview();
 }
 
 function renderSprite3dControls() {
@@ -1440,7 +1439,6 @@ function renderSprite3dColorSurfaces() {
   syncSprite3dColorAdjusters();
   renderSprite3dSliceBoard();
   renderSprite3dPreview();
-  renderSprite3dTextPreview();
 }
 
 function syncSprite3dPaletteSwatches() {
@@ -1545,7 +1543,6 @@ function paintSprite3dCellAtSliceIndex(index, colorIndex) {
   sprite3d.cells[voxelIndex] = nextColorIndex;
   renderSprite3dSliceBoard();
   renderSprite3dPreview();
-  renderSprite3dTextPreview();
   return true;
 }
 
@@ -1975,7 +1972,6 @@ function transformSprite3dCells(mapper, message) {
   sprite3d.hoverSlice = null;
   renderSprite3dSliceBoard();
   renderSprite3dPreview();
-  renderSprite3dTextPreview();
   setSprite3dActionStatus(message, "is-ok");
   pushVisualEditUndoSnapshot("sprite3d", before);
 }
@@ -2139,7 +2135,6 @@ function transformSprite3dCurrentSlice(mapper, message) {
   sprite3d.hoverSlice = null;
   renderSprite3dSliceBoard();
   renderSprite3dPreview();
-  renderSprite3dTextPreview();
   setSprite3dActionStatus(`${message} ${source.axis.toUpperCase()} slice ${source.slice + 1}`, "is-ok");
   pushVisualEditUndoSnapshot("sprite3d", before);
 }
@@ -2257,13 +2252,6 @@ function sprite3dVoxelRows() {
     }
   }
   return rows;
-}
-
-function renderSprite3dTextPreview() {
-  if (!sprite3dTextPreview) {
-    return;
-  }
-  sprite3dTextPreview.textContent = sprite3dClipboardText();
 }
 
 async function exportSprite3dSource() {
@@ -3115,7 +3103,6 @@ for (const input of [
 }
 sprite3dNameInput?.addEventListener("input", () => {
   renderSprite3dPreview();
-  renderSprite3dTextPreview();
 });
 sprite3dSizeInput?.addEventListener("change", () => updateSprite3dSize(sprite3dSizeInput.value));
 sprite3dSizeInput?.addEventListener("keydown", (event) => {

@@ -623,7 +623,7 @@ pub trait SceneBlockHandler {
         Err(SceneBlockParseError::new(&lines[start], "unknown scene directive state").into())
     }
 
-    fn parse_view_block(&mut self, lines: &[String], start: usize) -> Result<usize, Self::Error>;
+    fn parse_layout_block(&mut self, lines: &[String], start: usize) -> Result<usize, Self::Error>;
 
     fn parse_inputs_block(&mut self, lines: &[String], start: usize) -> Result<usize, Self::Error> {
         let _ = lines;
@@ -682,7 +682,7 @@ where
         let keyword = line.split_whitespace().next().unwrap_or("");
         index = match keyword {
             "state" => handler.parse_state_block(lines, index)?,
-            "view" => handler.parse_view_block(lines, index)?,
+            "layout" => handler.parse_layout_block(lines, index)?,
             "inputs" => handler.parse_inputs_block(lines, index)?,
             "keys" => handler.parse_keys_block(lines, index)?,
             "rules" => handler.parse_rules_block(lines, index)?,
@@ -987,14 +987,14 @@ mod tests {
     #[test]
     fn parses_brace_delimited_component_blocks_and_layout_headers() {
         let lines = vec![
-            "view size 4 3 {".to_string(),
+            "layout size 4 3 {".to_string(),
             "box align left top {".to_string(),
             "leaf".to_string(),
             "}".to_string(),
             "}".to_string(),
         ];
         let layout =
-            parse_scene_layout_header(&lines[0], "view", SceneBlockSyntax::Braces).unwrap();
+            parse_scene_layout_header(&lines[0], "layout", SceneBlockSyntax::Braces).unwrap();
         assert_eq!(layout.size, Some(SceneSize::new(4, 3)));
 
         let mut parse_leaf =
@@ -1015,7 +1015,7 @@ mod tests {
         let (next, components) = parse_scene_component_block(
             &lines,
             1,
-            "view",
+            "layout",
             SceneBlockSyntax::Braces,
             &mut parse_leaf,
             &build_container,

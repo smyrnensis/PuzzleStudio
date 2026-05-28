@@ -7,6 +7,7 @@
       this.data.scenes = this.data.scenes || this.data.screens || [];
       this.data.screens = this.data.screens || this.data.scenes;
       this.engine = exportData.engine;
+      this.compiledPlay = exportData.compiledPlay || null;
       this.objectsById = new Map(this.engine.objects.map((object) => [object.id, object]));
       this.objectLayers = new Map(this.engine.objects.map((object) => [object.id, object.layer]));
       this.queriesById = new Map(this.engine.queries.map((query) => [query.id, query.queryKind]));
@@ -125,12 +126,79 @@
     async loadCoreRuntime() {
       const version = String(this.data?.engineVersion || Date.now());
       const module = await window.PuzzleRuntimeWasmLoader.load(version);
+      if (typeof module.WasmCompiledCoreRuntime === "function") {
+        this.wasmModule = module;
+        this.coreRuntime = new module.WasmCompiledCoreRuntime(JSON.stringify(this.data || {}));
+        this.coreRuntimeStateHash = null;
+        return;
+      }
       if (typeof module.WasmCoreRuntime !== "function") {
         throw new Error("Puzzle core WASM runtime is unavailable.");
       }
       this.wasmModule = module;
       this.coreRuntime = new module.WasmCoreRuntime(this.data.source || "", this.data.puzzlePath || "game.puzzle");
       this.coreRuntimeStateHash = null;
+    }
+
+    grid2TransitionData() {
+      if (this.compiledPlay?.model !== "grid2") {
+        return null;
+      }
+      return Array.isArray(this.compiledPlay.transition) ? this.compiledPlay.transition : null;
+    }
+
+    transitionProgramLength(programKey, levelIndex = -1) {
+      const transition = this.grid2TransitionData();
+      if (transition) {
+        const programs = Array.isArray(transition[4]) ? transition[4] : [];
+        const levels = Array.isArray(transition[5]) ? transition[5] : [];
+        const globalIndexes = {
+          main: 0,
+          run_rules_on_level_start: 0,
+          level_start: 1,
+          level_clear: 2,
+          display_level_start: 3,
+          display_level_clear: 4,
+          display: 5,
+        };
+        if (programKey === "level_start_local" || programKey === "level_clear_local") {
+          const index = Number.isFinite(levelIndex) ? Math.trunc(levelIndex) : -1;
+          const local = index >= 0 ? levels[index] : null;
+          const program = Array.isArray(local) ? local[programKey === "level_start_local" ? 0 : 1] : null;
+          return Array.isArray(program) ? program.length : 0;
+        }
+        const program = programs[globalIndexes[programKey]];
+        return Array.isArray(program) ? program.length : 0;
+      }
+      if (programKey === "main" || programKey === "run_rules_on_level_start") {
+        return (this.engine.program || []).length;
+      }
+      if (programKey === "level_start") {
+        return (this.engine.levelStartProgram || []).length;
+      }
+      if (programKey === "level_clear") {
+        return (this.engine.levelClearProgram || []).length;
+      }
+      if (programKey === "display_level_start") {
+        return (this.engine.displayLevelStartProgram || []).length;
+      }
+      if (programKey === "display_level_clear") {
+        return (this.engine.displayLevelClearProgram || []).length;
+      }
+      if (programKey === "display") {
+        return (this.engine.displayProgram || []).length;
+      }
+      if (programKey === "level_start_local") {
+        return (this.data.levels[levelIndex]?.levelStartProgram || []).length;
+      }
+      if (programKey === "level_clear_local") {
+        return (this.data.levels[levelIndex]?.levelClearProgram || []).length;
+      }
+      return 0;
+    }
+
+    hasTransitionProgram(programKey, levelIndex = -1) {
+      return this.transitionProgramLength(programKey, levelIndex) > 0;
     }
 
     initializeSessionRuntime() {
@@ -668,7 +736,7 @@
     }
 
     transitionOutcome(initialState, input) {
-      return this.transitionProgramOutcome(this.engine.program || [], initialState, input, "main");
+      return this.transitionProgramOutcome(null, initialState, input, "main");
     }
 
     solveCurrentState(options = {}) {
@@ -1182,37 +1250,37 @@
     }
 
     applyLevelClearHook(forceClear = false) {
-      const program = this.engine.levelClearProgram || [];
-      const levelProgram = this.currentLevel()?.levelClearProgram || [];
-      const displayProgram = this.engine.displayLevelClearProgram || [];
-      if ((!program.length && !levelProgram.length && !displayProgram.length) || (!forceClear && !this.isGoalComplete(this.state))) {
+      const hasProgram = this.hasTransitionProgram("level_clear");
+      const hasLevelProgram = this.hasTransitionProgram("level_clear_local", this.levelIndex);
+      const hasDisplayProgram = this.hasTransitionProgram("display_level_clear");
+      if ((!hasProgram && !hasLevelProgram && !hasDisplayProgram) || (!forceClear && !this.isGoalComplete(this.state))) {
         return [];
       }
       const commands = [];
-      if (program.length) {
+      if (hasProgram) {
         const state = this.cloneState(this.state);
         this.applyPersistentVars(state);
-        const outcome = this.transitionProgramOutcome(program, state, 0, "level_clear");
+        const outcome = this.transitionProgramOutcome(null, state, 0, "level_clear");
         this.state = this.cloneState(outcome.state);
         this.capturePersistentVars(this.state);
         if (!outcome.cancelled) {
           commands.push(...this.queueTransitionCommands(null, outcome.commands || []));
         }
       }
-      if (levelProgram.length) {
+      if (hasLevelProgram) {
         const state = this.cloneState(this.state);
         this.applyPersistentVars(state);
-        const outcome = this.transitionProgramOutcome(levelProgram, state, 0, "level_clear_local", this.levelIndex);
+        const outcome = this.transitionProgramOutcome(null, state, 0, "level_clear_local", this.levelIndex);
         this.state = this.cloneState(outcome.state);
         this.capturePersistentVars(this.state);
         if (!outcome.cancelled) {
           commands.push(...this.queueTransitionCommands(null, outcome.commands || []));
         }
       }
-      if (displayProgram.length) {
+      if (hasDisplayProgram) {
         const state = this.cloneState(this.state);
         this.applyPersistentVars(state);
-        this.state = this.materializeDisplayProgram(displayProgram, state, "display_level_clear");
+        this.state = this.materializeDisplayProgram(state, "display_level_clear");
         this.capturePersistentVars(this.state);
       }
       this.syncPersistentVarsToStates();
@@ -1564,10 +1632,8 @@
     materializeLevelStart(state) {
       const outcome = this.levelStartOutcome(state);
       let next = outcome ? this.cloneState(outcome.state) : this.cloneState(state);
-      const displayLevelStartProgram = this.engine.displayLevelStartProgram || [];
-      if (displayLevelStartProgram.length) {
+      if (this.hasTransitionProgram("display_level_start", this.levelIndex)) {
         next = this.materializeDisplayProgram(
-          displayLevelStartProgram,
           next,
           "display_level_start",
           this.levelIndex,
@@ -1586,23 +1652,21 @@
         commands: [],
       };
       let ran = false;
-      const levelStartProgram = this.engine.levelStartProgram || [];
-      if (levelStartProgram.length) {
-        const next = this.transitionProgramOutcome(levelStartProgram, outcome.state, 0, "level_start", levelIndex);
+      if (this.hasTransitionProgram("level_start", levelIndex)) {
+        const next = this.transitionProgramOutcome(null, outcome.state, 0, "level_start", levelIndex);
         outcome.state = this.cloneState(next.state);
         outcome.cancelled = outcome.cancelled || !!next.cancelled;
         outcome.commands.push(...(next.commands || []));
         ran = true;
       } else if (this.engine.runRulesOnLevelStart) {
-        const next = this.transitionProgramOutcome(this.engine.program || [], outcome.state, 0, "run_rules_on_level_start", levelIndex);
+        const next = this.transitionProgramOutcome(null, outcome.state, 0, "run_rules_on_level_start", levelIndex);
         outcome.state = this.cloneState(next.state);
         outcome.cancelled = outcome.cancelled || !!next.cancelled;
         outcome.commands.push(...(next.commands || []));
         ran = true;
       }
-      const levelProgram = this.data.levels[levelIndex]?.levelStartProgram || [];
-      if (!outcome.cancelled && levelProgram.length) {
-        const next = this.transitionProgramOutcome(levelProgram, outcome.state, 0, "level_start_local", levelIndex);
+      if (!outcome.cancelled && this.hasTransitionProgram("level_start_local", levelIndex)) {
+        const next = this.transitionProgramOutcome(null, outcome.state, 0, "level_start_local", levelIndex);
         outcome.state = this.cloneState(next.state);
         outcome.cancelled = outcome.cancelled || !!next.cancelled;
         outcome.commands.push(...(next.commands || []));
@@ -1655,10 +1719,8 @@
       this.applyPersistentVars(state);
       const outcome = this.levelStartOutcome(state, levelIndex);
       let next = outcome ? this.cloneState(outcome.state) : this.cloneState(state);
-      const displayLevelStartProgram = this.engine.displayLevelStartProgram || [];
-      if (displayLevelStartProgram.length) {
+      if (this.hasTransitionProgram("display_level_start", levelIndex)) {
         next = this.materializeDisplayProgram(
-          displayLevelStartProgram,
           next,
           "display_level_start",
           levelIndex,
@@ -1668,16 +1730,15 @@
     }
 
     displayState(state) {
-      const displayProgram = this.engine.displayProgram || [];
-      if (!displayProgram.length) {
+      if (!this.hasTransitionProgram("display")) {
         return state;
       }
-      return this.materializeDisplayProgram(displayProgram, state, "display");
+      return this.materializeDisplayProgram(state, "display");
     }
 
-    materializeDisplayProgram(program, state, programKey, levelIndex = -1) {
+    materializeDisplayProgram(state, programKey, levelIndex = -1) {
       const base = this.cloneState(state);
-      return this.transitionProgram(program, base, 0, programKey, levelIndex);
+      return this.transitionProgram(null, base, 0, programKey, levelIndex);
     }
 
     setCurrentState(state, options = {}) {

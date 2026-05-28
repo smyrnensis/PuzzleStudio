@@ -123,7 +123,7 @@ scene playing {
 	state {
 		board = puzzle move_collision
 	}
-	view {
+	layout {
 		row {
 			title
 			subtitle level.label
@@ -140,7 +140,7 @@ scene playing {
 }
 
 scene level_select {
-	view {
+	layout {
 		text "Select a level"
 		level_menu
 		button "Back" -> goto title

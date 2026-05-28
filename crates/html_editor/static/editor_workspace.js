@@ -131,7 +131,7 @@ async function loadSource() {
     renderDocumentSelect();
     loadEmbeddedDocument(currentDocumentIndex);
     runButton.disabled = false;
-    runButton.title = "Refresh preview";
+    runButton.title = "Run preview";
     setEditorStatus(useStored ? "Loaded files" : "Preview embedded", "is-ok");
     return;
   }
@@ -483,6 +483,7 @@ function embeddedDocuments() {
     puzzlePath: editorSeed.puzzlePath || "Embedded puzzle",
     source: editorSeed.source || "",
     previewHtml: editorSeed.previewHtml || "",
+    previewError: editorSeed.previewError || "",
     gameCss: editorSeed.gameCss || "",
     gameVisualsJs: editorSeed.gameVisualsJs || "",
   })];
@@ -514,6 +515,7 @@ function normalizeDocument(document, fallback = {}) {
     syncedSource: document.syncedSource ?? document.source ?? "",
     dataUrl: document.dataUrl || "",
     previewHtml: document.previewHtml || "",
+    previewError: document.previewError || "",
     gameCss: document.gameCss ?? fallback.gameCss ?? "",
     gameVisualsJs: document.gameVisualsJs ?? fallback.gameVisualsJs ?? "",
   };
@@ -623,6 +625,7 @@ function mergeEmbeddedFallbacks(node, fallbackByPath) {
     mimeType: node.mimeType || fallback.mimeType,
     dataUrl: node.dataUrl || fallback.dataUrl,
     previewHtml: node.previewHtml || fallback.previewHtml,
+    previewError: node.previewError || fallback.previewError,
     gameCss: node.gameCss || fallback.gameCss,
     gameVisualsJs: node.gameVisualsJs || fallback.gameVisualsJs,
   };
@@ -737,6 +740,7 @@ function storeDocument(document) {
     source: document.source || "",
     dataUrl: document.dataUrl || "",
     previewHtml: "",
+    previewError: "",
     gameCss: document.gameCss || "",
     gameVisualsJs: document.gameVisualsJs || "",
   };
@@ -1812,6 +1816,7 @@ function loadEmbeddedDocument(index) {
     ? document.source || ""
     : `${document.name || fileName(document.puzzlePath)}\n${document.mimeType || "binary"}\n${document.dataUrl ? `${document.dataUrl.length} bytes encoded` : "No data"}`);
   latestHtml = previewDocument?.previewHtml || "";
+  const previewError = previewDocument?.previewError || "";
   previewExport = extractPreviewExport(latestHtml);
   if (typeof syncPaneModesFromFocusedPuzzleSource === "function") {
     syncPaneModesFromFocusedPuzzleSource({ switchOpenPane: true });
@@ -1824,12 +1829,19 @@ function loadEmbeddedDocument(index) {
   }
   setActiveLevelIndex(previewExport?.initialLevelIndex ?? 0);
   latestPreviewState = null;
-  resetPreviewLog("Embedded preview loaded");
+  resetPreviewLog(latestHtml ? "Embedded preview loaded" : "Embedded preview unavailable");
   if (latestHtml) {
     setPreviewFrameHtml(editorPreviewDocument(latestHtml));
   } else {
     setPreviewFrameHtml(emptyPreviewDocument());
-    appendPreviewLog("error", "No embedded preview.", { source: "workspace" });
+    if (previewError) {
+      appendPreviewLog("error", previewError, { source: "compiler" });
+    } else if (previewDocument) {
+      appendPreviewLog("system", "Preview will compile in browser.", { source: "workspace" });
+      queuePreviewCompile(previewDocument);
+    } else {
+      appendPreviewLog("error", "No game entry for preview.", { source: "workspace" });
+    }
   }
   downloadButton.disabled = !latestHtml;
   resetLevelBuilderFromPreviewSource();
@@ -1859,6 +1871,7 @@ function loadFolderPreview(folder) {
   applyGameCss(previewDocument ? effectiveGameCss(previewDocument) : "");
   applyGameVisuals(previewDocument ? effectiveGameVisualsJs(previewDocument) : "");
   latestHtml = previewDocument?.previewHtml || "";
+  const previewError = previewDocument?.previewError || "";
   previewExport = extractPreviewExport(latestHtml);
   syncPreviewViewportAspect();
   setPreviewDocumentLoaded(Boolean(latestHtml));
@@ -1875,7 +1888,14 @@ function loadFolderPreview(folder) {
     setPreviewFrameHtml(editorPreviewDocument(latestHtml));
   } else {
     setPreviewFrameHtml(emptyPreviewDocument());
-    appendPreviewLog("error", previewDocument ? "No embedded preview." : "No game entry for preview.", { source: "workspace" });
+    if (previewError) {
+      appendPreviewLog("error", previewError, { source: "compiler" });
+    } else if (previewDocument) {
+      appendPreviewLog("system", "Preview will compile in browser.", { source: "workspace" });
+      queuePreviewCompile(previewDocument);
+    } else {
+      appendPreviewLog("error", "No game entry for preview.", { source: "workspace" });
+    }
   }
   downloadButton.disabled = !latestHtml;
   updateSourceMeta();
@@ -1884,6 +1904,19 @@ function loadFolderPreview(folder) {
   if (previewDocument && !editorSeed) {
     renderPreview();
   }
+}
+
+function queuePreviewCompile(previewDocument) {
+  if (!editorSeed || !previewDocument || typeof renderPreview !== "function") {
+    return;
+  }
+  queueMicrotask(() => {
+    const active = activePreviewDocument();
+    if (active?.id !== previewDocument.id || active.previewHtml || active.previewError) {
+      return;
+    }
+    renderPreview();
+  });
 }
 
 function previewSelectionIsDetachedFromActiveDocument() {
@@ -2230,7 +2263,7 @@ async function removeWorkspaceNode(nodeId) {
 
 function starterPuzzleSource(name) {
   const title = name.replace(/\.puzzle$/i, "").replace(/[^\w]+/g, " ").trim() || "New Puzzle";
-  return `title ${JSON.stringify(title)}\n\npuzzle main {\n\tlayers {\n\t\tfloor = Goal\n\t\tsolid = Player Wall\n\t}\n\n\tinputs {\n\t\tup <- w ArrowUp\n\t\tdown <- s ArrowDown\n\t\tleft <- a ArrowLeft\n\t\tright <- d ArrowRight\n\t\trestart <- r\n\t}\n\n\twin_conditions {\n\t\texists(Goal)\n\t\tnone([ Goal no Player ])\n\t}\n\n\trules {\n\t\tfor d in directions {\n\t\t\tif input == d {\n\t\t\t\tonce d [ Player | no solid ] -> [ | Player ]\n\t\t\t}\n\t\t}\n\t}\n\n\tlevels {\n\t\tlegend {\n\t\t\t. = empty\n\t\t\t# = Wall\n\t\t\tP = Player\n\t\t\tG = Goal\n\t\t\t+ = Player Goal\n\t\t}\n\n\t\tlevel level_1\n\t\t\t#######\n\t\t\t#P...G#\n\t\t\t#######\n\n\t\tlevel level_2\n\t\t\t#######\n\t\t\t#P....#\n\t\t\t#..G..#\n\t\t\t#######\n\t}\n}\n\nscene playing {\n\tstate {\n\t\tpuzzle main\n\t}\n\tview size 4 3 {\n\t\tcolumn gap 1 align center top {\n\t\t\ttitle\n\t\t\tmain\n\t\t}\n\t}\n\trules {\n\t\tstep main\n\t}\n}\n`;
+  return `title ${JSON.stringify(title)}\n\npuzzle main {\n\tlayers {\n\t\tfloor = Goal\n\t\tsolid = Player Wall\n\t}\n\n\tinputs {\n\t\tup <- w ArrowUp\n\t\tdown <- s ArrowDown\n\t\tleft <- a ArrowLeft\n\t\tright <- d ArrowRight\n\t\trestart <- r\n\t}\n\n\twin_conditions {\n\t\texists(Goal)\n\t\tnone([ Goal no Player ])\n\t}\n\n\trules {\n\t\tfor d in directions {\n\t\t\tif input == d {\n\t\t\t\tonce d [ Player | no solid ] -> [ | Player ]\n\t\t\t}\n\t\t}\n\t}\n\n\tlevels {\n\t\tlegend {\n\t\t\t. = empty\n\t\t\t# = Wall\n\t\t\tP = Player\n\t\t\tG = Goal\n\t\t\t+ = Player Goal\n\t\t}\n\n\t\tlevel level_1\n\t\t\t#######\n\t\t\t#P...G#\n\t\t\t#######\n\n\t\tlevel level_2\n\t\t\t#######\n\t\t\t#P....#\n\t\t\t#..G..#\n\t\t\t#######\n\t}\n}\n\nscene playing {\n\tstate {\n\t\tpuzzle main\n\t}\n\tlayout size 4 3 {\n\t\tcolumn gap 1 align center top {\n\t\t\ttitle\n\t\t\tmain\n\t\t}\n\t}\n\trules {\n\t\tstep main\n\t}\n}\n`;
 }
 
 function activeFolder() {

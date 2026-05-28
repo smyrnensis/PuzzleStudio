@@ -47,7 +47,7 @@ scene playing {
   state {
     board = puzzle main
   }
-  view {
+  layout {
     puzzle board
   }
   inputs {
@@ -119,7 +119,7 @@ levels {
 }
 
 scene title {
-  view {
+  layout {
     choice "Start" -> goto playing
     button "Help" -> message "help"
   }
@@ -142,7 +142,7 @@ scene title {
 }
 
 #[test]
-fn scene_view_if_else_controls_components() {
+fn scene_layout_if_else_controls_components() {
     let source = r##"
 title "conditional view"
 
@@ -166,12 +166,12 @@ levels {
 }
 
 scene title {
-  view {
-    if game.has_progress_save
+  layout {
+    if game.has_progress_save {
       choice "Continue" -> input continue_game
-    else
+    } else {
       choice "New Game" -> input new_game
-    end
+    }
   }
 }
 "##;
@@ -219,7 +219,7 @@ levels {
 }
 
 scene title {
-  view {
+  layout {
     choice "Start" -> goto playing(one)
   }
 }
@@ -228,7 +228,7 @@ scene playing(level) {
   state {
     sokoban(level)
   }
-  view {
+  layout {
     sokoban
   }
   rules {
@@ -281,7 +281,7 @@ levels {
 }
 
 scene title {
-  view {
+  layout {
     choice "Start" -> start levels in playing
   }
 }

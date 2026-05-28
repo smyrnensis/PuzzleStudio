@@ -96,7 +96,7 @@ sprites3 compact of from_puzzle_sokoban_3d {
 }
 
 scene title {
-  view {
+  layout {
     title "Sokoban Literally in 3D"
     button "Start" -> goto playing
     button "Level Select" -> goto level_select
@@ -108,7 +108,7 @@ scene level_select {
     board = puzzle3 from_puzzle_sokoban_3d
   }
 
-  view {
+  layout {
     title "Select Level"
     level_menu
     button "Back" -> goto title
@@ -120,7 +120,7 @@ scene playing {
     board = puzzle3 from_puzzle_sokoban_3d
   }
 
-  view {
+  layout {
     puzzle3 board
   }
 }
