@@ -1,4 +1,5 @@
 use crate::AppError;
+use crate::syntax::{is_puzzle_lifecycle_block, puzzle_lifecycle_block};
 
 pub(crate) fn logical_lines(source: &str) -> Result<Vec<String>, AppError> {
     let mut lines = Vec::new();
@@ -310,9 +311,9 @@ fn canonical_section_block(normalized: &str) -> Option<&'static str> {
         "rule" | "rules" => Some("rules"),
         "level" | "levels" => Some("levels"),
         "on_display" => Some("on_display"),
-        "on_level_start" => Some("on_level_start"),
-        "on_level_clear" => Some("on_level_clear"),
-        "on_last_level_clear" => Some("on_last_level_clear"),
+        lifecycle if puzzle_lifecycle_block(lifecycle).is_some() => {
+            puzzle_lifecycle_block(lifecycle)
+        }
         "on_scene_start" => Some("on_scene_start"),
         "state" => Some("state"),
         "keys" => Some("keys"),
@@ -344,12 +345,12 @@ fn is_legend_row(tokens: &[&str]) -> bool {
 }
 
 fn starts_puzzle_section(tokens: &[&str]) -> bool {
+    if matches!(tokens, [lifecycle] if is_puzzle_lifecycle_block(lifecycle)) {
+        return true;
+    }
     matches!(
         tokens,
         ["map", ..]
-            | ["on_level_start"]
-            | ["on_level_clear"]
-            | ["on_last_level_clear"]
             | ["on_display"]
             | ["objects"]
             | ["display_objects"]
@@ -406,12 +407,12 @@ fn is_braced_levels_header(tokens: &[&str]) -> bool {
 }
 
 fn starts_inline_block(tokens: &[&str], line: &str) -> bool {
+    if matches!(tokens, [lifecycle] if is_puzzle_lifecycle_block(lifecycle)) {
+        return true;
+    }
     matches!(
         tokens,
         ["map", ..]
-            | ["on_level_start"]
-            | ["on_level_clear"]
-            | ["on_last_level_clear"]
             | ["on_display"]
             | ["objects"]
             | ["display_objects"]

@@ -1244,6 +1244,7 @@ dependencies = [
  "puzzle-play",
  "puzzle-solver",
  "puzzle3d-model",
+ "serde_json",
 ]
 
 [[package]]

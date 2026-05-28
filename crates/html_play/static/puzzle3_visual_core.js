@@ -178,11 +178,11 @@
   }
 
   function compareStablePrimitiveOrder(a, b) {
-    const primitiveOrderComparison = compareNumber(a.primitiveOrder, b.primitiveOrder);
-    if (primitiveOrderComparison !== 0) {
-      return primitiveOrderComparison;
+    const frameIndexComparison = compareNumber(a.frameIndex, b.frameIndex);
+    if (frameIndexComparison !== 0) {
+      return frameIndexComparison;
     }
-    const keyComparison = compareStableKey(a.key, b.key);
+    const keyComparison = compareStableKey(a.stableKey || a.key, b.stableKey || b.key);
     if (keyComparison !== 0) {
       return keyComparison;
     }

@@ -24,6 +24,7 @@ pub struct CompletionItem {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum CompletionKind {
     Keyword,
+    Literal,
     Object,
     Group,
     State,
@@ -44,12 +45,14 @@ pub enum CompletionKind {
     Music,
     Sprite,
     Asset,
+    Option,
 }
 
 impl CompletionKind {
     fn as_str(self) -> &'static str {
         match self {
             CompletionKind::Keyword => "keyword",
+            CompletionKind::Literal => "literal",
             CompletionKind::Object => "object",
             CompletionKind::Group => "group",
             CompletionKind::State => "state",
@@ -70,6 +73,7 @@ impl CompletionKind {
             CompletionKind::Music => "music",
             CompletionKind::Sprite => "sprite",
             CompletionKind::Asset => "asset",
+            CompletionKind::Option => "option",
         }
     }
 }
@@ -442,6 +446,16 @@ fn add_slot_items(
                 });
             }
         }
+        SemanticCompletionSlot::Literals(literals) => {
+            for literal in literals {
+                items.push(CompletionItem {
+                    label: (*literal).to_string(),
+                    kind: CompletionKind::Literal,
+                    insert_text: (*literal).to_string(),
+                    detail: "literal".to_string(),
+                });
+            }
+        }
         SemanticCompletionSlot::Objects => add_named_items(
             items,
             symbols.objects.iter(),
@@ -547,6 +561,16 @@ fn add_slot_items(
         SemanticCompletionSlot::Assets => {
             add_named_items(items, symbols.assets.iter(), CompletionKind::Asset, "asset")
         }
+        SemanticCompletionSlot::Options(options) => {
+            for option in options {
+                items.push(CompletionItem {
+                    label: (*option).to_string(),
+                    kind: CompletionKind::Option,
+                    insert_text: (*option).to_string(),
+                    detail: "option".to_string(),
+                });
+            }
+        }
     }
 }
 
@@ -568,10 +592,20 @@ fn add_named_items<'a>(
 
 fn keyword_insert_text(keyword: &str) -> &str {
     match keyword {
-        "objects" | "layers" | "group" | "scratch" | "legend" | "rules" | "levels"
-        | "resources" | "keys" | "tags" | "on_level_start" | "on_level_clear" | "on_display" => {
-            keyword
-        }
+        "objects"
+        | "layers"
+        | "group"
+        | "scratch"
+        | "legend"
+        | "rules"
+        | "levels"
+        | "resources"
+        | "keys"
+        | "tags"
+        | "on_level_start"
+        | "on_level_clear"
+        | "on_last_level_clear"
+        | "on_display" => keyword,
         _ => keyword,
     }
 }
@@ -654,6 +688,7 @@ fn escape_json_string(out: &mut String, value: &str) {
 #[cfg(test)]
 mod tests {
     use super::{CompletionKind, completion_list_json, suggest_source_completions};
+    use crate::syntax::PUZZLE_LIFECYCLE_BLOCKS;
 
     #[test]
     fn suggests_objects_by_prefix() {
@@ -906,6 +941,113 @@ sfx c
     }
 
     #[test]
+    fn suggests_3d_render_options_from_parser_names() {
+        let source = r#"
+title complete_3d_render_options
+puzzle3 board {
+layers {
+actor
+}
+objects {
+Player actor
+}
+render {
+camera {
+ya
+}
+}
+rules {
+}
+}
+"#;
+        let camera_cursor = source.find("ya").unwrap() + "ya".len();
+        let camera_list = suggest_source_completions(source, camera_cursor);
+        assert!(camera_list.items.iter().any(|item| {
+            item.label == "yaw" && item.kind == CompletionKind::Option && item.detail == "option"
+        }));
+
+        let render_cursor = source.find("camera {").unwrap();
+        let render_list = suggest_source_completions(source, render_cursor);
+        assert!(
+            render_list
+                .items
+                .iter()
+                .any(|item| item.label == "camera" && item.kind == CompletionKind::Option)
+        );
+    }
+
+    #[test]
+    fn suggests_contextual_option_names_only_in_owned_blocks() {
+        let source = r#"
+title complete_contextual_options
+sounds {
+sfx click se
+music bgm to
+}
+animation {
+tween du
+}
+scene menu {
+view {
+level_menu {
+show_
+}
+}
+}
+"#;
+        let sfx_cursor = source.find("sfx click se").unwrap() + "sfx click se".len();
+        let sfx_list = suggest_source_completions(source, sfx_cursor);
+        assert!(
+            sfx_list
+                .items
+                .iter()
+                .any(|item| item.label == "seed" && item.kind == CompletionKind::Option)
+        );
+        assert!(
+            !sfx_list
+                .items
+                .iter()
+                .any(|item| item.label == "tone" && item.kind == CompletionKind::Option)
+        );
+
+        let music_cursor = source.find("music bgm to").unwrap() + "music bgm to".len();
+        let music_list = suggest_source_completions(source, music_cursor);
+        assert!(
+            music_list
+                .items
+                .iter()
+                .any(|item| item.label == "tone" && item.kind == CompletionKind::Option)
+        );
+
+        let tween_cursor = source.find("tween du").unwrap() + "tween du".len();
+        let tween_list = suggest_source_completions(source, tween_cursor);
+        assert!(
+            tween_list
+                .items
+                .iter()
+                .any(|item| item.label == "duration" && item.kind == CompletionKind::Option)
+        );
+
+        let menu_cursor = source.find("show_").unwrap() + "show_".len();
+        let menu_list = suggest_source_completions(source, menu_cursor);
+        assert!(
+            menu_list
+                .items
+                .iter()
+                .any(|item| item.label == "show_index" && item.kind == CompletionKind::Option)
+        );
+
+        let scene_cursor = source.find("scene menu").unwrap() + "scene menu".len();
+        let scene_list = suggest_source_completions(source, scene_cursor);
+        assert!(
+            !scene_list
+                .items
+                .iter()
+                .any(|item| item.label == "duration" && item.kind == CompletionKind::Option)
+        );
+    }
+
+    #[test]
     fn sounds_scope_suggests_sfx_as_sounds_keyword() {
         let source = r#"
 title complete_sounds_keyword
@@ -994,6 +1136,32 @@ rules {
     }
 
     #[test]
+    fn suggests_boolean_literals() {
+        let source = r#"
+title complete_boolean_literals
+puzzle board {
+var enabled = tr
+rules {
+if enabled == fa
+}
+}
+"#;
+        let true_cursor = source.find("= tr").unwrap() + "= tr".len();
+        let true_list = suggest_source_completions(source, true_cursor);
+        assert!(true_list.items.iter().any(|item| {
+            item.label == "true" && item.kind == CompletionKind::Literal && item.detail == "literal"
+        }));
+
+        let false_cursor = source.find("== fa").unwrap() + "== fa".len();
+        let false_list = suggest_source_completions(source, false_cursor);
+        assert!(false_list.items.iter().any(|item| {
+            item.label == "false"
+                && item.kind == CompletionKind::Literal
+                && item.detail == "literal"
+        }));
+    }
+
+    #[test]
     fn does_not_suggest_removed_command_keyword() {
         let source = r#"
 title complete_removed_command
@@ -1037,6 +1205,27 @@ g
                 .iter()
                 .any(|item| item.label == "global" && item.kind == CompletionKind::Keyword)
         );
+    }
+
+    #[test]
+    fn suggests_all_puzzle_lifecycle_blocks() {
+        let source = r#"
+title complete_lifecycle
+puzzle board {
+on_
+}
+"#;
+        let cursor = source.find("on_").unwrap() + "on_".len();
+        let list = suggest_source_completions(source, cursor);
+
+        for keyword in PUZZLE_LIFECYCLE_BLOCKS {
+            assert!(
+                list.items
+                    .iter()
+                    .any(|item| item.label == *keyword && item.kind == CompletionKind::Keyword),
+                "missing lifecycle completion {keyword}"
+            );
+        }
     }
 
     #[test]

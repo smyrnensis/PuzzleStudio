@@ -212,9 +212,14 @@ class PuzzleRenderer {
     const context = canvas.getContext("2d");
     context.imageSmoothingEnabled = false;
     const animations = this.prepareAnimations(scene.animationEvents || [], frame);
-    const startedAt = performance.now();
+    let startedAt = null;
     const duration = this.animationDurationMs(scene);
     const draw = () => {
+      if (!this.root.isConnected) {
+        requestAnimationFrame(draw);
+        return;
+      }
+      startedAt ??= performance.now();
       const progress = animations.length
         ? Math.min(1, Math.max(0, (performance.now() - startedAt) / duration))
         : 1;
@@ -225,7 +230,7 @@ class PuzzleRenderer {
       }
     };
     this.root.append(canvas);
-    draw();
+    requestAnimationFrame(draw);
   }
 
   paintCanvas(context, scene, frame, unit, animations = [], progress = 1) {

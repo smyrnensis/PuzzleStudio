@@ -20,6 +20,11 @@ pub struct WasmPuzzle3Runtime {
 }
 
 #[wasm_bindgen]
+pub struct WasmStandaloneSession {
+    inner: html_play::StandaloneSessionBridge,
+}
+
+#[wasm_bindgen]
 impl WasmCoreRuntime {
     #[wasm_bindgen(constructor)]
     pub fn new(source: &str, puzzle_path: &str) -> Result<WasmCoreRuntime, JsValue> {
@@ -173,6 +178,57 @@ impl WasmPuzzle3Runtime {
         self.inner
             .is_current_complete()
             .map_err(|error| JsValue::from_str(&error))
+    }
+}
+
+#[wasm_bindgen]
+impl WasmStandaloneSession {
+    #[wasm_bindgen(constructor)]
+    pub fn new(source: &str, puzzle_path: &str) -> Result<WasmStandaloneSession, JsValue> {
+        Ok(Self {
+            inner: html_play::StandaloneSessionBridge::from_source(source, puzzle_path)
+                .map_err(|error| JsValue::from_str(&error))?,
+        })
+    }
+
+    pub fn snapshot(&mut self) -> String {
+        self.inner.snapshot_json()
+    }
+
+    pub fn request_json(&mut self, method: &str, url: &str) -> Result<String, JsValue> {
+        self.inner
+            .request_json(method, url)
+            .map_err(|error| JsValue::from_str(&error))
+    }
+
+    pub fn apply_input_name(&mut self, input_name: &str) -> Result<(), JsValue> {
+        self.inner
+            .apply_input_name(input_name)
+            .map_err(|error| JsValue::from_str(&error))
+    }
+
+    pub fn apply_command_name(&mut self, command_name: &str) -> Result<(), JsValue> {
+        self.inner
+            .apply_command_name(command_name)
+            .map_err(|error| JsValue::from_str(&error))
+    }
+
+    pub fn progress_save(&self) -> String {
+        self.inner.progress_save_json()
+    }
+
+    pub fn restore_progress_save(&mut self, save_json: &str) -> Result<(), JsValue> {
+        self.inner
+            .restore_progress_save_json(save_json)
+            .map_err(|error| JsValue::from_str(&error))
+    }
+
+    pub fn mark_progress_save_written(&mut self) {
+        self.inner.mark_progress_save_written();
+    }
+
+    pub fn clear_progress_save(&mut self) {
+        self.inner.clear_progress_save();
     }
 }
 

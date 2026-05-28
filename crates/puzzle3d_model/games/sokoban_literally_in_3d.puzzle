@@ -2,16 +2,8 @@ title "Microban Basic 3D"
 
 puzzle3 sokoban_literally_in_3d {
   render {
-    camera {
-      yaw = 34
-      pitch = 38
-      zoom = 1.1
-      interactive_look = false
-      interactive_zoom = false
-    }
-    grid {
-      occupied_cells = true
-    }
+    camera yaw=34 pitch=38 zoom=1.1
+    grid occupied_cells
   }
 
   layers {
@@ -52,7 +44,7 @@ scene level_select {
 
   view {
     title "Select Level"
-    level_menu microban -> goto playing(level)
+    level_menu
     button "Back" -> goto title
   }
 }

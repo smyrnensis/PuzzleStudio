@@ -20,6 +20,19 @@ const WORKSPACE_WATCH_INTERVAL: Duration = Duration::from_millis(700);
 const WORKSPACE_WATCH_DEBOUNCE: Duration = Duration::from_millis(150);
 const RECENT_WORKSPACES_FILE: &str = "recent-workspaces.json";
 const MAX_RECENT_WORKSPACES: usize = 8;
+const SKIPPED_WORKSPACE_DIRS: &[&str] = &[
+    ".cache",
+    ".git",
+    ".next",
+    ".turbo",
+    ".venv",
+    "build",
+    "coverage",
+    "dist",
+    "node_modules",
+    "out",
+    "target",
+];
 
 #[derive(Default)]
 struct DesktopState {
@@ -107,14 +120,24 @@ fn load_source(
     app: tauri::AppHandle,
     state: tauri::State<'_, DesktopState>,
 ) -> Result<serde_json::Value, String> {
-    let services = state
-        .services
-        .lock()
-        .map_err(|_| "desktop project state is unavailable".to_string())?;
-    match services.first() {
-        Some(service) => editor_source_value_with_recent(&app, service),
-        None => source_value_with_recent(&app, empty_source_value()),
+    {
+        let services = state
+            .services
+            .lock()
+            .map_err(|_| "desktop project state is unavailable".to_string())?;
+        if let Some(service) = services.first() {
+            return editor_source_value_with_recent(&app, service);
+        }
     }
+
+    if let Some(entry) = read_recent_workspaces(&app)?.first().cloned() {
+        match open_workspace_path(&app, &state, &PathBuf::from(entry.workspace_root), true) {
+            Ok(payload) => return Ok(payload),
+            Err(error) => eprintln!("failed to reopen recent workspace: {error}"),
+        }
+    }
+
+    source_value_with_recent(&app, empty_source_value())
 }
 
 #[tauri::command]
@@ -426,7 +449,12 @@ fn watch_workspace(
     stop: Arc<AtomicBool>,
 ) {
     let workspace_path = PathBuf::from(&workspace_root);
-    let puzzle_path = PathBuf::from(&puzzle_path);
+    let puzzle_path = puzzle_path.trim();
+    let puzzle_path = if puzzle_path.is_empty() {
+        workspace_path.clone()
+    } else {
+        PathBuf::from(puzzle_path)
+    };
     let mut snapshot = workspace_snapshot(&workspace_path);
 
     while !stop.load(Ordering::Relaxed) {
@@ -540,12 +568,10 @@ fn collect_workspace_snapshot(
 }
 
 fn should_skip_workspace_watch_dir(path: &Path) -> bool {
-    matches!(
-        path.file_name()
-            .and_then(|value| value.to_str())
-            .unwrap_or(""),
-        ".cache" | ".git" | ".venv" | "build" | "dist" | "node_modules" | "target"
-    )
+    let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
+        return false;
+    };
+    SKIPPED_WORKSPACE_DIRS.contains(&name)
 }
 
 fn metadata_modified_ns(metadata: &fs::Metadata) -> u128 {

@@ -87,6 +87,7 @@ function syncLevel3dFrameLayout() {
   level3dBuilder.style.setProperty("--level3d-frame-width", `${frameWidth}px`);
   level3dBuilder.style.setProperty("--level3d-frame-height", `${frameHeight}px`);
   level3dBuilder.style.setProperty("--level3d-frame-scale", String(scale));
+  level3dBuilder.style.setProperty("--level3d-frame-inverse-scale", String(1 / scale));
   level3dBuilder.style.setProperty("--level3d-frame-gap", `${LEVEL3D_FRAME_GAP}px`);
   workspace?.classList.toggle("is-stacked", !canFitSideBySide);
 }
@@ -1548,7 +1549,7 @@ function level3dSnippetSource(name, levelData, indent = "", options = {}) {
 
 function levelDefinition3dSource(name, levelData, indent = "", options = {}) {
   const { rows } = normalizeLevel3dSourceData(levelData);
-  const bodyIndent = options.bodyIndent || `${indent}  `;
+  const bodyIndent = Object.prototype.hasOwnProperty.call(options, "bodyIndent") ? options.bodyIndent : `${indent}  `;
   return [
     `${indent}level ${sanitizeLevel3dName(name)} {`,
     ...rows.map((row) => String(row || "").length ? `${bodyIndent}${row}` : ""),

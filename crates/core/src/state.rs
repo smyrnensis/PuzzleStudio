@@ -1,6 +1,7 @@
 use crate::compiled_game::{CompiledGame, GlobalUpdateOp};
 use crate::ids::{GlobalId, LayerId, ObjectId, RuleId, ScratchId};
 use puzzle_kernel::{GlobalValueError, ObjectCellMask, ScratchSpace, VisibleGlobals, fnv_mix};
+use std::collections::BTreeMap;
 
 #[derive(Clone, Debug)]
 pub struct State {
@@ -23,6 +24,14 @@ struct DerivedCache {
     object_counts: Vec<u32>,
     object_positions: Vec<Vec<usize>>,
     cell_object_masks: Vec<ObjectCellMask>,
+    scratch_positions: BTreeMap<ScratchPositionKey, Vec<usize>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct ScratchPositionKey {
+    object: ObjectId,
+    scratch: ScratchId,
+    value: Option<i64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -96,6 +105,7 @@ impl State {
                 object_counts: vec![0; object_count + 1],
                 object_positions: vec![Vec::new(); object_count + 1],
                 cell_object_masks: vec![ObjectCellMask::default(); cell_count],
+                scratch_positions: BTreeMap::new(),
             },
             hash: 0,
         };
@@ -155,6 +165,9 @@ impl State {
     }
 
     pub fn without_visual_objects(&self, game: &CompiledGame) -> Self {
+        if game.visual_objects().is_empty() {
+            return self.clone();
+        }
         if self
             .slots
             .iter()
@@ -229,6 +242,36 @@ impl State {
         let x = cell % usize::from(self.width);
         let y = cell / usize::from(self.width);
         Some((u16::try_from(x).ok()?, u16::try_from(y).ok()?))
+    }
+
+    #[inline]
+    pub fn cell_position(&self, index: usize) -> Option<(u16, u16)> {
+        let cell_count = usize::from(self.width) * usize::from(self.height);
+        if index >= cell_count {
+            return None;
+        }
+        let x = index % usize::from(self.width);
+        let y = index / usize::from(self.width);
+        Some((u16::try_from(x).ok()?, u16::try_from(y).ok()?))
+    }
+
+    #[inline]
+    pub fn scratch_positions(
+        &self,
+        object: ObjectId,
+        scratch: ScratchId,
+        value: Option<i64>,
+    ) -> &[usize] {
+        let key = ScratchPositionKey {
+            object,
+            scratch,
+            value,
+        };
+        self.derived_cache
+            .scratch_positions
+            .get(&key)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
     }
 
     pub fn cell_view(&self, x: u16, y: u16) -> Result<CellView, StateError> {
@@ -342,6 +385,7 @@ impl State {
         }
 
         self.set_slot_index_unchecked(index, object);
+        self.clear_slot_scratch_positions(index, existing);
         self.scratch.clear_slot(index);
         self.recompute_hash();
         Ok(())
@@ -349,10 +393,12 @@ impl State {
 
     pub(crate) fn set_slot_unchecked(&mut self, x: u16, y: u16, layer: LayerId, object: ObjectId) {
         let index = self.slot_index_unchecked(x, y, layer);
-        self.set_slot_index_unchecked(index, object);
+        let existing = self.slots[index];
         if object.is_empty() {
+            self.clear_slot_scratch_positions(index, existing);
             self.scratch.clear_slot(index);
         }
+        self.set_slot_index_unchecked(index, object);
     }
 
     pub(crate) fn take_slot_for_move_unchecked(
@@ -362,6 +408,8 @@ impl State {
         layer: LayerId,
     ) -> Vec<SlotScratch> {
         let index = self.slot_index_unchecked(x, y, layer);
+        let object = self.slots[index];
+        self.clear_slot_scratch_positions(index, object);
         self.set_slot_index_unchecked(index, ObjectId::EMPTY);
         self.scratch.take_slot(index)
     }
@@ -375,8 +423,11 @@ impl State {
         scratch: Vec<SlotScratch>,
     ) {
         let index = self.slot_index_unchecked(x, y, layer);
+        let existing = self.slots[index];
+        self.clear_slot_scratch_positions(index, existing);
         self.set_slot_index_unchecked(index, object);
         self.scratch.replace_slot(index, scratch);
+        self.add_slot_scratch_positions(index, object);
     }
 
     pub(crate) fn set_scratch_unchecked(
@@ -388,7 +439,10 @@ impl State {
         value: Option<i64>,
     ) {
         let index = self.slot_index_unchecked(x, y, layer);
+        let object = self.slots[index];
+        self.remove_slot_scratch_key_positions(index, object, scratch);
         self.scratch.set_slot(index, scratch, value);
+        self.add_scratch_position(object, scratch, value, index);
     }
 
     pub(crate) fn set_cell_scratch_unchecked(
@@ -399,7 +453,9 @@ impl State {
         value: Option<i64>,
     ) {
         let index = self.cell_index_unchecked(x, y);
+        self.remove_cell_scratch_key_positions(index, scratch);
         self.scratch.set_cell(index, scratch, value);
+        self.add_scratch_position(ObjectId::EMPTY, scratch, value, index);
     }
 
     pub(crate) fn remove_scratch_unchecked(
@@ -411,6 +467,8 @@ impl State {
         value: Option<i64>,
     ) {
         let index = self.slot_index_unchecked(x, y, layer);
+        let object = self.slots[index];
+        self.remove_matching_slot_scratch_positions(index, object, scratch, value);
         self.scratch.remove_slot(index, scratch, value);
     }
 
@@ -422,6 +480,7 @@ impl State {
         value: Option<i64>,
     ) {
         let index = self.cell_index_unchecked(x, y);
+        self.remove_matching_cell_scratch_positions(index, scratch, value);
         self.scratch.remove_cell(index, scratch, value);
     }
 
@@ -430,6 +489,7 @@ impl State {
             return;
         }
         self.scratch.clear_all();
+        self.derived_cache.scratch_positions.clear();
         self.recompute_hash();
     }
 
@@ -485,6 +545,124 @@ impl State {
     fn clear_cell_object_mask(&mut self, slot_index: usize, object: ObjectId) {
         let cell_index = slot_index / usize::from(self.layer_count);
         self.derived_cache.cell_object_masks[cell_index].remove_raw(object.0);
+    }
+
+    fn add_slot_scratch_positions(&mut self, index: usize, object: ObjectId) {
+        if object.is_empty() {
+            return;
+        }
+        let scratch = self.slot_scratch_at(index).collect::<Vec<_>>();
+        for entry in scratch {
+            self.add_scratch_position(object, entry.scratch, entry.value, index);
+        }
+    }
+
+    fn clear_slot_scratch_positions(&mut self, index: usize, object: ObjectId) {
+        if object.is_empty() {
+            return;
+        }
+        let scratch = self.slot_scratch_at(index).collect::<Vec<_>>();
+        for entry in scratch {
+            self.remove_scratch_position(object, entry.scratch, entry.value, index);
+        }
+    }
+
+    fn remove_slot_scratch_key_positions(
+        &mut self,
+        index: usize,
+        object: ObjectId,
+        scratch: ScratchId,
+    ) {
+        if object.is_empty() {
+            return;
+        }
+        let scratch_entries = self.slot_scratch_at(index).collect::<Vec<_>>();
+        for entry in scratch_entries {
+            if entry.scratch == scratch {
+                self.remove_scratch_position(object, entry.scratch, entry.value, index);
+            }
+        }
+    }
+
+    fn remove_matching_slot_scratch_positions(
+        &mut self,
+        index: usize,
+        object: ObjectId,
+        scratch: ScratchId,
+        value: Option<i64>,
+    ) {
+        if object.is_empty() {
+            return;
+        }
+        let scratch_entries = self.slot_scratch_at(index).collect::<Vec<_>>();
+        for entry in scratch_entries {
+            if entry.scratch == scratch && (value.is_none() || entry.value == value) {
+                self.remove_scratch_position(object, entry.scratch, entry.value, index);
+            }
+        }
+    }
+
+    fn remove_cell_scratch_key_positions(&mut self, index: usize, scratch: ScratchId) {
+        let scratch_entries = self.cell_scratch_at(index).collect::<Vec<_>>();
+        for entry in scratch_entries {
+            if entry.scratch == scratch {
+                self.remove_scratch_position(ObjectId::EMPTY, entry.scratch, entry.value, index);
+            }
+        }
+    }
+
+    fn remove_matching_cell_scratch_positions(
+        &mut self,
+        index: usize,
+        scratch: ScratchId,
+        value: Option<i64>,
+    ) {
+        let scratch_entries = self.cell_scratch_at(index).collect::<Vec<_>>();
+        for entry in scratch_entries {
+            if entry.scratch == scratch && (value.is_none() || entry.value == value) {
+                self.remove_scratch_position(ObjectId::EMPTY, entry.scratch, entry.value, index);
+            }
+        }
+    }
+
+    fn add_scratch_position(
+        &mut self,
+        object: ObjectId,
+        scratch: ScratchId,
+        value: Option<i64>,
+        index: usize,
+    ) {
+        let key = ScratchPositionKey {
+            object,
+            scratch,
+            value,
+        };
+        let positions = self.derived_cache.scratch_positions.entry(key).or_default();
+        if !positions.contains(&index) {
+            positions.push(index);
+        }
+    }
+
+    fn remove_scratch_position(
+        &mut self,
+        object: ObjectId,
+        scratch: ScratchId,
+        value: Option<i64>,
+        index: usize,
+    ) {
+        let key = ScratchPositionKey {
+            object,
+            scratch,
+            value,
+        };
+        if let Some(positions) = self.derived_cache.scratch_positions.get_mut(&key) {
+            if let Some(position_index) = positions.iter().position(|position| *position == index) {
+                positions.swap_remove(position_index);
+            }
+            if positions.is_empty() {
+                self.derived_cache.scratch_positions.remove(&key);
+            }
+        }
     }
 
     pub(crate) fn recompute_hash(&mut self) {

@@ -75,6 +75,7 @@ const addLevelButton = document.querySelector("#addLevelButton");
 const updateLevelButton = document.querySelector("#updateLevelButton");
 const levelExpandButton = document.querySelector("#levelExpandButton");
 const levelShrinkButton = document.querySelector("#levelShrinkButton");
+const levelGridButton = document.querySelector("#levelGridButton");
 const levelRotateLeftButton = document.querySelector("#levelRotateLeftButton");
 const levelRotateRightButton = document.querySelector("#levelRotateRightButton");
 const levelFlipHorizontalButton = document.querySelector("#levelFlipHorizontalButton");

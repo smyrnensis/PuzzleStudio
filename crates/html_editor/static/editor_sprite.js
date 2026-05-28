@@ -1,5 +1,9 @@
 let spriteActionClearTimer = 0;
 let spriteBucketActive = false;
+const spriteColorEditSessions = {
+  sprite: null,
+  sprite3d: null,
+};
 const SOLID_SPRITE_EDITOR_SIZE = 5;
 const SPRITE_EDITOR_MAX_SIZE = 64;
 
@@ -61,6 +65,25 @@ function toggleSpriteBucketMode() {
     spriteBucketActive ? "Bucket: click a connected area" : "Brush: paint individual cells",
     "is-ok",
   );
+}
+
+function beginSpriteColorEditHistory(kind) {
+  if (!spriteColorEditSessions[kind]) {
+    spriteColorEditSessions[kind] = visualEditSnapshot(kind);
+  }
+}
+
+function commitSpriteColorEditHistory(kind) {
+  const before = spriteColorEditSessions[kind];
+  spriteColorEditSessions[kind] = null;
+  if (!before) {
+    return false;
+  }
+  return pushVisualEditUndoSnapshot(kind, before);
+}
+
+function discardSpriteColorEditHistory(kind) {
+  spriteColorEditSessions[kind] = null;
 }
 
 function renderSpriteColorAdjuster({ color, ariaLabel, onChange }) {
@@ -187,6 +210,16 @@ function renderSpriteColorAdjuster({ color, ariaLabel, onChange }) {
     }
     setFromField(event);
   });
+  colorField.addEventListener("pointerup", (event) => {
+    if (colorField.hasPointerCapture(event.pointerId)) {
+      colorField.releasePointerCapture(event.pointerId);
+    }
+  });
+  colorField.addEventListener("pointercancel", (event) => {
+    if (colorField.hasPointerCapture(event.pointerId)) {
+      colorField.releasePointerCapture(event.pointerId);
+    }
+  });
   hueInput.addEventListener("input", () => {
     hsv.h = Number(hueInput.value) || 0;
     emit();
@@ -299,7 +332,7 @@ function renderSpritePalette() {
       : null;
     const colorNames = selectedIsTransparent ? [] : spriteColorAssetNames();
     const applyCurrentColorValue = (color) => {
-      const before = visualEditSnapshot("sprite");
+      beginSpriteColorEditHistory("sprite");
       const normalized = normalizeSpriteColor(color);
       clearSpriteActionError();
       selected.color = normalized;
@@ -308,7 +341,6 @@ function renderSpritePalette() {
       currentButton.setAttribute("aria-label", `Pick selected color ${normalized}`);
       currentHexInput.value = normalized;
       renderSpriteColorSurfaces();
-      pushVisualEditUndoSnapshot("sprite", before);
     };
     let pendingEditMenu = null;
     const applyCurrentHex = (options = {}) => {
@@ -320,27 +352,34 @@ function renderSpritePalette() {
         return;
       }
       applyCurrentColorValue(parsed);
+      if (options.commitHistory) {
+        commitSpriteColorEditHistory("sprite");
+      }
     };
 
     if (!selectedIsTransparent) {
       currentButton.addEventListener("click", () => {
-        sprite.editPaletteOpen = !sprite.editPaletteOpen;
+        const opening = !sprite.editPaletteOpen;
+        if (!opening) {
+          commitSpriteColorEditHistory("sprite");
+        }
+        sprite.editPaletteOpen = opening;
         sprite.addPaletteOpen = false;
         sprite.addDraftColorIndex = null;
-        sprite.customColorOpen = true;
+        sprite.customColorOpen = opening;
         renderSpritePalette();
       });
       currentHexInput.addEventListener("input", () => {
         applyCurrentHex();
       });
-      currentHexInput.addEventListener("change", () => applyCurrentHex({ reportError: true }));
+      currentHexInput.addEventListener("change", () => applyCurrentHex({ reportError: true, commitHistory: true }));
       currentHexInput.addEventListener("keydown", (event) => {
         event.stopPropagation();
         if (event.key !== "Enter") {
           return;
         }
         event.preventDefault();
-        applyCurrentHex({ reportError: true });
+        applyCurrentHex({ reportError: true, commitHistory: true });
       });
     }
     currentWrap.append(currentButton);
@@ -399,6 +438,10 @@ function renderSpritePalette() {
   const paletteGrid = document.createElement("span");
   paletteGrid.className = "sprite-palette-grid";
 
+  if (spriteFillButton) {
+    paletteGrid.append(spriteFillButton);
+  }
+
   const eraseButton = document.createElement("button");
   eraseButton.type = "button";
   eraseButton.className = "sprite-token sprite-color-swatch sprite-token-erase";
@@ -444,11 +487,11 @@ function renderSpritePalette() {
     colorInput.setAttribute("aria-label", `Edit color ${index}`);
     colorInput.addEventListener("input", () => {
       sprite.selectedColorIndex = index;
-      updateSelectedSpriteColor(colorInput.value);
+      updateSelectedSpriteColor(colorInput.value, { deferHistory: true });
     });
     colorInput.addEventListener("change", () => {
       sprite.selectedColorIndex = index;
-      updateSelectedSpriteColor(colorInput.value);
+      updateSelectedSpriteColor(colorInput.value, { commitHistory: true });
     });
     item.append(colorInput);
     const bindMarker = renderSpriteBindMarker(entry);
@@ -1126,11 +1169,11 @@ function renderSpriteColorMenu({
       preset.setAttribute("aria-label", mode === "add" ? `Start from color ${color}` : `Use color ${color}`);
       preset.addEventListener("click", () => {
         if (onPreset) {
-          onPreset(color);
+          onPreset(color, { deferHistory: true });
         } else if (mode === "add") {
-          previewNewSpriteColor(color);
+          previewNewSpriteColor(color, { deferHistory: true });
         } else {
-          updateSelectedSpriteColor(color);
+          updateSelectedSpriteColor(color, { deferHistory: true });
         }
         renderPalette();
       });
@@ -1143,11 +1186,11 @@ function renderSpriteColorMenu({
     ariaLabel: mode === "add" ? "New color" : "Selected color",
     onChange: (color) => {
       if (onChange) {
-        onChange(color);
+        onChange(color, { deferHistory: true });
       } else if (mode === "add") {
-        previewNewSpriteColor(color);
+        previewNewSpriteColor(color, { deferHistory: true });
       } else {
-        updateSelectedSpriteColor(color);
+        updateSelectedSpriteColor(color, { deferHistory: true });
       }
     },
   }));
@@ -1201,6 +1244,7 @@ function renderSpriteBoard() {
 }
 
 function selectSpriteColor(index) {
+  commitSpriteColorEditHistory("sprite");
   sprite.selectedColorIndex = validSpriteColorIndex(index) ? index : null;
   sprite.addPaletteOpen = false;
   sprite.editPaletteOpen = false;
@@ -1211,7 +1255,10 @@ function selectSpriteColor(index) {
 }
 
 function updateSelectedSpriteColor(value, options = {}) {
-  const before = visualEditSnapshot("sprite");
+  const before = options.deferHistory || options.commitHistory ? null : visualEditSnapshot("sprite");
+  if (options.deferHistory || options.commitHistory) {
+    beginSpriteColorEditHistory("sprite");
+  }
   if (!validSpriteColorIndex(sprite.selectedColorIndex)) {
     sprite.selectedColorIndex = 0;
   }
@@ -1228,10 +1275,21 @@ function updateSelectedSpriteColor(value, options = {}) {
     sprite.customColorOpen = false;
     sprite.addDraftColorIndex = null;
     renderSpriteBuilder();
-    pushVisualEditUndoSnapshot("sprite", before);
+    if (options.deferHistory || options.commitHistory) {
+      commitSpriteColorEditHistory("sprite");
+    } else {
+      pushVisualEditUndoSnapshot("sprite", before);
+    }
     return;
   }
   renderSpriteColorSurfaces();
+  if (options.deferHistory) {
+    return;
+  }
+  if (options.commitHistory) {
+    commitSpriteColorEditHistory("sprite");
+    return;
+  }
   pushVisualEditUndoSnapshot("sprite", before);
 }
 
@@ -1249,6 +1307,7 @@ function openColorInput(input) {
 }
 
 function toggleSpriteAddPalette() {
+  commitSpriteColorEditHistory("sprite");
   const before = visualEditSnapshot("sprite");
   const opening = !sprite.addPaletteOpen;
   if (opening && sprite.palette.length >= SPRITE_COLOR_TOKENS.length) {
@@ -1297,7 +1356,10 @@ function addSpriteColor(color = nextSpritePresetColor()) {
 }
 
 function previewNewSpriteColor(color, options = {}) {
-  const before = visualEditSnapshot("sprite");
+  const before = options.deferHistory ? null : visualEditSnapshot("sprite");
+  if (options.deferHistory) {
+    beginSpriteColorEditHistory("sprite");
+  }
   if (!validSpriteColorIndex(sprite.addDraftColorIndex) && sprite.palette.length >= SPRITE_COLOR_TOKENS.length) {
     return;
   }
@@ -1318,10 +1380,14 @@ function previewNewSpriteColor(color, options = {}) {
     sprite.addDraftColorIndex = null;
     renderSpriteBuilder();
   }
+  if (options.deferHistory) {
+    return;
+  }
   pushVisualEditUndoSnapshot("sprite", before);
 }
 
 function closeSpriteColorEditor() {
+  commitSpriteColorEditHistory("sprite");
   sprite.addPaletteOpen = false;
   sprite.editPaletteOpen = false;
   sprite.customColorOpen = false;
@@ -1333,6 +1399,7 @@ function confirmSpriteColorAdd() {
   if (!validSpriteColorIndex(sprite.addDraftColorIndex)) {
     return;
   }
+  commitSpriteColorEditHistory("sprite");
   sprite.selectedColorIndex = sprite.addDraftColorIndex;
   sprite.addPaletteOpen = false;
   sprite.editPaletteOpen = false;
@@ -1342,6 +1409,7 @@ function confirmSpriteColorAdd() {
 }
 
 function cancelSpriteColorAdd() {
+  discardSpriteColorEditHistory("sprite");
   const before = visualEditSnapshot("sprite");
   if (validSpriteColorIndex(sprite.addDraftColorIndex)) {
     removeSpritePaletteColor(sprite.addDraftColorIndex);
@@ -1377,6 +1445,7 @@ function nextSpritePresetColor(palette = sprite.palette) {
 }
 
 function deleteSelectedSpriteColor() {
+  commitSpriteColorEditHistory("sprite");
   const before = visualEditSnapshot("sprite");
   if (!validSpriteColorIndex(sprite.selectedColorIndex) || sprite.palette.length <= 1) {
     return;

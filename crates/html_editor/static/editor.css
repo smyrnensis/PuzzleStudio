@@ -1462,6 +1462,8 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
 }
 
 .source-completion-kind-keyword { color: var(--syntax-keyword); }
+.source-completion-kind-option { color: var(--syntax-keyword); }
+.source-completion-kind-literal { color: var(--syntax-literal); }
 .source-completion-kind-object { color: var(--syntax-object); }
 .source-completion-kind-group { color: var(--syntax-group); }
 .source-completion-kind-state { color: var(--syntax-state); }
@@ -2002,6 +2004,49 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
 
 .source-action-button rect {
   fill: none;
+}
+
+.level-toolbar .sprite-icon-button[data-tooltip],
+.level-palette .sprite-icon-button[data-tooltip],
+.source-preview-actions .source-action-button[data-tooltip] {
+  position: relative;
+}
+
+.level-toolbar .sprite-icon-button[data-tooltip]::after,
+.level-palette .sprite-icon-button[data-tooltip]::after,
+.source-preview-actions .source-action-button[data-tooltip]::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 6px);
+  z-index: 40;
+  max-width: min(180px, 70vw);
+  padding: 4px 6px;
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: var(--tooltip-bg);
+  color: var(--ink);
+  box-shadow: var(--shadow);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.1;
+  opacity: 0;
+  pointer-events: none;
+  text-overflow: ellipsis;
+  transform: translate(-50%, 2px);
+  transition: opacity 80ms ease, transform 80ms ease;
+  white-space: nowrap;
+}
+
+.level-toolbar .sprite-icon-button[data-tooltip]:hover::after,
+.level-toolbar .sprite-icon-button[data-tooltip]:focus-visible::after,
+.level-palette .sprite-icon-button[data-tooltip]:hover::after,
+.level-palette .sprite-icon-button[data-tooltip]:focus-visible::after,
+.source-preview-actions .source-action-button[data-tooltip]:hover::after,
+.source-preview-actions .source-action-button[data-tooltip]:focus-visible::after {
+  opacity: 1;
+  transform: translate(-50%, 0);
 }
 
 .level-playtest-button .level-play-icon {
@@ -2589,13 +2634,18 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   padding: 0;
 }
 
+.level-scope-toggle {
+  flex: 0 1 auto;
+}
+
 .level-expand-button,
 .level-shrink-button {
   flex: 0 0 var(--icon-button-size);
 }
 
 .level-expand-button.is-selected,
-.level-shrink-button.is-selected {
+.level-shrink-button.is-selected,
+.level-grid-button.is-selected {
   background: var(--active-bg);
   color: var(--ink);
 }
@@ -2643,6 +2693,22 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
 .level-token.is-selected {
   border-color: var(--accent);
   box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.level-palette-tool-button {
+  flex: 0 0 var(--icon-button-size);
+}
+
+.level-token-eraser {
+  width: 18px;
+  height: 18px;
+  align-self: center;
+  fill: none;
+  justify-self: center;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .tile-label {
@@ -2788,6 +2854,16 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   width: var(--editor-board-cell-size) !important;
 }
 
+.level-board.board.has-occupied-cell-grid .cell.has-objects::after,
+.level-board.board.has-all-cell-grid .cell::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 100;
+  pointer-events: none;
+  box-shadow: inset 0 0 0 1px rgba(30, 41, 59, 0.34);
+}
+
 .level-board .cell {
   cursor: crosshair;
   user-select: none;
@@ -2892,6 +2968,7 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   --level3d-frame-virtual-width: 960px;
   --level3d-frame-virtual-height: 720px;
   --level3d-frame-scale: 0.444444;
+  --level3d-frame-inverse-scale: 2.25;
   --level3d-frame-width: 427px;
   --level3d-frame-height: 320px;
   --level3d-frame-gap: 12px;
@@ -3022,15 +3099,25 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
 
 .level3d-runtime-wrap .level-size {
   z-index: 3;
+  transform: scale(var(--level3d-frame-inverse-scale));
+  transform-origin: right bottom;
 }
 
 .level3d-preview-controls {
-  left: 8px;
+  top: calc(8px * var(--level3d-frame-inverse-scale));
+  left: calc(8px * var(--level3d-frame-inverse-scale));
   right: auto;
-  max-width: calc(100% - 16px);
-  flex-wrap: wrap;
+  height: calc(var(--sprite3d-overlay-control-height) + 2px);
+  min-height: calc(var(--sprite3d-overlay-control-height) + 2px);
+  max-height: calc(var(--sprite3d-overlay-control-height) + 2px);
+  max-width: calc(var(--level3d-frame-width) - 16px);
+  flex-wrap: nowrap;
   align-content: center;
   row-gap: 2px;
+  box-sizing: border-box;
+  overflow: hidden;
+  transform: scale(var(--level3d-frame-inverse-scale));
+  transform-origin: top left;
 }
 
 .level3d-preview-controls .level3d-preview-scrub {
@@ -3293,6 +3380,21 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
 .sprite-controls .sprite-source-target {
   width: 148px;
   flex: 0 0 148px;
+}
+
+#spriteBuilder .sprite-controls .sprite-source-target,
+#spriteBuilder .sprite-controls .sprite-source-actions,
+#spriteBuilder .sprite-controls .sprite-toolbar,
+#spriteBuilder .sprite-controls .sprite-transform-bar {
+  flex: 1 0 100%;
+}
+
+#spriteBuilder .sprite-controls .sprite-source-target {
+  max-width: 220px;
+}
+
+#spriteBuilder .sprite-controls .sprite-toolbar {
+  padding: 0;
 }
 
 .sprite3d-axis-control {
@@ -4347,6 +4449,22 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   stroke-linejoin: round;
 }
 
+.sprite-palette-fill-button {
+  background: var(--bar-bg);
+  color: var(--muted);
+}
+
+.sprite-palette-fill-button:hover:not(:disabled),
+.sprite-palette-fill-button:focus-visible {
+  color: var(--ink);
+}
+
+.sprite-palette-fill-button.is-active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 18%, var(--bar-bg));
+  color: var(--ink);
+}
+
 .sprite-token-color-input {
   position: absolute;
   inset: 0;
@@ -4586,7 +4704,8 @@ html.is-sprite3d-slice-scrubbing * {
   color: var(--danger);
 }
 
-.sprite3d-scope-toggle {
+.sprite3d-scope-toggle,
+.level-scope-toggle {
   min-width: 0;
   min-height: 24px;
   display: inline-flex;
@@ -4607,7 +4726,8 @@ html.is-sprite3d-slice-scrubbing * {
   text-transform: uppercase;
 }
 
-.sprite3d-scope-button {
+.sprite3d-scope-button,
+.level-scope-button {
   width: 22px;
   min-width: 22px;
   height: 20px;
@@ -4616,13 +4736,15 @@ html.is-sprite3d-slice-scrubbing * {
   color: var(--muted);
 }
 
-.sprite3d-scope-button.is-active {
+.sprite3d-scope-button.is-active,
+.level-scope-button.is-active {
   background: color-mix(in srgb, var(--accent) 20%, var(--control-bg));
   color: var(--ink);
   box-shadow: none;
 }
 
-.sprite3d-scope-button svg {
+.sprite3d-scope-button svg,
+.level-scope-button svg {
   width: 14px;
   height: 14px;
 }

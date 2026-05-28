@@ -3,16 +3,7 @@ author "PuzzleStudio"
 
 puzzle3 wide_floor {
   render {
-    camera {
-      yaw = 34
-      pitch = 38
-      zoom = 1
-      interactive_look = true
-      interactive_zoom = false
-    }
-    grid {
-      occupied_cells = true
-    }
+    camera yaw=34 pitch=38 zoom=1 interactive_look
     viewport {
       smoothscreen 9 7
       focus Player

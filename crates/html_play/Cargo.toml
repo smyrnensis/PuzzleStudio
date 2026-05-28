@@ -14,3 +14,4 @@ puzzle3d-model = { path = "../puzzle3d_model" }
 puzzle-lang = { path = "../lang" }
 puzzle-play = { path = "../play" }
 puzzle-solver = { path = "../solver" }
+serde_json = "1"

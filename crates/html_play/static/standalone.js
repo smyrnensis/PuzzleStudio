@@ -1,5 +1,4 @@
 (function () {
-  const UNTIL_STABLE_REPEAT_LIMIT = 200;
   const CORE_STATE_HASH_PROPERTY = "__puzzleCoreStateHash";
 
   class PuzzleStandaloneRuntime {
@@ -47,6 +46,9 @@
       this.currentTurnSfx = null;
       this.maxAgainTurnsPerInput = 256;
       this.coreRuntime = null;
+      this.wasmModule = null;
+      this.sessionRuntime = null;
+      this.usesRustSession = false;
       this.coreRuntimeStateHash = null;
       this.editorPreviewSceneEnabled = false;
       this.editorPreviewInputEnabled = false;
@@ -57,6 +59,9 @@
     async requestJson(url, options = {}) {
       await this.ensureInitialized();
       const method = options.method || "GET";
+      if (this.usesRustSession && this.sessionRuntime) {
+        return this.sessionRequestJson(method, url);
+      }
       if (method === "GET" && url === "/api/state") {
         return this.snapshot();
       }
@@ -98,6 +103,10 @@
 
     async initializeRuntime() {
       await this.loadCoreRuntime();
+      if (this.initializeSessionRuntime()) {
+        this.initialized = true;
+        return;
+      }
       if (!this.gameHasSceneLevelOwner()) {
         this.activateLevel(this.selectedLevelIndex, true);
       }
@@ -115,21 +124,45 @@
 
     async loadCoreRuntime() {
       const version = String(this.data?.engineVersion || Date.now());
-      try {
-        const module = await window.PuzzleRuntimeWasmLoader.load(version);
-        if (typeof module.WasmCoreRuntime !== "function") {
-          throw new Error("Puzzle core WASM runtime is unavailable.");
-        }
-        this.coreRuntime = new module.WasmCoreRuntime(this.data.source || "", this.data.puzzlePath || "game.puzzle");
-        this.coreRuntimeStateHash = null;
-      } catch (error) {
-        console.warn("Puzzle core WASM runtime is unavailable; using JavaScript transition fallback.", error);
-        this.coreRuntime = null;
-        this.coreRuntimeStateHash = null;
+      const module = await window.PuzzleRuntimeWasmLoader.load(version);
+      if (typeof module.WasmCoreRuntime !== "function") {
+        throw new Error("Puzzle core WASM runtime is unavailable.");
       }
+      this.wasmModule = module;
+      this.coreRuntime = new module.WasmCoreRuntime(this.data.source || "", this.data.puzzlePath || "game.puzzle");
+      this.coreRuntimeStateHash = null;
+    }
+
+    initializeSessionRuntime() {
+      if (typeof this.wasmModule?.WasmStandaloneSession !== "function") {
+        return false;
+      }
+      this.sessionRuntime = new this.wasmModule.WasmStandaloneSession(
+        this.data.source || "",
+        this.data.puzzlePath || "game.puzzle",
+      );
+      this.restoreSessionProgressSave();
+      this.usesRustSession = true;
+      return true;
+    }
+
+    sessionRequestJson(method, url) {
+      const raw = this.sessionRuntime.request_json(method, url);
+      const next = JSON.parse(raw);
+      if (method === "POST") {
+        if (url === "/api/command/clear_game_progress") {
+          this.clearSessionProgressSave();
+        } else if (url !== "/api/solve") {
+          this.writeSessionProgressSave();
+        }
+      }
+      return next;
     }
 
     snapshot() {
+      if (this.usesRustSession && this.sessionRuntime) {
+        return JSON.parse(this.sessionRuntime.snapshot());
+      }
       const soundEvents = this.soundEvents.splice(0);
       const messageEvents = this.messageEvents.splice(0);
       const animationEvents = this.animationEvents.splice(0);
@@ -231,6 +264,11 @@
     }
 
     applyInputName(inputName) {
+      if (this.usesRustSession && this.sessionRuntime) {
+        this.sessionRuntime.apply_input_name(inputName);
+        this.writeSessionProgressSave();
+        return;
+      }
       const input = this.inputIdsByName.get(inputName);
       if (input === undefined) {
         throw new Error(`unknown input: ${inputName}`);
@@ -563,6 +601,15 @@
     }
 
     applyCommandName(command) {
+      if (this.usesRustSession && this.sessionRuntime) {
+        this.sessionRuntime.apply_command_name(command);
+        if (command === "clear_game_progress") {
+          this.clearSessionProgressSave();
+        } else {
+          this.writeSessionProgressSave();
+        }
+        return;
+      }
       if (command === "undo") {
         this.undo();
         return;
@@ -637,24 +684,10 @@
     }
 
     transitionProgramOutcome(program, initialState, input, programKey = "custom", levelIndex = -1) {
-      if (programKey !== "custom" && this.coreRuntime) {
-        return this.coreTransitionProgramOutcome(programKey, levelIndex, initialState, input);
+      if (programKey === "custom") {
+        throw new Error("Standalone runtime requires the WASM core runtime; JavaScript transition programs are unsupported.");
       }
-      const original = this.cloneState(initialState);
-      this.clearScratch(original);
-      let current = this.cloneState(initialState);
-      this.clearScratch(current);
-      const commands = [];
-      for (const step of program) {
-        const result = this.applyStep(step, input, current);
-        if (result.cancelled) {
-          return { state: original, cancelled: true, commands: [] };
-        }
-        current = result.state;
-        commands.push(...(result.commands || []));
-      }
-      this.clearScratch(current);
-      return { state: current, cancelled: false, commands };
+      return this.coreTransitionProgramOutcome(programKey, levelIndex, initialState, input);
     }
 
     coreTransitionProgramOutcome(programKey, levelIndex, initialState, input) {
@@ -681,7 +714,7 @@
           changed: outcome.changed === true,
           cancelled: outcome.cancelled === true,
           commands: this.commandsForCoreOutcome(outcome),
-          animations: this.animationsForCoreOutcome(outcome, nextState),
+          animations: this.normalizeAnimationEvents(outcome.animationEvents),
         };
       }
       const raw = this.coreRuntime.transition_program_outcome(
@@ -697,80 +730,12 @@
         changed: undefined,
         cancelled: outcome.cancelled === true,
         commands: this.commandsForCoreOutcome(outcome),
-        animations: this.animationsForCoreOutcome(outcome, outcome.state),
+        animations: this.normalizeAnimationEvents(outcome.animationEvents),
       };
     }
 
-    animationsForCoreOutcome(outcome, nextState) {
-      const animations = [];
-      const firedRules = outcome.firedRules || [];
-      const patches = outcome.patches || [];
-      for (let index = 0; index < Math.min(firedRules.length, patches.length); index += 1) {
-        const emissions = this.engine.ruleEmissions?.[String(firedRules[index])]
-          || this.engine.ruleEmissions?.[firedRules[index]]
-          || [];
-        const animateEmissions = emissions.filter((emission) => emission?.kind === "animate");
-        if (!animateEmissions.length) {
-          continue;
-        }
-        for (const emission of animateEmissions) {
-          const objects = new Set((emission.objects || []).map((object) => Number(object)));
-          if (emission.trigger === "move") {
-            for (const op of patches[index] || []) {
-              if (op.kind !== "move" || !objects.has(Number(op.objectId))) {
-                continue;
-              }
-              this.pushUniqueAnimation(animations, {
-                kind: "move",
-                name: emission.name,
-                objectId: Number(op.objectId),
-                fromX: Number(op.fromX),
-                fromY: Number(op.fromY),
-                toX: Number(op.toX),
-                toY: Number(op.toY),
-              });
-            }
-          } else if (emission.trigger === "cantmove") {
-            for (const op of patches[index] || []) {
-              if (op.kind !== "remove_scratch" || Number(op.scratch) !== 0) {
-                continue;
-              }
-              const objectId = Number(op.objectId);
-              if (objectId > 0) {
-                if (objects.has(objectId)) {
-                  this.pushUniqueAnimation(animations, {
-                    kind: "cantmove",
-                    name: emission.name,
-                    objectId,
-                    x: Number(op.x),
-                    y: Number(op.y),
-                  });
-                }
-                continue;
-              }
-              for (const candidate of objects) {
-                if (this.hasObject(nextState, Number(op.x), Number(op.y), candidate)) {
-                  this.pushUniqueAnimation(animations, {
-                    kind: "cantmove",
-                    name: emission.name,
-                    objectId: candidate,
-                    x: Number(op.x),
-                    y: Number(op.y),
-                  });
-                }
-              }
-            }
-          }
-        }
-      }
-      return animations;
-    }
-
-    pushUniqueAnimation(animations, event) {
-      const key = JSON.stringify(event);
-      if (!animations.some((existing) => JSON.stringify(existing) === key)) {
-        animations.push(event);
-      }
+    normalizeAnimationEvents(events) {
+      return Array.isArray(events) ? events : [];
     }
 
     syncCoreRuntimeState(state) {
@@ -859,328 +824,6 @@
         .filter(Boolean);
     }
 
-    applyStep(step, input, state) {
-      if (step.kind === "rule") {
-        return this.applyRuleStep(step.rule, input, state);
-      }
-      if (step.kind === "conditional") {
-        if (!this.conditionAccepts(step.condition, state, input)) {
-          return { fired: false, state };
-        }
-        let current = state;
-        let fired = false;
-        const commands = [];
-        for (const child of step.steps) {
-          const result = this.applyStep(child, input, current);
-          if (result.cancelled) {
-            return { fired: true, state: current, cancelled: true };
-          }
-          current = result.state;
-          commands.push(...(result.commands || []));
-          fired = fired || result.fired;
-        }
-        return { fired, state: current, commands };
-      }
-      if (step.application === "once" || step.application === "once_all" || step.application === "once_per_level") {
-        let current = state;
-        let fired = false;
-        const commands = [];
-        for (const child of step.steps) {
-          const result = this.applyStep(child, input, current);
-          if (result.cancelled) {
-            return { fired: true, state: current, cancelled: true };
-          }
-          current = result.state;
-          commands.push(...(result.commands || []));
-          fired = fired || result.fired;
-        }
-        return { fired, state: current, commands };
-      }
-
-      let current = state;
-      let firedAny = false;
-      const commands = [];
-      const seen = new Set([this.stateKey(current)]);
-      let repeatCount = 0;
-      while (true) {
-        if (step.condition && this.conditionAccepts(step.condition, current, input)) {
-          break;
-        }
-        const beforeKey = this.stateKey(current);
-        let passFired = false;
-        for (const child of step.steps) {
-          const result = this.applyStep(child, input, current);
-          if (result.cancelled) {
-            return { fired: true, state: current, cancelled: true };
-          }
-          current = result.state;
-          commands.push(...(result.commands || []));
-          passFired = passFired || result.fired;
-        }
-        if (!passFired) {
-          break;
-        }
-        const key = this.stateKey(current);
-        if (key === beforeKey) {
-          break;
-        }
-        firedAny = true;
-        if (seen.has(key)) {
-          console.warn("until-stable block cycle; ending repeat at current state");
-          break;
-        }
-        seen.add(key);
-        repeatCount += 1;
-        if (repeatCount >= UNTIL_STABLE_REPEAT_LIMIT) {
-          console.warn("until-stable block reached repeat limit; ending repeat at current state");
-          break;
-        }
-      }
-      return { fired: firedAny, state: current, commands };
-    }
-
-    conditionAccepts(condition, state, input = 0) {
-      const patterns = condition?.patterns || [];
-      if (condition?.kind === "any_matches") {
-        return patterns.some((entry) => this.hasPatternMatch(state, entry.pattern || entry));
-      }
-      if (condition?.kind === "no_matches") {
-        return patterns.every((entry) => !this.hasPatternMatch(state, entry.pattern || entry));
-      }
-      if (condition?.kind === "any_input_matches") {
-        return patterns.some((entry) => entry.input === input && this.hasPatternMatch(state, entry.pattern || entry));
-      }
-      if (condition?.kind === "no_input_matches") {
-        return patterns.every((entry) => entry.input !== input || !this.hasPatternMatch(state, entry.pattern || entry));
-      }
-      if (condition?.kind === "guard_branches") {
-        return (condition.branches || []).some((branch) =>
-          branch.every((guard) => this.guardAccepts(guard, input, state))
-        );
-      }
-      return false;
-    }
-
-    applyRuleStep(rule, input, state) {
-      if (!this.guardsAccept(rule, input, state)) {
-        return { fired: false, state };
-      }
-      if (rule.application === "once") {
-        const placement = this.findFirstMatch(state, rule);
-        if (!placement) {
-          return { fired: false, state };
-        }
-        if (this.ruleCancels(rule)) {
-          return { fired: true, state, cancelled: true };
-        }
-        return { fired: true, state: this.applyWrites(state, rule, placement), commands: this.ruleCommands(rule) };
-      }
-      if (rule.application === "once_all") {
-        const placements = this.findAllMatches(state, rule);
-        if (!placements.length) {
-          return { fired: false, state };
-        }
-        let current = state;
-        let fired = false;
-        for (const placement of placements) {
-          if (!this.placementMatches(current, rule, placement)) {
-            continue;
-          }
-          let next = null;
-          try {
-            next = this.applyWrites(current, rule, placement);
-          } catch (error) {
-            if (this.onceAllPatchBecameStale(error)) {
-              continue;
-            }
-            throw error;
-          }
-          fired = true;
-          if (this.ruleCancels(rule)) {
-            return { fired: true, state: current, cancelled: true };
-          }
-          current = next;
-        }
-        if (!fired) {
-          return { fired: false, state };
-        }
-        return { fired: true, state: current, commands: this.ruleCommands(rule) };
-      }
-      if (rule.application === "once_per_level") {
-        const firedRules = state.levelFiredRules || [];
-        if (firedRules.includes(rule.id)) {
-          return { fired: false, state };
-        }
-        const placement = this.findFirstMatch(state, rule);
-        if (!placement) {
-          return { fired: false, state };
-        }
-        if (this.ruleCancels(rule)) {
-          return { fired: true, state, cancelled: true };
-        }
-        const next = this.applyWrites(state, rule, placement);
-        next.levelFiredRules = [...(next.levelFiredRules || []), rule.id].sort((a, b) => a - b);
-        return { fired: true, state: next, commands: this.ruleCommands(rule) };
-      }
-
-      let current = state;
-      let fired = false;
-      const commands = [];
-      const seen = new Set([this.stateKey(current)]);
-      let repeatCount = 0;
-      while (true) {
-        const placements = this.findAllMatches(current, rule);
-        if (!placements.length) {
-          break;
-        }
-        let advanced = false;
-        let shouldStop = false;
-        const currentKey = this.stateKey(current);
-        for (const placement of placements) {
-          if (this.ruleCancels(rule)) {
-            return { fired: true, state: current, cancelled: true };
-          }
-          const next = this.applyWrites(current, rule, placement);
-          const key = this.stateKey(next);
-          const ruleCommands = this.ruleCommands(rule);
-          if (key === currentKey) {
-            if (ruleCommands.length) {
-              commands.push(...ruleCommands);
-              fired = true;
-            }
-            continue;
-          }
-          current = next;
-          commands.push(...ruleCommands);
-          fired = true;
-          advanced = true;
-          if (seen.has(key)) {
-            console.warn(`until-stable cycle in rule ${rule.id}; ending repeat at current state`);
-            shouldStop = true;
-            break;
-          }
-          seen.add(key);
-          repeatCount += 1;
-          if (repeatCount >= UNTIL_STABLE_REPEAT_LIMIT) {
-            console.warn(`until-stable repeat limit reached in rule ${rule.id}; ending repeat at current state`);
-            shouldStop = true;
-            break;
-          }
-          break;
-        }
-        if (shouldStop) {
-          break;
-        }
-        if (!advanced) {
-          break;
-        }
-        if (repeatCount >= UNTIL_STABLE_REPEAT_LIMIT) {
-          break;
-        }
-      }
-      return { fired, state: current, commands };
-    }
-
-    ruleCancels(rule) {
-      return (rule.effects || []).some((effect) => effect.kind === "cancel");
-    }
-
-    ruleCommands(rule) {
-      const ordered = this.engine.ruleEffects?.[String(rule.id)] || this.engine.ruleEffects?.[rule.id] || null;
-      return [...(ordered || [...(rule.effects || []), ...(this.engine.ruleEmissions?.[String(rule.id)] || this.engine.ruleEmissions?.[rule.id] || [])])]
-        .filter((effect) => effect.kind === "win" || effect.kind === "restart" || effect.kind === "next_level" || effect.kind === "again" || effect.kind === "checkpoint" || effect.kind === "clear_checkpoint" || effect.kind === "message" || effect.kind === "play_sfx" || effect.kind === "wait")
-        .map((effect) => {
-          if (effect.kind === "message") {
-            return {
-              kind: "message",
-              text: effect.text,
-              literal: effect.literal === true,
-            };
-          }
-          if (effect.kind === "play_sfx") {
-            return { kind: "play_sfx", name: effect.name };
-          }
-          if (effect.kind === "wait") {
-            return { kind: "wait", milliseconds: effect.milliseconds ?? effect.ms ?? 0 };
-          }
-          if (effect.kind === "again") {
-            return { kind: "again" };
-          }
-          if (effect.kind === "win") {
-            return { kind: "win" };
-          }
-          if (effect.kind === "checkpoint") {
-            return { kind: "checkpoint" };
-          }
-          if (effect.kind === "clear_checkpoint") {
-            return { kind: "clear_checkpoint" };
-          }
-          if (effect.kind === "restart") {
-            return { kind: "restart" };
-          }
-          return { kind: "next_level" };
-        });
-    }
-
-    guardsAccept(rule, input, state) {
-      return rule.guards.every((guard) => this.guardAccepts(guard, input, state));
-    }
-
-    guardAccepts(guard, input, state) {
-      if (guard.kind === "input_is") {
-        return input === guard.input;
-      }
-      if (guard.kind === "global_compare") {
-        return this.compare(state.globals[guard.global] ?? 0, guard.op, guard.value);
-      }
-      if (guard.kind === "query_compare") {
-        return this.compare(this.evalQuery(state, guard.query, input), guard.op, guard.value);
-      }
-      if (guard.kind === "query_nonzero") {
-        return this.evalQuery(state, guard.query, input) !== 0;
-      }
-      if (guard.kind === "query_value_compare") {
-        return this.compare(this.evalQueryKind(state, guard.queryKind, input), guard.op, guard.value);
-      }
-      if (guard.kind === "query_value_nonzero") {
-        return this.evalQueryKind(state, guard.queryKind, input) !== 0;
-      }
-      return true;
-    }
-
-    findFirstMatch(state, rule) {
-      if (!rule.pattern.components.length) {
-        return { components: [] };
-      }
-      for (const [x, y] of this.componentCandidateOrigins(state, rule.pattern.components[0])) {
-        const first = this.componentPlacementAt(state, rule.pattern.components[0], x, y);
-        if (!first) {
-          continue;
-        }
-        const components = [first];
-        if (this.completeComponentPlacements(state, rule, 1, components)) {
-          return { components };
-        }
-      }
-      return null;
-    }
-
-    findAllMatches(state, rule) {
-      if (!rule.pattern.components.length) {
-        return [{ components: [] }];
-      }
-      const matches = [];
-      for (const [x, y] of this.componentCandidateOrigins(state, rule.pattern.components[0])) {
-        const first = this.componentPlacementAt(state, rule.pattern.components[0], x, y);
-        if (!first) {
-          continue;
-        }
-        const components = [first];
-        this.collectComponentPlacements(state, rule, 1, components, matches);
-      }
-      return matches;
-    }
-
     completeComponentPlacements(state, rule, componentIndex, components) {
       if (componentIndex === rule.pattern.components.length) {
         return true;
@@ -1198,47 +841,6 @@
         components.pop();
       }
       return false;
-    }
-
-    collectComponentPlacements(state, rule, componentIndex, components, matches) {
-      if (componentIndex === rule.pattern.components.length) {
-        matches.push({ components: components.map((component) => ({
-          originX: component.originX,
-          originY: component.originY,
-          gaps: [...(component.gaps || [])],
-        })) });
-        return;
-      }
-      const component = rule.pattern.components[componentIndex];
-      for (const [x, y] of this.componentCandidateOrigins(state, component)) {
-        const placement = this.componentPlacementAt(state, component, x, y);
-        if (!placement) {
-          continue;
-        }
-        components.push(placement);
-        this.collectComponentPlacements(state, rule, componentIndex + 1, components, matches);
-        components.pop();
-      }
-    }
-
-    placementMatches(state, rule, placement) {
-      if ((placement.components || []).length !== rule.pattern.components.length) {
-        return false;
-      }
-      return rule.pattern.components.every((component, index) => {
-        const placed = placement.components[index];
-        return this.componentMatchesWithGaps(
-          state,
-          component,
-          placed.originX,
-          placed.originY,
-          placed.gaps || [],
-        );
-      });
-    }
-
-    onceAllPatchBecameStale(error) {
-      return error?.code === "expected_object" || error?.code === "layer_occupied";
     }
 
     componentCandidateOrigins(state, component) {
@@ -1331,185 +933,6 @@
         && cell.forbidObjects.every((object) => !this.hasObject(state, x, y, object))
         && (cell.requireScratch || []).every((attr) => this.hasScratchPattern(state, x, y, attr))
         && (cell.forbidScratch || []).every((attr) => !this.hasScratchPattern(state, x, y, attr));
-    }
-
-    applyWrites(state, rule, placement) {
-      const next = this.cloneState(state);
-      this.clearCoreStateHash(next);
-      this.applyMoveWrites(next, rule.writes || [], placement);
-      for (const write of rule.writes) {
-        if (write.kind === "add") {
-          const [x, y] = this.writePosition(placement, write.component, write.offset);
-          this.setObject(next, x, y, write.object);
-        } else if (write.kind === "remove") {
-          const [x, y] = this.writePosition(placement, write.component, write.offset);
-          this.removeObject(next, x, y, write.object);
-        } else if (write.kind === "move") {
-          continue;
-        } else if (write.kind === "replace") {
-          const [x, y] = this.writePosition(placement, write.component, write.offset);
-          this.removeObject(next, x, y, write.remove);
-          this.setObject(next, x, y, write.add);
-        } else if (write.kind === "set_scratch") {
-          const [x, y] = this.writePosition(placement, write.component, write.offset);
-          this.setScratch(next, x, y, write.object, write.scratch, Object.hasOwn(write, "value") ? write.value : null);
-        } else if (write.kind === "remove_scratch") {
-          const [x, y] = this.writePosition(placement, write.component, write.offset);
-          this.removeScratch(
-            next,
-            x,
-            y,
-            write.object,
-            write.scratch,
-            Object.hasOwn(write, "value") ? write.value : null,
-            write.match,
-          );
-        }
-      }
-      for (const effect of rule.effects) {
-        if (effect.kind === "update_global") {
-          next.globals[effect.global] = this.applyGlobalUpdate(next.globals[effect.global] ?? 0, effect.op, effect.value);
-        }
-      }
-      return next;
-    }
-
-    applyWritesOnceAll(state, rule, placements) {
-      const next = this.cloneState(state);
-      this.clearCoreStateHash(next);
-      const objectProposals = new Map();
-      const deferredWrites = [];
-      const deferredEffects = [];
-
-      for (const placement of placements) {
-        this.applyWrites(state, rule, placement);
-        for (const write of rule.writes) {
-          if (write.kind === "add") {
-            const [x, y] = this.writePosition(placement, write.component, write.offset);
-            const layer = this.objectLayers.get(write.object);
-            objectProposals.set(`${x},${y},${layer}`, { x, y, layer, object: write.object });
-          } else if (write.kind === "remove") {
-            const [x, y] = this.writePosition(placement, write.component, write.offset);
-            const layer = this.objectLayers.get(write.object);
-            objectProposals.set(`${x},${y},${layer}`, { x, y, layer, object: 0 });
-          } else if (write.kind === "move") {
-            const [fromX, fromY] = this.writePosition(placement, write.component, write.fromOffset);
-            const [toX, toY] = this.writePosition(placement, write.component, write.toOffset);
-            const layer = this.objectLayers.get(write.object);
-            objectProposals.set(`${fromX},${fromY},${layer}`, { x: fromX, y: fromY, layer, object: 0 });
-            objectProposals.set(`${toX},${toY},${layer}`, { x: toX, y: toY, layer, object: write.object });
-          } else if (write.kind === "replace") {
-            const [x, y] = this.writePosition(placement, write.component, write.offset);
-            const removeLayer = this.objectLayers.get(write.remove);
-            const addLayer = this.objectLayers.get(write.add);
-            objectProposals.set(`${x},${y},${removeLayer}`, { x, y, layer: removeLayer, object: 0 });
-            objectProposals.set(`${x},${y},${addLayer}`, { x, y, layer: addLayer, object: write.add });
-          } else if (write.kind === "set_scratch" || write.kind === "remove_scratch") {
-            const [x, y] = this.writePosition(placement, write.component, write.offset);
-            deferredWrites.push({ write, x, y });
-          }
-        }
-        deferredEffects.push(...(rule.effects || []));
-      }
-
-      for (const proposal of objectProposals.values()) {
-        const index = this.slotIndex(next, proposal.x, proposal.y, proposal.layer);
-        if (next.slots[index] !== proposal.object) {
-          next.slots[index] = proposal.object;
-          if (next.scratch?.[index]?.length) {
-            next.scratch[index] = [];
-          }
-        }
-      }
-      for (const { write, x, y } of deferredWrites) {
-        if (write.kind === "set_scratch") {
-          this.setScratch(next, x, y, write.object, write.scratch, Object.hasOwn(write, "value") ? write.value : null);
-        } else {
-          this.removeScratch(
-            next,
-            x,
-            y,
-            write.object,
-            write.scratch,
-            Object.hasOwn(write, "value") ? write.value : null,
-            write.match,
-          );
-        }
-      }
-      for (const effect of deferredEffects) {
-        if (effect.kind === "update_global") {
-          next.globals[effect.global] = this.applyGlobalUpdate(next.globals[effect.global] ?? 0, effect.op, effect.value);
-        }
-      }
-      return next;
-    }
-
-    applyMoveWrites(state, writes, placement) {
-      const moves = [];
-      const sources = new Set();
-      const destinations = new Set();
-
-      for (const write of writes) {
-        if (write.kind !== "move") {
-          continue;
-        }
-        const layer = this.objectLayers.get(write.object);
-        if (layer === undefined) {
-          throw this.patchError("unknown_object", `unknown object in move: ${write.object}`);
-        }
-        const [fromX, fromY] = this.writePosition(placement, write.component, write.fromOffset);
-        const [toX, toY] = this.writePosition(placement, write.component, write.toOffset);
-        const fromIndex = this.slotIndex(state, fromX, fromY, layer);
-        if (state.slots[fromIndex] !== write.object) {
-          throw this.patchError("expected_object", `expected object ${write.object} at ${fromX},${fromY}`);
-        }
-        const destinationKey = `${toX},${toY},${layer}`;
-        if (destinations.has(destinationKey)) {
-          throw this.patchError("layer_occupied", `move destination already occupied: ${toX},${toY}`);
-        }
-        sources.add(`${fromX},${fromY},${layer}`);
-        destinations.add(destinationKey);
-        moves.push({ fromX, fromY, toX, toY, layer, object: write.object });
-      }
-
-      for (const move of moves) {
-        const toIndex = this.slotIndex(state, move.toX, move.toY, move.layer);
-        const existing = state.slots[toIndex];
-        if (existing && !sources.has(`${move.toX},${move.toY},${move.layer}`)) {
-          throw this.patchError("layer_occupied", `move destination occupied: ${move.toX},${move.toY}`);
-        }
-      }
-
-      if (moves.length) {
-        this.clearCoreStateHash(state);
-      }
-      const moved = moves.map((move) => {
-        const fromIndex = this.slotIndex(state, move.fromX, move.fromY, move.layer);
-        const scratch = state.scratch?.[fromIndex]?.length
-          ? state.scratch[fromIndex].map((entry) => ({ ...entry }))
-          : [];
-        state.slots[fromIndex] = 0;
-        if (state.scratch?.[fromIndex]?.length) {
-          state.scratch[fromIndex] = [];
-        }
-        return { ...move, scratch };
-      });
-      for (const move of moved) {
-        const toIndex = this.slotIndex(state, move.toX, move.toY, move.layer);
-        state.slots[toIndex] = move.object;
-        if (move.scratch.length) {
-          state.scratch = state.scratch || [];
-          state.scratch[toIndex] = move.scratch;
-        } else if (state.scratch?.[toIndex]?.length) {
-          state.scratch[toIndex] = [];
-        }
-      }
-    }
-
-    writePosition(placement, componentIndex, offset) {
-      const component = placement.components[componentIndex];
-      const [dx, dy] = this.resolveOffset(offset, component.gaps);
-      return [component.originX + dx, component.originY + dy];
     }
 
     resolveOffset(offset, gaps) {
@@ -1614,16 +1037,6 @@
         }
       }
       return count;
-    }
-
-    applyGlobalUpdate(current, op, value) {
-      if (op === "set") return value;
-      if (op === "add") return current + value;
-      if (op === "subtract") return current - value;
-      if (op === "multiply") return current * value;
-      if (op === "divide") return Math.trunc(current / value);
-      if (op === "remainder") return current % value;
-      return current;
     }
 
     compare(left, op, right) {
@@ -2264,12 +1677,7 @@
 
     materializeDisplayProgram(program, state, programKey, levelIndex = -1) {
       const base = this.cloneState(state);
-      try {
-        return this.transitionProgram(program, base, 0, programKey, levelIndex);
-      } catch (error) {
-        console.warn(`${programKey} projection failed; using source state`, error);
-        return this.cloneState(state);
-      }
+      return this.transitionProgram(program, base, 0, programKey, levelIndex);
     }
 
     setCurrentState(state, options = {}) {
@@ -3456,6 +2864,50 @@
             this.persistentVars[index] = Math.trunc(value);
           }
         }
+      }
+    }
+
+    restoreSessionProgressSave() {
+      if (!this.sessionRuntime) {
+        return;
+      }
+      let raw;
+      try {
+        raw = window.localStorage?.getItem(this.progressSaveStorageKey());
+      } catch (_error) {
+        return;
+      }
+      if (!raw) {
+        return;
+      }
+      try {
+        this.sessionRuntime.restore_progress_save(raw);
+        this.sessionRuntime.mark_progress_save_written();
+      } catch (_error) {
+        // Ignore incompatible saves; the Rust session will start from defaults.
+      }
+    }
+
+    writeSessionProgressSave() {
+      if (!this.sessionRuntime) {
+        return;
+      }
+      try {
+        window.localStorage?.setItem(this.progressSaveStorageKey(), this.sessionRuntime.progress_save());
+        this.sessionRuntime.mark_progress_save_written();
+      } catch (_error) {
+        // Browsers can deny storage for local files, private windows, or quota limits.
+      }
+    }
+
+    clearSessionProgressSave() {
+      if (this.sessionRuntime) {
+        this.sessionRuntime.clear_progress_save();
+      }
+      try {
+        window.localStorage?.removeItem(this.progressSaveStorageKey());
+      } catch (_error) {
+        // Ignore storage failures; the in-memory progress was already cleared.
       }
     }
 
