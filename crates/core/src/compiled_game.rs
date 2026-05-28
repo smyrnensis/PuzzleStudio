@@ -390,9 +390,27 @@ pub struct PatternComponent {
 pub struct MatchCell {
     pub offset: Offset,
     pub require_objects: Vec<ObjectId>,
+    pub require_object_sets: Vec<ObjectSetMatcher>,
     pub forbid_objects: Vec<ObjectId>,
     pub require_scratch: Vec<ScratchPattern>,
+    pub require_object_set_scratch: Vec<ObjectSetScratchPattern>,
     pub forbid_scratch: Vec<ScratchPattern>,
+    pub forbid_object_set_scratch: Vec<ObjectSetScratchPattern>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ObjectSetMatcher {
+    pub binding: u16,
+    pub layer: LayerId,
+    pub objects: Vec<ObjectId>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ObjectSetScratchPattern {
+    pub binding: u16,
+    pub scratch: ScratchId,
+    pub value: Option<i64>,
+    pub match_value: ScratchValueMatch,
 }
 
 #[derive(Clone, Debug)]
@@ -422,16 +440,32 @@ pub enum WriteOp {
         offset: Offset,
         object: ObjectId,
     },
+    AddObjectSet {
+        component: u16,
+        offset: Offset,
+        binding: u16,
+    },
     Remove {
         component: u16,
         offset: Offset,
         object: ObjectId,
+    },
+    RemoveObjectSet {
+        component: u16,
+        offset: Offset,
+        binding: u16,
     },
     Move {
         component: u16,
         from_offset: Offset,
         to_offset: Offset,
         object: ObjectId,
+    },
+    MoveObjectSet {
+        component: u16,
+        from_offset: Offset,
+        to_offset: Offset,
+        binding: u16,
     },
     Replace {
         component: u16,
@@ -446,10 +480,25 @@ pub enum WriteOp {
         scratch: ScratchId,
         value: Option<i64>,
     },
+    SetObjectSetScratch {
+        component: u16,
+        offset: Offset,
+        binding: u16,
+        scratch: ScratchId,
+        value: Option<i64>,
+    },
     RemoveScratch {
         component: u16,
         offset: Offset,
         object: ObjectId,
+        scratch: ScratchId,
+        value: Option<i64>,
+        match_value: ScratchValueMatch,
+    },
+    RemoveObjectSetScratch {
+        component: u16,
+        offset: Offset,
+        binding: u16,
         scratch: ScratchId,
         value: Option<i64>,
         match_value: ScratchValueMatch,

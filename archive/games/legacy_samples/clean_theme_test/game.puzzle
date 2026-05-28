@@ -1,6 +1,6 @@
 title CleanThemeTest
 
-import "themes/clean.puzzle"
+theme clean
 
 const theme_title = "Clean Theme Test"
 const theme_subtitle = "Neutral readable baseline"

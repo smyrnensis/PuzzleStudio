@@ -227,8 +227,8 @@
       return next;
     }
 
-    snapshot() {
-      if (this.usesRustSession && this.sessionRuntime) {
+    snapshot(options = {}) {
+      if (this.usesRustSession && this.sessionRuntime && options.forceJs !== true) {
         return JSON.parse(this.sessionRuntime.snapshot());
       }
       const soundEvents = this.soundEvents.splice(0);
@@ -1767,6 +1767,9 @@
         : this.cloneState(state);
       if ((options.materializeDisplay || options.materializeTurnStart) && options.acceptModelInput !== true) {
         this.state = this.displayState(this.state);
+      }
+      if (Array.isArray(options.animationEvents)) {
+        this.animationEvents.push(...options.animationEvents);
       }
       this.capturePersistentVars(this.state);
       this.applyPersistentVars(this.state);

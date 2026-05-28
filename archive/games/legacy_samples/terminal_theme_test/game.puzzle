@@ -1,6 +1,6 @@
 title TerminalThemeTest
 
-import "themes/terminal.puzzle"
+theme terminal
 
 var clear_message = "Level clear"
 var final_message = "All levels clear"

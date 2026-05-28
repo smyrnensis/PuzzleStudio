@@ -646,6 +646,9 @@ function closeWorkPane(paneId) {
   }
   selectFallbackPreviewPane(normalized);
   applyPaneVisibility();
+  if (normalized === PREVIEW_WORK_PANE_ID && typeof terminatePreviewGame === "function") {
+    terminatePreviewGame();
+  }
   return true;
 }
 

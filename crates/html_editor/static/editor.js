@@ -112,7 +112,6 @@ const SPRITE_COLOR_PRESETS = [
   "#29adff", "#83769c", "#ff77a8", "#ffccaa",
 ];
 const SPRITE_COLOR_TOKENS = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
-const BUILTIN_THEME_IMPORTS = window.PuzzleEditorThemeImports || {};
 const PREVIEW_THEME_PRESETS = {
   clean: {
     colorScheme: "light",
@@ -841,6 +840,18 @@ function setPreviewDocumentLoaded(loaded) {
   }
 }
 
+function terminatePreviewGame() {
+  if (activePreviewRequest) {
+    activePreviewRequest.abort();
+    activePreviewRequest = null;
+  }
+  previewFrameHasEditorLevelState = false;
+  latestPreviewState = null;
+  pendingPreviewKeyStateSync = 0;
+  setPreviewDocumentLoaded(false);
+  setPreviewFrameHtml(emptyPreviewDocument());
+}
+
 function applyUnloadedPreviewTheme() {
   const root = playPreview;
   if (!root) {
@@ -1222,24 +1233,11 @@ function expandPuzzleImportsForWasm(source, puzzlePath, importStack = []) {
     const importPath = resolveWasmImportPath(baseDir, match[1]);
     const imported = documentByPath(importPath);
     if (!imported || !isTextDocument(imported)) {
-      const builtinSource = builtinThemeImportSource(importPath);
-      if (builtinSource) {
-        out.push(expandPuzzleImportsForWasm(builtinSource, importPath, nextStack));
-        continue;
-      }
       throw new Error(`import not found: ${match[1]} from ${normalizedPath}`);
     }
     out.push(expandPuzzleImportsForWasm(imported.source || "", importPath, nextStack));
   }
   return out.join("\n");
-}
-
-function builtinThemeImportSource(path) {
-  const normalized = normalizePathSegments(path);
-  const parts = normalized.split("/");
-  const fileName = parts.at(-1) || "";
-  const themePath = `themes/${fileName}`;
-  return parts.includes("themes") ? BUILTIN_THEME_IMPORTS[themePath] || "" : "";
 }
 
 function expandPuzzleSectionHeadersForWasm(source) {
@@ -3617,8 +3615,10 @@ function loadLevelFromSourcePosition(position, options = {}) {
   }
   openPreviewModePane("edit");
   const levelIndex = setActiveLevelIndex(previewLevelIndexForSourceEntry(entry));
-  loadLevelFromPreviewState();
   const levelName = previewExport?.levels?.[levelIndex]?.name || entry.name || `level_${levelIndex + 1}`;
+  if (!loadLevelFromSourceEntry(source, entry, { levelIndex, levelName })) {
+    loadLevelFromPreviewState();
+  }
   setLevelNameInputs(levelName);
   if (!options.silent) {
     setStatus(`Loaded level ${levelName}`, "is-ok");
@@ -3698,13 +3698,170 @@ function loadLevelSourceTarget(target, options = {}) {
   }
   openPreviewModePane("edit");
   levelIndex = setActiveLevelIndex(levelIndex);
-  loadLevelFromPreviewState();
   const levelName = levels[levelIndex]?.name || target.name || `level_${levelIndex + 1}`;
+  const source = sourceEditor.value || "";
+  if (!loadLevelFromSourceEntry(source, target, { levelIndex, levelName })) {
+    loadLevelFromPreviewState();
+  }
   setLevelNameInputs(levelName);
   if (!options.silent) {
     setStatus(`Loaded level ${levelName}`, "is-ok");
   }
   return `level:${levelIndex}:${levelName}`;
+}
+
+function loadLevelFromSourceEntry(source, entry, options = {}) {
+  const exportData = previewExport || extractPreviewExport(latestHtml);
+  const state = sourceLevelStateFromEntry(source, entry, exportData, options);
+  if (!state) {
+    return false;
+  }
+  clearSolutionPreview();
+  stopLevelPlaytest({ syncPreview: false });
+  levelDisplayCells = null;
+  level.width = state.width;
+  level.height = state.height;
+  level.regions = state.regions;
+  level.cells = state.cells;
+  renderLevelBoard();
+  sendLevelStateToPreview(options.levelIndex ?? currentEditableLevelIndex(exportData), levelStateData(exportData), {
+    materializeLevelStart: false,
+    materializeDisplay: false,
+    silent: true,
+  });
+  return true;
+}
+
+function sourceLevelStateFromEntry(source, entry, exportData = previewExport, options = {}) {
+  if (!entry || !exportData?.engine?.objects?.length) {
+    return null;
+  }
+  const parsed = sourceLevelRowsAndLocalLegends(source, entry);
+  if (!parsed.rows.length) {
+    return null;
+  }
+  const charEntries = [
+    ...sourceCharEntries(source, exportData),
+    ...parsed.localLegends.map((row) => legendEntryFromRow(row, new Set(engineObjects(exportData).map((object) => object.name)))).filter(Boolean),
+  ];
+  const charMap = new Map(charEntries.map((charEntry) => [charEntry.char, charEntry.objects]));
+  const groups = sourceLevelRowGroups(parsed.rows);
+  if (!groups.length) {
+    return null;
+  }
+  const regions = [];
+  let width = 0;
+  let height = 0;
+  for (const group of groups) {
+    const regionWidth = Math.max(1, ...group.map((row) => [...row].length));
+    const regionHeight = Math.max(1, group.length);
+    regions.push({ index: regions.length, x: width, y: 0, width: regionWidth, height: regionHeight });
+    width += regionWidth;
+    height = Math.max(height, regionHeight);
+  }
+  const cells = makeEmptyCells(width, height, exportData);
+  const objectIdsByName = new Map(engineObjects(exportData).map((object) => [object.name, object.id]));
+  for (const [regionIndex, group] of groups.entries()) {
+    const region = regions[regionIndex];
+    for (let y = 0; y < group.length; y += 1) {
+      const chars = [...group[y]];
+      for (let x = 0; x < region.width; x += 1) {
+        const char = chars[x] ?? ".";
+        const objects = /\s/.test(char) ? [] : charMap.get(char);
+        if (!objects) {
+          return null;
+        }
+        const slots = makeEmptyCell(exportData);
+        for (const objectName of objects) {
+          const objectId = objectIdsByName.get(objectName) || 0;
+          const object = engineObjectById(objectId, exportData);
+          if (!object) {
+            return null;
+          }
+          slots[object.layer] = object.id;
+        }
+        cells[((region.y + y) * width) + region.x + x] = slots;
+      }
+    }
+  }
+  return {
+    width,
+    height,
+    regions: normalizedLevelRegions(regions, width, height),
+    cells,
+  };
+}
+
+function sourceLevelRowsAndLocalLegends(source, entry) {
+  const lines = sourceLinesWithOffsets(String(source || "").slice(entry.start, entry.end));
+  const rows = [];
+  const localLegends = [];
+  let sawMapRow = false;
+  const firstTokens = splitLevelTokens(levelScannerCode(lines[0]?.raw || ""));
+  let index = sourceLevelEntryHasHeader(firstTokens) ? 1 : 0;
+  while (index < lines.length) {
+    const code = levelScannerCode(lines[index].raw);
+    if (!code) {
+      if (sawMapRow && rows.at(-1) !== "") {
+        rows.push("");
+      }
+      index += 1;
+      continue;
+    }
+    const normalized = braceNormalizedLineForSectionForWasm(code);
+    const tokens = splitLevelTokens(normalized);
+    if (tokens[0] === "legend") {
+      if (tokens.length > 1) {
+        localLegends.push(code.slice("legend".length).trim());
+        index += 1;
+      } else {
+        const result = collectLegendBlockRows(lines, index + 1, []);
+        localLegends.push(...result.rows);
+        index = Math.max(index + 1, result.endIndex + 1);
+      }
+      continue;
+    }
+    if (isLevelLifecycleHeader(tokens) || startsLevelBodyBlock(tokens, normalized)) {
+      index = skipLevelBodySourceBlock(lines, index);
+      continue;
+    }
+    if (isLevelEventSugarCode(code) || normalized === "}" || normalized === "end") {
+      index += 1;
+      continue;
+    }
+    rows.push(code);
+    sawMapRow = true;
+    index += 1;
+  }
+  while (rows.at(-1) === "") {
+    rows.pop();
+  }
+  return { rows, localLegends };
+}
+
+function sourceLevelEntryHasHeader(tokens) {
+  return tokens[0] === "level"
+    || (tokens.length === 1 && tokens[0] === "{")
+    || (tokens.at(-1) === "{" && tokens[0] !== "legend");
+}
+
+function sourceLevelRowGroups(rows) {
+  const groups = [];
+  let current = [];
+  for (const row of rows) {
+    if (String(row || "").trim() === "") {
+      if (current.length) {
+        groups.push(current);
+        current = [];
+      }
+      continue;
+    }
+    current.push(String(row || ""));
+  }
+  if (current.length) {
+    groups.push(current);
+  }
+  return groups;
 }
 
 function previewLevelIndexForSourceEntry(entry, exportData = previewExport) {
@@ -5882,6 +6039,7 @@ async function applyLevelPlaytestKey(event) {
     renderLevelBoard();
     sendLevelStateToPreview(levelIndex, levelPlaytestStateData, {
       acceptModelInput: true,
+      animationEvents: outcome.animationEvents,
       materializeLevelStart: false,
       materializeDisplay: true,
       silent: false,
@@ -6044,6 +6202,7 @@ function sendLevelStateToPreview(levelIndex = currentEditableLevelIndex(), state
     type: "PuzzleStudioSetState",
     levelIndex,
     state,
+    animationEvents: Array.isArray(options.animationEvents) ? options.animationEvents : [],
     regions: levelRegions(),
     acceptModelInput: options.acceptModelInput === true,
     materializeLevelStart,

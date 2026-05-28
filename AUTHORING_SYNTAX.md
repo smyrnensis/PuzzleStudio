@@ -1468,8 +1468,6 @@ theme の見た目の identity は HTML adapter の CSS preset が持つ。`.puz
 `theme` 宣言は preset 名の選択と、作者に公開する少数の調整項目だけを持つ。
 
 ```txt
-import "themes/clean.puzzle"
-
 theme clean {
 accent_color #2f7ebc
 board_color #edf1f2
@@ -1485,7 +1483,7 @@ ui_font sans-serif
 preset CSS の値を上書きする。値は space を含まない compact CSS token にする。
 複数 theme 宣言は import 展開後の順序で preset 名または同じ項目を上書きする。theme 未指定時の default theme name は `clean`。
 
-標準 preset は `themes/clean.puzzle`、`themes/terminal.puzzle`、`themes/paper.puzzle`、`themes/pixel.puzzle`、`themes/candy.puzzle`、`themes/blueprint.puzzle`、`themes/noir.puzzle`。これらの `.puzzle` import は実質的に `theme <theme>` を分割 file にしたもの。HTML adapter は対応する `theme-clean` / `theme-terminal` / `theme-paper` / `theme-pixel` / `theme-candy` / `theme-blueprint` / `theme-noir` CSS preset を同梱し、そこで各 theme の見た目の identity を定義する。editor upload でもこの `themes/*.puzzle` import は built-in として解決される。
+標準 preset は `clean`、`terminal`、`paper`、`pixel`、`candy`、`blueprint`、`noir`。HTML adapter は対応する `theme-clean` / `theme-terminal` / `theme-paper` / `theme-pixel` / `theme-candy` / `theme-blueprint` / `theme-noir` CSS preset を同梱し、そこで各 theme の見た目の identity を定義する。
 
 外部 CSS / JS は `assets` block で明示する。puzzle と同じ folder からの相対 path だけを書ける。
 

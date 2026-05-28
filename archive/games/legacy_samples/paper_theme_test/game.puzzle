@@ -1,6 +1,6 @@
 title PaperThemeTest
 
-import "themes/paper.puzzle"
+theme paper
 
 const theme_title = "Paper Theme Test"
 const theme_subtitle = "Notebook puzzle sheet"

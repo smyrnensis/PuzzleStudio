@@ -258,9 +258,10 @@
       }
     }
 
+    const faceRects = adapter.rectsFromCells || rectsFromCells;
     const faces = [];
     for (const group of groups.values()) {
-      for (const rect of rectsFromCells(group.cells)) {
+      for (const rect of faceRects(group.cells, group)) {
         faces.push(adapter.face(group, rect));
       }
     }

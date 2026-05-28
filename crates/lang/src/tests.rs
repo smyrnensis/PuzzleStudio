@@ -3677,6 +3677,72 @@ BB..
 }
 
 #[test]
+fn standard_move_uses_object_set_matchers_without_object_expansion() {
+    let source = r#"
+title standard_move_object_sets
+
+puzzle default {
+layers {
+actor = Player Box Key
+wall = Wall
+}
+
+legend {
+P = Player
+B = Box
+K = Key
+W = Wall
+. = empty
+}
+
+rules {
+once_all right [ Player ] -> [ > Player ]
+move
+}
+
+levels {
+level start
+PBK.
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+
+    fn count_steps(steps: &[RuleStep], rules: &mut usize, object_sets: &mut usize) {
+        for step in steps {
+            match step {
+                RuleStep::Rule(rule) => {
+                    *rules += 1;
+                    for component in &rule.pattern.components {
+                        for cell in &component.cells {
+                            *object_sets += cell.require_object_sets.len();
+                        }
+                    }
+                }
+                RuleStep::ConditionalBlock { steps, .. }
+                | RuleStep::Block { steps, .. }
+                | RuleStep::LocalFrame { steps, .. } => {
+                    count_steps(steps, rules, object_sets);
+                }
+            }
+        }
+    }
+
+    let mut rules = 0;
+    let mut object_sets = 0;
+    count_steps(loaded.game.program(), &mut rules, &mut object_sets);
+
+    assert!(
+        object_sets > 0,
+        "move should preserve layer groups as object-set matchers"
+    );
+    assert!(
+        rules < 100,
+        "move lowered to object-expanded rules: {rules}"
+    );
+}
+
+#[test]
 fn directions_scratch_sugar_matches_any_movement_value() {
     let source = r#"
 title directions_sugar
@@ -4870,7 +4936,7 @@ start -> goto title
 }
 
 #[test]
-fn game_file_can_import_theme_metadata() {
+fn game_file_can_declare_theme_metadata() {
     let dir = std::env::temp_dir().join(format!(
         "puzzlestudio_import_theme_test_{}",
         std::process::id()
@@ -4881,7 +4947,6 @@ fn game_file_can_import_theme_metadata() {
         &game_path,
         r##"
 title themed
-import "themes/clean.puzzle"
 
 puzzle default {
 layers {

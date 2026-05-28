@@ -2265,6 +2265,7 @@ step board
         assert!(EDITOR_JS.contains("transition_current_state_outcome"));
         assert!(EDITOR_JS.contains("function applyLevelPlaytestKey(event)"));
         assert!(EDITOR_JS.contains("acceptModelInput: true"));
+        assert!(EDITOR_JS.contains("animationEvents: outcome.animationEvents"));
         assert!(EDITOR_JS.contains(
             "levelDisplayCells = stateDataToLevelCells(levelPlaytestStateData, exportData);"
         ));
@@ -2305,7 +2306,7 @@ step board
     }
 
     #[test]
-    fn level_editor_uses_compiled_preview_source_for_level_reference_data() {
+    fn level_editor_loads_cells_from_source_target() {
         assert!(EDITOR_JS.contains("function levelReferenceSource(exportData = previewExport)"));
         assert!(
             EDITOR_JS.contains("level.palette = levelPaletteFromExport(levelReferenceSource());")
@@ -2315,6 +2316,12 @@ step board
         ));
         assert!(EDITOR_JS.contains("sourceTitleMatches(requestedName, level.name)"));
         assert!(EDITOR_JS.contains("openPreviewModePane(\"edit\");"));
+        assert!(EDITOR_JS.contains("function loadLevelFromSourceEntry(source, entry, options = {})"));
+        assert!(EDITOR_JS.contains("function sourceLevelStateFromEntry(source, entry, exportData = previewExport, options = {})"));
+        assert!(EDITOR_JS.contains("function sourceLevelRowsAndLocalLegends(source, entry)"));
+        assert!(EDITOR_JS.contains("function sourceLevelEntryHasHeader(tokens)"));
+        assert!(EDITOR_JS.contains("sourceLevelRowGroups(parsed.rows)"));
+        assert!(EDITOR_JS.contains("if (!loadLevelFromSourceEntry(source, target, { levelIndex, levelName }))"));
         assert!(EDITOR_JS.contains(
             "function levelSourceData(source = levelReferenceSource(previewExport || extractPreviewExport(latestHtml))"
         ));
@@ -2394,6 +2401,17 @@ step board
         assert!(
             EDITOR_JS
                 .contains("const maximizeButton = event.target.closest(\"[data-pane-maximize]\");")
+        );
+    }
+
+    #[test]
+    fn closing_preview_pane_terminates_preview_game() {
+        assert!(EDITOR_JS.contains("function terminatePreviewGame()"));
+        assert!(EDITOR_JS.contains("setPreviewFrameHtml(emptyPreviewDocument());"));
+        assert!(
+            EDITOR_WORKBENCH_JS.contains(
+                "if (normalized === PREVIEW_WORK_PANE_ID && typeof terminatePreviewGame === \"function\")"
+            )
         );
     }
 
@@ -2934,6 +2952,10 @@ step board
         assert!(EDITOR_SPRITE3D_JS.contains("const previewOwner = sprite3dPreviewRenderOwner();"));
         assert!(EDITOR_SPRITE3D_JS.contains("ownerCell: previewOwner"));
         assert!(EDITOR_SPRITE3D_JS.contains("renderPriority: order"));
+        assert!(EDITOR_SPRITE3D_JS.contains("assignSprite3dPrimitiveOrder(sceneFaces);"));
+        assert!(EDITOR_SPRITE3D_JS.contains("primitive.frameIndex = index;"));
+        assert!(EDITOR_SPRITE3D_JS.contains("primitive.stableKey = occurrence === 0 ? baseKey"));
+        assert!(EDITOR_SPRITE3D_JS.contains("rectsFromCells: sprite3dUnitFaceRects"));
         assert!(!EDITOR_SPRITE3D_JS.contains("function compareSprite3dSceneFaceOrder"));
     }
 
