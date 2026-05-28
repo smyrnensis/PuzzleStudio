@@ -265,7 +265,9 @@ let currentState = null;
 let swipeStart = null;
 const puzzleViewports = new Map();
 const puzzle3FrameIframes = new Map();
+const activeSolveRequests = new Map();
 const standardChoiceCursors = new Map();
+let wasmSolverPromise = null;
 let screenScaleSyncFrame = 0;
 let screenScaleSyncPasses = 0;
 const defaultSceneLogicalSize = { width: 4, height: 3 };
@@ -284,6 +286,42 @@ async function requestJson(url, options = {}) {
     throw new Error(body.error || response.statusText);
   }
   return body;
+}
+
+async function loadWasmSolver() {
+  if (!wasmSolverPromise) {
+    wasmSolverPromise = import("./wasm/puzzle_wasm.js")
+      .then(async (module) => {
+        await module.default({ module_or_path: "./wasm/puzzle_wasm_bg.wasm" });
+        if (typeof module.solve_state !== "function") {
+          throw new Error("Solver is not available");
+        }
+        return module;
+      })
+      .catch((error) => {
+        wasmSolverPromise = null;
+        throw error;
+      });
+  }
+  return wasmSolverPromise;
+}
+
+async function solveStandaloneCurrentState(options = {}) {
+  if (!standaloneRuntime) {
+    return requestJson("/api/solve", { method: "POST" });
+  }
+  if (!window.PuzzleExport?.source) {
+    throw new Error("standalone solve requires PuzzleExport.source");
+  }
+  const solver = await loadWasmSolver();
+  return JSON.parse(solver.solve_state(
+    window.PuzzleExport.source,
+    window.PuzzleExport.puzzlePath || "game.puzzle",
+    JSON.stringify(standaloneRuntime.state),
+    Number(options.maxDepth ?? 512),
+    Number(options.maxNodes ?? 5_000_000),
+    Number(options.maxMs ?? 0),
+  ));
 }
 
 async function loadState() {
@@ -2561,6 +2599,52 @@ window.addEventListener("message", async (event) => {
       } else {
         loadState();
       }
+    }
+    return;
+  }
+
+  if (event.data?.type === "PuzzleStudioSolve") {
+    const requestId = event.data.requestId;
+    const solveRequest = { cancelled: false };
+    activeSolveRequests.set(requestId, solveRequest);
+    try {
+      if (standaloneRuntime && event.data.state) {
+        standaloneRuntime.setCurrentState(event.data.state, {
+          levelIndex: event.data.levelIndex,
+          regions: event.data.regions,
+          acceptModelInput: event.data.acceptModelInput === true,
+          materializeLevelStart: event.data.materializeLevelStart === true,
+          materializeDisplay: event.data.materializeDisplay === true,
+          materializeTurnStart: event.data.materializeTurnStart === true,
+        });
+        if (event.data.silent === true) {
+          notifyPreviewState(standaloneRuntime.snapshot());
+        } else {
+          await loadState();
+        }
+      }
+      const solution = await solveStandaloneCurrentState(event.data.options || {});
+      window.parent.postMessage({
+        type: "PuzzleStudioSolveResult",
+        requestId,
+        solution,
+      }, "*");
+    } catch (error) {
+      window.parent.postMessage({
+        type: "PuzzleStudioSolveResult",
+        requestId,
+        error: String(error?.message || error),
+      }, "*");
+    } finally {
+      activeSolveRequests.delete(requestId);
+    }
+    return;
+  }
+
+  if (event.data?.type === "PuzzleStudioCancelSolve") {
+    const solveRequest = activeSolveRequests.get(event.data.requestId);
+    if (solveRequest) {
+      solveRequest.cancelled = true;
     }
     return;
   }
