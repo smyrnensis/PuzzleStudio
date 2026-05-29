@@ -3,9 +3,20 @@ const screenView = document.querySelector("#screenView");
 const screenFrame = document.querySelector("#screenFrame") || screenView?.parentElement;
 const playSurface = document.querySelector(".play-surface");
 const shell = document.querySelector("#shell");
+const PREVIEW_SURFACE_UPDATE_MESSAGE = "PuzzleStudioPreviewSurfaceUpdate";
+const PUZZLE3_LEVEL_PREVIEW_KIND = "puzzle3-level";
+const ISOLATED_PREVIEW_MODE = "isolated";
+const PUZZLE3_MODEL_COMPONENT_PREVIEW_MESSAGE = "PuzzleStudioRenderPuzzle3ModelComponent";
+const initialPuzzle3PreviewSurface = normalizePuzzle3PreviewSurface(
+  window.PuzzleStudioInitialPreviewSurface || window.PuzzleStudioInitialModelComponentPreview,
+);
+if (initialPuzzle3PreviewSurface) {
+  window.PuzzleStudioInitialPreviewSurfaceConsumed = true;
+  window.PuzzleStudioInitialModelComponentPreviewConsumed = true;
+}
 const componentEmbedMode = new URLSearchParams(window.location.search).get("component") === "1";
-document.documentElement.classList.toggle("is-component-embed", componentEmbedMode);
-document.body.classList.toggle("is-component-embed", componentEmbedMode);
+document.documentElement.classList.toggle("is-component-embed", componentEmbedMode || Boolean(initialPuzzle3PreviewSurface));
+document.body.classList.toggle("is-component-embed", componentEmbedMode || Boolean(initialPuzzle3PreviewSurface));
 const messageQueue = [];
 let messagePopup = null;
 let clientPendingWaits = 0;
@@ -181,7 +192,8 @@ let currentState = null;
 let swipeStart = null;
 const puzzleViewports = new Map();
 /* puzzle-host:optional:puzzle3:start */
-const puzzle3FrameIframes = new Map();
+const puzzle3Controllers = new Map();
+let puzzle3PreviewSurface = initialPuzzle3PreviewSurface;
 /* puzzle-host:optional:puzzle3:end */
 /* puzzle-host:optional:solver:start */
 const activeSolveRequests = new Map();
@@ -738,7 +750,7 @@ function renderSceneStack(state) {
 
   const layers = sceneLayers(state);
   syncVisualThemeForSceneStack(layers);
-  if (componentEmbedMode && renderEmbeddedPuzzleComponent(layers)) {
+  if (effectiveComponentEmbedMode() && renderEmbeddedPuzzleComponent(layers)) {
     return;
   }
   screenView.classList.toggle("has-scene-stack", layers.length > 1);
@@ -799,6 +811,21 @@ function fitPuzzleFrameComponents(root = screenView) {
 }
 
 function renderEmbeddedPuzzleComponent(layers) {
+  /* puzzle-host:optional:puzzle3:start */
+  if (puzzle3PreviewSurface) {
+    const sceneName = puzzle3PreviewSurface.sceneName;
+    const scope = {
+      __sceneLayer: { name: sceneName, focused: true },
+      __sceneDef: { name: sceneName, components: [puzzle3PreviewSurface.component] },
+      __sceneState: {},
+      __sceneMenuLike: false,
+      __standardChoiceCounter: { value: 0 },
+    };
+    screenView.classList.remove("has-scene-stack");
+    screenView.append(renderPuzzle3Frame(puzzle3PreviewSurface.component, scope));
+    return true;
+  }
+  /* puzzle-host:optional:puzzle3:end */
   const layer = layers.find((candidate) => candidate.focused === true) || layers[0];
   const sceneDef = sceneDefByName(layer?.name);
   const component = findComponentByKind(sceneDef?.components || [], "puzzle");
@@ -870,7 +897,6 @@ function componentSizingKind(component) {
     case "choice":
       return "flow";
     case "level_menu":
-    case "menu":
     case "for":
       return "collection";
     case "box":
@@ -939,6 +965,14 @@ function currentSceneHasPuzzle() {
   return sceneHasComponent(currentSceneDef(), "puzzle") || sceneHasComponent(currentSceneDef(), "frame");
 }
 
+function currentSceneAcceptsModelInput() {
+  const scene = currentSceneDef();
+  if (scene) {
+    return currentSceneHasPuzzle();
+  }
+  return Boolean(currentState?.scene);
+}
+
 function currentSceneHasPuzzle3() {
   return sceneHasComponent(currentSceneDef(), "puzzle3");
 }
@@ -995,34 +1029,12 @@ function renderComponent(component, scope = {}) {
       return renderFor(component, scope);
     case "level_menu":
       return renderLevelMenu(currentState, component, scope);
-    case "menu":
-      return renderMenuInstance(component, scope);
     default: {
       const empty = document.createElement("div");
       empty.hidden = true;
       return empty;
     }
   }
-}
-
-function renderMenuInstance(component, scope = {}) {
-  const menu = currentState?.menus?.find((candidate) => candidate.name === component.menu);
-  const container = document.createElement("div");
-  container.className = "view-menu";
-  applySizingKind(container, component);
-  if (!menu) {
-    container.hidden = true;
-    return container;
-  }
-
-  const menuScope = {
-    ...scope,
-    __menuInstance: component.name,
-    __menuButtonCounter: { value: 0 },
-    __menuCursor: Number((scope.__sceneState || currentState?.sceneState || currentState?.screenState)?.[`__menu_${component.name}_cursor`] || 0),
-  };
-  renderSurfaceComponents(menu.view || [], container, menuScope);
-  return container;
 }
 
 function renderTitle(component, className, scope = {}) {
@@ -1059,7 +1071,7 @@ function renderPuzzle(component, scope = {}) {
 
 /* puzzle-host:optional:puzzle3:start */
 function renderPuzzle3Frame(component, scope = {}) {
-  if (!window.Puzzle3DFrameFixture || !window.Puzzle3DFrameAssets) {
+  if (!window.Puzzle3DFrameFixture || !window.Puzzle3DFrameAssets || !window.Puzzle3Controller) {
     const empty = document.createElement("div");
     empty.hidden = true;
     return empty;
@@ -1067,64 +1079,235 @@ function renderPuzzle3Frame(component, scope = {}) {
   const sceneName = scope.__sceneDef?.name || scope.__sceneLayer?.name || currentState?.currentScene || currentState?.screen || "playing";
   const source = component.source || "board";
   const key = `${sceneName}:${source}`;
-  let frame = puzzle3FrameIframes.get(key);
-  if (!frame) {
-    frame = document.createElement("iframe");
-    frame.className = "puzzle3-frame";
-    frame.dataset.frameComponent = "true";
-    frame.loading = "eager";
-    frame.dataset.scene = sceneName;
-    frame.dataset.source = source;
-    frame.title = `${sceneTitle(sceneName)} ${source}`;
-    frame.srcdoc = puzzle3FrameSrcdoc(sceneName);
-    puzzle3FrameIframes.set(key, frame);
+  let entry = puzzle3Controllers.get(key);
+  if (!entry) {
+    const root = document.createElement("div");
+    root.className = "puzzle3-component";
+    root.dataset.frameComponent = "true";
+    root.dataset.scene = sceneName;
+    root.dataset.source = source;
+    root.setAttribute("aria-label", `${sceneTitle(sceneName)} ${source}`);
+    const canvas = document.createElement("canvas");
+    canvas.width = 960;
+    canvas.height = 640;
+    canvas.setAttribute("aria-label", `${sceneTitle(sceneName)} ${source}`);
+    root.append(canvas);
+    const fixture = puzzle3FrameFixture(sceneName);
+    const assets = window.Puzzle3DFrameAssets || {};
+    const controller = window.Puzzle3Controller.attach(canvas, {
+      screenView: root,
+      fixture,
+      source: assets.source || "",
+      puzzlePath: assets.puzzlePath || "game.puzzle",
+      scene: sceneName,
+      component,
+    });
+    entry = { root, canvas, controller, levelIndex: null };
+    if (shouldPostPuzzle3ControllerMessages()) {
+      controller.onView?.((view) => {
+        window.parent?.postMessage({
+          type: "PuzzleStudioPuzzle3View",
+          source,
+          scene: sceneName,
+          view,
+        }, "*");
+      });
+      controller.onStateChange?.((snapshot) => {
+        window.parent?.postMessage({
+          type: "PuzzleStudioPuzzle3State",
+          source,
+          scene: sceneName,
+          snapshot,
+        }, "*");
+      });
+    }
+    puzzle3Controllers.set(key, entry);
   }
-  return frame;
+  syncPuzzle3ControllerLevel(entry);
+  return entry.root;
 }
 
-function puzzle3FrameSrcdoc(sceneName) {
-  const assets = window.Puzzle3DFrameAssets || {};
+function puzzle3FrameFixture(sceneName) {
   const fixture = JSON.parse(JSON.stringify(window.Puzzle3DFrameFixture || {}));
+  if (puzzle3PreviewSurface) {
+    return puzzle3PreviewSurfaceFixture(fixture, sceneName);
+  }
   fixture.currentScene = sceneName || fixture.currentScene || fixture.scenes?.[0]?.name || "playing";
   if (Number.isInteger(currentState?.levelIndex)) {
     fixture.levelIndex = currentState.levelIndex;
   } else if (Number.isInteger(currentState?.selectedLevelIndex)) {
     fixture.levelIndex = currentState.selectedLevelIndex;
   }
-  const fixtureJson = puzzle3SafeScriptJson(fixture);
-  const sourceJson = puzzle3SafeScriptJson(assets.source || "");
-  const puzzlePathJson = puzzle3SafeScriptJson(assets.puzzlePath || "game.puzzle");
-  return `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<style>${puzzle3SafeScriptText(assets.themeCss || "")}</style>
-<style>${puzzle3SafeScriptText(assets.styleCss || "")}</style>
-<style>html,body,#screenView{width:100%;height:100%;margin:0;overflow:hidden;background:transparent;}body{display:block;}.puzzle3-component{width:100%;height:100%;}html.is-component-embed,body.is-component-embed,body.is-component-embed[class],body.is-component-embed #screenView,body.is-component-embed .scene,body.is-component-embed .puzzle3-component,body.is-component-embed canvas{background:transparent;}</style>
-</head>
-<body class="theme-clean is-component-embed">
-<main id="screenView" class="scene">
-  <div class="puzzle3-component">
-    <canvas id="view" width="960" height="640" aria-label="Puzzle3 component"></canvas>
-  </div>
-</main>
-<script>window.Puzzle3DComponentEmbed=true;window.Puzzle3DFixture=${fixtureJson};window.Puzzle3DSource=${sourceJson};window.Puzzle3DPath=${puzzlePathJson};${puzzle3SafeScriptText(assets.embeddedWasmJs || "")}</script>
-<script>${puzzle3SafeScriptText(assets.visualCoreJs || "")}</script>
-<script>${puzzle3SafeScriptText(assets.appJs || "")}</script>
-</body>
-</html>`;
+  return fixture;
 }
 
-function puzzle3SafeScriptJson(value) {
-  return JSON.stringify(value)
-    .replace(/</g, "\\u003c")
-    .replace(/>/g, "\\u003e")
-    .replace(/&/g, "\\u0026");
+function normalizePuzzle3PreviewSurface(update = null) {
+  if (!update || (update.type !== PREVIEW_SURFACE_UPDATE_MESSAGE && update.type !== PUZZLE3_MODEL_COMPONENT_PREVIEW_MESSAGE)) {
+    return null;
+  }
+  if (update.type === PREVIEW_SURFACE_UPDATE_MESSAGE && (update.kind !== PUZZLE3_LEVEL_PREVIEW_KIND || update.mode !== ISOLATED_PREVIEW_MODE)) {
+    return null;
+  }
+  const payload = update.type === PREVIEW_SURFACE_UPDATE_MESSAGE
+    ? update.payload || {}
+    : legacyPuzzle3LevelPreviewPayload(update);
+  const component = update.component || update.modelComponent || {};
+  return {
+    update,
+    sceneName: update.scene || "__editor_model_preview__",
+    payload,
+    component: {
+      kind: "puzzle3",
+      source: component.source || update.source || "__editor_model_preview__",
+      layout: component.layout || update.layout || {},
+    },
+  };
 }
 
-function puzzle3SafeScriptText(value) {
-  return String(value || "").replace(/<\/(script|style)/gi, "<\\/$1");
+function legacyPuzzle3LevelPreviewPayload(update = {}) {
+  return {
+    levelIndex: update.levelIndex,
+    level: update.level,
+    resources: update.resources || update,
+    view: {
+      ...(update.camera || {}),
+      ...(update.view || {}),
+    },
+    display: update.settings || {},
+  };
+}
+
+function puzzle3PreviewSurfaceControllerUpdate(surface = puzzle3PreviewSurface) {
+  if (!surface) {
+    return {};
+  }
+  const payload = surface.payload || {};
+  const view = payload.view || {};
+  return {
+    levelIndex: payload.levelIndex,
+    level: payload.level,
+    resources: payload.resources,
+    camera: {
+      yawDegrees: view.yawDegrees,
+      pitchDegrees: view.pitchDegrees,
+    },
+    view: {
+      zoom: view.zoom,
+      target: view.target,
+    },
+    settings: payload.display || {},
+    component: surface.component,
+    componentEmbed: true,
+  };
+}
+
+function setPuzzle3PreviewSurface(update = null) {
+  puzzle3PreviewSurface = normalizePuzzle3PreviewSurface(update);
+  const embed = effectiveComponentEmbedMode();
+  document.documentElement.classList.toggle("is-component-embed", embed);
+  document.body.classList.toggle("is-component-embed", embed);
+  if (currentState) {
+    renderSceneStack(currentState);
+  }
+}
+
+function applyPuzzleStudioPreviewSurfaceUpdate(update = null) {
+  const surface = normalizePuzzle3PreviewSurface(update);
+  if (!surface) {
+    return false;
+  }
+  setPuzzle3PreviewSurface(update);
+  const controllerUpdate = puzzle3PreviewSurfaceControllerUpdate(surface);
+  for (const entry of puzzle3Controllers.values()) {
+    entry.controller?.update?.(controllerUpdate);
+  }
+  return true;
+}
+
+window.applyPuzzleStudioPreviewSurfaceUpdate = applyPuzzleStudioPreviewSurfaceUpdate;
+
+function effectiveComponentEmbedMode() {
+  return componentEmbedMode || Boolean(puzzle3PreviewSurface);
+}
+
+function shouldPostPuzzle3ControllerMessages() {
+  return Boolean((componentEmbedMode || puzzle3PreviewSurface) && window.parent && window.parent !== window);
+}
+
+function puzzle3PreviewSurfaceFixture(source, sceneName) {
+  const surface = puzzle3PreviewSurface || {};
+  const payload = surface.payload || {};
+  const next = JSON.parse(JSON.stringify(source || {}));
+  const resources = payload.resources || {};
+  if (resources.layerCount != null) {
+    next.layerCount = Math.max(1, Math.trunc(Number(resources.layerCount) || 1));
+  }
+  if (resources.objects && typeof resources.objects === "object") {
+    next.objects = JSON.parse(JSON.stringify(resources.objects));
+  }
+  if (resources.sprites && typeof resources.sprites === "object") {
+    next.sprites = JSON.parse(JSON.stringify(resources.sprites));
+  }
+  const level = payload.level || {};
+  const size = level.size || payload.size || next.size || {};
+  const cells = Array.isArray(level.cells) ? level.cells : Array.isArray(payload.cells) ? payload.cells : next.cells || [];
+  const rawLevelIndex = payload.levelIndex ?? next.levelIndex ?? 0;
+  const levels = Array.isArray(next.levels) && next.levels.length ? next.levels : [{}];
+  const levelIndex = Math.max(0, Math.min(levels.length - 1, Math.trunc(Number(rawLevelIndex) || 0)));
+  const target = levels[levelIndex] || {};
+  levels[levelIndex] = {
+    ...target,
+    name: level.name || target.name || "level_1",
+    label: level.label || target.label || level.name || target.name || "Level 1",
+    size: { ...size },
+    cells: JSON.parse(JSON.stringify(cells)),
+  };
+  next.levels = levels;
+  next.levelIndex = levelIndex;
+  next.size = { ...size };
+  next.cells = JSON.parse(JSON.stringify(cells));
+  const view = payload.view || {};
+  if (view.yawDegrees != null || view.pitchDegrees != null) {
+    next.camera = JSON.parse(JSON.stringify({
+      yawDegrees: view.yawDegrees,
+      pitchDegrees: view.pitchDegrees,
+    }));
+  }
+  if (payload.view) {
+    next.view = JSON.parse(JSON.stringify({
+      zoom: view.zoom,
+      target: view.target,
+    }));
+  }
+  if (payload.display) {
+    next.settings = { ...(next.settings || {}), ...JSON.parse(JSON.stringify(payload.display)) };
+  }
+  const previewSceneName = sceneName || surface.sceneName || "__editor_model_preview__";
+  next.scenes = [{
+    name: previewSceneName,
+    components: [surface.component || { kind: "puzzle3", source: "__editor_model_preview__" }],
+  }];
+  next.currentScene = previewSceneName;
+  return next;
+}
+
+function syncPuzzle3ControllerLevel(entry) {
+  const controller = entry?.controller;
+  if (!controller) {
+    return;
+  }
+  if (puzzle3PreviewSurface) {
+    return;
+  }
+  const level = Number.isInteger(currentState?.levelIndex)
+    ? currentState.levelIndex
+    : Number.isInteger(currentState?.selectedLevelIndex)
+      ? currentState.selectedLevelIndex
+      : null;
+  if (level !== null && entry.levelIndex !== level) {
+    entry.levelIndex = level;
+    controller.ready?.then(() => controller.command("goto_level", { level }));
+  }
 }
 /* puzzle-host:optional:puzzle3:end */
 
@@ -1321,10 +1504,10 @@ function applyActivationConfirmGlyphs(target) {
   const label = activationConfirmLabel(target);
   const labelWidth = Array.from(label).length;
   const dashCount = Math.max(0, puzzlescriptTerminalWidth - 2 - labelWidth);
-  const leftCount = Math.floor(dashCount / 2);
-  const rightCount = dashCount - leftCount;
-  target.style.setProperty("--ps-confirm-before", JSON.stringify(`#${"-".repeat(leftCount)}`));
-  target.style.setProperty("--ps-confirm-after", JSON.stringify(`${"-".repeat(rightCount)}#`));
+  const sideCount = Math.floor(dashCount / 2);
+  const spacer = dashCount % 2 === 0 ? "" : " ";
+  target.style.setProperty("--ps-confirm-before", JSON.stringify(`#${"-".repeat(sideCount)}`));
+  target.style.setProperty("--ps-confirm-after", JSON.stringify(`${spacer}${"-".repeat(sideCount)}#`));
 }
 
 function clearActivationConfirmGlyphs(target) {
@@ -1545,11 +1728,6 @@ function resourceMatches(resource, name) {
   return name === resource || String(name || "").startsWith(`${resource}.`);
 }
 
-function menuInstanceComponent(scene = currentSceneDef()) {
-  const components = scene?.components || [];
-  return findComponent(components, (component) => component.kind === "menu");
-}
-
 function findComponent(components, predicate) {
   for (const component of components || []) {
     if (predicate(component)) {
@@ -1744,14 +1922,6 @@ function effectsForKey(event) {
     effects.push(binding.effect || { kind: "command", name: binding.command });
   }
 
-  const menu = menuInstanceComponent(scene);
-  if (menu) {
-    const menuInput = menuInputForKey(key, key, rawCode);
-    if (menuInput) {
-      effects.push({ kind: "command", name: `${menu.name}.${menuInput}` });
-    }
-  }
-
   if (currentSceneHasLevelMenu()) {
     const menuInput = menuInputForKey(key, key, rawCode);
     if (menuInput) {
@@ -1785,7 +1955,7 @@ function effectsForKey(event) {
   if (key === "y") {
     effects.push({ kind: "command", name: "redo" });
   }
-  if (input && (currentSceneHasPuzzle() || currentState.scene)) {
+  if (input && currentSceneAcceptsModelInput()) {
     effects.push({ kind: "command", name: input.name });
   }
   return effects;
@@ -1877,14 +2047,24 @@ function inputByName(name) {
 function currentSceneDef() {
   const source = currentState || window.PuzzleExport || {};
   const name = source.currentScene || source.screen || "playing";
-  const scenes = source.scenes || source.screens || [];
+  const scenes = sceneDefinitionsForSource(source);
   return scenes.find((scene) => scene.name === name) || null;
 }
 
 function sceneDefByName(name) {
   const source = currentState || window.PuzzleExport || {};
-  const scenes = source.scenes || source.screens || [];
+  const scenes = sceneDefinitionsForSource(source);
   return scenes.find((scene) => scene.name === name) || null;
+}
+
+function sceneDefinitionsForSource(source) {
+  const primary = nonEmptyArray(source?.scenes) || nonEmptyArray(source?.screens);
+  const fallback = nonEmptyArray(window.PuzzleExport?.scenes) || nonEmptyArray(window.PuzzleExport?.screens);
+  return primary || fallback || [];
+}
+
+function nonEmptyArray(value) {
+  return Array.isArray(value) && value.length > 0 ? value : null;
 }
 
 function isSceneConditionTrue(condition) {
@@ -2038,15 +2218,11 @@ function sendPuzzle3Command(command) {
   if (!parsed) {
     return false;
   }
-  const frame = puzzle3FrameForTarget(parsed.target);
-  if (!frame?.contentWindow) {
+  const controller = puzzle3ControllerForTarget(parsed.target);
+  if (!controller) {
     return false;
   }
-  frame.contentWindow.postMessage({
-    type: "PuzzleStudioCommand",
-    command: parsed.command,
-    level: parsed.level,
-  }, "*");
+  controller.command(parsed.command, { level: parsed.level });
   return true;
 }
 
@@ -2061,12 +2237,14 @@ function parsePuzzle3Command(command) {
   return { target, command: commandName, level };
 }
 
-function puzzle3FrameForTarget(target) {
+function puzzle3ControllerForTarget(target) {
   const targetName = String(target || "").split(".").pop();
-  const frames = [...document.querySelectorAll("iframe.puzzle3-frame")];
-  return frames.find((frame) => frame.dataset.source === targetName)
-    || frames.find((frame) => frame.dataset.source === target)
-    || null;
+  for (const entry of puzzle3Controllers.values()) {
+    if (entry.root.dataset.source === targetName || entry.root.dataset.source === target) {
+      return entry.controller;
+    }
+  }
+  return null;
 }
 /* puzzle-host:optional:puzzle3:end */
 
@@ -2481,7 +2659,10 @@ document.addEventListener("keydown", (event) => {
     return;
   }
   /* puzzle-host:optional:puzzle3:start */
-  broadcastPuzzle3Key(event, "down");
+  if (broadcastPuzzle3Key(event, "down")) {
+    event.preventDefault();
+    return;
+  }
   /* puzzle-host:optional:puzzle3:end */
 
   const effects = effectsForKey(event);
@@ -2508,17 +2689,18 @@ document.addEventListener("keyup", (event) => {
 });
 
 function broadcastPuzzle3Key(event, action = "down") {
-  if (!currentSceneHasPuzzle3()) {
-    return;
+  if (!puzzle3PreviewSurface && !currentSceneHasPuzzle3()) {
+    return false;
   }
-  for (const frame of document.querySelectorAll("iframe.puzzle3-frame")) {
-    frame.contentWindow?.postMessage({
-      type: "PuzzleStudioKey",
-      action,
-      key: String(event.key || ""),
-      code: String(event.code || ""),
-    }, "*");
+  let handled = false;
+  for (const entry of puzzle3Controllers.values()) {
+    if (action === "up") {
+      handled = entry.controller.releaseKey(event) || handled;
+    } else {
+      handled = entry.controller.applyKey(event) || handled;
+    }
   }
+  return handled;
 }
 /* puzzle-host:optional:puzzle3:end */
 
@@ -2541,6 +2723,25 @@ window.addEventListener("message", async (event) => {
     notifySceneEditorPreview(String(event.data.requestId || ""));
     return;
   }
+
+  /* puzzle-host:optional:puzzle3:start */
+  if (event.data?.type === PREVIEW_SURFACE_UPDATE_MESSAGE || event.data?.type === PUZZLE3_MODEL_COMPONENT_PREVIEW_MESSAGE) {
+    applyPuzzleStudioPreviewSurfaceUpdate(event.data || {});
+    return;
+  }
+
+  if (event.data?.type === "PuzzleStudioRequestPuzzle3State") {
+    for (const entry of puzzle3Controllers.values()) {
+      window.parent?.postMessage({
+        type: "PuzzleStudioPuzzle3State",
+        source: entry.root?.dataset.source || "",
+        scene: entry.root?.dataset.scene || "",
+        snapshot: entry.controller?.snapshot?.() || null,
+      }, "*");
+    }
+    return;
+  }
+  /* puzzle-host:optional:puzzle3:end */
 
   if (event.data?.type === "PuzzleStudioInput") {
     if (standaloneRuntime && event.data.input) {
@@ -2638,6 +2839,14 @@ window.addEventListener("message", async (event) => {
   }
   const command = String(event.data.command || "");
   if (command) {
+    /* puzzle-host:optional:puzzle3:start */
+    if (puzzle3PreviewSurface) {
+      for (const entry of puzzle3Controllers.values()) {
+        entry.controller?.command?.(command, event.data || {});
+      }
+      return;
+    }
+    /* puzzle-host:optional:puzzle3:end */
     sendCommand(command);
   }
 });

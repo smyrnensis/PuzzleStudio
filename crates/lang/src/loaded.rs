@@ -70,7 +70,6 @@ pub struct LoadedGame {
     pub controls: Controls,
     pub variables: Vec<SceneVarDef>,
     pub scenes: Vec<SceneDef>,
-    pub menus: Vec<MenuDef>,
     pub object_labels: HashMap<ObjectId, String>,
     pub object_groups: HashMap<String, Vec<ObjectId>>,
     pub input_labels: HashMap<InputId, String>,
@@ -151,6 +150,7 @@ pub enum RuleEffect {
     ClearCheckpoint,
     PlaySfx { name: String },
     Wait { milliseconds: u64 },
+    WaitAnimation,
     Message { text: String, literal: bool },
 }
 
@@ -230,6 +230,20 @@ pub struct VisualAliasDef {
 pub struct VisualSpriteDef {
     pub name: String,
     pub kind: VisualSpriteKind,
+    pub offset: VisualSpriteOffset,
+    pub pixels_per_cell: Option<VisualSpritePixelsPerCell>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct VisualSpriteOffset {
+    pub x: i32,
+    pub y: i32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct VisualSpritePixelsPerCell {
+    pub width: u32,
+    pub height: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -418,10 +432,6 @@ pub enum SceneStateLifetime {
 
 pub type SceneComponent = SharedSceneComponent<SceneEffect, SceneExpr, SceneTextContent>;
 
-pub type MenuInstanceDef = puzzle_scene::MenuInstance<SceneExpr>;
-
-pub type MenuDataBinding = puzzle_scene::MenuDataBinding<SceneExpr>;
-
 pub type SceneTitleDef = SharedSceneTextComponent<SceneExpr>;
 
 pub type SceneTextDef = SharedSceneTextComponent<SceneTextContent>;
@@ -555,76 +565,6 @@ pub type SceneContainerDef = SharedSceneContainer<SceneEffect, SceneExpr, SceneT
 pub type SceneForDef = SharedSceneFor<SceneEffect, SceneExpr, SceneTextContent>;
 
 pub type LevelMenuDef = puzzle_scene::LevelMenuComponent<SceneEffect, SceneExpr>;
-
-#[derive(Clone, Debug)]
-pub struct MenuDef {
-    pub name: String,
-    pub data: Vec<MenuDataDef>,
-    pub view: Vec<MenuComponent>,
-    pub commands: Vec<MenuCommandBinding>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct MenuDataDef {
-    pub name: String,
-    pub ty: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum MenuComponent {
-    Text(SceneTextDef),
-    Button(MenuButtonDef),
-    Row(MenuContainerDef),
-    Column(MenuContainerDef),
-    Box(MenuContainerDef),
-    For(MenuForDef),
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct MenuButtonDef {
-    pub label: SceneExpr,
-    pub value: SceneExpr,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct MenuContainerDef {
-    pub children: Vec<MenuComponent>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct MenuForDef {
-    pub binding: String,
-    pub source: ForSource,
-    pub children: Vec<MenuComponent>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct MenuCommandBinding {
-    pub input: String,
-    pub command: MenuCommand,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum MenuCommand {
-    CursorPrev,
-    CursorNext,
-    Emit(MenuEmit),
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum MenuEmit {
-    Event {
-        name: String,
-        value: Option<MenuValueExpr>,
-    },
-    CursorValue,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum MenuValueExpr {
-    CursorValue,
-    Expr(SceneExpr),
-}
 
 #[derive(Clone, Debug)]
 pub struct KeyBinding {

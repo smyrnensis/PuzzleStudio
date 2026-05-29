@@ -29,6 +29,9 @@ const LEVEL3D_FRAME_GAP = 12;
 const LEVEL3D_SLICE_SCRUB_STEP_PX = 18;
 const LEVEL3D_CAMERA_MIN_PITCH_DEGREES = -90;
 const LEVEL3D_CAMERA_MAX_PITCH_DEGREES = 90;
+const LEVEL3D_PREVIEW_SURFACE_MESSAGE = "PuzzleStudioPreviewSurfaceUpdate";
+const LEVEL3D_PREVIEW_SURFACE_KIND = "puzzle3-level";
+const LEVEL3D_PREVIEW_SURFACE_MODE = "isolated";
 const LEVEL3D_MODEL_COMPONENT_PREVIEW_MESSAGE = "PuzzleStudioRenderPuzzle3ModelComponent";
 const LEVEL3D_EMPTY_CHAR = ".";
 const LEVEL3D_LEGEND_CHAR_CANDIDATES = "xyzabcdefghijklmnopqrstuvwABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789@$%&?!~^:;,_+-*/";
@@ -1934,20 +1937,15 @@ function loadLevel3dSourceTarget(target, options = {}) {
   }
   const source = sourceEditor.value || "";
   const entry = Number.isInteger(target?.bodyStart) && Number.isInteger(target?.bodyEnd)
-    ? {
-      name: target.name || "level_1",
-      start: target.start ?? target.bodyStart,
-      end: target.end ?? target.bodyEnd,
-      bodyStart: target.bodyStart,
-      bodyEnd: target.bodyEnd,
-      bundle: target.bundle || target.params?.bundle || "",
-      model: target.model || target.params?.model || "",
-      levelIndex: target.levelIndex,
-      rows: rowsForLevel3dDefinition(source, {
-        bodyStart: target.bodyStart,
-        bodyEnd: target.bodyEnd,
+    ? sourceEditableEntryFromTarget(source, target, {
+      find: findLevel3dDefinitionAtPosition,
+      defaultName: "level_1",
+      body: (_source, entry) => ({
+        bundle: entry.bundle || entry.params?.bundle || "",
+        model: entry.model || entry.params?.model || "",
+        rows: rowsForLevel3dDefinition(_source, entry),
       }),
-    }
+    })
     : findLevel3dDefinitionAtPosition(source, target?.start ?? 0);
   if (!entry) {
     return null;
@@ -1986,7 +1984,9 @@ function loadLevel3dSourceDefinition(entry, source, options = {}) {
   }
   syncLevel3dNameOptions();
   const sourceKey = currentLevel3dEditorSourceKey(entry, sourceDocument, source);
-  if (levels[levelIndex]) {
+  if (entry.rows?.length) {
+    loadLevel3dFromSourceDefinition(entry, source, sourceKey, sourceDocument);
+  } else if (levels[levelIndex]) {
     loadLevel3dFromEntry(levels[levelIndex], source, exportData, sourceKey, sourceDocument);
   } else {
     loadLevel3dFromSourceDefinition(entry, source, sourceKey, sourceDocument);
@@ -2052,10 +2052,7 @@ function sendLevel3dSnapshotToRuntime() {
     level3dRuntimeFrameKey = "";
     return;
   }
-  level3dRuntimeFrame.contentWindow.postMessage({
-    type: LEVEL3D_MODEL_COMPONENT_PREVIEW_MESSAGE,
-    ...update,
-  }, "*");
+  level3dRuntimeFrame.contentWindow.postMessage(level3dPreviewSurfaceMessage(update), "*");
 }
 
 function refreshLevel3dRuntimePreviews() {
@@ -2118,10 +2115,11 @@ function updateLevel3dPlaytestControls() {
   }
   level3dBuilder.classList.toggle("is-playtesting", level3dPlaytestActive);
   if (level3dPlaytestButton) {
-    const label = level3dPlaytestActive ? "Stop 3D level play" : "Play 3D level";
+    const label = level3dPlaytestActive ? "Stop" : "Play";
+    const title = level3dPlaytestActive ? "Stop" : "Play";
     level3dPlaytestButton.classList.toggle("is-playing", level3dPlaytestActive);
     level3dPlaytestButton.setAttribute("aria-label", label);
-    level3dPlaytestButton.title = label;
+    level3dPlaytestButton.title = title;
   }
   for (const element of [
     level3dBundleInput,
@@ -2278,10 +2276,7 @@ function sendLevel3dLayerSnapshotToRuntime() {
     level3dLayerFrameKey = "";
     return;
   }
-  level3dLayerFrame.contentWindow.postMessage({
-    type: LEVEL3D_MODEL_COMPONENT_PREVIEW_MESSAGE,
-    ...update,
-  }, "*");
+  level3dLayerFrame.contentWindow.postMessage(level3dPreviewSurfaceMessage(update), "*");
 }
 
 function level3dRuntimePreviewUpdate() {
@@ -2358,6 +2353,29 @@ function level3dLayerRuntimePreviewUpdate() {
     settings: snapshot.settings || {},
     component: level3dModelPreviewComponent(),
     componentEmbed: true,
+  };
+}
+
+function level3dPreviewSurfaceMessage(update) {
+  return {
+    type: LEVEL3D_PREVIEW_SURFACE_MESSAGE,
+    kind: LEVEL3D_PREVIEW_SURFACE_KIND,
+    mode: LEVEL3D_PREVIEW_SURFACE_MODE,
+    payload: level3dPreviewSurfacePayload(update),
+  };
+}
+
+function level3dPreviewSurfacePayload(update = {}) {
+  const view = update.view || {};
+  return {
+    levelIndex: update.levelIndex,
+    level: update.level,
+    resources: update.resources,
+    view: {
+      ...(update.camera || {}),
+      ...(view || {}),
+    },
+    display: update.settings || {},
   };
 }
 
@@ -3005,10 +3023,7 @@ function level3dBlankRuntimeDocument() {
 
 function level3dRuntimePreviewDocument(update) {
   const html = editorPreviewDocument(latestHtml);
-  const payload = {
-    type: LEVEL3D_MODEL_COMPONENT_PREVIEW_MESSAGE,
-    ...update,
-  };
+  const payload = level3dPreviewSurfaceMessage(update);
   const json = JSON.stringify(payload)
     .replace(/</g, "\\u003c")
     .replace(/\u2028/g, "\\u2028")
@@ -3016,10 +3031,11 @@ function level3dRuntimePreviewDocument(update) {
   const seedScript = `<script id="puzzle-studio-initial-model-preview">
 (() => {
   const update = ${json};
-  window.PuzzleStudioInitialModelComponentPreview = update;
+  window.PuzzleStudioInitialPreviewSurface = update;
   window.PuzzleStudioModelComponentPreviewFixture = function(source, incoming = update) {
     const next = JSON.parse(JSON.stringify(source || {}));
-    const resources = incoming.resources || incoming;
+    const payload = incoming.payload || incoming;
+    const resources = payload.resources || incoming.resources || incoming;
     if (resources.layerCount != null) {
       next.layerCount = Math.max(1, Math.trunc(Number(resources.layerCount) || 1));
     }
@@ -3029,10 +3045,10 @@ function level3dRuntimePreviewDocument(update) {
     if (resources.sprites && typeof resources.sprites === "object") {
       next.sprites = JSON.parse(JSON.stringify(resources.sprites));
     }
-    const level = incoming.level || {};
-    const size = level.size || incoming.size || next.size || {};
-    const cells = Array.isArray(level.cells) ? level.cells : Array.isArray(incoming.cells) ? incoming.cells : next.cells || [];
-    const rawLevelIndex = incoming.levelIndex ?? next.levelIndex ?? 0;
+    const level = payload.level || incoming.level || {};
+    const size = level.size || payload.size || incoming.size || next.size || {};
+    const cells = Array.isArray(level.cells) ? level.cells : Array.isArray(payload.cells) ? payload.cells : Array.isArray(incoming.cells) ? incoming.cells : next.cells || [];
+    const rawLevelIndex = payload.levelIndex ?? incoming.levelIndex ?? next.levelIndex ?? 0;
     const levels = Array.isArray(next.levels) && next.levels.length ? next.levels : [{}];
     const levelIndex = Math.max(0, Math.min(levels.length - 1, Math.trunc(Number(rawLevelIndex) || 0)));
     const target = levels[levelIndex] || {};
@@ -3047,14 +3063,22 @@ function level3dRuntimePreviewDocument(update) {
     next.levelIndex = levelIndex;
     next.size = { ...size };
     next.cells = JSON.parse(JSON.stringify(cells));
-    if (incoming.camera) {
-      next.camera = JSON.parse(JSON.stringify(incoming.camera));
+    const view = payload.view || incoming.view || {};
+    if (payload.camera || incoming.camera || view.yawDegrees != null || view.pitchDegrees != null) {
+      next.camera = JSON.parse(JSON.stringify(payload.camera || incoming.camera || {
+        yawDegrees: view.yawDegrees,
+        pitchDegrees: view.pitchDegrees,
+      }));
     }
-    if (incoming.view) {
-      next.view = JSON.parse(JSON.stringify(incoming.view));
+    if (payload.view || incoming.view) {
+      next.view = JSON.parse(JSON.stringify({
+        zoom: view.zoom,
+        target: view.target,
+      }));
     }
-    if (incoming.settings) {
-      next.settings = { ...(next.settings || {}), ...JSON.parse(JSON.stringify(incoming.settings)) };
+    const display = payload.display || incoming.settings;
+    if (display) {
+      next.settings = { ...(next.settings || {}), ...JSON.parse(JSON.stringify(display)) };
     }
     const sceneName = incoming.scene || "__editor_model_preview__";
     next.scenes = [{
@@ -3080,15 +3104,15 @@ function level3dRuntimePreviewDocument(update) {
 <\/script>`;
   const bootScript = `<script id="puzzle-studio-initial-model-preview-boot">
 (() => {
-  const update = window.PuzzleStudioInitialModelComponentPreview;
-  if (!update || update.type !== "${LEVEL3D_MODEL_COMPONENT_PREVIEW_MESSAGE}") {
+  const update = window.PuzzleStudioInitialPreviewSurface;
+  if (!update || update.type !== "${LEVEL3D_PREVIEW_SURFACE_MESSAGE}") {
     return;
   }
-  if (window.PuzzleStudioInitialModelComponentPreviewConsumed === true) {
+  if (window.PuzzleStudioInitialPreviewSurfaceConsumed === true) {
     return;
   }
-  if (typeof window.applyPuzzle3ModelComponentPreviewUpdate === "function") {
-    window.applyPuzzle3ModelComponentPreviewUpdate(update);
+  if (typeof window.applyPuzzleStudioPreviewSurfaceUpdate === "function") {
+    window.applyPuzzleStudioPreviewSurfaceUpdate(update);
     return;
   }
   if (typeof window.loadSnapshotData !== "function") {
@@ -3282,10 +3306,7 @@ function sendPuzzle3dSolutionToSolverRuntime() {
   if (!update) {
     return;
   }
-  level3dSolverFrame.contentWindow.postMessage({
-    type: LEVEL3D_MODEL_COMPONENT_PREVIEW_MESSAGE,
-    ...update,
-  }, "*");
+  level3dSolverFrame.contentWindow.postMessage(level3dPreviewSurfaceMessage(update), "*");
 }
 
 function puzzle3dSolverPreviewSnapshot() {

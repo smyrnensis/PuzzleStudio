@@ -35,8 +35,6 @@ pub use loaded::{
     AnimationDef, ArrowKey, AsciiLegend, AssetDef, AssetKind, AssetsDef, Controls, ForSource,
     GoalClause, GoalCondition, GoalExpr, GoalValue, KeyBinding, KeyTrigger, Level, LevelMenuDef,
     LevelMenuLocked, LevelRegionDef, LoadedDocument, LoadedDocumentModel, LoadedGame,
-    MenuButtonDef, MenuCommand, MenuCommandBinding, MenuComponent, MenuContainerDef,
-    MenuDataBinding, MenuDataDef, MenuDef, MenuEmit, MenuForDef, MenuInstanceDef, MenuValueExpr,
     MusicSoundDef, PuzzleGridRenderDef, PuzzleRenderDef, PuzzleScreenDef, PuzzleViewDef,
     ResourceSelection, RuleAnimationTrigger, RuleEffect, RuleEmission, SceneAlignDef,
     SceneAlignXDef, SceneAlignYDef, SceneButtonDef, SceneComponent, SceneConditionalDef,
@@ -45,7 +43,8 @@ pub use loaded::{
     SceneSizeDef, SceneStateDef, SceneStateLifetime, SceneTextContent, SceneTextDef, SceneTitleDef,
     SceneTransition, SceneTransitionTrigger, SceneValue, SceneVarDef, SfxSoundDef, SoundsDef,
     ThemeDef, ThemeVariableDef, TweenAnimationDef, ViewportModeDef, ViewportSizeDef,
-    VisualAliasDef, VisualColorDef, VisualSpriteDef, VisualSpriteKind, VisualsDef,
+    VisualAliasDef, VisualColorDef, VisualSpriteDef, VisualSpriteKind, VisualSpriteOffset,
+    VisualSpritePixelsPerCell, VisualsDef,
 };
 
 const BLOCK_CLOSE: &str = "}";
@@ -92,9 +91,77 @@ const ANONYMOUS_MOVEMENT_SCRATCH: ScratchId = ScratchId(0);
 const ANONYMOUS_BOOL_SCRATCH: ScratchId = ScratchId(1);
 const ANONYMOUS_INT_SCRATCH: ScratchId = ScratchId(2);
 const UNASSIGNED_LAYER: u16 = u16::MAX;
+pub(crate) const THEME_PRESET_NAMES: &[&str] = &[
+    "clean",
+    "terminal",
+    "paper",
+    "pixel",
+    "puzzlescript",
+    "candy",
+    "blueprint",
+    "noir",
+];
+
+pub(crate) struct ThemeSettingSpec {
+    pub(crate) canonical: &'static str,
+    pub(crate) css_variable: &'static str,
+    pub(crate) aliases: &'static [&'static str],
+}
+
+pub(crate) const THEME_SETTING_SPECS: &[ThemeSettingSpec] = &[
+    ThemeSettingSpec {
+        canonical: "accent_color",
+        css_variable: "accent",
+        aliases: &["accent-color", "accent"],
+    },
+    ThemeSettingSpec {
+        canonical: "background_color",
+        css_variable: "bg",
+        aliases: &["background-color", "background", "bg"],
+    },
+    ThemeSettingSpec {
+        canonical: "text_color",
+        css_variable: "ink",
+        aliases: &["text-color", "ink"],
+    },
+    ThemeSettingSpec {
+        canonical: "ui_font",
+        css_variable: "ui-font",
+        aliases: &["ui-font"],
+    },
+    ThemeSettingSpec {
+        canonical: "title_font",
+        css_variable: "title-font",
+        aliases: &["title-font"],
+    },
+    ThemeSettingSpec {
+        canonical: "control_radius",
+        css_variable: "radius-control",
+        aliases: &["control-radius", "radius-control"],
+    },
+    ThemeSettingSpec {
+        canonical: "panel_radius",
+        css_variable: "radius-panel",
+        aliases: &["panel-radius", "radius-panel"],
+    },
+];
 
 pub fn parse_game(source: &str) -> Result<LoadedDocument, AppError> {
     parse_game_document(source)
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DocumentRuntimeSources {
+    pub model_2d: String,
+    pub model_3d: String,
+}
+
+pub fn split_document_runtime_sources(source: &str) -> Result<DocumentRuntimeSources, AppError> {
+    let mixed_sources = split_mixed_game_document_source(source)?;
+    Ok(DocumentRuntimeSources {
+        model_2d: strip_document_shell_source(&mixed_sources.puzzle2d)?,
+        model_3d: strip_document_shell_source_raw(&mixed_sources.puzzle3d),
+    })
 }
 
 pub fn parse_game2d(source: &str) -> Result<LoadedGame, AppError> {
@@ -473,7 +540,7 @@ fn split_mixed_game_document_source(source: &str) -> Result<MixedDocumentSources
             ["var", ..] | ["const", ..] | ["persistent", ..] => MixedSectionTarget::Puzzle2d,
             _ => MixedSectionTarget::Puzzle2d,
         };
-        let is_block = mixed_section_is_block(trimmed, tokens.as_slice());
+        let is_block = mixed_section_is_block(trimmed);
         let next = if is_block {
             skip_raw_top_level_block(&raw_lines, index)
         } else {
@@ -514,23 +581,8 @@ fn push_raw_model_block_without_default_scene_layouts(
     }
 }
 
-fn mixed_section_is_block(trimmed: &str, tokens: &[&str]) -> bool {
-    if trimmed.ends_with('{') {
-        return true;
-    }
-    matches!(
-        tokens,
-        ["puzzle", ..]
-            | ["levels", ..]
-            | ["sprites", ..]
-            | ["puzzle3", ..]
-            | ["levels3", ..]
-            | ["sprites3", ..]
-            | ["sounds", ..]
-            | ["theme", ..]
-            | ["assets", ..]
-            | ["level", ..]
-    )
+fn mixed_section_is_block(trimmed: &str) -> bool {
+    trimmed.ends_with('{')
 }
 
 fn push_raw_block(
@@ -1865,7 +1917,6 @@ fn parse_game2d_expanded_with_shell(
     let mut display_statements = None;
     let mut level_blocks = Vec::<LevelBlock>::new();
     let mut puzzle_models = Vec::<String>::new();
-    let menus = Vec::<MenuDef>::new();
     let mut variables = Vec::<SceneVarDef>::new();
     let mut render_overlays = Vec::<(Vec<ObjectId>, char)>::new();
     let mut model_sound_triggers = Vec::<ModelSoundTrigger>::new();
@@ -1977,12 +2028,6 @@ fn parse_game2d_expanded_with_shell(
                     "scene blocks are document-level syntax and must be parsed before the 2D model",
                 ));
             }
-            "menu" => {
-                return Err(parse_error(
-                    line,
-                    "top-level menu definitions are not supported; define a scene instead",
-                ));
-            }
             "sounds" => {
                 if model_sounds_block_starts(&lines, i) {
                     i = parse_model_sounds_block(&lines, i, &catalog, &mut model_sound_triggers)?;
@@ -2022,7 +2067,7 @@ fn parse_game2d_expanded_with_shell(
                 return Err(parse_error(
                     line,
                     &format!(
-                        "top-level directive must be title, subtitle, author, homepage, var, const, default_wait_time, again_interval, animation, puzzle, levels, sprites, menu, sounds, theme, or assets; found {other}"
+                        "top-level directive must be title, subtitle, author, homepage, var, const, default_wait_time, again_interval, animation, puzzle, levels, sprites, sounds, theme, or assets; found {other}"
                     ),
                 ));
             }
@@ -2243,7 +2288,6 @@ fn parse_game2d_expanded_with_shell(
         controls,
         variables,
         scenes: Vec::new(),
-        menus,
         object_labels: catalog.object_labels,
         object_groups: catalog.object_groups,
         input_labels: catalog.input_labels,
@@ -2470,8 +2514,7 @@ fn scene_entry_is_component(tokens: &[&str]) -> bool {
         | puzzle_scene::SceneComponentKind::Column
         | puzzle_scene::SceneComponentKind::Box
         | puzzle_scene::SceneComponentKind::Conditional
-        | puzzle_scene::SceneComponentKind::For
-        | puzzle_scene::SceneComponentKind::Menu => true,
+        | puzzle_scene::SceneComponentKind::For => true,
         puzzle_scene::SceneComponentKind::LevelMenu => true,
         puzzle_scene::SceneComponentKind::Frame => tokens.len() >= 2,
     }
@@ -2584,8 +2627,6 @@ fn starts_authoring_block(tokens: &[&str], line: &str) -> bool {
         | ["for", ..]
         | ["level_menu"] => true,
         ["legend"] => true,
-        ["menu", _] => true,
-        ["menu", _, "=", _, "with"] => true,
         ["button", ..] if line.trim_end().ends_with(" with") => true,
         ["choice", ..] if line.trim_end().ends_with(" with") => true,
         _ => false,
@@ -2791,20 +2832,37 @@ fn parse_theme_block(
             return Ok(i + 1);
         }
         let tokens = split_tokens(line);
-        match tokens.as_slice() {
-            [name, value] => {
-                let name = normalize_theme_setting_name(name, line)?;
-                validate_theme_value(value, line)?;
-                upsert_theme_variable(theme, name, (*value).to_string());
-            }
-            _ => {
-                return Err(parse_error(line, "theme entry must be: <setting> <value>"));
-            }
+        match parse_theme_setting_tokens(tokens.as_slice(), line) {
+            Ok(Some((name, value))) => upsert_theme_variable(theme, name, value),
+            Ok(None) => {}
+            Err(error) => return Err(error),
         }
         i += 1;
     }
 
     Err(parse_error(&lines[start], "theme missing closing brace"))
+}
+
+fn parse_theme_setting_tokens(
+    tokens: &[&str],
+    line: &str,
+) -> Result<Option<(String, String)>, AppError> {
+    match tokens {
+        [name, value] => {
+            let name = normalize_theme_setting_name(name, line)?;
+            validate_theme_value(value, line)?;
+            Ok(Some((name, (*value).to_string())))
+        }
+        [name, "=", value] => {
+            let name = normalize_theme_setting_name(name, line)?;
+            validate_theme_value(value, line)?;
+            Ok(Some((name, (*value).to_string())))
+        }
+        _ => Err(parse_error(
+            line,
+            "theme entry must be: <setting> <value> or <setting> = <value>",
+        )),
+    }
 }
 
 fn parse_theme_statement(
@@ -2819,9 +2877,10 @@ fn parse_theme_statement(
             "theme header must be: theme <theme> or theme <theme> {",
         ));
     };
-    if lines
-        .get(start + 1)
-        .is_some_and(|line| is_block_close_line(line) || is_theme_setting_line(line))
+    if lines[start].trim_end().ends_with('{')
+        || lines
+            .get(start + 1)
+            .is_some_and(|line| is_block_close_line(line) || is_theme_setting_line(line))
     {
         return parse_theme_block(lines, start, theme);
     }
@@ -2841,10 +2900,7 @@ fn parse_theme_name_directive(
 
 fn is_theme_setting_line(line: &str) -> bool {
     let tokens = split_tokens(line);
-    let [name, value] = tokens.as_slice() else {
-        return false;
-    };
-    normalize_theme_setting_name(name, line).is_ok() && validate_theme_value(value, line).is_ok()
+    parse_theme_setting_tokens(tokens.as_slice(), line).is_ok()
 }
 
 fn parse_assets_block(
@@ -2921,25 +2977,24 @@ fn normalize_theme_setting_name(name: &str, line: &str) -> Result<String, AppErr
         .trim_start_matches("--")
         .replace('_', "-")
         .to_ascii_lowercase();
-    let css_variable = match normalized.as_str() {
-        "accent-color" | "accent" => "accent",
-        "background-color" | "bg" => "bg",
-        "text-color" | "ink" => "ink",
-        "muted-text-color" | "muted" => "muted",
-        "line-color" | "line" => "line",
-        "board-color" | "board-background-color" | "board-bg" => "board-bg",
-        "ui-font" => "ui-font",
-        "title-font" => "title-font",
-        "control-radius" | "radius-control" => "radius-control",
-        "panel-radius" | "radius-panel" => "radius-panel",
-        _ => {
-            return Err(parse_error(
-                line,
-                "theme setting must be one of: accent_color, background_color, text_color, muted_text_color, line_color, board_color, ui_font, title_font, control_radius, panel_radius",
-            ));
+    for spec in THEME_SETTING_SPECS {
+        if normalized == spec.canonical.replace('_', "-")
+            || spec.aliases.iter().any(|alias| normalized == *alias)
+        {
+            return Ok(spec.css_variable.to_string());
         }
-    };
-    Ok(css_variable.to_string())
+    }
+    Err(parse_error(
+        line,
+        &format!(
+            "theme setting must be one of: {}",
+            THEME_SETTING_SPECS
+                .iter()
+                .map(|spec| spec.canonical)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    ))
 }
 
 fn validate_theme_value(value: &str, line: &str) -> Result<(), AppError> {
@@ -4580,7 +4635,10 @@ fn parse_level_event_sugar(
     if effects.iter().any(|effect| {
         !matches!(
             effect,
-            EffectAst::PlaySfx { .. } | EffectAst::Wait { .. } | EffectAst::Message { .. }
+            EffectAst::PlaySfx { .. }
+                | EffectAst::Wait { .. }
+                | EffectAst::WaitAnimation
+                | EffectAst::Message { .. }
         )
     }) {
         return Err(parse_error(
@@ -6957,9 +7015,10 @@ fn scene_effect_is_word_continue(ch: char) -> bool {
 impl EffectAst {
     fn command_syntax(&self) -> RewriteEffectCommandSyntax {
         match self {
-            EffectAst::PlaySfx { .. } | EffectAst::Wait { .. } | EffectAst::Message { .. } => {
-                RewriteEffectCommandSyntax::Emission
-            }
+            EffectAst::PlaySfx { .. }
+            | EffectAst::Wait { .. }
+            | EffectAst::WaitAnimation
+            | EffectAst::Message { .. } => RewriteEffectCommandSyntax::Emission,
             EffectAst::Cancel
             | EffectAst::Win
             | EffectAst::Restart
@@ -7746,8 +7805,7 @@ fn resolve_default_wait_in_component(component: &mut SceneComponent, default_wai
         SceneComponent::Frame(_)
         | SceneComponent::Title(_)
         | SceneComponent::Subtitle(_)
-        | SceneComponent::Text(_)
-        | SceneComponent::Menu(_) => {}
+        | SceneComponent::Text(_) => {}
     }
 }
 
@@ -9238,6 +9296,15 @@ struct VisualShapeRotation {
     from: String,
 }
 
+impl VisualShapeRotation {
+    fn new(map: &str, from: &str) -> Self {
+        Self {
+            map: map.to_string(),
+            from: from.to_string(),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 struct VisualColorTable {
     axis: String,
@@ -9303,10 +9370,18 @@ fn parse_visuals_block(
                 if shapes.contains_key(&name) {
                     return Err(parse_error(line, "duplicate visual shape"));
                 }
-                let rotation = VisualShapeRotation {
-                    map: "rotate".to_string(),
-                    from: (*from).to_string(),
-                };
+                let rotation = VisualShapeRotation::new("rotate", from);
+                let (table, next_i) =
+                    parse_visual_shape_table(lines, i, &axis, Some(rotation), catalog)?;
+                shapes.insert(name, table);
+                i = next_i;
+            }
+            ["shape", table_ref, "rotate", "using", map, "from", from] => {
+                let (name, axis) = parse_visual_table_ref(table_ref, line)?;
+                if shapes.contains_key(&name) {
+                    return Err(parse_error(line, "duplicate visual shape"));
+                }
+                let rotation = VisualShapeRotation::new(map, from);
                 let (table, next_i) =
                     parse_visual_shape_table(lines, i, &axis, Some(rotation), catalog)?;
                 shapes.insert(name, table);
@@ -9317,10 +9392,7 @@ fn parse_visuals_block(
                 if shapes.contains_key(&name) {
                     return Err(parse_error(line, "duplicate visual shape"));
                 }
-                let rotation = VisualShapeRotation {
-                    map: (*map).to_string(),
-                    from: (*from).to_string(),
-                };
+                let rotation = VisualShapeRotation::new(map, from);
                 let (table, next_i) =
                     parse_visual_shape_table(lines, i, &axis, Some(rotation), catalog)?;
                 shapes.insert(name, table);
@@ -9359,12 +9431,25 @@ fn parse_visuals_block(
                     i = next_i;
                     continue;
                 }
+                if let Some(next_i) = parse_canonical_sprite_entry(
+                    lines,
+                    i,
+                    selector,
+                    &plain_shapes,
+                    &shapes,
+                    &colors,
+                    catalog,
+                    visuals,
+                )? {
+                    i = next_i;
+                    continue;
+                }
                 if let Some(source) = parse_line_style_image_sprite_source(lines, i) {
                     add_image_visuals(selector, line, source, catalog, visuals)?;
                     i += 2;
                     continue;
                 }
-                if let Some((shape_name, shape_value, color_exprs, next_i)) =
+                if let Some((shape_name, shape_value, color_exprs, offset, next_i)) =
                     parse_ps_style_shape_sprite(lines, i, line, &plain_shapes, &shapes)?
                 {
                     if let Some(shape) = shapes.get(&shape_name) {
@@ -9374,6 +9459,8 @@ fn parse_visuals_block(
                             shape,
                             &shape_value,
                             &color_exprs,
+                            offset,
+                            None,
                             &colors,
                             catalog,
                             visuals,
@@ -9388,6 +9475,8 @@ fn parse_visuals_block(
                             line,
                             &pattern,
                             &color_exprs,
+                            offset,
+                            None,
                             catalog,
                             visuals,
                         )?;
@@ -9395,7 +9484,7 @@ fn parse_visuals_block(
                     i = next_i;
                     continue;
                 }
-                let (color_exprs, pattern, next_i) =
+                let (color_exprs, pattern, offset, next_i) =
                     parse_line_style_inline_sprite(lines, i, catalog)?;
                 if pattern.is_empty() {
                     let [(_, color)] = color_exprs.as_slice() else {
@@ -9408,6 +9497,8 @@ fn parse_visuals_block(
                         line,
                         &pattern,
                         &color_exprs,
+                        offset,
+                        None,
                         catalog,
                         visuals,
                     )?;
@@ -9567,10 +9658,23 @@ fn parse_visual_shapes_block(
             }
             [table_ref, "rotate", "from", from] => {
                 let (name, axis) = parse_visual_table_ref(table_ref, line)?;
-                let rotation = VisualShapeRotation {
-                    map: "rotate".to_string(),
-                    from: (*from).to_string(),
-                };
+                let rotation = VisualShapeRotation::new("rotate", from);
+                let (table, next_i) =
+                    parse_visual_shape_table(lines, i, &axis, Some(rotation), catalog)?;
+                shapes.insert(name, table);
+                i = next_i;
+            }
+            [table_ref, "rotate", "using", map, "from", from] => {
+                let (name, axis) = parse_visual_table_ref(table_ref, line)?;
+                let rotation = VisualShapeRotation::new(map, from);
+                let (table, next_i) =
+                    parse_visual_shape_table(lines, i, &axis, Some(rotation), catalog)?;
+                shapes.insert(name, table);
+                i = next_i;
+            }
+            [table_ref, "rotate", map, "from", from] => {
+                let (name, axis) = parse_visual_table_ref(table_ref, line)?;
+                let rotation = VisualShapeRotation::new(map, from);
                 let (table, next_i) =
                     parse_visual_shape_table(lines, i, &axis, Some(rotation), catalog)?;
                 shapes.insert(name, table);
@@ -9678,6 +9782,8 @@ fn parse_palette_shape_sprite_entry(
             validate_visual_pattern_palette(&pattern, &palette, &lines[start])?;
             visuals.sprites.push(VisualSpriteDef {
                 name: sprite,
+                offset: VisualSpriteOffset::default(),
+                pixels_per_cell: None,
                 kind: VisualSpriteKind::Ascii {
                     pattern,
                     colors: palette
@@ -9695,6 +9801,8 @@ fn parse_palette_shape_sprite_entry(
             };
             visuals.sprites.push(VisualSpriteDef {
                 name: sprite,
+                offset: VisualSpriteOffset::default(),
+                pixels_per_cell: None,
                 kind: VisualSpriteKind::Solid(color.clone()),
             });
         }
@@ -9709,6 +9817,319 @@ fn parse_palette_shape_sprite_entry(
         i
     };
     Ok(Some(next_i))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn parse_canonical_sprite_entry(
+    lines: &[String],
+    start: usize,
+    selector: &str,
+    plain_shapes: &HashMap<String, Vec<String>>,
+    shapes: &HashMap<String, VisualShapeTable>,
+    color_tables: &HashMap<String, VisualColorTable>,
+    catalog: &Catalog,
+    visuals: &mut VisualsDef,
+) -> Result<Option<usize>, AppError> {
+    let mut i = start + 1;
+    while i < lines.len() && lines[i].is_empty() {
+        i += 1;
+    }
+    if i >= lines.len() || is_block_close_line(&lines[i]) {
+        return Ok(None);
+    }
+
+    let first_tokens = split_tokens(&lines[i]);
+    let canonical_start = match first_tokens.as_slice() {
+        ["colors", ..]
+        | ["pixels_per_cell", ..]
+        | ["offset", ..]
+        | ["shape", ..]
+        | ["rotate", ..] => true,
+        _ => false,
+    };
+    if !canonical_start {
+        return Ok(None);
+    }
+
+    let mut color_exprs = None::<Vec<(char, String)>>;
+    let mut offset = VisualSpriteOffset::default();
+    let mut pixels_per_cell = None::<VisualSpritePixelsPerCell>;
+    let mut shape_ref = None::<(String, ValueExpr)>;
+    let mut inline_pattern = None::<Vec<String>>;
+    let mut rotation = None::<VisualShapeRotation>;
+
+    while i < lines.len() && !is_block_close_line(&lines[i]) {
+        if lines[i].is_empty() {
+            i += 1;
+            continue;
+        }
+        let line = &lines[i];
+        let tokens = split_tokens(line);
+        match tokens.as_slice() {
+            ["colors", colors @ ..] => {
+                if colors.is_empty() {
+                    return Err(parse_error(line, "sprite colors row must name colors"));
+                }
+                color_exprs = Some(visual_colors_from_tokens(colors, line)?);
+                i += 1;
+            }
+            ["pixels_per_cell", width, height] => {
+                pixels_per_cell = Some(VisualSpritePixelsPerCell {
+                    width: parse_positive_u32(width, line, "pixels_per_cell width")?,
+                    height: parse_positive_u32(height, line, "pixels_per_cell height")?,
+                });
+                i += 1;
+            }
+            ["offset", x, y] => {
+                offset = VisualSpriteOffset {
+                    x: parse_i32_value(x, line, "sprite offset x")?,
+                    y: parse_i32_value(y, line, "sprite offset y")?,
+                };
+                i += 1;
+            }
+            _ if is_visual_translate_transform_row(line) => {
+                let mut next_i = i;
+                let transform_offset = parse_visual_transform_offset(lines, &mut next_i)?;
+                offset.x += transform_offset.x;
+                offset.y += transform_offset.y;
+                i = next_i;
+            }
+            ["shape", shape] => {
+                shape_ref = Some(parse_ps_style_shape_ref(shape, line)?);
+                i += 1;
+            }
+            ["shape"] => {
+                let (pattern, next_i) = parse_visual_rows_until_close(lines, i + 1, start)?;
+                inline_pattern = Some(pattern);
+                i = next_i;
+            }
+            ["rotate", ..] => {
+                let Some(parsed_rotation) = parse_visual_shape_rotation_directive(line)? else {
+                    return Err(parse_error(
+                        line,
+                        "sprite rotation must be: rotate from <value>",
+                    ));
+                };
+                rotation = Some(parsed_rotation);
+                i += 1;
+            }
+            [first, ..]
+                if color_exprs.is_none()
+                    && (is_visual_color_token(first)
+                        || parse_visual_table_expr(first, line).is_ok()) =>
+            {
+                color_exprs = Some(visual_colors_from_row(line)?);
+                i += 1;
+            }
+            [shape_ref_token]
+                if color_exprs.is_some()
+                    && inline_pattern.is_none()
+                    && shape_ref.is_none()
+                    && visual_shape_ref_exists(shape_ref_token, plain_shapes, shapes, line)? =>
+            {
+                shape_ref = Some(parse_ps_style_shape_ref(shape_ref_token, line)?);
+                i += 1;
+            }
+            [_] if color_exprs.is_some() && inline_pattern.is_none() && shape_ref.is_none() => {
+                let (pattern, next_i) = parse_visual_rows_until_close(lines, i, start)?;
+                inline_pattern = Some(pattern);
+                i = next_i;
+            }
+            _ => {
+                return Err(parse_error(
+                    line,
+                    "sprite row must be colors, pixels_per_cell, offset, shape, or rotate",
+                ));
+            }
+        }
+    }
+    if i >= lines.len() {
+        return Err(parse_error(
+            &lines[start],
+            "canonical sprite entry missing closing brace",
+        ));
+    }
+
+    let color_exprs =
+        color_exprs.ok_or_else(|| parse_error(&lines[start], "sprite entry missing colors"))?;
+    let next_i = i + 1;
+    if let Some(rotation) = rotation {
+        let Some(pattern) = inline_pattern else {
+            return Err(parse_error(
+                &lines[start],
+                "sprite rotation requires inline ASCII rows",
+            ));
+        };
+        validate_visual_pattern_palette(&pattern, &color_exprs, &lines[start])?;
+        let targets = expand_visual_selector(selector, &lines[start], catalog)?;
+        let axis = visual_rotation_axis_for_targets(&targets, catalog, &rotation, &lines[start])?;
+        let mut entries = HashMap::new();
+        entries.insert(rotation.from.clone(), pattern);
+        let values = catalog_value_set(catalog, &axis)
+            .ok_or_else(|| parse_error(&lines[start], "visual rotation tag set must exist"))?;
+        expand_visual_shape_rotations(
+            &mut entries,
+            values,
+            catalog,
+            &axis,
+            &rotation,
+            &lines[start],
+        )?;
+        let shape = VisualShapeTable { axis, entries };
+        add_ascii_visuals(
+            selector,
+            &lines[start],
+            &shape,
+            &ValueExpr::Binding(shape.axis.clone()),
+            &color_exprs,
+            offset,
+            pixels_per_cell,
+            color_tables,
+            catalog,
+            visuals,
+        )?;
+    } else if let Some((shape_name, shape_value)) = shape_ref {
+        if let Some(shape) = shapes.get(&shape_name) {
+            add_ascii_visuals(
+                selector,
+                &lines[start],
+                shape,
+                &shape_value,
+                &color_exprs,
+                offset,
+                pixels_per_cell,
+                color_tables,
+                catalog,
+                visuals,
+            )?;
+        } else {
+            let pattern = plain_shapes
+                .get(&shape_name)
+                .ok_or_else(|| parse_error(&lines[start], "unknown sprite shape"))?;
+            add_inline_ascii_visuals(
+                selector,
+                &lines[start],
+                pattern,
+                &color_exprs,
+                offset,
+                pixels_per_cell,
+                catalog,
+                visuals,
+            )?;
+        }
+    } else if let Some(pattern) = inline_pattern {
+        add_inline_ascii_visuals(
+            selector,
+            &lines[start],
+            &pattern,
+            &color_exprs,
+            offset,
+            pixels_per_cell,
+            catalog,
+            visuals,
+        )?;
+    } else {
+        return Err(parse_error(&lines[start], "sprite entry missing shape"));
+    }
+
+    Ok(Some(next_i))
+}
+
+fn visual_colors_from_tokens(tokens: &[&str], line: &str) -> Result<Vec<(char, String)>, AppError> {
+    tokens
+        .iter()
+        .enumerate()
+        .map(|(index, color)| {
+            let token = visual_color_token_for_index(index)
+                .ok_or_else(|| parse_error(line, "sprite supports at most 62 colors"))?;
+            Ok((token, (*color).to_string()))
+        })
+        .collect()
+}
+
+fn parse_positive_u32(value: &str, line: &str, label: &str) -> Result<u32, AppError> {
+    let parsed = value
+        .parse::<u32>()
+        .map_err(|_| parse_error(line, &format!("{label} must be a positive integer")))?;
+    if parsed == 0 {
+        return Err(parse_error(
+            line,
+            &format!("{label} must be a positive integer"),
+        ));
+    }
+    Ok(parsed)
+}
+
+fn parse_i32_value(value: &str, line: &str, label: &str) -> Result<i32, AppError> {
+    value
+        .parse::<i32>()
+        .map_err(|_| parse_error(line, &format!("{label} must be an integer")))
+}
+
+fn parse_visual_rows_until_close(
+    lines: &[String],
+    mut i: usize,
+    start: usize,
+) -> Result<(Vec<String>, usize), AppError> {
+    let mut pattern = Vec::new();
+    while i < lines.len() && !is_block_close_line(&lines[i]) {
+        if lines[i].is_empty() {
+            i += 1;
+            continue;
+        }
+        if !pattern.is_empty() && is_visual_translate_transform_row(&lines[i]) {
+            break;
+        }
+        let row_tokens = split_tokens(&lines[i]);
+        let [row] = row_tokens.as_slice() else {
+            return Err(parse_error(
+                &lines[i],
+                "visual shape row must be a single token row",
+            ));
+        };
+        pattern.push((*row).to_string());
+        i += 1;
+    }
+    if i >= lines.len() {
+        return Err(parse_error(
+            &lines[start],
+            "visual shape rows missing closing brace",
+        ));
+    }
+    validate_visual_pattern(&pattern, &lines[i])?;
+    Ok((pattern, i))
+}
+
+fn visual_rotation_axis_for_targets(
+    targets: &[VisualSelectorTarget],
+    catalog: &Catalog,
+    rotation: &VisualShapeRotation,
+    line: &str,
+) -> Result<String, AppError> {
+    let first = targets
+        .first()
+        .ok_or_else(|| parse_error(line, "visual selector matched no objects"))?;
+    let mut candidates = first
+        .bindings
+        .keys()
+        .filter(|axis| {
+            catalog_value_set(catalog, axis)
+                .is_some_and(|values| values.iter().any(|value| value == &rotation.from))
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    candidates.retain(|axis| {
+        targets
+            .iter()
+            .all(|target| target.bindings.contains_key(axis))
+    });
+    let [axis] = candidates.as_slice() else {
+        return Err(parse_error(
+            line,
+            "sprite rotation requires exactly one matching selector tag set",
+        ));
+    };
+    Ok(axis.clone())
 }
 
 fn starts_palette_shape_sprite_entry(lines: &[String], index: usize, catalog: &Catalog) -> bool {
@@ -9862,7 +10283,16 @@ fn parse_ps_style_shape_sprite(
     line: &str,
     plain_shapes: &HashMap<String, Vec<String>>,
     shapes: &HashMap<String, VisualShapeTable>,
-) -> Result<Option<(String, ValueExpr, Vec<(char, String)>, usize)>, AppError> {
+) -> Result<
+    Option<(
+        String,
+        ValueExpr,
+        Vec<(char, String)>,
+        VisualSpriteOffset,
+        usize,
+    )>,
+    AppError,
+> {
     let mut i = start + 1;
     while i < lines.len() && lines[i].is_empty() {
         i += 1;
@@ -9897,6 +10327,7 @@ fn parse_ps_style_shape_sprite(
     let shape_line_index = i;
     let (shape_name, shape_value) = parse_ps_style_shape_ref(shape_ref, &lines[shape_line_index])?;
     let mut next_i = shape_line_index + 1;
+    let offset = parse_visual_transform_offset(lines, &mut next_i)?;
     while next_i < lines.len() && lines[next_i].is_empty() {
         next_i += 1;
     }
@@ -9906,7 +10337,7 @@ fn parse_ps_style_shape_sprite(
             "PS-style reusable sprite missing closing brace",
         ));
     }
-    Ok(Some((shape_name, shape_value, colors, next_i + 1)))
+    Ok(Some((shape_name, shape_value, colors, offset, next_i + 1)))
 }
 
 fn visual_shape_ref_exists(
@@ -9932,7 +10363,7 @@ fn parse_line_style_inline_sprite(
     lines: &[String],
     start: usize,
     catalog: &Catalog,
-) -> Result<(Vec<(char, String)>, Vec<String>, usize), AppError> {
+) -> Result<(Vec<(char, String)>, Vec<String>, VisualSpriteOffset, usize), AppError> {
     let mut i = start + 1;
     while i < lines.len() && lines[i].is_empty() {
         i += 1;
@@ -9955,6 +10386,9 @@ fn parse_line_style_inline_sprite(
         if is_visual_entry_boundary(lines, i, catalog) {
             break;
         }
+        if !pattern.is_empty() && is_visual_transform_row(&lines[i]) {
+            break;
+        }
         let row_tokens = split_tokens(&lines[i]);
         let [row] = row_tokens.as_slice() else {
             return Err(parse_error(
@@ -9974,10 +10408,93 @@ fn parse_line_style_inline_sprite(
     if !pattern.is_empty() {
         validate_visual_pattern(&pattern, &lines[start])?;
     }
+    let offset = parse_visual_transform_offset(lines, &mut i)?;
     if visual_end_closes_sprite_entry(lines, i) {
         i += 1;
     }
-    Ok((colors, pattern, i))
+    Ok((colors, pattern, offset, i))
+}
+
+fn parse_visual_transform_offset(
+    lines: &[String],
+    index: &mut usize,
+) -> Result<VisualSpriteOffset, AppError> {
+    let mut offset = VisualSpriteOffset::default();
+    while *index < lines.len() && is_visual_transform_row(&lines[*index]) {
+        for token in split_tokens(&lines[*index]) {
+            let Some((direction, amount)) =
+                parse_visual_translate_transform(token, &lines[*index])?
+            else {
+                return Err(parse_error(
+                    &lines[*index],
+                    "only translate:<direction>:<pixels> sprite transforms are supported",
+                ));
+            };
+            match direction {
+                VisualDirection::Up => offset.y -= amount,
+                VisualDirection::Right => offset.x += amount,
+                VisualDirection::Down => offset.y += amount,
+                VisualDirection::Left => offset.x -= amount,
+            }
+        }
+        *index += 1;
+    }
+    Ok(offset)
+}
+
+fn is_visual_transform_row(line: &str) -> bool {
+    let tokens = split_tokens(line);
+    !tokens.is_empty()
+        && tokens
+            .iter()
+            .all(|token| token.contains(':') && !is_visual_color_token(token))
+}
+
+fn is_visual_translate_transform_row(line: &str) -> bool {
+    let tokens = split_tokens(line);
+    !tokens.is_empty()
+        && tokens.iter().all(|token| {
+            parse_visual_translate_transform(token, line).is_ok_and(|parsed| parsed.is_some())
+        })
+}
+
+#[derive(Clone, Copy)]
+enum VisualDirection {
+    Up,
+    Right,
+    Down,
+    Left,
+}
+
+fn parse_visual_translate_transform(
+    token: &str,
+    line: &str,
+) -> Result<Option<(VisualDirection, i32)>, AppError> {
+    let lower = token.to_ascii_lowercase();
+    let Some(rest) = lower.strip_prefix("translate:") else {
+        return Ok(None);
+    };
+    let mut parts = rest.split(':');
+    let direction = parts
+        .next()
+        .ok_or_else(|| parse_error(line, "translate transform missing direction"))?;
+    let amount = parts
+        .next()
+        .ok_or_else(|| parse_error(line, "translate transform missing pixel amount"))?;
+    if parts.next().is_some() {
+        return Err(parse_error(line, "translate transform has too many fields"));
+    }
+    let amount = amount
+        .parse::<i32>()
+        .map_err(|_| parse_error(line, "translate transform pixel amount must be an integer"))?;
+    let direction = match direction {
+        "up" | "^" => VisualDirection::Up,
+        "right" | ">" => VisualDirection::Right,
+        "down" | "v" => VisualDirection::Down,
+        "left" | "<" => VisualDirection::Left,
+        _ => return Err(parse_error(line, "unknown translate transform direction")),
+    };
+    Ok(Some((direction, amount)))
 }
 
 fn visual_colors_from_row(line: &str) -> Result<Vec<(char, String)>, AppError> {
@@ -10020,10 +10537,14 @@ pub(crate) fn is_visual_color_token(value: &str) -> bool {
         || matches!(
             value,
             "transparent"
-                | "currentColor"
                 | "black"
                 | "silver"
                 | "gray"
+                | "grey"
+                | "darkgray"
+                | "darkgrey"
+                | "lightgray"
+                | "lightgrey"
                 | "white"
                 | "maroon"
                 | "red"
@@ -10038,6 +10559,8 @@ pub(crate) fn is_visual_color_token(value: &str) -> bool {
                 | "teal"
                 | "aqua"
                 | "orange"
+                | "brown"
+                | "pink"
         )
 }
 
@@ -10216,7 +10739,75 @@ fn parse_visual_shape_table(
             i + 1,
         ));
     }
+    let mut rotation = None::<VisualShapeRotation>;
     while i < lines.len() && !is_block_close_line(&lines[i]) {
+        if let Some(parsed_rotation) = parse_visual_shape_rotation_directive(&lines[i])? {
+            if rotation.is_some() {
+                return Err(parse_error(&lines[i], "duplicate visual shape rotation"));
+            }
+            if lines[i].trim_end().ends_with('{') {
+                let mut pattern = Vec::new();
+                i += 1;
+                while i < lines.len() && !is_block_close_line(&lines[i]) {
+                    let row_tokens = split_tokens(&lines[i]);
+                    let [row] = row_tokens.as_slice() else {
+                        return Err(parse_error(
+                            &lines[i],
+                            "visual shape row must be a single token row",
+                        ));
+                    };
+                    pattern.push((*row).to_string());
+                    i += 1;
+                }
+                if i >= lines.len() {
+                    return Err(parse_error(
+                        &lines[start],
+                        "visual shape rotation missing closing brace",
+                    ));
+                }
+                validate_visual_pattern(&pattern, &lines[i])?;
+                if entries
+                    .insert(parsed_rotation.from.clone(), pattern)
+                    .is_some()
+                {
+                    return Err(parse_error(
+                        &lines[i],
+                        "visual shape rotation source duplicates explicit shape value",
+                    ));
+                }
+                rotation = Some(parsed_rotation);
+                i += 1;
+                continue;
+            }
+            if !entries.contains_key(&parsed_rotation.from) {
+                let mut pattern = Vec::new();
+                i += 1;
+                while i < lines.len() && !is_block_close_line(&lines[i]) {
+                    let row_tokens = split_tokens(&lines[i]);
+                    let [row] = row_tokens.as_slice() else {
+                        return Err(parse_error(
+                            &lines[i],
+                            "visual shape row must be a single token row",
+                        ));
+                    };
+                    pattern.push((*row).to_string());
+                    i += 1;
+                }
+                if i >= lines.len() {
+                    return Err(parse_error(
+                        &lines[start],
+                        "visual shape rotation missing closing brace",
+                    ));
+                }
+                validate_visual_pattern(&pattern, &lines[i])?;
+                entries.insert(parsed_rotation.from.clone(), pattern);
+                rotation = Some(parsed_rotation);
+                continue;
+            }
+            rotation = Some(parsed_rotation);
+            i += 1;
+            continue;
+        }
         let value = block_header_text(&lines[i]);
         if !values.iter().any(|candidate| candidate == value) {
             return Err(parse_error(
@@ -10255,6 +10846,16 @@ fn parse_visual_shape_table(
             "visual shape missing closing brace",
         ));
     }
+    if let Some(rotation) = rotation {
+        expand_visual_shape_rotations(
+            &mut entries,
+            values,
+            catalog,
+            axis,
+            &rotation,
+            &lines[start],
+        )?;
+    }
     Ok((
         VisualShapeTable {
             axis: axis.to_string(),
@@ -10262,6 +10863,22 @@ fn parse_visual_shape_table(
         },
         i + 1,
     ))
+}
+
+fn parse_visual_shape_rotation_directive(
+    line: &str,
+) -> Result<Option<VisualShapeRotation>, AppError> {
+    let tokens = split_tokens(block_header_text(line));
+    match tokens.as_slice() {
+        ["rotate", "from", from] => Ok(Some(VisualShapeRotation::new("rotate", from))),
+        ["rotate", "using", map, "from", from] => Ok(Some(VisualShapeRotation::new(map, from))),
+        ["rotate", map, "from", from] => Ok(Some(VisualShapeRotation::new(map, from))),
+        ["rotate", ..] => Err(parse_error(
+            line,
+            "visual shape rotation must be: rotate from <value> | rotate using <map> from <value>",
+        )),
+        _ => Ok(None),
+    }
 }
 
 fn validate_visual_pattern(pattern: &[String], line: &str) -> Result<(), AppError> {
@@ -10425,6 +11042,8 @@ fn add_ascii_visuals(
     shape: &VisualShapeTable,
     shape_value_expr: &ValueExpr,
     color_exprs: &[(char, String)],
+    offset: VisualSpriteOffset,
+    pixels_per_cell: Option<VisualSpritePixelsPerCell>,
     color_tables: &HashMap<String, VisualColorTable>,
     catalog: &Catalog,
     visuals: &mut VisualsDef,
@@ -10468,6 +11087,8 @@ fn add_ascii_visuals(
         });
         visuals.sprites.push(VisualSpriteDef {
             name: sprite,
+            offset,
+            pixels_per_cell,
             kind: VisualSpriteKind::Ascii { pattern, colors },
         });
     }
@@ -10479,6 +11100,8 @@ fn add_inline_ascii_visuals(
     line: &str,
     pattern: &[String],
     color_exprs: &[(char, String)],
+    offset: VisualSpriteOffset,
+    pixels_per_cell: Option<VisualSpritePixelsPerCell>,
     catalog: &Catalog,
     visuals: &mut VisualsDef,
 ) -> Result<(), AppError> {
@@ -10498,6 +11121,8 @@ fn add_inline_ascii_visuals(
         });
         visuals.sprites.push(VisualSpriteDef {
             name: sprite,
+            offset,
+            pixels_per_cell,
             kind: VisualSpriteKind::Ascii {
                 pattern: pattern.to_vec(),
                 colors,
@@ -10530,6 +11155,8 @@ fn add_solid_visuals(
         });
         visuals.sprites.push(VisualSpriteDef {
             name: sprite,
+            offset: VisualSpriteOffset::default(),
+            pixels_per_cell: None,
             kind: VisualSpriteKind::Solid(color),
         });
     }
@@ -10551,6 +11178,8 @@ fn add_image_visuals(
         });
         visuals.sprites.push(VisualSpriteDef {
             name: sprite,
+            offset: VisualSpriteOffset::default(),
+            pixels_per_cell: None,
             kind: VisualSpriteKind::Image {
                 source: source.to_string(),
             },
@@ -14349,7 +14978,7 @@ fn alternatives_write_visual_objects(
         alternative
             .writes
             .iter()
-            .any(|write| write_template_touches_visual_object(write, visual_objects))
+            .any(|write| write_template_touches_visual_object(write, alternative, visual_objects))
     })
 }
 
@@ -14361,12 +14990,13 @@ fn alternatives_write_main_state(
         alternative
             .writes
             .iter()
-            .any(|write| write_template_touches_main_state(write, visual_objects))
+            .any(|write| write_template_touches_main_state(write, alternative, visual_objects))
     })
 }
 
 fn write_template_touches_visual_object(
     write: &WriteOpTemplate,
+    alternative: &RuleBodyAlternative,
     visual_objects: &[ObjectId],
 ) -> bool {
     match write {
@@ -14380,8 +15010,10 @@ fn write_template_touches_visual_object(
         | WriteOpTemplate::RemoveObjectSet { objects, .. } => objects
             .iter()
             .any(|object| object_is_visual(*object, visual_objects)),
-        WriteOpTemplate::SetObjectSetScratch { .. }
-        | WriteOpTemplate::RemoveObjectSetScratch { .. } => true,
+        WriteOpTemplate::SetObjectSetScratch { binding, .. }
+        | WriteOpTemplate::RemoveObjectSetScratch { binding, .. } => {
+            object_set_binding_touches_visual_object(*binding, alternative, visual_objects)
+        }
         WriteOpTemplate::SetScratch { object, .. }
         | WriteOpTemplate::RemoveScratch { object, .. } => {
             !object.is_empty() && object_is_visual(*object, visual_objects)
@@ -14389,7 +15021,11 @@ fn write_template_touches_visual_object(
     }
 }
 
-fn write_template_touches_main_state(write: &WriteOpTemplate, visual_objects: &[ObjectId]) -> bool {
+fn write_template_touches_main_state(
+    write: &WriteOpTemplate,
+    alternative: &RuleBodyAlternative,
+    visual_objects: &[ObjectId],
+) -> bool {
     match write {
         WriteOpTemplate::Add { object, .. }
         | WriteOpTemplate::Remove { object, .. }
@@ -14401,13 +15037,61 @@ fn write_template_touches_main_state(write: &WriteOpTemplate, visual_objects: &[
         | WriteOpTemplate::RemoveObjectSet { objects, .. } => objects
             .iter()
             .any(|object| !object_is_visual(*object, visual_objects)),
-        WriteOpTemplate::SetObjectSetScratch { .. }
-        | WriteOpTemplate::RemoveObjectSetScratch { .. } => true,
+        WriteOpTemplate::SetObjectSetScratch { binding, .. }
+        | WriteOpTemplate::RemoveObjectSetScratch { binding, .. } => {
+            object_set_binding_touches_main_state(*binding, alternative, visual_objects)
+        }
         WriteOpTemplate::SetScratch { object, .. }
         | WriteOpTemplate::RemoveScratch { object, .. } => {
             object.is_empty() || !object_is_visual(*object, visual_objects)
         }
     }
+}
+
+fn object_set_binding_objects(
+    binding: u16,
+    alternative: &RuleBodyAlternative,
+) -> Option<Vec<ObjectId>> {
+    let mut objects = Vec::new();
+    for component in &alternative.components {
+        for cell in &component.cells {
+            for matcher in &cell.require_object_sets {
+                if matcher.binding != binding {
+                    continue;
+                }
+                for object in &matcher.objects {
+                    if !objects.contains(object) {
+                        objects.push(*object);
+                    }
+                }
+            }
+        }
+    }
+    (!objects.is_empty()).then_some(objects)
+}
+
+fn object_set_binding_touches_visual_object(
+    binding: u16,
+    alternative: &RuleBodyAlternative,
+    visual_objects: &[ObjectId],
+) -> bool {
+    object_set_binding_objects(binding, alternative).map_or(true, |objects| {
+        objects
+            .iter()
+            .any(|object| object_is_visual(*object, visual_objects))
+    })
+}
+
+fn object_set_binding_touches_main_state(
+    binding: u16,
+    alternative: &RuleBodyAlternative,
+    visual_objects: &[ObjectId],
+) -> bool {
+    object_set_binding_objects(binding, alternative).map_or(true, |objects| {
+        objects
+            .iter()
+            .any(|object| !object_is_visual(*object, visual_objects))
+    })
 }
 
 impl<'a> ProgramLowerer<'a> {
@@ -15456,6 +16140,9 @@ impl<'a> ProgramLowerer<'a> {
                     lowered.emissions.push(RuleEmission::Wait { milliseconds });
                     lowered.ordered.push(RuleEffect::Wait { milliseconds });
                 }
+                EffectAst::WaitAnimation => {
+                    lowered.ordered.push(RuleEffect::WaitAnimation);
+                }
                 EffectAst::Message { text, literal } => {
                     lowered.emissions.push(RuleEmission::Message {
                         text: text.clone(),
@@ -15931,6 +16618,7 @@ fn parse_rewrite_effect_value(suffix: &str, line: &str) -> Result<Vec<EffectAst>
             parse_simple_rewrite_effects(tokens, line)
         }
         ["wait"] => Ok(vec![EffectAst::Wait { milliseconds: None }]),
+        ["wait", "animation"] | ["wait", "tween"] => Ok(vec![EffectAst::WaitAnimation]),
         ["wait", duration] => Ok(vec![EffectAst::Wait {
             milliseconds: Some(parse_wait_duration_ms(duration, line)?),
         }]),
@@ -15993,7 +16681,14 @@ fn parse_simple_rewrite_effects(tokens: &[&str], line: &str) -> Result<Vec<Effec
                 index += 1;
             }
             "wait" => {
-                if index + 1 < tokens.len() && !is_rewrite_effect_command_token(tokens[index + 1]) {
+                if tokens.get(index + 1).is_some_and(|token| {
+                    token.eq_ignore_ascii_case("animation") || token.eq_ignore_ascii_case("tween")
+                }) {
+                    effects.push(EffectAst::WaitAnimation);
+                    index += 2;
+                } else if index + 1 < tokens.len()
+                    && !is_rewrite_effect_command_token(tokens[index + 1])
+                {
                     effects.push(EffectAst::Wait {
                         milliseconds: Some(parse_wait_duration_ms(tokens[index + 1], line)?),
                     });
@@ -17159,6 +17854,7 @@ fn compile_before_after_blocks(
             let mut after_token_counts = HashMap::<String, usize>::new();
             let mut before_placements = HashMap::<OccurrenceKey, OccurrencePlacement>::new();
             let mut after_placements = HashMap::<OccurrenceKey, OccurrencePlacement>::new();
+            let mut duplicate_after_keys = HashSet::<OccurrenceKey>::new();
 
             for (component_index, (before_component, after_component)) in
                 before.components.iter().zip(&after.components).enumerate()
@@ -17299,39 +17995,43 @@ fn compile_before_after_blocks(
                         }
                         for occurrence in &after_occurrences {
                             if let Some(key) = &occurrence.key {
-                                after_placements.insert(
-                                    key.clone(),
-                                    OccurrencePlacement {
-                                        component: component_index,
-                                        offset: offset.clone(),
-                                        matched: occurrence.matched.clone(),
-                                        require_scratch: after_scratch
-                                            .require
-                                            .iter()
-                                            .filter(|attr| {
-                                                occurrence
-                                                    .matched
-                                                    .possible_objects()
-                                                    .contains(&attr.object)
-                                            })
-                                            .cloned()
-                                            .collect(),
-                                        require_object_set_scratch: after_scratch
-                                            .require_object_set
-                                            .iter()
-                                            .filter(|attr| {
-                                                matches!(
-                                                    &occurrence.matched,
-                                                    ResolvedObjectMatch::ObjectSet {
-                                                        binding,
-                                                        ..
-                                                    } if *binding == attr.binding
-                                                )
-                                            })
-                                            .cloned()
-                                            .collect(),
-                                    },
-                                );
+                                if duplicate_after_keys.contains(key) {
+                                    continue;
+                                }
+                                let placement = OccurrencePlacement {
+                                    component: component_index,
+                                    offset: offset.clone(),
+                                    matched: occurrence.matched.clone(),
+                                    require_scratch: after_scratch
+                                        .require
+                                        .iter()
+                                        .filter(|attr| {
+                                            occurrence
+                                                .matched
+                                                .possible_objects()
+                                                .contains(&attr.object)
+                                        })
+                                        .cloned()
+                                        .collect(),
+                                    require_object_set_scratch: after_scratch
+                                        .require_object_set
+                                        .iter()
+                                        .filter(|attr| {
+                                            matches!(
+                                                &occurrence.matched,
+                                                ResolvedObjectMatch::ObjectSet {
+                                                    binding,
+                                                    ..
+                                                } if *binding == attr.binding
+                                            )
+                                        })
+                                        .cloned()
+                                        .collect(),
+                                };
+                                if after_placements.insert(key.clone(), placement).is_some() {
+                                    after_placements.remove(key);
+                                    duplicate_after_keys.insert(key.clone());
+                                }
                             }
                         }
                         let mut forbid_objects = block_cell_forbid_objects(before_cell);
@@ -18443,18 +19143,10 @@ fn same_layer_alternatives(
     if alternatives.len() <= 1 {
         return None;
     }
-    let mut layer = None;
-    for object in alternatives {
-        let object_layer = object_layers.get(object).copied()?;
-        if let Some(existing) = layer {
-            if existing != object_layer {
-                return None;
-            }
-        } else {
-            layer = Some(object_layer);
-        }
-    }
-    layer
+    puzzle_kernel::object_set_matcher_for_same_layer(0, alternatives, |object| {
+        object_layers.get(&object).copied()
+    })
+    .map(|matcher| matcher.layer)
 }
 
 fn selector_assignment_value_is_possible(
@@ -18566,8 +19258,13 @@ fn block_cell_object_occurrences(
     cell.require
         .iter()
         .map(|selector| {
-            let ordinal = *token_counts.get(&selector.token).unwrap_or(&0);
-            token_counts.insert(selector.token.clone(), ordinal + 1);
+            let ordinal = if selector.occurrence_label.is_some() {
+                0
+            } else {
+                let ordinal = *token_counts.get(&selector.token).unwrap_or(&0);
+                token_counts.insert(selector.token.clone(), ordinal + 1);
+                ordinal
+            };
             if let Some(transform) = &selector.transform {
                 let before_occurrences =
                     before_by_token

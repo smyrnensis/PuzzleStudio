@@ -10,7 +10,6 @@ const previewLogOutput = document.querySelector("#previewLogOutput");
 const previewLogSplitter = document.querySelector("#previewLogSplitter");
 const clearPreviewLogButton = document.querySelector("#clearPreviewLogButton");
 const previewRefreshButton = document.querySelector("#previewRefreshButton");
-const previewSolveButton = document.querySelector("#previewSolveButton");
 const levelBuilder = document.querySelector("#levelBuilder");
 const solverPanel = document.querySelector("#solverPanel");
 const spriteBuilder = document.querySelector("#spriteBuilder");

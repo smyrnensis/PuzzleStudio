@@ -7,6 +7,7 @@ const SPRITE3D_EDITOR_MAX_SIZE = 64;
 const SPRITE3D_SLICE_SCRUB_STEP_PX = 18;
 const SPRITE3D_CAMERA_MIN_PITCH_DEGREES = -90;
 const SPRITE3D_CAMERA_MAX_PITCH_DEGREES = 90;
+const SPRITE3D_PREVIEW_BASE_ZOOM = 0.92;
 const SPRITE3D_CAMERA_DEFAULT = {
   yawDegrees: 15,
   pitchDegrees: 30,
@@ -38,6 +39,7 @@ function renderSprite3dBuilder() {
   renderSprite3dPalette();
   renderSprite3dSliceBoard();
   renderSprite3dPreview();
+  renderSprite3dTextPreview();
 }
 
 function renderSprite3dControls() {
@@ -95,14 +97,14 @@ function renderSprite3dScopeControl() {
     {
       button: sprite3dScopeSliceButton,
       scope: "slice",
-      label: "Edit scope: current slice",
-      title: "Scope: current slice",
+      label: "Scope slice",
+      title: "Scope slice",
     },
     {
       button: sprite3dScopeAllButton,
       scope: "all",
-      label: "Edit scope: whole sprite",
-      title: "Scope: whole sprite",
+      label: "Scope all",
+      title: "Scope all",
     },
   ];
   for (const item of buttons) {
@@ -120,27 +122,12 @@ function renderSprite3dScopeControl() {
 
 function updateSprite3dScopedActionLabels() {
   const isAll = sprite3dEditScope() === "all";
-  setSprite3dButtonLabel(
-    sprite3dRotatePlaneLeftButton,
-    isAll ? "Rotate whole sprite counterclockwise" : "Rotate current slice counterclockwise",
-  );
-  setSprite3dButtonLabel(
-    sprite3dRotatePlaneRightButton,
-    isAll ? "Rotate whole sprite clockwise" : "Rotate current slice clockwise",
-  );
-  setSprite3dButtonLabel(
-    sprite3dFlipPlaneHorizontalButton,
-    isAll ? "Flip whole sprite horizontally" : "Flip current slice horizontally",
-  );
-  setSprite3dButtonLabel(
-    sprite3dFlipPlaneVerticalButton,
-    isAll ? "Flip whole sprite vertically" : "Flip current slice vertically",
-  );
-  setSprite3dButtonLabel(
-    sprite3dFillButton,
-    isAll ? "Bucket fill 3D connected component" : "Bucket fill current slice connected component",
-  );
-  setSprite3dButtonLabel(sprite3dClearButton, isAll ? "Clear whole sprite" : "Clear current slice");
+  setSprite3dButtonLabel(sprite3dRotatePlaneLeftButton, "Rotate CCW");
+  setSprite3dButtonLabel(sprite3dRotatePlaneRightButton, "Rotate CW");
+  setSprite3dButtonLabel(sprite3dFlipPlaneHorizontalButton, "Flip horizontal");
+  setSprite3dButtonLabel(sprite3dFlipPlaneVerticalButton, "Flip vertical");
+  setSprite3dButtonLabel(sprite3dFillButton, "Bucket fill");
+  setSprite3dButtonLabel(sprite3dClearButton, isAll ? "Clear all" : "Clear slice");
 }
 
 function syncSprite3dBucketButton() {
@@ -374,7 +361,7 @@ function renderSprite3dPalette() {
   addButton.type = "button";
   addButton.className = "sprite-token sprite-add-color-button";
   addButton.disabled = sprite3dPaletteEntries().length >= SPRITE_COLOR_TOKENS.length;
-  addButton.title = "Add sprite color";
+  addButton.title = "Add color";
   addButton.setAttribute("aria-label", "Add sprite color");
   addButton.setAttribute("aria-expanded", String(sprite3d.addPaletteOpen));
   addButton.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14"></path><path d="M5 12h14"></path></svg>`;
@@ -480,7 +467,7 @@ function renderSprite3dPreview() {
 
 function sprite3dPreviewView(width, height, size) {
   const padding = 22;
-  const overlayClearanceY = 14;
+  const overlayClearanceY = 0;
   const boundsView = {
     cellScale: 1,
     originX: 0,
@@ -496,7 +483,7 @@ function sprite3dPreviewView(width, height, size) {
   const projectedHeight = Math.max(1, maxY - minY);
   const availableWidth = Math.max(1, width - padding * 2);
   const availableHeight = Math.max(1, height - padding * 2);
-  const scale = Math.max(4, Math.min(availableWidth / projectedWidth, availableHeight / projectedHeight))
+  const scale = Math.max(4, Math.min(availableWidth / projectedWidth, availableHeight / projectedHeight) * SPRITE3D_PREVIEW_BASE_ZOOM)
     * sprite3dCamera().zoom;
   return {
     cellScale: scale,
@@ -2240,6 +2227,13 @@ function sprite3dObjectName() {
 
 function sprite3dClipboardText() {
   return sprite3dObjectDefinitionText("");
+}
+
+function renderSprite3dTextPreview() {
+  if (!sprite3dTextPreview) {
+    return;
+  }
+  sprite3dTextPreview.textContent = sprite3dClipboardText();
 }
 
 function sprite3dObjectDefinitionText(indent) {

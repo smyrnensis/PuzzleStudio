@@ -5,6 +5,8 @@ sounds {
 	music music seed=418792 tone=0.85 bpm=109 volume=0.50
 }
 
+theme puzzlescript
+
 puzzle3 sokoban {
 render {
   camera {

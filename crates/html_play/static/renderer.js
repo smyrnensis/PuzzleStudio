@@ -178,8 +178,14 @@ class PuzzleRenderer {
     sprite.dataset.object = layer.object;
     sprite.dataset.layer = layer.layer;
     sprite.style.zIndex = String(definition.zIndex ?? layer.layer + 1);
-    sprite.style.setProperty("--sprite-cols", String(definition.pattern?.[0]?.length || 1));
-    sprite.style.setProperty("--sprite-rows", String(definition.pattern?.length || 1));
+    const spriteCols = Math.max(1, definition.pattern?.[0]?.length || 1);
+    const spriteRows = Math.max(1, definition.pattern?.length || 1);
+    sprite.style.setProperty("--sprite-cols", String(spriteCols));
+    sprite.style.setProperty("--sprite-rows", String(spriteRows));
+    sprite.style.setProperty("--sprite-cell-cols", String(definition.pixelsPerCell?.width || spriteCols));
+    sprite.style.setProperty("--sprite-cell-rows", String(definition.pixelsPerCell?.height || spriteRows));
+    sprite.style.setProperty("--sprite-offset-x", String(Number(definition.offset?.x) || 0));
+    sprite.style.setProperty("--sprite-offset-y", String(Number(definition.offset?.y) || 0));
     sprite.setAttribute("aria-hidden", "true");
 
     if (definition.source) {
@@ -337,7 +343,8 @@ class PuzzleRenderer {
     if (definition.source) {
       const image = this.cachedImage(definition.source);
       if (image?.complete && image.naturalWidth > 0) {
-        context.drawImage(image, x, y, unit, unit);
+        const offset = this.visualSpriteOffset(definition, unit);
+        context.drawImage(image, x + offset.x, y + offset.y, unit, unit);
       }
       if (transform) {
         context.restore();
@@ -355,7 +362,8 @@ class PuzzleRenderer {
       return;
     }
 
-    this.paintPattern(context, definition, x, y, unit);
+    const offset = this.visualSpriteOffset(definition, unit);
+    this.paintPattern(context, definition, x + offset.x, y + offset.y, unit);
     if (transform) {
       context.restore();
     }
@@ -397,8 +405,10 @@ class PuzzleRenderer {
     const pattern = definition.pattern || [];
     const rows = Math.max(1, pattern.length || 1);
     const cols = Math.max(1, pattern[0]?.length || 1);
-    const pixelWidth = unit / cols;
-    const pixelHeight = unit / rows;
+    const cellCols = Math.max(1, Number(definition.pixelsPerCell?.width) || cols);
+    const cellRows = Math.max(1, Number(definition.pixelsPerCell?.height) || rows);
+    const pixelWidth = unit / cellCols;
+    const pixelHeight = unit / cellRows;
     pattern.forEach((row, rowIndex) => {
       [...row].forEach((token, colIndex) => {
         const color = definition.colors?.[token] || "transparent";
@@ -414,6 +424,17 @@ class PuzzleRenderer {
         );
       });
     });
+  }
+
+  visualSpriteOffset(definition, unit) {
+    const cols = Math.max(1, definition.pattern?.[0]?.length || 1);
+    const rows = Math.max(1, definition.pattern?.length || 1);
+    const cellCols = Math.max(1, Number(definition.pixelsPerCell?.width) || cols);
+    const cellRows = Math.max(1, Number(definition.pixelsPerCell?.height) || rows);
+    return {
+      x: (Number(definition.offset?.x) || 0) * unit / cellCols,
+      y: (Number(definition.offset?.y) || 0) * unit / cellRows,
+    };
   }
 
   paintFallbackLayer(context, layer, x, y, unit) {
@@ -456,8 +477,10 @@ class PuzzleRenderer {
         }
         const cols = Math.max(1, definition.pattern?.[0]?.length || 1);
         const rows = Math.max(1, definition.pattern?.length || 1);
-        unit = this.boundedLeastCommonMultiple(unit, cols, 128);
-        unit = this.boundedLeastCommonMultiple(unit, rows, 128);
+        const cellCols = Math.max(1, Number(definition.pixelsPerCell?.width) || cols);
+        const cellRows = Math.max(1, Number(definition.pixelsPerCell?.height) || rows);
+        unit = this.boundedLeastCommonMultiple(unit, cellCols, 128);
+        unit = this.boundedLeastCommonMultiple(unit, cellRows, 128);
       }
     }
     return hasImage ? this.boundedLeastCommonMultiple(unit, 32, 128) : unit;

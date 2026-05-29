@@ -2337,6 +2337,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "puzzle-game-runtime"
+version = "0.1.0"
+dependencies = [
+ "puzzle-core",
+ "puzzle-lang",
+ "puzzle-play",
+ "puzzle3d-model",
+ "serde_json",
+]
+
+[[package]]
 name = "puzzle-kernel"
 version = "0.1.0"
 
@@ -2345,6 +2356,7 @@ name = "puzzle-lang"
 version = "0.1.0"
 dependencies = [
  "puzzle-core",
+ "puzzle-kernel",
  "puzzle-scene",
  "puzzle3d-model",
 ]
@@ -2385,6 +2397,14 @@ version = "0.1.0"
 dependencies = [
  "puzzle-core",
  "serde_json",
+ "wasm-bindgen",
+]
+
+[[package]]
+name = "puzzle-wasm-game"
+version = "0.1.0"
+dependencies = [
+ "puzzle-game-runtime",
  "wasm-bindgen",
 ]
 

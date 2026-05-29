@@ -993,8 +993,18 @@ impl CatalogBuild3 {
                 .collect::<Result<Vec<_>, _>>()?;
             groups.push(SelectorGroup3::new(spec.name, selectors));
         }
-        SelectorCatalog3::checked_new(self.concrete, self.families, groups)
-            .map_err(|error| message(format!("invalid selector catalog: {error:?}")))
+        let object_layers = self
+            .object_defs
+            .iter()
+            .map(|def| (def.id, def.layer_id))
+            .collect();
+        SelectorCatalog3::checked_new_with_object_layers(
+            self.concrete,
+            self.families,
+            groups,
+            object_layers,
+        )
+        .map_err(|error| message(format!("invalid selector catalog: {error:?}")))
     }
 
     fn alloc_object(&mut self) -> ObjectId {

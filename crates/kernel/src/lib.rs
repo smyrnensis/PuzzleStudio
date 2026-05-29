@@ -256,6 +256,44 @@ pub enum ScratchValueMatch {
     Exact,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ObjectSetMatcher<ObjectId, LayerId> {
+    pub binding: u16,
+    pub layer: LayerId,
+    pub objects: Vec<ObjectId>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ObjectSetScratchPattern<ScratchId> {
+    pub binding: u16,
+    pub scratch: ScratchId,
+    pub value: Option<i64>,
+    pub match_value: ScratchValueMatch,
+}
+
+pub fn object_set_matcher_for_same_layer<ObjectId, LayerId>(
+    binding: u16,
+    objects: &[ObjectId],
+    mut object_layer: impl FnMut(ObjectId) -> Option<LayerId>,
+) -> Option<ObjectSetMatcher<ObjectId, LayerId>>
+where
+    ObjectId: Copy,
+    LayerId: Copy + Eq,
+{
+    let (&first, rest) = objects.split_first()?;
+    let layer = object_layer(first)?;
+    for object in rest {
+        if object_layer(*object)? != layer {
+            return None;
+        }
+    }
+    Some(ObjectSetMatcher {
+        binding,
+        layer,
+        objects: objects.to_vec(),
+    })
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ScratchValue<ScratchId> {
     pub scratch: ScratchId,

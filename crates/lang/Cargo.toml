@@ -6,5 +6,6 @@ license.workspace = true
 
 [dependencies]
 puzzle-core = { path = "../core" }
+puzzle-kernel = { path = "../kernel" }
 puzzle-scene = { path = "../scene" }
 puzzle3d-model = { path = "../puzzle3d_model" }

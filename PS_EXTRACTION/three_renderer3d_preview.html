@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>3D Renderer MVP Preview</title>
+  <style>
+    html,
+    body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      background: #111318;
+      color: #f8fafc;
+      font-family: system-ui, sans-serif;
+    }
+
+    body {
+      display: grid;
+      place-items: stretch;
+    }
+
+    canvas {
+      width: 100vw;
+      height: 100vh;
+      display: block;
+    }
+
+    .status {
+      position: fixed;
+      left: 16px;
+      top: 16px;
+      padding: 8px 10px;
+      background: rgba(17, 19, 24, 0.78);
+      border: 1px solid rgba(248, 250, 252, 0.16);
+      font-size: 13px;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="preview" width="960" height="640" aria-label="3D renderer MVP preview"></canvas>
+  <div class="status" id="status">Loading Three.js...</div>
+
+  <script type="module">
+    import * as THREE from "./vendor/three/three.module.min.js";
+
+    window.THREE = THREE;
+
+    await new Promise((resolve, reject) => {
+      const script = document.createElement("script");
+      script.src = "upstream/PuzzleScriptNext/src/js/three_renderer3d.js";
+      script.onload = resolve;
+      script.onerror = () => reject(new Error("Failed to load three_renderer3d.js"));
+      document.head.append(script);
+    });
+
+    const frame = {
+      model: "psnext-grid3",
+      size: { width: 5, height: 3, depth: 4, layerCount: 3 },
+      spriteGrid: { width: 5, height: 5, depth: 1 },
+      objects: [
+        { id: 0, name: "background", layer: 0, visual: { color: "#263238" } },
+        { id: 1, name: "wall", layer: 1, visual: { color: "#94a3b8" } },
+        { id: 2, name: "player", layer: 2, visual: { color: "#f97316" } },
+        { id: 3, name: "crate", layer: 2, visual: { color: "#22c55e" } },
+        { id: 4, name: "goal", layer: 1, visual: { color: "#38bdf8" } }
+      ],
+      drawPlan: {
+        objectGroups: [
+          { firstObjectId: 0, objectCount: 1 },
+          { firstObjectId: 1, objectCount: 1 },
+          { firstObjectId: 2, objectCount: 3 }
+        ],
+        cellOrder: []
+      },
+      cells: [],
+      view: {
+        projection: "orthographic",
+        cameraPreset: "front-right-top",
+        visibility: "all"
+      }
+    };
+
+    function index(x, y, z) {
+      return x * frame.size.height * frame.size.depth + y * frame.size.depth + z;
+    }
+
+    for (let x = 0; x < frame.size.width; x++) {
+      for (let y = 0; y < frame.size.height; y++) {
+        for (let z = 0; z < frame.size.depth; z++) {
+          const objectIds = [0];
+          if (y === 0 && (x === 0 || z === 0 || x === frame.size.width - 1 || z === frame.size.depth - 1)) {
+            objectIds.push(1);
+          }
+          if (x === 2 && y === 1 && z === 1) objectIds.push(2);
+          if (x === 3 && y === 1 && z === 1) objectIds.push(3);
+          if (x === 3 && y === 0 && z === 2) objectIds.push(4);
+          frame.cells[index(x, y, z)] = { index: index(x, y, z), x, y, z, objectIds };
+        }
+      }
+    }
+
+    frame.drawPlan.cellOrder = frame.cells
+      .map((cell) => cell.index)
+      .sort((a, b) => {
+        const left = frame.cells[a];
+        const right = frame.cells[b];
+        const dl = left.x - left.y - left.z;
+        const dr = right.x - right.y - right.z;
+        return dl - dr;
+      });
+
+    try {
+      const result = window.Puzzle3DThreeRenderer.renderToCanvas(
+        document.getElementById("preview"),
+        frame
+      );
+      document.getElementById("status").textContent = result.rendered
+        ? `Rendered ${result.instances} instances with Three.js`
+        : "Frame ready; Three.js was not available";
+    } catch (error) {
+      document.getElementById("status").textContent = error.message;
+      throw error;
+    }
+  </script>
+</body>
+</html>

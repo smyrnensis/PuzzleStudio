@@ -203,13 +203,6 @@
                   <path d="M8 16H3v5"></path>
                 </svg>
               </button>
-              <button id="previewSolveButton" class="pane-header-icon-button preview-solve-button" type="button" aria-label="Solve current preview state" title="Solve current preview state">
-                <svg viewBox="0 0 24 24" aria-hidden="true" class="solve-level-icon">
-                  <circle cx="6" cy="19" r="3"></circle>
-                  <path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"></path>
-                  <circle cx="18" cy="5" r="3"></circle>
-                </svg>
-              </button>
               <button class="pane-maximize-button" type="button" data-pane-maximize="active-preview" aria-label="Maximize Preview pane" aria-pressed="false" title="Maximize Preview pane">
                 <svg viewBox="0 0 24 24" aria-hidden="true" class="lucide lucide-maximize-icon lucide-maximize">
                   <path d="M8 3H5a2 2 0 0 0-2 2v3"></path>
@@ -421,12 +414,12 @@
             <div id="levelPalette" class="level-palette" aria-label="Level tile palette">
               <div class="level-scope-toggle sprite3d-scope-toggle" role="group" aria-label="Level edit scope">
                 <span class="sprite3d-scope-toggle-label">Scope</span>
-                <button id="levelScopeLayerButton" class="level-scope-button sprite3d-scope-button sprite-icon-button is-active" type="button" data-level-scope-option="layer" aria-label="Edit scope: current layer" aria-pressed="true" title="Mono layer" data-tooltip="Mono layer">
+                <button id="levelScopeLayerButton" class="level-scope-button sprite3d-scope-button sprite-icon-button is-active" type="button" data-level-scope-option="layer" aria-label="Mono layer" aria-pressed="true" title="Mono layer" data-tooltip="Mono layer">
                   <svg xmlns="http://www.w3.org/2000/svg" class="lucide lucide-diamond-icon lucide-diamond" viewBox="0 0 24 24" aria-hidden="true">
                     <path d="M2.7 10.3a2.41 2.41 0 0 0 0 3.41l7.59 7.59a2.41 2.41 0 0 0 3.41 0l7.59-7.59a2.41 2.41 0 0 0 0-3.41l-7.59-7.59a2.41 2.41 0 0 0-3.41 0Z"></path>
                   </svg>
                 </button>
-                <button id="levelScopeAllButton" class="level-scope-button sprite3d-scope-button sprite-icon-button" type="button" data-level-scope-option="all" aria-label="Edit scope: all layers" aria-pressed="false" title="All layers" data-tooltip="All layers">
+                <button id="levelScopeAllButton" class="level-scope-button sprite3d-scope-button sprite-icon-button" type="button" data-level-scope-option="all" aria-label="All layers" aria-pressed="false" title="All layers" data-tooltip="All layers">
                   <svg viewBox="0 0 24 24" aria-hidden="true">
                     <path d="M5 8 12 4l7 4-7 4-7-4Z"></path>
                     <path d="M5 12l7 4 7-4"></path>
@@ -449,7 +442,7 @@
                   <path d="M3 21 21 3"></path>
                 </svg>
               </button>
-              <button id="levelFillButton" class="level-palette-tool-button sprite-fill-button sprite-icon-button" type="button" aria-label="Bucket fill connected area" aria-pressed="false" title="Fill" data-tooltip="Fill">
+              <button id="levelFillButton" class="level-palette-tool-button sprite-fill-button sprite-icon-button" type="button" aria-label="Fill" aria-pressed="false" title="Fill" data-tooltip="Fill">
                 <svg viewBox="0 0 24 24" aria-hidden="true">
                   <path d="m19 11-8-8-8.6 8.6a2 2 0 0 0 0 2.8l5.2 5.2a2 2 0 0 0 2.8 0L19 11Z"></path>
                   <path d="m5 2 5 5"></path>
@@ -480,7 +473,7 @@
                   <rect x="7" y="7" width="10" height="10" rx="1"></rect>
                 </svg>
               </button>
-              <button id="levelSolveShortcutButton" class="source-action-button level-solve-shortcut-button" type="button" aria-label="Solve level" title="Solve" data-tooltip="Solve">
+              <button id="levelSolveShortcutButton" class="source-action-button level-solve-shortcut-button" type="button" aria-label="Solve" title="Solve" data-tooltip="Solve">
                 <svg class="solve-level-icon" viewBox="0 0 24 24" aria-hidden="true">
                   <circle cx="6" cy="19" r="3"></circle>
                   <path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"></path>
@@ -491,13 +484,13 @@
                   <path d="M18 6 6 18"></path>
                 </svg>
               </button>
-              <button id="copyLevelButton" class="source-action-button source-copy-button" type="button" aria-label="Copy level source" title="Copy" data-tooltip="Copy">
+              <button id="copyLevelButton" class="source-action-button source-copy-button" type="button" aria-label="Copy" title="Copy" data-tooltip="Copy">
                 <svg viewBox="0 0 24 24" aria-hidden="true">
                   <rect x="8" y="8" width="14" height="14" rx="2"></rect>
                   <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path>
                 </svg>
               </button>
-              <button id="addLevelButton" class="source-action-button" type="button" aria-label="Add level to source" title="Add to source" data-tooltip="Add to source">
+              <button id="addLevelButton" class="source-action-button" type="button" aria-label="Add source" title="Add source" data-tooltip="Add source">
                 <svg viewBox="0 0 24 24" aria-hidden="true" class="lucide lucide-file-plus-corner-icon lucide-file-plus-corner">
                   <path d="M11.35 22H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.706.706l3.588 3.588A2.4 2.4 0 0 1 20 8v5.35"></path>
                   <path d="M14 2v5a1 1 0 0 0 1 1h5"></path>
@@ -505,7 +498,7 @@
                   <path d="M17 16v6"></path>
                 </svg>
               </button>
-              <button id="updateLevelButton" class="source-action-button is-primary" type="button" aria-label="Update matching level in source" title="Edit source" data-tooltip="Edit source">
+              <button id="updateLevelButton" class="source-action-button is-primary" type="button" aria-label="Edit source" title="Edit source" data-tooltip="Edit source">
                 <svg viewBox="0 0 24 24" aria-hidden="true" class="lucide lucide-file-pen-line-icon lucide-file-pen-line">
                   <path d="M14.364 13.634a2 2 0 0 0-.506.854l-.837 2.87a.5.5 0 0 0 .62.62l2.87-.837a2 2 0 0 0 .854-.506l4.013-4.009a1 1 0 0 0-3.004-3.004z"></path>
                   <path d="M14.487 7.858A1 1 0 0 1 14 7V2"></path>
@@ -525,7 +518,7 @@
               </div>
               <div class="solver-controls">
               <span class="solver-action-buttons" aria-label="Solver controls">
-                <button id="solveLevelButton" type="button" aria-label="Solve level" title="Solve level">
+                <button id="solveLevelButton" type="button" aria-label="Solve" title="Solve">
                   <svg class="solve-level-icon" viewBox="0 0 24 24" aria-hidden="true">
                     <circle cx="6" cy="19" r="3"></circle>
                     <path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"></path>
@@ -598,7 +591,7 @@
                   <div class="sprite-scale-group">
                     <span class="sprite-scale-prefix" aria-hidden="true">x</span>
                     <input id="spriteScaleInput" type="number" min="2" max="64" value="2" inputmode="numeric" aria-label="Scale multiplier">
-                    <button id="spriteScaleDownButton" class="sprite-scale-step-button" type="button" aria-label="Scale down sprite" title="Scale down sprite">
+                    <button id="spriteScaleDownButton" class="sprite-scale-step-button" type="button" aria-label="Scale down" title="Scale down">
                       <svg viewBox="0 0 24 24" aria-hidden="true">
                         <path d="M4 14h6v6"></path>
                         <path d="M10 14l-7 7"></path>
@@ -606,7 +599,7 @@
                         <path d="M14 10l7-7"></path>
                       </svg>
                     </button>
-                    <button id="spriteScaleUpButton" class="sprite-scale-step-button" type="button" aria-label="Scale up sprite" title="Scale up sprite">
+                    <button id="spriteScaleUpButton" class="sprite-scale-step-button" type="button" aria-label="Scale up" title="Scale up">
                       <svg viewBox="0 0 24 24" aria-hidden="true">
                         <path d="M15 3h6v6"></path>
                         <path d="M21 3l-7 7"></path>
@@ -621,7 +614,7 @@
               </div>
               </div>
               <div id="spritePalette" class="sprite-palette" aria-label="Sprite character palette">
-                <button id="spriteFillButton" class="sprite-token sprite-palette-fill-button sprite-fill-button sprite-icon-button" type="button" aria-label="Bucket fill connected area" aria-pressed="false" title="Bucket fill connected area">
+                <button id="spriteFillButton" class="sprite-token sprite-palette-fill-button sprite-fill-button sprite-icon-button" type="button" aria-label="Bucket fill" aria-pressed="false" title="Bucket fill">
                   <svg viewBox="0 0 24 24" aria-hidden="true">
                     <path d="m19 11-8-8-8.6 8.6a2 2 0 0 0 0 2.8l5.2 5.2a2 2 0 0 0 2.8 0L19 11Z"></path>
                     <path d="m5 2 5 5"></path>
@@ -666,7 +659,7 @@
                   <path d="M22 12h-2"></path>
                 </svg>
               </button>
-              <button id="spriteClearButton" class="sprite-clear-button sprite-icon-button" type="button" aria-label="Clear sprite" title="Clear sprite">
+              <button id="spriteClearButton" class="sprite-clear-button sprite-icon-button" type="button" aria-label="Clear" title="Clear">
                 <svg viewBox="0 0 24 24" aria-hidden="true">
                   <path d="M3 6h18"></path>
                   <path d="M8 6V4h8v2"></path>
@@ -678,13 +671,13 @@
               </div>
             </div>
             <div class="source-action-group source-preview-actions sprite-source-actions sprite-footer-actions" role="group" aria-label="Sprite source actions">
-              <button id="spriteExportButton" class="source-action-button source-copy-button" type="button" aria-label="Copy sprite" title="Copy sprite">
+              <button id="spriteExportButton" class="source-action-button source-copy-button" type="button" aria-label="Copy" title="Copy">
                 <svg viewBox="0 0 24 24" aria-hidden="true">
                   <rect x="8" y="8" width="14" height="14" rx="2"></rect>
                   <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path>
                 </svg>
               </button>
-              <button id="spriteInsertButton" class="source-action-button" type="button" aria-label="Add sprite to source" title="Add sprite to source">
+              <button id="spriteInsertButton" class="source-action-button" type="button" aria-label="Add source" title="Add source">
                 <svg viewBox="0 0 24 24" aria-hidden="true" class="lucide lucide-file-plus-corner-icon lucide-file-plus-corner">
                   <path d="M11.35 22H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.706.706l3.588 3.588A2.4 2.4 0 0 1 20 8v5.35"></path>
                   <path d="M14 2v5a1 1 0 0 0 1 1h5"></path>
@@ -692,7 +685,7 @@
                   <path d="M17 16v6"></path>
                 </svg>
               </button>
-              <button id="spriteUpdateButton" class="source-action-button is-primary" type="button" aria-label="Update matching sprite in source" title="Update matching sprite in source">
+              <button id="spriteUpdateButton" class="source-action-button is-primary" type="button" aria-label="Update source" title="Update source">
                 <svg viewBox="0 0 24 24" aria-hidden="true" class="lucide lucide-file-pen-line-icon lucide-file-pen-line">
                   <path d="M14.364 13.634a2 2 0 0 0-.506.854l-.837 2.87a.5.5 0 0 0 .62.62l2.87-.837a2 2 0 0 0 .854-.506l4.013-4.009a1 1 0 0 0-3.004-3.004z"></path>
                   <path d="M14.487 7.858A1 1 0 0 1 14 7V2"></path>
@@ -722,7 +715,7 @@
                   <div class="sprite-scale-group">
                     <span class="sprite-scale-prefix" aria-hidden="true">x</span>
                     <input id="sprite3dScaleInput" type="number" min="2" max="64" value="2" inputmode="numeric" aria-label="3D sprite scale multiplier">
-                    <button id="sprite3dScaleDownButton" class="sprite-scale-step-button" type="button" aria-label="Scale down 3D sprite" title="Scale down 3D sprite">
+                    <button id="sprite3dScaleDownButton" class="sprite-scale-step-button" type="button" aria-label="Scale down" title="Scale down">
                       <svg viewBox="0 0 24 24" aria-hidden="true">
                         <path d="M4 14h6v6"></path>
                         <path d="M10 14l-7 7"></path>
@@ -730,7 +723,7 @@
                         <path d="M14 10l7-7"></path>
                       </svg>
                     </button>
-                    <button id="sprite3dScaleUpButton" class="sprite-scale-step-button" type="button" aria-label="Scale up 3D sprite" title="Scale up 3D sprite">
+                    <button id="sprite3dScaleUpButton" class="sprite-scale-step-button" type="button" aria-label="Scale up" title="Scale up">
                       <svg viewBox="0 0 24 24" aria-hidden="true">
                         <path d="M15 3h6v6"></path>
                         <path d="M21 3l-7 7"></path>
@@ -749,12 +742,12 @@
                   <div class="sprite-toolbar sprite3d-edit-actions" role="toolbar" aria-label="3D sprite edit actions">
                     <div class="sprite3d-scope-toggle" role="group" aria-label="3D sprite edit scope">
                       <span class="sprite3d-scope-toggle-label">Scope</span>
-                      <button id="sprite3dScopeSliceButton" class="sprite3d-scope-button sprite-icon-button is-active" type="button" data-sprite3d-scope-option="slice" aria-label="Edit scope: current slice" aria-pressed="true" title="Scope: current slice">
+                      <button id="sprite3dScopeSliceButton" class="sprite3d-scope-button sprite-icon-button is-active" type="button" data-sprite3d-scope-option="slice" aria-label="Scope slice" aria-pressed="true" title="Scope slice">
                         <svg viewBox="0 0 24 24" aria-hidden="true">
                           <rect x="5" y="5" width="14" height="14" rx="1.8"></rect>
                         </svg>
                       </button>
-                      <button id="sprite3dScopeAllButton" class="sprite3d-scope-button sprite-icon-button" type="button" data-sprite3d-scope-option="all" aria-label="Edit scope: whole sprite" aria-pressed="false" title="Scope: whole sprite">
+                      <button id="sprite3dScopeAllButton" class="sprite3d-scope-button sprite-icon-button" type="button" data-sprite3d-scope-option="all" aria-label="Scope all" aria-pressed="false" title="Scope all">
                         <svg viewBox="0 0 24 24" aria-hidden="true">
                           <path d="M12 2.8 20 7.3v9.4l-8 4.5-8-4.5V7.3Z"></path>
                           <path d="M4 7.3 12 12l8-4.7"></path>
@@ -763,19 +756,19 @@
                       </button>
                     </div>
                     <div class="sprite3d-action-row" role="group" aria-label="3D sprite edit commands">
-                    <button id="sprite3dRotatePlaneLeftButton" class="sprite-icon-button" type="button" aria-label="Rotate current plane counterclockwise" title="Rotate current plane counterclockwise">
+                    <button id="sprite3dRotatePlaneLeftButton" class="sprite-icon-button" type="button" aria-label="Rotate CCW" title="Rotate CCW">
                       <svg viewBox="0 0 24 24" aria-hidden="true">
                         <path d="M3 12a9 9 0 1 0 2.64-6.36L3 8"></path>
                         <path d="M3 3v5h5"></path>
                       </svg>
                     </button>
-                    <button id="sprite3dRotatePlaneRightButton" class="sprite-icon-button" type="button" aria-label="Rotate current plane clockwise" title="Rotate current plane clockwise">
+                    <button id="sprite3dRotatePlaneRightButton" class="sprite-icon-button" type="button" aria-label="Rotate CW" title="Rotate CW">
                       <svg viewBox="0 0 24 24" aria-hidden="true">
                         <path d="M21 12a9 9 0 1 1-2.64-6.36L21 8"></path>
                         <path d="M21 3v5h-5"></path>
                       </svg>
                     </button>
-                    <button id="sprite3dFlipPlaneHorizontalButton" class="sprite-icon-button" type="button" aria-label="Flip current plane horizontally" title="Flip current plane horizontally">
+                    <button id="sprite3dFlipPlaneHorizontalButton" class="sprite-icon-button" type="button" aria-label="Flip horizontal" title="Flip horizontal">
                       <svg viewBox="0 0 24 24" aria-hidden="true">
                         <path d="M8 3H5a2 2 0 0 0-2 2v14c0 1.1.9 2 2 2h3"></path>
                         <path d="M16 3h3a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-3"></path>
@@ -785,7 +778,7 @@
                         <path d="M12 2v2"></path>
                       </svg>
                     </button>
-                    <button id="sprite3dFlipPlaneVerticalButton" class="sprite-icon-button" type="button" aria-label="Flip current plane vertically" title="Flip current plane vertically">
+                    <button id="sprite3dFlipPlaneVerticalButton" class="sprite-icon-button" type="button" aria-label="Flip vertical" title="Flip vertical">
                       <svg viewBox="0 0 24 24" aria-hidden="true">
                         <path d="M21 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v3"></path>
                         <path d="M21 16v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-3"></path>
@@ -795,13 +788,13 @@
                         <path d="M22 12h-2"></path>
                       </svg>
                     </button>
-                    <button id="sprite3dCopySliceButton" class="sprite-icon-button" type="button" aria-label="Copy current 2D slice" title="Copy current 2D slice">
+                    <button id="sprite3dCopySliceButton" class="sprite-icon-button" type="button" aria-label="Copy slice" title="Copy slice">
                       <svg viewBox="0 0 24 24" aria-hidden="true">
                         <rect x="8" y="8" width="12" height="12" rx="2"></rect>
                         <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path>
                       </svg>
                     </button>
-                    <button id="sprite3dPasteSliceButton" class="sprite-icon-button" type="button" aria-label="Paste copied 2D slice to current slice" title="Paste copied 2D slice" disabled>
+                    <button id="sprite3dPasteSliceButton" class="sprite-icon-button" type="button" aria-label="Paste slice" title="Paste slice" disabled>
                       <svg viewBox="0 0 24 24" aria-hidden="true">
                         <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path>
                         <rect x="8" y="2" width="8" height="4" rx="1"></rect>
@@ -809,7 +802,7 @@
                         <path d="M12 11v6"></path>
                       </svg>
                     </button>
-                    <button id="sprite3dFillButton" class="sprite-fill-button sprite3d-fill-button sprite-icon-button" type="button" aria-label="Bucket fill current slice connected component" aria-pressed="false" title="Bucket fill current slice connected component">
+                    <button id="sprite3dFillButton" class="sprite-fill-button sprite3d-fill-button sprite-icon-button" type="button" aria-label="Bucket fill" aria-pressed="false" title="Bucket fill">
                       <svg viewBox="0 0 24 24" aria-hidden="true">
                         <path d="m19 11-8-8-8.6 8.6a2 2 0 0 0 0 2.8l5.2 5.2a2 2 0 0 0 2.8 0L19 11Z"></path>
                         <path d="m5 2 5 5"></path>
@@ -817,7 +810,7 @@
                         <path d="M22 20a2 2 0 1 1-4 0c0-1.6 1.7-2.4 2-4 .3 1.6 2 2.4 2 4Z"></path>
                       </svg>
                     </button>
-                    <button id="sprite3dClearButton" class="sprite-clear-button sprite3d-clear-button sprite-icon-button" type="button" aria-label="Clear current 2D slice" title="Clear current 2D slice">
+                    <button id="sprite3dClearButton" class="sprite-clear-button sprite3d-clear-button sprite-icon-button" type="button" aria-label="Clear" title="Clear">
                       <svg viewBox="0 0 24 24" aria-hidden="true">
                         <path d="M3 6h18"></path>
                         <path d="M8 6V4h8v2"></path>
@@ -828,23 +821,48 @@
                     </button>
                     </div>
                   </div>
-                  <pre id="sprite3dTextPreview" class="sprite-text-preview sprite3d-text-preview" aria-label="3D sprite source preview"></pre>
                 </div>
                 <div class="sprite3d-preview-column">
                   <div class="sprite3d-preview-wrap">
+                    <div class="sprite3d-slice-axis-control" role="group" aria-label="3D sprite slice and axis">
+                      <span class="sprite3d-layer-axis-label">Slices</span>
+                      <button id="sprite3dPreviousSliceButton" class="sprite-icon-button" type="button" aria-label="Move to lower slice" title="Lower slice">
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                          <path d="M15 18l-6-6 6-6"></path>
+                        </svg>
+                      </button>
+                      <span class="sprite3d-slice-value-wrap" data-sprite3d-slice-scrub title="Adjust slice">
+                        <input id="sprite3dSliceValue" class="sprite3d-layer-axis-value" type="number" min="1" max="5" value="1" inputmode="numeric" aria-label="Current 3D sprite slice">
+                        <span class="sprite3d-slice-total-separator" aria-hidden="true">/</span>
+                        <span id="sprite3dSliceTotal" class="sprite3d-slice-total">5</span>
+                      </span>
+                      <button id="sprite3dNextSliceButton" class="sprite-icon-button" type="button" aria-label="Move to higher slice" title="Higher slice">
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                          <path d="M9 18l6-6-6-6"></path>
+                        </svg>
+                      </button>
+                      <span class="sprite3d-layer-axis-label">Axis</span>
+                      <div class="sprite3d-axis-control sprite3d-toolbar-axis" role="group" aria-label="3D sprite slice axis">
+                        <div class="sprite3d-axis-buttons">
+                          <button class="sprite3d-axis-button" type="button" data-sprite3d-axis="x" aria-pressed="false" title="Edit YZ slices">X</button>
+                          <button class="sprite3d-axis-button" type="button" data-sprite3d-axis="y" aria-pressed="false" title="Edit XZ slices">Y</button>
+                          <button class="sprite3d-axis-button is-active" type="button" data-sprite3d-axis="z" aria-pressed="true" title="Edit XY slices">Z</button>
+                        </div>
+                      </div>
+                    </div>
                     <canvas id="sprite3dPreviewCanvas" class="sprite3d-preview-canvas" width="360" height="320" aria-label="3D sprite preview"></canvas>
                     <div class="sprite3d-camera-controls" aria-label="3D preview camera controls">
                       <label>
                         <span title="yaw">Y</span>
-                        <button id="sprite3dCameraYawScrub" class="sprite3d-camera-scrub" type="button" data-sprite3d-camera="yaw" aria-label="Drag vertically to adjust yaw" title="Drag vertically to adjust yaw">340</button>
+                        <button id="sprite3dCameraYawScrub" class="sprite3d-camera-scrub" type="button" data-sprite3d-camera="yaw" aria-label="Adjust yaw" title="Yaw">340</button>
                       </label>
                       <label>
                         <span title="pitch">P</span>
-                        <button id="sprite3dCameraPitchScrub" class="sprite3d-camera-scrub" type="button" data-sprite3d-camera="pitch" aria-label="Drag vertically to adjust pitch" title="Drag vertically to adjust pitch">28</button>
+                        <button id="sprite3dCameraPitchScrub" class="sprite3d-camera-scrub" type="button" data-sprite3d-camera="pitch" aria-label="Adjust pitch" title="Pitch">28</button>
                       </label>
                       <label>
                         <span title="zoom">Z</span>
-                        <button id="sprite3dCameraZoomScrub" class="sprite3d-camera-scrub" type="button" data-sprite3d-camera="zoom" aria-label="Drag vertically to adjust zoom" title="Drag vertically to adjust zoom">1</button>
+                        <button id="sprite3dCameraZoomScrub" class="sprite3d-camera-scrub" type="button" data-sprite3d-camera="zoom" aria-label="Adjust zoom" title="Zoom">1</button>
                       </label>
                       <button id="sprite3dResetCameraButton" class="sprite3d-preview-reset-button sprite-icon-button" type="button" aria-label="Reset 3D preview camera" title="Reset camera">
                         <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -856,43 +874,18 @@
                       </button>
                     </div>
                   </div>
-                  <div class="sprite3d-slice-axis-control" role="group" aria-label="3D sprite slice and axis">
-                    <span class="sprite3d-layer-axis-label">Slices</span>
-                    <button id="sprite3dPreviousSliceButton" class="sprite-icon-button" type="button" aria-label="Move to lower slice" title="Lower slice">
-                      <svg viewBox="0 0 24 24" aria-hidden="true">
-                        <path d="M15 18l-6-6 6-6"></path>
-                      </svg>
-                    </button>
-                    <span class="sprite3d-slice-value-wrap" data-sprite3d-slice-scrub title="Drag horizontally to adjust slice">
-                      <input id="sprite3dSliceValue" class="sprite3d-layer-axis-value" type="number" min="1" max="5" value="1" inputmode="numeric" aria-label="Current 3D sprite slice">
-                      <span class="sprite3d-slice-total-separator" aria-hidden="true">/</span>
-                      <span id="sprite3dSliceTotal" class="sprite3d-slice-total">5</span>
-                    </span>
-                    <button id="sprite3dNextSliceButton" class="sprite-icon-button" type="button" aria-label="Move to higher slice" title="Higher slice">
-                      <svg viewBox="0 0 24 24" aria-hidden="true">
-                        <path d="M9 18l6-6-6-6"></path>
-                      </svg>
-                    </button>
-                    <span class="sprite3d-layer-axis-label">Axis</span>
-                    <div class="sprite3d-axis-control sprite3d-toolbar-axis" role="group" aria-label="3D sprite slice axis">
-                      <div class="sprite3d-axis-buttons">
-                        <button class="sprite3d-axis-button" type="button" data-sprite3d-axis="x" aria-pressed="false" title="Edit YZ slices">X</button>
-                        <button class="sprite3d-axis-button" type="button" data-sprite3d-axis="y" aria-pressed="false" title="Edit XZ slices">Y</button>
-                        <button class="sprite3d-axis-button is-active" type="button" data-sprite3d-axis="z" aria-pressed="true" title="Edit XY slices">Z</button>
-                      </div>
-                    </div>
-                  </div>
                 </div>
               </div>
+              <pre id="sprite3dTextPreview" class="sprite-text-preview sprite3d-text-preview" aria-label="3D sprite source preview"></pre>
             </div>
             <div class="source-action-group source-preview-actions sprite-source-actions sprite-footer-actions" role="group" aria-label="3D sprite source actions">
-              <button id="sprite3dExportButton" class="source-action-button source-copy-button" type="button" aria-label="Copy 3D sprite" title="Copy 3D sprite">
+              <button id="sprite3dExportButton" class="source-action-button source-copy-button" type="button" aria-label="Copy" title="Copy">
                 <svg viewBox="0 0 24 24" aria-hidden="true">
                   <rect x="8" y="8" width="14" height="14" rx="2"></rect>
                   <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path>
                 </svg>
               </button>
-              <button id="sprite3dInsertButton" class="source-action-button" type="button" aria-label="Add 3D sprite to source" title="Add 3D sprite to source">
+              <button id="sprite3dInsertButton" class="source-action-button" type="button" aria-label="Add source" title="Add source">
                 <svg viewBox="0 0 24 24" aria-hidden="true" class="lucide lucide-file-plus-corner-icon lucide-file-plus-corner">
                   <path d="M11.35 22H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.706.706l3.588 3.588A2.4 2.4 0 0 1 20 8v5.35"></path>
                   <path d="M14 2v5a1 1 0 0 0 1 1h5"></path>
@@ -900,7 +893,7 @@
                   <path d="M17 16v6"></path>
                 </svg>
               </button>
-              <button id="sprite3dUpdateButton" class="source-action-button is-primary" type="button" aria-label="Update matching 3D sprite in source" title="Update matching 3D sprite in source">
+              <button id="sprite3dUpdateButton" class="source-action-button is-primary" type="button" aria-label="Update source" title="Update source">
                 <svg viewBox="0 0 24 24" aria-hidden="true" class="lucide lucide-file-pen-line-icon lucide-file-pen-line">
                   <path d="M14.364 13.634a2 2 0 0 0-.506.854l-.837 2.87a.5.5 0 0 0 .62.62l2.87-.837a2 2 0 0 0 .854-.506l4.013-4.009a1 1 0 0 0-3.004-3.004z"></path>
                   <path d="M14.487 7.858A1 1 0 0 1 14 7V2"></path>
@@ -933,7 +926,7 @@
                   <iframe
                     id="level3dRuntimeFrame"
                     class="level3d-runtime-frame"
-                    title="3D level runtime preview"
+                    title="Runtime preview"
                     sandbox="allow-scripts"
                     scrolling="no"
                   ></iframe>
@@ -948,30 +941,30 @@
                   <div class="sprite3d-camera-controls level3d-preview-controls" aria-label="3D level preview controls">
                     <label>
                       <span title="yaw">Y</span>
-                      <button id="level3dCameraYawScrub" class="sprite3d-camera-scrub level3d-preview-scrub" type="button" data-level3d-preview="yaw" aria-label="Drag vertically to adjust yaw" title="Drag vertically to adjust yaw">15</button>
+                      <button id="level3dCameraYawScrub" class="sprite3d-camera-scrub level3d-preview-scrub" type="button" data-level3d-preview="yaw" aria-label="Adjust yaw" title="Yaw">15</button>
                     </label>
                     <label>
                       <span title="pitch">P</span>
-                      <button id="level3dCameraPitchScrub" class="sprite3d-camera-scrub level3d-preview-scrub" type="button" data-level3d-preview="pitch" aria-label="Drag vertically to adjust pitch" title="Drag vertically to adjust pitch">55</button>
+                      <button id="level3dCameraPitchScrub" class="sprite3d-camera-scrub level3d-preview-scrub" type="button" data-level3d-preview="pitch" aria-label="Adjust pitch" title="Pitch">55</button>
                     </label>
                     <label>
                       <span title="zoom">Z</span>
-                      <button id="level3dCameraZoomScrub" class="sprite3d-camera-scrub level3d-preview-scrub" type="button" data-level3d-preview="zoom" aria-label="Drag vertically to adjust zoom" title="Drag vertically to adjust zoom">1</button>
+                      <button id="level3dCameraZoomScrub" class="sprite3d-camera-scrub level3d-preview-scrub" type="button" data-level3d-preview="zoom" aria-label="Adjust zoom" title="Zoom">1</button>
                     </label>
                     <span class="level3d-preview-control-separator" aria-hidden="true"></span>
                     <label>
                       <span title="origin x">X</span>
-                      <button id="level3dOriginXScrub" class="sprite3d-camera-scrub level3d-preview-scrub" type="button" data-level3d-preview="originX" aria-label="Drag vertically to adjust origin x" title="Drag vertically to adjust origin x">0</button>
+                      <button id="level3dOriginXScrub" class="sprite3d-camera-scrub level3d-preview-scrub" type="button" data-level3d-preview="originX" aria-label="Adjust origin x" title="Origin X">0</button>
                     </label>
                     <label>
                       <span title="origin y">Y</span>
-                      <button id="level3dOriginYScrub" class="sprite3d-camera-scrub level3d-preview-scrub" type="button" data-level3d-preview="originY" aria-label="Drag vertically to adjust origin y" title="Drag vertically to adjust origin y">0</button>
+                      <button id="level3dOriginYScrub" class="sprite3d-camera-scrub level3d-preview-scrub" type="button" data-level3d-preview="originY" aria-label="Adjust origin y" title="Origin Y">0</button>
                     </label>
                     <label>
                       <span title="origin z">Z</span>
-                      <button id="level3dOriginZScrub" class="sprite3d-camera-scrub level3d-preview-scrub" type="button" data-level3d-preview="originZ" aria-label="Drag vertically to adjust origin z" title="Drag vertically to adjust origin z">0</button>
+                      <button id="level3dOriginZScrub" class="sprite3d-camera-scrub level3d-preview-scrub" type="button" data-level3d-preview="originZ" aria-label="Adjust origin z" title="Origin Z">0</button>
                     </label>
-                    <button id="level3dResetPreviewButton" class="sprite3d-preview-reset-button sprite-icon-button" type="button" aria-label="Reset 3D level preview view" title="Reset preview view">
+                    <button id="level3dResetPreviewButton" class="sprite3d-preview-reset-button sprite-icon-button" type="button" aria-label="Reset view" title="Reset view">
                       <svg viewBox="0 0 24 24" aria-hidden="true">
                         <path d="M21 12a9 9 0 0 1-15.4 6.36"></path>
                         <path d="M3 12a9 9 0 0 1 15.4-6.36"></path>
@@ -991,7 +984,7 @@
                       <path d="M15 18l-6-6 6-6"></path>
                     </svg>
                   </button>
-                  <span class="sprite3d-slice-value-wrap" data-level3d-slice-scrub title="Drag horizontally to adjust slice">
+                  <span class="sprite3d-slice-value-wrap" data-level3d-slice-scrub title="Adjust slice">
                     <input id="level3dLayerInput" class="sprite3d-layer-axis-value" type="number" min="1" max="1" value="1" inputmode="numeric" aria-label="Current 3D level slice">
                     <span class="sprite3d-slice-total-separator" aria-hidden="true">/</span>
                     <span id="level3dLayerTotal" class="sprite3d-slice-total">1</span>
@@ -1007,7 +1000,7 @@
                     <iframe
                       id="level3dLayerFrame"
                       class="level3d-layer-frame"
-                      title="Top-down 3D level layer"
+                      title="Layer preview"
                       sandbox="allow-scripts"
                       scrolling="no"
                     ></iframe>
@@ -1027,7 +1020,7 @@
               </div>
             </div>
             <div class="source-action-group source-preview-actions level-footer-actions level3d-source-actions" role="group" aria-label="3D level source actions">
-              <button id="level3dPlaytestButton" class="source-action-button level-playtest-button" type="button" aria-label="Play 3D level" title="Play 3D level">
+              <button id="level3dPlaytestButton" class="source-action-button level-playtest-button" type="button" aria-label="Play" title="Play">
                 <svg class="level-play-icon" viewBox="0 0 24 24" aria-hidden="true">
                   <polygon points="8 5 19 12 8 19 8 5"></polygon>
                 </svg>
@@ -1035,7 +1028,7 @@
                   <rect x="7" y="7" width="10" height="10" rx="1"></rect>
                 </svg>
               </button>
-              <button id="level3dSolveShortcutButton" class="source-action-button level-solve-shortcut-button" type="button" aria-label="Solve 3D level" title="Solve 3D level">
+              <button id="level3dSolveShortcutButton" class="source-action-button level-solve-shortcut-button" type="button" aria-label="Solve" title="Solve">
                 <svg class="solve-level-icon" viewBox="0 0 24 24" aria-hidden="true">
                   <circle cx="6" cy="19" r="3"></circle>
                   <path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"></path>
@@ -1046,13 +1039,13 @@
                   <path d="M18 6 6 18"></path>
                 </svg>
               </button>
-              <button id="copyLevel3dButton" class="source-action-button source-copy-button" type="button" aria-label="Copy 3D level" title="Copy 3D level">
+              <button id="copyLevel3dButton" class="source-action-button source-copy-button" type="button" aria-label="Copy" title="Copy">
                 <svg viewBox="0 0 24 24" aria-hidden="true">
                   <rect x="8" y="8" width="14" height="14" rx="2"></rect>
                   <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path>
                 </svg>
               </button>
-              <button id="addLevel3dButton" class="source-action-button" type="button" aria-label="Add 3D level to source" title="Add 3D level to source">
+              <button id="addLevel3dButton" class="source-action-button" type="button" aria-label="Add source" title="Add source">
                 <svg viewBox="0 0 24 24" aria-hidden="true" class="lucide lucide-file-plus-corner-icon lucide-file-plus-corner">
                   <path d="M11.35 22H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.706.706l3.588 3.588A2.4 2.4 0 0 1 20 8v5.35"></path>
                   <path d="M14 2v5a1 1 0 0 0 1 1h5"></path>
@@ -1060,7 +1053,7 @@
                   <path d="M17 16v6"></path>
                 </svg>
               </button>
-              <button id="updateLevel3dButton" class="source-action-button is-primary" type="button" aria-label="Update matching 3D level in source" title="Update matching 3D level in source">
+              <button id="updateLevel3dButton" class="source-action-button is-primary" type="button" aria-label="Update source" title="Update source">
                 <svg viewBox="0 0 24 24" aria-hidden="true" class="lucide lucide-file-pen-line-icon lucide-file-pen-line">
                   <path d="M14.364 13.634a2 2 0 0 0-.506.854l-.837 2.87a.5.5 0 0 0 .62.62l2.87-.837a2 2 0 0 0 .854-.506l4.013-4.009a1 1 0 0 0-3.004-3.004z"></path>
                   <path d="M14.487 7.858A1 1 0 0 1 14 7V2"></path>
@@ -1213,10 +1206,8 @@
       </section>
     </main>
 
-    <script src="/game.visuals.js"></script>
     <script src="/renderer.js"></script>
     <script src="/sound-generator.js"></script>
-    <script src="/editor_theme_imports.js"></script>
     <script src="/editor_dom.js"></script>
     <script src="/editor_workspace.js"></script>
     <script src="/editor_source.js"></script>
@@ -1225,7 +1216,7 @@
     <script src="/editor_workbench.js"></script>
     <script src="/editor.js"></script>
     <script src="/editor_sprite.js"></script>
-    <script src="/editor_sprite3d.js"></script>
+    <script src="/editor_sprite3d.js?v=sprite3d-preview-base-zoom"></script>
     <script src="/editor_sounds.js"></script>
   </body>
 </html>

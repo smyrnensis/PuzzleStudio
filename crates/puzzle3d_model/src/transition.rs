@@ -1,11 +1,13 @@
 use crate::{
-    Coord3, Game3, InputId3, ObjectId, Offset3, Patch3, PatchError3, PatchOp3, RuleId3, ScratchId3,
-    State3, StateError3,
+    Coord3, Game3, InputId3, LayerId, ObjectId, Offset3, Patch3, PatchError3, PatchOp3, RuleId3,
+    ScratchId3, State3, StateError3,
 };
 use puzzle_kernel::{LocalFrame, ScratchValueMatch};
 use std::collections::HashSet;
 
 pub type QueryKind3 = puzzle_kernel::QueryKind<ObjectId, Pattern3, InputId3>;
+pub type ObjectSetMatcher3 = puzzle_kernel::ObjectSetMatcher<ObjectId, LayerId>;
+pub type ObjectSetScratchPattern3 = puzzle_kernel::ObjectSetScratchPattern<ScratchId3>;
 
 const UNTIL_STABLE_REPEAT_LIMIT3: usize = 200;
 
@@ -13,9 +15,12 @@ const UNTIL_STABLE_REPEAT_LIMIT3: usize = 200;
 pub struct MatchCell3 {
     pub offset: Offset3,
     pub require_objects: Vec<ObjectId>,
+    pub require_object_sets: Vec<ObjectSetMatcher3>,
     pub forbid_objects: Vec<ObjectId>,
     pub require_scratch: Vec<ScratchPattern3>,
+    pub require_object_set_scratch: Vec<ObjectSetScratchPattern3>,
     pub forbid_scratch: Vec<ScratchPattern3>,
+    pub forbid_object_set_scratch: Vec<ObjectSetScratchPattern3>,
 }
 
 impl MatchCell3 {
@@ -23,9 +28,12 @@ impl MatchCell3 {
         Self {
             offset,
             require_objects: Vec::new(),
+            require_object_sets: Vec::new(),
             forbid_objects: Vec::new(),
             require_scratch: Vec::new(),
+            require_object_set_scratch: Vec::new(),
             forbid_scratch: Vec::new(),
+            forbid_object_set_scratch: Vec::new(),
         }
     }
 
@@ -207,9 +215,17 @@ pub enum WriteOp3 {
         offset: Offset3,
         object: ObjectId,
     },
+    AddObjectSet {
+        offset: Offset3,
+        binding: u16,
+    },
     Remove {
         offset: Offset3,
         object: ObjectId,
+    },
+    RemoveObjectSet {
+        offset: Offset3,
+        binding: u16,
     },
     Replace {
         offset: Offset3,
@@ -221,12 +237,18 @@ pub enum WriteOp3 {
         to_offset: Offset3,
         object: ObjectId,
     },
+    MoveObjectSet {
+        from_offset: Offset3,
+        to_offset: Offset3,
+        binding: u16,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TransitionError3 {
     Patch(PatchError3),
     OffsetOutOfBounds,
+    UnboundObjectSet { binding: u16 },
 }
 
 impl From<PatchError3> for TransitionError3 {
@@ -368,13 +390,13 @@ fn transition_rule_once(
         return Ok(next);
     }
     let scope = LocalFrameScope::new(state, local_frame);
-    let Some(origin) = first_match(game, state, &rule.pattern, &scope) else {
+    let Some(placement) = first_match(game, state, &rule.pattern, &scope) else {
         return Ok(next);
     };
-    if !writes_within_local_frame(origin, &rule.writes, &scope)? {
+    if !writes_within_local_frame(placement.origin, &rule.writes, &scope)? {
         return Ok(next);
     }
-    let patch = build_patch(origin, &rule.writes)?;
+    let patch = build_patch(&placement, &rule.writes)?;
     patch.apply(game, &mut next)?;
     Ok(next)
 }
@@ -415,21 +437,28 @@ fn transition_rule_once_all(
     }
 
     let scope = LocalFrameScope::new(state, local_frame);
-    let origins = all_matches(game, state, &rule.pattern, &scope);
-    if origins.is_empty() {
+    let placements = all_matches(game, state, &rule.pattern, &scope);
+    if placements.is_empty() {
         return Ok(state.clone());
     }
 
     let mut current = state.clone();
     let mut current_scope = LocalFrameScope::new(&current, local_frame);
-    for origin in origins {
-        if !pattern_matches_at(game, &current, &rule.pattern, origin, &current_scope)
-            || !writes_within_local_frame(origin, &rule.writes, &current_scope)?
-        {
+    for placement in placements {
+        let Some(placement) = pattern_placement_at(
+            game,
+            &current,
+            &rule.pattern,
+            placement.origin,
+            &current_scope,
+        ) else {
             continue;
-        }
+        };
+        if !writes_within_local_frame(placement.origin, &rule.writes, &current_scope)? {
+            continue;
+        };
 
-        let patch = build_patch(origin, &rule.writes)?;
+        let patch = build_patch(&placement, &rule.writes)?;
         match patch.apply(game, &mut current) {
             Ok(()) => {
                 current_scope = LocalFrameScope::new(&current, local_frame);
@@ -453,13 +482,13 @@ fn transition_rule_once_per_level(
         return Ok(next);
     }
     let scope = LocalFrameScope::new(state, local_frame);
-    let Some(origin) = first_match(game, state, &rule.pattern, &scope) else {
+    let Some(placement) = first_match(game, state, &rule.pattern, &scope) else {
         return Ok(next);
     };
-    if !writes_within_local_frame(origin, &rule.writes, &scope)? {
+    if !writes_within_local_frame(placement.origin, &rule.writes, &scope)? {
         return Ok(next);
     }
-    let patch = build_patch(origin, &rule.writes)?;
+    let patch = build_patch(&placement, &rule.writes)?;
     patch.apply(game, &mut next)?;
     next.mark_level_rule_fired(rule.id);
     Ok(next)
@@ -662,7 +691,9 @@ fn writes_within_local_frame(
     for write in writes {
         match *write {
             WriteOp3::Add { offset, .. }
+            | WriteOp3::AddObjectSet { offset, .. }
             | WriteOp3::Remove { offset, .. }
+            | WriteOp3::RemoveObjectSet { offset, .. }
             | WriteOp3::Replace { offset, .. } => {
                 let Some(position) = offset_pos(origin, offset) else {
                     return Err(TransitionError3::OffsetOutOfBounds);
@@ -672,6 +703,11 @@ fn writes_within_local_frame(
                 }
             }
             WriteOp3::Move {
+                from_offset,
+                to_offset,
+                ..
+            }
+            | WriteOp3::MoveObjectSet {
                 from_offset,
                 to_offset,
                 ..
@@ -691,23 +727,29 @@ fn writes_within_local_frame(
     Ok(true)
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct MatchPlacement3 {
+    origin: Coord3,
+    object_bindings: Vec<(u16, ObjectId)>,
+}
+
 fn first_match(
     game: &Game3,
     state: &State3,
     pattern: &Pattern3,
     scope: &LocalFrameScope<'_>,
-) -> Option<Coord3> {
+) -> Option<MatchPlacement3> {
     if let Some(candidates) = scope.origin_candidates(state) {
         return candidates
             .into_iter()
-            .find(|origin| pattern_matches_at(game, state, pattern, *origin, scope));
+            .find_map(|origin| pattern_placement_at(game, state, pattern, origin, scope));
     }
     for z in 0..state.size.height {
         for y in 0..state.size.depth {
             for x in 0..state.size.width {
                 let origin = Coord3 { x, y, z };
-                if pattern_matches_at(game, state, pattern, origin, scope) {
-                    return Some(origin);
+                if let Some(placement) = pattern_placement_at(game, state, pattern, origin, scope) {
+                    return Some(placement);
                 }
             }
         }
@@ -720,84 +762,140 @@ fn all_matches(
     state: &State3,
     pattern: &Pattern3,
     scope: &LocalFrameScope<'_>,
-) -> Vec<Coord3> {
-    let mut origins = Vec::new();
+) -> Vec<MatchPlacement3> {
+    let mut placements = Vec::new();
     if let Some(candidates) = scope.origin_candidates(state) {
-        origins.extend(
+        placements.extend(
             candidates
                 .into_iter()
-                .filter(|origin| pattern_matches_at(game, state, pattern, *origin, scope)),
+                .filter_map(|origin| pattern_placement_at(game, state, pattern, origin, scope)),
         );
-        return origins;
+        return placements;
     }
     for z in 0..state.size.height {
         for y in 0..state.size.depth {
             for x in 0..state.size.width {
                 let origin = Coord3 { x, y, z };
-                if pattern_matches_at(game, state, pattern, origin, scope) {
-                    origins.push(origin);
+                if let Some(placement) = pattern_placement_at(game, state, pattern, origin, scope) {
+                    placements.push(placement);
                 }
             }
         }
     }
-    origins
+    placements
 }
 
-fn pattern_matches_at(
+fn pattern_placement_at(
     game: &Game3,
     state: &State3,
     pattern: &Pattern3,
     origin: Coord3,
     scope: &LocalFrameScope<'_>,
-) -> bool {
-    pattern.cells.iter().all(|cell| {
+) -> Option<MatchPlacement3> {
+    let mut object_bindings = Vec::new();
+    for cell in &pattern.cells {
         let Some(position) = offset_pos(origin, cell.offset) else {
-            return false;
+            return None;
         };
         if state.check_pos(position).is_err() {
-            return false;
+            return None;
         }
         if !scope.contains_coord(position) {
-            return false;
+            return None;
         }
-        cell.require_objects
+        if !cell
+            .require_objects
             .iter()
             .all(|object| cell_requires_object(game, state, position, *object))
-            && cell
+            || !cell
                 .forbid_objects
                 .iter()
                 .all(|object| cell_forbids_object(game, state, position, *object))
-            && cell
-                .require_scratch
+        {
+            return None;
+        }
+        for object_set in &cell.require_object_sets {
+            let Ok(found) = state.get_layer(position, object_set.layer) else {
+                return None;
+            };
+            if found.is_empty() || !object_set.objects.contains(&found) {
+                return None;
+            }
+            if let Some((_, existing)) = object_bindings
                 .iter()
-                .all(|scratch| match scratch.match_value {
-                    ScratchValueMatch::Any => {
-                        state.has_scratch_key(game, position, scratch.object, scratch.scratch)
-                    }
-                    ScratchValueMatch::Exact => state.has_scratch(
-                        game,
-                        position,
-                        scratch.object,
-                        scratch.scratch,
-                        scratch.value,
-                    ),
-                })
-            && cell.forbid_scratch.iter().all(|scratch| {
-                let matched = match scratch.match_value {
-                    ScratchValueMatch::Any => {
-                        state.has_scratch_key(game, position, scratch.object, scratch.scratch)
-                    }
-                    ScratchValueMatch::Exact => state.has_scratch(
-                        game,
-                        position,
-                        scratch.object,
-                        scratch.scratch,
-                        scratch.value,
-                    ),
+                .find(|(binding, _)| *binding == object_set.binding)
+            {
+                if *existing != found {
+                    return None;
+                }
+            } else {
+                object_bindings.push((object_set.binding, found));
+            }
+        }
+        if !cell
+            .require_scratch
+            .iter()
+            .all(|scratch| scratch_pattern_matches(game, state, position, scratch.object, scratch))
+            || !cell.require_object_set_scratch.iter().all(|scratch| {
+                let Some(object) = bound_object(&object_bindings, scratch.binding) else {
+                    return false;
                 };
-                !matched
+                scratch_pattern_matches_bound(game, state, position, object, scratch)
             })
+            || !cell.forbid_scratch.iter().all(|scratch| {
+                !scratch_pattern_matches(game, state, position, scratch.object, scratch)
+            })
+            || !cell.forbid_object_set_scratch.iter().all(|scratch| {
+                let Some(object) = bound_object(&object_bindings, scratch.binding) else {
+                    return false;
+                };
+                !scratch_pattern_matches_bound(game, state, position, object, scratch)
+            })
+        {
+            return None;
+        }
+    }
+    Some(MatchPlacement3 {
+        origin,
+        object_bindings,
     })
+}
+
+fn bound_object(object_bindings: &[(u16, ObjectId)], binding: u16) -> Option<ObjectId> {
+    object_bindings
+        .iter()
+        .find(|(candidate, _)| *candidate == binding)
+        .map(|(_, object)| *object)
+}
+
+fn scratch_pattern_matches(
+    game: &Game3,
+    state: &State3,
+    position: Coord3,
+    object: ObjectId,
+    scratch: &ScratchPattern3,
+) -> bool {
+    match scratch.match_value {
+        ScratchValueMatch::Any => state.has_scratch_key(game, position, object, scratch.scratch),
+        ScratchValueMatch::Exact => {
+            state.has_scratch(game, position, object, scratch.scratch, scratch.value)
+        }
+    }
+}
+
+fn scratch_pattern_matches_bound(
+    game: &Game3,
+    state: &State3,
+    position: Coord3,
+    object: ObjectId,
+    scratch: &ObjectSetScratchPattern3,
+) -> bool {
+    match scratch.match_value {
+        ScratchValueMatch::Any => state.has_scratch_key(game, position, object, scratch.scratch),
+        ScratchValueMatch::Exact => {
+            state.has_scratch(game, position, object, scratch.scratch, scratch.value)
+        }
+    }
 }
 
 fn cell_requires_object(game: &Game3, state: &State3, position: Coord3, object: ObjectId) -> bool {
@@ -832,22 +930,41 @@ fn count_object(game: &Game3, state: &State3, object: ObjectId) -> u32 {
     count
 }
 
-fn build_patch(origin: Coord3, writes: &[WriteOp3]) -> Result<Patch3, TransitionError3> {
+fn build_patch(
+    placement: &MatchPlacement3,
+    writes: &[WriteOp3],
+) -> Result<Patch3, TransitionError3> {
     let mut patch = Patch3::new();
     for write in writes {
         match *write {
             WriteOp3::Add { offset, object } => {
                 patch.push(PatchOp3::Add {
-                    position: offset_pos(origin, offset)
+                    position: offset_pos(placement.origin, offset)
                         .ok_or(TransitionError3::OffsetOutOfBounds)?,
                     object,
                 });
             }
+            WriteOp3::AddObjectSet { offset, binding } => {
+                patch.push(PatchOp3::Add {
+                    position: offset_pos(placement.origin, offset)
+                        .ok_or(TransitionError3::OffsetOutOfBounds)?,
+                    object: bound_object(&placement.object_bindings, binding)
+                        .ok_or(TransitionError3::UnboundObjectSet { binding })?,
+                });
+            }
             WriteOp3::Remove { offset, object } => {
                 patch.push(PatchOp3::Remove {
-                    position: offset_pos(origin, offset)
+                    position: offset_pos(placement.origin, offset)
                         .ok_or(TransitionError3::OffsetOutOfBounds)?,
                     object,
+                });
+            }
+            WriteOp3::RemoveObjectSet { offset, binding } => {
+                patch.push(PatchOp3::Remove {
+                    position: offset_pos(placement.origin, offset)
+                        .ok_or(TransitionError3::OffsetOutOfBounds)?,
+                    object: bound_object(&placement.object_bindings, binding)
+                        .ok_or(TransitionError3::UnboundObjectSet { binding })?,
                 });
             }
             WriteOp3::Replace {
@@ -856,7 +973,7 @@ fn build_patch(origin: Coord3, writes: &[WriteOp3]) -> Result<Patch3, Transition
                 add,
             } => {
                 patch.push(PatchOp3::Replace {
-                    position: offset_pos(origin, offset)
+                    position: offset_pos(placement.origin, offset)
                         .ok_or(TransitionError3::OffsetOutOfBounds)?,
                     remove,
                     add,
@@ -868,10 +985,25 @@ fn build_patch(origin: Coord3, writes: &[WriteOp3]) -> Result<Patch3, Transition
                 object,
             } => {
                 patch.push(PatchOp3::Move {
-                    from: offset_pos(origin, from_offset)
+                    from: offset_pos(placement.origin, from_offset)
                         .ok_or(TransitionError3::OffsetOutOfBounds)?,
-                    to: offset_pos(origin, to_offset).ok_or(TransitionError3::OffsetOutOfBounds)?,
+                    to: offset_pos(placement.origin, to_offset)
+                        .ok_or(TransitionError3::OffsetOutOfBounds)?,
                     object,
+                });
+            }
+            WriteOp3::MoveObjectSet {
+                from_offset,
+                to_offset,
+                binding,
+            } => {
+                patch.push(PatchOp3::Move {
+                    from: offset_pos(placement.origin, from_offset)
+                        .ok_or(TransitionError3::OffsetOutOfBounds)?,
+                    to: offset_pos(placement.origin, to_offset)
+                        .ok_or(TransitionError3::OffsetOutOfBounds)?,
+                    object: bound_object(&placement.object_bindings, binding)
+                        .ok_or(TransitionError3::UnboundObjectSet { binding })?,
                 });
             }
         }

@@ -7,11 +7,13 @@ members = [
     "crates/lang",
     "crates/solver",
     "crates/play",
+    "crates/game_runtime",
     "crates/ascii_play",
     "crates/html_play",
     "crates/html_editor",
     "crates/cli",
     "crates/wasm",
+    "crates/wasm_game",
     "crates/wasm_core",
     "src-tauri",
 ]

@@ -4,10 +4,11 @@ use crate::{
     ANIMATION_BLOCK_OPTIONS, ANIMATION_TWEEN_OPTIONS, LEVEL_MENU_OPTIONS, LevelPathPartSyntax,
     MUSIC_SOUND_SETTING_OPTIONS, MapHeaderTokenSyntax, PUZZLE_RENDER_BLOCK_OPTIONS,
     PUZZLE_RENDER_GRID_OPTIONS, RewriteEffectCommandSyntax, SFX_SOUND_SETTING_OPTIONS,
-    SceneStateLhsSyntax, SoundSettingValueSyntax, level_path_part_syntax, map_header_token_syntax,
-    metadata_directive_value_token_index, rewrite_direction_prefix_token_index,
-    rewrite_effect_command_syntax, rewrite_effect_semantic_tokens, scene_effect_command_syntax,
-    scene_effect_semantic_tokens, scene_state_lhs_syntax, sound_setting_value_syntax,
+    SceneStateLhsSyntax, SoundSettingValueSyntax, THEME_SETTING_SPECS, level_path_part_syntax,
+    map_header_token_syntax, metadata_directive_value_token_index,
+    rewrite_direction_prefix_token_index, rewrite_effect_command_syntax,
+    rewrite_effect_semantic_tokens, scene_effect_command_syntax, scene_effect_semantic_tokens,
+    scene_state_lhs_syntax, sound_setting_value_syntax,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -24,7 +25,7 @@ pub enum SemanticKind {
     Query,
     Scene,
     Asset,
-    Option,
+    Setting,
     Number,
     String,
 }
@@ -69,7 +70,14 @@ pub(crate) enum SemanticCompletionSlot {
     MusicAssets,
     Sprites,
     Assets,
-    Options(&'static [&'static str]),
+    Themes,
+    Settings(SettingCompletionSet),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SettingCompletionSet {
+    Static(&'static [&'static str]),
+    Theme,
 }
 
 pub fn semantic_tokens(source: &str) -> Vec<SemanticToken> {
@@ -105,6 +113,8 @@ pub(crate) fn semantic_completion_context(
         vec![SemanticCompletionSlot::Scenes]
     } else if previous.as_deref() == Some("of") {
         vec![SemanticCompletionSlot::Puzzles]
+    } else if previous.as_deref() == Some("theme") {
+        vec![SemanticCompletionSlot::Themes]
     } else if previous.as_deref() == Some("sfx") && !sounds_definition_scope {
         vec![SemanticCompletionSlot::SfxAssets]
     } else if matches!(
@@ -191,11 +201,11 @@ fn sound_setting_completion_slots(
         .filter(|token| !token.is_empty())
         .collect::<Vec<_>>();
     match tokens.as_slice() {
-        ["sfx", _, ..] => Some(vec![SemanticCompletionSlot::Options(
-            SFX_SOUND_SETTING_OPTIONS,
+        ["sfx", _, ..] => Some(vec![SemanticCompletionSlot::Settings(
+            SettingCompletionSet::Static(SFX_SOUND_SETTING_OPTIONS),
         )]),
-        ["music", _, ..] => Some(vec![SemanticCompletionSlot::Options(
-            MUSIC_SOUND_SETTING_OPTIONS,
+        ["music", _, ..] => Some(vec![SemanticCompletionSlot::Settings(
+            SettingCompletionSet::Static(MUSIC_SOUND_SETTING_OPTIONS),
         )]),
         _ => None,
     }
@@ -235,13 +245,20 @@ fn option_completion_slots(
         (Some(OptionBlock::Grid2), _) => PUZZLE_RENDER_GRID_OPTIONS,
         (Some(OptionBlock::Tween), _) => ANIMATION_TWEEN_OPTIONS,
         (Some(OptionBlock::LevelMenu), _) => LEVEL_MENU_OPTIONS,
+        (Some(OptionBlock::Theme), _) => {
+            return Some(vec![SemanticCompletionSlot::Settings(
+                SettingCompletionSet::Theme,
+            )]);
+        }
         (Some(OptionBlock::Render3), _) => puzzle3d_model::RENDER_OPTIONS3,
         (Some(OptionBlock::Render2), _) => PUZZLE_RENDER_BLOCK_OPTIONS,
         (Some(OptionBlock::Animation), _) => ANIMATION_BLOCK_OPTIONS,
         _ => return None,
     };
 
-    Some(vec![SemanticCompletionSlot::Options(option_names)])
+    Some(vec![SemanticCompletionSlot::Settings(
+        SettingCompletionSet::Static(option_names),
+    )])
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -257,6 +274,7 @@ enum OptionBlock {
     Animation,
     Tween,
     LevelMenu,
+    Theme,
     Other,
 }
 
@@ -280,6 +298,7 @@ fn option_block_before_line(
                 | OptionBlock::Animation
                 | OptionBlock::Tween
                 | OptionBlock::LevelMenu
+                | OptionBlock::Theme
         )
     })
 }
@@ -308,6 +327,7 @@ fn line_opens_option_block(line: &crate::source::SourceContextLine) -> bool {
                 name.as_str(),
                 "puzzle" | "puzzle3" | "render" | "camera" | "grid" | "pixelate"
                     | "animation" | "tween" | "level_menu"
+                    | "theme"
             )
         )
 }
@@ -328,6 +348,7 @@ fn option_block_for_opening(tokens: &[String], stack: &[OptionBlock]) -> OptionB
         "animation" => OptionBlock::Animation,
         "tween" if stack.last() == Some(&OptionBlock::Animation) => OptionBlock::Tween,
         "level_menu" => OptionBlock::LevelMenu,
+        "theme" => OptionBlock::Theme,
         _ => OptionBlock::Other,
     }
 }
@@ -654,7 +675,6 @@ const SCENE_COMPLETION_KEYWORDS: &[&str] = &[
     "inputs",
     "keys",
     "level_menu",
-    "menu",
     "message",
     "on_scene_start",
     "box",
@@ -820,7 +840,7 @@ fn scan_sounds_setting_token(token: LineToken<'_>, ranges: &mut Vec<SemanticToke
     if key.is_empty() || value.is_empty() {
         return;
     }
-    add_token_subrange(ranges, token, 0, key.len(), SemanticKind::Keyword);
+    add_token_subrange(ranges, token, 0, key.len(), SemanticKind::Setting);
     let value_start = key.len() + 1;
     let value_kind = match value_syntax {
         SoundSettingValueSyntax::String => SemanticKind::String,
@@ -963,6 +983,7 @@ fn scan_option_semantic_tokens(
                     | OptionBlock::Animation
                     | OptionBlock::Tween
                     | OptionBlock::LevelMenu
+                    | OptionBlock::Theme
             )
         });
         let line_tokens = source_tokens_as_line_tokens(&line.token_spans);
@@ -981,7 +1002,7 @@ fn scan_option_semantic_line(
     };
     match block {
         Some(OptionBlock::Render3) if puzzle3d_model::RENDER_OPTIONS3.contains(&first.text) => {
-            add_token_range(ranges, first, SemanticKind::Option);
+            add_token_range(ranges, first, SemanticKind::Setting);
             match first.text {
                 "camera" => {
                     scan_option_tokens(&tokens[1..], puzzle3d_model::CAMERA_OPTIONS3, ranges)
@@ -996,7 +1017,7 @@ fn scan_option_semantic_line(
             }
         }
         Some(OptionBlock::Render2) if PUZZLE_RENDER_BLOCK_OPTIONS.contains(&first.text) => {
-            add_token_range(ranges, first, SemanticKind::Option);
+            add_token_range(ranges, first, SemanticKind::Setting);
             if first.text == "grid" {
                 scan_option_tokens(&tokens[1..], PUZZLE_RENDER_GRID_OPTIONS, ranges);
             }
@@ -1012,13 +1033,14 @@ fn scan_option_semantic_line(
         }
         Some(OptionBlock::Grid2) => scan_option_tokens(tokens, PUZZLE_RENDER_GRID_OPTIONS, ranges),
         Some(OptionBlock::Animation) if ANIMATION_BLOCK_OPTIONS.contains(&first.text) => {
-            add_token_range(ranges, first, SemanticKind::Option);
+            add_token_range(ranges, first, SemanticKind::Setting);
             if first.text == "tween" {
                 scan_option_tokens(&tokens[1..], ANIMATION_TWEEN_OPTIONS, ranges);
             }
         }
         Some(OptionBlock::Tween) => scan_option_tokens(tokens, ANIMATION_TWEEN_OPTIONS, ranges),
         Some(OptionBlock::LevelMenu) => scan_option_tokens(tokens, LEVEL_MENU_OPTIONS, ranges),
+        Some(OptionBlock::Theme) => scan_theme_setting_tokens(tokens, ranges),
         _ => {}
     }
 }
@@ -1042,7 +1064,31 @@ fn scan_option_tokens(
                 *token,
                 relative_start,
                 relative_start + name.len(),
-                SemanticKind::Option,
+                SemanticKind::Setting,
+            );
+        }
+    }
+}
+
+fn scan_theme_setting_tokens(tokens: &[LineToken<'_>], ranges: &mut Vec<SemanticToken>) {
+    for token in tokens {
+        let name = token
+            .text
+            .trim_start_matches("--")
+            .split_once('=')
+            .map_or(token.text, |(name, _)| name);
+        let normalized = name.replace('_', "-").to_ascii_lowercase();
+        if THEME_SETTING_SPECS.iter().any(|spec| {
+            normalized == spec.canonical.replace('_', "-")
+                || spec.aliases.iter().any(|alias| normalized == *alias)
+        }) && let Some(relative_start) = token.text.find(name)
+        {
+            add_token_subrange(
+                ranges,
+                *token,
+                relative_start,
+                relative_start + name.len(),
+                SemanticKind::Setting,
             );
         }
     }

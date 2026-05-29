@@ -816,7 +816,6 @@ fn source_opens_block(line: &str, tokens: &[&str], current: Option<SourceScope>)
             | ["box", ..]
             | ["for", ..]
             | ["level_menu", ..]
-            | ["menu", ..]
             | ["puzzle", ..]
             | ["puzzle3", ..]
             | ["input", ..]
@@ -867,7 +866,6 @@ fn source_opens_block(line: &str, tokens: &[&str], current: Option<SourceScope>)
                 | ["box", ..]
                 | ["for", ..]
                 | ["level_menu", ..]
-                | ["menu", ..]
         )
 }
 
@@ -879,7 +877,6 @@ fn opening_scope(line: &str, tokens: &[&str], current: Option<SourceScope>) -> O
             | ["column", ..]
             | ["box", ..]
             | ["for", ..]
-            | ["menu", ..]
             | ["puzzle", ..]
             | ["puzzle3", ..] => {
                 return Some(SourceScope::SceneLayout);

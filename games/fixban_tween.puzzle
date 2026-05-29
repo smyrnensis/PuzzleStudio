@@ -2,6 +2,10 @@ title "Fixban Tween"
 subtitle "Canonical Fixban with movement tween"
 author "PuzzleStudio"
 
+theme puzzlescript {
+	background_color #444
+}
+
 default_wait_time = 100ms
 
 animation {
@@ -94,10 +98,10 @@ puzzle fixban {
 		@fill_floor
 		@refresh_board
 	}
-
 	rules {
-		input directions [ Box:P ] -> [ > Box:P ]
-		[ > Box:kind | Box:kind ] -> [ > Box:kind | > Box:kind ]
+		input [ Box:P ] -> [ > Box:P ]
+		[ > Box:* | Box:* ] -> [ > Box:* | > Box:* ]
+		[ > Box:* @light ] -> [ > Box:* > @light ]
 		move
 		for k in kind {
 			[ Box:k Target:k ] -> [ Wall ]

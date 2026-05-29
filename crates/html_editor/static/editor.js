@@ -206,17 +206,136 @@ function renderSpriteScaleControl({
   }
   const maxScale = Math.floor(maxSize / size);
   const factor = spriteEditorScaleFactor(scaleInput, maxSize);
-  const capitalizedNoun = `${noun.slice(0, 1).toUpperCase()}${noun.slice(1)}`;
   scaleInput.max = String(Math.max(2, size, maxScale));
   scaleInput.disabled = false;
   scaleUpButton.disabled = maxScale < 2 || factor > maxScale;
   scaleUpButton.title = maxScale < 2
-    ? `${capitalizedNoun} is already at maximum size`
-    : `Scale up ${noun} by ${factor}x`;
+    ? "Max size"
+    : `Scale up by ${factor}x`;
   scaleDownButton.disabled = !canScaleDown(factor);
   scaleDownButton.title = scaleDownButton.disabled
-    ? `Scale down requires size divisible by ${factor}`
-    : `Scale down ${noun} by ${factor}x`;
+    ? "Not divisible"
+    : `Scale down by ${factor}x`;
+}
+
+const editorHoverTooltipSelector = [
+  ".level-builder button",
+  ".sprite-builder button",
+  ".source-preview-actions .source-action-button",
+].join(", ");
+let editorHoverTooltip = null;
+let editorHoverTooltipTarget = null;
+
+function editorTooltipTargetFromEventTarget(target) {
+  const element = target instanceof Element ? target.closest(editorHoverTooltipSelector) : null;
+  if (!element || element.classList.contains("sprite-cell")) {
+    return null;
+  }
+  return element;
+}
+
+function editorTooltipText(element) {
+  return String(
+    element?.dataset?.tooltip
+      || element?.getAttribute("title")
+      || element?.dataset?.hoverTitle
+      || element?.getAttribute("aria-label")
+      || "",
+  ).trim();
+}
+
+function ensureEditorHoverTooltip() {
+  if (!editorHoverTooltip) {
+    editorHoverTooltip = document.createElement("div");
+    editorHoverTooltip.className = "editor-hover-tooltip";
+    editorHoverTooltip.hidden = true;
+    document.body.append(editorHoverTooltip);
+  }
+  return editorHoverTooltip;
+}
+
+function positionEditorHoverTooltip() {
+  if (!editorHoverTooltipTarget || !editorHoverTooltip || editorHoverTooltip.hidden) {
+    return;
+  }
+  const margin = 8;
+  const gap = 6;
+  const targetRect = editorHoverTooltipTarget.getBoundingClientRect();
+  const tooltipRect = editorHoverTooltip.getBoundingClientRect();
+  const maxLeft = Math.max(margin, window.innerWidth - tooltipRect.width - margin);
+  const left = Math.min(maxLeft, Math.max(margin, targetRect.left + (targetRect.width - tooltipRect.width) / 2));
+  const topAbove = targetRect.top - tooltipRect.height - gap;
+  const placeBelow = topAbove < margin;
+  const top = placeBelow
+    ? Math.min(window.innerHeight - tooltipRect.height - margin, targetRect.bottom + gap)
+    : topAbove;
+  editorHoverTooltip.dataset.placement = placeBelow ? "below" : "above";
+  editorHoverTooltip.style.left = `${Math.round(left)}px`;
+  editorHoverTooltip.style.top = `${Math.round(Math.max(margin, top))}px`;
+}
+
+function showEditorHoverTooltip(element) {
+  const text = editorTooltipText(element);
+  if (!text) {
+    hideEditorHoverTooltip(element);
+    return;
+  }
+  editorHoverTooltipTarget = element;
+  if (element.hasAttribute("title")) {
+    element.dataset.hoverTitle = element.getAttribute("title") || "";
+    element.removeAttribute("title");
+  }
+  const tooltip = ensureEditorHoverTooltip();
+  tooltip.textContent = text;
+  tooltip.hidden = false;
+  positionEditorHoverTooltip();
+}
+
+function hideEditorHoverTooltip(element = editorHoverTooltipTarget) {
+  if (element?.dataset?.hoverTitle !== undefined) {
+    if (!element.hasAttribute("title")) {
+      element.setAttribute("title", element.dataset.hoverTitle);
+    }
+    delete element.dataset.hoverTitle;
+  }
+  if (editorHoverTooltip) {
+    editorHoverTooltip.hidden = true;
+    editorHoverTooltip.textContent = "";
+  }
+  if (!element || element === editorHoverTooltipTarget) {
+    editorHoverTooltipTarget = null;
+  }
+}
+
+function installEditorHoverTooltips() {
+  document.addEventListener("pointerover", (event) => {
+    const target = editorTooltipTargetFromEventTarget(event.target);
+    if (!target || target === editorHoverTooltipTarget) {
+      return;
+    }
+    showEditorHoverTooltip(target);
+  });
+  document.addEventListener("pointerout", (event) => {
+    const target = editorTooltipTargetFromEventTarget(event.target);
+    if (!target || target !== editorHoverTooltipTarget || target.contains(event.relatedTarget)) {
+      return;
+    }
+    hideEditorHoverTooltip(target);
+  });
+  document.addEventListener("focusin", (event) => {
+    const target = editorTooltipTargetFromEventTarget(event.target);
+    if (target) {
+      showEditorHoverTooltip(target);
+    }
+  });
+  document.addEventListener("focusout", (event) => {
+    const target = editorTooltipTargetFromEventTarget(event.target);
+    if (target && target === editorHoverTooltipTarget) {
+      hideEditorHoverTooltip(target);
+    }
+  });
+  window.addEventListener("scroll", positionEditorHoverTooltip, true);
+  window.addEventListener("resize", positionEditorHoverTooltip);
 }
 
 let latestHtml = "";
@@ -1186,7 +1305,11 @@ function embedStandaloneRuntimeWasm(html) {
 }
 
 function standaloneRuntimeWasmBootstrapScript(embedded) {
-  return `window.PuzzleStandaloneEmbeddedWasm = { moduleSource: ${JSON.stringify(embedded.moduleSource)}, wasmBase64: ${JSON.stringify(embedded.wasmBase64)} };
+  const runtimeEmbedded = window.PuzzleStudioEmbeddedGameWasm || embedded;
+  if (!runtimeEmbedded?.moduleSource || !runtimeEmbedded?.wasmBase64) {
+    return "";
+  }
+  return `window.PuzzleStandaloneEmbeddedWasm = { moduleSource: ${JSON.stringify(runtimeEmbedded.moduleSource)}, wasmBase64: ${JSON.stringify(runtimeEmbedded.wasmBase64)} };
 window.PuzzleRuntimeWasmLoader = window.PuzzleRuntimeWasmLoader || (() => {
   let modulePromise = null;
   function base64ToUint8Array(value) {
@@ -3265,9 +3388,14 @@ function syncPreviewModeButtonState() {
 
 function setPreviewMode(mode, options = {}) {
   const wasLevelMode = isPaneVisible("level") || isPaneVisible("solver");
+  const wasSpriteMode = currentPreviewMode === "sprite";
   const previewMode = normalizePreviewMode(mode);
+  hideEditorHoverTooltip();
   if (previewMode !== "edit" && levelPlaytestActive) {
     stopLevelPlaytest({ syncPreview: false });
+  }
+  if (wasSpriteMode && previewMode !== "sprite" && sprite) {
+    sprite.shapeTagPickerOpen = false;
   }
   if (!options.skipPaneSync) {
     showPreviewModePane(previewMode);
@@ -3700,7 +3828,11 @@ function loadLevelSourceTarget(target, options = {}) {
   levelIndex = setActiveLevelIndex(levelIndex);
   const levelName = levels[levelIndex]?.name || target.name || `level_${levelIndex + 1}`;
   const source = sourceEditor.value || "";
-  if (!loadLevelFromSourceEntry(source, target, { levelIndex, levelName })) {
+  const sourceEntry = sourceEditableEntryFromTarget(source, target, {
+    find: findLevelDefinitionAtPosition,
+    defaultName: "level_1",
+  });
+  if (!loadLevelFromSourceEntry(source, sourceEntry, { levelIndex, levelName })) {
     loadLevelFromPreviewState();
   }
   setLevelNameInputs(levelName);
@@ -4128,19 +4260,45 @@ function currentLevelSourceLocation() {
 }
 
 function findLevelSourceEntries(source, document) {
-  const lines = editorSourceLinesWithOffsets(source);
   const entries = [];
+  const seen = new Set();
+  if (typeof findLevelsRanges === "function" && typeof findLevelDefinitions === "function") {
+    for (const range of findLevelsRanges(source) || []) {
+      for (const entry of findLevelDefinitions(source, range) || []) {
+        const key = `${entry.start}:${entry.end}`;
+        if (seen.has(key)) {
+          continue;
+        }
+        seen.add(key);
+        entries.push({
+          document,
+          name: entry.name || "",
+          start: entry.start,
+          end: entry.end,
+          levelIndex: entry.levelIndex,
+        });
+      }
+    }
+  }
+
+  const lines = editorSourceLinesWithOffsets(source);
   for (const line of lines) {
     const code = stripLineCommentForWasm(line.raw).trim();
     const match = code.match(/^level(?:\s+(.+?))?\s*(?:\{|$)/);
     if (!match) {
       continue;
     }
+    const start = firstEditorSourceCodeIndex(line);
+    const key = `${start}:${line.absoluteEnd}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
     const rawName = String(match[1] || "").trim();
     entries.push({
       document,
       name: rawName.replace(/\s*\{\s*$/, ""),
-      start: firstEditorSourceCodeIndex(line),
+      start,
       end: line.absoluteEnd,
     });
   }
@@ -4713,11 +4871,21 @@ function assignLevelLevelIndexes(entries) {
       levelIndex = Math.max(0, Math.min(levels.length - 1, ordinal));
     }
     usedIndexes.add(levelIndex);
+    const levelName = levels[levelIndex]?.name || unnamedLevelEntryName(entry, ordinal);
     return {
       ...entry,
+      name: entry.name || levelName,
       levelIndex,
     };
   });
+}
+
+function unnamedLevelEntryName(entry, ordinal) {
+  if (String(entry?.name || "").trim()) {
+    return "";
+  }
+  const index = Number.isInteger(entry?.levelIndex) ? entry.levelIndex : ordinal;
+  return `unnamed level ${Math.max(0, index) + 1}`;
 }
 
 function makeEmptyCells(width, height) {
@@ -5073,88 +5241,6 @@ function applyPreviewSceneToLevel(scene) {
   return true;
 }
 
-function previewSolverSceneFromState(state = latestPreviewState) {
-  if (state?.rawScene?.width && state.rawScene?.height && Array.isArray(state.rawScene?.cells)) {
-    return state.rawScene;
-  }
-  if (state?.scene?.width && state.scene?.height && Array.isArray(state.scene?.cells)) {
-    return state.scene;
-  }
-  return null;
-}
-
-function solveCurrentPreviewState() {
-  const exportData = previewExport || extractPreviewExport(latestHtml);
-  if (!exportData) {
-    setStatus("No preview to solve", "is-error");
-    return;
-  }
-  if (isPuzzle3dExport(exportData)) {
-    const snapshot = latestPreviewState?.puzzle3Snapshot;
-    if (!snapshot || !Array.isArray(snapshot.cells)) {
-      openPreviewModePane("solver");
-      setLevelSolveStatus("No current 3D preview state to solve", "is-error");
-      return;
-    }
-    const levelIndex = Number.isInteger(Number(snapshot.levelIndex))
-      ? Math.trunc(Number(snapshot.levelIndex))
-      : currentSolverLevelIndex(exportData);
-    const stagedStateData = puzzle3dStateDataFromSnapshot(snapshot, exportData, {
-      levelIndex,
-      materializedLevelStart: true,
-    });
-    if (!stagedStateData) {
-      openPreviewModePane("solver");
-      setLevelSolveStatus("Could not stage current 3D preview state", "is-error");
-      return;
-    }
-    setSolverTargetFromState({
-      exportData,
-      levelIndex,
-      stateData: stagedStateData,
-      puzzle3dSnapshot: snapshot,
-    });
-    openPreviewModePane("solver");
-    syncSourceFromPreviewPane("solver");
-    renderSolverBoard();
-    solveLevel({ preserveStagedSolver: true });
-    return;
-  }
-  if (activeLevelSolveRequest) {
-    openPreviewModePane("solver");
-    syncSourceFromPreviewPane("solver");
-    return;
-  }
-  const state = latestPreviewState;
-  const scene = previewSolverSceneFromState(state);
-  if (!state || state.screenHasPuzzle === false || !scene) {
-    setStatus("No current puzzle state to solve", "is-error");
-    return;
-  }
-
-  ensurePreviewTargetsActiveDocument();
-  const levelIndex = Number.isInteger(Number(state.levelIndex))
-    ? Math.trunc(Number(state.levelIndex))
-    : currentSolverLevelIndex(exportData);
-  openPreviewModePane("solver");
-  syncSourceFromPreviewPane("solver");
-  const stagedStateData = stateDataFromScene(scene, exportData, levelIndex);
-  if (!stagedStateData || !Array.isArray(scene.cells) || !scene.cells.length) {
-    setLevelSolveStatus("Could not stage current preview state", "is-error");
-    return;
-  }
-  setSolverTargetFromState({
-    exportData,
-    levelIndex,
-    stateData: stagedStateData,
-    scene,
-  });
-  renderSolverBoard();
-  solveLevel({
-    preserveStagedSolver: true,
-  });
-}
-
 function initialPreviewScene() {
   return previewSceneForLevel(previewExport?.initialLevelIndex || 0);
 }
@@ -5487,7 +5573,7 @@ function syncLevelResizeControls() {
     button.textContent = mode === "shrink" ? "−" : "+";
     button.classList.toggle("is-shrink", mode === "shrink");
     button.setAttribute("aria-label", `${action} ${axis} ${side}`.trim());
-    button.title = `${action} ${axis} ${side}`.trim();
+    button.title = `${action} ${axis}`.trim();
     button.disabled = levelPlaytestActive || !mode;
   });
 }
@@ -5498,7 +5584,7 @@ function syncLevelBucketButton() {
   }
   levelFillButton.classList.toggle("is-active", levelBucketActive);
   levelFillButton.setAttribute("aria-pressed", String(levelBucketActive));
-  levelFillButton.setAttribute("aria-label", "Bucket fill connected area");
+  levelFillButton.setAttribute("aria-label", "Fill");
   levelFillButton.title = "Fill";
   levelFillButton.dataset.tooltip = "Fill";
 }
@@ -5650,13 +5736,13 @@ function renderLevelScopeControl() {
     {
       button: levelScopeLayerButton,
       scope: "layer",
-      label: "Edit scope: current layer",
+      label: "Mono layer",
       title: "Mono layer",
     },
     {
       button: levelScopeAllButton,
       scope: "all",
-      label: "Edit scope: all layers",
+      label: "All layers",
       title: "All layers",
     },
   ];
@@ -6437,7 +6523,7 @@ function cancelLevelSolve() {
 }
 
 function setSolveLevelButtonState(isSolving) {
-  const label = isSolving ? "Cancel solve" : "Solve level";
+  const label = isSolving ? "Cancel" : "Solve";
   const visibleLabel = isSolving ? "Cancel" : "Solve";
   for (const button of [solveLevelButton, levelSolveShortcutButton, level3dSolveShortcutButton]) {
     if (!button) {
@@ -7308,8 +7394,9 @@ function extractPreviewExport(html) {
     return null;
   }
   for (const candidate of [
-    { kind: "puzzle2d", pattern: /window\.PuzzleExport\s*=\s*JSON\.parse\(("(?:(?:\\.)|[^"\\])*")\);/ },
+    { kind: "puzzle3d", pattern: /window\.Puzzle3DFrameFixture\s*=\s*JSON\.parse\(("(?:(?:\\.)|[^"\\])*")\);/ },
     { kind: "puzzle3d", pattern: /window\.Puzzle3DFixture\s*=\s*JSON\.parse\(("(?:(?:\\.)|[^"\\])*")\);/ },
+    { kind: "puzzle2d", pattern: /window\.PuzzleExport\s*=\s*JSON\.parse\(("(?:(?:\\.)|[^"\\])*")\);/ },
   ]) {
     const match = html.match(candidate.pattern);
     if (!match) {
@@ -7332,9 +7419,9 @@ function extractPreviewExport(html) {
 function replacePreviewExport(html, exportData) {
   const encoded = JSON.stringify(JSON.stringify(exportData));
   const pattern = exportData?.__kind === "puzzle3d"
-    ? /window\.Puzzle3DFixture\s*=\s*JSON\.parse\("(?:(?:\\.)|[^"\\])*"\);/
+    ? /window\.Puzzle3DFrameFixture\s*=\s*JSON\.parse\("(?:(?:\\.)|[^"\\])*"\);|window\.Puzzle3DFixture\s*=\s*JSON\.parse\("(?:(?:\\.)|[^"\\])*"\);/
     : /window\.PuzzleExport\s*=\s*JSON\.parse\("(?:(?:\\.)|[^"\\])*"\);/;
-  const globalName = exportData?.__kind === "puzzle3d" ? "Puzzle3DFixture" : "PuzzleExport";
+  const globalName = exportData?.__kind === "puzzle3d" ? "Puzzle3DFrameFixture" : "PuzzleExport";
   const nextHtml = html.replace(pattern, `window.${globalName} = JSON.parse(${encoded});`);
   return nextHtml === html ? "" : nextHtml;
 }
@@ -8088,10 +8175,14 @@ function sourceTitleMatches(existing, title, namespace = "") {
   const requested = editableLevelName(title);
   const requestedNamespace = sanitizeLevelNamespace(editableLevelNamespace(title) || namespace);
   const existingNamespace = sanitizeLevelNamespace(editableLevelNamespace(existingTitle) || namespace);
+  const editableExisting = editableLevelName(existingTitle);
+  const normalizedExisting = sanitizeLevelName(editableExisting);
+  const normalizedRequested = sanitizeLevelName(requested);
   return existingTitle === requested
     || existingTitle.endsWith(`.${requested}`)
+    || (normalizedExisting && normalizedRequested && normalizedExisting === normalizedRequested)
     || (
-      editableLevelName(existingTitle) === requested
+      editableExisting === requested
       && (!requestedNamespace || !existingNamespace || requestedNamespace === existingNamespace)
     );
 }
@@ -8195,7 +8286,6 @@ function findMatchingBrace(source, openIndex) {
 
 runButton.addEventListener("click", runPreviewFromSourcePane);
 previewRefreshButton?.addEventListener("click", renderPreview);
-previewSolveButton?.addEventListener("click", solveCurrentPreviewState);
 clearPreviewLogButton?.addEventListener("click", clearPreviewLog);
 saveButton.addEventListener("click", () => {
   saveCurrentDocument(true).catch((error) => {
@@ -8791,6 +8881,7 @@ solutionExportButton.addEventListener("click", exportSolution);
 solutionSeekInput.addEventListener("input", seekSolutionStep);
 solutionSeekInput.addEventListener("change", seekSolutionStep);
 
+installEditorHoverTooltips();
 bindSourceEditorEvents();
 bindSourceEditorPopoverEvents();
 registerSourceEditableTarget?.("level", {
