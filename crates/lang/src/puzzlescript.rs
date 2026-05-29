@@ -269,11 +269,16 @@ fn parse_theme_colors(prelude: &[String]) -> Vec<(String, String)> {
     let mut colors = Vec::new();
     for line in prelude {
         let tokens = line.split_whitespace().collect::<Vec<_>>();
-        let [name @ ("background_color" | "text_color"), value] = tokens.as_slice() else {
+        let [name, value] = tokens.as_slice() else {
             continue;
         };
+        let name = match name.to_ascii_lowercase().as_str() {
+            "background" | "background_color" => "background_color",
+            "text_color" => "text_color",
+            _ => continue,
+        };
         if let Some(color) = ps_color_to_canonical(value) {
-            colors.push(((*name).to_string(), color));
+            colors.push((name.to_string(), color));
         }
     }
     colors

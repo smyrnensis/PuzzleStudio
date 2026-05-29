@@ -846,96 +846,6 @@ audio {
 }
 
 #[test]
-#[ignore = "non-canonical legacy syntax; migrate before re-enabling"]
-fn scene_effects_can_trigger_sounds() {
-    let source = r#"
-title sounds_effects
-
-sounds {
-  sfx click seed=746670 type=jump
-  music loop seed=123456
-}
-
-scene title_menu {
-title game.title
-start "Play" -> start_game
-action start_game -> {
-sfx click
-play_music loop
-goto playing
-}
-}
-
-puzzle board {
-layers {
-background = Player
-}
-
-legend {
-. = empty
-P = Player
-}
-
-rules {
-
-}
-
-levels {
-level one
-P
-}
-}
-"#;
-
-    let loaded = parse_game(source).unwrap();
-    let title = loaded
-        .scenes
-        .iter()
-        .find(|scene| scene.name == "title")
-        .unwrap();
-    let start_transition = title
-        .transitions
-        .iter()
-        .find(|transition| {
-            matches!(
-                &transition.trigger,
-                SceneTransitionTrigger::Condition(condition) if condition == "input == start"
-            )
-        })
-        .unwrap();
-    let SceneEffect::Input(action) = &start_transition.effect else {
-        panic!("expected start transition to emit an input");
-    };
-    assert_eq!(action, "start_game");
-
-    let start_game_transition = title
-        .transitions
-        .iter()
-        .find(|transition| {
-            matches!(
-                &transition.trigger,
-                SceneTransitionTrigger::Condition(condition) if condition == "input == start_game"
-            )
-        })
-        .unwrap();
-    let SceneEffect::Sequence(effects) = &start_game_transition.effect else {
-        panic!("expected sounds start effect to lower to a sequence");
-    };
-    assert!(matches!(
-        &effects[0],
-        SceneEffect::PlaySfx { name } if name == "click"
-    ));
-    assert!(matches!(
-        &effects[1],
-        SceneEffect::PlayMusic { name } if name == "loop"
-    ));
-    assert!(matches!(
-        &effects[2],
-        SceneEffect::Goto { scene, .. } if scene == "playing"
-    ));
-}
-
-#[test]
 fn scene_lifecycle_blocks_lower_to_lifecycle_transitions() {
     let source = r#"
 title scene_lifecycle_blocks
@@ -1032,96 +942,6 @@ message hint
     assert!(matches!(
         &effects[1],
         SceneEffect::Message { text: SceneExpr::Path(path) } if path == &vec!["hint".to_string()]
-    ));
-}
-
-#[test]
-#[ignore = "non-canonical legacy syntax; migrate before re-enabling"]
-fn scene_effect_wait_duration_parses_to_milliseconds() {
-    let source = r#"
-title scene_wait_effect
-
-puzzle default {
-objects {
-layer {
-Player P
-}
-}
-legend {
-. = empty
-P = Player
-}
-rules {
-
-}
-levels {
-P
-}
-}
-
-scene title {
-layout {
-button "Start" -> input start
-}
-rules {
-start ->
-wait
-wait 0.1s
-wait 1s
-wait 25ms
-goto playing
-end
-}
-}
-
-scene playing {
-layout {
-text "Playing"
-}
-}
-
-default_wait_time = 500ms
-"#;
-
-    let loaded = parse_game(source).unwrap();
-    assert_eq!(loaded.default_wait_ms, 500);
-    let title = loaded
-        .scenes
-        .iter()
-        .find(|scene| scene.name == "title")
-        .unwrap();
-    let transition = title
-        .transitions
-        .iter()
-        .find(|transition| {
-            matches!(
-                &transition.trigger,
-                SceneTransitionTrigger::Condition(condition) if condition == "input == start"
-            )
-        })
-        .unwrap();
-    let SceneEffect::Sequence(effects) = &transition.effect else {
-        panic!("expected wait effects to lower to a sequence");
-    };
-    assert!(matches!(
-        &effects[0],
-        SceneEffect::Wait { milliseconds } if *milliseconds == Some(500)
-    ));
-    assert!(matches!(
-        &effects[1],
-        SceneEffect::Wait { milliseconds } if *milliseconds == Some(100)
-    ));
-    assert!(matches!(
-        &effects[2],
-        SceneEffect::Wait { milliseconds } if *milliseconds == Some(1000)
-    ));
-    assert!(matches!(
-        &effects[3],
-        SceneEffect::Wait { milliseconds } if *milliseconds == Some(25)
-    ));
-    assert!(matches!(
-        &effects[4],
-        SceneEffect::Goto { scene, .. } if scene == "playing"
     ));
 }
 
@@ -1460,6 +1280,38 @@ P
 }
 
 #[test]
+fn puzzle_wait_animation_lowers_to_ordered_boundary_effect() {
+    let source = r#"
+title puzzle_wait_animation_effect
+
+puzzle default {
+objects {
+layer {
+Player P
+}
+}
+legend {
+. = empty
+P = Player
+}
+rules {
+wait animation
+}
+level start {
+P
+}
+}
+"#;
+
+    let loaded = parse_game(source).unwrap();
+    assert!(loaded.rule_effects.values().any(|effects| {
+        effects
+            .iter()
+            .any(|effect| matches!(effect, RuleEffect::WaitAnimation))
+    }));
+}
+
+#[test]
 fn puzzle_emit_is_rejected() {
     let source = r#"
 title puzzle_emit_rejected
@@ -1640,224 +1492,6 @@ P
 
     let error = parse_game(source).unwrap_err().to_string();
     assert!(error.contains("effect definitions are obsolete"));
-}
-
-#[test]
-#[ignore = "non-canonical legacy syntax; migrate before re-enabling"]
-fn scene_lifecycle_arrows_are_rejected() {
-    let source = r#"
-title lifecycle_arrow
-
-puzzle default {
-objects {
-layer {
-Player P
-}
-}
-legend {
-. = empty
-P = Player
-}
-rules {
-
-}
-level start {
-P
-}
-}
-
-scene playing {
-layout {
-text "Playing"
-}
-rules {
-level_start -> play_music music_name
-}
-}
-"#;
-
-    let error = parse_game(source).unwrap_err().to_string();
-    assert!(error.contains("level_start is a puzzle lifecycle block"));
-}
-
-#[test]
-#[ignore = "non-canonical legacy syntax; migrate before re-enabling"]
-fn then_effect_sequences_are_rejected() {
-    let source = r#"
-title no_then
-
-puzzle board {
-objects {
-  layers {
-  background = Player
-  }
-}
-
-legend {
-. = empty
-P = Player
-}
-
-rules {
-
-}
-
-levels {
-level one
-P
-}
-}
-
-scene playing {
-rules {
-done -> sfx click then goto playing
-}
-}
-"#;
-
-    let error = parse_game(source).unwrap_err().to_string();
-    assert!(error.contains("`then` effect sequences are not supported"));
-}
-
-#[test]
-#[ignore = "non-canonical legacy syntax; migrate before re-enabling"]
-fn scene_puzzle_can_own_board_model_and_view() {
-    let source = r#"
-title scene_puzzle
-
-scene puzzle playing {
-layers {
-actor = Player
-}
-
-legend {
-. = empty
-P = Player
-}
-
-win_conditions {
-some Player
-}
-
-rules {
-once right [ Player | no Player ] -> [ | Player ]
-}
-
-levels {
-level start
-P.
-}
-
-layout {
-board = puzzle playing
-puzzle board
-}
-
-rules {
-
-if input == right -> {
-update board
-}
-}
-
-if win_conditions {
-goto level_clear
-}
-}
-
-scene level_clear {
-layout {
-text "clear"
-}
-}
-"#;
-    let loaded = parse_game(source).unwrap();
-    let playing = &loaded.scenes[0];
-    assert_eq!(playing.name, "playing");
-    assert_eq!(playing.state.puzzles[0].name, "board");
-    assert_eq!(playing.transitions.len(), 2);
-
-    let SceneTransitionTrigger::Condition(action) = &playing.transitions[0].trigger else {
-        panic!("expected input rule to lower to a condition transition");
-    };
-    assert_eq!(action, "input == right");
-    let SceneEffect::Apply { rule, target, .. } = &playing.transitions[0].effect else {
-        panic!("expected update board to lower to apply effect");
-    };
-    assert_eq!(rule, "right");
-    assert_eq!(target.as_deref(), Some("board"));
-
-    let SceneTransitionTrigger::Condition(condition) = &playing.transitions[1].trigger else {
-        panic!("expected if block to lower to a condition transition");
-    };
-    assert_eq!(condition, "board.win_conditions");
-}
-
-#[test]
-#[ignore = "non-canonical legacy syntax; migrate before re-enabling"]
-fn scene_puzzle_uses_explicit_puzzle_slot_as_primary() {
-    let source = r#"
-title scene_puzzle_custom_slot
-
-scene puzzle playing {
-layout {
-playfield = puzzle playing
-}
-
-layers {
-actor = Player
-}
-
-legend {
-. = empty
-P = Player
-}
-
-win_conditions {
-some Player
-}
-
-rules {
-once right [ Player | no Player ] -> [ | Player ]
-}
-
-levels {
-level start
-P.
-}
-
-rules {
-
-if input == right -> {
-update playfield
-}
-}
-
-if win_conditions {
-goto level_clear
-}
-}
-
-scene level_clear {
-layout {
-text "clear"
-}
-}
-"#;
-    let loaded = parse_game(source).unwrap();
-    let playing = &loaded.scenes[0];
-    assert_eq!(playing.state.puzzles.len(), 1);
-    assert_eq!(playing.state.puzzles[0].name, "playfield");
-
-    let SceneEffect::Apply { target, .. } = &playing.transitions[0].effect else {
-        panic!("expected input handler to apply to explicit puzzle slot");
-    };
-    assert_eq!(target.as_deref(), Some("playfield"));
-
-    let SceneTransitionTrigger::Condition(condition) = &playing.transitions[1].trigger else {
-        panic!("expected unqualified condition to target explicit puzzle slot");
-    };
-    assert_eq!(condition, "playfield.win_conditions");
 }
 
 #[test]
@@ -2796,60 +2430,6 @@ level_menu microban -> goto playing(level)
 }
 
 #[test]
-#[ignore = "non-canonical legacy syntax; migrate before re-enabling"]
-fn typed_scenes_can_omit_default_names() {
-    let source = r#"
-title anonymous_typed_scenes
-
-scene puzzle {
-objects {
-layers {
-actor = Player
-}
-}
-
-legend {
-. = empty
-P = Player
-}
-
-rules {
-once right [ Player | no Player ] -> [ | Player ]
-}
-
-levels {
-level start
-P.
-}
-}
-
-scene level_menu {
-show_index = true
-columns = 4
-wrap = true
-button "Back" -> back
-}
-"#;
-    let loaded = parse_game(source).unwrap();
-    assert_eq!(loaded.scenes[0].name, "playing");
-    assert_eq!(loaded.scenes[0].state.puzzles[0].name, "playing");
-    assert!(matches!(
-        &loaded.scenes[0].components[0],
-        SceneComponent::Frame(frame) if frame.kind == "puzzle" && frame.source == "playing"
-    ));
-
-    let level_select = &loaded.scenes[1];
-    assert_eq!(level_select.name, "level_select");
-    let SceneComponent::LevelMenu(menu) = &level_select.components[0] else {
-        panic!("expected level_menu scene to create a level menu component");
-    };
-    assert!(menu.show_index);
-    assert_eq!(menu.columns, Some(4));
-    assert!(menu.wrap);
-    assert_eq!(menu.buttons.len(), 1);
-}
-
-#[test]
 fn title_scene_keeps_buttons_and_rules_explicit() {
     let source = r#"
 title title_menu_scene
@@ -3258,53 +2838,6 @@ B.
 }
 
 #[test]
-#[ignore = "non-canonical legacy syntax; migrate before re-enabling"]
-fn duplicate_rhs_object_can_add_without_moving_preserved_source() {
-    let source = r#"
-title duplicate_rhs_add
-
-puzzle default {
-layers 2
-empty .
-
-kind = A
-
-object Target:kind 0
-object Safe:kind 1
-object Wall 0
-legend t = Target:A
-
-level_start {
-mark_safe
-}
-
-routine mark_safe once {
-repeat [ Safe ] -> []
-repeat [ Target:A no Safe:A ] -> [ Target:A Safe:A ]
-repeat {
-[ no Wall | no Wall no Safe:A | Safe:A ] -> [ | Safe:A | Safe:A ]
-}
-}
-
-rules {
-
-}
-
-level start {
-..t
-}
-}
-"#;
-    let loaded = parse_game(source).unwrap();
-    let safe = object_named(&loaded, "Safe:A");
-    let initial = &loaded.levels[0].initial_state;
-
-    assert!(!initial.has_object(&loaded.game, 0, 0, safe));
-    assert!(initial.has_object(&loaded.game, 1, 0, safe));
-    assert!(initial.has_object(&loaded.game, 2, 0, safe));
-}
-
-#[test]
 fn group_selectors_accept_scratch_blocks() {
     let source = r#"
 title group_scratch
@@ -3421,51 +2954,6 @@ P
         "cell pattern cannot contain both `Player` and `Box` because they are in the same collision layer"
     ));
     assert!(error.contains("[ Player ] -> [ Player Box ]"));
-}
-
-#[test]
-#[ignore = "non-canonical legacy syntax; migrate before re-enabling"]
-fn scratch_is_transition_local_and_does_not_need_clear() {
-    let source = r#"
-title transition_scratch
-
-puzzle default {
-layers 2
-empty .
-
-scratch {
-checked
-hot
-}
-
-object Box 1
-object Marker 0
-legend B = Box
-
-input mark m arrow_right
-rules {
-if input == mark {
-once [ Box no Marker ] -> [ Box{checked} Marker{hot} ]
-once [ Box{checked} Marker{hot} ] -> [ Box Marker ]
-}
-}
-
-level start {
-B
-}
-}
-"#;
-    let loaded = parse_game(source).unwrap();
-    let mark = *loaded.controls.keys.get(&b'm').unwrap();
-    let marker = object_named(&loaded, "Marker");
-
-    let marked = transition_state(&loaded.game, &loaded.levels[0].initial_state, mark).unwrap();
-    assert!(marked.has_object(&loaded.game, 0, 0, marker));
-    assert!(marked.slot_scratch().iter().all(Vec::is_empty));
-    assert!(marked.cell_scratch().iter().all(Vec::is_empty));
-
-    let unchanged = transition_state(&loaded.game, &marked, mark).unwrap();
-    assert_eq!(unchanged, marked);
 }
 
 #[test]
@@ -3781,6 +3269,90 @@ B
     let marker = object_named(&loaded, "Marker");
 
     assert!(moved.has_object(&loaded.game, 0, 0, box_object));
+    assert!(moved.has_object(&loaded.game, 0, 0, marker));
+}
+
+#[test]
+fn prefix_movement_scratch_sugar_matches_braced_selector_scratch() {
+    let source = r#"
+title prefix_movement_scratch_sugar
+
+puzzle default {
+layers {
+actor = Player
+floor = Marker
+}
+
+legend {
+P = Player
+. = empty
+}
+
+rules {
+
+once right [ Player ] -> [ right Player ]
+once [ right Player ] -> [ Player Marker ]
+}
+
+levels {
+level start
+P
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    let moved = transition_state(
+        &loaded.game,
+        &loaded.levels[0].initial_state,
+        input_named(&loaded, "right"),
+    )
+    .unwrap();
+    let player = object_named(&loaded, "Player");
+    let marker = object_named(&loaded, "Marker");
+
+    assert!(moved.has_object(&loaded.game, 0, 0, player));
+    assert!(moved.has_object(&loaded.game, 0, 0, marker));
+}
+
+#[test]
+fn prefix_directions_scratch_sugar_matches_any_movement_value() {
+    let source = r#"
+title prefix_directions_scratch_sugar
+
+puzzle default {
+layers {
+actor = Player
+floor = Marker
+}
+
+legend {
+P = Player
+. = empty
+}
+
+rules {
+
+once right [ Player ] -> [ right Player ]
+once [ directions Player ] -> [ Player Marker ]
+}
+
+levels {
+level start
+P
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    let moved = transition_state(
+        &loaded.game,
+        &loaded.levels[0].initial_state,
+        input_named(&loaded, "right"),
+    )
+    .unwrap();
+    let player = object_named(&loaded, "Player");
+    let marker = object_named(&loaded, "Marker");
+
+    assert!(moved.has_object(&loaded.game, 0, 0, player));
     assert!(moved.has_object(&loaded.game, 0, 0, marker));
 }
 
@@ -4254,80 +3826,6 @@ P
 }
 
 #[test]
-#[ignore = "non-canonical legacy syntax; migrate before re-enabling"]
-fn old_when_transition_syntax_is_rejected() {
-    let source = r#"
-title old_when_transition
-
-puzzle default {
-layers 1
-empty .
-object Player 0
-legend P = Player
-
-win_conditions {
-some Player
-}
-
-rules {
-
-}
-
-level start {
-P
-}
-}
-
-scene playing {
-layout {
-board = puzzle default
-}
-rules {
-when board.win_conditions -> board.next_level
-}
-}
-"#;
-    let error = parse_game(source).unwrap_err().to_string();
-
-    assert!(error.contains("scene transition triggers must be `<input>` or `if <condition>`"));
-}
-
-#[test]
-#[ignore = "non-canonical legacy syntax; migrate before re-enabling"]
-fn old_menu_on_handler_syntax_is_rejected() {
-    let source = r#"
-title old_menu_on_handler
-
-puzzle default {
-layers 1
-empty .
-object Player 0
-legend P = Player
-
-rules {
-
-}
-
-level start {
-P
-}
-}
-
-menu selector {
-layout {
-button "Only" value 0
-}
-rules {
-on up -> cursor.prev
-}
-}
-"#;
-    let error = parse_game(source).unwrap_err().to_string();
-
-    assert!(error.contains("menu action must be: <input> -> <command>"));
-}
-
-#[test]
 fn conditional_rule_call_short_form_runs_named_rule_when_pattern_matches() {
     let source = r#"
 title conditional_short
@@ -4622,46 +4120,6 @@ P.
 }
 
 #[test]
-#[ignore = "non-canonical legacy syntax; migrate before re-enabling"]
-fn top_level_puzzle_directives_are_rejected_publicly() {
-    let source = r#"
-title old_keyword
-layers 2
-empty .
-object Player 1
-legend P = Player
-rules {
-
-}
-level start
-P
-end
-"#;
-
-    let error = parse_game(source).unwrap_err().to_string();
-    assert!(error.contains(
-        "top-level directive must be title, subtitle, author, homepage, var, const, default_wait_time, again_interval, puzzle, levels, sprites, menu, sounds, theme, or assets; found layers"
-    ));
-}
-
-#[test]
-#[ignore = "non-canonical legacy syntax; migrate before re-enabling"]
-fn parses_sample_game() {
-    let source = include_str!("../../../games/spec_2d.puzzle");
-    let loaded = super::parse_game2d(source).unwrap();
-
-    assert!(loaded.game.object_count() >= 10);
-    assert!(!loaded.game.rules().is_empty());
-    assert_eq!(loaded.levels.len(), 5);
-    assert!(loaded.levels[0].name.ends_with("solve_1"));
-    assert!(loaded.levels[1].name.ends_with("solve_2"));
-    assert!(loaded.levels[4].name.ends_with("child"));
-    assert!(loaded.goal.is_some());
-    assert!(!loaded.is_goal_complete(&loaded.levels[0].initial_state));
-    assert_eq!(loaded.levels[0].initial_state.height, 3);
-}
-
-#[test]
 fn parses_declared_assets() {
     let source = r#"
 title assets_test
@@ -4695,89 +4153,6 @@ P
     assert_eq!(loaded.assets.entries[0].path, "game.css");
     assert_eq!(loaded.assets.entries[1].kind, AssetKind::Script);
     assert_eq!(loaded.assets.entries[1].path, "visuals.js");
-}
-
-#[test]
-#[ignore = "non-canonical legacy syntax; migrate before re-enabling"]
-fn game_file_can_import_puzzle_fragments() {
-    let dir = std::env::temp_dir().join(format!("puzzlestudio_import_test_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(
-        dir.join("sokoban.puzzle"),
-        r#"
-puzzle default {
-layers 1
-empty .
-
-object Player 0
-legend P = Player
-
-rules {
-
-}
-
-import "levels.puzzle"
-}
-"#,
-    )
-    .unwrap();
-    std::fs::write(
-        dir.join("levels.puzzle"),
-        r#"
-levels {
-level start
-P
-}
-"#,
-    )
-    .unwrap();
-    std::fs::write(
-        dir.join("level_select.puzzle"),
-        r#"
-menu level_select {
-data {
-levels: list<level>
-}
-layout {
-column {
-button "Start" value 0
-}
-}
-rules {
-enter -> emit choose_level(cursor.value)
-}
-}
-"#,
-    )
-    .unwrap();
-    let game_path = dir.join("game.puzzle");
-    std::fs::write(
-        &game_path,
-        r#"
-title imported
-import "sokoban.puzzle"
-import "level_select.puzzle"
-
-scene select {
-layout {
-menu selector = level_select with {
-levels = default.levels
-}
-}
-}
-"#,
-    )
-    .unwrap();
-
-    let loaded = super::parse_game2d_file(&game_path).unwrap();
-
-    assert_eq!(loaded.title, "imported");
-    assert_eq!(loaded.levels.len(), 1);
-    assert_eq!(loaded.menus.len(), 1);
-    assert!(matches!(
-        &loaded.scenes[0].components[0],
-        SceneComponent::Menu(_)
-    ));
 }
 
 #[test]
@@ -4873,69 +4248,6 @@ level_menu
 }
 
 #[test]
-#[ignore = "non-canonical legacy syntax; migrate before re-enabling"]
-fn imported_section_header_closes_at_imported_file_boundary() {
-    let dir = std::env::temp_dir().join(format!(
-        "puzzlestudio_import_section_test_{}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(
-        dir.join("title_view.puzzle"),
-        r#"
-====
-VIEW
-====
-text "Imported"
-"#,
-    )
-    .unwrap();
-    let game_path = dir.join("game.puzzle");
-    std::fs::write(
-        &game_path,
-        r#"
-title imported_scene
-
-puzzle default {
-layers 1
-empty .
-object Player 0
-legend P = Player
-rules {
-
-}
-levels {
-level start
-P
-}
-}
-
-scene title {
-import "title_view.puzzle"
-keys {
-Enter -> start
-}
-rules {
-start -> goto title
-}
-}
-"#,
-    )
-    .unwrap();
-
-    let loaded = super::parse_game2d_file(&game_path).unwrap();
-    let title = loaded
-        .scenes
-        .iter()
-        .find(|scene| scene.name == "title")
-        .unwrap();
-
-    assert_eq!(title.components.len(), 1);
-    assert_eq!(title.key_bindings.len(), 1);
-    assert_eq!(title.transitions.len(), 1);
-}
-
-#[test]
 fn game_file_can_declare_theme_metadata() {
     let dir = std::env::temp_dir().join(format!(
         "puzzlestudio_import_theme_test_{}",
@@ -4970,7 +4282,6 @@ P
 
 theme clean {
 accent_color #2f7ebc
-board_color #edf1f2
 }
 "##,
     )
@@ -4989,6 +4300,80 @@ board_color #edf1f2
         Some("#2f7ebc")
     );
     assert_eq!(loaded.levels.len(), 1);
+}
+
+#[test]
+fn theme_background_alias_sets_background_variable() {
+    let loaded = parse_game(
+        r##"
+title themed
+theme puzzlescript {
+background #123456
+}
+puzzle default {
+layers {
+actor = Player
+}
+legend {
+. = empty
+P = Player
+}
+rules {
+[ Player ] -> [ Player ]
+}
+level start {
+P
+}
+}
+"##,
+    )
+    .unwrap();
+
+    assert_eq!(loaded.theme.name.as_deref(), Some("puzzlescript"));
+    assert_eq!(
+        loaded
+            .theme
+            .variables
+            .iter()
+            .find(|variable| variable.name == "bg")
+            .map(|variable| variable.value.as_str()),
+        Some("#123456")
+    );
+}
+
+#[test]
+fn puzzlescript_import_accepts_background_theme_alias() {
+    let canonical = translate_puzzlescript_to_canonical(
+        r##"
+title themed
+background #123456
+
+=======
+OBJECTS
+=======
+
+Background
+#000000
+
+======
+LEGEND
+======
+. = Background
+
+================
+COLLISIONLAYERS
+================
+Background
+
+======
+LEVELS
+======
+.
+"##,
+    )
+    .unwrap();
+
+    assert!(canonical.contains("theme puzzlescript {\n  background_color #123456\n}"));
 }
 
 #[test]
@@ -5018,6 +4403,87 @@ P
 
     assert_eq!(loaded.theme.name.as_deref(), Some("pixel"));
     assert!(loaded.theme.variables.is_empty());
+}
+
+#[test]
+fn theme_setting_accepts_equals_compatibility_syntax() {
+    let loaded = parse_game(
+        r##"
+title themed
+theme clean {
+background_color = #123456
+accent_color = #abcdef
+}
+puzzle default {
+layers {
+actor = Player
+}
+legend {
+. = empty
+P = Player
+}
+rules {
+[ Player ] -> [ Player ]
+}
+level start {
+P
+}
+}
+"##,
+    )
+    .unwrap();
+
+    assert_eq!(loaded.theme.name.as_deref(), Some("clean"));
+    assert_eq!(
+        loaded
+            .theme
+            .variables
+            .iter()
+            .find(|variable| variable.name == "bg")
+            .map(|variable| variable.value.as_str()),
+        Some("#123456")
+    );
+    assert_eq!(
+        loaded
+            .theme
+            .variables
+            .iter()
+            .find(|variable| variable.name == "accent")
+            .map(|variable| variable.value.as_str()),
+        Some("#abcdef")
+    );
+}
+
+#[test]
+fn theme_rejects_non_public_color_settings() {
+    let error = parse_game(
+        r##"
+title themed
+theme clean {
+board_color #edf1f2
+}
+puzzle default {
+layers {
+actor = Player
+}
+legend {
+. = empty
+P = Player
+}
+rules {
+[ Player ] -> [ Player ]
+}
+level start {
+P
+}
+}
+"##,
+    )
+    .unwrap_err();
+
+    assert!(error.to_string().contains("background_color"));
+    assert!(error.to_string().contains("text_color"));
+    assert!(error.to_string().contains("ui_font"));
 }
 
 #[test]
@@ -5439,6 +4905,51 @@ B
         VisualSpriteKind::Solid(color) => assert_eq!(color, "#444"),
         _ => panic!("Wall should be a solid sprite"),
     }
+}
+
+#[test]
+fn puzzle_sprites_accept_translate_transform_offset() {
+    let source = r##"
+title translated_sprite
+
+puzzle default {
+objects {
+layer {
+Player P
+}
+}
+legend {
+. = empty
+}
+sprites {
+Player {
+#fff
+00000
+00000
+00000
+00000
+00000
+translate:right:2 translate:up:1
+}
+}
+rules {
+
+}
+levels {
+level start
+P
+}
+}
+"##;
+    let loaded = parse_game(source).unwrap();
+    let player_sprite = loaded
+        .visuals
+        .sprites
+        .iter()
+        .find(|sprite| sprite.name == "Player")
+        .unwrap();
+    assert_eq!(player_sprite.offset.x, 2);
+    assert_eq!(player_sprite.offset.y, -1);
 }
 
 #[test]
@@ -5959,51 +5470,6 @@ P
 }
 
 #[test]
-#[ignore = "non-canonical legacy syntax; migrate before re-enabling"]
-fn numeric_value_set_values_can_select_object_variants() {
-    let source = r#"
-title numeric_rank_values
-
-puzzle default {
-tags {
-rank = 1 2 3
-}
-objects {
-layers {
-floor = Portal:rank
-actor = Player
-}
-}
-legend {
-. = empty
-1 = Portal:1
-2 = Portal:2
-3 = Portal:3
-P = Player
-}
-goal = count([ Player Portal:1 ]) == 0
-rules {
-once [ Player Portal:1 ] -> [ Player ]
-}
-levels {
-level start
-P1
-}
-}
-"#;
-    let loaded = parse_game(source).unwrap();
-
-    let labels = loaded
-        .object_labels
-        .values()
-        .cloned()
-        .collect::<Vec<String>>();
-    assert!(labels.iter().any(|label| label == "Portal:1"));
-    assert!(labels.iter().any(|label| label == "Portal:2"));
-    assert!(labels.iter().any(|label| label == "Portal:3"));
-}
-
-#[test]
 fn directions_is_builtin_value_set_for_objects_sprites_and_for() {
     let source = r#"
 title directions_value_set
@@ -6117,7 +5583,8 @@ palettes {
 edge = transparent #555
 }
 shapes {
-edge:directions rotate from up {
+edge:directions {
+rotate from up
 111
 000
 000
@@ -6126,6 +5593,200 @@ edge:directions rotate from up {
 Boundary:directions {
 palette edge
 shape edge:directions
+}
+}
+rules {
+
+}
+levels {
+level start
+.
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    let expected = [
+        ("Boundary-up", vec!["111", "000", "000"]),
+        ("Boundary-right", vec!["001", "001", "001"]),
+        ("Boundary-down", vec!["000", "000", "111"]),
+        ("Boundary-left", vec!["100", "100", "100"]),
+    ];
+
+    for (name, pattern) in expected {
+        let sprite = loaded
+            .visuals
+            .sprites
+            .iter()
+            .find(|sprite| sprite.name == name)
+            .unwrap();
+        match &sprite.kind {
+            VisualSpriteKind::Ascii {
+                pattern: actual, ..
+            } => {
+                let expected = pattern.into_iter().map(str::to_string).collect::<Vec<_>>();
+                assert_eq!(actual.as_slice(), expected.as_slice());
+            }
+            _ => panic!("{name} should be an ascii sprite"),
+        }
+    }
+}
+
+#[test]
+fn sprite_shape_rotation_can_use_named_map_directive() {
+    let source = r#"
+title rotated_sprites_named_map
+
+puzzle default {
+map clockwise directions {
+up -> right
+right -> down
+down -> left
+left -> up
+}
+objects {
+layer {
+Boundary:directions
+}
+}
+legend {
+. = empty
+}
+sprites {
+palettes {
+edge = transparent #555
+}
+shapes {
+edge:directions {
+rotate using clockwise from up
+111
+000
+000
+}
+}
+Boundary:directions {
+palette edge
+shape edge:directions
+}
+}
+rules {
+
+}
+levels {
+level start
+.
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    let boundary_right = loaded
+        .visuals
+        .sprites
+        .iter()
+        .find(|sprite| sprite.name == "Boundary-right")
+        .unwrap();
+
+    match &boundary_right.kind {
+        VisualSpriteKind::Ascii { pattern, .. } => {
+            assert_eq!(
+                pattern.as_slice(),
+                ["001".to_string(), "001".to_string(), "001".to_string()].as_slice()
+            );
+        }
+        _ => panic!("Boundary-right should be an ascii sprite"),
+    }
+}
+
+#[test]
+fn sprite_entry_accepts_canonical_metadata_colors_and_ascii_order() {
+    let source = r##"
+title canonical_sprite_metadata
+
+puzzle default {
+objects {
+layer {
+Player P
+}
+}
+legend {
+. = empty
+}
+sprites {
+Player {
+pixels_per_cell 5 5
+offset 2 -1
+#e94f64 #2f80ed
+........
+..00....
+..01....
+........
+}
+}
+rules {
+
+}
+levels {
+level start
+P
+}
+}
+"##;
+    let loaded = parse_game(source).unwrap();
+    let sprite = loaded
+        .visuals
+        .sprites
+        .iter()
+        .find(|sprite| sprite.name == "Player")
+        .unwrap();
+    assert_eq!(sprite.offset.x, 2);
+    assert_eq!(sprite.offset.y, -1);
+    assert_eq!(sprite.pixels_per_cell.unwrap().width, 5);
+    assert_eq!(sprite.pixels_per_cell.unwrap().height, 5);
+    match &sprite.kind {
+        VisualSpriteKind::Ascii { pattern, colors } => {
+            assert_eq!(
+                pattern.as_slice(),
+                [
+                    "........".to_string(),
+                    "..00....".to_string(),
+                    "..01....".to_string(),
+                    "........".to_string(),
+                ]
+                .as_slice()
+            );
+            assert_eq!(colors[0].color, "#e94f64");
+            assert_eq!(colors[1].color, "#2f80ed");
+        }
+        _ => panic!("Player should be an ascii sprite"),
+    }
+}
+
+#[test]
+fn sprite_entry_can_rotate_inline_ascii_from_selector_axis() {
+    let source = r#"
+title inline_rotated_sprite
+
+puzzle default {
+map rotate directions {
+up -> right
+right -> down
+down -> left
+left -> up
+}
+objects {
+layer {
+Boundary:directions
+}
+}
+legend {
+. = empty
+}
+sprites {
+Boundary:directions {
+rotate from up
+transparent #555
+111
+000
+000
 }
 }
 rules {
@@ -6189,7 +5850,8 @@ palettes {
 edge = transparent #555
 }
 shapes {
-edge:directions rotate from up {
+edge:directions {
+rotate from up
 111
 000
 000
@@ -6261,7 +5923,8 @@ palettes {
 edge = transparent #555
 }
 shapes {
-edge:directions rotate from up {
+edge:directions {
+rotate from up
 111
 000
 000
@@ -6863,46 +6526,6 @@ end
 }
 
 #[test]
-#[ignore = "non-canonical legacy syntax; migrate before re-enabling"]
-fn fix_can_contain_application_and_orientation_defaults() {
-    let source = r#"
-title fix_once_left
-
-puzzle default {
-layers 2
-empty .
-
-object Player 1
-legend P = Player
-
-input up w arrow_up
-input down s arrow_down
-input left a arrow_left
-input right d arrow_right
-
-rules
-fix once left
-[ Player | ] -> [ | Player ]
-end
-end
-
-level start
-...
-.P.
-...
-end
-}
-"#;
-    let loaded = parse_game(source).unwrap();
-    let moved =
-        transition_state(&loaded.game, &loaded.levels[0].initial_state, InputId(0)).unwrap();
-    let player = object_named(&loaded, "Player");
-
-    assert!(moved.has_object(&loaded.game, 0, 1, player));
-    assert_eq!(loaded.game.rules()[0].application, RuleApplication::Once);
-}
-
-#[test]
 fn explicit_rewrite_prefix_overrides_fix_default() {
     let source = r#"
 title fix_explicit_override
@@ -7067,59 +6690,6 @@ end
     let error = parse_game(source).unwrap_err().to_string();
 
     assert!(error.contains("unknown puzzle directive fix"));
-}
-
-#[test]
-#[ignore = "non-canonical legacy syntax; migrate before re-enabling"]
-fn brace_blocks_are_accepted_for_block_directives() {
-    let source = r#"
-title brace_blocks
-
-puzzle default {
-layers 2
-empty .
-
-tags {
-axis = left right
-}
-map flip axis {
-left -> right
-right -> left
-}
-
-object Player 1
-legend P = Player
-
-input left a arrow_left
-input right d arrow_right
-
-routine move once {
-for d in horizontal {
-if input == d {
-d [ Player | ] -> [ | Player ]
-} else {
-}
-}
-}
-
-rules {
-repeat {
-move
-}
-fix once right {
-[ Player | ] -> [ | Player ]
-}
-}
-
-level start {
-.P.
-}
-}
-"#;
-    let loaded = parse_game(source).unwrap();
-
-    assert_eq!(loaded.levels.len(), 1);
-    assert!(!loaded.game.rules().is_empty());
 }
 
 #[test]
@@ -7650,51 +7220,6 @@ rules {
 }
 
 #[test]
-#[ignore = "non-canonical legacy syntax; migrate before re-enabling"]
-fn persistent_vars_and_clear_undo_history_parse() {
-    let source = r#"
-title persistent_history_parse
-
-puzzle default {
-persistent var cleared = false
-
-objects {
-layer {
-Player P
-}
-}
-
-legend {
-. = empty
-}
-
-rules {
-once [ Player ] -> [ Player ] set cleared = true
-}
-
-level start {
-P
-}
-}
-
-scene playing {
-layout {
-board = puzzle default
-}
-rules {
-clear -> clear_undo_history
-}
-}
-"#;
-    let loaded = parse_game(source).unwrap();
-    assert_eq!(loaded.persistent_vars.len(), 1);
-    assert!(matches!(
-        loaded.scenes[0].transitions[0].effect,
-        SceneEffect::ClearUndoHistory
-    ));
-}
-
-#[test]
 fn progress_scene_effects_parse() {
     assert!(matches!(
         parse_scene_effect("clear_undo_history", "clear_undo_history").unwrap(),
@@ -7849,79 +7374,6 @@ right <- d ArrowRight
 }
 
 #[test]
-#[ignore = "non-canonical legacy syntax; migrate before re-enabling"]
-fn group_block_defines_selector_groups() {
-    let source = r#"
-title group_block
-
-puzzle default {
-layers 2
-empty .
-
-object Player 1
-object Box 1
-object Wall 1
-
-group {
-solid = Player Box Wall
-}
-
-legend P = Player
-legend B = Box
-legend # = Wall
-
-input right d arrow_right
-
-rules {
-once input directions [ Player | no solid ] -> [ | Player ]
-}
-
-level start {
-P#.
-}
-}
-"#;
-    let loaded = parse_game(source).unwrap();
-    let right = input_named(&loaded, "right");
-    let moved = transition_state(&loaded.game, &loaded.levels[0].initial_state, right).unwrap();
-    let player = object_named(&loaded, "Player");
-
-    assert!(moved.has_object(&loaded.game, 0, 0, player));
-}
-
-#[test]
-#[ignore = "non-canonical legacy syntax; migrate before re-enabling"]
-fn objects_block_rejects_bare_group_rows() {
-    let source = r#"
-title bare_group_row
-
-puzzle default {
-objects {
-layers {
-actor = Player Box Wall
-}
-solid = actor
-}
-
-legend {
-. = empty
-P = Player
-}
-
-rules {
-
-}
-
-level start {
-P
-}
-}
-"#;
-    let error = parse_game(source).unwrap_err().to_string();
-    assert!(error.contains("group rows must be inside `group { ... }`"));
-}
-
-#[test]
 fn level_body_legend_adds_level_local_chars() {
     let source = r#"
 title level_local_legend
@@ -8015,97 +7467,6 @@ x
 
     let error = parse_game(source).unwrap_err().to_string();
     assert!(error.contains("unknown level char 'x'"));
-}
-
-#[test]
-#[ignore = "non-canonical legacy syntax; migrate before re-enabling"]
-fn layers_block_can_define_named_layers_and_use_names_as_tags() {
-    let source = r#"
-title named_layers
-
-puzzle default {
-objects {
-layers {
-floor = Goal Button
-actor = Player Box Wall
-}
-}
-
-legend {
-. = empty
-P = Player
-G = Goal
-B = Box
-W = Wall
-O = Button
-}
-
-rules {
-once input directions [ Player | no floor ] -> [ | Player ]
-}
-
-level start {
-PG.
-}
-}
-"#;
-    let loaded = parse_game(source).unwrap();
-    let goal = object_named(&loaded, "Goal");
-    let button = object_named(&loaded, "Button");
-    let player = object_named(&loaded, "Player");
-    let right = input_named(&loaded, "right");
-
-    assert_eq!(loaded.game.object_count(), 5);
-    assert_eq!(loaded.game.layer_count, 2);
-    assert_eq!(
-        loaded.game.object_layer(goal),
-        loaded.game.object_layer(button)
-    );
-
-    let moved = transition_state(&loaded.game, &loaded.levels[0].initial_state, right).unwrap();
-    assert!(moved.has_object(&loaded.game, 0, 0, player));
-}
-
-#[test]
-#[ignore = "non-canonical legacy syntax; migrate before re-enabling"]
-fn standard_move_uses_named_layer_groups_without_blocking_other_layers() {
-    let source = r#"
-title standard_move_named_layers
-
-puzzle default {
-objects {
-layers {
-floor = Goal
-actor = Player Box Wall
-}
-}
-
-legend {
-. = empty
-P = Player
-G = Goal
-}
-
-rules {
-if input == right {
-once right [ Player | no actor ] -> [ > Player | ]
-}
-move
-}
-
-level start {
-PG
-}
-}
-"#;
-    let loaded = parse_game(source).unwrap();
-    let right = input_named(&loaded, "right");
-    let player = object_named(&loaded, "Player");
-    let goal = object_named(&loaded, "Goal");
-
-    let moved = transition_state(&loaded.game, &loaded.levels[0].initial_state, right).unwrap();
-    assert!(moved.has_object(&loaded.game, 1, 0, player));
-    assert!(moved.has_object(&loaded.game, 1, 0, goal));
 }
 
 #[test]
@@ -8539,198 +7900,6 @@ level start
         )),
         "none(pattern) should stay a NoneMatches query, not lower to count(pattern) == 0"
     );
-}
-
-#[test]
-#[ignore = "non-canonical legacy syntax; migrate before re-enabling"]
-fn low_level_numeric_offsets_rotate_when_guard_uses_dir() {
-    let source = r#"
-title low_level_direction
-
-puzzle default {
-layers 2
-empty .
-
-object Player 1
-legend P = Player
-
-input up w arrow_up
-input down s arrow_down
-input left a arrow_left
-input right d arrow_right
-
-routine move once
-for x in directions
-if input == x
-once x [ Player | ] -> [ | Player ]
-end
-end
-end
-
-rulesmove
-end
-
-level start
-...
-.P.
-...
-end
-}
-"#;
-    let loaded = parse_game(source).unwrap();
-    let input = *loaded.controls.keys.get(&b'w').unwrap();
-    let state = transition_state(&loaded.game, &loaded.levels[0].initial_state, input).unwrap();
-
-    let player = loaded
-        .object_labels
-        .iter()
-        .find_map(|(object, label)| (label == "Player").then_some(*object))
-        .unwrap();
-    assert!(state.has_object(&loaded.game, 1, 0, player));
-}
-
-#[test]
-#[ignore = "non-canonical legacy syntax; migrate before re-enabling"]
-fn fixed_orientation_rewrite_reads_as_direction_literal() {
-    let source = r#"
-title fixed_orientation
-
-puzzle default {
-layers 2
-empty .
-
-object Player 1
-legend P = Player
-
-input up w arrow_up
-input down s arrow_down
-input left a arrow_left
-input right d arrow_right
-
-routine move_right once
-if input == right
-once right [ Player | ] -> [ | Player ]
-end
-end
-
-rulesmove_right
-end
-
-level start
-...
-.P.
-...
-end
-}
-"#;
-    let loaded = parse_game(source).unwrap();
-    assert_eq!(loaded.game.rules().len(), 1);
-
-    let right = *loaded.controls.keys.get(&b'd').unwrap();
-    let moved = transition_state(&loaded.game, &loaded.levels[0].initial_state, right).unwrap();
-    let player = loaded
-        .object_labels
-        .iter()
-        .find_map(|(object, label)| (label == "Player").then_some(*object))
-        .unwrap();
-
-    assert!(moved.has_object(&loaded.game, 2, 1, player));
-}
-
-#[test]
-#[ignore = "non-canonical legacy syntax; migrate before re-enabling"]
-fn canonical_rules_block_calls_routine() {
-    let source = r#"
-title canonical_rules
-
-puzzle default {
-layers 2
-empty .
-
-object Player 1
-legend P = Player
-
-input up w arrow_up
-input down s arrow_down
-input left a arrow_left
-input right d arrow_right
-
-routine move_right once
-if input == right
-once right [ Player | ] -> [ | Player ]
-end
-end
-
-rules
-move_right
-end
-
-level start
-...
-.P.
-...
-end
-}
-"#;
-    let loaded = parse_game(source).unwrap();
-    assert_eq!(loaded.game.rules().len(), 1);
-
-    let right = *loaded.controls.keys.get(&b'd').unwrap();
-    let moved = transition_state(&loaded.game, &loaded.levels[0].initial_state, right).unwrap();
-    let player = object_named(&loaded, "Player");
-
-    assert!(moved.has_object(&loaded.game, 2, 1, player));
-}
-
-#[test]
-#[ignore = "non-canonical legacy syntax; migrate before re-enabling"]
-fn schema_selectors_expand_independently_and_preserve_matched_objects() {
-    let source = r#"
-title schema_selectors
-
-puzzle default {
-layers 2
-empty .
-
-tags {
-color = red blue
-}
-
-object player:color 1
-object box:color 1
-legend p = player:red
-legend q = player:blue
-legend a = box:red
-legend b = box:blue
-
-input up w arrow_up
-input down s arrow_down
-input left a arrow_left
-input right d arrow_right
-
-routine push once
-once input directions [ player:color | box:color | ] -> [ | player:color | box:color ]
-end
-
-rulespush
-end
-
-level start
-pb.
-end
-}
-"#;
-    let loaded = parse_game(source).unwrap();
-    assert_eq!(loaded.game.object_count(), 4);
-    assert_eq!(loaded.game.rules().len(), 16);
-
-    let right = *loaded.controls.keys.get(&b'd').unwrap();
-    let moved = transition_state(&loaded.game, &loaded.levels[0].initial_state, right).unwrap();
-    let player_red = object_named(&loaded, "player:red");
-    let box_blue = object_named(&loaded, "box:blue");
-
-    assert!(moved.has_object(&loaded.game, 1, 0, player_red));
-    assert!(moved.has_object(&loaded.game, 2, 0, box_blue));
 }
 
 #[test]
@@ -9462,141 +8631,6 @@ level start {
 }
 
 #[test]
-#[ignore = "non-canonical legacy syntax; migrate before re-enabling"]
-fn selector_value_can_use_direction_words_as_tags() {
-    let source = r#"
-title direction_word_tag
-
-puzzle default {
-layers 2
-empty .
-
-tags {
-facing = left right
-}
-
-object player:facing 1
-legend l = player:left
-legend r = player:right
-
-input up w arrow_up
-input down s arrow_down
-input left a arrow_left
-input right d arrow_right
-
-routine move_left_facing_player once
-once input directions [ player:left | ] -> [ | player:left ]
-end
-
-rulesmove_left_facing_player
-end
-
-level start
-l.
-end
-}
-"#;
-    let loaded = parse_game(source).unwrap();
-    assert_eq!(loaded.game.rules().len(), 4);
-
-    let right = *loaded.controls.keys.get(&b'd').unwrap();
-    let moved = transition_state(&loaded.game, &loaded.levels[0].initial_state, right).unwrap();
-    let player_left = object_named(&loaded, "player:left");
-
-    assert!(moved.has_object(&loaded.game, 1, 0, player_left));
-}
-
-#[test]
-#[ignore = "non-canonical legacy syntax; migrate before re-enabling"]
-fn no_selector_forbids_group_members() {
-    let source = r#"
-title no_group
-
-puzzle default {
-layers 2
-empty .
-
-object Player 1
-object Wall 1
-object Goal 0
-group blocked = Wall Goal
-
-legend P = Player
-legend # = Wall
-legend G = Goal
-
-input up w arrow_up
-input down s arrow_down
-input left a arrow_left
-input right d arrow_right
-
-routine move once
-once input directions [ Player | no blocked ] -> [ | Player ]
-end
-
-rulesmove
-end
-
-level start
-PG.
-end
-}
-"#;
-    let loaded = parse_game(source).unwrap();
-    let right = *loaded.controls.keys.get(&b'd').unwrap();
-    let moved = transition_state(&loaded.game, &loaded.levels[0].initial_state, right).unwrap();
-    let player = object_named(&loaded, "Player");
-
-    assert!(moved.has_object(&loaded.game, 0, 0, player));
-}
-
-#[test]
-#[ignore = "non-canonical legacy syntax; migrate before re-enabling"]
-fn positive_group_selector_preserves_matched_member() {
-    let source = r#"
-title positive_group
-
-puzzle default {
-layers 2
-empty .
-
-object Player 1
-object Box 1
-object Crate 1
-group pushable_objects = Box Crate
-
-legend P = Player
-legend B = Box
-legend C = Crate
-
-input up w arrow_up
-input down s arrow_down
-input left a arrow_left
-input right d arrow_right
-
-routine push once
-once input directions [ Player | pushable_objects | ] -> [ | Player | pushable_objects ]
-end
-
-rulespush
-end
-
-level start
-PC.
-end
-}
-"#;
-    let loaded = parse_game(source).unwrap();
-    let right = *loaded.controls.keys.get(&b'd').unwrap();
-    let moved = transition_state(&loaded.game, &loaded.levels[0].initial_state, right).unwrap();
-    let player = object_named(&loaded, "Player");
-    let crate_object = object_named(&loaded, "Crate");
-
-    assert!(moved.has_object(&loaded.game, 1, 0, player));
-    assert!(moved.has_object(&loaded.game, 2, 0, crate_object));
-}
-
-#[test]
 fn repeated_group_selector_expands_independently_and_preserves_occurrence_order() {
     let source = r#"
 title repeated_group_selector
@@ -9666,6 +8700,43 @@ BC
 
     assert!(moved.has_object(&loaded.game, 0, 0, crate_object));
     assert!(moved.has_object(&loaded.game, 1, 0, box_object));
+}
+
+#[test]
+fn selector_occurrence_labels_can_duplicate_group_members_on_rhs() {
+    let source = r#"
+title duplicate_selector_occurrence_label_rhs
+
+puzzle copy {
+layers {
+actor = Box Crate
+}
+group {
+solid = Box Crate
+}
+rules {
+once right [ solid#1 | solid#2 ] -> [ solid#1 | solid#1 ]
+}
+}
+
+levels basic of copy {
+legend {
+. = empty
+B = Box
+C = Crate
+}
+BC
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    let moved =
+        transition_state(&loaded.game, &loaded.levels[0].initial_state, InputId(0)).unwrap();
+    let box_object = object_named(&loaded, "Box");
+    let crate_object = object_named(&loaded, "Crate");
+
+    assert!(moved.has_object(&loaded.game, 0, 0, box_object));
+    assert!(moved.has_object(&loaded.game, 1, 0, box_object));
+    assert!(!moved.has_object(&loaded.game, 1, 0, crate_object));
 }
 
 #[test]
@@ -9776,750 +8847,6 @@ end
 }
 
 #[test]
-#[ignore = "non-canonical legacy syntax; migrate before re-enabling"]
-fn custom_direction_names_use_explicit_direction_declarations() {
-    let source = r#"
-title custom_direction_names
-
-puzzle default {
-layers 2
-empty .
-
-tags {
-move_dir = north south west east
-}
-
-object Player 1
-legend P = Player
-
-input up w arrow_up
-input down s arrow_down
-input left a arrow_left
-input right d arrow_right
-
-direction north up
-direction south down
-direction west left
-direction east right
-
-routine move once
-for x in move_dir
-if input == x
-once x [ Player | ] -> [ | Player ]
-end
-end
-end
-
-rulesmove
-end
-
-level start
-...
-.P.
-...
-end
-}
-"#;
-    let loaded = parse_game(source).unwrap();
-    let input = *loaded.controls.keys.get(&b'w').unwrap();
-    let state = transition_state(&loaded.game, &loaded.levels[0].initial_state, input).unwrap();
-
-    let player = loaded
-        .object_labels
-        .iter()
-        .find_map(|(object, label)| (label == "Player").then_some(*object))
-        .unwrap();
-    assert!(state.has_object(&loaded.game, 1, 0, player));
-}
-
-#[test]
-#[ignore = "non-canonical legacy syntax; migrate before re-enabling"]
-fn direction_alias_rewrites_to_canonical_direction_input() {
-    let source = r#"
-title direction_alias
-
-puzzle default {
-objects {
-layer {
-Player P
-}
-}
-
-legend {
-. = empty
-}
-
-direction east right
-
-rules {
-if input == east {
-once east [ Player | ] -> [ | Player ]
-}
-}
-
-levels {
-level start
-P.
-}
-}
-
-scene playing {
-layout {
-board = puzzle default
-}
-inputs {
-east <- d ArrowRight
-}
-rules {
-step board
-}
-}
-"#;
-    let loaded = parse_game(source).unwrap();
-    let input = *loaded.controls.keys.get(&b'd').unwrap();
-    assert_eq!(input, input_named(&loaded, "right"));
-
-    let state = transition_state(&loaded.game, &loaded.levels[0].initial_state, input).unwrap();
-    let player = object_named(&loaded, "Player");
-    assert!(state.has_object(&loaded.game, 1, 0, player));
-}
-
-#[test]
-#[ignore = "non-canonical legacy syntax; migrate before re-enabling"]
-fn numeric_direction_vector_syntax_is_rejected() {
-    let source = r#"
-title old_numeric_direction
-
-puzzle default {
-objects {
-layers {
-actor = Player
-}
-}
-
-legend {
-. = empty
-P = Player
-}
-
-direction east 1 0
-
-rules {
-
-}
-
-level start {
-P
-}
-}
-"#;
-    let error = parse_game(source).unwrap_err().to_string();
-
-    assert!(error.contains("direction must be: direction <alias> <up|down|left|right>"));
-}
-
-#[test]
-#[ignore = "non-canonical legacy syntax; migrate before re-enabling"]
-fn horizontal_and_vertical_axes_filter_direction_variants() {
-    let source = r#"
-title axis_filters
-
-puzzle default {
-layers 2
-empty .
-
-object Player 1
-legend P = Player
-
-input up w arrow_up
-input down s arrow_down
-input left a arrow_left
-input right d arrow_right
-
-routine move_horizontal once
-for h in horizontal
-if input == h
-once h [ Player | ] -> [ | Player ]
-end
-end
-end
-
-routine move_vertical once
-for v in vertical
-if input == v
-once v [ Player | ] -> [ | Player ]
-end
-end
-end
-
-rulesmove_horizontal
-move_vertical
-end
-
-level start
-...
-.P.
-...
-end
-}
-"#;
-    let loaded = parse_game(source).unwrap();
-
-    let up = *loaded.controls.keys.get(&b'w').unwrap();
-    let right = *loaded.controls.keys.get(&b'd').unwrap();
-
-    let moved_up = transition_state(&loaded.game, &loaded.levels[0].initial_state, up).unwrap();
-    let moved_right =
-        transition_state(&loaded.game, &loaded.levels[0].initial_state, right).unwrap();
-
-    let player = loaded
-        .object_labels
-        .iter()
-        .find_map(|(object, label)| (label == "Player").then_some(*object))
-        .unwrap();
-    assert!(moved_up.has_object(&loaded.game, 1, 0, player));
-    assert!(moved_right.has_object(&loaded.game, 2, 1, player));
-}
-
-#[test]
-#[ignore = "non-canonical legacy syntax; migrate before re-enabling"]
-fn rule_header_defaults_rewrites_to_repeat() {
-    let source = r#"
-title repeat_rule
-
-puzzle default {
-layers 2
-empty .
-
-object Player 1
-legend P = Player
-
-input up w arrow_up
-input down s arrow_down
-input left a arrow_left
-input right d arrow_right
-
-routine slide
-input directions [ Player | ] -> [ | Player ]
-end
-
-rulesslide
-end
-
-level start
-P...
-end
-}
-"#;
-    let loaded = parse_game(source).unwrap();
-    assert_eq!(loaded.game.rules().len(), 4);
-    assert!(
-        loaded
-            .game
-            .rules()
-            .iter()
-            .all(|rule| rule.application == RuleApplication::UntilStable)
-    );
-
-    let right = *loaded.controls.keys.get(&b'd').unwrap();
-    let moved = transition_state(&loaded.game, &loaded.levels[0].initial_state, right).unwrap();
-    let player = object_named(&loaded, "Player");
-
-    assert!(moved.has_object(&loaded.game, 3, 0, player));
-}
-
-#[test]
-#[ignore = "non-canonical legacy syntax; migrate before re-enabling"]
-fn rule_header_repeat_repeats_the_whole_block() {
-    let source = r#"
-title repeat_block
-
-puzzle default {
-layers 2
-empty .
-
-object Fire 1
-object Wood 1
-legend F = Fire
-legend W = Wood
-
-input up w arrow_up
-input down s arrow_down
-input left a arrow_left
-input right d arrow_right
-
-routine spread repeat
-once right [ Fire | Wood ] -> [ Fire | Fire ]
-end
-
-rulesspread
-end
-
-level start
-FWWW
-end
-}
-"#;
-    let loaded = parse_game(source).unwrap();
-    let right = *loaded.controls.keys.get(&b'd').unwrap();
-    let moved = transition_state(&loaded.game, &loaded.levels[0].initial_state, right).unwrap();
-    let fire = object_named(&loaded, "Fire");
-
-    assert!(moved.has_object(&loaded.game, 0, 0, fire));
-    assert!(moved.has_object(&loaded.game, 1, 0, fire));
-    assert!(moved.has_object(&loaded.game, 2, 0, fire));
-    assert!(moved.has_object(&loaded.game, 3, 0, fire));
-}
-
-#[test]
-#[ignore = "non-canonical legacy syntax; migrate before re-enabling"]
-fn anonymous_inline_rewrite_can_be_once() {
-    let source = r#"
-title anonymous_once
-
-puzzle default {
-layers 2
-empty .
-
-object Player 1
-legend P = Player
-
-input up w arrow_up
-input down s arrow_down
-input left a arrow_left
-input right d arrow_right
-
-rules
-once input directions [ Player | ] -> [ | Player ]
-end
-
-level start
-P...
-end
-}
-"#;
-    let loaded = parse_game(source).unwrap();
-    assert_eq!(loaded.game.rules().len(), 4);
-    assert!(
-        loaded
-            .game
-            .rules()
-            .iter()
-            .all(|rule| rule.application == RuleApplication::Once)
-    );
-
-    let right = *loaded.controls.keys.get(&b'd').unwrap();
-    let moved = transition_state(&loaded.game, &loaded.levels[0].initial_state, right).unwrap();
-    let player = object_named(&loaded, "Player");
-
-    assert!(moved.has_object(&loaded.game, 1, 0, player));
-}
-
-#[test]
-#[ignore = "non-canonical legacy syntax; migrate before re-enabling"]
-fn once_block_can_wrap_expanded_statements() {
-    let source = r#"
-title once_block_for
-
-puzzle default {
-layers 2
-empty .
-
-object Player 1
-legend P = Player
-
-input up w arrow_up
-input down s arrow_down
-input left a arrow_left
-input right d arrow_right
-
-rules
-once
-for x in directions
-if input == x
-once x [ Player | ] -> [ | Player ]
-end
-end
-end
-end
-
-level start
-P...
-end
-}
-"#;
-    let loaded = parse_game(source).unwrap();
-    assert!(matches!(
-        loaded.game.program()[0],
-        puzzle_core::RuleStep::Block {
-            application: RuleApplication::Once,
-            ..
-        }
-    ));
-
-    let right = *loaded.controls.keys.get(&b'd').unwrap();
-    let moved = transition_state(&loaded.game, &loaded.levels[0].initial_state, right).unwrap();
-    let player = object_named(&loaded, "Player");
-
-    assert!(moved.has_object(&loaded.game, 1, 0, player));
-}
-
-#[test]
-#[ignore = "non-canonical legacy syntax; migrate before re-enabling"]
-fn anonymous_inline_rewrite_can_be_explicit_repeat() {
-    let source = r#"
-title anonymous_repeat
-
-puzzle default {
-layers 2
-empty .
-
-object Player 1
-legend P = Player
-
-input up w arrow_up
-input down s arrow_down
-input left a arrow_left
-input right d arrow_right
-
-rulesrepeat input directions [ Player | ] -> [ | Player ]
-end
-
-level start
-P...
-end
-}
-"#;
-    let loaded = parse_game(source).unwrap();
-    assert_eq!(loaded.game.rules().len(), 4);
-    assert!(
-        loaded
-            .game
-            .rules()
-            .iter()
-            .all(|rule| rule.application == RuleApplication::UntilStable)
-    );
-
-    let right = *loaded.controls.keys.get(&b'd').unwrap();
-    let moved = transition_state(&loaded.game, &loaded.levels[0].initial_state, right).unwrap();
-    let player = object_named(&loaded, "Player");
-
-    assert!(moved.has_object(&loaded.game, 3, 0, player));
-}
-
-#[test]
-#[ignore = "non-canonical legacy syntax; migrate before re-enabling"]
-fn repeat_statement_block_retries_group_variants_together() {
-    let source = r#"
-title repeat_group_block
-
-puzzle default {
-layers 3
-empty .
-
-object Player 1
-object Box 1
-object Wall 1
-object Moment 2
-group pushable = Player Box
-group solid = Player Box Wall
-
-legend P = Player
-legend B = Box
-legend # = Wall
-
-input up w arrow_up
-input down s arrow_down
-input left a arrow_left
-input right d arrow_right
-
-rules
-once input directions [ Player ] -> [ Player Moment ]
-input directions [ pushable Moment | Box no Moment ] -> [ pushable Moment | Box Moment ]
-repeat
-input directions [ pushable Moment | no solid ] -> [ | pushable ]
-end
-input directions [ pushable Moment ] -> [ pushable ]
-end
-
-level start
-PBBB.
-end
-}
-"#;
-    let loaded = parse_game(source).unwrap();
-    let right = *loaded.controls.keys.get(&b'd').unwrap();
-    let moved = transition_state(&loaded.game, &loaded.levels[0].initial_state, right).unwrap();
-    let player = object_named(&loaded, "Player");
-    let box_object = object_named(&loaded, "Box");
-    let moment = object_named(&loaded, "Moment");
-
-    assert!(moved.has_object(&loaded.game, 1, 0, player));
-    assert!(moved.has_object(&loaded.game, 2, 0, box_object));
-    assert!(moved.has_object(&loaded.game, 3, 0, box_object));
-    assert!(moved.has_object(&loaded.game, 4, 0, box_object));
-    assert_eq!(moved.object_count(moment), 0);
-}
-
-#[test]
-#[ignore = "non-canonical legacy syntax; migrate before re-enabling"]
-fn repeat_inline_rewrite_retries_group_variants_together() {
-    let source = r#"
-title repeat_group_inline
-
-puzzle default {
-layers 3
-empty .
-
-object Player 1
-object Box 1
-object Wall 1
-object Moment 2
-group pushable = Player Box
-group solid = Player Box Wall
-
-legend P = Player
-legend B = Box
-legend # = Wall
-
-input up w arrow_up
-input down s arrow_down
-input left a arrow_left
-input right d arrow_right
-
-rules
-once input directions [ Player ] -> [ Player Moment ]
-input directions [ pushable Moment | Box no Moment ] -> [ pushable Moment | Box Moment ]
-repeat input directions [ pushable Moment | no solid ] -> [ | pushable ]
-input directions [ pushable Moment ] -> [ pushable ]
-end
-
-level start
-PBBB.
-end
-}
-"#;
-    let loaded = parse_game(source).unwrap();
-    let right = *loaded.controls.keys.get(&b'd').unwrap();
-    let moved = transition_state(&loaded.game, &loaded.levels[0].initial_state, right).unwrap();
-    let player = object_named(&loaded, "Player");
-    let box_object = object_named(&loaded, "Box");
-    let moment = object_named(&loaded, "Moment");
-
-    assert!(moved.has_object(&loaded.game, 1, 0, player));
-    assert!(moved.has_object(&loaded.game, 2, 0, box_object));
-    assert!(moved.has_object(&loaded.game, 3, 0, box_object));
-    assert!(moved.has_object(&loaded.game, 4, 0, box_object));
-    assert_eq!(moved.object_count(moment), 0);
-}
-
-#[test]
-#[ignore = "non-canonical legacy syntax; migrate before re-enabling"]
-fn global_if_guards_neutral_rewrite_block() {
-    let source = r#"
-title global_if
-
-puzzle default {
-layers 2
-empty .
-
-var button_is_pushed = true
-
-object A 1
-object B 1
-legend A = A
-legend B = B
-
-input tick t arrow_right
-
-rulesif button_is_pushed == true
-once [ A ] -> [ B ]
-end
-end
-
-level start
-A
-end
-}
-"#;
-    let loaded = parse_game(source).unwrap();
-    let tick = *loaded.controls.keys.get(&b't').unwrap();
-    let moved = transition_state(&loaded.game, &loaded.levels[0].initial_state, tick).unwrap();
-    let object_b = object_named(&loaded, "B");
-
-    assert!(moved.has_object(&loaded.game, 0, 0, object_b));
-}
-
-#[test]
-#[ignore = "non-canonical legacy syntax; migrate before re-enabling"]
-fn rewrite_effect_can_set_global_for_later_if() {
-    let source = r#"
-title global_set_effect
-
-puzzle default {
-layers 2
-empty .
-
-var switch = false
-
-object A 1
-object B 1
-object C 1
-legend A = A
-legend B = B
-legend C = C
-
-input tick t arrow_right
-
-rules
-once [ A ] -> [ A ] set switch = true
-if switch == true
-once [ B ] -> [ C ]
-end
-end
-
-level start
-AB
-end
-}
-"#;
-    let loaded = parse_game(source).unwrap();
-    let tick = *loaded.controls.keys.get(&b't').unwrap();
-    let moved = transition_state(&loaded.game, &loaded.levels[0].initial_state, tick).unwrap();
-    let object_c = object_named(&loaded, "C");
-
-    assert_eq!(moved.visible_globals(), &[1]);
-    assert!(moved.has_object(&loaded.game, 1, 0, object_c));
-}
-
-#[test]
-#[ignore = "non-canonical legacy syntax; migrate before re-enabling"]
-fn bare_global_condition_reads_truthy_value() {
-    let source = r#"
-title bare_global_condition
-
-puzzle default {
-layers 2
-empty .
-
-var switch = true
-
-object A 1
-object B 1
-legend A = A
-legend B = B
-
-input tick t arrow_right
-
-rules {
-if switch {
-once [ A ] -> [ B ]
-}
-}
-
-level start {
-A
-}
-}
-"#;
-    let loaded = parse_game(source).unwrap();
-    let tick = *loaded.controls.keys.get(&b't').unwrap();
-    let moved = transition_state(&loaded.game, &loaded.levels[0].initial_state, tick).unwrap();
-    let object_b = object_named(&loaded, "B");
-
-    assert!(moved.has_object(&loaded.game, 0, 0, object_b));
-}
-
-#[test]
-#[ignore = "non-canonical legacy syntax; migrate before re-enabling"]
-fn rule_if_else_lowers_both_branches() {
-    let source = r#"
-title else_condition
-
-puzzle default {
-layers 2
-empty .
-
-var switch = false
-
-object A 1
-object B 1
-object C 1
-legend A = A
-legend B = B
-legend C = C
-
-input tick t arrow_right
-
-rules {
-if switch {
-once [ A ] -> [ B ]
-} else {
-once [ A ] -> [ C ]
-}
-}
-
-level start {
-A
-}
-}
-"#;
-    let loaded = parse_game(source).unwrap();
-    let tick = *loaded.controls.keys.get(&b't').unwrap();
-    let moved = transition_state(&loaded.game, &loaded.levels[0].initial_state, tick).unwrap();
-    let object_c = object_named(&loaded, "C");
-
-    assert!(moved.has_object(&loaded.game, 0, 0, object_c));
-}
-
-#[test]
-#[ignore = "non-canonical legacy syntax; migrate before re-enabling"]
-fn rewrite_can_have_only_global_effect() {
-    let source = r#"
-title effect_only_rewrite
-
-puzzle default {
-layers 3
-empty .
-
-var button_is_pushed = false
-
-object Button 0
-object Box 1
-object A 2
-object B 2
-render_overlay Button Box X
-legend A = A
-legend B = B
-
-input tick t arrow_right
-
-rules
-once [ Button Box ] -> set button_is_pushed = true
-if button_is_pushed == true
-once [ A ] -> [ B ]
-end
-end
-
-level start
-XA
-end
-}
-"#;
-    let loaded = parse_game(source).unwrap();
-    let tick = *loaded.controls.keys.get(&b't').unwrap();
-    let moved = transition_state(&loaded.game, &loaded.levels[0].initial_state, tick).unwrap();
-    let button = object_named(&loaded, "Button");
-    let box_object = object_named(&loaded, "Box");
-    let object_b = object_named(&loaded, "B");
-
-    assert_eq!(moved.visible_globals(), &[1]);
-    assert!(moved.has_object(&loaded.game, 0, 0, button));
-    assert!(moved.has_object(&loaded.game, 0, 0, box_object));
-    assert!(moved.has_object(&loaded.game, 1, 0, object_b));
-}
-
-#[test]
 fn set_prefix_supports_integer_assignment_ops() {
     let source = r#"
 title set_prefix_math_effects
@@ -10554,286 +8881,6 @@ once [ Button ] -> [ Button ] set count = 9
         transition_state(&loaded.game, &loaded.levels[0].initial_state, InputId(0)).unwrap();
 
     assert_eq!(moved.visible_globals(), &[9]);
-}
-
-#[test]
-#[ignore = "non-canonical legacy syntax; migrate before re-enabling"]
-fn global_effect_supports_basic_integer_assignment_ops() {
-    let source = r#"
-title global_math_effects
-
-puzzle default {
-layers 2
-empty .
-
-var count = 2
-
-object Button 0
-object Box 1
-render_overlay Button Box X
-
-input tick t arrow_right
-
-rules
-once [ Button Box ] -> count += 3
-once [ Button Box ] -> count *= 4
-once [ Button Box ] -> count -= 5
-once [ Button Box ] -> count /= 3
-once [ Button Box ] -> count %= 4
-once [ Button Box ] -> count = 9
-end
-
-level start
-X
-end
-}
-"#;
-    let loaded = parse_game(source).unwrap();
-    let tick = *loaded.controls.keys.get(&b't').unwrap();
-    let moved = transition_state(&loaded.game, &loaded.levels[0].initial_state, tick).unwrap();
-
-    assert_eq!(moved.visible_globals(), &[9]);
-}
-
-#[test]
-#[ignore = "non-canonical legacy syntax; migrate before re-enabling"]
-fn cancel_effect_reverts_board_and_global_writes() {
-    let source = r#"
-title cancel_effect
-
-puzzle default {
-layers 2
-empty .
-
-var switch = false
-
-object A 1
-object B 1
-object C 1
-legend A = A
-legend B = B
-legend C = C
-
-input tick t arrow_right
-
-rules
-once [ A ] -> [ B ]
-once [ B ] -> [ C ] set switch = true
-once [ C ] -> cancel
-end
-
-level start
-A
-end
-}
-"#;
-    let loaded = parse_game(source).unwrap();
-    let tick = *loaded.controls.keys.get(&b't').unwrap();
-    let initial = loaded.levels[0].initial_state.clone();
-    let moved = transition_state(&loaded.game, &initial, tick).unwrap();
-
-    assert_eq!(moved, initial);
-    assert_eq!(moved.visible_globals(), &[0]);
-}
-
-#[test]
-#[ignore = "non-canonical legacy syntax; migrate before re-enabling"]
-fn named_query_can_count_author_defined_group() {
-    let source = r#"
-title named_query_count
-
-puzzle default {
-layers 2
-empty .
-
-object Box 1
-object Crate 1
-object Door 1
-object OpenDoor 1
-group cargo = Box Crate
-legend B = Box
-legend C = Crate
-legend D = Door
-legend O = OpenDoor
-
-query cargo_count = count(cargo)
-
-input tick t arrow_right
-
-rulesif cargo_count == 2
-once [ Door ] -> [ OpenDoor ]
-end
-end
-
-level start
-BCD
-end
-}
-"#;
-    let loaded = parse_game(source).unwrap();
-    let tick = *loaded.controls.keys.get(&b't').unwrap();
-    let moved = transition_state(&loaded.game, &loaded.levels[0].initial_state, tick).unwrap();
-    let open_door = object_named(&loaded, "OpenDoor");
-
-    assert!(moved.has_object(&loaded.game, 2, 0, open_door));
-}
-
-#[test]
-#[ignore = "non-canonical legacy syntax; migrate before re-enabling"]
-fn named_query_can_count_pattern() {
-    let source = r#"
-title named_query_count_pattern
-
-puzzle default {
-layers 3
-empty .
-
-object Button 0
-object Box 1
-object Door 2
-object OpenDoor 2
-render_overlay Button Box X
-legend D = Door
-legend O = OpenDoor
-
-query pressed_buttons = count([ Button Box ])
-
-input tick t arrow_right
-
-rulesif pressed_buttons == 1
-once [ Door ] -> [ OpenDoor ]
-end
-end
-
-level start
-XD
-end
-}
-"#;
-    let loaded = parse_game(source).unwrap();
-    let tick = *loaded.controls.keys.get(&b't').unwrap();
-    let moved = transition_state(&loaded.game, &loaded.levels[0].initial_state, tick).unwrap();
-    let open_door = object_named(&loaded, "OpenDoor");
-
-    assert!(moved.has_object(&loaded.game, 1, 0, open_door));
-}
-
-#[test]
-#[ignore = "non-canonical legacy syntax; migrate before re-enabling"]
-fn anonymous_query_condition_can_count_pattern() {
-    let source = r#"
-title anonymous_query_count_pattern
-
-puzzle default {
-layers 3
-empty .
-
-object Button 0
-object Box 1
-object Door 2
-object OpenDoor 2
-render_overlay Button Box X
-legend D = Door
-legend O = OpenDoor
-
-input tick t arrow_right
-
-rulesif count([ Button Box ]) == 1
-once [ Door ] -> [ OpenDoor ]
-end
-end
-
-level start
-XD
-end
-}
-"#;
-    let loaded = parse_game(source).unwrap();
-    let tick = *loaded.controls.keys.get(&b't').unwrap();
-    let moved = transition_state(&loaded.game, &loaded.levels[0].initial_state, tick).unwrap();
-    let open_door = object_named(&loaded, "OpenDoor");
-
-    assert!(moved.has_object(&loaded.game, 1, 0, open_door));
-}
-
-#[test]
-#[ignore = "non-canonical legacy syntax; migrate before re-enabling"]
-fn anonymous_query_condition_can_count_oriented_pattern() {
-    let source = r#"
-title anonymous_query_count_oriented_pattern
-
-puzzle default {
-layers 2
-empty .
-
-object Rock 1
-object Door 1
-object OpenDoor 1
-legend R = Rock
-legend D = Door
-legend O = OpenDoor
-
-input tick t arrow_right
-
-rules {
-
-if count(down [ Rock | ]) == 1 {
-once [ Door ] -> [ OpenDoor ]
-}
-}
-
-level start
-RD
-..
-end
-}
-"#;
-    let loaded = parse_game(source).unwrap();
-    let tick = *loaded.controls.keys.get(&b't').unwrap();
-    let moved = transition_state(&loaded.game, &loaded.levels[0].initial_state, tick).unwrap();
-    let open_door = object_named(&loaded, "OpenDoor");
-
-    assert!(moved.has_object(&loaded.game, 1, 0, open_door));
-}
-
-#[test]
-#[ignore = "non-canonical legacy syntax; migrate before re-enabling"]
-fn anonymous_query_condition_accepts_some_oriented_pattern() {
-    let source = r#"
-title anonymous_query_some_oriented_pattern
-
-puzzle default {
-layers 2
-empty .
-
-object Rock 1
-object Door 1
-object OpenDoor 1
-legend R = Rock
-legend D = Door
-legend O = OpenDoor
-
-input tick t arrow_right
-
-rules {
-
-if some(down [ Rock | ]) {
-once [ Door ] -> [ OpenDoor ]
-}
-}
-
-level start
-RD
-..
-end
-}
-"#;
-    let loaded = parse_game(source).unwrap();
-    let tick = *loaded.controls.keys.get(&b't').unwrap();
-    let moved = transition_state(&loaded.game, &loaded.levels[0].initial_state, tick).unwrap();
-    let open_door = object_named(&loaded, "OpenDoor");
-
-    assert!(moved.has_object(&loaded.game, 1, 0, open_door));
 }
 
 #[test]
@@ -10911,43 +8958,6 @@ level start
 }
 
 #[test]
-#[ignore = "non-canonical legacy syntax; migrate before re-enabling"]
-fn repeat_until_can_stop_on_oriented_no_pattern() {
-    let source = r#"
-title repeat_until_oriented_no_pattern
-
-puzzle default {
-layers 2
-empty .
-
-object Rock 1
-legend R = Rock
-
-input tick t arrow_right
-
-rules {
-
-repeat until no down [ Rock | ] {
-once_all down [ Rock | ] -> [ | Rock ]
-}
-}
-
-level start
-R
-.
-.
-end
-}
-"#;
-    let loaded = parse_game(source).unwrap();
-    let tick = *loaded.controls.keys.get(&b't').unwrap();
-    let moved = transition_state(&loaded.game, &loaded.levels[0].initial_state, tick).unwrap();
-    let rock = object_named(&loaded, "Rock");
-
-    assert!(moved.has_object(&loaded.game, 0, 2, rock));
-}
-
-#[test]
 fn count_matches_is_no_longer_accepted() {
     let source = r#"
 title old_query_name
@@ -10975,441 +8985,6 @@ end
     let error = parse_game(source).unwrap_err().to_string();
 
     assert!(error.contains("unknown query function"));
-}
-
-#[test]
-#[ignore = "non-canonical legacy syntax; migrate before re-enabling"]
-fn anonymous_query_condition_can_read_board() {
-    let source = r#"
-title anonymous_query_condition
-
-puzzle default {
-layers 2
-empty .
-
-object Box 1
-object Crate 1
-object Door 1
-object OpenDoor 1
-group cargo = Box Crate
-legend B = Box
-legend C = Crate
-legend D = Door
-legend O = OpenDoor
-
-input tick t arrow_right
-
-rulesif exists(cargo)
-once [ Door ] -> [ OpenDoor ]
-end
-end
-
-level start
-CD
-end
-}
-"#;
-    let loaded = parse_game(source).unwrap();
-    let tick = *loaded.controls.keys.get(&b't').unwrap();
-    let moved = transition_state(&loaded.game, &loaded.levels[0].initial_state, tick).unwrap();
-    let open_door = object_named(&loaded, "OpenDoor");
-
-    assert!(moved.has_object(&loaded.game, 1, 0, open_door));
-}
-
-#[test]
-#[ignore = "non-canonical legacy syntax; migrate before re-enabling"]
-fn condition_supports_comparison_ops_and_or_branches() {
-    let source = r#"
-title query_compare_or
-
-puzzle default {
-layers 2
-empty .
-
-object Box 1
-object Door 1
-object OpenDoor 1
-group cargo = Box
-legend B = Box
-legend D = Door
-legend O = OpenDoor
-
-query cargo_count = count(cargo)
-
-input tick t arrow_right
-input open o arrow_left
-
-rulesif cargo_count > 0 or input == open
-once [ Door ] -> [ OpenDoor ]
-end
-end
-
-level cargo
-BD
-end
-
-level manual
-D
-end
-}
-"#;
-    let loaded = parse_game(source).unwrap();
-    let tick = *loaded.controls.keys.get(&b't').unwrap();
-    let open = *loaded.controls.keys.get(&b'o').unwrap();
-    let open_door = object_named(&loaded, "OpenDoor");
-
-    let cargo_moved =
-        transition_state(&loaded.game, &loaded.levels[0].initial_state, tick).unwrap();
-    let manual_moved =
-        transition_state(&loaded.game, &loaded.levels[1].initial_state, open).unwrap();
-
-    assert!(cargo_moved.has_object(&loaded.game, 1, 0, open_door));
-    assert!(manual_moved.has_object(&loaded.game, 0, 0, open_door));
-}
-
-#[test]
-#[ignore = "non-canonical legacy syntax; migrate before re-enabling"]
-fn map_selector_transforms_matched_schema_value() {
-    let source = r#"
-title map_selector_transform
-
-puzzle default {
-layers 2
-empty .
-
-tags {
-color = black white
-}
-
-map brighten color
-black -> white
-white -> white
-end
-
-object box:color 1
-legend b = box:black
-legend w = box:white
-
-input tick t arrow_right
-
-rules
-once [ box:color ] -> [ box:brighten(color) ]
-end
-
-level start
-bw
-end
-}
-"#;
-    let loaded = parse_game(source).unwrap();
-    let tick = *loaded.controls.keys.get(&b't').unwrap();
-    let moved = transition_state(&loaded.game, &loaded.levels[0].initial_state, tick).unwrap();
-    let box_white = object_named(&loaded, "box:white");
-
-    assert!(moved.has_object(&loaded.game, 0, 0, box_white));
-    assert!(moved.has_object(&loaded.game, 1, 0, box_white));
-}
-
-#[test]
-#[ignore = "non-canonical legacy syntax; migrate before re-enabling"]
-fn for_can_expand_value_set_values_inside_selectors() {
-    let source = r#"
-title value_set_for_selector
-
-puzzle default {
-layers 2
-empty .
-
-tags {
-color = black white
-}
-
-object box:color 1
-object Done 0
-legend b = box:black
-legend w = box:white
-
-input tick t arrow_right
-
-rulesfor c in color
-[ box:c no Done ] -> [ Done box:c ]
-end
-end
-
-level start
-bw
-end
-}
-"#;
-    let loaded = parse_game(source).unwrap();
-    let tick = *loaded.controls.keys.get(&b't').unwrap();
-    let moved = transition_state(&loaded.game, &loaded.levels[0].initial_state, tick).unwrap();
-    let done = object_named(&loaded, "Done");
-
-    assert!(moved.has_object(&loaded.game, 0, 0, done));
-    assert!(moved.has_object(&loaded.game, 1, 0, done));
-}
-
-#[test]
-#[ignore = "non-canonical legacy syntax; migrate before re-enabling"]
-fn disconnected_pattern_blocks_match_independent_origins() {
-    let source = r#"
-title disconnected_blocks
-
-puzzle default {
-layers 2
-empty .
-
-object Player 1
-object Bird 1
-legend P = Player
-legend B = Bird
-
-input up w arrow_up
-input down s arrow_down
-input left a arrow_left
-input right d arrow_right
-
-rules
-once right [ Player ] [ Bird ] -> [ Player ] [ ]
-end
-
-level start
-P.B
-end
-}
-"#;
-    let loaded = parse_game(source).unwrap();
-    let right = *loaded.controls.keys.get(&b'd').unwrap();
-    let moved = transition_state(&loaded.game, &loaded.levels[0].initial_state, right).unwrap();
-    let player = object_named(&loaded, "Player");
-    let bird = object_named(&loaded, "Bird");
-
-    assert!(moved.has_object(&loaded.game, 0, 0, player));
-    assert_eq!(moved.object_count(bird), 0);
-}
-
-#[test]
-#[ignore = "non-canonical legacy syntax; migrate before re-enabling"]
-fn ellipsis_matches_variable_distance_inside_a_block() {
-    let source = r#"
-title ellipsis_rule
-
-puzzle default {
-layers 2
-empty .
-
-object Laser 1
-object Target 1
-object Ash 1
-legend L = Laser
-legend T = Target
-legend A = Ash
-
-input up w arrow_up
-input down s arrow_down
-input left a arrow_left
-input right d arrow_right
-
-rules
-once right [ Laser | ... | Target ] -> [ Laser | ... | Ash ]
-end
-
-level start
-L..T
-end
-}
-"#;
-    let loaded = parse_game(source).unwrap();
-    let right = *loaded.controls.keys.get(&b'd').unwrap();
-    let moved = transition_state(&loaded.game, &loaded.levels[0].initial_state, right).unwrap();
-    let laser = object_named(&loaded, "Laser");
-    let target = object_named(&loaded, "Target");
-    let ash = object_named(&loaded, "Ash");
-
-    assert!(moved.has_object(&loaded.game, 0, 0, laser));
-    assert_eq!(moved.object_count(target), 0);
-    assert!(moved.has_object(&loaded.game, 3, 0, ash));
-}
-
-#[test]
-#[ignore = "non-canonical legacy syntax; migrate before re-enabling"]
-fn rectangular_blocks_match_and_write_by_row_and_column() {
-    let source = r#"
-title rectangular_block
-
-puzzle default {
-layers 2
-empty .
-
-object Player 1
-object Box 1
-object Goal 0
-object Wall 1
-legend P = Player
-legend B = Box
-legend G = Goal
-legend # = Wall
-
-input up w arrow_up
-input down s arrow_down
-input left a arrow_left
-input right d arrow_right
-
-rules
-once right [ Player | Box ; Goal | no Wall ] -> [ Player | Box ; Goal | Wall ]
-end
-
-level start
-PB
-G.
-end
-}
-"#;
-    let loaded = parse_game(source).unwrap();
-    let right = *loaded.controls.keys.get(&b'd').unwrap();
-    let moved = transition_state(&loaded.game, &loaded.levels[0].initial_state, right).unwrap();
-    let wall = object_named(&loaded, "Wall");
-    let goal = object_named(&loaded, "Goal");
-
-    assert!(moved.has_object(&loaded.game, 1, 1, wall));
-    assert!(moved.has_object(&loaded.game, 0, 1, goal));
-}
-
-#[test]
-#[ignore = "non-canonical legacy syntax; migrate before re-enabling"]
-fn ellipsis_inside_rectangular_block_shares_gap_across_rows() {
-    let source = r#"
-title rectangular_ellipsis
-
-puzzle default {
-layers 2
-empty .
-
-object A 1
-object B 1
-object C 1
-object D 1
-object X 1
-object Y 1
-legend A = A
-legend B = B
-legend C = C
-legend D = D
-legend X = X
-legend Y = Y
-
-input up w arrow_up
-input down s arrow_down
-input left a arrow_left
-input right d arrow_right
-
-rules
-once right [ A | ... | B ; C | ... | D ] -> [ A | ... | X ; C | ... | Y ]
-end
-
-level aligned
-A.B
-C.D
-end
-
-level misaligned
-A.B
-CD.
-end
-}
-"#;
-    let loaded = parse_game(source).unwrap();
-    let right = *loaded.controls.keys.get(&b'd').unwrap();
-    let x = object_named(&loaded, "X");
-    let y = object_named(&loaded, "Y");
-    let b = object_named(&loaded, "B");
-    let d = object_named(&loaded, "D");
-
-    let aligned = transition_state(&loaded.game, &loaded.levels[0].initial_state, right).unwrap();
-    assert!(aligned.has_object(&loaded.game, 2, 0, x));
-    assert!(aligned.has_object(&loaded.game, 2, 1, y));
-
-    let misaligned =
-        transition_state(&loaded.game, &loaded.levels[1].initial_state, right).unwrap();
-    assert!(misaligned.has_object(&loaded.game, 2, 0, b));
-    assert!(misaligned.has_object(&loaded.game, 1, 1, d));
-    assert_eq!(misaligned.object_count(x), 0);
-    assert_eq!(misaligned.object_count(y), 0);
-}
-
-#[test]
-#[ignore = "non-canonical legacy syntax; migrate before re-enabling"]
-fn ellipsis_inside_rectangular_block_requires_matching_columns() {
-    let source = r#"
-title rectangular_ellipsis_layout
-
-puzzle default {
-layers 2
-empty .
-
-object A 1
-object B 1
-object C 1
-object D 1
-legend A = A
-legend B = B
-legend C = C
-legend D = D
-
-input up w arrow_up
-input down s arrow_down
-input left a arrow_left
-input right d arrow_right
-
-rules
-once right [ A | ... | B ; C | D | ... ] -> [ A | ... | B ; C | D | ... ]
-end
-
-level start
-A.B
-CD.
-end
-}
-"#;
-    let error = parse_game(source).unwrap_err().to_string();
-
-    assert!(error.contains(
-        "ellipsis inside rectangular blocks requires each row to use the same ellipsis columns"
-    ));
-}
-
-#[test]
-#[ignore = "non-canonical legacy syntax; migrate before re-enabling"]
-fn missing_main_is_error() {
-    let source = r#"
-title missing_main
-
-puzzle default {
-layers 2
-empty .
-
-object Player 1
-legend P = Player
-
-input up w arrow_up
-input down s arrow_down
-input left a arrow_left
-input right d arrow_right
-
-routine move once
-once input directions [ Player | ] -> [ | Player ]
-end
-
-level start
-P.
-end
-}
-"#;
-    let error = parse_game(source).unwrap_err().to_string();
-
-    assert!(error.contains("missing puzzle rules"));
 }
 
 #[test]
@@ -11474,126 +9049,6 @@ P.
     let core_solved = transition_state(&solver_core, initial, right).unwrap();
     assert!(core_solved.has_object(&loaded.game, 1, 0, player));
     assert!(!core_solved.has_object(&loaded.game, 1, 0, trail));
-}
-
-#[test]
-#[ignore = "non-canonical legacy syntax; migrate before re-enabling"]
-fn display_block_can_depend_on_transition_input() {
-    let source = r#"
-title display_input
-
-puzzle default {
-objects {
-Player
-}
-
-display_objects {
-Trail
-}
-
-layers {
-actor = Player
-@marker = Trail
-}
-
-legend {
-. = empty
-P = Player
-t = Trail
-}
-
-input left a arrow_left
-input right d arrow_right
-
-routine display paint once {
-[ Player no Trail ] -> [ Player Trail ]
-}
-
-rules {
-if input == right {
-display paint
-}
-}
-
-levels {
-level start
-P
-}
-}
-"#;
-    let loaded = parse_game(source).unwrap();
-    let trail = object_named(&loaded, "Trail");
-    let left = input_named(&loaded, "left");
-    let right = input_named(&loaded, "right");
-    let initial = &loaded.levels[0].initial_state;
-
-    let left_state = transition_state(&loaded.game, initial, left).unwrap();
-    assert!(!left_state.has_object(&loaded.game, 0, 0, trail));
-
-    let right_state = transition_state(&loaded.game, initial, right).unwrap();
-    assert!(right_state.has_object(&loaded.game, 0, 0, trail));
-}
-
-#[test]
-#[ignore = "non-canonical legacy syntax; migrate before re-enabling"]
-fn inline_display_rewrite_and_block_run_at_call_site() {
-    let source = r#"
-title display_inline
-
-puzzle default {
-objects {
-Player
-}
-
-display_objects {
-Trail
-Glow
-}
-
-layers {
-actor = Player
-@trail = Trail
-@glow = Glow
-}
-
-legend {
-. = empty
-P = Player
-t = Trail
-g = Glow
-}
-
-input right d arrow_right
-
-routine move once {
-}
-
-rules {
-display [ Player no Trail ] -> [ Player Trail ]
-display {
-[ Player no Glow ] -> [ Player Glow ]
-}
-}
-
-levels {
-level start
-P
-}
-}
-"#;
-    let loaded = parse_game(source).unwrap();
-    let trail = object_named(&loaded, "Trail");
-    let glow = object_named(&loaded, "Glow");
-    let right = input_named(&loaded, "right");
-    let initial = &loaded.levels[0].initial_state;
-
-    let played = transition_state(&loaded.game, initial, right).unwrap();
-    assert!(played.has_object(&loaded.game, 0, 0, trail));
-    assert!(played.has_object(&loaded.game, 0, 0, glow));
-
-    let solved = transition_solver_state(&loaded.game, initial, right).unwrap();
-    assert!(!solved.has_object(&loaded.game, 0, 0, trail));
-    assert!(!solved.has_object(&loaded.game, 0, 0, glow));
 }
 
 #[test]
@@ -11890,6 +9345,42 @@ P
     let error = parse_game(source).unwrap_err().to_string();
 
     assert!(error.contains("display object matches cannot cause gameplay changes"));
+}
+
+#[test]
+fn display_match_can_write_display_group_movement_scratch() {
+    let source = r#"
+title display_group_movement_scratch
+
+puzzle default {
+tags {
+kind = A B
+}
+
+layers {
+@light = @LightBase @Light:kind
+solid = Box:kind
+}
+
+legend {
+. = empty
+A = Box:A
+}
+
+rules {
+input [ Box:A ] -> [ > Box:A ]
+[ > Box:* @light ] -> [ > Box:* > @light ]
+move
+}
+
+levels {
+level start
+A
+}
+}
+"#;
+
+    parse_game(source).unwrap();
 }
 
 #[test]
@@ -12834,6 +10325,106 @@ scene level_select {
     assert!(fixture_json.contains("\"kind\": \"for\""));
     assert!(fixture_json.contains("\"scroll\": true"));
     assert!(!fixture_json.contains("\"kind\": \"level_menu\""));
+}
+
+#[test]
+fn theme_name_statement_before_puzzle3_does_not_capture_model_block() {
+    let document = super::parse_game(
+        r#"
+title "Themed 3D"
+theme puzzlescript
+
+puzzle3 push3 {
+  layers {
+    actor = Player
+  }
+  rules {
+  }
+}
+
+levels3 demo of push3 {
+  legend {
+    P = Player
+  }
+  level start {
+    P
+  }
+}
+"#,
+    )
+    .unwrap();
+
+    assert_eq!(document.theme.name.as_deref(), Some("puzzlescript"));
+    assert!(matches!(
+        document.models.as_slice(),
+        [LoadedDocumentModel::Puzzle3d { name, puzzle }]
+            if name == "push3" && puzzle.level_bundle.as_ref().unwrap().level_count() == 1
+    ));
+}
+
+#[test]
+fn document_runtime_sources_keep_model_sources_separate_from_document_scenes() {
+    let source = r#"
+title "Mixed Runtime"
+theme puzzlescript
+
+puzzle flat {
+layers 1
+empty .
+object Player 0
+rules {
+}
+}
+
+levels flat_levels of flat {
+legend P = Player
+level start {
+P
+}
+}
+
+puzzle3 cube {
+layers {
+actor = Player
+}
+rules {
+}
+}
+
+levels3 cube_levels of cube {
+legend {
+P = Player
+}
+level start {
+P
+}
+}
+
+scene mixed_play {
+state {
+flat_board = puzzle flat
+cube_board = puzzle3 cube
+}
+layout {
+puzzle flat_board
+puzzle3 cube_board
+}
+}
+"#;
+
+    let sources = super::split_document_runtime_sources(source).unwrap();
+
+    assert!(sources.model_2d.contains("puzzle flat"));
+    assert!(sources.model_2d.contains("levels flat_levels"));
+    assert!(!sources.model_2d.contains("scene mixed_play"));
+    assert!(!sources.model_2d.contains("puzzle3 cube_board"));
+    assert!(!sources.model_2d.contains("puzzle3 cube {"));
+    assert!(!sources.model_2d.contains("levels3 cube_levels"));
+    assert!(sources.model_3d.contains("puzzle3 cube {"));
+    assert!(sources.model_3d.contains("levels3 cube_levels"));
+    assert!(!sources.model_3d.contains("puzzle flat"));
+    assert!(!sources.model_3d.contains("scene mixed_play"));
+    assert!(!sources.model_3d.contains("theme puzzlescript"));
 }
 
 #[test]

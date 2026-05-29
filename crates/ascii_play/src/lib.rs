@@ -7,9 +7,9 @@ use std::process::Command;
 
 use puzzle_core::{InputId, State as PuzzleState, transition_program};
 use puzzle_lang::{
-    ArrowKey, ForSource, KeyTrigger, LoadedDocumentModel, LoadedGame, MenuComponent,
-    ResourceSelection, SceneComponent, SceneEffect, SceneExpr, SceneTextContent, SceneValue,
-    VisualSpriteKind, discover_game_entries, parse_game_file, resolve_game_entry,
+    ArrowKey, ForSource, KeyTrigger, LoadedDocumentModel, LoadedGame, ResourceSelection,
+    SceneComponent, SceneEffect, SceneExpr, SceneTextContent, SceneValue, VisualSpriteKind,
+    discover_game_entries, parse_game_file, resolve_game_entry,
 };
 use puzzle_play::{GameSession, MessageEvent, SoundEvent, WaitEvent, cell_objects};
 use puzzle3d_model::{
@@ -357,67 +357,6 @@ fn render_component(
                 }
                 out.push_str(&level.name);
                 out.push('\n');
-            }
-        }
-        SceneComponent::Menu(instance) => {
-            if let Some(menu) = loaded.menus.iter().find(|menu| menu.name == instance.menu) {
-                let mut scope = scope.clone();
-                scope.menu_instance = Some(instance.name.clone());
-                scope.menu_cursor = menu_cursor(session, &scope.scene_name, &instance.name);
-                let mut button_index = 0;
-                render_menu_components(loaded, session, &menu.view, &scope, &mut button_index, out);
-            }
-        }
-    }
-}
-
-fn render_menu_components(
-    loaded: &LoadedGame,
-    session: &GameSession,
-    components: &[MenuComponent],
-    scope: &RenderScope,
-    button_index: &mut usize,
-    out: &mut String,
-) {
-    for component in components {
-        match component {
-            MenuComponent::Text(text) => {
-                out.push_str(&eval_text(loaded, session, &text.content, scope));
-                out.push('\n');
-            }
-            MenuComponent::Button(button) => {
-                let selected = *button_index == scope.menu_cursor;
-                *button_index += 1;
-                out.push_str(if selected { "> [" } else { "  [" });
-                out.push_str(&eval_expr(loaded, session, &button.label, scope));
-                out.push_str("]\n");
-            }
-            MenuComponent::Row(container)
-            | MenuComponent::Column(container)
-            | MenuComponent::Box(container) => {
-                render_menu_components(
-                    loaded,
-                    session,
-                    &container.children,
-                    scope,
-                    button_index,
-                    out,
-                );
-            }
-            MenuComponent::For(for_view) => {
-                if for_view.source.is_levels() {
-                    for index in scene_level_indices(loaded, &scope.scene_name) {
-                        let child_scope = scope.with_level(&for_view.binding, index);
-                        render_menu_components(
-                            loaded,
-                            session,
-                            &for_view.children,
-                            &child_scope,
-                            button_index,
-                            out,
-                        );
-                    }
-                }
             }
         }
     }
@@ -1114,24 +1053,11 @@ fn level_ref_field(
     }
 }
 
-fn menu_cursor(session: &GameSession, scene_name: &str, instance: &str) -> usize {
-    session
-        .scene_state_for(scene_name)
-        .and_then(|state| state.values.get(&format!("__menu_{instance}_cursor")))
-        .and_then(|value| match value {
-            SceneValue::Int(value) => usize::try_from(*value).ok(),
-            _ => None,
-        })
-        .unwrap_or(0)
-}
-
 #[derive(Clone, Debug, Default)]
 struct RenderScope {
     scene_name: String,
     levels: HashMap<String, usize>,
     level_index: Option<usize>,
-    menu_instance: Option<String>,
-    menu_cursor: usize,
 }
 
 impl RenderScope {
@@ -1260,12 +1186,6 @@ fn command_for_key(
                 &binding.effect,
                 &RenderScope::for_scene(&screen.name),
             );
-        }
-    }
-
-    if let Some(menu) = first_menu_instance(&screen.components) {
-        if let Some(input) = menu_input_for_key(&key) {
-            return Some(format!("{}.{}", menu.name, input));
         }
     }
 
@@ -1420,8 +1340,7 @@ fn collect_button_commands(
             | SceneComponent::Title(_)
             | SceneComponent::Subtitle(_)
             | SceneComponent::Text(_)
-            | SceneComponent::LevelMenu(_)
-            | SceneComponent::Menu(_) => {}
+            | SceneComponent::LevelMenu(_) => {}
         }
     }
 }
@@ -1467,36 +1386,6 @@ fn menu_input_for_key(key: &TerminalKey) -> Option<&'static str> {
         TerminalKey::Named("Escape") | TerminalKey::Char('q') => Some("back"),
         _ => None,
     }
-}
-
-fn first_menu_instance(components: &[SceneComponent]) -> Option<&puzzle_lang::MenuInstanceDef> {
-    for component in components {
-        match component {
-            SceneComponent::Menu(instance) => return Some(instance),
-            SceneComponent::Row(container)
-            | SceneComponent::Column(container)
-            | SceneComponent::Box(container) => {
-                if let Some(instance) = first_menu_instance(&container.children) {
-                    return Some(instance);
-                }
-            }
-            SceneComponent::Conditional(conditional) => {
-                if let Some(instance) = first_menu_instance(&conditional.children) {
-                    return Some(instance);
-                }
-                if let Some(instance) = first_menu_instance(&conditional.else_children) {
-                    return Some(instance);
-                }
-            }
-            SceneComponent::For(for_view) => {
-                if let Some(instance) = first_menu_instance(&for_view.children) {
-                    return Some(instance);
-                }
-            }
-            _ => {}
-        }
-    }
-    None
 }
 
 fn first_level_menu(components: &[SceneComponent]) -> Option<&puzzle_lang::LevelMenuDef> {
@@ -1922,12 +1811,7 @@ P
         )
         .unwrap();
         let session = GameSession::new(&loaded);
-        let state = &session
-            .scene_state_for("playing")
-            .unwrap()
-            .puzzles
-            .get("board")
-            .unwrap();
+        let state = &session.scene_state().unwrap().puzzles["default"];
 
         assert_eq!(
             render_colored_ascii_top(&loaded, state),
@@ -1990,12 +1874,7 @@ level start
         )
         .unwrap();
         let session = GameSession::new(&loaded);
-        let state = &session
-            .scene_state_for("playing")
-            .unwrap()
-            .puzzles
-            .get("board")
-            .unwrap();
+        let state = &session.scene_state().unwrap().puzzles["default"];
 
         assert_eq!(
             render_colored_ascii_top(&loaded, state),
@@ -2011,7 +1890,7 @@ title floor_dot_color
 
 puzzle default {
 layers {
-display_floor = @Floor
+@display_floor = @Floor
 solid = Player
 }
 sprites {
@@ -2039,12 +1918,7 @@ level start
         )
         .unwrap();
         let session = GameSession::new(&loaded);
-        let state = &session
-            .scene_state_for("playing")
-            .unwrap()
-            .puzzles
-            .get("board")
-            .unwrap();
+        let state = &session.scene_state().unwrap().puzzles["default"];
 
         assert_eq!(render_colored_ascii_top(&loaded, state), ". ");
     }

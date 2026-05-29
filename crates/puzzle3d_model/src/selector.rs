@@ -1,6 +1,6 @@
 use crate::{
-    Direction3, DirectionSet3, Frame3, FrameSet3, Guard3, MatchCell3, ObjectId, Offset3, Pattern3,
-    Rule3, RuleApplication3, RuleId3, WriteOp3,
+    Direction3, DirectionSet3, Frame3, FrameSet3, Guard3, LayerId, MatchCell3, ObjectId, Offset3,
+    Pattern3, Rule3, RuleApplication3, RuleId3, WriteOp3,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -8,6 +8,7 @@ pub struct SelectorCatalog3 {
     pub objects: Vec<ConcreteObject3>,
     pub families: Vec<ObjectFamily3>,
     pub groups: Vec<SelectorGroup3>,
+    object_layers: Vec<(ObjectId, LayerId)>,
 }
 
 impl SelectorCatalog3 {
@@ -16,10 +17,21 @@ impl SelectorCatalog3 {
         families: Vec<ObjectFamily3>,
         groups: Vec<SelectorGroup3>,
     ) -> Self {
+        let object_layers = default_object_layers(&objects, &families);
+        Self::new_with_object_layers(objects, families, groups, object_layers)
+    }
+
+    pub fn new_with_object_layers(
+        objects: Vec<ConcreteObject3>,
+        families: Vec<ObjectFamily3>,
+        groups: Vec<SelectorGroup3>,
+        object_layers: Vec<(ObjectId, LayerId)>,
+    ) -> Self {
         Self {
             objects,
             families,
             groups,
+            object_layers,
         }
     }
 
@@ -28,8 +40,30 @@ impl SelectorCatalog3 {
         families: Vec<ObjectFamily3>,
         groups: Vec<SelectorGroup3>,
     ) -> Result<Self, SelectorCatalogError3> {
+        let object_layers = default_object_layers(&objects, &families);
+        Self::checked_new_with_object_layers(objects, families, groups, object_layers)
+    }
+
+    pub fn checked_new_with_object_layers(
+        objects: Vec<ConcreteObject3>,
+        families: Vec<ObjectFamily3>,
+        groups: Vec<SelectorGroup3>,
+        object_layers: Vec<(ObjectId, LayerId)>,
+    ) -> Result<Self, SelectorCatalogError3> {
         validate_catalog_names(&objects, &families, &groups)?;
-        Ok(Self::new(objects, families, groups))
+        Ok(Self::new_with_object_layers(
+            objects,
+            families,
+            groups,
+            object_layers,
+        ))
+    }
+
+    pub fn object_layer(&self, object: ObjectId) -> Option<LayerId> {
+        self.object_layers
+            .iter()
+            .find(|(candidate, _)| *candidate == object)
+            .map(|(_, layer)| *layer)
     }
 
     pub fn resolve(&self, selector: &ObjectSelector3) -> Result<ResolvedSelector3, SelectorError3> {
@@ -785,7 +819,17 @@ struct PatternPartial3 {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct SelectorAssignment3 {
     token: String,
-    object: ObjectId,
+    value: SelectorAssignmentValue3,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum SelectorAssignmentValue3 {
+    Object(ObjectId),
+    ObjectSet {
+        binding: u16,
+        layer: LayerId,
+        objects: Vec<ObjectId>,
+    },
 }
 
 fn lower_match_cell_template(
@@ -806,20 +850,76 @@ fn lower_match_cell_template(
     }
 
     let mut partials = vec![(cell, assignments)];
-    for selector in &template.require {
+    for (selector_index, selector) in template.require.iter().enumerate() {
         let resolved = catalog.resolve(selector)?;
         let mut next = Vec::new();
         for (cell, assignments) in partials {
             if let Some(assigned) = assignments
                 .iter()
                 .find(|assignment| assignment.token == resolved.token)
-                .map(|assignment| assignment.object)
             {
-                if resolved.alternatives.contains(&assigned) {
-                    let mut cell = cell;
-                    push_unique_object(&mut cell.require_objects, assigned);
-                    next.push((cell, assignments));
+                match &assigned.value {
+                    SelectorAssignmentValue3::Object(object) => {
+                        if resolved.alternatives.contains(object) {
+                            let mut cell = cell;
+                            push_unique_object(&mut cell.require_objects, *object);
+                            next.push((cell, assignments));
+                        }
+                    }
+                    SelectorAssignmentValue3::ObjectSet {
+                        binding,
+                        layer,
+                        objects,
+                    } => {
+                        if objects
+                            .iter()
+                            .any(|object| resolved.alternatives.contains(object))
+                        {
+                            let mut cell = cell;
+                            if !cell
+                                .require_object_sets
+                                .iter()
+                                .any(|existing| existing.binding == *binding)
+                            {
+                                cell.require_object_sets
+                                    .push(puzzle_kernel::ObjectSetMatcher {
+                                        binding: *binding,
+                                        layer: *layer,
+                                        objects: objects.clone(),
+                                    });
+                            }
+                            next.push((cell, assignments));
+                        }
+                    }
                 }
+                continue;
+            }
+
+            if selector.can_use_runtime_object_set()
+                && let Some(matcher) = same_layer_object_set_matcher(
+                    catalog,
+                    u16::try_from(assignments.len()).unwrap_or(u16::MAX),
+                    &resolved.alternatives,
+                )
+                && match_cell_selector_can_use_object_set(
+                    catalog,
+                    template,
+                    selector_index,
+                    matcher.layer,
+                )
+            {
+                let mut cell = cell;
+                cell.require_object_sets.push(matcher.clone());
+                let mut assignments = assignments.clone();
+                assignments.push(SelectorAssignment3 {
+                    token: resolved.token.clone(),
+                    value: SelectorAssignmentValue3::ObjectSet {
+                        binding: matcher.binding,
+                        layer: matcher.layer,
+                        objects: matcher.objects,
+                    },
+                });
+                next.push((cell, assignments));
                 continue;
             }
 
@@ -829,7 +929,7 @@ fn lower_match_cell_template(
                 push_unique_object(&mut cell.require_objects, *object);
                 assignments.push(SelectorAssignment3 {
                     token: resolved.token.clone(),
-                    object: *object,
+                    value: SelectorAssignmentValue3::Object(*object),
                 });
                 next.push((cell, assignments));
             }
@@ -847,56 +947,173 @@ fn lower_match_cell_template(
         .collect())
 }
 
+fn same_layer_object_set_matcher(
+    catalog: &SelectorCatalog3,
+    binding: u16,
+    alternatives: &[ObjectId],
+) -> Option<puzzle_kernel::ObjectSetMatcher<ObjectId, LayerId>> {
+    if alternatives.len() <= 1 {
+        return None;
+    }
+    puzzle_kernel::object_set_matcher_for_same_layer(binding, alternatives, |object| {
+        catalog.object_layer(object)
+    })
+}
+
+fn match_cell_selector_can_use_object_set(
+    catalog: &SelectorCatalog3,
+    template: &MatchCellTemplate3,
+    selector_index: usize,
+    layer: LayerId,
+) -> bool {
+    !template
+        .require
+        .iter()
+        .enumerate()
+        .any(|(other_index, other)| {
+            if other_index == selector_index {
+                return false;
+            }
+            let Ok(resolved) = catalog.resolve(other) else {
+                return true;
+            };
+            resolved.alternatives.len() > 1
+                && same_layer_object_set_matcher(catalog, 0, &resolved.alternatives)
+                    .is_none_or(|matcher| matcher.layer == layer)
+        })
+}
+
 fn lower_write_templates(
     catalog: &SelectorCatalog3,
     assignments: &[SelectorAssignment3],
     templates: &[WriteOpTemplate3],
 ) -> Result<Vec<WriteOp3>, RuleLoweringError3> {
-    templates
-        .iter()
-        .map(|template| match template {
-            WriteOpTemplate3::Add { offset, object } => Ok(WriteOp3::Add {
-                offset: *offset,
-                object: write_object(catalog, assignments, object)?,
-            }),
-            WriteOpTemplate3::Remove { offset, object } => Ok(WriteOp3::Remove {
-                offset: *offset,
-                object: write_object(catalog, assignments, object)?,
-            }),
+    let mut writes = Vec::new();
+    for template in templates {
+        match template {
+            WriteOpTemplate3::Add { offset, object } => {
+                match write_object(catalog, assignments, object)? {
+                    WriteObject3::Object(object) => writes.push(WriteOp3::Add {
+                        offset: *offset,
+                        object,
+                    }),
+                    WriteObject3::ObjectSet { binding } => writes.push(WriteOp3::AddObjectSet {
+                        offset: *offset,
+                        binding,
+                    }),
+                }
+            }
+            WriteOpTemplate3::Remove { offset, object } => {
+                match write_object(catalog, assignments, object)? {
+                    WriteObject3::Object(object) => writes.push(WriteOp3::Remove {
+                        offset: *offset,
+                        object,
+                    }),
+                    WriteObject3::ObjectSet { binding } => writes.push(WriteOp3::RemoveObjectSet {
+                        offset: *offset,
+                        binding,
+                    }),
+                }
+            }
             WriteOpTemplate3::Replace {
                 offset,
                 remove,
                 add,
-            } => Ok(WriteOp3::Replace {
-                offset: *offset,
-                remove: write_object(catalog, assignments, remove)?,
-                add: write_object(catalog, assignments, add)?,
-            }),
+            } => {
+                match (
+                    write_object(catalog, assignments, remove)?,
+                    write_object(catalog, assignments, add)?,
+                ) {
+                    (WriteObject3::Object(remove), WriteObject3::Object(add)) => {
+                        writes.push(WriteOp3::Replace {
+                            offset: *offset,
+                            remove,
+                            add,
+                        });
+                    }
+                    (WriteObject3::ObjectSet { binding }, WriteObject3::Object(add)) => {
+                        writes.push(WriteOp3::RemoveObjectSet {
+                            offset: *offset,
+                            binding,
+                        });
+                        writes.push(WriteOp3::Add {
+                            offset: *offset,
+                            object: add,
+                        });
+                    }
+                    (WriteObject3::Object(remove), WriteObject3::ObjectSet { binding }) => {
+                        writes.push(WriteOp3::Remove {
+                            offset: *offset,
+                            object: remove,
+                        });
+                        writes.push(WriteOp3::AddObjectSet {
+                            offset: *offset,
+                            binding,
+                        });
+                    }
+                    (
+                        WriteObject3::ObjectSet {
+                            binding: remove_binding,
+                        },
+                        WriteObject3::ObjectSet {
+                            binding: add_binding,
+                        },
+                    ) => {
+                        writes.push(WriteOp3::RemoveObjectSet {
+                            offset: *offset,
+                            binding: remove_binding,
+                        });
+                        writes.push(WriteOp3::AddObjectSet {
+                            offset: *offset,
+                            binding: add_binding,
+                        });
+                    }
+                }
+            }
             WriteOpTemplate3::Move {
                 from_offset,
                 to_offset,
                 object,
-            } => Ok(WriteOp3::Move {
-                from_offset: *from_offset,
-                to_offset: *to_offset,
-                object: write_object(catalog, assignments, object)?,
-            }),
-        })
-        .collect()
+            } => match write_object(catalog, assignments, object)? {
+                WriteObject3::Object(object) => writes.push(WriteOp3::Move {
+                    from_offset: *from_offset,
+                    to_offset: *to_offset,
+                    object,
+                }),
+                WriteObject3::ObjectSet { binding } => writes.push(WriteOp3::MoveObjectSet {
+                    from_offset: *from_offset,
+                    to_offset: *to_offset,
+                    binding,
+                }),
+            },
+        }
+    }
+    Ok(writes)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WriteObject3 {
+    Object(ObjectId),
+    ObjectSet { binding: u16 },
 }
 
 fn write_object(
     catalog: &SelectorCatalog3,
     assignments: &[SelectorAssignment3],
     selector: &ObjectSelector3,
-) -> Result<ObjectId, RuleLoweringError3> {
+) -> Result<WriteObject3, RuleLoweringError3> {
     let token = selector.token();
-    if let Some(object) = assignments
+    if let Some(value) = assignments
         .iter()
         .find(|assignment| assignment.token == token)
-        .map(|assignment| assignment.object)
+        .map(|assignment| &assignment.value)
     {
-        return Ok(object);
+        return Ok(match value {
+            SelectorAssignmentValue3::Object(object) => WriteObject3::Object(*object),
+            SelectorAssignmentValue3::ObjectSet { binding, .. } => {
+                WriteObject3::ObjectSet { binding: *binding }
+            }
+        });
     }
 
     if selector.has_occurrence_label() {
@@ -905,7 +1122,7 @@ fn write_object(
 
     let resolved = catalog.resolve(selector)?;
     if resolved.alternatives.len() == 1 {
-        return Ok(resolved.alternatives[0]);
+        return Ok(WriteObject3::Object(resolved.alternatives[0]));
     }
 
     Err(RuleLoweringError3::AmbiguousWriteSelector {
@@ -1116,6 +1333,10 @@ impl ObjectSelector3 {
     pub fn has_occurrence_label(&self) -> bool {
         matches!(self, Self::Labeled { .. })
     }
+
+    fn can_use_runtime_object_set(&self) -> bool {
+        matches!(self, Self::Group(_))
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1223,6 +1444,22 @@ impl From<SelectorError3> for RuleLoweringError3 {
     fn from(value: SelectorError3) -> Self {
         Self::Selector(value)
     }
+}
+
+fn default_object_layers(
+    objects: &[ConcreteObject3],
+    families: &[ObjectFamily3],
+) -> Vec<(ObjectId, LayerId)> {
+    objects
+        .iter()
+        .map(|object| object.id)
+        .chain(
+            families
+                .iter()
+                .flat_map(|family| family.variants.iter().map(|variant| variant.id)),
+        )
+        .map(|object| (object, LayerId(0)))
+        .collect()
 }
 
 fn validate_catalog_names(

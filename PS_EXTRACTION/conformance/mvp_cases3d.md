@@ -1,4 +1,4 @@
-# PS3D MVP Conformance Cases
+# 3D MVP Conformance Cases
 
 These cases define target behavior before implementation. They should become
 automated tests only after PS Next integration points are confirmed locally.
@@ -10,8 +10,9 @@ must behave exactly as upstream PS Next does.
 
 ## Case 2: Explicit 3D Mode
 
-Given a source containing `LEVELS3`, the compiler should enter 3D mode only for
-that game and should not reinterpret ordinary `LEVELS` blank lines.
+Given a source containing the `three_dimensions` prelude flag and ordinary
+`LEVELS`, the compiler should enter 3D mode only for that game and should not
+reinterpret ordinary 2D `LEVELS` blank lines.
 
 ## Case 3: 3D Dimensions
 

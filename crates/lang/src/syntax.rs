@@ -78,7 +78,6 @@ pub(crate) const PARSER_KEYWORDS: &[&str] = &[
     "levels3",
     "lose_conditions",
     "map",
-    "menu",
     "music",
     "name",
     "objects",

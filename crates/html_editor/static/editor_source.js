@@ -14,37 +14,31 @@ const sourceReplaceInput = sourceFindPanel?.querySelector("[data-source-replace-
 const sourceFindStatus = sourceFindPanel?.querySelector("[data-source-find-status]");
 const sourceFindCaseButton = sourceFindPanel?.querySelector("[data-source-find-case]");
 const sourceImportLinkFrame = createSourceImportLinkFrame();
-const sourceTargetHintLayer = createSourceTargetHintLayer();
 const SOURCE_EDITABLE_TARGETS = [
   {
     kind: "level3d",
     label: "3D level",
     openOptions: { switchMode: true },
-    showInitialFrame: true,
   },
   {
     kind: "level",
     label: "level",
     openOptions: {},
-    showInitialFrame: true,
   },
   {
     kind: "sprite3d",
     label: "3D sprite",
     openOptions: { switchMode: true },
-    showInitialFrame: true,
   },
   {
     kind: "sprite",
     label: "sprite",
     openOptions: { switchMode: true },
-    showInitialFrame: true,
   },
   {
     kind: "sounds",
     label: (entry) => entry?.kind || "sound",
     openOptions: { switchMode: true },
-    showInitialFrame: false,
   },
 ];
 const sourceEditableTargetHandlers = new Map();
@@ -56,9 +50,6 @@ let sourceCompletionRequestId = 0;
 let sourceColorEdit = null;
 let sourceCompletionState = null;
 let sourceImportLinkState = null;
-let sourceTargetHintKey = "";
-let sourceTargetHintTimer = 0;
-let sourceTargetHintActive = false;
 let sourceEditorKillRing = "";
 let sourceEditorBlockSelection = null;
 let sourceEditorRangeDrag = null;
@@ -183,7 +174,6 @@ function handleSourceUndoShortcut(event) {
 
 function setSourceEditorValue(value, options = {}) {
   sourceEditor.value = value || "";
-  invalidateSourceTargetHintFrames();
   updateSourceMeta();
   scheduleSourceHighlight(true);
   if (options.resetUndo === false) {
@@ -191,7 +181,6 @@ function setSourceEditorValue(value, options = {}) {
   } else {
     resetSourceUndoHistory();
   }
-  showSourceTargetHintFramesOnce();
 }
 
 function scheduleSourceHighlight(immediate = false) {
@@ -265,35 +254,6 @@ function syncSourceHighlightScroll() {
   renderSourceFindMatches();
   renderSourceCaret();
   renderSourceBlockSelection();
-  if (sourceTargetHintActive) {
-    renderSourceTargetHintFrames();
-  }
-}
-
-function invalidateSourceTargetHintFrames() {
-  sourceTargetHintKey = "";
-}
-
-function showSourceTargetHintFramesOnce() {
-  if (!sourceTargetHintLayer || !sourceDocumentSupportsEditableTargets()) {
-    return;
-  }
-  sourceTargetHintActive = true;
-  invalidateSourceTargetHintFrames();
-  renderSourceTargetHintFrames();
-  window.clearTimeout(sourceTargetHintTimer);
-  sourceTargetHintTimer = window.setTimeout(hideSourceTargetHintFrames, 1800);
-}
-
-function hideSourceTargetHintFrames() {
-  sourceTargetHintActive = false;
-  sourceTargetHintKey = "";
-  window.clearTimeout(sourceTargetHintTimer);
-  sourceTargetHintTimer = 0;
-  if (sourceTargetHintLayer) {
-    sourceTargetHintLayer.replaceChildren();
-    sourceTargetHintLayer.hidden = true;
-  }
 }
 
 function sourceDocumentSupportsEditableTargets() {
@@ -1307,17 +1267,6 @@ function createSourceImportLinkFrame() {
   return frame;
 }
 
-function createSourceTargetHintLayer() {
-  if (!sourceEditorWrap) {
-    return null;
-  }
-  const layer = document.createElement("div");
-  layer.className = "source-target-hint-layer";
-  layer.hidden = true;
-  sourceEditorWrap.append(layer);
-  return layer;
-}
-
 function showSourceColorEditor(event = null) {
   if (!sourceColorPopover || !sourceColorCodeInput) {
     return false;
@@ -1644,8 +1593,6 @@ sourceEditor.addEventListener("input", () => {
   if (!isTextDocument(documents[currentDocumentIndex])) {
     return;
   }
-  hideSourceTargetHintFrames();
-  invalidateSourceTargetHintFrames();
   hideSourceImportLinkFrame();
   clearSourceBlockSelection();
   sourceEditorPreferredCaretX = null;
@@ -1665,7 +1612,6 @@ sourceEditor.addEventListener("input", () => {
   schedulePreview();
 });
 sourceEditor.addEventListener("click", (event) => {
-  hideSourceTargetHintFrames();
   if (suppressNextSourceClickSelection) {
     suppressNextSourceClickSelection = false;
     return;
@@ -2389,7 +2335,6 @@ function handleSourceRewritePatternTab(event) {
 }
 
 function sourceEditorContentChanged() {
-  invalidateSourceTargetHintFrames();
   recordSourceUndoSnapshot();
   updateSourceMeta();
   refreshSourceColorEditor();
@@ -2694,7 +2639,6 @@ function handleSourceBlockSelectionPointerDown(event) {
 }
 
 function updateSourceImportLinkFromPointer(event) {
-  hideSourceTargetHintFrames();
   if (!sourceImportLinkFrame || sourceEditorBlockSelection || !sourceDocumentSupportsEditableTargets()) {
     hideSourceImportLinkFrame();
     return;
@@ -2705,13 +2649,7 @@ function updateSourceImportLinkFromPointer(event) {
     renderSourceImportLinkFrame();
     return;
   }
-  const target = sourceEditableTargetAtPointer(event);
-  if (!target) {
-    hideSourceImportLinkFrame();
-    return;
-  }
-  sourceImportLinkState = target;
-  renderSourceImportLinkFrame();
+  hideSourceImportLinkFrame();
 }
 
 function sourceImportLinkAtPointer(event) {
@@ -2729,35 +2667,19 @@ function sourceImportLinkAtPointer(event) {
   return sourceImportLinkAtOffset(sourceEditor.value || "", offset, lines);
 }
 
-function sourceEditableTargetAtPointer(event) {
-  if (!event || sourceEditorBlockSelection || !sourceDocumentSupportsEditableTargets()) {
-    return null;
-  }
-  const source = sourceEditor.value || "";
-  const offset = sourceOffsetFromEditorPointer(event, source);
-  if (!Number.isInteger(offset)) {
-    return null;
-  }
-  return sourceEditableTargetAtOffset(source, offset);
-}
-
-function sourceEditableTargetAtOffset(source, offset, options = {}) {
-  const hoverLine = options.lineRange || sourceLineRangeAtOffset(source, offset);
-  const configs = options.configs || SOURCE_EDITABLE_TARGETS;
-  for (const config of configs) {
+function sourceEditableTargetAtOffset(source, offset) {
+  for (const config of SOURCE_EDITABLE_TARGETS) {
     const finder = sourceEditableTargetFinder(config);
     const entry = finder ? finder(source, offset) : null;
     if (!entry) {
       continue;
     }
-    return sourceEditableTargetFrameState({
-      kind: config.kind,
+    return {
+      targetKind: config.kind,
       name: entry.name || "",
-      start: hoverLine.start,
-      end: hoverLine.end,
       position: offset,
       label: sourceEditableTargetLabel(config, entry),
-    });
+    };
   }
   return null;
 }
@@ -2785,95 +2707,6 @@ function registerSourceEditableTarget(kind, handlers = {}) {
     find: typeof handlers.find === "function" ? handlers.find : null,
     load: typeof handlers.load === "function" ? handlers.load : null,
   });
-  invalidateSourceTargetHintFrames();
-  if (sourceTargetHintActive && sourceDocumentSupportsEditableTargets()) {
-    renderSourceTargetHintFrames();
-  }
-}
-
-function sourceEditableTargetFrameState(target) {
-  const frame = sourceFrameRectForOffsets(target.start, target.end);
-  if (!frame) {
-    return null;
-  }
-  return {
-    linkType: "source-target",
-    targetKind: target.kind,
-    name: target.name,
-    position: target.position,
-    label: target.label,
-    ...frame,
-  };
-}
-
-function renderSourceTargetHintFrames() {
-  if (!sourceTargetHintLayer) {
-    return;
-  }
-  const states = sourceInitialEditableTargetFrames();
-  const key = [
-    activeDocument()?.id || "",
-    sourceEditor.value.length,
-    sourceEditor.scrollLeft,
-    sourceEditor.scrollTop,
-    ...states.map((state) => `${state.targetKind}:${state.position}:${state.left}:${state.top}`),
-  ].join("|");
-  if (key === sourceTargetHintKey) {
-    return;
-  }
-  sourceTargetHintKey = key;
-  sourceTargetHintLayer.replaceChildren();
-  sourceTargetHintLayer.hidden = states.length === 0;
-  for (const state of states) {
-    const frame = document.createElement("span");
-    frame.className = "source-target-hint-frame";
-    frame.style.left = `${state.left}px`;
-    frame.style.top = `${state.top}px`;
-    frame.style.width = `${state.width}px`;
-    frame.style.height = `${state.height}px`;
-    frame.dataset.sourceTargetKind = state.targetKind;
-    frame.title = state.label;
-    frame.setAttribute("aria-label", state.label);
-    sourceTargetHintLayer.append(frame);
-  }
-}
-
-function sourceInitialEditableTargetFrames() {
-  if (!sourceDocumentSupportsEditableTargets()) {
-    return [];
-  }
-  const source = sourceEditor.value || "";
-  const lines = sourceImportLinesWithOffsets(source);
-  const states = [];
-  const seenKinds = new Set();
-  const configs = SOURCE_EDITABLE_TARGETS.filter((config) => config.showInitialFrame);
-  for (const line of lines) {
-    if (seenKinds.size >= configs.length) {
-      break;
-    }
-    const firstCode = String(line.raw || "").search(/\S/);
-    if (firstCode < 0) {
-      continue;
-    }
-    const offset = line.start + firstCode;
-    const lineRange = sourceLineRangeAtOffset(source, offset);
-    for (const config of configs) {
-      if (seenKinds.has(config.kind)) {
-        continue;
-      }
-      const state = sourceEditableTargetAtOffset(source, offset, {
-        configs: [config],
-        lineRange,
-      });
-      if (!state) {
-        continue;
-      }
-      states.push(state);
-      seenKinds.add(config.kind);
-      break;
-    }
-  }
-  return states;
 }
 
 function sourceFrameRectForOffsets(start, end) {
@@ -2916,42 +2749,6 @@ function sourceFrameRectForOffsets(start, end) {
   };
   mirror.remove();
   return rect;
-}
-
-function sourceLineRangeAtOffset(source, offset) {
-  const lines = sourceImportLinesWithOffsets(source);
-  if (!lines.length) {
-    return { start: 0, end: 0 };
-  }
-  const lineIndex = sourceLineIndexAtOffset(lines, offset);
-  const line = lines[lineIndex] || lines[0];
-  if (!line) {
-    return { start: 0, end: 0 };
-  }
-  const firstCode = String(line.raw || "").search(/\S/);
-  if (firstCode < 0) {
-    return { start: line.start, end: line.end };
-  }
-  return {
-    start: line.start + firstCode,
-    end: Math.max(line.start + firstCode + 1, line.end),
-  };
-}
-
-function sourceOffsetFromEditorPointer(event, source) {
-  if (!event || !sourceEditorWrap?.contains(event.target)) {
-    return null;
-  }
-  const visualOffset = sourceOffsetFromVisualPointer(event, source);
-  if (Number.isInteger(visualOffset)) {
-    return visualOffset;
-  }
-  const position = sourceEditorPositionFromPoint(event.clientX, event.clientY);
-  if (!position) {
-    return null;
-  }
-  const lines = sourceImportLinesWithOffsets(source);
-  return sourceOffsetForLineColumn(lines, position.lineIndex, position.column);
 }
 
 function sourceImportLinesWithOffsets(source) {
@@ -3087,9 +2884,7 @@ function renderSourceImportLinkFrame() {
   sourceImportLinkFrame.style.top = `${rect.top}px`;
   sourceImportLinkFrame.style.width = `${rect.width}px`;
   sourceImportLinkFrame.style.height = `${rect.height}px`;
-  const label = sourceImportLinkState.linkType === "source-target"
-    ? sourceImportLinkState.label
-    : `Open ${sourceImportLinkState.rawPath}`;
+  const label = `Open ${sourceImportLinkState.rawPath}`;
   sourceImportLinkFrame.title = label;
   sourceImportLinkFrame.setAttribute("aria-label", label);
   sourceImportLinkFrame.hidden = false;
@@ -3135,24 +2930,7 @@ function openSourceImportLink() {
 }
 
 function openSourceFrameLink() {
-  if (sourceImportLinkState?.linkType === "source-target") {
-    return openSourceEditableTarget();
-  }
   return openSourceImportLink();
-}
-
-function openSourceEditableTarget() {
-  const target = sourceImportLinkState;
-  if (!target || !Number.isInteger(target.position)) {
-    return false;
-  }
-  const key = loadSourceEditableTarget(target, { recordHistory: true });
-  hideSourceImportLinkFrame();
-  if (key) {
-    sourceEditor.focus({ preventScroll: true });
-    return true;
-  }
-  return false;
 }
 
 function loadSourceEditableTargetFromPosition(position, options = {}) {
@@ -3174,6 +2952,26 @@ function loadSourceEditableTarget(target, options = {}) {
     ...(config.openOptions || {}),
     ...options,
   }) || "";
+}
+
+function sourceEditableEntryFromTarget(source, target, options = {}) {
+  if (!Number.isInteger(target?.bodyStart) || !Number.isInteger(target?.bodyEnd)) {
+    return target;
+  }
+  const start = Number.isInteger(target.start) ? target.start : target.bodyStart;
+  const end = Number.isInteger(target.end) && target.end > target.bodyStart ? target.end : target.bodyEnd;
+  const find = typeof options.find === "function" ? options.find : null;
+  const localEntry = find ? find(source, start) : null;
+  const entry = {
+    ...(localEntry || {}),
+    ...target,
+    start,
+    end,
+    name: target.name || localEntry?.name || options.defaultName || "",
+    levelIndex: Number.isInteger(target.levelIndex) ? target.levelIndex : localEntry?.levelIndex,
+  };
+  const body = typeof options.body === "function" ? options.body(source, entry, localEntry) : null;
+  return body && typeof body === "object" ? { ...entry, ...body } : entry;
 }
 
 function openSourceImportLinkFromPointer(event) {
@@ -3623,7 +3421,6 @@ function insertAtSelection(value) {
 
 function setSourceEditorText(value, selectionStart = null, selectionEnd = selectionStart) {
   sourceEditor.value = value || "";
-  invalidateSourceTargetHintFrames();
   hideSourceColorEditor();
   hideSourceCompletions();
   clearSourceBlockSelection();

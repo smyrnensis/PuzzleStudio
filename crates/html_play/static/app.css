@@ -4,21 +4,21 @@
   --scene-layout-gap-unit: 1px;
   --bg: #f5f3ef;
   --ink: #1f2428;
-  --muted: #66727c;
-  --line: #d7dde2;
-  --board-bg: #edf1f2;
   --accent: #2f7ebc;
-  --button-bg: #263039;
-  --button-bg-hover: #313d47;
-  --button-bg-active: #1d252c;
-  --menu-item-bg: rgba(38, 48, 57, 0.08);
-  --menu-item-bg-selected: rgba(47, 126, 188, 0.13);
-  --menu-item-ring: rgba(47, 126, 188, 0.22);
-  --panel-bg: rgba(255, 255, 255, 0.94);
-  --popup-bg: rgba(255, 255, 255, 0.96);
+  --muted: color-mix(in srgb, var(--ink) 66%, transparent);
+  --line: color-mix(in srgb, var(--ink) 24%, transparent);
+  --board-bg: var(--bg);
+  --button-bg: color-mix(in srgb, var(--accent) 14%, transparent);
+  --button-bg-hover: color-mix(in srgb, var(--accent) 22%, transparent);
+  --button-bg-active: color-mix(in srgb, var(--accent) 30%, transparent);
+  --menu-item-bg: color-mix(in srgb, var(--ink) 8%, transparent);
+  --menu-item-bg-selected: color-mix(in srgb, var(--accent) 18%, transparent);
+  --menu-item-ring: color-mix(in srgb, var(--accent) 42%, transparent);
+  --panel-bg: color-mix(in srgb, var(--bg) 96%, transparent);
+  --popup-bg: color-mix(in srgb, var(--bg) 96%, transparent);
   --radius-control: 6px;
   --radius-panel: 8px;
-  --ok: #257a59;
+  --ok: var(--accent);
   --ui-font: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --title-font: var(--ui-font);
   --menu-cursor: ">";
@@ -76,13 +76,13 @@ button {
   border: 0;
   border-radius: var(--radius-control);
   background: linear-gradient(180deg, var(--button-bg-hover), var(--button-bg));
-  color: #fff;
+  color: var(--ink);
   font: inherit;
   font-weight: 700;
   cursor: pointer;
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.12),
-    0 7px 16px rgba(31, 36, 40, 0.18);
+    inset 0 1px 0 color-mix(in srgb, var(--bg) 16%, transparent),
+    0 7px 16px color-mix(in srgb, var(--ink) 18%, transparent);
   transition:
     background-color 120ms ease,
     box-shadow 120ms ease,
@@ -92,16 +92,16 @@ button {
 button:hover {
   background: linear-gradient(180deg, var(--button-bg-hover), var(--button-bg));
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.16),
-    0 10px 20px rgba(31, 36, 40, 0.2);
+    inset 0 1px 0 color-mix(in srgb, var(--bg) 20%, transparent),
+    0 10px 20px color-mix(in srgb, var(--ink) 20%, transparent);
   transform: translateY(-1px);
 }
 
 button:active {
   background: var(--button-bg-active);
   box-shadow:
-    inset 0 2px 5px rgba(0, 0, 0, 0.22),
-    0 3px 9px rgba(31, 36, 40, 0.14);
+    inset 0 2px 5px color-mix(in srgb, var(--ink) 22%, transparent),
+    0 3px 9px color-mix(in srgb, var(--ink) 14%, transparent);
   transform: translateY(0);
 }
 
@@ -253,11 +253,17 @@ button:disabled {
 
 .view-row {
   flex-direction: row;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
 }
 
 .view-row > * {
   min-width: 0;
+}
+
+.screen-view .view-row > .scene-flow {
+  flex: 0 1 auto;
+  width: auto;
+  max-width: 100%;
 }
 
 .scene-flow {
@@ -281,6 +287,13 @@ button:disabled {
   align-self: stretch;
 }
 
+.scene-layer.has-ratio-content > :not(.has-ratio-content):not(.scene-ratio-slot),
+.view-column.has-ratio-content > :not(.has-ratio-content):not(.scene-ratio-slot),
+.view-box.has-ratio-content > :not(.has-ratio-content):not(.scene-ratio-slot),
+.view-row.has-ratio-content > :not(.has-ratio-content):not(.scene-ratio-slot) {
+  flex: 0 0 auto;
+}
+
 .scene-ratio-slot {
   flex: 1 1 auto;
   align-self: stretch;
@@ -298,8 +311,13 @@ button:disabled {
 }
 
 .scene-ratio-slot > [data-frame-component="true"] {
+  width: 100%;
+  height: 100%;
   max-width: 100%;
   max-height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .scene-ratio-slot > iframe[data-frame-component="true"] {

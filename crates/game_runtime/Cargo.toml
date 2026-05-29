@@ -1,0 +1,12 @@
+[package]
+name = "puzzle-game-runtime"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+puzzle-core = { path = "../core" }
+puzzle-lang = { path = "../lang" }
+puzzle-play = { path = "../play" }
+puzzle3d-model = { path = "../puzzle3d_model" }
+serde_json = "1"

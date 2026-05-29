@@ -4,7 +4,6 @@ fn main() {
     println!("cargo:rerun-if-changed=static/editor.html");
     println!("cargo:rerun-if-changed=docs/editor.md");
     println!("cargo:rerun-if-changed=static/editor_boot.js");
-    println!("cargo:rerun-if-changed=static/editor_theme_imports.js");
     println!("cargo:rerun-if-changed=static/editor_dom.js");
     println!("cargo:rerun-if-changed=static/editor_workspace.js");
     println!("cargo:rerun-if-changed=static/editor_source.js");
@@ -18,6 +17,8 @@ fn main() {
     println!("cargo:rerun-if-changed=static/editor.css");
     println!("cargo:rerun-if-changed=static/wasm/puzzle_wasm.js");
     println!("cargo:rerun-if-changed=static/wasm/puzzle_wasm_bg.wasm");
+    println!("cargo:rerun-if-changed=../html_play/static/wasm_game/puzzle_wasm_game.js");
+    println!("cargo:rerun-if-changed=../html_play/static/wasm_game/puzzle_wasm_game_bg.wasm");
 
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
     let editor_js =

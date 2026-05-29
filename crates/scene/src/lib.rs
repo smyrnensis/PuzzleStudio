@@ -197,7 +197,6 @@ pub enum SceneComponent<Effect = SceneCommand, LabelExpr = SceneTextExpr, TextEx
     Conditional(SceneConditional<Effect, LabelExpr, TextExpr>),
     For(SceneFor<Effect, LabelExpr, TextExpr>),
     LevelMenu(LevelMenuComponent<Effect, LabelExpr>),
-    Menu(MenuInstance<LabelExpr>),
 }
 
 impl<Effect, LabelExpr, TextExpr> SceneComponent<Effect, LabelExpr, TextExpr> {
@@ -215,7 +214,6 @@ impl<Effect, LabelExpr, TextExpr> SceneComponent<Effect, LabelExpr, TextExpr> {
             Self::Conditional(_) => SceneComponentKind::Conditional,
             Self::For(_) => SceneComponentKind::For,
             Self::LevelMenu(_) => SceneComponentKind::LevelMenu,
-            Self::Menu(_) => SceneComponentKind::Menu,
         }
     }
 
@@ -253,7 +251,7 @@ impl<Effect, LabelExpr, TextExpr> SceneComponent<Effect, LabelExpr, TextExpr> {
             Self::LevelMenu(menu) => Some(&menu.layout),
             Self::Title(text) | Self::Subtitle(text) => Some(&text.layout),
             Self::Text(text) => Some(&text.layout),
-            Self::Conditional(_) | Self::For(_) | Self::Menu(_) => None,
+            Self::Conditional(_) | Self::For(_) => None,
         }
     }
 
@@ -267,7 +265,7 @@ impl<Effect, LabelExpr, TextExpr> SceneComponent<Effect, LabelExpr, TextExpr> {
             Self::LevelMenu(menu) => Some(&mut menu.layout),
             Self::Title(text) | Self::Subtitle(text) => Some(&mut text.layout),
             Self::Text(text) => Some(&mut text.layout),
-            Self::Conditional(_) | Self::For(_) | Self::Menu(_) => None,
+            Self::Conditional(_) | Self::For(_) => None,
         }
     }
 }
@@ -286,7 +284,6 @@ pub enum SceneComponentKind {
     Conditional,
     For,
     LevelMenu,
-    Menu,
 }
 
 impl SceneComponentKind {
@@ -304,7 +301,6 @@ impl SceneComponentKind {
             Self::Conditional => "if",
             Self::For => "for",
             Self::LevelMenu => "level_menu",
-            Self::Menu => "menu",
         }
     }
 
@@ -322,7 +318,6 @@ impl SceneComponentKind {
             "if" => Self::Conditional,
             "for" => Self::For,
             "level_menu" => Self::LevelMenu,
-            "menu" => Self::Menu,
             _ => return None,
         })
     }
@@ -343,7 +338,6 @@ pub const GENERIC_SCENE_COMPONENT_KINDS: &[SceneComponentKind] = &[
     SceneComponentKind::Box,
     SceneComponentKind::For,
     SceneComponentKind::LevelMenu,
-    SceneComponentKind::Menu,
 ];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -454,19 +448,6 @@ pub enum LevelMenuLocked {
     #[default]
     Disabled,
     Hidden,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct MenuInstance<Expr = SceneTextExpr> {
-    pub name: String,
-    pub menu: String,
-    pub data: Vec<MenuDataBinding<Expr>>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct MenuDataBinding<Expr = SceneTextExpr> {
-    pub name: String,
-    pub value: Expr,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -938,13 +919,6 @@ mod tests {
             Some(SceneSize::new(4, 3))
         );
         assert!(component.layout().is_some_and(|layout| layout.scroll));
-
-        let menu = SceneComponent::<SceneCommand>::Menu(MenuInstance {
-            name: "main".to_string(),
-            menu: "main_menu".to_string(),
-            data: Vec::new(),
-        });
-        assert!(menu.layout().is_none());
     }
 
     #[test]

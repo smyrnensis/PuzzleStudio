@@ -333,6 +333,12 @@ group は selector の別名。rewrite では object selector と同じ場所で
 [ Box#1{hot} | Box#2{cold} ] -> [ Box#2{cold} | Box#1{hot} ]
 ```
 
+右辺では同じ label を複数回参照できる。
+
+```txt
+[ pushable_objects#1 | pushable_objects#2 ] -> [ pushable_objects#1 | pushable_objects#1 ]
+```
+
 ### `scratch`
 
 ```txt
@@ -1100,6 +1106,17 @@ tween duration=160ms
 }
 ```
 
+`wait animation` は rules 内の明示的な animation boundary。そこまでの segment で発生した tween などの visual animation が終わってから、同じ turn の残りの rules を continuation として実行する。animation が発生していなければ no-op。`wait tween` は互換 alias だが、canonical には `wait animation` を使う。
+
+```txt
+rules {
+input directions [ Player ] -> [ > Player ]
+move
+wait animation
+@refresh_board
+}
+```
+
 `checkpoint` は現在の turn が commit された後の puzzle state を、その puzzle slot の restart 先として保存する。`restart` は checkpoint があればそこへ戻り、なければ従来どおり level start state へ戻る。`clear_checkpoint` は保存された checkpoint を捨て、restart 先を level start state に戻す。level 移動や明示的な level load は checkpoint をリセットする。
 
 ```txt
@@ -1339,6 +1356,8 @@ Crate
 Gem sprites/gem.png
 
 Player {
+pixels_per_cell 5 5
+offset 2 -1
 #e94f64 #2f80ed #22a06b
 ........
 ..00....
@@ -1346,7 +1365,9 @@ Player {
 ........
 }
 
-shape edge:directions rotate from up {
+shapes {
+edge:directions {
+rotate from up
 11111
 00000
 00000
@@ -1354,38 +1375,48 @@ shape edge:directions rotate from up {
 00000
 }
 
-Boundary:directions {
-transparent #555
-edge:directions
-}
-
-shape player_shape {
+player_shape {
 ........
 ..00....
 ..01....
 ........
 }
+}
+
+Boundary:directions {
+rotate from up
+transparent #555
+11111
+00000
+00000
+00000
+00000
+}
 
 Player {
+pixels_per_cell 5 5
+offset 2 -1
 #e94f64 #2f80ed
-player_shape
+shape player_shape
 }
 }
 ```
 
-PS / PS Next 風の one-off sprite は、selector block の中に色行、ASCII pattern の順で書ける。色は CSS color として渡されるため、`transparent` や `#rrggbbaa` の alpha 付き hex も使える。`.` は透明、`0`..`9`、`a`..`z`、`A`..`Z` は色行の順序に対応する。
+PS / PS Next 風の one-off sprite は、selector block の中に色行、ASCII pattern の順で書ける。canonical では `pixels_per_cell` / `offset` の配置メタデータを上に置き、`rotate from <value>` を使う場合はその次、色行、ASCII pattern または `shape <name>` の順で書く。色行は `colors` keyword を付けてもよいが、省略するのが canonical。色は CSS color として渡されるため、`transparent`、基本 CSS color keywords、`orange`、`grey` / `gray` variants、`brown`、`pink`、`#rrggbbaa` の alpha 付き hex も使える。`.` は透明、`0`..`9`、`a`..`z`、`A`..`Z` は色行の順序に対応する。
 
-単純な sprite は block braces なしでも書ける。selector の次の行が色 1 つだけで pattern がなければ cell 全体の単色塗りつぶしになる。これは `Background` / `#9CBD0F` のような PuzzleScript 由来の色だけ sprite でも同じで、`00000` のようなダミー ASCII pattern は不要。pattern を続けると、その行数・列数が sprite pixel grid になる。pixel 幅・高さは別宣言ではなく ASCII pattern から決まり、`00000` を 5 行書けば 5x5、`00000000` を 8 行書けば 8x8 として HTML renderer に渡される。
+単純な sprite は block braces なしでも書ける。selector の次の行が色 1 つだけで pattern がなければ cell 全体の単色塗りつぶしになる。これは `Background` / `#9CBD0F` のような PuzzleScript 由来の色だけ sprite でも同じで、`00000` のようなダミー ASCII pattern は不要。pattern を続けると、その行数・列数が sprite pixel grid になる。`pixels_per_cell <w> <h>` を省略した場合は ASCII pattern の行数・列数が 1 cell の pixel grid になる。明示した場合は、pattern がその grid より大きくても描画は overflow できる。
 
 外部画像は `Box sprites/box.png` のように selector と画像パスを 1 行に書ける。パスは game folder からの相対パスとして HTML renderer に渡される。
 
-shape lookup は value expression を読める。たとえば `edge:rotate(directions)` は、selector で bind された `directions` 値を `rotate` map で置換してから shape table を引く。再利用したい pattern は `shape` と object block 内の色行 + bare shape ref で分けて書く。
+shape lookup は value expression を読める。たとえば `edge:rotate(directions)` は、selector で bind された `directions` 値を `rotate` map で置換してから shape table を引く。再利用したい pattern は `shape` と object block 内の色行 + `shape <ref>` で分けて書く。旧互換として bare shape ref も読む。
 
-`sprites` は HTML renderer 用の sprite alias と ASCII pattern を定義する。`shape <name>:<tag_set> rotate from <value>` は、同じ `<tag_set>` の `map rotate <tag_set>` を使って、`<value>` の pattern から時計回りに 90 度ずつ回転した pattern を生成する。
+`offset <x> <y>` は描画位置だけをずらす。基準は sprite pixel grid の左上で、正の x は右、正の y は下。object の実セル、collision、rule matching は変えない。Pattern:Script 互換として ASCII pattern または shape ref の後の `translate:<direction>:<pixels>` transform も読むが、canonical では `offset` を使う。
+
+`sprites` は HTML renderer 用の sprite alias と ASCII pattern を定義する。`shapes` 内の `<name>:<tag_set>` は value ごとの ASCII pattern table。table 内または sprite entry 内で `rotate from <value>` の後に pattern rows を書くと、その pattern を `<value>` として登録し、同じ `<tag_set>` の `map rotate <tag_set>` を使って他の value の pattern を生成する。
 
 HTML renderer が生成する sprite 名と CSS class は、object 名の大文字・小文字を保持する。CSS class として危ない区切り文字だけ `-` に置き換える。例: `Player` は `.sprite.Player`、`Box:A` は `.sprite.Box-A`。
 
-別名の map を使う場合は `shape <name>:<tag_set> rotate <map_name> from <value>` と書ける。rotation は parse/lowering 時点で通常の shape entries に展開されるため、runtime state や renderer は tag set 固有の挙動を持たない。
+別名の map を使う場合は table 内で `rotate using <map_name> from <value>` の後に pattern rows を書く。既存 table entry と分けたい場合は、`<value> { ... }` の後に `rotate from <value>` だけを書く形も読む。旧互換として `rotate from <value> { ... }`、`shape <name>:<tag_set> rotate from <value>`、`shape <name>:<tag_set> rotate <map_name> from <value>` も読むが、canonical では table header や source value に余分な block を足さない。rotation は parse/lowering 時点で通常の shape entries に展開されるため、runtime state や renderer は tag set 固有の挙動を持たない。
 
 ### `legend`
 
@@ -1470,17 +1501,17 @@ theme の見た目の identity は HTML adapter の CSS preset が持つ。`.puz
 ```txt
 theme clean {
 accent_color #2f7ebc
-board_color #edf1f2
 ui_font sans-serif
 }
 ```
 
 `theme <theme>` は preset 名だけを選ぶ。`theme <theme> { ... }` は同じ preset を選び、詳細設定を上書きする。各行は公開された調整項目
-`<setting> <value>` だけを受ける。現在の公開項目は
-`accent_color`、`background_color`、`text_color`、`muted_text_color`、
-`line_color`、`board_color`、`ui_font`、`title_font`、`control_radius`、
-`panel_radius`。これらは HTML adapter の CSS custom property に lower され、
-preset CSS の値を上書きする。値は space を含まない compact CSS token にする。
+`<setting> <value>` を canonical とする。互換 syntax として `<setting> = <value>` も読む。
+公開項目のうち、色は `accent_color`、`background_color`、`text_color` の 3 つだけである。
+UI の線、選択状態、panel、popup、盤面背景は preset がこの 3 色の alpha だけで作る。
+追加の非色設定は `ui_font`、`title_font`、`control_radius`、`panel_radius`。
+これらは HTML adapter の CSS custom property に lower され、preset CSS の値を上書きする。
+値は space を含まない compact CSS token にする。
 複数 theme 宣言は import 展開後の順序で preset 名または同じ項目を上書きする。theme 未指定時の default theme name は `clean`。
 
 標準 preset は `clean`、`terminal`、`paper`、`pixel`、`candy`、`blueprint`、`noir`。HTML adapter は対応する `theme-clean` / `theme-terminal` / `theme-paper` / `theme-pixel` / `theme-candy` / `theme-blueprint` / `theme-noir` CSS preset を同梱し、そこで各 theme の見た目の identity を定義する。

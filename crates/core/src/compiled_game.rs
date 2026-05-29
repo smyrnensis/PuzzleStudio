@@ -2,6 +2,8 @@ use crate::ids::{GlobalId, InputId, LayerId, ObjectId, QueryId, RuleId, ScratchI
 pub use puzzle_kernel::{
     GlobalUpdateOp, LocalFrame, LocalFrameExtent, ScratchKind, ScratchValueMatch,
 };
+pub type ObjectSetMatcher = puzzle_kernel::ObjectSetMatcher<ObjectId, LayerId>;
+pub type ObjectSetScratchPattern = puzzle_kernel::ObjectSetScratchPattern<ScratchId>;
 
 #[derive(Clone, Debug)]
 pub struct CompiledGame {
@@ -396,21 +398,6 @@ pub struct MatchCell {
     pub require_object_set_scratch: Vec<ObjectSetScratchPattern>,
     pub forbid_scratch: Vec<ScratchPattern>,
     pub forbid_object_set_scratch: Vec<ObjectSetScratchPattern>,
-}
-
-#[derive(Clone, Debug)]
-pub struct ObjectSetMatcher {
-    pub binding: u16,
-    pub layer: LayerId,
-    pub objects: Vec<ObjectId>,
-}
-
-#[derive(Clone, Debug)]
-pub struct ObjectSetScratchPattern {
-    pub binding: u16,
-    pub scratch: ScratchId,
-    pub value: Option<i64>,
-    pub match_value: ScratchValueMatch,
 }
 
 #[derive(Clone, Debug)]

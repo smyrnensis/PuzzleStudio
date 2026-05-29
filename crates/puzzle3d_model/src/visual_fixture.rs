@@ -487,6 +487,20 @@ fn write_match_cell_json(out: &mut String, cell: &MatchCell3) {
     )
     .unwrap();
     write_object_id_array(out, &cell.require_objects);
+    out.push_str("], \"requireObjectSets\": [");
+    for (index, object_set) in cell.require_object_sets.iter().enumerate() {
+        if index > 0 {
+            out.push_str(", ");
+        }
+        write!(
+            out,
+            "{{ \"binding\": {}, \"layer\": {}, \"objects\": [",
+            object_set.binding, object_set.layer.0
+        )
+        .unwrap();
+        write_object_id_array(out, &object_set.objects);
+        out.push_str("] }");
+    }
     out.push_str("], \"forbid\": [");
     write_object_id_array(out, &cell.forbid_objects);
     out.push_str("] }");
@@ -511,11 +525,27 @@ fn write_write_op_json(out: &mut String, write_op: &WriteOp3) {
             )
             .unwrap();
         }
+        WriteOp3::AddObjectSet { offset, binding } => {
+            write!(
+                out,
+                "{{ \"kind\": \"add_object_set\", \"offset\": {{ \"dx\": {}, \"dy\": {}, \"dz\": {} }}, \"binding\": {} }}",
+                offset.dx, offset.dy, offset.dz, binding
+            )
+            .unwrap();
+        }
         WriteOp3::Remove { offset, object } => {
             write!(
                 out,
                 "{{ \"kind\": \"remove\", \"offset\": {{ \"dx\": {}, \"dy\": {}, \"dz\": {} }}, \"object\": {} }}",
                 offset.dx, offset.dy, offset.dz, object.0
+            )
+            .unwrap();
+        }
+        WriteOp3::RemoveObjectSet { offset, binding } => {
+            write!(
+                out,
+                "{{ \"kind\": \"remove_object_set\", \"offset\": {{ \"dx\": {}, \"dy\": {}, \"dz\": {} }}, \"binding\": {} }}",
+                offset.dx, offset.dy, offset.dz, binding
             )
             .unwrap();
         }
@@ -546,6 +576,24 @@ fn write_write_op_json(out: &mut String, write_op: &WriteOp3) {
                 to_offset.dy,
                 to_offset.dz,
                 object.0
+            )
+            .unwrap();
+        }
+        WriteOp3::MoveObjectSet {
+            from_offset,
+            to_offset,
+            binding,
+        } => {
+            write!(
+                out,
+                "{{ \"kind\": \"move_object_set\", \"fromOffset\": {{ \"dx\": {}, \"dy\": {}, \"dz\": {} }}, \"toOffset\": {{ \"dx\": {}, \"dy\": {}, \"dz\": {} }}, \"binding\": {} }}",
+                from_offset.dx,
+                from_offset.dy,
+                from_offset.dz,
+                to_offset.dx,
+                to_offset.dy,
+                to_offset.dz,
+                binding
             )
             .unwrap();
         }

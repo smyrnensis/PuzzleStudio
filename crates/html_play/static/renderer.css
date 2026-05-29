@@ -20,7 +20,7 @@
   position: relative;
   display: grid;
   place-items: center;
-  overflow: hidden;
+  overflow: visible;
   background: var(--cell-background);
 }
 
@@ -74,10 +74,17 @@ body.is-component-embed .board-canvas {
 }
 
 .visual-sprite {
-  inset: 0;
+  left: 0;
+  top: 0;
+  width: calc(100% * var(--sprite-cols, 1) / var(--sprite-cell-cols, var(--sprite-cols, 1)));
+  height: calc(100% * var(--sprite-rows, 1) / var(--sprite-cell-rows, var(--sprite-rows, 1)));
   background-position: center;
   background-repeat: no-repeat;
   background-size: 100% 100%;
+  transform: translate(
+    calc(var(--sprite-offset-x, 0) * 100% / var(--sprite-cols, 1)),
+    calc(var(--sprite-offset-y, 0) * 100% / var(--sprite-rows, 1))
+  );
 }
 
 .visual-pixel {

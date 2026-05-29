@@ -9,10 +9,9 @@ use puzzle_core::{
     transition_program_trace,
 };
 use puzzle_lang::{
-    AsciiLegend, Level, LevelMenuDef, LoadedGame, MenuCommand, MenuComponent, MenuEmit,
-    MenuInstanceDef, MenuValueExpr, ResourceSelection, RuleAnimationTrigger, RuleEffect,
-    RuleEmission, SceneComponent, SceneEffect, SceneEffectParam, SceneExpr, ScenePuzzleInitializer,
-    SceneTransitionTrigger, SceneValue,
+    AsciiLegend, Level, LevelMenuDef, LoadedGame, ResourceSelection, RuleAnimationTrigger,
+    RuleEffect, RuleEmission, SceneComponent, SceneEffect, SceneEffectParam, SceneExpr,
+    ScenePuzzleInitializer, SceneTransitionTrigger, SceneValue,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -765,6 +764,7 @@ impl GameSession {
                     }
                     return self.resolve_turn_commands(game, commands, None);
                 }
+                RuleEffect::WaitAnimation => {}
                 RuleEffect::Message { text, literal } => {
                     let text = self.resolve_message_text(&text, literal);
                     self.message_events.push(MessageEvent::Message { text });
@@ -1047,11 +1047,11 @@ impl GameSession {
             return Ok(());
         }
 
-        if self.apply_menu_instruction(game, command)? {
+        if self.current_scene_has_level_menu(game) && self.apply_level_menu_command(game, command) {
             return Ok(());
         }
 
-        if self.current_scene_has_level_menu(game) && self.apply_level_menu_command(game, command) {
+        if self.apply_scene_input_command(game, command)? {
             return Ok(());
         }
 
@@ -1063,6 +1063,33 @@ impl GameSession {
         }
 
         Ok(())
+    }
+
+    fn apply_scene_input_command(
+        &mut self,
+        game: &LoadedGame,
+        input: &str,
+    ) -> Result<bool, TransitionError> {
+        if !self.current_scene_has_input_transition(game, input) {
+            return Ok(false);
+        }
+        let previous_input = self.current_input.clone();
+        self.current_input = Some(input.to_string());
+        let result = self.apply_turn_completion(game, Vec::new());
+        self.current_input = previous_input;
+        result?;
+        Ok(true)
+    }
+
+    fn current_scene_has_input_transition(&self, game: &LoadedGame, input: &str) -> bool {
+        game.scenes
+            .iter()
+            .find(|screen| screen.name == self.focused_scene)
+            .is_some_and(|screen| {
+                screen.transitions.iter().any(|transition| {
+                    transition_condition_mentions_input(&transition.trigger, input)
+                })
+            })
     }
 
     fn apply_input_name(&mut self, game: &LoadedGame, input: &str) -> Result<(), TransitionError> {
@@ -1088,224 +1115,11 @@ impl GameSession {
         game: &LoadedGame,
         effect: &str,
     ) -> Result<(), TransitionError> {
-        if self.apply_menu_instruction(game, effect)? {
-            return Ok(());
-        }
-
         if self.current_scene_has_level_menu(game) && self.apply_level_menu_command(game, effect) {
             return Ok(());
         }
 
         Ok(())
-    }
-
-    fn apply_menu_instruction(
-        &mut self,
-        game: &LoadedGame,
-        command: &str,
-    ) -> Result<bool, TransitionError> {
-        let (command, cursor_override) = split_command_cursor_override(command);
-        let Some((instance_name, input)) = command.split_once('.') else {
-            return Ok(false);
-        };
-        let Some(instance) = self.current_menu_instance(game, instance_name) else {
-            return Ok(false);
-        };
-        let Some(menu) = game.menus.iter().find(|menu| menu.name == instance.menu) else {
-            return Ok(false);
-        };
-        let Some(command) = menu
-            .commands
-            .iter()
-            .find(|binding| binding.input == input)
-            .map(|binding| binding.command.clone())
-        else {
-            return Ok(false);
-        };
-        if let Some(cursor) = cursor_override {
-            self.set_menu_cursor(game, &instance.name, cursor);
-        }
-
-        match command {
-            MenuCommand::CursorPrev => self.move_menu_cursor(game, &instance, -1),
-            MenuCommand::CursorNext => self.move_menu_cursor(game, &instance, 1),
-            MenuCommand::Emit(emit) => {
-                if let Some(command) = self.menu_emit_command(game, &instance, &emit) {
-                    self.apply_command(game, &command)?;
-                }
-            }
-        }
-        Ok(true)
-    }
-
-    fn current_menu_instance(&self, game: &LoadedGame, name: &str) -> Option<MenuInstanceDef> {
-        let screen = game
-            .scenes
-            .iter()
-            .find(|screen| screen.name == self.focused_scene)?;
-        find_menu_instance(&screen.components, name)
-    }
-
-    fn move_menu_cursor(&mut self, game: &LoadedGame, instance: &MenuInstanceDef, delta: i64) {
-        let count = self.menu_values(game, instance).len();
-        if count == 0 {
-            self.set_menu_cursor(game, &instance.name, 0);
-            return;
-        }
-        let cursor = self.menu_cursor(&instance.name);
-        let next = if delta < 0 {
-            cursor.saturating_sub(1)
-        } else {
-            cursor.saturating_add(1).min(count - 1)
-        };
-        self.set_menu_cursor(game, &instance.name, next);
-    }
-
-    fn menu_emit_command(
-        &self,
-        game: &LoadedGame,
-        instance: &MenuInstanceDef,
-        emit: &MenuEmit,
-    ) -> Option<String> {
-        match emit {
-            MenuEmit::CursorValue => {
-                let value = self.menu_cursor_value(game, instance)?;
-                Some(format!("{}.{}", instance.name, value))
-            }
-            MenuEmit::Event { name, value } => {
-                let Some(value) = value else {
-                    return Some(self.menu_event_command(instance, name, None));
-                };
-                let value = self.eval_menu_value_expr(game, instance, value)?;
-                Some(self.menu_event_command(instance, name, Some(&value)))
-            }
-        }
-    }
-
-    fn menu_event_command(
-        &self,
-        instance: &MenuInstanceDef,
-        name: &str,
-        value: Option<&str>,
-    ) -> String {
-        let command = format!("{}.{}", instance.name, name);
-        match value {
-            Some(value) => format!("{command}:{value}"),
-            None => command,
-        }
-    }
-
-    fn eval_menu_value_expr(
-        &self,
-        game: &LoadedGame,
-        instance: &MenuInstanceDef,
-        expr: &MenuValueExpr,
-    ) -> Option<String> {
-        match expr {
-            MenuValueExpr::CursorValue => self.menu_cursor_value(game, instance),
-            MenuValueExpr::Expr(expr) => self.eval_menu_expr(game, expr, None),
-        }
-    }
-
-    fn menu_cursor_value(&self, game: &LoadedGame, instance: &MenuInstanceDef) -> Option<String> {
-        self.menu_values(game, instance)
-            .get(self.menu_cursor(&instance.name))
-            .cloned()
-    }
-
-    fn menu_values(&self, game: &LoadedGame, instance: &MenuInstanceDef) -> Vec<String> {
-        let Some(menu) = game.menus.iter().find(|menu| menu.name == instance.menu) else {
-            return Vec::new();
-        };
-        let mut values = Vec::new();
-        self.collect_menu_values(game, &menu.view, None, &mut values);
-        values
-    }
-
-    fn collect_menu_values(
-        &self,
-        game: &LoadedGame,
-        components: &[MenuComponent],
-        scope: Option<(&str, usize)>,
-        values: &mut Vec<String>,
-    ) {
-        for component in components {
-            match component {
-                MenuComponent::Button(button) => {
-                    if let Some(value) = self.eval_menu_expr(game, &button.value, scope) {
-                        values.push(value);
-                    }
-                }
-                MenuComponent::Row(container)
-                | MenuComponent::Column(container)
-                | MenuComponent::Box(container) => {
-                    self.collect_menu_values(game, &container.children, scope, values);
-                }
-                MenuComponent::For(for_view) => {
-                    if for_view.source.is_levels() {
-                        for index in scene_level_indices(game, &self.focused_scene) {
-                            self.collect_menu_values(
-                                game,
-                                &for_view.children,
-                                Some((&for_view.binding, index)),
-                                values,
-                            );
-                        }
-                    }
-                }
-                MenuComponent::Text(_) => {}
-            }
-        }
-    }
-
-    fn eval_menu_expr(
-        &self,
-        game: &LoadedGame,
-        expr: &SceneExpr,
-        scope: Option<(&str, usize)>,
-    ) -> Option<String> {
-        match expr {
-            SceneExpr::Bool(value) => Some(value.to_string()),
-            SceneExpr::Int(value) => Some(value.to_string()),
-            SceneExpr::Text(value) => Some(value.clone()),
-            SceneExpr::Path(path) if path.len() == 1 => {
-                if scope.is_some_and(|(name, _)| name == path[0]) {
-                    return scope.map(|(_, index)| index.to_string());
-                }
-                Some(path[0].clone())
-            }
-            SceneExpr::Path(path) if path.len() == 2 && path[1] == "label" => {
-                let (binding, index) = scope?;
-                if binding == path[0] {
-                    return game.levels.get(index).map(|level| level.name.clone());
-                }
-                None
-            }
-            SceneExpr::Path(path) => Some(path.join(".")),
-            SceneExpr::Call { .. } => None,
-        }
-    }
-
-    fn menu_cursor(&self, instance: &str) -> usize {
-        let key = menu_cursor_key(instance);
-        self.scene_state()
-            .and_then(|state| state.values.get(&key))
-            .and_then(|value| match value {
-                SceneValue::Int(value) => usize::try_from(*value).ok(),
-                _ => None,
-            })
-            .unwrap_or(0)
-    }
-
-    fn set_menu_cursor(&mut self, game: &LoadedGame, instance: &str, cursor: usize) {
-        let focused = self.focused_scene.clone();
-        self.create_scene(game, &focused);
-        if let Some(state) = self.scene_states.get_mut(&focused) {
-            state.values.insert(
-                menu_cursor_key(instance),
-                SceneValue::Int(i64::try_from(cursor).unwrap_or(i64::MAX)),
-            );
-        }
     }
 
     fn condition_transition_effect(&self, game: &LoadedGame) -> Option<SceneEffect> {
@@ -1854,7 +1668,10 @@ impl GameSession {
             let Some(value) = self.eval_effect_value(game, &param.value, bindings) else {
                 continue;
             };
-            if let SceneValue::LevelRef(index) = value {
+            if let Some(index) = (param.name == "level")
+                .then(|| self.eval_effect_level_index(game, &param.value, bindings))
+                .flatten()
+            {
                 if scene_accepts_level(game, scene_name, index) {
                     let _ = self.activate_level(game, index, true);
                     self.undo_stack.clear();
@@ -2333,17 +2150,12 @@ impl GameSession {
             return SceneRuntimeState::default();
         };
 
-        let mut values = screen
+        let values = screen
             .state
             .variables
             .iter()
             .map(|variable| (variable.name.clone(), variable.default.clone()))
             .collect::<HashMap<_, _>>();
-        for instance in menu_instances(&screen.components) {
-            values
-                .entry(menu_cursor_key(&instance.name))
-                .or_insert(SceneValue::Int(0));
-        }
         let puzzles = screen
             .state
             .puzzles
@@ -3330,7 +3142,9 @@ fn transition_program_segment_outcome(
             &outcome.patches,
             &outcome.next_state,
         );
-        if let Some((before_wait, milliseconds, after_wait)) = split_effects_at_wait(effects) {
+        if let Some((before_wait, milliseconds, after_wait)) =
+            split_effects_at_program_boundary(game, effects, &animations)
+        {
             return Ok(ProgramSegmentOutcome {
                 next_state: outcome.next_state,
                 cancelled: outcome.cancelled,
@@ -3465,19 +3279,49 @@ fn push_unique_animation(events: &mut Vec<AnimationEvent>, event: AnimationEvent
     }
 }
 
-fn split_effects_at_wait(
+fn split_effects_at_program_boundary(
+    game: &LoadedGame,
     effects: Vec<QueuedRuleEffect>,
+    animations: &[AnimationEvent],
 ) -> Option<(Vec<QueuedRuleEffect>, u64, Vec<QueuedRuleEffect>)> {
-    let index = effects
-        .iter()
-        .position(|effect| matches!(effect.effect, RuleEffect::Wait { .. }))?;
-    let milliseconds = match effects[index].effect {
-        RuleEffect::Wait { milliseconds } => milliseconds,
-        _ => unreachable!(),
-    };
+    let mut boundary = None;
+    for (index, effect) in effects.iter().enumerate() {
+        match effect.effect {
+            RuleEffect::Wait { milliseconds } => {
+                boundary = Some((index, milliseconds));
+                break;
+            }
+            RuleEffect::WaitAnimation => {
+                if let Some(milliseconds) = animation_wait_milliseconds(game, animations) {
+                    boundary = Some((index, milliseconds));
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let (index, milliseconds) = boundary?;
     let before = effects[..index].to_vec();
     let after = effects[index + 1..].to_vec();
     Some((before, milliseconds, after))
+}
+
+fn animation_wait_milliseconds(game: &LoadedGame, animations: &[AnimationEvent]) -> Option<u64> {
+    animations
+        .iter()
+        .map(|animation| match animation {
+            AnimationEvent::Move { name, .. } | AnimationEvent::CantMove { name, .. } => {
+                animation_duration_milliseconds(game, name)
+            }
+        })
+        .max()
+}
+
+fn animation_duration_milliseconds(game: &LoadedGame, name: &str) -> u64 {
+    if name == "tween" {
+        return game.animation.tween.interval_ms;
+    }
+    game.default_wait_ms
 }
 
 fn parse_runtime_expr(value: &str) -> Option<SceneExpr> {
@@ -3586,6 +3430,17 @@ fn scene_accepts_level(game: &LoadedGame, scene_name: &str, level_index: usize) 
         .any(|index| index == level_index)
 }
 
+fn transition_condition_mentions_input(trigger: &SceneTransitionTrigger, input: &str) -> bool {
+    let SceneTransitionTrigger::Condition(condition) = trigger else {
+        return false;
+    };
+    condition.split(" and ").any(|part| {
+        let part = part.trim();
+        part.strip_prefix("input == ")
+            .is_some_and(|name| name.trim() == input)
+    })
+}
+
 fn level_resource_matches(resource: &str, level_name: &str) -> bool {
     level_name == resource
         || level_name
@@ -3611,7 +3466,6 @@ fn component_has_level_menu(component: &SceneComponent) -> bool {
         | SceneComponent::Text(_)
         | SceneComponent::Button(_)
         | SceneComponent::Choice(_) => false,
-        SceneComponent::Menu(_) => false,
     }
 }
 
@@ -3668,65 +3522,6 @@ fn split_command_cursor_override(command: &str) -> (&str, Option<usize>) {
         return (command, None);
     };
     (name, payload.parse::<usize>().ok())
-}
-
-fn menu_cursor_key(instance: &str) -> String {
-    format!("__menu_{instance}_cursor")
-}
-
-fn find_menu_instance(components: &[SceneComponent], name: &str) -> Option<MenuInstanceDef> {
-    for component in components {
-        match component {
-            SceneComponent::Menu(instance) if instance.name == name => {
-                return Some(instance.clone());
-            }
-            SceneComponent::Row(container)
-            | SceneComponent::Column(container)
-            | SceneComponent::Box(container) => {
-                if let Some(instance) = find_menu_instance(&container.children, name) {
-                    return Some(instance);
-                }
-            }
-            SceneComponent::Conditional(conditional) => {
-                if let Some(instance) = find_menu_instance(&conditional.children, name) {
-                    return Some(instance);
-                }
-                if let Some(instance) = find_menu_instance(&conditional.else_children, name) {
-                    return Some(instance);
-                }
-            }
-            SceneComponent::For(for_view) => {
-                if let Some(instance) = find_menu_instance(&for_view.children, name) {
-                    return Some(instance);
-                }
-            }
-            _ => {}
-        }
-    }
-    None
-}
-
-fn menu_instances(components: &[SceneComponent]) -> Vec<MenuInstanceDef> {
-    let mut out = Vec::new();
-    collect_menu_instances(components, &mut out);
-    out
-}
-
-fn collect_menu_instances(components: &[SceneComponent], out: &mut Vec<MenuInstanceDef>) {
-    for component in components {
-        match component {
-            SceneComponent::Menu(instance) => out.push(instance.clone()),
-            SceneComponent::Row(container)
-            | SceneComponent::Column(container)
-            | SceneComponent::Box(container) => collect_menu_instances(&container.children, out),
-            SceneComponent::Conditional(conditional) => {
-                collect_menu_instances(&conditional.children, out);
-                collect_menu_instances(&conditional.else_children, out);
-            }
-            SceneComponent::For(for_view) => collect_menu_instances(&for_view.children, out),
-            _ => {}
-        }
-    }
 }
 
 fn input_id_by_label(game: &LoadedGame, input_name: &str) -> Option<InputId> {
@@ -4043,8 +3838,8 @@ P
 
         session.apply_input(&loaded, InputId(0)).unwrap();
 
-        assert_eq!(session.level_index(), 0);
-        assert_eq!(session.state(), &loaded.levels[0].initial_state);
+        assert_eq!(session.level_index(), 1);
+        assert_eq!(session.state(), &loaded.levels[1].initial_state);
     }
 
     fn transition_fixture() -> LoadedGame {
@@ -4057,14 +3852,6 @@ floor = Goal
 actor = Player Box Wall
 }
 group solid = Player Box Wall
-legend {
-. = empty
-G = Goal
-# = Wall
-* = Goal Box
-P = Player
-B = Box
-}
 win_conditions {
 some Goal
 all Goal on Box
@@ -4074,6 +3861,14 @@ once input directions [ Player | Box | no solid ] -> [ | Player | Box ]
 once input directions [ Player | no solid ] -> [ | Player ]
 }
 levels {
+legend {
+. = empty
+G = Goal
+# = Wall
+* = Goal Box
+P = Player
+B = Box
+}
 level first {
 #######
 #P.B.G#
@@ -4087,8 +3882,11 @@ level second {
 }
 }
 scene playing {
-view {
+state {
 board = puzzle sokoban
+}
+layout {
+board
 }
 rules {
 step board
@@ -4097,7 +3895,7 @@ if board.win_conditions -> board.next_level
 }
 }
 scene level_select {
-view {
+layout {
 text "Level Select"
 }
 }
@@ -4173,7 +3971,7 @@ state {
 board = puzzle sokoban
 spec_board = puzzle sokoban
 }
-view {
+layout {
 board
 }
 rules {
@@ -4183,7 +3981,7 @@ if spec_board.portal_entered -> goto child_1
 }
 
 scene child_1 {
-view {
+layout {
 text "Child 1"
 }
 }
@@ -4195,7 +3993,7 @@ levels spec
 state {
 spec_board = puzzle sokoban
 }
-view {
+layout {
 spec_board
 }
 rules {
@@ -4226,7 +4024,6 @@ empty .
 var moved = false
 
 object Player 1
-legend P = Player
 
 input tick
 
@@ -4235,6 +4032,7 @@ once [ Player ] -> set moved = true
 }
 
 levels {
+legend P = Player
 level start {
 P
 }
@@ -4242,8 +4040,11 @@ P
 }
 
 scene playing {
-view {
+state {
 board = puzzle default
+}
+layout {
+board
 }
 rules {
 step board
@@ -4252,7 +4053,7 @@ if board.moved -> goto moved
 }
 
 scene moved {
-view {
+layout {
 text "moved"
 }
 }
@@ -4278,18 +4079,18 @@ persistent var moves = 0
 layers 1
 empty .
 object Player 0
-legend P = Player
 
 rules {
 }
 levels {
+legend P = Player
 level start {
 P
 }
 }
 }
 scene playing {
-view {
+layout {
 text "Playing"
 }
 rules {
@@ -4297,7 +4098,7 @@ if input == open -> goto menu
 }
 }
 scene menu {
-view {
+layout {
 text "Menu"
 }
 on_scene_start {
@@ -4332,13 +4133,14 @@ puzzle default {
 layers 1
 empty .
 object Player 0
-legend {
-P = Player
-}
 rules {
 right [ Player | ] -> [ | Player ] sfx push
 }
 levels {
+legend {
+. = empty
+P = Player
+}
 level start {
 P.
 }
@@ -4848,13 +4650,14 @@ puzzle default {
 layers 1
 empty .
 object Player 0
-legend {
-P = Player
-}
 rules {
 sfx tick
 }
 levels {
+legend {
+. = empty
+P = Player
+}
 level start {
 P
 }
@@ -4892,6 +4695,7 @@ wait 25ms
 }
 levels {
 legend {
+. = empty
 P = Player
 }
 level start {
@@ -4928,6 +4732,111 @@ P
     }
 
     #[test]
+    fn wait_animation_pauses_until_segment_animation_completes() {
+        let loaded = parse_game(
+            r#"
+title wait_animation_fixture
+animation {
+tween {
+duration = 80ms
+}
+}
+puzzle default {
+layers {
+actor = Player
+marker = Marker
+}
+rules {
+input directions [ Player ] -> [ > Player ]
+move
+wait animation
+[ Player no Marker ] -> [ Player Marker ]
+}
+levels {
+legend {
+. = empty
+P = Player
+}
+level start {
+P.
+}
+}
+}
+"#,
+        )
+        .unwrap();
+        let player = object_named(&loaded, "Player");
+        let marker = object_named(&loaded, "Marker");
+        let mut session = GameSession::new(&loaded);
+
+        session
+            .apply_input(&loaded, input_named(&loaded, "right"))
+            .unwrap();
+
+        assert_eq!(
+            session.take_wait_events(),
+            vec![WaitEvent::ContinueEffects { milliseconds: 80 }]
+        );
+        assert_eq!(
+            session.take_animation_events(),
+            vec![AnimationEvent::Move {
+                name: "tween".to_string(),
+                object: player,
+                from_x: 0,
+                from_y: 0,
+                to_x: 1,
+                to_y: 0,
+            }]
+        );
+        assert!(!session.state().has_object(&loaded.game, 1, 0, marker));
+
+        session
+            .apply_command(&loaded, "__continue_effects")
+            .unwrap();
+
+        assert!(session.state().has_object(&loaded.game, 1, 0, marker));
+        assert!(session.take_wait_events().is_empty());
+    }
+
+    #[test]
+    fn wait_animation_without_animation_is_noop() {
+        let loaded = parse_game(
+            r#"
+title wait_animation_noop_fixture
+puzzle default {
+layers {
+actor = Player
+marker = Marker
+}
+rules {
+wait animation
+[ Player no Marker ] -> [ Player Marker ]
+}
+levels {
+legend {
+. = empty
+P = Player
+}
+level start {
+P
+}
+}
+}
+"#,
+        )
+        .unwrap();
+        let marker = object_named(&loaded, "Marker");
+        let mut session = GameSession::new(&loaded);
+
+        session
+            .apply_input(&loaded, input_named(&loaded, "right"))
+            .unwrap();
+
+        assert!(session.take_wait_events().is_empty());
+        assert!(session.state().has_object(&loaded.game, 0, 0, marker));
+    }
+
+    #[test]
     fn scene_message_effect_queues_popup_message() {
         let loaded = parse_game(
             r#"
@@ -4937,17 +4846,21 @@ puzzle default {
 layers 1
 empty .
 object Player 0
+rules {
+}
+
+levels {
 legend {
 P = Player
 }
-rules {
-}
+
 level start {
 P
 }
 }
+}
 scene playing {
-view {
+layout {
 text "Playing"
 }
 on_scene_start {
@@ -4977,12 +4890,12 @@ puzzle default {
 layers 1
 empty .
 object Player 0
-legend {
-P = Player
-}
 rules {
 }
 levels {
+legend {
+P = Player
+}
 level first
 P
 
@@ -4994,7 +4907,7 @@ scene playing {
 state {
 board = puzzle default
 }
-view {
+layout {
 text "Playing"
 }
 on_scene_start {
@@ -5007,13 +4920,9 @@ message hint
         )
         .unwrap();
         let mut session = GameSession::new(&loaded);
+        session.apply_command(&loaded, "goto playing").unwrap();
 
-        assert_eq!(
-            session.take_message_events(),
-            vec![MessageEvent::Message {
-                text: "First level only".to_string()
-            }]
-        );
+        assert!(session.take_message_events().is_empty());
 
         session.start_level(&loaded, 1);
         assert!(session.take_message_events().is_empty());
@@ -5030,22 +4939,21 @@ layers {
 actor = Player
 floor = Goal
 }
+rules {
+once [ Player Goal ] -> message hint
+}
+
+levels {
 legend {
 . = empty
 P = Player
 G = Goal
 * = Player Goal
 }
-rules {
-once [ Player Goal ] -> message hint
-}
+
 level start {
 *
 }
-}
-scene playing {
-view {
-text "Playing"
 }
 }
 "#,
@@ -5074,7 +4982,7 @@ text "Playing"
             render_ascii_top(&loaded.levels[0].initial_state, &loaded.legend)
                 .lines()
                 .count(),
-            3
+            7
         );
     }
 
@@ -5367,11 +5275,6 @@ floor = Goal
 actor = Box Player
 }
 
-legend {
-. = empty
-* = Goal Box
-P = Player
-}
 
 input tick
 
@@ -5384,6 +5287,11 @@ rules {
 }
 
 levels {
+legend {
+. = empty
+* = Goal Box
+P = Player
+}
 level one {
 *
 P
@@ -5403,8 +5311,11 @@ rules {
 }
 
 scene playing {
-view {
+state {
 board = puzzle board
+}
+layout {
+board
 }
 rules {
 step board
@@ -5421,7 +5332,7 @@ if board.win_conditions -> board.next_level
         session.apply_input(&loaded, tick).unwrap();
 
         assert_eq!(session.level_index(), 1);
-        assert_eq!(session.screen(), "playing");
+        assert_eq!(session.screen(), "board");
         assert_eq!(session.state(), &loaded.levels[1].initial_state);
     }
 
@@ -5454,8 +5365,11 @@ P.
 }
 
 scene playing {
-view {
+state {
 board = puzzle default
+}
+layout {
+board
 }
 rules {
 step board
@@ -5495,11 +5409,13 @@ puzzle default {
 layers 2
 empty .
 object Player 1
-legend P = Player
 
 rules {
 once right [ Player | ] -> [ | Player ]
 }
+
+levels {
+legend P = Player
 
 level first {
 P.
@@ -5507,6 +5423,7 @@ P.
 
 level second {
 P..
+}
 }
 }
 
@@ -5519,8 +5436,11 @@ rules {
 }
 
 scene play {
-view {
+state {
 board = puzzle default
+}
+layout {
+board
 }
 keys {
 d -> input right
@@ -5591,7 +5511,6 @@ layers 2
 empty .
 
 object A 1
-legend A = A
 
 win_conditions {
 some A
@@ -5603,14 +5522,21 @@ rules {
 once [ A ] -> cancel
 }
 
+levels {
+legend A = A
+
 level start {
 A
 }
 }
+}
 
 scene playing {
-view {
+state {
 board = puzzle default
+}
+layout {
+board
 }
 rules {
 step board
@@ -5619,7 +5545,7 @@ if board.win_conditions -> goto level_clear
 }
 
 scene level_clear {
-view {
+layout {
 text "clear"
 }
 }
@@ -5761,10 +5687,6 @@ layers {
 actor = Player
 }
 
-legend {
-. = empty
-P = Player
-}
 
 input mark
 input done
@@ -5775,6 +5697,12 @@ once [ Player ] -> [ Player ] marks += 1
 }
 }
 
+levels {
+legend {
+. = empty
+P = Player
+}
+
 level hub {
 P
 }
@@ -5783,10 +5711,14 @@ level level {
 P
 }
 }
+}
 
 scene hub {
-view {
+state {
 board = puzzle default level hub
+}
+layout {
+board
 }
 rules {
 step board
@@ -5794,8 +5726,11 @@ step board
 }
 
 scene playing {
-view {
+state {
 board = puzzle default
+}
+layout {
+board
 }
 rules {
 if input == done -> {
@@ -5882,7 +5817,7 @@ layers {
 floor = Goal
 actor = Player Box Wall
 marker = ClearMark
-visual = display @ClearVisual
+@visual = display @ClearVisual
 }
 group solid = Player Box Wall
 win_conditions {
@@ -5897,15 +5832,27 @@ rules {
 once input directions [ Player | Box | no solid ] -> [ | Player | Box ]
 once input directions [ Player | no solid ] -> [ | Player ]
 }
+levels {
+legend {
+. = empty
+G = Goal
+P = Player
+B = Box
+# = Wall
+}
 level start {
 #####
 #PBG#
 #####
 }
 }
+}
 scene playing {
-view {
+state {
 board = puzzle sokoban
+}
+layout {
+board
 }
 rules {
 step board
@@ -5913,7 +5860,7 @@ if board.win_conditions -> goto level_select
 }
 }
 scene level_select {
-view {
+layout {
 text "done"
 }
 }
@@ -5977,8 +5924,11 @@ level second {
 }
 }
 scene playing {
-view {
+state {
 board = puzzle sokoban
+}
+layout {
+board
 }
 rules {
 step board
@@ -6083,10 +6033,10 @@ puzzle default {
 layers 1
 empty .
 object Player 0
-legend P = Player
 rules {
 }
 levels {
+legend P = Player
 level first {
 P
 }
@@ -6100,14 +6050,20 @@ P
 }
 
 scene playing {
-view {
+state {
 board = puzzle default
+}
+layout {
+board
 }
 }
 
 scene level_clear {
-view {
+state {
 board = puzzle default
+}
+layout {
+board
 }
 rules {
 }
@@ -6140,52 +6096,6 @@ rules {
     }
 
     #[test]
-    fn for_levels_source_is_rejected() {
-        let source = r#"
-title for_levels_rejected
-
-puzzle default {
-layers 1
-empty .
-object Player 0
-legend {
-P = Player
-}
-
-rules {
-}
-
-levels {
-level first {
-P
-}
-level second {
-P
-}
-}
-}
-
-scene playing {
-view {
-board = puzzle default
-}
-}
-
-scene level_select {
-view {
-column {
-for level in levels {
-text level.label
-}
-}
-}
-}
-"#;
-        let error = parse_game(source).unwrap_err().to_string();
-        assert!(error.contains("for <item> in levels"));
-    }
-
-    #[test]
     fn level_menu_component_owns_level_menu_commands() {
         let source = r#"
 title level_menu_commands
@@ -6212,13 +6122,16 @@ P
 }
 
 scene playing {
-view {
+state {
 board = puzzle default
+}
+layout {
+board
 }
 }
 
 scene select {
-view {
+layout {
 level_menu
 }
 }
@@ -6246,13 +6159,13 @@ layers 1
 empty .
 
 object Player 0
-legend P = Player
 
 rules {
 }
 }
 
 levels worldA of default {
+legend P = Player
 level 1
 P
 level 2
@@ -6260,6 +6173,7 @@ P
 }
 
 levels worldB of default {
+legend P = Player
 level 1
 P
 level 2
@@ -6270,7 +6184,7 @@ scene level_select {
 resources {
 levels worldB
 }
-view {
+layout {
 level_menu
 }
 }
@@ -6279,8 +6193,11 @@ scene playing {
 resources {
 levels worldB
 }
-view {
+state {
 board = puzzle default
+}
+layout {
+board
 }
 }
 "#;
@@ -6335,13 +6252,16 @@ P
 }
 
 scene playing {
-view {
+state {
 board = puzzle default
+}
+layout {
+board
 }
 }
 
 scene select {
-view {
+layout {
 level_menu {
 columns = 3
 wrap = true
@@ -6393,13 +6313,16 @@ P
 }
 
 scene playing {
-view {
+state {
 board = puzzle default
+}
+layout {
+board
 }
 }
 
 scene select {
-view {
+layout {
 level_menu
 }
 }
@@ -6426,12 +6349,12 @@ layers 1
 empty .
 
 object Player 0
-legend P = Player
 
 rules {
 }
 
 levels {
+legend P = Player
 level first {
 P
 }
@@ -6442,13 +6365,16 @@ P
 }
 
 scene playing {
-view {
+state {
 board = puzzle default
+}
+layout {
+board
 }
 }
 
 scene select {
-view {
+layout {
 level_menu {
 button "Back" -> back
 }
@@ -6461,7 +6387,7 @@ button "Back" -> back
         session.apply_command(&loaded, "enter select").unwrap();
         session.apply_command(&loaded, "down").unwrap();
         session.apply_command(&loaded, "down").unwrap();
-        assert_eq!(session.selected_level_index(), 2);
+        assert_eq!(session.selected_level_index(), 1);
 
         session.apply_command(&loaded, "enter").unwrap();
         assert_eq!(session.screen(), "playing");
@@ -6490,21 +6416,25 @@ P
 }
 
 scene a {
-view {
+layout {
 text "A"
 }
 }
 
 scene b {
-view {
+state {
 mark = empty
+}
+layout {
 text "B"
 }
 }
 
 scene c {
-view {
+state {
 mark = empty
+}
+layout {
 text "C"
 }
 }
@@ -6551,7 +6481,7 @@ P
 }
 
 scene playing {
-view {
+layout {
 text "Playing"
 }
 }
@@ -6559,7 +6489,7 @@ text "Playing"
 scene menu {
 var transient = empty
 persistent var tab = settings
-view {
+layout {
 text tab
 }
 }
@@ -6607,14 +6537,14 @@ P
 }
 
 scene playing {
-view {
+layout {
 text "Playing"
 }
 }
 
 scene menu {
 const tab = levels
-view {
+layout {
 text tab
 }
 }
@@ -6657,20 +6587,20 @@ P
 }
 
 scene title {
-view {
+layout {
 text "Title"
 }
 }
 
 scene playing {
 var selected = empty
-view {
+layout {
 text selected
 }
 }
 
 scene menu {
-view {
+layout {
 text "Menu"
 }
 }
@@ -6730,7 +6660,7 @@ P
 }
 
 scene detail(selected) {
-view {
+layout {
 text selected.solved
 }
 }
@@ -6774,12 +6704,12 @@ layers 1
 empty .
 
 object Player 0
-legend P = Player
 
 rules {
 }
 
 levels {
+legend P = Player
 level start {
 P
 }
@@ -6787,19 +6717,22 @@ P
 }
 
 scene playing {
-view {
+state {
 board = puzzle default
+}
+layout {
+board
 }
 }
 
 scene menu {
-view {
+layout {
 text "Menu"
 }
 }
 
 scene level_select {
-view {
+layout {
 text "Levels"
 }
 }
@@ -6853,16 +6786,18 @@ text "Levels"
         let source = r#"
 title scene_state
 puzzle default {
-layers 2
-empty .
-
-object Player 1
-legend P = Player
+layers {
+actor = Player
+}
 
 rules {
 }
 
 levels {
+legend {
+. = empty
+P = Player
+}
 level start {
 P
 }
@@ -6870,11 +6805,14 @@ P
 }
 
 scene playing {
-view {
+state {
 board = puzzle default
 message_visible = true
 moves = 0
 message = "Read this"
+}
+layout {
+board
 }
 keys {
 q -> goto level_select
@@ -6882,8 +6820,10 @@ q -> goto level_select
 }
 
 scene level_select {
-view {
+state {
 message = "Browse"
+}
+layout {
 level_menu
 }
 keys {
@@ -6941,11 +6881,6 @@ floor = Goal
 actor = Box Player
 }
 
-legend {
-. = empty
-* = Goal Box
-P = Player
-}
 
 input tick
 
@@ -6954,6 +6889,11 @@ rules {
 }
 
 levels {
+legend {
+. = empty
+* = Goal Box
+P = Player
+}
 level one {
 *
 P
@@ -6966,8 +6906,11 @@ P
 }
 
 scene playing {
-view {
+state {
 board = puzzle board
+}
+layout {
+board
 }
 rules {
 step board
@@ -6979,10 +6922,11 @@ step board
         let mut session = GameSession::new(&loaded);
         let tick = input_named(&loaded, "tick");
 
+        session.apply_command(&loaded, "goto playing").unwrap();
         session.apply_input(&loaded, tick).unwrap();
 
         assert_eq!(session.level_index(), 1);
-        assert_eq!(session.screen(), "playing");
+        assert_eq!(session.screen(), "board");
         assert_eq!(session.state(), &loaded.levels[1].initial_state);
     }
 
@@ -6998,11 +6942,6 @@ floor = Goal
 actor = Box Player
 }
 
-legend {
-. = empty
-* = Goal Box
-P = Player
-}
 
 input tick
 
@@ -7016,6 +6955,11 @@ if win_conditions -> next_level
 }
 
 levels {
+legend {
+. = empty
+* = Goal Box
+P = Player
+}
 level one {
 *
 P
@@ -7028,8 +6972,11 @@ P
 }
 
 scene playing {
-view {
+state {
 board = puzzle board
+}
+layout {
+board
 }
 rules {
 step board
@@ -7041,10 +6988,11 @@ step board
         let mut session = GameSession::new(&loaded);
         let tick = input_named(&loaded, "tick");
 
+        session.apply_command(&loaded, "goto playing").unwrap();
         session.apply_input(&loaded, tick).unwrap();
 
         assert_eq!(session.level_index(), 1);
-        assert_eq!(session.screen(), "playing");
+        assert_eq!(session.screen(), "board");
         assert_eq!(session.state(), &loaded.levels[1].initial_state);
     }
 
@@ -7060,10 +7008,6 @@ empty .
 object Player 0
 object Started 1
 
-legend {
-P = Player
-S = Started
-}
 
 input tick
 
@@ -7075,14 +7019,24 @@ message "started"
 rules {
 }
 
+levels {
+legend {
+P = Player
+S = Started
+}
+
 level one {
 P
 }
 }
+}
 
 scene playing {
-view {
+state {
 board = puzzle board
+}
+layout {
+board
 }
 rules {
 step board
@@ -7121,9 +7075,6 @@ layers 1
 empty .
 object Player 0
 
-legend {
-P = Player
-}
 
 input tick
 
@@ -7134,16 +7085,25 @@ some Player
 rules {
 }
 
+levels {
+legend {
+P = Player
+}
+
 level one {
 message "enter one"
 P
 message "clear one"
 }
 }
+}
 
 scene playing {
-view {
+state {
 board = puzzle board
+}
+layout {
+board
 }
 rules {
 step board
@@ -7186,18 +7146,21 @@ layers 1
 empty .
 object Player 0
 
-legend {
-P = Player
-}
 
 input tick
 
 rules {
 }
 
+levels {
+legend {
+P = Player
+}
+
 level one {
 message "enter one"
 P
+}
 }
 }
 
@@ -7206,8 +7169,11 @@ button "Play" -> goto playing
 }
 
 scene playing {
-view {
+state {
 board = puzzle board
+}
+layout {
+board
 }
 rules {
 step board
@@ -7247,11 +7213,6 @@ floor = Goal
 actor = Box Player
 }
 
-legend {
-. = empty
-* = Goal Box
-P = Player
-}
 
 input tick
 
@@ -7269,6 +7230,11 @@ if win_conditions -> next_level
 }
 
 levels {
+legend {
+. = empty
+* = Goal Box
+P = Player
+}
 level one {
 *
 P
@@ -7281,8 +7247,11 @@ P
 }
 
 scene playing {
-view {
+state {
 board = puzzle board
+}
+layout {
+board
 }
 rules {
 step board

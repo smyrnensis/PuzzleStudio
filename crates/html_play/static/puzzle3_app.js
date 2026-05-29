@@ -1,21 +1,34 @@
-const screenView = document.querySelector("#screenView") || document.body;
-const componentEmbedMode = new URLSearchParams(window.location.search).get("component") === "1"
-  || window.Puzzle3DComponentEmbed === true;
+(() => {
+function createPuzzle3Controller(options = {}) {
+const controllerOptions = options && typeof options === "object" ? options : {};
+const inlineComponentMount = Boolean(controllerOptions.canvas) || controllerOptions.mountMode === "inline";
+const screenView = controllerOptions.screenView || controllerOptions.container || document.querySelector("#screenView") || document.body;
+const componentEmbedMode = Boolean(controllerOptions.componentEmbedMode)
+  || (!inlineComponentMount && (
+    new URLSearchParams(window.location.search).get("component") === "1"
+    || window.Puzzle3DComponentEmbed === true
+  ));
 let editorComponentEmbedMode = false;
-document.documentElement.classList.toggle("is-component-embed", componentEmbedMode);
+if (!inlineComponentMount) {
+  document.documentElement.classList.toggle("is-component-embed", componentEmbedMode);
+}
 let activeThemeClass = "";
 const activeThemeVariables = new Set();
-applyTheme({ name: "clean" });
-document.body.classList.toggle("is-component-embed", componentEmbedMode);
+if (!inlineComponentMount) {
+  applyTheme({ name: "clean" });
+  document.body.classList.toggle("is-component-embed", componentEmbedMode);
+}
 const puzzle3Frame = ensurePuzzle3ComponentFrame();
 const canvas = puzzle3Frame.querySelector("#view");
-const ctx = canvas.getContext("2d");
+const ctx = canvas.getContext("2d", { alpha: true });
 const PUZZLE3_APP_CAMERA_MIN_PITCH_DEGREES = -90;
 const PUZZLE3_APP_CAMERA_MAX_PITCH_DEGREES = 90;
 
 function ensurePuzzle3ComponentFrame() {
-  let existing = document.querySelector("#view");
-  let frame = existing?.closest(".puzzle3-component") || document.createElement("div");
+  let existing = controllerOptions.canvas || document.querySelector("#view");
+  let frame = existing?.closest(".puzzle3-component")
+    || (inlineComponentMount ? existing?.parentElement : null)
+    || document.createElement("div");
   frame.className = "puzzle3-component";
   if (!existing) {
     existing = document.createElement("canvas");
@@ -23,6 +36,8 @@ function ensurePuzzle3ComponentFrame() {
     existing.width = 960;
     existing.height = 640;
     existing.setAttribute("aria-label", "Puzzle3 component");
+  } else if (!existing.id) {
+    existing.id = "view";
   }
   if (existing.parentElement !== frame) {
     frame.append(existing);
@@ -104,12 +119,17 @@ const pixelateBuffer = document.createElement("canvas");
 let mountedPuzzle3Component = null;
 let pendingResizeFrame = 0;
 let pendingSceneLayoutRender = false;
+let startupUrlCommandsApplied = false;
+const viewListeners = new Set();
+const stateListeners = new Set();
 const puzzle3Component = createPuzzle3Component();
 
 async function loadSnapshot() {
   let nextSnapshot = null;
   try {
-    if (window.Puzzle3DFixture) {
+    if (controllerOptions.fixture) {
+      nextSnapshot = controllerOptions.fixture;
+    } else if (window.Puzzle3DFixture) {
       nextSnapshot = window.Puzzle3DFixture;
     } else {
       const response = await fetch("./fixture.json", { cache: "no-store" });
@@ -139,14 +159,19 @@ async function loadSnapshotData(source, options = {}) {
   document.title = snapshot.title || "Puzzle3";
   currentSceneName = editorModelComponentPreview?.sceneName
     || options.scene
+    || controllerOptions.scene
     || (options.preferPuzzleScene ? puzzleSceneName(snapshot) : "")
     || initialSceneName(snapshot);
-  applyTheme(snapshot.theme || { name: "clean" });
+  if (!inlineComponentMount) {
+    applyTheme(snapshot.theme || { name: "clean" });
+  }
   initialCamera = cloneCamera(snapshot.camera || fallbackSnapshot.camera);
   view.projectionFitKey = "";
   resetRenderGeometryCache();
   resetViewportMotion();
   renderScene();
+  applyStartupPuzzle3UrlCommands();
+  notifyPuzzle3StateChange();
 }
 
 function applyTheme(theme) {
@@ -202,8 +227,8 @@ function normalizeThemeName(name) {
 }
 
 async function createPuzzle3Runtime(initialSnapshot) {
-  const source = String(window.Puzzle3DSource || initialSnapshot.source || "");
-  const puzzlePath = String(window.Puzzle3DPath || initialSnapshot.puzzlePath || "game.puzzle");
+  const source = String(controllerOptions.source ?? window.Puzzle3DSource ?? initialSnapshot.source ?? "");
+  const puzzlePath = String(controllerOptions.puzzlePath ?? window.Puzzle3DPath ?? initialSnapshot.puzzlePath ?? "game.puzzle");
   const module = await window.PuzzleRuntimeWasmLoader.load(source.length || Date.now());
   if (typeof module.WasmPuzzle3Runtime !== "function") {
     throw new Error("Puzzle3 WASM runtime is unavailable.");
@@ -589,7 +614,11 @@ function renderScene() {
     sceneName = scene?.name || currentSceneName || "default";
     component = puzzle3ComponentFor(scene) || puzzle3ModelPreviewComponent();
   }
-  screenView.className = `scene ${sceneName}`;
+  if (inlineComponentMount) {
+    screenView.dataset.scene = sceneName;
+  } else {
+    screenView.className = `scene ${sceneName}`;
+  }
   puzzle3Component.mount(component, sceneName);
 }
 
@@ -629,7 +658,11 @@ function createPuzzle3Component() {
       canvas.style.inset = embed ? "0" : "";
       canvas.style.width = embed ? "100%" : "";
       canvas.style.height = embed ? "100%" : "";
-      screenView.replaceChildren(puzzle3Frame);
+      if (!inlineComponentMount) {
+        screenView.replaceChildren(puzzle3Frame);
+      } else if (!puzzle3Frame.contains(canvas)) {
+        puzzle3Frame.append(canvas);
+      }
       applySceneComponentMetadata(component, sceneName);
       updateCameraInteractionState();
       resizeCanvas();
@@ -667,6 +700,7 @@ function createPuzzle3Component() {
         resetViewportMotion();
       }
       requestSceneViewportDraw();
+      notifyPuzzle3StateChange();
       return true;
     },
     nextLevel() {
@@ -676,6 +710,7 @@ function createPuzzle3Component() {
       snapshot = runtime.snapshot();
       resetViewportMotion();
       draw();
+      notifyPuzzle3StateChange();
       return true;
     },
     previousLevel() {
@@ -685,6 +720,7 @@ function createPuzzle3Component() {
       snapshot = runtime.snapshot();
       resetViewportMotion();
       draw();
+      notifyPuzzle3StateChange();
       return true;
     },
     gotoLevel(level) {
@@ -696,6 +732,7 @@ function createPuzzle3Component() {
       snapshot = runtime.snapshot();
       resetViewportMotion();
       draw();
+      notifyPuzzle3StateChange();
       return true;
     },
     resetCamera() {
@@ -714,7 +751,7 @@ function createPuzzle3Component() {
   };
 }
 
-function resetProjection(rect = canvas.getBoundingClientRect()) {
+function resetProjection(rect = canvasLayoutFrame()) {
   updateProjectionFit(rect);
 }
 
@@ -762,6 +799,27 @@ function puzzle3LevelIndex(level) {
   return index >= 0 ? index : null;
 }
 
+function applyStartupPuzzle3UrlCommands() {
+  if (startupUrlCommandsApplied) {
+    return;
+  }
+  startupUrlCommandsApplied = true;
+  const params = new URLSearchParams(window.location.search);
+  const level = params.get("level") || "";
+  if (level) {
+    puzzle3Component.gotoLevel(level);
+  }
+  const inputs = [
+    ...params.getAll("input"),
+    ...params
+      .getAll("inputs")
+      .flatMap((value) => String(value || "").split(",").map((input) => input.trim())),
+  ].filter(Boolean);
+  for (const input of inputs) {
+    puzzle3Component.applyInput(input);
+  }
+}
+
 function relativeLevelIndexForBundle(levelsName, globalIndex) {
   const indexes = levelIndexesForBundle(levelsName);
   const relative = indexes.indexOf(globalIndex);
@@ -769,16 +827,23 @@ function relativeLevelIndexForBundle(levelsName, globalIndex) {
 }
 
 function resizeCanvas() {
-  const rect = canvas.getBoundingClientRect();
+  const frame = canvasLayoutFrame();
   const scale = window.devicePixelRatio || 1;
-  const nextWidth = Math.max(1, Math.floor(rect.width * scale));
-  const nextHeight = Math.max(1, Math.floor(rect.height * scale));
+  const nextWidth = Math.max(1, Math.floor(frame.width * scale));
+  const nextHeight = Math.max(1, Math.floor(frame.height * scale));
   const changed = canvas.width !== nextWidth || canvas.height !== nextHeight;
   canvas.width = nextWidth;
   canvas.height = nextHeight;
   ctx.setTransform(scale, 0, 0, scale, 0, 0);
-  updateProjectionFit(rect);
+  updateProjectionFit(frame);
   return changed;
+}
+
+function canvasLayoutFrame() {
+  const rect = canvas.getBoundingClientRect();
+  const width = Math.max(1, Number(canvas.clientWidth) || Number(rect.width) || 1);
+  const height = Math.max(1, Number(canvas.clientHeight) || Number(rect.height) || 1);
+  return { width, height };
 }
 
 function schedulePuzzle3Resize(renderLayout = false) {
@@ -799,10 +864,10 @@ function schedulePuzzle3Resize(renderLayout = false) {
 }
 
 function syncCanvasSize() {
-  const rect = canvas.getBoundingClientRect();
+  const frame = canvasLayoutFrame();
   const scale = window.devicePixelRatio || 1;
-  const nextWidth = Math.max(1, Math.floor(rect.width * scale));
-  const nextHeight = Math.max(1, Math.floor(rect.height * scale));
+  const nextWidth = Math.max(1, Math.floor(frame.width * scale));
+  const nextHeight = Math.max(1, Math.floor(frame.height * scale));
   if (canvas.width !== nextWidth || canvas.height !== nextHeight) {
     resizeCanvas();
   }
@@ -833,7 +898,7 @@ function updateProjectionFit(rect) {
 }
 
 function ensureProjectionFit() {
-  const rect = canvas.getBoundingClientRect();
+  const rect = canvasLayoutFrame();
   const size = snapshot.size || fallbackSnapshot.size;
   if (activeViewportFocusCell()) {
     return;
@@ -1534,46 +1599,61 @@ function primitiveScreenPoints(primitive) {
 }
 
 function notifyPuzzle3View(width, height) {
+  const viewPayload = puzzle3ViewPayload(width, height);
+  for (const listener of viewListeners) {
+    listener(viewPayload);
+  }
   if (!effectiveComponentEmbedMode() || !window.parent || window.parent === window) {
     return;
   }
+  window.parent.postMessage({
+    type: "PuzzleStudioPuzzle3View",
+    source: canvas.dataset.source || "",
+    scene: canvas.dataset.scene || "",
+    view: viewPayload,
+  }, "*");
+}
+
+function puzzle3ViewPayload(width, height) {
   const size = snapshot.size || fallbackSnapshot.size;
   const normalizedSize = normalizeModelSize(size);
   const camera = snapshot.camera || fallbackSnapshot.camera;
   const previewView = puzzle3PreviewView();
   const canvasRect = canvas.getBoundingClientRect();
-  window.parent.postMessage({
-    type: "PuzzleStudioPuzzle3View",
-    source: canvas.dataset.source || "",
-    scene: canvas.dataset.scene || "",
-    view: {
-      width: Math.max(1, Number(width) || 1),
-      height: Math.max(1, Number(height) || 1),
-      viewport: {
-        width: Math.max(1, Number(window.innerWidth) || Number(width) || 1),
-        height: Math.max(1, Number(window.innerHeight) || Number(height) || 1),
-      },
-      canvasRect: {
-        x: canvasRect.x,
-        y: canvasRect.y,
-        width: Math.max(1, canvasRect.width || Number(width) || 1),
-        height: Math.max(1, canvasRect.height || Number(height) || 1),
-      },
-      coordinateSpace: "canvas-css-px",
-      originX: view.originX,
-      originY: view.originY,
-      scale: view.cellScale * projectionZoom(camera, previewView),
-      center: puzzle3ProjectionCenter(size, previewView),
-      camera: cloneCamera(camera),
-      editorView: previewView,
-      size: {
-        width: normalizedSize.width,
-        depth: normalizedSize.depth,
-        height: normalizedSize.height,
-      },
-      cellFootprints: projectedStageCellFootprints(size),
+  return {
+    width: Math.max(1, Number(width) || 1),
+    height: Math.max(1, Number(height) || 1),
+    viewport: {
+      width: Math.max(1, Number(window.innerWidth) || Number(width) || 1),
+      height: Math.max(1, Number(window.innerHeight) || Number(height) || 1),
     },
-  }, "*");
+    canvasRect: {
+      x: canvasRect.x,
+      y: canvasRect.y,
+      width: Math.max(1, canvasRect.width || Number(width) || 1),
+      height: Math.max(1, canvasRect.height || Number(height) || 1),
+    },
+    coordinateSpace: "canvas-css-px",
+    originX: view.originX,
+    originY: view.originY,
+    scale: view.cellScale * projectionZoom(camera, previewView),
+    center: puzzle3ProjectionCenter(size, previewView),
+    camera: cloneCamera(camera),
+    editorView: previewView,
+    size: {
+      width: normalizedSize.width,
+      depth: normalizedSize.depth,
+      height: normalizedSize.height,
+    },
+    cellFootprints: projectedStageCellFootprints(size),
+  };
+}
+
+function notifyPuzzle3StateChange() {
+  const state = cloneRuntimeSnapshot(snapshot || fallbackSnapshot);
+  for (const listener of stateListeners) {
+    listener(state);
+  }
 }
 
 function puzzle3InspectState() {
@@ -1963,9 +2043,9 @@ function puzzle3VisualView() {
 
 function gridStroke(kind, grid) {
   if (kind === "stageFrame") {
-    return grid.frameColor || "rgba(29, 37, 44, 0.82)";
+    return grid.frameColor || themeColor("--ink");
   }
-  return grid.color || "rgba(31, 36, 40, 0.62)";
+  return grid.color || themeColor("--ink");
 }
 
 function sceneFaces(renderCells, renderContext = null) {
@@ -1997,7 +2077,7 @@ function shadowFaces(renderCells) {
       ],
       depth: point.depth + 0.02,
       renderPriority: -1,
-      fill: "rgba(15, 23, 42, 0.16)",
+      fill: themeColorWithAlpha("--ink", 0.16),
     });
   }
   return faces;
@@ -2905,7 +2985,7 @@ function applyPixelatePostprocess() {
   const targetHeight = Math.max(1, Math.ceil(height / settings.scale));
   pixelateBuffer.width = targetWidth;
   pixelateBuffer.height = targetHeight;
-  const bufferCtx = pixelateBuffer.getContext("2d");
+  const bufferCtx = pixelateBuffer.getContext("2d", { alpha: true });
   bufferCtx.imageSmoothingEnabled = settings.smoothing;
   bufferCtx.clearRect(0, 0, targetWidth, targetHeight);
   bufferCtx.drawImage(canvas, 0, 0, width, height, 0, 0, targetWidth, targetHeight);
@@ -2936,6 +3016,18 @@ function expandPolygon(points, amount) {
 
 function cssVar(name) {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+
+function themeColor(name) {
+  return cssVar(name) || "currentColor";
+}
+
+function themeColorWithAlpha(name, alpha) {
+  const color = parseColor(themeColor(name));
+  if (!color) {
+    return themeColor(name);
+  }
+  return formatColor({ ...color, a: alpha });
 }
 
 canvas.addEventListener("pointerdown", (event) => {
@@ -3014,14 +3106,7 @@ function handleStandaloneKeydown(event) {
     return;
   }
 
-  if (event.code === "KeyZ") {
-    event.preventDefault();
-    puzzle3Component.applyInput("undo");
-    return;
-  }
-  if (event.code === "KeyR") {
-    event.preventDefault();
-    puzzle3Component.applyInput("restart");
+  if (applyPuzzle3CommandKey(event)) {
     return;
   }
   if (puzzle3ComponentFor(currentScene())) {
@@ -3033,14 +3118,7 @@ function handleComponentEmbedKeydown(event) {
   if (!puzzle3ComponentFor(currentScene())) {
     return;
   }
-  if (event.code === "KeyZ") {
-    event.preventDefault();
-    puzzle3Component.applyInput("undo");
-    return;
-  }
-  if (event.code === "KeyR") {
-    event.preventDefault();
-    puzzle3Component.applyInput("restart");
+  if (applyPuzzle3CommandKey(event)) {
     return;
   }
   const input = inputForRawInput({ key: event.key, code: event.code }, puzzle3ComponentFor(currentScene()));
@@ -3059,7 +3137,9 @@ function handleComponentEmbedKeyup(event) {
   stopSceneRawInput({ key: event.key, code: event.code });
 }
 
-if (!effectiveComponentEmbedMode()) {
+if (inlineComponentMount) {
+  // Inline controllers receive input through the host controller contract.
+} else if (!effectiveComponentEmbedMode()) {
   window.addEventListener("keydown", handleStandaloneKeydown);
   window.addEventListener("keyup", handleStandaloneKeyup);
 } else {
@@ -3149,6 +3229,25 @@ window.addEventListener("message", (event) => {
 
 function inputForEvent(event) {
   return inputForRawInput({ key: event.key, code: event.code }, mountedPuzzle3Component);
+}
+
+function applyPuzzle3CommandKey(event) {
+  const input = puzzle3CommandInputForEvent(event);
+  if (!input) {
+    return false;
+  }
+  event.preventDefault?.();
+  return puzzle3Component.applyInput(input);
+}
+
+function puzzle3CommandInputForEvent(event) {
+  if (event.code === "KeyZ") {
+    return "undo";
+  }
+  if (event.code === "KeyR") {
+    return "restart";
+  }
+  return null;
 }
 
 function inputForRawInput(raw, component = mountedPuzzle3Component) {
@@ -3355,8 +3454,79 @@ function applySceneRawInput(raw) {
   return applySceneInput(input);
 }
 
+const controllerApi = {
+  element: puzzle3Frame,
+  canvas,
+  ready: null,
+  update(update = {}) {
+    const next = puzzle3PreviewSnapshot(update || {});
+    this.ready = loadSnapshotData(next, {
+      scene: update.scene,
+      preferPuzzleScene: update.preferPuzzleScene !== false,
+    });
+    return this.ready;
+  },
+  applyKey(event) {
+    return applyPuzzle3CommandKey(event || {}) || puzzle3Component.handleKey(event || {});
+  },
+  releaseKey(event) {
+    stopSceneRawInput({
+      key: String(event?.key || ""),
+      code: String(event?.code || ""),
+    });
+    return true;
+  },
+  applyInput(input) {
+    return puzzle3Component.applyInput(String(input || ""));
+  },
+  command(command, payload = {}) {
+    const name = String(command || "");
+    if (name === "undo" || name === "restart") {
+      return puzzle3Component.applyInput(name);
+    }
+    if (name === "next_level") {
+      return puzzle3Component.nextLevel();
+    }
+    if (name === "previous_level") {
+      return puzzle3Component.previousLevel();
+    }
+    if (name === "goto_level" || name === "goto") {
+      return puzzle3Component.gotoLevel(payload.level);
+    }
+    if (name === "reset_camera") {
+      return puzzle3Component.resetCamera();
+    }
+    return false;
+  },
+  snapshot() {
+    return JSON.parse(JSON.stringify(snapshot || fallbackSnapshot));
+  },
+  onView(listener) {
+    if (typeof listener !== "function") {
+      return () => {};
+    }
+    viewListeners.add(listener);
+    return () => viewListeners.delete(listener);
+  },
+  onStateChange(listener) {
+    if (typeof listener !== "function") {
+      return () => {};
+    }
+    stateListeners.add(listener);
+    return () => stateListeners.delete(listener);
+  },
+  resize() {
+    schedulePuzzle3Resize(true);
+  },
+  destroy() {
+    viewListeners.clear();
+    stateListeners.clear();
+    stopAllHeldSceneInputs();
+  },
+};
+
 resizeCanvas();
-loadSnapshot();
+controllerApi.ready = loadSnapshot();
 
 function cloneRuntimeSnapshot(source) {
   return {
@@ -3685,3 +3855,19 @@ function sizeFromSlices(slices) {
 function clampIndex(index, length) {
   return Math.max(0, Math.min(Math.max(0, length - 1), index));
 }
+return controllerApi;
+}
+
+window.Puzzle3Controller = {
+  attach(canvas, options = {}) {
+    return createPuzzle3Controller({ ...options, canvas, mountMode: "inline" });
+  },
+  boot(options = {}) {
+    return createPuzzle3Controller(options);
+  },
+};
+
+if (window.Puzzle3ControllerAutoBoot !== false) {
+  window.Puzzle3ControllerInstance = window.Puzzle3Controller.boot();
+}
+})();

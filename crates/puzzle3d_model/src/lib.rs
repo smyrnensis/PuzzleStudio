@@ -49,12 +49,13 @@ pub use snapshot::{BoardCell3, BoardSnapshot3};
 pub use sprite::{Sprite3, SpriteColor3, SpriteSet3, SpriteVoxels3};
 pub use state::{CellView3, SlotScratch3, State3, StateError3};
 pub use transition::{
-    Guard3, MatchCell3, Pattern3, QueryKind3, Rule3, RuleApplication3, RuleEffect3,
-    ScratchPattern3, TransitionError3, WriteOp3, count_pattern_matches, eval_query_kind,
-    has_pattern_match, transition_once, transition_once_all, transition_once_per_level,
-    transition_once_with_input, transition_program, transition_program_with_local_frame,
-    transition_program_without_input, transition_program_without_input_with_local_frame,
-    transition_repeated, transition_solver_program,
+    Guard3, MatchCell3, ObjectSetMatcher3, ObjectSetScratchPattern3, Pattern3, QueryKind3, Rule3,
+    RuleApplication3, RuleEffect3, ScratchPattern3, TransitionError3, WriteOp3,
+    count_pattern_matches, eval_query_kind, has_pattern_match, transition_once,
+    transition_once_all, transition_once_per_level, transition_once_with_input, transition_program,
+    transition_program_with_local_frame, transition_program_without_input,
+    transition_program_without_input_with_local_frame, transition_repeated,
+    transition_solver_program,
 };
 pub use visual::{ObjectVisual3, VisualCell3, VisualObject3, VisualSnapshot3};
 pub use visual_fixture::{
@@ -1971,6 +1972,66 @@ directions [ Marker:* | ] -> [ | Marker:* ]
                     _ => ObjectId::EMPTY,
                 }
         }));
+    }
+
+    #[test]
+    fn parser_lowers_group_selector_to_runtime_object_set_matcher() {
+        let parsed = parse_puzzle3d(
+            r#"
+puzzle3 group_move {
+layers {
+actor
+}
+
+objects {
+Box actor
+Crate actor
+}
+
+group solid = Box Crate
+
+rules {
+right [ solid | ] -> [ | solid ]
+}
+}
+
+levels3 basic of group_move {
+legend {
+. = empty
+B = Box
+C = Crate
+}
+
+level start {
+B.C
+}
+}
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(parsed.rules.len(), 1);
+        let rule = &parsed.rules[0];
+        assert!(rule.pattern.cells[0].require_objects.is_empty());
+        assert_eq!(rule.pattern.cells[0].require_object_sets.len(), 1);
+        assert_eq!(
+            rule.pattern.cells[0].require_object_sets[0].objects,
+            vec![ObjectId(1), ObjectId(2)]
+        );
+        assert!(matches!(
+            rule.writes.as_slice(),
+            [WriteOp3::MoveObjectSet { binding: 0, .. }]
+        ));
+
+        let state = parsed
+            .level_bundle
+            .as_ref()
+            .unwrap()
+            .build_level_state(0)
+            .unwrap();
+        let next = transition_program_without_input(&parsed.game, &state, &parsed.rules).unwrap();
+        assert!(!next.has_object(&parsed.game, Coord3::new(0, 0, 0), ObjectId(1)));
+        assert!(next.has_object(&parsed.game, Coord3::new(1, 0, 0), ObjectId(1)));
     }
 
     #[test]

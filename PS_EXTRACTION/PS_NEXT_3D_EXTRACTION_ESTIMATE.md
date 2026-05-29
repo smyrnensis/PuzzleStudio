@@ -1,6 +1,6 @@
 # PS Next 3D Extraction Impact Plan
 
-この文書は、PS3D extraction を PuzzleScript Next へ統合してもらう可能性を第一候補にしつつ、受け入れられない場合に互換的な fork として成立させるための切り分けと作業量見積もりである。
+この文書は、3D extraction を PuzzleScript Next へ統合してもらう可能性を第一候補にしつつ、受け入れられない場合に互換的な fork として成立させるための切り分けと作業量見積もりである。
 
 作業対象は、当面この `PS_EXTRACTION` フォルダ内の計画・仕様整理に留める。ここでは PS Next 本体やこのリポジトリの実装ファイルは変更しない。
 
@@ -70,7 +70,7 @@ PS Next の構文と基本挙動に寄せた fork として `PuzzleScript 3D` �
 
 推奨:
 
-まず A の形で設計し、実装作業は B でも使えるように isolated module に寄せる。つまり、PS Next 側には `parser/compiler/engine/renderer` へ小さな接続点を作るが、3D 固有処理は `ps3d_*` または `dimensional_*` の別単位に置く。
+まず A の形で設計し、実装作業は B でも使えるように isolated module に寄せる。つまり、PS Next 側には `parser/compiler/engine/renderer` へ小さな接続点を作るが、3D 固有処理は `*3d` または `dimensional_*` の別単位に置く。
 
 ## PS Next 側の影響候補
 
@@ -201,7 +201,7 @@ PS Next の構文と基本挙動に寄せた fork として `PuzzleScript 3D` �
 
 目的:
 
-- PS3D source を edit -> run -> export できるようにする。
+- 3D source を edit -> run -> export できるようにする。
 - level editor なしでも、text source と preview で使える状態にする。
 
 最小変更:
@@ -378,7 +378,7 @@ upstream は 2D compatibility を壊さないための regression と review sur
 ## 次にやる具体作業
 
 1. PS Next を local checkout し、`parser.js`, `compiler.js`, `engine.js` の関数単位 map を作る。
-2. `PS_EXTRACTION/PS3D_CORE_SPEC.md` を作り、MVP syntax を 1-2 ページに固定する。
+2. `PS_EXTRACTION/CORE_SPEC_3D.md` を作り、MVP syntax を 1-2 ページに固定する。
 3. `PS_EXTRACTION/PS_NEXT_FUNCTION_MAP.md` を作り、実際に触る関数、読むだけの関数、触らない機能を表にする。
 4. 3D Sokoban の single-file example を PS Next style で書く。
 5. その example から必要機能を逆算し、PR 1/2/3 の境界を再調整する。

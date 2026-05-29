@@ -17,6 +17,61 @@
 1. 個人プロジェクトとしてのニッチな `.puzzle` 系仕様を、このリポジトリ内で必要な範囲まで進める。
 2. PuzzleScript Next + 3D として切り出せる仕様・runtime・editor 面を分離し、コミュニティとの摩擦を減らす。
 
+## Design Additions
+
+既存の中心原則は「3D は 2D に二つの空間方向を足したもの」である。
+以下はその補助原則であり、3D 化によって仕様面積や実装分岐が増えすぎることを防ぐための判断基準とする。
+
+### Readable Space Before Expressive Space
+
+3D 化の価値は、複雑な空間を作れることだけではない。PuzzleScript の強さは、盤面状態、移動、衝突、ルール結果を作者とプレイヤーが読めることにある。
+
+したがって 3D syntax、renderer、camera、editor は、まず「現在の空間関係を誤解なく読めるか」で評価する。
+
+帰結:
+
+- dense 3D pattern や oriented frame は表現力が高くても core tutorial の中心に置かない。
+- camera、occlusion、clipping、slice display は gameplay state を隠さない方向で設計する。
+- debug view、slice view、cell inspector、movement trace は単なる補助 UI ではなく、3D 仕様を検証する観測面として扱う。
+- renderer option は rule semantics を変えてはならないが、状態の観測可能性を壊す option も core には入れない。
+
+### Minimize New Learning For PuzzleScript Authors
+
+Canonical syntax は、便利さよりも PuzzleScript 作者が既存の mental model から推測できることを優先する。
+
+新しい構文を core に入れる前に、「これは 2D PuzzleScript のどの概念を 3D に拡張したものか」を説明できなければならない。
+
+帰結:
+
+- `three_dimensions` + ordinary `LEVELS` を author-facing の基本形にする。
+- `LEVELS3`、`puzzle3`、`sprites3` のような別言語感の強い名前は canonical にしないか、互換・内部・experimental に留める。
+- `left/right/front/back/up/down` は core に置けるが、frame rotation は advanced として扱う。
+- 表面文法が増えるときは、実装都合ではなく PS 作者の追加学習量で採否を判断する。
+
+### Dimension Hooks, Not Feature Forks
+
+3D 固有差分は feature fork ではなく dimension hook として現れるべきである。
+
+3D 側に非空間 feature の独自実装が増えた場合、それは 3D runtime の成熟ではなく、共有 PuzzleScript semantics が漏れている兆候として扱う。
+
+帰結:
+
+- `neighbor`、`coordToIndex`、direction table、movement resolution、rule frame、renderer projection は dimension hook として持てる。
+- command queue、late phase、random choice、win condition、undo、checkpoint、loop/gosub は dimension hook ではない。
+- 3D 実装で非空間 feature 名が増えたら、共有層へ戻すか、2D と同じ contract に抽出する。
+
+### Narrow Promise, Not Merely Small MVP
+
+MVP は機能数が少ないことではなく、公開する約束が狭く、検証可能で、保守できることを意味する。
+
+実装済みでも、説明・テスト・editor・export の contract が揃っていないものは core ではない。
+
+帰結:
+
+- advanced / experimental は実装されていても public promise にしない。
+- core に入れた機能は runtime、editor preview、standalone export、docs、diagnostics、examples のどこで何を保証するかを明記する。
+- 「動くが PS 作者に説明しにくい」ものは、canonical ではなく experimental として扱う。
+
 ## Current Situation
 
 このリポジトリには、既に 3D モデル専用 crate がある。
@@ -65,6 +120,7 @@
 - 最初の canonical は「Sokoban in 3D を自然に書ける」範囲に絞る。
 - 3D 固有でない機能は PS 側の既存 mental model に寄せる。
 - advanced 機能は仕様から消すのではなく、core / advanced / experimental に分けて公開する。
+- core に入れる構文は、2D PuzzleScript のどの概念を 3D に拡張したものか説明できる必要がある。
 
 ### 3. PuzzleScript Semantics Compatibility
 
@@ -82,7 +138,7 @@ PuzzleScript は表面文法だけでなく、rule application、movement、late
 切り分け:
 
 - `PS2D compatibility`: 既存 PS をどれだけ読めるか。
-- `PS3D extension`: 6方向、3D level、3D matching、camera をどう足すか。
+- `3D extension`: 6方向、3D level、3D matching、camera をどう足すか。
 - `Studio extras`: editor、scene、theme、assets、export をどこまで載せるか。
 
 ### 4. Editor Coupling
@@ -117,6 +173,7 @@ editor UI は再利用したいが、現状はこのリポジトリの `.puzzle`
 - Rule semantics は Rust reference。
 - Rendering semantics は最初は HTML reference でもよいが、puzzle state と切り離す。
 - `shade` / `shadow` / `tween` は gameplay semantics に影響しない presentation option として扱う。
+- renderer は見た目だけでなく観測契約を持つ。camera や display option は rule semantics を変えないが、状態を読めなくする option は core promise に入れない。
 
 ### 6. Open Source Readiness
 
@@ -352,6 +409,12 @@ render {
 - canonical examples と diagnostics がある。
 - advanced frame / dense pattern は、動いても tutorial の中心にしない。
 
+MVP の意味:
+
+- 「少ない機能」ではなく「狭い public promise」として定義する。
+- core として公開する機能は、runtime / editor preview / standalone export / docs / diagnostics / examples の保証範囲を明記する。
+- 実装済みでも、観測可能性・説明可能性・互換性の contract が揃っていないものは advanced または experimental に置く。
+
 入れないもの:
 
 - full scene system
@@ -417,7 +480,7 @@ render {
 
 ## Recommended Next Step
 
-次にやるべきことは実装ではなく、`PS3D_SPEC.md` を作り、core syntax だけを 1-2 ページで固定すること。
+次にやるべきことは実装ではなく、`3D_SPEC.md` を作り、core syntax だけを 1-2 ページで固定すること。
 
 その spec には、少なくとも次を含める。
 

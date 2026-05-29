@@ -965,7 +965,7 @@ fn highlight_kind_for_semantic(kind: SemanticKind) -> HighlightKind {
         SemanticKind::Query => HighlightKind::Query,
         SemanticKind::Scene => HighlightKind::Scene,
         SemanticKind::Asset => HighlightKind::Asset,
-        SemanticKind::Option => HighlightKind::Keyword,
+        SemanticKind::Setting => HighlightKind::Keyword,
         SemanticKind::Number => HighlightKind::Number,
         SemanticKind::String => HighlightKind::String,
     }
@@ -1734,6 +1734,10 @@ show_index = true
 }
 }
 }
+theme clean {
+background_color = #123456
+accent_color #abcdef
+}
 "#,
         );
 
@@ -1741,6 +1745,12 @@ show_index = true
         assert!(highlighted.html.contains("syntax-keyword\">tone"));
         assert!(highlighted.html.contains("syntax-keyword\">duration"));
         assert!(highlighted.html.contains("syntax-keyword\">show_index"));
+        assert!(
+            highlighted
+                .html
+                .contains("syntax-keyword\">background_color")
+        );
+        assert!(highlighted.html.contains("syntax-keyword\">accent_color"));
     }
 
     #[test]

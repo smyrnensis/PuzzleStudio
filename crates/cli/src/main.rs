@@ -29,6 +29,7 @@ fn run() -> Result<(), CliError> {
         "export-html" => export_html_command(&args),
         "export-editor" => export_editor_command(&args),
         "import-puzzlescript" => import_puzzlescript_command(&args),
+        "inspect" | "list" => inspect_command(&args),
         "screenshot" => screenshot_command(&args),
         "play" => play_command(&args),
         "preview" => preview_command(&args),
@@ -100,6 +101,10 @@ fn editor_command(args: &[String]) -> Result<(), CliError> {
 }
 
 fn screenshot_command(args: &[String]) -> Result<(), CliError> {
+    if args.iter().any(|arg| arg == "--list") {
+        return inspect_command(&screenshot_inspect_args(args)?);
+    }
+
     #[cfg(feature = "screenshot")]
     {
         if args.iter().any(|arg| arg == "--help" || arg == "-h") {
@@ -113,6 +118,50 @@ fn screenshot_command(args: &[String]) -> Result<(), CliError> {
         let _ = args;
         Err(disabled_adapter_command("screenshot", "screenshot"))
     }
+}
+
+fn screenshot_inspect_args(args: &[String]) -> Result<Vec<String>, CliError> {
+    let mut inspect_args = Vec::new();
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--list" => {}
+            "-o"
+            | "--output"
+            | "--scene"
+            | "--level"
+            | "--input"
+            | "--inputs"
+            | "--width"
+            | "--height"
+            | "--screenshot-timeout-ms"
+            | "--browser" => {
+                index += 1;
+                if index >= args.len() {
+                    return Err(CliError::Usage(format!(
+                        "{} requires a value",
+                        args[index - 1]
+                    )));
+                }
+            }
+            "--help" | "-h" => inspect_args.push(args[index].clone()),
+            value if value.starts_with('-') => {
+                return Err(CliError::Usage(format!(
+                    "unknown screenshot list option: {value}"
+                )));
+            }
+            value => {
+                if inspect_args.iter().any(|arg| !arg.starts_with('-')) {
+                    return Err(CliError::Usage(
+                        "screenshot --list accepts exactly one input path".to_string(),
+                    ));
+                }
+                inspect_args.push(value.to_string());
+            }
+        }
+        index += 1;
+    }
+    Ok(inspect_args)
 }
 
 #[cfg(feature = "screenshot")]
@@ -144,6 +193,181 @@ fn screenshot_forwarded_args(args: &[String]) -> Result<Vec<String>, CliError> {
     forwarded.push("--screenshot".to_string());
     forwarded.push(output_path);
     Ok(forwarded)
+}
+
+fn inspect_command(args: &[String]) -> Result<(), CliError> {
+    let mut path = None::<PathBuf>;
+
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--help" | "-h" => {
+                print_inspect_usage();
+                return Ok(());
+            }
+            value if value.starts_with('-') => {
+                return Err(CliError::Usage(format!("unknown inspect option: {value}")));
+            }
+            value => {
+                if path.is_some() {
+                    return Err(CliError::Usage(
+                        "inspect accepts exactly one path".to_string(),
+                    ));
+                }
+                path = Some(PathBuf::from(value));
+            }
+        }
+        index += 1;
+    }
+
+    let Some(input_path) = path else {
+        return Err(CliError::Usage("inspect requires a path".to_string()));
+    };
+    let entry = puzzle_lang::resolve_game_entry(&input_path)?;
+    let document = puzzle_lang::parse_game_file(&entry)?;
+    print!("{}", inspect_document_text(&document));
+    Ok(())
+}
+
+fn inspect_document_text(document: &LoadedDocument) -> String {
+    let mut scenes = Vec::<String>::new();
+    for scene in &document.scenes {
+        push_unique(&mut scenes, scene.name.clone());
+    }
+    for model in &document.models {
+        if let LoadedDocumentModel::Puzzle2d { game, .. } = model {
+            for scene in &game.scenes {
+                push_unique(&mut scenes, scene.name.clone());
+            }
+        }
+    }
+
+    let mut out = String::new();
+    out.push_str("scenes:\n");
+    if scenes.is_empty() {
+        out.push_str("  (none)\n");
+    } else {
+        for (index, scene) in scenes.iter().enumerate() {
+            out.push_str(&format!("  {index}: {scene}\n"));
+        }
+    }
+
+    out.push_str("levels:\n");
+    let multi_model = document.models.len() > 1;
+    let mut any_levels = false;
+    for model in &document.models {
+        match model {
+            LoadedDocumentModel::Puzzle2d { name, game } => {
+                if multi_model {
+                    out.push_str(&format!("  {name}:\n"));
+                }
+                if game.levels.is_empty() {
+                    if multi_model {
+                        out.push_str("    (none)\n");
+                    }
+                    continue;
+                }
+                any_levels = true;
+                for (index, level) in game.levels.iter().enumerate() {
+                    if multi_model {
+                        out.push_str(&format!("    {index}: {}\n", level.name));
+                    } else {
+                        out.push_str(&format!("  {index}: {}\n", level.name));
+                    }
+                }
+            }
+            LoadedDocumentModel::Puzzle3d { name, puzzle } => {
+                if multi_model {
+                    out.push_str(&format!("  {name}:\n"));
+                }
+                let Some(bundle) = puzzle.level_bundle.as_ref() else {
+                    if multi_model {
+                        out.push_str("    (none)\n");
+                    }
+                    continue;
+                };
+                any_levels = true;
+                for (index, level) in bundle.levels.iter().enumerate() {
+                    if multi_model {
+                        out.push_str(&format!("    {index}: {}\n", level.name));
+                    } else {
+                        out.push_str(&format!("  {index}: {}\n", level.name));
+                    }
+                }
+            }
+        }
+    }
+    if !any_levels {
+        out.push_str("  (none)\n");
+    }
+
+    out.push_str("inputs:\n");
+    let mut any_inputs = false;
+    for model in &document.models {
+        match model {
+            LoadedDocumentModel::Puzzle2d { name, game } => {
+                if multi_model {
+                    out.push_str(&format!("  {name}:\n"));
+                }
+                let mut inputs = game
+                    .input_labels
+                    .iter()
+                    .map(|(id, label)| (id.0, label.as_str()))
+                    .collect::<Vec<_>>();
+                inputs.sort_by_key(|(id, _)| *id);
+                if inputs.is_empty() {
+                    if multi_model {
+                        out.push_str("    (none)\n");
+                    }
+                    continue;
+                }
+                any_inputs = true;
+                for (_, input) in inputs {
+                    if multi_model {
+                        out.push_str(&format!("    {input}\n"));
+                    } else {
+                        out.push_str(&format!("  {input}\n"));
+                    }
+                }
+            }
+            LoadedDocumentModel::Puzzle3d { name, puzzle } => {
+                if multi_model {
+                    out.push_str(&format!("  {name}:\n"));
+                }
+                let mut inputs = puzzle
+                    .game
+                    .inputs
+                    .iter()
+                    .map(|input| (input.id.0, input.name.as_str()))
+                    .collect::<Vec<_>>();
+                inputs.sort_by_key(|(id, _)| *id);
+                if inputs.is_empty() {
+                    if multi_model {
+                        out.push_str("    (none)\n");
+                    }
+                    continue;
+                }
+                any_inputs = true;
+                for (_, input) in inputs {
+                    if multi_model {
+                        out.push_str(&format!("    {input}\n"));
+                    } else {
+                        out.push_str(&format!("  {input}\n"));
+                    }
+                }
+            }
+        }
+    }
+    if !any_inputs {
+        out.push_str("  (none)\n");
+    }
+    out
+}
+
+fn push_unique(values: &mut Vec<String>, value: String) {
+    if !values.iter().any(|existing| existing == &value) {
+        values.push(value);
+    }
 }
 
 #[cfg(not(all(
@@ -530,13 +754,17 @@ fn escape_json(value: &str) -> String {
 
 fn print_usage() {
     eprintln!(
-        "usage:\n  puzzlestudio check <path> [--json]\n  puzzlestudio play [path]\n  puzzlestudio preview [path] [--port 7878] [--solver-depth N] [--solver-nodes N] [--solver-ms N]\n  puzzlestudio editor [path] [--port 8787]\n  puzzlestudio export-html <path> -o <output.html>\n  puzzlestudio export-editor [path] -o <editor.html>\n  puzzlestudio screenshot <path> -o <output.png> [--scene name] [--width 1280] [--height 720] [--browser path]\n  puzzlestudio import-puzzlescript <source.txt> -o <game.puzzle>{}",
+        "usage:\n  puzzlestudio check <path> [--json]\n  puzzlestudio inspect <path>\n  puzzlestudio play [path]\n  puzzlestudio preview [path] [--port 7878] [--solver-depth N] [--solver-nodes N] [--solver-ms N]\n  puzzlestudio editor [path] [--port 8787]\n  puzzlestudio export-html <path> -o <output.html>\n  puzzlestudio export-editor [path] -o <editor.html>\n  puzzlestudio screenshot <path> -o <output.png> [--scene name] [--level name-or-index] [--input name] [--inputs a,b,c] [--width 1280] [--height 720] [--browser path]\n  puzzlestudio screenshot <path> --list\n  puzzlestudio import-puzzlescript <source.txt> -o <game.puzzle>{}",
         adapter_feature_note()
     );
 }
 
 fn print_check_usage() {
     eprintln!("usage: puzzlestudio check <path/to/game-folder-or-game.puzzle> [--json]");
+}
+
+fn print_inspect_usage() {
+    eprintln!("usage: puzzlestudio inspect <path/to/game-folder-or-game.puzzle>");
 }
 
 #[cfg(feature = "export-html")]
@@ -573,12 +801,51 @@ fn print_export_editor_usage() {
 #[cfg(feature = "screenshot")]
 fn print_screenshot_usage() {
     eprintln!(
-        "usage: puzzlestudio screenshot <path/to/game-folder-or-game.puzzle> -o <output.png> [--scene name] [--width 1280] [--height 720] [--screenshot-timeout-ms 5000] [--browser path]"
+        "usage: puzzlestudio screenshot <path/to/game-folder-or-game.puzzle> -o <output.png> [--scene name] [--level name-or-index] [--input name] [--inputs a,b,c] [--width 1280] [--height 720] [--screenshot-timeout-ms 5000] [--browser path]\n       puzzlestudio screenshot <path/to/game-folder-or-game.puzzle> --list"
     );
 }
 
 fn print_import_puzzlescript_usage() {
     eprintln!("usage: puzzlestudio import-puzzlescript <source.txt> -o <game.puzzle>");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inspect_document_lists_scenes_levels_and_inputs() {
+        let document = puzzle_lang::parse_game(include_str!("../../../games/spec_2d.puzzle"))
+            .expect("parse sample game");
+        let text = inspect_document_text(&document);
+
+        assert!(text.contains("scenes:\n"));
+        assert!(text.contains("  0: title\n"));
+        assert!(text.contains("  1: playing\n"));
+        assert!(text.contains("levels:\n"));
+        assert!(text.contains("  0: microban.1\n"));
+        assert!(text.contains("  1: microban.2\n"));
+        assert!(text.contains("inputs:\n"));
+        assert!(text.contains("  up\n"));
+        assert!(text.contains("  right\n"));
+    }
+
+    #[test]
+    fn screenshot_list_args_keep_only_the_input_path() {
+        let args = vec![
+            "games/spec_2d.puzzle".to_string(),
+            "-o".to_string(),
+            "/tmp/out.png".to_string(),
+            "--scene".to_string(),
+            "playing".to_string(),
+            "--list".to_string(),
+        ];
+
+        assert_eq!(
+            screenshot_inspect_args(&args).expect("parse screenshot list args"),
+            vec!["games/spec_2d.puzzle".to_string()]
+        );
+    }
 }
 
 #[derive(Debug)]

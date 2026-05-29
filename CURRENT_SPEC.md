@@ -409,6 +409,8 @@ confirm -> resume playing
 
 Top-level `animation { tween duration=160ms }` は move write に対する tween animation を有効化する。`tween` を書くこと自体が有効化であり、`enabled = true` は受け付けない。block 形で書く場合も `tween { duration = 160ms }` とし、値を持つ option だけを assignment にする。`duration` 省略時は `250ms`。
 
+`wait animation` は rules 内の animation boundary。runtime は boundary までの segment で発生した visual animation events の最大 duration だけ continuation を止め、完了後に同じ turn の残りの rules を実行する。animation events が空なら no-op。`sfx` / `message` / `wait 300ms` は別 effect であり、`wait animation` は visual animation だけを待つ。`wait tween` は alias として読めるが canonical は `wait animation`。
+
 ## Scenes
 
 `scene` は puzzle transition の外側にある game-flow metadata。`screen <name>` は読まない。
@@ -548,7 +550,7 @@ pointer drag の所有者は開始点で決まる。pointer down が `puzzle3` �
 
 `sounds { ... }` は top-level の音源定義。`sfx <name> seed=<seed> type=<type>` と `music <name> seed=<seed> tone=<0..1> bpm=<60..160> volume=<0..1>` を持つ。`sfx type=puzzlescript` は PuzzleScript numeric sound seed 互換 generator を選ぶ import 用 type。scene/component RHS の canonical form は `input <name>`、`component_effect <name>`、または direct scene command。scene command は `sfx <name>`、`play_music <name>`、`pause_music [name]`、`resume_music [name]`、`stop_music [name]`、`resume <scene>`、`resume <scene> with <name> = <value>`、`open <scene>`、`close`、`start <scene>`、`clear_undo_history`、`clear_game_progress`、`<target>.restart` などを書ける。`resume` は既存 scene instance の state を再利用して切り替える。`open` / `close` は現在 scene を下に残す一時 scene に使う。`start` は target scene state を初期化してから切り替える。旧 `goto` / `enter` / `back` は互換として読むが canonical ではない。level scene への入場は `resume sokoban`、`resume sokoban(level_name)`、`resume playing(level)` のように scene call として書く。level 指定なしの `resume <level scene>` は保存済みまたは選択中の `current_level` を使い、なければ最初の level に入る。旧 `start levels ... in <scene>` / `continue levels ... in <scene>` は読まず、同じ形へ誘導する error を出す。通常の clear / advance / restart は model window component と puzzle lifecycle の責務なので、scene command は明示的な介入に限る。game progress は scene effect として `clear_game_progress`、`set current_level = <level>`、`clear current_level`、`set level.cleared = true|false`、`set level(<level>).cleared = true|false`、`reset persistent_vars`、`reset <persistent var>` で操作できる。undo/redo 履歴だけを捨てる場合は `clear_undo_history` を使う。`play_sfx <name>` は読まない。`message <expr>` は popup message を出す presentation effect で、quoted text、scene `var`、top-level `var`、effect binding を参照できる。`wait [duration]` は `wait 0.1s` / `wait 1s` / `wait 100ms` のように書く scene presentation wait で、`wait` 単体は既定で `0.2s`。top-level `default_wait_time = 500ms` のように bare `wait` の既定値を変更できる。scene 直下の lifecycle block は `on_scene_start { ... }` のみ。`on_level_start { ... }` は puzzle lifecycle block であり、scene には置けない。複数 command は block に 1 行ずつ書き、`then` は使わない。音声、message、wait は presentation adapter の責務で、core rule state には入らない。
 
-`theme <theme>` / `theme <theme> { ... }` は top-level の表示 theme metadata。theme の見た目の identity は HTML adapter の CSS preset が持ち、`.puzzle` の theme 宣言は preset 名の選択と、作者に公開する少数の調整項目だけを持つ。公開項目は `accent_color`、`background_color`、`text_color`、`muted_text_color`、`line_color`、`board_color`、`ui_font`、`title_font`、`control_radius`、`panel_radius`。これらは HTML adapter が `--accent` / `--bg` / `--board-bg` などの CSS custom property へ lower し、preset CSS の値を上書きする。theme は `puzzle-core` の state、rule、transition には入らない。複数 theme 宣言は import 後の順序で preset 名または同じ項目を上書きする。theme 未指定時の default theme name は `clean`。標準 preset は `clean`、`terminal`、`paper`、`pixel`、`candy`、`blueprint`、`noir` で、HTML adapter は対応する CSS preset を同梱する。
+`theme <theme>` / `theme <theme> { ... }` は top-level の表示 theme metadata。theme の見た目の identity は HTML adapter の CSS preset が持ち、`.puzzle` の theme 宣言は preset 名の選択と、作者に公開する少数の調整項目だけを持つ。theme block の canonical entry は `<setting> <value>` で、互換 syntax として `<setting> = <value>` も読む。公開色は `accent_color`、`background_color`、`text_color` の 3 つだけである。UI の線、選択状態、panel、popup、盤面背景は HTML adapter の preset がこの 3 色の alpha だけで作り、別の実色を持たない。追加の非色設定は `ui_font`、`title_font`、`control_radius`、`panel_radius`。これらは HTML adapter が `--accent` / `--bg` / `--ink` などの CSS custom property へ lower し、preset CSS の値を上書きする。theme は `puzzle-core` の state、rule、transition には入らない。複数 theme 宣言は import 後の順序で preset 名または同じ項目を上書きする。theme 未指定時の default theme name は `clean`。標準 preset は `clean`、`terminal`、`paper`、`pixel`、`candy`、`blueprint`、`noir` で、HTML adapter は対応する CSS preset を同梱する。
 
 `assets { ... }` は top-level の外部 file manifest。`css "game.css"` と `script "visuals.js"` を持てる。path は game folder からの相対 path だけ。HTML adapter は宣言された CSS / script だけを読み込む。`script` は rendered scene snapshot から追加表示を作るための補助 JS で、puzzle state、transition、undo stack、level index を直接変更してはならない。盤面に追従する script は `window.PuzzleStudio.registerAssetScript({ setup(api) { api.onRender(...) } })` を使う。
 
@@ -758,9 +760,9 @@ solid = actor
 
 `sprites [name] [of namespace]` は object の見た目を補完する resource block であり、位置を持つ object と layer order の所有者は `layers`。
 
-単純な sprite は `sprites` 内で block braces なしでも書ける。`Box` の次に `#aaa` だけを書くと cell 全体の単色塗りつぶしになる。これは `Background` の次に `#9CBD0F` だけを書くような PuzzleScript 由来の色だけ sprite でも同じで、ASCII pattern 行は省略できる。続けて `00000` などの ASCII pattern 行を書くと、その行数・列数が sprite pixel grid になる。外部画像は `Box sprites/box.png` のように selector と画像パスを 1 行に書き、パスは game folder からの相対参照として HTML renderer に渡される。
+単純な sprite は `sprites` 内で block braces なしでも書ける。`Box` の次に `#aaa` だけを書くと cell 全体の単色塗りつぶしになる。これは `Background` の次に `#9CBD0F` だけを書くような PuzzleScript 由来の色だけ sprite でも同じで、ASCII pattern 行は省略できる。続けて `00000` などの ASCII pattern 行を書くと、その行数・列数が sprite pixel grid になる。`pixels_per_cell <w> <h>` を省略した場合は pattern の幅・高さが 1 cell の pixel grid になり、明示した場合は pattern が cell grid より大きくても描画は overflow できる。外部画像は `Box sprites/box.png` のように selector と画像パスを 1 行に書き、パスは game folder からの相対参照として HTML renderer に渡される。
 
-再利用する見た目部品は `colors` と `shapes` sub-block に分ける。`colors` は色名、`shapes` は ASCII shape を所有する。sprite entry は色行の次に bare shape ref を置いて参照する。`<name>:<tag_set>` は selector binding と同じ tag set を使って variant を解決する。
+再利用する見た目部品は `colors` と `shapes` sub-block に分ける。`colors` は色名、`shapes` は ASCII shape を所有する。sprite entry の canonical order は `pixels_per_cell` / `offset`、必要なら `rotate from <value>`、色行、ASCII pattern または `shape <ref>`。色行の `colors` keyword は省略できる。色は CSS color として渡されるため、`transparent`、基本 CSS color keywords、`orange`、`grey` / `gray` variants、`brown`、`pink`、alpha 付き hex も使える。`<name>:<tag_set>` は selector binding と同じ tag set を使って variant を解決する。
 
 ```txt
 sprites fixban of sokoban {
@@ -771,6 +773,12 @@ B = #a4a
 }
 }
 shapes {
+edge:directions {
+rotate from up
+111
+000
+000
+}
 mark:kind {
 A {
 01
@@ -783,11 +791,14 @@ B {
 }
 }
 Box:kind {
+pixels_per_cell 2 2
 piece:kind transparent
-mark:kind
+shape mark:kind
 }
 }
 ```
+
+`rotate from <value>` は shape table または selector-bound sprite entry 内の派生指定。続く pattern を source value として登録し、`map rotate <tag_set>` を使って他の value の pattern を生成する。別名 map の `rotate using <map_name> from <value>` や block 付きの旧形も読むが、canonical では `rotate from <value>` とし、source pattern 用の追加 braces は置かない。`offset <x> <y>` は sprite pixel grid 左上基準の描画 offset で、正の x は右、正の y は下。
 
 cell は visible objects の有限集合。実装は layer-slot 方式。
 
@@ -871,6 +882,7 @@ cargo = Box Crate
 ```
 
 同じ label 付き selector occurrence を左辺で複数回定義することはできない。右辺の label 付き selector は左辺に同じ label 付き occurrence が必要。
+右辺では同じ label を複数回参照でき、その場合は左辺で一致した同じ concrete object を各出現位置へ書く。
 
 ## Legend And Levels
 

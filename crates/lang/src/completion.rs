@@ -1,10 +1,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::semantic::{
-    SemanticCompletionSlot, SemanticKind, is_completion_keyword, semantic_builtin_effect_commands,
-    semantic_completion_context,
+    SemanticCompletionSlot, SemanticKind, SettingCompletionSet, is_completion_keyword,
+    semantic_builtin_effect_commands, semantic_completion_context,
 };
 use crate::source::{SourceScope, scan_source_context};
+use crate::{THEME_PRESET_NAMES, THEME_SETTING_SPECS};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CompletionList {
@@ -45,7 +46,8 @@ pub enum CompletionKind {
     Music,
     Sprite,
     Asset,
-    Option,
+    Setting,
+    Theme,
 }
 
 impl CompletionKind {
@@ -73,7 +75,8 @@ impl CompletionKind {
             CompletionKind::Music => "music",
             CompletionKind::Sprite => "sprite",
             CompletionKind::Asset => "asset",
-            CompletionKind::Option => "option",
+            CompletionKind::Setting => "setting",
+            CompletionKind::Theme => "theme",
         }
     }
 }
@@ -561,13 +564,30 @@ fn add_slot_items(
         SemanticCompletionSlot::Assets => {
             add_named_items(items, symbols.assets.iter(), CompletionKind::Asset, "asset")
         }
-        SemanticCompletionSlot::Options(options) => {
-            for option in options {
+        SemanticCompletionSlot::Themes => {
+            for theme in THEME_PRESET_NAMES {
                 items.push(CompletionItem {
-                    label: (*option).to_string(),
-                    kind: CompletionKind::Option,
-                    insert_text: (*option).to_string(),
-                    detail: "option".to_string(),
+                    label: (*theme).to_string(),
+                    kind: CompletionKind::Theme,
+                    insert_text: (*theme).to_string(),
+                    detail: "theme".to_string(),
+                });
+            }
+        }
+        SemanticCompletionSlot::Settings(settings) => {
+            let setting_names: Vec<&'static str> = match settings {
+                SettingCompletionSet::Static(settings) => settings.iter().copied().collect(),
+                SettingCompletionSet::Theme => THEME_SETTING_SPECS
+                    .iter()
+                    .map(|spec| spec.canonical)
+                    .collect(),
+            };
+            for setting in setting_names {
+                items.push(CompletionItem {
+                    label: setting.to_string(),
+                    kind: CompletionKind::Setting,
+                    insert_text: setting.to_string(),
+                    detail: "setting".to_string(),
                 });
             }
         }
@@ -963,7 +983,7 @@ rules {
         let camera_cursor = source.find("ya").unwrap() + "ya".len();
         let camera_list = suggest_source_completions(source, camera_cursor);
         assert!(camera_list.items.iter().any(|item| {
-            item.label == "yaw" && item.kind == CompletionKind::Option && item.detail == "option"
+            item.label == "yaw" && item.kind == CompletionKind::Setting && item.detail == "setting"
         }));
 
         let render_cursor = source.find("camera {").unwrap();
@@ -972,7 +992,7 @@ rules {
             render_list
                 .items
                 .iter()
-                .any(|item| item.label == "camera" && item.kind == CompletionKind::Option)
+                .any(|item| item.label == "camera" && item.kind == CompletionKind::Setting)
         );
     }
 
@@ -1001,13 +1021,13 @@ show_
             sfx_list
                 .items
                 .iter()
-                .any(|item| item.label == "seed" && item.kind == CompletionKind::Option)
+                .any(|item| item.label == "seed" && item.kind == CompletionKind::Setting)
         );
         assert!(
             !sfx_list
                 .items
                 .iter()
-                .any(|item| item.label == "tone" && item.kind == CompletionKind::Option)
+                .any(|item| item.label == "tone" && item.kind == CompletionKind::Setting)
         );
 
         let music_cursor = source.find("music bgm to").unwrap() + "music bgm to".len();
@@ -1016,7 +1036,7 @@ show_
             music_list
                 .items
                 .iter()
-                .any(|item| item.label == "tone" && item.kind == CompletionKind::Option)
+                .any(|item| item.label == "tone" && item.kind == CompletionKind::Setting)
         );
 
         let tween_cursor = source.find("tween du").unwrap() + "tween du".len();
@@ -1025,7 +1045,7 @@ show_
             tween_list
                 .items
                 .iter()
-                .any(|item| item.label == "duration" && item.kind == CompletionKind::Option)
+                .any(|item| item.label == "duration" && item.kind == CompletionKind::Setting)
         );
 
         let menu_cursor = source.find("show_").unwrap() + "show_".len();
@@ -1034,7 +1054,7 @@ show_
             menu_list
                 .items
                 .iter()
-                .any(|item| item.label == "show_index" && item.kind == CompletionKind::Option)
+                .any(|item| item.label == "show_index" && item.kind == CompletionKind::Setting)
         );
 
         let scene_cursor = source.find("scene menu").unwrap() + "scene menu".len();
@@ -1043,8 +1063,46 @@ show_
             !scene_list
                 .items
                 .iter()
-                .any(|item| item.label == "duration" && item.kind == CompletionKind::Option)
+                .any(|item| item.label == "duration" && item.kind == CompletionKind::Setting)
         );
+    }
+
+    #[test]
+    fn suggests_theme_names_after_theme_keyword() {
+        let source = r#"
+title complete_theme_names
+theme p
+"#;
+        let cursor = source.find("theme p").unwrap() + "theme p".len();
+        let list = suggest_source_completions(source, cursor);
+
+        assert!(
+            list.items
+                .iter()
+                .any(|item| item.label == "pixel" && item.kind == CompletionKind::Theme)
+        );
+        assert!(
+            list.items
+                .iter()
+                .any(|item| item.label == "paper" && item.kind == CompletionKind::Theme)
+        );
+    }
+
+    #[test]
+    fn suggests_theme_settings_inside_theme_block() {
+        let source = r#"
+title complete_theme_settings
+theme clean {
+b
+}
+"#;
+        let cursor = source.find("\nb\n").unwrap() + "\nb".len();
+        let list = suggest_source_completions(source, cursor);
+
+        assert!(list.items.iter().any(|item| {
+            item.label == "background_color" && item.kind == CompletionKind::Setting
+        }));
+        assert!(list.items.iter().all(|item| item.label != "board_color"));
     }
 
     #[test]

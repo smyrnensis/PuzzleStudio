@@ -1,6 +1,8 @@
 title "Microban 3D"
 author "Levels by David Skinner"
 
+theme puzzlescript
+
 puzzle3 sokoban {
 render {
   camera {

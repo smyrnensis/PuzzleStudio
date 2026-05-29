@@ -23,28 +23,11 @@
 body.theme-clean {
   --bg: #f5f3ef;
   --ink: #1f2428;
-  --muted: #66727c;
-  --line: #d7dde2;
-  --board-bg: #edf1f2;
   --accent: #2f7ebc;
-  --button-bg: #263039;
-  --button-bg-hover: #313d47;
-  --button-bg-active: #1d252c;
-  --menu-item-bg: rgba(38, 48, 57, 0.08);
-  --menu-item-bg-selected: rgba(47, 126, 188, 0.13);
-  --menu-item-ring: rgba(47, 126, 188, 0.24);
-  --panel-bg: rgba(255, 255, 255, 0.94);
-  --popup-bg: rgba(255, 255, 255, 0.96);
   --radius-control: 6px;
   --radius-panel: 8px;
-  --ok: #257a59;
   --ui-font: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --title-font: var(--ui-font);
-}
-
-.theme-clean button,
-.theme-clean .level-menu li {
-  letter-spacing: 0;
 }
 
 .theme-clean .scene-layer.is-menu-scene {
@@ -65,21 +48,9 @@ body.theme-terminal {
   color-scheme: dark;
   --bg: #000000;
   --ink: #ffffff;
-  --muted: #ffffff;
-  --line: #ffffff;
-  --board-bg: #000000;
   --accent: #ffffff;
-  --button-bg: #000000;
-  --button-bg-hover: #ffffff;
-  --button-bg-active: #000000;
-  --menu-item-bg: #000000;
-  --menu-item-bg-selected: #ffffff;
-  --menu-item-ring: #ffffff;
-  --panel-bg: #000000;
-  --popup-bg: #000000;
   --radius-control: 0px;
   --radius-panel: 0px;
-  --ok: #ffffff;
   --menu-cursor: ">";
   --level-clear-mark: "*";
   --ui-font: "PuzzleStudio Pixel 5x7", "Courier New", Monaco, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -92,21 +63,10 @@ body.theme-terminal {
   text-rendering: optimizeSpeed;
 }
 
-.theme-terminal .view-title {
-  color: var(--ink);
-}
-
-.theme-terminal .view-subtitle,
-.theme-terminal .screen-view .view-text,
-.theme-terminal .message-popup-text {
-  color: var(--ink);
-  text-shadow: none;
-}
-
 .theme-terminal button,
 .theme-terminal .level-menu li {
   border: 0;
-  background: var(--button-bg);
+  background: transparent;
   color: var(--ink);
   font-weight: 400;
   box-shadow: none;
@@ -117,30 +77,25 @@ body.theme-terminal {
 .theme-terminal .is-menu-scene button:hover,
 .theme-terminal .level-menu li.is-selected,
 .theme-terminal .is-menu-scene button.is-selected {
-  background: var(--button-bg-hover);
-  color: #000000;
+  background: var(--ink);
+  color: var(--bg);
   box-shadow: none;
   transform: none;
 }
 
 .theme-terminal button:active,
 .theme-terminal .is-menu-scene button:active {
-  background: var(--button-bg-active);
+  background: transparent;
   color: var(--ink);
-  box-shadow: none;
-  transform: none;
 }
 
 .theme-terminal .board {
   image-rendering: pixelated;
-  border: 4px solid var(--line);
+  border: 4px solid var(--ink);
   box-shadow: none;
 }
 
-.theme-terminal .cell {
-  box-shadow: inset 0 0 0 1px rgba(128, 255, 106, 0.05);
-}
-
+.theme-terminal .cell,
 .theme-terminal .sprite {
   image-rendering: pixelated;
 }
@@ -158,6 +113,7 @@ body.theme-terminal {
 }
 
 .theme-terminal .view-subtitle {
+  color: var(--ink);
   font-size: 14px;
   font-weight: 400;
   text-align: left;
@@ -180,35 +136,22 @@ body.theme-terminal {
 body.theme-paper {
   --bg: #f4ecd9;
   --ink: #2b2419;
-  --muted: #756852;
-  --line: #cdbd9a;
-  --board-bg: #efe3c8;
   --accent: #8d5d2a;
-  --button-bg: #fff7e7;
-  --button-bg-hover: #fffaf0;
-  --button-bg-active: #eadbbd;
-  --menu-item-bg: rgba(70, 55, 34, 0.08);
-  --menu-item-bg-selected: rgba(141, 93, 42, 0.16);
-  --menu-item-ring: rgba(141, 93, 42, 0.34);
-  --panel-bg: rgba(255, 250, 240, 0.96);
-  --popup-bg: #fff9ec;
   --radius-control: 4px;
   --radius-panel: 6px;
-  --ok: #8d5d2a;
   --ui-font: ui-serif, Georgia, Cambria, "Times New Roman", Times, serif;
   --title-font: var(--ui-font);
   background:
-    linear-gradient(rgba(255, 255, 255, 0.26), rgba(255, 255, 255, 0.26)),
-    repeating-linear-gradient(0deg, transparent 0 23px, rgba(141, 93, 42, 0.08) 23px 24px),
+    repeating-linear-gradient(0deg, transparent 0 23px, color-mix(in srgb, var(--accent) 8%, transparent) 23px 24px),
     var(--bg);
 }
 
 .theme-paper button,
 .theme-paper .level-menu li {
-  border: 1px solid rgba(141, 93, 42, 0.22);
-  border-left: 4px solid rgba(141, 93, 42, 0.24);
-  background: var(--button-bg);
-  box-shadow: 0 3px 8px rgba(84, 66, 42, 0.10);
+  border: 1px solid color-mix(in srgb, var(--accent) 24%, transparent);
+  border-left: 4px solid color-mix(in srgb, var(--accent) 34%, transparent);
+  background: color-mix(in srgb, var(--bg) 90%, transparent);
+  box-shadow: 0 3px 8px color-mix(in srgb, var(--ink) 10%, transparent);
   color: var(--ink);
 }
 
@@ -221,23 +164,23 @@ body.theme-paper {
 
 .theme-paper button:hover,
 .theme-paper .is-menu-scene button:hover {
-  background: var(--button-bg-hover);
-  box-shadow: 0 5px 12px rgba(84, 66, 42, 0.13);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  box-shadow: 0 5px 12px color-mix(in srgb, var(--ink) 13%, transparent);
   transform: translateY(-1px);
 }
 
 .theme-paper .level-menu li.is-selected,
 .theme-paper .is-menu-scene button.is-selected {
   border-left-color: var(--accent);
-  background: var(--button-bg-hover);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
   box-shadow:
-    inset 0 -2px 0 rgba(141, 93, 42, 0.24),
-    0 6px 14px rgba(84, 66, 42, 0.14);
+    inset 0 -2px 0 color-mix(in srgb, var(--accent) 24%, transparent),
+    0 6px 14px color-mix(in srgb, var(--ink) 14%, transparent);
 }
 
 .theme-paper .board {
-  border: 1px solid rgba(84, 66, 42, 0.16);
-  box-shadow: 0 10px 24px rgba(84, 66, 42, 0.15);
+  border: 1px solid color-mix(in srgb, var(--ink) 16%, transparent);
+  box-shadow: 0 10px 24px color-mix(in srgb, var(--ink) 15%, transparent);
 }
 
 .theme-paper .scene-layer.is-menu-scene {
@@ -270,21 +213,9 @@ body.theme-pixel {
   color-scheme: dark;
   --bg: #08080c;
   --ink: #f8f8f8;
-  --muted: #d8d8d8;
-  --line: #f8f8f8;
-  --board-bg: #08080c;
   --accent: #f8f8f8;
-  --button-bg: #08080c;
-  --button-bg-hover: #f8f8f8;
-  --button-bg-active: #08080c;
-  --menu-item-bg: #08080c;
-  --menu-item-bg-selected: #f8f8f8;
-  --menu-item-ring: #f8f8f8;
-  --panel-bg: #08080c;
-  --popup-bg: #08080c;
   --radius-control: 0px;
   --radius-panel: 0px;
-  --ok: #f8f8f8;
   --menu-cursor: ">";
   --level-clear-mark: "*";
   --ui-font: "PuzzleStudio Pixel 8x8", "Courier New", Monaco, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -299,7 +230,9 @@ body.theme-pixel {
 
 .theme-pixel button,
 .theme-pixel .level-menu li {
-  border: 4px solid var(--line);
+  border: 4px solid var(--ink);
+  background: transparent;
+  color: var(--ink);
   box-shadow: none;
   font-weight: 400;
   letter-spacing: 0;
@@ -307,17 +240,11 @@ body.theme-pixel {
   text-transform: uppercase;
 }
 
-.theme-pixel button,
-.theme-pixel .level-menu li {
-  background: var(--button-bg);
-  color: var(--ink);
-}
-
 .theme-pixel button:hover,
 .theme-pixel .is-menu-scene button:hover,
 .theme-pixel .level-menu li.is-selected,
 .theme-pixel .is-menu-scene button.is-selected {
-  background: var(--button-bg-hover);
+  background: var(--ink);
   color: var(--bg);
   box-shadow: none;
   transform: none;
@@ -325,14 +252,12 @@ body.theme-pixel {
 
 .theme-pixel button:active,
 .theme-pixel .is-menu-scene button:active {
-  background: var(--button-bg-active);
+  background: transparent;
   color: var(--ink);
-  box-shadow: none;
-  transform: none;
 }
 
 .theme-pixel .board {
-  border: 8px solid var(--line);
+  border: 8px solid var(--ink);
   box-shadow: none;
   image-rendering: pixelated;
 }
@@ -350,8 +275,8 @@ body.theme-pixel {
 .theme-pixel .view-title {
   max-width: 608px;
   padding: 12px 16px;
-  border: 8px solid var(--line);
-  background: var(--panel-bg);
+  border: 8px solid var(--ink);
+  background: var(--bg);
   box-shadow: none;
   font-size: 48px;
   font-weight: 400;
@@ -361,6 +286,7 @@ body.theme-pixel {
 }
 
 .theme-pixel .view-subtitle {
+  color: var(--ink);
   font-size: 24px;
   font-weight: 400;
   text-align: left;
@@ -394,21 +320,9 @@ body.theme-puzzlescript {
   --ps-terminal-control-width: 36ch;
   --bg: #000000;
   --ink: #ffffff;
-  --muted: #ffffff;
-  --line: #ffffff;
-  --board-bg: #000000;
   --accent: #ffffff;
-  --button-bg: transparent;
-  --button-bg-hover: transparent;
-  --button-bg-active: transparent;
-  --menu-item-bg: transparent;
-  --menu-item-bg-selected: transparent;
-  --menu-item-ring: #ffffff;
-  --panel-bg: transparent;
-  --popup-bg: transparent;
   --radius-control: 0px;
   --radius-panel: 0px;
-  --ok: #ffffff;
   --menu-cursor: "#";
   --level-clear-mark: "*";
   --ui-font: "PuzzleScript Terminal", "Courier New", Monaco, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -473,7 +387,7 @@ body.theme-puzzlescript {
   padding: 5px 1ch;
   border: 0;
   border-radius: 0;
-  background: var(--button-bg);
+  background: transparent;
   color: var(--ink);
   display: inline-flex;
   align-items: center;
@@ -490,26 +404,31 @@ body.theme-puzzlescript {
   white-space: nowrap;
 }
 
+.theme-puzzlescript .level-menu li > span:not(.level-clear-mark) {
+  min-width: 0;
+  flex: 0 1 auto;
+}
+
+.theme-puzzlescript .level-clear-mark {
+  width: 1ch;
+  flex: 0 0 1ch;
+}
+
 .theme-puzzlescript button,
 .theme-puzzlescript .level-menu {
   width: min(100%, var(--ps-terminal-control-width));
   max-width: min(100%, var(--ps-terminal-control-width));
 }
 
-.theme-puzzlescript button {
+.theme-puzzlescript button,
+.theme-puzzlescript .level-menu li {
   overflow: hidden;
 }
 
-.theme-puzzlescript button:hover {
-  background: var(--button-bg-hover);
-  color: var(--ink);
-  box-shadow: none;
-  transform: none;
-}
-
+.theme-puzzlescript button:hover,
 .theme-puzzlescript .level-menu li.is-selected,
 .theme-puzzlescript button.is-selected {
-  background: var(--menu-item-bg-selected);
+  background: transparent;
   color: var(--ink);
   box-shadow: none;
   transform: none;
@@ -521,9 +440,12 @@ body.theme-puzzlescript {
 .theme-puzzlescript .level-menu li::after {
   position: static;
   inset: auto;
+  min-width: 1ch;
   flex: 0 0 auto;
   color: var(--ink);
+  content: "";
   font-weight: 400;
+  text-align: center;
   transform: none;
 }
 
@@ -549,14 +471,11 @@ body.theme-puzzlescript {
   content: var(--ps-confirm-after, "----------#");
 }
 
-.theme-puzzlescript .board {
-  border: 0;
-  box-shadow: none;
-  image-rendering: pixelated;
-}
-
+.theme-puzzlescript .board,
 .theme-puzzlescript .cell,
 .theme-puzzlescript .sprite {
+  border: 0;
+  box-shadow: none;
   image-rendering: pixelated;
 }
 
@@ -577,63 +496,52 @@ body.theme-puzzlescript {
 body.theme-candy {
   --bg: #fff7fb;
   --ink: #33404a;
-  --muted: #7a8790;
-  --line: #efbfd3;
-  --board-bg: #edfaff;
   --accent: #d76f97;
-  --button-bg: #fffafd;
-  --button-bg-hover: #ffe9f2;
-  --button-bg-active: #f4d5e3;
-  --menu-item-bg: rgba(215, 111, 151, 0.08);
-  --menu-item-bg-selected: #d76f97;
-  --menu-item-ring: rgba(159, 76, 112, 0.32);
-  --panel-bg: rgba(255, 255, 255, 0.96);
-  --popup-bg: #ffffff;
   --radius-control: 999px;
   --radius-panel: 18px;
-  --ok: #1f9f72;
   --ui-font: Nunito, "Trebuchet MS", ui-sans-serif, system-ui, sans-serif;
   --title-font: var(--ui-font);
   background:
-    repeating-linear-gradient(135deg, rgba(215, 111, 151, 0.045) 0 14px, transparent 14px 28px),
+    repeating-linear-gradient(135deg, color-mix(in srgb, var(--accent) 5%, transparent) 0 14px, transparent 14px 28px),
     var(--bg);
 }
 
 .theme-candy button,
 .theme-candy .level-menu li {
-  border: 1px solid rgba(215, 111, 151, 0.24);
-  box-shadow: 0 5px 0 rgba(215, 111, 151, 0.16);
+  border: 1px solid color-mix(in srgb, var(--accent) 24%, transparent);
+  box-shadow: 0 5px 0 color-mix(in srgb, var(--accent) 16%, transparent);
   color: var(--ink);
 }
 
 .theme-candy button {
-  background: linear-gradient(180deg, var(--button-bg), var(--button-bg-hover));
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--bg) 96%, transparent),
+    color-mix(in srgb, var(--accent) 12%, transparent)
+  );
 }
 
 .theme-candy button:hover,
 .theme-candy .is-menu-scene button:hover {
   box-shadow:
-    0 6px 0 rgba(215, 111, 151, 0.18),
-    inset 0 0 0 2px rgba(255, 255, 255, 0.18);
+    0 6px 0 color-mix(in srgb, var(--accent) 18%, transparent),
+    inset 0 0 0 2px color-mix(in srgb, var(--bg) 26%, transparent);
   transform: translateY(-2px);
 }
 
 .theme-candy .level-menu li.is-selected,
 .theme-candy .is-menu-scene button.is-selected {
-  background: var(--menu-item-bg-selected);
-  color: #ffffff;
+  background: var(--accent);
+  color: var(--bg);
   box-shadow:
-    inset 0 0 0 2px rgba(255, 255, 255, 0.26),
-    0 5px 0 rgba(159, 76, 112, 0.34);
+    inset 0 0 0 2px color-mix(in srgb, var(--bg) 30%, transparent),
+    0 5px 0 color-mix(in srgb, var(--ink) 30%, transparent);
 }
 
 .theme-candy .board {
-  box-shadow: 0 16px 34px rgba(47, 95, 115, 0.16);
-}
-
-.theme-candy .board {
-  border: 1px solid rgba(215, 111, 151, 0.18);
+  border: 1px solid color-mix(in srgb, var(--accent) 18%, transparent);
   border-radius: 14px;
+  box-shadow: 0 16px 34px color-mix(in srgb, var(--ink) 16%, transparent);
   overflow: hidden;
 }
 
@@ -672,7 +580,7 @@ body.theme-candy {
   height: 10px;
   display: block;
   border-radius: 999px;
-  background: var(--accent);
+  background: var(--bg);
   content: "";
   transform: translateY(-50%);
 }
@@ -681,26 +589,14 @@ body.theme-blueprint {
   color-scheme: dark;
   --bg: #0d334e;
   --ink: #e9f8ff;
-  --muted: #aad0e0;
-  --line: #78c7e8;
-  --board-bg: #123f5d;
   --accent: #ffd166;
-  --button-bg: rgba(11, 42, 64, 0.78);
-  --button-bg-hover: rgba(255, 209, 102, 0.12);
-  --button-bg-active: #071c2c;
-  --menu-item-bg: rgba(120, 199, 232, 0.12);
-  --menu-item-bg-selected: rgba(255, 209, 102, 0.18);
-  --menu-item-ring: rgba(255, 209, 102, 0.42);
-  --panel-bg: rgba(11, 42, 64, 0.94);
-  --popup-bg: #0b2a40;
   --radius-control: 4px;
   --radius-panel: 4px;
-  --ok: #8cffc1;
   --ui-font: "Avenir Next", Inter, ui-sans-serif, system-ui, sans-serif;
   --title-font: var(--ui-font);
   background:
-    repeating-linear-gradient(0deg, rgba(120, 199, 232, 0.11) 0 1px, transparent 1px 24px),
-    repeating-linear-gradient(90deg, rgba(120, 199, 232, 0.11) 0 1px, transparent 1px 24px),
+    repeating-linear-gradient(0deg, color-mix(in srgb, var(--ink) 11%, transparent) 0 1px, transparent 1px 24px),
+    repeating-linear-gradient(90deg, color-mix(in srgb, var(--ink) 11%, transparent) 0 1px, transparent 1px 24px),
     var(--bg);
 }
 
@@ -710,32 +606,28 @@ body.theme-blueprint {
 
 .theme-blueprint button,
 .theme-blueprint .level-menu li {
-  border: 1px solid var(--line);
-  box-shadow: none;
-}
-
-.theme-blueprint button,
-.theme-blueprint .level-menu li {
-  background: var(--button-bg);
+  border: 1px solid color-mix(in srgb, var(--ink) 42%, transparent);
+  background: color-mix(in srgb, var(--bg) 78%, transparent);
   color: var(--ink);
+  box-shadow: none;
 }
 
 .theme-blueprint button:hover,
 .theme-blueprint .is-menu-scene button:hover,
 .theme-blueprint .level-menu li.is-selected,
 .theme-blueprint .is-menu-scene button.is-selected {
-  background: rgba(255, 209, 102, 0.12);
-  box-shadow: inset 0 0 0 2px var(--menu-item-ring);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 42%, transparent);
   transform: none;
 }
 
 .theme-blueprint .board {
-  border: 1px solid var(--line);
-  box-shadow: 0 0 0 1px rgba(233, 248, 255, 0.12);
+  border: 1px solid color-mix(in srgb, var(--ink) 42%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--ink) 12%, transparent);
 }
 
 .theme-blueprint .cell {
-  box-shadow: inset 0 0 0 1px rgba(120, 199, 232, 0.04);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ink) 4%, transparent);
 }
 
 .theme-blueprint .scene-layer.is-menu-scene {
@@ -770,25 +662,19 @@ body.theme-noir {
   color-scheme: dark;
   --bg: #101010;
   --ink: #f4f1e8;
-  --muted: #a9a097;
-  --line: #59544e;
-  --board-bg: #1a1a1a;
   --accent: #f2c14e;
-  --button-bg: #292929;
-  --button-bg-hover: #3a3a3a;
-  --button-bg-active: #171717;
-  --menu-item-bg: rgba(244, 241, 232, 0.08);
-  --menu-item-bg-selected: rgba(242, 193, 78, 0.16);
-  --menu-item-ring: rgba(242, 193, 78, 0.40);
-  --panel-bg: rgba(24, 24, 24, 0.96);
-  --popup-bg: #181818;
   --radius-control: 2px;
   --radius-panel: 2px;
-  --ok: #9fd67a;
   --ui-font: "Helvetica Neue", Arial, ui-sans-serif, system-ui, sans-serif;
   --title-font: Georgia, "Times New Roman", serif;
   background:
-    linear-gradient(90deg, rgba(242, 193, 78, 0.055), transparent 38%, transparent 62%, rgba(242, 193, 78, 0.035)),
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--accent) 6%, transparent),
+      transparent 38%,
+      transparent 62%,
+      color-mix(in srgb, var(--accent) 4%, transparent)
+    ),
     var(--bg);
 }
 
@@ -798,25 +684,25 @@ body.theme-noir {
 
 .theme-noir button,
 .theme-noir .level-menu li {
-  border: 1px solid var(--line);
-  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.36);
+  border: 1px solid color-mix(in srgb, var(--ink) 24%, transparent);
+  box-shadow: 0 10px 24px color-mix(in srgb, var(--bg) 50%, transparent);
 }
 
 .theme-noir button:hover,
 .theme-noir .is-menu-scene button:hover {
-  background: linear-gradient(180deg, #424242, var(--button-bg-hover));
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
 .theme-noir .level-menu li.is-selected,
 .theme-noir .is-menu-scene button.is-selected {
   box-shadow:
-    inset 0 0 0 2px var(--menu-item-ring),
-    0 10px 24px rgba(0, 0, 0, 0.36);
+    inset 0 0 0 2px color-mix(in srgb, var(--accent) 40%, transparent),
+    0 10px 24px color-mix(in srgb, var(--bg) 50%, transparent);
 }
 
 .theme-noir .board {
-  border: 1px solid var(--line);
-  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.40);
+  border: 1px solid color-mix(in srgb, var(--ink) 24%, transparent);
+  box-shadow: 0 16px 36px color-mix(in srgb, var(--bg) 54%, transparent);
 }
 
 .theme-noir .scene-layer.is-menu-scene {
@@ -832,7 +718,7 @@ body.theme-noir {
 }
 
 .theme-noir .view-subtitle {
-  color: #c8bda6;
+  color: color-mix(in srgb, var(--ink) 72%, transparent);
   font-size: 13px;
   text-align: center;
   text-transform: uppercase;
@@ -868,5 +754,5 @@ body.theme-noir {
   border-color: var(--accent);
   box-shadow:
     inset 4px 0 0 var(--accent),
-    0 14px 28px rgba(0, 0, 0, 0.42);
+    0 14px 28px color-mix(in srgb, var(--bg) 58%, transparent);
 }

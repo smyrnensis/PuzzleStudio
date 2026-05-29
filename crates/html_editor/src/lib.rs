@@ -10,7 +10,6 @@ const EDITOR_HTML: &str = include_str!("../static/editor.html");
 const EDITOR_DOCS_MARKDOWN: &str = include_str!("../docs/editor.md");
 const EDITOR_CSS: &str = include_str!("../static/editor.css");
 const EDITOR_BOOT_JS: &str = include_str!("../static/editor_boot.js");
-const EDITOR_THEME_IMPORTS_JS: &str = include_str!("../static/editor_theme_imports.js");
 const EDITOR_DOM_JS: &str = include_str!("../static/editor_dom.js");
 const EDITOR_WORKSPACE_JS: &str = include_str!("../static/editor_workspace.js");
 const EDITOR_SOURCE_JS: &str = include_str!("../static/editor_source.js");
@@ -26,6 +25,10 @@ const EDITOR_SOUNDS_JS: &str = include_str!("../static/editor_sounds.js");
 const FAVICON_SVG: &str = include_str!("../static/favicon.svg");
 const PUZZLE_WASM_JS: &str = include_str!("../static/wasm/puzzle_wasm.js");
 const PUZZLE_WASM_BG: &[u8] = include_bytes!("../static/wasm/puzzle_wasm_bg.wasm");
+const PUZZLE_GAME_WASM_JS: &str =
+    include_str!("../../html_play/static/wasm_game/puzzle_wasm_game.js");
+const PUZZLE_GAME_WASM_BG: &[u8] =
+    include_bytes!("../../html_play/static/wasm_game/puzzle_wasm_game_bg.wasm");
 const SEEDED_SFX_JS: &str = include_str!("../../../tools/music_generator/seeded_sfx.mjs");
 const SEEDED_MUSIC_JS: &str = include_str!("../../../tools/music_generator/seeded_music.mjs");
 const SOUND_EXPORT_JS: &str = include_str!("../../../tools/music_generator/audio_export.mjs");
@@ -924,9 +927,6 @@ fn route(request: &HttpRequest, service: &EditorService) -> Vec<u8> {
         ("GET", "/renderer.css") => http_ok("text/css; charset=utf-8", RENDERER_CSS),
         ("GET", "/game.css") => http_ok("text/css; charset=utf-8", &service.state().game_css),
         ("GET", "/editor_boot.js") => http_ok("text/javascript; charset=utf-8", EDITOR_BOOT_JS),
-        ("GET", "/editor_theme_imports.js") => {
-            http_ok("text/javascript; charset=utf-8", EDITOR_THEME_IMPORTS_JS)
-        }
         ("GET", "/editor_dom.js") => http_ok("text/javascript; charset=utf-8", EDITOR_DOM_JS),
         ("GET", "/editor_workspace.js") => {
             http_ok("text/javascript; charset=utf-8", EDITOR_WORKSPACE_JS)
@@ -1291,13 +1291,11 @@ fn export_editor_html(state: &EditorState) -> Result<String, AppError> {
     let renderer_css = escape_style(RENDERER_CSS);
     let game_css = escape_style(&state.game_css);
     let editor_boot_js = escape_script(EDITOR_BOOT_JS);
-    let editor_theme_imports_js = escape_script(EDITOR_THEME_IMPORTS_JS);
     let editor_dom_js = escape_script(EDITOR_DOM_JS);
     let editor_workspace_js = escape_script(EDITOR_WORKSPACE_JS);
     let editor_source_js = escape_script(EDITOR_SOURCE_JS);
     let editor_level3d_js = escape_script(EDITOR_LEVEL3D_JS);
     let editor_workbench_js = escape_script(EDITOR_WORKBENCH_JS);
-    let game_visuals_js = escape_script(&state.game_visuals_js);
     let renderer_js = escape_script(RENDERER_JS);
     let editor_js = escape_script(EDITOR_JS);
     let editor_sprite_js = escape_script(EDITOR_SPRITE_JS);
@@ -1336,16 +1334,8 @@ fn export_editor_html(state: &EditorState) -> Result<String, AppError> {
             &format!("<script>\n{sound_tools_js}\n</script>"),
         )
         .replace(
-            r#"<script src="/game.visuals.js"></script>"#,
-            &format!("<script>\n{game_visuals_js}\n</script>"),
-        )
-        .replace(
             r#"<script src="/renderer.js"></script>"#,
             &format!("<script>\n{renderer_js}\n</script>"),
-        )
-        .replace(
-            r#"<script src="/editor_theme_imports.js"></script>"#,
-            &format!("<script>\n{editor_theme_imports_js}\n</script>"),
         )
         .replace(
             r#"<script src="/editor_dom.js"></script>"#,
@@ -1516,10 +1506,12 @@ fn render_docs_inline(value: &str) -> String {
 }
 
 fn embedded_wasm_script() -> String {
-    let module_source = escape_script_json(PUZZLE_WASM_JS);
-    let wasm_base64 = base64_encode(PUZZLE_WASM_BG);
+    let editor_module_source = escape_script_json(PUZZLE_WASM_JS);
+    let editor_wasm_base64 = base64_encode(PUZZLE_WASM_BG);
+    let game_module_source = escape_script_json(PUZZLE_GAME_WASM_JS);
+    let game_wasm_base64 = base64_encode(PUZZLE_GAME_WASM_BG);
     format!(
-        "window.PuzzleStudioEmbeddedWasm = {{ moduleSource: \"{module_source}\", wasmBase64: \"{wasm_base64}\" }};"
+        "window.PuzzleStudioEmbeddedWasm = {{ moduleSource: \"{editor_module_source}\", wasmBase64: \"{editor_wasm_base64}\" }};\nwindow.PuzzleStudioEmbeddedGameWasm = {{ moduleSource: \"{game_module_source}\", wasmBase64: \"{game_wasm_base64}\" }};"
     )
 }
 
@@ -2316,12 +2308,24 @@ step board
         ));
         assert!(EDITOR_JS.contains("sourceTitleMatches(requestedName, level.name)"));
         assert!(EDITOR_JS.contains("openPreviewModePane(\"edit\");"));
-        assert!(EDITOR_JS.contains("function loadLevelFromSourceEntry(source, entry, options = {})"));
+        assert!(
+            EDITOR_JS.contains("function loadLevelFromSourceEntry(source, entry, options = {})")
+        );
+        assert!(
+            EDITOR_SOURCE_JS
+                .contains("function sourceEditableEntryFromTarget(source, target, options = {})")
+        );
+        assert!(
+            EDITOR_JS
+                .contains("const sourceEntry = sourceEditableEntryFromTarget(source, target, {")
+        );
         assert!(EDITOR_JS.contains("function sourceLevelStateFromEntry(source, entry, exportData = previewExport, options = {})"));
         assert!(EDITOR_JS.contains("function sourceLevelRowsAndLocalLegends(source, entry)"));
         assert!(EDITOR_JS.contains("function sourceLevelEntryHasHeader(tokens)"));
         assert!(EDITOR_JS.contains("sourceLevelRowGroups(parsed.rows)"));
-        assert!(EDITOR_JS.contains("if (!loadLevelFromSourceEntry(source, target, { levelIndex, levelName }))"));
+        assert!(EDITOR_JS.contains(
+            "if (!loadLevelFromSourceEntry(source, sourceEntry, { levelIndex, levelName }))"
+        ));
         assert!(EDITOR_JS.contains(
             "function levelSourceData(source = levelReferenceSource(previewExport || extractPreviewExport(latestHtml))"
         ));
@@ -2437,6 +2441,8 @@ step board
         assert!(EDITOR_JS.contains("setPreviewFrameHtml(editorPreviewDocument(latestHtml));"));
         assert!(EDITOR_LEVEL3D_JS.contains("function addLevel3dToSource()"));
         assert!(EDITOR_LEVEL3D_JS.contains("function updateLevel3dInSource()"));
+        assert!(EDITOR_LEVEL3D_JS.contains("sourceEditableEntryFromTarget(source, target, {"));
+        assert!(EDITOR_LEVEL3D_JS.contains("if (entry.rows?.length) {\n    loadLevel3dFromSourceDefinition(entry, source, sourceKey, sourceDocument);"));
         assert!(!EDITOR_LEVEL3D_JS.contains("syncLevel3dSourceFromState"));
         assert!(!EDITOR_LEVEL3D_JS.contains("syncPreviewStateFromLevel3d"));
         assert!(!EDITOR_LEVEL3D_JS.contains("nextExport.levels[levelIndex].size = edited.size"));
@@ -2444,13 +2450,33 @@ step board
 
     #[test]
     fn level3d_editor_updates_runtime_through_preview_contract() {
-        assert!(EDITOR_LEVEL3D_JS.contains("function level3dRuntimePreviewUpdate()"));
-        assert!(EDITOR_LEVEL3D_JS.contains("const LEVEL3D_MODEL_COMPONENT_PREVIEW_MESSAGE = \"PuzzleStudioRenderPuzzle3ModelComponent\";"));
-        assert!(EDITOR_LEVEL3D_JS.contains("type: LEVEL3D_MODEL_COMPONENT_PREVIEW_MESSAGE"));
-        assert!(EDITOR_LEVEL3D_JS.contains("function level3dRuntimePreviewDocument(update)"));
+        let frame_fixture = EDITOR_JS
+            .find("window\\.Puzzle3DFrameFixture")
+            .expect("3D frame fixture extractor candidate");
+        let puzzle_export = EDITOR_JS
+            .find("window\\.PuzzleExport")
+            .expect("2D export extractor candidate");
         assert!(
-            EDITOR_LEVEL3D_JS.contains("window.PuzzleStudioInitialModelComponentPreview = update;")
+            frame_fixture < puzzle_export,
+            "3D editor previews must extract the 3D frame fixture before the outer scene export"
         );
+        assert!(EDITOR_JS.contains("const globalName = exportData?.__kind === \"puzzle3d\" ? \"Puzzle3DFrameFixture\" : \"PuzzleExport\";"));
+        assert!(EDITOR_LEVEL3D_JS.contains("function level3dRuntimePreviewUpdate()"));
+        assert!(EDITOR_LEVEL3D_JS.contains(
+            "const LEVEL3D_PREVIEW_SURFACE_MESSAGE = \"PuzzleStudioPreviewSurfaceUpdate\";"
+        ));
+        assert!(
+            EDITOR_LEVEL3D_JS.contains("const LEVEL3D_PREVIEW_SURFACE_KIND = \"puzzle3-level\";")
+        );
+        assert!(EDITOR_LEVEL3D_JS.contains("const LEVEL3D_PREVIEW_SURFACE_MODE = \"isolated\";"));
+        assert!(EDITOR_LEVEL3D_JS.contains("const LEVEL3D_MODEL_COMPONENT_PREVIEW_MESSAGE = \"PuzzleStudioRenderPuzzle3ModelComponent\";"));
+        assert!(EDITOR_LEVEL3D_JS.contains("function level3dPreviewSurfaceMessage(update)"));
+        assert!(EDITOR_LEVEL3D_JS.contains("type: LEVEL3D_PREVIEW_SURFACE_MESSAGE"));
+        assert!(EDITOR_LEVEL3D_JS.contains("kind: LEVEL3D_PREVIEW_SURFACE_KIND"));
+        assert!(EDITOR_LEVEL3D_JS.contains("mode: LEVEL3D_PREVIEW_SURFACE_MODE"));
+        assert!(EDITOR_LEVEL3D_JS.contains("payload: level3dPreviewSurfacePayload(update)"));
+        assert!(EDITOR_LEVEL3D_JS.contains("function level3dRuntimePreviewDocument(update)"));
+        assert!(EDITOR_LEVEL3D_JS.contains("window.PuzzleStudioInitialPreviewSurface = update;"));
         assert!(
             EDITOR_LEVEL3D_JS
                 .contains("window.PuzzleStudioModelComponentPreviewFixture = function")
@@ -2459,8 +2485,7 @@ step board
         assert!(EDITOR_LEVEL3D_JS.contains("next.currentScene = sceneName;"));
         assert!(EDITOR_LEVEL3D_JS.contains("puzzle-studio-initial-model-preview-boot"));
         assert!(
-            EDITOR_LEVEL3D_JS
-                .contains("window.PuzzleStudioInitialModelComponentPreviewConsumed === true")
+            EDITOR_LEVEL3D_JS.contains("window.PuzzleStudioInitialPreviewSurfaceConsumed === true")
         );
         assert!(!EDITOR_LEVEL3D_JS.contains("type: \"PuzzleStudioSetPuzzle3Snapshot\""));
         assert!(EDITOR_LEVEL3D_JS.contains("level: {"));
@@ -2506,7 +2531,7 @@ step board
         assert!(!EDITOR_LEVEL3D_JS.contains("previewFrameHasEditorLevelState = true;"));
         assert!(EDITOR_LEVEL3D_JS.contains("function renderPuzzle3dSolverPreview()"));
         assert!(EDITOR_LEVEL3D_JS.contains("function sendPuzzle3dSolutionToSolverRuntime()"));
-        assert!(EDITOR_LEVEL3D_JS.contains("level3dSolverFrame.contentWindow.postMessage({"));
+        assert!(EDITOR_LEVEL3D_JS.contains("level3dSolverFrame.contentWindow.postMessage(level3dPreviewSurfaceMessage(update), \"*\");"));
         assert!(EDITOR_LEVEL3D_JS.contains("function level3dPreviewUpdateFromSnapshot(snapshot)"));
         assert!(EDITOR_JS.contains(
             "isPuzzle3dExport(exportData) && typeof renderPuzzle3dSolverPreview === \"function\""
@@ -2681,6 +2706,35 @@ step board
             EDITOR_SOURCE_JS
                 .contains("return Math.max(0, Math.min(source.length, lineHit.endOffset));")
         );
+    }
+
+    #[test]
+    fn source_block_selection_uses_normal_selection_fill() {
+        assert!(EDITOR_CSS.contains(
+            "--source-selection-bg: color-mix(in srgb, var(--accent) 34%, transparent);"
+        ));
+        assert!(EDITOR_CSS.contains(".source-block-selection-range {\n  position: absolute;\n  min-width: 2px;\n  background: var(--source-selection-bg);\n}"));
+        assert!(
+            EDITOR_CSS.contains(
+                "#sourceEditor::selection {\n  background: var(--source-selection-bg);\n}"
+            )
+        );
+    }
+
+    #[test]
+    fn sprite_source_ascii_rows_do_not_become_unbraced_sprite_boundaries() {
+        assert!(EDITOR_SPRITE_JS.contains(
+            "const paletteLength = unbracedSpritePaletteLength(source, spritesBlock, contentStart);"
+        ));
+        assert!(
+            EDITOR_SPRITE_JS.contains("&& !isSpriteAsciiRowForPalette(trimmed, paletteLength)")
+        );
+        assert!(EDITOR_SPRITE_JS.contains("function isSpriteAsciiRowForPalette"));
+        assert!(EDITOR_SPRITE_JS.contains("if (tokens[0] === \"shape\")"));
+        assert!(EDITOR_SPRITE_JS.contains("raw.set(`${tableName}:*`, value);"));
+        assert!(EDITOR_SPRITE_JS.contains(
+            "const key = assets.has(name) ? name : spriteTableAssetKey(name, assets, selectorName);"
+        ));
     }
 
     #[test]
@@ -2905,12 +2959,18 @@ step board
 
         assert!(html.contains("window.PuzzleEditorSeed = JSON.parse"));
         assert!(html.contains("window.PuzzleStudioEmbeddedWasm = {"));
+        assert!(html.contains("window.PuzzleStudioEmbeddedGameWasm = {"));
         assert!(html.contains("moduleSource: \""));
         assert!(html.contains("highlight_source_html"));
         assert!(html.contains("suggest_source_completions"));
+        assert!(html.contains("WasmStandaloneSession"));
         assert!(html.contains("Exported Editor"));
+        assert!(html.contains("gameVisualsJs"));
         assert!(html.contains(r#"<link rel="icon" type="image/svg+xml" href="data:image/svg+xml"#));
+        assert!(!html.contains(r#"<script src="/game.visuals.js"></script>"#));
+        assert!(!html.contains("<script>\nwindow.PuzzleAssets ="));
         assert!(!html.contains(r#"<script src="/editor.js"></script>"#));
+        assert!(!html.contains("PuzzleEditorThemeImports"));
         assert!(!html.contains(r#"<script src="/wasm/puzzle_wasm.js"></script>"#));
         assert!(!html.contains(r#"<link rel="stylesheet" href="/editor.css">"#));
         assert!(!html.contains(r#"<link rel="icon" type="image/svg+xml" href="/favicon.svg">"#));
@@ -2923,6 +2983,7 @@ step board
             EDITOR_JS
                 .contains("window.PuzzleRuntimeWasmLoader = window.PuzzleRuntimeWasmLoader ||")
         );
+        assert!(EDITOR_JS.contains("window.PuzzleStudioEmbeddedGameWasm || embedded"));
         assert!(EDITOR_JS.contains("\"window.Puzzle3DFixture = JSON.parse(\""));
         assert!(EDITOR_JS.contains("window.Puzzle3DFrameAssets.embeddedWasmJs"));
     }
