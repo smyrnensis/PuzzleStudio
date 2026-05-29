@@ -5340,6 +5340,13 @@ html.is-sprite3d-slice-scrubbing * {
   min-width: 0;
 }
 
+.ps-import-actions .source-action-button:hover:not(:disabled),
+.ps-import-actions .source-action-button:focus-visible {
+  background: var(--hover-bg);
+  color: var(--ink);
+  box-shadow: inset 0 0 0 1px var(--line-strong);
+}
+
 .ps-import-status {
   text-transform: none;
 }

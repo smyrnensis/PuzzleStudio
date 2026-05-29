@@ -1,6 +1,8 @@
 use crate::compiled_game::{CompiledGame, GlobalUpdateOp};
 use crate::ids::{GlobalId, LayerId, ObjectId, RuleId, ScratchId};
-use puzzle_kernel::{GlobalValueError, ObjectCellMask, ScratchSpace, VisibleGlobals, fnv_mix};
+use puzzle_kernel::{
+    GlobalValueError, GridCoord, GridShape, ObjectCellMask, ScratchSpace, VisibleGlobals, fnv_mix,
+};
 use std::collections::BTreeMap;
 
 #[derive(Clone, Debug)]
@@ -87,12 +89,14 @@ impl State {
         object_count: usize,
         visible_globals: Vec<i64>,
     ) -> Result<Self, StateError> {
+        let shape = GridShape::<2>::new([width, height], layer_count)
+            .ok_or(StateError::InvalidDimensions)?;
+        let slot_count = shape.slot_count().ok_or(StateError::InvalidDimensions)?;
+        let cell_count = shape.cell_count().ok_or(StateError::InvalidDimensions)?;
         if width == 0 || height == 0 || layer_count == 0 {
             return Err(StateError::InvalidDimensions);
         }
 
-        let slot_count = usize::from(width) * usize::from(height) * usize::from(layer_count);
-        let cell_count = usize::from(width) * usize::from(height);
         let mut state = Self {
             width,
             height,
@@ -685,7 +689,7 @@ impl State {
     }
 
     pub(crate) fn check_pos(&self, x: u16, y: u16) -> Result<(), StateError> {
-        if x >= self.width || y >= self.height {
+        if !self.shape().contains(GridCoord::new([x, y])) {
             return Err(StateError::PositionOutOfBounds { x, y });
         }
         Ok(())
@@ -696,24 +700,30 @@ impl State {
         if layer.0 >= self.layer_count {
             return Err(StateError::LayerOutOfBounds { layer });
         }
-        Ok(self.slot_index_unchecked(x, y, layer))
+        self.shape()
+            .slot_index(GridCoord::new([x, y]), layer.0)
+            .ok_or(StateError::LayerOutOfBounds { layer })
     }
 
     pub(crate) fn cell_index(&self, x: u16, y: u16) -> Result<usize, StateError> {
         self.check_pos(x, y)?;
-        Ok(self.cell_index_unchecked(x, y))
+        Ok(self.shape().cell_index_unchecked(GridCoord::new([x, y])))
     }
 
     #[inline]
     pub(crate) fn cell_index_unchecked(&self, x: u16, y: u16) -> usize {
-        usize::from(y) * usize::from(self.width) + usize::from(x)
+        self.shape().cell_index_unchecked(GridCoord::new([x, y]))
     }
 
     #[inline]
     pub(crate) fn slot_index_unchecked(&self, x: u16, y: u16, layer: LayerId) -> usize {
-        ((usize::from(y) * usize::from(self.width) + usize::from(x))
-            * usize::from(self.layer_count))
-            + usize::from(layer.0)
+        self.shape()
+            .slot_index_unchecked(GridCoord::new([x, y]), layer.0)
+    }
+
+    fn shape(&self) -> GridShape<2> {
+        GridShape::new([self.width, self.height], self.layer_count)
+            .expect("state dimensions are validated at construction")
     }
 }
 

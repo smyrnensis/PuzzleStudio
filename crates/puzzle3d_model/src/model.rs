@@ -1,6 +1,6 @@
 use crate::RuleId3;
 use crate::{InputId3, LayerId, ObjectId};
-use puzzle_kernel::ObjectRoleSet;
+use puzzle_kernel::{GridCoord, GridOffset, ObjectRoleSet};
 use std::collections::BTreeSet;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -27,11 +27,22 @@ impl Coord3 {
     }
 
     pub fn checked_offset(self, offset: Offset3) -> Option<Self> {
-        Some(Self {
-            x: offset_axis(self.x, offset.dx)?,
-            y: offset_axis(self.y, offset.dy)?,
-            z: offset_axis(self.z, offset.dz)?,
-        })
+        GridCoord::<3>::from(self)
+            .checked_offset(offset.into())
+            .map(Self::from)
+    }
+}
+
+impl From<Coord3> for GridCoord<3> {
+    fn from(value: Coord3) -> Self {
+        Self::new([value.x, value.y, value.z])
+    }
+}
+
+impl From<GridCoord<3>> for Coord3 {
+    fn from(value: GridCoord<3>) -> Self {
+        let [x, y, z] = value.axes();
+        Self { x, y, z }
     }
 }
 
@@ -67,6 +78,19 @@ impl Offset3 {
             dy: self.dy + other.dy,
             dz: self.dz + other.dz,
         }
+    }
+}
+
+impl From<Offset3> for GridOffset<3> {
+    fn from(value: Offset3) -> Self {
+        Self::new([value.dx, value.dy, value.dz])
+    }
+}
+
+impl From<GridOffset<3>> for Offset3 {
+    fn from(value: GridOffset<3>) -> Self {
+        let [dx, dy, dz] = value.deltas();
+        Self { dx, dy, dz }
     }
 }
 
@@ -704,12 +728,4 @@ pub enum GameError3 {
     ObjectLayerOutOfBounds { object: ObjectId, layer: LayerId },
     DuplicateInputId { input: InputId3 },
     DuplicateInputName { name: String },
-}
-
-fn offset_axis(value: u16, delta: i16) -> Option<u16> {
-    let next = i32::from(value) + i32::from(delta);
-    if next < 0 || next > i32::from(u16::MAX) {
-        return None;
-    }
-    Some(next as u16)
 }

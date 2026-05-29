@@ -1,5 +1,5 @@
 use crate::{Coord3, Game3, GlobalId3, LayerId, ObjectId, ScratchId3, State3, StateError3};
-use puzzle_kernel::{GlobalUpdateOp, ScratchValueMatch};
+use puzzle_kernel::{GlobalUpdateOp, GridPatchOp, ScratchValueMatch};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Patch3 {
@@ -228,45 +228,7 @@ impl SlotOverlay3 {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum PatchOp3 {
-    Add {
-        position: Coord3,
-        object: ObjectId,
-    },
-    Remove {
-        position: Coord3,
-        object: ObjectId,
-    },
-    Replace {
-        position: Coord3,
-        remove: ObjectId,
-        add: ObjectId,
-    },
-    Move {
-        from: Coord3,
-        to: Coord3,
-        object: ObjectId,
-    },
-    UpdateGlobal {
-        global: GlobalId3,
-        op: GlobalUpdateOp,
-        value: i64,
-    },
-    SetScratch {
-        position: Coord3,
-        object: ObjectId,
-        scratch: ScratchId3,
-        value: Option<i64>,
-    },
-    RemoveScratch {
-        position: Coord3,
-        object: ObjectId,
-        scratch: ScratchId3,
-        value: Option<i64>,
-        match_value: ScratchValueMatch,
-    },
-}
+pub type PatchOp3 = GridPatchOp<Coord3, ObjectId, GlobalId3, ScratchId3>;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PatchError3 {

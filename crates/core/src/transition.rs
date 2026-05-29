@@ -5,6 +5,14 @@ use crate::compiled_game::{
 use crate::ids::{InputId, ObjectId, QueryId, RuleId, ScratchId};
 use crate::patch::{Patch, PatchError, PatchOp};
 use crate::state::State;
+use puzzle_kernel::{
+    GridCoord, GridOffset, bind_object as bind_object_shared, bound_object as bound_object_shared,
+    collect_component_placements as collect_component_placements_shared,
+    complete_component_placements as complete_component_placements_shared,
+    placement_object_binding as placement_object_binding_shared,
+    write_position as write_position_shared,
+    write_position_for_components as write_position_for_components_shared,
+};
 use std::collections::{BTreeMap, BTreeSet};
 
 const UNTIL_STABLE_REPEAT_LIMIT: usize = 200;
@@ -867,24 +875,9 @@ fn has_pattern_match_in_scope(
         .any(|(x, y)| match_from_first_origin(game, state, &rule, x, y, &scope).is_some())
 }
 
-#[derive(Clone, Debug)]
-struct MatchPlacement {
-    components: Vec<ComponentPlacement>,
-}
-
-#[derive(Clone, Debug)]
-struct ComponentPlacement {
-    origin_x: u16,
-    origin_y: u16,
-    gaps: Vec<u16>,
-    object_bindings: Vec<ObjectBinding>,
-}
-
-#[derive(Clone, Copy, Debug)]
-struct ObjectBinding {
-    binding: u16,
-    object: ObjectId,
-}
+type MatchPlacement = puzzle_kernel::MatchPlacement<2, ObjectId>;
+type ComponentPlacement = puzzle_kernel::ComponentPlacement<2, ObjectId>;
+type ObjectBinding = puzzle_kernel::ObjectBinding<ObjectId>;
 
 fn find_first_match(
     game: &CompiledGame,
@@ -893,9 +886,7 @@ fn find_first_match(
     scope: &LocalFrameScope2<'_>,
 ) -> Option<MatchPlacement> {
     if rule.pattern.components.is_empty() {
-        return Some(MatchPlacement {
-            components: Vec::new(),
-        });
+        return Some(MatchPlacement::empty());
     }
 
     for (x, y) in component_candidate_origins(game, state, &rule.pattern.components[0], scope) {
@@ -906,7 +897,7 @@ fn find_first_match(
             if complete_component_placements(game, state, rule, 1, &mut components, scope)
                 && placement_writes_within_local_frame(rule, &components, scope)
             {
-                return Some(MatchPlacement { components });
+                return Some(MatchPlacement::new(components));
             }
         }
     }
@@ -920,9 +911,7 @@ fn find_all_matches(
     scope: &LocalFrameScope2<'_>,
 ) -> Vec<MatchPlacement> {
     if rule.pattern.components.is_empty() {
-        return vec![MatchPlacement {
-            components: Vec::new(),
-        }];
+        return vec![MatchPlacement::empty()];
     }
 
     let mut matches = Vec::new();
@@ -953,29 +942,18 @@ fn complete_component_placements(
     components: &mut Vec<ComponentPlacement>,
     scope: &LocalFrameScope2<'_>,
 ) -> bool {
-    if component_index == rule.pattern.components.len() {
-        return true;
-    }
-
-    let component = &rule.pattern.components[component_index];
-    for (x, y) in component_candidate_origins(game, state, component, scope) {
-        if let Some(placement) = component_placement_at(game, state, component, x, y, scope) {
-            components.push(placement);
-            if complete_component_placements(
-                game,
-                state,
-                rule,
-                component_index + 1,
-                components,
-                scope,
-            ) {
-                return true;
-            }
-            components.pop();
-        }
-    }
-
-    false
+    let mut candidate_origins =
+        |component: &PatternComponent| component_candidate_origins(game, state, component, scope);
+    let mut place_at = |component: &PatternComponent, (x, y)| {
+        component_placement_at(game, state, component, x, y, scope)
+    };
+    complete_component_placements_shared(
+        &rule.pattern.components,
+        component_index,
+        components,
+        &mut candidate_origins,
+        &mut place_at,
+    )
 }
 
 fn collect_component_placements(
@@ -987,31 +965,25 @@ fn collect_component_placements(
     matches: &mut Vec<MatchPlacement>,
     scope: &LocalFrameScope2<'_>,
 ) {
-    if component_index == rule.pattern.components.len() {
+    let mut candidate_origins =
+        |component: &PatternComponent| component_candidate_origins(game, state, component, scope);
+    let mut place_at = |component: &PatternComponent, (x, y)| {
+        component_placement_at(game, state, component, x, y, scope)
+    };
+    let mut push_match = |matches: &mut Vec<MatchPlacement>, components: &[ComponentPlacement]| {
         if placement_writes_within_local_frame(rule, components, scope) {
-            matches.push(MatchPlacement {
-                components: components.clone(),
-            });
+            matches.push(MatchPlacement::new(components.to_vec()));
         }
-        return;
-    }
-
-    let component = &rule.pattern.components[component_index];
-    for (x, y) in component_candidate_origins(game, state, component, scope) {
-        if let Some(placement) = component_placement_at(game, state, component, x, y, scope) {
-            components.push(placement);
-            collect_component_placements(
-                game,
-                state,
-                rule,
-                component_index + 1,
-                components,
-                matches,
-                scope,
-            );
-            components.pop();
-        }
-    }
+    };
+    collect_component_placements_shared(
+        &rule.pattern.components,
+        component_index,
+        components,
+        matches,
+        &mut candidate_origins,
+        &mut place_at,
+        &mut push_match,
+    );
 }
 
 fn apply_until_stable(
@@ -1135,7 +1107,7 @@ fn match_from_first_origin(
     if complete_component_placements(game, state, rule, 1, &mut components, scope)
         && placement_writes_within_local_frame(rule, &components, scope)
     {
-        Some(MatchPlacement { components })
+        Some(MatchPlacement::new(components))
     } else {
         None
     }
@@ -1161,8 +1133,8 @@ fn placement_matches(
                 game,
                 state,
                 component,
-                placement.origin_x,
-                placement.origin_y,
+                placement.origin.axes()[0],
+                placement.origin.axes()[1],
                 &placement.gaps,
                 scope,
             )
@@ -1619,12 +1591,11 @@ fn component_placement_at(
         if let Some(object_bindings) =
             component_matches_with_gaps(game, state, component, origin_x, origin_y, &gaps, scope)
         {
-            return Some(ComponentPlacement {
-                origin_x,
-                origin_y,
+            return Some(ComponentPlacement::new(
+                GridCoord::new([origin_x, origin_y]),
                 gaps,
                 object_bindings,
-            });
+            ));
         }
         return None;
     }
@@ -1635,12 +1606,11 @@ fn component_placement_at(
         if let Some(object_bindings) = find_gap_assignment(
             game, state, component, origin_x, origin_y, max_gap, total_gap, &mut gaps, scope,
         ) {
-            return Some(ComponentPlacement {
-                origin_x,
-                origin_y,
+            return Some(ComponentPlacement::new(
+                GridCoord::new([origin_x, origin_y]),
                 gaps,
                 object_bindings,
-            });
+            ));
         }
     }
 
@@ -1757,7 +1727,7 @@ fn match_cell(
         if found.is_empty() || !object_set.objects.contains(&found) {
             return false;
         }
-        if !bind_object(object_bindings, object_set.binding, found) {
+        if !bind_object_shared(object_bindings, object_set.binding, found) {
             return false;
         }
     }
@@ -1777,7 +1747,7 @@ fn match_cell(
     }
 
     for scratch in &cell.require_object_set_scratch {
-        let Some(object) = bound_object(object_bindings, scratch.binding) else {
+        let Some(object) = bound_object_shared(object_bindings, scratch.binding) else {
             return false;
         };
         let matched = match scratch.match_value {
@@ -1804,7 +1774,7 @@ fn match_cell(
     }
 
     for scratch in &cell.forbid_object_set_scratch {
-        let Some(object) = bound_object(object_bindings, scratch.binding) else {
+        let Some(object) = bound_object_shared(object_bindings, scratch.binding) else {
             return false;
         };
         let matched = match scratch.match_value {
@@ -1833,25 +1803,6 @@ fn match_cell(
     }
 
     true
-}
-
-fn bind_object(bindings: &mut Vec<ObjectBinding>, binding: u16, object: ObjectId) -> bool {
-    if let Some(existing) = bindings
-        .iter()
-        .find(|existing| existing.binding == binding)
-        .map(|existing| existing.object)
-    {
-        return existing == object;
-    }
-    bindings.push(ObjectBinding { binding, object });
-    true
-}
-
-fn bound_object(bindings: &[ObjectBinding], binding: u16) -> Option<ObjectId> {
-    bindings
-        .iter()
-        .find(|existing| existing.binding == binding)
-        .map(|existing| existing.object)
 }
 
 fn build_patch(rule: &Rule, placement: &MatchPlacement) -> TransitionResult<Patch> {
@@ -2046,13 +1997,7 @@ fn placement_object_binding(
     placement: &MatchPlacement,
     binding: u16,
 ) -> TransitionResult<ObjectId> {
-    placement
-        .components
-        .iter()
-        .flat_map(|component| &component.object_bindings)
-        .find(|object_binding| object_binding.binding == binding)
-        .map(|object_binding| object_binding.object)
-        .ok_or(TransitionError::OffsetOutOfBounds)
+    placement_object_binding_shared(placement, binding).ok_or(TransitionError::OffsetOutOfBounds)
 }
 
 fn write_position(
@@ -2060,8 +2005,10 @@ fn write_position(
     component: u16,
     offset: &Offset,
 ) -> TransitionResult<(u16, u16)> {
-    write_position_for_components(&placement.components, component, offset)
-        .ok_or(TransitionError::OffsetOutOfBounds)
+    write_position_shared(placement, component, offset, resolve_grid_offset, || {
+        TransitionError::OffsetOutOfBounds
+    })
+    .map(grid_coord_to_xy)
 }
 
 fn write_position_for_components(
@@ -2069,9 +2016,18 @@ fn write_position_for_components(
     component: u16,
     offset: &Offset,
 ) -> Option<(u16, u16)> {
-    let placement = components.get(usize::from(component))?;
-    let (dx, dy) = resolve_offset(offset, &placement.gaps)?;
-    offset_pos(placement.origin_x, placement.origin_y, dx, dy)
+    write_position_for_components_shared(components, component, offset, resolve_grid_offset)
+        .map(grid_coord_to_xy)
+}
+
+fn resolve_grid_offset(offset: &Offset, gaps: &[u16]) -> Option<GridOffset<2>> {
+    let (dx, dy) = resolve_offset(offset, gaps)?;
+    Some(GridOffset::new([dx, dy]))
+}
+
+fn grid_coord_to_xy(coord: GridCoord<2>) -> (u16, u16) {
+    let [x, y] = coord.axes();
+    (x, y)
 }
 
 fn fixed_offset(offset: &Offset) -> Option<(i16, i16)> {

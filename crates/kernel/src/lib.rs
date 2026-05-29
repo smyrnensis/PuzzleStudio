@@ -10,6 +10,354 @@ pub trait KernelId: Copy {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct GridCoord<const D: usize> {
+    axes: [u16; D],
+}
+
+impl<const D: usize> GridCoord<D> {
+    pub const fn new(axes: [u16; D]) -> Self {
+        Self { axes }
+    }
+
+    pub const fn axes(self) -> [u16; D] {
+        self.axes
+    }
+
+    pub fn checked_offset(self, offset: GridOffset<D>) -> Option<Self> {
+        let mut axes = self.axes;
+        let deltas = offset.deltas();
+        let mut index = 0;
+        while index < D {
+            axes[index] = offset_axis(axes[index], deltas[index])?;
+            index += 1;
+        }
+        Some(Self { axes })
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct GridOffset<const D: usize> {
+    deltas: [i16; D],
+}
+
+impl<const D: usize> GridOffset<D> {
+    pub const ZERO: Self = Self { deltas: [0; D] };
+
+    pub const fn new(deltas: [i16; D]) -> Self {
+        Self { deltas }
+    }
+
+    pub const fn deltas(self) -> [i16; D] {
+        self.deltas
+    }
+
+    pub fn scale(self, factor: i16) -> Self {
+        Self {
+            deltas: self.deltas.map(|delta| delta * factor),
+        }
+    }
+
+    pub fn add(self, other: Self) -> Self {
+        let mut deltas = self.deltas;
+        let other = other.deltas;
+        let mut index = 0;
+        while index < D {
+            deltas[index] += other[index];
+            index += 1;
+        }
+        Self { deltas }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct GridShape<const D: usize> {
+    axes: [u16; D],
+    layer_count: u16,
+}
+
+impl<const D: usize> GridShape<D> {
+    pub fn new(axes: [u16; D], layer_count: u16) -> Option<Self> {
+        if layer_count == 0 || axes.iter().any(|axis| *axis == 0) {
+            return None;
+        }
+        let shape = Self { axes, layer_count };
+        shape.slot_count()?;
+        Some(shape)
+    }
+
+    pub const fn axes(self) -> [u16; D] {
+        self.axes
+    }
+
+    pub const fn layer_count(self) -> u16 {
+        self.layer_count
+    }
+
+    pub fn cell_count(self) -> Option<usize> {
+        self.axes
+            .iter()
+            .try_fold(1usize, |count, axis| count.checked_mul(usize::from(*axis)))
+    }
+
+    pub fn slot_count(self) -> Option<usize> {
+        self.cell_count()?
+            .checked_mul(usize::from(self.layer_count))
+    }
+
+    pub fn contains(self, coord: GridCoord<D>) -> bool {
+        coord
+            .axes()
+            .iter()
+            .zip(self.axes.iter())
+            .all(|(value, limit)| value < limit)
+    }
+
+    pub fn cell_index(self, coord: GridCoord<D>) -> Option<usize> {
+        self.contains(coord)
+            .then(|| self.cell_index_unchecked(coord))
+    }
+
+    pub fn slot_index(self, coord: GridCoord<D>, layer: u16) -> Option<usize> {
+        if layer >= self.layer_count {
+            return None;
+        }
+        Some(self.slot_index_unchecked(coord, layer))
+    }
+
+    pub fn cell_index_unchecked(self, coord: GridCoord<D>) -> usize {
+        let axes = coord.axes();
+        let mut index = 0usize;
+        let mut stride = 1usize;
+        let mut axis_index = 0;
+        while axis_index < D {
+            index += usize::from(axes[axis_index]) * stride;
+            stride *= usize::from(self.axes[axis_index]);
+            axis_index += 1;
+        }
+        index
+    }
+
+    pub fn slot_index_unchecked(self, coord: GridCoord<D>, layer: u16) -> usize {
+        self.cell_index_unchecked(coord) * usize::from(self.layer_count) + usize::from(layer)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GridPatchOp<Position, ObjectId, GlobalId, ScratchId> {
+    Add {
+        position: Position,
+        object: ObjectId,
+    },
+    Remove {
+        position: Position,
+        object: ObjectId,
+    },
+    Move {
+        from: Position,
+        to: Position,
+        object: ObjectId,
+    },
+    Replace {
+        position: Position,
+        remove: ObjectId,
+        add: ObjectId,
+    },
+    UpdateGlobal {
+        global: GlobalId,
+        op: GlobalUpdateOp,
+        value: i64,
+    },
+    SetScratch {
+        position: Position,
+        object: ObjectId,
+        scratch: ScratchId,
+        value: Option<i64>,
+    },
+    RemoveScratch {
+        position: Position,
+        object: ObjectId,
+        scratch: ScratchId,
+        value: Option<i64>,
+        match_value: ScratchValueMatch,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ObjectBinding<ObjectId> {
+    pub binding: u16,
+    pub object: ObjectId,
+}
+
+pub fn bind_object<ObjectId: Copy + Eq>(
+    bindings: &mut Vec<ObjectBinding<ObjectId>>,
+    binding: u16,
+    object: ObjectId,
+) -> bool {
+    if let Some(existing) = bindings
+        .iter()
+        .find(|existing| existing.binding == binding)
+        .map(|existing| existing.object)
+    {
+        return existing == object;
+    }
+    bindings.push(ObjectBinding { binding, object });
+    true
+}
+
+pub fn bound_object<ObjectId: Copy>(
+    bindings: &[ObjectBinding<ObjectId>],
+    binding: u16,
+) -> Option<ObjectId> {
+    bindings
+        .iter()
+        .find(|existing| existing.binding == binding)
+        .map(|existing| existing.object)
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MatchPlacement<const D: usize, ObjectId> {
+    pub components: Vec<ComponentPlacement<D, ObjectId>>,
+}
+
+impl<const D: usize, ObjectId> MatchPlacement<D, ObjectId> {
+    pub fn empty() -> Self {
+        Self {
+            components: Vec::new(),
+        }
+    }
+
+    pub fn new(components: Vec<ComponentPlacement<D, ObjectId>>) -> Self {
+        Self { components }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ComponentPlacement<const D: usize, ObjectId> {
+    pub origin: GridCoord<D>,
+    pub gaps: Vec<u16>,
+    pub object_bindings: Vec<ObjectBinding<ObjectId>>,
+}
+
+impl<const D: usize, ObjectId> ComponentPlacement<D, ObjectId> {
+    pub fn new(
+        origin: GridCoord<D>,
+        gaps: Vec<u16>,
+        object_bindings: Vec<ObjectBinding<ObjectId>>,
+    ) -> Self {
+        Self {
+            origin,
+            gaps,
+            object_bindings,
+        }
+    }
+}
+
+pub fn placement_object_binding<const D: usize, ObjectId: Copy>(
+    placement: &MatchPlacement<D, ObjectId>,
+    binding: u16,
+) -> Option<ObjectId> {
+    placement
+        .components
+        .iter()
+        .flat_map(|component| &component.object_bindings)
+        .find(|object_binding| object_binding.binding == binding)
+        .map(|object_binding| object_binding.object)
+}
+
+pub fn write_position_for_components<const D: usize, ObjectId, Offset>(
+    components: &[ComponentPlacement<D, ObjectId>],
+    component: u16,
+    offset: &Offset,
+    resolve_offset: impl FnOnce(&Offset, &[u16]) -> Option<GridOffset<D>>,
+) -> Option<GridCoord<D>> {
+    let placement = components.get(usize::from(component))?;
+    let offset = resolve_offset(offset, &placement.gaps)?;
+    placement.origin.checked_offset(offset)
+}
+
+pub fn write_position<const D: usize, ObjectId, Offset, Error>(
+    placement: &MatchPlacement<D, ObjectId>,
+    component: u16,
+    offset: &Offset,
+    resolve_offset: impl FnOnce(&Offset, &[u16]) -> Option<GridOffset<D>>,
+    error: impl FnOnce() -> Error,
+) -> Result<GridCoord<D>, Error> {
+    write_position_for_components(&placement.components, component, offset, resolve_offset)
+        .ok_or_else(error)
+}
+
+pub fn complete_component_placements<Component, Placement, Candidate>(
+    components: &[Component],
+    component_index: usize,
+    placements: &mut Vec<Placement>,
+    candidate_origins: &mut impl FnMut(&Component) -> Vec<Candidate>,
+    place_at: &mut impl FnMut(&Component, Candidate) -> Option<Placement>,
+) -> bool {
+    if component_index == components.len() {
+        return true;
+    }
+
+    let component = &components[component_index];
+    for origin in candidate_origins(component) {
+        if let Some(placement) = place_at(component, origin) {
+            placements.push(placement);
+            if complete_component_placements(
+                components,
+                component_index + 1,
+                placements,
+                candidate_origins,
+                place_at,
+            ) {
+                return true;
+            }
+            placements.pop();
+        }
+    }
+
+    false
+}
+
+pub fn collect_component_placements<Component, Placement, Candidate, Match>(
+    components: &[Component],
+    component_index: usize,
+    placements: &mut Vec<Placement>,
+    matches: &mut Vec<Match>,
+    candidate_origins: &mut impl FnMut(&Component) -> Vec<Candidate>,
+    place_at: &mut impl FnMut(&Component, Candidate) -> Option<Placement>,
+    push_match: &mut impl FnMut(&mut Vec<Match>, &[Placement]),
+) {
+    if component_index == components.len() {
+        push_match(matches, placements);
+        return;
+    }
+
+    let component = &components[component_index];
+    for origin in candidate_origins(component) {
+        if let Some(placement) = place_at(component, origin) {
+            placements.push(placement);
+            collect_component_placements(
+                components,
+                component_index + 1,
+                placements,
+                matches,
+                candidate_origins,
+                place_at,
+                push_match,
+            );
+            placements.pop();
+        }
+    }
+}
+
+fn offset_axis(value: u16, delta: i16) -> Option<u16> {
+    let next = i32::from(value) + i32::from(delta);
+    if next < 0 || next > i32::from(u16::MAX) {
+        return None;
+    }
+    Some(next as u16)
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ObjectCellMask(u64);
 
@@ -779,6 +1127,75 @@ mod tests {
             globals.update(TestId(0), GlobalUpdateOp::Divide, 0),
             Err(GlobalValueError::DivisionByZero { .. })
         ));
+    }
+
+    #[test]
+    fn grid_coord_applies_checked_offsets_by_dimension() {
+        let coord = GridCoord::<3>::new([2, 3, 4]);
+
+        assert_eq!(
+            coord.checked_offset(GridOffset::new([-1, 2, 0])),
+            Some(GridCoord::new([1, 5, 4]))
+        );
+        assert_eq!(coord.checked_offset(GridOffset::new([-3, 0, 0])), None);
+        assert_eq!(
+            GridCoord::<2>::new([0, u16::MAX]).checked_offset(GridOffset::new([0, 1])),
+            None
+        );
+    }
+
+    #[test]
+    fn write_position_uses_component_origin_and_gap_resolver() {
+        let placement = MatchPlacement::<2, TestId>::new(vec![
+            ComponentPlacement::new(GridCoord::new([1, 1]), Vec::new(), Vec::new()),
+            ComponentPlacement::new(GridCoord::new([4, 5]), vec![2], Vec::new()),
+        ]);
+
+        let fixed = write_position(
+            &placement,
+            0,
+            &[1, 0],
+            |offset, _gaps| Some(GridOffset::new([offset[0], offset[1]])),
+            || "out",
+        )
+        .unwrap();
+        let with_gap = write_position(
+            &placement,
+            1,
+            &[1, 0],
+            |offset, gaps| Some(GridOffset::new([offset[0] + gaps[0] as i16, offset[1]])),
+            || "out",
+        )
+        .unwrap();
+
+        assert_eq!(fixed, GridCoord::new([2, 1]));
+        assert_eq!(with_gap, GridCoord::new([7, 5]));
+        assert_eq!(
+            write_position(
+                &placement,
+                2,
+                &[0, 0],
+                |offset, _gaps| { Some(GridOffset::new([offset[0], offset[1]])) },
+                || "out"
+            ),
+            Err("out")
+        );
+    }
+
+    #[test]
+    fn grid_shape_indexes_cells_and_slots_by_dimension() {
+        let shape2 = GridShape::<2>::new([4, 3], 2).unwrap();
+        assert_eq!(shape2.cell_count(), Some(12));
+        assert_eq!(shape2.slot_count(), Some(24));
+        assert_eq!(shape2.cell_index(GridCoord::new([2, 1])), Some(6));
+        assert_eq!(shape2.slot_index(GridCoord::new([2, 1]), 1), Some(13));
+        assert_eq!(shape2.cell_index(GridCoord::new([4, 1])), None);
+        assert_eq!(shape2.slot_index(GridCoord::new([2, 1]), 2), None);
+
+        let shape3 = GridShape::<3>::new([4, 3, 2], 2).unwrap();
+        assert_eq!(shape3.cell_count(), Some(24));
+        assert_eq!(shape3.cell_index(GridCoord::new([2, 1, 1])), Some(18));
+        assert_eq!(shape3.slot_index(GridCoord::new([2, 1, 1]), 1), Some(37));
     }
 
     #[test]

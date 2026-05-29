@@ -456,6 +456,7 @@ mod tests {
                     .forbid(WALL),
             ]),
             vec![WriteOp3::Move {
+                component: 0,
                 from_offset: Offset3::ZERO,
                 to_offset: Direction3::RIGHT.offset,
                 object: PLAYER,
@@ -476,11 +477,13 @@ mod tests {
             ]),
             vec![
                 WriteOp3::Move {
+                    component: 0,
                     from_offset: Direction3::RIGHT.offset,
                     to_offset: Direction3::RIGHT.offset.scale(2),
                     object: BOX,
                 },
                 WriteOp3::Move {
+                    component: 0,
                     from_offset: Offset3::ZERO,
                     to_offset: Direction3::RIGHT.offset,
                     object: PLAYER,
