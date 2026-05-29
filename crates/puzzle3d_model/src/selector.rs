@@ -994,10 +994,12 @@ fn lower_write_templates(
             WriteOpTemplate3::Add { offset, object } => {
                 match write_object(catalog, assignments, object)? {
                     WriteObject3::Object(object) => writes.push(WriteOp3::Add {
+                        component: 0,
                         offset: *offset,
                         object,
                     }),
                     WriteObject3::ObjectSet { binding } => writes.push(WriteOp3::AddObjectSet {
+                        component: 0,
                         offset: *offset,
                         binding,
                     }),
@@ -1006,10 +1008,12 @@ fn lower_write_templates(
             WriteOpTemplate3::Remove { offset, object } => {
                 match write_object(catalog, assignments, object)? {
                     WriteObject3::Object(object) => writes.push(WriteOp3::Remove {
+                        component: 0,
                         offset: *offset,
                         object,
                     }),
                     WriteObject3::ObjectSet { binding } => writes.push(WriteOp3::RemoveObjectSet {
+                        component: 0,
                         offset: *offset,
                         binding,
                     }),
@@ -1026,6 +1030,7 @@ fn lower_write_templates(
                 ) {
                     (WriteObject3::Object(remove), WriteObject3::Object(add)) => {
                         writes.push(WriteOp3::Replace {
+                            component: 0,
                             offset: *offset,
                             remove,
                             add,
@@ -1033,20 +1038,24 @@ fn lower_write_templates(
                     }
                     (WriteObject3::ObjectSet { binding }, WriteObject3::Object(add)) => {
                         writes.push(WriteOp3::RemoveObjectSet {
+                            component: 0,
                             offset: *offset,
                             binding,
                         });
                         writes.push(WriteOp3::Add {
+                            component: 0,
                             offset: *offset,
                             object: add,
                         });
                     }
                     (WriteObject3::Object(remove), WriteObject3::ObjectSet { binding }) => {
                         writes.push(WriteOp3::Remove {
+                            component: 0,
                             offset: *offset,
                             object: remove,
                         });
                         writes.push(WriteOp3::AddObjectSet {
+                            component: 0,
                             offset: *offset,
                             binding,
                         });
@@ -1060,10 +1069,12 @@ fn lower_write_templates(
                         },
                     ) => {
                         writes.push(WriteOp3::RemoveObjectSet {
+                            component: 0,
                             offset: *offset,
                             binding: remove_binding,
                         });
                         writes.push(WriteOp3::AddObjectSet {
+                            component: 0,
                             offset: *offset,
                             binding: add_binding,
                         });
@@ -1076,11 +1087,13 @@ fn lower_write_templates(
                 object,
             } => match write_object(catalog, assignments, object)? {
                 WriteObject3::Object(object) => writes.push(WriteOp3::Move {
+                    component: 0,
                     from_offset: *from_offset,
                     to_offset: *to_offset,
                     object,
                 }),
                 WriteObject3::ObjectSet { binding } => writes.push(WriteOp3::MoveObjectSet {
+                    component: 0,
                     from_offset: *from_offset,
                     to_offset: *to_offset,
                     binding,

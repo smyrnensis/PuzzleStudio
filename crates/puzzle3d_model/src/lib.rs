@@ -49,8 +49,8 @@ pub use snapshot::{BoardCell3, BoardSnapshot3};
 pub use sprite::{Sprite3, SpriteColor3, SpriteSet3, SpriteVoxels3};
 pub use state::{CellView3, SlotScratch3, State3, StateError3};
 pub use transition::{
-    Guard3, MatchCell3, ObjectSetMatcher3, ObjectSetScratchPattern3, Pattern3, QueryKind3, Rule3,
-    RuleApplication3, RuleEffect3, ScratchPattern3, TransitionError3, WriteOp3,
+    Guard3, MatchCell3, ObjectSetMatcher3, ObjectSetScratchPattern3, Pattern3, PatternComponent3,
+    QueryKind3, Rule3, RuleApplication3, RuleEffect3, ScratchPattern3, TransitionError3, WriteOp3,
     count_pattern_matches, eval_query_kind, has_pattern_match, transition_once,
     transition_once_all, transition_once_per_level, transition_once_with_input, transition_program,
     transition_program_with_local_frame, transition_program_without_input,
@@ -192,11 +192,13 @@ mod tests {
             ]),
             vec![
                 WriteOp3::Move {
+                    component: 0,
                     from_offset: step,
                     to_offset: two_steps,
                     object: BOX,
                 },
                 WriteOp3::Move {
+                    component: 0,
                     from_offset: Offset3::ZERO,
                     to_offset: step,
                     object: PLAYER,
@@ -215,6 +217,7 @@ mod tests {
                     .forbid(WALL),
             ]),
             vec![WriteOp3::Move {
+                component: 0,
                 from_offset: Offset3::ZERO,
                 to_offset: direction.offset,
                 object: PLAYER,
@@ -410,6 +413,31 @@ horizontal [ Player | no solid ] -> [ | Player ]
         assert!(Direction3::FORWARD.is_horizontal());
         assert!(!Direction3::UP.is_horizontal());
         assert!(Direction3::UP.is_vertical());
+    }
+
+    #[test]
+    fn pattern3_new_creates_single_core_shaped_component() {
+        let pattern = Pattern3::new(vec![
+            MatchCell3::new(Offset3::ZERO).require(PLAYER),
+            MatchCell3::new(Direction3::RIGHT.offset).require(BOX),
+        ]);
+
+        assert_eq!(pattern.components.len(), 1);
+        assert_eq!(pattern.components[0].gap_count, 0);
+        assert_eq!(pattern.components[0].cells, pattern.cells);
+    }
+
+    #[test]
+    fn pattern3_components_keep_compatibility_cells_view() {
+        let pattern = Pattern3::from_components(vec![
+            PatternComponent3::new(vec![MatchCell3::new(Offset3::ZERO).require(PLAYER)]),
+            PatternComponent3::new(vec![MatchCell3::new(Direction3::RIGHT.offset).require(BOX)]),
+        ]);
+
+        assert_eq!(pattern.components.len(), 2);
+        assert_eq!(pattern.cells.len(), 2);
+        assert_eq!(pattern.cells[0].require_objects, vec![PLAYER]);
+        assert_eq!(pattern.cells[1].require_objects, vec![BOX]);
     }
 
     #[test]
@@ -1144,6 +1172,7 @@ horizontal [ Player | no solid ] -> [ | Player ]
             assert_eq!(
                 rule.writes,
                 vec![WriteOp3::Move {
+                    component: 0,
                     from_offset: Offset3::ZERO,
                     to_offset: Direction3::RIGHT.offset,
                     object: required,
@@ -1172,6 +1201,7 @@ horizontal [ Player | no solid ] -> [ | Player ]
         assert_eq!(
             rules[0].writes,
             vec![WriteOp3::Add {
+                component: 0,
                 offset: Direction3::UP.offset,
                 object: WALL,
             }]
@@ -1222,6 +1252,7 @@ horizontal [ Player | no solid ] -> [ | Player ]
         assert_eq!(
             rules[0].writes,
             vec![WriteOp3::Replace {
+                component: 0,
                 offset: Offset3::ZERO,
                 remove: MARKER_UP,
                 add: WALL,
@@ -1230,6 +1261,7 @@ horizontal [ Player | no solid ] -> [ | Player ]
         assert_eq!(
             rules[1].writes,
             vec![WriteOp3::Replace {
+                component: 0,
                 offset: Offset3::ZERO,
                 remove: MARKER_DOWN,
                 add: WALL,
@@ -1383,6 +1415,7 @@ horizontal [ Player | no solid ] -> [ | Player ]
         assert_eq!(
             rules[1].writes,
             vec![WriteOp3::Move {
+                component: 0,
                 from_offset: Offset3::ZERO,
                 to_offset: Direction3::RIGHT.offset,
                 object: PLAYER,
@@ -1414,6 +1447,7 @@ horizontal [ Player | no solid ] -> [ | Player ]
         assert_eq!(
             rules[0].writes,
             vec![WriteOp3::Move {
+                component: 0,
                 from_offset: Direction3::FORWARD.offset,
                 to_offset: Direction3::FORWARD.offset.scale(2),
                 object: BOX,
@@ -1444,6 +1478,7 @@ horizontal [ Player | no solid ] -> [ | Player ]
             rule.pattern.cells[1].offset == Direction3::RIGHT.offset
                 && rule.writes
                     == vec![WriteOp3::Move {
+                        component: 0,
                         from_offset: Offset3::ZERO,
                         to_offset: Direction3::RIGHT.offset,
                         object: PLAYER,
@@ -1453,6 +1488,7 @@ horizontal [ Player | no solid ] -> [ | Player ]
             rule.pattern.cells[1].offset == Direction3::UP.offset
                 && rule.writes
                     == vec![WriteOp3::Move {
+                        component: 0,
                         from_offset: Offset3::ZERO,
                         to_offset: Direction3::UP.offset,
                         object: PLAYER,
@@ -1493,6 +1529,7 @@ horizontal [ Player | no solid ] -> [ | Player ]
         assert_eq!(
             parsed.rules[1].writes,
             vec![WriteOp3::Move {
+                component: 0,
                 from_offset: Offset3::ZERO,
                 to_offset: Direction3::RIGHT.offset,
                 object: ObjectId(1),
@@ -2055,11 +2092,13 @@ right [ solid#1 | solid#2 ] -> [ solid#2 | solid#1 ]
             rule.pattern.cells[0].require_objects == vec![ObjectId(1)]
                 && rule.pattern.cells[1].require_objects == vec![ObjectId(2)]
                 && rule.writes.contains(&WriteOp3::Move {
+                    component: 0,
                     from_offset: Offset3::ZERO,
                     to_offset: Direction3::RIGHT.offset,
                     object: ObjectId(1),
                 })
                 && rule.writes.contains(&WriteOp3::Move {
+                    component: 0,
                     from_offset: Direction3::RIGHT.offset,
                     to_offset: Offset3::ZERO,
                     object: ObjectId(2),
@@ -2119,6 +2158,7 @@ right:up [ Player | Box ] -> [ | Player | Box ]
         assert_eq!(
             parsed.rules[0].writes[0],
             WriteOp3::Move {
+                component: 0,
                 from_offset: Offset3::ZERO,
                 to_offset: Direction3::RIGHT.offset,
                 object: ObjectId(1),
@@ -3534,6 +3574,7 @@ input backward [ Player | ] -> [ | Player ]
         let no_progress = Rule3::repeated(
             Pattern3::new(vec![MatchCell3::new(Offset3::ZERO).require(PLAYER)]),
             vec![WriteOp3::Replace {
+                component: 0,
                 offset: Offset3::ZERO,
                 remove: PLAYER,
                 add: PLAYER,
@@ -3543,6 +3584,37 @@ input backward [ Player | ] -> [ | Player ]
         let next = transition_repeated(&game, &state, &no_progress).unwrap();
 
         assert_eq!(next, state);
+    }
+
+    #[test]
+    fn write_component_selects_the_matching_3d_component_origin() {
+        let game = game();
+        let mut state = empty_state(3, 1, 1);
+        state
+            .place_object(&game, Coord3::new(0, 0, 0), PLAYER)
+            .unwrap();
+        state
+            .place_object(&game, Coord3::new(2, 0, 0), BOX)
+            .unwrap();
+
+        let replace_second_component = Rule3::once(
+            Pattern3::from_components(vec![
+                PatternComponent3::new(vec![MatchCell3::new(Offset3::ZERO).require(PLAYER)]),
+                PatternComponent3::new(vec![MatchCell3::new(Offset3::ZERO).require(BOX)]),
+            ]),
+            vec![WriteOp3::Replace {
+                component: 1,
+                offset: Offset3::ZERO,
+                remove: BOX,
+                add: WALL,
+            }],
+        );
+
+        let next = transition_once(&game, &state, &replace_second_component).unwrap();
+
+        assert!(next.has_object(&game, Coord3::new(0, 0, 0), PLAYER));
+        assert!(!next.has_object(&game, Coord3::new(2, 0, 0), BOX));
+        assert!(next.has_object(&game, Coord3::new(2, 0, 0), WALL));
     }
 
     #[test]
@@ -3603,11 +3675,13 @@ input backward [ Player | ] -> [ | Player ]
             ]),
             vec![
                 WriteOp3::Replace {
+                    component: 0,
                     offset: Offset3::ZERO,
                     remove: PLAYER,
                     add: BOX,
                 },
                 WriteOp3::Remove {
+                    component: 0,
                     offset: Direction3::RIGHT.offset,
                     object: PLAYER,
                 },
@@ -3638,6 +3712,7 @@ input backward [ Player | ] -> [ | Player ]
         let player_to_box = Rule3::once_per_level(
             Pattern3::new(vec![MatchCell3::new(Offset3::ZERO).require(PLAYER)]),
             vec![WriteOp3::Replace {
+                component: 0,
                 offset: Offset3::ZERO,
                 remove: PLAYER,
                 add: BOX,
@@ -3662,6 +3737,7 @@ input backward [ Player | ] -> [ | Player ]
         let player_to_box = Rule3::once_per_level(
             Pattern3::new(vec![MatchCell3::new(Offset3::ZERO).require(PLAYER)]),
             vec![WriteOp3::Replace {
+                component: 0,
                 offset: Offset3::ZERO,
                 remove: PLAYER,
                 add: BOX,
@@ -3750,6 +3826,67 @@ input backward [ Player | ] -> [ | Player ]
         assert_eq!(state.global_value(GlobalId3(0)), Some(5));
         assert!(state.has_scratch(&game, Coord3::new(0, 0, 0), PLAYER, ScratchId3(1), Some(7)));
         assert!(state.has_cell_scratch_key(Coord3::new(0, 0, 0), ScratchId3(2)));
+    }
+
+    #[test]
+    fn rule_effect_can_update_3d_visible_global_like_core() {
+        let game = game();
+        let mut state = State3::empty_with_globals(Size3::new(1, 1, 1), 1, vec![2]).unwrap();
+        state
+            .place_object(&game, Coord3::new(0, 0, 0), PLAYER)
+            .unwrap();
+        let rule = Rule3::once(
+            Pattern3::new(vec![MatchCell3::new(Offset3::ZERO).require(PLAYER)]),
+            Vec::new(),
+        )
+        .with_effects(vec![RuleEffect3::UpdateGlobal {
+            global: GlobalId3(0),
+            op: GlobalUpdateOp::Add,
+            value: 4,
+        }]);
+
+        let next = transition_once(&game, &state, &rule).unwrap();
+
+        assert_eq!(next.global_value(GlobalId3(0)), Some(6));
+    }
+
+    #[test]
+    fn write_op3_can_set_scratch_for_later_rule_like_core() {
+        let game = game();
+        let mut state = empty_state(1, 1, 1);
+        state
+            .place_object(&game, Coord3::new(0, 0, 0), PLAYER)
+            .unwrap();
+        let mark_player = Rule3::once(
+            Pattern3::new(vec![MatchCell3::new(Offset3::ZERO).require(PLAYER)]),
+            vec![WriteOp3::SetScratch {
+                component: 0,
+                offset: Offset3::ZERO,
+                object: PLAYER,
+                scratch: ScratchId3(1),
+                value: Some(7),
+            }],
+        );
+        let consume_mark = Rule3::once(
+            Pattern3::new(vec![MatchCell3::new(Offset3::ZERO).require_scratch(
+                PLAYER,
+                ScratchId3(1),
+                Some(7),
+            )]),
+            vec![WriteOp3::Replace {
+                component: 0,
+                offset: Offset3::ZERO,
+                remove: PLAYER,
+                add: WALL,
+            }],
+        );
+
+        let next =
+            transition_program_without_input(&game, &state, &[mark_player, consume_mark]).unwrap();
+
+        assert!(!next.has_object(&game, Coord3::new(0, 0, 0), PLAYER));
+        assert!(next.has_object(&game, Coord3::new(0, 0, 0), WALL));
+        assert!(!next.has_scratch(&game, Coord3::new(0, 0, 0), PLAYER, ScratchId3(1), Some(7)));
     }
 
     #[test]
@@ -3906,6 +4043,7 @@ input backward [ Player | ] -> [ | Player ]
         let rule = Rule3::once_all(
             Pattern3::new(vec![MatchCell3::new(Offset3::ZERO).require(BOX)]),
             vec![WriteOp3::Replace {
+                component: 0,
                 offset: Offset3::ZERO,
                 remove: BOX,
                 add: WALL,

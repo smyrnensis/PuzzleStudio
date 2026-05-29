@@ -1,7 +1,7 @@
 use crate::{Coord3, Game3, GlobalId3, LayerId, ObjectId, RuleId3, ScratchId3, Size3};
 use puzzle_kernel::{
-    FnvBuilder, GlobalUpdateOp, GlobalValueError, ObjectCellMask, ScratchSpace, ScratchValue,
-    VisibleGlobals, fnv_mix,
+    FnvBuilder, GlobalUpdateOp, GlobalValueError, GridShape, ObjectCellMask, ScratchSpace,
+    ScratchValue, VisibleGlobals, fnv_mix,
 };
 
 #[derive(Clone, Debug)]
@@ -66,16 +66,9 @@ impl State3 {
         layer_count: u16,
         visible_globals: Vec<i64>,
     ) -> Result<Self, StateError3> {
-        if size.width == 0 || size.height == 0 || size.depth == 0 || layer_count == 0 {
-            return Err(StateError3::InvalidDimensions);
-        }
-        let cell_count = usize::from(size.width)
-            .checked_mul(usize::from(size.depth))
-            .and_then(|count| count.checked_mul(usize::from(size.height)))
-            .ok_or(StateError3::InvalidDimensions)?;
-        let slot_count = cell_count
-            .checked_mul(usize::from(layer_count))
-            .ok_or(StateError3::InvalidDimensions)?;
+        let shape = grid_shape(size, layer_count).ok_or(StateError3::InvalidDimensions)?;
+        let cell_count = shape.cell_count().ok_or(StateError3::InvalidDimensions)?;
+        let slot_count = shape.slot_count().ok_or(StateError3::InvalidDimensions)?;
         let mut state = Self {
             size,
             layer_count,
@@ -439,10 +432,7 @@ impl State3 {
     }
 
     pub(crate) fn check_pos(&self, position: Coord3) -> Result<(), StateError3> {
-        if position.x >= self.size.width
-            || position.y >= self.size.depth
-            || position.z >= self.size.height
-        {
+        if !self.shape().contains(position.into()) {
             return Err(StateError3::PositionOutOfBounds { position });
         }
         Ok(())
@@ -457,18 +447,27 @@ impl State3 {
         if layer.0 >= self.layer_count {
             return Err(StateError3::LayerOutOfBounds { layer });
         }
-        Ok(self.slot_index_unchecked(position, layer))
+        self.shape()
+            .slot_index(position.into(), layer.0)
+            .ok_or(StateError3::LayerOutOfBounds { layer })
     }
 
     pub(crate) fn slot_index_unchecked(&self, position: Coord3, layer: LayerId) -> usize {
-        (self.cell_index_unchecked(position) * usize::from(self.layer_count)) + usize::from(layer.0)
+        self.shape().slot_index_unchecked(position.into(), layer.0)
     }
 
     pub(crate) fn cell_index_unchecked(&self, position: Coord3) -> usize {
-        ((usize::from(position.z) * usize::from(self.size.depth)) + usize::from(position.y))
-            * usize::from(self.size.width)
-            + usize::from(position.x)
+        self.shape().cell_index_unchecked(position.into())
     }
+
+    fn shape(&self) -> GridShape<3> {
+        grid_shape(self.size, self.layer_count)
+            .expect("state dimensions are validated at construction")
+    }
+}
+
+fn grid_shape(size: Size3, layer_count: u16) -> Option<GridShape<3>> {
+    GridShape::new([size.width, size.depth, size.height], layer_count)
 }
 
 fn checked_object_layer(game: &Game3, object: ObjectId) -> Result<LayerId, StateError3> {

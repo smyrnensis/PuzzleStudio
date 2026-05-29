@@ -429,6 +429,16 @@ fn write_rule_json(out: &mut String, rule: &Rule3, index: usize) {
 
 fn write_rule_effect_json(out: &mut String, effect: &RuleEffect3) {
     match effect {
+        RuleEffect3::UpdateGlobal { global, op, value } => {
+            write!(
+                out,
+                "{{ \"kind\": \"update_global\", \"global\": {}, \"op\": \"{}\", \"value\": {} }}",
+                global.0,
+                global_update_op_name(*op),
+                value
+            )
+            .unwrap();
+        }
         RuleEffect3::SetCameraYaw(value) => {
             write!(
                 out,
@@ -456,6 +466,17 @@ fn write_rule_effect_json(out: &mut String, effect: &RuleEffect3) {
         RuleEffect3::ResetCamera => {
             out.push_str("{ \"kind\": \"reset_camera\" }");
         }
+    }
+}
+
+fn global_update_op_name(op: puzzle_kernel::GlobalUpdateOp) -> &'static str {
+    match op {
+        puzzle_kernel::GlobalUpdateOp::Set => "set",
+        puzzle_kernel::GlobalUpdateOp::Add => "add",
+        puzzle_kernel::GlobalUpdateOp::Subtract => "subtract",
+        puzzle_kernel::GlobalUpdateOp::Multiply => "multiply",
+        puzzle_kernel::GlobalUpdateOp::Divide => "divide",
+        puzzle_kernel::GlobalUpdateOp::Remainder => "remainder",
     }
 }
 
@@ -517,58 +538,77 @@ fn write_object_id_array(out: &mut String, objects: &[ObjectId]) {
 
 fn write_write_op_json(out: &mut String, write_op: &WriteOp3) {
     match write_op {
-        WriteOp3::Add { offset, object } => {
+        WriteOp3::Add {
+            component,
+            offset,
+            object,
+        } => {
             write!(
                 out,
-                "{{ \"kind\": \"add\", \"offset\": {{ \"dx\": {}, \"dy\": {}, \"dz\": {} }}, \"object\": {} }}",
-                offset.dx, offset.dy, offset.dz, object.0
+                "{{ \"kind\": \"add\", \"component\": {}, \"offset\": {{ \"dx\": {}, \"dy\": {}, \"dz\": {} }}, \"object\": {} }}",
+                component, offset.dx, offset.dy, offset.dz, object.0
             )
             .unwrap();
         }
-        WriteOp3::AddObjectSet { offset, binding } => {
+        WriteOp3::AddObjectSet {
+            component,
+            offset,
+            binding,
+        } => {
             write!(
                 out,
-                "{{ \"kind\": \"add_object_set\", \"offset\": {{ \"dx\": {}, \"dy\": {}, \"dz\": {} }}, \"binding\": {} }}",
-                offset.dx, offset.dy, offset.dz, binding
+                "{{ \"kind\": \"add_object_set\", \"component\": {}, \"offset\": {{ \"dx\": {}, \"dy\": {}, \"dz\": {} }}, \"binding\": {} }}",
+                component, offset.dx, offset.dy, offset.dz, binding
             )
             .unwrap();
         }
-        WriteOp3::Remove { offset, object } => {
+        WriteOp3::Remove {
+            component,
+            offset,
+            object,
+        } => {
             write!(
                 out,
-                "{{ \"kind\": \"remove\", \"offset\": {{ \"dx\": {}, \"dy\": {}, \"dz\": {} }}, \"object\": {} }}",
-                offset.dx, offset.dy, offset.dz, object.0
+                "{{ \"kind\": \"remove\", \"component\": {}, \"offset\": {{ \"dx\": {}, \"dy\": {}, \"dz\": {} }}, \"object\": {} }}",
+                component, offset.dx, offset.dy, offset.dz, object.0
             )
             .unwrap();
         }
-        WriteOp3::RemoveObjectSet { offset, binding } => {
+        WriteOp3::RemoveObjectSet {
+            component,
+            offset,
+            binding,
+        } => {
             write!(
                 out,
-                "{{ \"kind\": \"remove_object_set\", \"offset\": {{ \"dx\": {}, \"dy\": {}, \"dz\": {} }}, \"binding\": {} }}",
-                offset.dx, offset.dy, offset.dz, binding
+                "{{ \"kind\": \"remove_object_set\", \"component\": {}, \"offset\": {{ \"dx\": {}, \"dy\": {}, \"dz\": {} }}, \"binding\": {} }}",
+                component, offset.dx, offset.dy, offset.dz, binding
             )
             .unwrap();
         }
         WriteOp3::Replace {
+            component,
             offset,
             remove,
             add,
         } => {
             write!(
                 out,
-                "{{ \"kind\": \"replace\", \"offset\": {{ \"dx\": {}, \"dy\": {}, \"dz\": {} }}, \"remove\": {}, \"add\": {} }}",
-                offset.dx, offset.dy, offset.dz, remove.0, add.0
+                "{{ \"kind\": \"replace\", \"component\": {}, \"offset\": {{ \"dx\": {}, \"dy\": {}, \"dz\": {} }}, \"remove\": {}, \"add\": {} }}",
+                component, offset.dx, offset.dy, offset.dz, remove.0, add.0
             )
             .unwrap();
         }
         WriteOp3::Move {
+            component,
             from_offset,
             to_offset,
             object,
         } => {
             write!(
                 out,
-                "{{ \"kind\": \"move\", \"fromOffset\": {{ \"dx\": {}, \"dy\": {}, \"dz\": {} }}, \"toOffset\": {{ \"dx\": {}, \"dy\": {}, \"dz\": {} }}, \"object\": {} }}",
+                "{{ \"kind\": \"move\", \"component\": {}, \"fromOffset\": {{ \"dx\": {}, \"dy\": {}, \"dz\": {} }}, \"toOffset\": {{ \"dx\": {}, \"dy\": {}, \"dz\": {} }}, \"object\": {} }}",
+                component,
                 from_offset.dx,
                 from_offset.dy,
                 from_offset.dz,
@@ -580,13 +620,15 @@ fn write_write_op_json(out: &mut String, write_op: &WriteOp3) {
             .unwrap();
         }
         WriteOp3::MoveObjectSet {
+            component,
             from_offset,
             to_offset,
             binding,
         } => {
             write!(
                 out,
-                "{{ \"kind\": \"move_object_set\", \"fromOffset\": {{ \"dx\": {}, \"dy\": {}, \"dz\": {} }}, \"toOffset\": {{ \"dx\": {}, \"dy\": {}, \"dz\": {} }}, \"binding\": {} }}",
+                "{{ \"kind\": \"move_object_set\", \"component\": {}, \"fromOffset\": {{ \"dx\": {}, \"dy\": {}, \"dz\": {} }}, \"toOffset\": {{ \"dx\": {}, \"dy\": {}, \"dz\": {} }}, \"binding\": {} }}",
+                component,
                 from_offset.dx,
                 from_offset.dy,
                 from_offset.dz,
@@ -597,6 +639,96 @@ fn write_write_op_json(out: &mut String, write_op: &WriteOp3) {
             )
             .unwrap();
         }
+        WriteOp3::SetScratch {
+            component,
+            offset,
+            object,
+            scratch,
+            value,
+        } => {
+            write!(
+                out,
+                "{{ \"kind\": \"set_scratch\", \"component\": {}, \"offset\": {{ \"dx\": {}, \"dy\": {}, \"dz\": {} }}, \"object\": {}, \"scratch\": {}, \"value\": ",
+                component, offset.dx, offset.dy, offset.dz, object.0, scratch.0
+            )
+            .unwrap();
+            write_optional_i64(out, *value);
+            out.push_str(" }");
+        }
+        WriteOp3::SetObjectSetScratch {
+            component,
+            offset,
+            binding,
+            scratch,
+            value,
+        } => {
+            write!(
+                out,
+                "{{ \"kind\": \"set_object_set_scratch\", \"component\": {}, \"offset\": {{ \"dx\": {}, \"dy\": {}, \"dz\": {} }}, \"binding\": {}, \"scratch\": {}, \"value\": ",
+                component, offset.dx, offset.dy, offset.dz, binding, scratch.0
+            )
+            .unwrap();
+            write_optional_i64(out, *value);
+            out.push_str(" }");
+        }
+        WriteOp3::RemoveScratch {
+            component,
+            offset,
+            object,
+            scratch,
+            value,
+            match_value,
+        } => {
+            write!(
+                out,
+                "{{ \"kind\": \"remove_scratch\", \"component\": {}, \"offset\": {{ \"dx\": {}, \"dy\": {}, \"dz\": {} }}, \"object\": {}, \"scratch\": {}, \"value\": ",
+                component, offset.dx, offset.dy, offset.dz, object.0, scratch.0
+            )
+            .unwrap();
+            write_optional_i64(out, *value);
+            write!(
+                out,
+                ", \"match\": \"{}\" }}",
+                scratch_value_match_name(*match_value)
+            )
+            .unwrap();
+        }
+        WriteOp3::RemoveObjectSetScratch {
+            component,
+            offset,
+            binding,
+            scratch,
+            value,
+            match_value,
+        } => {
+            write!(
+                out,
+                "{{ \"kind\": \"remove_object_set_scratch\", \"component\": {}, \"offset\": {{ \"dx\": {}, \"dy\": {}, \"dz\": {} }}, \"binding\": {}, \"scratch\": {}, \"value\": ",
+                component, offset.dx, offset.dy, offset.dz, binding, scratch.0
+            )
+            .unwrap();
+            write_optional_i64(out, *value);
+            write!(
+                out,
+                ", \"match\": \"{}\" }}",
+                scratch_value_match_name(*match_value)
+            )
+            .unwrap();
+        }
+    }
+}
+
+fn write_optional_i64(out: &mut String, value: Option<i64>) {
+    match value {
+        Some(value) => write!(out, "{}", value).unwrap(),
+        None => out.push_str("null"),
+    }
+}
+
+fn scratch_value_match_name(match_value: puzzle_kernel::ScratchValueMatch) -> &'static str {
+    match match_value {
+        puzzle_kernel::ScratchValueMatch::Any => "any",
+        puzzle_kernel::ScratchValueMatch::Exact => "exact",
     }
 }
 

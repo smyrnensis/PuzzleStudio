@@ -2196,6 +2196,20 @@ step board
     }
 
     #[test]
+    fn puzzlescript_import_requires_explicit_convert_action() {
+        assert!(EDITOR_HTML.contains(r#"id="psImportConvertButton""#));
+        assert!(EDITOR_HTML.contains("lucide-file-plus-icon lucide-file-plus"));
+        assert!(EDITOR_JS.contains("function resetPuzzleScriptImportConversion()"));
+        assert!(EDITOR_JS.contains(
+            "psImportSourceInput?.addEventListener(\"input\", resetPuzzleScriptImportConversion);"
+        ));
+        assert!(EDITOR_JS.contains("psImportConvertButton?.addEventListener(\"click\", () => {"));
+        assert!(!EDITOR_JS.contains("schedulePuzzleScriptImportConversion"));
+        assert!(!EDITOR_JS.contains("await convertPuzzleScriptImport()"));
+        assert!(EDITOR_CSS.contains(".ps-import-actions .source-action-button:hover:not(:disabled)"));
+    }
+
+    #[test]
     fn level_editor_grid_is_owned_by_editor_toggle() {
         assert!(EDITOR_HTML.contains(r#"id="levelGridButton""#));
         assert!(

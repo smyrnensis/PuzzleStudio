@@ -46,69 +46,29 @@
 
     window.THREE = THREE;
 
-    await new Promise((resolve, reject) => {
+    await loadScript("upstream/PuzzleScriptNext/src/js/runtime3d.js");
+    await loadScript("upstream/PuzzleScriptNext/src/js/render_frame3d.js");
+    await loadScript("upstream/PuzzleScriptNext/src/js/three_renderer3d.js");
+
+    function loadScript(src) {
+      return new Promise((resolve, reject) => {
       const script = document.createElement("script");
-      script.src = "upstream/PuzzleScriptNext/src/js/three_renderer3d.js";
+        script.src = src;
       script.onload = resolve;
-      script.onerror = () => reject(new Error("Failed to load three_renderer3d.js"));
+        script.onerror = () => reject(new Error(`Failed to load ${src}`));
       document.head.append(script);
-    });
-
-    const frame = {
-      model: "psnext-grid3",
-      size: { width: 5, height: 3, depth: 4, layerCount: 3 },
-      spriteGrid: { width: 5, height: 5, depth: 1 },
-      objects: [
-        { id: 0, name: "background", layer: 0, visual: { color: "#263238" } },
-        { id: 1, name: "wall", layer: 1, visual: { color: "#94a3b8" } },
-        { id: 2, name: "player", layer: 2, visual: { color: "#f97316" } },
-        { id: 3, name: "crate", layer: 2, visual: { color: "#22c55e" } },
-        { id: 4, name: "goal", layer: 1, visual: { color: "#38bdf8" } }
-      ],
-      drawPlan: {
-        objectGroups: [
-          { firstObjectId: 0, objectCount: 1 },
-          { firstObjectId: 1, objectCount: 1 },
-          { firstObjectId: 2, objectCount: 3 }
-        ],
-        cellOrder: []
-      },
-      cells: [],
-      view: {
-        projection: "orthographic",
-        cameraPreset: "front-right-top",
-        visibility: "all"
-      }
-    };
-
-    function index(x, y, z) {
-      return x * frame.size.height * frame.size.depth + y * frame.size.depth + z;
-    }
-
-    for (let x = 0; x < frame.size.width; x++) {
-      for (let y = 0; y < frame.size.height; y++) {
-        for (let z = 0; z < frame.size.depth; z++) {
-          const objectIds = [0];
-          if (y === 0 && (x === 0 || z === 0 || x === frame.size.width - 1 || z === frame.size.depth - 1)) {
-            objectIds.push(1);
-          }
-          if (x === 2 && y === 1 && z === 1) objectIds.push(2);
-          if (x === 3 && y === 1 && z === 1) objectIds.push(3);
-          if (x === 3 && y === 0 && z === 2) objectIds.push(4);
-          frame.cells[index(x, y, z)] = { index: index(x, y, z), x, y, z, objectIds };
-        }
-      }
-    }
-
-    frame.drawPlan.cellOrder = frame.cells
-      .map((cell) => cell.index)
-      .sort((a, b) => {
-        const left = frame.cells[a];
-        const right = frame.cells[b];
-        const dl = left.x - left.y - left.z;
-        const dr = right.x - right.y - right.z;
-        return dl - dr;
       });
+    }
+
+    const source = await loadPuzzleSource();
+    const state = buildMicrobanCompiledState(source);
+    const runtime = buildMicrobanRuntime(state);
+    const frame = window.Puzzle3DRenderFrame.buildRenderFrame3D(runtime, state, {
+      view: state.render3d.view
+    });
+    window.puzzle3DCompiledState = state;
+    window.puzzle3DRuntime = runtime;
+    window.puzzle3DRenderFrame = frame;
 
     try {
       const result = window.Puzzle3DThreeRenderer.renderToCanvas(
@@ -116,11 +76,316 @@
         frame
       );
       document.getElementById("status").textContent = result.rendered
-        ? `Rendered ${result.instances} instances with Three.js`
+        ? `Microban 3D: ${frame.levelName}; ${result.instances} sprite voxels`
         : "Frame ready; Three.js was not available";
     } catch (error) {
       document.getElementById("status").textContent = error.message;
       throw error;
+    }
+
+    async function loadPuzzleSource() {
+      const candidates = [
+        "/games/spec_3d.puzzle",
+        "../games/spec_3d.puzzle",
+        "games/spec_3d.puzzle"
+      ];
+      const errors = [];
+      for (const url of candidates) {
+        try {
+          const response = await fetch(url);
+          if (response.ok)
+            return await response.text();
+          errors.push(`${url}: ${response.status}`);
+        } catch (error) {
+          errors.push(`${url}: ${error.message}`);
+        }
+      }
+      throw new Error(`Could not load Microban 3D .puzzle (${errors.join(", ")})`);
+    }
+
+    function buildMicrobanCompiledState(source) {
+      const model = extractBlock(source, "puzzle3 sokoban");
+      const levels = extractBlock(source, "levels3 microban of sokoban");
+      const sprites = extractBlock(source, "sprites3 basic of sokoban");
+      const render = parseRenderSettings(extractBlock(model, "render"));
+      const layerNames = parseLayerObjects(model);
+      const legend = parseLegend(extractBlock(levels, "legend"));
+      const levelName = "microban_01";
+      const slices = parseLevelSlices(extractBlock(levels, `level ${levelName}`));
+      const spriteByName = parseSprites(sprites);
+      const objectNames = layerNames.flat();
+      const objectIdByName = new Map(objectNames.map((name, id) => [name, id]));
+      const objectLayerByName = new Map();
+      layerNames.forEach((names, layer) => names.forEach((name) => objectLayerByName.set(name, layer)));
+      const size = {
+        width: slices[0][0].length,
+        height: slices.length,
+        depth: slices[0].length,
+        layerCount: layerNames.length
+      };
+      const cellCount = size.width * size.height * size.depth;
+      const objects = new Int32Array(cellCount);
+
+      for (let x = 0; x < size.width; x++) {
+        for (let y = 0; y < size.height; y++) {
+          for (let z = 0; z < size.depth; z++) {
+            const char = slices[y][z][x];
+            const names = legend.get(char) || [];
+            const objectIds = names
+              .map((name) => objectIdByName.get(name))
+              .filter((id) => id != null);
+            const cellIndex = index3(x, y, z, size);
+            objects[cellIndex] = objectIds.reduce((mask, id) => mask | (1 << id), 0);
+          }
+        }
+      }
+
+      return {
+        metadata: {},
+        default_metadata: {},
+        render3d: {
+          view: {
+            projection: "perspective",
+            fov: 34,
+            distanceScale: 4.2,
+            ...render.camera,
+            shade: render.shade,
+            visibility: "all"
+          }
+        },
+        source: "games/spec_3d.puzzle",
+        levelName,
+        objectCount: objectNames.length,
+        idDict: objectNames,
+        objects: Object.fromEntries(objectNames.map((name, id) => [name, {
+          id,
+          name,
+          layer: objectLayerByName.get(name) || 0,
+          colors: spriteByName[name] ? spriteByName[name].colors : ["#ff00ff"],
+          sprite3matrix: spriteByName[name] ? spriteByName[name].sprite3matrix : null,
+          sprite3offset: { row: 0, col: 0, slice: 0 }
+        }])),
+        collisionLayers: layerNames,
+        collisionLayerGroups: contiguousObjectGroups(layerNames),
+        layerMasks: layerNames.map((names) => {
+          return new Int32Array([names.reduce((mask, name) => mask | (1 << objectIdByName.get(name)), 0)]);
+        }),
+        playerMask: new Int32Array([1 << objectIdByName.get("Player")]),
+        levels3: [{
+          is3d: true,
+          title: levelName,
+          width: size.width,
+          height: size.height,
+          depth: size.depth,
+          layerCount: size.layerCount,
+          cellCount,
+          n_tiles: cellCount,
+          strideObj: 1,
+          STRIDE_OBJ: 1,
+          objects
+        }]
+      };
+    }
+
+    function buildMicrobanRuntime(state) {
+      const level = state.levels3[0];
+      const boardSlot = {
+        width: level.width,
+        height: level.height,
+        depth: level.depth,
+        cellCount: level.cellCount,
+        layerCount: level.layerCount,
+        strideObj: level.strideObj,
+        strideMov: 1,
+        movementBits: 8,
+        movementMask: 0xff,
+        cells: level.objects,
+        movements: new Int32Array(level.cellCount),
+        layerMasks: state.layerMasks,
+        objectLayers: state.idDict.map((name) => state.objects[name].layer),
+        objectCount: state.objectCount,
+        playerMask: state.playerMask,
+        deltas: {
+          left: [-1, 0, 0],
+          right: [1, 0, 0],
+          up: [0, -1, 0],
+          down: [0, 1, 0],
+          front: [0, 0, -1],
+          back: [0, 0, 1]
+        }
+      };
+      return { board: window.Runtime3D.createBoard(boardSlot) };
+    }
+
+    function extractBlock(source, header) {
+      const start = source.indexOf(`${header} {`);
+      if (start < 0)
+        throw new Error(`Missing block: ${header}`);
+      const open = source.indexOf("{", start);
+      let depth = 0;
+      for (let i = open; i < source.length; i++) {
+        if (source[i] === "{") depth++;
+        if (source[i] === "}") depth--;
+        if (depth === 0)
+          return source.slice(open + 1, i);
+      }
+      throw new Error(`Unclosed block: ${header}`);
+    }
+
+    function parseLayerObjects(modelBlock) {
+      const layersBlock = extractBlock(modelBlock, "layers");
+      return lines(layersBlock).map((line) => {
+        const parts = line.split("=");
+        const names = (parts[1] || parts[0]).trim().split(/\s+/).filter(Boolean);
+        return names;
+      });
+    }
+
+    function parseRenderSettings(renderBlock) {
+      return {
+        camera: parseCameraSettings(extractBlock(renderBlock, "camera")),
+        shade: !lines(renderBlock).some((line) => /^shade\s*=\s*false$/i.test(line) || /^no\s+shade$/i.test(line))
+      };
+    }
+
+    function parseCameraSettings(cameraBlock) {
+      const camera = {};
+      for (const line of lines(cameraBlock)) {
+        const match = line.match(/^([a-z_]+)\s*=\s*(-?\d+(?:\.\d+)?)$/i);
+        if (match)
+          camera[match[1]] = Number(match[2]);
+      }
+      return camera;
+    }
+
+    function parseLegend(legendBlock) {
+      const legend = new Map();
+      for (const line of lines(legendBlock)) {
+        const match = line.match(/^(.+?)\s*=\s*(.+)$/);
+        if (!match)
+          continue;
+        const char = match[1].trim();
+        const names = match[2].trim() === "empty"
+          ? []
+          : match[2].trim().split(/\s+/).filter(Boolean);
+        legend.set(char, names);
+      }
+      return legend;
+    }
+
+    function parseLevelSlices(levelBlock) {
+      const slices = [];
+      let current = [];
+      for (const raw of levelBlock.split(/\r?\n/)) {
+        const line = raw.trimEnd();
+        if (!line.trim()) {
+          if (current.length) {
+            slices.push(current);
+            current = [];
+          }
+          continue;
+        }
+        current.push(line.trim());
+      }
+      if (current.length)
+        slices.push(current);
+      return slices;
+    }
+
+    function parseSprites(spriteBlock) {
+      const result = {};
+      const rows = spriteBlock.split(/\r?\n/);
+      let index = 0;
+      while (index < rows.length) {
+        const name = rows[index].trim();
+        index++;
+        if (!name)
+          continue;
+        const paletteLine = (rows[index] || "").trim();
+        index++;
+        const colors = paletteLine.split(/\s+/).filter(Boolean);
+        const voxelRows = [];
+        while (index < rows.length) {
+          const line = rows[index].trimEnd();
+          const next = rows[index + 1] && rows[index + 1].trim();
+          if (line.trim() && next && isPaletteLine(next))
+            break;
+          voxelRows.push(line);
+          index++;
+        }
+        result[name] = {
+          name,
+          colors,
+          sprite3matrix: toSprite3Matrix(voxelRows)
+        };
+      }
+      return result;
+    }
+
+    function toSprite3Matrix(rows) {
+      const slices = splitBlankSeparated(rows);
+      const width = slices[0] && slices[0][0] ? slices[0][0].length : 1;
+      const depth = slices[0] ? slices[0].length : 1;
+      const height = Math.max(1, slices.length);
+      const matrix = Array.from({ length: depth }, () => {
+        return Array.from({ length: width }, () => new Array(height).fill(-1));
+      });
+      for (let slice = 0; slice < slices.length; slice++) {
+        for (let row = 0; row < slices[slice].length; row++) {
+          const sourceRow = slices[slice][row];
+          for (let col = 0; col < sourceRow.length; col++)
+            matrix[row][col][slice] = spriteValue(sourceRow[col]);
+        }
+      }
+      return matrix;
+    }
+
+    function spriteValue(char) {
+      if (char === "." || char === " ")
+        return -1;
+      if (char <= "9")
+        return Number(char);
+      return 10 + char.toLowerCase().charCodeAt(0) - 97;
+    }
+
+    function contiguousObjectGroups(layerNames) {
+      const groups = [];
+      let firstObjectId = 0;
+      for (const names of layerNames) {
+        groups.push({ firstObjectNo: firstObjectId, numObjects: names.length });
+        firstObjectId += names.length;
+      }
+      return groups;
+    }
+
+    function splitBlankSeparated(rows) {
+      const slices = [];
+      let current = [];
+      for (const row of rows) {
+        if (!row.trim()) {
+          if (current.length) {
+            slices.push(current);
+            current = [];
+          }
+          continue;
+        }
+        current.push(row.trim());
+      }
+      if (current.length)
+        slices.push(current);
+      return slices;
+    }
+
+    function isPaletteLine(line) {
+      return line.split(/\s+/).every((token) => token === "transparent" || /^#[0-9a-fA-F]{3,8}$/.test(token));
+    }
+
+    function index3(x, y, z, size) {
+      return x * size.height * size.depth + y * size.depth + z;
+    }
+
+    function lines(text) {
+      return text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
     }
   </script>
 </body>

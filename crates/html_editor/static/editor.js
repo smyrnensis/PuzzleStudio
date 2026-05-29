@@ -381,7 +381,6 @@ let scenePreviewRequestId = 0;
 let scenePreviewSnapshot = null;
 let selectedSceneButtonPath = [];
 let scenePreviewFrameLoaded = false;
-let psImportConvertTimer = 0;
 let levelPaintDrag = null;
 let levelBucketActive = false;
 let levelResizeMode = null;
@@ -2929,14 +2928,17 @@ function setPuzzleScriptImportStatus(message, tone = "") {
   setStatus(message, tone);
 }
 
-function schedulePuzzleScriptImportConversion(delay = 220) {
-  window.clearTimeout(psImportConvertTimer);
-  psImportConvertTimer = window.setTimeout(() => {
-    convertPuzzleScriptImport().catch((error) => {
-      console.error(error);
-      setPuzzleScriptImportStatus(error.message || String(error), "is-error");
-    });
-  }, delay);
+function resetPuzzleScriptImportConversion() {
+  if (psImportOutput) {
+    psImportOutput.value = "";
+  }
+  if (psImportCopyButton) {
+    psImportCopyButton.disabled = true;
+  }
+  if (psImportAddFileButton) {
+    psImportAddFileButton.disabled = true;
+  }
+  setPuzzleScriptImportStatus("", "");
 }
 
 async function convertPuzzleScriptImport() {
@@ -3000,9 +3002,9 @@ function puzzleScriptImportTitle(source, canonical) {
 }
 
 async function copyPuzzleScriptImportOutput() {
-  const output = psImportOutput?.value || await convertPuzzleScriptImport();
+  const output = psImportOutput?.value || "";
   if (!output.trim()) {
-    setPuzzleScriptImportStatus("Nothing to copy", "is-error");
+    setPuzzleScriptImportStatus("Generate import first", "is-error");
     return;
   }
   try {
@@ -3016,12 +3018,9 @@ async function copyPuzzleScriptImportOutput() {
 }
 
 async function addPuzzleScriptImportFile() {
-  let output = psImportOutput?.value || "";
+  const output = psImportOutput?.value || "";
   if (!output.trim()) {
-    output = await convertPuzzleScriptImport();
-  }
-  if (!output.trim()) {
-    setPuzzleScriptImportStatus("Nothing to add", "is-error");
+    setPuzzleScriptImportStatus("Generate import first", "is-error");
     return;
   }
 
@@ -3463,9 +3462,6 @@ function setPreviewMode(mode, options = {}) {
   }
   if (soundsMode) {
     renderSoundsBuilder();
-  }
-  if (psImportMode) {
-    schedulePuzzleScriptImportConversion(0);
   }
   if (previewMode === "play") {
     restoreCompiledGamePreview();
@@ -8756,7 +8752,7 @@ for (const control of [scenePreviewSceneSelect, scenePreviewThemeSelect, scenePr
     sendScenePreviewRequest();
   });
 }
-psImportSourceInput?.addEventListener("input", () => schedulePuzzleScriptImportConversion());
+psImportSourceInput?.addEventListener("input", resetPuzzleScriptImportConversion);
 psImportConvertButton?.addEventListener("click", () => {
   convertPuzzleScriptImport().catch((error) => {
     console.error(error);
