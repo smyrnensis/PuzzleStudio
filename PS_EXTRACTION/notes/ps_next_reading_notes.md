@@ -15,6 +15,10 @@ file has been read in the local checkout.
   source zip download were attempted from this environment. All failed because
   the network connection reset before the full payload completed. The local
   checkout is therefore not present yet.
+- 2026-05-29: local checkout is present at `upstream/PuzzleScriptNext`.
+  `src/js/ps3d.js`, parser `levels3` handling, compiler `levels3ToArray`, and
+  `test/ps3d.test.js` are present. The tests pass with
+  `node upstream/PuzzleScriptNext/test/ps3d.test.js`.
 
 ## First Files To Inspect
 
@@ -31,3 +35,16 @@ file has been read in the local checkout.
 ## Reading Log
 
 Add dated notes here as files are inspected.
+
+### 2026-05-29
+
+- Read `src/js/ps3d.js`: contains `parseLevels3`, `parseLevel3`,
+  `coordToIndex3`, and `indexToCoord3`.
+- Read `src/js/compiler.js` around `levels3ToArray` and
+  `level3FromParsedSource`: `LEVELS3` can lower to a 3D level-shaped object.
+- Read `src/js/engine.js` around direction masks and `Level`: the runtime is
+  still 2D-shaped (`width`, `height`, `n_tiles = width * height`) and movement
+  deltas are 2D.
+- Read `test/ps3d.test.js`: current tests cover parser storage, lowering,
+  glyph validation, background fill, and coordinate round trips.
+- Conclusion: the next step is a runtime boundary gate, not a 3D renderer.
