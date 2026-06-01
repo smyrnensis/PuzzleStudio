@@ -2237,10 +2237,11 @@ function renderSprite3dTextPreview() {
 }
 
 function sprite3dObjectDefinitionText(indent) {
+  const normalizedIndent = sprite3dSourceIndent(indent);
   const lines = [
-    `${indent}${sprite3dObjectName()}`,
-    `${indent}${sprite3dPaletteSourceTokens().join(" ")}`,
-    ...sprite3dVoxelRows().map((row) => (row ? `${indent}${row}` : "")),
+    `${normalizedIndent}${sprite3dObjectName()}`,
+    `${normalizedIndent}${sprite3dPaletteSourceTokens().join(" ")}`,
+    ...sprite3dVoxelRows().map((row) => (row ? `${normalizedIndent}${row}` : "")),
   ];
   return lines.join("\n");
 }
@@ -2345,22 +2346,32 @@ function applySprite3dSourceChange(document, source, statusText) {
   setStatus(statusText, "is-ok");
 }
 
+const SPRITE3D_SOURCE_INDENT = "";
+
+function sprite3dSourceIndent(indent = "") {
+  return String(indent || "").replace(/\t/g, SPRITE3D_SOURCE_INDENT);
+}
+
+function sprite3dSourceChildIndent(indent = "") {
+  return `${sprite3dSourceIndent(indent)}${SPRITE3D_SOURCE_INDENT}`;
+}
+
 function insertSprite3dDefinition(source) {
   const block = findSprites3dBlock(source);
   if (!block) {
     const puzzle3Block = findPuzzle3Block(source);
     if (puzzle3Block) {
       return {
-        source: `${source.slice(0, puzzle3Block.end).trimEnd()}\n\nsprites3 generated of ${puzzle3Block.name} {\n${sprite3dObjectDefinitionText("  ")}\n}\n${source.slice(puzzle3Block.end)}`,
+        source: `${source.slice(0, puzzle3Block.end).trimEnd()}\n\nsprites3 generated of ${puzzle3Block.name} {\n${sprite3dObjectDefinitionText(SPRITE3D_SOURCE_INDENT)}\n}\n${source.slice(puzzle3Block.end)}`,
       };
     }
     const prefix = source.trimEnd() ? `${source.trimEnd()}\n\n` : "";
     return {
-      source: `${prefix}sprites3 {\n${sprite3dObjectDefinitionText("  ")}\n}\n`,
+      source: `${prefix}sprites3 {\n${sprite3dObjectDefinitionText(SPRITE3D_SOURCE_INDENT)}\n}\n`,
     };
   }
 
-  const indent = `${block.indent}  `;
+  const indent = sprite3dSourceChildIndent(block.indent);
   return {
     source: `${source.slice(0, block.bodyEnd).trimEnd()}\n\n${sprite3dObjectDefinitionText(indent)}\n${source.slice(block.bodyEnd)}`,
   };
@@ -2371,7 +2382,7 @@ function replaceSprite3dDefinition(source) {
   if (!entry) {
     return null;
   }
-  const replacement = sprite3dObjectDefinitionText(entry.indent);
+  const replacement = sprite3dObjectDefinitionText(sprite3dSourceIndent(entry.indent));
   return {
     source: replaceEditorSourceRangePreservingLineBoundary(source, entry.start, entry.end, replacement),
   };
@@ -2543,7 +2554,7 @@ function findCanonicalSprite3dDefinitions(source, block) {
       name: code,
       start,
       end,
-      indent: line.raw.match(/^[\t ]*/)?.[0] || `${block.indent}  `,
+      indent: line.raw.match(/^[\t ]*/)?.[0] || sprite3dSourceChildIndent(block.indent),
       bodyStart: line.absoluteEnd,
       bodyEnd: end,
       format: "canonical",

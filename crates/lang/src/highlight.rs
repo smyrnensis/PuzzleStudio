@@ -29,7 +29,7 @@ enum HighlightKind {
     Group,
     Scratch,
     Variant,
-    Query,
+    Condition,
     Scene,
     Asset,
     Color,
@@ -38,6 +38,13 @@ enum HighlightKind {
     Comment,
     Operator,
     Arrow,
+    Brace0,
+    Brace1,
+    Brace2,
+    Brace3,
+    Brace4,
+    Brace5,
+    InvalidBrace,
     Section,
     SectionRule,
 }
@@ -56,7 +63,7 @@ impl HighlightKind {
             HighlightKind::Group => "syntax-group",
             HighlightKind::Scratch => "syntax-scratch",
             HighlightKind::Variant => "syntax-variant",
-            HighlightKind::Query => "syntax-query",
+            HighlightKind::Condition => "syntax-condition",
             HighlightKind::Scene => "syntax-scene",
             HighlightKind::Asset => "syntax-asset",
             HighlightKind::Color => "syntax-color",
@@ -65,6 +72,13 @@ impl HighlightKind {
             HighlightKind::Comment => "syntax-comment",
             HighlightKind::Operator => "syntax-operator",
             HighlightKind::Arrow => "syntax-arrow",
+            HighlightKind::Brace0 => "syntax-brace-depth-0",
+            HighlightKind::Brace1 => "syntax-brace-depth-1",
+            HighlightKind::Brace2 => "syntax-brace-depth-2",
+            HighlightKind::Brace3 => "syntax-brace-depth-3",
+            HighlightKind::Brace4 => "syntax-brace-depth-4",
+            HighlightKind::Brace5 => "syntax-brace-depth-5",
+            HighlightKind::InvalidBrace => "syntax-brace-invalid",
             HighlightKind::Section => "syntax-keyword",
             HighlightKind::SectionRule => "syntax-section-rule",
         }
@@ -151,11 +165,11 @@ fn collect_loaded_game_symbols(
     for name in game.global_labels.values() {
         symbols.insert(name.clone(), HighlightKind::State);
     }
-    for name in game.query_labels.values() {
-        symbols.insert(name.clone(), HighlightKind::Query);
+    for name in game.condition_labels.values() {
+        symbols.insert(name.clone(), HighlightKind::Condition);
     }
     for name in game.conditions.keys() {
-        symbols.insert(name.clone(), HighlightKind::Query);
+        symbols.insert(name.clone(), HighlightKind::Condition);
     }
     for level in &game.levels {
         symbols.insert(level.name.clone(), HighlightKind::Scene);
@@ -228,6 +242,7 @@ fn highlight_html(
     let context = scan_source_context(source);
     let binding_ranges = scan_for_binding_ranges(source);
     let semantic_ranges = semantic_tokens(source);
+    let brace_ranges = scan_brace_ranges(source, &context);
     let visual_color_aliases = scan_visual_color_aliases(&context);
     let visual_named_color_ranges = scan_visual_named_color_ranges(&context, &visual_color_aliases);
     let visual_ascii_color_ranges = scan_visual_ascii_color_ranges(source, &visual_color_aliases);
@@ -362,7 +377,7 @@ fn highlight_html(
 
         if is_operator_char(ch) {
             let end = consume_while(source, index, is_operator_char);
-            push_operator_run(&mut out, source, index, end);
+            push_operator_run(&mut out, source, index, end, &brace_ranges);
             skip_until(&mut chars, end);
             continue;
         }
@@ -374,6 +389,181 @@ fn highlight_html(
         out.push(' ');
     }
     out
+}
+
+fn scan_brace_ranges(
+    source: &str,
+    context: &crate::source::SourceContext,
+) -> HashMap<usize, HighlightKind> {
+    let mut ranges = HashMap::<usize, HighlightKind>::new();
+    let mut block_stack = Vec::<(usize, usize)>::new();
+    let mut line_start = 0usize;
+
+    for line in source.split_inclusive('\n') {
+        let line_end = line_start + line.len();
+        let content_end = line_end - usize::from(line.ends_with('\n'));
+        if context.raw_range_starting_at(line_start).is_none() {
+            scan_brace_line(
+                source,
+                line_start,
+                content_end,
+                &mut block_stack,
+                &mut ranges,
+            );
+        }
+        line_start = line_end;
+    }
+
+    if line_start < source.len() && context.raw_range_starting_at(line_start).is_none() {
+        scan_brace_line(
+            source,
+            line_start,
+            source.len(),
+            &mut block_stack,
+            &mut ranges,
+        );
+    }
+
+    for (open_index, _) in block_stack {
+        ranges.insert(open_index, HighlightKind::InvalidBrace);
+    }
+
+    ranges
+}
+
+fn scan_brace_line(
+    source: &str,
+    line_start: usize,
+    content_end: usize,
+    block_stack: &mut Vec<(usize, usize)>,
+    ranges: &mut HashMap<usize, HighlightKind>,
+) {
+    let line = &source[line_start..content_end];
+    let code_end = line_code_end(line);
+    let code = &line[..code_end];
+    let trimmed = code.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+
+    let braces = line_code_braces(source, line_start, code_end);
+    if braces.is_empty() {
+        return;
+    }
+
+    if trimmed == "}" {
+        for (index, ch) in braces {
+            if ch != '}' {
+                ranges.insert(index, HighlightKind::InvalidBrace);
+                continue;
+            }
+            if let Some((open_index, depth)) = block_stack.pop() {
+                let kind = brace_highlight_kind(depth);
+                ranges.insert(open_index, kind);
+                ranges.insert(index, kind);
+            } else {
+                ranges.insert(index, HighlightKind::InvalidBrace);
+            }
+        }
+        return;
+    }
+
+    let structural_open = code
+        .trim_end()
+        .ends_with('{')
+        .then(|| {
+            braces
+                .iter()
+                .rfind(|(_, ch)| *ch == '{')
+                .map(|(index, _)| *index)
+        })
+        .flatten();
+    let mut inline_stack = Vec::<(usize, usize)>::new();
+    for (index, ch) in braces {
+        if Some(index) == structural_open {
+            let depth = block_stack.len();
+            block_stack.push((index, depth));
+            continue;
+        }
+        match ch {
+            '{' => {
+                let depth = block_stack.len() + inline_stack.len();
+                inline_stack.push((index, depth));
+            }
+            '}' => {
+                if let Some((open_index, depth)) = inline_stack.pop() {
+                    let kind = brace_highlight_kind(depth);
+                    ranges.insert(open_index, kind);
+                    ranges.insert(index, kind);
+                } else {
+                    ranges.insert(index, HighlightKind::InvalidBrace);
+                }
+            }
+            _ => {}
+        }
+    }
+    for (open_index, _) in inline_stack {
+        ranges.insert(open_index, HighlightKind::InvalidBrace);
+    }
+}
+
+fn line_code_end(line: &str) -> usize {
+    let mut quote = None::<char>;
+    let mut escaped = false;
+    let mut previous = None;
+    for (index, ch) in line.char_indices() {
+        if let Some(active) = quote {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == active {
+                quote = None;
+            }
+        } else if ch == '"' || ch == '\'' {
+            quote = Some(ch);
+        } else if previous == Some('/') && ch == '/' {
+            return index - 1;
+        }
+        previous = Some(ch);
+    }
+    line.len()
+}
+
+fn line_code_braces(source: &str, line_start: usize, code_end: usize) -> Vec<(usize, char)> {
+    let mut braces = Vec::new();
+    let mut chars = source[line_start..line_start + code_end].char_indices();
+    while let Some((offset, ch)) = chars.next() {
+        if ch == '"' || ch == '\'' {
+            let quote = ch;
+            let mut escaped = false;
+            for (_, next_ch) in chars.by_ref() {
+                if escaped {
+                    escaped = false;
+                } else if next_ch == '\\' {
+                    escaped = true;
+                } else if next_ch == quote {
+                    break;
+                }
+            }
+            continue;
+        }
+        if ch == '{' || ch == '}' {
+            braces.push((line_start + offset, ch));
+        }
+    }
+    braces
+}
+
+fn brace_highlight_kind(depth: usize) -> HighlightKind {
+    match depth % 6 {
+        0 => HighlightKind::Brace0,
+        1 => HighlightKind::Brace1,
+        2 => HighlightKind::Brace2,
+        3 => HighlightKind::Brace3,
+        4 => HighlightKind::Brace4,
+        _ => HighlightKind::Brace5,
+    }
 }
 
 fn collect_source_symbols(
@@ -437,8 +627,8 @@ fn collect_line_symbols(
         ["input", name, ..] | ["direction", name, ..] => {
             insert_source_symbol(symbols, name, HighlightKind::Input);
         }
-        ["query", name, ..] => {
-            insert_source_symbol(symbols, name, HighlightKind::Query);
+        ["condition", name, ..] => {
+            insert_source_symbol(symbols, name, HighlightKind::Condition);
         }
         ["scene", name, ..] => {
             insert_source_symbol(symbols, name, HighlightKind::Scene);
@@ -760,7 +950,7 @@ fn symbol_priority(kind: HighlightKind) -> u8 {
         | HighlightKind::Input
         | HighlightKind::Effect
         | HighlightKind::Emission
-        | HighlightKind::Query
+        | HighlightKind::Condition
         | HighlightKind::Scene
         | HighlightKind::Asset => 4,
         HighlightKind::Variant => 2,
@@ -804,10 +994,14 @@ fn classify_bare_word(
     symbols: &HashMap<String, HighlightKind>,
     _family_bases: &HashSet<String>,
 ) -> Option<HighlightKind> {
-    classify_word(token, symbols)
+    classify_word(token, symbols, true)
 }
 
-fn classify_word(token: &str, symbols: &HashMap<String, HighlightKind>) -> Option<HighlightKind> {
+fn classify_word(
+    token: &str,
+    symbols: &HashMap<String, HighlightKind>,
+    allow_parser_keyword: bool,
+) -> Option<HighlightKind> {
     if let Some(kind) = symbols.get(token).copied() {
         return Some(kind);
     }
@@ -816,7 +1010,7 @@ fn classify_word(token: &str, symbols: &HashMap<String, HighlightKind>) -> Optio
             return Some(kind);
         }
     }
-    if parser_keyword(token) {
+    if allow_parser_keyword && parser_keyword(token) {
         return Some(HighlightKind::Keyword);
     }
     if parser_literal(token) {
@@ -881,7 +1075,7 @@ fn push_word(
         } else if token == text {
             classify_bare_word(text, symbols, family_bases)
         } else {
-            classify_word(text, symbols)
+            classify_word(text, symbols, false)
         };
         if let Some(kind) = kind {
             push_span(out, kind, text);
@@ -962,7 +1156,7 @@ fn highlight_kind_for_semantic(kind: SemanticKind) -> HighlightKind {
         SemanticKind::Input => HighlightKind::Input,
         SemanticKind::State => HighlightKind::State,
         SemanticKind::Group => HighlightKind::Group,
-        SemanticKind::Query => HighlightKind::Query,
+        SemanticKind::Condition => HighlightKind::Condition,
         SemanticKind::Scene => HighlightKind::Scene,
         SemanticKind::Asset => HighlightKind::Asset,
         SemanticKind::Setting => HighlightKind::Keyword,
@@ -1377,7 +1571,7 @@ fn opens_local_scope(first: &str, trimmed: &str) -> bool {
 // Parser-owned surface vocabulary. The browser editor consumes highlighted HTML
 // from this crate instead of carrying an independent .puzzle grammar table.
 fn parser_keyword(token: &str) -> bool {
-    is_parser_keyword(token)
+    token != "level" && is_parser_keyword(token)
 }
 
 fn parser_literal(token: &str) -> bool {
@@ -1516,10 +1710,24 @@ fn is_direction_glyph_boundary(ch: Option<char>) -> bool {
     })
 }
 
-fn push_operator_run(out: &mut String, source: &str, start: usize, end: usize) {
+fn push_operator_run(
+    out: &mut String,
+    source: &str,
+    start: usize,
+    end: usize,
+    brace_ranges: &HashMap<usize, HighlightKind>,
+) {
     let mut plain_start = start;
     for (offset, ch) in source[start..end].char_indices() {
         let index = start + offset;
+        if let Some(kind) = brace_ranges.get(&index).copied() {
+            if plain_start < index {
+                push_span(out, HighlightKind::Operator, &source[plain_start..index]);
+            }
+            push_span(out, kind, &source[index..index + ch.len_utf8()]);
+            plain_start = index + ch.len_utf8();
+            continue;
+        }
         if !is_direction_glyph_token(source, index, ch) {
             continue;
         }
@@ -1639,6 +1847,49 @@ P
     }
 
     #[test]
+    fn highlights_braces_by_depth_and_marks_unmatched_braces() {
+        let highlighted = highlight_source(
+            r#"
+puzzle board {
+rules {
+if { flag } -> set score = 1
+}
+}
+}
+scene menu {
+"{ignored string}"
+// {ignored comment}
+layout {
+"#,
+        );
+
+        assert!(highlighted.html.contains("syntax-brace-depth-0\">{</span>"));
+        assert!(highlighted.html.contains("syntax-brace-depth-1\">{</span>"));
+        assert!(highlighted.html.contains("syntax-brace-depth-2\">{</span>"));
+        assert!(highlighted.html.contains("syntax-brace-invalid\">}</span>"));
+        assert!(highlighted.html.contains("syntax-brace-invalid\">{</span>"));
+    }
+
+    #[test]
+    fn brace_highlight_does_not_pair_inline_braces_with_block_boundaries() {
+        let highlighted = highlight_source(
+            r#"
+puzzle board {
+rules {
+if { flag -> set score = 1
+if flag } -> set score = 2
+}
+}
+"#,
+        );
+
+        assert_eq!(highlighted.html.matches("syntax-brace-invalid").count(), 2);
+        assert!(highlighted.html.contains(
+            "<span class=\"syntax-brace-depth-1\">}</span>\n<span class=\"syntax-brace-depth-0\">}</span>"
+        ));
+    }
+
+    #[test]
     fn highlights_all_puzzle_lifecycle_blocks_from_shared_syntax() {
         let source = r#"
 title lifecycle_highlight
@@ -1720,7 +1971,7 @@ rules {
 title highlight_contextual_options
 sounds {
 sfx click seed=click01
-music bgm tone=0.7
+music bgm height=0.7
 }
 animation {
 tween {
@@ -1742,7 +1993,7 @@ accent_color #abcdef
         );
 
         assert!(highlighted.html.contains("syntax-keyword\">seed"));
-        assert!(highlighted.html.contains("syntax-keyword\">tone"));
+        assert!(highlighted.html.contains("syntax-keyword\">height"));
         assert!(highlighted.html.contains("syntax-keyword\">duration"));
         assert!(highlighted.html.contains("syntax-keyword\">show_index"));
         assert!(
@@ -1846,7 +2097,7 @@ Player Box:color
 group {
 pushable = Player Box:red
 }
-display_objects {
+objects {
 @Cursor @Aura:color
 }
 group active = Player Box:blue
@@ -1892,7 +2143,7 @@ tags {
 kind = A B
 }
 input jump
-query blocked = no Player
+condition blocked = no Player
 objects {
 Player Box:kind
 }
@@ -1930,7 +2181,7 @@ scene playing {
         assert!(highlighted.html.contains("syntax-variant\">A"));
         assert!(highlighted.html.contains("syntax-variant\">B"));
         assert!(highlighted.html.contains("syntax-input\">jump"));
-        assert!(highlighted.html.contains("syntax-query\">blocked"));
+        assert!(highlighted.html.contains("syntax-condition\">blocked"));
         assert!(highlighted.html.contains("syntax-asset\">bump"));
         assert!(highlighted.html.contains("syntax-input\">start"));
         assert!(highlighted.html.contains("syntax-effect\">goto"));
@@ -2110,10 +2361,10 @@ level start {
         assert!(highlighted.html.contains("syntax-literal\">^"));
         assert!(highlighted.html.contains("syntax-literal\">v"));
         assert!(
-            highlighted.html.contains("syntax-object\">Player</span><span class=\"syntax-operator\">{</span><span class=\"syntax-literal\">&gt;</span><span class=\"syntax-operator\">}")
+            highlighted.html.contains("syntax-object\">Player</span><span class=\"syntax-brace-depth-2\">{</span><span class=\"syntax-literal\">&gt;</span><span class=\"syntax-brace-depth-2\">}")
         );
         assert!(
-            highlighted.html.contains("syntax-object\">Player</span><span class=\"syntax-operator\">{</span><span class=\"syntax-literal\">&lt;</span><span class=\"syntax-operator\">}")
+            highlighted.html.contains("syntax-object\">Player</span><span class=\"syntax-brace-depth-2\">{</span><span class=\"syntax-literal\">&lt;</span><span class=\"syntax-brace-depth-2\">}")
         );
         assert!(
             !highlighted
@@ -2389,7 +2640,7 @@ quit <- q
 }
 rules {
 input quit -> goto title
-input resume -> back
+input resume -> goto playing
 }
 }
 "#,
@@ -2465,8 +2716,8 @@ text "Start"
 }
 }
 button "Start" -> playing.goto first
-button "Menu" -> enter menu
-button "Toggle" -> toggle menu
+button "Menu" -> goto menu
+button "Restart" -> start playing
 rules {
 input start -> playing.goto first
 }
@@ -2497,12 +2748,12 @@ scene menu {
         assert!(
             highlighted
                 .html
-                .contains("syntax-effect\">enter</span> <span class=\"syntax-scene\">menu")
+                .contains("syntax-effect\">goto</span> <span class=\"syntax-scene\">menu")
         );
         assert!(
             highlighted
                 .html
-                .contains("syntax-effect\">toggle</span> <span class=\"syntax-scene\">menu")
+                .contains("syntax-effect\">start</span> <span class=\"syntax-scene\">playing")
         );
         assert!(highlighted.html.contains("syntax-input\">start"));
     }
@@ -2765,7 +3016,7 @@ title Fixban
 
 sounds {
 sfx clear seed=clear01 type=jump
-music music_name seed=bgm01 tone=0 bpm=100 volume=0.5
+music music_name seed=bgm01 bars=8 height=0 bpm=100 volume=0.5
 }
 
 puzzle fixban {
@@ -2807,7 +3058,7 @@ goto title
         assert!(
             highlighted
                 .html
-                .contains("syntax-keyword\">tone</span><span class=\"syntax-operator\">=</span><span class=\"syntax-number\">0")
+                .contains("syntax-keyword\">height</span><span class=\"syntax-operator\">=</span><span class=\"syntax-number\">0")
         );
         assert!(
             highlighted
@@ -2820,11 +3071,61 @@ goto title
                 .contains("syntax-state\">board</span> <span class=\"syntax-operator\">=</span> <span class=\"syntax-keyword\">puzzle</span> <span class=\"syntax-scene\">fixban")
         );
         assert!(highlighted.html.contains(
-            "syntax-state\">board</span><span class=\"syntax-operator\">.</span><span class=\"syntax-keyword\">level</span><span class=\"syntax-operator\">.</span><span class=\"syntax-string\">label"
+            "syntax-state\">board</span><span class=\"syntax-operator\">.</span>level<span class=\"syntax-operator\">.</span><span class=\"syntax-string\">label"
         ));
         assert!(highlighted.html.contains(
-            "syntax-state\">board</span><span class=\"syntax-operator\">.</span><span class=\"syntax-keyword\">level</span><span class=\"syntax-operator\">.</span><span class=\"syntax-query\">last"
+            "syntax-state\">board</span><span class=\"syntax-operator\">.</span>level<span class=\"syntax-operator\">.</span><span class=\"syntax-condition\">last"
         ));
+    }
+
+    #[test]
+    fn highlights_scene_projection_and_layout_words() {
+        let highlighted = highlight_source(
+            r#"
+title projection_highlight
+theme name
+
+scene menu {
+layout {
+column scroll=true {
+for l in levels {
+button join(l.num, ". ", l.title, " ", l.solved) -> goto playing(l)
+}
+}
+}
+}
+"#,
+        );
+
+        assert!(highlighted.html.contains(
+            "<span class=\"syntax-keyword\">theme</span> <span class=\"syntax-keyword\">name"
+        ));
+        assert!(
+            highlighted
+                .html
+                .contains("syntax-keyword\">scroll</span><span class=\"syntax-operator\">=")
+        );
+        assert!(
+            highlighted
+                .html
+                .contains("syntax-effect\">join</span><span class=\"syntax-operator\">(")
+        );
+        assert!(
+            highlighted
+                .html
+                .contains("syntax-binding\">l</span><span class=\"syntax-operator\">.</span>num")
+        );
+        assert!(
+            highlighted
+                .html
+                .contains("syntax-binding\">l</span><span class=\"syntax-operator\">.</span>title")
+        );
+        assert!(
+            highlighted.html.contains(
+                "syntax-binding\">l</span><span class=\"syntax-operator\">.</span>solved"
+            )
+        );
+        assert!(!highlighted.html.contains("syntax-keyword\">level</span>"));
     }
 
     #[test]

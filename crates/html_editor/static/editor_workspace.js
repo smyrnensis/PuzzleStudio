@@ -875,16 +875,6 @@ function pushSourceNavigationHistory() {
     }
   }
   sourceNavigationForwardStack = [];
-  updateSourceNavigationButtons();
-}
-
-function updateSourceNavigationButtons() {
-  if (sourceBackButton) {
-    sourceBackButton.disabled = sourceNavigationBackStack.length === 0;
-  }
-  if (sourceForwardButton) {
-    sourceForwardButton.disabled = sourceNavigationForwardStack.length === 0;
-  }
 }
 
 function restoreEditorNavigationLocation(location) {
@@ -923,14 +913,12 @@ function restoreEditorNavigationLocation(location) {
     return true;
   } finally {
     sourceNavigationRestoring = false;
-    updateSourceNavigationButtons();
   }
 }
 
 function goSourceNavigationBack() {
   const previous = sourceNavigationBackStack.pop();
   if (!previous) {
-    updateSourceNavigationButtons();
     return false;
   }
   sourceNavigationForwardStack.push(editorNavigationLocation());
@@ -938,14 +926,12 @@ function goSourceNavigationBack() {
   if (!restored) {
     sourceNavigationForwardStack.pop();
   }
-  updateSourceNavigationButtons();
   return restored;
 }
 
 function goSourceNavigationForward() {
   const next = sourceNavigationForwardStack.pop();
   if (!next) {
-    updateSourceNavigationButtons();
     return false;
   }
   sourceNavigationBackStack.push(editorNavigationLocation());
@@ -953,7 +939,6 @@ function goSourceNavigationForward() {
   if (!restored) {
     sourceNavigationBackStack.pop();
   }
-  updateSourceNavigationButtons();
   return restored;
 }
 
@@ -1388,13 +1373,21 @@ function setTreeName(row, node) {
     input.addEventListener("keydown", (event) => {
       if (event.key === "Enter") {
         event.preventDefault();
-        commitRenameEntry(input.value);
+        commitRenameEntry(input.value).catch((error) => {
+          console.error(error);
+          setEditorStatus("Rename failed", "is-error");
+        });
       } else if (event.key === "Escape") {
         renameEntry = null;
         renderDocumentSelect();
       }
     });
-    input.addEventListener("blur", () => commitRenameEntry(input.value));
+    input.addEventListener("blur", () => {
+      commitRenameEntry(input.value).catch((error) => {
+        console.error(error);
+        setEditorStatus("Rename failed", "is-error");
+      });
+    });
     return;
   }
   row.querySelector(".tree-label").textContent = node.name || fileName(node.puzzlePath);
@@ -2166,10 +2159,14 @@ function startRenameEntry(nodeId) {
   renderDocumentSelect();
 }
 
-function commitRenameEntry(value) {
+async function commitRenameEntry(value) {
   if (!renameEntry) {
     return;
   }
+  if (renameEntry.committing) {
+    return;
+  }
+  renameEntry.committing = true;
   persistCurrentDocument();
   const target = findNodeWithParent(fileTree, renameEntry.nodeId);
   if (!target?.node || !target.parent) {
@@ -2181,6 +2178,31 @@ function commitRenameEntry(value) {
   const oldName = target.node.name || fileName(target.node.puzzlePath);
   const cleaned = sanitizeFileName(value) || oldName;
   const nextName = uniqueChildNameExcept(target.parent, cleaned, target.node.id);
+  if (nextName === oldName) {
+    renameEntry = null;
+    renderDocumentSelect();
+    return;
+  }
+  const parentPath = folderPath(target.parent);
+  const fromPath = target.node.kind === "folder"
+    ? folderPath(target.node)
+    : target.node.puzzlePath;
+  const toPath = joinPath(parentPath, nextName);
+  const targetWorkspaceRoot = workspaceRootForNode(target.node);
+  if (!editorSeed && isDesktopHost() && typeof window.PuzzleStudioHost.renameWorkspaceEntry === "function") {
+    try {
+      await window.PuzzleStudioHost.renameWorkspaceEntry({
+        fromPath: hostPathForEditorPath(fromPath, targetWorkspaceRoot),
+        toPath: hostPathForEditorPath(toPath, targetWorkspaceRoot),
+        workspaceRoot: targetWorkspaceRoot,
+      });
+    } catch (error) {
+      if (renameEntry) {
+        renameEntry.committing = false;
+      }
+      throw error;
+    }
+  }
   target.node.name = nextName;
   renameEntry = null;
   syncDocumentsFromTree();
@@ -2190,11 +2212,22 @@ function commitRenameEntry(value) {
   setEditorStatus("Renamed", "is-ok");
 }
 
-function deleteTreeNode(nodeId) {
+async function deleteTreeNode(nodeId) {
   persistCurrentDocument();
   const target = findNodeWithParent(fileTree, nodeId);
   if (!target?.node || !target.parent || target.node === fileTree) {
     return;
+  }
+
+  const targetWorkspaceRoot = workspaceRootForNode(target.node);
+  const entryPath = target.node.kind === "folder"
+    ? folderPath(target.node)
+    : target.node.puzzlePath;
+  if (!editorSeed && typeof window.PuzzleStudioHost.deleteWorkspaceEntry === "function") {
+    await window.PuzzleStudioHost.deleteWorkspaceEntry({
+      entryPath: hostPathForEditorPath(entryPath, targetWorkspaceRoot),
+      workspaceRoot: targetWorkspaceRoot,
+    });
   }
 
   const removedActive = target.node.id === activeFileId
@@ -2263,7 +2296,7 @@ async function removeWorkspaceNode(nodeId) {
 
 function starterPuzzleSource(name) {
   const title = name.replace(/\.puzzle$/i, "").replace(/[^\w]+/g, " ").trim() || "New Puzzle";
-  return `title ${JSON.stringify(title)}\n\npuzzle main {\n\tlayers {\n\t\tfloor = Goal\n\t\tsolid = Player Wall\n\t}\n\n\tinputs {\n\t\tup <- w ArrowUp\n\t\tdown <- s ArrowDown\n\t\tleft <- a ArrowLeft\n\t\tright <- d ArrowRight\n\t\trestart <- r\n\t}\n\n\twin_conditions {\n\t\texists(Goal)\n\t\tnone([ Goal no Player ])\n\t}\n\n\trules {\n\t\tfor d in directions {\n\t\t\tif input == d {\n\t\t\t\tonce d [ Player | no solid ] -> [ | Player ]\n\t\t\t}\n\t\t}\n\t}\n\n\tlevels {\n\t\tlegend {\n\t\t\t. = empty\n\t\t\t# = Wall\n\t\t\tP = Player\n\t\t\tG = Goal\n\t\t\t+ = Player Goal\n\t\t}\n\n\t\tlevel level_1\n\t\t\t#######\n\t\t\t#P...G#\n\t\t\t#######\n\n\t\tlevel level_2\n\t\t\t#######\n\t\t\t#P....#\n\t\t\t#..G..#\n\t\t\t#######\n\t}\n}\n\nscene playing {\n\tstate {\n\t\tpuzzle main\n\t}\n\tlayout size 4 3 {\n\t\tcolumn gap 1 align center top {\n\t\t\ttitle\n\t\t\tmain\n\t\t}\n\t}\n\trules {\n\t\tstep main\n\t}\n}\n`;
+  return `title ${JSON.stringify(title)}\n\npuzzle main {\n\tlayers {\n\t\tfloor = Goal\n\t\tsolid = Player Wall\n\t}\n\n\tinputs {\n\t\tup <- w ArrowUp\n\t\tdown <- s ArrowDown\n\t\tleft <- a ArrowLeft\n\t\tright <- d ArrowRight\n\t\trestart <- r\n\t}\n\n\twin_conditions {\n\t\texists(Goal)\n\t\tnone([ Goal no Player ])\n\t}\n\n\ton_level_clear {\n\t\tnext_level\n\t}\n\n\trules {\n\t\tfor d in directions {\n\t\t\tif input == d {\n\t\t\t\tonce d [ Player | no solid ] -> [ | Player ]\n\t\t\t}\n\t\t}\n\t}\n}\n\nlevels demo of main {\n\tlegend {\n\t\t. = empty\n\t\t# = Wall\n\t\tP = Player\n\t\tG = Goal\n\t\t+ = Player Goal\n\t}\n\n\tlevel level_1\n\t#######\n\t#P...G#\n\t#######\n\n\tlevel level_2\n\t#######\n\t#P....#\n\t#..G..#\n\t#######\n}\n`;
 }
 
 function activeFolder() {

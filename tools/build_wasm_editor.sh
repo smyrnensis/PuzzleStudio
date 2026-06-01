@@ -15,3 +15,8 @@ if ! grep -q "export function suggest_source_completions" crates/html_editor/sta
   echo "generated WASM bindings are missing suggest_source_completions" >&2
   exit 1
 fi
+
+if grep -Eq "WasmCoreRuntime|WasmPuzzle3Runtime|WasmStandaloneSession|transition_program_outcome" crates/html_editor/static/wasm/puzzle_wasm.js; then
+  echo "generated editor WASM bindings include runtime exports" >&2
+  exit 1
+fi

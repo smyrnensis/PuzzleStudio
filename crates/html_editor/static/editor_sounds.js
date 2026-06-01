@@ -1,5 +1,6 @@
 const soundPlayIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><polygon points="8 5 19 12 8 19 8 5"></polygon></svg>';
 const soundPauseIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14"></path><path d="M16 5v14"></path></svg>';
+const soundMusicBarOptions = [8, 16, 32, 64];
 
 function soundsApi() {
   return window.PuzzleSoundGenerator || window.PuzzleSoundTools || null;
@@ -8,7 +9,7 @@ function soundsApi() {
 function resetSoundsBuilder() {
   const api = soundsApi();
   if (!api) {
-    soundsOutput.textContent = "Sounds generator unavailable.";
+    setSoundsUnavailable("Sounds generator unavailable.");
     return;
   }
   if (!sounds.initialized) {
@@ -23,7 +24,8 @@ function resetSoundsBuilder() {
     soundsSfxSeedInput.value = sfxPreset.seed;
     soundsSfxTypeSelect.value = sfxPreset.type;
     soundsMusicSeedInput.value = musicPreset.seed;
-    soundsMusicToneInput.value = musicPreset.tone;
+    soundsMusicHeightInput.value = musicPreset.height ?? 0.5;
+    setSoundMusicBars(musicPreset.bars ?? 8);
     soundsMusicBpmInput.value = musicPreset.bpm;
     sounds.initialized = true;
   }
@@ -34,43 +36,16 @@ function resetSoundsBuilder() {
 function renderSoundsBuilder() {
   const api = soundsApi();
   if (!api) {
-    soundsOutput.textContent = "Sounds generator unavailable.";
+    setSoundsUnavailable("Sounds generator unavailable.");
     return;
   }
-  const sfxMode = sounds.mode === "sfx";
-  soundsSfxModeButton.classList.toggle("is-active", sfxMode);
-  soundsMusicModeButton.classList.toggle("is-active", !sfxMode);
+  soundsHeaderTools.hidden = currentPreviewMode !== "sounds";
   soundsTopbarButton.classList.toggle("is-active", currentPreviewMode === "sounds");
-  soundsSfxModeButton.setAttribute("aria-pressed", String(sfxMode));
-  soundsMusicModeButton.setAttribute("aria-pressed", String(!sfxMode));
-  soundsSfxPanel.hidden = !sfxMode;
-  soundsMusicPanel.hidden = sfxMode;
-  soundsSfxSourceActions.hidden = !sfxMode;
-  soundsMusicSourceActions.hidden = sfxMode;
   if (currentPreviewMode === "sounds") {
     gamePaneTitle.textContent = "Sound";
   }
-  if (sfxMode) {
-    renderSoundSfx();
-  } else {
-    renderSoundMusic();
-  }
-}
-
-function selectSoundMode(mode) {
-  const nextMode = mode === "music" ? "music" : "sfx";
-  if (sounds.mode === nextMode) {
-    renderSoundsBuilder();
-    return;
-  }
-  sounds.mode = nextMode;
-  if (nextMode === "sfx") {
-    pauseSoundMusic();
-  } else {
-    sounds.sfxPlayer?.stop();
-    sounds.sfxPlayer = null;
-  }
-  renderSoundsBuilder();
+  renderSoundSfx();
+  renderSoundMusic();
 }
 
 function soundSfxEffect() {
@@ -79,32 +54,34 @@ function soundSfxEffect() {
 
 function soundMusicSong() {
   return soundsApi().generateSong(soundsMusicSeedInput.value, {
-    tone: Number(soundsMusicToneInput.value),
+    height: Number(soundsMusicHeightInput.value),
+    bars: soundMusicBars(),
     bpm: Number(soundsMusicBpmInput.value),
     volume: Number(soundsMusicVolumeInput.value),
   });
 }
 
 function renderSoundSfx() {
-  soundsOutput.textContent = soundCurrentLine();
+  soundsSfxOutput.textContent = soundCurrentLine("sfx");
 }
 
 function renderSoundMusic() {
   const song = soundMusicSong();
-  soundsMusicToneValue.textContent = song.input.tone.toFixed(2);
+  soundsMusicHeightValue.textContent = song.input.height.toFixed(2);
+  soundsMusicBarsValue.textContent = `${song.input.bars}`;
   soundsMusicBpmValue.textContent = `${song.playbackScore.transport.bpm}`;
   soundsMusicVolumeValue.textContent = `${Math.round(song.playbackScore.mix.volume * 100)}%`;
   updateSoundRangeFills();
-  soundsOutput.textContent = soundCurrentLine();
+  soundsMusicOutput.textContent = soundCurrentLine("music");
 }
 
-function soundCurrentLine() {
-  const definition = soundCurrentDefinition();
+function soundCurrentLine(kind = "sfx") {
+  const definition = soundCurrentDefinition(kind);
   return definition ? definition.line : "";
 }
 
-function soundCurrentDefinition(options = {}) {
-  if (sounds.mode === "music") {
+function soundCurrentDefinition(kind = "sfx", options = {}) {
+  if (kind === "music") {
     const song = soundMusicSong();
     const requestedName = soundIdentifierAtom(soundsMusicTitleInput.value, "");
     const name = options.uniqueForInsert
@@ -113,7 +90,7 @@ function soundCurrentDefinition(options = {}) {
     return {
       kind: "music",
       name,
-      line: `music ${name} seed=${soundAtom(song.input.seed, "123456")} tone=${song.input.tone.toFixed(2)} bpm=${song.playbackScore.transport.bpm} volume=${song.playbackScore.mix.volume.toFixed(2)}`,
+      line: `music ${name} seed=${soundAtom(song.input.seed, "123456")} bars=${song.input.bars} height=${song.input.height.toFixed(2)} bpm=${song.playbackScore.transport.bpm} volume=${song.playbackScore.mix.volume.toFixed(2)}`,
     };
   }
   const effect = soundSfxEffect();
@@ -129,6 +106,11 @@ function soundCurrentDefinition(options = {}) {
   };
 }
 
+function setSoundsUnavailable(message) {
+  soundsSfxOutput.textContent = message;
+  soundsMusicOutput.textContent = message;
+}
+
 async function ensureAudioContext() {
   const AudioContextClass = window.AudioContext || window.webkitAudioContext;
   if (!AudioContextClass) {
@@ -140,7 +122,7 @@ async function ensureAudioContext() {
 
 async function playSoundSfx() {
   const api = soundsApi();
-  if (!api) {
+  if (!api || shouldSuppressSoundPlayback()) {
     return;
   }
   await ensureAudioContext();
@@ -152,7 +134,7 @@ async function playSoundSfx() {
 
 async function toggleSoundMusic() {
   const api = soundsApi();
-  if (!api) {
+  if (!api || shouldSuppressSoundPlayback()) {
     return;
   }
   if (sounds.musicPlaying) {
@@ -206,6 +188,27 @@ function stopSoundPlayback() {
   pauseSoundMusic();
 }
 
+function pauseSoundPlaybackForHiddenDocument() {
+  sounds.sfxPlayer?.stop();
+  sounds.sfxPlayer = null;
+  sounds.visibilityPausedMusic = sounds.musicPlaying === true;
+  if (sounds.musicPlaying) {
+    pauseSoundMusic();
+  }
+}
+
+function resumeSoundPlaybackForVisibleDocument() {
+  if (!sounds.visibilityPausedMusic || shouldSuppressSoundPlayback()) {
+    return;
+  }
+  sounds.visibilityPausedMusic = false;
+  toggleSoundMusic().catch((error) => setStatus(`Could not resume music: ${error?.message || error}`, "is-error"));
+}
+
+function shouldSuppressSoundPlayback() {
+  return typeof document !== "undefined" && document.visibilityState === "hidden";
+}
+
 function setSoundMusicPlaying(nextPlaying) {
   sounds.musicPlaying = nextPlaying;
   soundsMusicPlayButton.innerHTML = nextPlaying ? soundPauseIcon : soundPlayIcon;
@@ -244,8 +247,8 @@ function seekSoundMusic(value) {
   startSoundProgress();
 }
 
-async function copySoundLine() {
-  const text = soundCurrentLine();
+async function copySoundLine(kind = "sfx") {
+  const text = soundCurrentLine(kind);
   if (!text) {
     return;
   }
@@ -253,13 +256,13 @@ async function copySoundLine() {
   setStatus("Copied sounds definition", "is-ok");
 }
 
-function insertSoundsDefinition() {
+function insertSoundsDefinition(kind = "sfx") {
   const document = activeSoundEditDocument();
   if (!document || !isTextDocument(document)) {
     return;
   }
   const source = activeSoundEditSource();
-  const definition = soundCurrentDefinition({ uniqueForInsert: true, source });
+  const definition = soundCurrentDefinition(kind, { uniqueForInsert: true, source });
   if (!definition) {
     return;
   }
@@ -275,8 +278,8 @@ function insertSoundsDefinition() {
   setStatus(`Added ${definition.kind} ${definition.name}`, "is-ok");
 }
 
-function updateSoundsDefinition() {
-  const definition = soundCurrentDefinition();
+function updateSoundsDefinition(kind = "sfx") {
+  const definition = soundCurrentDefinition(kind);
   const document = activeSoundEditDocument();
   if (!definition || !document || !isTextDocument(document)) {
     return;
@@ -326,11 +329,13 @@ function loadSoundFromSourcePosition(position, options = {}) {
     pushSourceNavigationHistory();
   }
   if (entry.kind === "music") {
-    sounds.mode = "music";
     soundsMusicTitleInput.value = entry.name;
     soundsMusicSeedInput.value = entry.params.seed || soundsMusicSeedInput.value;
-    if (entry.params.tone !== undefined) {
-      soundsMusicToneInput.value = entry.params.tone;
+    if (entry.params.height !== undefined || entry.params.tone !== undefined) {
+      soundsMusicHeightInput.value = entry.params.height ?? entry.params.tone;
+    }
+    if (entry.params.bars !== undefined) {
+      setSoundMusicBars(entry.params.bars);
     }
     if (entry.params.bpm !== undefined) {
       soundsMusicBpmInput.value = entry.params.bpm;
@@ -340,7 +345,6 @@ function loadSoundFromSourcePosition(position, options = {}) {
     }
     setSoundProgress(0);
   } else {
-    sounds.mode = "sfx";
     soundsSfxTitleInput.value = entry.name;
     soundsSfxSeedInput.value = entry.params.seed || soundsSfxSeedInput.value;
     if (entry.params.type !== undefined) {
@@ -375,11 +379,13 @@ function loadSoundSourceTarget(target, options = {}) {
     pushSourceNavigationHistory();
   }
   if (entry.kind === "music") {
-    sounds.mode = "music";
     soundsMusicTitleInput.value = entry.name;
     soundsMusicSeedInput.value = entry.params.seed || soundsMusicSeedInput.value;
-    if (entry.params.tone !== undefined) {
-      soundsMusicToneInput.value = entry.params.tone;
+    if (entry.params.height !== undefined || entry.params.tone !== undefined) {
+      soundsMusicHeightInput.value = entry.params.height ?? entry.params.tone;
+    }
+    if (entry.params.bars !== undefined) {
+      setSoundMusicBars(entry.params.bars);
     }
     if (entry.params.bpm !== undefined) {
       soundsMusicBpmInput.value = entry.params.bpm;
@@ -389,7 +395,6 @@ function loadSoundSourceTarget(target, options = {}) {
     }
     setSoundProgress(0);
   } else {
-    sounds.mode = "sfx";
     soundsSfxTitleInput.value = entry.name;
     soundsSfxSeedInput.value = entry.params.seed || soundsSfxSeedInput.value;
     if (entry.params.type !== undefined) {
@@ -675,10 +680,21 @@ function randomizeSoundSfx() {
 function randomizeSoundMusic() {
   const preset = soundsApi().randomPreset(`${Date.now()}:${Math.random()}`);
   soundsMusicSeedInput.value = preset.seed;
-  soundsMusicToneInput.value = preset.tone;
+  soundsMusicHeightInput.value = preset.height ?? 0.5;
+  setSoundMusicBars(preset.bars ?? 8);
   soundsMusicBpmInput.value = preset.bpm;
   setSoundProgress(0);
   updateSoundMusic({ restartProgress: 0 });
+}
+
+function soundMusicBars() {
+  const bars = Number(soundsMusicBarsInput.value) || 8;
+  return soundMusicBarOptions.includes(bars) ? bars : 8;
+}
+
+function setSoundMusicBars(value) {
+  const bars = Number(value) || 8;
+  soundsMusicBarsInput.value = String(soundMusicBarOptions.includes(bars) ? bars : 8);
 }
 
 function soundLabelForType(type) {
@@ -693,7 +709,7 @@ function soundClamp(value, min, max) {
 
 function updateSoundRangeFills() {
   updateSoundRangeFill(soundsMusicProgress);
-  updateSoundRangeFill(soundsMusicToneInput);
+  updateSoundRangeFill(soundsMusicHeightInput);
   updateSoundRangeFill(soundsMusicBpmInput);
   updateSoundRangeFill(soundsMusicVolumeInput);
 }
@@ -710,18 +726,6 @@ function updateSoundRangeFill(input) {
   input.style.setProperty("--sounds-range-progress", `${(progress * 100).toFixed(2)}%`);
 }
 
-soundsSfxModeButton.addEventListener("click", () => {
-  selectSoundMode("sfx");
-  if (typeof syncSourceFromPreviewPane === "function") {
-    syncSourceFromPreviewPane("sounds");
-  }
-});
-soundsMusicModeButton.addEventListener("click", () => {
-  selectSoundMode("music");
-  if (typeof syncSourceFromPreviewPane === "function") {
-    syncSourceFromPreviewPane("sounds");
-  }
-});
 soundsSfxPlayButton.addEventListener("click", () => {
   playSoundSfx().catch((error) => setStatus(`Sounds failed: ${error?.message || error}`, "is-error"));
 });
@@ -730,24 +734,25 @@ soundsSfxTitleInput.addEventListener("input", renderSoundSfx);
 soundsSfxSeedInput.addEventListener("input", renderSoundSfx);
 soundsSfxTypeSelect.addEventListener("change", renderSoundSfx);
 soundsSfxCopyButton.addEventListener("click", () => {
-  copySoundLine().catch((error) => setStatus(`Could not copy sounds: ${error?.message || error}`, "is-error"));
+  copySoundLine("sfx").catch((error) => setStatus(`Could not copy sounds: ${error?.message || error}`, "is-error"));
 });
-soundsSfxInsertButton.addEventListener("click", insertSoundsDefinition);
-soundsSfxUpdateButton.addEventListener("click", updateSoundsDefinition);
+soundsSfxInsertButton.addEventListener("click", () => insertSoundsDefinition("sfx"));
+soundsSfxUpdateButton.addEventListener("click", () => updateSoundsDefinition("sfx"));
 soundsMusicPlayButton.addEventListener("click", () => {
   toggleSoundMusic().catch((error) => setStatus(`Sounds failed: ${error?.message || error}`, "is-error"));
 });
 soundsMusicRandomButton.addEventListener("click", randomizeSoundMusic);
 soundsMusicTitleInput.addEventListener("input", updateSoundMusic);
 soundsMusicSeedInput.addEventListener("input", updateSoundMusic);
-soundsMusicToneInput.addEventListener("input", updateSoundMusic);
+soundsMusicHeightInput.addEventListener("input", updateSoundMusic);
+soundsMusicBarsInput.addEventListener("change", () => updateSoundMusic({ restartProgress: 0 }));
 soundsMusicBpmInput.addEventListener("input", updateSoundMusic);
 soundsMusicVolumeInput.addEventListener("input", updateSoundMusic);
 soundsMusicCopyButton.addEventListener("click", () => {
-  copySoundLine().catch((error) => setStatus(`Could not copy sounds: ${error?.message || error}`, "is-error"));
+  copySoundLine("music").catch((error) => setStatus(`Could not copy sounds: ${error?.message || error}`, "is-error"));
 });
-soundsMusicInsertButton.addEventListener("click", insertSoundsDefinition);
-soundsMusicUpdateButton.addEventListener("click", updateSoundsDefinition);
+soundsMusicInsertButton.addEventListener("click", () => insertSoundsDefinition("music"));
+soundsMusicUpdateButton.addEventListener("click", () => updateSoundsDefinition("music"));
 soundsMusicProgress.addEventListener("input", () => seekSoundMusic(Number(soundsMusicProgress.value)));
 soundsMusicProgress.addEventListener("keydown", (event) => {
   if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
@@ -770,9 +775,17 @@ window.addEventListener("PuzzleSoundToolsReady", () => {
   resetSoundsBuilder();
 });
 
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") {
+    pauseSoundPlaybackForHiddenDocument();
+  } else {
+    resumeSoundPlaybackForVisibleDocument();
+  }
+});
+
 window.addEventListener("PuzzleSoundToolsError", (event) => {
   const message = event.detail?.message || "unknown error";
-  soundsOutput.textContent = `Sounds generator unavailable: ${message}`;
+  setSoundsUnavailable(`Sounds generator unavailable: ${message}`);
 });
 
 resetSoundsBuilder();

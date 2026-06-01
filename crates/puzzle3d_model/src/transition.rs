@@ -11,7 +11,7 @@ use puzzle_kernel::{
 };
 use std::collections::HashSet;
 
-pub type QueryKind3 = puzzle_kernel::QueryKind<ObjectId, Pattern3, InputId3>;
+pub type ConditionValueKind3 = puzzle_kernel::ConditionValueKind<ObjectId, Pattern3, InputId3>;
 pub type ObjectSetMatcher3 = puzzle_kernel::ObjectSetMatcher<ObjectId, LayerId>;
 pub type ObjectSetScratchPattern3 = puzzle_kernel::ObjectSetScratchPattern<ScratchId3>;
 
@@ -590,38 +590,38 @@ pub fn has_pattern_match(game: &Game3, state: &State3, pattern: &Pattern3) -> bo
     first_match(game, state, pattern, &scope).is_some()
 }
 
-pub fn eval_query_kind(
+pub fn eval_condition_kind(
     game: &Game3,
     state: &State3,
-    kind: &QueryKind3,
+    kind: &ConditionValueKind3,
     input: Option<InputId3>,
 ) -> i64 {
     match kind {
-        QueryKind3::CountObjects(objects) => objects
+        ConditionValueKind3::CountObjects(objects) => objects
             .iter()
             .map(|object| count_object(game, state, *object))
             .sum::<u32>() as i64,
-        QueryKind3::ExistsObjects(objects) => objects
+        ConditionValueKind3::ExistsObjects(objects) => objects
             .iter()
             .any(|object| count_object(game, state, *object) > 0)
             as i64,
-        QueryKind3::NoneObjects(objects) => objects
+        ConditionValueKind3::NoneObjects(objects) => objects
             .iter()
             .all(|object| count_object(game, state, *object) == 0)
             as i64,
-        QueryKind3::CountMatches(patterns) => patterns
+        ConditionValueKind3::CountMatches(patterns) => patterns
             .iter()
             .map(|pattern| count_pattern_matches(game, state, pattern))
             .sum::<u32>() as i64,
-        QueryKind3::ExistsMatches(patterns) => patterns
+        ConditionValueKind3::ExistsMatches(patterns) => patterns
             .iter()
             .any(|pattern| has_pattern_match(game, state, pattern))
             as i64,
-        QueryKind3::NoneMatches(patterns) => patterns
+        ConditionValueKind3::NoneMatches(patterns) => patterns
             .iter()
             .all(|pattern| !has_pattern_match(game, state, pattern))
             as i64,
-        QueryKind3::CountInputMatches(patterns) => input
+        ConditionValueKind3::CountInputMatches(patterns) => input
             .map(|input| {
                 patterns
                     .iter()
@@ -630,12 +630,12 @@ pub fn eval_query_kind(
                     .sum::<u32>() as i64
             })
             .unwrap_or(0),
-        QueryKind3::ExistsInputMatches(patterns) => input.is_some_and(|input| {
+        ConditionValueKind3::ExistsInputMatches(patterns) => input.is_some_and(|input| {
             patterns.iter().any(|(expected, pattern)| {
                 *expected == input && has_pattern_match(game, state, pattern)
             })
         }) as i64,
-        QueryKind3::NoneInputMatches(patterns) => input.is_some_and(|input| {
+        ConditionValueKind3::NoneInputMatches(patterns) => input.is_some_and(|input| {
             patterns
                 .iter()
                 .filter(|(expected, _)| *expected == input)

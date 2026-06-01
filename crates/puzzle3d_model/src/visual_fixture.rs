@@ -108,6 +108,7 @@ fn write_viewport(out: &mut String, parsed: &ParsedPuzzle3) {
     let mode = match viewport.mode {
         ViewportMode3::Full => "full",
         ViewportMode3::Centered => "centered",
+        ViewportMode3::Paged => "paged",
     };
     let follow = match viewport.follow {
         ViewportFollow3::Snap => "snap",

@@ -7,7 +7,7 @@
     if (window.PuzzleStudioHost?.soundTools) {
       return window.PuzzleStudioHost.soundTools();
     }
-    const response = await fetch("/sound-tools.js");
+    const response = await fetch("sound-tools.js");
     if (!response.ok) {
       throw new Error(response.statusText || `HTTP ${response.status}`);
     }

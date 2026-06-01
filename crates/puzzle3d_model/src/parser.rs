@@ -7,8 +7,8 @@ use crate::{
     LineOrientation3, LinePatternTemplate3, LineRuleTemplate3, LineWriteOpTemplate3,
     LocalWriteOpTemplate3, MatchCell3, ObjectDef3, ObjectFamily3, ObjectId, ObjectSelector3,
     ObjectVariant3, Offset3, Pattern3, Rule3, RuleEffect3, SelectorCatalog3, SelectorGroup3,
-    SelectorTag3, Size3, Sprite3, SpriteColor3, SpriteSet3, SpriteVoxels3, VariantAxis3,
-    WinCondition3, lower_dense_rule_template, lower_line_rule_template,
+    SelectorScratch3, SelectorTag3, Size3, Sprite3, SpriteColor3, SpriteSet3, SpriteVoxels3,
+    VariantAxis3, WinCondition3, lower_dense_rule_template, lower_line_rule_template,
 };
 use puzzle_kernel::{LocalFrame, LocalFrameExtent};
 
@@ -125,6 +125,7 @@ impl Default for ViewportSettings3 {
 pub enum ViewportMode3 {
     Full,
     Centered,
+    Paged,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -227,6 +228,10 @@ impl Parser3 {
                 index = self.parse_layers_block(index + 1)?;
             } else if line == "objects {" {
                 index = self.parse_objects_block(index + 1)?;
+            } else if line == "display_objects {" {
+                return Err(message(
+                    "`display_objects { ... }` was removed; use `objects { @Name layer }`",
+                ));
             } else if line == "inputs {" {
                 index = self.parse_inputs_block(index + 1)?;
             } else if line == "groups {" || line == "group {" {
@@ -287,11 +292,14 @@ impl Parser3 {
             build.add_object_spec(spec)?;
         }
         let object_defs = build.object_defs.clone();
+        let visual_objects = build.visual_objects.clone();
         let catalog = build.catalog_with_groups(self.group_specs)?;
-        let game = Game3::new_with_inputs(
+        let game = Game3::new_with_inputs_and_roles(
             layer_count,
             object_defs,
             inputs_from_specs(self.input_specs)?,
+            visual_objects,
+            Vec::new(),
         );
         let local_frame =
             parse_optional_program_local_frame(self.local_frame_modifier.as_deref(), &catalog)?;
@@ -361,6 +369,10 @@ impl Parser3 {
                 index = self.parse_layers_block(index + 1)?;
             } else if line == "objects {" {
                 index = self.parse_objects_block(index + 1)?;
+            } else if line == "display_objects {" {
+                return Err(message(
+                    "`display_objects { ... }` was removed; use `objects { @Name layer }`",
+                ));
             } else if line == "inputs {" {
                 index = self.parse_inputs_block(index + 1)?;
             } else if line == "groups {" || line == "group {" {
@@ -883,6 +895,7 @@ struct ObjectSpec3 {
     name: String,
     axes: Vec<String>,
     layer: String,
+    visual: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -931,6 +944,7 @@ struct CatalogBuild3 {
     concrete: Vec<crate::ConcreteObject3>,
     families: Vec<ObjectFamily3>,
     object_defs: Vec<ObjectDef3>,
+    visual_objects: Vec<ObjectId>,
 }
 
 impl CatalogBuild3 {
@@ -942,6 +956,7 @@ impl CatalogBuild3 {
             concrete: Vec::new(),
             families: Vec::new(),
             object_defs: Vec::new(),
+            visual_objects: Vec::new(),
         }
     }
 
@@ -955,6 +970,9 @@ impl CatalogBuild3 {
                 id,
                 layer_id: layer,
             });
+            if spec.visual {
+                push_unique_object(&mut self.visual_objects, id);
+            }
             return Ok(());
         }
 
@@ -974,6 +992,9 @@ impl CatalogBuild3 {
                 id,
                 layer_id: layer,
             });
+            if spec.visual {
+                push_unique_object(&mut self.visual_objects, id);
+            }
         }
         self.families
             .push(ObjectFamily3::new(spec.name, axes, variants));
@@ -1223,6 +1244,12 @@ fn parse_viewport_directive(
 ) -> Result<(), ParseError3> {
     let tokens = line.split_whitespace().collect::<Vec<_>>();
     match tokens.as_slice() {
+        ["flickscreen", width, depth] => {
+            parse_paged_viewport_directive(viewport, "flickscreen", width, depth, None)?
+        }
+        ["flickscreen", width, depth, height] => {
+            parse_paged_viewport_directive(viewport, "flickscreen", width, depth, Some(height))?
+        }
         ["zoomscreen", width, depth] => parse_centered_viewport_directive(
             viewport,
             "zoomscreen",
@@ -1263,6 +1290,26 @@ fn parse_viewport_directive(
         }
         [] => {}
     }
+    Ok(())
+}
+
+fn parse_paged_viewport_directive(
+    viewport: &mut ViewportSettings3,
+    directive: &str,
+    width: &str,
+    depth: &str,
+    height: Option<&str>,
+) -> Result<(), ParseError3> {
+    viewport.mode = ViewportMode3::Paged;
+    viewport.follow = ViewportFollow3::Snap;
+    viewport.framing = Some(ViewportFraming3 {
+        width: parse_viewport_size_value(width, &format!("{directive} width"))?,
+        depth: parse_viewport_size_value(depth, &format!("{directive} depth"))?,
+        height: match height {
+            Some(value) => parse_viewport_height_value(value)?,
+            None => ViewportHeight3::Full,
+        },
+    });
     Ok(())
 }
 
@@ -1365,12 +1412,13 @@ fn parse_object_spec(line: &str) -> Result<ObjectSpec3, ParseError3> {
     if parts.next().is_some() {
         return Err(message("object row must be: Object[:axis...] layer"));
     }
-    let mut name_parts = name.split(':');
-    let base = name_parts.next().unwrap().to_string();
+    let (base, axes) = puzzle_authoring::split_object_spec(name)
+        .ok_or_else(|| message("object row must be: Object[:axis...] layer"))?;
     Ok(ObjectSpec3 {
-        name: base,
-        axes: name_parts.map(str::to_string).collect(),
+        name: base.to_string(),
+        axes: axes.map(str::to_string).collect(),
         layer: layer.to_string(),
+        visual: puzzle_authoring::is_display_object_token(name),
     })
 }
 
@@ -1399,17 +1447,14 @@ fn parse_layer_object_spec(token: &str, layer: &str) -> Result<ObjectSpec3, Pars
     if token == "empty" {
         return Err(message("empty cannot be generated as a layer object"));
     }
-    let mut name_parts = token.split(':');
-    let base = name_parts
-        .next()
-        .filter(|name| !name.is_empty())
-        .ok_or_else(|| message("layer object must be Object[:axis...]"))?
-        .to_string();
-    reject_occurrence_label_marker_in_name(&base, "object name")?;
+    let (base, axes) = puzzle_authoring::split_object_spec(token)
+        .ok_or_else(|| message("layer object must be Object[:axis...]"))?;
+    reject_occurrence_label_marker_in_name(base, "object name")?;
     Ok(ObjectSpec3 {
-        name: base,
-        axes: name_parts.map(str::to_string).collect(),
+        name: base.to_string(),
+        axes: axes.map(str::to_string).collect(),
         layer: layer.to_string(),
+        visual: puzzle_authoring::is_display_object_token(token),
     })
 }
 
@@ -2473,6 +2518,11 @@ enum LineWriteWithGapStep3 {
         to: LineStepExpr3,
         object: ObjectSelector3,
     },
+    SetScratch {
+        at: LineStepExpr3,
+        object: ObjectSelector3,
+        scratch: SelectorScratch3,
+    },
 }
 
 fn infer_line_writes_from_patterns(
@@ -2481,6 +2531,7 @@ fn infer_line_writes_from_patterns(
 ) -> Vec<LineWriteWithGapStep3> {
     let before = positive_line_cells_from_pattern(before);
     let after = positive_line_cells_from_pattern(after);
+    let after_for_scratch = after.clone();
     let mut writes = Vec::new();
     let mut used_after = vec![false; after.len()];
     for (from, object) in &before {
@@ -2511,6 +2562,15 @@ fn infer_line_writes_from_patterns(
     for (index, (to, object)) in after.into_iter().enumerate() {
         if !used_after[index] {
             writes.push(LineWriteWithGapStep3::Add { to, object });
+        }
+    }
+    for (at, object) in after_for_scratch {
+        for scratch in object.scratch() {
+            writes.push(LineWriteWithGapStep3::SetScratch {
+                at: at.clone(),
+                object: object.clone(),
+                scratch: scratch.clone(),
+            });
         }
     }
     writes
@@ -2547,6 +2607,15 @@ fn materialize_line_writes(
                 from_step: from.materialize(gaps)?,
                 to_step: to.materialize(gaps)?,
                 object: object.clone(),
+            }),
+            LineWriteWithGapStep3::SetScratch {
+                at,
+                object,
+                scratch,
+            } => Ok(LineWriteOpTemplate3::SetScratch {
+                step: at.materialize(gaps)?,
+                object: object.clone(),
+                scratch: scratch.clone(),
             }),
         })
         .collect()
@@ -2627,7 +2696,12 @@ struct ParsedCell3 {
 fn parse_cell(cell: &str, catalog: &SelectorCatalog3) -> Result<ParsedCell3, ParseError3> {
     let mut require = Vec::new();
     let mut forbid = Vec::new();
-    let tokens = cell.split_whitespace().collect::<Vec<_>>();
+    let tokens = puzzle_authoring::split_cell_tokens(cell).map_err(|error| match error {
+        puzzle_authoring::CellTokenError::UnmatchedCloseBrace => {
+            message("scratch block has unmatched }")
+        }
+        puzzle_authoring::CellTokenError::MissingCloseBrace => message("scratch block missing }"),
+    })?;
     let mut index = 0;
     while index < tokens.len() {
         if tokens[index] == "no" {
@@ -2640,9 +2714,22 @@ fn parse_cell(cell: &str, catalog: &SelectorCatalog3) -> Result<ParsedCell3, Par
                 &catalog.groups,
             )?);
             index += 2;
+        } else if puzzle_authoring::scratch_sugar_kind(&tokens[index]).is_some() {
+            let selector = tokens
+                .get(index + 1)
+                .ok_or_else(|| message("scratch sugar must be followed by a selector"))?;
+            if selector == "no" || puzzle_authoring::scratch_sugar_kind(selector).is_some() {
+                return Err(message("scratch sugar must be followed by a selector"));
+            }
+            let selector = parse_selector(selector, &catalog.families, &catalog.groups)?;
+            require.push(ObjectSelector3::with_scratch(
+                selector,
+                vec![anonymous_selector_scratch(&tokens[index], false)],
+            ));
+            index += 2;
         } else {
             require.push(parse_selector(
-                tokens[index],
+                &tokens[index],
                 &catalog.families,
                 &catalog.groups,
             )?);
@@ -2760,7 +2847,8 @@ fn parse_selector(
     families: &[ObjectFamily3],
     groups: &[SelectorGroup3],
 ) -> Result<ObjectSelector3, ParseError3> {
-    let (selector, occurrence_label) = split_selector_occurrence_label3(token)?;
+    let (selector, scratch) = split_selector_scratch3(token)?;
+    let (selector, occurrence_label) = split_selector_occurrence_label3(selector)?;
     let parts = selector.split(':').collect::<Vec<_>>();
     let parsed = if parts.len() > 1 {
         ObjectSelector3::variant(
@@ -2788,10 +2876,68 @@ fn parse_selector(
             ObjectSelector3::object(selector)
         }
     };
-    Ok(match occurrence_label {
+    let parsed = match occurrence_label {
         Some(label) => ObjectSelector3::labeled(format!("{selector}#{label}"), parsed),
         None => parsed,
-    })
+    };
+    Ok(ObjectSelector3::with_scratch(parsed, scratch))
+}
+
+fn split_selector_scratch3(selector: &str) -> Result<(&str, Vec<SelectorScratch3>), ParseError3> {
+    let Some(open_index) = selector.find('{') else {
+        return Ok((selector, Vec::new()));
+    };
+    let base = &selector[..open_index];
+    let attrs = selector[open_index + 1..]
+        .strip_suffix('}')
+        .ok_or_else(|| message("scratch selector must end with }"))?;
+    if base.is_empty() {
+        return Err(message("scratch selector must attach to an object"));
+    }
+    Ok((base, parse_selector_scratch3(attrs)?))
+}
+
+fn parse_selector_scratch3(attrs: &str) -> Result<Vec<SelectorScratch3>, ParseError3> {
+    let mut parsed = Vec::new();
+    let tokens = attrs.split_whitespace().collect::<Vec<_>>();
+    let mut index = 0;
+    while index < tokens.len() {
+        let (negated, spec) = if tokens[index] == "no" {
+            let spec = tokens
+                .get(index + 1)
+                .ok_or_else(|| message("no must be followed by a scratch"))?;
+            index += 2;
+            (true, *spec)
+        } else {
+            let spec = tokens[index];
+            index += 1;
+            (false, spec)
+        };
+        if puzzle_authoring::scratch_sugar_kind(spec).is_some() {
+            parsed.push(anonymous_selector_scratch(spec, negated));
+            continue;
+        }
+        let (name, value) = spec
+            .split_once('=')
+            .map_or((spec, None), |(name, value)| (name, Some(value)));
+        if !puzzle_authoring::is_identifier(name) {
+            return Err(message("scratch name must start with an identifier"));
+        }
+        parsed.push(SelectorScratch3 {
+            name: name.to_string(),
+            value: value.map(str::to_string),
+            negated,
+        });
+    }
+    Ok(parsed)
+}
+
+fn anonymous_selector_scratch(value: &str, negated: bool) -> SelectorScratch3 {
+    SelectorScratch3 {
+        name: String::new(),
+        value: Some(value.to_string()),
+        negated,
+    }
 }
 
 fn split_selector_occurrence_label3(selector: &str) -> Result<(&str, Option<String>), ParseError3> {

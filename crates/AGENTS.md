@@ -14,8 +14,11 @@ read the more specific crate `AGENTS.md` when present.
 - `scene`: shared presentation/flow metadata and layout/component contracts.
 - `html_play`, `ascii_play`, `html_editor`, `cli`, `wasm`: adapters or facades.
   They should not own parser/compiler semantics.
-- `puzzle3d_model`: 3D parser/runtime experiment. Keep shared scene and document
-  contracts aligned with the 2D language path.
+- `puzzle3d_model`: 3D parser/runtime. Keep shared scene and document
+  contracts aligned with the 2D language path. 3D must not independently
+  reinterpret non-spatial authoring syntax; share the 2D/authoring helpers and
+  branch only for spatial concerns such as coordinates, offsets, directions,
+  frames, levels, and renderer metadata.
 
 ## Commands
 

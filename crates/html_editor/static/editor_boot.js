@@ -197,5 +197,33 @@
         body: JSON.stringify(payload),
       });
     },
+    async renameWorkspaceEntry(payload) {
+      const invoke = tauriInvoke();
+      if (invoke) {
+        return invoke("rename_workspace_entry", { request: payload });
+      }
+      if (!serverBackendAvailable()) {
+        throw backendUnavailableError();
+      }
+      return fetchJson("/api/rename-workspace-entry", {
+        method: "POST",
+        headers: { "Content-Type": "application/json; charset=utf-8" },
+        body: JSON.stringify(payload),
+      });
+    },
+    async deleteWorkspaceEntry(payload) {
+      const invoke = tauriInvoke();
+      if (invoke) {
+        return invoke("delete_workspace_entry", { request: payload });
+      }
+      if (!serverBackendAvailable()) {
+        throw backendUnavailableError();
+      }
+      return fetchJson("/api/delete-workspace-entry", {
+        method: "POST",
+        headers: { "Content-Type": "application/json; charset=utf-8" },
+        body: JSON.stringify(payload),
+      });
+    },
   };
 })();

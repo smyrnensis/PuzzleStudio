@@ -34,7 +34,7 @@ const LEVEL3D_PREVIEW_SURFACE_KIND = "puzzle3-level";
 const LEVEL3D_PREVIEW_SURFACE_MODE = "isolated";
 const LEVEL3D_MODEL_COMPONENT_PREVIEW_MESSAGE = "PuzzleStudioRenderPuzzle3ModelComponent";
 const LEVEL3D_EMPTY_CHAR = ".";
-const LEVEL3D_LEGEND_CHAR_CANDIDATES = "xyzabcdefghijklmnopqrstuvwABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789@$%&?!~^:;,_+-*/";
+const LEVEL3D_LEGEND_CHAR_CANDIDATES = "@$%&?!~^:;_+-*/XYZUVWQRSTABCDEFGHIJKLMNOPabcdefghijklmnopqrstuvw0123456789";
 let level3d = {
   width: 0,
   depth: 0,
@@ -42,6 +42,10 @@ let level3d = {
   slice: 0,
   selectedChar: LEVEL3D_EMPTY_CHAR,
   editMode: "replace",
+  layerFillActive: false,
+  layerPaletteCollapsed: false,
+  layerGridVisible: true,
+  hiddenLayers: [],
   stageResizeMode: null,
   stageExpandMode: false,
   previewFrames: false,
@@ -59,6 +63,7 @@ function renderLevel3dBuilder() {
   syncLevel3dFrameLayout();
   syncLevel3dControlsFromPreview();
   renderLevel3dPalette();
+  renderLevel3dLayerPalette();
   renderLevel3dPreviewControls();
   renderLevel3dLayerControls();
   renderLevel3dLayerBoard();
@@ -85,14 +90,20 @@ function syncLevel3dFrameLayout() {
   const frameWidth = Math.max(LEVEL3D_FRAME_MIN_WIDTH, maxFrameWidth);
   const scale = frameWidth / LEVEL3D_FRAME_VIRTUAL_WIDTH;
   const frameHeight = Math.max(1, Math.round(LEVEL3D_FRAME_VIRTUAL_HEIGHT * scale));
-  level3dBuilder.style.setProperty("--level3d-frame-virtual-width", `${LEVEL3D_FRAME_VIRTUAL_WIDTH}px`);
-  level3dBuilder.style.setProperty("--level3d-frame-virtual-height", `${LEVEL3D_FRAME_VIRTUAL_HEIGHT}px`);
-  level3dBuilder.style.setProperty("--level3d-frame-width", `${frameWidth}px`);
-  level3dBuilder.style.setProperty("--level3d-frame-height", `${frameHeight}px`);
-  level3dBuilder.style.setProperty("--level3d-frame-scale", String(scale));
-  level3dBuilder.style.setProperty("--level3d-frame-inverse-scale", String(1 / scale));
-  level3dBuilder.style.setProperty("--level3d-frame-gap", `${LEVEL3D_FRAME_GAP}px`);
+  setLevel3dBuilderStyleProperty("--level3d-frame-virtual-width", `${LEVEL3D_FRAME_VIRTUAL_WIDTH}px`);
+  setLevel3dBuilderStyleProperty("--level3d-frame-virtual-height", `${LEVEL3D_FRAME_VIRTUAL_HEIGHT}px`);
+  setLevel3dBuilderStyleProperty("--level3d-frame-width", `${frameWidth}px`);
+  setLevel3dBuilderStyleProperty("--level3d-frame-height", `${frameHeight}px`);
+  setLevel3dBuilderStyleProperty("--level3d-frame-scale", String(scale));
+  setLevel3dBuilderStyleProperty("--level3d-frame-inverse-scale", String(1 / scale));
+  setLevel3dBuilderStyleProperty("--level3d-frame-gap", `${LEVEL3D_FRAME_GAP}px`);
   workspace?.classList.toggle("is-stacked", !canFitSideBySide);
+}
+
+function setLevel3dBuilderStyleProperty(name, value) {
+  if (level3dBuilder.style.getPropertyValue(name) !== value) {
+    level3dBuilder.style.setProperty(name, value);
+  }
 }
 
 function level3dContentInlineSize(element) {
@@ -101,7 +112,9 @@ function level3dContentInlineSize(element) {
   }
   const style = window.getComputedStyle(element);
   const padding = (parseFloat(style.paddingLeft) || 0) + (parseFloat(style.paddingRight) || 0);
-  return Math.max(0, element.clientWidth - padding);
+  const rectWidth = element.getBoundingClientRect?.().width;
+  const measuredWidth = Number.isFinite(rectWidth) && rectWidth > 0 ? rectWidth : element.clientWidth;
+  return Math.max(0, measuredWidth - padding);
 }
 
 function level3dScaledSurfaceMetrics(element) {
@@ -135,9 +148,15 @@ function syncLevel3dControlsFromPreview() {
   const sourceDefinition = currentLevel3dSourceDefinition(source);
   const levelEntry = sourceDefinition
     ? level3dExportEntryForSourceDefinition(sourceDefinition, exportData)
-    : currentLevel3dEntry(exportData);
-  if (!levelEntry && !sourceDefinition) {
+    : null;
+  if (!sourceDefinition) {
     syncLevel3dPaletteWithoutLoadedLevel(source, sourceDocument);
+    if (level3dNameInput && !level3dNameInput.dataset.userEdited) {
+      level3dNameInput.value = "level_1";
+    }
+    if (level3dBundleInput && !level3dBundleInput.dataset.userEdited) {
+      level3dBundleInput.value = currentLevel3dBundleName(exportData);
+    }
   }
   const sourceName = levelEntry?.name || sourceDefinition?.name || "";
   if (sourceName && level3dNameInput) {
@@ -177,6 +196,9 @@ function syncLevel3dSizeControls(size = {}) {
   }
   if (level3dSizeLabel) {
     level3dSizeLabel.textContent = `${width} × ${depth} × ${height}`;
+  }
+  if (level3dLayerSizeLabel) {
+    level3dLayerSizeLabel.textContent = `${width} × ${depth} × ${height}`;
   }
   renderLevel3dPreviewControls();
   renderLevel3dLayerControls();
@@ -240,6 +262,10 @@ function clearLoadedLevel3dState(source, document = level3dSourceDocument()) {
     slice: 0,
     selectedChar: level3dSelectedCharForPalette(palette, level3d.selectedChar),
     editMode: level3dEditMode(),
+    layerFillActive: Boolean(level3d.layerFillActive),
+    layerPaletteCollapsed: Boolean(level3d.layerPaletteCollapsed),
+    layerGridVisible: level3d.layerGridVisible !== false,
+    hiddenLayers: Array.isArray(level3d.hiddenLayers) ? [...level3d.hiddenLayers] : [],
     stageResizeMode: null,
     stageExpandMode: false,
     previewFrames: level3d.previewFrames,
@@ -257,12 +283,17 @@ function sourceLevel3dPaletteEntries(source) {
 }
 
 function level3dSelectedCharForPalette(palette, current) {
-  if ((palette || []).some((entry) => entry.char === current)) {
+  const visiblePalette = level3dVisiblePaletteEntries(palette);
+  if (visiblePalette.some((entry) => entry.char === current)) {
     return current;
   }
-  return (palette || []).find((entry) => entry.objects.length > 0)?.char
-    || (palette || [])[0]?.char
+  return visiblePalette.find((entry) => entry.objects.length > 0)?.char
+    || visiblePalette[0]?.char
     || LEVEL3D_EMPTY_CHAR;
+}
+
+function level3dVisiblePaletteEntries(palette = level3d.palette) {
+  return (palette || []).filter((entry) => entry.temporary !== true);
 }
 
 function sameLevel3dPalette(left = [], right = []) {
@@ -285,10 +316,8 @@ function loadLevel3dFromEntry(entry, source, exportData = previewExport, sourceK
   level3d.depth = slices[0]?.length || Math.max(1, Math.trunc(Number(entry?.size?.depth) || 1));
   level3d.width = slices[0]?.[0]?.length || Math.max(1, Math.trunc(Number(entry?.size?.width) || 1));
   level3d.slice = Math.max(0, Math.min(level3d.height - 1, Math.trunc(Number(level3d.slice) || 0)));
-  if (!level3d.palette.some((entry) => entry.char === level3d.selectedChar)) {
-    level3d.selectedChar = level3d.palette.find((entry) => entry.objects.length > 0)?.char
-      || level3d.palette[0]?.char
-      || LEVEL3D_EMPTY_CHAR;
+  if (!level3dVisiblePaletteEntries(level3d.palette).some((entry) => entry.char === level3d.selectedChar)) {
+    level3d.selectedChar = level3dSelectedCharForPalette(level3d.palette, level3d.selectedChar);
   }
   level3d.sourceDocumentId = document?.id || level3d.sourceDocumentId || "";
   level3d.sourceKey = sourceKey || currentLevel3dEditorSourceKey(entry, document, source);
@@ -304,10 +333,8 @@ function loadLevel3dFromSourceDefinition(definition, source, sourceKey = "", doc
   level3d.depth = slices[0]?.length || 1;
   level3d.width = slices[0]?.[0]?.length || 1;
   level3d.slice = Math.max(0, Math.min(level3d.height - 1, Math.trunc(Number(level3d.slice) || 0)));
-  if (!level3d.palette.some((entry) => entry.char === level3d.selectedChar)) {
-    level3d.selectedChar = level3d.palette.find((entry) => entry.objects.length > 0)?.char
-      || level3d.palette[0]?.char
-      || LEVEL3D_EMPTY_CHAR;
+  if (!level3dVisiblePaletteEntries(level3d.palette).some((entry) => entry.char === level3d.selectedChar)) {
+    level3d.selectedChar = level3dSelectedCharForPalette(level3d.palette, level3d.selectedChar);
   }
   level3d.sourceDocumentId = document?.id || level3d.sourceDocumentId || "";
   level3d.sourceKey = sourceKey || currentLevel3dEditorSourceKey(definition, document, source);
@@ -581,7 +608,7 @@ function applyDefaultLevel3dSelectionForActiveDocument(exportData = previewExpor
     return false;
   }
   level3dAutoSelectionKey = selectionKey;
-  const target = firstLevel3dTargetNearDocument(document);
+  const target = firstLevel3dTargetInDocument(document);
   if (!target) {
     level3d.sourceDocumentId = "";
     level3d.sourceKey = "";
@@ -657,6 +684,9 @@ function currentLevel3dBundleName(exportData = previewExport) {
   const sourceRange = findLevels3InsertionRange(level3dEditorSource(), "");
   if (sourceRange?.bundle) {
     return sourceRange.bundle;
+  }
+  if (!findLevels3Ranges(level3dEditorSource()).length) {
+    return "levels";
   }
   const bundles = Object.keys(exportData?.levelBundles || {}).filter((name) => !["default", "levels"].includes(name));
   return bundles[0] || "levels";
@@ -740,7 +770,7 @@ function renderLevel3dSourcePreview() {
     return;
   }
   syncLevel3dNameOptions();
-  const levelName = sanitizeLevel3dName(level3dNameInput?.value || currentLevel3dEntry()?.name || "level_1");
+  const levelName = sanitizeLevel3dName(level3dNameInput?.value || currentLevel3dSourceDefinition(level3dEditorSource())?.name || "level_1");
   const sourceData = level3dSourceData();
   level3dSourcePreview.textContent = level3dSnippetSource(levelName, sourceData, "", { bodyIndent: "" });
 }
@@ -749,9 +779,13 @@ function level3dSourceData(source = level3dEditorSource(), exportData = previewE
   if (level3d.slices.length) {
     return level3dStateLevelData();
   }
-  const entry = currentLevel3dEntry(exportData);
-  if (!entry) {
+  const sourceDefinition = currentLevel3dSourceDefinition(source);
+  if (!sourceDefinition) {
     return { rows: [], unknownCells: 0 };
+  }
+  const entry = level3dExportEntryForSourceDefinition(sourceDefinition, exportData);
+  if (!entry) {
+    return { rows: sourceDefinition.rows || [], unknownCells: 0 };
   }
   const legendEntries = sourceLevel3dLegendEntries(source);
   const rows = level3dRowsForEntry(entry, legendEntries);
@@ -941,7 +975,7 @@ function renderLevel3dPalette() {
   level3dPalette.append(level3dShrinkModeButton());
   level3dPalette.append(level3dEditModeButton("add"));
   level3dPalette.append(level3dEditModeButton("replace"));
-  for (const entry of level3d.palette) {
+  for (const entry of level3dVisiblePaletteEntries()) {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "level-token level3d-token";
@@ -966,12 +1000,496 @@ function renderLevel3dPalette() {
       level3d.selectedChar = entry.char;
       level3dStageHit = null;
       renderLevel3dPalette();
+      renderLevel3dLayerPalette();
+      renderLevel3dLayerBoard();
       renderLevel3dLayerOverlay();
       renderLevel3dStageOverlay();
     });
     level3dPalette.append(button);
     drawLevel3dPalettePreview(visual, entry, exportData);
   }
+}
+
+function renderLevel3dLayerPalette() {
+  if (!level3dLayerPalette) {
+    return;
+  }
+  level3dLayerPalette.replaceChildren();
+  level3dLayerPalette.classList.add("is-sprite-only");
+  level3dLayerPalette.classList.toggle("is-collapsed", Boolean(level3d.layerPaletteCollapsed));
+  const exportData = previewExport || extractPreviewExport(latestHtml);
+  const transformRow = document.createElement("div");
+  transformRow.className = "level3d-layer-palette-row level3d-layer-transform-row";
+  transformRow.append(
+    level3dLayerResizeModeButton("expand"),
+    level3dLayerResizeModeButton("shrink"),
+    level3dLayerGridButton(),
+    level3dLayerVisibilityControl(),
+    level3dLayerTransformButton("rotate-left"),
+    level3dLayerTransformButton("rotate-right"),
+    level3dLayerTransformButton("flip-horizontal"),
+    level3dLayerTransformButton("flip-vertical"),
+  );
+  level3dLayerPalette.append(transformRow);
+  const editRow = document.createElement("div");
+  editRow.className = "level3d-layer-palette-row level3d-layer-edit-row";
+  editRow.append(
+    level3dLayerScopeToggle(),
+    level3dLayerPaletteCollapseButton(),
+    level3dLayerFillButton(),
+    level3dLayerEraserButton(),
+  );
+  const group = document.createElement("div");
+  group.className = "level-palette-group";
+  for (const entry of level3dVisiblePaletteEntries()) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "level-token level3d-layer-token";
+    button.classList.toggle("is-selected", entry.char === level3d.selectedChar);
+    button.dataset.label = level3dPaletteEntryLabel(entry);
+    button.title = level3dPaletteEntryLabel(entry);
+    button.setAttribute("aria-label", `Paint top-down ${level3dPaletteEntryLabel(entry)}`);
+    button.disabled = level3dPlaytestActive;
+
+    const visual = document.createElement("canvas");
+    visual.className = "level3d-layer-token-preview";
+    visual.setAttribute("aria-hidden", "true");
+    button.append(visual);
+
+    const label = document.createElement("span");
+    label.className = "tile-label level3d-token-label";
+    label.textContent = entry.objects.length ? entry.objects.join(" ") : "empty";
+    button.append(label);
+
+    button.addEventListener("click", () => {
+      setLevel3dStageResizeMode(null);
+      level3d.selectedChar = entry.char;
+      level3dStageHit = null;
+      renderLevel3dPalette();
+      renderLevel3dLayerPalette();
+      renderLevel3dLayerBoard();
+      renderLevel3dStageOverlay();
+    });
+    group.append(button);
+    drawLevel3dTopDownTilePreview(visual, entry, exportData);
+  }
+  editRow.append(group);
+  level3dLayerPalette.append(editRow);
+}
+
+function level3dLayerGridButton() {
+  const active = level3d.layerGridVisible !== false;
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "sprite-icon-button level-grid-button";
+  button.classList.toggle("is-selected", active);
+  button.setAttribute("aria-label", "Toggle top-down grid");
+  button.setAttribute("aria-pressed", active ? "true" : "false");
+  button.title = "Toggle grid";
+  button.dataset.tooltip = "Toggle grid";
+  button.disabled = level3dPlaytestActive;
+  button.innerHTML = `
+    <svg class="level-grid-token-icon lucide lucide-grid2x2-icon lucide-grid-2x2" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M12 3v18"></path>
+      <path d="M3 12h18"></path>
+      <rect x="3" y="3" width="18" height="18" rx="2"></rect>
+    </svg>
+  `;
+  button.addEventListener("click", () => {
+    level3d.layerGridVisible = level3d.layerGridVisible === false;
+    renderLevel3dLayerPalette();
+    renderLevel3dLayerBoard();
+  });
+  return button;
+}
+
+function level3dLayerVisibilityControl() {
+  const wrap = document.createElement("span");
+  wrap.className = "level-layer-visibility-wrap";
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "sprite-icon-button level-layer-visibility-button";
+  const hasHiddenLayers = normalizedLevel3dHiddenLayers().size > 0;
+  button.classList.toggle("has-hidden-layers", hasHiddenLayers);
+  button.setAttribute("aria-label", "Layer visibility");
+  button.setAttribute("aria-expanded", "false");
+  button.title = "Layer visibility";
+  button.dataset.tooltip = "Layer visibility";
+  button.disabled = level3dPlaytestActive;
+  button.innerHTML = `
+    <svg class="lucide lucide-list-filter level-layer-visibility-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M3 6h18"></path>
+      <path d="M7 12h10"></path>
+      <path d="M10 18h4"></path>
+    </svg>
+  `;
+  const menu = document.createElement("div");
+  menu.className = "level-layer-visibility-menu";
+  menu.setAttribute("role", "menu");
+  menu.setAttribute("aria-label", "Layer visibility");
+  menu.hidden = true;
+  renderLevel3dLayerVisibilityMenu(menu);
+  button.addEventListener("click", (event) => {
+    event.stopPropagation();
+    if (level3dPlaytestActive) {
+      return;
+    }
+    menu.hidden = !menu.hidden;
+    button.classList.toggle("is-open", !menu.hidden);
+    button.setAttribute("aria-expanded", String(!menu.hidden));
+  });
+  menu.addEventListener("click", (event) => {
+    event.stopPropagation();
+  });
+  menu.addEventListener("change", (event) => {
+    const checkbox = event.target?.closest?.("[data-level3d-visibility-layer]");
+    if (!checkbox) {
+      return;
+    }
+    setLevel3dLayerVisible(Number(checkbox.dataset.level3dVisibilityLayer), checkbox.checked);
+  });
+  wrap.append(button, menu);
+  return wrap;
+}
+
+function renderLevel3dLayerVisibilityMenu(menu) {
+  if (!menu) {
+    return;
+  }
+  menu.replaceChildren(...level3dLayerVisibilityEntries().map((entry) => {
+    const label = document.createElement("label");
+    label.className = "level-layer-visibility-option";
+    label.setAttribute("role", "menuitemcheckbox");
+    label.setAttribute("aria-checked", String(level3dLayerIsVisible(entry.layer)));
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = level3dLayerIsVisible(entry.layer);
+    checkbox.dataset.level3dVisibilityLayer = String(entry.layer);
+    checkbox.disabled = level3dPlaytestActive;
+    const text = document.createElement("span");
+    text.className = "level-layer-visibility-label";
+    text.textContent = entry.label;
+    label.append(checkbox, text);
+    return label;
+  }));
+}
+
+function level3dLayerVisibilityEntries(exportData = previewExport) {
+  const count = level3dLayerCount(exportData);
+  return Array.from({ length: count }, (_, layerIndex) => ({
+    layer: layerIndex,
+    label: `Layer ${layerIndex + 1}`,
+  }));
+}
+
+function level3dLayerCount(exportData = previewExport) {
+  const explicit = Math.trunc(Number(
+    exportData?.layerCount
+      ?? exportData?.engine?.layerCount
+      ?? exportData?.levels?.[0]?.layerCount,
+  ) || 0);
+  if (explicit > 0) {
+    return explicit;
+  }
+  const layers = [];
+  for (const entry of level3d.palette || []) {
+    for (const name of entry.objects || []) {
+      const layer = Math.trunc(Number(level3dObjectDescriptor(name, exportData)?.layer));
+      if (Number.isInteger(layer) && layer >= 0) {
+        layers.push(layer);
+      }
+    }
+  }
+  return layers.length ? Math.max(...layers) + 1 : 1;
+}
+
+function normalizedLevel3dHiddenLayers(exportData = previewExport) {
+  const count = Math.max(1, level3dLayerCount(exportData));
+  const hidden = new Set();
+  for (const layerIndex of level3d.hiddenLayers || []) {
+    const normalized = Math.trunc(Number(layerIndex));
+    if (Number.isInteger(normalized) && normalized >= 0 && normalized < count) {
+      hidden.add(normalized);
+    }
+  }
+  level3d.hiddenLayers = [...hidden].sort((left, right) => left - right);
+  return hidden;
+}
+
+function level3dLayerIsVisible(layerIndex, exportData = previewExport) {
+  const normalized = Math.trunc(Number(layerIndex));
+  if (!Number.isInteger(normalized) || normalized < 0) {
+    return true;
+  }
+  return !normalizedLevel3dHiddenLayers(exportData).has(normalized);
+}
+
+function setLevel3dLayerVisible(layerIndex, visible) {
+  const count = Math.max(1, level3dLayerCount());
+  const normalized = Math.max(0, Math.min(count - 1, Math.trunc(Number(layerIndex) || 0)));
+  const hidden = normalizedLevel3dHiddenLayers();
+  if (visible) {
+    hidden.delete(normalized);
+  } else {
+    hidden.add(normalized);
+  }
+  level3d.hiddenLayers = [...hidden].sort((left, right) => left - right);
+  const keepOpen = Boolean(document.querySelector(".level3d-layer-palette .level-layer-visibility-menu:not([hidden])"));
+  renderLevel3dLayerPalette();
+  if (keepOpen) {
+    const menu = document.querySelector(".level3d-layer-palette .level-layer-visibility-menu");
+    const button = menu?.closest(".level-layer-visibility-wrap")?.querySelector(".level-layer-visibility-button");
+    if (menu && button) {
+      menu.hidden = false;
+      button.classList.add("is-open");
+      button.setAttribute("aria-expanded", "true");
+    }
+  }
+  renderLevel3dLayerBoard();
+  setLevel3dActionStatus(level3d.hiddenLayers.length ? "Layer visibility filtered" : "All layers visible", "is-ok");
+}
+
+function level3dLayerResizeModeButton(mode) {
+  const active = level3dStageResizeMode() === mode;
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = `sprite-icon-button ${mode === "expand" ? "level-expand-button" : "level-shrink-button"}`;
+  button.classList.toggle("is-selected", active);
+  button.setAttribute("aria-label", mode === "expand" ? "Toggle top-down expansion" : "Toggle top-down shrinking");
+  button.setAttribute("aria-pressed", active ? "true" : "false");
+  button.title = mode === "expand" ? "Expand" : "Shrink";
+  button.dataset.tooltip = button.title;
+  button.disabled = level3dPlaytestActive;
+  button.innerHTML = mode === "expand"
+    ? `
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="m15 15 6 6"></path>
+        <path d="m15 9 6-6"></path>
+        <path d="M21 16v5h-5"></path>
+        <path d="M21 8V3h-5"></path>
+        <path d="M3 16v5h5"></path>
+        <path d="m3 21 6-6"></path>
+        <path d="M3 8V3h5"></path>
+        <path d="M9 9 3 3"></path>
+      </svg>
+    `
+    : `
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="m15 15 6 6m-6-6v4.8m0-4.8h4.8"></path>
+        <path d="M9 19.8V15m0 0H4.2M9 15l-6 6"></path>
+        <path d="M15 4.2V9m0 0h4.8M15 9l6-6"></path>
+        <path d="M9 4.2V9m0 0H4.2M9 9 3 3"></path>
+      </svg>
+    `;
+  button.addEventListener("click", () => {
+    setLevel3dStageResizeMode(level3dStageResizeMode() === mode ? null : mode);
+    level3dStageHit = null;
+    renderLevel3dPalette();
+    renderLevel3dLayerPalette();
+    syncLevel3dLayerResizeControls();
+    renderLevel3dStageOverlay();
+  });
+  return button;
+}
+
+function level3dLayerTransformButton(kind) {
+  const config = {
+    "rotate-left": {
+      label: "Rotate top-down left",
+      title: "Rotate left",
+      icon: `
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M3 12a9 9 0 1 0 2.64-6.36L3 8"></path>
+          <path d="M3 3v5h5"></path>
+        </svg>
+      `,
+      action: rotateLevel3dLayerLeft,
+    },
+    "rotate-right": {
+      label: "Rotate top-down right",
+      title: "Rotate right",
+      icon: `
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M21 12a9 9 0 1 1-2.64-6.36L21 8"></path>
+          <path d="M21 3v5h-5"></path>
+        </svg>
+      `,
+      action: rotateLevel3dLayerRight,
+    },
+    "flip-horizontal": {
+      label: "Flip top-down horizontal",
+      title: "Flip horizontal",
+      icon: `
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M8 3H5a2 2 0 0 0-2 2v14c0 1.1.9 2 2 2h3"></path>
+          <path d="M16 3h3a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-3"></path>
+          <path d="M12 20v2"></path>
+          <path d="M12 14v2"></path>
+          <path d="M12 8v2"></path>
+          <path d="M12 2v2"></path>
+        </svg>
+      `,
+      action: flipLevel3dLayerHorizontal,
+    },
+    "flip-vertical": {
+      label: "Flip top-down vertical",
+      title: "Flip vertical",
+      icon: `
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M21 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v3"></path>
+          <path d="M21 16v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-3"></path>
+          <path d="M4 12H2"></path>
+          <path d="M10 12H8"></path>
+          <path d="M16 12h-2"></path>
+          <path d="M22 12h-2"></path>
+        </svg>
+      `,
+      action: flipLevel3dLayerVertical,
+    },
+  }[kind];
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "sprite-icon-button level3d-layer-transform-button";
+  button.setAttribute("aria-label", config.label);
+  button.title = config.title;
+  button.dataset.tooltip = config.title;
+  button.disabled = level3dPlaytestActive;
+  button.innerHTML = config.icon;
+  button.addEventListener("click", () => {
+    setLevel3dStageResizeMode(null);
+    config.action();
+  });
+  return button;
+}
+
+function level3dLayerScopeToggle() {
+  const group = document.createElement("div");
+  group.className = "level-scope-toggle sprite3d-scope-toggle level3d-layer-scope-toggle";
+  group.setAttribute("role", "group");
+  group.setAttribute("aria-label", "Top-down 3D level edit scope");
+  const label = document.createElement("span");
+  label.className = "sprite3d-scope-toggle-label";
+  label.textContent = "Scope";
+  group.append(label);
+  group.append(level3dLayerScopeButton("add", "Mono layer", `
+    <svg xmlns="http://www.w3.org/2000/svg" class="lucide lucide-diamond-icon lucide-diamond" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M2.7 10.3a2.41 2.41 0 0 0 0 3.41l7.59 7.59a2.41 2.41 0 0 0 3.41 0l7.59-7.59a2.41 2.41 0 0 0 0-3.41l-7.59-7.59a2.41 2.41 0 0 0-3.41 0Z"></path>
+    </svg>
+  `));
+  group.append(level3dLayerScopeButton("replace", "All layers", `
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M5 8 12 4l7 4-7 4-7-4Z"></path>
+      <path d="M5 12l7 4 7-4"></path>
+      <path d="M5 16l7 4 7-4"></path>
+    </svg>
+  `));
+  return group;
+}
+
+function level3dLayerScopeButton(mode, label, icon) {
+  const active = level3dEditMode() === mode;
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "level-scope-button sprite3d-scope-button sprite-icon-button";
+  button.classList.toggle("is-active", active);
+  button.setAttribute("aria-label", label);
+  button.setAttribute("aria-pressed", active ? "true" : "false");
+  button.title = label;
+  button.dataset.tooltip = label;
+  button.disabled = level3dPlaytestActive;
+  button.innerHTML = icon;
+  button.addEventListener("click", () => {
+    setLevel3dStageResizeMode(null);
+    setLevel3dEditMode(mode);
+    level3dStageHit = null;
+    renderLevel3dPalette();
+    renderLevel3dLayerPalette();
+    renderLevel3dStageOverlay();
+  });
+  return button;
+}
+
+function level3dLayerFillButton() {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "level-palette-tool-button sprite-fill-button sprite-icon-button";
+  button.classList.toggle("is-active", Boolean(level3d.layerFillActive));
+  button.setAttribute("aria-label", "Fill top-down 3D level area");
+  button.setAttribute("aria-pressed", level3d.layerFillActive ? "true" : "false");
+  button.title = "Fill";
+  button.dataset.tooltip = "Fill";
+  button.disabled = level3dPlaytestActive;
+  button.innerHTML = `
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="m19 11-8-8-8.6 8.6a2 2 0 0 0 0 2.8l5.2 5.2a2 2 0 0 0 2.8 0L19 11Z"></path>
+      <path d="m5 2 5 5"></path>
+      <path d="M2 13h15"></path>
+      <path d="M22 20a2 2 0 1 1-4 0c0-1.6 1.7-2.4 2-4 .3 1.6 2 2.4 2 4Z"></path>
+    </svg>
+  `;
+  button.addEventListener("click", () => {
+    level3d.layerFillActive = !level3d.layerFillActive;
+    renderLevel3dLayerPalette();
+  });
+  return button;
+}
+
+function level3dLayerPaletteCollapseButton() {
+  const collapsed = Boolean(level3d.layerPaletteCollapsed);
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "level-palette-toggle-button";
+  button.classList.toggle("is-active", collapsed);
+  button.classList.toggle("is-collapsed", collapsed);
+  button.setAttribute("aria-expanded", String(!collapsed));
+  button.setAttribute("aria-label", collapsed ? "Show top-down palette" : "Hide top-down palette");
+  button.title = collapsed ? "Show palette" : "Hide palette";
+  button.dataset.tooltip = button.title;
+  button.disabled = level3dPlaytestActive;
+  button.innerHTML = `
+    <svg class="palette-open-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <rect x="4" y="4" width="6" height="6" rx="1"></rect>
+      <rect x="14" y="4" width="6" height="6" rx="1"></rect>
+      <rect x="4" y="14" width="6" height="6" rx="1"></rect>
+      <rect x="14" y="14" width="6" height="6" rx="1"></rect>
+    </svg>
+    <svg class="palette-closed-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <rect x="4" y="4" width="6" height="6" rx="1"></rect>
+      <rect x="14" y="4" width="6" height="6" rx="1"></rect>
+      <rect x="4" y="14" width="6" height="6" rx="1"></rect>
+      <rect x="14" y="14" width="6" height="6" rx="1"></rect>
+      <path d="M3 21 21 3"></path>
+    </svg>
+  `;
+  button.addEventListener("click", () => {
+    level3d.layerPaletteCollapsed = !level3d.layerPaletteCollapsed;
+    renderLevel3dLayerPalette();
+  });
+  return button;
+}
+
+function level3dLayerEraserButton() {
+  const entry = level3d.palette.find((candidate) => !candidate.objects?.length)
+    || { char: level3dEmptyChar(), objects: [] };
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "level-palette-tool-button sprite-icon-button level-eraser-button";
+  button.classList.toggle("is-active", level3d.selectedChar === entry.char);
+  button.setAttribute("aria-label", "Paint top-down Eraser");
+  button.setAttribute("aria-pressed", level3d.selectedChar === entry.char ? "true" : "false");
+  button.title = "Eraser";
+  button.dataset.tooltip = "Eraser";
+  button.disabled = level3dPlaytestActive;
+  button.append(renderLevelEraserIcon());
+  button.addEventListener("click", () => {
+    setLevel3dStageResizeMode(null);
+    level3d.selectedChar = entry.char;
+    renderLevel3dPalette();
+    renderLevel3dLayerPalette();
+    renderLevel3dLayerBoard();
+    renderLevel3dStageOverlay();
+  });
+  return button;
 }
 
 function level3dPaintSelectionActive() {
@@ -1016,6 +1534,7 @@ function level3dEditModeButton(mode) {
     setLevel3dEditMode(mode);
     level3dStageHit = null;
     renderLevel3dPalette();
+    renderLevel3dLayerPalette();
     renderLevel3dStageOverlay();
   });
   return button;
@@ -1052,6 +1571,7 @@ function level3dFrameToggleButton() {
   button.addEventListener("click", () => {
     level3d.previewFrames = !level3d.previewFrames;
     renderLevel3dPalette();
+    renderLevel3dLayerPalette();
     renderLevel3dStageOverlay();
     refreshLevel3dRuntimePreviews();
   });
@@ -1111,6 +1631,7 @@ function level3dStageResizeModeButton({ mode, className, label, ariaLabel, icon 
     setLevel3dStageResizeMode(level3dStageResizeMode() === mode ? null : mode);
     level3dStageHit = null;
     renderLevel3dPalette();
+    renderLevel3dLayerPalette();
     renderLevel3dStageOverlay();
   });
   return button;
@@ -1143,7 +1664,7 @@ function drawLevel3dPalettePreview(canvas, entry, exportData = previewExport) {
   const snapshot = {
     size: { width: 1, depth: 1, height: 1 },
     camera: level3dPalettePreviewCamera(exportData),
-    sprites: exportData?.sprites || {},
+    sprites: level3dPreviewSprites(exportData),
     settings: exportData?.settings || {},
   };
   if (!objects.length) {
@@ -1244,14 +1765,235 @@ function renderLevel3dLayerBoard() {
   const depth = Math.max(1, Math.trunc(Number(level3d.depth) || 1));
   level3dLayerBoard.style.setProperty("--level3d-layer-width", width);
   level3dLayerBoard.style.setProperty("--level3d-layer-depth", depth);
+  level3dLayerBoard.style.setProperty("--level3d-layer-cell-size", `${level3dLayerCellSize(width, depth)}px`);
+  level3dLayerBoard.parentElement?.style.setProperty("--level3d-layer-width", width);
+  level3dLayerBoard.parentElement?.style.setProperty("--level3d-layer-depth", depth);
+  level3dLayerBoard.closest?.(".level3d-layer-frame-viewport")?.style.setProperty("--level3d-layer-width", width);
+  level3dLayerBoard.closest?.(".level3d-layer-frame-viewport")?.style.setProperty("--level3d-layer-depth", depth);
+  level3dLayerBoard.classList.add("is-grid-board");
+  level3dLayerBoard.classList.toggle("has-grid", level3d.layerGridVisible !== false);
+  syncLevel3dLayerResizeControls();
   if (!level3d.slices.length) {
     level3dLayerBoard.classList.add("is-empty");
+    level3dLayerBoard.replaceChildren();
     renderLevel3dLayerOverlay();
     return;
   }
   level3dLayerBoard.classList.remove("is-empty");
-  renderLevel3dLayerRuntime();
+  renderLevel3dLayerGrid();
   renderLevel3dLayerOverlay();
+}
+
+function level3dLayerCellSize(width, depth) {
+  const frameWidth = level3dBuilderCssPixels("--level3d-frame-width", LEVEL3D_FRAME_MIN_WIDTH);
+  const frameHeight = level3dBuilderCssPixels(
+    "--level3d-frame-height",
+    Math.round(LEVEL3D_FRAME_VIRTUAL_HEIGHT * (frameWidth / LEVEL3D_FRAME_VIRTUAL_WIDTH)),
+  );
+  const viewport = level3dLayerBoard?.closest?.(".level3d-layer-frame-viewport");
+  const viewportStyle = viewport ? window.getComputedStyle(viewport) : null;
+  const paddingX = viewportStyle
+    ? (parseFloat(viewportStyle.paddingLeft) || 0) + (parseFloat(viewportStyle.paddingRight) || 0)
+    : 0;
+  const paddingY = viewportStyle
+    ? (parseFloat(viewportStyle.paddingTop) || 0) + (parseFloat(viewportStyle.paddingBottom) || 0)
+    : 0;
+  const edgeColumnWidth = 24 * 2;
+  const edgeRowHeight = 24 * 2;
+  const gridGap = 6 * 2;
+  const usableWidth = Math.max(1, frameWidth - paddingX - edgeColumnWidth - gridGap);
+  const usableHeight = Math.max(1, frameHeight - paddingY - edgeRowHeight - gridGap);
+  const widthFit = Math.floor(usableWidth / Math.max(1, width));
+  const depthFit = Math.floor(usableHeight / Math.max(1, depth));
+  return Math.max(1, Math.min(widthFit, depthFit));
+}
+
+function level3dBuilderCssPixels(name, fallback) {
+  if (!level3dBuilder) {
+    return fallback;
+  }
+  const value = window.getComputedStyle(level3dBuilder).getPropertyValue(name);
+  const parsed = parseFloat(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function syncLevel3dLayerResizeControls() {
+  const container = level3dLayerBoard?.parentElement;
+  const mode = level3dStageResizeMode();
+  container?.classList.toggle("is-resize-mode", Boolean(mode));
+  container?.classList.toggle("is-resize-expand", mode === "expand");
+  container?.classList.toggle("is-resize-shrink", mode === "shrink");
+  container?.querySelectorAll?.("[data-level3d-layer-edge]").forEach((button) => {
+    const edge = button.dataset.level3dLayerEdge || "";
+    const action = mode === "shrink" ? "Remove" : "Add";
+    const axis = edge === "left" || edge === "right" ? "column" : "row";
+    const side = {
+      top: "above",
+      bottom: "below",
+      left: "left",
+      right: "right",
+    }[edge] || edge;
+    button.textContent = mode === "shrink" ? "−" : "+";
+    button.classList.toggle("is-shrink", mode === "shrink");
+    button.setAttribute("aria-label", `${action} top-down ${axis} ${side}`.trim());
+    button.title = `${action} ${axis}`.trim();
+    button.disabled = level3dPlaytestActive
+      || !mode
+      || (mode === "shrink" && (
+        ((edge === "left" || edge === "right") && level3d.width <= 1)
+        || ((edge === "top" || edge === "bottom") && level3d.depth <= 1)
+      ));
+  });
+}
+
+function renderLevel3dLayerGrid() {
+  if (!level3dLayerBoard) {
+    return;
+  }
+  const width = Math.max(1, Math.trunc(Number(level3d.width) || 1));
+  const depth = Math.max(1, Math.trunc(Number(level3d.depth) || 1));
+  const cells = [];
+  for (let row = 0; row < depth; row += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const y = depth - 1 - row;
+      const position = { x, y, z: currentLevel3dLayerZ() };
+      const ch = level3dCharAtPosition(position);
+      const cell = document.createElement("button");
+      cell.type = "button";
+      cell.className = "cell level3d-layer-cell";
+      cell.dataset.index = String(row * width + x);
+      cell.dataset.x = String(x);
+      cell.dataset.y = String(y);
+      cell.dataset.z = String(position.z);
+      cell.setAttribute("role", "button");
+      cell.setAttribute("aria-label", level3dCellLabel(ch));
+      cell.tabIndex = 0;
+      cell.classList.toggle("is-hover", level3dLayerHover
+        && level3dLayerHover.x === x
+        && level3dLayerHover.y === y
+        && level3dLayerHover.z === position.z);
+      cell.append(level3dLayerCellVisual(ch));
+      cells.push(cell);
+    }
+  }
+  level3dLayerBoard.replaceChildren(...cells);
+}
+
+function level3dLayerCellVisual(ch) {
+  const root = document.createElement("span");
+  root.className = "level3d-layer-cell-visual";
+  const entry = level3d.palette.find((candidate) => candidate.char === ch);
+  if (!entry || !entry.objects?.length) {
+    root.classList.add("is-empty");
+    return root;
+  }
+  const preview = document.createElement("canvas");
+  preview.className = "level3d-layer-cell-preview";
+  preview.width = 56;
+  preview.height = 56;
+  drawLevel3dTopDownTilePreview(preview, entry);
+  root.append(preview);
+  return root;
+}
+
+function drawLevel3dTopDownTilePreview(canvas, entry, exportData = previewExport) {
+  if (!(canvas instanceof HTMLCanvasElement)) {
+    return;
+  }
+  const { width, height, scale } = resizeLevel3dPreviewCanvas(canvas, 56, 56);
+  const ctx = canvas.getContext("2d");
+  if (!ctx) {
+    return;
+  }
+  ctx.setTransform(scale, 0, 0, scale, 0, 0);
+  ctx.imageSmoothingEnabled = false;
+  ctx.clearRect(0, 0, width, height);
+  const sprites = level3dPreviewSprites(exportData);
+  const projections = (entry.objects || [])
+    .map((name) => level3dPaletteObjectDescriptor(name, exportData))
+    .filter(Boolean)
+    .filter((object) => level3dLayerIsVisible(object.layer, exportData))
+    .map((object) => level3dTopDownSpriteProjection(sprites?.[object.sprite] || sprites?.[object.name]))
+    .filter(Boolean);
+  if (!projections.length) {
+    drawLevel3dUnavailableTilePreview(ctx, width, height);
+    return;
+  }
+  const tileWidth = Math.max(1, ...projections.map((projection) => projection.width));
+  const tileDepth = Math.max(1, ...projections.map((projection) => projection.depth));
+  const cellSize = Math.max(1, Math.floor(Math.min(width / tileWidth, height / tileDepth)));
+  const offsetX = Math.floor((width - tileWidth * cellSize) / 2);
+  const offsetY = Math.floor((height - tileDepth * cellSize) / 2);
+  for (const projection of projections) {
+    const projectionOffsetX = offsetX + Math.floor((tileWidth - projection.width) * cellSize / 2);
+    const projectionOffsetY = offsetY + Math.floor((tileDepth - projection.depth) * cellSize / 2);
+    for (let row = 0; row < projection.depth; row += 1) {
+      for (let column = 0; column < projection.width; column += 1) {
+        const fill = projection.pixels[row]?.[column];
+        if (!fill) {
+          continue;
+        }
+        ctx.fillStyle = fill;
+        ctx.fillRect(
+          projectionOffsetX + column * cellSize,
+          projectionOffsetY + row * cellSize,
+          cellSize,
+          cellSize,
+        );
+      }
+    }
+  }
+}
+
+function level3dTopDownSpriteProjection(sprite) {
+  if (!sprite) {
+    return null;
+  }
+  const blocks = level3dBitmapBlocks(sprite.bitmap || []);
+  const depth = Math.max(1, ...blocks.map((rows) => rows.length));
+  const width = Math.max(1, ...blocks.flatMap((rows) => rows.map((row) => row.length)));
+  const pixels = Array.from({ length: depth }, () => Array.from({ length: width }, () => ""));
+  for (let row = 0; row < depth; row += 1) {
+    for (let column = 0; column < width; column += 1) {
+      for (let z = 0; z < blocks.length; z += 1) {
+        const token = blocks[z]?.[row]?.[column];
+        const fill = sprite.palette?.[token];
+        if (fill && level3dParseColor(fill)?.a > 0) {
+          pixels[row][column] = fill;
+          break;
+        }
+      }
+    }
+  }
+  return level3dCropTopDownProjection({ width, depth, pixels });
+}
+
+function level3dCropTopDownProjection(projection) {
+  let minX = projection.width;
+  let maxX = -1;
+  let minY = projection.depth;
+  let maxY = -1;
+  for (let row = 0; row < projection.depth; row += 1) {
+    for (let column = 0; column < projection.width; column += 1) {
+      if (!projection.pixels[row]?.[column]) {
+        continue;
+      }
+      minX = Math.min(minX, column);
+      maxX = Math.max(maxX, column);
+      minY = Math.min(minY, row);
+      maxY = Math.max(maxY, row);
+    }
+  }
+  if (maxX < minX || maxY < minY) {
+    return projection;
+  }
+  const width = maxX - minX + 1;
+  const depth = maxY - minY + 1;
+  const pixels = [];
+  for (let row = minY; row <= maxY; row += 1) {
+    pixels.push(projection.pixels[row].slice(minX, maxX + 1));
+  }
+  return { width, depth, pixels };
 }
 
 function currentLevel3dLayerZ() {
@@ -1285,7 +2027,32 @@ function setLevel3dLayer(value) {
 }
 
 function moveLevel3dLayer(delta) {
-  setLevel3dLayer(currentLevel3dLayerZ() + delta);
+  setLevel3dLayer(level3d.slice + delta);
+}
+
+function handleLevel3dSliceHorizontalInput(event) {
+  if (
+    level3dBuilder.hidden
+    || level3dPlaytestActive
+    || (event.key !== "ArrowLeft" && event.key !== "ArrowRight")
+  ) {
+    return false;
+  }
+  const targetElement = event.target instanceof Element ? event.target : null;
+  if (targetElement && targetElement !== document.body && !level3dBuilder.contains(targetElement)) {
+    return false;
+  }
+  const tagName = event.target?.tagName || "";
+  if (["INPUT", "TEXTAREA", "SELECT"].includes(tagName) || event.target?.isContentEditable) {
+    return false;
+  }
+  if (targetElement?.closest?.("[data-level3d-preview]")) {
+    return false;
+  }
+  event.preventDefault();
+  event.stopPropagation();
+  moveLevel3dLayer(event.key === "ArrowLeft" ? -1 : 1);
+  return true;
 }
 
 function applyLevel3dLayerInput() {
@@ -1384,6 +2151,10 @@ function startLevel3dLayerPaint(event) {
   }
   event.preventDefault();
   level3dLayerBoard?.focus();
+  if (level3d.layerFillActive) {
+    withVisualEditHistory("level3d", () => bucketFillLevel3dLayerFromPosition(cell.position));
+    return;
+  }
   level3dLayerPaintDrag = {
     pointerId: event.pointerId,
     lastKey: "",
@@ -1392,6 +2163,43 @@ function startLevel3dLayerPaint(event) {
   };
   level3dLayerBoard?.setPointerCapture?.(event.pointerId);
   continueLevel3dLayerPaint(event);
+}
+
+function bucketFillLevel3dLayerFromPosition(position) {
+  if (level3dPlaytestActive || !level3dPositionInBounds(position)) {
+    return false;
+  }
+  const targetChar = level3dCharAtPosition(position);
+  const visited = new Set();
+  const stack = [{ ...position }];
+  let changed = false;
+  while (stack.length) {
+    const current = stack.pop();
+    const key = `${current.x},${current.y},${current.z}`;
+    if (visited.has(key) || !level3dPositionInBounds(current) || level3dCharAtPosition(current) !== targetChar) {
+      continue;
+    }
+    visited.add(key);
+    if (paintLevel3dCellAtPosition(current)) {
+      changed = true;
+    }
+    if (current.x > 0) {
+      stack.push({ x: current.x - 1, y: current.y, z: current.z });
+    }
+    if (current.x < level3d.width - 1) {
+      stack.push({ x: current.x + 1, y: current.y, z: current.z });
+    }
+    if (current.y > 0) {
+      stack.push({ x: current.x, y: current.y - 1, z: current.z });
+    }
+    if (current.y < level3d.depth - 1) {
+      stack.push({ x: current.x, y: current.y + 1, z: current.z });
+    }
+  }
+  if (changed) {
+    setLevel3dActionStatus(level3d.selectedChar ? "Filled connected slice area" : "Erased connected slice area", "is-ok");
+  }
+  return changed;
 }
 
 function continueLevel3dLayerPaint(event) {
@@ -1434,6 +2242,111 @@ function stopLevel3dLayerPaint(event) {
     pushVisualEditUndoSnapshot("level3d", level3dLayerPaintDrag.beforeSnapshot);
   }
   level3dLayerPaintDrag = null;
+}
+
+function resizeLevel3dLayerEdge(edge, mode = level3dStageResizeMode() || "expand") {
+  const normalizedMode = mode === "shrink" ? "shrink" : "expand";
+  const delta = normalizedMode === "shrink" ? -1 : 1;
+  if (edge === "left" || edge === "right") {
+    return resizeLevel3dWidth((level3d.width || 1) + delta, { edge });
+  }
+  if (edge === "top" || edge === "bottom") {
+    return resizeLevel3dDepth((level3d.depth || 1) + delta, { edge: edge === "top" ? "back" : "front" });
+  }
+  return false;
+}
+
+function transformLevel3dLayerCells({ nextWidth, nextDepth, mapCell, message }) {
+  if (level3dPlaytestActive || !level3d.slices.length) {
+    return false;
+  }
+  const previousWidth = Math.max(1, Math.trunc(Number(level3d.width) || 1));
+  const previousDepth = Math.max(1, Math.trunc(Number(level3d.depth) || 1));
+  const width = Math.max(1, Math.trunc(Number(nextWidth) || previousWidth));
+  const depth = Math.max(1, Math.trunc(Number(nextDepth) || previousDepth));
+  const before = visualEditSnapshot("level3d");
+  const targets = level3d.slices.map((_slice, index) => index);
+  for (const sliceIndex of targets) {
+    level3d.slices[sliceIndex] = transformLevel3dRowsWithMap(
+      level3d.slices[sliceIndex],
+      previousWidth,
+      previousDepth,
+      width,
+      depth,
+      mapCell,
+    );
+  }
+  level3d.width = width;
+  level3d.depth = depth;
+  syncLevel3dSizeControls();
+  renderLevel3dLayerBoard();
+  renderLevel3dSourcePreview();
+  level3dStageHit = null;
+  renderLevel3dStageOverlay();
+  refreshLevel3dRuntimePreviews();
+  pushVisualEditUndoSnapshot("level3d", before);
+  setLevel3dActionStatus(`${message} all slices`, "is-ok");
+  return true;
+}
+
+function transformLevel3dRowsWithMap(rows, previousWidth, previousDepth, nextWidth, nextDepth, mapCell) {
+  const empty = level3dEmptyChar();
+  const sourceRows = Array.from({ length: previousDepth }, (_unused, row) => (
+    String(rows?.[row] || "").padEnd(previousWidth, empty).slice(0, previousWidth)
+  ));
+  const nextRows = [];
+  for (let y = 0; y < nextDepth; y += 1) {
+    const chars = [];
+    for (let x = 0; x < nextWidth; x += 1) {
+      const source = mapCell(x, y, previousWidth, previousDepth);
+      const ch = source
+        && source.x >= 0
+        && source.x < previousWidth
+        && source.y >= 0
+        && source.y < previousDepth
+        ? sourceRows[source.y][source.x]
+        : empty;
+      chars.push(ch || empty);
+    }
+    nextRows.push(chars.join(""));
+  }
+  return nextRows;
+}
+
+function rotateLevel3dLayerLeft() {
+  return transformLevel3dLayerCells({
+    nextWidth: level3d.depth,
+    nextDepth: level3d.width,
+    mapCell: (x, y, width) => ({ x: width - 1 - y, y: x }),
+    message: "Rotated left",
+  });
+}
+
+function rotateLevel3dLayerRight() {
+  return transformLevel3dLayerCells({
+    nextWidth: level3d.depth,
+    nextDepth: level3d.width,
+    mapCell: (x, y, _width, height) => ({ x: y, y: height - 1 - x }),
+    message: "Rotated right",
+  });
+}
+
+function flipLevel3dLayerHorizontal() {
+  return transformLevel3dLayerCells({
+    nextWidth: level3d.width,
+    nextDepth: level3d.depth,
+    mapCell: (x, y, width) => ({ x: width - 1 - x, y }),
+    message: "Flipped horizontal",
+  });
+}
+
+function flipLevel3dLayerVertical() {
+  return transformLevel3dLayerCells({
+    nextWidth: level3d.width,
+    nextDepth: level3d.depth,
+    mapCell: (x, y, _width, height) => ({ x, y: height - 1 - y }),
+    message: "Flipped vertical",
+  });
 }
 
 function paintLevel3dCellAtPosition(position, ch = level3d.selectedChar) {
@@ -1518,6 +2431,7 @@ function level3dEnsureCharForObjectNames(objects) {
   }
   level3d.palette.push({ char: ch, objects: [...cleanObjects], temporary: true });
   renderLevel3dPalette();
+  renderLevel3dLayerPalette();
   return ch;
 }
 
@@ -2145,6 +3059,9 @@ function updateLevel3dPlaytestControls() {
   level3dPalette?.querySelectorAll("button").forEach((button) => {
     button.disabled = level3dPlaytestActive;
   });
+  level3dLayerPalette?.querySelectorAll("button").forEach((button) => {
+    button.disabled = level3dPlaytestActive;
+  });
 }
 
 function focusLevel3dPlaytestTarget() {
@@ -2250,7 +3167,7 @@ function renderLevel3dLayerRuntime() {
     level3dLayerFrameKey = "";
     return;
   }
-  const key = `${activePreviewDocument()?.id || ""}:puzzle3-layer-renderer`;
+  const key = `${activePreviewDocument()?.id || ""}:puzzle3-layer-renderer:${currentLevel3dLayerZ()}`;
   if (level3dLayerFrameKey !== key) {
     level3dLayerFrameLoaded = false;
     level3dLayerRendererView = null;
@@ -2387,8 +3304,148 @@ function level3dRuntimePreviewResources(exportData = previewExport || extractPre
   return {
     layerCount: exportData?.layerCount,
     objects: exportData?.objects || {},
-    sprites: exportData?.sprites || {},
+    sprites: level3dPreviewSprites(exportData),
   };
+}
+
+function level3dPreviewSprites(exportData = previewExport || extractPreviewExport(latestHtml), source = level3dEditorSource()) {
+  return {
+    ...(exportData?.sprites || {}),
+    ...sourceLevel3dSprites(source),
+  };
+}
+
+function sourceLevel3dSprites(source) {
+  const sprites = {};
+  for (const block of sourceLevel3dSpriteBlocks(source)) {
+    Object.assign(sprites, sourceLevel3dSpritesFromBlock(String(source || "").slice(block.bodyStart, block.bodyEnd)));
+  }
+  return sprites;
+}
+
+function sourceLevel3dSpriteBlocks(source) {
+  const text = String(source || "");
+  const pattern = /(^|\n)([\t ]*)sprites3(?:\s+[^\n{]+)?\s*\{/gm;
+  const blocks = [];
+  let match = null;
+  while ((match = pattern.exec(text))) {
+    const start = match.index + match[1].length;
+    const openIndex = text.indexOf("{", start);
+    const closeIndex = level3dMatchingBrace(text, openIndex);
+    if (openIndex < 0 || closeIndex < 0) {
+      continue;
+    }
+    blocks.push({ bodyStart: openIndex + 1, bodyEnd: closeIndex });
+    pattern.lastIndex = closeIndex + 1;
+  }
+  return blocks;
+}
+
+function sourceLevel3dSpritesFromBlock(block) {
+  const lines = String(block || "")
+    .split("\n")
+    .map((raw) => level3dScannerCode(raw).trim());
+  const sprites = {};
+  for (let index = 0; index < lines.length; index += 1) {
+    const name = lines[index];
+    if (!isLevel3dSpriteName(name) || !isLevel3dSpritePaletteRow(nextLevel3dNonEmptyLine(lines, index + 1))) {
+      continue;
+    }
+    let paletteIndex = index + 1;
+    while (paletteIndex < lines.length && !lines[paletteIndex]) {
+      paletteIndex += 1;
+    }
+    const palette = level3dSpritePaletteFromLine(lines[paletteIndex]);
+    if (!palette) {
+      continue;
+    }
+    const bitmap = [];
+    for (let rowIndex = paletteIndex + 1; rowIndex < lines.length; rowIndex += 1) {
+      const row = lines[rowIndex];
+      if (isLevel3dSpriteName(row) && isLevel3dSpritePaletteRow(nextLevel3dNonEmptyLine(lines, rowIndex + 1))) {
+        break;
+      }
+      bitmap.push(row);
+    }
+    if (bitmap.some((row) => row.length > 0) && level3dSpriteBitmapUsesPalette(bitmap, palette)) {
+      sprites[name] = { palette, bitmap };
+    }
+  }
+  return sprites;
+}
+
+function level3dSpriteBitmapUsesPalette(bitmap, palette) {
+  const keys = new Set(Object.keys(palette || {}));
+  for (const row of bitmap || []) {
+    for (const char of String(row || "")) {
+      if (char !== "." && char !== " " && !keys.has(char)) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+function level3dMatchingBrace(text, openIndex) {
+  if (openIndex < 0 || text[openIndex] !== "{") {
+    return -1;
+  }
+  let depth = 0;
+  for (let index = openIndex; index < text.length; index += 1) {
+    const char = text[index];
+    if (char === "{") {
+      depth += 1;
+    } else if (char === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        return index;
+      }
+    }
+  }
+  return -1;
+}
+
+function nextLevel3dNonEmptyLine(lines, start) {
+  for (let index = start; index < lines.length; index += 1) {
+    if (lines[index]) {
+      return lines[index];
+    }
+  }
+  return "";
+}
+
+function isLevel3dSpriteName(value) {
+  return /^@?[A-Za-z_][\w:]*$/.test(String(value || "")) && !isLevel3dSpritePaletteRow(value);
+}
+
+function isLevel3dSpritePaletteRow(value) {
+  const tokens = String(value || "").split(/\s+/).filter(Boolean);
+  return tokens.length > 0 && tokens.every((token) => Boolean(level3dSpriteColorToken(token)));
+}
+
+function level3dSpritePaletteFromLine(line) {
+  const keys = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+  const palette = {};
+  const tokens = String(line || "").split(/\s+/).filter(Boolean);
+  if (!tokens.length || tokens.length > keys.length) {
+    return null;
+  }
+  for (const [index, token] of tokens.entries()) {
+    const color = level3dSpriteColorToken(token);
+    if (!color) {
+      return null;
+    }
+    palette[keys[index]] = color;
+  }
+  return palette;
+}
+
+function level3dSpriteColorToken(token) {
+  const value = String(token || "");
+  if (value.toLowerCase() === "transparent") {
+    return "transparent";
+  }
+  return /^#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(value) ? value : null;
 }
 
 function level3dLayerRuntimeSnapshot() {
@@ -2435,7 +3492,7 @@ function level3dLayerRuntimeSnapshot() {
 }
 
 function level3dLayerCamera() {
-  return { yawDegrees: 0, pitchDegrees: 90, zoom: 1 };
+  return { yawDegrees: 0, pitchDegrees: 90, zoom: 1, projection: "orthographic" };
 }
 
 function level3dLayerSettings(settings = {}) {
@@ -2457,6 +3514,13 @@ function level3dLayerSettings(settings = {}) {
 
 function renderLevel3dLayerOverlay() {
   if (!(level3dLayerOverlay instanceof HTMLCanvasElement) || !level3dLayerBoard) {
+    return;
+  }
+  if (level3dLayerBoard.classList.contains("is-grid-board")) {
+    const ctx = level3dLayerOverlay.getContext("2d");
+    if (ctx) {
+      ctx.clearRect(0, 0, level3dLayerOverlay.width, level3dLayerOverlay.height);
+    }
     return;
   }
   const metrics = level3dScaledSurfaceMetrics(level3dLayerOverlay);
@@ -2515,6 +3579,15 @@ function level3dLayerCellScreenPoints(position, width, height) {
 function level3dLayerPositionFromEvent(event) {
   if (!level3dLayerBoard) {
     return null;
+  }
+  const cell = document.elementFromPoint(event.clientX, event.clientY)?.closest?.(".level3d-layer-cell");
+  if (cell && level3dLayerBoard.contains(cell)) {
+    const position = {
+      x: Math.trunc(Number(cell.dataset.x) || 0),
+      y: Math.trunc(Number(cell.dataset.y) || 0),
+      z: Math.trunc(Number(cell.dataset.z) || currentLevel3dLayerZ()),
+    };
+    return level3dPositionInBounds(position) ? position : null;
   }
   const surface = level3dLayerOverlay instanceof HTMLCanvasElement
     ? level3dLayerOverlay
@@ -2779,6 +3852,33 @@ function level3dNormalizeRuntimeProjectionView(view) {
       pitchDegrees: Number(view.camera?.pitchDegrees ?? 35),
       zoom: 1,
     },
+    threeProjection: level3dNormalizeThreeProjection(view.threeProjection),
+  };
+}
+
+function level3dNormalizeThreeProjection(raw) {
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
+  const size = raw.size || {};
+  const target = raw.target || {};
+  const width = Math.max(1, Math.trunc(Number(size.width) || level3d.width || 1));
+  const depth = Math.max(1, Math.trunc(Number(size.depth) || level3d.depth || 1));
+  const height = Math.max(1, Math.trunc(Number(size.height) || level3d.height || 1));
+  const distance = Number(raw.distance);
+  const visibleHeight = Number(raw.visibleHeight);
+  return {
+    size: { width, depth, height },
+    target: {
+      x: Number(target.x) || 0,
+      y: Number(target.y) || 0,
+      z: Number(target.z) || 0,
+    },
+    distance: Number.isFinite(distance) && distance > 0 ? distance : 1,
+    visibleHeight: Number.isFinite(visibleHeight) && visibleHeight > 0 ? visibleHeight : 1,
+    fovDegrees: Number(raw.fovDegrees) || 34,
+    aspect: Math.max(0.01, Number(raw.aspect) || 1),
+    projection: String(raw.projection || "").toLowerCase() === "orthographic" ? "orthographic" : "perspective",
   };
 }
 
@@ -2898,6 +3998,9 @@ function scheduleLevel3dSurfaceResize() {
   level3dSurfaceResizeFrame = requestAnimationFrame(() => {
     level3dSurfaceResizeFrame = 0;
     syncLevel3dFrameLayout();
+    if (!level3dBuilder?.hidden) {
+      renderLevel3dLayerBoard();
+    }
     level3dStageRendererView = null;
     level3dLayerRendererView = null;
     renderLevel3dStageOverlay();
@@ -2944,6 +4047,9 @@ function handleLevel3dStagePointerDown(event) {
 function handleLevel3dStageKeydown(event) {
   if (level3dPlaytestActive) {
     sendLevel3dPlaytestKey(event);
+    return;
+  }
+  if (handleLevel3dSliceHorizontalInput(event)) {
     return;
   }
   if ((event.key !== "Enter" && event.key !== " ") || !level3dStageHit) {
@@ -3068,6 +4174,7 @@ function level3dRuntimePreviewDocument(update) {
       next.camera = JSON.parse(JSON.stringify(payload.camera || incoming.camera || {
         yawDegrees: view.yawDegrees,
         pitchDegrees: view.pitchDegrees,
+        projection: view.projection,
       }));
     }
     if (payload.view || incoming.view) {
@@ -3157,8 +4264,9 @@ function level3dStageHitKey(hit) {
 }
 
 function level3dSelectedEntry() {
-  return level3d.palette.find((entry) => entry.char === level3d.selectedChar)
-    || level3d.palette[0]
+  return level3dVisiblePaletteEntries().find((entry) => entry.char === level3d.selectedChar)
+    || level3dVisiblePaletteEntries().find((entry) => entry.objects.length > 0)
+    || level3dVisiblePaletteEntries()[0]
     || { char: level3dEmptyChar(), objects: [] };
 }
 
@@ -3313,6 +4421,9 @@ function puzzle3dSolverPreviewSnapshot() {
   if (levelSolutionPreview?.kind === "puzzle3d") {
     return levelSolutionPreview.snapshot
       || puzzle3dSolutionStepSnapshot(levelSolutionPreview.steps?.[levelSolutionPreview.index || 0]);
+  }
+  if (solverObservationPreview?.kind === "puzzle3d") {
+    return solverObservationPreview.snapshot || null;
   }
   if (typeof solverPuzzle3dPreviewSnapshot === "function") {
     return solverPuzzle3dPreviewSnapshot();
@@ -4426,6 +5537,9 @@ function level3dProjectedBoundsUnit(size, camera) {
 }
 
 function level3dProjectPoint(position, view) {
+  if (view?.threeProjection) {
+    return level3dProjectThreeSurfacePoint(position, view);
+  }
   if (level3dUsesRuntimeProjectionView(view)) {
     return level3dProjectRuntimeSurfacePoint(position, view);
   }
@@ -4443,6 +5557,92 @@ function level3dProjectPoint(position, view) {
     y: view.origin.y + (-yawY * Math.sin(pitch) - z * Math.cos(pitch)) * scale,
     depth: -yawY * Math.cos(pitch) + z * Math.sin(pitch),
   };
+}
+
+function level3dProjectThreeSurfacePoint(position, view) {
+  const projected = level3dProjectThreeCanvasPoint(position, view);
+  return level3dRuntimeCanvasPointToSurface(projected, view);
+}
+
+function level3dProjectThreeCanvasPoint(position, view) {
+  const projection = view.threeProjection || {};
+  const size = projection.size || { width: 1, depth: 1, height: 1 };
+  const camera = view.camera || {};
+  const target = projection.target || { x: 0, y: 0, z: 0 };
+  const yaw = level3dDegreesToRadians(camera.yawDegrees ?? 0);
+  const pitch = level3dDegreesToRadians(camera.pitchDegrees ?? 35);
+  const distance = Math.max(0.0001, Number(projection.distance) || 1);
+  const horizontal = Math.cos(pitch);
+  const cameraPosition = {
+    x: target.x - Math.sin(yaw) * horizontal * distance,
+    y: target.y + Math.sin(pitch) * distance,
+    z: target.z + Math.cos(yaw) * horizontal * distance,
+  };
+  const world = {
+    x: Number(position.x) - (Math.max(1, Number(size.width) || 1) - 1) / 2,
+    y: Number(position.z) - (Math.max(1, Number(size.height) || 1) - 1) / 2,
+    z: (Math.max(1, Number(size.depth) || 1) - 1) / 2 - Number(position.y),
+  };
+  const forward = level3dNormalizeVector({
+    x: target.x - cameraPosition.x,
+    y: target.y - cameraPosition.y,
+    z: target.z - cameraPosition.z,
+  });
+  let upSeed = { x: 0, y: 1, z: 0 };
+  if (Math.abs(Math.cos(pitch)) < 0.001) {
+    upSeed = { x: 0, y: 0, z: -Math.sign(Math.sin(pitch)) || -1 };
+  }
+  const right = level3dNormalizeVector(level3dCrossVector(forward, upSeed));
+  const up = level3dNormalizeVector(level3dCrossVector(right, forward));
+  const relative = {
+    x: world.x - cameraPosition.x,
+    y: world.y - cameraPosition.y,
+    z: world.z - cameraPosition.z,
+  };
+  const cameraX = level3dDotVector(relative, right);
+  const cameraY = level3dDotVector(relative, up);
+  const cameraDepth = Math.max(0.0001, level3dDotVector(relative, forward));
+  const width = Math.max(1, Number(view.width) || 1);
+  const height = Math.max(1, Number(view.height) || 1);
+  const aspect = Math.max(0.01, Number(projection.aspect) || width / height);
+  let ndcX = 0;
+  let ndcY = 0;
+  if (projection.projection === "orthographic") {
+    const visibleHeight = Math.max(0.0001, Number(projection.visibleHeight) || 1);
+    const visibleWidth = visibleHeight * aspect;
+    ndcX = cameraX / (visibleWidth / 2);
+    ndcY = cameraY / (visibleHeight / 2);
+  } else {
+    const tanHalfFov = Math.tan(level3dDegreesToRadians(Number(projection.fovDegrees) || 34) / 2);
+    ndcX = cameraX / (cameraDepth * tanHalfFov * aspect);
+    ndcY = cameraY / (cameraDepth * tanHalfFov);
+  }
+  return {
+    x: ((ndcX + 1) / 2) * width,
+    y: ((1 - ndcY) / 2) * height,
+    depth: cameraDepth,
+  };
+}
+
+function level3dNormalizeVector(vector) {
+  const length = Math.hypot(Number(vector.x) || 0, Number(vector.y) || 0, Number(vector.z) || 0) || 1;
+  return {
+    x: (Number(vector.x) || 0) / length,
+    y: (Number(vector.y) || 0) / length,
+    z: (Number(vector.z) || 0) / length,
+  };
+}
+
+function level3dCrossVector(left, right) {
+  return {
+    x: left.y * right.z - left.z * right.y,
+    y: left.z * right.x - left.x * right.z,
+    z: left.x * right.y - left.y * right.x,
+  };
+}
+
+function level3dDotVector(left, right) {
+  return left.x * right.x + left.y * right.y + left.z * right.z;
 }
 
 function level3dUsesRuntimeProjectionView(view) {
@@ -5038,6 +6238,18 @@ for (const scrub of [
 window.addEventListener("pointerup", stopLevel3dPreviewScrub, true);
 window.addEventListener("pointercancel", stopLevel3dPreviewScrub, true);
 window.addEventListener("blur", () => finishLevel3dPreviewScrub());
+document.addEventListener("click", (event) => {
+  document.querySelectorAll(".level3d-layer-palette .level-layer-visibility-menu:not([hidden])").forEach((menu) => {
+    const wrap = menu.closest(".level-layer-visibility-wrap");
+    if (wrap?.contains(event.target)) {
+      return;
+    }
+    menu.hidden = true;
+    const button = wrap?.querySelector(".level-layer-visibility-button");
+    button?.classList.remove("is-open");
+    button?.setAttribute("aria-expanded", "false");
+  });
+});
 level3dResetPreviewButton?.addEventListener("click", resetLevel3dPreviewView);
 level3dLayerInput?.addEventListener("change", applyLevel3dLayerInput);
 level3dLayerInput?.addEventListener("keydown", (event) => {
@@ -5062,6 +6274,9 @@ level3dLayerBoard?.addEventListener("pointermove", continueLevel3dLayerPaint);
 level3dLayerBoard?.addEventListener("pointerup", stopLevel3dLayerPaint);
 level3dLayerBoard?.addEventListener("pointercancel", stopLevel3dLayerPaint);
 level3dLayerBoard?.addEventListener("keydown", (event) => {
+  if (handleLevel3dSliceHorizontalInput(event)) {
+    return;
+  }
   if (event.key !== "Enter" && event.key !== " ") {
     return;
   }
@@ -5074,6 +6289,15 @@ level3dLayerBoard?.addEventListener("pointerleave", () => {
   level3dLayerHover = null;
   renderLevel3dLayerOverlay();
 });
+document.querySelectorAll("[data-level3d-layer-edge]").forEach((button) => {
+  button.addEventListener("click", () => {
+    const mode = level3dStageResizeMode();
+    if (!mode) {
+      return;
+    }
+    resizeLevel3dLayerEdge(button.dataset.level3dLayerEdge, mode);
+  });
+});
 window.addEventListener("message", handleLevel3dLayerRendererViewMessage);
 window.addEventListener("message", handleLevel3dStageRendererViewMessage);
 window.addEventListener("message", handleLevel3dPlaytestStateMessage);
@@ -5084,6 +6308,9 @@ document.addEventListener("keydown", (event) => {
     return;
   }
   sendLevel3dPlaytestKey(event);
+});
+document.addEventListener("keydown", (event) => {
+  handleLevel3dSliceHorizontalInput(event);
 });
 if (window.ResizeObserver) {
   const level3dSurfaceObserver = new ResizeObserver(scheduleLevel3dSurfaceResize);

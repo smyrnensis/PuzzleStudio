@@ -88,7 +88,7 @@ PS Next の構文と基本挙動に寄せた fork として `PuzzleScript 3D` �
 
 - `front`, `back`, `up`, `down`, `left`, `right` を 3D direction set として扱う。
 - 既存 2D の `up/down/left/right` との衝突を避けるため、3D mode でだけ `front/back` を direction として有効化する。
-- `LEVELS3` か `levels3` のような明示 section を追加する。既存 `LEVELS` の blank line separator と、3D slice separator が衝突するため、既存 `LEVELS` の解釈変更は避ける。
+- `three_dimensions` prelude と ordinary `LEVELS` を唯一の author-facing 3D level surface にする。slice は standalone `;` で表す。
 - 3D rule は最初は 1D directional rule に限定する。例: `[ > Player | Box ] -> [ > Player | > Box ]` を 6 方向へ展開できる形。
 
 避ける:
@@ -104,7 +104,7 @@ PS Next の構文と基本挙動に寄せた fork として `PuzzleScript 3D` �
 
 リスク:
 
-- PS Next は blank line を level separator として使う。3D slice separator も blank line にすると互換性が壊れる。upstream 提案では `LEVELS3` 内だけ blank line を slice と解釈するか、明示 slice marker を検討する。
+- PS Next は blank line を level separator として使う。3D slice separator も blank line にすると互換性が壊れるため、3D slice は standalone `;` に固定する。
 
 ### 2. Compiler/lowering: `src/js/compiler.js`
 
@@ -277,8 +277,8 @@ PS Next の構文と基本挙動に寄せた fork として `PuzzleScript 3D` �
 
 MVP に含める:
 
-- `3d` mode marker。具体構文は未決定だが、PS Next 側なら prelude line より `LEVELS3`/`RULES3` の明示 section の方が既存 `LEVELS` と衝突しにくい。
-- Objects / Legend / CollisionLayers / Rules / WinConditions / Levels3。
+- `three_dimensions` mode marker。
+- Objects / Legend / CollisionLayers / Rules / WinConditions / ordinary `LEVELS`。
 - 6 方向: `left`, `right`, `front`, `back`, `up`, `down`。
 - `horizontal = left right front back`。
 - `vertical = up down`。
@@ -382,4 +382,3 @@ upstream は 2D compatibility を壊さないための regression と review sur
 3. `PS_EXTRACTION/PS_NEXT_FUNCTION_MAP.md` を作り、実際に触る関数、読むだけの関数、触らない機能を表にする。
 4. 3D Sokoban の single-file example を PS Next style で書く。
 5. その example から必要機能を逆算し、PR 1/2/3 の境界を再調整する。
-

@@ -139,7 +139,7 @@ metadata before runtime starts.
 
 | Setting | 2D trace | 3D contract |
 | --- | --- | --- |
-| `case_sensitive` | Parser changes token case handling; affects object/glyph lookup. | Compiler. Must be honored because `LEVELS3` glyph parsing already depends on it. |
+| `case_sensitive` | Parser changes token case handling; affects object/glyph lookup. | Compiler. Must be honored by canonical `three_dimensions` plus `LEVELS` glyph parsing. |
 | `debug` | Compiler enables debug output in IDE. | Compiler/debug. Optional for execution, but slot should exist. |
 | `verbose_logging` | Compiler enables runtime verbose logging. | Compiler/session logging. |
 | `debug_switch` | Parsed as text and checked by runtime debug traces. | Compiler/session logging. |

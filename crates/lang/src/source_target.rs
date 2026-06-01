@@ -852,10 +852,10 @@ _P_
         let source = r#"
 sounds {
 sfx clear seed=clear01 type=jump
-music music_name seed=test1 tone=0 bpm=100
+music music_name seed=test1 bars=8 height=0 bpm=100
 }
 "#;
-        let cursor = source.find("tone=0").unwrap();
+        let cursor = source.find("height=0").unwrap();
         let target = resolve_source_target(source, cursor).unwrap();
 
         assert_eq!(target.kind, SourceTargetKind::Sounds);

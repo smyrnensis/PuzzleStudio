@@ -10,7 +10,6 @@ const PREVIEW_WORK_PANE_ID = "preview";
 const WORK_PANE_IDS = [
   SOURCE_WORK_PANE_ID,
   PREVIEW_WORK_PANE_ID,
-  "scene",
   "level",
   "solver",
   "sprite",
@@ -26,7 +25,6 @@ const PANE_ID_ALIASES = {
 };
 const PREVIEW_MODE_TO_WORK_PANE_ID = {
   play: PREVIEW_WORK_PANE_ID,
-  scene: "scene",
   edit: "level",
   level3d: "level",
   solver: "solver",
@@ -42,7 +40,6 @@ const MAX_VISIBLE_WORK_PANES = 2;
 const WORK_PANE_DEFAULT_WIDTHS = {
   [SOURCE_WORK_PANE_ID]: "42%",
   [PREVIEW_WORK_PANE_ID]: "420px",
-  scene: "520px",
   level: "420px",
   solver: "420px",
   sprite: "520px",
@@ -53,7 +50,6 @@ const WORK_PANE_DEFAULT_WIDTHS = {
 const WORK_PANE_MIN_WIDTHS = {
   [SOURCE_WORK_PANE_ID]: 240,
   [PREVIEW_WORK_PANE_ID]: 300,
-  scene: 360,
   level: 300,
   solver: 300,
   sprite: 320,
@@ -150,7 +146,6 @@ function toolPaneTitle(paneId) {
   return {
     [SOURCE_WORK_PANE_ID]: "Source",
     [PREVIEW_WORK_PANE_ID]: "Preview",
-    scene: "Scene",
     level: "Level",
     level3d: "3D Level",
     solver: "Solve",
@@ -164,7 +159,6 @@ function toolPaneTitle(paneId) {
 function toolPanePanelForPaneId(paneId) {
   return {
     [PREVIEW_WORK_PANE_ID]: playPreview,
-    scene: scenePanel,
     level: levelBuilder,
     level3d: level3dBuilder,
     solver: solverPanel,
@@ -210,6 +204,33 @@ function createPaneMaximizeButton(paneId) {
   return button;
 }
 
+function toolPaneHeaderActionGroups(paneId) {
+  if (paneId === "level") {
+    return [
+      document.querySelector("#levelPlaytestButton")?.closest(".source-action-group"),
+      document.querySelector("#level3dPlaytestButton")?.closest(".source-action-group"),
+    ].filter(Boolean);
+  }
+  if (paneId === "sprite") {
+    return [
+      document.querySelector("#spriteExportButton")?.closest(".source-action-group"),
+      document.querySelector("#sprite3dExportButton")?.closest(".source-action-group"),
+    ].filter(Boolean);
+  }
+  return [];
+}
+
+function syncToolPaneHeaderActionGroups() {
+  for (const group of toolPaneHeaderActionGroups("level")) {
+    const is3d = group.classList.contains("level3d-source-actions");
+    group.hidden = !isPaneVisible("level") || (is3d ? currentLevelPaneMode !== "level3d" : currentLevelPaneMode !== "edit");
+  }
+  for (const group of toolPaneHeaderActionGroups("sprite")) {
+    const is3d = Boolean(group.querySelector("#sprite3dExportButton"));
+    group.hidden = !isPaneVisible("sprite") || (is3d ? currentSpritePaneMode !== "sprite3d" : currentSpritePaneMode !== "sprite");
+  }
+}
+
 function createToolPane(paneId, panel) {
   const pane = document.createElement("section");
   pane.className = "preview-pane";
@@ -234,6 +255,12 @@ function createToolPane(paneId, panel) {
   }
   if (paneId === "sprite" && spritePaneModeSwitch) {
     title.append(spritePaneModeSwitch);
+  }
+  if (paneId === "sounds" && soundsHeaderTools) {
+    title.append(soundsHeaderTools);
+  }
+  for (const group of toolPaneHeaderActionGroups(paneId)) {
+    actions.append(group);
   }
   actions.append(createPaneMaximizeButton(paneId));
   actions.append(createPaneCloseButton(paneId));
@@ -427,6 +454,7 @@ function syncWorkbenchGridLayout() {
     const element = workPaneElementForPaneId(paneId);
     if (element) {
       element.style.gridColumn = String(columnIndex);
+      element.classList.toggle("is-leftmost-work-pane", index === 0);
     }
     columnIndex += 1;
     const splitter = splitters[index];
@@ -799,6 +827,7 @@ function applyPaneVisibility() {
   if (spritePaneModeSwitch) {
     spritePaneModeSwitch.hidden = !isPaneVisible("sprite");
   }
+  syncToolPaneHeaderActionGroups();
   syncWorkbenchGridLayout();
   paneToggleButtons.forEach((button) => {
     const normalized = normalizePaneId(button.dataset.paneToggle);
@@ -965,6 +994,9 @@ function resizePanes(event) {
   }
   setWorkPaneWidth(resizingPaneEdge.leftPaneId, `${next}px`);
   syncWorkbenchGridLayout();
+  if (typeof scheduleSourceEditorLayoutSync === "function") {
+    scheduleSourceEditorLayoutSync(2);
+  }
   syncPreviewViewportScale();
   workbench.dataset.collapsingPane = pendingPaneCollapse || "";
   workbench.dataset.collapsingPreview = pendingPaneCollapse && isPreviewHostPaneId(pendingPaneCollapse) ? "true" : "false";
@@ -1033,6 +1065,9 @@ function resizeExplorer(event) {
   pendingExplorerCollapse = pointerX <= snapWidth;
   const next = pendingExplorerCollapse ? 0 : Math.max(minWidth, Math.min(maxWidth, pointerX));
   workbench.style.setProperty("--explorer-pane-width", `${next}px`);
+  if (typeof scheduleSourceEditorLayoutSync === "function") {
+    scheduleSourceEditorLayoutSync(2);
+  }
   syncPreviewViewportScale();
   workbench.classList.toggle("is-explorer-collapse-pending", pendingExplorerCollapse);
 }

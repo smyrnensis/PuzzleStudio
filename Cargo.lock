@@ -2330,6 +2330,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "puzzle-authoring"
+version = "0.1.0"
+
+[[package]]
 name = "puzzle-core"
 version = "0.1.0"
 dependencies = [
@@ -2355,6 +2359,7 @@ version = "0.1.0"
 name = "puzzle-lang"
 version = "0.1.0"
 dependencies = [
+ "puzzle-authoring",
  "puzzle-core",
  "puzzle-kernel",
  "puzzle-scene",
@@ -2412,6 +2417,7 @@ dependencies = [
 name = "puzzle3d-model"
 version = "0.1.0"
 dependencies = [
+ "puzzle-authoring",
  "puzzle-kernel",
  "puzzle-scene",
 ]

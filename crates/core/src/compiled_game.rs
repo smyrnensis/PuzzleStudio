@@ -1,4 +1,4 @@
-use crate::ids::{GlobalId, InputId, LayerId, ObjectId, QueryId, RuleId, ScratchId};
+use crate::ids::{GlobalId, InputId, LayerId, ObjectId, ConditionId, RuleId, ScratchId};
 pub use puzzle_kernel::{
     GlobalUpdateOp, LocalFrame, LocalFrameExtent, ScratchKind, ScratchValueMatch,
 };
@@ -10,7 +10,7 @@ pub struct CompiledGame {
     pub layer_count: u16,
     objects: Vec<ObjectDef>,
     scratch: Vec<ScratchDef>,
-    queries: Vec<QueryDef>,
+    condition_defs: Vec<ConditionDef>,
     rules: Vec<Rule>,
     program: Vec<RuleStep>,
     visual_objects: Vec<ObjectId>,
@@ -24,7 +24,7 @@ impl CompiledGame {
             layer_count,
             objects,
             scratch: Vec::new(),
-            queries: Vec::new(),
+            condition_defs: Vec::new(),
             rules,
             program,
             visual_objects: Vec::new(),
@@ -37,47 +37,47 @@ impl CompiledGame {
         objects: Vec<ObjectDef>,
         program: Vec<RuleStep>,
     ) -> Self {
-        Self::new_with_queries_and_program(layer_count, objects, Vec::new(), program)
+        Self::new_with_condition_defs_and_program(layer_count, objects, Vec::new(), program)
     }
 
-    pub fn new_with_queries_and_program(
+    pub fn new_with_condition_defs_and_program(
         layer_count: u16,
         objects: Vec<ObjectDef>,
-        queries: Vec<QueryDef>,
+        condition_defs: Vec<ConditionDef>,
         program: Vec<RuleStep>,
     ) -> Self {
-        Self::new_with_scratch_queries_and_program(
+        Self::new_with_scratch_condition_defs_and_program(
             layer_count,
             objects,
             Vec::new(),
-            queries,
+            condition_defs,
             program,
         )
     }
 
-    pub fn new_with_scratch_queries_and_program(
+    pub fn new_with_scratch_condition_defs_and_program(
         layer_count: u16,
         objects: Vec<ObjectDef>,
         scratch: Vec<ScratchDef>,
-        queries: Vec<QueryDef>,
+        condition_defs: Vec<ConditionDef>,
         program: Vec<RuleStep>,
     ) -> Self {
-        Self::new_with_scratch_queries_program_roles(
+        Self::new_with_scratch_condition_defs_program_roles(
             layer_count,
             objects,
             scratch,
-            queries,
+            condition_defs,
             program,
             Vec::new(),
             Vec::new(),
         )
     }
 
-    pub fn new_with_scratch_queries_program_roles(
+    pub fn new_with_scratch_condition_defs_program_roles(
         layer_count: u16,
         objects: Vec<ObjectDef>,
         scratch: Vec<ScratchDef>,
-        queries: Vec<QueryDef>,
+        condition_defs: Vec<ConditionDef>,
         program: Vec<RuleStep>,
         mut visual_objects: Vec<ObjectId>,
         mut visual_rules: Vec<RuleId>,
@@ -92,7 +92,7 @@ impl CompiledGame {
             layer_count,
             objects,
             scratch,
-            queries,
+            condition_defs,
             rules,
             program,
             visual_objects,
@@ -116,13 +116,13 @@ impl CompiledGame {
     }
 
     #[inline]
-    pub fn queries(&self) -> &[QueryDef] {
-        &self.queries
+    pub fn condition_defs(&self) -> &[ConditionDef] {
+        &self.condition_defs
     }
 
     #[inline]
-    pub fn query(&self, query: QueryId) -> Option<&QueryDef> {
-        self.queries.get(usize::from(query.0))
+    pub fn condition_def(&self, condition: ConditionId) -> Option<&ConditionDef> {
+        self.condition_defs.get(usize::from(condition.0))
     }
 
     #[inline]
@@ -177,11 +177,11 @@ impl CompiledGame {
 
     pub fn solver_core(&self) -> Self {
         let program = filter_visual_steps(&self.program, &self.visual_rules);
-        Self::new_with_scratch_queries_program_roles(
+        Self::new_with_scratch_condition_defs_program_roles(
             self.layer_count,
             self.objects.clone(),
             self.scratch.clone(),
-            self.queries.clone(),
+            self.condition_defs.clone(),
             program,
             self.visual_objects.clone(),
             Vec::new(),
@@ -304,23 +304,23 @@ pub enum Guard {
         op: ComparisonOp,
         value: i64,
     },
-    QueryEquals {
-        query: QueryId,
+    ConditionEquals {
+        condition: ConditionId,
         value: i64,
     },
-    QueryNonZero(QueryId),
-    QueryCompare {
-        query: QueryId,
+    ConditionNonZero(ConditionId),
+    ConditionCompare {
+        condition: ConditionId,
         op: ComparisonOp,
         value: i64,
     },
-    QueryValue {
-        kind: QueryKind,
+    InlineConditionValue {
+        kind: ConditionValueKind,
         value: i64,
     },
-    QueryValueNonZero(QueryKind),
-    QueryValueCompare {
-        kind: QueryKind,
+    InlineConditionNonZero(ConditionValueKind),
+    InlineConditionCompare {
+        kind: ConditionValueKind,
         op: ComparisonOp,
         value: i64,
     },
@@ -361,12 +361,12 @@ pub enum Effect {
 }
 
 #[derive(Clone, Debug)]
-pub struct QueryDef {
-    pub id: QueryId,
-    pub kind: QueryKind,
+pub struct ConditionDef {
+    pub id: ConditionId,
+    pub kind: ConditionValueKind,
 }
 
-pub type QueryKind = puzzle_kernel::QueryKind<ObjectId, Pattern, InputId>;
+pub type ConditionValueKind = puzzle_kernel::ConditionValueKind<ObjectId, Pattern, InputId>;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum RuleApplication {

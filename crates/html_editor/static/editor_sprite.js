@@ -1059,6 +1059,7 @@ function setSpriteEditSource(entry, document = activeDocument()) {
     : Number.isInteger(entry?.openIndex)
       ? entry.openIndex
       : null;
+  sprite.editSourceName = entry?.name || "";
 }
 
 function activeSpriteEditSource() {
@@ -2286,7 +2287,7 @@ function findSpriteDefinitionAtPosition(source, position) {
         end: closeIndex + 1,
         bodyStart: openIndex + 1,
         bodyEnd: closeIndex,
-        indent: match[2] || `${spritesBlock.indent}\t`,
+        indent: match[2] || spriteSourceChildIndent(spritesBlock.indent),
         openIndex,
         closeIndex,
       };
@@ -2645,15 +2646,16 @@ function addSpriteToSource() {
   if (!source) {
     return;
   }
-  const result = { source };
+  const result = { source, start: inserted.start };
   document.source = result.source;
   if (document.id === activeDocument()?.id) {
     setSourceEditorValue(result.source, { resetUndo: false });
+    revealSpriteSourceResult(document, result);
   }
   scheduleLocalSave();
   schedulePreview();
-  setSpriteEditDocument(document);
-  sourceEditor.focus();
+  setSpriteEditSource({ start: result.start, name: spriteObjectName() }, document);
+  sourceEditor.focus({ preventScroll: true });
   setSpriteActionStatus("Added sprite", "is-ok");
   setStatus("Added sprite", "is-ok");
 }
@@ -2680,11 +2682,12 @@ function updateSpriteInSource() {
   document.source = result.source;
   if (document.id === activeDocument()?.id) {
     setSourceEditorValue(result.source, { resetUndo: false });
+    revealSpriteSourceResult(document, result);
   }
   scheduleLocalSave();
   schedulePreview();
-  setSpriteEditDocument(document);
-  sourceEditor.focus();
+  setSpriteEditSource({ start: result.start, name: spriteObjectName() }, document);
+  sourceEditor.focus({ preventScroll: true });
   setSpriteActionStatus("Updated sprite", "is-ok");
   setStatus("Updated sprite", "is-ok");
 }
@@ -2751,23 +2754,28 @@ function insertSpriteDefinition(source) {
   if (!block) {
     const puzzleBlock = findPuzzleBlock(source);
     if (puzzleBlock) {
-      const blockIndent = `${puzzleBlock.indent}\t`;
+      const blockIndent = spriteSourceChildIndent(puzzleBlock.indent);
+      const insertStart = source.slice(0, puzzleBlock.bodyEnd).trimEnd().length + 2 + blockIndent.length + "sprites {\n".length;
       return {
-        source: `${source.slice(0, puzzleBlock.bodyEnd).trimEnd()}\n\n${blockIndent}sprites {\n${spriteObjectDefinitionText(`${blockIndent}\t`)}\n${blockIndent}}\n${source.slice(puzzleBlock.bodyEnd)}`,
+        source: `${source.slice(0, puzzleBlock.bodyEnd).trimEnd()}\n\n${blockIndent}sprites {\n${spriteObjectDefinitionText(spriteSourceChildIndent(blockIndent))}\n${blockIndent}}\n${source.slice(puzzleBlock.bodyEnd)}`,
+        start: insertStart,
         updated: false,
       };
     }
 
     const prefix = source.trimEnd() ? `${source.trimEnd()}\n\n` : "";
     return {
-      source: `${prefix}sprites {\n${spriteObjectDefinitionText("\t")}\n}\n`,
+      source: `${prefix}sprites {\n${spriteObjectDefinitionText(SPRITE_SOURCE_INDENT)}\n}\n`,
+      start: `${prefix}sprites {\n`.length,
       updated: false,
     };
   }
 
-  const indent = `${block.indent}\t`;
+  const indent = spriteSourceChildIndent(block.indent);
+  const before = source.slice(0, block.bodyEnd).trimEnd();
   return {
-    source: `${source.slice(0, block.bodyEnd).trimEnd()}\n\n${spriteObjectDefinitionText(indent)}\n${source.slice(block.bodyEnd)}`,
+    source: `${before}\n\n${spriteObjectDefinitionText(indent)}\n${source.slice(block.bodyEnd)}`,
+    start: before.length + 2,
   };
 }
 
@@ -2780,9 +2788,10 @@ function replaceSpriteDefinition(source) {
   if (!entry) {
     return null;
   }
-  const replacement = spriteObjectDefinitionText(entry.indent);
+  const replacement = spriteObjectDefinitionText(spriteSourceIndent(entry.indent));
   return {
     source: replaceEditorSourceRangePreservingLineBoundary(source, entry.start, entry.end, replacement),
+    start: entry.start,
   };
 }
 
@@ -2805,20 +2814,40 @@ function syncSpriteSourceActionButtons() {
 }
 
 function findCurrentSpriteDefinitionEntry(source, block) {
-  const named = findSpriteDefinitionBlock(source, block, spriteObjectName());
-  if (named) {
-    sprite.editSourceStart = Number.isInteger(named.start) ? named.start : sprite.editSourceStart;
-    return named;
-  }
-  if (!Number.isInteger(sprite.editSourceStart)) {
-    return null;
-  }
-  const positioned = findSpriteDefinitionAtPosition(source, sprite.editSourceStart);
+  const positioned = Number.isInteger(sprite.editSourceStart)
+    ? findSpriteDefinitionAtPosition(source, sprite.editSourceStart)
+    : null;
   if (!positioned?.name) {
+    const named = findSpriteDefinitionBlock(source, block, spriteObjectName());
+    if (named) {
+      sprite.editSourceStart = Number.isInteger(named.start) ? named.start : sprite.editSourceStart;
+      sprite.editSourceName = spriteObjectName();
+      return named;
+    }
+    const originalNamed = sprite.editSourceName
+      ? findSpriteDefinitionBlock(source, block, sprite.editSourceName)
+      : null;
+    if (originalNamed) {
+      sprite.editSourceStart = Number.isInteger(originalNamed.start) ? originalNamed.start : sprite.editSourceStart;
+      return originalNamed;
+    }
     return null;
   }
-  spriteNameInput.value = positioned.name;
-  return findSpriteDefinitionBlock(source, block, positioned.name) || positioned;
+  return positioned;
+}
+
+function revealSpriteSourceResult(document, result) {
+  if (!Number.isInteger(result?.start) || typeof revealSourceLocation !== "function") {
+    return;
+  }
+  revealSourceLocation({
+    document,
+    start: result.start,
+    end: Number.isInteger(result.end) ? result.end : result.start,
+  }, {
+    recordHistory: false,
+    revealPane: false,
+  });
 }
 
 function findSpritesBlock(source) {
@@ -2887,11 +2916,12 @@ function ensureSpriteColorDefinition(source, name, color) {
   const normalized = normalizeSpriteColor(color);
   const colorsBlock = findVisualAssetBlock(source, spritesBlock, "colors");
   if (colorsBlock) {
-    const rowIndent = `${colorsBlock.indent}\t`;
+    const rowIndent = spriteSourceChildIndent(colorsBlock.indent);
     return `${source.slice(0, colorsBlock.bodyEnd).trimEnd()}\n${rowIndent}${name} = ${normalized}\n${source.slice(colorsBlock.bodyEnd)}`;
   }
-  const blockIndent = `${spritesBlock.indent}\t`;
-  const colorsText = `\n${blockIndent}colors {\n${blockIndent}\t${name} = ${normalized}\n${blockIndent}}\n`;
+  const blockIndent = spriteSourceChildIndent(spritesBlock.indent);
+  const rowIndent = spriteSourceChildIndent(blockIndent);
+  const colorsText = `\n${blockIndent}colors {\n${rowIndent}${name} = ${normalized}\n${blockIndent}}\n`;
   return `${source.slice(0, spritesBlock.bodyStart)}${colorsText}${source.slice(spritesBlock.bodyStart)}`;
 }
 
@@ -2916,11 +2946,12 @@ function ensureSpritePaletteDefinition(source, name, tokens) {
   const palettesBlock = findVisualAssetBlock(source, spritesBlock, "palettes");
   const row = `${name} = ${tokens.join(" ")}`;
   if (palettesBlock) {
-    const rowIndent = `${palettesBlock.indent}\t`;
+    const rowIndent = spriteSourceChildIndent(palettesBlock.indent);
     return `${source.slice(0, palettesBlock.bodyEnd).trimEnd()}\n${rowIndent}${row}\n${source.slice(palettesBlock.bodyEnd)}`;
   }
-  const blockIndent = `${spritesBlock.indent}\t`;
-  const text = `\n${blockIndent}palettes {\n${blockIndent}\t${row}\n${blockIndent}}\n`;
+  const blockIndent = spriteSourceChildIndent(spritesBlock.indent);
+  const rowIndent = spriteSourceChildIndent(blockIndent);
+  const text = `\n${blockIndent}palettes {\n${rowIndent}${row}\n${blockIndent}}\n`;
   return `${source.slice(0, spritesBlock.bodyStart)}${text}${source.slice(spritesBlock.bodyStart)}`;
 }
 
@@ -2950,12 +2981,15 @@ function ensureSpriteShapeDefinition(source, name, rows) {
   }
   const shapesBlock = findVisualAssetBlock(source, spritesBlock, "shapes");
   if (shapesBlock) {
-    const indent = `${shapesBlock.indent}\t`;
-    const text = `\n${indent}${name} {\n${rows.map((row) => `${indent}\t${row}`).join("\n")}\n${indent}}\n`;
+    const indent = spriteSourceChildIndent(shapesBlock.indent);
+    const rowIndent = spriteSourceChildIndent(indent);
+    const text = `\n${indent}${name} {\n${rows.map((row) => `${rowIndent}${row}`).join("\n")}\n${indent}}\n`;
     return `${source.slice(0, shapesBlock.bodyEnd).trimEnd()}${text}${source.slice(shapesBlock.bodyEnd)}`;
   }
-  const blockIndent = `${spritesBlock.indent}\t`;
-  const text = `\n${blockIndent}shapes {\n${blockIndent}\t${name} {\n${rows.map((row) => `${blockIndent}\t\t${row}`).join("\n")}\n${blockIndent}\t}\n${blockIndent}}\n`;
+  const blockIndent = spriteSourceChildIndent(spritesBlock.indent);
+  const shapeIndent = spriteSourceChildIndent(blockIndent);
+  const rowIndent = spriteSourceChildIndent(shapeIndent);
+  const text = `\n${blockIndent}shapes {\n${shapeIndent}${name} {\n${rows.map((row) => `${rowIndent}${row}`).join("\n")}\n${shapeIndent}}\n${blockIndent}}\n`;
   return `${source.slice(0, spritesBlock.bodyStart)}${text}${source.slice(spritesBlock.bodyStart)}`;
 }
 
@@ -2964,8 +2998,9 @@ function replaceSpriteShapeDefinition(source, name, rows) {
   if (!range) {
     return null;
   }
-  const indent = `${range.indent}\t`;
-  const body = `\n${rows.map((row) => `${indent}${row}`).join("\n")}\n${range.indent}`;
+  const rangeIndent = spriteSourceIndent(range.indent);
+  const indent = spriteSourceChildIndent(rangeIndent);
+  const body = `\n${rows.map((row) => `${indent}${row}`).join("\n")}\n${rangeIndent}`;
   return `${source.slice(0, range.bodyStart)}${body}${source.slice(range.bodyEnd)}`;
 }
 
@@ -2995,7 +3030,7 @@ function findSpriteShapeDefinitionRange(source, name) {
       continue;
     }
     return {
-      indent: match[2] || `${shapesBlock.indent}\t`,
+      indent: match[2] || spriteSourceChildIndent(shapesBlock.indent),
       bodyStart: openIndex + 1,
       bodyEnd: closeIndex,
     };
@@ -3033,7 +3068,7 @@ function findSpriteShapeTableRowRange(source, shapesBlock, tableName, value = ""
         continue;
       }
       const range = {
-        indent: rowMatch[2] || `${tableMatch[2]}\t`,
+        indent: rowMatch[2] || spriteSourceChildIndent(tableMatch[2]),
         bodyStart: openIndex + 1,
         bodyEnd: closeIndex,
       };
@@ -3128,8 +3163,19 @@ function findPuzzleBlock(source) {
   };
 }
 
+const SPRITE_SOURCE_INDENT = "";
+
+function spriteSourceIndent(indent = "") {
+  return String(indent || "").replace(/\t/g, SPRITE_SOURCE_INDENT);
+}
+
+function spriteSourceChildIndent(indent = "") {
+  return `${spriteSourceIndent(indent)}${SPRITE_SOURCE_INDENT}`;
+}
+
 function spriteObjectDefinitionText(indent) {
-  const rowIndent = `${indent}\t`;
+  const normalizedIndent = spriteSourceIndent(indent);
+  const rowIndent = spriteSourceChildIndent(normalizedIndent);
   const paletteInfo = spriteAssetBindInfo(sprite.paletteBind, "palette");
   const shapeInfo = spriteAssetBindInfo(sprite.shapeBind, "shape");
   const colorRow = paletteInfo.linked && paletteInfo.name
@@ -3138,12 +3184,12 @@ function spriteObjectDefinitionText(indent) {
   const solidRow = sprite.solidSource ? spriteSolidDefinitionRow(paletteInfo, shapeInfo) : null;
   if (solidRow) {
     return [
-      `${indent}${spriteObjectName()}`,
+      `${normalizedIndent}${spriteObjectName()}`,
       `${rowIndent}${solidRow}`,
     ].join("\n");
   }
   const lines = [
-    `${indent}${spriteObjectName()}`,
+    `${normalizedIndent}${spriteObjectName()}`,
     `${rowIndent}${colorRow}`,
   ];
   if (shapeInfo.linked && shapeInfo.name) {
@@ -3188,7 +3234,7 @@ function findSpriteDefinitionBlock(source, spritesBlock, name) {
     return {
       start: spritesBlock.bodyStart + bodyMatchStart,
       end: closeIndex + 1,
-      indent: match[2] || `${spritesBlock.indent}\t`,
+      indent: match[2] || spriteSourceChildIndent(spritesBlock.indent),
     };
   }
   return findUnbracedSpriteDefinitionBlock(source, spritesBlock, name);
@@ -3246,7 +3292,7 @@ function unbracedSpriteDefinitionFromLine(source, spritesBlock, start, indent, n
     end: bodyEnd,
     bodyStart,
     bodyEnd,
-    indent: indent || `${spritesBlock.indent}\t`,
+    indent: indent || spriteSourceChildIndent(spritesBlock.indent),
   };
 }
 

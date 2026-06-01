@@ -27,8 +27,4 @@ done
 
 output_dir="$(dirname "$output")"
 mkdir -p "$output_dir"
-tools/generate_editor.sh "${args[@]}"
-
-mkdir -p "$output_dir/wasm"
-cp crates/html_editor/static/wasm/puzzle_wasm.js "$output_dir/wasm/"
-cp crates/html_editor/static/wasm/puzzle_wasm_bg.wasm "$output_dir/wasm/"
+cargo run -p html-editor -- "${args[@]}"

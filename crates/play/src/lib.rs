@@ -768,6 +768,23 @@ impl GameSession {
                 RuleEffect::Message { text, literal } => {
                     let text = self.resolve_message_text(&text, literal);
                     self.message_events.push(MessageEvent::Message { text });
+                    if self.pending_program_continuation.is_none() {
+                        let remaining = effects.split_off(index + 1);
+                        if !remaining.is_empty() || condition_effect.is_some() {
+                            self.pending_effect_continuation = Some(PendingEffectContinuation {
+                                effects: remaining,
+                                condition_effect,
+                            });
+                            self.wait_events.push(WaitEvent::ContinueEffects {
+                                milliseconds: game.default_wait_ms,
+                            });
+                        } else {
+                            self.wait_events.push(WaitEvent::Wait {
+                                milliseconds: game.default_wait_ms,
+                            });
+                        }
+                        return self.resolve_turn_commands(game, commands, None);
+                    }
                 }
             }
             index += 1;
@@ -1010,6 +1027,9 @@ impl GameSession {
                     RuleEmission::Message { text, literal } => {
                         let text = self.resolve_message_text(text, *literal);
                         self.message_events.push(MessageEvent::Message { text });
+                        self.wait_events.push(WaitEvent::Wait {
+                            milliseconds: game.default_wait_ms,
+                        });
                     }
                     RuleEmission::Animate { .. } => {}
                 }
@@ -1501,6 +1521,9 @@ impl GameSession {
             SceneEffect::Message { text } => {
                 if let Some(text) = self.eval_effect_string(game, text, bindings) {
                     self.message_events.push(MessageEvent::Message { text });
+                    self.wait_events.push(WaitEvent::Wait {
+                        milliseconds: game.default_wait_ms,
+                    });
                 }
                 Ok(())
             }
@@ -2789,9 +2812,6 @@ fn level_ref_field(
 
 fn parse_runtime_command(command_text: &str, default_wait_ms: u64) -> Option<SceneEffect> {
     let command_text = command_text.trim();
-    if command_text == "back" || command_text == "close" {
-        return Some(SceneEffect::Back);
-    }
     if command_text == "clear_undo_history" || command_text == "clear_history" {
         return Some(SceneEffect::ClearUndoHistory);
     }
@@ -2916,11 +2936,7 @@ fn parse_runtime_command(command_text: &str, default_wait_ms: u64) -> Option<Sce
         return None;
     }
     match command {
-        "goto" | "resume" => Some(SceneEffect::Goto {
-            scene: screen.to_string(),
-            params,
-        }),
-        "enter" | "open" => Some(SceneEffect::Enter {
+        "goto" => Some(SceneEffect::Goto {
             scene: screen.to_string(),
             params,
         }),
@@ -2933,27 +2949,6 @@ fn parse_runtime_command(command_text: &str, default_wait_ms: u64) -> Option<Sce
                 params,
             },
         ])),
-        "create" => Some(SceneEffect::Create {
-            scene: screen.to_string(),
-        }),
-        "reset" => Some(SceneEffect::Reset {
-            scene: screen.to_string(),
-        }),
-        "delete" => Some(SceneEffect::Delete {
-            scene: screen.to_string(),
-        }),
-        "show" => Some(SceneEffect::Show {
-            scene: screen.to_string(),
-        }),
-        "hide" => Some(SceneEffect::Hide {
-            scene: screen.to_string(),
-        }),
-        "toggle" => Some(SceneEffect::Toggle {
-            scene: screen.to_string(),
-        }),
-        "focus" => Some(SceneEffect::Focus {
-            scene: screen.to_string(),
-        }),
         _ => None,
     }
 }
@@ -3197,7 +3192,7 @@ pub fn animation_events_for_trace(
             };
             match trigger {
                 RuleAnimationTrigger::Move => {
-                    for op in &patch.ops {
+                    for op in patch.ops() {
                         let PatchOp::Move {
                             from_x,
                             from_y,
@@ -3224,7 +3219,7 @@ pub fn animation_events_for_trace(
                     }
                 }
                 RuleAnimationTrigger::CantMove => {
-                    for op in &patch.ops {
+                    for op in patch.ops() {
                         let PatchOp::RemoveScratch {
                             x,
                             y,
@@ -3288,21 +3283,25 @@ fn split_effects_at_program_boundary(
     for (index, effect) in effects.iter().enumerate() {
         match effect.effect {
             RuleEffect::Wait { milliseconds } => {
-                boundary = Some((index, milliseconds));
+                boundary = Some((index, index + 1, milliseconds));
                 break;
             }
             RuleEffect::WaitAnimation => {
                 if let Some(milliseconds) = animation_wait_milliseconds(game, animations) {
-                    boundary = Some((index, milliseconds));
+                    boundary = Some((index, index + 1, milliseconds));
                     break;
                 }
+            }
+            RuleEffect::Message { .. } => {
+                boundary = Some((index + 1, index + 1, game.default_wait_ms));
+                break;
             }
             _ => {}
         }
     }
-    let (index, milliseconds) = boundary?;
-    let before = effects[..index].to_vec();
-    let after = effects[index + 1..].to_vec();
+    let (before_end, after_start, milliseconds) = boundary?;
+    let before = effects[..before_end].to_vec();
+    let after = effects[after_start..].to_vec();
     Some((before, milliseconds, after))
 }
 
@@ -4841,6 +4840,7 @@ P
         let loaded = parse_game(
             r#"
 title scene_message_fixture
+default_wait_time = 350ms
 var hint = "Push the box"
 puzzle default {
 layers 1
@@ -4877,6 +4877,10 @@ message hint
             vec![MessageEvent::Message {
                 text: "Push the box".to_string()
             }]
+        );
+        assert_eq!(
+            session.take_wait_events(),
+            vec![WaitEvent::Wait { milliseconds: 350 }]
         );
     }
 
@@ -4933,6 +4937,7 @@ message hint
         let loaded = parse_game(
             r#"
 title puzzle_message_fixture
+default_wait_time = 400ms
 var hint = "Found"
 puzzle default {
 layers {
@@ -4971,6 +4976,66 @@ level start {
                 text: "Found".to_string()
             }]
         );
+        assert_eq!(
+            session.take_wait_events(),
+            vec![WaitEvent::ContinueEffects { milliseconds: 400 }]
+        );
+    }
+
+    #[test]
+    fn message_effect_waits_before_following_rule_segment() {
+        let loaded = parse_game(
+            r#"
+title message_rule_segment_wait
+default_wait_time = 450ms
+puzzle default {
+layers 1
+empty .
+object A 0
+object B 0
+object C 0
+rules {
+[ A ] -> [ B ] message "changed"
+[ B ] -> [ C ]
+}
+levels {
+legend {
+A = A
+B = B
+C = C
+}
+level start {
+A
+}
+}
+}
+"#,
+        )
+        .unwrap();
+        let mut session = GameSession::new(&loaded);
+        let b = object_named(&loaded, "B");
+        let c = object_named(&loaded, "C");
+
+        session.apply_input(&loaded, InputId(0)).unwrap();
+
+        assert!(session.state().has_object(&loaded.game, 0, 0, b));
+        assert!(!session.state().has_object(&loaded.game, 0, 0, c));
+        assert_eq!(
+            session.take_message_events(),
+            vec![MessageEvent::Message {
+                text: "changed".to_string()
+            }]
+        );
+        assert_eq!(
+            session.take_wait_events(),
+            vec![WaitEvent::ContinueEffects { milliseconds: 450 }]
+        );
+
+        session
+            .apply_command(&loaded, "__continue_effects")
+            .unwrap();
+
+        assert!(session.state().has_object(&loaded.game, 0, 0, c));
     }
 
     #[test]
@@ -5568,7 +5633,7 @@ text "clear"
         session.apply_command(&loaded, "goto playing").unwrap();
         let initial = session.state().clone();
 
-        session.apply_command(&loaded, "enter menu").unwrap();
+        session.apply_command(&loaded, "goto menu").unwrap();
         assert_eq!(session.screen(), "menu");
 
         session.apply_command(&loaded, "right").unwrap();
@@ -6376,7 +6441,7 @@ board
 scene select {
 layout {
 level_menu {
-button "Back" -> back
+button "Title" -> goto title
 }
 }
 }
@@ -6384,7 +6449,7 @@ button "Back" -> back
         let loaded = parse_game(source).unwrap();
         let mut session = GameSession::new(&loaded);
 
-        session.apply_command(&loaded, "enter select").unwrap();
+        session.apply_command(&loaded, "goto select").unwrap();
         session.apply_command(&loaded, "down").unwrap();
         session.apply_command(&loaded, "down").unwrap();
         assert_eq!(session.selected_level_index(), 1);
@@ -6394,7 +6459,7 @@ button "Back" -> back
     }
 
     #[test]
-    fn enter_back_preserves_nested_screen_history_and_state() {
+    fn goto_preserves_fixed_scene_state_without_history_stack() {
         let source = r#"
 title screen_history
 puzzle default {
@@ -6442,20 +6507,23 @@ text "C"
         let loaded = parse_game(source).unwrap();
         let mut session = GameSession::new(&loaded);
 
-        session.apply_command(&loaded, "enter b").unwrap();
+        session
+            .apply_command(&loaded, "goto b with mark = first")
+            .unwrap();
         assert_eq!(session.screen(), "b");
 
-        session.apply_command(&loaded, "enter a").unwrap();
-        session.apply_command(&loaded, "enter c").unwrap();
-        session.apply_command(&loaded, "enter a").unwrap();
-        session.apply_command(&loaded, "enter b").unwrap();
+        session.apply_command(&loaded, "goto a").unwrap();
+        session.apply_command(&loaded, "goto c").unwrap();
+        session.apply_command(&loaded, "goto a").unwrap();
+        session.apply_command(&loaded, "goto b").unwrap();
 
         assert_eq!(session.screen(), "b");
-
-        for expected in ["a", "c", "a", "b", "a"] {
-            session.apply_command(&loaded, "back").unwrap();
-            assert_eq!(session.screen(), expected);
-        }
+        assert_eq!(
+            session
+                .scene_state()
+                .and_then(|state| state.values.get("mark")),
+            Some(&SceneValue::Symbol("first".to_string()))
+        );
     }
 
     #[test]
@@ -6497,8 +6565,10 @@ text tab
         let loaded = parse_game(source).unwrap();
         let mut session = GameSession::new(&loaded);
 
-        session.apply_command(&loaded, "enter menu").unwrap();
-        session.apply_command(&loaded, "reset menu").unwrap();
+        session
+            .apply_command(&loaded, "goto menu with transient = changed")
+            .unwrap();
+        session.apply_command(&loaded, "start menu").unwrap();
 
         assert_eq!(
             session
@@ -6553,7 +6623,7 @@ text tab
         let mut session = GameSession::new(&loaded);
 
         session
-            .apply_command(&loaded, "enter menu with tab = settings")
+            .apply_command(&loaded, "goto menu with tab = settings")
             .unwrap();
         assert_eq!(session.screen(), "menu");
         assert_eq!(
@@ -6565,7 +6635,7 @@ text tab
     }
 
     #[test]
-    fn runtime_scene_words_separate_resume_open_close_and_start() {
+    fn runtime_scene_words_keep_goto_and_start_only() {
         let source = r#"
 title scene_state_words
 puzzle default {
@@ -6609,7 +6679,7 @@ text "Menu"
         let mut session = GameSession::new(&loaded);
 
         session
-            .apply_command(&loaded, "resume playing with selected = first")
+            .apply_command(&loaded, "goto playing with selected = first")
             .unwrap();
         assert_eq!(session.screen(), "playing");
         assert_eq!(
@@ -6619,10 +6689,14 @@ text "Menu"
             Some(&SceneValue::LevelRef(0))
         );
 
-        session.apply_command(&loaded, "open menu").unwrap();
-        assert_eq!(session.screen(), "menu");
-        session.apply_command(&loaded, "close").unwrap();
-        assert_eq!(session.screen(), "playing");
+        for old in ["resume playing", "open menu", "enter menu", "back", "close"] {
+            session.apply_command(&loaded, old).unwrap();
+            assert_eq!(
+                session.screen(),
+                "playing",
+                "{old} should not navigate scenes"
+            );
+        }
 
         session.apply_command(&loaded, "start playing").unwrap();
         assert_eq!(
@@ -6743,42 +6817,13 @@ text "Levels"
         assert_eq!(session.screen(), "playing");
         assert_eq!(session.visible_scenes(), &["playing".to_string()]);
 
-        session.apply_command(&loaded, "enter menu").unwrap();
+        session.apply_command(&loaded, "goto menu").unwrap();
         assert_eq!(session.screen(), "menu");
-        assert_eq!(
-            session.visible_scenes(),
-            &["playing".to_string(), "menu".to_string()]
-        );
-
-        session.apply_command(&loaded, "back").unwrap();
-        assert_eq!(session.screen(), "playing");
-        assert_eq!(session.visible_scenes(), &["playing".to_string()]);
+        assert_eq!(session.visible_scenes(), &["menu".to_string()]);
 
         session.apply_command(&loaded, "goto level_select").unwrap();
         assert_eq!(session.screen(), "level_select");
         assert_eq!(session.visible_scenes(), &["level_select".to_string()]);
-
-        session.apply_command(&loaded, "back").unwrap();
-        assert_eq!(session.screen(), "playing");
-        assert_eq!(session.visible_scenes(), &["playing".to_string()]);
-
-        session.apply_command(&loaded, "show menu").unwrap();
-        assert_eq!(session.screen(), "playing");
-        assert_eq!(
-            session.visible_scenes(),
-            &["playing".to_string(), "menu".to_string()]
-        );
-
-        session.apply_command(&loaded, "focus menu").unwrap();
-        assert_eq!(session.screen(), "menu");
-        assert_eq!(
-            session.visible_scenes(),
-            &["playing".to_string(), "menu".to_string()]
-        );
-
-        session.apply_command(&loaded, "hide menu").unwrap();
-        assert_eq!(session.screen(), "playing");
-        assert_eq!(session.visible_scenes(), &["playing".to_string()]);
     }
 
     #[test]
@@ -6827,7 +6872,7 @@ layout {
 level_menu
 }
 keys {
-Escape -> back
+Escape -> goto playing
 }
 }
 "#;
@@ -6848,9 +6893,7 @@ Escape -> back
             Some(&loaded.levels[0].initial_state)
         );
 
-        session
-            .apply_command(&loaded, "enter level_select")
-            .unwrap();
+        session.apply_command(&loaded, "goto level_select").unwrap();
         assert_eq!(session.screen(), "level_select");
         assert_eq!(
             session
@@ -6859,7 +6902,7 @@ Escape -> back
             Some(&SceneValue::Text("Browse".to_string()))
         );
 
-        session.apply_command(&loaded, "back").unwrap();
+        session.apply_command(&loaded, "goto playing").unwrap();
         assert_eq!(session.screen(), "playing");
         assert_eq!(
             session

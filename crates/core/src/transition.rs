@@ -1,9 +1,9 @@
 use crate::compiled_game::{
     CompiledGame, Effect, Guard, LocalFrame, MatchCell, Offset, Pattern, PatternComponent,
-    QueryKind, Rule, RuleApplication, RuleCondition, RuleStep, ScratchValueMatch, WriteOp,
+    ConditionValueKind, Rule, RuleApplication, RuleCondition, RuleStep, ScratchValueMatch, WriteOp,
 };
-use crate::ids::{InputId, ObjectId, QueryId, RuleId, ScratchId};
-use crate::patch::{Patch, PatchError, PatchOp};
+use crate::ids::{InputId, ObjectId, ConditionId, RuleId, ScratchId};
+use crate::patch::{CorePatch, CorePatchOp, Patch, PatchError};
 use crate::state::State;
 use puzzle_kernel::{
     GridCoord, GridOffset, bind_object as bind_object_shared, bound_object as bound_object_shared,
@@ -700,17 +700,20 @@ fn guard_accepts(guard: &Guard, context: &TransitionContext, state: &State) -> b
         Guard::GlobalCompare { global, op, value } => state
             .global_value(*global)
             .is_some_and(|found| compare_i64(found, *op, *value)),
-        Guard::QueryEquals { query, value } => eval_query(context, state, *query) == Some(*value),
-        Guard::QueryNonZero(query) => {
-            eval_query(context, state, *query).is_some_and(|value| value != 0)
+        Guard::ConditionEquals { condition, value } => {
+            eval_condition_def(context, state, *condition) == Some(*value)
         }
-        Guard::QueryCompare { query, op, value } => {
-            eval_query(context, state, *query).is_some_and(|found| compare_i64(found, *op, *value))
+        Guard::ConditionNonZero(condition) => {
+            eval_condition_def(context, state, *condition).is_some_and(|value| value != 0)
         }
-        Guard::QueryValue { kind, value } => eval_query_kind(context, state, kind) == *value,
-        Guard::QueryValueNonZero(kind) => eval_query_kind(context, state, kind) != 0,
-        Guard::QueryValueCompare { kind, op, value } => {
-            compare_i64(eval_query_kind(context, state, kind), *op, *value)
+        Guard::ConditionCompare { condition, op, value } => {
+            eval_condition_def(context, state, *condition)
+                .is_some_and(|found| compare_i64(found, *op, *value))
+        }
+        Guard::InlineConditionValue { kind, value } => eval_condition_value_kind(context, state, kind) == *value,
+        Guard::InlineConditionNonZero(kind) => eval_condition_value_kind(context, state, kind) != 0,
+        Guard::InlineConditionCompare { kind, op, value } => {
+            compare_i64(eval_condition_value_kind(context, state, kind), *op, *value)
         }
     }
 }
@@ -726,32 +729,36 @@ fn compare_i64(left: i64, op: crate::ComparisonOp, right: i64) -> bool {
     }
 }
 
-fn eval_query(context: &TransitionContext, state: &State, query: QueryId) -> Option<i64> {
-    let query = context.game.query(query)?;
-    Some(eval_query_kind(context, state, &query.kind))
+fn eval_condition_def(
+    context: &TransitionContext,
+    state: &State,
+    condition: ConditionId,
+) -> Option<i64> {
+    let condition = context.game.condition_def(condition)?;
+    Some(eval_condition_value_kind(context, state, &condition.kind))
 }
 
-fn eval_query_kind(context: &TransitionContext, state: &State, kind: &QueryKind) -> i64 {
+fn eval_condition_value_kind(context: &TransitionContext, state: &State, kind: &ConditionValueKind) -> i64 {
     match kind {
-        QueryKind::CountObjects(objects) => objects
+        ConditionValueKind::CountObjects(objects) => objects
             .iter()
             .map(|object| i64::from(state.object_count(*object)))
             .sum(),
-        QueryKind::ExistsObjects(objects) => {
+        ConditionValueKind::ExistsObjects(objects) => {
             if objects.iter().any(|object| state.object_count(*object) > 0) {
                 1
             } else {
                 0
             }
         }
-        QueryKind::NoneObjects(objects) => {
+        ConditionValueKind::NoneObjects(objects) => {
             if objects.iter().any(|object| state.object_count(*object) > 0) {
                 0
             } else {
                 1
             }
         }
-        QueryKind::CountMatches(patterns) => patterns
+        ConditionValueKind::CountMatches(patterns) => patterns
             .iter()
             .map(|pattern| {
                 i64::from(count_pattern_matches_in_scope(
@@ -762,7 +769,7 @@ fn eval_query_kind(context: &TransitionContext, state: &State, kind: &QueryKind)
                 ))
             })
             .sum(),
-        QueryKind::ExistsMatches(patterns) => {
+        ConditionValueKind::ExistsMatches(patterns) => {
             if patterns.iter().any(|pattern| {
                 has_pattern_match_in_scope(context.game, state, pattern, context.local_frame)
             }) {
@@ -771,7 +778,7 @@ fn eval_query_kind(context: &TransitionContext, state: &State, kind: &QueryKind)
                 0
             }
         }
-        QueryKind::NoneMatches(patterns) => {
+        ConditionValueKind::NoneMatches(patterns) => {
             if patterns.iter().any(|pattern| {
                 has_pattern_match_in_scope(context.game, state, pattern, context.local_frame)
             }) {
@@ -780,7 +787,7 @@ fn eval_query_kind(context: &TransitionContext, state: &State, kind: &QueryKind)
                 1
             }
         }
-        QueryKind::CountInputMatches(patterns) => patterns
+        ConditionValueKind::CountInputMatches(patterns) => patterns
             .iter()
             .filter(|(input, _)| *input == context.input)
             .map(|(_, pattern)| {
@@ -792,7 +799,7 @@ fn eval_query_kind(context: &TransitionContext, state: &State, kind: &QueryKind)
                 ))
             })
             .sum(),
-        QueryKind::ExistsInputMatches(patterns) => {
+        ConditionValueKind::ExistsInputMatches(patterns) => {
             if patterns.iter().any(|(input, pattern)| {
                 *input == context.input
                     && has_pattern_match_in_scope(context.game, state, pattern, context.local_frame)
@@ -802,7 +809,7 @@ fn eval_query_kind(context: &TransitionContext, state: &State, kind: &QueryKind)
                 0
             }
         }
-        QueryKind::NoneInputMatches(patterns) => {
+        ConditionValueKind::NoneInputMatches(patterns) => {
             if patterns.iter().any(|(input, pattern)| {
                 *input == context.input
                     && has_pattern_match_in_scope(context.game, state, pattern, context.local_frame)
@@ -1806,7 +1813,7 @@ fn match_cell(
 }
 
 fn build_patch(rule: &Rule, placement: &MatchPlacement) -> TransitionResult<Patch> {
-    let mut patch = Patch::new();
+    let mut patch = CorePatch::new();
 
     for write in &rule.writes {
         match write {
@@ -1815,10 +1822,8 @@ fn build_patch(rule: &Rule, placement: &MatchPlacement) -> TransitionResult<Patc
                 offset,
                 object,
             } => {
-                let (x, y) = write_position(placement, *component, offset)?;
-                patch.ops.push(PatchOp::Add {
-                    x,
-                    y,
+                patch.push(CorePatchOp::Add {
+                    position: write_grid_position(placement, *component, offset)?,
                     object: *object,
                 });
             }
@@ -1827,19 +1832,19 @@ fn build_patch(rule: &Rule, placement: &MatchPlacement) -> TransitionResult<Patc
                 offset,
                 binding,
             } => {
-                let (x, y) = write_position(placement, *component, offset)?;
                 let object = placement_object_binding(placement, *binding)?;
-                patch.ops.push(PatchOp::Add { x, y, object });
+                patch.push(CorePatchOp::Add {
+                    position: write_grid_position(placement, *component, offset)?,
+                    object,
+                });
             }
             WriteOp::Remove {
                 component,
                 offset,
                 object,
             } => {
-                let (x, y) = write_position(placement, *component, offset)?;
-                patch.ops.push(PatchOp::Remove {
-                    x,
-                    y,
+                patch.push(CorePatchOp::Remove {
+                    position: write_grid_position(placement, *component, offset)?,
                     object: *object,
                 });
             }
@@ -1848,9 +1853,11 @@ fn build_patch(rule: &Rule, placement: &MatchPlacement) -> TransitionResult<Patc
                 offset,
                 binding,
             } => {
-                let (x, y) = write_position(placement, *component, offset)?;
                 let object = placement_object_binding(placement, *binding)?;
-                patch.ops.push(PatchOp::Remove { x, y, object });
+                patch.push(CorePatchOp::Remove {
+                    position: write_grid_position(placement, *component, offset)?,
+                    object,
+                });
             }
             WriteOp::Move {
                 component,
@@ -1858,13 +1865,9 @@ fn build_patch(rule: &Rule, placement: &MatchPlacement) -> TransitionResult<Patc
                 to_offset,
                 object,
             } => {
-                let (from_x, from_y) = write_position(placement, *component, from_offset)?;
-                let (to_x, to_y) = write_position(placement, *component, to_offset)?;
-                patch.ops.push(PatchOp::Move {
-                    from_x,
-                    from_y,
-                    to_x,
-                    to_y,
+                patch.push(CorePatchOp::Move {
+                    from: write_grid_position(placement, *component, from_offset)?,
+                    to: write_grid_position(placement, *component, to_offset)?,
                     object: *object,
                 });
             }
@@ -1874,14 +1877,10 @@ fn build_patch(rule: &Rule, placement: &MatchPlacement) -> TransitionResult<Patc
                 to_offset,
                 binding,
             } => {
-                let (from_x, from_y) = write_position(placement, *component, from_offset)?;
-                let (to_x, to_y) = write_position(placement, *component, to_offset)?;
                 let object = placement_object_binding(placement, *binding)?;
-                patch.ops.push(PatchOp::Move {
-                    from_x,
-                    from_y,
-                    to_x,
-                    to_y,
+                patch.push(CorePatchOp::Move {
+                    from: write_grid_position(placement, *component, from_offset)?,
+                    to: write_grid_position(placement, *component, to_offset)?,
                     object,
                 });
             }
@@ -1891,10 +1890,8 @@ fn build_patch(rule: &Rule, placement: &MatchPlacement) -> TransitionResult<Patc
                 remove,
                 add,
             } => {
-                let (x, y) = write_position(placement, *component, offset)?;
-                patch.ops.push(PatchOp::Replace {
-                    x,
-                    y,
+                patch.push(CorePatchOp::Replace {
+                    position: write_grid_position(placement, *component, offset)?,
                     remove: *remove,
                     add: *add,
                 });
@@ -1906,10 +1903,8 @@ fn build_patch(rule: &Rule, placement: &MatchPlacement) -> TransitionResult<Patc
                 scratch,
                 value,
             } => {
-                let (x, y) = write_position(placement, *component, offset)?;
-                patch.ops.push(PatchOp::SetScratch {
-                    x,
-                    y,
+                patch.push(CorePatchOp::SetScratch {
+                    position: write_grid_position(placement, *component, offset)?,
                     object: *object,
                     scratch: *scratch,
                     value: *value,
@@ -1922,11 +1917,9 @@ fn build_patch(rule: &Rule, placement: &MatchPlacement) -> TransitionResult<Patc
                 scratch,
                 value,
             } => {
-                let (x, y) = write_position(placement, *component, offset)?;
                 let object = placement_object_binding(placement, *binding)?;
-                patch.ops.push(PatchOp::SetScratch {
-                    x,
-                    y,
+                patch.push(CorePatchOp::SetScratch {
+                    position: write_grid_position(placement, *component, offset)?,
                     object,
                     scratch: *scratch,
                     value: *value,
@@ -1940,10 +1933,8 @@ fn build_patch(rule: &Rule, placement: &MatchPlacement) -> TransitionResult<Patc
                 value,
                 match_value,
             } => {
-                let (x, y) = write_position(placement, *component, offset)?;
-                patch.ops.push(PatchOp::RemoveScratch {
-                    x,
-                    y,
+                patch.push(CorePatchOp::RemoveScratch {
+                    position: write_grid_position(placement, *component, offset)?,
                     object: *object,
                     scratch: *scratch,
                     value: *value,
@@ -1958,11 +1949,9 @@ fn build_patch(rule: &Rule, placement: &MatchPlacement) -> TransitionResult<Patc
                 value,
                 match_value,
             } => {
-                let (x, y) = write_position(placement, *component, offset)?;
                 let object = placement_object_binding(placement, *binding)?;
-                patch.ops.push(PatchOp::RemoveScratch {
-                    x,
-                    y,
+                patch.push(CorePatchOp::RemoveScratch {
+                    position: write_grid_position(placement, *component, offset)?,
                     object,
                     scratch: *scratch,
                     value: *value,
@@ -1981,7 +1970,7 @@ fn build_patch(rule: &Rule, placement: &MatchPlacement) -> TransitionResult<Patc
             | Effect::Checkpoint
             | Effect::ClearCheckpoint => {}
             Effect::UpdateGlobal { global, op, value } => {
-                patch.ops.push(PatchOp::UpdateGlobal {
+                patch.push(CorePatchOp::UpdateGlobal {
                     global: *global,
                     op: *op,
                     value: *value,
@@ -1990,7 +1979,7 @@ fn build_patch(rule: &Rule, placement: &MatchPlacement) -> TransitionResult<Patc
         }
     }
 
-    Ok(patch)
+    Ok(Patch::from_core(patch))
 }
 
 fn placement_object_binding(
@@ -2000,15 +1989,14 @@ fn placement_object_binding(
     placement_object_binding_shared(placement, binding).ok_or(TransitionError::OffsetOutOfBounds)
 }
 
-fn write_position(
+fn write_grid_position(
     placement: &MatchPlacement,
     component: u16,
     offset: &Offset,
-) -> TransitionResult<(u16, u16)> {
+) -> TransitionResult<GridCoord<2>> {
     write_position_shared(placement, component, offset, resolve_grid_offset, || {
         TransitionError::OffsetOutOfBounds
     })
-    .map(grid_coord_to_xy)
 }
 
 fn write_position_for_components(
@@ -2256,7 +2244,7 @@ mod tests {
             kind: ScratchKind::Marker,
             values: Vec::new(),
         }];
-        CompiledGame::new_with_scratch_queries_and_program(3, objects, scratch, Vec::new(), vec![])
+        CompiledGame::new_with_scratch_condition_defs_and_program(3, objects, scratch, Vec::new(), vec![])
     }
 
     #[test]
@@ -2396,7 +2384,7 @@ mod tests {
 
         assert_eq!(trace.fired_rules, vec![RuleId(1)]);
         assert_eq!(trace.patches.len(), 1);
-        assert_eq!(trace.patches[0].ops.len(), 4);
+        assert_eq!(trace.patches[0].ops().len(), 4);
     }
 
     #[test]

@@ -25,7 +25,7 @@ pub struct InputId(pub u16);
 pub struct GlobalId(pub u16);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct QueryId(pub u16);
+pub struct ConditionId(pub u16);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ScratchId(pub u16);

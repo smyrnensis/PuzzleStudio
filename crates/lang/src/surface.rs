@@ -16,6 +16,7 @@ pub(crate) enum SurfaceSemanticKind {
     Emission,
     Input,
     State,
+    Condition,
     Scene,
     Asset,
     Number,

@@ -44,7 +44,7 @@ Canonical syntax は、便利さよりも PuzzleScript 作者が既存の mental
 帰結:
 
 - `three_dimensions` + ordinary `LEVELS` を author-facing の基本形にする。
-- `LEVELS3`、`puzzle3`、`sprites3` のような別言語感の強い名前は canonical にしないか、互換・内部・experimental に留める。
+- 別言語感の強い section 名は canonical にしない。後方互換の公開経路も置かない。
 - `left/right/front/back/up/down` は core に置けるが、frame rotation は advanced として扱う。
 - 表面文法が増えるときは、実装都合ではなく PS 作者の追加学習量で採否を判断する。
 
@@ -109,7 +109,7 @@ MVP は機能数が少ないことではなく、公開する約束が狭く、�
 
 特に判断が必要な領域:
 
-- `puzzle3` / `levels3` / `sprites3` という名前を PS 3D でも使うか
+- 3D用の別 section 名を公開しないことを前提に、内部 transport 名が author-facing に漏れていないか
 - 3D dense pattern `[ A | B ; C | D ;; E | F ; G | H ]` を標準に入れるか、advanced に隔離するか
 - `frame` prefix を author-facing にするか、まずは advanced にするか
 - camera / viewport / shade / pixelate を PS の metadata section 風にするか、現行 `render { ... }` 風にするか
@@ -467,7 +467,7 @@ MVP の意味:
 
 公開前に決める必要があること:
 
-- `puzzle3` / `levels3` / `sprites3` を PS 3D canonical 名にするか。
+- 3D用の別 section 名が author-facing に残っていないか。
 - PS section names を大文字のまま拡張するか、小文字/braced syntax に寄せるか。
 - `front/back` と `forward/backward` の関係をどう説明するか。
 - 3D level slice separator を blank line に固定するか、明示 marker も許すか。

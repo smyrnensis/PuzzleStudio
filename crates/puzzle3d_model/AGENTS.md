@@ -1,6 +1,14 @@
 # Agent Notes
 
-This crate owns the 3D model parser/runtime experiment.
+This crate owns the 3D model parser/runtime.
+
+3D authoring must stay logically isomorphic with the 2D authoring path. Do not
+add an independent parser interpretation for non-spatial syntax. Shared
+authoring concepts such as selectors, `no`, scratch blocks, prefix scratch sugar
+like `> Player`, inputs, lifecycle names, and scene commands must use shared
+authoring helpers or the same lowered meaning as 2D. 3D-specific code may branch
+only at the thin spatial boundary: coordinates, offsets, direction/frame
+expansion, 3D levels, and 3D rendering metadata.
 
 ## 3D Authoring Notes
 

@@ -22,7 +22,7 @@ pub enum SemanticKind {
     Input,
     State,
     Group,
-    Query,
+    Condition,
     Scene,
     Asset,
     Setting,
@@ -62,7 +62,7 @@ pub(crate) enum SemanticCompletionSlot {
     Effects,
     Emissions,
     Routines,
-    Queries,
+    Conditions,
     Scenes,
     Puzzles,
     Levels,
@@ -156,6 +156,10 @@ fn contextual_completion_slots(
     let after = &source[token.replace_end.min(line_end)..line_end];
     let previous = previous_completion_token(source, token.replace_start);
 
+    if cursor_is_after_effect_arrow(before) {
+        return Some(effect_completion_slots(scope));
+    }
+
     if let Some(options) = sound_setting_completion_slots(line.scope, before) {
         return Some(options);
     }
@@ -173,10 +177,21 @@ fn contextual_completion_slots(
     }
 
     if previous.as_deref() == Some("in") {
-        return Some(vec![
-            SemanticCompletionSlot::ValueSets,
-            SemanticCompletionSlot::Groups,
-        ]);
+        return Some(match scope {
+            Some(
+                SourceScope::Scene
+                | SourceScope::SceneLayout
+                | SourceScope::SceneTransitions
+                | SourceScope::LevelMenu,
+            ) => vec![
+                SemanticCompletionSlot::Keywords(SCENE_FOR_SOURCE_COMPLETION_KEYWORDS),
+                SemanticCompletionSlot::States,
+            ],
+            _ => vec![
+                SemanticCompletionSlot::ValueSets,
+                SemanticCompletionSlot::Groups,
+            ],
+        });
     }
 
     if is_rule_like_scope(scope) && next_non_whitespace_starts_pattern(after) {
@@ -186,7 +201,114 @@ fn contextual_completion_slots(
         ]);
     }
 
+    if before.trim().is_empty() && (token.text.is_empty() || !symbol_definition_scope(scope)) {
+        return Some(line_head_completion_slots(context, line_index, scope));
+    }
+
     None
+}
+
+fn cursor_is_after_effect_arrow(before: &str) -> bool {
+    let Some(arrow) = before.rfind("->") else {
+        return false;
+    };
+    let suffix = &before[arrow + 2..];
+    let tokens = suffix
+        .split_whitespace()
+        .filter(|token| !token.is_empty())
+        .collect::<Vec<_>>();
+    tokens.is_empty()
+        || (tokens.len() == 1 && suffix.chars().next_back().is_some_and(is_completion_char))
+}
+
+fn effect_completion_slots(scope: Option<SourceScope>) -> Vec<SemanticCompletionSlot> {
+    let mut slots = vec![SemanticCompletionSlot::Effects];
+    if scope != Some(SourceScope::Sounds) {
+        slots.push(SemanticCompletionSlot::Emissions);
+    }
+    slots
+}
+
+fn line_head_completion_slots(
+    context: &crate::source::SourceContext,
+    line_index: usize,
+    scope: Option<SourceScope>,
+) -> Vec<SemanticCompletionSlot> {
+    match scope {
+        None
+        | Some(
+            SourceScope::Puzzle
+            | SourceScope::Sounds
+            | SourceScope::Assets
+            | SourceScope::Scene
+            | SourceScope::SceneLayout
+            | SourceScope::SceneState
+            | SourceScope::SceneKeys
+            | SourceScope::SceneTransitions
+            | SourceScope::LevelMenu
+            | SourceScope::Objects
+            | SourceScope::Tags
+            | SourceScope::Group
+            | SourceScope::Layers
+            | SourceScope::Scratch
+            | SourceScope::Keys
+            | SourceScope::Legend
+            | SourceScope::Levels
+            | SourceScope::Level
+            | SourceScope::UnbracedLevel
+            | SourceScope::Visuals
+            | SourceScope::VisualShapeTable
+            | SourceScope::VisualShapeEntry
+            | SourceScope::VisualColorTable
+            | SourceScope::VisualPaletteTable,
+        ) => vec![SemanticCompletionSlot::Keywords(
+            completion_keywords_for_scope(scope),
+        )],
+        Some(SourceScope::Other)
+            if current_block_name_before_line(context, line_index) == Some("rules") =>
+        {
+            vec![
+                SemanticCompletionSlot::Keywords(RULE_HEAD_COMPLETION_KEYWORDS),
+                SemanticCompletionSlot::Directions,
+                SemanticCompletionSlot::DirectionSets,
+            ]
+        }
+        Some(SourceScope::Other) => default_completion_slots(scope),
+    }
+}
+
+fn current_block_name_before_line(
+    context: &crate::source::SourceContext,
+    line_index: usize,
+) -> Option<&str> {
+    let mut stack = Vec::<&str>::new();
+    for line in context.lines.iter().take(line_index) {
+        let trimmed = line.content.trim();
+        if trimmed == "}" {
+            stack.pop();
+            continue;
+        }
+        if line_opens_completion_block(line)
+            && let Some(first) = line.tokens.first()
+        {
+            stack.push(first.as_str());
+        }
+    }
+    stack.last().copied()
+}
+
+fn line_opens_completion_block(line: &crate::source::SourceContextLine) -> bool {
+    line.content.trim_end().ends_with('{')
+        || matches!(
+            line.tokens.as_slice(),
+            [name] if matches!(
+                name.as_str(),
+                "sounds" | "assets" | "objects" | "tags" | "layers" | "collision_layers"
+                    | "group" | "scratch" | "keys" | "inputs" | "resources" | "legend"
+                    | "levels" | "levels3" | "rules" | "render" | "camera" | "layout"
+                    | "state" | "on_scene_start" | "level_menu"
+            )
+        )
 }
 
 fn sound_setting_completion_slots(
@@ -382,6 +504,22 @@ fn is_rule_like_scope(scope: Option<SourceScope>) -> bool {
     matches!(scope, Some(SourceScope::Puzzle | SourceScope::Other))
 }
 
+fn symbol_definition_scope(scope: Option<SourceScope>) -> bool {
+    matches!(
+        scope,
+        Some(
+            SourceScope::Objects
+                | SourceScope::Group
+                | SourceScope::Layers
+                | SourceScope::Tags
+                | SourceScope::Scratch
+                | SourceScope::Keys
+                | SourceScope::SceneKeys
+                | SourceScope::SceneState
+        )
+    )
+}
+
 pub(crate) fn semantic_builtin_effect_commands() -> Vec<(&'static str, SemanticKind)> {
     let commands = [
         "apply",
@@ -464,7 +602,7 @@ fn default_completion_slots(scope: Option<SourceScope>) -> Vec<SemanticCompletio
     }
     slots.extend([
         SemanticCompletionSlot::Routines,
-        SemanticCompletionSlot::Queries,
+        SemanticCompletionSlot::Conditions,
         SemanticCompletionSlot::Scenes,
         SemanticCompletionSlot::Puzzles,
         SemanticCompletionSlot::Levels,
@@ -619,7 +757,6 @@ const ASSET_COMPLETION_KEYWORDS: &[&str] = &["css"];
 const PUZZLE_COMPLETION_KEYWORDS: &[&str] = &[
     "collision_layers",
     "const",
-    "display_objects",
     "for",
     "group",
     "if",
@@ -642,7 +779,7 @@ const PUZZLE_COMPLETION_KEYWORDS: &[&str] = &[
     "once_all",
     "once_per_level",
     "persistent",
-    "query",
+    "condition",
     "repeat",
     "resources",
     "render",
@@ -664,6 +801,16 @@ const SCRATCH_COMPLETION_KEYWORDS: &[&str] = &["const", "persistent", "var"];
 const KEY_COMPLETION_KEYWORDS: &[&str] = &["direction", "input"];
 const LEGEND_COMPLETION_KEYWORDS: &[&str] = &["empty"];
 const LEVEL_COMPLETION_KEYWORDS: &[&str] = &["legend", "level", "of"];
+const RULE_HEAD_COMPLETION_KEYWORDS: &[&str] = &[
+    "display",
+    "for",
+    "if",
+    "once",
+    "once_all",
+    "once_per_level",
+    "repeat",
+];
+const SCENE_FOR_SOURCE_COMPLETION_KEYWORDS: &[&str] = &["levels"];
 
 const SCENE_COMPLETION_KEYWORDS: &[&str] = &[
     "button",
@@ -707,7 +854,6 @@ const COMPLETION_KEYWORDS: &[&str] = &[
     "css",
     "direction",
     "display",
-    "display_objects",
     "each",
     "else",
     "for",
@@ -744,7 +890,7 @@ const COMPLETION_KEYWORDS: &[&str] = &[
     "persistent",
     "puzzle",
     "puzzle3",
-    "query",
+    "condition",
     "repeat",
     "resources",
     "render",
@@ -1123,6 +1269,7 @@ fn scan_level_header(tokens: &[LineToken<'_>], ranges: &mut Vec<SemanticToken>) 
     if first.text != "level" {
         return;
     }
+    add_token_range(ranges, first, SemanticKind::Keyword);
     let tokens = trim_trailing_block_markers(tokens);
     for name in tokens.iter().skip(1) {
         add_token_range(ranges, *name, SemanticKind::Scene);
@@ -1147,10 +1294,9 @@ fn scan_level_path_token(token: LineToken<'_>, ranges: &mut Vec<SemanticToken>) 
         if let Some(syntax) = level_path_part_syntax(&parts, index) {
             let kind = match syntax {
                 LevelPathPartSyntax::Owner => SemanticKind::State,
-                LevelPathPartSyntax::LevelRef => SemanticKind::Keyword,
                 LevelPathPartSyntax::TextProperty => SemanticKind::String,
                 LevelPathPartSyntax::NumberProperty => SemanticKind::Number,
-                LevelPathPartSyntax::ConditionProperty => SemanticKind::Query,
+                LevelPathPartSyntax::ConditionProperty => SemanticKind::Condition,
             };
             add_token_subrange(ranges, token, offset, offset + part.len(), kind);
         }

@@ -1,10 +1,6 @@
 title "Microban 3D"
 author "Levels by David Skinner"
 
-sounds {
-	music music seed=418792 tone=0.85 bpm=109 volume=0.50
-}
-
 theme puzzlescript
 
 puzzle3 sokoban {
@@ -27,8 +23,7 @@ group {
 }
 
 rules {
-  input horizontal [ Player | Box | no solid ] -> [ | Player | Box ]
-  input horizontal [ Player | no solid ] -> [ | Player ]
+  input [ Player ] -> [ > Player ]
 }
 
 win_conditions {
@@ -37,21 +32,15 @@ win_conditions {
 }
 
 on_level_clear {
-  if win_conditions -> next_level
+  next_level
 }
 }
 
 scene title {
 layout {
   title "Microban 3D"
-  choice "New Game" -> {
-    goto playing
-    play_music music
-  }
-  choice "Level Select" -> {
-    goto level_select
-    play_music music
-  }
+  button "New Game" -> goto playing
+  button "Level Select" -> goto level_select
 }
 }
 

@@ -67,6 +67,7 @@ let sourceUndoApplying = false;
 let sourceHighlightSource = "";
 let sourceHighlightHtml = "";
 let sourceHighlightMode = "";
+let sourceLayoutSyncFrame = 0;
 
 function sourceEditorSnapshot() {
   return {
@@ -254,6 +255,22 @@ function syncSourceHighlightScroll() {
   renderSourceFindMatches();
   renderSourceCaret();
   renderSourceBlockSelection();
+}
+
+function scheduleSourceEditorLayoutSync(frameCount = 1) {
+  if (sourceLayoutSyncFrame) {
+    return;
+  }
+  let remainingFrames = Math.max(1, frameCount || 1);
+  const sync = () => {
+    sourceLayoutSyncFrame = 0;
+    syncSourceHighlightScroll();
+    if (remainingFrames > 1) {
+      remainingFrames -= 1;
+      sourceLayoutSyncFrame = window.requestAnimationFrame(sync);
+    }
+  };
+  sourceLayoutSyncFrame = window.requestAnimationFrame(sync);
 }
 
 function sourceDocumentSupportsEditableTargets() {
@@ -476,7 +493,17 @@ function shouldAutoRequestSourceCompletion(source, cursor) {
   if (last === ":" || /[_@A-Za-z0-9.-]/.test(last)) {
     return true;
   }
-  return /\bgoto\s+$/.test(before.slice(Math.max(0, before.length - 80)));
+  if (!/\s/.test(last)) {
+    return false;
+  }
+  const tail = before.slice(Math.max(0, before.length - 120));
+  const currentLine = tail.slice(tail.lastIndexOf("\n") + 1);
+  return (
+    /\bgoto\s+$/.test(tail) ||
+    /->\s+$/.test(currentLine) ||
+    /\bin\s+$/.test(currentLine) ||
+    currentLine.trim() === ""
+  );
 }
 
 function hideSourceCompletions() {
@@ -2124,6 +2151,54 @@ function handleSourceBraceAssist(event) {
   return false;
 }
 
+function handleSourceRewriteLhsBracketAssist(event) {
+  if (event.altKey || event.ctrlKey || event.metaKey || event.isComposing || event.key !== "[") {
+    return false;
+  }
+  const start = sourceEditor.selectionStart;
+  const end = sourceEditor.selectionEnd;
+  const source = sourceEditor.value || "";
+  if (source.slice(start, end).includes("\n")) {
+    return false;
+  }
+  const lineStart = source.lastIndexOf("\n", start - 1) + 1;
+  const lineEnd = source.indexOf("\n", end);
+  const safeLineEnd = lineEnd < 0 ? source.length : lineEnd;
+  const lineBeforeSelection = source.slice(lineStart, start);
+  const lineAfterSelection = source.slice(end, safeLineEnd);
+  const codeBeforeSelection = stripSourceImportLineComment(lineBeforeSelection);
+  const codeAfterSelection = stripSourceImportLineComment(lineAfterSelection);
+  if (codeBeforeSelection.length !== lineBeforeSelection.length) {
+    return false;
+  }
+  if (codeBeforeSelection.includes("->")) {
+    return false;
+  }
+  const arrowAfterSelection = codeAfterSelection.indexOf("->");
+  if (arrowAfterSelection >= 0 && codeAfterSelection.slice(0, arrowAfterSelection).includes("[")) {
+    return false;
+  }
+  if (!/(^|[\t ])$/.test(codeBeforeSelection)) {
+    return false;
+  }
+
+  event.preventDefault();
+  event.stopPropagation();
+  insertSourceRewritePatternCell(start, end);
+  return true;
+}
+
+function insertSourceRewritePatternCell(start, end) {
+  clearSourceBlockSelection();
+  const selection = sourceEditor.value.slice(start, end);
+  const replacement = `[ ${selection} ]`;
+  sourceEditor.setRangeText(replacement, start, end, "end");
+  const innerStart = start + 2;
+  const innerEnd = innerStart + selection.length;
+  sourceEditor.setSelectionRange(innerStart, innerEnd, sourceEditor.selectionDirection || "none");
+  sourceEditorContentChanged();
+}
+
 function insertSourceBracePair() {
   const start = sourceEditor.selectionStart;
   const end = sourceEditor.selectionEnd;
@@ -2291,6 +2366,49 @@ function sourceRewritePatternSlotOffsets(pattern) {
   return slots;
 }
 
+function handleSourceRuleBracketCellTabExit(event) {
+  if (
+    event.key !== "Tab"
+    || event.shiftKey
+    || event.altKey
+    || event.ctrlKey
+    || event.metaKey
+    || event.isComposing
+    || sourceEditor.selectionStart !== sourceEditor.selectionEnd
+  ) {
+    return false;
+  }
+  const source = sourceEditor.value || "";
+  const cursor = sourceEditor.selectionStart;
+  const lineStart = source.lastIndexOf("\n", cursor - 1) + 1;
+  const lineEnd = source.indexOf("\n", cursor);
+  const safeLineEnd = lineEnd < 0 ? source.length : lineEnd;
+  const lineBeforeCursor = source.slice(lineStart, cursor);
+  if (stripSourceImportLineComment(lineBeforeCursor).length !== lineBeforeCursor.length) {
+    return false;
+  }
+  const open = source.lastIndexOf("[", cursor - 1);
+  const close = source.indexOf("]", cursor);
+  if (open < lineStart || close < 0 || close > safeLineEnd || cursor <= open || cursor >= close) {
+    return false;
+  }
+  const body = source.slice(open + 1, close);
+  if (!/^[\t ]*$/.test(body) || body.includes("[") || body.includes("]")) {
+    return false;
+  }
+  const afterClose = source[close + 1] || "";
+  const hasTrailingHorizontalSpace = afterClose === " " || afterClose === "\t";
+  const replacement = hasTrailingHorizontalSpace ? "[ ]" : "[ ] ";
+  event.preventDefault();
+  event.stopPropagation();
+  clearSourceBlockSelection();
+  sourceEditor.setRangeText(replacement, open, close + 1, "end");
+  const cursorAfterCell = open + replacement.length + (hasTrailingHorizontalSpace ? 1 : 0);
+  sourceEditor.setSelectionRange(cursorAfterCell, cursorAfterCell);
+  sourceEditorContentChanged();
+  return true;
+}
+
 function handleSourceRewritePatternTab(event) {
   if (
     event.key !== "Tab"
@@ -2324,10 +2442,14 @@ function handleSourceRewritePatternTab(event) {
   }
   const target = event.shiftKey
     ? slots.slice().reverse().find((slot) => slot < cursor) ?? slots.at(-1)
-    : slots.find((slot) => slot > cursor) ?? slots[0];
+    : slots.find((slot) => slot > cursor);
+  if (!event.shiftKey && target == null && handleSourceRuleBracketCellTabExit(event)) {
+    return true;
+  }
+  const fallbackTarget = target ?? slots[0];
   event.preventDefault();
   event.stopPropagation();
-  sourceEditor.setSelectionRange(target, target);
+  sourceEditor.setSelectionRange(fallbackTarget, fallbackTarget);
   updateSourceMeta();
   hideSourceCompletions();
   renderSourceCaret();
@@ -3351,6 +3473,9 @@ sourceEditor.addEventListener("keydown", (event) => {
   if (handleSourceBraceAssist(event)) {
     return;
   }
+  if (handleSourceRewriteLhsBracketAssist(event)) {
+    return;
+  }
   if (handleSourceIndentBackspace(event)) {
     return;
   }
@@ -3358,6 +3483,9 @@ sourceEditor.addEventListener("keydown", (event) => {
     return;
   }
   if (handleSourceRewritePatternTab(event)) {
+    return;
+  }
+  if (handleSourceRuleBracketCellTabExit(event)) {
     return;
   }
   if (event.key === "Tab") {
@@ -3466,6 +3594,10 @@ window.addEventListener("resize", syncSourceHighlightScroll);
 window.addEventListener("resize", hideSourceColorEditor);
 window.addEventListener("resize", renderSourceBlockSelection);
 window.addEventListener("resize", renderSourceCaret);
+if (window.ResizeObserver && sourceEditorWrap) {
+  const sourceEditorWrapObserver = new ResizeObserver(() => scheduleSourceEditorLayoutSync(2));
+  sourceEditorWrapObserver.observe(sourceEditorWrap);
+}
 }
 
 function nextLineIndent() {

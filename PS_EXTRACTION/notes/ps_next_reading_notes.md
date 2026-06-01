@@ -16,8 +16,8 @@ file has been read in the local checkout.
   the network connection reset before the full payload completed. The local
   checkout is therefore not present yet.
 - 2026-05-29: local checkout is present at `upstream/PuzzleScriptNext`.
-  `src/js/levels3d.js`, parser `levels3` handling, compiler `levels3ToArray`, and
-  `test/levels3d.test.js` are present. The tests pass with
+  `src/js/levels3d.js`, parser 3D `LEVELS` routing, compiler `levels3ToArray`,
+  and `test/levels3d.test.js` are present. The tests pass with
   `node upstream/PuzzleScriptNext/test/levels3d.test.js`.
 
 ## First Files To Inspect
@@ -41,16 +41,17 @@ Add dated notes here as files are inspected.
 - Read `src/js/levels3d.js`: contains `parseLevels3`, `parseLevel3`,
   `coordToIndex3`, and `indexToCoord3`.
 - Read `src/js/compiler.js` around `levels3ToArray` and
-  `level3FromParsedSource`: `LEVELS3` can lower to a 3D level-shaped object.
+  `level3FromParsedSource`: canonical `three_dimensions` plus `LEVELS` can
+  lower to a 3D level-shaped object.
 - Read `src/js/engine.js` around direction masks and `Level`: the runtime is
   still 2D-shaped (`width`, `height`, `n_tiles = width * height`) and movement
   deltas are 2D.
 - Read `test/levels3d.test.js`: current tests cover parser storage, lowering,
   glyph validation, background fill, and coordinate round trips.
 - Conclusion: the next step is a runtime boundary gate, not a 3D renderer.
-- Added the first boundary gate in `src/js/compiler.js`: `LEVELS3` now produces
-  an explicit unsupported-runtime message instead of falling through as missing
-  2D levels.
+- Added the first boundary gate in `src/js/compiler.js`: canonical 3D levels now
+  produce an explicit unsupported-runtime message instead of falling through as
+  missing 2D levels.
 - Added the first engine shape gate in `src/js/engine.js`: `Level` can carry
   optional `depth`/`is3d`, `deltaPositionIndex3` computes depth-aware offsets,
   and named 3D direction deltas are isolated from the existing 2D movement mask

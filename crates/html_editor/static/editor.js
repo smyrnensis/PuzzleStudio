@@ -5,12 +5,11 @@ const previewMinimumHeight = 720;
 const previewMinimumLogHeight = 72;
 const wasmCompilerAssetVersion = Date.now().toString(36);
 const solverProgressIntervalMs = 1000;
+const solverFeedbackTickMs = 250;
 const solverYieldEveryExpanded = 1;
 const solutionPlaybackBaseIntervalMs = 350;
 const WASM_SECTION_BLOCK_NAMES = Object.freeze({
   objects: "objects",
-  display_object: "display_objects",
-  display_objects: "display_objects",
   scratch: "scratch",
   group: "group",
   groups: "group",
@@ -57,7 +56,6 @@ const WASM_SECTION_BOUNDARY_BLOCKS = new Set([
   "on_level_clear",
   "on_display",
   "objects",
-  "display_objects",
   "scratch",
   "group",
   "layers",
@@ -218,30 +216,103 @@ function renderSpriteScaleControl({
     : `Scale down by ${factor}x`;
 }
 
-const editorHoverTooltipSelector = [
-  ".level-builder button",
-  ".sprite-builder button",
-  ".source-preview-actions .source-action-button",
-].join(", ");
+const editorHoverTooltipSelector = "button";
 let editorHoverTooltip = null;
 let editorHoverTooltipTarget = null;
 
 function editorTooltipTargetFromEventTarget(target) {
   const element = target instanceof Element ? target.closest(editorHoverTooltipSelector) : null;
-  if (!element || element.classList.contains("sprite-cell")) {
+  if (!element || element.classList.contains("sprite-cell") || !element.querySelector("svg")) {
     return null;
   }
   return element;
 }
 
+function compactEditorTooltipText(text) {
+  const cleaned = String(text || "")
+    .replace(/\s*\([^)]*\)\s*/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const exact = new Map([
+    ["Add converted .puzzle file", "Add file"],
+    ["Bucket active", "Bucket fill"],
+    ["Cell and stage frames", "Frames"],
+    ["Copy converted .puzzle", "Copy"],
+    ["Copy music sound line", "Copy music"],
+    ["Copy SFX sound line", "Copy SFX"],
+    ["Copy solution", "Copy"],
+    ["Discard new color", "Discard"],
+    ["Generate .puzzle translation", "Generate"],
+    ["Hide current tool pane", "Hide pane"],
+    ["Hide file pane", "Hide files"],
+    ["Maximize Preview pane", "Maximize"],
+    ["Maximize Source pane", "Maximize"],
+    ["More file actions", "File actions"],
+    ["Paint empty voxel", "Eraser"],
+    ["Paint transparent", "Eraser"],
+    ["Pick color from screen", "Pick color"],
+    ["Pick selected color", "Pick color"],
+    ["Remove selected color", "Remove color"],
+    ["Reset 3D preview camera", "Reset camera"],
+    ["Reset solution preview", "Reset"],
+    ["Screen color picker is not available in this browser", "Unavailable"],
+    ["Show file pane", "Show files"],
+    ["Show game pane", "Show game"],
+    ["Tag selected color", "Tag color"],
+    ["Tag shape by name", "Tag shape"],
+    ["Toggle grid", "Grid"],
+    ["Unlink color tag", "Unlink tag"],
+    ["Unlink shape tag", "Unlink tag"],
+    ["Update matching music in source", "Update music"],
+    ["Update matching SFX in source", "Update SFX"],
+  ]);
+  if (exact.has(cleaned)) {
+    return exact.get(cleaned);
+  }
+  const switchMatch = cleaned.match(/^Switch to (light|dark) mode$/i);
+  if (switchMatch) {
+    return `${switchMatch[1][0].toUpperCase()}${switchMatch[1].slice(1)} mode`;
+  }
+  const refreshMatch = cleaned.match(/^Refresh\b/i);
+  if (refreshMatch) {
+    return "Refresh";
+  }
+  const hideShowPaneMatch = cleaned.match(/^(Hide|Show) (.+?) pane$/i);
+  if (hideShowPaneMatch) {
+    return `${hideShowPaneMatch[1]} ${hideShowPaneMatch[2]}`;
+  }
+  const toggleMatch = cleaned.match(/^Toggle (.+)$/i);
+  if (toggleMatch) {
+    return toggleMatch[1]
+      .replace(/^(level|top-down|occupied cell and stage)\s+/i, "")
+      .replace(/\s+in the 3D preview$/i, "")
+      .replace(/\bexpansion\b/i, "expand")
+      .replace(/\bshrinking\b/i, "shrink")
+      .trim();
+  }
+  const moveSliceMatch = cleaned.match(/^Move to (lower|higher)(?: 3D level)? slice$/i);
+  if (moveSliceMatch) {
+    return `${moveSliceMatch[1][0].toUpperCase()}${moveSliceMatch[1].slice(1)} slice`;
+  }
+  const colorTagMatch = cleaned.match(/^(Color|Shape) tag:/i);
+  if (colorTagMatch) {
+    return `${colorTagMatch[1]} tag`;
+  }
+  const unlinkTagMatch = cleaned.match(/^Unlink (color|shape) tag\b/i);
+  if (unlinkTagMatch) {
+    return "Unlink tag";
+  }
+  return cleaned;
+}
+
 function editorTooltipText(element) {
-  return String(
+  return compactEditorTooltipText(
     element?.dataset?.tooltip
       || element?.getAttribute("title")
       || element?.dataset?.hoverTitle
       || element?.getAttribute("aria-label")
       || "",
-  ).trim();
+  );
 }
 
 function ensureEditorHoverTooltip() {
@@ -355,6 +426,7 @@ let editorStatusClearTimer = 0;
 let activePreviewRequest = null;
 let wasmCompiler = null;
 let wasmCompilerPromise = null;
+let wasmCoreRuntimePromise = null;
 let previewLogEntries = [];
 let latestPreviewState = null;
 let pendingPreviewKeyStateSync = 0;
@@ -372,15 +444,13 @@ let levelSolveSummaryText = "";
 let levelSolutionTimer = 0;
 let levelSolveFlashTimer = 0;
 let levelSolveFlashRestore = null;
+let levelSolveFeedbackTimer = 0;
+let levelSolveStartedAt = 0;
+let latestLevelSolveProgress = null;
 let currentPreviewMode = "play";
 let currentEditorDimension = "2d";
 let currentLevelPaneMode = "edit";
 let currentSpritePaneMode = "sprite";
-let scenePreviewLoadId = 0;
-let scenePreviewRequestId = 0;
-let scenePreviewSnapshot = null;
-let selectedSceneButtonPath = [];
-let scenePreviewFrameLoaded = false;
 let levelPaintDrag = null;
 let levelBucketActive = false;
 let levelResizeMode = null;
@@ -399,6 +469,7 @@ let level = {
   selectedObjectId: 0,
   editScope: "layer",
   activeLayer: 0,
+  hiddenLayers: [],
   paletteCollapsed: false,
   palette: [],
   regions: [],
@@ -409,6 +480,7 @@ let sprite = {
   size: 5,
   editDocumentId: null,
   editSourceStart: null,
+  editSourceName: "",
   selectedColorIndex: 0,
   addPaletteOpen: false,
   editPaletteOpen: false,
@@ -941,13 +1013,9 @@ function applyPreviewTheme(theme) {
   }
   const resolved = resolvePreviewTheme(theme);
   currentPreviewTheme = resolved;
-  root.style.setProperty("--preview-game-bg", resolved.bg);
-  root.style.setProperty("--preview-game-ink", resolved.ink);
-  root.style.setProperty("--preview-game-muted", resolved.muted);
-  root.style.setProperty("--preview-game-line", resolved.line);
-  root.style.setProperty("--preview-game-panel-bg", resolved.panelBg);
-  root.style.setProperty("--preview-game-background", resolved.background);
-  root.style.colorScheme = resolved.colorScheme;
+  for (const target of previewThemeRoots(root)) {
+    setPreviewThemeProperties(target, resolved);
+  }
 }
 
 function setPreviewDocumentLoaded(loaded) {
@@ -976,13 +1044,29 @@ function applyUnloadedPreviewTheme() {
     return;
   }
   currentPreviewTheme = editorPreviewTheme();
-  root.style.setProperty("--preview-game-bg", currentPreviewTheme.bg);
-  root.style.setProperty("--preview-game-ink", currentPreviewTheme.ink);
-  root.style.setProperty("--preview-game-muted", currentPreviewTheme.muted);
-  root.style.setProperty("--preview-game-line", currentPreviewTheme.line);
-  root.style.setProperty("--preview-game-panel-bg", currentPreviewTheme.panelBg);
-  root.style.setProperty("--preview-game-background", currentPreviewTheme.background);
-  root.style.colorScheme = currentPreviewTheme.colorScheme;
+  for (const target of previewThemeRoots(root)) {
+    setPreviewThemeProperties(target, currentPreviewTheme);
+  }
+}
+
+function previewThemeRoots(root) {
+  const roots = new Set([root]);
+  const pane = root.closest(".preview-pane");
+  if (pane) {
+    roots.add(pane);
+  }
+  document.querySelectorAll(".preview-pane").forEach((previewPane) => roots.add(previewPane));
+  return [...roots];
+}
+
+function setPreviewThemeProperties(root, theme) {
+  root.style.setProperty("--preview-game-bg", theme.bg);
+  root.style.setProperty("--preview-game-ink", theme.ink);
+  root.style.setProperty("--preview-game-muted", theme.muted);
+  root.style.setProperty("--preview-game-line", theme.line);
+  root.style.setProperty("--preview-game-panel-bg", theme.panelBg);
+  root.style.setProperty("--preview-game-background", theme.background);
+  root.style.colorScheme = theme.colorScheme;
 }
 
 function editorPreviewTheme() {
@@ -1246,9 +1330,6 @@ function applyCompiledPreviewHtml(html, document, source) {
   latestPreviewState = null;
   previewFrameHasEditorLevelState = false;
   setPreviewFrameHtml(editorPreviewDocument(html));
-  if (currentPreviewMode === "scene") {
-    renderScenePane();
-  }
   document.source = source;
   document.previewHtml = html;
   applyGameCss(effectiveGameCss(document));
@@ -1278,8 +1359,8 @@ async function compilePreviewWithWasm(document, source) {
 
 function embedStandaloneRuntimeWasm(html) {
   const sourceHtml = String(html || "");
-  const embedded = window.PuzzleStudioEmbeddedWasm;
-  if (!embedded?.moduleSource || !embedded?.wasmBase64) {
+  const runtimeAssets = window.PuzzleStudioGameWasmAssets;
+  if (!runtimeAssets?.moduleUrl || !runtimeAssets?.wasmUrl) {
     return html;
   }
   const markers = [
@@ -1297,39 +1378,27 @@ function embedStandaloneRuntimeWasm(html) {
   if (scriptEnd < 0) {
     return html;
   }
-  const bootstrap = standaloneRuntimeWasmBootstrapScript(embedded);
+  const bootstrap = standaloneRuntimeWasmBootstrapScript(runtimeAssets);
   const frameAssetBootstrap = JSON.stringify(bootstrap);
   const injection = `\n${bootstrap}\nif (window.Puzzle3DFrameAssets && !window.Puzzle3DFrameAssets.embeddedWasmJs) {\n  window.Puzzle3DFrameAssets.embeddedWasmJs = ${frameAssetBootstrap};\n}\n`;
   return `${sourceHtml.slice(0, scriptEnd)}${injection}${sourceHtml.slice(scriptEnd)}`;
 }
 
-function standaloneRuntimeWasmBootstrapScript(embedded) {
-  const runtimeEmbedded = window.PuzzleStudioEmbeddedGameWasm || embedded;
-  if (!runtimeEmbedded?.moduleSource || !runtimeEmbedded?.wasmBase64) {
+function standaloneRuntimeWasmBootstrapScript(runtimeAssets) {
+  if (!runtimeAssets?.moduleUrl || !runtimeAssets?.wasmUrl) {
     return "";
   }
-  return `window.PuzzleStandaloneEmbeddedWasm = { moduleSource: ${JSON.stringify(runtimeEmbedded.moduleSource)}, wasmBase64: ${JSON.stringify(runtimeEmbedded.wasmBase64)} };
-window.PuzzleRuntimeWasmLoader = window.PuzzleRuntimeWasmLoader || (() => {
+  return `window.PuzzleRuntimeWasmLoader = window.PuzzleRuntimeWasmLoader || (() => {
   let modulePromise = null;
-  function base64ToUint8Array(value) {
-    const binary = atob(value);
-    const bytes = new Uint8Array(binary.length);
-    for (let index = 0; index < binary.length; index += 1) {
-      bytes[index] = binary.charCodeAt(index);
-    }
-    return bytes;
-  }
+  const moduleUrl = ${JSON.stringify(runtimeAssets.moduleUrl)};
+  const wasmUrl = ${JSON.stringify(runtimeAssets.wasmUrl)};
   return {
-    async load(version = "embedded") {
+    async load() {
       if (!modulePromise) {
-        const standaloneEmbedded = window.PuzzleStandaloneEmbeddedWasm;
-        const moduleUrl = URL.createObjectURL(new Blob([standaloneEmbedded.moduleSource], { type: "text/javascript" }));
-        modulePromise = import(moduleUrl + "#" + encodeURIComponent(String(version)))
-          .then(async (module) => {
-            await module.default({ module_or_path: base64ToUint8Array(standaloneEmbedded.wasmBase64) });
-            return module;
-          })
-          .finally(() => URL.revokeObjectURL(moduleUrl));
+        modulePromise = import(moduleUrl).then(async (module) => {
+          await module.default({ module_or_path: wasmUrl });
+          return module;
+        });
       }
       return modulePromise;
     },
@@ -1464,7 +1533,7 @@ function sectionBoundaryForWasm(block, tokens) {
   if (block === "legend") {
     return !isLegendRowForWasm(tokens);
   }
-  if (["objects", "display_objects", "scratch", "group", "layers", "collision_layers", "win_conditions", "lose_conditions", "transitions", "levels", "sprites", "assets", "on_display"].includes(block)) {
+  if (["objects", "scratch", "group", "layers", "collision_layers", "win_conditions", "lose_conditions", "transitions", "levels", "sprites", "assets", "on_display"].includes(block)) {
     return startsPuzzleSectionForWasm(tokens);
   }
   return false;
@@ -1553,17 +1622,11 @@ function documentByPath(path) {
 async function loadWasmCompiler() {
   if (!wasmCompilerPromise) {
     const version = encodeURIComponent(wasmCompilerAssetVersion);
-    const embedded = window.PuzzleStudioEmbeddedWasm;
-    wasmCompilerPromise = (
-      embedded?.moduleSource && embedded?.wasmBase64
-        ? loadEmbeddedWasmCompiler(embedded, version)
-        : loadExternalWasmCompiler(version)
-    )
-      .catch((error) => {
-        wasmCompiler = null;
-        wasmCompilerPromise = null;
-        throw error;
-      });
+    wasmCompilerPromise = loadExternalWasmCompiler(version).catch((error) => {
+      wasmCompiler = null;
+      wasmCompilerPromise = null;
+      throw error;
+    });
   }
   return wasmCompilerPromise;
 }
@@ -1575,69 +1638,31 @@ async function loadExternalWasmCompiler(version) {
   return module;
 }
 
-async function loadEmbeddedWasmCompiler(embedded, version) {
-  const url = URL.createObjectURL(new Blob([embedded.moduleSource], {
-    type: "text/javascript",
-  }));
-  try {
-    const module = await import(`${url}#${version}`);
-    await module.default({ module_or_path: base64ToUint8Array(embedded.wasmBase64) });
-    wasmCompiler = module;
-    return module;
-  } finally {
-    URL.revokeObjectURL(url);
-  }
-}
-
-function base64ToUint8Array(value) {
-  const binary = atob(value || "");
-  const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index += 1) {
-    bytes[index] = binary.charCodeAt(index);
-  }
-  return bytes;
-}
-
 function wasmSolverWorkerConfig() {
   const version = encodeURIComponent(wasmCompilerAssetVersion);
-  const embedded = window.PuzzleStudioEmbeddedWasm;
-  if (embedded?.moduleSource && embedded?.wasmBase64) {
-    return {
-      embedded: true,
-      moduleSource: embedded.moduleSource,
-      wasmBase64: embedded.wasmBase64,
-      version,
-    };
-  }
   return {
-    embedded: false,
     moduleUrl: new URL(`./wasm/puzzle_wasm.js?v=${version}`, document.baseURI).href,
     wasmUrl: new URL(`./wasm/puzzle_wasm_bg.wasm?v=${version}`, document.baseURI).href,
   };
 }
 
-function createWasmSolveWorker() {
-  const workerSource = `
-function base64ToUint8Array(value) {
-  const binary = atob(value || "");
-  const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index += 1) {
-    bytes[index] = binary.charCodeAt(index);
+async function loadWasmCoreRuntime() {
+  if (!wasmCoreRuntimePromise) {
+    const version = encodeURIComponent(wasmCompilerAssetVersion);
+    wasmCoreRuntimePromise = import(`./wasm_core/puzzle_core_wasm.js?v=${version}`).then(async (module) => {
+      await module.default({ module_or_path: `./wasm_core/puzzle_core_wasm_bg.wasm?v=${version}` });
+      return module;
+    }).catch((error) => {
+      wasmCoreRuntimePromise = null;
+      throw error;
+    });
   }
-  return bytes;
+  return wasmCoreRuntimePromise;
 }
 
+function createWasmSolveWorker() {
+  const workerSource = `
 async function loadSolverModule(wasm) {
-  if (wasm.embedded) {
-    const moduleUrl = URL.createObjectURL(new Blob([wasm.moduleSource], { type: "text/javascript" }));
-    try {
-      const module = await import(moduleUrl + "#" + wasm.version);
-      await module.default({ module_or_path: base64ToUint8Array(wasm.wasmBase64) });
-      return module;
-    } finally {
-      URL.revokeObjectURL(moduleUrl);
-    }
-  }
   const module = await import(wasm.moduleUrl);
   await module.default({ module_or_path: wasm.wasmUrl });
   return module;
@@ -1653,7 +1678,7 @@ self.onmessage = async (event) => {
     const module = await loadSolverModule(data.wasm || {});
     const progressStartedAt = Date.now();
     const progressIntervalMs = Math.max(1, Number(data.progressIntervalMs || 1000));
-    let lastProgressPost = progressStartedAt;
+    let lastProgressPost = 0;
     const progressCallback = (progressJson) => {
       const now = Date.now();
       if (now - lastProgressPost < progressIntervalMs) {
@@ -1946,309 +1971,6 @@ function setPreviewFrameHtml(html) {
   }, { once: true });
 
   nextFrame.srcdoc = html;
-}
-
-function setScenePreviewFrameHtml(html) {
-  if (!scenePreviewFrame) {
-    return;
-  }
-  scenePreviewFrameLoaded = false;
-  const loadId = scenePreviewLoadId + 1;
-  scenePreviewLoadId = loadId;
-  scenePreviewFrame.addEventListener("load", () => {
-    if (loadId !== scenePreviewLoadId) {
-      return;
-    }
-    scenePreviewFrameLoaded = true;
-    sendScenePreviewRequest();
-    window.setTimeout(sendScenePreviewRequest, 100);
-    window.setTimeout(sendScenePreviewRequest, 350);
-  }, { once: true });
-  scenePreviewFrame.srcdoc = html || emptyPreviewDocument();
-}
-
-function renderScenePane() {
-  syncScenePreviewControls();
-  if (!latestHtml) {
-    setSceneStatus("Compiling preview", "");
-    renderPreview().catch((error) => {
-      setSceneStatus(error?.message || String(error), "is-error");
-    });
-    return;
-  }
-  setScenePreviewFrameHtml(editorPreviewDocument(latestHtml));
-}
-
-function syncScenePreviewControls() {
-  const scenes = previewExport?.scenes || previewExport?.screens || [];
-  if (scenePreviewSceneSelect) {
-    const previous = scenePreviewSceneSelect.value;
-    scenePreviewSceneSelect.replaceChildren(...scenes.map((scene) => {
-      const option = document.createElement("option");
-      option.value = scene.name || "";
-      option.textContent = scene.name || "(scene)";
-      return option;
-    }));
-    const current = previous && scenes.some((scene) => scene.name === previous)
-      ? previous
-      : (previewExport?.currentScene || previewExport?.screen || scenes[0]?.name || "");
-    scenePreviewSceneSelect.value = current;
-    if (!scenePreviewSceneSelect.value && scenePreviewSceneSelect.options.length) {
-      scenePreviewSceneSelect.selectedIndex = 0;
-    }
-  }
-  if (scenePreviewThemeSelect && !scenePreviewThemeSelect.childElementCount) {
-    scenePreviewThemeSelect.replaceChildren(...Object.keys(PREVIEW_THEME_PRESETS).map((name) => {
-      const option = document.createElement("option");
-      option.value = name;
-      option.textContent = name;
-      return option;
-    }));
-  }
-  if (scenePreviewThemeSelect) {
-    scenePreviewThemeSelect.value = previewThemePresetName(scenePreviewThemeSelect.value || previewExport?.theme?.name || "clean");
-  }
-  const scene = selectedScenePreviewDef();
-  const size = scene?.layout?.size || {};
-  if (scenePreviewWidthInput && !scenePreviewWidthInput.value) {
-    scenePreviewWidthInput.value = String(Number(size.width) || 4);
-  }
-  if (scenePreviewHeightInput && !scenePreviewHeightInput.value) {
-    scenePreviewHeightInput.value = String(Number(size.height) || 3);
-  }
-}
-
-function selectedScenePreviewDef() {
-  const scenes = previewExport?.scenes || previewExport?.screens || [];
-  const name = scenePreviewSceneSelect?.value || previewExport?.currentScene || previewExport?.screen || scenes[0]?.name || "";
-  return scenes.find((scene) => scene.name === name) || null;
-}
-
-function scenePreviewRequestPayload() {
-  const sceneName = scenePreviewSceneSelect?.value || selectedScenePreviewDef()?.name || (previewExport?.scenes || previewExport?.screens || [])[0]?.name || "";
-  const width = Number(scenePreviewWidthInput?.value || selectedScenePreviewDef()?.layout?.size?.width || 4);
-  const height = Number(scenePreviewHeightInput?.value || selectedScenePreviewDef()?.layout?.size?.height || 3);
-  const gap = scenePreviewGapInput?.value === "" ? null : Number(scenePreviewGapInput?.value);
-  const layout = {
-    size: {
-      width: Math.max(1, Math.trunc(width || 4)),
-      height: Math.max(1, Math.trunc(height || 3)),
-    },
-  };
-  if (Number.isFinite(gap) && gap >= 0) {
-    layout.gap = gap;
-  }
-  return {
-    type: "PuzzleStudioSetScenePreview",
-    requestId: `scene-${++scenePreviewRequestId}`,
-    scene: { name: sceneName },
-    theme: {
-      name: scenePreviewThemeSelect?.value || previewExport?.theme?.name || "clean",
-      variables: {},
-    },
-    layout,
-    inspect: {
-      enabled: true,
-      selectedPath: selectedSceneButtonPath,
-    },
-  };
-}
-
-function sendScenePreviewRequest() {
-  if (!scenePreviewFrameLoaded || !scenePreviewFrame?.contentWindow) {
-    return false;
-  }
-  scenePreviewFrame.contentWindow.postMessage(scenePreviewRequestPayload(), "*");
-  setSceneStatus("Scene preview requested", "");
-  return true;
-}
-
-function handleScenePreviewSnapshot(data) {
-  scenePreviewSnapshot = data || null;
-  if (data?.error) {
-    setSceneStatus(data.error, "is-error");
-  } else {
-    setSceneStatus(`Scene ${data?.scene || ""}`, "is-ok");
-  }
-  renderSceneButtonInspector();
-}
-
-function handleSceneComponentSelected(data) {
-  const component = data?.component || null;
-  selectedSceneButtonPath = Array.isArray(component?.path) ? component.path : [];
-  renderSceneButtonInspector();
-  sendScenePreviewRequest();
-}
-
-function renderSceneButtonInspector() {
-  if (!sceneButtonList || !sceneButtonEffectInput) {
-    return;
-  }
-  const buttons = (scenePreviewSnapshot?.components || []).filter((component) => component.kind === "button" || component.kind === "choice");
-  sceneButtonList.replaceChildren();
-  for (const component of buttons) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.textContent = component.label || component.kind;
-    button.classList.toggle("is-active", samePath(component.path, selectedSceneButtonPath));
-    button.addEventListener("click", () => {
-      selectedSceneButtonPath = Array.isArray(component.path) ? component.path : [];
-      sceneButtonEffectInput.value = effectSource(component.effect);
-      renderSceneButtonInspector();
-      sendScenePreviewRequest();
-    });
-    sceneButtonList.append(button);
-  }
-  const selected = buttons.find((component) => samePath(component.path, selectedSceneButtonPath)) || buttons[0] || null;
-  if (selected && !selectedSceneButtonPath.length) {
-    selectedSceneButtonPath = selected.path || [];
-  }
-  sceneButtonEffectInput.value = selected ? effectSource(selected.effect) : "";
-  sceneButtonEffectInput.disabled = !selected;
-  if (sceneApplyEffectButton) {
-    sceneApplyEffectButton.disabled = !selected;
-  }
-}
-
-function samePath(left, right) {
-  return JSON.stringify(left || []) === JSON.stringify(right || []);
-}
-
-function effectSource(effect) {
-  if (!effect) {
-    return "";
-  }
-  if (effect.kind === "input") {
-    return `input ${effect.name || ""}`.trim();
-  }
-  if (effect.kind === "component_effect") {
-    return `component_effect ${effect.name || ""}`.trim();
-  }
-  if (effect.kind === "goto") {
-    return `goto ${effect.scene || effect.screen || ""}`.trim();
-  }
-  if (effect.kind === "enter") {
-    return `open ${effect.scene || effect.screen || ""}`.trim();
-  }
-  if (effect.kind === "back") {
-    return "close";
-  }
-  if (effect.kind === "play_sfx") {
-    return `sfx ${effect.name || ""}`.trim();
-  }
-  if (effect.kind === "play_music") {
-    return `play_music ${effect.name || ""}`.trim();
-  }
-  if (effect.kind === "puzzle_restart") {
-    return `${effect.target || "playing"}.restart`;
-  }
-  if (effect.kind === "puzzle_next_level") {
-    return `${effect.target || "playing"}.next_level`;
-  }
-  if (effect.kind === "sequence") {
-    return (effect.effects || []).map((child) => effectSource(child.effect || child)).filter(Boolean).join(" ");
-  }
-  return effect.kind || "";
-}
-
-function applySceneButtonEffectToSource() {
-  const effect = String(sceneButtonEffectInput?.value || "").trim();
-  if (!effect) {
-    setSceneStatus("Effect is empty", "is-error");
-    return;
-  }
-  const selected = (scenePreviewSnapshot?.components || []).find((component) => samePath(component.path, selectedSceneButtonPath));
-  if (!selected) {
-    setSceneStatus("No button selected", "is-error");
-    return;
-  }
-  const previewDocument = activePreviewDocument();
-  if (!previewDocument || !isTextDocument(previewDocument)) {
-    setSceneStatus("No source document", "is-error");
-    return;
-  }
-  const result = replaceSceneButtonEffect(previewDocument.source || "", scenePreviewSnapshot.scene, selected.kind, selected.label, effect);
-  if (!result) {
-    setSceneStatus("Could not find matching button source", "is-error");
-    return;
-  }
-  previewDocument.source = result;
-  if (previewDocument.id === activeDocument()?.id) {
-    setSourceEditorValue(result, { resetUndo: false });
-  }
-  scheduleLocalSave();
-  setSceneStatus("Effect updated", "is-ok");
-  renderPreview().then(() => {
-    if (currentPreviewMode === "scene") {
-      renderScenePane();
-    }
-  }).catch((error) => {
-    setSceneStatus(error?.message || String(error), "is-error");
-  });
-}
-
-function replaceSceneButtonEffect(source, sceneName, kind, label, effect) {
-  const block = findSceneSourceBlock(source, sceneName);
-  if (!block) {
-    return null;
-  }
-  const lines = sourceLinesWithOffsets(source.slice(block.bodyStart, block.bodyEnd));
-  const escapedLabel = escapeRegExp(label || "");
-  const componentKind = kind === "choice" ? "choice" : "button";
-  const pattern = new RegExp(`^(\\s*${componentKind}\\s+\"${escapedLabel}\"\\s*)(?:->\\s*)?(.*)$`);
-  for (const line of lines) {
-    const match = pattern.exec(line.raw);
-    if (!match) {
-      continue;
-    }
-    const absoluteStart = block.bodyStart + line.start;
-    const absoluteEnd = block.bodyStart + line.end;
-    const arrowIndex = source.indexOf("->", absoluteStart);
-    if (arrowIndex >= 0 && arrowIndex < absoluteEnd) {
-      const afterArrow = arrowIndex + 2;
-      const nextText = source.slice(afterArrow, absoluteEnd).trimStart();
-      if (nextText.startsWith("{")) {
-        const open = source.indexOf("{", afterArrow);
-        const close = findMatchingBrace(source, open);
-        if (close > open) {
-          return `${source.slice(0, afterArrow)} ${effect}${source.slice(close + 1)}`;
-        }
-      }
-      return `${source.slice(0, afterArrow)} ${effect}${source.slice(absoluteEnd)}`;
-    }
-    return `${source.slice(0, absoluteEnd)} -> ${effect}${source.slice(absoluteEnd)}`;
-  }
-  return null;
-}
-
-function findSceneSourceBlock(source, sceneName) {
-  const name = escapeRegExp(sceneName || "");
-  const pattern = new RegExp(`(^|\\n)([\\t ]*)scene\\s+${name}\\s*\\{`, "m");
-  const match = pattern.exec(source);
-  if (!match) {
-    return null;
-  }
-  const openIndex = source.indexOf("{", match.index + match[0].lastIndexOf("scene"));
-  const closeIndex = findMatchingBrace(source, openIndex);
-  if (closeIndex < 0) {
-    return null;
-  }
-  return {
-    bodyStart: openIndex + 1,
-    bodyEnd: closeIndex,
-  };
-}
-
-function escapeRegExp(value) {
-  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function setSceneStatus(message, className = "") {
-  if (!sceneStatus) {
-    return;
-  }
-  sceneStatus.textContent = message || "";
-  sceneStatus.className = `tool-feedback-bar ${className}`.trim();
 }
 
 function editorPreviewDocument(html) {
@@ -3353,7 +3075,6 @@ function syncPreviewModeButtonState() {
   const spritePaneVisible = isPaneVisible("sprite");
   const dimensionLabel = editorDimensionLabel();
   playModeButton.classList.toggle("is-active", paneVisible && previewMode === "play");
-  sceneModeButton?.classList.toggle("is-active", paneVisible && previewMode === "scene");
   editModeButton.classList.toggle("is-active", isPaneVisible("level"));
   solverModeButton.classList.toggle("is-active", paneVisible && previewMode === "solver");
   spriteModeButton.classList.toggle("is-active", spritePaneVisible);
@@ -3406,7 +3127,6 @@ function setPreviewMode(mode, options = {}) {
   const editMode = previewMode === "edit";
   const level3dMode = previewMode === "level3d";
   const solverMode = previewMode === "solver";
-  const sceneMode = previewMode === "scene";
   const enteringLevelMode = (editMode || solverMode) && !wasLevelMode;
   const spriteMode = previewMode === "sprite";
   const sprite3dMode = previewMode === "sprite3d";
@@ -3422,6 +3142,9 @@ function setPreviewMode(mode, options = {}) {
   }
   if (spritePaneModeSwitch) {
     spritePaneModeSwitch.hidden = !isPaneVisible("sprite");
+  }
+  if (soundsHeaderTools) {
+    soundsHeaderTools.hidden = !isPaneVisible("sounds");
   }
   syncPreviewModeButtonState();
   if (gamePaneTitle) {
@@ -3465,9 +3188,6 @@ function setPreviewMode(mode, options = {}) {
   }
   if (previewMode === "play") {
     restoreCompiledGamePreview();
-  }
-  if (sceneMode) {
-    renderScenePane();
   }
 }
 
@@ -4402,11 +4122,20 @@ function sourceForDocument(document) {
 }
 
 function replaceEditorSourceRangePreservingLineBoundary(source, start, end, replacement) {
-  let suffix = String(source || "").slice(end);
-  if (suffix && !suffix.startsWith("\n") && !suffix.startsWith("\r")) {
-    suffix = `\n${suffix}`;
+  const text = String(source || "");
+  const safeStart = Math.max(0, Math.min(text.length, start || 0));
+  const safeEnd = Math.max(safeStart, Math.min(text.length, end || safeStart));
+  const removed = text.slice(safeStart, safeEnd);
+  const trailingBoundary = removed.match(/((?:\r?\n[\t ]*)+)$/)?.[1] || "";
+  const replacementText = String(replacement || "");
+  let suffix = text.slice(safeEnd);
+  let boundary = "";
+  if (trailingBoundary && (suffix || !replacementText.endsWith(trailingBoundary))) {
+    boundary = trailingBoundary;
+  } else if (suffix && !suffix.startsWith("\n") && !suffix.startsWith("\r") && !/[\n\r]$/.test(replacementText)) {
+    boundary = "\n";
   }
-  return `${String(source || "").slice(0, start)}${replacement}${suffix}`;
+  return `${text.slice(0, safeStart)}${replacementText}${boundary}${suffix}`;
 }
 
 function editorSourceLinesWithOffsets(source) {
@@ -4919,6 +4648,7 @@ function renderLevelPalette() {
   renderLevelPaletteGroup("", mainObjects);
   renderLevelPaletteGroup("Visual", visualObjects);
   renderLevelScopeControl();
+  syncLevelLayerVisibilityControl();
   updateLevelPlaytestControls();
 }
 
@@ -4981,14 +4711,16 @@ function renderLevelBoard() {
   updateLevelSizeLabel();
   syncLevelResizeControls();
   renderLevelScopeControl();
+  syncLevelLayerVisibilityControl();
   renderLevelSourcePreview();
   const cells = displayedLevelCells();
+  const visibleCells = levelVisibleCells(cells);
   if (levelRenderer) {
-    levelRenderer.render(levelScene(cells));
+    levelRenderer.render(levelScene(visibleCells));
     syncLevelGridVisibility();
     levelBoard.querySelectorAll(".cell").forEach((cell, index) => {
       cell.dataset.index = String(index);
-      cell.setAttribute("aria-label", cellLabel(cells[index]));
+      cell.setAttribute("aria-label", cellLabel(visibleCells[index]));
       cell.setAttribute("role", "button");
       cell.tabIndex = 0;
     });
@@ -5344,6 +5076,121 @@ function renderLevelEraserIcon() {
     svg.append(path);
   }
   return svg;
+}
+
+function levelListFilterIconSvg() {
+  return `
+    <svg class="lucide lucide-list-filter level-layer-visibility-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M3 6h18"></path>
+      <path d="M7 12h10"></path>
+      <path d="M10 18h4"></path>
+    </svg>
+  `;
+}
+
+function levelLayerVisibilityEntries(exportData = previewExport) {
+  const count = Math.max(1, layerCount(exportData));
+  return Array.from({ length: count }, (_, layerIndex) => ({
+    layer: layerIndex,
+    label: `Layer ${layerIndex + 1}`,
+  }));
+}
+
+function normalizedLevelHiddenLayers(exportData = previewExport) {
+  const count = Math.max(1, layerCount(exportData));
+  const hidden = new Set();
+  for (const layerIndex of level.hiddenLayers || []) {
+    const normalized = Math.trunc(Number(layerIndex));
+    if (Number.isInteger(normalized) && normalized >= 0 && normalized < count) {
+      hidden.add(normalized);
+    }
+  }
+  level.hiddenLayers = [...hidden].sort((left, right) => left - right);
+  return hidden;
+}
+
+function levelLayerIsVisible(layerIndex, exportData = previewExport) {
+  return !normalizedLevelHiddenLayers(exportData).has(Math.trunc(Number(layerIndex) || 0));
+}
+
+function levelFilteredCellSlots(slots, exportData = previewExport) {
+  const hidden = normalizedLevelHiddenLayers(exportData);
+  if (!hidden.size) {
+    return slots;
+  }
+  const next = cloneCellSlots(slots, exportData);
+  for (const layerIndex of hidden) {
+    if (layerIndex >= 0 && layerIndex < next.length) {
+      next[layerIndex] = 0;
+    }
+  }
+  return next;
+}
+
+function levelVisibleCells(sourceCells = displayedLevelCells(), exportData = previewExport) {
+  const hidden = normalizedLevelHiddenLayers(exportData);
+  if (!hidden.size) {
+    return sourceCells;
+  }
+  return (sourceCells || []).map((slots) => levelFilteredCellSlots(slots, exportData));
+}
+
+function syncLevelLayerVisibilityControl() {
+  if (!levelLayerVisibilityButton || !levelLayerVisibilityMenu) {
+    return;
+  }
+  const hasHiddenLayers = normalizedLevelHiddenLayers().size > 0;
+  const isOpen = !levelLayerVisibilityMenu.hidden;
+  levelLayerVisibilityButton.classList.toggle("has-hidden-layers", hasHiddenLayers);
+  levelLayerVisibilityButton.classList.toggle("is-open", isOpen);
+  levelLayerVisibilityButton.setAttribute("aria-expanded", String(isOpen));
+  levelLayerVisibilityButton.disabled = levelPlaytestActive;
+  renderLevelLayerVisibilityMenu();
+}
+
+function renderLevelLayerVisibilityMenu() {
+  if (!levelLayerVisibilityMenu) {
+    return;
+  }
+  const entries = levelLayerVisibilityEntries();
+  levelLayerVisibilityMenu.replaceChildren(...entries.map((entry) => {
+    const label = document.createElement("label");
+    label.className = "level-layer-visibility-option";
+    label.setAttribute("role", "menuitemcheckbox");
+    label.setAttribute("aria-checked", String(levelLayerIsVisible(entry.layer)));
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = levelLayerIsVisible(entry.layer);
+    checkbox.dataset.levelVisibilityLayer = String(entry.layer);
+    checkbox.disabled = levelPlaytestActive;
+    const text = document.createElement("span");
+    text.className = "level-layer-visibility-label";
+    text.textContent = entry.label;
+    label.append(checkbox, text);
+    return label;
+  }));
+}
+
+function toggleLevelLayerVisibilityMenu() {
+  if (!levelLayerVisibilityMenu || !levelLayerVisibilityButton || levelPlaytestActive) {
+    return;
+  }
+  levelLayerVisibilityMenu.hidden = !levelLayerVisibilityMenu.hidden;
+  syncLevelLayerVisibilityControl();
+}
+
+function setLevelLayerVisible(layerIndex, visible) {
+  const normalized = normalizedLevelActiveLayer(layerIndex);
+  const hidden = normalizedLevelHiddenLayers();
+  if (visible) {
+    hidden.delete(normalized);
+  } else {
+    hidden.add(normalized);
+  }
+  level.hiddenLayers = [...hidden].sort((left, right) => left - right);
+  renderLevelBoard();
+  syncLevelLayerVisibilityControl();
+  setStatus(level.hiddenLayers.length ? "Layer visibility filtered" : "All layers visible", "is-ok");
 }
 
 function objectScene(object) {
@@ -6015,65 +5862,56 @@ function focusLevelInputTarget() {
 }
 
 async function materializeLevelStartForPlaytest(stateData, exportData, levelIndex) {
-  const compiler = await loadWasmCompiler();
   let current = JSON.parse(JSON.stringify(stateData));
   resetLevelPlaytestRuntime();
   let cancelled = false;
   if (exportData.engine?.levelStartProgram?.length) {
-    const outcome = transitionPlaytestProgram(compiler, exportData, "level_start", levelIndex, current, 0);
+    const outcome = await transitionPlaytestProgram(exportData, "level_start", levelIndex, current, 0);
     current = outcome.state || current;
     cancelled = cancelled || outcome.cancelled === true;
   } else if (exportData.engine?.runRulesOnLevelStart) {
-    const outcome = transitionPlaytestProgram(compiler, exportData, "run_rules_on_level_start", levelIndex, current, 0);
+    const outcome = await transitionPlaytestProgram(exportData, "run_rules_on_level_start", levelIndex, current, 0);
     current = outcome.state || current;
     cancelled = cancelled || outcome.cancelled === true;
   }
   if (!cancelled && exportData.levels?.[levelIndex]?.levelStartProgram?.length) {
-    const outcome = transitionPlaytestProgram(compiler, exportData, "level_start_local", levelIndex, current, 0);
+    const outcome = await transitionPlaytestProgram(exportData, "level_start_local", levelIndex, current, 0);
     current = outcome.state || current;
   }
   return current;
 }
 
-function transitionPlaytestProgram(compiler, exportData, programKey, levelIndex, stateData, inputId) {
-  const runtime = levelPlaytestCoreRuntime(compiler, exportData);
-  if (runtime && typeof runtime.transition_current_state_outcome === "function") {
-    if (levelPlaytestRuntimeStateData !== stateData) {
-      runtime.set_state(JSON.stringify(stateData));
-      levelPlaytestRuntimeStateData = stateData;
-    }
-    const outcome = JSON.parse(runtime.transition_current_state_outcome(
-      programKey,
-      Number.isFinite(levelIndex) ? Math.trunc(levelIndex) : -1,
-      Number(inputId || 0),
-    ));
-    if (outcome.state) {
-      levelPlaytestRuntimeStateData = outcome.state;
-    }
-    return outcome;
+async function transitionPlaytestProgram(exportData, programKey, levelIndex, stateData, inputId) {
+  const runtime = await levelPlaytestCoreRuntime(exportData);
+  if (levelPlaytestRuntimeStateData !== stateData) {
+    runtime.set_state(JSON.stringify(stateData));
+    levelPlaytestRuntimeStateData = stateData;
   }
-  if (typeof compiler.transition_program_outcome !== "function") {
-    throw new Error("Transition runtime is not available");
-  }
-  return JSON.parse(compiler.transition_program_outcome(
-    exportData.source || activePreviewSource(),
+  const outcome = JSON.parse(runtime.transition_current_outcome(
     programKey,
-    levelIndex,
-    JSON.stringify(stateData),
-    inputId,
+    Number.isFinite(levelIndex) ? Math.trunc(levelIndex) : -1,
+    Number(inputId || 0),
   ));
+  if (outcome.state) {
+    levelPlaytestRuntimeStateData = outcome.state;
+  }
+  return outcome;
 }
 
-function levelPlaytestCoreRuntime(compiler, exportData) {
-  if (typeof compiler?.WasmCoreRuntime !== "function") {
-    return null;
+async function levelPlaytestCoreRuntime(exportData) {
+  if (!exportData?.compiledPlay) {
+    throw new Error("Compiled play data is not available");
   }
-  const source = exportData?.source || activePreviewSource();
-  const puzzlePath = exportData?.puzzlePath || "game.puzzle";
-  const sourceKey = `${puzzlePath}\n${source}`;
+  const module = await loadWasmCoreRuntime();
+  if (typeof module.WasmCompiledCoreRuntime !== "function") {
+    throw new Error("Compiled core runtime is not available");
+  }
+  const sourceKey = JSON.stringify(exportData.compiledPlay);
   if (!levelPlaytestRuntime || levelPlaytestRuntimeSourceKey !== sourceKey) {
     resetLevelPlaytestRuntime();
-    levelPlaytestRuntime = new compiler.WasmCoreRuntime(source, puzzlePath);
+    levelPlaytestRuntime = new module.WasmCompiledCoreRuntime(JSON.stringify({
+      compiledPlay: exportData.compiledPlay,
+    }));
     levelPlaytestRuntimeSourceKey = sourceKey;
   }
   return levelPlaytestRuntime;
@@ -6113,9 +5951,8 @@ async function applyLevelPlaytestKey(event) {
   }
   levelPlaytestTransitionBusy = true;
   try {
-    const compiler = await loadWasmCompiler();
     const levelIndex = currentEditableLevelIndex(exportData);
-    const outcome = transitionPlaytestProgram(compiler, exportData, "main", levelIndex, levelPlaytestStateData, inputId);
+    const outcome = await transitionPlaytestProgram(exportData, "main", levelIndex, levelPlaytestStateData, inputId);
     levelPlaytestStateData = outcome.state || levelPlaytestStateData;
     levelDisplayCells = stateDataToLevelCells(levelPlaytestStateData, exportData);
     renderLevelBoard();
@@ -6173,6 +6010,7 @@ function updateLevelPlaytestControls() {
     levelScopeAllButton,
     levelExpandButton,
     levelShrinkButton,
+    levelLayerVisibilityButton,
     levelRotateLeftButton,
     levelRotateRightButton,
     levelFlipHorizontalButton,
@@ -6360,7 +6198,7 @@ async function solveLevel(options = {}) {
     });
   };
   setSolveLevelButtonState(true);
-  setLevelSolveStatus("Solving", "");
+  startLevelSolveFeedback("Solving");
   try {
     worker.postMessage({
       type: "solve",
@@ -6393,7 +6231,7 @@ async function solveLevelInMainThread({ requestId, solveRequest, fallbackReason 
   const fallbackSuffix = fallbackReason
     ? ` (${userFacingWorkerError(fallbackReason)})`
     : "";
-  setLevelSolveStatus(`Solving in this browser tab${fallbackSuffix}`, "");
+  startLevelSolveFeedback(`Solving in this browser tab${fallbackSuffix}`);
   await new Promise((resolve) => window.setTimeout(resolve, 0));
   if (!activeLevelSolveRequest || activeLevelSolveRequest.id !== requestId) {
     return;
@@ -6411,7 +6249,7 @@ async function solveLevelInMainThread({ requestId, solveRequest, fallbackReason 
       throw new Error("WASM solver is not available");
     }
     const progressStartedAt = Date.now();
-    let lastProgressPost = progressStartedAt;
+    let lastProgressPost = 0;
     const progressCallback = (progressJson) => {
       const now = Date.now();
       if (now - lastProgressPost < solverProgressIntervalMs) {
@@ -6499,12 +6337,14 @@ function cancelLevelSolve() {
     disposeWasmSolveWorker(activeLevelSolveRequest.worker);
     activeLevelSolveRequest = null;
     setSolveLevelButtonState(false);
+    stopLevelSolveFeedback();
     setLevelSolveStatus("Cancelled", "");
     return;
   }
   if (activeLevelSolveRequest.backend === "wasm-main") {
     activeLevelSolveRequest = null;
     setSolveLevelButtonState(false);
+    stopLevelSolveFeedback();
     setLevelSolveStatus("Cancelled", "");
     return;
   }
@@ -6534,7 +6374,47 @@ function setSolveLevelButtonState(isSolving) {
       labelElement.textContent = visibleLabel;
     }
   }
+  solverBoardViewport?.classList.toggle("is-solving", Boolean(isSolving));
+  solverBoardViewport?.closest(".solver-board-wrap")?.classList.toggle("is-solving", Boolean(isSolving));
   syncSolverLevelSelector();
+}
+
+function startLevelSolveFeedback(initialText = "Solving") {
+  levelSolveStartedAt = Date.now();
+  latestLevelSolveProgress = null;
+  if (levelSolveFeedbackTimer) {
+    window.clearInterval(levelSolveFeedbackTimer);
+  }
+  setLevelSolveStatus(`${initialText}: starting search, ${formatSeconds(0)}`, "");
+  levelSolveFeedbackTimer = window.setInterval(tickLevelSolveFeedback, solverFeedbackTickMs);
+}
+
+function stopLevelSolveFeedback() {
+  if (levelSolveFeedbackTimer) {
+    window.clearInterval(levelSolveFeedbackTimer);
+    levelSolveFeedbackTimer = 0;
+  }
+  levelSolveStartedAt = 0;
+  latestLevelSolveProgress = null;
+  solverBoardViewport?.classList.remove("is-solving");
+  solverBoardViewport?.closest(".solver-board-wrap")?.classList.remove("is-solving");
+}
+
+function tickLevelSolveFeedback() {
+  if (!activeLevelSolveRequest || !levelSolveStartedAt) {
+    stopLevelSolveFeedback();
+    return;
+  }
+  const elapsedMs = Date.now() - levelSolveStartedAt;
+  if (latestLevelSolveProgress) {
+    setLevelSolveStatus(formatLevelSolveProgress(latestLevelSolveProgress, elapsedMs), "");
+    return;
+  }
+  setLevelSolveStatus(`Solving: starting search, ${formatSeconds(elapsedMs)}`, "");
+}
+
+function formatLevelSolveProgress(progress, elapsedMs = progress?.elapsedMs || 0) {
+  return `Solving: ${formatNumber(progress?.visited || 0)} states, depth ${progress?.maxDepthReached || 0}, frontier ${formatNumber(progress?.frontier || 0)}, ${formatSeconds(elapsedMs)}`;
 }
 
 function handleLevelSolveProgress(message) {
@@ -6543,10 +6423,27 @@ function handleLevelSolveProgress(message) {
   }
   const payload = message.progress || {};
   const progress = payload.progress || payload;
+  latestLevelSolveProgress = {
+    ...progress,
+    elapsedMs: progress.elapsedMs || (levelSolveStartedAt ? Date.now() - levelSolveStartedAt : 0),
+  };
   if (payload.sample?.scene && !levelSolutionPreview) {
     if (payload.model === "puzzle3d" || payload.sample.scene.kind === "puzzle3d") {
-      // 3D sampled search states use the existing status line for now; the
-      // 3D replay surface is reserved for completed solution steps.
+      if (typeof puzzle3dSolutionStepSnapshot === "function") {
+        const snapshot = puzzle3dSolutionStepSnapshot({
+          scene: payload.sample.scene,
+          completed: false,
+          clearCommands: [],
+        });
+        if (snapshot) {
+          solverObservationPreview = {
+            kind: "puzzle3d",
+            depth: payload.sample.depth || progress.maxDepthReached || 0,
+            snapshot,
+          };
+          renderSolverBoard();
+        }
+      }
     } else {
       solverObservationPreview = {
         depth: payload.sample.depth || progress.maxDepthReached || 0,
@@ -6555,10 +6452,7 @@ function handleLevelSolveProgress(message) {
       renderSolverBoard();
     }
   }
-  setLevelSolveStatus(
-    `Solving: ${formatNumber(progress.visited || 0)} states, depth ${progress.maxDepthReached || 0}, frontier ${formatNumber(progress.frontier || 0)}, ${formatSeconds(progress.elapsedMs || 0)}`,
-    "",
-  );
+  setLevelSolveStatus(formatLevelSolveProgress(latestLevelSolveProgress), "");
 }
 
 function handleLevelSolveResult(message) {
@@ -6568,6 +6462,7 @@ function handleLevelSolveResult(message) {
   disposeWasmSolveWorker(activeLevelSolveRequest.worker);
   activeLevelSolveRequest = null;
   setSolveLevelButtonState(false);
+  stopLevelSolveFeedback();
 
   if (message.error) {
     setLevelSolveStatus(message.error, "is-error");
@@ -7717,7 +7612,7 @@ function sourceCharEntries(source, exportData = previewExport) {
   const domains = schemaDomains(source);
   const knownObjects = new Set(engineObjects(exportData).map((object) => object.name));
 
-  for (const blockName of ["objects", "display_objects"]) {
+  for (const blockName of ["objects"]) {
     for (const line of blockLines(source, blockName)) {
       const schemaMatch = line.match(/^\s*(@?[A-Za-z][\w]*):([A-Za-z][\w]*)\s+(\S+)\s*$/);
       if (schemaMatch && !/^\d+$/.test(schemaMatch[3])) {
@@ -8290,8 +8185,6 @@ saveButton.addEventListener("click", () => {
     saveButton.disabled = false;
   });
 });
-sourceBackButton?.addEventListener("click", goSourceNavigationBack);
-sourceForwardButton?.addEventListener("click", goSourceNavigationForward);
 document.addEventListener("keydown", handleSaveShortcut);
 document.addEventListener("keydown", handleExplorerToggleShortcut);
 document.addEventListener("keydown", handleVisualEditUndoShortcut);
@@ -8418,7 +8311,10 @@ documentList.addEventListener("click", (event) => {
     if (actionButton.dataset.treeAction === "rename") {
       startRenameEntry(node.id);
     } else if (actionButton.dataset.treeAction === "delete") {
-      deleteTreeNode(node.id);
+      deleteTreeNode(node.id).catch((error) => {
+        console.error(error);
+        setEditorStatus("Delete failed", "is-error");
+      });
     } else if (actionButton.dataset.treeAction === "remove-workspace") {
       removeWorkspaceNode(node.id).catch((error) => {
         console.error(error);
@@ -8569,14 +8465,6 @@ window.addEventListener("message", (event) => {
   if (event.data?.type === "PuzzleStudioPreviewLayout") {
     return;
   }
-  if (event.data?.type === "PuzzleStudioScenePreview") {
-    handleScenePreviewSnapshot(event.data);
-    return;
-  }
-  if (event.data?.type === "PuzzleStudioSceneComponentSelected") {
-    handleSceneComponentSelected(event.data);
-    return;
-  }
   if (event.data?.type === "PuzzleStudioPreviewState") {
     applyPreviewTheme(event.data.theme || previewExport?.theme || null);
     syncPreviewViewportAspect(event.data.screen || "");
@@ -8667,10 +8555,6 @@ sourceEditor.addEventListener("click", loadLevelFromSourceClick);
 playModeButton.addEventListener("click", () => {
   openPreviewModePane("play");
 });
-sceneModeButton?.addEventListener("click", () => {
-  ensurePreviewTargetsActiveDocument();
-  openPreviewModePane("scene");
-});
 editModeButton.addEventListener("click", () => {
   openLevelPaneForCurrentDimension();
 });
@@ -8736,20 +8620,20 @@ docsTopbarButton?.addEventListener("click", () => {
   openPreviewModePane("docs");
   docsSearchInput?.focus();
 });
-sceneRefreshButton?.addEventListener("click", () => {
-  if (!latestHtml) {
-    renderPreview().then(renderScenePane).catch((error) => {
-      setSceneStatus(error?.message || String(error), "is-error");
-    });
-    return;
-  }
-  renderScenePane();
-});
-sceneApplyEffectButton?.addEventListener("click", applySceneButtonEffectToSource);
-for (const control of [scenePreviewSceneSelect, scenePreviewThemeSelect, scenePreviewWidthInput, scenePreviewHeightInput, scenePreviewGapInput]) {
-  control?.addEventListener("change", () => {
-    selectedSceneButtonPath = [];
-    sendScenePreviewRequest();
+for (const button of docsPageButtons) {
+  button.addEventListener("click", () => {
+    const pageId = button.dataset.docsPage || "";
+    for (const item of docsPageButtons) {
+      const active = item.dataset.docsPage === pageId;
+      item.classList.toggle("is-active", active);
+      item.setAttribute("aria-selected", String(active));
+    }
+    for (const article of docsArticles) {
+      article.hidden = article.dataset.docsArticle !== pageId;
+    }
+    if (docsPanel) {
+      docsPanel.scrollTop = 0;
+    }
   });
 }
 psImportSourceInput?.addEventListener("input", resetPuzzleScriptImportConversion);
@@ -8830,6 +8714,30 @@ levelEdgeButtons.forEach((button) => {
 levelExpandButton?.addEventListener("click", () => toggleLevelResizeMode("expand"));
 levelShrinkButton?.addEventListener("click", () => toggleLevelResizeMode("shrink"));
 levelGridButton?.addEventListener("click", toggleLevelGrid);
+levelLayerVisibilityButton?.addEventListener("click", (event) => {
+  event.stopPropagation();
+  toggleLevelLayerVisibilityMenu();
+});
+levelLayerVisibilityMenu?.addEventListener("click", (event) => {
+  event.stopPropagation();
+});
+levelLayerVisibilityMenu?.addEventListener("change", (event) => {
+  const checkbox = event.target?.closest?.("[data-level-visibility-layer]");
+  if (!checkbox) {
+    return;
+  }
+  setLevelLayerVisible(Number(checkbox.dataset.levelVisibilityLayer), checkbox.checked);
+});
+document.addEventListener("click", (event) => {
+  if (!levelLayerVisibilityMenu || levelLayerVisibilityMenu.hidden) {
+    return;
+  }
+  if (levelLayerVisibilityMenu.contains(event.target) || levelLayerVisibilityButton?.contains(event.target)) {
+    return;
+  }
+  levelLayerVisibilityMenu.hidden = true;
+  syncLevelLayerVisibilityControl();
+});
 levelRotateLeftButton?.addEventListener("click", rotateLevelLeft);
 levelRotateRightButton?.addEventListener("click", rotateLevelRight);
 levelFlipHorizontalButton?.addEventListener("click", flipLevelHorizontal);

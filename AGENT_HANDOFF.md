@@ -56,7 +56,7 @@ Read the corresponding folder `AGENTS.md` before editing these areas:
   highlighting, workspace behavior, and editor-owned layout.
 - `crates/ascii_play/`: terminal adapter behavior.
 - `crates/cli/`: product/automation facade and command routing.
-- `crates/puzzle3d_model/`: 3D model parser/runtime experiment.
+- `crates/puzzle3d_model/`: 3D model parser/runtime.
 - `src-tauri/`: desktop shell and host filesystem boundary.
 - `games/`: sample authoring inputs and generated standalone game exports.
 - `docs/`: generated web documentation exports and documentation source policy.
@@ -73,18 +73,28 @@ cargo test
 cargo run -p puzzlestudio -- check games/spec_2d.puzzle
 ```
 
-For standalone HTML artifacts that embed the WASM runtime, use the wrapper that
-matches the intended audience instead of calling the crate directly:
+For generated web artifacts, use the wrapper that matches the intended audience
+instead of calling the crate directly:
 
 ```bash
 tools/dev_export_html.sh games/fixban_tween.puzzle -o games/fixban_tween.html
-tools/release_editor_html.sh games/fixban_tween.puzzle -o editor.html
+tools/generate_web_editor.sh games/fixban_tween.puzzle -o docs/index.html
 ```
 
 `dev_export_html.sh` rebuilds WASM before game HTML export so local developer
-checks see the current Rust implementation. `release_editor_html.sh` rebuilds
-WASM before generating `editor.html`; the resulting editor keeps that embedded
-WASM fixed until the editor artifact is regenerated.
+checks see the current Rust implementation. `generate_web_editor.sh` produces
+the GitHub Pages editor release as `docs/index.html` plus static JS, CSS, and
+WASM assets. Rebuild editor/core/game WASM explicitly with
+`tools/build_wasm_editor.sh`, `tools/build_wasm_core.sh`, and
+`tools/build_wasm_game.sh` when Rust/WASM changes are meant to appear in the
+Pages release.
+
+Use `tools/serve_web_editor.sh` to open the generated Pages editor locally over
+HTTP. On macOS, `tools/open_web_editor.command` is the double-click entry point.
+Do not use `file://` as a supported editor release surface.
+
+Do not reintroduce a root single-file `editor.html` release path. GitHub Pages is
+the web release surface, and it should stay a multi-file static site.
 
 Adapter checks, editor checks, screenshots, and desktop builds have
 owner-specific caveats; read the relevant folder `AGENTS.md` before treating a

@@ -1,4 +1,4 @@
-use puzzle_core::{ComparisonOp, GlobalUpdateOp, ObjectId, QueryId, RuleApplication};
+use puzzle_core::{ComparisonOp, ConditionId, GlobalUpdateOp, ObjectId, RuleApplication};
 
 use crate::PatternBlock;
 
@@ -105,23 +105,23 @@ pub(crate) enum ConditionAst {
         op: ComparisonOp,
         value: i64,
     },
-    QueryEquals {
+    ConditionEquals {
         name: String,
         value: i64,
     },
-    QueryNonZero(String),
-    QueryCompare {
+    ConditionNonZero(String),
+    ConditionCompare {
         name: String,
         op: ComparisonOp,
         value: i64,
     },
-    QueryValueEquals {
-        kind: QueryKindAst,
+    InlineConditionValueEquals {
+        kind: ConditionValueAst,
         value: i64,
     },
-    QueryValueNonZero(QueryKindAst),
-    QueryValueCompare {
-        kind: QueryKindAst,
+    InlineConditionNonZero(ConditionValueAst),
+    InlineConditionCompare {
+        kind: ConditionValueAst,
         op: ComparisonOp,
         value: i64,
     },
@@ -155,23 +155,23 @@ pub(crate) enum EffectAst {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct QueryDefinitionAst {
-    pub(crate) id: QueryId,
-    pub(crate) kind: QueryKindAst,
+pub(crate) struct ConditionDefinitionAst {
+    pub(crate) id: ConditionId,
+    pub(crate) kind: ConditionValueAst,
 }
 
 #[derive(Clone, Debug)]
-pub(crate) enum QueryKindAst {
+pub(crate) enum ConditionValueAst {
     CountObjects(Vec<ObjectId>),
     ExistsObjects(Vec<ObjectId>),
     NoneObjects(Vec<ObjectId>),
-    CountMatches(QueryPatternAst),
-    ExistsMatches(QueryPatternAst),
-    NoneMatches(QueryPatternAst),
+    CountMatches(ConditionPatternAst),
+    ExistsMatches(ConditionPatternAst),
+    NoneMatches(ConditionPatternAst),
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct QueryPatternAst {
+pub(crate) struct ConditionPatternAst {
     pub(crate) orientation: OrientationExpr,
     pub(crate) pattern: PatternBlock,
 }
