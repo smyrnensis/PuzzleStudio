@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 
 use puzzle_core::{
-    GlobalId, InputId, LayerId, ObjectDef, ObjectId, QueryId, ScratchDef, ScratchId, ScratchKind,
+    ConditionId, GlobalId, InputId, LayerId, ObjectDef, ObjectId, ScratchDef, ScratchId,
+    ScratchKind,
 };
 
 #[derive(Clone, Debug)]
@@ -25,10 +26,11 @@ pub(crate) struct Catalog {
     pub(crate) global_names: HashMap<String, GlobalId>,
     pub(crate) global_labels: HashMap<GlobalId, String>,
     pub(crate) global_defaults: Vec<i64>,
+    pub(crate) numeric_global_defaults: HashMap<String, i64>,
     pub(crate) persistent_vars: Vec<GlobalId>,
     pub(crate) constant_globals: Vec<GlobalId>,
-    pub(crate) query_names: HashMap<String, QueryId>,
-    pub(crate) query_labels: HashMap<QueryId, String>,
+    pub(crate) condition_names: HashMap<String, ConditionId>,
+    pub(crate) condition_labels: HashMap<ConditionId, String>,
 }
 
 impl Default for Catalog {
@@ -110,10 +112,11 @@ impl Default for Catalog {
             global_names: HashMap::new(),
             global_labels: HashMap::new(),
             global_defaults: Vec::new(),
+            numeric_global_defaults: HashMap::new(),
             persistent_vars: Vec::new(),
             constant_globals: Vec::new(),
-            query_names: HashMap::new(),
-            query_labels: HashMap::new(),
+            condition_names: HashMap::new(),
+            condition_labels: HashMap::new(),
         }
     }
 }

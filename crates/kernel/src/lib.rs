@@ -1034,7 +1034,7 @@ fn scratch_entry_id(index: usize) -> NonZeroU32 {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum QueryKind<ObjectId, Pattern, InputId> {
+pub enum ConditionValueKind<ObjectId, Pattern, InputId> {
     CountObjects(Vec<ObjectId>),
     ExistsObjects(Vec<ObjectId>),
     NoneObjects(Vec<ObjectId>),
@@ -1196,6 +1196,117 @@ mod tests {
         assert_eq!(shape3.cell_count(), Some(24));
         assert_eq!(shape3.cell_index(GridCoord::new([2, 1, 1])), Some(18));
         assert_eq!(shape3.slot_index(GridCoord::new([2, 1, 1]), 1), Some(37));
+    }
+
+    #[test]
+    fn grid_shape_rejects_empty_or_overflowing_shapes() {
+        assert_eq!(GridShape::<2>::new([0, 3], 1), None);
+        assert_eq!(GridShape::<2>::new([3, 3], 0), None);
+        assert_eq!(GridShape::<8>::new([u16::MAX; 8], u16::MAX), None);
+    }
+
+    #[test]
+    fn object_bindings_reject_conflicting_rebinds() {
+        let mut bindings = Vec::new();
+
+        assert!(bind_object(&mut bindings, 0, TestId(2)));
+        assert!(bind_object(&mut bindings, 0, TestId(2)));
+        assert!(!bind_object(&mut bindings, 0, TestId(3)));
+        assert!(bind_object(&mut bindings, 1, TestId(3)));
+
+        assert_eq!(bound_object(&bindings, 0), Some(TestId(2)));
+        assert_eq!(bound_object(&bindings, 1), Some(TestId(3)));
+        assert_eq!(bound_object(&bindings, 2), None);
+    }
+
+    #[test]
+    fn placement_object_binding_searches_across_components() {
+        let placement = MatchPlacement::<2, TestId>::new(vec![
+            ComponentPlacement::new(
+                GridCoord::new([0, 0]),
+                Vec::new(),
+                vec![ObjectBinding {
+                    binding: 0,
+                    object: TestId(4),
+                }],
+            ),
+            ComponentPlacement::new(
+                GridCoord::new([1, 0]),
+                Vec::new(),
+                vec![ObjectBinding {
+                    binding: 1,
+                    object: TestId(5),
+                }],
+            ),
+        ]);
+
+        assert_eq!(placement_object_binding(&placement, 0), Some(TestId(4)));
+        assert_eq!(placement_object_binding(&placement, 1), Some(TestId(5)));
+        assert_eq!(placement_object_binding(&placement, 2), None);
+    }
+
+    #[test]
+    fn complete_component_placements_backtracks_to_later_candidates() {
+        let components = [0, 1, 2];
+        let mut placements = Vec::new();
+        let mut candidate_origins = |component: &i32| match *component {
+            0 => vec![0],
+            1 => vec![10, 11],
+            2 => vec![20],
+            _ => Vec::new(),
+        };
+        let mut place_at = |component: &i32, origin| {
+            if *component == 1 && origin == 10 {
+                None
+            } else {
+                Some((*component, origin))
+            }
+        };
+
+        assert!(complete_component_placements(
+            &components,
+            0,
+            &mut placements,
+            &mut candidate_origins,
+            &mut place_at,
+        ));
+        assert_eq!(placements, vec![(0, 0), (1, 11), (2, 20)]);
+    }
+
+    #[test]
+    fn collect_component_placements_emits_every_combination() {
+        let components = [0, 1];
+        let mut placements = Vec::new();
+        let mut matches = Vec::new();
+        let mut candidate_origins = |component: &i32| match *component {
+            0 => vec![0, 1],
+            1 => vec![10, 11],
+            _ => Vec::new(),
+        };
+        let mut place_at = |component: &i32, origin| Some((*component, origin));
+        let mut push_match = |matches: &mut Vec<Vec<(i32, i32)>>, placements: &[(i32, i32)]| {
+            matches.push(placements.to_vec());
+        };
+
+        collect_component_placements(
+            &components,
+            0,
+            &mut placements,
+            &mut matches,
+            &mut candidate_origins,
+            &mut place_at,
+            &mut push_match,
+        );
+
+        assert_eq!(
+            matches,
+            vec![
+                vec![(0, 0), (1, 10)],
+                vec![(0, 0), (1, 11)],
+                vec![(0, 1), (1, 10)],
+                vec![(0, 1), (1, 11)],
+            ]
+        );
     }
 
     #[test]

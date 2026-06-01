@@ -1,6 +1,6 @@
 use crate::{
     Direction3, DirectionSet3, Frame3, FrameSet3, Guard3, LayerId, MatchCell3, ObjectId, Offset3,
-    Pattern3, Rule3, RuleApplication3, RuleId3, WriteOp3,
+    Pattern3, Rule3, RuleApplication3, RuleId3, ScratchId3, WriteOp3,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -67,11 +67,24 @@ impl SelectorCatalog3 {
     }
 
     pub fn resolve(&self, selector: &ObjectSelector3) -> Result<ResolvedSelector3, SelectorError3> {
-        let alternatives = match selector {
-            ObjectSelector3::Object(name) => self.resolve_object(name)?,
-            ObjectSelector3::Group(name) => self.resolve_group(name, &mut Vec::new())?,
-            ObjectSelector3::Labeled { selector, .. } => self.resolve(selector)?.alternatives,
-            ObjectSelector3::Variant { family, tags } => self.resolve_variant(family, tags)?,
+        let (alternatives, scratch) = match selector {
+            ObjectSelector3::Object(name) => (self.resolve_object(name)?, Vec::new()),
+            ObjectSelector3::Group(name) => {
+                (self.resolve_group(name, &mut Vec::new())?, Vec::new())
+            }
+            ObjectSelector3::Labeled { selector, .. } => {
+                let resolved = self.resolve(selector)?;
+                (resolved.alternatives, resolved.scratch)
+            }
+            ObjectSelector3::Variant { family, tags } => {
+                (self.resolve_variant(family, tags)?, Vec::new())
+            }
+            ObjectSelector3::WithScratch { selector, scratch } => {
+                let resolved = self.resolve(selector)?;
+                let mut combined = resolved.scratch;
+                combined.extend(scratch.iter().cloned());
+                (resolved.alternatives, combined)
+            }
         };
         let token = selector.token();
         if alternatives.is_empty() {
@@ -81,7 +94,7 @@ impl SelectorCatalog3 {
             token,
             alternatives,
             transform: None,
-            scratch: Vec::new(),
+            scratch,
         })
     }
 
@@ -123,6 +136,9 @@ impl SelectorCatalog3 {
                 ObjectSelector3::Group(name) => self.resolve_group(name, stack)?,
                 ObjectSelector3::Labeled { selector, .. } => self.resolve(selector)?.alternatives,
                 ObjectSelector3::Variant { family, tags } => self.resolve_variant(family, tags)?,
+                ObjectSelector3::WithScratch { selector, .. } => {
+                    self.resolve(selector)?.alternatives
+                }
             };
             for object in alternatives {
                 push_unique_object(&mut objects, object);
@@ -426,6 +442,11 @@ pub enum WriteOpTemplate3 {
         to_offset: Offset3,
         object: ObjectSelector3,
     },
+    SetScratch {
+        offset: Offset3,
+        object: ObjectSelector3,
+        scratch: SelectorScratch3,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -538,6 +559,11 @@ pub enum LineWriteOpTemplate3 {
         to_step: i16,
         object: ObjectSelector3,
     },
+    SetScratch {
+        step: i16,
+        object: ObjectSelector3,
+        scratch: SelectorScratch3,
+    },
 }
 
 pub fn lower_line_rule_template(
@@ -553,8 +579,16 @@ pub fn lower_line_rule_template(
                 .iter()
                 .map(|cell| MatchCellTemplate3 {
                     offset: direction.offset.scale(cell.step),
-                    require: cell.require.clone(),
-                    forbid: cell.forbid.clone(),
+                    require: cell
+                        .require
+                        .iter()
+                        .map(|selector| selector.resolve_directional_scratch(direction))
+                        .collect(),
+                    forbid: cell
+                        .forbid
+                        .iter()
+                        .map(|selector| selector.resolve_directional_scratch(direction))
+                        .collect(),
                 })
                 .collect(),
         );
@@ -600,6 +634,15 @@ fn line_write_to_world(direction: Direction3, write: &LineWriteOpTemplate3) -> W
             from_offset: direction.offset.scale(*from_step),
             to_offset: direction.offset.scale(*to_step),
             object: object.clone(),
+        },
+        LineWriteOpTemplate3::SetScratch {
+            step,
+            object,
+            scratch,
+        } => WriteOpTemplate3::SetScratch {
+            offset: direction.offset.scale(*step),
+            object: object.clone(),
+            scratch: resolve_directional_selector_scratch(scratch, direction),
         },
     }
 }
@@ -846,6 +889,7 @@ fn lower_match_cell_template(
         let resolved = catalog.resolve(selector)?;
         for object in resolved.alternatives {
             push_unique_object(&mut cell.forbid_objects, object);
+            apply_selector_scratch_to_cell(&mut cell, object, None, &resolved.scratch, true)?;
         }
     }
 
@@ -863,6 +907,13 @@ fn lower_match_cell_template(
                         if resolved.alternatives.contains(object) {
                             let mut cell = cell;
                             push_unique_object(&mut cell.require_objects, *object);
+                            apply_selector_scratch_to_cell(
+                                &mut cell,
+                                *object,
+                                None,
+                                &resolved.scratch,
+                                false,
+                            )?;
                             next.push((cell, assignments));
                         }
                     }
@@ -888,6 +939,13 @@ fn lower_match_cell_template(
                                         objects: objects.clone(),
                                     });
                             }
+                            apply_selector_scratch_to_cell(
+                                &mut cell,
+                                ObjectId::EMPTY,
+                                Some(*binding),
+                                &resolved.scratch,
+                                false,
+                            )?;
                             next.push((cell, assignments));
                         }
                     }
@@ -895,7 +953,8 @@ fn lower_match_cell_template(
                 continue;
             }
 
-            if selector.can_use_runtime_object_set()
+            if resolved.scratch.is_empty()
+                && selector.can_use_runtime_object_set()
                 && let Some(matcher) = same_layer_object_set_matcher(
                     catalog,
                     u16::try_from(assignments.len()).unwrap_or(u16::MAX),
@@ -927,6 +986,7 @@ fn lower_match_cell_template(
                 let mut cell = cell.clone();
                 let mut assignments = assignments.clone();
                 push_unique_object(&mut cell.require_objects, *object);
+                apply_selector_scratch_to_cell(&mut cell, *object, None, &resolved.scratch, false)?;
                 assignments.push(SelectorAssignment3 {
                     token: resolved.token.clone(),
                     value: SelectorAssignmentValue3::Object(*object),
@@ -958,6 +1018,52 @@ fn same_layer_object_set_matcher(
     puzzle_kernel::object_set_matcher_for_same_layer(binding, alternatives, |object| {
         catalog.object_layer(object)
     })
+}
+
+fn apply_selector_scratch_to_cell(
+    cell: &mut MatchCell3,
+    object: ObjectId,
+    binding: Option<u16>,
+    scratch: &[SelectorScratch3],
+    force_forbid: bool,
+) -> Result<(), PatternLoweringError3> {
+    for attr in scratch {
+        let (scratch, value, match_value) = lower_selector_scratch_for_pattern(attr)?;
+        let negated = force_forbid || attr.negated;
+        match (binding, negated) {
+            (Some(binding), false) => {
+                cell.require_object_set_scratch
+                    .push(crate::ObjectSetScratchPattern3 {
+                        binding,
+                        scratch,
+                        value,
+                        match_value,
+                    })
+            }
+            (Some(binding), true) => {
+                cell.forbid_object_set_scratch
+                    .push(crate::ObjectSetScratchPattern3 {
+                        binding,
+                        scratch,
+                        value,
+                        match_value,
+                    })
+            }
+            (None, false) => cell.require_scratch.push(crate::ScratchPattern3 {
+                object,
+                scratch,
+                value,
+                match_value,
+            }),
+            (None, true) => cell.forbid_scratch.push(crate::ScratchPattern3 {
+                object,
+                scratch,
+                value,
+                match_value,
+            }),
+        }
+    }
+    Ok(())
 }
 
 fn match_cell_selector_can_use_object_set(
@@ -1099,6 +1205,32 @@ fn lower_write_templates(
                     binding,
                 }),
             },
+            WriteOpTemplate3::SetScratch {
+                offset,
+                object,
+                scratch,
+            } => match write_object(catalog, assignments, object)? {
+                WriteObject3::Object(object) => {
+                    let (scratch, value, _) = lower_selector_scratch(scratch)?;
+                    writes.push(WriteOp3::SetScratch {
+                        component: 0,
+                        offset: *offset,
+                        object,
+                        scratch,
+                        value,
+                    });
+                }
+                WriteObject3::ObjectSet { binding } => {
+                    let (scratch, value, _) = lower_selector_scratch(scratch)?;
+                    writes.push(WriteOp3::SetObjectSetScratch {
+                        component: 0,
+                        offset: *offset,
+                        binding,
+                        scratch,
+                        value,
+                    });
+                }
+            },
         }
     }
     Ok(writes)
@@ -1163,6 +1295,78 @@ pub struct SelectorScratch3 {
     pub name: String,
     pub value: Option<String>,
     pub negated: bool,
+}
+
+const ANONYMOUS_MOVEMENT_SCRATCH3: ScratchId3 = ScratchId3(0);
+
+fn lower_selector_scratch(
+    scratch: &SelectorScratch3,
+) -> Result<(ScratchId3, Option<i64>, puzzle_kernel::ScratchValueMatch), RuleLoweringError3> {
+    lower_selector_scratch_parts(scratch)
+        .map_err(|name| RuleLoweringError3::InvalidScratch { name })
+}
+
+fn lower_selector_scratch_for_pattern(
+    scratch: &SelectorScratch3,
+) -> Result<(ScratchId3, Option<i64>, puzzle_kernel::ScratchValueMatch), PatternLoweringError3> {
+    lower_selector_scratch_parts(scratch)
+        .map_err(|name| PatternLoweringError3::InvalidScratch { name })
+}
+
+fn lower_selector_scratch_parts(
+    scratch: &SelectorScratch3,
+) -> Result<(ScratchId3, Option<i64>, puzzle_kernel::ScratchValueMatch), String> {
+    if scratch.name.is_empty()
+        && let Some(value) = scratch.value.as_deref()
+    {
+        if value == "directions" {
+            return Ok((
+                ANONYMOUS_MOVEMENT_SCRATCH3,
+                None,
+                puzzle_kernel::ScratchValueMatch::Any,
+            ));
+        }
+        return Ok((
+            ANONYMOUS_MOVEMENT_SCRATCH3,
+            Some(movement_scratch_value3(value)?),
+            puzzle_kernel::ScratchValueMatch::Exact,
+        ));
+    }
+    Err(scratch.name.clone())
+}
+
+fn resolve_directional_selector_scratch(
+    scratch: &SelectorScratch3,
+    direction: Direction3,
+) -> SelectorScratch3 {
+    let Some(value) = scratch.value.as_deref() else {
+        return scratch.clone();
+    };
+    let value = match value {
+        ">" => direction.name,
+        "<" => direction.opposite().name,
+        "forward" => "front",
+        "backward" => "back",
+        other => other,
+    };
+    SelectorScratch3 {
+        name: scratch.name.clone(),
+        value: Some(value.to_string()),
+        negated: scratch.negated,
+    }
+}
+
+fn movement_scratch_value3(value: &str) -> Result<i64, String> {
+    let canonical = match value {
+        "forward" => "front",
+        "backward" => "back",
+        other => other,
+    };
+    Direction3::directions()
+        .iter()
+        .position(|direction| direction.name == canonical)
+        .map(|index| index as i64)
+        .ok_or_else(|| value.to_string())
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1303,6 +1507,10 @@ pub enum ObjectSelector3 {
         family: String,
         tags: Vec<SelectorTag3>,
     },
+    WithScratch {
+        selector: Box<ObjectSelector3>,
+        scratch: Vec<SelectorScratch3>,
+    },
 }
 
 impl ObjectSelector3 {
@@ -1328,10 +1536,22 @@ impl ObjectSelector3 {
         }
     }
 
+    pub fn with_scratch(selector: ObjectSelector3, scratch: Vec<SelectorScratch3>) -> Self {
+        if scratch.is_empty() {
+            selector
+        } else {
+            Self::WithScratch {
+                selector: Box::new(selector),
+                scratch,
+            }
+        }
+    }
+
     pub fn token(&self) -> String {
         match self {
             Self::Object(name) | Self::Group(name) => name.clone(),
             Self::Labeled { token, .. } => token.clone(),
+            Self::WithScratch { selector, .. } => selector.token(),
             Self::Variant { family, tags } => {
                 let mut token = family.clone();
                 for tag in tags {
@@ -1345,6 +1565,31 @@ impl ObjectSelector3 {
 
     pub fn has_occurrence_label(&self) -> bool {
         matches!(self, Self::Labeled { .. })
+            || matches!(self, Self::WithScratch { selector, .. } if selector.has_occurrence_label())
+    }
+
+    pub fn scratch(&self) -> &[SelectorScratch3] {
+        match self {
+            Self::WithScratch { scratch, .. } => scratch,
+            _ => &[],
+        }
+    }
+
+    fn resolve_directional_scratch(&self, direction: Direction3) -> Self {
+        match self {
+            Self::WithScratch { selector, scratch } => Self::with_scratch(
+                selector.resolve_directional_scratch(direction),
+                scratch
+                    .iter()
+                    .map(|scratch| resolve_directional_selector_scratch(scratch, direction))
+                    .collect(),
+            ),
+            Self::Labeled { token, selector } => Self::Labeled {
+                token: token.clone(),
+                selector: Box::new(selector.resolve_directional_scratch(direction)),
+            },
+            _ => self.clone(),
+        }
     }
 
     fn can_use_runtime_object_set(&self) -> bool {
@@ -1426,6 +1671,7 @@ pub enum SelectorError3 {
 pub enum PatternLoweringError3 {
     Selector(SelectorError3),
     DuplicateSelectorOccurrenceLabel { token: String },
+    InvalidScratch { name: String },
 }
 
 impl From<SelectorError3> for PatternLoweringError3 {
@@ -1444,6 +1690,9 @@ pub enum RuleLoweringError3 {
     AmbiguousWriteSelector {
         token: String,
         alternatives: Vec<ObjectId>,
+    },
+    InvalidScratch {
+        name: String,
     },
 }
 

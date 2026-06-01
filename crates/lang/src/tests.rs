@@ -82,12 +82,11 @@ fn modernize_test_source(source: &str) -> String {
         }
 
         match tokens.as_slice() {
-            ["objects"] | ["display_objects"] => {
-                let display = tokens[0] == "display_objects";
+            ["objects"] => {
                 let (modern, aliases, next_i) = modernize_test_objects_block(
                     &lines,
                     i,
-                    display,
+                    false,
                     test_puzzle_has_following_layers(&lines, i),
                 );
                 for line in modern {
@@ -186,13 +185,7 @@ fn test_puzzle_has_following_layers(lines: &[String], start: usize) -> bool {
         let tokens = split_tokens(&lines[i]);
         if matches!(
             tokens.as_slice(),
-            ["objects"]
-                | ["display_objects"]
-                | ["legend"]
-                | ["group"]
-                | ["sprites"]
-                | ["rules"]
-                | ["levels", ..]
+            ["objects"] | ["legend"] | ["group"] | ["sprites"] | ["rules"] | ["levels", ..]
         ) {
             depth += 1;
         } else if is_block_close_line(&lines[i]) {
@@ -794,7 +787,7 @@ title sounds_game
 
 sounds {
   sfx effect seed=746670 type=jump
-  music loop seed=123456 tone=0.62 bpm=104 volume=0.8
+  music loop seed=123456 bars=16 height=0.62 bpm=104 volume=0.8
 }
 
 puzzle board {
@@ -826,7 +819,8 @@ P
     assert_eq!(loaded.sounds.music.len(), 1);
     assert_eq!(loaded.sounds.music[0].name, "loop");
     assert_eq!(loaded.sounds.music[0].seed, "123456");
-    assert_eq!(loaded.sounds.music[0].tone, 0.62);
+    assert_eq!(loaded.sounds.music[0].height, 0.62);
+    assert_eq!(loaded.sounds.music[0].bars, 16);
     assert_eq!(loaded.sounds.music[0].bpm, 104);
     assert_eq!(loaded.sounds.music[0].volume, 0.8);
 }
@@ -1593,7 +1587,7 @@ escape <- q
 rules {
 
 if input == escape -> {
-back
+goto title
 }
 }
 }
@@ -1608,7 +1602,10 @@ back
         panic!("expected input rule to lower to condition transition");
     };
     assert_eq!(condition, "input == escape");
-    assert!(matches!(scene.transitions[0].effect, SceneEffect::Back));
+    assert!(matches!(
+        scene.transitions[0].effect,
+        SceneEffect::Goto { ref scene, ref params } if scene == "title" && params.is_empty()
+    ));
 }
 
 #[test]
@@ -2064,7 +2061,7 @@ button "Resume" -> input resume
 rules {
 
 resume -> {
-back
+goto playing
 }
 }
 }
@@ -2254,7 +2251,7 @@ button "Resume" -> resume
 "#;
     let error = parse_game(source).unwrap_err().to_string();
 
-    assert!(error.contains("bare scene command aliases were removed"));
+    assert!(error.contains("bare scene effect aliases were removed"));
 }
 
 #[test]
@@ -2322,6 +2319,61 @@ button join(level.num, ". ", level.title, " ", level.solved) -> goto playing(lev
 }
 
 #[test]
+fn layout_for_can_project_levels_with_author_chosen_binding_name() {
+    let source = r#"
+title level_projection_binding
+
+puzzle board {
+layers {
+actor = Player
+}
+legend {
+. = empty
+P = Player
+}
+rules {
+[ Player ] -> [ Player ]
+}
+levels {
+level first {
+P
+}
+}
+}
+
+scene level_select {
+layout {
+for l in levels {
+button join(l.num, ". ", l.title) -> goto playing(l)
+}
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    let SceneComponent::For(for_view) = &loaded.scenes[0].components[0] else {
+        panic!("expected level projection");
+    };
+    assert_eq!(for_view.binding, "l");
+    assert!(matches!(for_view.source, ForSource::Levels));
+
+    let SceneComponent::Button(button) = &for_view.children[0] else {
+        panic!("expected level button");
+    };
+    assert!(matches!(&button.label, SceneExpr::Call { name, args }
+            if name == "join"
+                && args.iter().any(|arg| matches!(arg, SceneExpr::Path(path) if path == &vec!["l".to_string(), "num".to_string()]))
+                && args.iter().any(|arg| matches!(arg, SceneExpr::Path(path) if path == &vec!["l".to_string(), "title".to_string()]))));
+    assert!(matches!(
+        &button.effect,
+        SceneEffect::Goto { scene, params }
+            if scene == "playing"
+                && params.len() == 1
+                && params[0].name == "level"
+                && matches!(&params[0].value, SceneExpr::Path(path) if path == &vec!["l".to_string()])
+    ));
+}
+
+#[test]
 fn typed_level_menu_scene_accepts_canonical_options() {
     let source = r#"
 title typed_level_menu
@@ -2348,7 +2400,7 @@ show_index = true
 show_solved = true
 columns = 4
 wrap = true
-button "Back" -> back
+button "Title" -> goto title
 }
 "#;
     let loaded = parse_game(source).unwrap();
@@ -2361,7 +2413,10 @@ button "Back" -> back
     assert!(menu.show_cleared);
     assert_eq!(menu.columns, Some(4));
     assert!(menu.wrap);
-    assert!(matches!(&menu.buttons[0].effect, SceneEffect::Back));
+    assert!(matches!(
+        &menu.buttons[0].effect,
+        SceneEffect::Goto { scene, params } if scene == "title" && params.is_empty()
+    ));
 }
 
 #[test]
@@ -3648,14 +3703,12 @@ objects {
 Source 0
 }
 
-display_objects {
-Marker 1
-}
+object @Marker 1
 
 legend S = Source
 
 routine display mark_initial once {
-[ Source no Marker ] -> [ Source Marker ]
+[ Source no @Marker ] -> [ Source @Marker ]
 }
 
 on_level_start {
@@ -3696,14 +3749,12 @@ objects {
 Player 0
 }
 
-display_objects {
-Marker 1
-}
+object @Marker 1
 
 legend P = Player
 
 routine display mark_initial once {
-input directions [ Player no Marker | ] -> [ Player Marker | ]
+input directions [ Player no @Marker | ] -> [ Player @Marker | ]
 }
 
 on_level_start {
@@ -6077,9 +6128,9 @@ level start
 }
 
 #[test]
-fn vertical_orientation_set_expands_query_pattern() {
+fn vertical_orientation_set_expands_condition_pattern() {
     let source = r#"
-title vertical_orientation_set_query
+title vertical_orientation_set_condition
 
 puzzle default {
 objects {
@@ -6186,9 +6237,9 @@ level start
 }
 
 #[test]
-fn input_directions_query_pattern_adds_input_guard_and_expands_orientation() {
+fn input_directions_condition_pattern_adds_input_guard_and_expands_orientation() {
     let source = r#"
-title input_directions_query
+title input_directions_condition
 
 puzzle default {
 objects {
@@ -6228,9 +6279,9 @@ P#D
 }
 
 #[test]
-fn input_query_pattern_without_set_is_directions_sugar() {
+fn input_condition_pattern_without_set_is_directions_sugar() {
     let source = r#"
-title input_query_directions_sugar
+title input_condition_directions_sugar
 
 puzzle default {
 objects {
@@ -6456,9 +6507,9 @@ WP
 }
 
 #[test]
-fn named_query_patterns_expand_to_cardinal_directions() {
+fn named_condition_patterns_expand_to_cardinal_directions() {
     let source = r#"
-title implicit_cardinal_query
+title implicit_cardinal_condition
 
 puzzle default {
 layers 2
@@ -6471,7 +6522,7 @@ legend P = Player
 legend W = Wall
 legend F = Flag
 
-query blocked = exists([ Player | Wall ])
+condition blocked = exists([ Player | Wall ])
 
 rules {
 if blocked {
@@ -7116,22 +7167,13 @@ fn scene_effect_sequence_parser_retains_semantic_tokens() {
 }
 
 #[test]
-fn scene_lifecycle_words_parse_by_state_semantics() {
-    let resume = parse_scene_effect("resume detail with selected = first", "").unwrap();
+fn scene_navigation_words_parse_by_state_semantics() {
+    let goto = parse_scene_effect("goto detail with selected = first", "").unwrap();
     assert!(matches!(
-        resume,
+        goto,
         SceneEffect::Goto { ref scene, ref params }
             if scene == "detail" && params.len() == 1 && params[0].name == "selected"
     ));
-
-    let open = parse_scene_effect("open menu", "").unwrap();
-    assert!(matches!(
-        open,
-        SceneEffect::Enter { ref scene, ref params } if scene == "menu" && params.is_empty()
-    ));
-
-    let close = parse_scene_effect("close", "").unwrap();
-    assert!(matches!(close, SceneEffect::Back));
 
     let start = parse_scene_effect("start playing(first)", "").unwrap();
     assert!(matches!(
@@ -7142,6 +7184,13 @@ fn scene_lifecycle_words_parse_by_state_semantics() {
                 SceneEffect::Goto { scene: goto_scene, params }
             ] if reset_scene == "playing" && goto_scene == "playing" && params.len() == 1)
     ));
+
+    for old in ["resume detail", "open menu", "enter menu", "back", "close"] {
+        assert!(
+            parse_scene_effect(old, old).is_err(),
+            "{old} should not be accepted as canonical scene navigation"
+        );
+    }
 }
 
 #[test]
@@ -7813,6 +7862,82 @@ A
 }
 
 #[test]
+fn rules_expand_for_in_inclusive_numeric_range() {
+    let source = r#"
+title numeric_for_range
+
+puzzle default {
+layers 2
+empty .
+
+scratch {
+count = int
+}
+
+object Box 1
+object Marker 0
+legend B = Box
+
+rules {
+for i in 1...3 {
+once [ Box ] -> [ Box{count=i} ]
+}
+once [ Box{count=3} no Marker ] -> [ Box Marker ]
+}
+
+level start {
+B
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    let moved =
+        transition_state(&loaded.game, &loaded.levels[0].initial_state, InputId(0)).unwrap();
+    let marker = object_named(&loaded, "Marker");
+
+    assert!(moved.has_object(&loaded.game, 0, 0, marker));
+}
+
+#[test]
+fn rules_expand_for_in_numeric_range_with_integer_var_endpoint() {
+    let source = r#"
+title numeric_for_var_range
+
+puzzle default {
+layers 2
+empty .
+
+var L = 3
+
+scratch {
+count = int
+}
+
+object Box 1
+object Marker 0
+legend B = Box
+
+rules {
+for i in 1...L {
+once [ Box ] -> [ Box{count=i} ]
+}
+once [ Box{count=3} no Marker ] -> [ Box Marker ]
+}
+
+level start {
+B
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    let moved =
+        transition_state(&loaded.game, &loaded.levels[0].initial_state, InputId(0)).unwrap();
+    let marker = object_named(&loaded, "Marker");
+
+    assert!(moved.has_object(&loaded.game, 0, 0, marker));
+}
+
+#[test]
 fn condition_blocks_accept_no_pattern_all_on_and_count_compare() {
     let source = r#"
 title condition_fixture
@@ -7853,7 +7978,7 @@ level start
 }
 
 #[test]
-fn condition_blocks_lower_none_function_to_short_circuit_query() {
+fn condition_blocks_lower_none_function_to_short_circuit_condition_def() {
     let source = r#"
 title none_condition_fixture
 puzzle default {
@@ -7893,12 +8018,12 @@ level start
         exprs.iter().any(|expr| matches!(
             expr,
             GoalExpr::Clause(GoalClause {
-                value: GoalValue::QueryValue(QueryKind::NoneMatches(_)),
+                value: GoalValue::InlineConditionValue(ConditionValueKind::NoneMatches(_)),
                 op: ComparisonOp::NotEq,
                 expected: 0,
             })
         )),
-        "none(pattern) should stay a NoneMatches query, not lower to count(pattern) == 0"
+        "none(pattern) should stay a NoneMatches condition, not lower to count(pattern) == 0"
     );
 }
 
@@ -8884,9 +9009,9 @@ once [ Button ] -> [ Button ] set count = 9
 }
 
 #[test]
-fn none_query_is_first_class_boolean_query() {
+fn none_condition_is_first_class_boolean_condition_def() {
     let source = r#"
-title none_query
+title none_condition
 
 puzzle default {
 layers {
@@ -8900,7 +9025,7 @@ D = Door
 O = OpenDoor
 }
 
-query no_pressed_buttons = none([ Button Box ])
+condition no_pressed_buttons = none([ Button Box ])
 
 rules {
 if no_pressed_buttons {
@@ -8923,9 +9048,9 @@ BD
 }
 
 #[test]
-fn win_conditions_accept_exists_and_none_as_canonical_queries() {
+fn win_conditions_accept_exists_and_none_as_canonical_condition_defs() {
     let source = r#"
-title canonical_query_goal
+title canonical_condition_goal
 
 puzzle default {
 layers {
@@ -8960,7 +9085,7 @@ level start
 #[test]
 fn count_matches_is_no_longer_accepted() {
     let source = r#"
-title old_query_name
+title old_condition_name
 
 puzzle default {
 layers 3
@@ -8971,7 +9096,7 @@ object Box 1
 object Door 2
 render_overlay Button Box X
 
-query pressed_buttons = count_matches([ Button Box ])
+condition pressed_buttons = count_matches([ Button Box ])
 
 rules {
 
@@ -8984,7 +9109,7 @@ end
 "#;
     let error = parse_game(source).unwrap_err().to_string();
 
-    assert!(error.contains("unknown query function"));
+    assert!(error.contains("unknown condition function"));
 }
 
 #[test]
@@ -8997,19 +9122,19 @@ objects {
 Player
 }
 
-display_objects {
-Trail
+objects {
+@Trail
 }
 
 layers {
 actor = Player
-@marker = Trail
+@marker = @Trail
 }
 
 legend {
 . = empty
 P = Player
-t = Trail
+t = @Trail
 }
 
 routine move once {
@@ -9017,7 +9142,7 @@ input directions [ Player | ] -> [ | Player ]
 }
 
 routine display paint once {
-[ Player no Trail ] -> [ Player Trail ]
+[ Player no @Trail ] -> [ Player @Trail ]
 }
 
 rules {
@@ -9052,6 +9177,73 @@ P.
 }
 
 #[test]
+fn objects_block_declares_main_and_display_objects_by_at_name() {
+    let source = r#"
+title unified_objects
+
+puzzle default {
+objects {
+Player @Trail
+}
+
+layers {
+actor = Player
+@marker = @Trail
+}
+
+levels {
+legend {
+. = empty
+P = Player
+}
+
+level start
+P
+}
+
+rules {
+
+}
+}
+"#;
+    let loaded = super::parse_game2d(source).unwrap();
+    let player = object_named(&loaded, "Player");
+    let trail = object_named(&loaded, "Trail");
+
+    assert!(!loaded.game.is_visual_object(player));
+    assert!(loaded.game.is_visual_object(trail));
+}
+
+#[test]
+fn display_objects_block_is_not_accepted() {
+    let source = r#"
+title old_display_objects
+
+puzzle default {
+display_objects {
+Trail
+}
+
+levels {
+legend {
+. = empty
+}
+
+level start
+.
+}
+
+rules {
+
+}
+}
+"#;
+    let error = super::parse_game2d(source).unwrap_err().to_string();
+
+    assert!(error.contains("`display_objects { ... }` was removed"));
+}
+
+#[test]
 fn on_display_lowers_to_snapshot_display_program() {
     let source = r#"
 title display_snapshot
@@ -9061,23 +9253,23 @@ objects {
 Player
 }
 
-display_objects {
-Trail
+objects {
+@Trail
 }
 
 layers {
 actor = Player
-@marker = Trail
+@marker = @Trail
 }
 
 legend {
 . = empty
 P = Player
-t = Trail
+t = @Trail
 }
 
 routine display paint once {
-[ Player no Trail ] -> [ Player Trail ]
+[ Player no @Trail ] -> [ Player @Trail ]
 }
 
 on_display {
@@ -9140,13 +9332,13 @@ objects {
 Player
 }
 
-display_objects {
-Trail
+objects {
+@Trail
 }
 
 layers {
 actor = Player
-@marker = Trail
+@marker = @Trail
 }
 
 legend {
@@ -9155,7 +9347,7 @@ P = Player
 }
 
 routine display paint once {
-input directions [ Player no Trail | ] -> [ Player Trail | ]
+input directions [ Player no @Trail | ] -> [ Player @Trail | ]
 }
 
 on_display {
@@ -9225,13 +9417,13 @@ objects {
 Player
 }
 
-display_objects {
-Trail
+objects {
+@Trail
 }
 
 layers {
 actor = Player
-@marker = Trail
+@marker = @Trail
 }
 
 legend {
@@ -9240,7 +9432,7 @@ P = Player
 }
 
 routine display paint once {
-[ Player no Trail ] -> [ Player Trail ]
+[ Player no @Trail ] -> [ Player @Trail ]
 }
 
 rules {
@@ -9275,13 +9467,13 @@ objects {
 Player
 }
 
-display_objects {
-Trail
+objects {
+@Trail
 }
 
 layers {
 actor = Player
-@marker = Trail
+@marker = @Trail
 }
 
 legend {
@@ -9318,13 +9510,13 @@ objects {
 Player
 }
 
-display_objects {
-Trail
+objects {
+@Trail
 }
 
 layers {
 actor = Player
-@marker = Trail
+@marker = @Trail
 }
 
 legend {
@@ -9333,7 +9525,7 @@ P = Player
 }
 
 rules {
-[ Trail ] -> [ Trail Player ]
+[ @Trail ] -> [ @Trail Player ]
 }
 
 levels {
@@ -9393,13 +9585,13 @@ objects {
 Player
 }
 
-display_objects {
-Trail
+objects {
+@Trail
 }
 
 layers {
 actor = Player
-@marker = Trail
+@marker = @Trail
 }
 
 legend {
@@ -9408,7 +9600,7 @@ P = Player
 }
 
 routine paint once {
-[ Player no Trail ] -> [ Player Trail ]
+[ Player no @Trail ] -> [ Player @Trail ]
 }
 
 rules {
@@ -9443,13 +9635,13 @@ objects {
 Player
 }
 
-display_objects {
-Trail
+objects {
+@Trail
 }
 
 layers {
 actor = Player
-@marker = Trail
+@marker = @Trail
 }
 
 legend {
@@ -9460,7 +9652,7 @@ P = Player
 input right direction right
 
 routine move once {
-input right [ Player | ] -> [ | Player Trail ]
+input right [ Player | ] -> [ | Player @Trail ]
 }
 
 rules {
@@ -9498,13 +9690,13 @@ objects {
 Player
 }
 
-display_objects {
-Trail
+objects {
+@Trail
 }
 
 layers {
 actor = Player
-@marker = Trail
+@marker = @Trail
 }
 
 legend {
@@ -9513,7 +9705,7 @@ P = Player
 }
 
 routine @paint once {
-[ Player | ] -> [ | Player Trail ]
+[ Player | ] -> [ | Player @Trail ]
 }
 
 rules {
@@ -9580,22 +9772,22 @@ PB.
 }
 
 #[test]
-fn main_block_cannot_read_display_objects_through_queries() {
+fn main_block_cannot_read_display_objects_through_condition_defs() {
     let source = r#"
-title main_display_query_guard
+title main_display_condition_guard
 
 puzzle default {
 objects {
 Player
 }
 
-display_objects {
-Trail
+objects {
+@Trail
 }
 
 layers {
 actor = Player
-@marker = Trail
+@marker = @Trail
 }
 
 legend {
@@ -9603,7 +9795,7 @@ legend {
 P = Player
 }
 
-query trail_count = count(Trail)
+condition trail_count = count(@Trail)
 
 rules {
 if trail_count > 0 {

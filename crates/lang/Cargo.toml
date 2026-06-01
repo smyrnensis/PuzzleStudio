@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+puzzle-authoring = { path = "../authoring" }
 puzzle-core = { path = "../core" }
 puzzle-kernel = { path = "../kernel" }
 puzzle-scene = { path = "../scene" }

@@ -21,19 +21,20 @@ on one-shot game sound effects. A seed plus an optional type target expands into
   style variation
 - compact JSON that can be stored instead of an audio asset
 
-The Music screen uses the latest clean loop generator in `seeded_music.mjs`. It
+The Music screen uses the canonical seeded composition generator in
+`seeded_music.mjs`. It
 expands a seed plus music-facing controls into:
 
-- user-facing tone, BPM, and volume controls
+- user-facing height, bars, BPM, and volume controls
 - playback-ready score JSON
-- fixed thirty-two-bar loop length
+- selectable 8, 16, 32, or 64 bar loop length
 - BPM
 - key and scale
-- generated form, phrase, hook, and arrangement debug data
+- generated form, roles, phrase state, and arrangement debug data
 - chord progression
-- lead, counter, harmony, bass, and drum events
-- generated drum parameters and hit placement, exposed in debug data rather than
-  selected from named kit templates
+- role-based melodic, tonal, rhythmic, motion, color, boundary, and drum events
+- generated stochastic timbre and transient fields exposed in debug data rather
+  than selected from named kit templates
 - timbre map for direct WebAudio scheduling
 
 The browser demo makes randomize-and-play the primary action in both screens.
@@ -42,7 +43,7 @@ plain numeric. `Random` means no type override: the seed hash deterministically
 resolves to one concrete game SFX type. Concrete types such as `pickup` and
 category-less `Wild` are explicit type overrides that should be written
 separately from the seed when the result is moved into PuzzleScript-style data.
-Music keeps loop controls such as tone, BPM, and volume on the Music screen only.
+Music keeps loop controls such as height, bars, BPM, and volume on the Music screen only.
 Detailed synthesis choices stay seeded instead of becoming low-level knobs.
 
 Run the structural tests:
@@ -50,7 +51,6 @@ Run the structural tests:
 ```sh
 node tools/music_generator/test/seeded_sfx.test.mjs
 node tools/music_generator/test/seeded_music.test.mjs
-node tools/music_generator/test/seeded_music_lab.test.mjs
 node tools/music_generator/test/audio_export.test.mjs
 ```
 
@@ -63,10 +63,5 @@ python3 -m http.server 8875
 
 Then open `http://localhost:8875`.
 
-The music lab keeps the editor-integrated generator untouched and loads the
-experimental music path from `seeded_music_lab.mjs`:
-
-```txt
-http://localhost:8875/lab.html
-http://localhost:8875/music_lab.html
-```
+Older music lab pages, the previous clean-loop generator, and timbre observation
+notes are archived under `archive/tools/music_generator/experimental_music_2026-05-30`.

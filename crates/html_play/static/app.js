@@ -3,18 +3,21 @@ const screenView = document.querySelector("#screenView");
 const screenFrame = document.querySelector("#screenFrame") || screenView?.parentElement;
 const playSurface = document.querySelector(".play-surface");
 const shell = document.querySelector("#shell");
+const componentEmbedMode = new URLSearchParams(window.location.search).get("component") === "1";
+let initialPuzzle3PreviewSurface = null;
+/* puzzle-host:optional:puzzle3:start */
 const PREVIEW_SURFACE_UPDATE_MESSAGE = "PuzzleStudioPreviewSurfaceUpdate";
 const PUZZLE3_LEVEL_PREVIEW_KIND = "puzzle3-level";
 const ISOLATED_PREVIEW_MODE = "isolated";
 const PUZZLE3_MODEL_COMPONENT_PREVIEW_MESSAGE = "PuzzleStudioRenderPuzzle3ModelComponent";
-const initialPuzzle3PreviewSurface = normalizePuzzle3PreviewSurface(
+initialPuzzle3PreviewSurface = normalizePuzzle3PreviewSurface(
   window.PuzzleStudioInitialPreviewSurface || window.PuzzleStudioInitialModelComponentPreview,
 );
 if (initialPuzzle3PreviewSurface) {
   window.PuzzleStudioInitialPreviewSurfaceConsumed = true;
   window.PuzzleStudioInitialModelComponentPreviewConsumed = true;
 }
-const componentEmbedMode = new URLSearchParams(window.location.search).get("component") === "1";
+/* puzzle-host:optional:puzzle3:end */
 document.documentElement.classList.toggle("is-component-embed", componentEmbedMode || Boolean(initialPuzzle3PreviewSurface));
 document.body.classList.toggle("is-component-embed", componentEmbedMode || Boolean(initialPuzzle3PreviewSurface));
 const messageQueue = [];
@@ -31,6 +34,7 @@ class PuzzleSoundRuntime {
     this.context = null;
     this.activeMusic = new Map();
     this.pausedMusic = new Map();
+    this.visibilityPausedMusic = new Map();
     this.missingGeneratorWarnings = new Set();
   }
 
@@ -69,6 +73,9 @@ class PuzzleSoundRuntime {
   }
 
   playSfx(name) {
+    if (this.shouldSuppressPlayback()) {
+      return;
+    }
     const def = this.sfxDef(name);
     const context = this.ensureContext();
     if (!def || !context) {
@@ -99,6 +106,9 @@ class PuzzleSoundRuntime {
   }
 
   playMusic(name, resume = {}) {
+    if (this.shouldSuppressPlayback()) {
+      return;
+    }
     const def = (this.sounds.music || []).find((entry) => entry.name === name);
     const context = this.ensureContext();
     if (!def || !context) {
@@ -113,8 +123,9 @@ class PuzzleSoundRuntime {
     if (api?.generateSong && api?.createPlayer) {
       const progress = typeof resume === "number" ? 0 : Number(resume.progress || 0);
       const song = api.generateSong(def.seed, {
-        tone: Number(def.tone ?? 0.62),
-        bpm: Number(def.bpm || 104),
+        height: Number(def.height ?? def.tone ?? 0.5),
+        bars: Number(def.bars || 8),
+        bpm: Number(def.bpm || 110),
         volume: Number(def.volume ?? 0.5),
       });
       const player = api.createPlayer(context, song.playbackScore);
@@ -161,6 +172,34 @@ class PuzzleSoundRuntime {
       this.playMusic(key, paused);
       this.pausedMusic.delete(key);
     }
+  }
+
+  pauseForHiddenDocument() {
+    for (const [key, handle] of [...this.activeMusic.entries()]) {
+      const progress = handle.player?.loopProgress?.() ?? handle.progress ?? 0;
+      this.stopMusicHandle(handle);
+      this.activeMusic.delete(key);
+      this.visibilityPausedMusic.set(key, {
+        progress,
+      });
+    }
+  }
+
+  resumeAfterVisibleDocument() {
+    if (this.shouldSuppressPlayback()) {
+      return;
+    }
+    const entries = [...this.visibilityPausedMusic.entries()];
+    this.visibilityPausedMusic.clear();
+    for (const [key, paused] of entries) {
+      if (!this.pausedMusic.has(key)) {
+        this.playMusic(key, paused);
+      }
+    }
+  }
+
+  shouldSuppressPlayback() {
+    return typeof document !== "undefined" && document.visibilityState === "hidden";
   }
 
   stopMusicHandle(handle) {
@@ -1190,6 +1229,7 @@ function puzzle3PreviewSurfaceControllerUpdate(surface = puzzle3PreviewSurface) 
     camera: {
       yawDegrees: view.yawDegrees,
       pitchDegrees: view.pitchDegrees,
+      projection: view.projection,
     },
     view: {
       zoom: view.zoom,
@@ -1271,6 +1311,7 @@ function puzzle3PreviewSurfaceFixture(source, sceneName) {
     next.camera = JSON.parse(JSON.stringify({
       yawDegrees: view.yawDegrees,
       pitchDegrees: view.pitchDegrees,
+      projection: view.projection,
     }));
   }
   if (payload.view) {
@@ -2894,6 +2935,13 @@ loadState().catch((error) => {
 if (!componentEmbedMode) {
   document.addEventListener("DOMContentLoaded", focusShell);
   document.addEventListener("pointerdown", focusShell);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") {
+      soundRuntime.pauseForHiddenDocument();
+    } else {
+      soundRuntime.resumeAfterVisibleDocument();
+    }
+  });
   window.addEventListener("resize", () => scheduleScreenScaleSync(2));
   window.addEventListener("load", () => {
     scheduleScreenScaleSync(3);

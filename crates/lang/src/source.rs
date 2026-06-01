@@ -300,7 +300,6 @@ fn normalize_section_title(title: &str) -> Option<String> {
 fn canonical_section_block(normalized: &str) -> Option<&'static str> {
     match normalized {
         "objects" => Some("objects"),
-        "display_object" | "display_objects" => Some("display_objects"),
         "scratch" => Some("scratch"),
         "group" | "groups" => Some("group"),
         "layer" | "layers" => Some("layers"),
@@ -336,9 +335,10 @@ fn section_boundary(block: &str, tokens: &[&str]) -> bool {
     }
     match block {
         "legend" => !is_legend_row(tokens),
-        "objects" | "display_objects" | "scratch" | "group" | "layers" | "collision_layers"
-        | "win_conditions" | "lose_conditions" | "rules" | "sprites" | "theme" | "assets"
-        | "on_display" => starts_puzzle_section(tokens),
+        "objects" | "scratch" | "group" | "layers" | "collision_layers" | "win_conditions"
+        | "lose_conditions" | "rules" | "sprites" | "theme" | "assets" | "on_display" => {
+            starts_puzzle_section(tokens)
+        }
         "levels" => starts_puzzle_section(tokens) && !matches!(tokens, ["level", ..] | ["{"]),
         _ => false,
     }
@@ -357,7 +357,6 @@ fn starts_puzzle_section(tokens: &[&str]) -> bool {
         ["map", ..]
             | ["on_display"]
             | ["objects"]
-            | ["display_objects"]
             | ["scratch"]
             | ["group"]
             | ["layers"]
@@ -412,7 +411,6 @@ fn starts_inline_block(tokens: &[&str], line: &str) -> bool {
         ["map", ..]
             | ["on_display"]
             | ["objects"]
-            | ["display_objects"]
             | ["scratch"]
             | ["group"]
             | ["layers"]
@@ -837,7 +835,6 @@ fn source_opens_block(line: &str, tokens: &[&str], current: Option<SourceScope>)
                 | ["levels", ..]
                 | ["levels3", ..]
                 | ["objects"]
-                | ["display_objects"]
                 | ["layers"]
                 | ["collision_layers"]
                 | ["scratch"]
@@ -949,7 +946,7 @@ fn source_scope_for_name(name: &str) -> Option<SourceScope> {
         "sounds" => Some(SourceScope::Sounds),
         "assets" => Some(SourceScope::Assets),
         "puzzle" => Some(SourceScope::Puzzle),
-        "objects" | "display_objects" => Some(SourceScope::Objects),
+        "objects" => Some(SourceScope::Objects),
         "tags" => Some(SourceScope::Tags),
         "layers" | "collision_layers" => Some(SourceScope::Layers),
         "group" => Some(SourceScope::Group),

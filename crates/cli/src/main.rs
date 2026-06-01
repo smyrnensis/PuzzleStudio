@@ -754,7 +754,7 @@ fn escape_json(value: &str) -> String {
 
 fn print_usage() {
     eprintln!(
-        "usage:\n  puzzlestudio check <path> [--json]\n  puzzlestudio inspect <path>\n  puzzlestudio play [path]\n  puzzlestudio preview [path] [--port 7878] [--solver-depth N] [--solver-nodes N] [--solver-ms N]\n  puzzlestudio editor [path] [--port 8787]\n  puzzlestudio export-html <path> -o <output.html>\n  puzzlestudio export-editor [path] -o <editor.html>\n  puzzlestudio screenshot <path> -o <output.png> [--scene name] [--level name-or-index] [--input name] [--inputs a,b,c] [--width 1280] [--height 720] [--browser path]\n  puzzlestudio screenshot <path> --list\n  puzzlestudio import-puzzlescript <source.txt> -o <game.puzzle>{}",
+        "usage:\n  puzzlestudio check <path> [--json]\n  puzzlestudio inspect <path>\n  puzzlestudio play [path]\n  puzzlestudio preview [path] [--port 7878] [--solver-depth N] [--solver-nodes N] [--solver-ms N]\n  puzzlestudio editor [path] [--port 8787]\n  puzzlestudio export-html <path> -o <output.html>\n  puzzlestudio export-editor [path] -o <docs/index.html>\n  puzzlestudio screenshot <path> -o <output.png> [--scene name] [--level name-or-index] [--input name] [--inputs a,b,c] [--width 1280] [--height 720] [--browser path]\n  puzzlestudio screenshot <path> --list\n  puzzlestudio import-puzzlescript <source.txt> -o <game.puzzle>{}",
         adapter_feature_note()
     );
 }
@@ -794,7 +794,7 @@ fn print_editor_usage() {
 #[cfg(feature = "export-editor")]
 fn print_export_editor_usage() {
     eprintln!(
-        "usage: puzzlestudio export-editor [path/to/game-folder-or-game.puzzle] -o <editor.html>"
+        "usage: puzzlestudio export-editor [path/to/game-folder-or-game.puzzle] -o <docs/index.html>"
     );
 }
 

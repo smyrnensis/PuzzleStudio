@@ -9,7 +9,8 @@ use std::thread;
 use std::time::{Duration, UNIX_EPOCH};
 
 use html_editor::{
-    CreateSourceFileRequest, CreateSourceFolderRequest, EditorService, PreviewRequest, SaveRequest,
+    CreateSourceFileRequest, CreateSourceFolderRequest, DeleteWorkspaceEntryRequest, EditorService,
+    PreviewRequest, RenameWorkspaceEntryRequest, SaveRequest,
 };
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager};
@@ -106,6 +107,21 @@ struct CreateSourceFileCommandRequest {
 #[serde(rename_all = "camelCase")]
 struct CreateSourceFolderCommandRequest {
     folder_path: String,
+    workspace_root: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RenameWorkspaceEntryCommandRequest {
+    from_path: String,
+    to_path: String,
+    workspace_root: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DeleteWorkspaceEntryCommandRequest {
+    entry_path: String,
     workspace_root: Option<String>,
 }
 
@@ -328,6 +344,47 @@ fn create_source_folder(
         "ok": true,
         "folderPath": path.display().to_string()
     }))
+}
+
+#[tauri::command]
+fn rename_workspace_entry(
+    request: RenameWorkspaceEntryCommandRequest,
+    state: tauri::State<'_, DesktopState>,
+) -> Result<serde_json::Value, String> {
+    let services = state
+        .services
+        .lock()
+        .map_err(|_| "desktop project state is unavailable".to_string())?;
+    let Some(service) = service_for_workspace(&services, request.workspace_root.as_deref()) else {
+        return Err("No project is open. Open a project folder before renaming files.".to_string());
+    };
+    let request = RenameWorkspaceEntryRequest::new(request.from_path, request.to_path);
+    let path = service
+        .rename_workspace_entry(&request)
+        .map_err(|error| error.to_string())?;
+    Ok(serde_json::json!({
+        "ok": true,
+        "path": path.display().to_string()
+    }))
+}
+
+#[tauri::command]
+fn delete_workspace_entry(
+    request: DeleteWorkspaceEntryCommandRequest,
+    state: tauri::State<'_, DesktopState>,
+) -> Result<serde_json::Value, String> {
+    let services = state
+        .services
+        .lock()
+        .map_err(|_| "desktop project state is unavailable".to_string())?;
+    let Some(service) = service_for_workspace(&services, request.workspace_root.as_deref()) else {
+        return Err("No project is open. Open a project folder before deleting files.".to_string());
+    };
+    let request = DeleteWorkspaceEntryRequest::new(request.entry_path);
+    service
+        .delete_workspace_entry(&request)
+        .map_err(|error| error.to_string())?;
+    Ok(serde_json::json!({ "ok": true }))
 }
 
 fn empty_source_value() -> serde_json::Value {
@@ -726,6 +783,8 @@ pub fn run() {
             save_source,
             create_source_file,
             create_source_folder,
+            rename_workspace_entry,
+            delete_workspace_entry,
         ])
         .run(tauri::generate_context!())
         .expect("error while running PuzzleStudio desktop app");

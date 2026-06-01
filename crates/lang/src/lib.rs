@@ -19,9 +19,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use ast::{
-    ConditionAst, Direction, DirectionName, EffectAst, FixDefaults, OrientationExpr,
-    OrientedRewriteAst, PatternConditionAst, PatternPredicateAst, QueryDefinitionAst, QueryKindAst,
-    QueryPatternAst, RuleDefinitionAst, RuleRole, StatementAst,
+    ConditionAst, ConditionDefinitionAst, ConditionPatternAst, ConditionValueAst, Direction,
+    DirectionName, EffectAst, FixDefaults, OrientationExpr, OrientedRewriteAst,
+    PatternConditionAst, PatternPredicateAst, RuleDefinitionAst, RuleRole, StatementAst,
 };
 use catalog::{Catalog, ObjectSchema, ObjectVariant, ValueMap};
 pub use completion::{
@@ -60,11 +60,11 @@ fn block_header_text(line: &str) -> &str {
         .unwrap_or(line)
 }
 use puzzle_core::{
-    ComparisonOp, CompiledGame, Effect, GapTerm, GlobalId, GlobalUpdateOp, Guard, InputId, LayerId,
-    LocalFrame, LocalFrameExtent, MatchCell, ObjectDef, ObjectId, ObjectSetMatcher,
-    ObjectSetScratchPattern, Offset, Pattern, PatternComponent, QueryDef, QueryId, QueryKind, Rule,
-    RuleApplication, RuleCondition, RuleId, RuleStep, ScratchDef, ScratchId, ScratchKind,
-    ScratchPattern, ScratchValueMatch, WriteOp,
+    ComparisonOp, CompiledGame, ConditionDef, ConditionId, ConditionValueKind, Effect, GapTerm,
+    GlobalId, GlobalUpdateOp, Guard, InputId, LayerId, LocalFrame, LocalFrameExtent, MatchCell,
+    ObjectDef, ObjectId, ObjectSetMatcher, ObjectSetScratchPattern, Offset, Pattern,
+    PatternComponent, Rule, RuleApplication, RuleCondition, RuleId, RuleStep, ScratchDef,
+    ScratchId, ScratchKind, ScratchPattern, ScratchValueMatch, WriteOp,
 };
 pub use puzzle3d_model::{
     ParseError3, ParsedPuzzle3, VisualFixtureExportError3, export_visual_fixture_json,
@@ -262,6 +262,7 @@ fn record_scene_surface_line(
     {
         add_scene_effect_token_range(sink, first, SurfaceSemanticKind::Keyword);
     }
+    record_scene_layout_attr_surface_tokens(tokens, sink);
     if let Some(arrow) = tokens.iter().position(|token| token.text == "->") {
         if tokens
             .iter()
@@ -269,14 +270,320 @@ fn record_scene_surface_line(
         {
             return;
         }
+        if matches!(first.text.as_str(), "button" | "choice") {
+            sink.extend(scene_expr_surface_document(&tokens[1..arrow]));
+        }
         record_scene_condition_surface_tokens(&tokens[..arrow], sink);
         sink.extend(scene_effect_surface_document(&tokens[arrow + 1..]));
         return;
+    }
+    match first.text.as_str() {
+        "title" | "subtitle" | "text" if tokens.len() > 1 => {
+            sink.extend(scene_expr_surface_document(&tokens[1..]));
+            return;
+        }
+        _ => {}
     }
     if first.text == "button" || first.text == "choice" || scope == Some(SourceScope::LevelMenu) {
         return;
     }
     sink.extend(scene_effect_surface_document(tokens));
+}
+
+fn record_scene_layout_attr_surface_tokens(tokens: &[SourceToken], sink: &mut SurfaceSink) {
+    let Some(first) = tokens.first() else {
+        return;
+    };
+    let attr_start = match first.text.as_str() {
+        "layout" | "row" | "column" | "box" => 1,
+        "puzzle" | "puzzle3" | "frame" => 2,
+        _ => return,
+    };
+    let attrs = tokens
+        .iter()
+        .skip(attr_start)
+        .take_while(|token| token.text != "{")
+        .cloned()
+        .collect::<Vec<_>>();
+    if attrs.is_empty() {
+        return;
+    }
+    let attr_texts = attrs
+        .iter()
+        .map(|token| token.text.as_str())
+        .collect::<Vec<_>>();
+    if puzzle_scene::parse_scene_layout_attrs(&attr_texts).is_err() {
+        return;
+    }
+    for token in &attrs {
+        mark_scene_layout_attr_token(token, sink);
+    }
+}
+
+fn mark_scene_layout_attr_token(token: &SourceToken, sink: &mut SurfaceSink) {
+    let (name, value) = token
+        .text
+        .split_once('=')
+        .map_or((token.text.as_str(), None), |(name, value)| {
+            (name, Some(value))
+        });
+    if !name.is_empty()
+        && name
+            .chars()
+            .next()
+            .is_some_and(|ch| ch == '_' || ch.is_ascii_alphabetic())
+    {
+        let name_start = token.text.find(name).unwrap_or(0);
+        sink.mark(
+            SourceSpan {
+                start: token.start + name_start,
+                end: token.start + name_start + name.len(),
+            },
+            SurfaceSemanticKind::Keyword,
+        );
+    }
+    if let Some(value) = value
+        && !value.is_empty()
+    {
+        let value_start = token.text.find(value).unwrap_or(token.text.len());
+        let kind = if value.parse::<u16>().is_ok() {
+            SurfaceSemanticKind::Number
+        } else {
+            SurfaceSemanticKind::Literal
+        };
+        sink.mark(
+            SourceSpan {
+                start: token.start + value_start,
+                end: token.start + value_start + value.len(),
+            },
+            kind,
+        );
+    } else if token.text.parse::<u16>().is_ok() {
+        sink.mark(
+            SourceSpan {
+                start: token.start,
+                end: token.end,
+            },
+            SurfaceSemanticKind::Number,
+        );
+    } else if matches!(
+        token.text.as_str(),
+        "left" | "right" | "center" | "top" | "bottom" | "true" | "false"
+    ) {
+        sink.mark(
+            SourceSpan {
+                start: token.start,
+                end: token.end,
+            },
+            SurfaceSemanticKind::Literal,
+        );
+    }
+}
+
+fn scene_expr_surface_document(tokens: &[SourceToken]) -> SurfaceDocument {
+    let mut sink = SurfaceSink::default();
+    let Some((source, base_start)) = source_tokens_text(tokens) else {
+        return sink.into_document();
+    };
+    let trimmed_start = source
+        .find(|ch: char| !ch.is_whitespace())
+        .unwrap_or(source.len());
+    let trimmed_end = source
+        .rfind(|ch: char| !ch.is_whitespace())
+        .map(|index| {
+            index
+                + source[index..]
+                    .chars()
+                    .next()
+                    .map(char::len_utf8)
+                    .unwrap_or(0)
+        })
+        .unwrap_or(trimmed_start);
+    if trimmed_start >= trimmed_end {
+        return sink.into_document();
+    }
+    let expr = &source[trimmed_start..trimmed_end];
+    let expr_start = base_start + trimmed_start;
+    if let Ok(parsed) = parse_scene_expr(expr, expr) {
+        add_scene_expr_surface_tokens(&parsed, expr, expr_start, &mut sink);
+    }
+    sink.into_document()
+}
+
+fn source_tokens_text(tokens: &[SourceToken]) -> Option<(String, usize)> {
+    let first = tokens.first()?;
+    let mut out = String::new();
+    let mut cursor = first.start;
+    for token in tokens {
+        if token.start > cursor {
+            out.push_str(&" ".repeat(token.start - cursor));
+        }
+        out.push_str(&token.text);
+        cursor = token.end;
+    }
+    Some((out, first.start))
+}
+
+fn add_scene_expr_surface_tokens(
+    expr: &SceneExpr,
+    source: &str,
+    absolute_start: usize,
+    sink: &mut SurfaceSink,
+) {
+    match expr {
+        SceneExpr::Bool(_) => {
+            mark_scene_expr_trimmed(sink, source, absolute_start, SurfaceSemanticKind::Literal);
+        }
+        SceneExpr::Int(_) => {
+            mark_scene_expr_trimmed(sink, source, absolute_start, SurfaceSemanticKind::Number);
+        }
+        SceneExpr::Text(_) => {
+            mark_scene_expr_trimmed(sink, source, absolute_start, SurfaceSemanticKind::String);
+        }
+        SceneExpr::Path(parts) => {
+            add_scene_path_surface_tokens(parts, absolute_start, sink);
+        }
+        SceneExpr::Call { name, args: _ } => {
+            if let Some(name_start) = source.find(name) {
+                sink.mark(
+                    SourceSpan {
+                        start: absolute_start + name_start,
+                        end: absolute_start + name_start + name.len(),
+                    },
+                    SurfaceSemanticKind::Effect,
+                );
+            }
+            for arg in scene_expr_call_arg_spans(source) {
+                if let Ok(parsed) = parse_scene_expr(&source[arg.clone()], &source[arg.clone()]) {
+                    add_scene_expr_surface_tokens(
+                        &parsed,
+                        &source[arg.clone()],
+                        absolute_start + arg.start,
+                        sink,
+                    );
+                } else {
+                    let arg_source = &source[arg.clone()];
+                    if let Some(parts) = parse_view_path(arg_source) {
+                        add_scene_path_surface_tokens(&parts, absolute_start + arg.start, sink);
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn mark_scene_expr_trimmed(
+    sink: &mut SurfaceSink,
+    source: &str,
+    absolute_start: usize,
+    kind: SurfaceSemanticKind,
+) {
+    let Some(start) = source.find(|ch: char| !ch.is_whitespace()) else {
+        return;
+    };
+    let Some(end_start) = source.rfind(|ch: char| !ch.is_whitespace()) else {
+        return;
+    };
+    let end = end_start
+        + source[end_start..]
+            .chars()
+            .next()
+            .map(char::len_utf8)
+            .unwrap_or(0);
+    if start < end {
+        sink.mark(
+            SourceSpan {
+                start: absolute_start + start,
+                end: absolute_start + end,
+            },
+            kind,
+        );
+    }
+}
+
+fn add_scene_path_surface_tokens(parts: &[String], absolute_start: usize, sink: &mut SurfaceSink) {
+    let part_refs = parts.iter().map(String::as_str).collect::<Vec<_>>();
+    let mut offset = 0usize;
+    for (index, part) in part_refs.iter().enumerate() {
+        if let Some(syntax) = level_path_part_syntax(&part_refs, index) {
+            let kind = match syntax {
+                LevelPathPartSyntax::Owner => SurfaceSemanticKind::State,
+                LevelPathPartSyntax::TextProperty => SurfaceSemanticKind::String,
+                LevelPathPartSyntax::NumberProperty => SurfaceSemanticKind::Number,
+                LevelPathPartSyntax::ConditionProperty => SurfaceSemanticKind::Condition,
+            };
+            sink.mark(
+                SourceSpan {
+                    start: absolute_start + offset,
+                    end: absolute_start + offset + part.len(),
+                },
+                kind,
+            );
+        }
+        offset += part.len() + 1;
+    }
+}
+
+fn scene_expr_call_arg_spans(source: &str) -> Vec<std::ops::Range<usize>> {
+    let Some(open) = source.find('(') else {
+        return Vec::new();
+    };
+    let Some(close) = source.rfind(')') else {
+        return Vec::new();
+    };
+    if open >= close {
+        return Vec::new();
+    }
+    let mut args = Vec::new();
+    let mut start = open + 1;
+    let mut depth = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+    for (relative, ch) in source[open + 1..close].char_indices() {
+        let index = open + 1 + relative;
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match ch {
+            '"' => in_string = true,
+            '(' => depth += 1,
+            ')' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                if let Some(range) = trimmed_range(source, start, index) {
+                    args.push(range);
+                }
+                start = index + ch.len_utf8();
+            }
+            _ => {}
+        }
+    }
+    if let Some(range) = trimmed_range(source, start, close) {
+        args.push(range);
+    }
+    args
+}
+
+fn trimmed_range(source: &str, start: usize, end: usize) -> Option<std::ops::Range<usize>> {
+    if start >= end {
+        return None;
+    }
+    let slice = &source[start..end];
+    let left = slice.find(|ch: char| !ch.is_whitespace())?;
+    let right_start = slice.rfind(|ch: char| !ch.is_whitespace())?;
+    let right = right_start
+        + slice[right_start..]
+            .chars()
+            .next()
+            .map(char::len_utf8)
+            .unwrap_or(0);
+    Some(start + left..start + right)
 }
 
 fn record_scene_condition_surface_tokens(tokens: &[SourceToken], sink: &mut SurfaceSink) {
@@ -1902,7 +2209,7 @@ fn parse_game2d_expanded_with_shell(
     let mut empty_char = None;
     let mut named_layers = HashMap::<String, u16>::new();
     let mut catalog = Catalog::default();
-    let mut query_definitions = Vec::<QueryDefinitionAst>::new();
+    let mut condition_definitions = Vec::<ConditionDefinitionAst>::new();
     let mut controls = Controls::default();
     let mut directions = Vec::<Direction>::new();
     let mut rule_definitions = Vec::<RuleDefinitionAst>::new();
@@ -1950,7 +2257,7 @@ fn parse_game2d_expanded_with_shell(
                     &mut empty_char,
                     &mut named_layers,
                     &mut catalog,
-                    &mut query_definitions,
+                    &mut condition_definitions,
                     &mut controls,
                     &mut directions,
                     &mut rule_definitions,
@@ -2137,9 +2444,10 @@ fn parse_game2d_expanded_with_shell(
         directions.clone()
     };
     let value_sets = catalog_value_sets(&catalog);
-    let visual_query_reads = visual_query_reads(&query_definitions, &catalog.visual_objects);
-    let queries = lower_queries(
-        query_definitions,
+    let visual_condition_reads =
+        visual_condition_reads(&condition_definitions, &catalog.visual_objects);
+    let condition_defs = lower_condition_defs(
+        condition_definitions,
         &catalog.object_layers,
         &catalog.scratch_names,
         &value_sets,
@@ -2154,8 +2462,8 @@ fn parse_game2d_expanded_with_shell(
                 &condition,
                 &catalog.object_layers,
                 &catalog.global_names,
-                &catalog.query_names,
-                &visual_query_reads,
+                &catalog.condition_names,
+                &visual_condition_reads,
                 &catalog.scratch_names,
                 &catalog.visual_objects,
                 &value_sets,
@@ -2191,7 +2499,7 @@ fn parse_game2d_expanded_with_shell(
         &catalog.object_groups,
         &catalog.input_names,
         &catalog.global_names,
-        &catalog.query_names,
+        &catalog.condition_names,
     )?;
     let visual_objects = catalog.visual_objects.clone();
     let programs = lower_programs(
@@ -2211,8 +2519,8 @@ fn parse_game2d_expanded_with_shell(
         &catalog.input_names,
         &catalog.global_names,
         &catalog.constant_globals,
-        &catalog.query_names,
-        &visual_query_reads,
+        &catalog.condition_names,
+        &visual_condition_reads,
         &catalog.scratch_names,
         &model_sound_triggers,
         &animation,
@@ -2220,11 +2528,11 @@ fn parse_game2d_expanded_with_shell(
         &effective_directions,
         default_wait_ms,
     )?;
-    let game = CompiledGame::new_with_scratch_queries_program_roles(
+    let game = CompiledGame::new_with_scratch_condition_defs_program_roles(
         layer_count,
         catalog.object_defs,
         catalog.scratch_defs,
-        queries,
+        condition_defs,
         programs.main,
         visual_objects.clone(),
         programs.visual_rules.clone(),
@@ -2293,7 +2601,7 @@ fn parse_game2d_expanded_with_shell(
         input_labels: catalog.input_labels,
         global_labels: catalog.global_labels,
         persistent_vars: catalog.persistent_vars,
-        query_labels: catalog.query_labels,
+        condition_labels: catalog.condition_labels,
         conditions,
         goal,
         lose,
@@ -2600,7 +2908,6 @@ fn starts_authoring_block(tokens: &[&str], line: &str) -> bool {
         | ["on_last_level_clear"]
         | ["on_display"]
         | ["objects"]
-        | ["display_objects"]
         | ["scratch"]
         | ["group"]
         | ["layers"]
@@ -2673,13 +2980,20 @@ fn parse_sounds_block(
                 }
                 let seed = required_sound_setting(settings, "seed", line)?;
                 validate_sound_atom(seed, line, "music seed")?;
-                let tone = parse_sound_f64(
-                    optional_sound_setting(settings, "tone").unwrap_or("0.62"),
+                let height = parse_sound_f64(
+                    optional_sound_setting(settings, "height")
+                        .or_else(|| optional_sound_setting(settings, "tone"))
+                        .unwrap_or("0.5"),
                     line,
-                    "tone",
+                    "height",
+                )?;
+                let bars = parse_sound_u16(
+                    optional_sound_setting(settings, "bars").unwrap_or("8"),
+                    line,
+                    "bars",
                 )?;
                 let bpm = parse_sound_u16(
-                    optional_sound_setting(settings, "bpm").unwrap_or("104"),
+                    optional_sound_setting(settings, "bpm").unwrap_or("110"),
                     line,
                     "bpm",
                 )?;
@@ -2688,8 +3002,14 @@ fn parse_sounds_block(
                     line,
                     "volume",
                 )?;
-                if !(0.0..=1.0).contains(&tone) {
-                    return Err(parse_error(line, "music tone must be between 0 and 1"));
+                if !(0.0..=1.0).contains(&height) {
+                    return Err(parse_error(line, "music height must be between 0 and 1"));
+                }
+                if !matches!(bars, 8 | 16 | 32 | 64) {
+                    return Err(parse_error(
+                        line,
+                        "music bars must be one of 8, 16, 32, or 64",
+                    ));
                 }
                 if !(40..=180).contains(&bpm) {
                     return Err(parse_error(line, "music bpm must be between 40 and 180"));
@@ -2700,7 +3020,8 @@ fn parse_sounds_block(
                 sounds.music.push(MusicSoundDef {
                     name: (*name).to_string(),
                     seed: seed.to_string(),
-                    tone,
+                    height,
+                    bars,
                     bpm,
                     volume,
                 });
@@ -2708,7 +3029,7 @@ fn parse_sounds_block(
             _ => {
                 return Err(parse_error(
                     line,
-                    "sounds entry must be: sfx <name> seed=<seed> type=<type> | music <name> seed=<seed> tone=<0..1> bpm=<40..180> volume=<0..1>",
+                    "sounds entry must be: sfx <name> seed=<seed> type=<type> | music <name> seed=<seed> bars=<8|16|32|64> height=<0..1> bpm=<40..180> volume=<0..1>",
                 ));
             }
         }
@@ -3084,7 +3405,7 @@ fn parse_puzzle_definition(
     empty_char: &mut Option<char>,
     named_layers: &mut HashMap<String, u16>,
     catalog: &mut Catalog,
-    query_definitions: &mut Vec<QueryDefinitionAst>,
+    condition_definitions: &mut Vec<ConditionDefinitionAst>,
     controls: &mut Controls,
     directions: &mut Vec<Direction>,
     rule_definitions: &mut Vec<RuleDefinitionAst>,
@@ -3216,15 +3537,13 @@ fn parse_puzzle_definition(
                 i += 1;
             }
             "objects" => {
-                return Err(parse_error(
-                    line,
-                    "`objects { ... }` was removed; use `layers { ... }` and `levels { legend { ... } }`",
-                ));
+                i = parse_objects_block(lines, i, catalog)?;
+                refresh_layer_tags_and_value_sets(named_layers, catalog);
             }
             "display_objects" => {
                 return Err(parse_error(
                     line,
-                    "`display_objects { ... }` was removed; declare display objects in `layers { display @Name }`",
+                    "`display_objects { ... }` was removed; use `objects { @Name ... }`",
                 ));
             }
             "scratch" => {
@@ -3239,7 +3558,7 @@ fn parse_puzzle_definition(
                         "object must be: object <name-or-schema> <layer>",
                     ));
                 }
-                parse_object_directive(
+                let declared = parse_object_directive(
                     spec,
                     layer,
                     tokens.get(3).copied(),
@@ -3253,6 +3572,7 @@ fn parse_puzzle_definition(
                     &mut catalog.render_chars,
                     &mut catalog.char_objects,
                 )?;
+                mark_visual_objects(&declared, is_display_role_token(spec), catalog);
                 refresh_layer_tags_and_value_sets(named_layers, catalog);
                 i += 1;
             }
@@ -3273,6 +3593,7 @@ fn parse_puzzle_definition(
                     &mut catalog.global_names,
                     &mut catalog.global_labels,
                     &mut catalog.global_defaults,
+                    &mut catalog.numeric_global_defaults,
                     &mut catalog.persistent_vars,
                     &mut catalog.constant_globals,
                 )?;
@@ -3281,8 +3602,8 @@ fn parse_puzzle_definition(
             "global" => {
                 return Err(parse_error(line, "`global` was removed; use `var`"));
             }
-            "query" => {
-                let definition = parse_query_directive(
+            "condition" => {
+                let definition = parse_condition_directive(
                     &tokens,
                     line,
                     &catalog.object_names,
@@ -3290,10 +3611,10 @@ fn parse_puzzle_definition(
                     &catalog_value_sets(&catalog),
                     &catalog.maps,
                     &catalog.object_groups,
-                    &mut catalog.query_names,
-                    &mut catalog.query_labels,
+                    &mut catalog.condition_names,
+                    &mut catalog.condition_labels,
                 )?;
-                query_definitions.push(definition);
+                condition_definitions.push(definition);
                 i += 1;
             }
             "effect" => {
@@ -3386,7 +3707,8 @@ fn parse_puzzle_definition(
                     &catalog.object_groups,
                     &catalog.input_names,
                     &catalog.global_names,
-                    &catalog.query_names,
+                    &catalog.numeric_global_defaults,
+                    &catalog.condition_names,
                 )?;
                 rule_definitions.push(definition);
                 i = next_i;
@@ -3413,7 +3735,8 @@ fn parse_puzzle_definition(
                     &catalog.object_groups,
                     &catalog.input_names,
                     &catalog.global_names,
-                    &catalog.query_names,
+                    &catalog.numeric_global_defaults,
+                    &catalog.condition_names,
                     named_conditions,
                     &[],
                 )?;
@@ -3448,7 +3771,8 @@ fn parse_puzzle_definition(
                     &catalog.object_groups,
                     &catalog.input_names,
                     &catalog.global_names,
-                    &catalog.query_names,
+                    &catalog.numeric_global_defaults,
+                    &catalog.condition_names,
                     named_conditions,
                     &[],
                 )?;
@@ -3848,16 +4172,15 @@ fn parse_condition_block_entry(
 ) -> Result<usize, AppError> {
     let line = &lines[start];
     let tokens = split_tokens(line);
-    if let Some(["for", binding, "in", axis]) = (tokens.len() == 4).then_some(tokens.as_slice()) {
+    if let Some(["for", binding, "in", source]) = (tokens.len() == 4).then_some(tokens.as_slice()) {
         let value_sets = catalog_value_sets(catalog);
-        let Some(values) = value_sets.get(*axis) else {
-            return Err(parse_error(line, "unknown expansion tag set"));
-        };
+        let values =
+            for_expansion_values(source, &value_sets, &catalog.numeric_global_defaults, line)?;
         validate_identifier(binding, line, "expansion binding")?;
         let (body_lines, next_i) = collect_statement_block_lines(lines, start + 1, line)?;
         for value in values {
             let expanded_lines =
-                expand_for_binding_lines(&body_lines, binding, *axis, value, &catalog.maps)?;
+                expand_for_binding_lines(&body_lines, binding, source, &value, &catalog.maps)?;
             parse_condition_rows(
                 &expanded_lines,
                 condition_name,
@@ -4291,7 +4614,7 @@ fn parse_condition_block_row(
 ) -> Result<ConditionAst, AppError> {
     if let Some(pattern) = line.trim().strip_prefix("some ") {
         let pattern = pattern.trim();
-        if let Some(pattern) = parse_query_pattern_arg(
+        if let Some(pattern) = parse_condition_pattern_arg(
             pattern,
             line,
             &catalog.object_names,
@@ -4300,14 +4623,14 @@ fn parse_condition_block_row(
             &catalog.maps,
             &catalog.object_groups,
         )? {
-            return Ok(ConditionAst::QueryValueNonZero(
-                QueryKindAst::ExistsMatches(pattern),
+            return Ok(ConditionAst::InlineConditionNonZero(
+                ConditionValueAst::ExistsMatches(pattern),
             ));
         }
     }
     if let Some(pattern) = line.trim().strip_prefix("no ") {
         let pattern = pattern.trim();
-        if let Some(pattern) = parse_query_pattern_arg(
+        if let Some(pattern) = parse_condition_pattern_arg(
             pattern,
             line,
             &catalog.object_names,
@@ -4316,9 +4639,9 @@ fn parse_condition_block_row(
             &catalog.maps,
             &catalog.object_groups,
         )? {
-            return Ok(ConditionAst::QueryValueNonZero(QueryKindAst::NoneMatches(
-                pattern,
-            )));
+            return Ok(ConditionAst::InlineConditionNonZero(
+                ConditionValueAst::NoneMatches(pattern),
+            ));
         }
     }
 
@@ -4327,7 +4650,7 @@ fn parse_condition_block_row(
         line,
         &catalog.input_names,
         &catalog.global_names,
-        &catalog.query_names,
+        &catalog.condition_names,
         &catalog.object_names,
         &catalog.object_schemas,
         &catalog_value_sets(catalog),
@@ -4346,7 +4669,7 @@ fn parse_condition_block_row(
                 line,
                 &catalog.input_names,
                 &catalog.global_names,
-                &catalog.query_names,
+                &catalog.condition_names,
                 &catalog.object_names,
                 &catalog.object_schemas,
                 &catalog_value_sets(catalog),
@@ -4361,7 +4684,7 @@ fn parse_condition_block_row(
                 line,
                 &catalog.input_names,
                 &catalog.global_names,
-                &catalog.query_names,
+                &catalog.condition_names,
                 &catalog.object_names,
                 &catalog.object_schemas,
                 &catalog_value_sets(catalog),
@@ -4376,7 +4699,7 @@ fn parse_condition_block_row(
                 line,
                 &catalog.input_names,
                 &catalog.global_names,
-                &catalog.query_names,
+                &catalog.condition_names,
                 &catalog.object_names,
                 &catalog.object_schemas,
                 &catalog_value_sets(catalog),
@@ -4391,7 +4714,7 @@ fn parse_condition_block_row(
                 line,
                 &catalog.input_names,
                 &catalog.global_names,
-                &catalog.query_names,
+                &catalog.condition_names,
                 &catalog.object_names,
                 &catalog.object_schemas,
                 &catalog_value_sets(catalog),
@@ -4559,7 +4882,8 @@ fn parse_level_body(
                 &catalog.object_groups,
                 &catalog.input_names,
                 &catalog.global_names,
-                &catalog.query_names,
+                &catalog.numeric_global_defaults,
+                &catalog.condition_names,
                 named_conditions,
                 &[],
             )?;
@@ -4867,7 +5191,7 @@ fn parse_assignment_directive(
             line,
             &catalog.input_names,
             &catalog.global_names,
-            &catalog.query_names,
+            &catalog.condition_names,
             &catalog.object_names,
             &catalog.object_schemas,
             &catalog_value_sets(catalog),
@@ -4937,15 +5261,7 @@ fn display_object_spec<'a>(
 }
 
 fn is_display_role_token(token: &str) -> bool {
-    let Some(rest) = token.strip_prefix('@') else {
-        return false;
-    };
-    let base = rest
-        .split_once('{')
-        .map_or(rest, |(base, _)| base)
-        .split_once(':')
-        .map_or(rest, |(base, _)| base);
-    is_identifier(base)
+    puzzle_authoring::is_display_object_token(token)
 }
 
 fn validate_selector_alias_name(value: &str, line: &str, label: &str) -> Result<(), AppError> {
@@ -5015,6 +5331,50 @@ fn parse_layer_term(
     };
     mark_visual_objects(&declared, visual || is_display_role_token(term), catalog);
     Ok(declared)
+}
+
+fn parse_objects_block(
+    lines: &[String],
+    start: usize,
+    catalog: &mut Catalog,
+) -> Result<usize, AppError> {
+    let mut i = start + 1;
+    while i < lines.len() && !is_block_close_line(&lines[i]) {
+        let line = &lines[i];
+        let tokens = split_tokens(line);
+        if tokens.is_empty() {
+            i += 1;
+            continue;
+        }
+        for spec in tokens {
+            if spec == "display" {
+                return Err(parse_error(
+                    line,
+                    "display objects in `objects` must use an @ name",
+                ));
+            }
+            let declared = parse_object_directive(
+                spec,
+                UNASSIGNED_LAYER,
+                None,
+                line,
+                &catalog_value_sets(catalog),
+                &mut catalog.object_schemas,
+                &mut catalog.object_names,
+                &mut catalog.object_labels,
+                &mut catalog.object_layers,
+                &mut catalog.object_defs,
+                &mut catalog.render_chars,
+                &mut catalog.char_objects,
+            )?;
+            mark_visual_objects(&declared, is_display_role_token(spec), catalog);
+        }
+        i += 1;
+    }
+    if i >= lines.len() {
+        return Err(parse_error(&lines[start], "objects missing closing brace"));
+    }
+    Ok(i + 1)
 }
 
 fn push_terms(objects: &mut Vec<ObjectId>, terms: &[ObjectId]) {
@@ -5118,16 +5478,24 @@ fn parse_layers_block(
             continue;
         }
         match tokens.as_slice() {
-            ["for", binding, "in", axis] => {
+            ["for", binding, "in", source] => {
                 let value_sets = catalog_value_sets(catalog);
-                let values = value_sets
-                    .get(*axis)
-                    .ok_or_else(|| parse_error(&lines[i], "unknown expansion tag set"))?;
+                let values = for_expansion_values(
+                    source,
+                    &value_sets,
+                    &catalog.numeric_global_defaults,
+                    &lines[i],
+                )?;
                 validate_identifier(binding, &lines[i], "expansion binding")?;
                 let (body_lines, next_i) = collect_statement_block_lines(lines, i + 1, &lines[i])?;
-                for value in values {
-                    let mut expanded_lines =
-                        expand_for_binding_lines(&body_lines, binding, axis, value, &catalog.maps)?;
+                for value in &values {
+                    let mut expanded_lines = expand_for_binding_lines(
+                        &body_lines,
+                        binding,
+                        source,
+                        value,
+                        &catalog.maps,
+                    )?;
                     expanded_lines.push(BLOCK_CLOSE.to_string());
                     let parsed_i =
                         parse_layers_block(&expanded_lines, 0, named_layers, layer_count, catalog)?;
@@ -5706,12 +6074,12 @@ fn collect_implicit_inputs_from_condition(condition: &ConditionAst, names: &mut 
         ConditionAst::InputIn(_)
         | ConditionAst::GlobalEquals { .. }
         | ConditionAst::GlobalCompare { .. }
-        | ConditionAst::QueryEquals { .. }
-        | ConditionAst::QueryNonZero(_)
-        | ConditionAst::QueryCompare { .. }
-        | ConditionAst::QueryValueEquals { .. }
-        | ConditionAst::QueryValueNonZero(_)
-        | ConditionAst::QueryValueCompare { .. } => {}
+        | ConditionAst::ConditionEquals { .. }
+        | ConditionAst::ConditionNonZero(_)
+        | ConditionAst::ConditionCompare { .. }
+        | ConditionAst::InlineConditionValueEquals { .. }
+        | ConditionAst::InlineConditionNonZero(_)
+        | ConditionAst::InlineConditionCompare { .. } => {}
     }
 }
 
@@ -6013,7 +6381,7 @@ impl puzzle_scene::SceneBlockHandler for Scene2dBlockHandler<'_> {
             )),
             ["input", ..] => Err(parse_error(
                 &lines[start],
-                "scene input handlers are removed; use `rules { if input == <command> -> ... }`",
+                "scene input handlers are removed; use `rules { if input == <input> -> <effect> }`",
             )),
             ["action", ..] => Err(parse_error(
                 &lines[start],
@@ -6444,14 +6812,14 @@ fn parse_button_like_def(
     let Some(rest) = line.strip_prefix(keyword) else {
         return Err(parse_error(
             line,
-            &format!("{keyword} must be: {keyword} \"<label>\" -> <command>"),
+            &format!("{keyword} must be: {keyword} \"<label>\" -> <effect>"),
         ));
     };
     let rest = rest.trim();
     if rest.is_empty() {
         return Err(parse_error(
             line,
-            &format!("{keyword} must be: {keyword} \"<label>\" -> <command>"),
+            &format!("{keyword} must be: {keyword} \"<label>\" -> <effect>"),
         ));
     }
 
@@ -6467,7 +6835,7 @@ fn parse_button_like_def(
     } else {
         return Err(parse_error(
             line,
-            &format!("{keyword} must be: {keyword} \"<label>\" -> <command>"),
+            &format!("{keyword} must be: {keyword} \"<label>\" -> <effect>"),
         ));
     };
 
@@ -6651,19 +7019,15 @@ pub(crate) fn scene_effect_command_syntax(token: &str) -> Option<SceneEffectComm
     match token {
         "input" => Some(SceneEffectCommandSyntax::InputTarget),
         "component_effect" => Some(SceneEffectCommandSyntax::ComponentEffectTarget),
-        "goto" | "resume" | "enter" | "open" | "start" | "create" | "reset" | "delete" | "show"
-        | "hide" | "toggle" | "focus" => Some(SceneEffectCommandSyntax::SceneTarget),
+        "goto" | "start" => Some(SceneEffectCommandSyntax::SceneTarget),
         "sfx" | "play_music" => Some(SceneEffectCommandSyntax::AssetTarget),
         "pause_music" | "resume_music" | "stop_music" => {
             Some(SceneEffectCommandSyntax::OptionalAssetTarget)
         }
         "apply"
-        | "back"
-        | "close"
         | "clear_history"
         | "clear_undo_history"
         | "clear_game_progress"
-        | "continue"
         | "clear"
         | "copy"
         | "load"
@@ -6694,6 +7058,7 @@ fn project_surface_semantic_tokens(
                 SurfaceSemanticKind::Emission => semantic::SemanticKind::Emission,
                 SurfaceSemanticKind::Input => semantic::SemanticKind::Input,
                 SurfaceSemanticKind::State => semantic::SemanticKind::State,
+                SurfaceSemanticKind::Condition => semantic::SemanticKind::Condition,
                 SurfaceSemanticKind::Scene => semantic::SemanticKind::Scene,
                 SurfaceSemanticKind::Asset => semantic::SemanticKind::Asset,
                 SurfaceSemanticKind::Number => semantic::SemanticKind::Number,
@@ -6734,9 +7099,7 @@ fn scene_effect_surface_document(tokens: &[SourceToken]) -> SurfaceDocument {
         return surface_document_with_node(sink, SurfaceNodeKind::SceneEffect, effect_span);
     }
 
-    if matches!(first.text.as_str(), "start" | "continue")
-        && add_level_flow_scene_effect_tokens(tokens, &mut sink)
-    {
+    if first.text == "start" && add_level_flow_scene_effect_tokens(tokens, &mut sink) {
         return surface_document_with_node(sink, SurfaceNodeKind::SceneEffect, effect_span);
     }
 
@@ -7243,13 +7606,14 @@ pub(crate) enum SoundSettingValueSyntax {
 pub(crate) fn sound_setting_value_syntax(key: &str) -> Option<SoundSettingValueSyntax> {
     match key {
         "seed" | "type" => Some(SoundSettingValueSyntax::String),
-        "tone" | "bpm" | "volume" => Some(SoundSettingValueSyntax::Number),
+        "height" | "tone" | "bars" | "bpm" | "volume" => Some(SoundSettingValueSyntax::Number),
         _ => None,
     }
 }
 
 pub(crate) const SFX_SOUND_SETTING_OPTIONS: &[&str] = &["seed", "type"];
-pub(crate) const MUSIC_SOUND_SETTING_OPTIONS: &[&str] = &["seed", "tone", "bpm", "volume"];
+pub(crate) const MUSIC_SOUND_SETTING_OPTIONS: &[&str] =
+    &["seed", "height", "bars", "bpm", "volume"];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum MapHeaderTokenSyntax {
@@ -7309,7 +7673,6 @@ pub(crate) fn metadata_directive_value_token_index(tokens: &[&str]) -> Option<us
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum LevelPathPartSyntax {
     Owner,
-    LevelRef,
     TextProperty,
     NumberProperty,
     ConditionProperty,
@@ -7324,7 +7687,7 @@ pub(crate) fn level_path_part_syntax(parts: &[&str], index: usize) -> Option<Lev
         },
         [_, "level", property] => match index {
             0 => Some(LevelPathPartSyntax::Owner),
-            1 => Some(LevelPathPartSyntax::LevelRef),
+            1 => None,
             2 => level_property_syntax(property),
             _ => None,
         },
@@ -7334,8 +7697,8 @@ pub(crate) fn level_path_part_syntax(parts: &[&str], index: usize) -> Option<Lev
 
 fn level_property_syntax(property: &str) -> Option<LevelPathPartSyntax> {
     match property {
-        "name" | "label" => Some(LevelPathPartSyntax::TextProperty),
-        "index" => Some(LevelPathPartSyntax::NumberProperty),
+        "name" | "label" | "title" => Some(LevelPathPartSyntax::TextProperty),
+        "index" | "num" => Some(LevelPathPartSyntax::NumberProperty),
         "cleared" | "solved" | "last" | "has_next" => Some(LevelPathPartSyntax::ConditionProperty),
         _ => None,
     }
@@ -7455,22 +7818,9 @@ fn parse_scene_effect_value(value: &str, line: &str) -> Result<SceneEffect, AppE
             });
         }
     }
-    if let Some(rest) = value
-        .strip_prefix("goto ")
-        .or_else(|| value.strip_prefix("resume "))
-    {
+    if let Some(rest) = value.strip_prefix("goto ") {
         let (scene, params) = parse_scene_target_params(rest, line)?;
         return Ok(SceneEffect::Goto { scene, params });
-    }
-    if let Some(rest) = value
-        .strip_prefix("enter ")
-        .or_else(|| value.strip_prefix("open "))
-    {
-        let (scene, params) = parse_scene_target_params(rest, line)?;
-        return Ok(SceneEffect::Enter { scene, params });
-    }
-    if value == "close" {
-        return Ok(SceneEffect::Back);
     }
     if let Some(rest) = value.strip_prefix("start ") {
         if rest.starts_with("levels ") || rest.contains(" in ") {
@@ -7529,7 +7879,6 @@ fn parse_scene_effect_value(value: &str, line: &str) -> Result<SceneEffect, AppE
         ["wait", duration] => Ok(SceneEffect::Wait {
             milliseconds: Some(parse_wait_duration_ms(duration, line)?),
         }),
-        ["back"] | ["close"] => Ok(SceneEffect::Back),
         ["clear_undo_history"] | ["clear_history"] => Ok(SceneEffect::ClearUndoHistory),
         ["clear_game_progress"] => Ok(SceneEffect::ClearGameProgress),
         ["clear", "current_level"] => Ok(SceneEffect::ClearCurrentLevel),
@@ -7573,36 +7922,6 @@ fn parse_scene_effect_value(value: &str, line: &str) -> Result<SceneEffect, AppE
                 target: (*target).to_string(),
             })
         }
-        [
-            command @ ("create" | "reset" | "delete" | "show" | "hide" | "toggle" | "focus"),
-            screen,
-        ] => {
-            validate_qualified_identifier(screen, line, "scene name")?;
-            match *command {
-                "create" => Ok(SceneEffect::Create {
-                    scene: (*screen).to_string(),
-                }),
-                "reset" => Ok(SceneEffect::Reset {
-                    scene: (*screen).to_string(),
-                }),
-                "delete" => Ok(SceneEffect::Delete {
-                    scene: (*screen).to_string(),
-                }),
-                "show" => Ok(SceneEffect::Show {
-                    scene: (*screen).to_string(),
-                }),
-                "hide" => Ok(SceneEffect::Hide {
-                    scene: (*screen).to_string(),
-                }),
-                "toggle" => Ok(SceneEffect::Toggle {
-                    scene: (*screen).to_string(),
-                }),
-                "focus" => Ok(SceneEffect::Focus {
-                    scene: (*screen).to_string(),
-                }),
-                _ => unreachable!(),
-            }
-        }
         ["start", "levels", ..] | ["start", _, "in", _] | ["continue", "levels", ..] => {
             Err(legacy_start_levels_error(line))
         }
@@ -7617,7 +7936,7 @@ fn parse_scene_effect_value(value: &str, line: &str) -> Result<SceneEffect, AppE
             }
             Err(parse_error(
                 line,
-                "effect must be: input <name> | component_effect <name> | close | clear_undo_history | clear_game_progress | message <text> | wait <duration> | sfx <name> | play_music <name> | pause_music [name] | resume_music [name] | stop_music [name] | resume <scene> | resume <scene> with <param> = <value> | open <scene> | start <scene> | <scene>.goto <level> | copy <puzzle> to <puzzle> | show <scene> | hide <scene> | focus <scene>",
+                "effect must be: input <name> | component_effect <name> | goto <scene> | goto <scene>(<level>) | start <scene> | start <scene>(<level>) | clear_undo_history | clear_game_progress | message <text> | wait <duration> | sfx <name> | play_music <name> | pause_music [name] | resume_music [name] | stop_music [name] | <scene>.goto <level> | copy <puzzle> to <puzzle>",
             ))
         }
         ["input"] => Err(parse_error(line, "input effect must name an input")),
@@ -7639,12 +7958,12 @@ fn parse_scene_effect_value(value: &str, line: &str) -> Result<SceneEffect, AppE
             }
             Err(parse_error(
                 line,
-                "bare scene command aliases were removed; use `input <name>`, `component_effect <name>`, or an explicit scene command",
+                "bare scene effect aliases were removed; use `input <name>`, `component_effect <name>`, or an explicit scene effect",
             ))
         }
         _ => Err(parse_error(
             line,
-            "effect must be: input <name> | component_effect <name> | close | clear_undo_history | clear_game_progress | message <text> | wait <duration> | sfx <name> | play_music <name> | pause_music [name] | resume_music [name] | stop_music [name] | resume <scene> | resume <scene> with <param> = <value> | open <scene> | start <scene> | copy <puzzle> to <puzzle> | show <scene> | hide <scene> | focus <scene>",
+            "effect must be: input <name> | component_effect <name> | goto <scene> | goto <scene>(<level>) | start <scene> | start <scene>(<level>) | clear_undo_history | clear_game_progress | message <text> | wait <duration> | sfx <name> | play_music <name> | pause_music [name] | resume_music [name] | stop_music [name] | copy <puzzle> to <puzzle>",
         )),
     }
 }
@@ -7696,9 +8015,7 @@ fn scene_effect_token_length(tokens: &[SourceToken]) -> Option<usize> {
                 Some(1)
             }
         }
-        "back" | "close" | "clear_undo_history" | "clear_history" | "clear_game_progress" => {
-            Some(1)
-        }
+        "clear_undo_history" | "clear_history" | "clear_game_progress" => Some(1),
         "clear" => (tokens.get(1)?.text == "current_level").then_some(2),
         "reset"
             if tokens
@@ -7708,15 +8025,12 @@ fn scene_effect_token_length(tokens: &[SourceToken]) -> Option<usize> {
             Some(2)
         }
         "reset" if tokens.get(1).is_some_and(|token| token.text.contains('.')) => Some(2),
-        "goto" | "resume" | "enter" | "open" | "start" => {
+        "goto" | "start" => {
             if tokens.get(2).is_some_and(|token| token.text == "with") {
                 None
             } else {
                 (tokens.len() >= 2).then_some(2)
             }
-        }
-        "create" | "reset" | "delete" | "show" | "hide" | "toggle" | "focus" => {
-            (tokens.len() >= 2).then_some(2)
         }
         _ if first.contains('.') => {
             let command = first.rsplit_once('.').map(|(_, command)| command)?;
@@ -8493,7 +8807,7 @@ fn parse_screen_transitions_block(
             _ => {
                 return Err(parse_error(
                     &lines[i],
-                    "transitions row must be: step <puzzle> | <input> -> <command> | if <condition> -> <command>",
+                    "transitions row must be: step <puzzle> | <input> -> <effect> | if <condition> -> <effect>",
                 ));
             }
         }
@@ -8657,7 +8971,7 @@ fn parse_transition_row(
     let Some((pattern, effect)) = lines[start].split_once("->") else {
         return Err(parse_error(
             &lines[start],
-            "transition must be: if <condition> -> <command>",
+            "transition must be: if <condition> -> <effect>",
         ));
     };
     let (effect, next_i) = parse_scene_effect_with_optional_block(effect.trim(), lines, start)?;
@@ -8987,13 +9301,13 @@ fn parse_scene_keys_block(
         if lines[i].contains('=') {
             return Err(parse_error(
                 &lines[i],
-                "keys row must use `->`: <key...> -> <scene command-or-input>",
+                "keys row must use `->`: <key...> -> <scene effect-or-input>",
             ));
         }
         let Some((key, effect)) = lines[i].split_once("->") else {
             return Err(parse_error(
                 &lines[i],
-                "keys row must be: <key...> -> <scene command-or-input>",
+                "keys row must be: <key...> -> <scene effect-or-input>",
             ));
         };
         let key_tokens = key.split_whitespace().collect::<Vec<_>>();
@@ -10633,7 +10947,6 @@ fn starts_visual_outer_section(tokens: &[&str]) -> bool {
             | ["on_last_level_clear"]
             | ["on_display"]
             | ["objects"]
-            | ["display_objects"]
             | ["scratch"]
             | ["group"]
             | ["layers"]
@@ -11718,6 +12031,7 @@ fn parse_global_directive(
     global_names: &mut HashMap<String, GlobalId>,
     global_labels: &mut HashMap<GlobalId, String>,
     global_defaults: &mut Vec<i64>,
+    numeric_global_defaults: &mut HashMap<String, i64>,
     persistent_vars: &mut Vec<GlobalId>,
     constant_globals: &mut Vec<GlobalId>,
 ) -> Result<(), AppError> {
@@ -11737,9 +12051,13 @@ fn parse_global_directive(
                 return Err(parse_error(line, "duplicate var or const"));
             }
             let id = GlobalId(global_defaults.len() as u16);
+            let default = parse_global_value(value, line)?;
             global_names.insert(name.to_string(), id);
             global_labels.insert(id, name.to_string());
-            global_defaults.push(parse_global_value(value, line)?);
+            global_defaults.push(default);
+            if value.parse::<i64>().is_ok() {
+                numeric_global_defaults.insert(name.to_string(), default);
+            }
             if persistent {
                 persistent_vars.push(id);
             }
@@ -11755,7 +12073,7 @@ fn parse_global_directive(
     }
 }
 
-fn parse_query_directive(
+fn parse_condition_directive(
     _tokens: &[&str],
     line: &str,
     object_names: &HashMap<String, ObjectId>,
@@ -11763,28 +12081,28 @@ fn parse_query_directive(
     value_sets: &HashMap<String, Vec<String>>,
     maps: &HashMap<String, ValueMap>,
     object_groups: &HashMap<String, Vec<ObjectId>>,
-    query_names: &mut HashMap<String, QueryId>,
-    query_labels: &mut HashMap<QueryId, String>,
-) -> Result<QueryDefinitionAst, AppError> {
-    let Some(rest) = line.strip_prefix("query ") else {
+    condition_names: &mut HashMap<String, ConditionId>,
+    condition_labels: &mut HashMap<ConditionId, String>,
+) -> Result<ConditionDefinitionAst, AppError> {
+    let Some(rest) = line.strip_prefix("condition ") else {
         return Err(parse_error(
             line,
-            "query must be: query <name> = <query_expr>",
+            "condition must be: condition <name> = <condition_expr>",
         ));
     };
     let Some((name, expr)) = rest.split_once('=') else {
         return Err(parse_error(
             line,
-            "query must be: query <name> = <query_expr>",
+            "condition must be: condition <name> = <condition_expr>",
         ));
     };
     let name = name.trim();
-    validate_qualified_identifier(name, line, "query name")?;
-    if query_names.contains_key(name) {
-        return Err(parse_error(line, "duplicate query"));
+    validate_qualified_identifier(name, line, "condition name")?;
+    if condition_names.contains_key(name) {
+        return Err(parse_error(line, "duplicate condition"));
     }
-    let id = QueryId(query_names.len() as u16);
-    let kind = parse_query_expr(
+    let id = ConditionId(condition_names.len() as u16);
+    let kind = parse_condition_value_expr(
         expr.trim(),
         line,
         object_names,
@@ -11793,12 +12111,12 @@ fn parse_query_directive(
         maps,
         object_groups,
     )?;
-    query_names.insert(name.to_string(), id);
-    query_labels.insert(id, name.to_string());
-    Ok(QueryDefinitionAst { id, kind })
+    condition_names.insert(name.to_string(), id);
+    condition_labels.insert(id, name.to_string());
+    Ok(ConditionDefinitionAst { id, kind })
 }
 
-fn parse_query_expr(
+fn parse_condition_value_expr(
     expr: &str,
     line: &str,
     object_names: &HashMap<String, ObjectId>,
@@ -11806,9 +12124,9 @@ fn parse_query_expr(
     value_sets: &HashMap<String, Vec<String>>,
     maps: &HashMap<String, ValueMap>,
     object_groups: &HashMap<String, Vec<ObjectId>>,
-) -> Result<QueryKindAst, AppError> {
+) -> Result<ConditionValueAst, AppError> {
     let (name, arg) = parse_call_expr(expr, line)?;
-    let pattern_arg = parse_query_pattern_arg(
+    let pattern_arg = parse_condition_pattern_arg(
         arg,
         line,
         object_names,
@@ -11818,10 +12136,10 @@ fn parse_query_expr(
         object_groups,
     )?;
     match name {
-        "count" if pattern_arg.is_some() => {
-            Ok(QueryKindAst::CountMatches(pattern_arg.expect("checked")))
-        }
-        "count" => Ok(QueryKindAst::CountObjects(
+        "count" if pattern_arg.is_some() => Ok(ConditionValueAst::CountMatches(
+            pattern_arg.expect("checked"),
+        )),
+        "count" => Ok(ConditionValueAst::CountObjects(
             resolve_object_selector(
                 arg,
                 line,
@@ -11833,13 +12151,13 @@ fn parse_query_expr(
             )?
             .alternatives,
         )),
-        "exists" | "some" if pattern_arg.is_some() => {
-            Ok(QueryKindAst::ExistsMatches(pattern_arg.expect("checked")))
-        }
-        "none" if pattern_arg.is_some() => {
-            Ok(QueryKindAst::NoneMatches(pattern_arg.expect("checked")))
-        }
-        "exists" => Ok(QueryKindAst::ExistsObjects(
+        "exists" | "some" if pattern_arg.is_some() => Ok(ConditionValueAst::ExistsMatches(
+            pattern_arg.expect("checked"),
+        )),
+        "none" if pattern_arg.is_some() => Ok(ConditionValueAst::NoneMatches(
+            pattern_arg.expect("checked"),
+        )),
+        "exists" => Ok(ConditionValueAst::ExistsObjects(
             resolve_object_selector(
                 arg,
                 line,
@@ -11851,7 +12169,7 @@ fn parse_query_expr(
             )?
             .alternatives,
         )),
-        "some" => Ok(QueryKindAst::ExistsObjects(
+        "some" => Ok(ConditionValueAst::ExistsObjects(
             resolve_object_selector(
                 arg,
                 line,
@@ -11863,7 +12181,7 @@ fn parse_query_expr(
             )?
             .alternatives,
         )),
-        "none" => Ok(QueryKindAst::NoneObjects(
+        "none" => Ok(ConditionValueAst::NoneObjects(
             resolve_object_selector(
                 arg,
                 line,
@@ -11875,11 +12193,11 @@ fn parse_query_expr(
             )?
             .alternatives,
         )),
-        _ => Err(parse_error(line, "unknown query function")),
+        _ => Err(parse_error(line, "unknown condition function")),
     }
 }
 
-fn parse_query_pattern_arg(
+fn parse_condition_pattern_arg(
     arg: &str,
     line: &str,
     object_names: &HashMap<String, ObjectId>,
@@ -11887,11 +12205,11 @@ fn parse_query_pattern_arg(
     value_sets: &HashMap<String, Vec<String>>,
     maps: &HashMap<String, ValueMap>,
     object_groups: &HashMap<String, Vec<ObjectId>>,
-) -> Result<Option<QueryPatternAst>, AppError> {
+) -> Result<Option<ConditionPatternAst>, AppError> {
     let Some((orientation, pattern)) = split_oriented_pattern_arg(arg, line)? else {
         return Ok(None);
     };
-    Ok(Some(QueryPatternAst {
+    Ok(Some(ConditionPatternAst {
         orientation,
         pattern: parse_pattern_side(
             &pattern,
@@ -11957,17 +12275,17 @@ fn parse_call_expr<'a>(expr: &'a str, line: &str) -> Result<(&'a str, &'a str), 
     let Some((name, rest)) = expr.split_once('(') else {
         return Err(parse_error(
             line,
-            "query expression must be a function call",
+            "condition expression must be a function call",
         ));
     };
     if !is_identifier(name) {
         return Err(parse_error(
             line,
-            "query function name must be an identifier",
+            "condition function name must be an identifier",
         ));
     }
     let Some(arg) = rest.strip_suffix(')') else {
-        return Err(parse_error(line, "query expression missing closing )"));
+        return Err(parse_error(line, "condition expression missing closing )"));
     };
     Ok((name, arg.trim()))
 }
@@ -12020,7 +12338,8 @@ fn parse_rule_definition(
     object_groups: &HashMap<String, Vec<ObjectId>>,
     input_names: &HashMap<String, InputId>,
     global_names: &HashMap<String, GlobalId>,
-    query_names: &HashMap<String, QueryId>,
+    numeric_globals: &HashMap<String, i64>,
+    condition_names: &HashMap<String, ConditionId>,
 ) -> Result<(RuleDefinitionAst, usize), AppError> {
     let header = split_tokens(&lines[start]);
     let declaration = header.first().copied().unwrap_or("routine");
@@ -12057,7 +12376,8 @@ fn parse_rule_definition(
         object_groups,
         input_names,
         global_names,
-        query_names,
+        numeric_globals,
+        condition_names,
         &HashMap::new(),
         &params,
     )?;
@@ -12085,7 +12405,7 @@ fn add_standard_move_rule_if_missing(
     object_groups: &HashMap<String, Vec<ObjectId>>,
     input_names: &HashMap<String, InputId>,
     global_names: &HashMap<String, GlobalId>,
-    query_names: &HashMap<String, QueryId>,
+    condition_names: &HashMap<String, ConditionId>,
 ) -> Result<(), AppError> {
     if definitions
         .iter()
@@ -12150,7 +12470,8 @@ fn add_standard_move_rule_if_missing(
         &generated_groups,
         input_names,
         global_names,
-        query_names,
+        &HashMap::new(),
+        condition_names,
         &HashMap::new(),
         &[],
     )?;
@@ -12210,7 +12531,8 @@ fn parse_lifecycle_block(
         &catalog.object_groups,
         &catalog.input_names,
         &catalog.global_names,
-        &catalog.query_names,
+        &catalog.numeric_global_defaults,
+        &catalog.condition_names,
         &HashMap::new(),
         &[],
     )?;
@@ -12565,13 +12887,62 @@ fn flush_identifier_token(out: &mut String, token: &mut String, binding: &str, v
 }
 
 fn for_expansion_values(
-    axis: &str,
+    source: &str,
     value_sets: &HashMap<String, Vec<String>>,
-) -> Option<Vec<String>> {
-    if let Some(values) = value_sets.get(axis) {
-        return Some(values.clone());
+    numeric_globals: &HashMap<String, i64>,
+    line: &str,
+) -> Result<Vec<String>, AppError> {
+    if let Some(values) = value_sets.get(source) {
+        return Ok(values.clone());
     }
-    None
+    if let Some(values) = numeric_range_values(source, numeric_globals, line)? {
+        return Ok(values);
+    }
+    Err(parse_error(
+        line,
+        "unknown expansion tag set or numeric range",
+    ))
+}
+
+fn numeric_range_values(
+    source: &str,
+    numeric_globals: &HashMap<String, i64>,
+    line: &str,
+) -> Result<Option<Vec<String>>, AppError> {
+    let Some((start, end)) = source.split_once("...") else {
+        return Ok(None);
+    };
+    if start.is_empty() || end.is_empty() || end.contains("...") {
+        return Err(parse_error(
+            line,
+            "numeric range must be: <integer>...<integer>",
+        ));
+    }
+    let start = parse_numeric_range_endpoint(start, numeric_globals, line)?;
+    let end = parse_numeric_range_endpoint(end, numeric_globals, line)?;
+    if start > end {
+        return Err(parse_error(
+            line,
+            "numeric range start must be less than or equal to end",
+        ));
+    }
+    Ok(Some((start..=end).map(|value| value.to_string()).collect()))
+}
+
+fn parse_numeric_range_endpoint(
+    value: &str,
+    numeric_globals: &HashMap<String, i64>,
+    line: &str,
+) -> Result<i64, AppError> {
+    if let Ok(parsed) = value.parse::<i64>() {
+        return Ok(parsed);
+    }
+    numeric_globals.get(value).copied().ok_or_else(|| {
+        parse_error(
+            line,
+            "numeric range endpoints must be integer literals or integer vars",
+        )
+    })
 }
 
 fn collect_multiline_rewrite_statement(
@@ -12691,7 +13062,8 @@ fn parse_statement_block(
     object_groups: &HashMap<String, Vec<ObjectId>>,
     input_names: &HashMap<String, InputId>,
     global_names: &HashMap<String, GlobalId>,
-    query_names: &HashMap<String, QueryId>,
+    numeric_globals: &HashMap<String, i64>,
+    condition_names: &HashMap<String, ConditionId>,
     named_conditions: &HashMap<String, (String, ConditionAst)>,
     rule_params: &[String],
 ) -> Result<(Vec<StatementAst>, usize), AppError> {
@@ -12717,45 +13089,44 @@ fn parse_statement_block(
         let tokens = split_tokens(line);
         match tokens.first().copied() {
             Some("for") => {
-                let Some(["for", binding, "in", axis]) =
+                let Some(["for", binding, "in", source]) =
                     (tokens.len() == 4).then_some(tokens.as_slice())
                 else {
                     return Err(parse_error(
                         line,
-                        "for directive must be: for <binding> in <tag_set>",
+                        "for directive must be: for <binding> in <tag_set-or-range>",
                     ));
                 };
-                if let Some(values) = for_expansion_values(*axis, value_sets) {
-                    validate_identifier(binding, line, "expansion binding")?;
-                    let (body_lines, next_i) = collect_statement_block_lines(lines, i + 1, line)?;
-                    for value in &values {
-                        let mut expanded_lines =
-                            expand_for_binding_lines(&body_lines, binding, *axis, value, maps)?;
-                        expanded_lines.push(BLOCK_CLOSE.to_string());
-                        let (nested, parsed_i) = parse_statement_block(
-                            &expanded_lines,
-                            0,
-                            &[BLOCK_CLOSE],
-                            object_names,
-                            object_schemas,
-                            value_sets,
-                            maps,
-                            object_groups,
-                            input_names,
-                            global_names,
-                            query_names,
-                            named_conditions,
-                            rule_params,
-                        )?;
-                        if parsed_i != expanded_lines.len() {
-                            return Err(parse_error(line, "for expansion failed"));
-                        }
-                        statements.extend(nested);
+                let values = for_expansion_values(source, value_sets, numeric_globals, line)?;
+                validate_identifier(binding, line, "expansion binding")?;
+                let (body_lines, next_i) = collect_statement_block_lines(lines, i + 1, line)?;
+                for value in &values {
+                    let mut expanded_lines =
+                        expand_for_binding_lines(&body_lines, binding, source, value, maps)?;
+                    expanded_lines.push(BLOCK_CLOSE.to_string());
+                    let (nested, parsed_i) = parse_statement_block(
+                        &expanded_lines,
+                        0,
+                        &[BLOCK_CLOSE],
+                        object_names,
+                        object_schemas,
+                        value_sets,
+                        maps,
+                        object_groups,
+                        input_names,
+                        global_names,
+                        numeric_globals,
+                        condition_names,
+                        named_conditions,
+                        rule_params,
+                    )?;
+                    if parsed_i != expanded_lines.len() {
+                        return Err(parse_error(line, "for expansion failed"));
                     }
-                    i = next_i;
-                    continue;
+                    statements.extend(nested);
                 }
-                return Err(parse_error(line, "unknown expansion tag set"));
+                i = next_i;
+                continue;
             }
             Some("fix") => {
                 let defaults = parse_fix_defaults(&tokens, line, rule_params)?;
@@ -12770,7 +13141,8 @@ fn parse_statement_block(
                     object_groups,
                     input_names,
                     global_names,
-                    query_names,
+                    numeric_globals,
+                    condition_names,
                     named_conditions,
                     rule_params,
                 )?;
@@ -12801,7 +13173,8 @@ fn parse_statement_block(
                             object_groups,
                             input_names,
                             global_names,
-                            query_names,
+                            numeric_globals,
+                            condition_names,
                             named_conditions,
                             rule_params,
                         )?;
@@ -12818,7 +13191,8 @@ fn parse_statement_block(
                                     object_groups,
                                     input_names,
                                     global_names,
-                                    query_names,
+                                    numeric_globals,
+                                    condition_names,
                                     named_conditions,
                                     rule_params,
                                 )?;
@@ -12854,7 +13228,7 @@ fn parse_statement_block(
                         line,
                         input_names,
                         global_names,
-                        query_names,
+                        condition_names,
                         named_conditions,
                         object_names,
                         object_schemas,
@@ -12876,7 +13250,7 @@ fn parse_statement_block(
                     line,
                     input_names,
                     global_names,
-                    query_names,
+                    condition_names,
                     named_conditions,
                     object_names,
                     object_schemas,
@@ -12895,7 +13269,8 @@ fn parse_statement_block(
                     object_groups,
                     input_names,
                     global_names,
-                    query_names,
+                    numeric_globals,
+                    condition_names,
                     named_conditions,
                     rule_params,
                 )?;
@@ -12914,7 +13289,8 @@ fn parse_statement_block(
                         object_groups,
                         input_names,
                         global_names,
-                        query_names,
+                        numeric_globals,
+                        condition_names,
                         named_conditions,
                         rule_params,
                     )?;
@@ -12972,7 +13348,8 @@ fn parse_statement_block(
                         object_groups,
                         input_names,
                         global_names,
-                        query_names,
+                        numeric_globals,
+                        condition_names,
                         named_conditions,
                         rule_params,
                     )?;
@@ -13035,7 +13412,8 @@ fn parse_statement_block(
                         object_groups,
                         input_names,
                         global_names,
-                        query_names,
+                        numeric_globals,
+                        condition_names,
                         named_conditions,
                         rule_params,
                     )?;
@@ -13074,7 +13452,8 @@ fn parse_statement_block(
                         object_groups,
                         input_names,
                         global_names,
-                        query_names,
+                        numeric_globals,
+                        condition_names,
                         named_conditions,
                         rule_params,
                     )?;
@@ -13113,7 +13492,8 @@ fn parse_statement_block(
                         object_groups,
                         input_names,
                         global_names,
-                        query_names,
+                        numeric_globals,
+                        condition_names,
                         named_conditions,
                         rule_params,
                     )?;
@@ -13152,7 +13532,8 @@ fn parse_statement_block(
                         object_groups,
                         input_names,
                         global_names,
-                        query_names,
+                        numeric_globals,
+                        condition_names,
                         named_conditions,
                         rule_params,
                     )?;
@@ -13178,7 +13559,7 @@ fn parse_statement_block(
                         line,
                         input_names,
                         global_names,
-                        query_names,
+                        condition_names,
                         named_conditions,
                         object_names,
                         object_schemas,
@@ -13197,7 +13578,8 @@ fn parse_statement_block(
                         object_groups,
                         input_names,
                         global_names,
-                        query_names,
+                        numeric_globals,
+                        condition_names,
                         named_conditions,
                         rule_params,
                     )?;
@@ -13261,7 +13643,8 @@ fn parse_statement_block(
                         object_groups,
                         input_names,
                         global_names,
-                        query_names,
+                        numeric_globals,
+                        condition_names,
                         named_conditions,
                         rule_params,
                     )?;
@@ -13835,7 +14218,7 @@ fn parse_statement_condition(
     line: &str,
     input_names: &HashMap<String, InputId>,
     global_names: &HashMap<String, GlobalId>,
-    query_names: &HashMap<String, QueryId>,
+    condition_names: &HashMap<String, ConditionId>,
     named_conditions: &HashMap<String, (String, ConditionAst)>,
     object_names: &HashMap<String, ObjectId>,
     object_schemas: &HashMap<String, ObjectSchema>,
@@ -13852,7 +14235,7 @@ fn parse_statement_condition(
         line,
         input_names,
         global_names,
-        query_names,
+        condition_names,
         object_names,
         object_schemas,
         value_sets,
@@ -13866,7 +14249,7 @@ fn parse_condition_expr(
     line: &str,
     input_names: &HashMap<String, InputId>,
     global_names: &HashMap<String, GlobalId>,
-    query_names: &HashMap<String, QueryId>,
+    condition_names: &HashMap<String, ConditionId>,
     object_names: &HashMap<String, ObjectId>,
     object_schemas: &HashMap<String, ObjectSchema>,
     value_sets: &HashMap<String, Vec<String>>,
@@ -13884,7 +14267,7 @@ fn parse_condition_expr(
                         line,
                         input_names,
                         global_names,
-                        query_names,
+                        condition_names,
                         object_names,
                         object_schemas,
                         value_sets,
@@ -13907,7 +14290,7 @@ fn parse_condition_expr(
                         line,
                         input_names,
                         global_names,
-                        query_names,
+                        condition_names,
                         object_names,
                         object_schemas,
                         value_sets,
@@ -13924,7 +14307,7 @@ fn parse_condition_expr(
         line,
         input_names,
         global_names,
-        query_names,
+        condition_names,
         object_names,
         object_schemas,
         value_sets,
@@ -13948,7 +14331,7 @@ fn parse_condition_atom(
     line: &str,
     input_names: &HashMap<String, InputId>,
     global_names: &HashMap<String, GlobalId>,
-    query_names: &HashMap<String, QueryId>,
+    condition_names: &HashMap<String, ConditionId>,
     object_names: &HashMap<String, ObjectId>,
     object_schemas: &HashMap<String, ObjectSchema>,
     value_sets: &HashMap<String, Vec<String>>,
@@ -13961,7 +14344,7 @@ fn parse_condition_atom(
     }
 
     if let Some(pattern) = condition.strip_prefix("some ") {
-        if let Some(pattern) = parse_query_pattern_arg(
+        if let Some(pattern) = parse_condition_pattern_arg(
             pattern.trim(),
             line,
             object_names,
@@ -13970,13 +14353,13 @@ fn parse_condition_atom(
             maps,
             object_groups,
         )? {
-            return Ok(ConditionAst::QueryValueNonZero(
-                QueryKindAst::ExistsMatches(pattern),
+            return Ok(ConditionAst::InlineConditionNonZero(
+                ConditionValueAst::ExistsMatches(pattern),
             ));
         }
     }
     if let Some(pattern) = condition.strip_prefix("no ") {
-        if let Some(pattern) = parse_query_pattern_arg(
+        if let Some(pattern) = parse_condition_pattern_arg(
             pattern.trim(),
             line,
             object_names,
@@ -13985,9 +14368,9 @@ fn parse_condition_atom(
             maps,
             object_groups,
         )? {
-            return Ok(ConditionAst::QueryValueNonZero(QueryKindAst::NoneMatches(
-                pattern,
-            )));
+            return Ok(ConditionAst::InlineConditionNonZero(
+                ConditionValueAst::NoneMatches(pattern),
+            ));
         }
     }
 
@@ -14018,13 +14401,13 @@ fn parse_condition_atom(
                 },
             });
         }
-        if query_names.contains_key(left) {
+        if condition_names.contains_key(left) {
             return Ok(match op {
-                ComparisonOp::Eq => ConditionAst::QueryEquals {
+                ComparisonOp::Eq => ConditionAst::ConditionEquals {
                     name: left.to_string(),
                     value,
                 },
-                op => ConditionAst::QueryCompare {
+                op => ConditionAst::ConditionCompare {
                     name: left.to_string(),
                     op,
                     value,
@@ -14033,8 +14416,8 @@ fn parse_condition_atom(
         }
         if left.contains('(') {
             return Ok(match op {
-                ComparisonOp::Eq => ConditionAst::QueryValueEquals {
-                    kind: parse_query_expr(
+                ComparisonOp::Eq => ConditionAst::InlineConditionValueEquals {
+                    kind: parse_condition_value_expr(
                         left,
                         line,
                         object_names,
@@ -14045,8 +14428,8 @@ fn parse_condition_atom(
                     )?,
                     value,
                 },
-                op => ConditionAst::QueryValueCompare {
-                    kind: parse_query_expr(
+                op => ConditionAst::InlineConditionCompare {
+                    kind: parse_condition_value_expr(
                         left,
                         line,
                         object_names,
@@ -14063,8 +14446,8 @@ fn parse_condition_atom(
         return Err(parse_error(line, "unknown value in condition"));
     }
 
-    if query_names.contains_key(condition) {
-        return Ok(ConditionAst::QueryNonZero(condition.to_string()));
+    if condition_names.contains_key(condition) {
+        return Ok(ConditionAst::ConditionNonZero(condition.to_string()));
     }
     if global_names.contains_key(condition) {
         return Ok(ConditionAst::GlobalCompare {
@@ -14074,15 +14457,17 @@ fn parse_condition_atom(
         });
     }
     if condition.contains('(') {
-        return Ok(ConditionAst::QueryValueNonZero(parse_query_expr(
-            condition,
-            line,
-            object_names,
-            object_schemas,
-            value_sets,
-            maps,
-            object_groups,
-        )?));
+        return Ok(ConditionAst::InlineConditionNonZero(
+            parse_condition_value_expr(
+                condition,
+                line,
+                object_names,
+                object_schemas,
+                value_sets,
+                maps,
+                object_groups,
+            )?,
+        ));
     }
 
     Err(parse_error(line, "unsupported condition"))
@@ -14128,8 +14513,8 @@ struct ProgramLowerer<'a> {
     input_names: &'a HashMap<String, InputId>,
     global_names: &'a HashMap<String, GlobalId>,
     constant_globals: &'a [GlobalId],
-    query_names: &'a HashMap<String, QueryId>,
-    visual_query_reads: &'a HashSet<QueryId>,
+    condition_names: &'a HashMap<String, ConditionId>,
+    visual_condition_reads: &'a HashSet<ConditionId>,
     scratch_names: &'a HashMap<String, ScratchDef>,
     model_sound_triggers: &'a [ModelSoundTrigger],
     animation: &'a AnimationDef,
@@ -14198,8 +14583,8 @@ fn lower_programs(
     input_names: &HashMap<String, InputId>,
     global_names: &HashMap<String, GlobalId>,
     constant_globals: &[GlobalId],
-    query_names: &HashMap<String, QueryId>,
-    visual_query_reads: &HashSet<QueryId>,
+    condition_names: &HashMap<String, ConditionId>,
+    visual_condition_reads: &HashSet<ConditionId>,
     scratch_names: &HashMap<String, ScratchDef>,
     model_sound_triggers: &[ModelSoundTrigger],
     animation: &AnimationDef,
@@ -14226,8 +14611,8 @@ fn lower_programs(
         input_names,
         global_names,
         constant_globals,
-        query_names,
-        visual_query_reads,
+        condition_names,
+        visual_condition_reads,
         scratch_names,
         model_sound_triggers,
         animation,
@@ -14338,18 +14723,18 @@ fn input_dependency_error(context: &StatementLoweringContext) -> AppError {
     AppError::Parse(format!("{scope} cannot depend on input"))
 }
 
-fn lower_queries(
-    definitions: Vec<QueryDefinitionAst>,
+fn lower_condition_defs(
+    definitions: Vec<ConditionDefinitionAst>,
     object_layers: &HashMap<ObjectId, LayerId>,
     scratch_names: &HashMap<String, ScratchDef>,
     value_sets: &HashMap<String, Vec<String>>,
     input_names: &HashMap<String, InputId>,
     directions: &[Direction],
-) -> Result<Vec<QueryDef>, AppError> {
+) -> Result<Vec<ConditionDef>, AppError> {
     definitions
         .into_iter()
         .map(|definition| {
-            let kind = lower_query_kind(
+            let kind = lower_condition_value_kind(
                 &definition.kind,
                 input_names,
                 object_layers,
@@ -14357,7 +14742,7 @@ fn lower_queries(
                 value_sets,
                 directions,
             )?;
-            Ok(QueryDef {
+            Ok(ConditionDef {
                 id: definition.id,
                 kind,
             })
@@ -14365,39 +14750,45 @@ fn lower_queries(
         .collect()
 }
 
-fn lower_query_kind(
-    kind: &QueryKindAst,
+fn lower_condition_value_kind(
+    kind: &ConditionValueAst,
     input_names: &HashMap<String, InputId>,
     object_layers: &HashMap<ObjectId, LayerId>,
     scratch_names: &HashMap<String, ScratchDef>,
     value_sets: &HashMap<String, Vec<String>>,
     directions: &[Direction],
-) -> Result<QueryKind, AppError> {
+) -> Result<ConditionValueKind, AppError> {
     match kind {
-        QueryKindAst::CountObjects(objects) => Ok(QueryKind::CountObjects(objects.clone())),
-        QueryKindAst::ExistsObjects(objects) => Ok(QueryKind::ExistsObjects(objects.clone())),
-        QueryKindAst::NoneObjects(objects) => Ok(QueryKind::NoneObjects(objects.clone())),
-        QueryKindAst::CountMatches(pattern) => lower_query_match_kind(
+        ConditionValueAst::CountObjects(objects) => {
+            Ok(ConditionValueKind::CountObjects(objects.clone()))
+        }
+        ConditionValueAst::ExistsObjects(objects) => {
+            Ok(ConditionValueKind::ExistsObjects(objects.clone()))
+        }
+        ConditionValueAst::NoneObjects(objects) => {
+            Ok(ConditionValueKind::NoneObjects(objects.clone()))
+        }
+        ConditionValueAst::CountMatches(pattern) => lower_condition_match_kind(
             pattern,
-            QueryMatchKind::Count,
+            ConditionMatchKind::Count,
             input_names,
             object_layers,
             scratch_names,
             value_sets,
             directions,
         ),
-        QueryKindAst::ExistsMatches(pattern) => lower_query_match_kind(
+        ConditionValueAst::ExistsMatches(pattern) => lower_condition_match_kind(
             pattern,
-            QueryMatchKind::Exists,
+            ConditionMatchKind::Exists,
             input_names,
             object_layers,
             scratch_names,
             value_sets,
             directions,
         ),
-        QueryKindAst::NoneMatches(pattern) => lower_query_match_kind(
+        ConditionValueAst::NoneMatches(pattern) => lower_condition_match_kind(
             pattern,
-            QueryMatchKind::None,
+            ConditionMatchKind::None,
             input_names,
             object_layers,
             scratch_names,
@@ -14408,27 +14799,27 @@ fn lower_query_kind(
 }
 
 #[derive(Clone, Copy)]
-enum QueryMatchKind {
+enum ConditionMatchKind {
     Count,
     Exists,
     None,
 }
 
-fn lower_query_match_kind(
-    query_pattern: &QueryPatternAst,
-    kind: QueryMatchKind,
+fn lower_condition_match_kind(
+    condition_pattern: &ConditionPatternAst,
+    kind: ConditionMatchKind,
     input_names: &HashMap<String, InputId>,
     object_layers: &HashMap<ObjectId, LayerId>,
     scratch_names: &HashMap<String, ScratchDef>,
     value_sets: &HashMap<String, Vec<String>>,
     directions: &[Direction],
-) -> Result<QueryKind, AppError> {
+) -> Result<ConditionValueKind, AppError> {
     if matches!(
-        query_pattern.orientation,
+        condition_pattern.orientation,
         OrientationExpr::Input | OrientationExpr::InputSet(_)
     ) {
-        let patterns = lower_query_input_patterns(
-            query_pattern,
+        let patterns = lower_condition_input_patterns(
+            condition_pattern,
             input_names,
             object_layers,
             scratch_names,
@@ -14436,13 +14827,13 @@ fn lower_query_match_kind(
             directions,
         )?;
         return Ok(match kind {
-            QueryMatchKind::Count => QueryKind::CountInputMatches(patterns),
-            QueryMatchKind::Exists => QueryKind::ExistsInputMatches(patterns),
-            QueryMatchKind::None => QueryKind::NoneInputMatches(patterns),
+            ConditionMatchKind::Count => ConditionValueKind::CountInputMatches(patterns),
+            ConditionMatchKind::Exists => ConditionValueKind::ExistsInputMatches(patterns),
+            ConditionMatchKind::None => ConditionValueKind::NoneInputMatches(patterns),
         });
     }
-    let patterns = lower_query_patterns(
-        query_pattern,
+    let patterns = lower_condition_patterns(
+        condition_pattern,
         object_layers,
         scratch_names,
         value_sets,
@@ -14450,48 +14841,48 @@ fn lower_query_match_kind(
         directions,
     )?;
     Ok(match kind {
-        QueryMatchKind::Count => QueryKind::CountMatches(patterns),
-        QueryMatchKind::Exists => QueryKind::ExistsMatches(patterns),
-        QueryMatchKind::None => QueryKind::NoneMatches(patterns),
+        ConditionMatchKind::Count => ConditionValueKind::CountMatches(patterns),
+        ConditionMatchKind::Exists => ConditionValueKind::ExistsMatches(patterns),
+        ConditionMatchKind::None => ConditionValueKind::NoneMatches(patterns),
     })
 }
 
-fn lower_query_patterns(
-    query_pattern: &QueryPatternAst,
+fn lower_condition_patterns(
+    condition_pattern: &ConditionPatternAst,
     object_layers: &HashMap<ObjectId, LayerId>,
     scratch_names: &HashMap<String, ScratchDef>,
     value_sets: &HashMap<String, Vec<String>>,
     input_names: &HashMap<String, InputId>,
     directions: &[Direction],
 ) -> Result<Vec<Pattern>, AppError> {
-    let block = &query_pattern.pattern;
+    let block = &condition_pattern.pattern;
     let alternatives = compile_before_after_blocks(
         block,
         block,
         object_layers,
         scratch_names,
         value_sets,
-        "query pattern",
+        "condition pattern",
     )?;
-    match &query_pattern.orientation {
+    match &condition_pattern.orientation {
         OrientationExpr::Neutral => {
             if pattern_block_requires_implicit_cardinal_expansion(block) {
                 return patterns_from_alternatives(
                     &alternatives,
                     directions,
                     true,
-                    "query pattern",
+                    "condition pattern",
                 );
             }
             patterns_from_alternatives(
                 &alternatives,
                 &[neutral_direction()],
                 false,
-                "query pattern",
+                "condition pattern",
             )
         }
         OrientationExpr::Input => {
-            patterns_from_alternatives(&alternatives, directions, true, "query pattern")
+            patterns_from_alternatives(&alternatives, directions, true, "condition pattern")
         }
         OrientationExpr::InputSet(axis) => {
             let directions =
@@ -14499,7 +14890,7 @@ fn lower_query_patterns(
                     .ok_or_else(|| {
                         AppError::Parse(format!("unknown input orientation set: {axis}"))
                     })?;
-            patterns_from_alternatives(&alternatives, &directions, true, "query pattern")
+            patterns_from_alternatives(&alternatives, &directions, true, "condition pattern")
         }
         OrientationExpr::Fixed(direction_name) => {
             let directions = directions_for_orientation_name(
@@ -14510,34 +14901,34 @@ fn lower_query_patterns(
             )?
             .ok_or_else(|| {
                 AppError::Parse(format!(
-                    "unknown query pattern orientation: {}",
+                    "unknown condition pattern orientation: {}",
                     direction_name.0
                 ))
             })?;
-            patterns_from_alternatives(&alternatives, &directions, true, "query pattern")
+            patterns_from_alternatives(&alternatives, &directions, true, "condition pattern")
         }
     }
 }
 
-fn lower_query_input_patterns(
-    query_pattern: &QueryPatternAst,
+fn lower_condition_input_patterns(
+    condition_pattern: &ConditionPatternAst,
     input_names: &HashMap<String, InputId>,
     object_layers: &HashMap<ObjectId, LayerId>,
     scratch_names: &HashMap<String, ScratchDef>,
     value_sets: &HashMap<String, Vec<String>>,
     directions: &[Direction],
 ) -> Result<Vec<(InputId, Pattern)>, AppError> {
-    let block = &query_pattern.pattern;
+    let block = &condition_pattern.pattern;
     let alternatives = compile_before_after_blocks(
         block,
         block,
         object_layers,
         scratch_names,
         value_sets,
-        "query pattern",
+        "condition pattern",
     )?;
     let mut patterns = Vec::new();
-    let input_directions = match &query_pattern.orientation {
+    let input_directions = match &condition_pattern.orientation {
         OrientationExpr::Input => directions.to_vec(),
         OrientationExpr::InputSet(axis) => {
             directions_for_orientation_name(axis, input_names, value_sets, directions)?
@@ -14547,7 +14938,7 @@ fn lower_query_input_patterns(
     };
     for direction in &input_directions {
         for pattern in
-            patterns_from_alternatives(&alternatives, &[*direction], true, "query pattern")?
+            patterns_from_alternatives(&alternatives, &[*direction], true, "condition pattern")?
         {
             patterns.push((direction.input, pattern));
         }
@@ -14654,8 +15045,8 @@ fn lower_goal_condition(
     condition: &ConditionAst,
     object_layers: &HashMap<ObjectId, LayerId>,
     global_names: &HashMap<String, GlobalId>,
-    query_names: &HashMap<String, QueryId>,
-    visual_query_reads: &HashSet<QueryId>,
+    condition_names: &HashMap<String, ConditionId>,
+    visual_condition_reads: &HashSet<ConditionId>,
     scratch_names: &HashMap<String, ScratchDef>,
     visual_objects: &[ObjectId],
     value_sets: &HashMap<String, Vec<String>>,
@@ -14668,8 +15059,8 @@ fn lower_goal_condition(
             condition,
             object_layers,
             global_names,
-            query_names,
-            visual_query_reads,
+            condition_names,
+            visual_condition_reads,
             scratch_names,
             visual_objects,
             value_sets,
@@ -14683,8 +15074,8 @@ fn lower_goal_expr(
     condition: &ConditionAst,
     object_layers: &HashMap<ObjectId, LayerId>,
     global_names: &HashMap<String, GlobalId>,
-    query_names: &HashMap<String, QueryId>,
-    visual_query_reads: &HashSet<QueryId>,
+    condition_names: &HashMap<String, ConditionId>,
+    visual_condition_reads: &HashSet<ConditionId>,
     scratch_names: &HashMap<String, ScratchDef>,
     visual_objects: &[ObjectId],
     value_sets: &HashMap<String, Vec<String>>,
@@ -14700,8 +15091,8 @@ fn lower_goal_expr(
                         condition,
                         object_layers,
                         global_names,
-                        query_names,
-                        visual_query_reads,
+                        condition_names,
+                        visual_condition_reads,
                         scratch_names,
                         visual_objects,
                         value_sets,
@@ -14719,8 +15110,8 @@ fn lower_goal_expr(
                         condition,
                         object_layers,
                         global_names,
-                        query_names,
-                        visual_query_reads,
+                        condition_names,
+                        visual_condition_reads,
                         scratch_names,
                         visual_objects,
                         value_sets,
@@ -14740,36 +15131,36 @@ fn lower_goal_expr(
             op: *op,
             expected: *value,
         })),
-        ConditionAst::QueryEquals { name, value } => Ok(GoalExpr::Clause(GoalClause {
-            value: GoalValue::Query(resolve_non_visual_query_for_goal(
+        ConditionAst::ConditionEquals { name, value } => Ok(GoalExpr::Clause(GoalClause {
+            value: GoalValue::Condition(resolve_non_visual_condition_for_goal(
                 name,
-                query_names,
-                visual_query_reads,
+                condition_names,
+                visual_condition_reads,
             )?),
             op: ComparisonOp::Eq,
             expected: *value,
         })),
-        ConditionAst::QueryNonZero(name) => Ok(GoalExpr::Clause(GoalClause {
-            value: GoalValue::Query(resolve_non_visual_query_for_goal(
+        ConditionAst::ConditionNonZero(name) => Ok(GoalExpr::Clause(GoalClause {
+            value: GoalValue::Condition(resolve_non_visual_condition_for_goal(
                 name,
-                query_names,
-                visual_query_reads,
+                condition_names,
+                visual_condition_reads,
             )?),
             op: ComparisonOp::NotEq,
             expected: 0,
         })),
-        ConditionAst::QueryCompare { name, op, value } => Ok(GoalExpr::Clause(GoalClause {
-            value: GoalValue::Query(resolve_non_visual_query_for_goal(
+        ConditionAst::ConditionCompare { name, op, value } => Ok(GoalExpr::Clause(GoalClause {
+            value: GoalValue::Condition(resolve_non_visual_condition_for_goal(
                 name,
-                query_names,
-                visual_query_reads,
+                condition_names,
+                visual_condition_reads,
             )?),
             op: *op,
             expected: *value,
         })),
-        ConditionAst::QueryValueEquals { kind, value } => {
-            validate_non_visual_query_kind(kind, visual_objects)?;
-            let kind = lower_query_kind(
+        ConditionAst::InlineConditionValueEquals { kind, value } => {
+            validate_non_visual_condition_value(kind, visual_objects)?;
+            let kind = lower_condition_value_kind(
                 kind,
                 input_names,
                 object_layers,
@@ -14778,14 +15169,14 @@ fn lower_goal_expr(
                 directions,
             )?;
             Ok(GoalExpr::Clause(GoalClause {
-                value: GoalValue::QueryValue(kind),
+                value: GoalValue::InlineConditionValue(kind),
                 op: ComparisonOp::Eq,
                 expected: *value,
             }))
         }
-        ConditionAst::QueryValueNonZero(kind) => {
-            validate_non_visual_query_kind(kind, visual_objects)?;
-            let kind = lower_query_kind(
+        ConditionAst::InlineConditionNonZero(kind) => {
+            validate_non_visual_condition_value(kind, visual_objects)?;
+            let kind = lower_condition_value_kind(
                 kind,
                 input_names,
                 object_layers,
@@ -14794,14 +15185,14 @@ fn lower_goal_expr(
                 directions,
             )?;
             Ok(GoalExpr::Clause(GoalClause {
-                value: GoalValue::QueryValue(kind),
+                value: GoalValue::InlineConditionValue(kind),
                 op: ComparisonOp::NotEq,
                 expected: 0,
             }))
         }
-        ConditionAst::QueryValueCompare { kind, op, value } => {
-            validate_non_visual_query_kind(kind, visual_objects)?;
-            let kind = lower_query_kind(
+        ConditionAst::InlineConditionCompare { kind, op, value } => {
+            validate_non_visual_condition_value(kind, visual_objects)?;
+            let kind = lower_condition_value_kind(
                 kind,
                 input_names,
                 object_layers,
@@ -14810,7 +15201,7 @@ fn lower_goal_expr(
                 directions,
             )?;
             Ok(GoalExpr::Clause(GoalClause {
-                value: GoalValue::QueryValue(kind),
+                value: GoalValue::InlineConditionValue(kind),
                 op: *op,
                 expected: *value,
             }))
@@ -14831,61 +15222,65 @@ fn resolve_global_for_goal(
         .ok_or_else(|| AppError::Parse(format!("unknown global in goal: {name}")))
 }
 
-fn resolve_non_visual_query_for_goal(
+fn resolve_non_visual_condition_for_goal(
     name: &str,
-    query_names: &HashMap<String, QueryId>,
-    visual_query_reads: &HashSet<QueryId>,
-) -> Result<QueryId, AppError> {
-    let query = query_names
+    condition_names: &HashMap<String, ConditionId>,
+    visual_condition_reads: &HashSet<ConditionId>,
+) -> Result<ConditionId, AppError> {
+    let condition = condition_names
         .get(name)
         .copied()
-        .ok_or_else(|| AppError::Parse(format!("unknown query in goal: {name}")))?;
-    ensure_non_visual_query(query, visual_query_reads)?;
-    Ok(query)
+        .ok_or_else(|| AppError::Parse(format!("unknown condition in goal: {name}")))?;
+    ensure_non_visual_condition_def(condition, visual_condition_reads)?;
+    Ok(condition)
 }
 
-fn visual_query_reads(
-    queries: &[QueryDefinitionAst],
+fn visual_condition_reads(
+    condition_defs: &[ConditionDefinitionAst],
     visual_objects: &[ObjectId],
-) -> HashSet<QueryId> {
-    queries
+) -> HashSet<ConditionId> {
+    condition_defs
         .iter()
-        .filter_map(|query| {
-            query_kind_reads_visual_object(&query.kind, visual_objects).then_some(query.id)
+        .filter_map(|condition| {
+            condition_value_reads_visual_object(&condition.kind, visual_objects)
+                .then_some(condition.id)
         })
         .collect()
 }
 
-fn ensure_non_visual_query(
-    query: QueryId,
-    visual_query_reads: &HashSet<QueryId>,
+fn ensure_non_visual_condition_def(
+    condition: ConditionId,
+    visual_condition_reads: &HashSet<ConditionId>,
 ) -> Result<(), AppError> {
-    if visual_query_reads.contains(&query) {
-        return Err(main_visual_object_error("query"));
+    if visual_condition_reads.contains(&condition) {
+        return Err(main_visual_object_error("condition"));
     }
     Ok(())
 }
 
-fn validate_non_visual_query_kind(
-    kind: &QueryKindAst,
+fn validate_non_visual_condition_value(
+    kind: &ConditionValueAst,
     visual_objects: &[ObjectId],
 ) -> Result<(), AppError> {
-    if query_kind_reads_visual_object(kind, visual_objects) {
-        return Err(main_visual_object_error("query"));
+    if condition_value_reads_visual_object(kind, visual_objects) {
+        return Err(main_visual_object_error("condition"));
     }
     Ok(())
 }
 
-fn query_kind_reads_visual_object(kind: &QueryKindAst, visual_objects: &[ObjectId]) -> bool {
+fn condition_value_reads_visual_object(
+    kind: &ConditionValueAst,
+    visual_objects: &[ObjectId],
+) -> bool {
     match kind {
-        QueryKindAst::CountObjects(objects)
-        | QueryKindAst::ExistsObjects(objects)
-        | QueryKindAst::NoneObjects(objects) => objects
+        ConditionValueAst::CountObjects(objects)
+        | ConditionValueAst::ExistsObjects(objects)
+        | ConditionValueAst::NoneObjects(objects) => objects
             .iter()
             .any(|object| object_is_visual(*object, visual_objects)),
-        QueryKindAst::CountMatches(pattern)
-        | QueryKindAst::ExistsMatches(pattern)
-        | QueryKindAst::NoneMatches(pattern) => {
+        ConditionValueAst::CountMatches(pattern)
+        | ConditionValueAst::ExistsMatches(pattern)
+        | ConditionValueAst::NoneMatches(pattern) => {
             pattern_block_reads_visual_object(&pattern.pattern, visual_objects)
         }
     }
@@ -15676,48 +16071,48 @@ impl<'a> ProgramLowerer<'a> {
                     value: *value,
                 })
             }
-            ConditionAst::QueryEquals { name, value } => {
-                let query = *self
-                    .query_names
+            ConditionAst::ConditionEquals { name, value } => {
+                let condition = *self
+                    .condition_names
                     .get(name)
-                    .ok_or_else(|| AppError::Parse(format!("unknown query: {name}")))?;
+                    .ok_or_else(|| AppError::Parse(format!("unknown condition: {name}")))?;
                 if context.role == RuleRole::Main {
-                    ensure_non_visual_query(query, self.visual_query_reads)?;
+                    ensure_non_visual_condition_def(condition, self.visual_condition_reads)?;
                 }
-                Ok(Guard::QueryEquals {
-                    query,
+                Ok(Guard::ConditionEquals {
+                    condition,
                     value: *value,
                 })
             }
-            ConditionAst::QueryNonZero(name) => {
-                let query = *self
-                    .query_names
+            ConditionAst::ConditionNonZero(name) => {
+                let condition = *self
+                    .condition_names
                     .get(name)
-                    .ok_or_else(|| AppError::Parse(format!("unknown query: {name}")))?;
+                    .ok_or_else(|| AppError::Parse(format!("unknown condition: {name}")))?;
                 if context.role == RuleRole::Main {
-                    ensure_non_visual_query(query, self.visual_query_reads)?;
+                    ensure_non_visual_condition_def(condition, self.visual_condition_reads)?;
                 }
-                Ok(Guard::QueryNonZero(query))
+                Ok(Guard::ConditionNonZero(condition))
             }
-            ConditionAst::QueryCompare { name, op, value } => {
-                let query = *self
-                    .query_names
+            ConditionAst::ConditionCompare { name, op, value } => {
+                let condition = *self
+                    .condition_names
                     .get(name)
-                    .ok_or_else(|| AppError::Parse(format!("unknown query: {name}")))?;
+                    .ok_or_else(|| AppError::Parse(format!("unknown condition: {name}")))?;
                 if context.role == RuleRole::Main {
-                    ensure_non_visual_query(query, self.visual_query_reads)?;
+                    ensure_non_visual_condition_def(condition, self.visual_condition_reads)?;
                 }
-                Ok(Guard::QueryCompare {
-                    query,
+                Ok(Guard::ConditionCompare {
+                    condition,
                     op: *op,
                     value: *value,
                 })
             }
-            ConditionAst::QueryValueEquals { kind, value } => {
+            ConditionAst::InlineConditionValueEquals { kind, value } => {
                 if context.role == RuleRole::Main {
-                    validate_non_visual_query_kind(kind, self.visual_objects)?;
+                    validate_non_visual_condition_value(kind, self.visual_objects)?;
                 }
-                let kind = lower_query_kind(
+                let kind = lower_condition_value_kind(
                     kind,
                     self.input_names,
                     self.object_layers,
@@ -15725,16 +16120,16 @@ impl<'a> ProgramLowerer<'a> {
                     self.value_sets,
                     self.directions,
                 )?;
-                Ok(Guard::QueryValue {
+                Ok(Guard::InlineConditionValue {
                     kind,
                     value: *value,
                 })
             }
-            ConditionAst::QueryValueNonZero(kind) => {
+            ConditionAst::InlineConditionNonZero(kind) => {
                 if context.role == RuleRole::Main {
-                    validate_non_visual_query_kind(kind, self.visual_objects)?;
+                    validate_non_visual_condition_value(kind, self.visual_objects)?;
                 }
-                let kind = lower_query_kind(
+                let kind = lower_condition_value_kind(
                     kind,
                     self.input_names,
                     self.object_layers,
@@ -15742,13 +16137,13 @@ impl<'a> ProgramLowerer<'a> {
                     self.value_sets,
                     self.directions,
                 )?;
-                Ok(Guard::QueryValueNonZero(kind))
+                Ok(Guard::InlineConditionNonZero(kind))
             }
-            ConditionAst::QueryValueCompare { kind, op, value } => {
+            ConditionAst::InlineConditionCompare { kind, op, value } => {
                 if context.role == RuleRole::Main {
-                    validate_non_visual_query_kind(kind, self.visual_objects)?;
+                    validate_non_visual_condition_value(kind, self.visual_objects)?;
                 }
-                let kind = lower_query_kind(
+                let kind = lower_condition_value_kind(
                     kind,
                     self.input_names,
                     self.object_layers,
@@ -15756,7 +16151,7 @@ impl<'a> ProgramLowerer<'a> {
                     self.value_sets,
                     self.directions,
                 )?;
-                Ok(Guard::QueryValueCompare {
+                Ok(Guard::InlineConditionCompare {
                     kind,
                     op: *op,
                     value: *value,
@@ -15796,49 +16191,52 @@ impl<'a> ProgramLowerer<'a> {
                     value: *value,
                 })
             }
-            ConditionAst::QueryEquals { name, value } => {
-                let query = *self
-                    .query_names
+            ConditionAst::ConditionEquals { name, value } => {
+                let condition = *self
+                    .condition_names
                     .get(name)
-                    .ok_or_else(|| AppError::Parse(format!("unknown query: {name}")))?;
+                    .ok_or_else(|| AppError::Parse(format!("unknown condition: {name}")))?;
                 if context.role == RuleRole::Main {
-                    ensure_non_visual_query(query, self.visual_query_reads)?;
+                    ensure_non_visual_condition_def(condition, self.visual_condition_reads)?;
                 }
-                Ok(Guard::QueryCompare {
-                    query,
+                Ok(Guard::ConditionCompare {
+                    condition,
                     op: ComparisonOp::NotEq,
                     value: *value,
                 })
             }
-            ConditionAst::QueryNonZero(name) => {
-                let query = *self
-                    .query_names
+            ConditionAst::ConditionNonZero(name) => {
+                let condition = *self
+                    .condition_names
                     .get(name)
-                    .ok_or_else(|| AppError::Parse(format!("unknown query: {name}")))?;
+                    .ok_or_else(|| AppError::Parse(format!("unknown condition: {name}")))?;
                 if context.role == RuleRole::Main {
-                    ensure_non_visual_query(query, self.visual_query_reads)?;
+                    ensure_non_visual_condition_def(condition, self.visual_condition_reads)?;
                 }
-                Ok(Guard::QueryEquals { query, value: 0 })
+                Ok(Guard::ConditionEquals {
+                    condition,
+                    value: 0,
+                })
             }
-            ConditionAst::QueryCompare { name, op, value } => {
-                let query = *self
-                    .query_names
+            ConditionAst::ConditionCompare { name, op, value } => {
+                let condition = *self
+                    .condition_names
                     .get(name)
-                    .ok_or_else(|| AppError::Parse(format!("unknown query: {name}")))?;
+                    .ok_or_else(|| AppError::Parse(format!("unknown condition: {name}")))?;
                 if context.role == RuleRole::Main {
-                    ensure_non_visual_query(query, self.visual_query_reads)?;
+                    ensure_non_visual_condition_def(condition, self.visual_condition_reads)?;
                 }
-                Ok(Guard::QueryCompare {
-                    query,
+                Ok(Guard::ConditionCompare {
+                    condition,
                     op: invert_comparison_op(*op),
                     value: *value,
                 })
             }
-            ConditionAst::QueryValueEquals { kind, value } => {
+            ConditionAst::InlineConditionValueEquals { kind, value } => {
                 if context.role == RuleRole::Main {
-                    validate_non_visual_query_kind(kind, self.visual_objects)?;
+                    validate_non_visual_condition_value(kind, self.visual_objects)?;
                 }
-                let kind = lower_query_kind(
+                let kind = lower_condition_value_kind(
                     kind,
                     self.input_names,
                     self.object_layers,
@@ -15846,17 +16244,17 @@ impl<'a> ProgramLowerer<'a> {
                     self.value_sets,
                     self.directions,
                 )?;
-                Ok(Guard::QueryValueCompare {
+                Ok(Guard::InlineConditionCompare {
                     kind,
                     op: ComparisonOp::NotEq,
                     value: *value,
                 })
             }
-            ConditionAst::QueryValueNonZero(kind) => {
+            ConditionAst::InlineConditionNonZero(kind) => {
                 if context.role == RuleRole::Main {
-                    validate_non_visual_query_kind(kind, self.visual_objects)?;
+                    validate_non_visual_condition_value(kind, self.visual_objects)?;
                 }
-                let kind = lower_query_kind(
+                let kind = lower_condition_value_kind(
                     kind,
                     self.input_names,
                     self.object_layers,
@@ -15864,13 +16262,13 @@ impl<'a> ProgramLowerer<'a> {
                     self.value_sets,
                     self.directions,
                 )?;
-                Ok(Guard::QueryValue { kind, value: 0 })
+                Ok(Guard::InlineConditionValue { kind, value: 0 })
             }
-            ConditionAst::QueryValueCompare { kind, op, value } => {
+            ConditionAst::InlineConditionCompare { kind, op, value } => {
                 if context.role == RuleRole::Main {
-                    validate_non_visual_query_kind(kind, self.visual_objects)?;
+                    validate_non_visual_condition_value(kind, self.visual_objects)?;
                 }
-                let kind = lower_query_kind(
+                let kind = lower_condition_value_kind(
                     kind,
                     self.input_names,
                     self.object_layers,
@@ -15878,7 +16276,7 @@ impl<'a> ProgramLowerer<'a> {
                     self.value_sets,
                     self.directions,
                 )?;
-                Ok(Guard::QueryValueCompare {
+                Ok(Guard::InlineConditionCompare {
                     kind,
                     op: invert_comparison_op(*op),
                     value: *value,
@@ -17368,61 +17766,22 @@ fn parse_cell_scratch_token(
 }
 
 fn anonymous_scratch_for_token(token: &str) -> Option<AnonymousScratch> {
-    if matches!(
-        token,
-        ">" | "<"
-            | "^"
-            | "v"
-            | "up"
-            | "down"
-            | "left"
-            | "right"
-            | "directions"
-            | "parallel"
-            | "perpendicular"
-    ) {
-        Some(AnonymousScratch::Movement)
-    } else if matches!(token, "true" | "false") {
-        Some(AnonymousScratch::Bool)
-    } else if token.parse::<i64>().is_ok() {
-        Some(AnonymousScratch::Int)
-    } else {
-        None
+    match puzzle_authoring::scratch_sugar_kind(token)? {
+        puzzle_authoring::ScratchSugarKind::Movement => Some(AnonymousScratch::Movement),
+        puzzle_authoring::ScratchSugarKind::Bool => Some(AnonymousScratch::Bool),
+        puzzle_authoring::ScratchSugarKind::Int => Some(AnonymousScratch::Int),
     }
 }
 
 fn split_cell_tokens(cell: &str, line: &str) -> Result<Vec<String>, AppError> {
-    let mut tokens = Vec::new();
-    let mut token = String::new();
-    let mut brace_depth = 0_u16;
-    for ch in cell.chars() {
-        match ch {
-            '{' => {
-                brace_depth += 1;
-                token.push(ch);
-            }
-            '}' => {
-                if brace_depth == 0 {
-                    return Err(parse_error(line, "scratch block has unmatched }"));
-                }
-                brace_depth -= 1;
-                token.push(ch);
-            }
-            ch if ch.is_whitespace() && brace_depth == 0 => {
-                if !token.is_empty() {
-                    tokens.push(std::mem::take(&mut token));
-                }
-            }
-            _ => token.push(ch),
+    puzzle_authoring::split_cell_tokens(cell).map_err(|error| match error {
+        puzzle_authoring::CellTokenError::UnmatchedCloseBrace => {
+            parse_error(line, "scratch block has unmatched }")
         }
-    }
-    if brace_depth != 0 {
-        return Err(parse_error(line, "scratch block missing }"));
-    }
-    if !token.is_empty() {
-        tokens.push(token);
-    }
-    Ok(tokens)
+        puzzle_authoring::CellTokenError::MissingCloseBrace => {
+            parse_error(line, "scratch block missing }")
+        }
+    })
 }
 
 fn resolve_object_selector(

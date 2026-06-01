@@ -246,7 +246,7 @@ scene playing {
 	}
 	rules {
 		step board
-		open_menu -> enter menu
+		open_menu -> goto menu
 		level_select -> {
 			stop_music music_name
 			goto level_select
@@ -274,7 +274,7 @@ scene menu {
 	rules {
 		resume -> {
 			resume_music music_name
-			back
+			goto playing
 		}
 		level_select -> {
 			stop_music music_name

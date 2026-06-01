@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use puzzle_core::{
-    ComparisonOp, CompiledGame, GlobalId, InputId, ObjectId, QueryId, QueryKind, RuleId, RuleStep,
-    State,
+    ComparisonOp, CompiledGame, ConditionId, ConditionValueKind, GlobalId, InputId, ObjectId,
+    RuleId, RuleStep, State,
 };
 pub use puzzle_scene::{
     LevelMenuLocked, SceneAlign as SceneAlignDef, SceneAlignX as SceneAlignXDef,
@@ -75,7 +75,7 @@ pub struct LoadedGame {
     pub input_labels: HashMap<InputId, String>,
     pub global_labels: HashMap<GlobalId, String>,
     pub persistent_vars: Vec<GlobalId>,
-    pub query_labels: HashMap<QueryId, String>,
+    pub condition_labels: HashMap<ConditionId, String>,
     pub conditions: HashMap<String, GoalCondition>,
     pub goal: Option<GoalCondition>,
     pub lose: Option<GoalCondition>,
@@ -188,7 +188,8 @@ pub struct SfxSoundDef {
 pub struct MusicSoundDef {
     pub name: String,
     pub seed: String,
-    pub tone: f64,
+    pub height: f64,
+    pub bars: u16,
     pub bpm: u16,
     pub volume: f64,
 }
@@ -349,8 +350,8 @@ pub struct GoalClause {
 #[derive(Clone, Debug)]
 pub enum GoalValue {
     Global(GlobalId),
-    Query(QueryId),
-    QueryValue(QueryKind),
+    Condition(ConditionId),
+    InlineConditionValue(ConditionValueKind),
 }
 
 #[derive(Clone, Debug)]
@@ -649,39 +650,43 @@ fn eval_goal_expr(game: &CompiledGame, state: &State, expr: &GoalExpr) -> bool {
 fn eval_goal_value(game: &CompiledGame, state: &State, value: &GoalValue) -> i64 {
     match value {
         GoalValue::Global(global) => state.global_value(*global).unwrap_or(0),
-        GoalValue::Query(query) => game
-            .query(*query)
-            .map(|query| eval_goal_query_kind(game, state, &query.kind))
+        GoalValue::Condition(condition) => game
+            .condition_def(*condition)
+            .map(|condition| eval_goal_condition_value_kind(game, state, &condition.kind))
             .unwrap_or(0),
-        GoalValue::QueryValue(kind) => eval_goal_query_kind(game, state, kind),
+        GoalValue::InlineConditionValue(kind) => eval_goal_condition_value_kind(game, state, kind),
     }
 }
 
-fn eval_goal_query_kind(game: &CompiledGame, state: &State, kind: &QueryKind) -> i64 {
+fn eval_goal_condition_value_kind(
+    game: &CompiledGame,
+    state: &State,
+    kind: &ConditionValueKind,
+) -> i64 {
     match kind {
-        QueryKind::CountObjects(objects) => objects
+        ConditionValueKind::CountObjects(objects) => objects
             .iter()
             .map(|object| i64::from(state.object_count(*object)))
             .sum(),
-        QueryKind::ExistsObjects(objects) => {
+        ConditionValueKind::ExistsObjects(objects) => {
             if objects.iter().any(|object| state.object_count(*object) > 0) {
                 1
             } else {
                 0
             }
         }
-        QueryKind::NoneObjects(objects) => {
+        ConditionValueKind::NoneObjects(objects) => {
             if objects.iter().any(|object| state.object_count(*object) > 0) {
                 0
             } else {
                 1
             }
         }
-        QueryKind::CountMatches(patterns) => patterns
+        ConditionValueKind::CountMatches(patterns) => patterns
             .iter()
             .map(|pattern| i64::from(puzzle_core::count_pattern_matches(game, state, pattern)))
             .sum(),
-        QueryKind::ExistsMatches(patterns) => {
+        ConditionValueKind::ExistsMatches(patterns) => {
             if patterns
                 .iter()
                 .any(|pattern| puzzle_core::has_pattern_match(game, state, pattern))
@@ -691,7 +696,7 @@ fn eval_goal_query_kind(game: &CompiledGame, state: &State, kind: &QueryKind) ->
                 0
             }
         }
-        QueryKind::NoneMatches(patterns) => {
+        ConditionValueKind::NoneMatches(patterns) => {
             if patterns
                 .iter()
                 .any(|pattern| puzzle_core::has_pattern_match(game, state, pattern))
@@ -701,9 +706,9 @@ fn eval_goal_query_kind(game: &CompiledGame, state: &State, kind: &QueryKind) ->
                 1
             }
         }
-        QueryKind::CountInputMatches(_)
-        | QueryKind::ExistsInputMatches(_)
-        | QueryKind::NoneInputMatches(_) => 0,
+        ConditionValueKind::CountInputMatches(_)
+        | ConditionValueKind::ExistsInputMatches(_)
+        | ConditionValueKind::NoneInputMatches(_) => 0,
     }
 }
 

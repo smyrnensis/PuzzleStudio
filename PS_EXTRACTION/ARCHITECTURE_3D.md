@@ -156,7 +156,7 @@ Internal 3D level transport such as `state.levels3` must not be shoved into
 `state.levels` to reuse the 2D loading path. That would let 2D caches,
 movement, undo, and rendering reinterpret 3D state as a malformed 2D board.
 
-`LEVELS3` is not an author-facing parser spelling. The stable boundary is
+There is no separate author-facing 3D level section. The stable boundary is
 `three_dimensions` mode plus ordinary `LEVELS` syntax.
 
 ## Implication For Current Work

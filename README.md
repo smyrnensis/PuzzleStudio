@@ -93,24 +93,45 @@ puzzlestudio editor games/spec_2d.puzzle
 By default this serves `http://127.0.0.1:8787/editor.html`. Use `--port` to pick
 a different port.
 
-Generate a standalone editor HTML file:
+During editor development, prefer the served editor or the owner-local command:
 
 ```bash
-puzzlestudio export-editor games/spec_2d.puzzle -o editor.html
+cargo run -p html-editor -- games/spec_2d.puzzle --serve
 ```
 
-If editor JavaScript, WASM, or preview code has changed, refresh the editor WASM
-bundle before exporting:
+This keeps the feedback loop short. The served `editor.html` is the editor app
+entry inside the static assets, not the web release artifact.
 
-```bash
-tools/build_wasm_editor.sh
-```
-
-For static web hosting, generate the standalone editor plus WASM preview
-fallback:
+Generate the GitHub Pages editor release:
 
 ```bash
 tools/generate_web_editor.sh games/spec_2d.puzzle -o docs/index.html
+```
+
+This writes `docs/index.html` plus the JavaScript, CSS, and WASM assets that
+GitHub Pages serves as static files. If Rust/WASM code changed, rebuild the
+generated WASM artifacts first:
+
+```bash
+tools/build_wasm_editor.sh
+tools/build_wasm_core.sh
+tools/build_wasm_game.sh
+```
+
+Open the generated Pages editor locally over HTTP:
+
+```bash
+tools/serve_web_editor.sh
+```
+
+On macOS, `tools/open_web_editor.command` can be opened from Finder. The Pages
+editor is not a `file://` artifact; serve `docs/` over local HTTP for the same
+asset-loading shape used by GitHub Pages.
+
+The CLI adapter command exports the same Pages-style editor HTML entry:
+
+```bash
+puzzlestudio export-editor games/spec_2d.puzzle -o docs/index.html
 ```
 
 ## 3D Prototype
@@ -153,7 +174,7 @@ puzzlestudio play [path]
 puzzlestudio preview [path] [--port 7878]
 puzzlestudio editor [path] [--port 8787]
 puzzlestudio export-html <path> -o <output.html>
-puzzlestudio export-editor [path] -o <editor.html>
+puzzlestudio export-editor [path] -o <docs/index.html>
 puzzlestudio screenshot <path> -o <output.png> [--scene name] [--width 1280] [--height 720]
 ```
 

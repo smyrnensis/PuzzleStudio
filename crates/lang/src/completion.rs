@@ -38,7 +38,7 @@ pub enum CompletionKind {
     Effect,
     Emission,
     Routine,
-    Query,
+    Condition,
     Puzzle,
     Scene,
     Level,
@@ -67,7 +67,7 @@ impl CompletionKind {
             CompletionKind::Effect => "effect",
             CompletionKind::Emission => "emission",
             CompletionKind::Routine => "routine",
-            CompletionKind::Query => "query",
+            CompletionKind::Condition => "condition",
             CompletionKind::Puzzle => "puzzle",
             CompletionKind::Scene => "scene",
             CompletionKind::Level => "level",
@@ -83,7 +83,8 @@ impl CompletionKind {
 
 pub fn suggest_source_completions(source: &str, cursor_offset: usize) -> CompletionList {
     let context = semantic_completion_context(source, cursor_offset);
-    let symbols = collect_completion_symbols(source);
+    let mut symbols = collect_completion_symbols(source);
+    remove_current_token_symbols(&mut symbols, &context.token_text);
 
     let mut items = Vec::<CompletionItem>::new();
 
@@ -157,7 +158,7 @@ struct CompletionSymbols {
     effects: BTreeSet<String>,
     emissions: BTreeSet<String>,
     routines: BTreeSet<String>,
-    queries: BTreeSet<String>,
+    condition_defs: BTreeSet<String>,
     puzzles: BTreeSet<String>,
     scenes: BTreeSet<String>,
     levels: BTreeSet<String>,
@@ -207,8 +208,12 @@ fn collect_completion_symbols(source: &str) -> CompletionSymbols {
         symbols.objects.extend(game.object_labels.values().cloned());
         symbols.inputs.extend(game.input_labels.values().cloned());
         symbols.states.extend(game.global_labels.values().cloned());
-        symbols.queries.extend(game.query_labels.values().cloned());
-        symbols.queries.extend(game.conditions.keys().cloned());
+        symbols
+            .condition_defs
+            .extend(game.condition_labels.values().cloned());
+        symbols
+            .condition_defs
+            .extend(game.conditions.keys().cloned());
         symbols
             .scenes
             .extend(game.scenes.iter().map(|scene| scene.name.clone()));
@@ -268,8 +273,8 @@ fn collect_line_symbols(
         ["input", name, ..] | ["direction", name, ..] => {
             insert_identifier(&mut symbols.inputs, name);
         }
-        ["query", name, ..] => {
-            insert_identifier(&mut symbols.queries, name);
+        ["condition", name, ..] => {
+            insert_identifier(&mut symbols.condition_defs, name);
         }
         ["sfx", name, ..] if scope == Some(SourceScope::Sounds) => {
             insert_identifier(&mut symbols.sfx, name);
@@ -287,6 +292,9 @@ fn collect_line_symbols(
         ["var" | "const", name, ..]
         | ["persistent", "var" | "const", name, ..]
         | ["persistent", name, ..] => {
+            insert_identifier(&mut symbols.states, name);
+        }
+        [name, "=", ..] if scope == Some(SourceScope::SceneState) => {
             insert_identifier(&mut symbols.states, name);
         }
         [name, "=", values @ ..]
@@ -531,11 +539,11 @@ fn add_slot_items(
             CompletionKind::Routine,
             "routine",
         ),
-        SemanticCompletionSlot::Queries => add_named_items(
+        SemanticCompletionSlot::Conditions => add_named_items(
             items,
-            symbols.queries.iter(),
-            CompletionKind::Query,
-            "query",
+            symbols.condition_defs.iter(),
+            CompletionKind::Condition,
+            "condition",
         ),
         SemanticCompletionSlot::Scenes => {
             add_named_items(items, symbols.scenes.iter(), CompletionKind::Scene, "scene")
@@ -608,6 +616,36 @@ fn add_named_items<'a>(
             detail: detail.to_string(),
         });
     }
+}
+
+fn remove_current_token_symbols(symbols: &mut CompletionSymbols, token: &str) {
+    let name = clean_spec(token);
+    if !is_identifier(name) {
+        return;
+    }
+    symbols.objects.remove(name);
+    symbols.groups.remove(name);
+    symbols.states.remove(name);
+    symbols.scratches.remove(name);
+    symbols.value_set_names.remove(name);
+    symbols.variants.remove(name);
+    symbols.directions.remove(name);
+    symbols.direction_sets.remove(name);
+    symbols.inputs.remove(name);
+    symbols.commands.remove(name);
+    symbols.effects.remove(name);
+    symbols.emissions.remove(name);
+    symbols.routines.remove(name);
+    symbols.condition_defs.remove(name);
+    symbols.puzzles.remove(name);
+    symbols.scenes.remove(name);
+    symbols.levels.remove(name);
+    symbols.sfx.remove(name);
+    symbols.music.remove(name);
+    symbols.sprites.remove(name);
+    symbols.assets.remove(name);
+    symbols.value_sets.remove(name);
+    symbols.object_axes.remove(name);
 }
 
 fn keyword_insert_text(keyword: &str) -> &str {
@@ -731,6 +769,79 @@ rules {
         let list = suggest_source_completions(source, cursor);
 
         assert!(list.items.iter().any(|item| item.label == "Player"));
+    }
+
+    #[test]
+    fn does_not_suggest_current_group_selector_token_as_object() {
+        let source = r#"
+title complete_group_objects
+puzzle board {
+objects {
+Player
+}
+group {
+Actors = Pl
+}
+}
+"#;
+        let cursor = source.find("Actors = Pl").unwrap() + "Actors = Pl".len();
+        let list = suggest_source_completions(source, cursor);
+
+        assert!(list.items.iter().any(|item| item.label == "Player"));
+        assert!(
+            !list
+                .items
+                .iter()
+                .any(|item| { item.kind == CompletionKind::Object && item.label == "Pl" })
+        );
+    }
+
+    #[test]
+    fn does_not_suggest_current_object_definition_token() {
+        let source = r#"
+title complete_object_definitions
+puzzle board {
+objects {
+Player
+Pl
+}
+}
+"#;
+        let cursor = source.rfind("Pl").unwrap() + "Pl".len();
+        let list = suggest_source_completions(source, cursor);
+
+        assert!(list.items.iter().any(|item| item.label == "Player"));
+        assert!(
+            !list
+                .items
+                .iter()
+                .any(|item| { item.kind == CompletionKind::Object && item.label == "Pl" })
+        );
+    }
+
+    #[test]
+    fn does_not_suggest_current_layer_definition_token() {
+        let source = r#"
+title complete_layer_definitions
+puzzle board {
+objects {
+Player
+}
+layers {
+Pl
+}
+}
+"#;
+        let cursor = source.rfind("Pl").unwrap() + "Pl".len();
+        let list = suggest_source_completions(source, cursor);
+
+        assert!(list.items.iter().any(|item| item.label == "Player"));
+        assert!(
+            !list
+                .items
+                .iter()
+                .any(|item| { item.kind == CompletionKind::Object && item.label == "Pl" })
+        );
     }
 
     #[test]
@@ -894,7 +1005,7 @@ title complete_level_flow_effects
 scene title {
 layout {
 button "Play" -> st
-button "Continue" -> co
+button "New Game" -> go
 }
 }
 "#;
@@ -907,13 +1018,105 @@ button "Continue" -> co
                 .any(|item| item.label == "start" && item.kind == CompletionKind::Effect)
         );
 
-        let continue_cursor = source.find("-> co").unwrap() + "-> co".len();
-        let continue_list = suggest_source_completions(source, continue_cursor);
+        let goto_cursor = source.find("-> go").unwrap() + "-> go".len();
+        let goto_list = suggest_source_completions(source, goto_cursor);
         assert!(
-            continue_list
+            goto_list
                 .items
                 .iter()
-                .any(|item| item.label == "continue" && item.kind == CompletionKind::Effect)
+                .any(|item| item.label == "goto" && item.kind == CompletionKind::Effect)
+        );
+    }
+
+    #[test]
+    fn line_head_suggests_scope_words_not_every_symbol() {
+        let source = r#"
+title complete_line_head
+puzzle board {
+objects {
+Player
+}
+rules {
+
+}
+}
+"#;
+        let cursor = source.find("\n\n}").unwrap() + 1;
+        let list = suggest_source_completions(source, cursor);
+
+        assert!(
+            list.items
+                .iter()
+                .any(|item| item.label == "if" && item.kind == CompletionKind::Keyword)
+        );
+        assert!(
+            !list
+                .items
+                .iter()
+                .any(|item| item.label == "Player" && item.kind == CompletionKind::Object)
+        );
+    }
+
+    #[test]
+    fn arrow_position_suggests_effect_words_only() {
+        let source = r#"
+title complete_arrow_position
+puzzle board {
+objects {
+Player
+}
+rules {
+[ Player ] -> 
+}
+}
+"#;
+        let cursor = source.find("-> ").unwrap() + "-> ".len();
+        let list = suggest_source_completions(source, cursor);
+
+        assert!(
+            list.items
+                .iter()
+                .any(|item| item.label == "next_level" && item.kind == CompletionKind::Effect)
+        );
+        assert!(
+            !list
+                .items
+                .iter()
+                .any(|item| item.label == "Player" && item.kind == CompletionKind::Object)
+        );
+    }
+
+    #[test]
+    fn scene_for_source_suggestions_are_scene_owned() {
+        let source = r#"
+title complete_scene_for_source
+scene menu {
+state {
+items = 0
+}
+layout {
+for item in 
+}
+}
+"#;
+        let cursor = source.find("in ").unwrap() + "in ".len();
+        let list = suggest_source_completions(source, cursor);
+
+        assert!(
+            list.items
+                .iter()
+                .any(|item| item.label == "levels" && item.kind == CompletionKind::Keyword)
+        );
+        assert!(
+            list.items
+                .iter()
+                .any(|item| item.label == "items" && item.kind == CompletionKind::State)
+        );
+        assert!(
+            !list
+                .items
+                .iter()
+                .any(|item| item.label == "directions" && item.kind == CompletionKind::ValueSet)
         );
     }
 
@@ -1002,7 +1205,7 @@ rules {
 title complete_contextual_options
 sounds {
 sfx click se
-music bgm to
+music bgm he
 }
 animation {
 tween du
@@ -1030,13 +1233,13 @@ show_
                 .any(|item| item.label == "tone" && item.kind == CompletionKind::Setting)
         );
 
-        let music_cursor = source.find("music bgm to").unwrap() + "music bgm to".len();
+        let music_cursor = source.find("music bgm he").unwrap() + "music bgm he".len();
         let music_list = suggest_source_completions(source, music_cursor);
         assert!(
             music_list
                 .items
                 .iter()
-                .any(|item| item.label == "tone" && item.kind == CompletionKind::Setting)
+                .any(|item| item.label == "height" && item.kind == CompletionKind::Setting)
         );
 
         let tween_cursor = source.find("tween du").unwrap() + "tween du".len();

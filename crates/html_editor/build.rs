@@ -3,6 +3,33 @@ use std::{env, fs, path::PathBuf};
 fn main() {
     println!("cargo:rerun-if-changed=static/editor.html");
     println!("cargo:rerun-if-changed=docs/editor.md");
+    println!("cargo:rerun-if-changed=docs/metadata.md");
+    println!("cargo:rerun-if-changed=docs/puzzle-block.md");
+    println!("cargo:rerun-if-changed=docs/layers.md");
+    println!("cargo:rerun-if-changed=docs/groups.md");
+    println!("cargo:rerun-if-changed=docs/tags.md");
+    println!("cargo:rerun-if-changed=docs/legend.md");
+    println!("cargo:rerun-if-changed=docs/levels.md");
+    println!("cargo:rerun-if-changed=docs/level-local-legend.md");
+    println!("cargo:rerun-if-changed=docs/messages.md");
+    println!("cargo:rerun-if-changed=docs/rewrite-rules.md");
+    println!("cargo:rerun-if-changed=docs/input-rules.md");
+    println!("cargo:rerun-if-changed=docs/movement.md");
+    println!("cargo:rerun-if-changed=docs/guards.md");
+    println!("cargo:rerun-if-changed=docs/fix.md");
+    println!("cargo:rerun-if-changed=docs/variables.md");
+    println!("cargo:rerun-if-changed=docs/scratch.md");
+    println!("cargo:rerun-if-changed=docs/conditions.md");
+    println!("cargo:rerun-if-changed=docs/win-conditions.md");
+    println!("cargo:rerun-if-changed=docs/scenes.md");
+    println!("cargo:rerun-if-changed=docs/scene-layout.md");
+    println!("cargo:rerun-if-changed=docs/semantic-inputs.md");
+    println!("cargo:rerun-if-changed=docs/menus.md");
+    println!("cargo:rerun-if-changed=docs/lifecycle.md");
+    println!("cargo:rerun-if-changed=docs/sprites.md");
+    println!("cargo:rerun-if-changed=docs/display.md");
+    println!("cargo:rerun-if-changed=docs/theme.md");
+    println!("cargo:rerun-if-changed=docs/sounds.md");
     println!("cargo:rerun-if-changed=static/editor_boot.js");
     println!("cargo:rerun-if-changed=static/editor_dom.js");
     println!("cargo:rerun-if-changed=static/editor_workspace.js");
@@ -19,6 +46,8 @@ fn main() {
     println!("cargo:rerun-if-changed=static/wasm/puzzle_wasm_bg.wasm");
     println!("cargo:rerun-if-changed=../html_play/static/wasm_game/puzzle_wasm_game.js");
     println!("cargo:rerun-if-changed=../html_play/static/wasm_game/puzzle_wasm_game_bg.wasm");
+    println!("cargo:rerun-if-changed=../wasm_core/static/puzzle_core_wasm.js");
+    println!("cargo:rerun-if-changed=../wasm_core/static/puzzle_core_wasm_bg.wasm");
 
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
     let editor_js =

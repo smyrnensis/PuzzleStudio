@@ -50,9 +50,10 @@ diagnostics are interpreted as 3D.
 absent. Blank lines in normal 2D `LEVELS` remain level separators and must not
 be reinterpreted as 3D slice separators.
 
-`LEVELS3` is not an accepted author-facing section. Internal names such as
-`levels3` are acceptable as implementation transport names only. Docs, examples,
-and parser entry points should use `three_dimensions` plus `LEVELS`.
+No separate 3D level section is accepted as an author-facing section. Internal
+names such as `levels3` are acceptable as implementation transport names only.
+Docs, examples, and parser entry points must use `three_dimensions` plus
+`LEVELS`.
 
 Existing 2D games must continue to compile and play through the existing 2D
 path.
@@ -197,8 +198,5 @@ belong to the same shared contract as 2D.
 
 ## Reference Example
 
-The current fixture is:
-
-- `examples/sokoban3d.txt`
-
-It is a target behavior fixture, not confirmed playable PS Next syntax yet.
+There is intentionally no draft 3D Sokoban fixture in this repository. Add new
+examples only in canonical `three_dimensions` plus `LEVELS` syntax.

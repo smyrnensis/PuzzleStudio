@@ -644,7 +644,8 @@ fn sounds_value(loaded: &LoadedGame) -> Value {
             json!({
                 "name": music.name,
                 "seed": music.seed,
-                "tone": music.tone,
+                "height": music.height,
+                "bars": music.bars,
                 "bpm": music.bpm,
                 "volume": music.volume,
             })
@@ -1356,11 +1357,11 @@ mod tests {
 
     #[test]
     fn standalone_session_bridge_supports_single_puzzle3_document() {
-        let source = include_str!("../../puzzle3d_model/games/sokoban_literally_in_3d.puzzle");
+        let source = include_str!("../../../games/spec_3d.puzzle");
         let mut bridge =
             StandaloneSessionBridge::from_source(source, "games/spec_3d.puzzle").unwrap();
         let snapshot: Value = serde_json::from_str(&bridge.snapshot_json()).unwrap();
         assert_eq!(snapshot["currentScene"], json!("title"));
-        assert_eq!(snapshot["game"]["title"], json!("Microban Basic 3D"));
+        assert_eq!(snapshot["game"]["title"], json!("Microban 3D"));
     }
 }

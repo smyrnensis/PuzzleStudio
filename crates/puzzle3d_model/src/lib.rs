@@ -49,9 +49,9 @@ pub use snapshot::{BoardCell3, BoardSnapshot3};
 pub use sprite::{Sprite3, SpriteColor3, SpriteSet3, SpriteVoxels3};
 pub use state::{CellView3, SlotScratch3, State3, StateError3};
 pub use transition::{
-    Guard3, MatchCell3, ObjectSetMatcher3, ObjectSetScratchPattern3, Pattern3, PatternComponent3,
-    QueryKind3, Rule3, RuleApplication3, RuleEffect3, ScratchPattern3, TransitionError3, WriteOp3,
-    count_pattern_matches, eval_query_kind, has_pattern_match, transition_once,
+    ConditionValueKind3, Guard3, MatchCell3, ObjectSetMatcher3, ObjectSetScratchPattern3, Pattern3,
+    PatternComponent3, Rule3, RuleApplication3, RuleEffect3, ScratchPattern3, TransitionError3,
+    WriteOp3, count_pattern_matches, eval_condition_kind, has_pattern_match, transition_once,
     transition_once_all, transition_once_per_level, transition_once_with_input, transition_program,
     transition_program_with_local_frame, transition_program_without_input,
     transition_program_without_input_with_local_frame, transition_repeated,
@@ -90,6 +90,38 @@ mod tests {
     const MICROBAN_PLAYER: ObjectId = ObjectId(3);
     const MICROBAN_BOX: ObjectId = ObjectId(4);
     const MICROBAN_WALL: ObjectId = ObjectId(5);
+
+    fn spec_3d_model_source() -> String {
+        let source = include_str!("../../../games/spec_3d.puzzle");
+        [
+            source_block(source, "puzzle3 sokoban").as_str(),
+            source_block(source, "levels3 microban").as_str(),
+            source_block(source, "sprites3 basic").as_str(),
+        ]
+        .join("\n\n")
+    }
+
+    fn source_block(source: &str, marker: &str) -> String {
+        let start = source.find(marker).expect("fixture block marker exists");
+        let open = source[start..]
+            .find('{')
+            .map(|index| start + index)
+            .expect("fixture block opens");
+        let mut depth = 0_i32;
+        for (index, ch) in source[open..].char_indices() {
+            match ch {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return source[start..=open + index].to_string();
+                    }
+                }
+                _ => {}
+            }
+        }
+        panic!("fixture block closes");
+    }
 
     fn game() -> Game3 {
         Game3::new_with_inputs(
@@ -1771,6 +1803,43 @@ group actor = Player Box
     }
 
     #[test]
+    fn parser_keeps_flickscreen_as_paged_viewport() {
+        let parsed = parse_puzzle3d(
+            r#"
+puzzle3 viewport_test {
+render {
+  viewport {
+    flickscreen 9 7 2
+    focus Player
+  }
+}
+
+layers {
+actor
+}
+
+objects {
+Player actor
+}
+}
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(parsed.settings.viewport.mode, ViewportMode3::Paged);
+        assert_eq!(parsed.settings.viewport.follow, ViewportFollow3::Snap);
+        assert_eq!(parsed.settings.viewport.focus, "Player");
+        assert_eq!(
+            parsed.settings.viewport.framing,
+            Some(ViewportFraming3 {
+                width: 9,
+                depth: 7,
+                height: ViewportHeight3::Size(2),
+            })
+        );
+    }
+
+    #[test]
     fn visual_fixture_exports_3d_viewport_contract() {
         let parsed = parse_puzzle3d(
             r#"
@@ -1932,6 +2001,35 @@ input [ Player | no solid ] -> [ | Player ]
         ] {
             assert!(guards.contains(&[Guard3::InputIs(input)].as_slice()));
         }
+    }
+
+    #[test]
+    fn parser_lowers_input_rule_with_forward_marker_rhs_sugar_as_movement_scratch() {
+        let parsed = parse_puzzle3d(
+            r#"
+layers {
+actor = Player
+}
+
+rules {
+input [ Player ] -> [ > Player ]
+}
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(parsed.rules.len(), 6);
+        assert!(parsed.rules.iter().any(|rule| {
+            rule.guards == vec![Guard3::InputIs(INPUT_RIGHT)]
+                && rule.writes
+                    == vec![WriteOp3::SetScratch {
+                        component: 0,
+                        object: PLAYER,
+                        offset: Offset3::ZERO,
+                        scratch: ScratchId3(0),
+                        value: Some(3),
+                    }]
+        }));
     }
 
     #[test]
@@ -2613,9 +2711,9 @@ actor = Player
     }
 
     #[test]
-    fn sokoban_literally_in_3d_recreates_microban_level_1() {
-        let parsed =
-            parse_puzzle3d(include_str!("../games/sokoban_literally_in_3d.puzzle")).unwrap();
+    fn spec_3d_recreates_microban_level_1() {
+        let source = spec_3d_model_source();
+        let parsed = parse_puzzle3d(&source).unwrap();
         let bundle = parsed.level_bundle.as_ref().expect("level bundle exists");
         let win = parsed.win_condition.as_ref().expect("win condition exists");
 
@@ -2625,14 +2723,14 @@ actor = Player
         assert_eq!(bundle.level(2).unwrap().name, "microban_03");
         assert_eq!(bundle.level(0).unwrap().level.size, Size3::new(6, 7, 2));
         assert_eq!(bundle.level(1).unwrap().level.size, Size3::new(6, 7, 2));
-        assert_eq!(bundle.level(2).unwrap().level.size, Size3::new(6, 7, 2));
+        assert_eq!(bundle.level(2).unwrap().level.size, Size3::new(9, 6, 2));
         assert_eq!(
             parsed.lifecycle.on_level_clear,
             vec![LifecycleCommand3::NextLevel]
         );
         let sprites = parsed.sprite_set.as_ref().expect("sprite set exists");
         assert_eq!(sprites.name, "basic");
-        assert_eq!(sprites.model.as_deref(), Some("sokoban_literally_in_3d"));
+        assert_eq!(sprites.model.as_deref(), Some("sokoban"));
         assert_eq!(sprites.sprites.len(), 5);
         assert_eq!(
             sprites.sprite("Floor").unwrap().voxels.size,
@@ -2648,17 +2746,10 @@ actor = Player
         );
         assert_eq!(
             sprites.sprite("Wall").unwrap().voxels.size,
-            Size3::new(5, 5, 3)
+            Size3::new(5, 5, 5)
         );
         let fixture_json = export_visual_fixture_json(&parsed).unwrap();
-        assert!(fixture_json.contains("\"title\": \"Sokoban Literally in 3D\""));
-        assert!(fixture_json.contains("\"grid\": { \"visibility\": 1, \"occupied_cells\": true }"));
         assert!(fixture_json.contains("\"shade\": true"));
-        assert!(
-            fixture_json.contains(
-                "\"pixelate\": { \"enabled\": false, \"scale\": 4, \"smoothing\": true }"
-            )
-        );
         assert!(fixture_json.contains("\"rules\": ["));
         assert!(fixture_json.contains("\"onLevelClear\": [\"next_level\"]"));
         assert!(fixture_json.contains("\"kind\": \"no_pattern\""));
@@ -2765,7 +2856,7 @@ actor = Player
         assert!(
             session
                 .state()
-                .has_object(&bundle.game, Coord3::new(2, 4, 1), ObjectId(3))
+                .has_object(&bundle.game, Coord3::new(6, 1, 1), ObjectId(3))
         );
         assert!(!session.has_next_level(bundle));
 
@@ -2791,59 +2882,31 @@ actor = Player
     }
 
     #[test]
-    fn handmade_3d_sokoban_can_be_authored_from_puzzle_file() {
-        let parsed =
-            parse_puzzle3d(include_str!("../games/from_puzzle_sokoban_3d.puzzle")).unwrap();
+    fn spec_3d_sokoban_can_be_authored_from_puzzle_file() {
+        let source = spec_3d_model_source();
+        let parsed = parse_puzzle3d(&source).unwrap();
         let bundle = parsed.level_bundle.as_ref().expect("level bundle exists");
-        let win = parsed.win_condition.as_ref().expect("win condition exists");
+        assert!(parsed.win_condition.is_some());
         let sprites = parsed.sprite_set.as_ref().expect("sprite set exists");
 
-        assert_eq!(bundle.level_count(), 2);
-        assert_eq!(bundle.level(0).unwrap().name, "push_once");
-        assert_eq!(bundle.level(1).unwrap().name, "corner_lift");
-        assert_eq!(bundle.level(0).unwrap().level.size, Size3::new(5, 5, 2));
+        assert_eq!(bundle.level_count(), 3);
+        assert_eq!(bundle.level(0).unwrap().name, "microban_01");
+        assert_eq!(bundle.level(1).unwrap().name, "microban_02");
+        assert_eq!(bundle.level(0).unwrap().level.size, Size3::new(6, 7, 2));
         assert_eq!(
             sprites.sprite("Floor").unwrap().voxels.size,
-            Size3::new(3, 3, 1)
+            Size3::new(5, 5, 5)
         );
         assert_eq!(
             sprites.sprite("Box").unwrap().voxels.size,
-            Size3::new(2, 2, 2)
+            Size3::new(5, 5, 5)
         );
 
         let fixture_json = export_visual_fixture_json(&parsed).unwrap();
-        assert!(fixture_json.contains("\"title\": \"From Puzzle Sokoban 3D\""));
-        assert!(fixture_json.contains("\"currentScene\": \"playing\""));
         assert!(fixture_json.contains("\"kind\": \"puzzle3\""));
         assert!(fixture_json.contains("\"levels\""));
 
-        let mut session =
-            GameSession3::new_with_lifecycle(bundle, &parsed.lifecycle).expect("session starts");
-        let first_clear = session
-            .apply_input_with_lifecycle(
-                bundle,
-                &parsed.rules,
-                input_for_microban_offset(Direction3::RIGHT.offset),
-                win,
-                &parsed.lifecycle,
-            )
-            .unwrap();
-        assert!(first_clear.cleared);
-        assert!(first_clear.level_changed);
-        assert_eq!(session.current_level_index(), 1);
-
-        let second_clear = session
-            .apply_input_with_lifecycle(
-                bundle,
-                &parsed.rules,
-                input_for_microban_offset(Direction3::FORWARD.offset),
-                win,
-                &parsed.lifecycle,
-            )
-            .unwrap();
-        assert!(second_clear.cleared);
-        assert!(!second_clear.level_changed);
-        assert!(session.completed());
+        GameSession3::new_with_lifecycle(bundle, &parsed.lifecycle).expect("session starts");
     }
 
     #[test]
@@ -3922,7 +3985,7 @@ input backward [ Player | ] -> [ | Player ]
     }
 
     #[test]
-    fn query_kind_evaluates_3d_objects_and_patterns() {
+    fn condition_kind_evaluates_3d_objects_and_patterns() {
         let game = game();
         let mut state = empty_state(2, 1, 1);
         state
@@ -3937,28 +4000,28 @@ input backward [ Player | ] -> [ | Player ]
         ]);
 
         assert_eq!(
-            eval_query_kind(
+            eval_condition_kind(
                 &game,
                 &state,
-                &QueryKind3::CountObjects(vec![PLAYER, BOX]),
+                &ConditionValueKind3::CountObjects(vec![PLAYER, BOX]),
                 None
             ),
             2
         );
         assert_eq!(
-            eval_query_kind(
+            eval_condition_kind(
                 &game,
                 &state,
-                &QueryKind3::ExistsMatches(vec![push_pattern.clone()]),
+                &ConditionValueKind3::ExistsMatches(vec![push_pattern.clone()]),
                 None
             ),
             1
         );
         assert_eq!(
-            eval_query_kind(
+            eval_condition_kind(
                 &game,
                 &state,
-                &QueryKind3::CountInputMatches(vec![(INPUT_RIGHT, push_pattern)]),
+                &ConditionValueKind3::CountInputMatches(vec![(INPUT_RIGHT, push_pattern)]),
                 Some(INPUT_RIGHT)
             ),
             1

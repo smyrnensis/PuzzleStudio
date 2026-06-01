@@ -1,7 +1,7 @@
 use puzzle_core::{
     ComparisonOp, CompiledGame, Effect, GapTerm, GlobalId, GlobalUpdateOp, Guard, InputId, LayerId,
     LocalFrame, LocalFrameExtent, MatchCell, ObjectDef, ObjectId, ObjectSetMatcher,
-    ObjectSetScratchPattern, Offset, Pattern, PatternComponent, QueryDef, QueryId, QueryKind, Rule,
+    ObjectSetScratchPattern, Offset, Pattern, PatternComponent, ConditionDef, ConditionId, ConditionValueKind, Rule,
     RuleApplication, RuleCondition, RuleId, RuleStep, ScratchId, ScratchPattern, ScratchValueMatch,
     State, TransitionCommand, WriteOp,
 };
@@ -170,7 +170,7 @@ fn decode_compiled_play(value: &Value) -> Result<CompiledEngine, String> {
         .collect::<Result<Vec<_>, _>>()?;
     let queries = array_at(data, 2, "transition queries")?
         .iter()
-        .map(decode_compact_query)
+        .map(decode_compact_condition)
         .collect::<Result<Vec<_>, _>>()?;
     let visual_objects = array_at(data, 3, "transition visual objects")?
         .iter()
@@ -178,7 +178,7 @@ fn decode_compiled_play(value: &Value) -> Result<CompiledEngine, String> {
         .collect::<Result<Vec<_>, String>>()?;
     let programs = array_at(data, 4, "transition programs")?;
     let program = decode_compact_program(value_at(programs, 0, "main program")?)?;
-    let game = CompiledGame::new_with_scratch_queries_program_roles(
+    let game = CompiledGame::new_with_scratch_condition_defs_program_roles(
         layer_count,
         objects,
         Vec::new(),
@@ -231,11 +231,11 @@ fn decode_compact_object(value: &Value) -> Result<ObjectDef, String> {
     })
 }
 
-fn decode_compact_query(value: &Value) -> Result<QueryDef, String> {
-    let items = value_array(value, "compact query")?;
-    Ok(QueryDef {
-        id: QueryId(u16_at(items, 0, "query id")?),
-        kind: decode_compact_query_kind(value_at(items, 1, "query kind")?)?,
+fn decode_compact_condition(value: &Value) -> Result<ConditionDef, String> {
+    let items = value_array(value, "compact condition")?;
+    Ok(ConditionDef {
+        id: ConditionId(u16_at(items, 0, "condition id")?),
+        kind: decode_compact_condition_value_kind(value_at(items, 1, "condition kind")?)?,
     })
 }
 
@@ -342,55 +342,55 @@ fn decode_compact_guard(value: &Value) -> Result<Guard, String> {
             op: decode_compact_comparison(u16_at(items, 2, "comparison")?)?,
             value: i64_at(items, 3, "value")?,
         }),
-        2 => Ok(Guard::QueryCompare {
-            query: QueryId(u16_at(items, 1, "query")?),
+        2 => Ok(Guard::ConditionCompare {
+            condition: ConditionId(u16_at(items, 1, "condition")?),
             op: decode_compact_comparison(u16_at(items, 2, "comparison")?)?,
             value: i64_at(items, 3, "value")?,
         }),
-        3 => Ok(Guard::QueryNonZero(QueryId(u16_at(items, 1, "query")?))),
-        4 => Ok(Guard::QueryValueCompare {
-            kind: decode_compact_query_kind(value_at(items, 1, "query kind")?)?,
+        3 => Ok(Guard::ConditionNonZero(ConditionId(u16_at(items, 1, "condition")?))),
+        4 => Ok(Guard::InlineConditionCompare {
+            kind: decode_compact_condition_value_kind(value_at(items, 1, "condition kind")?)?,
             op: decode_compact_comparison(u16_at(items, 2, "comparison")?)?,
             value: i64_at(items, 3, "value")?,
         }),
-        5 => Ok(Guard::QueryValueNonZero(decode_compact_query_kind(
-            value_at(items, 1, "query kind")?,
+        5 => Ok(Guard::InlineConditionNonZero(decode_compact_condition_value_kind(
+            value_at(items, 1, "condition kind")?,
         )?)),
         tag => Err(format!("unknown compact guard tag: {tag}")),
     }
 }
 
-fn decode_compact_query_kind(value: &Value) -> Result<QueryKind, String> {
-    let items = value_array(value, "compact query kind")?;
-    match tag_at(items, 0, "query kind tag")? {
-        0 => Ok(QueryKind::CountObjects(decode_compact_object_ids(
+fn decode_compact_condition_value_kind(value: &Value) -> Result<ConditionValueKind, String> {
+    let items = value_array(value, "compact condition kind")?;
+    match tag_at(items, 0, "condition kind tag")? {
+        0 => Ok(ConditionValueKind::CountObjects(decode_compact_object_ids(
             value_at(items, 1, "objects")?,
         )?)),
-        1 => Ok(QueryKind::ExistsObjects(decode_compact_object_ids(
+        1 => Ok(ConditionValueKind::ExistsObjects(decode_compact_object_ids(
             value_at(items, 1, "objects")?,
         )?)),
-        2 => Ok(QueryKind::NoneObjects(decode_compact_object_ids(
+        2 => Ok(ConditionValueKind::NoneObjects(decode_compact_object_ids(
             value_at(items, 1, "objects")?,
         )?)),
-        3 => Ok(QueryKind::CountMatches(decode_compact_patterns(value_at(
+        3 => Ok(ConditionValueKind::CountMatches(decode_compact_patterns(value_at(
             items, 1, "patterns",
         )?)?)),
-        4 => Ok(QueryKind::ExistsMatches(decode_compact_patterns(
+        4 => Ok(ConditionValueKind::ExistsMatches(decode_compact_patterns(
             value_at(items, 1, "patterns")?,
         )?)),
-        5 => Ok(QueryKind::NoneMatches(decode_compact_patterns(value_at(
+        5 => Ok(ConditionValueKind::NoneMatches(decode_compact_patterns(value_at(
             items, 1, "patterns",
         )?)?)),
-        6 => Ok(QueryKind::CountInputMatches(decode_compact_input_patterns(
+        6 => Ok(ConditionValueKind::CountInputMatches(decode_compact_input_patterns(
             value_at(items, 1, "input patterns")?,
         )?)),
-        7 => Ok(QueryKind::ExistsInputMatches(
+        7 => Ok(ConditionValueKind::ExistsInputMatches(
             decode_compact_input_patterns(value_at(items, 1, "input patterns")?)?,
         )),
-        8 => Ok(QueryKind::NoneInputMatches(decode_compact_input_patterns(
+        8 => Ok(ConditionValueKind::NoneInputMatches(decode_compact_input_patterns(
             value_at(items, 1, "input patterns")?,
         )?)),
-        tag => Err(format!("unknown compact query kind tag: {tag}")),
+        tag => Err(format!("unknown compact condition kind tag: {tag}")),
     }
 }
 

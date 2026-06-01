@@ -20,7 +20,14 @@ if (!inlineComponentMount) {
 }
 const puzzle3Frame = ensurePuzzle3ComponentFrame();
 const canvas = puzzle3Frame.querySelector("#view");
-const ctx = canvas.getContext("2d", { alpha: true });
+const puzzle3RendererMode = resolvePuzzle3RendererMode(
+  controllerOptions.renderer
+    || controllerOptions.rendererMode
+    || new URLSearchParams(window.location.search).get("puzzle3Renderer")
+    || new URLSearchParams(window.location.search).get("renderer"),
+);
+const ctx = puzzle3RendererMode === "three" ? null : canvas.getContext("2d", { alpha: true });
+const PUZZLE3_RENDERER_CONTRACT_VERSION = 1;
 const PUZZLE3_APP_CAMERA_MIN_PITCH_DEGREES = -90;
 const PUZZLE3_APP_CAMERA_MAX_PITCH_DEGREES = 90;
 
@@ -120,6 +127,8 @@ let mountedPuzzle3Component = null;
 let pendingResizeFrame = 0;
 let pendingSceneLayoutRender = false;
 let startupUrlCommandsApplied = false;
+let puzzle3ThreeRenderer = null;
+let puzzle3ThreeViewPayload = null;
 const viewListeners = new Set();
 const stateListeners = new Set();
 const puzzle3Component = createPuzzle3Component();
@@ -224,6 +233,15 @@ function normalizeThemeName(name) {
     .replace(/^theme-/, "")
     .replace(/[^a-zA-Z0-9_-]/g, "")
     || "clean";
+}
+
+function resolvePuzzle3RendererMode(value) {
+  return normalizePuzzle3RendererMode(value);
+}
+
+function normalizePuzzle3RendererMode(value) {
+  const text = String(value || "").trim().toLowerCase();
+  return text === "canvas" ? "canvas" : "three";
 }
 
 async function createPuzzle3Runtime(initialSnapshot) {
@@ -834,7 +852,9 @@ function resizeCanvas() {
   const changed = canvas.width !== nextWidth || canvas.height !== nextHeight;
   canvas.width = nextWidth;
   canvas.height = nextHeight;
-  ctx.setTransform(scale, 0, 0, scale, 0, 0);
+  if (ctx) {
+    ctx.setTransform(scale, 0, 0, scale, 0, 0);
+  }
   updateProjectionFit(frame);
   return changed;
 }
@@ -1028,11 +1048,15 @@ function projectScenePointUnit(position, size, camera) {
 }
 
 function cloneCamera(camera) {
-  return {
+  const next = {
     yawDegrees: Number(camera?.yawDegrees ?? fallbackSnapshot.camera.yawDegrees),
     pitchDegrees: Number(camera?.pitchDegrees ?? fallbackSnapshot.camera.pitchDegrees),
     zoom: Number(camera?.zoom ?? fallbackSnapshot.camera.zoom),
   };
+  if (String(camera?.projection || "").toLowerCase() === "orthographic") {
+    next.projection = "orthographic";
+  }
+  return next;
 }
 
 function resetCamera() {
@@ -1108,6 +1132,13 @@ function degreesToRadians(value) {
 }
 
 function draw(options = {}) {
+  if (puzzle3RendererMode === "three") {
+    drawWithThree();
+    return;
+  }
+  if (!ctx) {
+    return;
+  }
   const advanceViewport = options.advanceViewport !== false;
   syncCanvasSize();
   ensureProjectionFit();
@@ -1135,6 +1166,53 @@ function draw(options = {}) {
   notifyPuzzle3View(width, height);
 }
 
+function drawWithThree() {
+  syncCanvasSize();
+  const width = canvas.clientWidth;
+  const height = canvas.clientHeight;
+  const renderer = ensurePuzzle3ThreeRenderer();
+  if (!renderer) {
+    return;
+  }
+  const input = puzzle3RendererContractInput(width, height);
+  const result = renderer.render(input.snapshot, input.view);
+  puzzle3ThreeViewPayload = result?.view || null;
+  if (result?.rendered) {
+    view.viewportSnapNext = false;
+  }
+  if (result?.animating) {
+    scheduleViewportAnimation();
+  }
+  notifyPuzzle3View(width, height);
+}
+
+function puzzle3RendererContractInput(width, height) {
+  return {
+    version: PUZZLE3_RENDERER_CONTRACT_VERSION,
+    snapshot: cloneRuntimeSnapshot(snapshot || fallbackSnapshot),
+    view: {
+      width,
+      height,
+      editorView: puzzle3PreviewView(),
+      viewportSnapNext: view.viewportSnapNext,
+      background: "transparent",
+    },
+  };
+}
+
+function ensurePuzzle3ThreeRenderer() {
+  if (puzzle3ThreeRenderer) {
+    return puzzle3ThreeRenderer;
+  }
+  if (!window.Puzzle3ThreeRenderer) {
+    return null;
+  }
+  puzzle3ThreeRenderer = window.Puzzle3ThreeRenderer.create(canvas, {
+    onReady: () => draw(),
+  });
+  return puzzle3ThreeRenderer;
+}
+
 function resetViewportMotion() {
   view.viewportSnapNext = true;
 }
@@ -1157,7 +1235,7 @@ function smoothViewportActive() {
 function puzzle3RenderContext(width = canvas.clientWidth, height = canvas.clientHeight) {
   const frame = normalizeFrame({ width, height });
   const viewport = puzzle3ViewportSettings();
-  const focusCell = viewport?.mode === "centered" ? viewportFocusCell(viewport) : null;
+  const focusCell = viewportFocusMode(viewport) ? viewportFocusCell(viewport) : null;
   return {
     frame,
     viewport,
@@ -1279,7 +1357,7 @@ function smoothViewportMaxLag(target) {
 
 function viewportProjectionFitTarget(renderContext) {
   const viewport = renderContext?.viewport || null;
-  if (!viewport || viewport.mode !== "centered") {
+  if (!viewportFocusMode(viewport)) {
     return null;
   }
   const size = snapshot.size || fallbackSnapshot.size;
@@ -1363,7 +1441,11 @@ function viewportFocusCell(viewport) {
 
 function activeViewportFocusCell() {
   const viewport = puzzle3ViewportSettings();
-  return viewport?.mode === "centered" ? viewportFocusCell(viewport) : null;
+  return viewportFocusMode(viewport) ? viewportFocusCell(viewport) : null;
+}
+
+function viewportFocusMode(viewport) {
+  return viewport?.mode === "centered" || viewport?.mode === "paged";
 }
 
 function viewportObjectMatches(object, viewport, focusObjects) {
@@ -1392,11 +1474,11 @@ function viewportFramingProjectionBounds(size, camera, viewport, focusCell) {
 function viewportFramingRanges(size, viewport, focusCell) {
   const { width, depth, height } = normalizeModelSize(size);
   const position = focusCell.position || {};
-  const xRange = virtualCenteredCellRange(Number(position.x) || 0, viewport.framingBox.width);
-  const yRange = virtualCenteredCellRange(Number(position.y) || 0, viewport.framingBox.depth);
+  const xRange = viewportCellRange(Number(position.x) || 0, viewport.framingBox.width, viewport.mode);
+  const yRange = viewportCellRange(Number(position.y) || 0, viewport.framingBox.depth, viewport.mode);
   const zRange = viewport.framingBox.height === "full"
     ? { min: -0.5, max: height - 0.5 }
-    : virtualCenteredCellRange(Number(position.z) || 0, viewport.framingBox.height);
+    : viewportCellRange(Number(position.z) || 0, viewport.framingBox.height, viewport.mode);
   return { x: xRange, y: yRange, z: zRange };
 }
 
@@ -1455,6 +1537,21 @@ function virtualCenteredCellRange(center, span) {
     min: safeCenter - safeSpan / 2,
     max: safeCenter + safeSpan / 2,
   };
+}
+
+function virtualPagedCellRange(center, span) {
+  const safeSpan = Math.max(1, Number(span) || 1);
+  const min = Math.floor((Number(center) || 0) / safeSpan) * safeSpan - 0.5;
+  return {
+    min,
+    max: min + safeSpan,
+  };
+}
+
+function viewportCellRange(center, span, mode) {
+  return mode === "paged"
+    ? virtualPagedCellRange(center, span)
+    : virtualCenteredCellRange(center, span);
 }
 
 function projectedPointBounds(points) {
@@ -1615,6 +1712,12 @@ function notifyPuzzle3View(width, height) {
 }
 
 function puzzle3ViewPayload(width, height) {
+  if (puzzle3RendererMode === "three" && puzzle3ThreeViewPayload) {
+    return {
+      ...puzzle3ThreeViewPayload,
+      cellFootprints: projectedStageCellFootprints(snapshot.size || fallbackSnapshot.size),
+    };
+  }
   const size = snapshot.size || fallbackSnapshot.size;
   const normalizedSize = normalizeModelSize(size);
   const camera = snapshot.camera || fallbackSnapshot.camera;
@@ -2098,7 +2201,7 @@ function renderCellCandidates(renderContext = puzzle3RenderContext()) {
 
 function viewportRenderCullingEnabled(renderContext) {
   const viewport = renderContext?.viewport || null;
-  if (!viewport || viewport.mode !== "centered") {
+  if (!viewportFocusMode(viewport)) {
     return false;
   }
   return Boolean(renderContext?.focusCell);

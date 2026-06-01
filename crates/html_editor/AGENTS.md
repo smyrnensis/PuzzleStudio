@@ -5,25 +5,33 @@ highlighting integration, workspace behavior, and editor-owned layout.
 
 ## Generated Output
 
-Root `editor.html` is a generated artifact and must never be edited directly.
-Patch this crate's source owner, such as `src/` or `static/`, then regenerate the
-root export through the normal command when the checked-in artifact should follow
-the source.
+The web release surface is the GitHub Pages site under `docs/`, not a root
+single-file `editor.html`. Patch this crate's source owner, such as `src/` or
+`static/`, then regenerate the Pages site through `tools/generate_web_editor.sh`
+when the checked-in web release should follow the source.
 
-Before regenerating root `editor.html`, run:
+For local editor checks, prefer serving the editor:
 
 ```bash
-git status --short -- editor.html
+cargo run -p html-editor -- games/spec_2d.puzzle --serve
 ```
 
-This status check is for reporting and awareness. Do not hand-edit root
-`editor.html`; regenerate it from the source owner instead.
+`tools/generate_web_editor.sh <path> -o docs/index.html` writes the Pages HTML
+entry and copies the static JS, CSS, editor WASM, core runtime WASM, and game
+runtime WASM assets beside it. If Rust/WASM changes are meant to appear there,
+rebuild the generated WASM artifacts explicitly before generating the Pages site.
+Do not add a portable single-file HTML release path or a compatibility alias for
+the removed root artifact.
 
-When verifying generated `editor.html` in the Codex in-app browser, do not try
-to open it through `file://`. This environment's browser policy blocks local
+Use `tools/serve_web_editor.sh` to inspect the generated Pages site locally. On
+macOS, `tools/open_web_editor.command` is the double-click entry point. These
+serve `docs/` over local HTTP, matching the GitHub Pages asset-loading model.
+
+When verifying the generated Pages editor in the Codex in-app browser, do not
+try to open it through `file://`. This environment's browser policy blocks local
 file URLs even though the browser tool may describe `file://` as generally
-supported. Serve the repository or generated file over `http://127.0.0.1:<port>/`
-and open that URL instead.
+supported. Serve `docs/` or the repository over `http://127.0.0.1:<port>/` and
+open that URL instead.
 
 For visual feedback, prefer the shortest human-visible loop: open the served
 editor for the user or capture a screenshot of the relevant viewport. DOM-only

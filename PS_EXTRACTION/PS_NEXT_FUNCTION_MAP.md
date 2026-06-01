@@ -5,7 +5,7 @@ for the next 3D pass. It is based on the local checkout under
 `upstream/PuzzleScriptNext`.
 
 Current status: `three_dimensions` plus ordinary `LEVELS` now routes to the
-3D level transport. `LEVELS3` is not an accepted author-facing section. Runtime
+3D level transport. No separate 3D level section is accepted. Runtime
 playback still does not exist, but the compiler now has a boundary gate so
 unrouted 3D browser playback is refused explicitly instead of falling through
 as a missing 2D `LEVELS` section.
@@ -25,13 +25,13 @@ neighbor/indexing, spatial rule-frame expansion, and rendering.
 
 | Area | File | Current role | Status |
 | --- | --- | --- | --- |
-| 3D helper | `src/js/levels3d.js` | Parses current 3D level transport, validates slice shape, maps 3D coordinates to flat indices. | Keep and test; do not expose `LEVELS3` as syntax. |
+| 3D helper | `src/js/levels3d.js` | Parses current internal 3D level transport, validates slice shape, maps 3D coordinates to flat indices. | Keep and test; expose only `three_dimensions` plus `LEVELS` as syntax. |
 | Parser section | `src/js/parser.js` | Routes `three_dimensions` + ordinary `LEVELS` into `state.levels3`, treating blank lines as 3D level boundaries and standalone `;` as slice boundary. | Keep as the only author-facing 3D level route. |
 | Compiler lowering | `src/js/compiler.js` | `levels3ToArray` converts raw `state.levels3`; `level3FromParsedSource` lowers glyphs into a 3D level object. | Keep, then connect to runtime boundary. |
 | Runtime gate | `src/js/compiler.js` | `getRuntimeLevelGateMessage` distinguishes missing 2D levels from parsed but unrouted 3D browser playback. | Keep until upper-layer 3D routing replaces it. |
 | Engine shape experiment | `src/js/engine.js` | `Level` accepts optional `depth`/`is3d`, clones preserve 3D shape, and `deltaPositionIndex3` computes depth-aware flat offsets. | Do not treat this as the 3D runtime direction; prefer separate 3D runtime modules from here. |
-| Tests | `test/levels3d.test.js` | Covers parser storage, current 3D level validation, coordinate round trip, glyph lowering, background fill. | Extend with `three_dimensions` + `LEVELS` canonical cases before runtime changes. |
-| Dev note | `DEVELOPMENT.md` | May contain older `LEVELS3` extension notes. | User change already exists; update cautiously if needed. |
+| Tests | `test/levels3d.test.js` | Covers parser storage, current 3D level validation, coordinate round trip, glyph lowering, background fill. | Keep focused on `three_dimensions` + `LEVELS` canonical cases. |
+| Dev note | `DEVELOPMENT.md` | May contain older 3D extension notes. | User change already exists; update cautiously if needed. |
 
 ## Touch Next
 

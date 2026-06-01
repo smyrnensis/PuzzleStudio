@@ -1,14 +1,14 @@
-# Minimal Sokoban
-Start with one model, one level, and the two rules that make pushing work.
+# Start Here
+PuzzleStudio reads `.puzzle` files. Start with one `puzzle` block, then add the pieces you need: objects, level text, rules, and a win condition.
 
-## Copy this into a `.puzzle` file
+## Smallest Shape
 ```puzzle
-title "Minimal Sokoban"
-puzzle sokoban {
+puzzle my_game {
   layers {
     target = Goal
-    solid = Player Box Wall
+    solid = Player Wall
   }
+
   sprites {
     Goal {
       #ffd166
@@ -18,22 +18,6 @@ puzzle sokoban {
       .000.
       .....
     }
-    Wall {
-      #6c757d
-      00000
-      00000
-      00000
-      00000
-      00000
-    }
-    Box {
-      #b5651d #f4a261
-      00000
-      01110
-      01110
-      01110
-      00000
-    }
     Player {
       #2d6cdf
       .000.
@@ -42,37 +26,71 @@ puzzle sokoban {
       ..0..
       .0.0.
     }
+    Wall {
+      #6c757d
+      00000
+      00000
+      00000
+      00000
+      00000
+    }
   }
+
   win_conditions {
-    all Goal on Box
+    all Goal on Player
   }
+
   rules {
-    input directions [ Player ] -> [ Player{>} ]
-    [ Player{>} | Box ] -> [ Player{>} | Box{>} ]
+    input [ Player ] -> [ > Player ]
     move
   }
+
   levels {
     legend {
       . = empty
+      G = Goal
       # = Wall
       P = Player
-      B = Box
-      G = Goal
-      * = Goal Box
-      + = Goal Player
     }
+
     level start
     #####
-    #PBG#
+    #P.G#
     #####
-    message "WIN"
   }
 }
 ```
 
-## What matters first
-`layers` defines the objects and collision layers. `sprites` gives the visible objects a small 5x5 pixel shape. `legend` maps level characters to those objects.
+## Where To Go Next
+Use the pages on the left by what you are changing:
 
-The first rule marks the player with movement intent. The second rule passes that intent to a box. `move` commits valid movement and blocks walls or occupied solid cells.
+## File Shape
+Read Metadata and Puzzle Block.
 
-The level clears when every `Goal` has a `Box` on it, then shows `WIN`.
+## Board Structure
+Read Layers, Groups, Tags, Legend, Levels, Level Legend, and Messages.
+
+## Behavior
+Read Rewrite Rules, Input Rules, Movement, Guards, and Fix.
+
+## State And Checks
+Read Variables, Scratch, Conditions, and Win Conditions.
+
+## Screen Flow
+Read Scenes, Scene Layout, Inputs, Menus, and Lifecycle.
+
+## Presentation
+Read Sprites, Display, Theme, and Sounds.
+
+## First Editing Loop
+Change the level first, then the legend, then the rules. That keeps each edit visible:
+
+Add a character to the level.
+
+Map that character in `legend`.
+
+Give the object a sprite.
+
+Put it in a layer.
+
+Add rules only after it appears correctly.

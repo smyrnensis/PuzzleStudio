@@ -61,7 +61,7 @@ frame: {
 
 Consequences:
 
-- `LEVELS3` slices are stored as `z` planes.
+- 3D `LEVELS` slices are stored as `z` planes.
 - Rows inside a slice are `y`.
 - Columns inside a row are `x`.
 - `front` and `back` move across slices, not screen pixels.
@@ -79,7 +79,7 @@ The initial direction deltas are:
 | `up` | `[0, -1, 0]` |
 | `down` | `[0, 1, 0]` |
 
-This matches the current `LEVELS3` lowering helper direction experiment, but the
+This matches the current 3D level lowering helper direction convention, but the
 owner should be the 3D runtime module, not the 2D engine.
 
 ### Oriented Rule Frames
@@ -235,8 +235,10 @@ Cell occupancy and movement are separate concerns:
   `objectsMissing` bits may be set, each `anyObjectsPresent` mask must have at
   least one bit in the cell, all `movementsPresent` bits must be set, and no
   `movementsMissing` bits may be set.
-- Movement bitmap constants mirror the 2D ownership shape:
-  `movementBits = 8`, `movementMask = 0xff`, and
+- Movement bitmap constants preserve the 2D prefix:
+  `up=1`, `down=2`, `left=4`, `right=8`, and `action=16`. 3D appends only
+  `front=32` and `back=64`, so the default 3D shape is `movementBits = 7`,
+  `movementMask = 0x7f`, and
   `strideMov = ceil(layerCount * movementBits / 32)` unless the compiler
   supplies explicit values.
 - `layerMasks` and `objectLayers` belong in the board slot because movement
