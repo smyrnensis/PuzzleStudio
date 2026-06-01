@@ -9,6 +9,35 @@ time a design question comes up.
 
 ## Read File Notes
 
+- `UPSTREAM_COMPATIBILITY_AUDIT.md`: defines the current shared-helper admission
+  rule. Keep carrier-extraction helpers such as `rule_lowering.js` and
+  `cell_masks.js`; treat hook-driven semantic reimplementations such as
+  `turn_runtime.js`, `session_runtime.js`, `again_loop.js`, and possibly
+  `rule_application.js` as frozen until they either become true 2D-owner
+  projections or shrink away.
+- `upstream/PuzzleScriptNext/src/js/rule_lowering.js`: shared 2D/3D mask
+  lowering helper for `CellPattern` and `CellReplacement`. It consumes
+  compiler-prepared object/property masks and dimension hooks for movement bit
+  width/direction masks; it does not expand tags, mappings, or rule prefixes.
+- `upstream/PuzzleScriptNext/test/compiler_lowering_2d_parity.test.js`: added a
+  VM-based 2D compiler oracle that drives `expandRulesWithPrefixes`,
+  `expandRulesWithTags`, `expandRulesWithMultiDirectionObjects`,
+  `expandRulesWithMultipleDirections`, `convertObjectsAndDirections`, and final
+  2D/3D rule lowering on the same hand-built compiler state. 3D movement masks
+  are projected to the 2D prefix before comparison so only spatially appended
+  movement bits differ.
+- `upstream/PuzzleScriptNext/src/editor.html`: the `Puzzlescript Next 3D`
+  optgroup is the user-facing demo registration surface for 3D examples.
+- `upstream/PuzzleScriptNext/src/js/editor.js`: editor startup chooses the
+  default demo through `starterCodeFile`; query params, test storage, and saved
+  local drafts still take precedence over that fallback.
+- `upstream/PuzzleScriptNext/test/editor_3d_integration.test.js`: pins which
+  3D demos are exposed in the editor dropdown and verifies the 3D host scripts
+  remain on the normal compile path.
+- `upstream/PuzzleScriptNext/test/e2e3d.test.js`: carries source-level 3D
+  compiler/runtime smoke tests plus demo-fixture coverage; fixture coverage now
+  reads the Microban-derived 3D demo rather than the tiny ad hoc Sokoban demo.
+
 ## Current 3D Principle
 
 - 3D code must be 2D code with two extra spatial directions. 2D and 3D are
@@ -120,6 +149,9 @@ completion while a design interrupt touching 2D/3D semantic parity is unresolved
   promotes them into PS-style prelude metadata.
 - Parser routing now sends ordinary `LEVELS` through the 3D level transport when
   `three_dimensions` is enabled.
+- Compiler level finalization is shared for 2D and 3D level item commands.
+  `levelsToArray` and `lowerThreeDimensionLevels` differ only in how playable
+  grid payloads are lowered (`levelFromString` vs. 3D parsed level lowering).
 - `finalizeRulesFor3D(state)` must not mark ordinary 2D semantics as a 3D
   unsupported subset. It projects shared rule finalization into `state.rules3d`
   with dimension-specific spatial hooks only.
@@ -234,6 +266,10 @@ completion while a design interrupt touching 2D/3D semantic parity is unresolved
 - The parser stores this as `object.sprite3matrix[row][col][slice]`, while also
   preserving the first slice in `object.spritematrix` for existing 2D-owned
   sprite code paths.
+- `LEVELS` in `three_dimensions` preserves ordinary 2D level commands
+  (`message`, `level`, `section`, `goto`, `link`, `input`, `title`) as level
+  items. Only playable grid payloads are dimension-specific and use standalone
+  `;` as 3D slice separators.
 
 ### `upstream/PuzzleScriptNext/src/js/rule_frames3d.js`
 
@@ -345,6 +381,9 @@ completion while a design interrupt touching 2D/3D semantic parity is unresolved
   WebGL context checks. Page shells and editor/standalone compile callers should
   reach this through the shared compiler start path instead of carrying renderer
   dependency logic inline.
+- When opened through `file://`, `prepareCapabilities()` may load the vendored
+  classic Three.js fallback URL supplied by the page shell. This is still a host
+  capability fallback, not runtime semantics.
 - The bridge preserves the 2D `processInput(inputDirection, dontDoWin,
   dontModify, bak, coord)` entry shape. It forwards only dimension hooks:
   direction-index normalization and 2D browser `up` / `down` to 3D
@@ -461,12 +500,20 @@ completion while a design interrupt touching 2D/3D semantic parity is unresolved
 
 ### `upstream/PuzzleScriptNext/src/js/turn3d.js`
 
-- 3D turn runner added locally as a thin adapter over `src/js/turn_runtime.js`.
-- `turn_runtime.js` owns the shared turn order: seed input movement masks for
-  `playerMask`, apply normal rule groups, resolve movement with rigid retry /
-  rollback, apply late rule groups, validate `require_player_movement`, collect
-  SFX, collect command/session artifacts, evaluate win conditions, and report
-  board changes. `turn3d.js` supplies only 3D board/rule hooks.
+- 3D turn runner added locally as an adapter over `src/js/turn_runtime.js`, but
+  this is now classified as a semantic reimplementation risk, not the desired
+  final architecture.
+- Do not expand `turn_runtime.js` as a general shared runtime unless the
+  ordinary 2D path moves to it as the single owner. While 2D `engine.js`
+  continues to own `processInput` / `procInp`, treat `turn_runtime.js` as frozen
+  prototype debt: bug fixes must be checked against the 2D owner and parity
+  oracle, and new non-spatial semantics should not be added here.
+- `turn_runtime.js` currently mirrors the turn order: seed input movement masks
+  for `playerMask`, apply normal rule groups, resolve movement with rigid retry
+  / rollback, apply late rule groups, validate `require_player_movement`,
+  collect SFX, collect command/session artifacts, evaluate win conditions, and
+  report board changes. This mirroring is evidence to audit, not a reason to
+  duplicate more 2D behavior.
 - Input does not directly move player objects. It calls board `startMovement`,
   and board `resolveMovements` performs layer-based movement afterward.
 - Rule groups repeat until no rule changes the board, capped by an iteration
@@ -478,13 +525,12 @@ completion while a design interrupt touching 2D/3D semantic parity is unresolved
 - `...` ellipsis is supported by preserving the 2D wildcard tuple contract:
   matches carry origin plus one or two gap lengths, and later tuple rechecks use
   the concrete matched cells. 3D only extends the scan axis to x/y/z.
-- Rule group sequence control is shared: 2D `applyRules` and 3D `turn3d` both
-  use `RuleGroups.applyRuleSequence` for `startloop` / `endloop`, subroutine
-  boundaries, gosub jumps, and returns.
-- Rule application control is shared through `RuleApplication.buildRuleApplicationHooks`.
-  `turn3d` supplies only 3D match/replacement hooks and command metadata hooks;
-  tuple generation, random group application, later-tuple rechecks, command
-  queue timing, and rule/group looping belong to shared helpers.
+- Rule group sequence control currently uses `RuleGroups.applyRuleSequence` in
+  both 2D `applyRules` and 3D `turn3d`; this can remain only as a 2D-owner
+  projection pinned by parity tests.
+- `RuleApplication.buildRuleApplicationHooks` is on the freeze list unless it is
+  proven to be a direct 2D-owner projection. Do not add behavior there merely to
+  make the 3D rule runner look symmetrical with 2D.
 - Runtime metadata twiddling is not a 3D-specific unsupported feature. 3D
   command enqueue uses the shared `RuntimeMetadataTwiddling` helper, matching
   2D `handleQueuedCommand2D` for `set` / `default` / `wipe` behavior and then
