@@ -2211,17 +2211,33 @@ function escapeHtml(value) {
     .replaceAll('"', "&quot;");
 }
 
-function downloadHtml() {
+async function downloadHtml() {
   if (!latestHtml) {
     return;
   }
+  const filename = htmlDownloadFileName();
+  if (window.PuzzleStudioHost?.mode?.() === "tauri" && window.PuzzleStudioHost?.exportHtml) {
+    try {
+      const result = await window.PuzzleStudioHost.exportHtml({
+        html: latestHtml,
+        filename,
+      });
+      if (result?.canceled) {
+        setEditorStatus("Export canceled");
+        return;
+      }
+      if (result?.ok) {
+        setEditorStatus(`Exported ${fileName(result.path) || filename}`);
+        return;
+      }
+    } catch (error) {
+      console.error(error);
+      setEditorStatus(`Export failed: ${error.message || error}`, "is-error");
+      return;
+    }
+  }
   const blob = new Blob([latestHtml], { type: "text/html;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = htmlDownloadFileName();
-  link.click();
-  URL.revokeObjectURL(url);
+  downloadBlob(blob, filename);
 }
 
 function htmlDownloadFileName() {
@@ -2321,8 +2337,13 @@ function downloadBlob(blob, filename) {
   const link = document.createElement("a");
   link.href = url;
   link.download = filename;
+  link.style.display = "none";
+  document.body.appendChild(link);
   link.click();
-  URL.revokeObjectURL(url);
+  window.setTimeout(() => {
+    URL.revokeObjectURL(url);
+    link.remove();
+  }, 0);
 }
 
 function zipBlob(entries) {

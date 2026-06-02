@@ -24,6 +24,7 @@ pub enum SemanticKind {
     Group,
     Condition,
     Scene,
+    Theme,
     Asset,
     Setting,
     Number,
@@ -304,7 +305,7 @@ fn line_opens_completion_block(line: &crate::source::SourceContextLine) -> bool 
             [name] if matches!(
                 name.as_str(),
                 "sounds" | "assets" | "objects" | "tags" | "layers" | "collision_layers"
-                    | "group" | "scratch" | "keys" | "inputs" | "resources" | "legend"
+                    | "groups" | "scratch" | "keys" | "inputs" | "resources" | "legend"
                     | "levels" | "levels3" | "rules" | "render" | "camera" | "layout"
                     | "state" | "on_scene_start" | "level_menu"
             )
@@ -564,13 +565,19 @@ pub(crate) fn semantic_builtin_effect_commands() -> Vec<(&'static str, SemanticK
     commands
         .into_iter()
         .filter_map(|command| {
-            let kind = match rewrite_effect_command_syntax(command) {
-                Some(RewriteEffectCommandSyntax::Emission) => SemanticKind::Emission,
-                Some(RewriteEffectCommandSyntax::Effect) => SemanticKind::Effect,
-                None if scene_effect_command_syntax(command).is_some() || command == "restart" => {
-                    SemanticKind::Effect
+            let kind = if command == "sfx" {
+                SemanticKind::Effect
+            } else {
+                match rewrite_effect_command_syntax(command) {
+                    Some(RewriteEffectCommandSyntax::Emission) => SemanticKind::Emission,
+                    Some(RewriteEffectCommandSyntax::Effect) => SemanticKind::Effect,
+                    None if scene_effect_command_syntax(command).is_some()
+                        || command == "restart" =>
+                    {
+                        SemanticKind::Effect
+                    }
+                    None => return None,
                 }
-                None => return None,
             };
             Some((command, kind))
         })
@@ -759,6 +766,7 @@ const PUZZLE_COMPLETION_KEYWORDS: &[&str] = &[
     "const",
     "for",
     "group",
+    "groups",
     "if",
     "input",
     "inputs",
@@ -805,6 +813,7 @@ const RULE_HEAD_COMPLETION_KEYWORDS: &[&str] = &[
     "display",
     "for",
     "if",
+    "input",
     "once",
     "once_all",
     "once_per_level",
@@ -859,6 +868,7 @@ const COMPLETION_KEYWORDS: &[&str] = &[
     "for",
     "from",
     "group",
+    "groups",
     "homepage",
     "if",
     "import",
@@ -1027,6 +1037,9 @@ fn scan_authoring_semantic_line(
 
     scan_levels_header(tokens, ranges);
     scan_level_header(tokens, ranges);
+    scan_theme_header(tokens, ranges);
+    scan_condition_reference_tokens(tokens, ranges);
+    scan_state_declaration_line(tokens, ranges);
     scan_standard_move_call_line(scope, tokens, ranges);
     scan_layer_assignment_line(scope, tokens, ranges);
     scan_render_setting_line(scope, tokens, ranges);
@@ -1040,6 +1053,54 @@ fn scan_authoring_semantic_line(
         };
         add_token_range(ranges, name, kind);
     }
+}
+
+fn scan_theme_header(tokens: &[LineToken<'_>], ranges: &mut Vec<SemanticToken>) {
+    if !tokens.first().is_some_and(|token| token.text == "theme") {
+        return;
+    }
+    let tokens = trim_trailing_block_markers(tokens);
+    if let Some(name) = tokens.get(1).copied() {
+        add_token_range(ranges, name, SemanticKind::Theme);
+    }
+}
+
+fn scan_state_declaration_line(tokens: &[LineToken<'_>], ranges: &mut Vec<SemanticToken>) {
+    let name = match tokens {
+        [keyword, name, ..] if matches!(keyword.text, "var" | "const") => Some(*name),
+        [persistent, keyword, name, ..]
+            if persistent.text == "persistent" && matches!(keyword.text, "var" | "const") =>
+        {
+            Some(*name)
+        }
+        [persistent, name, ..] if persistent.text == "persistent" => Some(*name),
+        _ => None,
+    };
+    if let Some(name) = name {
+        add_token_range(ranges, name, SemanticKind::State);
+    }
+}
+
+fn scan_condition_reference_tokens(tokens: &[LineToken<'_>], ranges: &mut Vec<SemanticToken>) {
+    for token in tokens {
+        let mut offset = 0usize;
+        for part in token.text.split('.') {
+            if is_builtin_condition_name(part) {
+                add_token_subrange(
+                    ranges,
+                    *token,
+                    offset,
+                    offset + part.len(),
+                    SemanticKind::Condition,
+                );
+            }
+            offset += part.len() + 1;
+        }
+    }
+}
+
+fn is_builtin_condition_name(value: &str) -> bool {
+    matches!(value, "win_conditions" | "lose_conditions")
 }
 
 fn scan_standard_move_call_line(
@@ -1066,6 +1127,19 @@ fn scan_layer_assignment_line(
         return;
     }
     let Some(separator) = tokens.iter().position(|token| token.text == "=") else {
+        let selector_start = usize::from(tokens.first().is_some_and(|token| token.text == "each"));
+        if selector_start == 1 {
+            add_token_range(ranges, tokens[0], SemanticKind::Keyword);
+        }
+        if tokens
+            .first()
+            .is_some_and(|token| matches!(token.text, "for" | "}"))
+        {
+            return;
+        }
+        for object in &tokens[selector_start..] {
+            add_selector_object_token(ranges, *object);
+        }
         return;
     };
     if separator > 0 {
@@ -1693,7 +1767,7 @@ win -> sfx clear
         assert!(tokens.iter().any(|token| {
             token.start == scene_sfx_start
                 && token.end == scene_sfx_start + "sfx".len()
-                && token.kind == SemanticKind::Emission
+                && token.kind == SemanticKind::Effect
         }));
     }
 
@@ -1717,7 +1791,7 @@ set score = 1
         assert!(tokens.iter().any(|token| {
             token.start == sfx_start
                 && token.end == sfx_start + "sfx".len()
-                && token.kind == SemanticKind::Emission
+                && token.kind == SemanticKind::Effect
         }));
         assert!(tokens.iter().any(|token| {
             token.start == clear_start
@@ -1757,6 +1831,87 @@ move
             token.start == move_start
                 && token.end == move_start + "move".len()
                 && token.kind == SemanticKind::Effect
+        }));
+    }
+
+    #[test]
+    fn classifies_anonymous_layer_entries_as_objects() {
+        let source = r#"
+title anonymous_layer_semantics
+
+puzzle board {
+layers {
+Floor
+Goal
+solid = Player Box Wall
+}
+}
+"#;
+        let tokens = semantic_tokens(source);
+        let floor_start = source.find("Floor").unwrap();
+        let goal_start = source.find("Goal").unwrap();
+        let solid_start = source.find("solid =").unwrap();
+        let player_start = source.find("Player").unwrap();
+
+        assert!(tokens.iter().any(|token| {
+            token.start == floor_start
+                && token.end == floor_start + "Floor".len()
+                && token.kind == SemanticKind::Object
+        }));
+        assert!(tokens.iter().any(|token| {
+            token.start == goal_start
+                && token.end == goal_start + "Goal".len()
+                && token.kind == SemanticKind::Object
+        }));
+        assert!(tokens.iter().any(|token| {
+            token.start == solid_start
+                && token.end == solid_start + "solid".len()
+                && token.kind == SemanticKind::Group
+        }));
+        assert!(tokens.iter().any(|token| {
+            token.start == player_start
+                && token.end == player_start + "Player".len()
+                && token.kind == SemanticKind::Object
+        }));
+    }
+
+    #[test]
+    fn classifies_theme_state_and_condition_contexts() {
+        let source = r#"
+title semantic_contexts
+theme clean
+var count = 1
+
+scene playing {
+if win_conditions -> goto title
+if board.win_conditions -> goto title
+}
+"#;
+        let tokens = semantic_tokens(source);
+        let theme_start = source.find("clean").unwrap();
+        let count_start = source.find("count").unwrap();
+        let win_start = source.find("win_conditions").unwrap();
+        let path_win_start = source.rfind("win_conditions").unwrap();
+
+        assert!(tokens.iter().any(|token| {
+            token.start == theme_start
+                && token.end == theme_start + "clean".len()
+                && token.kind == SemanticKind::Theme
+        }));
+        assert!(tokens.iter().any(|token| {
+            token.start == count_start
+                && token.end == count_start + "count".len()
+                && token.kind == SemanticKind::State
+        }));
+        assert!(tokens.iter().any(|token| {
+            token.start == win_start
+                && token.end == win_start + "win_conditions".len()
+                && token.kind == SemanticKind::Condition
+        }));
+        assert!(tokens.iter().any(|token| {
+            token.start == path_win_start
+                && token.end == path_win_start + "win_conditions".len()
+                && token.kind == SemanticKind::Condition
         }));
     }
 

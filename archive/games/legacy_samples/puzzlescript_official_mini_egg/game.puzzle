@@ -12,7 +12,7 @@ layers {
   layer_4 = processed
 }
 
-group {
+groups {
   player = Player_u Player_d Player_l Player_r player_c
   obstacle = Crate Wall
 }

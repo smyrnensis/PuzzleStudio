@@ -30,7 +30,7 @@ inputs {
   restart <- r
 }
 
-group {
+groups {
   adult = Adult_Head Adult_body
   pushable = Dog adult Baby
   pusher = Dog adult Baby

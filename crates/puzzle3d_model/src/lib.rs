@@ -2265,6 +2265,51 @@ right:up [ Player | Box ] -> [ | Player | Box ]
     }
 
     #[test]
+    fn parser_lowers_dense_frame_rule_with_pattern_line_breaks() {
+        let parsed = parse_puzzle3d(
+            r#"
+layers {
+actor
+}
+
+objects {
+Player actor
+Box actor
+}
+
+rules {
+right:up [ Player
+Box ] -> [ Player
+Box ]
+}
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(parsed.rules.len(), 1);
+        assert_eq!(
+            parsed.rules[0].pattern.cells[1].offset,
+            Direction3::UP.offset
+        );
+    }
+
+    #[test]
+    fn parser_accepts_inline_braced_blocks_with_semicolon_rows() {
+        let parsed = parse_puzzle3d(
+            r#"
+layers { actor }
+objects { Player actor; Box actor }
+groups { solid = Box }
+rules { right [ Player | no solid ] -> [ | Player ] }
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(parsed.game.objects.len(), 2);
+        assert_eq!(parsed.rules.len(), 1);
+    }
+
+    #[test]
     fn parser_lowers_layers_legend_and_levels_to_level_bundle() {
         let parsed = parse_puzzle3d(
             r#"
@@ -2708,6 +2753,33 @@ actor = Player
         assert!(
             matches!(err, ParseError3::Message(message) if message.contains("unknown 3D puzzle directive"))
         );
+    }
+
+    #[test]
+    fn parser_accepts_last_level_clear_lifecycle() {
+        let parsed = parse_puzzle3d(
+            r#"
+puzzle3 lifecycle {
+layers {
+actor = Player
+}
+
+on_level_clear {
+next_level
+}
+
+on_last_level_clear {
+}
+}
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            parsed.lifecycle.on_level_clear,
+            vec![LifecycleCommand3::NextLevel]
+        );
+        assert_eq!(parsed.lifecycle.on_last_level_clear, Some(Vec::new()));
     }
 
     #[test]

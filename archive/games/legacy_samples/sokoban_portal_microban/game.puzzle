@@ -20,7 +20,7 @@ model puzzle portal_sokoban {
 		actor = Player Box Wall
 	}
 
-	group {
+	groups {
 		solid = actor
 	}
 

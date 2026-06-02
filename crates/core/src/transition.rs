@@ -1,8 +1,8 @@
 use crate::compiled_game::{
-    CompiledGame, Effect, Guard, LocalFrame, MatchCell, Offset, Pattern, PatternComponent,
-    ConditionValueKind, Rule, RuleApplication, RuleCondition, RuleStep, ScratchValueMatch, WriteOp,
+    CompiledGame, ConditionValueKind, Effect, Guard, LocalFrame, MatchCell, Offset, Pattern,
+    PatternComponent, Rule, RuleApplication, RuleCondition, RuleStep, ScratchValueMatch, WriteOp,
 };
-use crate::ids::{InputId, ObjectId, ConditionId, RuleId, ScratchId};
+use crate::ids::{ConditionId, InputId, ObjectId, RuleId, ScratchId};
 use crate::patch::{CorePatch, CorePatchOp, Patch, PatchError};
 use crate::state::State;
 use puzzle_kernel::{
@@ -706,11 +706,15 @@ fn guard_accepts(guard: &Guard, context: &TransitionContext, state: &State) -> b
         Guard::ConditionNonZero(condition) => {
             eval_condition_def(context, state, *condition).is_some_and(|value| value != 0)
         }
-        Guard::ConditionCompare { condition, op, value } => {
-            eval_condition_def(context, state, *condition)
-                .is_some_and(|found| compare_i64(found, *op, *value))
+        Guard::ConditionCompare {
+            condition,
+            op,
+            value,
+        } => eval_condition_def(context, state, *condition)
+            .is_some_and(|found| compare_i64(found, *op, *value)),
+        Guard::InlineConditionValue { kind, value } => {
+            eval_condition_value_kind(context, state, kind) == *value
         }
-        Guard::InlineConditionValue { kind, value } => eval_condition_value_kind(context, state, kind) == *value,
         Guard::InlineConditionNonZero(kind) => eval_condition_value_kind(context, state, kind) != 0,
         Guard::InlineConditionCompare { kind, op, value } => {
             compare_i64(eval_condition_value_kind(context, state, kind), *op, *value)
@@ -738,7 +742,11 @@ fn eval_condition_def(
     Some(eval_condition_value_kind(context, state, &condition.kind))
 }
 
-fn eval_condition_value_kind(context: &TransitionContext, state: &State, kind: &ConditionValueKind) -> i64 {
+fn eval_condition_value_kind(
+    context: &TransitionContext,
+    state: &State,
+    kind: &ConditionValueKind,
+) -> i64 {
     match kind {
         ConditionValueKind::CountObjects(objects) => objects
             .iter()
@@ -2244,7 +2252,13 @@ mod tests {
             kind: ScratchKind::Marker,
             values: Vec::new(),
         }];
-        CompiledGame::new_with_scratch_condition_defs_and_program(3, objects, scratch, Vec::new(), vec![])
+        CompiledGame::new_with_scratch_condition_defs_and_program(
+            3,
+            objects,
+            scratch,
+            Vec::new(),
+            vec![],
+        )
     }
 
     #[test]

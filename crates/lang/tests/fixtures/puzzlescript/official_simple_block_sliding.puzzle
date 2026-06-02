@@ -25,7 +25,7 @@ inputs {
   restart <- r
 }
 
-group {
+groups {
   crate = Crate1 Crate2 Crate3
   slidetag = slideleft slideup slideright slidedown
   obs = Wall crate

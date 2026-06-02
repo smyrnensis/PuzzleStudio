@@ -14,8 +14,7 @@ const EDITOR_DOCS_GROUPS_MARKDOWN: &str = include_str!("../docs/groups.md");
 const EDITOR_DOCS_TAGS_MARKDOWN: &str = include_str!("../docs/tags.md");
 const EDITOR_DOCS_LEGEND_MARKDOWN: &str = include_str!("../docs/legend.md");
 const EDITOR_DOCS_LEVELS_MARKDOWN: &str = include_str!("../docs/levels.md");
-const EDITOR_DOCS_LEVEL_LOCAL_LEGEND_MARKDOWN: &str =
-    include_str!("../docs/level-local-legend.md");
+const EDITOR_DOCS_LEVEL_LOCAL_LEGEND_MARKDOWN: &str = include_str!("../docs/level-local-legend.md");
 const EDITOR_DOCS_MESSAGES_MARKDOWN: &str = include_str!("../docs/messages.md");
 const EDITOR_DOCS_REWRITE_RULES_MARKDOWN: &str = include_str!("../docs/rewrite-rules.md");
 const EDITOR_DOCS_INPUT_RULES_MARKDOWN: &str = include_str!("../docs/input-rules.md");
@@ -2517,6 +2516,49 @@ step board
     }
 
     #[test]
+    fn compile_preview_accepts_3d_input_rule_without_orientation_set() {
+        let workspace = TestWorkspace::new();
+        let source = r#"
+title "Bare 3D Input"
+
+puzzle3 push3 {
+  layers {
+    actor = Player
+  }
+
+  rules {
+    input [ Player ] -> [ > Player ]
+  }
+}
+
+levels3 demo of push3 {
+  legend {
+    . = empty
+    P = Player
+  }
+
+  level start {
+    P.
+  }
+}
+"#;
+        let game_path = workspace.write("games/puzzle3_input_rule/game.puzzle", source);
+        let service = EditorService::open(&game_path).expect("open puzzle3 input fixture");
+
+        let html = service
+            .compile_preview(&PreviewRequest::new(
+                source,
+                game_path.display().to_string(),
+                String::new(),
+                String::new(),
+            ))
+            .expect("compile puzzle3 input preview");
+
+        assert!(html.contains("window.Puzzle3DFixture"));
+        assert!(html.contains("Bare 3D Input"));
+    }
+
+    #[test]
     fn editor_uses_dom_sprite_rendering_only_for_level_editing() {
         assert!(
             EDITOR_DOM_JS.contains("new window.PuzzleRenderer(levelBoard, { renderMode: \"dom\"")
@@ -2934,6 +2976,7 @@ step board
         assert!(EDITOR_LEVEL3D_JS.contains("function level3dRuntimePreviewResources"));
         assert!(EDITOR_LEVEL3D_JS.contains("sprites: exportData?.sprites || {}"));
         assert!(EDITOR_LEVEL3D_JS.contains("camera: level3dRuntimePreviewCamera(snapshot)"));
+        assert!(EDITOR_LEVEL3D_JS.contains("zoom: camera.zoom,"));
         assert!(EDITOR_LEVEL3D_JS.contains("view: level3dRuntimePreviewView(snapshot)"));
         assert!(
             EDITOR_LEVEL3D_JS.contains("settings: level3dPreviewSettings(snapshot.settings || {})")
@@ -3091,16 +3134,33 @@ step board
 
     #[test]
     fn source_editor_tab_exits_rule_bracket_cell() {
+        assert!(EDITOR_SOURCE_JS.contains("function handleSourceRuleBracketCellSlotTab(event)"));
+        assert!(
+            EDITOR_SOURCE_JS.contains(
+                "const targetIndex = event.shiftKey\n    ? (currentIndex + slots.length - 1) % slots.length\n    : (currentIndex + 1) % slots.length;"
+            )
+        );
         assert!(EDITOR_SOURCE_JS.contains("function handleSourceRuleBracketCellTabExit(event)"));
         assert!(
             EDITOR_SOURCE_JS
-                .contains("const replacement = hasTrailingHorizontalSpace ? \"[ ]\" : \"[ ] \";")
+                .contains("const replacement = hasTrailingHorizontalSpace ? \"[  ]\" : \"[  ] \";")
         );
         assert!(
             EDITOR_SOURCE_JS
                 .contains("sourceEditor.setRangeText(replacement, open, close + 1, \"end\")")
         );
         assert!(EDITOR_SOURCE_JS.contains("if (handleSourceRuleBracketCellTabExit(event))"));
+        let bracket_tab_handler = EDITOR_SOURCE_JS
+            .find("if (handleSourceRuleBracketCellTabExit(event))")
+            .unwrap();
+        let slot_tab_handler = EDITOR_SOURCE_JS
+            .find("if (handleSourceRuleBracketCellSlotTab(event))")
+            .unwrap();
+        let rewrite_tab_handler = EDITOR_SOURCE_JS
+            .find("if (handleSourceRewritePatternTab(event))")
+            .unwrap();
+        assert!(slot_tab_handler < bracket_tab_handler);
+        assert!(bracket_tab_handler < rewrite_tab_handler);
     }
 
     #[test]

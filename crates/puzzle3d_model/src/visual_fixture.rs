@@ -369,7 +369,22 @@ fn write_lifecycle(out: &mut String, lifecycle: &Lifecycle3) {
             LifecycleCommand3::NextLevel => out.push_str("\"next_level\""),
         }
     }
-    out.push_str("]\n");
+    out.push_str("],\n");
+    out.push_str("    \"onLastLevelClear\": ");
+    if let Some(commands) = lifecycle.on_last_level_clear.as_ref() {
+        out.push('[');
+        for (index, command) in commands.iter().enumerate() {
+            if index > 0 {
+                out.push_str(", ");
+            }
+            match command {
+                LifecycleCommand3::NextLevel => out.push_str("\"next_level\""),
+            }
+        }
+        out.push_str("]\n");
+    } else {
+        out.push_str("null\n");
+    }
     out.push_str("  },\n");
 }
 

@@ -11,6 +11,7 @@ pub(crate) fn logical_lines(source: &str) -> Result<Vec<String>, AppError> {
         .lines()
         .map(|raw_line| strip_line_comment(raw_line).trim().to_string())
         .collect::<Vec<_>>();
+    let raw_lines = expand_structural_sugar(&raw_lines)?;
 
     for index in 0..raw_lines.len() {
         let line = raw_lines[index].as_str();
@@ -101,6 +102,158 @@ pub(crate) fn strip_line_comment(line: &str) -> &str {
     line
 }
 
+fn expand_structural_sugar(lines: &[String]) -> Result<Vec<String>, AppError> {
+    let mut expanded = Vec::new();
+    let mut block_stack = Vec::<String>::new();
+
+    for line in lines {
+        if line.is_empty() {
+            expanded.push(String::new());
+            continue;
+        }
+
+        let split_semicolons = !block_stack.iter().any(|block| ascii_sensitive_block(block));
+        for piece in split_structural_line(line, split_semicolons)? {
+            update_structural_block_stack(&piece, &mut block_stack);
+            expanded.push(piece);
+        }
+    }
+
+    Ok(expanded)
+}
+
+fn ascii_sensitive_block(block: &str) -> bool {
+    matches!(block, "levels" | "levels3" | "sprites" | "sprites3" | "map")
+}
+
+fn update_structural_block_stack(line: &str, stack: &mut Vec<String>) {
+    if line == "}" {
+        stack.pop();
+        return;
+    }
+    if !line.ends_with('{') {
+        return;
+    }
+    let tokens = split_tokens(line);
+    if let Some(first) = tokens.first() {
+        stack.push((*first).to_string());
+    }
+}
+
+fn split_structural_line(line: &str, split_semicolons: bool) -> Result<Vec<String>, AppError> {
+    let mut pieces = Vec::new();
+    let mut current = String::new();
+    let mut in_string = false;
+    let mut escaped = false;
+    let mut square_depth = 0usize;
+    let mut paren_depth = 0usize;
+    let mut inline_brace_depth = 0usize;
+
+    for (index, ch) in line.char_indices() {
+        if in_string {
+            current.push(ch);
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+
+        if ch == '"' {
+            in_string = true;
+            current.push(ch);
+            continue;
+        }
+
+        if inline_brace_depth > 0 {
+            current.push(ch);
+            if ch == '{' {
+                inline_brace_depth += 1;
+            } else if ch == '}' {
+                inline_brace_depth = inline_brace_depth.saturating_sub(1);
+            }
+            continue;
+        }
+
+        match ch {
+            '[' => {
+                square_depth += 1;
+                current.push(ch);
+            }
+            ']' => {
+                square_depth = square_depth.saturating_sub(1);
+                current.push(ch);
+            }
+            '(' => {
+                paren_depth += 1;
+                current.push(ch);
+            }
+            ')' => {
+                paren_depth = paren_depth.saturating_sub(1);
+                current.push(ch);
+            }
+            '{' if square_depth == 0 && paren_depth == 0 => {
+                if is_inline_selector_brace(line, index) {
+                    inline_brace_depth = 1;
+                    current.push(ch);
+                    continue;
+                }
+                push_trimmed_piece(&mut pieces, &current);
+                current.clear();
+                if let Some(last) = pieces.last_mut() {
+                    last.push_str(" {");
+                } else {
+                    pieces.push("{".to_string());
+                }
+            }
+            '}' if square_depth == 0 && paren_depth == 0 => {
+                if !current.trim().is_empty() {
+                    push_trimmed_piece(&mut pieces, &current);
+                    current.clear();
+                }
+                pieces.push("}".to_string());
+            }
+            ';' if split_semicolons && square_depth == 0 && paren_depth == 0 => {
+                push_trimmed_piece(&mut pieces, &current);
+                current.clear();
+            }
+            _ => current.push(ch),
+        }
+    }
+
+    if in_string {
+        return Err(parse_error(line, "string literal is missing closing quote"));
+    }
+    if inline_brace_depth > 0 {
+        return Err(parse_error(
+            line,
+            "inline selector scratch is missing closing brace",
+        ));
+    }
+    push_trimmed_piece(&mut pieces, &current);
+    Ok(pieces)
+}
+
+fn push_trimmed_piece(pieces: &mut Vec<String>, piece: &str) {
+    let trimmed = piece.trim();
+    if !trimmed.is_empty() {
+        pieces.push(trimmed.to_string());
+    }
+}
+
+fn is_inline_selector_brace(line: &str, index: usize) -> bool {
+    let before = line[..index].chars().next_back();
+    let after = line[index + 1..].chars().next();
+    before.is_some_and(is_selector_token_char) && after.is_some_and(|ch| !ch.is_whitespace())
+}
+
+fn is_selector_token_char(ch: char) -> bool {
+    ch.is_ascii_alphanumeric() || matches!(ch, '_' | '@' | ':' | '*')
+}
+
 fn normalize_brace_blocks(lines: &[String]) -> Result<Vec<String>, AppError> {
     let mut normalized = Vec::new();
     let mut levels_brace_depth = 0i32;
@@ -120,10 +273,14 @@ fn normalize_brace_blocks(lines: &[String]) -> Result<Vec<String>, AppError> {
                 "else" => normalized.push("else".to_string()),
                 "else {" => normalized.push("else".to_string()),
                 "else{" => normalized.push("else".to_string()),
+                rest if rest.starts_with("->") => {
+                    normalized.push("}".to_string());
+                    normalized.push(rest.to_string());
+                }
                 _ => {
                     return Err(parse_error(
                         line,
-                        "closing brace must be alone or followed by else",
+                        "closing brace must be alone or followed by else or ->",
                     ));
                 }
             }
@@ -301,7 +458,7 @@ fn canonical_section_block(normalized: &str) -> Option<&'static str> {
     match normalized {
         "objects" => Some("objects"),
         "scratch" => Some("scratch"),
-        "group" | "groups" => Some("group"),
+        "groups" => Some("group"),
         "layer" | "layers" => Some("layers"),
         "legend" | "legends" => Some("legend"),
         "win_condition" | "win_conditions" => Some("win_conditions"),
@@ -358,7 +515,7 @@ fn starts_puzzle_section(tokens: &[&str]) -> bool {
             | ["on_display"]
             | ["objects"]
             | ["scratch"]
-            | ["group"]
+            | ["groups"]
             | ["layers"]
             | ["collision_layers"]
             | ["legend"]
@@ -412,7 +569,7 @@ fn starts_inline_block(tokens: &[&str], line: &str) -> bool {
             | ["on_display"]
             | ["objects"]
             | ["scratch"]
-            | ["group"]
+            | ["groups"]
             | ["layers"]
             | ["collision_layers"]
             | ["legend"]
@@ -830,7 +987,7 @@ fn source_opens_block(line: &str, tokens: &[&str], current: Option<SourceScope>)
             tokens,
             ["sounds"]
                 | ["assets"]
-                | ["group"]
+                | ["groups"]
                 | ["legend"]
                 | ["levels", ..]
                 | ["levels3", ..]
@@ -949,7 +1106,7 @@ fn source_scope_for_name(name: &str) -> Option<SourceScope> {
         "objects" => Some(SourceScope::Objects),
         "tags" => Some(SourceScope::Tags),
         "layers" | "collision_layers" => Some(SourceScope::Layers),
-        "group" => Some(SourceScope::Group),
+        "groups" => Some(SourceScope::Group),
         "scratch" => Some(SourceScope::Scratch),
         "keys" | "inputs" => Some(SourceScope::Keys),
         "resources" => Some(SourceScope::Other),

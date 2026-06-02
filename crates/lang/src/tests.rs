@@ -185,7 +185,7 @@ fn test_puzzle_has_following_layers(lines: &[String], start: usize) -> bool {
         let tokens = split_tokens(&lines[i]);
         if matches!(
             tokens.as_slice(),
-            ["objects"] | ["legend"] | ["group"] | ["sprites"] | ["rules"] | ["levels", ..]
+            ["objects"] | ["legend"] | ["groups"] | ["sprites"] | ["rules"] | ["levels", ..]
         ) {
             depth += 1;
         } else if is_block_close_line(&lines[i]) {
@@ -255,7 +255,7 @@ fn modernize_test_objects_block(
                     i += 1;
                 }
             }
-            ["group"] => {
+            ["groups"] => {
                 i += 1;
                 while i < lines.len() && !is_block_close_line(&lines[i]) {
                     group_rows.push(lines[i].clone());
@@ -335,7 +335,7 @@ fn modernize_test_objects_block(
         out.extend(legend_rows);
     }
     if !group_rows.is_empty() {
-        out.push("group".to_string());
+        out.push("groups".to_string());
         out.extend(group_rows);
         out.push(BLOCK_CLOSE.to_string());
     }
@@ -654,6 +654,63 @@ G
     assert_eq!(loaded.levels.len(), 2);
     assert_eq!(loaded.levels[0].name, "first");
     assert_eq!(loaded.levels[1].name, "second");
+}
+
+#[test]
+fn inline_braced_blocks_accept_semicolon_rows() {
+    let source = r#"
+title inline_blocks
+
+puzzle board {
+layers { actor = Player Box Wall; floor = Goal }
+groups { solid = Box Wall; pushable = Box }
+legend { . = empty; P = Player; B = Box; W = Wall; G = Goal }
+rules { once [ Player | ] -> [ | Player ] }
+levels {
+level start {
+P.G
+}
+}
+}
+"#;
+
+    let loaded = parse_game(source).unwrap();
+    let player = object_named(&loaded, "Player");
+    let right = input_named(&loaded, "right");
+    let moved = transition_state(&loaded.game, &loaded.levels[0].initial_state, right).unwrap();
+
+    assert!(moved.has_object(&loaded.game, 1, 0, player));
+}
+
+#[test]
+fn pattern_rows_accept_physical_line_breaks() {
+    let source = r#"
+title pattern_newlines
+
+puzzle board {
+layers { actor = A B C }
+legend { . = empty; A = A; B = B; C = C }
+rules {
+once [ A
+B ] -> [ C
+C ]
+}
+levels {
+level start {
+A
+B
+}
+}
+}
+"#;
+
+    let loaded = parse_game(source).unwrap();
+    let object_c = object_named(&loaded, "C");
+    let moved =
+        transition_state(&loaded.game, &loaded.levels[0].initial_state, InputId(0)).unwrap();
+
+    assert!(moved.has_object(&loaded.game, 0, 0, object_c));
+    assert!(moved.has_object(&loaded.game, 0, 1, object_c));
 }
 
 #[test]
@@ -1648,6 +1705,102 @@ level_select -> goto level_select
         &scene.transitions[0].effect,
         SceneEffect::Goto { scene, .. } if scene == "level_select"
     ));
+}
+
+#[test]
+fn scene_rules_accept_condition_block_arrow() {
+    let source = r#"
+title scene_condition_block_arrow
+
+puzzle board {
+layers {
+actor = Player
+}
+legend {
+. = empty
+P = Player
+}
+rules {
+[ Player ] -> [ Player ]
+}
+level start {
+P
+}
+}
+
+scene title {
+inputs {
+confirm <- Enter
+}
+rules {
+if {
+input == confirm
+game.has_progress_save == false
+} -> {
+goto playing
+}
+}
+}
+
+scene playing {
+layout {
+text "Playing"
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    let scene = &loaded.scenes[0];
+    let SceneTransitionTrigger::Condition(condition) = &scene.transitions[0].trigger else {
+        panic!("expected condition block to lower to condition transition");
+    };
+    assert_eq!(
+        condition,
+        "input == confirm and game.has_progress_save == false"
+    );
+    assert!(matches!(
+        &scene.transitions[0].effect,
+        SceneEffect::Goto { scene, .. } if scene == "playing"
+    ));
+}
+
+#[test]
+fn layout_if_keeps_structural_block_syntax() {
+    let source = r#"
+title layout_if_block
+
+puzzle board {
+layers {
+actor = Player
+}
+legend {
+. = empty
+P = Player
+}
+rules {
+[ Player ] -> [ Player ]
+}
+level start {
+P
+}
+}
+
+scene title {
+layout {
+if game.has_progress_save == true {
+button "Continue" -> input continue_game
+} else {
+button "New Game" -> input new_game
+}
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    let scene = &loaded.scenes[0];
+    let Some(SceneComponent::Conditional(conditional)) = scene.components.first() else {
+        panic!("expected layout if to lower to a conditional component");
+    };
+    assert_eq!(conditional.children.len(), 1);
+    assert_eq!(conditional.else_children.len(), 1);
 }
 
 #[test]
@@ -4053,6 +4206,29 @@ end
 }
 
 #[test]
+fn singular_group_block_is_rejected() {
+    let source = r#"
+title old_group_block
+
+puzzle default {
+objects {
+Player
+Wall
+}
+layers {
+actor = Player Wall
+}
+group {
+solid = Wall
+}
+}
+"#;
+
+    let error = parse_game(source).unwrap_err().to_string();
+    assert!(error.contains("`group { ... }` was removed; use `groups { ... }`"));
+}
+
+#[test]
 fn domain_keyword_is_not_part_of_public_syntax() {
     let source = r#"
 title old_domain
@@ -4386,7 +4562,7 @@ P
             .theme
             .variables
             .iter()
-            .find(|variable| variable.name == "bg")
+            .find(|variable| variable.name == "background")
             .map(|variable| variable.value.as_str()),
         Some("#123456")
     );
@@ -4490,7 +4666,7 @@ P
             .theme
             .variables
             .iter()
-            .find(|variable| variable.name == "bg")
+            .find(|variable| variable.name == "background")
             .map(|variable| variable.value.as_str()),
         Some("#123456")
     );
@@ -4534,7 +4710,45 @@ P
 
     assert!(error.to_string().contains("background_color"));
     assert!(error.to_string().contains("text_color"));
-    assert!(error.to_string().contains("ui_font"));
+    assert!(error.to_string().contains("accent_color"));
+    assert!(!error.to_string().contains("ui_font"));
+}
+
+#[test]
+fn theme_rejects_non_color_style_settings() {
+    let error = parse_game(
+        r##"
+title themed
+theme clean {
+ui_font Inter
+}
+puzzle default {
+layers {
+actor = Player
+}
+legend {
+. = empty
+P = Player
+}
+rules {
+[ Player ] -> [ Player ]
+}
+level start {
+P
+}
+}
+"##,
+    )
+    .unwrap_err();
+
+    assert!(error.to_string().contains("accent_color"));
+    assert!(error.to_string().contains("background_color"));
+    assert!(error.to_string().contains("text_color"));
+    assert!(
+        error
+            .to_string()
+            .contains("theme setting must be one of: accent_color, background_color, text_color")
+    );
 }
 
 #[test]
@@ -6544,6 +6758,77 @@ WP
 }
 
 #[test]
+fn if_condition_block_arrow_accepts_mixed_rule_body() {
+    let source = r#"
+title if_condition_block_arrow
+
+puzzle default {
+layers 3
+empty .
+
+object Player 1
+object Wall 1
+object Flag 2
+legend P = Player
+legend F = Flag
+
+rules {
+if {
+exists(Player)
+none(Wall)
+} -> {
+once [ Player ] -> [ Player Flag ]
+checkpoint
+}
+}
+
+level start {
+P
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    let moved =
+        transition_state(&loaded.game, &loaded.levels[0].initial_state, InputId(0)).unwrap();
+    let flag = object_named(&loaded, "Flag");
+
+    assert!(moved.has_object(&loaded.game, 0, 0, flag));
+}
+
+#[test]
+fn if_condition_arrow_block_accepts_rule_body() {
+    let source = r#"
+title if_condition_arrow_block
+
+puzzle default {
+layers 3
+empty .
+
+object Player 1
+object Flag 2
+legend P = Player
+legend F = Flag
+
+rules {
+if exists(Player) -> {
+once [ Player ] -> [ Player Flag ]
+}
+}
+
+level start {
+P
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    let moved =
+        transition_state(&loaded.game, &loaded.levels[0].initial_state, InputId(0)).unwrap();
+    let flag = object_named(&loaded, "Flag");
+
+    assert!(moved.has_object(&loaded.game, 0, 0, flag));
+}
+
+#[test]
 fn fix_once_sets_default_rewrite_application_for_nested_lines() {
     let source = r#"
 title fix_once
@@ -7202,11 +7487,11 @@ fn rewrite_effect_parser_retains_semantic_tokens() {
         [EffectAst::PlaySfx { name }] if name == "clear"
     ));
     assert!(parsed.semantic_tokens.iter().any(|token| {
-        &line[token.start..token.end] == "sfx" && token.kind == SemanticKind::Emission
+        &line[token.start..token.end] == "sfx" && token.kind == SemanticKind::Effect
     }));
     assert!(parsed.surface.document.semantic_tokens.iter().any(|token| {
         &line[token.span.start..token.span.end] == "sfx"
-            && token.kind == SurfaceSemanticKind::Emission
+            && token.kind == SurfaceSemanticKind::Effect
     }));
     assert!(parsed.surface.document.nodes.iter().any(|node| {
         node.kind == SurfaceNodeKind::RewriteEffect && &line[node.span.start..node.span.end] == line
@@ -7569,7 +7854,7 @@ Player P
 Box B
 Wall #
 }
-group {
+groups {
 solid = Player Box Wall
 }
 }
@@ -7623,7 +7908,7 @@ Player P
 Box B
 Wall #
 }
-group {
+groups {
 solid = Player Box Wall
 }
 }
@@ -7673,7 +7958,7 @@ layer {
 Box B
 Wall #
 }
-group {
+groups {
 solid = Box Wall
 }
 }
@@ -7711,7 +7996,7 @@ layer {
 Box B
 Wall #
 }
-group {
+groups {
 solid = Box Wall
 }
 }
@@ -7749,7 +8034,7 @@ layer {
 Box B
 Wall #
 }
-group {
+groups {
 solid = Box Wall
 }
 }
@@ -7950,7 +8235,7 @@ layer {
 Box B
 Wall #
 }
-group {
+groups {
 solid = Box Wall
 }
 }
@@ -8800,7 +9085,7 @@ puzzle swap {
 layers {
 actor = Box Crate
 }
-group {
+groups {
 solid = Box Crate
 }
 rules {
@@ -8836,7 +9121,7 @@ puzzle copy {
 layers {
 actor = Box Crate
 }
-group {
+groups {
 solid = Box Crate
 }
 rules {
@@ -8873,7 +9158,7 @@ puzzle swap {
 layers {
 actor = Box Crate
 }
-group {
+groups {
 solid = Box Crate
 }
 rules {
@@ -9956,7 +10241,7 @@ floor = Floor
 actor = Player
 }
 
-group {
+groups {
 @paint = @Shadow @Glow
 }
 
@@ -10060,7 +10345,7 @@ floor = Floor
 actor = Player
 }
 
-group {
+groups {
 @paint = Player @Shadow
 }
 
@@ -10096,7 +10381,7 @@ floor = Floor
 actor = Player
 }
 
-group {
+groups {
 paint = @Shadow
 }
 
@@ -10517,6 +10802,42 @@ scene level_select {
     assert!(fixture_json.contains("\"kind\": \"for\""));
     assert!(fixture_json.contains("\"scroll\": true"));
     assert!(!fixture_json.contains("\"kind\": \"level_menu\""));
+}
+
+#[test]
+fn parse_game_accepts_3d_input_rule_without_orientation_set() {
+    let document = super::parse_game(
+        r#"
+title "Bare 3D Input"
+
+puzzle3 push3 {
+  layers {
+    actor = Player
+  }
+
+  rules {
+    input [ Player ] -> [ > Player ]
+  }
+}
+
+levels3 demo of push3 {
+  legend {
+    . = empty
+    P = Player
+  }
+
+  level start {
+    P.
+  }
+}
+"#,
+    )
+    .unwrap();
+
+    let Some(LoadedDocumentModel::Puzzle3d { puzzle, .. }) = document.single_model() else {
+        panic!("expected one 3D puzzle model");
+    };
+    assert_eq!(puzzle.rules.len(), 6);
 }
 
 #[test]

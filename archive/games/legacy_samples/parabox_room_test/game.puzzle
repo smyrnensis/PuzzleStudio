@@ -28,7 +28,7 @@ puzzle parabox_room_test {
 		marker = Moment
 	}
 
-	group {
+	groups {
 		solid = actor
 		mobile = Player Box Room:*
 		lead_mobile = Player Box Room:*

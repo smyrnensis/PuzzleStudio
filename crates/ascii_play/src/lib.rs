@@ -1382,7 +1382,7 @@ fn menu_input_for_key(key: &TerminalKey) -> Option<&'static str> {
         TerminalKey::Char('s') | TerminalKey::Arrow(ArrowKey::Down) => Some("down"),
         TerminalKey::Char('a') | TerminalKey::Arrow(ArrowKey::Left) => Some("left"),
         TerminalKey::Char('d') | TerminalKey::Arrow(ArrowKey::Right) => Some("right"),
-        TerminalKey::Named("Enter") | TerminalKey::Named("Space") => Some("enter"),
+        TerminalKey::Named("Enter") | TerminalKey::Named("Space") => Some("select"),
         TerminalKey::Named("Escape") | TerminalKey::Char('q') => Some("back"),
         _ => None,
     }

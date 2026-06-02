@@ -261,6 +261,7 @@ Developer-facing documentation:
 - `CURRENT_SPEC.md`: current parser/runtime/adapter behavior
 - `AGENT_HANDOFF.md`: compact implementation map and recent design state
 - `SOLVER_DESIGN.md`: solver role and design notes
+- `EDITOR_TESTING_STRATEGY.md`: editor service and browser testing strategy
 - `PUBLICATION_PLAN.md`: release and hosting direction
 - `EDITOR_COMPLETION_PLAN.md`: editor completion plan
 

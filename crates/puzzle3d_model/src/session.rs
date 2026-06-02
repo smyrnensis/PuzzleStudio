@@ -9,6 +9,7 @@ pub struct Lifecycle3 {
     pub on_level_start: Vec<Rule3>,
     pub on_level_start_local_frame: Option<LocalFrame<ObjectId>>,
     pub on_level_clear: Vec<LifecycleCommand3>,
+    pub on_last_level_clear: Option<Vec<LifecycleCommand3>>,
 }
 
 impl Lifecycle3 {
@@ -17,6 +18,7 @@ impl Lifecycle3 {
             on_level_start,
             on_level_start_local_frame: None,
             on_level_clear,
+            on_last_level_clear: None,
         }
     }
 }
@@ -336,7 +338,15 @@ impl GameSession3 {
         lifecycle: &Lifecycle3,
     ) -> Result<bool, GameSessionError3> {
         let mut level_changed = false;
-        for command in &lifecycle.on_level_clear {
+        let commands = if self.current_level_index + 1 >= bundle.level_count() {
+            lifecycle
+                .on_last_level_clear
+                .as_deref()
+                .unwrap_or(&lifecycle.on_level_clear)
+        } else {
+            &lifecycle.on_level_clear
+        };
+        for command in commands {
             match command {
                 LifecycleCommand3::NextLevel => {
                     if self.next_level_with_lifecycle(bundle, lifecycle)? {
