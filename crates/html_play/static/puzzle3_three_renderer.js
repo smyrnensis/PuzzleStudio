@@ -34,10 +34,10 @@ class Puzzle3ThreeRenderer {
     scene.background = threeBackground(THREE, view.background);
     addLights(THREE, scene, frame);
     addGrid(THREE, scene, frame);
-    addMeshes(THREE, scene, frame);
     frame.rendererViewTarget = this.viewTarget;
     frame.rendererViewDistance = this.viewDistance;
     const camera = buildCamera(THREE, frame, this.canvas);
+    addMeshes(THREE, scene, frame);
     this.renderer.setSize(this.canvas.clientWidth || this.canvas.width || 1, this.canvas.clientHeight || this.canvas.height || 1, false);
     this.renderer.setClearColor(0x000000, scene.background ? 1 : 0);
     disposeScene(this.scene);
@@ -259,15 +259,18 @@ function spriteVisual(sprite) {
       const row = String(rows[rowIndex] || "");
       for (let x = 0; x < row.length; x += 1) {
         const token = row[x];
-        const color = palette[token];
-        if (!color || color === "transparent" || token === "." || token === " ") {
+        const fill = palette[token];
+        const color = parseColor(fill);
+        if (!fill || fill === "transparent" || token === "." || token === " " || color?.a <= 0) {
           continue;
         }
         voxels.push({
           x,
           y: Math.max(0, depth - 1 - rowIndex),
           z: Math.max(0, height - 1 - slice),
+          fill,
           color,
+          opaque: !color || color.a >= 0.999,
         });
       }
     }
@@ -335,62 +338,413 @@ function addGrid(THREE, scene, frame) {
 }
 
 function addMeshes(THREE, scene, frame) {
-  const groups = new Map();
-  for (const cell of frame.renderCells || frame.cells) {
-    for (const object of cell.objects) {
-      for (const instance of objectInstances(frame, cell.position, object)) {
-        const key = `${instance.color}:${instance.alpha}:${instance.scale.x}:${instance.scale.y}:${instance.scale.z}`;
-        if (!groups.has(key)) {
-          groups.set(key, { ...instance, items: [] });
-        }
-        groups.get(key).items.push(instance);
-      }
+  const { voxels, occupied } = frameVisibleVoxels(frame);
+  const faces = mergedVoxelFaces(voxels, occupied);
+  const opaqueGroups = new Map();
+  const materialCache = new Map();
+  for (const face of faces) {
+    const color = parseColor(face.fill);
+    const alpha = color ? color.a : 1;
+    if (alpha <= 0) {
+      continue;
     }
+    if (alpha < 0.999) {
+      const geometry = faceBufferGeometry(THREE, [face]);
+      const material = faceMaterial(THREE, face.fill, materialCache);
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.renderOrder = 100 + Number(face.objectOrder || 0);
+      scene.add(mesh);
+      continue;
+    }
+    const key = faceMaterialKey(face.fill);
+    if (!opaqueGroups.has(key)) {
+      opaqueGroups.set(key, []);
+    }
+    opaqueGroups.get(key).push(face);
   }
-  for (const group of groups.values()) {
-    const geometry = new THREE.BoxGeometry(group.scale.x, group.scale.y, group.scale.z);
-    const material = new THREE.MeshLambertMaterial({
-      color: group.color,
-      transparent: group.alpha < 1,
-      opacity: group.alpha,
-      depthWrite: group.alpha >= 1,
-    });
-    const mesh = new THREE.InstancedMesh(geometry, material, group.items.length);
-    group.items.forEach((item, index) => {
-      const matrix = new THREE.Matrix4();
-      matrix.makeTranslation(item.position.x, item.position.y, item.position.z);
-      mesh.setMatrixAt(index, matrix);
-    });
-    mesh.instanceMatrix.needsUpdate = true;
+  for (const [key, groupFaces] of opaqueGroups) {
+    const geometry = faceBufferGeometry(THREE, groupFaces);
+    const material = faceMaterial(THREE, groupFaces[0].fill, materialCache);
+    const mesh = new THREE.Mesh(geometry, material);
     scene.add(mesh);
   }
 }
 
-function objectInstances(frame, position, object) {
+function frameVisibleVoxels(frame) {
+  const voxels = [];
+  const occupied = emptyVoxelOccupancy();
+  for (const cell of frame.renderCells || frame.cells) {
+    const visible = cellVisibleVoxels(frame, cell);
+    voxels.push(...visible.voxels);
+    for (const key of visible.occupied.opaque) {
+      occupied.opaque.add(key);
+    }
+    for (const key of visible.occupied.bySource) {
+      occupied.bySource.add(key);
+    }
+  }
+  return { voxels, occupied };
+}
+
+function cellVisibleVoxels(frame, cell) {
+  const stacks = new Map();
+  for (const [objectIndex, object] of (cell.objects || []).entries()) {
+    const sourceKey = `${cellKey(cell.position)}:${objectIndex}`;
+    const objectOrder = objectRenderOrder(object, objectIndex);
+    for (const voxel of objectVoxels(frame, cell.position, object, sourceKey, objectOrder)) {
+      const key = voxelGeometryKeyAt(voxel.stackPosition, voxel.scale);
+      const stack = stacks.get(key) || [];
+      stack.push(voxel);
+      stacks.set(key, stack);
+    }
+  }
+  const voxels = [];
+  const occupied = emptyVoxelOccupancy();
+  for (const stack of stacks.values()) {
+    const visibleStack = visibleVoxelStack(stack);
+    voxels.push(...visibleStack);
+    for (const voxel of visibleStack) {
+      const key = voxelGeometryKey(voxel);
+      for (const sourceKey of voxel.sourceKeys || []) {
+        occupied.bySource.add(`${sourceKey}|${key}`);
+      }
+      if (voxel.opaque) {
+        occupied.opaque.add(key);
+      }
+    }
+  }
+  return { voxels, occupied };
+}
+
+function emptyVoxelOccupancy() {
+  return {
+    opaque: new Set(),
+    bySource: new Set(),
+  };
+}
+
+function visibleVoxelStack(stack) {
+  const visible = [];
+  const ordered = [...stack].sort((left, right) => objectVoxelOrder(left) - objectVoxelOrder(right));
+  for (const voxel of ordered) {
+    const source = voxel.color || parseColor(voxel.fill);
+    if (source?.a <= 0) {
+      continue;
+    }
+    const renderVoxel = {
+      ...voxel,
+      color: source || null,
+      opaque: !source || source.a >= 0.999,
+      fill: source ? formatColor(source) : voxel.fill,
+      sourceKeys: voxel.sourceKey ? [voxel.sourceKey] : [],
+    };
+    if (renderVoxel.opaque) {
+      visible.length = 0;
+    }
+    visible.push(renderVoxel);
+  }
+  return visible;
+}
+
+function objectRenderOrder(object, fallbackIndex = 0) {
+  const layer = Number(object?.layer);
+  return Number.isFinite(layer) ? layer : Number(fallbackIndex) || 0;
+}
+
+function objectVoxelOrder(voxel) {
+  const order = Number(voxel?.objectOrder);
+  return Number.isFinite(order) ? order : 0;
+}
+
+function objectVoxels(frame, position, object, sourceKey, objectOrder = 0) {
   if (object.visual?.kind === "voxels") {
-    return voxelInstances(frame, position, object);
+    return voxelInstances(frame, position, object, sourceKey, objectOrder);
   }
   return [];
 }
 
-function voxelInstances(frame, position, object) {
+function voxelInstances(frame, position, object, sourceKey, objectOrder = 0) {
   const visual = object.visual;
   const size = visual.size;
   const step = 1 / Math.max(size.width, size.height, size.depth, 1);
   const base = renderPositionForCell(frame, position);
   return visual.voxels.map((voxel) => {
     const local = spriteVoxelLocalPosition(voxel, step);
+    const layerY = object.layer * 0.08;
+    const renderPosition = {
+      x: base.x + local.x,
+      y: base.y + layerY + local.z,
+      z: base.z - local.y,
+    };
+    const stackPosition = {
+      x: base.x + local.x,
+      y: base.y + local.z,
+      z: base.z - local.y,
+    };
     return {
-      position: {
-        x: base.x + local.x,
-        y: base.y + object.layer * 0.08 + local.z,
-        z: base.z - local.y,
-      },
+      fill: voxel.fill,
       color: voxel.color,
-      alpha: 1,
-      scale: { x: step, y: step, z: step },
+      opaque: voxel.opaque,
+      scale: step,
+      grid: { x: voxel.x, y: voxel.z, z: -voxel.y },
+      position: renderPosition,
+      stackPosition,
+      bounds: voxelBounds(renderPosition, step),
+      sourceKey,
+      objectOrder,
     };
   });
+}
+
+function mergedVoxelFaces(voxels, occupied) {
+  if (window.Puzzle3VisualCore?.mergeVoxelFaces) {
+    return Puzzle3VisualCore.mergeVoxelFaces(voxels, {
+      faces: voxelFaces,
+      isFaceVisible: (voxel, face) => !isVoxelFaceOccluded(voxel, face.offset, occupied),
+      group: (voxel, face) => {
+        const info = voxelFaceGroupInfo(voxel, face.side);
+        const groupKey = [
+          quantizeGeometryValue(voxel.objectOrder),
+          face.side,
+          quantizeGeometryValue(info.origin.x),
+          quantizeGeometryValue(info.origin.y),
+          quantizeGeometryValue(info.origin.z),
+          quantizeGeometryValue(voxel.scale),
+          info.planeIndex,
+          voxel.fill,
+        ].join("|");
+        return {
+          key: groupKey,
+          u: info.u,
+          v: info.v,
+          group: {
+            key: groupKey,
+            objectOrder: voxel.objectOrder,
+            side: face.side,
+            origin: info.origin,
+            scale: voxel.scale,
+            planeIndex: info.planeIndex,
+            fill: voxel.fill,
+          },
+        };
+      },
+      face: (group, rect) => faceGeometry(mergedVoxelFaceCorners(group, rect), group.fill, group.objectOrder, group.side),
+    });
+  }
+  return voxels.flatMap((voxel) => voxelFaces(voxel)
+    .filter((face) => !isVoxelFaceOccluded(voxel, face.offset, occupied))
+    .map((face) => faceGeometry(face.corners, voxel.fill, voxel.objectOrder, face.side)));
+}
+
+function isVoxelFaceOccluded(voxel, offset, occupied) {
+  const adjacentKey = adjacentVoxelGeometryKey(voxel, offset);
+  if (voxel.opaque !== false && occupied.opaque.has(adjacentKey)) {
+    return true;
+  }
+  for (const sourceKey of voxel.sourceKeys || []) {
+    if (occupied.bySource.has(`${sourceKey}|${adjacentKey}`)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function voxelFaces(voxel) {
+  const { x0, x1, y0, y1, z0, z1 } = voxel.bounds;
+  return [
+    {
+      side: "zNeg",
+      offset: { x: 0, y: 0, z: -1 },
+      corners: [{ x: x1, y: y0, z: z0 }, { x: x0, y: y0, z: z0 }, { x: x0, y: y1, z: z0 }, { x: x1, y: y1, z: z0 }],
+    },
+    {
+      side: "zPos",
+      offset: { x: 0, y: 0, z: 1 },
+      corners: [{ x: x0, y: y0, z: z1 }, { x: x1, y: y0, z: z1 }, { x: x1, y: y1, z: z1 }, { x: x0, y: y1, z: z1 }],
+    },
+    {
+      side: "xNeg",
+      offset: { x: -1, y: 0, z: 0 },
+      corners: [{ x: x0, y: y0, z: z0 }, { x: x0, y: y0, z: z1 }, { x: x0, y: y1, z: z1 }, { x: x0, y: y1, z: z0 }],
+    },
+    {
+      side: "xPos",
+      offset: { x: 1, y: 0, z: 0 },
+      corners: [{ x: x1, y: y0, z: z1 }, { x: x1, y: y0, z: z0 }, { x: x1, y: y1, z: z0 }, { x: x1, y: y1, z: z1 }],
+    },
+    {
+      side: "yPos",
+      offset: { x: 0, y: 1, z: 0 },
+      corners: [{ x: x0, y: y1, z: z1 }, { x: x1, y: y1, z: z1 }, { x: x1, y: y1, z: z0 }, { x: x0, y: y1, z: z0 }],
+    },
+    {
+      side: "yNeg",
+      offset: { x: 0, y: -1, z: 0 },
+      corners: [{ x: x0, y: y0, z: z0 }, { x: x1, y: y0, z: z0 }, { x: x1, y: y0, z: z1 }, { x: x0, y: y0, z: z1 }],
+    },
+  ];
+}
+
+function voxelFaceGroupInfo(voxel, side) {
+  const origin = {
+    x: voxel.bounds.x0 - voxel.grid.x * voxel.scale,
+    y: voxel.bounds.y0 - voxel.grid.y * voxel.scale,
+    z: voxel.bounds.z0 - voxel.grid.z * voxel.scale,
+  };
+  if (side === "zNeg") {
+    return { origin, planeIndex: voxel.grid.z, u: voxel.grid.x, v: voxel.grid.y };
+  }
+  if (side === "zPos") {
+    return { origin, planeIndex: voxel.grid.z + 1, u: voxel.grid.x, v: voxel.grid.y };
+  }
+  if (side === "xNeg") {
+    return { origin, planeIndex: voxel.grid.x, u: voxel.grid.y, v: voxel.grid.z };
+  }
+  if (side === "xPos") {
+    return { origin, planeIndex: voxel.grid.x + 1, u: voxel.grid.y, v: voxel.grid.z };
+  }
+  if (side === "yPos") {
+    return { origin, planeIndex: voxel.grid.y + 1, u: voxel.grid.x, v: voxel.grid.z };
+  }
+  return { origin, planeIndex: voxel.grid.y, u: voxel.grid.x, v: voxel.grid.z };
+}
+
+function mergedVoxelFaceCorners(group, rect) {
+  const plane = axisValue(group.origin, group.side[0], group.planeIndex, group.scale);
+  const a0 = rect.u0;
+  const a1 = rect.u1 + 1;
+  const b0 = rect.v0;
+  const b1 = rect.v1 + 1;
+  if (group.side === "zNeg") {
+    return [
+      { x: axisValue(group.origin, "x", a1, group.scale), y: axisValue(group.origin, "y", b0, group.scale), z: plane },
+      { x: axisValue(group.origin, "x", a0, group.scale), y: axisValue(group.origin, "y", b0, group.scale), z: plane },
+      { x: axisValue(group.origin, "x", a0, group.scale), y: axisValue(group.origin, "y", b1, group.scale), z: plane },
+      { x: axisValue(group.origin, "x", a1, group.scale), y: axisValue(group.origin, "y", b1, group.scale), z: plane },
+    ];
+  }
+  if (group.side === "zPos") {
+    return [
+      { x: axisValue(group.origin, "x", a0, group.scale), y: axisValue(group.origin, "y", b0, group.scale), z: plane },
+      { x: axisValue(group.origin, "x", a1, group.scale), y: axisValue(group.origin, "y", b0, group.scale), z: plane },
+      { x: axisValue(group.origin, "x", a1, group.scale), y: axisValue(group.origin, "y", b1, group.scale), z: plane },
+      { x: axisValue(group.origin, "x", a0, group.scale), y: axisValue(group.origin, "y", b1, group.scale), z: plane },
+    ];
+  }
+  if (group.side === "xNeg") {
+    return [
+      { x: plane, y: axisValue(group.origin, "y", a0, group.scale), z: axisValue(group.origin, "z", b0, group.scale) },
+      { x: plane, y: axisValue(group.origin, "y", a0, group.scale), z: axisValue(group.origin, "z", b1, group.scale) },
+      { x: plane, y: axisValue(group.origin, "y", a1, group.scale), z: axisValue(group.origin, "z", b1, group.scale) },
+      { x: plane, y: axisValue(group.origin, "y", a1, group.scale), z: axisValue(group.origin, "z", b0, group.scale) },
+    ];
+  }
+  if (group.side === "xPos") {
+    return [
+      { x: plane, y: axisValue(group.origin, "y", a0, group.scale), z: axisValue(group.origin, "z", b1, group.scale) },
+      { x: plane, y: axisValue(group.origin, "y", a0, group.scale), z: axisValue(group.origin, "z", b0, group.scale) },
+      { x: plane, y: axisValue(group.origin, "y", a1, group.scale), z: axisValue(group.origin, "z", b0, group.scale) },
+      { x: plane, y: axisValue(group.origin, "y", a1, group.scale), z: axisValue(group.origin, "z", b1, group.scale) },
+    ];
+  }
+  if (group.side === "yPos") {
+    return [
+      { x: axisValue(group.origin, "x", a0, group.scale), y: plane, z: axisValue(group.origin, "z", b1, group.scale) },
+      { x: axisValue(group.origin, "x", a1, group.scale), y: plane, z: axisValue(group.origin, "z", b1, group.scale) },
+      { x: axisValue(group.origin, "x", a1, group.scale), y: plane, z: axisValue(group.origin, "z", b0, group.scale) },
+      { x: axisValue(group.origin, "x", a0, group.scale), y: plane, z: axisValue(group.origin, "z", b0, group.scale) },
+    ];
+  }
+  return [
+    { x: axisValue(group.origin, "x", a0, group.scale), y: plane, z: axisValue(group.origin, "z", b0, group.scale) },
+    { x: axisValue(group.origin, "x", a1, group.scale), y: plane, z: axisValue(group.origin, "z", b0, group.scale) },
+    { x: axisValue(group.origin, "x", a1, group.scale), y: plane, z: axisValue(group.origin, "z", b1, group.scale) },
+    { x: axisValue(group.origin, "x", a0, group.scale), y: plane, z: axisValue(group.origin, "z", b1, group.scale) },
+  ];
+}
+
+function axisValue(origin, axis, index, scale) {
+  return origin[axis] + index * scale;
+}
+
+function faceGeometry(corners, fill, objectOrder = 0, side = "") {
+  return { corners, fill, objectOrder, side };
+}
+
+function faceBufferGeometry(THREE, faces) {
+  const positions = [];
+  const normals = [];
+  for (const face of faces) {
+    const normal = faceNormal(face.side, face.corners);
+    const corners = face.corners || [];
+    for (const index of [0, 1, 2, 0, 2, 3]) {
+      const point = corners[index];
+      positions.push(point.x, point.y, point.z);
+      normals.push(normal.x, normal.y, normal.z);
+    }
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setAttribute("normal", new THREE.Float32BufferAttribute(normals, 3));
+  return geometry;
+}
+
+function faceNormal(side, corners) {
+  if (side === "xNeg") {
+    return { x: -1, y: 0, z: 0 };
+  }
+  if (side === "xPos") {
+    return { x: 1, y: 0, z: 0 };
+  }
+  if (side === "yNeg") {
+    return { x: 0, y: -1, z: 0 };
+  }
+  if (side === "yPos") {
+    return { x: 0, y: 1, z: 0 };
+  }
+  if (side === "zNeg") {
+    return { x: 0, y: 0, z: -1 };
+  }
+  if (side === "zPos") {
+    return { x: 0, y: 0, z: 1 };
+  }
+  const [a, b, c] = corners || [];
+  if (!a || !b || !c) {
+    return { x: 0, y: 1, z: 0 };
+  }
+  const ux = b.x - a.x;
+  const uy = b.y - a.y;
+  const uz = b.z - a.z;
+  const vx = c.x - a.x;
+  const vy = c.y - a.y;
+  const vz = c.z - a.z;
+  const nx = uy * vz - uz * vy;
+  const ny = uz * vx - ux * vz;
+  const nz = ux * vy - uy * vx;
+  const length = Math.hypot(nx, ny, nz) || 1;
+  return { x: nx / length, y: ny / length, z: nz / length };
+}
+
+function faceMaterial(THREE, fill, cache) {
+  const key = faceMaterialKey(fill);
+  if (cache.has(key)) {
+    return cache.get(key);
+  }
+  const color = parseColor(fill);
+  const alpha = color ? color.a : 1;
+  const material = new THREE.MeshLambertMaterial({
+    color: color ? formatRgbColor(color) : fill,
+    transparent: alpha < 0.999,
+    opacity: Math.max(0, Math.min(1, alpha)),
+    depthWrite: alpha >= 0.999,
+  });
+  cache.set(key, material);
+  return material;
+}
+
+function faceMaterialKey(fill) {
+  const color = parseColor(fill);
+  return color ? `${formatRgbColor(color)}:${Math.max(0, Math.min(1, color.a))}` : `${fill}:1`;
 }
 
 function spriteVoxelLocalPosition(voxel, step) {
@@ -399,6 +753,107 @@ function spriteVoxelLocalPosition(voxel, step) {
     y: (voxel.y + 0.5) * step - 0.5,
     z: (voxel.z + 0.5) * step - 0.5,
   };
+}
+
+function voxelBounds(position, scale) {
+  const half = scale / 2;
+  return {
+    x0: position.x - half,
+    x1: position.x + half,
+    y0: position.y - half,
+    y1: position.y + half,
+    z0: position.z - half,
+    z1: position.z + half,
+  };
+}
+
+function voxelGeometryKey(voxel) {
+  return voxelGeometryKeyAt(voxel.position, voxel.scale);
+}
+
+function adjacentVoxelGeometryKey(voxel, offset) {
+  return voxelGeometryKeyAt({
+    x: voxel.position.x + offset.x * voxel.scale,
+    y: voxel.position.y + offset.y * voxel.scale,
+    z: voxel.position.z + offset.z * voxel.scale,
+  }, voxel.scale);
+}
+
+function voxelGeometryKeyAt(position, scale) {
+  return [
+    quantizeGeometryValue(position.x),
+    quantizeGeometryValue(position.y),
+    quantizeGeometryValue(position.z),
+    quantizeGeometryValue(scale),
+  ].join(",");
+}
+
+function quantizeGeometryValue(value) {
+  return String(Math.round(Number(value) * 1000000) / 1000000);
+}
+
+function cellKey(position) {
+  return `${Number(position?.x) || 0},${Number(position?.y) || 0},${Number(position?.z) || 0}`;
+}
+
+function parseColor(fill) {
+  if (typeof fill !== "string") {
+    return null;
+  }
+  if (fill.startsWith("rgb(") || fill.startsWith("rgba(")) {
+    return parseRgbColor(fill);
+  }
+  if (!fill.startsWith("#") || ![4, 5, 7, 9].includes(fill.length)) {
+    return null;
+  }
+  const channels = fill.length <= 5
+    ? [...fill.slice(1)].map((digit) => parseInt(`${digit}${digit}`, 16))
+    : fill.slice(1).match(/../g).map((pair) => parseInt(pair, 16));
+  if (channels.some((channel) => Number.isNaN(channel))) {
+    return null;
+  }
+  return {
+    r: channels[0],
+    g: channels[1],
+    b: channels[2],
+    a: channels.length === 4 ? channels[3] / 255 : 1,
+  };
+}
+
+function parseRgbColor(fill) {
+  const match = fill.match(/^rgba?\(([^)]+)\)$/);
+  if (!match) {
+    return null;
+  }
+  const channels = match[1].split(",").map((part) => Number(part.trim()));
+  if (channels.length < 3 || channels.length > 4 || channels.some((channel) => Number.isNaN(channel))) {
+    return null;
+  }
+  return {
+    r: channels[0],
+    g: channels[1],
+    b: channels[2],
+    a: channels.length === 4 ? channels[3] : 1,
+  };
+}
+
+function formatColor(color) {
+  const r = clampColorChannel(color.r);
+  const g = clampColorChannel(color.g);
+  const b = clampColorChannel(color.b);
+  const a = Math.max(0, Math.min(1, color.a));
+  if (a >= 0.999) {
+    return `rgb(${r}, ${g}, ${b})`;
+  }
+  return `rgba(${r}, ${g}, ${b}, ${Number(a.toFixed(3))})`;
+}
+
+function formatRgbColor(color) {
+  return `rgb(${clampColorChannel(color.r)}, ${clampColorChannel(color.g)}, ${clampColorChannel(color.b)})`;
+}
+
+function clampColorChannel(value) {
+  return Math.max(0, Math.min(255, Math.round(value)));
 }
 
 function renderPositionForCell(frame, position) {

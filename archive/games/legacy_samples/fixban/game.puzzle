@@ -31,7 +31,7 @@ each @Boundary:directions
 each @Corner:directions
 }
 
-group {
+groups {
 target = Target:*
 pushable = Box:*
 solid = pushable Wall
@@ -191,6 +191,5 @@ scene menu {
 		back_to_title -> goto title
 	}
 }
-
 
 

@@ -38,7 +38,7 @@ puzzle fixban {
 		each @Corner:directions
 	}
 
-	group {
+	groups {
 		@wall_visual = @Boundary:directions @Corner:directions
 	}
 

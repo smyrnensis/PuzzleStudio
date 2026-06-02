@@ -95,6 +95,243 @@ Evidence:
 - Shared helper boundaries where 3D supplies only dimension hooks.
 - Tests that project away only appended 3D spatial bits.
 
+## Semantic Carrier Ledger
+
+Use this ledger before changing 3D runtime, compiler, browser, renderer, or
+shared-helper code. The purpose is not to make every file symmetrical. The
+purpose is to keep each PuzzleScript semantic carrier owned by the existing 2D
+contract unless 3D is adding only spatial capacity.
+
+Status meanings:
+
+- **Carrier extraction**: safe shared helper when it parameterizes a concrete
+  representation carrier such as movement bit width, bitmap storage, direction
+  masks, or cell access.
+- **2D-owner projection**: acceptable only when the ordinary 2D path uses the
+  helper as the owner and 3D supplies dimension hooks.
+- **3D spatial extension**: acceptable only under `three_dimensions`, and only
+  for depth, front/back, 3D coordinates, 3D neighbors, oriented frames,
+  movement resolution over 3D space, renderer, or camera presentation.
+- **Frozen semantic mirror**: do not expand. Shrink it, retire it, or prove it
+  is a 2D-owner projection.
+- **Design interrupt**: stop before implementation and add evidence first.
+
+### Mode And Public Routing
+
+- 2D owner: `parser.js`, `compiler.js`, editor/browser entry points that
+  already route ordinary PuzzleScript source.
+- 3D projection: `three_dimensions` is the canonical opt-in marker. It routes
+  ordinary `LEVELS` and rule vocabulary into 3D carriers without adding another
+  public level section.
+- Allowed 3D difference: only opt-in routing and front/back vocabulary under
+  `three_dimensions`.
+- Evidence: `test/e2e3d.test.js`, `test/compiler_host_prepare.test.js`,
+  `test/editor_3d_integration.test.js`.
+- Danger signal: a second public 3D mode marker, source-string dependency
+  detection, or 2D compile behavior changing when `three_dimensions` is absent.
+
+### Level Items And Playable Grids
+
+- 2D owner: compiler level finalization and existing browser level flow.
+- 3D projection: keep ordinary level items (`message`, `level`, `section`,
+  `goto`, `link`, `input`, `title`) as the same carrier; lower only playable
+  grid payloads through 3D slice parsing.
+- Allowed 3D difference: playable grid shape has `depth`; index/coordinate
+  helpers use the 3D order.
+- Evidence: `test/levels3d.test.js`, `test/game_runtime3d_2d_parity.test.js`,
+  `test/browser_level_flow.test.js`.
+- Danger signal: routing 3D levels through 2D `Level` loading, or creating a 3D
+  copy of message/title/section semantics.
+
+### Object, Property, Aggregate, And Layer Masks
+
+- 2D owner: compiler object setup in `compiler.js`.
+- 3D projection: use compiler-produced object ids, layer ids, object/property
+  masks, layer masks, and aggregate/property expansion.
+- Allowed 3D difference: movement carrier width may increase after object and
+  layer counts are known.
+- Evidence: `test/compiler_lowering_2d_parity.test.js`,
+  `test/cell_masks_2d_parity.test.js`,
+  `test/semantic_carrier_3d_parity.test.js`.
+- Danger signal: a 3D runtime expanding properties, synonyms, or aggregates
+  independently of the compiler.
+
+### Movement Bit Layout And Movement Storage
+
+- 2D owner: compiler movement constants plus `engine.js` movement access
+  contract.
+- 3D projection: preserve the 2D prefix (`up`, `down`, `left`, `right`,
+  `action`) and append only `front`/`back`; provide 3D movement storage with
+  the same per-cell, per-layer mask contract.
+- Allowed 3D difference: `MOV_BITS`, `MOV_MASK`, `STRIDE_MOV`, and direction
+  deltas may expand for 3D.
+- Evidence: `test/semantic_carrier_3d_parity.test.js`,
+  `test/runtime3d.test.js`, `test/resolve_movements_2d_parity.test.js`.
+- Danger signal: remapping `action`, changing the 2D bit prefix, or treating
+  input as direct object motion instead of movement-mask seeding.
+
+### Rule Lowering Masks
+
+- 2D owner: compiler rule lowering and the `CellPattern` /
+  `CellReplacement` mask contract.
+- 3D projection: `rule_lowering.js` may lower the same compiler-prepared IR
+  with dimension hooks for movement width, direction masks, and 3D row offsets.
+- Allowed 3D difference: only appended spatial movement bits and 3D spatial
+  offsets.
+- Evidence: `test/compiler_lowering_2d_parity.test.js`,
+  `test/compiler_lowering_2d_preservation.test.js`.
+- Danger signal: reintroducing `unsupportedFeatures` /
+  `unsupportedCounterparts`, or handling tags, mappings, prefixes, properties,
+  or aggregates in a 3D-only lowering path.
+
+### Rule Grouping, Random Groups, Loops, And Rigid Finalization
+
+- 2D owner: compiler finalization and engine rule sequence behavior.
+- 3D projection: helper extraction is acceptable only where the ordinary 2D
+  path calls the helper and the helper surface matches the extracted 2D
+  boundary.
+- Allowed 3D difference: spatial scan hooks and 3D frame expansion.
+- Evidence: `test/rule_grouping.test.js`, `test/rule_finalization.test.js`,
+  `test/rule_groups_2d_parity.test.js`,
+  `test/random_rule_groups_2d_parity.test.js`.
+- Danger signal: adding hook-driven rule sequencing behavior for 3D while 2D
+  `engine.js` still owns a different implementation.
+
+### Cell Matching And Cell-Local Replacement
+
+- 2D owner: `CellPattern.matches`, `CellPattern.replace`, and their lowered
+  mask semantics.
+- 3D projection: evaluate the same object/movement predicates and replacement
+  masks against 3D board cell access.
+- Allowed 3D difference: 3D neighbor/offset lookup and 3D scan bounds.
+- Evidence: `test/cell_masks_2d_parity.test.js`,
+  `test/cell_match3d.test.js`, `test/rules3d.test.js`.
+- Danger signal: treating replacement as movement, or applying collision-layer
+  defaults outside the lowered mask contract.
+
+### Movement Resolution
+
+- 2D owner: `engine.js` movement-resolution phase.
+- 3D projection: resolve movement masks per collision layer over 3D neighbors,
+  with the same blocking, clearing, rigid failure, SFX, and tween carrier
+  meanings.
+- Allowed 3D difference: target-neighbor calculation and six-direction spatial
+  deltas.
+- Evidence: `test/resolve_movements_2d_parity.test.js`,
+  `test/full_turn_2d_parity.test.js`.
+- Danger signal: adding a high-level push primitive, moving all layers together,
+  or clearing movement masks with a 3D-only policy.
+
+### Turn Order And Rule Application
+
+- 2D owner: `engine.js` `processInput` / `procInp`.
+- 3D projection: current `turn_runtime.js`, `turn3d.js`, and
+  `rule_application.js` are frozen semantic mirrors unless converted into a
+  true 2D-owner projection or reduced to carrier extraction.
+- Allowed 3D difference: board hooks for cell access, movement resolution,
+  spatial scanning, and 3D player position lookup.
+- Evidence: `test/turn_runtime.test.js`, `test/turn3d.test.js`,
+  `test/full_turn_2d_parity.test.js`.
+- Danger signal: adding new non-spatial turn semantics to the hook-driven
+  runtime, especially command priority, `late`, `global`, loops,
+  `require_player_movement`, or rigid retry behavior.
+
+### Command Queue And Session Artifacts
+
+- 2D owner: engine command queue handling and command session tail semantics.
+- 3D projection: preserve command artifacts and consume them through the shared
+  command/session planning contract.
+- Allowed 3D difference: adapter hooks for restoring/loading 3D board state and
+  following visible 3D link targets.
+- Evidence: `test/command_queue_2d_parity.test.js`,
+  `test/game_runtime3d_2d_parity.test.js`,
+  `test/full_turn_2d_parity.test.js`.
+- Danger signal: command side effects applied directly inside rule matching,
+  renderer code, or browser key handlers instead of through the command/session
+  artifact boundary.
+
+### Runtime Metadata Twiddling
+
+- 2D owner: `engine.js` command-time metadata twiddling and metadata-derived
+  browser/runtime state.
+- 3D projection: apply the same `set` / `default` / `wipe` semantics and then
+  refresh metadata-derived 3D slots.
+- Allowed 3D difference: 3D slots may project metadata into camera, renderer,
+  lifecycle, and input adapter state.
+- Evidence: `test/runtime_metadata_twiddling_2d_parity.test.js`,
+  `test/ps_metadata_slots.test.js`, `test/turn3d.test.js`.
+- Danger signal: keeping a separate 3D metadata copy, or treating a metadata
+  command as unsupported because the renderer/session hook has not caught up.
+
+### Win Conditions And Session Tail
+
+- 2D owner: engine win-condition evaluation and `DoWin` / session tail flow.
+- 3D projection: evaluate win conditions over board-access hooks and apply tail
+  artifacts through the same checkpoint, restart, undo, goto, link, cancel,
+  quit, and win-advance semantics.
+- Allowed 3D difference: load/restore hooks for 3D board sources and 3D visible
+  link lookup.
+- Evidence: `test/win_conditions_2d_parity.test.js`,
+  `test/game_runtime3d_2d_parity.test.js`,
+  `test/full_turn_2d_parity.test.js`.
+- Danger signal: immediate 3D win advance in browser mode when 2D delays through
+  `winning` / `timer`, or a separate 3D interpretation of numeric `goto`.
+
+### Again Loop And Browser Loop State
+
+- 2D owner: engine/inputoutput browser loop timing and the existing
+  `againing` / `timer` state.
+- 3D projection: 3D may request deferred again handling and map the result into
+  existing browser loop state.
+- Allowed 3D difference: no-input probe runs against a cloned 3D runtime.
+- Evidence: `test/again_loop.test.js`, `test/play_host3d.test.js`,
+  `test/inputoutput3d.test.js`.
+- Danger signal: a separate 3D browser loop, or expanding `again_loop.js` as a
+  new semantic owner while 2D `engine.js` still owns the original behavior.
+
+### SFX, Animation, And Tween Artifacts
+
+- 2D owner: engine SFX collection and graphics/tween semantics.
+- 3D projection: collect the same SFX artifact shapes and project movement
+  tween data into render frames.
+- Allowed 3D difference: 3D direction deltas and 3D renderer interpolation.
+- Evidence: `test/sfx_artifacts_2d_parity.test.js`,
+  `test/resolve_movements_2d_parity.test.js`,
+  `test/render_frame3d.test.js`.
+- Danger signal: playing sounds from rule/session code directly, or making
+  tween semantics depend on renderer internals instead of the artifact carrier.
+
+### Input, Keyboard, Mouse, And Screen Commands
+
+- 2D owner: `inputoutput.js` key policy, repeat suppression, title/message/
+  pause/level-select shell behavior, and mouse metadata behavior.
+- 3D projection: provide focus/session/screen command adapter hooks that let the
+  existing browser shell start or resume a 3D session.
+- Allowed 3D difference: direction-index normalization and canvas focus testing.
+- Evidence: `test/inputoutput3d.test.js`, `test/play_host3d.test.js`,
+  `test/browser_level_flow.test.js`.
+- Danger signal: a 3D-specific key policy, menu policy, message layout, or
+  mouse-command semantics path.
+
+### Renderer Frames And Camera Metadata
+
+- 2D owner: source metadata and existing sprite/graphics contracts remain the
+  semantic source; 3D render frames own only presentation snapshots.
+- 3D projection: render frames consume normalized state/session data and expose
+  renderer-facing `frame.view` / `frame.effects` fields.
+- Allowed 3D difference: camera projection, yaw/pitch, zoom, distance, view
+  angle, visibility, slice, 3D object instances, and WebGL rendering.
+- Evidence: `test/render_frame3d.test.js`,
+  `test/editor_3d_playable_contract.test.js`,
+  `test/play_host3d.test.js`.
+- Danger signal: renderers reading PuzzleScript source, compiler state, or live
+  sessions directly; compiler/browser code silently falling back to 2D canvas
+  when 3D host capability is missing.
+- Design interrupt: this audit and `AGENTS.md` list `camera_distance <cells>`
+  as 3D camera metadata, but current compiler behavior rejects
+  `CAMERA_DISTANCE`. Resolve that mismatch with a focused syntax/metadata test
+  before relying on either behavior.
+
 ### Upstream Review Surface
 
 Question:

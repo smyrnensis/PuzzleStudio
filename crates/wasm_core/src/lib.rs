@@ -1,9 +1,9 @@
 use puzzle_core::{
-    ComparisonOp, CompiledGame, Effect, GapTerm, GlobalId, GlobalUpdateOp, Guard, InputId, LayerId,
-    LocalFrame, LocalFrameExtent, MatchCell, ObjectDef, ObjectId, ObjectSetMatcher,
-    ObjectSetScratchPattern, Offset, Pattern, PatternComponent, ConditionDef, ConditionId, ConditionValueKind, Rule,
-    RuleApplication, RuleCondition, RuleId, RuleStep, ScratchId, ScratchPattern, ScratchValueMatch,
-    State, TransitionCommand, WriteOp,
+    ComparisonOp, CompiledGame, ConditionDef, ConditionId, ConditionValueKind, Effect, GapTerm,
+    GlobalId, GlobalUpdateOp, Guard, InputId, LayerId, LocalFrame, LocalFrameExtent, MatchCell,
+    ObjectDef, ObjectId, ObjectSetMatcher, ObjectSetScratchPattern, Offset, Pattern,
+    PatternComponent, Rule, RuleApplication, RuleCondition, RuleId, RuleStep, ScratchId,
+    ScratchPattern, ScratchValueMatch, State, TransitionCommand, WriteOp,
 };
 use serde_json::Value;
 use wasm_bindgen::prelude::*;
@@ -347,15 +347,19 @@ fn decode_compact_guard(value: &Value) -> Result<Guard, String> {
             op: decode_compact_comparison(u16_at(items, 2, "comparison")?)?,
             value: i64_at(items, 3, "value")?,
         }),
-        3 => Ok(Guard::ConditionNonZero(ConditionId(u16_at(items, 1, "condition")?))),
+        3 => Ok(Guard::ConditionNonZero(ConditionId(u16_at(
+            items,
+            1,
+            "condition",
+        )?))),
         4 => Ok(Guard::InlineConditionCompare {
             kind: decode_compact_condition_value_kind(value_at(items, 1, "condition kind")?)?,
             op: decode_compact_comparison(u16_at(items, 2, "comparison")?)?,
             value: i64_at(items, 3, "value")?,
         }),
-        5 => Ok(Guard::InlineConditionNonZero(decode_compact_condition_value_kind(
-            value_at(items, 1, "condition kind")?,
-        )?)),
+        5 => Ok(Guard::InlineConditionNonZero(
+            decode_compact_condition_value_kind(value_at(items, 1, "condition kind")?)?,
+        )),
         tag => Err(format!("unknown compact guard tag: {tag}")),
     }
 }
@@ -366,30 +370,30 @@ fn decode_compact_condition_value_kind(value: &Value) -> Result<ConditionValueKi
         0 => Ok(ConditionValueKind::CountObjects(decode_compact_object_ids(
             value_at(items, 1, "objects")?,
         )?)),
-        1 => Ok(ConditionValueKind::ExistsObjects(decode_compact_object_ids(
-            value_at(items, 1, "objects")?,
-        )?)),
+        1 => Ok(ConditionValueKind::ExistsObjects(
+            decode_compact_object_ids(value_at(items, 1, "objects")?)?,
+        )),
         2 => Ok(ConditionValueKind::NoneObjects(decode_compact_object_ids(
             value_at(items, 1, "objects")?,
         )?)),
-        3 => Ok(ConditionValueKind::CountMatches(decode_compact_patterns(value_at(
-            items, 1, "patterns",
-        )?)?)),
+        3 => Ok(ConditionValueKind::CountMatches(decode_compact_patterns(
+            value_at(items, 1, "patterns")?,
+        )?)),
         4 => Ok(ConditionValueKind::ExistsMatches(decode_compact_patterns(
             value_at(items, 1, "patterns")?,
         )?)),
-        5 => Ok(ConditionValueKind::NoneMatches(decode_compact_patterns(value_at(
-            items, 1, "patterns",
-        )?)?)),
-        6 => Ok(ConditionValueKind::CountInputMatches(decode_compact_input_patterns(
-            value_at(items, 1, "input patterns")?,
+        5 => Ok(ConditionValueKind::NoneMatches(decode_compact_patterns(
+            value_at(items, 1, "patterns")?,
         )?)),
+        6 => Ok(ConditionValueKind::CountInputMatches(
+            decode_compact_input_patterns(value_at(items, 1, "input patterns")?)?,
+        )),
         7 => Ok(ConditionValueKind::ExistsInputMatches(
             decode_compact_input_patterns(value_at(items, 1, "input patterns")?)?,
         )),
-        8 => Ok(ConditionValueKind::NoneInputMatches(decode_compact_input_patterns(
-            value_at(items, 1, "input patterns")?,
-        )?)),
+        8 => Ok(ConditionValueKind::NoneInputMatches(
+            decode_compact_input_patterns(value_at(items, 1, "input patterns")?)?,
+        )),
         tag => Err(format!("unknown compact condition kind tag: {tag}")),
     }
 }

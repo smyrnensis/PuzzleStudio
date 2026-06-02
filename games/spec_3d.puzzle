@@ -6,9 +6,9 @@ theme puzzlescript
 puzzle3 sokoban {
 render {
   camera {
-    yaw = 10
-    pitch = 55
-    zoom = 1.1
+    yaw = 0
+    pitch = 90
+    zoom = 1
   }
 }
 
@@ -18,7 +18,7 @@ layers {
   solid = Player Box Wall
 }
 
-group {
+groups {
   solid = Player Box Wall
 }
 
@@ -40,8 +40,8 @@ on_level_clear {
 scene title {
 layout {
   title "Microban 3D"
-  button "New Game" -> goto playing
-  button "Level Select" -> goto level_select
+  choice "New Game" -> goto playing
+  choice "Level Select" -> goto level_select
 }
 }
 

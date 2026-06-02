@@ -9,7 +9,7 @@ actor = Player Box Wall
 marker = Moment
 }
 
-group {
+groups {
 pushable = Player Box
 solid = actor
 }

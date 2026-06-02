@@ -1,8 +1,8 @@
 # Groups
-Use `group` to create selector aliases.
+Use `groups` to create selector aliases in one block.
 
 ```puzzle
-group {
+groups {
   solid = Player Box Wall
   pushable = Box Crate
   @hints = @Cursor @Hint
@@ -18,4 +18,3 @@ rules {
 ```
 
 Use a group name where you would otherwise list the same objects repeatedly.
-

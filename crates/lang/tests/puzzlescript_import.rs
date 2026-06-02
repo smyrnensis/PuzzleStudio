@@ -175,7 +175,7 @@ layers {
   payload = C
 }
 
-group {
+groups {
   G = A C
   H = A B
 }
@@ -591,7 +591,7 @@ P
 
     let translated = translate_puzzlescript_to_canonical(source).unwrap();
 
-    assert!(translated.contains("group {\n  player = Player_u Player_d\n}"));
+    assert!(translated.contains("groups {\n  player = Player_u Player_d\n}"));
     assert!(translated.contains("input directions [ player ] -> [ player{>} ]"));
     assert!(!translated.contains("input directions [ Player ]"));
     parse_game(&translated).unwrap();
@@ -801,7 +801,7 @@ fn translates_official_simple_block_sliding_with_groups_and_again_effects() {
 
     let translated = translate_puzzlescript_to_canonical(source).unwrap();
 
-    assert!(translated.contains("group {\n  crate = Crate1 Crate2 Crate3"));
+    assert!(translated.contains("groups {\n  crate = Crate1 Crate2 Crate3"));
     assert!(translated.contains("  1 = Crate1"));
     assert!(translated.contains("  , = nospawn"));
     assert!(!translated.contains("var __ps_again"));
@@ -1262,14 +1262,14 @@ P
             .theme
             .variables
             .iter()
-            .any(|variable| variable.name == "bg" && variable.value == "#000000")
+            .any(|variable| variable.name == "background" && variable.value == "#000000")
     );
     assert!(
         loaded
             .theme
             .variables
             .iter()
-            .any(|variable| variable.name == "ink" && variable.value == "#9CBD0F")
+            .any(|variable| variable.name == "text" && variable.value == "#9CBD0F")
     );
 }
 

@@ -176,6 +176,7 @@ struct Parser3 {
     on_level_start_lines: Vec<String>,
     on_level_start_local_frame_modifier: Option<String>,
     on_level_clear_lines: Vec<String>,
+    on_last_level_clear_lines: Option<Vec<String>>,
     win_condition_lines: Vec<String>,
     settings: ModelSettings3,
     sprite_set: Option<SpriteSet3>,
@@ -184,12 +185,7 @@ struct Parser3 {
 impl Parser3 {
     fn new(source: &str) -> Self {
         Self {
-            lines: source
-                .lines()
-                .map(strip_comment)
-                .map(str::trim)
-                .map(str::to_string)
-                .collect(),
+            lines: preprocess_source_lines3(source),
             value_sets: Vec::new(),
             input_specs: Vec::new(),
             layers: Vec::new(),
@@ -202,6 +198,7 @@ impl Parser3 {
             on_level_start_lines: Vec::new(),
             on_level_start_local_frame_modifier: None,
             on_level_clear_lines: Vec::new(),
+            on_last_level_clear_lines: None,
             win_condition_lines: Vec::new(),
             settings: ModelSettings3::default(),
             sprite_set: None,
@@ -234,8 +231,10 @@ impl Parser3 {
                 ));
             } else if line == "inputs {" {
                 index = self.parse_inputs_block(index + 1)?;
-            } else if line == "groups {" || line == "group {" {
+            } else if line == "groups {" {
                 index = self.parse_groups_block(index + 1)?;
+            } else if line == "group {" {
+                return Err(message("`group { ... }` was removed; use `groups { ... }`"));
             } else if line == "legend {" {
                 index = self.parse_legend_block(index + 1)?;
             } else if is_levels3_header(&line) {
@@ -263,6 +262,8 @@ impl Parser3 {
                 index = self.parse_on_level_start_block(index + 1)?;
             } else if line == "on_level_clear {" {
                 index = self.parse_on_level_clear_block(index + 1)?;
+            } else if line == "on_last_level_clear {" {
+                index = self.parse_on_last_level_clear_block(index + 1)?;
             } else if line == "win_conditions {" {
                 index = self.parse_win_conditions_block(index + 1)?;
             } else if line == "render {" {
@@ -322,8 +323,19 @@ impl Parser3 {
             .iter()
             .map(|line| parse_lifecycle_command_line(line))
             .collect::<Result<Vec<_>, ParseError3>>()?;
+        let on_last_level_clear = self
+            .on_last_level_clear_lines
+            .as_ref()
+            .map(|lines| {
+                lines
+                    .iter()
+                    .map(|line| parse_lifecycle_command_line(line))
+                    .collect::<Result<Vec<_>, ParseError3>>()
+            })
+            .transpose()?;
         let mut lifecycle = Lifecycle3::new(on_level_start, on_level_clear);
         lifecycle.on_level_start_local_frame = on_level_start_local_frame;
+        lifecycle.on_last_level_clear = on_last_level_clear;
         let win_condition = if self.win_condition_lines.is_empty() {
             None
         } else {
@@ -375,8 +387,10 @@ impl Parser3 {
                 ));
             } else if line == "inputs {" {
                 index = self.parse_inputs_block(index + 1)?;
-            } else if line == "groups {" || line == "group {" {
+            } else if line == "groups {" {
                 index = self.parse_groups_block(index + 1)?;
+            } else if line == "group {" {
+                return Err(message("`group { ... }` was removed; use `groups { ... }`"));
             } else if let Some(rest) = line
                 .strip_prefix("rules ")
                 .and_then(|head| head.strip_suffix(" {"))
@@ -395,6 +409,8 @@ impl Parser3 {
                 index = self.parse_on_level_start_block(index + 1)?;
             } else if line == "on_level_clear {" {
                 index = self.parse_on_level_clear_block(index + 1)?;
+            } else if line == "on_last_level_clear {" {
+                index = self.parse_on_last_level_clear_block(index + 1)?;
             } else if line == "win_conditions {" {
                 index = self.parse_win_conditions_block(index + 1)?;
             } else if line == "render {" {
@@ -835,8 +851,9 @@ impl Parser3 {
                 index += 1;
                 continue;
             }
-            self.rule_lines.push(line.clone());
-            index += 1;
+            let (rule_line, next_index) = collect_multiline_rule_line(&self.lines, index)?;
+            self.rule_lines.push(rule_line);
+            index = next_index;
         }
         Err(message("rules block missing }"))
     }
@@ -871,6 +888,29 @@ impl Parser3 {
             index += 1;
         }
         Err(message("on_level_clear block missing }"))
+    }
+
+    fn parse_on_last_level_clear_block(&mut self, mut index: usize) -> Result<usize, ParseError3> {
+        if self.on_last_level_clear_lines.is_some() {
+            return Err(message(
+                "multiple last_level_clear blocks are not supported",
+            ));
+        }
+        let mut lines = Vec::new();
+        while index < self.lines.len() {
+            let line = &self.lines[index];
+            if line == "}" {
+                self.on_last_level_clear_lines = Some(lines);
+                return Ok(index + 1);
+            }
+            if line.is_empty() {
+                index += 1;
+                continue;
+            }
+            lines.push(line.clone());
+            index += 1;
+        }
+        Err(message("on_last_level_clear block missing }"))
     }
 
     fn parse_win_conditions_block(&mut self, mut index: usize) -> Result<usize, ParseError3> {
@@ -1904,6 +1944,219 @@ fn parse_optional_program_local_frame(
             "transition block header must use local_radius <n> or local_frame <x> <y> <z>",
         )),
     }
+}
+
+fn preprocess_source_lines3(source: &str) -> Vec<String> {
+    let raw_lines = source
+        .lines()
+        .map(strip_comment)
+        .map(str::trim)
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    let mut lines = Vec::new();
+    let mut block_stack = Vec::<String>::new();
+    for line in raw_lines {
+        if line.is_empty() {
+            lines.push(String::new());
+            continue;
+        }
+        let split_semicolons = !block_stack
+            .iter()
+            .any(|block| matches!(block.as_str(), "levels3" | "sprites3"));
+        for piece in split_structural_line3(&line, split_semicolons) {
+            update_structural_block_stack3(&piece, &mut block_stack);
+            lines.push(piece);
+        }
+    }
+    lines
+}
+
+fn update_structural_block_stack3(line: &str, stack: &mut Vec<String>) {
+    if line == "}" {
+        stack.pop();
+        return;
+    }
+    if !line.ends_with('{') {
+        return;
+    }
+    if let Some(first) = line.split_whitespace().next() {
+        stack.push(first.to_string());
+    }
+}
+
+fn split_structural_line3(line: &str, split_semicolons: bool) -> Vec<String> {
+    let mut pieces = Vec::new();
+    let mut current = String::new();
+    let mut in_string = false;
+    let mut escaped = false;
+    let mut square_depth = 0usize;
+    let mut paren_depth = 0usize;
+    let mut inline_brace_depth = 0usize;
+
+    for (index, ch) in line.char_indices() {
+        if in_string {
+            current.push(ch);
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        if ch == '"' {
+            in_string = true;
+            current.push(ch);
+            continue;
+        }
+        if inline_brace_depth > 0 {
+            current.push(ch);
+            if ch == '{' {
+                inline_brace_depth += 1;
+            } else if ch == '}' {
+                inline_brace_depth = inline_brace_depth.saturating_sub(1);
+            }
+            continue;
+        }
+        match ch {
+            '[' => {
+                square_depth += 1;
+                current.push(ch);
+            }
+            ']' => {
+                square_depth = square_depth.saturating_sub(1);
+                current.push(ch);
+            }
+            '(' => {
+                paren_depth += 1;
+                current.push(ch);
+            }
+            ')' => {
+                paren_depth = paren_depth.saturating_sub(1);
+                current.push(ch);
+            }
+            '{' if square_depth == 0 && paren_depth == 0 => {
+                if is_inline_selector_brace3(line, index) {
+                    inline_brace_depth = 1;
+                    current.push(ch);
+                    continue;
+                }
+                push_trimmed_piece3(&mut pieces, &current);
+                current.clear();
+                if let Some(last) = pieces.last_mut() {
+                    last.push_str(" {");
+                } else {
+                    pieces.push("{".to_string());
+                }
+            }
+            '}' if square_depth == 0 && paren_depth == 0 => {
+                push_trimmed_piece3(&mut pieces, &current);
+                current.clear();
+                pieces.push("}".to_string());
+            }
+            ';' if split_semicolons && square_depth == 0 && paren_depth == 0 => {
+                push_trimmed_piece3(&mut pieces, &current);
+                current.clear();
+            }
+            _ => current.push(ch),
+        }
+    }
+    push_trimmed_piece3(&mut pieces, &current);
+    pieces
+}
+
+fn push_trimmed_piece3(pieces: &mut Vec<String>, piece: &str) {
+    let trimmed = piece.trim();
+    if !trimmed.is_empty() {
+        pieces.push(trimmed.to_string());
+    }
+}
+
+fn is_inline_selector_brace3(line: &str, index: usize) -> bool {
+    let before = line[..index].chars().next_back();
+    let after = line[index + 1..].chars().next();
+    before.is_some_and(is_selector_token_char3) && after.is_some_and(|ch| !ch.is_whitespace())
+}
+
+fn is_selector_token_char3(ch: char) -> bool {
+    ch.is_ascii_alphanumeric() || matches!(ch, '_' | '@' | ':' | '*')
+}
+
+fn collect_multiline_rule_line(
+    lines: &[String],
+    start: usize,
+) -> Result<(String, usize), ParseError3> {
+    let first = lines[start].trim();
+    if !looks_like_rule_line_start(first) {
+        return Ok((first.to_string(), start + 1));
+    }
+
+    let mut joined = String::new();
+    let mut bracket_depth = 0usize;
+    let mut saw_arrow = false;
+    let mut index = start;
+    while index < lines.len() {
+        let line = lines[index].trim();
+        if line == "}" {
+            break;
+        }
+        if index > start && bracket_depth == 0 && !saw_arrow && !line.starts_with("->") {
+            return Ok((first.to_string(), start + 1));
+        }
+        if !joined.is_empty() {
+            if bracket_depth > 0 {
+                joined.push_str("; ");
+            } else {
+                joined.push(' ');
+            }
+        }
+        joined.push_str(line);
+        bracket_depth = update_square_bracket_depth3(bracket_depth, line);
+        saw_arrow |= line.contains("->");
+
+        if index == start && bracket_depth == 0 {
+            return Ok((first.to_string(), start + 1));
+        }
+        if index > start && bracket_depth == 0 && saw_arrow {
+            return Ok((joined, index + 1));
+        }
+        index += 1;
+    }
+
+    Ok((first.to_string(), start + 1))
+}
+
+fn looks_like_rule_line_start(line: &str) -> bool {
+    line.contains('[')
+        && (line.starts_with("input ")
+            || line
+                .split_once(' ')
+                .is_some_and(|(prefix, _)| !prefix.is_empty()))
+}
+
+fn update_square_bracket_depth3(mut depth: usize, line: &str) -> usize {
+    let mut in_string = false;
+    let mut escaped = false;
+    for ch in line.chars() {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match ch {
+            '"' => in_string = true,
+            '[' => depth += 1,
+            ']' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+    }
+    depth
 }
 
 fn parse_local_frame_extent3(token: &str) -> Result<LocalFrameExtent, ParseError3> {

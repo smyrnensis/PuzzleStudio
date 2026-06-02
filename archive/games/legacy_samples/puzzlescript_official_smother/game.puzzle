@@ -23,7 +23,7 @@ layers {
   layer_5 = PlayerFull Protector ProtectorSolo victimSolo Wall PlayerDead LaserGV LaserGH pushBlock
 }
 
-group {
+groups {
   Player = PlayerFull Protector ProtectorSolo victimSolo
   PlayerWin = PlayerFull PlayerDead Protector victimSolo
   Laser = LaserV LaserH LaserB

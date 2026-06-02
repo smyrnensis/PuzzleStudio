@@ -1717,6 +1717,51 @@ right:up [ Player | Box ] -> [ | Player | Box ]
     }
 
     #[test]
+    fn parser_lowers_dense_frame_rule_with_pattern_line_breaks() {
+        let parsed = parse_puzzle3d(
+            r#"
+layers {
+actor
+}
+
+objects {
+Player actor
+Box actor
+}
+
+rules {
+right:up [ Player
+Box ] -> [ Player
+Box ]
+}
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(parsed.rules.len(), 1);
+        assert_eq!(
+            parsed.rules[0].pattern.cells[1].offset,
+            Direction3::UP.offset
+        );
+    }
+
+    #[test]
+    fn parser_accepts_inline_braced_blocks_with_semicolon_rows() {
+        let parsed = parse_puzzle3d(
+            r#"
+layers { actor }
+objects { Player actor; Box actor }
+groups { solid = Box }
+rules { right [ Player | no solid ] -> [ | Player ] }
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(parsed.game.objects.len(), 2);
+        assert_eq!(parsed.rules.len(), 1);
+    }
+
+    #[test]
     fn parser_lowers_layers_legend_and_levels_to_level_bundle() {
         let parsed = parse_puzzle3d(
             r#"
@@ -2063,6 +2108,33 @@ actor = Player
 
         assert!(
             matches!(err, ParseError3::Message(message) if message.contains("unknown 3D puzzle directive"))
+        );
+    }
+
+    #[test]
+    fn parser_rejects_singular_group_block() {
+        let err = parse_puzzle3d(
+            r#"
+puzzle3 old_group_block {
+layers {
+actor = Player Wall
+}
+
+objects {
+Player actor
+Wall actor
+}
+
+group {
+solid = Wall
+}
+}
+"#,
+        )
+        .unwrap_err();
+
+        assert!(
+            matches!(err, ParseError3::Message(message) if message.contains("`group { ... }` was removed; use `groups { ... }`"))
         );
     }
 

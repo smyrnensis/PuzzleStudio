@@ -28,7 +28,7 @@ actor = Head:directions Body:directions Tail:parity:directions Box:tile Wall:til
 marker = Moved
 }
 
-group {
+groups {
 snake = Head Body Tail
 pushable = Box
 solid = actor

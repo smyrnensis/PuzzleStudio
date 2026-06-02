@@ -97,6 +97,13 @@ struct SaveCommandRequest {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct ExportHtmlCommandRequest {
+    html: String,
+    filename: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct CreateSourceFileCommandRequest {
     source: String,
     puzzle_path: String,
@@ -300,6 +307,43 @@ fn save_source(
         .save_source_file(&request)
         .map_err(|error| error.to_string())?;
     Ok("{\"ok\":true}".to_string())
+}
+
+#[tauri::command]
+async fn export_html(
+    app: tauri::AppHandle,
+    request: ExportHtmlCommandRequest,
+) -> Result<serde_json::Value, String> {
+    let filename = export_html_file_name(request.filename.as_deref());
+    let (sender, mut receiver) = tauri::async_runtime::channel(1);
+    app.dialog()
+        .file()
+        .set_title("Export HTML")
+        .add_filter("HTML", &["html", "htm"])
+        .set_file_name(filename)
+        .save_file(move |path| {
+            let _ = sender.blocking_send(path);
+        });
+    let Some(path) = receiver.recv().await else {
+        return Err("export dialog closed before returning a path".to_string());
+    };
+    let Some(path) = path else {
+        return Ok(serde_json::json!({ "canceled": true }));
+    };
+    let mut path = path
+        .into_path()
+        .map_err(|error| format!("selected path is not a local filesystem path: {error}"))?;
+    ensure_html_extension(&mut path);
+    fs::write(&path, request.html).map_err(|error| {
+        format!(
+            "failed to write exported HTML to {}: {error}",
+            path.display()
+        )
+    })?;
+    Ok(serde_json::json!({
+        "ok": true,
+        "path": path.display().to_string(),
+    }))
 }
 
 #[tauri::command]
@@ -664,6 +708,30 @@ fn is_workspace_file(path: &Path) -> bool {
     )
 }
 
+fn export_html_file_name(filename: Option<&str>) -> String {
+    let candidate = filename
+        .and_then(|value| Path::new(value).file_name())
+        .and_then(|value| value.to_str())
+        .unwrap_or("game.html")
+        .trim();
+    let candidate = if candidate.is_empty() {
+        "game.html"
+    } else {
+        candidate
+    };
+    if Path::new(candidate).extension().is_some() {
+        candidate.to_string()
+    } else {
+        format!("{candidate}.html")
+    }
+}
+
+fn ensure_html_extension(path: &mut PathBuf) {
+    if path.extension().is_none() {
+        path.set_extension("html");
+    }
+}
+
 fn pick_workspace_path(
     app: &tauri::AppHandle,
     kind: Option<&str>,
@@ -781,6 +849,7 @@ pub fn run() {
             highlight_source,
             sound_tools,
             save_source,
+            export_html,
             create_source_file,
             create_source_folder,
             rename_workspace_entry,
@@ -848,5 +917,24 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["/tmp/project-a", "/tmp/project-b"]
         );
+    }
+
+    #[test]
+    fn export_html_file_name_uses_leaf_and_html_default() {
+        assert_eq!(export_html_file_name(Some("my-game.html")), "my-game.html");
+        assert_eq!(export_html_file_name(Some("/tmp/my-game")), "my-game.html");
+        assert_eq!(export_html_file_name(Some("")), "game.html");
+        assert_eq!(export_html_file_name(None), "game.html");
+    }
+
+    #[test]
+    fn ensure_html_extension_only_adds_missing_extension() {
+        let mut missing = PathBuf::from("/tmp/game");
+        ensure_html_extension(&mut missing);
+        assert_eq!(missing, PathBuf::from("/tmp/game.html"));
+
+        let mut existing = PathBuf::from("/tmp/game.htm");
+        ensure_html_extension(&mut existing);
+        assert_eq!(existing, PathBuf::from("/tmp/game.htm"));
     }
 }

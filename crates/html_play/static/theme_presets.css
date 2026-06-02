@@ -21,8 +21,8 @@
 }
 
 body.theme-clean {
-  --bg: #f5f3ef;
-  --ink: #1f2428;
+  --background: #f5f3ef;
+  --text: #1f2428;
   --accent: #2f7ebc;
   --radius-control: 6px;
   --radius-panel: 8px;
@@ -46,8 +46,8 @@ body.theme-clean {
 
 body.theme-terminal {
   color-scheme: dark;
-  --bg: #000000;
-  --ink: #ffffff;
+  --background: #000000;
+  --text: #ffffff;
   --accent: #ffffff;
   --radius-control: 0px;
   --radius-panel: 0px;
@@ -55,7 +55,7 @@ body.theme-terminal {
   --level-clear-mark: "*";
   --ui-font: "PuzzleStudio Pixel 5x7", "Courier New", Monaco, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   --title-font: var(--ui-font);
-  background: var(--bg);
+  background: var(--background);
   font-variant-ligatures: none;
   font-smooth: never;
   -webkit-font-smoothing: none;
@@ -67,7 +67,7 @@ body.theme-terminal {
 .theme-terminal .level-menu li {
   border: 0;
   background: transparent;
-  color: var(--ink);
+  color: var(--text);
   font-weight: 400;
   box-shadow: none;
   text-transform: uppercase;
@@ -77,8 +77,8 @@ body.theme-terminal {
 .theme-terminal .is-menu-scene button:hover,
 .theme-terminal .level-menu li.is-selected,
 .theme-terminal .is-menu-scene button.is-selected {
-  background: var(--ink);
-  color: var(--bg);
+  background: var(--text);
+  color: var(--background);
   box-shadow: none;
   transform: none;
 }
@@ -86,12 +86,12 @@ body.theme-terminal {
 .theme-terminal button:active,
 .theme-terminal .is-menu-scene button:active {
   background: transparent;
-  color: var(--ink);
+  color: var(--text);
 }
 
 .theme-terminal .board {
   image-rendering: pixelated;
-  border: 4px solid var(--ink);
+  border: 4px solid var(--text);
   box-shadow: none;
 }
 
@@ -113,7 +113,7 @@ body.theme-terminal {
 }
 
 .theme-terminal .view-subtitle {
-  color: var(--ink);
+  color: var(--text);
   font-size: 14px;
   font-weight: 400;
   text-align: left;
@@ -134,8 +134,8 @@ body.theme-terminal {
 }
 
 body.theme-paper {
-  --bg: #f4ecd9;
-  --ink: #2b2419;
+  --background: #f4ecd9;
+  --text: #2b2419;
   --accent: #8d5d2a;
   --radius-control: 4px;
   --radius-panel: 6px;
@@ -143,16 +143,16 @@ body.theme-paper {
   --title-font: var(--ui-font);
   background:
     repeating-linear-gradient(0deg, transparent 0 23px, color-mix(in srgb, var(--accent) 8%, transparent) 23px 24px),
-    var(--bg);
+    var(--background);
 }
 
 .theme-paper button,
 .theme-paper .level-menu li {
   border: 1px solid color-mix(in srgb, var(--accent) 24%, transparent);
   border-left: 4px solid color-mix(in srgb, var(--accent) 34%, transparent);
-  background: color-mix(in srgb, var(--bg) 90%, transparent);
-  box-shadow: 0 3px 8px color-mix(in srgb, var(--ink) 10%, transparent);
-  color: var(--ink);
+  background: color-mix(in srgb, var(--background) 90%, transparent);
+  box-shadow: 0 3px 8px color-mix(in srgb, var(--text) 10%, transparent);
+  color: var(--text);
 }
 
 .theme-paper .level-menu li,
@@ -165,7 +165,7 @@ body.theme-paper {
 .theme-paper button:hover,
 .theme-paper .is-menu-scene button:hover {
   background: color-mix(in srgb, var(--accent) 10%, transparent);
-  box-shadow: 0 5px 12px color-mix(in srgb, var(--ink) 13%, transparent);
+  box-shadow: 0 5px 12px color-mix(in srgb, var(--text) 13%, transparent);
   transform: translateY(-1px);
 }
 
@@ -175,12 +175,12 @@ body.theme-paper {
   background: color-mix(in srgb, var(--accent) 12%, transparent);
   box-shadow:
     inset 0 -2px 0 color-mix(in srgb, var(--accent) 24%, transparent),
-    0 6px 14px color-mix(in srgb, var(--ink) 14%, transparent);
+    0 6px 14px color-mix(in srgb, var(--text) 14%, transparent);
 }
 
 .theme-paper .board {
-  border: 1px solid color-mix(in srgb, var(--ink) 16%, transparent);
-  box-shadow: 0 10px 24px color-mix(in srgb, var(--ink) 15%, transparent);
+  border: 1px solid color-mix(in srgb, var(--text) 16%, transparent);
+  box-shadow: 0 10px 24px color-mix(in srgb, var(--text) 15%, transparent);
 }
 
 .theme-paper .scene-layer.is-menu-scene {
@@ -211,8 +211,8 @@ body.theme-paper {
 
 body.theme-pixel {
   color-scheme: dark;
-  --bg: #08080c;
-  --ink: #f8f8f8;
+  --background: #08080c;
+  --text: #f8f8f8;
   --accent: #f8f8f8;
   --radius-control: 0px;
   --radius-panel: 0px;
@@ -220,7 +220,7 @@ body.theme-pixel {
   --level-clear-mark: "*";
   --ui-font: "PuzzleStudio Pixel 8x8", "Courier New", Monaco, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   --title-font: var(--ui-font);
-  background: var(--bg);
+  background: var(--background);
   font-variant-ligatures: none;
   font-smooth: never;
   -webkit-font-smoothing: none;
@@ -230,9 +230,9 @@ body.theme-pixel {
 
 .theme-pixel button,
 .theme-pixel .level-menu li {
-  border: 4px solid var(--ink);
+  border: 4px solid var(--text);
   background: transparent;
-  color: var(--ink);
+  color: var(--text);
   box-shadow: none;
   font-weight: 400;
   letter-spacing: 0;
@@ -244,8 +244,8 @@ body.theme-pixel {
 .theme-pixel .is-menu-scene button:hover,
 .theme-pixel .level-menu li.is-selected,
 .theme-pixel .is-menu-scene button.is-selected {
-  background: var(--ink);
-  color: var(--bg);
+  background: var(--text);
+  color: var(--background);
   box-shadow: none;
   transform: none;
 }
@@ -253,11 +253,11 @@ body.theme-pixel {
 .theme-pixel button:active,
 .theme-pixel .is-menu-scene button:active {
   background: transparent;
-  color: var(--ink);
+  color: var(--text);
 }
 
 .theme-pixel .board {
-  border: 8px solid var(--ink);
+  border: 8px solid var(--text);
   box-shadow: none;
   image-rendering: pixelated;
 }
@@ -275,8 +275,8 @@ body.theme-pixel {
 .theme-pixel .view-title {
   max-width: 608px;
   padding: 12px 16px;
-  border: 8px solid var(--ink);
-  background: var(--bg);
+  border: 8px solid var(--text);
+  background: var(--background);
   box-shadow: none;
   font-size: 48px;
   font-weight: 400;
@@ -286,7 +286,7 @@ body.theme-pixel {
 }
 
 .theme-pixel .view-subtitle {
-  color: var(--ink);
+  color: var(--text);
   font-size: 24px;
   font-weight: 400;
   text-align: left;
@@ -318,8 +318,8 @@ body.theme-pixel {
 body.theme-puzzlescript {
   color-scheme: dark;
   --ps-terminal-control-width: 36ch;
-  --bg: #000000;
-  --ink: #ffffff;
+  --background: #000000;
+  --text: #ffffff;
   --accent: #ffffff;
   --radius-control: 0px;
   --radius-panel: 0px;
@@ -327,7 +327,7 @@ body.theme-puzzlescript {
   --level-clear-mark: "*";
   --ui-font: "PuzzleScript Terminal", "Courier New", Monaco, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   --title-font: var(--ui-font);
-  background: var(--bg);
+  background: var(--background);
   font-variant-ligatures: none;
   font-smooth: never;
   -webkit-font-smoothing: none;
@@ -343,7 +343,7 @@ body.theme-puzzlescript {
 .theme-puzzlescript .play-surface,
 .theme-puzzlescript .screen-view,
 .theme-puzzlescript .scene-layer {
-  background: var(--bg);
+  background: var(--background);
 }
 
 .theme-puzzlescript .screen-view {
@@ -359,7 +359,7 @@ body.theme-puzzlescript {
 .theme-puzzlescript .view-subtitle,
 .theme-puzzlescript .screen-view .view-text,
 .theme-puzzlescript .message-popup-text {
-  color: var(--ink);
+  color: var(--text);
   font-weight: 400;
   letter-spacing: 0;
   text-shadow: none;
@@ -388,7 +388,7 @@ body.theme-puzzlescript {
   border: 0;
   border-radius: 0;
   background: transparent;
-  color: var(--ink);
+  color: var(--text);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -429,7 +429,7 @@ body.theme-puzzlescript {
 .theme-puzzlescript .level-menu li.is-selected,
 .theme-puzzlescript button.is-selected {
   background: transparent;
-  color: var(--ink);
+  color: var(--text);
   box-shadow: none;
   transform: none;
 }
@@ -441,8 +441,8 @@ body.theme-puzzlescript {
   position: static;
   inset: auto;
   min-width: 1ch;
-  flex: 0 0 auto;
-  color: var(--ink);
+  flex: 0 0 1ch;
+  color: var(--text);
   content: "";
   font-weight: 400;
   text-align: center;
@@ -459,16 +459,25 @@ body.theme-puzzlescript {
   content: "#";
 }
 
-.theme-puzzlescript button.is-selected:active::before,
-.theme-puzzlescript button.is-confirming::before,
-.theme-puzzlescript .level-menu li.is-confirming::before {
-  content: var(--ps-confirm-before, "#----------");
+.theme-puzzlescript button.is-confirming,
+.theme-puzzlescript .level-menu li.is-confirming,
+.theme-puzzlescript .level-menu li.is-confirming > * {
+  color: transparent;
 }
 
-.theme-puzzlescript button.is-selected:active::after,
 .theme-puzzlescript button.is-confirming::after,
 .theme-puzzlescript .level-menu li.is-confirming::after {
-  content: var(--ps-confirm-after, "----------#");
+  position: absolute;
+  top: 50%;
+  left: 1ch;
+  right: 1ch;
+  min-width: 0;
+  flex: none;
+  color: var(--text);
+  content: var(--ps-confirm-line, "");
+  pointer-events: none;
+  text-align: center;
+  transform: translateY(-50%);
 }
 
 .theme-puzzlescript .board,
@@ -480,7 +489,7 @@ body.theme-puzzlescript {
 }
 
 .theme-puzzlescript .message-popup-backdrop {
-  background: var(--bg);
+  background: var(--background);
 }
 
 .theme-puzzlescript .message-popup {
@@ -494,8 +503,8 @@ body.theme-puzzlescript {
 }
 
 body.theme-candy {
-  --bg: #fff7fb;
-  --ink: #33404a;
+  --background: #fff7fb;
+  --text: #33404a;
   --accent: #d76f97;
   --radius-control: 999px;
   --radius-panel: 18px;
@@ -503,20 +512,20 @@ body.theme-candy {
   --title-font: var(--ui-font);
   background:
     repeating-linear-gradient(135deg, color-mix(in srgb, var(--accent) 5%, transparent) 0 14px, transparent 14px 28px),
-    var(--bg);
+    var(--background);
 }
 
 .theme-candy button,
 .theme-candy .level-menu li {
   border: 1px solid color-mix(in srgb, var(--accent) 24%, transparent);
   box-shadow: 0 5px 0 color-mix(in srgb, var(--accent) 16%, transparent);
-  color: var(--ink);
+  color: var(--text);
 }
 
 .theme-candy button {
   background: linear-gradient(
     180deg,
-    color-mix(in srgb, var(--bg) 96%, transparent),
+    color-mix(in srgb, var(--background) 96%, transparent),
     color-mix(in srgb, var(--accent) 12%, transparent)
   );
 }
@@ -525,23 +534,23 @@ body.theme-candy {
 .theme-candy .is-menu-scene button:hover {
   box-shadow:
     0 6px 0 color-mix(in srgb, var(--accent) 18%, transparent),
-    inset 0 0 0 2px color-mix(in srgb, var(--bg) 26%, transparent);
+    inset 0 0 0 2px color-mix(in srgb, var(--background) 26%, transparent);
   transform: translateY(-2px);
 }
 
 .theme-candy .level-menu li.is-selected,
 .theme-candy .is-menu-scene button.is-selected {
   background: var(--accent);
-  color: var(--bg);
+  color: var(--background);
   box-shadow:
-    inset 0 0 0 2px color-mix(in srgb, var(--bg) 30%, transparent),
-    0 5px 0 color-mix(in srgb, var(--ink) 30%, transparent);
+    inset 0 0 0 2px color-mix(in srgb, var(--background) 30%, transparent),
+    0 5px 0 color-mix(in srgb, var(--text) 30%, transparent);
 }
 
 .theme-candy .board {
   border: 1px solid color-mix(in srgb, var(--accent) 18%, transparent);
   border-radius: 14px;
-  box-shadow: 0 16px 34px color-mix(in srgb, var(--ink) 16%, transparent);
+  box-shadow: 0 16px 34px color-mix(in srgb, var(--text) 16%, transparent);
   overflow: hidden;
 }
 
@@ -580,24 +589,24 @@ body.theme-candy {
   height: 10px;
   display: block;
   border-radius: 999px;
-  background: var(--bg);
+  background: var(--background);
   content: "";
   transform: translateY(-50%);
 }
 
 body.theme-blueprint {
   color-scheme: dark;
-  --bg: #0d334e;
-  --ink: #e9f8ff;
+  --background: #0d334e;
+  --text: #e9f8ff;
   --accent: #ffd166;
   --radius-control: 4px;
   --radius-panel: 4px;
   --ui-font: "Avenir Next", Inter, ui-sans-serif, system-ui, sans-serif;
   --title-font: var(--ui-font);
   background:
-    repeating-linear-gradient(0deg, color-mix(in srgb, var(--ink) 11%, transparent) 0 1px, transparent 1px 24px),
-    repeating-linear-gradient(90deg, color-mix(in srgb, var(--ink) 11%, transparent) 0 1px, transparent 1px 24px),
-    var(--bg);
+    repeating-linear-gradient(0deg, color-mix(in srgb, var(--text) 11%, transparent) 0 1px, transparent 1px 24px),
+    repeating-linear-gradient(90deg, color-mix(in srgb, var(--text) 11%, transparent) 0 1px, transparent 1px 24px),
+    var(--background);
 }
 
 .theme-blueprint .view-title {
@@ -606,9 +615,9 @@ body.theme-blueprint {
 
 .theme-blueprint button,
 .theme-blueprint .level-menu li {
-  border: 1px solid color-mix(in srgb, var(--ink) 42%, transparent);
-  background: color-mix(in srgb, var(--bg) 78%, transparent);
-  color: var(--ink);
+  border: 1px solid color-mix(in srgb, var(--text) 42%, transparent);
+  background: color-mix(in srgb, var(--background) 78%, transparent);
+  color: var(--text);
   box-shadow: none;
 }
 
@@ -622,12 +631,12 @@ body.theme-blueprint {
 }
 
 .theme-blueprint .board {
-  border: 1px solid color-mix(in srgb, var(--ink) 42%, transparent);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--ink) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--text) 42%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--text) 12%, transparent);
 }
 
 .theme-blueprint .cell {
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ink) 4%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 4%, transparent);
 }
 
 .theme-blueprint .scene-layer.is-menu-scene {
@@ -660,8 +669,8 @@ body.theme-blueprint {
 
 body.theme-noir {
   color-scheme: dark;
-  --bg: #101010;
-  --ink: #f4f1e8;
+  --background: #101010;
+  --text: #f4f1e8;
   --accent: #f2c14e;
   --radius-control: 2px;
   --radius-panel: 2px;
@@ -675,7 +684,7 @@ body.theme-noir {
       transparent 62%,
       color-mix(in srgb, var(--accent) 4%, transparent)
     ),
-    var(--bg);
+    var(--background);
 }
 
 .theme-noir .view-title {
@@ -684,8 +693,8 @@ body.theme-noir {
 
 .theme-noir button,
 .theme-noir .level-menu li {
-  border: 1px solid color-mix(in srgb, var(--ink) 24%, transparent);
-  box-shadow: 0 10px 24px color-mix(in srgb, var(--bg) 50%, transparent);
+  border: 1px solid color-mix(in srgb, var(--text) 24%, transparent);
+  box-shadow: 0 10px 24px color-mix(in srgb, var(--background) 50%, transparent);
 }
 
 .theme-noir button:hover,
@@ -697,12 +706,12 @@ body.theme-noir {
 .theme-noir .is-menu-scene button.is-selected {
   box-shadow:
     inset 0 0 0 2px color-mix(in srgb, var(--accent) 40%, transparent),
-    0 10px 24px color-mix(in srgb, var(--bg) 50%, transparent);
+    0 10px 24px color-mix(in srgb, var(--background) 50%, transparent);
 }
 
 .theme-noir .board {
-  border: 1px solid color-mix(in srgb, var(--ink) 24%, transparent);
-  box-shadow: 0 16px 36px color-mix(in srgb, var(--bg) 54%, transparent);
+  border: 1px solid color-mix(in srgb, var(--text) 24%, transparent);
+  box-shadow: 0 16px 36px color-mix(in srgb, var(--background) 54%, transparent);
 }
 
 .theme-noir .scene-layer.is-menu-scene {
@@ -718,7 +727,7 @@ body.theme-noir {
 }
 
 .theme-noir .view-subtitle {
-  color: color-mix(in srgb, var(--ink) 72%, transparent);
+  color: color-mix(in srgb, var(--text) 72%, transparent);
   font-size: 13px;
   text-align: center;
   text-transform: uppercase;
@@ -754,5 +763,5 @@ body.theme-noir {
   border-color: var(--accent);
   box-shadow:
     inset 4px 0 0 var(--accent),
-    0 14px 28px color-mix(in srgb, var(--bg) 58%, transparent);
+    0 14px 28px color-mix(in srgb, var(--background) 58%, transparent);
 }

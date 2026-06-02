@@ -160,8 +160,8 @@
             <pre id="sourceHighlight" class="source-highlight" aria-hidden="true"></pre>
             <textarea id="sourceEditor" spellcheck="false" autocomplete="off" autocapitalize="off"></textarea>
           </div>
-          <div class="code-footer">
-            <span id="editorStatusLabel" class="document-status">Idle</span>
+          <div class="code-footer pane-footer">
+            <span id="editorStatusLabel" class="document-status" data-pane-status="source">Idle</span>
             <span id="sourceMeta">0 lines</span>
           </div>
         </section>
@@ -211,7 +211,7 @@
                 ></iframe>
               </div>
             </div>
-            <div id="previewLogPanel" class="preview-log-panel" role="log" aria-label="Preview log" aria-live="polite">
+            <div id="previewLogPanel" class="preview-log-panel" role="log" aria-label="Preview log" aria-live="polite" hidden>
               <div class="preview-log-header">
                 <span>Log</span>
                 <button id="clearPreviewLogButton" class="preview-log-clear" type="button">Clear</button>
@@ -1159,7 +1159,9 @@
               <pre id="soundsMusicOutput" class="sounds-output" aria-live="polite"></pre>
             </section>
           </div>
-          <span id="statusLabel" class="pane-status tool-feedback-bar" aria-live="polite"></span>
+          <div class="pane-footer">
+            <span id="statusLabel" class="pane-status" data-pane-status="preview" aria-live="polite"></span>
+          </div>
         </section>
       </section>
     </main>

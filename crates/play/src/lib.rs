@@ -2550,7 +2550,7 @@ impl GameSession {
                 self.move_level_menu_cursor(game, menu, &level_indices, 1);
                 true
             }
-            "enter" => {
+            "select" => {
                 let cursor = self.level_menu_cursor_position(game, &level_indices);
                 if let Some(level_index) = level_indices.get(cursor).copied() {
                     if let Some(action) = &menu.action {
@@ -6082,7 +6082,7 @@ A
         session.apply_command(&loaded, "goto level_select").unwrap();
         assert_eq!(session.screen(), "level_select");
 
-        session.apply_command(&loaded, "enter:1").unwrap();
+        session.apply_command(&loaded, "select:1").unwrap();
 
         assert_eq!(session.level_index(), 1);
         assert_eq!(session.screen(), "playing");
@@ -6208,7 +6208,7 @@ level_menu
         session.apply_command(&loaded, "down").unwrap();
         assert_eq!(session.selected_level_index(), 1);
 
-        session.apply_command(&loaded, "enter").unwrap();
+        session.apply_command(&loaded, "select").unwrap();
         assert_eq!(session.level_index(), 1);
         assert_eq!(session.screen(), "playing");
         assert_eq!(session.state(), &loaded.levels[1].initial_state);
@@ -6269,7 +6269,7 @@ board
         let loaded = parse_game(source).unwrap();
         let mut session = GameSession::new(&loaded);
 
-        session.apply_command(&loaded, "enter").unwrap();
+        session.apply_command(&loaded, "select").unwrap();
         assert_eq!(session.level_index(), 2);
         assert_eq!(loaded.levels[session.level_index()].name, "worldB.1");
 
@@ -6352,9 +6352,9 @@ wrap = true
     }
 
     #[test]
-    fn level_menu_enter_starts_selected_level() {
+    fn level_menu_select_starts_selected_level() {
         let source = r#"
-title level_menu_default_enter
+title level_menu_default_select
 
 puzzle default {
 layers 1
@@ -6397,7 +6397,7 @@ level_menu
 
         session.apply_command(&loaded, "goto select").unwrap();
         session.apply_command(&loaded, "down").unwrap();
-        session.apply_command(&loaded, "enter").unwrap();
+        session.apply_command(&loaded, "select").unwrap();
 
         assert_eq!(session.level_index(), 1);
         assert_eq!(session.screen(), "playing");
@@ -6454,7 +6454,7 @@ button "Title" -> goto title
         session.apply_command(&loaded, "down").unwrap();
         assert_eq!(session.selected_level_index(), 1);
 
-        session.apply_command(&loaded, "enter").unwrap();
+        session.apply_command(&loaded, "select").unwrap();
         assert_eq!(session.screen(), "playing");
     }
 

@@ -30,7 +30,7 @@ each @Boundary:directions
 each @Corner:directions
 }
 
-group {
+groups {
 target = Target
 pushable = Box
 solid = pushable Wall

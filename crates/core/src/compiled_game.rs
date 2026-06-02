@@ -1,4 +1,4 @@
-use crate::ids::{GlobalId, InputId, LayerId, ObjectId, ConditionId, RuleId, ScratchId};
+use crate::ids::{ConditionId, GlobalId, InputId, LayerId, ObjectId, RuleId, ScratchId};
 pub use puzzle_kernel::{
     GlobalUpdateOp, LocalFrame, LocalFrameExtent, ScratchKind, ScratchValueMatch,
 };

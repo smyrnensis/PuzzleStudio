@@ -652,7 +652,7 @@ fn keyword_insert_text(keyword: &str) -> &str {
     match keyword {
         "objects"
         | "layers"
-        | "group"
+        | "groups"
         | "scratch"
         | "legend"
         | "rules"
@@ -779,7 +779,7 @@ puzzle board {
 objects {
 Player
 }
-group {
+groups {
 Actors = Pl
 }
 }
@@ -1050,10 +1050,25 @@ rules {
                 .any(|item| item.label == "if" && item.kind == CompletionKind::Keyword)
         );
         assert!(
+            list.items
+                .iter()
+                .any(|item| item.label == "input" && item.kind == CompletionKind::Keyword)
+        );
+        assert!(
             !list
                 .items
                 .iter()
                 .any(|item| item.label == "Player" && item.kind == CompletionKind::Object)
+        );
+
+        let prefix_source = source.replacen("\n\n}", "\nin\n}", 1);
+        let prefix_cursor = prefix_source.find("\nin\n").unwrap() + "\nin".len();
+        let prefix_list = suggest_source_completions(&prefix_source, prefix_cursor);
+        assert!(
+            prefix_list
+                .items
+                .iter()
+                .any(|item| item.label == "input" && item.kind == CompletionKind::Keyword)
         );
     }
 
@@ -1296,15 +1311,26 @@ theme p
         let source = r#"
 title complete_theme_settings
 theme clean {
-b
+
 }
 "#;
-        let cursor = source.find("\nb\n").unwrap() + "\nb".len();
+        let cursor = source.find("\n\n").unwrap() + 1;
         let list = suggest_source_completions(source, cursor);
 
         assert!(list.items.iter().any(|item| {
             item.label == "background_color" && item.kind == CompletionKind::Setting
         }));
+        assert!(
+            list.items
+                .iter()
+                .any(|item| { item.label == "text_color" && item.kind == CompletionKind::Setting })
+        );
+        assert!(
+            list.items.iter().any(|item| {
+                item.label == "accent_color" && item.kind == CompletionKind::Setting
+            })
+        );
+        assert!(list.items.iter().all(|item| item.label != "ui_font"));
         assert!(list.items.iter().all(|item| item.label != "board_color"));
     }
 
@@ -1333,7 +1359,7 @@ s
     }
 
     #[test]
-    fn builtin_presentation_commands_are_emissions_not_commands() {
+    fn builtin_presentation_commands_are_effects_not_commands() {
         let source = r#"
 title complete_emissions
 sounds {
@@ -1349,9 +1375,7 @@ win -> s
         let list = suggest_source_completions(source, cursor);
 
         assert!(list.items.iter().any(|item| {
-            item.label == "sfx"
-                && item.kind == CompletionKind::Emission
-                && item.detail == "emission"
+            item.label == "sfx" && item.kind == CompletionKind::Effect && item.detail == "effect"
         }));
         assert!(
             !list

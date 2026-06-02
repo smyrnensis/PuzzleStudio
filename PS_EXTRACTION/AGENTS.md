@@ -37,6 +37,28 @@ time a design question comes up.
 - `upstream/PuzzleScriptNext/test/e2e3d.test.js`: carries source-level 3D
   compiler/runtime smoke tests plus demo-fixture coverage; fixture coverage now
   reads the Microban-derived 3D demo rather than the tiny ad hoc Sokoban demo.
+- `upstream/PuzzleScriptNext/src/js/compiler.js`: browser start now treats host
+  preparation as an asynchronous start boundary. 2D states still start
+  synchronously without host preparation; stale pending 3D preparation must not
+  later start over a newer 2D compile/load.
+- `upstream/PuzzleScriptNext/test/compiler_host_prepare.test.js`: pins the
+  host-preparation boundary, including the important 2D preservation case where
+  a newer 2D start invalidates an older pending 3D preparation and suppresses
+  stale 3D preparation errors.
+- `upstream/PuzzleScriptNext/src/js/graphics.js`: existing level editor
+  rendering is still the 2D canvas path. 3D editor entry should pass a thin
+  slice-view level into `redrawCellGrid` rather than forking object rendering.
+- `upstream/PuzzleScriptNext/src/js/inputoutput.js`: existing 2D level editor
+  owns palette selection, cell painting, print output, and resize border clicks.
+  3D editing should dispatch at the level-editor entry points and map only the
+  current slice coordinates to the 3D board/session.
+- `upstream/PuzzleScriptNext/src/js/toolbar.js`: toolbar level-editor entry is
+  the browser UI toggle point; keep 2D behavior intact and call preparation
+  hooks only after the editor is opened.
+- `upstream/PuzzleScriptNext/src/js/play_host3d.js`: 3D playback host owns the
+  3D render canvas. A 3D editor can temporarily restore the 2D canvas without
+  destroying the active 3D session, then normal host redraw recreates the 3D
+  canvas after editor close.
 
 ## Current 3D Principle
 
@@ -139,11 +161,11 @@ completion while a design interrupt touching 2D/3D semantic parity is unresolved
   levels and runtime routing. Do not add a separate public 3D level section.
 - 3D camera syntax is ordinary prelude metadata scoped by `three_dimensions`:
   `orthographic_camera`, `perspective_camera`, `camera_angle <yaw> <pitch>`,
-  `camera_zoom <n>`, `camera_distance <cells>`, and
-  `camera_view_angle <degrees>`. Do not reintroduce `three_camera` or a
-  direction-word camera preset.
-- `camera_distance` is measured in level cells. `camera_angle` and
-  `camera_view_angle` are measured in degrees.
+  `camera_zoom <n>`, and `camera_view_angle <degrees>`. Do not reintroduce
+  `three_camera` or a direction-word camera preset.
+- `camera_distance` is intentionally unsupported by the current compiler; use
+  `camera_zoom` and `camera_view_angle` for 3D camera framing.
+- `camera_angle` and `camera_view_angle` are measured in degrees.
 - Do not expose renderer-internal words such as `projection`, `fov`, or
   low-level scale/preset names as source syntax unless a later design explicitly
   promotes them into PS-style prelude metadata.
@@ -497,6 +519,16 @@ completion while a design interrupt touching 2D/3D semantic parity is unresolved
 - `buildInstances`, `render`, and `renderToCanvas` are renderer consumers, not
   runtime adapters. They should fail on malformed frames instead of silently
   synthesizing fallback `cells`, `drawPlan`, or object data from missing fields.
+- Oblique cameras use scene/world up (`+Y`) as `camera.up`. Only perfectly
+  vertical top-down views use a yaw-based horizontal fallback to avoid the
+  Three.js `lookAt` up-vector singularity.
+- Camera distance/orthographic size are renderer-derived from the current
+  `frame.view` orientation, canvas aspect ratio, visible region, and projected
+  scene bounds. Do not restore a source/frame `cameraDistance` carrier or fit
+  from a padded max-side radius.
+- WebGL output quality is renderer-owned: keep antialiasing enabled by default
+  and apply a bounded device pixel ratio through `renderer.setPixelRatio` before
+  `setSize`.
 
 ### `upstream/PuzzleScriptNext/src/js/turn3d.js`
 

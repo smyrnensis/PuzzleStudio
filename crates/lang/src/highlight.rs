@@ -31,6 +31,7 @@ enum HighlightKind {
     Variant,
     Condition,
     Scene,
+    Theme,
     Asset,
     Color,
     Number,
@@ -65,6 +66,7 @@ impl HighlightKind {
             HighlightKind::Variant => "syntax-variant",
             HighlightKind::Condition => "syntax-condition",
             HighlightKind::Scene => "syntax-scene",
+            HighlightKind::Theme => "syntax-theme",
             HighlightKind::Asset => "syntax-asset",
             HighlightKind::Color => "syntax-color",
             HighlightKind::Number => "syntax-number",
@@ -692,8 +694,12 @@ fn collect_line_symbols(
             insert_source_symbol(symbols, name, HighlightKind::Group);
             collect_layer_selector_specs(name, selectors, symbols);
         }
-        ["each", spec, ..] if scope == Some(SourceScope::Layers) => {
-            collect_object_spec(spec, symbols);
+        ["each", selectors @ ..] if scope == Some(SourceScope::Layers) => {
+            collect_selector_specs(selectors, symbols);
+        }
+        [first, selectors @ ..] if scope == Some(SourceScope::Layers) && *first != "for" => {
+            collect_selector_spec(first, symbols);
+            collect_selector_specs(selectors, symbols);
         }
         ["each", spec, ..] if scope == Some(SourceScope::Objects) => {
             collect_object_declaration_spec(
@@ -1158,6 +1164,7 @@ fn highlight_kind_for_semantic(kind: SemanticKind) -> HighlightKind {
         SemanticKind::Group => HighlightKind::Group,
         SemanticKind::Condition => HighlightKind::Condition,
         SemanticKind::Scene => HighlightKind::Scene,
+        SemanticKind::Theme => HighlightKind::Theme,
         SemanticKind::Asset => HighlightKind::Asset,
         SemanticKind::Setting => HighlightKind::Keyword,
         SemanticKind::Number => HighlightKind::Number,
@@ -2094,7 +2101,7 @@ color = red blue
 objects {
 Player Box:color
 }
-group {
+groups {
 pushable = Player Box:red
 }
 objects {
@@ -2147,7 +2154,7 @@ condition blocked = no Player
 objects {
 Player Box:kind
 }
-group {
+groups {
 pushable = Box:A
 }
 keys {
@@ -2389,7 +2396,7 @@ layers {
 floor = Goal
 solid = Player Box Wall
 }
-group {
+groups {
 blocked = solid
 }
 legend P = Player
@@ -2411,6 +2418,32 @@ P
     }
 
     #[test]
+    fn highlights_anonymous_layer_entries_as_objects() {
+        let highlighted = highlight_source(
+            r#"
+title anonymous_layer_highlight
+
+puzzle board {
+layers {
+Floor
+Goal
+solid = Player Box Wall
+}
+}
+"#,
+        );
+
+        assert!(highlighted.html.contains("syntax-object\">Floor"));
+        assert!(highlighted.html.contains("syntax-object\">Goal"));
+        assert!(
+            highlighted
+                .html
+                .contains("syntax-group\">solid</span> <span class=\"syntax-operator\">=</span>")
+        );
+        assert!(highlighted.html.contains("syntax-object\">Player"));
+    }
+
+    #[test]
     fn highlights_solid_layer_name_as_group_not_object() {
         let highlighted = highlight_source(
             r#"
@@ -2420,7 +2453,7 @@ puzzle board {
 layers {
 solid = Player Box Wall
 }
-group {
+groups {
 blocked = solid
 }
 rules {
@@ -2973,13 +3006,38 @@ play_music music_name
         assert!(
             highlighted
                 .html
-                .contains("syntax-emission\">sfx</span> <span class=\"syntax-asset\">clear")
+                .contains("syntax-effect\">sfx</span> <span class=\"syntax-asset\">clear")
         );
         assert!(
             highlighted.html.contains(
                 "syntax-effect\">play_music</span> <span class=\"syntax-asset\">music_name"
             )
         );
+    }
+
+    #[test]
+    fn highlights_theme_state_and_condition_contexts() {
+        let highlighted = highlight_source(
+            r#"
+title theme_state_condition_highlight
+theme clean
+var count = 1
+
+scene playing {
+if win_conditions -> goto title
+}
+"#,
+        );
+
+        assert!(highlighted.html.contains(
+            "<span class=\"syntax-keyword\">theme</span> <span class=\"syntax-theme\">clean"
+        ));
+        assert!(highlighted.html.contains(
+            "<span class=\"syntax-keyword\">var</span> <span class=\"syntax-state\">count"
+        ));
+        assert!(highlighted.html.contains(
+            "<span class=\"syntax-keyword\">if</span> <span class=\"syntax-condition\">win_conditions"
+        ));
     }
 
     #[test]
@@ -3098,7 +3156,7 @@ button join(l.num, ". ", l.title, " ", l.solved) -> goto playing(l)
         );
 
         assert!(highlighted.html.contains(
-            "<span class=\"syntax-keyword\">theme</span> <span class=\"syntax-keyword\">name"
+            "<span class=\"syntax-keyword\">theme</span> <span class=\"syntax-theme\">name"
         ));
         assert!(
             highlighted
@@ -3466,7 +3524,7 @@ layers 2
 legend . = empty
 objects {
 Player Box
-group {
+groups {
 object = Box
 }
 }
@@ -3588,7 +3646,7 @@ kind = A B
 objects {
 Target:kind
 Box
-group {
+groups {
 target = Target:*
 }
 }

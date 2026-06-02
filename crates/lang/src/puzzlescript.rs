@@ -782,7 +782,7 @@ fn push_groups(out: &mut Vec<String>, aliases: &[PsAliasDef]) {
     if aliases.is_empty() {
         return;
     }
-    out.push("group {".to_string());
+    out.push("groups {".to_string());
     for alias in aliases {
         out.push(format!("  {} = {}", alias.name, alias.terms.join(" ")));
     }

@@ -116,33 +116,13 @@ pub(crate) const THEME_SETTING_SPECS: &[ThemeSettingSpec] = &[
     },
     ThemeSettingSpec {
         canonical: "background_color",
-        css_variable: "bg",
+        css_variable: "background",
         aliases: &["background-color", "background", "bg"],
     },
     ThemeSettingSpec {
         canonical: "text_color",
-        css_variable: "ink",
-        aliases: &["text-color", "ink"],
-    },
-    ThemeSettingSpec {
-        canonical: "ui_font",
-        css_variable: "ui-font",
-        aliases: &["ui-font"],
-    },
-    ThemeSettingSpec {
-        canonical: "title_font",
-        css_variable: "title-font",
-        aliases: &["title-font"],
-    },
-    ThemeSettingSpec {
-        canonical: "control_radius",
-        css_variable: "radius-control",
-        aliases: &["control-radius", "radius-control"],
-    },
-    ThemeSettingSpec {
-        canonical: "panel_radius",
-        css_variable: "radius-panel",
-        aliases: &["panel-radius", "radius-panel"],
+        css_variable: "text",
+        aliases: &["text-color", "text", "ink"],
     },
 ];
 
@@ -1702,7 +1682,7 @@ fn logical_line_opens_block(tokens: &[&str]) -> bool {
             | ["tags", ..]
             | ["map", ..]
             | ["scratch", ..]
-            | ["group", ..]
+            | ["groups", ..]
             | ["legend", ..]
             | ["win_conditions", ..]
             | ["lose_conditions", ..]
@@ -2842,29 +2822,66 @@ fn collect_authoring_entry(
     }
 
     let mut entry = Vec::new();
-    let mut depth = 1usize;
+    let mut block_stack = vec![authoring_block_kind(&tokens)];
     let mut i = start;
     while i < lines.len() {
         let line = &lines[i];
         if i != start {
             let tokens = split_tokens(line);
             if tokens.first().copied() == Some(BLOCK_CLOSE) {
-                depth -= 1;
+                let closed = block_stack
+                    .pop()
+                    .ok_or_else(|| parse_error(line, "closing brace without block"))?;
                 entry.push(line.clone());
-                if depth == 0 {
-                    return Ok((entry, i + 1));
-                }
                 i += 1;
+                if block_stack.is_empty() {
+                    return Ok((entry, i));
+                }
+                if closed == AuthoringBlockKind::If && next_line_is_else(lines, i) {
+                    entry.push(lines[i].clone());
+                    i += 1;
+                    block_stack.push(AuthoringBlockKind::Other);
+                }
                 continue;
             }
-            if starts_authoring_block(&tokens, line) || line.trim_end().ends_with("->") {
-                depth += 1;
+            if let Some(kind) = authoring_nested_block_kind(&tokens, line) {
+                block_stack.push(kind);
             }
         }
         entry.push(line.clone());
         i += 1;
     }
     Err(parse_error(first, "block missing closing brace"))
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AuthoringBlockKind {
+    If,
+    Other,
+}
+
+fn authoring_block_kind(tokens: &[&str]) -> AuthoringBlockKind {
+    if tokens.first().copied() == Some("if") {
+        AuthoringBlockKind::If
+    } else {
+        AuthoringBlockKind::Other
+    }
+}
+
+fn authoring_nested_block_kind(tokens: &[&str], line: &str) -> Option<AuthoringBlockKind> {
+    if starts_authoring_block(tokens, line) {
+        Some(authoring_block_kind(tokens))
+    } else if line.trim_end().ends_with("->") {
+        Some(AuthoringBlockKind::Other)
+    } else {
+        None
+    }
+}
+
+fn next_line_is_else(lines: &[String], index: usize) -> bool {
+    lines
+        .get(index)
+        .is_some_and(|line| matches!(split_tokens(line).as_slice(), ["else"]))
 }
 
 fn collect_levels_authoring_entry(
@@ -2909,7 +2926,7 @@ fn starts_authoring_block(tokens: &[&str], line: &str) -> bool {
         | ["on_display"]
         | ["objects"]
         | ["scratch"]
-        | ["group"]
+        | ["groups"]
         | ["layers"]
         | ["win_conditions", ..]
         | ["lose_conditions", ..]
@@ -3623,9 +3640,19 @@ fn parse_puzzle_definition(
                     "effect definitions are obsolete; use routine",
                 ));
             }
-            "group" => {
+            "groups" => {
                 if tokens.len() == 1 {
                     i = parse_group_block(lines, i, catalog)?;
+                } else {
+                    return Err(parse_error(line, "groups block must be: groups { ... }"));
+                }
+            }
+            "group" => {
+                if tokens.len() == 1 {
+                    return Err(parse_error(
+                        line,
+                        "`group { ... }` was removed; use `groups { ... }`",
+                    ));
                 } else {
                     parse_group_directive(
                         &tokens,
@@ -6881,18 +6908,18 @@ fn parse_view_if_component(
     validate_screen_condition(condition, line)?;
     let (entry, next_i) = collect_authoring_entry(lines, start)?;
     let body = &entry[1..entry.len().saturating_sub(1)];
-    let (then_body, else_body) = split_view_if_body(body, line)?;
-    if then_body.is_empty() {
+    let (else_body, next_i) = collect_view_else_body(lines, next_i, line)?;
+    if body.is_empty() {
         return Err(parse_error(
             line,
             "layout condition requires at least one component",
         ));
     }
-    let children = parse_screen_component_body(then_body, "if")?;
+    let children = parse_screen_component_body(body, "if")?;
     let else_children = if else_body.is_empty() {
         Vec::new()
     } else {
-        parse_screen_component_body(else_body, "else")?
+        parse_screen_component_body(&else_body, "else")?
     };
     Ok((
         SceneComponent::Conditional(SceneConditionalDef {
@@ -6904,34 +6931,47 @@ fn parse_view_if_component(
     ))
 }
 
-fn split_view_if_body<'a>(
-    body: &'a [String],
+fn collect_view_else_body(
+    lines: &[String],
+    start: usize,
     header_line: &str,
-) -> Result<(&'a [String], &'a [String]), AppError> {
-    let mut depth = 0usize;
-    for (index, line) in body.iter().enumerate() {
+) -> Result<(Vec<String>, usize), AppError> {
+    if !next_line_is_else(lines, start) {
+        return Ok((Vec::new(), start));
+    }
+
+    let mut body = Vec::new();
+    let mut block_stack = vec![AuthoringBlockKind::Other];
+    let mut i = start + 1;
+    while i < lines.len() {
+        let line = &lines[i];
         let tokens = split_tokens(line);
-        if matches!(tokens.as_slice(), ["else"]) && depth == 0 {
-            return Ok((&body[..index], &body[index + 1..]));
-        }
         if tokens.first().copied() == Some(BLOCK_CLOSE) {
-            if depth == 0 {
-                return Err(parse_error(line, "closing brace without layout block"));
+            let closed = block_stack
+                .pop()
+                .ok_or_else(|| parse_error(line, "closing brace without layout block"))?;
+            i += 1;
+            if block_stack.is_empty() {
+                return Ok((body, i));
             }
-            depth -= 1;
+            body.push(line.clone());
+            if closed == AuthoringBlockKind::If && next_line_is_else(lines, i) {
+                body.push(lines[i].clone());
+                i += 1;
+                block_stack.push(AuthoringBlockKind::Other);
+            }
             continue;
         }
-        if starts_authoring_block(&tokens, line) || line.trim_end().ends_with("->") {
-            depth += 1;
+        if let Some(kind) = authoring_nested_block_kind(&tokens, line) {
+            block_stack.push(kind);
         }
+        body.push(line.clone());
+        i += 1;
     }
-    if depth != 0 {
-        return Err(parse_error(
-            header_line,
-            "layout condition block is unbalanced",
-        ));
-    }
-    Ok((body, &[]))
+    Err(parse_error(
+        header_line,
+        "layout else block missing closing brace",
+    ))
 }
 
 fn parse_screen_component_body(
@@ -7165,6 +7205,9 @@ fn surface_document_with_node(
 }
 
 fn scene_effect_command_kind(token: &str) -> SurfaceSemanticKind {
+    if token == "sfx" {
+        return SurfaceSemanticKind::Effect;
+    }
     if matches!(
         rewrite_effect_command_syntax(token),
         Some(RewriteEffectCommandSyntax::Emission)
@@ -7454,6 +7497,10 @@ fn add_rewrite_effect_semantic_tokens(tokens: &[SourceToken], sink: &mut Surface
     }
 
     match tokens {
+        [command] if command.text == "sfx" => {
+            add_scene_effect_token_range(sink, command, SurfaceSemanticKind::Effect);
+            true
+        }
         [command]
             if matches_rewrite_effect_command(
                 &command.text,
@@ -7478,7 +7525,7 @@ fn add_rewrite_effect_semantic_tokens(tokens: &[SourceToken], sink: &mut Surface
             true
         }
         [command, asset] if command.text == "sfx" => {
-            add_scene_effect_token_range(sink, command, SurfaceSemanticKind::Emission);
+            add_scene_effect_token_range(sink, command, SurfaceSemanticKind::Effect);
             add_scene_effect_token_range(sink, asset, SurfaceSemanticKind::Asset);
             true
         }
@@ -7530,7 +7577,7 @@ fn add_simple_rewrite_effect_semantic_tokens(
                 parsed_any = true;
             }
             "sfx" => {
-                add_scene_effect_token_range(sink, &tokens[index], SurfaceSemanticKind::Emission);
+                add_scene_effect_token_range(sink, &tokens[index], SurfaceSemanticKind::Effect);
                 if let Some(asset) = tokens.get(index + 1) {
                     add_scene_effect_token_range(sink, asset, SurfaceSemanticKind::Asset);
                     index += 2;
@@ -8798,6 +8845,12 @@ fn parse_screen_transitions_block(
                     "scene rules do not call component rules by path; use `step <puzzle>`",
                 ));
             }
+            ["if"] | ["if", "all"] if lines[i].trim_end().ends_with('{') => {
+                let (transition, next_i) = parse_screen_condition_arrow_block(lines, i)?;
+                transitions.push(transition);
+                i = next_i;
+                continue;
+            }
             _ if lines[i].contains("->") => {
                 let (transition, next_i) = parse_transition_row(lines, i)?;
                 transitions.push(transition);
@@ -8826,6 +8879,70 @@ fn parse_screen_transitions_block(
             puzzle_rule,
         },
         i + 1,
+    ))
+}
+
+fn parse_screen_condition_arrow_block(
+    lines: &[String],
+    start: usize,
+) -> Result<(SceneTransition, usize), AppError> {
+    let header = block_header_text(&lines[start]);
+    match split_tokens(header).as_slice() {
+        ["if"] | ["if", "all"] => {}
+        ["if", "any"] => {
+            return Err(parse_error(
+                &lines[start],
+                "scene condition blocks only support all conditions",
+            ));
+        }
+        _ => {
+            return Err(parse_error(
+                &lines[start],
+                "scene condition block must be: if [all] {",
+            ));
+        }
+    }
+
+    let mut conditions = Vec::new();
+    let mut i = start + 1;
+    while i < lines.len() && !is_block_close_line(&lines[i]) {
+        validate_screen_condition(&lines[i], &lines[i])?;
+        conditions.push(lines[i].clone());
+        i += 1;
+    }
+    if i >= lines.len() {
+        return Err(parse_error(
+            &lines[start],
+            "scene condition block missing closing brace",
+        ));
+    }
+    if conditions.is_empty() {
+        return Err(parse_error(
+            &lines[start],
+            "scene condition block requires at least one condition",
+        ));
+    }
+
+    let arrow_i = i + 1;
+    let Some(arrow_line) = lines.get(arrow_i) else {
+        return Err(parse_error(
+            &lines[start],
+            "scene condition block must be followed by ->",
+        ));
+    };
+    let Some((_, effect_text)) = arrow_line.split_once("->") else {
+        return Err(parse_error(
+            arrow_line,
+            "scene condition block must be followed by ->",
+        ));
+    };
+    let (effect, next_i) = parse_scene_effect_with_optional_block(effect_text.trim(), lines, arrow_i)?;
+    Ok((
+        SceneTransition {
+            trigger: SceneTransitionTrigger::Condition(conditions.join(" and ")),
+            effect,
+        },
+        next_i,
     ))
 }
 
@@ -10948,7 +11065,7 @@ fn starts_visual_outer_section(tokens: &[&str]) -> bool {
             | ["on_display"]
             | ["objects"]
             | ["scratch"]
-            | ["group"]
+            | ["groups"]
             | ["layers"]
             | ["collision_layers"]
             | ["legend"]
@@ -11844,7 +11961,7 @@ fn parse_group_block(
         i += 1;
     }
     if i >= lines.len() {
-        return Err(parse_error(&lines[start], "group missing closing brace"));
+        return Err(parse_error(&lines[start], "groups missing closing brace"));
     }
 
     Ok(i + 1)
@@ -12659,6 +12776,172 @@ fn starts_statement_block(tokens: &[&str]) -> bool {
     )
 }
 
+fn parse_if_condition_block_header(line: &str) -> Result<Option<ConditionBlockCombinator>, AppError> {
+    let tokens = split_tokens(line);
+    match tokens.as_slice() {
+        ["if"] => Ok(Some(ConditionBlockCombinator::All)),
+        ["if", "all"] => Ok(Some(ConditionBlockCombinator::All)),
+        ["if", "any"] => Ok(Some(ConditionBlockCombinator::Any)),
+        ["if", "{"] => Ok(Some(ConditionBlockCombinator::All)),
+        ["if", "all", "{"] => Ok(Some(ConditionBlockCombinator::All)),
+        ["if", "any", "{"] => Ok(Some(ConditionBlockCombinator::Any)),
+        ["if", ..] if line.trim_end().ends_with('{') => Err(parse_error(
+            line,
+            "if condition block must be: if [all | any] {",
+        )),
+        _ => Ok(None),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn parse_statement_condition_block(
+    lines: &[String],
+    start: usize,
+    combinator: ConditionBlockCombinator,
+    input_names: &HashMap<String, InputId>,
+    global_names: &HashMap<String, GlobalId>,
+    condition_names: &HashMap<String, ConditionId>,
+    named_conditions: &HashMap<String, (String, ConditionAst)>,
+    object_names: &HashMap<String, ObjectId>,
+    object_schemas: &HashMap<String, ObjectSchema>,
+    value_sets: &HashMap<String, Vec<String>>,
+    maps: &HashMap<String, ValueMap>,
+    object_groups: &HashMap<String, Vec<ObjectId>>,
+) -> Result<(ConditionAst, usize), AppError> {
+    let mut conditions = Vec::new();
+    let mut i = start + 1;
+    while i < lines.len() && !is_block_close_line(&lines[i]) {
+        let condition = parse_statement_condition(
+            &lines[i],
+            &lines[i],
+            input_names,
+            global_names,
+            condition_names,
+            named_conditions,
+            object_names,
+            object_schemas,
+            value_sets,
+            maps,
+            object_groups,
+        )?;
+        conditions.push(condition);
+        i += 1;
+    }
+    if i >= lines.len() {
+        return Err(parse_error(
+            &lines[start],
+            "if condition block missing closing brace",
+        ));
+    }
+    if conditions.is_empty() {
+        return Err(parse_error(
+            &lines[start],
+            "if condition block requires at least one condition",
+        ));
+    }
+    let condition = if conditions.len() == 1 {
+        conditions.remove(0)
+    } else {
+        combinator.combine(conditions)
+    };
+    Ok((condition, i + 1))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn parse_statement_arrow_consequence(
+    lines: &[String],
+    start: usize,
+    header_line: &str,
+    object_names: &HashMap<String, ObjectId>,
+    object_schemas: &HashMap<String, ObjectSchema>,
+    value_sets: &HashMap<String, Vec<String>>,
+    maps: &HashMap<String, ValueMap>,
+    object_groups: &HashMap<String, Vec<ObjectId>>,
+    input_names: &HashMap<String, InputId>,
+    global_names: &HashMap<String, GlobalId>,
+    numeric_globals: &HashMap<String, i64>,
+    condition_names: &HashMap<String, ConditionId>,
+    named_conditions: &HashMap<String, (String, ConditionAst)>,
+    rule_params: &[String],
+) -> Result<(Vec<StatementAst>, usize), AppError> {
+    let Some(line) = lines.get(start) else {
+        return Err(parse_error(header_line, "if condition block must be followed by ->"));
+    };
+    let header = block_header_text(line);
+    let Some((_, effect_text)) = header.split_once("->") else {
+        return Err(parse_error(line, "if condition block must be followed by ->"));
+    };
+    let effect_text = effect_text.trim();
+
+    if line.trim_end().ends_with('{') {
+        if !effect_text.is_empty() {
+            return Err(parse_error(line, "if -> block header must be: -> {"));
+        }
+        return parse_statement_block(
+            lines,
+            start + 1,
+            &["else", BLOCK_CLOSE],
+            object_names,
+            object_schemas,
+            value_sets,
+            maps,
+            object_groups,
+            input_names,
+            global_names,
+            numeric_globals,
+            condition_names,
+            named_conditions,
+            rule_params,
+        );
+    }
+
+    if effect_text.is_empty() {
+        return Err(parse_error(line, "if -> must be followed by an effect or block"));
+    }
+    if is_qualified_identifier(effect_text) && !is_builtin_rewrite_effect_text(effect_text) {
+        return Ok((vec![StatementAst::Call(effect_text.to_string())], start + 1));
+    }
+    let effects = parse_rewrite_effect(effect_text, line)?;
+    Ok((vec![StatementAst::Effect { effects }], start + 1))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn parse_optional_else_statement_block(
+    lines: &[String],
+    next_i: usize,
+    object_names: &HashMap<String, ObjectId>,
+    object_schemas: &HashMap<String, ObjectSchema>,
+    value_sets: &HashMap<String, Vec<String>>,
+    maps: &HashMap<String, ValueMap>,
+    object_groups: &HashMap<String, Vec<ObjectId>>,
+    input_names: &HashMap<String, InputId>,
+    global_names: &HashMap<String, GlobalId>,
+    numeric_globals: &HashMap<String, i64>,
+    condition_names: &HashMap<String, ConditionId>,
+    named_conditions: &HashMap<String, (String, ConditionAst)>,
+    rule_params: &[String],
+) -> Result<(Vec<StatementAst>, usize), AppError> {
+    let Some(else_start) = else_block_start(lines, next_i) else {
+        return Ok((Vec::new(), next_i));
+    };
+    parse_statement_block(
+        lines,
+        else_start,
+        &[BLOCK_CLOSE],
+        object_names,
+        object_schemas,
+        value_sets,
+        maps,
+        object_groups,
+        input_names,
+        global_names,
+        numeric_globals,
+        condition_names,
+        named_conditions,
+        rule_params,
+    )
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum ValueExpr {
     Binding(String),
@@ -12950,6 +13233,10 @@ fn collect_multiline_rewrite_statement(
     start: usize,
 ) -> Result<Option<(String, usize)>, AppError> {
     let line = lines[start].trim();
+    if let Some(collected) = collect_bracket_multiline_rewrite_statement(lines, start, line)? {
+        return Ok(Some(collected));
+    }
+
     let Some(trailing) = rewrite_lhs_trailing(line) else {
         return Ok(None);
     };
@@ -12974,6 +13261,83 @@ fn collect_multiline_rewrite_statement(
     }
 
     Ok(None)
+}
+
+fn collect_bracket_multiline_rewrite_statement(
+    lines: &[String],
+    start: usize,
+    first_line: &str,
+) -> Result<Option<(String, usize)>, AppError> {
+    let Some(open_index) = first_line.find('[') else {
+        return Ok(None);
+    };
+    let prefix = first_line[..open_index].trim();
+    if !can_start_rewrite_lhs(prefix) {
+        return Ok(None);
+    }
+
+    let mut joined = String::new();
+    let mut bracket_depth = 0usize;
+    let mut saw_arrow = false;
+    let mut i = start;
+    while i < lines.len() {
+        let line = lines[i].trim();
+        if i > start && bracket_depth == 0 && !saw_arrow && !line.starts_with("->") {
+            return Ok(None);
+        }
+        if !joined.is_empty() {
+            if bracket_depth > 0 {
+                joined.push_str("; ");
+            } else {
+                joined.push(' ');
+            }
+        }
+        joined.push_str(line);
+        bracket_depth = update_square_bracket_depth(bracket_depth, line);
+        saw_arrow |= line.contains("->");
+
+        if i == start && bracket_depth == 0 {
+            return Ok(None);
+        }
+        if i > start && bracket_depth == 0 && saw_arrow {
+            validate_rewrite_rhs_continuation_after_join(&joined)?;
+            return Ok(Some((joined, i + 1)));
+        }
+        i += 1;
+    }
+
+    Ok(None)
+}
+
+fn update_square_bracket_depth(mut depth: usize, line: &str) -> usize {
+    let mut in_string = false;
+    let mut escaped = false;
+    for ch in line.chars() {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match ch {
+            '"' => in_string = true,
+            '[' => depth += 1,
+            ']' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+    }
+    depth
+}
+
+fn validate_rewrite_rhs_continuation_after_join(line: &str) -> Result<(), AppError> {
+    let Some((_, rhs)) = line.split_once("->") else {
+        return Ok(());
+    };
+    validate_rewrite_rhs_continuation(rhs.trim_start(), line)
 }
 
 fn validate_rewrite_rhs_continuation(rhs: &str, line: &str) -> Result<(), AppError> {
@@ -13049,6 +13413,16 @@ fn pattern_side_syntax_end(value: &str) -> Option<usize> {
         found_block = true;
     }
     found_block.then_some(index)
+}
+
+fn else_block_start(lines: &[String], next_i: usize) -> Option<usize> {
+    if next_i > 0 && lines[next_i - 1] == "else" {
+        Some(next_i)
+    } else if next_i < lines.len() && lines[next_i] == "else" {
+        Some(next_i + 1)
+    } else {
+        None
+    }
 }
 
 fn parse_statement_block(
@@ -13153,6 +13527,60 @@ fn parse_statement_block(
                 i = next_i;
             }
             Some("if") => {
+                if let Some(combinator) = parse_if_condition_block_header(line)? {
+                    let (condition, arrow_i) = parse_statement_condition_block(
+                        lines,
+                        i,
+                        combinator,
+                        input_names,
+                        global_names,
+                        condition_names,
+                        named_conditions,
+                        object_names,
+                        object_schemas,
+                        value_sets,
+                        maps,
+                        object_groups,
+                    )?;
+                    let (then_statements, next_i) = parse_statement_arrow_consequence(
+                        lines,
+                        arrow_i,
+                        line,
+                        object_names,
+                        object_schemas,
+                        value_sets,
+                        maps,
+                        object_groups,
+                        input_names,
+                        global_names,
+                        numeric_globals,
+                        condition_names,
+                        named_conditions,
+                        rule_params,
+                    )?;
+                    let (else_statements, next_i) = parse_optional_else_statement_block(
+                        lines,
+                        next_i,
+                        object_names,
+                        object_schemas,
+                        value_sets,
+                        maps,
+                        object_groups,
+                        input_names,
+                        global_names,
+                        numeric_globals,
+                        condition_names,
+                        named_conditions,
+                        rule_params,
+                    )?;
+                    statements.push(StatementAst::If {
+                        condition,
+                        then_statements,
+                        else_statements,
+                    });
+                    i = next_i;
+                    continue;
+                }
                 if let Some((condition, trailing)) = parse_pattern_if_header(
                     line,
                     object_names,
@@ -13179,10 +13607,10 @@ fn parse_statement_block(
                             rule_params,
                         )?;
                         let (then_statements, else_statements, after_i) =
-                            if lines[next_i - 1] == "else" {
+                            if let Some(else_start) = else_block_start(lines, next_i) {
                                 let (else_statements, after_else_i) = parse_statement_block(
                                     lines,
-                                    next_i,
+                                    else_start,
                                     &[BLOCK_CLOSE],
                                     object_names,
                                     object_schemas,
@@ -13217,7 +13645,7 @@ fn parse_statement_block(
                     }
                     continue;
                 }
-                if let Some((condition_text, effect_text)) = line
+                if let Some((condition_text, _)) = line
                     .strip_prefix("if")
                     .unwrap_or("")
                     .trim_start()
@@ -13236,13 +13664,43 @@ fn parse_statement_block(
                         maps,
                         object_groups,
                     )?;
-                    let effects = parse_rewrite_effect(effect_text.trim(), line)?;
+                    let (then_statements, next_i) = parse_statement_arrow_consequence(
+                        lines,
+                        i,
+                        line,
+                        object_names,
+                        object_schemas,
+                        value_sets,
+                        maps,
+                        object_groups,
+                        input_names,
+                        global_names,
+                        numeric_globals,
+                        condition_names,
+                        named_conditions,
+                        rule_params,
+                    )?;
+                    let (else_statements, next_i) = parse_optional_else_statement_block(
+                        lines,
+                        next_i,
+                        object_names,
+                        object_schemas,
+                        value_sets,
+                        maps,
+                        object_groups,
+                        input_names,
+                        global_names,
+                        numeric_globals,
+                        condition_names,
+                        named_conditions,
+                        rule_params,
+                    )?;
                     statements.push(StatementAst::If {
                         condition,
-                        then_statements: vec![StatementAst::Effect { effects }],
-                        else_statements: Vec::new(),
+                        then_statements,
+                        else_statements,
                     });
-                    i += 1;
+                    i = next_i;
                     continue;
                 }
                 let condition = parse_statement_condition(
@@ -13277,37 +13735,27 @@ fn parse_statement_block(
                 if next_i == 0 {
                     return Err(parse_error(line, "if block missing closing brace"));
                 }
-                if lines[next_i - 1] == "else" {
-                    let (else_statements, after_else_i) = parse_statement_block(
-                        lines,
-                        next_i,
-                        &[BLOCK_CLOSE],
-                        object_names,
-                        object_schemas,
-                        value_sets,
-                        maps,
-                        object_groups,
-                        input_names,
-                        global_names,
-                        numeric_globals,
-                        condition_names,
-                        named_conditions,
-                        rule_params,
-                    )?;
-                    statements.push(StatementAst::If {
-                        condition,
-                        then_statements,
-                        else_statements,
-                    });
-                    i = after_else_i;
-                } else {
-                    statements.push(StatementAst::If {
-                        condition,
-                        then_statements,
-                        else_statements: Vec::new(),
-                    });
-                    i = next_i;
-                }
+                let (else_statements, next_i) = parse_optional_else_statement_block(
+                    lines,
+                    next_i,
+                    object_names,
+                    object_schemas,
+                    value_sets,
+                    maps,
+                    object_groups,
+                    input_names,
+                    global_names,
+                    numeric_globals,
+                    condition_names,
+                    named_conditions,
+                    rule_params,
+                )?;
+                statements.push(StatementAst::If {
+                    condition,
+                    then_statements,
+                    else_statements,
+                });
+                i = next_i;
             }
             Some("else") => return Err(parse_error(line, "else without if")),
             Some("when") => return Err(parse_error(line, "use `if` for conditions")),

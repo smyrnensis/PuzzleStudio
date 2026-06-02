@@ -31,7 +31,7 @@ inputs {
   restart <- r
 }
 
-group {
+groups {
   key = key1 key2 gkey pkey1 pkey2
   lock = lock1 lock2 glock
   crate = Crate1 crate2 gcrate pcrate1 pcrate2

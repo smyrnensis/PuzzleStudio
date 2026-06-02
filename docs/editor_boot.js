@@ -169,6 +169,13 @@
         body: JSON.stringify(payload),
       });
     },
+    async exportHtml(payload) {
+      const invoke = tauriInvoke();
+      if (invoke) {
+        return invoke("export_html", { request: payload });
+      }
+      return { handled: false };
+    },
     async createSourceFile(payload) {
       const invoke = tauriInvoke();
       if (invoke) {

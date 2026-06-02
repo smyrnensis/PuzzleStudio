@@ -1,29 +1,30 @@
-title "Microban 3D"
-author "Levels by David Skinner"
+title "Button puzzle"
+author "smyrnensis"
 
 theme puzzlescript
 
 puzzle3 sokoban {
 render {
   camera {
-    yaw = 10
-    pitch = 55
-    zoom = 1.1
+    yaw = 0
+    pitch = 90
+    zoom = 1
   }
 }
 
 layers {
-  floor = Floor
-  target = Goal
+  Floor
+  Goal
   solid = Player Box Wall
 }
 
-group {
+groups {
   solid = Player Box Wall
 }
 
 rules {
   input [ Player ] -> [ > Player ]
+  move
 }
 
 win_conditions {
@@ -38,9 +39,9 @@ on_level_clear {
 
 scene title {
 layout {
-  title "Microban 3D"
-  button "New Game" -> goto playing
-  button "Level Select" -> goto level_select
+  title
+  choice "New Game" -> goto playing
+  choice "Level Select" -> goto level_select
 }
 }
 
@@ -57,9 +58,9 @@ rules {
 
 layout {
   row {
-    title "Microban 3D"
+    title
   }
-  puzzle3 sokoban size 8 8
+  puzzle3 sokoban
 }
 }
 

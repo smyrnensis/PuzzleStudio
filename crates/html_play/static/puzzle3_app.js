@@ -197,13 +197,28 @@ function applyTheme(theme) {
   const variables = theme && typeof theme === "object" ? theme.variables : null;
   if (variables && typeof variables === "object") {
     for (const [key, value] of Object.entries(variables)) {
-      if (!key.startsWith("--")) {
+      const variable = normalizeThemeVariableKey(key);
+      if (!variable) {
         continue;
       }
-      document.documentElement.style.setProperty(key, String(value));
-      activeThemeVariables.add(key);
+      document.documentElement.style.setProperty(variable, String(value));
+      activeThemeVariables.add(variable);
     }
   }
+}
+
+function normalizeThemeVariableKey(name) {
+  const normalized = String(name || "")
+    .replace(/^--/, "")
+    .replace(/_/g, "-")
+    .toLowerCase();
+  if (normalized === "bg") {
+    return "--background";
+  }
+  if (normalized === "ink") {
+    return "--text";
+  }
+  return /^(background|text|accent)$/.test(normalized) ? `--${normalized}` : "";
 }
 
 function normalizeScenePreviewTheme(theme) {
@@ -525,7 +540,10 @@ function puzzle3PreviewSnapshot(update = {}, source = snapshot || fallbackSnapsh
     next.cells = JSON.parse(JSON.stringify(cells));
   }
   if (update.camera) {
-    next.camera = cloneCamera(update.camera);
+    next.camera = cloneCamera({
+      ...update.camera,
+      zoom: update.camera.zoom ?? update.view?.zoom,
+    });
   }
   if (update.view) {
     next.view = clonePuzzle3PreviewView(update.view, next.size || fallbackSnapshot.size);
@@ -2146,9 +2164,9 @@ function puzzle3VisualView() {
 
 function gridStroke(kind, grid) {
   if (kind === "stageFrame") {
-    return grid.frameColor || themeColor("--ink");
+    return grid.frameColor || themeColor("--text");
   }
-  return grid.color || themeColor("--ink");
+  return grid.color || themeColor("--text");
 }
 
 function sceneFaces(renderCells, renderContext = null) {
@@ -2180,7 +2198,7 @@ function shadowFaces(renderCells) {
       ],
       depth: point.depth + 0.02,
       renderPriority: -1,
-      fill: themeColorWithAlpha("--ink", 0.16),
+      fill: themeColorWithAlpha("--text", 0.16),
     });
   }
   return faces;
