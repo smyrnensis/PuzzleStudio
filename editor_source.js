@@ -2366,6 +2366,81 @@ function sourceRewritePatternSlotOffsets(pattern) {
   return slots;
 }
 
+function sourceRuleBracketCellSlots(source, cursor) {
+  const lineStart = source.lastIndexOf("\n", cursor - 1) + 1;
+  const lineEnd = source.indexOf("\n", cursor);
+  const safeLineEnd = lineEnd < 0 ? source.length : lineEnd;
+  const lineBeforeCursor = source.slice(lineStart, cursor);
+  if (stripSourceImportLineComment(lineBeforeCursor).length !== lineBeforeCursor.length) {
+    return null;
+  }
+  const open = source.lastIndexOf("[", cursor - 1);
+  const close = source.indexOf("]", cursor);
+  if (open < lineStart || close < 0 || close > safeLineEnd || cursor <= open || cursor >= close) {
+    return null;
+  }
+  const body = source.slice(open + 1, close);
+  if (body.includes("[") || body.includes("]")) {
+    return null;
+  }
+  const slots = [];
+  let segmentStart = 0;
+  const pushSegment = (segmentEnd) => {
+    const segment = body.slice(segmentStart, segmentEnd);
+    if (/^[\t ]*$/.test(segment)) {
+      slots.push({
+        start: open + 1 + segmentStart,
+        end: open + 1 + segmentEnd,
+        cursor: open + 1 + segmentStart + Math.ceil(segment.length / 2),
+      });
+    }
+    segmentStart = segmentEnd + 1;
+  };
+  for (let index = 0; index <= body.length; index += 1) {
+    if (index === body.length || body[index] === "|") {
+      pushSegment(index);
+    }
+  }
+  return slots;
+}
+
+function handleSourceRuleBracketCellSlotTab(event) {
+  if (
+    event.key !== "Tab"
+    || event.altKey
+    || event.ctrlKey
+    || event.metaKey
+    || event.isComposing
+    || sourceEditor.selectionStart !== sourceEditor.selectionEnd
+  ) {
+    return false;
+  }
+  const source = sourceEditor.value || "";
+  const cursor = sourceEditor.selectionStart;
+  const slots = sourceRuleBracketCellSlots(source, cursor);
+  if (!slots || slots.length < 2) {
+    return false;
+  }
+  const currentIndex = slots.findIndex((slot) => cursor >= slot.start && cursor <= slot.end);
+  if (currentIndex < 0) {
+    return false;
+  }
+  const targetIndex = event.shiftKey
+    ? (currentIndex + slots.length - 1) % slots.length
+    : (currentIndex + 1) % slots.length;
+  const target = slots[targetIndex]?.cursor;
+  if (!Number.isInteger(target)) {
+    return false;
+  }
+  event.preventDefault();
+  event.stopPropagation();
+  sourceEditor.setSelectionRange(target, target);
+  updateSourceMeta();
+  hideSourceCompletions();
+  renderSourceCaret();
+  return true;
+}
+
 function handleSourceRuleBracketCellTabExit(event) {
   if (
     event.key !== "Tab"
@@ -2398,7 +2473,7 @@ function handleSourceRuleBracketCellTabExit(event) {
   }
   const afterClose = source[close + 1] || "";
   const hasTrailingHorizontalSpace = afterClose === " " || afterClose === "\t";
-  const replacement = hasTrailingHorizontalSpace ? "[ ]" : "[ ] ";
+  const replacement = hasTrailingHorizontalSpace ? "[  ]" : "[  ] ";
   event.preventDefault();
   event.stopPropagation();
   clearSourceBlockSelection();
@@ -3482,10 +3557,13 @@ sourceEditor.addEventListener("keydown", (event) => {
   if (handleSourceRewriteRhsPatternAssist(event)) {
     return;
   }
-  if (handleSourceRewritePatternTab(event)) {
+  if (handleSourceRuleBracketCellSlotTab(event)) {
     return;
   }
   if (handleSourceRuleBracketCellTabExit(event)) {
+    return;
+  }
+  if (handleSourceRewritePatternTab(event)) {
     return;
   }
   if (event.key === "Tab") {

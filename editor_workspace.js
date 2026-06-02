@@ -180,22 +180,40 @@ async function applyLoadedSourcePayload(payload) {
     loadEmbeddedDocument(currentDocumentIndex);
     await renderPreview();
   } else {
-    renderDocumentSelect();
-    renderDocumentTabs();
-    applyGameCss(payload.gameCss || "");
-    applyGameVisuals(payload.gameVisualsJs || "");
-    setSourceEditorValue(payload.source || "");
-    resetLevelBuilderFromSource();
-    latestHtml = "";
-    previewExport = null;
-    latestPreviewState = null;
-    setPreviewDocumentLoaded(false);
-    setPreviewFrameHtml(emptyPreviewDocument());
-    resetPreviewLog("No project open");
-    runButton.disabled = true;
-    downloadButton.disabled = true;
-    setEditorStatus("Open or create a project", "");
+    resetEditorForNoOpenProject({
+      source: payload.source || "",
+      gameCss: payload.gameCss || "",
+      gameVisualsJs: payload.gameVisualsJs || "",
+      status: "Open or create a project",
+    });
   }
+}
+
+function resetEditorForNoOpenProject(options = {}) {
+  workspaceRoot = "";
+  activeFileId = "";
+  selectedTreeId = "";
+  selectedFolderId = "";
+  currentDocumentIndex = 0;
+  openTabIds = [];
+  sourceNavigationBackStack = [];
+  sourceNavigationForwardStack = [];
+  renderDocumentSelect();
+  renderDocumentTabs();
+  applyGameCss(options.gameCss || "");
+  applyGameVisuals(options.gameVisualsJs || "");
+  sourceEditor.readOnly = true;
+  setSourceEditorValue(options.source || "");
+  resetLevelBuilderFromSource();
+  latestHtml = "";
+  previewExport = null;
+  latestPreviewState = null;
+  setPreviewDocumentLoaded(false);
+  setPreviewFrameHtml(emptyPreviewDocument());
+  resetPreviewLog(options.previewMessage || "No project open");
+  runButton.disabled = true;
+  downloadButton.disabled = true;
+  setEditorStatus(options.status || "Open or create a project", options.statusClass || "");
 }
 
 async function appendLoadedWorkspacePayload(payload) {
@@ -451,6 +469,50 @@ function currentSourceForDocument(document) {
   return document?.id === activeDocument()?.id && isTextDocument(document)
     ? sourceEditor.value
     : document?.source || "";
+}
+
+function isDocumentUnsaved(document) {
+  if (!document || !isTextDocument(document)) {
+    return false;
+  }
+  return currentSourceForDocument(document) !== (document.syncedSource ?? document.source ?? "");
+}
+
+function collectTextDocumentsInNode(node, out = []) {
+  if (!node) {
+    return out;
+  }
+  if (node.kind === "file") {
+    if (isTextDocument(node)) {
+      out.push(node);
+    }
+    return out;
+  }
+  for (const child of node.children || []) {
+    collectTextDocumentsInNode(child, out);
+  }
+  return out;
+}
+
+function unsavedDocumentsInNode(node) {
+  return collectTextDocumentsInNode(node).filter((document) => isDocumentUnsaved(document));
+}
+
+function confirmRemoveWorkspaceWithUnsavedChanges(node, unsavedDocuments) {
+  if (!unsavedDocuments.length) {
+    return true;
+  }
+  const workspaceName = node?.name || "this workspace";
+  const fileList = unsavedDocuments
+    .slice(0, 4)
+    .map((document) => `- ${document.puzzlePath || document.name || "Untitled"}`)
+    .join("\n");
+  const more = unsavedDocuments.length > 4
+    ? `\n- and ${unsavedDocuments.length - 4} more`
+    : "";
+  return window.confirm(
+    `Close ${workspaceName} without saving?\n\nUnsaved changes will be lost:\n${fileList}${more}`,
+  );
 }
 
 async function openProjectFromDesktop(kind = "folder") {
@@ -2261,6 +2323,11 @@ async function removeWorkspaceNode(nodeId) {
   if (!target?.node || !target.parent || !target.node.isWorkspaceRoot) {
     return;
   }
+  const unsaved = unsavedDocumentsInNode(target.node);
+  if (!confirmRemoveWorkspaceWithUnsavedChanges(target.node, unsaved)) {
+    setEditorStatus("Close canceled: unsaved changes", "is-error");
+    return;
+  }
   const removedRoot = target.node.workspaceRoot || "";
   if (isDesktopHost() && removedRoot && typeof window.PuzzleStudioHost.removeWorkspace === "function") {
     await window.PuzzleStudioHost.removeWorkspace({ workspaceRoot: removedRoot });
@@ -2281,17 +2348,11 @@ async function removeWorkspaceNode(nodeId) {
   if (activeFileId) {
     loadEmbeddedDocument(currentDocumentIndex);
   } else {
-    renderDocumentSelect();
-    latestHtml = "";
-    previewExport = null;
-    latestPreviewState = null;
-    setPreviewDocumentLoaded(false);
-    setPreviewFrameHtml(emptyPreviewDocument());
-    resetPreviewLog("No project open");
-    runButton.disabled = true;
-    downloadButton.disabled = true;
+    resetEditorForNoOpenProject({ status: "Closed workspace", statusClass: "is-ok" });
   }
-  setEditorStatus("Closed workspace", "is-ok");
+  if (activeFileId) {
+    setEditorStatus("Closed workspace", "is-ok");
+  }
 }
 
 function starterPuzzleSource(name) {

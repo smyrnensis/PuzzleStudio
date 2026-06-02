@@ -3179,7 +3179,7 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
 .level3d-workspace {
   min-height: 0;
   display: grid;
-  grid-template-columns: var(--level3d-frame-width) var(--level3d-frame-width);
+  grid-template-columns: minmax(0, var(--level3d-frame-width)) minmax(0, var(--level3d-frame-width));
   grid-auto-rows: max-content;
   grid-template-areas:
     "preview layer"
@@ -3187,12 +3187,12 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   align-content: start;
   align-items: start;
   gap: var(--level3d-frame-gap);
-  width: max-content;
-  max-width: none;
+  width: 100%;
+  max-width: 100%;
 }
 
 .level3d-workspace.is-stacked {
-  grid-template-columns: var(--level3d-frame-width);
+  grid-template-columns: minmax(0, var(--level3d-frame-width));
   grid-template-areas:
     "preview"
     "layer"
@@ -3209,6 +3209,8 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   grid-area: preview;
   position: relative;
   display: block;
+  min-width: 0;
+  max-width: 100%;
   width: var(--level3d-frame-width);
   height: var(--level3d-frame-height);
   overflow: hidden;
@@ -3271,6 +3273,7 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
 .level3d-layer-editor {
   grid-area: layer;
   min-width: 0;
+  max-width: 100%;
   width: var(--level3d-frame-width);
   height: auto;
   position: relative;
@@ -3363,6 +3366,7 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   --level3d-layer-width: 1;
   --level3d-layer-depth: 1;
   --level3d-layer-cell-size: 56px;
+  --level3d-layer-grid-line: #050505;
   position: absolute;
   inset: 0 auto auto 0;
   width: var(--level3d-frame-virtual-width);
@@ -3396,6 +3400,39 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   box-sizing: border-box;
 }
 
+.level3d-layer-board.is-grid-board::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: none;
+  box-sizing: border-box;
+  pointer-events: none;
+}
+
+.level3d-layer-board.is-grid-board.has-grid::after {
+  display: block;
+  border: 1px solid var(--level3d-layer-grid-line);
+  background-image:
+    linear-gradient(
+      to right,
+      transparent 0,
+      transparent calc(var(--level3d-layer-cell-size) - 1px),
+      var(--level3d-layer-grid-line) calc(var(--level3d-layer-cell-size) - 1px),
+      var(--level3d-layer-grid-line) var(--level3d-layer-cell-size)
+    ),
+    linear-gradient(
+      to bottom,
+      transparent 0,
+      transparent calc(var(--level3d-layer-cell-size) - 1px),
+      var(--level3d-layer-grid-line) calc(var(--level3d-layer-cell-size) - 1px),
+      var(--level3d-layer-grid-line) var(--level3d-layer-cell-size)
+    );
+  background-size: var(--level3d-layer-cell-size) var(--level3d-layer-cell-size);
+  background-position: 0 0;
+  background-repeat: repeat;
+}
+
 .level3d-layer-board.is-grid-board .level3d-layer-cell {
   min-width: 0;
   min-height: 0;
@@ -3409,10 +3446,6 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   place-items: center;
   padding: 0;
   cursor: crosshair;
-}
-
-.level3d-layer-board.is-grid-board.has-grid .level3d-layer-cell {
-  box-shadow: inset 0 0 0 1px #050505;
 }
 
 .level3d-layer-board.is-grid-board .level3d-layer-cell:hover,
