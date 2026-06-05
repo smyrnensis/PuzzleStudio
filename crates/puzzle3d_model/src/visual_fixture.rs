@@ -14,6 +14,21 @@ pub enum VisualFixtureExportError3 {
     MissingObjectName { object: ObjectId },
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct VisualFixtureAnimation3 {
+    pub tween_enabled: bool,
+    pub tween_interval_ms: u64,
+}
+
+impl Default for VisualFixtureAnimation3 {
+    fn default() -> Self {
+        Self {
+            tween_enabled: false,
+            tween_interval_ms: 250,
+        }
+    }
+}
+
 pub fn export_visual_fixture_json(
     parsed: &ParsedPuzzle3,
 ) -> Result<String, VisualFixtureExportError3> {
@@ -33,6 +48,22 @@ pub fn export_visual_fixture_json_with_title_and_scenes(
     scene_fields_json: Option<&str>,
     level_bundle_names: &[String],
 ) -> Result<String, VisualFixtureExportError3> {
+    export_visual_fixture_json_with_title_scenes_and_animation(
+        parsed,
+        title,
+        scene_fields_json,
+        level_bundle_names,
+        VisualFixtureAnimation3::default(),
+    )
+}
+
+pub fn export_visual_fixture_json_with_title_scenes_and_animation(
+    parsed: &ParsedPuzzle3,
+    title: Option<&str>,
+    scene_fields_json: Option<&str>,
+    level_bundle_names: &[String],
+    animation: VisualFixtureAnimation3,
+) -> Result<String, VisualFixtureExportError3> {
     let bundle = parsed
         .level_bundle
         .as_ref()
@@ -48,7 +79,7 @@ pub fn export_visual_fixture_json_with_title_and_scenes(
     let _ = writeln!(out, "  \"layerCount\": {},", parsed.game.layer_count);
     write_size_field(&mut out, 1, "size", bundle.levels[0].level.size, true);
     write_camera(&mut out, parsed);
-    write_settings(&mut out, parsed);
+    write_settings(&mut out, parsed, animation);
     write_viewport(&mut out, parsed);
     write_directions(&mut out);
     write_direction_sets(&mut out);
@@ -79,12 +110,12 @@ fn write_camera(out: &mut String, parsed: &ParsedPuzzle3) {
     );
 }
 
-fn write_settings(out: &mut String, parsed: &ParsedPuzzle3) {
+fn write_settings(out: &mut String, parsed: &ParsedPuzzle3, animation: VisualFixtureAnimation3) {
     let camera = &parsed.settings.camera;
     let pixelate = &parsed.settings.pixelate;
     let _ = writeln!(
         out,
-        "  \"settings\": {{ \"interactiveLook\": {}, \"interactiveZoom\": {}, \"grid\": {{ \"visibility\": {}, \"occupied_cells\": {} }}, \"shade\": {}, \"pixelate\": {{ \"enabled\": {}, \"scale\": {}, \"smoothing\": {} }} }},",
+        "  \"settings\": {{ \"interactiveLook\": {}, \"interactiveZoom\": {}, \"grid\": {{ \"visibility\": {}, \"occupied_cells\": {} }}, \"shade\": {}, \"pixelate\": {{ \"enabled\": {}, \"scale\": {}, \"smoothing\": {} }}, \"animation\": {{ \"tween\": {{ \"enabled\": {}, \"intervalMs\": {} }} }} }},",
         camera.interactive_look,
         camera.interactive_zoom,
         if parsed.settings.grid.occupied_cells {
@@ -97,6 +128,8 @@ fn write_settings(out: &mut String, parsed: &ParsedPuzzle3) {
         pixelate.enabled,
         pixelate.scale,
         pixelate.smoothing,
+        animation.tween_enabled,
+        animation.tween_interval_ms,
     );
 }
 

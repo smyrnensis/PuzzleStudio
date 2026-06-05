@@ -26,7 +26,6 @@ let clientPendingWaits = 0;
 let activeThemeClass = "";
 const activeThemeVariables = new Set();
 const activationConfirmDelayMs = 160;
-const puzzlescriptTerminalWidth = 34;
 
 class PuzzleSoundRuntime {
   constructor() {
@@ -602,7 +601,7 @@ function notifySceneEditorPreview(requestId = sceneEditorPreview?.requestId || "
     logicalSize: logicalSceneSize(layout?.size),
     components: sceneEditorComponentMetadata(sceneDef?.components || [], {
       __sceneDef: sceneDef,
-      __sceneState: sceneEditorPreview.state || currentState?.sceneState || currentState?.screenState || {},
+      __sceneState: sceneEditorPreview.state || currentState?.sceneState || {},
       __standardChoiceCounter: { value: 0 },
     }),
     error: sceneDef ? null : `Unknown scene: ${sceneName}`,
@@ -631,14 +630,13 @@ function renderSceneEditorPreview(config = {}) {
     currentScene: sceneName,
     screen: sceneName,
     theme: sceneEditorPreview.theme,
-    sceneState: sceneEditorPreview.state || existingLayer?.sceneState || existingLayer?.state || baseState.sceneState || baseState.screenState || {},
-    screenState: sceneEditorPreview.state || existingLayer?.sceneState || existingLayer?.state || baseState.sceneState || baseState.screenState || {},
+    sceneState: sceneEditorPreview.state || existingLayer?.sceneState || existingLayer?.state || baseState.sceneState || {},
     sceneLayers: [{
       name: sceneName,
       focused: true,
       scene: existingLayer?.scene || baseState.scene || null,
-      sceneState: sceneEditorPreview.state || existingLayer?.sceneState || existingLayer?.state || baseState.sceneState || baseState.screenState || {},
-      scenePuzzles: existingLayer?.scenePuzzles || baseState.scenePuzzles || baseState.screenPuzzles || [],
+      sceneState: sceneEditorPreview.state || existingLayer?.sceneState || existingLayer?.state || baseState.sceneState || {},
+      scenePuzzles: existingLayer?.scenePuzzles || baseState.scenePuzzles || [],
     }],
   };
   currentState = previewState;
@@ -917,8 +915,8 @@ function sceneLayers(state) {
     name,
     focused: true,
     scene: state?.scene || null,
-    sceneState: state?.sceneState || state?.screenState || {},
-    scenePuzzles: state?.scenePuzzles || state?.screenPuzzles || [],
+    sceneState: state?.sceneState || {},
+    scenePuzzles: state?.scenePuzzles || [],
   }];
 }
 
@@ -1052,7 +1050,6 @@ function sceneHasModelInputTarget(scene, state = currentState, layer = currentSc
     || state?.scene
     || nonEmptyArray(layer?.scenePuzzles)
     || nonEmptyArray(state?.scenePuzzles)
-    || nonEmptyArray(state?.screenPuzzles)
     || scene?.puzzleRule,
   );
 }
@@ -1413,7 +1410,10 @@ function renderText(component, scope = {}) {
 function renderButton(component, scope = {}) {
   const button = document.createElement("button");
   button.type = "button";
-  button.textContent = resolveLabel(component.label, scope) || sceneTitle(effectLabel(component.effect));
+  setControlLabel(
+    button,
+    resolveLabel(component.label, scope) || sceneTitle(effectLabel(component.effect)),
+  );
   annotateSceneEditorComponent(button, component, scope);
   if (scope.__menuInstance && component.value) {
     const counter = scope.__menuButtonCounter || { value: 0 };
@@ -1442,7 +1442,10 @@ function renderButton(component, scope = {}) {
 function renderChoice(component, scope = {}) {
   const choice = document.createElement("button");
   choice.type = "button";
-  choice.textContent = resolveLabel(component.label, scope) || sceneTitle(effectLabel(component.effect));
+  setControlLabel(
+    choice,
+    resolveLabel(component.label, scope) || sceneTitle(effectLabel(component.effect)),
+  );
   choice.classList.add("standard-choice");
   annotateSceneEditorComponent(choice, component, scope);
   const counter = scope.__standardChoiceCounter || { value: 0 };
@@ -1460,6 +1463,13 @@ function renderChoice(component, scope = {}) {
   applySizingKind(choice, component);
   applySceneLayout(choice, component.layout);
   return choice;
+}
+
+function setControlLabel(control, label) {
+  const text = document.createElement("span");
+  text.className = "ps-control-label";
+  text.textContent = label;
+  control.replaceChildren(text);
 }
 
 /* puzzle-host:optional:scene-editor:start */
@@ -1578,20 +1588,37 @@ function applyActivationConfirmGlyphs(target) {
   if (!document.body.classList.contains("theme-puzzlescript")) {
     return;
   }
-  const label = activationConfirmLabel(target);
-  const labelWidth = Array.from(label).length;
-  const dashCount = Math.max(0, puzzlescriptTerminalWidth - 2 - labelWidth);
-  const sideCount = Math.floor(dashCount / 2);
-  const side = "-".repeat(sideCount);
-  target.style.setProperty("--ps-confirm-line", JSON.stringify(`#${side}${label}${side}#`));
+  clearActivationConfirmGlyphs(target);
+  target.style.setProperty("--ps-confirm-fill", JSON.stringify(puzzlescriptConfirmFill(target)));
 }
 
 function clearActivationConfirmGlyphs(target) {
-  target.style.removeProperty("--ps-confirm-line");
+  target.style.removeProperty("--ps-confirm-fill");
+}
+
+function puzzlescriptConfirmFill(target) {
+  const rect = target.getBoundingClientRect();
+  const charWidth = puzzlescriptControlCharWidth(target);
+  const count = Math.max(1, Math.ceil(rect.width / charWidth));
+  return "#".repeat(count);
+}
+
+function puzzlescriptControlCharWidth(target) {
+  const probe = document.createElement("span");
+  probe.textContent = "#";
+  probe.style.position = "absolute";
+  probe.style.visibility = "hidden";
+  probe.style.pointerEvents = "none";
+  probe.style.whiteSpace = "nowrap";
+  probe.style.font = window.getComputedStyle(target).font;
+  document.body.append(probe);
+  const width = probe.getBoundingClientRect().width;
+  probe.remove();
+  return Number.isFinite(width) && width > 0 ? width : 1;
 }
 
 function activationConfirmLabel(target) {
-  const labelNode = target.querySelector?.("span:not(.level-clear-mark)");
+  const labelNode = target.querySelector?.(".ps-control-label, span:not(.level-clear-mark)");
   return (labelNode?.textContent || target.textContent || "").trim();
 }
 
@@ -1832,7 +1859,7 @@ function resolveViewPath(path, scope = {}) {
     if (currentState && Object.prototype.hasOwnProperty.call(currentState, parts[0])) {
       return currentState[parts[0]];
     }
-    return (scope.__sceneState || currentState?.sceneState || currentState?.screenState)?.[parts[0]]
+    return (scope.__sceneState || currentState?.sceneState)?.[parts[0]]
       ?? currentState?.gameState?.[parts[0]];
   }
   if (parts.length >= 3 && parts[1] === "level") {
@@ -1849,7 +1876,7 @@ function resolveViewPath(path, scope = {}) {
     ? scope[parts[0]]
     : currentState?.[parts[0]];
   if (value === undefined) {
-  value = (scope.__sceneState || currentState?.sceneState || currentState?.screenState)?.[parts[0]];
+    value = (scope.__sceneState || currentState?.sceneState)?.[parts[0]];
   }
   if (value === undefined) {
     value = currentState?.gameState?.[parts[0]];
@@ -1912,6 +1939,7 @@ function renderLevelMenu(state, component = {}, scope = {}) {
     }
 
     const label = document.createElement("span");
+    label.className = "ps-control-label";
     const levelName = level?.name || `Level ${index + 1}`;
     label.textContent = component.showIndex ? `${position + 1}. ${levelName}` : levelName;
     item.append(label);
@@ -1934,6 +1962,7 @@ function renderLevelMenu(state, component = {}, scope = {}) {
       item.append(cleared);
     }
     const label = document.createElement("span");
+    label.className = "ps-control-label";
     label.textContent = resolveLabel(commandButton.label);
     item.append(label);
     item.addEventListener("click", () => runActivationConfirm(item, () => sendCommand(`select:${position}`)));
@@ -2134,9 +2163,7 @@ function sceneDefByName(name) {
 }
 
 function sceneDefinitionsForSource(source) {
-  const primary = nonEmptyArray(source?.scenes) || nonEmptyArray(source?.screens);
-  const fallback = nonEmptyArray(window.PuzzleExport?.scenes) || nonEmptyArray(window.PuzzleExport?.screens);
-  return primary || fallback || [];
+  return nonEmptyArray(source?.scenes) || nonEmptyArray(source?.screens) || [];
 }
 
 function nonEmptyArray(value) {
@@ -2387,7 +2414,7 @@ function standardChoiceFocusCells(scene = currentSceneDef()) {
   const footprint = componentColumnFootprint(scene.components || [], {
     scope: {
       __sceneDef: scene,
-      __sceneState: currentState?.sceneState || currentState?.screenState || {},
+      __sceneState: currentState?.sceneState || {},
     },
   });
   return footprint.cells.map((cell, index) => ({ ...cell, index }));
@@ -2713,12 +2740,18 @@ function effectCommand(effect, scope = {}) {
   if (!screen) {
     return "";
   }
-  if ((effect.kind === "goto" || effect.kind === "enter") && (effect.params || []).length === 1 && effect.params[0]?.name === "level") {
+  if ((effect.kind === "goto" || effect.kind === "enter") && (effect.params || []).length === 1 && sceneParamIsLevel(effect.params[0])) {
     return `${effect.kind} ${screen}(${exprSource(effect.params[0].value, scope)})`;
   }
-  const params = (effect.params || []).map((param) => `${param.name} = ${exprSource(param.value, scope)}`);
+  const params = (effect.params || [])
+    .filter((param) => !sceneParamIsLevel(param))
+    .map((param) => `${param.name} = ${exprSource(param.value, scope)}`);
   const base = `${effect.kind} ${screen}`;
   return params.length ? `${base} with ${params.join(", ")}` : base;
+}
+
+function sceneParamIsLevel(param) {
+  return param?.kind === "level";
 }
 
 function exprSource(expr, scope = {}) {

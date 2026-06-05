@@ -11,8 +11,6 @@ export function resolve_source_target(source: string, cursor_offset: number): st
 
 export function solve_state(source: string, puzzle_path: string, state_json: string, max_depth: number, max_nodes: number, max_ms: number): string;
 
-export function solve_state_with_progress(source: string, puzzle_path: string, state_json: string, max_depth: number, max_nodes: number, max_ms: number, progress_interval_ms: number, progress_callback: Function): string;
-
 export function suggest_source_completions(source: string, cursor_offset: number): string;
 
 export function translate_puzzlescript(source: string): string;
@@ -26,11 +24,8 @@ export interface InitOutput {
     readonly highlight_source_html: (a: number, b: number) => [number, number];
     readonly resolve_source_target: (a: number, b: number, c: number) => [number, number];
     readonly solve_state: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => [number, number, number, number];
-    readonly solve_state_with_progress: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: any) => [number, number, number, number];
     readonly suggest_source_completions: (a: number, b: number, c: number) => [number, number];
     readonly translate_puzzlescript: (a: number, b: number) => [number, number, number, number];
-    readonly __wbindgen_exn_store: (a: number) => void;
-    readonly __externref_table_alloc: () => number;
     readonly __wbindgen_externrefs: WebAssembly.Table;
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;

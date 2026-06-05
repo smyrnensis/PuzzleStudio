@@ -305,7 +305,14 @@ function createToolPane(paneId, panel) {
   actions.append(createPaneMaximizeButton(paneId));
   actions.append(createPaneCloseButton(paneId));
   header.append(title, actions);
-  pane.append(header, panel);
+  pane.append(header);
+  if (paneId === "level" && levelEmptyPane) {
+    pane.append(levelEmptyPane);
+  }
+  if (paneId === "sprite" && spriteEmptyPane) {
+    pane.append(spriteEmptyPane);
+  }
+  pane.append(panel);
   if (paneId === "level" && level3dBuilder) {
     pane.append(level3dBuilder);
   }
@@ -843,20 +850,28 @@ function applyPaneVisibility() {
       element.hidden = !visible;
     }
     if (paneId === "level") {
+      const levelUnbound = currentLevelPaneMode === "none";
+      if (levelEmptyPane) {
+        levelEmptyPane.hidden = !visible || !levelUnbound;
+      }
       if (levelBuilder) {
-        levelBuilder.hidden = !visible || currentLevelPaneMode !== "edit";
+        levelBuilder.hidden = !visible || levelUnbound || currentLevelPaneMode !== "edit";
       }
       if (level3dBuilder) {
-        level3dBuilder.hidden = !visible || currentLevelPaneMode !== "level3d";
+        level3dBuilder.hidden = !visible || levelUnbound || currentLevelPaneMode !== "level3d";
       }
       continue;
     }
     if (paneId === "sprite") {
+      const spriteUnbound = currentSpritePaneMode === "none";
+      if (spriteEmptyPane) {
+        spriteEmptyPane.hidden = !visible || !spriteUnbound;
+      }
       if (spriteBuilder) {
-        spriteBuilder.hidden = !visible || currentSpritePaneMode !== "sprite";
+        spriteBuilder.hidden = !visible || spriteUnbound || currentSpritePaneMode !== "sprite";
       }
       if (sprite3dBuilder) {
-        sprite3dBuilder.hidden = !visible || currentSpritePaneMode !== "sprite3d";
+        sprite3dBuilder.hidden = !visible || spriteUnbound || currentSpritePaneMode !== "sprite3d";
       }
       continue;
     }
@@ -870,6 +885,9 @@ function applyPaneVisibility() {
   }
   if (spritePaneModeSwitch) {
     spritePaneModeSwitch.hidden = !isPaneVisible("sprite");
+  }
+  if (typeof syncPaneBindLabels === "function") {
+    syncPaneBindLabels();
   }
   syncToolPaneHeaderActionGroups();
   syncWorkbenchGridLayout();

@@ -1,9 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::semantic::{SemanticKind, SemanticToken, semantic_tokens};
-use crate::source::{
-    SourceScope, SourceSectionPart, scan_source_context, split_tokens, strip_line_comment,
-};
+use crate::source::{SourceScope, scan_source_context, split_header_tokens, strip_line_comment};
 use crate::syntax::is_parser_keyword;
 use crate::{
     LoadedDocumentModel, RewriteEffectCommandSyntax, is_visual_color_token,
@@ -46,8 +44,6 @@ enum HighlightKind {
     Brace4,
     Brace5,
     InvalidBrace,
-    Section,
-    SectionRule,
 }
 
 impl HighlightKind {
@@ -81,8 +77,6 @@ impl HighlightKind {
             HighlightKind::Brace4 => "syntax-brace-depth-4",
             HighlightKind::Brace5 => "syntax-brace-depth-5",
             HighlightKind::InvalidBrace => "syntax-brace-invalid",
-            HighlightKind::Section => "syntax-keyword",
-            HighlightKind::SectionRule => "syntax-section-rule",
         }
     }
 }
@@ -251,16 +245,6 @@ fn highlight_html(
     let mut chars = source.char_indices().peekable();
 
     while let Some((index, ch)) = chars.next() {
-        if let Some((end, part)) = context.section_starting_at(index) {
-            let kind = match part {
-                SourceSectionPart::Title => HighlightKind::Section,
-                SourceSectionPart::Rule => HighlightKind::SectionRule,
-            };
-            push_span(&mut out, kind, &source[index..end]);
-            skip_until(&mut chars, end);
-            continue;
-        }
-
         if let Some(range) = visual_ascii_color_range_starting_at(&visual_ascii_color_ranges, index)
         {
             push_colored_text_span(&mut out, &range.color, &source[range.start..range.end]);
@@ -453,47 +437,14 @@ fn scan_brace_line(
         return;
     }
 
-    if trimmed == "}" {
-        for (index, ch) in braces {
-            if ch != '}' {
-                ranges.insert(index, HighlightKind::InvalidBrace);
-                continue;
-            }
-            if let Some((open_index, depth)) = block_stack.pop() {
-                let kind = brace_highlight_kind(depth);
-                ranges.insert(open_index, kind);
-                ranges.insert(index, kind);
-            } else {
-                ranges.insert(index, HighlightKind::InvalidBrace);
-            }
-        }
-        return;
-    }
-
-    let structural_open = code
-        .trim_end()
-        .ends_with('{')
-        .then(|| {
-            braces
-                .iter()
-                .rfind(|(_, ch)| *ch == '{')
-                .map(|(index, _)| *index)
-        })
-        .flatten();
-    let mut inline_stack = Vec::<(usize, usize)>::new();
     for (index, ch) in braces {
-        if Some(index) == structural_open {
-            let depth = block_stack.len();
-            block_stack.push((index, depth));
-            continue;
-        }
         match ch {
             '{' => {
-                let depth = block_stack.len() + inline_stack.len();
-                inline_stack.push((index, depth));
+                let depth = block_stack.len();
+                block_stack.push((index, depth));
             }
             '}' => {
-                if let Some((open_index, depth)) = inline_stack.pop() {
+                if let Some((open_index, depth)) = block_stack.pop() {
                     let kind = brace_highlight_kind(depth);
                     ranges.insert(open_index, kind);
                     ranges.insert(index, kind);
@@ -503,9 +454,6 @@ fn scan_brace_line(
             }
             _ => {}
         }
-    }
-    for (open_index, _) in inline_stack {
-        ranges.insert(open_index, HighlightKind::InvalidBrace);
     }
 }
 
@@ -1534,7 +1482,7 @@ fn scan_for_binding_ranges(source: &str) -> Vec<BindingRange> {
         let content = &source[offset..content_end];
         let raw = strip_line_comment(content);
         let trimmed = raw.trim();
-        let tokens = split_tokens(trimmed);
+        let tokens = split_header_tokens(trimmed);
 
         if trimmed == "}" {
             stack.pop();
@@ -1878,21 +1826,12 @@ layout {
     }
 
     #[test]
-    fn brace_highlight_does_not_pair_inline_braces_with_block_boundaries() {
-        let highlighted = highlight_source(
-            r#"
-puzzle board {
-rules {
-if { flag -> set score = 1
-if flag } -> set score = 2
-}
-}
-"#,
-        );
+    fn highlights_braces_by_source_order() {
+        let highlighted = highlight_source("puzzle board {\nrules { } }\n");
 
-        assert_eq!(highlighted.html.matches("syntax-brace-invalid").count(), 2);
+        assert_eq!(highlighted.html.matches("syntax-brace-invalid").count(), 0);
         assert!(highlighted.html.contains(
-            "<span class=\"syntax-brace-depth-1\">}</span>\n<span class=\"syntax-brace-depth-0\">}</span>"
+            "<span class=\"syntax-keyword\">rules</span> <span class=\"syntax-brace-depth-1\">{</span> <span class=\"syntax-brace-depth-1\">}</span> <span class=\"syntax-brace-depth-0\">}</span>"
         ));
     }
 
@@ -2042,25 +1981,6 @@ step board
 
         assert!(highlighted.html.contains("syntax-keyword\">step"));
         assert!(highlighted.html.contains("syntax-state\">board"));
-    }
-
-    #[test]
-    fn highlights_section_header_sugar() {
-        let highlighted = highlight_source(
-            r#"
-title section_header
-
-puzzle board {
-======
-LEGEND
-======
-P = Player
-}
-"#,
-        );
-
-        assert!(highlighted.html.contains("syntax-section-rule\">======"));
-        assert!(highlighted.html.contains("syntax-keyword\">LEGEND"));
     }
 
     #[test]
@@ -3240,7 +3160,7 @@ level start {
     }
 
     #[test]
-    fn keeps_section_header_scoped_rows_plain() {
+    fn keeps_block_scoped_rows_plain() {
         let highlighted = highlight_source(
             r#"
 title section_scoped_highlight
@@ -3252,16 +3172,14 @@ kind = A B
 objects {
 Box:kind
 }
-======
-LEGEND
-======
+legend {
 1 = Box:A
 A = Box:B
-======
-LEVELS
-======
+}
+levels {
 level start {
 1A
+}
 }
 }
 "#,
@@ -3360,7 +3278,7 @@ level microban_01 {
 
     #[test]
     fn spec_3d_microban_01_second_slice_rows_stay_plain() {
-        let source = include_str!("../../../games/spec_3d.puzzle");
+        let source = include_str!("../../../games/spec_3d.puzzle3");
         let highlighted = highlight_source(source);
 
         assert!(highlighted.html.contains("\n,,G,,,\n"));

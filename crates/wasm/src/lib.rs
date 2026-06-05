@@ -1,15 +1,6 @@
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
-extern "C" {
-    #[wasm_bindgen(typescript_type = "Function")]
-    pub type JsFunction;
-
-    #[wasm_bindgen(method, catch, structural, js_name = call)]
-    fn call1(this: &JsFunction, this_arg: &JsValue, arg: &JsValue) -> Result<JsValue, JsValue>;
-}
-
-#[wasm_bindgen]
 pub fn compile_preview(
     source: &str,
     puzzle_path: &str,
@@ -72,32 +63,6 @@ pub fn solve_state(
         max_depth,
         max_nodes as usize,
         u64::from(max_ms),
-    )
-    .map_err(|error| JsValue::from_str(&error))
-}
-
-#[wasm_bindgen]
-pub fn solve_state_with_progress(
-    source: &str,
-    puzzle_path: &str,
-    state_json: &str,
-    max_depth: u32,
-    max_nodes: u32,
-    max_ms: u32,
-    progress_interval_ms: u32,
-    progress_callback: JsFunction,
-) -> Result<String, JsValue> {
-    html_play::solve_state_json_from_source_with_progress(
-        source,
-        puzzle_path,
-        state_json,
-        max_depth,
-        max_nodes as usize,
-        u64::from(max_ms),
-        u64::from(progress_interval_ms),
-        |progress_json| {
-            let _ = progress_callback.call1(&JsValue::NULL, &JsValue::from_str(&progress_json));
-        },
     )
     .map_err(|error| JsValue::from_str(&error))
 }

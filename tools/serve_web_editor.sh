@@ -39,15 +39,58 @@ if [[ ! -f docs/index.html ]]; then
 fi
 
 url="http://127.0.0.1:${port}/index.html"
-echo "Serving PuzzleStudio Pages editor at ${url}"
+echo "Starting PuzzleStudio Pages editor at ${url}"
 echo "Press Ctrl+C to stop."
+
+python3 -m http.server "$port" --bind 127.0.0.1 -d docs &
+server_pid=$!
+
+cleanup() {
+  if kill -0 "$server_pid" >/dev/null 2>&1; then
+    kill "$server_pid" >/dev/null 2>&1 || true
+    wait "$server_pid" 2>/dev/null || true
+  fi
+}
+
+trap 'cleanup; exit 130' INT
+trap 'cleanup; exit 143' TERM
+trap cleanup EXIT
+
+ready=0
+for _ in {1..50}; do
+  if ! kill -0 "$server_pid" >/dev/null 2>&1; then
+    wait "$server_pid"
+    exit 1
+  fi
+  if python3 - "$port" <<'PY' >/dev/null 2>&1; then
+import socket
+import sys
+
+with socket.create_connection(("127.0.0.1", int(sys.argv[1])), timeout=0.2):
+    pass
+PY
+    ready=1
+    break
+  fi
+  sleep 0.1
+done
+
+if (( ! ready )); then
+  echo "server did not become ready at ${url}" >&2
+  exit 1
+fi
+
+echo "Serving PuzzleStudio Pages editor at ${url}"
 
 if (( open_browser )); then
   if command -v open >/dev/null 2>&1; then
-    open "$url" >/dev/null 2>&1 || true
+    open "$url"
   elif command -v xdg-open >/dev/null 2>&1; then
-    xdg-open "$url" >/dev/null 2>&1 || true
+    xdg-open "$url"
+  else
+    echo "no supported browser opener found for ${url}" >&2
+    exit 1
   fi
 fi
 
-exec python3 -m http.server "$port" -d docs
+wait "$server_pid"

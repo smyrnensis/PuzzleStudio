@@ -137,42 +137,6 @@ export function solve_state(source, puzzle_path, state_json, max_depth, max_node
 
 /**
  * @param {string} source
- * @param {string} puzzle_path
- * @param {string} state_json
- * @param {number} max_depth
- * @param {number} max_nodes
- * @param {number} max_ms
- * @param {number} progress_interval_ms
- * @param {Function} progress_callback
- * @returns {string}
- */
-export function solve_state_with_progress(source, puzzle_path, state_json, max_depth, max_nodes, max_ms, progress_interval_ms, progress_callback) {
-    let deferred5_0;
-    let deferred5_1;
-    try {
-        const ptr0 = passStringToWasm0(source, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len0 = WASM_VECTOR_LEN;
-        const ptr1 = passStringToWasm0(puzzle_path, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len1 = WASM_VECTOR_LEN;
-        const ptr2 = passStringToWasm0(state_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len2 = WASM_VECTOR_LEN;
-        const ret = wasm.solve_state_with_progress(ptr0, len0, ptr1, len1, ptr2, len2, max_depth, max_nodes, max_ms, progress_interval_ms, progress_callback);
-        var ptr4 = ret[0];
-        var len4 = ret[1];
-        if (ret[3]) {
-            ptr4 = 0; len4 = 0;
-            throw takeFromExternrefTable0(ret[2]);
-        }
-        deferred5_0 = ptr4;
-        deferred5_1 = len4;
-        return getStringFromWasm0(ptr4, len4);
-    } finally {
-        wasm.__wbindgen_free(deferred5_0, deferred5_1, 1);
-    }
-}
-
-/**
- * @param {string} source
  * @param {number} cursor_offset
  * @returns {string}
  */
@@ -218,10 +182,6 @@ export function translate_puzzlescript(source) {
 function __wbg_get_imports() {
     const import0 = {
         __proto__: null,
-        __wbg_call_45a03b2ba6c47e41: function() { return handleError(function (arg0, arg1, arg2) {
-            const ret = arg0.call(arg1, arg2);
-            return ret;
-        }, arguments); },
         __wbindgen_cast_0000000000000001: function(arg0, arg1) {
             // Cast intrinsic for `Ref(String) -> Externref`.
             const ret = getStringFromWasm0(arg0, arg1);
@@ -243,12 +203,6 @@ function __wbg_get_imports() {
     };
 }
 
-function addToExternrefTable0(obj) {
-    const idx = wasm.__externref_table_alloc();
-    wasm.__wbindgen_externrefs.set(idx, obj);
-    return idx;
-}
-
 function getStringFromWasm0(ptr, len) {
     return decodeText(ptr >>> 0, len);
 }
@@ -259,15 +213,6 @@ function getUint8ArrayMemory0() {
         cachedUint8ArrayMemory0 = new Uint8Array(wasm.memory.buffer);
     }
     return cachedUint8ArrayMemory0;
-}
-
-function handleError(f, args) {
-    try {
-        return f.apply(this, args);
-    } catch (e) {
-        const idx = addToExternrefTable0(e);
-        wasm.__wbindgen_exn_store(idx);
-    }
 }
 
 function passStringToWasm0(arg, malloc, realloc) {

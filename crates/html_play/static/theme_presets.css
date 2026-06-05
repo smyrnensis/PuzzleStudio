@@ -382,6 +382,7 @@ body.theme-puzzlescript {
 
 .theme-puzzlescript button,
 .theme-puzzlescript .level-menu li {
+  position: relative;
   min-height: 44px;
   max-width: 100%;
   padding: 5px 1ch;
@@ -389,7 +390,8 @@ body.theme-puzzlescript {
   border-radius: 0;
   background: transparent;
   color: var(--text);
-  display: inline-flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, max-content) minmax(0, 1fr);
   align-items: center;
   justify-content: center;
   font-size: 26px;
@@ -404,14 +406,25 @@ body.theme-puzzlescript {
   white-space: nowrap;
 }
 
+.theme-puzzlescript .ps-control-label,
 .theme-puzzlescript .level-menu li > span:not(.level-clear-mark) {
+  grid-column: 2;
   min-width: 0;
-  flex: 0 1 auto;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: clip;
+}
+
+.theme-puzzlescript .level-menu li {
+  width: 100%;
 }
 
 .theme-puzzlescript .level-clear-mark {
+  position: absolute;
+  right: 1ch;
   width: 1ch;
-  flex: 0 0 1ch;
+  color: var(--ok);
+  text-align: center;
 }
 
 .theme-puzzlescript button,
@@ -426,8 +439,10 @@ body.theme-puzzlescript {
 }
 
 .theme-puzzlescript button:hover,
+.theme-puzzlescript button:active,
 .theme-puzzlescript .level-menu li.is-selected,
-.theme-puzzlescript button.is-selected {
+.theme-puzzlescript button.is-selected,
+.theme-puzzlescript button.is-confirming {
   background: transparent;
   color: var(--text);
   box-shadow: none;
@@ -439,14 +454,28 @@ body.theme-puzzlescript {
 .theme-puzzlescript .level-menu li::before,
 .theme-puzzlescript .level-menu li::after {
   position: static;
-  inset: auto;
-  min-width: 1ch;
-  flex: 0 0 1ch;
+  min-width: 0;
+  width: 100%;
   color: var(--text);
   content: "";
   font-weight: 400;
   text-align: center;
   transform: none;
+  white-space: nowrap;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.theme-puzzlescript button::before,
+.theme-puzzlescript .level-menu li::before {
+  grid-column: 1;
+  text-align: left;
+}
+
+.theme-puzzlescript button::after,
+.theme-puzzlescript .level-menu li::after {
+  grid-column: 3;
+  text-align: right;
 }
 
 .theme-puzzlescript button.is-selected::before,
@@ -459,25 +488,16 @@ body.theme-puzzlescript {
   content: "#";
 }
 
-.theme-puzzlescript button.is-confirming,
-.theme-puzzlescript .level-menu li.is-confirming,
-.theme-puzzlescript .level-menu li.is-confirming > * {
-  color: transparent;
+.theme-puzzlescript button.is-confirming::before,
+.theme-puzzlescript .level-menu li.is-confirming::before {
+  content: var(--ps-confirm-fill, "#");
+  text-align: left;
 }
 
 .theme-puzzlescript button.is-confirming::after,
 .theme-puzzlescript .level-menu li.is-confirming::after {
-  position: absolute;
-  top: 50%;
-  left: 1ch;
-  right: 1ch;
-  min-width: 0;
-  flex: none;
-  color: var(--text);
-  content: var(--ps-confirm-line, "");
-  pointer-events: none;
-  text-align: center;
-  transform: translateY(-50%);
+  content: var(--ps-confirm-fill, "#");
+  text-align: right;
 }
 
 .theme-puzzlescript .board,

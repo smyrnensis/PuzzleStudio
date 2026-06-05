@@ -59,8 +59,9 @@ pub use transition::{
 };
 pub use visual::{ObjectVisual3, VisualCell3, VisualObject3, VisualSnapshot3};
 pub use visual_fixture::{
-    VisualFixtureExportError3, export_visual_fixture_json, export_visual_fixture_json_with_title,
-    export_visual_fixture_json_with_title_and_scenes,
+    VisualFixtureAnimation3, VisualFixtureExportError3, export_visual_fixture_json,
+    export_visual_fixture_json_with_title, export_visual_fixture_json_with_title_and_scenes,
+    export_visual_fixture_json_with_title_scenes_and_animation,
 };
 pub use win::WinCondition3;
 
@@ -92,7 +93,7 @@ mod tests {
     const MICROBAN_WALL: ObjectId = ObjectId(5);
 
     fn spec_3d_model_source() -> String {
-        let source = include_str!("../../../games/spec_3d.puzzle");
+        let source = include_str!("../../../games/spec_3d.puzzle3");
         [
             source_block(source, "puzzle3 sokoban").as_str(),
             source_block(source, "levels3 microban").as_str(),
@@ -121,6 +122,15 @@ mod tests {
             }
         }
         panic!("fixture block closes");
+    }
+
+    fn object_id(parsed: &ParsedPuzzle3, name: &str) -> ObjectId {
+        parsed
+            .catalog
+            .objects
+            .iter()
+            .find_map(|object| (object.name == name).then_some(object.id))
+            .unwrap_or_else(|| panic!("missing object {name}"))
     }
 
     fn game() -> Game3 {
@@ -2004,6 +2014,24 @@ input [ Player | no solid ] -> [ | Player ]
     }
 
     #[test]
+    fn parser_expands_3d_horizontal_and_vertical_movement_scratch_sets() {
+        let parsed = parse_puzzle3d(
+            r#"
+layers {
+actor = Box
+}
+
+rules {
+right [ Box{horizontal} ] -> [ Box{vertical} ]
+}
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(parsed.rules.len(), 8);
+    }
+
+    #[test]
     fn parser_lowers_input_rule_with_forward_marker_rhs_sugar_as_movement_scratch() {
         let parsed = parse_puzzle3d(
             r#"
@@ -2030,6 +2058,295 @@ input [ Player ] -> [ > Player ]
                         value: Some(3),
                     }]
         }));
+    }
+
+    #[test]
+    fn parser_lowers_standard_move_step_for_3d_movement_scratch() {
+        let parsed = parse_puzzle3d(
+            r#"
+puzzle3 push3 {
+layers {
+actor = Player
+}
+
+rules {
+input [ Player ] -> [ > Player ]
+move
+}
+}
+
+levels3 demo of push3 {
+legend {
+. = empty
+P = Player
+}
+
+level start {
+P.
+}
+}
+"#,
+        )
+        .unwrap();
+        let level_bundle = parsed.level_bundle.as_ref().unwrap();
+        let initial = level_bundle
+            .level(0)
+            .unwrap()
+            .level
+            .build_state(&parsed.game)
+            .unwrap();
+
+        let moved = transition_program(&parsed.game, &initial, &parsed.rules, INPUT_RIGHT).unwrap();
+        let player = object_id(&parsed, "Player");
+
+        assert!(!moved.has_object(&parsed.game, Coord3::new(0, 0, 0), player));
+        assert!(moved.has_object(&parsed.game, Coord3::new(1, 0, 0), player));
+        assert!(!moved.has_scratch(
+            &parsed.game,
+            Coord3::new(1, 0, 0),
+            player,
+            ScratchId3(0),
+            None
+        ));
+    }
+
+    #[test]
+    fn neutral_3d_rewrite_expands_relative_movement_scratch_by_direction() {
+        let parsed = parse_puzzle3d(
+            r#"
+puzzle3 push3 {
+layers {
+actor = Player Box
+}
+
+rules {
+input [ Player ] -> [ > Player ]
+[ > Player | Box ] -> [ > Player | > Box ]
+move
+}
+}
+
+levels3 demo of push3 {
+legend {
+. = empty
+P = Player
+B = Box
+}
+
+level start {
+PB.
+}
+}
+"#,
+        )
+        .unwrap();
+        let initial = parsed
+            .level_bundle
+            .as_ref()
+            .unwrap()
+            .level(0)
+            .unwrap()
+            .level
+            .build_state(&parsed.game)
+            .unwrap();
+
+        let moved = transition_program(&parsed.game, &initial, &parsed.rules, INPUT_RIGHT).unwrap();
+        let player = object_id(&parsed, "Player");
+        let box_object = object_id(&parsed, "Box");
+
+        assert!(!moved.has_object(&parsed.game, Coord3::new(0, 0, 0), player));
+        assert!(moved.has_object(&parsed.game, Coord3::new(1, 0, 0), player));
+        assert!(moved.has_object(&parsed.game, Coord3::new(2, 0, 0), box_object));
+    }
+
+    #[test]
+    fn parser_accepts_shared_application_prefixed_3d_rule_surface() {
+        let parsed = parse_puzzle3d(
+            r#"
+puzzle3 surface3 {
+layers {
+actor = Player Box
+}
+
+rules {
+once [ Player ] -> [ Player ]
+once_all [ > Player | Box ] -> [ > Player | > Box ]
+once_per_level input [ Player ] -> [ > Player ]
+repeat right [ Box | ] -> [ | Box ]
+}
+}
+"#,
+        )
+        .unwrap();
+
+        assert!(
+            parsed
+                .rules
+                .iter()
+                .any(|rule| rule.application == RuleApplication3::Once)
+        );
+        assert!(
+            parsed
+                .rules
+                .iter()
+                .any(|rule| rule.application == RuleApplication3::OnceAll)
+        );
+        assert!(
+            parsed
+                .rules
+                .iter()
+                .any(|rule| rule.application == RuleApplication3::OncePerLevel)
+        );
+        assert!(
+            parsed
+                .rules
+                .iter()
+                .any(|rule| rule.application == RuleApplication3::UntilStable)
+        );
+    }
+
+    #[test]
+    fn parser_rejects_shared_statement_surfaces_without_3d_lowering() {
+        let routine_call = parse_puzzle3d(
+            r#"
+puzzle3 no_routine_calls3 {
+layers {
+actor = Player
+}
+
+rules {
+push_boxes
+}
+}
+"#,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(
+                routine_call,
+                ParseError3::Message(ref message)
+                    if message.contains("3D rule blocks do not support routine calls")
+            ),
+            "{routine_call:?}"
+        );
+
+        let application_block = parse_puzzle3d(
+            r#"
+puzzle3 no_application_blocks3 {
+layers {
+actor = Player
+}
+
+rules {
+once
+}
+}
+"#,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(
+                application_block,
+                ParseError3::Message(ref message)
+                    if message.contains("3D rule blocks do not support nested application blocks")
+            ),
+            "{application_block:?}"
+        );
+    }
+
+    #[test]
+    fn standard_move_step_blocks_same_layer_destination_in_3d() {
+        let parsed = parse_puzzle3d(
+            r#"
+puzzle3 push3 {
+layers {
+actor = Player Wall
+}
+
+rules {
+input [ Player ] -> [ > Player ]
+move
+}
+}
+
+levels3 demo of push3 {
+legend {
+. = empty
+P = Player
+W = Wall
+}
+
+level start {
+PW
+}
+}
+"#,
+        )
+        .unwrap();
+        let initial = parsed
+            .level_bundle
+            .as_ref()
+            .unwrap()
+            .level(0)
+            .unwrap()
+            .level
+            .build_state(&parsed.game)
+            .unwrap();
+
+        let blocked =
+            transition_program(&parsed.game, &initial, &parsed.rules, INPUT_RIGHT).unwrap();
+        let player = object_id(&parsed, "Player");
+        let wall = object_id(&parsed, "Wall");
+
+        assert!(blocked.has_object(&parsed.game, Coord3::new(0, 0, 0), player));
+        assert!(blocked.has_object(&parsed.game, Coord3::new(1, 0, 0), wall));
+    }
+
+    #[test]
+    fn standard_move_step_moves_same_direction_3d_chains_one_cell() {
+        let parsed = parse_puzzle3d(
+            r#"
+puzzle3 push3 {
+layers {
+actor = Box
+}
+
+rules {
+right [ Box | Box ] -> [ > Box | > Box ]
+move
+}
+}
+
+levels3 demo of push3 {
+legend {
+. = empty
+B = Box
+}
+
+level start {
+BB..
+}
+}
+"#,
+        )
+        .unwrap();
+        let initial = parsed
+            .level_bundle
+            .as_ref()
+            .unwrap()
+            .level(0)
+            .unwrap()
+            .level
+            .build_state(&parsed.game)
+            .unwrap();
+
+        let moved = transition_program(&parsed.game, &initial, &parsed.rules, INPUT_RIGHT).unwrap();
+        let box_object = object_id(&parsed, "Box");
+
+        assert!(!moved.has_object(&parsed.game, Coord3::new(0, 0, 0), box_object));
+        assert!(moved.has_object(&parsed.game, Coord3::new(1, 0, 0), box_object));
+        assert!(moved.has_object(&parsed.game, Coord3::new(2, 0, 0), box_object));
+        assert!(!moved.has_object(&parsed.game, Coord3::new(3, 0, 0), box_object));
     }
 
     #[test]

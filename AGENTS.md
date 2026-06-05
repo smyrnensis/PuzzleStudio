@@ -20,7 +20,7 @@ Be explicit about capability and uncertainty:
 - Do not say a feature works, a test passed, a file was updated, or a behavior
   is supported unless you have checked it.
 - Do not promise to do something that the available tools, permissions, time, or
-  repository state do not allow. State the blocker and the best safe fallback.
+  repository state do not allow. State the blocker and the best safe next step.
 - If a change relies on an assumption, name the assumption before implementing
   it or record it in the handoff when appropriate.
 - If user intent is ambiguous, confirm the intended behavior with the user or
@@ -30,6 +30,21 @@ Treat implementation as alignment work, not just code production. Restate the
 behavior you are about to make true when the request could be interpreted in
 multiple ways, especially for syntax, lifecycle behavior, UI defaults, and
 cross-crate boundaries.
+
+## No Fallback Paths
+
+Do not add fallback behavior. Fallbacks make bugs harder to see by silently
+turning an invalid, stale, unsupported, or miswired path into a different
+execution path. When a required capability, generated artifact, command, host
+API, feature, version, or backend is unavailable, fail visibly with a specific
+error instead of trying an older API, alternate backend, generated artifact,
+default behavior, or compatibility path.
+
+If an existing fallback path is encountered while changing related behavior,
+treat it as technical debt to remove or explicitly report, not as a pattern to
+extend. Compatibility paths are allowed only when the user explicitly requests a
+temporary migration bridge and the code names the migration boundary, the
+failure mode it preserves, and the condition for deleting it.
 
 ## Context Budget And Repository Shape
 

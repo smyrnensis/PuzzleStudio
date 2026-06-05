@@ -170,7 +170,7 @@ async fn open_workspace(
     state: tauri::State<'_, DesktopState>,
 ) -> Result<serde_json::Value, String> {
     let kind = request.kind.as_deref();
-    let Some(path) = pick_workspace_path(&app, kind)? else {
+    let Some(path) = pick_workspace_path(&app, kind).await? else {
         return Ok(serde_json::json!({ "canceled": true }));
     };
     let record_recent = kind != Some("file");
@@ -444,7 +444,8 @@ fn empty_source_value() -> serde_json::Value {
 }
 
 fn editor_source_value(service: &EditorService) -> Result<serde_json::Value, String> {
-    serde_json::from_str(&service.source_json()).map_err(|error| error.to_string())
+    let source = service.source_json().map_err(|error| error.to_string())?;
+    serde_json::from_str(&source).map_err(|error| error.to_string())
 }
 
 fn editor_source_value_with_recent(
@@ -575,8 +576,7 @@ fn watch_workspace(
         }
         snapshot = next;
 
-        let service = EditorService::open_game_entry(&puzzle_path)
-            .or_else(|_| EditorService::open_game_entry(&workspace_path));
+        let service = EditorService::open_game_entry(&puzzle_path);
         match service {
             Ok(service) => {
                 let payload = match editor_workspace_changed_value(&service) {
@@ -690,6 +690,7 @@ fn is_workspace_file(path: &Path) -> bool {
             .and_then(|value| value.to_str())
             .unwrap_or(""),
         "puzzle"
+            | "puzzle3"
             | "css"
             | "js"
             | "mjs"
@@ -732,20 +733,28 @@ fn ensure_html_extension(path: &mut PathBuf) {
     }
 }
 
-fn pick_workspace_path(
+async fn pick_workspace_path(
     app: &tauri::AppHandle,
     kind: Option<&str>,
 ) -> Result<Option<PathBuf>, String> {
+    let (sender, mut receiver) = tauri::async_runtime::channel(1);
     let file_dialog = app.dialog().file();
-    let picked = if kind == Some("file") {
+    if kind == Some("file") {
         file_dialog
             .set_title("Open a PuzzleStudio file")
-            .add_filter("PuzzleStudio puzzle", &["puzzle"])
-            .blocking_pick_file()
+            .add_filter("PuzzleStudio puzzle", &["puzzle", "puzzle3"])
+            .pick_file(move |path| {
+                let _ = sender.blocking_send(path);
+            });
     } else {
         file_dialog
             .set_title("Open a PuzzleStudio workspace folder")
-            .blocking_pick_folder()
+            .pick_folder(move |path| {
+                let _ = sender.blocking_send(path);
+            });
+    };
+    let Some(picked) = receiver.recv().await else {
+        return Err("open dialog closed before returning a path".to_string());
     };
     picked
         .map(|path| {

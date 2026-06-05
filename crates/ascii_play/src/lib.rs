@@ -1550,15 +1550,24 @@ fn scene_command(
     if params.is_empty() {
         return format!("{command} {screen}");
     }
+    if let [puzzle_lang::SceneEffectParam::Level(value)] = params {
+        return format!(
+            "{command} {screen}({})",
+            expr_source(loaded, session, value, scope)
+        );
+    }
 
     let params = params
         .iter()
-        .map(|param| {
-            format!(
+        .filter_map(|param| match param {
+            puzzle_lang::SceneEffectParam::Level(value) => {
+                Some(expr_source(loaded, session, value, scope))
+            }
+            puzzle_lang::SceneEffectParam::Named { name, value } => Some(format!(
                 "{} = {}",
-                param.name,
-                expr_source(loaded, session, &param.value, scope)
-            )
+                name,
+                expr_source(loaded, session, value, scope)
+            )),
         })
         .collect::<Vec<_>>()
         .join(", ");
@@ -1686,7 +1695,8 @@ fn select_puzzle_path(args: impl IntoIterator<Item = String>) -> Result<PathBuf,
     if let Some(path) = args.next() {
         if path == "--help" || path == "-h" {
             return Err(AppError::Config(
-                "usage: ascii-play [path/to/game-folder-or-game.puzzle]".to_string(),
+                "usage: ascii-play [path/to/game-folder-or-game.puzzle-or-game.puzzle3]"
+                    .to_string(),
             ));
         }
         if args.next().is_some() {
@@ -1702,7 +1712,7 @@ fn select_puzzle_path(args: impl IntoIterator<Item = String>) -> Result<PathBuf,
         discover_game_entries("games").map_err(|error| AppError::Config(error.to_string()))?;
     match candidates.len() {
         0 => Err(AppError::Config(
-            "no games/*/game.puzzle entries found. Pass a path: ascii-play <path/to/game-folder-or-game.puzzle>"
+            "no games/*/game.puzzle or games/*/game.puzzle3 entries found. Pass a path: ascii-play <path/to/game-folder-or-game.puzzle-or-game.puzzle3>"
                 .to_string(),
         )),
         1 => Ok(candidates[0].clone()),

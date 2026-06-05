@@ -13,15 +13,6 @@ pub(crate) fn puzzle_lifecycle_event(block: &str) -> Option<&'static str> {
     }
 }
 
-pub(crate) fn puzzle_lifecycle_block(token: &str) -> Option<&'static str> {
-    match token {
-        "on_level_start" => Some(PUZZLE_LIFECYCLE_BLOCKS[0]),
-        "on_level_clear" => Some(PUZZLE_LIFECYCLE_BLOCKS[1]),
-        "on_last_level_clear" => Some(PUZZLE_LIFECYCLE_BLOCKS[2]),
-        _ => None,
-    }
-}
-
 pub(crate) fn is_puzzle_lifecycle_block(token: &str) -> bool {
     PUZZLE_LIFECYCLE_BLOCKS.contains(&token)
 }

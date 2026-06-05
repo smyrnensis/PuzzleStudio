@@ -15,8 +15,9 @@ mod syntax;
 use std::collections::{BTreeSet, HashMap, HashSet};
 #[cfg(not(target_arch = "wasm32"))]
 use std::fs;
+use std::path::Path;
 #[cfg(not(target_arch = "wasm32"))]
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use ast::{
     ConditionAst, ConditionDefinitionAst, ConditionPatternAst, ConditionValueAst, Direction,
@@ -67,15 +68,16 @@ use puzzle_core::{
     ScratchId, ScratchKind, ScratchPattern, ScratchValueMatch, WriteOp,
 };
 pub use puzzle3d_model::{
-    ParseError3, ParsedPuzzle3, VisualFixtureExportError3, export_visual_fixture_json,
-    export_visual_fixture_json_with_title, export_visual_fixture_json_with_title_and_scenes,
-    parse_puzzle3d,
+    ParseError3, ParsedPuzzle3, VisualFixtureAnimation3, VisualFixtureExportError3,
+    export_visual_fixture_json, export_visual_fixture_json_with_title,
+    export_visual_fixture_json_with_title_and_scenes,
+    export_visual_fixture_json_with_title_scenes_and_animation, parse_puzzle3d,
 };
 pub use puzzlescript::translate_puzzlescript_to_canonical;
 pub use semantic::{SemanticKind, SemanticToken, semantic_tokens};
 use source::{
-    SourceScope, SourceToken, logical_lines, scan_source_context, source_line_tokens, split_tokens,
-    strip_line_comment,
+    SourceScope, SourceToken, logical_lines, scan_source_context, source_line_tokens,
+    split_header_tokens, strip_line_comment,
 };
 pub use source_target::{
     SoundSourceTargetKind, SourceTarget, SourceTargetKind, resolve_source_target,
@@ -87,7 +89,8 @@ use surface::{
 };
 use syntax::puzzle_lifecycle_event;
 
-const ANONYMOUS_MOVEMENT_SCRATCH: ScratchId = ScratchId(0);
+const ANONYMOUS_MOVEMENT_SCRATCH: ScratchId =
+    ScratchId(puzzle_authoring::ANONYMOUS_MOVEMENT_SCRATCH_INDEX);
 const ANONYMOUS_BOOL_SCRATCH: ScratchId = ScratchId(1);
 const ANONYMOUS_INT_SCRATCH: ScratchId = ScratchId(2);
 const UNASSIGNED_LAYER: u16 = u16::MAX;
@@ -101,6 +104,40 @@ pub(crate) const THEME_PRESET_NAMES: &[&str] = &[
     "blueprint",
     "noir",
 ];
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PuzzleSourceProfile {
+    Puzzle2d,
+    Puzzle3d,
+}
+
+impl PuzzleSourceProfile {
+    pub fn canonical_extension(self) -> &'static str {
+        match self {
+            PuzzleSourceProfile::Puzzle2d => "puzzle",
+            PuzzleSourceProfile::Puzzle3d => "puzzle3",
+        }
+    }
+}
+
+pub fn puzzle_source_profile_for_extension(extension: &str) -> Option<PuzzleSourceProfile> {
+    match extension {
+        "puzzle" => Some(PuzzleSourceProfile::Puzzle2d),
+        "puzzle3" => Some(PuzzleSourceProfile::Puzzle3d),
+        _ => None,
+    }
+}
+
+pub fn puzzle_source_profile_for_path(path: impl AsRef<Path>) -> Option<PuzzleSourceProfile> {
+    path.as_ref()
+        .extension()
+        .and_then(|value| value.to_str())
+        .and_then(puzzle_source_profile_for_extension)
+}
+
+pub fn is_puzzle_source_path(path: impl AsRef<Path>) -> bool {
+    puzzle_source_profile_for_path(path).is_some()
+}
 
 pub(crate) struct ThemeSettingSpec {
     pub(crate) canonical: &'static str,
@@ -127,6 +164,14 @@ pub(crate) const THEME_SETTING_SPECS: &[ThemeSettingSpec] = &[
 ];
 
 pub fn parse_game(source: &str) -> Result<LoadedDocument, AppError> {
+    parse_game_document(source)
+}
+
+pub fn parse_game_for_path(
+    source: &str,
+    path: impl AsRef<Path>,
+) -> Result<LoadedDocument, AppError> {
+    validate_source_profile_for_path(source, path)?;
     parse_game_document(source)
 }
 
@@ -620,11 +665,15 @@ pub fn export_loaded_document_visual_fixture_json(
         ));
     };
     let (scene_fields, level_bundle_names) = puzzle3_scene_fixture_fields(document);
-    export_visual_fixture_json_with_title_and_scenes(
+    export_visual_fixture_json_with_title_scenes_and_animation(
         puzzle,
         Some(&document.title),
         scene_fields.as_deref(),
         &level_bundle_names,
+        VisualFixtureAnimation3 {
+            tween_enabled: document.animation.tween.enabled,
+            tween_interval_ms: document.animation.tween.interval_ms,
+        },
     )
     .map_err(|error| AppError::Parse(format!("failed to export puzzle3 fixture: {error:?}")))
 }
@@ -634,19 +683,30 @@ pub fn parse_game_file(path: impl AsRef<Path>) -> Result<LoadedDocument, AppErro
     let path = path.as_ref();
     let source = fs::read_to_string(path)
         .map_err(|error| AppError::Parse(format!("failed to read {}: {error}", path.display())))?;
-    if matches!(
-        detect_game_document_kind(&source)?,
-        GameDocumentKind::Puzzle3d | GameDocumentKind::Mixed
-    ) {
+    let profile = puzzle_source_profile_for_path(path).ok_or_else(|| {
+        AppError::Parse(format!(
+            "game entry must be a .puzzle or .puzzle3 file: {}",
+            path.display()
+        ))
+    })?;
+    validate_source_profile(&source, profile)?;
+    if profile == PuzzleSourceProfile::Puzzle3d {
         return parse_game_document(&source);
     }
     let expanded = expand_game_imports_for_file(&source, path)?;
+    validate_source_profile(&expanded, profile)?;
     parse_game_document(&expanded)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn parse_game2d_file(path: impl AsRef<Path>) -> Result<LoadedGame, AppError> {
     let path = path.as_ref();
+    if puzzle_source_profile_for_path(path) != Some(PuzzleSourceProfile::Puzzle2d) {
+        return Err(AppError::Parse(format!(
+            "2D game entry must be a .puzzle file: {}",
+            path.display()
+        )));
+    }
     let source = fs::read_to_string(path)
         .map_err(|error| AppError::Parse(format!("failed to read {}: {error}", path.display())))?;
     let expanded = expand_game_imports_for_file(&source, path)?;
@@ -804,7 +864,7 @@ fn split_mixed_game_document_source(source: &str) -> Result<MixedDocumentSources
             continue;
         }
 
-        let tokens = split_tokens(trimmed);
+        let tokens = split_header_tokens(trimmed);
         let target = match tokens.as_slice() {
             ["title", ..]
             | ["subtitle", ..]
@@ -812,6 +872,7 @@ fn split_mixed_game_document_source(source: &str) -> Result<MixedDocumentSources
             | ["homepage", ..]
             | ["default_wait_time", ..]
             | ["again_interval", ..]
+            | ["animation", ..]
             | ["sounds", ..]
             | ["theme", ..]
             | ["assets", ..] => MixedSectionTarget::Shared,
@@ -1114,7 +1175,7 @@ fn puzzle3_scene_component_json(
                 .as_ref()
                 .and_then(|effect| puzzle3_scene_action_json(effect, level_bundle_names))
                 .unwrap_or_else(|| {
-                    "{ \"kind\": \"goto\", \"scene\": \"playing\", \"params\": [{ \"name\": \"level\", \"value\": { \"kind\": \"path\", \"path\": \"level\" } }] }".to_string()
+                    "{ \"kind\": \"goto\", \"scene\": \"playing\", \"params\": [{ \"kind\": \"level\", \"value\": { \"kind\": \"path\", \"path\": \"level\" } }] }".to_string()
                 });
             let mut out = format!(
                 "{{ \"kind\": \"level_menu\", \"levels\": {}, \"action\": {}",
@@ -1231,11 +1292,20 @@ fn puzzle3_scene_action_json(
                     if index > 0 {
                         out.push_str(", ");
                     }
-                    out.push_str("{ \"name\": ");
-                    out.push_str(&json_string(&param.name));
-                    out.push_str(", \"value\": ");
-                    out.push_str(&puzzle3_scene_expr_json(&param.value));
-                    out.push_str(" }");
+                    match param {
+                        SceneEffectParam::Level(value) => {
+                            out.push_str("{ \"kind\": \"level\", \"value\": ");
+                            out.push_str(&puzzle3_scene_expr_json(value));
+                            out.push_str(" }");
+                        }
+                        SceneEffectParam::Named { name, value } => {
+                            out.push_str("{ \"kind\": \"named\", \"name\": ");
+                            out.push_str(&json_string(name));
+                            out.push_str(", \"value\": ");
+                            out.push_str(&puzzle3_scene_expr_json(value));
+                            out.push_str(" }");
+                        }
+                    }
                 }
                 out.push(']');
             }
@@ -1437,7 +1507,7 @@ fn parse_document_shell(source: &str) -> Result<DocumentShell, AppError> {
     let lines = logical_lines(source)?;
     let mut index = 0;
     while index < lines.len() {
-        let tokens = split_tokens(&lines[index]);
+        let tokens = split_header_tokens(&lines[index]);
         match tokens.as_slice() {
             ["title", ..] => {
                 shell.title = parse_metadata_text(&lines[index], "title")?;
@@ -1596,7 +1666,7 @@ fn strip_document_shell_source_raw(source: &str) -> String {
         let line = raw_lines[index];
         let trimmed = strip_line_comment(line).trim();
         if brace_depth == 0 {
-            let tokens = split_tokens(trimmed);
+            let tokens = split_header_tokens(trimmed);
             match tokens.as_slice() {
                 ["title", ..]
                 | ["subtitle", ..]
@@ -1607,7 +1677,7 @@ fn strip_document_shell_source_raw(source: &str) -> String {
                     index += 1;
                     continue;
                 }
-                ["sounds"] | ["sounds", "{"] | ["assets"] | ["assets", "{"] => {
+                ["animation"] | ["animation", ..] | ["sounds"] | ["assets"] => {
                     index = skip_raw_top_level_block(&raw_lines, index);
                     continue;
                 }
@@ -1637,7 +1707,7 @@ fn next_line_is_not_block_body(lines: &[String], index: usize) -> bool {
     if is_block_close_line(next) {
         return true;
     }
-    let tokens = split_tokens(next);
+    let tokens = split_header_tokens(next);
     logical_line_starts_document_boundary(tokens.as_slice())
 }
 
@@ -1706,7 +1776,7 @@ fn skip_logical_block(lines: &[String], start: usize) -> usize {
     let mut depth = 1usize;
     let mut index = start + 1;
     while index < lines.len() {
-        let tokens = split_tokens(&lines[index]);
+        let tokens = split_header_tokens(&lines[index]);
         if is_block_close_line(&lines[index]) {
             depth = depth.saturating_sub(1);
             index += 1;
@@ -1725,7 +1795,7 @@ fn skip_logical_block(lines: &[String], start: usize) -> usize {
 }
 
 fn logical_line_is_inline_if(line: &str) -> bool {
-    split_tokens(line).first().copied() == Some("if") && line.contains("->")
+    split_header_tokens(line).first().copied() == Some("if") && line.contains("->")
 }
 
 fn strip_document_scene_source_raw(source: &str) -> String {
@@ -1737,7 +1807,7 @@ fn strip_document_scene_source_raw(source: &str) -> String {
         let line = raw_lines[index];
         let trimmed = strip_line_comment(line).trim();
         if brace_depth == 0 {
-            let tokens = split_tokens(trimmed);
+            let tokens = split_header_tokens(trimmed);
             if matches!(tokens.as_slice(), ["scene", ..]) {
                 index = skip_raw_top_level_block(&raw_lines, index);
                 continue;
@@ -1768,7 +1838,7 @@ fn push_raw_model_without_default_scene_layouts<'a>(
     while index < raw_lines.len() && depth > 0 {
         let line = raw_lines[index];
         let trimmed = strip_line_comment(line).trim();
-        if depth == 1 && matches!(split_tokens(trimmed).as_slice(), ["layout", ..]) {
+        if depth == 1 && matches!(split_header_tokens(trimmed).as_slice(), ["layout", ..]) {
             index = skip_raw_top_level_block(raw_lines, index);
             continue;
         }
@@ -1785,7 +1855,7 @@ fn split_document_scene_source(source: &str) -> Result<(String, Vec<SceneDef>), 
     let mut scenes = Vec::new();
     let mut i = 0;
     while i < lines.len() {
-        let tokens = split_tokens(&lines[i]);
+        let tokens = split_header_tokens(&lines[i]);
         if matches!(tokens.as_slice(), ["scene", ..]) {
             let (scene, next_i) = parse_scene_definition(&lines, i)?;
             scenes.push(scene);
@@ -1825,7 +1895,7 @@ fn extract_default_model_scene(
     let mut i = start + 1;
     while i < lines.len() {
         let line = &lines[i];
-        let tokens = split_tokens(line);
+        let tokens = split_header_tokens(line);
         if tokens.first().copied() == Some(BLOCK_CLOSE) || line == "}" {
             depth = depth.saturating_sub(1);
             entry.push(line.clone());
@@ -1861,7 +1931,7 @@ fn skip_scene_layout_block(lines: &[String], start: usize) -> Result<usize, AppE
     let mut i = start + 1;
     while i < lines.len() {
         let line = &lines[i];
-        let tokens = split_tokens(line);
+        let tokens = split_header_tokens(line);
         if tokens.first().copied() == Some(BLOCK_CLOSE) {
             depth = depth.saturating_sub(1);
             i += 1;
@@ -1903,7 +1973,7 @@ fn parse_default_model_scene(
 
 fn rewrite_default_model_layout_components(lines: &mut [String], kind: &str, name: &str) {
     for line in lines {
-        if split_tokens(line).as_slice() == [kind] {
+        if split_header_tokens(line).as_slice() == [kind] {
             *line = format!("{kind} {name}");
         }
     }
@@ -1965,6 +2035,39 @@ fn detect_game_document_kind(source: &str) -> Result<GameDocumentKind, AppError>
     })
 }
 
+pub fn validate_source_profile_for_path(
+    source: &str,
+    path: impl AsRef<Path>,
+) -> Result<(), AppError> {
+    let path = path.as_ref();
+    let profile = puzzle_source_profile_for_path(path).ok_or_else(|| {
+        AppError::Parse(format!(
+            "puzzle source must use .puzzle or .puzzle3 extension: {}",
+            path.display()
+        ))
+    })?;
+    validate_source_profile(source, profile)
+}
+
+fn validate_source_profile(source: &str, profile: PuzzleSourceProfile) -> Result<(), AppError> {
+    let kind = detect_game_document_kind(source)?;
+    match (profile, kind) {
+        (PuzzleSourceProfile::Puzzle2d, GameDocumentKind::Puzzle2d)
+        | (PuzzleSourceProfile::Puzzle3d, GameDocumentKind::Puzzle3d) => Ok(()),
+        (_, GameDocumentKind::Mixed) => Err(AppError::Parse(
+            "mixed 2D/3D documents are no longer supported; split 2D .puzzle and 3D .puzzle3 sources"
+                .to_string(),
+        )),
+        (PuzzleSourceProfile::Puzzle2d, GameDocumentKind::Puzzle3d) => Err(AppError::Parse(
+            ".puzzle files cannot contain 3D puzzle3, levels3, or sprites3 sections; use .puzzle3"
+                .to_string(),
+        )),
+        (PuzzleSourceProfile::Puzzle3d, GameDocumentKind::Puzzle2d) => Err(AppError::Parse(
+            ".puzzle3 files must contain 3D puzzle3, levels3, or sprites3 sections".to_string(),
+        )),
+    }
+}
+
 fn first_model_name(source: &str, kind: &str) -> Option<String> {
     all_model_names(source, kind).into_iter().next()
 }
@@ -1995,15 +2098,15 @@ pub fn resolve_game_entry(path: impl AsRef<Path>) -> Result<PathBuf, AppError> {
             return Ok(entry);
         }
         return Err(AppError::Parse(format!(
-            "game folder must contain a .puzzle file with game prelude metadata such as title: {}",
+            "game folder must contain a .puzzle or .puzzle3 file with game prelude metadata such as title: {}",
             path.display()
         )));
     }
 
     if path.is_file() {
-        if path.extension().and_then(|value| value.to_str()) != Some("puzzle") {
+        if !is_puzzle_source_path(path) {
             return Err(AppError::Parse(format!(
-                "game entry must be a folder or .puzzle file: {}",
+                "game entry must be a folder, .puzzle file, or .puzzle3 file: {}",
                 path.display()
             )));
         }
@@ -2024,7 +2127,7 @@ pub fn resolve_game_entry(path: impl AsRef<Path>) -> Result<PathBuf, AppError> {
             dir = current.parent();
         }
         return Err(AppError::Parse(format!(
-            "puzzle file has no game prelude and no containing game entry was found: {}",
+            "puzzle source file has no game prelude and no containing game entry was found: {}",
             path.display()
         )));
     }
@@ -2069,7 +2172,7 @@ fn game_entry_in_directory(dir: &Path) -> Result<Option<PathBuf>, AppError> {
         let path = entry
             .map_err(|error| AppError::Parse(format!("failed to read game entry: {error}")))?
             .path();
-        if path.extension().and_then(|value| value.to_str()) != Some("puzzle") {
+        if !is_puzzle_source_path(&path) {
             continue;
         }
         let source = fs::read_to_string(&path).map_err(|error| {
@@ -2104,12 +2207,18 @@ fn game_entry_path_rank(path: &Path, dir: &Path) -> usize {
         .unwrap_or("");
     if name == "game.puzzle" {
         0
-    } else if !folder_name.is_empty() && name == format!("{folder_name}.puzzle") {
+    } else if name == "game.puzzle3" {
         1
-    } else if name == "main.puzzle" {
+    } else if !folder_name.is_empty() && name == format!("{folder_name}.puzzle") {
         2
-    } else {
+    } else if !folder_name.is_empty() && name == format!("{folder_name}.puzzle3") {
         3
+    } else if name == "main.puzzle" {
+        4
+    } else if name == "main.puzzle3" {
+        5
+    } else {
+        6
     }
 }
 
@@ -2129,7 +2238,7 @@ pub fn discover_game_entries(root: impl AsRef<Path>) -> Result<Vec<PathBuf>, App
             if let Some(entry) = game_entry_in_directory(&path)? {
                 candidates.push(entry);
             }
-        } else if path.extension().and_then(|value| value.to_str()) == Some("puzzle") {
+        } else if is_puzzle_source_path(&path) {
             let source = fs::read_to_string(&path).map_err(|error| {
                 AppError::Parse(format!(
                     "failed to read game entry candidate {}: {error}",
@@ -2222,7 +2331,7 @@ fn parse_game2d_expanded_with_shell(
     let mut i = 0;
     while i < lines.len() {
         let line = &lines[i];
-        let tokens = split_tokens(line);
+        let tokens = split_header_tokens(line);
         if tokens.is_empty() {
             i += 1;
             continue;
@@ -2701,7 +2810,7 @@ fn expand_game_imports(
 ) -> Result<String, AppError> {
     let mut out = String::new();
     for line in logical_lines(source)? {
-        let tokens = split_tokens(&line);
+        let tokens = split_header_tokens(&line);
         if matches!(tokens.as_slice(), ["import", _]) {
             let path = import_path(tokens[1], &line)?;
             let imported = read_import_expanded(base_dir, &path, import_stack, root)?;
@@ -2813,7 +2922,7 @@ fn collect_authoring_entry(
     start: usize,
 ) -> Result<(Vec<String>, usize), AppError> {
     let first = &lines[start];
-    let tokens = split_tokens(first);
+    let tokens = split_header_tokens(first);
     if matches!(tokens.as_slice(), ["levels", ..]) {
         return collect_levels_authoring_entry(lines, start);
     }
@@ -2827,7 +2936,7 @@ fn collect_authoring_entry(
     while i < lines.len() {
         let line = &lines[i];
         if i != start {
-            let tokens = split_tokens(line);
+            let tokens = split_header_tokens(line);
             if tokens.first().copied() == Some(BLOCK_CLOSE) {
                 let closed = block_stack
                     .pop()
@@ -2881,7 +2990,7 @@ fn authoring_nested_block_kind(tokens: &[&str], line: &str) -> Option<AuthoringB
 fn next_line_is_else(lines: &[String], index: usize) -> bool {
     lines
         .get(index)
-        .is_some_and(|line| matches!(split_tokens(line).as_slice(), ["else"]))
+        .is_some_and(|line| matches!(split_header_tokens(line).as_slice(), ["else"]))
 }
 
 fn collect_levels_authoring_entry(
@@ -2894,7 +3003,7 @@ fn collect_levels_authoring_entry(
     let mut i = start + 1;
     while i < lines.len() {
         let line = &lines[i];
-        let tokens = split_tokens(line);
+        let tokens = split_header_tokens(line);
         if tokens.first().copied() == Some(BLOCK_CLOSE) {
             depth -= 1;
             entry.push(line.clone());
@@ -2962,8 +3071,8 @@ fn parse_sounds_block(
     start: usize,
     sounds: &mut SoundsDef,
 ) -> Result<usize, AppError> {
-    let header = split_tokens(&lines[start]);
-    if !matches!(header.as_slice(), ["sounds"] | ["sounds", "{"]) {
+    let header = split_header_tokens(&lines[start]);
+    if !matches!(header.as_slice(), ["sounds"]) {
         return Err(parse_error(&lines[start], "sounds header must be: sounds"));
     }
 
@@ -2973,7 +3082,7 @@ fn parse_sounds_block(
         if is_block_close_line(line) {
             return Ok(i + 1);
         }
-        let tokens = split_tokens(line);
+        let tokens = split_header_tokens(line);
         match tokens.as_slice() {
             ["sfx", name, settings @ ..] => {
                 validate_qualified_identifier(name, line, "sfx sounds name")?;
@@ -3070,9 +3179,12 @@ enum ModelSoundTriggerKind {
 }
 
 fn model_sounds_block_starts(lines: &[String], start: usize) -> bool {
-    lines
-        .get(start + 1)
-        .is_some_and(|first| matches!(split_tokens(first).as_slice(), ["move" | "cantmove", ..]))
+    lines.get(start + 1).is_some_and(|first| {
+        matches!(
+            split_header_tokens(first).as_slice(),
+            ["move" | "cantmove", ..]
+        )
+    })
 }
 
 fn parse_model_sounds_block(
@@ -3081,8 +3193,8 @@ fn parse_model_sounds_block(
     catalog: &Catalog,
     triggers: &mut Vec<ModelSoundTrigger>,
 ) -> Result<usize, AppError> {
-    let header = split_tokens(&lines[start]);
-    if !matches!(header.as_slice(), ["sounds"] | ["sounds", "{"]) {
+    let header = split_header_tokens(&lines[start]);
+    if !matches!(header.as_slice(), ["sounds"]) {
         return Err(parse_error(
             &lines[start],
             "model sounds header must be: sounds",
@@ -3095,7 +3207,7 @@ fn parse_model_sounds_block(
         if is_block_close_line(line) {
             return Ok(i + 1);
         }
-        let tokens = split_tokens(line);
+        let tokens = split_header_tokens(line);
         let trigger_kind = match tokens.as_slice() {
             ["move", ..] => Some(ModelSoundTriggerKind::Move),
             ["cantmove", ..] => Some(ModelSoundTriggerKind::CantMove),
@@ -3150,7 +3262,7 @@ fn parse_theme_block(
     start: usize,
     theme: &mut ThemeDef,
 ) -> Result<usize, AppError> {
-    let header = split_tokens(&lines[start]);
+    let header = split_header_tokens(&lines[start]);
     match header.as_slice() {
         ["theme", name] => {
             parse_theme_name_directive(&lines[start], name, theme)?;
@@ -3169,7 +3281,7 @@ fn parse_theme_block(
         if is_block_close_line(line) {
             return Ok(i + 1);
         }
-        let tokens = split_tokens(line);
+        let tokens = split_header_tokens(line);
         match parse_theme_setting_tokens(tokens.as_slice(), line) {
             Ok(Some((name, value))) => upsert_theme_variable(theme, name, value),
             Ok(None) => {}
@@ -3208,7 +3320,7 @@ fn parse_theme_statement(
     start: usize,
     theme: &mut ThemeDef,
 ) -> Result<usize, AppError> {
-    let tokens = split_tokens(&lines[start]);
+    let tokens = split_header_tokens(&lines[start]);
     let ["theme", name] = tokens.as_slice() else {
         return Err(parse_error(
             &lines[start],
@@ -3237,7 +3349,7 @@ fn parse_theme_name_directive(
 }
 
 fn is_theme_setting_line(line: &str) -> bool {
-    let tokens = split_tokens(line);
+    let tokens = split_header_tokens(line);
     parse_theme_setting_tokens(tokens.as_slice(), line).is_ok()
 }
 
@@ -3246,8 +3358,8 @@ fn parse_assets_block(
     start: usize,
     assets: &mut AssetsDef,
 ) -> Result<usize, AppError> {
-    let header = split_tokens(&lines[start]);
-    if !matches!(header.as_slice(), ["assets"] | ["assets", "{"]) {
+    let header = split_header_tokens(&lines[start]);
+    if !matches!(header.as_slice(), ["assets"]) {
         return Err(parse_error(&lines[start], "assets header must be: assets"));
     }
 
@@ -3257,7 +3369,7 @@ fn parse_assets_block(
         if is_block_close_line(line) {
             return Ok(i + 1);
         }
-        let tokens = split_tokens(line);
+        let tokens = split_header_tokens(line);
         match tokens.as_slice() {
             ["css", path] => assets.entries.push(AssetDef {
                 kind: AssetKind::Css,
@@ -3445,7 +3557,7 @@ fn parse_puzzle_definition(
     animation: &mut AnimationDef,
     puzzle_screen: &mut PuzzleScreenDef,
 ) -> Result<(usize, String), AppError> {
-    let header = split_tokens(&lines[start]);
+    let header = split_header_tokens(&lines[start]);
     let name = match header.as_slice() {
         ["puzzle", name] => *name,
         _ => {
@@ -3460,7 +3572,7 @@ fn parse_puzzle_definition(
     let mut i = start + 1;
     while i < lines.len() && !is_block_close_line(&lines[i]) {
         let line = &lines[i];
-        let tokens = split_tokens(line);
+        let tokens = split_header_tokens(line);
         if tokens.is_empty() {
             i += 1;
             continue;
@@ -3922,7 +4034,7 @@ fn parse_levels_block(
     let mut namespace_count = 0usize;
     let mut i = start + 1;
     while i < lines.len() && !is_block_close_line(&lines[i]) {
-        let tokens = split_tokens(&lines[i]);
+        let tokens = split_header_tokens(&lines[i]);
         match tokens.as_slice() {
             ["legend"] => {
                 i = parse_legend_block(lines, i, catalog, render_overlays, empty_char)?;
@@ -3970,17 +4082,13 @@ fn parse_levels_block(
                 level_blocks.push(level);
                 i = next_i;
             }
-            [.., "{"] => {
-                namespace_count += 1;
-                let level_name = namespaced_level_name(
-                    header.pack.as_deref(),
-                    &parse_legacy_braced_level_header_name(&lines[i])?,
-                );
-                let (level, next_i) = parse_named_level_body(lines, i, level_name, &header)?;
-                level_blocks.push(level);
-                i = next_i;
-            }
             [] => i += 1,
+            _ if lines[i].trim_end().ends_with('{') => {
+                return Err(parse_error(
+                    &lines[i],
+                    "braced level header must be `level <name> {` or `{` for an unnamed level",
+                ));
+            }
             _ => {
                 namespace_count += 1;
                 let name = namespaced_unnamed_level_name(
@@ -4008,7 +4116,7 @@ struct LevelsHeader {
 }
 
 fn parse_levels_header(line: &str, default_puzzle: Option<&str>) -> Result<LevelsHeader, AppError> {
-    let tokens = split_tokens(line);
+    let tokens = split_header_tokens(line);
     match tokens.as_slice() {
         ["levels"] => Ok(LevelsHeader {
             pack: None,
@@ -4070,7 +4178,7 @@ fn resolve_level_block_puzzles(
 }
 
 fn parse_level_header_name_or_auto(line: &str, auto_name: String) -> Result<String, AppError> {
-    let tokens = split_tokens(line);
+    let tokens = split_header_tokens(line);
     if tokens.len() == 1 {
         return Ok(auto_name);
     }
@@ -4081,26 +4189,11 @@ fn parse_level_header_name_or_auto(line: &str, auto_name: String) -> Result<Stri
 }
 
 fn is_braced_level_header(line: &str) -> bool {
-    line.trim_end().ends_with('{') && matches!(split_tokens(line).as_slice(), ["level", ..])
-}
-
-fn parse_legacy_braced_level_header_name(line: &str) -> Result<String, AppError> {
-    let tokens = split_tokens(line);
-    if tokens.is_empty() {
-        return Err(parse_error(line, "level header must have a name"));
-    }
-    Ok(tokens.join(" "))
+    line.trim_end().ends_with('{') && matches!(split_header_tokens(line).as_slice(), ["level", ..])
 }
 
 fn unnamed_level_name(existing_count: usize) -> String {
     format!("unnamed level {}", existing_count + 1)
-}
-
-fn namespaced_level_name(namespace: Option<&str>, name: &str) -> String {
-    match namespace {
-        Some(namespace) => format!("{namespace}.{name}"),
-        None => name.to_string(),
-    }
 }
 
 fn namespaced_level_name_if_needed(namespace: Option<&str>, name: String) -> String {
@@ -4129,7 +4222,7 @@ fn parse_conditions_block(
     catalog: &Catalog,
     named_conditions: &mut HashMap<String, (String, ConditionAst)>,
 ) -> Result<usize, AppError> {
-    let header_tokens = split_tokens(&lines[start]);
+    let header_tokens = split_header_tokens(&lines[start]);
     let condition_name = header_tokens.first().copied().unwrap_or("win_conditions");
     let combinator = match header_tokens.as_slice() {
         [_] => ConditionBlockCombinator::All,
@@ -4198,7 +4291,7 @@ fn parse_condition_block_entry(
     descriptions: &mut Vec<String>,
 ) -> Result<usize, AppError> {
     let line = &lines[start];
-    let tokens = split_tokens(line);
+    let tokens = split_header_tokens(line);
     if let Some(["for", binding, "in", source]) = (tokens.len() == 4).then_some(tokens.as_slice()) {
         let value_sets = catalog_value_sets(catalog);
         let values =
@@ -4277,7 +4370,7 @@ fn parse_puzzle_screen_block(
     let mut i = start + 1;
     while i < lines.len() && !is_block_close_line(&lines[i]) {
         let line = &lines[i];
-        let tokens = split_tokens(line);
+        let tokens = split_header_tokens(line);
         match tokens.as_slice() {
             [] => i += 1,
             _ => {
@@ -4306,7 +4399,7 @@ fn parse_puzzle_render_block(
     let mut i = start + 1;
     while i < lines.len() && !is_block_close_line(&lines[i]) {
         let line = &lines[i];
-        let tokens = split_tokens(line);
+        let tokens = split_header_tokens(line);
         match tokens.as_slice() {
             [] => i += 1,
             [name] if *name == PUZZLE_RENDER_BLOCK_OPTIONS[0] => {
@@ -4344,8 +4437,8 @@ fn parse_animation_block(
     start: usize,
     animation: &mut AnimationDef,
 ) -> Result<usize, AppError> {
-    let header = split_tokens(&lines[start]);
-    if !matches!(header.as_slice(), ["animation"] | ["animation", "{"]) {
+    let header = split_header_tokens(&lines[start]);
+    if !matches!(header.as_slice(), ["animation"]) {
         return Err(parse_error(
             &lines[start],
             "animation header must be: animation",
@@ -4356,7 +4449,7 @@ fn parse_animation_block(
     let mut i = start + 1;
     while i < lines.len() && !is_block_close_line(&lines[i]) {
         let line = &lines[i];
-        let tokens = split_tokens(line);
+        let tokens = split_header_tokens(line);
         match tokens.as_slice() {
             [] => i += 1,
             [name] if *name == ANIMATION_BLOCK_OPTIONS[0] => {
@@ -4369,10 +4462,6 @@ fn parse_animation_block(
                 } else {
                     i = parse_animation_tween_block(lines, i, &mut parsed.tween)?;
                 }
-            }
-            [name, "{"] if *name == ANIMATION_BLOCK_OPTIONS[0] => {
-                parsed.tween.enabled = true;
-                i = parse_animation_tween_block(lines, i, &mut parsed.tween)?;
             }
             [name, options @ ..] if *name == ANIMATION_BLOCK_OPTIONS[0] => {
                 parsed.tween.enabled = true;
@@ -4406,7 +4495,7 @@ fn parse_animation_tween_block(
     let mut i = start + 1;
     while i < lines.len() && !is_block_close_line(&lines[i]) {
         let line = &lines[i];
-        let tokens = split_tokens(line);
+        let tokens = split_header_tokens(line);
         match tokens.as_slice() {
             [] => i += 1,
             [name, "=", value] | [name, value] if *name == ANIMATION_TWEEN_OPTIONS[0] => {
@@ -4476,7 +4565,7 @@ fn parse_puzzle_render_grid_block(
     let mut i = start + 1;
     while i < lines.len() && !is_block_close_line(&lines[i]) {
         let line = &lines[i];
-        let tokens = split_tokens(line);
+        let tokens = split_header_tokens(line);
         match tokens.as_slice() {
             [] => i += 1,
             [name] if *name == PUZZLE_RENDER_GRID_OPTIONS[0] => {
@@ -4527,7 +4616,7 @@ fn parse_puzzle_screen_directive(
     line: &str,
     puzzle_screen: &mut PuzzleScreenDef,
 ) -> Result<(), AppError> {
-    let tokens = split_tokens(line);
+    let tokens = split_header_tokens(line);
     match tokens.as_slice() {
         ["flickscreen", "full"] => {
             puzzle_screen.viewport_size = ViewportSizeDef::Full;
@@ -4602,7 +4691,7 @@ fn parse_screen_size_directive(line: &str, directive: &str) -> Result<(u16, u16)
                 .map_err(|_| parse_error(line, &format!("{directive} height must be u16")))?,
         ));
     }
-    let size_tokens = split_tokens(value);
+    let size_tokens = split_header_tokens(value);
     let [width, height] = size_tokens.as_slice() else {
         return Err(parse_error(
             line,
@@ -4687,7 +4776,7 @@ fn parse_condition_block_row(
         return Ok(condition);
     }
 
-    let tokens = split_tokens(line);
+    let tokens = split_header_tokens(line);
     match tokens.as_slice() {
         ["all", target, "on", cover] => {
             let expr = format!("none([ {target} no {cover} ])");
@@ -4777,7 +4866,7 @@ fn parse_named_level_body(
             i += 1;
             continue;
         }
-        if is_level_body_block(&split_tokens(&lines[i])) {
+        if is_level_body_block(&split_header_tokens(&lines[i])) {
             nested_blocks += 1;
         }
         level_lines.push(lines[i].clone());
@@ -4812,7 +4901,7 @@ fn parse_unbraced_level_body(
         if nested_blocks == 0 && (line.is_empty() || is_block_close_line(line)) {
             break;
         }
-        let tokens = split_tokens(line);
+        let tokens = split_header_tokens(line);
         if nested_blocks == 0 && matches!(tokens.as_slice(), ["level", ..]) {
             if !level_lines.is_empty() {
                 break;
@@ -4888,7 +4977,7 @@ fn parse_level_body(
     let mut i = 0;
     while i < level.lines.len() {
         let line = &level.lines[i];
-        let tokens = split_tokens(line);
+        let tokens = split_header_tokens(line);
         if tokens.is_empty() {
             if saw_map_row {
                 body.lines.push(line.clone());
@@ -4976,7 +5065,7 @@ fn parse_level_event_sugar(
     line: &str,
     default_wait_ms: u64,
 ) -> Result<Option<StatementAst>, AppError> {
-    let tokens = split_tokens(line);
+    let tokens = split_header_tokens(line);
     let is_level_event = matches!(tokens.as_slice(), ["sfx", _] | ["wait"] | ["wait", _])
         || line.strip_prefix("message ").is_some();
     if !is_level_event {
@@ -5015,7 +5104,7 @@ fn parse_level_legend_block_row(
     empty_char: char,
     local_char_objects: &mut HashMap<char, Vec<ObjectId>>,
 ) -> Result<(), AppError> {
-    let tokens = split_tokens(line);
+    let tokens = split_header_tokens(line);
     if tokens.len() < 3 || tokens.get(1).copied() != Some("=") {
         return Err(parse_error(
             line,
@@ -5080,7 +5169,7 @@ fn parse_map_definition(
     start: usize,
     value_sets: &HashMap<String, Vec<String>>,
 ) -> Result<(ValueMap, usize), AppError> {
-    let header = split_tokens(&lines[start]);
+    let header = split_header_tokens(&lines[start]);
     let ["map", name, axis] = header.as_slice() else {
         return Err(parse_error(
             &lines[start],
@@ -5097,7 +5186,7 @@ fn parse_map_definition(
     let mut values = HashMap::new();
     let mut i = start + 1;
     while i < lines.len() && !is_block_close_line(&lines[i]) {
-        let tokens = split_tokens(&lines[i]);
+        let tokens = split_header_tokens(&lines[i]);
         match tokens.as_slice() {
             [from, "->", to] => {
                 if !value_set_values.iter().any(|value| value == from) {
@@ -5150,7 +5239,7 @@ fn parse_tags_block(
     let mut i = start + 1;
     while i < lines.len() && !is_block_close_line(&lines[i]) {
         let line = &lines[i];
-        let tokens = split_tokens(line);
+        let tokens = split_header_tokens(line);
         match tokens.as_slice() {
             [] => {}
             [name, "=", values @ ..] => {
@@ -5368,7 +5457,7 @@ fn parse_objects_block(
     let mut i = start + 1;
     while i < lines.len() && !is_block_close_line(&lines[i]) {
         let line = &lines[i];
-        let tokens = split_tokens(line);
+        let tokens = split_header_tokens(line);
         if tokens.is_empty() {
             i += 1;
             continue;
@@ -5418,7 +5507,7 @@ fn parse_scratch_block(
     let mut i = start + 1;
     while i < lines.len() && !is_block_close_line(&lines[i]) {
         let line = &lines[i];
-        let tokens = split_tokens(line);
+        let tokens = split_header_tokens(line);
         match tokens.as_slice() {
             [name, "=", ty] => {
                 parse_scratch_directive(name, Some(*ty), line, catalog)?;
@@ -5499,7 +5588,7 @@ fn parse_layers_block(
 ) -> Result<usize, AppError> {
     let mut i = start;
     while i < lines.len() && !is_block_close_line(&lines[i]) {
-        let tokens = split_tokens(&lines[i]);
+        let tokens = split_header_tokens(&lines[i]);
         if tokens.is_empty() {
             i += 1;
             continue;
@@ -5960,7 +6049,7 @@ fn parse_legend_block_row(
     render_overlays: &mut OverlayDefs,
     empty_char: &mut Option<char>,
 ) -> Result<(), AppError> {
-    let tokens = split_tokens(line);
+    let tokens = split_header_tokens(line);
     if tokens.len() < 3 || tokens.get(1).copied() != Some("=") {
         return Err(parse_error(
             line,
@@ -6183,7 +6272,7 @@ fn parse_command_definition(
     start: usize,
     catalog: &mut Catalog,
 ) -> Result<(Option<Direction>, usize), AppError> {
-    let header = split_tokens(&lines[start]);
+    let header = split_header_tokens(&lines[start]);
     let keyword = header.first().copied().unwrap_or("input");
     let name = expect(header.get(1), &lines[start], "missing input name")?;
     let input = if let Some(input) = catalog.input_names.get(name).copied() {
@@ -6198,7 +6287,7 @@ fn parse_command_definition(
             if next >= lines.len() || is_block_close_line(&lines[next]) {
                 return Ok((None, next));
             }
-            if !is_input_option(&split_tokens(&lines[next])) {
+            if !is_input_option(&split_header_tokens(&lines[next])) {
                 return Ok((None, next));
             }
 
@@ -6229,7 +6318,7 @@ fn is_input_option(tokens: &[&str]) -> bool {
 }
 
 fn parse_input_option(line: &str, input: InputId) -> Result<Direction, AppError> {
-    let tokens = split_tokens(line);
+    let tokens = split_header_tokens(line);
     match tokens.as_slice() {
         ["direction", value] => {
             let (dx, dy) = named_direction_vector(value, line)?;
@@ -6253,7 +6342,7 @@ fn named_direction_vector(value: &str, line: &str) -> Result<(i16, i16), AppErro
 }
 
 fn parse_scene_definition(lines: &[String], start: usize) -> Result<(SceneDef, usize), AppError> {
-    let header = split_tokens(&lines[start]);
+    let header = split_header_tokens(&lines[start]);
     let (name, level_menu_scene) = match header.as_slice() {
         ["scene", "level_menu"] => ("level_select", true),
         ["scene", "level_menu", name] => (*name, true),
@@ -6382,7 +6471,7 @@ impl puzzle_scene::SceneBlockHandler for Scene2dBlockHandler<'_> {
         lines: &[String],
         start: usize,
     ) -> Result<usize, AppError> {
-        let tokens = split_tokens(&lines[start]);
+        let tokens = split_header_tokens(&lines[start]);
         match tokens.as_slice() {
             ["resources"] => parse_scene_resources_block(lines, start, &mut self.screen.resources),
             ["var", ..]
@@ -6440,7 +6529,7 @@ fn parse_scene_resources_block(
 ) -> Result<usize, AppError> {
     let mut i = start + 1;
     while i < lines.len() && !is_block_close_line(&lines[i]) {
-        let tokens = split_tokens(&lines[i]);
+        let tokens = split_header_tokens(&lines[i]);
         match tokens.as_slice() {
             ["levels", names @ ..] => {
                 resources.levels = parse_resource_selection(names, &lines[i])?;
@@ -6534,7 +6623,7 @@ fn parse_screen_view_like_block(
             continue;
         }
 
-        let tokens = split_tokens(&lines[i]);
+        let tokens = split_header_tokens(&lines[i]);
         if matches!(tokens.as_slice(), ["panel", ..]) {
             return Err(parse_error(&lines[i], "unknown layout directive panel"));
         }
@@ -6697,7 +6786,7 @@ fn parse_screen_leaf_component(
     lines: &[String],
     start: usize,
 ) -> Result<(SceneComponent, usize), AppError> {
-    let tokens = split_tokens(&lines[start]);
+    let tokens = split_header_tokens(&lines[start]);
     match tokens.as_slice() {
         ["puzzle", "current_level"] => Err(parse_error(
             &lines[start],
@@ -6945,7 +7034,7 @@ fn collect_view_else_body(
     let mut i = start + 1;
     while i < lines.len() {
         let line = &lines[i];
-        let tokens = split_tokens(line);
+        let tokens = split_header_tokens(line);
         if tokens.first().copied() == Some(BLOCK_CLOSE) {
             let closed = block_stack
                 .pop()
@@ -7001,7 +7090,7 @@ fn parse_for_component(
     lines: &[String],
     start: usize,
 ) -> Result<(SceneComponent, usize), AppError> {
-    let tokens = split_tokens(&lines[start]);
+    let tokens = split_header_tokens(&lines[start]);
     let ["for", binding, "in", source] = tokens.as_slice() else {
         return Err(parse_error(
             &lines[start],
@@ -7882,7 +7971,7 @@ fn parse_scene_effect_value(value: &str, line: &str) -> Result<SceneEffect, AppE
         ]));
     }
 
-    let tokens = split_tokens(value);
+    let tokens = split_header_tokens(value);
     match tokens.as_slice() {
         ["input", input] => Ok(SceneEffect::Input(
             parse_input_name(input, line)?.to_string(),
@@ -8324,10 +8413,7 @@ fn parse_scene_call_params(
 
     let parts = args.split(',').map(str::trim).collect::<Vec<_>>();
     let params = if parts.len() == 1 && !parts[0].contains('=') {
-        vec![SceneEffectParam {
-            name: "level".to_string(),
-            value: parse_scene_expr(parts[0], line)?,
-        }]
+        vec![SceneEffectParam::Level(parse_scene_expr(parts[0], line)?)]
     } else {
         parse_scene_named_params(&parts, line)?
     };
@@ -8360,7 +8446,7 @@ fn parse_scene_named_params(parts: &[&str], line: &str) -> Result<Vec<SceneEffec
             .ok_or_else(|| parse_error(line, "scene params must be named `<name> = <expr>`"))?;
         let name = name.trim();
         validate_identifier(name, line, "scene param name")?;
-        params.push(SceneEffectParam {
+        params.push(SceneEffectParam::Named {
             name: name.to_string(),
             value: parse_scene_expr(value.trim(), line)?,
         });
@@ -8586,7 +8672,7 @@ fn parse_implicit_scene_puzzle_state_entry(
             lifetime,
         }));
     }
-    let tokens = split_tokens(line);
+    let tokens = split_header_tokens(line);
     match tokens.as_slice() {
         [puzzle_name] if is_qualified_identifier(puzzle_name) => Ok(Some(ScenePuzzleDef {
             name: (*puzzle_name).to_string(),
@@ -8725,7 +8811,7 @@ fn parse_screen_puzzle_initializer(
     value: &str,
     line: &str,
 ) -> Result<Option<ParsedScenePuzzleInitializer>, AppError> {
-    let tokens = split_tokens(value);
+    let tokens = split_header_tokens(value);
     match tokens.as_slice() {
         ["puzzle", "current_level"] => Err(parse_error(
             line,
@@ -8830,7 +8916,7 @@ fn parse_screen_transitions_block(
     let mut puzzle_rule = None;
     let mut i = start + 1;
     while i < lines.len() && !is_block_close_line(&lines[i]) {
-        let tokens = split_tokens(&lines[i]);
+        let tokens = split_header_tokens(&lines[i]);
         match tokens.as_slice() {
             ["step", target] => {
                 validate_target_path(target, &lines[i], "step target")?;
@@ -8887,7 +8973,7 @@ fn parse_screen_condition_arrow_block(
     start: usize,
 ) -> Result<(SceneTransition, usize), AppError> {
     let header = block_header_text(&lines[start]);
-    match split_tokens(header).as_slice() {
+    match split_header_tokens(header).as_slice() {
         ["if"] | ["if", "all"] => {}
         ["if", "any"] => {
             return Err(parse_error(
@@ -8936,7 +9022,8 @@ fn parse_screen_condition_arrow_block(
             "scene condition block must be followed by ->",
         ));
     };
-    let (effect, next_i) = parse_scene_effect_with_optional_block(effect_text.trim(), lines, arrow_i)?;
+    let (effect, next_i) =
+        parse_scene_effect_with_optional_block(effect_text.trim(), lines, arrow_i)?;
     Ok((
         SceneTransition {
             trigger: SceneTransitionTrigger::Condition(conditions.join(" and ")),
@@ -8977,7 +9064,7 @@ fn parse_scene_lifecycle_block(
     lines: &[String],
     start: usize,
 ) -> Result<(SceneTransition, usize), AppError> {
-    let tokens = split_tokens(&lines[start]);
+    let tokens = split_header_tokens(&lines[start]);
     let [lifecycle @ "on_scene_start"] = tokens.as_slice() else {
         return Err(parse_error(
             &lines[start],
@@ -9022,7 +9109,7 @@ fn parse_scene_handler_effects_range(
     let mut i = start;
     while i < end {
         let line = &lines[i];
-        let tokens = split_tokens(line);
+        let tokens = split_header_tokens(line);
         match tokens.as_slice() {
             ["if", condition @ ..] => {
                 let condition = condition.join(" ");
@@ -9063,7 +9150,7 @@ fn matching_effect_block_end(
 ) -> Result<usize, AppError> {
     let mut depth = 0usize;
     for (i, line) in lines.iter().enumerate().take(end).skip(start + 1) {
-        let tokens = split_tokens(line);
+        let tokens = split_header_tokens(line);
         if matches!(tokens.as_slice(), ["if", ..]) {
             depth += 1;
             continue;
@@ -9134,7 +9221,7 @@ fn parse_transition_trigger(value: &str, line: &str) -> Result<SceneTransitionTr
         validate_screen_condition(condition, line)?;
         return Ok(SceneTransitionTrigger::Condition(condition.to_string()));
     }
-    let tokens = split_tokens(value);
+    let tokens = split_header_tokens(value);
     if let [input] = tokens.as_slice() {
         let input = parse_input_name(input, line)?;
         return Ok(SceneTransitionTrigger::Condition(format!(
@@ -9192,14 +9279,14 @@ fn parse_level_menu_component(
     start: usize,
 ) -> Result<(LevelMenuDef, usize), AppError> {
     let next = start + 1;
-    if next >= lines.len() || !is_level_menu_option(&split_tokens(&lines[next])) {
+    if next >= lines.len() || !is_level_menu_option(&split_header_tokens(&lines[next])) {
         return Ok((LevelMenuDef::default(), next));
     }
 
     let mut menu = LevelMenuDef::default();
     let mut i = next;
     while i < lines.len() && !is_block_close_line(&lines[i]) {
-        let tokens = split_tokens(&lines[i]);
+        let tokens = split_header_tokens(&lines[i]);
         match tokens.as_slice() {
             ["show_index", "=", value] => menu.show_index = parse_boolean_option(value, &lines[i])?,
             ["show_solved", "=", value] => {
@@ -9259,7 +9346,7 @@ fn parse_level_menu_scene_options(
     let mut body = vec!["level_menu".to_string()];
     let mut i = start + 1;
     while i < lines.len() && !is_block_close_line(&lines[i]) {
-        if matches!(split_tokens(&lines[i]).as_slice(), ["index", ..]) {
+        if matches!(split_header_tokens(&lines[i]).as_slice(), ["index", ..]) {
             return Err(parse_error(&lines[i], "unknown scene directive index"));
         }
         body.push(lines[i].clone());
@@ -9334,7 +9421,7 @@ fn parse_model_inputs_block(
     let mut seen_keys = HashSet::<KeyTrigger>::new();
     let mut i = start + 1;
     while i < lines.len() && !is_block_close_line(&lines[i]) {
-        let tokens = split_tokens(&lines[i]);
+        let tokens = split_header_tokens(&lines[i]);
         match tokens.as_slice() {
             [input_name, "<-", keys @ ..] if !keys.is_empty() => {
                 let input = catalog
@@ -9374,7 +9461,7 @@ fn parse_scene_inputs_block(
     let mut bindings = Vec::<KeyBinding>::new();
     let mut i = start + 1;
     while i < lines.len() && !is_block_close_line(&lines[i]) {
-        let tokens = split_tokens(&lines[i]);
+        let tokens = split_header_tokens(&lines[i]);
         match tokens.as_slice() {
             [input_name, "<-", keys @ ..] if !keys.is_empty() => {
                 let mut triggers = Vec::new();
@@ -9457,7 +9544,7 @@ fn parse_scene_key_effect(value: &str, line: &str) -> Result<SceneEffect, AppErr
     match parse_scene_effect(value, line) {
         Ok(effect) => Ok(effect),
         Err(error) => {
-            let tokens = split_tokens(value);
+            let tokens = split_header_tokens(value);
             if let [input] = tokens.as_slice() {
                 return Ok(SceneEffect::Input(
                     parse_input_name(input, line)?.to_string(),
@@ -9766,7 +9853,7 @@ fn parse_visuals_block(
 
     while i < lines.len() && !is_block_close_line(&lines[i]) {
         let line = &lines[i];
-        let tokens = split_tokens(line);
+        let tokens = split_header_tokens(line);
         match tokens.as_slice() {
             [] => i += 1,
             ["colors"] => {
@@ -9960,7 +10047,7 @@ fn parse_visual_colors_block(
     let mut i = start + 1;
     while i < lines.len() && !is_block_close_line(&lines[i]) {
         let line = &lines[i];
-        let tokens = split_tokens(line);
+        let tokens = split_header_tokens(line);
         match tokens.as_slice() {
             [] => i += 1,
             [name, "=", color] => {
@@ -9999,7 +10086,7 @@ fn parse_visual_palettes_block(
     let mut i = start + 1;
     while i < lines.len() && !is_block_close_line(&lines[i]) {
         let line = &lines[i];
-        let tokens = split_tokens(line);
+        let tokens = split_header_tokens(line);
         match tokens.as_slice() {
             [] => i += 1,
             [name, "=", colors @ ..] => {
@@ -10024,7 +10111,7 @@ fn parse_visual_palettes_block(
                 i += 1;
                 while i < lines.len() && !is_block_close_line(&lines[i]) {
                     let row = &lines[i];
-                    let row_tokens = split_tokens(row);
+                    let row_tokens = split_header_tokens(row);
                     let [value, "=", colors @ ..] = row_tokens.as_slice() else {
                         return Err(parse_error(
                             row,
@@ -10073,7 +10160,7 @@ fn parse_visual_shapes_block(
     let mut i = start + 1;
     while i < lines.len() && !is_block_close_line(&lines[i]) {
         let line = &lines[i];
-        let tokens = split_tokens(line);
+        let tokens = split_header_tokens(line);
         match tokens.as_slice() {
             [] => i += 1,
             [name] if !name.contains(':') => {
@@ -10146,7 +10233,7 @@ fn parse_palette_shape_sprite_entry(
         return Ok(None);
     }
 
-    let first_tokens = split_tokens(&lines[i]);
+    let first_tokens = split_header_tokens(&lines[i]);
     let first_is_new_style = matches!(first_tokens.as_slice(), ["palette", _] | ["shape", _])
         || first_tokens
             .first()
@@ -10160,7 +10247,7 @@ fn parse_palette_shape_sprite_entry(
     let mut consumed_rows = 0usize;
     while i < lines.len() && !is_block_close_line(&lines[i]) {
         let line = &lines[i];
-        let tokens = split_tokens(line);
+        let tokens = split_header_tokens(line);
         if consumed_rows > 0 && starts_palette_shape_sprite_entry(lines, i, catalog) {
             break;
         }
@@ -10241,7 +10328,7 @@ fn parse_palette_shape_sprite_entry(
     let next_i = if lines.get(i).map(String::as_str) == Some(BLOCK_CLOSE)
         && lines
             .get(i + 1)
-            .is_some_and(|next| !starts_visual_outer_section(&split_tokens(next)))
+            .is_some_and(|next| !starts_visual_outer_section(&split_header_tokens(next)))
     {
         i + 1
     } else {
@@ -10269,7 +10356,7 @@ fn parse_canonical_sprite_entry(
         return Ok(None);
     }
 
-    let first_tokens = split_tokens(&lines[i]);
+    let first_tokens = split_header_tokens(&lines[i]);
     let canonical_start = match first_tokens.as_slice() {
         ["colors", ..]
         | ["pixels_per_cell", ..]
@@ -10295,7 +10382,7 @@ fn parse_canonical_sprite_entry(
             continue;
         }
         let line = &lines[i];
-        let tokens = split_tokens(line);
+        let tokens = split_header_tokens(line);
         match tokens.as_slice() {
             ["colors", colors @ ..] => {
                 if colors.is_empty() {
@@ -10511,7 +10598,7 @@ fn parse_visual_rows_until_close(
         if !pattern.is_empty() && is_visual_translate_transform_row(&lines[i]) {
             break;
         }
-        let row_tokens = split_tokens(&lines[i]);
+        let row_tokens = split_header_tokens(&lines[i]);
         let [row] = row_tokens.as_slice() else {
             return Err(parse_error(
                 &lines[i],
@@ -10564,7 +10651,7 @@ fn visual_rotation_axis_for_targets(
 }
 
 fn starts_palette_shape_sprite_entry(lines: &[String], index: usize, catalog: &Catalog) -> bool {
-    let tokens = split_tokens(&lines[index]);
+    let tokens = split_header_tokens(&lines[index]);
     let [selector] = tokens.as_slice() else {
         return false;
     };
@@ -10574,7 +10661,10 @@ fn starts_palette_shape_sprite_entry(lines: &[String], index: usize, catalog: &C
     let Some(next) = lines.get(index + 1) else {
         return false;
     };
-    matches!(split_tokens(next).as_slice(), ["palette", _] | ["shape", _])
+    matches!(
+        split_header_tokens(next).as_slice(),
+        ["palette", _] | ["shape", _]
+    )
 }
 
 fn resolve_visual_palette(
@@ -10688,7 +10778,7 @@ fn parse_visual_plain_shape(
     let mut pattern = Vec::new();
     let mut i = start + 1;
     while i < lines.len() && !is_block_close_line(&lines[i]) {
-        let row_tokens = split_tokens(&lines[i]);
+        let row_tokens = split_header_tokens(&lines[i]);
         let [row] = row_tokens.as_slice() else {
             return Err(parse_error(
                 &lines[i],
@@ -10742,7 +10832,7 @@ fn parse_ps_style_shape_sprite(
     while i < lines.len() && lines[i].is_empty() {
         i += 1;
     }
-    let tokens = split_tokens(lines.get(i).map_or("", String::as_str));
+    let tokens = split_header_tokens(lines.get(i).map_or("", String::as_str));
     let shape_ref = match tokens.as_slice() {
         [shape_ref] if visual_shape_ref_exists(shape_ref, plain_shapes, shapes, &lines[i])? => {
             *shape_ref
@@ -10820,7 +10910,7 @@ fn parse_line_style_inline_sprite(
         if !pattern.is_empty() && is_visual_transform_row(&lines[i]) {
             break;
         }
-        let row_tokens = split_tokens(&lines[i]);
+        let row_tokens = split_header_tokens(&lines[i]);
         let [row] = row_tokens.as_slice() else {
             return Err(parse_error(
                 &lines[i],
@@ -10852,7 +10942,7 @@ fn parse_visual_transform_offset(
 ) -> Result<VisualSpriteOffset, AppError> {
     let mut offset = VisualSpriteOffset::default();
     while *index < lines.len() && is_visual_transform_row(&lines[*index]) {
-        for token in split_tokens(&lines[*index]) {
+        for token in split_header_tokens(&lines[*index]) {
             let Some((direction, amount)) =
                 parse_visual_translate_transform(token, &lines[*index])?
             else {
@@ -10874,7 +10964,7 @@ fn parse_visual_transform_offset(
 }
 
 fn is_visual_transform_row(line: &str) -> bool {
-    let tokens = split_tokens(line);
+    let tokens = split_header_tokens(line);
     !tokens.is_empty()
         && tokens
             .iter()
@@ -10882,7 +10972,7 @@ fn is_visual_transform_row(line: &str) -> bool {
 }
 
 fn is_visual_translate_transform_row(line: &str) -> bool {
-    let tokens = split_tokens(line);
+    let tokens = split_header_tokens(line);
     !tokens.is_empty()
         && tokens.iter().all(|token| {
             parse_visual_translate_transform(token, line).is_ok_and(|parsed| parsed.is_some())
@@ -10929,7 +11019,7 @@ fn parse_visual_translate_transform(
 }
 
 fn visual_colors_from_row(line: &str) -> Result<Vec<(char, String)>, AppError> {
-    split_tokens(line)
+    split_header_tokens(line)
         .iter()
         .enumerate()
         .map(|(index, color)| {
@@ -11000,7 +11090,7 @@ fn parse_line_style_image_sprite_source(lines: &[String], start: usize) -> Optio
     while i < lines.len() && lines[i].is_empty() {
         i += 1;
     }
-    let tokens = split_tokens(lines.get(i)?.as_str());
+    let tokens = split_header_tokens(lines.get(i)?.as_str());
     let [source] = tokens.as_slice() else {
         return None;
     };
@@ -11019,7 +11109,7 @@ fn is_visual_image_source(value: &str) -> bool {
 }
 
 fn is_visual_entry_boundary(lines: &[String], index: usize, catalog: &Catalog) -> bool {
-    let tokens = split_tokens(&lines[index]);
+    let tokens = split_header_tokens(&lines[index]);
     match tokens.as_slice() {
         ["shape", ..] | ["colors", ..] => true,
         [_, source] if is_visual_image_source(source) || is_visual_color_token(source) => true,
@@ -11033,7 +11123,7 @@ fn is_visual_entry_boundary(lines: &[String], index: usize, catalog: &Catalog) -
             if is_block_close_line(next) {
                 return false;
             }
-            let next_tokens = split_tokens(next);
+            let next_tokens = split_header_tokens(next);
             match next_tokens.as_slice() {
                 [source] if is_visual_image_source(source) => true,
                 [color, ..] if is_visual_color_token(color) => true,
@@ -11052,7 +11142,7 @@ fn visual_end_closes_sprite_entry(lines: &[String], index: usize) -> bool {
     let Some(next) = lines.get(index + 1) else {
         return false;
     };
-    is_block_close_line(next) || !starts_visual_outer_section(&split_tokens(next))
+    is_block_close_line(next) || !starts_visual_outer_section(&split_header_tokens(next))
 }
 
 fn starts_visual_outer_section(tokens: &[&str]) -> bool {
@@ -11135,7 +11225,7 @@ fn parse_visual_shape_table(
     if let Some(rotation) = rotation {
         let mut pattern = Vec::new();
         while i < lines.len() && !is_block_close_line(&lines[i]) {
-            let row_tokens = split_tokens(&lines[i]);
+            let row_tokens = split_header_tokens(&lines[i]);
             let [row] = row_tokens.as_slice() else {
                 return Err(parse_error(
                     &lines[i],
@@ -11179,7 +11269,7 @@ fn parse_visual_shape_table(
                 let mut pattern = Vec::new();
                 i += 1;
                 while i < lines.len() && !is_block_close_line(&lines[i]) {
-                    let row_tokens = split_tokens(&lines[i]);
+                    let row_tokens = split_header_tokens(&lines[i]);
                     let [row] = row_tokens.as_slice() else {
                         return Err(parse_error(
                             &lines[i],
@@ -11213,7 +11303,7 @@ fn parse_visual_shape_table(
                 let mut pattern = Vec::new();
                 i += 1;
                 while i < lines.len() && !is_block_close_line(&lines[i]) {
-                    let row_tokens = split_tokens(&lines[i]);
+                    let row_tokens = split_header_tokens(&lines[i]);
                     let [row] = row_tokens.as_slice() else {
                         return Err(parse_error(
                             &lines[i],
@@ -11248,7 +11338,7 @@ fn parse_visual_shape_table(
         let mut pattern = Vec::new();
         i += 1;
         while i < lines.len() && !is_block_close_line(&lines[i]) {
-            let row_tokens = split_tokens(&lines[i]);
+            let row_tokens = split_header_tokens(&lines[i]);
             let [row] = row_tokens.as_slice() else {
                 return Err(parse_error(
                     &lines[i],
@@ -11298,7 +11388,7 @@ fn parse_visual_shape_table(
 fn parse_visual_shape_rotation_directive(
     line: &str,
 ) -> Result<Option<VisualShapeRotation>, AppError> {
-    let tokens = split_tokens(block_header_text(line));
+    let tokens = split_header_tokens(block_header_text(line));
     match tokens.as_slice() {
         ["rotate", "from", from] => Ok(Some(VisualShapeRotation::new("rotate", from))),
         ["rotate", "using", map, "from", from] => Ok(Some(VisualShapeRotation::new(map, from))),
@@ -11328,6 +11418,9 @@ fn validate_visual_pattern(pattern: &[String], line: &str) -> Result<(), AppErro
             line,
             "visual shape rows must be equal-width ascii",
         ));
+    }
+    if pattern.iter().any(|row| row.contains(['{', '}'])) {
+        return Err(parse_error(line, "ASCII rows cannot contain braces"));
     }
     Ok(())
 }
@@ -11430,7 +11523,7 @@ fn parse_visual_color_table(
     let mut entries = HashMap::new();
     let mut i = start + 1;
     while i < lines.len() && !is_block_close_line(&lines[i]) {
-        let tokens = split_tokens(&lines[i]);
+        let tokens = split_header_tokens(&lines[i]);
         let [value, "=", color] = tokens.as_slice() else {
             return Err(parse_error(
                 &lines[i],
@@ -11934,7 +12027,7 @@ fn parse_group_block(
 ) -> Result<usize, AppError> {
     let mut i = start + 1;
     while i < lines.len() && !is_block_close_line(&lines[i]) {
-        let tokens = split_tokens(&lines[i]);
+        let tokens = split_header_tokens(&lines[i]);
         if tokens.is_empty() {
             i += 1;
             continue;
@@ -12458,7 +12551,7 @@ fn parse_rule_definition(
     numeric_globals: &HashMap<String, i64>,
     condition_names: &HashMap<String, ConditionId>,
 ) -> Result<(RuleDefinitionAst, usize), AppError> {
-    let header = split_tokens(&lines[start]);
+    let header = split_header_tokens(&lines[start]);
     let declaration = header.first().copied().unwrap_or("routine");
     let role = if header.get(1).copied() == Some("display")
         || header
@@ -12747,7 +12840,7 @@ fn collect_statement_block_lines(
     let mut i = start;
     while i < lines.len() {
         let nested_line = &lines[i];
-        let tokens = split_tokens(nested_line);
+        let tokens = split_header_tokens(nested_line);
         if tokens.first().copied() == Some(BLOCK_CLOSE) {
             depth -= 1;
             if depth == 0 {
@@ -12776,15 +12869,14 @@ fn starts_statement_block(tokens: &[&str]) -> bool {
     )
 }
 
-fn parse_if_condition_block_header(line: &str) -> Result<Option<ConditionBlockCombinator>, AppError> {
-    let tokens = split_tokens(line);
+fn parse_if_condition_block_header(
+    line: &str,
+) -> Result<Option<ConditionBlockCombinator>, AppError> {
+    let tokens = split_header_tokens(line);
     match tokens.as_slice() {
         ["if"] => Ok(Some(ConditionBlockCombinator::All)),
         ["if", "all"] => Ok(Some(ConditionBlockCombinator::All)),
         ["if", "any"] => Ok(Some(ConditionBlockCombinator::Any)),
-        ["if", "{"] => Ok(Some(ConditionBlockCombinator::All)),
-        ["if", "all", "{"] => Ok(Some(ConditionBlockCombinator::All)),
-        ["if", "any", "{"] => Ok(Some(ConditionBlockCombinator::Any)),
         ["if", ..] if line.trim_end().ends_with('{') => Err(parse_error(
             line,
             "if condition block must be: if [all | any] {",
@@ -12865,11 +12957,17 @@ fn parse_statement_arrow_consequence(
     rule_params: &[String],
 ) -> Result<(Vec<StatementAst>, usize), AppError> {
     let Some(line) = lines.get(start) else {
-        return Err(parse_error(header_line, "if condition block must be followed by ->"));
+        return Err(parse_error(
+            header_line,
+            "if condition block must be followed by ->",
+        ));
     };
     let header = block_header_text(line);
     let Some((_, effect_text)) = header.split_once("->") else {
-        return Err(parse_error(line, "if condition block must be followed by ->"));
+        return Err(parse_error(
+            line,
+            "if condition block must be followed by ->",
+        ));
     };
     let effect_text = effect_text.trim();
 
@@ -12896,7 +12994,10 @@ fn parse_statement_arrow_consequence(
     }
 
     if effect_text.is_empty() {
-        return Err(parse_error(line, "if -> must be followed by an effect or block"));
+        return Err(parse_error(
+            line,
+            "if -> must be followed by an effect or block",
+        ));
     }
     if is_qualified_identifier(effect_text) && !is_builtin_rewrite_effect_text(effect_text) {
         return Ok((vec![StatementAst::Call(effect_text.to_string())], start + 1));
@@ -13367,7 +13468,7 @@ fn rewrite_lhs_trailing(line: &str) -> Option<&str> {
 }
 
 fn can_start_rewrite_lhs(prefix: &str) -> bool {
-    let tokens = split_tokens(prefix);
+    let tokens = split_header_tokens(prefix);
     match tokens.as_slice() {
         [] => true,
         ["input", axis] => is_identifier(axis),
@@ -13388,7 +13489,7 @@ fn can_start_rewrite_lhs(prefix: &str) -> bool {
 }
 
 fn is_rewrite_application_prefix(token: &str) -> bool {
-    matches!(token, "once" | "once_all" | "once_per_level" | "repeat")
+    puzzle_authoring::rule_application_surface(token).is_some()
 }
 
 fn is_non_rewrite_statement_prefix(token: &str) -> bool {
@@ -13460,7 +13561,7 @@ fn parse_statement_block(
             line.as_str()
         };
         let line = block_header_text(line);
-        let tokens = split_tokens(line);
+        let tokens = split_header_tokens(line);
         match tokens.first().copied() {
             Some("for") => {
                 let Some(["for", binding, "in", source]) =
@@ -14138,7 +14239,11 @@ fn parse_statement_block(
                 }
                 i = next_statement_i;
             }
-            Some(call) if tokens.len() == 1 && is_qualified_identifier(call) => {
+            Some("move") if is_shared_standard_move_statement(line) => {
+                statements.push(StatementAst::Call("move".to_string()));
+                i += 1;
+            }
+            Some(call) if tokens.len() == 1 && is_shared_rule_call_statement(line, call) => {
                 statements.push(StatementAst::Call(call.to_string()));
                 i += 1;
             }
@@ -14162,6 +14267,24 @@ fn parse_statement_block(
     ))
 }
 
+fn is_shared_standard_move_statement(line: &str) -> bool {
+    matches!(
+        puzzle_authoring::rule_statement_surface(line),
+        Ok(puzzle_authoring::RuleStatementSurface::RuleLine(
+            puzzle_authoring::RuleLineSurface::StandardStep(
+                puzzle_authoring::StandardRuleStepSurface::Move
+            )
+        ))
+    )
+}
+
+fn is_shared_rule_call_statement(line: &str, expected_name: &str) -> bool {
+    matches!(
+        puzzle_authoring::rule_statement_surface(line),
+        Ok(puzzle_authoring::RuleStatementSurface::Call { name }) if name == expected_name
+    )
+}
+
 #[allow(clippy::too_many_arguments)]
 fn parse_display_statement(
     line: &str,
@@ -14183,7 +14306,7 @@ fn parse_display_statement(
         ));
     }
 
-    let tokens = split_tokens(rest);
+    let tokens = split_header_tokens(rest);
     if tokens.len() == 1 && (is_qualified_identifier(tokens[0]) || is_display_role_token(tokens[0]))
     {
         return Ok(StatementAst::DisplayCall(tokens[0].to_string()));
@@ -14500,11 +14623,14 @@ fn embedded_direction_name(marker: char) -> Option<&'static str> {
 }
 
 fn is_oriented_rewrite_line(line: &str, orientation_token: &str) -> bool {
-    let Some(rest) = line.strip_prefix(orientation_token).map(str::trim_start) else {
+    if !line.trim_start().starts_with(orientation_token) {
         return false;
-    };
-    rest.starts_with('[')
-        || (orientation_token == "input" && parse_input_set_orientation_rewrite(rest).is_some())
+    }
+    matches!(
+        puzzle_authoring::rule_line_surface(line),
+        Ok(puzzle_authoring::RuleLineSurface::InputRewrite { .. })
+            | Ok(puzzle_authoring::RuleLineSurface::OrientedRewrite { .. })
+    )
 }
 
 fn parse_oriented_rewrite_statement(
@@ -14518,8 +14644,140 @@ fn parse_oriented_rewrite_statement(
     maps: &HashMap<String, ValueMap>,
     object_groups: &HashMap<String, Vec<ObjectId>>,
 ) -> Result<OrientedRewriteAst, AppError> {
-    let (orientation, rewrite) =
-        parse_oriented_rewrite_prefix(line, orientation_token, rule_params)?;
+    if !line.trim_start().starts_with(orientation_token) {
+        return Err(parse_error(line, "missing oriented rewrite"));
+    }
+    let surface = puzzle_authoring::rule_line_surface(line)
+        .map_err(|error| parse_error(line, error.message()))?;
+    let parsed = parse_rule_line_rewrite_statement(
+        line,
+        surface,
+        rule_params,
+        object_names,
+        object_schemas,
+        value_sets,
+        maps,
+        object_groups,
+    )?;
+    if parsed.application.is_some() {
+        return Err(parse_error(line, "unexpected application-prefixed rewrite"));
+    }
+    Ok(OrientedRewriteAst {
+        application,
+        ..parsed
+    })
+}
+
+fn parse_neutral_rewrite_statement(
+    line: &str,
+    application: Option<RuleApplication>,
+    object_names: &HashMap<String, ObjectId>,
+    object_schemas: &HashMap<String, ObjectSchema>,
+    value_sets: &HashMap<String, Vec<String>>,
+    maps: &HashMap<String, ValueMap>,
+    object_groups: &HashMap<String, Vec<ObjectId>>,
+) -> Result<OrientedRewriteAst, AppError> {
+    let surface = puzzle_authoring::rule_line_surface(line)
+        .map_err(|error| parse_error(line, error.message()))?;
+    let parsed = parse_rule_line_rewrite_statement(
+        line,
+        surface,
+        &[],
+        object_names,
+        object_schemas,
+        value_sets,
+        maps,
+        object_groups,
+    )?;
+    if !matches!(parsed.orientation, OrientationExpr::Neutral) || parsed.application.is_some() {
+        return Err(parse_error(line, "expected a neutral rewrite"));
+    }
+    Ok(OrientedRewriteAst {
+        application,
+        ..parsed
+    })
+}
+
+fn parse_application_prefixed_rewrite_statement(
+    line: &str,
+    prefix: &str,
+    application: RuleApplication,
+    rule_params: &[String],
+    object_names: &HashMap<String, ObjectId>,
+    object_schemas: &HashMap<String, ObjectSchema>,
+    value_sets: &HashMap<String, Vec<String>>,
+    maps: &HashMap<String, ValueMap>,
+    object_groups: &HashMap<String, Vec<ObjectId>>,
+) -> Result<OrientedRewriteAst, AppError> {
+    line.strip_prefix(prefix)
+        .ok_or_else(|| parse_error(line, "missing application-prefixed rewrite"))?;
+    let surface = puzzle_authoring::rule_line_surface(line)
+        .map_err(|error| parse_error(line, error.message()))?;
+    let parsed = parse_rule_line_rewrite_statement(
+        line,
+        surface,
+        rule_params,
+        object_names,
+        object_schemas,
+        value_sets,
+        maps,
+        object_groups,
+    )?;
+    if parsed.application != Some(application) {
+        return Err(parse_error(
+            line,
+            "application prefix must be followed by a rewrite",
+        ));
+    }
+    Ok(parsed)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn parse_rule_line_rewrite_statement(
+    line: &str,
+    surface: puzzle_authoring::RuleLineSurface<'_>,
+    rule_params: &[String],
+    object_names: &HashMap<String, ObjectId>,
+    object_schemas: &HashMap<String, ObjectSchema>,
+    value_sets: &HashMap<String, Vec<String>>,
+    maps: &HashMap<String, ValueMap>,
+    object_groups: &HashMap<String, Vec<ObjectId>>,
+) -> Result<OrientedRewriteAst, AppError> {
+    let (orientation, application, rewrite) = match surface {
+        puzzle_authoring::RuleLineSurface::InputRewrite {
+            application,
+            surface,
+        } => {
+            if let Some(axis) = surface.orientation {
+                validate_identifier(axis, line, "input orientation")?;
+            }
+            (
+                OrientationExpr::InputSet(surface.orientation.unwrap_or("directions").to_string()),
+                application.map(rule_application_from_surface),
+                surface.rewrite,
+            )
+        }
+        puzzle_authoring::RuleLineSurface::NeutralRewrite {
+            application,
+            rewrite,
+        } => (
+            OrientationExpr::Neutral,
+            application.map(rule_application_from_surface),
+            rewrite,
+        ),
+        puzzle_authoring::RuleLineSurface::OrientedRewrite {
+            application,
+            orientation,
+            rewrite,
+        } => (
+            parse_statement_orientation_expr(orientation, rule_params),
+            application.map(rule_application_from_surface),
+            rewrite,
+        ),
+        puzzle_authoring::RuleLineSurface::StandardStep(_) => {
+            return Err(parse_error(line, "expected a rewrite statement"));
+        }
+    };
     let (before, after, effects) = parse_inline_rewrite(
         rewrite,
         object_names,
@@ -14539,83 +14797,15 @@ fn parse_oriented_rewrite_statement(
     })
 }
 
-fn parse_neutral_rewrite_statement(
-    line: &str,
-    application: Option<RuleApplication>,
-    object_names: &HashMap<String, ObjectId>,
-    object_schemas: &HashMap<String, ObjectSchema>,
-    value_sets: &HashMap<String, Vec<String>>,
-    maps: &HashMap<String, ValueMap>,
-    object_groups: &HashMap<String, Vec<ObjectId>>,
-) -> Result<OrientedRewriteAst, AppError> {
-    let (before, after, effects) = parse_inline_rewrite(
-        line,
-        object_names,
-        object_schemas,
-        value_sets,
-        maps,
-        object_groups,
-    )?;
-
-    Ok(OrientedRewriteAst {
-        source_line: line.to_string(),
-        orientation: OrientationExpr::Neutral,
-        application,
-        before,
-        after,
-        effects,
-    })
-}
-
-fn parse_application_prefixed_rewrite_statement(
-    line: &str,
-    prefix: &str,
-    application: RuleApplication,
-    rule_params: &[String],
-    object_names: &HashMap<String, ObjectId>,
-    object_schemas: &HashMap<String, ObjectSchema>,
-    value_sets: &HashMap<String, Vec<String>>,
-    maps: &HashMap<String, ValueMap>,
-    object_groups: &HashMap<String, Vec<ObjectId>>,
-) -> Result<OrientedRewriteAst, AppError> {
-    let rewrite = line
-        .strip_prefix(prefix)
-        .map(str::trim_start)
-        .ok_or_else(|| parse_error(line, "missing application-prefixed rewrite"))?;
-    let tokens = split_tokens(rewrite);
-    let orientation_token = tokens
-        .first()
-        .copied()
-        .ok_or_else(|| parse_error(line, "application prefix must be followed by a rewrite"))?;
-    if rewrite.starts_with('[') {
-        return parse_neutral_rewrite_statement(
-            rewrite,
-            Some(application),
-            object_names,
-            object_schemas,
-            value_sets,
-            maps,
-            object_groups,
-        );
+fn rule_application_from_surface(
+    application: puzzle_authoring::RuleApplicationSurface,
+) -> RuleApplication {
+    match application {
+        puzzle_authoring::RuleApplicationSurface::Once => RuleApplication::Once,
+        puzzle_authoring::RuleApplicationSurface::OnceAll => RuleApplication::OnceAll,
+        puzzle_authoring::RuleApplicationSurface::OncePerLevel => RuleApplication::OncePerLevel,
+        puzzle_authoring::RuleApplicationSurface::Repeat => RuleApplication::UntilStable,
     }
-    if !is_oriented_rewrite_line(rewrite, orientation_token) {
-        return Err(parse_error(
-            line,
-            "application prefix must be followed by an oriented rewrite",
-        ));
-    }
-
-    parse_oriented_rewrite_statement(
-        rewrite,
-        orientation_token,
-        Some(application),
-        rule_params,
-        object_names,
-        object_schemas,
-        value_sets,
-        maps,
-        object_groups,
-    )
 }
 
 fn parse_oriented_rewrite_prefix<'a>(
@@ -14628,13 +14818,16 @@ fn parse_oriented_rewrite_prefix<'a>(
         .map(str::trim_start)
         .ok_or_else(|| parse_error(line, "missing oriented rewrite"))?;
     if orientation_token == "input" {
-        if let Some((axis, rewrite)) = parse_input_set_orientation_rewrite(rest) {
-            return Ok((OrientationExpr::InputSet(axis.to_string()), rewrite));
+        let surface = puzzle_authoring::input_rewrite_surface(line)
+            .map_err(|error| parse_error(line, error.message()))?
+            .ok_or_else(|| parse_error(line, "missing input-oriented rewrite"))?;
+        if let Some(axis) = surface.orientation {
+            validate_identifier(axis, line, "input orientation")?;
         }
-        if rest.starts_with('[') {
-            return Ok((OrientationExpr::InputSet("directions".to_string()), rest));
-        }
-        return Err(parse_error(line, "missing input-oriented rewrite"));
+        return Ok((
+            OrientationExpr::InputSet(surface.orientation.unwrap_or("directions").to_string()),
+            surface.rewrite,
+        ));
     }
     if !rest.starts_with('[') {
         return Err(parse_error(line, "missing oriented rewrite"));
@@ -14643,13 +14836,6 @@ fn parse_oriented_rewrite_prefix<'a>(
         parse_statement_orientation_expr(orientation_token, rule_params),
         rest,
     ))
-}
-
-fn parse_input_set_orientation_rewrite(rest: &str) -> Option<(&str, &str)> {
-    let open_index = rest.find('[')?;
-    let axis = rest[..open_index].trim();
-    let rewrite = rest[open_index..].trim_start();
-    (is_identifier(axis) && rewrite.starts_with('[')).then_some((axis, rewrite))
 }
 
 fn parse_statement_orientation_expr(token: &str, rule_params: &[String]) -> OrientationExpr {
@@ -17444,7 +17630,7 @@ fn parse_rewrite_effect_value(suffix: &str, line: &str) -> Result<Vec<EffectAst>
         ));
     }
 
-    let tokens = split_tokens(suffix);
+    let tokens = split_header_tokens(suffix);
     match tokens.as_slice() {
         [command] if command.eq_ignore_ascii_case("cancel") => Ok(vec![EffectAst::Cancel]),
         [command] if command.eq_ignore_ascii_case("win") => Ok(vec![EffectAst::Win]),
@@ -17617,7 +17803,7 @@ fn is_builtin_rewrite_effect_text(suffix: &str) -> bool {
     if suffix.strip_prefix("message ").is_some() || suffix.strip_prefix("emit ").is_some() {
         return true;
     }
-    let tokens = split_tokens(suffix);
+    let tokens = split_header_tokens(suffix);
     matches!(
         tokens.as_slice(),
         [command] if command.eq_ignore_ascii_case("cancel") || command.eq_ignore_ascii_case("win") || command.eq_ignore_ascii_case("restart") || command.eq_ignore_ascii_case("next_level") || command.eq_ignore_ascii_case("again") || command.eq_ignore_ascii_case("checkpoint") || command.eq_ignore_ascii_case("clear_checkpoint")
@@ -18939,7 +19125,17 @@ fn compile_before_after_blocks(
                         for attr in scratch_to_remove_object_set(
                             &before_scratch.require_object_set,
                             &after_scratch.require_object_set,
-                        ) {
+                        )
+                        .into_iter()
+                        .filter(|attr| {
+                            after_occurrences.iter().any(|occurrence| {
+                                matches!(
+                                    &occurrence.matched,
+                                    ResolvedObjectMatch::ObjectSet { binding, .. }
+                                        if *binding == attr.binding
+                                )
+                            })
+                        }) {
                             writes.push(WriteOpTemplate::RemoveObjectSetScratch {
                                 component: component_index,
                                 offset: offset.clone(),
@@ -19005,13 +19201,15 @@ fn expand_movement_scratch_sets(
     before: &PatternBlock,
     after: &PatternBlock,
 ) -> Vec<(PatternBlock, PatternBlock)> {
+    let before = expand_negated_movement_scratch_sets(before);
+    let after = expand_negated_movement_scratch_sets(after);
     let mut bindings = Vec::<ScratchSetBinding>::new();
-    collect_movement_scratch_set_bindings(before, &mut bindings);
-    collect_movement_scratch_set_bindings(after, &mut bindings);
+    collect_movement_scratch_set_bindings(&before, &mut bindings);
+    collect_movement_scratch_set_bindings(&after, &mut bindings);
     dedup_scratch_set_bindings(&mut bindings);
 
     if bindings.is_empty() {
-        return vec![(before.clone(), after.clone())];
+        return vec![(before, after)];
     }
 
     let mut assignments = Vec::<HashMap<String, String>>::new();
@@ -19020,11 +19218,52 @@ fn expand_movement_scratch_sets(
         .into_iter()
         .map(|assignment| {
             (
-                apply_movement_scratch_set_assignment(before, &assignment),
-                apply_movement_scratch_set_assignment(after, &assignment),
+                apply_movement_scratch_set_assignment(&before, &assignment),
+                apply_movement_scratch_set_assignment(&after, &assignment),
             )
         })
         .collect()
+}
+
+fn expand_negated_movement_scratch_sets(block: &PatternBlock) -> PatternBlock {
+    let mut block = block.clone();
+    for component in &mut block.components {
+        for row in &mut component.rows {
+            for part in row {
+                let BlockPart::Cell(cell) = part else {
+                    continue;
+                };
+                expand_negated_movement_scratch_set_list(&mut cell.require_cell_scratch);
+                expand_negated_movement_scratch_set_list(&mut cell.forbid_cell_scratch);
+                for selector in &mut cell.require {
+                    expand_negated_movement_scratch_set_list(&mut selector.scratch);
+                }
+                for selector in &mut cell.forbid {
+                    expand_negated_movement_scratch_set_list(&mut selector.scratch);
+                }
+            }
+        }
+    }
+    block
+}
+
+fn expand_negated_movement_scratch_set_list(scratch: &mut Vec<ParsedScratch>) {
+    let mut expanded = Vec::with_capacity(scratch.len());
+    for scratch in scratch.drain(..) {
+        if scratch.negated
+            && let Some(value) = scratch.value.as_deref()
+            && let Some(values) = movement_scratch_set_values(value)
+        {
+            expanded.extend(values.iter().map(|value| {
+                let mut scratch = scratch.clone();
+                scratch.value = Some((*value).to_string());
+                scratch
+            }));
+        } else {
+            expanded.push(scratch);
+        }
+    }
+    *scratch = expanded;
 }
 
 fn collect_movement_scratch_set_bindings(
@@ -19480,9 +19719,7 @@ fn block_cell_scratch(
     dedup_object_set_scratch_patterns(&mut out.require_object_set);
     dedup_object_set_scratch_patterns(&mut out.forbid_object_set);
     reject_duplicate_scratch_patterns(&out.require, line)?;
-    reject_duplicate_scratch_patterns(&out.forbid, line)?;
     reject_duplicate_object_set_scratch_patterns(&out.require_object_set, line)?;
-    reject_duplicate_object_set_scratch_patterns(&out.forbid_object_set, line)?;
     Ok(out)
 }
 
@@ -19634,19 +19871,13 @@ fn parse_anonymous_movement_value(
     if let Some(relative) = parse_relative_direction_value(value) {
         return Ok(ScratchValueTemplate::Relative(relative));
     }
-    ["up", "down", "left", "right"]
-        .iter()
-        .position(|candidate| *candidate == value)
-        .map(|index| ScratchValueTemplate::Literal(index as i64))
+    puzzle_authoring::movement_scratch_index(value, puzzle_authoring::MOVEMENT_DIRECTIONS_2D)
+        .map(|index| ScratchValueTemplate::Literal(i64::from(index)))
         .ok_or_else(|| parse_error(line, "unknown movement scratch value"))
 }
 
 fn movement_scratch_set_values(value: &str) -> Option<&'static [&'static str]> {
-    match value {
-        "parallel" => Some(&["<", ">"]),
-        "perpendicular" => Some(&["^", "v"]),
-        _ => None,
-    }
+    puzzle_authoring::movement_scratch_set_values(value, 2)
 }
 
 fn parse_enum_scratch_value(

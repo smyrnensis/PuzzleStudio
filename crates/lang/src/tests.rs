@@ -7,24 +7,10 @@ fn parse_game(source: &str) -> Result<LoadedGame, AppError> {
     super::parse_game2d(&modernize_test_source(source))
 }
 
-fn test_legacy_block_close(line: &str) -> bool {
-    line == "end" || is_block_close_line(line)
-}
-
 fn modernize_test_source(source: &str) -> String {
     let Ok(lines) = super::source::logical_lines(source) else {
         return source.to_string();
     };
-    let lines = lines
-        .into_iter()
-        .map(|line| {
-            if test_legacy_block_close(&line) {
-                BLOCK_CLOSE.to_string()
-            } else {
-                line
-            }
-        })
-        .collect::<Vec<_>>();
     let mut out = Vec::new();
     let mut i = 0;
     let mut in_keys = false;
@@ -35,7 +21,7 @@ fn modernize_test_source(source: &str) -> String {
     while i < lines.len() {
         let rewritten_line = rewrite_test_display_aliases(&lines[i], &display_aliases);
         let line = &rewritten_line;
-        let tokens = split_tokens(line);
+        let tokens = split_header_tokens(line);
         let in_scene = scene_depth > 0;
         let in_levels = levels_depth > 0;
 
@@ -160,7 +146,7 @@ fn collect_test_legend_entry(
     start: usize,
     aliases: &[(String, String)],
 ) -> (Vec<String>, usize) {
-    if split_tokens(&lines[start]).as_slice() == ["legend"] {
+    if split_header_tokens(&lines[start]).as_slice() == ["legend"] {
         let mut out = vec![lines[start].clone()];
         let mut i = start + 1;
         while i < lines.len() {
@@ -182,7 +168,7 @@ fn test_puzzle_has_following_layers(lines: &[String], start: usize) -> bool {
     let mut i = start + 1;
     let mut depth = 1usize;
     while i < lines.len() && depth > 0 {
-        let tokens = split_tokens(&lines[i]);
+        let tokens = split_header_tokens(&lines[i]);
         if matches!(
             tokens.as_slice(),
             ["objects"] | ["legend"] | ["groups"] | ["sprites"] | ["rules"] | ["levels", ..]
@@ -194,7 +180,7 @@ fn test_puzzle_has_following_layers(lines: &[String], start: usize) -> bool {
         i += 1;
     }
     while i < lines.len() {
-        let tokens = split_tokens(&lines[i]);
+        let tokens = split_header_tokens(&lines[i]);
         match tokens.as_slice() {
             ["layers"] => return true,
             ["rules"]
@@ -224,7 +210,7 @@ fn modernize_test_objects_block(
     let mut layer_index = 0usize;
 
     while i < lines.len() && !is_block_close_line(&lines[i]) {
-        let tokens = split_tokens(&lines[i]);
+        let tokens = split_header_tokens(&lines[i]);
         match tokens.as_slice() {
             ["layer"] | ["layer", _] => {
                 let explicit_name = tokens.get(1).copied().map(str::to_string);
@@ -343,7 +329,7 @@ fn modernize_test_objects_block(
 }
 
 fn modernize_test_object_row(line: &str) -> Vec<(String, Option<String>)> {
-    let tokens = split_tokens(line);
+    let tokens = split_header_tokens(line);
     if tokens.len() == 2 && tokens[0].contains(':') && tokens[1].chars().count() > 1 {
         let family = tokens[0]
             .split_once(':')
@@ -402,7 +388,7 @@ fn push_test_display_alias(selector: &str, aliases: &mut Vec<(String, String)>) 
 }
 
 fn rewrite_test_display_aliases(line: &str, aliases: &[(String, String)]) -> String {
-    let tokens = split_tokens(line);
+    let tokens = split_header_tokens(line);
     if tokens.is_empty() || aliases.is_empty() {
         return line.to_string();
     }
@@ -572,7 +558,7 @@ once_all [ A ] -> [ B ]
 }
 
 #[test]
-fn section_headers_parse_existing_block_names() {
+fn section_headers_are_not_canonical_syntax() {
     let source = r#"
 title section_header
 
@@ -605,55 +591,7 @@ level start {
 }
 "#;
 
-    let loaded = parse_game(source).unwrap();
-    let goal = object_named(&loaded, "Goal");
-    let box_object = object_named(&loaded, "Box");
-    let initial = &loaded.levels[0].initial_state;
-
-    assert!(initial.has_object(&loaded.game, 0, 0, goal));
-    assert!(initial.has_object(&loaded.game, 0, 0, box_object));
-}
-
-#[test]
-fn levels_section_header_preserves_unbraced_level_separators() {
-    let source = r#"
-title section_header_levels
-
-puzzle board {
-======
-LAYERS
-======
-floor = Goal
-actor = Player
-
-=======
-LEGENDS
-=======
-. = empty
-P = Player
-G = Goal
-
-=====
-RULES
-=====
-once [ Player ] -> [ Player ]
-
-======
-LEVELS
-======
-level first
-P
-
-level second
-G
-}
-"#;
-
-    let loaded = parse_game(source).unwrap();
-
-    assert_eq!(loaded.levels.len(), 2);
-    assert_eq!(loaded.levels[0].name, "first");
-    assert_eq!(loaded.levels[1].name, "second");
+    assert!(super::parse_game2d(source).is_err());
 }
 
 #[test]
@@ -2466,8 +2404,7 @@ button join(level.num, ". ", level.title, " ", level.solved) -> goto playing(lev
         SceneEffect::Goto { scene, params }
             if scene == "playing"
                 && params.len() == 1
-                && params[0].name == "level"
-                && matches!(&params[0].value, SceneExpr::Path(path) if path == &vec!["level".to_string()])
+                && matches!(&params[0], SceneEffectParam::Level(SceneExpr::Path(path)) if path == &vec!["level".to_string()])
     ));
 }
 
@@ -2521,8 +2458,7 @@ button join(l.num, ". ", l.title) -> goto playing(l)
         SceneEffect::Goto { scene, params }
             if scene == "playing"
                 && params.len() == 1
-                && params[0].name == "level"
-                && matches!(&params[0].value, SceneExpr::Path(path) if path == &vec!["l".to_string()])
+                && matches!(&params[0], SceneEffectParam::Level(SceneExpr::Path(path)) if path == &vec!["l".to_string()])
     ));
 }
 
@@ -3080,6 +3016,53 @@ B
     let marker = object_named(&loaded, "Marker");
 
     assert!(moved.has_object(&loaded.game, 0, 0, marker));
+    assert!(moved.slot_scratch().iter().all(Vec::is_empty));
+}
+
+#[test]
+fn group_selector_removal_also_removes_movement_scratch() {
+    let source = r#"
+title group_remove_movement_scratch
+
+puzzle default {
+layers {
+  floor = Background
+  actor = Player Key Lock
+}
+empty .
+
+object Background 0
+object Player 1
+object Key 1
+object Lock 1
+group key = Key
+group lock = Lock
+group pushable = Key
+legend P = Player
+legend K = Key
+legend L = Lock
+
+rules {
+  [ Player{>} | pushable ] -> [ Player{>} | pushable{>} ]
+  [ key{>} | lock ] -> [ | ]
+  move
+}
+
+level start {
+PKL
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    let left = input_named(&loaded, "left");
+    let moved = transition_state(&loaded.game, &loaded.levels[0].initial_state, left).unwrap();
+    let player = object_named(&loaded, "Player");
+    let key = object_named(&loaded, "Key");
+    let lock = object_named(&loaded, "Lock");
+
+    assert!(moved.has_object(&loaded.game, 1, 0, player));
+    assert!(!moved.has_object(&loaded.game, 1, 0, key));
+    assert!(!moved.has_object(&loaded.game, 2, 0, lock));
     assert!(moved.slot_scratch().iter().all(Vec::is_empty));
 }
 
@@ -4197,7 +4180,7 @@ rules {
 
 level start
 P
-end
+}
 }
 "#;
 
@@ -4247,7 +4230,7 @@ rules {
 
 level start
 B
-end
+}
 }
 "#;
 
@@ -4822,6 +4805,96 @@ fn game_entry_resolution_allows_non_game_named_prelude_files() {
 }
 
 #[test]
+fn game_entry_resolution_accepts_puzzle3_extension() {
+    let dir = std::env::temp_dir().join(format!(
+        "puzzlestudio_puzzle3_entry_resolution_test_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let game_path = dir.join("game.puzzle3");
+    std::fs::write(
+        &game_path,
+        r#"
+title "3D Entry"
+
+puzzle3 cube {
+  layers {
+    actor = Player
+  }
+  rules {
+  }
+}
+"#,
+    )
+    .unwrap();
+
+    assert_eq!(super::resolve_game_entry(&dir).unwrap(), game_path);
+}
+
+#[test]
+fn parse_game_file_rejects_puzzle3_sections_in_puzzle_file() {
+    let dir = std::env::temp_dir().join(format!(
+        "puzzlestudio_puzzle_profile_mismatch_test_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let game_path = dir.join("game.puzzle");
+    std::fs::write(
+        &game_path,
+        r#"
+title "Wrong Extension"
+
+puzzle3 cube {
+  layers {
+    actor = Player
+  }
+  rules {
+  }
+}
+"#,
+    )
+    .unwrap();
+
+    let error = super::parse_game_file(&game_path).unwrap_err().to_string();
+    assert!(error.contains(".puzzle files cannot contain 3D"));
+    assert!(error.contains("use .puzzle3"));
+}
+
+#[test]
+fn parse_game_file_rejects_puzzle_sections_in_puzzle3_file() {
+    let dir = std::env::temp_dir().join(format!(
+        "puzzlestudio_puzzle3_profile_mismatch_test_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let game_path = dir.join("game.puzzle3");
+    std::fs::write(
+        &game_path,
+        r#"
+title "Wrong Extension"
+
+puzzle board {
+  layers {
+    actor = Player
+  }
+  legend {
+    P = Player
+  }
+  rules {
+  }
+  level start {
+    P
+  }
+}
+"#,
+    )
+    .unwrap();
+
+    let error = super::parse_game_file(&game_path).unwrap_err().to_string();
+    assert!(error.contains(".puzzle3 files must contain 3D"));
+}
+
+#[test]
 fn folder_without_game_prelude_is_not_auto_resolved() {
     let dir = std::env::temp_dir().join(format!(
         "puzzlestudio_entry_missing_test_{}",
@@ -5170,6 +5243,42 @@ B
         VisualSpriteKind::Solid(color) => assert_eq!(color, "#444"),
         _ => panic!("Wall should be a solid sprite"),
     }
+}
+
+#[test]
+fn puzzle_sprites_reject_braces_in_ascii_rows() {
+    let source = r##"
+title sprite_ascii_braces
+
+puzzle default {
+objects {
+layer {
+Box B
+}
+}
+legend {
+. = empty
+}
+sprites {
+Box
+#aaa
+00{00
+00000
+00000
+00000
+00000
+}
+rules {
+}
+levels {
+level start
+B
+}
+}
+"##;
+    let error = parse_game(source).unwrap_err().to_string();
+
+    assert!(error.contains("ASCII rows cannot contain braces"));
 }
 
 #[test]
@@ -6840,15 +6949,15 @@ empty .
 object A 1
 legend A = A
 
-rules
-fix once
+rules {
+fix once {
 right [ A | ] -> [ | A ]
-end
-end
+}
+}
 
-level start
+level start {
 A..
-end
+}
 }
 "#;
     let loaded = parse_game(source).unwrap();
@@ -6873,15 +6982,15 @@ empty .
 object A 1
 legend A = A
 
-rules
-fix once
+rules {
+fix once {
 repeat right [ A | ] -> [ | A ]
-end
-end
+}
+}
 
-level start
+level start {
 A..
-end
+}
 }
 "#;
     let loaded = parse_game(source).unwrap();
@@ -6978,17 +7087,17 @@ empty .
 object A 1
 legend A = A
 
-rules
-fix once
-repeat
+rules {
+fix once {
+repeat {
 right [ A | ] -> [ | A ]
-end
-end
-end
+}
+}
+}
 
-level start
+level start {
 A..
-end
+}
 }
 "#;
     let loaded = parse_game(source).unwrap();
@@ -7009,18 +7118,18 @@ puzzle default {
 layers 1
 empty .
 
-fix input
+fix input {
 lft a arrow_left
 rgt d arrow_right
-end
+}
 
 rules {
 
 }
 
-level start
+level start {
 .
-end
+}
 }
 "#;
     let error = parse_game(source).unwrap_err().to_string();
@@ -7409,7 +7518,8 @@ fn scene_effect_parser_retains_semantic_tokens() {
     assert!(matches!(
         parsed.surface.effect,
         SceneEffect::Goto { ref scene, ref params }
-            if scene == "playing" && params.len() == 1 && params[0].name == "level"
+            if scene == "playing"
+                && matches!(params.as_slice(), [SceneEffectParam::Level(SceneExpr::Path(path))] if path == &vec!["first".to_string()])
     ));
     assert!(parsed.semantic_tokens.iter().any(|token| {
         &line[token.start..token.end] == "goto" && token.kind == SemanticKind::Effect
@@ -7457,7 +7567,8 @@ fn scene_navigation_words_parse_by_state_semantics() {
     assert!(matches!(
         goto,
         SceneEffect::Goto { ref scene, ref params }
-            if scene == "detail" && params.len() == 1 && params[0].name == "selected"
+            if scene == "detail"
+                && matches!(params.as_slice(), [SceneEffectParam::Named { name, .. }] if name == "selected")
     ));
 
     let start = parse_scene_effect("start playing(first)", "").unwrap();
@@ -8526,9 +8637,9 @@ rules {
 once input directions [ player:* | ] -> [ | player:* ]
 }
 
-level start
+level start {
 r.
-end
+}
 }
 
 "#;
@@ -8565,7 +8676,7 @@ once [ player:_ ] -> [ player:_ ]
 
 level start
 l
-end
+}
 }
 
 "#;
@@ -8598,7 +8709,7 @@ once [ player ] -> [ player ]
 
 level start
 l
-end
+}
 }
 
 "#;
@@ -8666,7 +8777,7 @@ rules {
 
 level start
 .
-end
+}
 }
 
 "#;
@@ -8696,7 +8807,7 @@ rules {
 
 level start
 .
-end
+}
 }
 
 "#;
@@ -8841,6 +8952,54 @@ P.
     assert_eq!(loaded.levels.len(), 1);
     assert_eq!(loaded.levels[0].name, "unnamed level 1");
     assert_eq!(loaded.levels[0].regions.len(), 2);
+}
+
+#[test]
+fn levels_block_rejects_legacy_braced_name_without_level_keyword() {
+    let source = r#"
+title legacy_braced_level_name
+
+puzzle default {
+layers 1
+empty .
+object Player 0
+legend P = Player
+rules {
+}
+levels {
+intro {
+P
+}
+}
+}
+"#;
+    let error = parse_game(source).unwrap_err().to_string();
+
+    assert!(error.contains("braced level header must be `level <name> {`"));
+}
+
+#[test]
+fn levels_block_rejects_braces_in_ascii_rows() {
+    let source = r#"
+title level_ascii_braces
+
+puzzle default {
+layers 1
+empty .
+object Player 0
+legend P = Player
+rules {
+}
+levels {
+level start {
+P{
+}
+}
+}
+"#;
+    let error = parse_game(source).unwrap_err().to_string();
+
+    assert!(error.contains("ASCII rows cannot contain braces"));
 }
 
 #[test]
@@ -9062,7 +9221,7 @@ once [ cargo | cargo | ] -> [ | cargo | cargo ]
 
 level start
 BC.
-end
+}
 }
 "#;
     let loaded = parse_game(source).unwrap();
@@ -9242,7 +9401,7 @@ once [ box:color | box:color | ] -> [ | box:color | box:color ]
 
 level start
 rb.
-end
+}
 }
 "#;
     let loaded = parse_game(source).unwrap();
@@ -9389,7 +9548,7 @@ rules {
 
 level start
 X
-end
+}
 }
 "#;
     let error = parse_game(source).unwrap_err().to_string();
@@ -10999,7 +11158,7 @@ P
 
 #[test]
 fn spec_3d_exports_playable_puzzle_scene() {
-    let document = super::parse_game(include_str!("../../../games/spec_3d.puzzle")).unwrap();
+    let document = super::parse_game(include_str!("../../../games/spec_3d.puzzle3")).unwrap();
     let fixture_json = crate::export_loaded_document_visual_fixture_json(&document).unwrap();
 
     assert!(fixture_json.contains("\"currentScene\": \"title\""));

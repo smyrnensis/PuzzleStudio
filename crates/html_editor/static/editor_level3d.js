@@ -4356,7 +4356,7 @@ function level3dRuntimeSnapshot() {
   }
   const exportData = previewExport || extractPreviewExport(latestHtml);
   if (!isPuzzle3dExport(exportData)) {
-    return fallbackLevel3dRuntimeSnapshot(exportData);
+    return null;
   }
   const levelIndex = currentEditableLevelIndex(exportData);
   const levelEntry = exportData.levels?.[levelIndex];
@@ -4599,42 +4599,6 @@ function puzzle3dSolutionStepSnapshot(step) {
     snapshot.levels[snapshot.levelIndex].cells = JSON.parse(JSON.stringify(snapshot.cells));
   }
   return snapshot;
-}
-
-function fallbackLevel3dRuntimeSnapshot(exportData = previewExport || extractPreviewExport(latestHtml)) {
-  if (!level3d.slices.length) {
-    return null;
-  }
-  const size = {
-    width: Math.max(1, Math.trunc(Number(level3d.width) || 1)),
-    depth: Math.max(1, Math.trunc(Number(level3d.depth) || 1)),
-    height: Math.max(1, Math.trunc(Number(level3d.height) || 1)),
-  };
-  const objects = {};
-  for (const entry of level3d.palette || []) {
-    for (const name of entry.objects || []) {
-      objects[name] = level3dObjectDescriptor(name, exportData);
-    }
-  }
-  const snapshot = {
-    __kind: "puzzle3d",
-    size,
-    cells: [],
-    levels: [{ name: level3dNameInput?.value || "level_1", size, cells: [] }],
-    levelIndex: 0,
-    camera: level3dPreviewCamera(exportData),
-    sprites: exportData?.sprites || {},
-    settings: exportData?.settings || {},
-    objects,
-  };
-  const edited = level3dSnapshotLevelData(snapshot);
-  if (edited) {
-    snapshot.size = { ...edited.size };
-    snapshot.cells = edited.cells;
-    snapshot.levels[0].size = { ...edited.size };
-    snapshot.levels[0].cells = edited.cells;
-  }
-  return level3dSnapshotWithPreviewGrid(snapshot);
 }
 
 function level3dSnapshotWithPreviewGrid(snapshot) {

@@ -16,6 +16,9 @@ class Puzzle3ThreeRenderer {
     this.viewTarget = null;
     this.viewDistance = null;
     this.viewPayload = null;
+    this.animationFrame = 0;
+    this.animationKey = "";
+    this.animationStartedAt = 0;
   }
 
   render(snapshot, view = {}) {
@@ -29,7 +32,15 @@ class Puzzle3ThreeRenderer {
 
     const THREE = window.THREE;
     this.ensureRenderer(THREE);
-    const frame = buildPuzzleStudioThreeFrame(snapshot, view);
+    const animation = threeAnimationState(snapshot);
+    if (animation.key !== this.animationKey) {
+      this.animationKey = animation.key;
+      this.animationStartedAt = animation.events.length ? performance.now() : 0;
+    }
+    animation.progress = animation.events.length && this.animationStartedAt
+      ? Math.min(1, Math.max(0, (performance.now() - this.animationStartedAt) / animation.durationMs))
+      : 1;
+    const frame = buildPuzzleStudioThreeFrame(snapshot, { ...view, animationProgress: animation.progress });
     const scene = new THREE.Scene();
     scene.background = threeBackground(THREE, view.background);
     addLights(THREE, scene, frame);
@@ -37,6 +48,7 @@ class Puzzle3ThreeRenderer {
     frame.rendererViewTarget = this.viewTarget;
     frame.rendererViewDistance = this.viewDistance;
     const camera = buildCamera(THREE, frame, this.canvas);
+    applyProjectedRenderCulling(THREE, frame, camera, this.canvas);
     addMeshes(THREE, scene, frame);
     this.renderer.setSize(this.canvas.clientWidth || this.canvas.width || 1, this.canvas.clientHeight || this.canvas.height || 1, false);
     this.renderer.setClearColor(0x000000, scene.background ? 1 : 0);
@@ -46,12 +58,23 @@ class Puzzle3ThreeRenderer {
     this.camera = camera;
     this.viewPayload = threeViewPayload(frame, camera, this.canvas);
     this.updateViewportMotion(frame);
+    this.scheduleAnimationFrame(snapshot, view, animation.progress);
     return {
       rendered: true,
       objectCount: frame.objectCount,
-      animating: frame.viewport?.follow === "smooth" && frame.viewportAnimating === true,
+      animating: animation.progress < 1 || (frame.viewport?.follow === "smooth" && frame.viewportAnimating === true),
       view: this.viewPayload,
     };
+  }
+
+  scheduleAnimationFrame(snapshot, view, progress) {
+    if (progress >= 1 || this.animationFrame) {
+      return;
+    }
+    this.animationFrame = requestAnimationFrame(() => {
+      this.animationFrame = 0;
+      this.render(snapshot, view);
+    });
   }
 
   updateViewportMotion(frame) {
@@ -150,14 +173,26 @@ function buildPuzzleStudioThreeFrame(snapshot, view = {}) {
     camera: snapshot.camera || {},
     editorView: view.editorView || snapshot.view || {},
     settings: snapshot.settings || {},
+    animationEvents: Array.isArray(snapshot.animationEvents) ? snapshot.animationEvents : [],
+    animationProgress: Number.isFinite(Number(view.animationProgress)) ? Number(view.animationProgress) : 1,
     viewport: normalizeViewport(snapshot.viewport),
     viewportSnapNext: view.viewportSnapNext === true,
   };
   frame.focusCell = frame.viewport ? viewportFocusCell(frame) : null;
   frame.viewportRanges = viewportRanges(frame);
-  frame.renderRanges = renderRanges(frame);
-  frame.renderCells = frame.renderRanges ? cells.filter((cell) => cellInRanges(cell, frame.renderRanges)) : cells;
+  frame.renderCells = cells;
   return frame;
+}
+
+function threeAnimationState(snapshot) {
+  const events = Array.isArray(snapshot?.animationEvents) ? snapshot.animationEvents : [];
+  const tween = snapshot?.settings?.animation?.tween || snapshot?.animation?.tween || {};
+  return {
+    events,
+    durationMs: Math.max(1, Number(tween.intervalMs || 250)),
+    key: JSON.stringify(events),
+    progress: 1,
+  };
 }
 
 function normalizeSize(size) {
@@ -370,6 +405,93 @@ function addMeshes(THREE, scene, frame) {
   }
 }
 
+function applyProjectedRenderCulling(THREE, frame, camera, canvas) {
+  if (!projectedRenderCullingEnabled(frame)) {
+    frame.renderCells = frame.cells;
+    return;
+  }
+  camera.updateProjectionMatrix?.();
+  camera.updateMatrixWorld?.();
+  const width = Math.max(1, Number(canvas.clientWidth) || Number(canvas.width) || 1);
+  const height = Math.max(1, Number(canvas.clientHeight) || Number(canvas.height) || 1);
+  const marginPixels = Math.max(24, Math.min(width, height) * 0.08);
+  const marginX = (marginPixels / width) * 2;
+  const marginY = (marginPixels / height) * 2;
+  const extent = conservativeCellRenderExtent(frame);
+  frame.renderCells = frame.cells.filter((cell) => {
+    const bounds = cellCoordinateRenderBounds(frame, cell, extent);
+    const projected = projectedRenderBounds(THREE, bounds, camera);
+    return projected
+      && projected.maxX >= -1 - marginX
+      && projected.minX <= 1 + marginX
+      && projected.maxY >= -1 - marginY
+      && projected.minY <= 1 + marginY
+      && projected.maxZ >= -1
+      && projected.minZ <= 1;
+  });
+}
+
+function projectedRenderCullingEnabled(frame) {
+  return Boolean(frame.viewportRanges && frame.focusCell);
+}
+
+function cellCoordinateRenderBounds(frame, cell, extent = conservativeCellRenderExtent(frame)) {
+  const base = renderPositionForCell(frame, cell.position || {});
+  return {
+    minX: base.x - extent.x,
+    maxX: base.x + extent.x,
+    minY: base.y - extent.yBelow,
+    maxY: base.y + extent.yAbove,
+    minZ: base.z - extent.z,
+    maxZ: base.z + extent.z,
+  };
+}
+
+function conservativeCellRenderExtent(frame) {
+  const maxLayer = Math.max(
+    0,
+    ...Array.from(frame.objectCatalog?.values?.() || [], (object) => Number(object.layer) || 0),
+  );
+  return {
+    x: 0.65,
+    yBelow: 0.65,
+    yAbove: 0.65 + maxLayer * 0.08,
+    z: 0.65,
+  };
+}
+
+function emptyProjectedBounds() {
+  return {
+    minX: Infinity,
+    maxX: -Infinity,
+    minY: Infinity,
+    maxY: -Infinity,
+    minZ: Infinity,
+    maxZ: -Infinity,
+  };
+}
+
+function projectedRenderBounds(THREE, bounds, camera) {
+  const projected = emptyProjectedBounds();
+  for (const x of [bounds.minX, bounds.maxX]) {
+    for (const y of [bounds.minY, bounds.maxY]) {
+      for (const z of [bounds.minZ, bounds.maxZ]) {
+        const point = new THREE.Vector3(x, y, z).project(camera);
+        if (!Number.isFinite(point.x) || !Number.isFinite(point.y) || !Number.isFinite(point.z)) {
+          continue;
+        }
+        projected.minX = Math.min(projected.minX, point.x);
+        projected.maxX = Math.max(projected.maxX, point.x);
+        projected.minY = Math.min(projected.minY, point.y);
+        projected.maxY = Math.max(projected.maxY, point.y);
+        projected.minZ = Math.min(projected.minZ, point.z);
+        projected.maxZ = Math.max(projected.maxZ, point.z);
+      }
+    }
+  }
+  return Number.isFinite(projected.minX) ? projected : null;
+}
+
 function frameVisibleVoxels(frame) {
   const voxels = [];
   const occupied = emptyVoxelOccupancy();
@@ -468,6 +590,11 @@ function voxelInstances(frame, position, object, sourceKey, objectOrder = 0) {
   const size = visual.size;
   const step = 1 / Math.max(size.width, size.height, size.depth, 1);
   const base = renderPositionForCell(frame, position);
+  const animation = animationForObjectAtPosition(frame, object, position);
+  const offset = animationOffset3(frame, animation);
+  base.x += offset.x;
+  base.y += offset.y;
+  base.z += offset.z;
   return visual.voxels.map((voxel) => {
     const local = spriteVoxelLocalPosition(voxel, step);
     const layerY = object.layer * 0.08;
@@ -494,6 +621,33 @@ function voxelInstances(frame, position, object, sourceKey, objectOrder = 0) {
       objectOrder,
     };
   });
+}
+
+function animationForObjectAtPosition(frame, object, position) {
+  const objectId = Number(object?.id);
+  if (!Number.isFinite(objectId)) {
+    return null;
+  }
+  return (frame.animationEvents || []).find((event) =>
+    event.kind === "move"
+    && Number(event.objectId) === objectId
+    && Number(event.toX) === Number(position?.x)
+    && Number(event.toY) === Number(position?.y)
+    && Number(event.toZ ?? 0) === Number(position?.z ?? 0)
+  ) || null;
+}
+
+function animationOffset3(frame, animation) {
+  if (!animation) {
+    return { x: 0, y: 0, z: 0 };
+  }
+  const progress = Math.min(1, Math.max(0, Number(frame.animationProgress) || 0));
+  const remaining = 1 - progress;
+  return {
+    x: (Number(animation.fromX) - Number(animation.toX)) * remaining,
+    y: (Number(animation.fromZ ?? 0) - Number(animation.toZ ?? 0)) * remaining,
+    z: -(Number(animation.fromY) - Number(animation.toY)) * remaining,
+  };
 }
 
 function mergedVoxelFaces(voxels, occupied) {
@@ -913,42 +1067,12 @@ function rangeForViewportAxis(center, span, mode) {
   };
 }
 
-function cellInRanges(cell, ranges) {
-  const position = cell.position || {};
-  return Number(position.x) >= ranges.x.min
-    && Number(position.x) < ranges.x.max
-    && Number(position.y) >= ranges.y.min
-    && Number(position.y) < ranges.y.max
-    && Number(position.z) >= ranges.z.min
-    && Number(position.z) < ranges.z.max;
-}
-
-function renderRanges(frame) {
-  if (!frame.viewportRanges) {
-    return null;
-  }
-  const viewport = frame.viewport || {};
-  const box = viewport.framingBox || {};
-  const marginX = Math.max(2, Math.ceil(Number(box.width) || 1));
-  const marginY = Math.max(2, Math.ceil(Number(box.depth) || 1));
-  const marginZ = box.height === "full" ? 0 : Math.max(1, Math.ceil(Number(box.height) || 1));
-  return expandRanges(frame.viewportRanges, { x: marginX, y: marginY, z: marginZ });
-}
-
-function expandRanges(ranges, margin) {
-  return {
-    x: { min: ranges.x.min - margin.x, max: ranges.x.max + margin.x },
-    y: { min: ranges.y.min - margin.y, max: ranges.y.max + margin.y },
-    z: { min: ranges.z.min - margin.z, max: ranges.z.max + margin.z },
-  };
-}
-
 function buildCamera(THREE, frame, canvas) {
   const width = canvas.clientWidth || canvas.width || 1;
   const height = canvas.clientHeight || canvas.height || 1;
   const aspect = width / Math.max(1, height);
   const cameraSettings = frame.camera || {};
-  const zoom = Math.max(0.1, Number(cameraSettings.zoom ?? frame.editorView?.zoom ?? 1) || 1);
+  const zoom = cameraZoom(frame);
   const view = cameraViewForFrame(frame, aspect, zoom);
   const targetPoint = new THREE.Vector3(view.target.x, view.target.y, view.target.z);
   const distance = view.distance;
@@ -978,7 +1102,7 @@ function threeViewPayload(frame, camera, canvas) {
   const width = Math.max(1, Number(canvas.clientWidth) || Number(canvas.width) || 1);
   const height = Math.max(1, Number(canvas.clientHeight) || Number(canvas.height) || 1);
   const rect = canvas.getBoundingClientRect();
-  const cameraView = frame.cameraView || cameraViewForFrame(frame, width / height, Number(frame.camera?.zoom ?? frame.editorView?.zoom ?? 1) || 1);
+  const cameraView = frame.cameraView || cameraViewForFrame(frame, width / height, cameraZoom(frame));
   return {
     width,
     height,
@@ -1042,15 +1166,18 @@ function cameraViewForFrame(frame, aspect, zoom) {
     y: (ranges.y.min + ranges.y.max) / 2,
     z: (ranges.z.min + ranges.z.max) / 2,
   };
-  const logicalTarget = frame.viewportRanges ? center : {
-    ...center,
-    ...(frame.editorView?.target || {}),
-  };
-  const target = renderPositionForCell(frame, logicalTarget);
+  const target = frame.viewportRanges
+    ? viewportFocusRenderTarget(frame)
+    : renderPositionForCell(frame, {
+        ...center,
+        ...(frame.editorView?.target || {}),
+      });
   const visibleWidth = Math.max(1, ranges.x.max - ranges.x.min);
   const visibleDepth = Math.max(1, ranges.y.max - ranges.y.min);
   const fov = 34 * Math.PI / 180;
-  const visibleHeight = Math.max(visibleDepth, visibleWidth / Math.max(0.01, aspect)) * 1.08;
+  const visibleHeight = frame.viewportRanges
+    ? viewportProjectedVisibleHeight(frame, target, aspect)
+    : Math.max(visibleDepth, visibleWidth / Math.max(0.01, aspect)) * 1.08;
   const fittedVisibleHeight = visibleHeight * 1.12 / zoom;
   const targetDistance = Math.max(4, fittedVisibleHeight / (2 * Math.tan(fov / 2)));
   const snap = frame.viewport?.follow !== "smooth" || frame.viewportSnapNext || !thisLikeHasView(frame);
@@ -1058,11 +1185,15 @@ function cameraViewForFrame(frame, aspect, zoom) {
   const previousDistance = Number(frame.rendererViewDistance);
   const cameraTarget = snap || !previousTarget
     ? target
-    : {
-        x: lerp(previousTarget.x, target.x, 0.12),
-        y: lerp(previousTarget.y, target.y, 0.12),
-        z: lerp(previousTarget.z, target.z, 0.12),
-      };
+    : smoothViewportTarget(
+        {
+          x: lerp(previousTarget.x, target.x, 0.12),
+          y: lerp(previousTarget.y, target.y, 0.12),
+          z: lerp(previousTarget.z, target.z, 0.12),
+        },
+        target,
+        frame,
+      );
   const distance = snap || !Number.isFinite(previousDistance)
     ? targetDistance
     : lerp(previousDistance, targetDistance, 0.12);
@@ -1078,6 +1209,156 @@ function cameraViewForFrame(frame, aspect, zoom) {
 
 function thisLikeHasView(frame) {
   return Boolean(frame.rendererViewTarget) && Number.isFinite(Number(frame.rendererViewDistance));
+}
+
+function smoothViewportTarget(next, target, frame) {
+  const dx = target.x - next.x;
+  const dy = target.y - next.y;
+  const dz = target.z - next.z;
+  const distance = Math.hypot(dx, dy, dz);
+  const maxLag = smoothViewportMaxLag(frame);
+  if (!Number.isFinite(distance) || distance <= maxLag) {
+    return next;
+  }
+  const catchUp = (distance - maxLag) / distance;
+  return {
+    x: next.x + dx * catchUp,
+    y: next.y + dy * catchUp,
+    z: next.z + dz * catchUp,
+  };
+}
+
+function smoothViewportMaxLag(frame) {
+  const ranges = frame.viewportRanges;
+  if (!ranges) {
+    return 3.5;
+  }
+  const width = Math.max(1, ranges.x.max - ranges.x.min);
+  const depth = Math.max(1, ranges.y.max - ranges.y.min);
+  const horizontalLag = Math.min(width, depth) / 2;
+  if (frame.viewport?.framingBox?.height === "full") {
+    return Math.max(1, horizontalLag);
+  }
+  const height = Math.max(1, ranges.z.max - ranges.z.min);
+  return Math.max(1, Math.min(horizontalLag, height / 2));
+}
+
+function cameraZoom(frame) {
+  const cameraSettings = frame.camera || {};
+  const cameraValue = Math.max(0.1, Number(cameraSettings.zoom ?? 1) || 1);
+  const viewValue = Math.max(0.1, Number(frame.editorView?.zoom ?? 1) || 1);
+  return cameraValue * viewValue;
+}
+
+function viewportFocusRenderTarget(frame) {
+  const visualBounds = viewportFocusVisualRenderBounds(frame);
+  if (visualBounds) {
+    return {
+      x: (visualBounds.minX + visualBounds.maxX) / 2,
+      y: (visualBounds.minY + visualBounds.maxY) / 2,
+      z: (visualBounds.minZ + visualBounds.maxZ) / 2,
+    };
+  }
+  return renderPositionForCell(frame, frame.focusCell?.position || {});
+}
+
+function viewportFocusVisualRenderBounds(frame) {
+  const viewport = frame.viewport || {};
+  const focusObjects = new Set(viewport.focusObjects || []);
+  const bounds = {
+    minX: Infinity,
+    maxX: -Infinity,
+    minY: Infinity,
+    maxY: -Infinity,
+    minZ: Infinity,
+    maxZ: -Infinity,
+  };
+  for (const [objectIndex, object] of (frame.focusCell?.objects || []).entries()) {
+    if (!viewportObjectMatches(object, viewport, focusObjects)) {
+      continue;
+    }
+    const sourceKey = `${cellKey(frame.focusCell.position)}:${objectIndex}`;
+    const objectOrder = objectRenderOrder(object, objectIndex);
+    for (const voxel of objectVoxels(frame, frame.focusCell.position || {}, object, sourceKey, objectOrder)) {
+      bounds.minX = Math.min(bounds.minX, voxel.bounds.x0);
+      bounds.maxX = Math.max(bounds.maxX, voxel.bounds.x1);
+      bounds.minY = Math.min(bounds.minY, voxel.bounds.y0);
+      bounds.maxY = Math.max(bounds.maxY, voxel.bounds.y1);
+      bounds.minZ = Math.min(bounds.minZ, voxel.bounds.z0);
+      bounds.maxZ = Math.max(bounds.maxZ, voxel.bounds.z1);
+    }
+  }
+  return Number.isFinite(bounds.minX) ? bounds : null;
+}
+
+function viewportProjectedVisibleHeight(frame, target, aspect) {
+  const bounds = viewportProjectedBounds(frame);
+  if (!bounds) {
+    const ranges = frame.viewportRanges || fullFrameRanges(frame);
+    const visibleWidth = Math.max(1, ranges.x.max - ranges.x.min);
+    const visibleDepth = Math.max(1, ranges.y.max - ranges.y.min);
+    return Math.max(visibleDepth, visibleWidth / Math.max(0.01, aspect));
+  }
+  const anchor = projectRenderPointForCamera(target, frame.camera || {});
+  const halfWidth = Math.max(
+    0.001,
+    Math.max(Math.abs(bounds.minX - anchor.x), Math.abs(bounds.maxX - anchor.x)),
+  );
+  const halfHeight = Math.max(
+    0.001,
+    Math.max(Math.abs(bounds.minY - anchor.y), Math.abs(bounds.maxY - anchor.y)),
+  );
+  return Math.max(halfHeight * 2, (halfWidth * 2) / Math.max(0.01, aspect));
+}
+
+function viewportProjectedBounds(frame) {
+  if (!frame.viewportRanges) {
+    return null;
+  }
+  const points = [];
+  for (const x of [frame.viewportRanges.x.min, frame.viewportRanges.x.max]) {
+    for (const y of [frame.viewportRanges.y.min, frame.viewportRanges.y.max]) {
+      for (const z of [frame.viewportRanges.z.min, frame.viewportRanges.z.max]) {
+        points.push(
+          projectRenderPointForCamera(renderPositionForCell(frame, { x, y, z }), frame.camera || {}),
+        );
+      }
+    }
+  }
+  return projectedPointBounds(points);
+}
+
+function projectRenderPointForCamera(point, cameraSettings) {
+  const yaw = degreesToRadians(cameraSettings.yawDegrees ?? 0);
+  const pitch = degreesToRadians(clamp(Number(cameraSettings.pitchDegrees ?? 35) || 35, -90, 90));
+  const horizontal = Math.cos(pitch);
+  const right = { x: Math.cos(yaw), y: 0, z: Math.sin(yaw) };
+  const forward = {
+    x: Math.sin(yaw) * horizontal,
+    y: -Math.sin(pitch),
+    z: -Math.cos(yaw) * horizontal,
+  };
+  const up = {
+    x: right.y * forward.z - right.z * forward.y,
+    y: right.z * forward.x - right.x * forward.z,
+    z: right.x * forward.y - right.y * forward.x,
+  };
+  return {
+    x: point.x * right.x + point.y * right.y + point.z * right.z,
+    y: point.x * up.x + point.y * up.y + point.z * up.z,
+  };
+}
+
+function projectedPointBounds(points) {
+  return points.reduce(
+    (bounds, point) => ({
+      minX: Math.min(bounds.minX, point.x),
+      maxX: Math.max(bounds.maxX, point.x),
+      minY: Math.min(bounds.minY, point.y),
+      maxY: Math.max(bounds.maxY, point.y),
+    }),
+    { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity },
+  );
 }
 
 function fullFrameRanges(frame) {

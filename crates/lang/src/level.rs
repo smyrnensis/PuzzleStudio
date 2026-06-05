@@ -88,6 +88,11 @@ fn split_regions(lines: &[String]) -> Result<Vec<Vec<String>>, AppError> {
                 "level regions must be rectangular".to_string(),
             ));
         }
+        if region.iter().any(|row| row.contains(['{', '}'])) {
+            return Err(AppError::Parse(
+                "ASCII rows cannot contain braces".to_string(),
+            ));
+        }
     }
     Ok(regions)
 }

@@ -6,9 +6,10 @@ use crate::{
     LevelBundle3, LevelCell3, LevelEntry3, Lifecycle3, LifecycleCommand3, LineMatchCellTemplate3,
     LineOrientation3, LinePatternTemplate3, LineRuleTemplate3, LineWriteOpTemplate3,
     LocalWriteOpTemplate3, MatchCell3, ObjectDef3, ObjectFamily3, ObjectId, ObjectSelector3,
-    ObjectVariant3, Offset3, Pattern3, Rule3, RuleEffect3, SelectorCatalog3, SelectorGroup3,
-    SelectorScratch3, SelectorTag3, Size3, Sprite3, SpriteColor3, SpriteSet3, SpriteVoxels3,
-    VariantAxis3, WinCondition3, lower_dense_rule_template, lower_line_rule_template,
+    ObjectSetMatcher3, ObjectVariant3, Offset3, Pattern3, Rule3, RuleEffect3, ScratchId3,
+    SelectorCatalog3, SelectorGroup3, SelectorScratch3, SelectorTag3, Size3, Sprite3, SpriteColor3,
+    SpriteSet3, SpriteVoxels3, VariantAxis3, WinCondition3, WriteOp3, lower_dense_rule_template,
+    lower_line_rule_template,
 };
 use puzzle_kernel::{LocalFrame, LocalFrameExtent};
 
@@ -244,26 +245,8 @@ impl Parser3 {
             } else if let Some(name) = parse_scene_header(&line) {
                 let _ = name;
                 index = skip_braced_block(&self.lines, index + 1)?;
-            } else if let Some(rest) = line
-                .strip_prefix("rules ")
-                .and_then(|head| head.strip_suffix(" {"))
-                .or_else(|| (line == "rules {").then_some(""))
-            {
-                self.local_frame_modifier =
-                    (!rest.trim().is_empty()).then(|| rest.trim().to_string());
-                index = self.parse_rules_block(index + 1)?;
-            } else if let Some(rest) = line
-                .strip_prefix("on_level_start ")
-                .and_then(|head| head.strip_suffix(" {"))
-                .or_else(|| (line == "on_level_start {").then_some(""))
-            {
-                self.on_level_start_local_frame_modifier =
-                    (!rest.trim().is_empty()).then(|| rest.trim().to_string());
-                index = self.parse_on_level_start_block(index + 1)?;
-            } else if line == "on_level_clear {" {
-                index = self.parse_on_level_clear_block(index + 1)?;
-            } else if line == "on_last_level_clear {" {
-                index = self.parse_on_last_level_clear_block(index + 1)?;
+            } else if let Some(block) = puzzle_authoring::rule_program_block_surface(&line) {
+                index = self.parse_rule_program_block(block, index + 1)?;
             } else if line == "win_conditions {" {
                 index = self.parse_win_conditions_block(index + 1)?;
             } else if line == "render {" {
@@ -312,11 +295,11 @@ impl Parser3 {
         let line_gap_limit = line_gap_limit_from_levels(&self.level_specs);
         let mut rules = Vec::new();
         for line in &self.rule_lines {
-            rules.extend(parse_rule_line(line, &catalog, line_gap_limit)?);
+            rules.extend(parse_rule_line(line, &catalog, &game, line_gap_limit)?);
         }
         let mut on_level_start = Vec::new();
         for line in &self.on_level_start_lines {
-            on_level_start.extend(parse_rule_line(line, &catalog, line_gap_limit)?);
+            on_level_start.extend(parse_rule_line(line, &catalog, &game, line_gap_limit)?);
         }
         let on_level_clear = self
             .on_level_clear_lines
@@ -391,26 +374,8 @@ impl Parser3 {
                 index = self.parse_groups_block(index + 1)?;
             } else if line == "group {" {
                 return Err(message("`group { ... }` was removed; use `groups { ... }`"));
-            } else if let Some(rest) = line
-                .strip_prefix("rules ")
-                .and_then(|head| head.strip_suffix(" {"))
-                .or_else(|| (line == "rules {").then_some(""))
-            {
-                self.local_frame_modifier =
-                    (!rest.trim().is_empty()).then(|| rest.trim().to_string());
-                index = self.parse_rules_block(index + 1)?;
-            } else if let Some(rest) = line
-                .strip_prefix("on_level_start ")
-                .and_then(|head| head.strip_suffix(" {"))
-                .or_else(|| (line == "on_level_start {").then_some(""))
-            {
-                self.on_level_start_local_frame_modifier =
-                    (!rest.trim().is_empty()).then(|| rest.trim().to_string());
-                index = self.parse_on_level_start_block(index + 1)?;
-            } else if line == "on_level_clear {" {
-                index = self.parse_on_level_clear_block(index + 1)?;
-            } else if line == "on_last_level_clear {" {
-                index = self.parse_on_last_level_clear_block(index + 1)?;
+            } else if let Some(block) = puzzle_authoring::rule_program_block_surface(&line) {
+                index = self.parse_rule_program_block(block, index + 1)?;
             } else if line == "win_conditions {" {
                 index = self.parse_win_conditions_block(index + 1)?;
             } else if line == "render {" {
@@ -839,6 +804,31 @@ impl Parser3 {
             index += 1;
         }
         Err(message("level block missing }"))
+    }
+
+    fn parse_rule_program_block(
+        &mut self,
+        block: puzzle_authoring::RuleProgramBlockSurface<'_>,
+        start: usize,
+    ) -> Result<usize, ParseError3> {
+        match block {
+            puzzle_authoring::RuleProgramBlockSurface::Rules { modifier } => {
+                self.local_frame_modifier =
+                    (!modifier.trim().is_empty()).then(|| modifier.trim().to_string());
+                self.parse_rules_block(start)
+            }
+            puzzle_authoring::RuleProgramBlockSurface::OnLevelStart { modifier } => {
+                self.on_level_start_local_frame_modifier =
+                    (!modifier.trim().is_empty()).then(|| modifier.trim().to_string());
+                self.parse_on_level_start_block(start)
+            }
+            puzzle_authoring::RuleProgramBlockSurface::OnLevelClear => {
+                self.parse_on_level_clear_block(start)
+            }
+            puzzle_authoring::RuleProgramBlockSurface::OnLastLevelClear => {
+                self.parse_on_last_level_clear_block(start)
+            }
+        }
     }
 
     fn parse_rules_block(&mut self, mut index: usize) -> Result<usize, ParseError3> {
@@ -2188,6 +2178,7 @@ fn default_local_frame_focus_objects(
 fn parse_rule_line(
     line: &str,
     catalog: &SelectorCatalog3,
+    game: &Game3,
     line_gap_limit: u16,
 ) -> Result<Vec<Rule3>, ParseError3> {
     if let Some(effect) = parse_camera_rule_effect_line(line)? {
@@ -2196,17 +2187,63 @@ fn parse_rule_line(
         ]);
     }
 
-    if let Some((orientation, rest)) = parse_input_line_rewrite_prefix(line)? {
-        let (lhs, rhs, effects) = parse_rewrite(rest)?;
-        let mut rules = lower_input_line_rewrite(catalog, orientation, lhs, rhs, line_gap_limit)
-            .map_err(|error| message(format!("failed to lower input line rule: {error}")))?;
-        attach_rule_effects(&mut rules, &effects);
-        return Ok(rules);
-    }
-
-    let (prefix, rest) = line
-        .split_once(' ')
-        .ok_or_else(|| message("rule must be: <orientation> [ ... ] -> [ ... ]"))?;
+    let surface =
+        puzzle_authoring::rule_statement_surface(line).map_err(|error| message(error.message()))?;
+    let surface = match surface {
+        puzzle_authoring::RuleStatementSurface::RuleLine(surface) => surface,
+        puzzle_authoring::RuleStatementSurface::ApplicationBlock { .. } => {
+            return Err(message(
+                "3D rule blocks do not support nested application blocks",
+            ));
+        }
+        puzzle_authoring::RuleStatementSurface::Call { .. } => {
+            return Err(message("3D rule blocks do not support routine calls"));
+        }
+    };
+    let (application, prefix, rest) = match surface {
+        puzzle_authoring::RuleLineSurface::StandardStep(
+            puzzle_authoring::StandardRuleStepSurface::Move,
+        ) => return Ok(standard_move_rules3(game)),
+        puzzle_authoring::RuleLineSurface::InputRewrite {
+            application,
+            surface,
+        } => {
+            let orientation = match surface.orientation {
+                Some(orientation) => parse_line_orientation(orientation)?,
+                None => LineOrientation3::DirectionSet(DirectionSet3::Directions),
+            };
+            let (lhs, rhs, effects) = parse_rewrite(surface.rewrite)?;
+            let mut rules =
+                lower_input_line_rewrite(catalog, orientation, lhs, rhs, line_gap_limit).map_err(
+                    |error| message(format!("failed to lower input line rule: {error}")),
+                )?;
+            apply_rule_application(&mut rules, application);
+            attach_rule_effects(&mut rules, &effects);
+            return Ok(rules);
+        }
+        puzzle_authoring::RuleLineSurface::NeutralRewrite {
+            application,
+            rewrite,
+        } => {
+            let (lhs, rhs, effects) = parse_rewrite(rewrite)?;
+            let mut rules = lower_line_rewrite(
+                catalog,
+                LineOrientation3::DirectionSet(DirectionSet3::Directions),
+                lhs,
+                rhs,
+                line_gap_limit,
+            )
+            .map_err(|error| message(format!("failed to lower line rule: {error}")))?;
+            apply_rule_application(&mut rules, application);
+            attach_rule_effects(&mut rules, &effects);
+            return Ok(rules);
+        }
+        puzzle_authoring::RuleLineSurface::OrientedRewrite {
+            application,
+            orientation,
+            rewrite,
+        } => (application, orientation, rewrite),
+    };
     let (lhs, rhs, effects) = parse_rewrite(rest)?;
     if prefix.contains(':') || matches!(prefix, "frames" | "canonical" | "mirrored") {
         let orientation = parse_frame_orientation(prefix)?;
@@ -2217,6 +2254,7 @@ fn parse_rule_line(
         );
         let mut rules = lower_dense_rule_template(catalog, &rule)
             .map_err(|error| message(format!("failed to lower dense rule: {error:?}")))?;
+        apply_rule_application(&mut rules, application);
         attach_rule_effects(&mut rules, &effects);
         return Ok(rules);
     }
@@ -2224,33 +2262,86 @@ fn parse_rule_line(
     let orientation = parse_line_orientation(prefix)?;
     let mut rules = lower_line_rewrite(catalog, orientation, lhs, rhs, line_gap_limit)
         .map_err(|error| message(format!("failed to lower line rule: {error}")))?;
+    apply_rule_application(&mut rules, application);
     attach_rule_effects(&mut rules, &effects);
     Ok(rules)
 }
 
-fn parse_input_line_rewrite_prefix<'a>(
-    line: &'a str,
-) -> Result<Option<(LineOrientation3, &'a str)>, ParseError3> {
-    let Some(rest) = line.strip_prefix("input ").map(str::trim_start) else {
-        return Ok(None);
+fn apply_rule_application(
+    rules: &mut [Rule3],
+    application: Option<puzzle_authoring::RuleApplicationSurface>,
+) {
+    let Some(application) = application else {
+        return;
     };
-    if rest.starts_with('[') {
-        return Ok(Some((
-            LineOrientation3::DirectionSet(DirectionSet3::Directions),
-            rest,
-        )));
+    let application = match application {
+        puzzle_authoring::RuleApplicationSurface::Once => crate::RuleApplication3::Once,
+        puzzle_authoring::RuleApplicationSurface::OnceAll => crate::RuleApplication3::OnceAll,
+        puzzle_authoring::RuleApplicationSurface::OncePerLevel => {
+            crate::RuleApplication3::OncePerLevel
+        }
+        puzzle_authoring::RuleApplicationSurface::Repeat => crate::RuleApplication3::UntilStable,
+    };
+    for rule in rules {
+        rule.application = application;
     }
+}
 
-    let (orientation, rewrite) = rest
-        .split_once(' ')
-        .ok_or_else(|| message("input rule must be: input <orientation> [ ... ] -> [ ... ]"))?;
-    let rewrite = rewrite.trim_start();
-    if !rewrite.starts_with('[') {
-        return Err(message(
-            "input rule must be: input <orientation> [ ... ] -> [ ... ]",
-        ));
+fn standard_move_rules3(game: &Game3) -> Vec<Rule3> {
+    let mut rules = Vec::new();
+    let directions = Direction3::directions();
+    let mut layer_objects = HashMap::<LayerId, Vec<ObjectId>>::new();
+    for object in &game.objects {
+        layer_objects
+            .entry(object.layer_id)
+            .or_default()
+            .push(object.id);
     }
-    Ok(Some((parse_line_orientation(orientation)?, rewrite)))
+    for (layer, objects) in layer_objects {
+        if objects.is_empty() {
+            continue;
+        }
+        for (direction_index, direction) in directions.iter().enumerate() {
+            let binding = 0;
+            let mut cell = MatchCell3::new(Offset3::ZERO);
+            cell.require_object_sets.push(ObjectSetMatcher3 {
+                binding,
+                layer,
+                objects: objects.clone(),
+            });
+            cell.require_object_set_scratch
+                .push(crate::ObjectSetScratchPattern3 {
+                    binding,
+                    scratch: ScratchId3(puzzle_authoring::ANONYMOUS_MOVEMENT_SCRATCH_INDEX),
+                    value: Some(direction_index as i64),
+                    match_value: puzzle_kernel::ScratchValueMatch::Exact,
+                });
+            let mut destination = MatchCell3::new(direction.offset);
+            for layer_object in &objects {
+                destination = destination.forbid(*layer_object);
+            }
+            rules.push(Rule3::repeated(
+                Pattern3::new(vec![cell, destination]),
+                vec![
+                    WriteOp3::MoveObjectSet {
+                        component: 0,
+                        from_offset: Offset3::ZERO,
+                        to_offset: direction.offset,
+                        binding,
+                    },
+                    WriteOp3::RemoveObjectSetScratch {
+                        component: 0,
+                        offset: direction.offset,
+                        binding,
+                        scratch: ScratchId3(puzzle_authoring::ANONYMOUS_MOVEMENT_SCRATCH_INDEX),
+                        value: None,
+                        match_value: puzzle_kernel::ScratchValueMatch::Any,
+                    },
+                ],
+            ));
+        }
+    }
+    rules
 }
 
 fn attach_rule_effects(rules: &mut [Rule3], effects: &[RuleEffect3]) {
@@ -2622,17 +2713,19 @@ fn lower_line_rewrite(
     if before.gap_count != after.gap_count {
         return Err("line rewrite sides must contain the same number of ... gaps".to_string());
     }
-    let writes = infer_line_writes_from_patterns(&before, &after);
     let mut rules = Vec::new();
-    for gaps in line_gap_assignments(before.gap_count, line_gap_limit) {
-        let rule = LineRuleTemplate3::once(
-            orientation.clone(),
-            before.materialize(&gaps).map_err(parse_error_message)?,
-            materialize_line_writes(&writes, &gaps).map_err(parse_error_message)?,
-        );
-        rules.extend(
-            lower_line_rule_template(catalog, &rule).map_err(|error| format!("{error:?}"))?,
-        );
+    for (before, after) in expand_line_movement_scratch_sets3(&before, &after) {
+        let writes = infer_line_writes_from_patterns(&before, &after);
+        for gaps in line_gap_assignments(before.gap_count, line_gap_limit) {
+            let rule = LineRuleTemplate3::once(
+                orientation.clone(),
+                before.materialize(&gaps).map_err(parse_error_message)?,
+                materialize_line_writes(&writes, &gaps).map_err(parse_error_message)?,
+            );
+            rules.extend(
+                lower_line_rule_template(catalog, &rule).map_err(|error| format!("{error:?}"))?,
+            );
+        }
     }
     Ok(rules)
 }
@@ -2649,22 +2742,24 @@ fn lower_input_line_rewrite(
     if before.gap_count != after.gap_count {
         return Err("line rewrite sides must contain the same number of ... gaps".to_string());
     }
-    let writes = infer_line_writes_from_patterns(&before, &after);
     let mut rules = Vec::new();
-    for gaps in line_gap_assignments(before.gap_count, line_gap_limit) {
-        for direction in directions_for_line_orientation(orientation.clone()) {
-            let rule = LineRuleTemplate3::once(
-                LineOrientation3::Direction(direction),
-                before.materialize(&gaps).map_err(parse_error_message)?,
-                materialize_line_writes(&writes, &gaps).map_err(parse_error_message)?,
-            );
-            let input = input_for_direction(direction);
-            let mut lowered =
-                lower_line_rule_template(catalog, &rule).map_err(|error| format!("{error:?}"))?;
-            for rule in &mut lowered {
-                rule.guards.push(crate::Guard3::InputIs(input));
+    for (before, after) in expand_line_movement_scratch_sets3(&before, &after) {
+        let writes = infer_line_writes_from_patterns(&before, &after);
+        for gaps in line_gap_assignments(before.gap_count, line_gap_limit) {
+            for direction in directions_for_line_orientation(orientation.clone()) {
+                let rule = LineRuleTemplate3::once(
+                    LineOrientation3::Direction(direction),
+                    before.materialize(&gaps).map_err(parse_error_message)?,
+                    materialize_line_writes(&writes, &gaps).map_err(parse_error_message)?,
+                );
+                let input = input_for_direction(direction);
+                let mut lowered = lower_line_rule_template(catalog, &rule)
+                    .map_err(|error| format!("{error:?}"))?;
+                for rule in &mut lowered {
+                    rule.guards.push(crate::Guard3::InputIs(input));
+                }
+                rules.extend(lowered);
             }
-            rules.extend(lowered);
         }
     }
     Ok(rules)
@@ -2674,6 +2769,194 @@ fn directions_for_line_orientation(orientation: LineOrientation3) -> Vec<Directi
     match orientation {
         LineOrientation3::Direction(direction) => vec![direction],
         LineOrientation3::DirectionSet(set) => set.directions(),
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ScratchSetBinding3 {
+    key: String,
+    values: &'static [&'static str],
+}
+
+fn expand_line_movement_scratch_sets3(
+    before: &LinePatternWithGaps3,
+    after: &LinePatternWithGaps3,
+) -> Vec<(LinePatternWithGaps3, LinePatternWithGaps3)> {
+    let mut bindings = Vec::<ScratchSetBinding3>::new();
+    collect_line_movement_scratch_set_bindings3(before, &mut bindings);
+    collect_line_movement_scratch_set_bindings3(after, &mut bindings);
+    dedup_line_scratch_set_bindings3(&mut bindings);
+
+    if bindings.is_empty() {
+        return vec![(before.clone(), after.clone())];
+    }
+
+    let mut assignments = Vec::<HashMap<String, String>>::new();
+    expand_line_scratch_set_assignments3(&bindings, 0, &mut HashMap::new(), &mut assignments);
+    assignments
+        .into_iter()
+        .map(|assignment| {
+            (
+                apply_line_movement_scratch_set_assignment3(before, &assignment),
+                apply_line_movement_scratch_set_assignment3(after, &assignment),
+            )
+        })
+        .collect()
+}
+
+fn collect_line_movement_scratch_set_bindings3(
+    pattern: &LinePatternWithGaps3,
+    bindings: &mut Vec<ScratchSetBinding3>,
+) {
+    let mut selector_counts = HashMap::<String, usize>::new();
+    for (cell_index, cell) in pattern.cells.iter().enumerate() {
+        for selector in &cell.require {
+            let ordinal = *selector_counts.get(&selector.token()).unwrap_or(&0);
+            selector_counts.insert(selector.token(), ordinal + 1);
+            collect_selector_scratch_set_bindings3(
+                selector,
+                &format!("cell:{cell_index}:require:{}:{ordinal}", selector.token()),
+                bindings,
+            );
+        }
+        for selector in &cell.forbid {
+            let ordinal = *selector_counts.get(&selector.token()).unwrap_or(&0);
+            selector_counts.insert(selector.token(), ordinal + 1);
+            collect_selector_scratch_set_bindings3(
+                selector,
+                &format!("cell:{cell_index}:forbid:{}:{ordinal}", selector.token()),
+                bindings,
+            );
+        }
+    }
+}
+
+fn collect_selector_scratch_set_bindings3(
+    selector: &ObjectSelector3,
+    anchor: &str,
+    bindings: &mut Vec<ScratchSetBinding3>,
+) {
+    match selector {
+        ObjectSelector3::Labeled { selector, .. } => {
+            collect_selector_scratch_set_bindings3(selector, anchor, bindings);
+        }
+        ObjectSelector3::WithScratch { selector, scratch } => {
+            collect_selector_scratch_set_bindings3(selector, anchor, bindings);
+            for (scratch_index, scratch) in scratch.iter().enumerate() {
+                let Some(value) = scratch.value.as_deref() else {
+                    continue;
+                };
+                let Some(values) = line_movement_scratch_set_values3(value) else {
+                    continue;
+                };
+                bindings.push(ScratchSetBinding3 {
+                    key: format!("{anchor}:scratch:{scratch_index}:{value}"),
+                    values,
+                });
+            }
+        }
+        ObjectSelector3::Object(_)
+        | ObjectSelector3::Group(_)
+        | ObjectSelector3::Variant { .. } => {}
+    }
+}
+
+fn dedup_line_scratch_set_bindings3(bindings: &mut Vec<ScratchSetBinding3>) {
+    let mut deduped = Vec::with_capacity(bindings.len());
+    for binding in bindings.drain(..) {
+        if !deduped
+            .iter()
+            .any(|existing: &ScratchSetBinding3| existing.key == binding.key)
+        {
+            deduped.push(binding);
+        }
+    }
+    *bindings = deduped;
+}
+
+fn expand_line_scratch_set_assignments3(
+    bindings: &[ScratchSetBinding3],
+    index: usize,
+    current: &mut HashMap<String, String>,
+    out: &mut Vec<HashMap<String, String>>,
+) {
+    if index == bindings.len() {
+        out.push(current.clone());
+        return;
+    }
+    let binding = &bindings[index];
+    for value in binding.values {
+        current.insert(binding.key.clone(), (*value).to_string());
+        expand_line_scratch_set_assignments3(bindings, index + 1, current, out);
+    }
+    current.remove(&binding.key);
+}
+
+fn apply_line_movement_scratch_set_assignment3(
+    pattern: &LinePatternWithGaps3,
+    assignment: &HashMap<String, String>,
+) -> LinePatternWithGaps3 {
+    let mut pattern = pattern.clone();
+    let mut selector_counts = HashMap::<String, usize>::new();
+    for (cell_index, cell) in pattern.cells.iter_mut().enumerate() {
+        for selector in &mut cell.require {
+            let token = selector.token();
+            let ordinal = *selector_counts.get(&token).unwrap_or(&0);
+            selector_counts.insert(token.clone(), ordinal + 1);
+            apply_selector_scratch_set_assignment3(
+                selector,
+                &format!("cell:{cell_index}:require:{token}:{ordinal}"),
+                assignment,
+            );
+        }
+        for selector in &mut cell.forbid {
+            let token = selector.token();
+            let ordinal = *selector_counts.get(&token).unwrap_or(&0);
+            selector_counts.insert(token.clone(), ordinal + 1);
+            apply_selector_scratch_set_assignment3(
+                selector,
+                &format!("cell:{cell_index}:forbid:{token}:{ordinal}"),
+                assignment,
+            );
+        }
+    }
+    pattern
+}
+
+fn apply_selector_scratch_set_assignment3(
+    selector: &mut ObjectSelector3,
+    anchor: &str,
+    assignment: &HashMap<String, String>,
+) {
+    match selector {
+        ObjectSelector3::Labeled { selector, .. } => {
+            apply_selector_scratch_set_assignment3(selector, anchor, assignment);
+        }
+        ObjectSelector3::WithScratch { selector, scratch } => {
+            apply_selector_scratch_set_assignment3(selector, anchor, assignment);
+            for (scratch_index, scratch) in scratch.iter_mut().enumerate() {
+                let Some(value) = scratch.value.as_deref() else {
+                    continue;
+                };
+                if line_movement_scratch_set_values3(value).is_none() {
+                    continue;
+                }
+                let key = format!("{anchor}:scratch:{scratch_index}:{value}");
+                if let Some(concrete) = assignment.get(&key) {
+                    scratch.value = Some(concrete.clone());
+                }
+            }
+        }
+        ObjectSelector3::Object(_)
+        | ObjectSelector3::Group(_)
+        | ObjectSelector3::Variant { .. } => {}
+    }
+}
+
+fn line_movement_scratch_set_values3(value: &str) -> Option<&'static [&'static str]> {
+    match value {
+        "horizontal" | "vertical" => puzzle_authoring::movement_scratch_set_values(value, 3),
+        _ => None,
     }
 }
 
@@ -3246,11 +3529,7 @@ fn default_inputs() -> Vec<InputDef3> {
 }
 
 fn canonical_input_name3(name: &str) -> &str {
-    match name {
-        "forward" => "front",
-        "backward" => "back",
-        _ => name,
-    }
+    puzzle_authoring::canonical_3d_movement_direction_name(name)
 }
 
 fn inputs_from_specs(specs: Vec<InputSpec3>) -> Result<Vec<InputDef3>, ParseError3> {

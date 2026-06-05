@@ -2731,7 +2731,7 @@ function setSpriteActionStatus(text, className = "") {
   window.clearTimeout(spriteActionClearTimer);
   spriteActionStatus.className = `sprite-action-status tool-feedback-bar ${className}`.trim();
   spriteActionStatus.textContent = text;
-  setStatus(text, className);
+  setPaneStatus("sprite", text, className);
   if (text && className === "is-ok") {
     spriteActionClearTimer = window.setTimeout(() => {
       if (spriteActionStatus.textContent === text && spriteActionStatus.classList.contains("is-ok")) {

@@ -5,9 +5,9 @@ exports.
 
 ## Editing
 
-Edit `.puzzle` source files when changing sample games. Generated `*.html`
-exports must not be patched directly; update the source owner and regenerate
-only when the task explicitly asks for generated output.
+Edit `.puzzle` and `.puzzle3` source files when changing sample games.
+Generated `*.html` exports must not be patched directly; update the source
+owner and regenerate only when the task explicitly asks for generated output.
 
 Use sample files as focused fixtures only after identifying the crate or adapter
 that owns the behavior under test.
