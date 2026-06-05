@@ -113,8 +113,11 @@
       try {
         this.sessionRuntime.restore_progress_save(raw);
         this.sessionRuntime.mark_progress_save_written();
-      } catch (_error) {
-        // Ignore incompatible saves; the Rust session will start from defaults.
+      } catch (error) {
+        console.warn(
+          `Progress save could not be restored for ${this.progressSaveStorageKey()}; starting from defaults.`,
+          error,
+        );
       }
     }
 

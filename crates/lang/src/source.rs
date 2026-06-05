@@ -1,10 +1,9 @@
 use crate::AppError;
-use crate::syntax::{is_puzzle_lifecycle_block, puzzle_lifecycle_block};
+use crate::syntax::is_puzzle_lifecycle_block;
 
 pub(crate) fn logical_lines(source: &str) -> Result<Vec<String>, AppError> {
     let mut lines = Vec::new();
     let mut preserve_level_blanks = false;
-    let mut implicit_level_section = false;
     let mut level_brace_depth = 0i32;
     let mut level_end_depth = None::<usize>;
     let raw_lines = source
@@ -15,14 +14,6 @@ pub(crate) fn logical_lines(source: &str) -> Result<Vec<String>, AppError> {
 
     for index in 0..raw_lines.len() {
         let line = raw_lines[index].as_str();
-        let section = section_header_at(&raw_lines, index);
-        if implicit_level_section
-            && level_brace_depth <= 0
-            && section.is_some_and(|section| section.block != "levels")
-        {
-            preserve_level_blanks = false;
-            implicit_level_section = false;
-        }
         if line.is_empty() {
             if preserve_level_blanks {
                 lines.push(String::new());
@@ -30,12 +21,8 @@ pub(crate) fn logical_lines(source: &str) -> Result<Vec<String>, AppError> {
             continue;
         }
 
-        let tokens = split_tokens(line);
-        if section.is_some_and(|section| section.block == "levels") {
-            preserve_level_blanks = true;
-            implicit_level_section = true;
-            level_brace_depth = 0;
-        } else if is_levels_header(&tokens) {
+        let tokens = split_header_tokens(line);
+        if is_levels_header(&tokens) {
             preserve_level_blanks = true;
             level_end_depth = Some(1);
         } else if (is_levels_header(&tokens) || matches!(tokens.as_slice(), ["level", ..]))
@@ -59,15 +46,7 @@ pub(crate) fn logical_lines(source: &str) -> Result<Vec<String>, AppError> {
             level_brace_depth -= line.chars().filter(|ch| *ch == '}').count() as i32;
         }
         lines.push(line.to_string());
-        if implicit_level_section && level_brace_depth <= 0 && line == "}" {
-            preserve_level_blanks = false;
-            implicit_level_section = false;
-        }
-        if preserve_level_blanks
-            && !implicit_level_section
-            && level_brace_depth <= 0
-            && level_end_depth.is_none()
-        {
+        if preserve_level_blanks && level_brace_depth <= 0 && level_end_depth.is_none() {
             preserve_level_blanks = false;
         }
         if level_end_depth == Some(0) {
@@ -76,7 +55,7 @@ pub(crate) fn logical_lines(source: &str) -> Result<Vec<String>, AppError> {
         }
     }
     let lines = normalize_brace_blocks(&lines)?;
-    normalize_section_headers(&lines)
+    Ok(lines)
 }
 
 pub(crate) fn strip_line_comment(line: &str) -> &str {
@@ -113,6 +92,9 @@ fn expand_structural_sugar(lines: &[String]) -> Result<Vec<String>, AppError> {
         }
 
         let split_semicolons = !block_stack.iter().any(|block| ascii_sensitive_block(block));
+        if !split_semicolons && ascii_row_contains_brace(line) {
+            return Err(parse_error(line, "ASCII rows cannot contain braces"));
+        }
         for piece in split_structural_line(line, split_semicolons)? {
             update_structural_block_stack(&piece, &mut block_stack);
             expanded.push(piece);
@@ -126,6 +108,10 @@ fn ascii_sensitive_block(block: &str) -> bool {
     matches!(block, "levels" | "levels3" | "sprites" | "sprites3" | "map")
 }
 
+fn ascii_row_contains_brace(line: &str) -> bool {
+    line.contains(['{', '}']) && !line.trim_end().ends_with('{') && line.trim() != "}"
+}
+
 fn update_structural_block_stack(line: &str, stack: &mut Vec<String>) {
     if line == "}" {
         stack.pop();
@@ -134,7 +120,7 @@ fn update_structural_block_stack(line: &str, stack: &mut Vec<String>) {
     if !line.ends_with('{') {
         return;
     }
-    let tokens = split_tokens(line);
+    let tokens = split_header_tokens(line);
     if let Some(first) = tokens.first() {
         stack.push((*first).to_string());
     }
@@ -305,7 +291,7 @@ fn normalize_brace_blocks(lines: &[String]) -> Result<Vec<String>, AppError> {
                     "opening brace must follow a block header",
                 ));
             }
-            let header_tokens = split_tokens(header);
+            let header_tokens = split_header_tokens(header);
             let is_levels_header = is_levels_header(&header_tokens);
             let preserve_level_header = levels_brace_depth > 0
                 && !starts_inline_block(&header_tokens, header)
@@ -339,223 +325,10 @@ fn normalize_brace_blocks(lines: &[String]) -> Result<Vec<String>, AppError> {
     Ok(normalized)
 }
 
-fn normalize_section_headers(lines: &[String]) -> Result<Vec<String>, AppError> {
-    let mut normalized = Vec::new();
-    let mut open_section: Option<ImplicitSection> = None;
-    let mut i = 0;
-
-    while i < lines.len() {
-        if let Some(section) = section_header_at(lines, i) {
-            if let Some(open) = open_section.take() {
-                if open.nested_depth != 0 {
-                    return Err(parse_error(
-                        &lines[i],
-                        "section header cannot appear inside a nested block",
-                    ));
-                }
-                normalized.push("}".to_string());
-            }
-            normalized.push(format!("{} {{", section.block));
-            open_section = Some(section);
-            i += 3;
-            continue;
-        }
-
-        let line = &lines[i];
-        if let Some(open) = &mut open_section {
-            if line == "}" {
-                if open.nested_depth == 0 {
-                    normalized.push("}".to_string());
-                    open_section = None;
-                    normalized.push(line.clone());
-                } else {
-                    open.nested_depth -= 1;
-                    normalized.push(line.clone());
-                }
-                i += 1;
-                continue;
-            }
-
-            let tokens = split_tokens(line);
-            if open.nested_depth == 0 && section_boundary(open.block, &tokens) {
-                normalized.push("}".to_string());
-                open_section = None;
-                continue;
-            }
-            if starts_nested_block(open.block, &tokens, line) {
-                open.nested_depth += 1;
-            }
-        }
-
-        normalized.push(line.clone());
-        i += 1;
-    }
-
-    if let Some(open) = open_section {
-        if open.nested_depth != 0 {
-            return Err(AppError::Parse(format!(
-                "{} section missing closing brace for nested block",
-                open.block
-            )));
-        }
-        normalized.push("}".to_string());
-    }
-
-    Ok(normalized)
-}
-
-#[derive(Clone, Copy)]
-struct ImplicitSection {
-    block: &'static str,
-    nested_depth: usize,
-}
-
-fn section_header_at(lines: &[String], start: usize) -> Option<ImplicitSection> {
-    if start + 2 >= lines.len() {
-        return None;
-    }
-    if !is_section_separator(&lines[start]) || !is_section_separator(&lines[start + 2]) {
-        return None;
-    }
-    section_block_name(&lines[start + 1]).map(|block| ImplicitSection {
-        block,
-        nested_depth: 0,
-    })
-}
-
-fn is_section_separator(line: &str) -> bool {
-    line.len() >= 3 && line.chars().all(|ch| ch == '=')
-}
-
-fn section_block_name(title: &str) -> Option<&'static str> {
-    let normalized = normalize_section_title(title)?;
-    canonical_section_block(&normalized)
-}
-
-fn normalize_section_title(title: &str) -> Option<String> {
-    let mut normalized = String::new();
-    let mut previous_separator = false;
-    for ch in title.trim().chars() {
-        if ch.is_ascii_alphanumeric() {
-            normalized.push(ch.to_ascii_lowercase());
-            previous_separator = false;
-        } else if ch.is_whitespace() || ch == '_' || ch == '-' {
-            if !normalized.is_empty() && !previous_separator {
-                normalized.push('_');
-                previous_separator = true;
-            }
-        } else {
-            return None;
-        }
-    }
-    if previous_separator {
-        normalized.pop();
-    }
-    (!normalized.is_empty()).then_some(normalized)
-}
-
-fn canonical_section_block(normalized: &str) -> Option<&'static str> {
-    match normalized {
-        "objects" => Some("objects"),
-        "scratch" => Some("scratch"),
-        "groups" => Some("group"),
-        "layer" | "layers" => Some("layers"),
-        "legend" | "legends" => Some("legend"),
-        "win_condition" | "win_conditions" => Some("win_conditions"),
-        "lose_condition" | "lose_conditions" => Some("lose_conditions"),
-        "sprite" | "sprites" => Some("sprites"),
-        "theme" | "themes" => Some("theme"),
-        "asset" | "assets" => Some("assets"),
-        "screen" => Some("screen"),
-        "layout" => Some("layout"),
-        "rule" | "rules" => Some("rules"),
-        "level" | "levels" => Some("levels"),
-        "on_display" => Some("on_display"),
-        lifecycle if puzzle_lifecycle_block(lifecycle).is_some() => {
-            puzzle_lifecycle_block(lifecycle)
-        }
-        "on_scene_start" => Some("on_scene_start"),
-        "state" => Some("state"),
-        "keys" => Some("keys"),
-        "resources" => Some("resources"),
-        "row" => Some("row"),
-        "column" => Some("column"),
-        "box" => Some("box"),
-        "level_menu" => Some("level_menu"),
-        _ => None,
-    }
-}
-
-fn section_boundary(block: &str, tokens: &[&str]) -> bool {
-    if tokens.is_empty() {
-        return false;
-    }
-    match block {
-        "legend" => !is_legend_row(tokens),
-        "objects" | "scratch" | "group" | "layers" | "collision_layers" | "win_conditions"
-        | "lose_conditions" | "rules" | "sprites" | "theme" | "assets" | "on_display" => {
-            starts_puzzle_section(tokens)
-        }
-        "levels" => starts_puzzle_section(tokens) && !matches!(tokens, ["level", ..] | ["{"]),
-        _ => false,
-    }
-}
-
-fn is_legend_row(tokens: &[&str]) -> bool {
-    tokens.len() >= 3 && tokens.get(1).copied() == Some("=")
-}
-
-fn starts_puzzle_section(tokens: &[&str]) -> bool {
-    if matches!(tokens, [lifecycle] if is_puzzle_lifecycle_block(lifecycle)) {
-        return true;
-    }
-    matches!(
-        tokens,
-        ["map", ..]
-            | ["on_display"]
-            | ["objects"]
-            | ["scratch"]
-            | ["groups"]
-            | ["layers"]
-            | ["collision_layers"]
-            | ["legend"]
-            | ["win_conditions", ..]
-            | ["lose_conditions", ..]
-            | ["sprites", ..]
-            | ["theme", ..]
-            | ["assets"]
-            | ["screen"]
-            | ["layout"]
-            | ["rule", ..]
-            | ["rules"]
-            | ["main"]
-            | ["transitions"]
-            | ["levels", ..]
-            | ["level", ..]
-    )
-}
-
-fn starts_nested_block(block: &str, tokens: &[&str], line: &str) -> bool {
-    match block {
-        "legend" => false,
-        "levels" => {
-            (matches!(tokens, ["level", ..]) && line.ends_with('{'))
-                || matches!(tokens, ["{"])
-                || (!matches!(tokens, ["level", ..]) && starts_inline_block(tokens, line))
-        }
-        _ => starts_inline_block(tokens, line),
-    }
-}
-
 fn is_levels_header(tokens: &[&str]) -> bool {
     matches!(
         tokens,
-        ["levels"]
-            | ["levels", "of", _]
-            | ["levels", _, "of", _]
-            | ["levels", "{"]
-            | ["levels", "of", _, "{"]
-            | ["levels", _, "of", _, "{"]
+        ["levels"] | ["levels", "of", _] | ["levels", _, "of", _]
     )
 }
 
@@ -635,12 +408,13 @@ fn strip_inline_scratch_blocks(line: &str) -> Result<String, AppError> {
     Ok(out)
 }
 
+#[cfg(test)]
 pub(crate) fn split_tokens(line: &str) -> Vec<&str> {
-    let mut tokens = line.split_whitespace().collect::<Vec<_>>();
-    if tokens.len() > 1 && tokens.last().copied() == Some("{") {
-        tokens.pop();
-    }
-    tokens
+    line.split_whitespace().collect()
+}
+
+pub(crate) fn split_header_tokens(line: &str) -> Vec<&str> {
+    puzzle_authoring::split_header_tokens(line)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -701,14 +475,7 @@ pub(crate) struct SourceContextLine {
 pub(crate) struct SourceContext {
     raw: Vec<(usize, usize)>,
     plain: Vec<(usize, usize)>,
-    sections: Vec<(usize, usize, SourceSectionPart)>,
     pub(crate) lines: Vec<SourceContextLine>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum SourceSectionPart {
-    Title,
-    Rule,
 }
 
 impl SourceContext {
@@ -723,21 +490,11 @@ impl SourceContext {
             .iter()
             .any(|(range_start, range_end)| start >= *range_start && end <= *range_end)
     }
-
-    pub(crate) fn section_starting_at(&self, start: usize) -> Option<(usize, SourceSectionPart)> {
-        self.sections
-            .iter()
-            .find_map(|(range_start, range_end, part)| {
-                (*range_start == start).then_some((*range_end, *part))
-            })
-    }
 }
 
 pub(crate) fn scan_source_context(source: &str) -> SourceContext {
     let mut context = SourceContext::default();
-    let section_headers = source_section_headers(source);
     let mut block_stack = Vec::<SourceScope>::new();
-    let mut skip_section_header_until = None::<usize>;
     let mut offset = 0usize;
 
     for line in source.split_inclusive('\n') {
@@ -747,24 +504,13 @@ pub(crate) fn scan_source_context(source: &str) -> SourceContext {
         let raw = strip_line_comment(content);
         let trimmed = raw.trim();
         let tokens = source_context_tokens(trimmed);
-
-        if let Some((_, header_end, section)) = section_headers
-            .iter()
-            .find(|(header_start, _, _)| *header_start == offset)
-        {
-            reset_to_section_parent(&mut block_stack);
-            push_opening_scope(section, &mut block_stack);
-            skip_section_header_until = Some(*header_end);
-        }
-        let in_section_header =
-            skip_section_header_until.is_some_and(|header_end| offset < header_end);
         let current = block_stack.last().copied();
 
-        if !in_section_header && trimmed.is_empty() {
+        if trimmed.is_empty() {
             close_blank_line(&mut block_stack);
         }
 
-        if !in_section_header && !trimmed.is_empty() && trimmed != "}" {
+        if !trimmed.is_empty() && trimmed != "}" {
             match source_line_role(current, trimmed, &tokens) {
                 SourceLineRole::Normal => {}
                 SourceLineRole::Raw => context.raw.push((offset, content_end)),
@@ -781,11 +527,7 @@ pub(crate) fn scan_source_context(source: &str) -> SourceContext {
             }
         }
 
-        if in_section_header {
-            if skip_section_header_until.is_some_and(|header_end| line_end >= header_end) {
-                skip_section_header_until = None;
-            }
-        } else if trimmed == "}" {
+        if trimmed == "}" {
             close_block_line(&mut block_stack);
         } else if source_opens_block(trimmed, &tokens, current)
             && let Some(opened) = opening_scope(trimmed, &tokens, current)
@@ -802,22 +544,6 @@ pub(crate) fn scan_source_context(source: &str) -> SourceContext {
         });
 
         offset = line_end;
-    }
-
-    for (top_start, bottom_end, _) in section_headers {
-        if let Some((top, title, bottom)) =
-            source_section_line_ranges(source, top_start, bottom_end)
-        {
-            context
-                .sections
-                .push((top.0, top.1, SourceSectionPart::Rule));
-            context
-                .sections
-                .push((title.0, title.1, SourceSectionPart::Title));
-            context
-                .sections
-                .push((bottom.0, bottom.1, SourceSectionPart::Rule));
-        }
     }
 
     context
@@ -846,53 +572,6 @@ fn source_line_role(
 
 fn starts_level_legend(tokens: &[&str]) -> bool {
     tokens.first().copied() == Some("legend")
-}
-
-fn source_section_headers(source: &str) -> Vec<(usize, usize, &'static str)> {
-    let mut lines = Vec::<(&str, usize, usize)>::new();
-    let mut start = 0;
-    for line in source.split_inclusive('\n') {
-        let end = start + line.len();
-        let trimmed_end = end - usize::from(line.ends_with('\n'));
-        lines.push((&source[start..trimmed_end], start, trimmed_end));
-        start = end;
-    }
-    if start < source.len() || source.is_empty() {
-        lines.push((&source[start..], start, source.len()));
-    }
-
-    lines
-        .windows(3)
-        .filter_map(|window| {
-            let [(top, top_start, _), (title, _, _), (bottom, _, bottom_end)] = window else {
-                return None;
-            };
-            if !is_section_separator(top) || !is_section_separator(bottom) {
-                return None;
-            }
-            section_block_name(title).map(|section| (*top_start, *bottom_end, section))
-        })
-        .collect()
-}
-
-fn source_section_line_ranges(
-    source: &str,
-    header_start: usize,
-    header_end: usize,
-) -> Option<((usize, usize), (usize, usize), (usize, usize))> {
-    let header = &source[header_start..header_end];
-    let mut ranges = Vec::new();
-    let mut start = header_start;
-    for line in header.split_inclusive('\n').take(3) {
-        let end = start + line.len();
-        let trimmed_end = end - usize::from(line.ends_with('\n'));
-        ranges.push((start, trimmed_end));
-        start = end;
-    }
-    let [top, title, bottom] = ranges.as_slice() else {
-        return None;
-    };
-    Some((*top, *title, *bottom))
 }
 
 fn source_context_tokens(line: &str) -> Vec<&str> {
@@ -925,21 +604,6 @@ pub(crate) fn source_line_tokens(line: &str, line_offset: usize) -> Vec<SourceTo
         });
     }
     tokens
-}
-
-fn push_opening_scope(name: &str, block_stack: &mut Vec<SourceScope>) {
-    if let Some(block) = source_scope_for_name(name) {
-        block_stack.push(block);
-    }
-}
-
-fn reset_to_section_parent(block_stack: &mut Vec<SourceScope>) {
-    while block_stack
-        .last()
-        .is_some_and(|block| !matches!(block, SourceScope::Puzzle))
-    {
-        block_stack.pop();
-    }
 }
 
 fn close_blank_line(block_stack: &mut Vec<SourceScope>) {
@@ -1166,7 +830,21 @@ fn parse_error(line: &str, message: &str) -> AppError {
 
 #[cfg(test)]
 mod tests {
-    use super::scan_source_context;
+    use super::{scan_source_context, split_header_tokens, split_tokens};
+
+    #[test]
+    fn split_tokens_preserves_block_openers() {
+        assert_eq!(split_tokens("level first {"), vec!["level", "first", "{"]);
+        assert_eq!(split_tokens("levels {"), vec!["levels", "{"]);
+        assert_eq!(split_tokens("{"), vec!["{"]);
+    }
+
+    #[test]
+    fn split_header_tokens_removes_only_trailing_block_opener() {
+        assert_eq!(split_header_tokens("level first {"), vec!["level", "first"]);
+        assert_eq!(split_header_tokens("levels {"), vec!["levels"]);
+        assert_eq!(split_header_tokens("{"), vec!["{"]);
+    }
 
     #[test]
     fn source_context_preserves_token_spans_before_comments() {

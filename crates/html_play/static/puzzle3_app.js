@@ -110,6 +110,7 @@ const view = {
   primitiveSortCacheOrder: [],
 };
 let snapshot = fallbackSnapshot;
+let snapshotLoaded = false;
 let runtime = null;
 let initialCamera = cloneCamera(fallbackSnapshot.camera);
 let currentSceneName = initialSceneName(fallbackSnapshot);
@@ -134,22 +135,7 @@ const stateListeners = new Set();
 const puzzle3Component = createPuzzle3Component();
 
 async function loadSnapshot() {
-  let nextSnapshot = null;
-  try {
-    if (controllerOptions.fixture) {
-      nextSnapshot = controllerOptions.fixture;
-    } else if (window.Puzzle3DFixture) {
-      nextSnapshot = window.Puzzle3DFixture;
-    } else {
-      const response = await fetch("./fixture.json", { cache: "no-store" });
-      if (!response.ok) {
-        throw new Error(response.statusText);
-      }
-      nextSnapshot = await response.json();
-    }
-  } catch {
-    nextSnapshot = fallbackSnapshot;
-  }
+  const nextSnapshot = await loadInitialPuzzle3Snapshot();
   const initialModelPreview = window.PuzzleStudioInitialModelComponentPreview;
   if (initialModelPreview?.type === "PuzzleStudioRenderPuzzle3ModelComponent") {
     window.PuzzleStudioInitialModelComponentPreviewConsumed = true;
@@ -160,10 +146,41 @@ async function loadSnapshot() {
   await loadSnapshotData(nextSnapshot);
 }
 
+async function loadInitialPuzzle3Snapshot() {
+  if (controllerOptions.fixture) {
+    return controllerOptions.fixture;
+  }
+  if (window.Puzzle3DFixture) {
+    return window.Puzzle3DFixture;
+  }
+  const response = await fetch("./fixture.json", { cache: "no-store" });
+  if (!response.ok) {
+    const status = `${response.status} ${response.statusText || ""}`.trim();
+    throw new Error(`Could not load Puzzle3 fixture ./fixture.json (${status})`);
+  }
+  return response.json();
+}
+
+function requirePuzzle3Snapshot(source, label = "Puzzle3 snapshot") {
+  if (!source || typeof source !== "object" || Array.isArray(source)) {
+    throw new Error(`${label} is missing or invalid.`);
+  }
+  return source;
+}
+
+function requireLoadedPuzzle3Snapshot(label = "Puzzle3 snapshot") {
+  if (!snapshotLoaded) {
+    throw new Error(`${label} is not loaded.`);
+  }
+  return requirePuzzle3Snapshot(snapshot, label);
+}
+
 async function loadSnapshotData(source, options = {}) {
-  snapshot = normalizeSnapshot(source || fallbackSnapshot);
+  snapshotLoaded = false;
+  snapshot = normalizeSnapshot(requirePuzzle3Snapshot(source));
   runtime = await createPuzzle3Runtime(snapshot);
   snapshot = runtime.snapshot();
+  snapshotLoaded = true;
   editorModelComponentPreview = options.modelComponentPreview || null;
   document.title = snapshot.title || "Puzzle3";
   currentSceneName = editorModelComponentPreview?.sceneName
@@ -181,6 +198,38 @@ async function loadSnapshotData(source, options = {}) {
   renderScene();
   applyStartupPuzzle3UrlCommands();
   notifyPuzzle3StateChange();
+}
+
+function showPuzzle3LoadError(error) {
+  console.error(error);
+  const errorView = document.createElement("div");
+  errorView.className = "puzzle3-load-error";
+  errorView.setAttribute("role", "alert");
+  errorView.textContent = `Puzzle3 fixture load failed: ${error?.message || error || "unknown error"}`;
+  Object.assign(errorView.style, {
+    boxSizing: "border-box",
+    width: "100%",
+    minHeight: "100%",
+    padding: "24px",
+    display: "grid",
+    placeItems: "center",
+    color: "#8a1f11",
+    background: "#fff5f2",
+    border: "1px solid #f0b8a8",
+    fontFamily: "system-ui, sans-serif",
+    fontSize: "14px",
+    lineHeight: "1.5",
+    textAlign: "center",
+    whiteSpace: "pre-wrap",
+  });
+  screenView.replaceChildren(errorView);
+}
+
+function loadPuzzle3ControllerSnapshot() {
+  return loadSnapshot().catch((error) => {
+    showPuzzle3LoadError(error);
+    throw error;
+  });
 }
 
 function applyTheme(theme) {
@@ -282,6 +331,7 @@ class Puzzle3SessionRuntime {
     this.moveCount = 0;
     this.cellsByKey = new Map();
     this.cells = [];
+    this.animationEvents = [];
     this.initialStateHandle = null;
     this.completed = false;
     this.loadLevel(this.levelIndex);
@@ -297,6 +347,7 @@ class Puzzle3SessionRuntime {
         position: { ...cell.position },
         objects: cell.objects.map((object) => ({ ...object })),
       })),
+      animationEvents: this.animationEvents.map((event) => ({ ...event })),
       levelIndex: this.levelIndex,
       levelCount: this.levels.length,
       levelName: level.name,
@@ -319,6 +370,9 @@ class Puzzle3SessionRuntime {
       return false;
     }
     this.undoStack.push(before);
+    this.animationEvents = Array.isArray(outcome.animationEvents)
+      ? outcome.animationEvents.map((event) => ({ ...event }))
+      : [];
     this.applyRuntimeCells(outcome.changedCells || []);
     this.moveCount += 1;
     const wasCompleted = this.completed;
@@ -340,6 +394,7 @@ class Puzzle3SessionRuntime {
     }
     this.coreRuntime.restore_saved_state(Number(previous.handle));
     this.loadCellsFromRuntime();
+    this.animationEvents = [];
     this.moveCount = previous.moveCount;
     this.completed = previous.completed;
     return true;
@@ -355,6 +410,7 @@ class Puzzle3SessionRuntime {
     this.undoStack.push(this.historyEntry());
     this.coreRuntime.restore_saved_state(Number(this.initialStateHandle));
     this.loadCellsFromRuntime();
+    this.animationEvents = [];
     this.moveCount = 0;
     this.completed = this.coreRuntime.is_current_complete() === true;
     return true;
@@ -397,6 +453,7 @@ class Puzzle3SessionRuntime {
     this.loadInitialStateForCurrentLevel();
     this.undoStack = [];
     this.moveCount = 0;
+    this.animationEvents = [];
     this.completed = this.coreRuntime.is_current_complete() === true;
     this.initialStateHandle = this.coreRuntime.save_current_state();
   }
@@ -409,6 +466,7 @@ class Puzzle3SessionRuntime {
     this.cells = [];
     this.applyRuntimeCells(level.cells);
     const outcome = this.transitionCurrent("level_start", 0);
+    this.animationEvents = [];
     this.applyRuntimeCells(outcome.changedCells || []);
     this.completed = outcome.completed === true;
   }
@@ -500,8 +558,8 @@ function puzzle3ModelComponentPreviewLoadOptions(update = {}) {
   };
 }
 
-function puzzle3PreviewSnapshot(update = {}, source = snapshot || fallbackSnapshot) {
-  const next = JSON.parse(JSON.stringify(source || fallbackSnapshot));
+function puzzle3PreviewSnapshot(update = {}, source = requireLoadedPuzzle3Snapshot("Puzzle3 preview source snapshot")) {
+  const next = JSON.parse(JSON.stringify(requirePuzzle3Snapshot(source, "Puzzle3 preview source snapshot")));
   applyPuzzle3PreviewResources(next, update.resources || update);
   const rawLevelIndex = update.levelIndex ?? next.levelIndex ?? 0;
   const levelCount = Array.isArray(next.levels) && next.levels.length ? next.levels.length : 1;
@@ -1207,7 +1265,7 @@ function drawWithThree() {
 function puzzle3RendererContractInput(width, height) {
   return {
     version: PUZZLE3_RENDERER_CONTRACT_VERSION,
-    snapshot: cloneRuntimeSnapshot(snapshot || fallbackSnapshot),
+    snapshot: cloneRuntimeSnapshot(requireLoadedPuzzle3Snapshot("Puzzle3 renderer snapshot")),
     view: {
       width,
       height,
@@ -1771,7 +1829,7 @@ function puzzle3ViewPayload(width, height) {
 }
 
 function notifyPuzzle3StateChange() {
-  const state = cloneRuntimeSnapshot(snapshot || fallbackSnapshot);
+  const state = cloneRuntimeSnapshot(requireLoadedPuzzle3Snapshot("Puzzle3 state snapshot"));
   for (const listener of stateListeners) {
     listener(state);
   }
@@ -3620,7 +3678,7 @@ const controllerApi = {
     return false;
   },
   snapshot() {
-    return JSON.parse(JSON.stringify(snapshot || fallbackSnapshot));
+    return JSON.parse(JSON.stringify(requireLoadedPuzzle3Snapshot()));
   },
   onView(listener) {
     if (typeof listener !== "function") {
@@ -3647,7 +3705,7 @@ const controllerApi = {
 };
 
 resizeCanvas();
-controllerApi.ready = loadSnapshot();
+controllerApi.ready = loadPuzzle3ControllerSnapshot();
 
 function cloneRuntimeSnapshot(source) {
   return {

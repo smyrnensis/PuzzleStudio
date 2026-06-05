@@ -61,6 +61,7 @@ update/render APIs with named `level`, `resources`, `camera`, `view`, and
 `settings` fields. Keep whole-fixture replacement as compatibility/debug surface
 only.
 
-Highlighting should use the Rust host/server or WASM `highlight_source_html`
-path. JavaScript fallback should be plain escaped text, not an independent
-`.puzzle` grammar.
+Highlighting should use the Rust host/server path. If highlighting is
+unavailable, show plain escaped text and surface the reason visibly enough for
+debugging. Do not fall back to a second highlighter path such as WASM or a
+JavaScript `.puzzle` grammar.

@@ -215,7 +215,26 @@ impl CorePatch {
                             }
                         };
                     } else {
-                        let layer = expect_object_in_overlay(game, state, &slots, x, y, object)?;
+                        let layer = game
+                            .object_layer(object)
+                            .ok_or(PatchError::UnknownObject { object })?;
+                        let found = slots.get(game, state, x, y, layer)?;
+                        if found != object {
+                            if state
+                                .get_layer(x, y, layer)
+                                .is_ok_and(|original| original == object)
+                            {
+                                changed = true;
+                                continue;
+                            }
+                            return Err(PatchError::ExpectedObject {
+                                x,
+                                y,
+                                layer,
+                                expected: object,
+                                found,
+                            });
+                        }
                         if state
                             .get_layer(x, y, layer)
                             .is_ok_and(|found| found == object)
@@ -768,7 +787,12 @@ fn apply_remove_scratch(
         state.remove_cell_scratch_unchecked(x, y, scratch, value);
         return Ok(());
     }
-    let layer = expect_object_at(game, state, x, y, object)?;
+    let Some(layer) = game.object_layer(object) else {
+        return Err(PatchError::UnknownObject { object });
+    };
+    if state.get_layer(x, y, layer)? != object {
+        return Ok(());
+    }
     let value = match match_value {
         ScratchValueMatch::Any => None,
         ScratchValueMatch::Exact => value,
@@ -858,6 +882,7 @@ fn validate_global_update(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::compiled_game::ObjectDef;
 
     #[test]
     fn patch_round_trips_through_core_patch_ops() {
@@ -885,5 +910,72 @@ mod tests {
         ]);
 
         assert_eq!(Patch::from_core(patch.to_core()).ops(), patch.ops());
+    }
+
+    #[test]
+    fn scratch_cleanup_after_same_patch_object_removal_is_noop() {
+        let object = ObjectId(1);
+        let scratch = ScratchId(0);
+        let game = CompiledGame::new(
+            1,
+            vec![ObjectDef {
+                id: object,
+                layer_id: LayerId(0),
+            }],
+            Vec::new(),
+        );
+        let mut state = State::empty(1, 1, 1, 1).unwrap();
+        state.place_object(&game, 0, 0, object).unwrap();
+        state.set_scratch_unchecked(0, 0, LayerId(0), scratch, Some(7));
+
+        let patch = Patch::from_ops(vec![
+            PatchOp::Remove { x: 0, y: 0, object },
+            PatchOp::RemoveScratch {
+                x: 0,
+                y: 0,
+                object,
+                scratch,
+                value: Some(7),
+                match_value: ScratchValueMatch::Exact,
+            },
+        ]);
+
+        let next = patch.apply(&game, &state).unwrap();
+
+        assert_eq!(next.get_layer(0, 0, LayerId(0)).unwrap(), ObjectId::EMPTY);
+        assert!(next.slot_scratch().iter().all(Vec::is_empty));
+    }
+
+    #[test]
+    fn scratch_cleanup_still_rejects_initially_missing_object() {
+        let object = ObjectId(1);
+        let game = CompiledGame::new(
+            1,
+            vec![ObjectDef {
+                id: object,
+                layer_id: LayerId(0),
+            }],
+            Vec::new(),
+        );
+        let state = State::empty(1, 1, 1, 1).unwrap();
+        let patch = Patch::from_ops(vec![PatchOp::RemoveScratch {
+            x: 0,
+            y: 0,
+            object,
+            scratch: ScratchId(0),
+            value: Some(7),
+            match_value: ScratchValueMatch::Exact,
+        }]);
+
+        assert!(matches!(
+            patch.validate(&game, &state),
+            Err(PatchError::ExpectedObject {
+                x: 0,
+                y: 0,
+                layer: LayerId(0),
+                expected,
+                found: ObjectId::EMPTY,
+            }) if expected == object
+        ));
     }
 }

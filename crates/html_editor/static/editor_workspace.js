@@ -530,10 +530,15 @@ async function openProjectFromDesktop(kind = "folder") {
     await appendLoadedWorkspacePayload(payload);
   } catch (error) {
     console.error(error);
-    setEditorStatus("Open failed", "is-error");
+    setEditorStatus(openWorkspaceErrorMessage(error), "is-error");
   } finally {
     setOpenProjectButtonsDisabled(false);
   }
+}
+
+function openWorkspaceErrorMessage(error) {
+  const message = String(error?.message || error || "").trim();
+  return message ? `Open failed: ${message}` : "Open failed";
 }
 
 function embeddedDocuments() {
@@ -1261,13 +1266,22 @@ function puzzleEntryRank(path, dir) {
   if (name === "game.puzzle") {
     return 0;
   }
-  if (folderName && name === `${folderName}.puzzle`) {
+  if (name === "game.puzzle3") {
     return 1;
   }
-  if (name === "main.puzzle") {
+  if (folderName && name === `${folderName}.puzzle`) {
     return 2;
   }
-  return 3;
+  if (folderName && name === `${folderName}.puzzle3`) {
+    return 3;
+  }
+  if (name === "main.puzzle") {
+    return 4;
+  }
+  if (name === "main.puzzle3") {
+    return 5;
+  }
+  return 6;
 }
 
 function activePreviewSource() {
@@ -1557,7 +1571,18 @@ function directoryName(path) {
 }
 
 function isPuzzleDocument(document) {
-  return extensionName(document?.puzzlePath || document?.name) === "puzzle";
+  return puzzleSourceProfile(document) !== "";
+}
+
+function puzzleSourceProfile(document) {
+  const ext = extensionName(document?.puzzlePath || document?.name);
+  if (ext === "puzzle") {
+    return "puzzle2d";
+  }
+  if (ext === "puzzle3") {
+    return "puzzle3d";
+  }
+  return "";
 }
 
 function isTextDocument(document) {
@@ -1567,7 +1592,7 @@ function isTextDocument(document) {
 function isTextFileName(name, mimeType = "") {
   const ext = extensionName(name);
   return [
-    "puzzle", "css", "js", "mjs", "json", "svg", "txt", "md", "html", "xml", "csv", "tsv",
+    "puzzle", "puzzle3", "css", "js", "mjs", "json", "svg", "txt", "md", "html", "xml", "csv", "tsv",
   ].includes(ext) || String(mimeType || "").startsWith("text/");
 }
 
@@ -1590,6 +1615,7 @@ function mimeTypeForPath(path) {
     ogg: "audio/ogg",
     png: "image/png",
     puzzle: "text/plain",
+    puzzle3: "text/plain",
     svg: "image/svg+xml",
     txt: "text/plain",
     wav: "audio/wav",

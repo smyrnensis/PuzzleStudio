@@ -3,7 +3,7 @@
 This standalone crate tests the 3D puzzle-core shape before merging anything
 into the main crates.
 
-See `CANONICAL_SYNTAX.md` for the draft 3D `.puzzle` authoring syntax.
+See `CANONICAL_SYNTAX.md` for the draft 3D `.puzzle3` authoring syntax.
 
 ## Core conventions
 

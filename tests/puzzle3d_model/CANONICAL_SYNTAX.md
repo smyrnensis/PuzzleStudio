@@ -1,7 +1,8 @@
 # puzzle3D canonical syntax draft
 
 This is the authoring syntax target for the standalone 3D model prototype.
-It should stay parallel to the current 2D canonical `.puzzle` syntax unless 3D
+It should use the `.puzzle3` extension while staying parallel to the current 2D
+canonical `.puzzle` syntax unless 3D
 requires an explicit difference.
 
 ## Scope

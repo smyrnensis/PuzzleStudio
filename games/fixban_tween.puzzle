@@ -320,9 +320,9 @@ levels fixban of fixban {
 scene title {
 	title
 	subtitle
-	choice "Continue" -> resume playing
+	choice "Continue" -> goto playing
 	choice "New Game" -> input new_game
-	choice "Level Select" -> resume level_select
+	choice "Level Select" -> goto level_select
 	rules {
 		new_game -> {
 			clear_game_progress
@@ -348,8 +348,8 @@ scene playing {
 	}
 	rules {
 		step board
-		open_menu -> open menu
-		level_select -> resume level_select
+		open_menu -> goto menu
+		level_select -> goto level_select
 	}
 }
 
@@ -357,9 +357,9 @@ scene menu {
 	layout {
 		text "Menu"
 		column {
-			button "Resume" -> close
+			button "Resume" -> goto playing
 			button "Restart" -> playing.restart
-			button "Level Select" -> resume level_select
+			button "Level Select" -> goto level_select
 		}
 	}
 	inputs {
@@ -367,8 +367,8 @@ scene menu {
 		level_select <- q
 	}
 	rules {
-		resume -> close
-		level_select -> resume level_select
+		resume -> goto playing
+		level_select -> goto level_select
 	}
 }
 
@@ -376,12 +376,12 @@ scene level_select {
 	layout {
 		text "Select a level"
 		level_menu
-		button "Back" -> resume title
+		button "Back" -> goto title
 	}
 	inputs {
 		back_to_title <- q Escape
 	}
 	rules {
-		back_to_title -> resume title
+		back_to_title -> goto title
 	}
 }

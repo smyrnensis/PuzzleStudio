@@ -35,6 +35,10 @@ adapter / editor / build tool に folder を渡した場合は、その folder �
 
 `import "<path>"` は source composition である。同じ folder にある `.puzzle` は自動では読まれず、entry から明示的に import する。
 
+Canonical example と editor が生成する source は、indent なし、tab 文字なしを標準形とする。
+既存 file が whitespace indentation を含むことは許容する。これは authoring style の選択であり、
+parser restriction ではない。
+
 ## Execution Model
 
 `rules` は必須の puzzle gameplay entrypoint。旧 `transitions` / `main` block は読まない。表示用の派生処理は `routine @name` で宣言し、`@name` statement を置いた位置で実行する。
@@ -902,18 +906,11 @@ legend {
 }
 ```
 
-Section header は既存 block header の sugar として読まれる。
-
-```txt
-=======
-LEGENDS
-=======
-. = empty
-P = Player
-* = Goal Box
-```
-
-これは `levels` 直下では表面構文として `legend { ... }` と同じ意味になる。見出し名は lowercase snake_case に正規化され、既存 block 名に対応する場合だけ section として扱われる。たとえば `RULES` は `rules`、`ON DISPLAY` は `on_display`、`LAYERS` は `layers`、`LEGENDS` は `legend` になる。`TRANSITIONS` は canonical section ではない。
+PuzzleScript 風の section header は canonical `.puzzle` 構文では読まない。
+`=======` / `LEGENDS` / `=======` や `======` / `LEVELS` / `======`
+のような見出しは、明示的な `legend { ... }`、`levels { ... }`、
+`rules { ... }` に書き換える。PuzzleScript import の互換処理は
+`puzzlescript` translator 側に閉じる。
 
 `parse_game_file` で読む file は `import "<path>"` で別 file をその場展開できる。相対 path は import を書いた file の directory から解決される。
 

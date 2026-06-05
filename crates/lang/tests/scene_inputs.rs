@@ -1,5 +1,7 @@
 use puzzle_core::InputId;
-use puzzle_lang::{KeyTrigger, SceneComponent, SceneEffect, parse_game2d as parse_game};
+use puzzle_lang::{
+    KeyTrigger, SceneComponent, SceneEffect, SceneEffectParam, parse_game2d as parse_game,
+};
 
 #[test]
 fn scene_and_model_inputs_are_owner_scoped() {
@@ -243,7 +245,9 @@ scene playing(level) {
         title.components.first(),
         Some(SceneComponent::Choice(choice))
             if matches!(&choice.effect, SceneEffect::Goto { scene, params }
-                if scene == "playing" && params.len() == 1 && params[0].name == "level")
+                if scene == "playing"
+                    && matches!(params.as_slice(), [SceneEffectParam::Level(_)])
+            )
     ));
     let playing = loaded
         .scenes

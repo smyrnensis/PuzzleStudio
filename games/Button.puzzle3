@@ -4,79 +4,81 @@ author "smyrnensis"
 theme puzzlescript
 
 puzzle3 sokoban {
+
 render {
-  camera {
-    yaw = 0
-    pitch = 90
-    zoom = 1
-  }
+camera {
+yaw = 0
+pitch = 90
+zoom = 1
+}
 }
 
 layers {
-  Floor
-  Goal
-  solid = Player Box Wall
+floor = Floor
+target = Goal
+solid = Player Box Wall
 }
 
 groups {
-  solid = Player Box Wall
+solid = Player Box Wall
 }
 
 rules {
-  input [ Player ] -> [ > Player ]
-  move
+input [ Player ] -> [ > Player ]
+[ > Player | Box ] -> [ > Player | > Box ]
+move
 }
 
 win_conditions {
-  some Goal
-  no down [ no Box | Goal ]
+some Goal
+no down [ no Box | Goal ]
 }
 
 on_level_clear {
-  next_level
+next_level
 }
 }
 
 scene title {
 layout {
-  title
-  choice "New Game" -> goto playing
-  choice "Level Select" -> goto level_select
+title
+choice "New Game" -> goto playing
+choice "Level Select" -> goto level_select
 }
 }
 
 scene playing {
 state {
-  puzzle3 sokoban
+puzzle3 sokoban
 }
 keys {
 q Escape -> goto level_select	
 }
 rules {
-  step sokoban
+step sokoban
 }
 
 layout {
-  row {
-    title
-  }
-  puzzle3 sokoban
+row {
+title
+}
+puzzle3 sokoban
 }
 }
 
 scene level_select {
 layout {
-  title "Select Level"
-  column scroll=true {
-    for level in levels {
-      choice join(level.num, ". ", level.title) -> goto sokoban(level)
-    }
-  }
-  button "Exit" -> goto title
+title "Select Level"
+column scroll=true {
+for level in levels {
+  choice join(level.num, ". ", level.title) -> goto sokoban(level)
+}
+}
+button "Exit" -> goto title
 }
 }
 
-levels3 microban of sokoban {
+levels3 {
 legend {
 . = empty
 , = Floor

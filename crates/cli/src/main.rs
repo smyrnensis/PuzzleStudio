@@ -760,48 +760,52 @@ fn print_usage() {
 }
 
 fn print_check_usage() {
-    eprintln!("usage: puzzlestudio check <path/to/game-folder-or-game.puzzle> [--json]");
+    eprintln!(
+        "usage: puzzlestudio check <path/to/game-folder-or-game.puzzle-or-game.puzzle3> [--json]"
+    );
 }
 
 fn print_inspect_usage() {
-    eprintln!("usage: puzzlestudio inspect <path/to/game-folder-or-game.puzzle>");
+    eprintln!("usage: puzzlestudio inspect <path/to/game-folder-or-game.puzzle-or-game.puzzle3>");
 }
 
 #[cfg(feature = "export-html")]
 fn print_export_html_usage() {
     eprintln!(
-        "usage: puzzlestudio export-html <path/to/game-folder-or-game.puzzle> -o <output.html>"
+        "usage: puzzlestudio export-html <path/to/game-folder-or-game.puzzle-or-game.puzzle3> -o <output.html>"
     );
 }
 
 #[cfg(feature = "play")]
 fn print_play_usage() {
-    eprintln!("usage: puzzlestudio play [path/to/game-folder-or-game.puzzle]");
+    eprintln!("usage: puzzlestudio play [path/to/game-folder-or-game.puzzle-or-game.puzzle3]");
 }
 
 #[cfg(feature = "preview")]
 fn print_preview_usage() {
     eprintln!(
-        "usage: puzzlestudio preview [path/to/game-folder-or-game.puzzle] [--port 7878] [--solver-depth N] [--solver-nodes N] [--solver-ms N]"
+        "usage: puzzlestudio preview [path/to/game-folder-or-game.puzzle-or-game.puzzle3] [--port 7878] [--solver-depth N] [--solver-nodes N] [--solver-ms N]"
     );
 }
 
 #[cfg(feature = "editor")]
 fn print_editor_usage() {
-    eprintln!("usage: puzzlestudio editor [path/to/game-folder-or-game.puzzle] [--port 8787]");
+    eprintln!(
+        "usage: puzzlestudio editor [path/to/game-folder-or-game.puzzle-or-game.puzzle3] [--port 8787]"
+    );
 }
 
 #[cfg(feature = "export-editor")]
 fn print_export_editor_usage() {
     eprintln!(
-        "usage: puzzlestudio export-editor [path/to/game-folder-or-game.puzzle] -o <docs/index.html>"
+        "usage: puzzlestudio export-editor [path/to/game-folder-or-game.puzzle-or-game.puzzle3] -o <docs/index.html>"
     );
 }
 
 #[cfg(feature = "screenshot")]
 fn print_screenshot_usage() {
     eprintln!(
-        "usage: puzzlestudio screenshot <path/to/game-folder-or-game.puzzle> -o <output.png> [--scene name] [--level name-or-index] [--input name] [--inputs a,b,c] [--width 1280] [--height 720] [--screenshot-timeout-ms 5000] [--browser path]\n       puzzlestudio screenshot <path/to/game-folder-or-game.puzzle> --list"
+        "usage: puzzlestudio screenshot <path/to/game-folder-or-game.puzzle-or-game.puzzle3> -o <output.png> [--scene name] [--level name-or-index] [--input name] [--inputs a,b,c] [--width 1280] [--height 720] [--screenshot-timeout-ms 5000] [--browser path]\n       puzzlestudio screenshot <path/to/game-folder-or-game.puzzle-or-game.puzzle3> --list"
     );
 }
 

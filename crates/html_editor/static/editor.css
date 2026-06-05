@@ -3658,13 +3658,18 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
 .sprite-pane-mode-switch,
 .level-pane-mode-switch {
   min-height: 22px;
-  padding: 1px;
+  padding: 2px 8px;
   display: inline-flex;
   align-items: center;
   gap: 1px;
   border: 1px solid var(--line);
   border-radius: 4px;
   background: transparent;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0;
+  white-space: nowrap;
 }
 
 .sprite-pane-mode-switch[hidden],
@@ -3677,29 +3682,39 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   margin-left: 0;
 }
 
-.sprite-pane-mode-button,
-.level-pane-mode-button {
-  min-width: 30px;
-  min-height: 18px;
-  padding: 0 6px;
-  border: 0;
-  border-radius: 3px;
-  color: var(--muted);
-  font-size: 10px;
+.tool-empty-pane {
+  height: 100%;
+  min-height: 220px;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.tool-empty-pane[hidden] {
+  display: none;
+}
+
+.tool-empty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+}
+
+.tool-empty-action-button {
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 5px;
+  background: var(--button-bg);
+  color: var(--ink);
+  font-size: 12px;
   font-weight: 800;
 }
 
-.sprite-pane-mode-button:hover,
-.sprite-pane-mode-button:focus-visible,
-.level-pane-mode-button:hover,
-.level-pane-mode-button:focus-visible {
-  color: var(--ink);
-}
-
-.sprite-pane-mode-button.is-active,
-.level-pane-mode-button.is-active {
-  background: var(--active-bg);
-  color: var(--ink);
+.tool-empty-action-button:hover,
+.tool-empty-action-button:focus-visible {
+  background: var(--button-bg-hover);
 }
 
 .sprite-controls label,

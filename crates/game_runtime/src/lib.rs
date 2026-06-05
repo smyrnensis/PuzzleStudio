@@ -1,7 +1,9 @@
 use puzzle_core::{InputId, ObjectId, State as PuzzleState, transition_program};
 use puzzle_lang::{
-    ArrowKey, Level, LoadedDocumentModel, LoadedGame, ResourceSelection, SceneComponent, SceneDef,
-    SceneValue, ThemeDef, ViewportModeDef, ViewportSizeDef, parse_game2d,
+    ArrowKey, KeyTrigger, Level, LoadedDocumentModel, LoadedGame, ResourceSelection,
+    SceneAlignXDef, SceneAlignYDef, SceneComponent, SceneDef, SceneEffect, SceneEffectParam,
+    SceneExpr, SceneLayoutDef, ScenePuzzleInitializer, SceneStateLifetime, SceneTextContent,
+    SceneTransitionTrigger, SceneValue, ThemeDef, ViewportModeDef, ViewportSizeDef, parse_game2d,
 };
 use puzzle_play::{
     AnimationEvent, GameSession, LevelProgressSaveData, MessageEvent, PersistentVarSaveData,
@@ -41,8 +43,9 @@ pub struct StandaloneSessionBridge {
 }
 
 impl StandaloneSessionBridge {
-    pub fn from_source(source: &str, _puzzle_path: &str) -> Result<Self, String> {
-        let document = puzzle_lang::parse_game(source).map_err(|error| error.to_string())?;
+    pub fn from_source(source: &str, puzzle_path: &str) -> Result<Self, String> {
+        let document = puzzle_lang::parse_game_for_path(source, puzzle_path)
+            .map_err(|error| error.to_string())?;
         let loaded = if document.models.len() > 1 {
             mixed_document_loaded_game(&document)?
         } else {
@@ -174,12 +177,9 @@ impl StandaloneSessionBridge {
             "currentScene": current_scene,
             "focusedScreen": current_scene,
             "focusedScene": current_scene,
-            "visibleScreens": self.session.visible_scenes(),
             "visibleScenes": self.session.visible_scenes(),
             "gameState": scene_values_value(self.session.session_values()),
-            "screenState": scene_state,
             "sceneState": scene_state,
-            "screenPuzzles": scene_puzzles,
             "scenePuzzles": scene_puzzles,
             "scenePuzzleState": scene_puzzle_state,
             "sceneLayers": scene_layers_value(&self.loaded, &self.session),
@@ -189,14 +189,15 @@ impl StandaloneSessionBridge {
             "canRedo": self.session.can_redo(),
             "inputs": inputs_value(&self.loaded),
             "levels": levels_value(&self.loaded, self.session.cleared_levels()),
-            "scenes": [],
-            "screens": [],
+            "scenes": scenes_value(&self.loaded),
+            "screens": scenes_value(&self.loaded),
         })
     }
 }
 
 pub struct Puzzle3RuntimeBridge {
     parsed: ParsedPuzzle3,
+    animation: puzzle_lang::AnimationDef,
     current_state: Option<State3>,
     saved_states: SavedStateStore<State3>,
 }
@@ -206,11 +207,13 @@ impl Puzzle3RuntimeBridge {
         if let Ok(parsed) = puzzle3d_model::parse_puzzle3d(source) {
             return Ok(Self {
                 parsed,
+                animation: Default::default(),
                 current_state: None,
                 saved_states: SavedStateStore::new(),
             });
         }
         let document = puzzle_lang::parse_game(source).map_err(|error| error.to_string())?;
+        let animation = document.animation.clone();
         let parsed = document
             .models
             .iter()
@@ -221,6 +224,7 @@ impl Puzzle3RuntimeBridge {
             .ok_or_else(|| "3D runtime source does not contain a puzzle3 model".to_string())?;
         Ok(Self {
             parsed,
+            animation,
             current_state: None,
             saved_states: SavedStateStore::new(),
         })
@@ -287,6 +291,7 @@ impl Puzzle3RuntimeBridge {
             "completed": completed,
             "stateHash": next_state.hash(),
             "changedCells": state3_cells_value(&next_state, Some(&before)),
+            "animationEvents": animation_events3_value(&self.animation, &before, &next_state),
             "commands": [],
         })
         .to_string())
@@ -454,6 +459,368 @@ fn scene_puzzle_state_value(loaded: &LoadedGame, session: &GameSession) -> Value
         entries.insert(name.clone(), json!({ "level": level }));
     }
     Value::Object(entries)
+}
+
+fn scenes_value(loaded: &LoadedGame) -> Value {
+    Value::Array(loaded.scenes.iter().map(scene_def_value).collect())
+}
+
+fn scene_def_value(scene: &SceneDef) -> Value {
+    json!({
+        "name": scene.name,
+        "layout": scene_layout_value(&scene.layout),
+        "resources": scene_def_resources_value(scene),
+        "state": scene_state_def_value(scene),
+        "puzzleRule": scene.puzzle_rule.as_ref().map(|rule| json!({
+            "target": rule.target,
+            "rule": rule.rule,
+        })),
+        "components": scene.components.iter().map(scene_component_value).collect::<Vec<_>>(),
+        "keys": scene.key_bindings.iter().map(|binding| json!({
+            "effect": scene_effect_value(&binding.effect),
+            "keys": binding.keys.iter().map(key_trigger_name).collect::<Vec<_>>(),
+        })).collect::<Vec<_>>(),
+        "transitions": scene.transitions.iter().map(|transition| {
+            let mut value = serde_json::Map::new();
+            match &transition.trigger {
+                SceneTransitionTrigger::Condition(condition) => {
+                    value.insert("condition".to_string(), Value::String(condition.clone()));
+                }
+                SceneTransitionTrigger::SceneStart => {
+                    value.insert("lifecycle".to_string(), Value::String("scene_start".to_string()));
+                }
+                SceneTransitionTrigger::LevelStart => {
+                    value.insert("lifecycle".to_string(), Value::String("level_start".to_string()));
+                }
+            }
+            value.insert("effect".to_string(), scene_effect_value(&transition.effect));
+            Value::Object(value)
+        }).collect::<Vec<_>>(),
+    })
+}
+
+fn scene_def_resources_value(scene: &SceneDef) -> Value {
+    json!({
+        "levelsMode": resource_selection_mode(&scene.resources.levels),
+        "levels": resource_selection_names(&scene.resources.levels),
+        "spritesMode": resource_selection_mode(&scene.resources.sprites),
+        "sprites": resource_selection_names(&scene.resources.sprites),
+    })
+}
+
+fn resource_selection_mode(selection: &ResourceSelection) -> &'static str {
+    match selection {
+        ResourceSelection::All => "all",
+        ResourceSelection::Named(_) => "named",
+    }
+}
+
+fn resource_selection_names(selection: &ResourceSelection) -> Vec<String> {
+    match selection {
+        ResourceSelection::All => Vec::new(),
+        ResourceSelection::Named(names) => names.clone(),
+    }
+}
+
+fn scene_state_def_value(scene: &SceneDef) -> Value {
+    json!({
+        "variables": scene.state.variables.iter().map(|variable| json!({
+            "name": variable.name,
+            "default": scene_default_value(&variable.default),
+            "lifetime": scene_state_lifetime_name(variable.lifetime),
+            "mutable": variable.mutable,
+        })).collect::<Vec<_>>(),
+        "puzzles": scene.state.puzzles.iter().map(|puzzle| {
+            let mut value = serde_json::Map::new();
+            value.insert("name".to_string(), Value::String(puzzle.name.clone()));
+            value.insert("kind".to_string(), Value::String(puzzle.kind.clone()));
+            value.insert("model".to_string(), Value::String(puzzle.model.clone()));
+            match &puzzle.initializer {
+                ScenePuzzleInitializer::CurrentLevel => {
+                    value.insert("initializer".to_string(), Value::String("current_level".to_string()));
+                }
+                ScenePuzzleInitializer::Level(level) => {
+                    value.insert("initializer".to_string(), Value::String("level".to_string()));
+                    value.insert("level".to_string(), Value::String(level.clone()));
+                }
+            }
+            Value::Object(value)
+        }).collect::<Vec<_>>(),
+    })
+}
+
+fn scene_default_value(value: &SceneValue) -> Value {
+    match value {
+        SceneValue::Bool(value) => Value::Bool(*value),
+        SceneValue::Int(value) => json!(value),
+        SceneValue::Text(value) | SceneValue::Symbol(value) => Value::String(value.clone()),
+        SceneValue::LevelRef(index) => json!(index),
+    }
+}
+
+fn scene_state_lifetime_name(lifetime: SceneStateLifetime) -> &'static str {
+    match lifetime {
+        SceneStateLifetime::Instance => "instance",
+        SceneStateLifetime::ResetOnStart => "reset_on_start",
+        SceneStateLifetime::Persistent => "persistent",
+    }
+}
+
+fn scene_layout_value(layout: &SceneLayoutDef) -> Value {
+    let mut value = serde_json::Map::new();
+    if let Some(size) = layout.size {
+        value.insert(
+            "size".to_string(),
+            json!({ "width": size.width, "height": size.height }),
+        );
+    }
+    if let Some(gap) = layout.gap {
+        value.insert("gap".to_string(), json!(gap));
+    }
+    if layout.align != SceneLayoutDef::default().align {
+        value.insert(
+            "align".to_string(),
+            json!({
+                "x": match layout.align.x {
+                    SceneAlignXDef::Left => "left",
+                    SceneAlignXDef::Center => "center",
+                    SceneAlignXDef::Right => "right",
+                },
+                "y": match layout.align.y {
+                    SceneAlignYDef::Top => "top",
+                    SceneAlignYDef::Center => "center",
+                    SceneAlignYDef::Bottom => "bottom",
+                },
+            }),
+        );
+    }
+    if layout.scroll {
+        value.insert("scroll".to_string(), Value::Bool(true));
+    }
+    Value::Object(value)
+}
+
+fn scene_component_value(component: &SceneComponent) -> Value {
+    match component {
+        SceneComponent::Frame(frame) => json!({
+            "kind": frame.kind,
+            "source": frame.source,
+            "layout": scene_layout_value(&frame.layout),
+        }),
+        SceneComponent::Title(title) => json!({
+            "kind": "title",
+            "content": scene_expr_value(&title.content),
+        }),
+        SceneComponent::Subtitle(subtitle) => json!({
+            "kind": "subtitle",
+            "content": scene_expr_value(&subtitle.content),
+        }),
+        SceneComponent::Text(text) => {
+            let mut value = serde_json::Map::new();
+            value.insert("kind".to_string(), Value::String("text".to_string()));
+            match &text.content {
+                SceneTextContent::Literal(text) => {
+                    value.insert("source".to_string(), Value::String("literal".to_string()));
+                    value.insert("value".to_string(), Value::String(text.clone()));
+                }
+                SceneTextContent::Path(path) => {
+                    value.insert("source".to_string(), Value::String("path".to_string()));
+                    value.insert("path".to_string(), Value::String(path.join(".")));
+                }
+            }
+            Value::Object(value)
+        }
+        SceneComponent::Button(button) => json!({
+            "kind": "button",
+            "label": scene_expr_value(&button.label),
+            "effect": scene_effect_value(&button.effect),
+        }),
+        SceneComponent::Choice(choice) => json!({
+            "kind": "choice",
+            "label": scene_expr_value(&choice.label),
+            "effect": scene_effect_value(&choice.effect),
+        }),
+        SceneComponent::Row(container) => json!({
+            "kind": "row",
+            "layout": scene_layout_value(&container.layout),
+            "children": scene_component_list_value(&container.children),
+        }),
+        SceneComponent::Column(container) => json!({
+            "kind": "column",
+            "layout": scene_layout_value(&container.layout),
+            "children": scene_component_list_value(&container.children),
+        }),
+        SceneComponent::Box(container) => json!({
+            "kind": "box",
+            "layout": scene_layout_value(&container.layout),
+            "children": scene_component_list_value(&container.children),
+        }),
+        SceneComponent::Conditional(conditional) => json!({
+            "kind": "conditional",
+            "condition": conditional.condition,
+            "children": scene_component_list_value(&conditional.children),
+            "elseChildren": scene_component_list_value(&conditional.else_children),
+        }),
+        SceneComponent::For(for_view) => json!({
+            "kind": "for",
+            "binding": for_view.binding,
+            "source": for_view.source.as_str(),
+            "children": scene_component_list_value(&for_view.children),
+        }),
+        SceneComponent::LevelMenu(menu) => json!({
+            "kind": "level_menu",
+            "showIndex": menu.show_index,
+            "showCleared": menu.show_cleared,
+            "columns": menu.columns,
+            "wrap": menu.wrap,
+            "source": menu.source,
+            "action": menu.action.as_ref().map(scene_effect_value),
+            "buttons": menu.buttons.iter().map(|button| json!({
+                "label": scene_expr_value(&button.label),
+                "effect": scene_effect_value(&button.effect),
+            })).collect::<Vec<_>>(),
+        }),
+    }
+}
+
+fn scene_component_list_value(components: &[SceneComponent]) -> Vec<Value> {
+    components.iter().map(scene_component_value).collect()
+}
+
+fn scene_effect_value(effect: &SceneEffect) -> Value {
+    match effect {
+        SceneEffect::Input(input) => json!({ "kind": "input", "name": input }),
+        SceneEffect::ComponentEffect(name) => json!({ "kind": "component_effect", "name": name }),
+        SceneEffect::Message { text } => {
+            json!({ "kind": "message", "text": scene_expr_value(text) })
+        }
+        SceneEffect::Wait { milliseconds } => {
+            json!({ "kind": "wait", "milliseconds": milliseconds.unwrap_or(200) })
+        }
+        SceneEffect::Conditional { condition, effect } => json!({
+            "kind": "conditional",
+            "condition": condition,
+            "effect": scene_effect_value(effect),
+        }),
+        SceneEffect::PlaySfx { name } => json!({ "kind": "play_sfx", "name": name }),
+        SceneEffect::PlayMusic { name } => json!({ "kind": "play_music", "name": name }),
+        SceneEffect::PauseMusic { name } => json!({ "kind": "pause_music", "name": name }),
+        SceneEffect::ResumeMusic { name } => json!({ "kind": "resume_music", "name": name }),
+        SceneEffect::StopMusic { name } => json!({ "kind": "stop_music", "name": name }),
+        SceneEffect::Goto { scene, params } => scene_target_effect_value("goto", scene, params),
+        SceneEffect::Enter { scene, params } => scene_target_effect_value("enter", scene, params),
+        SceneEffect::Back => json!({ "kind": "back" }),
+        SceneEffect::Create { scene } => scene_target_effect_value("create", scene, &[]),
+        SceneEffect::Reset { scene } => scene_target_effect_value("reset", scene, &[]),
+        SceneEffect::Delete { scene } => scene_target_effect_value("delete", scene, &[]),
+        SceneEffect::Show { scene } => scene_target_effect_value("show", scene, &[]),
+        SceneEffect::Hide { scene } => scene_target_effect_value("hide", scene, &[]),
+        SceneEffect::Toggle { scene } => scene_target_effect_value("toggle", scene, &[]),
+        SceneEffect::Focus { scene } => scene_target_effect_value("focus", scene, &[]),
+        SceneEffect::PuzzleNextLevel { target } => {
+            json!({ "kind": "puzzle_next_level", "target": target })
+        }
+        SceneEffect::PuzzlePreviousLevel { target } => {
+            json!({ "kind": "puzzle_previous_level", "target": target })
+        }
+        SceneEffect::GotoLevel { target, level } => json!({
+            "kind": "puzzle_goto_level",
+            "target": target,
+            "level": scene_expr_value(level),
+        }),
+        SceneEffect::ResetPuzzle { target } => json!({ "kind": "puzzle_reset", "target": target }),
+        SceneEffect::LoadPuzzle { target, source } => json!({
+            "kind": "puzzle_load",
+            "target": target,
+            "source": source,
+        }),
+        SceneEffect::Apply { rule, args, target } => {
+            let mut value = serde_json::Map::new();
+            value.insert("kind".to_string(), Value::String("apply".to_string()));
+            value.insert("rule".to_string(), Value::String(rule.clone()));
+            value.insert(
+                "args".to_string(),
+                Value::Array(args.iter().map(scene_expr_value).collect()),
+            );
+            if let Some(target) = target {
+                value.insert("target".to_string(), Value::String(target.clone()));
+            }
+            Value::Object(value)
+        }
+        SceneEffect::Copy { source, target } => json!({
+            "kind": "copy",
+            "source": source,
+            "target": target,
+        }),
+        SceneEffect::ClearUndoHistory => json!({ "kind": "clear_undo_history" }),
+        SceneEffect::ClearGameProgress => json!({ "kind": "clear_game_progress" }),
+        SceneEffect::SetCurrentLevel { level } => json!({
+            "kind": "set_current_level",
+            "level": scene_expr_value(level),
+        }),
+        SceneEffect::ClearCurrentLevel => json!({ "kind": "clear_current_level" }),
+        SceneEffect::SetLevelCleared { level, cleared } => {
+            let mut value = serde_json::Map::new();
+            value.insert(
+                "kind".to_string(),
+                Value::String("set_level_cleared".to_string()),
+            );
+            value.insert("cleared".to_string(), Value::Bool(*cleared));
+            if let Some(level) = level {
+                value.insert("level".to_string(), scene_expr_value(level));
+            }
+            Value::Object(value)
+        }
+        SceneEffect::ResetPersistentVars => json!({ "kind": "reset_persistent_vars" }),
+        SceneEffect::Sequence(effects) => json!({
+            "kind": "sequence",
+            "effects": effects.iter().map(scene_effect_value).collect::<Vec<_>>(),
+        }),
+    }
+}
+
+fn scene_target_effect_value(kind: &str, scene: &str, params: &[SceneEffectParam]) -> Value {
+    json!({
+        "kind": kind,
+        "screen": scene,
+        "scene": scene,
+        "params": params.iter().map(scene_effect_param_value).collect::<Vec<_>>(),
+    })
+}
+
+fn scene_effect_param_value(param: &SceneEffectParam) -> Value {
+    match param {
+        SceneEffectParam::Level(value) => json!({
+            "kind": "level",
+            "value": scene_expr_value(value),
+        }),
+        SceneEffectParam::Named { name, value } => json!({
+            "kind": "named",
+            "name": name,
+            "value": scene_expr_value(value),
+        }),
+    }
+}
+
+fn scene_expr_value(expr: &SceneExpr) -> Value {
+    match expr {
+        SceneExpr::Bool(value) => json!({ "kind": "bool", "value": value }),
+        SceneExpr::Int(value) => json!({ "kind": "int", "value": value }),
+        SceneExpr::Text(value) => json!({ "kind": "text", "value": value }),
+        SceneExpr::Path(path) => json!({ "kind": "path", "path": path.join(".") }),
+        SceneExpr::Call { name, args } => json!({
+            "kind": "call",
+            "name": name,
+            "args": args.iter().map(scene_expr_value).collect::<Vec<_>>(),
+        }),
+    }
+}
+
+fn key_trigger_name(key: &KeyTrigger) -> String {
+    match key {
+        KeyTrigger::Char(ch) => ch.to_string(),
+        KeyTrigger::Named(name) => name.clone(),
+    }
 }
 
 fn scene_puzzle_state<'a>(
@@ -635,6 +1002,13 @@ fn object_name(loaded: &LoadedGame, object: ObjectId) -> String {
         .unwrap_or_else(|| "?".to_string())
 }
 
+fn object_id_by_name(loaded: &LoadedGame, object_name: &str) -> Option<ObjectId> {
+    loaded
+        .object_labels
+        .iter()
+        .find_map(|(id, label)| (label == object_name).then_some(*id))
+}
+
 fn sounds_value(loaded: &LoadedGame) -> Value {
     json!({
         "sfx": loaded.sounds.sfx.iter().map(|sfx| {
@@ -685,9 +1059,19 @@ fn screen_value(loaded: &LoadedGame) -> Value {
         ViewportModeDef::Paged => "paged",
         ViewportModeDef::Centered => "centered",
     };
+    let viewport_focus_objects = loaded
+        .object_groups
+        .get(&loaded.screen.viewport_focus)
+        .cloned()
+        .or_else(|| object_id_by_name(loaded, &loaded.screen.viewport_focus).map(|id| vec![id]))
+        .unwrap_or_default()
+        .into_iter()
+        .map(|id| id.0)
+        .collect::<Vec<_>>();
     json!({
         "viewportSize": viewport_size,
         "viewportFocus": loaded.screen.viewport_focus,
+        "viewportFocusObjects": viewport_focus_objects,
         "viewportMode": viewport_mode,
     })
 }
@@ -737,16 +1121,20 @@ fn animation_events_value(events: &[AnimationEvent]) -> Vec<Value> {
                 object,
                 from_x,
                 from_y,
+                from_z,
                 to_x,
                 to_y,
+                to_z,
             } => json!({
                 "kind": "move",
                 "name": name,
                 "objectId": object.0,
                 "fromX": from_x,
                 "fromY": from_y,
+                "fromZ": from_z,
                 "toX": to_x,
                 "toY": to_y,
+                "toZ": to_z,
             }),
             AnimationEvent::CantMove { name, object, x, y } => json!({
                 "kind": "cant_move",
@@ -1205,6 +1593,92 @@ fn state3_cell_slots_equal(before: &State3, after: &State3, cell: usize) -> bool
     before.slots()[start..start + layer_count] == after.slots()[start..start + layer_count]
 }
 
+fn animation_events3_value(
+    animation: &puzzle_lang::AnimationDef,
+    before: &State3,
+    after: &State3,
+) -> Value {
+    if !animation.tween.enabled
+        || before.size != after.size
+        || before.layer_count != after.layer_count
+    {
+        return json!([]);
+    }
+    let mut events = Vec::new();
+    for object in changed_object_ids3(before, after) {
+        let mut sources = changed_positions_for_object3(before, after, object, false);
+        let targets = changed_positions_for_object3(before, after, object, true);
+        for target in targets {
+            if let Some(source_index) = sources
+                .iter()
+                .position(|source| adjacent_coord3(*source, target))
+            {
+                let source = sources.remove(source_index);
+                events.push(json!({
+                    "kind": "move",
+                    "name": "tween",
+                    "objectId": object.0,
+                    "fromX": source.x,
+                    "fromY": source.y,
+                    "fromZ": source.z,
+                    "toX": target.x,
+                    "toY": target.y,
+                    "toZ": target.z,
+                }));
+            }
+        }
+    }
+    Value::Array(events)
+}
+
+fn changed_object_ids3(before: &State3, after: &State3) -> Vec<ObjectId3> {
+    let mut objects = Vec::new();
+    for (before, after) in before.slots().iter().zip(after.slots().iter()) {
+        for object in [*before, *after] {
+            if !object.is_empty() && !objects.contains(&object) {
+                objects.push(object);
+            }
+        }
+    }
+    objects.sort_by_key(|object| object.0);
+    objects
+}
+
+fn changed_positions_for_object3(
+    before: &State3,
+    after: &State3,
+    object: ObjectId3,
+    present_after: bool,
+) -> Vec<Coord3> {
+    let mut positions = Vec::new();
+    for z in 0..after.size.height {
+        for y in 0..after.size.depth {
+            for x in 0..after.size.width {
+                let coord = Coord3 { x, y, z };
+                let had = state3_has_object(before, coord, object);
+                let has = state3_has_object(after, coord, object);
+                if had != has && has == present_after {
+                    positions.push(coord);
+                }
+            }
+        }
+    }
+    positions
+}
+
+fn state3_has_object(state: &State3, coord: Coord3, object: ObjectId3) -> bool {
+    let cell = ((usize::from(coord.z) * usize::from(state.size.depth)) + usize::from(coord.y))
+        * usize::from(state.size.width)
+        + usize::from(coord.x);
+    let start = cell * usize::from(state.layer_count);
+    state.slots()[start..start + usize::from(state.layer_count)].contains(&object)
+}
+
+fn adjacent_coord3(left: Coord3, right: Coord3) -> bool {
+    let distance = left.x.abs_diff(right.x) + left.y.abs_diff(right.y) + left.z.abs_diff(right.z);
+    distance == 1
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1220,6 +1694,8 @@ mod tests {
             serde_json::from_str(&bridge.request_json("GET", "/api/state").unwrap()).unwrap();
         assert_eq!(title["currentScene"], "title");
         assert_eq!(title["game"]["title"], "Microban Basic");
+        assert_eq!(title["scenes"][0]["name"], "title");
+        assert_eq!(title["scenes"][0]["components"][0]["kind"], "title");
 
         let playing: Value = serde_json::from_str(
             &bridge
@@ -1259,6 +1735,13 @@ mod tests {
         assert_eq!(playing["currentScene"], "playing");
         assert_eq!(playing["levelIndex"], 0);
         assert_eq!(playing["scenePuzzles"], json!(["board"]));
+        let playing_object = playing.as_object().unwrap();
+        assert!(playing_object.contains_key("visibleScenes"));
+        assert!(playing_object.contains_key("sceneState"));
+        assert!(playing_object.contains_key("scenePuzzles"));
+        assert!(!playing_object.contains_key("visibleScreens"));
+        assert!(!playing_object.contains_key("screenState"));
+        assert!(!playing_object.contains_key("screenPuzzles"));
         assert_eq!(
             playing["scenePuzzleState"]["board"]["level"]["name"],
             "microban.1"
@@ -1271,6 +1754,40 @@ mod tests {
                 .iter()
                 .flat_map(|cell| cell["layers"].as_array().unwrap())
                 .any(|layer| layer["object"] == "@Floor")
+        );
+    }
+
+    #[test]
+    fn transition_flickscreen_focuses_player_group() {
+        let source = include_str!("../../../games/Transition.puzzle");
+        let mut bridge =
+            StandaloneSessionBridge::from_source(source, "games/Transition.puzzle").unwrap();
+
+        let playing: Value = serde_json::from_str(
+            &bridge
+                .request_json("POST", "/api/command/new_game")
+                .unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            playing["scene"]["screen"]["viewportSize"],
+            json!({"kind": "size", "width": 13, "height": 13})
+        );
+        assert_eq!(playing["scene"]["screen"]["viewportFocus"], "player");
+        assert!(
+            playing["scene"]["screen"]["viewportFocusObjects"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|id| id.as_u64().is_some_and(|id| id > 0))
+        );
+        assert!(
+            playing["scene"]["screen"]["viewportFocusObjects"]
+                .as_array()
+                .unwrap()
+                .len()
+                >= 2
         );
     }
 
@@ -1330,8 +1847,60 @@ mod tests {
                     "objectId": 19,
                     "fromX": 2,
                     "fromY": 5,
+                    "fromZ": 0,
                     "toX": 2,
-                    "toY": 4
+                    "toY": 4,
+                    "toZ": 0
+                }
+            ])
+        );
+    }
+
+    #[test]
+    fn puzzle3_runtime_bridge_emits_tween_move_events() {
+        let source = r#"
+title "3D Tween"
+
+animation {
+  tween {
+    duration = 300ms
+  }
+}
+
+puzzle3 sokoban {
+layers {
+  solid = Player
+}
+
+rules {
+  input horizontal [ Player | no Player ] -> [ | Player ]
+}
+}
+"#;
+        let mut bridge = Puzzle3RuntimeBridge::from_source(source).unwrap();
+        bridge
+            .set_state_json(
+                r#"{"kind":"puzzle3d","width":2,"depth":1,"height":1,"layerCount":1,"slots":[1,0],"levelFiredRules":[]}"#,
+            )
+            .unwrap();
+
+        let moved: Value =
+            serde_json::from_str(&bridge.transition_current_outcome_json("main", 1).unwrap())
+                .unwrap();
+
+        assert_eq!(
+            moved["animationEvents"],
+            json!([
+                {
+                    "kind": "move",
+                    "name": "tween",
+                    "objectId": 1,
+                    "fromX": 0,
+                    "fromY": 0,
+                    "fromZ": 0,
+                    "toX": 1,
+                    "toY": 0,
+                    "toZ": 0
                 }
             ])
         );
@@ -1357,9 +1926,9 @@ mod tests {
 
     #[test]
     fn standalone_session_bridge_supports_single_puzzle3_document() {
-        let source = include_str!("../../../games/spec_3d.puzzle");
+        let source = include_str!("../../../games/spec_3d.puzzle3");
         let mut bridge =
-            StandaloneSessionBridge::from_source(source, "games/spec_3d.puzzle").unwrap();
+            StandaloneSessionBridge::from_source(source, "games/spec_3d.puzzle3").unwrap();
         let snapshot: Value = serde_json::from_str(&bridge.snapshot_json()).unwrap();
         assert_eq!(snapshot["currentScene"], json!("title"));
         assert_eq!(snapshot["game"]["title"], json!("Microban 3D"));

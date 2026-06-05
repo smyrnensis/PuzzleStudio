@@ -156,7 +156,7 @@ impl Config {
                 }
                 "--help" | "-h" => {
                     return Err(AppError::Config(
-                        "usage: html-editor [path/to/game-folder-or-game.puzzle] [-o docs/index.html] [--serve] [--port 8787]"
+                        "usage: html-editor [path/to/game-folder-or-game.puzzle-or-game.puzzle3] [-o docs/index.html] [--serve] [--port 8787]"
                             .to_string(),
                     ));
                 }
@@ -195,7 +195,7 @@ impl EditorService {
             Ok(puzzle_path) => puzzle_path,
             Err(error) if path.is_dir() => {
                 let message = error.to_string();
-                if message.contains("game folder must contain a .puzzle file") {
+                if message.contains("game folder must contain a .puzzle or .puzzle3 file") {
                     return Self::open_workspace_root(path);
                 }
                 return Err(AppError::Config(message));
@@ -253,10 +253,19 @@ impl EditorService {
         }
         let source = fs::read_to_string(&puzzle_path)?;
         let base_game_visuals_js = load_base_game_visuals_js(&puzzle_path, &workspace_root)?;
-        let expanded_source =
-            expand_preview_source(&source, &puzzle_path).unwrap_or_else(|_| source.clone());
+        let expanded_source = expand_preview_source(&source, &puzzle_path).map_err(|error| {
+            AppError::Config(format!(
+                "failed to expand preview imports for {}: {error}",
+                puzzle_path.display()
+            ))
+        })?;
         let game_visuals_js = load_game_visuals_js(&expanded_source, &base_game_visuals_js)
-            .unwrap_or_else(|_| base_game_visuals_js.clone());
+            .map_err(|error| {
+                AppError::Config(format!(
+                    "failed to generate editor visuals for {}: {error}",
+                    puzzle_path.display()
+                ))
+            })?;
         Ok(Self {
             state: EditorState {
                 puzzle_path: puzzle_path.display().to_string(),
@@ -282,7 +291,7 @@ impl EditorService {
         &self.state.puzzle_path
     }
 
-    pub fn source_json(&self) -> String {
+    pub fn source_json(&self) -> Result<String, AppError> {
         source_json(&self.state)
     }
 
@@ -490,7 +499,7 @@ fn collect_asset_resolver_entries(
         }
         if !file_type.is_file()
             || !is_workspace_file(&path)
-            || path.extension().and_then(|value| value.to_str()) == Some("puzzle")
+            || puzzle_lang::is_puzzle_source_path(&path)
         {
             continue;
         }
@@ -541,11 +550,22 @@ fn load_game_visuals_js(source: &str, base_visuals_js: &str) -> Result<String, A
 }
 
 fn expand_preview_source(source: &str, puzzle_path: &Path) -> Result<String, AppError> {
-    if source_looks_puzzle3d(source) {
-        return Ok(source.to_string());
+    puzzle_lang::validate_source_profile_for_path(source, puzzle_path)
+        .map_err(|error| AppError::Config(error.to_string()))?;
+    match puzzle_lang::puzzle_source_profile_for_path(puzzle_path) {
+        Some(puzzle_lang::PuzzleSourceProfile::Puzzle3d) => Ok(source.to_string()),
+        Some(puzzle_lang::PuzzleSourceProfile::Puzzle2d) => {
+            let expanded = puzzle_lang::expand_game_imports_for_file(source, puzzle_path)
+                .map_err(|error| AppError::Config(error.to_string()))?;
+            puzzle_lang::validate_source_profile_for_path(&expanded, puzzle_path)
+                .map_err(|error| AppError::Config(error.to_string()))?;
+            Ok(expanded)
+        }
+        None => Err(AppError::Config(format!(
+            "preview source must be .puzzle or .puzzle3: {}",
+            puzzle_path.display()
+        ))),
     }
-    puzzle_lang::expand_game_imports_for_file(source, puzzle_path)
-        .map_err(|error| AppError::Config(error.to_string()))
 }
 
 fn expand_preview_source_under_root(
@@ -553,30 +573,36 @@ fn expand_preview_source_under_root(
     puzzle_path: &Path,
     workspace_root: &Path,
 ) -> Result<String, AppError> {
-    if source_looks_puzzle3d(source) {
-        let workspace_root = workspace_root.canonicalize()?;
-        let preview_path = puzzle_path.canonicalize()?;
-        if !preview_path.starts_with(&workspace_root) {
-            return Err(AppError::Config(format!(
-                "can only import puzzle files under {}",
-                workspace_root.display()
-            )));
+    puzzle_lang::validate_source_profile_for_path(source, puzzle_path)
+        .map_err(|error| AppError::Config(error.to_string()))?;
+    match puzzle_lang::puzzle_source_profile_for_path(puzzle_path) {
+        Some(puzzle_lang::PuzzleSourceProfile::Puzzle3d) => {
+            let workspace_root = workspace_root.canonicalize()?;
+            let preview_path = puzzle_path.canonicalize()?;
+            if !preview_path.starts_with(&workspace_root) {
+                return Err(AppError::Config(format!(
+                    "can only import puzzle files under {}",
+                    workspace_root.display()
+                )));
+            }
+            Ok(source.to_string())
         }
-        return Ok(source.to_string());
+        Some(puzzle_lang::PuzzleSourceProfile::Puzzle2d) => {
+            let expanded = puzzle_lang::expand_game_imports_for_file_under_root(
+                source,
+                puzzle_path,
+                workspace_root,
+            )
+            .map_err(|error| AppError::Config(error.to_string()))?;
+            puzzle_lang::validate_source_profile_for_path(&expanded, puzzle_path)
+                .map_err(|error| AppError::Config(error.to_string()))?;
+            Ok(expanded)
+        }
+        None => Err(AppError::Config(format!(
+            "preview source must be .puzzle or .puzzle3: {}",
+            puzzle_path.display()
+        ))),
     }
-    puzzle_lang::expand_game_imports_for_file_under_root(source, puzzle_path, workspace_root)
-        .map_err(|error| AppError::Config(error.to_string()))
-}
-
-fn source_looks_puzzle3d(source: &str) -> bool {
-    source.lines().any(|line| {
-        let trimmed = line.split("//").next().unwrap_or("").trim();
-        let tokens = trimmed.split_whitespace().collect::<Vec<_>>();
-        matches!(
-            tokens.as_slice(),
-            ["puzzle3", ..] | ["levels3", ..] | ["sprites3", ..]
-        )
-    })
 }
 
 fn load_editor_documents(
@@ -594,7 +620,7 @@ fn load_editor_documents(
 
     let mut documents = Vec::new();
     for path in paths {
-        if path.extension().and_then(|value| value.to_str()) == Some("puzzle") {
+        if puzzle_lang::is_puzzle_source_path(&path) {
             let source = read_workspace_text_file(&path, workspace_root)?;
             let (game_css, game_visuals_js) = if let Some(entry_path) =
                 preview_entry_for_document(&path, &source, &parent)
@@ -606,10 +632,20 @@ fn load_editor_documents(
                 };
                 let game_css = load_game_css(&entry_path, workspace_root)?;
                 let base_game_visuals_js = load_base_game_visuals_js(&entry_path, workspace_root)?;
-                let expanded_source = expand_preview_source(&entry_source, &entry_path)
-                    .unwrap_or_else(|_| entry_source.clone());
+                let expanded_source =
+                    expand_preview_source(&entry_source, &entry_path).map_err(|error| {
+                        AppError::Config(format!(
+                            "failed to expand preview imports for {}: {error}",
+                            entry_path.display()
+                        ))
+                    })?;
                 let game_visuals_js = load_game_visuals_js(&expanded_source, &base_game_visuals_js)
-                    .unwrap_or_else(|_| base_game_visuals_js.clone());
+                    .map_err(|error| {
+                        AppError::Config(format!(
+                            "failed to generate editor visuals for {}: {error}",
+                            entry_path.display()
+                        ))
+                    })?;
                 (game_css, game_visuals_js)
             } else {
                 (String::new(), String::new())
@@ -680,7 +716,7 @@ fn preview_entry_in_directory(dir: &Path, root: &Path) -> Option<PathBuf> {
             continue;
         }
         let path = entry.path();
-        if path.extension().and_then(|value| value.to_str()) != Some("puzzle") {
+        if !puzzle_lang::is_puzzle_source_path(&path) {
             continue;
         }
         let source = read_workspace_text_file(&path, root).ok()?;
@@ -707,12 +743,18 @@ fn preview_entry_rank(path: &Path, dir: &Path) -> usize {
         .unwrap_or("");
     if name == "game.puzzle" {
         0
-    } else if !folder_name.is_empty() && name == format!("{folder_name}.puzzle") {
+    } else if name == "game.puzzle3" {
         1
-    } else if name == "main.puzzle" {
+    } else if !folder_name.is_empty() && name == format!("{folder_name}.puzzle") {
         2
-    } else {
+    } else if !folder_name.is_empty() && name == format!("{folder_name}.puzzle3") {
         3
+    } else if name == "main.puzzle" {
+        4
+    } else if name == "main.puzzle3" {
+        5
+    } else {
+        6
     }
 }
 
@@ -783,6 +825,7 @@ fn is_workspace_file(path: &Path) -> bool {
             .and_then(|value| value.to_str())
             .unwrap_or(""),
         "puzzle"
+            | "puzzle3"
             | "css"
             | "js"
             | "mjs"
@@ -806,7 +849,7 @@ fn is_text_file(path: &Path) -> bool {
         path.extension()
             .and_then(|value| value.to_str())
             .unwrap_or(""),
-        "puzzle" | "css" | "js" | "mjs" | "svg" | "json" | "txt" | "md"
+        "puzzle" | "puzzle3" | "css" | "js" | "mjs" | "svg" | "json" | "txt" | "md"
     )
 }
 
@@ -824,7 +867,7 @@ fn mime_type(path: &Path) -> &'static str {
         "mp3" => "audio/mpeg",
         "ogg" => "audio/ogg",
         "png" => "image/png",
-        "puzzle" | "txt" | "md" => "text/plain",
+        "puzzle" | "puzzle3" | "txt" | "md" => "text/plain",
         "svg" => "image/svg+xml",
         "wav" => "audio/wav",
         "webp" => "image/webp",
@@ -1015,9 +1058,10 @@ fn route(request: &HttpRequest, service: &EditorService) -> Vec<u8> {
             "text/javascript; charset=utf-8",
             &service.state().game_visuals_js,
         ),
-        ("GET", "/api/source") => {
-            http_ok("application/json; charset=utf-8", &service.source_json())
-        }
+        ("GET", "/api/source") => match service.source_json() {
+            Ok(source) => http_ok("application/json; charset=utf-8", &source),
+            Err(error) => http_error(500, &error.to_string()),
+        },
         ("POST", "/api/preview") => {
             let preview = PreviewRequest::from_body(&request.body, service.state());
             match service.compile_preview(&preview) {
@@ -1271,9 +1315,9 @@ fn create_source_file(
     let workspace_root = workspace_root_path.canonicalize()?;
     let requested_path =
         resolve_workspace_request_path(&request.puzzle_path, &workspace_root_path)?;
-    if requested_path.extension().and_then(|value| value.to_str()) != Some("puzzle") {
+    if !puzzle_lang::is_puzzle_source_path(&requested_path) {
         return Err(AppError::Config(
-            "can only create .puzzle source files".to_string(),
+            "can only create .puzzle or .puzzle3 source files".to_string(),
         ));
     }
     if requested_path.exists() {
@@ -1492,6 +1536,7 @@ fn export_pages_editor_html(state: &EditorState) -> Result<String, AppError> {
     let editor_html = editor_html_with_docs();
 
     Ok(editor_html
+        .replace(r#"<html lang="en">"#, r#"<html lang="en" data-static-site="true">"#)
         .replace(
             r#"<script src="sound-generator.js"></script>"#,
             &format!("<script>\n{sound_tools_js}\n</script>"),
@@ -1915,11 +1960,11 @@ fn sound_tools_js() -> String {
     )
 }
 
-fn source_json(state: &EditorState) -> String {
+fn source_json(state: &EditorState) -> Result<String, AppError> {
     let source = if state.puzzle_path.trim().is_empty() {
         state.source.clone()
     } else {
-        fs::read_to_string(&state.puzzle_path).unwrap_or_else(|_| state.source.clone())
+        fs::read_to_string(&state.puzzle_path)?
     };
     let mut out = String::new();
     out.push('{');
@@ -1935,7 +1980,7 @@ fn source_json(state: &EditorState) -> String {
     out.push(',');
     push_editor_documents_json(&mut out, state);
     out.push('}');
-    out
+    Ok(out)
 }
 
 fn editor_seed_json(out: &mut String, state: &EditorState) {
@@ -2295,6 +2340,79 @@ step board
     }
 
     #[test]
+    fn open_reports_preview_import_expansion_failure() {
+        let workspace = TestWorkspace::new();
+        let source = format!(
+            "import \"missing.puzzle\"\n\n{}",
+            editor_fixture_source("Broken Import")
+        );
+        let game_path = workspace.write("games/broken_import/game.puzzle", source);
+
+        let error = match EditorService::open(&game_path) {
+            Ok(_) => panic!("broken preview import must fail while opening the editor"),
+            Err(error) => error,
+        };
+        let message = error.to_string();
+
+        assert!(
+            message.contains("failed to expand preview imports for"),
+            "error should name the failed open-time import expansion, got: {message}"
+        );
+        assert!(
+            message.contains("missing.puzzle"),
+            "error should preserve the missing import path, got: {message}"
+        );
+    }
+
+    #[test]
+    fn open_reports_editor_visuals_generation_failure() {
+        let workspace = TestWorkspace::new();
+        let game_path = workspace.write("games/broken_visuals/game.puzzle", "title \"Broken\"\n");
+
+        let error = match EditorService::open(&game_path) {
+            Ok(_) => panic!("invalid preview source must fail while generating editor visuals"),
+            Err(error) => error,
+        };
+        let message = error.to_string();
+
+        assert!(
+            message.contains("failed to generate editor visuals for"),
+            "error should name the failed open-time visuals generation, got: {message}"
+        );
+    }
+
+    #[test]
+    fn open_loads_puzzle3_workspace_documents() {
+        let workspace = TestWorkspace::new();
+        let game_path = workspace.write(
+            "games/puzzle3_editor_fixture/game.puzzle3",
+            include_str!("../../../games/spec_3d.puzzle3"),
+        );
+        workspace.write("games/puzzle3_editor_fixture/notes.md", "# Notes\n");
+
+        let project_dir = game_path.parent().expect("project dir");
+        let service = EditorService::open_game_entry(project_dir).expect("open puzzle3 fixture");
+        let state = service.state();
+
+        let canonical_game_path = game_path.canonicalize().expect("canonical game path");
+        assert_eq!(PathBuf::from(&state.puzzle_path), canonical_game_path);
+        assert_eq!(
+            PathBuf::from(&state.documents[0].puzzle_path),
+            canonical_game_path
+        );
+        let document = document_with_suffix(
+            &state.documents,
+            "games/puzzle3_editor_fixture/game.puzzle3",
+        );
+        assert_eq!(document.mime_type, "text/plain");
+        assert!(document.source.contains("puzzle3 sokoban"));
+        assert!(paths_contain(
+            &state.documents,
+            "games/puzzle3_editor_fixture/notes.md"
+        ));
+    }
+
+    #[test]
     fn open_skips_generated_and_dependency_directories() {
         let workspace = TestWorkspace::new();
         let game_path = workspace.write(
@@ -2353,11 +2471,28 @@ step board
 
         fs::write(&game_path, editor_fixture_source("Changed Title"))
             .expect("update source after service open");
-        let source_json = service.source_json();
+        let source_json = service.source_json().expect("source json");
         let source = json_string_field(&source_json, "source").expect("source field");
 
         assert!(source.contains("title \"Changed Title\""));
         assert!(!source.contains("title \"Original Title\""));
+    }
+
+    #[test]
+    fn source_json_reports_read_failure_instead_of_cached_source() {
+        let workspace = TestWorkspace::new();
+        let game_path = workspace.write(
+            "games/editor_fixture/game.puzzle",
+            editor_fixture_source("Original Title"),
+        );
+        let service = EditorService::open(&game_path).expect("open editor fixture");
+
+        fs::remove_file(&game_path).expect("remove source after service open");
+
+        assert!(
+            service.source_json().is_err(),
+            "source json must not fall back to the cached source when the file cannot be read"
+        );
     }
 
     #[test]
@@ -2416,7 +2551,7 @@ step board
             document.preview_error, "",
             "compile errors should be reported by the compile path, not while seeding the editor"
         );
-        let source_json = service.source_json();
+        let source_json = service.source_json().expect("source json");
         assert!(source_json.contains("\"previewHtml\":\"\""));
         assert!(source_json.contains("\"previewError\":\"\""));
     }
@@ -2494,8 +2629,8 @@ step board
     #[test]
     fn compile_preview_supports_puzzle3_documents() {
         let workspace = TestWorkspace::new();
-        let source = include_str!("../../../games/spec_3d.puzzle");
-        let game_path = workspace.write("games/puzzle3_fixture/game.puzzle", source);
+        let source = include_str!("../../../games/spec_3d.puzzle3");
+        let game_path = workspace.write("games/puzzle3_fixture/game.puzzle3", source);
         let service = EditorService::open(&game_path).expect("open puzzle3 fixture");
 
         let html = service
@@ -2542,7 +2677,7 @@ levels3 demo of push3 {
   }
 }
 "#;
-        let game_path = workspace.write("games/puzzle3_input_rule/game.puzzle", source);
+        let game_path = workspace.write("games/puzzle3_input_rule/game.puzzle3", source);
         let service = EditorService::open(&game_path).expect("open puzzle3 input fixture");
 
         let html = service
@@ -2805,9 +2940,10 @@ levels3 demo of push3 {
         assert!(EDITOR_JS.contains("function setSolverTargetFromState("));
         assert!(EDITOR_JS.contains("function compiledLevelStateData("));
         assert!(EDITOR_JS.contains("function solverPuzzle3dPreviewSnapshot("));
-        assert!(EDITOR_JS.contains("function solveLevelInMainThread("));
-        assert!(EDITOR_JS.contains("backend: \"wasm-main\""));
-        assert!(EDITOR_JS.contains("Solving in this browser tab"));
+        assert!(!EDITOR_JS.contains("function solveLevelInMainThread("));
+        assert!(!EDITOR_JS.contains("backend: \"wasm-main\""));
+        assert!(!EDITOR_JS.contains("Solving in this browser tab"));
+        assert!(EDITOR_JS.contains("Solver worker failed:"));
         assert!(EDITOR_JS.contains("return currentPreviewMode === \"edit\";"));
         assert!(!EDITOR_JS.contains("requestFocusedPreviewState();"));
         assert!(
@@ -2871,6 +3007,21 @@ levels3 demo of push3 {
         ));
         assert!(EDITOR_WORKBENCH_JS.contains(
             "if (typeof scheduleSourceEditorLayoutSync === \"function\") {\n    scheduleSourceEditorLayoutSync(2);\n  }\n  syncPreviewViewportScale();"
+        ));
+    }
+
+    #[test]
+    fn source_highlight_refresh_preserves_current_render_while_pending() {
+        assert!(
+            EDITOR_SOURCE_JS
+                .contains("function scheduleSourceHighlight(immediate = false, options = {})")
+        );
+        assert!(
+            EDITOR_SOURCE_JS.contains("const preserveCurrent = options.preserveCurrent !== false;")
+        );
+        assert!(EDITOR_SOURCE_JS.contains("if (preserveCurrent && sourceHighlightMode)"));
+        assert!(EDITOR_SOURCE_JS.contains(
+            "scheduleSourceHighlight(true, { preserveCurrent: Boolean(options.preserveHighlight) });"
         ));
     }
 
@@ -2943,6 +3094,11 @@ levels3 demo of push3 {
         assert!(EDITOR_LEVEL3D_JS.contains("level: {"));
         assert!(EDITOR_LEVEL3D_JS.contains("component: level3dModelPreviewComponent()"));
         assert!(EDITOR_LEVEL3D_JS.contains("const snapshot = level3dRuntimeSnapshot();"));
+        assert!(
+            EDITOR_LEVEL3D_JS
+                .contains("if (!isPuzzle3dExport(exportData)) {\n    return null;\n  }")
+        );
+        assert!(!EDITOR_LEVEL3D_JS.contains("fallbackLevel3dRuntimeSnapshot"));
         assert!(EDITOR_LEVEL3D_JS.contains("resources: level3dRuntimePreviewResources(snapshot)"));
         assert!(EDITOR_LEVEL3D_JS.contains("function showBlankLevel3dRuntimeFrame(frame)"));
         assert!(EDITOR_LEVEL3D_JS.contains("function level3dDefaultPreviewTarget("));
@@ -2974,7 +3130,7 @@ levels3 demo of push3 {
             "isPuzzle3dExport(exportData) && typeof sendLevel3dSnapshotToRuntime === \"function\""
         ));
         assert!(EDITOR_LEVEL3D_JS.contains("function level3dRuntimePreviewResources"));
-        assert!(EDITOR_LEVEL3D_JS.contains("sprites: exportData?.sprites || {}"));
+        assert!(EDITOR_LEVEL3D_JS.contains("sprites: level3dPreviewSprites(exportData)"));
         assert!(EDITOR_LEVEL3D_JS.contains("camera: level3dRuntimePreviewCamera(snapshot)"));
         assert!(EDITOR_LEVEL3D_JS.contains("zoom: camera.zoom,"));
         assert!(EDITOR_LEVEL3D_JS.contains("view: level3dRuntimePreviewView(snapshot)"));
@@ -3005,7 +3161,7 @@ levels3 demo of push3 {
 
     #[test]
     fn level3d_microban_01_supplies_preview_contract_data() {
-        let source = include_str!("../../../games/spec_3d.puzzle");
+        let source = include_str!("../../../games/spec_3d.puzzle3");
         let document = puzzle_lang::parse_game(source).expect("parse Microban 3D fixture");
         let fixture_json = puzzle_lang::export_loaded_document_visual_fixture_json(&document)
             .expect("export Microban 3D fixture");
@@ -3062,13 +3218,39 @@ levels3 demo of push3 {
         assert!(EDITOR_SOURCE_JS.contains("syncPreviewModeFromSourceCursor({ force: true });"));
         assert!(EDITOR_JS.contains("function syncPreviewModeFromSourceCursor(options = {})"));
         assert!(EDITOR_JS.contains("[\"edit\", \"level3d\", \"sprite\", \"sprite3d\", \"sounds\"].includes(currentPreviewMode)"));
-        assert!(
-            EDITOR_JS.contains("loadSourceTargetWithJsFallback(source, position, loadOptions)")
-        );
+        assert!(!EDITOR_JS.contains("loadSourceTargetWithJsFallback"));
         assert!(EDITOR_JS.contains("resolveSourceTargetFromWasm(source, position)"));
+        assert!(EDITOR_JS.contains("Source target sync failed:"));
         assert!(EDITOR_JS.contains(
             "currentPreviewMode === \"level3d\" && typeof renderLevel3dBuilder === \"function\""
         ));
+    }
+
+    #[test]
+    fn source_cursor_target_sync_fails_fast_without_js_fallback() {
+        let sync_start = EDITOR_JS
+            .find("function syncPreviewModeFromSourceCursor(options = {})")
+            .expect("source cursor target sync function");
+        let sync_end = EDITOR_JS[sync_start..]
+            .find("function syncPreviewModeFromSourcePointer")
+            .map(|index| sync_start + index)
+            .expect("next source cursor sync function");
+        let sync = &EDITOR_JS[sync_start..sync_end];
+        let catch_start = sync
+            .find(".catch((error) => {")
+            .expect("WASM source target failure path");
+        let catch = &sync[catch_start..];
+
+        assert!(sync.contains("resolveSourceTargetFromWasm(source, position)"));
+        assert!(!sync.contains("loadSourceTargetWithJsFallback"));
+        assert!(!EDITOR_JS.contains("function loadSourceTargetWithJsFallback"));
+        assert!(catch.contains("sourceCursorPreviewKey = \"\";"));
+        assert!(catch.contains(
+            "setStatus(`Source target sync failed: ${userFacingRuntimeError(error)}`, \"is-error\");"
+        ));
+        assert!(catch.contains("return false;"));
+        assert!(!catch.contains("loadResolvedSourceTarget("));
+        assert!(!catch.contains("finishSourceTargetSync("));
     }
 
     #[test]
@@ -3161,6 +3343,15 @@ levels3 demo of push3 {
             .unwrap();
         assert!(slot_tab_handler < bracket_tab_handler);
         assert!(bracket_tab_handler < rewrite_tab_handler);
+    }
+
+    #[test]
+    fn source_completion_keyboard_commit_requires_explicit_selection() {
+        assert!(EDITOR_SOURCE_JS.contains("keyboardCommit: Boolean(options.manual)"));
+        assert!(EDITOR_SOURCE_JS.contains("sourceCompletionState.keyboardCommit = true;"));
+        assert!(EDITOR_SOURCE_JS.contains(
+            "if ((event.key === \"Enter\" || event.key === \"Tab\") && sourceCompletionCanKeyboardCommit())"
+        ));
     }
 
     #[test]
@@ -3604,13 +3795,14 @@ levels3 demo of push3 {
             .expect("export pages editor html");
 
         assert!(html.contains("window.PuzzleEditorSeed = JSON.parse"));
+        assert!(html.contains(r#"<html lang="en" data-static-site="true">"#));
         assert!(html.contains("window.PuzzleStudioGameWasmAssets = {"));
         assert!(html.contains("./wasm_game/puzzle_wasm_game.js"));
         assert!(html.contains("./wasm_game/puzzle_wasm_game_bg.wasm"));
         assert!(html.contains("Exported Editor"));
         assert!(html.contains("gameVisualsJs"));
         assert!(html.contains(r#"<link rel="icon" type="image/svg+xml" href="favicon.svg">"#));
-        assert!(html.contains(r#"<script src="editor.js"></script>"#));
+        assert!(html.contains(r#"<script src="editor.js?v=preview-runtime-embed"></script>"#));
         assert!(html.contains(r#"<script src="editor_dom.js"></script>"#));
         assert!(!html.contains("<script>\nwindow.PuzzleAssets ="));
         assert!(!html.contains("PuzzleEditorThemeImports"));
@@ -3629,7 +3821,8 @@ levels3 demo of push3 {
             EDITOR_JS
                 .contains("window.PuzzleRuntimeWasmLoader = window.PuzzleRuntimeWasmLoader ||")
         );
-        assert!(EDITOR_JS.contains("module.default({ module_or_path: wasmUrl })"));
+        assert!(EDITOR_JS.contains("window.PuzzleStandaloneEmbeddedWasm = {"));
+        assert!(EDITOR_JS.contains("module.default({ module_or_path: base64ToUint8Array"));
         assert!(EDITOR_JS.contains("\"window.Puzzle3DFixture = JSON.parse(\""));
         assert!(EDITOR_JS.contains("window.Puzzle3DFrameAssets.embeddedWasmJs"));
     }
@@ -3637,7 +3830,8 @@ levels3 demo of push3 {
     #[test]
     fn editor_wasm_surface_excludes_runtime_exports() {
         assert!(PUZZLE_WASM_JS.contains("export function compile_preview"));
-        assert!(PUZZLE_WASM_JS.contains("export function solve_state_with_progress"));
+        assert!(PUZZLE_WASM_JS.contains("export function solve_state"));
+        assert!(!PUZZLE_WASM_JS.contains("export function solve_state_with_progress"));
         assert!(!PUZZLE_WASM_JS.contains("WasmCoreRuntime"));
         assert!(!PUZZLE_WASM_JS.contains("WasmPuzzle3Runtime"));
         assert!(!PUZZLE_WASM_JS.contains("WasmStandaloneSession"));
@@ -3708,7 +3902,7 @@ levels3 demo of push3 {
             .find(r#"<script src="editor_level3d.js"></script>"#)
             .expect("editor loads 3D level editor");
         let editor = EDITOR_HTML
-            .find(r#"<script src="editor.js"></script>"#)
+            .find(r#"<script src="editor.js?v=preview-runtime-embed"></script>"#)
             .expect("editor loads main editor script");
         let sprite3d = EDITOR_HTML
             .find(r#"<script src="editor_sprite3d.js"#)

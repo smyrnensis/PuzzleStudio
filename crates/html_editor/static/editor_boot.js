@@ -23,6 +23,9 @@
   }
 
   function serverBackendAvailable() {
+    if (window.PuzzleStudioStaticSite || document.documentElement.dataset.staticSite === "true") {
+      return false;
+    }
     return window.location.protocol === "http:" || window.location.protocol === "https:";
   }
 
@@ -63,6 +66,9 @@
 
   window.PuzzleStudioHost = {
     mode() {
+      if ((window.PuzzleStudioStaticSite || document.documentElement.dataset.staticSite === "true") && !tauriInvoke()) {
+        return "static";
+      }
       return tauriInvoke() ? "tauri" : "server";
     },
     async loadSource() {

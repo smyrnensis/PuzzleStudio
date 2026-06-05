@@ -547,9 +547,9 @@ pub enum SceneEffect {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SceneEffectParam {
-    pub name: String,
-    pub value: SceneExpr,
+pub enum SceneEffectParam {
+    Level(SceneExpr),
+    Named { name: String, value: SceneExpr },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

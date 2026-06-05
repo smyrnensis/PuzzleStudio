@@ -16,7 +16,7 @@ fn run() -> Result<(), String> {
     let source = args
         .next()
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("games/spec_3d.puzzle"));
+        .unwrap_or_else(|| PathBuf::from("games/spec_3d.puzzle3"));
     let json_output = args
         .next()
         .map(PathBuf::from)

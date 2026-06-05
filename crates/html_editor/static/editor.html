@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>PuzzleStudio Editor</title>
     <link rel="icon" type="image/svg+xml" href="favicon.svg">
-    <script src="editor_boot.js"></script>
+    <script src="editor_boot.js?v=static-backend-detection2"></script>
     <link rel="stylesheet" href="renderer.css">
     <link rel="stylesheet" href="editor.css">
     <style id="gameStyle"></style>
@@ -63,14 +63,8 @@
         </div>
       </header>
 
-      <div id="levelPaneModeSwitch" class="level-pane-mode-switch" role="group" aria-label="Level editor dimension" hidden>
-        <button class="level-pane-mode-button" type="button" data-level-pane-mode="edit" aria-pressed="true">2D</button>
-        <button class="level-pane-mode-button" type="button" data-level-pane-mode="level3d" aria-pressed="false">3D</button>
-      </div>
-      <div id="spritePaneModeSwitch" class="sprite-pane-mode-switch" role="group" aria-label="Sprite editor dimension" hidden>
-        <button class="sprite-pane-mode-button" type="button" data-sprite-pane-mode="sprite" aria-pressed="true">2D</button>
-        <button class="sprite-pane-mode-button" type="button" data-sprite-pane-mode="sprite3d" aria-pressed="false">3D</button>
-      </div>
+      <div id="levelPaneModeSwitch" class="level-pane-mode-switch pane-bind-label" aria-label="Bound level editor dimension" hidden>Level: none</div>
+      <div id="spritePaneModeSwitch" class="sprite-pane-mode-switch pane-bind-label" aria-label="Bound sprite editor dimension" hidden>Sprite: none</div>
 
       <section class="workbench" aria-label="Puzzle editor">
         <button class="pane-restore-button pane-restore-explorer" type="button" data-pane-toggle="explorer" aria-label="Show file pane" title="Show file pane (Command+B)">
@@ -211,7 +205,7 @@
                 ></iframe>
               </div>
             </div>
-            <div id="previewLogPanel" class="preview-log-panel" role="log" aria-label="Preview log" aria-live="polite" hidden>
+            <div id="previewLogPanel" class="preview-log-panel" role="log" aria-label="Preview log" aria-live="polite">
               <div class="preview-log-header">
                 <span>Log</span>
                 <button id="clearPreviewLogButton" class="preview-log-clear" type="button">Clear</button>
@@ -262,6 +256,12 @@
           </div>
           <div id="docsPanel" class="docs-panel" hidden>
             <!-- PUZZLESTUDIO_EDITOR_DOCS -->
+          </div>
+          <div id="levelEmptyPane" class="tool-empty-pane" hidden>
+            <div class="tool-empty-actions" aria-label="Create level">
+              <button id="addEmptyLevel2dButton" class="tool-empty-action-button" type="button">Add 2D level</button>
+              <button id="addEmptyLevel3dButton" class="tool-empty-action-button" type="button">Add 3D level</button>
+            </div>
           </div>
           <div id="levelBuilder" class="level-builder" hidden>
             <div class="level-controls">
@@ -633,6 +633,12 @@
               </div>
             </div>
             <span id="spriteActionStatus" class="sprite-action-status tool-feedback-bar" aria-live="polite"></span>
+          </div>
+          <div id="spriteEmptyPane" class="tool-empty-pane" hidden>
+            <div class="tool-empty-actions" aria-label="Create sprite">
+              <button id="addEmptySprite2dButton" class="tool-empty-action-button" type="button">Add 2D sprite</button>
+              <button id="addEmptySprite3dButton" class="tool-empty-action-button" type="button">Add 3D sprite</button>
+            </div>
           </div>
           <div id="sprite3dBuilder" class="sprite-builder sprite3d-builder" hidden>
             <div class="tool-pane-scroll">
@@ -1170,11 +1176,11 @@
     <script src="sound-generator.js"></script>
     <script src="editor_dom.js"></script>
     <script src="editor_workspace.js"></script>
-    <script src="editor_source.js"></script>
+    <script src="editor_source.js?v=highlight-unavailable-status"></script>
     <script src="puzzle3_visual_core.js"></script>
     <script src="editor_level3d.js"></script>
     <script src="editor_workbench.js"></script>
-    <script src="editor.js"></script>
+    <script src="editor.js?v=preview-runtime-embed"></script>
     <script src="editor_sprite.js"></script>
     <script src="editor_sprite3d.js?v=sprite3d-preview-base-zoom"></script>
     <script src="editor_sounds.js"></script>

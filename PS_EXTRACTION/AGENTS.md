@@ -59,6 +59,38 @@ time a design question comes up.
   3D render canvas. A 3D editor can temporarily restore the 2D canvas without
   destroying the active 3D session, then normal host redraw recreates the 3D
   canvas after editor close.
+- `upstream/PuzzleScriptNext/compile.js`: release build source-to-bin pipeline.
+  It removes `bin/js`, writes compiled editor/play bundles, and must copy
+  browser-loaded vendor assets such as `src/js/vendor/three.module.min.js` back
+  to `bin/js/vendor` because compiled HTML still resolves those URLs outside
+  the bundled script.
+- `upstream/PuzzleScriptNext/src/js/render_frame3d.js`: render frames now
+  separate logical `visibleRegion` from actual `renderRegion`; screen metadata
+  owns the logical 2D-style viewport, while 3D off-screen drawing is derived
+  from the camera/frustum footprint over the board x/z plane and vertical cell
+  extent. Render frames carry only candidate cells in that region.
+- `upstream/PuzzleScriptNext/src/js/render_frame_contract3d.js`: the view
+  contract explicitly admits `renderRegion` beside `visibleRegion`; `cells` is
+  a dense candidate-cell array and `drawPlan.cellOrder` covers those render
+  cells, not necessarily the whole board.
+- `upstream/PuzzleScriptNext/src/js/three_renderer3d.js`: renderer culling uses
+  `view.renderRegion` for candidate cells; camera center and fit continue to
+  use the logical visible screen.
+- `upstream/PuzzleScriptNext/src/js/compiler.js`: 3D color-only object sprites
+  should receive a default `sprite3matrix` using the current sprite grid size;
+  do not leave them as 2D-only `spritematrix` data that later renders as a
+  shallow 5x5x1-style visual.
+- `upstream/PuzzleScriptNext/src/js/render_frame3d.js`: `spriteGrid` defaults
+  are renderer contract data. In 3D, default depth follows `sprite_depth` when
+  present, otherwise `sprite_size`; it must not silently fall back to `1`.
+- `upstream/PuzzleScriptNext/src/js/graphics.js`: 3D level editor grid rendering
+  should render each cell by compositing the visible objects' 3D sprite volumes
+  in collision-layer draw order and only then projecting top-down. Projecting
+  each object first loses inter-object voxel depth and alpha ordering.
+- `upstream/PuzzleScriptNext/test/editor_3d_sprite_palette.test.js`: pins 3D
+  editor top-down sprite projection, including layered volume-before-projection
+  behavior and source-over alpha composition for same-voxel and depth-separated
+  overlap.
 
 ## Current 3D Principle
 

@@ -67,6 +67,7 @@ let sourceUndoApplying = false;
 let sourceHighlightSource = "";
 let sourceHighlightHtml = "";
 let sourceHighlightMode = "";
+let sourceHighlightUnavailableStatusShown = false;
 let sourceLayoutSyncFrame = 0;
 
 function sourceEditorSnapshot() {
@@ -176,7 +177,7 @@ function handleSourceUndoShortcut(event) {
 function setSourceEditorValue(value, options = {}) {
   sourceEditor.value = value || "";
   updateSourceMeta();
-  scheduleSourceHighlight(true);
+  scheduleSourceHighlight(true, { preserveCurrent: Boolean(options.preserveHighlight) });
   if (options.resetUndo === false) {
     recordSourceUndoSnapshot();
   } else {
@@ -184,41 +185,31 @@ function setSourceEditorValue(value, options = {}) {
   }
 }
 
-function scheduleSourceHighlight(immediate = false) {
-  if (!renderSourceHighlightWithLoadedWasm()) {
+function scheduleSourceHighlight(immediate = false, options = {}) {
+  const preserveCurrent = options.preserveCurrent !== false;
+  if (preserveCurrent && sourceHighlightMode) {
+    syncSourceHighlightScroll();
+  } else {
     renderPlainSourceHighlight();
   }
   window.clearTimeout(sourceHighlightTimer);
   sourceHighlightTimer = window.setTimeout(refreshSourceHighlight, immediate ? 0 : 140);
 }
 
-function renderPlainSourceHighlight(source = sourceEditor.value) {
+function renderPlainSourceHighlight(source = sourceEditor.value, reason = null) {
   if (!sourceHighlight) {
     return;
   }
   setSourceHighlightHtml(source, escapeHtml(source || " "), "plain");
-}
-
-function renderSourceHighlightWithLoadedWasm(source = sourceEditor.value) {
-  const document = activeDocument();
-  if (
-    !sourceHighlight
-    || !wasmCompiler
-    || typeof wasmCompiler.highlight_source_html !== "function"
-    || !isPuzzleDocument(document)
-    || !isTextDocument(document)
-  ) {
-    return false;
-  }
-  try {
-    setSourceHighlightHtml(
-      source,
-      wasmCompiler.highlight_source_html(source) || escapeHtml(source || " "),
-      "wasm",
-    );
-    return true;
-  } catch {
-    return false;
+  if (reason) {
+    const message = `Source highlighting unavailable: ${userFacingRuntimeError(reason)}`;
+    sourceHighlight.dataset.highlightError = message;
+    sourceHighlight.title = message;
+    if (!sourceHighlightUnavailableStatusShown && typeof setEditorStatus === "function") {
+      sourceHighlightUnavailableStatusShown = true;
+      setEditorStatus(message, "is-error");
+    }
+    console.warn(message);
   }
 }
 
@@ -232,6 +223,9 @@ function setSourceHighlightHtml(source, html, mode) {
     sourceHighlightSource = source;
     sourceHighlightHtml = html;
   }
+  delete sourceHighlight.dataset.highlightError;
+  sourceHighlight.removeAttribute("title");
+  sourceHighlightUnavailableStatusShown = false;
   sourceHighlightMode = mode;
   syncSourceHighlightScroll();
   renderSourceBlockSelection();
@@ -310,29 +304,15 @@ async function refreshSourceHighlight() {
     if (error.name === "AbortError") {
       return;
     }
-    if (previewBackendUnavailable(error)) {
-      try {
-        const html = await highlightSourceWithWasm(source);
-        if (requestId !== sourceHighlightRequestId || source !== sourceEditor.value) {
-          return;
-        }
-        setSourceHighlightHtml(source, html || escapeHtml(source || " "), "wasm");
-        return;
-      } catch {
-        // Fall through to plain highlighting. Syntax color is optional.
-      }
+    if (requestId !== sourceHighlightRequestId || source !== sourceEditor.value) {
+      return;
     }
-    renderPlainSourceHighlight(source);
+    renderPlainSourceHighlight(source, error);
   } finally {
     if (activeHighlightRequest === controller) {
       activeHighlightRequest = null;
     }
   }
-}
-
-async function highlightSourceWithWasm(source) {
-  const compiler = await loadWasmCompiler();
-  return compiler.highlight_source_html(source);
 }
 
 async function suggestSourceCompletionsWithWasm(source, cursorOffset) {
@@ -453,7 +433,7 @@ async function showSourceCompletions(options = {}) {
   }
   const source = sourceEditor.value;
   const cursor = sourceEditor.selectionStart;
-  if (!options.manual && !shouldAutoRequestSourceCompletion(source, cursor)) {
+  if (!options.manual && !sourceAutoCompletionEligible(source, cursor)) {
     hideSourceCompletions();
     return false;
   }
@@ -463,16 +443,25 @@ async function showSourceCompletions(options = {}) {
     if (requestId !== sourceCompletionRequestId || source !== sourceEditor.value || cursor !== sourceEditor.selectionStart) {
       return false;
     }
-    const items = list?.items || [];
+    const items = filterSourceCompletionsForCurrentRange(
+      filterSourceCompletionsForDocument(list?.items || [], document),
+      list,
+      source,
+    );
     if (!items.length) {
       hideSourceCompletions();
       return false;
     }
+    const mode = sourceCompletionMode(options, list, source, cursor);
     sourceCompletionState = {
+      mode,
+      source,
+      cursor,
       replaceStart: list.replaceStart,
       replaceEnd: list.replaceEnd,
       items,
-      selectedIndex: 0,
+      selectedIndex: mode === "completion" ? 0 : null,
+      keyboardCommit: mode === "completion",
     };
     renderSourceCompletionItems();
     positionSourceCompletionPopover();
@@ -484,26 +473,57 @@ async function showSourceCompletions(options = {}) {
   }
 }
 
-function shouldAutoRequestSourceCompletion(source, cursor) {
-  const before = source.slice(0, cursor);
-  const last = before.at(-1);
-  if (!last) {
+function filterSourceCompletionsForDocument(items, document) {
+  const profile = typeof puzzleSourceProfile === "function" ? puzzleSourceProfile(document) : "";
+  const hidden = profile === "puzzle3d"
+    ? new Set(["puzzle", "levels", "sprites"])
+    : profile === "puzzle2d"
+      ? new Set(["puzzle3", "levels3", "sprites3"])
+      : null;
+  if (!hidden) {
+    return items;
+  }
+  return items.filter((item) => !hidden.has(item?.label || ""));
+}
+
+function filterSourceCompletionsForCurrentRange(items, list, source) {
+  const replaceStart = Math.max(0, Math.min(source.length, Number(list?.replaceStart) || 0));
+  const replaceEnd = Math.max(replaceStart, Math.min(source.length, Number(list?.replaceEnd) || 0));
+  const current = source.slice(replaceStart, replaceEnd);
+  if (!current) {
+    return items;
+  }
+  return items.filter((item) => (item?.insertText || item?.label || "") !== current);
+}
+
+function sourceAutoCompletionEligible(source, cursor) {
+  if (
+    sourceEditor.selectionStart !== sourceEditor.selectionEnd
+    || sourceEditorBlockSelection?.ranges?.length
+    || sourceCursorAtBareLineTail(source, cursor)
+  ) {
     return false;
   }
-  if (last === ":" || /[_@A-Za-z0-9.-]/.test(last)) {
-    return true;
-  }
-  if (!/\s/.test(last)) {
+  return true;
+}
+
+function sourceCursorAtBareLineTail(source, cursor) {
+  const lineStart = source.lastIndexOf("\n", cursor - 1) + 1;
+  const line = source.slice(lineStart, cursor);
+  if (/[ \t]$/.test(line)) {
     return false;
   }
-  const tail = before.slice(Math.max(0, before.length - 120));
-  const currentLine = tail.slice(tail.lastIndexOf("\n") + 1);
-  return (
-    /\bgoto\s+$/.test(tail) ||
-    /->\s+$/.test(currentLine) ||
-    /\bin\s+$/.test(currentLine) ||
-    currentLine.trim() === ""
-  );
+  const code = stripSourceImportLineComment(line).trimEnd();
+  return Boolean(code && !/\s/.test(code.at(-1) || ""));
+}
+
+function sourceCompletionMode(options, list, source, cursor) {
+  if (options.manual) {
+    return "completion";
+  }
+  const replaceStart = Math.max(0, Math.min(source.length, Number(list?.replaceStart) || 0));
+  const prefix = source.slice(replaceStart, cursor);
+  return /[_@A-Za-z0-9.-]/.test(prefix) ? "completion" : "hint";
 }
 
 function hideSourceCompletions() {
@@ -542,9 +562,34 @@ function moveSourceCompletionSelection(delta) {
   if (!sourceCompletionState?.items?.length) {
     return;
   }
+  sourceCompletionState.mode = "completion";
+  sourceCompletionState.keyboardCommit = true;
+  if (!Number.isInteger(sourceCompletionState.selectedIndex)) {
+    sourceCompletionState.selectedIndex = 0;
+  }
   const count = sourceCompletionState.items.length;
   sourceCompletionState.selectedIndex = (sourceCompletionState.selectedIndex + delta + count) % count;
   renderSourceCompletionItems();
+}
+
+function sourceCompletionCanKeyboardCommit() {
+  return Boolean(sourceCompletionState?.keyboardCommit && sourceCompletionState?.mode === "completion");
+}
+
+function sourceCompletionMatchesCurrentCursor() {
+  return Boolean(
+    sourceCompletionState
+    && sourceEditor.value === sourceCompletionState.source
+    && sourceEditor.selectionStart === sourceEditor.selectionEnd
+    && sourceEditor.selectionStart === sourceCompletionState.cursor
+  );
+}
+
+function sourceCursorInLineLeadingWhitespace() {
+  const source = sourceEditor.value || "";
+  const cursor = sourceEditor.selectionStart;
+  const lineStart = source.lastIndexOf("\n", cursor - 1) + 1;
+  return /^[\t ]*$/.test(source.slice(lineStart, cursor));
 }
 
 function acceptSourceCompletion(index = sourceCompletionState?.selectedIndex ?? 0) {
@@ -2468,11 +2513,28 @@ function handleSourceRuleBracketCellTabExit(event) {
     return false;
   }
   const body = source.slice(open + 1, close);
-  if (!/^[\t ]*$/.test(body) || body.includes("[") || body.includes("]")) {
+  if (body.includes("[") || body.includes("]")) {
     return false;
   }
   const afterClose = source[close + 1] || "";
   const hasTrailingHorizontalSpace = afterClose === " " || afterClose === "\t";
+  const bodyBeforeCursor = source.slice(open + 1, cursor);
+  const bodyAfterCursor = source.slice(cursor, close);
+  if (!/^[\t ]*$/.test(body)) {
+    if (!bodyBeforeCursor.trim() || !/^[\t ]*$/.test(bodyAfterCursor)) {
+      return false;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    clearSourceBlockSelection();
+    if (!hasTrailingHorizontalSpace) {
+      sourceEditor.setRangeText(" ", close + 1, close + 1, "end");
+    }
+    const cursorAfterCell = close + 2;
+    sourceEditor.setSelectionRange(cursorAfterCell, cursorAfterCell);
+    sourceEditorContentChanged();
+    return true;
+  }
   const replacement = hasTrailingHorizontalSpace ? "[  ]" : "[  ] ";
   event.preventDefault();
   event.stopPropagation();
@@ -2792,7 +2854,7 @@ function indentSourceSelectedLines(direction) {
   const { rawLines, first, last } = selectedSourceRawLineSpan();
   for (let index = first; index <= last; index += 1) {
     if (direction > 0) {
-      rawLines[index] = `\t${rawLines[index] || ""}`;
+      rawLines[index] = rawLines[index] || "";
     } else if ((rawLines[index] || "").startsWith("\t")) {
       rawLines[index] = rawLines[index].slice(1);
     } else {
@@ -3389,7 +3451,7 @@ function handleSourceBlockSelectionKeydown(event) {
   } else if (event.key === "Delete") {
     deleteSourceBlockSelection(1);
   } else if (event.key === "Tab") {
-    replaceSourceBlockSelection("\t");
+    // Tab is a source-editor command; the standard source style does not insert raw tabs.
   } else if (event.key === "Enter") {
     replaceSourceBlockSelection("\n", { keepSelection: false });
   } else if (event.key.length === 1 && !event.altKey) {
@@ -3502,37 +3564,48 @@ sourceEditor.addEventListener("keydown", (event) => {
     return;
   }
   if (sourceCompletionState && !sourceCompletionPopover?.hidden) {
-    if (event.key === "ArrowDown") {
-      event.preventDefault();
-      moveSourceCompletionSelection(1);
-      return;
-    }
-    if (event.key === "ArrowUp") {
-      event.preventDefault();
-      moveSourceCompletionSelection(-1);
-      return;
-    }
-    if (event.key === "Enter" || event.key === "Tab") {
-      event.preventDefault();
-      acceptSourceCompletion();
-      return;
-    }
-    if (event.key === "Escape") {
-      event.preventDefault();
+    if (!sourceCompletionMatchesCurrentCursor()) {
       hideSourceCompletions();
-      return;
-    }
-    if (event.ctrlKey && !event.metaKey && !event.altKey && event.key.toLowerCase() === "n") {
-      event.preventDefault();
-      event.stopPropagation();
-      moveSourceCompletionSelection(1);
-      return;
-    }
-    if (event.ctrlKey && !event.metaKey && !event.altKey && event.key.toLowerCase() === "p") {
-      event.preventDefault();
-      event.stopPropagation();
-      moveSourceCompletionSelection(-1);
-      return;
+    } else {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        hideSourceCompletions();
+        return;
+      }
+      if (sourceCompletionState.mode === "completion") {
+        if (event.key === "ArrowDown") {
+          event.preventDefault();
+          moveSourceCompletionSelection(1);
+          return;
+        }
+        if (event.key === "ArrowUp") {
+          event.preventDefault();
+          moveSourceCompletionSelection(-1);
+          return;
+        }
+        if (event.key === "Tab") {
+          event.preventDefault();
+          acceptSourceCompletion();
+          return;
+        }
+        if (event.key === "Enter" && sourceCompletionCanKeyboardCommit()) {
+          event.preventDefault();
+          acceptSourceCompletion();
+          return;
+        }
+        if (event.ctrlKey && !event.metaKey && !event.altKey && event.key.toLowerCase() === "n") {
+          event.preventDefault();
+          event.stopPropagation();
+          moveSourceCompletionSelection(1);
+          return;
+        }
+        if (event.ctrlKey && !event.metaKey && !event.altKey && event.key.toLowerCase() === "p") {
+          event.preventDefault();
+          event.stopPropagation();
+          moveSourceCompletionSelection(-1);
+          return;
+        }
+      }
     }
   }
   if (event.key === "Escape" && sourceColorEdit && !sourceColorPopover?.hidden) {
@@ -3572,7 +3645,10 @@ sourceEditor.addEventListener("keydown", (event) => {
       indentSourceSelectedLines(event.shiftKey ? -1 : 1);
       return;
     }
-    insertAtSelection("\t");
+    if (sourceCursorInLineLeadingWhitespace()) {
+      insertAtSelection("\t");
+      return;
+    }
     return;
   }
 
@@ -3684,11 +3760,11 @@ function nextLineIndent() {
   const lineStart = source.lastIndexOf("\n", start - 1) + 1;
   const lineBeforeCursor = source.slice(lineStart, start);
   const currentIndent = lineBeforeCursor.match(/^[\t ]*/)?.[0] || "";
-  const extraIndent = lineBeforeCursor.trimEnd().endsWith("{") ? "\t" : "";
+  const extraIndent = "";
   const afterCursor = source.slice(sourceEditor.selectionEnd);
   const nextNonWhitespace = afterCursor.match(/^\s*(.)/)?.[1] || "";
 
-  if (extraIndent && nextNonWhitespace === "}") {
+  if (lineBeforeCursor.trimEnd().endsWith("{") && nextNonWhitespace === "}") {
     return `\n${currentIndent}${extraIndent}\n${currentIndent}`;
   }
   return `\n${currentIndent}${extraIndent}`;

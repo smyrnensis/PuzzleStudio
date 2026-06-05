@@ -4,9 +4,7 @@ const previewDefaultLogicalHeight = 3;
 const previewMinimumHeight = 720;
 const previewMinimumLogHeight = 72;
 const wasmCompilerAssetVersion = Date.now().toString(36);
-const solverProgressIntervalMs = 1000;
 const solverFeedbackTickMs = 250;
-const solverYieldEveryExpanded = 1;
 const solutionPlaybackBaseIntervalMs = 350;
 const WASM_SECTION_BLOCK_NAMES = Object.freeze({
   objects: "objects",
@@ -421,7 +419,7 @@ let previewDocumentLoaded = false;
 let previewFrameHasEditorLevelState = false;
 let boardScaleSyncFrame = 0;
 let boardScaleSyncPasses = 0;
-let statusClearTimer = 0;
+const paneStatusClearTimers = new Map();
 let editorStatusClearTimer = 0;
 let activePreviewRequest = null;
 let wasmCompiler = null;
@@ -446,7 +444,6 @@ let levelSolveFlashTimer = 0;
 let levelSolveFlashRestore = null;
 let levelSolveFeedbackTimer = 0;
 let levelSolveStartedAt = 0;
-let latestLevelSolveProgress = null;
 let currentPreviewMode = "play";
 let currentEditorDimension = "2d";
 let currentLevelPaneMode = "edit";
@@ -807,7 +804,6 @@ function handleVisualEditUndoShortcut(event) {
 initializeEditorTheme();
 configureFolderImport();
 configureDesktopHost();
-preloadSourceHighlighter();
 
 function initializeEditorTheme() {
   const theme = normalizeTheme(document.documentElement.dataset.theme);
@@ -1354,10 +1350,10 @@ async function compilePreviewWithWasm(document, source) {
     effectiveGameCss(document),
     effectiveGameVisualsJs(document),
   );
-  return embedStandaloneRuntimeWasm(html);
+  return await embedStandaloneRuntimeWasm(html);
 }
 
-function embedStandaloneRuntimeWasm(html) {
+async function embedStandaloneRuntimeWasm(html) {
   const sourceHtml = String(html || "");
   const runtimeAssets = window.PuzzleStudioGameWasmAssets;
   if (!runtimeAssets?.moduleUrl || !runtimeAssets?.wasmUrl) {
@@ -1378,32 +1374,75 @@ function embedStandaloneRuntimeWasm(html) {
   if (scriptEnd < 0) {
     return html;
   }
-  const bootstrap = standaloneRuntimeWasmBootstrapScript(runtimeAssets);
+  const bootstrap = await standaloneRuntimeWasmBootstrapScript(runtimeAssets);
   const frameAssetBootstrap = JSON.stringify(bootstrap);
   const injection = `\n${bootstrap}\nif (window.Puzzle3DFrameAssets && !window.Puzzle3DFrameAssets.embeddedWasmJs) {\n  window.Puzzle3DFrameAssets.embeddedWasmJs = ${frameAssetBootstrap};\n}\n`;
   return `${sourceHtml.slice(0, scriptEnd)}${injection}${sourceHtml.slice(scriptEnd)}`;
 }
 
-function standaloneRuntimeWasmBootstrapScript(runtimeAssets) {
+let standaloneRuntimeWasmAssetPromise = null;
+
+async function standaloneRuntimeWasmBootstrapScript(runtimeAssets) {
   if (!runtimeAssets?.moduleUrl || !runtimeAssets?.wasmUrl) {
     return "";
   }
-  return `window.PuzzleRuntimeWasmLoader = window.PuzzleRuntimeWasmLoader || (() => {
+  const embedded = await loadStandaloneRuntimeWasmAssets(runtimeAssets);
+  return `window.PuzzleStandaloneEmbeddedWasm = { moduleSource: ${JSON.stringify(embedded.moduleSource)}, wasmBase64: ${JSON.stringify(embedded.wasmBase64)} };
+window.PuzzleRuntimeWasmLoader = window.PuzzleRuntimeWasmLoader || (() => {
   let modulePromise = null;
-  const moduleUrl = ${JSON.stringify(runtimeAssets.moduleUrl)};
-  const wasmUrl = ${JSON.stringify(runtimeAssets.wasmUrl)};
+  function base64ToUint8Array(value) {
+    const binary = atob(value);
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) {
+      bytes[index] = binary.charCodeAt(index);
+    }
+    return bytes;
+  }
   return {
     async load() {
       if (!modulePromise) {
-        modulePromise = import(moduleUrl).then(async (module) => {
-          await module.default({ module_or_path: wasmUrl });
+        const embedded = window.PuzzleStandaloneEmbeddedWasm;
+        const moduleUrl = URL.createObjectURL(new Blob([embedded.moduleSource], { type: "text/javascript" }));
+        modulePromise = import(\`\${moduleUrl}#runtime\`).then(async (module) => {
+          await module.default({ module_or_path: base64ToUint8Array(embedded.wasmBase64) });
           return module;
-        });
+        }).finally(() => URL.revokeObjectURL(moduleUrl));
       }
       return modulePromise;
     },
   };
 })();`;
+}
+
+async function loadStandaloneRuntimeWasmAssets(runtimeAssets) {
+  if (!standaloneRuntimeWasmAssetPromise) {
+    standaloneRuntimeWasmAssetPromise = Promise.all([
+      fetchRequiredRuntimeAsset(runtimeAssets.moduleUrl, "game runtime module").then((response) => response.text()),
+      fetchRequiredRuntimeAsset(runtimeAssets.wasmUrl, "game runtime wasm").then((response) => response.arrayBuffer()),
+    ]).then(([moduleSource, wasmBuffer]) => ({
+      moduleSource,
+      wasmBase64: arrayBufferToBase64(wasmBuffer),
+    }));
+  }
+  return standaloneRuntimeWasmAssetPromise;
+}
+
+async function fetchRequiredRuntimeAsset(url, label) {
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`Failed to load ${label}: ${response.status} ${response.statusText}`);
+  }
+  return response;
+}
+
+function arrayBufferToBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+  }
+  return btoa(binary);
 }
 
 function expandPuzzleImportsForWasm(source, puzzlePath, importStack = []) {
@@ -1676,28 +1715,10 @@ self.onmessage = async (event) => {
   const requestId = data.requestId;
   try {
     const module = await loadSolverModule(data.wasm || {});
-    const progressStartedAt = Date.now();
-    const progressIntervalMs = Math.max(1, Number(data.progressIntervalMs || 1000));
-    let lastProgressPost = 0;
-    const progressCallback = (progressJson) => {
-      const now = Date.now();
-      if (now - lastProgressPost < progressIntervalMs) {
-        return;
-      }
-      lastProgressPost = now;
-      const progress = JSON.parse(progressJson);
-      if (progress?.progress) {
-        progress.progress.elapsedMs = now - progressStartedAt;
-      }
-      self.postMessage({
-        type: "progress",
-        requestId,
-        progress,
-      });
-    };
-    const solve = typeof module.solve_state_with_progress === "function"
-      ? module.solve_state_with_progress
-      : module.solve_state;
+    const solve = module.solve_state;
+    if (typeof solve !== "function") {
+      throw new Error("WASM solver is not available");
+    }
     const args = [
       data.source,
       data.puzzlePath,
@@ -1706,9 +1727,7 @@ self.onmessage = async (event) => {
       Number(data.maxNodes || 0),
       Number(data.maxMs || 0),
     ];
-    const solutionJson = solve === module.solve_state_with_progress
-      ? solve(...args, Number(data.progressIntervalMs || 1000), progressCallback)
-      : solve(...args);
+    const solutionJson = solve(...args);
     self.postMessage({
       type: "result",
       requestId,
@@ -1756,16 +1775,6 @@ function userFacingWorkerError(error) {
   return userFacingRuntimeError(error);
 }
 
-function preloadSourceHighlighter() {
-  loadWasmCompiler()
-    .then(() => {
-      renderSourceHighlightWithLoadedWasm();
-    })
-    .catch(() => {
-      // Server highlighting is still available in the local editor.
-    });
-}
-
 function previewBackendUnavailable(error) {
   if (error instanceof TypeError) {
     return true;
@@ -1797,20 +1806,75 @@ function updateSourceMeta() {
   sourceMeta.textContent = `${lineCount} lines`;
 }
 
-function setStatus(text, className) {
-  window.clearTimeout(statusClearTimer);
-  statusLabel.className = `pane-status tool-feedback-bar ${className || ""}`.trim();
-  statusLabel.textContent = text;
+function paneStatusClassName(className = "") {
+  return `pane-status ${className || ""}`.trim();
+}
+
+function activeStatusPaneId() {
+  return typeof workPaneIdForPreviewMode === "function"
+    ? workPaneIdForPreviewMode(currentPreviewMode || "play")
+    : "preview";
+}
+
+function statusElementForPane(paneId) {
+  const normalized = typeof normalizePaneId === "function"
+    ? normalizePaneId(paneId)
+    : (paneId || "");
+  if (typeof paneStatusElementForPaneId === "function") {
+    return paneStatusElementForPaneId(normalized);
+  }
+  return document.querySelector(`[data-pane-status="${normalized}"]`);
+}
+
+function clearPaneStatus(paneId) {
+  const normalized = typeof normalizePaneId === "function"
+    ? normalizePaneId(paneId)
+    : (paneId || "");
+  const timer = paneStatusClearTimers.get(normalized);
+  if (timer) {
+    window.clearTimeout(timer);
+    paneStatusClearTimers.delete(normalized);
+  }
+  const element = statusElementForPane(normalized);
+  if (element) {
+    element.className = paneStatusClassName();
+    element.textContent = "";
+  }
+  schedulePreviewViewportSync(2);
+}
+
+function setPaneStatus(paneId, text, className = "", options = {}) {
+  const normalized = typeof normalizePaneId === "function"
+    ? normalizePaneId(paneId)
+    : (paneId || "");
+  const timer = paneStatusClearTimers.get(normalized);
+  if (timer) {
+    window.clearTimeout(timer);
+    paneStatusClearTimers.delete(normalized);
+  }
+  const element = statusElementForPane(normalized);
+  if (!element) {
+    return;
+  }
+  element.className = paneStatusClassName(className);
+  element.textContent = text || "";
   schedulePreviewViewportSync(2);
   if (text && className === "is-ok") {
-    statusClearTimer = window.setTimeout(() => {
-      if (statusLabel.textContent === text && statusLabel.classList.contains("is-ok")) {
-        statusLabel.textContent = "";
-        statusLabel.className = "pane-status tool-feedback-bar";
+    const clearDelayMs = Number(options.clearDelayMs) || 1800;
+    const nextTimer = window.setTimeout(() => {
+      if (element.textContent === text && element.classList.contains("is-ok")) {
+        element.textContent = "";
+        element.className = paneStatusClassName();
         schedulePreviewViewportSync(2);
       }
-    }, 1800);
+      paneStatusClearTimers.delete(normalized);
+    }, clearDelayMs);
+    paneStatusClearTimers.set(normalized, nextTimer);
   }
+}
+
+function setStatus(text, className) {
+  setPaneStatus(activeStatusPaneId(), text, className);
 }
 
 function setEditorStatus(text, className) {
@@ -1877,6 +1941,7 @@ function previewLogTimeLabel(value) {
 
 function clearPreviewLog() {
   previewLogEntries = [];
+  clearPaneStatus("preview");
   renderPreviewLog();
 }
 
@@ -2668,7 +2733,7 @@ function setPuzzleScriptImportStatus(message, tone = "") {
   psImportStatus.className = "ps-import-status tool-feedback-bar";
   psImportStatus.classList.toggle("is-ok", tone === "is-ok");
   psImportStatus.classList.toggle("is-error", tone === "is-error");
-  setStatus(message, tone);
+  setPaneStatus("psimport", message, tone);
 }
 
 function resetPuzzleScriptImportConversion() {
@@ -2825,29 +2890,52 @@ function focusedPuzzleSourceContext(document = activeDocument()) {
 }
 
 function firstFocusedPuzzleEntry(kind, context = focusedPuzzleSourceContext()) {
+  return focusedPuzzleEntries(kind, context)[0] || null;
+}
+
+function focusedPuzzleEntries(kind, context = focusedPuzzleSourceContext()) {
   if (!context?.document) {
-    return null;
+    return [];
   }
-  const first2d = firstFocusedPuzzleEntryForDimension(kind, "2d", context);
-  const first3d = firstFocusedPuzzleEntryForDimension(kind, "3d", context);
-  if (!Number.isFinite(first2d?.start) && !Number.isFinite(first3d?.start)) {
-    return null;
-  }
-  if (Number.isFinite(first3d?.start) && (!Number.isFinite(first2d?.start) || first3d.start < first2d.start)) {
-    return { dimension: "3d", target: { ...first3d, document: context.document } };
-  }
-  return { dimension: "2d", target: { ...first2d, document: context.document } };
+  return [
+    ...focusedPuzzleEntriesForDimension(kind, "2d", context),
+    ...focusedPuzzleEntriesForDimension(kind, "3d", context),
+  ]
+    .filter((item) => Number.isFinite(item?.target?.start))
+    .sort((left, right) => left.target.start - right.target.start);
 }
 
 function firstFocusedPuzzleEntryForDimension(kind, dimension, context = focusedPuzzleSourceContext()) {
+  return focusedPuzzleEntriesForDimension(kind, dimension, context)[0]?.target || null;
+}
+
+function focusedPuzzleEntriesForDimension(kind, dimension, context = focusedPuzzleSourceContext()) {
   if (!context?.document) {
-    return null;
+    return [];
   }
   const normalized = normalizeEditorDimension(dimension);
-  const entry = normalized === "3d"
-    ? (kind === "sprite" ? firstFocusedPuzzleSprite3dEntry(context.source) : firstFocusedPuzzleLevel3dEntry(context.source))
-    : (kind === "sprite" ? firstFocusedPuzzleSprite2dEntry(context.source) : firstFocusedPuzzleLevel2dEntry(context.source, context.document));
-  return entry ? { ...entry, document: context.document } : null;
+  const entries = normalized === "3d"
+    ? (kind === "sprite" ? focusedPuzzleSprite3dEntries(context.source) : focusedPuzzleLevel3dEntries(context.source))
+    : (kind === "sprite" ? focusedPuzzleSprite2dEntries(context.source) : focusedPuzzleLevel2dEntries(context.source, context.document));
+  return uniqueFocusedPuzzleEntries(entries)
+    .map((entry) => ({ dimension: normalized, target: { ...entry, document: context.document } }));
+}
+
+function uniqueFocusedPuzzleEntries(entries) {
+  const seen = new Set();
+  const unique = [];
+  for (const entry of entries || []) {
+    if (!Number.isFinite(entry?.start)) {
+      continue;
+    }
+    const key = `${entry.start}:${entry.end ?? ""}:${entry.bodyStart ?? ""}:${entry.bodyEnd ?? ""}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    unique.push(entry);
+  }
+  return unique.sort((left, right) => left.start - right.start);
 }
 
 function firstFocusedPuzzleEntryDimension(kind, context = focusedPuzzleSourceContext()) {
@@ -2866,13 +2954,19 @@ function modeForFocusedPuzzleEntry(kind, context = focusedPuzzleSourceContext())
 
 function syncPaneModesFromFocusedPuzzleSource(options = {}) {
   const context = focusedPuzzleSourceContext();
+  const firstLevel = firstFocusedPuzzleEntry("level", context);
+  const firstSprite = firstFocusedPuzzleEntry("sprite", context);
   const levelMode = modeForFocusedPuzzleEntry("level", context);
   const spriteMode = modeForFocusedPuzzleEntry("sprite", context);
   if (levelMode) {
     currentLevelPaneMode = levelMode;
+  } else if (currentPreviewMode === "edit" || currentPreviewMode === "level3d") {
+    currentLevelPaneMode = "none";
   }
   if (spriteMode) {
     currentSpritePaneMode = spriteMode;
+  } else if (currentPreviewMode === "sprite" || currentPreviewMode === "sprite3d") {
+    currentSpritePaneMode = "none";
   }
 
   let nextMode = null;
@@ -2889,6 +2983,19 @@ function syncPaneModesFromFocusedPuzzleSource(options = {}) {
     currentEditorDimension = normalizeEditorDimension(inferredDimension);
     syncPreviewModeButtonState();
   }
+  if (options.loadFirst !== false) {
+    if (currentPreviewMode === "edit" || currentPreviewMode === "level3d") {
+      loadFocusedPuzzleEntry("level", firstLevel, { silent: true, recordHistory: false });
+    } else if (currentPreviewMode === "sprite" || currentPreviewMode === "sprite3d") {
+      loadFocusedPuzzleEntry("sprite", firstSprite, { silent: true, recordHistory: false });
+    }
+  }
+  if (
+    ((currentPreviewMode === "edit" || currentPreviewMode === "level3d") && !firstLevel)
+    || ((currentPreviewMode === "sprite" || currentPreviewMode === "sprite3d") && !firstSprite)
+  ) {
+    applyPaneVisibility();
+  }
   return nextMode || null;
 }
 
@@ -2903,21 +3010,29 @@ function sourcePositionInsideRanges(position, ranges) {
 }
 
 function firstFocusedPuzzleLevel2dEntry(source, document) {
+  return focusedPuzzleLevel2dEntries(source, document)[0] || null;
+}
+
+function focusedPuzzleLevel2dEntries(source, document) {
   const entries = [];
+  const level3dRanges = typeof findLevels3Ranges === "function" ? findLevels3Ranges(source) || [] : [];
   if (typeof findLevelsRanges === "function" && typeof findLevelDefinitions === "function") {
     for (const range of findLevelsRanges(source) || []) {
-      entries.push(...(findLevelDefinitions(source, range) || []));
+      if (sourcePositionInsideRanges(range.start, level3dRanges)) {
+        continue;
+      }
+      entries.push(...(findLevelDefinitions(source, range) || []).map((entry) => ({
+        ...entry,
+        namespace: range?.namespace || "",
+      })));
     }
   }
   if (typeof findLevelSourceEntries === "function") {
-    const level3dRanges = typeof findLevels3Ranges === "function" ? findLevels3Ranges(source) || [] : [];
     entries.push(...findLevelSourceEntries(source, document)
       .filter((entry) => !sourcePositionInsideRanges(entry.start, level3dRanges))
     );
   }
-  return entries
-    .filter((entry) => Number.isFinite(entry?.start))
-    .sort((left, right) => left.start - right.start)[0] || null;
+  return uniqueFocusedPuzzleEntries(entries);
 }
 
 function firstFocusedPuzzleLevel2dStart(source, document) {
@@ -2925,16 +3040,22 @@ function firstFocusedPuzzleLevel2dStart(source, document) {
 }
 
 function firstFocusedPuzzleLevel3dEntry(source) {
+  return focusedPuzzleLevel3dEntries(source)[0] || null;
+}
+
+function focusedPuzzleLevel3dEntries(source) {
   if (typeof findLevels3Ranges !== "function" || typeof findLevel3dDefinitions !== "function") {
-    return null;
+    return [];
   }
   const entries = [];
   for (const range of findLevels3Ranges(source) || []) {
-    entries.push(...(findLevel3dDefinitions(source, range) || []));
+    entries.push(...(findLevel3dDefinitions(source, range) || []).map((entry) => ({
+      ...entry,
+      bundle: range?.bundle || "",
+      model: range?.model || "",
+    })));
   }
-  return entries
-    .filter((entry) => Number.isFinite(entry?.start))
-    .sort((left, right) => left.start - right.start)[0] || null;
+  return uniqueFocusedPuzzleEntries(entries);
 }
 
 function firstFocusedPuzzleLevel3dStart(source) {
@@ -2942,18 +3063,23 @@ function firstFocusedPuzzleLevel3dStart(source) {
 }
 
 function firstFocusedPuzzleSprite2dEntry(source) {
+  return focusedPuzzleSprite2dEntries(source)[0] || null;
+}
+
+function focusedPuzzleSprite2dEntries(source) {
   if (
     typeof findSpritesBlock !== "function"
     || typeof editorSourceLinesWithOffsets !== "function"
     || typeof firstEditorSourceCodeIndex !== "function"
   ) {
-    return null;
+    return [];
   }
   const block = findSpritesBlock(source);
   if (!block) {
-    return null;
+    return [];
   }
   const body = source.slice(block.bodyStart, block.bodyEnd);
+  const entries = [];
   for (const line of editorSourceLinesWithOffsets(source)) {
     if (line.start < block.bodyStart || line.start >= block.bodyEnd) {
       continue;
@@ -2974,13 +3100,14 @@ function firstFocusedPuzzleSprite2dEntry(source) {
       if (typeof findSpriteDefinitionAtPosition === "function") {
         const entry = findSpriteDefinitionAtPosition(source, firstEditorSourceCodeIndex(line));
         if (entry) {
-          return entry;
+          entries.push(entry);
+          continue;
         }
       }
-      return { start: firstEditorSourceCodeIndex(line), end: line.absoluteEnd };
+      entries.push({ start: firstEditorSourceCodeIndex(line), end: line.absoluteEnd });
     }
   }
-  return null;
+  return uniqueFocusedPuzzleEntries(entries);
 }
 
 function firstFocusedPuzzleSprite2dStart(source) {
@@ -2988,8 +3115,12 @@ function firstFocusedPuzzleSprite2dStart(source) {
 }
 
 function firstFocusedPuzzleSprite3dEntry(source) {
+  return focusedPuzzleSprite3dEntries(source)[0] || null;
+}
+
+function focusedPuzzleSprite3dEntries(source) {
   if (typeof findSprite3dDefinitions !== "function") {
-    return null;
+    return [];
   }
   const blocks = typeof findSprites3dBlocks === "function"
     ? findSprites3dBlocks(source)
@@ -2998,9 +3129,7 @@ function firstFocusedPuzzleSprite3dEntry(source) {
   for (const block of blocks) {
     entries.push(...(findSprite3dDefinitions(source, block) || []));
   }
-  return entries
-    .filter((entry) => Number.isFinite(entry?.start))
-    .sort((left, right) => left.start - right.start)[0] || null;
+  return uniqueFocusedPuzzleEntries(entries);
 }
 
 function firstFocusedPuzzleSprite3dStart(source) {
@@ -3008,11 +3137,21 @@ function firstFocusedPuzzleSprite3dStart(source) {
 }
 
 function loadFirstFocusedPuzzleEntry(kind, mode, context = focusedPuzzleSourceContext()) {
-  const dimension = editorDimensionForPreviewMode(mode);
-  const target = firstFocusedPuzzleEntryForDimension(kind, dimension, context);
-  if (!target || target.document?.id !== activeDocument()?.id) {
+  return loadFocusedPuzzleEntry(kind, firstFocusedPuzzleEntry(kind, context), {
+    silent: true,
+    recordHistory: false,
+  });
+}
+
+function loadFocusedPuzzleEntry(kind, entry, options = {}) {
+  if (!entry?.target || entry.target.document?.id !== activeDocument()?.id) {
     return false;
   }
+  const dimension = normalizeEditorDimension(entry.dimension);
+  const target = entry.target;
+  const mode = kind === "sprite"
+    ? spriteModeForEditorDimension(dimension)
+    : levelModeForEditorDimension(dimension);
   if ((mode === "edit" || mode === "level3d") && kind !== "level") {
     return false;
   }
@@ -3020,33 +3159,192 @@ function loadFirstFocusedPuzzleEntry(kind, mode, context = focusedPuzzleSourceCo
     return false;
   }
   if (mode === "edit" && dimension === "2d") {
-    return Boolean(loadLevelSourceTarget(target, { silent: true, recordHistory: false }));
+    currentLevelPaneMode = "edit";
+    return finishFocusedPuzzleEntryLoad(loadLevelSourceTarget(target, { silent: options.silent !== false, recordHistory: Boolean(options.recordHistory) }));
   }
   if (mode === "level3d" && dimension === "3d" && typeof loadLevel3dSourceTarget === "function") {
-    return Boolean(loadLevel3dSourceTarget(target, { silent: true, recordHistory: false, switchMode: false }));
+    currentLevelPaneMode = "level3d";
+    return finishFocusedPuzzleEntryLoad(loadLevel3dSourceTarget(target, { silent: options.silent !== false, recordHistory: Boolean(options.recordHistory), switchMode: true }));
   }
   if (mode === "sprite" && dimension === "2d" && typeof loadSpriteSourceTarget === "function") {
-    return Boolean(loadSpriteSourceTarget(target, { silent: true, recordHistory: false, switchMode: false }));
+    currentSpritePaneMode = "sprite";
+    return finishFocusedPuzzleEntryLoad(loadSpriteSourceTarget(target, { silent: options.silent !== false, recordHistory: Boolean(options.recordHistory), switchMode: true }));
   }
   if (mode === "sprite3d" && dimension === "3d" && typeof loadSprite3dSourceTarget === "function") {
-    return Boolean(loadSprite3dSourceTarget(target, { silent: true, recordHistory: false, switchMode: false }));
+    currentSpritePaneMode = "sprite3d";
+    return finishFocusedPuzzleEntryLoad(loadSprite3dSourceTarget(target, { silent: options.silent !== false, recordHistory: Boolean(options.recordHistory), switchMode: true }));
   }
   return false;
+}
+
+function finishFocusedPuzzleEntryLoad(result) {
+  const loaded = Boolean(result);
+  if (loaded) {
+    hideEditorHoverTooltip();
+  }
+  return loaded;
+}
+
+function focusedPuzzleTextDocument() {
+  const document = activeDocument();
+  return document && isPuzzleDocument(document) && isTextDocument(document) ? document : null;
+}
+
+function focusedPuzzleTextSource(document = focusedPuzzleTextDocument()) {
+  return document?.id === activeDocument()?.id ? sourceEditor.value || "" : document?.source || "";
+}
+
+function applyFocusedPuzzleSourceChange(document, source) {
+  document.source = source;
+  if (document.id === activeDocument()?.id) {
+    setSourceEditorValue(source, { resetUndo: false });
+  }
+  scheduleLocalSave();
+  schedulePreview();
+}
+
+function defaultEmptyLevel2dSourceData() {
+  const rows = Array.from({ length: 5 }, () => ".....");
+  return { rows, localLegends: [] };
+}
+
+function insertLevelWithDefaultBlock(source, name, levelData, namespace = "") {
+  const inserted = insertLevel(source, name, levelData, namespace);
+  if (inserted) {
+    return inserted;
+  }
+  const levelSource = levelDefinitionSource(name, levelData, "", { leadingBlank: false, bodyIndent: "" }).trimEnd();
+  const prefix = source.trimEnd() ? `${source.trimEnd()}\n\n` : "";
+  const namespaceSuffix = sanitizeLevelNamespace(namespace) ? ` ${sanitizeLevelNamespace(namespace)}` : "";
+  return `${prefix}levels${namespaceSuffix} {\n${levelSource}\n}\n`;
+}
+
+function addEmptyLevel2dToFocusedSource() {
+  const document = focusedPuzzleTextDocument();
+  if (!document) {
+    setStatus("No puzzle source for level", "is-error");
+    return false;
+  }
+  const name = "new_level";
+  const sourceData = defaultEmptyLevel2dSourceData();
+  const nextSource = insertLevelWithDefaultBlock(focusedPuzzleTextSource(document), name, sourceData, "");
+  applyFocusedPuzzleSourceChange(document, nextSource);
+  currentLevelPaneMode = "edit";
+  openPreviewModePane("edit");
+  setLevelNameInputs(name);
+  level.width = 5;
+  level.height = 5;
+  level.regions = defaultLevelRegions(level.width, level.height);
+  level.cells = makeEmptyCells(level.width, level.height);
+  renderLevelBoard();
+  renderLevelSourcePreview();
+  applyPaneVisibility();
+  setStatus("Added 2D level", "is-ok");
+  hideEditorHoverTooltip();
+  return true;
+}
+
+function defaultEmptyLevel3dSourceData() {
+  return { rows: [LEVEL3D_EMPTY_CHAR], unknownCells: 0 };
+}
+
+function insertLevel3dWithDefaultBlock(source, name, levelData, bundle = "levels") {
+  const inserted = typeof insertLevel3d === "function" ? insertLevel3d(source, name, levelData, bundle) : "";
+  if (inserted) {
+    return inserted;
+  }
+  const normalizedBundle = sanitizeLevel3dBundle(bundle || "levels");
+  const levelSource = levelDefinition3dSource(name, levelData, "  ", { bodyIndent: "    " }).trimEnd();
+  const prefix = source.trimEnd() ? `${source.trimEnd()}\n\n` : "";
+  return `${prefix}levels3 ${normalizedBundle} {\n  legend {\n    ${LEVEL3D_EMPTY_CHAR} = empty\n  }\n\n${levelSource}\n}\n`;
+}
+
+function addEmptyLevel3dToFocusedSource() {
+  const document = focusedPuzzleTextDocument();
+  if (!document) {
+    setPaneStatus("level", "No puzzle source for 3D level", "is-error");
+    return false;
+  }
+  const name = "level_1";
+  const bundle = "levels";
+  const sourceData = defaultEmptyLevel3dSourceData();
+  const nextSource = insertLevel3dWithDefaultBlock(focusedPuzzleTextSource(document), name, sourceData, bundle);
+  applyFocusedPuzzleSourceChange(document, nextSource);
+  currentLevelPaneMode = "level3d";
+  openPreviewModePane("level3d");
+  if (level3dNameInput) {
+    level3dNameInput.value = name;
+  }
+  if (level3dBundleInput) {
+    level3dBundleInput.value = bundle;
+  }
+  if (typeof level3d !== "undefined") {
+    level3d.width = 1;
+    level3d.depth = 1;
+    level3d.height = 1;
+    level3d.slice = 0;
+    level3d.selectedChar = LEVEL3D_EMPTY_CHAR;
+    level3d.palette = [{ char: LEVEL3D_EMPTY_CHAR, objects: [] }];
+    level3d.slices = [[LEVEL3D_EMPTY_CHAR]];
+    level3d.sourceDocumentId = document.id || "";
+    level3d.sourceKey = "";
+  }
+  if (typeof renderLevel3dBuilder === "function") {
+    renderLevel3dBuilder();
+  }
+  applyPaneVisibility();
+  setPaneStatus("level", "Added 3D level", "is-ok");
+  hideEditorHoverTooltip();
+  return true;
+}
+
+function addEmptySprite2dToFocusedSource() {
+  currentSpritePaneMode = "sprite";
+  openPreviewModePane("sprite");
+  if (typeof addSpriteToSource === "function") {
+    addSpriteToSource();
+  }
+  applyPaneVisibility();
+  hideEditorHoverTooltip();
+}
+
+function addEmptySprite3dToFocusedSource() {
+  currentSpritePaneMode = "sprite3d";
+  openPreviewModePane("sprite3d");
+  if (typeof addSprite3dToSource === "function") {
+    addSprite3dToSource();
+  }
+  applyPaneVisibility();
+  hideEditorHoverTooltip();
 }
 
 function openLevelPaneForCurrentDimension() {
   const context = focusedPuzzleSourceContext();
   ensurePreviewTargetsActiveDocument();
-  const mode = modeForFocusedPuzzleEntry("level", context) || currentLevelPaneMode || levelModeForEditorDimension();
+  const first = firstFocusedPuzzleEntry("level", context);
+  const mode = first ? levelModeForEditorDimension(first.dimension) : "edit";
   openPreviewModePane(mode);
-  loadFirstFocusedPuzzleEntry("level", mode, context);
+  if (first) {
+    loadFocusedPuzzleEntry("level", first, { silent: true, recordHistory: false });
+  } else {
+    currentLevelPaneMode = "none";
+    applyPaneVisibility();
+    hideEditorHoverTooltip();
+  }
 }
 
 function openSpritePaneForCurrentDimension() {
   const context = focusedPuzzleSourceContext();
-  const mode = modeForFocusedPuzzleEntry("sprite", context) || currentSpritePaneMode || spriteModeForEditorDimension();
+  const first = firstFocusedPuzzleEntry("sprite", context);
+  const mode = first ? spriteModeForEditorDimension(first.dimension) : "sprite";
   openPreviewModePane(mode);
-  loadFirstFocusedPuzzleEntry("sprite", mode, context);
+  if (first) {
+    loadFocusedPuzzleEntry("sprite", first, { silent: true, recordHistory: false });
+  } else {
+    currentSpritePaneMode = "none";
+    applyPaneVisibility();
+    hideEditorHoverTooltip();
+  }
 }
 
 function editorDimensionForPreviewMode(mode) {
@@ -3090,6 +3388,34 @@ function setEditorDimensionMode(dimension) {
   return currentPreviewMode;
 }
 
+function paneBindLabel(kind) {
+  if (kind === "level") {
+    if (currentLevelPaneMode === "edit") {
+      return "Level: 2D";
+    }
+    if (currentLevelPaneMode === "level3d") {
+      return "Level: 3D";
+    }
+    return "Level: none";
+  }
+  if (currentSpritePaneMode === "sprite") {
+    return "Sprite: 2D";
+  }
+  if (currentSpritePaneMode === "sprite3d") {
+    return "Sprite: 3D";
+  }
+  return "Sprite: none";
+}
+
+function syncPaneBindLabels() {
+  if (levelPaneModeSwitch) {
+    levelPaneModeSwitch.textContent = paneBindLabel("level");
+  }
+  if (spritePaneModeSwitch) {
+    spritePaneModeSwitch.textContent = paneBindLabel("sprite");
+  }
+}
+
 function syncPreviewModeButtonState() {
   const previewMode = normalizePreviewMode(currentPreviewMode);
   const paneVisible = isPaneVisible(workPaneIdForPreviewMode(previewMode));
@@ -3107,6 +3433,7 @@ function syncPreviewModeButtonState() {
   if (editorDimensionSwitch) {
     editorDimensionSwitch.dataset.mode = currentEditorDimension;
   }
+  syncPaneBindLabels();
   for (const button of editorDimensionButtons) {
     const active = normalizeEditorDimension(button.dataset.editorDimension) === currentEditorDimension;
     button.classList.toggle("is-active", active);
@@ -3153,9 +3480,11 @@ function setPreviewMode(mode, options = {}) {
   const sprite3dMode = previewMode === "sprite3d";
   const soundsMode = previewMode === "sounds";
   const psImportMode = previewMode === "psimport";
-  if (editMode || level3dMode || spriteMode || sprite3dMode) {
+  if (editMode || level3dMode) {
     currentEditorDimension = editorDimensionForPreviewMode(previewMode);
     currentLevelPaneMode = levelModeForEditorDimension(currentEditorDimension);
+  } else if (spriteMode || sprite3dMode) {
+    currentEditorDimension = editorDimensionForPreviewMode(previewMode);
     currentSpritePaneMode = spriteModeForEditorDimension(currentEditorDimension);
   }
   if (levelPaneModeSwitch) {
@@ -3772,41 +4101,6 @@ function loadResolvedSourceTarget(target, options = {}) {
   return null;
 }
 
-function loadSourceTargetWithJsFallback(source, position, options = {}) {
-  if (
-    typeof findLevel3dDefinitionAtPosition === "function"
-    && typeof loadLevel3dFromSourcePosition === "function"
-    && findLevel3dDefinitionAtPosition(source, position)
-  ) {
-    return loadLevel3dFromSourcePosition(position, { silent: true, switchMode: true, recordHistory: options.recordHistory }) || "";
-  }
-  if (findLevelDefinitionAtPosition(source, position)) {
-    return loadLevelFromSourcePosition(position, { silent: true, recordHistory: options.recordHistory }) || "";
-  }
-  if (
-    typeof findSprite3dDefinitionAtPosition === "function"
-    && typeof loadSprite3dFromSourcePosition === "function"
-    && findSprite3dDefinitionAtPosition(source, position)
-  ) {
-    return loadSprite3dFromSourcePosition(position, { silent: true, switchMode: true, recordHistory: options.recordHistory }) || "";
-  }
-  if (
-    typeof findSpriteDefinitionAtPosition === "function"
-    && typeof loadSpriteFromSourcePosition === "function"
-    && findSpriteDefinitionAtPosition(source, position)
-  ) {
-    return loadSpriteFromSourcePosition(position, { silent: true, switchMode: true, recordHistory: options.recordHistory }) || "";
-  }
-  if (
-    typeof findSoundsDefinitionAtPosition === "function"
-    && typeof loadSoundFromSourcePosition === "function"
-    && findSoundsDefinitionAtPosition(source, position)
-  ) {
-    return loadSoundFromSourcePosition(position, { silent: true, switchMode: true, recordHistory: options.recordHistory }) || "";
-  }
-  return "";
-}
-
 function finishSourceTargetSync(key, options = {}) {
   if (!key) {
     sourceCursorPreviewKey = "";
@@ -3842,10 +4136,6 @@ function syncPreviewModeFromSourceCursor(options = {}) {
     switchMode: true,
     recordHistory: options.recordHistory === true,
   };
-  const fallbackKey = loadSourceTargetWithJsFallback(source, position, loadOptions);
-  if (finishSourceTargetSync(fallbackKey, options)) {
-    return true;
-  }
   resolveSourceTargetFromWasm(source, position)
     .then((target) => {
       if (
@@ -3858,7 +4148,7 @@ function syncPreviewModeFromSourceCursor(options = {}) {
       const key = target ? loadResolvedSourceTarget(target, loadOptions) || "" : "";
       return finishSourceTargetSync(key, options);
     })
-    .catch(() => {
+    .catch((error) => {
       if (
         requestId !== sourceTargetRequestId
         || documentId !== (activeDocument()?.id || "")
@@ -3866,8 +4156,9 @@ function syncPreviewModeFromSourceCursor(options = {}) {
       ) {
         return false;
       }
-      const key = loadSourceTargetWithJsFallback(source, position, loadOptions);
-      return finishSourceTargetSync(key, options);
+      sourceCursorPreviewKey = "";
+      setStatus(`Source target sync failed: ${userFacingRuntimeError(error)}`, "is-error");
+      return false;
     });
   return false;
 }
@@ -4276,7 +4567,7 @@ function findLevelsRanges(source) {
           headerStart: lines[index].start,
           bodyStart: openIndex + 1,
           bodyEnd: closeIndex,
-          indent: `${lineIndent(lines[index].raw)}\t`,
+          indent: lineIndent(lines[index].raw),
           namespace: levelsNamespaceFromTokens(tokens),
         });
       }
@@ -4293,7 +4584,7 @@ function findLevelsRanges(source) {
         headerStart: lines[index].start,
         bodyStart: lines[index].end + (lines[index].hasNewline ? 1 : 0),
         bodyEnd: findEndDelimitedLevelsEnd(lines, index + 1),
-        indent: `${lineIndent(lines[index].raw)}\t`,
+        indent: lineIndent(lines[index].raw),
         namespace: levelsNamespaceFromTokens(tokens),
       });
       continue;
@@ -6178,44 +6469,35 @@ async function solveLevel(options = {}) {
     maxDepth: 512,
     maxNodes: 5_000_000,
     maxMs: 0,
-    progressIntervalMs: solverProgressIntervalMs,
   };
   let worker = null;
   try {
     worker = createWasmSolveWorker();
   } catch (error) {
-    await solveLevelInMainThread({
-      requestId,
-      solveRequest,
-      fallbackReason: error,
-    });
+    setSolveLevelButtonState(false);
+    stopLevelSolveFeedback();
+    setLevelSolveStatus(`Solver worker failed: ${userFacingWorkerError(error)}`, "is-error");
     return;
   }
   activeLevelSolveRequest = { id: requestId, backend: "wasm-worker", worker };
   worker.onmessage = (event) => {
     const message = event.data || {};
-    if (message.type === "progress") {
-      handleLevelSolveProgress({ requestId, progress: message.progress });
-      return;
-    }
     if (message.type === "result") {
       handleLevelSolveResult({ requestId, solution: message.solution });
       return;
     }
     if (message.type === "error") {
-      solveLevelInMainThread({
+      handleLevelSolveResult({
         requestId,
-        solveRequest,
-        fallbackReason: message.error,
+        error: `Solver worker failed: ${userFacingWorkerError(message.error)}`,
       });
     }
   };
   worker.onerror = (error) => {
     error?.preventDefault?.();
-    solveLevelInMainThread({
+    handleLevelSolveResult({
       requestId,
-      solveRequest,
-      fallbackReason: error,
+      error: `Solver worker failed: ${userFacingWorkerError(error)}`,
     });
   };
   setSolveLevelButtonState(true);
@@ -6228,80 +6510,9 @@ async function solveLevel(options = {}) {
       ...solveRequest,
     });
   } catch (error) {
-    await solveLevelInMainThread({
-      requestId,
-      solveRequest,
-      fallbackReason: error,
-    });
-  }
-}
-
-async function solveLevelInMainThread({ requestId, solveRequest, fallbackReason = null }) {
-  const previousRequest = activeLevelSolveRequest;
-  if (previousRequest && previousRequest.id !== requestId) {
-    return;
-  }
-  if (previousRequest?.backend === "wasm-main") {
-    return;
-  }
-  if (previousRequest?.backend === "wasm-worker") {
-    disposeWasmSolveWorker(previousRequest.worker);
-  }
-  activeLevelSolveRequest = { id: requestId, backend: "wasm-main", worker: null };
-  setSolveLevelButtonState(true);
-  const fallbackSuffix = fallbackReason
-    ? ` (${userFacingWorkerError(fallbackReason)})`
-    : "";
-  startLevelSolveFeedback(`Solving in this browser tab${fallbackSuffix}`);
-  await new Promise((resolve) => window.setTimeout(resolve, 0));
-  if (!activeLevelSolveRequest || activeLevelSolveRequest.id !== requestId) {
-    return;
-  }
-
-  try {
-    const module = await loadWasmCompiler();
-    if (!activeLevelSolveRequest || activeLevelSolveRequest.id !== requestId) {
-      return;
-    }
-    const solve = typeof module.solve_state_with_progress === "function"
-      ? module.solve_state_with_progress
-      : module.solve_state;
-    if (typeof solve !== "function") {
-      throw new Error("WASM solver is not available");
-    }
-    const progressStartedAt = Date.now();
-    let lastProgressPost = 0;
-    const progressCallback = (progressJson) => {
-      const now = Date.now();
-      if (now - lastProgressPost < solverProgressIntervalMs) {
-        return;
-      }
-      lastProgressPost = now;
-      const progress = JSON.parse(progressJson);
-      if (progress?.progress) {
-        progress.progress.elapsedMs = now - progressStartedAt;
-      }
-      handleLevelSolveProgress({ requestId, progress });
-    };
-    const args = [
-      solveRequest.source,
-      solveRequest.puzzlePath,
-      solveRequest.stateJson,
-      solveRequest.maxDepth,
-      solveRequest.maxNodes,
-      solveRequest.maxMs,
-    ];
-    const solutionJson = solve === module.solve_state_with_progress
-      ? solve(...args, solveRequest.progressIntervalMs, progressCallback)
-      : solve(...args);
     handleLevelSolveResult({
       requestId,
-      solution: JSON.parse(solutionJson),
-    });
-  } catch (error) {
-    handleLevelSolveResult({
-      requestId,
-      error: `Solver failed: ${userFacingRuntimeError(error)}`,
+      error: `Solver worker failed: ${userFacingWorkerError(error)}`,
     });
   }
 }
@@ -6362,13 +6573,6 @@ function cancelLevelSolve() {
     setLevelSolveStatus("Cancelled", "");
     return;
   }
-  if (activeLevelSolveRequest.backend === "wasm-main") {
-    activeLevelSolveRequest = null;
-    setSolveLevelButtonState(false);
-    stopLevelSolveFeedback();
-    setLevelSolveStatus("Cancelled", "");
-    return;
-  }
   if (!previewFrame.contentWindow) {
     return;
   }
@@ -6402,7 +6606,6 @@ function setSolveLevelButtonState(isSolving) {
 
 function startLevelSolveFeedback(initialText = "Solving") {
   levelSolveStartedAt = Date.now();
-  latestLevelSolveProgress = null;
   if (levelSolveFeedbackTimer) {
     window.clearInterval(levelSolveFeedbackTimer);
   }
@@ -6416,7 +6619,6 @@ function stopLevelSolveFeedback() {
     levelSolveFeedbackTimer = 0;
   }
   levelSolveStartedAt = 0;
-  latestLevelSolveProgress = null;
   solverBoardViewport?.classList.remove("is-solving");
   solverBoardViewport?.closest(".solver-board-wrap")?.classList.remove("is-solving");
 }
@@ -6427,53 +6629,7 @@ function tickLevelSolveFeedback() {
     return;
   }
   const elapsedMs = Date.now() - levelSolveStartedAt;
-  if (latestLevelSolveProgress) {
-    setLevelSolveStatus(formatLevelSolveProgress(latestLevelSolveProgress, elapsedMs), "");
-    return;
-  }
   setLevelSolveStatus(`Solving: starting search, ${formatSeconds(elapsedMs)}`, "");
-}
-
-function formatLevelSolveProgress(progress, elapsedMs = progress?.elapsedMs || 0) {
-  return `Solving: ${formatNumber(progress?.visited || 0)} states, depth ${progress?.maxDepthReached || 0}, frontier ${formatNumber(progress?.frontier || 0)}, ${formatSeconds(elapsedMs)}`;
-}
-
-function handleLevelSolveProgress(message) {
-  if (!activeLevelSolveRequest || message.requestId !== activeLevelSolveRequest.id) {
-    return;
-  }
-  const payload = message.progress || {};
-  const progress = payload.progress || payload;
-  latestLevelSolveProgress = {
-    ...progress,
-    elapsedMs: progress.elapsedMs || (levelSolveStartedAt ? Date.now() - levelSolveStartedAt : 0),
-  };
-  if (payload.sample?.scene && !levelSolutionPreview) {
-    if (payload.model === "puzzle3d" || payload.sample.scene.kind === "puzzle3d") {
-      if (typeof puzzle3dSolutionStepSnapshot === "function") {
-        const snapshot = puzzle3dSolutionStepSnapshot({
-          scene: payload.sample.scene,
-          completed: false,
-          clearCommands: [],
-        });
-        if (snapshot) {
-          solverObservationPreview = {
-            kind: "puzzle3d",
-            depth: payload.sample.depth || progress.maxDepthReached || 0,
-            snapshot,
-          };
-          renderSolverBoard();
-        }
-      }
-    } else {
-      solverObservationPreview = {
-        depth: payload.sample.depth || progress.maxDepthReached || 0,
-        cells: sceneCellsToSlots(payload.sample.scene, displayedSolverCells()),
-      };
-      renderSolverBoard();
-    }
-  }
-  setLevelSolveStatus(formatLevelSolveProgress(latestLevelSolveProgress), "");
 }
 
 function handleLevelSolveResult(message) {
@@ -6525,19 +6681,11 @@ function setLevelSolveStatus(text, className = "") {
   if (!levelSolutionPreview) {
     setLevelSolveSummary(text, className);
   }
-  if (currentPreviewMode === "solver") {
-    clearSharedPaneStatus();
-  } else {
-    setStatus(text, className);
-  }
+  setPaneStatus("solver", text, className);
 }
 
 function clearSharedPaneStatus() {
-  window.clearTimeout(statusClearTimer);
-  statusClearTimer = 0;
-  statusLabel.className = "pane-status tool-feedback-bar";
-  statusLabel.textContent = "";
-  schedulePreviewViewportSync(2);
+  clearPaneStatus(activeStatusPaneId());
 }
 
 function setLevelSolveSummary(text, className = "") {
@@ -7359,17 +7507,46 @@ function setLevelNameInputs(qualifiedName) {
   syncLevelNameOptions();
 }
 
-function levelNameControlConfig(source = activePreviewSource()) {
+function focusedLevelNameControlConfig(source = focusedPuzzleSourceContext()?.source || activePreviewSource(), options = {}) {
   return {
     source,
-    scopeValue: sanitizeLevelNamespace(levelNamespaceInput?.value || ""),
-    nameInput: levelNameInput,
-    datalist: levelNameOptions,
-    findRanges: findLevelsRanges,
-    findDefinitions: findLevelDefinitions,
-    rangeScope: (range) => sanitizeLevelNamespace(range?.namespace || ""),
-    entryName: (entry) => entry?.name || "",
-    optionValue: (entry) => editableLevelName(entry?.name || ""),
+    nameInput: options.nameInput || levelNameInput,
+    datalist: options.datalist || levelNameOptions,
+    collectEntries: () => focusedLevelNameControlEntries(source),
+  };
+}
+
+function focusedLevelNameControlEntries(source = focusedPuzzleSourceContext()?.source || activePreviewSource()) {
+  const document = focusedPuzzleSourceContext()?.document || activeDocument();
+  const context = document ? { document, source } : focusedPuzzleSourceContext();
+  return focusedPuzzleEntries("level", context).map((item) => {
+    const target = item.target || {};
+    const name = String(target.name || "").trim();
+    const scope = item.dimension === "3d"
+      ? String(target.bundle || "levels").trim()
+      : sanitizeLevelNamespace(target.namespace || editableLevelNamespace(name));
+    const scopedName = item.dimension === "2d" && scope && !name.includes(".")
+      ? `${scope}.${name}`
+      : name;
+    const displayName = item.dimension === "3d" && scope
+      ? `${scope}.${name}`
+      : scopedName;
+    return {
+      range: { namespace: target.namespace || "", bundle: target.bundle || "" },
+      entry: target,
+      dimension: item.dimension,
+      name,
+      value: `${editorDimensionLabel(item.dimension)} ${displayName || name}`,
+    };
+  });
+}
+
+function levelNameControlConfig(source = focusedPuzzleSourceContext()?.source || activePreviewSource()) {
+  return {
+    ...focusedLevelNameControlConfig(source, {
+      nameInput: levelNameInput,
+      datalist: levelNameOptions,
+    }),
   };
 }
 
@@ -7380,22 +7557,22 @@ function syncLevelNameOptions() {
   return syncSourceLevelNameDatalist(levelNameControlConfig());
 }
 
-function levelNamePickerConfig(source = activePreviewSource()) {
+function levelNamePickerConfig(source = focusedPuzzleSourceContext()?.source || activePreviewSource()) {
   return {
     ...levelNameControlConfig(source),
     load: loadLevelNameEntry,
   };
 }
 
-function loadLevelNameEntry({ entry }) {
-  const target = {
-    kind: "level",
-    name: entry.name,
-    start: entry.start,
-    end: entry.end,
-    levelIndex: entry.levelIndex,
-  };
-  return loadLevelSourceTarget(target, { recordHistory: true, silent: false });
+function loadLevelNameEntry(match) {
+  const dimension = normalizeEditorDimension(match?.dimension);
+  return loadFocusedPuzzleEntry("level", {
+    dimension,
+    target: {
+      ...(match?.entry || {}),
+      document: match?.entry?.document || activeDocument(),
+    },
+  }, { recordHistory: true, silent: false });
 }
 
 function showLevelNameOptions() {
@@ -7917,7 +8094,7 @@ function levelDefinitionSource(name, levelData, levelIndent, options = {}) {
   const lifecycle = options.lifecycle || {};
   const startLifecycleLines = Array.isArray(lifecycle.start) ? lifecycle.start : [];
   const clearLifecycleLines = Array.isArray(lifecycle.clear) ? lifecycle.clear : [];
-  const rowIndent = Object.prototype.hasOwnProperty.call(options, "bodyIndent") ? options.bodyIndent : `${levelIndent}\t`;
+  const rowIndent = Object.prototype.hasOwnProperty.call(options, "bodyIndent") ? options.bodyIndent : levelIndent;
   const hasRegionBreak = rows.some((row) => row.trim() === "");
   const hasLocalLegends = localLegends.length > 0;
   const hasLifecycle = startLifecycleLines.length > 0 || clearLifecycleLines.length > 0;
@@ -7953,7 +8130,7 @@ function levelBodyBlockSourceLines(lines, indent) {
     const normalized = braceNormalizedLineForSectionForWasm(line);
     const isClose = normalized === "}" || normalized === "end";
     const lineDepth = Math.max(0, depth - (isClose ? 1 : 0));
-    out.push(`${indent}${"\t".repeat(lineDepth)}${line}`);
+    out.push(`${indent}${line}`);
     depth = lineDepth + (startsInlineBlockForWasm(splitLevelTokens(normalized), normalized) ? 1 : 0);
   }
   return out;
@@ -8068,7 +8245,7 @@ function levelLegendSourceLines(localLegends, indent) {
   if (!localLegends.length) {
     return [];
   }
-  const bodyIndent = `${indent}\t`;
+  const bodyIndent = indent;
   return [
     `${indent}legend {`,
     ...localLegends.map((entry) => `${bodyIndent}${entry.char} = ${entry.objects.join(" ")}`),
@@ -8079,7 +8256,7 @@ function levelLegendSourceLines(localLegends, indent) {
 function levelDefinitionIndent(source, entry) {
   const lines = sourceLinesWithOffsets(source);
   const line = lines.find((candidate) => entry.start >= candidate.start && entry.start <= candidate.end);
-  return line ? lineIndent(line.raw) : "\t";
+  return line ? lineIndent(line.raw) : "";
 }
 
 function sourceTitleMatches(existing, title, namespace = "") {
@@ -8128,12 +8305,12 @@ function levelInsertionIndent(source, range) {
       return lineIndent(line.raw);
     }
   }
-  return range.indent || "\t";
+  return range.indent || "";
 }
 
 function levelInsertionBodyIndent(source, range, levelIndent) {
   const existing = findLevelDefinitions(source, range)[0];
-  return existing ? levelDefinitionBodyIndent(source, existing, levelIndent) : `${levelIndent}\t`;
+  return existing ? levelDefinitionBodyIndent(source, existing, levelIndent) : levelIndent;
 }
 
 function levelDefinitionBodyIndent(source, entry, levelIndent) {
@@ -8156,7 +8333,7 @@ function levelDefinitionBodyIndent(source, entry, levelIndent) {
       break;
     }
   }
-  return `${levelIndent}\t`;
+  return levelIndent;
 }
 
 function lineIndent(line) {
@@ -8525,10 +8702,6 @@ window.addEventListener("message", (event) => {
     });
     return;
   }
-  if (event.data?.type === "PuzzleStudioSolveProgress") {
-    handleLevelSolveProgress(event.data);
-    return;
-  }
   if (event.data?.type === "PuzzleStudioSolveResult") {
     handleLevelSolveResult(event.data);
   }
@@ -8588,48 +8761,60 @@ for (const button of editorDimensionButtons) {
   button.addEventListener("click", () => {
     const context = focusedPuzzleSourceContext();
     const previousMode = currentPreviewMode;
-    const mode = setEditorDimensionMode(button.dataset.editorDimension);
-    if (!["edit", "level3d", "sprite", "sprite3d"].includes(previousMode)) {
-      const levelMode = levelModeForEditorDimension();
+    const activeKind = previousMode === "sprite" || previousMode === "sprite3d" ? "sprite" : "level";
+    const first = ["edit", "level3d", "sprite", "sprite3d"].includes(previousMode)
+      ? firstFocusedPuzzleEntry(activeKind, context)
+      : firstFocusedPuzzleEntry("level", context);
+    if (first) {
       ensurePreviewTargetsActiveDocument();
-      openPreviewModePane(levelMode);
-      loadFirstFocusedPuzzleEntry("level", levelMode, context);
+      openPreviewModePane(activeKind === "sprite"
+        ? spriteModeForEditorDimension(first.dimension)
+        : levelModeForEditorDimension(first.dimension));
+      loadFocusedPuzzleEntry(activeKind, first, { silent: true, recordHistory: false });
       return;
     }
-    loadFirstFocusedPuzzleEntry(previousMode === "sprite" || previousMode === "sprite3d" ? "sprite" : "level", mode, context);
+    setEditorDimensionMode(button.dataset.editorDimension);
   });
 }
 for (const button of levelPaneModeButtons) {
   button.addEventListener("click", () => {
     const context = focusedPuzzleSourceContext();
-    const mode = button.dataset.levelPaneMode;
-    if (!["edit", "level3d"].includes(mode)) {
+    if (!["edit", "level3d"].includes(button.dataset.levelPaneMode)) {
+      return;
+    }
+    const first = firstFocusedPuzzleEntry("level", context);
+    if (!first) {
       return;
     }
     ensurePreviewTargetsActiveDocument();
-    openPreviewModePane(mode);
-    loadFirstFocusedPuzzleEntry("level", mode, context);
+    openPreviewModePane(levelModeForEditorDimension(first.dimension));
+    loadFocusedPuzzleEntry("level", first, { silent: true, recordHistory: false });
   });
 }
 spriteModeButton.addEventListener("click", () => {
   openSpritePaneForCurrentDimension();
 });
 sprite3dModeButton?.addEventListener("click", () => {
-  const context = focusedPuzzleSourceContext();
-  openPreviewModePane("sprite3d");
-  loadFirstFocusedPuzzleEntry("sprite", "sprite3d", context);
+  openSpritePaneForCurrentDimension();
 });
 for (const button of spritePaneModeButtons) {
   button.addEventListener("click", () => {
     const context = focusedPuzzleSourceContext();
-    const mode = button.dataset.spritePaneMode;
-    if (!["sprite", "sprite3d"].includes(mode)) {
+    if (!["sprite", "sprite3d"].includes(button.dataset.spritePaneMode)) {
       return;
     }
-    openPreviewModePane(mode);
-    loadFirstFocusedPuzzleEntry("sprite", mode, context);
+    const first = firstFocusedPuzzleEntry("sprite", context);
+    if (!first) {
+      return;
+    }
+    openPreviewModePane(spriteModeForEditorDimension(first.dimension));
+    loadFocusedPuzzleEntry("sprite", first, { silent: true, recordHistory: false });
   });
 }
+addEmptyLevel2dButton?.addEventListener("click", addEmptyLevel2dToFocusedSource);
+addEmptyLevel3dButton?.addEventListener("click", addEmptyLevel3dToFocusedSource);
+addEmptySprite2dButton?.addEventListener("click", addEmptySprite2dToFocusedSource);
+addEmptySprite3dButton?.addEventListener("click", addEmptySprite3dToFocusedSource);
 soundsTopbarButton.addEventListener("click", () => {
   openPreviewModePane("sounds");
   syncSourceFromPreviewPane("sounds");

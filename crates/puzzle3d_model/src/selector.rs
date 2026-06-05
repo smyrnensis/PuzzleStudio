@@ -1297,7 +1297,8 @@ pub struct SelectorScratch3 {
     pub negated: bool,
 }
 
-const ANONYMOUS_MOVEMENT_SCRATCH3: ScratchId3 = ScratchId3(0);
+const ANONYMOUS_MOVEMENT_SCRATCH3: ScratchId3 =
+    ScratchId3(puzzle_authoring::ANONYMOUS_MOVEMENT_SCRATCH_INDEX);
 
 fn lower_selector_scratch(
     scratch: &SelectorScratch3,
@@ -1326,9 +1327,11 @@ fn lower_selector_scratch_parts(
                 puzzle_kernel::ScratchValueMatch::Any,
             ));
         }
+        let value =
+            puzzle_authoring::movement_scratch_index_3d(value).ok_or_else(|| value.to_string())?;
         return Ok((
             ANONYMOUS_MOVEMENT_SCRATCH3,
-            Some(movement_scratch_value3(value)?),
+            Some(i64::from(value)),
             puzzle_kernel::ScratchValueMatch::Exact,
         ));
     }
@@ -1345,28 +1348,13 @@ fn resolve_directional_selector_scratch(
     let value = match value {
         ">" => direction.name,
         "<" => direction.opposite().name,
-        "forward" => "front",
-        "backward" => "back",
-        other => other,
+        other => puzzle_authoring::canonical_3d_movement_direction_name(other),
     };
     SelectorScratch3 {
         name: scratch.name.clone(),
         value: Some(value.to_string()),
         negated: scratch.negated,
     }
-}
-
-fn movement_scratch_value3(value: &str) -> Result<i64, String> {
-    let canonical = match value {
-        "forward" => "front",
-        "backward" => "back",
-        other => other,
-    };
-    Direction3::directions()
-        .iter()
-        .position(|direction| direction.name == canonical)
-        .map(|index| index as i64)
-        .ok_or_else(|| value.to_string())
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

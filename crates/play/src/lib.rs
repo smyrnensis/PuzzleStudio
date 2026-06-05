@@ -41,8 +41,10 @@ pub enum AnimationEvent {
         object: ObjectId,
         from_x: u16,
         from_y: u16,
+        from_z: u16,
         to_x: u16,
         to_y: u16,
+        to_z: u16,
     },
     CantMove {
         name: String,
@@ -1687,41 +1689,45 @@ impl GameSession {
         bindings: &HashMap<String, String>,
     ) {
         let mut level_changed = false;
-        for param in params {
-            let Some(value) = self.eval_effect_value(game, &param.value, bindings) else {
-                continue;
-            };
-            if let Some(index) = (param.name == "level")
-                .then(|| self.eval_effect_level_index(game, &param.value, bindings))
-                .flatten()
-            {
-                if scene_accepts_level(game, scene_name, index) {
-                    let _ = self.activate_level(game, index, true);
-                    self.undo_stack.clear();
-                    self.redo_stack.clear();
-                    level_changed = true;
-                }
-            }
-
+        if !params.is_empty() {
             self.create_scene(game, scene_name);
-            if let Some(state) = self.scene_states.get_mut(scene_name) {
-                let accepts_param = game
-                    .scenes
-                    .iter()
-                    .find(|scene| scene.name == scene_name)
-                    .and_then(|scene| {
-                        scene
-                            .state
-                            .variables
-                            .iter()
-                            .find(|variable| variable.name == param.name)
-                    })
-                    .map(|variable| variable.mutable)
-                    .unwrap_or(true);
-                if !accepts_param {
-                    continue;
+        }
+        for param in params {
+            match param {
+                SceneEffectParam::Level(level) => {
+                    if let Some(index) = self.eval_effect_level_index(game, level, bindings) {
+                        if scene_accepts_level(game, scene_name, index) {
+                            let _ = self.activate_level(game, index, true);
+                            self.undo_stack.clear();
+                            self.redo_stack.clear();
+                            level_changed = true;
+                        }
+                    }
                 }
-                state.values.insert(param.name.clone(), value);
+                SceneEffectParam::Named { name, value } => {
+                    let Some(value) = self.eval_effect_value(game, value, bindings) else {
+                        continue;
+                    };
+                    if let Some(state) = self.scene_states.get_mut(scene_name) {
+                        let accepts_param = game
+                            .scenes
+                            .iter()
+                            .find(|scene| scene.name == scene_name)
+                            .and_then(|scene| {
+                                scene
+                                    .state
+                                    .variables
+                                    .iter()
+                                    .find(|variable| variable.name == *name)
+                            })
+                            .map(|variable| variable.mutable)
+                            .unwrap_or(true);
+                        if !accepts_param {
+                            continue;
+                        }
+                        state.values.insert(name.clone(), value);
+                    }
+                }
             }
         }
         if level_changed {
@@ -2971,10 +2977,7 @@ fn parse_runtime_scene_target(value: &str) -> Option<(&str, Vec<SceneEffectParam
         let params = if args.is_empty() {
             Vec::new()
         } else if !args.contains('=') && !args.contains(',') {
-            vec![SceneEffectParam {
-                name: "level".to_string(),
-                value: parse_runtime_expr(args)?,
-            }]
+            vec![SceneEffectParam::Level(parse_runtime_expr(args)?)]
         } else {
             parse_runtime_params(&args.replace(" = ", "="))?
         };
@@ -2991,7 +2994,7 @@ fn parse_runtime_params(value: &str) -> Option<Vec<SceneEffectParam>> {
         .map(|param| {
             let (name, value) = param.split_once('=')?;
             let name = name.trim();
-            is_simple_identifier(name).then_some(SceneEffectParam {
+            is_simple_identifier(name).then_some(SceneEffectParam::Named {
                 name: name.to_string(),
                 value: parse_runtime_expr(value.trim())?,
             })
@@ -3211,8 +3214,10 @@ pub fn animation_events_for_trace(
                                     object: *object,
                                     from_x: *from_x,
                                     from_y: *from_y,
+                                    from_z: 0,
                                     to_x: *to_x,
                                     to_y: *to_y,
+                                    to_z: 0,
                                 },
                             );
                         }
@@ -3792,8 +3797,10 @@ P.
                 object: player,
                 from_x: 0,
                 from_y: 0,
+                from_z: 0,
                 to_x: 1,
                 to_y: 0,
+                to_z: 0,
             }]
         );
     }
@@ -4783,8 +4790,10 @@ P.
                 object: player,
                 from_x: 0,
                 from_y: 0,
+                from_z: 0,
                 to_x: 1,
                 to_y: 0,
+                to_z: 0,
             }]
         );
         assert!(!session.state().has_object(&loaded.game, 1, 0, marker));
