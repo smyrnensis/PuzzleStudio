@@ -23,9 +23,14 @@ rebuild the generated WASM artifacts explicitly before generating the Pages site
 Do not add a portable single-file HTML release path or a compatibility alias for
 the removed root artifact.
 
-Use `tools/serve_web_editor.sh` to inspect the generated Pages site locally. On
-macOS, `tools/open_web_editor.command` is the double-click entry point. These
-serve `docs/` over local HTTP, matching the GitHub Pages asset-loading model.
+Use `tools/serve_web_editor.sh` or `tools/open_web_editor.command` for the
+normal local web editor. These start the Rust editor server so `/api/highlight`,
+preview compilation, save, and other editor backend routes are available.
+
+Use `tools/serve_web_editor.sh --pages` or `tools/open_web_editor.command
+--pages` only to inspect the generated Pages site locally. That mode serves
+`docs/` over local HTTP, matching the GitHub Pages asset-loading model, and does
+not provide Rust editor API routes such as `/api/highlight`.
 
 When verifying the generated Pages editor in the Codex in-app browser, do not
 try to open it through `file://`. This environment's browser policy blocks local

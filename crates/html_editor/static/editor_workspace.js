@@ -26,6 +26,8 @@ let draftEntry = null;
 let renameEntry = null;
 let draggedNodeId = "";
 let workspaceChangeUnlisten = null;
+let workspaceHostMutationDepth = 0;
+let deferredWorkspaceChangedPayload = null;
 let recentWorkspaces = [];
 
 function configureFolderImport() {
@@ -101,6 +103,10 @@ function configureWorkspaceChangeListener() {
     return;
   }
   window.PuzzleStudioHost.listenWorkspaceChanged((payload) => {
+    if (workspaceHostMutationDepth > 0) {
+      deferredWorkspaceChangedPayload = payload;
+      return;
+    }
     applyWorkspaceChangedPayload(payload).catch((error) => {
       console.error(error);
       setEditorStatus("External reload failed", "is-error");
@@ -109,6 +115,28 @@ function configureWorkspaceChangeListener() {
     workspaceChangeUnlisten = typeof unlisten === "function" ? unlisten : null;
   }).catch((error) => {
     console.error(error);
+  });
+}
+
+function beginWorkspaceHostMutation() {
+  workspaceHostMutationDepth += 1;
+}
+
+function endWorkspaceHostMutation() {
+  workspaceHostMutationDepth = Math.max(0, workspaceHostMutationDepth - 1);
+  if (workspaceHostMutationDepth > 0 || !deferredWorkspaceChangedPayload) {
+    return;
+  }
+  queueMicrotask(() => {
+    if (workspaceHostMutationDepth > 0 || !deferredWorkspaceChangedPayload) {
+      return;
+    }
+    const payload = deferredWorkspaceChangedPayload;
+    deferredWorkspaceChangedPayload = null;
+    applyWorkspaceChangedPayload(payload).catch((error) => {
+      console.error(error);
+      setEditorStatus("External reload failed", "is-error");
+    });
   });
 }
 
@@ -513,6 +541,12 @@ function confirmRemoveWorkspaceWithUnsavedChanges(node, unsavedDocuments) {
   return window.confirm(
     `Close ${workspaceName} without saving?\n\nUnsaved changes will be lost:\n${fileList}${more}`,
   );
+}
+
+function confirmDesktopDeleteWorkspaceEntry(node) {
+  const name = node?.name || fileName(node?.puzzlePath) || "this entry";
+  const kind = node?.kind === "folder" ? "folder" : "file";
+  return window.confirm(`Delete ${kind} "${name}" from disk?\n\nThis cannot be undone.`);
 }
 
 async function openProjectFromDesktop(kind = "folder") {
@@ -1080,7 +1114,7 @@ function renderDocumentTabs() {
 
 function documentTabDisplayName(document) {
   const name = document?.name || fileName(document?.puzzlePath) || "";
-  return name.endsWith(".puzzle") ? name.slice(0, -".puzzle".length) : name;
+  return name;
 }
 
 function updateDocumentTabScrollState() {
@@ -1412,7 +1446,7 @@ function renderTreeNode(node, parent, depth) {
   row.classList.toggle("is-active", node.id === activeFileId);
   row.classList.toggle("is-active-tree", node.id === selectedTreeId);
   row.classList.toggle("is-renaming", renameEntry?.nodeId === node.id);
-  row.innerHTML = `${fileIconSvg()}${treeNameHtml(node)}${treeActionsHtml("file")}`;
+  row.innerHTML = `${fileIconSvg(node)}${treeNameHtml(node)}${treeActionsHtml("file")}`;
   setTreeName(row, node);
   parent.append(row);
 }
@@ -1430,7 +1464,10 @@ function folderIconSvg(workspace = false) {
   return `<svg class="tree-icon lucide lucide-folder" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"></path></svg>`;
 }
 
-function fileIconSvg() {
+function fileIconSvg(node) {
+  if (puzzleSourceProfile(node) === "puzzle3d") {
+    return `<svg xmlns="http://www.w3.org/2000/svg" class="tree-icon lucide lucide-file-box-icon lucide-file-box" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.5 22H18a2 2 0 0 0 2-2V8a2.4 2.4 0 0 0-.706-1.706l-3.588-3.588A2.4 2.4 0 0 0 14 2H6a2 2 0 0 0-2 2v3.8"/><path d="M14 2v5a1 1 0 0 0 1 1h5"/><path d="M11.7 14.2 7 17l-4.7-2.8"/><path d="M3 13.1a2 2 0 0 0-.999 1.76v3.24a2 2 0 0 0 .969 1.78L6 21.7a2 2 0 0 0 2.03.01L11 19.9a2 2 0 0 0 1-1.76V14.9a2 2 0 0 0-.97-1.78L8 11.3a2 2 0 0 0-2.03-.01z"/><path d="M7 17v5"/></svg>`;
+  }
   return `<svg class="tree-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><path d="M14 2v6h6"></path></svg>`;
 }
 
@@ -2083,10 +2120,15 @@ async function commitDraftEntry(rawName) {
     folder.workspaceRoot = workspaceRootForFolder(parent);
     const folderPathValue = joinPath(folderPath(parent), folder.name);
     if (!editorSeed && isDesktopHost() && typeof window.PuzzleStudioHost.createSourceFolder === "function") {
-      await window.PuzzleStudioHost.createSourceFolder({
-        folderPath: hostPathForEditorPath(folderPathValue, folder.workspaceRoot),
-        workspaceRoot: folder.workspaceRoot,
-      });
+      beginWorkspaceHostMutation();
+      try {
+        await window.PuzzleStudioHost.createSourceFolder({
+          folderPath: hostPathForEditorPath(folderPathValue, folder.workspaceRoot),
+          workspaceRoot: folder.workspaceRoot,
+        });
+      } finally {
+        endWorkspaceHostMutation();
+      }
     }
     parent.children.push(folder);
     parent.expanded = true;
@@ -2104,11 +2146,16 @@ async function commitDraftEntry(rawName) {
     gameVisualsJs: current.gameVisualsJs || editorSeed?.gameVisualsJs || "",
   });
   if (!editorSeed && isDesktopHost() && typeof window.PuzzleStudioHost.createSourceFile === "function") {
-    await window.PuzzleStudioHost.createSourceFile({
-      source: file.source || "",
-      puzzlePath: hostPathForEditorPath(file.puzzlePath, file.workspaceRoot),
-      workspaceRoot: file.workspaceRoot,
-    });
+    beginWorkspaceHostMutation();
+    try {
+      await window.PuzzleStudioHost.createSourceFile({
+        source: file.source || "",
+        puzzlePath: hostPathForEditorPath(file.puzzlePath, file.workspaceRoot),
+        workspaceRoot: file.workspaceRoot,
+      });
+    } finally {
+      endWorkspaceHostMutation();
+    }
   }
   parent.children.push(file);
   activeFileId = file.id;
@@ -2278,6 +2325,7 @@ async function commitRenameEntry(value) {
   const toPath = joinPath(parentPath, nextName);
   const targetWorkspaceRoot = workspaceRootForNode(target.node);
   if (!editorSeed && isDesktopHost() && typeof window.PuzzleStudioHost.renameWorkspaceEntry === "function") {
+    beginWorkspaceHostMutation();
     try {
       await window.PuzzleStudioHost.renameWorkspaceEntry({
         fromPath: hostPathForEditorPath(fromPath, targetWorkspaceRoot),
@@ -2289,6 +2337,8 @@ async function commitRenameEntry(value) {
         renameEntry.committing = false;
       }
       throw error;
+    } finally {
+      endWorkspaceHostMutation();
     }
   }
   target.node.name = nextName;
@@ -2312,10 +2362,19 @@ async function deleteTreeNode(nodeId) {
     ? folderPath(target.node)
     : target.node.puzzlePath;
   if (!editorSeed && typeof window.PuzzleStudioHost.deleteWorkspaceEntry === "function") {
-    await window.PuzzleStudioHost.deleteWorkspaceEntry({
-      entryPath: hostPathForEditorPath(entryPath, targetWorkspaceRoot),
-      workspaceRoot: targetWorkspaceRoot,
-    });
+    if (!confirmDesktopDeleteWorkspaceEntry(target.node)) {
+      setEditorStatus("Delete canceled", "");
+      return;
+    }
+    beginWorkspaceHostMutation();
+    try {
+      await window.PuzzleStudioHost.deleteWorkspaceEntry({
+        entryPath: hostPathForEditorPath(entryPath, targetWorkspaceRoot),
+        workspaceRoot: targetWorkspaceRoot,
+      });
+    } finally {
+      endWorkspaceHostMutation();
+    }
   }
 
   const removedActive = target.node.id === activeFileId

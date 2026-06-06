@@ -1511,7 +1511,7 @@ fn push_playing_scene(
     if let Some(author) = author {
         out.push(format!("    subtitle \"by {}\"", escape_scene_text(author)));
     }
-    out.push("    if game.has_progress_save {".to_string());
+    out.push("    if has_progress_save {".to_string());
     out.push("      choice \"Continue\" -> input continue_game".to_string());
     out.push("    }".to_string());
     out.push("    choice \"New Game\" -> input new_game".to_string());

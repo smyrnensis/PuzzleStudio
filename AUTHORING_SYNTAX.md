@@ -102,7 +102,7 @@ author "Puzzle Author"
 homepage "https://example.com"
 ```
 
-表示用・配布用のゲーム metadata。`title` はゲーム名、`subtitle` は短い説明、`author` は作者名、`homepage` は作者または作品の URL。`subtitle` / `author` / `homepage` は省略可能。scene の `title` / `subtitle` component は、引数を省略すると top-level metadata を表示する。旧 surface の `game.title` / `game.subtitle` / `game.author` / `game.homepage` は互換として残すが、canonical example では使わない。`name <text>` は top-level metadata としては読まない。
+表示用・配布用のゲーム metadata。`title` はゲーム名、`subtitle` は短い説明、`author` は作者名、`homepage` は作者または作品の URL。`subtitle` / `author` / `homepage` は省略可能。scene の `title` / `subtitle` component は、引数を省略すると top-level metadata を表示する。scene expression からは `title` / `subtitle` / `author` / `homepage` を top scope の bare name として読む。`name <text>` は top-level metadata としては読まない。
 
 ### Tags / Object Schema
 
@@ -1766,17 +1766,6 @@ button "Title" -> goto title
 ```
 
 `columns = <n>` は level item を n 列の matrix として配置する。`layout = list` は通常の縦 list。matrix では `left` / `right` が隣の item、`up` / `down` が列数ぶん前後の item に移動する。`wrap = true` は cursor の端越えを循環させ、`wrap = false` で無効にする。
-
-`scene title_menu [name]` はタイトル用 menu scene。`name` を省略すると `title` になる。直下に `title`、`subtitle`、`text`、`button`、`row` / `column` / `box` を書ける。
-
-```txt
-scene title_menu {
-title "Microban"
-subtitle "A compact puzzle"
-button "Play" -> goto playing
-button "Levels" -> goto level_select
-}
-```
 
 ```txt
 scene play_level {

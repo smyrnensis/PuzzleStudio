@@ -1350,7 +1350,6 @@ fn puzzle3_scene_expr_json(expr: &SceneExpr) -> String {
 fn scene_expr_fixture_text(expr: &SceneExpr) -> String {
     match expr {
         SceneExpr::Text(value) => value.clone(),
-        SceneExpr::Path(path) if path.as_slice() == ["game", "title"] => "title".to_string(),
         SceneExpr::Path(path) => path.join("."),
         SceneExpr::Int(value) => value.to_string(),
         SceneExpr::Bool(value) => value.to_string(),
@@ -6878,7 +6877,7 @@ fn parse_title_component(line: &str, is_title: bool) -> Result<SceneComponent, A
     };
     let rest = rest.trim();
     let content = if rest.is_empty() {
-        SceneExpr::Path(vec!["game".to_string(), keyword.to_string()])
+        SceneExpr::Path(vec![keyword.to_string()])
     } else {
         parse_scene_expr(rest, line)?
     };

@@ -8,6 +8,9 @@ const componentEmbedMode = Boolean(controllerOptions.componentEmbedMode)
     new URLSearchParams(window.location.search).get("component") === "1"
     || window.Puzzle3DComponentEmbed === true
   ));
+const PREVIEW_SURFACE_UPDATE_MESSAGE = "PuzzleStudioPreviewSurfaceUpdate";
+const PUZZLE3_LEVEL_PREVIEW_KIND = "puzzle3-level";
+const ISOLATED_PREVIEW_MODE = "isolated";
 let editorComponentEmbedMode = false;
 if (!inlineComponentMount) {
   document.documentElement.classList.toggle("is-component-embed", componentEmbedMode);
@@ -547,6 +550,27 @@ function applyPuzzle3PreviewUpdate(update = {}) {
 function applyPuzzle3ModelComponentPreviewUpdate(update = {}) {
   const next = puzzle3PreviewSnapshot(update);
   void loadSnapshotData(next, puzzle3ModelComponentPreviewLoadOptions(update));
+}
+
+function puzzle3PreviewUpdateFromSurface(update = {}) {
+  if (
+    update.kind
+    && (update.kind !== PUZZLE3_LEVEL_PREVIEW_KIND || update.mode !== ISOLATED_PREVIEW_MODE)
+  ) {
+    return null;
+  }
+  const payload = update.payload || {};
+  return {
+    levelIndex: payload.levelIndex,
+    level: payload.level,
+    resources: payload.resources,
+    camera: payload.camera,
+    view: payload.view,
+    settings: payload.settings || {},
+    scene: update.scene,
+    component: update.component,
+    componentEmbed: update.componentEmbed === true,
+  };
 }
 
 function puzzle3ModelComponentPreviewLoadOptions(update = {}) {
@@ -3342,6 +3366,15 @@ window.addEventListener("message", (event) => {
   if (event.data?.type === "PuzzleStudioUpdatePuzzle3Preview") {
     setEditorComponentEmbedMode(event.data.componentEmbed === true);
     applyPuzzle3PreviewUpdate(event.data);
+    return;
+  }
+
+  if (event.data?.type === PREVIEW_SURFACE_UPDATE_MESSAGE) {
+    const update = puzzle3PreviewUpdateFromSurface(event.data);
+    if (update) {
+      setEditorComponentEmbedMode(event.data.componentEmbed === true);
+      applyPuzzle3ModelComponentPreviewUpdate(update);
+    }
     return;
   }
 

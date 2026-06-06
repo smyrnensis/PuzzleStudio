@@ -2718,6 +2718,43 @@ levels3 demo of push3 {
     }
 
     #[test]
+    fn desktop_workspace_delete_requires_confirmation() {
+        assert!(EDITOR_WORKSPACE_JS.contains("function confirmDesktopDeleteWorkspaceEntry(node)"));
+        let confirm = EDITOR_WORKSPACE_JS
+            .find("confirmDesktopDeleteWorkspaceEntry(target.node)")
+            .expect("desktop delete confirms the selected workspace entry");
+        let host_delete = EDITOR_WORKSPACE_JS
+            .find("window.PuzzleStudioHost.deleteWorkspaceEntry({")
+            .expect("desktop delete calls the host filesystem boundary");
+        assert!(confirm < host_delete);
+    }
+
+    #[test]
+    fn desktop_workspace_mutations_defer_external_reload() {
+        assert!(EDITOR_WORKSPACE_JS.contains("let workspaceHostMutationDepth = 0;"));
+        assert!(EDITOR_WORKSPACE_JS.contains("let deferredWorkspaceChangedPayload = null;"));
+        assert!(EDITOR_WORKSPACE_JS.contains("function beginWorkspaceHostMutation()"));
+        assert!(EDITOR_WORKSPACE_JS.contains("function endWorkspaceHostMutation()"));
+        assert!(EDITOR_WORKSPACE_JS.contains("if (workspaceHostMutationDepth > 0)"));
+        assert!(EDITOR_WORKSPACE_JS.contains("deferredWorkspaceChangedPayload = payload;"));
+        assert!(EDITOR_WORKSPACE_JS.contains("queueMicrotask(() => {"));
+        let create_file_guard = EDITOR_WORKSPACE_JS
+            .find("beginWorkspaceHostMutation();\n    try {\n      await window.PuzzleStudioHost.createSourceFile({")
+            .expect("desktop file creation is guarded while host IO runs");
+        let create_file_release = EDITOR_WORKSPACE_JS[create_file_guard..]
+            .find("endWorkspaceHostMutation();")
+            .expect("desktop file creation releases the host mutation guard");
+        assert!(create_file_release > 0);
+        let delete_guard = EDITOR_WORKSPACE_JS
+            .find("beginWorkspaceHostMutation();\n    try {\n      await window.PuzzleStudioHost.deleteWorkspaceEntry({")
+            .expect("desktop delete is guarded while host IO runs");
+        let delete_release = EDITOR_WORKSPACE_JS[delete_guard..]
+            .find("endWorkspaceHostMutation();")
+            .expect("desktop delete releases the host mutation guard");
+        assert!(delete_release > 0);
+    }
+
+    #[test]
     fn editor_does_not_expose_scene_preview_pane() {
         assert!(!EDITOR_HTML.contains(r#"id="sceneModeButton""#));
         assert!(!EDITOR_HTML.contains(r#"id="scenePanel""#));
@@ -2759,7 +2796,12 @@ levels3 demo of push3 {
             )
         );
         assert!(EDITOR_JS.contains("hiddenLayers: []"));
+        assert!(!EDITOR_HTML.contains(r#"id="levelScopeLayerButton""#));
+        assert!(!EDITOR_HTML.contains(r#"aria-label="Level edit scope""#));
         assert!(EDITOR_JS.contains("function levelVisibleCells("));
+        assert!(EDITOR_JS.contains("function levelVisibleLayerIndexes("));
+        assert!(EDITOR_JS.contains("function sameCellSlotsForVisibleLayers("));
+        assert!(EDITOR_JS.contains("function paintCellSlots(slots, objectId, exportData = previewExport)"));
         assert!(EDITOR_JS.contains("function syncLevelGridVisibility()"));
         assert!(EDITOR_JS.contains(
             "levelBoard?.classList.remove(\"has-occupied-cell-grid\", \"has-all-cell-grid\");"
@@ -2774,6 +2816,8 @@ levels3 demo of push3 {
         assert!(
             EDITOR_JS.contains("levelGridButton?.addEventListener(\"click\", toggleLevelGrid);")
         );
+        assert!(EDITOR_JS.contains("function sourceLayerNameEntries("));
+        assert!(EDITOR_JS.contains("label: layerNames.get(layerIndex) || \"\""));
         assert!(EDITOR_CSS.contains(".level-board.board.has-all-cell-grid .cell::after"));
         assert!(EDITOR_CSS.contains("z-index: 100;"));
     }
@@ -2799,7 +2843,9 @@ levels3 demo of push3 {
         assert!(EDITOR_JS.contains("let levelPlaytestActive = false;"));
         assert!(EDITOR_JS.contains("let levelPlaytestStateData = null;"));
         assert!(EDITOR_JS.contains("let levelPlaytestRuntime = null;"));
+        assert!(EDITOR_JS.contains("async function ensurePreviewExportForLevelAction(options = {})"));
         assert!(EDITOR_JS.contains("function startLevelPlaytest()"));
+        assert!(EDITOR_JS.contains("compilingMessage: \"Compiling preview for play\""));
         assert!(EDITOR_JS.contains("function stopLevelPlaytest(options = {})"));
         assert!(EDITOR_JS.contains("function focusLevelInputTarget()"));
         assert!(EDITOR_JS.contains("const stateData = levelStateData(exportData);"));
@@ -2834,6 +2880,8 @@ levels3 demo of push3 {
         assert!(EDITOR_DOM_JS.contains("const level3dPlaytestButton = document.querySelector"));
         assert!(EDITOR_LEVEL3D_JS.contains("let level3dPlaytestActive = false;"));
         assert!(EDITOR_LEVEL3D_JS.contains("function startLevel3dPlaytest()"));
+        assert!(EDITOR_LEVEL3D_JS.contains("await ensurePreviewExportForLevelAction({"));
+        assert!(EDITOR_LEVEL3D_JS.contains("compilingMessage: \"Compiling preview for play\""));
         assert!(EDITOR_LEVEL3D_JS.contains("function stopLevel3dPlaytest(options = {})"));
         assert!(EDITOR_LEVEL3D_JS.contains("function sendLevel3dPlaytestKey(event)"));
         assert!(
@@ -2879,6 +2927,11 @@ levels3 demo of push3 {
         assert!(
             EDITOR_JS.contains("function loadLevelFromSourceEntry(source, entry, options = {})")
         );
+        assert!(EDITOR_JS.contains("function currentFocused2dLevelEntry("));
+        assert!(EDITOR_JS.contains("function focusedLevelEntryForPaneMode("));
+        assert!(EDITOR_JS.contains("function loadLevelPaneEntryForMode("));
+        assert!(EDITOR_JS.contains("const current = currentFocused2dLevelEntry(context);"));
+        assert!(EDITOR_JS.contains("currentLevelSourceLocation()"));
         assert!(
             EDITOR_SOURCE_JS
                 .contains("function sourceEditableEntryFromTarget(source, target, options = {})")
@@ -2938,6 +2991,8 @@ levels3 demo of push3 {
         assert!(EDITOR_JS.contains("function syncSolverLevelSelector("));
         assert!(EDITOR_JS.contains("function selectSolverLevel("));
         assert!(EDITOR_JS.contains("function setSolverTargetFromState("));
+        assert!(EDITOR_JS.contains("compilingMessage: \"Compiling preview for solve\""));
+        assert!(EDITOR_JS.contains("async function solveEditedLevelFromEditor()"));
         assert!(EDITOR_JS.contains("function compiledLevelStateData("));
         assert!(EDITOR_JS.contains("function solverPuzzle3dPreviewSnapshot("));
         assert!(!EDITOR_JS.contains("function solveLevelInMainThread("));
@@ -3020,6 +3075,13 @@ levels3 demo of push3 {
             EDITOR_SOURCE_JS.contains("const preserveCurrent = options.preserveCurrent !== false;")
         );
         assert!(EDITOR_SOURCE_JS.contains("if (preserveCurrent && sourceHighlightMode)"));
+        assert!(EDITOR_SOURCE_JS.contains("renderOptimisticSourceHighlight()"));
+        assert!(EDITOR_SOURCE_JS.contains("function sourceHighlightRunsFromDom()"));
+        assert!(EDITOR_SOURCE_JS.contains("function sourceHighlightStyleAtOffset(runs, offset)"));
+        assert!(EDITOR_SOURCE_JS.contains("function sourcePredictedBeforeInputValue(event)"));
+        assert!(
+            EDITOR_SOURCE_JS.contains("const predicted = sourcePredictedBeforeInputValue(event);")
+        );
         assert!(EDITOR_SOURCE_JS.contains(
             "scheduleSourceHighlight(true, { preserveCurrent: Boolean(options.preserveHighlight) });"
         ));
@@ -3077,7 +3139,11 @@ levels3 demo of push3 {
         assert!(EDITOR_LEVEL3D_JS.contains("type: LEVEL3D_PREVIEW_SURFACE_MESSAGE"));
         assert!(EDITOR_LEVEL3D_JS.contains("kind: LEVEL3D_PREVIEW_SURFACE_KIND"));
         assert!(EDITOR_LEVEL3D_JS.contains("mode: LEVEL3D_PREVIEW_SURFACE_MODE"));
+        assert!(EDITOR_LEVEL3D_JS.contains("component: update.component"));
         assert!(EDITOR_LEVEL3D_JS.contains("payload: level3dPreviewSurfacePayload(update)"));
+        assert!(EDITOR_LEVEL3D_JS.contains("camera: update.camera"));
+        assert!(EDITOR_LEVEL3D_JS.contains("view: update.view"));
+        assert!(EDITOR_LEVEL3D_JS.contains("settings: update.settings || {}"));
         assert!(EDITOR_LEVEL3D_JS.contains("function level3dRuntimePreviewDocument(update)"));
         assert!(EDITOR_LEVEL3D_JS.contains("window.PuzzleStudioInitialPreviewSurface = update;"));
         assert!(
@@ -3940,19 +4006,24 @@ levels3 demo of push3 {
             "const level3dLayerPalette = document.querySelector(\"#level3dLayerPalette\");"
         ));
         assert!(EDITOR_LEVEL3D_JS.contains("function renderLevel3dLayerPalette()"));
-        assert!(EDITOR_LEVEL3D_JS.contains("function level3dLayerScopeToggle()"));
         assert!(EDITOR_LEVEL3D_JS.contains("function level3dLayerResizeModeButton("));
         assert!(EDITOR_LEVEL3D_JS.contains("function level3dLayerGridButton("));
         assert!(EDITOR_LEVEL3D_JS.contains("function level3dLayerTransformButton("));
         assert!(EDITOR_LEVEL3D_JS.contains("level3d-layer-transform-row"));
         assert!(EDITOR_LEVEL3D_JS.contains("level3d-layer-edit-row"));
+        assert!(!EDITOR_LEVEL3D_JS.contains("function level3dLayerScopeToggle("));
+        assert!(!EDITOR_LEVEL3D_JS.contains("Top-down 3D level edit scope"));
         assert!(!EDITOR_LEVEL3D_JS.contains("function level3dLayerTransformScopeToggle("));
         assert!(!EDITOR_LEVEL3D_JS.contains("Current slice"));
         assert!(!EDITOR_LEVEL3D_JS.contains("All slices"));
         assert!(EDITOR_LEVEL3D_JS.contains("function level3dLayerFillButton()"));
         assert!(EDITOR_LEVEL3D_JS.contains("function level3dLayerEraserButton()"));
         assert!(EDITOR_LEVEL3D_JS.contains("function level3dVisiblePaletteEntries("));
-        assert!(EDITOR_LEVEL3D_JS.contains(".filter((entry) => entry.temporary !== true)"));
+        assert!(EDITOR_LEVEL3D_JS.contains("function level3dVisibleObjectKeyForChar("));
+        assert!(EDITOR_LEVEL3D_JS.contains("function level3dObjectNameIsVisible("));
+        assert!(EDITOR_LEVEL3D_JS.contains("function level3dLayerVisibilityEntries("));
+        assert!(EDITOR_LEVEL3D_JS.contains("label: layerNames.get(layerIndex) || \"\""));
+        assert!(EDITOR_LEVEL3D_JS.contains("level3dObjectIsVisible(object, snapshot)"));
         assert!(EDITOR_LEVEL3D_JS.contains("function bucketFillLevel3dLayerFromPosition("));
         assert!(EDITOR_LEVEL3D_JS.contains("function resizeLevel3dLayerEdge("));
         assert!(EDITOR_LEVEL3D_JS.contains("function transformLevel3dRowsWithMap("));

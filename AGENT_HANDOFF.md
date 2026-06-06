@@ -89,9 +89,12 @@ WASM assets. Rebuild editor/core/game WASM explicitly with
 `tools/build_wasm_game.sh` when Rust/WASM changes are meant to appear in the
 Pages release.
 
-Use `tools/serve_web_editor.sh` to open the generated Pages editor locally over
-HTTP. On macOS, `tools/open_web_editor.command` is the double-click entry point.
-Do not use `file://` as a supported editor release surface.
+Use `tools/serve_web_editor.sh` to open the normal local web editor through the
+Rust editor server. On macOS, `tools/open_web_editor.command` is the
+double-click entry point. Use `tools/serve_web_editor.sh --pages` only when the
+intended check is the generated GitHub Pages site under `docs/`; that static
+mode does not provide Rust editor API routes such as `/api/highlight`. Do not
+use `file://` as a supported editor release surface.
 
 Do not reintroduce a root single-file `editor.html` release path. GitHub Pages is
 the web release surface, and it should stay a multi-file static site.

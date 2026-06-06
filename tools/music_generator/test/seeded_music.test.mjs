@@ -250,14 +250,34 @@ for (const song of sampleSongs) {
     if (bar.localBar !== 0 || !bar.transitionIn) {
       continue;
     }
-    transitionEntries.push({ previous: song.debug.barPlan[index - 1], bar });
+    transitionEntries.push({ song, previous: song.debug.barPlan[index - 1], bar });
   }
 }
 assert.ok(transitionEntries.length >= 40, "high-impact section changes should usually expose transition context");
-for (const { previous, bar } of transitionEntries) {
+for (const { song, previous, bar } of transitionEntries) {
   assert.ok(previous.transitionOut && previous.transitionOut.impact === bar.transitionIn.impact, "adjacent bars should share one transition context");
-  assert.ok(bar.phraseBar.boundary <= 0.25, "transition-projected phrase state should not begin with a strong phrase boundary accent");
-  assert.ok(bar.phraseBar.pickup <= 0.35, "transition-projected phrase state should not begin with a strong pickup accent");
+  assert.ok(bar.phraseBar.boundary <= 0.25, "incoming transition phrase should not begin with a strong phrase boundary accent");
+  assert.ok(bar.phraseBar.pickup <= 0.35, "incoming transition phrase should not begin with a strong pickup accent");
+  assert.ok(previous.phraseBar.transitionBridge, "outgoing transition bars should expose an explicit bridge instead of relying on state interpolation");
+  assert.ok(bar.phraseBar.transitionEntryBridge, "incoming transition bars should expose an explicit entry bridge instead of relying on state interpolation");
+  assert.equal(previous.phraseBar.transitionBridge.impact, previous.transitionOut.impact, "bridge should belong to the same transition context as the outgoing bar");
+  assert.equal(bar.phraseBar.transitionEntryBridge.impact, bar.transitionIn.impact, "entry bridge should belong to the same transition context as the incoming bar");
+  const bridge = previous.phraseBar.transitionBridge;
+  const entryBridge = bar.phraseBar.transitionEntryBridge;
+  assert.equal(entryBridge.track, bridge.track, "outgoing and incoming bridge should use the same continuity track");
+  const bridgeEvents = song.playbackScore.events.filter((event) => (
+    event.role === "boundary"
+      && event.track === bridge.track
+      && event.step >= previous.bar * 16 + 9
+      && event.step < (previous.bar + 1) * 16
+  ));
+  const entryBridgeEvents = song.playbackScore.events.filter((event) => (
+    event.track === entryBridge.track
+      && event.step >= bar.bar * 16
+      && event.step < bar.bar * 16 + 4
+  ));
+  assert.ok(bridgeEvents.length > 0, "outgoing transition bars should render a late bridge event on the continuity track");
+  assert.ok(entryBridgeEvents.length > 0, "incoming transition bars should catch the bridge on the same continuity track");
 }
 
 const firstBarIdentitySignature = (song, track) => song.playbackScore.events

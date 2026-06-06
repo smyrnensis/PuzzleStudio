@@ -121,6 +121,11 @@ button:disabled {
   transform: none;
 }
 
+.ps-control-edge {
+  display: none;
+  pointer-events: none;
+}
+
 .shell {
   position: relative;
   width: min(1100px, 100vw);

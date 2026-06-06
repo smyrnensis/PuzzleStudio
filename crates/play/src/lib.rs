@@ -5377,7 +5377,7 @@ P
 }
 }
 
-scene title_menu {
+scene title {
 title
 button "Play" -> goto playing
 rules {

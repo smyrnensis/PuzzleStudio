@@ -406,13 +406,45 @@ body.theme-puzzlescript {
   white-space: nowrap;
 }
 
-.theme-puzzlescript .ps-control-label,
-.theme-puzzlescript .level-menu li > span:not(.level-clear-mark) {
+.theme-puzzlescript .ps-control-label {
   grid-column: 2;
   min-width: 0;
   max-width: 100%;
   overflow: hidden;
   text-overflow: clip;
+}
+
+.theme-puzzlescript .ps-control-edge {
+  min-width: 0;
+  width: 100%;
+  color: var(--text);
+  display: block;
+  font-weight: 400;
+  overflow: hidden;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.theme-puzzlescript .ps-control-edge.is-left {
+  grid-column: 1;
+  text-align: left;
+}
+
+.theme-puzzlescript .ps-control-edge.is-right {
+  grid-column: 3;
+  text-align: right;
+}
+
+.theme-puzzlescript .ps-control-edge::before {
+  content: "";
+}
+
+.theme-puzzlescript button::before,
+.theme-puzzlescript button::after,
+.theme-puzzlescript .level-menu li::before,
+.theme-puzzlescript .level-menu li::after {
+  display: none;
+  content: "";
 }
 
 .theme-puzzlescript .level-menu li {
@@ -449,55 +481,14 @@ body.theme-puzzlescript {
   transform: none;
 }
 
-.theme-puzzlescript button::before,
-.theme-puzzlescript button::after,
-.theme-puzzlescript .level-menu li::before,
-.theme-puzzlescript .level-menu li::after {
-  position: static;
-  min-width: 0;
-  width: 100%;
-  color: var(--text);
-  content: "";
-  font-weight: 400;
-  text-align: center;
-  transform: none;
-  white-space: nowrap;
-  pointer-events: none;
-  overflow: hidden;
-}
-
-.theme-puzzlescript button::before,
-.theme-puzzlescript .level-menu li::before {
-  grid-column: 1;
-  text-align: left;
-}
-
-.theme-puzzlescript button::after,
-.theme-puzzlescript .level-menu li::after {
-  grid-column: 3;
-  text-align: right;
-}
-
-.theme-puzzlescript button.is-selected::before,
-.theme-puzzlescript .level-menu li.is-selected::before {
+.theme-puzzlescript button.is-selected > .ps-control-edge::before,
+.theme-puzzlescript .level-menu li.is-selected > .ps-control-edge::before {
   content: "#";
 }
 
-.theme-puzzlescript button.is-selected::after,
-.theme-puzzlescript .level-menu li.is-selected::after {
-  content: "#";
-}
-
-.theme-puzzlescript button.is-confirming::before,
-.theme-puzzlescript .level-menu li.is-confirming::before {
+.theme-puzzlescript button.is-confirming > .ps-control-edge::before,
+.theme-puzzlescript .level-menu li.is-confirming > .ps-control-edge::before {
   content: var(--ps-confirm-fill, "#");
-  text-align: left;
-}
-
-.theme-puzzlescript button.is-confirming::after,
-.theme-puzzlescript .level-menu li.is-confirming::after {
-  content: var(--ps-confirm-fill, "#");
-  text-align: right;
 }
 
 .theme-puzzlescript .board,
