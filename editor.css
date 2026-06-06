@@ -3657,18 +3657,10 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
 
 .sprite-pane-mode-switch,
 .level-pane-mode-switch {
-  min-height: 22px;
-  padding: 2px 8px;
   display: inline-flex;
   align-items: center;
-  gap: 1px;
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  background: transparent;
   color: var(--muted);
-  font-size: 10px;
-  font-weight: 800;
-  letter-spacing: 0;
+  font: inherit;
   white-space: nowrap;
 }
 
