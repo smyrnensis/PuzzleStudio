@@ -157,10 +157,11 @@ impl StandaloneSessionBridge {
         let scene_puzzles = scene_puzzles_value(self.session.scene_state());
         let scene_puzzle_state = scene_puzzle_state_value(&self.loaded, &self.session);
         json!({
-            "game": {
-                "title": self.loaded.title,
-                "has_progress_save": self.has_progress_save,
-            },
+            "title": self.loaded.title,
+            "subtitle": self.loaded.subtitle,
+            "author": self.loaded.author,
+            "homepage": self.loaded.homepage,
+            "has_progress_save": self.has_progress_save,
             "sounds": sounds_value(&self.loaded),
             "theme": theme_value(&self.loaded.theme),
             "defaultWaitMs": self.loaded.default_wait_ms,
@@ -1693,7 +1694,7 @@ mod tests {
         let title: Value =
             serde_json::from_str(&bridge.request_json("GET", "/api/state").unwrap()).unwrap();
         assert_eq!(title["currentScene"], "title");
-        assert_eq!(title["game"]["title"], "Microban Basic");
+        assert_eq!(title["title"], "Microban Basic");
         assert_eq!(title["scenes"][0]["name"], "title");
         assert_eq!(title["scenes"][0]["components"][0]["kind"], "title");
 
@@ -1920,7 +1921,7 @@ rules {
         let snapshot: Value =
             serde_json::from_str(&bridge.request_json("GET", "/api/state").unwrap()).unwrap();
         assert_eq!(snapshot["selectedLevelIndex"], 1);
-        assert_eq!(snapshot["game"]["has_progress_save"], true);
+        assert_eq!(snapshot["has_progress_save"], true);
         assert_eq!(snapshot["levels"][1]["cleared"], true);
     }
 
@@ -1931,6 +1932,6 @@ rules {
             StandaloneSessionBridge::from_source(source, "games/spec_3d.puzzle3").unwrap();
         let snapshot: Value = serde_json::from_str(&bridge.snapshot_json()).unwrap();
         assert_eq!(snapshot["currentScene"], json!("title"));
-        assert_eq!(snapshot["game"]["title"], json!("Microban 3D"));
+        assert_eq!(snapshot["title"], json!("Microban 3D"));
     }
 }

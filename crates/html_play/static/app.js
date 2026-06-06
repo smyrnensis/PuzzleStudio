@@ -1017,6 +1017,10 @@ function currentSceneAcceptsModelInput() {
   return sceneInteractionProfile(currentSceneDef()).acceptsModelInput;
 }
 
+function isControlPointerTarget(target) {
+  return Boolean(target?.closest?.("button, a, input, select, textarea, [role='button'], [tabindex]"));
+}
+
 function currentSceneHasPuzzle3() {
   return sceneHasComponent(currentSceneDef(), "puzzle3");
 }
@@ -1248,11 +1252,9 @@ function legacyPuzzle3LevelPreviewPayload(update = {}) {
     levelIndex: update.levelIndex,
     level: update.level,
     resources: update.resources || update,
-    view: {
-      ...(update.camera || {}),
-      ...(update.view || {}),
-    },
-    display: update.settings || {},
+    camera: update.camera,
+    view: update.view,
+    settings: update.settings || {},
   };
 }
 
@@ -1261,22 +1263,13 @@ function puzzle3PreviewSurfaceControllerUpdate(surface = puzzle3PreviewSurface) 
     return {};
   }
   const payload = surface.payload || {};
-  const view = payload.view || {};
   return {
     levelIndex: payload.levelIndex,
     level: payload.level,
     resources: payload.resources,
-    camera: {
-      yawDegrees: view.yawDegrees,
-      pitchDegrees: view.pitchDegrees,
-      zoom: view.zoom,
-      projection: view.projection,
-    },
-    view: {
-      zoom: view.zoom,
-      target: view.target,
-    },
-    settings: payload.display || {},
+    camera: payload.camera,
+    view: payload.view,
+    settings: payload.settings || {},
     component: surface.component,
     componentEmbed: true,
   };
@@ -1347,23 +1340,18 @@ function puzzle3PreviewSurfaceFixture(source, sceneName) {
   next.levelIndex = levelIndex;
   next.size = { ...size };
   next.cells = JSON.parse(JSON.stringify(cells));
-  const view = payload.view || {};
-  if (view.yawDegrees != null || view.pitchDegrees != null) {
-    next.camera = JSON.parse(JSON.stringify({
-      yawDegrees: view.yawDegrees,
-      pitchDegrees: view.pitchDegrees,
-      zoom: view.zoom,
-      projection: view.projection,
-    }));
+  if (payload.camera) {
+    next.camera = JSON.parse(JSON.stringify(payload.camera));
   }
   if (payload.view) {
+    const view = payload.view || {};
     next.view = JSON.parse(JSON.stringify({
       zoom: view.zoom,
       target: view.target,
     }));
   }
-  if (payload.display) {
-    next.settings = { ...(next.settings || {}), ...JSON.parse(JSON.stringify(payload.display)) };
+  if (payload.settings) {
+    next.settings = { ...(next.settings || {}), ...JSON.parse(JSON.stringify(payload.settings)) };
   }
   const previewSceneName = sceneName || surface.sceneName || "__editor_model_preview__";
   next.scenes = [{
@@ -1452,12 +1440,14 @@ function renderChoice(component, scope = {}) {
   scope.__standardChoiceCounter = counter;
   const index = counter.value;
   counter.value += 1;
+  choice.dataset.standardChoiceIndex = String(index);
   choice.classList.toggle("is-selected", index === standardChoiceCursor(scope.__sceneDef));
   choice.addEventListener("click", () => {
     if (selectSceneEditorComponent(component, scope)) {
       return;
     }
     standardChoiceCursors.set(scope.__sceneDef.name, index);
+    syncStandardChoiceSelection(choice, index);
     runEffectActivationConfirm(choice, component.effect, scope);
   });
   applySizingKind(choice, component);
@@ -1465,11 +1455,28 @@ function renderChoice(component, scope = {}) {
   return choice;
 }
 
+function syncStandardChoiceSelection(choice, selectedIndex) {
+  const root = choice.closest(".scene-layer") || choice.parentElement || document;
+  root.querySelectorAll(".standard-choice").forEach((item) => {
+    item.classList.toggle("is-selected", Number(item.dataset.standardChoiceIndex) === selectedIndex);
+  });
+}
+
 function setControlLabel(control, label) {
+  control.replaceChildren(...controlLabelNodes(label));
+}
+
+function controlLabelNodes(label) {
+  const left = document.createElement("span");
+  left.className = "ps-control-edge is-left";
+  left.setAttribute("aria-hidden", "true");
   const text = document.createElement("span");
   text.className = "ps-control-label";
   text.textContent = label;
-  control.replaceChildren(text);
+  const right = document.createElement("span");
+  right.className = "ps-control-edge is-right";
+  right.setAttribute("aria-hidden", "true");
+  return [left, text, right];
 }
 
 /* puzzle-host:optional:scene-editor:start */
@@ -1938,11 +1945,8 @@ function renderLevelMenu(state, component = {}, scope = {}) {
       item.append(cleared);
     }
 
-    const label = document.createElement("span");
-    label.className = "ps-control-label";
     const levelName = level?.name || `Level ${index + 1}`;
-    label.textContent = component.showIndex ? `${position + 1}. ${levelName}` : levelName;
-    item.append(label);
+    item.append(...controlLabelNodes(component.showIndex ? `${position + 1}. ${levelName}` : levelName));
     item.addEventListener("click", () => runActivationConfirm(item, () => sendCommand(`select:${position}`)));
 
     list.append(item);
@@ -1961,10 +1965,7 @@ function renderLevelMenu(state, component = {}, scope = {}) {
       cleared.className = "level-clear-mark";
       item.append(cleared);
     }
-    const label = document.createElement("span");
-    label.className = "ps-control-label";
-    label.textContent = resolveLabel(commandButton.label);
-    item.append(label);
+    item.append(...controlLabelNodes(resolveLabel(commandButton.label)));
     item.addEventListener("click", () => runActivationConfirm(item, () => sendCommand(`select:${position}`)));
     list.append(item);
   }
@@ -3019,6 +3020,9 @@ window.addEventListener("message", async (event) => {
 
 playSurface.addEventListener("pointerdown", (event) => {
   if (!currentState || currentState.busy || !currentSceneAcceptsModelInput()) {
+    return;
+  }
+  if (isControlPointerTarget(event.target)) {
     return;
   }
   swipeStart = { x: event.clientX, y: event.clientY, pointerId: event.pointerId };

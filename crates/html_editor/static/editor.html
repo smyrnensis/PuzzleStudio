@@ -272,7 +272,7 @@
                 </label>
                 <label>
                   <span>Level</span>
-                  <input id="levelNameInput" type="text" value="new_level" spellcheck="false" autocomplete="off" autocapitalize="off">
+                  <input id="levelNameInput" type="text" value="" spellcheck="false" autocomplete="off" autocapitalize="off">
                   <datalist id="levelNameOptions"></datalist>
                 </label>
               </div>
@@ -393,21 +393,6 @@
             </div>
             <div class="level-palette-toolbar" aria-label="Palette display controls" hidden></div>
             <div id="levelPalette" class="level-palette" aria-label="Level tile palette">
-              <div class="level-scope-toggle sprite3d-scope-toggle" role="group" aria-label="Level edit scope">
-                <span class="sprite3d-scope-toggle-label">Scope</span>
-                <button id="levelScopeLayerButton" class="level-scope-button sprite3d-scope-button sprite-icon-button is-active" type="button" data-level-scope-option="layer" aria-label="Mono layer" aria-pressed="true" title="Mono layer" data-tooltip="Mono layer">
-                  <svg xmlns="http://www.w3.org/2000/svg" class="lucide lucide-diamond-icon lucide-diamond" viewBox="0 0 24 24" aria-hidden="true">
-                    <path d="M2.7 10.3a2.41 2.41 0 0 0 0 3.41l7.59 7.59a2.41 2.41 0 0 0 3.41 0l7.59-7.59a2.41 2.41 0 0 0 0-3.41l-7.59-7.59a2.41 2.41 0 0 0-3.41 0Z"></path>
-                  </svg>
-                </button>
-                <button id="levelScopeAllButton" class="level-scope-button sprite3d-scope-button sprite-icon-button" type="button" data-level-scope-option="all" aria-label="All layers" aria-pressed="false" title="All layers" data-tooltip="All layers">
-                  <svg viewBox="0 0 24 24" aria-hidden="true">
-                    <path d="M5 8 12 4l7 4-7 4-7-4Z"></path>
-                    <path d="M5 12l7 4 7-4"></path>
-                    <path d="M5 16l7 4 7-4"></path>
-                  </svg>
-                </button>
-              </div>
               <button id="levelPaletteCollapseButton" class="level-palette-toggle-button" type="button" aria-expanded="true" aria-label="Hide palette" title="Hide palette">
                 <svg class="palette-open-icon" viewBox="0 0 24 24" aria-hidden="true">
                   <rect x="4" y="4" width="6" height="6" rx="1"></rect>

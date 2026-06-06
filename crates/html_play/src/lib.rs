@@ -79,8 +79,7 @@ const PUZZLE3_STYLE_CSS: &str = include_str!("../static/puzzle3.css");
 const PUZZLE3_VISUAL_CORE_JS: &str = include_str!("../static/puzzle3_visual_core.js");
 const PUZZLE3_THREE_RENDERER_JS: &str = include_str!("../static/puzzle3_three_renderer.js");
 const PUZZLE3_APP_JS: &str = include_str!("../static/puzzle3_app.js");
-const THREE_MODULE_JS: &str =
-    include_str!("../../../PS_EXTRACTION/vendor/three/three.module.min.js");
+const THREE_MODULE_JS: &str = include_str!("../static/vendor/three/three.module.min.js");
 const PUZZLE3_SCENE_HOST_SOURCE: &str = r#"
 title "__puzzle3_scene_host__"
 
@@ -1186,7 +1185,7 @@ impl ServerState {
         let animation_events = self.session.take_animation_events();
         let mut out = String::new();
         out.push('{');
-        push_game_context(&mut out, &self.loaded, self.has_progress_save);
+        push_top_scope_context(&mut out, &self.loaded, self.has_progress_save);
         out.push(',');
         push_export_sounds(&mut out, &self.loaded.sounds);
         out.push(',');
@@ -7037,8 +7036,7 @@ fn push_levels(out: &mut String, loaded: &LoadedGame, cleared_levels: &[bool]) {
     out.push(']');
 }
 
-fn push_game_context(out: &mut String, loaded: &LoadedGame, has_progress_save: bool) {
-    out.push_str("\"game\":{");
+fn push_top_scope_context(out: &mut String, loaded: &LoadedGame, has_progress_save: bool) {
     push_json_pair(out, "title", &loaded.title);
     out.push(',');
     out.push_str("\"subtitle\":");
@@ -7063,7 +7061,6 @@ fn push_game_context(out: &mut String, loaded: &LoadedGame, has_progress_save: b
     }
     out.push(',');
     push_json_bool(out, "has_progress_save", has_progress_save);
-    out.push('}');
 }
 
 fn push_level_context(
@@ -8370,6 +8367,8 @@ P
     #[test]
     fn html_play_standard_choice_focus_uses_logical_grid() {
         assert!(APP_JS.contains("function standardChoiceFocusCells(scene = currentSceneDef())"));
+        assert!(APP_JS.contains("function isControlPointerTarget(target)"));
+        assert!(APP_JS.contains("if (isControlPointerTarget(event.target))"));
         assert!(APP_JS.contains("function componentRowFootprint(components, context = {})"));
         assert!(APP_JS.contains("function componentColumnFootprint(components, context = {})"));
         assert!(APP_JS.contains("component.kind === \"choice\""));
@@ -8404,8 +8403,17 @@ P
     #[test]
     fn puzzlescript_theme_reserves_terminal_control_width_for_confirm_glyphs() {
         assert!(APP_JS.contains("function setControlLabel(control, label)"));
+        assert!(APP_JS.contains("function controlLabelNodes(label)"));
+        assert!(APP_JS.contains("choice.dataset.standardChoiceIndex = String(index);"));
+        assert!(APP_JS.contains("function syncStandardChoiceSelection(choice, selectedIndex)"));
+        assert!(APP_JS.contains("syncStandardChoiceSelection(choice, index);"));
+        assert!(APP_JS.contains("left.className = \"ps-control-edge is-left\";"));
         assert!(APP_JS.contains("text.className = \"ps-control-label\";"));
-        assert!(APP_JS.contains("label.className = \"ps-control-label\";"));
+        assert!(APP_JS.contains("right.className = \"ps-control-edge is-right\";"));
+        assert!(APP_JS.contains("item.append(...controlLabelNodes("));
+        assert!(
+            APP_CSS.contains(".ps-control-edge {\n  display: none;\n  pointer-events: none;\n}")
+        );
         assert!(APP_JS.contains("function puzzlescriptConfirmFill(target)"));
         assert!(APP_JS.contains("function puzzlescriptControlCharWidth(target)"));
         assert!(APP_JS.contains("target.style.setProperty(\"--ps-confirm-fill\""));
@@ -8433,7 +8441,17 @@ P
         assert!(THEME_PRESETS_CSS.contains(
             "grid-template-columns: minmax(0, 1fr) minmax(0, max-content) minmax(0, 1fr);"
         ));
-        assert!(THEME_PRESETS_CSS.contains(".theme-puzzlescript .ps-control-label,"));
+        assert!(THEME_PRESETS_CSS.contains(".theme-puzzlescript .ps-control-label {"));
+        assert!(
+            !THEME_PRESETS_CSS
+                .contains(".theme-puzzlescript .level-menu li > span:not(.level-clear-mark)")
+        );
+        assert!(THEME_PRESETS_CSS.contains(".theme-puzzlescript .ps-control-edge {"));
+        assert!(THEME_PRESETS_CSS.contains("display: block;"));
+        assert!(THEME_PRESETS_CSS.contains(".theme-puzzlescript .ps-control-edge.is-left {"));
+        assert!(THEME_PRESETS_CSS.contains(".theme-puzzlescript .ps-control-edge.is-right {"));
+        assert!(THEME_PRESETS_CSS.contains(".theme-puzzlescript .level-menu li::before,"));
+        assert!(THEME_PRESETS_CSS.contains("display: none;"));
         assert!(THEME_PRESETS_CSS.contains(".theme-puzzlescript .level-menu li {\n  width: 100%;"));
         assert!(THEME_PRESETS_CSS.contains(".theme-puzzlescript button,\n.theme-puzzlescript .level-menu li {\n  overflow: hidden;\n}"));
         assert!(THEME_PRESETS_CSS.contains(".theme-puzzlescript button:active,"));
@@ -8556,6 +8574,20 @@ P
         assert!(APP_JS.contains(
             "function puzzle3PreviewSurfaceControllerUpdate(surface = puzzle3PreviewSurface)"
         ));
+        assert!(APP_JS.contains("camera: payload.camera"));
+        assert!(APP_JS.contains("view: payload.view"));
+        assert!(APP_JS.contains("settings: payload.settings || {}"));
+        assert!(PUZZLE3_APP_JS.contains(
+            "const PREVIEW_SURFACE_UPDATE_MESSAGE = \"PuzzleStudioPreviewSurfaceUpdate\";"
+        ));
+        assert!(
+            PUZZLE3_APP_JS.contains("function puzzle3PreviewUpdateFromSurface(update = {})")
+        );
+        assert!(PUZZLE3_APP_JS.contains("if (event.data?.type === PREVIEW_SURFACE_UPDATE_MESSAGE)"));
+        assert!(PUZZLE3_APP_JS.contains("levelIndex: payload.levelIndex"));
+        assert!(PUZZLE3_APP_JS.contains("camera: payload.camera"));
+        assert!(PUZZLE3_APP_JS.contains("view: payload.view"));
+        assert!(PUZZLE3_APP_JS.contains("settings: payload.settings || {}"));
         assert!(APP_JS.contains("if (puzzle3PreviewSurface) {\n    return puzzle3PreviewSurfaceFixture(fixture, sceneName);\n  }"));
         assert!(
             APP_JS.contains("if (componentEmbedMode && renderEmbeddedPuzzleComponent(layers))")
@@ -9760,7 +9792,7 @@ rules {
         let title = bridge.request_json("GET", "/api/state").unwrap();
         let title: serde_json::Value = serde_json::from_str(&title).unwrap();
         assert_eq!(title["currentScene"], "title");
-        assert_eq!(title["game"]["title"], "Microban Basic");
+        assert_eq!(title["title"], "Microban Basic");
         let title = title.as_object().unwrap();
         assert!(title.contains_key("visibleScenes"));
         assert!(title.contains_key("sceneState"));
@@ -9827,7 +9859,7 @@ rules {
         let snapshot = bridge.request_json("GET", "/api/state").unwrap();
         let snapshot: serde_json::Value = serde_json::from_str(&snapshot).unwrap();
         assert_eq!(snapshot["selectedLevelIndex"], 1);
-        assert_eq!(snapshot["game"]["has_progress_save"], true);
+        assert_eq!(snapshot["has_progress_save"], true);
         assert_eq!(snapshot["levels"][1]["cleared"], true);
     }
 

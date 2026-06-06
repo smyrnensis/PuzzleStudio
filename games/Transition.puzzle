@@ -878,7 +878,7 @@ scene title {
   layout {
     title "Transition"
     subtitle "by NinaBirb"
-    if game.has_progress_save {
+    if has_progress_save {
       choice "Continue" -> input continue_game
     }
     choice "New Game" -> input new_game

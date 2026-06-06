@@ -424,8 +424,6 @@ fn modern_scene_header(tokens: &[&str]) -> Option<String> {
         ["scene" | "screen", "puzzle"] => Some("scene puzzle".to_string()),
         ["scene" | "screen", "level_menu", name] => Some(format!("scene {name}")),
         ["scene" | "screen", "level_menu"] => Some("scene level_menu".to_string()),
-        ["scene" | "screen", "title_menu", name] => Some(format!("scene {name}")),
-        ["scene" | "screen", "title_menu"] => Some("scene title_menu".to_string()),
         ["scene" | "screen", "menu", name] => Some(format!("scene {name}")),
         ["scene" | "screen", "menu"] => Some("scene menu".to_string()),
         ["scene" | "screen", name] => Some(format!("scene {name}")),
@@ -1673,7 +1671,7 @@ confirm <- Enter
 rules {
 if {
 input == confirm
-game.has_progress_save == false
+has_progress_save == false
 } -> {
 goto playing
 }
@@ -1691,10 +1689,7 @@ text "Playing"
     let SceneTransitionTrigger::Condition(condition) = &scene.transitions[0].trigger else {
         panic!("expected condition block to lower to condition transition");
     };
-    assert_eq!(
-        condition,
-        "input == confirm and game.has_progress_save == false"
-    );
+    assert_eq!(condition, "input == confirm and has_progress_save == false");
     assert!(matches!(
         &scene.transitions[0].effect,
         SceneEffect::Goto { scene, .. } if scene == "playing"
@@ -1724,7 +1719,7 @@ P
 
 scene title {
 layout {
-if game.has_progress_save == true {
+if has_progress_save == true {
 button "Continue" -> input continue_game
 } else {
 button "New Game" -> input new_game
@@ -1885,12 +1880,12 @@ subtitle
     assert!(matches!(
         &scene.components[0],
         SceneComponent::Title(title)
-            if title.content == SceneExpr::Path(vec!["game".to_string(), "title".to_string()])
+            if title.content == SceneExpr::Path(vec!["title".to_string()])
     ));
     assert!(matches!(
         &scene.components[1],
         SceneComponent::Subtitle(subtitle)
-            if subtitle.content == SceneExpr::Path(vec!["game".to_string(), "subtitle".to_string()])
+            if subtitle.content == SceneExpr::Path(vec!["subtitle".to_string()])
     ));
 }
 
@@ -2576,7 +2571,7 @@ level_menu microban -> goto playing(level)
 #[test]
 fn title_scene_keeps_buttons_and_rules_explicit() {
     let source = r#"
-title title_menu_scene
+title title_scene
 
 puzzle default {
 layers {
@@ -2647,10 +2642,10 @@ P
 }
 
 scene title {
-title game.title
-subtitle game.subtitle
-text game.author
-text game.homepage
+title title
+subtitle subtitle
+text author
+text homepage
 }
 "#;
     let loaded = parse_game(source).unwrap();
@@ -7617,7 +7612,7 @@ fn surface_document_collects_parser_owned_effect_nodes() {
     let source = r#"
 scene title {
 layout {
-title game.title
+title title
 button "Play" -> goto playing
 }
 }
@@ -7630,7 +7625,7 @@ rules {
 "#;
     let surface = parse_surface_document(source);
     let scene_name_start = source.find("scene title").unwrap() + "scene ".len();
-    let component_title_start = source.rfind("title game.title").unwrap();
+    let component_title_start = source.rfind("title title").unwrap();
 
     assert!(surface.semantic_tokens.iter().any(|token| {
         &source[token.span.start..token.span.end] == "scene"

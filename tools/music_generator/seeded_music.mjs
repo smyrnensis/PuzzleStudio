@@ -91,6 +91,8 @@ export function generateSong(seed, options = {}) {
     addMotion(events, sectionState.roles.motion, timbres, tonic, scale, chordRoot, bar, localBar, sectionState, seedText);
     addColor(events, sectionState.roles.color, timbres, chord, bar, localBar, sectionState, seedText);
     addBoundary(events, sectionState.roles.boundary, timbres, tonic, scale, bar, localBar, sectionState, seedText);
+    addSectionBridge(events, tonic, scale, bar, localBar, sectionState, seedText);
+    addSectionEntryBridge(events, tonic, scale, chord, bar, localBar, sectionState, seedText);
   }
 
   events.sort((a, b) => a.step - b.step || a.track.localeCompare(b.track));
@@ -501,13 +503,12 @@ function buildPhraseShape(index, variant, degreeOffset, progressionShift, motifV
   const bars = [];
   let previousTarget = 0;
   for (let index = 0; index < 8; index += 1) {
-    const localState = phraseStateForBar(state, context, index);
-    const energy = phraseEnergyForState(energies[index], state, localState);
+    const energy = energies[index];
     const nextEnergy = energies[Math.min(7, index + 1)];
     const previousEnergy = energies[Math.max(0, index - 1)];
     const slopeIn = energy - previousEnergy;
     const slopeOut = nextEnergy - energy;
-    const barState = phraseBarState(index, energy, slopeIn, slopeOut, previousTarget, localState, rng);
+    const barState = phraseBarState(index, energy, slopeIn, slopeOut, previousTarget, state, rng);
     const entryProgress = transitionEntryProgress(context, index);
     const boundary = phraseBoundaryForBar(index, barState, slopeIn, slopeOut, energy, rng) * entryProgress;
     const pickup = phrasePickupForBar(index, energy, slopeOut, boundary, rng) * entryProgress;
@@ -533,26 +534,6 @@ function buildPhraseShape(index, variant, degreeOffset, progressionShift, motifV
   return { archetype: curve.archetype, curve, bars };
 }
 
-function phraseStateForBar(state, context, barIndex) {
-  const incomingImpact = Number(context.transitionIn?.impact ?? 0);
-  const outgoingImpact = Number(context.transitionOut?.impact ?? 0);
-  let effective = state;
-  if (context.previousState && incomingImpact >= 0.46) {
-    const bars = transitionSpan(incomingImpact);
-    if (barIndex < bars) {
-      const progress = smoothstep((barIndex + 1) / (bars + 1));
-      const amount = clamp(0.24 + progress * 0.76 + (1 - incomingImpact) * 0.12, 0.18, 1);
-      effective = interpolateState(context.previousState, effective, amount);
-    }
-  }
-  if (context.nextState && outgoingImpact >= 0.46 && barIndex >= 6) {
-    const progress = smoothstep((barIndex - 5) / 3);
-    const amount = clamp(progress * outgoingImpact * 0.34, 0, 0.34);
-    effective = interpolateState(effective, context.nextState, amount);
-  }
-  return effective;
-}
-
 function transitionEntryProgress(context, barIndex) {
   const incomingImpact = Number(context.transitionIn?.impact ?? 0);
   if (incomingImpact < 0.46) {
@@ -563,29 +544,6 @@ function transitionEntryProgress(context, barIndex) {
     return 1;
   }
   return smoothstep((barIndex + 1) / (bars + 1));
-}
-
-function phraseEnergyForState(baseEnergy, sectionState, localState) {
-  const sectionEnergy = stateEnergy(sectionState);
-  const localEnergy = stateEnergy(localState);
-  return clamp(baseEnergy * clamp(localEnergy / Math.max(0.12, sectionEnergy), 0.72, 1.14), 0.5, 1.36);
-}
-
-function stateEnergy(state) {
-  return clamp(0.36 + state.density * 0.34 + state.tension * 0.24 + state.closurePressure * 0.16, 0.16, 0.96);
-}
-
-function interpolateState(left, right, amount) {
-  const t = clamp(amount, 0, 1);
-  return sectionVector(
-    interpolate(left.progress ?? 0, right.progress ?? 0, t),
-    interpolate(left.novelty, right.novelty, t),
-    interpolate(left.stability, right.stability, t),
-    interpolate(left.density, right.density, t),
-    interpolate(left.tension, right.tension, t),
-    interpolate(left.closurePressure, right.closurePressure, t),
-    interpolate(left.memoryDistance, right.memoryDistance, t),
-  );
 }
 
 function smoothstep(value) {
@@ -789,8 +747,6 @@ function buildBarStateTrajectory(sectionPlan, bars) {
     const transitionIn = previous ? transitionContext(previous, section) : null;
     const transitionOut = next ? transitionContext(section, next) : null;
     const phraseShape = buildPhraseShape(section.index, section.variant, section.degreeOffset, section.progressionShift, section.motifVariant, sectionStateVector(section), {
-      previousState: previous ? sectionStateVector(previous) : null,
-      nextState: next ? sectionStateVector(next) : null,
       transitionIn,
       transitionOut,
     });
@@ -799,11 +755,47 @@ function buildBarStateTrajectory(sectionPlan, bars) {
       sectionIndex: section.index,
       localBar: phraseBar.index,
       phraseArchetype: phraseShape.archetype,
-      phraseBar,
+      phraseBar: withTransitionProjection(phraseBar, previous, section, next, transitionIn, transitionOut),
       transitionIn,
       transitionOut,
     }));
   }).slice(0, bars);
+}
+
+function withTransitionProjection(phraseBar, previous, section, next, transitionIn, transitionOut) {
+  return {
+    ...phraseBar,
+    transitionIn,
+    transitionOut,
+    transitionEntryBridge: previous && transitionIn ? transitionBridge(previous, section, transitionIn) : null,
+    transitionBridge: next && transitionOut ? transitionBridge(section, next, transitionOut) : null,
+  };
+}
+
+function transitionBridge(left, right, transitionOut) {
+  const leftCarriers = effectiveCarriers(left, COMPOSITION_ROLES);
+  const rightCarriers = effectiveCarriers(right, COMPOSITION_ROLES);
+  const roleName = COMPOSITION_ROLES.find((name) => (
+    leftCarriers[name] === rightCarriers[name]
+      && isContinuityCarrier(name, leftCarriers[name])
+  ));
+  if (!roleName) {
+    throw new Error(`transition ${left.name}->${right.name} has no continuity carrier`);
+  }
+  const carrier = rightCarriers[roleName];
+  const tracks = tracksForCarrier(carrier);
+  if (tracks.length === 0) {
+    throw new Error(`transition ${left.name}->${right.name} continuity carrier ${carrier} has no playback track`);
+  }
+  return {
+    role: roleName,
+    carrier,
+    track: tracks[0],
+    targetDegreeOffset: right.degreeOffset,
+    targetProgressionShift: right.progressionShift,
+    impact: transitionOut.impact,
+    bars: transitionOut.bars,
+  };
 }
 
 function transitionContext(left, right) {
@@ -1675,6 +1667,95 @@ function addLoopHandoff(events, tonic, scale, bar, sectionState, seedText) {
   const bassStep = leadStep >= 14 ? 15 : 14;
   events.push(noteEvent("lead", bar, leadStep, 1, [degreeNote(tonic, scale, approach, 12)], "boundary", 0.055 * sectionState.boundaryLevel));
   events.push(noteEvent("bass", bar, bassStep, 1, [degreeNote(tonic, scale, 0, -12)], "boundary", 0.06 * sectionState.boundaryLevel));
+}
+
+function addSectionBridge(events, tonic, scale, bar, localBar, sectionState, seedText) {
+  const barShape = phraseBar(sectionState, localBar);
+  const bridge = barShape.transitionBridge;
+  if (!bridge || localBar < 8 - bridge.bars) {
+    return;
+  }
+  const rng = eventRng(seedText, "boundary", `section-bridge:${bridge.role}:${bridge.carrier}`, sectionState, localBar);
+  const progress = bridge.bars <= 1 ? 1 : (localBar - (8 - bridge.bars)) / (bridge.bars - 1);
+  const velocity = (0.028 + bridge.impact * 0.044) * (0.72 + progress * 0.42);
+  const step = localBar === 7
+    ? weightedPick([
+      { item: 12, weight: 0.24 },
+      { item: 13, weight: 0.28 },
+      { item: 14, weight: 0.34 },
+      { item: 15, weight: 0.14 },
+    ], rng)
+    : randomInt(rng, 9, 13);
+  if (bridge.track === "drums") {
+    const sound = weightedPick([
+      { item: "hat", weight: 0.48 },
+      { item: "snare", weight: 0.34 },
+      { item: "kick", weight: 0.18 },
+    ], rng);
+    events.push(noiseEvent("drums", bar, step, sound, "boundary", velocity));
+    return;
+  }
+  const degree = bridge.targetDegreeOffset + weightedPick([
+    { item: 0, weight: 0.48 },
+    { item: 1, weight: 0.24 },
+    { item: -1, weight: 0.16 },
+    { item: 2, weight: 0.12 },
+  ], rng);
+  if (bridge.track === "bass") {
+    events.push(noteEvent("bass", bar, step, 2, [degreeNote(tonic, scale, degree, -24)], "boundary", velocity * 1.2));
+    return;
+  }
+  if (bridge.track === "chord") {
+    const note = degreeNote(tonic, scale, degree + pick([0, 2, 4], rng), 12);
+    events.push(noteEvent("chord", bar, step, 2, [note], "boundary", velocity * 0.9));
+    return;
+  }
+  const octave = bridge.track === "counter" ? 0 : 12;
+  events.push(noteEvent(bridge.track, bar, step, 2, [degreeNote(tonic, scale, degree, octave)], "boundary", velocity));
+}
+
+function addSectionEntryBridge(events, tonic, scale, chord, bar, localBar, sectionState, seedText) {
+  const barShape = phraseBar(sectionState, localBar);
+  const bridge = barShape.transitionEntryBridge;
+  if (!bridge || localBar >= bridge.bars) {
+    return;
+  }
+  const barStart = bar * 16;
+  const hasEntryOnTrack = events.some((event) => (
+    event.track === bridge.track
+      && event.step >= barStart
+      && event.step < barStart + 4
+  ));
+  if (hasEntryOnTrack) {
+    return;
+  }
+  const rng = eventRng(seedText, "boundary", `section-entry:${bridge.role}:${bridge.carrier}`, sectionState, localBar);
+  const progress = bridge.bars <= 1 ? 1 : 1 - localBar / (bridge.bars - 1);
+  const velocity = (0.022 + bridge.impact * 0.034) * (0.68 + progress * 0.28);
+  const step = weightedPick([
+    { item: 0, weight: 0.42 },
+    { item: 1, weight: 0.32 },
+    { item: 2, weight: 0.18 },
+    { item: 3, weight: 0.08 },
+  ], rng);
+  if (bridge.track === "drums") {
+    events.push(noiseEvent("drums", bar, step, weightedPick([
+      { item: "kick", weight: 0.4 },
+      { item: "hat", weight: 0.38 },
+      { item: "snare", weight: 0.22 },
+    ], rng), "boundary", velocity));
+    return;
+  }
+  if (bridge.track === "bass") {
+    events.push(noteEvent("bass", bar, step, 2, [chord[0] - 24], "boundary", velocity * 1.18));
+    return;
+  }
+  if (bridge.track === "chord") {
+    events.push(noteEvent("chord", bar, step, 2, [pick(chord, rng)], "boundary", velocity * 0.9));
+    return;
+  }
+  const octave = bridge.track === "counter" ? 0 : 12;
+  events.push(noteEvent(bridge.track, bar, step, 2, [degreeNote(tonic, scale, bridge.targetDegreeOffset, octave)], "boundary", velocity));
 }
 
 function buildPlaybackScore({ seed, height, brightness, presence, attack, bpm, volume, bars, stepsPerBar, events, timbres }) {

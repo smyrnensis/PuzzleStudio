@@ -3391,20 +3391,20 @@ function setEditorDimensionMode(dimension) {
 function paneBindLabel(kind) {
   if (kind === "level") {
     if (currentLevelPaneMode === "edit") {
-      return "Level: 2D";
+      return "2D";
     }
     if (currentLevelPaneMode === "level3d") {
-      return "Level: 3D";
+      return "3D";
     }
-    return "Level: none";
+    return "none";
   }
   if (currentSpritePaneMode === "sprite") {
-    return "Sprite: 2D";
+    return "2D";
   }
   if (currentSpritePaneMode === "sprite3d") {
-    return "Sprite: 3D";
+    return "3D";
   }
-  return "Sprite: none";
+  return "none";
 }
 
 function syncPaneBindLabels() {
