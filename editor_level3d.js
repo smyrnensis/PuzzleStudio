@@ -3357,21 +3357,20 @@ function level3dPreviewSurfaceMessage(update) {
     type: LEVEL3D_PREVIEW_SURFACE_MESSAGE,
     kind: LEVEL3D_PREVIEW_SURFACE_KIND,
     mode: LEVEL3D_PREVIEW_SURFACE_MODE,
+    component: update.component,
+    componentEmbed: update.componentEmbed === true,
     payload: level3dPreviewSurfacePayload(update),
   };
 }
 
 function level3dPreviewSurfacePayload(update = {}) {
-  const view = update.view || {};
   return {
     levelIndex: update.levelIndex,
     level: update.level,
     resources: update.resources,
-    view: {
-      ...(update.camera || {}),
-      ...(view || {}),
-    },
-    display: update.settings || {},
+    camera: update.camera,
+    view: update.view,
+    settings: update.settings || {},
   };
 }
 
@@ -4248,24 +4247,20 @@ function level3dRuntimePreviewDocument(update) {
     next.levelIndex = levelIndex;
     next.size = { ...size };
     next.cells = JSON.parse(JSON.stringify(cells));
-    const view = payload.view || incoming.view || {};
-    if (payload.camera || incoming.camera || view.yawDegrees != null || view.pitchDegrees != null) {
-      next.camera = JSON.parse(JSON.stringify(payload.camera || incoming.camera || {
-        yawDegrees: view.yawDegrees,
-        pitchDegrees: view.pitchDegrees,
-        zoom: view.zoom,
-        projection: view.projection,
-      }));
+    const camera = payload.camera || incoming.camera;
+    if (camera) {
+      next.camera = JSON.parse(JSON.stringify(camera));
     }
+    const view = payload.view || incoming.view || {};
     if (payload.view || incoming.view) {
       next.view = JSON.parse(JSON.stringify({
         zoom: view.zoom,
         target: view.target,
       }));
     }
-    const display = payload.display || incoming.settings;
-    if (display) {
-      next.settings = { ...(next.settings || {}), ...JSON.parse(JSON.stringify(display)) };
+    const settings = payload.settings || incoming.settings;
+    if (settings) {
+      next.settings = { ...(next.settings || {}), ...JSON.parse(JSON.stringify(settings)) };
     }
     const sceneName = incoming.scene || "__editor_model_preview__";
     next.scenes = [{

@@ -188,12 +188,165 @@ function setSourceEditorValue(value, options = {}) {
 function scheduleSourceHighlight(immediate = false, options = {}) {
   const preserveCurrent = options.preserveCurrent !== false;
   if (preserveCurrent && sourceHighlightMode) {
-    syncSourceHighlightScroll();
+    if (!renderOptimisticSourceHighlight()) {
+      syncSourceHighlightScroll();
+    }
   } else {
     renderPlainSourceHighlight();
   }
   window.clearTimeout(sourceHighlightTimer);
   sourceHighlightTimer = window.setTimeout(refreshSourceHighlight, immediate ? 0 : 140);
+}
+
+function renderOptimisticSourceHighlight(source = sourceEditor.value) {
+  if (!sourceHighlight || !sourceHighlightMode || sourceHighlightSource === source) {
+    return false;
+  }
+  const previous = sourceHighlightSource || "";
+  if ((sourceHighlight.textContent || "") !== previous) {
+    return false;
+  }
+  const runs = sourceHighlightRunsFromDom();
+  if (!runs.length) {
+    return false;
+  }
+  let prefix = 0;
+  const maxPrefix = Math.min(previous.length, source.length);
+  while (prefix < maxPrefix && previous[prefix] === source[prefix]) {
+    prefix += 1;
+  }
+  let suffix = 0;
+  const maxSuffix = Math.min(previous.length - prefix, source.length - prefix);
+  while (
+    suffix < maxSuffix
+    && previous[previous.length - suffix - 1] === source[source.length - suffix - 1]
+  ) {
+    suffix += 1;
+  }
+
+  const inserted = source.slice(prefix, source.length - suffix);
+  const nextRuns = [
+    ...sourceHighlightRunsSlice(runs, 0, prefix),
+  ];
+  if (inserted) {
+    const style = sourceHighlightStyleAtOffset(runs, prefix);
+    nextRuns.push({
+      text: inserted,
+      className: style.className,
+      style: style.style,
+    });
+  }
+  nextRuns.push(...sourceHighlightRunsSlice(runs, previous.length - suffix, previous.length));
+  setSourceHighlightHtml(source, sourceHighlightRunsToHtml(nextRuns), "optimistic");
+  return true;
+}
+
+function sourceHighlightRunsFromDom() {
+  const runs = [];
+  if (!sourceHighlight) {
+    return runs;
+  }
+  const walker = document.createTreeWalker(sourceHighlight, NodeFilter.SHOW_TEXT);
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    const text = node.nodeValue || "";
+    if (!text) {
+      continue;
+    }
+    const element = node.parentElement && node.parentElement !== sourceHighlight
+      ? node.parentElement
+      : null;
+    runs.push({
+      text,
+      className: element?.getAttribute("class") || "",
+      style: element?.getAttribute("style") || "",
+    });
+  }
+  return sourceHighlightMergeRuns(runs);
+}
+
+function sourceHighlightRunsSlice(runs, start, end) {
+  const result = [];
+  let offset = 0;
+  for (const run of runs) {
+    const runStart = offset;
+    const runEnd = runStart + run.text.length;
+    offset = runEnd;
+    if (runEnd <= start || runStart >= end) {
+      continue;
+    }
+    const sliceStart = Math.max(start, runStart) - runStart;
+    const sliceEnd = Math.min(end, runEnd) - runStart;
+    result.push({
+      text: run.text.slice(sliceStart, sliceEnd),
+      className: run.className,
+      style: run.style,
+    });
+  }
+  return sourceHighlightMergeRuns(result);
+}
+
+function sourceHighlightStyleAtOffset(runs, offset) {
+  const before = Math.max(0, offset - 1);
+  let position = 0;
+  let firstAfter = null;
+  for (const run of runs) {
+    const next = position + run.text.length;
+    if (!firstAfter && next >= offset) {
+      firstAfter = run;
+    }
+    if (before >= position && before < next) {
+      return { className: run.className, style: run.style };
+    }
+    position = next;
+  }
+  const run = firstAfter || runs.at(-1) || {};
+  return { className: run.className || "", style: run.style || "" };
+}
+
+function sourceHighlightRunsToHtml(runs) {
+  return sourceHighlightMergeRuns(runs).map((run) => {
+    const text = escapeHtml(run.text);
+    const className = run.className ? ` class="${escapeHtml(run.className)}"` : "";
+    const style = run.style ? ` style="${escapeHtml(run.style)}"` : "";
+    return className || style ? `<span${className}${style}>${text}</span>` : text;
+  }).join("") || " ";
+}
+
+function sourceHighlightMergeRuns(runs) {
+  const merged = [];
+  for (const run of runs) {
+    if (!run?.text) {
+      continue;
+    }
+    const previous = merged.at(-1);
+    if (previous && previous.className === run.className && previous.style === run.style) {
+      previous.text += run.text;
+    } else {
+      merged.push({
+        text: run.text,
+        className: run.className || "",
+        style: run.style || "",
+      });
+    }
+  }
+  return merged;
+}
+
+function sourcePredictedBeforeInputValue(event) {
+  if (
+    !event
+    || event.isComposing
+    || sourceEditorBlockSelection?.ranges?.length
+  ) {
+    return null;
+  }
+  if (event.inputType !== "insertText" || typeof event.data !== "string") {
+    return null;
+  }
+  const source = sourceEditor.value || "";
+  const start = Math.max(0, Math.min(source.length, sourceEditor.selectionStart || 0));
+  const end = Math.max(start, Math.min(source.length, sourceEditor.selectionEnd || start));
+  return `${source.slice(0, start)}${event.data}${source.slice(end)}`;
 }
 
 function renderPlainSourceHighlight(source = sourceEditor.value, reason = null) {
@@ -501,6 +654,7 @@ function sourceAutoCompletionEligible(source, cursor) {
     sourceEditor.selectionStart !== sourceEditor.selectionEnd
     || sourceEditorBlockSelection?.ranges?.length
     || sourceCursorAtBareLineTail(source, cursor)
+    || sourceCursorBeforeSyntaxBoundaryWithoutPrefix(source, cursor)
   ) {
     return false;
   }
@@ -515,6 +669,17 @@ function sourceCursorAtBareLineTail(source, cursor) {
   }
   const code = stripSourceImportLineComment(line).trimEnd();
   return Boolean(code && !/\s/.test(code.at(-1) || ""));
+}
+
+function sourceCursorBeforeSyntaxBoundaryWithoutPrefix(source, cursor) {
+  const before = source.slice(0, cursor);
+  if (/[_@A-Za-z0-9.-]$/.test(before)) {
+    return false;
+  }
+  const lineEnd = source.indexOf("\n", cursor);
+  const safeLineEnd = lineEnd < 0 ? source.length : lineEnd;
+  const after = stripSourceImportLineComment(source.slice(cursor, safeLineEnd));
+  return /^[\t ]*[\]{}]/.test(after);
 }
 
 function sourceCompletionMode(options, list, source, cursor) {
@@ -1659,6 +1824,11 @@ sourceEditor.addEventListener("beforeinput", (event) => {
     } else {
       redoSourceEdit();
     }
+    return;
+  }
+  const predicted = sourcePredictedBeforeInputValue(event);
+  if (predicted !== null) {
+    renderOptimisticSourceHighlight(predicted);
   }
 });
 sourceEditor.addEventListener("input", () => {
@@ -2854,7 +3024,7 @@ function indentSourceSelectedLines(direction) {
   const { rawLines, first, last } = selectedSourceRawLineSpan();
   for (let index = first; index <= last; index += 1) {
     if (direction > 0) {
-      rawLines[index] = rawLines[index] || "";
+      rawLines[index] = `\t${rawLines[index] || ""}`;
     } else if ((rawLines[index] || "").startsWith("\t")) {
       rawLines[index] = rawLines[index].slice(1);
     } else {
