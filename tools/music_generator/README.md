@@ -54,14 +54,16 @@ node tools/music_generator/test/seeded_music.test.mjs
 node tools/music_generator/test/audio_export.test.mjs
 ```
 
-Try the browser demo:
+Build the standalone music listener when you want to test music without the
+editor server:
 
 ```sh
-cd tools/music_generator
-python3 -m http.server 8875
+node tools/music_generator/build_music_listen_page.mjs
 ```
 
-Then open `http://localhost:8875`.
+Then open `tools/music_generator/music_listen.html` directly in a browser. The
+page is generated as one self-contained file from the current music generator
+modules, so it does not require the Rust editor server or any editor pane.
 
 Older music lab pages, the previous clean-loop generator, and timbre observation
 notes are archived under `archive/tools/music_generator/experimental_music_2026-05-30`.

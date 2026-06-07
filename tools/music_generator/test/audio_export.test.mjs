@@ -22,8 +22,8 @@ assert.equal(songExport.height, 0.5);
 assert.equal(songExport.brightness, 0.62);
 assert.equal(songExport.bpm, 106);
 assert.equal(songExport.volume, 0.7);
-assert.equal(songExport.bars, 8);
-assert.equal(songExport.ps, "music music-seed height=0.5 bpm=106 bars=8 volume=0.7");
+assert.equal(songExport.bars, 32);
+assert.equal(songExport.ps, "music music-seed height=0.5 bpm=106 bars=32 volume=0.7");
 
 const musicExport = exportMusicLoop(generateSong("music-seed", { height: 0.8, bpm: 110, bars: 16, volume: 0.5 }));
 assert.equal(musicExport.height, 0.8);
