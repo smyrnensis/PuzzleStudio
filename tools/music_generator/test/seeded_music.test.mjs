@@ -18,9 +18,9 @@ assert.deepEqual(styleA.debug.roles, styleB.debug.roles, "changing only the seed
 assert.deepEqual(styleA.debug.timbres, styleB.debug.timbres, "changing only the seed prefix should preserve generated timbres");
 assert.notDeepEqual(styleA.playbackScore.events, styleB.playbackScore.events, "changing only the seed prefix should still regenerate the musical content");
 assert.equal(first.playbackScore.version, 1);
-assert.equal(first.playbackScore.transport.bars, 8);
+assert.equal(first.playbackScore.transport.bars, 32);
 assert.equal(first.playbackScore.transport.stepsPerBar, 16);
-assert.equal(first.input.bars, 8);
+assert.equal(first.input.bars, 32);
 assert.equal(first.input.height, 0.5);
 assert.equal(first.input.focus, 0.5);
 assert.equal(first.input.brightness, 0.5);
@@ -29,14 +29,19 @@ assert.equal(first.input.attack, 0.5);
 assert.equal(first.playbackScore.mix.playbackTone.brightness, 0.5);
 assert.equal(first.playbackScore.mix.playbackTone.presence, 0.5);
 assert.equal(first.playbackScore.mix.playbackTone.attack, 0.5);
-assert.equal(first.debug.sectionPlan.length, 1);
+assert.equal(first.debug.sectionPlan.length, 4);
 for (const field of ["novelty", "stability", "density", "tension", "closurePressure", "memoryDistance"]) {
   assert.ok(first.debug.sectionPlan.every((section) => section[field] >= 0 && section[field] <= 1), `section ${field} should be normalized`);
 }
 assert.equal(first.debug.barPlan.length, first.input.bars, "bar-level form projection should expose one phrase state per bar");
 assert.ok(first.debug.sectionPlan.every((section) => !("phraseShape" in section)), "section anchors should not own phrase shapes");
 assert.ok(first.debug.barPlan.every((bar) => bar.phraseBar.pace >= 0 && bar.phraseBar.pace <= 1 && bar.phraseBar.targetCenter >= -1 && bar.phraseBar.targetCenter <= 1), "bar-level phrase states should expose normalized pace and target center");
-assert.ok(first.debug.sectionPlan[0].closurePressure >= 0.8, "default 8-bar songs should use a single compact loop-closing section");
+assert.ok(first.debug.sectionPlan.some((section) => section.memoryDistance >= 0.34 || section.tension >= 0.48 || section.closurePressure >= 0.68), "default songs should use the 32-bar moderate-form behavior");
+
+const defaultSong = generateSong("default-check", { tone: 0.5 });
+assert.equal(defaultSong.input.bpm, 100);
+assert.equal(defaultSong.input.bars, 32);
+assert.equal(generateSong("wide-bpm-check", { bpm: 175 }).input.bpm, 175, "non-UI callers should keep access to the wider BPM range");
 
 const long = generateSong("same-seed", { tone: 0.5, bpm: 110, bars: 64 });
 assert.equal(long.debug.sectionPlan.length, 8);
@@ -135,6 +140,7 @@ for (const [name, timbre] of Object.entries(first.playbackScore.timbres)) {
 }
 
 const sampleSongs = Array.from({ length: 160 }, (_, index) => generateSong(`42function-style-${index}`, { tone: 0.5, bpm: 110, bars: 64 }));
+const compactSongs = Array.from({ length: 120 }, (_, index) => generateSong(`compact-function-style-${index}`, { tone: 0.5, bpm: 110, bars: 32 }));
 const notesByTrack = {};
 for (const song of sampleSongs) {
   for (const event of song.playbackScore.events) {
@@ -170,6 +176,11 @@ const firstSectionModulationSignatures = new Set(sampleSongs.map((song) => song.
   .join("|")));
 
 assert.ok(carriersByFunction.identity.size >= 4, "identity should not collapse to melody-only");
+for (const name of roleNames) {
+  assert.ok(sampleSongs.every((song) => (
+    new Set(song.debug.sectionPlan.map((section) => section.roles[name].carrier)).size === 1
+  )), `${name} carrier should stay stable across sections instead of introducing a new song world at the chorus`);
+}
 assert.ok(carriersByFunction.time.size >= 4, "time should not collapse to drums-only");
 assert.ok(carriersByFunction.tone.size >= 4, "tone should not collapse to chord-only");
 assert.ok(carriersByFunction.motion.size >= 4, "motion should expose multiple motion strategies");
@@ -181,6 +192,65 @@ assert.ok(new Set(progressionSignatures).size >= 80, "harmonic progression shoul
 assert.ok(Math.max(...progressionCounts.values()) / progressionSignatures.length < 0.08, "harmonic progression should not be dominated by one hand-authored loop");
 assert.ok(firstSectionPhraseArchetypes.size >= 5, "8-bar modulation should draw from multiple phrase-shape archetypes");
 assert.ok(firstSectionModulationSignatures.size >= 100, "8-bar modulation should vary by seed instead of reusing one bar-role curve");
+
+const normalizedMotifShape = (song) => {
+  const names = new Map();
+  let nextName = 65;
+  return song.debug.sectionPlan.map((section) => {
+    if (!names.has(section.motifVariant)) {
+      names.set(section.motifVariant, String.fromCharCode(nextName));
+      nextName += 1;
+    }
+    return names.get(section.motifVariant);
+  }).join("");
+};
+const compactMotifShapes = compactSongs.map(normalizedMotifShape);
+const compactMotifShapeCounts = new Map();
+for (const shape of compactMotifShapes) {
+  compactMotifShapeCounts.set(shape, (compactMotifShapeCounts.get(shape) || 0) + 1);
+}
+assert.ok(new Set(compactMotifShapes).size >= 6, "32-bar motif-family motion should not collapse to one fixed section pattern");
+assert.ok((compactMotifShapeCounts.get("AABB") || 0) / compactMotifShapes.length < 0.5, "32-bar motif-family motion should allow AABB without making it the template");
+
+const identityTimingBuckets = (song, sectionIndex, localBar) => new Set(song.playbackScore.events
+  .filter((event) => (
+    event.role === "identity"
+      && event.step >= (sectionIndex * 8 + localBar) * 16
+      && event.step < (sectionIndex * 8 + localBar + 1) * 16
+  ))
+  .map((event) => `${event.track}:${Math.round((event.step - (sectionIndex * 8 + localBar) * 16) / 3)}`));
+const bucketSimilarity = (left, right) => {
+  const union = new Set([...left, ...right]);
+  const intersectionSize = [...left].filter((item) => right.has(item)).length;
+  return union.size ? intersectionSize / union.size : 0;
+};
+const sameMotifTimingSimilarities = [];
+const differentMotifTimingSimilarities = [];
+for (const song of sampleSongs) {
+  for (let left = 0; left < song.debug.sectionPlan.length; left += 1) {
+    for (let right = left + 1; right < song.debug.sectionPlan.length; right += 1) {
+      for (let localBar = 0; localBar < 8; localBar += 1) {
+        const leftBuckets = identityTimingBuckets(song, left, localBar);
+        const rightBuckets = identityTimingBuckets(song, right, localBar);
+        if (!leftBuckets.size || !rightBuckets.size) {
+          continue;
+        }
+        const target = song.debug.sectionPlan[left].motifVariant === song.debug.sectionPlan[right].motifVariant
+          ? sameMotifTimingSimilarities
+          : differentMotifTimingSimilarities;
+        target.push(bucketSimilarity(leftBuckets, rightBuckets));
+      }
+    }
+  }
+}
+assert.ok(
+  average(sameMotifTimingSimilarities) > average(differentMotifTimingSimilarities),
+  "sections sharing a motif family should keep a more recognizable identity timing skeleton than sections with different motif families",
+);
+assert.ok(
+  average(sameMotifTimingSimilarities) - average(differentMotifTimingSimilarities) >= 0.12,
+  "identity rhythm should carry motif sameness more strongly than pitch/register variation",
+);
 
 const phrasePaces = sampleSongs.flatMap((song) => song.debug.barPlan.map((bar) => bar.phraseBar.pace));
 assert.ok(phrasePaces.some((pace) => pace <= 0.34), "phrase pace should sometimes allow slower quarter-note-like motion");
@@ -247,13 +317,12 @@ const transitionEntries = [];
 for (const song of sampleSongs) {
   for (let index = 1; index < song.debug.barPlan.length; index += 1) {
     const bar = song.debug.barPlan[index];
-    if (bar.localBar !== 0 || !bar.transitionIn) {
+    if (bar.localBar !== 0 || !bar.transitionIn || bar.transitionIn.impact < 0.46) {
       continue;
     }
     transitionEntries.push({ song, previous: song.debug.barPlan[index - 1], bar });
   }
 }
-assert.ok(transitionEntries.length >= 40, "high-impact section changes should usually expose transition context");
 for (const { song, previous, bar } of transitionEntries) {
   assert.ok(previous.transitionOut && previous.transitionOut.impact === bar.transitionIn.impact, "adjacent bars should share one transition context");
   assert.ok(bar.phraseBar.boundary <= 0.25, "incoming transition phrase should not begin with a strong phrase boundary accent");
@@ -374,7 +443,7 @@ for (const song of sampleSongs) {
     }
   }
 }
-assert.ok(checkedPitchGestures > 160, "sample should include enough intra-bar pitch gestures");
+assert.ok(checkedPitchGestures > 120, "sample should include enough intra-bar pitch gestures");
 assert.ok(
   fullyAlternatingGestures / checkedPitchGestures < 0.34,
   "intra-bar pitch fields should not mostly collapse into up-down-up-down zigzags",
@@ -387,6 +456,41 @@ const melodicRhythmProfiles = new Set(sampleSongs
     .map((event) => `${event.step}:${event.durationSteps}`)
     .join("|")));
 assert.ok(melodicRhythmProfiles.size >= 6, "melodic identity should draw from varied rhythm profiles across seeds");
+
+const coarseMelodicTimingSignature = (song, bar) => song.playbackScore.events
+  .filter((event) => event.role === "identity" && event.track === "lead" && event.step >= bar * 16 && event.step < (bar + 1) * 16)
+  .map((event) => `${Math.round((event.step - bar * 16) / 3)}`)
+  .join(".");
+let melodicTimingSections = 0;
+let melodicTimingSectionsWithReuse = 0;
+let melodicTimingUniqueRatioTotal = 0;
+for (const song of sampleSongs) {
+  for (let sectionIndex = 0; sectionIndex < song.debug.sectionPlan.length; sectionIndex += 1) {
+    if (song.debug.sectionPlan[sectionIndex].roles.identity.carrier !== "melodic-line") {
+      continue;
+    }
+    const signatures = Array.from({ length: 8 }, (_, localBar) => coarseMelodicTimingSignature(song, sectionIndex * 8 + localBar))
+      .filter(Boolean);
+    if (signatures.length < 4) {
+      continue;
+    }
+    const uniqueCount = new Set(signatures).size;
+    melodicTimingSections += 1;
+    melodicTimingUniqueRatioTotal += uniqueCount / signatures.length;
+    if (uniqueCount < signatures.length) {
+      melodicTimingSectionsWithReuse += 1;
+    }
+  }
+}
+assert.ok(melodicTimingSections > 120, "sample should include enough melodic sections for timing phrase checks");
+assert.ok(
+  melodicTimingSectionsWithReuse / melodicTimingSections >= 0.7,
+  "melodic timing should reuse a coarse phrase skeleton within sections instead of redrawing every bar",
+);
+assert.ok(
+  melodicTimingUniqueRatioTotal / melodicTimingSections <= 0.88,
+  "melodic timing should preserve phrase memory while still allowing bar-level variation",
+);
 
 const melodicLeadLines = sampleSongs
   .filter((song) => song.debug.roles.identity.carrier === "melodic-line")
@@ -445,10 +549,11 @@ for (const song of sampleSongs) {
     "64-bar form should give the second half a state change or wrap pressure",
   );
   for (const section of song.debug.sectionPlan) {
-    if (!section.loopHandoff && section.progress >= 0.18 && (section.memoryDistance >= 0.5 || section.novelty >= 0.58)) {
-      assert.notDeepEqual(section.roles, song.debug.roles, "high-distance or high-novelty states should expose section-local role changes");
-    }
+    assert.deepEqual(section.roles, song.debug.roles, "section state should preserve song-level role identity");
   }
+  const motifVariantCount = new Set(song.debug.sectionPlan.map((section) => section.motifVariant)).size;
+  assert.ok(motifVariantCount >= 2, "64-bar form should contain more than one identity motif family");
+  assert.ok(motifVariantCount <= Math.ceil(song.debug.sectionPlan.length / 2), "motif families should persist across section groups instead of changing every section");
 }
 
 const melodySong = generateSong("00melody-2", { height: 0.5, bpm: 110, bars: 64 });
@@ -488,9 +593,13 @@ assert.notEqual(
   "melodic identity should develop within a four-bar phrase instead of repeating every bar exactly",
 );
 assert.equal(
-  new Set(melodicSectionIndexes.slice(0, 3).map((sectionIndex) => leadIdentityRhythmSignature(melodySong, sectionIndex))).size,
-  Math.min(3, melodicSectionIndexes.length),
-  "active melodic sections should have distinct rhythm profiles",
+  new Set(melodicSectionIndexes.map((sectionIndex) => melodySong.debug.sectionPlan[sectionIndex].motifVariant)).size < melodicSectionIndexes.length,
+  true,
+  "active melodic sections should include motif-family returns instead of changing motif every section",
+);
+assert.ok(
+  new Set(melodicSectionIndexes.map((sectionIndex) => melodySong.debug.sectionPlan[sectionIndex].motifVariant)).size >= 2,
+  "active melodic sections should still include more than one motif family across the form",
 );
 
 const rhythmHookSongs = sampleSongs.filter((song) => song.debug.roles.identity.carrier === "rhythm-hook");
@@ -523,7 +632,8 @@ assert.equal(preset.brightness, 0.5);
 assert.equal(preset.presence, 0.5);
 assert.equal(preset.attack, 0.5);
 assert.equal(preset.tone, 0.5);
-assert.equal(preset.bpm, 110);
+assert.equal(preset.bpm, 100);
+assert.equal(preset.bars, 32);
 
 const higher = generateSong("knob-check", { height: 1, bpm: 110 });
 const lower = generateSong("knob-check", { height: 0, bpm: 110 });

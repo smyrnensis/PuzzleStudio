@@ -26,10 +26,12 @@ const DEFAULT_HEIGHT = 0.5;
 const DEFAULT_BRIGHTNESS = 0.5;
 const DEFAULT_PRESENCE = 0.5;
 const DEFAULT_ATTACK = 0.5;
-const DEFAULT_BPM = 110;
+const DEFAULT_BPM = 100;
 const DEFAULT_VOLUME = 0.5;
-const DEFAULT_BARS = 8;
+const DEFAULT_BARS = 32;
 const BAR_OPTIONS = [8, 16, 32, 64];
+const TRANSITION_BRIDGE_IMPACT = 0.22;
+const TRANSITION_ENVELOPE_IMPACT = 0.46;
 
 const COMPOSITION_ROLES = ["identity", "time", "tone", "motion", "color", "boundary"];
 
@@ -225,10 +227,10 @@ function role(name, carrier) {
   return { name, carrier };
 }
 
-function rolesWithCarriers(baseRoles, carriers = null) {
+function rolesWithCarriers(baseRoles) {
   return Object.fromEntries(COMPOSITION_ROLES.map((name) => [
     name,
-    role(name, carriers?.[name] ?? baseRoles[name].carrier),
+    role(name, baseRoles[name].carrier),
   ]));
 }
 
@@ -246,92 +248,37 @@ function assignTimbres(rng, roles, seedText) {
 }
 
 function buildSectionPlan(rng, form, roles, sectionCount = 8) {
-  const motif = () => randomInt(rng, 0, 9999);
-  const distantIdentityCarrier = weightedPick([
-    { item: "melodic-line", weight: roles.identity.carrier === "melodic-line" ? 0 : form.focus === "identity" ? 0.28 : 0.34 },
-    { item: "harmony-arp", weight: roles.identity.carrier === "harmony-arp" ? 0 : form.focus === "motion" ? 0.3 : 0.22 },
-    { item: "rhythm-hook", weight: roles.identity.carrier === "rhythm-hook" ? 0 : form.focus === "time" ? 0.28 : 0.2 },
-    { item: "bass-riff", weight: roles.identity.carrier === "bass-riff" ? 0 : form.focus === "tone" ? 0.24 : 0.16 },
-  ], rng);
-  const distantTimeCarrier = weightedPick([
-    { item: "drum-grid", weight: distantIdentityCarrier === "rhythm-hook" ? 0.02 : 0.34 },
-    { item: "arp-pulse", weight: distantIdentityCarrier === "harmony-arp" ? 0.1 : 0.28 },
-    { item: "bass-pulse", weight: distantIdentityCarrier === "bass-riff" ? 0.08 : 0.22 },
-    { item: "thin-pulse", weight: form.space > 0.55 ? 0.24 : 0.12 },
-  ], rng);
-  const distantToneCarrier = weightedPick([
-    { item: "chord-pad", weight: 0.34 },
-    { item: "drone", weight: form.space > 0.5 ? 0.28 : 0.14 },
-    { item: "root-bass", weight: distantIdentityCarrier === "bass-riff" ? 0.08 : 0.24 },
-    { item: "implied", weight: form.density > 0.58 ? 0.2 : 0.1 },
-  ], rng);
-  const foregroundIdentityCarrier = weightedPick([
-    { item: "melodic-line", weight: distantIdentityCarrier === "melodic-line" ? 0.62 : 0.58 },
-    { item: "harmony-arp", weight: distantIdentityCarrier === "harmony-arp" ? 0.2 : 0.32 },
-    { item: "bass-riff", weight: 0.08 },
-  ], rng);
-  const foregroundOverrides = {
-    identity: foregroundIdentityCarrier,
-    time: weightedPick([
-      { item: "drum-grid", weight: 0.42 },
-      { item: "arp-pulse", weight: foregroundIdentityCarrier === "harmony-arp" ? 0.1 : 0.28 },
-      { item: "bass-pulse", weight: foregroundIdentityCarrier === "bass-riff" ? 0.08 : 0.2 },
-      { item: "thin-pulse", weight: 0.08 },
-    ], rng),
-    tone: weightedPick([
-      { item: "chord-pad", weight: 0.44 },
-      { item: "root-bass", weight: foregroundIdentityCarrier === "bass-riff" ? 0.12 : 0.24 },
-      { item: "drone", weight: 0.18 },
-      { item: "implied", weight: 0.08 },
-    ], rng),
-    motion: weightedPick([
-      { item: "answer-line", weight: foregroundIdentityCarrier === "melodic-line" ? 0.16 : 0.3 },
-      { item: "harmony-arp", weight: 0.26 },
-      { item: "bass-walk", weight: 0.14 },
-      { item: "percussion-fill", weight: 0.2 },
-      { item: "none", weight: 0.04 },
-    ], rng),
-    color: weightedPick([
-      { item: "air-pad", weight: 0.24 },
-      { item: "organ-bed", weight: 0.28 },
-      { item: "bright-accent", weight: 0.22 },
-      { item: "noise-halo", weight: 0.18 },
-      { item: "none", weight: 0.04 },
-    ], rng),
-    boundary: weightedPick([
-      { item: "drum-fill", weight: 0.34 },
-      { item: "contrast-note", weight: 0.3 },
-      { item: "register-turn", weight: 0.22 },
-      { item: "rest-gap", weight: 0.08 },
-    ], rng),
-  };
-  const distantOverrides = {
-    identity: distantIdentityCarrier,
-    time: distantTimeCarrier,
-    tone: distantToneCarrier,
-    motion: weightedPick([
-      { item: "answer-line", weight: distantIdentityCarrier === "melodic-line" ? 0.16 : 0.34 },
-      { item: "harmony-arp", weight: distantTimeCarrier === "arp-pulse" ? 0.1 : 0.28 },
-      { item: "bass-walk", weight: distantToneCarrier === "root-bass" ? 0.24 : 0.12 },
-      { item: "percussion-fill", weight: distantTimeCarrier === "drum-grid" ? 0.22 : 0.1 },
-      { item: "none", weight: 0.06 },
-    ], rng),
-    color: weightedPick([
-      { item: "air-pad", weight: 0.2 },
-      { item: "noise-halo", weight: 0.24 },
-      { item: "organ-bed", weight: 0.2 },
-      { item: "bright-accent", weight: 0.14 },
-      { item: "none", weight: 0.1 },
-    ], rng),
-    boundary: weightedPick([
-      { item: "rest-gap", weight: 0.22 },
-      { item: "contrast-note", weight: 0.32 },
-      { item: "register-turn", weight: 0.2 },
-      { item: "drum-fill", weight: 0.2 },
-    ], rng),
-  };
   const trajectory = buildStateTrajectory(rng, form, sectionCount);
-  return trajectory.map((state, index) => realizeSectionState(state, index, rng, form, roles, motif, distantOverrides, foregroundOverrides));
+  const motifVariants = buildMotifVariantTrajectory(rng, trajectory);
+  return trajectory.map((state, index) => realizeSectionState(state, index, rng, roles, motifVariants[index]));
+}
+
+function buildMotifVariantTrajectory(rng, trajectory) {
+  const sectionCount = trajectory.length;
+  const familyCount = clamp(
+    Math.round(1.52 + Math.sqrt(sectionCount) * 0.38 + rng() * 0.9),
+    1,
+    Math.max(1, Math.min(4, sectionCount)),
+  );
+  const families = Array.from({ length: familyCount }, () => randomInt(rng, 0, 9999));
+  const dwell = weightedPick([
+    { item: 1.45, weight: 0.18 + Math.max(0, 5 - sectionCount) * 0.04 },
+    { item: 1.85, weight: 0.42 },
+    { item: 2.35, weight: 0.3 },
+    { item: 2.9, weight: 0.1 + Math.max(0, sectionCount - 5) * 0.04 },
+  ], rng);
+  const phase = rng() * 0.86;
+  const stateDrift = 0.2 + rng() * 0.36;
+  const closureReturn = rng() * 0.28;
+  return trajectory.map((state, index) => {
+    const phrasePosition = index / dwell
+      + phase
+      + state.memoryDistance * stateDrift
+      + state.tension * 0.12
+      - state.closurePressure * state.progress * closureReturn;
+    const familyIndex = ((Math.floor(phrasePosition) % familyCount) + familyCount) % familyCount;
+    return families[familyIndex];
+  });
 }
 
 function buildStateTrajectory(rng, form, sectionCount) {
@@ -387,7 +334,7 @@ function sectionVector(progress, novelty, stability, density, tension, closurePr
   };
 }
 
-function realizeSectionState(state, index, rng, form, baseRoles, motif, distantOverrides, foregroundOverrides) {
+function realizeSectionState(state, index, rng, baseRoles, motifVariant) {
   const variant = variantForState(state, rng);
   const degreeOffset = degreeOffsetForState(state, rng);
   const progressionShift = progressionShiftForState(state, rng);
@@ -396,7 +343,6 @@ function realizeSectionState(state, index, rng, form, baseRoles, motif, distantO
   const motionLevel = 0.66 + energy * 0.48 + state.memoryDistance * 0.18 + state.tension * 0.12 - state.closurePressure * 0.08;
   const colorLevel = 0.52 + state.density * 0.48 + state.novelty * 0.12;
   const boundaryLevel = 0.68 + state.closurePressure * 0.42 + state.memoryDistance * 0.18;
-  const roleCarriers = roleCarriersForState(state, form, distantOverrides, foregroundOverrides, rng);
   const section = sectionState(
     index,
     variant,
@@ -406,10 +352,10 @@ function realizeSectionState(state, index, rng, form, baseRoles, motif, distantO
     clamp(motionLevel, 0.56, 1.36),
     clamp(colorLevel, 0.44, 1.24),
     clamp(boundaryLevel, 0.7, 1.34),
-    motif(),
+    motifVariant,
     state,
     energy,
-    rolesWithCarriers(baseRoles, roleCarriers),
+    rolesWithCarriers(baseRoles),
   );
   return section;
 }
@@ -437,27 +383,6 @@ function progressionShiftForState(state, rng) {
     { item: 2, weight: 0.22 + state.tension * 0.18 },
     { item: 3, weight: 0.16 + state.memoryDistance * 0.24 },
   ], rng);
-}
-
-function roleCarriersForState(state, form, distantOverrides, foregroundOverrides, rng) {
-  if (state.progress < 0.18 || state.memoryDistance < 0.2 && state.novelty < 0.24) {
-    return null;
-  }
-  if (state.closurePressure > 0.7 && state.density >= 0.46) {
-    return foregroundOverrides;
-  }
-  if (state.density <= 0.32 || form.space > 0.68 && state.stability < 0.48) {
-    return {
-      ...distantOverrides,
-      time: "thin-pulse",
-      color: form.space > 0.48 ? "noise-halo" : "air-pad",
-      boundary: weightedPick([{ item: "rest-gap", weight: 0.58 }, { item: "register-turn", weight: 0.24 }, { item: "contrast-note", weight: 0.18 }], rng),
-    };
-  }
-  if (state.memoryDistance >= 0.48 || state.novelty > 0.58) {
-    return distantOverrides;
-  }
-  return rng() < 0.42 ? foregroundOverrides : null;
 }
 
 function sectionState(index, variant, degreeOffset, progressionShift, identityLevel, motionLevel, colorLevel, boundaryLevel, motifVariant, state, energy, roles) {
@@ -499,7 +424,8 @@ function buildPhraseShape(index, variant, degreeOffset, progressionShift, motifV
     state.memoryDistance,
   ].join(":")));
   const curve = buildPhraseEnergyCurve(rng, state, variant);
-  const energies = Array.from({ length: 8 }, (_, index) => phraseEnergyAt(index, curve, rng));
+  const rawEnergies = Array.from({ length: 8 }, (_, index) => phraseEnergyAt(index, curve, rng));
+  const energies = rawEnergies.map((energy, index) => contextualPhraseEnergy(energy, context, index));
   const bars = [];
   let previousTarget = 0;
   for (let index = 0; index < 8; index += 1) {
@@ -536,7 +462,7 @@ function buildPhraseShape(index, variant, degreeOffset, progressionShift, motifV
 
 function transitionEntryProgress(context, barIndex) {
   const incomingImpact = Number(context.transitionIn?.impact ?? 0);
-  if (incomingImpact < 0.46) {
+  if (incomingImpact < TRANSITION_ENVELOPE_IMPACT) {
     return 1;
   }
   const bars = transitionSpan(incomingImpact);
@@ -544,6 +470,37 @@ function transitionEntryProgress(context, barIndex) {
     return 1;
   }
   return smoothstep((barIndex + 1) / (bars + 1));
+}
+
+function transitionExitProgress(context, barIndex) {
+  const outgoingImpact = Number(context.transitionOut?.impact ?? 0);
+  if (outgoingImpact < TRANSITION_ENVELOPE_IMPACT) {
+    return 0;
+  }
+  const bars = transitionSpan(outgoingImpact);
+  const start = 8 - bars;
+  if (barIndex < start) {
+    return 0;
+  }
+  return smoothstep((barIndex - start + 1) / (bars + 1));
+}
+
+function contextualPhraseEnergy(energy, context, barIndex) {
+  const sectionEnergy = Number(context.sectionEnergy ?? 0);
+  const entry = transitionEntryProgress(context, barIndex);
+  const exit = transitionExitProgress(context, barIndex);
+  const entryScale = interpolate(sectionEnergyRatio(context.previousSectionEnergy, sectionEnergy), 1, entry);
+  const exitScale = interpolate(1, sectionEnergyRatio(context.nextSectionEnergy, sectionEnergy), exit);
+  return clamp(energy * entryScale * exitScale, 0.48, 1.28);
+}
+
+function sectionEnergyRatio(referenceEnergy, sectionEnergy) {
+  const reference = Number(referenceEnergy);
+  const current = Number(sectionEnergy);
+  if (!Number.isFinite(reference) || !Number.isFinite(current) || current <= 0) {
+    return 1;
+  }
+  return clamp((0.42 + reference) / (0.42 + current), 0.78, 1.12);
 }
 
 function smoothstep(value) {
@@ -742,11 +699,15 @@ function buildBarStateTrajectory(sectionPlan, bars) {
     return [];
   }
   return sectionPlan.flatMap((section, index) => {
-    const previous = index > 0 ? sectionPlan[index - 1] : null;
-    const next = index < sectionPlan.length - 1 ? sectionPlan[index + 1] : null;
+    const hasLoopNeighbor = sectionPlan.length > 1;
+    const previous = index > 0 ? sectionPlan[index - 1] : hasLoopNeighbor ? sectionPlan[sectionPlan.length - 1] : null;
+    const next = index < sectionPlan.length - 1 ? sectionPlan[index + 1] : hasLoopNeighbor ? sectionPlan[0] : null;
     const transitionIn = previous ? transitionContext(previous, section) : null;
     const transitionOut = next ? transitionContext(section, next) : null;
     const phraseShape = buildPhraseShape(section.index, section.variant, section.degreeOffset, section.progressionShift, section.motifVariant, sectionStateVector(section), {
+      sectionEnergy: section.energy,
+      previousSectionEnergy: previous?.energy,
+      nextSectionEnergy: next?.energy,
       transitionIn,
       transitionOut,
     });
@@ -800,7 +761,7 @@ function transitionBridge(left, right, transitionOut) {
 
 function transitionContext(left, right) {
   const impact = sectionTransitionImpact(left, right);
-  if (impact < 0.46) {
+  if (impact < TRANSITION_BRIDGE_IMPACT) {
     return null;
   }
   return {
@@ -827,16 +788,16 @@ function sectionStateVector(section) {
 
 function sectionTransitionImpact(left, right) {
   const carrierChange = carrierChangeRatio(left, right);
-  const densityLift = Math.max(0, right.density - left.density);
-  const energyLift = Math.max(0, right.energy - left.energy);
+  const densityShift = Math.abs(right.density - left.density);
+  const energyShift = Math.abs(right.energy - left.energy);
   const noveltyLift = Math.max(0, right.novelty - left.novelty);
   const distanceLift = Math.max(0, right.memoryDistance - left.memoryDistance);
   const closureLift = Math.max(0, right.closurePressure - left.closurePressure);
   const foregroundLift = carrierChange > 0 ? 0.1 : 0;
   return clamp(
     carrierChange * 0.34
-      + densityLift * 0.24
-      + energyLift * 0.44
+      + densityShift * 0.22
+      + energyShift * 0.38
       + noveltyLift * 0.18
       + distanceLift * 0.18
       + closureLift * 0.1
@@ -896,30 +857,50 @@ function withSectionRoleCarrier(section, name, carrier) {
 function addIdentity(events, role, timbres, tonic, scale, chordRoot, bar, localBar, sectionState, seedText) {
   if (role.carrier === "melodic-line") {
     const pattern = generateMelodicLine(seedText, localBar, sectionState);
-    for (const [step, offset, duration] of pattern) {
-      events.push(noteEvent("lead", bar, step, duration, [degreeNote(tonic, scale, chordRoot + offset, 12)], "identity", 0.13 * sectionState.identityLevel));
+    for (const [index, [step, offset, duration]] of pattern.entries()) {
+      const accent = identityMotifAccent(seedText, role.carrier, sectionState, localBar, step, index, pattern.length);
+      events.push(noteEvent("lead", bar, step, duration, [degreeNote(tonic, scale, chordRoot + offset, 12)], "identity", 0.13 * sectionState.identityLevel * accent));
     }
     return;
   }
   if (role.carrier === "bass-riff") {
     const pattern = generateBassRiff(seedText, localBar, sectionState, "identity");
-    for (const [step, offset] of pattern) {
-      events.push(noteEvent("bass", bar, step, bassDuration(step), [degreeNote(tonic, scale, chordRoot + offset, -24)], "identity", 0.17 * sectionState.identityLevel));
+    for (const [index, [step, offset]] of pattern.entries()) {
+      const accent = identityMotifAccent(seedText, role.carrier, sectionState, localBar, step, index, pattern.length);
+      events.push(noteEvent("bass", bar, step, bassDuration(step), [degreeNote(tonic, scale, chordRoot + offset, -24)], "identity", 0.17 * sectionState.identityLevel * accent));
     }
     return;
   }
   if (role.carrier === "harmony-arp") {
     const pattern = generateHarmonyArp(seedText, localBar, sectionState, "identity");
-    for (const [step, offset, duration] of pattern) {
-      events.push(noteEvent("chord", bar, step, duration, [degreeNote(tonic, scale, chordRoot + offset, 12)], "identity", 0.075 * sectionState.identityLevel));
+    for (const [index, [step, offset, duration]] of pattern.entries()) {
+      const accent = identityMotifAccent(seedText, role.carrier, sectionState, localBar, step, index, pattern.length);
+      events.push(noteEvent("chord", bar, step, duration, [degreeNote(tonic, scale, chordRoot + offset, 12)], "identity", 0.075 * sectionState.identityLevel * accent));
     }
     return;
   }
   const barLift = localBar === 7 ? 1.12 : 1;
-  for (const hit of generateRhythmHook(seedText, localBar, sectionState, "identity")) {
+  const hits = generateRhythmHook(seedText, localBar, sectionState, "identity");
+  for (const [index, hit] of hits.entries()) {
+    const accent = identityMotifAccent(seedText, role.carrier, sectionState, localBar, hit.step, index, hits.length);
     const base = hit.sound === "kick" ? 0.22 : hit.sound === "snare" ? 0.17 : 0.085;
-    events.push(noiseEvent("drums", bar, hit.step, hit.sound, "identity", base * hit.weight * sectionState.identityLevel * barLift));
+    events.push(noiseEvent("drums", bar, hit.step, hit.sound, "identity", base * hit.weight * sectionState.identityLevel * barLift * accent));
   }
+}
+
+function identityMotifAccent(seedText, carrier, sectionState, localBar, step, index, count) {
+  const barShape = phraseBar(sectionState, localBar);
+  const cell = generatedRhythmCell(seedText, "identity", carrier, sectionState, count);
+  const anchors = projectRhythmCell(cell, {
+    min: 0,
+    max: 15,
+    minGap: barShape.pace < 0.44 ? 4 : 2,
+  });
+  const rhythmScore = Math.max(...anchors.map((anchor) => gaussianScore(step, anchor, 0.9)));
+  const position = count <= 1 ? 0 : index / (count - 1);
+  const contourScore = Math.max(...cell.map((point) => gaussianScore(position, point, 0.18)));
+  const memory = motifPresence(seedText, carrier, localBar, sectionState);
+  return 0.88 + rhythmScore * (0.12 + memory * 0.18) + contourScore * memory * 0.08;
 }
 
 function generateMelodicLine(seedText, localBar, sectionState) {
@@ -939,28 +920,177 @@ function generateMelodicLine(seedText, localBar, sectionState) {
     : barShape.tension > 0.58 && barShape.closure < 0.58
       ? randomInt(rng, 11, 14)
       : randomInt(rng, 9, 15);
-  const steps = stochasticOnsets(rng, count, {
-    min: start,
-    max: phraseEndStep,
-    anchorEnd: phraseEndStep,
-    strongBeatBias: sparse ? 0.28 : 0.52,
-    syncopation: barShape.syncopation + sectionState.variant * 0.06 + rng() * 0.12,
-    minGap: barShape.pace < 0.34 || sparse ? 4 : barShape.pace < 0.56 ? 3 : 2,
+  const steps = melodicPhraseOnsets(seedText, localBar, sectionState, {
+    count,
+    start,
+    phraseEndStep,
+    sparse,
   });
-  return shapeMelodicPhrase(steps.map((step) => [step, 0, melodicDuration(step, phraseEndStep, sparse, barShape.pace, rng)]), localBar, sectionState, rng);
+  return shapeMelodicPhrase(steps.map((step) => [step, 0, melodicDuration(step, phraseEndStep, sparse, barShape.pace, rng)]), localBar, sectionState, rng, seedText);
 }
 
-function shapeMelodicPhrase(pattern, localBar, sectionState, rng) {
+function melodicPhraseOnsets(seedText, localBar, sectionState, { count, start, phraseEndStep, sparse }) {
+  const barShape = phraseBar(sectionState, localBar);
+  const phraseRng = motifRng(seedText, "identity", "melodic-line", "rhythm", sectionState);
+  const barRng = eventRng(seedText, "identity-phrase-bar", "melodic-line", sectionState, localBar);
+  const memory = motifPresence(seedText, "melodic-line", localBar, sectionState);
+  const baseCount = clamp(Math.round(2 + phraseRng() * 3 + Number(sectionState.density > 0.58) - Number(sparse)), 1, 6);
+  const baseEnd = clamp(Math.round(12 + phraseRng() * 3), start + 2, phraseEndStep);
+  const baseSteps = projectRhythmCell(generatedRhythmCell(seedText, "identity", "melodic-line", sectionState, baseCount), {
+    min: start,
+    max: baseEnd,
+    minGap: sparse ? 4 : 3,
+  });
+  const sourceSteps = rhythmMotifSourceSteps(baseSteps, barRng, {
+    count: baseCount,
+    min: start,
+    max: baseEnd,
+    minGap: sparse ? 4 : 3,
+    memory,
+    strongBeatBias: sparse ? 0.28 : 0.5,
+    syncopation: barShape.syncopation,
+  });
+  const motif = developRhythmMotif(sourceSteps, barShape, localBar, barRng, memory, "identity");
+  return fitRhythmMotif(motif, count, {
+    min: start,
+    max: phraseEndStep,
+    minGap: sparse ? 3 : barShape.pace < 0.46 ? 3 : 2,
+    rng: barRng,
+    syncopation: barShape.syncopation,
+  });
+}
+
+function motifRng(seedText, role, carrier, layer, sectionState = null) {
+  const motifIdentity = sectionState
+    ? sectionState.motifVariant
+    : "song";
+  return mulberry32(hashSeed([seedText, "phrase-motif", role, carrier, layer, motifIdentity].join(":")));
+}
+
+function motifPresence(seedText, carrier, localBar, sectionState) {
+  const rng = motifRng(seedText, "identity", carrier, "presence", sectionState);
+  const phase = rng() * Math.PI * 2;
+  const phraseWave = (Math.cos(localBar * Math.PI * 0.5 + phase) + 1) * 0.5;
+  const returnWave = (Math.cos(localBar * Math.PI + phase * 0.47) + 1) * 0.5;
+  const barShape = phraseBar(sectionState, localBar);
+  const field = 0.24
+    + phraseWave * (1.08 + sectionState.stability * 0.34)
+    + returnWave * 0.34
+    + barShape.boundary * 0.24
+    - sectionState.memoryDistance * 0.28
+    - barShape.tension * 0.18;
+  return 0.42 + 0.52 / (1 + Math.exp(-field));
+}
+
+function rhythmMotifSourceSteps(baseSteps, rng, { count, min, max, minGap, memory, strongBeatBias, syncopation }) {
+  const freshSteps = stochasticOnsets(rng, count, {
+    min,
+    max,
+    strongBeatBias,
+    syncopation,
+    minGap,
+  });
+  return baseSteps.map((step, index) => {
+    const fresh = freshSteps[index % freshSteps.length] ?? step;
+    return clamp(Math.round(interpolate(fresh, step, memory)), min, max);
+  });
+}
+
+function generatedRhythmCell(seedText, role, carrier, sectionState, countHint) {
+  const rng = motifRng(seedText, role, carrier, "rhythm-cell", sectionState);
+  const count = clamp(Math.round(countHint), 2, 5);
+  const accents = [];
+  const phase = rng() * 0.18;
+  const spread = 0.68 + rng() * 0.22;
+  for (let index = 0; index < count; index += 1) {
+    const progress = count <= 1 ? 0 : index / (count - 1);
+    const curve = progress ** (0.82 + rng() * 0.32);
+    const swing = Math.sin((index + 1) * 1.7 + phase * 7) * (0.035 + rng() * 0.035);
+    accents.push(clamp(phase + curve * spread + swing, 0, 1));
+  }
+  return [...new Set(accents.map((accent) => round2(accent)))].sort((left, right) => left - right);
+}
+
+function projectRhythmCell(cell, { min, max, minGap }) {
+  const span = Math.max(1, max - min);
+  const projected = cell.map((point) => clamp(Math.round(min + point * span), min, max));
+  const result = [];
+  for (const step of projected) {
+    const shifted = nearestOpenStep(step, result, min, max, minGap);
+    result.push(shifted);
+  }
+  return [...new Set(result)].sort((left, right) => left - right);
+}
+
+function nearestOpenStep(step, selected, min, max, minGap) {
+  const candidates = Array.from({ length: max - min + 1 }, (_, index) => min + index)
+    .filter((candidate) => selected.every((other) => Math.abs(candidate - other) >= minGap));
+  return candidates.reduce((best, candidate) => (
+    Math.abs(candidate - step) < Math.abs(best - step) ? candidate : best
+  ), candidates[0] ?? step);
+}
+
+function developRhythmMotif(baseSteps, barShape, localBar, rng, memory = 0.7, priority = "texture") {
+  const rhythmIdentity = priority === "identity" ? 1 : 0;
+  const phraseLift = barShape.pickup * 0.42 + barShape.tension * 0.18 - barShape.stability * 0.12;
+  const barWave = Math.sin((localBar + 1) * 1.17 + barShape.targetCenter * 0.8);
+  const phraseShift = weightedPick([
+    { item: -1, weight: (0.08 + Math.max(0, -barWave) * 0.08 + (1 - memory) * 0.14) * (1 - rhythmIdentity * 0.72) },
+    { item: 0, weight: 0.58 + barShape.stability * 0.24 + memory * 0.42 + rhythmIdentity * 0.78 },
+    { item: 1, weight: (0.1 + phraseLift * 0.12 + Math.max(0, barWave) * 0.08 + (1 - memory) * 0.12) * (1 - rhythmIdentity * 0.72) },
+    { item: 2, weight: (0.02 + barShape.pickup * 0.08) * (1 - rhythmIdentity * 0.84) },
+  ], rng);
+  return baseSteps.map((step, index) => {
+    const localNudge = weightedPick([
+      { item: -1, weight: (0.04 + barShape.syncopation * 0.05 + (1 - memory) * 0.1) * (1 - rhythmIdentity * 0.76) },
+      { item: 0, weight: 0.62 - barShape.syncopation * 0.08 + index * 0.01 + memory * 0.38 + rhythmIdentity * 0.7 },
+      { item: 1, weight: (0.06 + barShape.pickup * 0.05 + (1 - memory) * 0.1) * (1 - rhythmIdentity * 0.76) },
+    ], rng);
+    return step + phraseShift + localNudge;
+  });
+}
+
+function fitRhythmMotif(motif, count, { min, max, minGap, rng, syncopation, priority = "texture" }) {
+  const rhythmIdentity = priority === "identity" ? 1 : 0;
+  const targetCount = clamp(Math.round(count), 1, 7);
+  const normalized = [...new Set(motif.map((step) => clamp(Math.round(step), min, max)))].sort((left, right) => left - right);
+  const expanded = [...normalized];
+  const expansionPool = [min, 2, 4, 6, 8, 10, 12, max]
+    .map((step) => clamp(step + weightedPick([
+      { item: -1, weight: syncopation * 0.18 },
+      { item: 0, weight: 0.72 },
+      { item: 1, weight: 0.1 + syncopation * 0.16 },
+    ], rng), min, max));
+  const additions = expansionPool
+    .filter((step) => expanded.every((other) => Math.abs(other - step) >= minGap))
+    .sort((left, right) => onsetWeight(right, { syncopation }) - onsetWeight(left, { syncopation }))
+    .slice(0, Math.max(0, Math.min(1 - rhythmIdentity, targetCount - expanded.length)));
+  return [...expanded, ...additions]
+    .sort((left, right) => left - right)
+    .filter((step, index, steps) => index === 0 || step - steps[index - 1] >= minGap)
+    .slice(0, Math.max(1, targetCount - rhythmIdentity * Math.max(0, targetCount - normalized.length)));
+}
+
+function shapeMelodicPhrase(pattern, localBar, sectionState, rng, seedText) {
   const barShape = phraseBar(sectionState, localBar);
   const frame = melodicFrameForBar(sectionState, barShape, rng);
   const targetPitch = melodicTargetForBar(frame, barShape);
   const count = pattern.length;
   const candidates = Array.from({ length: frame.max - frame.min + 1 }, (_, index) => frame.min + index);
+  const motifOffsets = identityContourOffsets(pattern, "melodic-line", {
+    seedText,
+    localBar,
+    sectionState,
+    rng,
+    min: frame.min,
+    max: frame.max,
+  });
   const offsets = samplePitchPath(candidates, count, rng, {
     initialPitch: frame.start,
     targetPitch,
     barShape,
     sectionState,
+    motifOffsets,
     exactFinal: barShape.boundary > 0.72,
   });
 
@@ -973,6 +1103,63 @@ function shapeMelodicPhrase(pattern, localBar, sectionState, rng) {
     const nextDuration = isLanding ? Math.max(duration, barShape.boundary > 0.58 ? 3 : 2) : Math.max(barShape.pace < 0.38 ? 3 : 2, duration);
     return [step, offset, nextDuration];
   });
+}
+
+function identityContourOffsets(pattern, carrier, { seedText, localBar, sectionState, rng, min, max }) {
+  const source = generatedContourMotif(seedText, carrier, Math.max(3, pattern.length), min, max, sectionState);
+  const barShape = phraseBar(sectionState, localBar);
+  const memory = motifPresence(seedText, carrier, localBar, sectionState);
+  const centerShift = clamp(Math.round(
+    sectionState.degreeOffset * 0.28
+      + barShape.targetCenter * 1.4
+      + barShape.heightBias * 0.9
+      + weightedPick([
+        { item: -1, weight: 0.12 + barShape.stability * 0.04 },
+        { item: 0, weight: 0.72 + barShape.stability * 0.3 },
+        { item: 1, weight: 0.12 + barShape.pickup * 0.08 + barShape.tension * 0.04 },
+      ], rng)
+  ), min - Math.max(...source), max - Math.min(...source));
+  return pattern.map((_, index) => {
+    const base = source[index % source.length];
+    const fresh = randomInt(rng, min, max);
+    const breath = weightedPick([
+      { item: -1, weight: 0.05 + barShape.syncopation * 0.06 + (1 - memory) * 0.08 },
+      { item: 0, weight: 0.7 + barShape.stability * 0.18 + memory * 0.2 },
+      { item: 1, weight: 0.06 + barShape.pickup * 0.06 + (1 - memory) * 0.08 },
+    ], rng);
+    return clamp(Math.round(interpolate(fresh, base + centerShift + breath, clamp(memory + 0.08, 0, 1))), min, max);
+  });
+}
+
+function generatedContourMotif(seedText, carrier, length, min, max, sectionState) {
+  const rng = motifRng(seedText, "identity", carrier, "contour", sectionState);
+  const span = Math.max(1, max - min);
+  const start = clamp(Math.round(interpolate(min, max, 0.36 + rng() * 0.26)), min, max);
+  const direction = weightedPick([
+    { item: -1, weight: 0.36 },
+    { item: 1, weight: 0.44 },
+    { item: 0, weight: 0.2 },
+  ], rng);
+  const contour = [start];
+  let previous = start;
+  let previousDirection = direction;
+  for (let index = 1; index < length; index += 1) {
+    const interval = weightedPick([
+      { item: -3, weight: previousDirection < 0 ? 0.18 : 0.08 },
+      { item: -2, weight: previousDirection < 0 ? 0.26 : 0.12 },
+      { item: -1, weight: 0.22 },
+      { item: 0, weight: 0.14 },
+      { item: 1, weight: 0.24 },
+      { item: 2, weight: previousDirection > 0 ? 0.28 : 0.14 },
+      { item: 3, weight: previousDirection > 0 ? 0.18 : 0.08 },
+    ], rng);
+    const gravity = Math.round((start - previous) / Math.max(2, span * 0.7));
+    const next = clamp(previous + interval + gravity, min, max);
+    previousDirection = Math.sign(next - previous) || previousDirection;
+    previous = next;
+    contour.push(next);
+  }
+  return contour;
 }
 
 function melodicFrameForBar(sectionState, barShape, rng) {
@@ -1029,7 +1216,7 @@ function melodicTargetForBar(frame, barShape) {
   return clamp(Math.round(openTarget), frame.min, frame.max);
 }
 
-function samplePitchPath(candidates, count, rng, { initialPitch, targetPitch, barShape, sectionState, exactFinal = false }) {
+function samplePitchPath(candidates, count, rng, { initialPitch, targetPitch, barShape, sectionState, motifOffsets = [], exactFinal = false }) {
   const path = [];
   const used = [];
   let previous = nearestCandidate(candidates, initialPitch);
@@ -1050,6 +1237,8 @@ function samplePitchPath(candidates, count, rng, { initialPitch, targetPitch, ba
       const bridgeScore = gaussianScore(pitch, bridgeCenter, 0.9 + localRandomness * 3.8);
       const targetScore = gaussianScore(pitch, targetPitch, 1.1 + (1 - targetPull) * 5);
       const smoothScore = gaussianScore(pitch, previous, 1.0 + localRandomness * 5.5);
+      const motifTarget = motifOffsets[index];
+      const motifScore = Number.isFinite(motifTarget) ? gaussianScore(pitch, motifTarget, 0.9 + localRandomness * 2.6) : 0;
       const actualDirection = Math.sign(pitch - previous);
       const reversal = previousDirection && actualDirection && actualDirection !== previousDirection;
       const reversalPenalty = reversal ? 0.54 + localRandomness * 0.54 : 1;
@@ -1063,6 +1252,7 @@ function samplePitchPath(candidates, count, rng, { initialPitch, targetPitch, ba
           + bridgeScore * 0.52
           + targetScore * (0.16 + targetPull * 0.44)
           + smoothScore * 0.28
+          + motifScore * (0.34 + barShape.stability * 0.42)
           + feasible * 0.18
           + rng() * localRandomness * 0.08
         ) * reversalPenalty * repeatWeight * reuseWeight),
@@ -1226,25 +1416,37 @@ function generateBassRiff(seedText, localBar, sectionState, role) {
   const rng = eventRng(seedText, role, "bass-riff", sectionState, localBar);
   const barShape = phraseBar(sectionState, localBar);
   const count = clamp(Math.round(1.4 + barShape.pace * 2.2 + Number(rng() > 0.68 - barShape.pickup * 0.22 && sectionState.density > 0.28)), 1, 4);
-  const steps = stochasticOnsets(rng, count, {
+  const baseRng = motifRng(seedText, role, "bass-riff", "rhythm", sectionState);
+  const baseCount = clamp(Math.round(2 + baseRng() * 2), 2, 4);
+  const baseSteps = projectRhythmCell(generatedRhythmCell(seedText, role, "bass-riff", sectionState, baseCount), {
     min: 0,
     max: 14,
-    anchorStart: true,
-    strongBeatBias: 0.72,
-    syncopation: 0.18 + barShape.syncopation * 0.65 + rng() * 0.18,
     minGap: barShape.pace < 0.42 ? 5 : 3,
   });
+  const steps = fitRhythmMotif(developRhythmMotif(baseSteps, barShape, localBar, rng, motifPresence(seedText, "bass-riff", localBar, sectionState), "identity"), count, {
+    min: 0,
+    max: 14,
+    minGap: barShape.pace < 0.42 ? 5 : 3,
+    rng,
+    syncopation: barShape.syncopation,
+    priority: "identity",
+  });
+  const contour = identityContourOffsets(steps, "bass-riff", {
+    seedText,
+    localBar,
+    sectionState,
+    rng,
+    min: -1,
+    max: 4,
+  });
   return steps.map((step, index) => {
-    if (index === 0 || barShape.boundary > 0.58 && index === steps.length - 1 && rng() < 0.62) {
-      return [step, 0];
-    }
-    const approachWeight = step >= 11 ? 0.36 : 0.18;
+    const approachWeight = step >= 11 ? 0.28 : 0.12;
+    const motifOffset = contour[index] ?? 0;
     const offset = weightedPick([
-      { item: 0, weight: 0.28 },
-      { item: 1, weight: 0.18 + approachWeight },
-      { item: 2, weight: 0.24 },
-      { item: 4, weight: 0.18 },
-      { item: -1, weight: 0.12 },
+      { item: motifOffset, weight: 0.62 },
+      { item: clamp(motifOffset + 1, -1, 4), weight: 0.14 + approachWeight },
+      { item: clamp(motifOffset - 1, -1, 4), weight: 0.14 },
+      { item: 0, weight: 0.18 },
     ], rng);
     return [step, offset];
   });
@@ -1259,9 +1461,31 @@ function generateHarmonyArp(seedText, localBar, sectionState, role) {
     minimum: barShape.pace < 0.34 ? 1 : 2,
     burst: 0.04 + barShape.tension * 0.08 + barShape.pickup * 0.1,
   });
-  const steps = pulseOnsets(rng, count, { phaseMax: 3, minGap: barShape.pace < 0.5 ? 4 : 3, strongBeatBias: 0.2, syncopation: 0.58 + barShape.syncopation * 0.16 });
+  const baseRng = motifRng(seedText, role, "harmony-arp", "rhythm", sectionState);
+  const baseCount = clamp(Math.round(2 + baseRng() * 3), 2, 5);
+  const baseSteps = projectRhythmCell(generatedRhythmCell(seedText, role, "harmony-arp", sectionState, baseCount), {
+    min: 0,
+    max: 15,
+    minGap: barShape.pace < 0.5 ? 4 : 3,
+  });
+  const steps = fitRhythmMotif(developRhythmMotif(baseSteps, barShape, localBar, rng, motifPresence(seedText, "harmony-arp", localBar, sectionState), "identity"), count, {
+    min: 0,
+    max: 15,
+    minGap: barShape.pace < 0.5 ? 4 : 3,
+    rng,
+    syncopation: barShape.syncopation,
+    priority: "identity",
+  });
   const harmonicTargets = harmonicTargetsForBar(barShape);
   const candidates = Array.from({ length: 11 }, (_, value) => value - 1);
+  const motifOffsets = identityContourOffsets(steps, "harmony-arp", {
+    seedText,
+    localBar,
+    sectionState,
+    rng,
+    min: -1,
+    max: 9,
+  });
   const initialPitch = weightedPick(harmonicTargets.map((target) => ({ item: target, weight: target <= 4 ? 0.42 : 0.24 })), rng);
   const targetPitch = weightedPick(harmonicTargets.map((target) => ({ item: target, weight: barShape.boundary > 0.6 && target <= 2 ? 0.48 : 0.24 })), rng);
   const offsets = samplePitchPath(candidates, steps.length, rng, {
@@ -1269,6 +1493,7 @@ function generateHarmonyArp(seedText, localBar, sectionState, role) {
     targetPitch,
     barShape,
     sectionState,
+    motifOffsets,
   });
   return steps.map((step, index) => {
     const offset = offsets[index];
@@ -1987,7 +2212,7 @@ function playbackToneFor({ height, brightness, presence, attack, punch }) {
     bassFilter: 1,
     noiseFilter: 1,
     leadGain: round2(2 ** (presenceCentered * 1.45)),
-    harmonyGain: round2(2 ** (-presenceCentered * 0.38)),
+    harmonyGain: round2(0.74 * 2 ** (-presenceCentered * 0.38)),
     bassGain: round2(2 ** (-presenceCentered * 0.24)),
     highPercussionGain: 1,
     lowPercussionGain: 1,
