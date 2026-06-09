@@ -109,7 +109,7 @@ function configureWorkspaceChangeListener() {
     }
     applyWorkspaceChangedPayload(payload).catch((error) => {
       console.error(error);
-      setEditorStatus("External reload failed", "is-error");
+      setEditorStatus(externalReloadErrorMessage(error), "is-error");
     });
   }).then((unlisten) => {
     workspaceChangeUnlisten = typeof unlisten === "function" ? unlisten : null;
@@ -135,7 +135,7 @@ function endWorkspaceHostMutation() {
     deferredWorkspaceChangedPayload = null;
     applyWorkspaceChangedPayload(payload).catch((error) => {
       console.error(error);
-      setEditorStatus("External reload failed", "is-error");
+      setEditorStatus(externalReloadErrorMessage(error), "is-error");
     });
   });
 }
@@ -402,7 +402,7 @@ async function applyWorkspaceChangedPayload(payload) {
     return;
   }
   if (payload.error) {
-    setEditorStatus("External reload failed", "is-error");
+    setEditorStatus(externalReloadErrorMessage(payload.error), "is-error");
     return;
   }
   const root = payload.workspaceRoot || "";
@@ -487,6 +487,11 @@ async function applyWorkspaceChangedPayload(payload) {
   } else {
     setEditorStatus("Reloaded external changes", "is-ok");
   }
+}
+
+function externalReloadErrorMessage(error) {
+  const message = String(error?.message || error || "").trim();
+  return message ? `External reload failed: ${message}` : "External reload failed";
 }
 
 function documentIdentityKey(document) {
@@ -2440,9 +2445,15 @@ async function removeWorkspaceNode(nodeId) {
   }
 }
 
+const STARTER_PUZZLE_SOURCE = "__PUZZLESTUDIO_NEW_PUZZLE_SOURCE__";
+
 function starterPuzzleSource(name) {
   const title = name.replace(/\.puzzle$/i, "").replace(/[^\w]+/g, " ").trim() || "New Puzzle";
-  return `title ${JSON.stringify(title)}\n\npuzzle main {\n\tlayers {\n\t\tfloor = Goal\n\t\tsolid = Player Wall\n\t}\n\n\tinputs {\n\t\tup <- w ArrowUp\n\t\tdown <- s ArrowDown\n\t\tleft <- a ArrowLeft\n\t\tright <- d ArrowRight\n\t\trestart <- r\n\t}\n\n\twin_conditions {\n\t\texists(Goal)\n\t\tnone([ Goal no Player ])\n\t}\n\n\ton_level_clear {\n\t\tnext_level\n\t}\n\n\trules {\n\t\tfor d in directions {\n\t\t\tif input == d {\n\t\t\t\tonce d [ Player | no solid ] -> [ | Player ]\n\t\t\t}\n\t\t}\n\t}\n}\n\nlevels demo of main {\n\tlegend {\n\t\t. = empty\n\t\t# = Wall\n\t\tP = Player\n\t\tG = Goal\n\t\t+ = Player Goal\n\t}\n\n\tlevel level_1\n\t#######\n\t#P...G#\n\t#######\n\n\tlevel level_2\n\t#######\n\t#P....#\n\t#..G..#\n\t#######\n}\n`;
+  const defaultTitleLine = "title \"New Puzzle\"";
+  if (!STARTER_PUZZLE_SOURCE.startsWith(`${defaultTitleLine}\n`)) {
+    throw new Error("new puzzle template title line is missing");
+  }
+  return `title ${JSON.stringify(title)}${STARTER_PUZZLE_SOURCE.slice(defaultTitleLine.length)}`;
 }
 
 function activeFolder() {

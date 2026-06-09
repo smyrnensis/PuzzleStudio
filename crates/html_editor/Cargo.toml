@@ -11,4 +11,5 @@ path = "src/main.rs"
 
 [dependencies]
 html-play = { path = "../html_play" }
+puzzle-authoring = { path = "../authoring" }
 puzzle-lang = { path = "../lang" }

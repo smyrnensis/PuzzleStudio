@@ -4476,7 +4476,23 @@ input backward [ Player | ] -> [ | Player ]
         assert_eq!(snapshot.cells[0].objects.len(), 1);
         assert_eq!(snapshot.cells[0].objects[0].id, PLAYER);
         assert_eq!(snapshot.cells[0].objects[0].name, "Player");
-        assert_eq!(snapshot.cells[0].objects[0].sprite, "cube");
+        assert_eq!(snapshot.cells[0].objects[0].sprite.as_deref(), Some("cube"));
+    }
+
+    #[test]
+    fn visual_snapshot_does_not_assign_implicit_sprite_when_visual_is_missing() {
+        let game = game();
+        let mut state = empty_state(3, 3, 3);
+        state
+            .place_object(&game, Coord3::new(1, 1, 1), PLAYER)
+            .unwrap();
+
+        let snapshot = VisualSnapshot3::from_state(&state, &[]);
+
+        assert_eq!(snapshot.cells.len(), 1);
+        assert_eq!(snapshot.cells[0].objects[0].id, PLAYER);
+        assert_eq!(snapshot.cells[0].objects[0].name, "object_1");
+        assert_eq!(snapshot.cells[0].objects[0].sprite, None);
     }
 
     #[test]
