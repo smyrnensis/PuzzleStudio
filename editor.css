@@ -2758,10 +2758,6 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   white-space: nowrap;
 }
 
-.level-scope-toggle {
-  flex: 0 1 auto;
-}
-
 .level-expand-button,
 .level-shrink-button {
   flex: 0 0 var(--icon-button-size);
@@ -5177,8 +5173,7 @@ html.is-sprite3d-slice-scrubbing * {
   color: var(--danger);
 }
 
-.sprite3d-scope-toggle,
-.level-scope-toggle {
+.sprite3d-scope-toggle {
   min-width: 0;
   min-height: 24px;
   display: inline-flex;
@@ -5199,8 +5194,7 @@ html.is-sprite3d-slice-scrubbing * {
   text-transform: uppercase;
 }
 
-.sprite3d-scope-button,
-.level-scope-button {
+.sprite3d-scope-button {
   width: 22px;
   min-width: 22px;
   height: 20px;
@@ -5209,15 +5203,13 @@ html.is-sprite3d-slice-scrubbing * {
   color: var(--muted);
 }
 
-.sprite3d-scope-button.is-active,
-.level-scope-button.is-active {
+.sprite3d-scope-button.is-active {
   background: color-mix(in srgb, var(--accent) 20%, var(--control-bg));
   color: var(--ink);
   box-shadow: none;
 }
 
-.sprite3d-scope-button svg,
-.level-scope-button svg {
+.sprite3d-scope-button svg {
   width: 14px;
   height: 14px;
 }
