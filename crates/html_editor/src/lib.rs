@@ -104,7 +104,7 @@ fn run(args: impl IntoIterator<Item = String>) -> Result<(), AppError> {
     let service = Arc::new(service);
     let (listener, port) = bind_listener(config.port)?;
 
-    println!("html-editor serving http://127.0.0.1:{port}/editor.html");
+    println!("html-editor serving http://127.0.0.1:{port}/editor");
     println!("puzzle: {}", config.puzzle_path.display());
 
     for stream in listener.incoming() {
@@ -253,27 +253,14 @@ impl EditorService {
         }
         let source = fs::read_to_string(&puzzle_path)?;
         let base_game_visuals_js = load_base_game_visuals_js(&puzzle_path, &workspace_root)?;
-        let expanded_source = expand_preview_source(&source, &puzzle_path).map_err(|error| {
-            AppError::Config(format!(
-                "failed to expand preview imports for {}: {error}",
-                puzzle_path.display()
-            ))
-        })?;
-        let game_visuals_js = load_game_visuals_js(&expanded_source, &base_game_visuals_js)
-            .map_err(|error| {
-                AppError::Config(format!(
-                    "failed to generate editor visuals for {}: {error}",
-                    puzzle_path.display()
-                ))
-            })?;
         Ok(Self {
             state: EditorState {
                 puzzle_path: puzzle_path.display().to_string(),
                 workspace_root: workspace_root.display().to_string(),
                 source,
                 game_css: load_game_css(&puzzle_path, &workspace_root)?,
+                game_visuals_js: base_game_visuals_js.clone(),
                 base_game_visuals_js,
-                game_visuals_js,
                 documents: load_editor_documents(&puzzle_path, &workspace_root)?,
             },
         })
@@ -545,10 +532,6 @@ fn percent_encode(value: &str) -> String {
     out
 }
 
-fn load_game_visuals_js(source: &str, base_visuals_js: &str) -> Result<String, AppError> {
-    html_play::export_visuals_js_from_source(source, base_visuals_js).map_err(AppError::Config)
-}
-
 fn expand_preview_source(source: &str, puzzle_path: &Path) -> Result<String, AppError> {
     puzzle_lang::validate_source_profile_for_path(source, puzzle_path)
         .map_err(|error| AppError::Config(error.to_string()))?;
@@ -622,34 +605,10 @@ fn load_editor_documents(
     for path in paths {
         if puzzle_lang::is_puzzle_source_path(&path) {
             let source = read_workspace_text_file(&path, workspace_root)?;
-            let (game_css, game_visuals_js) = if let Some(entry_path) =
-                preview_entry_for_document(&path, &source, &parent)
-            {
-                let entry_source = if entry_path == path {
-                    source.clone()
-                } else {
-                    read_workspace_text_file(&entry_path, workspace_root)?
-                };
-                let game_css = load_game_css(&entry_path, workspace_root)?;
-                let base_game_visuals_js = load_base_game_visuals_js(&entry_path, workspace_root)?;
-                let expanded_source =
-                    expand_preview_source(&entry_source, &entry_path).map_err(|error| {
-                        AppError::Config(format!(
-                            "failed to expand preview imports for {}: {error}",
-                            entry_path.display()
-                        ))
-                    })?;
-                let game_visuals_js = load_game_visuals_js(&expanded_source, &base_game_visuals_js)
-                    .map_err(|error| {
-                        AppError::Config(format!(
-                            "failed to generate editor visuals for {}: {error}",
-                            entry_path.display()
-                        ))
-                    })?;
-                (game_css, game_visuals_js)
-            } else {
-                (String::new(), String::new())
-            };
+            let game_css = preview_entry_for_document(&path, &source, &parent)
+                .map(|entry_path| load_game_css(&entry_path, workspace_root))
+                .transpose()?
+                .unwrap_or_default();
             documents.push(EditorDocument {
                 puzzle_path: path.display().to_string(),
                 encoding: "text".to_string(),
@@ -659,7 +618,7 @@ fn load_editor_documents(
                 preview_html: String::new(),
                 preview_error: String::new(),
                 game_css,
-                game_visuals_js,
+                game_visuals_js: String::new(),
             });
         } else if is_text_file(&path) {
             documents.push(EditorDocument {
@@ -1005,7 +964,7 @@ fn parse_content_length(header: &[u8]) -> usize {
 
 fn route(request: &HttpRequest, service: &EditorService) -> Vec<u8> {
     match (request.method.as_str(), request.path.as_str()) {
-        ("GET", "/") | ("GET", "/editor") | ("GET", "/editor.html") => {
+        ("GET", "/") | ("GET", "/editor") => {
             let html = editor_html_with_docs();
             http_ok("text/html; charset=utf-8", &html)
         }
@@ -1019,7 +978,7 @@ fn route(request: &HttpRequest, service: &EditorService) -> Vec<u8> {
         ("GET", "/editor_boot.js") => http_ok("text/javascript; charset=utf-8", EDITOR_BOOT_JS),
         ("GET", "/editor_dom.js") => http_ok("text/javascript; charset=utf-8", EDITOR_DOM_JS),
         ("GET", "/editor_workspace.js") => {
-            http_ok("text/javascript; charset=utf-8", EDITOR_WORKSPACE_JS)
+            http_ok("text/javascript; charset=utf-8", &editor_workspace_js())
         }
         ("GET", "/editor_source.js") => http_ok("text/javascript; charset=utf-8", EDITOR_SOURCE_JS),
         ("GET", "/editor_level3d.js") => {
@@ -1561,7 +1520,7 @@ fn write_pages_editor_site(output_path: &Path, html: String) -> Result<(), AppEr
     write_text_asset(output_dir, "editor.css", EDITOR_CSS)?;
     write_text_asset(output_dir, "editor_boot.js", EDITOR_BOOT_JS)?;
     write_text_asset(output_dir, "editor_dom.js", EDITOR_DOM_JS)?;
-    write_text_asset(output_dir, "editor_workspace.js", EDITOR_WORKSPACE_JS)?;
+    write_text_asset(output_dir, "editor_workspace.js", &editor_workspace_js())?;
     write_text_asset(output_dir, "editor_source.js", EDITOR_SOURCE_JS)?;
     write_text_asset(output_dir, "editor_level3d.js", EDITOR_LEVEL3D_JS)?;
     write_text_asset(output_dir, "editor_workbench.js", EDITOR_WORKBENCH_JS)?;
@@ -1610,6 +1569,17 @@ fn write_text_asset(output_dir: &Path, name: &str, contents: &str) -> Result<(),
 
 fn editor_html_with_docs() -> String {
     EDITOR_HTML.replace("<!-- PUZZLESTUDIO_EDITOR_DOCS -->", &render_editor_docs())
+}
+
+fn editor_workspace_js() -> String {
+    const PLACEHOLDER: &str = "\"__PUZZLESTUDIO_NEW_PUZZLE_SOURCE__\"";
+    if !EDITOR_WORKSPACE_JS.contains(PLACEHOLDER) {
+        panic!("editor workspace JS must contain the new puzzle template placeholder");
+    }
+    EDITOR_WORKSPACE_JS.replace(
+        PLACEHOLDER,
+        &js_string_literal(puzzle_authoring::NEW_PUZZLE_TEMPLATE),
+    )
 }
 
 struct EditorDocsPage {
@@ -2069,6 +2039,12 @@ fn push_json_string(out: &mut String, value: &str) {
     out.push('"');
 }
 
+fn js_string_literal(value: &str) -> String {
+    let mut out = String::new();
+    push_json_string(&mut out, value);
+    out
+}
+
 fn escape_script_json(value: &str) -> String {
     let mut escaped = String::new();
     for ch in value.chars() {
@@ -2243,48 +2219,6 @@ step board
             .expect("document with suffix")
     }
 
-    fn starter_puzzle_source_from_editor_js() -> String {
-        let function_start = EDITOR_WORKSPACE_JS
-            .find("function starterPuzzleSource(name) {")
-            .expect("starterPuzzleSource function");
-        let body = &EDITOR_WORKSPACE_JS[function_start..];
-        let literal_start = body
-            .find("return `")
-            .map(|index| index + "return `".len())
-            .expect("starterPuzzleSource template literal");
-        let literal_tail = &body[literal_start..];
-        let literal_end = literal_tail
-            .find("`;\n}")
-            .expect("starterPuzzleSource template literal end");
-        let literal =
-            literal_tail[..literal_end].replace("${JSON.stringify(title)}", "\"New Puzzle\"");
-        decode_js_template_literal(&literal)
-    }
-
-    fn decode_js_template_literal(input: &str) -> String {
-        let mut decoded = String::new();
-        let mut chars = input.chars();
-        while let Some(ch) = chars.next() {
-            if ch != '\\' {
-                decoded.push(ch);
-                continue;
-            }
-            match chars.next() {
-                Some('n') => decoded.push('\n'),
-                Some('t') => decoded.push('\t'),
-                Some('\\') => decoded.push('\\'),
-                Some('`') => decoded.push('`'),
-                Some('$') => decoded.push('$'),
-                Some(other) => {
-                    decoded.push('\\');
-                    decoded.push(other);
-                }
-                None => decoded.push('\\'),
-            }
-        }
-        decoded
-    }
-
     #[test]
     fn open_loads_workspace_documents_with_active_puzzle_first() {
         let workspace = TestWorkspace::new();
@@ -2340,44 +2274,57 @@ step board
     }
 
     #[test]
-    fn open_reports_preview_import_expansion_failure() {
+    fn open_defers_preview_import_expansion_failure_until_compile() {
         let workspace = TestWorkspace::new();
         let source = format!(
             "import \"missing.puzzle\"\n\n{}",
             editor_fixture_source("Broken Import")
         );
         let game_path = workspace.write("games/broken_import/game.puzzle", source);
+        let project_dir = game_path.parent().expect("project dir");
 
-        let error = match EditorService::open(&game_path) {
-            Ok(_) => panic!("broken preview import must fail while opening the editor"),
-            Err(error) => error,
-        };
+        let service =
+            EditorService::open_game_entry(project_dir).expect("open workspace with broken import");
+        let error = service
+            .compile_preview(&PreviewRequest::new(
+                fs::read_to_string(&game_path).expect("read broken import source"),
+                game_path.display().to_string(),
+                String::new(),
+                service.state().base_game_visuals_js.clone(),
+            ))
+            .expect_err("broken preview import must fail while compiling preview");
         let message = error.to_string();
 
         assert!(
-            message.contains("failed to expand preview imports for"),
-            "error should name the failed open-time import expansion, got: {message}"
-        );
-        assert!(
-            message.contains("missing.puzzle"),
-            "error should preserve the missing import path, got: {message}"
+            !message.trim().is_empty(),
+            "compile error should be reported by preview compile, not editor open"
         );
     }
 
     #[test]
-    fn open_reports_editor_visuals_generation_failure() {
+    fn open_defers_editor_visuals_generation_failure_until_compile() {
         let workspace = TestWorkspace::new();
         let game_path = workspace.write("games/broken_visuals/game.puzzle", "title \"Broken\"\n");
 
-        let error = match EditorService::open(&game_path) {
-            Ok(_) => panic!("invalid preview source must fail while generating editor visuals"),
-            Err(error) => error,
-        };
-        let message = error.to_string();
+        let service =
+            EditorService::open(&game_path).expect("open editor with invalid preview source");
+        let document = document_with_suffix(
+            &service.state().documents,
+            "games/broken_visuals/game.puzzle",
+        );
 
+        assert_eq!(document.preview_html, "");
+        assert_eq!(document.preview_error, "");
+        assert_eq!(document.game_visuals_js, "");
         assert!(
-            message.contains("failed to generate editor visuals for"),
-            "error should name the failed open-time visuals generation, got: {message}"
+            service
+                .compile_preview(&PreviewRequest::new(
+                    "title \"Broken\"\n",
+                    game_path.display().to_string(),
+                    String::new(),
+                    service.state().base_game_visuals_js.clone(),
+                ))
+                .is_err()
         );
     }
 
@@ -2733,6 +2680,8 @@ levels3 demo of push3 {
     fn desktop_workspace_mutations_defer_external_reload() {
         assert!(EDITOR_WORKSPACE_JS.contains("let workspaceHostMutationDepth = 0;"));
         assert!(EDITOR_WORKSPACE_JS.contains("let deferredWorkspaceChangedPayload = null;"));
+        assert!(EDITOR_WORKSPACE_JS.contains("function externalReloadErrorMessage(error)"));
+        assert!(EDITOR_WORKSPACE_JS.contains("External reload failed: ${message}"));
         assert!(EDITOR_WORKSPACE_JS.contains("function beginWorkspaceHostMutation()"));
         assert!(EDITOR_WORKSPACE_JS.contains("function endWorkspaceHostMutation()"));
         assert!(EDITOR_WORKSPACE_JS.contains("if (workspaceHostMutationDepth > 0)"));
@@ -2801,7 +2750,10 @@ levels3 demo of push3 {
         assert!(EDITOR_JS.contains("function levelVisibleCells("));
         assert!(EDITOR_JS.contains("function levelVisibleLayerIndexes("));
         assert!(EDITOR_JS.contains("function sameCellSlotsForVisibleLayers("));
-        assert!(EDITOR_JS.contains("function paintCellSlots(slots, objectId, exportData = previewExport)"));
+        assert!(
+            EDITOR_JS
+                .contains("function paintCellSlots(slots, objectId, exportData = previewExport)")
+        );
         assert!(EDITOR_JS.contains("function syncLevelGridVisibility()"));
         assert!(EDITOR_JS.contains(
             "levelBoard?.classList.remove(\"has-occupied-cell-grid\", \"has-all-cell-grid\");"
@@ -2843,7 +2795,9 @@ levels3 demo of push3 {
         assert!(EDITOR_JS.contains("let levelPlaytestActive = false;"));
         assert!(EDITOR_JS.contains("let levelPlaytestStateData = null;"));
         assert!(EDITOR_JS.contains("let levelPlaytestRuntime = null;"));
-        assert!(EDITOR_JS.contains("async function ensurePreviewExportForLevelAction(options = {})"));
+        assert!(
+            EDITOR_JS.contains("async function ensurePreviewExportForLevelAction(options = {})")
+        );
         assert!(EDITOR_JS.contains("function startLevelPlaytest()"));
         assert!(EDITOR_JS.contains("compilingMessage: \"Compiling preview for play\""));
         assert!(EDITOR_JS.contains("function stopLevelPlaytest(options = {})"));
@@ -2958,7 +2912,7 @@ levels3 demo of push3 {
             "levelDefinitionSource(levelName, levelSourceData(), \"\", { leadingBlank: false, bodyIndent: \"\" })"
         ));
         assert!(EDITOR_JS.contains(
-            "const rowIndent = Object.prototype.hasOwnProperty.call(options, \"bodyIndent\") ? options.bodyIndent : `${levelIndent}\\t`;"
+            "const rowIndent = Object.prototype.hasOwnProperty.call(options, \"bodyIndent\") ? options.bodyIndent : levelIndent;"
         ));
         assert!(EDITOR_LEVEL3D_JS.contains(
             "level3dSourcePreview.textContent = level3dSnippetSource(levelName, sourceData, \"\", { bodyIndent: \"\" });"
@@ -2966,6 +2920,36 @@ levels3 demo of push3 {
         assert!(EDITOR_LEVEL3D_JS.contains(
             "const bodyIndent = Object.prototype.hasOwnProperty.call(options, \"bodyIndent\") ? options.bodyIndent : `${indent}  `;"
         ));
+    }
+
+    #[test]
+    fn level_editor_allows_unnamed_2d_levels() {
+        assert!(EDITOR_HTML.contains(r#"id="levelNameInput" type="text" value="""#));
+        assert!(
+            EDITOR_JS.contains(
+                "const name = \"\";\n  const sourceData = defaultEmptyLevel2dSourceData();"
+            )
+        );
+        assert!(EDITOR_JS.contains("return cleaned;\n}"));
+        assert!(
+            EDITOR_JS
+                .contains("levelName ? `${levelIndent}level ${levelName} {` : `${levelIndent}{`")
+        );
+        assert!(EDITOR_JS.contains("setStatus(levelName ? `Updated level ${levelName}` : \"Updated unnamed level\", \"is-ok\");"));
+    }
+
+    #[test]
+    fn level_name_picker_does_not_write_dimension_prefix_into_value() {
+        assert!(
+            !EDITOR_JS.contains(
+                "value: `${editorDimensionLabel(item.dimension)} ${displayName || name}`"
+            )
+        );
+        assert!(
+            EDITOR_JS.contains("value: displayName || name,\n      label: displayName || name,")
+        );
+        assert!(EDITOR_SOURCE_JS.contains("const optionLabel = config.optionLabel || null;"));
+        assert!(EDITOR_SOURCE_JS.contains("button.textContent = entry.label || entry.value;"));
     }
 
     #[test]
@@ -3079,6 +3063,9 @@ levels3 demo of push3 {
         assert!(EDITOR_SOURCE_JS.contains("function sourceHighlightRunsFromDom()"));
         assert!(EDITOR_SOURCE_JS.contains("function sourceHighlightStyleAtOffset(runs, offset)"));
         assert!(EDITOR_SOURCE_JS.contains("function sourcePredictedBeforeInputValue(event)"));
+        assert!(EDITOR_SOURCE_JS.contains("function handleSourceBeforeInputTextInsert(event)"));
+        assert!(EDITOR_SOURCE_JS.contains("sourceEditor.setRangeText(\n    event.data,"));
+        assert!(EDITOR_SOURCE_JS.contains("sourceEditorContentChanged();\n  syncPreviewModeFromSourceCursor();\n  renderSourceCaret();"));
         assert!(
             EDITOR_SOURCE_JS.contains("const predicted = sourcePredictedBeforeInputValue(event);")
         );
@@ -3223,6 +3210,10 @@ levels3 demo of push3 {
                 .contains("level3dLayerScreenPointToFootprint({ x, y }, view, width, height)")
         );
         assert!(EDITOR_LEVEL3D_JS.contains("return height - 1 - slice;"));
+        assert!(EDITOR_LEVEL3D_JS.contains("sprite: object?.sprite ?? descriptor.sprite ?? null,"));
+        assert!(!EDITOR_LEVEL3D_JS.contains(
+            "sprite: object?.sprite || descriptor.sprite || object?.name || descriptor.name"
+        ));
     }
 
     #[test]
@@ -3523,28 +3514,14 @@ levels3 demo of push3 {
     }
 
     #[test]
-    fn new_puzzle_starter_source_uses_canonical_syntax() {
-        let source = starter_puzzle_source_from_editor_js();
+    fn new_puzzle_starter_source_is_injected_from_authoring_template() {
+        let workspace_js = editor_workspace_js();
 
-        puzzle_lang::parse_game(&source).expect("new puzzle starter source should parse");
-        assert!(source.contains("exists(Goal)\n\t\tnone([ Goal no Player ])"));
-        assert!(source.contains("for d in directions {\n\t\t\tif input == d {"));
-        assert!(source.contains("once d [ Player | no solid ] -> [ | Player ]"));
-        assert!(source.contains("on_level_clear {\n\t\tnext_level\n\t}"));
-        assert!(source.contains("levels demo of main {"));
-        assert!(!source.contains("all Goal on Player"));
-        assert!(!source.contains("input directions"));
-        assert!(!source.contains("layout {"));
-        assert!(!source.contains("layout size"));
-        assert!(!source.contains("scene playing"));
-        assert!(!source.contains("if main.win_conditions"));
-        assert!(!source.contains("board = puzzle"));
-        assert!(!source.contains("puzzle board"));
-        assert!(!source.contains("\n\t\tpuzzle\n"));
-        assert!(!source.contains("step board"));
-        assert!(!source.contains("step main"));
-        assert!(!source.contains("levels {\n"));
-        assert!(!source.contains("main.next_level"));
+        assert!(EDITOR_WORKSPACE_JS.contains("\"__PUZZLESTUDIO_NEW_PUZZLE_SOURCE__\""));
+        assert!(!workspace_js.contains("__PUZZLESTUDIO_NEW_PUZZLE_SOURCE__"));
+        assert!(workspace_js.contains(&js_string_literal(puzzle_authoring::NEW_PUZZLE_TEMPLATE)));
+        assert!(workspace_js.contains("function starterPuzzleSource(name)"));
+        assert!(workspace_js.contains("STARTER_PUZZLE_SOURCE.slice(defaultTitleLine.length)"));
     }
 
     #[test]
@@ -3877,6 +3854,20 @@ levels3 demo of push3 {
         assert!(!html.contains("wasmBase64"));
         assert!(!html.contains(r#"href="/editor.css""#));
         assert!(!html.contains(r#"src="/editor.js""#));
+    }
+
+    #[test]
+    fn served_editor_does_not_route_to_editor_html_path() {
+        let source = include_str!("lib.rs");
+        let removed_url = format!(
+            "html-editor serving http://127.0.0.1:{{port}}/{}",
+            "editor.html"
+        );
+        let removed_route = format!("(\"GET\", \"/{}\")", "editor.html");
+        assert!(source.contains("html-editor serving http://127.0.0.1:{port}/editor"));
+        assert!(!source.contains(&removed_url));
+        assert!(source.contains("(\"GET\", \"/\") | (\"GET\", \"/editor\")"));
+        assert!(!source.contains(&removed_route));
     }
 
     #[test]

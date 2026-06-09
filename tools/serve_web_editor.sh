@@ -146,7 +146,7 @@ run_pages_server() {
 }
 
 run_rust_editor_server() {
-  local url="http://127.0.0.1:${port}/editor.html"
+  local url="http://127.0.0.1:${port}/editor"
   local args=()
   if [[ -n "$entry_path" ]]; then
     args+=("$entry_path")

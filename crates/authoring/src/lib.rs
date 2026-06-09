@@ -1,3 +1,14 @@
+pub const NEW_PUZZLE_DEFAULT_TITLE: &str = "New Puzzle";
+pub const NEW_PUZZLE_TEMPLATE: &str = include_str!("../templates/new.puzzle");
+
+pub fn new_puzzle_source(title: &str) -> String {
+    let default_title_line = format!("title {NEW_PUZZLE_DEFAULT_TITLE:?}");
+    let Some(rest) = NEW_PUZZLE_TEMPLATE.strip_prefix(&default_title_line) else {
+        panic!("new puzzle template must start with the default title line");
+    };
+    format!("title {title:?}{rest}")
+}
+
 pub fn is_display_object_token(token: &str) -> bool {
     let Some(rest) = token.strip_prefix('@') else {
         return false;
@@ -419,6 +430,16 @@ pub fn split_cell_tokens(cell: &str) -> Result<Vec<String>, CellTokenError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn new_puzzle_source_replaces_only_template_title() {
+        let source = new_puzzle_source("Custom Puzzle");
+
+        assert!(NEW_PUZZLE_TEMPLATE.starts_with("title \"New Puzzle\"\n"));
+        assert!(source.starts_with("title \"Custom Puzzle\"\n"));
+        assert!(source.contains("puzzle main {"));
+        assert!(source.contains("levels demo of main {"));
+    }
 
     #[test]
     fn at_name_marks_display_object_tokens() {

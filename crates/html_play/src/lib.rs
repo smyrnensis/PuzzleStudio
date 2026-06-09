@@ -8580,10 +8580,10 @@ P
         assert!(PUZZLE3_APP_JS.contains(
             "const PREVIEW_SURFACE_UPDATE_MESSAGE = \"PuzzleStudioPreviewSurfaceUpdate\";"
         ));
+        assert!(PUZZLE3_APP_JS.contains("function puzzle3PreviewUpdateFromSurface(update = {})"));
         assert!(
-            PUZZLE3_APP_JS.contains("function puzzle3PreviewUpdateFromSurface(update = {})")
+            PUZZLE3_APP_JS.contains("if (event.data?.type === PREVIEW_SURFACE_UPDATE_MESSAGE)")
         );
-        assert!(PUZZLE3_APP_JS.contains("if (event.data?.type === PREVIEW_SURFACE_UPDATE_MESSAGE)"));
         assert!(PUZZLE3_APP_JS.contains("levelIndex: payload.levelIndex"));
         assert!(PUZZLE3_APP_JS.contains("camera: payload.camera"));
         assert!(PUZZLE3_APP_JS.contains("view: payload.view"));

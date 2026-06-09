@@ -392,20 +392,54 @@ fn create_source_folder(
 
 #[tauri::command]
 fn rename_workspace_entry(
+    app: tauri::AppHandle,
     request: RenameWorkspaceEntryCommandRequest,
     state: tauri::State<'_, DesktopState>,
 ) -> Result<serde_json::Value, String> {
-    let services = state
+    let mut services = state
         .services
         .lock()
         .map_err(|_| "desktop project state is unavailable".to_string())?;
-    let Some(service) = service_for_workspace(&services, request.workspace_root.as_deref()) else {
+    let Some(service_index) =
+        service_index_for_workspace(&services, request.workspace_root.as_deref())
+    else {
         return Err("No project is open. Open a project folder before renaming files.".to_string());
     };
+
+    let service = &services[service_index];
+    let workspace_root = PathBuf::from(service.workspace_root());
+    let from_path = resolve_desktop_workspace_command_path(&request.from_path, &workspace_root)
+        .canonicalize()
+        .map_err(|error| error.to_string())?;
+    let to_path = resolve_desktop_workspace_command_path(&request.to_path, &workspace_root);
+    let active_entry_tail = active_entry_rename_tail(service.puzzle_path(), &from_path)?;
+    if active_entry_tail.is_some()
+        && from_path.is_file()
+        && !is_desktop_puzzle_source_path(&to_path)
+    {
+        return Err("cannot rename the active game entry to a non-puzzle source file".to_string());
+    }
+
     let request = RenameWorkspaceEntryRequest::new(request.from_path, request.to_path);
-    let path = service
+    let path = services[service_index]
         .rename_workspace_entry(&request)
         .map_err(|error| error.to_string())?;
+
+    if let Some(tail) = active_entry_tail {
+        let next_entry_path = if tail.as_os_str().is_empty() {
+            path.clone()
+        } else {
+            path.join(tail)
+        };
+        let service =
+            EditorService::open_game_entry(&next_entry_path).map_err(|error| error.to_string())?;
+        let workspace_root = service.workspace_root().to_string();
+        let puzzle_path = service.puzzle_path().to_string();
+        services[service_index] = service;
+        drop(services);
+        restart_workspace_watcher(&app, &state, workspace_root, puzzle_path)?;
+    }
+
     Ok(serde_json::json!({
         "ok": true,
         "path": path.display().to_string()
@@ -491,13 +525,61 @@ fn service_for_workspace<'a>(
     services: &'a [EditorService],
     workspace_root: Option<&str>,
 ) -> Option<&'a EditorService> {
+    service_index_for_workspace(services, workspace_root).map(|index| &services[index])
+}
+
+fn service_index_for_workspace(
+    services: &[EditorService],
+    workspace_root: Option<&str>,
+) -> Option<usize> {
     let requested = workspace_root.unwrap_or_default();
     if requested.trim().is_empty() {
-        return services.first();
+        return (!services.is_empty()).then_some(0);
     }
     services
         .iter()
-        .find(|service| service.workspace_root() == requested)
+        .position(|service| service.workspace_root() == requested)
+}
+
+fn resolve_desktop_workspace_command_path(path: &str, workspace_root: &Path) -> PathBuf {
+    let requested = PathBuf::from(path);
+    if requested.is_absolute() {
+        requested
+    } else {
+        workspace_root.join(requested)
+    }
+}
+
+fn active_entry_rename_tail(
+    active_entry: &str,
+    renamed_from: &Path,
+) -> Result<Option<PathBuf>, String> {
+    let active_entry = active_entry.trim();
+    if active_entry.is_empty() {
+        return Ok(None);
+    }
+    let active_entry = PathBuf::from(active_entry)
+        .canonicalize()
+        .map_err(|error| error.to_string())?;
+    if active_entry == renamed_from {
+        return Ok(Some(PathBuf::new()));
+    }
+    if active_entry.starts_with(renamed_from) {
+        let tail = active_entry
+            .strip_prefix(renamed_from)
+            .map_err(|error| error.to_string())?;
+        return Ok(Some(tail.to_path_buf()));
+    }
+    Ok(None)
+}
+
+fn is_desktop_puzzle_source_path(path: &Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or(""),
+        "puzzle" | "puzzle3"
+    )
 }
 
 fn restart_workspace_watcher(
@@ -945,5 +1027,46 @@ mod tests {
         let mut existing = PathBuf::from("/tmp/game.htm");
         ensure_html_extension(&mut existing);
         assert_eq!(existing, PathBuf::from("/tmp/game.htm"));
+    }
+
+    #[test]
+    fn active_entry_rename_tail_tracks_exact_file_rename() {
+        let root = std::env::temp_dir().join(format!(
+            "puzzlestudio-desktop-rename-file-{}",
+            std::process::id()
+        ));
+        let old_path = root.join("old.puzzle");
+        fs::create_dir_all(&root).expect("create test root");
+        fs::write(&old_path, "title \"Old\"\n").expect("write active entry");
+
+        let tail = active_entry_rename_tail(
+            old_path.to_str().expect("utf-8 path"),
+            &old_path.canonicalize().expect("canonical old path"),
+        )
+        .expect("resolve active entry tail");
+
+        assert_eq!(tail, Some(PathBuf::new()));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn active_entry_rename_tail_tracks_parent_folder_rename() {
+        let root = std::env::temp_dir().join(format!(
+            "puzzlestudio-desktop-rename-folder-{}",
+            std::process::id()
+        ));
+        let folder = root.join("folder");
+        let old_path = folder.join("game.puzzle");
+        fs::create_dir_all(&folder).expect("create test folder");
+        fs::write(&old_path, "title \"Old\"\n").expect("write active entry");
+
+        let tail = active_entry_rename_tail(
+            old_path.to_str().expect("utf-8 path"),
+            &folder.canonicalize().expect("canonical folder"),
+        )
+        .expect("resolve active entry tail");
+
+        assert_eq!(tail, Some(PathBuf::from("game.puzzle")));
+        let _ = fs::remove_dir_all(root);
     }
 }

@@ -1,349 +1,410 @@
-# Current Music Generation Method
+# 次世代 Music Generator 仕様案
 
-This document explains how the current music generator works, with emphasis on
-where the randomness comes from and what is still hand-authored. It is meant to
-make the generator inspectable, not to make it sound more principled than it is.
+この文書は、現行実装の説明ではなく、次に作る music generator の仕様案である。
 
-## Short Description
+目的は、コードを読まなくても生成方法を再現できるくらい、生成原理を薄く圧縮すること。
+そのために、音楽的な印象を後から補修するのではなく、最初から再現可能な確率モデルとして定義する。
 
-The generator is a deterministic seeded stochastic system. Given the same seed
-and options, it produces the same song. Given a different seed, it samples a new
-combination of musical parameters from code-defined probability distributions.
+## 目的
 
-It is not an AI model at runtime. It does not call a language model, search a
-database of songs, or select from a library of complete human-written examples.
-The output comes from JavaScript functions, seeded pseudo-random numbers,
-weighted choices, generated numeric fields, and event rules.
+この generator は、AI が知識で作曲するものではない。
 
-That does not mean it is "pure random." The code contains human-authored musical
-priors: scale names, role names, carrier names, weighted options, range limits,
-and formulas for density, phrase energy, contour, timing, and velocity. The
-randomness operates inside that authored space.
+人間が定義した小さな生成文法と確率分布の中を、seed が探索する仕組みにする。
 
-## What Is Random
+したがって、信頼できる説明は次の形でなければならない。
 
-The main random source is a seeded PRNG created from text seeds. The generator
-uses it for:
+> この順番で latent variables を sample し、その値から motif / section /
+> bar / event を deterministic に展開する。
 
-- key and scale selection
-- broad form parameters
-- role carrier selection
+文書だけで同じ generator を再実装できないなら、generator 側がまだ複雑すぎる。
+
+## 基本原理
+
+生成は次の 5 層だけにする。
+
+1. `SongWorld`
+2. `MotifSet`
+3. `SectionPlan`
+4. `BarProjection`
+5. `Rendering`
+
+各層は、前の層からだけ作られる。
+下位層が上位層を勝手に引き直してはいけない。
+
+```txt
+seed
+  -> SongWorld
+  -> MotifSet
+  -> SectionPlan
+  -> BarProjection
+  -> Rendering
+```
+
+この順序が generator の説明性そのものになる。
+
+## 乱数の扱い
+
+乱数は、各層の latent variables を sample するためだけに使う。
+
+bar event を作る途中で、その場の都合で新しい音楽判断を追加しない。
+bar で使う乱数は、上位層で決まった motif と transform を揺らすための局所 jitter に限る。
+
+乱数 stream は用途別に分ける。
+
+```txt
+styleSeed       -> scale, tempo range, timbre family
+compositionSeed -> motif set, section plan, harmony path
+realizationSeed -> bar-level jitter
+```
+
+同じ stream を複数の意味に使わない。
+これにより、ある要素を変更しても別の層の乱数列が崩れにくくなる。
+
+## SongWorld
+
+`SongWorld` は曲全体の物理法則である。
+
+ここで決めるもの:
+
+- scale field
+- harmonic space
+- tempo
+- meter
+- global density range
+- register ranges
 - timbre fields
-- harmonic progression
-- section state trajectory
-- motif family trajectory
-- rhythm cells
-- contour cells
-- bar-level timing, count, duration, and pitch realization
-- event velocities and textural details
+- available renderers
 
-Most choices are not uniform. They are weighted by current state. For example,
-a sparse form state can make thinner carriers or fewer events more likely, and a
-higher-tension bar can make denser or more active gestures more likely.
+ここでは melody や section を作らない。
+この層は「この曲世界で使える材料と座標系」を決めるだけ。
 
-So the correct claim is:
+### scale field
 
-> The generator explores a seeded stochastic space shaped by hand-written
-> musical constraints.
+scale は固定リストから選ぶが、以後の pitch は scale degree 空間で扱う。
 
-The incorrect claim would be:
+```txt
+pitch = tonic + scaleDegreeToSemitone(degree) + octave
+```
 
-> The generator has no authored assumptions.
+pitch の乱数は直接 MIDI note を選ばない。
+必ず degree / register / contour から導く。
 
-It has many authored assumptions.
+### timbre field
 
-## What Is Hand-Written
+timbre は named preset ではなく、seeded spectral field から生成する。
 
-The following are hand-authored vocabulary or constraints:
+ただし、timbre 生成の仕様は composition 仕様から分ける。
+composition は `rendererId` と `registerRange` を持ち、実際の音色パラメータは Rendering 層で決まる。
 
-- the available scale list
-- the role names
-- the carrier names
-- the candidate carrier sets for each role
-- the numeric weights used in weighted choices
-- range limits for section state values
-- the event-generating functions for each carrier
-- the mapping from generated events to playback tracks
-- the broad synthesis and timbre model
+## MotifSet
 
-This is a real limitation. A carrier named `bass-riff` does not emerge from the
-random field by itself. The code defines that such a carrier exists, then uses
-random fields to decide how that carrier behaves in a particular song.
+`MotifSet` は曲中で再利用される musical identity の集合である。
 
-The current implementation is therefore not "AI-free" in the sense of having no
-human judgment. It is AI-free in the runtime sense: no model is generating bars
-from learned musical knowledge while the page runs.
+motif は次の 4 要素で定義する。
 
-## Templates Versus Vocabulary
+```txt
+Motif {
+  rhythmCell
+  accentProfile
+  contourCell
+  transformFamily
+}
+```
 
-The generator tries not to use fixed song templates or fixed note patterns.
-However, it does use a fixed vocabulary.
+motif は bar の中で作らない。
+section の中でも作らない。
+曲の上位層で先に作る。
 
-Examples of fixed vocabulary:
+### rhythmCell
 
-- `melodic-line`
-- `bass-riff`
-- `harmony-arp`
-- `rhythm-hook`
-- `drum-grid`
-- `air-pad`
-- `contrast-note`
+`rhythmCell` は motif の最重要同一性である。
 
-These are labels for generator behaviors, not complete phrases. For example,
-`bass-riff` does not point to one stored riff. It points to code that samples a
-rhythm cell, projects it into a bar, generates pitch contour, and emits bass
-events.
+形式:
 
-This distinction matters, but it is not perfect. The more carrier-specific code
-there is, the more the generator risks becoming a set of small disguised
-templates. The current tests try to catch collapse into a small number of
-dominant first-bar signatures, repeated section patterns, or one carrier taking
-over too much of the output.
+```txt
+rhythmCell = [0..1 の normalized onset positions]
+```
 
-## Seed Layers
+例:
 
-The seed is split into:
+```txt
+[0.08, 0.34, 0.72]
+```
 
-- `style`: a slower identity seed derived from the seed text after a short
-  prefix.
-- `variation`: the full seed text.
+bar に投影するときは、
 
-The style seed controls slower choices such as key, scale, form tendency, role
-carriers, and timbres. The full seed controls more concrete composition
-material such as progression, section trajectory, motif variants, and events.
+```txt
+step = round(barStart + onset * usableSpan)
+```
 
-This is a practical split, not a complete theory of style and variation. It
-allows related seeds to preserve some high-level identity while changing
-concrete notes and rhythms.
+とする。
 
-## Song-Level State
+同じ motif family 内では、rhythmCell は原則として変えない。
+変奏は主に pitch / register / duration / density で行う。
 
-A song starts by choosing:
+rhythm を変える場合も、別の rhythmCell を作るのではなく、`transformFamily` の中の
+限定された transform として扱う。
 
-- key
-- scale
-- broad form parameters
-- role carriers
-- timbres
-- harmonic progression
+### accentProfile
 
-The role names are operational labels, not precise music-theory categories:
+`accentProfile` は motif の中でどの onset が前景になるかを決める。
 
-- `identity`: the material intended to be recognized as the main musical idea.
-- `time`: pulse or bar-level timekeeping material.
-- `tone`: harmonic support or tonal grounding.
-- `motion`: secondary movement or answering material.
-- `color`: texture, sustained color, or noise-like atmosphere.
-- `boundary`: phrase-edge or section-edge material.
+形式:
 
-These labels are not always perfectly literal. For example, a `harmony-arp`
-carrier can serve identity in one song and motion in another. A `boundary`
-carrier may be very subtle. The names are useful for organizing generation, but
-they should not be read as proof that the resulting audio clearly expresses
-those exact functions.
+```txt
+accentProfile = [0..1 の weights]
+```
 
-## Section State
+`rhythmCell` と同じ長さを持つ。
 
-The form is represented by bounded numeric state variables. The main fields are:
+accent は velocity だけではなく、duration や register の安定性にも影響してよい。
 
-- novelty
-- stability
-- density
-- tension
-- closure pressure
-- memory distance
+### contourCell
 
-These values are generated through formulas, random draws, clamps, and rounding.
-They are not continuous in a mathematically clean sense, and they are not named
-song parts. They are control variables that influence later generation.
+`contourCell` は pitch の相対形である。
 
-The section state affects:
+形式:
 
-- event density
-- phrase energy
-- register bias
-- contour range
-- closure behavior
-- motif-family movement
-- section transition context
+```txt
+contourCell = relative degree offsets
+```
 
-This is one of the areas where the implementation is still more procedural than
-elegant. Some parts are smooth fields; some parts are weighted choices; some
-parts are explicit enforcement to keep the trajectory from becoming too flat.
+例:
 
-## Role Carriers
+```txt
+[0, +2, +1]
+```
 
-Role carriers are selected once for the song and reused in every section.
+これは absolute pitch ではない。
+bar や section の register transform によって実音高へ写像される。
 
-This is a structural choice: section state changes how a carrier behaves, but it
-does not replace the carrier with a different instrument role. A song whose
-identity is `bass-riff` keeps that identity carrier throughout the form.
+### transformFamily
 
-This improves continuity, but it also means the generator depends heavily on the
-chosen carrier being able to carry enough variation across the whole song.
+`transformFamily` は motif をどう変奏してよいかの分布である。
 
-## Motif Families
+含むもの:
 
-Each section has a `motifVariant`, which identifies the motif family used by the
-identity material in that section.
+- transposition distribution
+- register shift distribution
+- duration stretch distribution
+- density thinning distribution
+- ornament probability
+- rhythm deformation limit
 
-The motif-family sequence is generated from:
+重要なのは、変奏可能性も motif の一部として先に定義すること。
+bar 側が勝手に「今回はこう変える」と決めない。
 
-- number of sections
-- a sampled family count
-- sampled family IDs
-- a sampled dwell rate
-- phase
-- state drift from tension, memory distance, closure, and progress
+## SectionPlan
 
-This produces low-frequency motif movement. It is not meant to change every bar.
-It is also not meant to be a fixed named form. The generated shape can repeat a
-family, introduce another, or return to an earlier family depending on the seed
-and state trajectory.
+`SectionPlan` は、曲全体の時間軸に motif と transform を配置する。
 
-The current implementation only models motif family as an ID plus generated
-rhythm/contour cells. It does not understand an idea the way a composer would.
+section は named form ではない。
+section は次の値を持つ。
 
-## Rhythm Cells
+```txt
+Section {
+  motifId
+  energy
+  density
+  registerCenter
+  tension
+  closure
+  transformBias
+}
+```
 
-For identity material, motif rhythm is generated as a normalized rhythm cell.
-That cell is then projected into each bar's usable step range.
+section は motif を生成しない。
+section は motif を選び、その motif にどの transform bias をかけるかを決める。
 
-Rhythm is treated as the strongest cue for motif identity. The current code
-therefore keeps rhythm variation more conservative than pitch variation for
-identity carriers.
+### motifId の遷移
 
-This is implemented by:
+motifId は低周波の Markov process で決める。
 
-- generating the cell from the motif family
-- projecting the cell into bar space
-- applying limited local shift and nudge
-- avoiding large additions to the identity rhythm skeleton
-- testing that same-family sections have closer coarse timing than
-  different-family sections
+入力:
 
-This does not guarantee a memorable hook. It only makes the generated material
-more internally consistent.
+- current motifId
+- section index
+- phrase position
+- energy slope
+- closure
 
-## Pitch And Contour
+出力:
 
-Pitch contour is also generated from motif-family data, but it is allowed to
-move more than rhythm.
+- stay
+- switch to related motif
+- return to previous motif
 
-For pitched identity material, the generator combines:
+ただし section index から形を直接決めない。
+同時に、各 section が独立に motif を選ぶわけでもない。
 
-- a generated contour motif
-- local target pitch
-- previous-pitch smoothness
-- phrase closure
-- register bias
-- scale-degree candidates
+仕様としては、遷移確率だけを定義する。
 
-This means two bars from the same motif family may share rhythm while changing
-register or contour detail. That is intentional, but the current balance is
-still empirical.
+```txt
+P(stay)   = high when closure is low and phrase position is internal
+P(switch) = higher near contrast points
+P(return) = higher near closure points
+```
 
-## Motif Accent
+この確率式から結果が出る。
+結果の形を直接指定しない。
 
-Identity events receive a motif accent derived from the same rhythm cell. This
-applies across identity carriers, including melody, bass, harmony arpeggios, and
-rhythmic hooks.
+## BarProjection
 
-The purpose is to make the motif audible, not just structurally present in debug
-data. The accent is still subtle and may not be enough to create a memorable
-phrase by itself.
+`BarProjection` は、section が持つ motif と transform を 1 bar の event へ写像する。
 
-## Harmony
+bar は作曲判断をしない。
+bar は projection だけを行う。
 
-Harmony is comparatively simple. The generator chooses a seeded scale-degree
-progression, starts from home, and derives chords from the selected scale. Some
-section states shift or offset the progression.
+入力:
 
-This is not a strong functional harmony model. It does not deeply model cadence,
-voice-leading, modulation, or harmonic expectation. It provides a tonal frame
-for the generated events.
+```txt
+SongWorld
+Motif
+Section
+barIndex
+localPhrasePosition
+realizationSeed
+```
 
-## Timbre
+出力:
 
-Timbres are generated from stochastic spectral fields. The generator does not
-pick from a small list of named synth presets. Each role gets generated timbre
-parameters from a seeded field.
+```txt
+Event[]
+```
 
-This is one of the stronger randomness claims in the current system: timbre is
-not a hand-picked preset per seed. It is generated from numeric distributions.
+### projection 手順
 
-## Playback Controls
+1. `rhythmCell` を usable step range に投影する。
+2. `accentProfile` から velocity / duration emphasis を決める。
+3. `contourCell` を section の registerCenter と transformBias に写像する。
+4. density thinning を適用する。
+5. ornament を追加する。
+6. renderer に必要な event fields を埋める。
 
-The visible music controls affect broad playback and input normalization:
+この順序を守る。
 
-- height
-- tone/brightness
-- bpm
-- volume
-- bars
+特に、rhythm projection より前に bar 独自の onset を作らない。
+onset の新規追加は ornament として扱い、motif 本体とは分ける。
 
-These controls do not rewrite the composition algorithm. They influence the
-generated score and playback rendering within fixed ranges.
+## Renderer
 
-## Debug And Tests
+現行の `carrier` は、次世代仕様では renderer に近い。
 
-The generator exposes debug data such as:
+renderer は motif をどう鳴らすかを決める。
 
-- seed split
-- key
-- scale
-- form
-- roles
-- timbres
-- progression
-- section plan
-- bar plan
-- track mapping
+例:
 
-The tests sample many seeds and check structural properties:
+- lead renderer
+- bass renderer
+- arp renderer
+- percussion renderer
+- pad renderer
 
-- deterministic output for the same seed
-- variation across different seeds
-- carrier diversity
-- stable carriers across sections
-- motif-family diversity without collapsing to one pattern
-- same-family rhythm being closer than different-family rhythm
-- broad progression and phrase-shape diversity
-- generated timbres not falling back to old named palettes
+renderer は motif を作らない。
+renderer は event を音域・track・timbre へ写像する。
 
-These tests support the claim that the generator is seeded and stochastic. They
-do not prove that the result is good music.
+これにより、`bass-riff` のような名前は generator の中心概念ではなくなる。
 
-## Honest Weak Points
+```txt
+motif + renderer = audible part
+```
 
-The generator is still a procedural music generator, not a composer.
+renderer が違っても、同じ motif を鳴らせる。
+同じ renderer でも、別 motif を鳴らせる。
 
-The role labels are useful implementation categories, but they do not guarantee
-that a listener hears exactly those functions.
+## 生成順序
 
-The carrier vocabulary is hand-written. Even though the concrete events are
-generated, the set of possible behaviors is constrained by the code's carrier
-list.
+完全な生成手順は以下。
 
-Some code still uses explicit corrective logic to keep the form from becoming
-too flat or too unstable. That is not the same as pure continuous generation.
+```txt
+1. split seed into streams
+2. sample SongWorld
+3. sample MotifSet
+4. sample SectionPlan
+5. for each section:
+     for each bar:
+       project selected motif into events
+6. render events through renderer/timbre fields
+7. return playbackScore + debug
+```
 
-The motif model is mechanical. It can preserve rhythm identity better than
-before, but it does not evaluate memorability directly.
+この 7 ステップで説明できない処理は、原則として設計を見直す。
 
-Harmony is shallow compared with the rhythmic and textural systems.
+## debug data
 
-Most importantly, the generator has no listening loop. It can expose structure
-and pass distribution tests, but human listening feedback is still required to
-judge whether the result feels musical.
+debug は「説明性」の一部なので、生成層と同じ構造で出す。
 
-## Practical Trust Claim
+必要な debug:
 
-A careful trust claim for this generator is:
+```txt
+songWorld
+motifSet
+sectionPlan
+barProjections
+rendererAssignments
+randomStreams
+```
 
-> The output is deterministic seeded randomness inside a hand-authored musical
-> grammar. It is not selected from a library of finished phrases, and it is not
-> generated by an AI model at runtime. The code defines the vocabulary and
-> probability fields; the seed selects one realized path through them.
+特に `motifSet` は必須。
+聴こえる motif が debug 上でも見えなければ、説明可能とは言えない。
 
-That is the honest version of the randomness story.
+## tests
+
+テストは音質ではなく、生成文法の不変条件を守る。
+
+必要なテスト:
+
+- same seed produces same `SongWorld`, `MotifSet`, `SectionPlan`, and events
+- different seed changes at least one upper-layer latent variable
+- renderer does not create motif identity
+- same motifId preserves rhythmCell under projection
+- different motifId usually changes rhythmCell
+- section can change transform without changing motif
+- bar projection does not create new primary onsets outside motif/ornament rules
+- timbre field is generated, not selected from a small preset table
+
+これらは「いい曲」のテストではない。
+説明可能な generator であることのテスト。
+
+## 現行実装との差分
+
+現行実装で問題になる点:
+
+- role/carrier が中心概念になっている
+- motif が event 生成の途中で参照される補助情報になっている
+- rhythm / contour / accent が明示的な上位 object として debug に出ていない
+- section state の値が多くの局所式に散っている
+- carrier ごとの branch が生成文法に見えてしまう
+- tests が不変条件より症状検出に寄っている
+
+移行方針:
+
+1. `MotifSet` を先に作る。
+2. identity event 生成を motif projection に置き換える。
+3. carrier を renderer に格下げする。
+4. section state を `Section` の transform bias に整理する。
+5. debug に `motifSet` と `barProjections` を出す。
+6. tests を projection invariants に移す。
+
+## この仕様の信頼 claim
+
+この仕様が実装できた場合、generator について次のように言える。
+
+> この generator は、hand-authored な小さな生成文法と確率分布を持つ。
+> seed はその文法上の latent variables を sample し、以後は deterministic
+> projection によって event を作る。AI model は runtime に存在せず、完成済み
+> phrase のライブラリも持たない。
+
+この claim を文書だけで検証できることが、この仕様の目標である。
+
+## まだ決めていないこと
+
+以下はまだ仕様化できていない。
+
+- harmony を motif と同じ粒度で扱うか、別の harmonic path として扱うか
+- percussion identity を rhythmCell とどう統合するか
+- ornament と primary onset の境界
+- section transition を motif transform として表す方法
+- listener にとって memorable かどうかをどう評価するか
+
+ここを曖昧にしたまま実装すると、また局所補修が増える。

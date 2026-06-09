@@ -4400,6 +4400,33 @@ P
 }
 
 #[test]
+fn shared_new_puzzle_template_uses_canonical_syntax() {
+    let source = puzzle_authoring::NEW_PUZZLE_TEMPLATE;
+
+    parse_game(source).expect("new puzzle template should parse");
+    assert!(source.contains("exists(Goal)\n\t\tnone([ Goal no Player ])"));
+    assert!(source.contains("input directions [ Player ] -> [ > Player ]"));
+    assert!(source.contains("\n\t\tmove\n"));
+    assert!(source.contains("on_level_clear {\n\t\tnext_level\n\t}"));
+    assert!(source.contains("levels demo of main {"));
+    assert!(!source.contains("all Goal on Player"));
+    assert!(!source.contains("for d in directions"));
+    assert!(!source.contains("if input == d"));
+    assert!(!source.contains("[ | Player ]"));
+    assert!(!source.contains("layout {"));
+    assert!(!source.contains("layout size"));
+    assert!(!source.contains("scene playing"));
+    assert!(!source.contains("if main.win_conditions"));
+    assert!(!source.contains("board = puzzle"));
+    assert!(!source.contains("puzzle board"));
+    assert!(!source.contains("\n\t\tpuzzle\n"));
+    assert!(!source.contains("step board"));
+    assert!(!source.contains("step main"));
+    assert!(!source.contains("levels {\n"));
+    assert!(!source.contains("main.next_level"));
+}
+
+#[test]
 fn scene_resources_can_select_level_and_sprite_sets() {
     let source = r##"
 title scene_resources

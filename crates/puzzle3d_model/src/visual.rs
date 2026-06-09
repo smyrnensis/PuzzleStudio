@@ -62,7 +62,7 @@ pub struct VisualCell3 {
 pub struct VisualObject3 {
     pub id: ObjectId,
     pub name: String,
-    pub sprite: String,
+    pub sprite: Option<String>,
 }
 
 fn visual_object(id: ObjectId, visuals: &[ObjectVisual3]) -> VisualObject3 {
@@ -70,12 +70,12 @@ fn visual_object(id: ObjectId, visuals: &[ObjectVisual3]) -> VisualObject3 {
         return VisualObject3 {
             id,
             name: visual.name.clone(),
-            sprite: visual.sprite.clone(),
+            sprite: Some(visual.sprite.clone()),
         };
     }
     VisualObject3 {
         id,
         name: format!("object_{}", id.0),
-        sprite: "cube".to_string(),
+        sprite: None,
     }
 }

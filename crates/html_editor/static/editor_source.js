@@ -349,6 +349,32 @@ function sourcePredictedBeforeInputValue(event) {
   return `${source.slice(0, start)}${event.data}${source.slice(end)}`;
 }
 
+function handleSourceBeforeInputTextInsert(event) {
+  if (
+    !event
+    || event.isComposing
+    || sourceEditorBlockSelection?.ranges?.length
+    || event.inputType !== "insertText"
+    || typeof event.data !== "string"
+  ) {
+    return false;
+  }
+  event.preventDefault();
+  hideSourceImportLinkFrame();
+  clearSourceBlockSelection();
+  sourceEditorPreferredCaretX = null;
+  sourceEditor.setRangeText(
+    event.data,
+    sourceEditor.selectionStart,
+    sourceEditor.selectionEnd,
+    "end",
+  );
+  sourceEditorContentChanged();
+  syncPreviewModeFromSourceCursor();
+  renderSourceCaret();
+  return true;
+}
+
 function renderPlainSourceHighlight(source = sourceEditor.value, reason = null) {
   if (!sourceHighlight) {
     return;
@@ -1824,6 +1850,9 @@ sourceEditor.addEventListener("beforeinput", (event) => {
     } else {
       redoSourceEdit();
     }
+    return;
+  }
+  if (handleSourceBeforeInputTextInsert(event)) {
     return;
   }
   const predicted = sourcePredictedBeforeInputValue(event);

@@ -1232,6 +1232,7 @@ name = "html-editor"
 version = "0.1.0"
 dependencies = [
  "html-play",
+ "puzzle-authoring",
  "puzzle-lang",
 ]
 
