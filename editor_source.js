@@ -3970,6 +3970,7 @@ function sourceLevelNameControlEntries(config = {}) {
   const rangeScope = config.rangeScope || (() => "");
   const entryName = config.entryName || ((entry) => entry?.name || "");
   const optionValue = config.optionValue || ((entry) => entryName(entry));
+  const optionLabel = config.optionLabel || null;
   const ranges = findRanges(source).filter((range) => {
     const scope = String(rangeScope(range) || "").trim();
     return requestedScope ? scope === requestedScope : scope === "";
@@ -3988,7 +3989,8 @@ function sourceLevelNameControlEntries(config = {}) {
         continue;
       }
       seen.add(key);
-      entries.push({ range, entry, name, value });
+      const label = typeof optionLabel === "function" ? String(optionLabel(entry, range) || "").trim() : "";
+      entries.push({ range, entry, name, value, label });
     }
   }
   return entries;
@@ -4003,8 +4005,9 @@ function syncSourceLevelNameDatalist(config = {}) {
   datalist.replaceChildren(...entries.map((entry) => {
     const option = document.createElement("option");
     option.value = entry.value;
-    if (entry.name !== entry.value) {
-      option.label = entry.name;
+    const label = entry.label || entry.name;
+    if (label && label !== entry.value) {
+      option.label = label;
     }
     return option;
   }));
@@ -4045,7 +4048,7 @@ function showSourceLevelNameMenu(config = {}) {
     button.type = "button";
     button.className = "source-level-name-option";
     button.classList.toggle("is-current", entry.value === current || entry.name === current);
-    button.textContent = entry.value;
+    button.textContent = entry.label || entry.value;
     button.title = entry.name === entry.value ? entry.value : entry.name;
     button.addEventListener("mousedown", (event) => {
       event.preventDefault();
