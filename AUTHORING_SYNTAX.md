@@ -35,12 +35,12 @@ group {
 solid = actor
 }
 
-inputs {
-up <- w ArrowUp
-down <- s ArrowDown
-left <- a ArrowLeft
-right <- d ArrowRight
-restart <- r
+keys {
+w ArrowUp -> up
+s ArrowDown -> down
+a ArrowLeft -> left
+d ArrowRight -> right
+r -> restart
 }
 
 win_conditions {
@@ -85,9 +85,13 @@ step sokoban
 }
 }
 
-scene level_menu level_select {
+scene level_select {
+layout {
+level_menu {
 show_index = true
+}
 button "Title" -> goto title
+}
 }
 ```
 
@@ -112,19 +116,23 @@ homepage "https://example.com"
 tags {
 color = red blue
 facing = left right
+count = 1...10
 }
 ```
+
+tag value list の中の `<start>...<end>` は inclusive numeric range として展開される。`count = 1...10` は `count = 1 2 3 4 5 6 7 8 9 10` と同じ tag set を作る。
 
 `directions` は組み込み tag set で、常に `up down left right` を表す。`horizontal` は `left right`、`vertical` は `up down` を表す。これらは object schema、`map`、visual `shape` / `colors`、`for` の展開元で同じように使える。再定義はできない。
 
 `layers` は object 定義から作られる組み込み tag set。名前付き layer はその名前、匿名 layer は内部名で展開される。各 layer 名は同じ layer に属する object group としても登録される。
 
-tag set を使った object schema は concrete object variants に展開される。
+tag set を使った object schema は、`layers` の右辺で concrete object variants に展開される。
 
 ```txt
-object player:color 1
-object box:color 1
-object marker:directions 1
+layers {
+actor = player:color box:color
+marker = marker:directions
+}
 ```
 
 これは概念的には次の object 群を作る。
@@ -140,6 +148,34 @@ marker:left
 marker:right
 ```
 
+schema selector の slot には、同じ puzzle 内の `var` / `const` も書ける。これは
+object variants を作る syntax ではなく、既にある schema variants のうち、現在の
+var 値と同じ tag value を持つ object を選ぶ runtime selector である。
+
+```txt
+var count = 2
+
+tags {
+num = 1 2 3
+}
+
+layers {
+actor = Box:num
+}
+
+rules {
+once [ Box:count ] -> [ Box:count ]
+}
+```
+
+この例で `Box:count` は `count == 2` のとき `Box:2` にだけ一致する。
+`count` が `num` 外の値なら、その selector は match しない。mutable `var` を
+dynamic selector に使う場合は warning が出る。`const` は値が変わらないので
+warning しない。
+
+同じ名前が tag value、tag set、`var` / `const` の複数に見える場合は ambiguous
+selector として error になる。黙って tag set や var のどちらかを優先しない。
+
 表示・level 文字は schema とは別に `legend` で定義する。
 
 ### `directions` / `direction`
@@ -148,7 +184,7 @@ marker:right
 
 `up` / `down` / `left` / `right` は標準の意味入力でもあり、direction mapping も既定で用意される。
 
-これらは physical key ではなく、key を読み替えた semantic input である。キーやタッチなどの物理入力との対応は puzzle の `inputs` table で定義し、puzzle rule からは `transition(state, input)` の transition context として参照する。
+これらは physical key ではなく、key を読み替えた semantic input である。キーやタッチなどの物理入力との対応は puzzle の `keys` table で定義し、puzzle rule からは `transition(state, input)` の transition context として参照する。
 
 別名を使いたい場合だけ、`direction` で標準方向への alias を定義する。
 
@@ -165,11 +201,11 @@ direction <alias> <up | down | left | right>
 
 `direction east right` は、direction / input 文脈で `east` を `right` として lower する sugar。object 名、group 名、level 名、scene effect 名を置換する general alias ではない。
 
-`direction` alias は、orientation prefix、`if input == ...`、`inputs` から semantic input に渡す名前で解決される。
+`direction` alias は、orientation prefix、input guard、`keys` から semantic input に渡す名前で解決される。
 
 `direction <input_name> <dx> <dy>` の数値ベクトル形式は public syntax ではない。
 
-`input` は canonical state ではない。物理 key を読み替えた semantic input として `transition(state, input)` の transition context に渡され、`if input == ...` から名前を参照できる。
+`input` は canonical state ではない。物理 key を読み替えた semantic input として `transition(state, input)` の transition context に渡され、model rule の input sugar から名前を参照できる。
 
 すべての input が方向を持つわけではない。`right` / `left` などは方向付き input なので `input directions [ A | ]` の orientation として使えるが、`enter` や `restart` のような非方向 input は名前としては存在しても orientation にはならない。非方向 input で `input directions [ ... ]` 型の pattern を評価すると match しない。
 
@@ -189,21 +225,21 @@ button "Restart" -> playing.restart
 button "Restart Board" -> board.restart
 ```
 
-物理入力の対応は puzzle の `inputs` block に書く。
+物理入力の対応は puzzle の `keys` block に書く。
 
 ```txt
-inputs {
-up <- w ArrowUp
-down <- s ArrowDown
-left <- a ArrowLeft
-right <- d ArrowRight
-restart <- r
+keys {
+w ArrowUp -> up
+s ArrowDown -> down
+a ArrowLeft -> left
+d ArrowRight -> right
+r -> restart
 }
 ```
 
-`inputs` は `<input> <- <key...>` の形で、raw key を puzzle semantic input に割り当てる。`my_restart <- r` のように書くと、既定の `restart <- r` は shadow され、`r` は `my_restart` として解釈される。
+`keys` は `<key...> -> <input>` の形で、raw key を puzzle semantic input に割り当てる。`r -> my_restart` のように書くと、既定の `r -> restart` は shadow され、`r` は `my_restart` として解釈される。
 
-`rules` 内では `<input> -> <effect>` を `if input == <input> { <effect> }` の sugar として書ける。
+`rules` 内では `<input> -> <effect>` を input guard の sugar として書ける。
 
 ```txt
 rules {
@@ -274,7 +310,7 @@ solid = actor
 }
 ```
 
-`layers` は位置を持つ main object、display object、layer assignment をまとめる canonical authoring block。
+`layers` は位置を持つ main object、display object、layer assignment をまとめる canonical authoring block。object / schema を生成できる owner は `layers` だけで、独立した object 宣言 block はない。
 
 `sprites` は object の見た目を補完する block であり、位置を持つ object と layer order の所有者は `layers`。
 
@@ -283,6 +319,8 @@ solid = actor
 layer 名はそのまま tag selector として使える。たとえば `floor = Goal Button` と書いた後は、rule や legend や condition で `floor` が `Goal Button` の selector として解決される。
 
 右辺は、未知の名前なら新しい object / schema として作られ、既存の object / schema / group / layer tag ならその selector をその layer に割り当てる。
+
+puzzle 直下の declaration/use block は同じ puzzle scope の catalog に対して解決される。したがって `sounds`、`rules`、`win_conditions`、`legend` などの object selector は、同じ puzzle 内の `layers` が作る最終 catalog を見る。block のテキスト順は、statement list や layout child のように順序そのものを表す構文でだけ意味を持つ。
 
 `@Name` は display object を表す。display object は main object と同じ layer order 上に並ぶが、main object と同じ storage layer には入れない。`display @Name` も互換・明示形として読める。`@layer_name = ...` と `@group_name = ...` は display-only の alias であり、右辺に main object を含められない。`@` なしの layer / group は display object を含められない。
 
@@ -302,17 +340,9 @@ solid = actor
 }
 ```
 
-`objects { ... }` は object schema / object name の宣言ブロック。`@Name` は display object、`Name` は main object を表す。layer assignment は puzzle-level の `layers { ... }`、level 文字と表示文字は `levels { legend { ... } }` に書く。`display_objects { ... }`、`layer { ... }`、`layer <name> { ... }` は読まない。
+level 文字と表示文字は `levels { legend { ... } }` に書く。`layers` は object identity と storage layer を作るだけで、level 文字は作らない。
 
-`layer { ... }` 内の object 行の形:
-
-```txt
-<object> [render_char]
-```
-
-`Goal G` は object `Goal` を作り、単体表示/level 文字 `G` も同時に定義する。render char を省略した object は、後から `legend` で表示文字を定義できる。
-
-`group { ... }` は top-level にも `objects` block 内にも書ける。semantic selector は layer declaration とは別責務なので、canonical では group row を `group { ... }` の中に集める。`objects` block 直下の裸の `solid = actor` は読まない。
+semantic selector は layer declaration とは別責務なので、canonical では group row を `groups { ... }` の中に集める。
 
 同じセルの同じ layer には最大 1 object しか入れない。
 
@@ -639,13 +669,11 @@ right [ A | ] -> [ | A ]
 
 ### Blocks
 
-`map` / `group` / `inputs` / `routine` / `rules` / `level` / `scene` / `for` / `if` / `once` / `repeat` / `fix` は `{ ... }` で block を書く。`keys` / `rule` / puzzle-level `transitions` / `main` などの旧 header は読まない。
+`map` / `group` / `keys` / `routine` / `rules` / `level` / `scene` / `for` / `if` / `once` / `repeat` / `fix` は `{ ... }` で block を書く。`inputs` / `rule` / puzzle-level `transitions` / `main` などの旧 header は読まない。
 
 ```txt
 rules {
-if input == right {
-right [ Player | ] -> [ | Player ]
-}
+input right [ Player | ] -> [ | Player ]
 }
 ```
 
@@ -896,7 +924,6 @@ once [ B ] -> [ BPrime ]
 現在は input guard、puzzle state 変数、condition guard に対応する。bare var は `!= 0` として読む。
 
 ```txt
-if input == right
 if button_is_pushed
 if button_is_pushed == true
 if score == 3
@@ -932,21 +959,6 @@ move
 
 これは概念的には、入力された方向だけに対応する movement intent を Player に付け、前方の Box にも同じ intent を伝播し、最後に `move` で可能な object だけを動かす。
 
-```txt
-rules {
-if input == right {
-right [ Player ] -> [ Player{right} ]
-[ Player{right} | Box ] -> [ Player{right} | Box{right} ]
-move
-}
-if input == left {
-left [ Player ] -> [ Player{left} ]
-[ Player{left} | Box ] -> [ Player{left} | Box{left} ]
-move
-}
-}
-```
-
 `directions` は常に `up/down/left/right` の4方向 tag set。`input` は canonical state ではなく、`transition(state, input)` の transition context である。
 
 入力とは独立に、方向 set へ同じ rewrite を展開する場合は次の形を使える。
@@ -965,13 +977,13 @@ input horizontal [ Cursor | ] -> [ | Cursor ]
 
 同じ形で `input directions [ ... ]` と `input vertical [ ... ]` も使える。これは `input` が方向そのものだという意味ではなく、input 名が指定 set の member だったときに、その member を orientation として使うという意味。
 
-名前だけを見たい場合は `if input == restart { ... }` のような guard を使える。これは orientation を要求しないので、非方向 input でも意味を持つ。
+名前だけを見たい場合は `restart -> restart` のような input sugar を使える。これは orientation を要求しないので、非方向 input でも意味を持つ。
 
 入力に連動しない複数方向ルールや、方向ごとに複数の文をまとめて生成したい advanced case では、明示的な `for` block を使える。
 
 ### Direction Expansion Trigger
 
-`for <binding> in <source>` は、有限で順序を持つ source の各 item へ statement list を展開する。`directions` / `horizontal` / `vertical` / `layers`、author-defined tag set、group で同じ仕組みを使う。
+`for <binding> in <source...>` は、有限で順序を持つ source の各 item へ statement list を展開する。source には `directions` / `horizontal` / `vertical` / `layers`、author-defined tag set、numeric range、または inline value list を使える。
 
 よく使う軸:
 
@@ -982,11 +994,16 @@ for v in vertical
 for l in layers
 for i in 1...3
 for i in 1...L
+for object in Box Wall Player
+for tag in tag_1 tag_2 tag_3 tag_4
+for x in a b 1...3 z
 ```
 
 `directions` / `horizontal` / `vertical` はそれ自体を offset の単位としては使わない。展開後の `up` / `right` などが orientation prefix や movement scratch として解釈される。
 
-`<start>...<end>` は inclusive numeric range。`1...3` は `1` / `2` / `3` へ展開される。endpoint は整数 literal または同じ puzzle 内で整数 literal に初期化された `var` / `const` を使える。これは authoring-time expansion なので、turn 中に var を更新しても展開数は変わらない。
+`<start>...<end>` は inclusive numeric range。`1...3` は `1` / `2` / `3` へ展開される。endpoint は整数 literal または同じ puzzle 内で整数 literal に初期化された `var` / `const` を使える。これは authoring-time expansion なので、turn 中に var を更新しても展開数は変わらない。同じ range token は `tags` の value list でも使える。
+
+inline value list の各 token は、展開後に body 側の構文が object selector、tag value、layer name などとして解釈する。`for object in Box Wall { no object }` は `no Box` / `no Wall` と同じ。`for tag in red blue { Box:tag }` は `Box:red` / `Box:blue` と同じ。
 
 ```txt
 rules {
@@ -1276,9 +1293,6 @@ actor = Player Box Wall
 tags {
 kind = red blue
 }
-objects {
-A:kind B:kind
-}
 layers {
 for k in kind {
 k = A:k B:k
@@ -1286,11 +1300,11 @@ k = A:k B:k
 }
 ```
 
-これは `red = A:red B:red` / `blue = A:blue B:blue` と同じ。`A:k` のように concrete value へ展開する場合、`A:kind` の schema は先に宣言されている必要がある。
+これは `red = A:red B:red` / `blue = A:blue B:blue` と同じ。`A:k` のように concrete value へ展開する場合、schema は同じ `layers` block 内の展開後の右辺から生成される。
 
 display object は通常プレイでは state に存在できるが、solver の state key と solver transition からは除外される。ASCII 表示でも既定では無視される。
 
-display object は `objects { @Name }` で事前宣言するか、`layers { @Name }` で layer assignment と同時に宣言する。`display_objects { ... }` は読まない。
+display object は `layers { @overlay = @Name }` のように layer assignment と同時に宣言する。
 
 ### `display`
 
@@ -1479,7 +1493,7 @@ music loop seed=123456 tone=0.62 bpm=104 volume=0.8
 
 `sfx` は one-shot sound effect、`music` は loop 用の background track。`seed` は必須。`sfx type` は省略時 `random`。`type=puzzlescript` は PuzzleScript の numeric sound seed 互換 generator を選ぶための import 用 type。`music tone` / `bpm` / `volume` は省略時 `0.62` / `104` / `0.8`。
 
-音を鳴らすタイミングは scene / component の effect が所有する。
+presentation として明示的に鳴らす音は scene / component の effect が所有する。
 
 ```txt
 button "Start" -> input start_game
@@ -1540,7 +1554,7 @@ play_music loop
 }
 ```
 
-scene / component RHS の canonical form は、`input <name>`、`component_effect <name>`、または direct scene effect。`input <name>` は focus 中の scene transition または puzzle transition に渡る semantic input で、1 回の遷移中に必ず 1 つだけ存在する原因として扱う。`component_effect <name>` は `level_menu` の cursor 移動や enter のように component が所有する操作に使う。scene / presentation / lifecycle effect は `effect` wrapper を付けずに直接書く。
+scene / component RHS の canonical form は、`input <name>`、`component_effect <name>`、bare scene routine name、または direct scene effect。`input <name>` は focus 中の scene transition または puzzle transition に渡る semantic input で、1 回の遷移中に必ず 1 つだけ存在する原因として扱う。`component_effect <name>` は `level_menu` の cursor 移動や enter のように component が所有する操作に使う。scene / presentation / lifecycle effect は `effect` wrapper を付けずに直接書く。
 
 scene effect は `sfx <name>`、`play_music <name>`、`pause_music [name]`、`resume_music [name]`、`stop_music [name]`、`goto <scene>`、`goto <scene>(<level>)`、`start <scene>`、`start <scene>(<level>)`、`clear_undo_history`、`clear_game_progress`、`<target>.restart`、`<target>.next_level` など。scene navigation の canonical form は `goto` と `start` だけ。`goto` は固定 scene node へ切り替え、既存の scene state を保持する。`start` は target scene state を初期化してから `goto` する。level scene への入場も `goto sokoban`、`goto sokoban(level_name)`、`goto playing(level)` のように scene call として書く。level 指定なしの `goto <level scene>` は保存済みまたは選択中の `current_level` を使い、なければ最初の level に入る。`resume` / `continue` / `open` / `enter` / `back` / `close` は canonical scene navigation ではない。旧 `start levels ... in <scene>` / `continue levels ... in <scene>` は読まない。通常の clear / advance / restart は model window component と puzzle lifecycle の責務なので、scene からの target-qualified level effect は button、menu、debug、hub、分岐演出などの明示的な介入に限る。`play_sfx <name>` と `effect <effect>` wrapper は読まない。Effect は単体でも列でも同じ場所に書ける。列の分割は effect vocabulary が所有し、`button "New Game" -> goto playing play_music music` のように component 側は列を特別扱いしない。曖昧な引数を避けたい場合は `on_scene_start` / `if` block、または scene `rules` 内の block に 1 行ずつ書く。`then` による inline sequence は使わない。
 
@@ -1597,12 +1611,17 @@ model 内の `sounds` block では、object が実際に move として lower �
 ```txt
 puzzle sokoban {
 sounds {
-on move Box -> sfx push
+move Box -> sfx push
+cantmove Box -> sfx bump
+}
+
+layers {
+actor = Player Box
 }
 }
 ```
 
-`on move <selector> -> sfx <name>` の `<selector>` は通常の object selector / group / schema selector。これは runtime event watcher ではなく lowering sugar で、rewrite alternative が `Move` write を含む場合だけ、その rule に `sfx` emission を付ける。remove+add として書かれた変化は move ではないので対象外。
+`move <selector> -> sfx <name>` / `cantmove <selector> -> sfx <name>` の `<selector>` は通常の object selector / group / schema selector。`sounds` が `layers` より前にあっても、同じ puzzle scope の最終 catalog に対して解決する。これは runtime event watcher ではなく lowering sugar で、rewrite alternative が standard move の move / blocked move に対応するときだけ、その rule に `sfx` emission を付ける。remove+add として書かれた変化は move ではないので対象外。
 
 PuzzleScript の `Sounds` section は object move / create / SFX0 などの runtime event に seed を結びつける。importer は `sfx0 12345` のような単純な named seed を `sounds { sfx sfx0 seed=12345 type=puzzlescript }` に lower し、rule suffix の `SFX0` は明示的な `sfx sfx0` として鳴らす。PuzzleScript importer の event-based sounds、たとえば object movement / create sounds はまだ canonical syntax へ自動変換しない。
 
@@ -1753,15 +1772,19 @@ update board
 }
 ```
 
-`scene level_menu [name]` は level 選択専用 scene。`name` を省略すると `level_select` になる。直下に `show_index = <true|false>`、`show_solved = <true|false>`、`layout = list`、`columns = <n>`、`wrap = <true|false>`、`locked = disabled|hidden`、`button ...` などの `level_menu` option を書ける。
+`scene level_menu [name]` の typed scene template は読まない。level list は通常 scene の `layout` 内に `level_menu` component として置く。`show_index = <true|false>`、`show_solved = <true|false>`、`layout = list`、`columns = <n>`、`wrap = <true|false>`、`locked = disabled|hidden`、`button ...` などの option は `level_menu { ... }` 内に書く。
 
 ```txt
-scene level_menu {
+scene level_select {
+layout {
+level_menu {
 show_index = true
 show_solved = true
 columns = 4
 wrap = true
 button "Title" -> goto title
+}
+}
 }
 ```
 
@@ -1786,7 +1809,7 @@ text message
 sokoban
 text "Level clear"
 text message
-choice "Resume" -> input resume
+choice "Resume" -> resume
 button "Title" -> goto title
 box {
 text message
@@ -1815,10 +1838,10 @@ text message
 text level.label
 ```
 
-`choice` と `button` は押されたときに input、component effect、または scene effect を発行する。`choice` は標準 cursor で選ばれる主選択肢、`button` は補助操作である。旧 `button "Label" = name`、`choice "Label" action name`、裸名 RHS は読まない。`-> input <name>`、`-> component_effect <name>`、または direct scene effect を使う。
+`choice` と `button` は押されたときに input、component effect、scene-local routine、または scene effect を発行する。`choice` は標準 cursor で選ばれる主選択肢、`button` は補助操作である。旧 `button "Label" = name` と `choice "Label" action name` は読まない。`-> input <name>`、`-> component_effect <name>`、bare routine name、または direct scene effect を使う。bare routine name は同じ scene 内の `routine <name> { ... }` を要求する。
 
 ```txt
-choice "Resume" -> input resume
+choice "Resume" -> resume
 choice "Start" -> goto sokoban
 button "Restart" -> playing.restart
 button "Title" -> goto title
@@ -1829,17 +1852,7 @@ button level.label -> playing.goto level
 
 `for` は collection の各 item から layout node を生成する projection primitive。固定 component を並べる場合も、collection を表示する場合も、最終的には `row` / `column` の children として扱われる。`for` 自体は cursor、enter、scroll を所有しない。
 
-level list の基本形は `scene level_menu level_select { ... }`。見出しや追加説明などが必要な場合だけ、通常の `scene` の `layout` に `level_menu { ... }` を置く。どちらの場合も component が cursor 移動、enter、locked 表示、多すぎる項目の scroll を所有する。
-
-```txt
-scene level_menu level_select {
-level_menu {
-show_index = true
-show_solved = true
-button "Title" -> goto title
-}
-}
-```
+level list の基本形は、通常の `scene` の `layout` に `level_menu { ... }` を置くこと。component が cursor 移動、enter、locked 表示、多すぎる項目の scroll を所有する。
 
 ```txt
 scene level_select {
@@ -1860,25 +1873,25 @@ button "Title" -> goto title
 
 level の開始、読み込み、restart は level scene / puzzle slot に対する effect として書ける。ただし通常の clear / advance / restart は level scene 内の model window component と puzzle lifecycle が所有する。scene からの target effect は、title/menu から入る、button で明示 restart する、hub から特定 level に飛ぶ、通常 clear とは別の例外 flow に入る、などの介入だけに使う。canonical な開始は `goto sokoban` または `goto sokoban(level_name)`。level 指定なしの `goto <level scene>` は保存済みまたは選択中の `current_level` を使い、なければ最初の level に入る。独自 scene なら `scene playing(level) { state { sokoban(level) } layout { sokoban } rules { step sokoban } }` として `goto playing(level)` で入る。旧 `start levels ... in <scene>` / `continue levels ... in <scene>` は読まない。`playing.restart` は playing scene の現在 level を初期状態に戻し、`playing.next_level` は playing scene を次 level で開始し、`playing.previous_level` は前 level で開始する。`playing.goto <level>` は指定 level で playing scene に移る。`board.restart` のように puzzle slot を target にした場合は、その puzzle state を初期状態に戻す。`board.next_level` はその puzzle を所有する level scene を進める。
 
-### `inputs`
+### `keys`
 
 ```txt
-inputs {
-right <- d ArrowRight
-left <- a ArrowLeft
-restart <- r
+keys {
+d ArrowRight -> right
+a ArrowLeft -> left
+r -> restart
 }
 ```
 
-`inputs` は owner-scoped な raw input source から semantic input への対応表。puzzle 内では puzzle rules が読む input に変換し、scene 内では scene-wide shortcut や menu/title confirm が読む input に変換する。
+`keys` は owner-scoped な raw key から semantic input、scene routine、または scene effect への対応表。puzzle 内では puzzle rules が読む semantic input に変換し、scene 内では scene-local routine や明示 effect を呼ぶ。
 
 ```txt
-<input> <- <key> [<key> ...]
+<key> [<key> ...] -> <input-or-routine-or-effect>
 ```
 
-通常文字は `d` のように書く。特殊キーは `ArrowRight` / `ArrowLeft` / `ArrowUp` / `ArrowDown` / `Enter` / `Space` / `Escape` / `Tab` / `Backspace` のように名前で書く。`restart <- r` は model default mapping だが、`my_restart <- r` のように同じ key を別 input に割り当てると、その key は `restart` ではなく自作 input として解釈される。
+通常文字は `d` のように書く。特殊キーは `ArrowRight` / `ArrowLeft` / `ArrowUp` / `ArrowDown` / `Enter` / `Space` / `Escape` / `Tab` / `Backspace` のように名前で書く。`r -> restart` は model default mapping だが、`r -> my_restart` のように同じ key を別 input に割り当てると、その key は `restart` ではなく自作 input として解釈される。
 
-`keys { ... }` は scene-local な shortcut として使える。`q Escape -> level_select` は複数 key を同じ scene input に変換し、`Escape -> goto title` は key から直接 scene effect を実行する。`keys` では `=` を使わない。名前付きの scene input を定義してから束ねる通常形は `inputs { <input> <- <key...> }`。
+scene では bare identifier の RHS は scene-local `routine` 呼び出しとして扱う。`q Escape -> level_select` は複数 key から `routine level_select` を呼び、`Escape -> goto title` は key から直接 scene effect を実行する。`keys` では `=` を使わない。
 
 ```txt
 scene title {
@@ -1887,19 +1900,19 @@ Enter Space -> confirm
 Escape -> goto title
 }
 button "Play" -> input confirm
-rules {
-confirm -> goto playing
+routine confirm {
+goto playing
 }
 }
 ```
 
-button click も `button "Play" -> input confirm` のように semantic input を出せる。これにより keyboard confirm と click confirm は同じ scene rules を通る。将来的には `confirm <- Enter Space x Play` のように button source 名も `inputs` 側へ含められるようにする。
+button click も `button "Play" -> input confirm` のように semantic input を出せる。keyboard confirm を同じ semantic input として扱いたい場合は `keys { Enter Space -> input confirm }` と明示する。key から単に named effect sequence を実行したい場合は `keys { Enter Space -> confirm }` と `routine confirm { ... }` を使う。
 
 ```txt
 my_restart -> restart
 ```
 
-model `rules` の `<input> -> <effect>` と scene `rules` の `<input> -> <effect>` はどちらも `if input == <input> { ... }` の sugar。model rules 内に `restart` input handler がなければ、default として `restart -> restart` が追加される。
+model `rules` の `<input> -> <effect>` は `if input == <input> { <effect> }` の sugar。model rules 内に `restart` input handler がなければ、default として `restart -> restart` が追加される。scene key dispatch は `rules` ではなく `keys` と `routine` で書く。
 
 scene が level lifecycle に介入したい場合は、button や scene transition から `playing.restart` / `board.restart` のように target を明示する。これは通常進行の書き方ではなく、ユーザー操作や特殊 flow のための escape hatch である。
 

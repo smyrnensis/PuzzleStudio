@@ -13,7 +13,7 @@ pub fn compile_preview(
         puzzle_path
     };
     html_play::export_html_from_source(source, path, game_css, game_visuals_js)
-        .map_err(|error| JsValue::from_str(&error))
+        .map_err(|error| JsValue::from_str(&error.to_string()))
 }
 
 #[wasm_bindgen]

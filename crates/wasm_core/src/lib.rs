@@ -797,6 +797,9 @@ fn encode_outcome(
     out.push(',');
     bool_field(&mut out, "cancelled", cancelled);
     out.push(',');
+    out.push_str("\"state\":");
+    out.push_str(&encode_state(state));
+    out.push(',');
     number(&mut out, "stateHash", state.hash());
     out.push_str(",\"stateHashKey\":");
     string(&mut out, &state.hash().to_string());
@@ -1009,4 +1012,22 @@ fn string(out: &mut String, value: &str) {
         }
     }
     out.push('"');
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn transition_outcome_includes_state_payload() {
+        let state = State::empty_with_globals(2, 1, 1, 2, vec![7]).expect("state");
+        let outcome = encode_outcome(&state, None, None, false, &[], &[]);
+        let parsed: Value = serde_json::from_str(&outcome).expect("outcome json");
+
+        assert_eq!(parsed["state"]["width"], 2);
+        assert_eq!(parsed["state"]["height"], 1);
+        assert_eq!(parsed["state"]["layerCount"], 1);
+        assert_eq!(parsed["state"]["slots"].as_array().expect("slots").len(), 2);
+        assert_eq!(parsed["state"]["globals"][0], 7);
+    }
 }

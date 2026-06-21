@@ -9,4 +9,4 @@ puzzle-authoring = { path = "../authoring" }
 puzzle-core = { path = "../core" }
 puzzle-kernel = { path = "../kernel" }
 puzzle-scene = { path = "../scene" }
-puzzle3d-model = { path = "../puzzle3d_model" }
+puzzle-3d = { path = "../puzzle_3d" }

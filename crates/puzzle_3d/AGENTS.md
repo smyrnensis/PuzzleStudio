@@ -1,14 +1,28 @@
 # Agent Notes
 
-This crate owns the 3D model parser/runtime.
+This crate is a temporary 3D authoring/runtime facade.
+
+The deterministic 3D grid core lives in `crates/grid3d`. Do not add new state,
+patch, transition, win-condition, level-state construction, coordinate, offset,
+direction, or frame mechanics here.
+
+Remaining responsibilities in this crate should migrate toward their normal
+owners:
+
+- `.puzzle3` parsing, validation, semantic scanning, and lowering belong in
+  `crates/lang`.
+- session flow, undo/restart, level navigation, and lifecycle behavior belong in
+  `crates/play`.
+- visual fixture export and host-facing presentation behavior belong in
+  adapters.
 
 3D authoring must stay logically isomorphic with the 2D authoring path. Do not
 add an independent parser interpretation for non-spatial syntax. Shared
 authoring concepts such as selectors, `no`, scratch blocks, prefix scratch sugar
 like `> Player`, inputs, lifecycle names, and scene commands must use shared
-authoring helpers or the same lowered meaning as 2D. 3D-specific code may branch
-only at the thin spatial boundary: coordinates, offsets, direction/frame
-expansion, 3D levels, and 3D rendering metadata.
+authoring helpers or the same lowered meaning as 2D. 3D-specific authoring code
+may branch only at the thin spatial boundary: coordinates, offsets,
+direction/frame expansion, 3D levels, and 3D rendering metadata.
 
 ## 3D Authoring Notes
 

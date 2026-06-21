@@ -147,11 +147,16 @@ class PuzzleRenderer {
     const layers = this.sortedLayers(cellData.layers);
     cell.classList.toggle("has-objects", layers.length > 0);
     for (const layer of layers) {
-      cell.classList.add(`has-${layer.sprite}`);
+      if (this.resolveVisualSprite(layer)) {
+        cell.classList.add(`has-${layer.sprite}`);
+      }
     }
 
     for (const layer of layers) {
-      cell.append(this.renderSprite(layer));
+      const sprite = this.renderSprite(layer);
+      if (sprite) {
+        cell.append(sprite);
+      }
     }
 
     return cell;
@@ -163,13 +168,7 @@ class PuzzleRenderer {
       return this.renderVisualSprite(layer, visualSprite.definition, visualSprite.key);
     }
 
-    const sprite = document.createElement("span");
-    sprite.className = `sprite ${layer.sprite}`;
-    sprite.dataset.object = layer.object;
-    sprite.dataset.layer = layer.layer;
-    sprite.style.zIndex = String(layer.layer + 1);
-    sprite.setAttribute("aria-hidden", "true");
-    return sprite;
+    return null;
   }
 
   renderVisualSprite(layer, definition, visualKey) {
@@ -333,7 +332,6 @@ class PuzzleRenderer {
       y = -unit / 2;
     }
     if (!definition) {
-      this.paintFallbackLayer(context, layer, x, y, unit);
       if (transform) {
         context.restore();
       }
@@ -437,13 +435,6 @@ class PuzzleRenderer {
     };
   }
 
-  paintFallbackLayer(context, layer, x, y, unit) {
-    const hue = this.hashString(layer.object || layer.sprite || "") % 360;
-    context.fillStyle = `hsl(${hue} 55% 54%)`;
-    const inset = Math.max(1, Math.floor(unit * 0.18));
-    context.fillRect(x + inset, y + inset, Math.max(1, unit - inset * 2), Math.max(1, unit - inset * 2));
-  }
-
   cachedImage(source) {
     const url = window.PuzzleAssets?.url(source) || source;
     const cache = this.constructor.imageCache || (this.constructor.imageCache = new Map());
@@ -514,14 +505,6 @@ class PuzzleRenderer {
 
   boardLabel(scene, frame) {
     return `Board ${frame.width} by ${frame.height}`;
-  }
-
-  hashString(value) {
-    let hash = 0;
-    for (const char of String(value || "")) {
-      hash = ((hash << 5) - hash + char.charCodeAt(0)) | 0;
-    }
-    return Math.abs(hash);
   }
 
   patternDataUrl(definition) {

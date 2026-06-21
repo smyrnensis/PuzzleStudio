@@ -44,6 +44,8 @@ Read the corresponding folder `AGENTS.md` before editing these areas:
 
 - `crates/`: shared crate boundaries and package-level commands.
 - `crates/core/`: deterministic state, patches, guards, transition application.
+- `crates/grid3d/`: deterministic 3D grid primitives, state, patches, levels,
+  win checks, and transition application.
 - `crates/lang/`: `.puzzle` parsing, validation, authoring syntax, lowering,
   semantic highlighting, and import compatibility.
 - `crates/play/`: loaded-game session mechanics, undo/restart/level flow, and
@@ -56,7 +58,9 @@ Read the corresponding folder `AGENTS.md` before editing these areas:
   highlighting, workspace behavior, and editor-owned layout.
 - `crates/ascii_play/`: terminal adapter behavior.
 - `crates/cli/`: product/automation facade and command routing.
-- `crates/puzzle3d_model/`: 3D model parser/runtime.
+- `crates/puzzle_3d/`: temporary 3D authoring/runtime facade. Its deterministic
+  core has moved to `crates/grid3d/`; remaining parser/lowering/session/export
+  responsibilities should continue migrating to `lang`, `play`, and adapters.
 - `src-tauri/`: desktop shell and host filesystem boundary.
 - `games/`: sample authoring inputs and generated standalone game exports.
 - `docs/`: generated web documentation exports and documentation source policy.

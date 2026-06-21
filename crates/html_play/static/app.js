@@ -393,6 +393,7 @@ function syncScreenScale() {
   screenFrame.dataset.screenVirtualWidth = String(virtualSize.width);
   screenFrame.dataset.screenVirtualHeight = String(virtualSize.height);
   syncLogicalLayoutElementSizes(unit);
+  syncCleanControlGroupWidths(screenView);
   fitPuzzleFrameComponents(screenView);
 }
 
@@ -670,6 +671,7 @@ function renderSceneEditorLayer(sceneDef, state) {
   renderSurfaceComponents(components, layerEl, scope);
   markSingleFrameComponentLayer(layerEl);
   screenView.append(layerEl);
+  syncCleanControlGroupWidths(screenView);
   fitPuzzleFrameComponents(screenView);
 }
 
@@ -826,6 +828,7 @@ function renderSceneStack(state) {
     markSingleFrameComponentLayer(layerEl);
     screenView.append(layerEl);
   }
+  syncCleanControlGroupWidths(screenView);
   fitPuzzleFrameComponents(screenView);
 }
 
@@ -834,6 +837,52 @@ function markSingleFrameComponentLayer(layerEl) {
   const singleFrameComponent =
     visibleChildren.length === 1 && visibleChildren[0]?.dataset.frameComponent === "true";
   layerEl.classList.toggle("has-single-frame-component", singleFrameComponent);
+}
+
+function syncCleanControlGroupWidths(root = screenView) {
+  if (!root?.querySelectorAll) {
+    return;
+  }
+  const groups = cleanControlGroups(root);
+  for (const group of groups) {
+    group.style.removeProperty("--clean-control-width");
+  }
+  if (!document.body.classList.contains("theme-clean")) {
+    return;
+  }
+  for (const group of groups) {
+    const controls = directCleanControlChildren(group);
+    if (controls.length < 2) {
+      continue;
+    }
+    const maxWidth = Math.ceil(controls.reduce((max, control) => (
+      Math.max(max, cleanControlNaturalWidth(control))
+    ), 0));
+    if (maxWidth > 0) {
+      group.style.setProperty("--clean-control-width", `${maxWidth}px`);
+    }
+  }
+}
+
+function cleanControlGroups(root = screenView) {
+  const groups = [];
+  if (root?.matches?.(".scene-layer, .view-column, .view-box")) {
+    groups.push(root);
+  }
+  groups.push(...root.querySelectorAll(".scene-layer, .view-column, .view-box"));
+  return groups;
+}
+
+function directCleanControlChildren(group) {
+  return [...group.children].filter((child) => (
+    !child.hidden
+      && child.matches("button, .level-menu")
+      && child.getClientRects().length > 0
+  ));
+}
+
+function cleanControlNaturalWidth(control) {
+  return Math.max(control.scrollWidth, control.offsetWidth);
 }
 
 function fitPuzzleFrameComponents(root = screenView) {
@@ -2167,6 +2216,15 @@ function sceneDefinitionsForSource(source) {
   return nonEmptyArray(source?.scenes) || nonEmptyArray(source?.screens) || [];
 }
 
+function sceneRoutineEffect(name, scope = {}) {
+  const scene = scope.__sceneDef || currentSceneDef();
+  const routine = (scene?.routines || []).find((candidate) => candidate.name === name);
+  if (!routine) {
+    throw new Error(`Unknown scene routine: ${name}`);
+  }
+  return routine.effect || null;
+}
+
 function nonEmptyArray(value) {
   return Array.isArray(value) && value.length > 0 ? value : null;
 }
@@ -2602,7 +2660,7 @@ function effectLabel(effect) {
   if (typeof effect === "string") {
     return effect;
   }
-  if (effect.kind === "command" || effect.kind === "input" || effect.kind === "component_effect") {
+  if (effect.kind === "command" || effect.kind === "input" || effect.kind === "component_effect" || effect.kind === "routine_call") {
     return effect.name;
   }
   if (effect.kind === "message") {
@@ -2656,6 +2714,10 @@ function effectToCommand(effect, scope = {}) {
   }
   if (effect.kind === "command" || effect.kind === "input" || effect.kind === "component_effect") {
     return commandWithScope(effect.name, scope);
+  }
+  if (effect.kind === "routine_call") {
+    const routineEffect = sceneRoutineEffect(effect.name, scope);
+    return effectToCommand(routineEffect?.effect || routineEffect, scope);
   }
   if (effect.kind === "message") {
     return `message ${exprSource(effect.text, scope)}`.trim();
@@ -2777,7 +2839,7 @@ function exprSource(expr, scope = {}) {
 
 function exprValueSource(value) {
   if (typeof value === "object" && value?.kind === "level" && value.name !== undefined) {
-    return JSON.stringify(value.name);
+    return String(value.name);
   }
   return commandPayload(value);
 }

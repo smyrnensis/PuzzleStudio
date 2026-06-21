@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::semantic::{SemanticKind, SemanticToken, semantic_tokens};
+use crate::semantic::{SemanticKind, SemanticToken, first_identifier_bounds, semantic_tokens};
 use crate::source::{SourceScope, scan_source_context, split_header_tokens, strip_line_comment};
 use crate::syntax::is_parser_keyword;
 use crate::{
@@ -201,7 +201,7 @@ fn collect_puzzle3_symbols(
         for axis in &family.axes {
             family_axis_names.insert(axis.name.clone());
             symbols.insert(axis.name.clone(), HighlightKind::Group);
-            if let puzzle3d_model::VariantValueSet3::Named(values) = &axis.values {
+            if let puzzle_3d::VariantValueSet3::Named(values) = &axis.values {
                 for value in values {
                     symbols.insert(value.clone(), HighlightKind::Variant);
                 }
@@ -238,6 +238,7 @@ fn highlight_html(
     let context = scan_source_context(source);
     let binding_ranges = scan_for_binding_ranges(source);
     let semantic_ranges = semantic_tokens(source);
+    let keyword_ranges = scan_contextual_keyword_ranges(&context);
     let brace_ranges = scan_brace_ranges(source, &context);
     let visual_color_aliases = scan_visual_color_aliases(&context);
     let visual_named_color_ranges = scan_visual_named_color_ranges(&context, &visual_color_aliases);
@@ -247,7 +248,12 @@ fn highlight_html(
     while let Some((index, ch)) = chars.next() {
         if let Some(range) = visual_ascii_color_range_starting_at(&visual_ascii_color_ranges, index)
         {
-            push_colored_text_span(&mut out, &range.color, &source[range.start..range.end]);
+            push_colored_text_span(
+                &mut out,
+                &range.color,
+                &source[range.start..range.end],
+                range.transparent,
+            );
             skip_until(&mut chars, range.end);
             continue;
         }
@@ -340,6 +346,7 @@ fn highlight_html(
                     family_axis_names,
                     &binding_ranges,
                     &semantic_ranges,
+                    &keyword_ranges,
                 );
             }
             skip_until(&mut chars, end);
@@ -437,8 +444,24 @@ fn scan_brace_line(
         return;
     }
 
-    for (index, ch) in braces {
+    let mut brace_index = 0usize;
+    while brace_index < braces.len() {
+        let (index, ch) = braces[brace_index];
         match ch {
+            '{' if is_inline_selector_scratch_open(source, index) => {
+                if let Some(close) = inline_selector_scratch_close(source, index, content_end)
+                    && let Some(close_offset) = braces[brace_index + 1..]
+                        .iter()
+                        .position(|(brace_index, brace)| *brace_index == close && *brace == '}')
+                {
+                    let close_index = brace_index + 1 + close_offset;
+                    ranges.insert(index, HighlightKind::Scratch);
+                    ranges.insert(braces[close_index].0, HighlightKind::Scratch);
+                    brace_index = close_index + 1;
+                    continue;
+                }
+                ranges.insert(index, HighlightKind::InvalidBrace);
+            }
             '{' => {
                 let depth = block_stack.len();
                 block_stack.push((index, depth));
@@ -454,7 +477,30 @@ fn scan_brace_line(
             }
             _ => {}
         }
+        brace_index += 1;
     }
+}
+
+fn is_inline_selector_scratch_open(source: &str, index: usize) -> bool {
+    let before = source[..index].chars().next_back();
+    let after = source[index + 1..].chars().next();
+    before.is_some_and(is_selector_token_char) && after.is_some_and(|ch| !ch.is_whitespace())
+}
+
+fn inline_selector_scratch_close(source: &str, open: usize, content_end: usize) -> Option<usize> {
+    for (offset, ch) in source[open + 1..content_end].char_indices() {
+        let index = open + 1 + offset;
+        match ch {
+            '}' => return Some(index),
+            '[' | ']' | '|' | ';' | ',' | '(' | ')' | '{' => return None,
+            _ => {}
+        }
+    }
+    None
+}
+
+fn is_selector_token_char(ch: char) -> bool {
+    ch.is_ascii_alphanumeric() || matches!(ch, '_' | '@' | ':' | '*')
 }
 
 fn line_code_end(line: &str) -> usize {
@@ -545,8 +591,7 @@ fn symbol_collection_scope(scope: Option<SourceScope>) -> Option<SourceScope> {
     match scope {
         None | Some(SourceScope::Puzzle) => None,
         Some(
-            scope @ (SourceScope::Objects
-            | SourceScope::Sounds
+            scope @ (SourceScope::Sounds
             | SourceScope::Tags
             | SourceScope::Group
             | SourceScope::Layers
@@ -555,6 +600,7 @@ fn symbol_collection_scope(scope: Option<SourceScope>) -> Option<SourceScope> {
             | SourceScope::Keys),
         ) => Some(scope),
         Some(SourceScope::SceneKeys) => Some(SourceScope::Keys),
+        Some(SourceScope::SceneState) => Some(SourceScope::SceneState),
         Some(_) => Some(SourceScope::Other),
     }
 }
@@ -569,33 +615,35 @@ fn collect_line_symbols(
 ) {
     match tokens {
         ["routine", "display", name, ..] | ["rule", "display", name, ..] => {
-            insert_source_symbol(symbols, name, HighlightKind::Effect);
+            insert_declared_source_symbol(symbols, name, HighlightKind::Effect);
         }
         ["routine", name, ..] | ["rule", name, ..] => {
-            insert_source_symbol(symbols, name, HighlightKind::Effect);
+            insert_declared_source_symbol(symbols, name, HighlightKind::Effect);
         }
         ["input", name, ..] | ["direction", name, ..] => {
-            insert_source_symbol(symbols, name, HighlightKind::Input);
+            insert_declared_source_symbol(symbols, name, HighlightKind::Input);
         }
         ["condition", name, ..] => {
-            insert_source_symbol(symbols, name, HighlightKind::Condition);
+            insert_declared_source_symbol(symbols, name, HighlightKind::Condition);
         }
-        ["scene", name, ..] => {
-            insert_source_symbol(symbols, name, HighlightKind::Scene);
+        ["scene", name, ..] if scope.is_none() => {
+            insert_declared_source_symbol(symbols, name, HighlightKind::Scene);
         }
-        ["puzzle" | "puzzle3", name, ..] => {
-            insert_source_symbol(symbols, name, HighlightKind::Scene);
+        ["puzzle" | "puzzle3", name, ..] if scope.is_none() => {
+            insert_declared_source_symbol(symbols, name, HighlightKind::Scene);
         }
-        ["levels3", name, "of", model, ..] | ["sprites3", name, "of", model, ..] => {
-            insert_source_symbol(symbols, name, HighlightKind::Scene);
+        ["levels3", name, "of", model, ..] | ["sprites3", name, "of", model, ..]
+            if scope.is_none() =>
+        {
+            insert_declared_source_symbol(symbols, name, HighlightKind::Scene);
             insert_source_symbol(symbols, model, HighlightKind::Scene);
         }
-        ["levels3" | "sprites3", name, ..] => {
-            insert_source_symbol(symbols, name, HighlightKind::Scene);
+        ["levels3" | "sprites3", name, ..] if scope.is_none() => {
+            insert_declared_source_symbol(symbols, name, HighlightKind::Scene);
         }
         ["map", name, axis] => {
-            insert_source_symbol(symbols, name, HighlightKind::Effect);
-            insert_source_symbol(symbols, axis, HighlightKind::Group);
+            insert_declared_source_symbol(symbols, name, HighlightKind::Effect);
+            insert_declared_source_symbol(symbols, axis, HighlightKind::Group);
             family_axis_names.insert((*axis).to_string());
         }
         ["sfx", name, ..] | ["music", name, ..] if scope == Some(SourceScope::Sounds) => {
@@ -610,71 +658,56 @@ fn collect_line_symbols(
         [name] if scope == Some(SourceScope::Visuals) => {
             insert_source_symbol(symbols, name, HighlightKind::Asset);
         }
-        ["object", spec, ..] if *spec != "=" => collect_object_declaration_spec(
-            spec,
-            symbols,
-            family_bases,
-            family_axes,
-            family_axis_names,
-        ),
+        ["var" | "const", name, "=", ..] if scope == Some(SourceScope::SceneState) => {
+            insert_declared_source_symbol(symbols, name, HighlightKind::State);
+        }
+        ["persistent", "var" | "const", name, "=", ..]
+            if scope == Some(SourceScope::SceneState) =>
+        {
+            insert_declared_source_symbol(symbols, name, HighlightKind::State);
+        }
+        ["persistent", name, "=", ..] if scope == Some(SourceScope::SceneState) => {
+            insert_declared_source_symbol(symbols, name, HighlightKind::State);
+        }
+        [name, "=", ..] if scope == Some(SourceScope::SceneState) => {
+            insert_declared_source_symbol(symbols, name, HighlightKind::State);
+        }
         ["var" | "const", name, "=", ..]
         | ["persistent", "var" | "const", name, "=", ..]
         | ["persistent", name, "=", ..] => {
-            insert_source_symbol(symbols, name, HighlightKind::State);
+            insert_declared_source_symbol(symbols, name, HighlightKind::State);
         }
         ["group", name, "=", selectors @ ..] => {
-            insert_source_symbol(symbols, name, HighlightKind::Group);
+            insert_declared_source_symbol(symbols, name, HighlightKind::Group);
             collect_selector_specs(selectors, symbols);
         }
         [name, "=", values @ ..] if scope == Some(SourceScope::Group) => {
-            insert_source_symbol(symbols, name, HighlightKind::Group);
+            insert_declared_source_symbol(symbols, name, HighlightKind::Group);
             collect_selector_specs(values, symbols);
         }
-        [
-            "layer" | "layers" | "collision_layers",
-            name,
-            "=",
-            selectors @ ..,
-        ] if scope == Some(SourceScope::Objects) => {
-            collect_layer_selector_specs(name, selectors, symbols);
-        }
         [name, "=", selectors @ ..] if scope == Some(SourceScope::Layers) => {
-            insert_source_symbol(symbols, name, HighlightKind::Group);
-            collect_layer_selector_specs(name, selectors, symbols);
+            insert_declared_source_symbol(symbols, name, HighlightKind::Group);
+            collect_layer_selector_specs(
+                name,
+                selectors,
+                symbols,
+                family_bases,
+                family_axes,
+                family_axis_names,
+            );
         }
         ["each", selectors @ ..] if scope == Some(SourceScope::Layers) => {
-            collect_selector_specs(selectors, symbols);
+            collect_schema_object_specs(
+                selectors,
+                symbols,
+                family_bases,
+                family_axes,
+                family_axis_names,
+            );
         }
         [first, selectors @ ..] if scope == Some(SourceScope::Layers) && *first != "for" => {
             collect_selector_spec(first, symbols);
             collect_selector_specs(selectors, symbols);
-        }
-        ["each", spec, ..] if scope == Some(SourceScope::Objects) => {
-            collect_object_declaration_spec(
-                spec,
-                symbols,
-                family_bases,
-                family_axes,
-                family_axis_names,
-            );
-        }
-        ["display", spec, ..] if scope == Some(SourceScope::Objects) => {
-            collect_object_declaration_spec(
-                spec,
-                symbols,
-                family_bases,
-                family_axes,
-                family_axis_names,
-            );
-        }
-        [specs @ ..] if scope == Some(SourceScope::Objects) => {
-            collect_object_declaration_specs(
-                specs,
-                symbols,
-                family_bases,
-                family_axes,
-                family_axis_names,
-            );
         }
         [name, "=", ty] if scope == Some(SourceScope::Scratch) => {
             collect_scratch_spec(name, Some(*ty), symbols)
@@ -685,14 +718,16 @@ fn collect_line_symbols(
                 .map_or((*spec, None), |(name, ty)| (name, Some(ty)));
             collect_scratch_spec(name, ty, symbols);
         }
-        [..] if scope == Some(SourceScope::Keys) => collect_key_binding_symbols(tokens, symbols),
+        [..] if matches!(scope, Some(SourceScope::Keys | SourceScope::SceneKeys)) => {
+            collect_key_binding_symbols(tokens, symbols)
+        }
         [name, "=", values @ ..]
             if scope == Some(SourceScope::Tags) && tag_set_tokens(name, values) =>
         {
-            insert_source_symbol(symbols, name, HighlightKind::Group);
+            insert_declared_source_symbol(symbols, name, HighlightKind::Group);
             family_axis_names.insert((*name).to_string());
             for value in values {
-                insert_source_symbol(symbols, value, HighlightKind::Variant);
+                insert_declared_source_symbol(symbols, value, HighlightKind::Variant);
             }
         }
         _ => {}
@@ -701,14 +736,6 @@ fn collect_line_symbols(
 
 fn collect_key_binding_symbols(tokens: &[&str], symbols: &mut HashMap<String, HighlightKind>) {
     let Some(separator) = tokens.iter().position(|token| matches!(*token, "=" | "->")) else {
-        if let Some(separator) = tokens.iter().position(|token| *token == "<-") {
-            for input in &tokens[..separator] {
-                insert_source_symbol(symbols, input, HighlightKind::Input);
-            }
-            for key in &tokens[separator + 1..] {
-                insert_source_symbol(symbols, key, HighlightKind::Input);
-            }
-        }
         return;
     };
     if separator == 0 || separator + 1 >= tokens.len() {
@@ -738,12 +765,22 @@ fn collect_layer_selector_specs(
     layer_name: &str,
     specs: &[&str],
     symbols: &mut HashMap<String, HighlightKind>,
+    family_bases: &mut HashSet<String>,
+    family_axes: &mut HashMap<String, usize>,
+    family_axis_names: &mut HashSet<String>,
 ) {
     for spec in specs {
         if matches!(*spec, "=" | "display" | "each") || parser_keyword(spec) {
             continue;
         }
-        collect_layer_selector_spec(layer_name, spec, symbols);
+        collect_layer_selector_spec(
+            layer_name,
+            spec,
+            symbols,
+            family_bases,
+            family_axes,
+            family_axis_names,
+        );
     }
 }
 
@@ -763,6 +800,9 @@ fn collect_layer_selector_spec(
     layer_name: &str,
     spec: &str,
     symbols: &mut HashMap<String, HighlightKind>,
+    family_bases: &mut HashSet<String>,
+    family_axes: &mut HashMap<String, usize>,
+    family_axis_names: &mut HashSet<String>,
 ) {
     let cleaned = clean_object_spec(spec);
     let mut parts = cleaned.split(':');
@@ -772,10 +812,10 @@ fn collect_layer_selector_spec(
     if base != layer_name && matches!(symbols.get(base), Some(HighlightKind::Group)) {
         return;
     }
-    collect_object_spec(spec, symbols);
+    collect_schema_object_spec(spec, symbols, family_bases, family_axes, family_axis_names);
 }
 
-fn collect_object_declaration_specs(
+fn collect_schema_object_specs(
     specs: &[&str],
     symbols: &mut HashMap<String, HighlightKind>,
     family_bases: &mut HashSet<String>,
@@ -786,17 +826,11 @@ fn collect_object_declaration_specs(
         if matches!(*spec, "=" | "display" | "each") || parser_keyword(spec) {
             continue;
         }
-        collect_object_declaration_spec(
-            spec,
-            symbols,
-            family_bases,
-            family_axes,
-            family_axis_names,
-        );
+        collect_schema_object_spec(spec, symbols, family_bases, family_axes, family_axis_names);
     }
 }
 
-fn collect_object_declaration_spec(
+fn collect_schema_object_spec(
     spec: &str,
     symbols: &mut HashMap<String, HighlightKind>,
     family_bases: &mut HashSet<String>,
@@ -812,7 +846,7 @@ fn collect_object_declaration_spec(
             family_axes.insert(base.to_string(), parts.len() - 1);
         }
         for axis in parts.iter().skip(1) {
-            if is_source_symbol_name(axis) {
+            if is_source_symbol_name(axis) && !parser_keyword(axis) {
                 family_axis_names.insert((*axis).to_string());
             }
         }
@@ -943,12 +977,220 @@ fn is_source_value_atom(name: &str) -> bool {
             .all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
 }
 
+fn scan_contextual_keyword_ranges(
+    context: &crate::source::SourceContext,
+) -> HashSet<(usize, usize)> {
+    let mut ranges = HashSet::<(usize, usize)>::new();
+    for line in &context.lines {
+        let tokens = line
+            .token_spans
+            .iter()
+            .filter_map(highlight_token_identifier)
+            .collect::<Vec<_>>();
+        for index in 0..tokens.len() {
+            let (text, start, end) = tokens[index];
+            if parser_keyword(text) && contextual_keyword_token(line.scope, &tokens, index) {
+                ranges.insert((start, end));
+            }
+        }
+    }
+    ranges
+}
+
+fn highlight_token_identifier(token: &crate::source::SourceToken) -> Option<(&str, usize, usize)> {
+    let (relative_start, relative_end) = first_identifier_bounds(&token.text)?;
+    Some((
+        &token.text[relative_start..relative_end],
+        token.start + relative_start,
+        token.start + relative_end,
+    ))
+}
+
+fn contextual_keyword_token(
+    scope: Option<SourceScope>,
+    tokens: &[(&str, usize, usize)],
+    index: usize,
+) -> bool {
+    let Some((keyword, _, _)) = tokens.get(index).copied() else {
+        return false;
+    };
+    if index == 0 && line_head_keyword(scope, keyword, tokens) {
+        return true;
+    }
+    match keyword {
+        "in" => tokens
+            .get(index.checked_sub(2).unwrap_or(usize::MAX))
+            .is_some_and(|(for_keyword, _, _)| *for_keyword == "for"),
+        "of" => tokens
+            .first()
+            .is_some_and(|(first, _, _)| matches!(*first, "levels" | "levels3" | "sprites3")),
+        "display" => {
+            index == 1
+                && tokens
+                    .first()
+                    .is_some_and(|(first, _, _)| matches!(*first, "routine" | "rule"))
+        }
+        "input" => is_rule_like_scope(scope) && index > 0 && before_pattern_token(tokens, index),
+        "puzzle" | "puzzle3" => index > 0,
+        _ => false,
+    }
+}
+
+fn line_head_keyword(
+    scope: Option<SourceScope>,
+    keyword: &str,
+    tokens: &[(&str, usize, usize)],
+) -> bool {
+    if tokens
+        .get(1)
+        .is_some_and(|(separator, _, _)| *separator == "=")
+    {
+        return matches!(scope, Some(SourceScope::SceneState)) && matches!(keyword, "persistent");
+    }
+
+    match scope {
+        None => matches!(
+            keyword,
+            "again_interval"
+                | "assets"
+                | "author"
+                | "default_wait_time"
+                | "homepage"
+                | "import"
+                | "levels"
+                | "levels3"
+                | "puzzle"
+                | "puzzle3"
+                | "scene"
+                | "sounds"
+                | "sprites"
+                | "sprites3"
+                | "theme"
+                | "title"
+                | "var"
+                | "const"
+                | "persistent"
+        ),
+        Some(SourceScope::Puzzle) => {
+            matches!(
+                keyword,
+                "collision_layers"
+                    | "condition"
+                    | "direction"
+                    | "for"
+                    | "groups"
+                    | "if"
+                    | "input"
+                    | "keys"
+                    | "layers"
+                    | "legend"
+                    | "levels"
+                    | "levels3"
+                    | "map"
+                    | "on_display"
+                    | "render"
+                    | "resources"
+                    | "routine"
+                    | "rule"
+                    | "rules"
+                    | "scratch"
+                    | "sprites"
+                    | "sprites3"
+                    | "tags"
+                    | "var"
+                    | "const"
+                    | "persistent"
+            ) || crate::syntax::is_puzzle_lifecycle_block(keyword)
+        }
+        Some(SourceScope::Sounds) => matches!(keyword, "sfx" | "music"),
+        Some(SourceScope::Assets) => matches!(keyword, "css"),
+        Some(SourceScope::Tags) => matches!(keyword, "for"),
+        Some(SourceScope::Group) => matches!(keyword, "for"),
+        Some(SourceScope::Layers) => matches!(keyword, "each" | "for"),
+        Some(SourceScope::Scratch) => matches!(keyword, "var" | "const"),
+        Some(SourceScope::Keys | SourceScope::SceneKeys) => {
+            matches!(keyword, "input" | "direction")
+        }
+        Some(SourceScope::Legend) => matches!(keyword, "legend"),
+        Some(SourceScope::Levels | SourceScope::Level | SourceScope::UnbracedLevel) => {
+            matches!(keyword, "legend" | "level")
+        }
+        Some(SourceScope::Scene) => matches!(
+            keyword,
+            "button" | "for" | "if" | "keys" | "layout" | "level_menu" | "rules" | "state"
+        ),
+        Some(SourceScope::SceneLayout) => matches!(
+            keyword,
+            "box"
+                | "button"
+                | "column"
+                | "for"
+                | "if"
+                | "level_menu"
+                | "puzzle"
+                | "puzzle3"
+                | "row"
+                | "text"
+                | "title"
+                | "subtitle"
+        ),
+        Some(SourceScope::SceneState) => matches!(keyword, "var" | "const" | "persistent"),
+        Some(SourceScope::SceneTransitions) => matches!(
+            keyword,
+            "button" | "else" | "for" | "if" | "input" | "routine" | "step"
+        ),
+        Some(SourceScope::LevelMenu) => matches!(keyword, "button" | "for" | "if"),
+        Some(
+            SourceScope::Visuals
+            | SourceScope::VisualShapeTable
+            | SourceScope::VisualShapeEntry
+            | SourceScope::VisualColorTable
+            | SourceScope::VisualPaletteTable,
+        ) => matches!(keyword, "colors" | "palettes" | "shape" | "shapes"),
+        Some(SourceScope::Other) => {
+            matches!(
+                keyword,
+                "camera"
+                    | "else"
+                    | "for"
+                    | "if"
+                    | "grid"
+                    | "layers"
+                    | "pixelate"
+                    | "repeat"
+                    | "render"
+                    | "tween"
+            ) || rewrite_application_keyword(keyword)
+        }
+    }
+}
+
+fn is_rule_like_scope(scope: Option<SourceScope>) -> bool {
+    matches!(
+        scope,
+        Some(SourceScope::Other | SourceScope::SceneTransitions)
+    )
+}
+
+fn before_pattern_token(tokens: &[(&str, usize, usize)], index: usize) -> bool {
+    tokens
+        .get(index + 1)
+        .is_some_and(|(next, _, _)| matches!(*next, "[" | "{"))
+}
+
+fn rewrite_application_keyword(value: &str) -> bool {
+    matches!(
+        value,
+        "fix" | "once" | "once_all" | "once_per_level" | "repeat"
+    )
+}
+
 fn classify_bare_word(
     token: &str,
     symbols: &HashMap<String, HighlightKind>,
-    _family_bases: &HashSet<String>,
+    allow_parser_keyword: bool,
 ) -> Option<HighlightKind> {
-    classify_word(token, symbols, true)
+    classify_word(token, symbols, allow_parser_keyword)
 }
 
 fn classify_word(
@@ -956,6 +1198,9 @@ fn classify_word(
     symbols: &HashMap<String, HighlightKind>,
     allow_parser_keyword: bool,
 ) -> Option<HighlightKind> {
+    if allow_parser_keyword && parser_keyword(token) {
+        return Some(HighlightKind::Keyword);
+    }
     if let Some(kind) = symbols.get(token).copied() {
         return Some(kind);
     }
@@ -963,9 +1208,6 @@ fn classify_word(
         if let Some(kind @ HighlightKind::Object) = symbols.get(head).copied() {
             return Some(kind);
         }
-    }
-    if allow_parser_keyword && parser_keyword(token) {
-        return Some(HighlightKind::Keyword);
     }
     if parser_literal(token) {
         return Some(HighlightKind::Literal);
@@ -989,6 +1231,7 @@ fn push_word(
     family_axis_names: &HashSet<String>,
     binding_ranges: &[BindingRange],
     semantic_ranges: &[SemanticToken],
+    keyword_ranges: &HashSet<(usize, usize)>,
 ) {
     if matches!(symbols.get(token), Some(HighlightKind::Scratch)) {
         push_span(out, HighlightKind::Scratch, token);
@@ -998,6 +1241,7 @@ fn push_word(
     let parts = split_highlight_word(token);
     let supplied_axes = token.matches(':').count();
     let use_schema_selector_coloring = token.contains(':') && !token.contains('.');
+    let schema_selector_head = parts.first().map(|part| &token[part.start..part.end]);
 
     for (index, part) in parts.iter().enumerate() {
         if let Some(separator) = part.separator_before {
@@ -1006,9 +1250,38 @@ fn push_word(
         let absolute_start = token_start + part.start;
         let absolute_end = token_start + part.end;
         let text = &token[part.start..part.end];
-        let kind = if let Some(kind) =
-            semantic_kind_at(semantic_ranges, absolute_start, absolute_end)
+        let semantic_kind = semantic_kind_at(semantic_ranges, absolute_start, absolute_end);
+        let symbol_kind = symbols.get(text).copied();
+        let allow_parser_keyword = keyword_ranges.contains(&(absolute_start, absolute_end));
+        let kind = if use_schema_selector_coloring
+            && index > 0
+            && local_binding_at(binding_ranges, absolute_start, absolute_end, text)
         {
+            Some(HighlightKind::Binding)
+        } else if use_schema_selector_coloring
+            && index > 0
+            && symbol_kind == Some(HighlightKind::State)
+        {
+            Some(HighlightKind::State)
+        } else if use_schema_selector_coloring && index > 0 && family_axis_names.contains(text) {
+            Some(HighlightKind::Group)
+        } else if use_schema_selector_coloring && index > 0 && text == "*" {
+            Some(HighlightKind::Group)
+        } else if use_schema_selector_coloring
+            && index > 0
+            && schema_selector_head_is_known(
+                schema_selector_head,
+                symbols,
+                family_bases,
+                family_axes,
+            )
+        {
+            Some(HighlightKind::Variant)
+        } else if semantic_kind == Some(HighlightKind::Scene)
+            && symbol_kind == Some(HighlightKind::State)
+        {
+            symbol_kind
+        } else if let Some(kind) = semantic_kind {
             Some(kind)
         } else if local_binding_at(binding_ranges, absolute_start, absolute_end, text) {
             Some(HighlightKind::Binding)
@@ -1022,14 +1295,10 @@ fn push_word(
             } else {
                 Some(HighlightKind::Object)
             }
-        } else if use_schema_selector_coloring && index > 0 && family_axis_names.contains(text) {
-            Some(HighlightKind::Group)
-        } else if use_schema_selector_coloring && index > 0 && text == "*" {
-            Some(HighlightKind::Group)
         } else if token == text {
-            classify_bare_word(text, symbols, family_bases)
+            classify_bare_word(text, symbols, allow_parser_keyword)
         } else {
-            classify_word(text, symbols, false)
+            classify_word(text, symbols, allow_parser_keyword)
         };
         if let Some(kind) = kind {
             push_span(out, kind, text);
@@ -1042,6 +1311,23 @@ fn push_word(
     {
         escape_html_into(out, &token[last.end..]);
     }
+}
+
+fn schema_selector_head_is_known(
+    head: Option<&str>,
+    symbols: &HashMap<String, HighlightKind>,
+    family_bases: &HashSet<String>,
+    family_axes: &HashMap<String, usize>,
+) -> bool {
+    let Some(head) = head else {
+        return false;
+    };
+    family_bases.contains(head)
+        || family_axes.contains_key(head)
+        || matches!(
+            symbols.get(head),
+            Some(HighlightKind::Object | HighlightKind::Group)
+        )
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1110,6 +1396,7 @@ fn highlight_kind_for_semantic(kind: SemanticKind) -> HighlightKind {
         SemanticKind::Input => HighlightKind::Input,
         SemanticKind::State => HighlightKind::State,
         SemanticKind::Group => HighlightKind::Group,
+        SemanticKind::Variant => HighlightKind::Variant,
         SemanticKind::Condition => HighlightKind::Condition,
         SemanticKind::Scene => HighlightKind::Scene,
         SemanticKind::Theme => HighlightKind::Theme,
@@ -1125,6 +1412,7 @@ struct VisualAsciiColorRange {
     start: usize,
     end: usize,
     color: String,
+    transparent: bool,
 }
 
 fn visual_ascii_color_range_starting_at(
@@ -1451,8 +1739,20 @@ fn add_visual_ascii_row_ranges(
     for ch in trimmed.chars() {
         let start = line_start + leading + column;
         let end = start + ch.len_utf8();
-        if let Some(color) = palette.get(&ch).cloned() {
-            ranges.push(VisualAsciiColorRange { start, end, color });
+        if ch == '.' {
+            ranges.push(VisualAsciiColorRange {
+                start,
+                end,
+                color: "transparent".to_string(),
+                transparent: true,
+            });
+        } else if let Some(color) = palette.get(&ch).cloned() {
+            ranges.push(VisualAsciiColorRange {
+                start,
+                end,
+                color,
+                transparent: false,
+            });
         }
         column += ch.len_utf8();
     }
@@ -1740,8 +2040,12 @@ fn push_color_text_span(out: &mut String, color: &str, text: &str) {
     out.push_str("</span>");
 }
 
-fn push_colored_text_span(out: &mut String, color: &str, text: &str) {
-    out.push_str("<span class=\"syntax-sprite-pixel\" style=\"--syntax-sprite-pixel-color: ");
+fn push_colored_text_span(out: &mut String, color: &str, text: &str, transparent: bool) {
+    out.push_str("<span class=\"syntax-sprite-pixel");
+    if transparent {
+        out.push_str(" is-transparent");
+    }
+    out.push_str("\" style=\"--syntax-sprite-pixel-color: ");
     out.push_str(color);
     out.push_str("\">");
     escape_html_into(out, text);
@@ -1886,8 +2190,8 @@ puzzle3 board {
 layers {
 actor
 }
-objects {
-Player actor
+layers {
+__legacy_layer_0 = Player actor
 }
 render {
 camera {
@@ -1990,8 +2294,8 @@ step board
 title arrow_highlight
 
 puzzle board {
-objects {
-Player Box
+layers {
+__legacy_layer_0 = Player Box
 }
 rules {
 [ Player ]->[ Box ]
@@ -2018,14 +2322,14 @@ puzzle board {
 tags {
 color = red blue
 }
-objects {
-Player Box:color
+layers {
+__legacy_layer_0 = Player Box:color
 }
 groups {
 pushable = Player Box:red
 }
-objects {
-@Cursor @Aura:color
+layers {
+@__legacy_layer_0 = @Cursor @Aura:color
 }
 group active = Player Box:blue
 var moves = 0
@@ -2060,6 +2364,91 @@ PB
     }
 
     #[test]
+    fn highlights_tag_definition_values_as_variants() {
+        let highlighted = highlight_source(
+            r#"
+title tag_definition_highlight
+
+puzzle board {
+tags {
+facing = left right
+}
+}
+"#,
+        );
+
+        assert!(highlighted.html.contains("syntax-group\">facing"));
+        assert!(highlighted.html.contains("syntax-variant\">left"));
+        assert!(highlighted.html.contains("syntax-variant\">right"));
+    }
+
+    #[test]
+    fn highlights_keyword_named_tag_axis_in_schema_selectors() {
+        let highlighted = highlight_source(
+            r#"
+title keyword_axis_highlight
+
+puzzle board {
+tags {
+state = stack movable
+}
+layers {
+actor = Box:state
+}
+rules {
+[ Box:state | Box:stack | Box:movable ] -> [ Box:movable ]
+}
+level start {
+.
+}
+}
+"#,
+        );
+        assert!(highlighted.html.contains(
+            "syntax-object\">Box</span><span class=\"syntax-operator\">:</span><span class=\"syntax-variant\">state"
+        ));
+        assert!(highlighted.html.contains(
+            "syntax-object\">Box</span><span class=\"syntax-operator\">:</span><span class=\"syntax-variant\">stack"
+        ));
+        assert!(highlighted.html.contains(
+            "syntax-object\">Box</span><span class=\"syntax-operator\">:</span><span class=\"syntax-variant\">movable"
+        ));
+    }
+
+    #[test]
+    fn highlights_state_backed_schema_selector_slots_as_state_references() {
+        let highlighted = highlight_source(
+            r#"
+title dynamic_selector_highlight
+
+puzzle board {
+var count = 2
+tags {
+num = 1 2 3
+}
+layers {
+actor = Box:num
+}
+empty .
+rules {
+[ Box:count ] -> [ Box:count ]
+}
+level start {
+.
+}
+}
+"#,
+        );
+
+        assert!(highlighted.html.contains(
+            "syntax-object\">Box</span><span class=\"syntax-operator\">:</span><span class=\"syntax-group\">num"
+        ));
+        assert!(highlighted.html.contains(
+            "syntax-object\">Box</span><span class=\"syntax-operator\">:</span><span class=\"syntax-state\">count"
+        ));
+    }
+
+    #[test]
     fn highlights_declared_elements_even_when_source_does_not_parse() {
         let highlighted = highlight_source(
             r#"
@@ -2071,8 +2460,8 @@ kind = A B
 }
 input jump
 condition blocked = no Player
-objects {
-Player Box:kind
+layers {
+__legacy_layer_0 = Player Box:kind
 }
 groups {
 pushable = Box:A
@@ -2125,9 +2514,15 @@ puzzle board {
 tags {
 kind = A B
 }
-objects {
-Box:kind Player
+layers {
+__legacy_layer_0 = Box:kind Box:P Box:L Box:A Box:Y Box:E Box:R
 }
+legend P = Box:P
+legend l = Box:L
+legend a = Box:A
+legend y = Box:Y
+legend e = Box:E
+legend r = Box:R
 rules {
 for k in kind {
 [ Box:k | Player ] -> [ Player | Box:k ]
@@ -2159,8 +2554,8 @@ puzzle board {
 tags {
 kind = A B
 }
-objects {
-Target:kind
+layers {
+__legacy_layer_0 = Target:kind
 }
 rules {
 [ Target:kind | Target:A | Target ] -> [ Target:B | Target ]
@@ -2235,8 +2630,8 @@ level start {
 title direction_axis_highlight
 
 puzzle board {
-objects {
-Facing:directions
+layers {
+__legacy_layer_0 = Facing:directions
 }
 rules {
 for dir in directions {
@@ -2265,8 +2660,8 @@ level start {
 title glyph_highlight
 
 puzzle board {
-objects {
-Player
+layers {
+actor = Player
 }
 rules {
 [ > Player ] -> [ Player ]
@@ -2288,10 +2683,10 @@ level start {
         assert!(highlighted.html.contains("syntax-literal\">^"));
         assert!(highlighted.html.contains("syntax-literal\">v"));
         assert!(
-            highlighted.html.contains("syntax-object\">Player</span><span class=\"syntax-brace-depth-2\">{</span><span class=\"syntax-literal\">&gt;</span><span class=\"syntax-brace-depth-2\">}")
+            highlighted.html.contains("syntax-object\">Player</span><span class=\"syntax-scratch\">{</span><span class=\"syntax-literal\">&gt;</span><span class=\"syntax-scratch\">}")
         );
         assert!(
-            highlighted.html.contains("syntax-object\">Player</span><span class=\"syntax-brace-depth-2\">{</span><span class=\"syntax-literal\">&lt;</span><span class=\"syntax-brace-depth-2\">}")
+            highlighted.html.contains("syntax-object\">Player</span><span class=\"syntax-scratch\">{</span><span class=\"syntax-literal\">&lt;</span><span class=\"syntax-scratch\">}")
         );
         assert!(
             !highlighted
@@ -2385,7 +2780,6 @@ level start {
 }
 "#,
         );
-
         assert!(
             highlighted
                 .html
@@ -2424,7 +2818,6 @@ level accidental {
 }
 "#,
         );
-
         assert!(
             highlighted
                 .html
@@ -2444,7 +2837,7 @@ level accidental {
         assert!(
             highlighted
                 .html
-                .contains("syntax-sprite-pixel\" style=\"--syntax-sprite-pixel-color: #111\">0</span><span class=\"syntax-sprite-pixel\" style=\"--syntax-sprite-pixel-color: #222\">1</span>.")
+                .contains("syntax-sprite-pixel\" style=\"--syntax-sprite-pixel-color: #111\">0</span><span class=\"syntax-sprite-pixel\" style=\"--syntax-sprite-pixel-color: #222\">1</span><span class=\"syntax-sprite-pixel is-transparent\" style=\"--syntax-sprite-pixel-color: transparent\">.</span>")
         );
         assert!(
             !highlighted
@@ -2492,7 +2885,6 @@ Player
 }
 "#,
         );
-
         assert!(
             highlighted
                 .html
@@ -2511,7 +2903,7 @@ Player
         assert!(
             highlighted
                 .html
-                .contains("syntax-sprite-pixel\" style=\"--syntax-sprite-pixel-color: #0000ff\">3</span>.<span class=\"syntax-sprite-pixel\" style=\"--syntax-sprite-pixel-color: #0000ff\">3</span>")
+                .contains("syntax-sprite-pixel\" style=\"--syntax-sprite-pixel-color: #0000ff\">3</span><span class=\"syntax-sprite-pixel is-transparent\" style=\"--syntax-sprite-pixel-color: transparent\">.</span><span class=\"syntax-sprite-pixel\" style=\"--syntax-sprite-pixel-color: #0000ff\">3</span>")
         );
     }
 
@@ -2566,7 +2958,7 @@ light_green dark_green
         assert!(
             highlighted
                 .html
-                .contains("syntax-sprite-pixel\" style=\"--syntax-sprite-pixel-color: #90ee90\">0</span><span class=\"syntax-sprite-pixel\" style=\"--syntax-sprite-pixel-color: #008000\">1</span>.")
+                .contains("syntax-sprite-pixel\" style=\"--syntax-sprite-pixel-color: #90ee90\">0</span><span class=\"syntax-sprite-pixel\" style=\"--syntax-sprite-pixel-color: #008000\">1</span><span class=\"syntax-sprite-pixel is-transparent\" style=\"--syntax-sprite-pixel-color: transparent\">.</span>")
         );
         assert!(
             !highlighted
@@ -2587,9 +2979,9 @@ light_green dark_green
 title key_highlight
 
 scene pause {
-inputs {
-resume <- Escape Enter Space
-quit <- q
+keys {
+Escape Enter Space -> resume
+q -> quit
 }
 rules {
 input quit -> goto title
@@ -2614,8 +3006,8 @@ input resume -> goto playing
 title rewrite_direction_highlight
 
 puzzle board {
-objects {
-Player
+layers {
+actor = Player
 }
 rules {
 right [ Player | ] -> [ | Player ]
@@ -2645,8 +3037,11 @@ level start {
 title scene_highlight
 
 puzzle board {
-objects {
-Player
+layers {
+__legacy_layer_0 = Player
+}
+legend {
+. = empty
 }
 rules {
 [ Player ] -> [ Player ]
@@ -2709,6 +3104,60 @@ scene menu {
                 .contains("syntax-effect\">start</span> <span class=\"syntax-scene\">playing")
         );
         assert!(highlighted.html.contains("syntax-input\">start"));
+    }
+
+    #[test]
+    fn highlights_keyword_named_scene_state_slot_as_state_reference() {
+        let highlighted = highlight_source(
+            r#"
+title state_slot_highlight
+
+puzzle board {
+layers {
+__legacy_layer_0 = Player
+}
+rules {
+[ Player ] -> [ Player ]
+}
+levels {
+legend {
+. = empty
+}
+level start {
+.
+}
+}
+}
+
+scene playing {
+state {
+state = puzzle board
+}
+layout {
+puzzle state
+text state.level.label
+}
+button "Restart" -> state.restart
+}
+"#,
+        );
+
+        assert!(
+            highlighted.parsed,
+            "test fixture should parse before checking contextual highlight"
+        );
+        assert!(highlighted.html.contains(
+            "<span class=\"syntax-keyword\">state</span> <span class=\"syntax-brace-depth-1\">{</span>"
+        ));
+        assert!(highlighted.html.contains(
+            "<span class=\"syntax-state\">state</span> <span class=\"syntax-operator\">=</span> <span class=\"syntax-keyword\">puzzle"
+        ));
+        assert!(highlighted.html.contains(
+            "<span class=\"syntax-keyword\">puzzle</span> <span class=\"syntax-state\">state"
+        ));
+        assert!(highlighted.html.contains(
+            "syntax-state\">state</span><span class=\"syntax-operator\">.</span><span class=\"syntax-effect\">restart"
+        ));
     }
 
     #[test]
@@ -2868,9 +3317,9 @@ Floor
 scene playing {
 layout {
 puzzle3 board {
-inputs {
-forward <- w ArrowUp
-backward <- s ArrowDown
+keys {
+w ArrowUp -> forward
+s ArrowDown -> backward
 }
 }
 }
@@ -2898,8 +3347,8 @@ music music_name seed=bgm01
 }
 
 puzzle board {
-objects {
-Player
+layers {
+__legacy_layer_0 = Player
 }
 rules {
 [ Player ] -> [ Player ]
@@ -2998,8 +3447,8 @@ music music_name seed=bgm01 bars=8 height=0 bpm=100 volume=0.5
 }
 
 puzzle fixban {
-objects {
-Player
+layers {
+__legacy_layer_0 = Player
 }
 map rotate directions {
 up -> right
@@ -3116,8 +3565,8 @@ puzzle board {
 tags {
 kind = A B
 }
-objects {
-Box:kind
+layers {
+__legacy_layer_0 = Box:kind
 }
 legend {
 1 = Box:A
@@ -3169,8 +3618,8 @@ puzzle board {
 tags {
 kind = A B
 }
-objects {
-Box:kind
+layers {
+__legacy_layer_0 = Box:kind
 }
 legend {
 1 = Box:A
@@ -3199,8 +3648,8 @@ title top_level_levels_highlight
 
 puzzle board {
 layers 2
-objects {
-Player
+layers {
+__legacy_layer_0 = Player
 }
 legend P = Player
 rules {
@@ -3343,8 +3792,8 @@ title top_level_unbraced_levels_highlight
 
 puzzle board {
 layers 2
-objects {
-Player
+layers {
+__legacy_layer_0 = Player
 }
 legend P = Player
 rules {
@@ -3382,8 +3831,8 @@ title routine_highlight
 puzzle board {
 layers 2
 legend . = empty
-objects {
-Player
+layers {
+__legacy_layer_0 = Player
 }
 routine move_player once {
 [ Player ] -> [ Player ]
@@ -3440,14 +3889,16 @@ title keyword_group_highlight
 puzzle board {
 layers 2
 legend . = empty
-objects {
-Player Box
+layers {
+__legacy_layer_0 = Player Box
+}
 groups {
 object = Box
 }
-}
 rules {
-object Player 1
+layers {
+__legacy_layer_1 = Player
+}
 }
 level start {
 .
@@ -3461,6 +3912,58 @@ level start {
     }
 
     #[test]
+    fn layer_can_be_used_as_an_object_name_without_keyword_highlight() {
+        let highlighted = highlight_source(
+            r#"
+title layer_object_highlight
+
+puzzle board {
+layers {
+floor = layer
+}
+rules {
+[ layer ]
+}
+}
+"#,
+        );
+
+        assert!(highlighted.html.contains("syntax-object\">layer</span>"));
+        assert!(!highlighted.html.contains("syntax-keyword\">layer</span>"));
+    }
+
+    #[test]
+    fn keyword_named_group_does_not_override_block_keyword_highlight() {
+        let highlighted = highlight_source(
+            r#"
+title keyword_group_scope_highlight
+
+puzzle board {
+layers {
+actor = Player
+}
+groups {
+rules = Player
+}
+rules {
+[ rules | Player ] -> [ Player ]
+}
+}
+"#,
+        );
+
+        assert!(highlighted.html.contains(
+            "<span class=\"syntax-keyword\">rules</span> <span class=\"syntax-brace-depth-1\">{</span>"
+        ));
+        assert!(highlighted.html.contains(
+            "<span class=\"syntax-group\">rules</span> <span class=\"syntax-operator\">=</span>"
+        ));
+        assert!(highlighted.html.contains(
+            "<span class=\"syntax-group\">rules</span> <span class=\"syntax-operator\">|</span>"
+        ));
+    }
+
+    #[test]
     fn flag_can_be_used_as_an_object_name_without_literal_color() {
         let highlighted = highlight_source(
             r#"
@@ -3469,8 +3972,8 @@ title flag_object_highlight
 puzzle board {
 layers 2
 legend . = empty
-objects {
-flag
+layers {
+__legacy_layer_0 = flag
 }
 rules {
 [ flag ] -> [ flag ]
@@ -3496,8 +3999,8 @@ title flag_scratch_highlight
 puzzle board {
 layers 2
 legend . = empty
-objects {
-Player
+layers {
+__legacy_layer_0 = Player
 }
 scratch {
 flag
@@ -3518,6 +4021,39 @@ level start {
     }
 
     #[test]
+    fn highlights_selector_scratch_braces_apart_from_block_braces() {
+        let highlighted = highlight_source(
+            r#"
+title scratch_brace_highlight
+
+puzzle board {
+layers {
+actor = Player
+}
+scratch {
+mark
+}
+rules {
+[ Player{} | Player{mark} ] -> [ Player{mark} | Player ]
+}
+level start {
+.
+}
+}
+"#,
+        );
+
+        assert!(highlighted.html.contains(
+            "syntax-object\">Player</span><span class=\"syntax-scratch\">{</span><span class=\"syntax-scratch\">}</span>"
+        ));
+        assert!(highlighted.html.contains(
+            "syntax-object\">Player</span><span class=\"syntax-scratch\">{</span><span class=\"syntax-scratch\">mark</span><span class=\"syntax-scratch\">}</span>"
+        ));
+        assert!(highlighted.html.contains("syntax-brace-depth-0\">{</span>"));
+        assert!(highlighted.html.contains("syntax-brace-depth-1\">{</span>"));
+    }
+
+    #[test]
     fn qualified_scratch_names_keep_scratch_color() {
         let highlighted = highlight_source(
             r#"
@@ -3526,8 +4062,8 @@ title qualified_scratch_highlight
 puzzle board {
 layers 2
 legend . = empty
-objects {
-Player
+layers {
+__legacy_layer_0 = Player
 }
 scratch {
 enter:directions = bool
@@ -3561,12 +4097,12 @@ puzzle board {
 tags {
 kind = A B
 }
-objects {
-Target:kind
-Box
+layers {
+__legacy_layer_0 = Target:kind
+__legacy_layer_1 = Box
+}
 groups {
 target = Target:*
-}
 }
 rules {
 [ Target:A | Target:* ] -> [ Target:B | Target:* ]
@@ -3622,8 +4158,8 @@ kind = A B
 tags {
 phase = hot cold
 }
-objects {
-Target:kind:phase
+layers {
+actor = Target:kind:phase
 }
 rules {
 [ Target:A | Target:A:hot ] -> [ Target:B | Target:B:cold ]
@@ -3634,7 +4170,6 @@ level start {
 }
 "#,
         );
-
         assert!(
             highlighted
                 .html
@@ -3643,7 +4178,7 @@ level start {
         assert!(
             highlighted
                 .html
-                .contains("syntax-group\">Target</span><span class=\"syntax-operator\">:</span><span class=\"syntax-variant\">A")
+                .contains("syntax-object\">Target</span><span class=\"syntax-operator\">:</span><span class=\"syntax-variant\">A")
         );
         assert!(
             highlighted

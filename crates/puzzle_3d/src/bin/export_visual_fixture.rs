@@ -2,7 +2,7 @@ use std::env;
 use std::fs;
 use std::path::PathBuf;
 
-use puzzle3d_model::{export_visual_fixture_json, parse_puzzle3d};
+use puzzle_3d::{export_visual_fixture_json, parse_puzzle3d};
 
 fn main() {
     if let Err(error) = run() {

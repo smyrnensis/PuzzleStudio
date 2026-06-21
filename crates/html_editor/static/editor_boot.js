@@ -35,18 +35,40 @@
     return error;
   }
 
+  function diagnosticSummary(diagnostics) {
+    if (!Array.isArray(diagnostics) || diagnostics.length === 0) {
+      return "";
+    }
+    if (diagnostics.length === 1) {
+      return diagnostics[0]?.message || "Compile error";
+    }
+    return `${diagnostics.length} compile errors`;
+  }
+
+  function hostErrorFromPayload(payload, fallbackMessage) {
+    if (payload && typeof payload === "object") {
+      const diagnostics = Array.isArray(payload.diagnostics) ? payload.diagnostics : null;
+      const message = payload.error || diagnosticSummary(diagnostics) || fallbackMessage;
+      const error = new Error(message);
+      if (diagnostics) {
+        error.diagnostics = diagnostics;
+      }
+      return error;
+    }
+    return new Error(String(payload || fallbackMessage));
+  }
+
   async function fetchText(url, options = {}) {
     const response = await fetch(url, options);
     const contentType = response.headers.get("content-type") || "";
     if (!response.ok) {
-      let message = response.statusText;
+      let error;
       if (contentType.includes("application/json")) {
         const body = await response.json();
-        message = body.error || response.statusText;
+        error = hostErrorFromPayload(body, response.statusText);
       } else {
-        message = await response.text();
+        error = new Error(await response.text());
       }
-      const error = new Error(message);
       error.status = response.status;
       throw error;
     }
@@ -124,7 +146,11 @@
     async preview(payload, options = {}) {
       const invoke = tauriInvoke();
       if (invoke) {
-        return invoke("compile_preview", { request: payload });
+        try {
+          return await invoke("compile_preview", { request: payload });
+        } catch (error) {
+          throw hostErrorFromPayload(error, "Preview compile failed");
+        }
       }
       if (!serverBackendAvailable()) {
         throw backendUnavailableError();
@@ -160,6 +186,24 @@
         throw backendUnavailableError();
       }
       return fetchText("/sound-tools.js");
+    },
+    async pickScreenColor() {
+      const invoke = tauriInvoke();
+      if (invoke) {
+        return invoke("pick_screen_color");
+      }
+      if ("EyeDropper" in window) {
+        const result = await new window.EyeDropper().open();
+        return { color: result.sRGBHex };
+      }
+      throw new Error("Screen color picker is unavailable in this host.");
+    },
+    async newPuzzleSource(payload) {
+      const invoke = tauriInvoke();
+      if (!invoke) {
+        throw new Error("New puzzle source is only available from the desktop host.");
+      }
+      return invoke("new_puzzle_source", { request: payload });
     },
     async save(payload) {
       const invoke = tauriInvoke();

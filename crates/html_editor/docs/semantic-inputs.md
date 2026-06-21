@@ -1,19 +1,18 @@
-# Inputs
-Use `inputs` to map physical keys to named actions.
+# Semantic Inputs
+Use `keys` to map physical keys to named semantic inputs.
 
 ```puzzle
 puzzle sokoban {
-  inputs {
-    up <- w ArrowUp
-    down <- s ArrowDown
-    left <- a ArrowLeft
-    right <- d ArrowRight
-    restart <- r
+  keys {
+    w ArrowUp -> up
+    s ArrowDown -> down
+    a ArrowLeft -> left
+    d ArrowRight -> right
+    r -> restart
   }
 }
 ```
 
-The left side is the action name. The right side lists keys.
+The left side lists keys. The right side is the semantic input.
 
 Rules and scenes use the action name.
-

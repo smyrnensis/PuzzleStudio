@@ -4544,7 +4544,7 @@ function level3dCellsWithObjectDescriptors(cells, objects = {}) {
       return {
         ...JSON.parse(JSON.stringify(descriptor)),
         ...JSON.parse(JSON.stringify(object || {})),
-        sprite: object?.sprite || descriptor.sprite || object?.name || descriptor.name,
+        sprite: object?.sprite ?? descriptor.sprite ?? null,
         layer: object?.layer ?? descriptor.layer ?? null,
       };
     }),

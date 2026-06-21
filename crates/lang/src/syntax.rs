@@ -21,6 +21,47 @@ pub(crate) fn is_parser_keyword(token: &str) -> bool {
     PARSER_KEYWORDS.contains(&token)
 }
 
+pub(crate) fn is_visual_named_color(token: &str) -> bool {
+    let lower = token.to_ascii_lowercase();
+    VISUAL_COLOR_NAMES.contains(&lower.as_str())
+}
+
+pub(crate) const VISUAL_COLOR_NAMES: &[&str] = &[
+    "transparent",
+    "currentcolor",
+    "black",
+    "silver",
+    "gray",
+    "grey",
+    "darkgray",
+    "darkgrey",
+    "lightgray",
+    "lightgrey",
+    "white",
+    "maroon",
+    "red",
+    "darkred",
+    "lightred",
+    "purple",
+    "fuchsia",
+    "green",
+    "darkgreen",
+    "lightgreen",
+    "lime",
+    "olive",
+    "yellow",
+    "navy",
+    "blue",
+    "darkblue",
+    "lightblue",
+    "teal",
+    "aqua",
+    "orange",
+    "brown",
+    "darkbrown",
+    "pink",
+];
+
 pub(crate) const PARSER_KEYWORDS: &[&str] = &[
     "again_interval",
     "assets",
@@ -55,11 +96,9 @@ pub(crate) const PARSER_KEYWORDS: &[&str] = &[
     "in",
     "import",
     "input",
-    "inputs",
     "interactive_look",
     "interactive_zoom",
     "keys",
-    "layer",
     "layers",
     "legend",
     "level",
@@ -70,7 +109,6 @@ pub(crate) const PARSER_KEYWORDS: &[&str] = &[
     "map",
     "music",
     "name",
-    "objects",
     "occupied_cells",
     "on",
     "on_display",

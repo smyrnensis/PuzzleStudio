@@ -1,6 +1,6 @@
 use crate::domain::SearchDomain;
 use crate::stable_hash::{fnv_mix, fnv_seed};
-use puzzle3d_model::{Game3, InputId3, Rule3, State3, TransitionError3, transition_program};
+use puzzle_grid3d::{Game3, InputId3, Rule3, State3, TransitionError3, transition_program};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
@@ -114,7 +114,8 @@ impl SearchDomain for Puzzle3Domain {
 mod tests {
     use super::*;
     use crate::{SearchBudget, SearchOutcome, exact_bfs};
-    use puzzle3d_model::{ObjectId, parse_puzzle3d, transition_program};
+    use puzzle_3d::parse_puzzle3d;
+    use puzzle_grid3d::{ObjectId, Size3, transition_program};
     use std::sync::Arc;
     use std::time::Duration;
 
@@ -187,8 +188,8 @@ PB.
 
     #[test]
     fn keys_distinguish_same_slots_with_different_3d_shapes() {
-        let flat = State3::empty(puzzle3d_model::Size3::new(2, 2, 1), 1).unwrap();
-        let tall = State3::empty(puzzle3d_model::Size3::new(2, 1, 2), 1).unwrap();
+        let flat = State3::empty(Size3::new(2, 2, 1), 1).unwrap();
+        let tall = State3::empty(Size3::new(2, 1, 2), 1).unwrap();
 
         assert_ne!(
             Puzzle3StateKey::from_state(&flat),

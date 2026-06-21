@@ -24,6 +24,7 @@ pub enum TransitionError {
     Patch(PatchError),
     OffsetOutOfBounds,
     RepeatUntilNoProgress,
+    InvalidCommand(String),
 }
 
 impl From<PatchError> for TransitionError {

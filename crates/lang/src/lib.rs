@@ -29,7 +29,7 @@ pub use completion::{
     CompletionItem, CompletionKind, CompletionList, completion_list_json,
     suggest_source_completions,
 };
-pub use error::AppError;
+pub use error::{Diagnostic, DiagnosticReport, DiagnosticSeverity, DiagnosticSpan};
 pub use highlight::{HighlightedSource, highlight_source};
 use level::{LevelBlock, parse_level};
 pub use loaded::{
@@ -37,15 +37,15 @@ pub use loaded::{
     GoalClause, GoalCondition, GoalExpr, GoalValue, KeyBinding, KeyTrigger, Level, LevelMenuDef,
     LevelMenuLocked, LevelRegionDef, LoadedDocument, LoadedDocumentModel, LoadedGame,
     MusicSoundDef, PuzzleGridRenderDef, PuzzleRenderDef, PuzzleScreenDef, PuzzleViewDef,
-    ResourceSelection, RuleAnimationTrigger, RuleEffect, RuleEmission, SceneAlignDef,
+    ResourceSelection, RuleAnimation, RuleAnimationTrigger, RuleEffect, SceneAlignDef,
     SceneAlignXDef, SceneAlignYDef, SceneButtonDef, SceneComponent, SceneConditionalDef,
     SceneContainerDef, SceneDef, SceneEffect, SceneEffectParam, SceneExpr, SceneForDef,
     SceneLayoutDef, ScenePuzzleDef, ScenePuzzleInitializer, ScenePuzzleRule, SceneResources,
-    SceneSizeDef, SceneStateDef, SceneStateLifetime, SceneTextContent, SceneTextDef, SceneTitleDef,
-    SceneTransition, SceneTransitionTrigger, SceneValue, SceneVarDef, SfxSoundDef, SoundsDef,
-    ThemeDef, ThemeVariableDef, TweenAnimationDef, ViewportModeDef, ViewportSizeDef,
-    VisualAliasDef, VisualColorDef, VisualSpriteDef, VisualSpriteKind, VisualSpriteOffset,
-    VisualSpritePixelsPerCell, VisualsDef,
+    SceneRoutineDef, SceneSizeDef, SceneStateDef, SceneStateLifetime, SceneTextContent,
+    SceneTextDef, SceneTitleDef, SceneTransition, SceneTransitionTrigger, SceneValue, SceneVarDef,
+    SfxSoundDef, SoundsDef, ThemeDef, ThemeVariableDef, TweenAnimationDef, ViewportModeDef,
+    ViewportSizeDef, VisualAliasDef, VisualColorDef, VisualSpriteDef, VisualSpriteKind,
+    VisualSpriteOffset, VisualSpritePixelsPerCell, VisualsDef,
 };
 
 const BLOCK_CLOSE: &str = "}";
@@ -60,18 +60,18 @@ fn block_header_text(line: &str) -> &str {
         .map(str::trim_end)
         .unwrap_or(line)
 }
+pub use puzzle_3d::{
+    ParseError3, ParsedPuzzle3, VisualFixtureAnimation3, VisualFixtureExportError3,
+    export_visual_fixture_json, export_visual_fixture_json_with_title,
+    export_visual_fixture_json_with_title_and_scenes,
+    export_visual_fixture_json_with_title_scenes_and_animation, parse_puzzle3d,
+};
 use puzzle_core::{
     ComparisonOp, CompiledGame, ConditionDef, ConditionId, ConditionValueKind, Effect, GapTerm,
     GlobalId, GlobalUpdateOp, Guard, InputId, LayerId, LocalFrame, LocalFrameExtent, MatchCell,
     ObjectDef, ObjectId, ObjectSetMatcher, ObjectSetScratchPattern, Offset, Pattern,
     PatternComponent, Rule, RuleApplication, RuleCondition, RuleId, RuleStep, ScratchDef,
     ScratchId, ScratchKind, ScratchPattern, ScratchValueMatch, WriteOp,
-};
-pub use puzzle3d_model::{
-    ParseError3, ParsedPuzzle3, VisualFixtureAnimation3, VisualFixtureExportError3,
-    export_visual_fixture_json, export_visual_fixture_json_with_title,
-    export_visual_fixture_json_with_title_and_scenes,
-    export_visual_fixture_json_with_title_scenes_and_animation, parse_puzzle3d,
 };
 pub use puzzlescript::translate_puzzlescript_to_canonical;
 pub use semantic::{SemanticKind, SemanticToken, semantic_tokens};
@@ -163,14 +163,14 @@ pub(crate) const THEME_SETTING_SPECS: &[ThemeSettingSpec] = &[
     },
 ];
 
-pub fn parse_game(source: &str) -> Result<LoadedDocument, AppError> {
+pub fn parse_game(source: &str) -> Result<LoadedDocument, DiagnosticReport> {
     parse_game_document(source)
 }
 
 pub fn parse_game_for_path(
     source: &str,
     path: impl AsRef<Path>,
-) -> Result<LoadedDocument, AppError> {
+) -> Result<LoadedDocument, DiagnosticReport> {
     validate_source_profile_for_path(source, path)?;
     parse_game_document(source)
 }
@@ -181,7 +181,9 @@ pub struct DocumentRuntimeSources {
     pub model_3d: String,
 }
 
-pub fn split_document_runtime_sources(source: &str) -> Result<DocumentRuntimeSources, AppError> {
+pub fn split_document_runtime_sources(
+    source: &str,
+) -> Result<DocumentRuntimeSources, DiagnosticReport> {
     let mixed_sources = split_mixed_game_document_source(source)?;
     Ok(DocumentRuntimeSources {
         model_2d: strip_document_shell_source(&mixed_sources.puzzle2d)?,
@@ -189,7 +191,7 @@ pub fn split_document_runtime_sources(source: &str) -> Result<DocumentRuntimeSou
     })
 }
 
-pub fn parse_game2d(source: &str) -> Result<LoadedGame, AppError> {
+pub fn parse_game2d(source: &str) -> Result<LoadedGame, DiagnosticReport> {
     let _surface = parse_surface_document(source);
     parse_game2d_document(source)
 }
@@ -280,6 +282,9 @@ fn record_scene_surface_line(
         if let Some(name) = tokens.get(1) {
             add_scene_effect_token_range(sink, name, SurfaceSemanticKind::Scene);
         }
+        return;
+    }
+    if scope == Some(SourceScope::SceneState) {
         return;
     }
     if scene_block_keyword(&first.text)
@@ -623,14 +628,7 @@ fn record_scene_condition_surface_tokens(tokens: &[SourceToken], sink: &mut Surf
 fn scene_block_keyword(value: &str) -> bool {
     matches!(
         value,
-        "inputs"
-            | "keys"
-            | "on_scene_start"
-            | "resources"
-            | "rules"
-            | "state"
-            | "transitions"
-            | "layout"
+        "keys" | "on_scene_start" | "resources" | "rules" | "state" | "transitions" | "layout"
     )
 }
 
@@ -658,9 +656,9 @@ fn record_rewrite_surface_line(
 
 pub fn export_loaded_document_visual_fixture_json(
     document: &LoadedDocument,
-) -> Result<String, AppError> {
+) -> Result<String, DiagnosticReport> {
     let Some(LoadedDocumentModel::Puzzle3d { puzzle, .. }) = document.single_model() else {
-        return Err(AppError::Parse(
+        return Err(DiagnosticReport::error(
             "visual fixture export currently requires a single puzzle3 model".to_string(),
         ));
     };
@@ -675,16 +673,19 @@ pub fn export_loaded_document_visual_fixture_json(
             tween_interval_ms: document.animation.tween.interval_ms,
         },
     )
-    .map_err(|error| AppError::Parse(format!("failed to export puzzle3 fixture: {error:?}")))
+    .map_err(|error| {
+        DiagnosticReport::error(format!("failed to export puzzle3 fixture: {error:?}"))
+    })
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub fn parse_game_file(path: impl AsRef<Path>) -> Result<LoadedDocument, AppError> {
+pub fn parse_game_file(path: impl AsRef<Path>) -> Result<LoadedDocument, DiagnosticReport> {
     let path = path.as_ref();
-    let source = fs::read_to_string(path)
-        .map_err(|error| AppError::Parse(format!("failed to read {}: {error}", path.display())))?;
+    let source = fs::read_to_string(path).map_err(|error| {
+        DiagnosticReport::error(format!("failed to read {}: {error}", path.display()))
+    })?;
     let profile = puzzle_source_profile_for_path(path).ok_or_else(|| {
-        AppError::Parse(format!(
+        DiagnosticReport::error(format!(
             "game entry must be a .puzzle or .puzzle3 file: {}",
             path.display()
         ))
@@ -699,26 +700,29 @@ pub fn parse_game_file(path: impl AsRef<Path>) -> Result<LoadedDocument, AppErro
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub fn parse_game2d_file(path: impl AsRef<Path>) -> Result<LoadedGame, AppError> {
+pub fn parse_game2d_file(path: impl AsRef<Path>) -> Result<LoadedGame, DiagnosticReport> {
     let path = path.as_ref();
     if puzzle_source_profile_for_path(path) != Some(PuzzleSourceProfile::Puzzle2d) {
-        return Err(AppError::Parse(format!(
+        return Err(DiagnosticReport::error(format!(
             "2D game entry must be a .puzzle file: {}",
             path.display()
         )));
     }
-    let source = fs::read_to_string(path)
-        .map_err(|error| AppError::Parse(format!("failed to read {}: {error}", path.display())))?;
+    let source = fs::read_to_string(path).map_err(|error| {
+        DiagnosticReport::error(format!("failed to read {}: {error}", path.display()))
+    })?;
     let expanded = expand_game_imports_for_file(&source, path)?;
     parse_game2d_document(&expanded)
 }
 
-fn parse_game2d_document(source: &str) -> Result<LoadedGame, AppError> {
+fn parse_game2d_document(source: &str) -> Result<LoadedGame, DiagnosticReport> {
     let parts = parse_document_source_parts(source)?;
     parse_game2d_from_document_parts(parts)
 }
 
-fn parse_game2d_from_document_parts(parts: DocumentSourceParts) -> Result<LoadedGame, AppError> {
+fn parse_game2d_from_document_parts(
+    parts: DocumentSourceParts,
+) -> Result<LoadedGame, DiagnosticReport> {
     let mut scenes = parts.scenes;
     let model_names = all_model_names(&parts.model_source, "puzzle");
     resolve_inferred_scene_puzzle_slots(
@@ -733,7 +737,7 @@ fn parse_game2d_from_document_parts(parts: DocumentSourceParts) -> Result<Loaded
     Ok(game)
 }
 
-fn parse_game_document(source: &str) -> Result<LoadedDocument, AppError> {
+fn parse_game_document(source: &str) -> Result<LoadedDocument, DiagnosticReport> {
     match detect_game_document_kind(source)? {
         GameDocumentKind::Puzzle2d => {
             let parts = parse_document_source_parts(source)?;
@@ -767,7 +771,7 @@ fn parse_game_document(source: &str) -> Result<LoadedDocument, AppError> {
             resolve_inferred_scene_puzzle_slots(&mut scenes, std::iter::once(("puzzle3", &name)))?;
             let puzzle = parse_puzzle3d(&parts.raw_model_source_without_shell).map_err(
                 |error| match error {
-                    ParseError3::Message(message) => AppError::Parse(message),
+                    ParseError3::Message(message) => DiagnosticReport::error(message),
                 },
             )?;
             let scenes = add_implicit_model_scenes(scenes, std::iter::once(("puzzle3", &name)));
@@ -790,7 +794,7 @@ fn parse_game_document(source: &str) -> Result<LoadedDocument, AppError> {
     }
 }
 
-fn parse_mixed_game_document(source: &str) -> Result<LoadedDocument, AppError> {
+fn parse_mixed_game_document(source: &str) -> Result<LoadedDocument, DiagnosticReport> {
     let parts = parse_document_source_parts(source)?;
     let sources = split_mixed_game_document_source(source)?;
     let model_2d_name =
@@ -801,7 +805,7 @@ fn parse_mixed_game_document(source: &str) -> Result<LoadedDocument, AppError> {
         first_model_name(&sources.puzzle3d, "puzzle3").unwrap_or_else(|| "default".to_string());
     let puzzle_3d_source = strip_document_shell_source_raw(&sources.puzzle3d);
     let puzzle_3d = parse_puzzle3d(&puzzle_3d_source).map_err(|error| match error {
-        ParseError3::Message(message) => AppError::Parse(message),
+        ParseError3::Message(message) => DiagnosticReport::error(message),
     })?;
     let mut scenes = parts.scenes;
     resolve_inferred_scene_puzzle_slots(
@@ -850,7 +854,9 @@ enum MixedSectionTarget {
     Shared,
 }
 
-fn split_mixed_game_document_source(source: &str) -> Result<MixedDocumentSources, AppError> {
+fn split_mixed_game_document_source(
+    source: &str,
+) -> Result<MixedDocumentSources, DiagnosticReport> {
     let raw_lines = source.lines().collect::<Vec<_>>();
     let mut sources = MixedDocumentSources::default();
     let mut index = 0usize;
@@ -982,7 +988,7 @@ const INFERRED_SCENE_PUZZLE_KIND: &str = "__model__";
 fn resolve_inferred_scene_puzzle_slots<'a>(
     scenes: &mut [SceneDef],
     models: impl IntoIterator<Item = (&'a str, &'a String)>,
-) -> Result<(), AppError> {
+) -> Result<(), DiagnosticReport> {
     let mut model_kinds = HashMap::<String, String>::new();
     let mut ambiguous = HashSet::<String>::new();
     for (kind, model_name) in models {
@@ -1003,13 +1009,13 @@ fn resolve_inferred_scene_puzzle_slots<'a>(
                 continue;
             }
             if ambiguous.contains(&puzzle.model) {
-                return Err(AppError::Parse(format!(
+                return Err(DiagnosticReport::error(format!(
                     "scene puzzle slot `{}` is ambiguous; use `puzzle <name>` or `puzzle3 <name>`",
                     puzzle.model
                 )));
             }
             let Some(kind) = model_kinds.get(&puzzle.model) else {
-                return Err(AppError::Parse(format!(
+                return Err(DiagnosticReport::error(format!(
                     "scene puzzle slot `{}` does not match a puzzle model",
                     puzzle.model
                 )));
@@ -1038,6 +1044,7 @@ fn implicit_model_scene(kind: &str, model_name: &str) -> SceneDef {
         },
         components: vec![scene_frame_component(kind, model_name)],
         key_bindings: Vec::new(),
+        routines: Vec::new(),
         transitions: Vec::new(),
         puzzle_rule: Some(ScenePuzzleRule {
             target: model_name.to_string(),
@@ -1485,7 +1492,242 @@ impl Default for DocumentShell {
     }
 }
 
-fn parse_document_source_parts(source: &str) -> Result<DocumentSourceParts, AppError> {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ModelTopLevelDirective {
+    Puzzle,
+    RemovedModelPrefix,
+    RemovedNameMetadata,
+    Title,
+    Subtitle,
+    Author,
+    Homepage,
+    Variable,
+    DefaultWaitTime,
+    AgainInterval,
+    Animation,
+    Scene,
+    Sounds,
+    Theme,
+    Assets,
+    Close,
+    Sprites,
+    Levels,
+    Level,
+    PuzzleLifecycle,
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ModelTopLevelExpectedGroup {
+    Metadata,
+    Variables,
+    Model,
+    Content,
+    Config,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct HeaderChoiceAlternative<Action, ExpectedGroup> {
+    trigger: &'static str,
+    label: &'static str,
+    action: Action,
+    expected_group: Option<ExpectedGroup>,
+}
+
+const MODEL_TOP_LEVEL_ALTERNATIVES: &[HeaderChoiceAlternative<
+    ModelTopLevelDirective,
+    ModelTopLevelExpectedGroup,
+>] = &[
+    HeaderChoiceAlternative {
+        trigger: "puzzle",
+        label: "puzzle",
+        action: ModelTopLevelDirective::Puzzle,
+        expected_group: Some(ModelTopLevelExpectedGroup::Model),
+    },
+    HeaderChoiceAlternative {
+        trigger: "model",
+        label: "model",
+        action: ModelTopLevelDirective::RemovedModelPrefix,
+        expected_group: None,
+    },
+    HeaderChoiceAlternative {
+        trigger: "name",
+        label: "name",
+        action: ModelTopLevelDirective::RemovedNameMetadata,
+        expected_group: None,
+    },
+    HeaderChoiceAlternative {
+        trigger: "title",
+        label: "title",
+        action: ModelTopLevelDirective::Title,
+        expected_group: Some(ModelTopLevelExpectedGroup::Metadata),
+    },
+    HeaderChoiceAlternative {
+        trigger: "subtitle",
+        label: "subtitle",
+        action: ModelTopLevelDirective::Subtitle,
+        expected_group: Some(ModelTopLevelExpectedGroup::Metadata),
+    },
+    HeaderChoiceAlternative {
+        trigger: "author",
+        label: "author",
+        action: ModelTopLevelDirective::Author,
+        expected_group: Some(ModelTopLevelExpectedGroup::Metadata),
+    },
+    HeaderChoiceAlternative {
+        trigger: "homepage",
+        label: "homepage",
+        action: ModelTopLevelDirective::Homepage,
+        expected_group: Some(ModelTopLevelExpectedGroup::Metadata),
+    },
+    HeaderChoiceAlternative {
+        trigger: "var",
+        label: "var",
+        action: ModelTopLevelDirective::Variable,
+        expected_group: Some(ModelTopLevelExpectedGroup::Variables),
+    },
+    HeaderChoiceAlternative {
+        trigger: "const",
+        label: "const",
+        action: ModelTopLevelDirective::Variable,
+        expected_group: Some(ModelTopLevelExpectedGroup::Variables),
+    },
+    HeaderChoiceAlternative {
+        trigger: "persistent",
+        label: "persistent var",
+        action: ModelTopLevelDirective::Variable,
+        expected_group: Some(ModelTopLevelExpectedGroup::Variables),
+    },
+    HeaderChoiceAlternative {
+        trigger: "default_wait_time",
+        label: "default_wait_time",
+        action: ModelTopLevelDirective::DefaultWaitTime,
+        expected_group: Some(ModelTopLevelExpectedGroup::Config),
+    },
+    HeaderChoiceAlternative {
+        trigger: "again_interval",
+        label: "again_interval",
+        action: ModelTopLevelDirective::AgainInterval,
+        expected_group: Some(ModelTopLevelExpectedGroup::Config),
+    },
+    HeaderChoiceAlternative {
+        trigger: "animation",
+        label: "animation",
+        action: ModelTopLevelDirective::Animation,
+        expected_group: Some(ModelTopLevelExpectedGroup::Config),
+    },
+    HeaderChoiceAlternative {
+        trigger: "scene",
+        label: "scene",
+        action: ModelTopLevelDirective::Scene,
+        expected_group: None,
+    },
+    HeaderChoiceAlternative {
+        trigger: "sounds",
+        label: "sounds",
+        action: ModelTopLevelDirective::Sounds,
+        expected_group: Some(ModelTopLevelExpectedGroup::Content),
+    },
+    HeaderChoiceAlternative {
+        trigger: "theme",
+        label: "theme",
+        action: ModelTopLevelDirective::Theme,
+        expected_group: Some(ModelTopLevelExpectedGroup::Content),
+    },
+    HeaderChoiceAlternative {
+        trigger: "assets",
+        label: "assets",
+        action: ModelTopLevelDirective::Assets,
+        expected_group: Some(ModelTopLevelExpectedGroup::Content),
+    },
+    HeaderChoiceAlternative {
+        trigger: BLOCK_CLOSE,
+        label: BLOCK_CLOSE,
+        action: ModelTopLevelDirective::Close,
+        expected_group: None,
+    },
+    HeaderChoiceAlternative {
+        trigger: "sprites",
+        label: "sprites",
+        action: ModelTopLevelDirective::Sprites,
+        expected_group: Some(ModelTopLevelExpectedGroup::Content),
+    },
+    HeaderChoiceAlternative {
+        trigger: "levels",
+        label: "levels",
+        action: ModelTopLevelDirective::Levels,
+        expected_group: Some(ModelTopLevelExpectedGroup::Content),
+    },
+    HeaderChoiceAlternative {
+        trigger: "level",
+        label: "level",
+        action: ModelTopLevelDirective::Level,
+        expected_group: Some(ModelTopLevelExpectedGroup::Content),
+    },
+];
+
+fn classify_header_choice<Action: Copy, ExpectedGroup>(
+    alternatives: &[HeaderChoiceAlternative<Action, ExpectedGroup>],
+    trigger: &str,
+) -> Option<Action> {
+    alternatives
+        .iter()
+        .find(|alternative| alternative.trigger == trigger)
+        .map(|alternative| alternative.action)
+}
+
+fn format_header_choice_expected_group<Action, ExpectedGroup: Copy + PartialEq>(
+    alternatives: &[HeaderChoiceAlternative<Action, ExpectedGroup>],
+    group: ExpectedGroup,
+) -> String {
+    alternatives
+        .iter()
+        .filter(|alternative| alternative.expected_group == Some(group))
+        .map(|alternative| format!("`{}`", alternative.label))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn classify_model_top_level_directive(tokens: &[&str]) -> ModelTopLevelDirective {
+    let Some(first) = tokens.first().copied() else {
+        return ModelTopLevelDirective::Unknown;
+    };
+    if puzzle_lifecycle_event(first).is_some() {
+        return ModelTopLevelDirective::PuzzleLifecycle;
+    }
+    classify_header_choice(MODEL_TOP_LEVEL_ALTERNATIVES, first)
+        .unwrap_or(ModelTopLevelDirective::Unknown)
+}
+
+fn format_model_top_level_expected_group(group: ModelTopLevelExpectedGroup) -> String {
+    format_header_choice_expected_group(MODEL_TOP_LEVEL_ALTERNATIVES, group)
+}
+
+fn model_top_level_expected_directives_message() -> String {
+    format!(
+        "metadata ({}), variables ({}), a model ({}), content ({}), or config ({})",
+        format_model_top_level_expected_group(ModelTopLevelExpectedGroup::Metadata),
+        format_model_top_level_expected_group(ModelTopLevelExpectedGroup::Variables),
+        format_model_top_level_expected_group(ModelTopLevelExpectedGroup::Model),
+        format_model_top_level_expected_group(ModelTopLevelExpectedGroup::Content),
+        format_model_top_level_expected_group(ModelTopLevelExpectedGroup::Config),
+    )
+}
+
+fn unknown_model_top_level_directive_message(other: &str) -> String {
+    format!(
+        "unknown top-level directive `{other}`; expected {}",
+        model_top_level_expected_directives_message()
+    )
+}
+
+fn misplaced_puzzle_lifecycle_message(lifecycle_block: &str) -> String {
+    format!(
+        "{lifecycle_block} is a puzzle lifecycle block; put it inside `puzzle <name> {{ ... }}` next to `rules {{ ... }}`"
+    )
+}
+
+fn parse_document_source_parts(source: &str) -> Result<DocumentSourceParts, DiagnosticReport> {
     let shell = parse_document_shell(source)?;
     let (model_source, scenes) = split_document_scene_source(source)?;
     let shell_stripped_source = strip_document_shell_source(source)?;
@@ -1501,7 +1743,7 @@ fn parse_document_source_parts(source: &str) -> Result<DocumentSourceParts, AppE
     })
 }
 
-fn parse_document_shell(source: &str) -> Result<DocumentShell, AppError> {
+fn parse_document_shell(source: &str) -> Result<DocumentShell, DiagnosticReport> {
     let mut shell = DocumentShell::default();
     let lines = logical_lines(source)?;
     let mut index = 0;
@@ -1563,7 +1805,7 @@ fn parse_document_shell(source: &str) -> Result<DocumentShell, AppError> {
     Ok(shell)
 }
 
-fn strip_document_shell_source(source: &str) -> Result<String, AppError> {
+fn strip_document_shell_source(source: &str) -> Result<String, DiagnosticReport> {
     let context = scan_source_context(source);
     let mut out = Vec::new();
     let mut index = 0;
@@ -1761,6 +2003,7 @@ fn logical_line_opens_block(tokens: &[&str]) -> bool {
             | ["on_level_start", ..]
             | ["on_level_clear", ..]
             | ["on_last_level_clear", ..]
+            | ["keys", ..]
             | ["inputs", ..]
             | ["transitions", ..]
             | ["on_scene_start", ..]
@@ -1848,7 +2091,7 @@ fn push_raw_model_without_default_scene_layouts<'a>(
     index
 }
 
-fn split_document_scene_source(source: &str) -> Result<(String, Vec<SceneDef>), AppError> {
+fn split_document_scene_source(source: &str) -> Result<(String, Vec<SceneDef>), DiagnosticReport> {
     let lines = logical_lines(source)?;
     let mut model_lines = Vec::new();
     let mut scenes = Vec::new();
@@ -1887,7 +2130,7 @@ fn extract_default_model_scene(
     start: usize,
     kind: &str,
     name: &str,
-) -> Result<(Vec<String>, Option<SceneDef>, usize), AppError> {
+) -> Result<(Vec<String>, Option<SceneDef>, usize), DiagnosticReport> {
     let mut entry = vec![lines[start].clone()];
     let mut default_scene = None;
     let mut depth = 1usize;
@@ -1925,7 +2168,7 @@ fn extract_default_model_scene(
     Ok((vec![lines[start].clone()], None, start + 1))
 }
 
-fn skip_scene_layout_block(lines: &[String], start: usize) -> Result<usize, AppError> {
+fn skip_scene_layout_block(lines: &[String], start: usize) -> Result<usize, DiagnosticReport> {
     let mut depth = 1usize;
     let mut i = start + 1;
     while i < lines.len() {
@@ -1957,7 +2200,7 @@ fn parse_default_model_scene(
     end: usize,
     kind: &str,
     name: &str,
-) -> Result<SceneDef, AppError> {
+) -> Result<SceneDef, DiagnosticReport> {
     let mut layout_lines = lines[start..end].to_vec();
     rewrite_default_model_layout_components(&mut layout_lines, kind, name);
     let (layout_block, next_i) = parse_screen_layout_block(&layout_lines, 0)?;
@@ -2014,7 +2257,7 @@ enum GameDocumentKind {
     Mixed,
 }
 
-fn detect_game_document_kind(source: &str) -> Result<GameDocumentKind, AppError> {
+fn detect_game_document_kind(source: &str) -> Result<GameDocumentKind, DiagnosticReport> {
     let mut has_2d = false;
     let mut has_3d = false;
     let context = scan_source_context(source);
@@ -2037,10 +2280,10 @@ fn detect_game_document_kind(source: &str) -> Result<GameDocumentKind, AppError>
 pub fn validate_source_profile_for_path(
     source: &str,
     path: impl AsRef<Path>,
-) -> Result<(), AppError> {
+) -> Result<(), DiagnosticReport> {
     let path = path.as_ref();
     let profile = puzzle_source_profile_for_path(path).ok_or_else(|| {
-        AppError::Parse(format!(
+        DiagnosticReport::error(format!(
             "puzzle source must use .puzzle or .puzzle3 extension: {}",
             path.display()
         ))
@@ -2048,20 +2291,23 @@ pub fn validate_source_profile_for_path(
     validate_source_profile(source, profile)
 }
 
-fn validate_source_profile(source: &str, profile: PuzzleSourceProfile) -> Result<(), AppError> {
+fn validate_source_profile(
+    source: &str,
+    profile: PuzzleSourceProfile,
+) -> Result<(), DiagnosticReport> {
     let kind = detect_game_document_kind(source)?;
     match (profile, kind) {
         (PuzzleSourceProfile::Puzzle2d, GameDocumentKind::Puzzle2d)
         | (PuzzleSourceProfile::Puzzle3d, GameDocumentKind::Puzzle3d) => Ok(()),
-        (_, GameDocumentKind::Mixed) => Err(AppError::Parse(
+        (_, GameDocumentKind::Mixed) => Err(DiagnosticReport::error(
             "mixed 2D/3D documents are no longer supported; split 2D .puzzle and 3D .puzzle3 sources"
                 .to_string(),
         )),
-        (PuzzleSourceProfile::Puzzle2d, GameDocumentKind::Puzzle3d) => Err(AppError::Parse(
+        (PuzzleSourceProfile::Puzzle2d, GameDocumentKind::Puzzle3d) => Err(DiagnosticReport::error(
             ".puzzle files cannot contain 3D puzzle3, levels3, or sprites3 sections; use .puzzle3"
                 .to_string(),
         )),
-        (PuzzleSourceProfile::Puzzle3d, GameDocumentKind::Puzzle2d) => Err(AppError::Parse(
+        (PuzzleSourceProfile::Puzzle3d, GameDocumentKind::Puzzle2d) => Err(DiagnosticReport::error(
             ".puzzle3 files must contain 3D puzzle3, levels3, or sprites3 sections".to_string(),
         )),
     }
@@ -2090,13 +2336,13 @@ fn all_model_names(source: &str, kind: &str) -> Vec<String> {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub fn resolve_game_entry(path: impl AsRef<Path>) -> Result<PathBuf, AppError> {
+pub fn resolve_game_entry(path: impl AsRef<Path>) -> Result<PathBuf, DiagnosticReport> {
     let path = path.as_ref();
     if path.is_dir() {
         if let Some(entry) = game_entry_in_directory(path)? {
             return Ok(entry);
         }
-        return Err(AppError::Parse(format!(
+        return Err(DiagnosticReport::error(format!(
             "game folder must contain a .puzzle or .puzzle3 file with game prelude metadata such as title: {}",
             path.display()
         )));
@@ -2104,13 +2350,13 @@ pub fn resolve_game_entry(path: impl AsRef<Path>) -> Result<PathBuf, AppError> {
 
     if path.is_file() {
         if !is_puzzle_source_path(path) {
-            return Err(AppError::Parse(format!(
+            return Err(DiagnosticReport::error(format!(
                 "game entry must be a folder, .puzzle file, or .puzzle3 file: {}",
                 path.display()
             )));
         }
         let source = fs::read_to_string(path).map_err(|error| {
-            AppError::Parse(format!(
+            DiagnosticReport::error(format!(
                 "failed to read game entry {}: {error}",
                 path.display()
             ))
@@ -2125,13 +2371,13 @@ pub fn resolve_game_entry(path: impl AsRef<Path>) -> Result<PathBuf, AppError> {
             }
             dir = current.parent();
         }
-        return Err(AppError::Parse(format!(
+        return Err(DiagnosticReport::error(format!(
             "puzzle source file has no game prelude and no containing game entry was found: {}",
             path.display()
         )));
     }
 
-    Err(AppError::Parse(format!(
+    Err(DiagnosticReport::error(format!(
         "game entry not found: {}",
         path.display()
     )))
@@ -2160,22 +2406,24 @@ pub fn source_has_game_prelude(source: &str) -> bool {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn game_entry_in_directory(dir: &Path) -> Result<Option<PathBuf>, AppError> {
+fn game_entry_in_directory(dir: &Path) -> Result<Option<PathBuf>, DiagnosticReport> {
     let mut candidates = Vec::new();
     for entry in fs::read_dir(dir).map_err(|error| {
-        AppError::Parse(format!(
+        DiagnosticReport::error(format!(
             "failed to read game entry directory {}: {error}",
             dir.display()
         ))
     })? {
         let path = entry
-            .map_err(|error| AppError::Parse(format!("failed to read game entry: {error}")))?
+            .map_err(|error| {
+                DiagnosticReport::error(format!("failed to read game entry: {error}"))
+            })?
             .path();
         if !is_puzzle_source_path(&path) {
             continue;
         }
         let source = fs::read_to_string(&path).map_err(|error| {
-            AppError::Parse(format!(
+            DiagnosticReport::error(format!(
                 "failed to read game entry candidate {}: {error}",
                 path.display()
             ))
@@ -2222,16 +2470,18 @@ fn game_entry_path_rank(path: &Path, dir: &Path) -> usize {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub fn discover_game_entries(root: impl AsRef<Path>) -> Result<Vec<PathBuf>, AppError> {
+pub fn discover_game_entries(root: impl AsRef<Path>) -> Result<Vec<PathBuf>, DiagnosticReport> {
     let mut candidates = Vec::new();
     for entry in fs::read_dir(root.as_ref()).map_err(|error| {
-        AppError::Parse(format!(
+        DiagnosticReport::error(format!(
             "failed to read game root {}: {error}",
             root.as_ref().display()
         ))
     })? {
         let path = entry
-            .map_err(|error| AppError::Parse(format!("failed to read game entry: {error}")))?
+            .map_err(|error| {
+                DiagnosticReport::error(format!("failed to read game entry: {error}"))
+            })?
             .path();
         if path.is_dir() {
             if let Some(entry) = game_entry_in_directory(&path)? {
@@ -2239,7 +2489,7 @@ pub fn discover_game_entries(root: impl AsRef<Path>) -> Result<Vec<PathBuf>, App
             }
         } else if is_puzzle_source_path(&path) {
             let source = fs::read_to_string(&path).map_err(|error| {
-                AppError::Parse(format!(
+                DiagnosticReport::error(format!(
                     "failed to read game entry candidate {}: {error}",
                     path.display()
                 ))
@@ -2257,7 +2507,7 @@ pub fn discover_game_entries(root: impl AsRef<Path>) -> Result<Vec<PathBuf>, App
 pub fn expand_game_imports_for_file(
     source: &str,
     path: impl AsRef<Path>,
-) -> Result<String, AppError> {
+) -> Result<String, DiagnosticReport> {
     let path = path.as_ref();
     let base_dir = path.parent().unwrap_or_else(|| Path::new("."));
     let mut import_stack = vec![canonical_import_path(path)];
@@ -2269,12 +2519,12 @@ pub fn expand_game_imports_for_file_under_root(
     source: &str,
     path: impl AsRef<Path>,
     root: impl AsRef<Path>,
-) -> Result<String, AppError> {
+) -> Result<String, DiagnosticReport> {
     let path = path.as_ref();
     let root = canonical_import_path(root.as_ref());
     let canonical_path = canonical_import_path(path);
     if !canonical_path.starts_with(&root) {
-        return Err(AppError::Parse(format!(
+        return Err(DiagnosticReport::error(format!(
             "can only import puzzle files under {}",
             root.display()
         )));
@@ -2287,7 +2537,7 @@ pub fn expand_game_imports_for_file_under_root(
 fn parse_game2d_expanded_with_shell(
     source: &str,
     shell: &DocumentShell,
-) -> Result<LoadedGame, AppError> {
+) -> Result<LoadedGame, DiagnosticReport> {
     let lines = logical_lines(source)?;
     let mut title = shell.title.clone();
     let mut subtitle = shell.subtitle.clone();
@@ -2314,7 +2564,7 @@ fn parse_game2d_expanded_with_shell(
     let mut puzzle_models = Vec::<String>::new();
     let mut variables = Vec::<SceneVarDef>::new();
     let mut render_overlays = Vec::<(Vec<ObjectId>, char)>::new();
-    let mut model_sound_triggers = Vec::<ModelSoundTrigger>::new();
+    let mut model_sound_triggers = Vec::<ModelSoundTriggerSpec>::new();
     let mut named_conditions = HashMap::<String, (String, ConditionAst)>::new();
     let mut run_rules_on_level_start = false;
     let mut visuals = VisualsDef::default();
@@ -2336,8 +2586,8 @@ fn parse_game2d_expanded_with_shell(
             continue;
         }
 
-        match tokens[0] {
-            "puzzle" => {
+        match classify_model_top_level_directive(tokens.as_slice()) {
+            ModelTopLevelDirective::Puzzle => {
                 let (next_i, puzzle_name) = parse_puzzle_definition(
                     &lines,
                     i,
@@ -2371,7 +2621,7 @@ fn parse_game2d_expanded_with_shell(
                 puzzle_models.push(puzzle_name);
                 i = next_i;
             }
-            "model" => {
+            ModelTopLevelDirective::RemovedModelPrefix => {
                 let message = match tokens.as_slice() {
                     ["model", "puzzle3", ..] => {
                         "top-level 3D puzzle definition must be: puzzle3 <name>"
@@ -2380,69 +2630,69 @@ fn parse_game2d_expanded_with_shell(
                 };
                 return Err(parse_error(line, message));
             }
-            "name" => {
+            ModelTopLevelDirective::RemovedNameMetadata => {
                 return Err(parse_error(
                     line,
                     "top-level `name` metadata was removed; use `title <text>`",
                 ));
             }
-            "title" => {
+            ModelTopLevelDirective::Title => {
                 title = parse_metadata_text(line, "title")?;
                 i += 1;
             }
-            "subtitle" => {
+            ModelTopLevelDirective::Subtitle => {
                 subtitle = Some(parse_metadata_text(line, "subtitle")?);
                 i += 1;
             }
-            "author" => {
+            ModelTopLevelDirective::Author => {
                 author = Some(parse_metadata_text(line, "author")?);
                 i += 1;
             }
-            "homepage" => {
+            ModelTopLevelDirective::Homepage => {
                 homepage = Some(parse_metadata_text(line, "homepage")?);
                 i += 1;
             }
-            "var" | "const" | "persistent" => {
+            ModelTopLevelDirective::Variable => {
                 variables.push(parse_top_level_var_directive(&tokens, line)?);
                 i += 1;
             }
-            "default_wait_time" => {
+            ModelTopLevelDirective::DefaultWaitTime => {
                 default_wait_ms = parse_default_wait_time_directive(&tokens, line)?;
                 i += 1;
             }
-            "again_interval" => {
+            ModelTopLevelDirective::AgainInterval => {
                 default_again_ms = parse_again_interval_directive(&tokens, line)?;
                 i += 1;
             }
-            "animation" => {
+            ModelTopLevelDirective::Animation => {
                 i = parse_animation_block(&lines, i, &mut animation)?;
             }
-            "scene" => {
+            ModelTopLevelDirective::Scene => {
                 return Err(parse_error(
                     line,
                     "scene blocks are document-level syntax and must be parsed before the 2D model",
                 ));
             }
-            "sounds" => {
+            ModelTopLevelDirective::Sounds => {
                 if model_sounds_block_starts(&lines, i) {
-                    i = parse_model_sounds_block(&lines, i, &catalog, &mut model_sound_triggers)?;
+                    i = parse_model_sounds_block(&lines, i, &mut model_sound_triggers)?;
                 } else {
                     i = parse_sounds_block(&lines, i, &mut sounds)?;
                 }
             }
-            "theme" => {
+            ModelTopLevelDirective::Theme => {
                 i = parse_theme_statement(&lines, i, &mut theme)?;
             }
-            "assets" => {
+            ModelTopLevelDirective::Assets => {
                 i = parse_assets_block(&lines, i, &mut assets)?;
             }
-            "}" => {
+            ModelTopLevelDirective::Close => {
                 i += 1;
             }
-            "sprites" => {
+            ModelTopLevelDirective::Sprites => {
                 i = parse_visuals_block(&lines, i, &mut catalog, &mut visuals)?;
             }
-            "levels" => {
+            ModelTopLevelDirective::Levels => {
                 i = parse_levels_block(
                     &lines,
                     i,
@@ -2453,31 +2703,37 @@ fn parse_game2d_expanded_with_shell(
                     None,
                 )?;
             }
-            "level" => {
+            ModelTopLevelDirective::Level => {
                 let (level, next_i) = parse_level_block(&lines, i, level_blocks.len())?;
                 level_blocks.push(level);
                 i = next_i;
             }
-            other => {
+            ModelTopLevelDirective::PuzzleLifecycle => {
                 return Err(parse_error(
                     line,
-                    &format!(
-                        "top-level directive must be title, subtitle, author, homepage, var, const, default_wait_time, again_interval, animation, puzzle, levels, sprites, sounds, theme, or assets; found {other}"
-                    ),
+                    &misplaced_puzzle_lifecycle_message(tokens[0]),
+                ));
+            }
+            ModelTopLevelDirective::Unknown => {
+                return Err(parse_error(
+                    line,
+                    &unknown_model_top_level_directive_message(tokens[0]),
                 ));
             }
         }
     }
 
     let empty_char = empty_char.ok_or_else(|| {
-        AppError::Parse("missing empty char; use `levels { legend { . = empty } }`".to_string())
+        DiagnosticReport::error(
+            "missing empty char; use `levels { legend { . = empty } }`".to_string(),
+        )
     })?;
-    assign_unlayered_objects_to_anonymous_layers(&mut named_layers, &mut layer_count, &mut catalog);
     validate_layer_role_separation(&catalog, &named_layers)?;
     refresh_layer_tags_and_value_sets(&mut named_layers, &mut catalog);
-    let layer_count = layer_count.ok_or_else(|| AppError::Parse("missing layers".to_string()))?;
+    let layer_count =
+        layer_count.ok_or_else(|| DiagnosticReport::error("missing layers".to_string()))?;
     if level_blocks.is_empty() {
-        return Err(AppError::Parse("missing level".to_string()));
+        return Err(DiagnosticReport::error("missing level".to_string()));
     }
     resolve_level_block_puzzles(&mut level_blocks, &puzzle_models)?;
     let prepared_level_bodies = level_blocks
@@ -2506,7 +2762,7 @@ fn parse_game2d_expanded_with_shell(
                 level_clear_statements: body.level_clear_statements,
             })
         })
-        .collect::<Result<Vec<_>, AppError>>()?;
+        .collect::<Result<Vec<_>, DiagnosticReport>>()?;
     add_default_restart_handler(main_statements.as_mut());
     add_implicit_input_guards_to_catalog(
         &rule_definitions,
@@ -2560,7 +2816,7 @@ fn parse_game2d_expanded_with_shell(
             )
             .map(|condition| (name, condition))
         })
-        .collect::<Result<HashMap<_, _>, AppError>>()?;
+        .collect::<Result<HashMap<_, _>, DiagnosticReport>>()?;
     let goal = conditions
         .get("win_conditions")
         .or_else(|| conditions.get("goal"))
@@ -2572,7 +2828,7 @@ fn parse_game2d_expanded_with_shell(
     conditions.remove("lose_conditions");
     conditions.remove("lose");
     if run_rules_on_level_start && level_start_statements.is_some() {
-        return Err(AppError::Parse(
+        return Err(DiagnosticReport::error(
             "run_rules_on_level_start cannot be combined with on_level_start".to_string(),
         ));
     }
@@ -2590,6 +2846,17 @@ fn parse_game2d_expanded_with_shell(
         &catalog.condition_names,
     )?;
     let visual_objects = catalog.visual_objects.clone();
+    let model_sound_triggers = resolve_model_sound_triggers(&model_sound_triggers, &catalog)?;
+    let mut warnings = collect_dynamic_selector_warnings(
+        &rule_definitions,
+        main_statements.as_deref(),
+        level_start_statements.as_deref(),
+        level_clear_statements.as_deref(),
+        last_level_clear_statements.as_deref(),
+        display_statements.as_deref(),
+        &prepared_level_bodies,
+        &catalog.constant_globals,
+    );
     let programs = lower_programs(
         rule_definitions,
         main_statements,
@@ -2656,9 +2923,9 @@ fn parse_game2d_expanded_with_shell(
                 level_clear_program: programs.level_clears[index].clone(),
             })
         })
-        .collect::<Result<Vec<_>, AppError>>()?;
+        .collect::<Result<Vec<_>, DiagnosticReport>>()?;
 
-    let warnings = collect_scratch_warnings(&game, &catalog.scratch_names);
+    warnings.extend(collect_scratch_warnings(&game, &catalog.scratch_names));
 
     Ok(LoadedGame {
         title,
@@ -2670,7 +2937,7 @@ fn parse_game2d_expanded_with_shell(
         default_wait_ms,
         default_again_ms,
         animation: animation.clone(),
-        rule_emissions: programs.rule_emissions,
+        rule_animations: programs.rule_animations,
         rule_effects: programs.rule_effects,
         level_start_program: programs.level_start,
         display_level_start_program: None,
@@ -2700,6 +2967,146 @@ fn parse_game2d_expanded_with_shell(
         render,
         screen: puzzle_screen,
     })
+}
+
+fn collect_dynamic_selector_warnings(
+    definitions: &[RuleDefinitionAst],
+    main_statements: Option<&[StatementAst]>,
+    level_start_statements: Option<&[StatementAst]>,
+    level_clear_statements: Option<&[StatementAst]>,
+    last_level_clear_statements: Option<&[StatementAst]>,
+    display_statements: Option<&[StatementAst]>,
+    level_bodies: &[PreparedLevelBody],
+    constant_globals: &[GlobalId],
+) -> Vec<String> {
+    let mut warnings = Vec::new();
+    for definition in definitions {
+        collect_dynamic_selector_statement_warnings(
+            &definition.statements,
+            constant_globals,
+            &mut warnings,
+        );
+    }
+    for statements in [
+        main_statements,
+        level_start_statements,
+        level_clear_statements,
+        last_level_clear_statements,
+        display_statements,
+    ]
+    .into_iter()
+    .flatten()
+    {
+        collect_dynamic_selector_statement_warnings(statements, constant_globals, &mut warnings);
+    }
+    for body in level_bodies {
+        collect_dynamic_selector_statement_warnings(
+            &body.level_start_statements,
+            constant_globals,
+            &mut warnings,
+        );
+        collect_dynamic_selector_statement_warnings(
+            &body.level_clear_statements,
+            constant_globals,
+            &mut warnings,
+        );
+    }
+    warnings
+}
+
+fn collect_dynamic_selector_statement_warnings(
+    statements: &[StatementAst],
+    constant_globals: &[GlobalId],
+    warnings: &mut Vec<String>,
+) {
+    for statement in statements {
+        match statement {
+            StatementAst::Rewrite(rewrite) | StatementAst::DisplayRewrite(rewrite) => {
+                collect_dynamic_selector_block_warnings(
+                    &rewrite.before,
+                    constant_globals,
+                    warnings,
+                );
+                collect_dynamic_selector_block_warnings(&rewrite.after, constant_globals, warnings);
+            }
+            StatementAst::Conditional {
+                condition,
+                then_statements,
+                else_statements,
+            } => {
+                collect_dynamic_selector_block_warnings(
+                    &condition.pattern,
+                    constant_globals,
+                    warnings,
+                );
+                collect_dynamic_selector_statement_warnings(
+                    then_statements,
+                    constant_globals,
+                    warnings,
+                );
+                collect_dynamic_selector_statement_warnings(
+                    else_statements,
+                    constant_globals,
+                    warnings,
+                );
+            }
+            StatementAst::Block { statements, .. }
+            | StatementAst::DisplayBlock(statements)
+            | StatementAst::Fix { statements, .. }
+            | StatementAst::RepeatUntil { statements, .. } => {
+                collect_dynamic_selector_statement_warnings(statements, constant_globals, warnings);
+            }
+            StatementAst::If {
+                then_statements,
+                else_statements,
+                ..
+            } => {
+                collect_dynamic_selector_statement_warnings(
+                    then_statements,
+                    constant_globals,
+                    warnings,
+                );
+                collect_dynamic_selector_statement_warnings(
+                    else_statements,
+                    constant_globals,
+                    warnings,
+                );
+            }
+            StatementAst::Call { .. }
+            | StatementAst::DisplayCall { .. }
+            | StatementAst::Effect { .. } => {}
+        }
+    }
+}
+
+fn collect_dynamic_selector_block_warnings(
+    block: &PatternBlock,
+    constant_globals: &[GlobalId],
+    warnings: &mut Vec<String>,
+) {
+    for component in &block.components {
+        for row in &component.rows {
+            for part in row {
+                let BlockPart::Cell(cell) = part else {
+                    continue;
+                };
+                for selector in cell.require.iter().chain(&cell.forbid) {
+                    for guard in selector.dynamic_guards.values().flatten() {
+                        if constant_globals.contains(&guard.global) {
+                            continue;
+                        }
+                        push_unique_warning(
+                            warnings,
+                            format!(
+                                "dynamic selector `{}` uses mutable var `{}`; if the var is outside the selector tag slot values, the selector does not match",
+                                selector.token, guard.name
+                            ),
+                        );
+                    }
+                }
+            }
+        }
+    }
 }
 
 fn collect_scratch_warnings(
@@ -2806,7 +3213,7 @@ fn expand_game_imports(
     base_dir: &Path,
     import_stack: &mut Vec<PathBuf>,
     root: Option<&Path>,
-) -> Result<String, AppError> {
+) -> Result<String, DiagnosticReport> {
     let mut out = String::new();
     for line in logical_lines(source)? {
         let tokens = split_header_tokens(&line);
@@ -2831,19 +3238,19 @@ fn read_import_expanded(
     path: &Path,
     import_stack: &mut Vec<PathBuf>,
     root: Option<&Path>,
-) -> Result<String, AppError> {
+) -> Result<String, DiagnosticReport> {
     let resolved = resolve_import_path(base_dir, path);
     let canonical = canonical_import_path(&resolved);
     if let Some(root) = root {
         if !canonical.starts_with(root) {
-            return Err(AppError::Parse(format!(
+            return Err(DiagnosticReport::error(format!(
                 "can only import puzzle files under {}",
                 root.display()
             )));
         }
     }
     if import_stack.contains(&canonical) {
-        return Err(AppError::Parse(format!(
+        return Err(DiagnosticReport::error(format!(
             "cyclic import: {}",
             import_stack
                 .iter()
@@ -2865,7 +3272,7 @@ fn read_import_expanded(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn import_path(token: &str, line: &str) -> Result<PathBuf, AppError> {
+fn import_path(token: &str, line: &str) -> Result<PathBuf, DiagnosticReport> {
     let path = token
         .strip_prefix('"')
         .and_then(|value| value.strip_suffix('"'))
@@ -2888,9 +3295,10 @@ fn canonical_import_path(path: &Path) -> PathBuf {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn read_import_path(path: &Path) -> Result<String, AppError> {
-    fs::read_to_string(path)
-        .map_err(|error| AppError::Parse(format!("failed to read {}: {error}", path.display())))
+fn read_import_path(path: &Path) -> Result<String, DiagnosticReport> {
+    fs::read_to_string(path).map_err(|error| {
+        DiagnosticReport::error(format!("failed to read {}: {error}", path.display()))
+    })
 }
 
 fn scene_entry_is_component(tokens: &[&str]) -> bool {
@@ -2919,7 +3327,7 @@ fn scene_entry_is_component(tokens: &[&str]) -> bool {
 fn collect_authoring_entry(
     lines: &[String],
     start: usize,
-) -> Result<(Vec<String>, usize), AppError> {
+) -> Result<(Vec<String>, usize), DiagnosticReport> {
     let first = &lines[start];
     let tokens = split_header_tokens(first);
     if matches!(tokens.as_slice(), ["levels", ..]) {
@@ -2995,7 +3403,7 @@ fn next_line_is_else(lines: &[String], index: usize) -> bool {
 fn collect_levels_authoring_entry(
     lines: &[String],
     start: usize,
-) -> Result<(Vec<String>, usize), AppError> {
+) -> Result<(Vec<String>, usize), DiagnosticReport> {
     let first = &lines[start];
     let mut entry = vec![first.clone()];
     let mut depth = 1usize;
@@ -3032,7 +3440,6 @@ fn starts_authoring_block(tokens: &[&str], line: &str) -> bool {
         | ["on_level_clear"]
         | ["on_last_level_clear"]
         | ["on_display"]
-        | ["objects"]
         | ["scratch"]
         | ["groups"]
         | ["layers"]
@@ -3069,7 +3476,7 @@ fn parse_sounds_block(
     lines: &[String],
     start: usize,
     sounds: &mut SoundsDef,
-) -> Result<usize, AppError> {
+) -> Result<usize, DiagnosticReport> {
     let header = split_header_tokens(&lines[start]);
     if !matches!(header.as_slice(), ["sounds"]) {
         return Err(parse_error(&lines[start], "sounds header must be: sounds"));
@@ -3171,6 +3578,14 @@ struct ModelSoundTrigger {
     sfx_name: String,
 }
 
+#[derive(Clone, Debug)]
+struct ModelSoundTriggerSpec {
+    kind: ModelSoundTriggerKind,
+    selector: String,
+    sfx_name: String,
+    line: String,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ModelSoundTriggerKind {
     Move,
@@ -3189,9 +3604,8 @@ fn model_sounds_block_starts(lines: &[String], start: usize) -> bool {
 fn parse_model_sounds_block(
     lines: &[String],
     start: usize,
-    catalog: &Catalog,
-    triggers: &mut Vec<ModelSoundTrigger>,
-) -> Result<usize, AppError> {
+    triggers: &mut Vec<ModelSoundTriggerSpec>,
+) -> Result<usize, DiagnosticReport> {
     let header = split_header_tokens(&lines[start]);
     if !matches!(header.as_slice(), ["sounds"]) {
         return Err(parse_error(
@@ -3215,29 +3629,11 @@ fn parse_model_sounds_block(
         match (trigger_kind, tokens.as_slice()) {
             (Some(kind), [_, selector, "->", "sfx", name]) => {
                 validate_qualified_identifier(name, line, "sfx name")?;
-                let selector = resolve_object_selector(
-                    selector,
-                    line,
-                    &catalog.object_names,
-                    &catalog.object_schemas,
-                    &catalog_value_sets(catalog),
-                    &catalog.maps,
-                    &catalog.object_groups,
-                )?;
-                if selector
-                    .alternatives
-                    .iter()
-                    .any(|object| catalog.visual_objects.contains(object))
-                {
-                    return Err(parse_error(
-                        line,
-                        "model sound triggers cannot target display objects",
-                    ));
-                }
-                triggers.push(ModelSoundTrigger {
+                triggers.push(ModelSoundTriggerSpec {
                     kind,
-                    objects: selector.alternatives,
+                    selector: (*selector).to_string(),
                     sfx_name: (*name).to_string(),
+                    line: line.clone(),
                 });
             }
             _ => {
@@ -3256,11 +3652,70 @@ fn parse_model_sounds_block(
     ))
 }
 
+fn resolve_model_sound_triggers(
+    specs: &[ModelSoundTriggerSpec],
+    catalog: &Catalog,
+) -> Result<Vec<ModelSoundTrigger>, DiagnosticReport> {
+    let value_sets = catalog_value_sets(catalog);
+    specs
+        .iter()
+        .map(|spec| {
+            let selector = resolve_object_selector(
+                &spec.selector,
+                &spec.line,
+                &catalog.object_names,
+                &catalog.object_schemas,
+                &value_sets,
+                &catalog.maps,
+                &catalog.object_groups,
+                &HashMap::new(),
+            )
+            .map_err(|error| model_sound_selector_error(error, spec))?;
+            if selector
+                .alternatives
+                .iter()
+                .any(|object| catalog.visual_objects.contains(object))
+            {
+                return Err(parse_error(
+                    &spec.line,
+                    "model sound triggers cannot target display objects",
+                ));
+            }
+            Ok(ModelSoundTrigger {
+                kind: spec.kind,
+                objects: selector.alternatives,
+                sfx_name: spec.sfx_name.clone(),
+            })
+        })
+        .collect()
+}
+
+fn model_sound_selector_error(
+    error: DiagnosticReport,
+    spec: &ModelSoundTriggerSpec,
+) -> DiagnosticReport {
+    if error
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| diagnostic.message.starts_with("unknown object selector"))
+    {
+        parse_error(
+            &spec.line,
+            &format!(
+                "unknown model sound trigger object selector `{}`",
+                spec.selector
+            ),
+        )
+    } else {
+        error
+    }
+}
+
 fn parse_theme_block(
     lines: &[String],
     start: usize,
     theme: &mut ThemeDef,
-) -> Result<usize, AppError> {
+) -> Result<usize, DiagnosticReport> {
     let header = split_header_tokens(&lines[start]);
     match header.as_slice() {
         ["theme", name] => {
@@ -3295,7 +3750,7 @@ fn parse_theme_block(
 fn parse_theme_setting_tokens(
     tokens: &[&str],
     line: &str,
-) -> Result<Option<(String, String)>, AppError> {
+) -> Result<Option<(String, String)>, DiagnosticReport> {
     match tokens {
         [name, value] => {
             let name = normalize_theme_setting_name(name, line)?;
@@ -3318,7 +3773,7 @@ fn parse_theme_statement(
     lines: &[String],
     start: usize,
     theme: &mut ThemeDef,
-) -> Result<usize, AppError> {
+) -> Result<usize, DiagnosticReport> {
     let tokens = split_header_tokens(&lines[start]);
     let ["theme", name] = tokens.as_slice() else {
         return Err(parse_error(
@@ -3341,7 +3796,7 @@ fn parse_theme_name_directive(
     line: &str,
     name: &str,
     theme: &mut ThemeDef,
-) -> Result<(), AppError> {
+) -> Result<(), DiagnosticReport> {
     validate_qualified_identifier(name, line, "theme name")?;
     theme.name = Some(name.to_string());
     Ok(())
@@ -3356,7 +3811,7 @@ fn parse_assets_block(
     lines: &[String],
     start: usize,
     assets: &mut AssetsDef,
-) -> Result<usize, AppError> {
+) -> Result<usize, DiagnosticReport> {
     let header = split_header_tokens(&lines[start]);
     if !matches!(header.as_slice(), ["assets"]) {
         return Err(parse_error(&lines[start], "assets header must be: assets"));
@@ -3390,7 +3845,7 @@ fn parse_assets_block(
     Err(parse_error(&lines[start], "assets missing closing brace"))
 }
 
-fn parse_asset_path(token: &str, line: &str) -> Result<String, AppError> {
+fn parse_asset_path(token: &str, line: &str) -> Result<String, DiagnosticReport> {
     let path = token
         .strip_prefix('"')
         .and_then(|value| value.strip_suffix('"'))
@@ -3407,7 +3862,7 @@ fn parse_asset_path(token: &str, line: &str) -> Result<String, AppError> {
     Ok(path.to_string())
 }
 
-fn parse_metadata_text(line: &str, keyword: &str) -> Result<String, AppError> {
+fn parse_metadata_text(line: &str, keyword: &str) -> Result<String, DiagnosticReport> {
     let Some(rest) = line.strip_prefix(keyword) else {
         return Err(parse_error(
             line,
@@ -3421,7 +3876,7 @@ fn parse_metadata_text(line: &str, keyword: &str) -> Result<String, AppError> {
     Ok(parse_quoted_text(value).unwrap_or_else(|| value.to_string()))
 }
 
-fn normalize_theme_setting_name(name: &str, line: &str) -> Result<String, AppError> {
+fn normalize_theme_setting_name(name: &str, line: &str) -> Result<String, DiagnosticReport> {
     let normalized = name
         .trim_start_matches("--")
         .replace('_', "-")
@@ -3446,7 +3901,7 @@ fn normalize_theme_setting_name(name: &str, line: &str) -> Result<String, AppErr
     ))
 }
 
-fn validate_theme_value(value: &str, line: &str) -> Result<(), AppError> {
+fn validate_theme_value(value: &str, line: &str) -> Result<(), DiagnosticReport> {
     let is_safe_css_token = !value.is_empty()
         && value.chars().all(|ch| {
             ch.is_ascii_alphanumeric()
@@ -3481,7 +3936,7 @@ fn required_sound_setting<'a>(
     settings: &'a [&'a str],
     key: &str,
     line: &str,
-) -> Result<&'a str, AppError> {
+) -> Result<&'a str, DiagnosticReport> {
     optional_sound_setting(settings, key)
         .ok_or_else(|| parse_error(line, &format!("sounds setting `{key}` is required")))
 }
@@ -3493,7 +3948,7 @@ fn optional_sound_setting<'a>(settings: &'a [&'a str], key: &str) -> Option<&'a 
     })
 }
 
-fn validate_sound_atom(value: &str, line: &str, label: &str) -> Result<(), AppError> {
+fn validate_sound_atom(value: &str, line: &str, label: &str) -> Result<(), DiagnosticReport> {
     if !value.is_empty()
         && value
             .chars()
@@ -3508,7 +3963,7 @@ fn validate_sound_atom(value: &str, line: &str, label: &str) -> Result<(), AppEr
     }
 }
 
-fn parse_sound_f64(value: &str, line: &str, label: &str) -> Result<f64, AppError> {
+fn parse_sound_f64(value: &str, line: &str, label: &str) -> Result<f64, DiagnosticReport> {
     let parsed = value
         .parse::<f64>()
         .map_err(|_| parse_error(line, &format!("{label} must be a number")))?;
@@ -3519,7 +3974,7 @@ fn parse_sound_f64(value: &str, line: &str, label: &str) -> Result<f64, AppError
     }
 }
 
-fn parse_sound_u16(value: &str, line: &str, label: &str) -> Result<u16, AppError> {
+fn parse_sound_u16(value: &str, line: &str, label: &str) -> Result<u16, DiagnosticReport> {
     value
         .parse::<u16>()
         .map_err(|_| parse_error(line, &format!("{label} must be u16")))
@@ -3548,14 +4003,14 @@ fn parse_puzzle_definition(
     display_statements: &mut Option<Vec<StatementAst>>,
     level_blocks: &mut Vec<LevelBlock>,
     render_overlays: &mut OverlayDefs,
-    model_sound_triggers: &mut Vec<ModelSoundTrigger>,
+    model_sound_triggers: &mut Vec<ModelSoundTriggerSpec>,
     named_conditions: &mut HashMap<String, (String, ConditionAst)>,
     run_rules_on_level_start: &mut bool,
     visuals: &mut VisualsDef,
     render: &mut PuzzleRenderDef,
     animation: &mut AnimationDef,
     puzzle_screen: &mut PuzzleScreenDef,
-) -> Result<(usize, String), AppError> {
+) -> Result<(usize, String), DiagnosticReport> {
     let header = split_header_tokens(&lines[start]);
     let name = match header.as_slice() {
         ["puzzle", name] => *name,
@@ -3664,45 +4119,8 @@ fn parse_puzzle_definition(
                 *empty_char = Some(parse_char(tokens.get(1), line, "missing empty char")?);
                 i += 1;
             }
-            "objects" => {
-                i = parse_objects_block(lines, i, catalog)?;
-                refresh_layer_tags_and_value_sets(named_layers, catalog);
-            }
-            "display_objects" => {
-                return Err(parse_error(
-                    line,
-                    "`display_objects { ... }` was removed; use `objects { @Name ... }`",
-                ));
-            }
             "scratch" => {
                 i = parse_scratch_block(lines, i, catalog)?;
-            }
-            "object" => {
-                let spec = expect(tokens.get(1), line, "missing object name")?;
-                let layer = parse_u16(tokens.get(2), line, "missing object layer")?;
-                if tokens.len() > 4 {
-                    return Err(parse_error(
-                        line,
-                        "object must be: object <name-or-schema> <layer>",
-                    ));
-                }
-                let declared = parse_object_directive(
-                    spec,
-                    layer,
-                    tokens.get(3).copied(),
-                    line,
-                    &catalog_value_sets(catalog),
-                    &mut catalog.object_schemas,
-                    &mut catalog.object_names,
-                    &mut catalog.object_labels,
-                    &mut catalog.object_layers,
-                    &mut catalog.object_defs,
-                    &mut catalog.render_chars,
-                    &mut catalog.char_objects,
-                )?;
-                mark_visual_objects(&declared, is_display_role_token(spec), catalog);
-                refresh_layer_tags_and_value_sets(named_layers, catalog);
-                i += 1;
             }
             "input" => {
                 let (direction, next_i) = parse_command_definition(lines, i, catalog)?;
@@ -3712,7 +4130,13 @@ fn parse_puzzle_definition(
                 i = next_i;
             }
             "inputs" => {
-                i = parse_model_inputs_block(lines, i, catalog, controls)?;
+                return Err(parse_error(
+                    line,
+                    "`inputs { ... }` was removed; use `keys { <key...> -> <input> }`",
+                ));
+            }
+            "keys" => {
+                i = parse_model_keys_block(lines, i, catalog, controls)?;
             }
             "var" | "const" | "persistent" => {
                 parse_global_directive(
@@ -3819,7 +4243,7 @@ fn parse_puzzle_definition(
                 i = parse_animation_block(lines, i, animation)?;
             }
             "sounds" => {
-                i = parse_model_sounds_block(lines, i, catalog, model_sound_triggers)?;
+                i = parse_model_sounds_block(lines, i, model_sound_triggers)?;
             }
             "screen" | "layout" => {
                 i = parse_puzzle_screen_block(lines, i, puzzle_screen)?;
@@ -3960,7 +4384,7 @@ fn parse_program_local_frame_modifier(
     tokens: &[&str],
     line: &str,
     catalog: &Catalog,
-) -> Result<Option<LocalFrame<ObjectId>>, AppError> {
+) -> Result<Option<LocalFrame<ObjectId>>, DiagnosticReport> {
     if tokens.is_empty() {
         return Ok(None);
     }
@@ -3988,7 +4412,7 @@ fn parse_program_local_frame_modifier(
     }
 }
 
-fn parse_local_frame_extent(token: &str, line: &str) -> Result<LocalFrameExtent, AppError> {
+fn parse_local_frame_extent(token: &str, line: &str) -> Result<LocalFrameExtent, DiagnosticReport> {
     if token == "full" {
         return Ok(LocalFrameExtent::Full);
     }
@@ -3998,7 +4422,7 @@ fn parse_local_frame_extent(token: &str, line: &str) -> Result<LocalFrameExtent,
 fn default_local_frame_focus_objects(
     catalog: &Catalog,
     line: &str,
-) -> Result<Vec<ObjectId>, AppError> {
+) -> Result<Vec<ObjectId>, DiagnosticReport> {
     for name in ["Player", "player"] {
         if let Some(object) = catalog.object_names.get(name) {
             return Ok(vec![*object]);
@@ -4014,7 +4438,7 @@ fn parse_level_block(
     lines: &[String],
     start: usize,
     existing_count: usize,
-) -> Result<(LevelBlock, usize), AppError> {
+) -> Result<(LevelBlock, usize), DiagnosticReport> {
     let level_name =
         parse_level_header_name_or_auto(&lines[start], unnamed_level_name(existing_count))?;
     parse_named_level_body(lines, start, level_name, &LevelsHeader::default())
@@ -4028,7 +4452,7 @@ fn parse_levels_block(
     render_overlays: &mut OverlayDefs,
     empty_char: &mut Option<char>,
     default_puzzle: Option<&str>,
-) -> Result<usize, AppError> {
+) -> Result<usize, DiagnosticReport> {
     let header = parse_levels_header(&lines[start], default_puzzle)?;
     let mut namespace_count = 0usize;
     let mut i = start + 1;
@@ -4114,7 +4538,10 @@ struct LevelsHeader {
     puzzle: Option<String>,
 }
 
-fn parse_levels_header(line: &str, default_puzzle: Option<&str>) -> Result<LevelsHeader, AppError> {
+fn parse_levels_header(
+    line: &str,
+    default_puzzle: Option<&str>,
+) -> Result<LevelsHeader, DiagnosticReport> {
     let tokens = split_header_tokens(line);
     match tokens.as_slice() {
         ["levels"] => Ok(LevelsHeader {
@@ -4146,12 +4573,12 @@ fn parse_levels_header(line: &str, default_puzzle: Option<&str>) -> Result<Level
 fn resolve_level_block_puzzles(
     levels: &mut [LevelBlock],
     puzzle_models: &[String],
-) -> Result<(), AppError> {
+) -> Result<(), DiagnosticReport> {
     let unique_models = puzzle_models.iter().collect::<HashSet<_>>();
     for level in levels {
         if let Some(puzzle) = &level.puzzle {
             if !unique_models.contains(puzzle) {
-                return Err(AppError::Parse(format!(
+                return Err(DiagnosticReport::error(format!(
                     "levels target unknown puzzle model: {puzzle}"
                 )));
             }
@@ -4159,7 +4586,7 @@ fn resolve_level_block_puzzles(
         }
         match unique_models.len() {
             0 => {
-                return Err(AppError::Parse(
+                return Err(DiagnosticReport::error(
                     "bare levels requires one puzzle definition".to_string(),
                 ));
             }
@@ -4167,7 +4594,7 @@ fn resolve_level_block_puzzles(
                 level.puzzle = unique_models.iter().next().map(|name| (*name).clone());
             }
             _ => {
-                return Err(AppError::Parse(
+                return Err(DiagnosticReport::error(
                     "bare levels is ambiguous with multiple puzzle models; use `levels of <puzzle>` or `levels <pack> of <puzzle>`".to_string(),
                 ));
             }
@@ -4176,7 +4603,10 @@ fn resolve_level_block_puzzles(
     Ok(())
 }
 
-fn parse_level_header_name_or_auto(line: &str, auto_name: String) -> Result<String, AppError> {
+fn parse_level_header_name_or_auto(
+    line: &str,
+    auto_name: String,
+) -> Result<String, DiagnosticReport> {
     let tokens = split_header_tokens(line);
     if tokens.len() == 1 {
         return Ok(auto_name);
@@ -4220,7 +4650,7 @@ fn parse_conditions_block(
     start: usize,
     catalog: &Catalog,
     named_conditions: &mut HashMap<String, (String, ConditionAst)>,
-) -> Result<usize, AppError> {
+) -> Result<usize, DiagnosticReport> {
     let header_tokens = split_header_tokens(&lines[start]);
     let condition_name = header_tokens.first().copied().unwrap_or("win_conditions");
     let combinator = match header_tokens.as_slice() {
@@ -4288,18 +4718,26 @@ fn parse_condition_block_entry(
     catalog: &Catalog,
     conditions: &mut Vec<ConditionAst>,
     descriptions: &mut Vec<String>,
-) -> Result<usize, AppError> {
+) -> Result<usize, DiagnosticReport> {
     let line = &lines[start];
     let tokens = split_header_tokens(line);
-    if let Some(["for", binding, "in", source]) = (tokens.len() == 4).then_some(tokens.as_slice()) {
+    if matches!(tokens.as_slice(), ["for", _, "in", ..]) {
+        let ["for", binding, "in", sources @ ..] = tokens.as_slice() else {
+            unreachable!("checked by matches");
+        };
         let value_sets = catalog_value_sets(catalog);
         let values =
-            for_expansion_values(source, &value_sets, &catalog.numeric_global_defaults, line)?;
+            for_expansion_values(sources, &value_sets, &catalog.numeric_global_defaults, line)?;
         validate_identifier(binding, line, "expansion binding")?;
         let (body_lines, next_i) = collect_statement_block_lines(lines, start + 1, line)?;
         for value in values {
-            let expanded_lines =
-                expand_for_binding_lines(&body_lines, binding, source, &value, &catalog.maps)?;
+            let expanded_lines = expand_for_binding_lines(
+                &body_lines,
+                binding,
+                value.axis.as_deref(),
+                &value.value,
+                &catalog.maps,
+            )?;
             parse_condition_rows(
                 &expanded_lines,
                 condition_name,
@@ -4323,7 +4761,7 @@ fn parse_condition_rows(
     catalog: &Catalog,
     conditions: &mut Vec<ConditionAst>,
     descriptions: &mut Vec<String>,
-) -> Result<(), AppError> {
+) -> Result<(), DiagnosticReport> {
     let mut i = 0;
     while i < lines.len() {
         i = parse_condition_block_entry(
@@ -4364,7 +4802,7 @@ fn parse_puzzle_screen_block(
     lines: &[String],
     start: usize,
     puzzle_screen: &mut PuzzleScreenDef,
-) -> Result<usize, AppError> {
+) -> Result<usize, DiagnosticReport> {
     let mut parsed = puzzle_screen.clone();
     let mut i = start + 1;
     while i < lines.len() && !is_block_close_line(&lines[i]) {
@@ -4393,7 +4831,7 @@ fn parse_puzzle_render_block(
     lines: &[String],
     start: usize,
     render: &mut PuzzleRenderDef,
-) -> Result<usize, AppError> {
+) -> Result<usize, DiagnosticReport> {
     let mut parsed = render.clone();
     let mut i = start + 1;
     while i < lines.len() && !is_block_close_line(&lines[i]) {
@@ -4435,7 +4873,7 @@ fn parse_animation_block(
     lines: &[String],
     start: usize,
     animation: &mut AnimationDef,
-) -> Result<usize, AppError> {
+) -> Result<usize, DiagnosticReport> {
     let header = split_header_tokens(&lines[start]);
     if !matches!(header.as_slice(), ["animation"]) {
         return Err(parse_error(
@@ -4489,7 +4927,7 @@ fn parse_animation_tween_block(
     lines: &[String],
     start: usize,
     tween: &mut TweenAnimationDef,
-) -> Result<usize, AppError> {
+) -> Result<usize, DiagnosticReport> {
     let mut parsed = tween.clone();
     let mut i = start + 1;
     while i < lines.len() && !is_block_close_line(&lines[i]) {
@@ -4520,7 +4958,7 @@ fn parse_animation_tween_options(
     options: &[&str],
     line: &str,
     tween: &mut TweenAnimationDef,
-) -> Result<(), AppError> {
+) -> Result<(), DiagnosticReport> {
     if options.is_empty() {
         return Err(parse_error(
             line,
@@ -4547,7 +4985,7 @@ fn parse_animation_tween_options(
     Ok(())
 }
 
-fn parse_animation_duration_ms(value: &str, line: &str) -> Result<u64, AppError> {
+fn parse_animation_duration_ms(value: &str, line: &str) -> Result<u64, DiagnosticReport> {
     let milliseconds = parse_wait_duration_ms(value, line)?;
     if milliseconds == 0 {
         return Err(parse_error(line, "tween duration must be greater than 0"));
@@ -4559,7 +4997,7 @@ fn parse_puzzle_render_grid_block(
     lines: &[String],
     start: usize,
     grid: &mut PuzzleGridRenderDef,
-) -> Result<usize, AppError> {
+) -> Result<usize, DiagnosticReport> {
     let mut parsed = grid.clone();
     let mut i = start + 1;
     while i < lines.len() && !is_block_close_line(&lines[i]) {
@@ -4594,7 +5032,7 @@ fn parse_puzzle_render_grid_options(
     options: &[&str],
     line: &str,
     grid: &mut PuzzleGridRenderDef,
-) -> Result<(), AppError> {
+) -> Result<(), DiagnosticReport> {
     if options.is_empty() {
         return Err(parse_error(
             line,
@@ -4614,7 +5052,7 @@ fn parse_puzzle_render_grid_options(
 fn parse_puzzle_screen_directive(
     line: &str,
     puzzle_screen: &mut PuzzleScreenDef,
-) -> Result<(), AppError> {
+) -> Result<(), DiagnosticReport> {
     let tokens = split_header_tokens(line);
     match tokens.as_slice() {
         ["flickscreen", "full"] => {
@@ -4652,7 +5090,10 @@ fn parse_puzzle_screen_directive(
     Ok(())
 }
 
-fn validate_puzzle_screen(puzzle_screen: &PuzzleScreenDef, line: &str) -> Result<(), AppError> {
+fn validate_puzzle_screen(
+    puzzle_screen: &PuzzleScreenDef,
+    line: &str,
+) -> Result<(), DiagnosticReport> {
     if !matches!(puzzle_screen.viewport_size, ViewportSizeDef::Size { .. })
         && puzzle_screen.viewport_mode == ViewportModeDef::Centered
     {
@@ -4664,7 +5105,10 @@ fn validate_puzzle_screen(puzzle_screen: &PuzzleScreenDef, line: &str) -> Result
     Ok(())
 }
 
-fn parse_screen_size_directive(line: &str, directive: &str) -> Result<(u16, u16), AppError> {
+fn parse_screen_size_directive(
+    line: &str,
+    directive: &str,
+) -> Result<(u16, u16), DiagnosticReport> {
     let value = line
         .strip_prefix(directive)
         .map(str::trim)
@@ -4703,7 +5147,7 @@ fn parse_screen_size_directive(line: &str, directive: &str) -> Result<(u16, u16)
     ))
 }
 
-fn parse_u16_tuple(value: &str, line: &str, name: &str) -> Result<(u16, u16), AppError> {
+fn parse_u16_tuple(value: &str, line: &str, name: &str) -> Result<(u16, u16), DiagnosticReport> {
     let inner = value
         .strip_prefix('(')
         .and_then(|value| value.strip_suffix(')'))
@@ -4726,7 +5170,7 @@ fn parse_condition_block_row(
     line: &str,
     condition_name: &str,
     catalog: &Catalog,
-) -> Result<ConditionAst, AppError> {
+) -> Result<ConditionAst, DiagnosticReport> {
     if let Some(pattern) = line.trim().strip_prefix("some ") {
         let pattern = pattern.trim();
         if let Some(pattern) = parse_condition_pattern_arg(
@@ -4851,7 +5295,7 @@ fn parse_named_level_body(
     start: usize,
     name: String,
     header: &LevelsHeader,
-) -> Result<(LevelBlock, usize), AppError> {
+) -> Result<(LevelBlock, usize), DiagnosticReport> {
     let mut level_lines = Vec::new();
     let mut i = start + 1;
     let mut nested_blocks = 0usize;
@@ -4891,7 +5335,7 @@ fn parse_unbraced_level_body(
     start: usize,
     name: String,
     header: &LevelsHeader,
-) -> Result<(LevelBlock, usize), AppError> {
+) -> Result<(LevelBlock, usize), DiagnosticReport> {
     let mut level_lines = Vec::new();
     let mut i = start;
     let mut nested_blocks = 0usize;
@@ -4970,7 +5414,7 @@ fn parse_level_body(
     empty_char: char,
     default_wait_ms: u64,
     named_conditions: &HashMap<String, (String, ConditionAst)>,
-) -> Result<ParsedLevelBody, AppError> {
+) -> Result<ParsedLevelBody, DiagnosticReport> {
     let mut body = ParsedLevelBody::default();
     let mut saw_map_row = false;
     let mut i = 0;
@@ -5063,7 +5507,7 @@ fn parse_level_body(
 fn parse_level_event_sugar(
     line: &str,
     default_wait_ms: u64,
-) -> Result<Option<StatementAst>, AppError> {
+) -> Result<Option<StatementAst>, DiagnosticReport> {
     let tokens = split_header_tokens(line);
     let is_level_event = matches!(tokens.as_slice(), ["sfx", _] | ["wait"] | ["wait", _])
         || line.strip_prefix("message ").is_some();
@@ -5102,7 +5546,7 @@ fn parse_level_legend_block_row(
     catalog: &Catalog,
     empty_char: char,
     local_char_objects: &mut HashMap<char, Vec<ObjectId>>,
-) -> Result<(), AppError> {
+) -> Result<(), DiagnosticReport> {
     let tokens = split_header_tokens(line);
     if tokens.len() < 3 || tokens.get(1).copied() != Some("=") {
         return Err(parse_error(
@@ -5123,7 +5567,7 @@ fn parse_level_legend_directive(
     line: &str,
     catalog: &Catalog,
     empty_char: char,
-) -> Result<(char, Vec<ObjectId>), AppError> {
+) -> Result<(char, Vec<ObjectId>), DiagnosticReport> {
     if tokens.len() < 4 || tokens.get(2).copied() != Some("=") {
         return Err(parse_error(
             line,
@@ -5167,7 +5611,7 @@ fn parse_map_definition(
     lines: &[String],
     start: usize,
     value_sets: &HashMap<String, Vec<String>>,
-) -> Result<(ValueMap, usize), AppError> {
+) -> Result<(ValueMap, usize), DiagnosticReport> {
     let header = split_header_tokens(&lines[start]);
     let ["map", name, axis] = header.as_slice() else {
         return Err(parse_error(
@@ -5234,7 +5678,7 @@ fn parse_tags_block(
     lines: &[String],
     start: usize,
     catalog: &mut Catalog,
-) -> Result<usize, AppError> {
+) -> Result<usize, DiagnosticReport> {
     let mut i = start + 1;
     while i < lines.len() && !is_block_close_line(&lines[i]) {
         let line = &lines[i];
@@ -5261,15 +5705,15 @@ fn parse_tag_set_directive(
     values: &[&str],
     line: &str,
     catalog: &mut Catalog,
-) -> Result<(), AppError> {
+) -> Result<(), DiagnosticReport> {
     validate_identifier(name, line, "tag set name")?;
     if values.is_empty() {
         return Err(parse_error(line, "tag set must have at least one value"));
     }
-    for value in values {
-        if value.trim().is_empty() {
-            return Err(parse_error(line, "tag value must not be empty"));
-        }
+    let expanded_values =
+        expand_numeric_ranges_in_value_list(values, &catalog.numeric_global_defaults, line)?;
+    if expanded_values.is_empty() {
+        return Err(parse_error(line, "tag set must have at least one value"));
     }
     if is_builtin_value_set(name) {
         return Err(parse_error(line, "built-in tag set cannot be redefined"));
@@ -5277,10 +5721,9 @@ fn parse_tag_set_directive(
     if catalog.value_sets.contains_key(name) || catalog.object_axes.contains_key(name) {
         return Err(parse_error(line, "duplicate tag set"));
     }
-    catalog.object_axes.insert(
-        name.to_string(),
-        values.iter().map(|value| value.to_string()).collect(),
-    );
+    catalog
+        .object_axes
+        .insert(name.to_string(), expanded_values);
     Ok(())
 }
 
@@ -5289,7 +5732,7 @@ fn parse_assignment_directive(
     line: &str,
     catalog: &mut Catalog,
     named_conditions: &mut HashMap<String, (String, ConditionAst)>,
-) -> Result<(), AppError> {
+) -> Result<(), DiagnosticReport> {
     if !is_identifier(name) {
         return Err(parse_error(line, "assignment name must be an identifier"));
     }
@@ -5359,7 +5802,7 @@ fn display_object_spec<'a>(
     tokens: &[&'a str],
     index: &mut usize,
     line: &str,
-) -> Result<Option<&'a str>, AppError> {
+) -> Result<Option<&'a str>, DiagnosticReport> {
     if tokens.get(*index).copied() != Some("display") {
         return Ok(None);
     }
@@ -5379,7 +5822,11 @@ fn is_display_role_token(token: &str) -> bool {
     puzzle_authoring::is_display_object_token(token)
 }
 
-fn validate_selector_alias_name(value: &str, line: &str, label: &str) -> Result<(), AppError> {
+fn validate_selector_alias_name(
+    value: &str,
+    line: &str,
+    label: &str,
+) -> Result<(), DiagnosticReport> {
     if is_display_role_token(value) || is_qualified_identifier(value) {
         Ok(())
     } else {
@@ -5390,7 +5837,7 @@ fn validate_selector_alias_name(value: &str, line: &str, label: &str) -> Result<
     }
 }
 
-fn validate_rule_name(value: &str, line: &str) -> Result<(), AppError> {
+fn validate_rule_name(value: &str, line: &str) -> Result<(), DiagnosticReport> {
     if is_display_role_token(value) || is_qualified_identifier(value) {
         Ok(())
     } else {
@@ -5407,7 +5854,7 @@ fn parse_layer_term(
     layer: u16,
     visual: bool,
     catalog: &mut Catalog,
-) -> Result<Vec<ObjectId>, AppError> {
+) -> Result<Vec<ObjectId>, DiagnosticReport> {
     let declared = if is_known_object_selector(
         term,
         &catalog.object_names,
@@ -5422,6 +5869,7 @@ fn parse_layer_term(
             &catalog_value_sets(catalog),
             &catalog.maps,
             &catalog.object_groups,
+            &HashMap::new(),
         )?;
         for object in &selector.alternatives {
             assign_object_layer(*object, layer, catalog);
@@ -5429,7 +5877,7 @@ fn parse_layer_term(
         selector.alternatives
     } else {
         let value_sets = catalog_value_sets(catalog);
-        parse_object_directive(
+        define_object_spec(
             term,
             layer,
             None,
@@ -5448,50 +5896,6 @@ fn parse_layer_term(
     Ok(declared)
 }
 
-fn parse_objects_block(
-    lines: &[String],
-    start: usize,
-    catalog: &mut Catalog,
-) -> Result<usize, AppError> {
-    let mut i = start + 1;
-    while i < lines.len() && !is_block_close_line(&lines[i]) {
-        let line = &lines[i];
-        let tokens = split_header_tokens(line);
-        if tokens.is_empty() {
-            i += 1;
-            continue;
-        }
-        for spec in tokens {
-            if spec == "display" {
-                return Err(parse_error(
-                    line,
-                    "display objects in `objects` must use an @ name",
-                ));
-            }
-            let declared = parse_object_directive(
-                spec,
-                UNASSIGNED_LAYER,
-                None,
-                line,
-                &catalog_value_sets(catalog),
-                &mut catalog.object_schemas,
-                &mut catalog.object_names,
-                &mut catalog.object_labels,
-                &mut catalog.object_layers,
-                &mut catalog.object_defs,
-                &mut catalog.render_chars,
-                &mut catalog.char_objects,
-            )?;
-            mark_visual_objects(&declared, is_display_role_token(spec), catalog);
-        }
-        i += 1;
-    }
-    if i >= lines.len() {
-        return Err(parse_error(&lines[start], "objects missing closing brace"));
-    }
-    Ok(i + 1)
-}
-
 fn push_terms(objects: &mut Vec<ObjectId>, terms: &[ObjectId]) {
     for object in terms {
         push_unique_object(objects, *object);
@@ -5502,7 +5906,7 @@ fn parse_scratch_block(
     lines: &[String],
     start: usize,
     catalog: &mut Catalog,
-) -> Result<usize, AppError> {
+) -> Result<usize, DiagnosticReport> {
     let mut i = start + 1;
     while i < lines.len() && !is_block_close_line(&lines[i]) {
         let line = &lines[i];
@@ -5539,7 +5943,7 @@ fn parse_scratch_directive(
     ty: Option<&str>,
     line: &str,
     catalog: &mut Catalog,
-) -> Result<(), AppError> {
+) -> Result<(), DiagnosticReport> {
     let (name, kind, values) = if let Some(ty) = ty {
         validate_scratch_name(name, line)?;
         if ty.is_empty() {
@@ -5584,7 +5988,7 @@ fn parse_layers_block(
     named_layers: &mut HashMap<String, u16>,
     layer_count: &mut Option<u16>,
     catalog: &mut Catalog,
-) -> Result<usize, AppError> {
+) -> Result<usize, DiagnosticReport> {
     let mut i = start;
     while i < lines.len() && !is_block_close_line(&lines[i]) {
         let tokens = split_header_tokens(&lines[i]);
@@ -5593,10 +5997,10 @@ fn parse_layers_block(
             continue;
         }
         match tokens.as_slice() {
-            ["for", binding, "in", source] => {
+            ["for", binding, "in", sources @ ..] => {
                 let value_sets = catalog_value_sets(catalog);
                 let values = for_expansion_values(
-                    source,
+                    sources,
                     &value_sets,
                     &catalog.numeric_global_defaults,
                     &lines[i],
@@ -5607,8 +6011,8 @@ fn parse_layers_block(
                     let mut expanded_lines = expand_for_binding_lines(
                         &body_lines,
                         binding,
-                        source,
-                        value,
+                        value.axis.as_deref(),
+                        &value.value,
                         &catalog.maps,
                     )?;
                     expanded_lines.push(BLOCK_CLOSE.to_string());
@@ -5624,7 +6028,7 @@ fn parse_layers_block(
             ["for", ..] => {
                 return Err(parse_error(
                     &lines[i],
-                    "for directive must be: for <binding> in <tag_set>",
+                    "for directive must be: for <binding> in <source...>",
                 ));
             }
             ["each", selectors @ ..] => {
@@ -5677,7 +6081,7 @@ fn define_or_assign_terms_to_layer(
     layer: u16,
     catalog: &mut Catalog,
     visual: bool,
-) -> Result<Vec<ObjectId>, AppError> {
+) -> Result<Vec<ObjectId>, DiagnosticReport> {
     if terms.is_empty() {
         return Err(parse_error(
             line,
@@ -5724,7 +6128,7 @@ fn assign_selectors_to_separate_layers(
     layer_count: &mut Option<u16>,
     catalog: &mut Catalog,
     visual: bool,
-) -> Result<Vec<ObjectId>, AppError> {
+) -> Result<Vec<ObjectId>, DiagnosticReport> {
     if selectors.is_empty() {
         return Err(parse_error(
             line,
@@ -5751,7 +6155,7 @@ fn resolve_or_declare_layer_selector(
     line: &str,
     visual: bool,
     catalog: &mut Catalog,
-) -> Result<Vec<ObjectId>, AppError> {
+) -> Result<Vec<ObjectId>, DiagnosticReport> {
     let declared = if is_known_object_selector(
         selector,
         &catalog.object_names,
@@ -5766,10 +6170,11 @@ fn resolve_or_declare_layer_selector(
             &catalog_value_sets(catalog),
             &catalog.maps,
             &catalog.object_groups,
+            &HashMap::new(),
         )?
         .alternatives
     } else {
-        parse_object_directive(
+        define_object_spec(
             selector,
             UNASSIGNED_LAYER,
             None,
@@ -5798,7 +6203,7 @@ fn assign_selectors_to_anonymous_layer(
     named_layers: &mut HashMap<String, u16>,
     layer_count: &mut Option<u16>,
     catalog: &mut Catalog,
-) -> Result<Vec<ObjectId>, AppError> {
+) -> Result<Vec<ObjectId>, DiagnosticReport> {
     let layer = anonymous_layer_id(named_layers, layer_count);
     define_or_assign_terms_to_layer(selectors, line, layer, catalog, false)
 }
@@ -5830,24 +6235,6 @@ fn assign_object_layer(object: ObjectId, layer: u16, catalog: &mut Catalog) {
     }
 }
 
-fn assign_unlayered_objects_to_anonymous_layers(
-    named_layers: &mut HashMap<String, u16>,
-    layer_count: &mut Option<u16>,
-    catalog: &mut Catalog,
-) {
-    let objects = catalog
-        .object_defs
-        .iter()
-        .filter_map(|definition| {
-            (definition.layer_id.0 == UNASSIGNED_LAYER).then_some(definition.id)
-        })
-        .collect::<Vec<_>>();
-    for object in objects {
-        let layer = anonymous_layer_id(named_layers, layer_count);
-        assign_object_layer(object, layer, catalog);
-    }
-}
-
 fn register_layer_tag_from_layer(name: &str, layer: u16, catalog: &mut Catalog) {
     let layer = LayerId(layer);
     let objects = catalog
@@ -5864,7 +6251,7 @@ fn validate_named_selector_role(
     visual_objects: &[ObjectId],
     line: &str,
     kind: &str,
-) -> Result<(), AppError> {
+) -> Result<(), DiagnosticReport> {
     let display_name = is_display_role_token(name);
     let has_main = objects
         .iter()
@@ -5888,7 +6275,7 @@ fn validate_named_selector_role(
 fn validate_layer_role_separation(
     catalog: &Catalog,
     named_layers: &HashMap<String, u16>,
-) -> Result<(), AppError> {
+) -> Result<(), DiagnosticReport> {
     let mut layer_roles = HashMap::<LayerId, (bool, bool)>::new();
     for definition in &catalog.object_defs {
         if definition.layer_id.0 == UNASSIGNED_LAYER || definition.id.is_empty() {
@@ -5914,7 +6301,7 @@ fn validate_layer_role_separation(
                         .then_some(name.as_str())
                 })
                 .unwrap_or("<anonymous>");
-            return Err(AppError::Parse(format!(
+            return Err(DiagnosticReport::error(format!(
                 "layers cannot mix gameplay objects and display objects in the same storage layer ({name}); put display objects in a separate layer"
             )));
         }
@@ -5980,7 +6367,7 @@ fn layer_id_for_name(
     named_layers: &mut HashMap<String, u16>,
     layer_count: &mut Option<u16>,
     catalog: &Catalog,
-) -> Result<u16, AppError> {
+) -> Result<u16, DiagnosticReport> {
     validate_selector_alias_name(name, line, "layer name")?;
     if let Some(layer) = named_layers.get(name).copied() {
         return Ok(layer);
@@ -6029,7 +6416,7 @@ fn parse_legend_block(
     catalog: &mut Catalog,
     render_overlays: &mut OverlayDefs,
     empty_char: &mut Option<char>,
-) -> Result<usize, AppError> {
+) -> Result<usize, DiagnosticReport> {
     let mut i = start + 1;
     while i < lines.len() && !is_block_close_line(&lines[i]) {
         parse_legend_block_row(&lines[i], catalog, render_overlays, empty_char)?;
@@ -6047,7 +6434,7 @@ fn parse_legend_block_row(
     catalog: &mut Catalog,
     render_overlays: &mut OverlayDefs,
     empty_char: &mut Option<char>,
-) -> Result<(), AppError> {
+) -> Result<(), DiagnosticReport> {
     let tokens = split_header_tokens(line);
     if tokens.len() < 3 || tokens.get(1).copied() != Some("=") {
         return Err(parse_error(
@@ -6078,7 +6465,11 @@ fn parse_legend_block_row(
     )
 }
 
-fn add_input_name(name: &str, line: &str, catalog: &mut Catalog) -> Result<InputId, AppError> {
+fn add_input_name(
+    name: &str,
+    line: &str,
+    catalog: &mut Catalog,
+) -> Result<InputId, DiagnosticReport> {
     if !is_identifier(name) {
         return Err(parse_error(line, "input name must be an identifier"));
     }
@@ -6101,7 +6492,7 @@ fn add_implicit_input_guards_to_catalog(
     level_bodies: &[PreparedLevelBody],
     named_conditions: &HashMap<String, (String, ConditionAst)>,
     catalog: &mut Catalog,
-) -> Result<(), AppError> {
+) -> Result<(), DiagnosticReport> {
     let mut names = BTreeSet::<String>::new();
     for definition in definitions {
         collect_implicit_inputs_from_statements(&definition.statements, &mut names);
@@ -6167,8 +6558,8 @@ fn collect_implicit_inputs_from_statements(
                 collect_implicit_inputs_from_statements(then_statements, names);
                 collect_implicit_inputs_from_statements(else_statements, names);
             }
-            StatementAst::Call(_)
-            | StatementAst::DisplayCall(_)
+            StatementAst::Call { .. }
+            | StatementAst::DisplayCall { .. }
             | StatementAst::DisplayRewrite(_)
             | StatementAst::Effect { .. }
             | StatementAst::Rewrite(_) => {}
@@ -6220,7 +6611,7 @@ fn add_cardinal_directions(
     line: &str,
     catalog: &mut Catalog,
     directions: &mut Vec<Direction>,
-) -> Result<(), AppError> {
+) -> Result<(), DiagnosticReport> {
     for (name, dx, dy) in [
         ("up", 0, -1),
         ("down", 0, 1),
@@ -6240,7 +6631,10 @@ fn add_cardinal_directions(
     Ok(())
 }
 
-fn add_default_non_direction_inputs(line: &str, catalog: &mut Catalog) -> Result<(), AppError> {
+fn add_default_non_direction_inputs(
+    line: &str,
+    catalog: &mut Catalog,
+) -> Result<(), DiagnosticReport> {
     for name in ["restart"] {
         if !catalog.input_names.contains_key(name) {
             add_input_name(name, line, catalog)?;
@@ -6270,7 +6664,7 @@ fn parse_command_definition(
     lines: &[String],
     start: usize,
     catalog: &mut Catalog,
-) -> Result<(Option<Direction>, usize), AppError> {
+) -> Result<(Option<Direction>, usize), DiagnosticReport> {
     let header = split_header_tokens(&lines[start]);
     let keyword = header.first().copied().unwrap_or("input");
     let name = expect(header.get(1), &lines[start], "missing input name")?;
@@ -6316,7 +6710,7 @@ fn is_input_option(tokens: &[&str]) -> bool {
     matches!(tokens, ["direction", ..])
 }
 
-fn parse_input_option(line: &str, input: InputId) -> Result<Direction, AppError> {
+fn parse_input_option(line: &str, input: InputId) -> Result<Direction, DiagnosticReport> {
     let tokens = split_header_tokens(line);
     match tokens.as_slice() {
         ["direction", value] => {
@@ -6330,7 +6724,7 @@ fn parse_input_option(line: &str, input: InputId) -> Result<Direction, AppError>
     }
 }
 
-fn named_direction_vector(value: &str, line: &str) -> Result<(i16, i16), AppError> {
+fn named_direction_vector(value: &str, line: &str) -> Result<(i16, i16), DiagnosticReport> {
     match value {
         "right" => Ok((1, 0)),
         "left" => Ok((-1, 0)),
@@ -6340,16 +6734,23 @@ fn named_direction_vector(value: &str, line: &str) -> Result<(i16, i16), AppErro
     }
 }
 
-fn parse_scene_definition(lines: &[String], start: usize) -> Result<(SceneDef, usize), AppError> {
+fn parse_scene_definition(
+    lines: &[String],
+    start: usize,
+) -> Result<(SceneDef, usize), DiagnosticReport> {
     let header = split_header_tokens(&lines[start]);
-    let (name, level_menu_scene) = match header.as_slice() {
-        ["scene", "level_menu"] => ("level_select", true),
-        ["scene", "level_menu", name] => (*name, true),
-        ["scene", name] => (*name, false),
+    let name = match header.as_slice() {
+        ["scene", "level_menu", ..] => {
+            return Err(parse_error(
+                &lines[start],
+                "scene level_menu template is not supported; use scene <name> with layout { level_menu { ... } }",
+            ));
+        }
+        ["scene", name] => *name,
         _ => {
             return Err(parse_error(
                 &lines[start],
-                "scene header must be: scene <name>[(param...)] | scene level_menu [name]",
+                "scene header must be: scene <name>[(param...)]",
             ));
         }
     };
@@ -6362,14 +6763,10 @@ fn parse_scene_definition(lines: &[String], start: usize) -> Result<(SceneDef, u
         state: SceneStateDef::default(),
         components: Vec::new(),
         key_bindings: Vec::new(),
+        routines: Vec::new(),
         transitions: Vec::new(),
         puzzle_rule: None,
     };
-    if level_menu_scene {
-        let (menu, next_i) = parse_level_menu_scene_options(lines, start)?;
-        screen.components.push(SceneComponent::LevelMenu(menu));
-        return Ok((screen, next_i));
-    }
     let mut handler = Scene2dBlockHandler {
         screen: &mut screen,
     };
@@ -6380,11 +6777,15 @@ fn parse_scene_definition(lines: &[String], start: usize) -> Result<(SceneDef, u
         puzzle_scene::SceneBlockSyntax::Braces,
         &mut handler,
     )?;
+    validate_scene_routines(&screen)?;
 
     Ok((screen, next))
 }
 
-fn parse_scene_name_and_params(value: &str, line: &str) -> Result<(String, Vec<String>), AppError> {
+fn parse_scene_name_and_params(
+    value: &str,
+    line: &str,
+) -> Result<(String, Vec<String>), DiagnosticReport> {
     let Some((name, params)) = value.split_once('(') else {
         validate_qualified_identifier(value, line, "scene name")?;
         return Ok((value.to_string(), Vec::new()));
@@ -6403,9 +6804,197 @@ fn parse_scene_name_and_params(value: &str, line: &str) -> Result<(String, Vec<S
                 validate_identifier(param, line, "scene param")?;
                 Ok(param.to_string())
             })
-            .collect::<Result<Vec<_>, AppError>>()?
+            .collect::<Result<Vec<_>, DiagnosticReport>>()?
     };
     Ok((name.to_string(), params))
+}
+
+fn validate_scene_routines(scene: &SceneDef) -> Result<(), DiagnosticReport> {
+    let routine_names = scene
+        .routines
+        .iter()
+        .map(|routine| routine.name.clone())
+        .collect::<HashSet<_>>();
+    for binding in &scene.key_bindings {
+        validate_scene_effect_routine_calls(&binding.effect, &routine_names)?;
+    }
+    for transition in &scene.transitions {
+        validate_scene_effect_routine_calls(&transition.effect, &routine_names)?;
+    }
+    for component in &scene.components {
+        validate_scene_component_routine_calls(component, &routine_names)?;
+    }
+
+    let routines = scene
+        .routines
+        .iter()
+        .map(|routine| (routine.name.as_str(), routine))
+        .collect::<HashMap<_, _>>();
+    let mut checked = HashSet::<String>::new();
+    for routine in &scene.routines {
+        validate_scene_routine_not_recursive(
+            routine.name.as_str(),
+            &routines,
+            &mut Vec::new(),
+            &mut checked,
+        )?;
+    }
+    Ok(())
+}
+
+fn validate_scene_component_routine_calls(
+    component: &SceneComponent,
+    routine_names: &HashSet<String>,
+) -> Result<(), DiagnosticReport> {
+    match component {
+        SceneComponent::Button(button) | SceneComponent::Choice(button) => {
+            validate_scene_effect_routine_calls(&button.effect, routine_names)
+        }
+        SceneComponent::Row(container)
+        | SceneComponent::Column(container)
+        | SceneComponent::Box(container) => {
+            for child in &container.children {
+                validate_scene_component_routine_calls(child, routine_names)?;
+            }
+            Ok(())
+        }
+        SceneComponent::Conditional(conditional) => {
+            for child in &conditional.children {
+                validate_scene_component_routine_calls(child, routine_names)?;
+            }
+            for child in &conditional.else_children {
+                validate_scene_component_routine_calls(child, routine_names)?;
+            }
+            Ok(())
+        }
+        SceneComponent::For(for_view) => {
+            for child in &for_view.children {
+                validate_scene_component_routine_calls(child, routine_names)?;
+            }
+            Ok(())
+        }
+        SceneComponent::LevelMenu(menu) => {
+            if let Some(effect) = &menu.action {
+                validate_scene_effect_routine_calls(effect, routine_names)?;
+            }
+            for button in &menu.buttons {
+                validate_scene_effect_routine_calls(&button.effect, routine_names)?;
+            }
+            Ok(())
+        }
+        SceneComponent::Frame(_)
+        | SceneComponent::Title(_)
+        | SceneComponent::Subtitle(_)
+        | SceneComponent::Text(_) => Ok(()),
+    }
+}
+
+fn validate_scene_effect_routine_calls(
+    effect: &SceneEffect,
+    routine_names: &HashSet<String>,
+) -> Result<(), DiagnosticReport> {
+    match effect {
+        SceneEffect::RoutineCall(name) => {
+            if !routine_names.contains(name) {
+                return Err(DiagnosticReport::error(format!(
+                    "unknown scene routine: {name}"
+                )));
+            }
+            Ok(())
+        }
+        SceneEffect::Conditional { effect, .. } => {
+            validate_scene_effect_routine_calls(effect, routine_names)
+        }
+        SceneEffect::Sequence(effects) => {
+            for effect in effects {
+                validate_scene_effect_routine_calls(effect, routine_names)?;
+            }
+            Ok(())
+        }
+        SceneEffect::Input(_)
+        | SceneEffect::ComponentEffect(_)
+        | SceneEffect::Message { .. }
+        | SceneEffect::Wait { .. }
+        | SceneEffect::PlaySfx { .. }
+        | SceneEffect::PlayMusic { .. }
+        | SceneEffect::PauseMusic { .. }
+        | SceneEffect::ResumeMusic { .. }
+        | SceneEffect::StopMusic { .. }
+        | SceneEffect::Goto { .. }
+        | SceneEffect::Enter { .. }
+        | SceneEffect::Back
+        | SceneEffect::Create { .. }
+        | SceneEffect::Reset { .. }
+        | SceneEffect::Delete { .. }
+        | SceneEffect::Show { .. }
+        | SceneEffect::Hide { .. }
+        | SceneEffect::Toggle { .. }
+        | SceneEffect::Focus { .. }
+        | SceneEffect::PuzzleNextLevel { .. }
+        | SceneEffect::PuzzlePreviousLevel { .. }
+        | SceneEffect::GotoLevel { .. }
+        | SceneEffect::ResetPuzzle { .. }
+        | SceneEffect::LoadPuzzle { .. }
+        | SceneEffect::Apply { .. }
+        | SceneEffect::Copy { .. }
+        | SceneEffect::ClearUndoHistory
+        | SceneEffect::ClearGameProgress
+        | SceneEffect::SetCurrentLevel { .. }
+        | SceneEffect::ClearCurrentLevel
+        | SceneEffect::SetLevelCleared { .. }
+        | SceneEffect::ResetPersistentVars => Ok(()),
+    }
+}
+
+fn validate_scene_routine_not_recursive(
+    name: &str,
+    routines: &HashMap<&str, &SceneRoutineDef>,
+    stack: &mut Vec<String>,
+    checked: &mut HashSet<String>,
+) -> Result<(), DiagnosticReport> {
+    if checked.contains(name) {
+        return Ok(());
+    }
+    if stack.iter().any(|active| active == name) {
+        stack.push(name.to_string());
+        return Err(DiagnosticReport::error(format!(
+            "recursive scene routine call: {}",
+            stack.join(" -> ")
+        )));
+    }
+    let Some(routine) = routines.get(name) else {
+        return Err(DiagnosticReport::error(format!(
+            "unknown scene routine: {name}"
+        )));
+    };
+    stack.push(name.to_string());
+    for call in scene_effect_routine_calls(&routine.effect) {
+        validate_scene_routine_not_recursive(call, routines, stack, checked)?;
+    }
+    stack.pop();
+    checked.insert(name.to_string());
+    Ok(())
+}
+
+fn scene_effect_routine_calls(effect: &SceneEffect) -> Vec<&str> {
+    let mut calls = Vec::new();
+    collect_scene_effect_routine_calls(effect, &mut calls);
+    calls
+}
+
+fn collect_scene_effect_routine_calls<'a>(effect: &'a SceneEffect, calls: &mut Vec<&'a str>) {
+    match effect {
+        SceneEffect::RoutineCall(name) => calls.push(name.as_str()),
+        SceneEffect::Conditional { effect, .. } => {
+            collect_scene_effect_routine_calls(effect, calls);
+        }
+        SceneEffect::Sequence(effects) => {
+            for effect in effects {
+                collect_scene_effect_routine_calls(effect, calls);
+            }
+        }
+        _ => {}
+    }
 }
 
 struct Scene2dBlockHandler<'a> {
@@ -6413,16 +7002,24 @@ struct Scene2dBlockHandler<'a> {
 }
 
 impl puzzle_scene::SceneBlockHandler for Scene2dBlockHandler<'_> {
-    type Error = AppError;
+    type Error = DiagnosticReport;
 
-    fn parse_state_block(&mut self, lines: &[String], start: usize) -> Result<usize, AppError> {
+    fn parse_state_block(
+        &mut self,
+        lines: &[String],
+        start: usize,
+    ) -> Result<usize, DiagnosticReport> {
         let (state, next_i) = parse_scene_state_block(lines, start, SceneStateLifetime::Instance)?;
         self.screen.state.variables.extend(state.variables);
         self.screen.state.puzzles.extend(state.puzzles);
         Ok(next_i)
     }
 
-    fn parse_layout_block(&mut self, lines: &[String], start: usize) -> Result<usize, AppError> {
+    fn parse_layout_block(
+        &mut self,
+        lines: &[String],
+        start: usize,
+    ) -> Result<usize, DiagnosticReport> {
         let (layout_block, next_i) = parse_screen_layout_block(lines, start)?;
         self.screen.layout = layout_block.layout;
         self.screen
@@ -6434,19 +7031,32 @@ impl puzzle_scene::SceneBlockHandler for Scene2dBlockHandler<'_> {
         Ok(next_i)
     }
 
-    fn parse_inputs_block(&mut self, lines: &[String], start: usize) -> Result<usize, AppError> {
-        let (bindings, next_i) = parse_scene_inputs_block(lines, start)?;
-        self.screen.key_bindings.extend(bindings);
-        Ok(next_i)
+    fn parse_inputs_block(
+        &mut self,
+        lines: &[String],
+        start: usize,
+    ) -> Result<usize, DiagnosticReport> {
+        Err(parse_error(
+            &lines[start],
+            "`inputs { ... }` was removed; use `keys { <key...> -> <routine-or-effect> }`",
+        ))
     }
 
-    fn parse_keys_block(&mut self, lines: &[String], start: usize) -> Result<usize, AppError> {
+    fn parse_keys_block(
+        &mut self,
+        lines: &[String],
+        start: usize,
+    ) -> Result<usize, DiagnosticReport> {
         let (bindings, next_i) = parse_scene_keys_block(lines, start)?;
         self.screen.key_bindings.extend(bindings);
         Ok(next_i)
     }
 
-    fn parse_rules_block(&mut self, lines: &[String], start: usize) -> Result<usize, AppError> {
+    fn parse_rules_block(
+        &mut self,
+        lines: &[String],
+        start: usize,
+    ) -> Result<usize, DiagnosticReport> {
         let (block, next_i) = parse_screen_transitions_block(lines, start)?;
         self.screen.transitions.extend(block.transitions);
         if let Some(puzzle_rule) = block.puzzle_rule {
@@ -6459,7 +7069,7 @@ impl puzzle_scene::SceneBlockHandler for Scene2dBlockHandler<'_> {
         &mut self,
         lines: &[String],
         start: usize,
-    ) -> Result<usize, AppError> {
+    ) -> Result<usize, DiagnosticReport> {
         let (transition, next_i) = parse_scene_lifecycle_block(lines, start)?;
         self.screen.transitions.push(transition);
         Ok(next_i)
@@ -6469,7 +7079,7 @@ impl puzzle_scene::SceneBlockHandler for Scene2dBlockHandler<'_> {
         &mut self,
         lines: &[String],
         start: usize,
-    ) -> Result<usize, AppError> {
+    ) -> Result<usize, DiagnosticReport> {
         let tokens = split_header_tokens(&lines[start]);
         match tokens.as_slice() {
             ["resources"] => parse_scene_resources_block(lines, start, &mut self.screen.resources),
@@ -6496,12 +7106,25 @@ impl puzzle_scene::SceneBlockHandler for Scene2dBlockHandler<'_> {
             )),
             ["input", ..] => Err(parse_error(
                 &lines[start],
-                "scene input handlers are removed; use `rules { if input == <input> -> <effect> }`",
+                "scene input handlers are removed; use `keys { <key...> -> <routine-or-effect> }` and `routine <name> { ... }`",
             )),
             ["action", ..] => Err(parse_error(
                 &lines[start],
-                "`action` scene handlers were removed; use `rules { if input == <name> -> ... }`",
+                "`action` scene handlers were removed; use `routine <name> { ... }`",
             )),
+            ["routine", ..] => {
+                let (routine, next_i) = parse_scene_routine_block(lines, start)?;
+                if self
+                    .screen
+                    .routines
+                    .iter()
+                    .any(|existing| existing.name == routine.name)
+                {
+                    return Err(parse_error(&lines[start], "duplicate scene routine"));
+                }
+                self.screen.routines.push(routine);
+                Ok(next_i)
+            }
             ["if", ..] => {
                 let (transition, next_i) = parse_screen_condition_block(lines, start)?;
                 self.screen.transitions.push(transition);
@@ -6525,7 +7148,7 @@ fn parse_scene_resources_block(
     lines: &[String],
     start: usize,
     resources: &mut SceneResources,
-) -> Result<usize, AppError> {
+) -> Result<usize, DiagnosticReport> {
     let mut i = start + 1;
     while i < lines.len() && !is_block_close_line(&lines[i]) {
         let tokens = split_header_tokens(&lines[i]);
@@ -6555,7 +7178,10 @@ fn parse_scene_resources_block(
     Ok(i + 1)
 }
 
-fn parse_resource_selection(names: &[&str], line: &str) -> Result<ResourceSelection, AppError> {
+fn parse_resource_selection(
+    names: &[&str],
+    line: &str,
+) -> Result<ResourceSelection, DiagnosticReport> {
     match names {
         [] | ["all"] => Ok(ResourceSelection::All),
         ["none"] => Ok(ResourceSelection::Named(Vec::new())),
@@ -6584,7 +7210,7 @@ struct ParsedScreenLayoutBlock {
 fn parse_screen_layout_block(
     lines: &[String],
     start: usize,
-) -> Result<(ParsedScreenLayoutBlock, usize), AppError> {
+) -> Result<(ParsedScreenLayoutBlock, usize), DiagnosticReport> {
     parse_screen_view_like_block(lines, start, "layout")
 }
 
@@ -6592,7 +7218,7 @@ fn parse_screen_view_like_block(
     lines: &[String],
     start: usize,
     block_name: &str,
-) -> Result<(ParsedScreenLayoutBlock, usize), AppError> {
+) -> Result<(ParsedScreenLayoutBlock, usize), DiagnosticReport> {
     let layout = parse_scene_layout_from_header(&lines[start], block_name)?;
     let mut variables = Vec::new();
     let mut puzzles = Vec::new();
@@ -6674,12 +7300,15 @@ fn parse_screen_view_like_block(
     ))
 }
 
-fn parse_scene_layout_from_header(line: &str, keyword: &str) -> Result<SceneLayoutDef, AppError> {
+fn parse_scene_layout_from_header(
+    line: &str,
+    keyword: &str,
+) -> Result<SceneLayoutDef, DiagnosticReport> {
     puzzle_scene::parse_scene_layout_header(line, keyword, puzzle_scene::SceneBlockSyntax::Braces)
-        .map_err(AppError::from)
+        .map_err(DiagnosticReport::from)
 }
 
-fn parse_layer_visibility(line: &str) -> Result<Option<(String, bool)>, AppError> {
+fn parse_layer_visibility(line: &str) -> Result<Option<(String, bool)>, DiagnosticReport> {
     let Some((name, value)) = line.split_once('=') else {
         return Ok(None);
     };
@@ -6726,9 +7355,9 @@ fn parse_screen_components_block(
     lines: &[String],
     start: usize,
     block_name: &str,
-) -> Result<(Vec<SceneComponent>, usize), AppError> {
+) -> Result<(Vec<SceneComponent>, usize), DiagnosticReport> {
     let mut parse_leaf =
-        |lines: &[String], index: usize| -> Result<(usize, SceneComponent), AppError> {
+        |lines: &[String], index: usize| -> Result<(usize, SceneComponent), DiagnosticReport> {
             let (component, next) = parse_screen_leaf_component(lines, index)?;
             Ok((next, component))
         };
@@ -6746,9 +7375,9 @@ fn parse_screen_components_block(
 fn parse_screen_component(
     lines: &[String],
     start: usize,
-) -> Result<(SceneComponent, usize), AppError> {
+) -> Result<(SceneComponent, usize), DiagnosticReport> {
     let mut parse_leaf =
-        |lines: &[String], index: usize| -> Result<(usize, SceneComponent), AppError> {
+        |lines: &[String], index: usize| -> Result<(usize, SceneComponent), DiagnosticReport> {
             let (component, next) = parse_screen_leaf_component(lines, index)?;
             Ok((next, component))
         };
@@ -6784,7 +7413,7 @@ fn build_scene_container_component(
 fn parse_screen_leaf_component(
     lines: &[String],
     start: usize,
-) -> Result<(SceneComponent, usize), AppError> {
+) -> Result<(SceneComponent, usize), DiagnosticReport> {
     let tokens = split_header_tokens(&lines[start]);
     match tokens.as_slice() {
         ["puzzle", "current_level"] => Err(parse_error(
@@ -6866,11 +7495,11 @@ fn parse_screen_leaf_component(
 fn parse_scene_layout_attrs_for_line(
     attrs: &[&str],
     line: &str,
-) -> Result<SceneLayoutDef, AppError> {
+) -> Result<SceneLayoutDef, DiagnosticReport> {
     puzzle_scene::parse_scene_layout_attrs(attrs).map_err(|error| parse_error(line, &error.message))
 }
 
-fn parse_title_component(line: &str, is_title: bool) -> Result<SceneComponent, AppError> {
+fn parse_title_component(line: &str, is_title: bool) -> Result<SceneComponent, DiagnosticReport> {
     let keyword = if is_title { "title" } else { "subtitle" };
     let Some(rest) = line.strip_prefix(keyword) else {
         return Err(parse_error(line, "title must be: title <text-or-path>"));
@@ -6892,7 +7521,7 @@ fn parse_title_component(line: &str, is_title: bool) -> Result<SceneComponent, A
     })
 }
 
-fn parse_text_component(line: &str) -> Result<SceneComponent, AppError> {
+fn parse_text_component(line: &str) -> Result<SceneComponent, DiagnosticReport> {
     let Some(rest) = line.strip_prefix("text") else {
         return Err(parse_error(
             line,
@@ -6922,7 +7551,7 @@ fn parse_button_like_def(
     lines: &[String],
     start: usize,
     keyword: &str,
-) -> Result<(SceneButtonDef, usize), AppError> {
+) -> Result<(SceneButtonDef, usize), DiagnosticReport> {
     let line = &lines[start];
     let Some(rest) = line.strip_prefix(keyword) else {
         return Err(parse_error(
@@ -6964,14 +7593,17 @@ fn parse_button_like_def(
     ))
 }
 
-fn parse_button_def(lines: &[String], start: usize) -> Result<(SceneButtonDef, usize), AppError> {
+fn parse_button_def(
+    lines: &[String],
+    start: usize,
+) -> Result<(SceneButtonDef, usize), DiagnosticReport> {
     parse_button_like_def(lines, start, "button")
 }
 
 fn parse_button_component(
     lines: &[String],
     start: usize,
-) -> Result<(SceneComponent, usize), AppError> {
+) -> Result<(SceneComponent, usize), DiagnosticReport> {
     let (button, next_i) = parse_button_def(lines, start)?;
     Ok((SceneComponent::Button(button), next_i))
 }
@@ -6979,7 +7611,7 @@ fn parse_button_component(
 fn parse_choice_component(
     lines: &[String],
     start: usize,
-) -> Result<(SceneComponent, usize), AppError> {
+) -> Result<(SceneComponent, usize), DiagnosticReport> {
     let (choice, next_i) = parse_button_like_def(lines, start, "choice")?;
     Ok((SceneComponent::Choice(choice), next_i))
 }
@@ -6987,7 +7619,7 @@ fn parse_choice_component(
 fn parse_view_if_component(
     lines: &[String],
     start: usize,
-) -> Result<(SceneComponent, usize), AppError> {
+) -> Result<(SceneComponent, usize), DiagnosticReport> {
     let line = &lines[start];
     let condition = block_header_text(line)
         .strip_prefix("if ")
@@ -7023,7 +7655,7 @@ fn collect_view_else_body(
     lines: &[String],
     start: usize,
     header_line: &str,
-) -> Result<(Vec<String>, usize), AppError> {
+) -> Result<(Vec<String>, usize), DiagnosticReport> {
     if !next_line_is_else(lines, start) {
         return Ok((Vec::new(), start));
     }
@@ -7065,11 +7697,11 @@ fn collect_view_else_body(
 fn parse_screen_component_body(
     body: &[String],
     block_name: &str,
-) -> Result<Vec<SceneComponent>, AppError> {
+) -> Result<Vec<SceneComponent>, DiagnosticReport> {
     let mut lines = body.to_vec();
     lines.push(BLOCK_CLOSE.to_string());
     let mut parse_leaf =
-        |lines: &[String], index: usize| -> Result<(usize, SceneComponent), AppError> {
+        |lines: &[String], index: usize| -> Result<(usize, SceneComponent), DiagnosticReport> {
             let (component, next) = parse_screen_leaf_component(lines, index)?;
             Ok((next, component))
         };
@@ -7088,7 +7720,7 @@ fn parse_screen_component_body(
 fn parse_for_component(
     lines: &[String],
     start: usize,
-) -> Result<(SceneComponent, usize), AppError> {
+) -> Result<(SceneComponent, usize), DiagnosticReport> {
     let tokens = split_header_tokens(&lines[start]);
     let ["for", binding, "in", source] = tokens.as_slice() else {
         return Err(parse_error(
@@ -7114,7 +7746,7 @@ fn parse_for_component(
     ))
 }
 
-fn parse_for_source(value: &str, line: &str) -> Result<ForSource, AppError> {
+fn parse_for_source(value: &str, line: &str) -> Result<ForSource, DiagnosticReport> {
     if value == "levels" {
         return Ok(ForSource::Levels);
     }
@@ -7293,7 +7925,10 @@ fn surface_document_with_node(
 }
 
 fn scene_effect_command_kind(token: &str) -> SurfaceSemanticKind {
-    if token == "sfx" {
+    if matches!(
+        token,
+        "sfx" | "play_music" | "pause_music" | "resume_music" | "stop_music"
+    ) {
         return SurfaceSemanticKind::Effect;
     }
     if matches!(
@@ -7510,6 +8145,10 @@ impl EffectAst {
     fn command_syntax(&self) -> RewriteEffectCommandSyntax {
         match self {
             EffectAst::PlaySfx { .. }
+            | EffectAst::PlayMusic { .. }
+            | EffectAst::PauseMusic { .. }
+            | EffectAst::ResumeMusic { .. }
+            | EffectAst::StopMusic { .. }
             | EffectAst::Wait { .. }
             | EffectAst::WaitAnimation
             | EffectAst::Message { .. } => RewriteEffectCommandSyntax::Emission,
@@ -7531,6 +8170,10 @@ pub(crate) fn rewrite_effect_command_syntax(token: &str) -> Option<RewriteEffect
         | "clear_checkpoint" | "wait" => token.to_string(),
         "message" => "message \"text\"".to_string(),
         "sfx" => "sfx __highlight_probe".to_string(),
+        "play_music" => "play_music __highlight_probe".to_string(),
+        "pause_music" => token.to_string(),
+        "resume_music" => token.to_string(),
+        "stop_music" => token.to_string(),
         "set" => "set __highlight_probe = 0".to_string(),
         _ => return None,
     };
@@ -7668,6 +8311,32 @@ fn add_simple_rewrite_effect_semantic_tokens(
                 add_scene_effect_token_range(sink, &tokens[index], SurfaceSemanticKind::Effect);
                 if let Some(asset) = tokens.get(index + 1) {
                     add_scene_effect_token_range(sink, asset, SurfaceSemanticKind::Asset);
+                    index += 2;
+                } else {
+                    index += 1;
+                }
+                parsed_any = true;
+            }
+            "play_music" => {
+                add_scene_effect_token_range(sink, &tokens[index], SurfaceSemanticKind::Emission);
+                if let Some(asset) = tokens.get(index + 1) {
+                    add_scene_effect_token_range(sink, asset, SurfaceSemanticKind::Asset);
+                    index += 2;
+                } else {
+                    index += 1;
+                }
+                parsed_any = true;
+            }
+            "pause_music" | "resume_music" | "stop_music" => {
+                add_scene_effect_token_range(sink, &tokens[index], SurfaceSemanticKind::Emission);
+                if index + 1 < tokens.len()
+                    && !is_rewrite_effect_command_token(&tokens[index + 1].text)
+                {
+                    add_scene_effect_token_range(
+                        sink,
+                        &tokens[index + 1],
+                        SurfaceSemanticKind::Asset,
+                    );
                     index += 2;
                 } else {
                     index += 1;
@@ -7843,7 +8512,7 @@ fn parse_scene_effect_with_optional_block(
     value: &str,
     lines: &[String],
     start: usize,
-) -> Result<(SceneEffect, usize), AppError> {
+) -> Result<(SceneEffect, usize), DiagnosticReport> {
     let line = &lines[start];
     if value.is_empty() {
         return Err(parse_error(
@@ -7852,22 +8521,15 @@ fn parse_scene_effect_with_optional_block(
         ));
     }
     if value == "{" {
-        let mut i = start + 1;
-        let mut body = Vec::new();
-        while i < lines.len() && !is_block_close_line(&lines[i]) {
-            body.push(lines[i].clone());
-            i += 1;
-        }
-        if i >= lines.len() {
-            return Err(parse_error(line, "effect block missing closing brace"));
-        }
+        let block_end = matching_effect_block_end(lines, start, lines.len())?;
+        let body = lines[start + 1..block_end].to_vec();
         if body.is_empty() {
             return Err(parse_error(
                 line,
                 "effect block requires at least one effect",
             ));
         }
-        return Ok((parse_scene_handler_effects(&body, line)?, i + 1));
+        return Ok((parse_scene_handler_effects(&body, line)?, block_end + 1));
     }
 
     Ok((parse_scene_effect(value, line)?, start + 1))
@@ -7879,7 +8541,7 @@ pub(crate) struct ParsedSceneEffect {
     pub(crate) semantic_tokens: Vec<semantic::SemanticToken>,
 }
 
-fn parse_scene_effect(value: &str, line: &str) -> Result<SceneEffect, AppError> {
+fn parse_scene_effect(value: &str, line: &str) -> Result<SceneEffect, DiagnosticReport> {
     let parsed = parse_scene_effect_with_semantic_tokens(value, line)?;
     debug_assert!(
         parsed
@@ -7893,7 +8555,7 @@ fn parse_scene_effect(value: &str, line: &str) -> Result<SceneEffect, AppError> 
 fn parse_scene_effect_with_semantic_tokens(
     value: &str,
     line: &str,
-) -> Result<ParsedSceneEffect, AppError> {
+) -> Result<ParsedSceneEffect, DiagnosticReport> {
     let surface = parse_surface_scene_effect(value, line)?;
     let semantic_tokens = project_surface_semantic_tokens(&surface.document.semantic_tokens);
     Ok(ParsedSceneEffect {
@@ -7902,14 +8564,17 @@ fn parse_scene_effect_with_semantic_tokens(
     })
 }
 
-fn parse_surface_scene_effect(value: &str, line: &str) -> Result<SurfaceSceneEffect, AppError> {
+fn parse_surface_scene_effect(
+    value: &str,
+    line: &str,
+) -> Result<SurfaceSceneEffect, DiagnosticReport> {
     let tokens = source_line_tokens(strip_line_comment(value), 0);
     let document = scene_effect_surface_document(&tokens);
     let effect = parse_scene_effect_value(value, line)?;
     Ok(SurfaceSceneEffect { effect, document })
 }
 
-fn parse_scene_effect_value(value: &str, line: &str) -> Result<SceneEffect, AppError> {
+fn parse_scene_effect_value(value: &str, line: &str) -> Result<SceneEffect, DiagnosticReport> {
     if value.contains(" then ") {
         return Err(parse_error(
             line,
@@ -7936,7 +8601,7 @@ fn parse_scene_effect_value(value: &str, line: &str) -> Result<SceneEffect, AppE
     }
     if let Some(rest) = value.strip_prefix("set current_level = ") {
         return Ok(SceneEffect::SetCurrentLevel {
-            level: parse_scene_expr(rest.trim(), line)?,
+            level: parse_scene_level_expr(rest.trim(), line)?,
         });
     }
     if let Some(rest) = value.strip_prefix("set level.cleared = ") {
@@ -7948,7 +8613,7 @@ fn parse_scene_effect_value(value: &str, line: &str) -> Result<SceneEffect, AppE
     if let Some(rest) = value.strip_prefix("set level(") {
         if let Some((level, cleared)) = rest.split_once(").cleared = ") {
             return Ok(SceneEffect::SetLevelCleared {
-                level: Some(parse_scene_expr(level.trim(), line)?),
+                level: Some(parse_scene_level_expr(level.trim(), line)?),
                 cleared: parse_scene_effect_bool(cleared.trim(), line)?,
             });
         }
@@ -8065,7 +8730,7 @@ fn parse_scene_effect_value(value: &str, line: &str) -> Result<SceneEffect, AppE
                 if command == "goto" {
                     return Ok(SceneEffect::GotoLevel {
                         target,
-                        level: parse_scene_expr(level, line)?,
+                        level: parse_scene_level_expr(level, line)?,
                     });
                 }
             }
@@ -8091,9 +8756,12 @@ fn parse_scene_effect_value(value: &str, line: &str) -> Result<SceneEffect, AppE
                     return Ok(SceneEffect::ResetPuzzle { target });
                 }
             }
+            if is_identifier(command_text) {
+                return Ok(SceneEffect::RoutineCall((*command_text).to_string()));
+            }
             Err(parse_error(
                 line,
-                "bare scene effect aliases were removed; use `input <name>`, `component_effect <name>`, or an explicit scene effect",
+                "bare scene effect aliases were removed; use `input <name>`, `component_effect <name>`, a scene routine, or an explicit scene effect",
             ))
         }
         _ => Err(parse_error(
@@ -8189,7 +8857,7 @@ fn is_scene_effect_command_start(token: &str) -> bool {
         })
 }
 
-fn parse_scene_effect_bool(value: &str, line: &str) -> Result<bool, AppError> {
+fn parse_scene_effect_bool(value: &str, line: &str) -> Result<bool, DiagnosticReport> {
     match value {
         "true" => Ok(true),
         "false" => Ok(false),
@@ -8200,7 +8868,7 @@ fn parse_scene_effect_bool(value: &str, line: &str) -> Result<bool, AppError> {
     }
 }
 
-fn legacy_start_levels_error(line: &str) -> AppError {
+fn legacy_start_levels_error(line: &str) -> DiagnosticReport {
     parse_error(
         line,
         "`start levels ... in <scene>` and `continue levels ... in <scene>` are no longer supported; use `goto <puzzle>` for the default playable scene, `goto <puzzle>(<level>)` for a specific level, or `goto <scene>(<level>)` for an explicit level scene",
@@ -8217,6 +8885,9 @@ fn resolve_default_wait_in_scenes(scenes: &mut [SceneDef], default_wait_ms: u64)
         }
         for binding in &mut scene.key_bindings {
             resolve_default_wait_in_effect(&mut binding.effect, default_wait_ms);
+        }
+        for routine in &mut scene.routines {
+            resolve_default_wait_in_effect(&mut routine.effect, default_wait_ms);
         }
         for transition in &mut scene.transitions {
             resolve_default_wait_in_effect(&mut transition.effect, default_wait_ms);
@@ -8275,6 +8946,7 @@ fn resolve_default_wait_in_effect(effect: &mut SceneEffect, default_wait_ms: u64
         }
         SceneEffect::Input(_)
         | SceneEffect::ComponentEffect(_)
+        | SceneEffect::RoutineCall(_)
         | SceneEffect::Message { .. }
         | SceneEffect::PlaySfx { .. }
         | SceneEffect::PlayMusic { .. }
@@ -8307,7 +8979,7 @@ fn resolve_default_wait_in_effect(effect: &mut SceneEffect, default_wait_ms: u64
     }
 }
 
-fn parse_wait_duration_ms(value: &str, line: &str) -> Result<u64, AppError> {
+fn parse_wait_duration_ms(value: &str, line: &str) -> Result<u64, DiagnosticReport> {
     if let Some(milliseconds) = value.strip_suffix("ms") {
         return parse_whole_milliseconds(milliseconds, line);
     }
@@ -8320,7 +8992,7 @@ fn parse_wait_duration_ms(value: &str, line: &str) -> Result<u64, AppError> {
     ))
 }
 
-fn parse_whole_milliseconds(value: &str, line: &str) -> Result<u64, AppError> {
+fn parse_whole_milliseconds(value: &str, line: &str) -> Result<u64, DiagnosticReport> {
     let value = value.trim();
     if value.is_empty() || !value.chars().all(|ch| ch.is_ascii_digit()) {
         return Err(parse_error(
@@ -8333,7 +9005,7 @@ fn parse_whole_milliseconds(value: &str, line: &str) -> Result<u64, AppError> {
         .map_err(|_| parse_error(line, "wait duration is too large"))
 }
 
-fn parse_seconds_duration_ms(value: &str, line: &str) -> Result<u64, AppError> {
+fn parse_seconds_duration_ms(value: &str, line: &str) -> Result<u64, DiagnosticReport> {
     let value = value.trim();
     let has_decimal = value.contains('.');
     let (whole, fraction) = value.split_once('.').unwrap_or((value, ""));
@@ -8373,7 +9045,10 @@ fn parse_seconds_duration_ms(value: &str, line: &str) -> Result<u64, AppError> {
         .ok_or_else(|| parse_error(line, "wait duration is too large"))
 }
 
-fn parse_rule_call_expr(value: &str, line: &str) -> Result<(String, Vec<SceneExpr>), AppError> {
+fn parse_rule_call_expr(
+    value: &str,
+    line: &str,
+) -> Result<(String, Vec<SceneExpr>), DiagnosticReport> {
     let Some((name, args)) = value.split_once('(') else {
         validate_qualified_identifier(value, line, "rule name")?;
         return Ok((value.to_string(), Vec::new()));
@@ -8388,7 +9063,7 @@ fn parse_rule_call_expr(value: &str, line: &str) -> Result<(String, Vec<SceneExp
         args.split(',')
             .map(str::trim)
             .map(|arg| parse_scene_expr(arg, line))
-            .collect::<Result<Vec<_>, AppError>>()?
+            .collect::<Result<Vec<_>, DiagnosticReport>>()?
     };
     Ok((name.to_string(), args))
 }
@@ -8396,7 +9071,7 @@ fn parse_rule_call_expr(value: &str, line: &str) -> Result<(String, Vec<SceneExp
 fn parse_scene_call_params(
     value: &str,
     line: &str,
-) -> Result<Option<(String, Vec<SceneEffectParam>)>, AppError> {
+) -> Result<Option<(String, Vec<SceneEffectParam>)>, DiagnosticReport> {
     let Some(open) = value.find('(') else {
         return Ok(None);
     };
@@ -8412,7 +9087,9 @@ fn parse_scene_call_params(
 
     let parts = args.split(',').map(str::trim).collect::<Vec<_>>();
     let params = if parts.len() == 1 && !parts[0].contains('=') {
-        vec![SceneEffectParam::Level(parse_scene_expr(parts[0], line)?)]
+        vec![SceneEffectParam::Level(parse_scene_level_expr(
+            parts[0], line,
+        )?)]
     } else {
         parse_scene_named_params(&parts, line)?
     };
@@ -8422,7 +9099,7 @@ fn parse_scene_call_params(
 fn parse_scene_target_params(
     value: &str,
     line: &str,
-) -> Result<(String, Vec<SceneEffectParam>), AppError> {
+) -> Result<(String, Vec<SceneEffectParam>), DiagnosticReport> {
     let value = value.trim();
     if let Some((scene, params)) = value.split_once(" with ") {
         let scene = scene.trim();
@@ -8437,7 +9114,10 @@ fn parse_scene_target_params(
     Ok((value.to_string(), Vec::new()))
 }
 
-fn parse_scene_named_params(parts: &[&str], line: &str) -> Result<Vec<SceneEffectParam>, AppError> {
+fn parse_scene_named_params(
+    parts: &[&str],
+    line: &str,
+) -> Result<Vec<SceneEffectParam>, DiagnosticReport> {
     let mut params = Vec::new();
     for part in parts {
         let (name, value) = part
@@ -8453,7 +9133,23 @@ fn parse_scene_named_params(parts: &[&str], line: &str) -> Result<Vec<SceneEffec
     Ok(params)
 }
 
-fn parse_scene_expr(value: &str, line: &str) -> Result<SceneExpr, AppError> {
+fn parse_scene_level_expr(value: &str, line: &str) -> Result<SceneExpr, DiagnosticReport> {
+    if parse_quoted_text(value).is_some() {
+        return Err(parse_error(
+            line,
+            "scene level arguments must not be quoted; use `goto <scene>(<level_name>)`",
+        ));
+    }
+    if is_dotted_level_atom(value) {
+        return Ok(SceneExpr::Text(value.to_string()));
+    }
+    match parse_scene_expr(value, line) {
+        Ok(expr) => Ok(expr),
+        Err(error) => Err(error),
+    }
+}
+
+fn parse_scene_expr(value: &str, line: &str) -> Result<SceneExpr, DiagnosticReport> {
     if value == "true" {
         return Ok(SceneExpr::Bool(true));
     }
@@ -8485,7 +9181,18 @@ fn parse_scene_expr(value: &str, line: &str) -> Result<SceneExpr, AppError> {
     ))
 }
 
-fn parse_input_name<'a>(value: &'a str, line: &str) -> Result<&'a str, AppError> {
+fn is_dotted_level_atom(value: &str) -> bool {
+    let parts = value.split('.').collect::<Vec<_>>();
+    parts.len() > 1
+        && parts.iter().all(|part| {
+            !part.is_empty()
+                && part
+                    .chars()
+                    .all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
+        })
+}
+
+fn parse_input_name<'a>(value: &'a str, line: &str) -> Result<&'a str, DiagnosticReport> {
     validate_identifier(value, line, "input name")?;
     Ok(value)
 }
@@ -8494,7 +9201,7 @@ fn parse_scene_signal_name<'a>(
     value: &'a str,
     line: &str,
     label: &str,
-) -> Result<&'a str, AppError> {
+) -> Result<&'a str, DiagnosticReport> {
     validate_qualified_identifier(value, line, label)?;
     Ok(value)
 }
@@ -8502,7 +9209,7 @@ fn parse_scene_signal_name<'a>(
 fn parse_puzzle_command<'a>(
     value: &'a str,
     line: &str,
-) -> Result<Option<(String, &'a str)>, AppError> {
+) -> Result<Option<(String, &'a str)>, DiagnosticReport> {
     let Some((target, command)) = value.split_once('.') else {
         return Ok(None);
     };
@@ -8511,7 +9218,7 @@ fn parse_puzzle_command<'a>(
     Ok(Some((target.to_string(), command)))
 }
 
-fn validate_target_path(value: &str, line: &str, label: &str) -> Result<(), AppError> {
+fn validate_target_path(value: &str, line: &str, label: &str) -> Result<(), DiagnosticReport> {
     if parse_view_path(value).is_some() {
         Ok(())
     } else {
@@ -8528,7 +9235,12 @@ enum NameClass {
     Qualified,
 }
 
-fn validate_name(value: &str, class: NameClass, line: &str, label: &str) -> Result<(), AppError> {
+fn validate_name(
+    value: &str,
+    class: NameClass,
+    line: &str,
+    label: &str,
+) -> Result<(), DiagnosticReport> {
     let valid = match class {
         NameClass::Identifier => is_identifier(value),
         NameClass::Qualified => is_qualified_identifier(value),
@@ -8544,11 +9256,15 @@ fn validate_name(value: &str, class: NameClass, line: &str, label: &str) -> Resu
     }
 }
 
-fn validate_identifier(value: &str, line: &str, label: &str) -> Result<(), AppError> {
+fn validate_identifier(value: &str, line: &str, label: &str) -> Result<(), DiagnosticReport> {
     validate_name(value, NameClass::Identifier, line, label)
 }
 
-fn validate_qualified_identifier(value: &str, line: &str, label: &str) -> Result<(), AppError> {
+fn validate_qualified_identifier(
+    value: &str,
+    line: &str,
+    label: &str,
+) -> Result<(), DiagnosticReport> {
     validate_name(value, NameClass::Qualified, line, label)
 }
 
@@ -8560,7 +9276,7 @@ fn parse_view_path(value: &str) -> Option<Vec<String>> {
     Some(parts.into_iter().map(ToString::to_string).collect())
 }
 
-fn parse_button_label(value: &str, line: &str) -> Result<SceneExpr, AppError> {
+fn parse_button_label(value: &str, line: &str) -> Result<SceneExpr, DiagnosticReport> {
     parse_scene_expr(value, line)
 }
 
@@ -8578,7 +9294,7 @@ fn parse_scene_state_block(
     lines: &[String],
     start: usize,
     lifetime: SceneStateLifetime,
-) -> Result<(ParsedScreenStateBlock, usize), AppError> {
+) -> Result<(ParsedScreenStateBlock, usize), DiagnosticReport> {
     let mut variables = Vec::new();
     let mut puzzles = Vec::new();
     let mut i = start + 1;
@@ -8598,7 +9314,7 @@ fn parse_scene_state_block(
 fn parse_scene_state_entry(
     line: &str,
     lifetime: SceneStateLifetime,
-) -> Result<ParsedSceneStateEntry, AppError> {
+) -> Result<ParsedSceneStateEntry, DiagnosticReport> {
     let line = line.trim();
     if let Some(puzzle) = parse_implicit_scene_puzzle_state_entry(line, lifetime)? {
         return Ok(ParsedSceneStateEntry::Puzzle(puzzle));
@@ -8653,7 +9369,7 @@ fn parse_scene_state_entry(
 fn parse_implicit_scene_puzzle_state_entry(
     line: &str,
     lifetime: SceneStateLifetime,
-) -> Result<Option<ScenePuzzleDef>, AppError> {
+) -> Result<Option<ScenePuzzleDef>, DiagnosticReport> {
     if let Some((puzzle_name, param)) = parse_scene_puzzle_state_call(line) {
         validate_qualified_identifier(puzzle_name, line, "puzzle name")?;
         validate_identifier(param, line, "scene level param")?;
@@ -8745,7 +9461,10 @@ fn parse_scene_puzzle_state_call(line: &str) -> Option<(&str, &str)> {
     Some((name, param))
 }
 
-fn parse_top_level_var_directive(_tokens: &[&str], line: &str) -> Result<SceneVarDef, AppError> {
+fn parse_top_level_var_directive(
+    _tokens: &[&str],
+    line: &str,
+) -> Result<SceneVarDef, DiagnosticReport> {
     let (rest, lifetime, mutable) = if let Some(rest) = line.trim().strip_prefix("persistent var ")
     {
         (rest.trim_start(), SceneStateLifetime::Persistent, true)
@@ -8778,7 +9497,7 @@ fn parse_top_level_var_directive(_tokens: &[&str], line: &str) -> Result<SceneVa
     })
 }
 
-fn parse_default_wait_time_directive(tokens: &[&str], line: &str) -> Result<u64, AppError> {
+fn parse_default_wait_time_directive(tokens: &[&str], line: &str) -> Result<u64, DiagnosticReport> {
     let ["default_wait_time", "=", duration] = tokens else {
         return Err(parse_error(
             line,
@@ -8788,7 +9507,7 @@ fn parse_default_wait_time_directive(tokens: &[&str], line: &str) -> Result<u64,
     parse_wait_duration_ms(duration, line)
 }
 
-fn parse_again_interval_directive(tokens: &[&str], line: &str) -> Result<u64, AppError> {
+fn parse_again_interval_directive(tokens: &[&str], line: &str) -> Result<u64, DiagnosticReport> {
     match tokens {
         ["again_interval", "=", duration] => parse_wait_duration_ms(duration, line),
         ["again_interval", seconds] => parse_seconds_duration_ms(seconds, line),
@@ -8809,7 +9528,7 @@ struct ParsedScenePuzzleInitializer {
 fn parse_screen_puzzle_initializer(
     value: &str,
     line: &str,
-) -> Result<Option<ParsedScenePuzzleInitializer>, AppError> {
+) -> Result<Option<ParsedScenePuzzleInitializer>, DiagnosticReport> {
     let tokens = split_header_tokens(value);
     match tokens.as_slice() {
         ["puzzle", "current_level"] => Err(parse_error(
@@ -8875,7 +9594,7 @@ fn parse_screen_puzzle_initializer(
     }
 }
 
-fn parse_scene_value(value: &str, line: &str) -> Result<SceneValue, AppError> {
+fn parse_scene_value(value: &str, line: &str) -> Result<SceneValue, DiagnosticReport> {
     if value == "true" {
         return Ok(SceneValue::Bool(true));
     }
@@ -8910,7 +9629,7 @@ struct ParsedScreenTransitionsBlock {
 fn parse_screen_transitions_block(
     lines: &[String],
     start: usize,
-) -> Result<(ParsedScreenTransitionsBlock, usize), AppError> {
+) -> Result<(ParsedScreenTransitionsBlock, usize), DiagnosticReport> {
     let mut transitions = Vec::new();
     let mut puzzle_rule = None;
     let mut i = start + 1;
@@ -8970,7 +9689,7 @@ fn parse_screen_transitions_block(
 fn parse_screen_condition_arrow_block(
     lines: &[String],
     start: usize,
-) -> Result<(SceneTransition, usize), AppError> {
+) -> Result<(SceneTransition, usize), DiagnosticReport> {
     let header = block_header_text(&lines[start]);
     match split_header_tokens(header).as_slice() {
         ["if"] | ["if", "all"] => {}
@@ -9035,7 +9754,7 @@ fn parse_screen_condition_arrow_block(
 fn parse_screen_condition_block(
     lines: &[String],
     start: usize,
-) -> Result<(SceneTransition, usize), AppError> {
+) -> Result<(SceneTransition, usize), DiagnosticReport> {
     let line = &lines[start];
     let condition = block_header_text(line)
         .strip_prefix("if ")
@@ -9062,7 +9781,7 @@ fn parse_screen_condition_block(
 fn parse_scene_lifecycle_block(
     lines: &[String],
     start: usize,
-) -> Result<(SceneTransition, usize), AppError> {
+) -> Result<(SceneTransition, usize), DiagnosticReport> {
     let tokens = split_header_tokens(&lines[start]);
     let [lifecycle @ "on_scene_start"] = tokens.as_slice() else {
         return Err(parse_error(
@@ -9091,10 +9810,39 @@ fn parse_scene_lifecycle_block(
     ))
 }
 
+fn parse_scene_routine_block(
+    lines: &[String],
+    start: usize,
+) -> Result<(SceneRoutineDef, usize), DiagnosticReport> {
+    let tokens = split_header_tokens(&lines[start]);
+    let ["routine", name] = tokens.as_slice() else {
+        return Err(parse_error(
+            &lines[start],
+            "scene routine header must be: routine <name>",
+        ));
+    };
+    validate_identifier(name, &lines[start], "scene routine name")?;
+    let (body, next_i) = collect_authoring_entry(lines, start)?;
+    let body = &body[1..body.len().saturating_sub(1)];
+    if body.is_empty() {
+        return Err(parse_error(
+            &lines[start],
+            "scene routine requires at least one effect",
+        ));
+    }
+    Ok((
+        SceneRoutineDef {
+            name: (*name).to_string(),
+            effect: parse_scene_handler_effects(body, &lines[start])?,
+        },
+        next_i,
+    ))
+}
+
 fn parse_scene_handler_effects(
     lines: &[String],
     header_line: &str,
-) -> Result<SceneEffect, AppError> {
+) -> Result<SceneEffect, DiagnosticReport> {
     parse_scene_handler_effects_range(lines, 0, lines.len(), header_line)
 }
 
@@ -9103,7 +9851,7 @@ fn parse_scene_handler_effects_range(
     start: usize,
     end: usize,
     header_line: &str,
-) -> Result<SceneEffect, AppError> {
+) -> Result<SceneEffect, DiagnosticReport> {
     let mut effects = Vec::new();
     let mut i = start;
     while i < end {
@@ -9146,7 +9894,7 @@ fn matching_effect_block_end(
     lines: &[String],
     start: usize,
     end: usize,
-) -> Result<usize, AppError> {
+) -> Result<usize, DiagnosticReport> {
     let mut depth = 0usize;
     for (i, line) in lines.iter().enumerate().take(end).skip(start + 1) {
         let tokens = split_header_tokens(line);
@@ -9170,7 +9918,7 @@ fn matching_effect_block_end(
 fn parse_transition_row(
     lines: &[String],
     start: usize,
-) -> Result<(SceneTransition, usize), AppError> {
+) -> Result<(SceneTransition, usize), DiagnosticReport> {
     let Some((pattern, effect)) = lines[start].split_once("->") else {
         return Err(parse_error(
             &lines[start],
@@ -9187,7 +9935,10 @@ fn parse_transition_row(
     ))
 }
 
-fn parse_transition_trigger(value: &str, line: &str) -> Result<SceneTransitionTrigger, AppError> {
+fn parse_transition_trigger(
+    value: &str,
+    line: &str,
+) -> Result<SceneTransitionTrigger, DiagnosticReport> {
     if value == "scene_start" {
         return Err(parse_error(
             line,
@@ -9233,7 +9984,7 @@ fn parse_transition_trigger(value: &str, line: &str) -> Result<SceneTransitionTr
     ))
 }
 
-fn validate_screen_condition(value: &str, line: &str) -> Result<(), AppError> {
+fn validate_screen_condition(value: &str, line: &str) -> Result<(), DiagnosticReport> {
     if value.is_empty() {
         return Err(parse_error(line, "condition must not be empty"));
     }
@@ -9276,7 +10027,7 @@ fn validate_screen_condition_value(value: &str) -> Result<(), ()> {
 fn parse_level_menu_component(
     lines: &[String],
     start: usize,
-) -> Result<(LevelMenuDef, usize), AppError> {
+) -> Result<(LevelMenuDef, usize), DiagnosticReport> {
     let next = start + 1;
     if next >= lines.len() || !is_level_menu_option(&split_header_tokens(&lines[next])) {
         return Ok((LevelMenuDef::default(), next));
@@ -9338,30 +10089,6 @@ pub(crate) const LEVEL_MENU_OPTIONS: &[&str] = &[
     "locked",
 ];
 
-fn parse_level_menu_scene_options(
-    lines: &[String],
-    start: usize,
-) -> Result<(LevelMenuDef, usize), AppError> {
-    let mut body = vec!["level_menu".to_string()];
-    let mut i = start + 1;
-    while i < lines.len() && !is_block_close_line(&lines[i]) {
-        if matches!(split_header_tokens(&lines[i]).as_slice(), ["index", ..]) {
-            return Err(parse_error(&lines[i], "unknown scene directive index"));
-        }
-        body.push(lines[i].clone());
-        i += 1;
-    }
-    if i >= lines.len() {
-        return Err(parse_error(&lines[start], "scene missing closing brace"));
-    }
-    body.push(BLOCK_CLOSE.to_string());
-    let (menu, parsed) = parse_level_menu_component(&body, 0)?;
-    if parsed != body.len() {
-        return Err(parse_error(&lines[start], "level_menu scene parse failed"));
-    }
-    Ok((menu, i + 1))
-}
-
 fn is_level_menu_option(tokens: &[&str]) -> bool {
     matches!(
         tokens,
@@ -9379,7 +10106,7 @@ fn is_level_menu_option(tokens: &[&str]) -> bool {
     )
 }
 
-fn parse_boolean_option(value: &str, line: &str) -> Result<bool, AppError> {
+fn parse_boolean_option(value: &str, line: &str) -> Result<bool, DiagnosticReport> {
     match value {
         "true" => Ok(true),
         "false" => Ok(false),
@@ -9387,7 +10114,7 @@ fn parse_boolean_option(value: &str, line: &str) -> Result<bool, AppError> {
     }
 }
 
-fn parse_level_menu_columns(value: &str, line: &str) -> Result<u16, AppError> {
+fn parse_level_menu_columns(value: &str, line: &str) -> Result<u16, DiagnosticReport> {
     let columns = value
         .parse::<u16>()
         .map_err(|_| parse_error(line, "columns must be an integer"))?;
@@ -9400,7 +10127,7 @@ fn parse_level_menu_columns(value: &str, line: &str) -> Result<u16, AppError> {
     Ok(columns)
 }
 
-fn parse_key_trigger(token: &str, line: &str) -> Result<KeyTrigger, AppError> {
+fn parse_key_trigger(token: &str, line: &str) -> Result<KeyTrigger, DiagnosticReport> {
     let mut chars = token.chars();
     let Some(first) = chars.next() else {
         return Err(parse_error(line, "missing key"));
@@ -9411,18 +10138,25 @@ fn parse_key_trigger(token: &str, line: &str) -> Result<KeyTrigger, AppError> {
     Ok(KeyTrigger::Named(token.to_string()))
 }
 
-fn parse_model_inputs_block(
+fn parse_model_keys_block(
     lines: &[String],
     start: usize,
     catalog: &mut Catalog,
     controls: &mut Controls,
-) -> Result<usize, AppError> {
+) -> Result<usize, DiagnosticReport> {
     let mut seen_keys = HashSet::<KeyTrigger>::new();
     let mut i = start + 1;
     while i < lines.len() && !is_block_close_line(&lines[i]) {
-        let tokens = split_header_tokens(&lines[i]);
-        match tokens.as_slice() {
-            [input_name, "<-", keys @ ..] if !keys.is_empty() => {
+        let Some((keys_text, input_text)) = lines[i].split_once("->") else {
+            return Err(parse_error(
+                &lines[i],
+                "keys row must be: <key...> -> <input>",
+            ));
+        };
+        let keys = keys_text.split_whitespace().collect::<Vec<_>>();
+        let input_tokens = split_header_tokens(input_text.trim());
+        match input_tokens.as_slice() {
+            [input_name] if !keys.is_empty() => {
                 let input = catalog
                     .input_names
                     .get(*input_name)
@@ -9440,64 +10174,22 @@ fn parse_model_inputs_block(
             _ => {
                 return Err(parse_error(
                     &lines[i],
-                    "inputs row must be: <input> <- <key...>",
+                    "keys row must be: <key...> -> <input>",
                 ));
             }
         }
         i += 1;
     }
     if i >= lines.len() {
-        return Err(parse_error(&lines[start], "inputs missing closing brace"));
+        return Err(parse_error(&lines[start], "keys missing closing brace"));
     }
     Ok(i + 1)
-}
-
-fn parse_scene_inputs_block(
-    lines: &[String],
-    start: usize,
-) -> Result<(Vec<KeyBinding>, usize), AppError> {
-    let mut seen_keys = HashSet::<KeyTrigger>::new();
-    let mut bindings = Vec::<KeyBinding>::new();
-    let mut i = start + 1;
-    while i < lines.len() && !is_block_close_line(&lines[i]) {
-        let tokens = split_header_tokens(&lines[i]);
-        match tokens.as_slice() {
-            [input_name, "<-", keys @ ..] if !keys.is_empty() => {
-                let mut triggers = Vec::new();
-                for key in keys {
-                    let trigger = parse_key_trigger(key, &lines[i])?;
-                    validate_key_trigger_supported(&trigger, &lines[i])?;
-                    if !seen_keys.insert(trigger.clone()) {
-                        return Err(parse_error(&lines[i], "duplicate scene input key"));
-                    }
-                    triggers.push(trigger);
-                }
-                bindings.push(KeyBinding {
-                    keys: triggers,
-                    effect: SceneEffect::Input(
-                        parse_input_name(input_name, &lines[i])?.to_string(),
-                    ),
-                });
-            }
-            _ => {
-                return Err(parse_error(
-                    &lines[i],
-                    "inputs row must be: <input> <- <key...>",
-                ));
-            }
-        }
-        i += 1;
-    }
-    if i >= lines.len() {
-        return Err(parse_error(&lines[start], "inputs missing closing brace"));
-    }
-    Ok((bindings, i + 1))
 }
 
 fn parse_scene_keys_block(
     lines: &[String],
     start: usize,
-) -> Result<(Vec<KeyBinding>, usize), AppError> {
+) -> Result<(Vec<KeyBinding>, usize), DiagnosticReport> {
     let mut bindings = Vec::<KeyBinding>::new();
     let mut i = start + 1;
     while i < lines.len() && !is_block_close_line(&lines[i]) {
@@ -9526,12 +10218,12 @@ fn parse_scene_keys_block(
             validate_key_trigger_supported(&trigger, &lines[i])?;
             triggers.push(trigger);
         }
-        let effect = parse_scene_key_effect(effect.trim(), &lines[i])?;
+        let (effect, next_i) = parse_scene_effect_with_optional_block(effect.trim(), lines, i)?;
         bindings.push(KeyBinding {
             keys: triggers,
             effect,
         });
-        i += 1;
+        i = next_i;
     }
     if i >= lines.len() {
         return Err(parse_error(&lines[start], "keys missing closing brace"));
@@ -9539,27 +10231,12 @@ fn parse_scene_keys_block(
     Ok((bindings, i + 1))
 }
 
-fn parse_scene_key_effect(value: &str, line: &str) -> Result<SceneEffect, AppError> {
-    match parse_scene_effect(value, line) {
-        Ok(effect) => Ok(effect),
-        Err(error) => {
-            let tokens = split_header_tokens(value);
-            if let [input] = tokens.as_slice() {
-                return Ok(SceneEffect::Input(
-                    parse_input_name(input, line)?.to_string(),
-                ));
-            }
-            Err(error)
-        }
-    }
-}
-
 fn add_key_trigger_to_controls(
     key: &KeyTrigger,
     input: InputId,
     controls: &mut Controls,
     line: &str,
-) -> Result<(), AppError> {
+) -> Result<(), DiagnosticReport> {
     match key {
         KeyTrigger::Char(ch) if ch.is_ascii() => {
             controls
@@ -9567,7 +10244,7 @@ fn add_key_trigger_to_controls(
                 .insert((*ch as u8).to_ascii_lowercase(), input);
         }
         KeyTrigger::Char(_) => {
-            return Err(AppError::Parse(
+            return Err(DiagnosticReport::error(
                 "non-ascii model input key bindings are not supported yet".to_string(),
             ));
         }
@@ -9601,10 +10278,10 @@ fn add_default_key_controls(input_names: &HashMap<String, InputId>, controls: &m
     }
 }
 
-fn validate_key_trigger_supported(key: &KeyTrigger, line: &str) -> Result<(), AppError> {
+fn validate_key_trigger_supported(key: &KeyTrigger, line: &str) -> Result<(), DiagnosticReport> {
     match key {
         KeyTrigger::Char(ch) if ch.is_ascii() => Ok(()),
-        KeyTrigger::Char(_) => Err(AppError::Parse(
+        KeyTrigger::Char(_) => Err(DiagnosticReport::error(
             "non-ascii input key bindings are not supported yet".to_string(),
         )),
         KeyTrigger::Named(name) if is_supported_named_key(name) => Ok(()),
@@ -9630,7 +10307,7 @@ fn named_key_to_arrow(name: &str) -> Option<ArrowKey> {
     }
 }
 
-fn parse_object_directive(
+fn define_object_spec(
     spec: &str,
     layer: u16,
     render_spec: Option<&str>,
@@ -9643,7 +10320,7 @@ fn parse_object_directive(
     object_defs: &mut Vec<ObjectDef>,
     render_chars: &mut HashMap<ObjectId, char>,
     char_objects: &mut HashMap<char, Vec<ObjectId>>,
-) -> Result<Vec<ObjectId>, AppError> {
+) -> Result<Vec<ObjectId>, DiagnosticReport> {
     let parts = spec.split(':').collect::<Vec<_>>();
     let base = parts[0];
     if parts.len() == 1 {
@@ -9696,7 +10373,7 @@ fn parse_object_directive(
             }
             Ok((*axis).to_string())
         })
-        .collect::<Result<Vec<_>, AppError>>()?;
+        .collect::<Result<Vec<_>, DiagnosticReport>>()?;
     let value_combinations = expand_axis_values(&axes, value_sets, line)?;
     let render_chars_for_variants = render_spec
         .map(|render| render_chars_for_variants(render, value_combinations.len(), line))
@@ -9754,7 +10431,7 @@ fn expand_axis_values(
     axes: &[String],
     value_sets: &HashMap<String, Vec<String>>,
     line: &str,
-) -> Result<Vec<Vec<String>>, AppError> {
+) -> Result<Vec<Vec<String>>, DiagnosticReport> {
     let mut combinations = vec![Vec::<String>::new()];
     for axis in axes {
         let values = value_sets
@@ -9777,7 +10454,7 @@ fn render_chars_for_variants(
     render: &str,
     variant_count: usize,
     line: &str,
-) -> Result<Vec<char>, AppError> {
+) -> Result<Vec<char>, DiagnosticReport> {
     let chars = parse_render_chars(render, line)?;
     if chars.len() == 1 {
         return Ok(vec![chars[0]; variant_count]);
@@ -9791,7 +10468,7 @@ fn render_chars_for_variants(
     ))
 }
 
-fn parse_render_chars(render: &str, line: &str) -> Result<Vec<char>, AppError> {
+fn parse_render_chars(render: &str, line: &str) -> Result<Vec<char>, DiagnosticReport> {
     let chars = render.chars().collect::<Vec<_>>();
     if chars.is_empty() {
         return Err(parse_error(line, "missing object render char"));
@@ -9842,7 +10519,7 @@ fn parse_visuals_block(
     start: usize,
     catalog: &Catalog,
     visuals: &mut VisualsDef,
-) -> Result<usize, AppError> {
+) -> Result<usize, DiagnosticReport> {
     let mut shapes = HashMap::<String, VisualShapeTable>::new();
     let mut plain_shapes = HashMap::<String, Vec<String>>::new();
     let mut palettes = HashMap::<String, VisualPalette>::new();
@@ -10042,7 +10719,7 @@ fn parse_visual_colors_block(
     catalog: &Catalog,
     color_aliases: &mut HashMap<String, String>,
     colors: &mut HashMap<String, VisualColorTable>,
-) -> Result<usize, AppError> {
+) -> Result<usize, DiagnosticReport> {
     let mut i = start + 1;
     while i < lines.len() && !is_block_close_line(&lines[i]) {
         let line = &lines[i];
@@ -10081,7 +10758,7 @@ fn parse_visual_palettes_block(
     start: usize,
     catalog: &Catalog,
     palettes: &mut HashMap<String, VisualPalette>,
-) -> Result<usize, AppError> {
+) -> Result<usize, DiagnosticReport> {
     let mut i = start + 1;
     while i < lines.len() && !is_block_close_line(&lines[i]) {
         let line = &lines[i];
@@ -10155,7 +10832,7 @@ fn parse_visual_shapes_block(
     catalog: &Catalog,
     plain_shapes: &mut HashMap<String, Vec<String>>,
     shapes: &mut HashMap<String, VisualShapeTable>,
-) -> Result<usize, AppError> {
+) -> Result<usize, DiagnosticReport> {
     let mut i = start + 1;
     while i < lines.len() && !is_block_close_line(&lines[i]) {
         let line = &lines[i];
@@ -10223,7 +10900,7 @@ fn parse_palette_shape_sprite_entry(
     color_tables: &HashMap<String, VisualColorTable>,
     catalog: &Catalog,
     visuals: &mut VisualsDef,
-) -> Result<Option<usize>, AppError> {
+) -> Result<Option<usize>, DiagnosticReport> {
     let mut i = start + 1;
     while i < lines.len() && lines[i].is_empty() {
         i += 1;
@@ -10346,7 +11023,7 @@ fn parse_canonical_sprite_entry(
     color_tables: &HashMap<String, VisualColorTable>,
     catalog: &Catalog,
     visuals: &mut VisualsDef,
-) -> Result<Option<usize>, AppError> {
+) -> Result<Option<usize>, DiagnosticReport> {
     let mut i = start + 1;
     while i < lines.len() && lines[i].is_empty() {
         i += 1;
@@ -10552,7 +11229,10 @@ fn parse_canonical_sprite_entry(
     Ok(Some(next_i))
 }
 
-fn visual_colors_from_tokens(tokens: &[&str], line: &str) -> Result<Vec<(char, String)>, AppError> {
+fn visual_colors_from_tokens(
+    tokens: &[&str],
+    line: &str,
+) -> Result<Vec<(char, String)>, DiagnosticReport> {
     tokens
         .iter()
         .enumerate()
@@ -10564,7 +11244,7 @@ fn visual_colors_from_tokens(tokens: &[&str], line: &str) -> Result<Vec<(char, S
         .collect()
 }
 
-fn parse_positive_u32(value: &str, line: &str, label: &str) -> Result<u32, AppError> {
+fn parse_positive_u32(value: &str, line: &str, label: &str) -> Result<u32, DiagnosticReport> {
     let parsed = value
         .parse::<u32>()
         .map_err(|_| parse_error(line, &format!("{label} must be a positive integer")))?;
@@ -10577,7 +11257,7 @@ fn parse_positive_u32(value: &str, line: &str, label: &str) -> Result<u32, AppEr
     Ok(parsed)
 }
 
-fn parse_i32_value(value: &str, line: &str, label: &str) -> Result<i32, AppError> {
+fn parse_i32_value(value: &str, line: &str, label: &str) -> Result<i32, DiagnosticReport> {
     value
         .parse::<i32>()
         .map_err(|_| parse_error(line, &format!("{label} must be an integer")))
@@ -10587,7 +11267,7 @@ fn parse_visual_rows_until_close(
     lines: &[String],
     mut i: usize,
     start: usize,
-) -> Result<(Vec<String>, usize), AppError> {
+) -> Result<(Vec<String>, usize), DiagnosticReport> {
     let mut pattern = Vec::new();
     while i < lines.len() && !is_block_close_line(&lines[i]) {
         if lines[i].is_empty() {
@@ -10622,7 +11302,7 @@ fn visual_rotation_axis_for_targets(
     catalog: &Catalog,
     rotation: &VisualShapeRotation,
     line: &str,
-) -> Result<String, AppError> {
+) -> Result<String, DiagnosticReport> {
     let first = targets
         .first()
         .ok_or_else(|| parse_error(line, "visual selector matched no objects"))?;
@@ -10674,7 +11354,7 @@ fn resolve_visual_palette(
     color_tables: &HashMap<String, VisualColorTable>,
     maps: &HashMap<String, ValueMap>,
     line: &str,
-) -> Result<Vec<(char, String)>, AppError> {
+) -> Result<Vec<(char, String)>, DiagnosticReport> {
     let colors = if let Some((name, expr)) = parse_visual_table_expr(value, line).ok() {
         let Some(VisualPalette::Table { axis, entries }) = palettes.get(&name) else {
             return Err(parse_error(line, "unknown visual palette"));
@@ -10724,7 +11404,7 @@ fn resolve_visual_shape(
     shapes: &HashMap<String, VisualShapeTable>,
     maps: &HashMap<String, ValueMap>,
     line: &str,
-) -> Result<Vec<String>, AppError> {
+) -> Result<Vec<String>, DiagnosticReport> {
     if let Some((name, expr)) = parse_visual_table_expr(value, line).ok() {
         let shape = shapes
             .get(&name)
@@ -10749,7 +11429,7 @@ fn visual_table_key<T>(
     bindings: &HashMap<String, String>,
     maps: &HashMap<String, ValueMap>,
     line: &str,
-) -> Result<String, AppError> {
+) -> Result<String, DiagnosticReport> {
     if let ValueExpr::Binding(name) = expr {
         if let Some(value) = bindings.get(name) {
             return Ok(value.clone());
@@ -10773,7 +11453,7 @@ fn visual_table_key<T>(
 fn parse_visual_plain_shape(
     lines: &[String],
     start: usize,
-) -> Result<(Vec<String>, usize), AppError> {
+) -> Result<(Vec<String>, usize), DiagnosticReport> {
     let mut pattern = Vec::new();
     let mut i = start + 1;
     while i < lines.len() && !is_block_close_line(&lines[i]) {
@@ -10811,7 +11491,7 @@ fn parse_ps_style_shape_sprite(
         VisualSpriteOffset,
         usize,
     )>,
-    AppError,
+    DiagnosticReport,
 > {
     let mut i = start + 1;
     while i < lines.len() && lines[i].is_empty() {
@@ -10865,12 +11545,15 @@ fn visual_shape_ref_exists(
     plain_shapes: &HashMap<String, Vec<String>>,
     shapes: &HashMap<String, VisualShapeTable>,
     line: &str,
-) -> Result<bool, AppError> {
+) -> Result<bool, DiagnosticReport> {
     let (shape_name, _) = parse_ps_style_shape_ref(shape_ref, line)?;
     Ok(plain_shapes.contains_key(&shape_name) || shapes.contains_key(&shape_name))
 }
 
-fn parse_ps_style_shape_ref(shape_ref: &str, line: &str) -> Result<(String, ValueExpr), AppError> {
+fn parse_ps_style_shape_ref(
+    shape_ref: &str,
+    line: &str,
+) -> Result<(String, ValueExpr), DiagnosticReport> {
     let (shape_name, shape_value) = if shape_ref.contains(':') {
         parse_visual_table_expr(shape_ref, line)?
     } else {
@@ -10883,7 +11566,7 @@ fn parse_line_style_inline_sprite(
     lines: &[String],
     start: usize,
     catalog: &Catalog,
-) -> Result<(Vec<(char, String)>, Vec<String>, VisualSpriteOffset, usize), AppError> {
+) -> Result<(Vec<(char, String)>, Vec<String>, VisualSpriteOffset, usize), DiagnosticReport> {
     let mut i = start + 1;
     while i < lines.len() && lines[i].is_empty() {
         i += 1;
@@ -10938,7 +11621,7 @@ fn parse_line_style_inline_sprite(
 fn parse_visual_transform_offset(
     lines: &[String],
     index: &mut usize,
-) -> Result<VisualSpriteOffset, AppError> {
+) -> Result<VisualSpriteOffset, DiagnosticReport> {
     let mut offset = VisualSpriteOffset::default();
     while *index < lines.len() && is_visual_transform_row(&lines[*index]) {
         for token in split_header_tokens(&lines[*index]) {
@@ -10989,7 +11672,7 @@ enum VisualDirection {
 fn parse_visual_translate_transform(
     token: &str,
     line: &str,
-) -> Result<Option<(VisualDirection, i32)>, AppError> {
+) -> Result<Option<(VisualDirection, i32)>, DiagnosticReport> {
     let lower = token.to_ascii_lowercase();
     let Some(rest) = lower.strip_prefix("translate:") else {
         return Ok(None);
@@ -11017,7 +11700,7 @@ fn parse_visual_translate_transform(
     Ok(Some((direction, amount)))
 }
 
-fn visual_colors_from_row(line: &str) -> Result<Vec<(char, String)>, AppError> {
+fn visual_colors_from_row(line: &str) -> Result<Vec<(char, String)>, DiagnosticReport> {
     split_header_tokens(line)
         .iter()
         .enumerate()
@@ -11026,14 +11709,14 @@ fn visual_colors_from_row(line: &str) -> Result<Vec<(char, String)>, AppError> {
                 .ok_or_else(|| parse_error(line, "PS-style sprite supports at most 62 colors"))?;
             Ok((token, (*color).to_string()))
         })
-        .collect::<Result<Vec<_>, AppError>>()
+        .collect::<Result<Vec<_>, DiagnosticReport>>()
 }
 
 fn validate_visual_pattern_palette(
     pattern: &[String],
     color_exprs: &[(char, String)],
     line: &str,
-) -> Result<(), AppError> {
+) -> Result<(), DiagnosticReport> {
     let colors = color_exprs
         .iter()
         .map(|(token, _)| *token)
@@ -11053,35 +11736,7 @@ fn validate_visual_pattern_palette(
 }
 
 pub(crate) fn is_visual_color_token(value: &str) -> bool {
-    value.starts_with('#')
-        || matches!(
-            value,
-            "transparent"
-                | "black"
-                | "silver"
-                | "gray"
-                | "grey"
-                | "darkgray"
-                | "darkgrey"
-                | "lightgray"
-                | "lightgrey"
-                | "white"
-                | "maroon"
-                | "red"
-                | "purple"
-                | "fuchsia"
-                | "green"
-                | "lime"
-                | "olive"
-                | "yellow"
-                | "navy"
-                | "blue"
-                | "teal"
-                | "aqua"
-                | "orange"
-                | "brown"
-                | "pink"
-        )
+    value.starts_with('#') || crate::syntax::is_visual_named_color(value)
 }
 
 fn parse_line_style_image_sprite_source(lines: &[String], start: usize) -> Option<&str> {
@@ -11152,7 +11807,6 @@ fn starts_visual_outer_section(tokens: &[&str]) -> bool {
             | ["on_level_clear"]
             | ["on_last_level_clear"]
             | ["on_display"]
-            | ["objects"]
             | ["scratch"]
             | ["groups"]
             | ["layers"]
@@ -11164,6 +11818,7 @@ fn starts_visual_outer_section(tokens: &[&str]) -> bool {
             | ["sounds"]
             | ["screen"]
             | ["layout", ..]
+            | ["keys"]
             | ["routine", ..]
             | ["rule", ..]
             | ["rules"]
@@ -11177,7 +11832,7 @@ pub(crate) fn visual_color_token_for_index(index: usize) -> Option<char> {
     TOKENS.get(index).map(|token| *token as char)
 }
 
-fn parse_visual_table_ref(value: &str, line: &str) -> Result<(String, String), AppError> {
+fn parse_visual_table_ref(value: &str, line: &str) -> Result<(String, String), DiagnosticReport> {
     let Some((name, axis)) = value.split_once(':') else {
         return Err(parse_error(line, "visual table must be: <name>:<tag_set>"));
     };
@@ -11193,7 +11848,10 @@ fn parse_visual_table_ref(value: &str, line: &str) -> Result<(String, String), A
     Ok((name.to_string(), axis.to_string()))
 }
 
-fn parse_visual_table_expr(value: &str, line: &str) -> Result<(String, ValueExpr), AppError> {
+fn parse_visual_table_expr(
+    value: &str,
+    line: &str,
+) -> Result<(String, ValueExpr), DiagnosticReport> {
     let Some((name, value)) = value.split_once(':') else {
         return Err(parse_error(
             line,
@@ -11212,7 +11870,7 @@ fn parse_visual_shape_table(
     axis: &str,
     rotation: Option<VisualShapeRotation>,
     catalog: &Catalog,
-) -> Result<(VisualShapeTable, usize), AppError> {
+) -> Result<(VisualShapeTable, usize), DiagnosticReport> {
     let values = catalog_value_set(catalog, axis).ok_or_else(|| {
         parse_error(
             &lines[start],
@@ -11386,7 +12044,7 @@ fn parse_visual_shape_table(
 
 fn parse_visual_shape_rotation_directive(
     line: &str,
-) -> Result<Option<VisualShapeRotation>, AppError> {
+) -> Result<Option<VisualShapeRotation>, DiagnosticReport> {
     let tokens = split_header_tokens(block_header_text(line));
     match tokens.as_slice() {
         ["rotate", "from", from] => Ok(Some(VisualShapeRotation::new("rotate", from))),
@@ -11400,7 +12058,7 @@ fn parse_visual_shape_rotation_directive(
     }
 }
 
-fn validate_visual_pattern(pattern: &[String], line: &str) -> Result<(), AppError> {
+fn validate_visual_pattern(pattern: &[String], line: &str) -> Result<(), DiagnosticReport> {
     if pattern.is_empty() {
         return Err(parse_error(
             line,
@@ -11431,7 +12089,7 @@ fn expand_visual_shape_rotations(
     axis: &str,
     rotation: &VisualShapeRotation,
     line: &str,
-) -> Result<(), AppError> {
+) -> Result<(), DiagnosticReport> {
     if !values.iter().any(|value| value == &rotation.from) {
         return Err(parse_error(
             line,
@@ -11512,7 +12170,7 @@ fn parse_visual_color_table(
     start: usize,
     axis: &str,
     catalog: &Catalog,
-) -> Result<(VisualColorTable, usize), AppError> {
+) -> Result<(VisualColorTable, usize), DiagnosticReport> {
     let values = catalog_value_set(catalog, axis).ok_or_else(|| {
         parse_error(
             &lines[start],
@@ -11569,7 +12227,7 @@ fn add_ascii_visuals(
     color_tables: &HashMap<String, VisualColorTable>,
     catalog: &Catalog,
     visuals: &mut VisualsDef,
-) -> Result<(), AppError> {
+) -> Result<(), DiagnosticReport> {
     for target in expand_visual_selector(selector, line, catalog)? {
         let env = visual_value_env(&target.bindings);
         if value_expr_result_axis(shape_value_expr, &env, &catalog.maps, line)? != shape.axis {
@@ -11601,7 +12259,7 @@ fn add_ascii_visuals(
                     )?,
                 })
             })
-            .collect::<Result<Vec<_>, AppError>>()?;
+            .collect::<Result<Vec<_>, DiagnosticReport>>()?;
         let sprite = sprite_name_for_object(&target.object_name);
         visuals.aliases.push(VisualAliasDef {
             object: target.object_name,
@@ -11626,7 +12284,7 @@ fn add_inline_ascii_visuals(
     pixels_per_cell: Option<VisualSpritePixelsPerCell>,
     catalog: &Catalog,
     visuals: &mut VisualsDef,
-) -> Result<(), AppError> {
+) -> Result<(), DiagnosticReport> {
     validate_visual_pattern_palette(pattern, color_exprs, line)?;
     for target in expand_visual_selector(selector, line, catalog)? {
         let colors = color_exprs
@@ -11661,7 +12319,7 @@ fn add_solid_visuals(
     color_tables: &HashMap<String, VisualColorTable>,
     catalog: &Catalog,
     visuals: &mut VisualsDef,
-) -> Result<(), AppError> {
+) -> Result<(), DiagnosticReport> {
     for target in expand_visual_selector(selector, line, catalog)? {
         let sprite = sprite_name_for_object(&target.object_name);
         let color = resolve_visual_color_expr(
@@ -11691,7 +12349,7 @@ fn add_image_visuals(
     source: &str,
     catalog: &Catalog,
     visuals: &mut VisualsDef,
-) -> Result<(), AppError> {
+) -> Result<(), DiagnosticReport> {
     for target in expand_visual_selector(selector, line, catalog)? {
         let sprite = sprite_name_for_object(&target.object_name);
         visuals.aliases.push(VisualAliasDef {
@@ -11716,7 +12374,7 @@ fn resolve_visual_color_expr(
     color_tables: &HashMap<String, VisualColorTable>,
     maps: &HashMap<String, ValueMap>,
     line: &str,
-) -> Result<String, AppError> {
+) -> Result<String, DiagnosticReport> {
     resolve_visual_color_expr_with_aliases(
         expr,
         bindings,
@@ -11734,7 +12392,7 @@ fn resolve_visual_color_expr_with_aliases(
     color_tables: &HashMap<String, VisualColorTable>,
     maps: &HashMap<String, ValueMap>,
     line: &str,
-) -> Result<String, AppError> {
+) -> Result<String, DiagnosticReport> {
     if let Some(color) = color_aliases.get(expr) {
         return Ok(color.clone());
     }
@@ -11769,7 +12427,7 @@ fn expand_visual_selector(
     selector: &str,
     line: &str,
     catalog: &Catalog,
-) -> Result<Vec<VisualSelectorTarget>, AppError> {
+) -> Result<Vec<VisualSelectorTarget>, DiagnosticReport> {
     let selector_base = selector.split_once(':').map_or(selector, |(base, _)| base);
     if !catalog.object_schemas.contains_key(selector_base) {
         if let Some(object) = catalog.object_names.get(selector).copied() {
@@ -11848,7 +12506,7 @@ fn visual_selector_constraints(
     schema: &ObjectSchema,
     catalog: &Catalog,
     line: &str,
-) -> Result<Vec<VisualSelectorConstraint>, AppError> {
+) -> Result<Vec<VisualSelectorConstraint>, DiagnosticReport> {
     let value_sets = catalog_value_sets(catalog);
     schema
         .axes
@@ -11904,7 +12562,7 @@ fn visual_selector_assignments(
     constraints: &[VisualSelectorConstraint],
     maps: &HashMap<String, ValueMap>,
     line: &str,
-) -> Result<Vec<(Vec<String>, HashMap<String, String>)>, AppError> {
+) -> Result<Vec<(Vec<String>, HashMap<String, String>)>, DiagnosticReport> {
     let mut assignments = vec![(Vec::<String>::new(), HashMap::<String, String>::new())];
     for (index, axis) in schema.axes.iter().enumerate() {
         let axis_values = schema_axis_values(schema, index)?;
@@ -11976,7 +12634,7 @@ fn parse_group_directive(
     maps: &HashMap<String, ValueMap>,
     visual_objects: &[ObjectId],
     object_groups: &mut HashMap<String, Vec<ObjectId>>,
-) -> Result<(), AppError> {
+) -> Result<(), DiagnosticReport> {
     if tokens.len() < 4 || tokens.get(2).copied() != Some("=") {
         return Err(parse_error(
             line,
@@ -12023,7 +12681,7 @@ fn parse_group_block(
     lines: &[String],
     start: usize,
     catalog: &mut Catalog,
-) -> Result<usize, AppError> {
+) -> Result<usize, DiagnosticReport> {
     let mut i = start + 1;
     while i < lines.len() && !is_block_close_line(&lines[i]) {
         let tokens = split_header_tokens(&lines[i]);
@@ -12070,7 +12728,7 @@ fn parse_legend_directive(
     render_chars: &mut HashMap<ObjectId, char>,
     char_objects: &mut HashMap<char, Vec<ObjectId>>,
     render_overlays: &mut OverlayDefs,
-) -> Result<(), AppError> {
+) -> Result<(), DiagnosticReport> {
     if tokens.len() < 4 || tokens.get(2).copied() != Some("=") {
         return Err(parse_error(
             line,
@@ -12118,7 +12776,7 @@ fn parse_render_overlay(
     value_sets: &HashMap<String, Vec<String>>,
     maps: &HashMap<String, ValueMap>,
     object_groups: &HashMap<String, Vec<ObjectId>>,
-) -> Result<(OverlayDefs, Option<Vec<ObjectId>>, char), AppError> {
+) -> Result<(OverlayDefs, Option<Vec<ObjectId>>, char), DiagnosticReport> {
     if tokens.len() < 4 {
         return Err(parse_error(
             line,
@@ -12154,7 +12812,7 @@ fn selector_sets(
     value_sets: &HashMap<String, Vec<String>>,
     maps: &HashMap<String, ValueMap>,
     object_groups: &HashMap<String, Vec<ObjectId>>,
-) -> Result<Vec<Vec<ObjectId>>, AppError> {
+) -> Result<Vec<Vec<ObjectId>>, DiagnosticReport> {
     selectors
         .iter()
         .map(|selector| {
@@ -12166,6 +12824,7 @@ fn selector_sets(
                 value_sets,
                 maps,
                 object_groups,
+                &HashMap::new(),
             )
             .map(|selector| selector.alternatives)
         })
@@ -12192,7 +12851,7 @@ fn parse_direction_directive(
     tokens: &[&str],
     line: &str,
     catalog: &mut Catalog,
-) -> Result<Option<Direction>, AppError> {
+) -> Result<Option<Direction>, DiagnosticReport> {
     match tokens {
         ["direction", alias, canonical] => {
             add_direction_alias(alias, canonical, line, catalog)?;
@@ -12210,7 +12869,7 @@ fn add_direction_alias(
     canonical: &str,
     line: &str,
     catalog: &mut Catalog,
-) -> Result<(), AppError> {
+) -> Result<(), DiagnosticReport> {
     validate_identifier(alias, line, "direction alias")?;
     named_direction_vector(canonical, line)?;
     let canonical_input = catalog
@@ -12243,7 +12902,7 @@ fn parse_global_directive(
     numeric_global_defaults: &mut HashMap<String, i64>,
     persistent_vars: &mut Vec<GlobalId>,
     constant_globals: &mut Vec<GlobalId>,
-) -> Result<(), AppError> {
+) -> Result<(), DiagnosticReport> {
     let parsed = match tokens {
         ["var", name, "=", value] => Some((*name, *value, false, false)),
         ["const", name, "=", value] => Some((*name, *value, false, true)),
@@ -12292,7 +12951,7 @@ fn parse_condition_directive(
     object_groups: &HashMap<String, Vec<ObjectId>>,
     condition_names: &mut HashMap<String, ConditionId>,
     condition_labels: &mut HashMap<ConditionId, String>,
-) -> Result<ConditionDefinitionAst, AppError> {
+) -> Result<ConditionDefinitionAst, DiagnosticReport> {
     let Some(rest) = line.strip_prefix("condition ") else {
         return Err(parse_error(
             line,
@@ -12333,7 +12992,7 @@ fn parse_condition_value_expr(
     value_sets: &HashMap<String, Vec<String>>,
     maps: &HashMap<String, ValueMap>,
     object_groups: &HashMap<String, Vec<ObjectId>>,
-) -> Result<ConditionValueAst, AppError> {
+) -> Result<ConditionValueAst, DiagnosticReport> {
     let (name, arg) = parse_call_expr(expr, line)?;
     let pattern_arg = parse_condition_pattern_arg(
         arg,
@@ -12357,6 +13016,7 @@ fn parse_condition_value_expr(
                 value_sets,
                 maps,
                 object_groups,
+                &HashMap::new(),
             )?
             .alternatives,
         )),
@@ -12375,6 +13035,7 @@ fn parse_condition_value_expr(
                 value_sets,
                 maps,
                 object_groups,
+                &HashMap::new(),
             )?
             .alternatives,
         )),
@@ -12387,6 +13048,7 @@ fn parse_condition_value_expr(
                 value_sets,
                 maps,
                 object_groups,
+                &HashMap::new(),
             )?
             .alternatives,
         )),
@@ -12399,6 +13061,7 @@ fn parse_condition_value_expr(
                 value_sets,
                 maps,
                 object_groups,
+                &HashMap::new(),
             )?
             .alternatives,
         )),
@@ -12414,7 +13077,7 @@ fn parse_condition_pattern_arg(
     value_sets: &HashMap<String, Vec<String>>,
     maps: &HashMap<String, ValueMap>,
     object_groups: &HashMap<String, Vec<ObjectId>>,
-) -> Result<Option<ConditionPatternAst>, AppError> {
+) -> Result<Option<ConditionPatternAst>, DiagnosticReport> {
     let Some((orientation, pattern)) = split_oriented_pattern_arg(arg, line)? else {
         return Ok(None);
     };
@@ -12427,6 +13090,7 @@ fn parse_condition_pattern_arg(
             value_sets,
             maps,
             object_groups,
+            &HashMap::new(),
         )?,
     }))
 }
@@ -12434,7 +13098,7 @@ fn parse_condition_pattern_arg(
 fn split_oriented_pattern_arg(
     arg: &str,
     line: &str,
-) -> Result<Option<(OrientationExpr, String)>, AppError> {
+) -> Result<Option<(OrientationExpr, String)>, DiagnosticReport> {
     let trimmed = arg.trim();
     if trimmed.starts_with('[') {
         let (embedded_orientation, pattern) = normalize_embedded_direction_marker(trimmed);
@@ -12480,7 +13144,7 @@ fn split_oriented_pattern_arg(
     Ok(Some((orientation, pattern)))
 }
 
-fn parse_call_expr<'a>(expr: &'a str, line: &str) -> Result<(&'a str, &'a str), AppError> {
+fn parse_call_expr<'a>(expr: &'a str, line: &str) -> Result<(&'a str, &'a str), DiagnosticReport> {
     let Some((name, rest)) = expr.split_once('(') else {
         return Err(parse_error(
             line,
@@ -12549,7 +13213,7 @@ fn parse_rule_definition(
     global_names: &HashMap<String, GlobalId>,
     numeric_globals: &HashMap<String, i64>,
     condition_names: &HashMap<String, ConditionId>,
-) -> Result<(RuleDefinitionAst, usize), AppError> {
+) -> Result<(RuleDefinitionAst, usize), DiagnosticReport> {
     let header = split_header_tokens(&lines[start]);
     let declaration = header.first().copied().unwrap_or("routine");
     let role = if header.get(1).copied() == Some("display")
@@ -12615,7 +13279,7 @@ fn add_standard_move_rule_if_missing(
     input_names: &HashMap<String, InputId>,
     global_names: &HashMap<String, GlobalId>,
     condition_names: &HashMap<String, ConditionId>,
-) -> Result<(), AppError> {
+) -> Result<(), DiagnosticReport> {
     if definitions
         .iter()
         .any(|definition| definition.name == "move")
@@ -12685,7 +13349,7 @@ fn add_standard_move_rule_if_missing(
         &[],
     )?;
     if next_i != lines.len() {
-        return Err(AppError::Parse(
+        return Err(DiagnosticReport::error(
             "standard move rule expansion failed".to_string(),
         ));
     }
@@ -12699,7 +13363,10 @@ fn add_standard_move_rule_if_missing(
     Ok(())
 }
 
-fn parse_rule_name_and_params(value: &str, line: &str) -> Result<(String, Vec<String>), AppError> {
+fn parse_rule_name_and_params(
+    value: &str,
+    line: &str,
+) -> Result<(String, Vec<String>), DiagnosticReport> {
     let Some((name, params)) = value.split_once('(') else {
         validate_rule_name(value, line)?;
         return Ok((value.to_string(), Vec::new()));
@@ -12718,7 +13385,7 @@ fn parse_rule_name_and_params(value: &str, line: &str) -> Result<(String, Vec<St
                 validate_identifier(param, line, "routine param")?;
                 Ok(param.to_string())
             })
-            .collect::<Result<Vec<_>, AppError>>()?
+            .collect::<Result<Vec<_>, DiagnosticReport>>()?
     };
     Ok((name.to_string(), params))
 }
@@ -12728,7 +13395,7 @@ fn parse_lifecycle_block(
     start: usize,
     event: &str,
     catalog: &Catalog,
-) -> Result<(String, Vec<StatementAst>, usize), AppError> {
+) -> Result<(String, Vec<StatementAst>, usize), DiagnosticReport> {
     let (statements, next_i) = parse_statement_block(
         lines,
         start + 1,
@@ -12753,7 +13420,7 @@ fn parse_rule_application(
     declaration: &str,
     role: RuleRole,
     line: &str,
-) -> Result<RuleApplication, AppError> {
+) -> Result<RuleApplication, DiagnosticReport> {
     match (role, tokens) {
         (RuleRole::Main, [kind, _]) if *kind == declaration => Ok(RuleApplication::UntilStable),
         (RuleRole::Visual, [kind, "display", _]) if *kind == declaration => {
@@ -12780,7 +13447,7 @@ fn parse_rule_application(
     }
 }
 
-fn parse_application_keyword(token: &str, line: &str) -> Result<RuleApplication, AppError> {
+fn parse_application_keyword(token: &str, line: &str) -> Result<RuleApplication, DiagnosticReport> {
     match token {
         "once" => Ok(RuleApplication::Once),
         "once_all" => Ok(RuleApplication::OnceAll),
@@ -12797,7 +13464,7 @@ fn parse_fix_defaults(
     tokens: &[&str],
     line: &str,
     rule_params: &[String],
-) -> Result<FixDefaults, AppError> {
+) -> Result<FixDefaults, DiagnosticReport> {
     if tokens.len() < 2 {
         return Err(parse_error(
             line,
@@ -12833,7 +13500,7 @@ fn collect_statement_block_lines(
     lines: &[String],
     start: usize,
     line: &str,
-) -> Result<(Vec<String>, usize), AppError> {
+) -> Result<(Vec<String>, usize), DiagnosticReport> {
     let mut body = Vec::new();
     let mut depth = 1usize;
     let mut i = start;
@@ -12870,7 +13537,7 @@ fn starts_statement_block(tokens: &[&str]) -> bool {
 
 fn parse_if_condition_block_header(
     line: &str,
-) -> Result<Option<ConditionBlockCombinator>, AppError> {
+) -> Result<Option<ConditionBlockCombinator>, DiagnosticReport> {
     let tokens = split_header_tokens(line);
     match tokens.as_slice() {
         ["if"] => Ok(Some(ConditionBlockCombinator::All)),
@@ -12898,7 +13565,7 @@ fn parse_statement_condition_block(
     value_sets: &HashMap<String, Vec<String>>,
     maps: &HashMap<String, ValueMap>,
     object_groups: &HashMap<String, Vec<ObjectId>>,
-) -> Result<(ConditionAst, usize), AppError> {
+) -> Result<(ConditionAst, usize), DiagnosticReport> {
     let mut conditions = Vec::new();
     let mut i = start + 1;
     while i < lines.len() && !is_block_close_line(&lines[i]) {
@@ -12954,7 +13621,7 @@ fn parse_statement_arrow_consequence(
     condition_names: &HashMap<String, ConditionId>,
     named_conditions: &HashMap<String, (String, ConditionAst)>,
     rule_params: &[String],
-) -> Result<(Vec<StatementAst>, usize), AppError> {
+) -> Result<(Vec<StatementAst>, usize), DiagnosticReport> {
     let Some(line) = lines.get(start) else {
         return Err(parse_error(
             header_line,
@@ -12999,7 +13666,13 @@ fn parse_statement_arrow_consequence(
         ));
     }
     if is_qualified_identifier(effect_text) && !is_builtin_rewrite_effect_text(effect_text) {
-        return Ok((vec![StatementAst::Call(effect_text.to_string())], start + 1));
+        return Ok((
+            vec![StatementAst::Call {
+                name: effect_text.to_string(),
+                source_line: line.to_string(),
+            }],
+            start + 1,
+        ));
     }
     let effects = parse_rewrite_effect(effect_text, line)?;
     Ok((vec![StatementAst::Effect { effects }], start + 1))
@@ -13020,7 +13693,7 @@ fn parse_optional_else_statement_block(
     condition_names: &HashMap<String, ConditionId>,
     named_conditions: &HashMap<String, (String, ConditionAst)>,
     rule_params: &[String],
-) -> Result<(Vec<StatementAst>, usize), AppError> {
+) -> Result<(Vec<StatementAst>, usize), DiagnosticReport> {
     let Some(else_start) = else_block_start(lines, next_i) else {
         return Ok((Vec::new(), next_i));
     };
@@ -13059,6 +13732,10 @@ impl ValueEnv {
         self.values.insert(name.to_string(), value.to_string());
         self.axes.insert(name.to_string(), axis.to_string());
     }
+
+    fn bind_untyped(&mut self, name: &str, value: &str) {
+        self.values.insert(name.to_string(), value.to_string());
+    }
 }
 
 fn visual_value_env(bindings: &HashMap<String, String>) -> ValueEnv {
@@ -13069,7 +13746,7 @@ fn visual_value_env(bindings: &HashMap<String, String>) -> ValueEnv {
     env
 }
 
-fn parse_value_expr(value: &str, line: &str) -> Result<ValueExpr, AppError> {
+fn parse_value_expr(value: &str, line: &str) -> Result<ValueExpr, DiagnosticReport> {
     if let Some((name, arg)) = parse_map_call(value) {
         validate_identifier(name, line, "map name")?;
         validate_identifier(arg, line, "map argument")?;
@@ -13092,7 +13769,7 @@ fn eval_bound_value_expr(
     env: &ValueEnv,
     maps: &HashMap<String, ValueMap>,
     line: &str,
-) -> Result<String, AppError> {
+) -> Result<String, DiagnosticReport> {
     eval_value_expr(expr, env, maps, line, false)
 }
 
@@ -13102,7 +13779,7 @@ fn eval_value_expr(
     maps: &HashMap<String, ValueMap>,
     line: &str,
     allow_literal: bool,
-) -> Result<String, AppError> {
+) -> Result<String, DiagnosticReport> {
     match expr {
         ValueExpr::Binding(name) => {
             if let Some(value) = env.values.get(name) {
@@ -13144,7 +13821,7 @@ fn value_expr_result_axis(
     env: &ValueEnv,
     maps: &HashMap<String, ValueMap>,
     line: &str,
-) -> Result<String, AppError> {
+) -> Result<String, DiagnosticReport> {
     match expr {
         ValueExpr::Binding(name) => env
             .axes
@@ -13170,10 +13847,10 @@ fn value_expr_result_axis(
 fn expand_for_binding_lines(
     lines: &[String],
     binding: &str,
-    axis: &str,
+    axis: Option<&str>,
     value: &str,
     maps: &HashMap<String, ValueMap>,
-) -> Result<Vec<String>, AppError> {
+) -> Result<Vec<String>, DiagnosticReport> {
     lines
         .iter()
         .map(|line| expand_for_binding_line(line, binding, axis, value, maps))
@@ -13183,12 +13860,16 @@ fn expand_for_binding_lines(
 fn expand_for_binding_line(
     line: &str,
     binding: &str,
-    axis: &str,
+    axis: Option<&str>,
     value: &str,
     maps: &HashMap<String, ValueMap>,
-) -> Result<String, AppError> {
+) -> Result<String, DiagnosticReport> {
     let mut env = ValueEnv::default();
-    env.bind(binding, axis, value);
+    if let Some(axis) = axis {
+        env.bind(binding, axis, value);
+    } else {
+        env.bind_untyped(binding, value);
+    }
     let expanded = replace_map_call_tokens(line, &env, maps)?;
     Ok(replace_identifier_token(&expanded, binding, value))
 }
@@ -13197,7 +13878,7 @@ fn replace_map_call_tokens(
     line: &str,
     env: &ValueEnv,
     maps: &HashMap<String, ValueMap>,
-) -> Result<String, AppError> {
+) -> Result<String, DiagnosticReport> {
     let mut out = String::with_capacity(line.len());
     let chars = line.chars().collect::<Vec<_>>();
     let mut i = 0usize;
@@ -13269,29 +13950,100 @@ fn flush_identifier_token(out: &mut String, token: &mut String, binding: &str, v
     token.clear();
 }
 
+#[derive(Clone, Debug)]
+struct ForExpansionValue {
+    value: String,
+    axis: Option<String>,
+}
+
 fn for_expansion_values(
-    source: &str,
+    sources: &[&str],
     value_sets: &HashMap<String, Vec<String>>,
     numeric_globals: &HashMap<String, i64>,
     line: &str,
-) -> Result<Vec<String>, AppError> {
-    if let Some(values) = value_sets.get(source) {
-        return Ok(values.clone());
+) -> Result<Vec<ForExpansionValue>, DiagnosticReport> {
+    if sources.is_empty() {
+        return Err(parse_error(
+            line,
+            "for directive must be: for <binding> in <source...>",
+        ));
     }
-    if let Some(values) = numeric_range_values(source, numeric_globals, line)? {
-        return Ok(values);
+    if sources.len() == 1 {
+        let source = sources[0];
+        if let Some(values) = value_sets.get(source) {
+            return Ok(values
+                .iter()
+                .map(|value| ForExpansionValue {
+                    value: value.clone(),
+                    axis: Some(source.to_string()),
+                })
+                .collect());
+        }
+        if let Some(values) = numeric_range_values(source, numeric_globals, line)? {
+            return Ok(values
+                .into_iter()
+                .map(|value| ForExpansionValue { value, axis: None })
+                .collect());
+        }
+        return Err(parse_error(
+            line,
+            "unknown expansion tag set or numeric range",
+        ));
     }
-    Err(parse_error(
-        line,
-        "unknown expansion tag set or numeric range",
-    ))
+
+    sources
+        .iter()
+        .flat_map(|source| {
+            if let Some(values) = value_sets.get(*source) {
+                return values
+                    .iter()
+                    .map(|value| {
+                        Ok(ForExpansionValue {
+                            value: value.clone(),
+                            axis: Some((*source).to_string()),
+                        })
+                    })
+                    .collect::<Vec<_>>();
+            }
+            match numeric_range_values(source, numeric_globals, line) {
+                Ok(Some(values)) => values
+                    .into_iter()
+                    .map(|value| Ok(ForExpansionValue { value, axis: None }))
+                    .collect(),
+                Ok(None) => vec![Ok(ForExpansionValue {
+                    value: (*source).to_string(),
+                    axis: None,
+                })],
+                Err(error) => vec![Err(error)],
+            }
+        })
+        .collect()
+}
+
+fn expand_numeric_ranges_in_value_list(
+    values: &[&str],
+    numeric_globals: &HashMap<String, i64>,
+    line: &str,
+) -> Result<Vec<String>, DiagnosticReport> {
+    let mut expanded = Vec::new();
+    for value in values {
+        if value.trim().is_empty() {
+            return Err(parse_error(line, "tag value must not be empty"));
+        }
+        if let Some(range_values) = numeric_range_values(value, numeric_globals, line)? {
+            expanded.extend(range_values);
+        } else {
+            expanded.push((*value).to_string());
+        }
+    }
+    Ok(expanded)
 }
 
 fn numeric_range_values(
     source: &str,
     numeric_globals: &HashMap<String, i64>,
     line: &str,
-) -> Result<Option<Vec<String>>, AppError> {
+) -> Result<Option<Vec<String>>, DiagnosticReport> {
     let Some((start, end)) = source.split_once("...") else {
         return Ok(None);
     };
@@ -13316,7 +14068,7 @@ fn parse_numeric_range_endpoint(
     value: &str,
     numeric_globals: &HashMap<String, i64>,
     line: &str,
-) -> Result<i64, AppError> {
+) -> Result<i64, DiagnosticReport> {
     if let Ok(parsed) = value.parse::<i64>() {
         return Ok(parsed);
     }
@@ -13331,7 +14083,7 @@ fn parse_numeric_range_endpoint(
 fn collect_multiline_rewrite_statement(
     lines: &[String],
     start: usize,
-) -> Result<Option<(String, usize)>, AppError> {
+) -> Result<Option<(String, usize)>, DiagnosticReport> {
     let line = lines[start].trim();
     if let Some(collected) = collect_bracket_multiline_rewrite_statement(lines, start, line)? {
         return Ok(Some(collected));
@@ -13367,7 +14119,7 @@ fn collect_bracket_multiline_rewrite_statement(
     lines: &[String],
     start: usize,
     first_line: &str,
-) -> Result<Option<(String, usize)>, AppError> {
+) -> Result<Option<(String, usize)>, DiagnosticReport> {
     let Some(open_index) = first_line.find('[') else {
         return Ok(None);
     };
@@ -13433,14 +14185,14 @@ fn update_square_bracket_depth(mut depth: usize, line: &str) -> usize {
     depth
 }
 
-fn validate_rewrite_rhs_continuation_after_join(line: &str) -> Result<(), AppError> {
+fn validate_rewrite_rhs_continuation_after_join(line: &str) -> Result<(), DiagnosticReport> {
     let Some((_, rhs)) = line.split_once("->") else {
         return Ok(());
     };
     validate_rewrite_rhs_continuation(rhs.trim_start(), line)
 }
 
-fn validate_rewrite_rhs_continuation(rhs: &str, line: &str) -> Result<(), AppError> {
+fn validate_rewrite_rhs_continuation(rhs: &str, line: &str) -> Result<(), DiagnosticReport> {
     if rhs.is_empty() || !rhs.starts_with('[') {
         return Err(parse_error(
             line,
@@ -13540,7 +14292,7 @@ fn parse_statement_block(
     condition_names: &HashMap<String, ConditionId>,
     named_conditions: &HashMap<String, (String, ConditionAst)>,
     rule_params: &[String],
-) -> Result<(Vec<StatementAst>, usize), AppError> {
+) -> Result<(Vec<StatementAst>, usize), DiagnosticReport> {
     let mut statements = Vec::new();
     let mut i = start;
 
@@ -13563,20 +14315,23 @@ fn parse_statement_block(
         let tokens = split_header_tokens(line);
         match tokens.first().copied() {
             Some("for") => {
-                let Some(["for", binding, "in", source]) =
-                    (tokens.len() == 4).then_some(tokens.as_slice())
-                else {
+                let ["for", binding, "in", sources @ ..] = tokens.as_slice() else {
                     return Err(parse_error(
                         line,
-                        "for directive must be: for <binding> in <tag_set-or-range>",
+                        "for directive must be: for <binding> in <source...>",
                     ));
                 };
-                let values = for_expansion_values(source, value_sets, numeric_globals, line)?;
+                let values = for_expansion_values(sources, value_sets, numeric_globals, line)?;
                 validate_identifier(binding, line, "expansion binding")?;
                 let (body_lines, next_i) = collect_statement_block_lines(lines, i + 1, line)?;
                 for value in &values {
-                    let mut expanded_lines =
-                        expand_for_binding_lines(&body_lines, binding, source, value, maps)?;
+                    let mut expanded_lines = expand_for_binding_lines(
+                        &body_lines,
+                        binding,
+                        value.axis.as_deref(),
+                        &value.value,
+                        maps,
+                    )?;
                     expanded_lines.push(BLOCK_CLOSE.to_string());
                     let (nested, parsed_i) = parse_statement_block(
                         &expanded_lines,
@@ -13688,6 +14443,7 @@ fn parse_statement_block(
                     value_sets,
                     maps,
                     object_groups,
+                    global_names,
                 )? {
                     if trailing.is_empty() {
                         let (nested, next_i) = parse_statement_block(
@@ -13738,7 +14494,10 @@ fn parse_statement_block(
                         validate_qualified_identifier(trailing, line, "routine name")?;
                         statements.push(StatementAst::Conditional {
                             condition,
-                            then_statements: vec![StatementAst::Call(trailing.to_string())],
+                            then_statements: vec![StatementAst::Call {
+                                name: trailing.to_string(),
+                                source_line: line.to_string(),
+                            }],
                             else_statements: Vec::new(),
                         });
                         i += 1;
@@ -13932,6 +14691,7 @@ fn parse_statement_block(
                     value_sets,
                     maps,
                     object_groups,
+                    global_names,
                 )? {
                     statements.push(statement);
                 } else {
@@ -13943,6 +14703,7 @@ fn parse_statement_block(
                         value_sets,
                         maps,
                         object_groups,
+                        global_names,
                     )?));
                 }
                 i = next_statement_i;
@@ -13982,6 +14743,7 @@ fn parse_statement_block(
                             value_sets,
                             maps,
                             object_groups,
+                            global_names,
                         )?,
                     ));
                     i = next_statement_i;
@@ -14022,6 +14784,7 @@ fn parse_statement_block(
                             value_sets,
                             maps,
                             object_groups,
+                            global_names,
                         )?,
                     ));
                     i = next_statement_i;
@@ -14062,6 +14825,7 @@ fn parse_statement_block(
                             value_sets,
                             maps,
                             object_groups,
+                            global_names,
                         )?,
                     ));
                     i = next_statement_i;
@@ -14148,6 +14912,7 @@ fn parse_statement_block(
                             value_sets,
                             maps,
                             object_groups,
+                            global_names,
                         )?,
                     ));
                     i = next_statement_i;
@@ -14163,6 +14928,7 @@ fn parse_statement_block(
                     value_sets,
                     maps,
                     object_groups,
+                    global_names,
                 )? {
                     statements.push(statement);
                 } else {
@@ -14174,6 +14940,7 @@ fn parse_statement_block(
                         value_sets,
                         maps,
                         object_groups,
+                        global_names,
                     )?));
                 }
                 i = next_statement_i;
@@ -14207,6 +14974,7 @@ fn parse_statement_block(
                         value_sets,
                         maps,
                         object_groups,
+                        global_names,
                     )?);
                     i += 1;
                 }
@@ -14221,6 +14989,7 @@ fn parse_statement_block(
                     value_sets,
                     maps,
                     object_groups,
+                    global_names,
                 )? {
                     statements.push(statement);
                 } else {
@@ -14234,21 +15003,41 @@ fn parse_statement_block(
                         value_sets,
                         maps,
                         object_groups,
+                        global_names,
                     )?));
                 }
                 i = next_statement_i;
             }
             Some("move") if is_shared_standard_move_statement(line) => {
-                statements.push(StatementAst::Call("move".to_string()));
+                statements.push(StatementAst::Call {
+                    name: "move".to_string(),
+                    source_line: line.to_string(),
+                });
                 i += 1;
             }
             Some(call) if tokens.len() == 1 && is_shared_rule_call_statement(line, call) => {
-                statements.push(StatementAst::Call(call.to_string()));
+                statements.push(StatementAst::Call {
+                    name: call.to_string(),
+                    source_line: line.to_string(),
+                });
                 i += 1;
             }
             Some(call) if tokens.len() == 1 && is_display_role_token(call) => {
-                statements.push(StatementAst::DisplayCall(call.to_string()));
+                statements.push(StatementAst::DisplayCall {
+                    name: call.to_string(),
+                    source_line: line.to_string(),
+                });
                 i += 1;
+            }
+            Some(other) if scene_effect_command_syntax(other).is_some() => {
+                return Err(parse_error(
+                    line,
+                    &format!(
+                        "scene effect `{other}` cannot be used in puzzle statement blocks; \
+                         put scene effects in a scene lifecycle, scene routine, \
+                         or scene component effect"
+                    ),
+                ));
             }
             Some(other) => {
                 return Err(parse_error(
@@ -14293,7 +15082,8 @@ fn parse_display_statement(
     value_sets: &HashMap<String, Vec<String>>,
     maps: &HashMap<String, ValueMap>,
     object_groups: &HashMap<String, Vec<ObjectId>>,
-) -> Result<StatementAst, AppError> {
+    global_names: &HashMap<String, GlobalId>,
+) -> Result<StatementAst, DiagnosticReport> {
     let rest = line
         .strip_prefix("display")
         .ok_or_else(|| parse_error(line, "display statement must start with display"))?
@@ -14308,7 +15098,10 @@ fn parse_display_statement(
     let tokens = split_header_tokens(rest);
     if tokens.len() == 1 && (is_qualified_identifier(tokens[0]) || is_display_role_token(tokens[0]))
     {
-        return Ok(StatementAst::DisplayCall(tokens[0].to_string()));
+        return Ok(StatementAst::DisplayCall {
+            name: tokens[0].to_string(),
+            source_line: line.to_string(),
+        });
     }
 
     let rewrite = match tokens.first().copied() {
@@ -14322,6 +15115,7 @@ fn parse_display_statement(
             value_sets,
             maps,
             object_groups,
+            &HashMap::new(),
         )?,
         Some("once_all") => parse_application_prefixed_rewrite_statement(
             rest,
@@ -14333,6 +15127,7 @@ fn parse_display_statement(
             value_sets,
             maps,
             object_groups,
+            &HashMap::new(),
         )?,
         Some("once_per_level") => parse_application_prefixed_rewrite_statement(
             rest,
@@ -14344,6 +15139,7 @@ fn parse_display_statement(
             value_sets,
             maps,
             object_groups,
+            &HashMap::new(),
         )?,
         Some("repeat") => parse_application_prefixed_rewrite_statement(
             rest,
@@ -14355,6 +15151,7 @@ fn parse_display_statement(
             value_sets,
             maps,
             object_groups,
+            global_names,
         )?,
         Some(first) if is_oriented_rewrite_line(rest, first) => parse_oriented_rewrite_statement(
             rest,
@@ -14366,6 +15163,7 @@ fn parse_display_statement(
             value_sets,
             maps,
             object_groups,
+            global_names,
         )?,
         Some(_) if rest.starts_with('[') => parse_neutral_rewrite_statement(
             rest,
@@ -14375,6 +15173,7 @@ fn parse_display_statement(
             value_sets,
             maps,
             object_groups,
+            global_names,
         )?,
         Some(other) => {
             return Err(parse_error(
@@ -14388,10 +15187,10 @@ fn parse_display_statement(
     Ok(StatementAst::DisplayRewrite(rewrite))
 }
 
-fn validate_display_hook_statements(statements: &[StatementAst]) -> Result<(), AppError> {
+fn validate_display_hook_statements(statements: &[StatementAst]) -> Result<(), DiagnosticReport> {
     for statement in statements {
         match statement {
-            StatementAst::DisplayCall(_)
+            StatementAst::DisplayCall { .. }
             | StatementAst::DisplayRewrite(_)
             | StatementAst::DisplayBlock(_) => {}
             StatementAst::Conditional {
@@ -14419,8 +15218,8 @@ fn validate_display_hook_statements(statements: &[StatementAst]) -> Result<(), A
                 validate_display_hook_statements(then_statements)?;
                 validate_display_hook_statements(else_statements)?;
             }
-            StatementAst::Call(_) | StatementAst::Effect { .. } | StatementAst::Rewrite(_) => {
-                return Err(AppError::Parse(
+            StatementAst::Call { .. } | StatementAst::Effect { .. } | StatementAst::Rewrite(_) => {
+                return Err(DiagnosticReport::error(
                     "on_display can only contain display statements".to_string(),
                 ));
             }
@@ -14439,7 +15238,8 @@ fn parse_conditional_call_statement(
     value_sets: &HashMap<String, Vec<String>>,
     maps: &HashMap<String, ValueMap>,
     object_groups: &HashMap<String, Vec<ObjectId>>,
-) -> Result<Option<StatementAst>, AppError> {
+    global_names: &HashMap<String, GlobalId>,
+) -> Result<Option<StatementAst>, DiagnosticReport> {
     let Some((left, right)) = line.split_once("->") else {
         return Ok(None);
     };
@@ -14468,11 +15268,15 @@ fn parse_conditional_call_statement(
         value_sets,
         maps,
         object_groups,
+        global_names,
     )?;
 
     Ok(Some(StatementAst::Conditional {
         condition,
-        then_statements: vec![StatementAst::Call(rule_name.to_string())],
+        then_statements: vec![StatementAst::Call {
+            name: rule_name.to_string(),
+            source_line: line.to_string(),
+        }],
         else_statements: Vec::new(),
     }))
 }
@@ -14485,7 +15289,8 @@ fn parse_pattern_if_header<'a>(
     value_sets: &HashMap<String, Vec<String>>,
     maps: &HashMap<String, ValueMap>,
     object_groups: &HashMap<String, Vec<ObjectId>>,
-) -> Result<Option<(PatternConditionAst, &'a str)>, AppError> {
+    global_names: &HashMap<String, GlobalId>,
+) -> Result<Option<(PatternConditionAst, &'a str)>, DiagnosticReport> {
     let Some(rest) = line.strip_prefix("if") else {
         return Ok(None);
     };
@@ -14511,6 +15316,7 @@ fn parse_pattern_if_header<'a>(
         value_sets,
         maps,
         object_groups,
+        global_names,
     )?;
     Ok(Some((condition, trailing)))
 }
@@ -14553,7 +15359,8 @@ fn parse_pattern_condition(
     value_sets: &HashMap<String, Vec<String>>,
     maps: &HashMap<String, ValueMap>,
     object_groups: &HashMap<String, Vec<ObjectId>>,
-) -> Result<PatternConditionAst, AppError> {
+    _global_names: &HashMap<String, GlobalId>,
+) -> Result<PatternConditionAst, DiagnosticReport> {
     let Some((pattern_orientation, pattern)) = split_oriented_pattern_arg(pattern, line)? else {
         return Err(parse_error(
             line,
@@ -14581,6 +15388,7 @@ fn parse_pattern_condition(
             value_sets,
             maps,
             object_groups,
+            &HashMap::new(),
         )?,
     })
 }
@@ -14642,7 +15450,8 @@ fn parse_oriented_rewrite_statement(
     value_sets: &HashMap<String, Vec<String>>,
     maps: &HashMap<String, ValueMap>,
     object_groups: &HashMap<String, Vec<ObjectId>>,
-) -> Result<OrientedRewriteAst, AppError> {
+    global_names: &HashMap<String, GlobalId>,
+) -> Result<OrientedRewriteAst, DiagnosticReport> {
     if !line.trim_start().starts_with(orientation_token) {
         return Err(parse_error(line, "missing oriented rewrite"));
     }
@@ -14657,6 +15466,7 @@ fn parse_oriented_rewrite_statement(
         value_sets,
         maps,
         object_groups,
+        global_names,
     )?;
     if parsed.application.is_some() {
         return Err(parse_error(line, "unexpected application-prefixed rewrite"));
@@ -14675,7 +15485,8 @@ fn parse_neutral_rewrite_statement(
     value_sets: &HashMap<String, Vec<String>>,
     maps: &HashMap<String, ValueMap>,
     object_groups: &HashMap<String, Vec<ObjectId>>,
-) -> Result<OrientedRewriteAst, AppError> {
+    global_names: &HashMap<String, GlobalId>,
+) -> Result<OrientedRewriteAst, DiagnosticReport> {
     let surface = puzzle_authoring::rule_line_surface(line)
         .map_err(|error| parse_error(line, error.message()))?;
     let parsed = parse_rule_line_rewrite_statement(
@@ -14687,6 +15498,7 @@ fn parse_neutral_rewrite_statement(
         value_sets,
         maps,
         object_groups,
+        global_names,
     )?;
     if !matches!(parsed.orientation, OrientationExpr::Neutral) || parsed.application.is_some() {
         return Err(parse_error(line, "expected a neutral rewrite"));
@@ -14707,7 +15519,8 @@ fn parse_application_prefixed_rewrite_statement(
     value_sets: &HashMap<String, Vec<String>>,
     maps: &HashMap<String, ValueMap>,
     object_groups: &HashMap<String, Vec<ObjectId>>,
-) -> Result<OrientedRewriteAst, AppError> {
+    global_names: &HashMap<String, GlobalId>,
+) -> Result<OrientedRewriteAst, DiagnosticReport> {
     line.strip_prefix(prefix)
         .ok_or_else(|| parse_error(line, "missing application-prefixed rewrite"))?;
     let surface = puzzle_authoring::rule_line_surface(line)
@@ -14721,6 +15534,7 @@ fn parse_application_prefixed_rewrite_statement(
         value_sets,
         maps,
         object_groups,
+        global_names,
     )?;
     if parsed.application != Some(application) {
         return Err(parse_error(
@@ -14741,7 +15555,8 @@ fn parse_rule_line_rewrite_statement(
     value_sets: &HashMap<String, Vec<String>>,
     maps: &HashMap<String, ValueMap>,
     object_groups: &HashMap<String, Vec<ObjectId>>,
-) -> Result<OrientedRewriteAst, AppError> {
+    global_names: &HashMap<String, GlobalId>,
+) -> Result<OrientedRewriteAst, DiagnosticReport> {
     let (orientation, application, rewrite) = match surface {
         puzzle_authoring::RuleLineSurface::InputRewrite {
             application,
@@ -14784,6 +15599,7 @@ fn parse_rule_line_rewrite_statement(
         value_sets,
         maps,
         object_groups,
+        global_names,
     )?;
 
     Ok(OrientedRewriteAst {
@@ -14811,7 +15627,7 @@ fn parse_oriented_rewrite_prefix<'a>(
     line: &'a str,
     orientation_token: &str,
     rule_params: &[String],
-) -> Result<(OrientationExpr, &'a str), AppError> {
+) -> Result<(OrientationExpr, &'a str), DiagnosticReport> {
     let rest = line
         .strip_prefix(orientation_token)
         .map(str::trim_start)
@@ -14858,7 +15674,7 @@ fn parse_statement_condition(
     value_sets: &HashMap<String, Vec<String>>,
     maps: &HashMap<String, ValueMap>,
     object_groups: &HashMap<String, Vec<ObjectId>>,
-) -> Result<ConditionAst, AppError> {
+) -> Result<ConditionAst, DiagnosticReport> {
     let condition = condition.trim();
     if let Some((_, named_condition)) = named_conditions.get(condition) {
         return Ok(named_condition.clone());
@@ -14888,7 +15704,7 @@ fn parse_condition_expr(
     value_sets: &HashMap<String, Vec<String>>,
     maps: &HashMap<String, ValueMap>,
     object_groups: &HashMap<String, Vec<ObjectId>>,
-) -> Result<ConditionAst, AppError> {
+) -> Result<ConditionAst, DiagnosticReport> {
     let or_parts = split_condition_keyword(condition, "or");
     if or_parts.len() > 1 {
         return Ok(ConditionAst::Any(
@@ -14908,7 +15724,7 @@ fn parse_condition_expr(
                         object_groups,
                     )
                 })
-                .collect::<Result<Vec<_>, AppError>>()?,
+                .collect::<Result<Vec<_>, DiagnosticReport>>()?,
         ));
     }
 
@@ -14931,7 +15747,7 @@ fn parse_condition_expr(
                         object_groups,
                     )
                 })
-                .collect::<Result<Vec<_>, AppError>>()?,
+                .collect::<Result<Vec<_>, DiagnosticReport>>()?,
         ));
     }
 
@@ -14970,7 +15786,7 @@ fn parse_condition_atom(
     value_sets: &HashMap<String, Vec<String>>,
     maps: &HashMap<String, ValueMap>,
     object_groups: &HashMap<String, Vec<ObjectId>>,
-) -> Result<ConditionAst, AppError> {
+) -> Result<ConditionAst, DiagnosticReport> {
     let tokens = condition.split_whitespace().collect::<Vec<_>>();
     if let ["input", "in", axis] = tokens.as_slice() {
         return Ok(ConditionAst::InputIn((*axis).to_string()));
@@ -15157,7 +15973,7 @@ struct ProgramLowerer<'a> {
     default_wait_ms: u64,
     next_rule_id: u16,
     visual_rules: Vec<RuleId>,
-    rule_emissions: HashMap<RuleId, Vec<RuleEmission>>,
+    rule_animations: HashMap<RuleId, Vec<RuleAnimation>>,
     rule_effects: HashMap<RuleId, Vec<RuleEffect>>,
 }
 
@@ -15182,14 +15998,13 @@ struct LoweredPrograms {
     level_clears: Vec<Option<Vec<RuleStep>>>,
     display: Option<Vec<RuleStep>>,
     visual_rules: Vec<RuleId>,
-    rule_emissions: HashMap<RuleId, Vec<RuleEmission>>,
+    rule_animations: HashMap<RuleId, Vec<RuleAnimation>>,
     rule_effects: HashMap<RuleId, Vec<RuleEffect>>,
 }
 
 #[derive(Clone, Debug, Default)]
 struct LoweredEffects {
     core: Vec<Effect>,
-    emissions: Vec<RuleEmission>,
     ordered: Vec<RuleEffect>,
 }
 
@@ -15224,19 +16039,33 @@ fn lower_programs(
     value_sets: &HashMap<String, Vec<String>>,
     directions: &[Direction],
     default_wait_ms: u64,
-) -> Result<LoweredPrograms, AppError> {
+) -> Result<LoweredPrograms, DiagnosticReport> {
     let mut definitions_by_name = HashMap::new();
     for definition in definitions {
         if definitions_by_name
             .insert(definition.name.clone(), definition)
             .is_some()
         {
-            return Err(AppError::Parse("duplicate routine definition".to_string()));
+            return Err(DiagnosticReport::error(
+                "duplicate routine definition".to_string(),
+            ));
         }
     }
     let Some(main_statements) = main_statements else {
-        return Err(AppError::Parse("missing puzzle rules".to_string()));
+        return Err(DiagnosticReport::error("missing puzzle rules".to_string()));
     };
+    let diagnostics = collect_program_reference_diagnostics(
+        &definitions_by_name,
+        &main_statements,
+        level_start_statements.as_deref(),
+        level_clear_statements.as_deref(),
+        last_level_clear_statements.as_deref(),
+        display_statements.as_deref(),
+        level_bodies,
+    );
+    if !diagnostics.is_empty() {
+        return Err(DiagnosticReport::from_diagnostics(diagnostics));
+    }
 
     let mut lowerer = ProgramLowerer {
         definitions: definitions_by_name,
@@ -15255,7 +16084,7 @@ fn lower_programs(
         default_wait_ms,
         next_rule_id: 1,
         visual_rules: Vec::new(),
-        rule_emissions: HashMap::new(),
+        rule_animations: HashMap::new(),
         rule_effects: HashMap::new(),
     };
     let mut context = StatementLoweringContext::default();
@@ -15336,9 +16165,118 @@ fn lower_programs(
         level_clears,
         display,
         visual_rules: lowerer.visual_rules,
-        rule_emissions: lowerer.rule_emissions,
+        rule_animations: lowerer.rule_animations,
         rule_effects: lowerer.rule_effects,
     })
+}
+
+fn collect_program_reference_diagnostics(
+    definitions_by_name: &HashMap<String, RuleDefinitionAst>,
+    main_statements: &[StatementAst],
+    level_start_statements: Option<&[StatementAst]>,
+    level_clear_statements: Option<&[StatementAst]>,
+    last_level_clear_statements: Option<&[StatementAst]>,
+    display_statements: Option<&[StatementAst]>,
+    level_bodies: &[PreparedLevelBody],
+) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+    for definition in definitions_by_name.values() {
+        collect_statement_reference_diagnostics(
+            &definition.statements,
+            definitions_by_name,
+            &mut diagnostics,
+        );
+    }
+    collect_statement_reference_diagnostics(main_statements, definitions_by_name, &mut diagnostics);
+    for statements in [
+        level_start_statements,
+        level_clear_statements,
+        last_level_clear_statements,
+        display_statements,
+    ]
+    .into_iter()
+    .flatten()
+    {
+        collect_statement_reference_diagnostics(statements, definitions_by_name, &mut diagnostics);
+    }
+    for level in level_bodies {
+        collect_statement_reference_diagnostics(
+            &level.level_start_statements,
+            definitions_by_name,
+            &mut diagnostics,
+        );
+        collect_statement_reference_diagnostics(
+            &level.level_clear_statements,
+            definitions_by_name,
+            &mut diagnostics,
+        );
+    }
+    diagnostics
+}
+
+fn collect_statement_reference_diagnostics(
+    statements: &[StatementAst],
+    definitions_by_name: &HashMap<String, RuleDefinitionAst>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    for statement in statements {
+        match statement {
+            StatementAst::Call { name, source_line } => {
+                if !definitions_by_name.contains_key(name) {
+                    diagnostics.push(
+                        Diagnostic::error(format!("unknown routine call: {name}"))
+                            .with_source_line(source_line.clone()),
+                    );
+                }
+            }
+            StatementAst::DisplayCall { name, source_line } => {
+                if !definitions_by_name.contains_key(name) {
+                    diagnostics.push(
+                        Diagnostic::error(format!("unknown display routine call: {name}"))
+                            .with_source_line(source_line.clone()),
+                    );
+                }
+            }
+            StatementAst::DisplayBlock(statements) | StatementAst::Block { statements, .. } => {
+                collect_statement_reference_diagnostics(
+                    statements,
+                    definitions_by_name,
+                    diagnostics,
+                );
+            }
+            StatementAst::Conditional {
+                then_statements,
+                else_statements,
+                ..
+            }
+            | StatementAst::If {
+                then_statements,
+                else_statements,
+                ..
+            } => {
+                collect_statement_reference_diagnostics(
+                    then_statements,
+                    definitions_by_name,
+                    diagnostics,
+                );
+                collect_statement_reference_diagnostics(
+                    else_statements,
+                    definitions_by_name,
+                    diagnostics,
+                );
+            }
+            StatementAst::RepeatUntil { statements, .. } | StatementAst::Fix { statements, .. } => {
+                collect_statement_reference_diagnostics(
+                    statements,
+                    definitions_by_name,
+                    diagnostics,
+                );
+            }
+            StatementAst::DisplayRewrite(_)
+            | StatementAst::Effect { .. }
+            | StatementAst::Rewrite(_) => {}
+        }
+    }
 }
 
 fn wrap_program_local_frame(
@@ -15351,9 +16289,9 @@ fn wrap_program_local_frame(
     }
 }
 
-fn input_dependency_error(context: &StatementLoweringContext) -> AppError {
+fn input_dependency_error(context: &StatementLoweringContext) -> DiagnosticReport {
     let scope = context.input_forbidden_context.unwrap_or("this program");
-    AppError::Parse(format!("{scope} cannot depend on input"))
+    DiagnosticReport::error(format!("{scope} cannot depend on input"))
 }
 
 fn lower_condition_defs(
@@ -15363,7 +16301,7 @@ fn lower_condition_defs(
     value_sets: &HashMap<String, Vec<String>>,
     input_names: &HashMap<String, InputId>,
     directions: &[Direction],
-) -> Result<Vec<ConditionDef>, AppError> {
+) -> Result<Vec<ConditionDef>, DiagnosticReport> {
     definitions
         .into_iter()
         .map(|definition| {
@@ -15390,7 +16328,7 @@ fn lower_condition_value_kind(
     scratch_names: &HashMap<String, ScratchDef>,
     value_sets: &HashMap<String, Vec<String>>,
     directions: &[Direction],
-) -> Result<ConditionValueKind, AppError> {
+) -> Result<ConditionValueKind, DiagnosticReport> {
     match kind {
         ConditionValueAst::CountObjects(objects) => {
             Ok(ConditionValueKind::CountObjects(objects.clone()))
@@ -15446,7 +16384,7 @@ fn lower_condition_match_kind(
     scratch_names: &HashMap<String, ScratchDef>,
     value_sets: &HashMap<String, Vec<String>>,
     directions: &[Direction],
-) -> Result<ConditionValueKind, AppError> {
+) -> Result<ConditionValueKind, DiagnosticReport> {
     if matches!(
         condition_pattern.orientation,
         OrientationExpr::Input | OrientationExpr::InputSet(_)
@@ -15487,7 +16425,7 @@ fn lower_condition_patterns(
     value_sets: &HashMap<String, Vec<String>>,
     input_names: &HashMap<String, InputId>,
     directions: &[Direction],
-) -> Result<Vec<Pattern>, AppError> {
+) -> Result<Vec<Pattern>, DiagnosticReport> {
     let block = &condition_pattern.pattern;
     let alternatives = compile_before_after_blocks(
         block,
@@ -15521,7 +16459,7 @@ fn lower_condition_patterns(
             let directions =
                 directions_for_orientation_name(axis, input_names, value_sets, directions)?
                     .ok_or_else(|| {
-                        AppError::Parse(format!("unknown input orientation set: {axis}"))
+                        DiagnosticReport::error(format!("unknown input orientation set: {axis}"))
                     })?;
             patterns_from_alternatives(&alternatives, &directions, true, "condition pattern")
         }
@@ -15533,7 +16471,7 @@ fn lower_condition_patterns(
                 directions,
             )?
             .ok_or_else(|| {
-                AppError::Parse(format!(
+                DiagnosticReport::error(format!(
                     "unknown condition pattern orientation: {}",
                     direction_name.0
                 ))
@@ -15550,7 +16488,7 @@ fn lower_condition_input_patterns(
     scratch_names: &HashMap<String, ScratchDef>,
     value_sets: &HashMap<String, Vec<String>>,
     directions: &[Direction],
-) -> Result<Vec<(InputId, Pattern)>, AppError> {
+) -> Result<Vec<(InputId, Pattern)>, DiagnosticReport> {
     let block = &condition_pattern.pattern;
     let alternatives = compile_before_after_blocks(
         block,
@@ -15564,8 +16502,9 @@ fn lower_condition_input_patterns(
     let input_directions = match &condition_pattern.orientation {
         OrientationExpr::Input => directions.to_vec(),
         OrientationExpr::InputSet(axis) => {
-            directions_for_orientation_name(axis, input_names, value_sets, directions)?
-                .ok_or_else(|| AppError::Parse(format!("unknown input orientation set: {axis}")))?
+            directions_for_orientation_name(axis, input_names, value_sets, directions)?.ok_or_else(
+                || DiagnosticReport::error(format!("unknown input orientation set: {axis}")),
+            )?
         }
         OrientationExpr::Neutral | OrientationExpr::Fixed(_) => Vec::new(),
     };
@@ -15584,7 +16523,7 @@ fn directions_for_orientation_name(
     input_names: &HashMap<String, InputId>,
     value_sets: &HashMap<String, Vec<String>>,
     directions: &[Direction],
-) -> Result<Option<Vec<Direction>>, AppError> {
+) -> Result<Option<Vec<Direction>>, DiagnosticReport> {
     if let Some(direction) = direction_by_name(name, input_names, directions) {
         return Ok(Some(vec![direction]));
     }
@@ -15592,13 +16531,15 @@ fn directions_for_orientation_name(
         return Ok(None);
     };
     if values.is_empty() {
-        return Err(AppError::Parse(format!("empty orientation set: {name}")));
+        return Err(DiagnosticReport::error(format!(
+            "empty orientation set: {name}"
+        )));
     }
     values
         .iter()
         .map(|value| {
             direction_by_name(value, input_names, directions).ok_or_else(|| {
-                AppError::Parse(format!(
+                DiagnosticReport::error(format!(
                     "orientation set {name} contains non-direction value: {value}"
                 ))
             })
@@ -15612,10 +16553,16 @@ fn patterns_from_alternatives(
     directions: &[Direction],
     direction_expanded: bool,
     line: &str,
-) -> Result<Vec<Pattern>, AppError> {
+) -> Result<Vec<Pattern>, DiagnosticReport> {
     let mut patterns = Vec::new();
     for direction in directions {
         for alternative in alternatives {
+            if !alternative.guards.is_empty() {
+                return Err(DiagnosticReport::error(
+                    "dynamic object selectors are not supported in condition patterns yet"
+                        .to_string(),
+                ));
+            }
             let components = alternative
                 .components
                 .iter()
@@ -15660,13 +16607,13 @@ fn patterns_from_alternatives(
                                 )?,
                             })
                         })
-                        .collect::<Result<Vec<_>, AppError>>()?;
+                        .collect::<Result<Vec<_>, DiagnosticReport>>()?;
                     Ok(PatternComponent {
                         cells,
                         gap_count: component.gap_count,
                     })
                 })
-                .collect::<Result<Vec<_>, AppError>>()?;
+                .collect::<Result<Vec<_>, DiagnosticReport>>()?;
             patterns.push(Pattern { components });
         }
     }
@@ -15685,7 +16632,7 @@ fn lower_goal_condition(
     value_sets: &HashMap<String, Vec<String>>,
     input_names: &HashMap<String, InputId>,
     directions: &[Direction],
-) -> Result<GoalCondition, AppError> {
+) -> Result<GoalCondition, DiagnosticReport> {
     Ok(GoalCondition {
         description,
         expr: lower_goal_expr(
@@ -15714,7 +16661,7 @@ fn lower_goal_expr(
     value_sets: &HashMap<String, Vec<String>>,
     input_names: &HashMap<String, InputId>,
     directions: &[Direction],
-) -> Result<GoalExpr, AppError> {
+) -> Result<GoalExpr, DiagnosticReport> {
     match condition {
         ConditionAst::All(conditions) => Ok(GoalExpr::All(
             conditions
@@ -15733,7 +16680,7 @@ fn lower_goal_expr(
                         directions,
                     )
                 })
-                .collect::<Result<Vec<_>, AppError>>()?,
+                .collect::<Result<Vec<_>, DiagnosticReport>>()?,
         )),
         ConditionAst::Any(conditions) => Ok(GoalExpr::Any(
             conditions
@@ -15752,7 +16699,7 @@ fn lower_goal_expr(
                         directions,
                     )
                 })
-                .collect::<Result<Vec<_>, AppError>>()?,
+                .collect::<Result<Vec<_>, DiagnosticReport>>()?,
         )),
         ConditionAst::GlobalEquals { name, value } => Ok(GoalExpr::Clause(GoalClause {
             value: GoalValue::Global(resolve_global_for_goal(name, global_names)?),
@@ -15839,31 +16786,31 @@ fn lower_goal_expr(
                 expected: *value,
             }))
         }
-        ConditionAst::InputIs(_) | ConditionAst::InputIn(_) => {
-            Err(AppError::Parse("goal cannot depend on input".to_string()))
-        }
+        ConditionAst::InputIs(_) | ConditionAst::InputIn(_) => Err(DiagnosticReport::error(
+            "goal cannot depend on input".to_string(),
+        )),
     }
 }
 
 fn resolve_global_for_goal(
     name: &str,
     global_names: &HashMap<String, GlobalId>,
-) -> Result<GlobalId, AppError> {
+) -> Result<GlobalId, DiagnosticReport> {
     global_names
         .get(name)
         .copied()
-        .ok_or_else(|| AppError::Parse(format!("unknown global in goal: {name}")))
+        .ok_or_else(|| DiagnosticReport::error(format!("unknown global in goal: {name}")))
 }
 
 fn resolve_non_visual_condition_for_goal(
     name: &str,
     condition_names: &HashMap<String, ConditionId>,
     visual_condition_reads: &HashSet<ConditionId>,
-) -> Result<ConditionId, AppError> {
+) -> Result<ConditionId, DiagnosticReport> {
     let condition = condition_names
         .get(name)
         .copied()
-        .ok_or_else(|| AppError::Parse(format!("unknown condition in goal: {name}")))?;
+        .ok_or_else(|| DiagnosticReport::error(format!("unknown condition in goal: {name}")))?;
     ensure_non_visual_condition_def(condition, visual_condition_reads)?;
     Ok(condition)
 }
@@ -15884,7 +16831,7 @@ fn visual_condition_reads(
 fn ensure_non_visual_condition_def(
     condition: ConditionId,
     visual_condition_reads: &HashSet<ConditionId>,
-) -> Result<(), AppError> {
+) -> Result<(), DiagnosticReport> {
     if visual_condition_reads.contains(&condition) {
         return Err(main_visual_object_error("condition"));
     }
@@ -15894,7 +16841,7 @@ fn ensure_non_visual_condition_def(
 fn validate_non_visual_condition_value(
     kind: &ConditionValueAst,
     visual_objects: &[ObjectId],
-) -> Result<(), AppError> {
+) -> Result<(), DiagnosticReport> {
     if condition_value_reads_visual_object(kind, visual_objects) {
         return Err(main_visual_object_error("condition"));
     }
@@ -15922,7 +16869,7 @@ fn condition_value_reads_visual_object(
 fn validate_non_visual_pattern_block(
     pattern: &PatternBlock,
     visual_objects: &[ObjectId],
-) -> Result<(), AppError> {
+) -> Result<(), DiagnosticReport> {
     if pattern_block_reads_visual_object(pattern, visual_objects) {
         return Err(main_visual_object_error("pattern"));
     }
@@ -15954,8 +16901,8 @@ fn object_is_visual(object: ObjectId, visual_objects: &[ObjectId]) -> bool {
     visual_objects.contains(&object)
 }
 
-fn main_visual_object_error(context: &str) -> AppError {
-    AppError::Parse(format!(
+fn main_visual_object_error(context: &str) -> DiagnosticReport {
+    DiagnosticReport::error(format!(
         "main rules and conditions cannot read or write display objects ({context})"
     ))
 }
@@ -15966,15 +16913,14 @@ fn classify_rewrite_role(
     effects: &LoweredEffects,
     visual_objects: &[ObjectId],
     context: &StatementLoweringContext,
-) -> Result<ClassifiedRuleRole, AppError> {
+) -> Result<ClassifiedRuleRole, DiagnosticReport> {
     let reads_visual = pattern_block_reads_visual_object(before, visual_objects);
     let writes_visual = alternatives_write_visual_objects(alternatives, visual_objects);
     let writes_main = alternatives_write_main_state(alternatives, visual_objects);
-    let has_effects =
-        !effects.core.is_empty() || !effects.emissions.is_empty() || !effects.ordered.is_empty();
+    let has_effects = !effects.core.is_empty() || !effects.ordered.is_empty();
 
     if reads_visual && (writes_main || has_effects) {
-        return Err(AppError::Parse(
+        return Err(DiagnosticReport::error(
             "display object matches cannot cause gameplay changes".to_string(),
         ));
     }
@@ -15990,7 +16936,7 @@ fn classify_rewrite_role(
     };
 
     if context.role == RuleRole::Visual && role == ClassifiedRuleRole::Main {
-        return Err(AppError::Parse(
+        return Err(DiagnosticReport::error(
             "display routines and display blocks can only contain display rules".to_string(),
         ));
     }
@@ -16127,7 +17073,7 @@ impl<'a> ProgramLowerer<'a> {
         &mut self,
         statements: &[StatementAst],
         context: &StatementLoweringContext,
-    ) -> Result<Vec<RuleStep>, AppError> {
+    ) -> Result<Vec<RuleStep>, DiagnosticReport> {
         let mut rules = Vec::new();
         for statement in statements {
             rules.extend(self.lower_statement(statement, context)?);
@@ -16139,10 +17085,12 @@ impl<'a> ProgramLowerer<'a> {
         &mut self,
         statement: &StatementAst,
         context: &StatementLoweringContext,
-    ) -> Result<Vec<RuleStep>, AppError> {
+    ) -> Result<Vec<RuleStep>, DiagnosticReport> {
         match statement {
-            StatementAst::Call(name) => self.lower_call(name, context),
-            StatementAst::DisplayCall(name) => self.lower_display_call(name, context),
+            StatementAst::Call { name, source_line } => self.lower_call(name, source_line, context),
+            StatementAst::DisplayCall { name, source_line } => {
+                self.lower_display_call(name, source_line, context)
+            }
             StatementAst::DisplayRewrite(rewrite) => self.lower_display_rewrite(rewrite, context),
             StatementAst::DisplayBlock(statements) => self.lower_display_block(statements, context),
             StatementAst::Conditional {
@@ -16176,7 +17124,7 @@ impl<'a> ProgramLowerer<'a> {
         &mut self,
         effects: &[EffectAst],
         context: &StatementLoweringContext,
-    ) -> Result<Vec<RuleStep>, AppError> {
+    ) -> Result<Vec<RuleStep>, DiagnosticReport> {
         let effects = self.lower_effects(effects)?;
         if context.role == RuleRole::Visual {
             validate_visual_effects(&effects)?;
@@ -16185,9 +17133,6 @@ impl<'a> ProgramLowerer<'a> {
         self.next_rule_id += 1;
         if context.role == RuleRole::Visual {
             self.visual_rules.push(id);
-        }
-        if !effects.emissions.is_empty() {
-            self.rule_emissions.insert(id, effects.emissions.clone());
         }
         if !effects.ordered.is_empty() {
             self.rule_effects.insert(id, effects.ordered.clone());
@@ -16210,7 +17155,7 @@ impl<'a> ProgramLowerer<'a> {
         then_statements: &[StatementAst],
         else_statements: &[StatementAst],
         context: &StatementLoweringContext,
-    ) -> Result<Vec<RuleStep>, AppError> {
+    ) -> Result<Vec<RuleStep>, DiagnosticReport> {
         let mut steps = vec![RuleStep::ConditionalBlock {
             condition: self.lower_pattern_condition(condition, context)?,
             steps: self.lower_statements(then_statements, context)?,
@@ -16231,7 +17176,7 @@ impl<'a> ProgramLowerer<'a> {
         application: RuleApplication,
         statements: &[StatementAst],
         context: &StatementLoweringContext,
-    ) -> Result<Vec<RuleStep>, AppError> {
+    ) -> Result<Vec<RuleStep>, DiagnosticReport> {
         let mut nested_context = context.clone();
         if !nested_context.application_fixed {
             nested_context.application = RuleApplication::UntilStable;
@@ -16249,7 +17194,7 @@ impl<'a> ProgramLowerer<'a> {
         condition: &ConditionAst,
         statements: &[StatementAst],
         context: &StatementLoweringContext,
-    ) -> Result<Vec<RuleStep>, AppError> {
+    ) -> Result<Vec<RuleStep>, DiagnosticReport> {
         let mut nested_context = context.clone();
         if !nested_context.application_fixed {
             nested_context.application = RuleApplication::UntilStable;
@@ -16268,7 +17213,7 @@ impl<'a> ProgramLowerer<'a> {
         defaults: &FixDefaults,
         statements: &[StatementAst],
         context: &StatementLoweringContext,
-    ) -> Result<Vec<RuleStep>, AppError> {
+    ) -> Result<Vec<RuleStep>, DiagnosticReport> {
         let mut nested_context = context.clone();
         if let Some(application) = defaults.application {
             nested_context.application = application;
@@ -16283,16 +17228,18 @@ impl<'a> ProgramLowerer<'a> {
     fn lower_call(
         &mut self,
         name: &str,
+        source_line: &str,
         context: &StatementLoweringContext,
-    ) -> Result<Vec<RuleStep>, AppError> {
+    ) -> Result<Vec<RuleStep>, DiagnosticReport> {
         if context.call_stack.iter().any(|active| active == name) {
-            return Err(AppError::Parse(format!("recursive routine call: {name}")));
+            return Err(DiagnosticReport::error_at_line(
+                format!("recursive routine call: {name}"),
+                source_line,
+            ));
         }
-        let definition = self
-            .definitions
-            .get(name)
-            .cloned()
-            .ok_or_else(|| AppError::Parse(format!("unknown routine call: {name}")))?;
+        let definition = self.definitions.get(name).cloned().ok_or_else(|| {
+            DiagnosticReport::error_at_line(format!("unknown routine call: {name}"), source_line)
+        })?;
         let mut nested_context = context.clone();
         if context.role == RuleRole::Visual || definition.role == RuleRole::Visual {
             nested_context.role = RuleRole::Visual;
@@ -16313,7 +17260,7 @@ impl<'a> ProgramLowerer<'a> {
         &mut self,
         statements: &[StatementAst],
         context: &StatementLoweringContext,
-    ) -> Result<Vec<RuleStep>, AppError> {
+    ) -> Result<Vec<RuleStep>, DiagnosticReport> {
         let mut nested_context = context.clone();
         nested_context.role = RuleRole::Visual;
         self.lower_statements(statements, &nested_context)
@@ -16323,7 +17270,7 @@ impl<'a> ProgramLowerer<'a> {
         &mut self,
         rewrite: &OrientedRewriteAst,
         context: &StatementLoweringContext,
-    ) -> Result<Vec<RuleStep>, AppError> {
+    ) -> Result<Vec<RuleStep>, DiagnosticReport> {
         let mut nested_context = context.clone();
         nested_context.role = RuleRole::Visual;
         self.lower_rewrite(rewrite, &nested_context)
@@ -16332,16 +17279,21 @@ impl<'a> ProgramLowerer<'a> {
     fn lower_display_call(
         &mut self,
         name: &str,
+        source_line: &str,
         context: &StatementLoweringContext,
-    ) -> Result<Vec<RuleStep>, AppError> {
+    ) -> Result<Vec<RuleStep>, DiagnosticReport> {
         if context.call_stack.iter().any(|active| active == name) {
-            return Err(AppError::Parse(format!("recursive routine call: {name}")));
+            return Err(DiagnosticReport::error_at_line(
+                format!("recursive routine call: {name}"),
+                source_line,
+            ));
         }
-        let definition = self
-            .definitions
-            .get(name)
-            .cloned()
-            .ok_or_else(|| AppError::Parse(format!("unknown display routine call: {name}")))?;
+        let definition = self.definitions.get(name).cloned().ok_or_else(|| {
+            DiagnosticReport::error_at_line(
+                format!("unknown display routine call: {name}"),
+                source_line,
+            )
+        })?;
         let mut nested_context = context.clone();
         nested_context.role = RuleRole::Visual;
         nested_context.call_stack.push(name.to_string());
@@ -16360,7 +17312,7 @@ impl<'a> ProgramLowerer<'a> {
         &self,
         condition: &PatternConditionAst,
         context: &StatementLoweringContext,
-    ) -> Result<RuleCondition, AppError> {
+    ) -> Result<RuleCondition, DiagnosticReport> {
         if context.role == RuleRole::Main {
             validate_non_visual_pattern_block(&condition.pattern, self.visual_objects)?;
         }
@@ -16415,7 +17367,7 @@ impl<'a> ProgramLowerer<'a> {
                     return Err(input_dependency_error(context));
                 }
                 let directions = self.directions_for_orientation_name(axis)?.ok_or_else(|| {
-                    AppError::Parse(format!("unknown input orientation set: {axis}"))
+                    DiagnosticReport::error(format!("unknown input orientation set: {axis}"))
                 })?;
                 let mut patterns = Vec::new();
                 for direction in directions {
@@ -16437,7 +17389,7 @@ impl<'a> ProgramLowerer<'a> {
                 let directions = self
                     .directions_for_orientation_name(&direction_name.0)?
                     .ok_or_else(|| {
-                        AppError::Parse(format!(
+                        DiagnosticReport::error(format!(
                             "unknown pattern condition orientation: {}",
                             direction_name.0
                         ))
@@ -16462,7 +17414,7 @@ impl<'a> ProgramLowerer<'a> {
         &self,
         condition: &ConditionAst,
         context: &StatementLoweringContext,
-    ) -> Result<RuleCondition, AppError> {
+    ) -> Result<RuleCondition, DiagnosticReport> {
         Ok(RuleCondition::GuardBranches(
             self.lower_condition_branches(condition, context)?,
         ))
@@ -16474,7 +17426,7 @@ impl<'a> ProgramLowerer<'a> {
         direction: Direction,
         direction_expanded: bool,
         line: &str,
-    ) -> Result<Vec<Pattern>, AppError> {
+    ) -> Result<Vec<Pattern>, DiagnosticReport> {
         let alternatives = compile_before_after_blocks(
             pattern,
             pattern,
@@ -16492,7 +17444,7 @@ impl<'a> ProgramLowerer<'a> {
         directions: &[Direction],
         direction_expanded: bool,
         line: &str,
-    ) -> Result<Vec<Pattern>, AppError> {
+    ) -> Result<Vec<Pattern>, DiagnosticReport> {
         let alternatives = compile_before_after_blocks(
             pattern,
             pattern,
@@ -16510,7 +17462,7 @@ impl<'a> ProgramLowerer<'a> {
         then_statements: &[StatementAst],
         else_statements: &[StatementAst],
         context: &StatementLoweringContext,
-    ) -> Result<Vec<RuleStep>, AppError> {
+    ) -> Result<Vec<RuleStep>, DiagnosticReport> {
         let mut steps = Vec::new();
         for branch in self.lower_condition_branches(condition, context)? {
             let mut nested_context = context.clone();
@@ -16525,21 +17477,22 @@ impl<'a> ProgramLowerer<'a> {
         Ok(steps)
     }
 
-    fn input_ids_for_value_set(&self, name: &str) -> Result<Vec<InputId>, AppError> {
+    fn input_ids_for_value_set(&self, name: &str) -> Result<Vec<InputId>, DiagnosticReport> {
         let values = self
             .value_sets
             .get(name)
-            .ok_or_else(|| AppError::Parse(format!("unknown input tag set: {name}")))?;
+            .ok_or_else(|| DiagnosticReport::error(format!("unknown input tag set: {name}")))?;
         if values.is_empty() {
-            return Err(AppError::Parse(format!("empty input tag set: {name}")));
+            return Err(DiagnosticReport::error(format!(
+                "empty input tag set: {name}"
+            )));
         }
         values
             .iter()
             .map(|value| {
-                self.input_names
-                    .get(value)
-                    .copied()
-                    .ok_or_else(|| AppError::Parse(format!("unknown input in tag set: {value}")))
+                self.input_names.get(value).copied().ok_or_else(|| {
+                    DiagnosticReport::error(format!("unknown input in tag set: {value}"))
+                })
             })
             .collect()
     }
@@ -16547,7 +17500,7 @@ impl<'a> ProgramLowerer<'a> {
     fn directions_for_orientation_name(
         &self,
         name: &str,
-    ) -> Result<Option<Vec<Direction>>, AppError> {
+    ) -> Result<Option<Vec<Direction>>, DiagnosticReport> {
         directions_for_orientation_name(name, self.input_names, self.value_sets, self.directions)
     }
 
@@ -16555,7 +17508,7 @@ impl<'a> ProgramLowerer<'a> {
         &self,
         condition: &ConditionAst,
         context: &StatementLoweringContext,
-    ) -> Result<Vec<Vec<Guard>>, AppError> {
+    ) -> Result<Vec<Vec<Guard>>, DiagnosticReport> {
         match condition {
             ConditionAst::All(conditions) => {
                 let mut branches = vec![Vec::<Guard>::new()];
@@ -16598,7 +17551,7 @@ impl<'a> ProgramLowerer<'a> {
         &self,
         condition: &ConditionAst,
         context: &StatementLoweringContext,
-    ) -> Result<Vec<Vec<Guard>>, AppError> {
+    ) -> Result<Vec<Vec<Guard>>, DiagnosticReport> {
         match condition {
             ConditionAst::All(conditions) => {
                 let mut branches = Vec::new();
@@ -16628,10 +17581,9 @@ impl<'a> ProgramLowerer<'a> {
                 if !context.input_allowed {
                     return Err(input_dependency_error(context));
                 }
-                let excluded = *self
-                    .input_names
-                    .get(input_name)
-                    .ok_or_else(|| AppError::Parse(format!("unknown input: {input_name}")))?;
+                let excluded = *self.input_names.get(input_name).ok_or_else(|| {
+                    DiagnosticReport::error(format!("unknown input: {input_name}"))
+                })?;
                 Ok(self
                     .sorted_input_ids()
                     .into_iter()
@@ -16668,26 +17620,25 @@ impl<'a> ProgramLowerer<'a> {
         &self,
         condition: &ConditionAst,
         context: &StatementLoweringContext,
-    ) -> Result<Guard, AppError> {
+    ) -> Result<Guard, DiagnosticReport> {
         match condition {
             ConditionAst::InputIs(input_name) => {
                 if !context.input_allowed {
                     return Err(input_dependency_error(context));
                 }
-                let input = *self
-                    .input_names
-                    .get(input_name)
-                    .ok_or_else(|| AppError::Parse(format!("unknown input: {input_name}")))?;
+                let input = *self.input_names.get(input_name).ok_or_else(|| {
+                    DiagnosticReport::error(format!("unknown input: {input_name}"))
+                })?;
                 Ok(Guard::InputIs(input))
             }
-            ConditionAst::InputIn(_) => Err(AppError::Parse(
+            ConditionAst::InputIn(_) => Err(DiagnosticReport::error(
                 "input tag-set condition was not expanded".to_string(),
             )),
             ConditionAst::GlobalEquals { name, value } => {
                 let global = *self
                     .global_names
                     .get(name)
-                    .ok_or_else(|| AppError::Parse(format!("unknown global: {name}")))?;
+                    .ok_or_else(|| DiagnosticReport::error(format!("unknown global: {name}")))?;
                 Ok(Guard::GlobalEquals {
                     global,
                     value: *value,
@@ -16697,7 +17648,7 @@ impl<'a> ProgramLowerer<'a> {
                 let global = *self
                     .global_names
                     .get(name)
-                    .ok_or_else(|| AppError::Parse(format!("unknown global: {name}")))?;
+                    .ok_or_else(|| DiagnosticReport::error(format!("unknown global: {name}")))?;
                 Ok(Guard::GlobalCompare {
                     global,
                     op: *op,
@@ -16708,7 +17659,7 @@ impl<'a> ProgramLowerer<'a> {
                 let condition = *self
                     .condition_names
                     .get(name)
-                    .ok_or_else(|| AppError::Parse(format!("unknown condition: {name}")))?;
+                    .ok_or_else(|| DiagnosticReport::error(format!("unknown condition: {name}")))?;
                 if context.role == RuleRole::Main {
                     ensure_non_visual_condition_def(condition, self.visual_condition_reads)?;
                 }
@@ -16721,7 +17672,7 @@ impl<'a> ProgramLowerer<'a> {
                 let condition = *self
                     .condition_names
                     .get(name)
-                    .ok_or_else(|| AppError::Parse(format!("unknown condition: {name}")))?;
+                    .ok_or_else(|| DiagnosticReport::error(format!("unknown condition: {name}")))?;
                 if context.role == RuleRole::Main {
                     ensure_non_visual_condition_def(condition, self.visual_condition_reads)?;
                 }
@@ -16731,7 +17682,7 @@ impl<'a> ProgramLowerer<'a> {
                 let condition = *self
                     .condition_names
                     .get(name)
-                    .ok_or_else(|| AppError::Parse(format!("unknown condition: {name}")))?;
+                    .ok_or_else(|| DiagnosticReport::error(format!("unknown condition: {name}")))?;
                 if context.role == RuleRole::Main {
                     ensure_non_visual_condition_def(condition, self.visual_condition_reads)?;
                 }
@@ -16790,7 +17741,7 @@ impl<'a> ProgramLowerer<'a> {
                     value: *value,
                 })
             }
-            ConditionAst::All(_) | ConditionAst::Any(_) => Err(AppError::Parse(
+            ConditionAst::All(_) | ConditionAst::Any(_) => Err(DiagnosticReport::error(
                 "nested condition expression was not expanded".to_string(),
             )),
         }
@@ -16800,13 +17751,13 @@ impl<'a> ProgramLowerer<'a> {
         &self,
         condition: &ConditionAst,
         context: &StatementLoweringContext,
-    ) -> Result<Guard, AppError> {
+    ) -> Result<Guard, DiagnosticReport> {
         match condition {
             ConditionAst::GlobalEquals { name, value } => {
                 let global = *self
                     .global_names
                     .get(name)
-                    .ok_or_else(|| AppError::Parse(format!("unknown global: {name}")))?;
+                    .ok_or_else(|| DiagnosticReport::error(format!("unknown global: {name}")))?;
                 Ok(Guard::GlobalCompare {
                     global,
                     op: ComparisonOp::NotEq,
@@ -16817,7 +17768,7 @@ impl<'a> ProgramLowerer<'a> {
                 let global = *self
                     .global_names
                     .get(name)
-                    .ok_or_else(|| AppError::Parse(format!("unknown global: {name}")))?;
+                    .ok_or_else(|| DiagnosticReport::error(format!("unknown global: {name}")))?;
                 Ok(Guard::GlobalCompare {
                     global,
                     op: invert_comparison_op(*op),
@@ -16828,7 +17779,7 @@ impl<'a> ProgramLowerer<'a> {
                 let condition = *self
                     .condition_names
                     .get(name)
-                    .ok_or_else(|| AppError::Parse(format!("unknown condition: {name}")))?;
+                    .ok_or_else(|| DiagnosticReport::error(format!("unknown condition: {name}")))?;
                 if context.role == RuleRole::Main {
                     ensure_non_visual_condition_def(condition, self.visual_condition_reads)?;
                 }
@@ -16842,7 +17793,7 @@ impl<'a> ProgramLowerer<'a> {
                 let condition = *self
                     .condition_names
                     .get(name)
-                    .ok_or_else(|| AppError::Parse(format!("unknown condition: {name}")))?;
+                    .ok_or_else(|| DiagnosticReport::error(format!("unknown condition: {name}")))?;
                 if context.role == RuleRole::Main {
                     ensure_non_visual_condition_def(condition, self.visual_condition_reads)?;
                 }
@@ -16855,7 +17806,7 @@ impl<'a> ProgramLowerer<'a> {
                 let condition = *self
                     .condition_names
                     .get(name)
-                    .ok_or_else(|| AppError::Parse(format!("unknown condition: {name}")))?;
+                    .ok_or_else(|| DiagnosticReport::error(format!("unknown condition: {name}")))?;
                 if context.role == RuleRole::Main {
                     ensure_non_visual_condition_def(condition, self.visual_condition_reads)?;
                 }
@@ -16918,7 +17869,7 @@ impl<'a> ProgramLowerer<'a> {
             ConditionAst::InputIs(_)
             | ConditionAst::InputIn(_)
             | ConditionAst::All(_)
-            | ConditionAst::Any(_) => Err(AppError::Parse(
+            | ConditionAst::Any(_) => Err(DiagnosticReport::error(
                 "nested condition expression was not expanded".to_string(),
             )),
         }
@@ -16928,7 +17879,7 @@ impl<'a> ProgramLowerer<'a> {
         &mut self,
         rewrite: &OrientedRewriteAst,
         context: &StatementLoweringContext,
-    ) -> Result<Vec<RuleStep>, AppError> {
+    ) -> Result<Vec<RuleStep>, DiagnosticReport> {
         let effects = self.lower_effects(&rewrite.effects)?;
         let application = if effects
             .core
@@ -16973,7 +17924,6 @@ impl<'a> ProgramLowerer<'a> {
                             true,
                             context.guards.clone(),
                             effects.core.clone(),
-                            effects.emissions.clone(),
                             effects.ordered.clone(),
                             application,
                             role,
@@ -16987,7 +17937,6 @@ impl<'a> ProgramLowerer<'a> {
                     false,
                     context.guards.clone(),
                     effects.core,
-                    effects.emissions,
                     effects.ordered,
                     application,
                     role,
@@ -17026,7 +17975,6 @@ impl<'a> ProgramLowerer<'a> {
                         true,
                         guards,
                         effects.core.clone(),
-                        effects.emissions.clone(),
                         effects.ordered.clone(),
                         application,
                         role,
@@ -17039,7 +17987,7 @@ impl<'a> ProgramLowerer<'a> {
                     return Err(input_dependency_error(context));
                 }
                 let directions = self.directions_for_orientation_name(axis)?.ok_or_else(|| {
-                    AppError::Parse(format!("unknown input orientation set: {axis}"))
+                    DiagnosticReport::error(format!("unknown input orientation set: {axis}"))
                 })?;
                 let alternatives = compile_before_after_blocks(
                     &rewrite.before,
@@ -17069,7 +18017,6 @@ impl<'a> ProgramLowerer<'a> {
                         true,
                         guards,
                         effects.core.clone(),
-                        effects.emissions.clone(),
                         effects.ordered.clone(),
                         application,
                         role,
@@ -17081,7 +18028,10 @@ impl<'a> ProgramLowerer<'a> {
                 let directions = self
                     .directions_for_orientation_name(&direction_name.0)?
                     .ok_or_else(|| {
-                        AppError::Parse(format!("unknown orientation: {}", direction_name.0))
+                        DiagnosticReport::error(format!(
+                            "unknown orientation: {}",
+                            direction_name.0
+                        ))
                     })?;
                 let alternatives = compile_before_after_blocks(
                     &rewrite.before,
@@ -17109,7 +18059,6 @@ impl<'a> ProgramLowerer<'a> {
                         true,
                         context.guards.clone(),
                         effects.core.clone(),
-                        effects.emissions.clone(),
                         effects.ordered.clone(),
                         application,
                         role,
@@ -17120,7 +18069,7 @@ impl<'a> ProgramLowerer<'a> {
         }
     }
 
-    fn lower_effects(&self, effects: &[EffectAst]) -> Result<LoweredEffects, AppError> {
+    fn lower_effects(&self, effects: &[EffectAst]) -> Result<LoweredEffects, DiagnosticReport> {
         let mut lowered = LoweredEffects::default();
         self.lower_effects_into(effects, &mut lowered)?;
         Ok(lowered)
@@ -17130,7 +18079,7 @@ impl<'a> ProgramLowerer<'a> {
         &self,
         effects: &[EffectAst],
         lowered: &mut LoweredEffects,
-    ) -> Result<(), AppError> {
+    ) -> Result<(), DiagnosticReport> {
         for effect in effects {
             match effect {
                 EffectAst::Cancel => lowered.core.push(Effect::Cancel),
@@ -17160,25 +18109,37 @@ impl<'a> ProgramLowerer<'a> {
                 }
                 EffectAst::PlaySfx { name } => {
                     lowered
-                        .emissions
-                        .push(RuleEmission::PlaySfx { name: name.clone() });
-                    lowered
                         .ordered
                         .push(RuleEffect::PlaySfx { name: name.clone() });
                 }
+                EffectAst::PlayMusic { name } => {
+                    lowered
+                        .ordered
+                        .push(RuleEffect::PlayMusic { name: name.clone() });
+                }
+                EffectAst::PauseMusic { name } => {
+                    lowered
+                        .ordered
+                        .push(RuleEffect::PauseMusic { name: name.clone() });
+                }
+                EffectAst::ResumeMusic { name } => {
+                    lowered
+                        .ordered
+                        .push(RuleEffect::ResumeMusic { name: name.clone() });
+                }
+                EffectAst::StopMusic { name } => {
+                    lowered
+                        .ordered
+                        .push(RuleEffect::StopMusic { name: name.clone() });
+                }
                 EffectAst::Wait { milliseconds } => {
                     let milliseconds = milliseconds.unwrap_or(self.default_wait_ms);
-                    lowered.emissions.push(RuleEmission::Wait { milliseconds });
                     lowered.ordered.push(RuleEffect::Wait { milliseconds });
                 }
                 EffectAst::WaitAnimation => {
                     lowered.ordered.push(RuleEffect::WaitAnimation);
                 }
                 EffectAst::Message { text, literal } => {
-                    lowered.emissions.push(RuleEmission::Message {
-                        text: text.clone(),
-                        literal: *literal,
-                    });
                     lowered.ordered.push(RuleEffect::Message {
                         text: text.clone(),
                         literal: *literal,
@@ -17186,10 +18147,12 @@ impl<'a> ProgramLowerer<'a> {
                 }
                 EffectAst::UpdateGlobal { name, op, value } => {
                     let global = *self.global_names.get(name).ok_or_else(|| {
-                        AppError::Parse(format!("unknown global in effect: {name}"))
+                        DiagnosticReport::error(format!("unknown global in effect: {name}"))
                     })?;
                     if self.constant_globals.contains(&global) {
-                        return Err(AppError::Parse(format!("cannot update const: {name}")));
+                        return Err(DiagnosticReport::error(format!(
+                            "cannot update const: {name}"
+                        )));
                     }
                     lowered.core.push(Effect::UpdateGlobal {
                         global,
@@ -17209,27 +18172,27 @@ impl<'a> ProgramLowerer<'a> {
         direction_expanded: bool,
         guards: Vec<Guard>,
         effects: Vec<Effect>,
-        emissions: Vec<RuleEmission>,
         ordered_effects: Vec<RuleEffect>,
         application: RuleApplication,
         role: ClassifiedRuleRole,
-    ) -> Result<Vec<RuleStep>, AppError> {
+    ) -> Result<Vec<RuleStep>, DiagnosticReport> {
         let mut rules = Vec::with_capacity(alternatives.len());
         for alternative in alternatives {
-            let mut rule_emissions = emissions.clone();
+            let mut guards = guards.clone();
+            guards.extend(alternative.guards.clone());
             let mut rule_effects = ordered_effects.clone();
-            append_move_sound_emissions(
+            append_move_sound_effects(
                 &alternative.components,
                 &alternative.writes,
                 self.model_sound_triggers,
-                &mut rule_emissions,
                 &mut rule_effects,
             );
+            let mut rule_animations = Vec::new();
             if role != ClassifiedRuleRole::Visual {
-                append_tween_animation_emissions(
+                append_tween_rule_animations(
                     &alternative.writes,
                     self.animation,
-                    &mut rule_emissions,
+                    &mut rule_animations,
                 );
             }
             let compiled_components = alternative
@@ -17276,18 +18239,18 @@ impl<'a> ProgramLowerer<'a> {
                                 )?,
                             })
                         })
-                        .collect::<Result<Vec<_>, AppError>>()?;
+                        .collect::<Result<Vec<_>, DiagnosticReport>>()?;
                     Ok(PatternComponent {
                         cells,
                         gap_count: component.gap_count,
                     })
                 })
-                .collect::<Result<Vec<_>, AppError>>()?;
+                .collect::<Result<Vec<_>, DiagnosticReport>>()?;
             let compiled_writes = alternative
                 .writes
                 .iter()
                 .map(|write| resolve_write(write, direction, direction_expanded, "statement"))
-                .collect::<Result<Vec<_>, AppError>>()?;
+                .collect::<Result<Vec<_>, DiagnosticReport>>()?;
             if role == ClassifiedRuleRole::Visual {
                 validate_visual_writes(&compiled_writes, self.visual_objects)?;
             }
@@ -17297,15 +18260,15 @@ impl<'a> ProgramLowerer<'a> {
             if role == ClassifiedRuleRole::Visual {
                 self.visual_rules.push(id);
             }
-            if !rule_emissions.is_empty() {
-                self.rule_emissions.insert(id, rule_emissions);
+            if !rule_animations.is_empty() {
+                self.rule_animations.insert(id, rule_animations);
             }
             if !rule_effects.is_empty() {
                 self.rule_effects.insert(id, rule_effects);
             }
             rules.push(RuleStep::Rule(Rule {
                 id,
-                guards: guards.clone(),
+                guards,
                 application,
                 pattern: Pattern {
                     components: compiled_components,
@@ -17330,16 +18293,19 @@ fn wrap_rewrite_steps(application: RuleApplication, steps: Vec<RuleStep>) -> Vec
     }
 }
 
-fn validate_visual_effects(effects: &LoweredEffects) -> Result<(), AppError> {
-    if effects.core.is_empty() && effects.emissions.is_empty() && effects.ordered.is_empty() {
+fn validate_visual_effects(effects: &LoweredEffects) -> Result<(), DiagnosticReport> {
+    if effects.core.is_empty() && effects.ordered.is_empty() {
         return Ok(());
     }
-    Err(AppError::Parse(
+    Err(DiagnosticReport::error(
         "display block rewrites cannot use effects".to_string(),
     ))
 }
 
-fn validate_visual_writes(writes: &[WriteOp], visual_objects: &[ObjectId]) -> Result<(), AppError> {
+fn validate_visual_writes(
+    writes: &[WriteOp],
+    visual_objects: &[ObjectId],
+) -> Result<(), DiagnosticReport> {
     for write in writes {
         match write {
             WriteOp::Add { object, .. }
@@ -17369,26 +18335,26 @@ fn validate_visual_writes(writes: &[WriteOp], visual_objects: &[ObjectId]) -> Re
 fn ensure_visual_write_object(
     object: ObjectId,
     visual_objects: &[ObjectId],
-) -> Result<(), AppError> {
+) -> Result<(), DiagnosticReport> {
     if visual_objects.contains(&object) {
         return Ok(());
     }
-    Err(AppError::Parse(
+    Err(DiagnosticReport::error(
         "display block can read main objects but can only write display objects".to_string(),
     ))
 }
 
 #[derive(Clone, Debug, Default)]
 struct RuleBodyAlternative {
+    guards: Vec<Guard>,
     components: Vec<PatternComponentTemplate>,
     writes: Vec<WriteOpTemplate>,
 }
 
-fn append_move_sound_emissions(
+fn append_move_sound_effects(
     components: &[PatternComponentTemplate],
     writes: &[WriteOpTemplate],
     triggers: &[ModelSoundTrigger],
-    emissions: &mut Vec<RuleEmission>,
     ordered_effects: &mut Vec<RuleEffect>,
 ) {
     if triggers.is_empty() {
@@ -17414,55 +18380,49 @@ fn append_move_sound_emissions(
                     .iter()
                     .any(|object| trigger.objects.contains(object))
             }
-            (
-                ModelSoundTriggerKind::CantMove,
-                WriteOpTemplate::RemoveScratch {
-                    object, scratch, ..
-                },
-            ) => {
-                !moves_trigger_object
-                    && *scratch == ScratchId(0)
-                    && (object.is_empty() || trigger.objects.contains(object))
-            }
-            (
-                ModelSoundTriggerKind::CantMove,
-                WriteOpTemplate::RemoveObjectSetScratch { scratch, .. },
-            ) => !moves_trigger_object && *scratch == ScratchId(0),
             _ => false,
         });
         let matches_cantmove_intent = trigger.kind == ModelSoundTriggerKind::CantMove
             && !moves_trigger_object
             && components.iter().any(|component| {
-                component.cells.iter().any(|cell| {
-                    cell.require_scratch.iter().any(|scratch| {
-                        scratch.scratch == ScratchId(0)
-                            && (scratch.object.is_empty()
-                                || trigger.objects.contains(&scratch.object))
-                    }) || cell
-                        .require_object_set_scratch
-                        .iter()
-                        .any(|scratch| scratch.scratch == ScratchId(0))
-                })
+                component
+                    .cells
+                    .iter()
+                    .any(|cell| cell_matches_cantmove_intent(cell, trigger))
             });
         let matches_trigger = matches_trigger || matches_cantmove_intent;
         if !matches_trigger {
             continue;
         }
         let name = &trigger.sfx_name;
-        if !emissions
-            .iter()
-            .any(|emission| matches!(emission, RuleEmission::PlaySfx { name: existing } if existing == name))
-        {
-            emissions.push(RuleEmission::PlaySfx { name: name.clone() });
+        if !ordered_effects.iter().any(
+            |effect| matches!(effect, RuleEffect::PlaySfx { name: existing } if existing == name),
+        ) {
             ordered_effects.push(RuleEffect::PlaySfx { name: name.clone() });
         }
     }
 }
 
-fn append_tween_animation_emissions(
+fn cell_matches_cantmove_intent(cell: &MatchCellTemplate, trigger: &ModelSoundTrigger) -> bool {
+    cell.require_scratch
+        .iter()
+        .any(|scratch| scratch.scratch == ScratchId(0) && trigger.objects.contains(&scratch.object))
+        || cell.require_object_set_scratch.iter().any(|scratch| {
+            scratch.scratch == ScratchId(0)
+                && cell.require_object_sets.iter().any(|object_set| {
+                    object_set.binding == scratch.binding
+                        && object_set
+                            .objects
+                            .iter()
+                            .any(|object| trigger.objects.contains(object))
+                })
+        })
+}
+
+fn append_tween_rule_animations(
     writes: &[WriteOpTemplate],
     animation: &AnimationDef,
-    emissions: &mut Vec<RuleEmission>,
+    animations: &mut Vec<RuleAnimation>,
 ) {
     if !animation.tween.enabled {
         return;
@@ -17491,19 +18451,14 @@ fn append_tween_animation_emissions(
     if objects.is_empty() {
         return;
     }
-    if emissions.iter().any(|emission| {
-        matches!(
-            emission,
-            RuleEmission::Animate {
-                trigger: RuleAnimationTrigger::Move,
-                name,
-                objects: existing,
-            } if name == "tween" && existing == &objects
-        )
+    if animations.iter().any(|animation| {
+        animation.trigger == RuleAnimationTrigger::Move
+            && animation.name == "tween"
+            && animation.objects == objects
     }) {
         return;
     }
-    emissions.push(RuleEmission::Animate {
+    animations.push(RuleAnimation {
         trigger: RuleAnimationTrigger::Move,
         name: "tween".to_string(),
         objects,
@@ -17517,7 +18472,8 @@ fn parse_inline_rewrite(
     value_sets: &HashMap<String, Vec<String>>,
     maps: &HashMap<String, ValueMap>,
     object_groups: &HashMap<String, Vec<ObjectId>>,
-) -> Result<(PatternBlock, PatternBlock, Vec<EffectAst>), AppError> {
+    global_names: &HashMap<String, GlobalId>,
+) -> Result<(PatternBlock, PatternBlock, Vec<EffectAst>), DiagnosticReport> {
     let (before, after) = line
         .split_once("->")
         .ok_or_else(|| parse_error(line, "inline rewrite must contain ->"))?;
@@ -17528,6 +18484,7 @@ fn parse_inline_rewrite(
         value_sets,
         maps,
         object_groups,
+        global_names,
     )?;
     let (after, effects) = split_rewrite_effects(after.trim(), line)?;
     let after = if after.is_empty() {
@@ -17540,6 +18497,7 @@ fn parse_inline_rewrite(
             value_sets,
             maps,
             object_groups,
+            global_names,
         )?
     };
 
@@ -17549,7 +18507,7 @@ fn parse_inline_rewrite(
 fn split_rewrite_effects<'a>(
     after: &'a str,
     line: &str,
-) -> Result<(&'a str, Vec<EffectAst>), AppError> {
+) -> Result<(&'a str, Vec<EffectAst>), DiagnosticReport> {
     let Some(last_block_end) = after.rfind(']') else {
         return parse_rewrite_effect(after, line).map(|effects| ("", effects));
     };
@@ -17568,7 +18526,7 @@ pub(crate) struct ParsedRewriteEffect {
     pub(crate) semantic_tokens: Vec<semantic::SemanticToken>,
 }
 
-fn parse_rewrite_effect(suffix: &str, line: &str) -> Result<Vec<EffectAst>, AppError> {
+fn parse_rewrite_effect(suffix: &str, line: &str) -> Result<Vec<EffectAst>, DiagnosticReport> {
     let parsed = parse_rewrite_effect_with_semantic_tokens(suffix, line)?;
     debug_assert!(
         parsed
@@ -17582,7 +18540,7 @@ fn parse_rewrite_effect(suffix: &str, line: &str) -> Result<Vec<EffectAst>, AppE
 fn parse_rewrite_effect_with_semantic_tokens(
     suffix: &str,
     line: &str,
-) -> Result<ParsedRewriteEffect, AppError> {
+) -> Result<ParsedRewriteEffect, DiagnosticReport> {
     let surface = parse_surface_rewrite_effect(suffix, line)?;
     let semantic_tokens = project_surface_semantic_tokens(&surface.document.semantic_tokens);
     Ok(ParsedRewriteEffect {
@@ -17594,14 +18552,17 @@ fn parse_rewrite_effect_with_semantic_tokens(
 fn parse_surface_rewrite_effect(
     suffix: &str,
     line: &str,
-) -> Result<SurfaceRewriteEffect, AppError> {
+) -> Result<SurfaceRewriteEffect, DiagnosticReport> {
     let tokens = source_line_tokens(strip_line_comment(suffix), 0);
     let document = rewrite_effect_surface_document(&tokens);
     let effects = parse_rewrite_effect_value(suffix, line)?;
     Ok(SurfaceRewriteEffect { effects, document })
 }
 
-fn parse_rewrite_effect_value(suffix: &str, line: &str) -> Result<Vec<EffectAst>, AppError> {
+fn parse_rewrite_effect_value(
+    suffix: &str,
+    line: &str,
+) -> Result<Vec<EffectAst>, DiagnosticReport> {
     let suffix = suffix.trim();
     if suffix.strip_prefix("emit ").is_some() {
         return Err(parse_error(
@@ -17659,6 +18620,33 @@ fn parse_rewrite_effect_value(suffix: &str, line: &str) -> Result<Vec<EffectAst>
                 name: (*name).to_string(),
             }])
         }
+        ["play_music", name] => {
+            validate_qualified_identifier(name, line, "music sounds name")?;
+            Ok(vec![EffectAst::PlayMusic {
+                name: (*name).to_string(),
+            }])
+        }
+        ["pause_music"] => Ok(vec![EffectAst::PauseMusic { name: None }]),
+        ["pause_music", name] => {
+            validate_qualified_identifier(name, line, "music sounds name")?;
+            Ok(vec![EffectAst::PauseMusic {
+                name: Some((*name).to_string()),
+            }])
+        }
+        ["resume_music"] => Ok(vec![EffectAst::ResumeMusic { name: None }]),
+        ["resume_music", name] => {
+            validate_qualified_identifier(name, line, "music sounds name")?;
+            Ok(vec![EffectAst::ResumeMusic {
+                name: Some((*name).to_string()),
+            }])
+        }
+        ["stop_music"] => Ok(vec![EffectAst::StopMusic { name: None }]),
+        ["stop_music", name] => {
+            validate_qualified_identifier(name, line, "music sounds name")?;
+            Ok(vec![EffectAst::StopMusic {
+                name: Some((*name).to_string()),
+            }])
+        }
         ["set", name, op, value] if is_global_update_operator(op) => {
             Ok(vec![EffectAst::UpdateGlobal {
                 name: (*name).to_string(),
@@ -17673,12 +18661,15 @@ fn parse_rewrite_effect_value(suffix: &str, line: &str) -> Result<Vec<EffectAst>
         }]),
         _ => Err(parse_error(
             line,
-            "rewrite effect must be: cancel, win, restart, next_level, again, checkpoint, clear_checkpoint, sfx <name>, wait [duration], message <text>, set <global> <op> <value>, or <global> <op> <value> without set",
+            "rewrite effect must be: cancel, win, restart, next_level, again, checkpoint, clear_checkpoint, sfx <name>, play_music <name>, pause_music [name], resume_music [name], stop_music [name], wait [duration], message <text>, set <global> <op> <value>, or <global> <op> <value> without set",
         )),
     }
 }
 
-fn parse_simple_rewrite_effects(tokens: &[&str], line: &str) -> Result<Vec<EffectAst>, AppError> {
+fn parse_simple_rewrite_effects(
+    tokens: &[&str],
+    line: &str,
+) -> Result<Vec<EffectAst>, DiagnosticReport> {
     let mut effects = Vec::new();
     let mut index = 0;
     while index < tokens.len() {
@@ -17739,6 +18730,55 @@ fn parse_simple_rewrite_effects(tokens: &[&str], line: &str) -> Result<Vec<Effec
                 });
                 index += 2;
             }
+            "play_music" => {
+                let Some(name) = tokens.get(index + 1) else {
+                    return Err(parse_error(line, "play_music effect must include a name"));
+                };
+                validate_qualified_identifier(name, line, "music sounds name")?;
+                effects.push(EffectAst::PlayMusic {
+                    name: (*name).to_string(),
+                });
+                index += 2;
+            }
+            "pause_music" => {
+                let name = if index + 1 < tokens.len()
+                    && !is_rewrite_effect_command_token(tokens[index + 1])
+                {
+                    validate_qualified_identifier(tokens[index + 1], line, "music sounds name")?;
+                    index += 2;
+                    Some(tokens[index - 1].to_string())
+                } else {
+                    index += 1;
+                    None
+                };
+                effects.push(EffectAst::PauseMusic { name });
+            }
+            "resume_music" => {
+                let name = if index + 1 < tokens.len()
+                    && !is_rewrite_effect_command_token(tokens[index + 1])
+                {
+                    validate_qualified_identifier(tokens[index + 1], line, "music sounds name")?;
+                    index += 2;
+                    Some(tokens[index - 1].to_string())
+                } else {
+                    index += 1;
+                    None
+                };
+                effects.push(EffectAst::ResumeMusic { name });
+            }
+            "stop_music" => {
+                let name = if index + 1 < tokens.len()
+                    && !is_rewrite_effect_command_token(tokens[index + 1])
+                {
+                    validate_qualified_identifier(tokens[index + 1], line, "music sounds name")?;
+                    index += 2;
+                    Some(tokens[index - 1].to_string())
+                } else {
+                    index += 1;
+                    None
+                };
+                effects.push(EffectAst::StopMusic { name });
+            }
             "set" => {
                 let (Some(name), Some(op), Some(value)) = (
                     tokens.get(index + 1),
@@ -17774,7 +18814,7 @@ fn parse_simple_rewrite_effects(tokens: &[&str], line: &str) -> Result<Vec<Effec
             _ => {
                 return Err(parse_error(
                     line,
-                    "rewrite effect must be: cancel, win, restart, next_level, again, checkpoint, clear_checkpoint, sfx <name>, wait [duration], message <text>, set <global> <op> <value>, or <global> <op> <value> without set",
+                    "rewrite effect must be: cancel, win, restart, next_level, again, checkpoint, clear_checkpoint, sfx <name>, play_music <name>, pause_music [name], resume_music [name], stop_music [name], wait [duration], message <text>, set <global> <op> <value>, or <global> <op> <value> without set",
                 ));
             }
         }
@@ -17794,6 +18834,10 @@ fn is_rewrite_effect_command_token(token: &str) -> bool {
             | "clear_checkpoint"
             | "wait"
             | "sfx"
+            | "play_music"
+            | "pause_music"
+            | "resume_music"
+            | "stop_music"
             | "set"
     )
 }
@@ -17806,8 +18850,19 @@ fn is_builtin_rewrite_effect_text(suffix: &str) -> bool {
     matches!(
         tokens.as_slice(),
         [command] if command.eq_ignore_ascii_case("cancel") || command.eq_ignore_ascii_case("win") || command.eq_ignore_ascii_case("restart") || command.eq_ignore_ascii_case("next_level") || command.eq_ignore_ascii_case("again") || command.eq_ignore_ascii_case("checkpoint") || command.eq_ignore_ascii_case("clear_checkpoint")
-    ) || matches!(tokens.as_slice(), ["sfx", _] | ["wait"] | ["wait", _])
-        || matches!(tokens.as_slice(), [_, op, _] if is_global_update_operator(op))
+    ) || matches!(
+        tokens.as_slice(),
+        ["sfx", _]
+            | ["play_music", _]
+            | ["pause_music"]
+            | ["pause_music", _]
+            | ["resume_music"]
+            | ["resume_music", _]
+            | ["stop_music"]
+            | ["stop_music", _]
+            | ["wait"]
+            | ["wait", _]
+    ) || matches!(tokens.as_slice(), [_, op, _] if is_global_update_operator(op))
         || matches!(tokens.as_slice(), ["set", _, op, _] if is_global_update_operator(op))
 }
 
@@ -17815,7 +18870,7 @@ fn is_global_update_operator(op: &str) -> bool {
     matches!(op, "=" | "+=" | "-=" | "*=" | "/=" | "%=")
 }
 
-fn parse_global_update_op(op: &str, line: &str) -> Result<GlobalUpdateOp, AppError> {
+fn parse_global_update_op(op: &str, line: &str) -> Result<GlobalUpdateOp, DiagnosticReport> {
     match op {
         "=" => Ok(GlobalUpdateOp::Set),
         "+=" => Ok(GlobalUpdateOp::Add),
@@ -18024,8 +19079,16 @@ struct ObjectSelector {
     token: String,
     alternatives: Vec<ObjectId>,
     transform: Option<SelectorTransform>,
+    dynamic_guards: HashMap<ObjectId, Vec<DynamicSelectorGuard>>,
     scratch: Vec<ParsedScratch>,
     occurrence_label: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct DynamicSelectorGuard {
+    name: String,
+    global: GlobalId,
+    value: i64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -18118,7 +19181,8 @@ fn parse_pattern_side(
     value_sets: &HashMap<String, Vec<String>>,
     maps: &HashMap<String, ValueMap>,
     object_groups: &HashMap<String, Vec<ObjectId>>,
-) -> Result<PatternBlock, AppError> {
+    global_names: &HashMap<String, GlobalId>,
+) -> Result<PatternBlock, DiagnosticReport> {
     let mut components = Vec::new();
     let mut rest = line.trim();
 
@@ -18142,6 +19206,7 @@ fn parse_pattern_side(
                 value_sets,
                 maps,
                 object_groups,
+                global_names,
             )?,
         });
         rest = inner_start[close_index + 1..].trim_start();
@@ -18165,7 +19230,8 @@ fn parse_block_rows(
     value_sets: &HashMap<String, Vec<String>>,
     maps: &HashMap<String, ValueMap>,
     object_groups: &HashMap<String, Vec<ObjectId>>,
-) -> Result<Vec<Vec<BlockPart>>, AppError> {
+    global_names: &HashMap<String, GlobalId>,
+) -> Result<Vec<Vec<BlockPart>>, DiagnosticReport> {
     let rows = inner
         .split(';')
         .map(str::trim)
@@ -18178,9 +19244,10 @@ fn parse_block_rows(
                 value_sets,
                 maps,
                 object_groups,
+                global_names,
             )
         })
-        .collect::<Result<Vec<_>, AppError>>()?;
+        .collect::<Result<Vec<_>, DiagnosticReport>>()?;
 
     if rows.is_empty() {
         return Err(parse_error(
@@ -18196,7 +19263,7 @@ fn parse_block_rows(
 fn validate_rectangular_ellipsis_layout(
     rows: &[Vec<BlockPart>],
     line: &str,
-) -> Result<(), AppError> {
+) -> Result<(), DiagnosticReport> {
     if rows.len() <= 1
         || !rows
             .iter()
@@ -18237,7 +19304,8 @@ fn parse_block_parts(
     value_sets: &HashMap<String, Vec<String>>,
     maps: &HashMap<String, ValueMap>,
     object_groups: &HashMap<String, Vec<ObjectId>>,
-) -> Result<Vec<BlockPart>, AppError> {
+    global_names: &HashMap<String, GlobalId>,
+) -> Result<Vec<BlockPart>, DiagnosticReport> {
     let parts = inner
         .split('|')
         .map(str::trim)
@@ -18253,10 +19321,11 @@ fn parse_block_parts(
                     value_sets,
                     maps,
                     object_groups,
+                    global_names,
                 )?))
             }
         })
-        .collect::<Result<Vec<_>, AppError>>()?;
+        .collect::<Result<Vec<_>, DiagnosticReport>>()?;
 
     if parts.is_empty() {
         return Err(parse_error(
@@ -18276,7 +19345,8 @@ fn parse_block_cell(
     value_sets: &HashMap<String, Vec<String>>,
     maps: &HashMap<String, ValueMap>,
     object_groups: &HashMap<String, Vec<ObjectId>>,
-) -> Result<BlockCell, AppError> {
+    global_names: &HashMap<String, GlobalId>,
+) -> Result<BlockCell, DiagnosticReport> {
     let mut parsed = BlockCell::default();
     let cell_tokens = split_cell_tokens(cell, line)?;
     let mut tokens = cell_tokens.iter().map(String::as_str).peekable();
@@ -18291,6 +19361,7 @@ fn parse_block_cell(
                 value_sets,
                 maps,
                 object_groups,
+                global_names,
             )?);
             continue;
         }
@@ -18321,6 +19392,7 @@ fn parse_block_cell(
                 value_sets,
                 maps,
                 object_groups,
+                global_names,
             )?;
             selector
                 .scratch
@@ -18352,6 +19424,7 @@ fn parse_block_cell(
                 value_sets,
                 maps,
                 object_groups,
+                global_names,
             )?);
         } else {
             parsed.require.push(resolve_object_selector(
@@ -18362,6 +19435,7 @@ fn parse_block_cell(
                 value_sets,
                 maps,
                 object_groups,
+                global_names,
             )?);
         }
     }
@@ -18372,7 +19446,7 @@ fn parse_block_cell(
 fn display_selector_token<'a, I>(
     tokens: &mut std::iter::Peekable<I>,
     line: &str,
-) -> Result<&'a str, AppError>
+) -> Result<&'a str, DiagnosticReport>
 where
     I: Iterator<Item = &'a str>,
 {
@@ -18388,7 +19462,7 @@ where
 fn parse_cell_scratch_token(
     token: &str,
     line: &str,
-) -> Result<Option<Vec<ParsedScratch>>, AppError> {
+) -> Result<Option<Vec<ParsedScratch>>, DiagnosticReport> {
     let Some(inner) = token
         .strip_prefix('{')
         .and_then(|rest| rest.strip_suffix('}'))
@@ -18406,7 +19480,7 @@ fn anonymous_scratch_for_token(token: &str) -> Option<AnonymousScratch> {
     }
 }
 
-fn split_cell_tokens(cell: &str, line: &str) -> Result<Vec<String>, AppError> {
+fn split_cell_tokens(cell: &str, line: &str) -> Result<Vec<String>, DiagnosticReport> {
     puzzle_authoring::split_cell_tokens(cell).map_err(|error| match error {
         puzzle_authoring::CellTokenError::UnmatchedCloseBrace => {
             parse_error(line, "scratch block has unmatched }")
@@ -18425,7 +19499,8 @@ fn resolve_object_selector(
     value_sets: &HashMap<String, Vec<String>>,
     maps: &HashMap<String, ValueMap>,
     object_groups: &HashMap<String, Vec<ObjectId>>,
-) -> Result<ObjectSelector, AppError> {
+    global_names: &HashMap<String, GlobalId>,
+) -> Result<ObjectSelector, DiagnosticReport> {
     let (selector, scratch) = split_selector_scratch(selector, line)?;
     let (selector, occurrence_label) = split_selector_occurrence_label(selector, line)?;
     let token = labeled_selector_token(selector, occurrence_label.as_deref());
@@ -18436,6 +19511,7 @@ fn resolve_object_selector(
                 token,
                 alternatives: vec![object],
                 transform: None,
+                dynamic_guards: HashMap::new(),
                 scratch,
                 occurrence_label,
             });
@@ -18447,6 +19523,7 @@ fn resolve_object_selector(
             token,
             alternatives: objects.clone(),
             transform: None,
+            dynamic_guards: HashMap::new(),
             scratch,
             occurrence_label,
         });
@@ -18481,6 +19558,9 @@ fn resolve_object_selector(
             }
             let expr = parse_value_expr(value, line)?;
             if expr == ValueExpr::Binding(axis.clone()) {
+                if global_names.contains_key(axis) {
+                    return Err(ambiguous_selector_tag_error(axis, parts[0], axis, line));
+                }
                 source_token_parts.push(axis.clone());
                 Ok(None)
             } else if let ValueExpr::MapCall { arg, .. } = &expr {
@@ -18506,16 +19586,28 @@ fn resolve_object_selector(
                 }))
             } else if let ValueExpr::Binding(name) = &expr {
                 let axis_values = schema_axis_values(schema, index)?;
-                if axis_values.contains(name) && value_sets.contains_key(name) {
+                let names_axis_value = axis_values.contains(name);
+                let names_value_set = value_sets.contains_key(name);
+                let global = global_names.get(name).copied();
+                if (names_axis_value && names_value_set)
+                    || (global.is_some() && (names_axis_value || names_value_set))
+                {
                     return Err(ambiguous_selector_tag_error(name, parts[0], axis, line));
                 }
                 if let Some(values) = value_sets.get(name) {
                     validate_selector_subset(name, values, &axis_values, parts[0], axis, line)?;
                     source_token_parts.push(name.clone());
                     Ok(Some(SelectorConstraint::ValueSet(values.clone())))
-                } else if axis_values.contains(name) {
+                } else if names_axis_value {
                     source_token_parts.push(name.clone());
                     Ok(Some(SelectorConstraint::Fixed(name.clone())))
+                } else if let Some(global) = global {
+                    source_token_parts.push(name.clone());
+                    Ok(Some(SelectorConstraint::DynamicGlobal {
+                        axis_index: index,
+                        name: name.clone(),
+                        global,
+                    }))
                 } else {
                     source_token_parts.push(name.clone());
                     Ok(Some(SelectorConstraint::Fixed(name.clone())))
@@ -18525,7 +19617,7 @@ fn resolve_object_selector(
                 Ok(Some(SelectorConstraint::Fixed((*value).to_string())))
             }
         })
-        .collect::<Result<Vec<_>, AppError>>()?;
+        .collect::<Result<Vec<_>, DiagnosticReport>>()?;
 
     let alternatives = schema
         .variants
@@ -18539,7 +19631,9 @@ fn resolve_object_selector(
                     Some(SelectorConstraint::ValueSet(values)) => {
                         values.contains(&variant.values[index])
                     }
-                    Some(SelectorConstraint::Mapped { .. }) | None => true,
+                    Some(SelectorConstraint::Mapped { .. })
+                    | Some(SelectorConstraint::DynamicGlobal { .. })
+                    | None => true,
                 })
         })
         .map(|variant| variant.object)
@@ -18587,15 +19681,18 @@ fn resolve_object_selector(
                 source_token,
                 mapped_objects,
             }),
+            dynamic_guards: HashMap::new(),
             scratch,
             occurrence_label,
         });
     }
 
+    let dynamic_guards = dynamic_selector_guards(&constraints, schema, line)?;
     Ok(ObjectSelector {
         token,
         alternatives,
         transform: None,
+        dynamic_guards,
         scratch,
         occurrence_label,
     })
@@ -18604,7 +19701,7 @@ fn resolve_object_selector(
 fn split_selector_occurrence_label<'a>(
     selector: &'a str,
     line: &str,
-) -> Result<(&'a str, Option<String>), AppError> {
+) -> Result<(&'a str, Option<String>), DiagnosticReport> {
     let Some((base, label)) = selector.split_once('#') else {
         return Ok((selector, None));
     };
@@ -18636,7 +19733,7 @@ fn labeled_selector_token(selector: &str, occurrence_label: Option<&str>) -> Str
 fn split_selector_scratch<'a>(
     selector: &'a str,
     line: &str,
-) -> Result<(&'a str, Vec<ParsedScratch>), AppError> {
+) -> Result<(&'a str, Vec<ParsedScratch>), DiagnosticReport> {
     let Some(open_index) = selector.find('{') else {
         return Ok((selector, Vec::new()));
     };
@@ -18654,7 +19751,7 @@ fn split_selector_scratch<'a>(
     Ok((base, attrs))
 }
 
-fn parse_selector_scratch(attrs: &str, line: &str) -> Result<Vec<ParsedScratch>, AppError> {
+fn parse_selector_scratch(attrs: &str, line: &str) -> Result<Vec<ParsedScratch>, DiagnosticReport> {
     let mut parsed = Vec::new();
     let mut tokens = attrs.split_whitespace().peekable();
     while let Some(token) = tokens.next() {
@@ -18682,7 +19779,7 @@ fn parse_selector_scratch(attrs: &str, line: &str) -> Result<Vec<ParsedScratch>,
     Ok(parsed)
 }
 
-fn validate_scratch_name(value: &str, line: &str) -> Result<(), AppError> {
+fn validate_scratch_name(value: &str, line: &str) -> Result<(), DiagnosticReport> {
     let mut parts = value.split(':');
     let Some(first) = parts.next() else {
         return Err(parse_error(
@@ -18703,7 +19800,58 @@ fn validate_scratch_name(value: &str, line: &str) -> Result<(), AppError> {
 enum SelectorConstraint {
     Fixed(String),
     ValueSet(Vec<String>),
-    Mapped { axis_index: usize, expr: ValueExpr },
+    Mapped {
+        axis_index: usize,
+        expr: ValueExpr,
+    },
+    DynamicGlobal {
+        axis_index: usize,
+        name: String,
+        global: GlobalId,
+    },
+}
+
+fn dynamic_selector_guards(
+    constraints: &[Option<SelectorConstraint>],
+    schema: &ObjectSchema,
+    line: &str,
+) -> Result<HashMap<ObjectId, Vec<DynamicSelectorGuard>>, DiagnosticReport> {
+    if !constraints
+        .iter()
+        .any(|constraint| matches!(constraint, Some(SelectorConstraint::DynamicGlobal { .. })))
+    {
+        return Ok(HashMap::new());
+    }
+
+    let mut guards = HashMap::<ObjectId, Vec<DynamicSelectorGuard>>::new();
+    for variant in &schema.variants {
+        let mut variant_guards = Vec::new();
+        for constraint in constraints.iter().flatten() {
+            let SelectorConstraint::DynamicGlobal {
+                axis_index,
+                name,
+                global,
+            } = constraint
+            else {
+                continue;
+            };
+            let value = variant.values.get(*axis_index).ok_or_else(|| {
+                DiagnosticReport::error("internal schema variant missing tag value".to_string())
+            })?;
+            variant_guards.push(DynamicSelectorGuard {
+                name: name.clone(),
+                global: *global,
+                value: parse_global_value(value, line).map_err(|_| {
+                    parse_error(
+                        line,
+                        "dynamic selector tag slot values must be true, false, or integers",
+                    )
+                })?,
+            });
+        }
+        guards.insert(variant.object, variant_guards);
+    }
+    Ok(guards)
 }
 
 fn validate_schema_selector_arity(
@@ -18711,7 +19859,7 @@ fn validate_schema_selector_arity(
     schema: &ObjectSchema,
     line: &str,
     label: &str,
-) -> Result<(), AppError> {
+) -> Result<(), DiagnosticReport> {
     let slot_count = parts.len().saturating_sub(1);
     if parts.iter().skip(1).any(|part| *part == "_") {
         return Err(parse_error(
@@ -18748,11 +19896,14 @@ fn schema_selector_part<'a>(
     parts.get(axis_index + 1).copied()
 }
 
-fn schema_axis_values(schema: &ObjectSchema, axis_index: usize) -> Result<Vec<String>, AppError> {
+fn schema_axis_values(
+    schema: &ObjectSchema,
+    axis_index: usize,
+) -> Result<Vec<String>, DiagnosticReport> {
     let mut values = Vec::new();
     for variant in &schema.variants {
         let value = variant.values.get(axis_index).ok_or_else(|| {
-            AppError::Parse("internal schema variant missing tag value".to_string())
+            DiagnosticReport::error("internal schema variant missing tag value".to_string())
         })?;
         if !values.contains(value) {
             values.push(value.clone());
@@ -18768,7 +19919,7 @@ fn validate_selector_subset(
     family: &str,
     axis: &str,
     line: &str,
-) -> Result<(), AppError> {
+) -> Result<(), DiagnosticReport> {
     for value in values {
         if !axis_values.contains(value) {
             return Err(parse_error(
@@ -18782,7 +19933,12 @@ fn validate_selector_subset(
     Ok(())
 }
 
-fn ambiguous_selector_tag_error(tag: &str, family: &str, axis: &str, line: &str) -> AppError {
+fn ambiguous_selector_tag_error(
+    tag: &str,
+    family: &str,
+    axis: &str,
+    line: &str,
+) -> DiagnosticReport {
     parse_error(
         line,
         &format!(
@@ -18804,7 +19960,7 @@ fn compile_before_after_blocks(
     scratch_names: &HashMap<String, ScratchDef>,
     _value_sets: &HashMap<String, Vec<String>>,
     line: &str,
-) -> Result<Vec<RuleBodyAlternative>, AppError> {
+) -> Result<Vec<RuleBodyAlternative>, DiagnosticReport> {
     if before.components.len() != after.components.len() {
         return Err(parse_error(
             line,
@@ -18828,135 +19984,177 @@ fn compile_before_after_blocks(
     let mut alternatives = Vec::new();
 
     for (before, after) in expanded_blocks {
-        let before_occurrences = collect_before_occurrences(&before);
-        reject_duplicate_labeled_occurrences(&before_occurrences, line)?;
-        let mut assignments =
-            expand_selector_assignments(&before_occurrences, object_layers, line)?;
-        if before_occurrences
-            .iter()
-            .any(|occurrence| occurrence.occurrence_label.is_some())
-        {
-            assignments.reverse();
-        }
-        let before_by_token = before_occurrences_by_token(&before_occurrences);
-        'assignment_loop: for assignment in assignments {
-            let mut components = Vec::new();
-            let mut writes = Vec::new();
-            let mut before_token_counts = HashMap::<String, usize>::new();
-            let mut after_token_counts = HashMap::<String, usize>::new();
-            let mut before_placements = HashMap::<OccurrenceKey, OccurrencePlacement>::new();
-            let mut after_placements = HashMap::<OccurrenceKey, OccurrencePlacement>::new();
-            let mut duplicate_after_keys = HashSet::<OccurrenceKey>::new();
-
-            for (component_index, (before_component, after_component)) in
-                before.components.iter().zip(&after.components).enumerate()
+        let dynamic_blocks = expand_dynamic_selector_blocks(&before, &after);
+        for (dynamic_guards, before, after) in dynamic_blocks {
+            let before_occurrences = collect_before_occurrences(&before);
+            reject_duplicate_labeled_occurrences(&before_occurrences, line)?;
+            let mut assignments =
+                expand_selector_assignments(&before_occurrences, object_layers, line)?;
+            if before_occurrences
+                .iter()
+                .any(|occurrence| occurrence.occurrence_label.is_some())
             {
-                let component_index = component_index as u16;
-                let mut component_cells = Vec::new();
-                let shared_gap_indices = rectangular_shared_gap_indices(before_component);
-                let mut next_gap_index = shared_gap_indices.as_ref().map_or(0, |indices| {
-                    indices.iter().filter(|index| index.is_some()).count() as u16
-                });
+                assignments.reverse();
+            }
+            let before_by_token = before_occurrences_by_token(&before_occurrences);
+            'assignment_loop: for assignment in assignments {
+                let mut components = Vec::new();
+                let mut writes = Vec::new();
+                let mut before_token_counts = HashMap::<String, usize>::new();
+                let mut after_token_counts = HashMap::<String, usize>::new();
+                let mut before_placements = HashMap::<OccurrenceKey, OccurrencePlacement>::new();
+                let mut after_placements = HashMap::<OccurrenceKey, OccurrencePlacement>::new();
+                let mut duplicate_after_keys = HashSet::<OccurrenceKey>::new();
 
-                for (y, (before_row, after_row)) in before_component
-                    .rows
-                    .iter()
-                    .zip(&after_component.rows)
-                    .enumerate()
+                for (component_index, (before_component, after_component)) in
+                    before.components.iter().zip(&after.components).enumerate()
                 {
-                    let mut concrete_x = 0_i16;
-                    let mut active_gaps = Vec::<u16>::new();
+                    let component_index = component_index as u16;
+                    let mut component_cells = Vec::new();
+                    let shared_gap_indices = rectangular_shared_gap_indices(before_component);
+                    let mut next_gap_index = shared_gap_indices.as_ref().map_or(0, |indices| {
+                        indices.iter().filter(|index| index.is_some()).count() as u16
+                    });
 
-                    for (part_index, (before_part, after_part)) in
-                        before_row.iter().zip(after_row).enumerate()
+                    for (y, (before_row, after_row)) in before_component
+                        .rows
+                        .iter()
+                        .zip(&after_component.rows)
+                        .enumerate()
                     {
-                        if matches!(before_part, BlockPart::Ellipsis) {
-                            let gap_index = shared_gap_indices
-                                .as_ref()
-                                .and_then(|indices| indices.get(part_index).copied().flatten())
-                                .unwrap_or_else(|| {
-                                    let gap_index = next_gap_index;
-                                    next_gap_index += 1;
-                                    gap_index
-                                });
-                            active_gaps.push(gap_index);
-                            continue;
-                        }
+                        let mut concrete_x = 0_i16;
+                        let mut active_gaps = Vec::<u16>::new();
 
-                        let (BlockPart::Cell(before_cell), BlockPart::Cell(after_cell)) =
-                            (before_part, after_part)
-                        else {
-                            unreachable!(
-                                "block_shapes_match already validated matching part kinds"
+                        for (part_index, (before_part, after_part)) in
+                            before_row.iter().zip(after_row).enumerate()
+                        {
+                            if matches!(before_part, BlockPart::Ellipsis) {
+                                let gap_index = shared_gap_indices
+                                    .as_ref()
+                                    .and_then(|indices| indices.get(part_index).copied().flatten())
+                                    .unwrap_or_else(|| {
+                                        let gap_index = next_gap_index;
+                                        next_gap_index += 1;
+                                        gap_index
+                                    });
+                                active_gaps.push(gap_index);
+                                continue;
+                            }
+
+                            let (BlockPart::Cell(before_cell), BlockPart::Cell(after_cell)) =
+                                (before_part, after_part)
+                            else {
+                                unreachable!(
+                                    "block_shapes_match already validated matching part kinds"
+                                );
+                            };
+                            let offset = OffsetTemplate {
+                                oriented_x: concrete_x,
+                                oriented_y: y as i16,
+                                gap_terms: active_gaps.clone(),
+                            };
+                            let before_occurrences = block_cell_object_occurrences(
+                                before_cell,
+                                &assignment,
+                                &before_by_token,
+                                &mut before_token_counts,
+                                line,
+                            )?;
+                            let mut after_occurrences = block_cell_object_occurrences(
+                                after_cell,
+                                &assignment,
+                                &before_by_token,
+                                &mut after_token_counts,
+                                line,
+                            )?;
+                            prefer_same_cell_occurrence_keys(
+                                &before_occurrences,
+                                &mut after_occurrences,
                             );
-                        };
-                        let offset = OffsetTemplate {
-                            oriented_x: concrete_x,
-                            oriented_y: y as i16,
-                            gap_terms: active_gaps.clone(),
-                        };
-                        let before_occurrences = block_cell_object_occurrences(
-                            before_cell,
-                            &assignment,
-                            &before_by_token,
-                            &mut before_token_counts,
-                            line,
-                        )?;
-                        let mut after_occurrences = block_cell_object_occurrences(
-                            after_cell,
-                            &assignment,
-                            &before_by_token,
-                            &mut after_token_counts,
-                            line,
-                        )?;
-                        prefer_same_cell_occurrence_keys(
-                            &before_occurrences,
-                            &mut after_occurrences,
-                        );
-                        if !validate_same_layer_cell_occurrences(
-                            &before_occurrences,
-                            object_layers,
-                            line,
-                        )? {
-                            continue 'assignment_loop;
-                        }
-                        if !validate_same_layer_cell_occurrences(
-                            &after_occurrences,
-                            object_layers,
-                            line,
-                        )? {
-                            continue 'assignment_loop;
-                        }
-                        let mut before_objects =
-                            possible_objects_for_occurrences(&before_occurrences);
-                        let mut after_objects =
-                            possible_objects_for_occurrences(&after_occurrences);
-                        let before_scratch = block_cell_scratch(
-                            before_cell,
-                            &before_occurrences,
-                            scratch_names,
-                            line,
-                        )?;
-                        let after_scratch = block_cell_scratch(
-                            after_cell,
-                            &after_occurrences,
-                            scratch_names,
-                            line,
-                        )?;
-                        dedup_objects(&mut before_objects);
-                        dedup_objects(&mut after_objects);
-                        let require_objects = concrete_objects_for_occurrences(&before_occurrences);
-                        let require_object_sets = object_sets_for_occurrences(&before_occurrences);
+                            if !validate_same_layer_cell_occurrences(
+                                &before_occurrences,
+                                object_layers,
+                                line,
+                            )? {
+                                continue 'assignment_loop;
+                            }
+                            if !validate_same_layer_cell_occurrences(
+                                &after_occurrences,
+                                object_layers,
+                                line,
+                            )? {
+                                continue 'assignment_loop;
+                            }
+                            let mut before_objects =
+                                possible_objects_for_occurrences(&before_occurrences);
+                            let mut after_objects =
+                                possible_objects_for_occurrences(&after_occurrences);
+                            let before_scratch = block_cell_scratch(
+                                before_cell,
+                                &before_occurrences,
+                                scratch_names,
+                                line,
+                            )?;
+                            let after_scratch = block_cell_scratch(
+                                after_cell,
+                                &after_occurrences,
+                                scratch_names,
+                                line,
+                            )?;
+                            dedup_objects(&mut before_objects);
+                            dedup_objects(&mut after_objects);
+                            let require_objects =
+                                concrete_objects_for_occurrences(&before_occurrences);
+                            let require_object_sets =
+                                object_sets_for_occurrences(&before_occurrences);
 
-                        for occurrence in &before_occurrences {
-                            if let Some(key) = &occurrence.key {
-                                before_placements.insert(
-                                    key.clone(),
-                                    OccurrencePlacement {
+                            for occurrence in &before_occurrences {
+                                if let Some(key) = &occurrence.key {
+                                    before_placements.insert(
+                                        key.clone(),
+                                        OccurrencePlacement {
+                                            component: component_index,
+                                            offset: offset.clone(),
+                                            matched: occurrence.matched.clone(),
+                                            require_scratch: before_scratch
+                                                .require
+                                                .iter()
+                                                .filter(|attr| {
+                                                    occurrence
+                                                        .matched
+                                                        .possible_objects()
+                                                        .contains(&attr.object)
+                                                })
+                                                .cloned()
+                                                .collect(),
+                                            require_object_set_scratch: before_scratch
+                                                .require_object_set
+                                                .iter()
+                                                .filter(|attr| {
+                                                    matches!(
+                                                        &occurrence.matched,
+                                                        ResolvedObjectMatch::ObjectSet {
+                                                            binding,
+                                                            ..
+                                                        } if *binding == attr.binding
+                                                    )
+                                                })
+                                                .cloned()
+                                                .collect(),
+                                        },
+                                    );
+                                }
+                            }
+                            for occurrence in &after_occurrences {
+                                if let Some(key) = &occurrence.key {
+                                    if duplicate_after_keys.contains(key) {
+                                        continue;
+                                    }
+                                    let placement = OccurrencePlacement {
                                         component: component_index,
                                         offset: offset.clone(),
                                         matched: occurrence.matched.clone(),
-                                        require_scratch: before_scratch
+                                        require_scratch: after_scratch
                                             .require
                                             .iter()
                                             .filter(|attr| {
@@ -18967,7 +20165,7 @@ fn compile_before_after_blocks(
                                             })
                                             .cloned()
                                             .collect(),
-                                        require_object_set_scratch: before_scratch
+                                        require_object_set_scratch: after_scratch
                                             .require_object_set
                                             .iter()
                                             .filter(|attr| {
@@ -18981,213 +20179,331 @@ fn compile_before_after_blocks(
                                             })
                                             .cloned()
                                             .collect(),
-                                    },
-                                );
-                            }
-                        }
-                        for occurrence in &after_occurrences {
-                            if let Some(key) = &occurrence.key {
-                                if duplicate_after_keys.contains(key) {
-                                    continue;
+                                    };
+                                    if after_placements.insert(key.clone(), placement).is_some() {
+                                        after_placements.remove(key);
+                                        duplicate_after_keys.insert(key.clone());
+                                    }
                                 }
-                                let placement = OccurrencePlacement {
+                            }
+                            let mut forbid_objects = block_cell_forbid_objects(before_cell);
+                            forbid_objects.extend(implicit_layer_forbids(
+                                &before_objects,
+                                &after_objects,
+                                object_layers,
+                                &occupancy_objects,
+                            ));
+                            dedup_objects(&mut forbid_objects);
+
+                            component_cells.push(MatchCellTemplate {
+                                offset: offset.clone(),
+                                require_objects,
+                                require_object_sets,
+                                forbid_objects,
+                                require_scratch: before_scratch.require.clone(),
+                                require_object_set_scratch: before_scratch
+                                    .require_object_set
+                                    .clone(),
+                                forbid_scratch: before_scratch.forbid.clone(),
+                                forbid_object_set_scratch: before_scratch.forbid_object_set.clone(),
+                            });
+
+                            let before_object_set_objects =
+                                object_set_objects_for_occurrences(&before_occurrences);
+                            let after_object_set_objects =
+                                object_set_objects_for_occurrences(&after_occurrences);
+
+                            for object in before_objects.iter().filter(|object| {
+                                !after_objects.contains(object)
+                                    && !before_object_set_objects.contains(object)
+                            }) {
+                                writes.push(WriteOpTemplate::Remove {
                                     component: component_index,
                                     offset: offset.clone(),
-                                    matched: occurrence.matched.clone(),
-                                    require_scratch: after_scratch
-                                        .require
-                                        .iter()
-                                        .filter(|attr| {
-                                            occurrence
-                                                .matched
-                                                .possible_objects()
-                                                .contains(&attr.object)
-                                        })
-                                        .cloned()
-                                        .collect(),
-                                    require_object_set_scratch: after_scratch
-                                        .require_object_set
-                                        .iter()
-                                        .filter(|attr| {
-                                            matches!(
-                                                &occurrence.matched,
-                                                ResolvedObjectMatch::ObjectSet {
-                                                    binding,
-                                                    ..
-                                                } if *binding == attr.binding
-                                            )
-                                        })
-                                        .cloned()
-                                        .collect(),
-                                };
-                                if after_placements.insert(key.clone(), placement).is_some() {
-                                    after_placements.remove(key);
-                                    duplicate_after_keys.insert(key.clone());
-                                }
+                                    object: *object,
+                                });
                             }
-                        }
-                        let mut forbid_objects = block_cell_forbid_objects(before_cell);
-                        forbid_objects.extend(implicit_layer_forbids(
-                            &before_objects,
-                            &after_objects,
-                            object_layers,
-                            &occupancy_objects,
-                        ));
-                        dedup_objects(&mut forbid_objects);
 
-                        component_cells.push(MatchCellTemplate {
-                            offset: offset.clone(),
-                            require_objects,
-                            require_object_sets,
-                            forbid_objects,
-                            require_scratch: before_scratch.require.clone(),
-                            require_object_set_scratch: before_scratch.require_object_set.clone(),
-                            forbid_scratch: before_scratch.forbid.clone(),
-                            forbid_object_set_scratch: before_scratch.forbid_object_set.clone(),
-                        });
+                            for object in after_objects.iter().filter(|object| {
+                                !before_objects.contains(object)
+                                    && !after_object_set_objects.contains(object)
+                            }) {
+                                writes.push(WriteOpTemplate::Add {
+                                    component: component_index,
+                                    offset: offset.clone(),
+                                    object: *object,
+                                });
+                            }
+                            append_object_set_presence_writes(
+                                component_index,
+                                &offset,
+                                &before_occurrences,
+                                &after_occurrences,
+                                &mut writes,
+                            );
 
-                        let before_object_set_objects =
-                            object_set_objects_for_occurrences(&before_occurrences);
-                        let after_object_set_objects =
-                            object_set_objects_for_occurrences(&after_occurrences);
+                            for attr in scratch_to_set(
+                                &after_scratch.require,
+                                &before_scratch.require,
+                                line,
+                            )? {
+                                writes.push(WriteOpTemplate::SetScratch {
+                                    component: component_index,
+                                    offset: offset.clone(),
+                                    object: attr.object,
+                                    scratch: attr.scratch,
+                                    value: attr.value.clone(),
+                                });
+                            }
+                            for attr in scratch_to_set_object_set(
+                                &after_scratch.require_object_set,
+                                &before_scratch.require_object_set,
+                                line,
+                            )? {
+                                writes.push(WriteOpTemplate::SetObjectSetScratch {
+                                    component: component_index,
+                                    offset: offset.clone(),
+                                    binding: attr.binding,
+                                    scratch: attr.scratch,
+                                    value: attr.value.clone(),
+                                });
+                            }
 
-                        for object in before_objects.iter().filter(|object| {
-                            !after_objects.contains(object)
-                                && !before_object_set_objects.contains(object)
-                        }) {
-                            writes.push(WriteOpTemplate::Remove {
-                                component: component_index,
-                                offset: offset.clone(),
-                                object: *object,
-                            });
-                        }
-
-                        for object in after_objects.iter().filter(|object| {
-                            !before_objects.contains(object)
-                                && !after_object_set_objects.contains(object)
-                        }) {
-                            writes.push(WriteOpTemplate::Add {
-                                component: component_index,
-                                offset: offset.clone(),
-                                object: *object,
-                            });
-                        }
-                        append_object_set_presence_writes(
-                            component_index,
-                            &offset,
-                            &before_occurrences,
-                            &after_occurrences,
-                            &mut writes,
-                        );
-
-                        for attr in
-                            scratch_to_set(&after_scratch.require, &before_scratch.require, line)?
-                        {
-                            writes.push(WriteOpTemplate::SetScratch {
-                                component: component_index,
-                                offset: offset.clone(),
-                                object: attr.object,
-                                scratch: attr.scratch,
-                                value: attr.value.clone(),
-                            });
-                        }
-                        for attr in scratch_to_set_object_set(
-                            &after_scratch.require_object_set,
-                            &before_scratch.require_object_set,
-                            line,
-                        )? {
-                            writes.push(WriteOpTemplate::SetObjectSetScratch {
-                                component: component_index,
-                                offset: offset.clone(),
-                                binding: attr.binding,
-                                scratch: attr.scratch,
-                                value: attr.value.clone(),
-                            });
-                        }
-
-                        for attr in
-                            scratch_to_remove(&before_scratch.require, &after_scratch.require)
-                                .into_iter()
-                                .filter(|attr| {
-                                    attr.object.is_empty() || after_objects.contains(&attr.object)
+                            for attr in
+                                scratch_to_remove(&before_scratch.require, &after_scratch.require)
+                                    .into_iter()
+                                    .filter(|attr| {
+                                        attr.object.is_empty()
+                                            || after_objects.contains(&attr.object)
+                                    })
+                            {
+                                writes.push(WriteOpTemplate::RemoveScratch {
+                                    component: component_index,
+                                    offset: offset.clone(),
+                                    object: attr.object,
+                                    scratch: attr.scratch,
+                                    value: attr.value.clone(),
+                                    match_value: attr.match_value,
+                                });
+                            }
+                            for attr in scratch_to_remove_object_set(
+                                &before_scratch.require_object_set,
+                                &after_scratch.require_object_set,
+                            )
+                            .into_iter()
+                            .filter(|attr| {
+                                after_occurrences.iter().any(|occurrence| {
+                                    matches!(
+                                        &occurrence.matched,
+                                        ResolvedObjectMatch::ObjectSet { binding, .. }
+                                            if *binding == attr.binding
+                                    )
                                 })
-                        {
-                            writes.push(WriteOpTemplate::RemoveScratch {
-                                component: component_index,
-                                offset: offset.clone(),
-                                object: attr.object,
-                                scratch: attr.scratch,
-                                value: attr.value.clone(),
-                                match_value: attr.match_value,
-                            });
-                        }
-                        for attr in scratch_to_remove_object_set(
-                            &before_scratch.require_object_set,
-                            &after_scratch.require_object_set,
-                        )
-                        .into_iter()
-                        .filter(|attr| {
-                            after_occurrences.iter().any(|occurrence| {
-                                matches!(
-                                    &occurrence.matched,
-                                    ResolvedObjectMatch::ObjectSet { binding, .. }
-                                        if *binding == attr.binding
-                                )
-                            })
-                        }) {
-                            writes.push(WriteOpTemplate::RemoveObjectSetScratch {
-                                component: component_index,
-                                offset: offset.clone(),
-                                binding: attr.binding,
-                                scratch: attr.scratch,
-                                value: attr.value.clone(),
-                                match_value: attr.match_value,
-                            });
-                        }
+                            }) {
+                                writes.push(WriteOpTemplate::RemoveObjectSetScratch {
+                                    component: component_index,
+                                    offset: offset.clone(),
+                                    binding: attr.binding,
+                                    scratch: attr.scratch,
+                                    value: attr.value.clone(),
+                                    match_value: attr.match_value,
+                                });
+                            }
 
-                        for attr in &after_scratch.forbid {
-                            writes.push(WriteOpTemplate::RemoveScratch {
-                                component: component_index,
-                                offset: offset.clone(),
-                                object: attr.object,
-                                scratch: attr.scratch,
-                                value: attr.value.clone(),
-                                match_value: attr.match_value,
-                            });
-                        }
-                        for attr in &after_scratch.forbid_object_set {
-                            writes.push(WriteOpTemplate::RemoveObjectSetScratch {
-                                component: component_index,
-                                offset: offset.clone(),
-                                binding: attr.binding,
-                                scratch: attr.scratch,
-                                value: attr.value.clone(),
-                                match_value: attr.match_value,
-                            });
-                        }
+                            for attr in &after_scratch.forbid {
+                                writes.push(WriteOpTemplate::RemoveScratch {
+                                    component: component_index,
+                                    offset: offset.clone(),
+                                    object: attr.object,
+                                    scratch: attr.scratch,
+                                    value: attr.value.clone(),
+                                    match_value: attr.match_value,
+                                });
+                            }
+                            for attr in &after_scratch.forbid_object_set {
+                                writes.push(WriteOpTemplate::RemoveObjectSetScratch {
+                                    component: component_index,
+                                    offset: offset.clone(),
+                                    binding: attr.binding,
+                                    scratch: attr.scratch,
+                                    value: attr.value.clone(),
+                                    match_value: attr.match_value,
+                                });
+                            }
 
-                        concrete_x += 1;
+                            concrete_x += 1;
+                        }
                     }
+
+                    components.push(PatternComponentTemplate {
+                        cells: component_cells,
+                        gap_count: next_gap_index,
+                    });
                 }
 
-                components.push(PatternComponentTemplate {
-                    cells: component_cells,
-                    gap_count: next_gap_index,
+                writes = preserve_moved_occurrence_scratch(
+                    writes,
+                    &before_placements,
+                    &after_placements,
+                    line,
+                )?;
+
+                alternatives.push(RuleBodyAlternative {
+                    guards: dynamic_guards.clone(),
+                    components,
+                    writes,
                 });
             }
-
-            writes = preserve_moved_occurrence_scratch(
-                writes,
-                &before_placements,
-                &after_placements,
-                line,
-            )?;
-
-            alternatives.push(RuleBodyAlternative { components, writes });
         }
     }
 
     Ok(alternatives)
+}
+
+fn expand_dynamic_selector_blocks(
+    before: &PatternBlock,
+    after: &PatternBlock,
+) -> Vec<(Vec<Guard>, PatternBlock, PatternBlock)> {
+    let mut branches = vec![(Vec::new(), before.clone(), after.clone())];
+    loop {
+        let mut expanded = Vec::new();
+        let mut changed = false;
+        for (guards, before, after) in branches {
+            if let Some(location) = first_dynamic_selector_location(&before) {
+                changed = true;
+                expand_dynamic_selector_branch(
+                    guards,
+                    before,
+                    after,
+                    true,
+                    location,
+                    &mut expanded,
+                );
+                continue;
+            }
+            if let Some(location) = first_dynamic_selector_location(&after) {
+                changed = true;
+                expand_dynamic_selector_branch(
+                    guards,
+                    before,
+                    after,
+                    false,
+                    location,
+                    &mut expanded,
+                );
+                continue;
+            }
+            expanded.push((guards, before, after));
+        }
+        if !changed {
+            return expanded;
+        }
+        branches = expanded;
+    }
+}
+
+#[derive(Clone, Copy)]
+struct SelectorLocation {
+    component: usize,
+    row: usize,
+    part: usize,
+    require: bool,
+    selector: usize,
+}
+
+fn first_dynamic_selector_location(block: &PatternBlock) -> Option<SelectorLocation> {
+    for (component_index, component) in block.components.iter().enumerate() {
+        for (row_index, row) in component.rows.iter().enumerate() {
+            for (part_index, part) in row.iter().enumerate() {
+                let BlockPart::Cell(cell) = part else {
+                    continue;
+                };
+                if let Some(selector_index) = cell
+                    .require
+                    .iter()
+                    .position(|selector| !selector.dynamic_guards.is_empty())
+                {
+                    return Some(SelectorLocation {
+                        component: component_index,
+                        row: row_index,
+                        part: part_index,
+                        require: true,
+                        selector: selector_index,
+                    });
+                }
+                if let Some(selector_index) = cell
+                    .forbid
+                    .iter()
+                    .position(|selector| !selector.dynamic_guards.is_empty())
+                {
+                    return Some(SelectorLocation {
+                        component: component_index,
+                        row: row_index,
+                        part: part_index,
+                        require: false,
+                        selector: selector_index,
+                    });
+                }
+            }
+        }
+    }
+    None
+}
+
+fn expand_dynamic_selector_branch(
+    guards: Vec<Guard>,
+    before: PatternBlock,
+    after: PatternBlock,
+    in_before: bool,
+    location: SelectorLocation,
+    out: &mut Vec<(Vec<Guard>, PatternBlock, PatternBlock)>,
+) {
+    let selector = selector_at_location(if in_before { &before } else { &after }, location);
+    for object in &selector.alternatives {
+        let mut guards = guards.clone();
+        if let Some(dynamic_guards) = selector.dynamic_guards.get(object) {
+            guards.extend(dynamic_guards.iter().map(|guard| Guard::GlobalEquals {
+                global: guard.global,
+                value: guard.value,
+            }));
+        }
+        let mut before = before.clone();
+        let mut after = after.clone();
+        let target = if in_before { &mut before } else { &mut after };
+        let selector = selector_at_location_mut(target, location);
+        selector.alternatives = vec![*object];
+        selector.dynamic_guards.clear();
+        out.push((guards, before, after));
+    }
+}
+
+fn selector_at_location(block: &PatternBlock, location: SelectorLocation) -> &ObjectSelector {
+    let BlockPart::Cell(cell) =
+        &block.components[location.component].rows[location.row][location.part]
+    else {
+        unreachable!("selector locations only point to cells");
+    };
+    if location.require {
+        &cell.require[location.selector]
+    } else {
+        &cell.forbid[location.selector]
+    }
+}
+
+fn selector_at_location_mut(
+    block: &mut PatternBlock,
+    location: SelectorLocation,
+) -> &mut ObjectSelector {
+    let BlockPart::Cell(cell) =
+        &mut block.components[location.component].rows[location.row][location.part]
+    else {
+        unreachable!("selector locations only point to cells");
+    };
+    if location.require {
+        &mut cell.require[location.selector]
+    } else {
+        &mut cell.forbid[location.selector]
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -19468,7 +20784,7 @@ fn preserve_moved_occurrence_scratch(
     before_placements: &HashMap<OccurrenceKey, OccurrencePlacement>,
     after_placements: &HashMap<OccurrenceKey, OccurrencePlacement>,
     _line: &str,
-) -> Result<Vec<WriteOpTemplate>, AppError> {
+) -> Result<Vec<WriteOpTemplate>, DiagnosticReport> {
     let moves = before_placements
         .iter()
         .filter_map(|(key, before)| {
@@ -19676,7 +20992,7 @@ fn block_cell_scratch(
     occurrences: &[ResolvedObjectOccurrence],
     scratch_names: &HashMap<String, ScratchDef>,
     line: &str,
-) -> Result<BlockCellScratch, AppError> {
+) -> Result<BlockCellScratch, DiagnosticReport> {
     let mut out = BlockCellScratch::default();
     for scratch in &cell.require_cell_scratch {
         let pattern = parsed_scratch_pattern(ObjectId::EMPTY, scratch, scratch_names, line)?;
@@ -19747,7 +21063,7 @@ fn parsed_object_set_scratch_pattern(
     scratch: &ParsedScratch,
     scratch_names: &HashMap<String, ScratchDef>,
     line: &str,
-) -> Result<ObjectSetScratchPatternTemplate, AppError> {
+) -> Result<ObjectSetScratchPatternTemplate, DiagnosticReport> {
     let pattern = parsed_scratch_pattern(ObjectId::EMPTY, scratch, scratch_names, line)?;
     Ok(ObjectSetScratchPatternTemplate {
         binding,
@@ -19763,7 +21079,7 @@ fn parsed_scratch_pattern(
     scratch: &ParsedScratch,
     scratch_names: &HashMap<String, ScratchDef>,
     line: &str,
-) -> Result<ScratchPatternTemplate, AppError> {
+) -> Result<ScratchPatternTemplate, DiagnosticReport> {
     if let Some(anonymous) = &scratch.anonymous {
         return parsed_anonymous_scratch_pattern(object, anonymous, scratch, line);
     }
@@ -19821,7 +21137,7 @@ fn parsed_anonymous_scratch_pattern(
     anonymous: &AnonymousScratch,
     scratch: &ParsedScratch,
     line: &str,
-) -> Result<ScratchPatternTemplate, AppError> {
+) -> Result<ScratchPatternTemplate, DiagnosticReport> {
     let value = scratch
         .value
         .as_deref()
@@ -19866,7 +21182,7 @@ fn parsed_anonymous_scratch_pattern(
 fn parse_anonymous_movement_value(
     value: &str,
     line: &str,
-) -> Result<ScratchValueTemplate, AppError> {
+) -> Result<ScratchValueTemplate, DiagnosticReport> {
     if let Some(relative) = parse_relative_direction_value(value) {
         return Ok(ScratchValueTemplate::Relative(relative));
     }
@@ -19883,7 +21199,7 @@ fn parse_enum_scratch_value(
     value: &str,
     def: &ScratchDef,
     line: &str,
-) -> Result<ScratchValueTemplate, AppError> {
+) -> Result<ScratchValueTemplate, DiagnosticReport> {
     if let Some(relative) = parse_relative_direction_value(value) {
         return Ok(ScratchValueTemplate::Relative(relative));
     }
@@ -19907,7 +21223,7 @@ fn parse_relative_direction_value(value: &str) -> Option<RelativeDirection> {
 fn reject_duplicate_scratch_patterns(
     scratch: &[ScratchPatternTemplate],
     line: &str,
-) -> Result<(), AppError> {
+) -> Result<(), DiagnosticReport> {
     let mut seen = Vec::<(ObjectId, ScratchId)>::new();
     for attr in scratch {
         let key = (attr.object, attr.scratch);
@@ -19925,7 +21241,7 @@ fn reject_duplicate_scratch_patterns(
 fn reject_duplicate_object_set_scratch_patterns(
     scratch: &[ObjectSetScratchPatternTemplate],
     line: &str,
-) -> Result<(), AppError> {
+) -> Result<(), DiagnosticReport> {
     let mut seen = Vec::<(u16, ScratchId)>::new();
     for attr in scratch {
         let key = (attr.binding, attr.scratch);
@@ -19944,7 +21260,7 @@ fn scratch_to_set(
     after: &[ScratchPatternTemplate],
     before: &[ScratchPatternTemplate],
     line: &str,
-) -> Result<Vec<ScratchPatternTemplate>, AppError> {
+) -> Result<Vec<ScratchPatternTemplate>, DiagnosticReport> {
     let mut writes = Vec::new();
     for attr in after {
         if !attr.is_marker && attr.value.is_none() {
@@ -19961,7 +21277,7 @@ fn scratch_to_set_object_set(
     after: &[ObjectSetScratchPatternTemplate],
     before: &[ObjectSetScratchPatternTemplate],
     line: &str,
-) -> Result<Vec<ObjectSetScratchPatternTemplate>, AppError> {
+) -> Result<Vec<ObjectSetScratchPatternTemplate>, DiagnosticReport> {
     let mut writes = Vec::new();
     for attr in after {
         if !attr.is_marker && attr.value.is_none() {
@@ -20080,7 +21396,7 @@ fn collect_before_occurrences(block: &PatternBlock) -> Vec<SelectorOccurrence> {
 fn reject_duplicate_labeled_occurrences(
     occurrences: &[SelectorOccurrence],
     line: &str,
-) -> Result<(), AppError> {
+) -> Result<(), DiagnosticReport> {
     let mut seen = Vec::<String>::new();
     for occurrence in occurrences {
         if occurrence.occurrence_label.is_none() {
@@ -20101,7 +21417,7 @@ fn expand_selector_assignments(
     occurrences: &[SelectorOccurrence],
     object_layers: &HashMap<ObjectId, LayerId>,
     line: &str,
-) -> Result<Vec<Vec<SelectorAssignmentValue>>, AppError> {
+) -> Result<Vec<Vec<SelectorAssignmentValue>>, DiagnosticReport> {
     let mut assignments = vec![Vec::<SelectorAssignmentValue>::new()];
     for (index, occurrence) in occurrences.iter().enumerate() {
         if occurrence.occurrence_label.is_none()
@@ -20194,7 +21510,7 @@ fn selector_assignment_value_is_possible(
     objects: &[ObjectId],
     object_layers: &HashMap<ObjectId, LayerId>,
     line: &str,
-) -> Result<bool, AppError> {
+) -> Result<bool, DiagnosticReport> {
     let occurrence = &occurrences[index];
     for (previous_index, previous_value) in prefix.iter().enumerate() {
         let previous = &occurrences[previous_index];
@@ -20234,7 +21550,7 @@ fn selector_assignment_object_is_possible(
     object: ObjectId,
     object_layers: &HashMap<ObjectId, LayerId>,
     line: &str,
-) -> Result<bool, AppError> {
+) -> Result<bool, DiagnosticReport> {
     let occurrence = &occurrences[index];
     let Some(layer) = object_layers.get(&object) else {
         return Ok(true);
@@ -20291,7 +21607,7 @@ fn block_cell_object_occurrences(
     before_by_token: &HashMap<String, Vec<usize>>,
     token_counts: &mut HashMap<String, usize>,
     line: &str,
-) -> Result<Vec<ResolvedObjectOccurrence>, AppError> {
+) -> Result<Vec<ResolvedObjectOccurrence>, DiagnosticReport> {
     cell.require
         .iter()
         .map(|selector| {
@@ -20393,7 +21709,7 @@ fn validate_same_layer_cell_occurrences(
     occurrences: &[ResolvedObjectOccurrence],
     object_layers: &HashMap<ObjectId, LayerId>,
     line: &str,
-) -> Result<bool, AppError> {
+) -> Result<bool, DiagnosticReport> {
     let mut seen = Vec::<(LayerId, &ResolvedObjectOccurrence)>::new();
     for occurrence in occurrences {
         let layer = match &occurrence.matched {
@@ -20559,7 +21875,7 @@ fn resolve_write(
     direction: Direction,
     dir_any: bool,
     line: &str,
-) -> Result<WriteOp, AppError> {
+) -> Result<WriteOp, DiagnosticReport> {
     match write {
         WriteOpTemplate::Add {
             component,
@@ -20718,7 +22034,7 @@ fn resolve_scratch_patterns(
     direction: Direction,
     direction_expanded: bool,
     line: &str,
-) -> Result<Vec<ScratchPattern>, AppError> {
+) -> Result<Vec<ScratchPattern>, DiagnosticReport> {
     patterns
         .into_iter()
         .map(|pattern| {
@@ -20742,7 +22058,7 @@ fn resolve_object_set_scratch_patterns(
     direction: Direction,
     direction_expanded: bool,
     line: &str,
-) -> Result<Vec<ObjectSetScratchPattern>, AppError> {
+) -> Result<Vec<ObjectSetScratchPattern>, DiagnosticReport> {
     patterns
         .into_iter()
         .map(|pattern| {
@@ -20766,7 +22082,7 @@ fn resolve_scratch_value(
     direction: Direction,
     direction_expanded: bool,
     line: &str,
-) -> Result<Option<i64>, AppError> {
+) -> Result<Option<i64>, DiagnosticReport> {
     match value {
         Some(ScratchValueTemplate::Literal(value)) => Ok(Some(*value)),
         Some(ScratchValueTemplate::Relative(relative)) => {
@@ -20783,7 +22099,7 @@ fn resolve_relative_direction(
     direction: Direction,
     direction_expanded: bool,
     line: &str,
-) -> Result<Direction, AppError> {
+) -> Result<Direction, DiagnosticReport> {
     if !direction_expanded {
         return Err(parse_error(
             line,
@@ -20803,13 +22119,15 @@ fn resolve_relative_direction(
     })
 }
 
-fn direction_value(direction: Direction) -> Result<i64, AppError> {
+fn direction_value(direction: Direction) -> Result<i64, DiagnosticReport> {
     match (direction.dx, direction.dy) {
         (0, -1) => Ok(0),
         (0, 1) => Ok(1),
         (-1, 0) => Ok(2),
         (1, 0) => Ok(3),
-        _ => Err(AppError::Parse("unsupported direction scratch".to_string())),
+        _ => Err(DiagnosticReport::error(
+            "unsupported direction scratch".to_string(),
+        )),
     }
 }
 
@@ -20818,7 +22136,7 @@ fn resolve_offset(
     direction: Direction,
     direction_expanded: bool,
     line: &str,
-) -> Result<Offset, AppError> {
+) -> Result<Offset, DiagnosticReport> {
     let (base_dx, base_dy) = resolve_oriented_xy(
         offset.oriented_x,
         offset.oriented_y,
@@ -20856,7 +22174,7 @@ fn resolve_oriented_xy(
     direction: Direction,
     direction_expanded: bool,
     line: &str,
-) -> Result<(i16, i16), AppError> {
+) -> Result<(i16, i16), DiagnosticReport> {
     if !direction_expanded {
         return Ok((x, y));
     }
@@ -20894,7 +22212,7 @@ fn is_value_atom(value: &str) -> bool {
             .all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
 }
 
-fn parse_char(token: Option<&&str>, line: &str, message: &str) -> Result<char, AppError> {
+fn parse_char(token: Option<&&str>, line: &str, message: &str) -> Result<char, DiagnosticReport> {
     let value = expect(token, line, message)?;
     let mut chars = value.chars();
     let ch = chars.next().ok_or_else(|| parse_error(line, message))?;
@@ -20904,13 +22222,13 @@ fn parse_char(token: Option<&&str>, line: &str, message: &str) -> Result<char, A
     Ok(ch)
 }
 
-fn parse_u16(token: Option<&&str>, line: &str, message: &str) -> Result<u16, AppError> {
+fn parse_u16(token: Option<&&str>, line: &str, message: &str) -> Result<u16, DiagnosticReport> {
     expect(token, line, message)?
         .parse()
         .map_err(|_| parse_error(line, "expected u16"))
 }
 
-fn parse_global_value(token: &str, line: &str) -> Result<i64, AppError> {
+fn parse_global_value(token: &str, line: &str) -> Result<i64, DiagnosticReport> {
     match token {
         "true" => Ok(1),
         "false" => Ok(0),
@@ -20920,12 +22238,16 @@ fn parse_global_value(token: &str, line: &str) -> Result<i64, AppError> {
     }
 }
 
-fn expect<'a>(token: Option<&'a &str>, line: &str, message: &str) -> Result<&'a str, AppError> {
+fn expect<'a>(
+    token: Option<&'a &str>,
+    line: &str,
+    message: &str,
+) -> Result<&'a str, DiagnosticReport> {
     token.copied().ok_or_else(|| parse_error(line, message))
 }
 
-fn parse_error(line: &str, message: &str) -> AppError {
-    AppError::Parse(format!("{message}: {line}"))
+fn parse_error(line: &str, message: &str) -> DiagnosticReport {
+    DiagnosticReport::error_at_line(message, line)
 }
 
 #[cfg(test)]

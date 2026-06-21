@@ -342,14 +342,18 @@ scene playing {
 		}
 		puzzle
 	}
-	inputs {
-		open_menu <- Escape
-		level_select <- q
+	keys {
+		Escape -> open_menu
+		q -> level_select
 	}
 	rules {
 		step board
-		open_menu -> goto menu
-		level_select -> goto level_select
+	}
+	routine open_menu {
+		goto menu
+	}
+	routine level_select {
+		goto level_select
 	}
 }
 
@@ -362,13 +366,15 @@ scene menu {
 			button "Level Select" -> goto level_select
 		}
 	}
-	inputs {
-		resume <- Escape Enter Space
-		level_select <- q
+	keys {
+		Escape Enter Space -> resume
+		q -> level_select
 	}
-	rules {
-		resume -> goto playing
-		level_select -> goto level_select
+	routine resume {
+		goto playing
+	}
+	routine level_select {
+		goto level_select
 	}
 }
 
@@ -378,10 +384,10 @@ scene level_select {
 		level_menu
 		button "Back" -> goto title
 	}
-	inputs {
-		back_to_title <- q Escape
+	keys {
+		q Escape -> back_to_title
 	}
-	rules {
-		back_to_title -> goto title
+	routine back_to_title {
+		goto title
 	}
 }

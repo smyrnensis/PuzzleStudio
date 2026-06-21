@@ -8,5 +8,5 @@ license.workspace = true
 puzzle-core = { path = "../core" }
 puzzle-lang = { path = "../lang" }
 puzzle-play = { path = "../play" }
-puzzle3d-model = { path = "../puzzle3d_model" }
+puzzle-3d = { path = "../puzzle_3d" }
 serde_json = "1"

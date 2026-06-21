@@ -12,15 +12,14 @@ scene menu {
     }
   }
 
-  inputs {
-    resume <- Escape Enter Space
+  keys {
+    Escape Enter Space -> resume
   }
 
-  rules {
-    resume -> back
+  routine resume {
+    goto playing
   }
 }
 ```
 
 Use target-qualified commands such as `playing.restart` or `board.restart` when a command should operate on a specific target.
-

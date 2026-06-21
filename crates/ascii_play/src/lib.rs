@@ -5,17 +5,17 @@ use std::io::{self, IsTerminal, Read, Write};
 use std::path::PathBuf;
 use std::process::Command;
 
-use puzzle_core::{InputId, State as PuzzleState, transition_program};
-use puzzle_lang::{
-    ArrowKey, ForSource, KeyTrigger, LoadedDocumentModel, LoadedGame, ResourceSelection,
-    SceneComponent, SceneEffect, SceneExpr, SceneTextContent, SceneValue, VisualSpriteKind,
-    discover_game_entries, parse_game_file, resolve_game_entry,
-};
-use puzzle_play::{GameSession, MessageEvent, SoundEvent, WaitEvent, cell_objects};
-use puzzle3d_model::{
+use puzzle_3d::{
     Coord3, GameSession3, GameSessionError3, InputDef3, ObjectId as ObjectId3, ParsedPuzzle3,
     State3,
 };
+use puzzle_core::{InputId, State as PuzzleState, transition_program};
+use puzzle_lang::{
+    ArrowKey, DiagnosticReport, ForSource, KeyTrigger, LoadedDocumentModel, LoadedGame,
+    ResourceSelection, SceneComponent, SceneEffect, SceneExpr, SceneTextContent, SceneValue,
+    VisualSpriteKind, discover_game_entries, parse_game_file, resolve_game_entry,
+};
+use puzzle_play::{GameSession, MessageEvent, SoundEvent, WaitEvent, cell_objects};
 
 pub fn run_terminal_from_env() -> Result<(), AppError> {
     run_terminal_from_args(env::args().skip(1))
@@ -473,7 +473,7 @@ impl Puzzle3TerminalSession {
     fn apply_input(
         &mut self,
         parsed: &ParsedPuzzle3,
-        input: puzzle3d_model::InputId3,
+        input: puzzle_3d::InputId3,
     ) -> Result<(), AppError> {
         let bundle = parsed
             .level_bundle
@@ -494,7 +494,7 @@ impl Puzzle3TerminalSession {
                 .session
                 .apply_input(bundle, &parsed.rules, input)
                 .map_err(AppError::from)?;
-            puzzle3d_model::SessionLifecycleResult3 {
+            puzzle_3d::SessionLifecycleResult3 {
                 changed,
                 cleared: false,
                 level_changed: false,
@@ -1471,6 +1471,15 @@ fn effect_to_command(
         SceneEffect::Input(input) | SceneEffect::ComponentEffect(input) => {
             Some(command_with_scope(loaded, session, input, scope))
         }
+        SceneEffect::RoutineCall(name) => {
+            let routine = loaded
+                .scenes
+                .iter()
+                .find(|scene| scene.name == scope.scene_name)
+                .and_then(|scene| scene.routines.iter().find(|routine| routine.name == *name))
+                .expect("scene routine call was validated before runtime");
+            effect_to_command(loaded, session, &routine.effect, scope)
+        }
         SceneEffect::Message { text } => Some(format!(
             "message {}",
             expr_source(loaded, session, text, scope)
@@ -1935,7 +1944,7 @@ level start
 
     #[test]
     fn puzzle3_ascii_renders_z_slices_from_top_to_bottom() {
-        let parsed = puzzle3d_model::parse_puzzle3d(
+        let parsed = puzzle_3d::parse_puzzle3d(
             r#"
 layers {
 actor = Top Bottom
@@ -1977,7 +1986,7 @@ T.
 #[derive(Debug)]
 pub enum AppError {
     Io(io::Error),
-    Lang(puzzle_lang::AppError),
+    Lang(DiagnosticReport),
     Runtime(String),
     Config(String),
 }
@@ -1988,8 +1997,8 @@ impl From<io::Error> for AppError {
     }
 }
 
-impl From<puzzle_lang::AppError> for AppError {
-    fn from(value: puzzle_lang::AppError) -> Self {
+impl From<DiagnosticReport> for AppError {
+    fn from(value: DiagnosticReport) -> Self {
         Self::Lang(value)
     }
 }

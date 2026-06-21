@@ -261,6 +261,7 @@ function insertSoundsDefinition(kind = "sfx") {
   if (!document || !isTextDocument(document)) {
     return;
   }
+  sounds.mode = kind === "music" ? "music" : "sfx";
   const source = activeSoundEditSource();
   const definition = soundCurrentDefinition(kind, { uniqueForInsert: true, source });
   if (!definition) {
@@ -274,6 +275,12 @@ function insertSoundsDefinition(kind = "sfx") {
   scheduleLocalSave();
   schedulePreview();
   sourceEditor.focus();
+  setActiveSoundEditTarget({
+    kind: definition.kind,
+    name: definition.name,
+    start: insertion.selectionStart,
+    end: insertion.selectionStart,
+  }, document);
   renderSoundsBuilder();
   setStatus(`Added ${definition.kind} ${definition.name}`, "is-ok");
 }
@@ -284,20 +291,54 @@ function updateSoundsDefinition(kind = "sfx") {
   if (!definition || !document || !isTextDocument(document)) {
     return;
   }
-  const replacement = replaceSoundsDefinitionInSource(activeSoundEditSource(), definition);
-  if (!replacement) {
-    setStatus(`No ${definition.kind} named ${definition.name}`, "is-error");
+  sounds.mode = kind === "music" ? "music" : "sfx";
+  const editTarget = activeSoundEditTargetForDocument(document, definition.kind);
+  const originalName = editTarget?.name || definition.name;
+  const source = activeSoundEditSource();
+  if (
+    originalName !== definition.name
+    && soundsDefinitionNameExists(source, definition.kind, definition.name, {
+      exceptStart: editTarget?.start,
+    })
+  ) {
+    setStatus(`${definition.kind} ${definition.name} already exists`, "is-error");
     return;
   }
-  document.source = replacement.source;
+  const replacement = replaceSoundsDefinitionInSource(source, definition, {
+    originalName,
+    originalStart: editTarget?.start,
+  });
+  if (!replacement) {
+    setStatus(`No ${definition.kind} named ${originalName}`, "is-error");
+    return;
+  }
+  const renamed = originalName !== definition.name;
+  const referenceReplacement = renamed
+    ? replaceSoundReferencesInSource(replacement.source, definition.kind, originalName, definition.name, {
+      definitionStart: replacement.definitionStart,
+      definitionEnd: replacement.definitionEnd,
+      selectionStart: replacement.selectionStart,
+    })
+    : { source: replacement.source, count: 0 };
+  document.source = referenceReplacement.source;
+  const selectionStart = replacement.selectionStart + (referenceReplacement.selectionShift || 0);
   if (document.id === activeDocument()?.id) {
-    setSourceEditorText(replacement.source, replacement.selectionStart, replacement.selectionEnd);
+    setSourceEditorText(referenceReplacement.source, selectionStart, selectionStart);
   }
   scheduleLocalSave();
   schedulePreview();
   sourceEditor.focus();
+  setActiveSoundEditTarget({
+    kind: definition.kind,
+    name: definition.name,
+    start: replacement.definitionStart,
+    end: replacement.definitionEnd,
+  }, document);
   renderSoundsBuilder();
-  setStatus(`Updated ${definition.kind} ${definition.name}`, "is-ok");
+  const referenceMessage = referenceReplacement.count > 0
+    ? ` and ${referenceReplacement.count} reference${referenceReplacement.count === 1 ? "" : "s"}`
+    : "";
+  setStatus(`Updated ${definition.kind} ${definition.name}${referenceMessage}`, "is-ok");
 }
 
 function activeSoundEditDocument() {
@@ -329,6 +370,7 @@ function loadSoundFromSourcePosition(position, options = {}) {
     pushSourceNavigationHistory();
   }
   if (entry.kind === "music") {
+    sounds.mode = "music";
     soundsMusicTitleInput.value = entry.name;
     soundsMusicSeedInput.value = entry.params.seed || soundsMusicSeedInput.value;
     if (entry.params.height !== undefined || entry.params.tone !== undefined) {
@@ -345,6 +387,7 @@ function loadSoundFromSourcePosition(position, options = {}) {
     }
     setSoundProgress(0);
   } else {
+    sounds.mode = "sfx";
     soundsSfxTitleInput.value = entry.name;
     soundsSfxSeedInput.value = entry.params.seed || soundsSfxSeedInput.value;
     if (entry.params.type !== undefined) {
@@ -359,6 +402,7 @@ function loadSoundFromSourcePosition(position, options = {}) {
   if (!options.silent) {
     setStatus(`Loaded ${entry.kind} ${entry.name}`, "is-ok");
   }
+  setActiveSoundEditTarget(entry, activeDocument());
   return `sounds:${entry.kind}:${entry.name}:${entry.start}`;
 }
 
@@ -379,6 +423,7 @@ function loadSoundSourceTarget(target, options = {}) {
     pushSourceNavigationHistory();
   }
   if (entry.kind === "music") {
+    sounds.mode = "music";
     soundsMusicTitleInput.value = entry.name;
     soundsMusicSeedInput.value = entry.params.seed || soundsMusicSeedInput.value;
     if (entry.params.height !== undefined || entry.params.tone !== undefined) {
@@ -395,6 +440,7 @@ function loadSoundSourceTarget(target, options = {}) {
     }
     setSoundProgress(0);
   } else {
+    sounds.mode = "sfx";
     soundsSfxTitleInput.value = entry.name;
     soundsSfxSeedInput.value = entry.params.seed || soundsSfxSeedInput.value;
     if (entry.params.type !== undefined) {
@@ -409,7 +455,30 @@ function loadSoundSourceTarget(target, options = {}) {
   if (!options.silent) {
     setStatus(`Loaded ${entry.kind} ${entry.name}`, "is-ok");
   }
+  setActiveSoundEditTarget(entry, activeDocument());
   return `sounds:${entry.kind}:${entry.name}:${entry.start}`;
+}
+
+function setActiveSoundEditTarget(entry, document = activeSoundEditDocument()) {
+  if (!entry?.kind || !entry?.name || !document?.id) {
+    sounds.editTarget = null;
+    return;
+  }
+  sounds.editTarget = {
+    documentId: document.id,
+    kind: entry.kind,
+    name: entry.name,
+    start: Number.isInteger(entry.start) ? entry.start : null,
+    end: Number.isInteger(entry.end) ? entry.end : null,
+  };
+}
+
+function activeSoundEditTargetForDocument(document, kind) {
+  const target = sounds.editTarget;
+  if (!target || target.documentId !== document?.id || target.kind !== kind) {
+    return null;
+  }
+  return target;
 }
 
 function soundAtom(value, fallback) {
@@ -467,6 +536,28 @@ function existingSoundsDefinitionNames(source, kind) {
     }
   }
   return names;
+}
+
+function soundsDefinitionNameExists(source, kind, name, options = {}) {
+  const text = String(source || "");
+  const lines = soundSourceLinesWithOffsets(text);
+  const soundsBlock = findTopLevelSoundsBlock(lines);
+  if (!soundsBlock) {
+    return false;
+  }
+  const exceptStart = Number.isInteger(options.exceptStart) ? options.exceptStart : null;
+  for (let index = soundsBlock.startLine + 1; index < soundsBlock.endLine; index += 1) {
+    const line = lines[index];
+    const parsed = parseSoundsDefinitionLine(line?.text || "");
+    if (!parsed || parsed.kind !== kind || parsed.name !== name) {
+      continue;
+    }
+    if (exceptStart !== null && exceptStart >= line.start && exceptStart <= line.end) {
+      continue;
+    }
+    return true;
+  }
+  return false;
 }
 
 function findSoundsDefinitionAtPosition(source, position) {
@@ -542,27 +633,219 @@ function insertSoundsDefinitionIntoSource(source, line) {
   return { source: nextSource, selectionStart, selectionEnd: selectionStart };
 }
 
-function replaceSoundsDefinitionInSource(source, definition) {
+function replaceSoundsDefinitionInSource(source, definition, options = {}) {
   const text = String(source || "");
   const lines = soundSourceLinesWithOffsets(text);
   const soundsBlock = findTopLevelSoundsBlock(lines);
   if (!soundsBlock) {
     return null;
   }
+  const originalName = options.originalName || definition.name;
+  const originalStart = Number.isInteger(options.originalStart) ? options.originalStart : null;
+  let fallback = null;
   for (let index = soundsBlock.startLine + 1; index < soundsBlock.endLine; index += 1) {
     const line = lines[index];
     const parsed = parseSoundsDefinitionLine(line?.text || "");
-    if (!parsed || parsed.kind !== definition.kind || parsed.name !== definition.name) {
+    if (!parsed || parsed.kind !== definition.kind || parsed.name !== originalName) {
       continue;
     }
-    const indent = line.text.match(/^\s*/)?.[0] || soundsBlock.entryIndent || `${soundsBlock.indent}\t`;
-    const hasNewline = line.text.endsWith("\n");
-    const replacement = `${indent}${definition.line}${hasNewline ? "\n" : ""}`;
-    const nextSource = `${text.slice(0, line.start)}${replacement}${text.slice(line.end)}`;
-    const selectionStart = line.start + replacement.length;
-    return { source: nextSource, selectionStart, selectionEnd: selectionStart };
+    const candidate = replaceSoundsDefinitionLine(text, line, soundsBlock, definition);
+    if (originalStart !== null && originalStart >= line.start && originalStart <= line.end) {
+      return candidate;
+    }
+    fallback ??= candidate;
   }
-  return null;
+  return fallback;
+}
+
+function replaceSoundsDefinitionLine(text, line, soundsBlock, definition) {
+  const indent = line.text.match(/^\s*/)?.[0] || soundsBlock.entryIndent || `${soundsBlock.indent}\t`;
+  const hasNewline = line.text.endsWith("\n");
+  const replacement = `${indent}${definition.line}${hasNewline ? "\n" : ""}`;
+  const nextSource = `${text.slice(0, line.start)}${replacement}${text.slice(line.end)}`;
+  const selectionStart = line.start + replacement.length;
+  return {
+    source: nextSource,
+    selectionStart,
+    selectionEnd: selectionStart,
+    definitionStart: line.start,
+    definitionEnd: line.start + replacement.length,
+  };
+}
+
+function replaceSoundReferencesInSource(source, kind, oldName, newName, options = {}) {
+  if (!oldName || !newName || oldName === newName) {
+    return { source, count: 0 };
+  }
+  const text = String(source || "");
+  const lines = soundSourceLinesWithOffsets(text);
+  const soundsBlock = findTopLevelSoundsBlock(lines);
+  const definitionStart = Number.isInteger(options.definitionStart) ? options.definitionStart : -1;
+  const definitionEnd = Number.isInteger(options.definitionEnd) ? options.definitionEnd : -1;
+  const selectionStart = Number.isInteger(options.selectionStart) ? options.selectionStart : -1;
+  let changed = false;
+  let count = 0;
+  let selectionShift = 0;
+  const nextLines = lines.map((line, lineIndex) => {
+    if (!line || line.start >= text.length && !line.text) {
+      return line?.text || "";
+    }
+    if (definitionStart >= 0 && line.start < definitionEnd && line.end > definitionStart) {
+      return line.text;
+    }
+    const parsed = parseSoundsDefinitionLine(line.text);
+    if (
+      parsed?.kind === kind
+      && soundsBlock
+      && lineIndex > soundsBlock.startLine
+      && lineIndex < soundsBlock.endLine
+    ) {
+      return line.text;
+    }
+    const commentStart = soundLineCommentStart(line.text);
+    const code = commentStart >= 0 ? line.text.slice(0, commentStart) : line.text;
+    const comment = commentStart >= 0 ? line.text.slice(commentStart) : "";
+    const replaced = replaceSoundReferencesInCode(code, kind, oldName, newName);
+    if (replaced.count > 0) {
+      changed = true;
+      count += replaced.count;
+      if (selectionStart >= 0 && line.end <= selectionStart) {
+        selectionShift += replaced.code.length - code.length;
+      }
+      return `${replaced.code}${comment}`;
+    }
+    return line.text;
+  });
+  return { source: changed ? nextLines.join("") : text, count, selectionShift };
+}
+
+function replaceSoundReferencesInCode(code, kind, oldName, newName) {
+  let output = "";
+  let index = 0;
+  let count = 0;
+  while (index < code.length) {
+    const char = code[index];
+    if (char === "\"" || char === "'") {
+      const end = soundQuotedSegmentEnd(code, index);
+      output += code.slice(index, end);
+      index = end;
+      continue;
+    }
+    if (!soundIdentifierStart(char)) {
+      output += char;
+      index += 1;
+      continue;
+    }
+    const wordStart = index;
+    const wordEnd = soundIdentifierEnd(code, wordStart);
+    const word = code.slice(wordStart, wordEnd);
+    const commandKind = soundReferenceCommandKind(word);
+    if (commandKind !== kind) {
+      output += word;
+      index = wordEnd;
+      continue;
+    }
+    const whitespaceEnd = soundWhitespaceEnd(code, wordEnd);
+    const nameEnd = soundIdentifierEnd(code, whitespaceEnd);
+    const name = code.slice(whitespaceEnd, nameEnd);
+    if (whitespaceEnd > wordEnd && name === oldName) {
+      output += `${code.slice(wordStart, whitespaceEnd)}${newName}`;
+      index = nameEnd;
+      count += 1;
+      continue;
+    }
+    output += word;
+    index = wordEnd;
+  }
+  return { code: output, count };
+}
+
+function soundReferenceCommandKind(word) {
+  if (word === "sfx") {
+    return "sfx";
+  }
+  if (word === "play_music" || word === "pause_music" || word === "resume_music" || word === "stop_music") {
+    return "music";
+  }
+  return "";
+}
+
+function soundLineCommentStart(line) {
+  let quote = "";
+  let escaped = false;
+  for (let index = 0; index < line.length - 1; index += 1) {
+    const char = line[index];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (char === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      if (char === quote) {
+        quote = "";
+      }
+      continue;
+    }
+    if (char === "\"" || char === "'") {
+      quote = char;
+      continue;
+    }
+    if (char === "/" && line[index + 1] === "/") {
+      return index;
+    }
+  }
+  return -1;
+}
+
+function soundQuotedSegmentEnd(source, start) {
+  const quote = source[start];
+  let escaped = false;
+  for (let index = start + 1; index < source.length; index += 1) {
+    const char = source[index];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (char === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (char === quote) {
+      return index + 1;
+    }
+  }
+  return source.length;
+}
+
+function soundIdentifierStart(char) {
+  return /[A-Za-z_]/.test(char || "");
+}
+
+function soundIdentifierPart(char) {
+  return /[A-Za-z0-9_]/.test(char || "");
+}
+
+function soundIdentifierEnd(source, start) {
+  let index = start;
+  if (!soundIdentifierStart(source[index])) {
+    return start;
+  }
+  index += 1;
+  while (index < source.length && soundIdentifierPart(source[index])) {
+    index += 1;
+  }
+  return index;
+}
+
+function soundWhitespaceEnd(source, start) {
+  let index = start;
+  while (index < source.length && /\s/.test(source[index] || "")) {
+    index += 1;
+  }
+  return index;
 }
 
 function soundSourceLinesWithOffsets(source) {

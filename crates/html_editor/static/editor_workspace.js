@@ -494,6 +494,11 @@ function externalReloadErrorMessage(error) {
   return message ? `External reload failed: ${message}` : "External reload failed";
 }
 
+function workspaceMutationErrorMessage(prefix, error) {
+  const message = String(error?.message || error || "").trim();
+  return message ? `${prefix}: ${message}` : prefix;
+}
+
 function documentIdentityKey(document) {
   return `${normalizePath(document?.workspaceRoot || workspaceRoot || "")}\n${normalizePath(document?.puzzlePath || "")}`;
 }
@@ -1551,7 +1556,7 @@ function renderDraftEntry(parentFolder, parent, depth) {
     event.preventDefault();
     commitDraftEntry(input.value).catch((error) => {
       console.error(error);
-      setEditorStatus("Create failed", "is-error");
+      setEditorStatus(workspaceMutationErrorMessage("Create failed", error), "is-error");
       renderDocumentSelect();
     });
   });
@@ -1564,7 +1569,7 @@ function renderDraftEntry(parentFolder, parent, depth) {
   input.addEventListener("blur", () => {
     commitDraftEntry(input.value).catch((error) => {
       console.error(error);
-      setEditorStatus("Create failed", "is-error");
+      setEditorStatus(workspaceMutationErrorMessage("Create failed", error), "is-error");
       renderDocumentSelect();
     });
   });
@@ -2072,6 +2077,18 @@ function workspaceRootForFolder(folder) {
   return workspaceRootForNode(folder);
 }
 
+function workspaceRootFolder(root) {
+  const normalizedRoot = normalizePath(root || workspaceRoot || "");
+  if (!normalizedRoot) {
+    return null;
+  }
+  return (fileTree?.children || []).find((child) =>
+    child.kind === "folder"
+    && child.isWorkspaceRoot
+    && normalizePath(child.workspaceRoot || "") === normalizedRoot
+  ) || null;
+}
+
 function hostPathForEditorPath(path, rootOverride = workspaceRoot) {
   const normalized = normalizePath(path);
   const rootValue = rootOverride || workspaceRoot;
@@ -2092,6 +2109,21 @@ function createNewFile() {
 
 function createNewFolder() {
   startDraftEntry("folder");
+}
+
+function starterPuzzleTitle(name) {
+  return name.replace(/\.puzzle$/i, "").replace(/[^\w]+/g, " ").trim() || "New Puzzle";
+}
+
+async function newPuzzleSourceForFile(name) {
+  const title = starterPuzzleTitle(name);
+  if (!editorSeed && isDesktopHost()) {
+    if (typeof window.PuzzleStudioHost.newPuzzleSource !== "function") {
+      throw new Error("desktop new puzzle source command is unavailable");
+    }
+    return window.PuzzleStudioHost.newPuzzleSource({ title });
+  }
+  return starterPuzzleSourceFromTitle(title);
 }
 
 function startDraftEntry(kind) {
@@ -2144,7 +2176,7 @@ async function commitDraftEntry(rawName) {
   }
   const current = documents[currentDocumentIndex] || {};
   const fileNameValue = uniqueChildName(parent, name);
-  const file = makeFile(fileNameValue, starterPuzzleSource(fileNameValue), {
+  const file = makeFile(fileNameValue, await newPuzzleSourceForFile(fileNameValue), {
     parentPath: folderPath(parent),
     workspaceRoot: workspaceRootForFolder(parent),
     gameCss: current.gameCss || editorSeed?.gameCss || "",
@@ -2392,9 +2424,13 @@ async function deleteTreeNode(nodeId) {
   }
   syncDocumentsFromTree();
   openTabIds = openTabIds.filter((id) => documents.some((document) => document.id === id));
-  if (!documents.length) {
-    const file = makeFile("new.puzzle", starterPuzzleSource("new.puzzle"));
-    fileTree.children.push(file);
+  if (!documents.length && (editorSeed || !isDesktopHost())) {
+    const fallbackParent = workspaceRootFolder(targetWorkspaceRoot) || fileTree;
+    const file = makeFile("new.puzzle", starterPuzzleSource("new.puzzle"), {
+      parentPath: folderPath(fallbackParent),
+      workspaceRoot: workspaceRootForFolder(fallbackParent),
+    });
+    fallbackParent.children.push(file);
     syncDocumentsFromTree();
   }
   if (removedActive || !findNode(fileTree, activeFileId)) {
@@ -2403,6 +2439,21 @@ async function deleteTreeNode(nodeId) {
   selectedTreeId = activeFileId;
   currentDocumentIndex = activeDocumentIndex();
   saveDocumentStore(false);
+  if (!activeFileId) {
+    selectedTreeId = target.parent === fileTree ? "" : target.parent.id;
+    selectedFolderId = selectedTreeId;
+    renderDocumentSelect();
+    renderDocumentTabs();
+    runButton.disabled = true;
+    sourceEditor.readOnly = false;
+    setSourceEditorValue("");
+    latestHtml = "";
+    previewExport = null;
+    setPreviewFrameHtml(emptyPreviewDocument());
+    resetPreviewLog("No puzzle selected");
+    setEditorStatus("Deleted", "is-ok");
+    return;
+  }
   loadEmbeddedDocument(currentDocumentIndex);
   setEditorStatus("Deleted", "is-ok");
 }
@@ -2448,7 +2499,10 @@ async function removeWorkspaceNode(nodeId) {
 const STARTER_PUZZLE_SOURCE = "__PUZZLESTUDIO_NEW_PUZZLE_SOURCE__";
 
 function starterPuzzleSource(name) {
-  const title = name.replace(/\.puzzle$/i, "").replace(/[^\w]+/g, " ").trim() || "New Puzzle";
+  return starterPuzzleSourceFromTitle(starterPuzzleTitle(name));
+}
+
+function starterPuzzleSourceFromTitle(title) {
   const defaultTitleLine = "title \"New Puzzle\"";
   if (!STARTER_PUZZLE_SOURCE.startsWith(`${defaultTitleLine}\n`)) {
     throw new Error("new puzzle template title line is missing");

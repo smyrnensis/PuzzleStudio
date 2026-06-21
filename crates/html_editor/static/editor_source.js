@@ -69,6 +69,7 @@ let sourceHighlightHtml = "";
 let sourceHighlightMode = "";
 let sourceHighlightUnavailableStatusShown = false;
 let sourceLayoutSyncFrame = 0;
+let sourceCompositionPreviewSource = "";
 
 function sourceEditorSnapshot() {
   return {
@@ -335,12 +336,14 @@ function sourceHighlightMergeRuns(runs) {
 function sourcePredictedBeforeInputValue(event) {
   if (
     !event
-    || event.isComposing
     || sourceEditorBlockSelection?.ranges?.length
   ) {
     return null;
   }
-  if (event.inputType !== "insertText" || typeof event.data !== "string") {
+  if (
+    !["insertText", "insertCompositionText"].includes(event.inputType)
+    || typeof event.data !== "string"
+  ) {
     return null;
   }
   const source = sourceEditor.value || "";
@@ -349,30 +352,10 @@ function sourcePredictedBeforeInputValue(event) {
   return `${source.slice(0, start)}${event.data}${source.slice(end)}`;
 }
 
-function handleSourceBeforeInputTextInsert(event) {
-  if (
-    !event
-    || event.isComposing
-    || sourceEditorBlockSelection?.ranges?.length
-    || event.inputType !== "insertText"
-    || typeof event.data !== "string"
-  ) {
-    return false;
+function renderPredictedSourceHighlight(source) {
+  if (!renderOptimisticSourceHighlight(source)) {
+    setSourceHighlightHtml(source, escapeHtml(source || " "), "optimistic");
   }
-  event.preventDefault();
-  hideSourceImportLinkFrame();
-  clearSourceBlockSelection();
-  sourceEditorPreferredCaretX = null;
-  sourceEditor.setRangeText(
-    event.data,
-    sourceEditor.selectionStart,
-    sourceEditor.selectionEnd,
-    "end",
-  );
-  sourceEditorContentChanged();
-  syncPreviewModeFromSourceCursor();
-  renderSourceCaret();
-  return true;
 }
 
 function renderPlainSourceHighlight(source = sourceEditor.value, reason = null) {
@@ -457,6 +440,9 @@ function sourceDocumentSupportsEditableTargets() {
 async function refreshSourceHighlight() {
   const document = activeDocument();
   if (!sourceHighlight || !isPuzzleDocument(document) || !isTextDocument(document)) {
+    return;
+  }
+  if (sourceCompositionPreviewSource) {
     return;
   }
 
@@ -588,8 +574,12 @@ function createSourceFindPanel() {
     </div>
     <div class="source-find-row source-replace-row">
       <input class="source-find-input" data-source-replace-input type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Replace" aria-label="Replace with">
-      <button class="source-find-command-button" data-source-replace-current type="button">Replace</button>
-      <button class="source-find-command-button" data-source-replace-all type="button">All</button>
+      <button class="source-find-icon-button" data-source-replace-current type="button" aria-label="Replace" title="Replace">
+        <svg class="lucide lucide-replace" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4a1 1 0 0 1 1-1"></path><path d="M15 10a1 1 0 0 1-1-1"></path><path d="M21 4a1 1 0 0 0-1-1"></path><path d="M21 9a1 1 0 0 1-1 1"></path><path d="m3 7 3 3 3-3"></path><path d="M6 10V5a2 2 0 0 1 2-2h2"></path><rect x="3" y="14" width="7" height="7" rx="1"></rect></svg>
+      </button>
+      <button class="source-find-icon-button" data-source-replace-all type="button" aria-label="Replace all" title="Replace all">
+        <svg class="lucide lucide-replace-all" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 14a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1"></path><path d="M14 4a1 1 0 0 1 1-1"></path><path d="M15 10a1 1 0 0 1-1-1"></path><path d="M19 14a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1"></path><path d="M21 4a1 1 0 0 0-1-1"></path><path d="M21 9a1 1 0 0 1-1 1"></path><path d="m3 7 3 3 3-3"></path><path d="M6 10V5a2 2 0 0 1 2-2h2"></path><rect x="3" y="14" width="7" height="7" rx="1"></rect></svg>
+      </button>
     </div>
     <div class="source-find-status" data-source-find-status aria-live="polite">No query</div>
   `;
@@ -640,7 +630,7 @@ async function showSourceCompletions(options = {}) {
       replaceEnd: list.replaceEnd,
       items,
       selectedIndex: mode === "completion" ? 0 : null,
-      keyboardCommit: mode === "completion",
+      keyboardCommit: Boolean(options.manual),
     };
     renderSourceCompletionItems();
     positionSourceCompletionPopover();
@@ -679,22 +669,15 @@ function sourceAutoCompletionEligible(source, cursor) {
   if (
     sourceEditor.selectionStart !== sourceEditor.selectionEnd
     || sourceEditorBlockSelection?.ranges?.length
-    || sourceCursorAtBareLineTail(source, cursor)
     || sourceCursorBeforeSyntaxBoundaryWithoutPrefix(source, cursor)
   ) {
     return false;
   }
-  return true;
+  return sourceCursorHasCompletionPrefix(source, cursor);
 }
 
-function sourceCursorAtBareLineTail(source, cursor) {
-  const lineStart = source.lastIndexOf("\n", cursor - 1) + 1;
-  const line = source.slice(lineStart, cursor);
-  if (/[ \t]$/.test(line)) {
-    return false;
-  }
-  const code = stripSourceImportLineComment(line).trimEnd();
-  return Boolean(code && !/\s/.test(code.at(-1) || ""));
+function sourceCursorHasCompletionPrefix(source, cursor) {
+  return /[_@A-Za-z0-9.-]$/.test(source.slice(0, cursor));
 }
 
 function sourceCursorBeforeSyntaxBoundaryWithoutPrefix(source, cursor) {
@@ -848,6 +831,25 @@ function handleSourceFindShortcut(event) {
   event.stopPropagation();
   event.stopImmediatePropagation?.();
   openSourceFindPanel({ replace: event.altKey });
+  return true;
+}
+
+function sourceFindMoveShortcutRequested(event) {
+  if (!event.metaKey || event.ctrlKey || event.altKey) {
+    return false;
+  }
+  const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
+  return key === "g" || event.code === "KeyG";
+}
+
+function handleSourceFindMoveShortcut(event) {
+  if (!sourceFindMoveShortcutRequested(event) || !isTextDocument(documents[currentDocumentIndex])) {
+    return false;
+  }
+  event.preventDefault();
+  event.stopPropagation();
+  event.stopImmediatePropagation?.();
+  moveSourceFindSelection(event.shiftKey ? -1 : 1);
   return true;
 }
 
@@ -1852,18 +1854,23 @@ sourceEditor.addEventListener("beforeinput", (event) => {
     }
     return;
   }
-  if (handleSourceBeforeInputTextInsert(event)) {
-    return;
-  }
   const predicted = sourcePredictedBeforeInputValue(event);
   if (predicted !== null) {
-    renderOptimisticSourceHighlight(predicted);
+    if (event.isComposing || event.inputType === "insertCompositionText") {
+      sourceCompositionPreviewSource = predicted;
+      if (activeHighlightRequest) {
+        activeHighlightRequest.abort();
+      }
+      sourceHighlightRequestId += 1;
+    }
+    renderPredictedSourceHighlight(predicted);
   }
 });
 sourceEditor.addEventListener("input", () => {
   if (!isTextDocument(documents[currentDocumentIndex])) {
     return;
   }
+  sourceCompositionPreviewSource = "";
   hideSourceImportLinkFrame();
   clearSourceBlockSelection();
   sourceEditorPreferredCaretX = null;
@@ -1881,6 +1888,10 @@ sourceEditor.addEventListener("input", () => {
   syncPreviewModeFromSourceCursor();
   renderSourceCaret();
   schedulePreview();
+});
+sourceEditor.addEventListener("compositionend", () => {
+  sourceCompositionPreviewSource = "";
+  scheduleSourceHighlight();
 });
 sourceEditor.addEventListener("click", (event) => {
   if (suppressNextSourceClickSelection) {
@@ -1938,7 +1949,10 @@ document.addEventListener("keydown", (event) => {
   if (event.defaultPrevented) {
     return;
   }
-  handleSourceFindShortcut(event);
+  if (handleSourceFindShortcut(event)) {
+    return;
+  }
+  handleSourceFindMoveShortcut(event);
 }, true);
 sourceFindPanel?.addEventListener("mousedown", (event) => {
   if (event.target.closest("button")) {
@@ -2805,6 +2819,36 @@ function sourceEditorContentChanged() {
   resetLevelBuilderFromSource(false);
   schedulePreview();
   hideSourceCompletions();
+}
+
+function handleSourcePrintableKeydownInput(event) {
+  if (
+    !event
+    || event.defaultPrevented
+    || event.isComposing
+    || event.altKey
+    || event.ctrlKey
+    || event.metaKey
+    || event.key.length !== 1
+    || sourceEditorBlockSelection?.ranges?.length
+  ) {
+    return false;
+  }
+  event.preventDefault();
+  event.stopPropagation();
+  hideSourceImportLinkFrame();
+  sourceEditorPreferredCaretX = null;
+  sourceEditor.setRangeText(
+    event.key,
+    sourceEditor.selectionStart,
+    sourceEditor.selectionEnd,
+    "end",
+  );
+  sourceEditorContentChanged();
+  scheduleSourceCompletion();
+  syncPreviewModeFromSourceCursor();
+  renderSourceCaret();
+  return true;
 }
 
 function handleSourceEditorVsCodeShortcut(event) {
@@ -3745,6 +3789,9 @@ sourceEditor.addEventListener("keydown", (event) => {
   if (handleSourceFindShortcut(event)) {
     return;
   }
+  if (handleSourceFindMoveShortcut(event)) {
+    return;
+  }
   if (event.key === "Escape" && isSourceFindPanelOpen()) {
     event.preventDefault();
     event.stopPropagation();
@@ -3848,6 +3895,9 @@ sourceEditor.addEventListener("keydown", (event) => {
       insertAtSelection("\t");
       return;
     }
+    return;
+  }
+  if (handleSourcePrintableKeydownInput(event)) {
     return;
   }
 

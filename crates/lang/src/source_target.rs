@@ -327,9 +327,7 @@ fn resolve_sprite_target(
             .find('{')
             .map(|offset| line.start + offset)
         {
-            let end = find_matching_brace(source, open_index)
-                .map(|index| index + 1)
-                .unwrap_or_else(|| sprite_range_fallback_end(context, index));
+            let end = find_matching_brace(source, open_index)? + 1;
             if cursor < line.start || cursor > end {
                 continue;
             }
@@ -494,7 +492,7 @@ fn sprite3d_name(line: &SourceContextLine) -> Option<String> {
     let [name] = line.tokens.as_slice() else {
         return None;
     };
-    if sprite_definition_name_token(name) && !is_sprite_color_row(code_trim(&line.content)) {
+    if sprite_definition_name_token(name) {
         return Some(clean_name_token(name));
     }
     None
@@ -535,7 +533,7 @@ fn sprite_name(line: &SourceContextLine) -> Option<String> {
                 && !first.contains('=')
                 && (line.content.trim_end().ends_with('{') || is_unbraced_sprite_header(line)) =>
         {
-            Some(clean_table_name(first))
+            Some(clean_name_token(first))
         }
         _ => None,
     }
@@ -645,34 +643,39 @@ fn sprite_definition_name_token(value: &str) -> bool {
 
 fn is_sprite_color_row(line: &str) -> bool {
     let colors = line.split_whitespace().collect::<Vec<_>>();
-    !colors.is_empty() && colors.iter().all(|color| is_sprite_color(color))
+    !colors.is_empty() && colors.iter().all(|color| is_sprite_color_expr(color))
+}
+
+fn is_sprite_color_expr(value: &str) -> bool {
+    is_sprite_color(value) || is_sprite_color_ref(value)
 }
 
 fn is_sprite_color(value: &str) -> bool {
-    let lower = value.to_ascii_lowercase();
-    lower == "transparent"
-        || lower == "currentcolor"
-        || matches!(
-            lower.as_str(),
-            "black"
-                | "silver"
-                | "gray"
-                | "white"
-                | "maroon"
-                | "red"
-                | "purple"
-                | "fuchsia"
-                | "green"
-                | "lime"
-                | "olive"
-                | "yellow"
-                | "navy"
-                | "blue"
-                | "teal"
-                | "aqua"
-                | "orange"
-        )
-        || is_hex_color(value)
+    crate::syntax::is_visual_named_color(value) || is_hex_color(value)
+}
+
+fn is_sprite_color_ref(value: &str) -> bool {
+    let mut parts = value.split(':');
+    let Some(first) = parts.next() else {
+        return false;
+    };
+    is_identifier_token(first)
+        && parts.all(|part| {
+            !part.is_empty()
+                && part.chars().all(|ch| {
+                    ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '+' | '*' | '(' | ')')
+                })
+        })
+}
+
+fn is_identifier_token(value: &str) -> bool {
+    let Some(first) = value.chars().next() else {
+        return false;
+    };
+    (first.is_ascii_alphabetic() || first == '_')
+        && value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
 }
 
 fn is_hex_color(value: &str) -> bool {
@@ -693,21 +696,6 @@ fn is_visual_image_source(value: &str) -> bool {
         || lower.ends_with(".webp")
         || lower.ends_with(".svg")
         || lower.ends_with(".avif")
-}
-
-fn sprite_range_fallback_end(context: &SourceContext, start_index: usize) -> usize {
-    context
-        .lines
-        .iter()
-        .skip(start_index + 1)
-        .take_while(|line| {
-            matches!(
-                line.scope,
-                Some(SourceScope::VisualShapeTable | SourceScope::VisualShapeEntry)
-            ) || code_trim(&line.content).is_empty()
-        })
-        .last()
-        .map_or_else(|| line_end(&context.lines[start_index]), line_end)
 }
 
 fn line_end(line: &SourceContextLine) -> usize {
@@ -932,6 +920,56 @@ Box sprites/box.png
         let body = &source[target.body_start.unwrap()..target.body_end.unwrap()];
         assert!(body.contains("111"));
         assert!(!body.contains("Box sprites/box.png"));
+    }
+
+    #[test]
+    fn resolves_unbraced_schema_sprite_with_color_alias_row() {
+        let source = r##"
+sprites {
+Gate:num
+Gate_color_1 Gate_color_2
+.......
+.00000.
+.00000.
+.00000.
+.00000.
+.00000.
+.......
+}
+"##;
+        let cursor = source.find(".00000.").unwrap();
+        let target = resolve_source_target(source, cursor).unwrap();
+
+        assert_eq!(target.kind, SourceTargetKind::Sprite);
+        assert_eq!(target.name, "Gate:num");
+        let body = &source[target.body_start.unwrap()..target.body_end.unwrap()];
+        assert!(body.contains("Gate_color_1 Gate_color_2"));
+        assert!(body.contains(".00000."));
+    }
+
+    #[test]
+    fn resolves_unbraced_variant_sprite_with_color_alias_row() {
+        let source = r##"
+sprites {
+Gate:1
+Gate_color_1 Gate_color_2
+.......
+.00000.
+.00000.
+.00000.
+.00000.
+.00000.
+.......
+}
+"##;
+        let cursor = source.find(".00000.").unwrap();
+        let target = resolve_source_target(source, cursor).unwrap();
+
+        assert_eq!(target.kind, SourceTargetKind::Sprite);
+        assert_eq!(target.name, "Gate:1");
+        let body = &source[target.body_start.unwrap()..target.body_end.unwrap()];
+        assert!(body.contains("Gate_color_1 Gate_color_2"));
+        assert!(body.contains(".00000."));
     }
 
     #[test]

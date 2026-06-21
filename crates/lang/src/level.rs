@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use puzzle_core::{CompiledGame, ObjectId, State};
 
-use crate::{AppError, LevelRegionDef};
+use crate::{DiagnosticReport, LevelRegionDef};
 
 #[derive(Clone, Debug)]
 pub(crate) struct LevelBlock {
@@ -23,7 +23,7 @@ pub(crate) fn parse_level(
     empty: char,
     char_objects: &HashMap<char, Vec<ObjectId>>,
     global_defaults: &[i64],
-) -> Result<ParsedLevel, AppError> {
+) -> Result<ParsedLevel, DiagnosticReport> {
     let regions = split_regions(lines)?;
     let (lowered_lines, region_defs) = lower_regions(&regions, empty);
     let height = lowered_lines.len() as u16;
@@ -47,7 +47,7 @@ pub(crate) fn parse_level(
             }
             let objects = char_objects
                 .get(&ch)
-                .ok_or_else(|| AppError::Parse(format!("unknown level char '{ch}'")))?;
+                .ok_or_else(|| DiagnosticReport::error(format!("unknown level char '{ch}'")))?;
             for object in objects {
                 state.place_object(game, x as u16, y as u16, *object)?;
             }
@@ -60,7 +60,7 @@ pub(crate) fn parse_level(
     })
 }
 
-fn split_regions(lines: &[String]) -> Result<Vec<Vec<String>>, AppError> {
+fn split_regions(lines: &[String]) -> Result<Vec<Vec<String>>, DiagnosticReport> {
     let mut regions = Vec::<Vec<String>>::new();
     let mut current = Vec::<String>::new();
     for line in lines {
@@ -76,7 +76,7 @@ fn split_regions(lines: &[String]) -> Result<Vec<Vec<String>>, AppError> {
         regions.push(current);
     }
     if regions.is_empty() {
-        return Err(AppError::Parse(
+        return Err(DiagnosticReport::error(
             "level requires at least one row".to_string(),
         ));
     }
@@ -84,12 +84,12 @@ fn split_regions(lines: &[String]) -> Result<Vec<Vec<String>>, AppError> {
     for region in &regions {
         let width = region[0].chars().count();
         if width == 0 || region.iter().any(|row| row.chars().count() != width) {
-            return Err(AppError::Parse(
+            return Err(DiagnosticReport::error(
                 "level regions must be rectangular".to_string(),
             ));
         }
         if region.iter().any(|row| row.contains(['{', '}'])) {
-            return Err(AppError::Parse(
+            return Err(DiagnosticReport::error(
                 "ASCII rows cannot contain braces".to_string(),
             ));
         }

@@ -1378,11 +1378,11 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
 .syntax-asset { color: var(--syntax-asset); }
 .syntax-color {
   color: var(--code-ink);
-  font-weight: 700;
   text-decoration-line: underline;
   text-decoration-color: var(--syntax-color-token);
   text-decoration-thickness: 0.18em;
   text-underline-offset: 0.18em;
+  text-decoration-skip-ink: none;
 }
 
 .syntax-color::before {
@@ -1515,6 +1515,9 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
 .source-completion-kind-music { color: var(--syntax-asset); }
 .source-completion-kind-sprite { color: var(--syntax-asset); }
 .source-completion-kind-asset { color: var(--syntax-asset); }
+.source-completion-kind-palette { color: var(--syntax-asset); }
+.source-completion-kind-shape { color: var(--syntax-asset); }
+.source-completion-kind-color { color: var(--syntax-color); }
 
 .source-find-panel {
   position: absolute;
@@ -1546,7 +1549,7 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
 
 .source-replace-row {
   display: none;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(0, 1fr) 30px 30px;
 }
 
 .source-find-panel.has-replace .source-replace-row {
@@ -1570,8 +1573,7 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
 }
 
-.source-find-icon-button,
-.source-find-command-button {
+.source-find-icon-button {
   height: 28px;
   min-height: 28px;
   border: 1px solid transparent;
@@ -1600,17 +1602,9 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   stroke-linejoin: round;
 }
 
-.source-find-command-button {
-  min-width: 0;
-  padding: 0 8px;
-  white-space: nowrap;
-}
-
 .source-find-icon-button:hover,
 .source-find-icon-button:focus-visible,
-.source-find-icon-button.is-active,
-.source-find-command-button:hover,
-.source-find-command-button:focus-visible {
+.source-find-icon-button.is-active {
   background: var(--hover-bg);
   color: var(--ink);
 }
@@ -1684,6 +1678,12 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   );
   font-weight: 800;
 }
+
+.syntax-sprite-pixel.is-transparent {
+  color: color-mix(in srgb, var(--code-ink) 32%, transparent);
+  font-weight: 600;
+}
+
 .syntax-scratch { color: var(--syntax-scratch); }
 .syntax-state { color: var(--syntax-state); }
 .syntax-string { color: var(--syntax-string); }
@@ -4829,11 +4829,13 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
 
 .sprite-color-swatch {
   --sprite-swatch-color: transparent;
+  --sprite-swatch-bg: #d7dde2;
+  --sprite-swatch-checker: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='8' viewBox='0 0 8 8'%3E%3Cpath fill='%23f5f3ef' d='M0 0h4v4H0zm4 4h4v4H4z'/%3E%3Cpath fill='%23aeb6be' d='M4 0h4v4H4zM0 4h4v4H0z'/%3E%3C/svg%3E");
   position: relative;
   overflow: hidden;
   isolation: isolate;
-  background-color: #d7dde2;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='8' viewBox='0 0 8 8'%3E%3Cpath fill='%23f5f3ef' d='M0 0h4v4H0zm4 4h4v4H4z'/%3E%3Cpath fill='%23aeb6be' d='M4 0h4v4H4zM0 4h4v4H0z'/%3E%3C/svg%3E");
+  background-color: var(--sprite-swatch-bg);
+  background-image: var(--sprite-swatch-checker);
   background-size: 8px 8px;
 }
 
@@ -5250,7 +5252,11 @@ html.is-sprite3d-slice-scrubbing * {
 }
 
 .sprite-cell:hover,
-.sprite-cell:focus-visible {
+.sprite-cell:focus-visible,
+.sprite-cell:active {
+  background-color: var(--sprite-swatch-bg);
+  background-image: var(--sprite-swatch-checker);
+  background-size: 8px 8px;
   outline: 2px solid var(--accent);
   outline-offset: -2px;
 }

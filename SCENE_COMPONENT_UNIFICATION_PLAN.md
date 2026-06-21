@@ -239,7 +239,7 @@ Validation:
 
 ### Package E: Migrate 3D Scenes To Shared Shape
 
-Owner: `puzzle3d-model`.
+Owner: `puzzle-3d` facade, with deterministic 3D state owned by `puzzle-grid3d`.
 
 Goal: stop representing 3D scenes as a separate scene/component hierarchy.
 
@@ -255,7 +255,8 @@ Tasks:
 
 Validation:
 
-- `cargo test -p puzzle3d-model`
+- `cargo test -p puzzle-3d`
+- `cargo test -p puzzle-grid3d`
 - Fixture export should still include the same scene JSON shape.
 
 ### Package F: Shared Scene JSON
@@ -281,7 +282,8 @@ Tasks:
 Validation:
 
 - `cargo check -p html-play`
-- `cargo test -p puzzle3d-model`
+- `cargo test -p puzzle-3d`
+- `cargo test -p puzzle-grid3d`
 - Diff generated fixture JSON intentionally if field names change.
 
 ### Package G: Runtime Rendering Boundary
@@ -351,14 +353,14 @@ The unification is complete when:
 ## Current Known DRY Violations To Track
 
 - `SceneComponent` in `crates/lang/src/loaded.rs` and `SceneComponent3` in
-  `crates/puzzle3d_model/src/scene.rs`.
+  `crates/puzzle_3d/src/scene.rs`.
 - 2D scene parsing around `parse_screen_view_block` / `parse_screen_component`
   and 3D scene parsing around `parse_scene_block` / `parse_scene_component_at`.
 - Component keyword lists in authoring collection, block parsing, and component
   parsing.
-- Layout JSON writing in `html-play` and `puzzle3d_model` fixture export.
+- Layout JSON writing in `html-play` and `puzzle_3d` fixture export.
 - Copied 3D visual runtime code between `crates/html_play/static/puzzle3_app.js`
-  and `tests/puzzle3d_model/visual/app.js`.
+  and `tests/puzzle_3d/visual/app.js`.
 - Canonical drift between 2D `inputs { ... }` and 3D `keys { ... }`.
 
 ## Non-Goals

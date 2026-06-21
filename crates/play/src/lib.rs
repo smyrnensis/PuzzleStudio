@@ -9,8 +9,8 @@ use puzzle_core::{
     transition_program_trace,
 };
 use puzzle_lang::{
-    AsciiLegend, Level, LevelMenuDef, LoadedGame, ResourceSelection, RuleAnimationTrigger,
-    RuleEffect, RuleEmission, SceneComponent, SceneEffect, SceneEffectParam, SceneExpr,
+    AsciiLegend, Level, LevelMenuDef, LoadedGame, ResourceSelection, RuleAnimation,
+    RuleAnimationTrigger, RuleEffect, SceneComponent, SceneEffect, SceneEffectParam, SceneExpr,
     ScenePuzzleInitializer, SceneTransitionTrigger, SceneValue,
 };
 
@@ -523,12 +523,12 @@ impl GameSession {
     ) -> Result<(), TransitionError> {
         let previous_input = self.current_input.clone();
         self.current_input = game.input_labels.get(&input).cloned();
-        let owns_turn_sfx = self.begin_rule_emission_turn();
+        let owns_turn_sfx = self.begin_turn_sfx_dedup();
         let result = match self.apply_model_input(game, input) {
             Ok(result) => result,
             Err(error) => {
                 self.current_input = previous_input;
-                self.end_rule_emission_turn(owns_turn_sfx);
+                self.end_turn_sfx_dedup(owns_turn_sfx);
                 return Err(error);
             }
         };
@@ -537,18 +537,18 @@ impl GameSession {
                 self.queue_program_continuation(checkpoint);
                 let condition_result = self.resolve_turn_effects(game, result.effects, None);
                 self.current_input = previous_input;
-                self.end_rule_emission_turn(owns_turn_sfx);
+                self.end_turn_sfx_dedup(owns_turn_sfx);
                 condition_result?;
                 return Ok(());
             }
             let condition_result = self.apply_turn_completion(game, result.effects);
             self.current_input = previous_input;
-            self.end_rule_emission_turn(owns_turn_sfx);
+            self.end_turn_sfx_dedup(owns_turn_sfx);
             condition_result?;
             return Ok(());
         }
         self.current_input = previous_input;
-        self.end_rule_emission_turn(owns_turn_sfx);
+        self.end_turn_sfx_dedup(owns_turn_sfx);
         Ok(())
     }
 
@@ -752,6 +752,18 @@ impl GameSession {
                         self.sound_events.push(SoundEvent::PlaySfx { name });
                     }
                 }
+                RuleEffect::PlayMusic { name } => {
+                    self.sound_events.push(SoundEvent::PlayMusic { name });
+                }
+                RuleEffect::PauseMusic { name } => {
+                    self.sound_events.push(SoundEvent::PauseMusic { name });
+                }
+                RuleEffect::ResumeMusic { name } => {
+                    self.sound_events.push(SoundEvent::ResumeMusic { name });
+                }
+                RuleEffect::StopMusic { name } => {
+                    self.sound_events.push(SoundEvent::StopMusic { name });
+                }
                 RuleEffect::Wait { milliseconds } => {
                     let remaining = effects.split_off(index + 1);
                     if !remaining.is_empty() || condition_effect.is_some() {
@@ -942,7 +954,7 @@ impl GameSession {
         target: Option<String>,
     ) -> Result<(), TransitionError> {
         for _ in 0..MAX_AGAIN_TURNS_PER_INPUT {
-            let previous_turn_sfx = self.begin_separate_rule_emission_turn();
+            let previous_turn_sfx = self.begin_separate_turn_sfx_dedup();
             let result = match if let Some(target) = target.as_deref() {
                 self.apply_model_input_to_target(game, target, InputId(0))
             } else {
@@ -950,12 +962,12 @@ impl GameSession {
             } {
                 Ok(result) => result,
                 Err(error) => {
-                    self.end_separate_rule_emission_turn(previous_turn_sfx);
+                    self.end_separate_turn_sfx_dedup(previous_turn_sfx);
                     return Err(error);
                 }
             };
             if result.cancelled {
-                self.end_separate_rule_emission_turn(previous_turn_sfx);
+                self.end_separate_turn_sfx_dedup(previous_turn_sfx);
                 return Ok(());
             }
             let has_again = result
@@ -968,7 +980,7 @@ impl GameSession {
                 .filter(|effect| !matches!(effect.effect, RuleEffect::Again))
                 .collect();
             let completion = self.apply_turn_completion(game, effects);
-            self.end_separate_rule_emission_turn(previous_turn_sfx);
+            self.end_separate_turn_sfx_dedup(previous_turn_sfx);
             completion?;
             if !has_again {
                 return Ok(());
@@ -977,7 +989,7 @@ impl GameSession {
         Ok(())
     }
 
-    fn begin_rule_emission_turn(&mut self) -> bool {
+    fn begin_turn_sfx_dedup(&mut self) -> bool {
         if self.current_turn_sfx.is_some() {
             return false;
         }
@@ -985,19 +997,19 @@ impl GameSession {
         true
     }
 
-    fn end_rule_emission_turn(&mut self, owned: bool) {
+    fn end_turn_sfx_dedup(&mut self, owned: bool) {
         if owned {
             self.current_turn_sfx = None;
         }
     }
 
-    fn begin_separate_rule_emission_turn(&mut self) -> Option<HashSet<String>> {
+    fn begin_separate_turn_sfx_dedup(&mut self) -> Option<HashSet<String>> {
         let previous = self.current_turn_sfx.take();
         self.current_turn_sfx = Some(HashSet::new());
         previous
     }
 
-    fn end_separate_rule_emission_turn(&mut self, previous: Option<HashSet<String>>) {
+    fn end_separate_turn_sfx_dedup(&mut self, previous: Option<HashSet<String>>) {
         self.current_turn_sfx = previous;
     }
 
@@ -1006,37 +1018,6 @@ impl GameSession {
             return true;
         };
         seen.insert(name.to_string())
-    }
-
-    fn apply_rule_emissions(&mut self, game: &LoadedGame, fired_rules: &[puzzle_core::RuleId]) {
-        for rule in fired_rules {
-            let Some(emissions) = game.rule_emissions.get(rule) else {
-                continue;
-            };
-            for emission in emissions {
-                match emission {
-                    RuleEmission::PlaySfx { name } => {
-                        if self.should_emit_turn_sfx(name) {
-                            self.sound_events
-                                .push(SoundEvent::PlaySfx { name: name.clone() });
-                        }
-                    }
-                    RuleEmission::Wait { milliseconds } => {
-                        self.wait_events.push(WaitEvent::Wait {
-                            milliseconds: *milliseconds,
-                        });
-                    }
-                    RuleEmission::Message { text, literal } => {
-                        let text = self.resolve_message_text(text, *literal);
-                        self.message_events.push(MessageEvent::Message { text });
-                        self.wait_events.push(WaitEvent::Wait {
-                            milliseconds: game.default_wait_ms,
-                        });
-                    }
-                    RuleEmission::Animate { .. } => {}
-                }
-            }
-        }
     }
 
     pub fn apply_command(
@@ -1057,6 +1038,10 @@ impl GameSession {
                 return Ok(());
             }
             _ => {}
+        }
+
+        if runtime_command_has_quoted_level_arg(command) {
+            return Err(TransitionError::InvalidCommand(command.to_string()));
         }
 
         if let Some(effect) = parse_runtime_command(command, game.default_wait_ms) {
@@ -1201,9 +1186,9 @@ impl GameSession {
         self.state = next_state;
         self.sync_persistent_vars_to_scene_states(game);
         if emit_events && !outcome.cancelled {
-            self.apply_rule_emissions(game, &outcome.fired_rules);
-            let commands = queue_transition_commands(None, outcome.commands);
-            self.resolve_turn_commands(game, commands, None)?;
+            let effects =
+                queued_effects_for_outcome(game, None, &outcome.commands, &outcome.fired_rules);
+            self.resolve_turn_effects(game, effects, None)?;
         }
         Ok(())
     }
@@ -1520,6 +1505,16 @@ impl GameSession {
         match effect {
             SceneEffect::Input(input) => self.apply_input_name(game, input),
             SceneEffect::ComponentEffect(effect) => self.apply_component_effect(game, effect),
+            SceneEffect::RoutineCall(name) => {
+                let effect = game
+                    .scenes
+                    .iter()
+                    .find(|scene| scene.name == self.focused_scene)
+                    .and_then(|scene| scene.routines.iter().find(|routine| routine.name == *name))
+                    .map(|routine| routine.effect.clone())
+                    .expect("scene routine call was validated before runtime");
+                self.apply_screen_effect(game, &effect, bindings)
+            }
             SceneEffect::Message { text } => {
                 if let Some(text) = self.eval_effect_string(game, text, bindings) {
                     self.message_events.push(MessageEvent::Message { text });
@@ -2832,7 +2827,7 @@ fn parse_runtime_command(command_text: &str, default_wait_ms: u64) -> Option<Sce
     }
     if let Some(rest) = command_text.strip_prefix("set current_level = ") {
         return Some(SceneEffect::SetCurrentLevel {
-            level: parse_runtime_expr(rest.trim())?,
+            level: parse_runtime_level_expr(rest.trim())?,
         });
     }
     if let Some(rest) = command_text.strip_prefix("set level.cleared = ") {
@@ -2844,7 +2839,7 @@ fn parse_runtime_command(command_text: &str, default_wait_ms: u64) -> Option<Sce
     if let Some(rest) = command_text.strip_prefix("set level(") {
         let (level, cleared) = rest.split_once(").cleared = ")?;
         return Some(SceneEffect::SetLevelCleared {
-            level: Some(parse_runtime_expr(level.trim())?),
+            level: Some(parse_runtime_level_expr(level.trim())?),
             cleared: parse_runtime_bool(cleared.trim())?,
         });
     }
@@ -2977,7 +2972,7 @@ fn parse_runtime_scene_target(value: &str) -> Option<(&str, Vec<SceneEffectParam
         let params = if args.is_empty() {
             Vec::new()
         } else if !args.contains('=') && !args.contains(',') {
-            vec![SceneEffectParam::Level(parse_runtime_expr(args)?)]
+            vec![SceneEffectParam::Level(parse_runtime_level_expr(args)?)]
         } else {
             parse_runtime_params(&args.replace(" = ", "="))?
         };
@@ -3044,7 +3039,7 @@ fn parse_puzzle_runtime_command(command_text: &str) -> Option<SceneEffect> {
         if is_simple_identifier(target) && command == "goto" {
             return Some(SceneEffect::GotoLevel {
                 target: target.to_string(),
-                level: parse_runtime_expr(level.trim())?,
+                level: parse_runtime_level_expr(level.trim())?,
             });
         }
         return None;
@@ -3065,19 +3060,6 @@ fn parse_puzzle_runtime_command(command_text: &str) -> Option<SceneEffect> {
         }),
         _ => None,
     }
-}
-
-fn queue_transition_commands(
-    target: Option<&str>,
-    commands: Vec<TransitionCommand>,
-) -> Vec<QueuedTransitionCommand> {
-    commands
-        .into_iter()
-        .map(|command| QueuedTransitionCommand {
-            target: target.map(str::to_string),
-            command,
-        })
-        .collect()
 }
 
 fn queued_effects_for_outcome(
@@ -3181,18 +3163,15 @@ pub fn animation_events_for_trace(
 ) -> Vec<AnimationEvent> {
     let mut events = Vec::new();
     for (rule, patch) in fired_rules.iter().zip(patches.iter()) {
-        let Some(emissions) = game.rule_emissions.get(rule) else {
+        let Some(animations) = game.rule_animations.get(rule) else {
             continue;
         };
-        for emission in emissions {
-            let RuleEmission::Animate {
-                trigger,
-                name,
-                objects,
-            } = emission
-            else {
-                continue;
-            };
+        for RuleAnimation {
+            trigger,
+            name,
+            objects,
+        } in animations
+        {
             match trigger {
                 RuleAnimationTrigger::Move => {
                     for op in patch.ops() {
@@ -3366,6 +3345,52 @@ fn parse_runtime_expr(value: &str) -> Option<SceneExpr> {
         .then(|| SceneExpr::Path(parts.into_iter().map(ToString::to_string).collect()))
 }
 
+fn parse_runtime_level_expr(value: &str) -> Option<SceneExpr> {
+    if parse_runtime_quoted_text(value).is_some() {
+        return None;
+    }
+    if is_dotted_level_atom(value) {
+        return Some(SceneExpr::Text(value.to_string()));
+    }
+    parse_runtime_expr(value)
+}
+
+fn runtime_command_has_quoted_level_arg(command: &str) -> bool {
+    let command = command.trim();
+    if let Some(value) = command.strip_prefix("set current_level = ") {
+        return parse_runtime_quoted_text(value.trim()).is_some();
+    }
+    if let Some(rest) = command.strip_prefix("set level(") {
+        return rest
+            .split_once(").cleared = ")
+            .is_some_and(|(level, _)| parse_runtime_quoted_text(level.trim()).is_some());
+    }
+    if let Some(rest) = command
+        .strip_prefix("goto ")
+        .or_else(|| command.strip_prefix("start "))
+    {
+        return runtime_scene_target_has_quoted_level_arg(rest);
+    }
+    if let Some((target_command, level)) = command.split_once(' ') {
+        return target_command
+            .split_once('.')
+            .is_some_and(|(_, action)| action == "goto")
+            && parse_runtime_quoted_text(level.trim()).is_some();
+    }
+    false
+}
+
+fn runtime_scene_target_has_quoted_level_arg(target: &str) -> bool {
+    let Some((_, args)) = target.trim().split_once('(') else {
+        return false;
+    };
+    let Some(args) = args.strip_suffix(')') else {
+        return false;
+    };
+    let args = args.trim();
+    !args.contains('=') && !args.contains(',') && parse_runtime_quoted_text(args).is_some()
+}
+
 fn parse_runtime_quoted_text(value: &str) -> Option<String> {
     let inner = value.strip_prefix('"')?.strip_suffix('"')?;
     Some(inner.replace("\\\"", "\""))
@@ -3378,6 +3403,17 @@ fn is_simple_identifier(value: &str) -> bool {
     };
     (first.is_ascii_alphabetic() || first == '_')
         && chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+}
+
+fn is_dotted_level_atom(value: &str) -> bool {
+    let parts = value.split('.').collect::<Vec<_>>();
+    parts.len() > 1
+        && parts.iter().all(|part| {
+            !part.is_empty()
+                && part
+                    .chars()
+                    .all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
+        })
 }
 
 fn level_index_from_value(game: &LoadedGame, value: &str) -> Option<usize> {
@@ -3593,10 +3629,10 @@ mod tests {
             r#"
 title again_runtime
 puzzle default {
-layers 1
+layers {
+__legacy_layer_0 = Before After
+}
 empty .
-object Before 0
-object After 0
 rules {
 once [ Before ] -> [ After ]
 }
@@ -3634,10 +3670,10 @@ B
             r#"
 title again_effect
 puzzle default {
-layers 1
+layers {
+__legacy_layer_0 = Before After
+}
 empty .
-object Before 0
-object After 0
 rules {
 once [ Before ] -> [ After ] again
 }
@@ -3665,9 +3701,10 @@ A
             r#"
 title checkpoint_runtime
 puzzle default {
-layers 1
+layers {
+__legacy_layer_0 = Player
+}
 empty .
-object Player 0
 input save
 input clear
 rules {
@@ -4024,12 +4061,13 @@ step spec_board
 title scene_var_condition
 
 puzzle default {
-layers 2
+layers {
+__legacy_layer_1 = Player
+}
 empty .
 
 var moved = false
 
-object Player 1
 
 input tick
 
@@ -4082,9 +4120,10 @@ title scene_start_fixture
 puzzle default {
 persistent var moves = 0
 
-layers 1
+layers {
+__legacy_layer_0 = Player
+}
 empty .
-object Player 0
 
 rules {
 }
@@ -4136,9 +4175,10 @@ sounds {
 sfx push seed=push01 type=jump
 }
 puzzle default {
-layers 1
+layers {
+__legacy_layer_0 = Player
+}
 empty .
-object Player 0
 rules {
 right [ Player | ] -> [ | Player ] sfx push
 }
@@ -4164,6 +4204,48 @@ P.
             session.take_sound_events(),
             vec![SoundEvent::PlaySfx {
                 name: "push".to_string()
+            }]
+        );
+    }
+
+    #[test]
+    fn puzzle_rule_music_effect_queues_sound_event_on_match() {
+        let loaded = parse_game(
+            r#"
+title rule_music_fixture
+sounds {
+music locked_room seed=room01
+}
+puzzle default {
+layers {
+__legacy_layer_0 = Player
+}
+empty .
+rules {
+right [ Player | ] -> [ | Player ] stop_music locked_room
+}
+levels {
+legend {
+. = empty
+P = Player
+}
+level start {
+P.
+}
+}
+}
+"#,
+        )
+        .unwrap();
+        let right = *loaded.controls.keys.get(&b'd').unwrap();
+        let mut session = GameSession::new(&loaded);
+
+        session.apply_input(&loaded, right).unwrap();
+
+        assert_eq!(
+            session.take_sound_events(),
+            vec![SoundEvent::StopMusic {
+                name: Some("locked_room".to_string())
             }]
         );
     }
@@ -4259,6 +4341,88 @@ PB#
                 name: "bump".to_string()
             }]
         );
+    }
+
+    #[test]
+    fn model_cantmove_sound_trigger_ignores_direction_cleanup_without_intent() {
+        let loaded = parse_game(
+            r#"
+title model_cantmove_cleanup_without_intent_fixture
+sounds {
+sfx bump seed=bump01 type=hit
+}
+puzzle default {
+layers {
+actor = A
+}
+sounds {
+cantmove A -> sfx bump
+}
+rules {
+right [ A ] -> [ A{no directions} ]
+}
+levels {
+legend {
+. = empty
+A = A
+}
+level start {
+A
+}
+}
+}
+"#,
+        )
+        .unwrap();
+        let right = input_named(&loaded, "right");
+        let mut session = GameSession::new(&loaded);
+
+        session.apply_input(&loaded, right).unwrap();
+
+        assert!(session.take_sound_events().is_empty());
+    }
+
+    #[test]
+    fn model_cantmove_sound_trigger_ignores_other_object_set_intent() {
+        let loaded = parse_game(
+            r#"
+title model_cantmove_other_object_set_fixture
+sounds {
+sfx bump seed=bump01 type=hit
+}
+puzzle default {
+layers {
+actor = A
+crate = B Wall
+}
+sounds {
+cantmove A -> sfx bump
+}
+rules {
+right [ B ] -> [ > B ]
+move
+}
+levels {
+legend {
+. = empty
+A = A
+B = B
+# = Wall
+}
+level start {
+B#
+}
+}
+}
+"#,
+        )
+        .unwrap();
+        let right = input_named(&loaded, "right");
+        let mut session = GameSession::new(&loaded);
+
+        session.apply_input(&loaded, right).unwrap();
+
+        assert!(session.take_sound_events().is_empty());
     }
 
     #[test]
@@ -4653,9 +4817,10 @@ sounds {
 sfx tick seed=tick01 type=jump
 }
 puzzle default {
-layers 1
+layers {
+__legacy_layer_0 = Player
+}
 empty .
-object Player 0
 rules {
 sfx tick
 }
@@ -4692,9 +4857,10 @@ P
 title rule_wait_fixture
 default_wait_time = 300ms
 puzzle default {
-layers 1
+layers {
+__legacy_layer_0 = Player
+}
 empty .
-object Player 0
 rules {
 wait
 wait 25ms
@@ -4852,9 +5018,10 @@ title scene_message_fixture
 default_wait_time = 350ms
 var hint = "Push the box"
 puzzle default {
-layers 1
+layers {
+__legacy_layer_0 = Player
+}
 empty .
-object Player 0
 rules {
 }
 
@@ -4900,9 +5067,10 @@ message hint
 title level_name_condition_message
 var hint = "First level only"
 puzzle default {
-layers 1
+layers {
+__legacy_layer_0 = Player
+}
 empty .
-object Player 0
 rules {
 }
 levels {
@@ -4998,11 +5166,10 @@ level start {
 title message_rule_segment_wait
 default_wait_time = 450ms
 puzzle default {
-layers 1
+layers {
+__legacy_layer_0 = A B C
+}
 empty .
-object A 0
-object B 0
-object C 0
 rules {
 [ A ] -> [ B ] message "changed"
 [ B ] -> [ C ]
@@ -5135,9 +5302,10 @@ title progress_fixture
 puzzle default {
 persistent var moves = 0
 
-layers 1
+layers {
+__legacy_layer_0 = Player
+}
 empty .
-object Player 0
 
 rules {
 }
@@ -5234,7 +5402,7 @@ P
         );
 
         session
-            .apply_command(&loaded, "goto playing(\"microban.1\")")
+            .apply_command(&loaded, "goto playing(microban.1)")
             .unwrap();
 
         assert_eq!(session.screen(), "playing");
@@ -5249,6 +5417,101 @@ P
     }
 
     #[test]
+    fn goto_level_param_accepts_dotted_level_name_without_digits() {
+        let loaded = parse_game(
+            r#"
+title dotted_level
+
+puzzle default {
+layers {
+__legacy_layer_0 = Player
+}
+empty .
+rules {
+}
+levels {
+legend P = Player
+level first {
+P
+}
+level test.chain {
+P
+}
+}
+}
+
+scene playing(level) {
+state {
+board = puzzle default
+}
+layout {
+board
+}
+rules {
+step board
+}
+}
+"#,
+        )
+        .unwrap();
+        let mut session = GameSession::new(&loaded);
+
+        session
+            .apply_command(&loaded, "goto playing(test.chain)")
+            .unwrap();
+
+        assert_eq!(session.scene(), "playing");
+        assert_eq!(session.level_index(), 1);
+    }
+
+    #[test]
+    fn goto_level_param_rejects_quoted_level_name() {
+        let loaded = parse_game(
+            r#"
+title quoted_level
+
+puzzle default {
+layers {
+__legacy_layer_0 = Player
+}
+empty .
+rules {
+}
+levels {
+legend P = Player
+level microban.1 {
+P
+}
+}
+}
+
+scene playing(level) {
+state {
+board = puzzle default
+}
+layout {
+board
+}
+rules {
+step board
+}
+}
+"#,
+        )
+        .unwrap();
+        let mut session = GameSession::new(&loaded);
+
+        let error = session
+            .apply_command(&loaded, "goto playing(\"microban.1\")")
+            .unwrap_err();
+
+        assert_eq!(
+            error,
+            TransitionError::InvalidCommand("goto playing(\"microban.1\")".to_string())
+        );
+    }
+
+    #[test]
     fn game_progress_effects_update_progress_primitives() {
         let loaded = parse_game(
             r#"
@@ -5257,9 +5520,10 @@ title progress_effects
 puzzle default {
 persistent var score = 5
 
-layers 1
+layers {
+__legacy_layer_0 = Player
+}
 empty .
-object Player 0
 
 rules {
 }
@@ -5419,9 +5683,10 @@ title persistent_history
 puzzle default {
 persistent var cleared = false
 
-layers 1
+layers {
+__legacy_layer_0 = Player
+}
 empty .
-object Player 0
 
 rules {
 if input == right {
@@ -5480,9 +5745,10 @@ step board
 title puzzle_load_reset
 
 puzzle default {
-layers 2
+layers {
+__legacy_layer_1 = Player
+}
 empty .
-object Player 1
 
 rules {
 once right [ Player | ] -> [ | Player ]
@@ -5581,10 +5847,11 @@ step board
 title cancel_screen_transition
 
 puzzle default {
-layers 2
+layers {
+__legacy_layer_1 = A
+}
 empty .
 
-object A 1
 
 win_conditions {
 some A
@@ -6037,11 +6304,10 @@ step board
             r#"
 title wait_statement_segments
 puzzle default {
-layers 1
+layers {
+__legacy_layer_0 = A B C
+}
 empty .
-object A 0
-object B 0
-object C 0
 rules {
 [ A ] -> [ B ]
 wait 1s
@@ -6104,9 +6370,10 @@ A
             r#"
 title scene_level_commands
 puzzle default {
-layers 1
+layers {
+__legacy_layer_0 = Player
+}
 empty .
-object Player 0
 rules {
 }
 levels {
@@ -6175,10 +6442,11 @@ rules {
 title level_menu_commands
 
 puzzle default {
-layers 1
+layers {
+__legacy_layer_0 = Player
+}
 empty .
 
-object Player 0
 
 rules {
 }
@@ -6229,10 +6497,11 @@ level_menu
 title scene_level_resources
 
 puzzle default {
-layers 1
+layers {
+__legacy_layer_0 = Player
+}
 empty .
 
-object Player 0
 
 rules {
 }
@@ -6296,10 +6565,11 @@ board
 title level_menu_matrix
 
 puzzle default {
-layers 1
+layers {
+__legacy_layer_0 = Player
+}
 empty .
 
-object Player 0
 
 rules {
 }
@@ -6366,10 +6636,11 @@ wrap = true
 title level_menu_default_select
 
 puzzle default {
-layers 1
+layers {
+__legacy_layer_0 = Player
+}
 empty .
 
-object Player 0
 
 rules {
 }
@@ -6419,10 +6690,11 @@ level_menu
 title level_menu_buttons
 
 puzzle default {
-layers 1
+layers {
+__legacy_layer_0 = Player
+}
 empty .
 
-object Player 0
 
 rules {
 }
@@ -6472,10 +6744,11 @@ button "Title" -> goto title
         let source = r#"
 title screen_history
 puzzle default {
-layers 1
+layers {
+__legacy_layer_0 = Player
+}
 empty .
 
-object Player 0
 
 rules {
 }
@@ -6540,10 +6813,11 @@ text "C"
         let source = r#"
 title persistent_scene_var
 puzzle default {
-layers 1
+layers {
+__legacy_layer_0 = Player
+}
 empty .
 
-object Player 0
 
 rules {
 }
@@ -6598,10 +6872,11 @@ text tab
         let source = r#"
 title scene_param_rejection
 puzzle default {
-layers 1
+layers {
+__legacy_layer_0 = Player
+}
 empty .
 
-object Player 0
 
 rules {
 }
@@ -6648,10 +6923,11 @@ text tab
         let source = r#"
 title scene_state_words
 puzzle default {
-layers 1
+layers {
+__legacy_layer_0 = Player
+}
 empty .
 
-object Player 0
 
 rules {
 }
@@ -6721,10 +6997,11 @@ text "Menu"
         let source = r#"
 title level_ref_params
 puzzle default {
-layers 1
+layers {
+__legacy_layer_0 = Player
+}
 empty .
 
-object Player 0
 
 rules {
 }
@@ -6783,10 +7060,11 @@ text selected.solved
         let source = r#"
 title screen_focus
 puzzle default {
-layers 1
+layers {
+__legacy_layer_0 = Player
+}
 empty .
 
-object Player 0
 
 rules {
 }
@@ -7055,10 +7333,11 @@ step board
 title runtime_level_start
 
 puzzle board {
-layers 2
+layers {
+__legacy_layer_0 = Player
+__legacy_layer_1 = Started
+}
 empty .
-object Player 0
-object Started 1
 
 
 input tick
@@ -7123,9 +7402,10 @@ step board
 title level_message_sugar
 
 puzzle board {
-layers 1
+layers {
+__legacy_layer_0 = Player
+}
 empty .
-object Player 0
 
 
 input tick
@@ -7194,9 +7474,10 @@ step board
 title title_level_start_boundary
 
 puzzle board {
-layers 1
+layers {
+__legacy_layer_0 = Player
+}
 empty .
-object Player 0
 
 
 input tick
