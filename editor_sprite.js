@@ -87,7 +87,7 @@ function discardSpriteColorEditHistory(kind) {
   spriteColorEditSessions[kind] = null;
 }
 
-function renderSpriteColorAdjuster({ color, ariaLabel, onChange }) {
+function renderSpriteColorAdjuster({ color, ariaLabel, onChange, onPickError = null }) {
   const editor = document.createElement("span");
   editor.className = "sprite-color-adjuster";
   const colorField = document.createElement("span");
@@ -112,13 +112,8 @@ function renderSpriteColorAdjuster({ color, ariaLabel, onChange }) {
   eyedropperButton.type = "button";
   eyedropperButton.className = "sprite-eyedropper-button";
   eyedropperButton.title = "Pick color from screen";
-  eyedropperButton.setAttribute("aria-label", "Pick color from screen");
+  eyedropperButton.setAttribute("aria-label", eyedropperButton.title);
   eyedropperButton.innerHTML = spriteEyedropperIconSvg();
-  if (!("EyeDropper" in window)) {
-    eyedropperButton.disabled = true;
-    eyedropperButton.title = "Screen color picker is not available in this browser";
-    eyedropperButton.setAttribute("aria-label", eyedropperButton.title);
-  }
   const previewSwatch = document.createElement("span");
   previewSwatch.className = "sprite-color-preview-swatch sprite-color-swatch";
   previewSwatch.setAttribute("aria-hidden", "true");
@@ -185,6 +180,27 @@ function renderSpriteColorAdjuster({ color, ariaLabel, onChange }) {
     syncUi(next);
     onChange(next);
   };
+  const makeHueEditVisible = () => {
+    let changed = false;
+    if (hsv.s <= 0) {
+      hsv.s = 1;
+      changed = true;
+    }
+    if (hsv.v <= 0) {
+      hsv.v = 1;
+      changed = true;
+    }
+    return changed;
+  };
+  const syncHueFromInput = () => {
+    hsv.h = Number(hueInput.value) || 0;
+  };
+  const activateHueInput = () => {
+    syncHueFromInput();
+    if (makeHueEditVisible()) {
+      emit();
+    }
+  };
   const emitRgb = () => {
     const r = clampNumber(numberInputs.r.value, 0, 255).toString(16).padStart(2, "0");
     const g = clampNumber(numberInputs.g.value, 0, 255).toString(16).padStart(2, "0");
@@ -222,8 +238,12 @@ function renderSpriteColorAdjuster({ color, ariaLabel, onChange }) {
     }
   });
   hueInput.addEventListener("input", () => {
-    hsv.h = Number(hueInput.value) || 0;
+    syncHueFromInput();
+    makeHueEditVisible();
     emit();
+  });
+  hueInput.addEventListener("pointerdown", () => {
+    window.requestAnimationFrame(activateHueInput);
   });
   numberInputs.r.addEventListener("input", emitRgb);
   numberInputs.g.addEventListener("input", emitRgb);
@@ -235,16 +255,20 @@ function renderSpriteColorAdjuster({ color, ariaLabel, onChange }) {
   alphaInput.addEventListener("input", emit);
   alphaInput.addEventListener("change", emit);
   eyedropperButton.addEventListener("click", async () => {
-    if (!("EyeDropper" in window)) {
-      return;
-    }
     try {
-      const result = await new window.EyeDropper().open();
-      const picked = spriteColorWithAlpha(result.sRGBHex, alphaInput.value);
+      const result = await window.PuzzleStudioHost?.pickScreenColor?.();
+      if (!result || result.canceled) {
+        return;
+      }
+      const pickedColor = parseSpriteHexColor(result.color || result.sRGBHex);
+      if (!pickedColor) {
+        throw new Error("Screen color picker returned an invalid color.");
+      }
+      const picked = spriteColorWithAlpha(pickedColor, alphaInput.value);
       sync(picked);
       onChange(picked);
-    } catch (_error) {
-      // Canceling the native picker is a normal path.
+    } catch (error) {
+      onPickError?.(error?.message || "Screen color picker is unavailable.", "is-error");
     }
   });
   alphaWrap.append(alphaInput);
@@ -954,12 +978,12 @@ function updateSpriteBoundShapeDefinition() {
   return true;
 }
 
-function promptSpriteAssetName(label, fallback) {
-  let raw = fallback;
+function promptSpriteAssetName(label, defaultValue) {
+  let raw = defaultValue;
   try {
-    raw = window.prompt(label, fallback);
+    raw = window.prompt(label, defaultValue);
   } catch {
-    raw = fallback;
+    raw = defaultValue;
   }
   if (raw === null) {
     return null;
@@ -1059,6 +1083,9 @@ function setSpriteEditSource(entry, document = activeDocument()) {
     : Number.isInteger(entry?.openIndex)
       ? entry.openIndex
       : null;
+  sprite.editSourceEnd = Number.isInteger(entry?.end) ? entry.end : null;
+  sprite.editSourceBodyStart = Number.isInteger(entry?.bodyStart) ? entry.bodyStart : null;
+  sprite.editSourceBodyEnd = Number.isInteger(entry?.bodyEnd) ? entry.bodyEnd : null;
   sprite.editSourceName = entry?.name || "";
 }
 
@@ -1134,6 +1161,7 @@ function renderSpriteColorMenu({
   customValue,
   customOnly = false,
   inline = false,
+  onPickError = setSpriteActionStatus,
   onPreset = null,
   onChange = null,
   onDiscard = cancelSpriteColorAdd,
@@ -1175,6 +1203,7 @@ function renderSpriteColorMenu({
   presetList.append(renderSpriteColorAdjuster({
     color: customValue,
     ariaLabel: mode === "add" ? "New color" : "Selected color",
+    onPickError,
     onChange: (color) => {
       if (onChange) {
         onChange(color, { deferHistory: true });
@@ -2166,51 +2195,24 @@ function spriteCellsFromAsciiRows(rows, paletteLength) {
   return { size, cells };
 }
 
-function loadSpriteFromSourceClick() {
-  loadSpriteFromSourcePosition(sourceEditor.selectionStart, { switchMode: true });
-}
-
-function loadSpriteFromSourcePosition(position, options = {}) {
-  if (!isPuzzleDocument(activeDocument()) || !isTextDocument(activeDocument())) {
-    return null;
+function loadSpriteFromSourceClick(event = null) {
+  if (event?.defaultPrevented) {
+    return;
+  }
+  if (typeof syncPreviewModeFromSourceCursor !== "function") {
+    setSpriteActionStatus("Source target sync unavailable", "is-error");
+    return;
   }
   const source = sourceEditor.value || "";
-  const entry = findSpriteDefinitionAtPosition(source, position);
-  if (!entry) {
-    return null;
-  }
-  const loaded = parseSpriteDefinitionSource(source.slice(entry.bodyStart, entry.bodyEnd), source, entry.name);
-  if (!loaded) {
-    if (!options.silent) {
-      setSpriteActionStatus("No editable sprite here", "is-error");
-    }
-    return null;
-  }
-  if (options.recordHistory && typeof pushSourceNavigationHistory === "function") {
-    pushSourceNavigationHistory();
-  }
-  if (options.switchMode && currentPreviewMode !== "sprite") {
-    setPreviewMode("sprite");
-  }
-  spriteNameInput.value = entry.name;
-  setSpriteEditSource(entry, activeDocument());
-  sprite.size = loaded.size;
-  sprite.palette = loaded.palette;
-  sprite.paletteBind = loaded.paletteBind || null;
-  sprite.shapeBind = loaded.shapeBind || null;
-  sprite.solidSource = Boolean(loaded.solid);
-  sprite.cells = loaded.cells;
-  sprite.selectedColorIndex = sprite.palette.length ? 0 : null;
-  sprite.addPaletteOpen = false;
-  sprite.editPaletteOpen = false;
-  sprite.customColorOpen = false;
-  sprite.addDraftColorIndex = null;
-  renderSpriteBuilder();
-  if (!options.silent) {
-    setSpriteActionStatus(`Loaded ${entry.name}`, "is-ok");
-    setStatus(`Loaded sprite ${entry.name}`, "is-ok");
-  }
-  return `sprite:${entry.name}:${entry.openIndex ?? entry.bodyStart}`;
+  const clickOffset = typeof sourceOffsetFromEditorClick === "function"
+    ? sourceOffsetFromEditorClick(event, source)
+    : null;
+  syncPreviewModeFromSourceCursor({
+    force: true,
+    recordHistory: true,
+    allowInactiveMode: true,
+    position: clickOffset ?? sourceEditor.selectionStart,
+  });
 }
 
 function loadSpriteSourceTarget(target, options = {}) {
@@ -2221,13 +2223,7 @@ function loadSpriteSourceTarget(target, options = {}) {
   if (!Number.isInteger(target?.bodyStart) || !Number.isInteger(target?.bodyEnd)) {
     return null;
   }
-  const targetEntry = findSpriteDefinitionAtPosition(
-    source,
-    Number.isInteger(target.start)
-      ? target.start
-      : Math.max(0, (target.bodyStart || 1) - 1),
-  ) || findSpriteDefinitionAtPosition(source, target.bodyStart);
-  const targetName = target.name || targetEntry?.name || spriteObjectName();
+  const targetName = target.name || spriteObjectName();
   const loaded = parseSpriteDefinitionSource(source.slice(target.bodyStart, target.bodyEnd), source, targetName);
   if (!loaded) {
     if (!options.silent) {
@@ -2242,7 +2238,7 @@ function loadSpriteSourceTarget(target, options = {}) {
     setPreviewMode("sprite");
   }
   spriteNameInput.value = targetName || "Sprite";
-  setSpriteEditSource(targetEntry || target, activeDocument());
+  setSpriteEditSource(target, activeDocument());
   sprite.size = loaded.size;
   sprite.palette = loaded.palette;
   sprite.paletteBind = loaded.paletteBind || null;
@@ -2259,41 +2255,7 @@ function loadSpriteSourceTarget(target, options = {}) {
     setSpriteActionStatus(`Loaded ${spriteNameInput.value}`, "is-ok");
     setStatus(`Loaded sprite ${spriteNameInput.value}`, "is-ok");
   }
-  return `sprite:${target.name}:${target.start ?? target.bodyStart}`;
-}
-
-function findSpriteDefinitionAtPosition(source, position) {
-  const spritesBlock = findSpritesBlock(source);
-  if (!spritesBlock || position < spritesBlock.bodyStart || position > spritesBlock.bodyEnd) {
-    return null;
-  }
-  const body = source.slice(spritesBlock.bodyStart, spritesBlock.bodyEnd);
-  const pattern = /(^|\n)([\t ]*)(@?[A-Za-z_][\w:]*)\s*\{/g;
-  let match = null;
-  while ((match = pattern.exec(body))) {
-    const bodyMatchStart = match.index + match[1].length;
-    const openIndex = source.indexOf("{", spritesBlock.bodyStart + bodyMatchStart);
-    if (topLevelDepthAt(body, bodyMatchStart) !== 0 || openIndex < 0 || openIndex >= spritesBlock.bodyEnd) {
-      continue;
-    }
-    const closeIndex = findMatchingBrace(source, openIndex);
-    if (closeIndex < 0 || closeIndex > spritesBlock.bodyEnd) {
-      continue;
-    }
-    if (position >= spritesBlock.bodyStart + bodyMatchStart && position <= closeIndex) {
-      return {
-        name: match[3],
-        start: spritesBlock.bodyStart + bodyMatchStart,
-        end: closeIndex + 1,
-        bodyStart: openIndex + 1,
-        bodyEnd: closeIndex,
-        indent: match[2] || spriteSourceChildIndent(spritesBlock.indent),
-        openIndex,
-        closeIndex,
-      };
-    }
-  }
-  return findUnbracedSpriteDefinitionAtPosition(source, spritesBlock, position);
+  return `sprite:${targetName}:${target.start ?? target.bodyStart}`;
 }
 
 function parseSpriteDefinitionSource(body, source = "", selectorName = "") {
@@ -2405,9 +2367,6 @@ function parseSpriteColorAssets(source) {
   });
   collectSpriteAssetTables(source, colorsBlock, (tableName, rowName, value) => {
     raw.set(`${tableName}:${rowName}`, value);
-    if (!raw.has(`${tableName}:*`)) {
-      raw.set(`${tableName}:*`, value);
-    }
   });
   return raw;
 }
@@ -2425,9 +2384,6 @@ function parseSpritePaletteAssets(source) {
   collectSpriteAssetTables(source, palettesBlock, (tableName, rowName, value) => {
     const tokens = value.split(/\s+/).filter(Boolean);
     raw.set(`${tableName}:${rowName}`, tokens);
-    if (!raw.has(`${tableName}:*`)) {
-      raw.set(`${tableName}:*`, tokens);
-    }
   });
   return raw;
 }
@@ -2510,9 +2466,6 @@ function collectSpriteShapeTableRows(source, bodyStart, bodyEnd, tableName, tabl
       continue;
     }
     raw.set(`${tableName}:${match[3]}`, rows);
-    if (!raw.has(`${tableName}:*`)) {
-      raw.set(`${tableName}:*`, rows);
-    }
   }
 }
 
@@ -2538,8 +2491,7 @@ function spriteTableAssetKey(token, assets, selectorName = "") {
   if (selectorValue && assets.has(`${tableName}:${selectorValue}`)) {
     return `${tableName}:${selectorValue}`;
   }
-  const fallback = `${tableName}:*`;
-  return assets.has(fallback) ? fallback : "";
+  return "";
 }
 
 function spriteSelectorSingleTagValue(selectorName, bindingName = "") {
@@ -2608,7 +2560,7 @@ function collectSpriteAssetTables(source, block, callback) {
 }
 
 function stripSpriteAssetComment(value) {
-  return String(value || "").replace(/\s+#.*$/, "");
+  return String(value || "").replace(/\s+\/\/.*$/, "");
 }
 
 function spriteColorIndexForPaletteChar(char, paletteLength) {
@@ -2668,17 +2620,17 @@ function updateSpriteInSource() {
     return;
   }
 
-  const source = sourceWithStagedSpriteAssetDefinitions(activeSpriteEditSource());
-  if (!source) {
+  const replaced = replaceSpriteDefinition(activeSpriteEditSource());
+  if (!replaced) {
+    setSpriteActionStatus("No selected sprite source range", "is-error");
+    setStatus("No selected sprite source range", "is-error");
     return;
   }
-  const result = replaceSpriteDefinition(source);
-  if (!result) {
-    const name = spriteObjectName();
-    setSpriteActionStatus(`No sprite named ${name}`, "is-error");
-    setStatus(`No sprite named ${name}`, "is-error");
+  const stagedSource = sourceWithStagedSpriteAssetDefinitions(replaced.source);
+  if (!stagedSource) {
     return;
   }
+  const result = { ...replaced, source: stagedSource };
   document.source = result.source;
   if (document.id === activeDocument()?.id) {
     setSourceEditorValue(result.source, { resetUndo: false });
@@ -2780,11 +2732,7 @@ function insertSpriteDefinition(source) {
 }
 
 function replaceSpriteDefinition(source) {
-  const block = findSpritesBlock(source);
-  if (!block) {
-    return null;
-  }
-  const entry = findCurrentSpriteDefinitionEntry(source, block);
+  const entry = currentSpriteEditSourceRange(source);
   if (!entry) {
     return null;
   }
@@ -2796,15 +2744,7 @@ function replaceSpriteDefinition(source) {
 }
 
 function canReplaceCurrentSpriteDefinition(source) {
-  const block = findSpritesBlock(source);
-  if (!block) {
-    return false;
-  }
-  if (findSpriteDefinitionBlock(source, block, spriteObjectName())) {
-    return true;
-  }
-  return Number.isInteger(sprite.editSourceStart)
-    && Boolean(findSpriteDefinitionAtPosition(source, sprite.editSourceStart)?.name);
+  return Boolean(currentSpriteEditSourceRange(source));
 }
 
 function syncSpriteSourceActionButtons() {
@@ -2813,27 +2753,23 @@ function syncSpriteSourceActionButtons() {
   }
 }
 
-function findCurrentSpriteDefinitionEntry(source, block) {
-  const positioned = Number.isInteger(sprite.editSourceStart)
-    ? findSpriteDefinitionAtPosition(source, sprite.editSourceStart)
-    : null;
-  if (!positioned?.name) {
-    const named = findSpriteDefinitionBlock(source, block, spriteObjectName());
-    if (named) {
-      sprite.editSourceStart = Number.isInteger(named.start) ? named.start : sprite.editSourceStart;
-      sprite.editSourceName = spriteObjectName();
-      return named;
-    }
-    const originalNamed = sprite.editSourceName
-      ? findSpriteDefinitionBlock(source, block, sprite.editSourceName)
-      : null;
-    if (originalNamed) {
-      sprite.editSourceStart = Number.isInteger(originalNamed.start) ? originalNamed.start : sprite.editSourceStart;
-      return originalNamed;
-    }
+function currentSpriteEditSourceRange(source) {
+  const start = sprite.editSourceStart;
+  const end = sprite.editSourceEnd;
+  if (
+    !Number.isInteger(start)
+    || !Number.isInteger(end)
+    || start < 0
+    || end <= start
+    || end > String(source || "").length
+  ) {
     return null;
   }
-  return positioned;
+  return {
+    start,
+    end,
+    indent: spriteSourceIndent(source.slice(source.lastIndexOf("\n", start - 1) + 1, start)),
+  };
 }
 
 function revealSpriteSourceResult(document, result) {
@@ -3217,249 +3153,6 @@ function spritePaletteSourceTokens() {
   return sprite.palette.map((entry) => spritePaletteEntrySourceToken(entry));
 }
 
-function findSpriteDefinitionBlock(source, spritesBlock, name) {
-  const body = source.slice(spritesBlock.bodyStart, spritesBlock.bodyEnd);
-  const pattern = new RegExp(`(^|\\n)([\\t ]*)${escapeRegExp(name)}\\s*\\{`, "g");
-  let match = null;
-  while ((match = pattern.exec(body))) {
-    const bodyMatchStart = match.index + match[1].length;
-    const openIndex = source.indexOf("{", spritesBlock.bodyStart + match.index + match[0].lastIndexOf(name));
-    if (topLevelDepthAt(body, bodyMatchStart) !== 0 || openIndex < 0 || openIndex >= spritesBlock.bodyEnd) {
-      continue;
-    }
-    const closeIndex = findMatchingBrace(source, openIndex);
-    if (closeIndex < 0 || closeIndex > spritesBlock.bodyEnd) {
-      continue;
-    }
-    return {
-      start: spritesBlock.bodyStart + bodyMatchStart,
-      end: closeIndex + 1,
-      indent: match[2] || spriteSourceChildIndent(spritesBlock.indent),
-    };
-  }
-  return findUnbracedSpriteDefinitionBlock(source, spritesBlock, name);
-}
-
-function findUnbracedSpriteDefinitionAtPosition(source, spritesBlock, position) {
-  const body = source.slice(spritesBlock.bodyStart, spritesBlock.bodyEnd);
-  const pattern = /(^|\n)([\t ]*)(@?[A-Za-z_][\w:]*)\s*(?=\n|$)/g;
-  let match = null;
-  while ((match = pattern.exec(body))) {
-    const bodyMatchStart = match.index + match[1].length;
-    if (topLevelDepthAt(body, bodyMatchStart) !== 0) {
-      continue;
-    }
-    const start = spritesBlock.bodyStart + bodyMatchStart;
-    const entry = unbracedSpriteDefinitionFromLine(source, spritesBlock, start, match[2], match[3]);
-    if (!entry) {
-      continue;
-    }
-    if (position >= entry.start && position <= entry.end) {
-      return entry;
-    }
-  }
-  return null;
-}
-
-function findUnbracedSpriteDefinitionBlock(source, spritesBlock, name) {
-  const body = source.slice(spritesBlock.bodyStart, spritesBlock.bodyEnd);
-  const pattern = new RegExp(`(^|\\n)([\\t ]*)${escapeRegExp(name)}\\s*(?=\\n|$)`, "g");
-  let match = null;
-  while ((match = pattern.exec(body))) {
-    const bodyMatchStart = match.index + match[1].length;
-    if (topLevelDepthAt(body, bodyMatchStart) !== 0) {
-      continue;
-    }
-    const start = spritesBlock.bodyStart + bodyMatchStart;
-    const entry = unbracedSpriteDefinitionFromLine(source, spritesBlock, start, match[2], name);
-    if (entry) {
-      return entry;
-    }
-  }
-  return null;
-}
-
-function unbracedSpriteDefinitionFromLine(source, spritesBlock, start, indent, name) {
-  const headerEnd = source.indexOf("\n", start);
-  const bodyStart = headerEnd < 0 ? spritesBlock.bodyEnd : headerEnd + 1;
-  const bodyEnd = findUnbracedSpriteDefinitionEnd(source, spritesBlock, bodyStart, indent);
-  if (bodyEnd <= bodyStart || !parseSpriteDefinitionSource(source.slice(bodyStart, bodyEnd), source, name)) {
-    return null;
-  }
-  return {
-    name,
-    start,
-    end: bodyEnd,
-    bodyStart,
-    bodyEnd,
-    indent: indent || spriteSourceChildIndent(spritesBlock.indent),
-  };
-}
-
-function findUnbracedSpriteDefinitionEnd(source, spritesBlock, contentStart, indent) {
-  let index = contentStart;
-  let lastContentEnd = contentStart;
-  const body = source.slice(spritesBlock.bodyStart, spritesBlock.bodyEnd);
-  const paletteLength = unbracedSpritePaletteLength(source, spritesBlock, contentStart);
-  while (index < spritesBlock.bodyEnd) {
-    const lineEnd = source.indexOf("\n", index);
-    const end = lineEnd < 0 || lineEnd > spritesBlock.bodyEnd ? spritesBlock.bodyEnd : lineEnd;
-    const line = source.slice(index, end);
-    const trimmed = line.trim();
-    const bodyIndex = index - spritesBlock.bodyStart;
-    if (
-      trimmed
-      && topLevelDepthAt(body, bodyIndex) === 0
-      && spriteLineIndent(line).length <= indent.length
-      && !isSpriteAsciiRowForPalette(trimmed, paletteLength)
-      && isSpriteDefinitionBoundary(source, index, spritesBlock.bodyEnd)
-    ) {
-      break;
-    }
-    if (trimmed) {
-      lastContentEnd = end;
-    }
-    if (end >= spritesBlock.bodyEnd) {
-      break;
-    }
-    index = end + 1;
-  }
-  return lastContentEnd;
-}
-
-function unbracedSpritePaletteLength(source, spritesBlock, contentStart) {
-  const bodyEnd = spritesBlock?.bodyEnd ?? String(source || "").length;
-  for (let index = contentStart; index < bodyEnd;) {
-    const lineEnd = source.indexOf("\n", index);
-    const end = lineEnd < 0 || lineEnd > bodyEnd ? bodyEnd : lineEnd;
-    const trimmed = source.slice(index, end).trim();
-    if (trimmed) {
-      const sourceRows = trimmed.startsWith("palette ")
-        ? trimmed.slice("palette ".length).trim()
-        : trimmed;
-      const length = sourceRows.split(/\s+/).filter(Boolean).length;
-      return length > 0 ? length : null;
-    }
-    if (end >= bodyEnd) {
-      break;
-    }
-    index = end + 1;
-  }
-  return null;
-}
-
-function isSpriteAsciiRowForPalette(line, paletteLength) {
-  if (!Number.isInteger(paletteLength) || paletteLength <= 0 || !line) {
-    return false;
-  }
-  for (const char of line) {
-    if (/\s/.test(char)) {
-      continue;
-    }
-    if (spriteColorIndexForPaletteChar(char, paletteLength) === undefined) {
-      return false;
-    }
-  }
-  return true;
-}
-
-function isSpriteDefinitionBoundary(source, lineStart, limit) {
-  const lineEnd = source.indexOf("\n", lineStart);
-  const end = lineEnd < 0 || lineEnd > limit ? limit : lineEnd;
-  const line = source.slice(lineStart, end).trim();
-  if (/^@?[A-Za-z_][\w:]*\s*\{/.test(line)) {
-    return true;
-  }
-  if (/^(colors|palettes|shapes)\b/.test(line)) {
-    return true;
-  }
-  if (isLineStyleSpriteDefinitionBoundary(line)) {
-    return true;
-  }
-  if (!/^@?[A-Za-z_][\w:]*$/.test(line)) {
-    return false;
-  }
-  const next = nextNonBlankLine(source, end + 1, limit);
-  return Boolean(next && isSpriteDefinitionBodyStart(next.trim()));
-}
-
-function isLineStyleSpriteDefinitionBoundary(line) {
-  const tokens = line.split(/\s+/).filter(Boolean);
-  if (tokens.length !== 2 || !isSpriteDefinitionNameToken(tokens[0]) || isSpriteLiteralColorToken(tokens[0])) {
-    return false;
-  }
-  if (tokens[0] === "shape") {
-    return false;
-  }
-  return isSpriteImageSource(tokens[1])
-    || isSpriteLiteralColorToken(tokens[1])
-    || isSpriteDefinitionNameToken(tokens[1]);
-}
-
-function isSpriteDefinitionBodyStart(line) {
-  return isSpriteImageSource(line) || isSpriteColorRow(line);
-}
-
-function isSpriteImageSource(value) {
-  const token = String(value || "").trim().replace(/^["']|["']$/g, "").toLowerCase();
-  return /\.(png|jpe?g|gif|webp|svg|avif)$/.test(token);
-}
-
-function isSpriteLiteralColorToken(value) {
-  const token = String(value || "").trim().toLowerCase();
-  return Boolean(parseSpriteHexColor(token))
-    || token === "currentcolor"
-    || [
-      "black",
-      "silver",
-      "gray",
-      "white",
-      "maroon",
-      "red",
-      "purple",
-      "fuchsia",
-      "green",
-      "lime",
-      "olive",
-      "yellow",
-      "navy",
-      "blue",
-      "teal",
-      "aqua",
-      "orange",
-    ].includes(token);
-}
-
-function isSpriteDefinitionNameToken(value) {
-  return /^@?[A-Za-z_][\w:]*$/.test(String(value || "").trim());
-}
-
-function nextNonBlankLine(source, start, limit) {
-  let index = start;
-  while (index < limit) {
-    const lineEnd = source.indexOf("\n", index);
-    const end = lineEnd < 0 || lineEnd > limit ? limit : lineEnd;
-    const line = source.slice(index, end);
-    if (line.trim()) {
-      return line;
-    }
-    if (end >= limit) {
-      break;
-    }
-    index = end + 1;
-  }
-  return null;
-}
-
-function isSpriteColorRow(line) {
-  const colors = line.split(/\s+/).filter(Boolean);
-  return colors.length > 0 && colors.every((color) => Boolean(parseSpriteHexColor(color)) || /^[A-Za-z_][\w]*(?::[A-Za-z_][\w]*)?$/.test(color));
-}
-
-function spriteLineIndent(line) {
-  return line.match(/^[\t ]*/)?.[0] || "";
-}
-
 function topLevelDepthAt(text, endIndex) {
   let depth = 0;
   for (let index = 0; index < endIndex; index += 1) {
@@ -3540,9 +3233,4 @@ spriteFlipHorizontalButton.addEventListener("click", flipSpriteHorizontal);
 spriteFlipVerticalButton.addEventListener("click", flipSpriteVertical);
 spriteFillButton.addEventListener("click", toggleSpriteBucketMode);
 sourceEditor.addEventListener("click", loadSpriteFromSourceClick);
-registerSourceEditableTarget?.("sprite", {
-  find: findSpriteDefinitionAtPosition,
-  load: loadSpriteFromSourcePosition,
-});
-
 resetSpriteBuilder();

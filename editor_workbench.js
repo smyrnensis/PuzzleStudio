@@ -309,9 +309,6 @@ function createToolPane(paneId, panel) {
   if (paneId === "level" && levelEmptyPane) {
     pane.append(levelEmptyPane);
   }
-  if (paneId === "sprite" && spriteEmptyPane) {
-    pane.append(spriteEmptyPane);
-  }
   pane.append(panel);
   if (paneId === "level" && level3dBuilder) {
     pane.append(level3dBuilder);
@@ -864,9 +861,6 @@ function applyPaneVisibility() {
     }
     if (paneId === "sprite") {
       const spriteUnbound = currentSpritePaneMode === "none";
-      if (spriteEmptyPane) {
-        spriteEmptyPane.hidden = !visible || !spriteUnbound;
-      }
       if (spriteBuilder) {
         spriteBuilder.hidden = !visible || spriteUnbound || currentSpritePaneMode !== "sprite";
       }
