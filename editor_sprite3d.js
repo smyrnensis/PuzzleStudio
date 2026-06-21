@@ -287,6 +287,7 @@ function renderSprite3dPalette() {
         mode: "edit",
         customValue: selected.color,
         customOnly: true,
+        onPickError: setSprite3dActionStatus,
         onChange: updateSelectedSprite3dColor,
         onPreset: updateSelectedSprite3dColor,
         renderPalette: renderSprite3dPalette,
@@ -387,6 +388,7 @@ function renderSprite3dPalette() {
     const addMenu = renderSpriteColorMenu({
       mode: "add",
       customValue: draft,
+      onPickError: setSprite3dActionStatus,
       onDiscard: cancelSprite3dColorAdd,
       onChange: previewNewSprite3dColor,
       onPreset: previewNewSprite3dColor,
@@ -3179,6 +3181,12 @@ window.addEventListener("pointercancel", stopSprite3dSliceScrub, true);
 window.addEventListener("blur", () => {
   finishSprite3dCameraScrub();
   finishSprite3dSliceScrub();
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && cancelSprite3dLocalColorPick()) {
+    event.preventDefault();
+    event.stopPropagation();
+  }
 });
 for (const button of sprite3dAxisButtons) {
   button.addEventListener("click", () => setSprite3dAxis(button.dataset.sprite3dAxis));
