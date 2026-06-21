@@ -126,7 +126,7 @@ scene title {
 	rules {
 		input new_game -> {
 			clear_game_progress
-			goto playing("microban.1")
+			goto playing(microban.1)
 		}
 	}
 }
@@ -191,5 +191,4 @@ scene menu {
 		back_to_title -> goto title
 	}
 }
-
 

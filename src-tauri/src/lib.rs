@@ -9,8 +9,9 @@ use std::thread;
 use std::time::{Duration, UNIX_EPOCH};
 
 use html_editor::{
-    CreateSourceFileRequest, CreateSourceFolderRequest, DeleteWorkspaceEntryRequest, EditorService,
-    PreviewRequest, RenameWorkspaceEntryRequest, SaveRequest,
+    AppError as EditorAppError, CreateSourceFileRequest, CreateSourceFolderRequest,
+    DeleteWorkspaceEntryRequest, EditorService, PreviewRequest, RenameWorkspaceEntryRequest,
+    SaveRequest,
 };
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager};
@@ -85,6 +86,12 @@ struct PreviewCommandRequest {
 #[serde(rename_all = "camelCase")]
 struct HighlightCommandRequest {
     source: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct NewPuzzleSourceCommandRequest {
+    title: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -258,7 +265,7 @@ fn remove_workspace(
 fn compile_preview(
     request: PreviewCommandRequest,
     state: tauri::State<'_, DesktopState>,
-) -> Result<String, String> {
+) -> Result<String, serde_json::Value> {
     let workspace_root = request.workspace_root.clone();
     let request = PreviewRequest::new(
         request.source,
@@ -269,15 +276,40 @@ fn compile_preview(
     let services = state
         .services
         .lock()
-        .map_err(|_| "desktop project state is unavailable".to_string())?;
+        .map_err(|_| serde_json::json!({ "error": "desktop project state is unavailable" }))?;
     let Some(service) = service_for_workspace(&services, workspace_root.as_deref()) else {
-        return Err(
-            "No project is open. Open a project folder before running preview.".to_string(),
-        );
+        return Err(serde_json::json!({
+            "error": "No project is open. Open a project folder before running preview."
+        }));
     };
     service
         .compile_preview(&request)
-        .map_err(|error| error.to_string())
+        .map_err(preview_command_error)
+}
+
+fn preview_command_error(error: EditorAppError) -> serde_json::Value {
+    match error {
+        EditorAppError::Diagnostics(report) => {
+            let diagnostics = report
+                .diagnostics()
+                .iter()
+                .map(|diagnostic| {
+                    let span = diagnostic.primary_span.as_ref();
+                    serde_json::json!({
+                        "severity": diagnostic.severity.as_str(),
+                        "code": diagnostic.code,
+                        "file": span.and_then(|span| span.file.as_deref()).unwrap_or(""),
+                        "line": span.and_then(|span| span.line),
+                        "column": span.and_then(|span| span.column),
+                        "sourceLine": span.and_then(|span| span.source_line.as_deref()),
+                        "message": diagnostic.message,
+                    })
+                })
+                .collect::<Vec<_>>();
+            serde_json::json!({ "diagnostics": diagnostics })
+        }
+        other => serde_json::json!({ "error": other.to_string() }),
+    }
 }
 
 #[tauri::command]
@@ -288,6 +320,61 @@ fn highlight_source(request: HighlightCommandRequest) -> String {
 #[tauri::command]
 fn sound_tools() -> String {
     html_editor::sound_tools_script()
+}
+
+#[tauri::command]
+async fn pick_screen_color() -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(pick_screen_color_platform)
+        .await
+        .map_err(|error| format!("screen color picker task failed: {error}"))?
+}
+
+#[cfg(target_os = "macos")]
+fn pick_screen_color_platform() -> Result<serde_json::Value, String> {
+    let output = std::process::Command::new("osascript")
+        .args(["-e", "choose color"])
+        .output()
+        .map_err(|error| format!("failed to open screen color picker: {error}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if stderr.contains("User canceled") {
+            return Ok(serde_json::json!({ "canceled": true }));
+        }
+        let message = stderr.trim();
+        return Err(if message.is_empty() {
+            "screen color picker failed".to_string()
+        } else {
+            message.to_string()
+        });
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let components = stdout
+        .split(',')
+        .map(|part| part.trim().parse::<u32>())
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| "screen color picker returned an invalid color".to_string())?;
+    if components.len() != 3 || components.iter().any(|value| *value > 65_535) {
+        return Err("screen color picker returned an invalid color".to_string());
+    }
+    let to_byte = |value: u32| ((value * 255 + 32_767) / 65_535) as u8;
+    Ok(serde_json::json!({
+        "color": format!(
+            "#{:02x}{:02x}{:02x}",
+            to_byte(components[0]),
+            to_byte(components[1]),
+            to_byte(components[2])
+        )
+    }))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn pick_screen_color_platform() -> Result<serde_json::Value, String> {
+    Err("screen color picker is not implemented for this desktop platform".to_string())
+}
+
+#[tauri::command]
+fn new_puzzle_source(request: NewPuzzleSourceCommandRequest) -> String {
+    html_editor::new_puzzle_source(&request.title)
 }
 
 #[tauri::command]
@@ -348,20 +435,35 @@ async fn export_html(
 
 #[tauri::command]
 fn create_source_file(
+    app: tauri::AppHandle,
     request: CreateSourceFileCommandRequest,
     state: tauri::State<'_, DesktopState>,
 ) -> Result<serde_json::Value, String> {
-    let service = state
+    let mut services = state
         .services
         .lock()
         .map_err(|_| "desktop project state is unavailable".to_string())?;
-    let Some(service) = service_for_workspace(&service, request.workspace_root.as_deref()) else {
+    let Some(service_index) =
+        service_index_for_workspace(&services, request.workspace_root.as_deref())
+    else {
         return Err("No project is open. Open a project folder before adding files.".to_string());
     };
+    let active_entry_is_empty = services[service_index].puzzle_path().trim().is_empty();
     let request = CreateSourceFileRequest::new(request.source, request.puzzle_path);
-    let path = service
+    let path = services[service_index]
         .create_source_file(&request)
         .map_err(|error| error.to_string())?;
+
+    if active_entry_is_empty && is_desktop_puzzle_source_path(&path) {
+        if let Ok(service) = EditorService::open_game_entry(&path) {
+            let workspace_root = service.workspace_root().to_string();
+            let puzzle_path = service.puzzle_path().to_string();
+            services[service_index] = service;
+            drop(services);
+            restart_workspace_watcher(&app, &state, workspace_root, puzzle_path)?;
+        }
+    }
+
     Ok(serde_json::json!({
         "ok": true,
         "puzzlePath": path.display().to_string()
@@ -412,7 +514,7 @@ fn rename_workspace_entry(
         .canonicalize()
         .map_err(|error| error.to_string())?;
     let to_path = resolve_desktop_workspace_command_path(&request.to_path, &workspace_root);
-    let active_entry_tail = active_entry_rename_tail(service.puzzle_path(), &from_path)?;
+    let active_entry_tail = active_entry_tail_under_path(service.puzzle_path(), &from_path)?;
     if active_entry_tail.is_some()
         && from_path.is_file()
         && !is_desktop_puzzle_source_path(&to_path)
@@ -448,20 +550,42 @@ fn rename_workspace_entry(
 
 #[tauri::command]
 fn delete_workspace_entry(
+    app: tauri::AppHandle,
     request: DeleteWorkspaceEntryCommandRequest,
     state: tauri::State<'_, DesktopState>,
 ) -> Result<serde_json::Value, String> {
-    let services = state
+    let mut services = state
         .services
         .lock()
         .map_err(|_| "desktop project state is unavailable".to_string())?;
-    let Some(service) = service_for_workspace(&services, request.workspace_root.as_deref()) else {
+    let Some(service_index) =
+        service_index_for_workspace(&services, request.workspace_root.as_deref())
+    else {
         return Err("No project is open. Open a project folder before deleting files.".to_string());
     };
+    let service = &services[service_index];
+    let workspace_root = PathBuf::from(service.workspace_root());
+    let entry_path = resolve_desktop_workspace_command_path(&request.entry_path, &workspace_root)
+        .canonicalize()
+        .map_err(|error| error.to_string())?;
+    let deletes_active_entry =
+        active_entry_tail_under_path(service.puzzle_path(), &entry_path)?.is_some();
+
     let request = DeleteWorkspaceEntryRequest::new(request.entry_path);
-    service
+    services[service_index]
         .delete_workspace_entry(&request)
         .map_err(|error| error.to_string())?;
+
+    if deletes_active_entry {
+        let service = EditorService::open_workspace_root(&workspace_root)
+            .map_err(|error| error.to_string())?;
+        let workspace_root = service.workspace_root().to_string();
+        let puzzle_path = service.puzzle_path().to_string();
+        services[service_index] = service;
+        drop(services);
+        restart_workspace_watcher(&app, &state, workspace_root, puzzle_path)?;
+    }
+
     Ok(serde_json::json!({ "ok": true }))
 }
 
@@ -550,9 +674,9 @@ fn resolve_desktop_workspace_command_path(path: &str, workspace_root: &Path) -> 
     }
 }
 
-fn active_entry_rename_tail(
+fn active_entry_tail_under_path(
     active_entry: &str,
-    renamed_from: &Path,
+    ancestor: &Path,
 ) -> Result<Option<PathBuf>, String> {
     let active_entry = active_entry.trim();
     if active_entry.is_empty() {
@@ -561,12 +685,12 @@ fn active_entry_rename_tail(
     let active_entry = PathBuf::from(active_entry)
         .canonicalize()
         .map_err(|error| error.to_string())?;
-    if active_entry == renamed_from {
+    if active_entry == ancestor {
         return Ok(Some(PathBuf::new()));
     }
-    if active_entry.starts_with(renamed_from) {
+    if active_entry.starts_with(ancestor) {
         let tail = active_entry
-            .strip_prefix(renamed_from)
+            .strip_prefix(ancestor)
             .map_err(|error| error.to_string())?;
         return Ok(Some(tail.to_path_buf()));
     }
@@ -939,6 +1063,8 @@ pub fn run() {
             compile_preview,
             highlight_source,
             sound_tools,
+            pick_screen_color,
+            new_puzzle_source,
             save_source,
             export_html,
             create_source_file,
@@ -1030,16 +1156,27 @@ mod tests {
     }
 
     #[test]
-    fn active_entry_rename_tail_tracks_exact_file_rename() {
+    fn desktop_new_puzzle_source_uses_authoring_template() {
+        let source = new_puzzle_source(NewPuzzleSourceCommandRequest {
+            title: "Desktop Test".to_string(),
+        });
+
+        assert!(source.starts_with("title \"Desktop Test\"\n"));
+        assert!(source.contains("puzzle main {"));
+        assert!(source.contains("scene playing {"));
+    }
+
+    #[test]
+    fn active_entry_tail_under_path_tracks_exact_file_mutation() {
         let root = std::env::temp_dir().join(format!(
-            "puzzlestudio-desktop-rename-file-{}",
+            "puzzlestudio-desktop-active-file-{}",
             std::process::id()
         ));
         let old_path = root.join("old.puzzle");
         fs::create_dir_all(&root).expect("create test root");
         fs::write(&old_path, "title \"Old\"\n").expect("write active entry");
 
-        let tail = active_entry_rename_tail(
+        let tail = active_entry_tail_under_path(
             old_path.to_str().expect("utf-8 path"),
             &old_path.canonicalize().expect("canonical old path"),
         )
@@ -1050,9 +1187,9 @@ mod tests {
     }
 
     #[test]
-    fn active_entry_rename_tail_tracks_parent_folder_rename() {
+    fn active_entry_tail_under_path_tracks_parent_folder_mutation() {
         let root = std::env::temp_dir().join(format!(
-            "puzzlestudio-desktop-rename-folder-{}",
+            "puzzlestudio-desktop-active-folder-{}",
             std::process::id()
         ));
         let folder = root.join("folder");
@@ -1060,7 +1197,7 @@ mod tests {
         fs::create_dir_all(&folder).expect("create test folder");
         fs::write(&old_path, "title \"Old\"\n").expect("write active entry");
 
-        let tail = active_entry_rename_tail(
+        let tail = active_entry_tail_under_path(
             old_path.to_str().expect("utf-8 path"),
             &folder.canonicalize().expect("canonical folder"),
         )

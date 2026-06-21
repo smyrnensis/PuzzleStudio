@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::{AppError, source::strip_line_comment};
+use crate::{DiagnosticReport, source::strip_line_comment};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PsSection {
@@ -70,7 +70,7 @@ enum PsSoundEvent {
     Move,
 }
 
-pub fn translate_puzzlescript_to_canonical(source: &str) -> Result<String, AppError> {
+pub fn translate_puzzlescript_to_canonical(source: &str) -> Result<String, DiagnosticReport> {
     let sections = collect_sections(source);
     let title = parse_title(&sections.prelude);
     let author = parse_author(&sections.prelude);
@@ -800,12 +800,12 @@ fn push_layers(out: &mut Vec<String>, layers: &[(String, Vec<String>)]) {
 }
 
 fn push_default_inputs(out: &mut Vec<String>) {
-    out.push("inputs {".to_string());
-    out.push("  up <- w ArrowUp".to_string());
-    out.push("  down <- s ArrowDown".to_string());
-    out.push("  left <- a ArrowLeft".to_string());
-    out.push("  right <- d ArrowRight".to_string());
-    out.push("  restart <- r".to_string());
+    out.push("keys {".to_string());
+    out.push("  w ArrowUp -> up".to_string());
+    out.push("  s ArrowDown -> down".to_string());
+    out.push("  a ArrowLeft -> left".to_string());
+    out.push("  d ArrowRight -> right".to_string());
+    out.push("  r -> restart".to_string());
     out.push("}".to_string());
     out.push(String::new());
 }
@@ -1516,19 +1516,17 @@ fn push_playing_scene(
     out.push("    }".to_string());
     out.push("    choice \"New Game\" -> input new_game".to_string());
     out.push("  }".to_string());
-    out.push("  inputs {".to_string());
-    out.push("    continue_game <- Enter Space x".to_string());
-    out.push("    new_game <- n".to_string());
+    out.push("  keys {".to_string());
+    out.push("    Enter Space x -> continue_game".to_string());
+    out.push("    n -> new_game".to_string());
     out.push("  }".to_string());
-    out.push("  rules {".to_string());
-    push_title_start_rule(out, "continue_game", &["goto playing"], startgame_sfx);
-    push_title_start_rule(
+    push_scene_routine(out, "continue_game", &["goto playing"], startgame_sfx);
+    push_scene_routine(
         out,
         "new_game",
         &["clear_game_progress", "goto playing(0)"],
         startgame_sfx,
     );
-    out.push("  }".to_string());
     out.push("}".to_string());
     out.push(String::new());
 
@@ -1548,39 +1546,35 @@ fn push_playing_scene(
         out.push("    puzzle board".to_string());
         out.push("  }".to_string());
     }
-    out.push("  inputs {".to_string());
-    out.push("    back <- Escape q".to_string());
+    out.push("  keys {".to_string());
+    out.push("    Escape q -> back".to_string());
     out.push("  }".to_string());
     out.push("  rules {".to_string());
     out.push("    step board".to_string());
-    out.push("    if input == back -> goto title".to_string());
     out.push("  }".to_string());
+    push_scene_routine(out, "back", &["goto title"], None);
     out.push("}".to_string());
     out.push(String::new());
 }
 
-fn push_title_start_rule(
+fn push_scene_routine(
     out: &mut Vec<String>,
-    input_name: &str,
+    name: &str,
     effects: &[&str],
     startgame_sfx: Option<&str>,
 ) {
+    out.push(format!("  routine {name} {{"));
     if let Some(name) = startgame_sfx {
-        out.push(format!("    if input == {input_name} -> {{"));
-        out.push(format!("      sfx {name}"));
+        out.push(format!("    sfx {name}"));
         for effect in effects {
-            out.push(format!("      {effect}"));
+            out.push(format!("    {effect}"));
         }
-        out.push("    }".to_string());
-    } else if let [effect] = effects {
-        out.push(format!("    if input == {input_name} -> {effect}"));
     } else {
-        out.push(format!("    if input == {input_name} -> {{"));
         for effect in effects {
-            out.push(format!("      {effect}"));
+            out.push(format!("    {effect}"));
         }
-        out.push("    }".to_string());
     }
+    out.push("  }".to_string());
 }
 
 fn escape_scene_text(text: &str) -> String {

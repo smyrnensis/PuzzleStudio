@@ -1,3 +1,8 @@
+use puzzle_3d::{
+    Coord3, Game3, InputId3, ObjectId as ObjectId3, ParsedPuzzle3, RuleId3, Size3, State3,
+    transition_program_with_local_frame as transition_program_with_local_frame3,
+    transition_program_without_input_with_local_frame,
+};
 use puzzle_core::{InputId, ObjectId, State as PuzzleState, transition_program};
 use puzzle_lang::{
     ArrowKey, KeyTrigger, Level, LoadedDocumentModel, LoadedGame, ResourceSelection,
@@ -9,20 +14,16 @@ use puzzle_play::{
     AnimationEvent, GameSession, LevelProgressSaveData, MessageEvent, PersistentVarSaveData,
     ProgressSaveData, SoundEvent, WaitEvent,
 };
-use puzzle3d_model::{
-    Coord3, Game3, InputId3, ObjectId as ObjectId3, ParsedPuzzle3, RuleId3, Size3, State3,
-    transition_program_with_local_frame as transition_program_with_local_frame3,
-    transition_program_without_input_with_local_frame,
-};
 use serde_json::{Value, json};
 
 const PUZZLE3_SCENE_HOST_SOURCE: &str = r#"
 title "__puzzle3_scene_host__"
 
 puzzle scene_host {
-layers 1
+layers {
+__legacy_layer_0 = Marker
+}
 empty .
-object Marker 0
 rules {
 
 }
@@ -205,7 +206,7 @@ pub struct Puzzle3RuntimeBridge {
 
 impl Puzzle3RuntimeBridge {
     pub fn from_source(source: &str) -> Result<Self, String> {
-        if let Ok(parsed) = puzzle3d_model::parse_puzzle3d(source) {
+        if let Ok(parsed) = puzzle_3d::parse_puzzle3d(source) {
             return Ok(Self {
                 parsed,
                 animation: Default::default(),
@@ -481,6 +482,10 @@ fn scene_def_value(scene: &SceneDef) -> Value {
             "effect": scene_effect_value(&binding.effect),
             "keys": binding.keys.iter().map(key_trigger_name).collect::<Vec<_>>(),
         })).collect::<Vec<_>>(),
+        "routines": scene.routines.iter().map(|routine| json!({
+            "name": routine.name,
+            "effect": scene_effect_value(&routine.effect),
+        })).collect::<Vec<_>>(),
         "transitions": scene.transitions.iter().map(|transition| {
             let mut value = serde_json::Map::new();
             match &transition.trigger {
@@ -692,6 +697,7 @@ fn scene_effect_value(effect: &SceneEffect) -> Value {
     match effect {
         SceneEffect::Input(input) => json!({ "kind": "input", "name": input }),
         SceneEffect::ComponentEffect(name) => json!({ "kind": "component_effect", "name": name }),
+        SceneEffect::RoutineCall(name) => json!({ "kind": "routine_call", "name": name }),
         SceneEffect::Message { text } => {
             json!({ "kind": "message", "text": scene_expr_value(text) })
         }
@@ -1727,12 +1733,7 @@ mod tests {
                 .any(|input| { input["name"] == "up" && input["arrow"] == "ArrowUp" })
         );
 
-        let playing: Value = serde_json::from_str(
-            &bridge
-                .request_json("POST", "/api/command/new_game")
-                .unwrap(),
-        )
-        .unwrap();
+        let playing = start_spec_2d_new_game(&mut bridge);
         assert_eq!(playing["currentScene"], "playing");
         assert_eq!(playing["levelIndex"], 0);
         assert_eq!(playing["scenePuzzles"], json!(["board"]));
@@ -1800,12 +1801,7 @@ mod tests {
         for input in ["up", "down", "left", "right"] {
             let mut bridge =
                 StandaloneSessionBridge::from_source(source, "games/spec_2d.puzzle").unwrap();
-            let before: Value = serde_json::from_str(
-                &bridge
-                    .request_json("POST", "/api/command/new_game")
-                    .unwrap(),
-            )
-            .unwrap();
+            let before = start_spec_2d_new_game(&mut bridge);
             let after: Value = serde_json::from_str(
                 &bridge
                     .request_json("POST", &format!("/api/input/{input}"))
@@ -1820,6 +1816,18 @@ mod tests {
         }
 
         assert!(changed_input.is_some());
+    }
+
+    fn start_spec_2d_new_game(bridge: &mut StandaloneSessionBridge) -> Value {
+        bridge
+            .request_json("POST", "/api/command/clear_game_progress")
+            .unwrap();
+        serde_json::from_str(
+            &bridge
+                .request_json("POST", "/api/command/goto%20playing(%22microban.1%22)")
+                .unwrap(),
+        )
+        .unwrap()
     }
 
     #[test]

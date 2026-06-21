@@ -26,6 +26,13 @@ use std::time::Instant;
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::SystemTime;
 
+use puzzle_3d::{
+    Coord3, Game3, InputId3, LifecycleCommand3, ObjectId as ObjectId3, ParsedPuzzle3, RuleId3,
+    Size3, State3, transition_program_with_local_frame as transition_program_with_local_frame3,
+    transition_program_without_input_with_local_frame,
+};
+#[cfg(feature = "solver")]
+use puzzle_3d::{Rule3, WinCondition3, transition_program as transition_program3};
 #[cfg(feature = "solver")]
 use puzzle_core::transition_state;
 use puzzle_core::{
@@ -34,16 +41,16 @@ use puzzle_core::{
     RuleId, RuleStep, ScratchPattern, ScratchValueMatch, State, TransitionCommand, WriteOp,
     transition_program, transition_program_outcome, transition_program_trace,
 };
-use puzzle_lang::AssetKind;
 #[cfg(not(target_arch = "wasm32"))]
 use puzzle_lang::AssetsDef;
 use puzzle_lang::{
     AnimationDef, ArrowKey, GoalCondition, GoalExpr, GoalValue, KeyTrigger, Level,
-    LoadedDocumentModel, LoadedGame, ResourceSelection, RuleAnimationTrigger, RuleEffect,
-    RuleEmission, SceneAlignXDef, SceneAlignYDef, SceneComponent, SceneDef, SceneEffect, SceneExpr,
+    LoadedDocumentModel, LoadedGame, ResourceSelection, RuleAnimation, RuleAnimationTrigger,
+    RuleEffect, SceneAlignXDef, SceneAlignYDef, SceneComponent, SceneDef, SceneEffect, SceneExpr,
     SceneLayoutDef, ScenePuzzleInitializer, SceneTextContent, SceneTransitionTrigger, SceneValue,
     SoundsDef, ThemeDef, VisualSpriteDef, VisualSpriteKind, parse_game2d as parse_game,
 };
+use puzzle_lang::{AssetKind, DiagnosticReport};
 #[cfg(not(target_arch = "wasm32"))]
 use puzzle_lang::{discover_game_entries, expand_game_imports_for_file, resolve_game_entry};
 use puzzle_play::{
@@ -55,13 +62,6 @@ use puzzle_solver::{
     Puzzle3Domain, PuzzleDomain, SearchBudget, SearchOutcome, SearchProgress, SearchStats,
     best_first_with_dead_states_and_progress,
 };
-use puzzle3d_model::{
-    Coord3, Game3, InputId3, LifecycleCommand3, ObjectId as ObjectId3, ParsedPuzzle3, RuleId3,
-    Size3, State3, transition_program_with_local_frame as transition_program_with_local_frame3,
-    transition_program_without_input_with_local_frame,
-};
-#[cfg(feature = "solver")]
-use puzzle3d_model::{Rule3, WinCondition3, transition_program as transition_program3};
 
 const INDEX_HTML: &str = include_str!("../static/index.html");
 const APP_CSS: &str = include_str!("../static/app.css");
@@ -237,7 +237,7 @@ fn print_wasm_freshness_status() {
             Path::new("crates/core/src"),
             Path::new("crates/lang/src"),
             Path::new("crates/play/src"),
-            Path::new("crates/puzzle3d_model/src"),
+            Path::new("crates/puzzle_3d/src"),
             Path::new("crates/scene/src"),
             Path::new("crates/kernel/src"),
             Path::new("Cargo.lock"),
@@ -2454,11 +2454,10 @@ pub fn export_html_from_source(
     puzzle_path: &str,
     game_css: &str,
     game_visuals_js: &str,
-) -> Result<String, String> {
-    let document =
-        puzzle_lang::parse_game_for_path(source, puzzle_path).map_err(|error| error.to_string())?;
+) -> Result<String, DiagnosticReport> {
+    let document = puzzle_lang::parse_game_for_path(source, puzzle_path)?;
     if document.models.len() > 1 {
-        let loaded = mixed_document_loaded_game(&document)?;
+        let loaded = mixed_document_loaded_game(&document).map_err(DiagnosticReport::error)?;
         let game_visuals_js = join_visuals_js(game_visuals_js, &generated_visuals_js(&loaded));
         return export_mixed_document_html(
             &document,
@@ -2468,7 +2467,8 @@ pub fn export_html_from_source(
             game_css.to_string(),
             game_visuals_js,
             SolverConfig::default(),
-        );
+        )
+        .map_err(DiagnosticReport::error);
     }
     match document.single_model() {
         Some(LoadedDocumentModel::Puzzle2d { game, .. }) => {
@@ -2485,8 +2485,11 @@ pub fn export_html_from_source(
         }
         Some(LoadedDocumentModel::Puzzle3d { .. }) => {
             export_puzzle3_document_html(&document, source, puzzle_path, game_css, game_visuals_js)
+                .map_err(DiagnosticReport::error)
         }
-        None => Err("HTML export requires a single puzzle model".to_string()),
+        None => Err(DiagnosticReport::error(
+            "HTML export requires a single puzzle model",
+        )),
     }
 }
 
@@ -2710,7 +2713,7 @@ pub struct Puzzle3RuntimeBridge {
 
 impl Puzzle3RuntimeBridge {
     pub fn from_source(source: &str) -> Result<Self, String> {
-        if let Ok(parsed) = puzzle3d_model::parse_puzzle3d(source) {
+        if let Ok(parsed) = puzzle_3d::parse_puzzle3d(source) {
             return Ok(Self {
                 parsed,
                 animation: AnimationDef::default(),
@@ -3360,7 +3363,7 @@ fn solve_state3_json_from_source_inner(
 
 #[cfg(feature = "solver")]
 fn parse_puzzle3d_for_solver(source: &str) -> Result<ParsedPuzzle3, AppError> {
-    match puzzle3d_model::parse_puzzle3d(source) {
+    match puzzle_3d::parse_puzzle3d(source) {
         Ok(parsed) => Ok(parsed),
         Err(raw_error) => {
             let document = puzzle_lang::parse_game(source)
@@ -4103,7 +4106,7 @@ fn push_export_engine(out: &mut String, loaded: &LoadedGame) {
     }
     out.push(']');
     out.push(',');
-    push_rule_emissions(out, loaded);
+    push_rule_animations(out, loaded);
     out.push(',');
     push_rule_effects(out, loaded);
     out.push(',');
@@ -4196,6 +4199,32 @@ fn push_ordered_rule_effect(out: &mut String, effect: &RuleEffect) {
             out.push(',');
             push_json_pair(out, "name", name);
         }
+        RuleEffect::PlayMusic { name } => {
+            push_json_pair(out, "kind", "play_music");
+            out.push(',');
+            push_json_pair(out, "name", name);
+        }
+        RuleEffect::PauseMusic { name } => {
+            push_json_pair(out, "kind", "pause_music");
+            if let Some(name) = name {
+                out.push(',');
+                push_json_pair(out, "name", name);
+            }
+        }
+        RuleEffect::ResumeMusic { name } => {
+            push_json_pair(out, "kind", "resume_music");
+            if let Some(name) = name {
+                out.push(',');
+                push_json_pair(out, "name", name);
+            }
+        }
+        RuleEffect::StopMusic { name } => {
+            push_json_pair(out, "kind", "stop_music");
+            if let Some(name) = name {
+                out.push(',');
+                push_json_pair(out, "name", name);
+            }
+        }
         RuleEffect::Wait { milliseconds } => {
             push_json_pair(out, "kind", "wait");
             out.push(',');
@@ -4213,76 +4242,51 @@ fn push_ordered_rule_effect(out: &mut String, effect: &RuleEffect) {
     out.push('}');
 }
 
-fn push_rule_emissions(out: &mut String, loaded: &LoadedGame) {
-    out.push_str("\"ruleEmissions\":{");
-    let mut entries = loaded.rule_emissions.iter().collect::<Vec<_>>();
+fn push_rule_animations(out: &mut String, loaded: &LoadedGame) {
+    out.push_str("\"ruleAnimations\":{");
+    let mut entries = loaded.rule_animations.iter().collect::<Vec<_>>();
     entries.sort_by_key(|(rule, _)| rule.0);
-    for (index, (rule, emissions)) in entries.into_iter().enumerate() {
+    for (index, (rule, animations)) in entries.into_iter().enumerate() {
         if index > 0 {
             out.push(',');
         }
         push_json_string(out, &rule.0.to_string());
         out.push(':');
         out.push('[');
-        for (emission_index, emission) in emissions.iter().enumerate() {
-            if emission_index > 0 {
+        for (animation_index, animation) in animations.iter().enumerate() {
+            if animation_index > 0 {
                 out.push(',');
             }
-            push_rule_emission(out, emission);
+            push_rule_animation(out, animation);
         }
         out.push(']');
     }
     out.push('}');
 }
 
-fn push_rule_emission(out: &mut String, emission: &RuleEmission) {
+fn push_rule_animation(out: &mut String, animation: &RuleAnimation) {
     out.push('{');
-    match emission {
-        RuleEmission::PlaySfx { name } => {
-            push_json_pair(out, "kind", "play_sfx");
+    push_json_pair(out, "kind", "animate");
+    out.push(',');
+    push_json_pair(
+        out,
+        "trigger",
+        match animation.trigger {
+            RuleAnimationTrigger::Move => "move",
+            RuleAnimationTrigger::CantMove => "cantmove",
+        },
+    );
+    out.push(',');
+    push_json_pair(out, "name", &animation.name);
+    out.push(',');
+    out.push_str("\"objects\":[");
+    for (index, object) in animation.objects.iter().enumerate() {
+        if index > 0 {
             out.push(',');
-            push_json_pair(out, "name", name);
         }
-        RuleEmission::Animate {
-            trigger,
-            name,
-            objects,
-        } => {
-            push_json_pair(out, "kind", "animate");
-            out.push(',');
-            push_json_pair(
-                out,
-                "trigger",
-                match trigger {
-                    RuleAnimationTrigger::Move => "move",
-                    RuleAnimationTrigger::CantMove => "cantmove",
-                },
-            );
-            out.push(',');
-            push_json_pair(out, "name", name);
-            out.push(',');
-            out.push_str("\"objects\":[");
-            for (index, object) in objects.iter().enumerate() {
-                if index > 0 {
-                    out.push(',');
-                }
-                out.push_str(&object.0.to_string());
-            }
-            out.push(']');
-        }
-        RuleEmission::Wait { milliseconds } => {
-            push_json_pair(out, "kind", "wait");
-            out.push(',');
-            push_json_number(out, "milliseconds", *milliseconds);
-        }
-        RuleEmission::Message { text, literal } => {
-            push_json_pair(out, "kind", "message");
-            out.push(',');
-            push_json_pair(out, "text", text);
-            out.push(',');
-            push_json_bool(out, "literal", *literal);
-        }
+        out.push_str(&object.0.to_string());
     }
+    out.push(']');
     out.push('}');
 }
 
@@ -7166,6 +7170,19 @@ fn push_scenes(out: &mut String, key: &str, loaded: &LoadedGame) {
         }
         out.push(']');
         out.push(',');
+        out.push_str("\"routines\":[");
+        for (routine_index, routine) in scene.routines.iter().enumerate() {
+            if routine_index > 0 {
+                out.push(',');
+            }
+            out.push('{');
+            push_json_pair(out, "name", &routine.name);
+            out.push(',');
+            push_json_effect(out, &routine.effect);
+            out.push('}');
+        }
+        out.push(']');
+        out.push(',');
         out.push_str("\"transitions\":[");
         for (transition_index, transition) in scene.transitions.iter().enumerate() {
             if transition_index > 0 {
@@ -7516,6 +7533,11 @@ fn push_json_effect_fields(out: &mut String, effect: &SceneEffect) {
             push_json_pair(out, "kind", "component_effect");
             out.push(',');
             push_json_pair(out, "name", effect);
+        }
+        SceneEffect::RoutineCall(name) => {
+            push_json_pair(out, "kind", "routine_call");
+            out.push(',');
+            push_json_pair(out, "name", name);
         }
         SceneEffect::Message { text } => {
             push_json_pair(out, "kind", "message");
@@ -8014,7 +8036,7 @@ fn http_response(status: u16, reason: &str, content_type: &str, body: &str) -> S
 enum AppError {
     #[cfg(not(target_arch = "wasm32"))]
     Io(io::Error),
-    Lang(puzzle_lang::AppError),
+    Lang(DiagnosticReport),
     CoreTransition(puzzle_core::TransitionError),
     Config(String),
 }
@@ -8026,8 +8048,8 @@ impl From<io::Error> for AppError {
     }
 }
 
-impl From<puzzle_lang::AppError> for AppError {
-    fn from(value: puzzle_lang::AppError) -> Self {
+impl From<DiagnosticReport> for AppError {
+    fn from(value: DiagnosticReport) -> Self {
         Self::Lang(value)
     }
 }
@@ -8222,11 +8244,16 @@ levels3 default of board {
     }
 
     #[test]
-    fn renderer_gives_dom_fallback_sprites_a_visible_shape() {
-        assert!(RENDERER_JS.contains("sprite.className = `sprite ${layer.sprite}`;"));
+    fn renderer_does_not_draw_fallback_sprites() {
+        assert!(RENDERER_JS.contains("return null;"));
+        assert!(RENDERER_JS.contains("const sprite = this.renderSprite(layer);"));
+        assert!(!RENDERER_JS.contains("sprite.className = `sprite ${layer.sprite}`;"));
+        assert!(!RENDERER_JS.contains("this.paintFallbackLayer("));
+        assert!(!RENDERER_JS.contains("function paintFallbackLayer("));
+        assert!(!RENDERER_JS.contains("function hashString("));
         assert!(RENDERER_CSS.contains(".sprite {"));
         assert!(RENDERER_CSS.contains("position: absolute;"));
-        assert!(RENDERER_CSS.contains(".sprite.unknown"));
+        assert!(!RENDERER_CSS.contains(".sprite.unknown"));
     }
 
     #[test]
@@ -8401,6 +8428,38 @@ P
     }
 
     #[test]
+    fn clean_theme_removes_button_drop_shadows_and_unifies_vertical_control_width() {
+        assert!(APP_JS.contains("function syncCleanControlGroupWidths(root = screenView)"));
+        assert!(APP_JS.contains("group.style.removeProperty(\"--clean-control-width\");"));
+        assert!(APP_JS.contains("Math.max(max, cleanControlNaturalWidth(control))"));
+        assert!(
+            APP_JS.contains("group.style.setProperty(\"--clean-control-width\", `${maxWidth}px`);")
+        );
+        assert!(APP_JS.contains("child.matches(\"button, .level-menu\")"));
+        assert!(APP_CSS.contains("--button-shadow:"));
+        assert!(APP_CSS.contains("box-shadow: var(--button-shadow);"));
+        assert!(APP_CSS.contains("box-shadow: var(--button-shadow-hover);"));
+        assert!(APP_CSS.contains("box-shadow: var(--button-shadow-active);"));
+        assert!(!APP_CSS.contains("--menu-control-width: 420px;"));
+        assert!(THEME_PRESETS_CSS.contains("body.theme-clean {"));
+        assert!(THEME_PRESETS_CSS.contains("--button-shadow: none;"));
+        assert!(THEME_PRESETS_CSS.contains("--button-shadow-hover: none;"));
+        assert!(THEME_PRESETS_CSS.contains("--button-shadow-active: none;"));
+        assert!(THEME_PRESETS_CSS.contains("--button-hover-transform: none;"));
+        assert!(!THEME_PRESETS_CSS.contains("--menu-control-width: 420px;"));
+        assert!(THEME_PRESETS_CSS.contains(".theme-clean .scene-layer > button,"));
+        assert!(THEME_PRESETS_CSS.contains(".theme-clean .scene-layer > .level-menu,"));
+        assert!(THEME_PRESETS_CSS.contains(".theme-clean .view-column > button,"));
+        assert!(THEME_PRESETS_CSS.contains(".theme-clean .view-column > .level-menu,"));
+        assert!(THEME_PRESETS_CSS.contains(".theme-clean .view-box > button,"));
+        assert!(THEME_PRESETS_CSS.contains(".theme-clean .view-box > .level-menu {"));
+        assert!(
+            THEME_PRESETS_CSS
+                .contains("width: var(--clean-control-width, auto);\n  max-width: 100%;")
+        );
+    }
+
+    #[test]
     fn puzzlescript_theme_reserves_terminal_control_width_for_confirm_glyphs() {
         assert!(APP_JS.contains("function setControlLabel(control, label)"));
         assert!(APP_JS.contains("function controlLabelNodes(label)"));
@@ -8552,10 +8611,10 @@ P
     }
 
     #[test]
-    fn html_play_serializes_level_refs_as_quoted_scene_args() {
+    fn html_play_serializes_level_refs_as_unquoted_scene_args() {
         assert!(APP_JS.contains("function exprValueSource(value)"));
         assert!(APP_JS.contains("value?.kind === \"level\""));
-        assert!(APP_JS.contains("return JSON.stringify(value.name);"));
+        assert!(APP_JS.contains("return String(value.name);"));
     }
 
     #[test]
@@ -9373,8 +9432,8 @@ puzzle board {
     floor = Goal
     actor = Player
   }
-  inputs {
-    noop <- Space
+  keys {
+    Space -> noop
   }
   rules {
     if input == noop {
@@ -9431,12 +9490,12 @@ puzzle board {
     floor = Goal
     actor = Player Box Wall
   }
-  inputs {
-    up <- w ArrowUp
-    down <- s ArrowDown
-    left <- a ArrowLeft
-    right <- d ArrowRight
-    restart <- r
+  keys {
+    w ArrowUp -> up
+    s ArrowDown -> down
+    a ArrowLeft -> left
+    d ArrowRight -> right
+    r -> restart
   }
   rules {
     input directions [ Player | Box | no actor ] -> [ | Player | Box ]
@@ -9463,11 +9522,11 @@ scene title {
   layout {
     choice "New Game" -> input new_game
   }
-  inputs {
-    new_game <- n
+  keys {
+    n -> new_game
   }
-  rules {
-    if input == new_game -> goto playing
+  routine new_game {
+    goto playing
   }
 }
 
@@ -9475,11 +9534,11 @@ scene playing {
   state {
     puzzle board
   }
-  inputs {
-    back <- Escape
+  keys {
+    Escape -> back
   }
-  rules {
-    if input == back -> goto title
+  routine back {
+    goto title
   }
   layout {
     puzzle board
@@ -9501,7 +9560,6 @@ scene playing {
     fn solver_accepts_puzzle3d_state_and_returns_replay_steps() {
         let source = r#"
 title "Themed 3D Solver"
-theme puzzlescript
 
 puzzle3 push3 {
 layers {
@@ -9509,9 +9567,9 @@ floor = Goal
 solid = Player Box Wall
 }
 
-inputs {
-right <- d ArrowRight
-restart <- r
+keys {
+d ArrowRight -> right
+r -> restart
 }
 
 group solid = Player Box Wall

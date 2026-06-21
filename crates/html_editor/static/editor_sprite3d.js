@@ -287,6 +287,7 @@ function renderSprite3dPalette() {
         mode: "edit",
         customValue: selected.color,
         customOnly: true,
+        onPickError: setSprite3dActionStatus,
         onChange: updateSelectedSprite3dColor,
         onPreset: updateSelectedSprite3dColor,
         renderPalette: renderSprite3dPalette,
@@ -387,6 +388,7 @@ function renderSprite3dPalette() {
     const addMenu = renderSpriteColorMenu({
       mode: "add",
       customValue: draft,
+      onPickError: setSprite3dActionStatus,
       onDiscard: cancelSprite3dColorAdd,
       onChange: previewNewSprite3dColor,
       onPreset: previewNewSprite3dColor,

@@ -13,8 +13,8 @@ layers {
   layer_1 = Player
 }
 
-inputs {
-  action <- Enter Space Escape
+keys {
+  Enter Space Escape -> action
 }
 
 sprites {
@@ -36,12 +36,12 @@ levels {
 }
 
 scene title {
-  inputs {
-    confirm <- Enter Space x
+  keys {
+    Enter Space x -> confirm
   }
   button "Play" -> input confirm
-  rules {
-    if input == confirm -> goto playing
+  routine confirm {
+    goto playing
   }
 }
 
@@ -52,12 +52,14 @@ scene playing {
   layout {
     puzzle board
   }
-  inputs {
-    back <- Escape q
+  keys {
+    Escape q -> back
   }
   rules {
     step board
-    if input == back -> goto title
+  }
+  routine back {
+    goto title
   }
 }
 "##;
@@ -81,7 +83,7 @@ scene playing {
     );
     assert_eq!(
         title.key_bindings[0].effect,
-        SceneEffect::Input("confirm".to_string())
+        SceneEffect::RoutineCall("confirm".to_string())
     );
     assert!(matches!(
         title.components.iter().find(|component| matches!(component, SceneComponent::Button(_))),
@@ -91,7 +93,7 @@ scene playing {
     let playing = &loaded.scenes[1];
     assert_eq!(
         playing.key_bindings[0].effect,
-        SceneEffect::Input("back".to_string())
+        SceneEffect::RoutineCall("back".to_string())
     );
     assert_eq!(loaded.controls.keys.get(&b'q'), None);
 }

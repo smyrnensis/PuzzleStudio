@@ -9,12 +9,12 @@ layers {
   layer_3 = Player Wall Crate
 }
 
-inputs {
-  up <- w ArrowUp
-  down <- s ArrowDown
-  left <- a ArrowLeft
-  right <- d ArrowRight
-  restart <- r
+keys {
+  w ArrowUp -> up
+  s ArrowDown -> down
+  a ArrowLeft -> left
+  d ArrowRight -> right
+  r -> restart
 }
 
 sprites {
@@ -99,21 +99,21 @@ levels {
 scene title {
   layout {
     title "Basic PS Sokoban"
-    if game.has_progress_save {
+    if has_progress_save {
       choice "Continue" -> input continue_game
     }
     choice "New Game" -> input new_game
   }
-  inputs {
-    continue_game <- Enter Space x
-    new_game <- n
+  keys {
+    Enter Space x -> continue_game
+    n -> new_game
   }
-  rules {
-    if input == continue_game -> goto playing
-    if input == new_game -> {
-      clear_game_progress
-      goto playing(0)
-    }
+  routine continue_game {
+    goto playing
+  }
+  routine new_game {
+    clear_game_progress
+    goto playing(0)
   }
 }
 
@@ -127,11 +127,13 @@ scene playing {
     }
     puzzle board
   }
-  inputs {
-    back <- Escape q
+  keys {
+    Escape q -> back
   }
   rules {
     step board
-    if input == back -> goto title
+  }
+  routine back {
+    goto title
   }
 }

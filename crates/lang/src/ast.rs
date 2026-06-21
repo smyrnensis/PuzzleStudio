@@ -30,8 +30,14 @@ pub(crate) enum RuleRole {
 
 #[derive(Clone, Debug)]
 pub(crate) enum StatementAst {
-    Call(String),
-    DisplayCall(String),
+    Call {
+        name: String,
+        source_line: String,
+    },
+    DisplayCall {
+        name: String,
+        source_line: String,
+    },
     DisplayRewrite(OrientedRewriteAst),
     DisplayBlock(Vec<StatementAst>),
     Conditional {
@@ -138,6 +144,18 @@ pub(crate) enum EffectAst {
     ClearCheckpoint,
     PlaySfx {
         name: String,
+    },
+    PlayMusic {
+        name: String,
+    },
+    PauseMusic {
+        name: Option<String>,
+    },
+    ResumeMusic {
+        name: Option<String>,
+    },
+    StopMusic {
+        name: Option<String>,
     },
     Wait {
         milliseconds: Option<u64>,

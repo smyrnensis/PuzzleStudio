@@ -1,6 +1,8 @@
 target/
 .DS_Store
 tests/
+!crates/html_editor/tests/
+!crates/html_editor/tests/**
 
 # External PS Next checkout used for PS 3D extraction work.
 # Keep notes/patches/examples in this repo, but do not vendor the fork body.

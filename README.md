@@ -79,8 +79,8 @@ The default 2D sample uses these controls:
 - `r`: send the standard `restart` input
 - `q`: quit the terminal player
 
-Input handling is part of the `.puzzle` model. Other games can map keys to
-different semantic inputs with an `inputs { ... }` block.
+Input handling is part of the `.puzzle` model. Other games can map raw keys to
+semantic inputs with a `keys { <key...> -> <input> }` block.
 
 ## Editor
 
@@ -216,6 +216,7 @@ automatically; the entry file must import them explicitly.
 
 ```txt
 crates/core/            deterministic transition core
+crates/grid3d/          deterministic 3D grid/state/transition core
 crates/lang/            .puzzle parser, validation, lowering, imports
 crates/scene/           shared scene/layout data structures
 crates/play/            loaded-game session mechanics and render helpers
@@ -224,7 +225,7 @@ crates/ascii_play/      terminal adapter
 crates/html_play/       browser player and standalone HTML export
 crates/html_editor/     browser editor and editor export
 crates/wasm/            WASM bridge used by editor/player workflows
-crates/puzzle3d_model/  prototype 3D model parser/runtime
+crates/puzzle_3d/       3D authoring/runtime facade pending full layer split
 src-tauri/              desktop shell for the shared editor
 games/                  current small specification/sample games
 archive/games/          older experiments and compatibility samples

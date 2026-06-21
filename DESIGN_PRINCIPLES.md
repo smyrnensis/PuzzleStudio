@@ -166,7 +166,7 @@ AI が生成したルールは、動いたというだけでは採用されな�
 `.puzzle` の文法は、ユーザーが一度覚えた形を別の場所でも使えると感じられるように設計する。
 
 同じ概念は、可能な限り同じ形で現れるべきである。
-たとえば、条件は `if`、反復は `for` や `repeat`、所有者ごとの入力割り当ては `inputs { ... }`、lifecycle は `on_*`、scene command は command として直接書く、というように、構文の形が概念の形に対応するべきである。
+たとえば、条件は `if`、反復は `for` や `repeat`、所有者ごとの key 割り当ては `keys { <key...> -> <semantic-input-or-routine> }`、lifecycle は `on_*`、scene command は command として直接書く、というように、構文の形が概念の形に対応するべきである。
 
 これは単なる表記の統一ではない。
 ある構文を覚えたユーザーが、「ここでも使えそうだ」と推測したとき、その推測が概念的に正しければ、文法もそれを受け入れる方向に寄せる。
@@ -197,7 +197,7 @@ display routine と gameplay routine が違うなら、同じ routine 風の形�
 hardcode の兆候は次のような形で現れる。
 
 - 特定の名前、特定の component、特定の adapter だけが、文法上の一般概念を迂回している。
-- 既存の `if`、`for`、`inputs`、routine、effect、scene command で表せるはずのものに、別の小さな専用言語を足している。
+- 既存の `if`、`for`、`keys`、routine、effect、scene command で表せるはずのものに、別の小さな専用言語を足している。
 - 似た機能を追加すると、同じような分岐をもう一つ書く必要がある。
 - ユーザー向けには自然に見えるが、開発者向けにはどの層が所有しているか説明できない。
 - 互換性のための処理が canonical syntax の mental model を変えている。

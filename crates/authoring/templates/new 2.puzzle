@@ -1,0 +1,51 @@
+title "New Puzzle"
+
+puzzle main {
+	layers {
+		floor = Goal
+		solid = Player Wall
+	}
+
+	inputs {
+		up <- w ArrowUp
+		down <- s ArrowDown
+		left <- a ArrowLeft
+		right <- d ArrowRight
+		restart <- r
+	}
+
+	win_conditions {
+		exists(Goal)
+		none([ Goal no Player ])
+	}
+
+	on_level_clear {
+		next_level
+	}
+
+	rules {
+		input directions [ Player ] -> [ > Player ]
+		move
+	}
+}
+
+levels demo of main {
+	legend {
+		. = empty
+		# = Wall
+		P = Player
+		G = Goal
+		+ = Player Goal
+	}
+
+	level level_1
+	#######
+	#P...G#
+	#######
+
+	level level_2
+	#######
+	#P....#
+	#..G..#
+	#######
+}

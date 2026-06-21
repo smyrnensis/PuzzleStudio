@@ -436,9 +436,23 @@ mod tests {
         let source = new_puzzle_source("Custom Puzzle");
 
         assert!(NEW_PUZZLE_TEMPLATE.starts_with("title \"New Puzzle\"\n"));
+        assert!(!NEW_PUZZLE_TEMPLATE.contains('\t'));
+        assert!(
+            !NEW_PUZZLE_TEMPLATE
+                .lines()
+                .any(|line| line.starts_with(' '))
+        );
         assert!(source.starts_with("title \"Custom Puzzle\"\n"));
         assert!(source.contains("puzzle main {"));
-        assert!(source.contains("levels demo of main {"));
+        assert!(source.contains("sprites {\n}"));
+        assert!(source.contains("levels {\n}"));
+        assert!(source.contains("scene title {"));
+        assert!(source.contains("scene level_select {"));
+        assert!(source.contains("scene playing {"));
+        assert!(!source.contains("<-"));
+        assert!(!source.contains("exists("));
+        assert!(!source.contains("none("));
+        assert!(!source.contains("input directions"));
     }
 
     #[test]

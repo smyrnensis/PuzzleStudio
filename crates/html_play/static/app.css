@@ -11,6 +11,17 @@
   --button-bg: color-mix(in srgb, var(--accent) 14%, transparent);
   --button-bg-hover: color-mix(in srgb, var(--accent) 22%, transparent);
   --button-bg-active: color-mix(in srgb, var(--accent) 30%, transparent);
+  --button-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--background) 16%, transparent),
+    0 7px 16px color-mix(in srgb, var(--text) 18%, transparent);
+  --button-shadow-hover:
+    inset 0 1px 0 color-mix(in srgb, var(--background) 20%, transparent),
+    0 10px 20px color-mix(in srgb, var(--text) 20%, transparent);
+  --button-shadow-active:
+    inset 0 2px 5px color-mix(in srgb, var(--text) 22%, transparent),
+    0 3px 9px color-mix(in srgb, var(--text) 14%, transparent);
+  --button-hover-transform: translateY(-1px);
+  --button-active-transform: translateY(0);
   --menu-item-bg: color-mix(in srgb, var(--text) 8%, transparent);
   --menu-item-bg-selected: color-mix(in srgb, var(--accent) 18%, transparent);
   --menu-item-ring: color-mix(in srgb, var(--accent) 42%, transparent);
@@ -80,9 +91,7 @@ button {
   font: inherit;
   font-weight: 700;
   cursor: pointer;
-  box-shadow:
-    inset 0 1px 0 color-mix(in srgb, var(--background) 16%, transparent),
-    0 7px 16px color-mix(in srgb, var(--text) 18%, transparent);
+  box-shadow: var(--button-shadow);
   transition:
     background-color 120ms ease,
     box-shadow 120ms ease,
@@ -91,18 +100,14 @@ button {
 
 button:hover {
   background: linear-gradient(180deg, var(--button-bg-hover), var(--button-bg));
-  box-shadow:
-    inset 0 1px 0 color-mix(in srgb, var(--background) 20%, transparent),
-    0 10px 20px color-mix(in srgb, var(--text) 20%, transparent);
-  transform: translateY(-1px);
+  box-shadow: var(--button-shadow-hover);
+  transform: var(--button-hover-transform);
 }
 
 button:active {
   background: var(--button-bg-active);
-  box-shadow:
-    inset 0 2px 5px color-mix(in srgb, var(--text) 22%, transparent),
-    0 3px 9px color-mix(in srgb, var(--text) 14%, transparent);
-  transform: translateY(0);
+  box-shadow: var(--button-shadow-active);
+  transform: var(--button-active-transform);
 }
 
 button:focus-visible {
@@ -364,7 +369,8 @@ button:disabled {
 }
 
 .level-menu {
-  width: min(100%, 420px);
+  width: var(--menu-control-width, auto);
+  max-width: 100%;
   max-height: min(100%, calc(var(--screen-virtual-height, 100vh) - 96px));
   padding-right: 4px;
   overflow-y: auto;
@@ -393,7 +399,8 @@ button:disabled {
 }
 
 .is-menu-scene button {
-  width: min(100%, 420px);
+  width: var(--menu-control-width, auto);
+  max-width: 100%;
   justify-self: center;
   cursor: pointer;
   grid-template-columns: minmax(0, 1fr);

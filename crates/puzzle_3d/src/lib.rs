@@ -1,24 +1,11 @@
-mod ids;
-mod level;
-mod model;
 mod parser;
-mod patch;
 mod selector;
 mod session;
 mod snapshot;
 mod sprite;
-mod state;
-mod transition;
 mod visual;
 mod visual_fixture;
-mod win;
 
-pub use ids::{GlobalId3, InputId3, LayerId, ObjectId, RuleId3, ScratchId3};
-pub use level::{Level3, LevelBundle3, LevelBundleError3, LevelCell3, LevelEntry3, LevelError3};
-pub use model::{
-    Axis3, Coord3, Direction3, DirectionSet3, Frame3, FrameChirality3, FrameError3, FrameExpr3,
-    FrameSet3, FrameSlot3, Game3, GameError3, InputDef3, ObjectDef3, Offset3, Size3,
-};
 pub use parser::{
     CAMERA_ASSIGNMENT_OPTIONS3, CAMERA_BARE_OPTIONS3, CAMERA_OPTIONS3, CameraSettings3,
     GRID_BARE_OPTIONS3, GridSettings3, ModelSettings3, PIXELATE_ASSIGNMENT_OPTIONS3,
@@ -26,9 +13,22 @@ pub use parser::{
     RENDER_BLOCK_OPTIONS3, RENDER_OPTIONS3, ViewportFollow3, ViewportFraming3, ViewportHeight3,
     ViewportMode3, ViewportSettings3, parse_puzzle3d,
 };
-pub use patch::{Patch3, PatchError3, PatchOp3};
-pub use puzzle_kernel::{
-    GlobalUpdateOp, LocalFrame, LocalFrameExtent, ScratchKind, ScratchValueMatch,
+pub use puzzle_grid3d::{
+    Axis3, Coord3, Direction3, DirectionSet3, Frame3, FrameChirality3, FrameError3, FrameExpr3,
+    FrameSet3, FrameSlot3, Game3, GameError3, GlobalId3, InputDef3, InputId3, LayerId, Level3,
+    LevelBundle3, LevelBundleError3, LevelCell3, LevelEntry3, LevelError3, ObjectDef3, ObjectId,
+    Offset3, Patch3, PatchError3, PatchOp3, RuleId3, ScratchId3, Size3,
+};
+pub use puzzle_grid3d::{
+    CellView3, ConditionValueKind3, GlobalUpdateOp, Guard3, LocalFrame, LocalFrameExtent,
+    MatchCell3, ObjectSetMatcher3, ObjectSetScratchPattern3, Pattern3, PatternComponent3, Rule3,
+    RuleApplication3, RuleEffect3, ScratchKind, ScratchPattern3, ScratchValueMatch, SlotScratch3,
+    State3, StateError3, TransitionError3, WinCondition3, WriteOp3, count_pattern_matches,
+    eval_condition_kind, has_pattern_match, transition_once, transition_once_all,
+    transition_once_per_level, transition_once_with_input, transition_program,
+    transition_program_with_local_frame, transition_program_without_input,
+    transition_program_without_input_with_local_frame, transition_repeated,
+    transition_solver_program,
 };
 pub use selector::{
     ConcreteObject3, DenseCell3, DensePattern3, DenseRow3, DenseRuleTemplate3, DenseSlice3,
@@ -47,23 +47,12 @@ pub use session::{
 };
 pub use snapshot::{BoardCell3, BoardSnapshot3};
 pub use sprite::{Sprite3, SpriteColor3, SpriteSet3, SpriteVoxels3};
-pub use state::{CellView3, SlotScratch3, State3, StateError3};
-pub use transition::{
-    ConditionValueKind3, Guard3, MatchCell3, ObjectSetMatcher3, ObjectSetScratchPattern3, Pattern3,
-    PatternComponent3, Rule3, RuleApplication3, RuleEffect3, ScratchPattern3, TransitionError3,
-    WriteOp3, count_pattern_matches, eval_condition_kind, has_pattern_match, transition_once,
-    transition_once_all, transition_once_per_level, transition_once_with_input, transition_program,
-    transition_program_with_local_frame, transition_program_without_input,
-    transition_program_without_input_with_local_frame, transition_repeated,
-    transition_solver_program,
-};
 pub use visual::{ObjectVisual3, VisualCell3, VisualObject3, VisualSnapshot3};
 pub use visual_fixture::{
     VisualFixtureAnimation3, VisualFixtureExportError3, export_visual_fixture_json,
     export_visual_fixture_json_with_title, export_visual_fixture_json_with_title_and_scenes,
     export_visual_fixture_json_with_title_scenes_and_animation,
 };
-pub use win::WinCondition3;
 
 #[cfg(test)]
 mod tests {
@@ -3387,7 +3376,7 @@ on_last_level_clear {
     }
 
     #[test]
-    fn parser_accepts_owner_scoped_inputs_for_3d_models() {
+    fn parser_accepts_owner_scoped_keys_for_3d_models() {
         let parsed = parse_puzzle3d(
             r#"
 puzzle3 scoped_inputs {
@@ -3395,9 +3384,9 @@ layers {
 solid = Player
 }
 
-inputs {
-right <- d ArrowRight
-restart <- r
+keys {
+d ArrowRight -> right
+r -> restart
 }
 
 rules {
@@ -3427,9 +3416,9 @@ layers {
 solid = Player
 }
 
-inputs {
-front <- w ArrowUp
-back <- s ArrowDown
+keys {
+w ArrowUp -> front
+s ArrowDown -> back
 }
 
 rules {
@@ -3477,9 +3466,9 @@ layers {
 solid = Player
 }
 
-inputs {
-forward <- w ArrowUp
-backward <- s ArrowDown
+keys {
+w ArrowUp -> forward
+s ArrowDown -> backward
 }
 
 rules {

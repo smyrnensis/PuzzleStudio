@@ -84,10 +84,10 @@ contract を通って runtime へ届くことを確認する。
 - request path normalization and rejection
 - generated file exclusion
 
-実行:
+service test 実行:
 
 ```bash
-cargo test -p html-editor
+cargo test -p html-editor --lib
 ```
 
 service test で見るべきなのは、公開 API の入出力である。static JS の文字列
@@ -104,6 +104,27 @@ supported release surface ではない。
 ```bash
 cargo run -p html-editor -- games/spec_2d.puzzle --serve --port 8787
 ```
+
+このリポジトリでは、追加 npm 依存を持たない最小の Chrome DevTools
+Protocol smoke を `tools/editor_browser_smoke.mjs` に置く。これは見た目の
+良し悪しではなく、HTTP editor、DOM click、iframe runtime、keyboard event、
+3D `postMessage` contract が実ブラウザでつながっていることだけを見る。
+
+実行:
+
+```bash
+cargo test -p html-editor --test browser_smoke
+```
+
+直接実行する場合:
+
+```bash
+cargo build -p html-editor
+node tools/editor_browser_smoke.mjs --editor-bin target/debug/html-editor
+```
+
+Chrome/Chromium が標準位置にない場合は `PUZZLESTUDIO_CHROME` か `--chrome`
+で実行ファイルを指定する。
 
 Playwright などを追加する場合の最小 shape:
 

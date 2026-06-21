@@ -23,12 +23,12 @@ layers {
   layer_9 = piplayer2 piplayer1
 }
 
-inputs {
-  up <- w ArrowUp
-  down <- s ArrowDown
-  left <- a ArrowLeft
-  right <- d ArrowRight
-  restart <- r
+keys {
+  w ArrowUp -> up
+  s ArrowDown -> down
+  a ArrowLeft -> left
+  d ArrowRight -> right
+  r -> restart
 }
 
 groups {
@@ -883,16 +883,16 @@ scene title {
     }
     choice "New Game" -> input new_game
   }
-  inputs {
-    continue_game <- Enter Space x
-    new_game <- n
+  keys {
+    Enter Space x -> continue_game
+    n -> new_game
   }
-  rules {
-    if input == continue_game -> goto playing
-    if input == new_game -> {
-      clear_game_progress
-      goto playing(0)
-    }
+  routine continue_game {
+    goto playing
+  }
+  routine new_game {
+    clear_game_progress
+    goto playing(0)
   }
 }
 
@@ -903,11 +903,13 @@ scene playing {
   layout {
     puzzle board
   }
-  inputs {
-    back <- Escape q
+  keys {
+    Escape q -> back
   }
   rules {
     step board
-    if input == back -> goto title
+  }
+  routine back {
+    goto title
   }
 }

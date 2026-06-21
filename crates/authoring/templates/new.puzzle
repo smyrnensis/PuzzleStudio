@@ -1,51 +1,55 @@
 title "New Puzzle"
 
 puzzle main {
-	layers {
-		floor = Goal
-		solid = Player Wall
-	}
-
-	inputs {
-		up <- w ArrowUp
-		down <- s ArrowDown
-		left <- a ArrowLeft
-		right <- d ArrowRight
-		restart <- r
-	}
-
-	win_conditions {
-		exists(Goal)
-		none([ Goal no Player ])
-	}
-
-	on_level_clear {
-		next_level
-	}
-
-	rules {
-		input directions [ Player ] -> [ > Player ]
-		move
-	}
+layers {
+base = Floor
 }
 
-levels demo of main {
-	legend {
-		. = empty
-		# = Wall
-		P = Player
-		G = Goal
-		+ = Player Goal
-	}
+sprites {
+}
 
-	level level_1
-	#######
-	#P...G#
-	#######
+rules {
+}
 
-	level level_2
-	#######
-	#P....#
-	#..G..#
-	#######
+levels {
+}
+}
+
+scene title {
+layout {
+title
+button "Start" -> goto playing
+button "Levels" -> goto level_select
+}
+
+keys {
+Enter Space -> goto playing
+l -> goto level_select
+}
+}
+
+scene level_select {
+layout {
+text "Select Level"
+level_menu
+button "Back" -> goto title
+}
+
+keys {
+Escape q -> goto title
+}
+}
+
+scene playing {
+state {
+board = puzzle main
+}
+
+layout {
+board
+}
+
+keys {
+Escape q -> goto title
+}
 }

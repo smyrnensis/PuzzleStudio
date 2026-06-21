@@ -1,7 +1,7 @@
-use crate::AppError;
+use crate::DiagnosticReport;
 use crate::syntax::is_puzzle_lifecycle_block;
 
-pub(crate) fn logical_lines(source: &str) -> Result<Vec<String>, AppError> {
+pub(crate) fn logical_lines(source: &str) -> Result<Vec<String>, DiagnosticReport> {
     let mut lines = Vec::new();
     let mut preserve_level_blanks = false;
     let mut level_brace_depth = 0i32;
@@ -81,7 +81,7 @@ pub(crate) fn strip_line_comment(line: &str) -> &str {
     line
 }
 
-fn expand_structural_sugar(lines: &[String]) -> Result<Vec<String>, AppError> {
+fn expand_structural_sugar(lines: &[String]) -> Result<Vec<String>, DiagnosticReport> {
     let mut expanded = Vec::new();
     let mut block_stack = Vec::<String>::new();
 
@@ -126,7 +126,10 @@ fn update_structural_block_stack(line: &str, stack: &mut Vec<String>) {
     }
 }
 
-fn split_structural_line(line: &str, split_semicolons: bool) -> Result<Vec<String>, AppError> {
+fn split_structural_line(
+    line: &str,
+    split_semicolons: bool,
+) -> Result<Vec<String>, DiagnosticReport> {
     let mut pieces = Vec::new();
     let mut current = String::new();
     let mut in_string = false;
@@ -240,7 +243,7 @@ fn is_selector_token_char(ch: char) -> bool {
     ch.is_ascii_alphanumeric() || matches!(ch, '_' | '@' | ':' | '*')
 }
 
-fn normalize_brace_blocks(lines: &[String]) -> Result<Vec<String>, AppError> {
+fn normalize_brace_blocks(lines: &[String]) -> Result<Vec<String>, DiagnosticReport> {
     let mut normalized = Vec::new();
     let mut levels_brace_depth = 0i32;
 
@@ -340,7 +343,6 @@ fn starts_inline_block(tokens: &[&str], line: &str) -> bool {
         tokens,
         ["map", ..]
             | ["on_display"]
-            | ["objects"]
             | ["scratch"]
             | ["groups"]
             | ["layers"]
@@ -383,7 +385,7 @@ fn starts_inline_block(tokens: &[&str], line: &str) -> bool {
     ) || matches!(tokens, ["button", ..] if line.trim_end().ends_with(" with"))
 }
 
-fn strip_inline_scratch_blocks(line: &str) -> Result<String, AppError> {
+fn strip_inline_scratch_blocks(line: &str) -> Result<String, DiagnosticReport> {
     let mut out = String::with_capacity(line.len());
     let mut chars = line.chars().peekable();
     while let Some(ch) = chars.next() {
@@ -428,7 +430,6 @@ pub(crate) enum SourceScope {
     SceneKeys,
     SceneTransitions,
     LevelMenu,
-    Objects,
     Tags,
     Group,
     Layers,
@@ -637,6 +638,7 @@ fn source_opens_block(line: &str, tokens: &[&str], current: Option<SourceScope>)
             | ["level_menu", ..]
             | ["puzzle", ..]
             | ["puzzle3", ..]
+            | ["routine", ..]
             | ["input", ..]
             | ["action", ..]
             | ["if", ..] => return line.ends_with('{'),
@@ -655,7 +657,7 @@ fn source_opens_block(line: &str, tokens: &[&str], current: Option<SourceScope>)
                 | ["legend"]
                 | ["levels", ..]
                 | ["levels3", ..]
-                | ["objects"]
+                | ["tags"]
                 | ["layers"]
                 | ["collision_layers"]
                 | ["scratch"]
@@ -701,7 +703,12 @@ fn opening_scope(line: &str, tokens: &[&str], current: Option<SourceScope>) -> O
             }
             ["state"] => return Some(SourceScope::SceneState),
             ["keys"] | ["inputs"] => return Some(SourceScope::SceneKeys),
-            ["rules"] | ["on_scene_start"] | ["input", ..] | ["action", ..] | ["if", ..] => {
+            ["rules"]
+            | ["on_scene_start"]
+            | ["routine", ..]
+            | ["input", ..]
+            | ["action", ..]
+            | ["if", ..] => {
                 return Some(SourceScope::SceneTransitions);
             }
             ["level_menu", ..] => return Some(SourceScope::LevelMenu),
@@ -767,7 +774,6 @@ fn source_scope_for_name(name: &str) -> Option<SourceScope> {
         "sounds" => Some(SourceScope::Sounds),
         "assets" => Some(SourceScope::Assets),
         "puzzle" => Some(SourceScope::Puzzle),
-        "objects" => Some(SourceScope::Objects),
         "tags" => Some(SourceScope::Tags),
         "layers" | "collision_layers" => Some(SourceScope::Layers),
         "groups" => Some(SourceScope::Group),
@@ -824,8 +830,8 @@ fn leading_token_len(line: &str) -> Option<usize> {
     Some(start + token)
 }
 
-fn parse_error(line: &str, message: &str) -> AppError {
-    AppError::Parse(format!("{message}: {line}"))
+fn parse_error(line: &str, message: &str) -> DiagnosticReport {
+    DiagnosticReport::error_at_line(message, line)
 }
 
 #[cfg(test)]

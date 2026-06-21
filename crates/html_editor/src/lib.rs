@@ -5,6 +5,8 @@ use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use puzzle_lang::{Diagnostic, DiagnosticReport};
+
 const EDITOR_HTML: &str = include_str!("../static/editor.html");
 const EDITOR_DOCS_MARKDOWN: &str = include_str!("../docs/editor.md");
 const EDITOR_DOCS_METADATA_MARKDOWN: &str = include_str!("../docs/metadata.md");
@@ -293,7 +295,7 @@ impl EditorService {
             &request.game_css,
             &request.game_visuals_js,
         )
-        .map_err(AppError::Config)
+        .map_err(AppError::Diagnostics)
     }
 
     pub fn compile_preview_request(request: &PreviewRequest) -> Result<String, AppError> {
@@ -305,7 +307,7 @@ impl EditorService {
             &request.game_css,
             &request.game_visuals_js,
         )
-        .map_err(AppError::Config)
+        .map_err(AppError::Diagnostics)
     }
 
     pub fn highlight_json(&self, source: &str) -> String {
@@ -355,6 +357,10 @@ impl EditorService {
 
 pub fn sound_tools_script() -> String {
     sound_tools_js()
+}
+
+pub fn new_puzzle_source(title: &str) -> String {
+    puzzle_authoring::new_puzzle_source(title)
 }
 
 #[derive(Debug)]
@@ -1025,6 +1031,7 @@ fn route(request: &HttpRequest, service: &EditorService) -> Vec<u8> {
             let preview = PreviewRequest::from_body(&request.body, service.state());
             match service.compile_preview(&preview) {
                 Ok(body) => http_ok("text/html; charset=utf-8", &body),
+                Err(AppError::Diagnostics(report)) => http_diagnostic_error(400, &report),
                 Err(error) => http_error(400, &error.to_string()),
             }
         }
@@ -2039,6 +2046,62 @@ fn push_json_string(out: &mut String, value: &str) {
     out.push('"');
 }
 
+fn push_diagnostics_json(out: &mut String, diagnostics: &[Diagnostic]) {
+    out.push_str("{\"diagnostics\":[");
+    for (index, diagnostic) in diagnostics.iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        push_diagnostic_json(out, diagnostic);
+    }
+    out.push_str("]}");
+}
+
+fn push_diagnostic_json(out: &mut String, diagnostic: &Diagnostic) {
+    let span = diagnostic.primary_span.as_ref();
+    out.push('{');
+    push_json_pair(out, "severity", diagnostic.severity.as_str());
+    out.push(',');
+    push_json_pair(out, "code", diagnostic.code);
+    out.push(',');
+    push_json_pair(
+        out,
+        "file",
+        span.and_then(|span| span.file.as_deref()).unwrap_or(""),
+    );
+    out.push(',');
+    push_json_option_number(out, "line", span.and_then(|span| span.line));
+    out.push(',');
+    push_json_option_number(out, "column", span.and_then(|span| span.column));
+    out.push(',');
+    push_json_option_string(
+        out,
+        "sourceLine",
+        span.and_then(|span| span.source_line.as_deref()),
+    );
+    out.push(',');
+    push_json_pair(out, "message", &diagnostic.message);
+    out.push('}');
+}
+
+fn push_json_option_number(out: &mut String, key: &str, value: Option<usize>) {
+    push_json_string(out, key);
+    out.push(':');
+    match value {
+        Some(value) => out.push_str(&value.to_string()),
+        None => out.push_str("null"),
+    }
+}
+
+fn push_json_option_string(out: &mut String, key: &str, value: Option<&str>) {
+    push_json_string(out, key);
+    out.push(':');
+    match value {
+        Some(value) => push_json_string(out, value),
+        None => out.push_str("null"),
+    }
+}
+
 fn js_string_literal(value: &str) -> String {
     let mut out = String::new();
     push_json_string(&mut out, value);
@@ -2085,6 +2148,17 @@ fn http_error(status: u16, message: &str) -> Vec<u8> {
     http_response(status, reason, "application/json; charset=utf-8", &body)
 }
 
+fn http_diagnostic_error(status: u16, report: &DiagnosticReport) -> Vec<u8> {
+    let mut body = String::new();
+    push_diagnostics_json(&mut body, report.diagnostics());
+    let reason = match status {
+        400 => "Bad Request",
+        404 => "Not Found",
+        _ => "Error",
+    };
+    http_response(status, reason, "application/json; charset=utf-8", &body)
+}
+
 fn http_response(status: u16, reason: &str, content_type: &str, body: &str) -> Vec<u8> {
     let response = format!(
         "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n{body}",
@@ -2107,6 +2181,7 @@ fn http_bytes(content_type: &str, body: &[u8]) -> Vec<u8> {
 pub enum AppError {
     Io(io::Error),
     Config(String),
+    Diagnostics(DiagnosticReport),
 }
 
 impl From<io::Error> for AppError {
@@ -2120,6 +2195,7 @@ impl std::fmt::Display for AppError {
         match self {
             Self::Io(error) => write!(f, "{error}"),
             Self::Config(error) => write!(f, "{error}"),
+            Self::Diagnostics(report) => write!(f, "{report}"),
         }
     }
 }
@@ -2571,6 +2647,60 @@ step board
             "request CSS should flow into the generated preview"
         );
         assert!(!html.contains("Preview Before"));
+    }
+
+    #[test]
+    fn compile_preview_preserves_language_diagnostics() {
+        let workspace = TestWorkspace::new();
+        let source = r#"
+title "Multi Error Probe"
+
+puzzle main {
+layers {
+base = Floor
+}
+
+sprites {
+}
+
+rules {
+unknown_statement_one
+unknown_statement_two
+}
+
+levels {
+legend {
+. = empty
+}
+level first
+.
+}
+}
+"#;
+        let game_path = workspace.write("games/multi_error/game.puzzle", source);
+        let service = EditorService::open(&game_path).expect("open editor");
+        let error = service
+            .compile_preview(&PreviewRequest::new(
+                source.to_string(),
+                game_path.display().to_string(),
+                String::new(),
+                service.state().base_game_visuals_js.clone(),
+            ))
+            .expect_err("invalid source should fail preview compile");
+
+        let AppError::Diagnostics(report) = error else {
+            panic!("preview compile should preserve language diagnostics");
+        };
+        let diagnostics = report.diagnostics();
+        assert_eq!(diagnostics.len(), 2);
+        assert_eq!(
+            diagnostics[0].message,
+            "unknown routine call: unknown_statement_one"
+        );
+        assert_eq!(
+            diagnostics[1].message,
+            "unknown routine call: unknown_statement_two"
+        );
     }
 
     #[test]
@@ -3311,6 +3441,25 @@ levels3 demo of push3 {
     }
 
     #[test]
+    fn sprite_source_click_uses_rust_target_sync() {
+        let click_start = EDITOR_SPRITE_JS
+            .find("function loadSpriteFromSourceClick(event = null)")
+            .expect("sprite source click handler");
+        let click_end = EDITOR_SPRITE_JS[click_start..]
+            .find("function loadSpriteSourceTarget")
+            .map(|index| click_start + index)
+            .expect("sprite rust target loader");
+        let click = &EDITOR_SPRITE_JS[click_start..click_end];
+
+        assert!(click.contains("allowInactiveMode: true,"));
+        assert!(click.contains("position: clickOffset ?? sourceEditor.selectionStart,"));
+        assert!(
+            EDITOR_SPRITE_JS
+                .contains("sourceEditor.addEventListener(\"click\", loadSpriteFromSourceClick);")
+        );
+    }
+
+    #[test]
     fn sprite3d_source_focus_scans_all_sprites3_blocks() {
         assert!(EDITOR_SPRITE3D_JS.contains("function findSprites3dBlocks(source)"));
         assert!(EDITOR_SPRITE3D_JS.contains("while ((match = pattern.exec(source)))"));
@@ -3347,6 +3496,34 @@ levels3 demo of push3 {
         );
         assert!(EDITOR_SPRITE3D_JS.contains("onChange: previewNewSprite3dColor"));
         assert!(EDITOR_JS.contains("commitSpriteColorEditHistory(kind);"));
+    }
+
+    #[test]
+    fn sprite_hue_edit_colorizes_neutral_starting_colors() {
+        assert!(EDITOR_SPRITE_JS.contains("const makeHueEditVisible = () => {"));
+        assert!(EDITOR_SPRITE_JS.contains("if (hsv.s <= 0)"));
+        assert!(EDITOR_SPRITE_JS.contains("if (hsv.v <= 0)"));
+        assert!(EDITOR_SPRITE_JS.contains("hueInput.addEventListener(\"pointerdown\", () => {"));
+        assert!(EDITOR_SPRITE_JS.contains("window.requestAnimationFrame(activateHueInput);"));
+        assert!(EDITOR_SPRITE_JS.contains("makeHueEditVisible();\n    emit();"));
+    }
+
+    #[test]
+    fn sprite_eyedropper_uses_host_screen_color_picker() {
+        assert!(EDITOR_BOOT_JS.contains("async pickScreenColor()"));
+        assert!(EDITOR_BOOT_JS.contains(r#"invoke("pick_screen_color")"#));
+        assert!(EDITOR_BOOT_JS.contains("\"EyeDropper\" in window"));
+        assert!(EDITOR_SPRITE_JS.contains("window.PuzzleStudioHost?.pickScreenColor?.()"));
+        assert!(!EDITOR_SPRITE_JS.contains("function spriteLocalPickColorFromTarget"));
+        assert!(!EDITOR_SPRITE3D_JS.contains("function sprite3dLocalPickColorFromTarget"));
+    }
+
+    #[test]
+    fn sprite_cell_hover_preserves_pixel_color_surface() {
+        assert!(EDITOR_CSS.contains("--sprite-swatch-checker: url("));
+        assert!(EDITOR_CSS.contains(
+            ".sprite-cell:hover,\n.sprite-cell:focus-visible,\n.sprite-cell:active {\n  background-color: var(--sprite-swatch-bg);\n  background-image: var(--sprite-swatch-checker);"
+        ));
     }
 
     #[test]
@@ -3403,12 +3580,47 @@ levels3 demo of push3 {
     }
 
     #[test]
-    fn source_completion_keyboard_commit_requires_explicit_selection() {
+    fn source_completion_keyboard_commit_splits_tab_from_enter() {
         assert!(EDITOR_SOURCE_JS.contains("keyboardCommit: Boolean(options.manual)"));
         assert!(EDITOR_SOURCE_JS.contains("sourceCompletionState.keyboardCommit = true;"));
-        assert!(EDITOR_SOURCE_JS.contains(
-            "if ((event.key === \"Enter\" || event.key === \"Tab\") && sourceCompletionCanKeyboardCommit())"
-        ));
+        assert!(EDITOR_SOURCE_JS.contains("if (event.key === \"Tab\")"));
+        assert!(
+            EDITOR_SOURCE_JS
+                .contains("if (event.key === \"Enter\" && sourceCompletionCanKeyboardCommit())")
+        );
+        let tab_handler = EDITOR_SOURCE_JS
+            .find("if (event.key === \"Tab\")")
+            .expect("source completion Tab handler");
+        let enter_handler = EDITOR_SOURCE_JS
+            .find("if (event.key === \"Enter\" && sourceCompletionCanKeyboardCommit())")
+            .expect("source completion Enter handler");
+        assert!(EDITOR_SOURCE_JS.contains("if (sourceCompletionState.mode === \"completion\")"));
+        assert!(tab_handler < enter_handler);
+    }
+
+    #[test]
+    fn source_find_supports_command_g_match_navigation() {
+        assert!(EDITOR_SOURCE_JS.contains("function sourceFindMoveShortcutRequested(event)"));
+        assert!(EDITOR_SOURCE_JS.contains("!event.metaKey || event.ctrlKey || event.altKey"));
+        assert!(EDITOR_SOURCE_JS.contains("return key === \"g\" || event.code === \"KeyG\";"));
+        assert!(EDITOR_SOURCE_JS.contains("function handleSourceFindMoveShortcut(event)"));
+        assert!(EDITOR_SOURCE_JS.contains("moveSourceFindSelection(event.shiftKey ? -1 : 1);"));
+        assert!(EDITOR_SOURCE_JS.contains("if (handleSourceFindMoveShortcut(event))"));
+    }
+
+    #[test]
+    fn source_completion_auto_requires_typed_prefix() {
+        assert!(
+            EDITOR_SOURCE_JS.contains("function sourceCursorHasCompletionPrefix(source, cursor)")
+        );
+        assert!(
+            EDITOR_SOURCE_JS.contains("return sourceCursorHasCompletionPrefix(source, cursor);")
+        );
+        assert!(!EDITOR_SOURCE_JS.contains("function sourceCursorAtBareLineTail"));
+        assert!(
+            EDITOR_SOURCE_JS
+                .contains("if (!options.manual && !sourceAutoCompletionEligible(source, cursor))")
+        );
     }
 
     #[test]
@@ -3464,19 +3676,27 @@ levels3 demo of push3 {
     }
 
     #[test]
-    fn sprite_source_ascii_rows_do_not_become_unbraced_sprite_boundaries() {
-        assert!(EDITOR_SPRITE_JS.contains(
-            "const paletteLength = unbracedSpritePaletteLength(source, spritesBlock, contentStart);"
-        ));
-        assert!(
-            EDITOR_SPRITE_JS.contains("&& !isSpriteAsciiRowForPalette(trimmed, paletteLength)")
-        );
-        assert!(EDITOR_SPRITE_JS.contains("function isSpriteAsciiRowForPalette"));
-        assert!(EDITOR_SPRITE_JS.contains("if (tokens[0] === \"shape\")"));
-        assert!(EDITOR_SPRITE_JS.contains("raw.set(`${tableName}:*`, value);"));
+    fn source_color_highlight_is_not_bold() {
+        let start = EDITOR_CSS
+            .find(".syntax-color {")
+            .expect("syntax color CSS block");
+        let end = EDITOR_CSS[start..]
+            .find("\n}")
+            .map(|offset| start + offset)
+            .expect("syntax color CSS block end");
+        let block = &EDITOR_CSS[start..end];
+        assert!(!block.contains("font-weight"));
+        assert!(block.contains("text-decoration-skip-ink: none;"));
+    }
+
+    #[test]
+    fn sprite_asset_tables_require_explicit_selector_keys() {
+        assert!(!EDITOR_SPRITE_JS.contains("`${tableName}:*`"));
+        assert!(!EDITOR_SPRITE_JS.contains(":*"));
         assert!(EDITOR_SPRITE_JS.contains(
             "const key = assets.has(name) ? name : spriteTableAssetKey(name, assets, selectorName);"
         ));
+        assert!(EDITOR_SPRITE_JS.contains("return \"\";\n}"));
     }
 
     #[test]
@@ -3501,16 +3721,40 @@ levels3 demo of push3 {
     #[test]
     fn sprite_source_update_reveals_and_preserves_target_boundary() {
         assert!(EDITOR_JS.contains("editSourceName: \"\""));
+        assert!(EDITOR_JS.contains("editSourceEnd: null"));
+        assert!(EDITOR_JS.contains("editSourceBodyStart: null"));
+        assert!(EDITOR_JS.contains("editSourceBodyEnd: null"));
         assert!(EDITOR_SPRITE_JS.contains("function revealSpriteSourceResult"));
         assert!(EDITOR_SPRITE_JS.contains("const result = { source, start: inserted.start };"));
         assert!(EDITOR_SPRITE_JS.contains("revealSourceLocation({"));
         assert!(EDITOR_SPRITE_JS.contains("recordHistory: false"));
         assert!(EDITOR_SPRITE_JS.contains("sourceEditor.focus({ preventScroll: true });"));
-        assert!(EDITOR_SPRITE_JS.contains("const originalNamed = sprite.editSourceName"));
-        assert!(EDITOR_SPRITE_JS.contains("return positioned;"));
+        assert!(EDITOR_SPRITE_JS.contains("function currentSpriteEditSourceRange(source)"));
+        assert!(EDITOR_SPRITE_JS.contains("const start = sprite.editSourceStart;"));
+        assert!(EDITOR_SPRITE_JS.contains("const end = sprite.editSourceEnd;"));
         assert!(EDITOR_JS.contains(
             "const trailingBoundary = removed.match(/((?:\\r?\\n[\\t ]*)+)$/)?.[1] || \"\";"
         ));
+    }
+
+    #[test]
+    fn sprite_source_has_no_legacy_js_target_scanner() {
+        for forbidden in [
+            "findSpriteDefinitionAtPosition",
+            "findSpriteDefinitionBlock",
+            "findUnbracedSpriteDefinition",
+            "isSpriteDefinitionBoundary",
+            "isLineStyleSpriteDefinitionBoundary",
+            "isSpriteDefinitionNameToken",
+            "isSpriteColorRow(",
+            "loadSpriteFromSourcePosition",
+            "registerSourceEditableTarget?.(\"sprite\"",
+        ] {
+            assert!(
+                !EDITOR_SPRITE_JS.contains(forbidden),
+                "legacy sprite source scanner remains: {forbidden}"
+            );
+        }
     }
 
     #[test]
@@ -3522,6 +3766,18 @@ levels3 demo of push3 {
         assert!(workspace_js.contains(&js_string_literal(puzzle_authoring::NEW_PUZZLE_TEMPLATE)));
         assert!(workspace_js.contains("function starterPuzzleSource(name)"));
         assert!(workspace_js.contains("STARTER_PUZZLE_SOURCE.slice(defaultTitleLine.length)"));
+    }
+
+    #[test]
+    fn tauri_new_puzzle_creation_uses_desktop_host_template_source() {
+        assert!(EDITOR_BOOT_JS.contains("async newPuzzleSource(payload)"));
+        assert!(EDITOR_BOOT_JS.contains(r#"invoke("new_puzzle_source", { request: payload })"#));
+        assert!(EDITOR_WORKSPACE_JS.contains("async function newPuzzleSourceForFile(name)"));
+        assert!(
+            EDITOR_WORKSPACE_JS
+                .contains("return window.PuzzleStudioHost.newPuzzleSource({ title });")
+        );
+        assert!(EDITOR_WORKSPACE_JS.contains("return starterPuzzleSourceFromTitle(title);"));
     }
 
     #[test]
@@ -4099,7 +4355,7 @@ levels3 demo of push3 {
             .find("window.PuzzleEditorSeed = JSON.parse")
             .expect("seeded editor should define seed before workspace scripts load");
         let embedded_documents_index = html
-            .find(r#"<script src="editor_workspace.js"></script>"#)
+            .find(r#"<script src="editor_workspace.js?v=desktop-new-puzzle-source"></script>"#)
             .expect("seeded editor should load workspace code after seed data");
 
         assert!(

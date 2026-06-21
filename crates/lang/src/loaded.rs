@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use puzzle_3d::ParsedPuzzle3;
 use puzzle_core::{
     ComparisonOp, CompiledGame, ConditionId, ConditionValueKind, GlobalId, InputId, ObjectId,
     RuleId, RuleStep, State,
@@ -12,7 +13,6 @@ pub use puzzle_scene::{
     SceneForSource as ForSource, SceneLayout as SceneLayoutDef, SceneSize as SceneSizeDef,
     SceneTextComponent as SharedSceneTextComponent,
 };
-use puzzle3d_model::ParsedPuzzle3;
 
 #[derive(Clone, Debug)]
 pub struct LoadedDocument {
@@ -56,7 +56,7 @@ pub struct LoadedGame {
     pub default_wait_ms: u64,
     pub default_again_ms: u64,
     pub animation: AnimationDef,
-    pub rule_emissions: HashMap<RuleId, Vec<RuleEmission>>,
+    pub rule_animations: HashMap<RuleId, Vec<RuleAnimation>>,
     pub rule_effects: HashMap<RuleId, Vec<RuleEffect>>,
     pub level_start_program: Option<Vec<RuleStep>>,
     pub display_level_start_program: Option<Vec<RuleStep>>,
@@ -88,22 +88,10 @@ pub struct LoadedGame {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum RuleEmission {
-    PlaySfx {
-        name: String,
-    },
-    Animate {
-        trigger: RuleAnimationTrigger,
-        name: String,
-        objects: Vec<ObjectId>,
-    },
-    Wait {
-        milliseconds: u64,
-    },
-    Message {
-        text: String,
-        literal: bool,
-    },
+pub struct RuleAnimation {
+    pub trigger: RuleAnimationTrigger,
+    pub name: String,
+    pub objects: Vec<ObjectId>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -149,6 +137,10 @@ pub enum RuleEffect {
     Checkpoint,
     ClearCheckpoint,
     PlaySfx { name: String },
+    PlayMusic { name: String },
+    PauseMusic { name: Option<String> },
+    ResumeMusic { name: Option<String> },
+    StopMusic { name: Option<String> },
     Wait { milliseconds: u64 },
     WaitAnimation,
     Message { text: String, literal: bool },
@@ -362,8 +354,15 @@ pub struct SceneDef {
     pub state: SceneStateDef,
     pub components: Vec<SceneComponent>,
     pub key_bindings: Vec<KeyBinding>,
+    pub routines: Vec<SceneRoutineDef>,
     pub transitions: Vec<SceneTransition>,
     pub puzzle_rule: Option<ScenePuzzleRule>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SceneRoutineDef {
+    pub name: String,
+    pub effect: SceneEffect,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -451,6 +450,7 @@ pub type SceneConditionalDef = SharedSceneConditional<SceneEffect, SceneExpr, Sc
 pub enum SceneEffect {
     Input(String),
     ComponentEffect(String),
+    RoutineCall(String),
     Message {
         text: SceneExpr,
     },

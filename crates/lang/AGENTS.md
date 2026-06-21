@@ -6,8 +6,8 @@ semantic scanning/highlighting, and lowering.
 ## Syntax Ownership
 
 Canonical authoring should reuse existing concepts rather than add one-off
-mini-languages. Prefer owner-scoped `inputs`, `if` guards, routines, lifecycle
-hooks, scene commands, and explicit component contracts.
+mini-languages. Prefer owner-scoped `keys`, routines, lifecycle hooks, scene
+commands, and explicit component contracts.
 
 `rules { ... }` is the required puzzle entrypoint. Legacy puzzle
 `transitions` / `main` blocks and `rule` declarations are rejected.
@@ -22,9 +22,10 @@ menu primitive. Do not make generic loops navigable or level-aware.
 Use `on_*` only for scoped lifecycle. Puzzle lifecycle hooks include
 `on_level_start` and `on_level_clear`; scene lifecycle has its own scope.
 
-`inputs { <input> <- <key...> }` is owner-scoped. Model inputs map raw keys to
-model semantic inputs; scene inputs/keys map raw keys to scene semantic inputs
-or explicit scene commands.
+`keys { <key...> -> <input-or-routine> }` is owner-scoped. Model keys map raw
+keys to model semantic inputs; scene keys map raw keys to scene routines, input
+effects, or explicit scene commands. The semantic input concept remains, but
+`inputs { <input> <- <key...> }` is not canonical syntax.
 
 ## Surface/Highlighting Direction
 

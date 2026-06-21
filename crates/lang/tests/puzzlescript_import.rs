@@ -63,15 +63,16 @@ fn translates_basic_vanilla_puzzlescript_to_canonical_fixture() {
     assert!(!translated.contains("level imported_1 {"));
     assert!(!translated.contains("-> effect "));
     assert!(
-        translated.contains(
-            "if game.has_progress_save {\n      choice \"Continue\" -> input continue_game"
-        )
+        translated
+            .contains("if has_progress_save {\n      choice \"Continue\" -> input continue_game")
     );
     assert!(translated.contains("choice \"New Game\" -> input new_game"));
-    assert!(translated.contains("continue_game <- Enter Space x"));
-    assert!(translated.contains("new_game <- n"));
-    assert!(translated.contains("back <- Escape q"));
-    assert!(!translated.contains("\n  keys {"));
+    assert!(translated.contains("Enter Space x -> continue_game"));
+    assert!(translated.contains("n -> new_game"));
+    assert!(translated.contains("Escape q -> back"));
+    assert!(translated.contains("routine continue_game {\n    goto playing"));
+    assert!(translated.contains("routine new_game {\n    clear_game_progress"));
+    assert!(translated.contains("routine back {\n    goto title"));
     assert!(translated.contains("on_level_clear {\n  wait 0.3s\n  next_level\n}"));
     assert!(!translated.contains("board.next_level"));
     assert!(!translated.contains("board.level.has_next"));
@@ -406,22 +407,16 @@ P
     let translated = translate_puzzlescript_to_canonical(source).unwrap();
 
     assert!(
-        translated.contains(
-            "if game.has_progress_save {\n      choice \"Continue\" -> input continue_game"
-        )
+        translated
+            .contains("if has_progress_save {\n      choice \"Continue\" -> input continue_game")
     );
     assert!(translated.contains("choice \"New Game\" -> input new_game"));
-    assert!(translated.contains("continue_game <- Enter Space x"));
-    assert!(translated.contains("new_game <- n"));
-    assert!(
-        translated
-            .contains("if input == continue_game -> {\n      sfx startgame\n      goto playing")
-    );
-    assert!(
-        translated.contains(
-            "if input == new_game -> {\n      sfx startgame\n      clear_game_progress\n      goto playing(0)"
-        )
-    );
+    assert!(translated.contains("Enter Space x -> continue_game"));
+    assert!(translated.contains("n -> new_game"));
+    assert!(translated.contains("routine continue_game {\n    sfx startgame\n    goto playing"));
+    assert!(translated.contains(
+        "routine new_game {\n    sfx startgame\n    clear_game_progress\n    goto playing(0)"
+    ));
 
     let loaded = parse_game(&translated).unwrap();
     let button = find_choice_by_label(&loaded.scenes[0].components, "Continue")
@@ -432,11 +427,11 @@ P
     );
     assert_eq!(
         loaded.scenes[0].key_bindings[0].effect,
-        SceneEffect::Input("continue_game".to_string())
+        SceneEffect::RoutineCall("continue_game".to_string())
     );
-    assert!(loaded.scenes[0].transitions.iter().any(|transition| {
+    assert!(loaded.scenes[0].routines.iter().any(|routine| {
         matches!(
-            &transition.effect,
+            &routine.effect,
             SceneEffect::Sequence(effects)
                 if matches!(
                     effects.as_slice(),
@@ -447,9 +442,9 @@ P
                 )
         )
     }));
-    assert!(loaded.scenes[0].transitions.iter().any(|transition| {
+    assert!(loaded.scenes[0].routines.iter().any(|routine| {
         matches!(
-            &transition.effect,
+            &routine.effect,
             SceneEffect::Sequence(effects)
                 if matches!(
                     effects.as_slice(),
@@ -772,15 +767,16 @@ fn translates_official_sumo_demo_with_disconnected_pattern() {
     assert!(!translated.contains("win_conditions {"));
     assert!(!translated.contains("-> effect "));
     assert!(
-        translated.contains(
-            "if game.has_progress_save {\n      choice \"Continue\" -> input continue_game"
-        )
+        translated
+            .contains("if has_progress_save {\n      choice \"Continue\" -> input continue_game")
     );
     assert!(translated.contains("choice \"New Game\" -> input new_game"));
-    assert!(translated.contains("continue_game <- Enter Space x"));
-    assert!(translated.contains("new_game <- n"));
-    assert!(translated.contains("back <- Escape q"));
-    assert!(!translated.contains("\n  keys {"));
+    assert!(translated.contains("Enter Space x -> continue_game"));
+    assert!(translated.contains("n -> new_game"));
+    assert!(translated.contains("Escape q -> back"));
+    assert!(translated.contains("routine continue_game {\n    goto playing"));
+    assert!(translated.contains("routine new_game {\n    clear_game_progress"));
+    assert!(translated.contains("routine back {\n    goto title"));
     assert!(!translated.contains("if board.win_conditions -> {"));
     assert!(translated.contains("on_level_clear {\n  wait 0.3s\n  next_level\n}"));
 

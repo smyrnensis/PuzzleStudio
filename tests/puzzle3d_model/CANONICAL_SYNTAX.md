@@ -253,8 +253,9 @@ component keywords such as `title`, `subtitle`, `text`, `button`, `row`,
 `column`, `box`, `for`, `level_menu`, and `menu` have the same meaning for 2D
 and 3D scenes. The model-specific leaf is `puzzle3 <slot>`.
 
-Mapping raw keys to named inputs is owned by the component, not by the scene.
-The component-local block is plural:
+Mapping raw keys to named semantic inputs is owned by the model/component slot
+that consumes them. The component-local block uses raw keys on the left and the
+semantic input on the right:
 
 ```txt
 scene playing {
@@ -268,11 +269,11 @@ scene playing {
 
   view {
     puzzle3 board {
-      inputs {
-        forward <- w ArrowUp
-        backward <- s ArrowDown
-        left <- a ArrowLeft
-        right <- d ArrowRight
+      keys {
+        w ArrowUp -> forward
+        s ArrowDown -> backward
+        a ArrowLeft -> left
+        d ArrowRight -> right
       }
     }
   }
@@ -280,8 +281,8 @@ scene playing {
 ```
 
 `step board` means "step the `board` component with the current raw input
-context". The component then interprets that raw input through its `inputs`
-block and calls the model with the resulting local input.
+context". The component then interprets that raw input through its `keys` block
+and calls the model with the resulting local input.
 
 Key tokens in source use the shared authoring tokens such as `w`, `ArrowUp`,
 `Escape`, `Enter`, and `Space`. They lower to standard browser key/code values
@@ -295,10 +296,10 @@ as `up`.
 Undo and restart are not component inputs. They are stronger play/session
 operations owned by the parent runtime or scene.
 
-Scene `keys { ... }` blocks are shortcuts and use
-`<key...> -> <scene action>`. Use `inputs { <input> <- <key...> }` when the
-semantic input should be named before routing, with model-specific interpretation
-owned by the `puzzle3` component or 3D model runtime.
+Scene `keys { ... }` blocks use `<key...> -> <routine-or-effect>`. Prefer
+`keys { q -> quit }` plus `routine quit { ... }` when a scene key should run a
+named effect sequence. Use explicit `input <name>` only when a key or component
+effect must produce a semantic input for another owner to consume.
 
 ## Minimal example
 
@@ -310,12 +311,8 @@ puzzle3 push3d {
   }
 
   rules {
-    for d in horizontal {
-      if input == d {
-        once d [ Player | Box | no solid ] -> [ | Player | Box ]
-        once d [ Player | no solid ] -> [ | Player ]
-      }
-    }
+    input horizontal [ Player | Box | no solid ] -> [ | Player | Box ]
+    input horizontal [ Player | no solid ] -> [ | Player ]
   }
 }
 

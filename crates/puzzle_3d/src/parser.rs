@@ -230,8 +230,12 @@ impl Parser3 {
                 return Err(message(
                     "`display_objects { ... }` was removed; use `objects { @Name layer }`",
                 ));
+            } else if line == "keys {" {
+                index = self.parse_keys_block(index + 1)?;
             } else if line == "inputs {" {
-                index = self.parse_inputs_block(index + 1)?;
+                return Err(message(
+                    "`inputs { ... }` was removed; use `keys { <key...> -> <input> }`",
+                ));
             } else if line == "groups {" {
                 index = self.parse_groups_block(index + 1)?;
             } else if line == "group {" {
@@ -368,8 +372,12 @@ impl Parser3 {
                 return Err(message(
                     "`display_objects { ... }` was removed; use `objects { @Name layer }`",
                 ));
+            } else if line == "keys {" {
+                index = self.parse_keys_block(index + 1)?;
             } else if line == "inputs {" {
-                index = self.parse_inputs_block(index + 1)?;
+                return Err(message(
+                    "`inputs { ... }` was removed; use `keys { <key...> -> <input> }`",
+                ));
             } else if line == "groups {" {
                 index = self.parse_groups_block(index + 1)?;
             } else if line == "group {" {
@@ -722,18 +730,18 @@ impl Parser3 {
         Err(message("objects block missing }"))
     }
 
-    fn parse_inputs_block(&mut self, mut index: usize) -> Result<usize, ParseError3> {
+    fn parse_keys_block(&mut self, mut index: usize) -> Result<usize, ParseError3> {
         while index < self.lines.len() {
             let line = &self.lines[index];
             if line == "}" {
                 return Ok(index + 1);
             }
             if !line.is_empty() {
-                self.input_specs.push(parse_input_spec(line)?);
+                self.input_specs.push(parse_key_input_spec(line)?);
             }
             index += 1;
         }
-        Err(message("inputs block missing }"))
+        Err(message("keys block missing }"))
     }
 
     fn parse_groups_block(&mut self, mut index: usize) -> Result<usize, ParseError3> {
@@ -1452,20 +1460,20 @@ fn parse_object_spec(line: &str) -> Result<ObjectSpec3, ParseError3> {
     })
 }
 
-fn parse_input_spec(line: &str) -> Result<InputSpec3, ParseError3> {
-    let (name, keys) = line
-        .split_once("<-")
-        .ok_or_else(|| message("inputs row must be: <input> <- <key...>"))?;
+fn parse_key_input_spec(line: &str) -> Result<InputSpec3, ParseError3> {
+    let (keys, name) = line
+        .split_once("->")
+        .ok_or_else(|| message("keys row must be: <key...> -> <input>"))?;
     let name = name.trim();
     if name.is_empty() {
-        return Err(message("inputs row must name an input before <-"));
+        return Err(message("keys row must name an input after ->"));
     }
     let keys = keys
         .split_whitespace()
         .map(str::to_string)
         .collect::<Vec<_>>();
     if keys.is_empty() {
-        return Err(message("inputs row must include at least one key after <-"));
+        return Err(message("keys row must include at least one key before ->"));
     }
     Ok(InputSpec3 {
         name: name.to_string(),

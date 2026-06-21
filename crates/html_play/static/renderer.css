@@ -99,20 +99,6 @@ body.is-component-embed .board-canvas {
   image-rendering: pixelated;
 }
 
-.sprite.unknown {
-  inset: 24%;
-  display: grid;
-  place-items: center;
-  border: 2px dashed #77848d;
-  border-radius: 6px;
-}
-
-.sprite.unknown::after {
-  content: "?";
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-weight: 800;
-}
-
 @media (max-width: 720px) {
   .board {
     gap: 0;

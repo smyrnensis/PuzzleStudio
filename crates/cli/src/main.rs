@@ -2,7 +2,7 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use puzzle_lang::{LoadedDocument, LoadedDocumentModel};
+use puzzle_lang::{Diagnostic, DiagnosticReport, LoadedDocument, LoadedDocumentModel};
 
 fn main() {
     let code = match run() {
@@ -442,8 +442,8 @@ fn check_command(args: &[String]) -> Result<(), CliError> {
     let entry = match puzzle_lang::resolve_game_entry(&input_path) {
         Ok(entry) => entry,
         Err(error) => {
-            let diagnostic = Diagnostic::error(input_path.clone(), error.to_string());
-            write_check_failure(json, &[diagnostic]);
+            let diagnostics = diagnostics_with_file(&input_path, error);
+            write_check_failure(json, &diagnostics);
             return Err(CliError::CommandFailed);
         }
     };
@@ -462,8 +462,8 @@ fn check_command(args: &[String]) -> Result<(), CliError> {
             Ok(())
         }
         Err(error) => {
-            let diagnostic = diagnostic_from_error(&entry, error.to_string());
-            write_check_failure(json, &[diagnostic]);
+            let diagnostics = diagnostics_with_file(&entry, error);
+            write_check_failure(json, &diagnostics);
             Err(CliError::CommandFailed)
         }
     }
@@ -476,9 +476,9 @@ fn write_check_failure(json: bool, diagnostics: &[Diagnostic]) {
         for diagnostic in diagnostics {
             eprintln!(
                 "{}: {}\n  --> {}",
-                diagnostic.severity,
+                diagnostic.severity.as_str(),
                 diagnostic.message,
-                diagnostic.location()
+                diagnostic_location(diagnostic)
             );
         }
     }
@@ -643,71 +643,41 @@ fn warning_diagnostics(entry: &Path, document: &LoadedDocument) -> Vec<Diagnosti
             LoadedDocumentModel::Puzzle2d { game, .. } => game.warnings.as_slice(),
             LoadedDocumentModel::Puzzle3d { .. } => &[],
         })
-        .map(|warning| Diagnostic::warning(entry.to_path_buf(), warning.clone()))
+        .map(|warning| Diagnostic::warning(warning.clone()).with_file(entry.display().to_string()))
         .collect()
 }
 
-fn diagnostic_from_error(path: &Path, message: String) -> Diagnostic {
-    let mut diagnostic = Diagnostic::error(path.to_path_buf(), message.clone());
-    if let Some((line, column)) = find_error_location(path, &message) {
-        diagnostic.line = Some(line);
-        diagnostic.column = Some(column);
-    }
-    diagnostic
+fn diagnostics_with_file(path: &Path, report: DiagnosticReport) -> Vec<Diagnostic> {
+    let file = path.display().to_string();
+    report
+        .into_diagnostics()
+        .into_iter()
+        .map(|diagnostic| {
+            if diagnostic
+                .primary_span
+                .as_ref()
+                .and_then(|span| span.file.as_ref())
+                .is_some()
+            {
+                diagnostic
+            } else {
+                diagnostic.with_file(file.clone())
+            }
+        })
+        .collect()
 }
 
-fn find_error_location(path: &Path, message: &str) -> Option<(usize, usize)> {
-    let (_, source_line) = message.rsplit_once(": ")?;
-    if source_line.is_empty() {
-        return None;
-    }
-    let source = fs::read_to_string(path).ok()?;
-    source.lines().enumerate().find_map(|(index, line)| {
-        (line.trim() == source_line.trim()).then_some((index + 1, first_non_space_column(line)))
-    })
-}
-
-fn first_non_space_column(line: &str) -> usize {
-    line.char_indices()
-        .find_map(|(index, ch)| (!ch.is_whitespace()).then_some(index + 1))
-        .unwrap_or(1)
-}
-
-#[derive(Clone, Debug)]
-struct Diagnostic {
-    severity: &'static str,
-    file: PathBuf,
-    line: Option<usize>,
-    column: Option<usize>,
-    message: String,
-}
-
-impl Diagnostic {
-    fn error(file: PathBuf, message: String) -> Self {
-        Self {
-            severity: "error",
-            file,
-            line: None,
-            column: None,
-            message,
-        }
-    }
-
-    fn warning(file: PathBuf, message: String) -> Self {
-        Self {
-            severity: "warning",
-            file,
-            line: None,
-            column: None,
-            message,
-        }
-    }
-
-    fn location(&self) -> String {
-        match (self.line, self.column) {
-            (Some(line), Some(column)) => format!("{}:{line}:{column}", self.file.display()),
-            _ => self.file.display().to_string(),
-        }
+fn diagnostic_location(diagnostic: &Diagnostic) -> String {
+    let span = diagnostic.primary_span.as_ref();
+    let file = span
+        .and_then(|span| span.file.as_deref())
+        .unwrap_or("<source>");
+    match (
+        span.and_then(|span| span.line),
+        span.and_then(|span| span.column),
+    ) {
+        (Some(line), Some(column)) => format!("{file}:{line}:{column}"),
+        _ => file.to_string(),
     }
 }
 
@@ -720,12 +690,15 @@ fn print_json_result(ok: bool, diagnostics: &[Diagnostic]) {
         if index > 0 {
             print!(",");
         }
+        let span = diagnostic.primary_span.as_ref();
         print!(
-            "{{\"severity\":\"{}\",\"file\":\"{}\",\"line\":{},\"column\":{},\"message\":\"{}\"}}",
-            diagnostic.severity,
-            escape_json(&diagnostic.file.display().to_string()),
-            option_number_json(diagnostic.line),
-            option_number_json(diagnostic.column),
+            "{{\"severity\":\"{}\",\"code\":\"{}\",\"file\":\"{}\",\"line\":{},\"column\":{},\"sourceLine\":{},\"message\":\"{}\"}}",
+            diagnostic.severity.as_str(),
+            escape_json(diagnostic.code),
+            escape_json(span.and_then(|span| span.file.as_deref()).unwrap_or("")),
+            option_number_json(span.and_then(|span| span.line)),
+            option_number_json(span.and_then(|span| span.column)),
+            option_string_json(span.and_then(|span| span.source_line.as_deref())),
             escape_json(&diagnostic.message)
         );
     }
@@ -734,6 +707,13 @@ fn print_json_result(ok: bool, diagnostics: &[Diagnostic]) {
 
 fn option_number_json(value: Option<usize>) -> String {
     value.map_or_else(|| "null".to_string(), |value| value.to_string())
+}
+
+fn option_string_json(value: Option<&str>) -> String {
+    value.map_or_else(
+        || "null".to_string(),
+        |value| format!("\"{}\"", escape_json(value)),
+    )
 }
 
 fn escape_json(value: &str) -> String {
@@ -855,7 +835,7 @@ mod tests {
 #[derive(Debug)]
 enum CliError {
     Io(std::io::Error),
-    Lang(puzzle_lang::AppError),
+    Lang(DiagnosticReport),
     Config(String),
     Usage(String),
     CommandFailed,
@@ -867,8 +847,8 @@ impl From<std::io::Error> for CliError {
     }
 }
 
-impl From<puzzle_lang::AppError> for CliError {
-    fn from(value: puzzle_lang::AppError) -> Self {
+impl From<DiagnosticReport> for CliError {
+    fn from(value: DiagnosticReport) -> Self {
         Self::Lang(value)
     }
 }

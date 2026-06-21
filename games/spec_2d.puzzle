@@ -212,20 +212,18 @@ scene title {
 	title
 	subtitle
 	choice "Continue" -> goto playing
-	choice "New Game" -> input new_game
+	choice "New Game" -> new_game
 	choice "Level Select" -> goto level_select
 	on_scene_start {
 		stop_music music_name
 	}
-	rules {
-		new_game -> {
-			clear_game_progress
-			goto playing("microban.1")
-		}
+	routine new_game {
+		clear_game_progress
+		goto playing(microban.1)
 	}
 }
 
-scene playing {
+scene playing(level) {
 	state {
 		board = puzzle sokoban
 	}
@@ -237,24 +235,26 @@ scene playing {
 		}
 		board
 	}
-	inputs {
-		open_menu <- Escape
-		level_select <- q
+	keys {
+		Escape -> open_menu
+		q -> level_select
 	}
 	on_scene_start {
 		play_music music_name
 	}
 	rules {
 		step board
-		open_menu -> goto menu
-		level_select -> {
-			stop_music music_name
-			goto level_select
-		}
 		if board.win_conditions and board.level.last -> {
 			stop_music music_name
 			goto level_select
 		}
+	}
+	routine open_menu {
+		goto menu
+	}
+	routine level_select {
+		stop_music music_name
+		goto level_select
 	}
 }
 
@@ -262,40 +262,38 @@ scene menu {
 	layout {
 		text "Menu"
 		column {
-			choice "Resume" -> input resume
+			choice "Resume" -> resume
 			choice "Restart" -> playing.restart
 			choice "Level Select" -> goto level_select
 		}
 	}
-	inputs {
-		resume <- Escape Enter Space
-		level_select <- q
+	keys {
+		Escape Enter Space -> resume
+		q -> level_select
 	}
-	rules {
-		resume -> {
-			resume_music music_name
-			goto playing
-		}
-		level_select -> {
-			stop_music music_name
-			goto level_select
-		}
+	routine resume {
+		resume_music music_name
+		goto playing
+	}
+	routine level_select {
+		stop_music music_name
+		goto level_select
 	}
 }
 
-	scene level_select {
-			layout {
-				text "Select a level"
-				level_menu
-				button "Back" -> goto title
-			}
-		inputs {
-			back_to_title <- q Escape
-		}
+scene level_select {
+	layout {
+		text "Select a level"
+		level_menu
+		button "Back" -> goto title
+	}
+	keys {
+		q Escape -> back_to_title
+	}
 	on_scene_start {
 		stop_music music_name
 	}
-	rules {
-		back_to_title -> goto title
+	routine back_to_title {
+		goto title
 	}
 }

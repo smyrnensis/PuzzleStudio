@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>PuzzleStudio Editor</title>
     <link rel="icon" type="image/svg+xml" href="favicon.svg">
-    <script src="editor_boot.js?v=static-backend-detection2"></script>
+    <script src="editor_boot.js?v=screen-color-picker"></script>
     <link rel="stylesheet" href="renderer.css">
     <link rel="stylesheet" href="editor.css">
     <style id="gameStyle"></style>
@@ -536,6 +536,15 @@
                 <div id="spriteShapeField" class="sprite-source-field sprite-shape-field"></div>
               </div>
               <div class="source-action-group source-preview-actions sprite-source-actions sprite-header-actions" role="group" aria-label="Sprite source actions">
+                <button id="newSpriteButton" class="source-action-button" type="button" aria-label="New sprite" title="New sprite">
+                  <svg viewBox="0 0 24 24" aria-hidden="true" class="lucide lucide-image-plus-icon lucide-image-plus">
+                    <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7"></path>
+                    <line x1="16" x2="22" y1="5" y2="5"></line>
+                    <line x1="19" x2="19" y1="2" y2="8"></line>
+                    <circle cx="9" cy="9" r="2"></circle>
+                    <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"></path>
+                  </svg>
+                </button>
                 <button id="spriteExportButton" class="source-action-button source-copy-button" type="button" aria-label="Copy" title="Copy">
                   <svg viewBox="0 0 24 24" aria-hidden="true">
                     <rect x="8" y="8" width="14" height="14" rx="2"></rect>
@@ -619,12 +628,6 @@
             </div>
             <span id="spriteActionStatus" class="sprite-action-status tool-feedback-bar" aria-live="polite"></span>
           </div>
-          <div id="spriteEmptyPane" class="tool-empty-pane" hidden>
-            <div class="tool-empty-actions" aria-label="Create sprite">
-              <button id="addEmptySprite2dButton" class="tool-empty-action-button" type="button">Add 2D sprite</button>
-              <button id="addEmptySprite3dButton" class="tool-empty-action-button" type="button">Add 3D sprite</button>
-            </div>
-          </div>
           <div id="sprite3dBuilder" class="sprite-builder sprite3d-builder" hidden>
             <div class="tool-pane-scroll">
               <div class="sprite-controls">
@@ -664,6 +667,15 @@
                 </div>
               </div>
               <div class="source-action-group source-preview-actions sprite-source-actions sprite-header-actions" role="group" aria-label="3D sprite source actions">
+                <button id="newSprite3dButton" class="source-action-button" type="button" aria-label="New 3D sprite" title="New 3D sprite">
+                  <svg viewBox="0 0 24 24" aria-hidden="true" class="lucide lucide-image-plus-icon lucide-image-plus">
+                    <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7"></path>
+                    <line x1="16" x2="22" y1="5" y2="5"></line>
+                    <line x1="19" x2="19" y1="2" y2="8"></line>
+                    <circle cx="9" cy="9" r="2"></circle>
+                    <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"></path>
+                  </svg>
+                </button>
                 <button id="sprite3dExportButton" class="source-action-button source-copy-button" type="button" aria-label="Copy" title="Copy">
                   <svg viewBox="0 0 24 24" aria-hidden="true">
                     <rect x="8" y="8" width="14" height="14" rx="2"></rect>
@@ -1160,7 +1172,7 @@
     <script src="renderer.js"></script>
     <script src="sound-generator.js"></script>
     <script src="editor_dom.js"></script>
-    <script src="editor_workspace.js"></script>
+    <script src="editor_workspace.js?v=desktop-new-puzzle-source"></script>
     <script src="editor_source.js?v=highlight-unavailable-status"></script>
     <script src="puzzle3_visual_core.js"></script>
     <script src="editor_level3d.js"></script>

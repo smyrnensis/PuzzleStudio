@@ -1,10 +1,8 @@
 [package]
-name = "puzzle3d-model"
+name = "puzzle-grid3d"
 version = "0.1.0"
 edition = "2024"
 license = "UNLICENSED"
 
 [dependencies]
-puzzle-authoring = { path = "../authoring" }
 puzzle-kernel = { path = "../kernel" }
-puzzle-scene = { path = "../scene" }
