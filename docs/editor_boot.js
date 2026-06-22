@@ -187,6 +187,17 @@
       }
       return fetchText("/sound-tools.js");
     },
+    async pickScreenColor() {
+      const invoke = tauriInvoke();
+      if (invoke) {
+        return invoke("pick_screen_color");
+      }
+      if ("EyeDropper" in window) {
+        const result = await new window.EyeDropper().open();
+        return { color: result.sRGBHex };
+      }
+      throw new Error("Screen color picker is unavailable in this host.");
+    },
     async newPuzzleSource(payload) {
       const invoke = tauriInvoke();
       if (!invoke) {

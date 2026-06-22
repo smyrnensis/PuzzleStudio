@@ -410,7 +410,11 @@ async function applyWorkspaceChangedPayload(payload) {
     return;
   }
   persistCurrentDocument();
-  const activeKey = activeDocument() ? documentIdentityKey(activeDocument()) : "";
+  const previousActive = activeDocument();
+  const activeKey = previousActive ? documentIdentityKey(previousActive) : "";
+  const previousActiveSource = previousActive && isTextDocument(previousActive)
+    ? currentSourceForDocument(previousActive)
+    : "";
   const previousByKey = new Map(documents.map((document) => [documentIdentityKey(document), document]));
   const sourceDocuments = Array.isArray(payload.documents) && payload.documents.length
     ? payload.documents
@@ -435,6 +439,15 @@ async function applyWorkspaceChangedPayload(payload) {
       const localSource = currentSourceForDocument(previous);
       const syncedSource = previous.syncedSource ?? previous.source ?? "";
       const externalSource = normalized.source || "";
+      const previousGameCss = previous.gameCss || "";
+      const previousGameVisualsJs = previous.gameVisualsJs || "";
+      const previewInputsUnchanged = externalSource === localSource
+        && (normalized.gameCss || "") === previousGameCss
+        && (normalized.gameVisualsJs || "") === previousGameVisualsJs;
+      if (previewInputsUnchanged) {
+        normalized.previewHtml = previous.previewHtml || "";
+        normalized.previewError = previous.previewError || "";
+      }
       if (localSource !== syncedSource) {
         normalized.source = localSource;
         normalized.syncedSource = syncedSource;
@@ -477,7 +490,22 @@ async function applyWorkspaceChangedPayload(payload) {
   selectedFolderId = activeFileId ? findParentFolder(fileTree, activeFileId)?.id || selectedFolderId : selectedFolderId;
   currentDocumentIndex = activeDocumentIndex();
   if (activeFileId) {
-    loadEmbeddedDocument(currentDocumentIndex);
+    const activeAfterReload = activeDocument();
+    const preserveActiveView = previousActive
+      && activeAfterReload
+      && documentIdentityKey(activeAfterReload) === activeKey
+      && isTextDocument(previousActive)
+      && isTextDocument(activeAfterReload)
+      && (activeAfterReload.source || "") === previousActiveSource
+      && (activeAfterReload.gameCss || "") === (previousActive.gameCss || "")
+      && (activeAfterReload.gameVisualsJs || "") === (previousActive.gameVisualsJs || "");
+    if (preserveActiveView) {
+      renderDocumentSelect();
+      renderDocumentTabs();
+      updateDocumentTabUnsavedStates();
+    } else {
+      loadEmbeddedDocument(currentDocumentIndex);
+    }
   } else {
     renderDocumentSelect();
   }
@@ -905,14 +933,16 @@ async function saveCurrentDocument(showStatus = true) {
     if (showStatus) {
       setEditorStatus("Nothing to save", "is-error");
     }
-    return;
+    return false;
   }
 
   if (editorSeed) {
+    document.syncedSource = document.source || "";
+    updateDocumentTabUnsavedStates();
     if (showStatus) {
       setEditorStatus("Saved locally", "is-ok");
     }
-    return;
+    return true;
   }
 
   if (showStatus) {
@@ -920,22 +950,34 @@ async function saveCurrentDocument(showStatus = true) {
   }
   saveButton.disabled = true;
   try {
-    await window.PuzzleStudioHost.save({
-      source: document.source || "",
-      puzzlePath: document.puzzlePath || "",
-      workspaceRoot: document.workspaceRoot || workspaceRoot || "",
-    });
+    if (isDesktopHost()) {
+      beginWorkspaceHostMutation();
+    }
+    try {
+      await window.PuzzleStudioHost.save({
+        source: document.source || "",
+        puzzlePath: document.puzzlePath || "",
+        workspaceRoot: document.workspaceRoot || workspaceRoot || "",
+      });
+    } finally {
+      if (isDesktopHost()) {
+        endWorkspaceHostMutation();
+      }
+    }
     document.syncedSource = document.source || "";
     document.externalDirty = false;
     document.externalSource = "";
+    updateDocumentTabUnsavedStates();
     if (showStatus) {
       setEditorStatus("Saved file", "is-ok");
     }
+    return true;
   } catch (error) {
     console.error(error);
     if (showStatus) {
       setEditorStatus("Save failed", "is-error");
     }
+    throw error;
   } finally {
     saveButton.disabled = false;
   }
@@ -1097,14 +1139,20 @@ function renderDocumentTabs() {
     tab.setAttribute("role", "tab");
     tab.dataset.documentTab = documentId;
     tab.classList.toggle("is-active", documentId === activeFileId);
+    tab.classList.toggle("is-unsaved", isDocumentUnsaved(tabDocument));
     tab.setAttribute("aria-selected", documentId === activeFileId ? "true" : "false");
     tab.tabIndex = documentId === activeFileId ? 0 : -1;
-    tab.title = tabDocument.puzzlePath || tabDocument.name || "";
+    updateDocumentTabTitle(tab, tabDocument);
 
     const label = window.document.createElement("span");
     label.className = "document-tab-label";
     label.textContent = documentTabDisplayName(tabDocument);
     tab.append(label);
+
+    const unsaved = window.document.createElement("span");
+    unsaved.className = "document-tab-unsaved-dot";
+    unsaved.setAttribute("aria-hidden", "true");
+    tab.append(unsaved);
 
     const close = window.document.createElement("span");
     close.className = "document-tab-close";
@@ -1125,6 +1173,32 @@ function renderDocumentTabs() {
 function documentTabDisplayName(document) {
   const name = document?.name || fileName(document?.puzzlePath) || "";
   return name;
+}
+
+function updateDocumentTabTitle(tab, document) {
+  if (!tab) {
+    return;
+  }
+  const title = document?.puzzlePath || document?.name || "";
+  tab.title = isDocumentUnsaved(document) && title ? `${title} (unsaved changes)` : title;
+  const label = documentTabDisplayName(document) || title;
+  if (label) {
+    tab.setAttribute("aria-label", isDocumentUnsaved(document) ? `${label}, unsaved changes` : label);
+  }
+}
+
+function updateDocumentTabUnsavedStates() {
+  if (!documentTabs) {
+    return;
+  }
+  for (const tab of documentTabs.querySelectorAll("[data-document-tab]")) {
+    const tabDocument = documents.find((item) => item.id === tab.dataset.documentTab);
+    if (!tabDocument) {
+      continue;
+    }
+    tab.classList.toggle("is-unsaved", isDocumentUnsaved(tabDocument));
+    updateDocumentTabTitle(tab, tabDocument);
+  }
 }
 
 function updateDocumentTabScrollState() {
@@ -1339,6 +1413,7 @@ function activePreviewSource() {
 }
 
 function scheduleLocalSave() {
+  updateDocumentTabUnsavedStates();
   window.clearTimeout(localSaveTimer);
   localSaveTimer = window.setTimeout(() => saveDocumentStore(false), 250);
 }
@@ -1926,6 +2001,7 @@ function loadEmbeddedDocument(index) {
   if (!document) {
     return;
   }
+  const previousActiveFileId = activeFileId;
   showWorkPane(SOURCE_WORK_PANE_ID);
   currentDocumentIndex = index;
   activeFileId = document.id;
@@ -1940,9 +2016,13 @@ function loadEmbeddedDocument(index) {
   applyGameVisuals(previewDocument ? effectiveGameVisualsJs(previewDocument) : "");
   runButton.disabled = !previewDocument;
   sourceEditor.readOnly = !isTextDocument(document);
-  setSourceEditorValue(isTextDocument(document)
+  const sourceText = isTextDocument(document)
     ? document.source || ""
-    : `${document.name || fileName(document.puzzlePath)}\n${document.mimeType || "binary"}\n${document.dataUrl ? `${document.dataUrl.length} bytes encoded` : "No data"}`);
+    : `${document.name || fileName(document.puzzlePath)}\n${document.mimeType || "binary"}\n${document.dataUrl ? `${document.dataUrl.length} bytes encoded` : "No data"}`;
+  setSourceEditorValue(sourceText, {
+    preserveUndoOnSameValue: document.id === previousActiveFileId,
+  });
+  updateDocumentTabUnsavedStates();
   latestHtml = previewDocument?.previewHtml || "";
   const previewError = previewDocument?.previewError || "";
   previewExport = extractPreviewExport(latestHtml);

@@ -2650,6 +2650,56 @@ step board
     }
 
     #[test]
+    fn compile_preview_accepts_line_style_tagged_sprite_after_pattern() {
+        let workspace = TestWorkspace::new();
+        let source = r##"
+title line_style_tagged_preview
+
+puzzle default {
+tags {
+state = base movable
+}
+layers {
+actor = Box:state
+}
+sprites {
+Box:base
+#aaa
+0
+Box:movable
+#bbb
+0
+}
+rules {
+
+}
+levels {
+legend {
+. = empty
+}
+legend B = Box:base
+level start
+B
+}
+}
+"##;
+        let game_path = workspace.write("games/tagged_sprite/game.puzzle", source);
+        let service = EditorService::open(&game_path).expect("open editor fixture");
+
+        let html = service
+            .compile_preview(&PreviewRequest::new(
+                source,
+                game_path.display().to_string(),
+                service.state().game_css.clone(),
+                service.state().base_game_visuals_js.clone(),
+            ))
+            .expect("compile tagged sprite preview");
+
+        assert!(html.contains("<!doctype html>"));
+        assert!(html.contains("line_style_tagged_preview"));
+    }
+
+    #[test]
     fn compile_preview_preserves_language_diagnostics() {
         let workspace = TestWorkspace::new();
         let source = r#"
@@ -2700,6 +2750,132 @@ level first
         assert_eq!(
             diagnostics[1].message,
             "unknown routine call: unknown_statement_two"
+        );
+    }
+
+    #[test]
+    fn compile_preview_reports_independent_lifecycle_diagnostics_together() {
+        let workspace = TestWorkspace::new();
+        let source = r#"
+title "Multi Lifecycle Error Probe"
+
+puzzle main {
+layers {
+actor = Player
+}
+layers {
+base = Player actor
+}
+
+on_level_start {
+input directions [ Player | ] -> [ | Player ]
+}
+
+on_level_clear {
+input directions [ Player | ] -> [ | Player ]
+}
+
+rules {
+}
+
+levels {
+legend {
+. = empty
+P = Player
+}
+level first
+P.
+}
+}
+"#;
+        let game_path = workspace.write("games/multi_lifecycle_error/game.puzzle", source);
+        let service = EditorService::open(&game_path).expect("open editor");
+        let error = service
+            .compile_preview(&PreviewRequest::new(
+                source.to_string(),
+                game_path.display().to_string(),
+                String::new(),
+                service.state().base_game_visuals_js.clone(),
+            ))
+            .expect_err("invalid source should fail preview compile");
+
+        let AppError::Diagnostics(report) = error else {
+            panic!("preview compile should preserve language diagnostics");
+        };
+        let messages = report
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| diagnostic.message.as_str())
+            .collect::<Vec<_>>();
+        assert!(
+            messages.contains(&"on_level_start cannot depend on input"),
+            "{messages:?}"
+        );
+        assert!(
+            messages.contains(&"on_level_clear cannot depend on input"),
+            "{messages:?}"
+        );
+    }
+
+    #[test]
+    fn compile_preview_reports_independent_statement_parse_errors_together() {
+        let workspace = TestWorkspace::new();
+        let source = r#"
+title "Multi Statement Parse Error Probe"
+
+puzzle main {
+layers {
+base = Player
+}
+
+rules {
+action push
+do win
+banana split
+}
+
+levels {
+legend {
+. = empty
+P = Player
+}
+level first
+P
+}
+}
+"#;
+        let game_path = workspace.write("games/multi_statement_error/game.puzzle", source);
+        let service = EditorService::open(&game_path).expect("open editor");
+        let error = service
+            .compile_preview(&PreviewRequest::new(
+                source.to_string(),
+                game_path.display().to_string(),
+                String::new(),
+                service.state().base_game_visuals_js.clone(),
+            ))
+            .expect_err("invalid source should fail preview compile");
+
+        let AppError::Diagnostics(report) = error else {
+            panic!("preview compile should preserve language diagnostics");
+        };
+        let messages = report
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| diagnostic.message.as_str())
+            .collect::<Vec<_>>();
+        assert!(
+            messages.contains(
+                &"`action` statements were removed; use explicit input guards and rewrites"
+            ),
+            "{messages:?}"
+        );
+        assert!(
+            messages.contains(&"`do` is obsolete; write the effect statement directly"),
+            "{messages:?}"
+        );
+        assert!(
+            messages.contains(&"unknown statement directive banana"),
+            "{messages:?}"
         );
     }
 
@@ -2786,12 +2962,48 @@ levels3 demo of push3 {
         assert!(EDITOR_HTML.contains(r#"id="runButton""#));
         assert!(EDITOR_HTML.contains(r#"aria-label="Run preview""#));
         assert!(EDITOR_HTML.contains("lucide-play"));
-        assert!(EDITOR_JS.contains("function runPreviewFromSourcePane()"));
+        assert!(EDITOR_JS.contains("async function runPreviewFromSourcePane()"));
+        assert!(EDITOR_JS.contains(
+            "async function runPreviewFromSourcePane() {\n  ensurePreviewTargetsActiveDocument();"
+        ));
+        assert!(EDITOR_JS.contains("setStatus(\"Saving before preview\", \"\");"));
+        assert!(EDITOR_JS.contains("saved = await saveCurrentDocument(true);"));
+        assert!(EDITOR_JS.contains("if (!saved) {\n    setStatus(\"Save failed\", \"is-error\");"));
+        let save = EDITOR_JS
+            .find("saved = await saveCurrentDocument(true);")
+            .expect("run preview saves before compiling");
+        let compile_after_save = EDITOR_JS[save..]
+            .find("await renderPreview();")
+            .expect("run preview compiles after save");
+        assert!(compile_after_save > 0);
+        assert!(
+            EDITOR_WORKSPACE_JS.contains("async function saveCurrentDocument(showStatus = true)")
+        );
+        assert!(EDITOR_WORKSPACE_JS.contains("return true;\n  } catch (error) {"));
+        assert!(EDITOR_WORKSPACE_JS.contains("throw error;\n  } finally {"));
         assert!(EDITOR_JS.contains("openPreviewModePane(\"play\", { focus: false });"));
         assert!(
             EDITOR_JS.contains("runButton.addEventListener(\"click\", runPreviewFromSourcePane);")
         );
         assert!(EDITOR_WORKSPACE_JS.contains("runButton.title = \"Run preview\";"));
+    }
+
+    #[test]
+    fn editor_preview_save_shortcut_is_not_game_input() {
+        assert!(EDITOR_JS.contains("const isEditorSaveShortcut = (event) => {"));
+        assert!(EDITOR_JS.contains("document.addEventListener(\"keydown\", (event) => {"));
+        assert!(EDITOR_JS.contains("event.stopImmediatePropagation();"));
+        assert!(EDITOR_JS.contains(
+            "window.parent.postMessage({ type: \"PuzzleStudioEditorSaveShortcut\" }, \"*\");"
+        ));
+        assert!(EDITOR_JS.contains("event.data?.type === \"PuzzleStudioEditorSaveShortcut\""));
+        assert!(EDITOR_JS.contains("saveCurrentDocument(true).catch((error) => {"));
+    }
+
+    #[test]
+    fn editor_preview_dirty_status_stays_on_preview_pane() {
+        assert!(EDITOR_JS.contains(r#"setPaneStatus("preview", "Preview is stale", "");"#));
+        assert!(!EDITOR_JS.contains(r#"setStatus("Preview is stale", "");"#));
     }
 
     #[test]
@@ -2817,6 +3029,34 @@ levels3 demo of push3 {
         assert!(EDITOR_WORKSPACE_JS.contains("if (workspaceHostMutationDepth > 0)"));
         assert!(EDITOR_WORKSPACE_JS.contains("deferredWorkspaceChangedPayload = payload;"));
         assert!(EDITOR_WORKSPACE_JS.contains("queueMicrotask(() => {"));
+        assert!(EDITOR_WORKSPACE_JS.contains("const previousActive = activeDocument();"));
+        assert!(EDITOR_WORKSPACE_JS.contains(
+            "const previousActiveSource = previousActive && isTextDocument(previousActive)"
+        ));
+        assert!(EDITOR_WORKSPACE_JS.contains("const preserveActiveView = previousActive"));
+        assert!(EDITOR_WORKSPACE_JS.contains("renderDocumentTabs();"));
+        assert!(
+            EDITOR_WORKSPACE_JS
+                .contains("} else {\n      loadEmbeddedDocument(currentDocumentIndex);\n    }")
+        );
+        assert!(
+            EDITOR_WORKSPACE_JS
+                .contains("const previewInputsUnchanged = externalSource === localSource")
+        );
+        assert!(
+            EDITOR_WORKSPACE_JS.contains("normalized.previewHtml = previous.previewHtml || \"\";")
+        );
+        assert!(
+            EDITOR_WORKSPACE_JS
+                .contains("normalized.previewError = previous.previewError || \"\";")
+        );
+        let save_guard = EDITOR_WORKSPACE_JS
+            .find("if (isDesktopHost()) {\n      beginWorkspaceHostMutation();\n    }\n    try {\n      await window.PuzzleStudioHost.save({")
+            .expect("desktop save is guarded while host IO runs");
+        let save_release = EDITOR_WORKSPACE_JS[save_guard..]
+            .find("endWorkspaceHostMutation();")
+            .expect("desktop save releases the host mutation guard");
+        assert!(save_release > 0);
         let create_file_guard = EDITOR_WORKSPACE_JS
             .find("beginWorkspaceHostMutation();\n    try {\n      await window.PuzzleStudioHost.createSourceFile({")
             .expect("desktop file creation is guarded while host IO runs");
@@ -2897,6 +3137,12 @@ levels3 demo of push3 {
         ));
         assert!(
             EDITOR_JS.contains("levelGridButton?.addEventListener(\"click\", toggleLevelGrid);")
+        );
+        assert!(EDITOR_JS.contains("function compiledPreviewGameVisualsJs(html)"));
+        assert!(EDITOR_JS.contains("function previewGameVisualsJsForCompiledHtml(html, document)"));
+        assert!(
+            EDITOR_JS
+                .contains("applyGameVisuals(previewGameVisualsJsForCompiledHtml(html, document));")
         );
         assert!(EDITOR_JS.contains("function sourceLayerNameEntries("));
         assert!(EDITOR_JS.contains("label: layerNames.get(layerIndex) || \"\""));
@@ -3069,6 +3315,21 @@ levels3 demo of push3 {
     }
 
     #[test]
+    fn level_pane_loads_existing_source_levels_instead_of_add_choice_screen() {
+        assert!(!EDITOR_HTML.contains(r#"id="levelEmptyPane""#));
+        assert!(!EDITOR_HTML.contains("Add 2D level"));
+        assert!(!EDITOR_HTML.contains("Add 3D level"));
+        assert!(EDITOR_JS.contains("function loadAvailableLevelPaneEntry("));
+        assert!(EDITOR_JS.contains("function loadFocusedLevelPaneEntry("));
+        assert!(
+            EDITOR_JS.contains(
+                "if (!loadAvailableLevelPaneEntry(focusedPuzzleSourceContext(document), {"
+            )
+        );
+        assert!(EDITOR_JS.contains("const loadedSourceLevel = loadLevelPaneEntryForMode(\"edit\", focusedPuzzleSourceContext(), {"));
+    }
+
+    #[test]
     fn level_name_picker_does_not_write_dimension_prefix_into_value() {
         assert!(
             !EDITOR_JS.contains(
@@ -3095,6 +3356,28 @@ levels3 demo of push3 {
         assert!(EDITOR_JS.contains("function sourceAllLegendRows(source)"));
         assert!(EDITOR_JS.contains("No unused single-character legend symbol is available"));
         assert!(!EDITOR_JS.contains("return \".\";\n      }\n      usedChars.add(ch);"));
+    }
+
+    #[test]
+    fn editor_compile_log_splits_plain_multiline_errors() {
+        assert!(EDITOR_JS.contains("function appendPlainCompileError("));
+        assert!(EDITOR_JS.contains("function plainCompileErrorMessages("));
+        assert!(EDITOR_JS.contains(".split(/\\r?\\n/)"));
+        assert!(EDITOR_JS.contains("appendPlainCompileError(error, options);"));
+    }
+
+    #[test]
+    fn editor_source_line_numbers_are_loaded_by_static_editor() {
+        assert!(EDITOR_HTML.contains(r#"id="sourceLineNumbers""#));
+        assert!(EDITOR_DOM_JS.contains(
+            r##"const sourceLineNumbers = document.querySelector("#sourceLineNumbers");"##
+        ));
+        assert!(EDITOR_CSS.contains(".source-line-numbers"));
+        assert!(
+            EDITOR_SOURCE_JS
+                .contains(r#"const lines = source.length ? source.split("\n") : [""];"#)
+        );
+        assert!(EDITOR_JS.contains("renderSourceLineNumbers();"));
     }
 
     #[test]
@@ -3194,8 +3477,8 @@ levels3 demo of push3 {
         assert!(EDITOR_SOURCE_JS.contains("function sourceHighlightStyleAtOffset(runs, offset)"));
         assert!(EDITOR_SOURCE_JS.contains("function sourcePredictedBeforeInputValue(event)"));
         assert!(EDITOR_SOURCE_JS.contains("function handleSourceBeforeInputTextInsert(event)"));
-        assert!(EDITOR_SOURCE_JS.contains("sourceEditor.setRangeText(\n    event.data,"));
-        assert!(EDITOR_SOURCE_JS.contains("sourceEditorContentChanged();\n  syncPreviewModeFromSourceCursor();\n  renderSourceCaret();"));
+        assert!(EDITOR_SOURCE_JS.contains("sourceEditor.setRangeText(\n    event.key,"));
+        assert!(EDITOR_SOURCE_JS.contains("sourceEditorContentChanged();\n  scheduleSourceCompletion();\n  syncPreviewModeFromSourceCursor();"));
         assert!(
             EDITOR_SOURCE_JS.contains("const predicted = sourcePredictedBeforeInputValue(event);")
         );
@@ -3533,8 +3816,17 @@ levels3 demo of push3 {
         assert!(EDITOR_SOURCE_JS.contains("function sourceEmptyRewritePattern(pattern)"));
         assert!(EDITOR_SOURCE_JS.contains("function handleSourceRewritePatternTab(event)"));
         assert!(
+            EDITOR_SOURCE_JS.contains(
+                "const lhsPattern = sourceRewritePatternBeforeArrow(code.slice(0, arrow));"
+            )
+        );
+        assert!(
             EDITOR_SOURCE_JS
                 .contains("sourceEditor.setRangeText(rhsPattern, cursor, cursor, \"end\")")
+        );
+        assert!(
+            EDITOR_SOURCE_JS
+                .contains("sourceEditor.setRangeText(lhsPattern, cursor, cursor, \"end\")")
         );
         assert!(EDITOR_SOURCE_JS.contains("if (handleSourceRewriteRhsPatternAssist(event))"));
     }
@@ -3581,7 +3873,10 @@ levels3 demo of push3 {
 
     #[test]
     fn source_completion_keyboard_commit_splits_tab_from_enter() {
-        assert!(EDITOR_SOURCE_JS.contains("keyboardCommit: Boolean(options.manual)"));
+        assert!(EDITOR_SOURCE_JS.contains("function sourceCompletionSelectedIndexForSession"));
+        assert!(EDITOR_SOURCE_JS.contains("function sourceCompletionSessionMatches"));
+        assert!(EDITOR_SOURCE_JS.contains("function sourceCompletionItemsMatch"));
+        assert!(EDITOR_SOURCE_JS.contains("keyboardCommit: Boolean(options.manual || sourceCompletionSessionMatches(previousState, {"));
         assert!(EDITOR_SOURCE_JS.contains("sourceCompletionState.keyboardCommit = true;"));
         assert!(EDITOR_SOURCE_JS.contains("if (event.key === \"Tab\")"));
         assert!(
@@ -3609,17 +3904,60 @@ levels3 demo of push3 {
     }
 
     #[test]
+    fn source_save_reload_preserves_undo_for_same_active_document() {
+        assert!(EDITOR_SOURCE_JS.contains("preserveUndoOnSameValue"));
+        assert!(EDITOR_SOURCE_JS.contains("ensureSourceUndoHistory();"));
+        assert!(EDITOR_WORKSPACE_JS.contains("const previousActiveFileId = activeFileId;"));
+        assert!(
+            EDITOR_WORKSPACE_JS
+                .contains("preserveUndoOnSameValue: document.id === previousActiveFileId")
+        );
+    }
+
+    #[test]
+    fn source_undo_redo_reveals_restored_selection() {
+        assert!(EDITOR_SOURCE_JS.contains("function restoreSourceEditorSnapshot(snapshot)"));
+        assert!(EDITOR_SOURCE_JS.contains("scrollSourceOffsetIntoView(start);"));
+        let selection_restore = EDITOR_SOURCE_JS
+            .find("sourceEditor.setSelectionRange(start, end, snapshot.selectionDirection || \"none\");")
+            .expect("source snapshot selection restore");
+        let reveal = EDITOR_SOURCE_JS
+            .find("scrollSourceOffsetIntoView(start);")
+            .expect("source snapshot reveal");
+        assert!(selection_restore < reveal);
+    }
+
+    #[test]
     fn source_completion_auto_requires_typed_prefix() {
         assert!(
             EDITOR_SOURCE_JS.contains("function sourceCursorHasCompletionPrefix(source, cursor)")
         );
         assert!(
-            EDITOR_SOURCE_JS.contains("return sourceCursorHasCompletionPrefix(source, cursor);")
+            EDITOR_SOURCE_JS.contains(
+                "return sourceCursorHasCompletionPrefix(source, cursor)\n    || sourceCursorAfterSelectorTagSeparator(source, cursor);"
+            )
         );
         assert!(!EDITOR_SOURCE_JS.contains("function sourceCursorAtBareLineTail"));
         assert!(
             EDITOR_SOURCE_JS
                 .contains("if (!options.manual && !sourceAutoCompletionEligible(source, cursor))")
+        );
+    }
+
+    #[test]
+    fn source_completion_auto_allows_selector_tag_separator() {
+        assert!(
+            EDITOR_SOURCE_JS
+                .contains("function sourceCursorAfterSelectorTagSeparator(source, cursor)")
+        );
+        assert!(
+            EDITOR_SOURCE_JS.contains(
+                "return sourceCursorHasCompletionPrefix(source, cursor)\n    || sourceCursorAfterSelectorTagSeparator(source, cursor);"
+            )
+        );
+        assert!(
+            EDITOR_SOURCE_JS
+                .contains("/(?:^|[^\\w@.-])[@A-Za-z_][\\w@.-]*(?::[@A-Za-z_][\\w@.-]*)*:$/.test")
         );
     }
 
@@ -3660,6 +3998,21 @@ levels3 demo of push3 {
             EDITOR_SOURCE_JS
                 .contains("return Math.max(0, Math.min(source.length, lineHit.endOffset));")
         );
+        assert!(EDITOR_JS.contains("function sourceOffsetFromEditorClick(event, source)"));
+        assert!(
+            EDITOR_JS.contains(
+                "return sourceOffsetFromVisualPoint(event.clientX, event.clientY, source);"
+            )
+        );
+    }
+
+    #[test]
+    fn source_pointer_sync_uses_visual_click_offset() {
+        assert!(EDITOR_JS.contains("function syncPreviewModeFromSourcePointer(event)"));
+        assert!(
+            EDITOR_JS.contains("const clickOffset = sourceOffsetFromEditorClick(event, source);")
+        );
+        assert!(EDITOR_JS.contains("position: clickOffset"));
     }
 
     #[test]
@@ -3719,6 +4072,38 @@ levels3 demo of push3 {
     }
 
     #[test]
+    fn sprite_source_loader_accepts_bare_shape_refs() {
+        assert!(EDITOR_SPRITE_JS.contains("const shapeAssets = parseSpriteShapeAssets(source);"));
+        assert!(EDITOR_SPRITE_JS.contains("} else if (asciiRows.length === 1) {"));
+        assert!(EDITOR_SPRITE_JS.contains(
+            "const shapeRows = resolveSpriteShapeAssetToken(shapeName, shapeAssets, selectorName);"
+        ));
+        assert!(
+            EDITOR_SPRITE_JS
+                .contains("shapeBind = { type: \"shape\", name: shapeName, linked: true };")
+        );
+    }
+
+    #[test]
+    fn sprite_source_loader_projects_generic_table_refs() {
+        assert!(EDITOR_SPRITE_JS.contains("function spriteSelectorSingleTagBinding("));
+        assert!(EDITOR_SPRITE_JS.contains("function firstSpriteTableAssetKey(tableName, assets)"));
+        assert!(EDITOR_SPRITE_JS.contains(
+            "const selectorBinding = spriteSelectorSingleTagBinding(selectorName, name.slice(separator + 1));"
+        ));
+        assert!(EDITOR_SPRITE_JS.contains("return firstSpriteTableAssetKey(tableName, assets);"));
+    }
+
+    #[test]
+    fn sprite_source_loader_reads_rotated_shape_table_base_rows() {
+        assert!(EDITOR_SPRITE_JS.contains(
+            "const tablePattern = /(^|\\n)([\\t ]*)([A-Za-z_][\\w]*):([A-Za-z_][\\w]*)[^\\n{]*\\{/g;"
+        ));
+        assert!(EDITOR_SPRITE_JS.contains("if (!tableBody.includes(\"{\")) {"));
+        assert!(EDITOR_SPRITE_JS.contains("raw.set(`${tableMatch[3]}:${tableMatch[4]}`, rows);"));
+    }
+
+    #[test]
     fn sprite_source_update_reveals_and_preserves_target_boundary() {
         assert!(EDITOR_JS.contains("editSourceName: \"\""));
         assert!(EDITOR_JS.contains("editSourceEnd: null"));
@@ -3735,6 +4120,20 @@ levels3 demo of push3 {
         assert!(EDITOR_JS.contains(
             "const trailingBoundary = removed.match(/((?:\\r?\\n[\\t ]*)+)$/)?.[1] || \"\";"
         ));
+    }
+
+    #[test]
+    fn sprite_source_edit_invalidates_cached_target_until_rust_resync() {
+        assert!(EDITOR_SPRITE_JS.contains("function clearSpriteEditSource()"));
+        assert!(EDITOR_SPRITE_JS.contains(
+            "function invalidateSpriteEditSourceForDocument(document = activeDocument())"
+        ));
+        assert!(EDITOR_SPRITE_JS.contains("clearSpriteEditSource();"));
+        assert!(EDITOR_SPRITE_JS.contains(
+            "sourceEditor.addEventListener(\"input\", () => {\n  invalidateSpriteEditSourceForDocument(activeDocument());\n  syncSpriteSourceActionButtons();\n});"
+        ));
+        assert!(EDITOR_SPRITE_JS.contains("function loadSpriteSourceTarget(target, options = {})"));
+        assert!(EDITOR_SPRITE_JS.contains("setSpriteEditSource(target, activeDocument());"));
     }
 
     #[test]
@@ -4101,7 +4500,10 @@ levels3 demo of push3 {
         assert!(html.contains("Exported Editor"));
         assert!(html.contains("gameVisualsJs"));
         assert!(html.contains(r#"<link rel="icon" type="image/svg+xml" href="favicon.svg">"#));
-        assert!(html.contains(r#"<script src="editor.js?v=preview-runtime-embed"></script>"#));
+        assert!(html.contains(
+            r#"<link rel="stylesheet" href="editor.css?v=source-line-numbers-tab-unsaved">"#
+        ));
+        assert!(html.contains(r#"<script src="editor.js?v=parallel-diagnostics"></script>"#));
         assert!(html.contains(r#"<script src="editor_dom.js"></script>"#));
         assert!(!html.contains("<script>\nwindow.PuzzleAssets ="));
         assert!(!html.contains("PuzzleEditorThemeImports"));
@@ -4129,6 +4531,12 @@ levels3 demo of push3 {
     #[test]
     fn browser_compiled_preview_uses_pages_runtime_loader() {
         assert!(EDITOR_JS.contains("function embedStandaloneRuntimeWasm(html)"));
+        assert!(
+            EDITOR_JS.contains(
+                "previewBackendUnavailable(error) && window.PuzzleStudioHost?.mode?.() === \"static\""
+            ),
+            "browser WASM preview compile must stay static-site only"
+        );
         assert!(EDITOR_JS.contains("window.PuzzleStudioGameWasmAssets"));
         assert!(
             EDITOR_JS
@@ -4215,7 +4623,7 @@ levels3 demo of push3 {
             .find(r#"<script src="editor_level3d.js"></script>"#)
             .expect("editor loads 3D level editor");
         let editor = EDITOR_HTML
-            .find(r#"<script src="editor.js?v=preview-runtime-embed"></script>"#)
+            .find(r#"<script src="editor.js?v=parallel-diagnostics"></script>"#)
             .expect("editor loads main editor script");
         let sprite3d = EDITOR_HTML
             .find(r#"<script src="editor_sprite3d.js"#)
@@ -4224,6 +4632,31 @@ levels3 demo of push3 {
         assert!(core < level3d);
         assert!(core < editor);
         assert!(core < sprite3d);
+    }
+
+    #[test]
+    fn tauri_static_editor_busts_cache_for_editor_error_line_number_and_tab_unsaved_assets() {
+        assert!(
+            EDITOR_HTML
+                .contains(r#"<script src="editor_boot.js?v=parallel-diagnostics"></script>"#)
+        );
+        assert!(EDITOR_HTML.contains(
+            r#"<link rel="stylesheet" href="editor.css?v=source-line-numbers-tab-unsaved">"#
+        ));
+        assert!(
+            EDITOR_HTML
+                .contains(r#"<script src="editor_source.js?v=source-line-numbers"></script>"#)
+        );
+        assert!(EDITOR_HTML.contains(
+            r#"<script src="editor_workspace.js?v=desktop-new-puzzle-tab-unsaved-sync"></script>"#
+        ));
+        assert!(
+            EDITOR_HTML.contains(r#"<script src="editor.js?v=parallel-diagnostics"></script>"#)
+        );
+        assert!(EDITOR_WORKSPACE_JS.contains("document-tab-unsaved-dot"));
+        assert!(EDITOR_WORKSPACE_JS.contains("updateDocumentTabUnsavedStates"));
+        assert!(EDITOR_WORKSPACE_JS.contains("setSourceEditorValue(sourceText, {\n    preserveUndoOnSameValue: document.id === previousActiveFileId,\n  });\n  updateDocumentTabUnsavedStates();"));
+        assert!(EDITOR_CSS.contains(".document-tab.is-unsaved .document-tab-unsaved-dot"));
     }
 
     #[test]
@@ -4355,7 +4788,7 @@ levels3 demo of push3 {
             .find("window.PuzzleEditorSeed = JSON.parse")
             .expect("seeded editor should define seed before workspace scripts load");
         let embedded_documents_index = html
-            .find(r#"<script src="editor_workspace.js?v=desktop-new-puzzle-source"></script>"#)
+            .find(r#"<script src="editor_workspace.js?v=desktop-new-puzzle-tab-unsaved-sync"></script>"#)
             .expect("seeded editor should load workspace code after seed data");
 
         assert!(

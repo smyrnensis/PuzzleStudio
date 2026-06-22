@@ -65,7 +65,7 @@ move
 }
 ```
 
-routine の application はデフォルトで `repeat`。
+routine の application はデフォルトで `once`。
 
 `routine @name` は display-only assertion 付き routine を定義する。中に書けるのは display rule だけで、normal rule や normal rule with display effect が混ざるとエラーになる。`routine display <name>` は同じ意味の明示形。
 
@@ -92,7 +92,7 @@ move
 }
 ```
 
-`routine <name> repeat` は routine block 全体の application。block 内の statement sequence を、block 全体が変化しなくなるまで繰り返す。
+`routine <name> repeat` は routine block 全体の application を明示的に `repeat` にする。block 内の statement sequence を、block 全体が変化しなくなるまで繰り返す。
 
 rewrite 行も application を持つ。plain rewrite のデフォルトも `repeat`。行ごとに `once` / `once_all` / `once_per_level` / `repeat` を明示できる。標準 `move` routine を使わない direct movement rule では、block と rewrite 行の両方に `once` を明示する。
 
@@ -187,7 +187,7 @@ set moved = false
 }
 ```
 
-`effect <name> { ... }` は puzzle rule effect の名前付き macro。body は `cancel`、`win`、`restart`、`next_level`、`again`、`checkpoint`、`clear_checkpoint`、`sfx <name>`、`message <text>`、var update、または別の名前付き effect を 1 行ずつ持つ。呼び出しは effect 名を statement として直接書くか、`if <condition> -> <name>`、rewrite suffix の `<name>`。
+effect 文は `routine` にまとめられる。`[ before ] -> [ after ] <routine>` は rewrite statement 本体を実行し、その statement が LHS match によって trigger された場合だけ、その後に `<routine>` を 1 回呼ぶ。plain rewrite は通常どおり default `repeat` として安定するまで評価され、after routine は repeat 全体が一度でも trigger された後に実行される。省略時の routine block は `once` なので、after routine の中身は通常1回だけ実行される。RHS が state 差分を作らない場合でも、LHS が match すれば trigger として扱う。
 
 `checkpoint` は現在の turn が commit された後の puzzle state を、その puzzle slot の restart 先として保存する。`clear_checkpoint` は保存された checkpoint を捨て、restart 先を level start state に戻す。level 移動や明示的な level load は checkpoint をリセットする。
 
@@ -438,7 +438,7 @@ top-level `puzzle <name>` / `puzzle3 <name>` は、同名の `scene <name>` が�
 
 renderer は component を sizing class で扱う。`title` / `subtitle` / `text` / `button` は flow content で、親から与えられた幅の中で高さを測る。`puzzle` / `puzzle3` / `frame` は ratio content で、割り当てられた slot 内で aspect ratio を守って contain される。`level_menu` / `menu` / `for` は collection content で、列数や item 数から表示し、多すぎる場合は component が scroll を所有する。`row` / `column` / `box` は container であり、見た目の箱ではない。
 
-`choice` は標準 UI cursor で選ばれる主選択肢、`button` は pointer や明示 key binding で押す補助操作である。`choice` だけが logical focus graph に入る。`button` は focus graph に入らない。`text` / `title` / `subtitle` は cell を占有する non-focusable item。`layout` 直下は暗黙 column、`row` は child footprint を横連結、`column` / `box` は縦連結として論理 grid に投影する。方向入力は同じ行または同じ列の次の focusable `choice` にだけ移動し、欠けている cell には斜め吸着しない。端では no-op。Enter/Space は focused choice を activate する。これは UI component の focus であり、puzzle/model cursor movement ではない。デフォルトでは scene は input を component 群へ broadcast し、各 component が関係する input だけに反応する。`for` projection は cursor や confirm を所有しない。
+`choice` は標準 UI cursor で選ばれる主選択肢、`button` は pointer や明示 key binding で押す補助操作である。`choice` だけが logical focus graph に入る。`button` は focus graph に入らない。`text` / `title` / `subtitle` は cell を占有する non-focusable item。`layout` 直下は暗黙 column、`row` は child footprint を横連結、`column` / `box` は縦連結として論理 grid に投影する。方向入力は同じ行または同じ列の次の focusable `choice` にだけ移動し、欠けている cell には斜め吸着しない。端では no-op。Enter/Space/x は focused choice を activate する。これは UI component の focus であり、puzzle/model cursor movement ではない。デフォルトでは scene は input を component 群へ broadcast し、各 component が関係する input だけに反応する。`for` projection は cursor や confirm を所有しない。
 
 `size <w> <h>`、`gap <n>`、`align <x> [y]`、`scroll` は既存ファイル向けに読めるが、canonical authoring の中心ではない。`size` は pixel ではなく logical size / ratio metadata で、絶対的な実寸は renderer と theme が決める。新しい例では、root `layout size 4 3` よりも default root size を前提にした `layout { ... }` を優先する。
 
@@ -602,7 +602,7 @@ show_index = true
 }
 ```
 
-`text` は literal text、scene state の scalar value、または `for` binding の path を表示する。`choice` と `button` は input、component effect、または scene effect を発行する layout component。`choice` は方向キー・ゲームパッドで選ばれる主選択肢、`button` は click/tap や明示 key binding 向けの補助操作である。旧 `button "Label" = name`、`choice "Label" action name`、裸名 RHS は読まない。`choice "Resume" -> input resume`、`button "Help" -> goto help` のように `-> input <name>`、`-> component_effect <name>`、または direct scene effect を使う。`box` / `row` / `column` は入れ子の layout tree を作る layout component。`box` は純粋な配置用の矩形で、背景・枠線・装飾をデフォルトでは持たない。`panel` は layout primitive ではなく、canonical syntax では使わない。`layout` / `box` / `row` / `column` は layout metadata として `size <w> <h>`、`gap <n>`、`align <x> [y]` を読めるが、canonical examples では default / theme に任せる。`size` と `gap` の実寸は HTML adapter / theme が決め、`.puzzle` author は px を書かない。通常 `choice` 配列では、`row` / `column` / `box` の論理 grid に沿って arrow keys または `w/a/s/d` で UI focus が移動する。`for` は scene state collection や level list の各 item から layout node を生成する projection primitive で、cursor 移動や confirm 動作は所有しない。
+`text` は literal text、scene state の scalar value、または `for` binding の path を表示する。`choice` と `button` は input、component effect、または scene effect を発行する layout component。`choice` は方向キー・ゲームパッドで選ばれる主選択肢、`button` は click/tap や明示 key binding 向けの補助操作である。旧 `button "Label" = name`、`choice "Label" action name`、裸名 RHS は読まない。`choice "Resume" -> input resume`、`button "Help" -> goto help` のように `-> input <name>`、`-> component_effect <name>`、または direct scene effect を使う。`box` / `row` / `column` は入れ子の layout tree を作る layout component。`box` は純粋な配置用の矩形で、背景・枠線・装飾をデフォルトでは持たない。`panel` は layout primitive ではなく、canonical syntax では使わない。`layout` / `box` / `row` / `column` は layout metadata として `size <w> <h>`、`gap <n>`、`align <x> [y]` を読めるが、canonical examples では default / theme に任せる。`size` と `gap` の実寸は HTML adapter / theme が決め、`.puzzle` author は px を書かない。通常 `choice` 配列では、`row` / `column` / `box` の論理 grid に沿って arrow keys または `w/a/s/d` で UI focus が移動し、Enter/Space/x で focused choice を実行する。`for` は scene state collection や level list の各 item から layout node を生成する projection primitive で、cursor 移動や confirm 動作は所有しない。
 
 scene condition は current level context を読める。`level.name == <name>` / `level.name != <name>`、`level.label == <label>` / `level.label != <label>`、`level.last`、`level.has_next` をサポートする。level 固有の message / sounds / exception flow は effect 側ではなく condition 側で scoped にする。通常の level progression は scene condition の標準責務にしない。authoring での level 指定は `level.name` を標準にし、index / number 条件は標準 surface にしない。
 
@@ -618,13 +618,13 @@ button "Title" -> goto title
 }
 ```
 
-`level_menu` は level 選択専用 component。component が cursor と enter と多すぎる項目の scroll を所有する。通常は key binding を書かなくてよい。既定では `w/a/s/d` と arrow keys が移動し、Enter/Space が選択 level を開始する。
+`level_menu` は level 選択専用 component。component が cursor と enter と多すぎる項目の scroll を所有する。通常は key binding を書かなくてよい。既定では `w/a/s/d` と arrow keys が移動し、Enter/Space/x が選択 level を開始する。
 
 見出しなどを足す場合だけ、通常の `scene` の `layout` に `level_menu { ... }` を置く。`level_menu` は level 選択専用 component なので、`up` / `down` / `left` / `right` / `enter` の cursor 動作と、多すぎる項目の scroll を所有する。enter 時は選択 level を開始する。これは `level_menu` template の主動作なので、`action goto_level` や `choose_level` transition は書かない。`level_menu` は inline source や `->` effect を取らない。表示する level の絞り込みは scene の `resources { levels ... }` が所有する。旧 `show index`、`columns <n>`、裸の `wrap`、`action <name>` は読まない。
 
 level の開始、読み込み、restart は level scene / puzzle slot に対する effect として書ける。ただし通常の clear / advance / restart は level scene 内の model window component と puzzle lifecycle が所有する。scene からの target effect は、title/menu から入る、button で明示 restart する、hub から特定 level に飛ぶ、通常 clear とは別の例外 flow に入る、などの介入だけに使う。canonical な開始は `goto sokoban` または `goto sokoban(level_name)`。独自 scene なら `scene playing(level) { state { sokoban(level) } layout { sokoban } rules { step sokoban } }` として `goto playing(level)` で入る。旧 `start levels ... in <scene>` / `continue levels ... in <scene>` は読まない。`playing.restart` は playing scene の現在 level を初期状態に戻し、`playing.next_level` は playing scene を次 level で開始し、`playing.previous_level` は前 level で開始する。`playing.goto <level>` は指定 level で playing scene に移る。`board.restart` のように puzzle slot を target にした場合は、その puzzle state を初期状態に戻す。`board.next_level` はその puzzle を所有する level scene を進める。
 
-puzzle rule でも `win`、`restart`、`next_level`、`again`、`message`、`sfx` を effect として出せる。`win` はその turn の `win_conditions` を true として扱う clear outcome effect で、`set win_conditions = true` の sugar に近い。model rules では `restart -> restart` が semantic input `restart` を model restart effect に接続する rule になる。model rules 内に `restart` input handler がない場合は、この default handler が暗黙に追加される。scene key dispatch は `keys { q -> level_select }` と `routine level_select { goto level_select }` で書く。scene 側で restart / level navigation に介入したい場合は、`board.restart` や `playing.next_level` のような target effect を明示する。これは通常進行の書き方ではなく、ユーザー操作や特殊 flow のための escape hatch である。`[ Goal Box ] -> next_level` と `if win_conditions -> next_level` は board transition の結果として、所有 component/runtime に level advance effect を渡す。`again` は現在の turn を commit した後、runtime に no-input follow-up turn を要求する。`again` が再実行するのは直前の key / semantic input ではなく、同じ puzzle target の rule entrypoint である。したがって follow-up turn では input guard は成立しない。自動 turn は最大 256 回で止まり、`cancel` が出た場合はその自動 turn だけを取り消して停止する。standalone HTML では follow-up turn を `defaultAgainMs` 間隔で実行し、未指定時は 120ms を使う。`again_interval = 100ms` や `again_interval = 0.1s` で変更できる。各 turn の `sfx` / `message` emissions は別 snapshot として公開する。`[ Player Goal ] -> message "Found"` と `[ Player Box ] -> message hint` は popup message effect を渡し、既定で `default_wait_time` だけ後続 effect / 後続 rule segment を待たせる。`[ Player | Box | ] -> [ | Player | Box ] sfx push` は rule が match したときに named SFX を再生する effect を渡す。同じ turn 内で同じ named SFX が複数回出ても再生 event は 1 回にまとめる。`again` の follow-up は別 turn なので、各 automatic turn で同じ SFX を最大 1 回ずつ出せる。model 内の `sounds { move <selector> -> sfx <name> }` / `sounds { cantmove <selector> -> sfx <name> }` は、同じ puzzle scope の最終 catalog に対して selector を解決し、lowering 後の rewrite alternative が対象 object の `Move` write または blocked move に対応するときだけ、その rule に `sfx` emission を付ける。remove+add は move sound の対象外。
+puzzle rule でも `win`、`restart`、`next_level`、`again`、`message`、`sfx`、`goto` / `start` を effect として出せる。`win` はその turn の `win_conditions` を true として扱う clear outcome effect で、`set win_conditions = true` の sugar に近い。model rules では `restart -> restart` が semantic input `restart` を model restart effect に接続する rule になる。model rules 内に `restart` input handler がない場合は、この default handler が暗黙に追加される。scene key dispatch は `keys { q -> level_select }` と `routine level_select { goto level_select }` で書く。scene 側で restart / level navigation に介入したい場合は、`board.restart` や `playing.next_level` のような target effect を明示する。これは通常進行の書き方ではなく、ユーザー操作や特殊 flow のための escape hatch である。`[ Goal Box ] -> next_level` と `if win_conditions -> next_level` は board transition の結果として、所有 component/runtime に level advance effect を渡す。`again` は現在の turn を commit した後、runtime に no-input follow-up turn を要求する。`again` が再実行するのは直前の key / semantic input ではなく、同じ puzzle target の rule entrypoint である。したがって follow-up turn では input guard は成立しない。自動 turn は最大 256 回で止まり、`cancel` が出た場合はその自動 turn だけを取り消して停止する。standalone HTML では follow-up turn を `defaultAgainMs` 間隔で実行し、未指定時は 120ms を使う。`again_interval = 100ms` や `again_interval = 0.1s` で変更できる。各 turn の `sfx` / `message` emissions は別 snapshot として公開する。`[ Player Goal ] -> message "Found"` と `[ Player Box ] -> message hint` は popup message effect を渡し、既定で `default_wait_time` だけ後続 effect / 後続 rule segment を待たせる。`[ Player | Box | ] -> [ | Player | Box ] sfx push` は rule が match したときに named SFX を再生する effect を渡す。同じ turn 内で同じ named SFX が複数回出ても再生 event は 1 回にまとめる。`again` の follow-up は別 turn なので、各 automatic turn で同じ SFX を最大 1 回ずつ出せる。model 内の `sounds { move <selector> -> sfx <name> }` / `sounds { cantmove <selector> -> sfx <name> }` は、同じ puzzle scope の最終 catalog に対して selector を解決し、lowering 後の rewrite alternative が対象 object の `Move` write または blocked move に対応するときだけ、その rule に `sfx` emission を付ける。remove+add は move sound の対象外。
 
 level list は `level_menu` または明示的な `for level in levels` projection で表す。`for` は単なる layout projection であり、cursor 移動や confirm 動作は所有しない。
 
@@ -825,6 +825,9 @@ object vocabulary は `layers { ... }` の右辺から作る。`@Name` は displ
 
 rewrite cell の空欄は「未指定」。何も object がないことは意味しない。
 
+RHS cell が `=` だけなら、対応する LHS cell へ parse/lowering 時に展開する。
+`=` は RHS 専用で、LHS / condition pattern には置けず、同じ cell で他 token と混ぜられない。
+
 ```txt
 input directions [ Player ] -> [ > Player ]
 move
@@ -874,10 +877,10 @@ player:blue
 pattern では selector を使える。
 
 ```txt
-[ player:* | player:red | player:color ]
+[ player:* | player:red | player:color | *:red ]
 ```
 
-`player:*` は `player` の全 variants を明示的に選ぶ。variant を持つ schema object では、裸の `player` は全 variants の省略形としては使わない。複数 tag slot の schema では `Box:red:*` や `Box:*:wood` のように、未制約 slot を `*` で明示する。
+`player:*` は `player` の全 variants を明示的に選ぶ。`*:<tag>` は schema family をまたいで、その tag value または tag set に一致する variants を選ぶ。rewrite 右辺の `*:<tag>` は、左辺で一致した family wildcard occurrence の concrete object と同じ schema family / tag slot の target tag variant へ写像する。variant を持つ schema object では、裸の `player` は全 variants の省略形としては使わない。複数 tag slot の schema では `Box:red:*` や `Box:*:wood` のように、未制約 slot を `*` で明示する。
 
 schema selector の slot が同じ puzzle 内の `var` / `const` 名であり、tag value や
 tag set 名と衝突しない場合、その slot は dynamic selector になる。たとえば

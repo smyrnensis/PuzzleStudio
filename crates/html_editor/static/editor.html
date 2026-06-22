@@ -5,9 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>PuzzleStudio Editor</title>
     <link rel="icon" type="image/svg+xml" href="favicon.svg">
-    <script src="editor_boot.js?v=screen-color-picker"></script>
+    <script src="editor_boot.js?v=parallel-diagnostics"></script>
     <link rel="stylesheet" href="renderer.css">
-    <link rel="stylesheet" href="editor.css">
+    <link rel="stylesheet" href="editor.css?v=source-line-numbers-tab-unsaved"></script>
     <style id="gameStyle"></style>
   </head>
   <body>
@@ -151,6 +151,7 @@
             </div>
           </div>
           <div id="sourceEditorWrap" class="source-editor-wrap">
+            <pre id="sourceLineNumbers" class="source-line-numbers" aria-hidden="true"></pre>
             <pre id="sourceHighlight" class="source-highlight" aria-hidden="true"></pre>
             <textarea id="sourceEditor" spellcheck="false" autocomplete="off" autocapitalize="off"></textarea>
           </div>
@@ -256,12 +257,6 @@
           </div>
           <div id="docsPanel" class="docs-panel" hidden>
             <!-- PUZZLESTUDIO_EDITOR_DOCS -->
-          </div>
-          <div id="levelEmptyPane" class="tool-empty-pane" hidden>
-            <div class="tool-empty-actions" aria-label="Create level">
-              <button id="addEmptyLevel2dButton" class="tool-empty-action-button" type="button">Add 2D level</button>
-              <button id="addEmptyLevel3dButton" class="tool-empty-action-button" type="button">Add 3D level</button>
-            </div>
           </div>
           <div id="levelBuilder" class="level-builder" hidden>
             <div class="level-controls">
@@ -1172,12 +1167,12 @@
     <script src="renderer.js"></script>
     <script src="sound-generator.js"></script>
     <script src="editor_dom.js"></script>
-    <script src="editor_workspace.js?v=desktop-new-puzzle-source"></script>
-    <script src="editor_source.js?v=highlight-unavailable-status"></script>
+    <script src="editor_workspace.js?v=desktop-new-puzzle-tab-unsaved-sync"></script>
+    <script src="editor_source.js?v=source-line-numbers"></script>
     <script src="puzzle3_visual_core.js"></script>
     <script src="editor_level3d.js"></script>
     <script src="editor_workbench.js"></script>
-    <script src="editor.js?v=preview-runtime-embed"></script>
+    <script src="editor.js?v=parallel-diagnostics"></script>
     <script src="editor_sprite.js"></script>
     <script src="editor_sprite3d.js?v=sprite3d-preview-base-zoom"></script>
     <script src="editor_sounds.js"></script>

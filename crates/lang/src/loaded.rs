@@ -144,6 +144,7 @@ pub enum RuleEffect {
     Wait { milliseconds: u64 },
     WaitAnimation,
     Message { text: String, literal: bool },
+    Scene(SceneEffect),
 }
 
 #[derive(Clone, Debug, Default)]

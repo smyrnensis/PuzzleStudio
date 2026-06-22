@@ -91,17 +91,25 @@ fn expand_structural_sugar(lines: &[String]) -> Result<Vec<String>, DiagnosticRe
             continue;
         }
 
-        let split_semicolons = !block_stack.iter().any(|block| ascii_sensitive_block(block));
-        if !split_semicolons && ascii_row_contains_brace(line) {
-            return Err(parse_error(line, "ASCII rows cannot contain braces"));
-        }
-        for piece in split_structural_line(line, split_semicolons)? {
-            update_structural_block_stack(&piece, &mut block_stack);
-            expanded.push(piece);
-        }
+        expanded.extend(expand_structural_source_line(line, &mut block_stack)?);
     }
 
     Ok(expanded)
+}
+
+fn expand_structural_source_line(
+    line: &str,
+    block_stack: &mut Vec<String>,
+) -> Result<Vec<String>, DiagnosticReport> {
+    let split_semicolons = !block_stack.iter().any(|block| ascii_sensitive_block(block));
+    if !split_semicolons && ascii_row_contains_brace(line) {
+        return Err(parse_error(line, "ASCII rows cannot contain braces"));
+    }
+    let pieces = split_structural_line(line, split_semicolons)?;
+    for piece in &pieces {
+        update_structural_block_stack(piece, block_stack);
+    }
+    Ok(pieces)
 }
 
 fn ascii_sensitive_block(block: &str) -> bool {
@@ -248,84 +256,98 @@ fn normalize_brace_blocks(lines: &[String]) -> Result<Vec<String>, DiagnosticRep
     let mut levels_brace_depth = 0i32;
 
     for line in lines {
-        if line == "}" {
-            normalized.push("}".to_string());
-            if levels_brace_depth > 0 {
-                levels_brace_depth -= 1;
-            }
-            continue;
-        }
-
-        if let Some(rest) = line.strip_prefix('}') {
-            let rest = rest.trim_start();
-            match rest {
-                "else" => normalized.push("else".to_string()),
-                "else {" => normalized.push("else".to_string()),
-                "else{" => normalized.push("else".to_string()),
-                rest if rest.starts_with("->") => {
-                    normalized.push("}".to_string());
-                    normalized.push(rest.to_string());
-                }
-                _ => {
-                    return Err(parse_error(
-                        line,
-                        "closing brace must be alone or followed by else or ->",
-                    ));
-                }
-            }
-            continue;
-        }
-
-        if line == "else {" {
-            normalized.push("else".to_string());
-            continue;
-        }
-
-        if line == "{" {
-            normalized.push("{".to_string());
-            continue;
-        }
-
-        if let Some(header) = line.strip_suffix('{') {
-            let header = header.trim_end();
-            if header.is_empty() {
-                return Err(parse_error(
-                    line,
-                    "opening brace must follow a block header",
-                ));
-            }
-            let header_tokens = split_header_tokens(header);
-            let is_levels_header = is_levels_header(&header_tokens);
-            let preserve_level_header = levels_brace_depth > 0
-                && !starts_inline_block(&header_tokens, header)
-                || matches!(header_tokens.as_slice(), ["level", ..]);
-            if header.ends_with("->") {
-                normalized.push(format!("{header} {{"));
-                continue;
-            }
-            if preserve_level_header {
-                normalized.push(format!("{header} {{"));
-                if levels_brace_depth > 0 || is_levels_header {
-                    levels_brace_depth += 1;
-                }
-                continue;
-            }
-            normalized.push(format!("{header} {{"));
-            if levels_brace_depth > 0 || is_levels_header {
-                levels_brace_depth += 1;
-            }
-            continue;
-        }
-
-        let structural_view = strip_inline_scratch_blocks(line)?;
-        if structural_view.contains('{') || structural_view.contains('}') {
-            return Err(parse_error(line, "braces must be used at block boundaries"));
-        }
-
-        normalized.push(line.clone());
+        normalize_brace_block_line(line, &mut levels_brace_depth, &mut normalized)?;
     }
 
     Ok(normalized)
+}
+
+fn normalize_brace_block_line(
+    line: &str,
+    levels_brace_depth: &mut i32,
+    normalized: &mut Vec<String>,
+) -> Result<(), DiagnosticReport> {
+    if line == "}" {
+        normalized.push("}".to_string());
+        if *levels_brace_depth > 0 {
+            *levels_brace_depth -= 1;
+        }
+        return Ok(());
+    }
+
+    if let Some(rest) = line.strip_prefix('}') {
+        let rest = rest.trim_start();
+        match rest {
+            "else" => {
+                normalized.push("}".to_string());
+                normalized.push("else".to_string());
+            }
+            "else {" | "else{" => {
+                normalized.push("}".to_string());
+                normalized.push("else {".to_string());
+            }
+            rest if rest.starts_with("->") => {
+                normalized.push("}".to_string());
+                normalized.push(rest.to_string());
+            }
+            _ => {
+                return Err(parse_error(
+                    line,
+                    "closing brace must be alone or followed by else or ->",
+                ));
+            }
+        }
+        return Ok(());
+    }
+
+    if line == "else {" {
+        normalized.push("else {".to_string());
+        return Ok(());
+    }
+
+    if line == "{" {
+        normalized.push("{".to_string());
+        return Ok(());
+    }
+
+    if let Some(header) = line.strip_suffix('{') {
+        let header = header.trim_end();
+        if header.is_empty() {
+            return Err(parse_error(
+                line,
+                "opening brace must follow a block header",
+            ));
+        }
+        let header_tokens = split_header_tokens(header);
+        let is_levels_header = is_levels_header(&header_tokens);
+        let preserve_level_header = *levels_brace_depth > 0
+            && !starts_inline_block(&header_tokens, header)
+            || matches!(header_tokens.as_slice(), ["level", ..]);
+        if header.ends_with("->") {
+            normalized.push(format!("{header} {{"));
+            return Ok(());
+        }
+        if preserve_level_header {
+            normalized.push(format!("{header} {{"));
+            if *levels_brace_depth > 0 || is_levels_header {
+                *levels_brace_depth += 1;
+            }
+            return Ok(());
+        }
+        normalized.push(format!("{header} {{"));
+        if *levels_brace_depth > 0 || is_levels_header {
+            *levels_brace_depth += 1;
+        }
+        return Ok(());
+    }
+
+    let structural_view = strip_inline_scratch_blocks(line)?;
+    if structural_view.contains('{') || structural_view.contains('}') {
+        return Err(parse_error(line, "braces must be used at block boundaries"));
+    }
+
+    normalized.push(line.to_string());
+    Ok(())
 }
 
 fn is_levels_header(tokens: &[&str]) -> bool {
@@ -496,6 +518,8 @@ impl SourceContext {
 pub(crate) fn scan_source_context(source: &str) -> SourceContext {
     let mut context = SourceContext::default();
     let mut block_stack = Vec::<SourceScope>::new();
+    let mut structural_block_stack = Vec::<String>::new();
+    let mut normalize_levels_brace_depth = 0i32;
     let mut offset = 0usize;
 
     for line in source.split_inclusive('\n') {
@@ -528,12 +552,20 @@ pub(crate) fn scan_source_context(source: &str) -> SourceContext {
             }
         }
 
-        if trimmed == "}" {
-            close_block_line(&mut block_stack);
-        } else if source_opens_block(trimmed, &tokens, current)
-            && let Some(opened) = opening_scope(trimmed, &tokens, current)
-        {
-            block_stack.push(opened);
+        for stack_line in source_context_stack_lines(
+            trimmed,
+            &mut structural_block_stack,
+            &mut normalize_levels_brace_depth,
+        ) {
+            let tokens = source_context_tokens(&stack_line);
+            let current = block_stack.last().copied();
+            if stack_line == "}" {
+                close_block_line(&mut block_stack);
+            } else if source_opens_block(&stack_line, &tokens, current)
+                && let Some(opened) = opening_scope(&stack_line, &tokens, current)
+            {
+                block_stack.push(opened);
+            }
         }
 
         context.lines.push(SourceContextLine {
@@ -550,6 +582,29 @@ pub(crate) fn scan_source_context(source: &str) -> SourceContext {
     context
 }
 
+fn source_context_stack_lines(
+    trimmed: &str,
+    structural_block_stack: &mut Vec<String>,
+    normalize_levels_brace_depth: &mut i32,
+) -> Vec<String> {
+    if trimmed.is_empty() {
+        return Vec::new();
+    }
+
+    let mut normalized = Vec::new();
+    let expanded = match expand_structural_source_line(trimmed, structural_block_stack) {
+        Ok(expanded) => expanded,
+        Err(_) => return Vec::new(),
+    };
+    for line in expanded {
+        if normalize_brace_block_line(&line, normalize_levels_brace_depth, &mut normalized).is_err()
+        {
+            return Vec::new();
+        }
+    }
+    normalized
+}
+
 fn source_line_role(
     current: Option<SourceScope>,
     trimmed: &str,
@@ -561,6 +616,9 @@ fn source_line_role(
             SourceLineRole::PlainAfterKeywordAssignmentLeft
         }
         Some(SourceScope::Level | SourceScope::UnbracedLevel) => SourceLineRole::Raw,
+        Some(SourceScope::VisualShapeEntry) if trimmed.ends_with('{') => {
+            SourceLineRole::PlainFirstToken
+        }
         Some(SourceScope::VisualShapeEntry) => SourceLineRole::Raw,
         Some(SourceScope::VisualShapeTable) if trimmed.ends_with('{') => {
             SourceLineRole::PlainFirstToken
@@ -729,6 +787,14 @@ fn opening_scope(line: &str, tokens: &[&str], current: Option<SourceScope>) -> O
     {
         return Some(SourceScope::VisualShapeEntry);
     }
+    if current == Some(SourceScope::Visuals) && line.ends_with('{') {
+        match tokens {
+            ["colors"] => return Some(SourceScope::VisualColorTable),
+            ["palettes"] => return Some(SourceScope::VisualPaletteTable),
+            ["shapes"] => return Some(SourceScope::VisualShapeTable),
+            [..] => return Some(SourceScope::VisualShapeEntry),
+        }
+    }
     if current == Some(SourceScope::Levels) {
         if matches!(tokens, ["legend"]) {
             return Some(SourceScope::Legend);
@@ -836,7 +902,7 @@ fn parse_error(line: &str, message: &str) -> DiagnosticReport {
 
 #[cfg(test)]
 mod tests {
-    use super::{scan_source_context, split_header_tokens, split_tokens};
+    use super::{logical_lines, scan_source_context, split_header_tokens, split_tokens};
 
     #[test]
     fn split_tokens_preserves_block_openers() {
@@ -850,6 +916,50 @@ mod tests {
         assert_eq!(split_header_tokens("level first {"), vec!["level", "first"]);
         assert_eq!(split_header_tokens("levels {"), vec!["levels"]);
         assert_eq!(split_header_tokens("{"), vec!["{"]);
+    }
+
+    #[test]
+    fn logical_lines_preserve_else_block_braces() {
+        let lines = logical_lines(
+            r#"
+rules {
+if some([ Gate:1{checked} ]) {
+[ Gate:1{checked} ] -> [ ]
+} else {
+[ Gate:1{checked} ] -> [ Gate:1 ]
+}
+}
+"#,
+        )
+        .unwrap();
+
+        assert!(lines.iter().any(|line| line == "else {"), "{lines:?}");
+        assert!(!lines.iter().any(|line| line == "else"), "{lines:?}");
+    }
+
+    #[test]
+    fn source_context_uses_parser_structural_lines_for_scope_stack() {
+        let source = r#"
+puzzle board {
+rules {
+if some([ Gate:1{checked} ]) {
+[ Gate:1{checked} ] -> [ ]
+} else {
+[ Gate:1{checked} ] -> [ Gate:1 ]
+}
+}
+on_level_start {
+}
+}
+"#;
+        let context = scan_source_context(source);
+        let lifecycle_line = context
+            .lines
+            .iter()
+            .find(|line| line.content.trim() == "on_level_start {")
+            .unwrap();
+
+        assert_eq!(lifecycle_line.scope, Some(super::SourceScope::Puzzle));
     }
 
     #[test]

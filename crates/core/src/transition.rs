@@ -241,6 +241,28 @@ fn apply_step(
                 Ok(ApplyOutcome::idle())
             }
         }
+        RuleStep::ConditionalBranch {
+            condition,
+            then_steps,
+            else_steps,
+        } => {
+            let selected_steps = if condition_accepts(game, condition, context, current) {
+                then_steps
+            } else {
+                else_steps
+            };
+            apply_block_once(
+                game,
+                selected_steps,
+                context,
+                current,
+                fired_rules,
+                patches,
+                commands,
+                collect_trace,
+                skip_visual_rules,
+            )
+        }
         RuleStep::Block {
             application,
             stop_condition,
@@ -272,6 +294,34 @@ fn apply_step(
                 skip_visual_rules,
             ),
         },
+        RuleStep::AfterTriggered { steps, then_steps } => {
+            let mut outcome = apply_block_once(
+                game,
+                steps,
+                context,
+                current,
+                fired_rules,
+                patches,
+                commands,
+                collect_trace,
+                skip_visual_rules,
+            )?;
+            if outcome.fired && !outcome.cancelled {
+                let then_outcome = apply_block_once(
+                    game,
+                    then_steps,
+                    context,
+                    current,
+                    fired_rules,
+                    patches,
+                    commands,
+                    collect_trace,
+                    skip_visual_rules,
+                )?;
+                outcome.merge(then_outcome);
+            }
+            Ok(outcome)
+        }
         RuleStep::LocalFrame { frame, steps } => {
             let scoped_context = TransitionContext {
                 local_frame: Some(frame),
@@ -452,10 +502,10 @@ fn apply_block_until_stable(
         if !pass_outcome.fired {
             break;
         }
+        fired_any = true;
         if current.hash() == before_hash && *current == before {
             break;
         }
-        fired_any = true;
         if !seen_states.insert(current) {
             break;
         }
@@ -1046,22 +1096,18 @@ fn apply_until_stable(
             patch.apply_in_place(game, current)?
         };
         if !changed {
+            fired_rules.push(rule.id);
+            fired = true;
+            if collect_trace {
+                patches.push(patch);
+            }
             if cancels {
-                fired_rules.push(rule.id);
-                if collect_trace {
-                    patches.push(patch);
-                }
                 return Ok(ApplyOutcome {
                     fired: true,
                     cancelled: true,
                 });
             }
             if has_transition_command {
-                fired_rules.push(rule.id);
-                fired = true;
-                if collect_trace {
-                    patches.push(patch);
-                }
                 push_rule_commands(rule, commands);
             }
             continue;

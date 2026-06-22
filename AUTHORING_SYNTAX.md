@@ -761,7 +761,7 @@ move
 
 `routine @name` は display-only assertion 付き routine を定義する。中に normal rule や normal rule with display effect が混ざるとエラーになる。`routine display <name>` は同じ意味の明示形。旧 `rule @name` / `rule display <name>` は読まない。
 
-routine block の application はデフォルトで `repeat`。
+routine block の application はデフォルトで `once`。
 
 ```txt
 routine slide {
@@ -770,7 +770,7 @@ move
 }
 ```
 
-`routine <name> repeat` は routine block 全体の application。block 内の statement sequence を、block 全体が変化しなくなるまで繰り返す。
+`routine <name> repeat` は routine block 全体の application を明示的に `repeat` にする。block 内の statement sequence を、block 全体が変化しなくなるまで繰り返す。
 
 rewrite 行も application を持つ。plain rewrite のデフォルトも `repeat` で、必要なら行ごとに `once` / `once_all` / `once_per_level` / `repeat` を明示できる。
 
@@ -781,7 +781,7 @@ once input directions [ Fire | Grass ] -> [ Fire | Fire ]
 }
 ```
 
-この例は「各行は1回適用、block 全体は変化しなくなるまで反復」。一方で plain rewrite にすると、各行自体も変化しなくなるまで適用され、そのうえで block 全体も変化しなくなるまで反復される。
+この例は「各行は1回適用、block 全体は変化しなくなるまで反復」。`repeat` を書かない routine では、block 全体は1回だけ実行される。一方で plain rewrite にすると、その rewrite 行自体は変化しなくなるまで適用される。
 
 rewrite-level `repeat` は、同じ concrete rewrite rule の match origin がなくなるまで繰り返す。実行順は row-major order。実装は単純な単一 component / fixed offset rule では dirty-origin delta を使い、それ以外の矩形 pattern、可変 gap、離散 pattern では全 origin を再検査する。
 
@@ -832,17 +832,16 @@ set moves += 1
 }
 ```
 
-名前付き rule effect は puzzle 内の `effect <name> { ... }` で定義できる。これは新しい core 実行概念ではなく、既存の rule effect 列への authoring macro として展開される。body には `cancel`、`win`、`restart`、`next_level`、`again`、`sfx <name>`、`message <text>`、var update などを書ける。effect 名を statement として直接書くか、`if <condition> -> <name>`、rewrite suffix の `<name>` から呼べる。
+effect 文や follow-up rule は `routine` にまとめられる。rewrite suffix の `<routine>` は、rewrite statement 本体が LHS match によって trigger された場合だけ、その後に 1 回呼ばれる。plain rewrite は default `repeat` として安定するまで評価され、suffix routine は repeat 全体が一度でも trigger された後に実行される。省略時の routine block は `once` なので、suffix routine の中身は通常1回だけ実行される。RHS が state 差分を作らない場合でも、LHS が match すれば trigger として扱う。
 
 ```txt
-effect clear_feedback {
+routine clear_feedback once {
 sfx clear
 message "Clear"
 next_level
 }
 
 rules {
-if win_conditions -> clear_feedback
 [ Goal Box ] -> [ Goal Box ] clear_feedback
 }
 ```
@@ -1170,6 +1169,14 @@ once right [ Player ] [ Bird ] -> [ Player ] [ ]
 
 左辺と右辺は同じ block 数、同じ cell / `...` 配置でなければならない。
 
+右辺 cell に `=` だけを書くと、対応する左辺 cell をそのまま書いたものとして扱う。
+これは「この cell は変えない」ことを短く書くための sugar で、左辺や condition
+pattern には使えず、同じ cell 内で他の token と混ぜられない。
+
+```txt
+once [ A | B ] -> [ = | C ]
+```
+
 ### Rectangular Blocks
 
 block 内の `;` は行区切りとして扱う。
@@ -1209,7 +1216,7 @@ once right [ Laser | ... | Target ] -> [ Laser | ... | Ash ]
 schema object は selector として使える。
 
 ```txt
-[ player:* | player:red | player:color | marker:left ]
+[ player:* | player:red | player:color | marker:left | *:left ]
 ```
 
 意味:
@@ -1219,9 +1226,12 @@ player:*      = player の全 variants
 player:red    = color が red の player
 player:color  = color tag set 上の任意の player
 marker:left   = facing tag set の値 left を持つ marker
+*:left        = family をまたいで left tag value を持つ全 variants
 ```
 
 variant を持つ schema object では、裸の `player` は全 variants の省略形としては使わない。全 variants を指定するときは `player:*` と書く。複数 tag slot の schema では `Box:red:*` や `Box:*:wood` のように、未制約 slot を `*` で明示する。
+
+rewrite 右辺で `*:B` のような family wildcard selector を使うと、左辺で一致した `*:A` などの concrete object と同じ schema family の `B` variant へ置き換える。
 
 同じ selector が rewrite 左辺と右辺に出る場合、右辺は左辺で一致した concrete object を保持する。
 
@@ -1653,7 +1663,7 @@ top-level に `puzzle sokoban { ... }` を定義し、同名の `scene sokoban` 
 
 scene は 2D / 3D model の違いを直接所有しない。scene が所有するのは root layout、component tree、入力、遷移で、model の違いは model window component に閉じる。`layout { ... }` 直下に component を改行で並べる形は、暗黙の `column` として扱う。作者は通常、細かい幅・高さ・gap を書かず、どの component があり、どの選択肢が縦積み・横並び・matrix なのかを書く。root scene の論理サイズ、標準 gap、文字・button metrics は default / theme / renderer が持つ。
 
-`choice` は方向キー・ゲームパッドで選ばれる主選択肢、`button` は click/tap や明示 key binding で押す補助操作である。標準 UI focus cursor に入るのは `choice` だけで、`button` は入らない。`text` / `title` / `subtitle` は cell を占有するが選択対象ではない。`row` は children を横に、`column` / `box` は縦に連結して論理 grid を作る。方向入力は同じ行または同じ列の次の `choice` にだけ移動し、欠けている cell へ斜めに補正しない。Enter/Space は focused choice を実行する。scene はデフォルトで input を component 群へ broadcast し、各 component が関係する input だけに反応する。これは UI focus であり、puzzle の cursor movement ではない。
+`choice` は方向キー・ゲームパッドで選ばれる主選択肢、`button` は click/tap や明示 key binding で押す補助操作である。標準 UI focus cursor に入るのは `choice` だけで、`button` は入らない。`text` / `title` / `subtitle` は cell を占有するが選択対象ではない。`row` は children を横に、`column` / `box` は縦に連結して論理 grid を作る。方向入力は同じ行または同じ列の次の `choice` にだけ移動し、欠けている cell へ斜めに補正しない。Enter/Space/x は focused choice を実行する。scene はデフォルトで input を component 群へ broadcast し、各 component が関係する input だけに反応する。これは UI focus であり、puzzle の cursor movement ではない。
 
 renderer は component を sizing class で扱う。`title` / `subtitle` / `text` / `button` は flow content、`puzzle` / `puzzle3` / `frame` は ratio content、`level_menu` / `menu` / `for` は collection content、`row` / `column` / `box` は container である。ratio content は割り当てられた slot 内で aspect ratio を守って contain される。`size` / `gap` / `align` は既存ファイル向けに読めるが、新しい例では default に任せる。
 
@@ -1867,7 +1877,7 @@ button "Title" -> goto title
 }
 ```
 
-`level_menu` は level 選択用 component なので、`up` / `down` / `left` / `right` / `enter` の cursor 動作と、多すぎる項目の scroll を所有する。通常は key binding を書かなくてよい。既定では `w/a/s/d` と arrow keys が移動し、Enter/Space が選択 level を開始する。これは `level_menu` template の主動作なので、通常 `choose_level` transition のような中継は書かない。`level_menu` は inline source や `->` effect を取らない。表示する level の絞り込みは scene の `resources { levels ... }` で指定する。
+`level_menu` は level 選択用 component なので、`up` / `down` / `left` / `right` / `enter` の cursor 動作と、多すぎる項目の scroll を所有する。通常は key binding を書かなくてよい。既定では `w/a/s/d` と arrow keys が移動し、Enter/Space/x が選択 level を開始する。これは `level_menu` template の主動作なので、通常 `choose_level` transition のような中継は書かない。`level_menu` は inline source や `->` effect を取らない。表示する level の絞り込みは scene の `resources { levels ... }` で指定する。
 
 この構文では旧 `show index`、`columns <n>`、裸の `wrap`、`action <name>` は読まない。`level_menu` を選んだ時点で enter は選択 level 開始を意味する。
 
@@ -1912,7 +1922,7 @@ button click も `button "Play" -> input confirm` のように semantic input �
 my_restart -> restart
 ```
 
-model `rules` の `<input> -> <effect>` は `if input == <input> { <effect> }` の sugar。model rules 内に `restart` input handler がなければ、default として `restart -> restart` が追加される。scene key dispatch は `rules` ではなく `keys` と `routine` で書く。
+model `rules` の `<input> -> <effect>` は `if input == <input> { <effect> }` の sugar。model rules 内に `restart` input handler がなければ、default として `restart -> restart` が追加される。model rules から固定 scene node へ移る場合は `goto <scene>` または `start <scene>` を effect として直接書ける。scene key dispatch は `rules` ではなく `keys` と `routine` で書く。
 
 scene が level lifecycle に介入したい場合は、button や scene transition から `playing.restart` / `board.restart` のように target を明示する。これは通常進行の書き方ではなく、ユーザー操作や特殊 flow のための escape hatch である。
 

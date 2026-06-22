@@ -800,6 +800,9 @@ impl GameSession {
                         return self.resolve_turn_commands(game, commands, None);
                     }
                 }
+                RuleEffect::Scene(effect) => {
+                    self.apply_screen_effect(game, &effect, &HashMap::new())?;
+                }
             }
             index += 1;
         }
@@ -3885,6 +3888,58 @@ P
         assert_eq!(session.state(), &loaded.levels[1].initial_state);
     }
 
+    #[test]
+    fn puzzle_rule_goto_effect_changes_scene_after_turn() {
+        let loaded = parse_game(
+            r#"
+title puzzle_rule_goto_runtime
+puzzle default {
+layers {
+actor = Player
+}
+input open
+rules {
+if input == open -> goto menu
+}
+levels {
+legend {
+. = empty
+P = Player
+}
+level start {
+P
+}
+}
+}
+scene playing {
+state {
+board = puzzle default
+}
+layout {
+board
+}
+rules {
+step board
+}
+}
+scene menu {
+layout {
+text "Menu"
+}
+}
+"#,
+        )
+        .unwrap();
+        let mut session = GameSession::new(&loaded);
+        assert_eq!(session.screen(), "playing");
+
+        session
+            .apply_input(&loaded, input_named(&loaded, "open"))
+            .unwrap();
+
+        assert_eq!(session.screen(), "menu");
+    }
+
     fn transition_fixture() -> LoadedGame {
         parse_game(
             r#"
@@ -4624,6 +4679,55 @@ A#
             session.take_sound_events(),
             vec![SoundEvent::PlaySfx {
                 name: "bump".to_string()
+            }]
+        );
+    }
+
+    #[test]
+    fn standard_move_successful_intent_does_not_queue_cantmove_sfx() {
+        let loaded = parse_game(
+            r#"
+title model_successful_move_sfx_fixture
+sounds {
+sfx move seed=move01 type=jump
+sfx bump seed=bump01 type=hit
+}
+puzzle default {
+layers {
+actor = A
+}
+sounds {
+move A -> sfx move
+cantmove A -> sfx bump
+}
+rules {
+right [ A ] -> [ > A ]
+move
+}
+levels {
+legend {
+. = empty
+A = A
+}
+level start {
+A.
+}
+}
+}
+"#,
+        )
+        .unwrap();
+        let right = input_named(&loaded, "right");
+        let a = object_named(&loaded, "A");
+        let mut session = GameSession::new(&loaded);
+
+        session.apply_input(&loaded, right).unwrap();
+
+        assert!(session.state().has_object(&loaded.game, 1, 0, a));
+        assert_eq!(
+            session.take_sound_events(),
+            vec![SoundEvent::PlaySfx {
+                name: "move".to_string()
             }]
         );
     }

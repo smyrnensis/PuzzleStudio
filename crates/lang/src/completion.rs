@@ -380,13 +380,7 @@ fn collect_line_symbols(
             insert_identifier(&mut symbols.groups, name);
             collect_selector_specs(selectors, symbols);
         }
-        [name, "=", selectors @ ..] if scope == Some(SourceScope::Layers) => {
-            insert_identifier(&mut symbols.groups, name);
-            collect_selector_specs(selectors, symbols);
-        }
-        ["each", spec, ..] if scope == Some(SourceScope::Layers) => {
-            collect_object_spec(spec, symbols);
-        }
+        [..] if scope == Some(SourceScope::Layers) => collect_layer_row_symbols(tokens, symbols),
         [name, "=", ty] if scope == Some(SourceScope::Scratch) => {
             collect_scratch_spec(name, Some(*ty), symbols)
         }
@@ -399,6 +393,23 @@ fn collect_line_symbols(
         }
         [..] if scope == Some(SourceScope::Keys) => collect_keys(tokens, symbols),
         _ => {}
+    }
+}
+
+fn collect_layer_row_symbols(tokens: &[&str], symbols: &mut CompletionSymbols) {
+    match tokens {
+        [] => {}
+        [name, "=", selectors @ ..] => {
+            insert_identifier(&mut symbols.groups, name);
+            collect_selector_specs(selectors, symbols);
+        }
+        ["each", selectors @ ..] => {
+            collect_selector_specs(selectors, symbols);
+        }
+        ["for", ..] => {}
+        [selectors @ ..] => {
+            collect_selector_specs(selectors, symbols);
+        }
     }
 }
 
@@ -582,18 +593,6 @@ fn add_slot_items(
         SemanticCompletionSlot::Inputs => {
             add_named_items(items, symbols.inputs.iter(), CompletionKind::Input, "input")
         }
-        SemanticCompletionSlot::Commands => add_named_items(
-            items,
-            symbols.commands.iter(),
-            CompletionKind::Command,
-            "command",
-        ),
-        SemanticCompletionSlot::Effects => add_named_items(
-            items,
-            symbols.effects.iter(),
-            CompletionKind::Effect,
-            "effect",
-        ),
         SemanticCompletionSlot::ModelEffects => add_named_items(
             items,
             symbols.model_effects.iter(),
@@ -633,9 +632,6 @@ fn add_slot_items(
             CompletionKind::Puzzle,
             "puzzle",
         ),
-        SemanticCompletionSlot::Levels => {
-            add_named_items(items, symbols.levels.iter(), CompletionKind::Level, "level")
-        }
         SemanticCompletionSlot::SfxAssets => {
             add_named_items(items, symbols.sfx.iter(), CompletionKind::Sfx, "sfx")
         }
@@ -887,6 +883,36 @@ rules {
         let list = suggest_source_completions(source, cursor);
 
         assert!(list.items.iter().any(|item| item.label == "Player"));
+    }
+
+    #[test]
+    fn suggests_display_objects_from_unparsed_layer_rows() {
+        let source = r#"
+title complete_display_objects
+puzzle board {
+layers {
+@Count
+display @Badge
+each @Spark @Flash
+}
+rules {
+[ @
+"#;
+        let cursor = source.rfind("[ @").unwrap() + "[ @".len();
+        let list = suggest_source_completions(source, cursor);
+
+        assert!(list.items.iter().any(|item| {
+            item.label == "@Count" && item.kind == CompletionKind::Object && item.detail == "object"
+        }));
+        assert!(list.items.iter().any(|item| {
+            item.label == "@Badge" && item.kind == CompletionKind::Object && item.detail == "object"
+        }));
+        assert!(list.items.iter().any(|item| {
+            item.label == "@Spark" && item.kind == CompletionKind::Object && item.detail == "object"
+        }));
+        assert!(list.items.iter().any(|item| {
+            item.label == "@Flash" && item.kind == CompletionKind::Object && item.detail == "object"
+        }));
     }
 
     #[test]
@@ -1213,6 +1239,8 @@ puzzle board {
 layers {
 __legacy_layer_0 = Player
 }
+routine refresh once {
+}
 rules {
 
 }
@@ -1236,6 +1264,11 @@ rules {
                 .items
                 .iter()
                 .any(|item| item.label == "Player" && item.kind == CompletionKind::Object)
+        );
+        assert!(
+            list.items
+                .iter()
+                .any(|item| item.label == "refresh" && item.kind == CompletionKind::Routine)
         );
 
         let prefix_source = source.replacen("\n\n}", "\nin\n}", 1);

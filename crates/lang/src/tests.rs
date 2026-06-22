@@ -489,6 +489,47 @@ P
 }
 
 #[test]
+fn layers_define_objects_even_when_sprites_are_omitted() {
+    let source = r#"
+title sprite_omitted_is_transparent
+
+puzzle board {
+layers {
+actor = Player Hidden
+}
+
+levels {
+legend {
+. = empty
+P = Player
+H = Hidden
+}
+
+level start {
+PH
+}
+}
+
+rules {
+[ Hidden ] -> [ Hidden ]
+}
+}
+"#;
+
+    let loaded = parse_game(source).unwrap();
+    let hidden = object_named(&loaded, "Hidden");
+
+    assert!(loaded.game.object(hidden).is_some());
+    assert!(
+        loaded.levels[0]
+            .initial_state
+            .has_object(&loaded.game, 1, 0, hidden)
+    );
+    assert!(loaded.visuals.sprites.is_empty());
+    assert!(loaded.visuals.aliases.is_empty());
+}
+
+#[test]
 fn top_level_sounds_keeps_only_seed_and_settings() {
     let source = r#"
 title sounds_game
@@ -1083,6 +1124,49 @@ P
     assert!(effects.iter().any(|effect| {
         matches!(effect, RuleEffect::Wait { milliseconds } if *milliseconds == 25)
     }));
+}
+
+#[test]
+fn puzzle_rule_effect_accepts_goto_scene() {
+    let source = r#"
+title puzzle_rule_goto_effect
+
+puzzle default {
+layers {
+__legacy_layer_0 = Player
+}
+input open
+rules {
+if input == open -> goto menu
+}
+levels {
+legend {
+. = empty
+P = Player
+}
+level start {
+P
+}
+}
+}
+
+scene menu {
+layout {
+text "Menu"
+}
+}
+"#;
+
+    let loaded = parse_game(source).unwrap();
+    let effects = loaded
+        .rule_effects
+        .values()
+        .flat_map(|effects| effects.iter())
+        .collect::<Vec<_>>();
+    assert!(effects.iter().any(|effect| matches!(
+        effect,
+        RuleEffect::Scene(SceneEffect::Goto { scene, params }) if scene == "menu" && params.is_empty()
+    )));
 }
 
 #[test]
@@ -2815,6 +2899,46 @@ B
 }
 
 #[test]
+fn scratch_names_can_use_direction_glyph_colon_parts() {
+    let source = r#"
+title glyph_qualified_scratch
+
+puzzle default {
+layers {
+__legacy_layer_0 = Marker
+__legacy_layer_1 = Box
+}
+empty .
+
+scratch {
+push:>
+pull:<
+rise:^
+fall:v
+}
+
+legend B = Box
+
+rules {
+once [ Box ] -> [ Box{push:> pull:< rise:^ fall:v} ]
+once [ Box{push:> pull:< rise:^ fall:v} no Marker ] -> [ Box Marker ]
+}
+
+level start {
+B
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    let moved =
+        transition_state(&loaded.game, &loaded.levels[0].initial_state, InputId(0)).unwrap();
+    let marker = object_named(&loaded, "Marker");
+
+    assert!(moved.has_object(&loaded.game, 0, 0, marker));
+    assert!(moved.slot_scratch().iter().all(Vec::is_empty));
+}
+
+#[test]
 fn qualified_scratch_names_can_use_colons() {
     let source = r#"
 title qualified_scratch
@@ -3385,6 +3509,18 @@ PBK.
                 | RuleStep::Block { steps, .. }
                 | RuleStep::LocalFrame { steps, .. } => {
                     count_steps(steps, rules, object_sets);
+                }
+                RuleStep::ConditionalBranch {
+                    then_steps,
+                    else_steps,
+                    ..
+                } => {
+                    count_steps(then_steps, rules, object_sets);
+                    count_steps(else_steps, rules, object_sets);
+                }
+                RuleStep::AfterTriggered { steps, then_steps } => {
+                    count_steps(steps, rules, object_sets);
+                    count_steps(then_steps, rules, object_sets);
                 }
             }
         }
@@ -3974,6 +4110,106 @@ P.
     let error = parse_game(source).unwrap_err().to_string();
 
     assert!(error.contains("on_level_clear cannot depend on input"));
+}
+
+#[test]
+fn independent_lifecycle_lowering_errors_are_reported_together() {
+    let source = r#"
+title multiple_lifecycle_errors
+
+puzzle default {
+layers {
+actor = Player
+}
+layers {
+__legacy_layer_0 = Player actor
+}
+legend {
+. = empty
+P = Player
+}
+
+on_level_start {
+input directions [ Player | ] -> [ | Player ]
+}
+
+on_level_clear {
+input directions [ Player | ] -> [ | Player ]
+}
+
+rules {
+
+}
+
+level start {
+P.
+}
+}
+"#;
+    let report = parse_game(source).unwrap_err();
+    let messages = report
+        .diagnostics()
+        .iter()
+        .map(|diagnostic| diagnostic.message.as_str())
+        .collect::<Vec<_>>();
+
+    assert!(
+        messages.contains(&"on_level_start cannot depend on input"),
+        "{messages:?}"
+    );
+    assert!(
+        messages.contains(&"on_level_clear cannot depend on input"),
+        "{messages:?}"
+    );
+}
+
+#[test]
+fn independent_statement_parse_errors_are_reported_together() {
+    let source = r#"
+title multiple_statement_parse_errors
+
+puzzle default {
+layers {
+__legacy_layer_0 = Player
+}
+
+rules {
+action push
+do win
+banana split
+}
+
+levels {
+legend {
+. = empty
+P = Player
+}
+level start {
+P
+}
+}
+}
+"#;
+    let report = parse_game(source).unwrap_err();
+    let messages = report
+        .diagnostics()
+        .iter()
+        .map(|diagnostic| diagnostic.message.as_str())
+        .collect::<Vec<_>>();
+
+    assert!(
+        messages
+            .contains(&"`action` statements were removed; use explicit input guards and rewrites"),
+        "{messages:?}"
+    );
+    assert!(
+        messages.contains(&"`do` is obsolete; write the effect statement directly"),
+        "{messages:?}"
+    );
+    assert!(
+        messages.contains(&"unknown statement directive banana"),
+        "{messages:?}"
+    );
 }
 
 #[test]
@@ -5131,6 +5367,58 @@ B
 }
 
 #[test]
+fn puzzle_sprites_accept_sprite_names_that_are_css_color_names() {
+    let source = r##"
+title color_named_sprites
+
+puzzle default {
+layers {
+__legacy_layer_0 = red blue
+}
+legend r = red
+legend b = blue
+legend {
+. = empty
+}
+sprites {
+red #ff0000
+blue
+#0000ff
+}
+rules {
+
+}
+levels {
+level start
+rb
+}
+}
+"##;
+    let loaded = parse_game(source).unwrap();
+    let red = loaded
+        .visuals
+        .sprites
+        .iter()
+        .find(|sprite| sprite.name == "red")
+        .unwrap();
+    let blue = loaded
+        .visuals
+        .sprites
+        .iter()
+        .find(|sprite| sprite.name == "blue")
+        .unwrap();
+
+    match &red.kind {
+        VisualSpriteKind::Solid(color) => assert_eq!(color, "#ff0000"),
+        _ => panic!("red should be a solid sprite"),
+    }
+    match &blue.kind {
+        VisualSpriteKind::Solid(color) => assert_eq!(color, "#0000ff"),
+        _ => panic!("blue should be a solid sprite"),
+    }
+}
+
+#[test]
 fn puzzle_sprites_accept_line_style_solid_color_table_sprite() {
     let source = r##"
 title line_style_solid_color_table_sprite
@@ -5261,6 +5549,160 @@ B
 }
 
 #[test]
+fn puzzle_sprites_accept_line_style_tagged_ascii_sprite_after_pattern() {
+    let source = r##"
+title line_style_tagged_ascii_sprite
+
+puzzle default {
+tags {
+state = base movable
+}
+layers {
+__legacy_layer_0 = Box:state
+}
+legend B = Box:base
+legend {
+. = empty
+}
+sprites {
+Box:base
+#aaa
+0
+Box:movable
+#bbb
+0
+}
+rules {
+
+}
+levels {
+level start
+B
+}
+}
+"##;
+    let loaded = parse_game(source).unwrap();
+    let box_movable = loaded
+        .visuals
+        .sprites
+        .iter()
+        .find(|sprite| sprite.name == "Box-movable")
+        .unwrap();
+    match &box_movable.kind {
+        VisualSpriteKind::Ascii { pattern, colors } => {
+            assert_eq!(pattern.as_slice(), ["0".to_string()].as_slice());
+            assert!(
+                colors
+                    .iter()
+                    .any(|color| { color.token == '0' && color.color == "#bbb" })
+            );
+        }
+        _ => panic!("Box:movable should be an ascii sprite"),
+    }
+}
+
+#[test]
+fn puzzle_sprites_accept_schema_sprite_with_color_alias_row() {
+    let source = r##"
+title schema_sprite_color_alias_row
+
+puzzle default {
+tags {
+num = 1 2
+}
+layers {
+__legacy_layer_0 = Gate:num
+}
+legend 1 = Gate:1
+legend {
+. = empty
+}
+sprites {
+colors {
+Gate_color_1 = #111111
+Gate_color_2 = #222222
+}
+Gate:num
+Gate_color_1 Gate_color_2
+01
+10
+}
+rules {
+
+}
+levels {
+level start
+1
+}
+}
+"##;
+    let loaded = parse_game(source).unwrap();
+    let sprite = loaded
+        .visuals
+        .sprites
+        .iter()
+        .find(|sprite| sprite.name == "Gate-1")
+        .unwrap();
+
+    match &sprite.kind {
+        VisualSpriteKind::Ascii { pattern, colors } => {
+            assert_eq!(pattern.as_slice(), ["01".to_string(), "10".to_string()]);
+            assert!(
+                colors
+                    .iter()
+                    .any(|color| color.token == '0' && color.color == "#111111")
+            );
+            assert!(
+                colors
+                    .iter()
+                    .any(|color| color.token == '1' && color.color == "#222222")
+            );
+        }
+        _ => panic!("Gate:1 should be an ascii sprite"),
+    }
+}
+
+#[test]
+fn puzzle_sprites_do_not_parse_tagged_entry_header_as_transform() {
+    let source = r##"
+title tagged_sprite_header_not_transform
+
+puzzle default {
+tags {
+state = base
+}
+layers {
+__legacy_layer_0 = Box:state
+}
+legend B = Box:base
+legend {
+. = empty
+}
+sprites {
+Box:base
+#aaa
+0
+Box:movable
+#bbb
+0
+}
+rules {
+
+}
+levels {
+level start
+B
+}
+}
+"##;
+    let error = parse_game(source).unwrap_err().to_string();
+    assert!(
+        !error.contains("only translate:<direction>:<pixels> sprite transforms are supported"),
+        "{error}"
+    );
+}
+
+#[test]
 fn puzzle_sprites_reject_braces_in_ascii_rows() {
     let source = r##"
 title sprite_ascii_braces
@@ -5337,6 +5779,42 @@ P
         .unwrap();
     assert_eq!(player_sprite.offset.x, 2);
     assert_eq!(player_sprite.offset.y, -1);
+}
+
+#[test]
+fn puzzle_sprites_reject_malformed_translate_transform_as_transform() {
+    let source = r##"
+title malformed_translated_sprite
+
+puzzle default {
+layers {
+__legacy_layer_0 = Player
+}
+legend P = Player
+legend {
+. = empty
+}
+sprites {
+Player {
+#fff
+0
+translate:right
+}
+}
+rules {
+
+}
+levels {
+level start
+P
+}
+}
+"##;
+    let error = parse_game(source).unwrap_err().to_string();
+    assert!(
+        error.contains("translate transform missing pixel amount"),
+        "{error}"
+    );
 }
 
 #[test]
@@ -7099,6 +7577,266 @@ A
 }
 
 #[test]
+fn routine_default_application_runs_effect_statement_once() {
+    let source = r#"
+title routine_default_once
+
+puzzle default {
+layers {
+__legacy_layer_1 = A
+}
+empty .
+
+var count = 0
+
+legend A = A
+
+routine bump {
+count += 1
+}
+
+rules {
+bump
+}
+
+level start {
+A
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    let next = transition_state(&loaded.game, &loaded.levels[0].initial_state, InputId(0)).unwrap();
+
+    assert_eq!(next.visible_globals(), &[1]);
+}
+
+#[test]
+fn routine_default_application_runs_statement_list_once() {
+    let source = r#"
+title routine_default_statement_list_once
+
+puzzle default {
+layers {
+__legacy_layer_1 = A B C
+}
+empty .
+
+legend A = A
+legend B = B
+legend C = C
+
+routine advance {
+once [ B ] -> [ C ]
+once [ A ] -> [ B ]
+}
+
+rules {
+advance
+}
+
+level start {
+A
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    let next = transition_state(&loaded.game, &loaded.levels[0].initial_state, InputId(0)).unwrap();
+    let object_b = object_named(&loaded, "B");
+    let object_c = object_named(&loaded, "C");
+
+    assert!(next.has_object(&loaded.game, 0, 0, object_b));
+    assert!(!next.has_object(&loaded.game, 0, 0, object_c));
+}
+
+#[test]
+fn explicit_routine_repeat_runs_block_until_stable() {
+    let source = r#"
+title explicit_routine_repeat
+
+puzzle default {
+layers {
+__legacy_layer_1 = A B C
+}
+empty .
+
+legend A = A
+legend B = B
+legend C = C
+
+routine spread repeat {
+once right [ A | B ] -> [ A | A ]
+once right [ A | C ] -> [ A | B ]
+}
+
+rules {
+spread
+}
+
+level start {
+AC
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    let next = transition_state(&loaded.game, &loaded.levels[0].initial_state, InputId(0)).unwrap();
+    let object_a = object_named(&loaded, "A");
+
+    assert!(next.has_object(&loaded.game, 1, 0, object_a));
+}
+
+#[test]
+fn rewrite_suffix_calls_routine_after_rewrite_statement_triggers() {
+    let source = r#"
+title rewrite_suffix_after_call
+
+puzzle default {
+layers {
+__legacy_layer_0 = A B C D
+}
+empty .
+
+legend A = A
+legend B = B
+legend C = C
+legend D = D
+
+routine feedback once {
+[ C ] -> [ D ]
+}
+
+rules {
+[ A ] -> [ B ] feedback
+}
+
+level start {
+AC
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    let next = transition_state(&loaded.game, &loaded.levels[0].initial_state, InputId(0)).unwrap();
+    let object_b = object_named(&loaded, "B");
+    let object_d = object_named(&loaded, "D");
+
+    assert!(next.has_object(&loaded.game, 0, 0, object_b));
+    assert!(next.has_object(&loaded.game, 1, 0, object_d));
+}
+
+#[test]
+fn rewrite_suffix_after_call_uses_lhs_match_not_rhs_change() {
+    let source = r#"
+title rewrite_suffix_after_lhs_match
+
+puzzle default {
+layers {
+__legacy_layer_0 = A
+}
+empty .
+
+var count = 0
+
+legend A = A
+
+routine feedback once {
+count += 1
+}
+
+rules {
+[ A ] -> [ A ] feedback
+}
+
+level start {
+A
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    let next = transition_state(&loaded.game, &loaded.levels[0].initial_state, InputId(0)).unwrap();
+
+    assert_eq!(next.visible_globals(), &[1]);
+}
+
+#[test]
+fn rhs_keep_marker_preserves_matching_cell() {
+    let source = r#"
+title rhs_keep_marker
+
+puzzle default {
+layers {
+__legacy_layer_1 = A B C
+}
+empty .
+
+legend A = A
+legend B = B
+legend C = C
+
+rules {
+once [ A | B ] -> [ = | C ]
+}
+
+level start {
+AB
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    let next = transition_state(&loaded.game, &loaded.levels[0].initial_state, InputId(0)).unwrap();
+    let object_a = object_named(&loaded, "A");
+    let object_b = object_named(&loaded, "B");
+    let object_c = object_named(&loaded, "C");
+
+    assert!(next.has_object(&loaded.game, 0, 0, object_a));
+    assert!(!next.has_object(&loaded.game, 1, 0, object_b));
+    assert!(next.has_object(&loaded.game, 1, 0, object_c));
+}
+
+#[test]
+fn keep_marker_is_only_valid_as_whole_rhs_cell() {
+    let lhs_source = r#"
+title rhs_keep_marker_lhs_reject
+
+puzzle default {
+layers {
+__legacy_layer_1 = A B
+}
+empty .
+
+rules {
+[ = | B ] -> [ A | B ]
+}
+
+level start {
+AB
+}
+}
+"#;
+    let error = parse_game(lhs_source).unwrap_err().to_string();
+    assert!(error.contains("`=` is only valid as a RHS cell"));
+
+    let mixed_rhs_source = r#"
+title rhs_keep_marker_mixed_reject
+
+puzzle default {
+layers {
+__legacy_layer_1 = A B
+}
+empty .
+
+rules {
+[ A ] -> [ = B ]
+}
+
+level start {
+A
+}
+}
+"#;
+    let error = parse_game(mixed_rhs_source).unwrap_err().to_string();
+    assert!(error.contains("`=` RHS cell cannot contain other tokens"));
+}
+
+#[test]
 fn fix_default_applies_through_nested_blocks() {
     let source = r#"
 title fix_nested_block
@@ -8481,6 +9219,330 @@ B
 }
 
 #[test]
+fn for_statement_body_uses_balanced_brace_depth() {
+    let source = r#"
+title for_if_else_checked_scratch
+
+puzzle default {
+tags {
+gate_no = 1...5
+}
+scratch {
+checked
+}
+var locked_room_count = 1
+layers {
+gate = Gate:gate_no
+}
+empty .
+
+levels {
+legend 1 = Gate:1
+
+level start {
+1
+}
+}
+
+rules {
+for n in 1...5 {
+if some([ Gate:n{checked} ]) {
+if locked_room_count > n {
+locked_room_count -= n
+[ Gate:n{checked} ] -> [  ]
+} else {
+[ Gate:n{checked} ] -> [ Gate:n ]
+}
+}
+}
+}
+}
+"#;
+
+    let loaded = parse_game(source).unwrap();
+    let _ = transition_state(&loaded.game, &loaded.levels[0].initial_state, InputId(0)).unwrap();
+}
+
+#[test]
+fn inline_if_condition_accepts_inclusive_numeric_comparisons() {
+    let source = r#"
+title inclusive_compare_if
+
+puzzle default {
+var count = 2
+layers {
+__legacy_layer_0 = Marker
+__legacy_layer_1 = Flag
+__legacy_layer_2 = Box
+}
+empty .
+legend B = Box
+
+rules {
+if count >= 2 {
+[ Box no Marker ] -> [ Box Marker ]
+}
+if count <= 2 {
+[ Box no Flag ] -> [ Box Flag ]
+}
+}
+
+levels {
+level start
+B
+}
+}
+"#;
+
+    let loaded = parse_game(source).unwrap();
+    let next = transition_state(&loaded.game, &loaded.levels[0].initial_state, InputId(0)).unwrap();
+    let marker = object_named(&loaded, "Marker");
+    let flag = object_named(&loaded, "Flag");
+
+    assert!(next.has_object(&loaded.game, 0, 0, marker));
+    assert!(next.has_object(&loaded.game, 0, 0, flag));
+}
+
+#[test]
+fn routine_for_condition_accepts_inclusive_loop_binding_comparison() {
+    let source = r#"
+title routine_inclusive_loop_compare
+
+sounds {
+sfx bump seed=746670 type=jump
+}
+
+puzzle default {
+tags {
+gate_no = 1...5
+}
+scratch {
+checked
+}
+var locked_room_count = 1
+layers {
+gate = Gate:gate_no
+}
+empty .
+
+routine open_gate {
+for n in 1...5 {
+if some([ Gate:n{checked}]) {
+sfx bump
+if locked_room_count >= n {
+locked_room_count -= n
+[ Gate:n{checked} ] -> [  ]
+} else {
+[ Gate:n{checked} ] -> [ Gate:n ]
+}
+}
+}
+}
+
+rules {
+once [ Gate:1 ] -> [ Gate:1{checked} ]
+open_gate
+}
+
+levels {
+legend 1 = Gate:1
+
+level start {
+1
+}
+}
+}
+"#;
+
+    let loaded = parse_game(source).unwrap();
+    let next = transition_state(&loaded.game, &loaded.levels[0].initial_state, InputId(0)).unwrap();
+    let gate = object_named(&loaded, "Gate:1");
+
+    assert_eq!(next.visible_globals(), &[0]);
+    assert!(!next.has_object(&loaded.game, 0, 0, gate));
+}
+
+#[test]
+fn routine_if_without_else_uses_one_condition_snapshot_for_all_then_statements() {
+    let source = r#"
+title routine_if_without_else_condition_snapshot
+
+puzzle default {
+tags {
+gate_no = 1...5
+count_value = 0 1
+}
+scratch {
+checked
+}
+var locked_room_count = 1
+layers {
+gate = Gate:gate_no
+@count = @Count:count_value
+}
+empty .
+
+routine open_gate {
+for n in 1...5 {
+if some([ Gate:n{checked} ]) {
+if locked_room_count >= n {
+locked_room_count -= n
+[ @Count:* ] -> [ @Count:locked_room_count ]
+[ Gate:n{checked} ] -> [  ]
+}
+[ Gate:n{checked} ] -> [ Gate:n ]
+}
+}
+}
+
+rules {
+once [ Gate:1 ] -> [ Gate:1{checked} ]
+open_gate
+}
+
+levels {
+legend 1 = Gate:1
+legend c = @Count:1
+
+level start {
+1
+c
+}
+}
+}
+"#;
+
+    let loaded = parse_game(source).unwrap();
+    let next = transition_state(&loaded.game, &loaded.levels[0].initial_state, InputId(0)).unwrap();
+    let gate = object_named(&loaded, "Gate:1");
+    let count_zero = object_named(&loaded, "@Count:0");
+
+    assert_eq!(next.visible_globals(), &[0]);
+    assert!(!next.has_object(&loaded.game, 0, 0, gate));
+    assert!(next.has_object(&loaded.game, 0, 1, count_zero));
+}
+
+#[test]
+fn routine_if_without_else_uses_updated_global_for_later_dynamic_display_write() {
+    let source = r#"
+title routine_if_without_else_dynamic_display_update
+
+puzzle default {
+tags {
+gate_no = 1...5
+count_value = 0 1 2
+}
+scratch {
+checked
+}
+var locked_room_count = 2
+layers {
+gate = Gate:gate_no
+@count = @Count:count_value
+}
+empty .
+
+routine open_gate {
+for n in 1...5 {
+if some([ Gate:n{checked} ]) {
+if locked_room_count >= n {
+locked_room_count -= n
+[ @Count:* ] -> [ @Count:locked_room_count ]
+[ Gate:n{checked} ] -> [  ]
+}
+[ Gate:n{checked} ] -> [ Gate:n ]
+}
+}
+}
+
+rules {
+once [ Gate:1 ] -> [ Gate:1{checked} ]
+open_gate
+}
+
+levels {
+legend 1 = Gate:1
+legend c = @Count:2
+
+level start {
+1
+c
+}
+}
+}
+"#;
+
+    let loaded = parse_game(source).unwrap();
+    let next = transition_state(&loaded.game, &loaded.levels[0].initial_state, InputId(0)).unwrap();
+    let gate = object_named(&loaded, "Gate:1");
+    let count_one = object_named(&loaded, "@Count:1");
+
+    assert_eq!(next.visible_globals(), &[1]);
+    assert!(!next.has_object(&loaded.game, 0, 0, gate));
+    assert!(next.has_object(&loaded.game, 0, 1, count_one));
+}
+
+#[test]
+fn routine_for_condition_runs_inclusive_loop_binding_else_branch() {
+    let source = r#"
+title routine_inclusive_loop_compare_else
+
+sounds {
+sfx bump seed=746670 type=jump
+}
+
+puzzle default {
+tags {
+gate_no = 1...5
+}
+scratch {
+checked
+}
+var locked_room_count = 0
+layers {
+gate = Gate:gate_no
+}
+empty .
+
+routine open_gate {
+for n in 1...5 {
+if some([ Gate:n{checked} ]) {
+sfx bump
+if locked_room_count >= n {
+locked_room_count -= n
+[ Gate:n{checked} ] -> [  ]
+} else {
+[ Gate:n{checked} ] -> [ Gate:n ]
+}
+}
+}
+}
+
+rules {
+once [ Gate:1 ] -> [ Gate:1{checked} ]
+open_gate
+}
+
+levels {
+legend 1 = Gate:1
+
+level start {
+1
+}
+}
+}
+"#;
+
+    let loaded = parse_game(source).unwrap();
+    let next = transition_state(&loaded.game, &loaded.levels[0].initial_state, InputId(0)).unwrap();
+    let gate = object_named(&loaded, "Gate:1");
+
+    assert_eq!(next.visible_globals(), &[0]);
+    assert!(next.has_object(&loaded.game, 0, 0, gate));
+    assert!(next.slot_scratch().iter().all(Vec::is_empty));
+}
+
+#[test]
 fn schema_selector_can_read_current_integer_var_tag_value() {
     let source = r#"
 title dynamic_selector_var
@@ -8574,6 +9636,233 @@ BC
 }
 
 #[test]
+fn schema_selector_reads_var_updated_by_previous_statement_in_same_turn() {
+    let source = r#"
+title dynamic_selector_same_turn_update
+
+puzzle default {
+var count = 0
+
+tags {
+num = 0 1 2
+}
+
+layers {
+__legacy_layer_1 = Count:num
+}
+empty .
+
+legend {
+. = empty
+0 = Count:0
+}
+
+rules {
+count += 1
+once [ Count:* ] -> [ Count:count ]
+}
+
+level start {
+0
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    let next = transition_state(&loaded.game, &loaded.levels[0].initial_state, InputId(0)).unwrap();
+    let count_0 = object_named(&loaded, "Count:0");
+    let count_1 = object_named(&loaded, "Count:1");
+
+    assert_eq!(next.visible_globals(), &[1]);
+    assert!(!next.has_object(&loaded.game, 0, 0, count_0));
+    assert!(next.has_object(&loaded.game, 0, 0, count_1));
+}
+
+#[test]
+fn repeated_schema_selector_reads_var_updated_by_previous_statement_in_same_turn() {
+    let source = r#"
+title dynamic_selector_same_turn_update_repeated
+
+puzzle default {
+var count = 0
+
+tags {
+num = 0 1 2
+}
+
+layers {
+__legacy_layer_1 = Count:num
+}
+empty .
+
+legend {
+. = empty
+0 = Count:0
+}
+
+rules {
+count += 1
+[ Count:* ] -> [ Count:count ]
+}
+
+level start {
+0
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    let next = transition_state(&loaded.game, &loaded.levels[0].initial_state, InputId(0)).unwrap();
+    let count_0 = object_named(&loaded, "Count:0");
+    let count_1 = object_named(&loaded, "Count:1");
+
+    assert_eq!(next.visible_globals(), &[1]);
+    assert!(!next.has_object(&loaded.game, 0, 0, count_0));
+    assert!(next.has_object(&loaded.game, 0, 0, count_1));
+}
+
+#[test]
+fn schema_selector_rhs_uses_current_var_value() {
+    let source = r#"
+title dynamic_selector_rhs_current_value
+
+puzzle default {
+var count = 1
+
+tags {
+num = 0 1 2
+}
+
+layers {
+__legacy_layer_1 = Count:num
+}
+empty .
+
+legend {
+. = empty
+0 = Count:0
+}
+
+rules {
+once [ Count:* ] -> [ Count:count ]
+}
+
+level start {
+0
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    let next = transition_state(&loaded.game, &loaded.levels[0].initial_state, InputId(0)).unwrap();
+    let count_0 = object_named(&loaded, "Count:0");
+    let count_1 = object_named(&loaded, "Count:1");
+
+    assert_eq!(next.visible_globals(), &[1]);
+    assert!(!next.has_object(&loaded.game, 0, 0, count_0));
+    assert!(next.has_object(&loaded.game, 0, 0, count_1));
+}
+
+#[test]
+fn schema_selector_rhs_lowers_to_guarded_concrete_write() {
+    let source = r#"
+title dynamic_selector_rhs_lowering
+
+puzzle default {
+var count = 1
+
+tags {
+num = 0 1 2
+}
+
+layers {
+__legacy_layer_1 = Count:num
+}
+empty .
+
+legend {
+. = empty
+0 = Count:0
+}
+
+rules {
+once [ Count:* ] -> [ Count:count ]
+}
+
+level start {
+0
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    let count_global = loaded
+        .global_labels
+        .iter()
+        .find_map(|(global, label)| (label == "count").then_some(*global))
+        .unwrap();
+    let count_1 = object_named(&loaded, "Count:1");
+
+    let rules = loaded.game.rules();
+    assert!(rules.iter().any(|rule| {
+        rule.guards.iter().any(|guard| {
+            matches!(
+                guard,
+                Guard::GlobalEquals {
+                    global,
+                    value: 1
+                } if *global == count_global
+            )
+        }) && rule.writes.iter().any(|write| {
+            matches!(
+                write,
+                WriteOp::Add {
+                    object,
+                    ..
+                } if *object == count_1
+            )
+        })
+    }));
+}
+
+#[test]
+fn dynamic_selector_suffix_update_runs_once_after_rewrite_triggers() {
+    let source = r#"
+title dynamic_selector_same_rewrite_effect_order
+
+puzzle default {
+var count = 0
+
+tags {
+num = 0 1 2
+}
+
+layers {
+__legacy_layer_1 = Count:num
+}
+empty .
+
+legend {
+. = empty
+0 = Count:0
+}
+
+rules {
+[ Count:* ] -> [ Count:count ] count += 1
+}
+
+level start {
+0
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    let next = transition_state(&loaded.game, &loaded.levels[0].initial_state, InputId(0)).unwrap();
+    let count_0 = object_named(&loaded, "Count:0");
+    let count_1 = object_named(&loaded, "Count:1");
+
+    assert_eq!(next.visible_globals(), &[1]);
+    assert!(next.has_object(&loaded.game, 0, 0, count_0));
+    assert!(!next.has_object(&loaded.game, 0, 0, count_1));
+}
+
+#[test]
 fn schema_selector_out_of_domain_var_value_does_not_match() {
     let source = r#"
 title dynamic_selector_out_of_domain
@@ -8598,7 +9887,8 @@ C = Box:3
 }
 
 rules {
-once [ Box:count no Flag ] -> [ Box:count Flag ] count = 4
+once [ Box:count no Flag ] -> [ Box:count Flag ]
+count = 4
 }
 
 level start {
@@ -9161,6 +10451,117 @@ abx
     let loaded = parse_game(source).unwrap();
 
     assert!(loaded.is_goal_complete(&loaded.levels[0].initial_state));
+}
+
+#[test]
+fn family_wildcard_selector_matches_tag_across_schema_families() {
+    let source = r#"
+title family_wildcard_selector
+
+puzzle default {
+empty .
+
+tags {
+state = on off
+}
+
+layers {
+__legacy_layer_1 = Door:state Switch:state
+}
+
+legend d = Door:on
+legend s = Switch:on
+legend x = Door:off
+
+win_conditions = count(*:on) == 2
+
+rules {
+
+}
+
+level start {
+dsx
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+
+    assert!(loaded.is_goal_complete(&loaded.levels[0].initial_state));
+}
+
+#[test]
+fn family_wildcard_selector_maps_matching_family_on_rhs() {
+    let source = r#"
+title family_wildcard_rewrite
+
+puzzle default {
+empty .
+
+tags {
+state = A B
+}
+
+layers {
+__legacy_layer_1 = Door:state Switch:state
+}
+
+legend d = Door:A
+legend s = Switch:A
+
+rules {
+once [ *:A ] -> [ *:B ]
+}
+
+level start {
+ds
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    let next = transition_state(&loaded.game, &loaded.levels[0].initial_state, InputId(0)).unwrap();
+    let door_b = object_named(&loaded, "Door:B");
+    let switch_b = object_named(&loaded, "Switch:B");
+
+    assert!(next.has_object(&loaded.game, 0, 0, door_b));
+    assert!(next.has_object(&loaded.game, 1, 0, switch_b));
+}
+
+#[test]
+fn family_wildcard_rhs_allows_tag_set_and_group_name_overlap() {
+    let source = r#"
+title family_wildcard_group_tag_overlap
+
+puzzle default {
+empty .
+
+tags {
+state = stack movable
+}
+
+layers {
+__legacy_layer_1 = Crate:state
+}
+
+groups {
+movable = Crate:movable
+}
+
+legend c = Crate:stack
+
+rules {
+once [ *:stack ] -> [ *:movable ]
+}
+
+level start {
+c
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    let next = transition_state(&loaded.game, &loaded.levels[0].initial_state, InputId(0)).unwrap();
+    let crate_movable = object_named(&loaded, "Crate:movable");
+
+    assert!(next.has_object(&loaded.game, 0, 0, crate_movable));
 }
 
 #[test]

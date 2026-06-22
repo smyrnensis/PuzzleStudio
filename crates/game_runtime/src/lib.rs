@@ -3,7 +3,14 @@ use puzzle_3d::{
     transition_program_with_local_frame as transition_program_with_local_frame3,
     transition_program_without_input_with_local_frame,
 };
-use puzzle_core::{InputId, ObjectId, State as PuzzleState, transition_program};
+use puzzle_core::{
+    ComparisonOp, CompiledGame, ConditionDef, ConditionId, ConditionValueKind, Effect, GapTerm,
+    GlobalId, GlobalUpdateOp, Guard, InputId, LayerId, LocalFrame, LocalFrameExtent, MatchCell,
+    ObjectDef, ObjectId, ObjectSetMatcher, ObjectSetScratchPattern, Offset, Pattern,
+    PatternComponent, Rule, RuleApplication, RuleCondition, RuleId, RuleStep, ScratchId,
+    ScratchPattern, ScratchValueMatch, State as PuzzleState, TransitionCommand, WriteOp,
+    transition_program, transition_program_outcome,
+};
 use puzzle_lang::{
     ArrowKey, KeyTrigger, Level, LoadedDocumentModel, LoadedGame, ResourceSelection,
     SceneAlignXDef, SceneAlignYDef, SceneComponent, SceneDef, SceneEffect, SceneEffectParam,
@@ -195,6 +202,1272 @@ impl StandaloneSessionBridge {
             "screens": scenes_value(&self.loaded),
         })
     }
+}
+
+pub struct CompiledStandaloneSessionBridge {
+    export: Value,
+    engine: CompiledEngine,
+    current_state: PuzzleState,
+    current_level_index: usize,
+    current_scene: String,
+    cleared_levels: Vec<bool>,
+    undo_stack: Vec<PuzzleState>,
+    redo_stack: Vec<PuzzleState>,
+    has_progress_save: bool,
+    pending_animation_events: Vec<Value>,
+}
+
+impl CompiledStandaloneSessionBridge {
+    pub fn from_export_json(export_json: &str) -> Result<Self, String> {
+        let export: Value = serde_json::from_str(export_json).map_err(|error| error.to_string())?;
+        let engine = decode_export_engine(&export)?;
+        let level_count = compiled_export_levels(&export)?.len();
+        if level_count == 0 {
+            return Err("compiled standalone session requires at least one level".to_string());
+        }
+        let current_state = decode_level_initial_state(&engine.game, &export, 0)?;
+        let current_scene = initial_export_scene(&export);
+        let mut session = Self {
+            export,
+            engine,
+            current_state,
+            current_level_index: 0,
+            current_scene,
+            cleared_levels: vec![false; level_count],
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
+            has_progress_save: false,
+            pending_animation_events: Vec::new(),
+        };
+        session.load_level(0, false)?;
+        Ok(session)
+    }
+
+    pub fn snapshot_json(&mut self) -> String {
+        self.snapshot_value().to_string()
+    }
+
+    pub fn request_json(&mut self, method: &str, url: &str) -> Result<String, String> {
+        match (method, url) {
+            ("GET", "/api/state") => Ok(self.snapshot_json()),
+            ("POST", "/api/command/undo") => {
+                self.undo();
+                Ok(self.snapshot_json())
+            }
+            ("POST", "/api/command/redo") => {
+                self.redo();
+                Ok(self.snapshot_json())
+            }
+            ("POST", "/api/command/restart") => {
+                self.load_level(self.current_level_index, true)?;
+                Ok(self.snapshot_json())
+            }
+            ("POST", "/api/command/next") => {
+                self.advance_level()?;
+                Ok(self.snapshot_json())
+            }
+            ("POST", path) if path.starts_with("/api/input/") => {
+                self.apply_input_name(&percent_decode(&path["/api/input/".len()..]))?;
+                Ok(self.snapshot_json())
+            }
+            ("POST", path) if path.starts_with("/api/command/") => {
+                self.apply_command_name(&percent_decode(&path["/api/command/".len()..]))?;
+                Ok(self.snapshot_json())
+            }
+            _ => Err(format!("Unsupported exported HTML request: {method} {url}")),
+        }
+    }
+
+    pub fn apply_input_name(&mut self, input_name: &str) -> Result<(), String> {
+        let input = self
+            .input_id_by_name(input_name)
+            .ok_or_else(|| format!("unknown input: {input_name}"))?;
+        self.apply_main_input(input)
+    }
+
+    pub fn apply_command_name(&mut self, command_name: &str) -> Result<(), String> {
+        if command_name == "__continue_effects" {
+            return Ok(());
+        }
+        if let Some(position) = command_name.strip_prefix("select:") {
+            let index = position
+                .parse::<usize>()
+                .map_err(|_| format!("invalid level selection: {position}"))?;
+            return self.load_level(index, true);
+        }
+        match command_name {
+            "undo" => self.undo(),
+            "redo" => self.redo(),
+            "restart" => self.load_level(self.current_level_index, true)?,
+            "next" => self.advance_level()?,
+            other => {
+                if let Some(scene) = other.strip_prefix("goto ") {
+                    self.current_scene = scene.to_string();
+                } else if let Some(input) = self.input_id_by_name(other) {
+                    self.apply_main_input(input)?;
+                } else {
+                    return Err(format!("unsupported compiled export command: {other}"));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn progress_save_json(&self) -> String {
+        json!({
+            "version": 1,
+            "compiledSession": {
+                "levelIndex": self.current_level_index,
+                "state": compiled_state_value(&self.current_state),
+                "clearedLevels": self.cleared_levels,
+            }
+        })
+        .to_string()
+    }
+
+    pub fn restore_progress_save_json(&mut self, save_json: &str) -> Result<(), String> {
+        let save: Value = serde_json::from_str(save_json).map_err(|error| error.to_string())?;
+        let session = save
+            .get("compiledSession")
+            .ok_or_else(|| "progress save is not a compiled standalone session".to_string())?;
+        let level_index = session
+            .get("levelIndex")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| "compiled progress save is missing levelIndex".to_string())?
+            as usize;
+        if level_index >= compiled_export_levels(&self.export)?.len() {
+            return Err("compiled progress save level index is out of range".to_string());
+        }
+        self.current_level_index = level_index;
+        self.current_state = decode_state_value(
+            &self.engine.game,
+            session
+                .get("state")
+                .ok_or_else(|| "compiled progress save is missing state".to_string())?,
+        )?;
+        if let Some(items) = session.get("clearedLevels").and_then(Value::as_array) {
+            self.cleared_levels = items
+                .iter()
+                .map(|item| item.as_bool().unwrap_or(false))
+                .collect();
+            self.cleared_levels
+                .resize(compiled_export_levels(&self.export)?.len(), false);
+        }
+        self.undo_stack.clear();
+        self.redo_stack.clear();
+        self.has_progress_save = true;
+        Ok(())
+    }
+
+    pub fn mark_progress_save_written(&mut self) {
+        self.has_progress_save = true;
+    }
+
+    pub fn clear_progress_save(&mut self) {
+        self.has_progress_save = false;
+    }
+
+    fn apply_main_input(&mut self, input: InputId) -> Result<(), String> {
+        let before = self.current_state.clone();
+        let commands = self.transition_program("main", input)?;
+        if before != self.current_state {
+            self.undo_stack.push(before);
+            self.redo_stack.clear();
+        }
+        self.apply_transition_commands(&commands)
+    }
+
+    fn transition_program(
+        &mut self,
+        program_key: &str,
+        input: InputId,
+    ) -> Result<Vec<TransitionCommand>, String> {
+        let program = self
+            .engine
+            .program(program_key, self.current_level_index)
+            .ok_or_else(|| format!("unknown compiled program: {program_key}"))?
+            .to_vec();
+        if program.is_empty() {
+            return Ok(Vec::new());
+        }
+        let before = self.current_state.clone();
+        let outcome = transition_program_outcome(&self.engine.game, &program, &before, input)
+            .map_err(|error| format!("{error:?}"))?;
+        self.pending_animation_events = compiled_animation_events(&before, &outcome.next_state);
+        self.current_state = outcome.next_state;
+        Ok(outcome.commands)
+    }
+
+    fn apply_transition_commands(&mut self, commands: &[TransitionCommand]) -> Result<(), String> {
+        for command in commands {
+            match command {
+                TransitionCommand::Win => {
+                    if let Some(cleared) = self.cleared_levels.get_mut(self.current_level_index) {
+                        *cleared = true;
+                    }
+                }
+                TransitionCommand::Restart => self.load_level(self.current_level_index, true)?,
+                TransitionCommand::NextLevel => self.advance_level()?,
+                TransitionCommand::Again
+                | TransitionCommand::Checkpoint
+                | TransitionCommand::ClearCheckpoint => {}
+            }
+        }
+        Ok(())
+    }
+
+    fn load_level(&mut self, index: usize, clear_history: bool) -> Result<(), String> {
+        if index >= compiled_export_levels(&self.export)?.len() {
+            return Err(format!("level index out of range: {index}"));
+        }
+        self.current_level_index = index;
+        self.current_state = decode_level_initial_state(&self.engine.game, &self.export, index)?;
+        if clear_history {
+            self.undo_stack.clear();
+            self.redo_stack.clear();
+        }
+        if self.engine.has_program("level_start") {
+            let commands = self.transition_program("level_start", InputId(0))?;
+            self.apply_transition_commands(&commands)?;
+        } else if self
+            .export
+            .get("engine")
+            .and_then(|engine| engine.get("runRulesOnLevelStart"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            let commands = self.transition_program("run_rules_on_level_start", InputId(0))?;
+            self.apply_transition_commands(&commands)?;
+        }
+        if self.engine.has_level_program("level_start_local", index) {
+            let commands = self.transition_program("level_start_local", InputId(0))?;
+            self.apply_transition_commands(&commands)?;
+        }
+        Ok(())
+    }
+
+    fn advance_level(&mut self) -> Result<(), String> {
+        let level_count = compiled_export_levels(&self.export)?.len();
+        if self.current_level_index + 1 < level_count {
+            self.load_level(self.current_level_index + 1, true)?;
+        }
+        Ok(())
+    }
+
+    fn undo(&mut self) {
+        if let Some(previous) = self.undo_stack.pop() {
+            self.redo_stack.push(self.current_state.clone());
+            self.current_state = previous;
+        }
+    }
+
+    fn redo(&mut self) {
+        if let Some(next) = self.redo_stack.pop() {
+            self.undo_stack.push(self.current_state.clone());
+            self.current_state = next;
+        }
+    }
+
+    fn input_id_by_name(&self, input_name: &str) -> Option<InputId> {
+        self.export
+            .get("inputs")
+            .and_then(Value::as_array)?
+            .iter()
+            .find_map(|input| {
+                (input.get("name").and_then(Value::as_str) == Some(input_name)).then(|| {
+                    input
+                        .get("id")
+                        .and_then(Value::as_u64)
+                        .and_then(|id| u16::try_from(id).ok())
+                        .map(InputId)
+                })?
+            })
+    }
+
+    fn snapshot_value(&mut self) -> Value {
+        let mut value = self.export.clone();
+        let level = compiled_export_levels(&self.export)
+            .ok()
+            .and_then(|levels| levels.get(self.current_level_index))
+            .cloned()
+            .unwrap_or(Value::Null);
+        set_json_field(
+            &mut value,
+            "has_progress_save",
+            Value::Bool(self.has_progress_save),
+        );
+        set_json_field(&mut value, "levelIndex", json!(self.current_level_index));
+        set_json_field(
+            &mut value,
+            "selectedLevelIndex",
+            json!(self.current_level_index),
+        );
+        set_json_field(&mut value, "busy", Value::Bool(false));
+        set_json_field(
+            &mut value,
+            "canUndo",
+            Value::Bool(!self.undo_stack.is_empty()),
+        );
+        set_json_field(
+            &mut value,
+            "canRedo",
+            Value::Bool(!self.redo_stack.is_empty()),
+        );
+        set_json_field(&mut value, "soundEvents", Value::Array(Vec::new()));
+        set_json_field(&mut value, "messageEvents", Value::Array(Vec::new()));
+        set_json_field(&mut value, "waitEvents", Value::Array(Vec::new()));
+        set_json_field(
+            &mut value,
+            "animationEvents",
+            Value::Array(std::mem::take(&mut self.pending_animation_events)),
+        );
+        set_json_field(&mut value, "gameState", json!({}));
+        set_json_field(&mut value, "sceneState", json!({}));
+        set_json_field(&mut value, "scenePuzzles", json!([]));
+        set_json_field(&mut value, "scenePuzzleState", json!({}));
+        set_json_field(&mut value, "currentScene", json!(self.current_scene));
+        set_json_field(&mut value, "focusedScreen", json!(self.current_scene));
+        set_json_field(&mut value, "focusedScene", json!(self.current_scene));
+        set_json_field(&mut value, "visibleScenes", json!([self.current_scene]));
+        set_json_field(&mut value, "level", self.level_context_value(&level));
+        set_json_field(&mut value, "levels", self.levels_value());
+        let scene = self.scene_value(&level);
+        let focused_scene = if self.current_scene_has_puzzle() {
+            scene.clone()
+        } else if self.export_has_scenes() {
+            Value::Null
+        } else {
+            scene.clone()
+        };
+        set_json_field(&mut value, "scene", focused_scene.clone());
+        set_json_field(
+            &mut value,
+            "sceneLayers",
+            json!([{ "name": self.current_scene, "focused": true, "sceneState": {}, "scenePuzzles": [], "scene": focused_scene }]),
+        );
+        value
+    }
+
+    fn export_has_scenes(&self) -> bool {
+        self.export
+            .get("scenes")
+            .and_then(Value::as_array)
+            .is_some_and(|scenes| !scenes.is_empty())
+    }
+
+    fn current_scene_has_puzzle(&self) -> bool {
+        let Some(scene) = self
+            .export
+            .get("scenes")
+            .and_then(Value::as_array)
+            .and_then(|scenes| {
+                scenes.iter().find(|scene| {
+                    scene.get("name").and_then(Value::as_str) == Some(self.current_scene.as_str())
+                })
+            })
+        else {
+            return false;
+        };
+        scene
+            .get("components")
+            .and_then(Value::as_array)
+            .is_some_and(|components| components_contain_puzzle(components))
+    }
+
+    fn level_context_value(&self, level: &Value) -> Value {
+        json!({
+            "index": self.current_level_index,
+            "name": level.get("name").and_then(Value::as_str).unwrap_or("level"),
+            "pack": level.get("pack").cloned().unwrap_or(Value::Null),
+            "puzzle": level.get("puzzle").and_then(Value::as_str).unwrap_or("default"),
+            "cleared": self.cleared_levels.get(self.current_level_index).copied().unwrap_or(false),
+        })
+    }
+
+    fn levels_value(&self) -> Value {
+        let levels = compiled_export_levels(&self.export)
+            .map(|levels| {
+                levels
+                    .iter()
+                    .enumerate()
+                    .map(|(index, level)| {
+                        let mut next = level.clone();
+                        set_json_field(
+                            &mut next,
+                            "cleared",
+                            Value::Bool(self.cleared_levels.get(index).copied().unwrap_or(false)),
+                        );
+                        next
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        Value::Array(levels)
+    }
+
+    fn scene_value(&self, level: &Value) -> Value {
+        json!({
+            "width": self.current_state.width,
+            "height": self.current_state.height,
+            "layerCount": self.current_state.layer_count,
+            "settings": {
+                "grid": { "visibility": 0, "occupied_cells": false, "all_cells": false },
+                "animation": self.export.get("animation").cloned().unwrap_or_else(|| json!({ "tween": { "enabled": false, "intervalMs": 250 }})),
+            },
+            "screen": self.export.get("screen").cloned().unwrap_or_else(|| json!({})),
+            "resources": Value::Null,
+            "regions": level.get("regions").cloned().unwrap_or_else(|| Value::Array(Vec::new())),
+            "cells": self.cells_value(),
+        })
+    }
+
+    fn cells_value(&self) -> Value {
+        let mut cells = Vec::new();
+        let objects = self
+            .export
+            .get("engine")
+            .and_then(|engine| engine.get("objects"))
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        for y in 0..self.current_state.height {
+            for x in 0..self.current_state.width {
+                let mut layers = Vec::new();
+                for layer in 0..self.current_state.layer_count {
+                    let object = self
+                        .current_state
+                        .get_layer(x, y, LayerId(layer))
+                        .unwrap_or(ObjectId::EMPTY);
+                    if object.is_empty() {
+                        continue;
+                    }
+                    let object_def = objects.iter().find(|candidate| {
+                        candidate.get("id").and_then(Value::as_u64) == Some(u64::from(object.0))
+                    });
+                    let object_name = object_def
+                        .and_then(|candidate| candidate.get("name").and_then(Value::as_str))
+                        .unwrap_or("unknown");
+                    let sprite = object_def
+                        .and_then(|candidate| candidate.get("sprite").and_then(Value::as_str))
+                        .unwrap_or("unknown");
+                    layers.push(json!({
+                        "layer": layer,
+                        "objectId": object.0,
+                        "object": object_name,
+                        "sprite": sprite,
+                    }));
+                }
+                cells.push(json!({ "x": x, "y": y, "layers": layers }));
+            }
+        }
+        Value::Array(cells)
+    }
+}
+
+fn set_json_field(value: &mut Value, key: &str, field: Value) {
+    if let Value::Object(map) = value {
+        map.insert(key.to_string(), field);
+    }
+}
+
+fn initial_export_scene(export: &Value) -> String {
+    export
+        .get("scenes")
+        .and_then(Value::as_array)
+        .and_then(|scenes| scenes.first())
+        .and_then(|scene| scene.get("name"))
+        .and_then(Value::as_str)
+        .unwrap_or("playing")
+        .to_string()
+}
+
+fn components_contain_puzzle(components: &[Value]) -> bool {
+    components.iter().any(component_contains_puzzle)
+}
+
+fn component_contains_puzzle(component: &Value) -> bool {
+    matches!(
+        component.get("kind").and_then(Value::as_str),
+        Some("puzzle" | "frame")
+    ) || component
+        .get("children")
+        .and_then(Value::as_array)
+        .is_some_and(|components| components_contain_puzzle(components))
+        || component
+            .get("elseChildren")
+            .and_then(Value::as_array)
+            .is_some_and(|components| components_contain_puzzle(components))
+}
+
+struct CompiledEngine {
+    game: CompiledGame,
+    level_start_program: Vec<RuleStep>,
+    level_clear_program: Vec<RuleStep>,
+    display_level_start_program: Vec<RuleStep>,
+    display_level_clear_program: Vec<RuleStep>,
+    display_program: Vec<RuleStep>,
+    level_start_programs: Vec<Vec<RuleStep>>,
+    level_clear_programs: Vec<Vec<RuleStep>>,
+}
+
+impl CompiledEngine {
+    fn program(&self, key: &str, level_index: usize) -> Option<&[RuleStep]> {
+        match key {
+            "main" | "run_rules_on_level_start" => Some(self.game.program()),
+            "level_start" => Some(&self.level_start_program),
+            "level_clear" => Some(&self.level_clear_program),
+            "display_level_start" => Some(&self.display_level_start_program),
+            "display_level_clear" => Some(&self.display_level_clear_program),
+            "display" => Some(&self.display_program),
+            "level_start_local" => self
+                .level_start_programs
+                .get(level_index)
+                .map(Vec::as_slice),
+            "level_clear_local" => self
+                .level_clear_programs
+                .get(level_index)
+                .map(Vec::as_slice),
+            _ => None,
+        }
+    }
+
+    fn has_program(&self, key: &str) -> bool {
+        self.program(key, 0)
+            .is_some_and(|program| !program.is_empty())
+    }
+
+    fn has_level_program(&self, key: &str, level_index: usize) -> bool {
+        self.program(key, level_index)
+            .is_some_and(|program| !program.is_empty())
+    }
+}
+
+fn decode_export_engine(export: &Value) -> Result<CompiledEngine, String> {
+    let compiled = export
+        .get("compiledPlay")
+        .ok_or_else(|| "compiled play export is missing compiledPlay".to_string())?;
+    decode_compiled_play(compiled)
+}
+
+fn decode_compiled_play(value: &Value) -> Result<CompiledEngine, String> {
+    let model = string_field(value, "model")?;
+    if model != "grid2" {
+        return Err(format!("unsupported compiled play model: {model}"));
+    }
+    let data = value_array(
+        object_field(value, "transition")?,
+        "compiled play transition",
+    )?;
+    let layer_count = u16_at(data, 0, "transition layer count")?;
+    let objects = array_at(data, 1, "transition objects")?
+        .iter()
+        .map(decode_compact_object)
+        .collect::<Result<Vec<_>, _>>()?;
+    let queries = array_at(data, 2, "transition queries")?
+        .iter()
+        .map(decode_compact_condition)
+        .collect::<Result<Vec<_>, _>>()?;
+    let visual_objects = array_at(data, 3, "transition visual objects")?
+        .iter()
+        .map(|item| Ok(ObjectId(u16_value(item, "visual object")?)))
+        .collect::<Result<Vec<_>, String>>()?;
+    let programs = array_at(data, 4, "transition programs")?;
+    let program = decode_compact_program(value_at(programs, 0, "main program")?)?;
+    let game = CompiledGame::new_with_scratch_condition_defs_program_roles(
+        layer_count,
+        objects,
+        Vec::new(),
+        queries,
+        program,
+        visual_objects,
+        Vec::new(),
+    );
+    let level_programs = array_at(data, 5, "transition level programs")?;
+    let mut level_start_programs = Vec::with_capacity(level_programs.len());
+    let mut level_clear_programs = Vec::with_capacity(level_programs.len());
+    for (index, entry) in level_programs.iter().enumerate() {
+        let entry = value_array(entry, &format!("level program {index}"))?;
+        level_start_programs.push(decode_compact_program(value_at(
+            entry,
+            0,
+            "level start local program",
+        )?)?);
+        level_clear_programs.push(decode_compact_program(value_at(
+            entry,
+            1,
+            "level clear local program",
+        )?)?);
+    }
+    Ok(CompiledEngine {
+        game,
+        level_start_program: decode_compact_program(value_at(programs, 1, "level start program")?)?,
+        level_clear_program: decode_compact_program(value_at(programs, 2, "level clear program")?)?,
+        display_level_start_program: decode_compact_program(value_at(
+            programs,
+            3,
+            "display level start program",
+        )?)?,
+        display_level_clear_program: decode_compact_program(value_at(
+            programs,
+            4,
+            "display level clear program",
+        )?)?,
+        display_program: decode_compact_program(value_at(programs, 5, "display program")?)?,
+        level_start_programs,
+        level_clear_programs,
+    })
+}
+
+fn decode_compact_object(value: &Value) -> Result<ObjectDef, String> {
+    let items = value_array(value, "compact object")?;
+    Ok(ObjectDef {
+        id: ObjectId(u16_at(items, 0, "object id")?),
+        layer_id: LayerId(u16_at(items, 1, "object layer")?),
+    })
+}
+
+fn decode_compact_condition(value: &Value) -> Result<ConditionDef, String> {
+    let items = value_array(value, "compact condition")?;
+    Ok(ConditionDef {
+        id: ConditionId(u16_at(items, 0, "condition id")?),
+        kind: decode_compact_condition_value_kind(value_at(items, 1, "condition kind")?)?,
+    })
+}
+
+fn decode_compact_program(value: &Value) -> Result<Vec<RuleStep>, String> {
+    value_array(value, "compact program")?
+        .iter()
+        .map(decode_compact_rule_step)
+        .collect()
+}
+
+fn decode_compact_rule_step(value: &Value) -> Result<RuleStep, String> {
+    let items = value_array(value, "compact rule step")?;
+    match tag_at(items, 0, "rule step tag")? {
+        0 => Ok(RuleStep::Rule(decode_compact_rule(value_at(
+            items, 1, "rule",
+        )?)?)),
+        1 => Ok(RuleStep::ConditionalBlock {
+            condition: decode_compact_rule_condition(value_at(items, 1, "condition")?)?,
+            steps: decode_compact_program(value_at(items, 2, "steps")?)?,
+        }),
+        2 => Ok(RuleStep::Block {
+            application: decode_compact_application(u16_at(items, 1, "application")?)?,
+            stop_condition: match value_at(items, 2, "condition")? {
+                Value::Null => None,
+                condition => Some(decode_compact_rule_condition(condition)?),
+            },
+            steps: decode_compact_program(value_at(items, 3, "steps")?)?,
+        }),
+        3 => Ok(RuleStep::LocalFrame {
+            frame: decode_compact_local_frame(value_at(items, 1, "local frame")?)?,
+            steps: decode_compact_program(value_at(items, 2, "steps")?)?,
+        }),
+        4 => Ok(RuleStep::AfterTriggered {
+            steps: decode_compact_program(value_at(items, 1, "steps")?)?,
+            then_steps: decode_compact_program(value_at(items, 2, "then steps")?)?,
+        }),
+        5 => Ok(RuleStep::ConditionalBranch {
+            condition: decode_compact_rule_condition(value_at(items, 1, "condition")?)?,
+            then_steps: decode_compact_program(value_at(items, 2, "then steps")?)?,
+            else_steps: decode_compact_program(value_at(items, 3, "else steps")?)?,
+        }),
+        tag => Err(format!("unknown compact rule step tag: {tag}")),
+    }
+}
+
+fn decode_compact_rule(value: &Value) -> Result<Rule, String> {
+    let items = value_array(value, "compact rule")?;
+    Ok(Rule {
+        id: RuleId(u16_at(items, 0, "rule id")?),
+        application: decode_compact_application(u16_at(items, 1, "application")?)?,
+        guards: array_at(items, 2, "guards")?
+            .iter()
+            .map(decode_compact_guard)
+            .collect::<Result<Vec<_>, _>>()?,
+        pattern: decode_compact_pattern(value_at(items, 3, "pattern")?)?,
+        writes: array_at(items, 4, "writes")?
+            .iter()
+            .map(decode_compact_write)
+            .collect::<Result<Vec<_>, _>>()?,
+        effects: array_at(items, 5, "effects")?
+            .iter()
+            .map(decode_compact_effect)
+            .collect::<Result<Vec<_>, _>>()?,
+    })
+}
+
+fn decode_compact_application(value: u16) -> Result<RuleApplication, String> {
+    match value {
+        0 => Ok(RuleApplication::Once),
+        1 => Ok(RuleApplication::OnceAll),
+        2 => Ok(RuleApplication::OncePerLevel),
+        3 => Ok(RuleApplication::UntilStable),
+        other => Err(format!("unknown compact rule application: {other}")),
+    }
+}
+
+fn decode_compact_rule_condition(value: &Value) -> Result<RuleCondition, String> {
+    let items = value_array(value, "compact rule condition")?;
+    match tag_at(items, 0, "condition tag")? {
+        0 => Ok(RuleCondition::AnyMatches(decode_compact_patterns(
+            value_at(items, 1, "patterns")?,
+        )?)),
+        1 => Ok(RuleCondition::NoMatches(decode_compact_patterns(
+            value_at(items, 1, "patterns")?,
+        )?)),
+        2 => Ok(RuleCondition::AnyInputMatches(
+            decode_compact_input_patterns(value_at(items, 1, "input patterns")?)?,
+        )),
+        3 => Ok(RuleCondition::NoInputMatches(
+            decode_compact_input_patterns(value_at(items, 1, "input patterns")?)?,
+        )),
+        4 => Ok(RuleCondition::GuardBranches(
+            value_array(value_at(items, 1, "guard branches")?, "guard branches")?
+                .iter()
+                .map(|branch| {
+                    value_array(branch, "guard branch")?
+                        .iter()
+                        .map(decode_compact_guard)
+                        .collect()
+                })
+                .collect::<Result<Vec<_>, _>>()?,
+        )),
+        tag => Err(format!("unknown compact condition tag: {tag}")),
+    }
+}
+
+fn decode_compact_guard(value: &Value) -> Result<Guard, String> {
+    let items = value_array(value, "compact guard")?;
+    match tag_at(items, 0, "guard tag")? {
+        0 => Ok(Guard::InputIs(InputId(u16_at(items, 1, "input")?))),
+        1 => Ok(Guard::GlobalCompare {
+            global: GlobalId(u16_at(items, 1, "global")?),
+            op: decode_compact_comparison(u16_at(items, 2, "comparison")?)?,
+            value: i64_at(items, 3, "value")?,
+        }),
+        2 => Ok(Guard::ConditionCompare {
+            condition: ConditionId(u16_at(items, 1, "condition")?),
+            op: decode_compact_comparison(u16_at(items, 2, "comparison")?)?,
+            value: i64_at(items, 3, "value")?,
+        }),
+        3 => Ok(Guard::ConditionNonZero(ConditionId(u16_at(
+            items,
+            1,
+            "condition",
+        )?))),
+        4 => Ok(Guard::InlineConditionCompare {
+            kind: decode_compact_condition_value_kind(value_at(items, 1, "condition kind")?)?,
+            op: decode_compact_comparison(u16_at(items, 2, "comparison")?)?,
+            value: i64_at(items, 3, "value")?,
+        }),
+        5 => Ok(Guard::InlineConditionNonZero(
+            decode_compact_condition_value_kind(value_at(items, 1, "condition kind")?)?,
+        )),
+        tag => Err(format!("unknown compact guard tag: {tag}")),
+    }
+}
+
+fn decode_compact_condition_value_kind(value: &Value) -> Result<ConditionValueKind, String> {
+    let items = value_array(value, "compact condition kind")?;
+    match tag_at(items, 0, "condition kind tag")? {
+        0 => Ok(ConditionValueKind::CountObjects(decode_compact_object_ids(
+            value_at(items, 1, "objects")?,
+        )?)),
+        1 => Ok(ConditionValueKind::ExistsObjects(
+            decode_compact_object_ids(value_at(items, 1, "objects")?)?,
+        )),
+        2 => Ok(ConditionValueKind::NoneObjects(decode_compact_object_ids(
+            value_at(items, 1, "objects")?,
+        )?)),
+        3 => Ok(ConditionValueKind::CountMatches(decode_compact_patterns(
+            value_at(items, 1, "patterns")?,
+        )?)),
+        4 => Ok(ConditionValueKind::ExistsMatches(decode_compact_patterns(
+            value_at(items, 1, "patterns")?,
+        )?)),
+        5 => Ok(ConditionValueKind::NoneMatches(decode_compact_patterns(
+            value_at(items, 1, "patterns")?,
+        )?)),
+        6 => Ok(ConditionValueKind::CountInputMatches(
+            decode_compact_input_patterns(value_at(items, 1, "input patterns")?)?,
+        )),
+        7 => Ok(ConditionValueKind::ExistsInputMatches(
+            decode_compact_input_patterns(value_at(items, 1, "input patterns")?)?,
+        )),
+        8 => Ok(ConditionValueKind::NoneInputMatches(
+            decode_compact_input_patterns(value_at(items, 1, "input patterns")?)?,
+        )),
+        tag => Err(format!("unknown compact condition kind tag: {tag}")),
+    }
+}
+
+fn decode_compact_patterns(value: &Value) -> Result<Vec<Pattern>, String> {
+    value_array(value, "compact patterns")?
+        .iter()
+        .map(decode_compact_pattern)
+        .collect()
+}
+
+fn decode_compact_input_patterns(value: &Value) -> Result<Vec<(InputId, Pattern)>, String> {
+    value_array(value, "input patterns")?
+        .iter()
+        .map(|entry| {
+            let entry = value_array(entry, "input pattern")?;
+            Ok((
+                InputId(u16_at(entry, 0, "input")?),
+                decode_compact_pattern(value_at(entry, 1, "pattern")?)?,
+            ))
+        })
+        .collect()
+}
+
+fn decode_compact_pattern(value: &Value) -> Result<Pattern, String> {
+    Ok(Pattern {
+        components: value_array(value, "compact pattern")?
+            .iter()
+            .map(|component| {
+                let component = value_array(component, "pattern component")?;
+                Ok(PatternComponent {
+                    gap_count: u16_at(component, 0, "gap count")?,
+                    cells: value_array(value_at(component, 1, "cells")?, "cells")?
+                        .iter()
+                        .map(decode_compact_match_cell)
+                        .collect::<Result<Vec<_>, _>>()?,
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()?,
+    })
+}
+
+fn decode_compact_match_cell(value: &Value) -> Result<MatchCell, String> {
+    let items = value_array(value, "match cell")?;
+    Ok(MatchCell {
+        offset: decode_compact_offset(value_at(items, 0, "offset")?)?,
+        require_objects: decode_compact_object_ids(value_at(items, 1, "require objects")?)?,
+        require_object_sets: if items.len() >= 8 {
+            decode_compact_object_sets(value_at(items, 2, "require object sets")?)?
+        } else {
+            Vec::new()
+        },
+        forbid_objects: decode_compact_object_ids(value_at(
+            items,
+            if items.len() >= 8 { 3 } else { 2 },
+            "forbid objects",
+        )?)?,
+        require_scratch: decode_compact_scratch_patterns(value_at(
+            items,
+            if items.len() >= 8 { 4 } else { 3 },
+            "require scratch",
+        )?)?,
+        require_object_set_scratch: if items.len() >= 8 {
+            decode_compact_object_set_scratch_patterns(value_at(
+                items,
+                5,
+                "require object set scratch",
+            )?)?
+        } else {
+            Vec::new()
+        },
+        forbid_scratch: decode_compact_scratch_patterns(value_at(
+            items,
+            if items.len() >= 8 { 6 } else { 4 },
+            "forbid scratch",
+        )?)?,
+        forbid_object_set_scratch: if items.len() >= 8 {
+            decode_compact_object_set_scratch_patterns(value_at(
+                items,
+                7,
+                "forbid object set scratch",
+            )?)?
+        } else {
+            Vec::new()
+        },
+    })
+}
+
+fn decode_compact_offset(value: &Value) -> Result<Offset, String> {
+    let items = value_array(value, "offset")?;
+    match tag_at(items, 0, "offset tag")? {
+        0 => Ok(Offset::Fixed {
+            dx: i16_at(items, 1, "dx")?,
+            dy: i16_at(items, 2, "dy")?,
+        }),
+        1 => Ok(Offset::Variable {
+            base_dx: i16_at(items, 1, "base dx")?,
+            base_dy: i16_at(items, 2, "base dy")?,
+            gap_terms: value_array(value_at(items, 3, "gap terms")?, "gap terms")?
+                .iter()
+                .map(|term| {
+                    let term = value_array(term, "gap term")?;
+                    Ok(GapTerm {
+                        gap_index: u16_at(term, 0, "gap index")?,
+                        dx: i16_at(term, 1, "dx")?,
+                        dy: i16_at(term, 2, "dy")?,
+                    })
+                })
+                .collect::<Result<Vec<_>, String>>()?,
+        }),
+        tag => Err(format!("unknown compact offset tag: {tag}")),
+    }
+}
+
+fn decode_compact_write(value: &Value) -> Result<WriteOp, String> {
+    let items = value_array(value, "write")?;
+    match tag_at(items, 0, "write tag")? {
+        0 => Ok(WriteOp::Add {
+            component: u16_at(items, 1, "component")?,
+            offset: decode_compact_offset(value_at(items, 2, "offset")?)?,
+            object: ObjectId(u16_at(items, 3, "object")?),
+        }),
+        1 => Ok(WriteOp::Remove {
+            component: u16_at(items, 1, "component")?,
+            offset: decode_compact_offset(value_at(items, 2, "offset")?)?,
+            object: ObjectId(u16_at(items, 3, "object")?),
+        }),
+        2 => Ok(WriteOp::Move {
+            component: u16_at(items, 1, "component")?,
+            from_offset: decode_compact_offset(value_at(items, 2, "from offset")?)?,
+            to_offset: decode_compact_offset(value_at(items, 3, "to offset")?)?,
+            object: ObjectId(u16_at(items, 4, "object")?),
+        }),
+        3 => Ok(WriteOp::Replace {
+            component: u16_at(items, 1, "component")?,
+            offset: decode_compact_offset(value_at(items, 2, "offset")?)?,
+            remove: ObjectId(u16_at(items, 3, "remove")?),
+            add: ObjectId(u16_at(items, 4, "add")?),
+        }),
+        4 => Ok(WriteOp::SetScratch {
+            component: u16_at(items, 1, "component")?,
+            offset: decode_compact_offset(value_at(items, 2, "offset")?)?,
+            object: ObjectId(u16_at(items, 3, "object")?),
+            scratch: ScratchId(u16_at(items, 4, "scratch")?),
+            value: optional_i64_at(items, 5, "scratch value")?,
+        }),
+        5 => Ok(WriteOp::RemoveScratch {
+            component: u16_at(items, 1, "component")?,
+            offset: decode_compact_offset(value_at(items, 2, "offset")?)?,
+            object: ObjectId(u16_at(items, 3, "object")?),
+            scratch: ScratchId(u16_at(items, 4, "scratch")?),
+            value: optional_i64_at(items, 5, "scratch value")?,
+            match_value: decode_compact_scratch_match(u16_at(items, 6, "scratch match")?)?,
+        }),
+        6 => Ok(WriteOp::AddObjectSet {
+            component: u16_at(items, 1, "component")?,
+            offset: decode_compact_offset(value_at(items, 2, "offset")?)?,
+            binding: u16_at(items, 3, "binding")?,
+        }),
+        7 => Ok(WriteOp::RemoveObjectSet {
+            component: u16_at(items, 1, "component")?,
+            offset: decode_compact_offset(value_at(items, 2, "offset")?)?,
+            binding: u16_at(items, 3, "binding")?,
+        }),
+        8 => Ok(WriteOp::MoveObjectSet {
+            component: u16_at(items, 1, "component")?,
+            from_offset: decode_compact_offset(value_at(items, 2, "from offset")?)?,
+            to_offset: decode_compact_offset(value_at(items, 3, "to offset")?)?,
+            binding: u16_at(items, 4, "binding")?,
+        }),
+        9 => Ok(WriteOp::SetObjectSetScratch {
+            component: u16_at(items, 1, "component")?,
+            offset: decode_compact_offset(value_at(items, 2, "offset")?)?,
+            binding: u16_at(items, 3, "binding")?,
+            scratch: ScratchId(u16_at(items, 4, "scratch")?),
+            value: optional_i64_at(items, 5, "scratch value")?,
+        }),
+        10 => Ok(WriteOp::RemoveObjectSetScratch {
+            component: u16_at(items, 1, "component")?,
+            offset: decode_compact_offset(value_at(items, 2, "offset")?)?,
+            binding: u16_at(items, 3, "binding")?,
+            scratch: ScratchId(u16_at(items, 4, "scratch")?),
+            value: optional_i64_at(items, 5, "scratch value")?,
+            match_value: decode_compact_scratch_match(u16_at(items, 6, "scratch match")?)?,
+        }),
+        tag => Err(format!("unknown compact write tag: {tag}")),
+    }
+}
+
+fn decode_compact_effect(value: &Value) -> Result<Effect, String> {
+    let items = value_array(value, "effect")?;
+    match tag_at(items, 0, "effect tag")? {
+        0 => Ok(Effect::Cancel),
+        1 => Ok(Effect::Win),
+        2 => Ok(Effect::Restart),
+        3 => Ok(Effect::NextLevel),
+        4 => Ok(Effect::Again),
+        5 => Ok(Effect::Checkpoint),
+        6 => Ok(Effect::ClearCheckpoint),
+        7 => Ok(Effect::UpdateGlobal {
+            global: GlobalId(u16_at(items, 1, "global")?),
+            op: decode_compact_global_update(u16_at(items, 2, "global update")?)?,
+            value: i64_at(items, 3, "value")?,
+        }),
+        tag => Err(format!("unknown compact effect tag: {tag}")),
+    }
+}
+
+fn decode_compact_scratch_patterns(value: &Value) -> Result<Vec<ScratchPattern>, String> {
+    value_array(value, "scratch patterns")?
+        .iter()
+        .map(|entry| {
+            let entry = value_array(entry, "scratch pattern")?;
+            Ok(ScratchPattern {
+                object: ObjectId(u16_at(entry, 0, "object")?),
+                scratch: ScratchId(u16_at(entry, 1, "scratch")?),
+                value: optional_i64_at(entry, 2, "value")?,
+                match_value: decode_compact_scratch_match(u16_at(entry, 3, "scratch match")?)?,
+            })
+        })
+        .collect()
+}
+
+fn decode_compact_object_sets(value: &Value) -> Result<Vec<ObjectSetMatcher>, String> {
+    value_array(value, "object sets")?
+        .iter()
+        .map(|entry| {
+            let entry = value_array(entry, "object set")?;
+            Ok(ObjectSetMatcher {
+                binding: u16_at(entry, 0, "binding")?,
+                layer: LayerId(u16_at(entry, 1, "layer")?),
+                objects: decode_compact_object_ids(value_at(entry, 2, "objects")?)?,
+            })
+        })
+        .collect()
+}
+
+fn decode_compact_object_set_scratch_patterns(
+    value: &Value,
+) -> Result<Vec<ObjectSetScratchPattern>, String> {
+    value_array(value, "object set scratch patterns")?
+        .iter()
+        .map(|entry| {
+            let entry = value_array(entry, "object set scratch pattern")?;
+            Ok(ObjectSetScratchPattern {
+                binding: u16_at(entry, 0, "binding")?,
+                scratch: ScratchId(u16_at(entry, 1, "scratch")?),
+                value: optional_i64_at(entry, 2, "value")?,
+                match_value: decode_compact_scratch_match(u16_at(entry, 3, "scratch match")?)?,
+            })
+        })
+        .collect()
+}
+
+fn decode_compact_object_ids(value: &Value) -> Result<Vec<ObjectId>, String> {
+    value_array(value, "object ids")?
+        .iter()
+        .map(|item| Ok(ObjectId(u16_value(item, "object id")?)))
+        .collect()
+}
+
+fn decode_compact_local_frame(value: &Value) -> Result<LocalFrame<ObjectId>, String> {
+    let items = value_array(value, "local frame")?;
+    Ok(LocalFrame {
+        x: decode_compact_local_frame_extent(value_at(items, 0, "frame x")?)?,
+        y: decode_compact_local_frame_extent(value_at(items, 1, "frame y")?)?,
+        z: decode_compact_local_frame_extent(value_at(items, 2, "frame z")?)?,
+        focus_objects: decode_compact_object_ids(value_at(items, 3, "focus objects")?)?,
+    })
+}
+
+fn decode_compact_local_frame_extent(value: &Value) -> Result<LocalFrameExtent, String> {
+    if value.is_null() {
+        return Ok(LocalFrameExtent::Full);
+    }
+    Ok(LocalFrameExtent::Radius(u16_value(value, "frame extent")?))
+}
+
+fn decode_compact_comparison(value: u16) -> Result<ComparisonOp, String> {
+    match value {
+        0 => Ok(ComparisonOp::Eq),
+        1 => Ok(ComparisonOp::NotEq),
+        2 => Ok(ComparisonOp::Greater),
+        3 => Ok(ComparisonOp::GreaterEq),
+        4 => Ok(ComparisonOp::Less),
+        5 => Ok(ComparisonOp::LessEq),
+        other => Err(format!("unknown compact comparison op: {other}")),
+    }
+}
+
+fn decode_compact_global_update(value: u16) -> Result<GlobalUpdateOp, String> {
+    match value {
+        0 => Ok(GlobalUpdateOp::Set),
+        1 => Ok(GlobalUpdateOp::Add),
+        2 => Ok(GlobalUpdateOp::Subtract),
+        3 => Ok(GlobalUpdateOp::Multiply),
+        4 => Ok(GlobalUpdateOp::Divide),
+        5 => Ok(GlobalUpdateOp::Remainder),
+        other => Err(format!("unknown compact global update op: {other}")),
+    }
+}
+
+fn decode_compact_scratch_match(value: u16) -> Result<ScratchValueMatch, String> {
+    match value {
+        0 => Ok(ScratchValueMatch::Any),
+        1 => Ok(ScratchValueMatch::Exact),
+        other => Err(format!("unknown compact scratch match: {other}")),
+    }
+}
+
+fn compiled_export_levels(export: &Value) -> Result<&[Value], String> {
+    array_field(export, "levels")
+}
+
+fn decode_level_initial_state(
+    game: &CompiledGame,
+    export: &Value,
+    level_index: usize,
+) -> Result<PuzzleState, String> {
+    let levels = compiled_export_levels(export)?;
+    let level = levels
+        .get(level_index)
+        .ok_or_else(|| format!("level index out of range: {level_index}"))?;
+    decode_state_value(
+        game,
+        level
+            .get("initialState")
+            .ok_or_else(|| "level is missing initialState".to_string())?,
+    )
+}
+
+fn decode_state_value(game: &CompiledGame, value: &Value) -> Result<PuzzleState, String> {
+    let width = u16_field(value, "width")?;
+    let height = u16_field(value, "height")?;
+    let layer_count = u16_field(value, "layerCount")?;
+    let globals = value
+        .get("globals")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .map(|item| {
+                    item.as_i64()
+                        .ok_or_else(|| "global must be an integer".to_string())
+                })
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .transpose()?
+        .unwrap_or_default();
+    let mut state =
+        PuzzleState::empty_with_globals(width, height, layer_count, game.object_count(), globals)
+            .map_err(|error| format!("{error:?}"))?;
+    for (index, item) in array_field(value, "slots")?.iter().enumerate() {
+        let object = ObjectId(u16_value(item, "slot")?);
+        if object.is_empty() {
+            continue;
+        }
+        let cell = index / usize::from(layer_count);
+        let x = u16::try_from(cell % usize::from(width)).map_err(|_| "x out of range")?;
+        let y = u16::try_from(cell / usize::from(width)).map_err(|_| "y out of range")?;
+        state
+            .place_object(game, x, y, object)
+            .map_err(|error| format!("{error:?}"))?;
+    }
+    if let Some(rules) = value.get("levelFiredRules").and_then(Value::as_array) {
+        for rule in rules {
+            state.mark_level_rule_fired(RuleId(u16_value(rule, "levelFiredRules")?));
+        }
+    }
+    Ok(state)
+}
+
+fn compiled_state_value(state: &PuzzleState) -> Value {
+    json!({
+        "width": state.width,
+        "height": state.height,
+        "layerCount": state.layer_count,
+        "slots": state.slots().iter().map(|object| object.0).collect::<Vec<_>>(),
+        "scratch": [],
+        "globals": state.visible_globals(),
+        "levelFiredRules": state.level_fired_rules().iter().map(|rule| rule.0).collect::<Vec<_>>(),
+    })
+}
+
+fn compiled_animation_events(_before: &PuzzleState, _after: &PuzzleState) -> Vec<Value> {
+    Vec::new()
+}
+
+fn object_field<'a>(value: &'a Value, key: &str) -> Result<&'a Value, String> {
+    value
+        .get(key)
+        .ok_or_else(|| format!("missing field: {key}"))
+}
+
+fn value_array<'a>(value: &'a Value, name: &str) -> Result<&'a [Value], String> {
+    value
+        .as_array()
+        .map(Vec::as_slice)
+        .ok_or_else(|| format!("{name} must be an array"))
+}
+
+fn value_at<'a>(items: &'a [Value], index: usize, name: &str) -> Result<&'a Value, String> {
+    items
+        .get(index)
+        .ok_or_else(|| format!("missing {name} at index {index}"))
+}
+
+fn array_at<'a>(items: &'a [Value], index: usize, name: &str) -> Result<&'a [Value], String> {
+    value_array(value_at(items, index, name)?, name)
+}
+
+fn array_field<'a>(value: &'a Value, key: &str) -> Result<&'a [Value], String> {
+    value
+        .get(key)
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .ok_or_else(|| format!("{key} must be an array"))
+}
+
+fn string_field<'a>(value: &'a Value, key: &str) -> Result<&'a str, String> {
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .ok_or_else(|| format!("{key} must be a string"))
+}
+
+fn optional_i64_at(items: &[Value], index: usize, name: &str) -> Result<Option<i64>, String> {
+    let value = value_at(items, index, name)?;
+    if value.is_null() {
+        return Ok(None);
+    }
+    value
+        .as_i64()
+        .map(Some)
+        .ok_or_else(|| format!("{name} must be an integer or null"))
+}
+
+fn tag_at(items: &[Value], index: usize, name: &str) -> Result<u16, String> {
+    u16_at(items, index, name)
+}
+
+fn u16_at(items: &[Value], index: usize, name: &str) -> Result<u16, String> {
+    u16_value(value_at(items, index, name)?, name)
+}
+
+fn i16_at(items: &[Value], index: usize, name: &str) -> Result<i16, String> {
+    let raw = i64_at(items, index, name)?;
+    i16::try_from(raw).map_err(|_| format!("{name} out of range"))
+}
+
+fn i64_at(items: &[Value], index: usize, name: &str) -> Result<i64, String> {
+    value_at(items, index, name)?
+        .as_i64()
+        .ok_or_else(|| format!("{name} must be an integer"))
+}
+
+fn u16_field(value: &Value, key: &str) -> Result<u16, String> {
+    u16_value(
+        value
+            .get(key)
+            .ok_or_else(|| format!("missing field: {key}"))?,
+        key,
+    )
+}
+
+fn u16_value(value: &Value, name: &str) -> Result<u16, String> {
+    let raw = value
+        .as_u64()
+        .ok_or_else(|| format!("{name} must be an unsigned integer"))?;
+    u16::try_from(raw).map_err(|_| format!("{name} out of range"))
 }
 
 pub struct Puzzle3RuntimeBridge {
@@ -1690,6 +2963,64 @@ fn adjacent_coord3(left: Coord3, right: Coord3) -> bool {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn compiled_standalone_session_starts_from_export_without_parsing_source() {
+        let export = json!({
+            "title": "Compiled only",
+            "source": "[ *:stack ] -> [ *:movable ] // deliberately not a complete puzzle",
+            "progressSaveVersion": 1,
+            "compiledPlay": {
+                "version": 1,
+                "model": "grid2",
+                "transition": [
+                    1,
+                    [[1, 0]],
+                    [],
+                    [],
+                    [[], [], [], [], [], []],
+                    [[[], []]]
+                ]
+            },
+            "engine": {
+                "layerCount": 1,
+                "objects": [{ "id": 1, "layer": 0, "name": "Crate:stack", "sprite": "Crate-stack" }],
+                "runRulesOnLevelStart": false
+            },
+            "screen": {},
+            "animation": { "tween": { "enabled": false, "intervalMs": 250 } },
+            "levels": [{
+                "index": 0,
+                "name": "one",
+                "puzzle": "board",
+                "pack": null,
+                "regions": [],
+                "initialState": {
+                    "width": 1,
+                    "height": 1,
+                    "layerCount": 1,
+                    "slots": [1],
+                    "scratch": [[]],
+                    "globals": [],
+                    "levelFiredRules": []
+                }
+            }],
+            "inputs": [],
+            "scenes": [],
+            "screens": []
+        });
+        let mut bridge = CompiledStandaloneSessionBridge::from_export_json(&export.to_string())
+            .expect("compiled export should start without source parsing");
+
+        let state: Value = serde_json::from_str(&bridge.request_json("GET", "/api/state").unwrap())
+            .expect("snapshot json");
+
+        assert_eq!(state["title"], "Compiled only");
+        assert_eq!(
+            state["scene"]["cells"][0]["layers"][0]["object"],
+            "Crate:stack"
+        );
+    }
 
     #[test]
     fn standalone_session_bridge_uses_rust_session_for_requests() {

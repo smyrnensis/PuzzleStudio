@@ -194,7 +194,19 @@ fn collect_rules(program: &[RuleStep], rules: &mut Vec<Rule>) {
         match step {
             RuleStep::Rule(rule) => rules.push(rule.clone()),
             RuleStep::ConditionalBlock { steps, .. } => collect_rules(steps, rules),
+            RuleStep::ConditionalBranch {
+                then_steps,
+                else_steps,
+                ..
+            } => {
+                collect_rules(then_steps, rules);
+                collect_rules(else_steps, rules);
+            }
             RuleStep::Block { steps, .. } => collect_rules(steps, rules),
+            RuleStep::AfterTriggered { steps, then_steps } => {
+                collect_rules(steps, rules);
+                collect_rules(then_steps, rules);
+            }
             RuleStep::LocalFrame { steps, .. } => collect_rules(steps, rules),
         }
     }
@@ -220,6 +232,21 @@ fn filter_visual_step(step: &RuleStep, visual_rules: &[RuleId]) -> Option<RuleSt
                 steps,
             })
         }
+        RuleStep::ConditionalBranch {
+            condition,
+            then_steps,
+            else_steps,
+        } => {
+            let then_steps = filter_visual_steps(then_steps, visual_rules);
+            let else_steps = filter_visual_steps(else_steps, visual_rules);
+            (!then_steps.is_empty() || !else_steps.is_empty()).then(|| {
+                RuleStep::ConditionalBranch {
+                    condition: condition.clone(),
+                    then_steps,
+                    else_steps,
+                }
+            })
+        }
         RuleStep::Block {
             application,
             stop_condition,
@@ -231,6 +258,11 @@ fn filter_visual_step(step: &RuleStep, visual_rules: &[RuleId]) -> Option<RuleSt
                 stop_condition: stop_condition.clone(),
                 steps,
             })
+        }
+        RuleStep::AfterTriggered { steps, then_steps } => {
+            let steps = filter_visual_steps(steps, visual_rules);
+            let then_steps = filter_visual_steps(then_steps, visual_rules);
+            (!steps.is_empty()).then(|| RuleStep::AfterTriggered { steps, then_steps })
         }
         RuleStep::LocalFrame { frame, steps } => {
             let steps = filter_visual_steps(steps, visual_rules);
@@ -272,10 +304,19 @@ pub enum RuleStep {
         condition: RuleCondition,
         steps: Vec<RuleStep>,
     },
+    ConditionalBranch {
+        condition: RuleCondition,
+        then_steps: Vec<RuleStep>,
+        else_steps: Vec<RuleStep>,
+    },
     Block {
         application: RuleApplication,
         stop_condition: Option<RuleCondition>,
         steps: Vec<RuleStep>,
+    },
+    AfterTriggered {
+        steps: Vec<RuleStep>,
+        then_steps: Vec<RuleStep>,
     },
     LocalFrame {
         frame: LocalFrame<ObjectId>,

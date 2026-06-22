@@ -2167,7 +2167,8 @@ function isStandardMenuConfirmKey(key, rawKey, code = "") {
     || rawKey === " "
     || code === "Enter"
     || code === "Space"
-    || (document.body.classList.contains("theme-puzzlescript") && (key === "x" || code === "KeyX"));
+    || key === "x"
+    || code === "KeyX";
 }
 
 function menuInputForKey(key, rawKey, code = "") {
@@ -2183,7 +2184,7 @@ function menuInputForKey(key, rawKey, code = "") {
   if (key === "d" || rawKey === "ArrowRight" || code === "ArrowRight") {
     return "right";
   }
-  if (rawKey === "Enter" || rawKey === " " || code === "Enter" || code === "Space") {
+  if (isStandardMenuConfirmKey(key, rawKey, code)) {
     return "enter";
   }
   if (rawKey === "Escape" || code === "Escape" || key === "q") {

@@ -268,6 +268,15 @@ fn decode_compact_rule_step(value: &Value) -> Result<RuleStep, String> {
             frame: decode_compact_local_frame(value_at(items, 1, "local frame")?)?,
             steps: decode_compact_program(value_at(items, 2, "steps")?)?,
         }),
+        4 => Ok(RuleStep::AfterTriggered {
+            steps: decode_compact_program(value_at(items, 1, "steps")?)?,
+            then_steps: decode_compact_program(value_at(items, 2, "then steps")?)?,
+        }),
+        5 => Ok(RuleStep::ConditionalBranch {
+            condition: decode_compact_rule_condition(value_at(items, 1, "condition")?)?,
+            then_steps: decode_compact_program(value_at(items, 2, "then steps")?)?,
+            else_steps: decode_compact_program(value_at(items, 3, "else steps")?)?,
+        }),
         tag => Err(format!("unknown compact rule step tag: {tag}")),
     }
 }

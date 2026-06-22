@@ -19,6 +19,7 @@ export class WasmStandaloneSession {
     apply_command_name(command_name: string): void;
     apply_input_name(input_name: string): void;
     clear_progress_save(): void;
+    static fromExport(export_json: string): WasmStandaloneSession;
     mark_progress_save_written(): void;
     constructor(source: string, puzzle_path: string);
     progress_save(): string;
@@ -43,6 +44,7 @@ export interface InitOutput {
     readonly wasmstandalonesession_apply_command_name: (a: number, b: number, c: number) => [number, number];
     readonly wasmstandalonesession_apply_input_name: (a: number, b: number, c: number) => [number, number];
     readonly wasmstandalonesession_clear_progress_save: (a: number) => void;
+    readonly wasmstandalonesession_fromExport: (a: number, b: number) => [number, number, number];
     readonly wasmstandalonesession_mark_progress_save_written: (a: number) => void;
     readonly wasmstandalonesession_new: (a: number, b: number, c: number, d: number) => [number, number, number];
     readonly wasmstandalonesession_progress_save: (a: number) => [number, number];
