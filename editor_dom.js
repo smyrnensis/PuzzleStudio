@@ -1,5 +1,6 @@
 const sourceEditor = document.querySelector("#sourceEditor");
 const sourceEditorWrap = document.querySelector("#sourceEditorWrap");
+const sourceLineNumbers = document.querySelector("#sourceLineNumbers");
 const sourceHighlight = document.querySelector("#sourceHighlight");
 let previewFrame = document.querySelector("#previewFrame");
 const playPreview = document.querySelector("#playPreview");
