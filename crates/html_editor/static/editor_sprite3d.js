@@ -1516,8 +1516,8 @@ function sprite3dPaletteEntries() {
 }
 
 function ensureSprite3dPalette() {
-  if (!Array.isArray(sprite3d.palette) || sprite3d.palette.length === 0) {
-    sprite3d.palette = [{ color: "#ff004d" }];
+  if (!Array.isArray(sprite3d.palette)) {
+    sprite3d.palette = [];
   }
 }
 
@@ -2302,6 +2302,52 @@ function addSprite3dToSource() {
   applySprite3dSourceChange(document, result.source, "Added 3D sprite");
 }
 
+async function addEmptySprite3dToSource() {
+  const document = activeSprite3dEditDocument();
+  if (!document || !isTextDocument(document)) {
+    setSprite3dActionStatus("No puzzle source", "is-error");
+    setStatus("No puzzle source for 3D sprite", "is-error");
+    return false;
+  }
+
+  const source = activeSprite3dEditSource();
+  const cursor = typeof spriteSourceCursorPosition === "function"
+    ? spriteSourceCursorPosition(source, document)
+    : source.length;
+  let target = null;
+  try {
+    target = typeof spriteSourceTargetAtCursor === "function"
+      ? await spriteSourceTargetAtCursor(source, cursor)
+      : null;
+  } catch (error) {
+    setSprite3dActionStatus("Source target sync failed", "is-error");
+    setStatus(`Source target sync failed: ${userFacingRuntimeError(error)}`, "is-error");
+    return false;
+  }
+  const result = insertEmptySprite3dDefinition(source, { cursor, target });
+  document.source = result.source;
+  if (document.id === activeDocument()?.id) {
+    setSourceEditorValue(result.source, { resetUndo: false });
+    if (typeof revealSourceLocation === "function") {
+      revealSourceLocation({
+        document,
+        start: result.start,
+        end: result.end,
+      }, {
+        recordHistory: false,
+        revealPane: false,
+      });
+    }
+  }
+  scheduleLocalSave();
+  schedulePreview();
+  applyIncompleteSprite3dSourceTarget("", { start: result.start, end: result.end, bodyStart: result.start, bodyEnd: result.end });
+  sourceEditor.focus({ preventScroll: true });
+  setSprite3dActionStatus("Added unfinished 3D sprite", "is-ok");
+  setStatus("Added unfinished 3D sprite", "is-ok");
+  return true;
+}
+
 function updateSprite3dInSource() {
   const document = activeSprite3dEditDocument();
   if (!document || !isTextDocument(document)) {
@@ -2379,6 +2425,28 @@ function insertSprite3dDefinition(source) {
   };
 }
 
+function insertEmptySprite3dDefinition(source, options = {}) {
+  const block = findSprites3dBlock(source);
+  const cursor = Number.isInteger(options.cursor)
+    ? options.cursor
+    : (typeof spriteSourceCursorPosition === "function" ? spriteSourceCursorPosition(source) : source.length);
+  const target = options.target?.kind === "sprite3d" ? options.target : null;
+  if (!block) {
+    const position = typeof spriteSourceInsertionLineEnd === "function"
+      ? spriteSourceInsertionLineEnd(source, cursor)
+      : source.length;
+    const text = "sprites3 {\n\n}";
+    return insertSpriteSourceTextAt(source, position, text, "sprites3 {\n".length);
+  }
+  const insideBlock = cursor > block.openIndex && cursor < block.closeIndex;
+  const position = target && target.start >= block.bodyStart && target.end <= block.bodyEnd
+    ? spriteSourceInsertionLineEnd(source, target.end)
+    : insideBlock
+      ? spriteSourceInsertionLineEnd(source, cursor)
+      : block.bodyEnd;
+  return insertSpriteSourceTextAt(source, position, "", 0);
+}
+
 function replaceSprite3dDefinition(source) {
   const entry = findSprite3dDefinitionByName(source, sprite3dObjectName());
   if (!entry) {
@@ -2434,7 +2502,14 @@ function loadSprite3dSourceTarget(target, options = {}) {
     bodyEnd: target.bodyEnd,
   });
   if (!loaded) {
-    if (!options.silent) {
+    if (isIncompleteSprite3dSourceTarget(source, target)) {
+      applyIncompleteSprite3dSourceTarget(target.name || "", target);
+      if (!options.silent) {
+        setSprite3dActionStatus(`Loaded unfinished ${sprite3dNameInput.value || "3D sprite"}`, "is-ok");
+        setStatus(`Loaded unfinished 3D sprite ${sprite3dNameInput.value || ""}`.trim(), "is-ok");
+      }
+      return `sprite3d:${target.name}:${target.start ?? target.bodyStart}`;
+    } else if (!options.silent) {
       setSprite3dActionStatus("No editable 3D sprite here", "is-error");
     }
     return null;
@@ -2451,6 +2526,34 @@ function loadSprite3dSourceTarget(target, options = {}) {
     setStatus(`Loaded 3D sprite ${sprite3dNameInput.value}`, "is-ok");
   }
   return `sprite3d:${target.name}:${target.start ?? target.bodyStart}`;
+}
+
+function isIncompleteSprite3dSourceTarget(source, target) {
+  if (!Number.isInteger(target?.bodyStart) || !Number.isInteger(target?.bodyEnd)) {
+    return false;
+  }
+  const body = String(source || "").slice(target.bodyStart, target.bodyEnd);
+  const rows = body
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  return !rows.length || !isSprite3dPaletteRow(rows[0]);
+}
+
+function applyIncompleteSprite3dSourceTarget(name, target) {
+  sprite3dNameInput.value = name || "";
+  sprite3d.size = clampSprite3dSize(sprite3d.size);
+  sprite3d.axis = "z";
+  sprite3d.slice = 0;
+  sprite3d.hoverSlice = null;
+  sprite3d.palette = [];
+  sprite3d.cells = Array.from({ length: sprite3d.size * sprite3d.size * sprite3d.size }, () => null);
+  sprite3d.selectedColorIndex = null;
+  sprite3d.addPaletteOpen = false;
+  sprite3d.editPaletteOpen = false;
+  sprite3d.customColorOpen = false;
+  sprite3d.addDraftColorIndex = null;
+  renderSprite3dBuilder();
 }
 
 function applyLoadedSprite3d(name, loaded) {
@@ -3126,12 +3229,7 @@ for (const input of [
   sprite3dScaleInput,
   sprite3dSliceValue,
 ]) {
-  input?.addEventListener("focus", () => input.select());
-  input?.addEventListener("pointerup", (event) => {
-    if (document.activeElement === input) {
-      event.preventDefault();
-    }
-  });
+  installSelectAllOnFocus(input);
 }
 sprite3dNameInput?.addEventListener("input", () => {
   renderSprite3dPreview();

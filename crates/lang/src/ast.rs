@@ -1,6 +1,6 @@
 use puzzle_core::{ComparisonOp, ConditionId, GlobalUpdateOp, ObjectId, RuleApplication};
 
-use crate::PatternBlock;
+use crate::{PatternBlock, loaded::SceneEffect};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct DirectionName(pub String);
@@ -81,15 +81,6 @@ pub(crate) enum PatternPredicateAst {
     None,
 }
 
-impl PatternPredicateAst {
-    pub(crate) fn inverted(self) -> Self {
-        match self {
-            Self::Some => Self::None,
-            Self::None => Self::Some,
-        }
-    }
-}
-
 #[derive(Clone, Debug, Default)]
 pub(crate) struct FixDefaults {
     pub(crate) application: Option<RuleApplication>,
@@ -165,6 +156,7 @@ pub(crate) enum EffectAst {
         text: String,
         literal: bool,
     },
+    Scene(SceneEffect),
     UpdateGlobal {
         name: String,
         op: GlobalUpdateOp,
@@ -202,6 +194,8 @@ pub(crate) struct OrientedRewriteAst {
     pub(crate) before: PatternBlock,
     pub(crate) after: PatternBlock,
     pub(crate) effects: Vec<EffectAst>,
+    pub(crate) after_effects: Vec<EffectAst>,
+    pub(crate) after_call: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug)]

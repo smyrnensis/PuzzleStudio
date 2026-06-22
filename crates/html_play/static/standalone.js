@@ -38,13 +38,10 @@
     }
 
     initializeSessionRuntime() {
-      if (typeof this.wasmModule?.WasmStandaloneSession !== "function") {
+      if (typeof this.wasmModule?.WasmStandaloneSession?.fromExport !== "function") {
         return false;
       }
-      this.sessionRuntime = new this.wasmModule.WasmStandaloneSession(
-        this.data.source || "",
-        this.data.puzzlePath || "game.puzzle",
-      );
+      this.sessionRuntime = this.wasmModule.WasmStandaloneSession.fromExport(JSON.stringify(this.data || {}));
       this.restoreSessionProgressSave();
       this.usesRustSession = true;
       return true;

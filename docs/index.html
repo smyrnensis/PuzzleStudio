@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>PuzzleStudio Editor</title>
     <link rel="icon" type="image/svg+xml" href="favicon.svg">
-    <script src="editor_boot.js?v=desktop-new-puzzle-source"></script>
+    <script src="editor_boot.js?v=screen-color-picker"></script>
     <link rel="stylesheet" href="renderer.css">
     <link rel="stylesheet" href="editor.css">
     <style id="gameStyle"></style>
@@ -151,6 +151,7 @@
             </div>
           </div>
           <div id="sourceEditorWrap" class="source-editor-wrap">
+            <pre id="sourceLineNumbers" class="source-line-numbers" aria-hidden="true"></pre>
             <pre id="sourceHighlight" class="source-highlight" aria-hidden="true"></pre>
             <textarea id="sourceEditor" spellcheck="false" autocomplete="off" autocapitalize="off"></textarea>
           </div>

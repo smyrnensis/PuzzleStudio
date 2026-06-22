@@ -84,11 +84,11 @@ const PUZZLE3_SCENE_HOST_SOURCE: &str = r#"
 title "__puzzle3_scene_host__"
 
 puzzle scene_host {
-layers 1
+layers {
+  marker = Marker
+}
 empty .
-object Marker 0
 rules {
-
 }
 }
 
@@ -4238,6 +4238,9 @@ fn push_ordered_rule_effect(out: &mut String, effect: &RuleEffect) {
             out.push(',');
             push_json_bool(out, "literal", *literal);
         }
+        RuleEffect::Scene(effect) => {
+            push_json_effect_fields(out, effect);
+        }
     }
     out.push('}');
 }
@@ -4785,6 +4788,19 @@ fn push_compact_rule_step(out: &mut String, step: &RuleStep) {
             out.push(',');
             push_compact_rule_program(out, steps);
         }
+        RuleStep::ConditionalBranch {
+            condition,
+            then_steps,
+            else_steps,
+        } => {
+            out.push('5');
+            out.push(',');
+            push_compact_rule_condition(out, condition);
+            out.push(',');
+            push_compact_rule_program(out, then_steps);
+            out.push(',');
+            push_compact_rule_program(out, else_steps);
+        }
         RuleStep::Block {
             application,
             stop_condition,
@@ -4808,6 +4824,13 @@ fn push_compact_rule_step(out: &mut String, step: &RuleStep) {
             push_compact_local_frame(out, frame);
             out.push(',');
             push_compact_rule_program(out, steps);
+        }
+        RuleStep::AfterTriggered { steps, then_steps } => {
+            out.push('4');
+            out.push(',');
+            push_compact_rule_program(out, steps);
+            out.push(',');
+            push_compact_rule_program(out, then_steps);
         }
     }
     out.push(']');
@@ -6128,6 +6151,15 @@ fn collect_solver_inputs(program: &[RuleStep], inputs: &mut BTreeSet<InputId>) {
                 collect_solver_inputs_from_condition(condition, inputs);
                 collect_solver_inputs(steps, inputs);
             }
+            RuleStep::ConditionalBranch {
+                condition,
+                then_steps,
+                else_steps,
+            } => {
+                collect_solver_inputs_from_condition(condition, inputs);
+                collect_solver_inputs(then_steps, inputs);
+                collect_solver_inputs(else_steps, inputs);
+            }
             RuleStep::Block {
                 stop_condition,
                 steps,
@@ -6139,6 +6171,10 @@ fn collect_solver_inputs(program: &[RuleStep], inputs: &mut BTreeSet<InputId>) {
                 collect_solver_inputs(steps, inputs);
             }
             RuleStep::LocalFrame { steps, .. } => collect_solver_inputs(steps, inputs),
+            RuleStep::AfterTriggered { steps, then_steps } => {
+                collect_solver_inputs(steps, inputs);
+                collect_solver_inputs(then_steps, inputs);
+            }
         }
     }
 }
@@ -8083,6 +8119,13 @@ mod tests {
     }
 
     #[test]
+    fn puzzle3_scene_host_source_uses_current_2d_syntax() {
+        let loaded =
+            parse_game(PUZZLE3_SCENE_HOST_SOURCE).expect("puzzle3 scene host source should parse");
+        assert_eq!(loaded.levels.len(), 1);
+    }
+
+    #[test]
     fn stateful_core_runtime_exposes_changed_cells_for_2d() {
         let source = r#"
 animation {
@@ -8414,6 +8457,8 @@ P
         assert!(
             APP_JS.contains("effects.push({ kind: \"standard_choice\", input: standardInput });")
         );
+        assert!(APP_JS.contains("|| key === \"x\"\n    || code === \"KeyX\";"));
+        assert!(!APP_JS.contains("theme-puzzlescript\") && (key === \"x\""));
         assert!(APP_CSS.contains("button.standard-choice.is-selected"));
     }
 
@@ -8421,6 +8466,9 @@ P
     fn html_play_level_menu_uses_select_command() {
         assert!(APP_JS.contains("sendCommand(`select:${position}`)"));
         assert!(APP_JS.contains("enter: \"select\""));
+        assert!(APP_JS.contains(
+            "if (isStandardMenuConfirmKey(key, rawKey, code)) {\n    return \"enter\";\n  }"
+        ));
         assert!(APP_JS.contains("\"select\","));
         assert!(APP_JS.contains("String(command).split(\":\", 1)[0] === \"select\""));
         assert!(!APP_JS.contains("sendCommand(`enter:${position}`)"));
@@ -9726,6 +9774,8 @@ scene playing {
         assert!(!html.contains("Puzzle3DFrameAssets"));
         assert!(STANDALONE_JS.contains("loadRuntimeModule()"));
         assert!(STANDALONE_JS.contains("initializeSessionRuntime()"));
+        assert!(STANDALONE_JS.contains("WasmStandaloneSession.fromExport(JSON.stringify"));
+        assert!(!STANDALONE_JS.contains("new this.wasmModule.WasmStandaloneSession("));
         assert!(STANDALONE_JS.contains("Puzzle game WASM runtime is unavailable."));
         assert!(!STANDALONE_JS.contains("this.initializeCoreRuntime();"));
         assert!(!STANDALONE_JS.contains("WasmCoreRuntime"));

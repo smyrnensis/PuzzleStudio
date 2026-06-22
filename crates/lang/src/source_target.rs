@@ -319,10 +319,26 @@ fn resolve_sprite_target(
         {
             continue;
         }
+        let line_end = line_end(line);
+        if let Some((name, body_start)) = line_style_sprite_header(line) {
+            if cursor < line.start || cursor > line_end {
+                continue;
+            }
+            return Some(SourceTarget {
+                kind: SourceTargetKind::Sprite,
+                name,
+                start: line.start,
+                end: line_end,
+                body_start: Some(body_start),
+                body_end: Some(line_end),
+                level_index: None,
+                sound_kind: None,
+                params: Vec::new(),
+            });
+        }
         let Some(name) = sprite_name(line) else {
             continue;
         };
-        let line_end = line_end(line);
         if let Some(open_index) = source[line.start..line_end]
             .find('{')
             .map(|offset| line.start + offset)
@@ -429,25 +445,35 @@ fn resolve_sprite3d_target(
             let Some(name) = sprite3d_name(line) else {
                 continue;
             };
-            if !next_sprite3d_palette_line(context, index, block) {
-                continue;
-            }
             let start = line.start;
             let body_start = line_end(line);
             let mut end = body_start;
             let mut body_end = body_start;
+            let complete_entry = next_sprite3d_palette_line(context, index, block);
+            let mut saw_palette_row = false;
             for (next_index, next) in context.lines.iter().enumerate().skip(index + 1) {
                 if next.start >= block.close_index {
                     break;
                 }
-                if sprite3d_name(next).is_some()
+                let next_trimmed = code_trim(&next.content);
+                if !complete_entry && !next_trimmed.is_empty() && sprite3d_name(next).is_some() {
+                    break;
+                }
+                if complete_entry
+                    && sprite3d_name(next).is_some()
                     && next_sprite3d_palette_line(context, next_index, block)
                 {
                     break;
                 }
                 end = line_end(next);
-                if !code_trim(&next.content).is_empty() {
+                if !next_trimmed.is_empty() {
                     body_end = line_end(next);
+                    if is_sprite_color_row(next_trimmed) {
+                        saw_palette_row = true;
+                    }
+                }
+                if !complete_entry && saw_palette_row {
+                    break;
                 }
             }
             if cursor < start || cursor > end {
@@ -510,7 +536,7 @@ fn next_sprite3d_palette_line(
         .take_while(|line| line.start < block.close_index)
         .find_map(|line| {
             let trimmed = code_trim(&line.content);
-            (!trimmed.is_empty()).then_some(is_sprite_color_row(trimmed))
+            (!trimmed.is_empty()).then_some(is_sprite_entry_start_color_row(trimmed))
         })
         .unwrap_or(false)
 }
@@ -539,6 +565,26 @@ fn sprite_name(line: &SourceContextLine) -> Option<String> {
     }
 }
 
+fn line_style_sprite_header(line: &SourceContextLine) -> Option<(String, usize)> {
+    if !matches!(line.scope, Some(SourceScope::Visuals)) {
+        return None;
+    }
+    let [selector, source] = line.tokens.as_slice() else {
+        return None;
+    };
+    if !sprite_definition_name_token(selector)
+        || !(is_visual_image_source(source) || is_sprite_entry_start_color_token(source))
+    {
+        return None;
+    }
+    let body_start = line
+        .token_spans
+        .get(1)
+        .map(|token| token.start)
+        .unwrap_or_else(|| line_end(line));
+    Some((clean_name_token(selector), body_start))
+}
+
 fn clean_table_name(value: &str) -> String {
     clean_name_token(value.split_once(':').map_or(value, |(name, _)| name))
 }
@@ -557,38 +603,30 @@ fn unbraced_sprite_range(
     if !is_unbraced_sprite_header(line) {
         return None;
     }
-    let next_content = context.lines.iter().skip(start_index + 1).find(|next| {
-        next.scope == Some(SourceScope::Visuals) && !code_trim(&next.content).is_empty()
-    })?;
-    if !is_sprite_color_row(code_trim(&next_content.content)) {
-        return None;
-    }
     let body_start = line_end(line);
     let mut end = body_start;
     let mut body_end = body_start;
-    for next in context.lines.iter().skip(start_index + 1) {
+    let mut saw_color_row = false;
+    for (next_index, next) in context.lines.iter().enumerate().skip(start_index + 1) {
         if next.scope != Some(SourceScope::Visuals) {
             break;
         }
         let trimmed = code_trim(&next.content);
-        if !trimmed.is_empty()
-            && next.start != next_content.start
-            && is_visual_sprite_entry_boundary(
-                next,
-                context
-                    .lines
-                    .iter()
-                    .skip_while(|line| line.start < next.start),
-            )
-        {
+        if trimmed == "}" {
+            break;
+        }
+        if !trimmed.is_empty() && starts_next_sprite_entry(context, next_index, saw_color_row) {
             break;
         }
         end = line_end(next);
         if !trimmed.is_empty() {
             body_end = line_end(next);
+            if is_sprite_entry_start_color_row(trimmed) {
+                saw_color_row = true;
+            }
         }
     }
-    (body_end > body_start).then_some((end, body_start, body_end))
+    Some((end, body_start, body_end))
 }
 
 fn is_unbraced_sprite_header(line: &SourceContextLine) -> bool {
@@ -600,6 +638,7 @@ fn is_unbraced_sprite_header(line: &SourceContextLine) -> bool {
 fn is_visual_sprite_entry_boundary<'a>(
     line: &SourceContextLine,
     following: impl Iterator<Item = &'a SourceContextLine>,
+    current_saw_color_row: bool,
 ) -> bool {
     if !matches!(line.scope, Some(SourceScope::Visuals)) {
         return false;
@@ -610,14 +649,13 @@ fn is_visual_sprite_entry_boundary<'a>(
         }
         [selector, source]
             if sprite_definition_name_token(selector)
-                && !is_sprite_color(selector)
+                && current_saw_color_row
                 && (is_visual_image_source(source)
-                    || is_sprite_color(source)
-                    || sprite_definition_name_token(source)) =>
+                    || is_sprite_entry_start_color_token(source)) =>
         {
             true
         }
-        [selector] if sprite_definition_name_token(selector) => following
+        [selector] if current_saw_color_row && sprite_definition_name_token(selector) => following
             .skip(1)
             .find(|next| {
                 next.scope == Some(SourceScope::Visuals) && !code_trim(&next.content).is_empty()
@@ -628,6 +666,30 @@ fn is_visual_sprite_entry_boundary<'a>(
             }),
         _ => false,
     }
+}
+
+fn starts_next_sprite_entry(
+    context: &SourceContext,
+    line_index: usize,
+    current_saw_color_row: bool,
+) -> bool {
+    let Some(line) = context.lines.get(line_index) else {
+        return false;
+    };
+    if !matches!(line.scope, Some(SourceScope::Visuals)) {
+        return false;
+    }
+    if is_visual_sprite_entry_boundary(
+        line,
+        context.lines.iter().skip(line_index),
+        current_saw_color_row,
+    ) {
+        return true;
+    }
+    if is_sprite_entry_start_color_row(code_trim(&line.content)) {
+        return false;
+    }
+    !current_saw_color_row && sprite_name(line).is_some()
 }
 
 fn sprite_definition_name_token(value: &str) -> bool {
@@ -644,6 +706,21 @@ fn sprite_definition_name_token(value: &str) -> bool {
 fn is_sprite_color_row(line: &str) -> bool {
     let colors = line.split_whitespace().collect::<Vec<_>>();
     !colors.is_empty() && colors.iter().all(|color| is_sprite_color_expr(color))
+}
+
+fn is_sprite_entry_start_color_row(line: &str) -> bool {
+    let colors = line.split_whitespace().collect::<Vec<_>>();
+    if colors.is_empty() || !colors.iter().all(|color| is_sprite_color_expr(color)) {
+        return false;
+    }
+    colors.len() > 1
+        || colors
+            .first()
+            .is_some_and(|color| is_sprite_color(color) || color.contains(':'))
+}
+
+fn is_sprite_entry_start_color_token(token: &str) -> bool {
+    is_sprite_color(token) || token.contains(':')
 }
 
 fn is_sprite_color_expr(value: &str) -> bool {
@@ -878,6 +955,109 @@ Player {
     }
 
     #[test]
+    fn resolves_unfinished_sprite_name_as_sprite_target() {
+        let source = r#"
+sprites {
+Player
+}
+"#;
+        let cursor = source.find("Player").unwrap() + "Player".len();
+        let target = resolve_source_target(source, cursor).unwrap();
+
+        assert_eq!(target.kind, SourceTargetKind::Sprite);
+        assert_eq!(target.name, "Player");
+        assert_eq!(target.body_start, target.body_end);
+    }
+
+    #[test]
+    fn resolves_unfinished_sprite_body_as_sprite_target() {
+        let source = r##"
+sprites {
+Player
+#f
+}
+"##;
+        let cursor = source.find("#f").unwrap() + 1;
+        let target = resolve_source_target(source, cursor).unwrap();
+
+        assert_eq!(target.kind, SourceTargetKind::Sprite);
+        assert_eq!(target.name, "Player");
+        let body = &source[target.body_start.unwrap()..target.body_end.unwrap()];
+        assert!(body.contains("#f"));
+    }
+
+    #[test]
+    fn resolves_line_style_sprite_named_like_color() {
+        let source = r##"
+sprites {
+red #f00
+}
+"##;
+        let cursor = source.find("#f00").unwrap();
+        let target = resolve_source_target(source, cursor).unwrap();
+
+        assert_eq!(target.kind, SourceTargetKind::Sprite);
+        assert_eq!(target.name, "red");
+        let body = &source[target.body_start.unwrap()..target.body_end.unwrap()];
+        assert_eq!(body.trim(), "#f00");
+    }
+
+    #[test]
+    fn resolves_split_sprite_named_like_color_after_ascii_body() {
+        let source = r##"
+sprites {
+Player
+#000
+0
+red
+#f00
+}
+"##;
+        let cursor = source.find("#f00").unwrap();
+        let target = resolve_source_target(source, cursor).unwrap();
+
+        assert_eq!(target.kind, SourceTargetKind::Sprite);
+        assert_eq!(target.name, "red");
+        let body = &source[target.body_start.unwrap()..target.body_end.unwrap()];
+        assert!(body.contains("#f00"));
+        assert!(!body.contains("#000"));
+    }
+
+    #[test]
+    fn color_name_palette_row_stays_in_current_sprite_target() {
+        let source = r##"
+sprites {
+Player
+red blue
+01
+}
+"##;
+        let cursor = source.find("red blue").unwrap();
+        let target = resolve_source_target(source, cursor).unwrap();
+
+        assert_eq!(target.kind, SourceTargetKind::Sprite);
+        assert_eq!(target.name, "Player");
+        let body = &source[target.body_start.unwrap()..target.body_end.unwrap()];
+        assert!(body.contains("red blue"));
+        assert!(body.contains("01"));
+    }
+
+    #[test]
+    fn unfinished_unbraced_sprite_stops_before_next_entry_header() {
+        let source = r#"
+sprites {
+Player
+Box
+}
+"#;
+        let cursor = source.find("Box").unwrap();
+        let target = resolve_source_target(source, cursor).unwrap();
+
+        assert_eq!(target.kind, SourceTargetKind::Sprite);
+        assert_eq!(target.name, "Box");
+    }
+
+    #[test]
     fn resolves_unbraced_at_sprite_before_next_at_sprite() {
         let source = r##"
 sprites {
@@ -973,6 +1153,28 @@ Gate_color_1 Gate_color_2
     }
 
     #[test]
+    fn resolves_unbraced_tagged_sprite_after_tagged_sprite() {
+        let source = r##"
+sprites {
+Box:base
+#aaa
+0
+Box:movable
+#bbb
+0
+}
+"##;
+        let cursor = source.rfind("#bbb").unwrap();
+        let target = resolve_source_target(source, cursor).unwrap();
+
+        assert_eq!(target.kind, SourceTargetKind::Sprite);
+        assert_eq!(target.name, "Box:movable");
+        let body = &source[target.body_start.unwrap()..target.body_end.unwrap()];
+        assert!(body.contains("#bbb"));
+        assert!(!body.contains("#aaa"));
+    }
+
+    #[test]
     fn resolves_unbraced_sprite_before_split_line_image_sprite() {
         let source = r##"
 sprites {
@@ -1037,6 +1239,36 @@ Goal
 }
 "##;
         let cursor = source.find(".000.").unwrap();
+        let target = resolve_source_target(source, cursor).unwrap();
+
+        assert_eq!(target.kind, SourceTargetKind::Sprite3d);
+        assert_eq!(target.name, "Goal");
+    }
+
+    #[test]
+    fn resolves_unfinished_sprite3d_name_as_sprite3d_target() {
+        let source = r#"
+sprites3 basic {
+Floor
+}
+"#;
+        let cursor = source.find("Floor").unwrap() + "Floor".len();
+        let target = resolve_source_target(source, cursor).unwrap();
+
+        assert_eq!(target.kind, SourceTargetKind::Sprite3d);
+        assert_eq!(target.name, "Floor");
+        assert_eq!(target.body_start, target.body_end);
+    }
+
+    #[test]
+    fn unfinished_sprite3d_stops_before_next_entry_header() {
+        let source = r#"
+sprites3 basic {
+Floor
+Goal
+}
+"#;
+        let cursor = source.find("Goal").unwrap();
         let target = resolve_source_target(source, cursor).unwrap();
 
         assert_eq!(target.kind, SourceTargetKind::Sprite3d);

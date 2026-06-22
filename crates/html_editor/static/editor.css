@@ -49,6 +49,8 @@
   --syntax-scene: #ce9178;
   --syntax-section-rule: #9cdcfe;
   --syntax-theme: #cba6f7;
+  --syntax-level-cell: color-mix(in srgb, var(--code-ink) 72%, var(--code-bg));
+  --syntax-level-cell-invalid: #ff9da4;
   --sprite-ascii-color-adjust: #ffffff;
   --sprite-ascii-color-retain: 80%;
   --syntax-sprite-pixel-adjust: var(--sprite-ascii-color-adjust);
@@ -122,6 +124,7 @@ html[data-theme="light"] {
   --syntax-scene: #9a4d2f;
   --syntax-section-rule: #0f6f95;
   --syntax-theme: #6f42c1;
+  --syntax-level-cell-invalid: #b32634;
   --sprite-ascii-color-adjust: #000000;
   --sprite-ascii-color-retain: 80%;
   --syntax-sprite-pixel-adjust: var(--sprite-ascii-color-adjust);
@@ -1096,6 +1099,24 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   white-space: nowrap;
 }
 
+.document-tab-unsaved-dot {
+  width: 8px;
+  min-width: 8px;
+  height: 8px;
+  min-height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+  opacity: 0;
+}
+
+.document-tab.is-unsaved .document-tab-unsaved-dot {
+  opacity: 1;
+}
+
+.document-tab.is-active.is-unsaved .document-tab-unsaved-dot {
+  background: var(--ink);
+}
+
 .document-tab-close {
   width: 18px;
   min-width: 18px;
@@ -1242,13 +1263,14 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   overflow: hidden;
   background: var(--code-bg);
   --source-selection-bg: color-mix(in srgb, var(--accent) 34%, transparent);
+  --source-line-gutter-width: 44px;
 }
 
 #sourceEditor,
 .source-highlight {
   width: 100%;
   height: 100%;
-  padding: 16px;
+  padding: 16px 16px 16px calc(16px + var(--source-line-gutter-width));
   margin: 0;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
   font-size: 13px;
@@ -1258,11 +1280,41 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   overflow-wrap: break-word;
 }
 
+.source-line-numbers {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 2;
+  width: var(--source-line-gutter-width);
+  min-height: 100%;
+  padding: 16px 8px 16px 0;
+  margin: 0;
+  overflow: hidden;
+  border-right: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
+  background: var(--code-bg);
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 20px;
+  text-align: right;
+  user-select: none;
+  pointer-events: none;
+  will-change: transform;
+}
+
+.source-line-number-row {
+  display: flex;
+  justify-content: flex-end;
+  min-height: 20px;
+  line-height: 20px;
+}
+
 .source-highlight {
   position: absolute;
   inset: 0;
   pointer-events: none;
   color: var(--code-ink);
+  will-change: transform;
 }
 
 .source-block-selection-layer {
@@ -1298,41 +1350,19 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
     0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent);
 }
 
-.source-caret-layer {
-  position: absolute;
-  inset: 0;
-  z-index: 4;
-  pointer-events: none;
-}
-
-.source-caret-layer[hidden] {
-  display: none;
-}
-
-.source-caret {
-  position: absolute;
-  width: 1px;
-  min-height: 1em;
-  background: var(--code-ink);
-  animation: source-caret-blink 1s steps(1, end) infinite;
-}
-
-@keyframes source-caret-blink {
-  0%,
-  49% {
-    opacity: 1;
-  }
-
-  50%,
-  100% {
-    opacity: 0;
-  }
-}
-
 .source-block-selection-range {
   position: absolute;
   min-width: 2px;
   background: var(--source-selection-bg);
+}
+
+.source-block-selection-caret {
+  position: absolute;
+  width: 2px;
+  min-height: 20px;
+  border-radius: 1px;
+  background: var(--code-ink);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--code-bg) 40%, transparent);
 }
 
 .source-import-link-frame {
@@ -1665,6 +1695,14 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
 .syntax-condition { color: var(--syntax-condition); }
 .syntax-scene { color: var(--syntax-scene); }
 .syntax-theme { color: var(--syntax-theme); }
+.syntax-level-cell { color: var(--syntax-level-cell); }
+.syntax-level-cell-invalid {
+  color: var(--syntax-level-cell-invalid);
+  font-weight: 800;
+  text-decoration: underline;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 2px;
+}
 .syntax-section-rule {
   color: var(--syntax-section-rule);
   font-weight: 800;
@@ -1830,6 +1868,19 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
 
 .preview-log-line {
   color: var(--log-ink);
+}
+
+.preview-log-line.is-navigable {
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+
+.preview-log-line.is-navigable:hover,
+.preview-log-line.is-navigable:focus-visible {
+  color: var(--accent);
+  outline: none;
 }
 
 .preview-log-line + .preview-log-line {

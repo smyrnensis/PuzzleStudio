@@ -60,8 +60,6 @@ pub(crate) enum SemanticCompletionSlot {
     Directions,
     DirectionSets,
     Inputs,
-    Commands,
-    Effects,
     ModelEffects,
     SceneEffects,
     Emissions,
@@ -69,7 +67,6 @@ pub(crate) enum SemanticCompletionSlot {
     Conditions,
     Scenes,
     Puzzles,
-    Levels,
     SfxAssets,
     MusicAssets,
     Sprites,
@@ -301,6 +298,7 @@ fn line_head_completion_slots(
         {
             vec![
                 SemanticCompletionSlot::Keywords(RULE_HEAD_COMPLETION_KEYWORDS),
+                SemanticCompletionSlot::Routines,
                 SemanticCompletionSlot::Directions,
                 SemanticCompletionSlot::DirectionSets,
             ]
@@ -1258,6 +1256,7 @@ fn scan_authoring_semantic_line(
     scan_levels_header(tokens, ranges);
     scan_level_header(tokens, ranges);
     scan_theme_header(tokens, ranges);
+    scan_routine_header(tokens, ranges);
     scan_condition_reference_tokens(tokens, ranges);
     scan_state_declaration_line(tokens, ranges);
     scan_tag_set_line(scope, tokens, ranges);
@@ -1300,6 +1299,36 @@ fn scan_state_declaration_line(tokens: &[LineToken<'_>], ranges: &mut Vec<Semant
     if let Some(name) = name {
         add_token_range(ranges, name, SemanticKind::State);
     }
+}
+
+fn scan_routine_header(tokens: &[LineToken<'_>], ranges: &mut Vec<SemanticToken>) {
+    let Some(kind) = tokens.first().copied() else {
+        return;
+    };
+    if !matches!(kind.text, "routine" | "rule") {
+        return;
+    }
+
+    add_token_range(ranges, kind, SemanticKind::Keyword);
+    let mut name_index = 1usize;
+    if let Some(display) = tokens.get(name_index).copied()
+        && display.text == "display"
+    {
+        add_token_range(ranges, display, SemanticKind::Keyword);
+        name_index += 1;
+    }
+    if let Some(name) = tokens.get(name_index).copied() {
+        add_token_range(ranges, name, SemanticKind::Effect);
+    }
+    if let Some(application) = tokens.get(name_index + 1).copied()
+        && rule_application_keyword(application.text)
+    {
+        add_token_range(ranges, application, SemanticKind::Keyword);
+    }
+}
+
+fn rule_application_keyword(token: &str) -> bool {
+    matches!(token, "once" | "once_all" | "once_per_level" | "repeat")
 }
 
 fn scan_tag_set_line(

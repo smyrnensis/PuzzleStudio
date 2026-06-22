@@ -28,12 +28,16 @@ async function main() {
       await page.navigate(server.url);
       await editorLoads(page);
       await sourceEditorReflectsInputBeforeKeyup(page);
+      await sourceUndoSurvivesSameDocumentReload(page);
       await sourceEditorReflectsCompositionBeforeCommit(page);
+      await sourceCompletionKeepsKeyboardSelectionAcrossRefresh(page);
+      await sourceRewritePatternTabCopiesLhsToEmptyRhs(page);
       if (sourceInputOnly) {
         return;
       }
       await runPreviewStartsRuntime(page);
       await levelPlaytestKeyboardChangesBoardWithoutSavingSource(page);
+      await sourceLevelAsciiClickOpensLevelEditor(page);
     });
 
     if (!sourceInputOnly) {
@@ -92,6 +96,82 @@ async function runPreviewStartsRuntime(page) {
   await page.assertNoErrors("run preview");
 }
 
+async function sourceLevelAsciiClickOpensLevelEditor(page) {
+  const source = `title "Ascii Click Smoke"
+
+puzzle main {
+  layers {
+    actor = Player
+  }
+
+  rules {
+  }
+}
+
+levels main of main {
+  legend {
+    . = empty
+    P = Player
+  }
+
+  level ascii
+  P
+}
+`;
+  await page.evaluateTop(`(() => {
+    const source = ${JSON.stringify(source)};
+    setSourceEditorValue(source, { resetUndo: true });
+    if (documents[currentDocumentIndex]) {
+      documents[currentDocumentIndex].source = source;
+    }
+    sourceEditor.setSelectionRange(0, 0);
+    scheduleSourceHighlight(true);
+    scheduleLocalSave();
+    return true;
+  })()`);
+  await clickTop(page, "#runButton");
+  await waitForTopWithDiagnostics(
+    page,
+    `Boolean(previewExport?.levels?.some((level) => level.name === "main.ascii" || level.name === "ascii"))`,
+    "level ascii preview export",
+    { timeoutMs: 20_000 }
+  );
+  const clickPoint = await page.evaluateTop(`(() => {
+    const editor = document.querySelector("#sourceEditor");
+    const source = editor?.value || "";
+    const offset = source.indexOf("level ascii");
+    if (offset < 0) {
+      throw new Error("missing level ascii source");
+    }
+    const linesBefore = source.slice(0, offset).split("\\n").length - 1;
+    const lineHeight = sourceEditorLineHeight();
+    editor.scrollTop = Math.max(0, (linesBefore - 4) * lineHeight);
+    syncSourceHighlightScroll();
+    const point = sourceVisualCaretPoint(offset);
+    if (!point) {
+      throw new Error("missing visual caret point for level ascii");
+    }
+    const rect = sourceEditorWrap.getBoundingClientRect();
+    return {
+      x: Math.round(rect.left + point.left + 8),
+      y: Math.round(rect.top + point.top + lineHeight / 2),
+    };
+  })()`);
+  await clickViewport(page, clickPoint);
+  await waitForTopWithDiagnostics(
+    page,
+    `Boolean(
+      currentPreviewMode === "edit"
+      && document.querySelector("#levelBuilder")
+      && !document.querySelector("#levelBuilder").hidden
+      && document.querySelector("#levelNameInput")?.value === "ascii"
+    )`,
+    "level ascii source click opens 2D level editor",
+    { timeoutMs: 10_000 }
+  );
+  await page.assertNoErrors("level ascii source click");
+}
+
 async function sourceEditorReflectsInputBeforeKeyup(page) {
   await page.evaluateTop(`(() => {
     const editor = document.querySelector("#sourceEditor");
@@ -113,15 +193,22 @@ async function sourceEditorReflectsInputBeforeKeyup(page) {
   })()`);
 
   try {
-    await page.send("Input.dispatchKeyEvent", {
-      type: "keyDown",
-      key: "a",
-      code: "KeyA",
-      windowsVirtualKeyCode: 65,
-      nativeVirtualKeyCode: 65,
-      unmodifiedText: "a",
-      text: "a",
-    });
+    await page.evaluateTop(`(() => {
+      if (typeof handleSourcePrintableKeydownInput !== "function") {
+        throw new Error("missing handleSourcePrintableKeydownInput");
+      }
+      handleSourcePrintableKeydownInput({
+        defaultPrevented: false,
+        isComposing: false,
+        altKey: false,
+        ctrlKey: false,
+        metaKey: false,
+        key: "a",
+        preventDefault() {},
+        stopPropagation() {},
+      });
+      return true;
+    })()`);
     try {
       await page.waitForTop(
         `(() => {
@@ -162,15 +249,7 @@ async function sourceEditorReflectsInputBeforeKeyup(page) {
       throw new Error(`${error.message}\nSource diagnostics: ${JSON.stringify(diagnostics, null, 2)}`);
     }
   } finally {
-    await page.send("Input.dispatchKeyEvent", {
-      type: "keyUp",
-      key: "a",
-      code: "KeyA",
-      windowsVirtualKeyCode: 65,
-      nativeVirtualKeyCode: 65,
-      unmodifiedText: "",
-      text: "",
-    }).catch(() => {});
+    await page.evaluateTop(`true`).catch(() => {});
     await page.evaluateTop(`(() => {
       const original = window.__sourceRealtimeOriginal;
       if (typeof original !== "string") {
@@ -188,6 +267,57 @@ async function sourceEditorReflectsInputBeforeKeyup(page) {
     })()`).catch(() => {});
   }
   await page.assertNoErrors("source input reflection");
+}
+
+async function sourceUndoSurvivesSameDocumentReload(page) {
+  await page.evaluateTop(`(() => {
+    const editor = document.querySelector("#sourceEditor");
+    if (!editor || typeof loadEmbeddedDocument !== "function" || typeof handleSourceUndoShortcut !== "function") {
+      throw new Error("missing source undo reload helpers");
+    }
+    const original = editor.value || "";
+    const insertAt = Math.max(0, original.indexOf("\\n"));
+    setSourceEditorValue(original, { resetUndo: true });
+    editor.focus();
+    editor.setSelectionRange(insertAt, insertAt);
+    handleSourcePrintableKeydownInput({
+      defaultPrevented: false,
+      isComposing: false,
+      altKey: false,
+      ctrlKey: false,
+      metaKey: false,
+      key: "z",
+      preventDefault() {},
+      stopPropagation() {},
+    });
+    const edited = editor.value || "";
+    if (edited === original) {
+      throw new Error("source edit did not change source before reload");
+    }
+    if (documents[currentDocumentIndex]) {
+      documents[currentDocumentIndex].source = edited;
+    }
+    loadEmbeddedDocument(currentDocumentIndex);
+    const handled = handleSourceUndoShortcut({
+      altKey: false,
+      ctrlKey: false,
+      metaKey: true,
+      shiftKey: false,
+      key: "z",
+      preventDefault() {},
+      stopPropagation() {},
+    });
+    if (!handled || editor.value !== original) {
+      throw new Error("same-document reload cleared source undo history");
+    }
+    if (documents[currentDocumentIndex]) {
+      documents[currentDocumentIndex].source = original;
+    }
+    setSourceEditorValue(original, { resetUndo: true });
+    scheduleSourceHighlight(true);
+    return true;
+  })()`);
+  await page.assertNoErrors("source undo after same-document reload");
 }
 
 async function sourceEditorReflectsCompositionBeforeCommit(page) {
@@ -221,14 +351,16 @@ async function sourceEditorReflectsCompositionBeforeCommit(page) {
     try {
       await page.waitForTop(
         `(() => {
-          const editor = document.querySelector("#sourceEditor");
-          const highlight = document.querySelector("#sourceHighlight");
-          return Boolean(
-            editor?.value === ""
-            && highlight?.textContent === "a"
-            && documents[currentDocumentIndex]?.source === ""
-          );
-        })()`,
+        const editor = document.querySelector("#sourceEditor");
+        const highlight = document.querySelector("#sourceHighlight");
+        const wrap = document.querySelector("#sourceEditorWrap");
+        return Boolean(
+          editor?.value === ""
+          && highlight?.textContent === "a"
+          && documents[currentDocumentIndex]?.source === ""
+          && !wrap?.classList.contains("is-native-input-active")
+        );
+      })()`,
         "source composition reflection before commit",
         { timeoutMs: 5_000 }
       );
@@ -265,6 +397,139 @@ async function sourceEditorReflectsCompositionBeforeCommit(page) {
     })()`).catch(() => {});
   }
   await page.assertNoErrors("source composition reflection");
+}
+
+async function sourceCompletionKeepsKeyboardSelectionAcrossRefresh(page) {
+  await page.evaluateTop(`(() => {
+    if (
+      typeof sourceCompletionSelectedIndexForSession !== "function"
+      || typeof sourceCompletionSessionMatches !== "function"
+      || typeof sourceCompletionMatchesCurrentCursor !== "function"
+    ) {
+      throw new Error("missing source completion selection helpers");
+    }
+    const previous = {
+      mode: "completion",
+      source: "abc",
+      cursor: 3,
+      replaceStart: 1,
+      replaceEnd: 3,
+      items: [
+        { label: "alpha", insertText: "alpha", kind: "keyword", detail: "" },
+        { label: "beta", insertText: "beta", kind: "keyword", detail: "" },
+      ],
+      selectedIndex: 1,
+      keyboardCommit: true,
+    };
+    const next = {
+      mode: "completion",
+      source: previous.source,
+      cursor: previous.cursor,
+      replaceStart: previous.replaceStart,
+      replaceEnd: previous.replaceEnd,
+      items: [
+        { label: "alpha", insertText: "alpha", kind: "keyword", detail: "" },
+        { label: "beta", insertText: "beta", kind: "keyword", detail: "" },
+      ],
+    };
+    if (sourceCompletionSelectedIndexForSession(previous, next) !== 1) {
+      throw new Error("completion selection reset during same-session refresh");
+    }
+    const editor = document.querySelector("#sourceEditor");
+    if (!editor || !sourceCompletionPopover) {
+      throw new Error("missing source editor completion UI");
+    }
+    const originalShow = showSourceCompletions;
+    const originalState = sourceCompletionState;
+    const originalValue = editor.value;
+    const originalStart = editor.selectionStart;
+    const originalEnd = editor.selectionEnd;
+    const originalHidden = sourceCompletionPopover.hidden;
+    let calls = 0;
+    try {
+      showSourceCompletions = () => {
+        calls += 1;
+        return false;
+      };
+      editor.value = previous.source;
+      editor.focus();
+      editor.setSelectionRange(previous.cursor, previous.cursor);
+      sourceCompletionState = { ...previous };
+      sourceCompletionPopover.hidden = false;
+      editor.dispatchEvent(new KeyboardEvent("keyup", { key: "ArrowDown", bubbles: true }));
+    } finally {
+      showSourceCompletions = originalShow;
+      sourceCompletionState = originalState;
+      sourceCompletionPopover.hidden = originalHidden;
+      editor.value = originalValue;
+      editor.setSelectionRange(originalStart, originalEnd);
+    }
+    if (calls !== 0) {
+      throw new Error("completion ArrowDown keyup reopened completions");
+    }
+    return true;
+  })()`);
+  await page.assertNoErrors("source completion keyboard selection");
+}
+
+async function sourceRewritePatternTabCopiesLhsToEmptyRhs(page) {
+  await page.evaluateTop(`(() => {
+    const editor = document.querySelector("#sourceEditor");
+    if (!editor || typeof handleSourceRewritePatternTab !== "function") {
+      throw new Error("missing source rewrite pattern tab helper");
+    }
+    const original = editor.value || "";
+    const source = "puzzle tab_rhs\\nrules\\n[ A B C ] -> ";
+    const cursor = source.length;
+    setSourceEditorValue(source, { resetUndo: true });
+    if (documents[currentDocumentIndex]) {
+      documents[currentDocumentIndex].source = source;
+    }
+    editor.focus();
+    editor.setSelectionRange(cursor, cursor);
+    const event = {
+      key: "Tab",
+      altKey: false,
+      ctrlKey: false,
+      metaKey: false,
+      shiftKey: false,
+      defaultPrevented: false,
+      propagationStopped: false,
+      preventDefault() {
+        this.defaultPrevented = true;
+      },
+      stopPropagation() {
+        this.propagationStopped = true;
+      },
+    };
+    const handled = handleSourceRewritePatternTab(event);
+    const expected = "puzzle tab_rhs\\nrules\\n[ A B C ] -> [ A B C ]";
+    const result = {
+      handled,
+      value: editor.value,
+      selectionStart: editor.selectionStart,
+      selectionEnd: editor.selectionEnd,
+      defaultPrevented: event.defaultPrevented,
+      propagationStopped: event.propagationStopped,
+    };
+    if (documents[currentDocumentIndex]) {
+      documents[currentDocumentIndex].source = original;
+    }
+    setSourceEditorValue(original, { resetUndo: true });
+    scheduleSourceHighlight(true);
+    if (
+      !handled
+      || result.value !== expected
+      || result.selectionStart !== expected.length
+      || result.selectionEnd !== expected.length
+      || !result.defaultPrevented
+      || !result.propagationStopped
+    ) {
+      throw new Error(\`rewrite RHS Tab did not copy LHS pattern: \${JSON.stringify(result)}\`);
+    }
+    return true;
+  })()`);
+  await page.assertNoErrors("source rewrite RHS Tab copy");
 }
 
 async function levelPlaytestKeyboardChangesBoardWithoutSavingSource(page) {
@@ -394,6 +659,25 @@ async function clickTop(page, selector) {
     element.click();
     return true;
   })()`);
+}
+
+async function clickViewport(page, { x, y }) {
+  await page.send("Input.dispatchMouseEvent", {
+    type: "mousePressed",
+    button: "left",
+    buttons: 1,
+    clickCount: 1,
+    x,
+    y,
+  });
+  await page.send("Input.dispatchMouseEvent", {
+    type: "mouseReleased",
+    button: "left",
+    buttons: 0,
+    clickCount: 1,
+    x,
+    y,
+  });
 }
 
 async function pressKey(page, { key, code, keyCode }) {

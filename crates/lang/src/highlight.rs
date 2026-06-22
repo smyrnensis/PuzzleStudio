@@ -44,6 +44,8 @@ enum HighlightKind {
     Brace4,
     Brace5,
     InvalidBrace,
+    LevelCell,
+    InvalidLevelCell,
 }
 
 impl HighlightKind {
@@ -77,6 +79,8 @@ impl HighlightKind {
             HighlightKind::Brace4 => "syntax-brace-depth-4",
             HighlightKind::Brace5 => "syntax-brace-depth-5",
             HighlightKind::InvalidBrace => "syntax-brace-invalid",
+            HighlightKind::LevelCell => "syntax-level-cell",
+            HighlightKind::InvalidLevelCell => "syntax-level-cell-invalid",
         }
     }
 }
@@ -239,13 +243,25 @@ fn highlight_html(
     let binding_ranges = scan_for_binding_ranges(source);
     let semantic_ranges = semantic_tokens(source);
     let keyword_ranges = scan_contextual_keyword_ranges(&context);
-    let brace_ranges = scan_brace_ranges(source, &context);
+    let brace_ranges = scan_brace_ranges(source);
+    let level_ascii_ranges = scan_level_ascii_ranges(&context);
     let visual_color_aliases = scan_visual_color_aliases(&context);
     let visual_named_color_ranges = scan_visual_named_color_ranges(&context, &visual_color_aliases);
     let visual_ascii_color_ranges = scan_visual_ascii_color_ranges(source, &visual_color_aliases);
     let mut chars = source.char_indices().peekable();
 
     while let Some((index, ch)) = chars.next() {
+        if let Some(range) = level_ascii_range_starting_at(&level_ascii_ranges, index) {
+            let kind = if range.known {
+                HighlightKind::LevelCell
+            } else {
+                HighlightKind::InvalidLevelCell
+            };
+            push_span(&mut out, kind, &source[range.start..range.end]);
+            skip_until(&mut chars, range.end);
+            continue;
+        }
+
         if let Some(range) = visual_ascii_color_range_starting_at(&visual_ascii_color_ranges, index)
         {
             push_colored_text_span(
@@ -330,7 +346,7 @@ fn highlight_html(
             continue;
         }
 
-        if is_word_start(ch) {
+        if is_word_start_at(source, index, ch) {
             let end = consume_word(source, index);
             let token = &source[index..end];
             if context.is_plain_range(index, end) {
@@ -384,10 +400,7 @@ fn highlight_html(
     out
 }
 
-fn scan_brace_ranges(
-    source: &str,
-    context: &crate::source::SourceContext,
-) -> HashMap<usize, HighlightKind> {
+fn scan_brace_ranges(source: &str) -> HashMap<usize, HighlightKind> {
     let mut ranges = HashMap::<usize, HighlightKind>::new();
     let mut block_stack = Vec::<(usize, usize)>::new();
     let mut line_start = 0usize;
@@ -395,19 +408,17 @@ fn scan_brace_ranges(
     for line in source.split_inclusive('\n') {
         let line_end = line_start + line.len();
         let content_end = line_end - usize::from(line.ends_with('\n'));
-        if context.raw_range_starting_at(line_start).is_none() {
-            scan_brace_line(
-                source,
-                line_start,
-                content_end,
-                &mut block_stack,
-                &mut ranges,
-            );
-        }
+        scan_brace_line(
+            source,
+            line_start,
+            content_end,
+            &mut block_stack,
+            &mut ranges,
+        );
         line_start = line_end;
     }
 
-    if line_start < source.len() && context.raw_range_starting_at(line_start).is_none() {
+    if line_start < source.len() {
         scan_brace_line(
             source,
             line_start,
@@ -448,20 +459,6 @@ fn scan_brace_line(
     while brace_index < braces.len() {
         let (index, ch) = braces[brace_index];
         match ch {
-            '{' if is_inline_selector_scratch_open(source, index) => {
-                if let Some(close) = inline_selector_scratch_close(source, index, content_end)
-                    && let Some(close_offset) = braces[brace_index + 1..]
-                        .iter()
-                        .position(|(brace_index, brace)| *brace_index == close && *brace == '}')
-                {
-                    let close_index = brace_index + 1 + close_offset;
-                    ranges.insert(index, HighlightKind::Scratch);
-                    ranges.insert(braces[close_index].0, HighlightKind::Scratch);
-                    brace_index = close_index + 1;
-                    continue;
-                }
-                ranges.insert(index, HighlightKind::InvalidBrace);
-            }
             '{' => {
                 let depth = block_stack.len();
                 block_stack.push((index, depth));
@@ -479,28 +476,6 @@ fn scan_brace_line(
         }
         brace_index += 1;
     }
-}
-
-fn is_inline_selector_scratch_open(source: &str, index: usize) -> bool {
-    let before = source[..index].chars().next_back();
-    let after = source[index + 1..].chars().next();
-    before.is_some_and(is_selector_token_char) && after.is_some_and(|ch| !ch.is_whitespace())
-}
-
-fn inline_selector_scratch_close(source: &str, open: usize, content_end: usize) -> Option<usize> {
-    for (offset, ch) in source[open + 1..content_end].char_indices() {
-        let index = open + 1 + offset;
-        match ch {
-            '}' => return Some(index),
-            '[' | ']' | '|' | ';' | ',' | '(' | ')' | '{' => return None,
-            _ => {}
-        }
-    }
-    None
-}
-
-fn is_selector_token_char(ch: char) -> bool {
-    ch.is_ascii_alphanumeric() || matches!(ch, '_' | '@' | ':' | '*')
 }
 
 fn line_code_end(line: &str) -> usize {
@@ -846,7 +821,7 @@ fn collect_schema_object_spec(
             family_axes.insert(base.to_string(), parts.len() - 1);
         }
         for axis in parts.iter().skip(1) {
-            if is_source_symbol_name(axis) && !parser_keyword(axis) {
+            if is_source_symbol_name(axis) {
                 family_axis_names.insert((*axis).to_string());
             }
         }
@@ -885,14 +860,13 @@ fn collect_scratch_spec(
 fn insert_scratch_symbol(symbols: &mut HashMap<String, HighlightKind>, name: &str) {
     if is_source_symbol_name(name) {
         insert_source_symbol(symbols, name, HighlightKind::Scratch);
-    } else if is_source_qualified_identifier(name) && !parser_literal(name) {
+    } else if is_source_scratch_qualified_identifier(name) && !parser_literal(name) {
         symbols.insert(name.to_string(), HighlightKind::Scratch);
     }
 }
 
 fn tag_set_tokens(name: &str, values: &[&str]) -> bool {
     is_source_identifier(name)
-        && !parser_keyword(name)
         && !values.is_empty()
         && values.iter().all(|value| is_source_identifier(value))
 }
@@ -962,12 +936,12 @@ fn is_source_identifier(name: &str) -> bool {
         && chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
 }
 
-fn is_source_qualified_identifier(name: &str) -> bool {
+fn is_source_scratch_qualified_identifier(name: &str) -> bool {
     let mut parts = name.split(':');
     let Some(first) = parts.next() else {
         return false;
     };
-    is_source_identifier(first) && parts.all(is_source_value_atom)
+    is_source_identifier(first) && parts.all(is_source_scratch_value_atom)
 }
 
 fn is_source_value_atom(name: &str) -> bool {
@@ -975,6 +949,10 @@ fn is_source_value_atom(name: &str) -> bool {
         && name
             .chars()
             .all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
+}
+
+fn is_source_scratch_value_atom(name: &str) -> bool {
+    is_source_value_atom(name) || matches!(name, ">" | "<" | "^" | "v")
 }
 
 fn scan_contextual_keyword_ranges(
@@ -1233,14 +1211,16 @@ fn push_word(
     semantic_ranges: &[SemanticToken],
     keyword_ranges: &HashSet<(usize, usize)>,
 ) {
-    if matches!(symbols.get(token), Some(HighlightKind::Scratch)) {
+    let qualified_scratch = matches!(symbols.get(token), Some(HighlightKind::Scratch));
+    if qualified_scratch && !token.contains(':') {
         push_span(out, HighlightKind::Scratch, token);
         return;
     }
 
     let parts = split_highlight_word(token);
     let supplied_axes = token.matches(':').count();
-    let use_schema_selector_coloring = token.contains(':') && !token.contains('.');
+    let use_schema_selector_coloring =
+        token.contains(':') && !token.contains('.') && !qualified_scratch;
     let schema_selector_head = parts.first().map(|part| &token[part.start..part.end]);
 
     for (index, part) in parts.iter().enumerate() {
@@ -1253,7 +1233,9 @@ fn push_word(
         let semantic_kind = semantic_kind_at(semantic_ranges, absolute_start, absolute_end);
         let symbol_kind = symbols.get(text).copied();
         let allow_parser_keyword = keyword_ranges.contains(&(absolute_start, absolute_end));
-        let kind = if use_schema_selector_coloring
+        let kind = if qualified_scratch {
+            qualified_scratch_part_kind(index, text, symbol_kind, family_axis_names)
+        } else if use_schema_selector_coloring
             && index > 0
             && local_binding_at(binding_ranges, absolute_start, absolute_end, text)
         {
@@ -1285,6 +1267,8 @@ fn push_word(
             Some(kind)
         } else if local_binding_at(binding_ranges, absolute_start, absolute_end, text) {
             Some(HighlightKind::Binding)
+        } else if use_schema_selector_coloring && index == 0 && text == "*" {
+            Some(HighlightKind::Group)
         } else if use_schema_selector_coloring
             && index == 0
             && matches!(symbols.get(text), Some(HighlightKind::Object))
@@ -1313,6 +1297,24 @@ fn push_word(
     }
 }
 
+fn qualified_scratch_part_kind(
+    index: usize,
+    text: &str,
+    symbol_kind: Option<HighlightKind>,
+    family_axis_names: &HashSet<String>,
+) -> Option<HighlightKind> {
+    if index == 0 {
+        return Some(HighlightKind::Scratch);
+    }
+    if family_axis_names.contains(text) || symbol_kind == Some(HighlightKind::Group) {
+        return Some(HighlightKind::Group);
+    }
+    if symbol_kind == Some(HighlightKind::Variant) || is_source_scratch_value_atom(text) {
+        return Some(HighlightKind::Variant);
+    }
+    symbol_kind
+}
+
 fn schema_selector_head_is_known(
     head: Option<&str>,
     symbols: &HashMap<String, HighlightKind>,
@@ -1324,6 +1326,7 @@ fn schema_selector_head_is_known(
     };
     family_bases.contains(head)
         || family_axes.contains_key(head)
+        || (head == "*" && (!family_bases.is_empty() || !family_axes.is_empty()))
         || matches!(
             symbols.get(head),
             Some(HighlightKind::Object | HighlightKind::Group)
@@ -1434,6 +1437,253 @@ fn visual_named_color_range_starting_at(
     start: usize,
 ) -> Option<&VisualNamedColorRange> {
     ranges.iter().find(|range| range.start == start)
+}
+
+#[derive(Clone, Debug)]
+struct LevelAsciiRange {
+    start: usize,
+    end: usize,
+    known: bool,
+}
+
+fn level_ascii_range_starting_at(
+    ranges: &[LevelAsciiRange],
+    start: usize,
+) -> Option<&LevelAsciiRange> {
+    ranges.iter().find(|range| range.start == start)
+}
+
+#[derive(Clone, Debug)]
+struct LevelAsciiScanLevel {
+    global_chars: HashSet<char>,
+    local_chars: HashSet<char>,
+    braced: bool,
+    is_2d: bool,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum LevelLegendTarget {
+    Global { enabled: bool },
+    Local(usize),
+}
+
+fn scan_level_ascii_ranges(context: &crate::source::SourceContext) -> Vec<LevelAsciiRange> {
+    let mut ranges = Vec::new();
+    let mut global_chars = HashSet::<char>::new();
+    let mut levels = Vec::<LevelAsciiScanLevel>::new();
+    let mut line_levels = vec![None::<usize>; context.lines.len()];
+    let mut current_level = None::<usize>;
+    let mut level_legend_stack = Vec::<LevelLegendTarget>::new();
+    let mut levels_2d_stack = Vec::<bool>::new();
+
+    for (line_index, line) in context.lines.iter().enumerate() {
+        let raw = strip_line_comment(&line.content);
+        let trimmed = raw.trim();
+        let tokens = line.tokens.iter().map(String::as_str).collect::<Vec<_>>();
+
+        if let Some(level_index) = current_level
+            && !levels[level_index].braced
+            && !matches!(
+                line.scope,
+                Some(SourceScope::UnbracedLevel | SourceScope::Legend | SourceScope::Other)
+            )
+        {
+            current_level = None;
+        }
+
+        let levels_is_2d = levels_2d_stack.last().copied().unwrap_or(true);
+        let implicit_level_row = current_level.is_none()
+            && line.scope == Some(SourceScope::Levels)
+            && levels_is_2d
+            && starts_implicit_unbraced_level_row(trimmed, &tokens);
+        if starts_level_header(line.scope, trimmed, &tokens, levels_is_2d) || implicit_level_row {
+            let braced = trimmed.ends_with('{') || matches!(tokens.as_slice(), ["{"]);
+            let level_index = levels.len();
+            levels.push(LevelAsciiScanLevel {
+                global_chars: global_chars.clone(),
+                local_chars: HashSet::new(),
+                braced,
+                is_2d: levels_is_2d,
+            });
+            current_level = Some(level_index);
+        }
+
+        if let Some(ch) = inline_legend_directive_char(&tokens) {
+            if let Some(level_index) = current_level
+                && matches!(
+                    line.scope,
+                    Some(SourceScope::Level | SourceScope::UnbracedLevel)
+                )
+            {
+                levels[level_index].local_chars.insert(ch);
+            } else if levels_is_2d {
+                global_chars.insert(ch);
+            }
+        } else if let Some(target) = level_legend_stack.last().copied()
+            && let Some(ch) = legend_row_char(&tokens)
+        {
+            match target {
+                LevelLegendTarget::Global { enabled } if enabled => {
+                    global_chars.insert(ch);
+                }
+                LevelLegendTarget::Local(level_index) => {
+                    levels[level_index].local_chars.insert(ch);
+                }
+                _ => {}
+            }
+        }
+
+        if let Some(level_index) = current_level
+            && levels[level_index].is_2d
+            && is_level_ascii_map_row(line.scope, trimmed, &tokens, implicit_level_row)
+        {
+            line_levels[line_index] = Some(level_index);
+        }
+
+        if opens_level_legend_block(trimmed, &tokens) {
+            let target = if let Some(level_index) = current_level {
+                if matches!(
+                    line.scope,
+                    Some(SourceScope::Level | SourceScope::UnbracedLevel)
+                ) {
+                    LevelLegendTarget::Local(level_index)
+                } else {
+                    LevelLegendTarget::Global {
+                        enabled: levels_is_2d,
+                    }
+                }
+            } else {
+                LevelLegendTarget::Global {
+                    enabled: levels_is_2d,
+                }
+            };
+            level_legend_stack.push(target);
+        }
+
+        if starts_levels_block(&tokens) {
+            levels_2d_stack.push(tokens.first().copied() == Some("levels"));
+        }
+
+        if line.scope == Some(SourceScope::Legend) && trimmed == "}" {
+            level_legend_stack.pop();
+        }
+        if line.scope == Some(SourceScope::Level) && trimmed == "}" {
+            current_level = None;
+        }
+        if line.scope == Some(SourceScope::Levels) && trimmed == "}" {
+            levels_2d_stack.pop();
+        }
+    }
+
+    for (line, level_index) in context.lines.iter().zip(line_levels) {
+        let Some(level_index) = level_index else {
+            continue;
+        };
+        let mut known_chars = levels[level_index].global_chars.clone();
+        known_chars.extend(levels[level_index].local_chars.iter().copied());
+        add_level_ascii_line_ranges(&mut ranges, line, &known_chars);
+    }
+
+    ranges
+}
+
+fn starts_levels_block(tokens: &[&str]) -> bool {
+    matches!(tokens.first().copied(), Some("levels" | "levels3"))
+}
+
+fn starts_level_header(
+    scope: Option<SourceScope>,
+    trimmed: &str,
+    tokens: &[&str],
+    levels_is_2d: bool,
+) -> bool {
+    if !levels_is_2d || trimmed.is_empty() {
+        return false;
+    }
+    matches!(tokens, ["level", ..])
+        || (scope == Some(SourceScope::Levels) && matches!(tokens, ["{"]))
+}
+
+fn starts_implicit_unbraced_level_row(trimmed: &str, tokens: &[&str]) -> bool {
+    !trimmed.is_empty()
+        && trimmed != "}"
+        && !trimmed.ends_with('{')
+        && !matches!(tokens, ["legend", ..] | ["level", ..])
+}
+
+fn opens_level_legend_block(trimmed: &str, tokens: &[&str]) -> bool {
+    matches!(tokens, ["legend"]) && (trimmed == "legend" || trimmed.ends_with('{'))
+}
+
+fn inline_legend_directive_char(tokens: &[&str]) -> Option<char> {
+    match tokens {
+        ["legend", ch, "=", ..] => single_char_token(ch),
+        _ => None,
+    }
+}
+
+fn legend_row_char(tokens: &[&str]) -> Option<char> {
+    match tokens {
+        [ch, "=", ..] => single_char_token(ch),
+        _ => None,
+    }
+}
+
+fn single_char_token(token: &str) -> Option<char> {
+    let mut chars = token.chars();
+    let ch = chars.next()?;
+    chars.next().is_none().then_some(ch)
+}
+
+fn is_level_ascii_map_row(
+    scope: Option<SourceScope>,
+    trimmed: &str,
+    tokens: &[&str],
+    implicit_level_row: bool,
+) -> bool {
+    if trimmed.is_empty() || trimmed == "}" {
+        return false;
+    }
+    if !implicit_level_row
+        && !matches!(scope, Some(SourceScope::Level | SourceScope::UnbracedLevel))
+    {
+        return false;
+    }
+    if matches!(
+        tokens,
+        ["legend", ..] | ["on_level_start", ..] | ["on_level_clear", ..]
+    ) {
+        return false;
+    }
+    !is_level_event_sugar(trimmed, tokens)
+}
+
+fn is_level_event_sugar(trimmed: &str, tokens: &[&str]) -> bool {
+    matches!(tokens, ["sfx", _] | ["wait"] | ["wait", _])
+        || trimmed.strip_prefix("message ").is_some()
+}
+
+fn add_level_ascii_line_ranges(
+    ranges: &mut Vec<LevelAsciiRange>,
+    line: &crate::source::SourceContextLine,
+    known_chars: &HashSet<char>,
+) {
+    let raw = strip_line_comment(&line.content);
+    let leading = raw.len() - raw.trim_start().len();
+    let body = raw.trim();
+    let mut column = 0usize;
+    for ch in body.chars() {
+        let start = line.start + leading + column;
+        let end = start + ch.len_utf8();
+        if !ch.is_whitespace() {
+            ranges.push(LevelAsciiRange {
+                start,
+                end,
+                known: known_chars.contains(&ch),
+            });
+        }
+        column += ch.len_utf8();
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1640,7 +1890,7 @@ fn scan_visual_ascii_color_ranges(
             continue;
         }
 
-        let starts_entry = visual_sprite_entry_header(&tokens, trimmed);
+        let starts_entry = visual_sprite_entry_header(&tokens, trimmed, aliases);
         if pending_color_row && let Some(next_palette) = visual_ascii_palette(&tokens, aliases) {
             palette = next_palette;
             pending_color_row = false;
@@ -1679,18 +1929,43 @@ fn brace_delta(line: &str) -> i32 {
     })
 }
 
-fn visual_sprite_entry_header(tokens: &[&str], trimmed: &str) -> bool {
+fn visual_sprite_entry_header(
+    tokens: &[&str],
+    trimmed: &str,
+    aliases: &HashMap<String, String>,
+) -> bool {
     let Some(first) = tokens.first().copied() else {
         return false;
     };
     if matches!(
         first,
         "shape" | "colors" | "ascii" | "sprites" | "sprites3" | "{" | "}"
-    ) || is_visual_color_token(first)
-    {
+    ) {
         return false;
     }
-    tokens.len() == 1 || trimmed.ends_with('{')
+    tokens.len() == 1
+        || trimmed.ends_with('{')
+        || matches!(
+            tokens,
+            [_, source] if is_visual_image_source(source) || visual_sprite_entry_start_color_token(source, aliases)
+        )
+}
+
+fn visual_sprite_entry_start_color_token(token: &str, aliases: &HashMap<String, String>) -> bool {
+    highlightable_visual_color_token(token) || aliases.contains_key(token) || token.contains(':')
+}
+
+fn is_visual_image_source(value: &str) -> bool {
+    let lower = value
+        .trim_matches(|ch| matches!(ch, '"' | '\''))
+        .to_ascii_lowercase();
+    lower.ends_with(".png")
+        || lower.ends_with(".jpg")
+        || lower.ends_with(".jpeg")
+        || lower.ends_with(".gif")
+        || lower.ends_with(".webp")
+        || lower.ends_with(".svg")
+        || lower.ends_with(".avif")
 }
 
 fn visual_ascii_palette(
@@ -1918,6 +2193,10 @@ fn is_word_start(ch: char) -> bool {
     ch == '@' || ch == '_' || ch.is_ascii_alphabetic()
 }
 
+fn is_word_start_at(source: &str, index: usize, ch: char) -> bool {
+    is_word_start(ch) || (ch == '*' && source[index + ch.len_utf8()..].starts_with(':'))
+}
+
 fn is_word_continue(ch: char) -> bool {
     ch == '@'
         || ch == '_'
@@ -1935,12 +2214,23 @@ fn consume_word(source: &str, start: usize) -> usize {
         if ch == '-' && source[absolute..].starts_with("->") {
             break;
         }
-        if !is_word_continue(ch) {
+        if !is_word_continue(ch)
+            && !is_qualified_direction_glyph_continue(source, start, absolute, ch)
+        {
             break;
         }
         end = absolute + ch.len_utf8();
     }
     end
+}
+
+fn is_qualified_direction_glyph_continue(
+    source: &str,
+    token_start: usize,
+    index: usize,
+    ch: char,
+) -> bool {
+    matches!(ch, '>' | '<' | '^' | 'v') && source[token_start..index].ends_with(':')
 }
 
 fn is_operator_char(ch: char) -> bool {
@@ -1979,7 +2269,14 @@ fn push_operator_run(
             if plain_start < index {
                 push_span(out, HighlightKind::Operator, &source[plain_start..index]);
             }
-            push_span(out, kind, &source[index..index + ch.len_utf8()]);
+            let display_kind = if kind != HighlightKind::InvalidBrace
+                && is_inline_selector_scratch_brace(source, index, ch)
+            {
+                HighlightKind::Scratch
+            } else {
+                kind
+            };
+            push_span(out, display_kind, &source[index..index + ch.len_utf8()]);
             plain_start = index + ch.len_utf8();
             continue;
         }
@@ -1999,6 +2296,59 @@ fn push_operator_run(
     if plain_start < end {
         push_span(out, HighlightKind::Operator, &source[plain_start..end]);
     }
+}
+
+fn is_inline_selector_scratch_brace(source: &str, index: usize, brace: char) -> bool {
+    match brace {
+        '{' => {
+            is_inline_selector_scratch_open(source, index)
+                && inline_selector_scratch_close(source, index).is_some()
+        }
+        '}' => matching_inline_selector_scratch_open(source, index).is_some(),
+        _ => false,
+    }
+}
+
+fn is_inline_selector_scratch_open(source: &str, index: usize) -> bool {
+    let before = source[..index].chars().next_back();
+    let after = source[index + 1..].chars().next();
+    before.is_some_and(is_selector_token_char) && after.is_some_and(|ch| !ch.is_whitespace())
+}
+
+fn inline_selector_scratch_close(source: &str, open: usize) -> Option<usize> {
+    let line_end = source[open + 1..]
+        .find('\n')
+        .map(|offset| open + 1 + offset)
+        .unwrap_or(source.len());
+    for (offset, ch) in source[open + 1..line_end].char_indices() {
+        let index = open + 1 + offset;
+        match ch {
+            '}' => return Some(index),
+            '[' | ']' | '|' | ';' | ',' | '(' | ')' | '{' => return None,
+            _ => {}
+        }
+    }
+    None
+}
+
+fn matching_inline_selector_scratch_open(source: &str, close: usize) -> Option<usize> {
+    let line_start = source[..close]
+        .rfind('\n')
+        .map(|index| index + 1)
+        .unwrap_or(0);
+    for (offset, ch) in source[line_start..close].char_indices().rev() {
+        let index = line_start + offset;
+        match ch {
+            '{' if is_inline_selector_scratch_open(source, index) => return Some(index),
+            '[' | ']' | '|' | ';' | ',' | '(' | ')' | '}' => return None,
+            _ => {}
+        }
+    }
+    None
+}
+
+fn is_selector_token_char(ch: char) -> bool {
+    ch.is_ascii_alphanumeric() || matches!(ch, '_' | '@' | ':' | '*')
 }
 
 fn consume_while(source: &str, start: usize, predicate: impl Fn(char) -> bool) -> usize {
@@ -2179,6 +2529,54 @@ P
                 "missing lifecycle highlight {keyword}"
             );
         }
+    }
+
+    #[test]
+    fn highlights_lifecycle_after_inline_else_brace_continuation() {
+        let source = r#"
+title lifecycle_after_else
+
+puzzle board {
+tags {
+gate_no = 1...5
+}
+scratch {
+checked
+}
+var locked_room_count = 3
+layers {
+gate = Gate:gate_no
+}
+empty .
+legend 1 = Gate:1
+rules {
+for n in 1...5 {
+if some([ Gate:n{checked} ]) {
+if locked_room_count > n {
+locked_room_count -= n
+[ Gate:n{checked} ] -> [  ]
+} else {
+[ Gate:n{checked} ] -> [ Gate:n ]
+}
+}
+}
+}
+on_level_start {
+}
+level start {
+1
+}
+}
+"#;
+        let highlighted = highlight_source(source);
+
+        assert!(highlighted.html.contains(
+            "<span class=\"syntax-keyword\">on_level_start</span> <span class=\"syntax-brace-depth-1\">{</span>"
+        ));
+        assert!(highlighted.html.contains(
+            "<span class=\"syntax-keyword\">level</span> <span class=\"syntax-scene\">start</span>"
+        ));
+        assert_eq!(highlighted.html.matches("syntax-brace-invalid").count(), 0);
     }
 
     #[test]
@@ -2405,13 +2803,47 @@ level start {
 "#,
         );
         assert!(highlighted.html.contains(
-            "syntax-object\">Box</span><span class=\"syntax-operator\">:</span><span class=\"syntax-variant\">state"
+            "syntax-object\">Box</span><span class=\"syntax-operator\">:</span><span class=\"syntax-group\">state"
         ));
         assert!(highlighted.html.contains(
             "syntax-object\">Box</span><span class=\"syntax-operator\">:</span><span class=\"syntax-variant\">stack"
         ));
         assert!(highlighted.html.contains(
             "syntax-object\">Box</span><span class=\"syntax-operator\">:</span><span class=\"syntax-variant\">movable"
+        ));
+    }
+
+    #[test]
+    fn family_wildcard_schema_selectors_highlight_by_selector_grammar() {
+        let highlighted = highlight_source(
+            r#"
+title family_wildcard_highlight
+
+puzzle board {
+tags {
+state = stack movable
+}
+layers {
+actor = Crate:state
+}
+groups {
+movable = Crate:movable
+}
+rules {
+[ *:stack ] -> [ *:movable ]
+}
+level start {
+.
+}
+}
+"#,
+        );
+
+        assert!(highlighted.html.contains(
+            "syntax-group\">*</span><span class=\"syntax-operator\">:</span><span class=\"syntax-variant\">stack"
+        ));
+        assert!(highlighted.html.contains(
+            "syntax-group\">*</span><span class=\"syntax-operator\">:</span><span class=\"syntax-variant\">movable"
         ));
     }
 
@@ -2843,6 +3275,42 @@ level accidental {
             !highlighted
                 .html
                 .contains("style=\"--syntax-color-token: #.#")
+        );
+    }
+
+    #[test]
+    fn highlights_ascii_pixels_for_sprite_named_like_color() {
+        let highlighted = highlight_source(
+            r#"
+sprites {
+red
+#f00
+0
+}
+"#,
+        );
+
+        assert!(highlighted.html.contains(
+            "syntax-sprite-pixel\" style=\"--syntax-sprite-pixel-color: #f00\">0</span>"
+        ));
+    }
+
+    #[test]
+    fn highlights_color_name_palette_rows_as_sprite_palette() {
+        let highlighted = highlight_source(
+            r#"
+sprites {
+Player
+red blue
+01
+}
+"#,
+        );
+
+        assert!(
+            highlighted
+                .html
+                .contains("syntax-sprite-pixel\" style=\"--syntax-sprite-pixel-color: red\">0</span><span class=\"syntax-sprite-pixel\" style=\"--syntax-sprite-pixel-color: blue\">1</span>")
         );
     }
 
@@ -3609,6 +4077,59 @@ level start {
     }
 
     #[test]
+    fn highlights_visual_shape_variant_braces_without_coloring_ascii_rows() {
+        let highlighted = highlight_source(
+            r#"
+title shape_variant_braces
+
+puzzle board {
+tags {
+kind = A B
+}
+layers {
+actor = Box:kind
+}
+rules {
+}
+sprites {
+shapes {
+mark:kind {
+A {
+00000
+01010
+00100
+01010
+00000
+}
+B {
+00000
+00100
+01010
+00100
+00000
+}
+}
+}
+}
+}
+"#,
+        );
+
+        assert_eq!(highlighted.html.matches("syntax-brace-invalid").count(), 0);
+        assert!(
+            highlighted
+                .html
+                .contains("A <span class=\"syntax-brace-depth-4\">{</span>")
+        );
+        assert!(
+            highlighted
+                .html
+                .contains("B <span class=\"syntax-brace-depth-4\">{</span>")
+        );
+        assert!(!highlighted.html.contains("syntax-number\">01010</span>"));
+    }
+
+    #[test]
     fn keeps_block_scoped_rows_plain() {
         let highlighted = highlight_source(
             r#"
@@ -3641,7 +4162,7 @@ level start {
     }
 
     #[test]
-    fn top_level_levels_scope_keeps_map_rows_plain() {
+    fn top_level_levels_scope_highlights_known_and_unknown_map_cells() {
         let highlighted = highlight_source(
             r#"
 title top_level_levels_highlight
@@ -3670,7 +4191,9 @@ P
 
         assert!(highlighted.html.contains("syntax-keyword\">levels"));
         assert!(highlighted.html.contains("syntax-keyword\">level"));
-        assert!(highlighted.html.contains("\nP1\n"));
+        assert!(highlighted.html.contains(
+            "\n<span class=\"syntax-level-cell\">P</span><span class=\"syntax-level-cell-invalid\">1</span>\n"
+        ));
         assert!(
             !highlighted
                 .html
@@ -3785,7 +4308,7 @@ G*
     }
 
     #[test]
-    fn top_level_unbraced_levels_scope_keeps_map_rows_plain() {
+    fn top_level_unbraced_levels_scope_highlights_known_and_unknown_map_cells() {
         let highlighted = highlight_source(
             r#"
 title top_level_unbraced_levels_highlight
@@ -3813,13 +4336,54 @@ P
 
         assert!(highlighted.html.contains("syntax-keyword\">levels"));
         assert!(highlighted.html.contains("syntax-keyword\">level"));
-        assert!(highlighted.html.contains("\nP1\n"));
+        assert!(highlighted.html.contains(
+            "\n<span class=\"syntax-level-cell\">P</span><span class=\"syntax-level-cell-invalid\">1</span>\n"
+        ));
         assert!(
             !highlighted
                 .html
                 .contains("P<span class=\"syntax-number\">1</span>")
         );
         assert!(!highlighted.html.contains("syntax-object\">P</span>1"));
+    }
+
+    #[test]
+    fn level_local_legend_highlights_cells_even_when_declared_after_rows() {
+        let highlighted = highlight_source(
+            r#"
+title level_local_legend_highlight
+
+puzzle board {
+layers 2
+layers {
+__legacy_layer_0 = Player Box
+}
+legend P = Player
+rules {
+[ Player ] -> [ Player ]
+}
+}
+
+levels {
+level start {
+PX
+legend X = Box
+}
+level second {
+X
+}
+}
+"#,
+        );
+
+        assert!(highlighted.html.contains(
+            "\n<span class=\"syntax-level-cell\">P</span><span class=\"syntax-level-cell\">X</span>\n"
+        ));
+        assert!(
+            highlighted
+                .html
+                .contains("\n<span class=\"syntax-level-cell-invalid\">X</span>\n")
+        );
     }
 
     #[test]
@@ -3835,6 +4399,9 @@ layers {
 __legacy_layer_0 = Player
 }
 routine move_player once {
+[ Player ] -> [ Player ]
+}
+routine slide repeat {
 [ Player ] -> [ Player ]
 }
 rule display paint once {
@@ -3856,7 +4423,10 @@ level start {
 
         assert!(highlighted.html.contains("syntax-keyword\">routine"));
         assert!(highlighted.html.contains("syntax-keyword\">rule"));
+        assert!(highlighted.html.contains("syntax-keyword\">once"));
+        assert!(highlighted.html.contains("syntax-keyword\">repeat"));
         assert!(highlighted.html.contains("syntax-effect\">move_player"));
+        assert!(highlighted.html.contains("syntax-effect\">slide"));
         assert!(highlighted.html.contains("syntax-effect\">paint"));
     }
 
@@ -4054,12 +4624,15 @@ level start {
     }
 
     #[test]
-    fn qualified_scratch_names_keep_scratch_color() {
+    fn qualified_scratch_names_highlight_tag_parts_with_tag_colors() {
         let highlighted = highlight_source(
             r#"
 title qualified_scratch_highlight
 
 puzzle board {
+tags {
+color = red blue
+}
 layers 2
 legend . = empty
 layers {
@@ -4067,10 +4640,12 @@ __legacy_layer_0 = Player
 }
 scratch {
 enter:directions = bool
+paint:red
+push:>
 count:3
 }
 rules {
-[ Player ] -> [ Player{enter:directions count:3} ]
+[ Player ] -> [ Player{enter:directions paint:red push:> count:3} ]
 }
 level start {
 .
@@ -4079,12 +4654,23 @@ level start {
 "#,
         );
 
+        assert!(highlighted.html.contains(
+            "syntax-scratch\">enter</span><span class=\"syntax-operator\">:</span><span class=\"syntax-group\">directions</span>"
+        ));
+        assert!(highlighted.html.contains(
+            "syntax-scratch\">paint</span><span class=\"syntax-operator\">:</span><span class=\"syntax-variant\">red</span>"
+        ));
+        assert!(highlighted.html.contains(
+            "syntax-scratch\">push</span><span class=\"syntax-operator\">:</span><span class=\"syntax-variant\">&gt;</span>"
+        ));
+        assert!(highlighted.html.contains(
+            "syntax-scratch\">count</span><span class=\"syntax-operator\">:</span><span class=\"syntax-variant\">3</span>"
+        ));
         assert!(
-            highlighted
+            !highlighted
                 .html
                 .contains("syntax-scratch\">enter:directions</span>")
         );
-        assert!(highlighted.html.contains("syntax-scratch\">count:3</span>"));
     }
 
     #[test]

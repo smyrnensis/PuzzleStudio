@@ -1089,6 +1089,22 @@ function setSpriteEditSource(entry, document = activeDocument()) {
   sprite.editSourceName = entry?.name || "";
 }
 
+function clearSpriteEditSource() {
+  sprite.editSourceStart = null;
+  sprite.editSourceEnd = null;
+  sprite.editSourceBodyStart = null;
+  sprite.editSourceBodyEnd = null;
+  sprite.editSourceName = "";
+}
+
+function invalidateSpriteEditSourceForDocument(document = activeDocument()) {
+  if (!document || !sprite.editDocumentId || document.id !== sprite.editDocumentId) {
+    return false;
+  }
+  clearSpriteEditSource();
+  return true;
+}
+
 function activeSpriteEditSource() {
   const document = activeSpriteEditDocument();
   if (!document || !isTextDocument(document)) {
@@ -2226,7 +2242,14 @@ function loadSpriteSourceTarget(target, options = {}) {
   const targetName = target.name || spriteObjectName();
   const loaded = parseSpriteDefinitionSource(source.slice(target.bodyStart, target.bodyEnd), source, targetName);
   if (!loaded) {
-    if (!options.silent) {
+    if (isIncompleteSpriteSourceTarget(source, target)) {
+      applyIncompleteSpriteSourceTarget(targetName, target);
+      if (!options.silent) {
+        setSpriteActionStatus(`Loaded unfinished ${spriteNameInput.value || "sprite"}`, "is-ok");
+        setStatus(`Loaded unfinished sprite ${spriteNameInput.value || ""}`.trim(), "is-ok");
+      }
+      return `sprite:${targetName}:${target.start ?? target.bodyStart}`;
+    } else if (!options.silent) {
       setSpriteActionStatus("No editable sprite here", "is-error");
     }
     return null;
@@ -2256,6 +2279,46 @@ function loadSpriteSourceTarget(target, options = {}) {
     setStatus(`Loaded sprite ${spriteNameInput.value}`, "is-ok");
   }
   return `sprite:${targetName}:${target.start ?? target.bodyStart}`;
+}
+
+function isIncompleteSpriteSourceTarget(source, target) {
+  if (!Number.isInteger(target?.bodyStart) || !Number.isInteger(target?.bodyEnd)) {
+    return false;
+  }
+  const body = String(source || "").slice(target.bodyStart, target.bodyEnd);
+  const rows = body
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (!rows.length) {
+    return true;
+  }
+  if (rows[0].startsWith("palette ")) {
+    rows[0] = rows[0].slice("palette ".length).trim();
+  }
+  return !rows[0]
+    .split(/\s+/)
+    .filter(Boolean)
+    .every((token) => Boolean(spritePaletteEntryFromSourceToken(token, parseSpriteColorAssets(source), target.name || "")));
+}
+
+function applyIncompleteSpriteSourceTarget(name, target) {
+  if (target && typeof target === "object") {
+    setSpriteEditSource(target, activeDocument());
+  }
+  spriteNameInput.value = name || "";
+  sprite.size = clampSpriteSize(sprite.size);
+  sprite.palette = [];
+  sprite.paletteBind = null;
+  sprite.shapeBind = null;
+  sprite.solidSource = false;
+  sprite.cells = Array.from({ length: sprite.size * sprite.size }, () => null);
+  sprite.selectedColorIndex = null;
+  sprite.addPaletteOpen = false;
+  sprite.editPaletteOpen = false;
+  sprite.customColorOpen = false;
+  sprite.addDraftColorIndex = null;
+  renderSpriteBuilder();
 }
 
 function parseSpriteDefinitionSource(body, source = "", selectorName = "") {
@@ -2612,6 +2675,39 @@ function addSpriteToSource() {
   setStatus("Added sprite", "is-ok");
 }
 
+async function addEmptySpriteToSource() {
+  const document = activeSpriteEditDocument();
+  if (!document || !isTextDocument(document)) {
+    setSpriteActionStatus("No puzzle source", "is-error");
+    setStatus("No puzzle source for sprite", "is-error");
+    return false;
+  }
+
+  const source = activeSpriteEditSource();
+  const cursor = spriteSourceCursorPosition(source, document);
+  let target = null;
+  try {
+    target = await spriteSourceTargetAtCursor(source, cursor);
+  } catch (error) {
+    setSpriteActionStatus("Source target sync failed", "is-error");
+    setStatus(`Source target sync failed: ${userFacingRuntimeError(error)}`, "is-error");
+    return false;
+  }
+  const result = insertEmptySpriteDefinition(source, { cursor, target });
+  document.source = result.source;
+  if (document.id === activeDocument()?.id) {
+    setSourceEditorValue(result.source, { resetUndo: false });
+    revealSpriteSourceResult(document, result);
+  }
+  scheduleLocalSave();
+  schedulePreview();
+  applyIncompleteSpriteSourceTarget("", { start: result.start, end: result.end, bodyStart: result.start, bodyEnd: result.end });
+  sourceEditor.focus({ preventScroll: true });
+  setSpriteActionStatus("Added unfinished sprite", "is-ok");
+  setStatus("Added unfinished sprite", "is-ok");
+  return true;
+}
+
 function updateSpriteInSource() {
   const document = activeSpriteEditDocument();
   if (!document || !isTextDocument(document)) {
@@ -2731,6 +2827,73 @@ function insertSpriteDefinition(source) {
   };
 }
 
+function insertEmptySpriteDefinition(source, options = {}) {
+  const block = findSpritesBlock(source);
+  const cursor = Number.isInteger(options.cursor) ? options.cursor : spriteSourceCursorPosition(source);
+  const target = options.target?.kind === "sprite" ? options.target : null;
+  if (!block) {
+    const position = spriteSourceInsertionLineEnd(source, cursor);
+    const text = "sprites {\n\n}";
+    return insertSpriteSourceTextAt(source, position, text, "sprites {\n".length);
+  }
+  const insideBlock = cursor > block.openIndex && cursor < block.closeIndex;
+  const position = target && target.start >= block.bodyStart && target.end <= block.bodyEnd
+    ? spriteSourceInsertionLineEnd(source, target.end)
+    : insideBlock
+      ? spriteSourceInsertionLineEnd(source, cursor)
+      : block.bodyEnd;
+  const inserted = insertSpriteSourceTextAt(source, position, "", 0);
+  return {
+    ...inserted,
+    source: inserted.source,
+  };
+}
+
+function spriteSourceCursorPosition(source, document = activeDocument()) {
+  if (document?.id === activeDocument()?.id && sourceEditor) {
+    return Math.max(
+      0,
+      Math.min(String(source || "").length, Math.max(sourceEditor.selectionStart || 0, sourceEditor.selectionEnd || 0)),
+    );
+  }
+  return String(source || "").length;
+}
+
+async function spriteSourceTargetAtCursor(source, cursor) {
+  if (typeof resolveSourceTargetFromWasm !== "function") {
+    return null;
+  }
+  return resolveSourceTargetFromWasm(source, cursor);
+}
+
+function spriteSourceInsertionLineEnd(source, position) {
+  const text = String(source || "");
+  const safePosition = Math.max(0, Math.min(text.length, Math.trunc(Number(position) || 0)));
+  const newline = text.indexOf("\n", safePosition);
+  return newline < 0 ? text.length : newline + 1;
+}
+
+function insertSpriteSourceTextAt(source, position, text, innerOffset = 0) {
+  const original = String(source || "");
+  const safePosition = Math.max(0, Math.min(original.length, Math.trunc(Number(position) || 0)));
+  const before = original.slice(0, safePosition).trimEnd();
+  const after = original.slice(safePosition).replace(/^[\t ]*\n?/, "");
+  const snippet = String(text || "").trimEnd();
+  let next = before;
+  if (next) {
+    next += "\n\n";
+  }
+  const start = next.length + Math.max(0, Math.min(snippet.length, innerOffset));
+  next += snippet;
+  const end = next.length;
+  if (after) {
+    next += `${snippet ? "\n\n" : "\n"}${after}`;
+  } else {
+    next += "\n";
+  }
+  return { source: next, start, end };
+}
+
 function replaceSpriteDefinition(source) {
   const entry = currentSpriteEditSourceRange(source);
   if (!entry) {
@@ -2760,7 +2923,7 @@ function currentSpriteEditSourceRange(source) {
     !Number.isInteger(start)
     || !Number.isInteger(end)
     || start < 0
-    || end <= start
+    || end < start
     || end > String(source || "").length
   ) {
     return null;
@@ -3194,7 +3357,10 @@ spriteScaleInput.addEventListener("keydown", (event) => {
   event.preventDefault();
 });
 spriteNameInput.addEventListener("input", syncSpriteSourceActionButtons);
-sourceEditor.addEventListener("input", syncSpriteSourceActionButtons);
+sourceEditor.addEventListener("input", () => {
+  invalidateSpriteEditSourceForDocument(activeDocument());
+  syncSpriteSourceActionButtons();
+});
 spritePalette.addEventListener("keydown", (event) => {
   const token = event.target.closest(".sprite-token");
   if (!token) {
