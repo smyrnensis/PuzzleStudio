@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::semantic::{SemanticKind, SemanticToken, first_identifier_bounds, semantic_tokens};
 use crate::source::{SourceScope, scan_source_context, split_header_tokens, strip_line_comment};
-use crate::syntax::is_parser_keyword;
+use crate::syntax::{is_parser_keyword, is_puzzle_line_head_keyword};
 use crate::{
     LoadedDocumentModel, RewriteEffectCommandSyntax, is_visual_color_token,
     rewrite_effect_command_syntax, scene_effect_command_syntax, visual_color_token_for_index,
@@ -247,7 +247,7 @@ fn highlight_html(
     let level_ascii_ranges = scan_level_ascii_ranges(&context);
     let visual_color_aliases = scan_visual_color_aliases(&context);
     let visual_named_color_ranges = scan_visual_named_color_ranges(&context, &visual_color_aliases);
-    let visual_ascii_color_ranges = scan_visual_ascii_color_ranges(source, &visual_color_aliases);
+    let visual_ascii_color_ranges = scan_visual_ascii_color_ranges(&context, &visual_color_aliases);
     let mut chars = source.char_indices().peekable();
 
     while let Some((index, ch)) = chars.next() {
@@ -282,6 +282,18 @@ fn highlight_html(
         }
 
         if let Some(end) = context.raw_range_starting_at(index) {
+            if let Some(next_start) = next_raw_embedded_highlight_start(
+                index,
+                end,
+                &level_ascii_ranges,
+                &visual_ascii_color_ranges,
+                &visual_named_color_ranges,
+            ) && next_start > index
+            {
+                escape_html_into(&mut out, &source[index..next_start]);
+                skip_until(&mut chars, next_start);
+                continue;
+            }
             escape_html_into(&mut out, &source[index..end]);
             skip_until(&mut chars, end);
             continue;
@@ -1049,37 +1061,7 @@ fn line_head_keyword(
                 | "const"
                 | "persistent"
         ),
-        Some(SourceScope::Puzzle) => {
-            matches!(
-                keyword,
-                "collision_layers"
-                    | "condition"
-                    | "direction"
-                    | "for"
-                    | "groups"
-                    | "if"
-                    | "input"
-                    | "keys"
-                    | "layers"
-                    | "legend"
-                    | "levels"
-                    | "levels3"
-                    | "map"
-                    | "on_display"
-                    | "render"
-                    | "resources"
-                    | "routine"
-                    | "rule"
-                    | "rules"
-                    | "scratch"
-                    | "sprites"
-                    | "sprites3"
-                    | "tags"
-                    | "var"
-                    | "const"
-                    | "persistent"
-            ) || crate::syntax::is_puzzle_lifecycle_block(keyword)
-        }
+        Some(SourceScope::Puzzle) => is_puzzle_line_head_keyword(keyword),
         Some(SourceScope::Sounds) => matches!(keyword, "sfx" | "music"),
         Some(SourceScope::Assets) => matches!(keyword, "css"),
         Some(SourceScope::Tags) => matches!(keyword, "for"),
@@ -1122,9 +1104,8 @@ fn line_head_keyword(
             SourceScope::Visuals
             | SourceScope::VisualShapeTable
             | SourceScope::VisualShapeEntry
-            | SourceScope::VisualColorTable
-            | SourceScope::VisualPaletteTable,
-        ) => matches!(keyword, "colors" | "palettes" | "shape" | "shapes"),
+            | SourceScope::VisualColorTable,
+        ) => matches!(keyword, "colors" | "shape" | "shapes"),
         Some(SourceScope::Other) => {
             matches!(
                 keyword,
@@ -1225,7 +1206,12 @@ fn push_word(
 
     for (index, part) in parts.iter().enumerate() {
         if let Some(separator) = part.separator_before {
-            push_span(out, HighlightKind::Operator, separator);
+            let separator_kind = if separator == "#" {
+                HighlightKind::Binding
+            } else {
+                HighlightKind::Operator
+            };
+            push_span(out, separator_kind, separator);
         }
         let absolute_start = token_start + part.start;
         let absolute_end = token_start + part.end;
@@ -1233,7 +1219,9 @@ fn push_word(
         let semantic_kind = semantic_kind_at(semantic_ranges, absolute_start, absolute_end);
         let symbol_kind = symbols.get(text).copied();
         let allow_parser_keyword = keyword_ranges.contains(&(absolute_start, absolute_end));
-        let kind = if qualified_scratch {
+        let kind = if part.separator_before == Some("#") {
+            Some(HighlightKind::Binding)
+        } else if qualified_scratch {
             qualified_scratch_part_kind(index, text, symbol_kind, family_axis_names)
         } else if use_schema_selector_coloring
             && index > 0
@@ -1348,6 +1336,7 @@ fn split_highlight_word(token: &str) -> Vec<HighlightWordPart> {
         let separator = match ch {
             ':' => Some(":"),
             '.' => Some("."),
+            '#' => Some("#"),
             _ => None,
         };
         let Some(separator) = separator else {
@@ -1451,6 +1440,22 @@ fn level_ascii_range_starting_at(
     start: usize,
 ) -> Option<&LevelAsciiRange> {
     ranges.iter().find(|range| range.start == start)
+}
+
+fn next_raw_embedded_highlight_start(
+    raw_start: usize,
+    raw_end: usize,
+    level_ascii_ranges: &[LevelAsciiRange],
+    visual_ascii_color_ranges: &[VisualAsciiColorRange],
+    visual_named_color_ranges: &[VisualNamedColorRange],
+) -> Option<usize> {
+    level_ascii_ranges
+        .iter()
+        .map(|range| range.start)
+        .chain(visual_ascii_color_ranges.iter().map(|range| range.start))
+        .chain(visual_named_color_ranges.iter().map(|range| range.start))
+        .filter(|start| *start >= raw_start && *start < raw_end)
+        .min()
 }
 
 #[derive(Clone, Debug)]
@@ -1692,8 +1697,6 @@ enum VisualHighlightScope {
     SpriteEntry,
     Colors,
     ColorTable,
-    Palettes,
-    PaletteTable,
     Other,
 }
 
@@ -1711,12 +1714,7 @@ fn scan_visual_named_color_ranges(
     for (line, scope) in context.lines.iter().zip(scopes.iter().copied()) {
         if !matches!(
             scope,
-            Some(
-                VisualHighlightScope::Sprites
-                    | VisualHighlightScope::SpriteEntry
-                    | VisualHighlightScope::Palettes
-                    | VisualHighlightScope::PaletteTable
-            )
+            Some(VisualHighlightScope::Sprites | VisualHighlightScope::SpriteEntry)
         ) || is_visual_closing_line(line)
         {
             continue;
@@ -1781,7 +1779,6 @@ fn visual_highlight_opening_scope(
         None if matches!(first, "sprites" | "sprites3") => Some(VisualHighlightScope::Sprites),
         Some(VisualHighlightScope::Sprites) => match first {
             "colors" => Some(VisualHighlightScope::Colors),
-            "palettes" => Some(VisualHighlightScope::Palettes),
             "shapes" | "shape" => Some(VisualHighlightScope::Other),
             _ if line.content.trim_end().ends_with('{') => Some(VisualHighlightScope::SpriteEntry),
             _ => None,
@@ -1791,16 +1788,11 @@ fn visual_highlight_opening_scope(
         {
             Some(VisualHighlightScope::ColorTable)
         }
-        Some(VisualHighlightScope::Palettes)
-            if !has_assignment && first.contains(':') && line.content.trim_end().ends_with('{') =>
+        Some(VisualHighlightScope::SpriteEntry | VisualHighlightScope::ColorTable)
+            if line.content.trim_end().ends_with('{') =>
         {
-            Some(VisualHighlightScope::PaletteTable)
+            Some(VisualHighlightScope::Other)
         }
-        Some(
-            VisualHighlightScope::SpriteEntry
-            | VisualHighlightScope::ColorTable
-            | VisualHighlightScope::PaletteTable,
-        ) if line.content.trim_end().ends_with('{') => Some(VisualHighlightScope::Other),
         _ => None,
     }
 }
@@ -1853,106 +1845,217 @@ fn highlightable_visual_color_token(value: &str) -> bool {
 }
 
 fn scan_visual_ascii_color_ranges(
-    source: &str,
+    context: &crate::source::SourceContext,
     aliases: &HashMap<String, String>,
 ) -> Vec<VisualAsciiColorRange> {
     let mut ranges = Vec::new();
-    let mut in_sprites = false;
-    let mut in_sprites3 = false;
-    let mut sprites_depth = 0i32;
-    let mut pending_color_row = false;
-    let mut palette = HashMap::<char, String>::new();
-    let mut offset = 0usize;
 
-    for line in source.split_inclusive('\n') {
-        let line_end = offset + line.len();
-        let content_end = line_end - usize::from(line.ends_with('\n'));
-        let content = &source[offset..content_end];
-        let trimmed = content.trim();
-        let tokens = trimmed.split_whitespace().collect::<Vec<_>>();
-
-        if !in_sprites {
-            if matches!(tokens.as_slice(), ["sprites" | "sprites3", ..]) {
-                in_sprites = true;
-                in_sprites3 = matches!(tokens.first().copied(), Some("sprites3"));
-                sprites_depth = brace_delta(content).max(1);
-            }
-            offset = line_end;
+    let mut line_index = 0usize;
+    while line_index < context.lines.len() {
+        let line = &context.lines[line_index];
+        if !visual_sprite_entry_header_line(line, aliases) {
+            line_index += 1;
             continue;
         }
 
-        if trimmed.is_empty() {
-            if !in_sprites3 {
-                pending_color_row = false;
-                palette.clear();
-            }
-            offset = line_end;
-            continue;
+        if visual_inline_sprite_entry_line(line, aliases) {
+            line_index += 1;
+        } else if line.content.trim_end().ends_with('{') {
+            line_index = scan_braced_visual_sprite_entry(context, line_index, aliases, &mut ranges);
+        } else {
+            line_index =
+                scan_unbraced_visual_sprite_entry(context, line_index, aliases, &mut ranges);
         }
-
-        let starts_entry = visual_sprite_entry_header(&tokens, trimmed, aliases);
-        if pending_color_row && let Some(next_palette) = visual_ascii_palette(&tokens, aliases) {
-            palette = next_palette;
-            pending_color_row = false;
-            offset = line_end;
-            continue;
-        }
-
-        if !palette.is_empty() && visual_ascii_row(trimmed, &palette) {
-            add_visual_ascii_row_ranges(&mut ranges, offset, content, trimmed, &palette);
-        } else if starts_entry {
-            pending_color_row = true;
-            palette.clear();
-        } else if !matches!(tokens.as_slice(), ["{"] | ["}"]) {
-            pending_color_row = false;
-            palette.clear();
-        }
-
-        sprites_depth += brace_delta(content);
-        if sprites_depth <= 0 {
-            in_sprites = false;
-            in_sprites3 = false;
-            pending_color_row = false;
-            palette.clear();
-        }
-        offset = line_end;
     }
 
     ranges
 }
 
-fn brace_delta(line: &str) -> i32 {
-    line.chars().fold(0, |depth, ch| match ch {
-        '{' => depth + 1,
-        '}' => depth - 1,
-        _ => depth,
-    })
+#[derive(Default)]
+struct VisualSpritePixelScan {
+    palette: HashMap<char, String>,
 }
 
-fn visual_sprite_entry_header(
-    tokens: &[&str],
-    trimmed: &str,
+impl VisualSpritePixelScan {
+    fn has_palette(&self) -> bool {
+        !self.palette.is_empty()
+    }
+}
+
+fn scan_braced_visual_sprite_entry(
+    context: &crate::source::SourceContext,
+    start: usize,
+    aliases: &HashMap<String, String>,
+    ranges: &mut Vec<VisualAsciiColorRange>,
+) -> usize {
+    let mut scan = VisualSpritePixelScan::default();
+    let mut index = start + 1;
+    while index < context.lines.len() {
+        let line = &context.lines[index];
+        if line.scope == Some(SourceScope::Visuals) {
+            break;
+        }
+        scan_visual_sprite_body_line(&mut scan, ranges, line, aliases);
+        index += 1;
+    }
+    index.max(start + 1)
+}
+
+fn scan_unbraced_visual_sprite_entry(
+    context: &crate::source::SourceContext,
+    start: usize,
+    aliases: &HashMap<String, String>,
+    ranges: &mut Vec<VisualAsciiColorRange>,
+) -> usize {
+    let mut scan = VisualSpritePixelScan::default();
+    let mut index = start + 1;
+    while index < context.lines.len() {
+        let line = &context.lines[index];
+        if line.scope != Some(SourceScope::Visuals) || is_visual_closing_line(line) {
+            break;
+        }
+        if !code_trim(&line.content).is_empty()
+            && visual_sprite_entry_boundary(context, index, scan.has_palette(), aliases)
+        {
+            break;
+        }
+        scan_visual_sprite_body_line(&mut scan, ranges, line, aliases);
+        index += 1;
+    }
+    index.max(start + 1)
+}
+
+fn scan_visual_sprite_body_line(
+    scan: &mut VisualSpritePixelScan,
+    ranges: &mut Vec<VisualAsciiColorRange>,
+    line: &crate::source::SourceContextLine,
+    aliases: &HashMap<String, String>,
+) {
+    let raw = strip_line_comment(&line.content);
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || trimmed == "}" {
+        return;
+    }
+    let tokens = line.tokens.iter().map(String::as_str).collect::<Vec<_>>();
+    if let Some(palette) = visual_ascii_palette_for_line(&tokens, aliases) {
+        scan.palette = palette;
+        return;
+    }
+    if scan.has_palette() && visual_ascii_row(trimmed, &scan.palette) {
+        add_visual_ascii_row_ranges(ranges, line.start, raw, trimmed, &scan.palette);
+    }
+}
+
+fn visual_sprite_entry_header_line(
+    line: &crate::source::SourceContextLine,
     aliases: &HashMap<String, String>,
 ) -> bool {
-    let Some(first) = tokens.first().copied() else {
-        return false;
-    };
-    if matches!(
-        first,
-        "shape" | "colors" | "ascii" | "sprites" | "sprites3" | "{" | "}"
-    ) {
+    if line.scope != Some(SourceScope::Visuals) || is_visual_closing_line(line) {
         return false;
     }
-    tokens.len() == 1
-        || trimmed.ends_with('{')
-        || matches!(
-            tokens,
-            [_, source] if is_visual_image_source(source) || visual_sprite_entry_start_color_token(source, aliases)
-        )
+    let tokens = line.tokens.iter().map(String::as_str).collect::<Vec<_>>();
+    match tokens.as_slice() {
+        [selector] => visual_sprite_selector_token(selector),
+        [selector, source] => {
+            visual_sprite_selector_token(selector)
+                && (is_visual_image_source(source)
+                    || visual_sprite_entry_start_color_token(source, aliases))
+        }
+        _ => false,
+    }
+}
+
+fn visual_inline_sprite_entry_line(
+    line: &crate::source::SourceContextLine,
+    aliases: &HashMap<String, String>,
+) -> bool {
+    let tokens = line.tokens.iter().map(String::as_str).collect::<Vec<_>>();
+    matches!(
+        tokens.as_slice(),
+        [selector, source]
+            if visual_sprite_selector_token(selector)
+                && (is_visual_image_source(source)
+                    || visual_sprite_entry_start_color_token(source, aliases))
+    )
+}
+
+fn visual_sprite_entry_boundary(
+    context: &crate::source::SourceContext,
+    line_index: usize,
+    current_has_palette: bool,
+    aliases: &HashMap<String, String>,
+) -> bool {
+    let Some(line) = context.lines.get(line_index) else {
+        return false;
+    };
+    if !current_has_palette {
+        return false;
+    }
+    let tokens = line.tokens.iter().map(String::as_str).collect::<Vec<_>>();
+    match tokens.as_slice() {
+        ["colors" | "shape" | "shapes", ..] => true,
+        [selector, source]
+            if visual_sprite_selector_token(selector)
+                && (is_visual_image_source(source)
+                    || visual_sprite_entry_start_color_token(source, aliases)) =>
+        {
+            true
+        }
+        [selector]
+            if visual_sprite_selector_token(selector) && line.content.trim_end().ends_with('{') =>
+        {
+            true
+        }
+        [selector] if current_has_palette && visual_sprite_selector_token(selector) => context
+            .lines
+            .iter()
+            .skip(line_index + 1)
+            .find(|next| {
+                next.scope == Some(SourceScope::Visuals) && !code_trim(&next.content).is_empty()
+            })
+            .is_some_and(|next| visual_line_starts_sprite_source(next, aliases)),
+        _ => false,
+    }
+}
+
+fn visual_line_starts_sprite_source(
+    line: &crate::source::SourceContextLine,
+    aliases: &HashMap<String, String>,
+) -> bool {
+    let tokens = line.tokens.iter().map(String::as_str).collect::<Vec<_>>();
+    match tokens.as_slice() {
+        ["pixels_per_cell" | "offset" | "rotate", ..] => true,
+        ["colors", colors @ ..] => {
+            !colors.is_empty()
+                && colors
+                    .iter()
+                    .all(|token| visual_color_value_for_token(token, aliases).is_some())
+        }
+        [source] if is_visual_image_source(source) => true,
+        colors if visual_ascii_palette(colors, aliases).is_some() => true,
+        _ => false,
+    }
 }
 
 fn visual_sprite_entry_start_color_token(token: &str, aliases: &HashMap<String, String>) -> bool {
     highlightable_visual_color_token(token) || aliases.contains_key(token) || token.contains(':')
+}
+
+fn visual_sprite_selector_token(value: &str) -> bool {
+    if matches!(
+        value,
+        "shape" | "shapes" | "colors" | "ascii" | "sprites" | "sprites3"
+    ) {
+        return false;
+    }
+    let cleaned = value.trim_start_matches('@');
+    let Some(first) = cleaned.chars().next() else {
+        return false;
+    };
+    (first.is_ascii_alphabetic() || first == '_')
+        && cleaned
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | ':'))
 }
 
 fn is_visual_image_source(value: &str) -> bool {
@@ -1987,6 +2090,20 @@ fn visual_ascii_palette(
         }
     }
     (!palette.is_empty()).then_some(palette)
+}
+
+fn visual_ascii_palette_for_line(
+    tokens: &[&str],
+    aliases: &HashMap<String, String>,
+) -> Option<HashMap<char, String>> {
+    match tokens {
+        ["colors", colors @ ..] if !colors.is_empty() => visual_ascii_palette(colors, aliases),
+        colors => visual_ascii_palette(colors, aliases),
+    }
+}
+
+fn code_trim(line: &str) -> &str {
+    strip_line_comment(line).trim()
 }
 
 fn visual_color_value_for_token(token: &str, aliases: &HashMap<String, String>) -> Option<String> {
@@ -2202,6 +2319,7 @@ fn is_word_continue(ch: char) -> bool {
         || ch == '_'
         || ch == ':'
         || ch == '.'
+        || ch == '#'
         || ch == '-'
         || ch == '*'
         || ch.is_ascii_alphanumeric()
@@ -2421,7 +2539,7 @@ fn escape_char_into(out: &mut String, ch: char) {
 #[cfg(test)]
 mod tests {
     use super::highlight_source;
-    use crate::syntax::PUZZLE_LIFECYCLE_BLOCKS;
+    use crate::syntax::{PUZZLE_LIFECYCLE_BLOCKS, PUZZLE_LINE_HEAD_KEYWORDS};
 
     #[test]
     fn highlights_parser_symbols_from_a_valid_game() {
@@ -2461,7 +2579,7 @@ P
             r#"
 puzzle board {
 rules {
-if { flag } -> set score = 1
+if { flag } -> score = 1
 }
 }
 }
@@ -2527,6 +2645,21 @@ P
                     .html
                     .contains(&format!("syntax-keyword\">{keyword}")),
                 "missing lifecycle highlight {keyword}"
+            );
+        }
+    }
+
+    #[test]
+    fn highlights_all_puzzle_line_head_keywords_from_shared_syntax() {
+        for keyword in PUZZLE_LINE_HEAD_KEYWORDS {
+            let source = format!("title highlight_{keyword}\npuzzle board {{\n{keyword}\n}}\n");
+            let highlighted = highlight_source(&source);
+
+            assert!(
+                highlighted
+                    .html
+                    .contains(&format!("syntax-keyword\">{keyword}")),
+                "missing puzzle line-head highlight {keyword}"
             );
         }
     }
@@ -2937,6 +3070,34 @@ scene playing {
     }
 
     #[test]
+    fn highlights_selector_occurrence_labels() {
+        let highlighted = highlight_source(
+            r#"
+title occurrence_label_highlight
+
+puzzle copy {
+layers {
+actor = Box Crate
+}
+groups {
+solid = Box Crate
+}
+rules {
+once [ solid#1 | solid#2 ] -> [ solid#2 | solid#1 ]
+}
+}
+"#,
+        );
+
+        assert!(highlighted.html.contains(
+            "syntax-group\">solid</span><span class=\"syntax-binding\">#</span><span class=\"syntax-binding\">1"
+        ));
+        assert!(highlighted.html.contains(
+            "syntax-group\">solid</span><span class=\"syntax-binding\">#</span><span class=\"syntax-binding\">2"
+        ));
+    }
+
+    #[test]
     fn highlights_for_bindings_as_local_bindings() {
         let highlighted = highlight_source(
             r#"
@@ -3296,7 +3457,7 @@ red
     }
 
     #[test]
-    fn highlights_color_name_palette_rows_as_sprite_palette() {
+    fn highlights_color_name_rows_as_sprite_colors() {
         let highlighted = highlight_source(
             r#"
 sprites {
@@ -3311,6 +3472,69 @@ red blue
             highlighted
                 .html
                 .contains("syntax-sprite-pixel\" style=\"--syntax-sprite-pixel-color: red\">0</span><span class=\"syntax-sprite-pixel\" style=\"--syntax-sprite-pixel-color: blue\">1</span>")
+        );
+    }
+
+    #[test]
+    fn highlights_sprite_pixels_with_attached_braces_and_tabs() {
+        let source = "title attached_sprite_braces\n\npuzzle default {\nlayers {\n__legacy_layer_0 = Player\n}\nsprites{\n\tPlayer{\n\t\t#ff0000 #0000ff\n\t\t01.\n\t}\n}\nrules {\n}\n}\nlevels {\nlegend {\n. = empty\nP = Player\n}\nlevel start\nP\n}\n";
+        let highlighted = highlight_source(source);
+
+        assert!(highlighted.parsed);
+        assert!(
+            highlighted
+                .html
+                .contains("syntax-sprite-pixel\" style=\"--syntax-sprite-pixel-color: #ff0000\">0</span><span class=\"syntax-sprite-pixel\" style=\"--syntax-sprite-pixel-color: #0000ff\">1</span><span class=\"syntax-sprite-pixel is-transparent\" style=\"--syntax-sprite-pixel-color: transparent\">.</span>")
+        );
+    }
+
+    #[test]
+    fn highlights_canonical_sprite_pixels_after_metadata_rows() {
+        let highlighted = highlight_source(
+            r##"
+title canonical_sprite_highlight
+
+puzzle default {
+layers {
+__legacy_layer_0 = Player Box
+}
+sprites {
+Player {
+pixels_per_cell 5 5
+offset 2 -1
+#e94f64 #2f80ed
+01
+}
+Box {
+colors #111111 #222222
+01
+}
+}
+rules {
+}
+}
+levels {
+legend {
+. = empty
+P = Player
+B = Box
+}
+level start
+P
+}
+"##,
+        );
+
+        assert!(highlighted.parsed);
+        assert!(
+            highlighted
+                .html
+                .contains("syntax-sprite-pixel\" style=\"--syntax-sprite-pixel-color: #e94f64\">0</span><span class=\"syntax-sprite-pixel\" style=\"--syntax-sprite-pixel-color: #2f80ed\">1</span>")
+        );
+        assert!(
+            highlighted
+                .html
+                .contains("syntax-sprite-pixel\" style=\"--syntax-sprite-pixel-color: #111111\">0</span><span class=\"syntax-sprite-pixel\" style=\"--syntax-sprite-pixel-color: #222222\">1</span>")
         );
     }
 
@@ -3386,13 +3610,6 @@ dark_green = #008000
 piece_color:kind {
 A = #ff004d
 B = #29adff
-}
-}
-palettes {
-floor = light_green dark_green
-piece:kind {
-A = light_green
-B = dark_green
 }
 }
 Floor {

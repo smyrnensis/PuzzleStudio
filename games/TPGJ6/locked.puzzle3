@@ -1,0 +1,302 @@
+title "Microban 3D"
+author "Levels by David Skinner"
+
+theme puzzlescript
+
+puzzle3 sokoban {
+render {
+  camera {
+    yaw = 0
+    pitch = 90
+    zoom = 1
+  }
+}
+
+layers {
+  floor = Floor
+  target = Goal
+  solid = Player Box Wall
+}
+
+groups {
+  solid = Player Box Wall
+}
+
+rules {
+  input horizontal [ Player | Box | no solid ] -> [ | Player | Box ]
+  input horizontal [ Player | no solid ] -> [ | Player ]
+}
+
+win_conditions {
+  some Goal
+  no down [ no Box | Goal ]
+}
+
+on_level_clear {
+  if win_conditions -> next_level
+}
+}
+
+scene title {
+layout {
+  title "Microban 3D"
+  choice "New Game" -> goto playing
+  choice "Level Select" -> goto level_select
+}
+}
+
+scene playing {
+state {
+  puzzle3 sokoban
+}
+keys {
+q Escape -> goto level_select	
+}
+rules {
+  step sokoban
+}
+
+layout {
+  row {
+    title "Microban 3D"
+  }
+  puzzle3 sokoban size 8 8
+}
+}
+
+scene level_select {
+layout {
+  title "Select Level"
+  column scroll=true {
+    for level in levels {
+      choice join(level.num, ". ", level.title) -> goto sokoban(level)
+    }
+  }
+  button "Exit" -> goto title
+}
+}
+
+levels3 microban of sokoban {
+legend {
+. = empty
+, = Floor
+G = Floor Goal
+P = Player
+B = Box
+# = Wall
+}
+
+level microban_01 {
+####..
+#..#..
+#..###
+#BP..#
+#..B.#
+#..###
+####..
+
+,,,,,,
+,,G,,,
+,,,,,,
+,G,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+}
+
+level microban_02 {
+######
+#....#
+#.#P.#
+#.BB.#
+#..B.#
+#....#
+######
+
+,,,,,,
+,,,,,,
+,,,,,,
+,,,G,,
+,,GG,,
+,,,,,,
+,,,,,,
+}
+
+level microban_03 {
+..####...
+###..####
+#.....B.#
+#.#..#B.#
+#....#P.#
+#########
+
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+,,G,G,,,,
+,,,,,,,,,
+}
+}
+
+sprites3 basic of sokoban {
+Floor
+#90ee90 #008000
+11111
+01111
+11101
+11111
+10111
+
+.....
+.....
+.....
+.....
+.....
+
+.....
+.....
+.....
+.....
+.....
+
+.....
+.....
+.....
+.....
+.....
+
+.....
+.....
+.....
+.....
+.....
+
+Goal
+#00008b
+.....
+.000.
+.0.0.
+.000.
+.....
+
+.....
+.....
+.....
+.....
+.....
+
+.....
+.....
+.....
+.....
+.....
+
+.....
+.....
+.....
+.....
+.....
+
+.....
+.....
+.....
+.....
+.....
+
+Player
+#000000 #ffa500 #ffffff #0000ff
+.....
+.....
+.000.
+.....
+.....
+
+.....
+.....
+.111.
+.....
+.....
+
+.....
+.....
+22222
+.....
+.....
+
+.....
+.....
+.333.
+.....
+.....
+
+.....
+.....
+.3.3.
+.....
+.....
+
+Box
+#ffa500
+00000
+0...0
+0...0
+0...0
+00000
+
+0...0
+.....
+.....
+.....
+0...0
+
+0...0
+.....
+.....
+.....
+0...0
+
+0...0
+.....
+.....
+.....
+0...0
+
+00000
+0...0
+0...0
+0...0
+00000
+
+Wall
+#a46322 #493c2b
+.....
+.....
+.....
+.....
+.....
+
+.....
+.....
+.....
+.....
+.....
+
+00010
+11111
+01000
+11111
+00010
+
+11111
+00010
+11111
+01000
+11111
+
+00010
+11111
+01000
+11111
+00010
+}

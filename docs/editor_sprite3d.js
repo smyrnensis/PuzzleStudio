@@ -3229,12 +3229,7 @@ for (const input of [
   sprite3dScaleInput,
   sprite3dSliceValue,
 ]) {
-  input?.addEventListener("focus", () => input.select());
-  input?.addEventListener("pointerup", (event) => {
-    if (document.activeElement === input) {
-      event.preventDefault();
-    }
-  });
+  installSelectAllOnFocus(input);
 }
 sprite3dNameInput?.addEventListener("input", () => {
   renderSprite3dPreview();

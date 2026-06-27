@@ -1,5 +1,5 @@
 use crate::source::{SourceScope, SourceToken, scan_source_context};
-use crate::syntax::PUZZLE_LIFECYCLE_BLOCKS;
+use crate::syntax::{PUZZLE_COMPLETION_KEYWORDS, PUZZLE_LIFECYCLE_BLOCKS};
 use crate::{
     ANIMATION_BLOCK_OPTIONS, ANIMATION_TWEEN_OPTIONS, LEVEL_MENU_OPTIONS, LevelPathPartSyntax,
     MUSIC_SOUND_SETTING_OPTIONS, MapHeaderTokenSyntax, PUZZLE_RENDER_BLOCK_OPTIONS,
@@ -71,7 +71,6 @@ pub(crate) enum SemanticCompletionSlot {
     MusicAssets,
     Sprites,
     Assets,
-    Palettes,
     Shapes,
     Themes,
     Colors,
@@ -288,8 +287,7 @@ fn line_head_completion_slots(
             | SourceScope::Visuals
             | SourceScope::VisualShapeTable
             | SourceScope::VisualShapeEntry
-            | SourceScope::VisualColorTable
-            | SourceScope::VisualPaletteTable,
+            | SourceScope::VisualColorTable,
         ) => vec![SemanticCompletionSlot::Keywords(
             completion_keywords_for_scope(scope),
         )],
@@ -438,7 +436,7 @@ fn visual_completion_slots(
     before: &str,
 ) -> Option<Vec<SemanticCompletionSlot>> {
     match scope {
-        Some(SourceScope::VisualColorTable | SourceScope::VisualPaletteTable) => {
+        Some(SourceScope::VisualColorTable) => {
             before.rfind('=')?;
             Some(vec![SemanticCompletionSlot::Colors])
         }
@@ -449,7 +447,6 @@ fn visual_completion_slots(
                 .collect::<Vec<_>>();
             match tokens.as_slice() {
                 ["colors", ..] => Some(vec![SemanticCompletionSlot::Colors]),
-                ["palette", ..] => Some(vec![SemanticCompletionSlot::Palettes]),
                 ["shape", ..] => Some(vec![SemanticCompletionSlot::Shapes]),
                 [first, ..] if !matches!(*first, "shape" | "sprite" | "colors") => Some(vec![
                     SemanticCompletionSlot::Colors,
@@ -643,7 +640,6 @@ pub(crate) fn semantic_builtin_effect_commands() -> Vec<(&'static str, SemanticK
         "restart",
         "resume",
         "resume_music",
-        "set",
         "sfx",
         "show",
         "start",
@@ -683,7 +679,6 @@ pub(crate) fn semantic_model_effect_commands() -> Vec<(&'static str, SemanticKin
         "message",
         "next_level",
         "restart",
-        "set",
         "sfx",
         "wait",
         "win",
@@ -719,7 +714,6 @@ pub(crate) fn semantic_scene_effect_commands() -> Vec<(&'static str, SemanticKin
         "pause_music",
         "play_music",
         "resume_music",
-        "set",
         "sfx",
         "start",
         "stop_music",
@@ -810,13 +804,11 @@ fn fallback_completion_slots(scope: Option<SourceScope>) -> Vec<SemanticCompleti
             SourceScope::Visuals
             | SourceScope::VisualShapeTable
             | SourceScope::VisualShapeEntry
-            | SourceScope::VisualColorTable
-            | SourceScope::VisualPaletteTable,
+            | SourceScope::VisualColorTable,
         ) => vec![
             SemanticCompletionSlot::Keywords(completion_keywords_for_scope(scope)),
             SemanticCompletionSlot::Sprites,
             SemanticCompletionSlot::Assets,
-            SemanticCompletionSlot::Palettes,
             SemanticCompletionSlot::Shapes,
             SemanticCompletionSlot::Colors,
         ],
@@ -868,8 +860,7 @@ fn completion_keywords_for_scope(scope: Option<SourceScope>) -> &'static [&'stat
             SourceScope::Visuals
             | SourceScope::VisualShapeTable
             | SourceScope::VisualShapeEntry
-            | SourceScope::VisualColorTable
-            | SourceScope::VisualPaletteTable,
+            | SourceScope::VisualColorTable,
         ) => VISUAL_COMPLETION_KEYWORDS,
         Some(SourceScope::Other) => COMPLETION_KEYWORDS,
     }
@@ -977,43 +968,6 @@ const SOUNDS_COMPLETION_KEYWORDS: &[&str] = &["music", "sfx"];
 
 const ASSET_COMPLETION_KEYWORDS: &[&str] = &["css", "script"];
 
-const PUZZLE_COMPLETION_KEYWORDS: &[&str] = &[
-    "collision_layers",
-    "const",
-    "for",
-    "group",
-    "groups",
-    "if",
-    "input",
-    "keys",
-    "layers",
-    "legend",
-    "level",
-    "levels",
-    "levels3",
-    "lose_conditions",
-    "on_display",
-    PUZZLE_LIFECYCLE_BLOCKS[0],
-    PUZZLE_LIFECYCLE_BLOCKS[1],
-    PUZZLE_LIFECYCLE_BLOCKS[2],
-    "once",
-    "once_all",
-    "once_per_level",
-    "persistent",
-    "condition",
-    "repeat",
-    "resources",
-    "render",
-    "routine",
-    "rule",
-    "rules",
-    "scratch",
-    "state",
-    "tags",
-    "var",
-    "win_conditions",
-];
-
 const TAG_COMPLETION_KEYWORDS: &[&str] = &[];
 const GROUP_COMPLETION_KEYWORDS: &[&str] = &["display", "each"];
 const LAYER_COMPLETION_KEYWORDS: &[&str] = &["display", "each"];
@@ -1060,8 +1014,6 @@ const SCENE_COMPLETION_KEYWORDS: &[&str] = &[
 const VISUAL_COMPLETION_KEYWORDS: &[&str] = &[
     "colors",
     "offset",
-    "palette",
-    "palettes",
     "pixels_per_cell",
     "rotate",
     "shape",
@@ -2056,14 +2008,13 @@ title rewrite_effect_semantics
 puzzle default {
 rules {
 once [ Player ] -> [ Player ] sfx clear
-set score = 1
+score = 1
 }
 }
 "#;
         let tokens = semantic_tokens(source);
         let sfx_start = source.find("sfx clear").unwrap();
         let clear_start = source.find("clear").unwrap();
-        let set_start = source.find("set score").unwrap();
         let score_start = source.find("score").unwrap();
 
         assert!(tokens.iter().any(|token| {
@@ -2075,11 +2026,6 @@ set score = 1
             token.start == clear_start
                 && token.end == clear_start + "clear".len()
                 && token.kind == SemanticKind::Asset
-        }));
-        assert!(tokens.iter().any(|token| {
-            token.start == set_start
-                && token.end == set_start + "set".len()
-                && token.kind == SemanticKind::Effect
         }));
         assert!(tokens.iter().any(|token| {
             token.start == score_start

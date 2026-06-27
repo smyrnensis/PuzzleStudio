@@ -12,7 +12,7 @@ pub struct WasmStandaloneSession {
 
 enum WasmStandaloneSessionInner {
     Source(puzzle_game_runtime::StandaloneSessionBridge),
-    Export(puzzle_game_runtime::CompiledStandaloneSessionBridge),
+    Export(puzzle_game_runtime::StandaloneSessionBridge),
 }
 
 #[wasm_bindgen]
@@ -83,7 +83,7 @@ impl WasmStandaloneSession {
     pub fn from_export(export_json: &str) -> Result<WasmStandaloneSession, JsValue> {
         Ok(Self {
             inner: WasmStandaloneSessionInner::Export(
-                puzzle_game_runtime::CompiledStandaloneSessionBridge::from_export_json(export_json)
+                puzzle_game_runtime::StandaloneSessionBridge::from_export_json(export_json)
                     .map_err(|error| JsValue::from_str(&error))?,
             ),
         })

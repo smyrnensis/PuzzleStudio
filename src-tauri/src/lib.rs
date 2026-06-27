@@ -20,6 +20,7 @@ use tauri_plugin_dialog::DialogExt;
 const WORKSPACE_CHANGED_EVENT: &str = "puzzlestudio-workspace-changed";
 const WORKSPACE_WATCH_INTERVAL: Duration = Duration::from_millis(700);
 const WORKSPACE_WATCH_DEBOUNCE: Duration = Duration::from_millis(150);
+const LOADED_WORKSPACES_FILE: &str = "loaded-workspaces.json";
 const RECENT_WORKSPACES_FILE: &str = "recent-workspaces.json";
 const MAX_RECENT_WORKSPACES: usize = 8;
 const SKIPPED_WORKSPACE_DIRS: &[&str] = &[
@@ -155,19 +156,27 @@ fn load_source(
             .services
             .lock()
             .map_err(|_| "desktop project state is unavailable".to_string())?;
-        if let Some(service) = services.first() {
-            return editor_source_value_with_recent(&app, service);
+        if !services.is_empty() {
+            let workspaces = services
+                .iter()
+                .map(editor_source_value)
+                .collect::<Result<Vec<_>, _>>()?;
+            return workspaces_source_value_with_recent(&app, workspaces, Vec::new());
         }
     }
 
-    if let Some(entry) = read_recent_workspaces(&app)?.first().cloned() {
-        match open_workspace_path(&app, &state, &PathBuf::from(entry.workspace_root), true) {
-            Ok(payload) => return Ok(payload),
-            Err(error) => eprintln!("failed to reopen recent workspace: {error}"),
-        }
+    let loaded = read_loaded_workspaces(&app)?;
+    let (workspaces, restore_errors) = restore_workspace_payloads(&loaded, |workspace_root| {
+        open_workspace_path(&app, &state, &PathBuf::from(workspace_root), false).map_err(|error| {
+            eprintln!("failed to restore loaded workspace {workspace_root}: {error}");
+            error
+        })
+    });
+    if !workspaces.is_empty() {
+        return workspaces_source_value_with_recent(&app, workspaces, restore_errors);
     }
 
-    source_value_with_recent(&app, empty_source_value())
+    workspaces_source_value_with_recent(&app, Vec::new(), restore_errors)
 }
 
 #[tauri::command]
@@ -180,8 +189,8 @@ async fn open_workspace(
     let Some(path) = pick_workspace_path(&app, kind).await? else {
         return Ok(serde_json::json!({ "canceled": true }));
     };
-    let record_recent = kind != Some("file");
-    open_workspace_path(&app, &state, &path, record_recent)
+    let record_loaded = kind != Some("file");
+    open_workspace_path(&app, &state, &path, record_loaded)
 }
 
 #[tauri::command]
@@ -209,15 +218,16 @@ fn open_workspace_path(
     app: &tauri::AppHandle,
     state: &tauri::State<'_, DesktopState>,
     path: &Path,
-    record_recent: bool,
+    record_loaded: bool,
 ) -> Result<serde_json::Value, String> {
     let service = EditorService::open_game_entry(path).map_err(|error| error.to_string())?;
     let workspace_root = service.workspace_root().to_string();
     let puzzle_path = service.puzzle_path().to_string();
-    if record_recent {
+    if record_loaded {
         if let Err(error) = record_recent_workspace(app, &workspace_root) {
             eprintln!("failed to record recent workspace: {error}");
         }
+        record_loaded_workspace(app, &workspace_root)?;
     }
     let payload = editor_source_value_with_recent(app, &service)?;
     let mut services = state
@@ -248,6 +258,7 @@ async fn open_project(
 
 #[tauri::command]
 fn remove_workspace(
+    app: tauri::AppHandle,
     request: RemoveWorkspaceCommandRequest,
     state: tauri::State<'_, DesktopState>,
 ) -> Result<serde_json::Value, String> {
@@ -256,6 +267,12 @@ fn remove_workspace(
         .lock()
         .map_err(|_| "desktop project state is unavailable".to_string())?;
     let before = services.len();
+    if services
+        .iter()
+        .any(|service| service.workspace_root() == request.workspace_root)
+    {
+        remove_loaded_workspace(&app, &request.workspace_root)?;
+    }
     services.retain(|service| service.workspace_root() != request.workspace_root);
     stop_workspace_watcher(&state, &request.workspace_root)?;
     Ok(serde_json::json!({ "ok": true, "removed": before != services.len() }))
@@ -611,6 +628,31 @@ fn editor_source_value_with_recent(
     service: &EditorService,
 ) -> Result<serde_json::Value, String> {
     source_value_with_recent(app, editor_source_value(service)?)
+}
+
+fn workspaces_source_value_with_recent(
+    app: &tauri::AppHandle,
+    workspaces: Vec<serde_json::Value>,
+    restore_errors: Vec<serde_json::Value>,
+) -> Result<serde_json::Value, String> {
+    let mut payload = empty_source_value();
+    if let serde_json::Value::Object(object) = &mut payload {
+        object.insert(
+            "empty".to_string(),
+            serde_json::Value::Bool(workspaces.is_empty()),
+        );
+        object.insert(
+            "workspaces".to_string(),
+            serde_json::Value::Array(workspaces),
+        );
+        if !restore_errors.is_empty() {
+            object.insert(
+                "restoreErrors".to_string(),
+                serde_json::Value::Array(restore_errors),
+            );
+        }
+    }
+    source_value_with_recent(app, payload)
 }
 
 fn source_value_with_recent(
@@ -971,34 +1013,75 @@ async fn pick_workspace_path(
 }
 
 fn read_recent_workspaces(app: &tauri::AppHandle) -> Result<Vec<RecentWorkspaceEntry>, String> {
-    let path = recent_workspaces_path(app)?;
+    read_workspace_entries(app, RECENT_WORKSPACES_FILE, Some(MAX_RECENT_WORKSPACES))
+}
+
+fn read_loaded_workspaces(app: &tauri::AppHandle) -> Result<Vec<RecentWorkspaceEntry>, String> {
+    read_workspace_entries(app, LOADED_WORKSPACES_FILE, None)
+}
+
+fn read_workspace_entries(
+    app: &tauri::AppHandle,
+    filename: &str,
+    max_entries: Option<usize>,
+) -> Result<Vec<RecentWorkspaceEntry>, String> {
+    let path = workspace_entries_path(app, filename)?;
     let Ok(source) = fs::read_to_string(path) else {
         return Ok(Vec::new());
     };
     let entries: Vec<RecentWorkspaceEntry> = serde_json::from_str(&source).unwrap_or_default();
-    Ok(clean_recent_workspaces(entries))
+    Ok(clean_workspace_entries(entries, max_entries))
 }
 
 fn record_recent_workspace(app: &tauri::AppHandle, workspace_root: &str) -> Result<(), String> {
     let mut entries = read_recent_workspaces(app)?;
     push_recent_workspace(&mut entries, workspace_root);
-    let path = recent_workspaces_path(app)?;
+    write_workspace_entries(app, RECENT_WORKSPACES_FILE, &entries)
+}
+
+fn record_loaded_workspace(app: &tauri::AppHandle, workspace_root: &str) -> Result<(), String> {
+    let mut entries = read_loaded_workspaces(app)?;
+    push_loaded_workspace(&mut entries, workspace_root);
+    write_workspace_entries(app, LOADED_WORKSPACES_FILE, &entries)
+}
+
+fn remove_loaded_workspace(app: &tauri::AppHandle, workspace_root: &str) -> Result<(), String> {
+    let mut entries = read_loaded_workspaces(app)?;
+    entries.retain(|entry| entry.workspace_root != workspace_root);
+    write_workspace_entries(app, LOADED_WORKSPACES_FILE, &entries)
+}
+
+fn write_workspace_entries(
+    app: &tauri::AppHandle,
+    filename: &str,
+    entries: &[RecentWorkspaceEntry],
+) -> Result<(), String> {
+    let path = workspace_entries_path(app, filename)?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
-    let source = serde_json::to_string_pretty(&entries).map_err(|error| error.to_string())?;
+    let source = serde_json::to_string_pretty(entries).map_err(|error| error.to_string())?;
     fs::write(path, source).map_err(|error| error.to_string())
 }
 
-fn recent_workspaces_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+fn workspace_entries_path(app: &tauri::AppHandle, filename: &str) -> Result<PathBuf, String> {
     Ok(app
         .path()
         .app_config_dir()
         .map_err(|error| error.to_string())?
-        .join(RECENT_WORKSPACES_FILE))
+        .join(filename))
 }
 
 fn push_recent_workspace(entries: &mut Vec<RecentWorkspaceEntry>, workspace_root: &str) {
+    push_workspace_entry(entries, workspace_root);
+    entries.truncate(MAX_RECENT_WORKSPACES);
+}
+
+fn push_loaded_workspace(entries: &mut Vec<RecentWorkspaceEntry>, workspace_root: &str) {
+    push_workspace_entry(entries, workspace_root);
+}
+
+fn push_workspace_entry(entries: &mut Vec<RecentWorkspaceEntry>, workspace_root: &str) {
     let workspace_root = workspace_root.trim();
     if workspace_root.is_empty() {
         return;
@@ -1011,10 +1094,38 @@ fn push_recent_workspace(entries: &mut Vec<RecentWorkspaceEntry>, workspace_root
             name: recent_workspace_name(workspace_root),
         },
     );
-    entries.truncate(MAX_RECENT_WORKSPACES);
 }
 
+fn restore_workspace_payloads<F>(
+    entries: &[RecentWorkspaceEntry],
+    mut open_workspace: F,
+) -> (Vec<serde_json::Value>, Vec<serde_json::Value>)
+where
+    F: FnMut(&str) -> Result<serde_json::Value, String>,
+{
+    let mut workspaces = Vec::new();
+    let mut errors = Vec::new();
+    for entry in entries {
+        match open_workspace(&entry.workspace_root) {
+            Ok(payload) => workspaces.push(payload),
+            Err(error) => errors.push(serde_json::json!({
+                "workspaceRoot": entry.workspace_root,
+                "message": error,
+            })),
+        }
+    }
+    (workspaces, errors)
+}
+
+#[cfg(test)]
 fn clean_recent_workspaces(entries: Vec<RecentWorkspaceEntry>) -> Vec<RecentWorkspaceEntry> {
+    clean_workspace_entries(entries, Some(MAX_RECENT_WORKSPACES))
+}
+
+fn clean_workspace_entries(
+    entries: Vec<RecentWorkspaceEntry>,
+    max_entries: Option<usize>,
+) -> Vec<RecentWorkspaceEntry> {
     let mut clean = Vec::new();
     for entry in entries {
         let workspace_root = entry.workspace_root.trim();
@@ -1033,7 +1144,7 @@ fn clean_recent_workspaces(entries: Vec<RecentWorkspaceEntry>) -> Vec<RecentWork
                 entry.name
             },
         });
-        if clean.len() >= MAX_RECENT_WORKSPACES {
+        if max_entries.is_some_and(|limit| clean.len() >= limit) {
             break;
         }
     }
@@ -1133,6 +1244,111 @@ mod tests {
                 .map(|entry| entry.workspace_root.as_str())
                 .collect::<Vec<_>>(),
             vec!["/tmp/project-a", "/tmp/project-b"]
+        );
+    }
+
+    #[test]
+    fn loaded_workspace_push_preserves_all_loaded_entries() {
+        let mut entries = (0..MAX_RECENT_WORKSPACES)
+            .map(|index| RecentWorkspaceEntry {
+                workspace_root: format!("/tmp/project-{index}"),
+                name: format!("project-{index}"),
+            })
+            .collect::<Vec<_>>();
+
+        push_loaded_workspace(&mut entries, "/tmp/project-extra");
+
+        assert_eq!(entries.len(), MAX_RECENT_WORKSPACES + 1);
+        assert_eq!(entries[0].workspace_root, "/tmp/project-extra");
+    }
+
+    #[test]
+    fn loaded_workspace_cleanup_preserves_all_loaded_entries() {
+        let entries = clean_workspace_entries(
+            (0..MAX_RECENT_WORKSPACES + 2)
+                .map(|index| RecentWorkspaceEntry {
+                    workspace_root: format!("/tmp/project-{index}"),
+                    name: format!("project-{index}"),
+                })
+                .collect(),
+            None,
+        );
+
+        assert_eq!(entries.len(), MAX_RECENT_WORKSPACES + 2);
+    }
+
+    #[test]
+    fn restore_workspace_payloads_attempts_every_loaded_entry_in_order() {
+        let entries = vec![
+            RecentWorkspaceEntry {
+                workspace_root: "/tmp/project-a".to_string(),
+                name: "A".to_string(),
+            },
+            RecentWorkspaceEntry {
+                workspace_root: "/tmp/project-b".to_string(),
+                name: "B".to_string(),
+            },
+        ];
+        let mut opened = Vec::new();
+
+        let (workspaces, errors) = restore_workspace_payloads(&entries, |workspace_root| {
+            opened.push(workspace_root.to_string());
+            Ok(serde_json::json!({ "workspaceRoot": workspace_root }))
+        });
+
+        assert_eq!(opened, vec!["/tmp/project-a", "/tmp/project-b"]);
+        assert_eq!(workspaces.len(), 2);
+        assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn restore_workspace_payloads_reports_failures_and_continues() {
+        let entries = vec![
+            RecentWorkspaceEntry {
+                workspace_root: "/tmp/project-a".to_string(),
+                name: "A".to_string(),
+            },
+            RecentWorkspaceEntry {
+                workspace_root: "/tmp/project-b".to_string(),
+                name: "B".to_string(),
+            },
+            RecentWorkspaceEntry {
+                workspace_root: "/tmp/project-c".to_string(),
+                name: "C".to_string(),
+            },
+        ];
+        let mut opened = Vec::new();
+
+        let (workspaces, errors) = restore_workspace_payloads(&entries, |workspace_root| {
+            opened.push(workspace_root.to_string());
+            if workspace_root == "/tmp/project-b" {
+                Err("missing folder".to_string())
+            } else {
+                Ok(serde_json::json!({ "workspaceRoot": workspace_root }))
+            }
+        });
+
+        assert_eq!(
+            opened,
+            vec!["/tmp/project-a", "/tmp/project-b", "/tmp/project-c"]
+        );
+        assert_eq!(
+            workspaces
+                .iter()
+                .filter_map(|payload| payload.get("workspaceRoot")?.as_str())
+                .collect::<Vec<_>>(),
+            vec!["/tmp/project-a", "/tmp/project-c"]
+        );
+        assert_eq!(errors.len(), 1);
+        assert_eq!(
+            errors[0]
+                .get("workspaceRoot")
+                .and_then(|value| value.as_str()),
+            Some("/tmp/project-b")
+        );
+        assert_eq!(
+            errors[0].get("message").and_then(|value| value.as_str()),
+            Some("missing folder")
         );
     }
 

@@ -462,7 +462,8 @@ fn check_command(args: &[String]) -> Result<(), CliError> {
             Ok(())
         }
         Err(error) => {
-            let diagnostics = diagnostics_with_file(&entry, error);
+            let source = fs::read_to_string(&entry).ok();
+            let diagnostics = diagnostics_with_file_and_source(&entry, error, source.as_deref());
             write_check_failure(json, &diagnostics);
             Err(CliError::CommandFailed)
         }
@@ -667,6 +668,18 @@ fn diagnostics_with_file(path: &Path, report: DiagnosticReport) -> Vec<Diagnosti
         .collect()
 }
 
+fn diagnostics_with_file_and_source(
+    path: &Path,
+    report: DiagnosticReport,
+    source: Option<&str>,
+) -> Vec<Diagnostic> {
+    let report = match source {
+        Some(source) => puzzle_lang::resolve_diagnostic_source_locations(report, source),
+        None => report,
+    };
+    diagnostics_with_file(path, report)
+}
+
 fn diagnostic_location(diagnostic: &Diagnostic) -> String {
     let span = diagnostic.primary_span.as_ref();
     let file = span
@@ -677,6 +690,7 @@ fn diagnostic_location(diagnostic: &Diagnostic) -> String {
         span.and_then(|span| span.column),
     ) {
         (Some(line), Some(column)) => format!("{file}:{line}:{column}"),
+        (Some(line), None) => format!("{file}:{line}"),
         _ => file.to_string(),
     }
 }

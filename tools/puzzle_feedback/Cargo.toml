@@ -1,0 +1,12 @@
+[package]
+name = "puzzle-feedback"
+version = "0.1.0"
+edition = "2024"
+license = "UNLICENSED"
+
+[workspace]
+
+[dependencies]
+puzzle-core = { path = "../../crates/core" }
+puzzle-lang = { path = "../../crates/lang" }
+puzzle-play = { path = "../../crates/play" }

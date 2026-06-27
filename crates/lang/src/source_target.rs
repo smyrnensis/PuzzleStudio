@@ -1,6 +1,7 @@
 use crate::source::{
     SourceContext, SourceContextLine, SourceScope, scan_source_context, strip_line_comment,
 };
+use std::collections::HashSet;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SourceTargetKind {
@@ -54,11 +55,12 @@ pub struct SourceTarget {
 pub fn resolve_source_target(source: &str, cursor_offset: usize) -> Option<SourceTarget> {
     let cursor = cursor_offset.min(source.len());
     let context = scan_source_context(source);
+    let visual_refs = collect_visual_sprite_refs(source, &context);
     resolve_sounds_target(&context, cursor)
         .or_else(|| resolve_level3d_target(source, &context, cursor))
         .or_else(|| resolve_level_target(source, &context, cursor))
         .or_else(|| resolve_sprite3d_target(source, &context, cursor))
-        .or_else(|| resolve_sprite_target(source, &context, cursor))
+        .or_else(|| resolve_sprite_target(source, &context, cursor, &visual_refs))
 }
 
 pub fn source_target_json(target: Option<&SourceTarget>) -> String {
@@ -307,6 +309,7 @@ fn resolve_sprite_target(
     source: &str,
     context: &SourceContext,
     cursor: usize,
+    visual_refs: &VisualSpriteRefs,
 ) -> Option<SourceTarget> {
     let sprite3d_blocks = sprite3d_blocks(source, context);
     for (index, line) in context.lines.iter().enumerate() {
@@ -320,7 +323,7 @@ fn resolve_sprite_target(
             continue;
         }
         let line_end = line_end(line);
-        if let Some((name, body_start)) = line_style_sprite_header(line) {
+        if let Some((name, body_start)) = line_style_sprite_header(line, visual_refs) {
             if cursor < line.start || cursor > line_end {
                 continue;
             }
@@ -359,7 +362,8 @@ fn resolve_sprite_target(
                 params: Vec::new(),
             });
         }
-        let Some((end, body_start, body_end)) = unbraced_sprite_range(context, index) else {
+        let Some((end, body_start, body_end)) = unbraced_sprite_range(context, index, visual_refs)
+        else {
             continue;
         };
         if cursor < line.start || cursor > end {
@@ -536,7 +540,8 @@ fn next_sprite3d_palette_line(
         .take_while(|line| line.start < block.close_index)
         .find_map(|line| {
             let trimmed = code_trim(&line.content);
-            (!trimmed.is_empty()).then_some(is_sprite_entry_start_color_row(trimmed))
+            (!trimmed.is_empty())
+                .then(|| is_sprite_entry_start_color_row(trimmed, &VisualSpriteRefs::default()))
         })
         .unwrap_or(false)
 }
@@ -546,6 +551,87 @@ fn sprite_header_scope(scope: Option<SourceScope>) -> bool {
         scope,
         Some(SourceScope::Visuals | SourceScope::VisualShapeTable | SourceScope::VisualShapeEntry)
     )
+}
+
+#[derive(Default)]
+struct VisualSpriteRefs {
+    color_names: HashSet<String>,
+}
+
+impl VisualSpriteRefs {
+    fn contains(&self, value: &str) -> bool {
+        self.color_names.contains(value)
+    }
+}
+
+fn collect_visual_sprite_refs(source: &str, context: &SourceContext) -> VisualSpriteRefs {
+    let mut refs = VisualSpriteRefs::default();
+    for line in &context.lines {
+        if !matches!(line.scope, Some(SourceScope::Visuals)) {
+            continue;
+        }
+        let Some(kind) = line.tokens.first().map(String::as_str) else {
+            continue;
+        };
+        if kind != "colors" {
+            continue;
+        }
+        let line_end = line_end(line);
+        let Some(open_index) = source[line.start..line_end]
+            .find('{')
+            .map(|offset| line.start + offset)
+        else {
+            continue;
+        };
+        let Some(close_index) = find_matching_brace(source, open_index) else {
+            continue;
+        };
+        collect_visual_flat_asset_names(context, open_index, close_index, &mut refs);
+    }
+    refs
+}
+
+fn collect_visual_flat_asset_names(
+    context: &SourceContext,
+    open_index: usize,
+    close_index: usize,
+    refs: &mut VisualSpriteRefs,
+) {
+    for line in &context.lines {
+        if line.start <= open_index || line.start >= close_index {
+            continue;
+        }
+        if visual_asset_depth_at_line(context, open_index, line.start) != 0 {
+            continue;
+        }
+        let [name, equals, ..] = line.tokens.as_slice() else {
+            continue;
+        };
+        if equals == "=" && is_identifier_token(name) {
+            refs.color_names.insert(name.clone());
+        }
+    }
+}
+
+fn visual_asset_depth_at_line(
+    context: &SourceContext,
+    open_index: usize,
+    line_start: usize,
+) -> usize {
+    let mut depth = 0usize;
+    for line in &context.lines {
+        if line.start <= open_index || line.start >= line_start {
+            continue;
+        }
+        let trimmed = code_trim(&line.content);
+        if trimmed == "}" {
+            depth = depth.saturating_sub(1);
+        }
+        if trimmed.ends_with('{') {
+            depth += 1;
+        }
+    }
+    depth
 }
 
 fn sprite_name(line: &SourceContextLine) -> Option<String> {
@@ -565,7 +651,10 @@ fn sprite_name(line: &SourceContextLine) -> Option<String> {
     }
 }
 
-fn line_style_sprite_header(line: &SourceContextLine) -> Option<(String, usize)> {
+fn line_style_sprite_header(
+    line: &SourceContextLine,
+    visual_refs: &VisualSpriteRefs,
+) -> Option<(String, usize)> {
     if !matches!(line.scope, Some(SourceScope::Visuals)) {
         return None;
     }
@@ -573,7 +662,8 @@ fn line_style_sprite_header(line: &SourceContextLine) -> Option<(String, usize)>
         return None;
     };
     if !sprite_definition_name_token(selector)
-        || !(is_visual_image_source(source) || is_sprite_entry_start_color_token(source))
+        || !(is_visual_image_source(source)
+            || is_sprite_entry_start_color_token(source, visual_refs))
     {
         return None;
     }
@@ -598,6 +688,7 @@ fn clean_name_token(value: &str) -> String {
 fn unbraced_sprite_range(
     context: &SourceContext,
     start_index: usize,
+    visual_refs: &VisualSpriteRefs,
 ) -> Option<(usize, usize, usize)> {
     let line = &context.lines[start_index];
     if !is_unbraced_sprite_header(line) {
@@ -615,13 +706,15 @@ fn unbraced_sprite_range(
         if trimmed == "}" {
             break;
         }
-        if !trimmed.is_empty() && starts_next_sprite_entry(context, next_index, saw_color_row) {
+        if !trimmed.is_empty()
+            && starts_next_sprite_entry(context, next_index, saw_color_row, visual_refs)
+        {
             break;
         }
         end = line_end(next);
         if !trimmed.is_empty() {
             body_end = line_end(next);
-            if is_sprite_entry_start_color_row(trimmed) {
+            if is_sprite_entry_start_color_row(trimmed, visual_refs) {
                 saw_color_row = true;
             }
         }
@@ -639,19 +732,18 @@ fn is_visual_sprite_entry_boundary<'a>(
     line: &SourceContextLine,
     following: impl Iterator<Item = &'a SourceContextLine>,
     current_saw_color_row: bool,
+    visual_refs: &VisualSpriteRefs,
 ) -> bool {
     if !matches!(line.scope, Some(SourceScope::Visuals)) {
         return false;
     }
     match line.tokens.as_slice() {
-        [keyword, ..] if keyword == "colors" || keyword == "palettes" || keyword == "shapes" => {
-            true
-        }
+        [keyword, ..] if keyword == "colors" || keyword == "shapes" => true,
         [selector, source]
             if sprite_definition_name_token(selector)
                 && current_saw_color_row
                 && (is_visual_image_source(source)
-                    || is_sprite_entry_start_color_token(source)) =>
+                    || is_sprite_entry_start_color_token(source, visual_refs)) =>
         {
             true
         }
@@ -672,6 +764,7 @@ fn starts_next_sprite_entry(
     context: &SourceContext,
     line_index: usize,
     current_saw_color_row: bool,
+    visual_refs: &VisualSpriteRefs,
 ) -> bool {
     let Some(line) = context.lines.get(line_index) else {
         return false;
@@ -683,10 +776,11 @@ fn starts_next_sprite_entry(
         line,
         context.lines.iter().skip(line_index),
         current_saw_color_row,
+        visual_refs,
     ) {
         return true;
     }
-    if is_sprite_entry_start_color_row(code_trim(&line.content)) {
+    if is_sprite_entry_start_color_row(code_trim(&line.content), visual_refs) {
         return false;
     }
     !current_saw_color_row && sprite_name(line).is_some()
@@ -708,19 +802,19 @@ fn is_sprite_color_row(line: &str) -> bool {
     !colors.is_empty() && colors.iter().all(|color| is_sprite_color_expr(color))
 }
 
-fn is_sprite_entry_start_color_row(line: &str) -> bool {
+fn is_sprite_entry_start_color_row(line: &str, visual_refs: &VisualSpriteRefs) -> bool {
     let colors = line.split_whitespace().collect::<Vec<_>>();
     if colors.is_empty() || !colors.iter().all(|color| is_sprite_color_expr(color)) {
         return false;
     }
     colors.len() > 1
-        || colors
-            .first()
-            .is_some_and(|color| is_sprite_color(color) || color.contains(':'))
+        || colors.first().is_some_and(|color| {
+            is_sprite_color(color) || color.contains(':') || visual_refs.contains(color)
+        })
 }
 
-fn is_sprite_entry_start_color_token(token: &str) -> bool {
-    is_sprite_color(token) || token.contains(':')
+fn is_sprite_entry_start_color_token(token: &str, visual_refs: &VisualSpriteRefs) -> bool {
+    is_sprite_color(token) || token.contains(':') || visual_refs.contains(token)
 }
 
 fn is_sprite_color_expr(value: &str) -> bool {
@@ -935,6 +1029,29 @@ music music_name seed=test1 bars=8 height=0 bpm=100
     }
 
     #[test]
+    fn resolves_nested_sound_definition_with_params() {
+        let source = r#"
+puzzle board {
+sounds {
+sfx clear seed=clear01 type=jump
+}
+}
+"#;
+        let cursor = source.find("type=jump").unwrap();
+        let target = resolve_source_target(source, cursor).unwrap();
+
+        assert_eq!(target.kind, SourceTargetKind::Sounds);
+        assert_eq!(target.name, "clear");
+        assert_eq!(target.sound_kind, Some(SoundSourceTargetKind::Sfx));
+        assert!(
+            target
+                .params
+                .iter()
+                .any(|param| param == &("seed".to_string(), "clear01".to_string()))
+        );
+    }
+
+    #[test]
     fn resolves_sprite_entry_body() {
         let source = r#"
 sprites {
@@ -958,6 +1075,21 @@ Player {
     fn resolves_unfinished_sprite_name_as_sprite_target() {
         let source = r#"
 sprites {
+Player
+}
+"#;
+        let cursor = source.find("Player").unwrap() + "Player".len();
+        let target = resolve_source_target(source, cursor).unwrap();
+
+        assert_eq!(target.kind, SourceTargetKind::Sprite);
+        assert_eq!(target.name, "Player");
+        assert_eq!(target.body_start, target.body_end);
+    }
+
+    #[test]
+    fn resolves_unfinished_singular_sprite_name_as_sprite_target() {
+        let source = r#"
+sprite {
 Player
 }
 "#;
@@ -1024,7 +1156,7 @@ red
     }
 
     #[test]
-    fn color_name_palette_row_stays_in_current_sprite_target() {
+    fn color_name_row_stays_in_current_sprite_target() {
         let source = r##"
 sprites {
 Player
@@ -1040,6 +1172,50 @@ red blue
         let body = &source[target.body_start.unwrap()..target.body_end.unwrap()];
         assert!(body.contains("red blue"));
         assert!(body.contains("01"));
+    }
+
+    #[test]
+    fn user_named_color_row_stays_in_current_sprite_target() {
+        let source = r##"
+sprites {
+colors {
+accent = #e94f64
+}
+Player
+accent
+0
+Box
+#222
+}
+"##;
+        let cursor = source.find("accent\n0").unwrap();
+        let target = resolve_source_target(source, cursor).unwrap();
+
+        assert_eq!(target.kind, SourceTargetKind::Sprite);
+        assert_eq!(target.name, "Player");
+        let body = &source[target.body_start.unwrap()..target.body_end.unwrap()];
+        assert!(body.contains("accent"));
+        assert!(body.contains("0"));
+        assert!(!body.contains("Box"));
+    }
+
+    #[test]
+    fn line_style_sprite_accepts_user_named_color() {
+        let source = r##"
+sprites {
+colors {
+accent = #e94f64
+}
+Player accent
+}
+"##;
+        let cursor = source.rfind("accent").unwrap();
+        let target = resolve_source_target(source, cursor).unwrap();
+
+        assert_eq!(target.kind, SourceTargetKind::Sprite);
+        assert_eq!(target.name, "Player");
+        let body = &source[target.body_start.unwrap()..target.body_end.unwrap()];
+        assert_eq!(body.trim(), "accent");
     }
 
     #[test]

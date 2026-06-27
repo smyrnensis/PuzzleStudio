@@ -1127,6 +1127,45 @@ P
 }
 
 #[test]
+fn rule_condition_can_emit_win_effect() {
+    let source = r#"
+title rule_condition_win_effect
+
+puzzle default {
+layers {
+actor = Player
+}
+input clear
+rules {
+if input == clear -> win
+}
+levels {
+legend {
+. = empty
+P = Player
+}
+level start {
+P
+}
+}
+}
+"#;
+
+    let loaded = parse_game(source).unwrap();
+    let effects = loaded
+        .rule_effects
+        .values()
+        .flat_map(|effects| effects.iter())
+        .collect::<Vec<_>>();
+
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, RuleEffect::Win))
+    );
+}
+
+#[test]
 fn puzzle_rule_effect_accepts_goto_scene() {
     let source = r#"
 title puzzle_rule_goto_effect
@@ -1245,7 +1284,7 @@ P = Player
 var moved = false
 rules {
 
-emit set moved = true
+emit moved = true
 }
 level start {
 P
@@ -1303,7 +1342,7 @@ var ready = false
 routine ready_feedback once {
 sfx tick
 message "Ready"
-set ready = true
+ready = true
 }
 rules {
 
@@ -1472,7 +1511,7 @@ P
 
 scene playing {
 keys {
-q -> escape
+q -> input escape
 }
 routine escape {
 goto title
@@ -1481,8 +1520,8 @@ goto title
 "#;
     let loaded = parse_game(source).unwrap();
     let scene = &loaded.scenes[0];
-    let SceneEffect::RoutineCall(action) = &scene.key_bindings[0].effect else {
-        panic!("expected key assignment to emit a routine call");
+    let SceneEffect::Input(action) = &scene.key_bindings[0].effect else {
+        panic!("expected key assignment to emit an input action");
     };
     assert_eq!(action, "escape");
     assert!(matches!(
@@ -1650,6 +1689,7 @@ scene title {
 keys {
 q -> level_select
 Escape -> goto pause
+Escape q -> goto title
 }
 routine level_select {
 goto level_select
@@ -1665,6 +1705,11 @@ goto level_select
     assert!(matches!(
         &scene.key_bindings[1].effect,
         SceneEffect::Goto { scene, .. } if scene == "pause"
+    ));
+    assert_eq!(scene.key_bindings[2].keys.len(), 2);
+    assert!(matches!(
+        &scene.key_bindings[2].effect,
+        SceneEffect::Goto { scene, .. } if scene == "title"
     ));
 }
 
@@ -1792,6 +1837,89 @@ q = goto level_select
 "#;
     let error = parse_game(source).unwrap_err().to_string();
     assert!(error.contains("keys row must use `->`"));
+}
+
+#[test]
+fn puzzle_default_scene_keys_accept_scene_effects_without_stealing_model_inputs() {
+    let source = r#"
+title model_keys_scene_effect
+
+puzzle board {
+layers {
+actor = Player
+}
+legend {
+. = empty
+P = Player
+}
+keys {
+w ArrowUp -> up
+Escape q -> goto title
+}
+rules {
+[ Player ] -> [ Player ]
+}
+level start {
+P
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    assert_eq!(
+        loaded.controls.keys.get(&b'w'),
+        loaded.controls.arrows.get(&ArrowKey::Up)
+    );
+    assert!(matches!(
+        loaded.scenes.as_slice(),
+        [scene] if scene.name == "board"
+            && scene.key_bindings.len() == 2
+            && scene.key_bindings[0].keys.len() == 2
+            && matches!(
+                &scene.key_bindings[0].effect,
+                SceneEffect::Input(input) if input == "up"
+            )
+            && scene.key_bindings[1].keys.len() == 2
+            && matches!(
+                &scene.key_bindings[1].effect,
+                SceneEffect::Goto { scene, params } if scene == "title" && params.is_empty()
+            )
+    ));
+}
+
+#[test]
+fn bare_scene_key_action_rejects_input_routine_ambiguity() {
+    let source = r#"
+title ambiguous_key_action
+
+puzzle board {
+layers {
+actor = Player
+}
+input open
+legend {
+. = empty
+P = Player
+}
+rules {
+[ Player ] -> [ Player ]
+}
+level start {
+P
+}
+}
+
+scene title {
+keys {
+Enter -> open
+}
+routine open {
+goto title
+}
+}
+"#;
+    let error = parse_game(source).unwrap_err().to_string();
+    assert!(error.contains("ambiguous scene action `open`"));
+    assert!(error.contains("write `input open`"));
 }
 
 #[test]
@@ -4213,6 +4341,61 @@ P
 }
 
 #[test]
+fn sibling_statement_blocks_are_parsed_after_inner_errors() {
+    let source = r#"
+title sibling_statement_block_errors
+
+puzzle default {
+layers {
+__legacy_layer_0 = Player
+}
+
+rules {
+once {
+action push
+}
+
+repeat {
+do win
+}
+
+banana split
+}
+
+levels {
+legend {
+. = empty
+P = Player
+}
+level start {
+P
+}
+}
+}
+"#;
+    let report = parse_game(source).unwrap_err();
+    let messages = report
+        .diagnostics()
+        .iter()
+        .map(|diagnostic| diagnostic.message.as_str())
+        .collect::<Vec<_>>();
+
+    assert!(
+        messages
+            .contains(&"`action` statements were removed; use explicit input guards and rewrites"),
+        "{messages:?}"
+    );
+    assert!(
+        messages.contains(&"`do` is obsolete; write the effect statement directly"),
+        "{messages:?}"
+    );
+    assert!(
+        messages.contains(&"unknown statement directive banana"),
+        "{messages:?}"
+    );
+}
+
+#[test]
 fn old_on_level_start_syntax_is_rejected() {
     let source = r#"
 title old_on_level_start
@@ -5200,12 +5383,6 @@ A = #4a4
 B = #a4a
 }
 }
-palettes {
-piece:kind {
-A = piece_color:A transparent
-B = piece_color:B transparent
-}
-}
 shapes {
 mark:kind {
 A {
@@ -5219,7 +5396,7 @@ B {
 }
 }
 Box:kind {
-palette piece:kind
+colors piece_color:kind transparent
 shape mark:kind
 }
 Wall {
@@ -5367,6 +5544,174 @@ B
 }
 
 #[test]
+fn puzzle_sprites_accept_display_object_single_color_solid_sprite() {
+    let source = r##"
+title display_object_single_color_solid_sprite
+
+puzzle default {
+layers {
+@display_floor = @Floor
+}
+legend {
+. = empty
+}
+sprites {
+@Floor
+#eeeeee
+}
+rules {
+
+}
+levels {
+level start
+.
+}
+}
+"##;
+    let loaded = parse_game(source).unwrap();
+    let sprite = loaded
+        .visuals
+        .sprites
+        .iter()
+        .find(|sprite| sprite.name == "Floor")
+        .unwrap();
+    match &sprite.kind {
+        VisualSpriteKind::Solid(color) => {
+            assert_eq!(color, "#eeeeee");
+        }
+        _ => panic!("@Floor should be a solid sprite"),
+    }
+}
+
+#[test]
+fn puzzle_sprites_can_reference_layers_declared_later() {
+    let source = r##"
+title sprites_before_layers
+
+puzzle default {
+sprites {
+@Floor
+#eeeeee
+}
+layers {
+@display_floor = @Floor
+}
+legend {
+. = empty
+}
+rules {
+
+}
+levels {
+level start
+.
+}
+}
+"##;
+    let loaded = parse_game(source).unwrap();
+    let sprite = loaded
+        .visuals
+        .sprites
+        .iter()
+        .find(|sprite| sprite.name == "Floor")
+        .unwrap();
+    match &sprite.kind {
+        VisualSpriteKind::Solid(color) => assert_eq!(color, "#eeeeee"),
+        _ => panic!("@Floor should be a solid sprite"),
+    }
+}
+
+#[test]
+fn puzzle_sprites_accept_display_object_after_another_line_style_sprite() {
+    let source = r##"
+title display_object_after_sprite
+
+puzzle default {
+layers {
+solid = Player
+@display_floor = @Floor
+}
+legend P = Player
+legend {
+. = empty
+}
+sprites {
+Player
+#ff0000
+@Floor
+#eeeeee
+}
+rules {
+
+}
+levels {
+level start
+P
+}
+}
+"##;
+    let loaded = parse_game(source).unwrap();
+    let player = loaded
+        .visuals
+        .sprites
+        .iter()
+        .find(|sprite| sprite.name == "Player")
+        .unwrap();
+    let floor = loaded
+        .visuals
+        .sprites
+        .iter()
+        .find(|sprite| sprite.name == "Floor")
+        .unwrap();
+
+    match &player.kind {
+        VisualSpriteKind::Solid(color) => assert_eq!(color, "#ff0000"),
+        _ => panic!("Player should be a solid sprite"),
+    }
+    match &floor.kind {
+        VisualSpriteKind::Solid(color) => assert_eq!(color, "#eeeeee"),
+        _ => panic!("@Floor should be a solid sprite"),
+    }
+}
+
+#[test]
+fn puzzle_sprites_report_unknown_display_selector_instead_of_shape_error() {
+    let source = r##"
+title unknown_display_sprite_selector
+
+puzzle default {
+layers {
+solid = Player
+}
+legend P = Player
+legend {
+. = empty
+}
+sprites {
+Player
+#ff0000
+@Floor
+#eeeeee
+}
+rules {
+
+}
+levels {
+level start
+P
+}
+}
+"##;
+    let error = parse_game(source).unwrap_err().to_string();
+
+    assert!(error.contains("unknown visual object selector"), "{error}");
+    assert!(
+        !error.contains("visual shape rows must be equal-width ascii"),
+        "{error}"
+    );
+}
+
+#[test]
 fn puzzle_sprites_accept_sprite_names_that_are_css_color_names() {
     let source = r##"
 title color_named_sprites
@@ -5441,14 +5786,7 @@ A = #4a4
 B = #a4a
 }
 }
-palettes {
-piece:kind {
-A = piece_color:A
-B = piece_color:B
-}
-}
-Light:kind
-palette piece:kind
+Light:kind piece_color:kind
 }
 rules {
 
@@ -5818,9 +6156,9 @@ P
 }
 
 #[test]
-fn puzzle_sprites_accept_line_style_palette_and_shape_refs() {
+fn puzzle_sprites_accept_line_style_color_and_shape_refs() {
     let source = r##"
-title line_style_palette_shape_refs
+title line_style_color_shape_refs
 
 puzzle default {
 layers {
@@ -5831,9 +6169,6 @@ legend {
 . = empty
 }
 sprites {
-palettes {
-box_palette = #111 #eee
-}
 shapes {
 box_shape {
 010
@@ -5841,9 +6176,10 @@ box_shape {
 010
 }
 }
-Box
-box_palette
+Box {
+colors #111 #eee
 shape box_shape
+}
 }
 rules {
 
@@ -5875,9 +6211,9 @@ B
 }
 
 #[test]
-fn puzzle_sprites_allow_duplicate_palette_color_refs() {
+fn puzzle_sprites_allow_duplicate_color_refs() {
     let source = r##"
-title duplicate_palette_color_refs
+title duplicate_color_refs
 
 puzzle default {
 tags {
@@ -5898,17 +6234,15 @@ A = #abcdef
 B = #fedcba
 }
 }
-palettes {
-box_palette = shared shared tagged:A tagged:A
-}
 shapes {
 box_shape {
 0123
 }
 }
-Box
-box_palette
+Box {
+colors shared shared tagged:A tagged:A
 shape box_shape
+}
 }
 rules {
 
@@ -6325,6 +6659,43 @@ P
 }
 
 #[test]
+fn puzzle_sprites_reject_legacy_palettes_block() {
+    let source = r##"
+title legacy_palettes_block
+
+puzzle default {
+layers {
+__legacy_layer_0 = Player
+}
+legend P = Player
+legend {
+. = empty
+}
+sprites {
+palettes {
+player = #e94f64 #2f80ed
+}
+Player
+colors #e94f64 #2f80ed
+01
+}
+rules {
+
+}
+levels {
+level start
+P
+}
+}
+"##;
+    let error = parse_game(source).unwrap_err().to_string();
+    assert!(
+        error.contains("palettes block was removed; write sprite colors rows directly"),
+        "{error}"
+    );
+}
+
+#[test]
 fn directions_is_builtin_value_set_for_objects_sprites_and_for() {
     let source = r#"
 title directions_value_set
@@ -6339,9 +6710,6 @@ legend {
 . = empty
 }
 sprites {
-palettes {
-edge = transparent #555
-}
 shapes {
 edge:directions {
 up {
@@ -6363,7 +6731,7 @@ right {
 }
 }
 Boundary:directions {
-palette edge
+colors transparent #555
 shape edge:directions
 }
 }
@@ -6471,9 +6839,6 @@ legend {
 . = empty
 }
 sprites {
-palettes {
-edge = transparent #555
-}
 shapes {
 edge:directions {
 rotate from up
@@ -6483,7 +6848,7 @@ rotate from up
 }
 }
 Boundary:directions {
-palette edge
+colors transparent #555
 shape edge:directions
 }
 }
@@ -6542,9 +6907,6 @@ legend {
 . = empty
 }
 sprites {
-palettes {
-edge = transparent #555
-}
 shapes {
 edge:directions {
 rotate using clockwise from up
@@ -6554,7 +6916,7 @@ rotate using clockwise from up
 }
 }
 Boundary:directions {
-palette edge
+colors transparent #555
 shape edge:directions
 }
 }
@@ -6731,9 +7093,6 @@ legend {
 . = empty
 }
 sprites {
-palettes {
-edge = transparent #555
-}
 shapes {
 edge:directions {
 rotate from up
@@ -6743,7 +7102,7 @@ rotate from up
 }
 }
 Boundary:directions {
-palette edge
+colors transparent #555
 shape edge:rotate(directions)
 }
 }
@@ -6802,9 +7161,6 @@ legend {
 . = empty
 }
 sprites {
-palettes {
-edge = transparent #555
-}
 shapes {
 edge:directions {
 rotate from up
@@ -6814,7 +7170,7 @@ rotate from up
 }
 }
 Boundary:rotate(directions) {
-palette edge
+colors transparent #555
 shape edge:directions
 }
 }
@@ -8505,11 +8861,11 @@ fn progress_scene_effects_parse() {
         SceneEffect::ResetPersistentVars
     ));
     assert!(matches!(
-        parse_scene_effect("set current_level = level", "set current_level = level").unwrap(),
+        parse_scene_effect("current_level = level", "current_level = level").unwrap(),
         SceneEffect::SetCurrentLevel { .. }
     ));
     assert!(matches!(
-        parse_scene_effect("set level.cleared = true", "set level.cleared = true").unwrap(),
+        parse_scene_effect("level.cleared = true", "level.cleared = true").unwrap(),
         SceneEffect::SetLevelCleared {
             level: None,
             cleared: true
@@ -8517,8 +8873,8 @@ fn progress_scene_effects_parse() {
     ));
     assert!(matches!(
         parse_scene_effect(
-            "set level(\"microban.2\").cleared = false",
-            "set level(\"microban.2\").cleared = false"
+            "level(microban.2).cleared = false",
+            "level(microban.2).cleared = false"
         )
         .unwrap(),
         SceneEffect::SetLevelCleared {
@@ -8526,6 +8882,16 @@ fn progress_scene_effects_parse() {
             cleared: false
         }
     ));
+}
+
+#[test]
+fn scene_variable_assignment_effect_parses_path_rhs() {
+    assert!(matches!(
+        parse_scene_effect("num = num_run", "num = num_run").unwrap(),
+        SceneEffect::SetVariable { name, value }
+            if name == "num" && value == SceneExpr::Path(vec!["num_run".to_string()])
+    ));
+    assert!(parse_scene_effect("set num = num_run", "set num = num_run").is_err());
 }
 
 #[test]
@@ -8550,7 +8916,7 @@ P = Player
 }
 
 rules {
-once [ Player ] -> set moved = true
+once [ Player ] -> moved = true
 }
 
 level start {
@@ -9758,6 +10124,47 @@ level start {
     assert_eq!(next.visible_globals(), &[1]);
     assert!(!next.has_object(&loaded.game, 0, 0, count_0));
     assert!(next.has_object(&loaded.game, 0, 0, count_1));
+}
+
+#[test]
+fn schema_selector_rhs_mutable_var_tag_does_not_warn() {
+    let source = r#"
+title dynamic_selector_rhs_no_warning
+
+puzzle default {
+var count = 1
+
+tags {
+num = 0 1 2
+}
+
+layers {
+__legacy_layer_1 = Count:num
+}
+empty .
+
+legend {
+. = empty
+0 = Count:0
+}
+
+rules {
+once [ Count:* ] -> [ Count:count ]
+}
+
+level start {
+0
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+
+    assert!(
+        !loaded
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("dynamic selector `Count:count` uses mutable var"))
+    );
 }
 
 #[test]
@@ -11092,6 +11499,74 @@ BC
 }
 
 #[test]
+fn single_group_occurrence_duplicates_to_multiple_rhs_cells() {
+    let source = r#"
+title duplicate_single_group_occurrence_rhs
+
+puzzle copy {
+layers {
+actor = Box Crate
+}
+groups {
+solid = Box Crate
+}
+rules {
+once right [ solid | ] -> [ solid | solid ]
+}
+}
+
+levels basic of copy {
+legend {
+. = empty
+B = Box
+C = Crate
+}
+B.
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    let moved =
+        transition_state(&loaded.game, &loaded.levels[0].initial_state, InputId(0)).unwrap();
+    let box_object = object_named(&loaded, "Box");
+    let crate_object = object_named(&loaded, "Crate");
+
+    assert!(moved.has_object(&loaded.game, 0, 0, box_object));
+    assert!(moved.has_object(&loaded.game, 1, 0, box_object));
+    assert!(!moved.has_object(&loaded.game, 1, 0, crate_object));
+}
+
+#[test]
+fn repeated_group_occurrences_do_not_allow_extra_unlabeled_rhs_copy() {
+    let source = r#"
+title reject_ambiguous_extra_group_rhs
+
+puzzle copy {
+layers {
+actor = Box Crate
+}
+groups {
+solid = Box Crate
+}
+rules {
+once right [ solid | solid | ] -> [ solid | solid | solid ]
+}
+}
+
+levels basic of copy {
+legend {
+. = empty
+B = Box
+C = Crate
+}
+BC.
+}
+"#;
+    let error = parse_game(source).unwrap_err().to_string();
+
+    assert!(error.contains("after selector with alternatives must also appear in before"));
+}
+
+#[test]
 fn selector_occurrence_labels_must_be_unique_in_before_pattern() {
     let source = r#"
 title duplicate_selector_occurrence_label
@@ -11222,12 +11697,12 @@ B
 }
 
 rules {
-once [ Button ] -> [ Button ] set count += 3
-once [ Button ] -> [ Button ] set count *= 4
-once [ Button ] -> [ Button ] set count -= 5
-once [ Button ] -> [ Button ] set count /= 3
-once [ Button ] -> [ Button ] set count %= 4
-once [ Button ] -> [ Button ] set count = 9
+once [ Button ] -> [ Button ] count += 3
+once [ Button ] -> [ Button ] count *= 4
+once [ Button ] -> [ Button ] count -= 5
+once [ Button ] -> [ Button ] count /= 3
+once [ Button ] -> [ Button ] count %= 4
+once [ Button ] -> [ Button ] count = 9
 }
 }
 "#;
@@ -11704,6 +12179,91 @@ P = Player
 
 rules {
 [ @Trail ] -> [ @Trail Player ]
+}
+
+levels {
+level start
+P
+}
+}
+"#;
+    let error = parse_game(source).unwrap_err().to_string();
+
+    assert!(error.contains("display object matches cannot cause gameplay changes"));
+}
+
+#[test]
+fn display_match_can_emit_sfx_without_rhs_block() {
+    let source = r#"
+title display_match_sfx
+
+puzzle default {
+layers {
+actor = Player
+@ui = @Check
+}
+
+groups {
+group = Player
+}
+
+legend {
+. = empty
+P = Player
+}
+
+rules {
+[ @Check no group ] -> sfx x
+[ @Check no group ] -> [ = ] sfx y
+}
+
+levels {
+level start
+P
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    let effects = loaded
+        .rule_effects
+        .values()
+        .flat_map(|effects| effects.iter())
+        .collect::<Vec<_>>();
+
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, RuleEffect::PlaySfx { name } if name == "x"))
+    );
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, RuleEffect::PlaySfx { name } if name == "y"))
+    );
+}
+
+#[test]
+fn display_match_still_rejects_gameplay_effect_without_rhs_block() {
+    let source = r#"
+title display_match_gameplay_effect_guard
+
+puzzle default {
+layers {
+actor = Player
+@ui = @Check
+}
+
+groups {
+group = Player
+}
+
+legend {
+. = empty
+P = Player
+}
+
+rules {
+[ @Check no group ] -> win
 }
 
 levels {
@@ -13332,4 +13892,86 @@ level first
             .and_then(|span| span.source_line.as_deref()),
         Some("unknown_statement_two")
     );
+}
+
+#[test]
+fn diagnostic_source_location_resolves_split_structural_line() {
+    let source = r#"title probe
+
+puzzle main {
+layers {
+base = Floor
+}
+
+rules {
+}
+
+on_last_level_clear {r
+}
+
+levels {
+legend {
+. = empty
+}
+level first
+.
+}
+}
+"#;
+    let report = super::parse_game2d(source).unwrap_err();
+    let report = super::resolve_diagnostic_source_locations(report, source);
+    let diagnostics = report.diagnostics();
+
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(diagnostics[0].message, "unknown routine call: r");
+    assert_eq!(
+        diagnostics[0]
+            .primary_span
+            .as_ref()
+            .and_then(|span| span.source_line.as_deref()),
+        Some("r")
+    );
+    assert_eq!(
+        diagnostics[0]
+            .primary_span
+            .as_ref()
+            .and_then(|span| span.line),
+        Some(11)
+    );
+}
+
+#[test]
+fn diagnostic_source_location_does_not_guess_duplicate_lines() {
+    let source = r#"title probe
+
+puzzle main {
+layers {
+base = Floor
+}
+
+rules {
+missing
+missing
+}
+
+levels {
+legend {
+. = empty
+}
+level first
+.
+}
+}
+"#;
+    let report = super::parse_game2d(source).unwrap_err();
+    let report = super::resolve_diagnostic_source_locations(report, source);
+    let diagnostics = report.diagnostics();
+
+    assert_eq!(diagnostics.len(), 2);
+    for diagnostic in diagnostics {
+        assert_eq!(
+            diagnostic.primary_span.as_ref().and_then(|span| span.line),
+            None
+        );
+    }
 }

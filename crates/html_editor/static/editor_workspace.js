@@ -170,6 +170,13 @@ async function loadSource() {
 
 async function applyLoadedSourcePayload(payload) {
   applyRecentWorkspacesPayload(payload);
+  const workspacePayloads = Array.isArray(payload?.workspaces)
+    ? payload.workspaces.filter((workspacePayload) => workspacePayload && !workspacePayload.empty)
+    : [];
+  if (workspacePayloads.length) {
+    await applyLoadedWorkspacePayloads(workspacePayloads, payload);
+    return;
+  }
   workspaceRoot = payload.workspaceRoot || "";
   const sourceDocuments = Array.isArray(payload.documents)
     ? payload.documents
@@ -215,6 +222,7 @@ async function applyLoadedSourcePayload(payload) {
       status: "Open or create a project",
     });
   }
+  reportWorkspaceRestoreErrors(payload);
 }
 
 function resetEditorForNoOpenProject(options = {}) {
@@ -244,10 +252,42 @@ function resetEditorForNoOpenProject(options = {}) {
   setEditorStatus(options.status || "Open or create a project", options.statusClass || "");
 }
 
-async function appendLoadedWorkspacePayload(payload) {
+async function applyLoadedWorkspacePayloads(workspacePayloads, payload) {
+  fileTree = treeFromDocuments([]);
+  documents = [];
+  workspaceRoot = "";
+  activeFileId = "";
+  selectedTreeId = "";
+  selectedFolderId = "";
+  openTabIds = [];
+  sourceNavigationBackStack = [];
+  sourceNavigationForwardStack = [];
+  for (const workspacePayload of workspacePayloads) {
+    await appendLoadedWorkspacePayload({
+      ...workspacePayload,
+      recentWorkspaces: payload?.recentWorkspaces || workspacePayload.recentWorkspaces,
+    }, { activate: false, showStatus: false });
+  }
+  const activeRoot = workspacePayloads
+    .find((workspacePayload) => workspacePayload?.workspaceRoot)
+    ?.workspaceRoot || "";
+  if (activateWorkspaceRoot(activeRoot)) {
+    await renderPreview();
+  }
+  if (!reportWorkspaceRestoreErrors(payload)) {
+    setEditorStatus(
+      workspacePayloads.length === 1 ? "Opened workspace" : "Opened workspaces",
+      "is-ok",
+    );
+  }
+}
+
+async function appendLoadedWorkspacePayload(payload, options = {}) {
   if (!payload || payload.empty) {
     return;
   }
+  const activate = options.activate !== false;
+  const showStatus = options.showStatus !== false;
   applyRecentWorkspacesPayload(payload);
   const root = payload.workspaceRoot || "";
   workspaceRoot = root || workspaceRoot;
@@ -268,28 +308,57 @@ async function appendLoadedWorkspacePayload(payload) {
   const workspaceFolder = workspaceFolderFromDocuments(root, sourceDocuments);
   fileTree.children.push(workspaceFolder);
   syncDocumentsFromTree();
-  activeFileId = documents.find((document) => document.workspaceRoot === root && isPuzzleDocument(document))?.id
-    || documents.find((document) => document.workspaceRoot === root)?.id
+  if (activate) {
+    activateWorkspaceRoot(root, workspaceFolder);
+  } else {
+    renderDocumentSelect();
+  }
+  if (showStatus) {
+    setEditorStatus("Opened workspace", "is-ok");
+  }
+}
+
+function activateWorkspaceRoot(root, workspaceFolder = workspaceRootFolder(root)) {
+  const normalizedRoot = normalizePath(root || "");
+  workspaceRoot = root || workspaceRoot;
+  activeFileId = documents.find((document) =>
+    normalizePath(document.workspaceRoot || "") === normalizedRoot && isPuzzleDocument(document))?.id
+    || documents.find((document) => normalizePath(document.workspaceRoot || "") === normalizedRoot)?.id
     || documents[0]?.id
     || "";
-  selectedTreeId = activeFileId || workspaceFolder.id;
-  selectedFolderId = activeFileId ? findParentFolder(fileTree, activeFileId)?.id || workspaceFolder.id : workspaceFolder.id;
+  selectedTreeId = activeFileId || workspaceFolder?.id || "";
+  selectedFolderId = activeFileId
+    ? findParentFolder(fileTree, activeFileId)?.id || workspaceFolder?.id || ""
+    : workspaceFolder?.id || "";
   currentDocumentIndex = activeDocumentIndex();
   openDocumentTab(activeFileId);
   if (activeFileId) {
     loadEmbeddedDocument(currentDocumentIndex);
-  } else {
-    renderDocumentSelect();
-    latestHtml = "";
-    previewExport = null;
-    latestPreviewState = null;
-    setPreviewDocumentLoaded(false);
-    setPreviewFrameHtml(emptyPreviewDocument());
-    resetPreviewLog("No game entry for preview");
-    runButton.disabled = true;
-    downloadButton.disabled = true;
+    return true;
   }
-  setEditorStatus("Opened workspace", "is-ok");
+  renderDocumentSelect();
+  latestHtml = "";
+  previewExport = null;
+  latestPreviewState = null;
+  setPreviewDocumentLoaded(false);
+  setPreviewFrameHtml(emptyPreviewDocument());
+  resetPreviewLog("No game entry for preview");
+  runButton.disabled = true;
+  downloadButton.disabled = true;
+  return false;
+}
+
+function reportWorkspaceRestoreErrors(payload) {
+  const errors = Array.isArray(payload?.restoreErrors) ? payload.restoreErrors : [];
+  if (!errors.length) {
+    return false;
+  }
+  console.error("Workspace restore failed", errors);
+  setEditorStatus(
+    errors.length === 1 ? "Workspace restore failed" : "Some workspaces failed to restore",
+    "is-error",
+  );
+  return true;
 }
 
 function workspaceFolderFromDocuments(root, sourceDocuments) {
@@ -435,6 +504,7 @@ async function applyWorkspaceChangedPayload(payload) {
       return normalized;
     }
     normalized.id = previous.id;
+    normalized.sourceFoldedBlockKeys = normalizeSourceFoldedBlockKeys(previous.sourceFoldedBlockKeys);
     if (isTextDocument(normalized) && isTextDocument(previous)) {
       const localSource = currentSourceForDocument(previous);
       const syncedSource = previous.syncedSource ?? previous.source ?? "";
@@ -533,7 +603,7 @@ function documentIdentityKey(document) {
 
 function currentSourceForDocument(document) {
   return document?.id === activeDocument()?.id && isTextDocument(document)
-    ? sourceEditor.value
+    ? sourceEditorDocumentValue()
     : document?.source || "";
 }
 
@@ -638,11 +708,21 @@ function embeddedSeedKey(seedDocuments) {
   ]));
 }
 
+function normalizeSourceFoldedBlockKeys(keys) {
+  return Array.isArray(keys) ? keys.filter((key) => typeof key === "string" && key) : [];
+}
+
 function normalizeDocument(document, fallback = {}) {
   const path = document.puzzlePath || fallback.puzzlePath || document.name || "Embedded puzzle";
   const documentWorkspaceRoot = document.workspaceRoot || fallback.workspaceRoot || workspaceRoot;
   const editorPath = editorPathForHostPath(path, documentWorkspaceRoot);
   const encoding = document.encoding || (document.dataUrl ? "data_url" : "text");
+  const importedBy = Array.isArray(document.importedBy)
+    ? document.importedBy.map((path) => editorPathForHostPath(path, documentWorkspaceRoot)).filter(Boolean)
+    : Array.isArray(fallback.importedBy)
+      ? fallback.importedBy.map((path) => editorPathForHostPath(path, documentWorkspaceRoot)).filter(Boolean)
+      : [];
+  const parentGamePath = document.parentGamePath || fallback.parentGamePath || "";
   return {
     id: document.id || createDocumentId(),
     name: document.name || fileName(editorPath),
@@ -657,6 +737,11 @@ function normalizeDocument(document, fallback = {}) {
     previewError: document.previewError || "",
     gameCss: document.gameCss ?? fallback.gameCss ?? "",
     gameVisualsJs: document.gameVisualsJs ?? fallback.gameVisualsJs ?? "",
+    sourceFoldedBlockKeys: normalizeSourceFoldedBlockKeys(
+      document.sourceFoldedBlockKeys ?? fallback.sourceFoldedBlockKeys,
+    ),
+    importedBy,
+    parentGamePath: parentGamePath ? editorPathForHostPath(parentGamePath, documentWorkspaceRoot) : "",
   };
 }
 
@@ -767,6 +852,8 @@ function mergeEmbeddedFallbacks(node, fallbackByPath) {
     previewError: node.previewError || fallback.previewError,
     gameCss: node.gameCss || fallback.gameCss,
     gameVisualsJs: node.gameVisualsJs || fallback.gameVisualsJs,
+    importedBy: Array.isArray(node.importedBy) ? node.importedBy : fallback.importedBy || [],
+    parentGamePath: node.parentGamePath || fallback.parentGamePath || "",
   };
 }
 
@@ -882,6 +969,9 @@ function storeDocument(document) {
     previewError: "",
     gameCss: document.gameCss || "",
     gameVisualsJs: document.gameVisualsJs || "",
+    sourceFoldedBlockKeys: normalizeSourceFoldedBlockKeys(document.sourceFoldedBlockKeys),
+    importedBy: Array.isArray(document.importedBy) ? document.importedBy : [],
+    parentGamePath: document.parentGamePath || "",
   };
 }
 
@@ -994,10 +1084,12 @@ function activeDocument() {
 
 function editorNavigationLocation() {
   const document = activeDocument();
+  const selectionStart = sourceViewOffsetToDocumentOffset(sourceEditor?.selectionStart || 0, "start");
+  const selectionEnd = sourceViewOffsetToDocumentOffset(sourceEditor?.selectionEnd || sourceEditor?.selectionStart || 0, "end");
   return {
     documentId: document?.id || activeFileId || "",
-    selectionStart: sourceEditor?.selectionStart || 0,
-    selectionEnd: sourceEditor?.selectionEnd || sourceEditor?.selectionStart || 0,
+    selectionStart,
+    selectionEnd,
     scrollTop: sourceEditor?.scrollTop || 0,
     scrollLeft: sourceEditor?.scrollLeft || 0,
     previewMode: currentPreviewMode || "play",
@@ -1051,8 +1143,11 @@ function restoreEditorNavigationLocation(location) {
       setActiveLevelIndex(Math.max(0, Math.min(previewExport.levels.length - 1, location.levelIndex || 0)));
       loadLevelFromPreviewState({ requestRender: false });
     }
-    const start = Math.max(0, Math.min(sourceEditor.value.length, location.selectionStart || 0));
-    const end = Math.max(start, Math.min(sourceEditor.value.length, location.selectionEnd || start));
+    const source = sourceEditorDocumentValue();
+    const sourceStart = Math.max(0, Math.min(source.length, location.selectionStart || 0));
+    const sourceEnd = Math.max(sourceStart, Math.min(source.length, location.selectionEnd || sourceStart));
+    const start = sourceDocumentOffsetToViewOffset(sourceStart, "start");
+    const end = sourceDocumentOffsetToViewOffset(sourceEnd, "end");
     sourceEditor.setSelectionRange(start, end);
     sourceEditor.scrollTop = Math.max(0, location.scrollTop || 0);
     sourceEditor.scrollLeft = Math.max(0, location.scrollLeft || 0);
@@ -1282,7 +1377,7 @@ function previewDocumentForFolder(folder) {
   const active = activeDocument();
   if (active && documentPathIsInFolder(active, dir)) {
     const activePreview = previewDocumentFor(active);
-    if (activePreview && documentPathIsInFolder(activePreview, dir)) {
+    if (activePreview) {
       return activePreview;
     }
   }
@@ -1296,7 +1391,7 @@ function previewDocumentForFolder(folder) {
     .filter((item) => inFolder(item) && isPuzzleDocument(item))
     .sort(comparePuzzleEntryDocuments)[0];
   if (nestedGame) {
-    return nestedGame;
+    return previewDocumentFor(nestedGame);
   }
   return null;
 }
@@ -1310,9 +1405,160 @@ function documentPathIsInFolder(document, folderDir) {
   return path === dir || path.startsWith(`${dir}/`);
 }
 
+function parentGameDocumentForImportFragment(document) {
+  if (!isPuzzleDocument(document) || documentHasGamePrelude(document)) {
+    return null;
+  }
+  return parentGameCandidatesForDocument(document)[0] || null;
+}
+
+function parentGameCandidatesForDocument(document) {
+  if (!isPuzzleDocument(document)) {
+    return [];
+  }
+  if (documentHasGamePrelude(document)) {
+    return [document];
+  }
+  const targetRoot = normalizePath(document.workspaceRoot || workspaceRoot || "");
+  return documents
+    .filter((candidate) => {
+      if (!isPuzzleDocument(candidate) || !isTextDocument(candidate) || !documentHasGamePrelude(candidate)) {
+        return false;
+      }
+      const candidateRoot = normalizePath(candidate.workspaceRoot || workspaceRoot || "");
+      if (targetRoot && candidateRoot && targetRoot !== candidateRoot) {
+        return false;
+      }
+      return documentImportClosureContains(candidate, document, new Set());
+    })
+    .sort(comparePuzzleEntryDocuments);
+}
+
+function documentImportClosureContains(candidate, target, visited) {
+  if (!candidate || !target || visited.has(candidate.id)) {
+    return false;
+  }
+  visited.add(candidate.id);
+  for (const importPath of puzzleImportPathsForDocument(candidate)) {
+    const imported = documentByPathForWorkspace(importPath, candidate.workspaceRoot || workspaceRoot || "");
+    if (!imported || !isPuzzleDocument(imported) || !isTextDocument(imported)) {
+      continue;
+    }
+    if (imported.id === target.id || documentImportClosureContains(imported, target, visited)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function directImportersForDocument(document) {
+  if (!isPuzzleDocument(document)) {
+    return [];
+  }
+  const targetRoot = normalizePath(document.workspaceRoot || workspaceRoot || "");
+  const importers = [];
+  for (const candidate of documents) {
+    if (!isPuzzleDocument(candidate) || !isTextDocument(candidate) || candidate.id === document.id) {
+      continue;
+    }
+    const candidateRoot = normalizePath(candidate.workspaceRoot || workspaceRoot || "");
+    if (targetRoot && candidateRoot && candidateRoot !== targetRoot) {
+      continue;
+    }
+    const importsTarget = puzzleImportPathsForDocument(candidate).some((importPath) => {
+      const imported = documentByPathForWorkspace(importPath, candidate.workspaceRoot || workspaceRoot || "");
+      return imported?.id === document.id;
+    });
+    if (importsTarget) {
+      importers.push(candidate);
+    }
+  }
+  return importers.sort(comparePuzzleEntryDocuments);
+}
+
+function puzzleImportPathsForDocument(document) {
+  if (!isPuzzleDocument(document) || !isTextDocument(document)) {
+    return [];
+  }
+  const baseDir = directoryName(document.puzzlePath || "");
+  const paths = [];
+  for (const rawLine of String(currentSourceForDocument(document) || "").split("\n")) {
+    const code = stripWorkspaceImportLineComment(rawLine).trim();
+    const match = code.match(/^import\s+"((?:\\.|[^"\\])*)"\s*$/);
+    if (match) {
+      paths.push(resolveWorkspaceImportPath(baseDir, match[1]));
+    }
+  }
+  return paths;
+}
+
+function stripWorkspaceImportLineComment(line) {
+  let quoted = false;
+  let escaped = false;
+  const text = String(line || "");
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    const next = text[index + 1];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (char === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (char === "\"") {
+      quoted = !quoted;
+      continue;
+    }
+    if (!quoted && char === "/" && next === "/") {
+      return text.slice(0, index);
+    }
+  }
+  return text;
+}
+
+function resolveWorkspaceImportPath(baseDir, importPath, root = workspaceRoot || "") {
+  const normalized = normalizePath(importPath);
+  if (!normalized) {
+    return "";
+  }
+  if (normalized.startsWith("/") || /^[A-Za-z]:\//.test(normalized)) {
+    return editorPathForHostPath(normalized, root);
+  }
+  return normalizeWorkspacePathSegments(baseDir ? `${baseDir}/${normalized}` : normalized);
+}
+
+function normalizeWorkspacePathSegments(path) {
+  const parts = [];
+  for (const part of normalizePath(path).split("/")) {
+    if (!part || part === ".") {
+      continue;
+    }
+    if (part === "..") {
+      parts.pop();
+      continue;
+    }
+    parts.push(part);
+  }
+  return parts.join("/");
+}
+
+function documentByPathForWorkspace(path, root) {
+  const target = normalizePath(path);
+  const normalizedRoot = normalizePath(root || "");
+  return documents.find((candidate) =>
+    normalizePath(candidate.puzzlePath) === target
+    && (!normalizedRoot || !candidate.workspaceRoot || normalizePath(candidate.workspaceRoot) === normalizedRoot)
+  ) || null;
+}
+
 function previewDocumentFor(document) {
   if (isPuzzleDocument(document) && documentHasGamePrelude(document)) {
     return document;
+  }
+  if (isPuzzleDocument(document)) {
+    return parentGameDocumentForImportFragment(document);
   }
 
   let dir = directoryName(document?.puzzlePath || "");
@@ -1348,7 +1594,7 @@ function preferredPuzzleDocumentForDirectory(dir) {
 }
 
 function documentHasGamePrelude(document) {
-  return isPuzzleDocument(document) && sourceHasGamePrelude(sourceForDocument(document));
+  return isPuzzleDocument(document) && sourceHasGamePrelude(currentSourceForDocument(document));
 }
 
 function sourceHasGamePrelude(source) {
@@ -1408,7 +1654,7 @@ function activePreviewSource() {
     return "";
   }
   return document.id === activeDocument()?.id && isTextDocument(document)
-    ? sourceEditor.value
+    ? sourceEditorDocumentValue()
     : document.source || "";
 }
 
@@ -1533,6 +1779,7 @@ function renderTreeNode(node, parent, depth) {
   row.classList.toggle("is-renaming", renameEntry?.nodeId === node.id);
   row.innerHTML = `${fileIconSvg(node)}${treeNameHtml(node)}${treeActionsHtml("file")}`;
   setTreeName(row, node);
+  setTreeImportTitle(row, node);
   parent.append(row);
 }
 
@@ -1589,6 +1836,31 @@ function setTreeName(row, node) {
     return;
   }
   row.querySelector(".tree-label").textContent = node.name || fileName(node.puzzlePath);
+}
+
+function setTreeImportTitle(row, node) {
+  if (!isPuzzleDocument(node) || !isTextDocument(node)) {
+    return;
+  }
+  const lines = [];
+  const parentGames = parentGameCandidatesForDocument(node);
+  if (parentGames.length > 1) {
+    lines.push(`Parent games: ${parentGames.map((item) => item.puzzlePath || item.name || "game").join(", ")}`);
+    lines.push(`Preview uses: ${parentGames[0].puzzlePath || parentGames[0].name || "game"}`);
+  } else if (parentGames.length === 1 && parentGames[0].id !== node.id) {
+    lines.push(`Parent game: ${parentGames[0].puzzlePath || parentGames[0].name || "game"}`);
+  } else if (parentGames.length === 1) {
+    lines.push("Game entry");
+  }
+  const importers = directImportersForDocument(node);
+  if (importers.length) {
+    lines.push(`Imported by: ${importers.map((item) => item.puzzlePath || item.name).join(", ")}`);
+  } else if (!parentGames.length) {
+    lines.push("Not imported by a game entry");
+  }
+  if (lines.length) {
+    row.title = lines.join("\n");
+  }
 }
 
 function treeActionsHtml(kind) {
@@ -1815,10 +2087,18 @@ function rewriteCssAssetUrls(css, baseDir = "", root = workspaceRoot) {
 function effectiveGameCss(document) {
   const baseDir = directoryName(document.puzzlePath);
   const declaredCssPaths = declaredAssetPaths(document, "css");
-  if (!declaredCssPaths.length && document.gameCss) {
-    return document.gameCss;
-  }
   const parts = [];
+  for (const themeDocument of effectiveThemeCssDocuments(document, effectiveThemeName(document))) {
+    parts.push(rewriteCssAssetUrls(
+      themeDocument.source || "",
+      directoryName(themeDocument.puzzlePath),
+      document.workspaceRoot || workspaceRoot,
+    ));
+  }
+  if (!declaredCssPaths.length && document.gameCss) {
+    parts.push(document.gameCss);
+    return parts.filter(Boolean).join("\n");
+  }
   let missingDeclaredAsset = false;
   for (const path of declaredCssPaths) {
     const cssDocument = documentByPath(normalizePath(joinPath(baseDir, path)));
@@ -1830,7 +2110,7 @@ function effectiveGameCss(document) {
     }
   }
   if (missingDeclaredAsset && document.gameCss) {
-    return document.gameCss;
+    parts.push(document.gameCss);
   }
   return parts.filter(Boolean).join("\n");
 }
@@ -1887,11 +2167,11 @@ function themeNameFromPuzzleSource(source) {
     }
     const header = trimmed.match(/^theme(?:\s+([A-Za-z][A-Za-z0-9_-]*))?(?:\s*\{)?$/);
     if (header) {
-      activeTheme = true;
-      depth = trimmed.endsWith("{") ? 1 : 0;
       if (header[1]) {
         latest = header[1];
       }
+      activeTheme = trimmed.endsWith("{");
+      depth = activeTheme ? 1 : 0;
       continue;
     }
     if (!activeTheme) {
@@ -1990,7 +2270,8 @@ function persistCurrentDocument() {
   if (!isTextDocument(document)) {
     return;
   }
-  document.source = sourceEditor.value;
+  document.source = sourceEditorDocumentValue();
+  document.sourceFoldedBlockKeys = sourceFoldStateForSource(document.source);
   if (isPuzzleDocument(document)) {
     document.previewHtml = latestHtml;
   }
@@ -2022,10 +2303,14 @@ function loadEmbeddedDocument(index) {
   setSourceEditorValue(sourceText, {
     preserveUndoOnSameValue: document.id === previousActiveFileId,
   });
+  if (isTextDocument(document)) {
+    restoreSourceFoldState(document.sourceFoldedBlockKeys);
+  }
   updateDocumentTabUnsavedStates();
   latestHtml = previewDocument?.previewHtml || "";
   const previewError = previewDocument?.previewError || "";
   previewExport = extractPreviewExport(latestHtml);
+  previewDirty = false;
   if (typeof syncPaneModesFromFocusedPuzzleSource === "function") {
     syncPaneModesFromFocusedPuzzleSource({ switchOpenPane: true });
   }
@@ -2081,6 +2366,7 @@ function loadFolderPreview(folder) {
   latestHtml = previewDocument?.previewHtml || "";
   const previewError = previewDocument?.previewError || "";
   previewExport = extractPreviewExport(latestHtml);
+  previewDirty = false;
   syncPreviewViewportAspect();
   setPreviewDocumentLoaded(Boolean(latestHtml));
   runButton.disabled = !previewDocument;
@@ -2529,6 +2815,7 @@ async function deleteTreeNode(nodeId) {
     setSourceEditorValue("");
     latestHtml = "";
     previewExport = null;
+    previewDirty = false;
     setPreviewFrameHtml(emptyPreviewDocument());
     resetPreviewLog("No puzzle selected");
     setEditorStatus("Deleted", "is-ok");
@@ -2716,6 +3003,11 @@ function uniqueChildNameExcept(folder, name, ignoredId) {
 function handleSaveShortcut(event) {
   if (!((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s")) {
     return false;
+  }
+  if (typeof handleToolPaneSaveShortcut === "function" && handleToolPaneSaveShortcut(event)) {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    return true;
   }
   event.preventDefault();
   event.stopImmediatePropagation();

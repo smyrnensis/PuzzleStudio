@@ -72,6 +72,19 @@ impl StandaloneSessionBridge {
         })
     }
 
+    pub fn from_export_json(export_json: &str) -> Result<Self, String> {
+        let export: Value = serde_json::from_str(export_json).map_err(|error| error.to_string())?;
+        let source = export
+            .get("source")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "standalone export is missing source".to_string())?;
+        let puzzle_path = export
+            .get("puzzlePath")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "standalone export is missing puzzlePath".to_string())?;
+        Self::from_source(source, puzzle_path)
+    }
+
     pub fn snapshot_json(&mut self) -> String {
         let sound_events = self.session.take_sound_events();
         let message_events = self.session.take_message_events();
@@ -2032,6 +2045,11 @@ fn scene_effect_value(effect: &SceneEffect) -> Value {
             "source": source,
             "target": target,
         }),
+        SceneEffect::SetVariable { name, value } => json!({
+            "kind": "set_variable",
+            "name": name,
+            "value": scene_expr_value(value),
+        }),
         SceneEffect::ClearUndoHistory => json!({ "kind": "clear_undo_history" }),
         SceneEffect::ClearGameProgress => json!({ "kind": "clear_game_progress" }),
         SceneEffect::SetCurrentLevel { level } => json!({
@@ -2292,7 +2310,7 @@ fn object_id_by_name(loaded: &LoadedGame, object_name: &str) -> Option<ObjectId>
 fn sounds_value(loaded: &LoadedGame) -> Value {
     json!({
         "sfx": loaded.sounds.sfx.iter().map(|sfx| {
-            json!({"name": sfx.name, "seed": sfx.seed, "typeTarget": sfx.type_target})
+            json!({"name": sfx.name, "seed": sfx.seed, "type": sfx.type_target})
         }).collect::<Vec<_>>(),
         "music": loaded.sounds.music.iter().map(|music| {
             json!({
@@ -2965,61 +2983,103 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn compiled_standalone_session_starts_from_export_without_parsing_source() {
+    fn standalone_session_from_export_uses_game_session_wait_continuation() {
+        let source = r#"
+title export_wait
+
+puzzle board {
+layers {
+actor = Player
+}
+input clear
+rules {
+if input == clear -> win
+}
+on_level_clear {
+wait 1s
+next_level
+}
+levels {
+legend {
+. = empty
+P = Player
+}
+P
+
+P
+}
+}
+"#;
         let export = json!({
-            "title": "Compiled only",
-            "source": "[ *:stack ] -> [ *:movable ] // deliberately not a complete puzzle",
-            "progressSaveVersion": 1,
-            "compiledPlay": {
-                "version": 1,
-                "model": "grid2",
-                "transition": [
-                    1,
-                    [[1, 0]],
-                    [],
-                    [],
-                    [[], [], [], [], [], []],
-                    [[[], []]]
-                ]
-            },
-            "engine": {
-                "layerCount": 1,
-                "objects": [{ "id": 1, "layer": 0, "name": "Crate:stack", "sprite": "Crate-stack" }],
-                "runRulesOnLevelStart": false
-            },
-            "screen": {},
-            "animation": { "tween": { "enabled": false, "intervalMs": 250 } },
-            "levels": [{
-                "index": 0,
-                "name": "one",
-                "puzzle": "board",
-                "pack": null,
-                "regions": [],
-                "initialState": {
-                    "width": 1,
-                    "height": 1,
-                    "layerCount": 1,
-                    "slots": [1],
-                    "scratch": [[]],
-                    "globals": [],
-                    "levelFiredRules": []
-                }
-            }],
-            "inputs": [],
-            "scenes": [],
-            "screens": []
+            "source": source,
+            "puzzlePath": "games/export_wait.puzzle"
         });
-        let mut bridge = CompiledStandaloneSessionBridge::from_export_json(&export.to_string())
-            .expect("compiled export should start without source parsing");
+        let mut bridge = StandaloneSessionBridge::from_export_json(&export.to_string())
+            .expect("export should initialize from embedded source");
 
-        let state: Value = serde_json::from_str(&bridge.request_json("GET", "/api/state").unwrap())
-            .expect("snapshot json");
+        let state: Value = serde_json::from_str(
+            &bridge
+                .request_json("POST", "/api/input/clear")
+                .expect("clear input should run"),
+        )
+        .expect("snapshot json");
 
-        assert_eq!(state["title"], "Compiled only");
+        assert_eq!(state["levelIndex"], json!(0));
         assert_eq!(
-            state["scene"]["cells"][0]["layers"][0]["object"],
-            "Crate:stack"
+            state["waitEvents"],
+            json!([{ "kind": "continue_effects", "milliseconds": 1000 }])
         );
+
+        let state: Value = serde_json::from_str(
+            &bridge
+                .request_json("POST", "/api/command/__continue_effects")
+                .expect("continuation should run"),
+        )
+        .expect("snapshot json");
+
+        assert_eq!(state["levelIndex"], json!(1));
+    }
+
+    #[test]
+    fn standalone_session_state_exports_sfx_type_for_browser_runtime() {
+        let source = r#"
+title sound_export
+
+sounds {
+sfx push seed=push type=hit
+}
+
+puzzle board {
+layers {
+actor = Player
+}
+input clear
+rules {
+if input == clear -> win
+}
+levels {
+legend {
+. = empty
+P = Player
+}
+P
+}
+}
+"#;
+        let export = json!({
+            "source": source,
+            "puzzlePath": "games/sound_export.puzzle"
+        });
+        let mut bridge = StandaloneSessionBridge::from_export_json(&export.to_string())
+            .expect("export should initialize from embedded source");
+
+        let state: Value =
+            serde_json::from_str(&bridge.request_json("GET", "/api/state").unwrap()).unwrap();
+        let sfx = &state["sounds"]["sfx"][0];
+        assert_eq!(sfx["name"], json!("push"));
+        assert_eq!(sfx["seed"], json!("push"));
+        assert_eq!(sfx["type"], json!("hit"));
+        assert!(sfx.get("typeTarget").is_none());
     }
 
     #[test]
@@ -3155,7 +3215,7 @@ mod tests {
             .unwrap();
         serde_json::from_str(
             &bridge
-                .request_json("POST", "/api/command/goto%20playing(%22microban.1%22)")
+                .request_json("POST", "/api/command/goto%20playing(microban.1)")
                 .unwrap(),
         )
         .unwrap()

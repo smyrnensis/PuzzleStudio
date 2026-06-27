@@ -5,14 +5,16 @@ This folder owns the desktop shell and host filesystem boundary.
 ## Desktop Boundaries
 
 Desktop mode may directly edit files only after the user explicitly opens a
-project folder or project entry, or after the app restores a workspace from the
-recorded recent-workspaces list. Startup may restore the most recent recorded
-workspace, but must not auto-load sample folders, the repository, or the user's
-home directory by convention or default.
+project folder or project entry, or after the app restores workspaces from the
+recorded loaded-workspaces list. Startup may restore the workspace set that was
+loaded in the previous desktop session, but must not auto-load sample folders,
+the repository, the user's home directory, or the whole recent-workspace history
+by convention or default.
 
-When recent-workspace restoration fails, report the failure explicitly and leave
-the app in a no-project state. Do not silently substitute a different workspace,
-sample, repository path, or generated placeholder.
+When loaded-workspace restoration fails, report the failure explicitly. If no
+workspace restores successfully, leave the app in a no-project state. Do not
+silently substitute a different workspace, sample, repository path, or generated
+placeholder.
 
 File reads and writes should be owned by Rust-side host commands bounded by the
 opened project root. Do not expose broad filesystem access to JavaScript unless a

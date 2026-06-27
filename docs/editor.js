@@ -1093,11 +1093,13 @@ function resolvePreviewTheme(theme) {
     if (!value) {
       continue;
     }
-    if (name === "bg") {
+    if (name === "bg" || name === "background") {
       resolved.bg = value;
       resolved.background = "var(--preview-game-bg)";
-    } else if (name === "ink") {
+    } else if (name === "ink" || name === "text") {
       resolved.ink = value;
+    } else if (name === "accent") {
+      resolved.line = value;
     } else if (name === "muted") {
       resolved.muted = value;
     } else if (name === "line") {
@@ -1238,6 +1240,23 @@ function applyGameVisuals(script) {
   }
 }
 
+function compiledPreviewGameVisualsJs(html) {
+  const source = String(html || "");
+  const scriptPattern = /<script>\n([\s\S]*?)\n<\/script>/g;
+  let match = null;
+  while ((match = scriptPattern.exec(source))) {
+    const script = match[1] || "";
+    if (script.includes("window.GameVisuals")) {
+      return script;
+    }
+  }
+  return "";
+}
+
+function previewGameVisualsJsForCompiledHtml(html, document) {
+  return compiledPreviewGameVisualsJs(html) || effectiveGameVisualsJs(document);
+}
+
 function schedulePreview() {
   window.clearTimeout(previewTimer);
   markPreviewDirty();
@@ -1278,7 +1297,7 @@ async function renderPreview() {
     if (error.name === "AbortError") {
       return;
     }
-    if (previewBackendUnavailable(error)) {
+    if (previewBackendUnavailable(error) && window.PuzzleStudioHost?.mode?.() === "static") {
       try {
         appendPreviewLog("system", "Compiling in browser", { source: "compiler" });
         const html = await compilePreviewWithWasm(document, source);
@@ -1296,9 +1315,15 @@ async function renderPreview() {
         error = wasmError;
       }
     }
-    downloadButton.disabled = true;
     appendCompileDiagnostics(error, { source: "compiler", document, sourceText: source });
-    setStatus("Compile error", "is-error");
+    if (preserveCompiledPreviewAfterCompileError(document)) {
+      appendPreviewLog("warn", "Keeping last successful preview", { source: "compiler" });
+      setPaneStatus("preview", "Preview has compile errors", "is-error");
+      setStatus("Preview kept with compile errors", "is-error");
+    } else {
+      downloadButton.disabled = true;
+      setStatus("Compile error", "is-error");
+    }
   } finally {
     if (activePreviewRequest === controller) {
       activePreviewRequest = null;
@@ -1345,9 +1370,29 @@ async function ensurePreviewExportForLevelAction(options = {}) {
   return exportData;
 }
 
-function runPreviewFromSourcePane() {
+async function runPreviewFromSourcePane() {
+  ensurePreviewTargetsActiveDocument();
   openPreviewModePane("play", { focus: false });
-  renderPreview();
+  runButton.disabled = true;
+  setStatus("Saving before preview", "");
+  let saved = false;
+  try {
+    saved = await saveCurrentDocument(true);
+  } catch (error) {
+    console.error(error);
+    setStatus("Save failed", "is-error");
+    saveButton.disabled = false;
+    return;
+  } finally {
+    if (!saved && !activePreviewRequest) {
+      runButton.disabled = !isPuzzleDocument(activePreviewDocument());
+    }
+  }
+  if (!saved) {
+    setStatus("Save failed", "is-error");
+    return;
+  }
+  await renderPreview();
 }
 
 function applyCompiledPreviewHtml(html, document, source) {
@@ -1368,8 +1413,19 @@ function applyCompiledPreviewHtml(html, document, source) {
   document.source = source;
   document.previewHtml = html;
   applyGameCss(effectiveGameCss(document));
-  applyGameVisuals(effectiveGameVisualsJs(document));
-  resetLevelBuilderFromPreviewSource();
+  applyGameVisuals(previewGameVisualsJsForCompiledHtml(html, document));
+  if (isPaneVisible("level")) {
+    if (!loadAvailableLevelPaneEntry(focusedPuzzleSourceContext(document), {
+      mode: currentLevelPaneMode,
+      silent: true,
+      recordHistory: false,
+      openPane: false,
+    })) {
+      resetLevelBuilderFromPreviewSource();
+    }
+  } else {
+    resetLevelBuilderFromPreviewSource();
+  }
   syncSolverLevelSelector();
   if (!level3dBuilder.hidden) {
     renderLevel3dBuilder();
@@ -1378,6 +1434,24 @@ function applyCompiledPreviewHtml(html, document, source) {
   downloadButton.disabled = false;
   appendPreviewLog("system", "Preview ready", { source: "compiler" });
   setStatus("Preview ready", "is-ok");
+}
+
+function preserveCompiledPreviewAfterCompileError(document) {
+  const html = latestHtml || document?.previewHtml || "";
+  if (!html) {
+    return false;
+  }
+  if (!latestHtml) {
+    latestHtml = html;
+    previewExport = extractPreviewExport(html);
+  }
+  setPreviewDocumentLoaded(true);
+  applyPreviewTheme(previewExport?.theme || null);
+  downloadButton.disabled = false;
+  if (currentPreviewMode === "play") {
+    restoreCompiledGamePreview();
+  }
+  return true;
 }
 
 async function compilePreviewWithWasm(document, source) {
@@ -1989,7 +2063,7 @@ function markPreviewDirty() {
   latestPreviewState = null;
   scheduleLocalSave();
   downloadButton.disabled = true;
-  setStatus("Preview is stale", "");
+  setPaneStatus("preview", "Preview is stale", "");
 }
 
 function updateSourceMeta() {
@@ -2275,6 +2349,7 @@ function setPreviewFrameHtml(html) {
   nextFrame.className = "preview-frame";
   nextFrame.title = "Compiled puzzle preview";
   nextFrame.setAttribute("sandbox", "allow-scripts");
+  nextFrame.setAttribute("allow", "autoplay");
   nextFrame.setAttribute("scrolling", "no");
   nextFrame.setAttribute("aria-hidden", "true");
   nextFrame.style.visibility = "hidden";
@@ -2312,6 +2387,26 @@ function setPreviewFrameHtml(html) {
 function editorPreviewDocument(html) {
   const consoleScript = `<script id="puzzle-studio-editor-preview-log-script">
 (() => {
+  const isEditorSaveShortcut = (event) => {
+    if (!event || event.altKey) {
+      return false;
+    }
+    const modifier = (event.metaKey && !event.ctrlKey) || (event.ctrlKey && !event.metaKey);
+    const key = event.key && event.key.length === 1 ? event.key.toLowerCase() : event.key;
+    return modifier && key === "s";
+  };
+  document.addEventListener("keydown", (event) => {
+    if (!isEditorSaveShortcut(event)) {
+      return;
+    }
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    try {
+      window.parent.postMessage({ type: "PuzzleStudioEditorSaveShortcut" }, "*");
+    } catch (_error) {
+      // Editor shortcuts must not affect the preview runtime.
+    }
+  }, true);
   const formatArg = (value, depth = 0) => {
     if (typeof value === "string") {
       return value;
@@ -3426,14 +3521,31 @@ function focusedLevelEntryForPaneMode(mode, context = focusedPuzzleSourceContext
 
 function loadLevelPaneEntryForMode(mode, context = focusedPuzzleSourceContext(), options = {}) {
   const entry = focusedLevelEntryForPaneMode(mode, context);
+  return loadFocusedLevelPaneEntry(entry, options);
+}
+
+function loadFirstLevelPaneEntry(context = focusedPuzzleSourceContext(), options = {}) {
+  return loadFocusedLevelPaneEntry(firstFocusedPuzzleEntry("level", context), options);
+}
+
+function loadAvailableLevelPaneEntry(context = focusedPuzzleSourceContext(), options = {}) {
+  const requestedMode = ["edit", "level3d"].includes(options.mode) ? options.mode : currentLevelPaneMode;
+  return loadLevelPaneEntryForMode(requestedMode, context, options)
+    || loadFirstLevelPaneEntry(context, options);
+}
+
+function loadFocusedLevelPaneEntry(entry, options = {}) {
   if (!entry) {
     return false;
   }
   const targetMode = levelModeForEditorDimension(entry.dimension);
-  openPreviewModePane(targetMode);
+  if (options.openPane !== false) {
+    openPreviewModePane(targetMode);
+  }
   return loadFocusedPuzzleEntry("level", entry, {
     silent: options.silent !== false,
     recordHistory: Boolean(options.recordHistory),
+    openPane: options.openPane !== false,
   });
 }
 
@@ -3454,11 +3566,19 @@ function loadFocusedPuzzleEntry(kind, entry, options = {}) {
   }
   if (mode === "edit" && dimension === "2d") {
     currentLevelPaneMode = "edit";
-    return finishFocusedPuzzleEntryLoad(loadLevelSourceTarget(target, { silent: options.silent !== false, recordHistory: Boolean(options.recordHistory) }));
+    return finishFocusedPuzzleEntryLoad(loadLevelSourceTarget(target, {
+      silent: options.silent !== false,
+      recordHistory: Boolean(options.recordHistory),
+      openPane: options.openPane !== false,
+    }));
   }
   if (mode === "level3d" && dimension === "3d" && typeof loadLevel3dSourceTarget === "function") {
     currentLevelPaneMode = "level3d";
-    return finishFocusedPuzzleEntryLoad(loadLevel3dSourceTarget(target, { silent: options.silent !== false, recordHistory: Boolean(options.recordHistory), switchMode: true }));
+    return finishFocusedPuzzleEntryLoad(loadLevel3dSourceTarget(target, {
+      silent: options.silent !== false,
+      recordHistory: Boolean(options.recordHistory),
+      switchMode: options.openPane !== false,
+    }));
   }
   if (mode === "sprite" && dimension === "2d" && typeof loadSpriteSourceTarget === "function") {
     currentSpritePaneMode = "sprite";
@@ -3616,17 +3736,21 @@ function openLevelPaneForCurrentDimension() {
   const context = focusedPuzzleSourceContext();
   ensurePreviewTargetsActiveDocument();
   const mode = levelModeForEditorDimension(currentEditorDimension);
-  let loaded = loadLevelPaneEntryForMode(mode, context, { silent: true, recordHistory: false });
-  if (!loaded) {
-    const first = firstFocusedPuzzleEntry("level", context);
-    if (first) {
-      openPreviewModePane(levelModeForEditorDimension(first.dimension));
-      loaded = loadFocusedPuzzleEntry("level", first, { silent: true, recordHistory: false });
-    }
-  }
+  const loaded = loadAvailableLevelPaneEntry(context, {
+    mode,
+    silent: true,
+    recordHistory: false,
+  });
   if (!loaded) {
     openPreviewModePane(mode);
-    currentLevelPaneMode = "none";
+    currentLevelPaneMode = mode;
+    if (mode === "edit") {
+      resetLevelBuilderFromSource(true);
+      renderLevelSourcePreview();
+    } else if (typeof renderLevel3dBuilder === "function") {
+      renderLevel3dBuilder();
+    }
+    setPaneStatus("level", "No level in active source", "is-error");
     applyPaneVisibility();
     hideEditorHoverTooltip();
   }
@@ -3810,7 +3934,12 @@ function setPreviewMode(mode, options = {}) {
   }
   if (editMode) {
     resetLevelBuilderFromSource(false);
-    if (enteringLevelMode || !level.cells.length) {
+    const loadedSourceLevel = loadLevelPaneEntryForMode("edit", focusedPuzzleSourceContext(), {
+      silent: true,
+      recordHistory: false,
+      openPane: false,
+    });
+    if (!loadedSourceLevel && (enteringLevelMode || !level.cells.length)) {
       loadLevelFromPreviewState();
     } else if (levelSolutionPreview) {
       clearSolutionPreview();
@@ -3903,51 +4032,56 @@ function titleLabel(value) {
 }
 
 function levelPaletteFromExport(source) {
-  const placeableObjects = sourcePlaceableObjectNames(source, previewExport);
-  const objects = engineObjects().filter((object) => placeableObjects.has(object.name));
+  const exportData = currentLevelExportData();
+  const placeableObjects = sourcePlaceableObjectNames(source, exportData);
+  const objects = engineObjects(exportData).filter((object) => placeableObjects.has(object.name));
   return [
     { id: 0, name: "Eraser", layer: null, sprite: "eraser" },
     ...objects,
   ];
 }
 
-function levelReferenceSource(exportData = previewExport) {
+function levelReferenceSource(exportData = currentLevelExportData()) {
   return exportData?.source || activePreviewSource();
 }
 
-function sourcePlaceableObjectNames(source, exportData = previewExport) {
+function currentLevelExportData(exportData = null) {
+  return exportData || previewExport || null;
+}
+
+function sourcePlaceableObjectNames(source, exportData = currentLevelExportData()) {
   return new Set(sourceCharEntries(source, exportData)
     .filter((entry) => entry.objects.length === 1)
     .map((entry) => entry.objects[0]));
 }
 
-function engineObjects(exportData = previewExport) {
+function engineObjects(exportData = currentLevelExportData()) {
   return [...(exportData?.engine?.objects || [])]
     .sort((left, right) => left.layer - right.layer || left.name.localeCompare(right.name));
 }
 
-function engineObjectById(objectId, exportData = previewExport) {
+function engineObjectById(objectId, exportData = currentLevelExportData()) {
   return (exportData?.engine?.objects || []).find((object) => object.id === objectId) || null;
 }
 
-function isVisualObject(object, exportData = previewExport) {
+function isVisualObject(object, exportData = currentLevelExportData()) {
   return (exportData?.engine?.visualObjects || []).includes(object.id);
 }
 
-function visualObjectNameSet(exportData = previewExport) {
+function visualObjectNameSet(exportData = currentLevelExportData()) {
   const visualIds = new Set(exportData?.engine?.visualObjects || []);
   return new Set((exportData?.engine?.objects || [])
     .filter((object) => visualIds.has(object.id))
     .map((object) => object.name));
 }
 
-function layerCount(exportData = previewExport) {
+function layerCount(exportData = currentLevelExportData()) {
   return exportData?.engine?.layerCount
     || exportData?.levels?.[0]?.initialState?.layerCount
     || 1;
 }
 
-function sourceLayerNameEntries(source = levelReferenceSource(), exportData = previewExport) {
+function sourceLayerNameEntries(source = levelReferenceSource(), exportData = currentLevelExportData()) {
   const objectsByName = new Map(engineObjects(exportData).map((object) => [object.name, object]));
   const namesByLayer = new Map();
   for (const row of sourceLayerRows(source)) {
@@ -4187,7 +4321,9 @@ function loadLevelFromSourcePosition(position, options = {}) {
   if (options.recordHistory) {
     pushSourceNavigationHistory();
   }
-  openPreviewModePane("edit");
+  if (options.openPane !== false) {
+    openPreviewModePane("edit");
+  }
   const levelIndex = setActiveLevelIndex(previewLevelIndexForSourceEntry(entry));
   const levelName = previewExport?.levels?.[levelIndex]?.name || entry.name || `level_${levelIndex + 1}`;
   if (!loadLevelFromSourceEntry(source, entry, { levelIndex, levelName })) {
@@ -4270,7 +4406,9 @@ function loadLevelSourceTarget(target, options = {}) {
   if (options.recordHistory) {
     pushSourceNavigationHistory();
   }
-  openPreviewModePane("edit");
+  if (options.openPane !== false) {
+    openPreviewModePane("edit");
+  }
   levelIndex = setActiveLevelIndex(levelIndex);
   const levelName = levels[levelIndex]?.name || target.name || `level_${levelIndex + 1}`;
   const source = sourceEditor.value || "";
@@ -4310,7 +4448,7 @@ function loadLevelFromSourceEntry(source, entry, options = {}) {
   return true;
 }
 
-function sourceLevelStateFromEntry(source, entry, exportData = previewExport, options = {}) {
+function sourceLevelStateFromEntry(source, entry, exportData = currentLevelExportData(), options = {}) {
   if (!entry || !exportData?.engine?.objects?.length) {
     return null;
   }
@@ -5309,11 +5447,11 @@ function makeEmptyCells(width, height) {
   return Array.from({ length: width * height }, () => makeEmptyCell());
 }
 
-function makeEmptyCell(exportData = previewExport) {
+function makeEmptyCell(exportData = currentLevelExportData()) {
   return Array.from({ length: layerCount(exportData) }, () => 0);
 }
 
-function cloneCellSlots(slots, exportData = previewExport) {
+function cloneCellSlots(slots, exportData = currentLevelExportData()) {
   const next = makeEmptyCell(exportData);
   if (Array.isArray(slots)) {
     for (let index = 0; index < Math.min(slots.length, next.length); index += 1) {
@@ -5404,12 +5542,13 @@ function renderLevelBoard() {
   renderLevelSourcePreview();
   const cells = displayedLevelCells();
   const visibleCells = levelVisibleCells(cells);
+  const exportData = currentLevelExportData();
   if (levelRenderer) {
-    levelRenderer.render(levelScene(visibleCells));
+    levelRenderer.render(levelScene(visibleCells, exportData));
     syncLevelGridVisibility();
     levelBoard.querySelectorAll(".cell").forEach((cell, index) => {
       cell.dataset.index = String(index);
-      cell.setAttribute("aria-label", cellLabel(visibleCells[index]));
+      cell.setAttribute("aria-label", cellLabel(visibleCells[index], exportData));
       cell.setAttribute("role", "button");
       cell.tabIndex = 0;
     });
@@ -5777,7 +5916,7 @@ function levelListFilterIconSvg() {
   `;
 }
 
-function levelLayerVisibilityEntries(exportData = previewExport) {
+function levelLayerVisibilityEntries(exportData = currentLevelExportData()) {
   const count = Math.max(1, layerCount(exportData));
   const layerNames = sourceLayerNameEntries(levelReferenceSource(exportData), exportData);
   return Array.from({ length: count }, (_, layerIndex) => ({
@@ -5786,7 +5925,7 @@ function levelLayerVisibilityEntries(exportData = previewExport) {
   }));
 }
 
-function normalizedLevelHiddenLayers(exportData = previewExport) {
+function normalizedLevelHiddenLayers(exportData = currentLevelExportData()) {
   const count = Math.max(1, layerCount(exportData));
   const hidden = new Set();
   for (const layerIndex of level.hiddenLayers || []) {
@@ -5799,18 +5938,18 @@ function normalizedLevelHiddenLayers(exportData = previewExport) {
   return hidden;
 }
 
-function levelLayerIsVisible(layerIndex, exportData = previewExport) {
+function levelLayerIsVisible(layerIndex, exportData = currentLevelExportData()) {
   return !normalizedLevelHiddenLayers(exportData).has(Math.trunc(Number(layerIndex) || 0));
 }
 
-function levelVisibleLayerIndexes(exportData = previewExport) {
+function levelVisibleLayerIndexes(exportData = currentLevelExportData()) {
   const count = Math.max(1, layerCount(exportData));
   const hidden = normalizedLevelHiddenLayers(exportData);
   return Array.from({ length: count }, (_unused, layerIndex) => layerIndex)
     .filter((layerIndex) => !hidden.has(layerIndex));
 }
 
-function levelFilteredCellSlots(slots, exportData = previewExport) {
+function levelFilteredCellSlots(slots, exportData = currentLevelExportData()) {
   const hidden = normalizedLevelHiddenLayers(exportData);
   if (!hidden.size) {
     return slots;
@@ -5824,7 +5963,7 @@ function levelFilteredCellSlots(slots, exportData = previewExport) {
   return next;
 }
 
-function levelVisibleCells(sourceCells = displayedLevelCells(), exportData = previewExport) {
+function levelVisibleCells(sourceCells = displayedLevelCells(), exportData = currentLevelExportData()) {
   const hidden = normalizedLevelHiddenLayers(exportData);
   if (!hidden.size) {
     return sourceCells;
@@ -5902,32 +6041,34 @@ function objectScene(object) {
   });
 }
 
-function levelScene(sourceCells = level.cells) {
+function levelScene(sourceCells = level.cells, exportData = currentLevelExportData()) {
   return sceneFromCellSlots(sourceCells, {
     width: level.width,
     height: level.height,
     regions: levelRegions(),
+    exportData,
   });
 }
 
 function sceneFromCellSlots(sourceCells, options = {}) {
   const width = Math.max(1, Number(options.width || level.width || 1));
   const height = Math.max(1, Number(options.height || level.height || 1));
+  const exportData = options.exportData || currentLevelExportData();
   const cells = sourceCells.map((slots, index) => ({
     x: index % width,
     y: Math.floor(index / width),
-    layers: layersForSlots(normalizedCellSlots(slots)),
+    layers: layersForSlots(normalizedCellSlots(slots, exportData), exportData),
   }));
   return {
     width,
     height,
-    layerCount: layerCount(),
+    layerCount: layerCount(exportData),
     regions: options.regions || [],
     cells,
   };
 }
 
-function normalizedCellSlots(slots, exportData = previewExport) {
+function normalizedCellSlots(slots, exportData = currentLevelExportData()) {
   if (Array.isArray(slots) && slots.length === layerCount(exportData)) {
     return slots;
   }
@@ -5982,7 +6123,7 @@ function displayedSolverCells() {
   return sceneCellsToSlots(scene, displayedLevelCells());
 }
 
-function layersForSlots(slots, exportData = previewExport) {
+function layersForSlots(slots, exportData = currentLevelExportData()) {
   return cloneCellSlots(slots, exportData)
     .map((objectId) => engineObjectById(objectId, exportData))
     .filter(Boolean)
@@ -5999,8 +6140,8 @@ function layerForObject(object) {
   };
 }
 
-function cellLabel(slots) {
-  const names = layersForSlots(slots).map((layer) => layer.object);
+function cellLabel(slots, exportData = currentLevelExportData()) {
+  const names = layersForSlots(slots, exportData).map((layer) => layer.object);
   return names.length ? names.join(", ") : "Empty";
 }
 
@@ -6241,12 +6382,13 @@ function updateLevelSizeLabel() {
   levelSizeLabel.textContent = `${level.width} × ${level.height}`;
 }
 
-function normalizedLevelActiveLayer(layer = level.activeLayer, exportData = previewExport) {
+function normalizedLevelActiveLayer(layer = level.activeLayer, exportData = currentLevelExportData()) {
   const count = Math.max(1, layerCount(exportData));
   return Math.max(0, Math.min(count - 1, Math.trunc(Number(layer) || 0)));
 }
 
 function setLevelActiveLayerForObject(objectId) {
+  const exportData = currentLevelExportData();
   const object = engineObjectById(objectId, exportData);
   if (object && Number.isInteger(object.layer)) {
     level.activeLayer = normalizedLevelActiveLayer(object.layer);
@@ -6674,13 +6816,13 @@ function sameCellSlots(left, right) {
   return left.every((value, index) => value === right[index]);
 }
 
-function sameCellSlotsForVisibleLayers(left, right, exportData = previewExport) {
+function sameCellSlotsForVisibleLayers(left, right, exportData = currentLevelExportData()) {
   const leftSlots = cloneCellSlots(left);
   const rightSlots = cloneCellSlots(right);
   return levelVisibleLayerIndexes(exportData).every((layerIndex) => leftSlots[layerIndex] === rightSlots[layerIndex]);
 }
 
-function paintCellSlots(slots, objectId, exportData = previewExport) {
+function paintCellSlots(slots, objectId, exportData = currentLevelExportData()) {
   const visibleLayers = new Set(levelVisibleLayerIndexes(exportData));
   const next = cloneCellSlots(slots, exportData);
   for (const layerIndex of visibleLayers) {
@@ -8066,7 +8208,7 @@ function levelLegendCandidateChars() {
   return [...new Set([...ascii, ...generated])].filter((char) => /\S/u.test(char));
 }
 
-function charForSourceCell(slots, entries, allocator, exportData = previewExport, _visualObjects = visualObjectNameSet(exportData)) {
+function charForSourceCell(slots, entries, allocator, exportData = currentLevelExportData(), _visualObjects = visualObjectNameSet(exportData)) {
   const objects = objectNamesForSlots(slots, exportData);
   const exact = exactCharForObjects(objects, entries);
   if (exact) {
@@ -8083,7 +8225,7 @@ function charForSourceCell(slots, entries, allocator, exportData = previewExport
   return objects.length ? allocator.charForObjects(objects) : ".";
 }
 
-function objectNamesForSlots(slots, exportData = previewExport) {
+function objectNamesForSlots(slots, exportData = currentLevelExportData()) {
   return layersForSlots(slots, exportData).map((layer) => layer.object);
 }
 
@@ -8172,7 +8314,7 @@ function resizeLevelRegions(regions, edge, width, height, delta = 1) {
   return normalizedLevelRegions(normalized, width, height);
 }
 
-function sourceCharEntries(source, exportData = previewExport) {
+function sourceCharEntries(source, exportData = currentLevelExportData()) {
   const entries = [];
   const knownObjects = new Set(engineObjects(exportData).map((object) => object.name));
 
@@ -9013,6 +9155,17 @@ workbench.addEventListener("dragleave", (event) => {
   }
 });
 window.addEventListener("message", (event) => {
+  if (event.data?.type === "PuzzleStudioEditorSaveShortcut") {
+    if (event.source && previewFrame?.contentWindow && event.source !== previewFrame.contentWindow) {
+      return;
+    }
+    saveCurrentDocument(true).catch((error) => {
+      console.error(error);
+      setEditorStatus("Save failed", "is-error");
+      saveButton.disabled = false;
+    });
+    return;
+  }
   if (event.data?.type === "PuzzleStudioPreviewLayout") {
     return;
   }
