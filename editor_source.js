@@ -64,10 +64,13 @@ let sourceUndoApplying = false;
 let sourceHighlightSource = "";
 let sourceHighlightHtml = "";
 let sourceHighlightMode = "";
+let sourceHighlightRuns = [];
 let sourceHighlightUnavailableStatusShown = false;
 let sourceLayoutSyncFrame = 0;
 let sourceCompositionPreviewSource = "";
 let sourceCompositionRange = null;
+let sourceLevelBuilderResetFrame = 0;
+let sourceLevelBuilderResetCells = false;
 let sourceLineNumberSource = null;
 let sourceLineNumberColumns = 0;
 let sourceLineNumberLineHeight = 0;
@@ -133,6 +136,7 @@ function restoreSourceEditorSnapshot(snapshot) {
   const end = Math.max(0, Math.min(sourceEditor.value.length, snapshot.selectionEnd || start));
   sourceEditor.setSelectionRange(start, end, snapshot.selectionDirection || "none");
   sourceEditorContentChanged();
+  scrollSourceOffsetIntoView(start);
   sourceUndoApplying = false;
 }
 
@@ -180,10 +184,14 @@ function handleSourceUndoShortcut(event) {
 }
 
 function setSourceEditorValue(value, options = {}) {
-  sourceEditor.value = value || "";
+  const nextValue = value || "";
+  const preservesUndo = options.preserveUndoOnSameValue === true && sourceEditor.value === nextValue;
+  sourceEditor.value = nextValue;
   updateSourceMeta();
   scheduleSourceHighlight(true, { preserveCurrent: Boolean(options.preserveHighlight) });
-  if (options.resetUndo === false) {
+  if (preservesUndo) {
+    ensureSourceUndoHistory();
+  } else if (options.resetUndo === false) {
     recordSourceUndoSnapshot();
   } else {
     resetSourceUndoHistory();
@@ -208,10 +216,14 @@ function renderOptimisticSourceHighlight(source = sourceEditor.value) {
     return false;
   }
   const previous = sourceHighlightSource || "";
-  if ((sourceHighlight.textContent || "") !== previous) {
-    return false;
+  let runs = sourceHighlightRuns;
+  if (!runs.length) {
+    if ((sourceHighlight.textContent || "") !== previous) {
+      return false;
+    }
+    runs = sourceHighlightRunsFromDom();
+    sourceHighlightRuns = runs;
   }
-  const runs = sourceHighlightRunsFromDom();
   if (!runs.length) {
     return false;
   }
@@ -242,7 +254,9 @@ function renderOptimisticSourceHighlight(source = sourceEditor.value) {
     });
   }
   nextRuns.push(...sourceHighlightRunsSlice(runs, previous.length - suffix, previous.length));
-  setSourceHighlightHtml(source, sourceHighlightRunsToHtml(nextRuns), "optimistic");
+  setSourceHighlightHtml(source, sourceHighlightRunsToHtml(nextRuns), "optimistic", nextRuns, {
+    deferLayout: true,
+  });
   return true;
 }
 
@@ -358,7 +372,13 @@ function sourcePredictedBeforeInputValue(event) {
 
 function renderPredictedSourceHighlight(source) {
   if (!renderOptimisticSourceHighlight(source)) {
-    setSourceHighlightHtml(source, escapeHtml(source || " "), "optimistic");
+    setSourceHighlightHtml(
+      source,
+      escapeHtml(source || " "),
+      "optimistic",
+      [{ text: source || " ", className: "", style: "" }],
+      { deferLayout: true },
+    );
   }
 }
 
@@ -388,6 +408,19 @@ function clearSourceCompositionPreview() {
   sourceCompositionRange = null;
 }
 
+function scheduleLevelBuilderResetFromSource(resetCells = false) {
+  sourceLevelBuilderResetCells = sourceLevelBuilderResetCells || Boolean(resetCells);
+  if (sourceLevelBuilderResetFrame) {
+    return;
+  }
+  sourceLevelBuilderResetFrame = window.requestAnimationFrame(() => {
+    const shouldResetCells = sourceLevelBuilderResetCells;
+    sourceLevelBuilderResetFrame = 0;
+    sourceLevelBuilderResetCells = false;
+    resetLevelBuilderFromSource(shouldResetCells);
+  });
+}
+
 function renderPlainSourceHighlight(source = sourceEditor.value, reason = null) {
   if (!sourceHighlight) {
     return;
@@ -405,21 +438,30 @@ function renderPlainSourceHighlight(source = sourceEditor.value, reason = null) 
   }
 }
 
-function setSourceHighlightHtml(source, html, mode) {
+function setSourceHighlightHtml(source, html, mode, runs = null, options = {}) {
   if (!sourceHighlight) {
     return;
   }
-  syncSourceHighlightMetrics();
   if (sourceHighlightSource !== source || sourceHighlightHtml !== html) {
     sourceHighlight.innerHTML = html;
     sourceHighlightSource = source;
     sourceHighlightHtml = html;
+    sourceHighlightRuns = Array.isArray(runs)
+      ? sourceHighlightMergeRuns(runs)
+      : sourceHighlightRunsFromDom();
+  } else if (Array.isArray(runs)) {
+    sourceHighlightRuns = sourceHighlightMergeRuns(runs);
   }
   delete sourceHighlight.dataset.highlightError;
   sourceHighlight.removeAttribute("title");
   sourceHighlightUnavailableStatusShown = false;
   sourceHighlightMode = mode;
-  syncSourceHighlightScroll();
+  if (options.deferLayout) {
+    syncSourceHighlightTransform();
+    scheduleSourceEditorLayoutSync();
+  } else {
+    syncSourceHighlightScroll();
+  }
   renderSourceBlockSelection();
 }
 
@@ -444,14 +486,21 @@ function syncSourceHighlightScroll() {
     return;
   }
   syncSourceHighlightMetrics();
-  sourceHighlight.style.transform = `translate(${-sourceEditor.scrollLeft}px, ${-sourceEditor.scrollTop}px)`;
-  syncSourceLineNumberScroll();
+  syncSourceHighlightTransform();
   if (isSourceFindPanelOpen() && sourceFindState.matches.length) {
     renderSourceFindMatches();
   }
   if (sourceEditorBlockSelection?.ranges?.length) {
     renderSourceBlockSelection();
   }
+}
+
+function syncSourceHighlightTransform() {
+  if (!sourceHighlight) {
+    return;
+  }
+  sourceHighlight.style.transform = `translate(${-sourceEditor.scrollLeft}px, ${-sourceEditor.scrollTop}px)`;
+  syncSourceLineNumberScroll();
 }
 
 function scheduleSourceEditorLayoutSync(frameCount = 1) {
@@ -718,16 +767,24 @@ function sourceAutoCompletionEligible(source, cursor) {
   ) {
     return false;
   }
-  return sourceCursorHasCompletionPrefix(source, cursor);
+  return sourceCursorHasCompletionPrefix(source, cursor)
+    || sourceCursorAfterSelectorTagSeparator(source, cursor);
 }
 
 function sourceCursorHasCompletionPrefix(source, cursor) {
   return /[_@A-Za-z0-9.-]$/.test(source.slice(0, cursor));
 }
 
+function sourceCursorAfterSelectorTagSeparator(source, cursor) {
+  return /(?:^|[^\w@.-])[@A-Za-z_][\w@.-]*(?::[@A-Za-z_][\w@.-]*)*:$/.test(source.slice(0, cursor));
+}
+
 function sourceCursorBeforeSyntaxBoundaryWithoutPrefix(source, cursor) {
   const before = source.slice(0, cursor);
-  if (/[_@A-Za-z0-9.-]$/.test(before)) {
+  if (
+    /[_@A-Za-z0-9.-]$/.test(before)
+    || sourceCursorAfterSelectorTagSeparator(source, cursor)
+  ) {
     return false;
   }
   const lineEnd = source.indexOf("\n", cursor);
@@ -1856,6 +1913,7 @@ sourceEditor.addEventListener("input", () => {
     return;
   }
   clearSourceCompositionPreview();
+  scheduleSourceHighlight();
   hideSourceImportLinkFrame();
   clearSourceBlockSelection();
   sourceEditorPreferredCaretX = null;
@@ -1863,13 +1921,12 @@ sourceEditor.addEventListener("input", () => {
   updateSourceMeta();
   refreshSourceColorEditor();
   refreshSourceFindAfterSourceChange();
-  scheduleSourceHighlight();
   scheduleSourceCompletion();
   if (documents[currentDocumentIndex]) {
     documents[currentDocumentIndex].source = sourceEditor.value;
   }
   scheduleLocalSave();
-  resetLevelBuilderFromSource(false);
+  scheduleLevelBuilderResetFromSource(false);
   syncPreviewModeFromSourceCursor();
   schedulePreview();
 });
@@ -2265,7 +2322,7 @@ function renderSourceLineNumbers() {
     return;
   }
   const source = sourceEditor.value || "";
-  const lines = source.length ? source.split("\n") : [];
+  const lines = source.length ? source.split("\n") : [""];
   const digits = Math.max(2, String(Math.max(1, lines.length)).length);
   const gutterWidth = Math.max(44, Math.min(88, 24 + (digits * sourceEditorCharWidth())));
   sourceEditorWrap.style.setProperty("--source-line-gutter-width", `${Math.ceil(gutterWidth)}px`);
@@ -2841,6 +2898,19 @@ function handleSourceRewritePatternTab(event) {
   if (cursor < rhsStart || cursor > rhsEnd) {
     return false;
   }
+  const rhsTextBeforeCursor = source.slice(rhsStart, cursor);
+  const rhsTextAfterCursor = source.slice(cursor, rhsEnd);
+  if (!event.shiftKey && /^[\t ]*$/.test(rhsTextBeforeCursor) && /^[\t ]*$/.test(rhsTextAfterCursor)) {
+    const lhsPattern = sourceRewritePatternBeforeArrow(code.slice(0, arrow));
+    if (lhsPattern) {
+      event.preventDefault();
+      event.stopPropagation();
+      clearSourceBlockSelection();
+      sourceEditor.setRangeText(lhsPattern, cursor, cursor, "end");
+      sourceEditorContentChanged();
+      return true;
+    }
+  }
   const slots = sourceRewritePatternSlotOffsets(source.slice(rhsStart, rhsEnd))
     .map((slot) => rhsStart + slot);
   if (!slots.length) {
@@ -2862,6 +2932,7 @@ function handleSourceRewritePatternTab(event) {
 }
 
 function sourceEditorContentChanged() {
+  scheduleSourceHighlight();
   recordSourceUndoSnapshot();
   updateSourceMeta();
   refreshSourceColorEditor();
@@ -2869,9 +2940,8 @@ function sourceEditorContentChanged() {
   if (documents[currentDocumentIndex]) {
     documents[currentDocumentIndex].source = sourceEditor.value;
   }
-  scheduleSourceHighlight();
   scheduleLocalSave();
-  resetLevelBuilderFromSource(false);
+  scheduleLevelBuilderResetFromSource(false);
   schedulePreview();
   hideSourceCompletions();
 }
@@ -3174,10 +3244,14 @@ function insertSourceLineAroundSelection(direction) {
 }
 
 function handleSourceBlockSelectionPointerDown(event) {
+  if (sourceEditorBlockSelection && !event.altKey) {
+    clearSourceBlockSelection();
+    return;
+  }
   if (!event.altKey || event.ctrlKey || event.metaKey || !isTextDocument(activeDocument())) {
     return;
   }
-  const anchor = sourceEditorPositionFromPoint(event.clientX, event.clientY);
+  const anchor = sourceEditorPositionFromPoint(event.clientX, event.clientY, { preserveColumn: true });
   if (!anchor) {
     return;
   }
@@ -3191,6 +3265,10 @@ function handleSourceBlockSelectionPointerDown(event) {
     draggingPointerId: event.pointerId,
     ranges: sourceBlockRangesFromPoints(anchor, anchor),
   };
+  const first = sourceEditorBlockSelection.ranges[0];
+  if (first) {
+    sourceEditor.setSelectionRange(first.start, first.end);
+  }
   renderSourceBlockSelection();
 }
 
@@ -3548,7 +3626,7 @@ function updateSourceBlockSelectionDrag(event) {
   if (!sourceEditorBlockSelection || sourceEditorBlockSelection.draggingPointerId !== event.pointerId) {
     return;
   }
-  const focus = sourceEditorPositionFromPoint(event.clientX, event.clientY);
+  const focus = sourceEditorPositionFromPoint(event.clientX, event.clientY, { preserveColumn: true });
   if (!focus) {
     return;
   }
@@ -3567,19 +3645,30 @@ function finishSourceBlockSelectionDrag(event) {
     return;
   }
   event.preventDefault();
+  if (sourceEditor.hasPointerCapture?.(event.pointerId)) {
+    sourceEditor.releasePointerCapture(event.pointerId);
+  }
   sourceEditorBlockSelection.draggingPointerId = null;
   renderSourceBlockSelection();
 }
 
-function sourceEditorPositionFromPoint(clientX, clientY) {
+function sourceEditorPositionFromPoint(clientX, clientY, options = {}) {
   const lines = sourceLinesWithOffsets(sourceEditor.value);
   if (!lines.length) {
     return null;
   }
+  const rawPosition = sourceEditorRawPositionFromPoint(clientX, clientY, lines);
   const visualOffset = sourceOffsetFromVisualPoint(clientX, clientY);
   if (Number.isInteger(visualOffset)) {
-    return sourceLineColumnForOffset(lines, visualOffset);
+    const visualPosition = sourceLineColumnForOffset(lines, visualOffset);
+    return options.preserveColumn
+      ? { lineIndex: visualPosition.lineIndex, column: rawPosition.column }
+      : visualPosition;
   }
+  return rawPosition;
+}
+
+function sourceEditorRawPositionFromPoint(clientX, clientY, lines) {
   const rect = sourceEditor.getBoundingClientRect();
   const style = window.getComputedStyle(sourceEditor);
   const paddingLeft = Number.parseFloat(style.paddingLeft) || 0;
@@ -3640,12 +3729,29 @@ function renderSourceBlockSelection() {
   sourceBlockSelectionLayer.replaceChildren();
   if (ranges.length) {
     for (const range of ranges) {
-      appendSourceSelectionRects(range.start, range.end);
+      appendSourceBlockRange(range);
     }
     sourceBlockSelectionLayer.hidden = sourceBlockSelectionLayer.childElementCount === 0;
     return;
   }
   sourceBlockSelectionLayer.hidden = true;
+}
+
+function appendSourceBlockRange(range) {
+  if (!range || range.start !== range.end) {
+    appendSourceSelectionRects(range?.start, range?.end);
+    return;
+  }
+  const rect = sourceBlockCaretRectForRange(range);
+  if (!rect) {
+    return;
+  }
+  const caret = document.createElement("div");
+  caret.className = "source-block-selection-caret";
+  caret.style.left = `${rect.left}px`;
+  caret.style.top = `${rect.top}px`;
+  caret.style.height = `${rect.height}px`;
+  sourceBlockSelectionLayer.append(caret);
 }
 
 function appendSourceSelectionRects(start, end) {
@@ -3711,6 +3817,36 @@ function sourceSelectionRectsForOffsets(start, end) {
     width: Math.max(2, rect.right - rect.left),
     height: rect.height,
   }));
+}
+
+function sourceBlockCaretRectForRange(range) {
+  if (!sourceEditor || !sourceEditorWrap || !Number.isInteger(range?.lineIndex)) {
+    return null;
+  }
+  const lines = sourceLinesWithOffsets(sourceEditor.value || "");
+  const line = lines[range.lineIndex];
+  if (!line) {
+    return null;
+  }
+  const lineStartRect = sourceCaretRectForOffset(line.start);
+  if (!lineStartRect) {
+    return null;
+  }
+  if (range.startCol <= line.raw.length) {
+    const caretRect = sourceCaretRectForOffset(range.start);
+    if (caretRect) {
+      return {
+        left: caretRect.left,
+        top: caretRect.top,
+        height: caretRect.height || sourceEditorLineHeight(),
+      };
+    }
+  }
+  return {
+    left: lineStartRect.left + (sourceEditorCharWidth() * Math.max(0, range.startCol || 0)),
+    top: lineStartRect.top,
+    height: lineStartRect.height || sourceEditorLineHeight(),
+  };
 }
 
 function clearSourceBlockSelection() {

@@ -228,6 +228,33 @@ const soundsMusicUpdateButton = document.querySelector("#soundsMusicUpdateButton
 const soundsMusicSourceActions = document.querySelector("#soundsMusicSourceActions");
 const soundsSfxOutput = document.querySelector("#soundsSfxOutput");
 const soundsMusicOutput = document.querySelector("#soundsMusicOutput");
+
+function installSelectAllOnFocus(input) {
+  if (!(input instanceof HTMLInputElement) && !(input instanceof HTMLTextAreaElement)) {
+    return;
+  }
+  let initialFocusPointerId = null;
+  input.addEventListener("pointerdown", (event) => {
+    initialFocusPointerId = event.button === 0 && document.activeElement !== input
+      ? event.pointerId
+      : null;
+  });
+  input.addEventListener("focus", () => {
+    input.select();
+  });
+  input.addEventListener("pointerup", (event) => {
+    if (event.pointerId === initialFocusPointerId && document.activeElement === input) {
+      event.preventDefault();
+    }
+    initialFocusPointerId = null;
+  });
+  input.addEventListener("pointercancel", () => {
+    initialFocusPointerId = null;
+  });
+  input.addEventListener("blur", () => {
+    initialFocusPointerId = null;
+  });
+}
 const editorSeed = window.PuzzleEditorSeed || null;
 const levelThemeRoot = levelBoard?.closest(".level-board-wrap") || levelBoard;
 const solverThemeRoot = solverBoard?.closest(".solver-board-wrap") || solverBoard;
