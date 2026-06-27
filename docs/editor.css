@@ -1099,6 +1099,24 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   white-space: nowrap;
 }
 
+.document-tab-unsaved-dot {
+  width: 8px;
+  min-width: 8px;
+  height: 8px;
+  min-height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+  opacity: 0;
+}
+
+.document-tab.is-unsaved .document-tab-unsaved-dot {
+  opacity: 1;
+}
+
+.document-tab.is-active.is-unsaved .document-tab-unsaved-dot {
+  background: var(--ink);
+}
+
 .document-tab-close {
   width: 18px;
   min-width: 18px;
@@ -1338,6 +1356,15 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   background: var(--source-selection-bg);
 }
 
+.source-block-selection-caret {
+  position: absolute;
+  width: 2px;
+  min-height: 20px;
+  border-radius: 1px;
+  background: var(--code-ink);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--code-bg) 40%, transparent);
+}
+
 .source-import-link-frame {
   position: absolute;
   z-index: 3;
@@ -1371,7 +1398,6 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   background: transparent;
   color: transparent;
   caret-color: var(--code-ink);
-  -webkit-text-fill-color: transparent;
 }
 
 #sourceEditor::selection {
@@ -1845,9 +1871,7 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
 
 .preview-log-line.is-navigable {
   cursor: pointer;
-  text-decoration: underline;
-  text-decoration-thickness: 1px;
-  text-underline-offset: 2px;
+  text-decoration: none;
 }
 
 .preview-log-line.is-navigable:hover,
@@ -2893,9 +2917,10 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   place-items: start center;
   overflow: hidden;
   padding: 12px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--preview-game-line);
   border-radius: 8px;
-  background: var(--bg);
+  background: var(--preview-game-background);
+  color: var(--preview-game-ink);
 }
 
 .level-board-viewport,
@@ -3051,9 +3076,10 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   place-items: start center;
   overflow: hidden;
   padding: 12px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--preview-game-line);
   border-radius: 8px;
-  background: var(--bg);
+  background: var(--preview-game-background);
+  color: var(--preview-game-ink);
 }
 
 .solver-board-wrap.is-solving {

@@ -1,4 +1,4 @@
-export const SFX_TYPES = ["jump", "pickup", "hit", "explosion", "laser", "powerup", "select", "error"];
+export const SFX_TYPES = ["jump", "pickup", "hit", "lock", "explosion", "laser", "powerup", "select", "error"];
 export const SFX_TYPE_OPTIONS = ["random", ...SFX_TYPES, "wild"];
 
 const TYPE_CONFIG = {
@@ -6,6 +6,7 @@ const TYPE_CONFIG = {
   jump: { duration: 0.28, label: "Jump", baseFrequency: [230, 330], shape: "rise" },
   pickup: { duration: 0.42, label: "Pickup", baseFrequency: [620, 880], shape: "spark" },
   hit: { duration: 0.24, label: "Hit", baseFrequency: [90, 160], shape: "impact" },
+  lock: { duration: 0.3, label: "Lock", baseFrequency: [85, 145], shape: "latch" },
   explosion: { duration: 0.82, label: "Explosion", baseFrequency: [45, 82], shape: "blast" },
   laser: { duration: 0.36, label: "Laser", baseFrequency: [460, 760], shape: "sweep" },
   powerup: { duration: 0.72, label: "Power Up", baseFrequency: [260, 430], shape: "climb" },
@@ -18,6 +19,7 @@ const TYPE_PATTERNS = {
   jump: ["hop", "spring", "rubber", "whoosh"],
   pickup: ["coin", "sparkle", "gem", "chord"],
   hit: ["punch", "slash", "metal", "crunch"],
+  lock: ["latch", "deadbolt", "key-turn", "tumblers"],
   explosion: ["boom", "puff", "crackle", "burst"],
   laser: ["pew", "zap", "down", "charge"],
   powerup: ["arpeggio", "swell", "sparkle", "fanfare"],
@@ -96,15 +98,15 @@ function buildProfile(rng, type, tonalFamily, intensity) {
   const bright = tonalFamily === "bright";
   const dark = tonalFamily === "dark";
   const waveforms = bright ? ["triangle", "sine", "square"] : dark ? ["sawtooth", "square", "triangle"] : ["sine", "triangle", "square"];
-  const variants = type === "error" ? ["clean", "double", "gritty", "stepped"] : ["clean", "double", "gritty", "hollow", "wide", "stepped"];
+  const variants = type === "error" || type === "lock" ? ["clean", "double", "gritty", "stepped"] : ["clean", "double", "gritty", "hollow", "wide", "stepped"];
   return {
     engine: pick(["arcade", "soft-synth", "bit-crush", "toy-speaker"], rng),
     variant: pick(variants, rng),
     pattern: pick(TYPE_PATTERNS[type], rng),
-    waveform: type === "error" ? pick(["square", "sawtooth"], rng) : pick(waveforms, rng),
-    noiseColor: dark || type === "explosion" || type === "error" ? "crackle" : "white",
+    waveform: type === "error" ? pick(["square", "sawtooth"], rng) : type === "lock" ? pick(["square", "triangle"], rng) : pick(waveforms, rng),
+    noiseColor: dark || type === "explosion" || type === "error" || type === "lock" ? "crackle" : "white",
     filterBias: round2(lerp(0.75, 1.35, intensity) * (type === "error" ? 0.78 : bright ? 1.18 : dark ? 0.82 : 1)),
-    pitchWobble: round2(lerp(type === "error" ? 0.04 : 0.01, type === "error" ? 0.12 : 0.075, rng() * intensity)),
+    pitchWobble: round2(type === "lock" ? lerp(0, 0.018, rng() * intensity) : lerp(type === "error" ? 0.04 : 0.01, type === "error" ? 0.12 : 0.075, rng() * intensity)),
   };
 }
 
@@ -242,6 +244,45 @@ function buildLayers(type, baseFrequency, duration, mood, intensity, profile, rn
       ];
     }
     return varyLayers(layers, duration, baseFrequency, intensity, profile, rng);
+  }
+
+  if (type === "lock") {
+    if (profile.pattern === "deadbolt") {
+      layers = [
+        clickLayer(0, 0.008, 0.07 + intensity * 0.07, 7600),
+        noiseLayer("bolt-drag", duration * 0.18, duration * 0.3, 0.055 + intensity * 0.07, "bandpass", 4200, 740, profile),
+        toneLayer("bolt-slide", duration * 0.2, duration * 0.22, "square", baseFrequency * 1.2, baseFrequency * 0.78, 0.055, intensity, profile),
+        clickLayer(duration * 0.52, 0.011, 0.22 + intensity * 0.14, 5000),
+        toneLayer("lock-stop", duration * 0.52, duration * 0.14, "square", baseFrequency * 0.9, baseFrequency * 0.52, 0.24, intensity, profile),
+      ];
+    } else if (profile.pattern === "key-turn") {
+      layers = [
+        clickLayer(0, 0.007, 0.08 + intensity * 0.07, 8200),
+        clickLayer(duration * 0.22, 0.008, 0.065 + intensity * 0.065, 6800),
+        noiseLayer("key-scrape", duration * 0.24, duration * 0.22, 0.04 + intensity * 0.045, "highpass", 5600, 2300, profile),
+        toneLayer("key-turn", duration * 0.28, duration * 0.2, "triangle", baseFrequency * 1.35, baseFrequency * 0.72, 0.055, intensity, profile),
+        clickLayer(duration * 0.54, 0.011, 0.2 + intensity * 0.13, 4800),
+        toneLayer("lock-stop", duration * 0.54, duration * 0.14, "square", baseFrequency * 0.95, baseFrequency * 0.5, 0.23, intensity, profile),
+      ];
+    } else if (profile.pattern === "tumblers") {
+      layers = [
+        clickLayer(0, 0.007, 0.075 + intensity * 0.06, 8400),
+        clickLayer(duration * 0.18, 0.007, 0.065 + intensity * 0.06, 7200),
+        clickLayer(duration * 0.34, 0.008, 0.07 + intensity * 0.07, 6100),
+        noiseLayer("pin-scrape", duration * 0.24, duration * 0.2, 0.04 + intensity * 0.045, "highpass", 5200, 1900, profile),
+        clickLayer(duration * 0.56, 0.011, 0.19 + intensity * 0.13, 4700),
+        toneLayer("lock-stop", duration * 0.56, duration * 0.14, "square", baseFrequency * 0.88, baseFrequency * 0.48, 0.23, intensity, profile),
+      ];
+    } else {
+      layers = [
+        clickLayer(0, 0.008, 0.08 + intensity * 0.07, 7800),
+        noiseLayer("latch-scrape", duration * 0.18, duration * 0.22, 0.05 + intensity * 0.055, "bandpass", 4200, 920, profile),
+        clickLayer(duration * 0.42, 0.009, 0.11 + intensity * 0.09, 5600),
+        clickLayer(duration * 0.54, 0.012, 0.22 + intensity * 0.14, 3900),
+        toneLayer("lock-stop", duration * 0.54, duration * 0.14, "square", baseFrequency, baseFrequency * 0.5, 0.24, intensity, profile),
+      ];
+    }
+    return varyLockLayers(layers, duration, intensity, profile, rng);
   }
 
   if (type === "explosion") {
@@ -425,6 +466,39 @@ function varyLayers(layers, duration, baseFrequency, intensity, profile, rng) {
     varied.push(toneLayer("upper", duration * 0.04, duration * 0.5, "triangle", baseFrequency * 2, baseFrequency * lerp(1.6, 2.8, rng()), 0.08, intensity, profile));
   } else if (profile.variant === "stepped") {
     varied.push(clickLayer(duration * lerp(0.22, 0.56, rng()), 0.018, 0.06 + intensity * 0.08, 3600 * profile.filterBias));
+  }
+
+  return varied.sort((a, b) => a.start - b.start || a.name.localeCompare(b.name));
+}
+
+function varyLockLayers(layers, duration, intensity, profile, rng) {
+  const varied = layers.map((layer) => {
+    const gainJitter = lerp(0.92, 1.14, rng());
+    if (layer.kind === "tone") {
+      return {
+        ...layer,
+        frequencyStart: Math.round(layer.frequencyStart * lerp(0.94, 1.05, rng())),
+        frequencyEnd: Math.round(layer.frequencyEnd * lerp(0.9, 1.08, rng())),
+        gain: round3(layer.gain * gainJitter),
+      };
+    }
+    if (layer.kind === "noise") {
+      return {
+        ...layer,
+        filterStart: Math.round(layer.filterStart * lerp(0.88, 1.16, rng())),
+        filterEnd: Math.round(layer.filterEnd * lerp(0.84, 1.18, rng())),
+        gain: round3(layer.gain * gainJitter),
+      };
+    }
+    return { ...layer, gain: round3(layer.gain * gainJitter) };
+  });
+
+  if (profile.variant === "double") {
+    varied.push(clickLayer(duration * lerp(0.28, 0.42, rng()), 0.008, 0.05 + intensity * 0.06, randomInt(rng, 5800, 8600)));
+  } else if (profile.variant === "gritty") {
+    varied.push(noiseLayer("lock-grit", duration * 0.2, duration * 0.18, 0.03 + intensity * 0.045, "highpass", randomInt(rng, 4600, 7200), randomInt(rng, 1500, 2800), profile));
+  } else if (profile.variant === "stepped") {
+    varied.push(clickLayer(duration * lerp(0.3, 0.48, rng()), 0.009, 0.06 + intensity * 0.07, randomInt(rng, 5000, 7600)));
   }
 
   return varied.sort((a, b) => a.start - b.start || a.name.localeCompare(b.name));

@@ -28,6 +28,7 @@ async function main() {
       await page.navigate(server.url);
       await editorLoads(page);
       await sourceEditorReflectsInputBeforeKeyup(page);
+      await sourceEditorPairsDoubleQuote(page);
       await sourceUndoSurvivesSameDocumentReload(page);
       await sourceEditorReflectsCompositionBeforeCommit(page);
       await sourceCompletionKeepsKeyboardSelectionAcrossRefresh(page);
@@ -267,6 +268,78 @@ async function sourceEditorReflectsInputBeforeKeyup(page) {
     })()`).catch(() => {});
   }
   await page.assertNoErrors("source input reflection");
+}
+
+async function sourceEditorPairsDoubleQuote(page) {
+  const result = await page.evaluateTop(`(() => {
+    const editor = document.querySelector("#sourceEditor");
+    if (!editor || typeof handleSourcePrintableKeydownInput !== "function") {
+      throw new Error("missing source editor quote pair helpers");
+    }
+    const original = editor.value || "";
+    const originalDocumentSource = documents[currentDocumentIndex]?.source || "";
+    const result = {};
+    const quoteEvent = () => ({
+      defaultPrevented: false,
+      isComposing: false,
+      altKey: false,
+      ctrlKey: false,
+      metaKey: false,
+      key: String.fromCharCode(34),
+      preventDefault() {},
+      stopPropagation() {},
+    });
+    try {
+      setSourceEditorValue("", { resetUndo: true });
+      if (documents[currentDocumentIndex]) {
+        documents[currentDocumentIndex].source = "";
+      }
+      editor.focus();
+      editor.setSelectionRange(0, 0);
+      result.emptyHandled = handleSourcePrintableKeydownInput(quoteEvent());
+      result.empty = {
+        value: editor.value,
+        selectionStart: editor.selectionStart,
+        selectionEnd: editor.selectionEnd,
+        documentSource: documents[currentDocumentIndex]?.source || "",
+      };
+
+      setSourceEditorValue("abc", { resetUndo: true });
+      if (documents[currentDocumentIndex]) {
+        documents[currentDocumentIndex].source = "abc";
+      }
+      editor.setSelectionRange(0, 3);
+      result.selectionHandled = handleSourcePrintableKeydownInput(quoteEvent());
+      result.selection = {
+        value: editor.value,
+        selectionStart: editor.selectionStart,
+        selectionEnd: editor.selectionEnd,
+        documentSource: documents[currentDocumentIndex]?.source || "",
+      };
+    } finally {
+      setSourceEditorValue(original, { resetUndo: true });
+      if (documents[currentDocumentIndex]) {
+        documents[currentDocumentIndex].source = originalDocumentSource;
+      }
+      scheduleSourceHighlight(true);
+    }
+    return result;
+  })()`);
+  assert.equal(result.emptyHandled, true);
+  assert.deepEqual(result.empty, {
+    value: String.fromCharCode(34, 34),
+    selectionStart: 1,
+    selectionEnd: 1,
+    documentSource: String.fromCharCode(34, 34),
+  });
+  assert.equal(result.selectionHandled, true);
+  assert.deepEqual(result.selection, {
+    value: `${String.fromCharCode(34)}abc${String.fromCharCode(34)}`,
+    selectionStart: 1,
+    selectionEnd: 4,
+    documentSource: `${String.fromCharCode(34)}abc${String.fromCharCode(34)}`,
+  });
+  await page.assertNoErrors("source double quote pairing");
 }
 
 async function sourceUndoSurvivesSameDocumentReload(page) {

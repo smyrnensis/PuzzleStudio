@@ -10,7 +10,6 @@ const SPRITE_EDITOR_MAX_SIZE = 64;
 function resetSpriteBuilder(size = sprite.size) {
   sprite.size = clampSpriteSize(size);
   sprite.cells = Array.from({ length: sprite.size * sprite.size }, () => null);
-  sprite.paletteBind = null;
   sprite.shapeBind = null;
   sprite.solidSource = false;
   if (!Number.isInteger(sprite.selectedColorIndex) || !sprite.palette[sprite.selectedColorIndex]) {
@@ -575,7 +574,7 @@ function spritePaletteEntryBindInfo(entry) {
     return { available: true, linked: true, name: bind, label: `Bound to ${bind}` };
   }
   if (typeof bind === "object") {
-    const name = bind.name || bind.ref || bind.source || bind.color || bind.palette || "";
+    const name = bind.name || bind.ref || bind.source || bind.color || "";
     const linked = !(bind.linked === false || bind.unlinked === true || bind.detached === true);
     return { available: true, linked, name, label: name ? `Bound to ${name}` : "Bound color" };
   }
@@ -886,52 +885,6 @@ function updateSpriteBoundColorDefinition(entry, color) {
   return applied;
 }
 
-function toggleSpritePaletteBinding() {
-  const info = spriteAssetBindInfo(sprite.paletteBind, "palette");
-  if (!info.name) {
-    linkSpritePaletteToNewPalette();
-    return;
-  }
-  sprite.paletteBind = { type: "palette", name: info.name, linked: !info.linked };
-  rewriteCurrentSpriteDefinitionFromBuilder(sprite.paletteBind.linked ? "Linked palette" : "Unlinked palette");
-  renderSpriteBuilder();
-}
-
-function linkSpritePaletteToNewPalette() {
-  const name = promptSpriteAssetName("Palette name", defaultSpriteAssetName("palette"));
-  if (!name) {
-    return;
-  }
-  const source = activeSpriteEditSource();
-  const nextSource = ensureSpritePaletteDefinition(source, name, spritePaletteSourceTokens());
-  if (!nextSource) {
-    return;
-  }
-  sprite.paletteBind = { type: "palette", name, linked: true };
-  const rewritten = replaceSpriteDefinition(nextSource);
-  if (!rewritten) {
-    sprite.paletteBind = null;
-    setSpriteActionStatus(`No sprite named ${spriteObjectName()}`, "is-error");
-    return;
-  }
-  applySpriteSourceChange(rewritten.source, `Linked palette ${name}`);
-  renderSpriteBuilder();
-}
-
-function updateSpriteBoundPaletteDefinition() {
-  const info = spriteAssetBindInfo(sprite.paletteBind, "palette");
-  if (!info.linked || !info.name) {
-    return false;
-  }
-  const source = activeSpriteEditSource();
-  const nextSource = replaceSpritePaletteDefinition(source, info.name, spritePaletteSourceTokens());
-  if (!nextSource || nextSource === source) {
-    return false;
-  }
-  applySpriteSourceChange(nextSource);
-  return true;
-}
-
 function toggleSpriteShapeBinding() {
   const info = spriteAssetBindInfo(sprite.shapeBind, "shape");
   if (!info.name) {
@@ -1022,6 +975,11 @@ function sanitizeSpriteColorAssetRef(value) {
 }
 
 function defaultSpriteAssetName(kind, index = 0) {
+  if (kind === "color") {
+    const objectName = String(spriteObjectName()).split(":")[0];
+    const base = sanitizeSpriteAssetName(objectName) || "sprite";
+    return `${base}_${Number(index) + 1}`;
+  }
   const base = sanitizeSpriteAssetName(spriteObjectName()).replace(new RegExp(`_${kind}$`), "") || "sprite";
   return `${base}_${kind}_${Number(index) + 1}`;
 }
@@ -1305,7 +1263,6 @@ function updateSelectedSpriteColor(value, options = {}) {
   const normalized = normalizeSpriteColor(value);
   selected.color = normalized;
   updateSpriteBoundColorDefinition(selected, normalized);
-  updateSpriteBoundPaletteDefinition();
   if (options.closeMenu) {
     sprite.editPaletteOpen = false;
     sprite.customColorOpen = false;
@@ -1382,7 +1339,6 @@ function addSpriteColor(color = nextSpritePresetColor()) {
     sprite.palette[draftIndex].color = normalizeSpriteColor(color);
     sprite.selectedColorIndex = draftIndex;
   }
-  updateSpriteBoundPaletteDefinition();
   sprite.addPaletteOpen = false;
   sprite.editPaletteOpen = false;
   sprite.customColorOpen = false;
@@ -1454,7 +1410,6 @@ function cancelSpriteColorAdd() {
   sprite.editPaletteOpen = false;
   sprite.customColorOpen = false;
   sprite.addDraftColorIndex = null;
-  updateSpriteBoundPaletteDefinition();
   renderSpriteBuilder();
   pushVisualEditUndoSnapshot("sprite", before);
 }
@@ -1491,7 +1446,6 @@ function deleteSelectedSpriteColor() {
   sprite.customColorOpen = false;
   sprite.addDraftColorIndex = null;
   removeSpritePaletteColor(sprite.selectedColorIndex);
-  updateSpriteBoundPaletteDefinition();
   updateSpriteBoundShapeDefinition();
   renderSpriteBuilder();
   pushVisualEditUndoSnapshot("sprite", before);
@@ -2264,7 +2218,6 @@ function loadSpriteSourceTarget(target, options = {}) {
   setSpriteEditSource(target, activeDocument());
   sprite.size = loaded.size;
   sprite.palette = loaded.palette;
-  sprite.paletteBind = loaded.paletteBind || null;
   sprite.shapeBind = loaded.shapeBind || null;
   sprite.solidSource = Boolean(loaded.solid);
   sprite.cells = loaded.cells;
@@ -2293,9 +2246,6 @@ function isIncompleteSpriteSourceTarget(source, target) {
   if (!rows.length) {
     return true;
   }
-  if (rows[0].startsWith("palette ")) {
-    rows[0] = rows[0].slice("palette ".length).trim();
-  }
   return !rows[0]
     .split(/\s+/)
     .filter(Boolean)
@@ -2309,7 +2259,6 @@ function applyIncompleteSpriteSourceTarget(name, target) {
   spriteNameInput.value = name || "";
   sprite.size = clampSpriteSize(sprite.size);
   sprite.palette = [];
-  sprite.paletteBind = null;
   sprite.shapeBind = null;
   sprite.solidSource = false;
   sprite.cells = Array.from({ length: sprite.size * sprite.size }, () => null);
@@ -2330,34 +2279,30 @@ function parseSpriteDefinitionSource(body, source = "", selectorName = "") {
     return null;
   }
   const colorAssets = parseSpriteColorAssets(source);
-  let paletteBind = null;
   let shapeBind = null;
-  let paletteRows = rows;
-  if (paletteRows[0].startsWith("palette ")) {
-    paletteRows = [paletteRows[0].slice("palette ".length).trim(), ...paletteRows.slice(1)];
-  }
-  const paletteAssets = parseSpritePaletteAssets(source);
-  const paletteRef = paletteRows[0].split(/\s+/).filter(Boolean);
-  const palette = paletteRef.length === 1 && spritePaletteAssetHasReference(paletteRef[0], paletteAssets, selectorName)
-    ? resolveSpritePaletteAssetToken(paletteRef[0], paletteAssets, colorAssets, selectorName)
-    : paletteRows[0]
-      .split(/\s+/)
-      .map((token) => spritePaletteEntryFromSourceToken(token, colorAssets, selectorName));
-  if (paletteRef.length === 1 && spritePaletteAssetHasReference(paletteRef[0], paletteAssets, selectorName)) {
-    paletteBind = { type: "palette", name: paletteRef[0], linked: true };
-  }
+  const palette = rows[0]
+    .split(/\s+/)
+    .map((token) => spritePaletteEntryFromSourceToken(token, colorAssets, selectorName));
   if (!palette.length || palette.some((entry) => !entry)) {
     return null;
   }
-  let asciiRows = paletteRows.slice(1);
+  let asciiRows = rows.slice(1);
+  const shapeAssets = parseSpriteShapeAssets(source);
   if (asciiRows[0]?.startsWith("shape ")) {
     const shapeName = asciiRows[0].slice("shape ".length).trim();
-    const shapeRows = resolveSpriteShapeAssetToken(shapeName, parseSpriteShapeAssets(source), selectorName);
+    const shapeRows = resolveSpriteShapeAssetToken(shapeName, shapeAssets, selectorName);
     if (!shapeRows) {
       return null;
     }
     shapeBind = { type: "shape", name: shapeName, linked: true };
     asciiRows = shapeRows;
+  } else if (asciiRows.length === 1) {
+    const shapeName = asciiRows[0].trim();
+    const shapeRows = resolveSpriteShapeAssetToken(shapeName, shapeAssets, selectorName);
+    if (shapeRows) {
+      shapeBind = { type: "shape", name: shapeName, linked: true };
+      asciiRows = shapeRows;
+    }
   }
   if (asciiRows.length === 0) {
     if (palette.length !== 1) {
@@ -2367,7 +2312,6 @@ function parseSpriteDefinitionSource(body, source = "", selectorName = "") {
     return {
       size,
       palette,
-      paletteBind,
       shapeBind: null,
       solid: true,
       cells: Array.from({ length: size * size }, () => 0),
@@ -2389,7 +2333,6 @@ function parseSpriteDefinitionSource(body, source = "", selectorName = "") {
   return {
     size,
     palette,
-    paletteBind,
     shapeBind,
     cells,
   };
@@ -2434,33 +2377,6 @@ function parseSpriteColorAssets(source) {
   return raw;
 }
 
-function parseSpritePaletteAssets(source) {
-  const raw = new Map();
-  const spritesBlock = findSpritesBlock(source);
-  const palettesBlock = spritesBlock ? findVisualAssetBlock(source, spritesBlock, "palettes") : null;
-  if (!palettesBlock) {
-    return raw;
-  }
-  collectSpriteFlatAssetRows(source, palettesBlock, (name, value) => {
-    raw.set(name, value.split(/\s+/).filter(Boolean));
-  });
-  collectSpriteAssetTables(source, palettesBlock, (tableName, rowName, value) => {
-    const tokens = value.split(/\s+/).filter(Boolean);
-    raw.set(`${tableName}:${rowName}`, tokens);
-  });
-  return raw;
-}
-
-function spritePaletteAssetHasReference(token, paletteAssets, selectorName = "") {
-  return Boolean(spriteTableAssetKey(token, paletteAssets, selectorName));
-}
-
-function resolveSpritePaletteAssetToken(token, paletteAssets, colorAssets, selectorName = "") {
-  const key = spriteTableAssetKey(token, paletteAssets, selectorName);
-  const names = key ? paletteAssets.get(key) || [] : [];
-  return names.map((name) => spritePaletteEntryFromSourceToken(name, colorAssets, selectorName));
-}
-
 function parseSpriteShapeAssets(source) {
   const raw = new Map();
   const spritesBlock = findSpritesBlock(source);
@@ -2469,7 +2385,7 @@ function parseSpriteShapeAssets(source) {
     return raw;
   }
   const body = source.slice(shapesBlock.bodyStart, shapesBlock.bodyEnd);
-  const tablePattern = /(^|\n)([\t ]*)([A-Za-z_][\w]*):[A-Za-z_][\w]*\s*\{/g;
+  const tablePattern = /(^|\n)([\t ]*)([A-Za-z_][\w]*):([A-Za-z_][\w]*)[^\n{]*\{/g;
   let tableMatch = null;
   while ((tableMatch = tablePattern.exec(body))) {
     const bodyMatchStart = tableMatch.index + tableMatch[1].length;
@@ -2483,6 +2399,15 @@ function parseSpriteShapeAssets(source) {
     }
     const tableBody = source.slice(openIndex + 1, closeIndex);
     collectSpriteShapeTableRows(source, openIndex + 1, closeIndex, tableMatch[3], tableBody, raw);
+    if (!tableBody.includes("{")) {
+      const rows = tableBody
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean);
+      if (rows.length) {
+        raw.set(`${tableMatch[3]}:${tableMatch[4]}`, rows);
+      }
+    }
   }
 
   const pattern = /(^|\n)([\t ]*)([A-Za-z_][\w]*)\s*\{/g;
@@ -2554,6 +2479,10 @@ function spriteTableAssetKey(token, assets, selectorName = "") {
   if (selectorValue && assets.has(`${tableName}:${selectorValue}`)) {
     return `${tableName}:${selectorValue}`;
   }
+  const selectorBinding = spriteSelectorSingleTagBinding(selectorName, name.slice(separator + 1));
+  if (selectorBinding) {
+    return firstSpriteTableAssetKey(tableName, assets);
+  }
   return "";
 }
 
@@ -2564,6 +2493,25 @@ function spriteSelectorSingleTagValue(selectorName, bindingName = "") {
   }
   const value = parts[1];
   return value && value !== bindingName ? value : "";
+}
+
+function spriteSelectorSingleTagBinding(selectorName, bindingName = "") {
+  const parts = String(selectorName || "").split(":").filter(Boolean);
+  if (parts.length !== 2 || !bindingName) {
+    return "";
+  }
+  const value = parts[1];
+  return value === bindingName ? value : "";
+}
+
+function firstSpriteTableAssetKey(tableName, assets) {
+  const prefix = `${tableName}:`;
+  for (const key of assets.keys()) {
+    if (key.startsWith(prefix)) {
+      return key;
+    }
+  }
+  return "";
 }
 
 function resolveSpriteColorAssetToken(token, colorAssets = null, stack = [], selectorName = "") {
@@ -3032,42 +2980,6 @@ function replaceSpriteColorDefinition(source, name, color) {
   return `${source.slice(0, range.valueStart)} ${normalizeSpriteColor(color)}${source.slice(range.valueEnd)}`;
 }
 
-function ensureSpritePaletteDefinition(source, name, tokens) {
-  const spritesBlock = findSpritesBlock(source);
-  if (!spritesBlock) {
-    setSpriteActionStatus("No sprites block", "is-error");
-    return null;
-  }
-  if (findSpritePaletteDefinitionRange(source, name)) {
-    setSpriteActionStatus(`${name} already exists`, "is-error");
-    return null;
-  }
-  const palettesBlock = findVisualAssetBlock(source, spritesBlock, "palettes");
-  const row = `${name} = ${tokens.join(" ")}`;
-  if (palettesBlock) {
-    const rowIndent = spriteSourceChildIndent(palettesBlock.indent);
-    return `${source.slice(0, palettesBlock.bodyEnd).trimEnd()}\n${rowIndent}${row}\n${source.slice(palettesBlock.bodyEnd)}`;
-  }
-  const blockIndent = spriteSourceChildIndent(spritesBlock.indent);
-  const rowIndent = spriteSourceChildIndent(blockIndent);
-  const text = `\n${blockIndent}palettes {\n${rowIndent}${row}\n${blockIndent}}\n`;
-  return `${source.slice(0, spritesBlock.bodyStart)}${text}${source.slice(spritesBlock.bodyStart)}`;
-}
-
-function replaceSpritePaletteDefinition(source, name, tokens) {
-  const range = findSpritePaletteDefinitionRange(source, name);
-  if (!range) {
-    return null;
-  }
-  return `${source.slice(0, range.valueStart)} ${tokens.join(" ")}${source.slice(range.valueEnd)}`;
-}
-
-function findSpritePaletteDefinitionRange(source, name) {
-  const spritesBlock = findSpritesBlock(source);
-  const palettesBlock = spritesBlock ? findVisualAssetBlock(source, spritesBlock, "palettes") : null;
-  return palettesBlock ? findSpriteFlatAssetRowRange(source, palettesBlock, name) : null;
-}
-
 function ensureSpriteShapeDefinition(source, name, rows) {
   const spritesBlock = findSpritesBlock(source);
   if (!spritesBlock) {
@@ -3275,12 +3187,9 @@ function spriteSourceChildIndent(indent = "") {
 function spriteObjectDefinitionText(indent) {
   const normalizedIndent = spriteSourceIndent(indent);
   const rowIndent = spriteSourceChildIndent(normalizedIndent);
-  const paletteInfo = spriteAssetBindInfo(sprite.paletteBind, "palette");
   const shapeInfo = spriteAssetBindInfo(sprite.shapeBind, "shape");
-  const colorRow = paletteInfo.linked && paletteInfo.name
-    ? paletteInfo.name
-    : spritePaletteSourceTokens().join(" ");
-  const solidRow = sprite.solidSource ? spriteSolidDefinitionRow(paletteInfo, shapeInfo) : null;
+  const colorRow = spritePaletteSourceTokens().join(" ");
+  const solidRow = sprite.solidSource ? spriteSolidDefinitionRow(shapeInfo) : null;
   if (solidRow) {
     return [
       `${normalizedIndent}${spriteObjectName()}`,
@@ -3299,15 +3208,12 @@ function spriteObjectDefinitionText(indent) {
   return lines.join("\n");
 }
 
-function spriteSolidDefinitionRow(paletteInfo, shapeInfo) {
+function spriteSolidDefinitionRow(shapeInfo) {
   if (shapeInfo.linked || sprite.palette.length !== 1 || !sprite.cells.length) {
     return null;
   }
   if (!sprite.cells.every((cell) => cell === 0)) {
     return null;
-  }
-  if (paletteInfo.linked && paletteInfo.name) {
-    return `palette ${paletteInfo.name}`;
   }
   return spritePaletteSourceTokens()[0] || null;
 }
@@ -3329,14 +3235,7 @@ function topLevelDepthAt(text, endIndex) {
 }
 
 for (const input of [spriteNameInput, spriteSizeInput, spriteScaleInput]) {
-  input.addEventListener("focus", () => {
-    input.select();
-  });
-  input.addEventListener("pointerup", (event) => {
-    if (document.activeElement === input) {
-      event.preventDefault();
-    }
-  });
+  installSelectAllOnFocus(input);
 }
 spriteSizeInput.addEventListener("change", () => updateSpriteSize(spriteSizeInput.value));
 spriteSizeInput.addEventListener("keydown", (event) => {

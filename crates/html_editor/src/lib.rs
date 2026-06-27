@@ -1,3 +1,4 @@
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::env;
 use std::fs;
 use std::io::{self, Read, Write};
@@ -295,7 +296,12 @@ impl EditorService {
             &request.game_css,
             &request.game_visuals_js,
         )
-        .map_err(AppError::Diagnostics)
+        .map_err(|report| {
+            AppError::Diagnostics(puzzle_lang::resolve_diagnostic_source_locations(
+                report,
+                &request.source,
+            ))
+        })
     }
 
     pub fn compile_preview_request(request: &PreviewRequest) -> Result<String, AppError> {
@@ -307,7 +313,12 @@ impl EditorService {
             &request.game_css,
             &request.game_visuals_js,
         )
-        .map_err(AppError::Diagnostics)
+        .map_err(|report| {
+            AppError::Diagnostics(puzzle_lang::resolve_diagnostic_source_locations(
+                report,
+                &request.source,
+            ))
+        })
     }
 
     pub fn highlight_json(&self, source: &str) -> String {
@@ -385,6 +396,21 @@ pub struct EditorDocument {
     preview_error: String,
     game_css: String,
     game_visuals_js: String,
+    imported_by: Vec<String>,
+    parent_game_path: String,
+}
+
+struct WorkspacePuzzleDocument {
+    path: PathBuf,
+    source: String,
+    has_game_prelude: bool,
+    imports: Vec<PathBuf>,
+}
+
+#[derive(Default)]
+struct WorkspaceImportGraph {
+    imported_by: HashMap<PathBuf, Vec<PathBuf>>,
+    parent_game_by_path: HashMap<PathBuf, PathBuf>,
 }
 
 fn load_game_css(puzzle_path: &Path, workspace_root: &Path) -> Result<String, AppError> {
@@ -607,12 +633,29 @@ fn load_editor_documents(
         (left_key, left.display().to_string()).cmp(&(right_key, right.display().to_string()))
     });
 
+    let puzzle_documents = load_workspace_puzzle_documents(&paths, workspace_root)?;
+    let import_graph = build_workspace_import_graph(&puzzle_documents);
+    let puzzle_sources_by_path = puzzle_documents
+        .into_iter()
+        .map(|document| (document.path, document.source))
+        .collect::<HashMap<_, _>>();
+
     let mut documents = Vec::new();
     for path in paths {
         if puzzle_lang::is_puzzle_source_path(&path) {
-            let source = read_workspace_text_file(&path, workspace_root)?;
-            let game_css = preview_entry_for_document(&path, &source, &parent)
-                .map(|entry_path| load_game_css(&entry_path, workspace_root))
+            let canonical_path = path.canonicalize()?;
+            let source = puzzle_sources_by_path
+                .get(&canonical_path)
+                .cloned()
+                .ok_or_else(|| {
+                    AppError::Config(format!(
+                        "workspace puzzle source was not indexed: {}",
+                        path.display()
+                    ))
+                })?;
+            let parent_game_path = import_graph.parent_game_by_path.get(&canonical_path);
+            let game_css = parent_game_path
+                .map(|entry_path| load_game_css(entry_path, workspace_root))
                 .transpose()?
                 .unwrap_or_default();
             documents.push(EditorDocument {
@@ -625,6 +668,14 @@ fn load_editor_documents(
                 preview_error: String::new(),
                 game_css,
                 game_visuals_js: String::new(),
+                imported_by: import_graph
+                    .imported_by
+                    .get(&canonical_path)
+                    .map(|paths| display_paths(paths))
+                    .unwrap_or_default(),
+                parent_game_path: parent_game_path
+                    .map(|path| path.display().to_string())
+                    .unwrap_or_default(),
             });
         } else if is_text_file(&path) {
             documents.push(EditorDocument {
@@ -637,6 +688,8 @@ fn load_editor_documents(
                 preview_error: String::new(),
                 game_css: String::new(),
                 game_visuals_js: String::new(),
+                imported_by: Vec::new(),
+                parent_game_path: String::new(),
             });
         } else {
             let bytes = read_workspace_bytes(&path, workspace_root)?;
@@ -651,50 +704,145 @@ fn load_editor_documents(
                 preview_error: String::new(),
                 game_css: String::new(),
                 game_visuals_js: String::new(),
+                imported_by: Vec::new(),
+                parent_game_path: String::new(),
             });
         }
     }
     Ok(documents)
 }
 
-fn preview_entry_for_document(path: &Path, source: &str, root: &Path) -> Option<PathBuf> {
-    if puzzle_lang::source_has_game_prelude(source) {
-        return Some(path.to_path_buf());
-    }
-    let mut dir = path.parent()?.to_path_buf();
-    loop {
-        if let Some(entry) = preview_entry_in_directory(&dir, root) {
-            return Some(entry);
+fn load_workspace_puzzle_documents(
+    paths: &[PathBuf],
+    workspace_root: &Path,
+) -> Result<Vec<WorkspacePuzzleDocument>, AppError> {
+    let workspace_root = workspace_root.canonicalize()?;
+    let mut documents = Vec::new();
+    for path in paths {
+        if !puzzle_lang::is_puzzle_source_path(path) {
+            continue;
         }
-        if dir == root || !dir.pop() {
-            return None;
+        let canonical_path = path.canonicalize()?;
+        if !canonical_path.starts_with(&workspace_root) {
+            continue;
         }
+        let source = read_workspace_text_file(&canonical_path, &workspace_root)?;
+        let imports = workspace_import_paths(&source, &canonical_path, &workspace_root);
+        documents.push(WorkspacePuzzleDocument {
+            path: canonical_path,
+            has_game_prelude: puzzle_lang::source_has_game_prelude(&source),
+            source,
+            imports,
+        });
     }
+    documents.sort_by(|left, right| left.path.cmp(&right.path));
+    Ok(documents)
 }
 
-fn preview_entry_in_directory(dir: &Path, root: &Path) -> Option<PathBuf> {
-    let mut candidates = Vec::new();
-    let entries = fs::read_dir(dir).ok()?;
-    for entry in entries.flatten() {
-        let file_type = entry.file_type().ok()?;
-        if !file_type.is_file() {
-            continue;
-        }
-        let path = entry.path();
-        if !puzzle_lang::is_puzzle_source_path(&path) {
-            continue;
-        }
-        let source = read_workspace_text_file(&path, root).ok()?;
-        if puzzle_lang::source_has_game_prelude(&source) {
-            candidates.push(path);
+fn workspace_import_paths(source: &str, path: &Path, workspace_root: &Path) -> Vec<PathBuf> {
+    let base_dir = path.parent().unwrap_or_else(|| Path::new("."));
+    let Ok(imports) = puzzle_lang::game_import_paths(source) else {
+        return Vec::new();
+    };
+    imports
+        .into_iter()
+        .filter_map(|import| canonical_workspace_import_path(base_dir, &import, workspace_root))
+        .collect()
+}
+
+fn canonical_workspace_import_path(
+    base_dir: &Path,
+    import: &Path,
+    workspace_root: &Path,
+) -> Option<PathBuf> {
+    let resolved = if import.is_absolute() {
+        import.to_path_buf()
+    } else {
+        base_dir.join(import)
+    };
+    let canonical = resolved.canonicalize().ok()?;
+    if !canonical.starts_with(workspace_root) || !puzzle_lang::is_puzzle_source_path(&canonical) {
+        return None;
+    }
+    Some(canonical)
+}
+
+fn build_workspace_import_graph(documents: &[WorkspacePuzzleDocument]) -> WorkspaceImportGraph {
+    let mut graph = WorkspaceImportGraph::default();
+    let paths = documents
+        .iter()
+        .map(|document| document.path.clone())
+        .collect::<HashSet<_>>();
+    let document_by_path = documents
+        .iter()
+        .map(|document| (document.path.clone(), document))
+        .collect::<HashMap<_, _>>();
+
+    for document in documents {
+        for import in &document.imports {
+            if paths.contains(import) {
+                graph
+                    .imported_by
+                    .entry(import.clone())
+                    .or_default()
+                    .push(document.path.clone());
+            }
         }
     }
-    candidates.sort_by(|left, right| {
-        preview_entry_rank(left, dir)
-            .cmp(&preview_entry_rank(right, dir))
+    for imported_by in graph.imported_by.values_mut() {
+        sort_parent_game_paths(imported_by);
+        imported_by.dedup();
+    }
+
+    let mut game_entries = documents
+        .iter()
+        .filter(|document| document.has_game_prelude)
+        .map(|document| document.path.clone())
+        .collect::<Vec<_>>();
+    sort_parent_game_paths(&mut game_entries);
+    for game_path in game_entries {
+        graph
+            .parent_game_by_path
+            .entry(game_path.clone())
+            .or_insert_with(|| game_path.clone());
+        let mut seen = HashSet::new();
+        let mut queue = VecDeque::new();
+        seen.insert(game_path.clone());
+        if let Some(game_document) = document_by_path.get(&game_path) {
+            queue.extend(game_document.imports.iter().cloned());
+        }
+        while let Some(import_path) = queue.pop_front() {
+            if !paths.contains(&import_path) || !seen.insert(import_path.clone()) {
+                continue;
+            }
+            graph
+                .parent_game_by_path
+                .entry(import_path.clone())
+                .or_insert_with(|| game_path.clone());
+            if let Some(document) = document_by_path.get(&import_path) {
+                queue.extend(document.imports.iter().cloned());
+            }
+        }
+    }
+
+    graph
+}
+
+fn sort_parent_game_paths(paths: &mut [PathBuf]) {
+    paths.sort_by(|left, right| {
+        let left_dir = left.parent().unwrap_or_else(|| Path::new(""));
+        let right_dir = right.parent().unwrap_or_else(|| Path::new(""));
+        preview_entry_rank(left, left_dir)
+            .cmp(&preview_entry_rank(right, right_dir))
             .then_with(|| left.display().to_string().cmp(&right.display().to_string()))
     });
-    candidates.into_iter().next()
+}
+
+fn display_paths(paths: &[PathBuf]) -> Vec<String> {
+    paths
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect()
 }
 
 fn preview_entry_rank(path: &Path, dir: &Path) -> usize {
@@ -2008,6 +2156,10 @@ fn push_editor_documents_json(out: &mut String, state: &EditorState) {
         push_json_pair(out, "gameCss", &document.game_css);
         out.push(',');
         push_json_pair(out, "gameVisualsJs", &document.game_visuals_js);
+        out.push(',');
+        push_json_string_array(out, "importedBy", &document.imported_by);
+        out.push(',');
+        push_json_pair(out, "parentGamePath", &document.parent_game_path);
         out.push('}');
     }
     out.push(']');
@@ -2044,6 +2196,18 @@ fn push_json_string(out: &mut String, value: &str) {
         }
     }
     out.push('"');
+}
+
+fn push_json_string_array(out: &mut String, key: &str, values: &[String]) {
+    push_json_string(out, key);
+    out.push_str(":[");
+    for (index, value) in values.iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        push_json_string(out, value);
+    }
+    out.push(']');
 }
 
 fn push_diagnostics_json(out: &mut String, diagnostics: &[Diagnostic]) {
@@ -2556,6 +2720,75 @@ step board
     }
 
     #[test]
+    fn workspace_import_graph_tracks_multiple_parent_game_candidates() {
+        let workspace = TestWorkspace::new();
+        let fragment_path =
+            workspace.write("games/multiple_parents/shared/levels.puzzle", "levels {}\n");
+        let game_path = workspace.write(
+            "games/multiple_parents/game.puzzle",
+            format!(
+                "import \"shared/levels.puzzle\"\n\n{}",
+                editor_fixture_source("Game Parent")
+            ),
+        );
+        workspace.write(
+            "games/multiple_parents/main.puzzle",
+            format!(
+                "import \"shared/levels.puzzle\"\n\n{}",
+                editor_fixture_source("Main Parent")
+            ),
+        );
+        workspace.write(
+            "games/multiple_parents/third_parent.puzzle",
+            format!(
+                "import \"shared/levels.puzzle\"\n\n{}",
+                editor_fixture_source("Third Parent")
+            ),
+        );
+        let project_dir = game_path.parent().expect("project dir");
+
+        let service =
+            EditorService::open_game_entry(project_dir).expect("open multi-parent project");
+        let state = service.state();
+        let fragment_doc = document_with_suffix(
+            &state.documents,
+            "games/multiple_parents/shared/levels.puzzle",
+        );
+
+        assert_eq!(
+            fragment_doc.imported_by.len(),
+            3,
+            "all direct parent candidates should be visible to the editor"
+        );
+        assert_eq!(
+            PathBuf::from(&fragment_doc.imported_by[0]),
+            game_path.canonicalize().expect("canonical game path"),
+            "multiple parent candidates should be sorted so the normal game entry wins"
+        );
+        assert_eq!(
+            PathBuf::from(&fragment_doc.parent_game_path),
+            game_path.canonicalize().expect("canonical parent game")
+        );
+        assert_eq!(
+            PathBuf::from(&fragment_path)
+                .canonicalize()
+                .expect("canonical fragment"),
+            PathBuf::from(&fragment_doc.puzzle_path)
+        );
+    }
+
+    #[test]
+    fn editor_workspace_preview_selects_first_parent_game_candidate() {
+        assert!(EDITOR_WORKSPACE_JS.contains("function parentGameCandidatesForDocument(document)"));
+        assert!(EDITOR_WORKSPACE_JS.contains(".sort(comparePuzzleEntryDocuments);"));
+        assert!(
+            EDITOR_WORKSPACE_JS
+                .contains("return parentGameCandidatesForDocument(document)[0] || null;")
+        );
+        assert!(EDITOR_WORKSPACE_JS.contains("Preview uses: ${parentGames[0].puzzlePath"));
+    }
+
+    #[test]
     fn workspace_preview_generation_is_deferred_until_run() {
         let workspace = TestWorkspace::new();
         let game_path = workspace.write(
@@ -2647,6 +2880,72 @@ step board
             "request CSS should flow into the generated preview"
         );
         assert!(!html.contains("Preview Before"));
+    }
+
+    #[test]
+    fn desktop_compile_preview_exports_current_theme() {
+        let workspace = TestWorkspace::new();
+        let themed_source = editor_fixture_source("Themed Preview").replace(
+            "puzzle default {",
+            "theme puzzlescript {\nbackground_color #ffffff\ntext_color #000000\n}\n\npuzzle default {",
+        );
+        let game_path = workspace.write("games/themed_preview/game.puzzle", &themed_source);
+        let service = EditorService::open(&game_path).expect("open themed editor fixture");
+
+        let html = service
+            .compile_preview(&PreviewRequest::new(
+                themed_source,
+                game_path.display().to_string(),
+                service.state().game_css.clone(),
+                service.state().base_game_visuals_js.clone(),
+            ))
+            .expect("compile themed preview");
+
+        assert!(html.contains(r#"<body class="theme-puzzlescript""#));
+        assert!(html.contains("--background:#ffffff;"));
+        assert!(html.contains("--text:#000000;"));
+    }
+
+    #[test]
+    fn compile_preview_accepts_display_object_single_color_sprite() {
+        let workspace = TestWorkspace::new();
+        let source = r##"
+title display_object_single_color_preview
+
+puzzle default {
+layers {
+@display_floor = @Floor
+}
+sprites {
+@Floor
+#eeeeee
+}
+rules {
+
+}
+levels {
+legend {
+. = empty
+}
+level start
+.
+}
+}
+"##;
+        let game_path = workspace.write("games/floor_color/game.puzzle", source);
+        let service = EditorService::open(&game_path).expect("open editor fixture");
+
+        let html = service
+            .compile_preview(&PreviewRequest::new(
+                source,
+                game_path.display().to_string(),
+                service.state().game_css.clone(),
+                service.state().base_game_visuals_js.clone(),
+            ))
+            .expect("compile preview");
+
+        assert!(html.contains("<!doctype html>"));
+        assert!(html.contains("#eeeeee"));
     }
 
     #[test]
@@ -2748,8 +3047,22 @@ level first
             "unknown routine call: unknown_statement_one"
         );
         assert_eq!(
+            diagnostics[0]
+                .primary_span
+                .as_ref()
+                .and_then(|span| span.line),
+            Some(13)
+        );
+        assert_eq!(
             diagnostics[1].message,
             "unknown routine call: unknown_statement_two"
+        );
+        assert_eq!(
+            diagnostics[1]
+                .primary_span
+                .as_ref()
+                .and_then(|span| span.line),
+            Some(14)
         );
     }
 
@@ -2845,6 +3158,74 @@ P
 }
 "#;
         let game_path = workspace.write("games/multi_statement_error/game.puzzle", source);
+        let service = EditorService::open(&game_path).expect("open editor");
+        let error = service
+            .compile_preview(&PreviewRequest::new(
+                source.to_string(),
+                game_path.display().to_string(),
+                String::new(),
+                service.state().base_game_visuals_js.clone(),
+            ))
+            .expect_err("invalid source should fail preview compile");
+
+        let AppError::Diagnostics(report) = error else {
+            panic!("preview compile should preserve language diagnostics");
+        };
+        let messages = report
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| diagnostic.message.as_str())
+            .collect::<Vec<_>>();
+        assert!(
+            messages.contains(
+                &"`action` statements were removed; use explicit input guards and rewrites"
+            ),
+            "{messages:?}"
+        );
+        assert!(
+            messages.contains(&"`do` is obsolete; write the effect statement directly"),
+            "{messages:?}"
+        );
+        assert!(
+            messages.contains(&"unknown statement directive banana"),
+            "{messages:?}"
+        );
+    }
+
+    #[test]
+    fn compile_preview_reports_sibling_statement_block_errors_together() {
+        let workspace = TestWorkspace::new();
+        let source = r#"
+title "Sibling Statement Block Error Probe"
+
+puzzle main {
+layers {
+base = Player
+}
+
+rules {
+once {
+action push
+}
+
+repeat {
+do win
+}
+
+banana split
+}
+
+levels {
+legend {
+. = empty
+P = Player
+}
+level first
+P
+}
+}
+"#;
+        let game_path = workspace.write("games/sibling_statement_block_error/game.puzzle", source);
         let service = EditorService::open(&game_path).expect("open editor");
         let error = service
             .compile_preview(&PreviewRequest::new(
@@ -2989,6 +3370,23 @@ levels3 demo of push3 {
     }
 
     #[test]
+    fn editor_preview_iframe_allows_audio_playback() {
+        let preview_frame = EDITOR_HTML
+            .find(r#"id="previewFrame""#)
+            .expect("editor preview iframe");
+        let preview_frame_tail = &EDITOR_HTML[preview_frame..];
+        assert!(
+            preview_frame_tail.contains(r#"sandbox="allow-scripts""#),
+            "preview iframe should remain script-sandboxed"
+        );
+        assert!(
+            preview_frame_tail.contains(r#"allow="autoplay""#),
+            "preview iframe must delegate autoplay for sfx and music playback in Tauri/WebView"
+        );
+        assert!(EDITOR_JS.contains(r#"nextFrame.setAttribute("allow", "autoplay");"#));
+    }
+
+    #[test]
     fn editor_preview_save_shortcut_is_not_game_input() {
         assert!(EDITOR_JS.contains("const isEditorSaveShortcut = (event) => {"));
         assert!(EDITOR_JS.contains("document.addEventListener(\"keydown\", (event) => {"));
@@ -3001,9 +3399,53 @@ levels3 demo of push3 {
     }
 
     #[test]
+    fn tool_pane_save_shortcut_updates_source_before_file_save() {
+        let tool_pane_hook = EDITOR_WORKSPACE_JS
+            .find("handleToolPaneSaveShortcut(event)")
+            .expect("save shortcut delegates to tool panes");
+        let normal_save = EDITOR_WORKSPACE_JS[tool_pane_hook..]
+            .find("saveCurrentDocument(true)")
+            .expect("document save remains the non-tool-pane path");
+        assert!(normal_save > 0);
+        assert!(EDITOR_WORKSPACE_JS.contains(
+            "if (typeof handleToolPaneSaveShortcut === \"function\" && handleToolPaneSaveShortcut(event)) {\n    event.preventDefault();\n    event.stopImmediatePropagation();\n    return true;\n  }"
+        ));
+        assert!(EDITOR_JS.contains("function handleToolPaneSaveShortcut(event)"));
+        assert!(EDITOR_JS.contains("function currentToolPaneSaveShortcutMode(event)"));
+        assert!(EDITOR_JS.contains("rememberToolPaneSaveShortcutContext(event.target);"));
+        assert!(EDITOR_JS.contains("updateLevelInSource();"));
+        assert!(EDITOR_JS.contains("updateLevel3dInSource();"));
+        assert!(EDITOR_JS.contains("updateSpriteInSource();"));
+        assert!(EDITOR_JS.contains("updateSprite3dInSource();"));
+        assert!(
+            EDITOR_JS.contains(
+                "updateSoundsDefinition(sounds.mode === \"music\" ? \"music\" : \"sfx\");"
+            )
+        );
+        assert!(EDITOR_JS.contains("Level source update unavailable"));
+        assert!(EDITOR_JS.contains("3D level source update unavailable"));
+        assert!(EDITOR_JS.contains("Sprite source update unavailable"));
+        assert!(EDITOR_JS.contains("3D sprite source update unavailable"));
+        assert!(EDITOR_JS.contains("Sound source update unavailable"));
+    }
+
+    #[test]
     fn editor_preview_dirty_status_stays_on_preview_pane() {
         assert!(EDITOR_JS.contains(r#"setPaneStatus("preview", "Preview is stale", "");"#));
         assert!(!EDITOR_JS.contains(r#"setStatus("Preview is stale", "");"#));
+    }
+
+    #[test]
+    fn editor_keeps_last_preview_when_compile_diagnostics_fail() {
+        assert!(EDITOR_JS.contains("function preserveCompiledPreviewAfterCompileError(document)"));
+        assert!(EDITOR_JS.contains("Keeping last successful preview"));
+        assert!(
+            EDITOR_JS
+                .contains(r#"setPaneStatus("preview", "Preview has compile errors", "is-error");"#)
+        );
+        assert!(
+            EDITOR_JS.contains(r#"setStatus("Preview kept with compile errors", "is-error");"#)
+        );
     }
 
     #[test]
@@ -3120,10 +3562,9 @@ levels3 demo of push3 {
         assert!(EDITOR_JS.contains("function levelVisibleCells("));
         assert!(EDITOR_JS.contains("function levelVisibleLayerIndexes("));
         assert!(EDITOR_JS.contains("function sameCellSlotsForVisibleLayers("));
-        assert!(
-            EDITOR_JS
-                .contains("function paintCellSlots(slots, objectId, exportData = previewExport)")
-        );
+        assert!(EDITOR_JS.contains(
+            "function paintCellSlots(slots, objectId, exportData = currentLevelExportData())"
+        ));
         assert!(EDITOR_JS.contains("function syncLevelGridVisibility()"));
         assert!(EDITOR_JS.contains(
             "levelBoard?.classList.remove(\"has-occupied-cell-grid\", \"has-all-cell-grid\");"
@@ -3133,13 +3574,16 @@ levels3 demo of push3 {
                 .contains("levelBoard?.classList.toggle(\"has-all-cell-grid\", levelGridVisible);")
         );
         assert!(EDITOR_JS.contains(
-            "levelRenderer.render(levelScene(visibleCells));\n    syncLevelGridVisibility();"
+            "levelRenderer.render(levelScene(visibleCells, exportData));\n    syncLevelGridVisibility();"
         ));
         assert!(
             EDITOR_JS.contains("levelGridButton?.addEventListener(\"click\", toggleLevelGrid);")
         );
         assert!(EDITOR_JS.contains("function compiledPreviewGameVisualsJs(html)"));
         assert!(EDITOR_JS.contains("function previewGameVisualsJsForCompiledHtml(html, document)"));
+        assert!(!EDITOR_JS.contains("function renderLevelEditorFromSourceOnly(document, source)"));
+        assert!(!EDITOR_JS.contains("function levelEditorSourceExportData(source, entry)"));
+        assert!(!EDITOR_JS.contains("function sourceGameVisualsJs(source)"));
         assert!(
             EDITOR_JS
                 .contains("applyGameVisuals(previewGameVisualsJsForCompiledHtml(html, document));")
@@ -3245,10 +3689,13 @@ levels3 demo of push3 {
 
     #[test]
     fn level_editor_loads_cells_from_source_target() {
-        assert!(EDITOR_JS.contains("function levelReferenceSource(exportData = previewExport)"));
         assert!(
-            EDITOR_JS.contains("level.palette = levelPaletteFromExport(levelReferenceSource());")
+            EDITOR_JS
+                .contains("function levelReferenceSource(exportData = currentLevelExportData())")
         );
+        assert!(EDITOR_JS.contains(
+            "level.palette = levelPaletteFromExport(levelReferenceSource(exportData), exportData);"
+        ));
         assert!(EDITOR_JS.contains(
             "function previewLevelIndexForSourceEntry(entry, exportData = previewExport)"
         ));
@@ -3257,6 +3704,24 @@ levels3 demo of push3 {
         assert!(
             EDITOR_JS.contains("function loadLevelFromSourceEntry(source, entry, options = {})")
         );
+        assert!(EDITOR_JS.contains("const referenceSource = levelReferenceSource(exportData);"));
+        assert!(EDITOR_JS.contains(
+            "sourceLevelStateFromEntry(source, entry, exportData, { ...options, referenceSource })"
+        ));
+        assert!(
+            EDITOR_JS.contains("level.palette = levelPaletteFromExport(referenceSource, exportData);")
+        );
+        assert!(EDITOR_JS.contains("...sourceCharEntries(referenceSource, exportData),"));
+        assert!(
+            !EDITOR_JS.contains("level.palette = levelPaletteFromExport(source, exportData);")
+        );
+        assert!(EDITOR_JS.contains("let previewDirty = false;"));
+        assert!(EDITOR_JS.contains("previewDirty = true;"));
+        assert!(EDITOR_JS.contains("previewDirty = false;"));
+        assert!(EDITOR_JS.contains("function levelEditorCurrentExportData()"));
+        assert!(EDITOR_JS.contains("async function loadLevelSourceEntryAfterPreviewCompile("));
+        assert!(EDITOR_JS.contains("function loadLevelSourceEntryWithExportData("));
+        assert!(EDITOR_JS.contains("function reportLevelSourceLoadFailure("));
         assert!(EDITOR_JS.contains("function currentFocused2dLevelEntry("));
         assert!(EDITOR_JS.contains("function focusedLevelEntryForPaneMode("));
         assert!(EDITOR_JS.contains("function loadLevelPaneEntryForMode("));
@@ -3270,15 +3735,22 @@ levels3 demo of push3 {
             EDITOR_JS
                 .contains("const sourceEntry = sourceEditableEntryFromTarget(source, target, {")
         );
-        assert!(EDITOR_JS.contains("function sourceLevelStateFromEntry(source, entry, exportData = previewExport, options = {})"));
+        assert!(EDITOR_JS.contains("function sourceLevelStateFromEntry(source, entry, exportData = currentLevelExportData(), options = {})"));
+        assert!(
+            !EDITOR_JS
+                .contains("const sourceExportData = levelEditorSourceExportData(source, entry);")
+        );
         assert!(EDITOR_JS.contains("function sourceLevelRowsAndLocalLegends(source, entry)"));
         assert!(EDITOR_JS.contains("function sourceLevelEntryHasHeader(tokens)"));
         assert!(EDITOR_JS.contains("sourceLevelRowGroups(parsed.rows)"));
         assert!(EDITOR_JS.contains(
+            "if (!loadLevelFromSourceEntry(source, entry, { ...options, exportData, levelIndex, levelName }))"
+        ));
+        assert!(!EDITOR_JS.contains(
             "if (!loadLevelFromSourceEntry(source, sourceEntry, { levelIndex, levelName }))"
         ));
         assert!(EDITOR_JS.contains(
-            "function levelSourceData(source = levelReferenceSource(previewExport || extractPreviewExport(latestHtml))"
+            "function levelSourceData(source = levelReferenceSource(currentLevelExportData()), exportData = currentLevelExportData())"
         ));
     }
 
@@ -3373,10 +3845,15 @@ levels3 demo of push3 {
             r##"const sourceLineNumbers = document.querySelector("#sourceLineNumbers");"##
         ));
         assert!(EDITOR_CSS.contains(".source-line-numbers"));
-        assert!(
-            EDITOR_SOURCE_JS
-                .contains(r#"const lines = source.length ? source.split("\n") : [""];"#)
-        );
+        assert!(EDITOR_SOURCE_JS.contains(
+            r#"const visibleLines = visibleSource.length ? visibleSource.split("\n") : [""];"#
+        ));
+        assert!(EDITOR_SOURCE_JS.contains("sourceFoldableBlocks(source)"));
+        assert!(EDITOR_SOURCE_JS.contains("sourceFoldMarkerHighlightRuns(runs, range)"));
+        assert!(EDITOR_SOURCE_JS.contains("range.closeOffset, range.closeOffset + 1"));
+        assert!(EDITOR_SOURCE_JS.contains("function sourceFoldStateForSource("));
+        assert!(EDITOR_WORKSPACE_JS.contains("sourceFoldedBlockKeys"));
+        assert!(EDITOR_WORKSPACE_JS.contains("restoreSourceFoldState(document.sourceFoldedBlockKeys)"));
         assert!(EDITOR_JS.contains("renderSourceLineNumbers();"));
     }
 
@@ -3477,7 +3954,15 @@ levels3 demo of push3 {
         assert!(EDITOR_SOURCE_JS.contains("function sourceHighlightStyleAtOffset(runs, offset)"));
         assert!(EDITOR_SOURCE_JS.contains("function sourcePredictedBeforeInputValue(event)"));
         assert!(EDITOR_SOURCE_JS.contains("function handleSourceBeforeInputTextInsert(event)"));
-        assert!(EDITOR_SOURCE_JS.contains("sourceEditor.setRangeText(\n    event.key,"));
+        assert!(EDITOR_SOURCE_JS.contains("function sourcePrintableKeydownEdit(event)"));
+        assert!(EDITOR_SOURCE_JS.contains("if (event.key !== \"\\\"\")"));
+        assert!(EDITOR_SOURCE_JS.contains("const replacement = `\"${selection}\"`;"));
+        assert!(EDITOR_SOURCE_JS.contains("sourceEditor.setRangeText(\n    edit.replacement,"));
+        assert!(
+            EDITOR_SOURCE_JS.contains(
+                "sourceEditor.setSelectionRange(edit.selectionStart, edit.selectionEnd);"
+            )
+        );
         assert!(EDITOR_SOURCE_JS.contains("sourceEditorContentChanged();\n  scheduleSourceCompletion();\n  syncPreviewModeFromSourceCursor();"));
         assert!(
             EDITOR_SOURCE_JS.contains("const predicted = sourcePredictedBeforeInputValue(event);")
@@ -3735,7 +4220,12 @@ levels3 demo of push3 {
         let click = &EDITOR_SPRITE_JS[click_start..click_end];
 
         assert!(click.contains("allowInactiveMode: true,"));
-        assert!(click.contains("position: clickOffset ?? sourceEditor.selectionStart,"));
+        assert!(click.contains("position: clickOffset ?? ("));
+        assert!(
+            click.contains(
+                "sourceViewOffsetToDocumentOffset(sourceEditor.selectionStart, \"start\")"
+            )
+        );
         assert!(
             EDITOR_SPRITE_JS
                 .contains("sourceEditor.addEventListener(\"click\", loadSpriteFromSourceClick);")
@@ -3934,7 +4424,7 @@ levels3 demo of push3 {
         );
         assert!(
             EDITOR_SOURCE_JS.contains(
-                "return sourceCursorHasCompletionPrefix(source, cursor)\n    || sourceCursorAfterSelectorTagSeparator(source, cursor);"
+                "return sourceCursorHasCompletionPrefix(source, cursor)\n    || sourceCursorAfterSelectorTagSeparator(source, cursor)\n    || Boolean(sourceImportPathCompletionContext(source, cursor));"
             )
         );
         assert!(!EDITOR_SOURCE_JS.contains("function sourceCursorAtBareLineTail"));
@@ -3952,13 +4442,46 @@ levels3 demo of push3 {
         );
         assert!(
             EDITOR_SOURCE_JS.contains(
-                "return sourceCursorHasCompletionPrefix(source, cursor)\n    || sourceCursorAfterSelectorTagSeparator(source, cursor);"
+                "return sourceCursorHasCompletionPrefix(source, cursor)\n    || sourceCursorAfterSelectorTagSeparator(source, cursor)\n    || Boolean(sourceImportPathCompletionContext(source, cursor));"
             )
         );
         assert!(
             EDITOR_SOURCE_JS
                 .contains("/(?:^|[^\\w@.-])[@A-Za-z_][\\w@.-]*(?::[@A-Za-z_][\\w@.-]*)*:$/.test")
         );
+    }
+
+    #[test]
+    fn source_completion_suggests_import_paths_from_workspace_documents() {
+        assert!(EDITOR_SOURCE_JS.contains(
+            "const list = suggestSourceCompletionsFromEditorContext(source, cursor, document)\n      || await suggestSourceCompletionsWithWasm(source, cursor);"
+        ));
+        assert!(
+            EDITOR_SOURCE_JS.contains("function sourceImportPathCompletionContext(source, cursor)")
+        );
+        assert!(
+            EDITOR_SOURCE_JS
+                .contains("function sourceImportPathCompletionItems(context, document)")
+        );
+        assert!(EDITOR_SOURCE_JS.contains(
+            "if (!candidate || !isPuzzleDocument(candidate) || !isTextDocument(candidate))"
+        ));
+        assert!(EDITOR_SOURCE_JS.contains("candidatePath === currentDocumentPath"));
+        assert!(EDITOR_SOURCE_JS.contains(
+            "if (preferredRoot && normalizePath(candidate.workspaceRoot || \"\") !== preferredRoot)"
+        ));
+        assert!(
+            EDITOR_SOURCE_JS
+                .contains("const relativePath = sourceRelativeImportPath(document, candidate);")
+        );
+        assert!(EDITOR_SOURCE_JS.contains(
+            "insertText: context.needsClosingQuote ? `${relativePath}\"` : relativePath,"
+        ));
+        assert!(EDITOR_SOURCE_JS.contains("needsClosingQuote: closeQuoteColumn < 0"));
+        assert!(EDITOR_SOURCE_JS.contains("detail: \"path\""));
+        assert!(EDITOR_SOURCE_JS.contains(
+            "if (sourceImportPathCompletionContext(source, cursor)) {\n    return \"completion\";\n  }"
+        ));
     }
 
     #[test]
@@ -4007,6 +4530,28 @@ levels3 demo of push3 {
     }
 
     #[test]
+    fn source_editor_folded_selection_uses_view_offsets_for_caret_motion() {
+        assert!(EDITOR_SOURCE_JS.contains(
+            "function sourceViewOffsetFromVisualPoint(clientX, clientY)"
+        ));
+        assert!(EDITOR_SOURCE_JS.contains(
+            "function sourceOffsetFromVisualPointer(event, source = sourceEditorDocumentValue())"
+        ));
+        assert!(EDITOR_SOURCE_JS.contains(
+            "function sourceOffsetFromVisualPoint(clientX, clientY, source = sourceEditorDocumentValue())"
+        ));
+        assert!(EDITOR_SOURCE_JS.contains(
+            "const documentOffset = sourceFoldsActive()\n    ? sourceViewOffsetToDocumentOffset(offset, \"start\")\n    : offset;"
+        ));
+        assert!(EDITOR_SOURCE_JS.contains(
+            "const next = sourceViewOffsetFromVisualPoint(targetClientX, targetClientY);"
+        ));
+        assert!(EDITOR_SOURCE_JS.contains(
+            "const visualOffset = sourceViewOffsetFromVisualPoint(clientX, clientY);"
+        ));
+    }
+
+    #[test]
     fn source_pointer_sync_uses_visual_click_offset() {
         assert!(EDITOR_JS.contains("function syncPreviewModeFromSourcePointer(event)"));
         assert!(
@@ -4026,6 +4571,58 @@ levels3 demo of push3 {
                 "#sourceEditor::selection {\n  background: var(--source-selection-bg);\n}"
             )
         );
+    }
+
+    #[test]
+    fn source_editor_keeps_native_caret_visible() {
+        let start = EDITOR_CSS
+            .find("#sourceEditor {")
+            .expect("source editor CSS block");
+        let end = EDITOR_CSS[start..]
+            .find("\n}")
+            .map(|offset| start + offset)
+            .expect("source editor CSS block end");
+        let block = &EDITOR_CSS[start..end];
+        assert!(block.contains("color: transparent;"));
+        assert!(block.contains("caret-color: var(--code-ink);"));
+        assert!(!block.contains("-webkit-text-fill-color: transparent;"));
+    }
+
+    #[test]
+    fn level_and_solver_boards_use_preview_theme_colors() {
+        for selector in [".level-board-wrap {", ".solver-board-wrap {"] {
+            let start = EDITOR_CSS.find(selector).expect("board wrap CSS block");
+            let end = EDITOR_CSS[start..]
+                .find("\n}")
+                .map(|offset| start + offset)
+                .expect("board wrap CSS block end");
+            let block = &EDITOR_CSS[start..end];
+            assert!(block.contains("border: 1px solid var(--preview-game-line);"));
+            assert!(block.contains("background: var(--preview-game-background);"));
+            assert!(block.contains("color: var(--preview-game-ink);"));
+            assert!(!block.contains("background: var(--bg);"));
+        }
+    }
+
+    #[test]
+    fn editor_preview_theme_resolver_accepts_canonical_theme_variables() {
+        assert!(EDITOR_JS.contains("if (name === \"bg\" || name === \"background\") {"));
+        assert!(EDITOR_JS.contains("} else if (name === \"ink\" || name === \"text\") {"));
+        assert!(
+            EDITOR_JS.contains("} else if (name === \"accent\") {\n      resolved.line = value;")
+        );
+    }
+
+    #[test]
+    fn editor_workspace_includes_named_theme_css_in_effective_game_css() {
+        assert!(EDITOR_WORKSPACE_JS.contains(
+            "for (const themeDocument of effectiveThemeCssDocuments(document, effectiveThemeName(document)))"
+        ));
+        assert!(
+            EDITOR_WORKSPACE_JS
+                .contains("parts.push(rewriteCssAssetUrls(\n      themeDocument.source || \"\",")
+        );
+        assert!(EDITOR_WORKSPACE_JS.contains("activeTheme = trimmed.endsWith(\"{\");"));
     }
 
     #[test]
@@ -4050,6 +4647,17 @@ levels3 demo of push3 {
             "const key = assets.has(name) ? name : spriteTableAssetKey(name, assets, selectorName);"
         ));
         assert!(EDITOR_SPRITE_JS.contains("return \"\";\n}"));
+    }
+
+    #[test]
+    fn sprite_color_default_names_use_object_base_without_tag_or_color_suffix() {
+        assert!(EDITOR_SPRITE_JS.contains("if (kind === \"color\") {"));
+        assert!(
+            EDITOR_SPRITE_JS
+                .contains("const objectName = String(spriteObjectName()).split(\":\")[0];")
+        );
+        assert!(EDITOR_SPRITE_JS.contains("return `${base}_${Number(index) + 1}`;"));
+        assert!(EDITOR_SPRITE_JS.contains("return `${base}_${kind}_${Number(index) + 1}`;"));
     }
 
     #[test]
@@ -4501,9 +5109,11 @@ levels3 demo of push3 {
         assert!(html.contains("gameVisualsJs"));
         assert!(html.contains(r#"<link rel="icon" type="image/svg+xml" href="favicon.svg">"#));
         assert!(html.contains(
-            r#"<link rel="stylesheet" href="editor.css?v=source-line-numbers-tab-unsaved">"#
+            r#"<link rel="stylesheet" href="editor.css?v=source-folding-tabs-close-left">"#
         ));
-        assert!(html.contains(r#"<script src="editor.js?v=parallel-diagnostics"></script>"#));
+        assert!(
+            html.contains(r#"<script src="editor.js?v=level-editor-source-preview"></script>"#)
+        );
         assert!(html.contains(r#"<script src="editor_dom.js"></script>"#));
         assert!(!html.contains("<script>\nwindow.PuzzleAssets ="));
         assert!(!html.contains("PuzzleEditorThemeImports"));
@@ -4574,6 +5184,25 @@ levels3 demo of push3 {
     }
 
     #[test]
+    fn sound_source_sync_scans_nested_sounds_blocks() {
+        assert!(EDITOR_SOUNDS_JS.contains("function findSoundsBlocks(lines)"));
+        assert!(
+            EDITOR_SOUNDS_JS
+                .contains("const soundsBlock = findSoundsBlockAtPosition(lines, position);")
+        );
+        assert!(EDITOR_SOUNDS_JS.contains("for (const soundsBlock of findSoundsBlocks(lines))"));
+        assert!(!EDITOR_SOUNDS_JS.contains("function findTopLevelSoundsBlock"));
+    }
+
+    #[test]
+    fn sound_source_edits_generate_space_indentation() {
+        assert!(EDITOR_SOUNDS_JS.contains("const soundSourceIndentUnit = \"  \";"));
+        assert!(EDITOR_SOUNDS_JS.contains("function soundDefinitionIndent("));
+        assert!(!EDITOR_SOUNDS_JS.contains("`sounds {\\n\\t${line}\\n}\\n`"));
+        assert!(!EDITOR_SOUNDS_JS.contains("`${soundsBlock.indent}\\t`"));
+    }
+
+    #[test]
     fn sprite3d_preview_uses_runtime_visual_ordering_contract() {
         assert!(PUZZLE3_VISUAL_CORE_JS.contains("function comparePrimitiveOrder(a, b)"));
         assert!(PUZZLE3_VISUAL_CORE_JS.contains("function faceGridOrder(corners, view)"));
@@ -4623,7 +5252,7 @@ levels3 demo of push3 {
             .find(r#"<script src="editor_level3d.js"></script>"#)
             .expect("editor loads 3D level editor");
         let editor = EDITOR_HTML
-            .find(r#"<script src="editor.js?v=parallel-diagnostics"></script>"#)
+            .find(r#"<script src="editor.js?v=level-editor-source-preview"></script>"#)
             .expect("editor loads main editor script");
         let sprite3d = EDITOR_HTML
             .find(r#"<script src="editor_sprite3d.js"#)
@@ -4635,27 +5264,29 @@ levels3 demo of push3 {
     }
 
     #[test]
-    fn tauri_static_editor_busts_cache_for_editor_error_line_number_and_tab_unsaved_assets() {
+    fn tauri_editor_busts_cache_for_theme_css_and_tab_unsaved_assets() {
         assert!(
             EDITOR_HTML
                 .contains(r#"<script src="editor_boot.js?v=parallel-diagnostics"></script>"#)
         );
         assert!(EDITOR_HTML.contains(
-            r#"<link rel="stylesheet" href="editor.css?v=source-line-numbers-tab-unsaved">"#
+            r#"<link rel="stylesheet" href="editor.css?v=source-folding-tabs-close-left">"#
         ));
+        assert!(EDITOR_HTML.contains(
+            r#"<script src="editor_source.js?v=source-folding-state"></script>"#
+        ));
+        assert!(
+            EDITOR_HTML.contains(
+                r#"<script src="editor_workspace.js?v=source-folding-state"></script>"#
+            )
+        );
         assert!(
             EDITOR_HTML
-                .contains(r#"<script src="editor_source.js?v=source-line-numbers"></script>"#)
-        );
-        assert!(EDITOR_HTML.contains(
-            r#"<script src="editor_workspace.js?v=desktop-new-puzzle-tab-unsaved-sync"></script>"#
-        ));
-        assert!(
-            EDITOR_HTML.contains(r#"<script src="editor.js?v=parallel-diagnostics"></script>"#)
+                .contains(r#"<script src="editor.js?v=level-editor-source-preview"></script>"#)
         );
         assert!(EDITOR_WORKSPACE_JS.contains("document-tab-unsaved-dot"));
         assert!(EDITOR_WORKSPACE_JS.contains("updateDocumentTabUnsavedStates"));
-        assert!(EDITOR_WORKSPACE_JS.contains("setSourceEditorValue(sourceText, {\n    preserveUndoOnSameValue: document.id === previousActiveFileId,\n  });\n  updateDocumentTabUnsavedStates();"));
+        assert!(EDITOR_WORKSPACE_JS.contains("setSourceEditorValue(sourceText, {\n    preserveUndoOnSameValue: document.id === previousActiveFileId,\n  });\n  if (isTextDocument(document)) {\n    restoreSourceFoldState(document.sourceFoldedBlockKeys);\n  }\n  updateDocumentTabUnsavedStates();"));
         assert!(EDITOR_CSS.contains(".document-tab.is-unsaved .document-tab-unsaved-dot"));
     }
 
@@ -4788,7 +5419,7 @@ levels3 demo of push3 {
             .find("window.PuzzleEditorSeed = JSON.parse")
             .expect("seeded editor should define seed before workspace scripts load");
         let embedded_documents_index = html
-            .find(r#"<script src="editor_workspace.js?v=desktop-new-puzzle-tab-unsaved-sync"></script>"#)
+            .find(r#"<script src="editor_workspace.js?v=source-folding-state"></script>"#)
             .expect("seeded editor should load workspace code after seed data");
 
         assert!(

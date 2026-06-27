@@ -1,0 +1,256 @@
+title "Locked Room"
+
+theme puzzlescript
+
+default_wait_time = 100ms
+
+theme clean {
+accent_color #2f7d62
+background_color #f7f5ef
+text_color #1d2522
+}
+
+sounds {
+sfx push seed=push type=hit
+sfx bump seed=bump type=hit
+sfx clear seed=clear type=jump
+sfx locked seed=locked type=lock
+sfx fall seed=fall type=hit
+music locked_room seed=locked_room bars=16 height=0.62 bpm=100 volume=0.50
+}
+
+puzzle sokoban {
+
+tags {
+state = movable stack
+num = 0...5
+}
+
+sounds {
+// move Box:* -> sfx push
+// cantmove Box:* -> sfx bump
+}
+
+scratch {
+checked
+}
+
+layers {
+@Floor
+@Check
+room = Room Open Locked
+Crack Hole
+Goal:num
+solid = Player Box:state Pull:state Wall Gate:num
+@Count:num
+OnPlayer CanEnter
+Debug
+}
+
+groups {
+separate = Box:* Pull:* Wall Gate:*
+fixed = Box:stack Pull:stack Wall Gate:*
+cantgo = Box:stack Pull:* Wall Gate:*
+cantpush = Box:* Pull:* Wall Gate:*
+accessible = OnPlayer CanEnter
+heavy = Box:* Pull:* Player
+}
+
+var locked_room_count = 0
+var previous_count = 0
+
+routine @fill_floor {
+[ no @Floor ] -> [ @Floor ]
+}
+
+routine check_OnPlayer {
+[ OnPlayer ] -> [  ]
+once [ Player ] -> [ Player OnPlayer ]
+repeat {
+[ accessible | no accessible no separate ] -> [ accessible | accessible ] 
+// [ accessible | Box:movable | no cantpush ] -> [ accessible | Box:movable CanEnter |  ]
+}
+}
+
+// routine check_stacked {
+// [ fixed |  ;  Box:movable | fixed ] -> [ fixed |  ;  Box:stack | fixed ]
+// [ Box:movable | Box:movable ; cantpush | cantpush ] -> [ Box:stack | Box:stack ; cantpush | cantpush ]
+// }
+
+// routine check_stacked {
+// [ *:stack ] -> [ *:movable ]
+// repeat {
+// [ OnPlayer | Box:movable{no checked} | no fixed ] -> [ OnPlayer | Box:movable{checked} |  ]
+
+// [ no fixed | OnPlayer | Pull:movable{no checked} ] -> [  | OnPlayer | Pull:movable{checked} ]
+// [ no cantpush | Box:movable | OnPlayer | Pull:movable{no checked} ] -> [ | = | = | Pull:movable{checked} ]
+
+// [ *:movable{no checked} ] -> [ *:stack ]
+// [ *:movable{checked} ] -> [ *:movable ]
+// }
+// }
+
+routine check_stacked {
+[ *:stack ] -> [ *:movable ]
+[ OnPlayer | Box:movable{no checked} | no cantpush ] -> [ OnPlayer | Box:movable{checked} |  ]
+
+[ no cantgo | OnPlayer | Pull:movable{no checked} ] -> [  | OnPlayer | Pull:movable{checked} ]
+[ no cantpush | Box:movable | OnPlayer | Pull:movable{no checked} ] -> [ | = | = | Pull:movable{checked} ]
+
+[ *:movable{no checked} ] -> [ *:stack ]
+[ *:movable{checked} ] -> [ *:movable ]
+}
+
+routine compute_locked_rooms {
+[ no Locked ] -> [ @Check ]
+locked_room_count = 0
+[ room ] -> [  ]
+once_all [ no separate ] -> [ Room ]
+[ *:movable | Room ] -> [ *:movable | Open ]
+[ Open | Room ] -> [ Open | Open ] 
+repeat {
+	once [ Room ] -> [ Locked ] locked_room_count += 1
+	[ Locked | Room ] -> [ Locked | Locked ]
+}
+[ Locked @Check ] -> [ = ] sfx locked
+[ @Check ] -> [  ]
+[ @Count:* ] -> [ @Count:locked_room_count ]
+}
+
+routine move {
+[ > solid | no solid ] -> [  | solid ]
+[ > solid ] -> [ solid ]
+}
+
+routine open_gate {
+for n in 1...5 {
+	if some([ Gate:n{checked} ]) {
+		if locked_room_count >= n {
+			[ @Count:* ] -> [ @Count:locked_room_count ]
+			[ Gate:n{checked} ] -> [  ]
+		} else {
+			[ Gate:n{checked} ] -> [ Gate:n ]
+		}
+	}
+}
+}
+
+routine check_win {
+for n in 1...5 {
+	if some([Goal:n{checked}]) {
+		if locked_room_count >= n -> win
+	}
+}
+[ Goal:*{checked} ] -> [ Goal:* ]
+}
+
+routine check_crack {
+[ Crack heavy ] -> [ Crack{checked} heavy ]
+}
+
+routine change_crack {
+[ Crack{checked} no heavy ] -> [ Hole ]
+}
+
+routine fall {
+[ Hole heavy ] -> [ Hole ] sfx fall
+}
+
+on_level_start {
+@fill_floor
+check_OnPlayer
+check_stacked
+locked_room_count = 0
+[ Player ] -> [ Player @Count:0 ]
+compute_locked_rooms
+}
+
+rules {
+input [ Player ] -> [ > Player ]
+
+[ > Player | Gate:* ] -> [ > Player | Gate:*{checked} ] open_gate
+
+[ > Player | Box:movable ] -> [ > Player | > Box:movable ]
+[ < Player | Pull:movable ] -> [ < Player | < Pull:movable ]
+
+move
+[ @Count:* | Player ] -> [  | @Count:* Player ]
+check_OnPlayer
+check_stacked
+compute_locked_rooms
+
+[ Player Goal:* ] -> [ Player Goal:*{checked} ] check_win
+}
+
+on_level_clear {
+sfx clear
+wait 0.35s
+next_level
+}
+
+on_last_level_clear {
+sfx clear
+wait 0.35s
+message final_message
+stop_music locked_room
+goto level_select
+}
+}
+
+import "locked_levels.puzzle"
+import "locked_sprite.puzzle"
+
+
+scene title {
+	title
+	subtitle
+	choice "Continue" -> goto playing
+	choice "New Game" -> {
+			clear_game_progress
+			goto playing
+		}
+	choice "Level Select" -> goto level_select
+	on_scene_start {
+		stop_music locked_room
+	}
+}
+
+scene playing(level) {
+	state {
+		sokoban
+	}
+	layout {
+		row {
+			title
+			subtitle level.label
+		}
+		sokoban
+	}
+	keys {
+		q Escape -> {
+		stop_music locked_room
+		goto level_select
+		}
+	}
+	on_scene_start {
+		play_music locked_room
+	}
+	rules {
+		step board
+	}
+}
+
+
+scene level_select {
+			layout {
+				text "Select a level"
+				level_menu
+				button "Back" -> goto title
+			}
+		keys {
+			q Escape -> goto title
+		}
+	on_scene_start {
+		stop_music locked_room
+	}
+}

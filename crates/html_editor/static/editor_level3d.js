@@ -2881,7 +2881,7 @@ function loadLevel3dFromSourcePosition(position, options = {}) {
   if (!isPuzzleDocument(activeDocument()) || !isTextDocument(activeDocument())) {
     return null;
   }
-  const source = sourceEditor.value || "";
+  const source = sourceEditorDocumentValue();
   const entry = findLevel3dDefinitionAtPosition(source, position);
   if (!entry) {
     return null;
@@ -2893,7 +2893,7 @@ function loadLevel3dSourceTarget(target, options = {}) {
   if (!isPuzzleDocument(activeDocument()) || !isTextDocument(activeDocument())) {
     return null;
   }
-  const source = sourceEditor.value || "";
+  const source = sourceEditorDocumentValue();
   const entry = Number.isInteger(target?.bodyStart) && Number.isInteger(target?.bodyEnd)
     ? sourceEditableEntryFromTarget(source, target, {
       find: findLevel3dDefinitionAtPosition,

@@ -697,10 +697,13 @@ impl GameSession {
         game: &LoadedGame,
         effects: Vec<QueuedRuleEffect>,
     ) -> Result<(), TransitionError> {
-        let condition_effect = self.condition_transition_effect(game);
-        let force_clear = effects
+        let win_targets = effects
             .iter()
-            .any(|effect| matches!(effect.effect, RuleEffect::Win));
+            .filter(|effect| matches!(effect.effect, RuleEffect::Win))
+            .map(|effect| effect.target.clone())
+            .collect::<Vec<_>>();
+        let condition_effect = self.condition_transition_effect(game, &win_targets);
+        let force_clear = !win_targets.is_empty();
         let mut effects = effects;
         effects.extend(self.apply_model_level_clear(game, force_clear)?);
         self.resolve_turn_effects(game, effects, condition_effect)
@@ -1132,7 +1135,11 @@ impl GameSession {
         Ok(())
     }
 
-    fn condition_transition_effect(&self, game: &LoadedGame) -> Option<SceneEffect> {
+    fn condition_transition_effect(
+        &self,
+        game: &LoadedGame,
+        forced_win_targets: &[Option<String>],
+    ) -> Option<SceneEffect> {
         let Some(screen) = game
             .scenes
             .iter()
@@ -1144,7 +1151,7 @@ impl GameSession {
             let SceneTransitionTrigger::Condition(condition) = &transition.trigger else {
                 return None;
             };
-            self.is_screen_condition_true(game, condition)
+            self.is_screen_condition_true_with_forced_win(game, condition, forced_win_targets)
                 .then(|| transition.effect.clone())
         })
     }
@@ -1381,12 +1388,30 @@ impl GameSession {
     }
 
     fn is_screen_condition_true(&self, game: &LoadedGame, condition: &str) -> bool {
-        condition
-            .split(" and ")
-            .all(|part| self.is_screen_condition_atom_true(game, part.trim()))
+        self.is_screen_condition_true_with_forced_win(game, condition, &[])
     }
 
-    fn is_screen_condition_atom_true(&self, game: &LoadedGame, condition: &str) -> bool {
+    fn is_screen_condition_true_with_forced_win(
+        &self,
+        game: &LoadedGame,
+        condition: &str,
+        forced_win_targets: &[Option<String>],
+    ) -> bool {
+        condition.split(" and ").all(|part| {
+            self.is_screen_condition_atom_true_with_forced_win(
+                game,
+                part.trim(),
+                forced_win_targets,
+            )
+        })
+    }
+
+    fn is_screen_condition_atom_true_with_forced_win(
+        &self,
+        game: &LoadedGame,
+        condition: &str,
+        forced_win_targets: &[Option<String>],
+    ) -> bool {
         if let Some((left, right)) = condition.split_once(" == ") {
             return self
                 .screen_condition_value(game, left.trim())
@@ -1402,6 +1427,9 @@ impl GameSession {
         if let Some(value) = self.level_path_value(game, condition) {
             return value == "true";
         }
+        if self.forced_win_condition_atom_true(game, condition, forced_win_targets) {
+            return true;
+        }
         let scoped = self.condition_state_and_name(game, condition);
         let Some((state, condition_name)) = scoped.or_else(|| {
             self.active_level_index
@@ -1412,6 +1440,34 @@ impl GameSession {
         };
         game.is_condition_true(condition_name, state)
             || game.is_global_truthy(condition_name, state)
+    }
+
+    fn forced_win_condition_atom_true(
+        &self,
+        game: &LoadedGame,
+        condition: &str,
+        forced_win_targets: &[Option<String>],
+    ) -> bool {
+        if forced_win_targets.is_empty() || condition_name(condition) != "win_conditions" {
+            return false;
+        }
+        let parts = condition.split('.').collect::<Vec<_>>();
+        let candidate = match parts.as_slice() {
+            [_] => return forced_win_targets.iter().any(Option::is_none),
+            [puzzle, _] => self.resolve_puzzle_target(game, puzzle),
+            [scene, puzzle, _] => Some(((*scene).to_string(), (*puzzle).to_string())),
+            _ => None,
+        };
+        let Some(candidate) = candidate else {
+            return false;
+        };
+        forced_win_targets.iter().any(|target| {
+            let Some(target) = target else {
+                return false;
+            };
+            self.resolve_puzzle_target(game, target)
+                .is_some_and(|resolved| resolved == candidate)
+        })
     }
 
     fn screen_condition_value(&self, game: &LoadedGame, value: &str) -> Option<String> {
@@ -1645,6 +1701,9 @@ impl GameSession {
             SceneEffect::Copy { source, target } => {
                 self.copy_puzzle_state(game, source, target);
                 Ok(())
+            }
+            SceneEffect::SetVariable { name, value } => {
+                self.set_scene_variable(game, name, value, bindings)
             }
             SceneEffect::ClearUndoHistory => {
                 self.clear_undo_history();
@@ -2151,6 +2210,38 @@ impl GameSession {
         self.scene_state()
             .and_then(|state| state.values.get(name))
             .or_else(|| self.session_values.get(name))
+    }
+
+    fn set_scene_variable(
+        &mut self,
+        game: &LoadedGame,
+        name: &str,
+        expr: &SceneExpr,
+        bindings: &HashMap<String, String>,
+    ) -> Result<(), TransitionError> {
+        let Some(value) = self.eval_effect_value(game, expr, bindings) else {
+            return Err(TransitionError::InvalidCommand(name.to_string()));
+        };
+        let scene_name = self.focused_scene.clone();
+        if let Some(mutable) = scene_variable_mutability(game, &scene_name, name) {
+            if !mutable {
+                return Err(TransitionError::InvalidCommand(name.to_string()));
+            }
+            if let Some(state) = self.scene_states.get_mut(&scene_name)
+                && state.values.contains_key(name)
+            {
+                state.values.insert(name.to_string(), value);
+                return Ok(());
+            }
+        }
+        if let Some(mutable) = session_variable_mutability(game, name) {
+            if !mutable {
+                return Err(TransitionError::InvalidCommand(name.to_string()));
+            }
+            self.session_values.insert(name.to_string(), value);
+            return Ok(());
+        }
+        Err(TransitionError::InvalidCommand(name.to_string()))
     }
 
     fn reset_scene_state(&mut self, game: &LoadedGame, name: &str) {
@@ -2814,6 +2905,24 @@ fn level_ref_field(
     }
 }
 
+fn scene_variable_mutability(game: &LoadedGame, scene_name: &str, name: &str) -> Option<bool> {
+    game.scenes
+        .iter()
+        .find(|scene| scene.name == scene_name)?
+        .state
+        .variables
+        .iter()
+        .find(|variable| variable.name == name)
+        .map(|variable| variable.mutable)
+}
+
+fn session_variable_mutability(game: &LoadedGame, name: &str) -> Option<bool> {
+    game.variables
+        .iter()
+        .find(|variable| variable.name == name)
+        .map(|variable| variable.mutable)
+}
+
 fn parse_runtime_command(command_text: &str, default_wait_ms: u64) -> Option<SceneEffect> {
     let command_text = command_text.trim();
     if command_text == "clear_undo_history" || command_text == "clear_history" {
@@ -2828,22 +2937,28 @@ fn parse_runtime_command(command_text: &str, default_wait_ms: u64) -> Option<Sce
     if command_text == "reset persistent_vars" {
         return Some(SceneEffect::ResetPersistentVars);
     }
-    if let Some(rest) = command_text.strip_prefix("set current_level = ") {
+    if let Some(rest) = command_text.strip_prefix("current_level = ") {
         return Some(SceneEffect::SetCurrentLevel {
             level: parse_runtime_level_expr(rest.trim())?,
         });
     }
-    if let Some(rest) = command_text.strip_prefix("set level.cleared = ") {
+    if let Some(rest) = command_text.strip_prefix("level.cleared = ") {
         return Some(SceneEffect::SetLevelCleared {
             level: None,
             cleared: parse_runtime_bool(rest.trim())?,
         });
     }
-    if let Some(rest) = command_text.strip_prefix("set level(") {
+    if let Some(rest) = command_text.strip_prefix("level(") {
         let (level, cleared) = rest.split_once(").cleared = ")?;
         return Some(SceneEffect::SetLevelCleared {
             level: Some(parse_runtime_level_expr(level.trim())?),
             cleared: parse_runtime_bool(cleared.trim())?,
+        });
+    }
+    if let Some((name, value)) = parse_runtime_variable_assignment(command_text) {
+        return Some(SceneEffect::SetVariable {
+            name: name.to_string(),
+            value: parse_runtime_expr(value)?,
         });
     }
     if let Some(text) = command_text.strip_prefix("message ") {
@@ -2955,6 +3070,16 @@ fn parse_runtime_command(command_text: &str, default_wait_ms: u64) -> Option<Sce
         ])),
         _ => None,
     }
+}
+
+fn parse_runtime_variable_assignment(value: &str) -> Option<(&str, &str)> {
+    let (name, rhs) = value.split_once('=')?;
+    let name = name.trim();
+    let rhs = rhs.trim();
+    if rhs.is_empty() || !is_simple_identifier(name) || matches!(name, "current_level" | "level") {
+        return None;
+    }
+    Some((name, rhs))
 }
 
 fn parse_runtime_bool(value: &str) -> Option<bool> {
@@ -3360,10 +3485,10 @@ fn parse_runtime_level_expr(value: &str) -> Option<SceneExpr> {
 
 fn runtime_command_has_quoted_level_arg(command: &str) -> bool {
     let command = command.trim();
-    if let Some(value) = command.strip_prefix("set current_level = ") {
+    if let Some(value) = command.strip_prefix("current_level = ") {
         return parse_runtime_quoted_text(value.trim()).is_some();
     }
-    if let Some(rest) = command.strip_prefix("set level(") {
+    if let Some(rest) = command.strip_prefix("level(") {
         return rest
             .split_once(").cleared = ")
             .is_some_and(|(level, _)| parse_runtime_quoted_text(level.trim()).is_some());
@@ -3889,6 +4014,168 @@ P
     }
 
     #[test]
+    fn conditional_win_effect_forces_level_clear_lifecycle() {
+        let loaded = parse_game(
+            r#"
+title conditional_win_effect_runtime
+puzzle default {
+layers {
+floor = Exit
+marker = Cleared
+actor = Player
+}
+input clear
+condition can_clear = exists(Exit)
+on_level_clear {
+[ Player Exit no Cleared ] -> [ Player Exit Cleared ]
+next_level
+}
+rules {
+if can_clear -> win
+}
+levels {
+legend {
+. = empty
+X = Player Exit
+P = Player
+}
+X
+
+P
+}
+}
+"#,
+        )
+        .unwrap();
+        let mut session = GameSession::new(&loaded);
+
+        session
+            .apply_input(&loaded, input_named(&loaded, "clear"))
+            .unwrap();
+
+        assert_eq!(session.level_index(), 1);
+        assert_eq!(session.state(), &loaded.levels[1].initial_state);
+    }
+
+    #[test]
+    fn targeted_conditional_win_effect_forces_level_clear_lifecycle() {
+        let loaded = parse_game(
+            r#"
+title targeted_conditional_win_effect_runtime
+puzzle board {
+layers {
+floor = Exit
+marker = Cleared
+actor = Player
+}
+input clear
+win_conditions {
+no Exit
+}
+on_level_clear {
+[ Player Exit no Cleared ] -> [ Player Exit Cleared ]
+next_level
+}
+rules {
+if input == clear -> win
+}
+levels {
+legend {
+. = empty
+X = Player Exit
+P = Player
+}
+X
+
+P
+}
+}
+
+scene playing {
+state {
+board = puzzle board
+}
+layout {
+board
+}
+rules {
+step board
+}
+}
+"#,
+        )
+        .unwrap();
+        let mut session = GameSession::new(&loaded);
+
+        session.apply_command(&loaded, "goto playing").unwrap();
+        session
+            .apply_input(&loaded, input_named(&loaded, "clear"))
+            .unwrap();
+
+        assert_eq!(session.level_index(), 1);
+        assert_eq!(session.state(), &loaded.levels[1].initial_state);
+    }
+
+    #[test]
+    fn conditional_win_effect_satisfies_scene_win_condition_transition() {
+        let loaded = parse_game(
+            r#"
+title conditional_win_effect_scene_transition
+puzzle board {
+layers {
+floor = Exit
+actor = Player
+}
+input clear
+condition can_clear = exists(Exit)
+win_conditions {
+no Exit
+}
+rules {
+if can_clear -> win
+}
+levels {
+legend {
+. = empty
+X = Player Exit
+}
+X
+}
+}
+
+scene playing {
+state {
+board = puzzle board
+}
+layout {
+board
+}
+rules {
+step board
+if board.win_conditions -> goto level_clear
+}
+}
+
+scene level_clear {
+layout {
+text "clear"
+}
+}
+"#,
+        )
+        .unwrap();
+        let mut session = GameSession::new(&loaded);
+
+        session.apply_command(&loaded, "goto playing").unwrap();
+        session
+            .apply_input(&loaded, input_named(&loaded, "clear"))
+            .unwrap();
+
+        assert_eq!(session.screen(), "level_clear");
+        assert!(session.cleared_levels()[0]);
+    }
+
+    #[test]
     fn puzzle_rule_goto_effect_changes_scene_after_turn() {
         let loaded = parse_game(
             r#"
@@ -4035,10 +4322,10 @@ solid = Player Wall
 }
 
 rules {
-once [ Player ] -> set portal_entered = false
+once [ Player ] -> portal_entered = false
 for d in directions {
 if input == d {
-once d [ Player | Portal no solid ] -> [ | Player ] set portal_entered = true
+once d [ Player | Portal no solid ] -> [ | Player ] portal_entered = true
 once d [ Player | no solid ] -> [ | Player ]
 }
 }
@@ -4127,7 +4414,7 @@ var moved = false
 input tick
 
 rules {
-once [ Player ] -> set moved = true
+once [ Player ] -> moved = true
 }
 
 levels {
@@ -5648,10 +5935,10 @@ P
         let mut session = GameSession::new(&loaded);
 
         session
-            .apply_command(&loaded, "set current_level = second")
+            .apply_command(&loaded, "current_level = second")
             .unwrap();
         session
-            .apply_command(&loaded, "set level(second).cleared = true")
+            .apply_command(&loaded, "level(second).cleared = true")
             .unwrap();
         assert_eq!(session.selected_level_index(), 1);
         assert_eq!(session.cleared_levels(), &[false, true]);
@@ -5676,6 +5963,45 @@ P
                 name: "score".to_string(),
                 value: 5,
             }]
+        );
+    }
+
+    #[test]
+    fn scene_variable_assignment_copies_variable_value() {
+        let loaded = parse_game(
+            r#"
+title scene_var_assignment
+
+var num = 0
+var num_run = 7
+
+puzzle default {
+layers {
+actor = Player
+}
+empty .
+
+rules {
+}
+
+levels {
+legend P = Player
+
+level start {
+P
+}
+}
+}
+"#,
+        )
+        .unwrap();
+        let mut session = GameSession::new(&loaded);
+
+        session.apply_command(&loaded, "num = num_run").unwrap();
+
+        assert_eq!(
+            session.session_values().get("num"),
+            Some(&SceneValue::Int(7))
         );
     }
 
@@ -5794,7 +6120,7 @@ empty .
 
 rules {
 if input == right {
-once right [ Player | no Player ] -> [ | Player ] set cleared = true
+once right [ Player | no Player ] -> [ | Player ] cleared = true
 }
 }
 
@@ -7133,7 +7459,7 @@ text selected.solved
         let mut session = GameSession::new(&loaded);
 
         session
-            .apply_command(&loaded, "set level(first).cleared = true")
+            .apply_command(&loaded, "level(first).cleared = true")
             .unwrap();
         session
             .apply_command(&loaded, "goto detail with selected = first")
@@ -7659,7 +7985,7 @@ all Goal on Box
 }
 
 on_level_clear {
-once [ Goal Box ] -> set clear_seen = true
+once [ Goal Box ] -> clear_seen = true
 }
 
 rules {

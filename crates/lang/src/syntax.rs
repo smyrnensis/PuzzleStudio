@@ -17,6 +17,10 @@ pub(crate) fn is_puzzle_lifecycle_block(token: &str) -> bool {
     PUZZLE_LIFECYCLE_BLOCKS.contains(&token)
 }
 
+pub(crate) fn is_puzzle_line_head_keyword(token: &str) -> bool {
+    PUZZLE_LINE_HEAD_KEYWORDS.contains(&token)
+}
+
 pub(crate) fn is_parser_keyword(token: &str) -> bool {
     PARSER_KEYWORDS.contains(&token)
 }
@@ -60,6 +64,82 @@ pub(crate) const VISUAL_COLOR_NAMES: &[&str] = &[
     "brown",
     "darkbrown",
     "pink",
+];
+
+pub(crate) const PUZZLE_LINE_HEAD_KEYWORDS: &[&str] = &[
+    "collision_layers",
+    "condition",
+    "const",
+    "direction",
+    "for",
+    "group",
+    "groups",
+    "if",
+    "input",
+    "keys",
+    "layers",
+    "legend",
+    "levels",
+    "levels3",
+    "map",
+    "on_display",
+    PUZZLE_LIFECYCLE_BLOCKS[0],
+    PUZZLE_LIFECYCLE_BLOCKS[1],
+    PUZZLE_LIFECYCLE_BLOCKS[2],
+    "persistent",
+    "render",
+    "resources",
+    "routine",
+    "rule",
+    "rules",
+    "scratch",
+    "sounds",
+    "sprites",
+    "sprites3",
+    "tags",
+    "var",
+];
+
+pub(crate) const PUZZLE_COMPLETION_KEYWORDS: &[&str] = &[
+    "collision_layers",
+    "condition",
+    "const",
+    "direction",
+    "for",
+    "group",
+    "groups",
+    "if",
+    "input",
+    "keys",
+    "layers",
+    "legend",
+    "level",
+    "levels",
+    "levels3",
+    "lose_conditions",
+    "map",
+    "on_display",
+    PUZZLE_LIFECYCLE_BLOCKS[0],
+    PUZZLE_LIFECYCLE_BLOCKS[1],
+    PUZZLE_LIFECYCLE_BLOCKS[2],
+    "once",
+    "once_all",
+    "once_per_level",
+    "persistent",
+    "repeat",
+    "resources",
+    "render",
+    "routine",
+    "rule",
+    "rules",
+    "scratch",
+    "sounds",
+    "sprites",
+    "sprites3",
+    "state",
+    "tags",
+    "var",
+    "win_conditions",
 ];
 
 pub(crate) const PARSER_KEYWORDS: &[&str] = &[

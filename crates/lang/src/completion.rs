@@ -48,7 +48,6 @@ pub enum CompletionKind {
     Music,
     Sprite,
     Asset,
-    Palette,
     Shape,
     Setting,
     Theme,
@@ -80,7 +79,6 @@ impl CompletionKind {
             CompletionKind::Music => "music",
             CompletionKind::Sprite => "sprite",
             CompletionKind::Asset => "asset",
-            CompletionKind::Palette => "palette",
             CompletionKind::Shape => "shape",
             CompletionKind::Setting => "setting",
             CompletionKind::Theme => "theme",
@@ -178,7 +176,6 @@ struct CompletionSymbols {
     music: BTreeSet<String>,
     sprites: BTreeSet<String>,
     assets: BTreeSet<String>,
-    palettes: BTreeSet<String>,
     shapes: BTreeSet<String>,
     colors: BTreeSet<String>,
     value_sets: BTreeMap<String, Vec<String>>,
@@ -330,15 +327,6 @@ fn collect_line_symbols(
         [table_ref] if scope == Some(SourceScope::VisualColorTable) => {
             if let Some((name, axis)) = table_ref.split_once(':') {
                 insert_identifier(&mut symbols.colors, name);
-                insert_identifier(&mut symbols.variants, axis);
-            }
-        }
-        [name, "=", ..] if scope == Some(SourceScope::VisualPaletteTable) => {
-            insert_identifier(&mut symbols.palettes, name);
-        }
-        [table_ref] if scope == Some(SourceScope::VisualPaletteTable) => {
-            if let Some((name, axis)) = table_ref.split_once(':') {
-                insert_identifier(&mut symbols.palettes, name);
                 insert_identifier(&mut symbols.variants, axis);
             }
         }
@@ -647,12 +635,6 @@ fn add_slot_items(
         SemanticCompletionSlot::Assets => {
             add_named_items(items, symbols.assets.iter(), CompletionKind::Asset, "asset")
         }
-        SemanticCompletionSlot::Palettes => add_named_items(
-            items,
-            symbols.palettes.iter(),
-            CompletionKind::Palette,
-            "palette",
-        ),
         SemanticCompletionSlot::Shapes => {
             add_named_items(items, symbols.shapes.iter(), CompletionKind::Shape, "shape")
         }
@@ -741,7 +723,6 @@ fn remove_current_token_symbols(symbols: &mut CompletionSymbols, token: &str) {
     symbols.music.remove(name);
     symbols.sprites.remove(name);
     symbols.assets.remove(name);
-    symbols.palettes.remove(name);
     symbols.shapes.remove(name);
     symbols.colors.remove(name);
     symbols.value_sets.remove(name);
@@ -860,7 +841,7 @@ fn escape_json_string(out: &mut String, value: &str) {
 #[cfg(test)]
 mod tests {
     use super::{CompletionKind, completion_list_json, suggest_source_completions};
-    use crate::syntax::PUZZLE_LIFECYCLE_BLOCKS;
+    use crate::syntax::{PUZZLE_COMPLETION_KEYWORDS, PUZZLE_LIFECYCLE_BLOCKS};
 
     #[test]
     fn suggests_objects_by_prefix() {
@@ -1673,30 +1654,7 @@ Box li
     }
 
     #[test]
-    fn suggests_named_visual_colors_in_palette_rows() {
-        let source = r#"
-title complete_named_visual_colors
-sprites {
-colors {
-edge = transparent
-}
-palettes {
-box = ed
-}
-}
-"#;
-        let cursor = source.find("box = ed").unwrap() + "box = ed".len();
-        let list = suggest_source_completions(source, cursor);
-
-        assert!(
-            list.items
-                .iter()
-                .any(|item| item.label == "edge" && item.kind == CompletionKind::Color)
-        );
-    }
-
-    #[test]
-    fn suggests_visual_palette_and_shape_names_in_sprite_entries() {
+    fn suggests_visual_shape_names_in_sprite_entries() {
         let source = r#"
 title complete_visual_resource_refs
 puzzle board {
@@ -1708,27 +1666,16 @@ __legacy_layer_0 = Box:kind
 }
 }
 sprites {
-palettes {
-box_palette = red blue
-}
 shapes {
 box_shape
 00
 }
 Box {
-palette box_
+colors red blue
 shape box_
 }
 }
 "#;
-        let palette_cursor = source.find("palette box_").unwrap() + "palette box_".len();
-        let palette_list = suggest_source_completions(source, palette_cursor);
-        assert!(
-            palette_list.items.iter().any(|item| {
-                item.label == "box_palette" && item.kind == CompletionKind::Palette
-            })
-        );
-
         let shape_cursor = source.find("shape box_").unwrap() + "shape box_".len();
         let shape_list = suggest_source_completions(source, shape_cursor);
         assert!(
@@ -1984,6 +1931,22 @@ on_
                     .iter()
                     .any(|item| item.label == *keyword && item.kind == CompletionKind::Keyword),
                 "missing lifecycle completion {keyword}"
+            );
+        }
+    }
+
+    #[test]
+    fn suggests_all_puzzle_keywords_from_shared_syntax() {
+        for keyword in PUZZLE_COMPLETION_KEYWORDS {
+            let source = format!("title complete_{keyword}\npuzzle board {{\n{keyword}\n}}\n");
+            let cursor = source.rfind(keyword).unwrap() + keyword.len();
+            let list = suggest_source_completions(&source, cursor);
+
+            assert!(
+                list.items
+                    .iter()
+                    .any(|item| item.label == *keyword && item.kind == CompletionKind::Keyword),
+                "missing puzzle completion {keyword}"
             );
         }
     }

@@ -1,0 +1,125 @@
+title "light"
+
+theme puzzlescript {
+background_color = #fff
+text_color = #000
+}
+
+puzzle main {
+
+layers {
+@base = @Floor
+solid = Wall Player Crate Box Lump
+effect = Light Dark
+}
+
+groups {
+obstacle = Wall Crate Box
+push = Crate Lump
+multpush = Box Player
+}
+
+routine light_effect {
+[ effect ] -> [ ]
+[ Lump | no obstacle ] -> [ Lump | Light ]
+[ Light | no obstacle ] -> [ Light | Light ]
+[ no Light no obstacle ] -> [ Dark ]
+}
+
+on_level_start {
+light_effect
+}
+
+rules {
+input [ Player ] -> [ > Player ]
+[ >  Player | push ] -> [  >  Player | > push  ]
+[ > solid | multpush ] -> [ > solid | > multpush ]
+move
+light_effect
+}
+
+sprites {
+@Floor
+#eeeeee
+
+Wall
+#001111
+
+Player
+#000000
+.000.
+.000.
+00000
+.000.
+.0.0.
+
+Crate
+#f3a002 #b38002
+00000
+01110
+01110
+01110
+00000
+
+Lump
+#363535 #ffffcc
+..0..
+.000.
+.111.
+.111.
+00000
+
+Light
+#ffffff55
+
+Dark
+#000000aa
+}
+
+levels {
+legend {
+. = empty
+# = Wall
+* = Crate
+P = Player
+@ = Lump
+}
+#########
+#...*...#
+#...*...#
+#.P.*...#
+#.@.*...#
+#...*...#
+#########
+}
+
+keys {
+Escape q -> goto title
+}
+}
+
+scene title {
+layout {
+title
+choice "Start" -> goto main
+choice "Levels" -> goto level_select
+}
+
+keys {
+Enter Space -> goto playing
+l -> goto level_select
+}
+}
+
+scene level_select {
+layout {
+text "Select Level"
+level_menu
+button "Back" -> goto title
+}
+
+keys {
+Escape q -> goto title
+}
+}
+

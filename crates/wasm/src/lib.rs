@@ -66,3 +66,40 @@ pub fn solve_state(
     )
     .map_err(|error| JsValue::from_str(&error))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::compile_preview;
+
+    #[test]
+    fn compile_preview_accepts_display_object_single_color_sprite() {
+        let source = r##"
+title display_object_single_color_preview
+
+puzzle default {
+layers {
+@display_floor = @Floor
+}
+sprites {
+@Floor
+#eeeeee
+}
+rules {
+
+}
+levels {
+legend {
+. = empty
+}
+level start
+.
+}
+}
+"##;
+
+        let html = compile_preview(source, "game.puzzle", "", "").expect("compile preview");
+
+        assert!(html.contains("<!doctype html>"));
+        assert!(html.contains("#eeeeee"));
+    }
+}

@@ -13,8 +13,8 @@ The browser demo has two switchable generator screens. The SFX screen focuses
 on one-shot game sound effects. A seed plus an optional type target expands into:
 
 - compact numeric seeds
-- common game SFX types: random, jump, pickup, hit, explosion, laser, powerup,
-  select, error, and category-less `Wild`
+- common game SFX types: random, jump, pickup, hit, lock, explosion, laser,
+  powerup, select, error, and category-less `Wild`
 - deterministic tone, noise, and transient layers
 - pitch sweeps and short tonal phrases
 - seeded synthesis profile for arcade, soft synth, bit-crush, and toy-speaker

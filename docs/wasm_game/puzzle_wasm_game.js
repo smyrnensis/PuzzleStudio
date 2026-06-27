@@ -118,6 +118,12 @@ export class WasmPuzzle3Runtime {
 if (Symbol.dispose) WasmPuzzle3Runtime.prototype[Symbol.dispose] = WasmPuzzle3Runtime.prototype.free;
 
 export class WasmStandaloneSession {
+    static __wrap(ptr) {
+        const obj = Object.create(WasmStandaloneSession.prototype);
+        obj.__wbg_ptr = ptr;
+        WasmStandaloneSessionFinalization.register(obj, obj.__wbg_ptr, obj);
+        return obj;
+    }
     __destroy_into_raw() {
         const ptr = this.__wbg_ptr;
         this.__wbg_ptr = 0;
@@ -152,6 +158,19 @@ export class WasmStandaloneSession {
     }
     clear_progress_save() {
         wasm.wasmstandalonesession_clear_progress_save(this.__wbg_ptr);
+    }
+    /**
+     * @param {string} export_json
+     * @returns {WasmStandaloneSession}
+     */
+    static fromExport(export_json) {
+        const ptr0 = passStringToWasm0(export_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.wasmstandalonesession_fromExport(ptr0, len0);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return WasmStandaloneSession.__wrap(ret[0]);
     }
     mark_progress_save_written() {
         wasm.wasmstandalonesession_mark_progress_save_written(this.__wbg_ptr);

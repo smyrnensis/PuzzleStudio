@@ -96,10 +96,6 @@ class PuzzleSoundRuntime {
     this.warnMissingGenerator(`sfx:${name}`, `Sound effect "${name}" was skipped because the sound generator is unavailable.`);
   }
 
-  hasSfx(name) {
-    return Boolean(this.sfxDef(name));
-  }
-
   sfxDef(name) {
     return (this.sounds.sfx || []).find((entry) => entry.name === name);
   }
@@ -513,9 +509,6 @@ function showNextMessage() {
   if (messagePopup || messageQueue.length === 0) {
     return;
   }
-  if (document.body.classList.contains("theme-puzzlescript") && soundRuntime.hasSfx("ShowMessage")) {
-    soundRuntime.playSfx("ShowMessage");
-  }
   const text = messageQueue.shift();
   const backdrop = document.createElement("div");
   backdrop.className = "message-popup-backdrop";
@@ -543,9 +536,6 @@ function showNextMessage() {
 function closeMessagePopup() {
   if (!messagePopup) {
     return;
-  }
-  if (document.body.classList.contains("theme-puzzlescript") && soundRuntime.hasSfx("CloseMessage")) {
-    soundRuntime.playSfx("CloseMessage");
   }
   messagePopup.remove();
   messagePopup = null;
@@ -2772,6 +2762,21 @@ function effectToCommand(effect, scope = {}) {
   }
   if (effect.kind === "puzzle_goto_level") {
     return `${effect.target}.goto ${effectValueToCommand(effect.level, scope)}`;
+  }
+  if (effect.kind === "set_variable") {
+    return `${effect.name} = ${exprSource(effect.value, scope)}`;
+  }
+  if (effect.kind === "set_current_level") {
+    return `current_level = ${exprSource(effect.level, scope)}`;
+  }
+  if (effect.kind === "clear_current_level") {
+    return "clear current_level";
+  }
+  if (effect.kind === "set_level_cleared") {
+    const value = effect.cleared === true ? "true" : "false";
+    return effect.level
+      ? `level(${exprSource(effect.level, scope)}).cleared = ${value}`
+      : `level.cleared = ${value}`;
   }
   if (effect.kind === "back") {
     return "back";

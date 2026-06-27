@@ -1,6 +1,7 @@
 const soundPlayIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><polygon points="8 5 19 12 8 19 8 5"></polygon></svg>';
 const soundPauseIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14"></path><path d="M16 5v14"></path></svg>';
 const soundMusicBarOptions = [8, 16, 32, 64];
+const soundSourceIndentUnit = "  ";
 
 function soundsApi() {
   return window.PuzzleSoundGenerator || window.PuzzleSoundTools || null;
@@ -354,14 +355,16 @@ function activeSoundEditSource() {
   if (!document || !isTextDocument(document)) {
     return "";
   }
-  return document.id === activeDocument()?.id ? sourceEditor.value : document.source || "";
+  return document.id === activeDocument()?.id
+    ? sourceEditorDocumentValue()
+    : document.source || "";
 }
 
 function loadSoundFromSourcePosition(position, options = {}) {
   if (!isPuzzleDocument(activeDocument()) || !isTextDocument(activeDocument())) {
     return null;
   }
-  const source = sourceEditor.value || "";
+  const source = sourceEditorDocumentValue();
   const entry = findSoundsDefinitionAtPosition(source, position);
   if (!entry) {
     return null;
@@ -498,7 +501,7 @@ function nextSoundsDefinitionName(kind, baseName, sourceOverride = null) {
   const source = sourceOverride !== null
     ? String(sourceOverride || "")
     : isTextDocument(documents[currentDocumentIndex])
-      ? sourceEditor.value
+      ? sourceEditorDocumentValue()
       : "";
   const names = existingSoundsDefinitionNames(source, kind);
   const base = soundIdentifierAtom(baseName, kind === "music" ? "music" : "sfx");
@@ -541,21 +544,19 @@ function existingSoundsDefinitionNames(source, kind) {
 function soundsDefinitionNameExists(source, kind, name, options = {}) {
   const text = String(source || "");
   const lines = soundSourceLinesWithOffsets(text);
-  const soundsBlock = findTopLevelSoundsBlock(lines);
-  if (!soundsBlock) {
-    return false;
-  }
   const exceptStart = Number.isInteger(options.exceptStart) ? options.exceptStart : null;
-  for (let index = soundsBlock.startLine + 1; index < soundsBlock.endLine; index += 1) {
-    const line = lines[index];
-    const parsed = parseSoundsDefinitionLine(line?.text || "");
-    if (!parsed || parsed.kind !== kind || parsed.name !== name) {
-      continue;
+  for (const soundsBlock of findSoundsBlocks(lines)) {
+    for (let index = soundsBlock.startLine + 1; index < soundsBlock.endLine; index += 1) {
+      const line = lines[index];
+      const parsed = parseSoundsDefinitionLine(line?.text || "");
+      if (!parsed || parsed.kind !== kind || parsed.name !== name) {
+        continue;
+      }
+      if (exceptStart !== null && exceptStart >= line.start && exceptStart <= line.end) {
+        continue;
+      }
+      return true;
     }
-    if (exceptStart !== null && exceptStart >= line.start && exceptStart <= line.end) {
-      continue;
-    }
-    return true;
   }
   return false;
 }
@@ -563,8 +564,8 @@ function soundsDefinitionNameExists(source, kind, name, options = {}) {
 function findSoundsDefinitionAtPosition(source, position) {
   const text = String(source || "");
   const lines = soundSourceLinesWithOffsets(text);
-  const soundsBlock = findTopLevelSoundsBlock(lines);
-  if (!soundsBlock || position < soundsBlock.bodyStart || position > soundsBlock.bodyEnd) {
+  const soundsBlock = findSoundsBlockAtPosition(lines, position);
+  if (!soundsBlock) {
     return null;
   }
   for (let index = soundsBlock.startLine + 1; index < soundsBlock.endLine; index += 1) {
@@ -607,16 +608,16 @@ function parseSoundsDefinitionLine(line) {
 function insertSoundsDefinitionIntoSource(source, line) {
   const text = String(source || "");
   const lines = soundSourceLinesWithOffsets(text);
-  const soundsBlock = findTopLevelSoundsBlock(lines);
+  const soundsBlock = findFirstSoundsBlock(lines);
   if (soundsBlock) {
-    const entryIndent = soundsBlock.entryIndent || `${soundsBlock.indent}\t`;
+    const entryIndent = soundDefinitionIndent(soundsBlock.entryIndent, soundsBlock.indent);
     const insertText = `${entryIndent}${line}\n`;
     const nextSource = `${text.slice(0, soundsBlock.insertIndex)}${insertText}${text.slice(soundsBlock.insertIndex)}`;
     const selectionStart = soundsBlock.insertIndex + insertText.length;
     return { source: nextSource, selectionStart, selectionEnd: selectionStart };
   }
 
-  const block = `sounds {\n\t${line}\n}\n`;
+  const block = `sounds {\n${soundSourceIndentUnit}${line}\n}\n`;
   const afterName = findTopLevelNameInsertionIndex(lines);
   if (afterName > 0) {
     const prefix = text[afterName - 1] === "\n" ? "\n" : "\n\n";
@@ -636,30 +637,34 @@ function insertSoundsDefinitionIntoSource(source, line) {
 function replaceSoundsDefinitionInSource(source, definition, options = {}) {
   const text = String(source || "");
   const lines = soundSourceLinesWithOffsets(text);
-  const soundsBlock = findTopLevelSoundsBlock(lines);
-  if (!soundsBlock) {
+  const originalStart = Number.isInteger(options.originalStart) ? options.originalStart : null;
+  const soundsBlocks = originalStart !== null
+    ? [findSoundsBlockAtPosition(lines, originalStart)].filter(Boolean)
+    : findSoundsBlocks(lines);
+  if (!soundsBlocks.length) {
     return null;
   }
   const originalName = options.originalName || definition.name;
-  const originalStart = Number.isInteger(options.originalStart) ? options.originalStart : null;
   let fallback = null;
-  for (let index = soundsBlock.startLine + 1; index < soundsBlock.endLine; index += 1) {
-    const line = lines[index];
-    const parsed = parseSoundsDefinitionLine(line?.text || "");
-    if (!parsed || parsed.kind !== definition.kind || parsed.name !== originalName) {
-      continue;
+  for (const soundsBlock of soundsBlocks) {
+    for (let index = soundsBlock.startLine + 1; index < soundsBlock.endLine; index += 1) {
+      const line = lines[index];
+      const parsed = parseSoundsDefinitionLine(line?.text || "");
+      if (!parsed || parsed.kind !== definition.kind || parsed.name !== originalName) {
+        continue;
+      }
+      const candidate = replaceSoundsDefinitionLine(text, line, soundsBlock, definition);
+      if (originalStart !== null && originalStart >= line.start && originalStart <= line.end) {
+        return candidate;
+      }
+      fallback ??= candidate;
     }
-    const candidate = replaceSoundsDefinitionLine(text, line, soundsBlock, definition);
-    if (originalStart !== null && originalStart >= line.start && originalStart <= line.end) {
-      return candidate;
-    }
-    fallback ??= candidate;
   }
   return fallback;
 }
 
 function replaceSoundsDefinitionLine(text, line, soundsBlock, definition) {
-  const indent = line.text.match(/^\s*/)?.[0] || soundsBlock.entryIndent || `${soundsBlock.indent}\t`;
+  const indent = soundDefinitionIndent(line.text.match(/^\s*/)?.[0] || soundsBlock.entryIndent, soundsBlock.indent);
   const hasNewline = line.text.endsWith("\n");
   const replacement = `${indent}${definition.line}${hasNewline ? "\n" : ""}`;
   const nextSource = `${text.slice(0, line.start)}${replacement}${text.slice(line.end)}`;
@@ -673,13 +678,18 @@ function replaceSoundsDefinitionLine(text, line, soundsBlock, definition) {
   };
 }
 
+function soundDefinitionIndent(rawIndent, parentIndent = "") {
+  const indent = rawIndent || `${parentIndent || ""}${soundSourceIndentUnit}`;
+  return indent.replace(/\t/g, soundSourceIndentUnit);
+}
+
 function replaceSoundReferencesInSource(source, kind, oldName, newName, options = {}) {
   if (!oldName || !newName || oldName === newName) {
     return { source, count: 0 };
   }
   const text = String(source || "");
   const lines = soundSourceLinesWithOffsets(text);
-  const soundsBlock = findTopLevelSoundsBlock(lines);
+  const soundsBlocks = findSoundsBlocks(lines);
   const definitionStart = Number.isInteger(options.definitionStart) ? options.definitionStart : -1;
   const definitionEnd = Number.isInteger(options.definitionEnd) ? options.definitionEnd : -1;
   const selectionStart = Number.isInteger(options.selectionStart) ? options.selectionStart : -1;
@@ -696,9 +706,7 @@ function replaceSoundReferencesInSource(source, kind, oldName, newName, options 
     const parsed = parseSoundsDefinitionLine(line.text);
     if (
       parsed?.kind === kind
-      && soundsBlock
-      && lineIndex > soundsBlock.startLine
-      && lineIndex < soundsBlock.endLine
+      && lineIsInSoundsBlock(lineIndex, soundsBlocks)
     ) {
       return line.text;
     }
@@ -863,18 +871,18 @@ function soundSourceLinesWithOffsets(source) {
   return lines;
 }
 
-function findTopLevelSoundsBlock(lines) {
-  let depth = 0;
+function findSoundsBlocks(lines) {
+  const blocks = [];
   for (let index = 0; index < lines.length; index += 1) {
     const entry = lines[index];
     const code = stripLineComment(entry.text).trim();
-    if (depth === 0 && (code === "sounds" || code === "sounds {")) {
+    if (code === "sounds" || code === "sounds {") {
       const braceStyle = code.endsWith("{");
       const end = findSoundsBlockEnd(lines, index, braceStyle);
       if (!end) {
-        return null;
+        continue;
       }
-      return {
+      blocks.push({
         startLine: index,
         endLine: end.index,
         bodyStart: lines[index].end,
@@ -882,11 +890,22 @@ function findTopLevelSoundsBlock(lines) {
         insertIndex: end.entry.start,
         indent: entry.text.match(/^\s*/)?.[0] || "",
         entryIndent: inferSoundsEntryIndent(lines, index + 1, end.index),
-      };
+      });
     }
-    depth = Math.max(0, depth + braceDelta(code));
   }
-  return null;
+  return blocks;
+}
+
+function findFirstSoundsBlock(lines) {
+  return findSoundsBlocks(lines)[0] || null;
+}
+
+function findSoundsBlockAtPosition(lines, position) {
+  return findSoundsBlocks(lines).find((block) => position >= block.bodyStart && position <= block.bodyEnd) || null;
+}
+
+function lineIsInSoundsBlock(lineIndex, soundsBlocks) {
+  return soundsBlocks.some((block) => lineIndex > block.startLine && lineIndex < block.endLine);
 }
 
 function findSoundsBlockEnd(lines, headerIndex, braceStyle) {

@@ -44,7 +44,7 @@ const long = generateSoundEffect("123456", { type: "explosion", mood: 0.62, inte
 assert.ok(long.duration > short.duration, "length should scale effect duration");
 
 const generatedByType = SFX_TYPES.map((type) => generateSoundEffect("123456", { type, mood: 0.62, intensity: 0.7, length: 0.5 }));
-assert.equal(generatedByType.length, 8, "all expected game SFX types should be exposed");
+assert.equal(generatedByType.length, 9, "all expected game SFX types should be exposed");
 assert.ok(
   generatedByType.find((effect) => effect.type === "explosion").layers.some((layer) => layer.kind === "noise"),
   "explosions should include a noise layer",
@@ -57,9 +57,14 @@ assert.ok(
   generatedByType.find((effect) => effect.type === "hit").layers.some((layer) => layer.kind === "tone" || layer.kind === "noise"),
   "hits should include an impact layer",
 );
+assert.ok(
+  generatedByType.find((effect) => effect.type === "lock").layers.filter((layer) => layer.kind === "click").length >= 2,
+  "locks should include multiple mechanical transients",
+);
 
 const pickupVariants = Array.from({ length: 24 }, (_, index) => generateSoundEffect(`${100000 + index}`, { type: "pickup" }));
 const hitVariants = Array.from({ length: 24 }, (_, index) => generateSoundEffect(`${100000 + index}`, { type: "hit" }));
+const lockVariants = Array.from({ length: 32 }, (_, index) => generateSoundEffect(`${100000 + index}`, { type: "lock" }));
 const errorVariants = Array.from({ length: 32 }, (_, index) => generateSoundEffect(`${100000 + index}`, { type: "error" }));
 assert.ok(new Set(pickupVariants.map((effect) => effect.profile.variant)).size >= 4, "same type should expose multiple seeded variants");
 assert.ok(new Set(pickupVariants.map((effect) => effect.profile.pattern)).size >= 3, "same type should expose multiple sound patterns");
@@ -72,6 +77,26 @@ assert.ok(
   "hit variants should include slash, metal, and crunch structures",
 );
 assert.ok(hitVariants.some((effect) => effect.layers.some((layer) => layer.kind === "click")), "some hit variants should include transient layers");
+assert.ok(new Set(lockVariants.map((effect) => effect.profile.pattern)).size >= 3, "lock type should expose multiple mechanical patterns");
+assert.ok(
+  lockVariants.every((effect) =>
+    effect.layers.filter((layer) => layer.kind === "click").length >= 2
+      && effect.layers.some((layer) => layer.kind === "tone" || layer.kind === "noise"),
+  ),
+  "every lock variant should include latch clicks plus a body or scrape layer",
+);
+assert.ok(lockVariants.every((effect) => effect.duration < 0.5), "lock variants should stay short like a mechanical lock click");
+assert.ok(
+  lockVariants.every((effect) => {
+    const stop = effect.layers.find((layer) => layer.name === "lock-stop");
+    return stop && stop.start >= effect.duration * 0.48 && stop.start <= effect.duration * 0.62;
+  }),
+  "every lock variant should resolve into a final lock-stop near the main transient",
+);
+assert.ok(
+  lockVariants.every((effect) => effect.layers.every((layer) => !["ghost", "upper"].includes(layer.name))),
+  "lock variants should avoid melodic generic variation layers",
+);
 assert.ok(new Set(errorVariants.map((effect) => effect.profile.pattern)).size >= 3, "error type should expose multiple failed-action patterns");
 assert.ok(
   errorVariants.every((effect) => !["hollow", "wide"].includes(effect.profile.variant)),

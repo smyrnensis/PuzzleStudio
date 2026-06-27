@@ -177,12 +177,12 @@ class PuzzleRenderer {
     sprite.dataset.object = layer.object;
     sprite.dataset.layer = layer.layer;
     sprite.style.zIndex = String(definition.zIndex ?? layer.layer + 1);
-    const spriteCols = Math.max(1, definition.pattern?.[0]?.length || 1);
-    const spriteRows = Math.max(1, definition.pattern?.length || 1);
+    const { cols: spriteCols, rows: spriteRows } = this.spritePatternSize(definition);
+    const { cols: cellCols, rows: cellRows } = this.spriteCellGrid(definition);
     sprite.style.setProperty("--sprite-cols", String(spriteCols));
     sprite.style.setProperty("--sprite-rows", String(spriteRows));
-    sprite.style.setProperty("--sprite-cell-cols", String(definition.pixelsPerCell?.width || spriteCols));
-    sprite.style.setProperty("--sprite-cell-rows", String(definition.pixelsPerCell?.height || spriteRows));
+    sprite.style.setProperty("--sprite-cell-cols", String(cellCols));
+    sprite.style.setProperty("--sprite-cell-rows", String(cellRows));
     sprite.style.setProperty("--sprite-offset-x", String(Number(definition.offset?.x) || 0));
     sprite.style.setProperty("--sprite-offset-y", String(Number(definition.offset?.y) || 0));
     sprite.setAttribute("aria-hidden", "true");
@@ -195,7 +195,7 @@ class PuzzleRenderer {
     }
 
     const solidColor = this.solidPatternColor(definition);
-    if (solidColor) {
+    if (solidColor && this.canPaintAsFullCellSolid(definition)) {
       sprite.classList.add("visual-solid");
       sprite.style.backgroundColor = solidColor;
       return sprite;
@@ -351,7 +351,7 @@ class PuzzleRenderer {
     }
 
     const solidColor = this.solidPatternColor(definition);
-    if (solidColor) {
+    if (solidColor && this.canPaintAsFullCellSolid(definition)) {
       context.fillStyle = solidColor;
       context.fillRect(x, y, unit, unit);
       if (transform) {
@@ -401,10 +401,7 @@ class PuzzleRenderer {
 
   paintPattern(context, definition, x, y, unit) {
     const pattern = definition.pattern || [];
-    const rows = Math.max(1, pattern.length || 1);
-    const cols = Math.max(1, pattern[0]?.length || 1);
-    const cellCols = Math.max(1, Number(definition.pixelsPerCell?.width) || cols);
-    const cellRows = Math.max(1, Number(definition.pixelsPerCell?.height) || rows);
+    const { cols: cellCols, rows: cellRows } = this.spriteCellGrid(definition);
     const pixelWidth = unit / cellCols;
     const pixelHeight = unit / cellRows;
     pattern.forEach((row, rowIndex) => {
@@ -425,10 +422,7 @@ class PuzzleRenderer {
   }
 
   visualSpriteOffset(definition, unit) {
-    const cols = Math.max(1, definition.pattern?.[0]?.length || 1);
-    const rows = Math.max(1, definition.pattern?.length || 1);
-    const cellCols = Math.max(1, Number(definition.pixelsPerCell?.width) || cols);
-    const cellRows = Math.max(1, Number(definition.pixelsPerCell?.height) || rows);
+    const { cols: cellCols, rows: cellRows } = this.spriteCellGrid(definition);
     return {
       x: (Number(definition.offset?.x) || 0) * unit / cellCols,
       y: (Number(definition.offset?.y) || 0) * unit / cellRows,
@@ -466,22 +460,18 @@ class PuzzleRenderer {
           hasImage = true;
           continue;
         }
-        const cols = Math.max(1, definition.pattern?.[0]?.length || 1);
-        const rows = Math.max(1, definition.pattern?.length || 1);
-        const cellCols = Math.max(1, Number(definition.pixelsPerCell?.width) || cols);
-        const cellRows = Math.max(1, Number(definition.pixelsPerCell?.height) || rows);
-        unit = this.boundedLeastCommonMultiple(unit, cellCols, 128);
-        unit = this.boundedLeastCommonMultiple(unit, cellRows, 128);
+        const { cols: cellCols, rows: cellRows } = this.spriteCellGrid(definition);
+        unit = this.leastCommonMultiple(unit, cellCols);
+        unit = this.leastCommonMultiple(unit, cellRows);
       }
     }
-    return hasImage ? this.boundedLeastCommonMultiple(unit, 32, 128) : unit;
+    return hasImage ? this.leastCommonMultiple(unit, 32) : unit;
   }
 
-  boundedLeastCommonMultiple(a, b, limit) {
+  leastCommonMultiple(a, b) {
     const left = Math.max(1, Math.trunc(Number(a) || 1));
     const right = Math.max(1, Math.trunc(Number(b) || 1));
-    const value = (left * right) / this.greatestCommonDivisor(left, right);
-    return value <= limit ? value : left;
+    return (left * right) / this.greatestCommonDivisor(left, right);
   }
 
   greatestCommonDivisor(a, b) {
@@ -509,8 +499,7 @@ class PuzzleRenderer {
 
   patternDataUrl(definition) {
     const pattern = definition.pattern || [];
-    const width = Math.max(1, pattern[0]?.length || 1);
-    const height = Math.max(1, pattern.length || 1);
+    const { cols: width, rows: height } = this.spritePatternSize(definition);
     const rects = [];
     pattern.forEach((row, y) => {
       [...row].forEach((token, x) => {
@@ -546,6 +535,28 @@ class PuzzleRenderer {
     }
     const color = definition.colors[firstToken];
     return color && color !== "transparent" ? color : null;
+  }
+
+  canPaintAsFullCellSolid(definition) {
+    return !definition.pixelsPerCell
+      && !Number(definition.offset?.x)
+      && !Number(definition.offset?.y);
+  }
+
+  spritePatternSize(definition) {
+    const pattern = definition.pattern || [];
+    return {
+      cols: Math.max(1, ...pattern.map((row) => String(row).length), 1),
+      rows: Math.max(1, pattern.length || 1),
+    };
+  }
+
+  spriteCellGrid(definition) {
+    const pattern = this.spritePatternSize(definition);
+    return {
+      cols: Math.max(1, Number(definition.pixelsPerCell?.width) || pattern.cols),
+      rows: Math.max(1, Number(definition.pixelsPerCell?.height) || pattern.rows),
+    };
   }
 
   sortedLayers(layers) {

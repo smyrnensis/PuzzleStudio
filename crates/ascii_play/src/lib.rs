@@ -1523,10 +1523,14 @@ fn effect_to_command(
         SceneEffect::ResetPuzzle { target } => Some(format!("{target}.restart")),
         SceneEffect::LoadPuzzle { target, source } => Some(format!("load {target} from {source}")),
         SceneEffect::Copy { source, target } => Some(format!("copy {source} to {target}")),
+        SceneEffect::SetVariable { name, value } => Some(format!(
+            "{name} = {}",
+            expr_source(loaded, session, value, scope)
+        )),
         SceneEffect::ClearUndoHistory => Some("clear_undo_history".to_string()),
         SceneEffect::ClearGameProgress => Some("clear_game_progress".to_string()),
         SceneEffect::SetCurrentLevel { level } => Some(format!(
-            "set current_level = {}",
+            "current_level = {}",
             expr_source(loaded, session, level, scope)
         )),
         SceneEffect::ClearCurrentLevel => Some("clear current_level".to_string()),
@@ -1534,11 +1538,11 @@ fn effect_to_command(
             .as_ref()
             .map(|level| {
                 format!(
-                    "set level({}).cleared = {cleared}",
+                    "level({}).cleared = {cleared}",
                     expr_source(loaded, session, level, scope)
                 )
             })
-            .or_else(|| Some(format!("set level.cleared = {cleared}"))),
+            .or_else(|| Some(format!("level.cleared = {cleared}"))),
         SceneEffect::ResetPersistentVars => Some("reset persistent_vars".to_string()),
         SceneEffect::Apply { args, .. } => args
             .first()

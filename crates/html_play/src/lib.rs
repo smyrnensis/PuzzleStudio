@@ -7758,6 +7758,13 @@ fn push_json_effect_fields(out: &mut String, effect: &SceneEffect) {
             out.push(',');
             push_json_pair(out, "target", target);
         }
+        SceneEffect::SetVariable { name, value } => {
+            push_json_pair(out, "kind", "set_variable");
+            out.push(',');
+            push_json_pair(out, "name", name);
+            out.push(',');
+            push_json_expr_named(out, "value", value);
+        }
         SceneEffect::ClearUndoHistory => {
             push_json_pair(out, "kind", "clear_undo_history");
         }
@@ -8304,9 +8311,9 @@ levels3 default of board {
         let source = r#"
 title sprite_translate
 puzzle default {
-layers 1
-empty .
-object Player 0
+layers {
+actor = Player
+}
 sprites {
 Player {
 pixels_per_cell 5 5
@@ -8323,7 +8330,10 @@ rules {
 
 }
 levels {
-legend P = Player
+legend {
+. = empty
+P = Player
+}
 level start {
 P
 }
@@ -8337,6 +8347,9 @@ P
         assert!(visuals.contains("\"pixelsPerCell\":{\"width\":5,\"height\":5}"));
         assert!(RENDERER_JS.contains("visualSpriteOffset(definition, unit)"));
         assert!(RENDERER_JS.contains("definition.pixelsPerCell?.width"));
+        assert!(RENDERER_JS.contains("solidColor && this.canPaintAsFullCellSolid(definition)"));
+        assert!(RENDERER_JS.contains("unit = this.leastCommonMultiple(unit, cellCols);"));
+        assert!(!RENDERER_JS.contains("boundedLeastCommonMultiple"));
         assert!(RENDERER_CSS.contains("overflow: visible;"));
     }
 
@@ -8345,9 +8358,9 @@ P
         let source = r#"
 title grid_render
 puzzle default {
-layers 1
-empty .
-object Player 0
+layers {
+actor = Player
+}
 render {
 grid occupied_cells all_cells
 }
@@ -8355,7 +8368,10 @@ rules {
 
 }
 levels {
-legend P = Player
+legend {
+. = empty
+P = Player
+}
 level start {
 P
 }
@@ -8603,6 +8619,9 @@ P
         assert!(APP_JS.contains("key === \"x\""));
         assert!(APP_JS.contains("if (messagePopup) {\n    event.preventDefault();\n    if (isMessageDismissKey(event)) {\n      closeMessagePopup();\n    }\n    return;\n  }"));
         assert!(!APP_JS.contains("backdrop.addEventListener(\"click\", closeMessagePopup);"));
+        assert!(!APP_JS.contains("ShowMessage"));
+        assert!(!APP_JS.contains("CloseMessage"));
+        assert!(!APP_JS.contains("hasSfx"));
         assert!(APP_CSS.contains(".message-popup-backdrop:focus {\n  outline: none;\n}"));
     }
 
@@ -9021,16 +9040,19 @@ P
 title Mixed Game
 
 puzzle flat {
-layers 1
-empty .
-object Player 0
+layers {
+actor = Player
+}
 rules {
 
 }
 }
 
 levels flat_levels of flat {
-legend P = Player
+legend {
+. = empty
+P = Player
+}
 level start {
 P
 }
@@ -9112,16 +9134,19 @@ scene mixed_play {
 title Mixed Microban
 
 puzzle microban2d {
-layers 1
-empty .
-object Player 0
+layers {
+actor = Player
+}
 rules {
 
 }
 }
 
 levels microban of microban2d {
-legend P = Player
+legend {
+. = empty
+P = Player
+}
 
 level microban_01 {
 P.
@@ -9788,12 +9813,15 @@ scene playing {
 title Export Test
 
 puzzle default {
-layers 1
-empty .
-object Player 0
+layers {
+actor = Player
+}
 
 levels {
-    legend P = Player
+    legend {
+        . = empty
+        P = Player
+    }
 
     level one
     P
@@ -9838,12 +9866,15 @@ title Progress Export
 puzzle default {
 persistent var bonus = 0
 
-layers 1
-empty .
-object Player 0
+layers {
+actor = Player
+}
 
 levels {
-    legend P = Player
+    legend {
+        . = empty
+        P = Player
+    }
 
     level one
     P
@@ -9853,7 +9884,7 @@ levels {
 }
 
 rules {
-    [ Player ] -> [ Player ] set bonus = 1
+    [ Player ] -> [ Player ] bonus = 1
 }
 }
 "#;
@@ -10025,12 +10056,15 @@ theme noir {
 }
 
 puzzle default {
-layers 1
-empty .
-object Player 0
+layers {
+actor = Player
+}
 
 levels {
-    legend P = Player
+    legend {
+        . = empty
+        P = Player
+    }
 
     level one
     P

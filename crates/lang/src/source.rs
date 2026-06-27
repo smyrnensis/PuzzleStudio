@@ -2,21 +2,54 @@ use crate::DiagnosticReport;
 use crate::syntax::is_puzzle_lifecycle_block;
 
 pub(crate) fn logical_lines(source: &str) -> Result<Vec<String>, DiagnosticReport> {
+    logical_lines_with_locations(source)
+        .map(|lines| lines.into_iter().map(|line| line.text).collect())
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct LogicalLine {
+    pub(crate) text: String,
+    pub(crate) line: usize,
+}
+
+impl LogicalLine {
+    fn new(text: impl Into<String>, line: usize) -> Self {
+        Self {
+            text: text.into(),
+            line,
+        }
+    }
+
+    fn with_text(&self, text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            line: self.line,
+        }
+    }
+}
+
+pub(crate) fn logical_lines_with_locations(
+    source: &str,
+) -> Result<Vec<LogicalLine>, DiagnosticReport> {
     let mut lines = Vec::new();
     let mut preserve_level_blanks = false;
     let mut level_brace_depth = 0i32;
     let mut level_end_depth = None::<usize>;
     let raw_lines = source
         .lines()
-        .map(|raw_line| strip_line_comment(raw_line).trim().to_string())
+        .enumerate()
+        .map(|(index, raw_line)| {
+            LogicalLine::new(strip_line_comment(raw_line).trim().to_string(), index + 1)
+        })
         .collect::<Vec<_>>();
     let raw_lines = expand_structural_sugar(&raw_lines)?;
 
     for index in 0..raw_lines.len() {
-        let line = raw_lines[index].as_str();
+        let logical_line = &raw_lines[index];
+        let line = logical_line.text.as_str();
         if line.is_empty() {
             if preserve_level_blanks {
-                lines.push(String::new());
+                lines.push(logical_line.clone());
             }
             continue;
         }
@@ -45,7 +78,7 @@ pub(crate) fn logical_lines(source: &str) -> Result<Vec<String>, DiagnosticRepor
             level_brace_depth += line.chars().filter(|ch| *ch == '{').count() as i32;
             level_brace_depth -= line.chars().filter(|ch| *ch == '}').count() as i32;
         }
-        lines.push(line.to_string());
+        lines.push(logical_line.clone());
         if preserve_level_blanks && level_brace_depth <= 0 && level_end_depth.is_none() {
             preserve_level_blanks = false;
         }
@@ -54,8 +87,7 @@ pub(crate) fn logical_lines(source: &str) -> Result<Vec<String>, DiagnosticRepor
             level_end_depth = None;
         }
     }
-    let lines = normalize_brace_blocks(&lines)?;
-    Ok(lines)
+    normalize_brace_blocks(&lines)
 }
 
 pub(crate) fn strip_line_comment(line: &str) -> &str {
@@ -81,17 +113,21 @@ pub(crate) fn strip_line_comment(line: &str) -> &str {
     line
 }
 
-fn expand_structural_sugar(lines: &[String]) -> Result<Vec<String>, DiagnosticReport> {
+fn expand_structural_sugar(lines: &[LogicalLine]) -> Result<Vec<LogicalLine>, DiagnosticReport> {
     let mut expanded = Vec::new();
     let mut block_stack = Vec::<String>::new();
 
-    for line in lines {
-        if line.is_empty() {
-            expanded.push(String::new());
+    for logical_line in lines {
+        if logical_line.text.is_empty() {
+            expanded.push(logical_line.clone());
             continue;
         }
 
-        expanded.extend(expand_structural_source_line(line, &mut block_stack)?);
+        expanded.extend(
+            expand_structural_source_line(&logical_line.text, &mut block_stack)?
+                .into_iter()
+                .map(|text| logical_line.with_text(text)),
+        );
     }
 
     Ok(expanded)
@@ -113,7 +149,10 @@ fn expand_structural_source_line(
 }
 
 fn ascii_sensitive_block(block: &str) -> bool {
-    matches!(block, "levels" | "levels3" | "sprites" | "sprites3" | "map")
+    matches!(
+        block,
+        "levels" | "levels3" | "sprites" | "sprite" | "sprites3" | "map"
+    )
 }
 
 fn ascii_row_contains_brace(line: &str) -> bool {
@@ -251,24 +290,25 @@ fn is_selector_token_char(ch: char) -> bool {
     ch.is_ascii_alphanumeric() || matches!(ch, '_' | '@' | ':' | '*')
 }
 
-fn normalize_brace_blocks(lines: &[String]) -> Result<Vec<String>, DiagnosticReport> {
+fn normalize_brace_blocks(lines: &[LogicalLine]) -> Result<Vec<LogicalLine>, DiagnosticReport> {
     let mut normalized = Vec::new();
     let mut levels_brace_depth = 0i32;
 
-    for line in lines {
-        normalize_brace_block_line(line, &mut levels_brace_depth, &mut normalized)?;
+    for logical_line in lines {
+        normalize_brace_block_line(logical_line, &mut levels_brace_depth, &mut normalized)?;
     }
 
     Ok(normalized)
 }
 
 fn normalize_brace_block_line(
-    line: &str,
+    logical_line: &LogicalLine,
     levels_brace_depth: &mut i32,
-    normalized: &mut Vec<String>,
+    normalized: &mut Vec<LogicalLine>,
 ) -> Result<(), DiagnosticReport> {
+    let line = logical_line.text.as_str();
     if line == "}" {
-        normalized.push("}".to_string());
+        normalized.push(logical_line.with_text("}"));
         if *levels_brace_depth > 0 {
             *levels_brace_depth -= 1;
         }
@@ -279,16 +319,16 @@ fn normalize_brace_block_line(
         let rest = rest.trim_start();
         match rest {
             "else" => {
-                normalized.push("}".to_string());
-                normalized.push("else".to_string());
+                normalized.push(logical_line.with_text("}"));
+                normalized.push(logical_line.with_text("else"));
             }
             "else {" | "else{" => {
-                normalized.push("}".to_string());
-                normalized.push("else {".to_string());
+                normalized.push(logical_line.with_text("}"));
+                normalized.push(logical_line.with_text("else {"));
             }
             rest if rest.starts_with("->") => {
-                normalized.push("}".to_string());
-                normalized.push(rest.to_string());
+                normalized.push(logical_line.with_text("}"));
+                normalized.push(logical_line.with_text(rest));
             }
             _ => {
                 return Err(parse_error(
@@ -301,12 +341,12 @@ fn normalize_brace_block_line(
     }
 
     if line == "else {" {
-        normalized.push("else {".to_string());
+        normalized.push(logical_line.with_text("else {"));
         return Ok(());
     }
 
     if line == "{" {
-        normalized.push("{".to_string());
+        normalized.push(logical_line.with_text("{"));
         return Ok(());
     }
 
@@ -324,17 +364,17 @@ fn normalize_brace_block_line(
             && !starts_inline_block(&header_tokens, header)
             || matches!(header_tokens.as_slice(), ["level", ..]);
         if header.ends_with("->") {
-            normalized.push(format!("{header} {{"));
+            normalized.push(logical_line.with_text(format!("{header} {{")));
             return Ok(());
         }
         if preserve_level_header {
-            normalized.push(format!("{header} {{"));
+            normalized.push(logical_line.with_text(format!("{header} {{")));
             if *levels_brace_depth > 0 || is_levels_header {
                 *levels_brace_depth += 1;
             }
             return Ok(());
         }
-        normalized.push(format!("{header} {{"));
+        normalized.push(logical_line.with_text(format!("{header} {{")));
         if *levels_brace_depth > 0 || is_levels_header {
             *levels_brace_depth += 1;
         }
@@ -346,7 +386,7 @@ fn normalize_brace_block_line(
         return Err(parse_error(line, "braces must be used at block boundaries"));
     }
 
-    normalized.push(line.to_string());
+    normalized.push(logical_line.clone());
     Ok(())
 }
 
@@ -374,7 +414,6 @@ fn starts_inline_block(tokens: &[&str], line: &str) -> bool {
             | ["lose_conditions", ..]
             | ["sprites", ..]
             | ["colors"]
-            | ["palettes"]
             | ["shapes"]
             | ["theme", ..]
             | ["assets"]
@@ -465,7 +504,6 @@ pub(crate) enum SourceScope {
     VisualShapeTable,
     VisualShapeEntry,
     VisualColorTable,
-    VisualPaletteTable,
     Other,
 }
 
@@ -597,12 +635,17 @@ fn source_context_stack_lines(
         Err(_) => return Vec::new(),
     };
     for line in expanded {
-        if normalize_brace_block_line(&line, normalize_levels_brace_depth, &mut normalized).is_err()
+        let logical_line = LogicalLine::new(line, 0);
+        if normalize_brace_block_line(&logical_line, normalize_levels_brace_depth, &mut normalized)
+            .is_err()
         {
             return Vec::new();
         }
     }
     normalized
+        .into_iter()
+        .map(|logical_line| logical_line.text)
+        .collect()
 }
 
 fn source_line_role(
@@ -624,7 +667,6 @@ fn source_line_role(
             SourceLineRole::PlainFirstToken
         }
         Some(SourceScope::VisualColorTable) => SourceLineRole::PlainAssignmentLeft,
-        Some(SourceScope::VisualPaletteTable) => SourceLineRole::PlainAssignmentLeft,
         _ => SourceLineRole::Normal,
     }
 }
@@ -725,7 +767,6 @@ fn source_opens_block(line: &str, tokens: &[&str], current: Option<SourceScope>)
                 | ["sprites", ..]
                 | ["sprites3", ..]
                 | ["colors"]
-                | ["palettes"]
                 | ["shapes"]
                 | ["render"]
                 | ["camera"]
@@ -790,7 +831,6 @@ fn opening_scope(line: &str, tokens: &[&str], current: Option<SourceScope>) -> O
     if current == Some(SourceScope::Visuals) && line.ends_with('{') {
         match tokens {
             ["colors"] => return Some(SourceScope::VisualColorTable),
-            ["palettes"] => return Some(SourceScope::VisualPaletteTable),
             ["shapes"] => return Some(SourceScope::VisualShapeTable),
             [..] => return Some(SourceScope::VisualShapeEntry),
         }
@@ -814,7 +854,6 @@ fn opening_scope(line: &str, tokens: &[&str], current: Option<SourceScope>) -> O
         ["level", ..] => Some(SourceScope::Level),
         ["shapes"] => Some(SourceScope::VisualShapeTable),
         ["colors"] => Some(SourceScope::VisualColorTable),
-        ["palettes"] => Some(SourceScope::VisualPaletteTable),
         [first, ..] => source_scope_for_name(first),
         [] => line.ends_with('{').then_some(SourceScope::Other),
     }
@@ -849,7 +888,7 @@ fn source_scope_for_name(name: &str) -> Option<SourceScope> {
         "legend" => Some(SourceScope::Legend),
         "levels" | "levels3" => Some(SourceScope::Levels),
         "level" => Some(SourceScope::Level),
-        "sprites" | "sprites3" => Some(SourceScope::Visuals),
+        "sprites" | "sprite" | "sprites3" => Some(SourceScope::Visuals),
         "render" | "camera" => Some(SourceScope::Other),
         "rules" => Some(SourceScope::Other),
         _ => None,

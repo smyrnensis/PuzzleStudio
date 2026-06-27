@@ -533,6 +533,10 @@ pub enum SceneEffect {
         source: String,
         target: String,
     },
+    SetVariable {
+        name: String,
+        value: SceneExpr,
+    },
     ClearUndoHistory,
     ClearGameProgress,
     SetCurrentLevel {
