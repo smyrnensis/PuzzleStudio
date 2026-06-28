@@ -17337,92 +17337,46 @@ fn lower_condition_patterns(
     match &condition_pattern.orientation {
         OrientationExpr::Neutral => {
             if pattern_block_requires_implicit_cardinal_expansion(block) {
-                let mut patterns = Vec::new();
-                for direction in directions {
-                    let (_, alternatives) = compile_before_after_blocks_for_direction(
-                        block,
-                        block,
-                        object_layers,
-                        scratch_names,
-                        value_sets,
-                        *direction,
-                        true,
-                        "condition pattern",
-                    )?;
-                    patterns.extend(patterns_from_alternatives(
-                        &alternatives,
-                        &[*direction],
-                        true,
-                        "condition pattern",
-                    )?);
-                }
-                return Ok(patterns);
-            }
-            let (_, alternatives) = compile_before_after_blocks_for_direction(
-                block,
-                block,
-                object_layers,
-                scratch_names,
-                value_sets,
-                neutral_direction(),
-                false,
-                "condition pattern",
-            )?;
-            patterns_from_alternatives(
-                &alternatives,
-                &[neutral_direction()],
-                false,
-                "condition pattern",
-            )
-        }
-        OrientationExpr::Input => {
-            let mut patterns = Vec::new();
-            for direction in directions {
-                let (_, alternatives) = compile_before_after_blocks_for_direction(
-                    block,
+                return lower_condition_patterns_for_directions(
                     block,
                     object_layers,
                     scratch_names,
                     value_sets,
-                    *direction,
+                    directions,
                     true,
-                    "condition pattern",
-                )?;
-                patterns.extend(patterns_from_alternatives(
-                    &alternatives,
-                    &[*direction],
-                    true,
-                    "condition pattern",
-                )?);
+                );
             }
-            Ok(patterns)
+            lower_condition_patterns_for_directions(
+                block,
+                object_layers,
+                scratch_names,
+                value_sets,
+                &[neutral_direction()],
+                false,
+            )
         }
+        OrientationExpr::Input => lower_condition_patterns_for_directions(
+            block,
+            object_layers,
+            scratch_names,
+            value_sets,
+            directions,
+            true,
+        ),
         OrientationExpr::InputSet(axis) => {
             let directions =
                 directions_for_orientation_name(axis, input_names, value_sets, directions)?
                     .ok_or_else(|| {
                         DiagnosticReport::error(format!("unknown input orientation set: {axis}"))
                     })?;
-            let mut patterns = Vec::new();
-            for direction in directions {
-                let (_, alternatives) = compile_before_after_blocks_for_direction(
-                    block,
-                    block,
-                    object_layers,
-                    scratch_names,
-                    value_sets,
-                    direction,
-                    true,
-                    "condition pattern",
-                )?;
-                patterns.extend(patterns_from_alternatives(
-                    &alternatives,
-                    &[direction],
-                    true,
-                    "condition pattern",
-                )?);
-            }
-            Ok(patterns)
+            lower_condition_patterns_for_directions(
+                block,
+                object_layers,
+                scratch_names,
+                value_sets,
+                &directions,
+                true,
+            )
         }
         OrientationExpr::Fixed(direction_name) => {
             let directions = directions_for_orientation_name(
@@ -17437,28 +17391,46 @@ fn lower_condition_patterns(
                     direction_name.0
                 ))
             })?;
-            let mut patterns = Vec::new();
-            for direction in directions {
-                let (_, alternatives) = compile_before_after_blocks_for_direction(
-                    block,
-                    block,
-                    object_layers,
-                    scratch_names,
-                    value_sets,
-                    direction,
-                    true,
-                    "condition pattern",
-                )?;
-                patterns.extend(patterns_from_alternatives(
-                    &alternatives,
-                    &[direction],
-                    true,
-                    "condition pattern",
-                )?);
-            }
-            Ok(patterns)
+            lower_condition_patterns_for_directions(
+                block,
+                object_layers,
+                scratch_names,
+                value_sets,
+                &directions,
+                true,
+            )
         }
     }
+}
+
+fn lower_condition_patterns_for_directions(
+    block: &PatternBlock,
+    object_layers: &HashMap<ObjectId, LayerId>,
+    scratch_names: &HashMap<String, ScratchDef>,
+    value_sets: &HashMap<String, Vec<String>>,
+    directions: &[Direction],
+    direction_expanded: bool,
+) -> Result<Vec<Pattern>, DiagnosticReport> {
+    let mut patterns = Vec::new();
+    for direction in directions {
+        let (_, alternatives) = compile_before_after_blocks_for_direction(
+            block,
+            block,
+            object_layers,
+            scratch_names,
+            value_sets,
+            *direction,
+            direction_expanded,
+            "condition pattern",
+        )?;
+        patterns.extend(patterns_from_alternatives(
+            &alternatives,
+            &[*direction],
+            direction_expanded,
+            "condition pattern",
+        )?);
+    }
+    Ok(patterns)
 }
 
 fn lower_condition_input_patterns(
@@ -18799,50 +18771,29 @@ impl<'a> ProgramLowerer<'a> {
         };
         match orientation {
             OrientationExpr::Neutral => {
-                let alternatives = compile_before_after_blocks(
-                    &rewrite.before,
-                    &rewrite.after,
-                    self.object_layers,
-                    self.scratch_names,
-                    self.value_sets,
-                    &rewrite.source_line,
-                )?;
-                let role = classify_rewrite_role(
-                    &rewrite.before,
-                    &alternatives,
-                    &effects,
-                    self.visual_objects,
-                    context,
-                    &rewrite.source_line,
-                )?;
-                if role == ClassifiedRuleRole::Visual {
-                    validate_visual_effects(&effects, &rewrite.source_line)?;
-                }
                 if rewrite_requires_implicit_cardinal_expansion(rewrite) {
                     let mut rules = Vec::new();
                     for direction in self.directions {
-                        rules.extend(self.rules_from_alternatives(
-                            alternatives.clone(),
+                        rules.extend(self.lower_rewrite_rules_for_direction(
+                            rewrite,
+                            context,
+                            &effects,
+                            application,
                             *direction,
                             true,
                             context.guards.clone(),
-                            effects.core.clone(),
-                            effects.ordered.clone(),
-                            application,
-                            role,
                         )?);
                     }
                     return Ok(wrap_rewrite_steps(application, rules));
                 }
-                self.rules_from_alternatives(
-                    alternatives,
+                self.lower_rewrite_rules_for_direction(
+                    rewrite,
+                    context,
+                    &effects,
+                    application,
                     neutral_direction(),
                     false,
                     context.guards.clone(),
-                    effects.core,
-                    effects.ordered,
-                    application,
-                    role,
                 )
                 .map(|rules| wrap_rewrite_steps(application, rules))
             }
@@ -18850,38 +18801,18 @@ impl<'a> ProgramLowerer<'a> {
                 if !context.input_allowed {
                     return Err(input_dependency_error(context, &rewrite.source_line));
                 }
-                let alternatives = compile_before_after_blocks(
-                    &rewrite.before,
-                    &rewrite.after,
-                    self.object_layers,
-                    self.scratch_names,
-                    self.value_sets,
-                    &rewrite.source_line,
-                )?;
-                let role = classify_rewrite_role(
-                    &rewrite.before,
-                    &alternatives,
-                    &effects,
-                    self.visual_objects,
-                    context,
-                    &rewrite.source_line,
-                )?;
-                if role == ClassifiedRuleRole::Visual {
-                    validate_visual_effects(&effects, &rewrite.source_line)?;
-                }
                 let mut rules = Vec::new();
                 for direction in self.directions {
                     let mut guards = context.guards.clone();
                     guards.push(Guard::InputIs(direction.input));
-                    rules.extend(self.rules_from_alternatives(
-                        alternatives.clone(),
+                    rules.extend(self.lower_rewrite_rules_for_direction(
+                        rewrite,
+                        context,
+                        &effects,
+                        application,
                         *direction,
                         true,
                         guards,
-                        effects.core.clone(),
-                        effects.ordered.clone(),
-                        application,
-                        role,
                     )?);
                 }
                 Ok(wrap_rewrite_steps(application, rules))
@@ -18896,38 +18827,18 @@ impl<'a> ProgramLowerer<'a> {
                         &rewrite.source_line,
                     )
                 })?;
-                let alternatives = compile_before_after_blocks(
-                    &rewrite.before,
-                    &rewrite.after,
-                    self.object_layers,
-                    self.scratch_names,
-                    self.value_sets,
-                    &rewrite.source_line,
-                )?;
-                let role = classify_rewrite_role(
-                    &rewrite.before,
-                    &alternatives,
-                    &effects,
-                    self.visual_objects,
-                    context,
-                    &rewrite.source_line,
-                )?;
-                if role == ClassifiedRuleRole::Visual {
-                    validate_visual_effects(&effects, &rewrite.source_line)?;
-                }
                 let mut rules = Vec::new();
                 for direction in directions {
                     let mut guards = context.guards.clone();
                     guards.push(Guard::InputIs(direction.input));
-                    rules.extend(self.rules_from_alternatives(
-                        alternatives.clone(),
+                    rules.extend(self.lower_rewrite_rules_for_direction(
+                        rewrite,
+                        context,
+                        &effects,
+                        application,
                         direction,
                         true,
                         guards,
-                        effects.core.clone(),
-                        effects.ordered.clone(),
-                        application,
-                        role,
                     )?);
                 }
                 Ok(wrap_rewrite_steps(application, rules))
@@ -18941,36 +18852,16 @@ impl<'a> ProgramLowerer<'a> {
                             &rewrite.source_line,
                         )
                     })?;
-                let alternatives = compile_before_after_blocks(
-                    &rewrite.before,
-                    &rewrite.after,
-                    self.object_layers,
-                    self.scratch_names,
-                    self.value_sets,
-                    &rewrite.source_line,
-                )?;
-                let role = classify_rewrite_role(
-                    &rewrite.before,
-                    &alternatives,
-                    &effects,
-                    self.visual_objects,
-                    context,
-                    &rewrite.source_line,
-                )?;
-                if role == ClassifiedRuleRole::Visual {
-                    validate_visual_effects(&effects, &rewrite.source_line)?;
-                }
                 let mut rules = Vec::new();
                 for direction in directions {
-                    rules.extend(self.rules_from_alternatives(
-                        alternatives.clone(),
+                    rules.extend(self.lower_rewrite_rules_for_direction(
+                        rewrite,
+                        context,
+                        &effects,
+                        application,
                         direction,
                         true,
                         context.guards.clone(),
-                        effects.core.clone(),
-                        effects.ordered.clone(),
-                        application,
-                        role,
                     )?);
                 }
                 Ok(wrap_rewrite_steps(application, rules))
