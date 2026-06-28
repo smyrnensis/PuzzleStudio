@@ -1,6 +1,8 @@
 use std::marker::PhantomData;
 use std::num::NonZeroU32;
 
+use serde::{Deserialize, Serialize};
+
 pub trait KernelId: Copy {
     fn raw(self) -> u16;
 
@@ -392,7 +394,7 @@ fn object_bit(object: u16) -> Option<u64> {
     ObjectCellMask::can_represent_raw(object).then(|| 1u64 << u32::from(object))
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LocalFrameExtent {
     Radius(u16),
     Full,
@@ -420,7 +422,7 @@ impl LocalFrameExtent {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LocalFrame<ObjectId> {
     pub x: LocalFrameExtent,
     pub y: LocalFrameExtent,
@@ -489,7 +491,7 @@ impl<ObjectId> LocalFrame<ObjectId> {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum GlobalUpdateOp {
     Set,
     Add,
@@ -506,7 +508,7 @@ pub enum GlobalValueError<GlobalId> {
     DivisionByZero { global: GlobalId },
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VisibleGlobals<GlobalId> {
     values: Vec<i64>,
     _id: PhantomData<GlobalId>,
@@ -590,7 +592,7 @@ fn apply_global_update<GlobalId: Copy>(
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ScratchKind {
     Marker,
     Bool,
@@ -598,20 +600,20 @@ pub enum ScratchKind {
     Enum,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ScratchValueMatch {
     Any,
     Exact,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ObjectSetMatcher<ObjectId, LayerId> {
     pub binding: u16,
     pub layer: LayerId,
     pub objects: Vec<ObjectId>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ObjectSetScratchPattern<ScratchId> {
     pub binding: u16,
     pub scratch: ScratchId,
@@ -642,13 +644,13 @@ where
     })
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ScratchValue<ScratchId> {
     pub scratch: ScratchId,
     pub value: Option<i64>,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 struct ScratchEntry<ScratchId> {
     scratch: ScratchValue<ScratchId>,
     next: Option<NonZeroU32>,
@@ -671,7 +673,7 @@ impl<ScratchId: Copy> Iterator for ScratchIter<'_, ScratchId> {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ScratchSpace<ScratchId> {
     cell_heads: Vec<Option<NonZeroU32>>,
     slot_heads: Vec<Option<NonZeroU32>>,
@@ -1033,7 +1035,7 @@ fn scratch_entry_id(index: usize) -> NonZeroU32 {
     NonZeroU32::new(raw).expect("scratch entry ids are one-based")
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ConditionValueKind<ObjectId, Pattern, InputId> {
     CountObjects(Vec<ObjectId>),
     ExistsObjects(Vec<ObjectId>),
@@ -1046,7 +1048,7 @@ pub enum ConditionValueKind<ObjectId, Pattern, InputId> {
     NoneInputMatches(Vec<(InputId, Pattern)>),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ObjectRoleSet<Id> {
     ids: Vec<Id>,
 }

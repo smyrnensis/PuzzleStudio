@@ -19,6 +19,7 @@ export const wasmstandalonesession_new: (a: number, b: number, c: number, d: num
 export const wasmstandalonesession_progress_save: (a: number) => [number, number];
 export const wasmstandalonesession_request_json: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
 export const wasmstandalonesession_restore_progress_save: (a: number, b: number, c: number) => [number, number];
+export const wasmstandalonesession_set_current_state: (a: number, b: number, c: number, d: number, e: number) => [number, number];
 export const wasmstandalonesession_snapshot: (a: number) => [number, number];
 export const __wbindgen_externrefs: WebAssembly.Table;
 export const __externref_table_dealloc: (a: number) => void;

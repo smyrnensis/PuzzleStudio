@@ -33,7 +33,9 @@ pub(crate) fn logical_lines_with_locations(
 ) -> Result<Vec<LogicalLine>, DiagnosticReport> {
     let mut lines = Vec::new();
     let mut preserve_level_blanks = false;
+    let mut preserve_sprite_blanks = false;
     let mut level_brace_depth = 0i32;
+    let mut sprite_brace_depth = 0i32;
     let mut level_end_depth = None::<usize>;
     let raw_lines = source
         .lines()
@@ -48,13 +50,20 @@ pub(crate) fn logical_lines_with_locations(
         let logical_line = &raw_lines[index];
         let line = logical_line.text.as_str();
         if line.is_empty() {
-            if preserve_level_blanks {
+            if preserve_level_blanks || preserve_sprite_blanks {
                 lines.push(logical_line.clone());
             }
             continue;
         }
 
         let tokens = split_header_tokens(line);
+        if matches!(tokens.as_slice(), ["sprites"] | ["sprites", ..])
+            && line.ends_with('{')
+            && !preserve_level_blanks
+        {
+            preserve_sprite_blanks = true;
+            sprite_brace_depth = 0;
+        }
         if is_levels_header(&tokens) {
             preserve_level_blanks = true;
             level_end_depth = Some(1);
@@ -78,6 +87,10 @@ pub(crate) fn logical_lines_with_locations(
             level_brace_depth += line.chars().filter(|ch| *ch == '{').count() as i32;
             level_brace_depth -= line.chars().filter(|ch| *ch == '}').count() as i32;
         }
+        if preserve_sprite_blanks {
+            sprite_brace_depth += line.chars().filter(|ch| *ch == '{').count() as i32;
+            sprite_brace_depth -= line.chars().filter(|ch| *ch == '}').count() as i32;
+        }
         lines.push(logical_line.clone());
         if preserve_level_blanks && level_brace_depth <= 0 && level_end_depth.is_none() {
             preserve_level_blanks = false;
@@ -85,6 +98,9 @@ pub(crate) fn logical_lines_with_locations(
         if level_end_depth == Some(0) {
             preserve_level_blanks = false;
             level_end_depth = None;
+        }
+        if preserve_sprite_blanks && sprite_brace_depth <= 0 {
+            preserve_sprite_blanks = false;
         }
     }
     normalize_brace_blocks(&lines)
@@ -663,9 +679,6 @@ fn source_line_role(
             SourceLineRole::PlainFirstToken
         }
         Some(SourceScope::VisualShapeEntry) => SourceLineRole::Raw,
-        Some(SourceScope::VisualShapeTable) if trimmed.ends_with('{') => {
-            SourceLineRole::PlainFirstToken
-        }
         Some(SourceScope::VisualColorTable) => SourceLineRole::PlainAssignmentLeft,
         _ => SourceLineRole::Normal,
     }

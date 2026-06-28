@@ -43,6 +43,69 @@ pub struct StepTrace {
     pub patches: Vec<Patch>,
 }
 
+pub struct ProgramBoundarySnapshot<'a> {
+    pub input: InputId,
+    pub next_state: &'a State,
+    pub cancelled: bool,
+    pub commands: &'a [TransitionCommand],
+    pub fired_rules: &'a [RuleId],
+    pub patches: &'a [Patch],
+}
+
+#[derive(Clone, Debug)]
+pub struct ProgramSegmentTrace {
+    pub trace: StepTrace,
+    pub remaining_program: Option<ProgramContinuation>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ProgramContinuation {
+    steps: Vec<ContinuationStep>,
+}
+
+#[derive(Clone, Debug)]
+enum ContinuationStep {
+    RuleStep(RuleStep),
+    LocalFrame {
+        frame: LocalFrame<ObjectId>,
+        continuation: ProgramContinuation,
+    },
+    UntilStable {
+        stop_condition: Option<RuleCondition>,
+        steps: Vec<RuleStep>,
+        before: State,
+        before_hash: u64,
+        seen_states: StateHistory,
+        fired_any: bool,
+        pass_fired: bool,
+        repeat_count: usize,
+        remaining_pass: ProgramContinuation,
+    },
+}
+
+impl ProgramContinuation {
+    fn empty() -> Self {
+        Self { steps: Vec::new() }
+    }
+
+    fn from_step(step: ContinuationStep) -> Self {
+        Self { steps: vec![step] }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.steps.is_empty()
+    }
+
+    fn extend_rule_steps(&mut self, steps: &[RuleStep]) {
+        self.steps
+            .extend(steps.iter().cloned().map(ContinuationStep::RuleStep));
+    }
+
+    fn extend_continuation_steps(&mut self, steps: &[ContinuationStep]) {
+        self.steps.extend_from_slice(steps);
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct TransitionOutcome {
     pub input: InputId,
@@ -141,6 +204,32 @@ pub fn transition_program_trace(
     run_program_transition(game, program, state, input, true, false)
 }
 
+pub fn transition_program_segment_trace<F>(
+    game: &CompiledGame,
+    program: &[RuleStep],
+    state: &State,
+    input: InputId,
+    mut should_stop: F,
+) -> TransitionResult<ProgramSegmentTrace>
+where
+    F: FnMut(ProgramBoundarySnapshot<'_>) -> bool,
+{
+    run_program_transition_segment(game, program, state, input, &mut should_stop)
+}
+
+pub fn transition_program_continuation_segment_trace<F>(
+    game: &CompiledGame,
+    continuation: &ProgramContinuation,
+    state: &State,
+    input: InputId,
+    mut should_stop: F,
+) -> TransitionResult<ProgramSegmentTrace>
+where
+    F: FnMut(ProgramBoundarySnapshot<'_>) -> bool,
+{
+    run_program_continuation_segment(game, continuation, state, input, &mut should_stop)
+}
+
 fn run_program_transition(
     game: &CompiledGame,
     program: &[RuleStep],
@@ -194,6 +283,163 @@ fn run_program_transition(
         commands,
         fired_rules,
         patches,
+    })
+}
+
+fn run_program_transition_segment<F>(
+    game: &CompiledGame,
+    program: &[RuleStep],
+    state: &State,
+    input: InputId,
+    should_stop: &mut F,
+) -> TransitionResult<ProgramSegmentTrace>
+where
+    F: FnMut(ProgramBoundarySnapshot<'_>) -> bool,
+{
+    let mut original = state.clone();
+    original.clear_scratch();
+    let mut current = original.clone();
+    let mut fired_rules = Vec::new();
+    let mut patches = Vec::new();
+    let mut commands = Vec::new();
+    let context = TransitionContext {
+        game,
+        input,
+        local_frame: None,
+    };
+
+    for (index, step) in program.iter().enumerate() {
+        let outcome = apply_step_segment(
+            game,
+            step,
+            &context,
+            &mut current,
+            &mut fired_rules,
+            &mut patches,
+            &mut commands,
+            true,
+            false,
+            should_stop,
+        )?;
+        if let Some(mut remaining_program) = outcome.remaining_program {
+            remaining_program.extend_rule_steps(&program[index + 1..]);
+            current.clear_scratch();
+            return Ok(ProgramSegmentTrace {
+                trace: StepTrace {
+                    input,
+                    next_state: current,
+                    cancelled: false,
+                    commands,
+                    fired_rules,
+                    patches,
+                },
+                remaining_program: Some(remaining_program),
+            });
+        }
+        if outcome.cancelled {
+            return Ok(ProgramSegmentTrace {
+                trace: StepTrace {
+                    input,
+                    next_state: original,
+                    cancelled: true,
+                    commands: Vec::new(),
+                    fired_rules,
+                    patches,
+                },
+                remaining_program: None,
+            });
+        }
+    }
+
+    current.clear_scratch();
+
+    Ok(ProgramSegmentTrace {
+        trace: StepTrace {
+            input,
+            next_state: current,
+            cancelled: false,
+            commands,
+            fired_rules,
+            patches,
+        },
+        remaining_program: None,
+    })
+}
+
+fn run_program_continuation_segment<F>(
+    game: &CompiledGame,
+    continuation: &ProgramContinuation,
+    state: &State,
+    input: InputId,
+    should_stop: &mut F,
+) -> TransitionResult<ProgramSegmentTrace>
+where
+    F: FnMut(ProgramBoundarySnapshot<'_>) -> bool,
+{
+    let mut original = state.clone();
+    original.clear_scratch();
+    let mut current = original.clone();
+    let mut fired_rules = Vec::new();
+    let mut patches = Vec::new();
+    let mut commands = Vec::new();
+    let context = TransitionContext {
+        game,
+        input,
+        local_frame: None,
+    };
+
+    let outcome = apply_continuation_segment(
+        game,
+        continuation,
+        &context,
+        &mut current,
+        &mut fired_rules,
+        &mut patches,
+        &mut commands,
+        true,
+        false,
+        should_stop,
+    )?;
+    if let Some(remaining_program) = outcome.remaining_program {
+        current.clear_scratch();
+        return Ok(ProgramSegmentTrace {
+            trace: StepTrace {
+                input,
+                next_state: current,
+                cancelled: false,
+                commands,
+                fired_rules,
+                patches,
+            },
+            remaining_program: Some(remaining_program),
+        });
+    }
+    if outcome.cancelled {
+        return Ok(ProgramSegmentTrace {
+            trace: StepTrace {
+                input,
+                next_state: original,
+                cancelled: true,
+                commands: Vec::new(),
+                fired_rules,
+                patches,
+            },
+            remaining_program: None,
+        });
+    }
+
+    current.clear_scratch();
+
+    Ok(ProgramSegmentTrace {
+        trace: StepTrace {
+            input,
+            next_state: current,
+            cancelled: false,
+            commands,
+            fired_rules,
+            patches,
+        },
+        remaining_program: None,
     })
 }
 
@@ -342,6 +588,200 @@ fn apply_step(
     }
 }
 
+fn apply_step_segment<F>(
+    game: &CompiledGame,
+    step: &RuleStep,
+    context: &TransitionContext,
+    current: &mut State,
+    fired_rules: &mut Vec<RuleId>,
+    patches: &mut Vec<Patch>,
+    commands: &mut Vec<TransitionCommand>,
+    collect_trace: bool,
+    skip_visual_rules: bool,
+    should_stop: &mut F,
+) -> TransitionResult<SegmentApplyOutcome>
+where
+    F: FnMut(ProgramBoundarySnapshot<'_>) -> bool,
+{
+    match step {
+        RuleStep::Rule(rule) => {
+            if skip_visual_rules && game.is_visual_rule(rule.id) {
+                return Ok(SegmentApplyOutcome::idle());
+            }
+            let before_fired_len = fired_rules.len();
+            let outcome = apply_rule_step(
+                game,
+                rule,
+                context,
+                current,
+                fired_rules,
+                patches,
+                commands,
+                collect_trace,
+            )?;
+            if outcome.fired
+                && !outcome.cancelled
+                && fired_rules.len() > before_fired_len
+                && should_stop(ProgramBoundarySnapshot {
+                    input: context.input,
+                    next_state: current,
+                    cancelled: false,
+                    commands,
+                    fired_rules,
+                    patches,
+                })
+            {
+                return Ok(SegmentApplyOutcome {
+                    fired: true,
+                    cancelled: false,
+                    remaining_program: Some(ProgramContinuation::empty()),
+                });
+            }
+            Ok(SegmentApplyOutcome::from_apply(outcome))
+        }
+        RuleStep::ConditionalBlock { condition, steps } => {
+            if condition_accepts(game, condition, context, current) {
+                apply_block_once_segment(
+                    game,
+                    steps,
+                    context,
+                    current,
+                    fired_rules,
+                    patches,
+                    commands,
+                    collect_trace,
+                    skip_visual_rules,
+                    should_stop,
+                )
+            } else {
+                Ok(SegmentApplyOutcome::idle())
+            }
+        }
+        RuleStep::ConditionalBranch {
+            condition,
+            then_steps,
+            else_steps,
+        } => {
+            let selected_steps = if condition_accepts(game, condition, context, current) {
+                then_steps
+            } else {
+                else_steps
+            };
+            apply_block_once_segment(
+                game,
+                selected_steps,
+                context,
+                current,
+                fired_rules,
+                patches,
+                commands,
+                collect_trace,
+                skip_visual_rules,
+                should_stop,
+            )
+        }
+        RuleStep::Block {
+            application,
+            stop_condition,
+            steps,
+        } => match application {
+            RuleApplication::Once | RuleApplication::OnceAll | RuleApplication::OncePerLevel => {
+                apply_block_once_segment(
+                    game,
+                    steps,
+                    context,
+                    current,
+                    fired_rules,
+                    patches,
+                    commands,
+                    collect_trace,
+                    skip_visual_rules,
+                    should_stop,
+                )
+            }
+            RuleApplication::UntilStable => apply_block_until_stable_segment(
+                game,
+                stop_condition.as_ref(),
+                steps,
+                context,
+                current,
+                fired_rules,
+                patches,
+                commands,
+                collect_trace,
+                skip_visual_rules,
+                should_stop,
+            ),
+        },
+        RuleStep::AfterTriggered { steps, then_steps } => {
+            let mut outcome = apply_block_once_segment(
+                game,
+                steps,
+                context,
+                current,
+                fired_rules,
+                patches,
+                commands,
+                collect_trace,
+                skip_visual_rules,
+                should_stop,
+            )?;
+            if let Some(mut remaining_program) = outcome.remaining_program.take() {
+                remaining_program.extend_rule_steps(then_steps);
+                outcome.remaining_program = Some(remaining_program);
+                return Ok(outcome);
+            }
+            if outcome.fired && !outcome.cancelled {
+                let then_outcome = apply_block_once_segment(
+                    game,
+                    then_steps,
+                    context,
+                    current,
+                    fired_rules,
+                    patches,
+                    commands,
+                    collect_trace,
+                    skip_visual_rules,
+                    should_stop,
+                )?;
+                outcome.merge(then_outcome);
+            }
+            Ok(outcome)
+        }
+        RuleStep::LocalFrame { frame, steps } => {
+            let scoped_context = TransitionContext {
+                local_frame: Some(frame),
+                ..*context
+            };
+            let mut outcome = apply_block_once_segment(
+                game,
+                steps,
+                &scoped_context,
+                current,
+                fired_rules,
+                patches,
+                commands,
+                collect_trace,
+                skip_visual_rules,
+                should_stop,
+            )?;
+            if let Some(remaining_steps) = outcome.remaining_program.take() {
+                outcome.remaining_program = if remaining_steps.is_empty() {
+                    Some(ProgramContinuation::empty())
+                } else {
+                    Some(ProgramContinuation::from_step(
+                        ContinuationStep::LocalFrame {
+                            frame: frame.clone(),
+                            continuation: remaining_steps,
+                        },
+                    ))
+                };
+            }
+            Ok(outcome)
+        }
+    }
+}
+
 fn condition_accepts(
     game: &CompiledGame,
     condition: &RuleCondition,
@@ -461,6 +901,187 @@ fn apply_block_once(
     Ok(outcome)
 }
 
+fn apply_block_once_segment<F>(
+    game: &CompiledGame,
+    steps: &[RuleStep],
+    context: &TransitionContext,
+    current: &mut State,
+    fired_rules: &mut Vec<RuleId>,
+    patches: &mut Vec<Patch>,
+    commands: &mut Vec<TransitionCommand>,
+    collect_trace: bool,
+    skip_visual_rules: bool,
+    should_stop: &mut F,
+) -> TransitionResult<SegmentApplyOutcome>
+where
+    F: FnMut(ProgramBoundarySnapshot<'_>) -> bool,
+{
+    let mut outcome = SegmentApplyOutcome::idle();
+    for (index, step) in steps.iter().enumerate() {
+        let mut step_outcome = apply_step_segment(
+            game,
+            step,
+            context,
+            current,
+            fired_rules,
+            patches,
+            commands,
+            collect_trace,
+            skip_visual_rules,
+            should_stop,
+        )?;
+        if let Some(mut remaining_program) = step_outcome.remaining_program.take() {
+            remaining_program.extend_rule_steps(&steps[index + 1..]);
+            step_outcome.remaining_program = Some(remaining_program);
+            outcome.merge(step_outcome);
+            return Ok(outcome);
+        }
+        outcome.merge(step_outcome);
+        if outcome.cancelled {
+            break;
+        }
+    }
+    Ok(outcome)
+}
+
+fn apply_continuation_segment<F>(
+    game: &CompiledGame,
+    continuation: &ProgramContinuation,
+    context: &TransitionContext,
+    current: &mut State,
+    fired_rules: &mut Vec<RuleId>,
+    patches: &mut Vec<Patch>,
+    commands: &mut Vec<TransitionCommand>,
+    collect_trace: bool,
+    skip_visual_rules: bool,
+    should_stop: &mut F,
+) -> TransitionResult<SegmentApplyOutcome>
+where
+    F: FnMut(ProgramBoundarySnapshot<'_>) -> bool,
+{
+    let mut outcome = SegmentApplyOutcome::idle();
+    for (index, step) in continuation.steps.iter().enumerate() {
+        let mut step_outcome = apply_continuation_step_segment(
+            game,
+            step,
+            context,
+            current,
+            fired_rules,
+            patches,
+            commands,
+            collect_trace,
+            skip_visual_rules,
+            should_stop,
+        )?;
+        if let Some(mut remaining_program) = step_outcome.remaining_program.take() {
+            remaining_program.extend_continuation_steps(&continuation.steps[index + 1..]);
+            step_outcome.remaining_program = Some(remaining_program);
+            outcome.merge(step_outcome);
+            return Ok(outcome);
+        }
+        outcome.merge(step_outcome);
+        if outcome.cancelled {
+            break;
+        }
+    }
+    Ok(outcome)
+}
+
+fn apply_continuation_step_segment<F>(
+    game: &CompiledGame,
+    step: &ContinuationStep,
+    context: &TransitionContext,
+    current: &mut State,
+    fired_rules: &mut Vec<RuleId>,
+    patches: &mut Vec<Patch>,
+    commands: &mut Vec<TransitionCommand>,
+    collect_trace: bool,
+    skip_visual_rules: bool,
+    should_stop: &mut F,
+) -> TransitionResult<SegmentApplyOutcome>
+where
+    F: FnMut(ProgramBoundarySnapshot<'_>) -> bool,
+{
+    match step {
+        ContinuationStep::RuleStep(step) => apply_step_segment(
+            game,
+            step,
+            context,
+            current,
+            fired_rules,
+            patches,
+            commands,
+            collect_trace,
+            skip_visual_rules,
+            should_stop,
+        ),
+        ContinuationStep::LocalFrame {
+            frame,
+            continuation,
+        } => {
+            let scoped_context = TransitionContext {
+                local_frame: Some(frame),
+                ..*context
+            };
+            let mut outcome = apply_continuation_segment(
+                game,
+                continuation,
+                &scoped_context,
+                current,
+                fired_rules,
+                patches,
+                commands,
+                collect_trace,
+                skip_visual_rules,
+                should_stop,
+            )?;
+            if let Some(remaining) = outcome.remaining_program.take() {
+                outcome.remaining_program = if remaining.is_empty() {
+                    Some(ProgramContinuation::empty())
+                } else {
+                    Some(ProgramContinuation::from_step(
+                        ContinuationStep::LocalFrame {
+                            frame: frame.clone(),
+                            continuation: remaining,
+                        },
+                    ))
+                };
+            }
+            Ok(outcome)
+        }
+        ContinuationStep::UntilStable {
+            stop_condition,
+            steps,
+            before,
+            before_hash,
+            seen_states,
+            fired_any,
+            pass_fired,
+            repeat_count,
+            remaining_pass,
+        } => apply_until_stable_continuation_segment(
+            game,
+            stop_condition.as_ref(),
+            steps,
+            before,
+            *before_hash,
+            seen_states.clone(),
+            *fired_any,
+            *pass_fired,
+            *repeat_count,
+            remaining_pass,
+            context,
+            current,
+            fired_rules,
+            patches,
+            commands,
+            collect_trace,
+            skip_visual_rules,
+            should_stop,
+        ),
+    }
+}
+
 fn apply_block_until_stable(
     game: &CompiledGame,
     stop_condition: Option<&RuleCondition>,
@@ -518,6 +1139,247 @@ fn apply_block_until_stable(
     Ok(ApplyOutcome {
         fired: fired_any,
         cancelled: false,
+    })
+}
+
+fn apply_block_until_stable_segment<F>(
+    game: &CompiledGame,
+    stop_condition: Option<&RuleCondition>,
+    steps: &[RuleStep],
+    context: &TransitionContext,
+    current: &mut State,
+    fired_rules: &mut Vec<RuleId>,
+    patches: &mut Vec<Patch>,
+    commands: &mut Vec<TransitionCommand>,
+    collect_trace: bool,
+    skip_visual_rules: bool,
+    should_stop: &mut F,
+) -> TransitionResult<SegmentApplyOutcome>
+where
+    F: FnMut(ProgramBoundarySnapshot<'_>) -> bool,
+{
+    let mut seen_states = StateHistory::from_current(current);
+    let mut fired_any = false;
+    let mut repeat_count = 0;
+
+    loop {
+        if stop_condition
+            .is_some_and(|condition| condition_accepts(game, condition, context, current))
+        {
+            break;
+        }
+        let before_hash = current.hash();
+        let before = current.clone();
+        let pass_outcome = apply_block_once_segment(
+            game,
+            steps,
+            context,
+            current,
+            fired_rules,
+            patches,
+            commands,
+            collect_trace,
+            skip_visual_rules,
+            should_stop,
+        )?;
+        if let Some(remaining_pass) = pass_outcome.remaining_program {
+            return Ok(SegmentApplyOutcome {
+                fired: pass_outcome.fired,
+                cancelled: false,
+                remaining_program: Some(ProgramContinuation::from_step(
+                    ContinuationStep::UntilStable {
+                        stop_condition: stop_condition.cloned(),
+                        steps: steps.to_vec(),
+                        before,
+                        before_hash,
+                        seen_states,
+                        fired_any,
+                        pass_fired: pass_outcome.fired,
+                        repeat_count,
+                        remaining_pass,
+                    },
+                )),
+            });
+        }
+        if pass_outcome.cancelled {
+            return Ok(pass_outcome);
+        }
+        if !pass_outcome.fired {
+            break;
+        }
+        fired_any = true;
+        if current.hash() == before_hash && *current == before {
+            break;
+        }
+        if !seen_states.insert(current) {
+            break;
+        }
+        repeat_count += 1;
+        if repeat_count >= UNTIL_STABLE_REPEAT_LIMIT {
+            break;
+        }
+    }
+
+    Ok(SegmentApplyOutcome {
+        fired: fired_any,
+        cancelled: false,
+        remaining_program: None,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn apply_until_stable_continuation_segment<F>(
+    game: &CompiledGame,
+    stop_condition: Option<&RuleCondition>,
+    steps: &[RuleStep],
+    before: &State,
+    before_hash: u64,
+    mut seen_states: StateHistory,
+    mut fired_any: bool,
+    pass_fired_before_wait: bool,
+    mut repeat_count: usize,
+    remaining_pass: &ProgramContinuation,
+    context: &TransitionContext,
+    current: &mut State,
+    fired_rules: &mut Vec<RuleId>,
+    patches: &mut Vec<Patch>,
+    commands: &mut Vec<TransitionCommand>,
+    collect_trace: bool,
+    skip_visual_rules: bool,
+    should_stop: &mut F,
+) -> TransitionResult<SegmentApplyOutcome>
+where
+    F: FnMut(ProgramBoundarySnapshot<'_>) -> bool,
+{
+    let remaining_outcome = apply_continuation_segment(
+        game,
+        remaining_pass,
+        context,
+        current,
+        fired_rules,
+        patches,
+        commands,
+        collect_trace,
+        skip_visual_rules,
+        should_stop,
+    )?;
+    if let Some(remaining_pass) = remaining_outcome.remaining_program {
+        return Ok(SegmentApplyOutcome {
+            fired: pass_fired_before_wait || remaining_outcome.fired,
+            cancelled: false,
+            remaining_program: Some(ProgramContinuation::from_step(
+                ContinuationStep::UntilStable {
+                    stop_condition: stop_condition.cloned(),
+                    steps: steps.to_vec(),
+                    before: before.clone(),
+                    before_hash,
+                    seen_states,
+                    fired_any,
+                    pass_fired: pass_fired_before_wait || remaining_outcome.fired,
+                    repeat_count,
+                    remaining_pass,
+                },
+            )),
+        });
+    }
+    if remaining_outcome.cancelled {
+        return Ok(remaining_outcome);
+    }
+
+    let pass_fired = pass_fired_before_wait || remaining_outcome.fired;
+    if !pass_fired {
+        return Ok(SegmentApplyOutcome {
+            fired: fired_any,
+            cancelled: false,
+            remaining_program: None,
+        });
+    }
+    fired_any = true;
+    if current.hash() == before_hash && *current == *before {
+        return Ok(SegmentApplyOutcome {
+            fired: true,
+            cancelled: false,
+            remaining_program: None,
+        });
+    }
+    if !seen_states.insert(current) {
+        return Ok(SegmentApplyOutcome {
+            fired: true,
+            cancelled: false,
+            remaining_program: None,
+        });
+    }
+    repeat_count += 1;
+    if repeat_count >= UNTIL_STABLE_REPEAT_LIMIT {
+        return Ok(SegmentApplyOutcome {
+            fired: true,
+            cancelled: false,
+            remaining_program: None,
+        });
+    }
+
+    loop {
+        if stop_condition
+            .is_some_and(|condition| condition_accepts(game, condition, context, current))
+        {
+            break;
+        }
+        let before_hash = current.hash();
+        let before = current.clone();
+        let pass_outcome = apply_block_once_segment(
+            game,
+            steps,
+            context,
+            current,
+            fired_rules,
+            patches,
+            commands,
+            collect_trace,
+            skip_visual_rules,
+            should_stop,
+        )?;
+        if let Some(remaining_pass) = pass_outcome.remaining_program {
+            return Ok(SegmentApplyOutcome {
+                fired: pass_outcome.fired,
+                cancelled: false,
+                remaining_program: Some(ProgramContinuation::from_step(
+                    ContinuationStep::UntilStable {
+                        stop_condition: stop_condition.cloned(),
+                        steps: steps.to_vec(),
+                        before,
+                        before_hash,
+                        seen_states,
+                        fired_any,
+                        pass_fired: pass_outcome.fired,
+                        repeat_count,
+                        remaining_pass,
+                    },
+                )),
+            });
+        }
+        if pass_outcome.cancelled {
+            return Ok(pass_outcome);
+        }
+        if !pass_outcome.fired {
+            break;
+        }
+        fired_any = true;
+        if current.hash() == before_hash && *current == before {
+            break;
+        }
+        if !seen_states.insert(current) {
+            break;
+        }
+        repeat_count += 1;
+        if repeat_count >= UNTIL_STABLE_REPEAT_LIMIT {
+            break;
+        }
+    }
+
+    Ok(SegmentApplyOutcome {
+        fired: fired_any,
+        cancelled: false,
+        remaining_program: None,
     })
 }
 
@@ -714,6 +1576,39 @@ impl ApplyOutcome {
     fn merge(&mut self, other: Self) {
         self.fired |= other.fired;
         self.cancelled |= other.cancelled;
+    }
+}
+
+#[derive(Clone, Debug)]
+struct SegmentApplyOutcome {
+    fired: bool,
+    cancelled: bool,
+    remaining_program: Option<ProgramContinuation>,
+}
+
+impl SegmentApplyOutcome {
+    fn idle() -> Self {
+        Self {
+            fired: false,
+            cancelled: false,
+            remaining_program: None,
+        }
+    }
+
+    fn from_apply(outcome: ApplyOutcome) -> Self {
+        Self {
+            fired: outcome.fired,
+            cancelled: outcome.cancelled,
+            remaining_program: None,
+        }
+    }
+
+    fn merge(&mut self, other: Self) {
+        self.fired |= other.fired;
+        self.cancelled |= other.cancelled;
+        if other.remaining_program.is_some() {
+            self.remaining_program = other.remaining_program;
+        }
     }
 }
 

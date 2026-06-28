@@ -1,4 +1,6 @@
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SceneLayout {
     pub size: Option<SceneSize>,
     pub gap: Option<u16>,
@@ -6,7 +8,7 @@ pub struct SceneLayout {
     pub scroll: bool,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SceneSize {
     pub width: u16,
     pub height: u16,
@@ -18,7 +20,7 @@ impl SceneSize {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SceneAlign {
     pub x: SceneAlignX,
     pub y: SceneAlignY,
@@ -33,21 +35,21 @@ impl Default for SceneAlign {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SceneAlignX {
     Left,
     Center,
     Right,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SceneAlignY {
     Top,
     Center,
     Bottom,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Scene<
     State = (),
     Component = SceneComponent<SceneCommand, SceneTextExpr, SceneTextExpr>,
@@ -88,13 +90,13 @@ impl<State, Component, Action, Rule> Scene<State, Component, Action, Rule> {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SceneInputBinding {
     pub input: String,
     pub keys: Vec<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SceneKeyBinding<Action = SceneCommand> {
     pub keys: Vec<String>,
     pub action: Action,
@@ -113,7 +115,7 @@ impl<Action> SceneKeyBinding<Action> {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SceneControl<Action = SceneCommand> {
     pub key: String,
     pub target: SceneControlTarget<Action>,
@@ -128,13 +130,13 @@ impl<Action> SceneControl<Action> {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SceneControlTarget<Action = SceneCommand> {
     Input(String),
     Action(Action),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SceneRuleCall {
     pub target: String,
     pub rule: String,
@@ -155,7 +157,7 @@ impl SceneRuleCall {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SceneInputMap {
     pub from: String,
     pub to: String,
@@ -170,19 +172,19 @@ impl SceneInputMap {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SceneTransition<Effect = SceneCommand> {
     pub trigger: SceneTransitionTrigger,
     pub effect: Effect,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SceneTransitionTrigger {
     Condition(String),
     SceneStart,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SceneComponent<Effect = SceneCommand, LabelExpr = SceneTextExpr, TextExpr = SceneTextExpr>
 {
     Frame(FrameComponent),
@@ -270,7 +272,7 @@ impl<Effect, LabelExpr, TextExpr> SceneComponent<Effect, LabelExpr, TextExpr> {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SceneComponentKind {
     Frame,
     Title,
@@ -340,7 +342,7 @@ pub const GENERIC_SCENE_COMPONENT_KINDS: &[SceneComponentKind] = &[
     SceneComponentKind::LevelMenu,
 ];
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FrameComponent {
     pub kind: String,
     pub source: String,
@@ -348,26 +350,26 @@ pub struct FrameComponent {
     pub layout: SceneLayout,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SceneTextExpr {
     Literal(String),
     Path(Vec<String>),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SceneTextComponent<Expr = SceneTextExpr> {
     pub content: Expr,
     pub layout: SceneLayout,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SceneButton<Effect = SceneCommand, Expr = SceneTextExpr> {
     pub label: Expr,
     pub effect: Effect,
     pub layout: SceneLayout,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SceneContainer<
     Effect = SceneCommand,
     LabelExpr = SceneTextExpr,
@@ -377,7 +379,7 @@ pub struct SceneContainer<
     pub layout: SceneLayout,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SceneConditional<
     Effect = SceneCommand,
     LabelExpr = SceneTextExpr,
@@ -388,14 +390,14 @@ pub struct SceneConditional<
     pub else_children: Vec<SceneComponent<Effect, LabelExpr, TextExpr>>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SceneFor<Effect = SceneCommand, LabelExpr = SceneTextExpr, TextExpr = SceneTextExpr> {
     pub binding: String,
     pub source: SceneForSource,
     pub children: Vec<SceneComponent<Effect, LabelExpr, TextExpr>>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SceneForSource {
     Levels,
     State(String),
@@ -414,7 +416,7 @@ impl SceneForSource {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LevelMenuComponent<Effect = SceneCommand, Expr = SceneTextExpr> {
     pub source: Option<String>,
     pub action: Option<Effect>,
@@ -443,25 +445,25 @@ impl<Effect, Expr> Default for LevelMenuComponent<Effect, Expr> {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LevelMenuLocked {
     #[default]
     Disabled,
     Hidden,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SceneCommand {
     pub name: String,
     pub args: Vec<SceneCommandArg>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SceneAction {
     Goto { scene: String },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SceneCommandArg {
     pub name: String,
     pub value: SceneTextExpr,

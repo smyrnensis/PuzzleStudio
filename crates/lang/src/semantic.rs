@@ -4,11 +4,11 @@ use crate::{
     ANIMATION_BLOCK_OPTIONS, ANIMATION_TWEEN_OPTIONS, LEVEL_MENU_OPTIONS, LevelPathPartSyntax,
     MUSIC_SOUND_SETTING_OPTIONS, MapHeaderTokenSyntax, PUZZLE_RENDER_BLOCK_OPTIONS,
     PUZZLE_RENDER_GRID_OPTIONS, RewriteEffectCommandSyntax, SFX_SOUND_SETTING_OPTIONS,
-    SceneStateLhsSyntax, SoundSettingValueSyntax, THEME_SETTING_SPECS, level_path_part_syntax,
-    map_header_token_syntax, metadata_directive_value_token_index,
+    SceneStateLhsSyntax, SoundSettingValueSyntax, SurfaceOptionBlock, THEME_SETTING_SPECS,
+    level_path_part_syntax, map_header_token_syntax, metadata_directive_value_token_index,
     rewrite_direction_prefix_token_index, rewrite_effect_command_syntax,
     rewrite_effect_semantic_tokens, scene_effect_command_syntax, scene_effect_semantic_tokens,
-    scene_state_lhs_syntax, sound_setting_value_syntax,
+    scene_state_lhs_syntax, sound_setting_value_syntax, surface_option_block_before_line,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -50,16 +50,18 @@ pub(crate) struct SemanticCompletionContext {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SemanticCompletionSlot {
     Keywords(&'static [&'static str]),
+    ModelTopLevelKeywords,
     Literals(&'static [&'static str]),
     Objects,
     Groups,
     States,
     Scratches,
-    Variants,
+    ObjectNameAtoms,
     ValueSets,
     Directions,
     DirectionSets,
     Inputs,
+    StandardRuleSteps,
     ModelEffects,
     SceneEffects,
     Emissions,
@@ -91,7 +93,6 @@ pub fn semantic_tokens(source: &str) -> Vec<SemanticToken> {
         scan_semantic_line(line.scope, &line_tokens, &mut tokens);
     }
     tokens.extend(crate::surface_document_semantic_tokens(source));
-    scan_option_semantic_tokens(&context.lines, &mut tokens);
     tokens
 }
 
@@ -152,7 +153,7 @@ fn contextual_completion_slots(
     if token.text.contains(':') {
         return Some(vec![
             SemanticCompletionSlot::ValueSets,
-            SemanticCompletionSlot::Variants,
+            SemanticCompletionSlot::ObjectNameAtoms,
         ]);
     }
 
@@ -264,8 +265,8 @@ fn line_head_completion_slots(
     scope: Option<SourceScope>,
 ) -> Vec<SemanticCompletionSlot> {
     match scope {
-        None
-        | Some(
+        None => vec![SemanticCompletionSlot::ModelTopLevelKeywords],
+        Some(
             SourceScope::Puzzle
             | SourceScope::Sounds
             | SourceScope::Assets
@@ -291,52 +292,59 @@ fn line_head_completion_slots(
         ) => vec![SemanticCompletionSlot::Keywords(
             completion_keywords_for_scope(scope),
         )],
-        Some(SourceScope::Other)
-            if current_block_name_before_line(context, line_index) == Some("rules") =>
-        {
+        Some(SourceScope::Other) if current_statement_block_before_line(context, line_index) => {
             vec![
-                SemanticCompletionSlot::Keywords(RULE_HEAD_COMPLETION_KEYWORDS),
+                SemanticCompletionSlot::Keywords(puzzle_authoring::RULE_STATEMENT_HEAD_KEYWORDS),
                 SemanticCompletionSlot::Routines,
+                SemanticCompletionSlot::StandardRuleSteps,
                 SemanticCompletionSlot::Directions,
                 SemanticCompletionSlot::DirectionSets,
+                SemanticCompletionSlot::ModelEffects,
+                SemanticCompletionSlot::Emissions,
             ]
         }
         Some(SourceScope::Other) => fallback_completion_slots(scope),
     }
 }
 
-fn current_block_name_before_line(
+fn current_statement_block_before_line(
     context: &crate::source::SourceContext,
     line_index: usize,
-) -> Option<&str> {
-    let mut stack = Vec::<&str>::new();
+) -> bool {
+    let mut stack = Vec::<CompletionBlockKind>::new();
     for line in context.lines.iter().take(line_index) {
-        let trimmed = line.content.trim();
-        if trimmed == "}" {
-            stack.pop();
-            continue;
-        }
-        if line_opens_completion_block(line)
-            && let Some(first) = line.tokens.first()
-        {
-            stack.push(first.as_str());
-        }
+        update_completion_block_stack(line.content.trim(), &mut stack);
     }
-    stack.last().copied()
+    stack.last() == Some(&CompletionBlockKind::Statement)
 }
 
-fn line_opens_completion_block(line: &crate::source::SourceContextLine) -> bool {
-    line.content.trim_end().ends_with('{')
-        || matches!(
-            line.tokens.as_slice(),
-            [name] if matches!(
-                name.as_str(),
-                "sounds" | "assets" | "tags" | "layers" | "collision_layers"
-                    | "groups" | "scratch" | "keys" | "resources" | "legend"
-                    | "levels" | "levels3" | "rules" | "render" | "camera" | "layout"
-                    | "state" | "on_scene_start" | "level_menu"
-            )
-        )
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CompletionBlockKind {
+    Statement,
+    Other,
+}
+
+fn update_completion_block_stack(line: &str, stack: &mut Vec<CompletionBlockKind>) {
+    let mut current = line;
+    while let Some(rest) = current.strip_prefix('}') {
+        stack.pop();
+        current = rest.trim_start();
+        if current.is_empty() {
+            return;
+        }
+    }
+    if !current.ends_with('{') {
+        return;
+    }
+    let parent_is_statement_block = stack.last() == Some(&CompletionBlockKind::Statement);
+    let kind = if puzzle_authoring::rule_statement_block_surface(current, parent_is_statement_block)
+        .is_some()
+    {
+        CompletionBlockKind::Statement
+    } else {
+        CompletionBlockKind::Other
+    };
+    stack.push(kind);
 }
 
 fn sound_setting_completion_slots(
@@ -376,7 +384,7 @@ fn option_completion_slots(
     line_index: usize,
     before: &str,
 ) -> Option<Vec<SemanticCompletionSlot>> {
-    let block = option_block_before_line(&context.lines, line_index);
+    let block = surface_option_block_before_line(&context.lines, line_index);
     let tokens_before = before
         .split(|ch: char| ch.is_whitespace() || matches!(ch, '{' | '}' | ',' | ';'))
         .filter(|token| !token.is_empty())
@@ -384,18 +392,18 @@ fn option_completion_slots(
     let first = tokens_before.first().copied();
 
     let option_names = match (block, first) {
-        (Some(OptionBlock::Render3), Some("camera")) => puzzle_3d::CAMERA_OPTIONS3,
-        (Some(OptionBlock::Render3), Some("grid")) => puzzle_3d::GRID_BARE_OPTIONS3,
-        (Some(OptionBlock::Render3), Some("pixelate")) => puzzle_3d::PIXELATE_OPTIONS3,
-        (Some(OptionBlock::Render2), Some("grid")) => PUZZLE_RENDER_GRID_OPTIONS,
-        (Some(OptionBlock::Animation), Some("tween")) => ANIMATION_TWEEN_OPTIONS,
-        (Some(OptionBlock::Camera3), _) => puzzle_3d::CAMERA_OPTIONS3,
-        (Some(OptionBlock::Grid3), _) => puzzle_3d::GRID_BARE_OPTIONS3,
-        (Some(OptionBlock::Pixelate3), _) => puzzle_3d::PIXELATE_OPTIONS3,
-        (Some(OptionBlock::Grid2), _) => PUZZLE_RENDER_GRID_OPTIONS,
-        (Some(OptionBlock::Tween), _) => ANIMATION_TWEEN_OPTIONS,
-        (Some(OptionBlock::LevelMenu), _) => LEVEL_MENU_OPTIONS,
-        (Some(OptionBlock::Theme), _) => {
+        (Some(SurfaceOptionBlock::Render3), Some("camera")) => puzzle_3d::CAMERA_OPTIONS3,
+        (Some(SurfaceOptionBlock::Render3), Some("grid")) => puzzle_3d::GRID_BARE_OPTIONS3,
+        (Some(SurfaceOptionBlock::Render3), Some("pixelate")) => puzzle_3d::PIXELATE_OPTIONS3,
+        (Some(SurfaceOptionBlock::Render2), Some("grid")) => PUZZLE_RENDER_GRID_OPTIONS,
+        (Some(SurfaceOptionBlock::Animation), Some("tween")) => ANIMATION_TWEEN_OPTIONS,
+        (Some(SurfaceOptionBlock::Camera3), _) => puzzle_3d::CAMERA_OPTIONS3,
+        (Some(SurfaceOptionBlock::Grid3), _) => puzzle_3d::GRID_BARE_OPTIONS3,
+        (Some(SurfaceOptionBlock::Pixelate3), _) => puzzle_3d::PIXELATE_OPTIONS3,
+        (Some(SurfaceOptionBlock::Grid2), _) => PUZZLE_RENDER_GRID_OPTIONS,
+        (Some(SurfaceOptionBlock::Tween), _) => ANIMATION_TWEEN_OPTIONS,
+        (Some(SurfaceOptionBlock::LevelMenu), _) => LEVEL_MENU_OPTIONS,
+        (Some(SurfaceOptionBlock::Theme), _) => {
             if theme_setting_value_is_before_cursor(before) {
                 return Some(vec![SemanticCompletionSlot::Colors]);
             }
@@ -403,9 +411,9 @@ fn option_completion_slots(
                 SettingCompletionSet::Theme,
             )]);
         }
-        (Some(OptionBlock::Render3), _) => puzzle_3d::RENDER_OPTIONS3,
-        (Some(OptionBlock::Render2), _) => PUZZLE_RENDER_BLOCK_OPTIONS,
-        (Some(OptionBlock::Animation), _) => ANIMATION_BLOCK_OPTIONS,
+        (Some(SurfaceOptionBlock::Render3), _) => puzzle_3d::RENDER_OPTIONS3,
+        (Some(SurfaceOptionBlock::Render2), _) => PUZZLE_RENDER_BLOCK_OPTIONS,
+        (Some(SurfaceOptionBlock::Animation), _) => ANIMATION_BLOCK_OPTIONS,
         _ => return None,
     };
 
@@ -456,98 +464,6 @@ fn visual_completion_slots(
             }
         }
         _ => None,
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum OptionBlock {
-    Puzzle2,
-    Puzzle3,
-    Render2,
-    Render3,
-    Camera3,
-    Grid2,
-    Grid3,
-    Pixelate3,
-    Animation,
-    Tween,
-    LevelMenu,
-    Theme,
-    Other,
-}
-
-fn option_block_before_line(
-    lines: &[crate::source::SourceContextLine],
-    line_index: usize,
-) -> Option<OptionBlock> {
-    let mut stack = Vec::<OptionBlock>::new();
-    for line in lines.iter().take(line_index) {
-        update_option_block_stack(line, &mut stack);
-    }
-    stack.iter().rev().copied().find(|block| {
-        matches!(
-            block,
-            OptionBlock::Render2
-                | OptionBlock::Render3
-                | OptionBlock::Camera3
-                | OptionBlock::Grid2
-                | OptionBlock::Grid3
-                | OptionBlock::Pixelate3
-                | OptionBlock::Animation
-                | OptionBlock::Tween
-                | OptionBlock::LevelMenu
-                | OptionBlock::Theme
-        )
-    })
-}
-
-fn update_option_block_stack(
-    line: &crate::source::SourceContextLine,
-    stack: &mut Vec<OptionBlock>,
-) {
-    let trimmed = line.content.trim();
-    if trimmed == "}" {
-        stack.pop();
-        return;
-    }
-    if !line_opens_option_block(line) {
-        return;
-    }
-    let block = option_block_for_opening(&line.tokens, stack);
-    stack.push(block);
-}
-
-fn line_opens_option_block(line: &crate::source::SourceContextLine) -> bool {
-    line.content.trim_end().ends_with('{')
-        || matches!(
-            line.tokens.as_slice(),
-            [name] if matches!(
-                name.as_str(),
-                "puzzle" | "puzzle3" | "render" | "camera" | "grid" | "pixelate"
-                    | "animation" | "tween" | "level_menu"
-                    | "theme"
-            )
-        )
-}
-
-fn option_block_for_opening(tokens: &[String], stack: &[OptionBlock]) -> OptionBlock {
-    let Some(first) = tokens.first().map(String::as_str) else {
-        return OptionBlock::Other;
-    };
-    match first {
-        "puzzle3" => OptionBlock::Puzzle3,
-        "puzzle" => OptionBlock::Puzzle2,
-        "render" if stack.contains(&OptionBlock::Puzzle3) => OptionBlock::Render3,
-        "render" => OptionBlock::Render2,
-        "camera" if stack.last() == Some(&OptionBlock::Render3) => OptionBlock::Camera3,
-        "grid" if stack.last() == Some(&OptionBlock::Render3) => OptionBlock::Grid3,
-        "grid" if stack.last() == Some(&OptionBlock::Render2) => OptionBlock::Grid2,
-        "pixelate" if stack.last() == Some(&OptionBlock::Render3) => OptionBlock::Pixelate3,
-        "animation" => OptionBlock::Animation,
-        "tween" if stack.last() == Some(&OptionBlock::Animation) => OptionBlock::Tween,
-        "level_menu" => OptionBlock::LevelMenu,
-        "theme" => OptionBlock::Theme,
-        _ => OptionBlock::Other,
     }
 }
 
@@ -733,9 +649,7 @@ pub(crate) fn is_completion_keyword(token: &str) -> bool {
 
 fn fallback_completion_slots(scope: Option<SourceScope>) -> Vec<SemanticCompletionSlot> {
     match scope {
-        None => vec![SemanticCompletionSlot::Keywords(
-            completion_keywords_for_scope(scope),
-        )],
+        None => vec![SemanticCompletionSlot::ModelTopLevelKeywords],
         Some(SourceScope::Sounds | SourceScope::Assets) => {
             vec![SemanticCompletionSlot::Keywords(
                 completion_keywords_for_scope(scope),
@@ -749,7 +663,7 @@ fn fallback_completion_slots(scope: Option<SourceScope>) -> Vec<SemanticCompleti
         ],
         Some(SourceScope::Scratch) => vec![
             SemanticCompletionSlot::Keywords(completion_keywords_for_scope(scope)),
-            SemanticCompletionSlot::Variants,
+            SemanticCompletionSlot::ObjectNameAtoms,
             SemanticCompletionSlot::Directions,
             SemanticCompletionSlot::DirectionSets,
         ],
@@ -823,7 +737,7 @@ fn rule_expression_completion_slots() -> Vec<SemanticCompletionSlot> {
         SemanticCompletionSlot::Groups,
         SemanticCompletionSlot::States,
         SemanticCompletionSlot::Scratches,
-        SemanticCompletionSlot::Variants,
+        SemanticCompletionSlot::ObjectNameAtoms,
         SemanticCompletionSlot::Directions,
         SemanticCompletionSlot::DirectionSets,
         SemanticCompletionSlot::Inputs,
@@ -836,7 +750,7 @@ fn rule_expression_completion_slots() -> Vec<SemanticCompletionSlot> {
 
 fn completion_keywords_for_scope(scope: Option<SourceScope>) -> &'static [&'static str] {
     match scope {
-        None => TOP_LEVEL_COMPLETION_KEYWORDS,
+        None => &[],
         Some(SourceScope::Sounds) => SOUNDS_COMPLETION_KEYWORDS,
         Some(SourceScope::Assets) => ASSET_COMPLETION_KEYWORDS,
         Some(SourceScope::Puzzle) => PUZZLE_COMPLETION_KEYWORDS,
@@ -940,30 +854,6 @@ fn is_completion_char(ch: char) -> bool {
     ch == '@' || ch == '_' || ch == ':' || ch == '.' || ch == '-' || ch.is_ascii_alphanumeric()
 }
 
-const TOP_LEVEL_COMPLETION_KEYWORDS: &[&str] = &[
-    "again_interval",
-    "assets",
-    "author",
-    "sounds",
-    "const",
-    "homepage",
-    "import",
-    "levels",
-    "levels3",
-    "music",
-    "puzzle",
-    "puzzle3",
-    "resources",
-    "scene",
-    "sfx",
-    "sprites",
-    "sprites3",
-    "subtitle",
-    "theme",
-    "title",
-    "var",
-];
-
 const SOUNDS_COMPLETION_KEYWORDS: &[&str] = &["music", "sfx"];
 
 const ASSET_COMPLETION_KEYWORDS: &[&str] = &["css", "script"];
@@ -975,16 +865,6 @@ const SCRATCH_COMPLETION_KEYWORDS: &[&str] = &["const", "persistent", "var"];
 const KEY_COMPLETION_KEYWORDS: &[&str] = &["direction", "input"];
 const LEGEND_COMPLETION_KEYWORDS: &[&str] = &["empty"];
 const LEVEL_COMPLETION_KEYWORDS: &[&str] = &["legend", "level", "of"];
-const RULE_HEAD_COMPLETION_KEYWORDS: &[&str] = &[
-    "display",
-    "for",
-    "if",
-    "input",
-    "once",
-    "once_all",
-    "once_per_level",
-    "repeat",
-];
 const SCENE_FOR_SOURCE_COMPLETION_KEYWORDS: &[&str] = &["levels"];
 
 const SCENE_COMPLETION_KEYWORDS: &[&str] = &[
@@ -1299,7 +1179,7 @@ fn scan_tag_set_line(
     }
     add_token_range(ranges, *name, SemanticKind::Group);
     for value in values {
-        add_token_range(ranges, *value, SemanticKind::Variant);
+        add_token_range(ranges, *value, SemanticKind::Object);
     }
 }
 
@@ -1404,131 +1284,6 @@ fn scan_render_setting_line(
         && first.text == "shade"
     {
         add_token_range(ranges, first, SemanticKind::Keyword);
-    }
-}
-
-fn scan_option_semantic_tokens(
-    lines: &[crate::source::SourceContextLine],
-    ranges: &mut Vec<SemanticToken>,
-) {
-    let mut stack = Vec::<OptionBlock>::new();
-    for line in lines {
-        let block = stack.iter().rev().copied().find(|block| {
-            matches!(
-                block,
-                OptionBlock::Render2
-                    | OptionBlock::Render3
-                    | OptionBlock::Camera3
-                    | OptionBlock::Grid2
-                    | OptionBlock::Grid3
-                    | OptionBlock::Pixelate3
-                    | OptionBlock::Animation
-                    | OptionBlock::Tween
-                    | OptionBlock::LevelMenu
-                    | OptionBlock::Theme
-            )
-        });
-        let line_tokens = source_tokens_as_line_tokens(&line.token_spans);
-        scan_option_semantic_line(block, &line_tokens, ranges);
-        update_option_block_stack(line, &mut stack);
-    }
-}
-
-fn scan_option_semantic_line(
-    block: Option<OptionBlock>,
-    tokens: &[LineToken<'_>],
-    ranges: &mut Vec<SemanticToken>,
-) {
-    let Some(first) = tokens.first().copied() else {
-        return;
-    };
-    match block {
-        Some(OptionBlock::Render3) if puzzle_3d::RENDER_OPTIONS3.contains(&first.text) => {
-            add_token_range(ranges, first, SemanticKind::Setting);
-            match first.text {
-                "camera" => scan_option_tokens(&tokens[1..], puzzle_3d::CAMERA_OPTIONS3, ranges),
-                "grid" => scan_option_tokens(&tokens[1..], puzzle_3d::GRID_BARE_OPTIONS3, ranges),
-                "pixelate" => {
-                    scan_option_tokens(&tokens[1..], puzzle_3d::PIXELATE_OPTIONS3, ranges)
-                }
-                _ => {}
-            }
-        }
-        Some(OptionBlock::Render2) if PUZZLE_RENDER_BLOCK_OPTIONS.contains(&first.text) => {
-            add_token_range(ranges, first, SemanticKind::Setting);
-            if first.text == "grid" {
-                scan_option_tokens(&tokens[1..], PUZZLE_RENDER_GRID_OPTIONS, ranges);
-            }
-        }
-        Some(OptionBlock::Camera3) => {
-            scan_option_tokens(tokens, puzzle_3d::CAMERA_OPTIONS3, ranges)
-        }
-        Some(OptionBlock::Grid3) => {
-            scan_option_tokens(tokens, puzzle_3d::GRID_BARE_OPTIONS3, ranges)
-        }
-        Some(OptionBlock::Pixelate3) => {
-            scan_option_tokens(tokens, puzzle_3d::PIXELATE_OPTIONS3, ranges)
-        }
-        Some(OptionBlock::Grid2) => scan_option_tokens(tokens, PUZZLE_RENDER_GRID_OPTIONS, ranges),
-        Some(OptionBlock::Animation) if ANIMATION_BLOCK_OPTIONS.contains(&first.text) => {
-            add_token_range(ranges, first, SemanticKind::Setting);
-            if first.text == "tween" {
-                scan_option_tokens(&tokens[1..], ANIMATION_TWEEN_OPTIONS, ranges);
-            }
-        }
-        Some(OptionBlock::Tween) => scan_option_tokens(tokens, ANIMATION_TWEEN_OPTIONS, ranges),
-        Some(OptionBlock::LevelMenu) => scan_option_tokens(tokens, LEVEL_MENU_OPTIONS, ranges),
-        Some(OptionBlock::Theme) => scan_theme_setting_tokens(tokens, ranges),
-        _ => {}
-    }
-}
-
-fn scan_option_tokens(
-    tokens: &[LineToken<'_>],
-    option_names: &'static [&'static str],
-    ranges: &mut Vec<SemanticToken>,
-) {
-    for token in tokens {
-        let name = token
-            .text
-            .split_once('=')
-            .map_or(token.text, |(name, _)| name);
-        if !name.is_empty()
-            && option_names.contains(&name)
-            && let Some(relative_start) = token.text.find(name)
-        {
-            add_token_subrange(
-                ranges,
-                *token,
-                relative_start,
-                relative_start + name.len(),
-                SemanticKind::Setting,
-            );
-        }
-    }
-}
-
-fn scan_theme_setting_tokens(tokens: &[LineToken<'_>], ranges: &mut Vec<SemanticToken>) {
-    for token in tokens {
-        let name = token
-            .text
-            .trim_start_matches("--")
-            .split_once('=')
-            .map_or(token.text, |(name, _)| name);
-        let normalized = name.replace('_', "-").to_ascii_lowercase();
-        if THEME_SETTING_SPECS.iter().any(|spec| {
-            normalized == spec.canonical.replace('_', "-")
-                || spec.aliases.iter().any(|alias| normalized == *alias)
-        }) && let Some(relative_start) = token.text.find(name)
-        {
-            add_token_subrange(
-                ranges,
-                *token,
-                relative_start,
-                relative_start + name.len(),
-                SemanticKind::Setting,
-            );
-        }
     }
 }
 
@@ -2100,7 +1855,7 @@ solid = Player Box Wall
     }
 
     #[test]
-    fn classifies_tag_set_definitions_as_groups_and_variants() {
+    fn classifies_tag_set_definitions_as_groups_and_object_name_atoms() {
         let source = r#"
 title tag_semantics
 
@@ -2124,12 +1879,12 @@ facing = left right
         assert!(tokens.iter().any(|token| {
             token.start == red_start
                 && token.end == red_start + "red".len()
-                && token.kind == SemanticKind::Variant
+                && token.kind == SemanticKind::Object
         }));
         assert!(tokens.iter().any(|token| {
             token.start == left_start
                 && token.end == left_start + "left".len()
-                && token.kind == SemanticKind::Variant
+                && token.kind == SemanticKind::Object
         }));
     }
 

@@ -535,7 +535,7 @@ fn top_level_sounds_keeps_only_seed_and_settings() {
 title sounds_game
 
 sounds {
-  sfx effect seed=746670 type=jump
+  sfx effect seed=746670 type=jump volume=0.35
   music loop seed=123456 bars=16 height=0.62 bpm=104 volume=0.8
 }
 
@@ -565,6 +565,7 @@ P
     assert_eq!(loaded.sounds.sfx[0].name, "effect");
     assert_eq!(loaded.sounds.sfx[0].seed, "746670");
     assert_eq!(loaded.sounds.sfx[0].type_target, "jump");
+    assert_eq!(loaded.sounds.sfx[0].volume, 0.35);
     assert_eq!(loaded.sounds.music.len(), 1);
     assert_eq!(loaded.sounds.music[0].name, "loop");
     assert_eq!(loaded.sounds.music[0].seed, "123456");
@@ -572,6 +573,77 @@ P
     assert_eq!(loaded.sounds.music[0].bars, 16);
     assert_eq!(loaded.sounds.music[0].bpm, 104);
     assert_eq!(loaded.sounds.music[0].volume, 0.8);
+}
+
+#[test]
+fn top_level_sfx_volume_defaults_to_existing_full_gain() {
+    let source = r#"
+title sounds_game
+
+sounds {
+  sfx effect seed=746670 type=jump
+}
+
+puzzle board {
+layers {
+background = Player
+}
+
+legend {
+. = empty
+P = Player
+}
+
+rules {
+
+}
+
+levels {
+level one
+P
+}
+}
+"#;
+
+    let loaded = parse_game(source).unwrap();
+    assert_eq!(loaded.sounds.sfx[0].volume, 1.0);
+}
+
+#[test]
+fn top_level_sfx_rejects_out_of_range_volume() {
+    let source = r#"
+title sounds_game
+
+sounds {
+  sfx effect seed=746670 type=jump volume=1.5
+}
+
+puzzle board {
+layers {
+background = Player
+}
+
+legend {
+. = empty
+P = Player
+}
+
+rules {
+
+}
+
+levels {
+level one
+P
+}
+}
+"#;
+
+    let error = parse_game(source).unwrap_err().to_string();
+    assert!(
+        error.contains("sfx volume must be between 0 and 1"),
+        "{error}"
+    );
 }
 
 #[test]
@@ -2596,11 +2668,11 @@ P
 scene level_select {
 layout {
 level_menu {
+button "Title" -> goto title
 show_index = true
 show_solved = true
 columns = 4
 wrap = true
-button "Title" -> goto title
 }
 }
 }
@@ -2617,6 +2689,49 @@ button "Title" -> goto title
     assert!(menu.wrap);
     assert!(matches!(
         &menu.buttons[0].effect,
+        SceneEffect::Goto { scene, params } if scene == "title" && params.is_empty()
+    ));
+}
+
+#[test]
+fn bare_level_menu_does_not_capture_following_button() {
+    let source = r#"
+title bare_level_menu_button_boundary
+
+puzzle board {
+layers {
+actor = Player
+}
+empty .
+legend {
+P = Player
+}
+rules {
+}
+level start {
+P
+}
+}
+
+scene level_select {
+layout {
+level_menu
+button "Back" -> goto title
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    let scene = &loaded.scenes[0];
+    let [
+        SceneComponent::LevelMenu(menu),
+        SceneComponent::Button(button),
+    ] = scene.components.as_slice()
+    else {
+        panic!("expected bare level_menu followed by top-level button");
+    };
+    assert!(menu.buttons.is_empty());
+    assert!(matches!(
+        &button.effect,
         SceneEffect::Goto { scene, params } if scene == "title" && params.is_empty()
     ));
 }
@@ -5887,6 +6002,140 @@ B
 }
 
 #[test]
+fn puzzle_sprites_keep_solid_entry_before_line_style_shape_sprite() {
+    let source = r##"
+title solid_before_line_style_shape_sprite
+
+puzzle default {
+tags {
+state = open close
+}
+layers {
+__legacy_layer_0 = Hole Box:state
+}
+legend H = Hole
+legend B = Box:open
+legend {
+. = empty
+}
+sprites {
+shapes {
+Box {
+01
+10
+}
+}
+
+Hole
+#000
+
+Box:open
+#45667d #2f485d
+shape Box
+
+Box:close
+#34444e #262f38
+shape Box
+}
+rules {
+
+}
+levels {
+level start
+HB
+}
+}
+"##;
+    let loaded = parse_game(source).unwrap();
+
+    let hole_sprite = loaded
+        .visuals
+        .sprites
+        .iter()
+        .find(|sprite| sprite.name == "Hole")
+        .unwrap();
+    match &hole_sprite.kind {
+        VisualSpriteKind::Solid(color) => assert_eq!(color, "#000"),
+        _ => panic!("Hole should be a solid sprite"),
+    }
+
+    let box_sprite = loaded
+        .visuals
+        .sprites
+        .iter()
+        .find(|sprite| sprite.name == "Box-open")
+        .unwrap();
+    match &box_sprite.kind {
+        VisualSpriteKind::Ascii { pattern, colors } => {
+            assert_eq!(pattern.as_slice(), ["01".to_string(), "10".to_string()]);
+            assert!(
+                colors
+                    .iter()
+                    .any(|color| color.token == '0' && color.color == "#45667d")
+            );
+            assert!(
+                colors
+                    .iter()
+                    .any(|color| color.token == '1' && color.color == "#2f485d")
+            );
+        }
+        _ => panic!("Box:open should be an ascii sprite"),
+    }
+}
+
+#[test]
+fn puzzle_sprites_warn_when_generated_sprite_key_is_overwritten() {
+    let source = r##"
+title duplicate_sprite_visual
+
+puzzle default {
+layers {
+__legacy_layer_0 = Crack
+}
+legend C = Crack
+legend {
+. = empty
+}
+sprites {
+Crack
+#2cc511
+.....
+..0..
+.000.
+..0..
+.....
+
+Crack
+#000
+0
+}
+rules {
+
+}
+levels {
+level start
+C
+}
+}
+"##;
+    let loaded = parse_game(source).unwrap();
+
+    assert_eq!(
+        loaded
+            .visuals
+            .sprites
+            .iter()
+            .filter(|sprite| sprite.name == "Crack")
+            .count(),
+        2
+    );
+    assert!(loaded.warnings.iter().any(|warning| {
+        warning.contains("visual sprite `Crack` is defined more than once")
+            && warning.contains("later definition overwrites earlier sprite")
+    }));
+}
+
+#[test]
 fn puzzle_sprites_accept_line_style_tagged_ascii_sprite_after_pattern() {
     let source = r##"
 title line_style_tagged_ascii_sprite
@@ -6207,6 +6456,228 @@ B
             assert_eq!(colors[1].color, "#eee");
         }
         _ => panic!("Box should be an ascii sprite"),
+    }
+}
+
+#[test]
+fn puzzle_sprites_accept_terminal_unbraced_shape_block_before_colors() {
+    let source = r##"
+title terminal_unbraced_shape_block_before_colors
+
+puzzle default {
+layers {
+__legacy_layer_0 = Box
+}
+legend B = Box
+legend {
+. = empty
+}
+sprites {
+shapes {
+box_shape
+010
+111
+010
+}
+
+colors {
+box_color = #eee
+}
+
+Box {
+box_color #111
+shape box_shape
+}
+}
+rules {
+
+}
+levels {
+level start
+B
+}
+}
+"##;
+    let loaded = parse_game(source).unwrap();
+    let box_sprite = loaded
+        .visuals
+        .sprites
+        .iter()
+        .find(|sprite| sprite.name == "Box")
+        .unwrap();
+    match &box_sprite.kind {
+        VisualSpriteKind::Ascii { pattern, colors } => {
+            assert_eq!(
+                pattern.as_slice(),
+                ["010".to_string(), "111".to_string(), "010".to_string()].as_slice()
+            );
+            assert!(
+                colors
+                    .iter()
+                    .any(|color| { color.token == '0' && color.color == "#eee" })
+            );
+            assert!(
+                colors
+                    .iter()
+                    .any(|color| { color.token == '1' && color.color == "#111" })
+            );
+        }
+        _ => panic!("Box should be an ascii sprite"),
+    }
+}
+
+#[test]
+fn puzzle_sprites_accept_multiple_unbraced_shapes_in_one_shapes_block() {
+    let source = r##"
+title multiple_unbraced_shapes
+
+puzzle default {
+layers {
+__legacy_layer_0 = Box Pull
+}
+legend B = Box
+legend P = Pull
+legend {
+. = empty
+}
+sprites {
+shapes {
+Box
+010
+111
+010
+
+Pull
+000
+010
+000
+}
+
+Box {
+colors #111 #eee
+shape Box
+}
+
+Pull {
+colors #222 #0f0
+shape Pull
+}
+}
+rules {
+
+}
+levels {
+level start
+BP
+}
+}
+"##;
+    let loaded = parse_game(source).unwrap();
+    let box_sprite = loaded
+        .visuals
+        .sprites
+        .iter()
+        .find(|sprite| sprite.name == "Box")
+        .unwrap();
+    match &box_sprite.kind {
+        VisualSpriteKind::Ascii { pattern, .. } => {
+            assert_eq!(
+                pattern.as_slice(),
+                ["010".to_string(), "111".to_string(), "010".to_string()].as_slice()
+            );
+        }
+        _ => panic!("Box should be an ascii sprite"),
+    }
+
+    let pull_sprite = loaded
+        .visuals
+        .sprites
+        .iter()
+        .find(|sprite| sprite.name == "Pull")
+        .unwrap();
+    match &pull_sprite.kind {
+        VisualSpriteKind::Ascii { pattern, .. } => {
+            assert_eq!(
+                pattern.as_slice(),
+                ["000".to_string(), "010".to_string(), "000".to_string()].as_slice()
+            );
+        }
+        _ => panic!("Pull should be an ascii sprite"),
+    }
+}
+
+#[test]
+fn puzzle_sprites_do_not_extend_unbraced_shape_by_row_width() {
+    let source = r##"
+title unbraced_shape_boundary
+
+puzzle default {
+layers {
+__legacy_layer_0 = Box Pad
+}
+legend B = Box
+legend P = Pad
+legend {
+. = empty
+}
+sprites {
+shapes {
+Box
+010
+111
+010
+
+Pad
+0
+}
+
+Box {
+colors #111 #eee
+shape Box
+}
+
+Pad {
+colors #222
+shape Pad
+}
+}
+rules {
+
+}
+levels {
+level start
+BP
+}
+}
+"##;
+    let loaded = parse_game(source).unwrap();
+    let box_sprite = loaded
+        .visuals
+        .sprites
+        .iter()
+        .find(|sprite| sprite.name == "Box")
+        .unwrap();
+    match &box_sprite.kind {
+        VisualSpriteKind::Ascii { pattern, .. } => {
+            assert_eq!(
+                pattern.as_slice(),
+                ["010".to_string(), "111".to_string(), "010".to_string()].as_slice()
+            );
+        }
+        _ => panic!("Box should be an ascii sprite"),
+    }
+
+    let pad_sprite = loaded
+        .visuals
+        .sprites
+        .iter()
+        .find(|sprite| sprite.name == "Pad")
+        .unwrap();
+    match &pad_sprite.kind {
+        VisualSpriteKind::Ascii { pattern, .. } => {
+            assert_eq!(pattern.as_slice(), ["0".to_string()].as_slice());
+        }
+        _ => panic!("Pad should be an ascii sprite"),
     }
 }
 
@@ -6851,6 +7322,68 @@ Boundary:directions {
 colors transparent #555
 shape edge:directions
 }
+}
+rules {
+
+}
+levels {
+level start
+.
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    let expected = [
+        ("Boundary-up", vec!["111", "000", "000"]),
+        ("Boundary-right", vec!["001", "001", "001"]),
+        ("Boundary-down", vec!["000", "000", "111"]),
+        ("Boundary-left", vec!["100", "100", "100"]),
+    ];
+
+    for (name, pattern) in expected {
+        let sprite = loaded
+            .visuals
+            .sprites
+            .iter()
+            .find(|sprite| sprite.name == name)
+            .unwrap();
+        match &sprite.kind {
+            VisualSpriteKind::Ascii {
+                pattern: actual, ..
+            } => {
+                let expected = pattern.into_iter().map(str::to_string).collect::<Vec<_>>();
+                assert_eq!(actual.as_slice(), expected.as_slice());
+            }
+            _ => panic!("{name} should be an ascii sprite"),
+        }
+    }
+}
+
+#[test]
+fn unbraced_sprite_entry_can_generate_direction_variants_by_rotation() {
+    let source = r#"
+title unbraced_rotated_sprite
+
+puzzle default {
+map rotate directions {
+up -> right
+right -> down
+down -> left
+left -> up
+}
+layers {
+__legacy_layer_0 = Boundary:directions
+}
+legend {
+. = empty
+}
+sprites {
+Boundary:directions
+rotate from up
+transparent #555
+111
+000
+000
 }
 rules {
 
@@ -10972,34 +11505,280 @@ c
 }
 
 #[test]
-fn object_family_base_cannot_be_a_concrete_object() {
+fn qualified_tag_selector_expands_object_name_atoms_mechanically() {
     let source = r#"
-title family_shadow
+title qualified_tag_selector
 
 puzzle default {
 empty .
 
 tags {
-color = red blue
+kind = a b
+pair = A B
 }
 
 layers {
-__legacy_layer_1 = marker marker:color
+__legacy_layer_1 = A:kind B:kind C:kind
 }
 
+legend a = A:a
+legend b = B:a
+legend c = C:a
+
+win_conditions = count(pair:a) == 2
 
 rules {
 
 }
 
-level start
-.
+level start {
+abc
 }
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+
+    assert!(loaded.is_goal_complete(&loaded.levels[0].initial_state));
+    assert!(!loaded.object_groups.contains_key("pair"));
 }
 
+#[test]
+fn group_rows_reject_bare_family_terms_instead_of_deferring_them() {
+    let source = r#"
+title bare_family_group_rejected
+
+puzzle default {
+empty .
+
+tags {
+kind = a b
+}
+
+layers {
+__legacy_layer_1 = A:kind B:kind
+}
+
+groups {
+pair = A B
+}
+
+legend a = A:a
+
+win_conditions = count(pair) == 0
+
+rules {
+
+}
+
+level start {
+a
+}
+}
 "#;
     let error = parse_game(source).unwrap_err().to_string();
-    assert!(error.contains("object family name must not shadow an object"));
+
+    assert!(error.contains("object selector for variants must use :*"));
+}
+
+#[test]
+fn qualified_tag_selector_rhs_maps_matching_object_name_atoms() {
+    let source = r#"
+title qualified_tag_selector_rhs
+
+puzzle default {
+empty .
+
+tags {
+kind = a b
+pair = A B
+}
+
+layers {
+__legacy_layer_1 = A:kind B:kind C:kind
+}
+
+legend x = A:a
+legend y = B:a
+legend z = C:a
+
+rules {
+once [ pair:a ] -> [ pair:b ]
+}
+
+level start {
+xyz
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    let next = transition_state(&loaded.game, &loaded.levels[0].initial_state, InputId(0)).unwrap();
+    let a_b = object_named(&loaded, "A:b");
+    let b_b = object_named(&loaded, "B:b");
+    let c_a = object_named(&loaded, "C:a");
+
+    assert!(next.has_object(&loaded.game, 0, 0, a_b));
+    assert!(next.has_object(&loaded.game, 1, 0, b_b));
+    assert!(next.has_object(&loaded.game, 2, 0, c_a));
+}
+
+#[test]
+fn qualified_tag_selector_errors_when_an_atom_cannot_take_the_suffix() {
+    let source = r#"
+title qualified_tag_selector_bad_atom
+
+puzzle default {
+empty .
+
+tags {
+kind = a b
+mixed = A Wall
+}
+
+layers {
+__legacy_layer_1 = A:kind Wall
+}
+
+legend a = A:a
+legend # = Wall
+
+win_conditions = count(mixed:a) == 1
+
+rules {
+
+}
+
+level start {
+a#
+}
+}
+"#;
+    let error = parse_game(source).unwrap_err().to_string();
+
+    assert!(error.contains("unknown object selector"));
+}
+
+#[test]
+fn group_selector_suffix_is_not_a_group_feature() {
+    let source = r#"
+title group_suffix_rejected
+
+puzzle default {
+empty .
+
+tags {
+kind = a b
+}
+
+layers {
+__legacy_layer_1 = A:kind B:kind
+}
+
+groups {
+pair = A:a B:a
+}
+
+legend a = A:a
+
+win_conditions = count(pair:b) == 0
+
+rules {
+
+}
+
+level start {
+a
+}
+}
+"#;
+    let error = parse_game(source).unwrap_err().to_string();
+
+    assert!(error.contains("unknown object selector"));
+}
+
+#[test]
+fn object_family_base_can_also_be_a_concrete_object() {
+    let source = r#"
+title family_exact_object
+
+puzzle main {
+tags {
+state = open close
+}
+
+layers {
+room = Room Room:state
+marker = Marker:state Marker
+}
+
+rules {
+[ Room ] -> [ Room:open ]
+[ Marker ] -> [ Marker:open ]
+}
+
+levels {
+legend {
+. = empty
+R = Room
+M = Marker
+O = Room:open
+K = Marker:open
+}
+
+level start
+RM
+}
+}
+"#;
+    let loaded = super::parse_game2d(source).unwrap();
+    let room = object_named(&loaded, "Room");
+    let room_open = object_named(&loaded, "Room:open");
+    let marker = object_named(&loaded, "Marker");
+    let marker_open = object_named(&loaded, "Marker:open");
+
+    let initial = &loaded.levels[0].initial_state;
+    assert!(initial.has_object(&loaded.game, 0, 0, room));
+    assert!(!initial.has_object(&loaded.game, 0, 0, room_open));
+    assert!(initial.has_object(&loaded.game, 1, 0, marker));
+    assert!(!initial.has_object(&loaded.game, 1, 0, marker_open));
+
+    let next = transition_state(&loaded.game, initial, InputId(0)).unwrap();
+    assert!(next.has_object(&loaded.game, 0, 0, room_open));
+    assert!(!next.has_object(&loaded.game, 0, 0, room));
+    assert!(next.has_object(&loaded.game, 1, 0, marker_open));
+    assert!(!next.has_object(&loaded.game, 1, 0, marker));
+}
+
+#[test]
+fn bare_schema_family_selector_without_exact_object_is_rejected() {
+    let source = r#"
+title family_base_without_exact_object
+
+puzzle main {
+tags {
+color = red blue
+}
+
+layers {
+base = marker:color
+}
+
+rules {
+[ marker ] -> [ marker:red ]
+}
+
+levels {
+legend {
+. = empty
+r = marker:red
+}
+
+level start
+r
+}
+}
+"#;
+    let error = super::parse_game2d(source).unwrap_err().to_string();
+    assert!(error.contains("object selector for variants must use :*"));
 }
 
 #[test]
@@ -12187,9 +12966,37 @@ P
 }
 }
 "#;
-    let error = parse_game(source).unwrap_err().to_string();
+    let report = parse_game(source).unwrap_err();
+    let diagnostic = report
+        .diagnostics()
+        .first()
+        .expect("display match diagnostic");
 
-    assert!(error.contains("display object matches cannot cause gameplay changes"));
+    assert_eq!(
+        diagnostic.message,
+        "display object matches cannot cause gameplay changes"
+    );
+    assert_eq!(
+        diagnostic
+            .primary_span
+            .as_ref()
+            .and_then(|span| span.source_line.as_deref()),
+        Some("[ @Trail ] -> [ @Trail Player ]")
+    );
+
+    let report = super::resolve_diagnostic_source_locations(report, source);
+    let expected_line = source
+        .lines()
+        .position(|line| line.trim() == "[ @Trail ] -> [ @Trail Player ]")
+        .map(|index| index + 1);
+    assert_eq!(
+        report
+            .diagnostics()
+            .first()
+            .and_then(|diagnostic| diagnostic.primary_span.as_ref())
+            .and_then(|span| span.line),
+        expected_line
+    );
 }
 
 #[test]
@@ -12272,9 +13079,37 @@ P
 }
 }
 "#;
-    let error = parse_game(source).unwrap_err().to_string();
+    let report = parse_game(source).unwrap_err();
+    let diagnostic = report
+        .diagnostics()
+        .first()
+        .expect("display match diagnostic");
 
-    assert!(error.contains("display object matches cannot cause gameplay changes"));
+    assert_eq!(
+        diagnostic.message,
+        "display object matches cannot cause gameplay changes"
+    );
+    assert_eq!(
+        diagnostic
+            .primary_span
+            .as_ref()
+            .and_then(|span| span.source_line.as_deref()),
+        Some("[ @Check no group ] -> win")
+    );
+
+    let report = super::resolve_diagnostic_source_locations(report, source);
+    let expected_line = source
+        .lines()
+        .position(|line| line.trim() == "[ @Check no group ] -> win")
+        .map(|index| index + 1);
+    assert_eq!(
+        report
+            .diagnostics()
+            .first()
+            .and_then(|diagnostic| diagnostic.primary_span.as_ref())
+            .and_then(|span| span.line),
+        expected_line
+    );
 }
 
 #[test]

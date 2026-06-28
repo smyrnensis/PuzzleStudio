@@ -6,11 +6,10 @@ cd "$repo_root"
 
 port=8891
 open_browser=1
-pages=0
 entry_path=""
 
 usage() {
-  echo "usage: tools/serve_web_editor.sh [path/to/game-folder-or-game.puzzle-or-game.puzzle3] [--port 8891] [--no-open] [--pages]"
+  echo "usage: tools/serve_web_editor.sh [path/to/game-folder-or-game.puzzle-or-game.puzzle3] [--port 8891] [--no-open]"
 }
 
 while (($#)); do
@@ -28,8 +27,8 @@ while (($#)); do
       shift
       ;;
     --pages)
-      pages=1
-      shift
+      echo "--pages static editor serving was removed; use the Rust editor server instead" >&2
+      exit 1
       ;;
     --help|-h)
       usage
@@ -109,42 +108,6 @@ PY
   fi
 }
 
-run_pages_server() {
-  if [[ -n "$entry_path" ]]; then
-    echo "--pages serves the generated docs/ site and does not accept an entry path" >&2
-    exit 1
-  fi
-  if [[ ! -f docs/index.html ]]; then
-    echo "docs/index.html is missing; run tools/generate_web_editor.sh first" >&2
-    exit 1
-  fi
-
-  local url="http://127.0.0.1:${port}/index.html"
-  echo "Starting PuzzleStudio generated Pages editor at ${url}"
-  echo "This static server does not provide Rust editor APIs such as /api/highlight."
-  echo "Press Ctrl+C to stop."
-
-  ensure_port_free "$port"
-  python3 -m http.server "$port" --bind 127.0.0.1 -d docs &
-  server_pid=$!
-
-  cleanup() {
-    if kill -0 "$server_pid" >/dev/null 2>&1; then
-      kill "$server_pid" >/dev/null 2>&1 || true
-      wait "$server_pid" 2>/dev/null || true
-    fi
-  }
-
-  trap 'cleanup; exit 130' INT
-  trap 'cleanup; exit 143' TERM
-  trap cleanup EXIT
-
-  wait_for_port "$port" "$server_pid"
-  echo "Serving PuzzleStudio generated Pages editor at ${url}"
-  open_url "$url"
-  wait "$server_pid"
-}
-
 run_rust_editor_server() {
   local url="http://127.0.0.1:${port}/editor"
   local args=()
@@ -178,8 +141,4 @@ run_rust_editor_server() {
   wait "$server_pid"
 }
 
-if (( pages )); then
-  run_pages_server
-else
-  run_rust_editor_server
-fi
+run_rust_editor_server

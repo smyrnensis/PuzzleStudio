@@ -4,14 +4,21 @@ use std::{
 };
 
 use puzzle_core::{
-    InputId, LayerId, ObjectId, PatchOp, RuleStep, State as PuzzleState, TransitionCommand,
-    TransitionError, transition_outcome, transition_program, transition_program_outcome,
-    transition_program_trace,
+    InputId, LayerId, ObjectId, PatchOp, ProgramContinuation, ProgramSegmentTrace, RuleStep,
+    State as PuzzleState, TransitionCommand, TransitionError, transition_outcome,
+    transition_program, transition_program_continuation_segment_trace, transition_program_outcome,
+    transition_program_segment_trace,
 };
 use puzzle_lang::{
     AsciiLegend, Level, LevelMenuDef, LoadedGame, ResourceSelection, RuleAnimation,
     RuleAnimationTrigger, RuleEffect, SceneComponent, SceneEffect, SceneEffectParam, SceneExpr,
     ScenePuzzleInitializer, SceneTransitionTrigger, SceneValue,
+};
+
+mod runtime_sounds;
+
+pub use runtime_sounds::{
+    RuntimeMusicSoundDef, RuntimeSfxSoundDef, RuntimeSoundsDef, runtime_sounds_def,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -68,6 +75,12 @@ pub struct ScenePuzzleRuntimeState {
     pub level_index: Option<usize>,
 }
 
+#[derive(Clone, Debug)]
+struct LevelInitialStateOverride {
+    state: PuzzleState,
+    materialize_level_start: bool,
+}
+
 impl Deref for ScenePuzzleRuntimeState {
     type Target = PuzzleState;
 
@@ -99,6 +112,7 @@ struct QueuedRuleEffect {
 struct PendingEffectContinuation {
     effects: Vec<QueuedRuleEffect>,
     condition_effect: Option<SceneEffect>,
+    undo_base_len: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -106,9 +120,11 @@ struct PendingProgramContinuation {
     target: Option<String>,
     input: InputId,
     wait_ms: u64,
-    remaining_program: Vec<RuleStep>,
+    remaining_program: ProgramContinuation,
     effects_after_wait: Vec<QueuedRuleEffect>,
     mode: PendingProgramMode,
+    undo_anchor: Option<PuzzleState>,
+    undo_base_len: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -129,7 +145,7 @@ struct ProgramSegmentOutcome {
 struct EffectCheckpoint {
     milliseconds: u64,
     effects_after_wait: Vec<QueuedRuleEffect>,
-    remaining_program: Vec<RuleStep>,
+    remaining_program: ProgramContinuation,
 }
 
 #[derive(Clone, Debug)]
@@ -182,6 +198,7 @@ pub struct GameSession {
     scene_states: HashMap<String, SceneRuntimeState>,
     selected_level_index: usize,
     level_checkpoint_state: Option<PuzzleState>,
+    level_initial_state_override: Option<LevelInitialStateOverride>,
     session_values: HashMap<String, SceneValue>,
     persistent_vars: Vec<i64>,
     current_input: Option<String>,
@@ -210,6 +227,7 @@ impl GameSession {
             scene_states: HashMap::new(),
             selected_level_index: 0,
             level_checkpoint_state: None,
+            level_initial_state_override: None,
             session_values: game
                 .variables
                 .iter()
@@ -523,8 +541,9 @@ impl GameSession {
     ) -> Result<(), TransitionError> {
         let previous_input = self.current_input.clone();
         self.current_input = game.input_labels.get(&input).cloned();
+        let undo_base_len = self.undo_stack.len();
         let owns_turn_sfx = self.begin_turn_sfx_dedup();
-        let result = match self.apply_model_input(game, input) {
+        let result = match self.apply_model_input(game, input, undo_base_len) {
             Ok(result) => result,
             Err(error) => {
                 self.current_input = previous_input;
@@ -535,13 +554,14 @@ impl GameSession {
         if !result.cancelled {
             if let Some(checkpoint) = result.checkpoint {
                 self.queue_program_continuation(checkpoint);
-                let condition_result = self.resolve_turn_effects(game, result.effects, None);
+                let condition_result =
+                    self.resolve_turn_effects(game, result.effects, None, undo_base_len);
                 self.current_input = previous_input;
                 self.end_turn_sfx_dedup(owns_turn_sfx);
                 condition_result?;
                 return Ok(());
             }
-            let condition_result = self.apply_turn_completion(game, result.effects);
+            let condition_result = self.apply_turn_completion(game, result.effects, undo_base_len);
             self.current_input = previous_input;
             self.end_turn_sfx_dedup(owns_turn_sfx);
             condition_result?;
@@ -556,6 +576,7 @@ impl GameSession {
         &mut self,
         game: &LoadedGame,
         input: InputId,
+        undo_base_len: usize,
     ) -> Result<ModelInputResult, TransitionError> {
         let target = game
             .scenes
@@ -564,18 +585,19 @@ impl GameSession {
             .and_then(|screen| screen.puzzle_rule.as_ref())
             .map(|rule| rule.target.clone());
         if let Some(target) = target {
-            return self.apply_model_input_to_target(game, &target, input);
+            return self.apply_model_input_to_target(game, &target, input, undo_base_len);
         }
 
         if self.active_level_index.is_none() {
             return Ok(ModelInputResult::default());
         }
+        let undo_anchor = self.state.clone();
         let mut state = self.state.clone();
         self.apply_persistent_vars(game, &mut state);
         let outcome =
             transition_program_segment_outcome(game, game.game.program(), &state, input, None)?;
         let cancelled = outcome.cancelled;
-        self.replace_state_if_changed(game, outcome.next_state);
+        let state_changed = self.replace_state_if_changed(game, outcome.next_state);
         self.sync_current_level_puzzles(game);
         self.animation_events.extend(outcome.animations.clone());
         let checkpoint = outcome
@@ -587,6 +609,8 @@ impl GameSession {
                 remaining_program: checkpoint.remaining_program,
                 effects_after_wait: checkpoint.effects_after_wait,
                 mode: PendingProgramMode::TurnCompletion,
+                undo_anchor: (!state_changed).then_some(undo_anchor),
+                undo_base_len,
             });
         Ok(ModelInputResult {
             cancelled,
@@ -600,14 +624,16 @@ impl GameSession {
         game: &LoadedGame,
         target: &str,
         input: InputId,
+        undo_base_len: usize,
     ) -> Result<ModelInputResult, TransitionError> {
         let Some((scene_name, puzzle_name)) = self.resolve_puzzle_target(game, target) else {
-            return self.apply_model_input_to_current_level(game, input);
+            return self.apply_model_input_to_current_level(game, input, undo_base_len);
         };
         let Some(initializer) = scene_puzzle_initializer(game, &scene_name, &puzzle_name) else {
-            return self.apply_model_input_to_current_level(game, input);
+            return self.apply_model_input_to_current_level(game, input, undo_base_len);
         };
 
+        let undo_anchor = self.state.clone();
         self.create_scene(game, &scene_name);
         let Some(mut state) = self
             .scene_states
@@ -637,11 +663,15 @@ impl GameSession {
         {
             puzzle.state = next_state.clone();
         }
-        if initializer == ScenePuzzleInitializer::CurrentLevel && scene_name == self.focused_scene {
-            self.replace_state_if_changed(game, outcome.next_state);
+        let mut undo_anchor = if initializer == ScenePuzzleInitializer::CurrentLevel
+            && scene_name == self.focused_scene
+        {
+            let state_changed = self.replace_state_if_changed(game, outcome.next_state);
+            (!state_changed).then_some(undo_anchor)
         } else {
             self.sync_persistent_vars_to_scene_states(game);
-        }
+            None
+        };
         let checkpoint = outcome
             .checkpoint
             .map(|checkpoint| PendingProgramContinuation {
@@ -651,6 +681,8 @@ impl GameSession {
                 remaining_program: checkpoint.remaining_program,
                 effects_after_wait: checkpoint.effects_after_wait,
                 mode: PendingProgramMode::TurnCompletion,
+                undo_anchor: undo_anchor.take(),
+                undo_base_len,
             });
         Ok(ModelInputResult {
             cancelled,
@@ -663,16 +695,18 @@ impl GameSession {
         &mut self,
         game: &LoadedGame,
         input: InputId,
+        undo_base_len: usize,
     ) -> Result<ModelInputResult, TransitionError> {
         if self.active_level_index.is_none() {
             return Ok(ModelInputResult::default());
         }
+        let undo_anchor = self.state.clone();
         let mut state = self.state.clone();
         self.apply_persistent_vars(game, &mut state);
         let outcome =
             transition_program_segment_outcome(game, game.game.program(), &state, input, None)?;
         let cancelled = outcome.cancelled;
-        self.replace_state_if_changed(game, outcome.next_state);
+        let state_changed = self.replace_state_if_changed(game, outcome.next_state);
         self.sync_current_level_puzzles(game);
         self.animation_events.extend(outcome.animations.clone());
         let checkpoint = outcome
@@ -684,6 +718,8 @@ impl GameSession {
                 remaining_program: checkpoint.remaining_program,
                 effects_after_wait: checkpoint.effects_after_wait,
                 mode: PendingProgramMode::TurnCompletion,
+                undo_anchor: (!state_changed).then_some(undo_anchor),
+                undo_base_len,
             });
         Ok(ModelInputResult {
             cancelled,
@@ -696,6 +732,7 @@ impl GameSession {
         &mut self,
         game: &LoadedGame,
         effects: Vec<QueuedRuleEffect>,
+        undo_base_len: usize,
     ) -> Result<(), TransitionError> {
         let win_targets = effects
             .iter()
@@ -706,7 +743,7 @@ impl GameSession {
         let force_clear = !win_targets.is_empty();
         let mut effects = effects;
         effects.extend(self.apply_model_level_clear(game, force_clear)?);
-        self.resolve_turn_effects(game, effects, condition_effect)
+        self.resolve_turn_effects(game, effects, condition_effect, undo_base_len)
     }
 
     fn resolve_turn_effects(
@@ -714,6 +751,7 @@ impl GameSession {
         game: &LoadedGame,
         mut effects: Vec<QueuedRuleEffect>,
         condition_effect: Option<SceneEffect>,
+        undo_base_len: usize,
     ) -> Result<(), TransitionError> {
         let mut commands = Vec::new();
         let mut index = 0;
@@ -773,13 +811,14 @@ impl GameSession {
                         self.pending_effect_continuation = Some(PendingEffectContinuation {
                             effects: remaining,
                             condition_effect,
+                            undo_base_len,
                         });
                         self.wait_events
                             .push(WaitEvent::ContinueEffects { milliseconds });
                     } else {
                         self.wait_events.push(WaitEvent::Wait { milliseconds });
                     }
-                    return self.resolve_turn_commands(game, commands, None);
+                    return self.resolve_turn_commands(game, commands, None, undo_base_len);
                 }
                 RuleEffect::WaitAnimation => {}
                 RuleEffect::Message { text, literal } => {
@@ -791,6 +830,7 @@ impl GameSession {
                             self.pending_effect_continuation = Some(PendingEffectContinuation {
                                 effects: remaining,
                                 condition_effect,
+                                undo_base_len,
                             });
                             self.wait_events.push(WaitEvent::ContinueEffects {
                                 milliseconds: game.default_wait_ms,
@@ -800,7 +840,7 @@ impl GameSession {
                                 milliseconds: game.default_wait_ms,
                             });
                         }
-                        return self.resolve_turn_commands(game, commands, None);
+                        return self.resolve_turn_commands(game, commands, None, undo_base_len);
                     }
                 }
                 RuleEffect::Scene(effect) => {
@@ -809,7 +849,7 @@ impl GameSession {
             }
             index += 1;
         }
-        self.resolve_turn_commands(game, commands, condition_effect)
+        self.resolve_turn_commands(game, commands, condition_effect, undo_base_len)
     }
 
     fn resume_effect_continuation(&mut self, game: &LoadedGame) -> Result<(), TransitionError> {
@@ -819,7 +859,12 @@ impl GameSession {
         let Some(continuation) = self.pending_effect_continuation.take() else {
             return Ok(());
         };
-        self.resolve_turn_effects(game, continuation.effects, continuation.condition_effect)
+        self.resolve_turn_effects(
+            game,
+            continuation.effects,
+            continuation.condition_effect,
+            continuation.undo_base_len,
+        )
     }
 
     fn queue_program_continuation(&mut self, continuation: PendingProgramContinuation) {
@@ -834,7 +879,13 @@ impl GameSession {
         game: &LoadedGame,
         continuation: PendingProgramContinuation,
     ) -> Result<(), TransitionError> {
-        let mut state = if let Some(target) = continuation.target.as_deref() {
+        let target_name = continuation.target.clone();
+        let target = target_name.as_deref();
+        let input = continuation.input;
+        let mode = continuation.mode;
+        let undo_base_len = continuation.undo_base_len;
+        let mut undo_anchor = continuation.undo_anchor;
+        let mut state = if let Some(target) = target {
             if let Some((scene_name, puzzle_name)) = self.resolve_puzzle_target(game, target) {
                 self.scene_states
                     .get(&scene_name)
@@ -848,12 +899,11 @@ impl GameSession {
             self.state.clone()
         };
         self.apply_persistent_vars(game, &mut state);
-        let target = continuation.target.as_deref();
-        let outcome = transition_program_segment_outcome(
+        let outcome = transition_continuation_segment_outcome(
             game,
             &continuation.remaining_program,
             &state,
-            continuation.input,
+            input,
             target,
         )?;
         if let Some(target) = target {
@@ -869,11 +919,31 @@ impl GameSession {
                 if initializer == Some(ScenePuzzleInitializer::CurrentLevel)
                     && scene_name == self.focused_scene
                 {
-                    self.replace_state_if_changed(game, outcome.next_state);
+                    let state_changed = match undo_anchor.clone() {
+                        Some(anchor) => self.replace_state_if_changed_from_anchor(
+                            game,
+                            outcome.next_state,
+                            anchor,
+                        ),
+                        None => {
+                            self.replace_state_if_changed_without_undo(game, outcome.next_state)
+                        }
+                    };
+                    if state_changed {
+                        undo_anchor = None;
+                    }
                 }
             }
         } else {
-            self.replace_state_if_changed(game, outcome.next_state);
+            let state_changed = match undo_anchor.clone() {
+                Some(anchor) => {
+                    self.replace_state_if_changed_from_anchor(game, outcome.next_state, anchor)
+                }
+                None => self.replace_state_if_changed_without_undo(game, outcome.next_state),
+            };
+            if state_changed {
+                undo_anchor = None;
+            }
             self.sync_current_level_puzzles(game);
         }
 
@@ -881,24 +951,28 @@ impl GameSession {
         effects.extend(outcome.effects);
         if let Some(checkpoint) = outcome.checkpoint {
             self.pending_program_continuation = Some(PendingProgramContinuation {
-                target: continuation.target,
-                input: continuation.input,
+                target: target_name,
+                input,
                 wait_ms: checkpoint.milliseconds,
                 remaining_program: checkpoint.remaining_program,
                 effects_after_wait: checkpoint.effects_after_wait,
-                mode: continuation.mode,
+                mode,
+                undo_anchor,
+                undo_base_len,
             });
             self.wait_events.push(WaitEvent::ContinueEffects {
                 milliseconds: checkpoint.milliseconds,
             });
-            return self.resolve_turn_effects(game, effects, None);
+            return self.resolve_turn_effects(game, effects, None, undo_base_len);
         }
 
-        match continuation.mode {
+        match mode {
             PendingProgramMode::TurnCompletion if effects.is_empty() && game.goal.is_none() => {
                 Ok(())
             }
-            PendingProgramMode::TurnCompletion => self.apply_turn_completion(game, effects),
+            PendingProgramMode::TurnCompletion => {
+                self.apply_turn_completion(game, effects, undo_base_len)
+            }
         }
     }
 
@@ -907,6 +981,7 @@ impl GameSession {
         game: &LoadedGame,
         commands: Vec<QueuedTransitionCommand>,
         condition_effect: Option<SceneEffect>,
+        undo_base_len: usize,
     ) -> Result<(), TransitionError> {
         let mut pending_next_level = None::<Option<String>>;
         let mut pending_again = None::<Option<String>>;
@@ -949,7 +1024,7 @@ impl GameSession {
                 self.advance_level(game);
             }
         } else if let Some(target) = pending_again {
-            self.apply_again_turns(game, target)?;
+            self.apply_again_turns(game, target, undo_base_len)?;
         }
         Ok(())
     }
@@ -958,13 +1033,14 @@ impl GameSession {
         &mut self,
         game: &LoadedGame,
         target: Option<String>,
+        undo_base_len: usize,
     ) -> Result<(), TransitionError> {
         for _ in 0..MAX_AGAIN_TURNS_PER_INPUT {
             let previous_turn_sfx = self.begin_separate_turn_sfx_dedup();
             let result = match if let Some(target) = target.as_deref() {
-                self.apply_model_input_to_target(game, target, InputId(0))
+                self.apply_model_input_to_target(game, target, InputId(0), undo_base_len)
             } else {
-                self.apply_model_input_to_current_level(game, InputId(0))
+                self.apply_model_input_to_current_level(game, InputId(0), undo_base_len)
             } {
                 Ok(result) => result,
                 Err(error) => {
@@ -972,6 +1048,7 @@ impl GameSession {
                     return Err(error);
                 }
             };
+            self.compress_undo_stack_to_turn_boundary(undo_base_len);
             if result.cancelled {
                 self.end_separate_turn_sfx_dedup(previous_turn_sfx);
                 return Ok(());
@@ -985,7 +1062,8 @@ impl GameSession {
                 .into_iter()
                 .filter(|effect| !matches!(effect.effect, RuleEffect::Again))
                 .collect();
-            let completion = self.apply_turn_completion(game, effects);
+            let completion = self.apply_turn_completion(game, effects, undo_base_len);
+            self.compress_undo_stack_to_turn_boundary(undo_base_len);
             self.end_separate_turn_sfx_dedup(previous_turn_sfx);
             completion?;
             if !has_again {
@@ -993,6 +1071,13 @@ impl GameSession {
             }
         }
         Ok(())
+    }
+
+    fn compress_undo_stack_to_turn_boundary(&mut self, undo_base_len: usize) {
+        let keep_len = undo_base_len.saturating_add(1);
+        if self.undo_stack.len() > keep_len {
+            self.undo_stack.truncate(keep_len);
+        }
     }
 
     fn begin_turn_sfx_dedup(&mut self) -> bool {
@@ -1088,7 +1173,8 @@ impl GameSession {
         }
         let previous_input = self.current_input.clone();
         self.current_input = Some(input.to_string());
-        let result = self.apply_turn_completion(game, Vec::new());
+        let undo_base_len = self.undo_stack.len();
+        let result = self.apply_turn_completion(game, Vec::new(), undo_base_len);
         self.current_input = previous_input;
         result?;
         Ok(true)
@@ -1115,7 +1201,8 @@ impl GameSession {
         } else {
             let previous_input = self.current_input.clone();
             self.current_input = Some(input.to_string());
-            let result = self.apply_turn_completion(game, Vec::new());
+            let undo_base_len = self.undo_stack.len();
+            let result = self.apply_turn_completion(game, Vec::new(), undo_base_len);
             self.current_input = previous_input;
             result?;
         }
@@ -1198,7 +1285,8 @@ impl GameSession {
         if emit_events && !outcome.cancelled {
             let effects =
                 queued_effects_for_outcome(game, None, &outcome.commands, &outcome.fired_rules);
-            self.resolve_turn_effects(game, effects, None)?;
+            let undo_base_len = self.undo_stack.len();
+            self.resolve_turn_effects(game, effects, None, undo_base_len)?;
         }
         Ok(())
     }
@@ -1216,6 +1304,7 @@ impl GameSession {
         self.active_level_index = Some(level_index);
         self.selected_level_index = level_index;
         self.level_checkpoint_state = None;
+        self.level_initial_state_override = None;
         self.state = level.initial_state.clone();
         apply_persistent_var_values(game, &self.persistent_vars, &mut self.state);
         self.apply_model_level_start(game, emit_events)
@@ -1287,6 +1376,27 @@ impl GameSession {
             }
             Err(_) => state,
         }
+    }
+
+    fn current_level_initial_state(&self, game: &LoadedGame, level_index: usize) -> PuzzleState {
+        if self.active_level_index == Some(level_index) {
+            if let Some(initial) = &self.level_initial_state_override {
+                let mut state = initial.state.clone();
+                self.apply_persistent_vars(game, &mut state);
+                if initial.materialize_level_start {
+                    match self.model_level_start_outcome(game, &state, level_index) {
+                        Ok(outcome) => {
+                            let mut next = outcome.next_state;
+                            self.apply_persistent_vars(game, &mut next);
+                            return next;
+                        }
+                        Err(_) => return state,
+                    }
+                }
+                return state;
+            }
+        }
+        self.materialized_level_initial_state(game, level_index)
     }
 
     fn apply_screen_effect_during_turn(
@@ -1691,7 +1801,8 @@ impl GameSession {
                     .unwrap_or_else(|| rule.clone());
                 if let Some(input) = input_id_by_label(game, &input_name) {
                     if let Some(target) = target {
-                        self.apply_model_input_to_target(game, target, input)?;
+                        let undo_base_len = self.undo_stack.len();
+                        self.apply_model_input_to_target(game, target, input, undo_base_len)?;
                     } else {
                         self.apply_input(game, input)?;
                     }
@@ -1803,6 +1914,17 @@ impl GameSession {
             self.sync_current_level_puzzles(game);
             return;
         }
+        if let Some(initial) = self.level_initial_state_override.clone() {
+            let mut next = initial.state;
+            self.apply_persistent_vars(game, &mut next);
+            self.replace_state_if_changed(game, next);
+            if initial.materialize_level_start {
+                let _ = self.apply_model_level_start(game, true);
+            }
+            let _ = self.apply_level_start_transition(game);
+            self.sync_current_level_puzzles(game);
+            return;
+        }
         let mut next = self.current_level(game).initial_state.clone();
         self.apply_persistent_vars(game, &mut next);
         self.replace_state_if_changed(game, next);
@@ -1896,6 +2018,39 @@ impl GameSession {
         self.sync_current_level_puzzles(game);
     }
 
+    pub fn start_level_from_state(
+        &mut self,
+        game: &LoadedGame,
+        level_index: usize,
+        mut state: PuzzleState,
+        materialize_level_start: bool,
+    ) -> Result<(), TransitionError> {
+        if level_index >= game.levels.len() {
+            return Err(TransitionError::InvalidCommand(format!(
+                "level index out of range: {level_index}"
+            )));
+        }
+
+        self.level_index = level_index;
+        self.active_level_index = Some(level_index);
+        self.selected_level_index = level_index;
+        self.level_checkpoint_state = None;
+        self.level_initial_state_override = Some(LevelInitialStateOverride {
+            state: state.clone(),
+            materialize_level_start,
+        });
+        self.undo_stack.clear();
+        self.redo_stack.clear();
+        self.apply_persistent_vars(game, &mut state);
+        self.state = state;
+        if materialize_level_start {
+            self.apply_model_level_start(game, true)?;
+        }
+        self.start_scene(game, initial_level_scene_name(game));
+        self.sync_current_level_puzzles(game);
+        Ok(())
+    }
+
     fn goto_level_target(
         &mut self,
         game: &LoadedGame,
@@ -1947,23 +2102,53 @@ impl GameSession {
         }
     }
 
-    fn replace_state_if_changed(&mut self, game: &LoadedGame, mut next: PuzzleState) {
+    fn replace_state_if_changed(&mut self, game: &LoadedGame, next: PuzzleState) -> bool {
+        let undo_state = self.state.clone();
+        self.replace_state_if_changed_with_undo(game, next, Some(undo_state))
+    }
+
+    fn replace_state_if_changed_from_anchor(
+        &mut self,
+        game: &LoadedGame,
+        next: PuzzleState,
+        undo_anchor: PuzzleState,
+    ) -> bool {
+        self.replace_state_if_changed_with_undo(game, next, Some(undo_anchor))
+    }
+
+    fn replace_state_if_changed_without_undo(
+        &mut self,
+        game: &LoadedGame,
+        next: PuzzleState,
+    ) -> bool {
+        self.replace_state_if_changed_with_undo(game, next, None)
+    }
+
+    fn replace_state_if_changed_with_undo(
+        &mut self,
+        game: &LoadedGame,
+        mut next: PuzzleState,
+        undo_state: Option<PuzzleState>,
+    ) -> bool {
         if self.active_level_index.is_none() {
             self.state = next;
-            return;
+            return false;
         }
         self.capture_persistent_vars(game, &next);
         self.apply_persistent_vars(game, &mut next);
         if states_equal_ignoring_persistent_vars(game, &next, &self.state) {
             self.state = next;
             self.sync_persistent_vars_to_scene_states(game);
-            return;
+            return false;
         }
 
-        self.undo_stack.push(self.state.clone());
+        if let Some(undo_state) = undo_state {
+            self.undo_stack.push(undo_state);
+        }
         self.state = next;
         self.redo_stack.clear();
         self.sync_persistent_vars_to_scene_states(game);
+        true
     }
 
     fn goto_scene(&mut self, game: &LoadedGame, name: &str) {
@@ -2331,7 +2516,7 @@ impl GameSession {
         let Some(level_index) = self.active_level_index else {
             return;
         };
-        let current_initial_state = self.materialized_level_initial_state(game, level_index);
+        let current_initial_state = self.current_level_initial_state(game, level_index);
         for screen in game
             .scenes
             .iter()
@@ -2532,6 +2717,7 @@ impl GameSession {
             == Some(ScenePuzzleInitializer::CurrentLevel)
         {
             self.level_checkpoint_state = None;
+            self.level_initial_state_override = None;
             self.level_index = level_index;
             self.active_level_index = Some(level_index);
             self.selected_level_index = level_index;
@@ -3239,44 +3425,85 @@ fn transition_program_segment_outcome(
         });
     }
 
-    let mut last = None;
-    for index in 0..program.len() {
-        let outcome = transition_program_trace(&game.game, &program[..=index], state, input)?;
-        let effects =
-            queued_effects_for_outcome(game, target, &outcome.commands, &outcome.fired_rules);
-        let animations = animation_events_for_trace(
-            game,
-            &outcome.fired_rules,
-            &outcome.patches,
-            &outcome.next_state,
-        );
-        if let Some((before_wait, milliseconds, after_wait)) =
-            split_effects_at_program_boundary(game, effects, &animations)
-        {
-            return Ok(ProgramSegmentOutcome {
-                next_state: outcome.next_state,
-                cancelled: outcome.cancelled,
-                effects: before_wait,
-                animations,
-                checkpoint: Some(EffectCheckpoint {
-                    milliseconds,
-                    effects_after_wait: after_wait,
-                    remaining_program: program[index + 1..].to_vec(),
-                }),
-            });
-        }
-        last = Some(outcome);
+    let segment =
+        transition_program_segment_trace(&game.game, program, state, input, |snapshot| {
+            let effects =
+                queued_effects_for_outcome(game, target, snapshot.commands, snapshot.fired_rules);
+            let animations = animation_events_for_trace(
+                game,
+                snapshot.fired_rules,
+                snapshot.patches,
+                snapshot.next_state,
+            );
+            split_effects_at_program_boundary(game, effects, &animations).is_some()
+        })?;
+    program_segment_outcome_from_trace(game, target, segment)
+}
+
+fn transition_continuation_segment_outcome(
+    game: &LoadedGame,
+    continuation: &ProgramContinuation,
+    state: &PuzzleState,
+    input: InputId,
+    target: Option<&str>,
+) -> Result<ProgramSegmentOutcome, TransitionError> {
+    let segment = transition_program_continuation_segment_trace(
+        &game.game,
+        continuation,
+        state,
+        input,
+        |snapshot| {
+            let effects =
+                queued_effects_for_outcome(game, target, snapshot.commands, snapshot.fired_rules);
+            let animations = animation_events_for_trace(
+                game,
+                snapshot.fired_rules,
+                snapshot.patches,
+                snapshot.next_state,
+            );
+            split_effects_at_program_boundary(game, effects, &animations).is_some()
+        },
+    )?;
+    program_segment_outcome_from_trace(game, target, segment)
+}
+
+fn program_segment_outcome_from_trace(
+    game: &LoadedGame,
+    target: Option<&str>,
+    segment: ProgramSegmentTrace,
+) -> Result<ProgramSegmentOutcome, TransitionError> {
+    let outcome = segment.trace;
+    let effects = queued_effects_for_outcome(game, target, &outcome.commands, &outcome.fired_rules);
+    let animations = animation_events_for_trace(
+        game,
+        &outcome.fired_rules,
+        &outcome.patches,
+        &outcome.next_state,
+    );
+    if let Some((before_wait, milliseconds, after_wait)) =
+        split_effects_at_program_boundary(game, effects.clone(), &animations)
+    {
+        let Some(remaining_program) = segment.remaining_program else {
+            return Err(TransitionError::InvalidCommand(
+                "program boundary did not produce a continuation".to_string(),
+            ));
+        };
+        return Ok(ProgramSegmentOutcome {
+            next_state: outcome.next_state,
+            cancelled: outcome.cancelled,
+            effects: before_wait,
+            animations,
+            checkpoint: Some(EffectCheckpoint {
+                milliseconds,
+                effects_after_wait: after_wait,
+                remaining_program,
+            }),
+        });
     }
 
-    let outcome = last.expect("non-empty program has an outcome");
     Ok(ProgramSegmentOutcome {
-        effects: queued_effects_for_outcome(game, target, &outcome.commands, &outcome.fired_rules),
-        animations: animation_events_for_trace(
-            game,
-            &outcome.fired_rules,
-            &outcome.patches,
-            &outcome.next_state,
-        ),
+        effects,
+        animations,
         next_state: outcome.next_state,
         cancelled: outcome.cancelled,
         checkpoint: None,
@@ -3786,10 +4013,60 @@ B
                     command: TransitionCommand::Again,
                 }],
                 None,
+                session.undo_stack.len(),
             )
             .unwrap();
 
         assert!(session.state().has_object(&loaded.game, 0, 0, after));
+    }
+
+    #[test]
+    fn again_follow_up_turn_does_not_add_an_undo_step() {
+        let loaded = parse_game(
+            r#"
+title again_undo_boundary
+puzzle default {
+layers {
+__legacy_layer_0 = A B C
+}
+empty .
+rules {
+once right [ A ] -> [ B ] again
+once [ B ] -> [ C ]
+}
+levels {
+legend {
+A = A
+B = B
+C = C
+}
+level start {
+A
+}
+}
+}
+"#,
+        )
+        .unwrap();
+        let right = input_named(&loaded, "right");
+        let a = object_named(&loaded, "A");
+        let b = object_named(&loaded, "B");
+        let c = object_named(&loaded, "C");
+        let mut session = GameSession::new(&loaded);
+
+        session.apply_input(&loaded, right).unwrap();
+
+        assert!(!session.state().has_object(&loaded.game, 0, 0, a));
+        assert!(!session.state().has_object(&loaded.game, 0, 0, b));
+        assert!(session.state().has_object(&loaded.game, 0, 0, c));
+        assert!(session.can_undo());
+
+        session.undo(&loaded);
+
+        assert!(session.state().has_object(&loaded.game, 0, 0, a));
+        assert!(!session.state().has_object(&loaded.game, 0, 0, b));
+        assert!(!session.state().has_object(&loaded.game, 0, 0, c));
+        assert!(!session.can_undo());
     }
 
     #[test]
@@ -5606,6 +5883,132 @@ A
     }
 
     #[test]
+    fn routine_wait_splits_before_following_inner_rule_and_undo_is_one_turn() {
+        let loaded = parse_game(
+            r#"
+title routine_wait_segments
+sounds {
+sfx fall seed=fall type=hit
+}
+puzzle default {
+layers {
+__legacy_layer_0 = A B C
+}
+empty .
+rules {
+[ A ] -> [ C ]
+fall
+}
+routine fall {
+[ C ] -> wait 100ms
+[ C ] -> [ B ] sfx fall
+}
+levels {
+legend {
+A = A
+B = B
+C = C
+}
+level start {
+A
+}
+}
+}
+"#,
+        )
+        .unwrap();
+        let mut session = GameSession::new(&loaded);
+        let a = object_named(&loaded, "A");
+        let b = object_named(&loaded, "B");
+        let c = object_named(&loaded, "C");
+
+        session.apply_input(&loaded, InputId(0)).unwrap();
+
+        assert!(!session.state().has_object(&loaded.game, 0, 0, a));
+        assert!(!session.state().has_object(&loaded.game, 0, 0, b));
+        assert!(session.state().has_object(&loaded.game, 0, 0, c));
+        assert_eq!(
+            session.take_wait_events(),
+            vec![WaitEvent::ContinueEffects { milliseconds: 100 }]
+        );
+
+        session
+            .apply_command(&loaded, "__continue_effects")
+            .unwrap();
+
+        assert!(!session.state().has_object(&loaded.game, 0, 0, c));
+        assert!(session.state().has_object(&loaded.game, 0, 0, b));
+        assert_eq!(
+            session.take_sound_events(),
+            vec![SoundEvent::PlaySfx {
+                name: "fall".to_string()
+            }]
+        );
+
+        session.undo(&loaded);
+
+        assert!(session.state().has_object(&loaded.game, 0, 0, a));
+        assert!(!session.state().has_object(&loaded.game, 0, 0, b));
+        assert!(!session.can_undo());
+    }
+
+    #[test]
+    fn wait_before_first_state_change_keeps_single_undo_anchor() {
+        let loaded = parse_game(
+            r#"
+title wait_anchor_segments
+puzzle default {
+layers {
+__legacy_layer_0 = A B
+}
+empty .
+rules {
+wait 100ms
+[ A ] -> [ B ]
+}
+levels {
+legend {
+A = A
+B = B
+}
+level start {
+A
+}
+}
+}
+"#,
+        )
+        .unwrap();
+        let mut session = GameSession::new(&loaded);
+        let a = object_named(&loaded, "A");
+        let b = object_named(&loaded, "B");
+
+        session.apply_input(&loaded, InputId(0)).unwrap();
+
+        assert!(session.state().has_object(&loaded.game, 0, 0, a));
+        assert!(!session.state().has_object(&loaded.game, 0, 0, b));
+        assert!(!session.can_undo());
+        assert_eq!(
+            session.take_wait_events(),
+            vec![WaitEvent::ContinueEffects { milliseconds: 100 }]
+        );
+
+        session
+            .apply_command(&loaded, "__continue_effects")
+            .unwrap();
+
+        assert!(!session.state().has_object(&loaded.game, 0, 0, a));
+        assert!(session.state().has_object(&loaded.game, 0, 0, b));
+        assert!(session.can_undo());
+
+        session.undo(&loaded);
+
+        assert!(session.state().has_object(&loaded.game, 0, 0, a));
+        assert!(!session.state().has_object(&loaded.game, 0, 0, b));
+        assert!(!session.can_undo());
+    }
+
+    #[test]
     fn render_ascii_top_uses_loaded_legend() {
         let source = include_str!("../../../games/spec_2d.puzzle");
         let loaded = parse_game(source).unwrap();
@@ -5679,6 +6082,76 @@ B = Box
 
         session.restart_level(&loaded);
         assert_eq!(session.state(), &initial);
+        assert!(session.can_undo());
+
+        session.undo(&loaded);
+        assert_eq!(session.state(), &moved);
+    }
+
+    #[test]
+    fn session_restart_uses_explicit_editor_start_state() {
+        let loaded = parse_game(
+            r#"
+title editor_state_start
+
+puzzle board {
+layers {
+actor = Player
+}
+empty .
+input right
+rules {
+input right [ Player | no Player ] -> [ | Player ]
+}
+levels {
+legend {
+. = empty
+P = Player
+}
+level authored {
+.P
+}
+level editor_state {
+P.
+}
+}
+}
+
+scene playing {
+state {
+board = puzzle board
+}
+layout {
+board
+}
+rules {
+step board
+}
+}
+"#,
+        )
+        .unwrap();
+        let mut session = GameSession::new(&loaded);
+        let authored = loaded.levels[0].initial_state.clone();
+        let editor_start = loaded.levels[1].initial_state.clone();
+
+        session
+            .start_level_from_state(&loaded, 0, editor_start.clone(), false)
+            .unwrap();
+        assert_eq!(session.level_index(), 0);
+        assert_eq!(session.state(), &editor_start);
+        assert_ne!(session.state(), &authored);
+
+        session
+            .apply_input(&loaded, input_named(&loaded, "right"))
+            .unwrap();
+        let moved = session.state().clone();
+        assert_ne!(moved, editor_start);
+        assert!(session.can_undo());
+
+        session.restart_level(&loaded);
+        assert_eq!(session.state(), &editor_start);
+        assert_ne!(session.state(), &authored);
         assert!(session.can_undo());
 
         session.undo(&loaded);
@@ -7149,6 +7622,12 @@ board
 }
 }
 
+scene title {
+layout {
+text "Title"
+}
+}
+
 scene select {
 layout {
 level_menu {
@@ -7163,10 +7642,10 @@ button "Title" -> goto title
         session.apply_command(&loaded, "goto select").unwrap();
         session.apply_command(&loaded, "down").unwrap();
         session.apply_command(&loaded, "down").unwrap();
-        assert_eq!(session.selected_level_index(), 1);
+        assert_eq!(session.selected_level_index(), loaded.levels.len());
 
         session.apply_command(&loaded, "select").unwrap();
-        assert_eq!(session.screen(), "playing");
+        assert_eq!(session.screen(), "title");
     }
 
     #[test]

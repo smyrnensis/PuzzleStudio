@@ -2349,6 +2349,7 @@ name = "puzzle-core"
 version = "0.1.0"
 dependencies = [
  "puzzle-kernel",
+ "serde",
 ]
 
 [[package]]
@@ -2372,6 +2373,9 @@ dependencies = [
 [[package]]
 name = "puzzle-kernel"
 version = "0.1.0"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "puzzle-lang"
@@ -2382,6 +2386,7 @@ dependencies = [
  "puzzle-core",
  "puzzle-kernel",
  "puzzle-scene",
+ "serde",
 ]
 
 [[package]]
@@ -2390,11 +2395,16 @@ version = "0.1.0"
 dependencies = [
  "puzzle-core",
  "puzzle-lang",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
 name = "puzzle-scene"
 version = "0.1.0"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "puzzle-solver"

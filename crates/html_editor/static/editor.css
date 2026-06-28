@@ -1068,14 +1068,14 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
 }
 
 .document-tab {
-  min-width: 72px;
+  min-width: 0;
   max-width: min(150px, 30vw);
   min-height: 30px;
   padding: 0 10px 0 4px;
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  flex: 0 1 104px;
+  flex: 0 1 auto;
   border: 1px solid transparent;
   border-bottom: 0;
   border-radius: 6px 6px 0 0;
@@ -1087,9 +1087,7 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
 }
 
 .document-tab.is-active {
-  min-width: min(180px, 52vw);
   max-width: min(280px, 56vw);
-  flex: 1 0 min(220px, 56vw);
   border-color: var(--line);
   background: var(--code-bg);
   color: var(--ink);
@@ -1337,7 +1335,7 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   font-size: 12px;
   line-height: 20px;
   user-select: none;
-  pointer-events: auto;
+  pointer-events: none;
   will-change: transform;
 }
 
@@ -1373,6 +1371,7 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   background: transparent;
   color: color-mix(in srgb, var(--muted) 84%, var(--code-ink));
   cursor: pointer;
+  pointer-events: auto;
 }
 
 .source-fold-button:hover {
@@ -1386,6 +1385,10 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   color: var(--ink);
   outline: 1px solid color-mix(in srgb, var(--accent) 62%, transparent);
   outline-offset: -2px;
+}
+
+.source-editor-wrap.is-source-selection-dragging .source-fold-button {
+  pointer-events: none;
 }
 
 .source-fold-icon {
@@ -1487,6 +1490,10 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   background: transparent;
   color: transparent;
   caret-color: var(--code-ink);
+}
+
+#sourceEditor.has-source-block-selection {
+  caret-color: transparent;
 }
 
 #sourceEditor::selection {
@@ -4102,9 +4109,10 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
 }
 
 .sprite-scale-group {
+  height: var(--icon-button-size);
   min-height: var(--icon-button-size);
   display: grid;
-  grid-template-columns: 18px minmax(0, 1fr) var(--icon-button-size) var(--icon-button-size);
+  grid-template-columns: 16px minmax(0, 1fr) var(--icon-button-size) var(--icon-button-size);
   align-items: center;
   overflow: hidden;
   border: 1px solid var(--line-strong);
@@ -4120,12 +4128,13 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
 
 .sprite-scale-prefix {
   height: var(--icon-button-size);
-  display: grid;
-  place-items: center end;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 800;
-  line-height: 1;
+  line-height: var(--icon-button-size);
 }
 
 .sprite-scale-step-button {
@@ -4178,7 +4187,8 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
 .sprite-transform-bar .sprite-scale-group input {
   height: var(--icon-button-size);
   min-height: var(--icon-button-size);
-  padding: 0 5px 0 2px;
+  display: block;
+  padding: 0 5px 0 0;
   border: 0;
   border-right: 1px solid var(--line);
   border-radius: 0;
@@ -4267,6 +4277,34 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   grid-template-columns: repeat(8, var(--icon-button-size));
   grid-auto-rows: var(--icon-button-size);
   gap: 4px;
+}
+
+.sprite-marker-tool {
+  display: inline-grid;
+  grid-column: span 2;
+  grid-template-columns: var(--icon-button-size) var(--icon-button-size);
+  gap: 4px;
+  align-items: center;
+}
+
+.sprite-marker-size-input {
+  width: var(--icon-button-size);
+  min-width: var(--icon-button-size);
+  height: var(--icon-button-size);
+  min-height: var(--icon-button-size);
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--icon-button-radius);
+  background: var(--input-bg);
+  color: var(--ink);
+  font: 800 12px/var(--icon-button-size) ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  text-align: center;
+}
+
+.sprite-marker-size-input:focus {
+  border-color: var(--accent);
+  outline: 2px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  outline-offset: 1px;
 }
 
 .sprite-palette-actions {
@@ -5035,16 +5073,20 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   stroke-linejoin: round;
 }
 
+.sprite-marker-button,
 .sprite-palette-fill-button {
   background: var(--bar-bg);
   color: var(--muted);
 }
 
+.sprite-marker-button:hover:not(:disabled),
+.sprite-marker-button:focus-visible,
 .sprite-palette-fill-button:hover:not(:disabled),
 .sprite-palette-fill-button:focus-visible {
   color: var(--ink);
 }
 
+.sprite-marker-button.is-active,
 .sprite-palette-fill-button.is-active {
   border-color: var(--line-strong);
   background: var(--active-bg);

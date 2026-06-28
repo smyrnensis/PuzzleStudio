@@ -5,9 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>PuzzleStudio Editor</title>
     <link rel="icon" type="image/svg+xml" href="favicon.svg">
-    <script src="editor_boot.js?v=parallel-diagnostics"></script>
+    <script src="editor_boot.js?v=host-mode-required"></script>
     <link rel="stylesheet" href="renderer.css">
-    <link rel="stylesheet" href="editor.css?v=source-folding-tabs-close-left">
+    <link rel="stylesheet" href="editor.css?v=source-folding-tabs-compact-close-left">
     <style id="gameStyle"></style>
   </head>
   <body>
@@ -508,7 +508,7 @@
                 <div class="sprite-scale-control sprite-compact-control" role="group" aria-label="Sprite scale">
                   <span class="sprite-control-label">Scale</span>
                   <div class="sprite-scale-group">
-                    <span class="sprite-scale-prefix" aria-hidden="true">x</span>
+                    <span class="sprite-scale-prefix" aria-hidden="true">×</span>
                     <input id="spriteScaleInput" type="number" min="2" max="64" value="2" inputmode="numeric" aria-label="Scale multiplier">
                     <button id="spriteScaleDownButton" class="sprite-scale-step-button" type="button" aria-label="Scale down" title="Scale down">
                       <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -532,13 +532,12 @@
                 <div id="spriteShapeField" class="sprite-source-field sprite-shape-field"></div>
               </div>
               <div class="source-action-group source-preview-actions sprite-source-actions sprite-header-actions" role="group" aria-label="Sprite source actions">
-                <button id="newSpriteButton" class="source-action-button" type="button" aria-label="New sprite" title="New sprite">
-                  <svg viewBox="0 0 24 24" aria-hidden="true" class="lucide lucide-image-plus-icon lucide-image-plus">
-                    <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7"></path>
-                    <line x1="16" x2="22" y1="5" y2="5"></line>
-                    <line x1="19" x2="19" y1="2" y2="8"></line>
-                    <circle cx="9" cy="9" r="2"></circle>
-                    <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"></path>
+                <button id="duplicateSpriteButton" class="source-action-button" type="button" aria-label="Duplicate sprite" title="Duplicate sprite" disabled>
+                  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="lucide lucide-copy-plus-icon lucide-copy-plus">
+                    <line x1="15" x2="15" y1="12" y2="18"></line>
+                    <line x1="12" x2="18" y1="15" y2="15"></line>
+                    <rect width="14" height="14" x="8" y="8" rx="2" ry="2"></rect>
+                    <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path>
                   </svg>
                 </button>
                 <button id="spriteExportButton" class="source-action-button source-copy-button" type="button" aria-label="Copy" title="Copy">
@@ -566,6 +565,16 @@
               </div>
               </div>
               <div id="spritePalette" class="sprite-palette" aria-label="Sprite character palette">
+                <span id="spriteMarkerTool" class="sprite-marker-tool" role="group" aria-label="Marker tool">
+                  <button id="spriteMarkerButton" class="sprite-token sprite-marker-button sprite-icon-button" type="button" aria-label="Marker" aria-pressed="false" title="Marker">
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="m9 11-6 6v4h4l6-6"></path>
+                      <path d="m22 12-7-7-4 4 7 7 4-4Z"></path>
+                      <path d="M3 21h18"></path>
+                    </svg>
+                  </button>
+                  <input id="spriteMarkerSizeInput" class="sprite-marker-size-input" type="number" min="1" max="16" value="3" inputmode="numeric" aria-label="Marker width" title="Marker width">
+                </span>
                 <button id="spriteFillButton" class="sprite-token sprite-palette-fill-button sprite-fill-button sprite-icon-button" type="button" aria-label="Bucket fill" aria-pressed="false" title="Bucket fill">
                   <svg viewBox="0 0 24 24" aria-hidden="true">
                     <path d="m19 11-8-8-8.6 8.6a2 2 0 0 0 0 2.8l5.2 5.2a2 2 0 0 0 2.8 0L19 11Z"></path>
@@ -641,7 +650,7 @@
                 <div class="sprite-scale-control sprite3d-scale-control sprite-compact-control" role="group" aria-label="3D sprite scale">
                   <span class="sprite-control-label">Scale</span>
                   <div class="sprite-scale-group">
-                    <span class="sprite-scale-prefix" aria-hidden="true">x</span>
+                    <span class="sprite-scale-prefix" aria-hidden="true">×</span>
                     <input id="sprite3dScaleInput" type="number" min="2" max="64" value="2" inputmode="numeric" aria-label="3D sprite scale multiplier">
                     <button id="sprite3dScaleDownButton" class="sprite-scale-step-button" type="button" aria-label="Scale down" title="Scale down">
                       <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -1069,6 +1078,12 @@
                   <span>Type</span>
                   <select id="soundsSfxTypeSelect"></select>
                 </label>
+                <div class="sounds-slider-puzzle">
+                  <label>
+                    <span>Volume <output id="soundsSfxVolumeValue">100%</output></span>
+                    <input id="soundsSfxVolumeInput" type="range" min="0" max="1" step="0.01" value="1">
+                  </label>
+                </div>
               </div>
               <pre id="soundsSfxOutput" class="sounds-output" aria-live="polite"></pre>
             </section>
@@ -1168,12 +1183,12 @@
     <script src="renderer.js"></script>
     <script src="sound-generator.js"></script>
     <script src="editor_dom.js"></script>
-    <script src="editor_workspace.js?v=source-folding-state"></script>
+    <script src="editor_workspace.js?v=import-parent-preview"></script>
     <script src="editor_source.js?v=source-folding-state"></script>
     <script src="puzzle3_visual_core.js"></script>
     <script src="editor_level3d.js"></script>
     <script src="editor_workbench.js"></script>
-    <script src="editor.js?v=level-editor-source-preview"></script>
+    <script src="editor.js?v=level-editor-import-reference"></script>
     <script src="editor_sprite.js"></script>
     <script src="editor_sprite3d.js?v=sprite3d-preview-base-zoom"></script>
     <script src="editor_sounds.js"></script>

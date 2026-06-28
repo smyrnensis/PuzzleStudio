@@ -738,7 +738,12 @@ fn is_visual_sprite_entry_boundary<'a>(
         return false;
     }
     match line.tokens.as_slice() {
-        [keyword, ..] if keyword == "colors" || keyword == "shapes" => true,
+        [keyword, ..]
+            if (keyword == "colors" || keyword == "shapes")
+                && line.content.trim_end().ends_with('{') =>
+        {
+            true
+        }
         [selector, source]
             if sprite_definition_name_token(selector)
                 && current_saw_color_row
@@ -798,12 +803,12 @@ fn sprite_definition_name_token(value: &str) -> bool {
 }
 
 fn is_sprite_color_row(line: &str) -> bool {
-    let colors = line.split_whitespace().collect::<Vec<_>>();
+    let colors = sprite_color_row_tokens(line);
     !colors.is_empty() && colors.iter().all(|color| is_sprite_color_expr(color))
 }
 
 fn is_sprite_entry_start_color_row(line: &str, visual_refs: &VisualSpriteRefs) -> bool {
-    let colors = line.split_whitespace().collect::<Vec<_>>();
+    let colors = sprite_color_row_tokens(line);
     if colors.is_empty() || !colors.iter().all(|color| is_sprite_color_expr(color)) {
         return false;
     }
@@ -811,6 +816,14 @@ fn is_sprite_entry_start_color_row(line: &str, visual_refs: &VisualSpriteRefs) -
         || colors.first().is_some_and(|color| {
             is_sprite_color(color) || color.contains(':') || visual_refs.contains(color)
         })
+}
+
+fn sprite_color_row_tokens(line: &str) -> Vec<&str> {
+    let mut tokens = line.split_whitespace().collect::<Vec<_>>();
+    if tokens.first() == Some(&"colors") {
+        tokens.remove(0);
+    }
+    tokens
 }
 
 fn is_sprite_entry_start_color_token(token: &str, visual_refs: &VisualSpriteRefs) -> bool {
@@ -1371,6 +1384,50 @@ sprites/box.png
         assert!(body.contains("111"));
         assert!(!body.contains("Box"));
         assert!(!body.contains("sprites/box.png"));
+    }
+
+    #[test]
+    fn resolves_unbraced_sprite_with_colors_keyword_palette() {
+        let source = r##"
+sprites {
+Player
+colors #000 #fff
+.0.
+111
+}
+"##;
+        let cursor = source.find(".0.").unwrap();
+        let target = resolve_source_target(source, cursor).unwrap();
+
+        assert_eq!(target.kind, SourceTargetKind::Sprite);
+        assert_eq!(target.name, "Player");
+        let body = &source[target.body_start.unwrap()..target.body_end.unwrap()];
+        assert!(body.contains("colors #000 #fff"));
+        assert!(body.contains("111"));
+    }
+
+    #[test]
+    fn unbraced_sprite_target_end_stops_before_next_colors_keyword_sprite() {
+        let source = r##"
+sprites {
+Player
+#000 #fff
+.0.
+111
+Box
+colors #222
+0
+}
+"##;
+        let cursor = source.find(".0.").unwrap();
+        let target = resolve_source_target(source, cursor).unwrap();
+
+        assert_eq!(target.kind, SourceTargetKind::Sprite);
+        assert_eq!(target.name, "Player");
+        let target_source = &source[target.start..target.end];
+        assert!(target_source.contains("111"));
+        assert!(!target_source.contains("Box"));
+        assert!(!target_source.contains("colors #222"));
     }
 
     #[test]

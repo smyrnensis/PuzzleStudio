@@ -77,6 +77,50 @@ pub fn rule_program_block_surface(line: &str) -> Option<RuleProgramBlockSurface<
     None
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RuleStatementBlockSurface<'a> {
+    Program(RuleProgramBlockSurface<'a>),
+    Routine,
+    DisplayHook,
+    Nested,
+}
+
+pub fn rule_statement_block_surface(
+    line: &str,
+    parent_is_statement_block: bool,
+) -> Option<RuleStatementBlockSurface<'_>> {
+    let trimmed = line.trim();
+    trimmed.strip_suffix('{')?;
+    if let Some(program) = rule_program_block_surface(trimmed) {
+        return Some(RuleStatementBlockSurface::Program(program));
+    }
+    let tokens = split_header_tokens(trimmed);
+    match tokens.first().copied()? {
+        "routine" => Some(RuleStatementBlockSurface::Routine),
+        "on_display" => Some(RuleStatementBlockSurface::DisplayHook),
+        _ if parent_is_statement_block && nested_rule_statement_block_surface(trimmed, &tokens) => {
+            Some(RuleStatementBlockSurface::Nested)
+        }
+        _ => None,
+    }
+}
+
+fn nested_rule_statement_block_surface(line: &str, tokens: &[&str]) -> bool {
+    if line
+        .strip_suffix('{')
+        .map(str::trim_end)
+        .is_some_and(|head| head.contains("->"))
+    {
+        return true;
+    }
+    match tokens.first().copied() {
+        Some("display" | "else" | "fix" | "for" | "if") => true,
+        Some("repeat") if tokens.get(1).copied() == Some("until") => true,
+        Some(first) => rule_application_surface(first).is_some(),
+        None => false,
+    }
+}
+
 fn named_block_header_modifier<'a>(line: &'a str, keyword: &str) -> Option<&'a str> {
     let head = line.trim().strip_suffix('{')?.trim_end();
     let rest = head.strip_prefix(keyword)?;
@@ -90,6 +134,8 @@ fn named_block_header_modifier<'a>(line: &'a str, keyword: &str) -> Option<&'a s
 pub enum StandardRuleStepSurface {
     Move,
 }
+
+pub const STANDARD_RULE_STEP_NAMES: &[&str] = &["move"];
 
 pub fn standard_rule_step_surface(line: &str) -> Option<StandardRuleStepSurface> {
     match line.trim() {
@@ -105,6 +151,17 @@ pub enum RuleApplicationSurface {
     OncePerLevel,
     Repeat,
 }
+
+pub const RULE_STATEMENT_HEAD_KEYWORDS: &[&str] = &[
+    "display",
+    "for",
+    "if",
+    "input",
+    "once",
+    "once_all",
+    "once_per_level",
+    "repeat",
+];
 
 pub fn rule_application_surface(token: &str) -> Option<RuleApplicationSurface> {
     match token {
@@ -497,6 +554,27 @@ mod tests {
             rule_program_block_surface("on_level_clear {"),
             Some(RuleProgramBlockSurface::OnLevelClear)
         );
+        assert_eq!(
+            rule_statement_block_surface("rules local_frame 3 full {", false),
+            Some(RuleStatementBlockSurface::Program(
+                RuleProgramBlockSurface::Rules {
+                    modifier: "local_frame 3 full"
+                }
+            ))
+        );
+        assert_eq!(
+            rule_statement_block_surface("routine slide once {", false),
+            Some(RuleStatementBlockSurface::Routine)
+        );
+        assert_eq!(
+            rule_statement_block_surface("if true {", true),
+            Some(RuleStatementBlockSurface::Nested)
+        );
+        assert_eq!(
+            rule_statement_block_surface("restart -> {", true),
+            Some(RuleStatementBlockSurface::Nested)
+        );
+        assert_eq!(rule_statement_block_surface("render {", true), None);
         assert_eq!(
             standard_rule_step_surface("move"),
             Some(StandardRuleStepSurface::Move)
