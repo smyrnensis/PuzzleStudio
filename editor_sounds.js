@@ -355,14 +355,16 @@ function activeSoundEditSource() {
   if (!document || !isTextDocument(document)) {
     return "";
   }
-  return document.id === activeDocument()?.id ? sourceEditor.value : document.source || "";
+  return document.id === activeDocument()?.id
+    ? sourceEditorDocumentValue()
+    : document.source || "";
 }
 
 function loadSoundFromSourcePosition(position, options = {}) {
   if (!isPuzzleDocument(activeDocument()) || !isTextDocument(activeDocument())) {
     return null;
   }
-  const source = sourceEditor.value || "";
+  const source = sourceEditorDocumentValue();
   const entry = findSoundsDefinitionAtPosition(source, position);
   if (!entry) {
     return null;
@@ -499,7 +501,7 @@ function nextSoundsDefinitionName(kind, baseName, sourceOverride = null) {
   const source = sourceOverride !== null
     ? String(sourceOverride || "")
     : isTextDocument(documents[currentDocumentIndex])
-      ? sourceEditor.value
+      ? sourceEditorDocumentValue()
       : "";
   const names = existingSoundsDefinitionNames(source, kind);
   const base = soundIdentifierAtom(baseName, kind === "music" ? "music" : "sfx");

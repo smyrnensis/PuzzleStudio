@@ -88,9 +88,6 @@
 
   window.PuzzleStudioHost = {
     mode() {
-      if ((window.PuzzleStudioStaticSite || document.documentElement.dataset.staticSite === "true") && !tauriInvoke()) {
-        return "static";
-      }
       return tauriInvoke() ? "tauri" : "server";
     },
     async loadSource() {
