@@ -77,12 +77,501 @@ let sourceLineNumberLineHeight = 0;
 let sourceHighlightClientWidth = 0;
 let sourceHighlightScrollHeight = 0;
 let sourceLineNumberScrollHeight = 0;
+let sourceFoldedBlockKeys = new Set();
+let sourceFoldBaseSource = null;
+let sourceFoldViewMap = [];
+let sourceFoldBlockCacheSource = "";
+let sourceFoldBlockCache = [];
+let sourceFoldEditSnapshot = null;
+
+function sourceEditorDocumentValue() {
+  return sourceFoldBaseSource !== null
+    ? sourceFoldBaseSource
+    : sourceEditor.value || "";
+}
+
+function sourceFoldsActive() {
+  return sourceFoldBaseSource !== null && sourceFoldedBlockKeys.size > 0;
+}
+
+function sourceFoldedLineCount() {
+  if (!sourceFoldsActive()) {
+    return 0;
+  }
+  return sourceFoldRangesForSource(sourceEditorDocumentValue())
+    .reduce((total, range) => total + Math.max(0, range.hiddenLineCount), 0);
+}
+
+function resetSourceFoldingState() {
+  sourceFoldedBlockKeys = new Set();
+  sourceFoldBaseSource = null;
+  sourceFoldViewMap = [];
+  sourceFoldBlockCacheSource = "";
+  sourceFoldBlockCache = [];
+}
+
+function sourceFoldLinesWithOffsets(source) {
+  const lines = [];
+  let start = 0;
+  const text = String(source || "");
+  for (const raw of text.split("\n")) {
+    const end = start + raw.length;
+    const hasNewline = end < text.length;
+    lines.push({
+      raw,
+      start,
+      end,
+      absoluteEnd: end + (hasNewline ? 1 : 0),
+      hasNewline,
+    });
+    start = end + 1;
+  }
+  return lines;
+}
+
+function sourceLineIndexForFoldOffset(lines, offset) {
+  const position = Math.max(0, offset || 0);
+  for (let index = 0; index < lines.length; index += 1) {
+    if (position <= lines[index].end || index === lines.length - 1) {
+      return index;
+    }
+  }
+  return Math.max(0, lines.length - 1);
+}
+
+function sourceFoldableBlocks(source) {
+  const text = String(source || "");
+  if (sourceFoldBlockCacheSource === text) {
+    return sourceFoldBlockCache;
+  }
+  const lines = sourceFoldLinesWithOffsets(text);
+  const stack = [];
+  const blocks = [];
+  let lineIndex = 0;
+  let quote = "";
+  let escaped = false;
+  let lineComment = false;
+
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    const next = text[index + 1] || "";
+    if (char === "\n") {
+      lineIndex += 1;
+      lineComment = false;
+      escaped = false;
+      continue;
+    }
+    if (lineComment) {
+      continue;
+    }
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (quote) {
+      if (char === "\\") {
+        escaped = true;
+      } else if (char === quote) {
+        quote = "";
+      }
+      continue;
+    }
+    if (char === "/" && next === "/") {
+      lineComment = true;
+      index += 1;
+      continue;
+    }
+    if (char === "\"") {
+      quote = char;
+      continue;
+    }
+    if (char === "{") {
+      stack.push({ offset: index, lineIndex });
+      continue;
+    }
+    if (char !== "}") {
+      continue;
+    }
+    const open = stack.pop();
+    if (!open || lineIndex <= open.lineIndex) {
+      continue;
+    }
+    const openLine = lines[open.lineIndex];
+    const closeLine = lines[lineIndex];
+    if (!openLine || !closeLine) {
+      continue;
+    }
+    blocks.push({
+      key: `${open.offset}:${index}`,
+      openOffset: open.offset,
+      closeOffset: index,
+      openLine: open.lineIndex,
+      closeLine: lineIndex,
+      sourceStart: openLine.end,
+      sourceEnd: closeLine.absoluteEnd,
+      hiddenLineCount: Math.max(1, lineIndex - open.lineIndex),
+      hasTrailingNewline: closeLine.hasNewline,
+    });
+  }
+
+  blocks.sort((left, right) => (
+    left.openLine - right.openLine
+    || left.openOffset - right.openOffset
+    || right.closeOffset - left.closeOffset
+  ));
+  sourceFoldBlockCacheSource = text;
+  sourceFoldBlockCache = blocks;
+  return blocks;
+}
+
+function sourceFoldRangesForSource(source) {
+  if (!sourceFoldedBlockKeys.size) {
+    return [];
+  }
+  const selected = sourceFoldableBlocks(source)
+    .filter((block) => sourceFoldedBlockKeys.has(block.key))
+    .sort((left, right) => (
+      left.sourceStart - right.sourceStart
+      || right.sourceEnd - left.sourceEnd
+    ));
+  const ranges = [];
+  let coveredUntil = -1;
+  for (const block of selected) {
+    if (block.sourceStart < coveredUntil) {
+      continue;
+    }
+    ranges.push(block);
+    coveredUntil = block.sourceEnd;
+  }
+  return ranges;
+}
+
+function sourceFoldStateForSource(source = sourceEditorDocumentValue()) {
+  return sourceFoldableBlocks(source)
+    .filter((block) => sourceFoldedBlockKeys.has(block.key))
+    .map((block) => block.key);
+}
+
+function restoreSourceFoldState(keys = []) {
+  const validKeys = new Set(sourceFoldableBlocks(sourceEditorDocumentValue()).map((block) => block.key));
+  sourceFoldedBlockKeys = new Set(
+    (Array.isArray(keys) ? keys : []).filter((key) => typeof key === "string" && validKeys.has(key)),
+  );
+  applySourceFoldingView();
+  return sourceFoldedBlockKeys.size > 0;
+}
+
+function buildSourceFoldedView(source) {
+  const text = String(source || "");
+  const ranges = sourceFoldRangesForSource(text);
+  const map = [];
+  let view = "";
+  let sourceCursor = 0;
+  let viewCursor = 0;
+
+  const appendVisible = (sourceStart, sourceEnd) => {
+    if (sourceEnd <= sourceStart) {
+      return;
+    }
+    const chunk = text.slice(sourceStart, sourceEnd);
+    view += chunk;
+    map.push({
+      kind: "visible",
+      viewStart: viewCursor,
+      viewEnd: viewCursor + chunk.length,
+      sourceStart,
+      sourceEnd,
+    });
+    viewCursor += chunk.length;
+  };
+
+  for (const range of ranges) {
+    appendVisible(sourceCursor, range.sourceStart);
+    const marker = sourceFoldMarker(range);
+    view += marker;
+    map.push({
+      kind: "fold",
+      viewStart: viewCursor,
+      viewEnd: viewCursor + marker.length,
+      sourceStart: range.sourceStart,
+      sourceEnd: range.sourceEnd,
+    });
+    viewCursor += marker.length;
+    sourceCursor = range.sourceEnd;
+  }
+  appendVisible(sourceCursor, text.length);
+  return { view, map, ranges };
+}
+
+function sourceFoldMarker(range) {
+  return `${sourceFoldMarkerPrefix()}${sourceFoldMarkerBrace()}${range?.hasTrailingNewline ? "\n" : ""}`;
+}
+
+function sourceFoldMarkerPrefix() {
+  return " ⋯ ";
+}
+
+function sourceFoldMarkerBrace() {
+  return "}";
+}
+
+function sourceViewOffsetToDocumentOffset(offset, affinity = "start") {
+  if (!sourceFoldsActive()) {
+    return Math.max(0, Math.min((sourceEditor.value || "").length, offset || 0));
+  }
+  return sourceViewOffsetToDocumentOffsetWithMap(
+    sourceFoldViewMap,
+    sourceEditorDocumentValue().length,
+    offset,
+    affinity,
+  );
+}
+
+function sourceViewOffsetToDocumentOffsetWithMap(map, documentLength, offset, affinity = "start") {
+  const viewOffset = Math.max(0, offset || 0);
+  for (const segment of map || []) {
+    if (viewOffset < segment.viewStart) {
+      return segment.sourceStart;
+    }
+    if (viewOffset <= segment.viewEnd) {
+      if (segment.kind === "fold") {
+        if (affinity === "end" || viewOffset >= segment.viewEnd) {
+          return segment.sourceEnd;
+        }
+        return segment.sourceStart;
+      }
+      return segment.sourceStart + Math.max(0, Math.min(segment.sourceEnd - segment.sourceStart, viewOffset - segment.viewStart));
+    }
+  }
+  return Math.max(0, documentLength || 0);
+}
+
+function sourceDocumentOffsetToViewOffset(offset, affinity = "start") {
+  if (!sourceFoldsActive()) {
+    return Math.max(0, Math.min((sourceEditor.value || "").length, offset || 0));
+  }
+  const sourceOffset = Math.max(0, offset || 0);
+  for (const segment of sourceFoldViewMap) {
+    if (sourceOffset < segment.sourceStart) {
+      return segment.viewStart;
+    }
+    if (sourceOffset <= segment.sourceEnd) {
+      if (segment.kind === "fold") {
+        return affinity === "end" && sourceOffset >= segment.sourceEnd
+          ? segment.viewEnd
+          : segment.viewStart;
+      }
+      return segment.viewStart + Math.max(0, Math.min(segment.viewEnd - segment.viewStart, sourceOffset - segment.sourceStart));
+    }
+  }
+  return sourceEditor.value.length;
+}
+
+function applySourceFoldingView(options = {}) {
+  const documentSource = sourceEditorDocumentValue();
+  const previousStart = sourceViewOffsetToDocumentOffset(sourceEditor.selectionStart || 0, "start");
+  const previousEnd = sourceViewOffsetToDocumentOffset(sourceEditor.selectionEnd || sourceEditor.selectionStart || 0, "end");
+  const previousDirection = sourceEditor.selectionDirection || "none";
+  const folded = buildSourceFoldedView(documentSource);
+  if (!folded.ranges.length) {
+    sourceFoldBaseSource = null;
+    sourceFoldViewMap = [];
+    sourceEditor.value = documentSource;
+  } else {
+    sourceFoldBaseSource = documentSource;
+    sourceFoldViewMap = folded.map;
+    sourceEditor.value = folded.view;
+  }
+  const selectionStart = sourceDocumentOffsetToViewOffset(previousStart, "start");
+  const selectionEnd = sourceDocumentOffsetToViewOffset(previousEnd, "end");
+  sourceEditor.setSelectionRange(selectionStart, selectionEnd, previousDirection);
+  if (options.refresh !== false) {
+    scheduleSourceHighlight(true, { preserveCurrent: false });
+    updateSourceMeta();
+    hideSourceColorEditor();
+    hideSourceCompletions();
+    hideSourceImportLinkFrame();
+    clearSourceBlockSelection();
+  }
+}
+
+function captureSourceFoldEditSnapshot() {
+  if (!sourceFoldsActive()) {
+    sourceFoldEditSnapshot = null;
+    return;
+  }
+  const source = sourceEditorDocumentValue();
+  sourceFoldEditSnapshot = {
+    source,
+    view: sourceEditor.value || "",
+    map: sourceFoldViewMap.map((segment) => ({ ...segment })),
+    ranges: sourceFoldRangesForSource(source).map((range) => ({ ...range })),
+  };
+}
+
+function expandSourceFoldsForEdit() {
+  if (!sourceFoldsActive()) {
+    return false;
+  }
+  const documentSource = sourceEditorDocumentValue();
+  const selectionStart = sourceViewOffsetToDocumentOffset(sourceEditor.selectionStart || 0, "start");
+  const selectionEnd = sourceViewOffsetToDocumentOffset(sourceEditor.selectionEnd || sourceEditor.selectionStart || 0, "end");
+  const selectionDirection = sourceEditor.selectionDirection || "none";
+  sourceFoldedBlockKeys = new Set();
+  sourceFoldBaseSource = null;
+  sourceFoldViewMap = [];
+  sourceEditor.value = documentSource;
+  sourceEditor.setSelectionRange(selectionStart, selectionEnd, selectionDirection);
+  scheduleSourceHighlight(true, { preserveCurrent: false });
+  updateSourceMeta();
+  hideSourceColorEditor();
+  hideSourceCompletions();
+  hideSourceImportLinkFrame();
+  clearSourceBlockSelection();
+  return true;
+}
+
+function commitSourceFoldedDisplayEdit() {
+  if (!sourceFoldsActive()) {
+    sourceFoldEditSnapshot = null;
+    return true;
+  }
+  const snapshot = sourceFoldEditSnapshot || {
+    source: sourceFoldBaseSource || "",
+    view: buildSourceFoldedView(sourceFoldBaseSource || "").view,
+    map: sourceFoldViewMap.map((segment) => ({ ...segment })),
+    ranges: sourceFoldRangesForSource(sourceFoldBaseSource || "").map((range) => ({ ...range })),
+  };
+  const before = snapshot.view || "";
+  const after = sourceEditor.value || "";
+  let prefix = 0;
+  const maxPrefix = Math.min(before.length, after.length);
+  while (prefix < maxPrefix && before[prefix] === after[prefix]) {
+    prefix += 1;
+  }
+  let suffix = 0;
+  const maxSuffix = Math.min(before.length - prefix, after.length - prefix);
+  while (
+    suffix < maxSuffix
+    && before[before.length - suffix - 1] === after[after.length - suffix - 1]
+  ) {
+    suffix += 1;
+  }
+
+  const oldViewStart = prefix;
+  const oldViewEnd = before.length - suffix;
+  const inserted = after.slice(prefix, after.length - suffix);
+  if (sourceFoldEditTouchesMarker(snapshot.map, oldViewStart, oldViewEnd)) {
+    sourceFoldBaseSource = snapshot.source;
+    sourceFoldedBlockKeys = new Set(
+      (snapshot.ranges || [])
+        .filter((range) => !sourceFoldRangeMarkerTouched(snapshot.map, range, oldViewStart, oldViewEnd))
+        .map((range) => range.key),
+    );
+    sourceFoldEditSnapshot = null;
+    applySourceFoldingView({ refresh: false });
+    return false;
+  }
+  const sourceStart = sourceViewOffsetToDocumentOffsetWithMap(
+    snapshot.map,
+    snapshot.source.length,
+    oldViewStart,
+    "start",
+  );
+  const sourceEnd = sourceViewOffsetToDocumentOffsetWithMap(
+    snapshot.map,
+    snapshot.source.length,
+    oldViewEnd,
+    "end",
+  );
+  const nextSource = `${snapshot.source.slice(0, sourceStart)}${inserted}${snapshot.source.slice(sourceEnd)}`;
+  sourceFoldBaseSource = nextSource;
+  sourceFoldedBlockKeys = sourceFoldKeysAfterEdit(snapshot, nextSource, sourceStart, sourceEnd, inserted);
+  sourceFoldEditSnapshot = null;
+  applySourceFoldingView({ refresh: false });
+  return true;
+}
+
+function sourceFoldEditTouchesMarker(map, viewStart, viewEnd) {
+  return (map || []).some((segment) => (
+    segment.kind === "fold"
+    && viewStart < segment.viewEnd
+    && viewEnd > segment.viewStart
+    && !(viewStart === segment.viewStart && viewEnd === segment.viewStart)
+    && !(viewStart === segment.viewEnd && viewEnd === segment.viewEnd)
+  ));
+}
+
+function sourceFoldRangeMarkerTouched(map, range, viewStart, viewEnd) {
+  return (map || []).some((segment) => (
+    segment.kind === "fold"
+    && segment.sourceStart === range.sourceStart
+    && segment.sourceEnd === range.sourceEnd
+    && viewStart < segment.viewEnd
+    && viewEnd > segment.viewStart
+  ));
+}
+
+function sourceFoldKeysAfterEdit(snapshot, nextSource, sourceStart, sourceEnd, inserted) {
+  const lineDelta = sourceFoldLineDelta(snapshot.source.slice(sourceStart, sourceEnd), inserted);
+  const nextBlocks = sourceFoldableBlocks(nextSource);
+  const nextKeys = new Set();
+  for (const range of snapshot.ranges || []) {
+    const overlaps = sourceStart < range.sourceEnd && sourceEnd > range.sourceStart;
+    if (overlaps) {
+      continue;
+    }
+    const targetOpenLine = range.openLine + (sourceEnd <= range.sourceStart ? lineDelta : 0);
+    const candidate = nextBlocks
+      .filter((block) => block.openLine === targetOpenLine)
+      .sort((left, right) => Math.abs(left.hiddenLineCount - range.hiddenLineCount) - Math.abs(right.hiddenLineCount - range.hiddenLineCount))[0];
+    if (candidate) {
+      nextKeys.add(candidate.key);
+    }
+  }
+  return nextKeys;
+}
+
+function sourceFoldLineDelta(removed, inserted) {
+  return sourceFoldNewlineCount(inserted) - sourceFoldNewlineCount(removed);
+}
+
+function sourceFoldNewlineCount(value) {
+  return (String(value || "").match(/\n/g) || []).length;
+}
+
+function sourceKeydownWillEdit(event) {
+  if (!event || event.defaultPrevented || event.isComposing) {
+    return false;
+  }
+  if (!event.metaKey && !event.ctrlKey && !event.altKey) {
+    return event.key.length === 1
+      || event.key === "Enter"
+      || event.key === "Tab"
+      || event.key === "Backspace"
+      || event.key === "Delete";
+  }
+  const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
+  if (event.altKey && !event.ctrlKey && !event.metaKey && (event.key === "ArrowUp" || event.key === "ArrowDown")) {
+    return true;
+  }
+  if ((event.metaKey || event.ctrlKey) && !event.altKey) {
+    return key === "z"
+      || key === "y"
+      || key === "/"
+      || key === "["
+      || key === "]"
+      || key === "Enter"
+      || (event.shiftKey && key === "k");
+  }
+  return false;
+}
 
 function sourceEditorSnapshot() {
   return {
-    value: sourceEditor.value || "",
-    selectionStart: sourceEditor.selectionStart || 0,
-    selectionEnd: sourceEditor.selectionEnd || 0,
+    value: sourceEditorDocumentValue(),
+    selectionStart: sourceViewOffsetToDocumentOffset(sourceEditor.selectionStart || 0, "start"),
+    selectionEnd: sourceViewOffsetToDocumentOffset(sourceEditor.selectionEnd || 0, "end"),
     selectionDirection: sourceEditor.selectionDirection || "none",
   };
 }
@@ -101,7 +590,7 @@ function resetSourceUndoHistory() {
 }
 
 function ensureSourceUndoHistory() {
-  if (!sourceUndoStack.length || sourceUndoStack.at(-1)?.value !== sourceEditor.value) {
+  if (!sourceUndoStack.length || sourceUndoStack.at(-1)?.value !== sourceEditorDocumentValue()) {
     resetSourceUndoHistory();
     return;
   }
@@ -131,6 +620,7 @@ function restoreSourceEditorSnapshot(snapshot) {
     return;
   }
   sourceUndoApplying = true;
+  resetSourceFoldingState();
   sourceEditor.value = snapshot.value || "";
   const start = Math.max(0, Math.min(sourceEditor.value.length, snapshot.selectionStart || 0));
   const end = Math.max(0, Math.min(sourceEditor.value.length, snapshot.selectionEnd || start));
@@ -185,7 +675,8 @@ function handleSourceUndoShortcut(event) {
 
 function setSourceEditorValue(value, options = {}) {
   const nextValue = value || "";
-  const preservesUndo = options.preserveUndoOnSameValue === true && sourceEditor.value === nextValue;
+  const preservesUndo = options.preserveUndoOnSameValue === true && sourceEditorDocumentValue() === nextValue;
+  resetSourceFoldingState();
   sourceEditor.value = nextValue;
   updateSourceMeta();
   scheduleSourceHighlight(true, { preserveCurrent: Boolean(options.preserveHighlight) });
@@ -265,7 +756,21 @@ function sourceHighlightRunsFromDom() {
   if (!sourceHighlight) {
     return runs;
   }
-  const walker = document.createTreeWalker(sourceHighlight, NodeFilter.SHOW_TEXT);
+  return sourceHighlightRunsFromRoot(sourceHighlight);
+}
+
+function sourceHighlightRunsFromHtml(html) {
+  const root = document.createElement("div");
+  root.innerHTML = html || "";
+  return sourceHighlightRunsFromRoot(root);
+}
+
+function sourceHighlightRunsFromRoot(root) {
+  const runs = [];
+  if (!root) {
+    return runs;
+  }
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
   for (let node = walker.nextNode(); node; node = walker.nextNode()) {
     const text = node.nodeValue || "";
     if (!text) {
@@ -281,6 +786,47 @@ function sourceHighlightRunsFromDom() {
     });
   }
   return sourceHighlightMergeRuns(runs);
+}
+
+function sourceFoldHighlightRuns(runs, source) {
+  if (!sourceFoldsActive()) {
+    return sourceHighlightMergeRuns(runs);
+  }
+  const foldedRuns = [];
+  let sourceCursor = 0;
+  for (const range of sourceFoldRangesForSource(source)) {
+    foldedRuns.push(...sourceHighlightRunsSlice(runs, sourceCursor, range.sourceStart));
+    foldedRuns.push(...sourceFoldMarkerHighlightRuns(runs, range));
+    sourceCursor = range.sourceEnd;
+  }
+  foldedRuns.push(...sourceHighlightRunsSlice(runs, sourceCursor, String(source || "").length));
+  return sourceHighlightMergeRuns(foldedRuns);
+}
+
+function sourceFoldMarkerHighlightRuns(runs, range) {
+  const markerRuns = [{
+    text: sourceFoldMarkerPrefix(),
+    className: "source-fold-marker",
+    style: "",
+  }];
+  const braceRuns = sourceHighlightRunsSlice(runs, range.closeOffset, range.closeOffset + 1);
+  if (braceRuns.map((run) => run.text).join("") === sourceFoldMarkerBrace()) {
+    markerRuns.push(...braceRuns);
+  } else {
+    markerRuns.push({
+      text: sourceFoldMarkerBrace(),
+      className: "",
+      style: "",
+    });
+  }
+  if (range.hasTrailingNewline) {
+    markerRuns.push({
+      text: "\n",
+      className: "",
+      style: "",
+    });
+  }
+  return markerRuns;
 }
 
 function sourceHighlightRunsSlice(runs, start, end) {
@@ -540,7 +1086,8 @@ async function refreshSourceHighlight() {
   if (activeHighlightRequest) {
     activeHighlightRequest.abort();
   }
-  const source = sourceEditor.value;
+  const source = sourceEditorDocumentValue();
+  const displaySource = sourceEditor.value || "";
   const requestId = ++sourceHighlightRequestId;
   const controller = new AbortController();
   activeHighlightRequest = controller;
@@ -550,20 +1097,33 @@ async function refreshSourceHighlight() {
       { source },
       { signal: controller.signal },
     );
-    if (requestId !== sourceHighlightRequestId || source !== sourceEditor.value) {
+    if (
+      requestId !== sourceHighlightRequestId
+      || source !== sourceEditorDocumentValue()
+      || displaySource !== (sourceEditor.value || "")
+    ) {
       return;
     }
     syncSourceHighlightMetrics();
     const payload = JSON.parse(text);
-    setSourceHighlightHtml(source, payload.html || escapeHtml(source || " "), "server");
+    if (sourceFoldsActive()) {
+      const foldedRuns = sourceFoldHighlightRuns(sourceHighlightRunsFromHtml(payload.html || escapeHtml(source || " ")), source);
+      setSourceHighlightHtml(displaySource, sourceHighlightRunsToHtml(foldedRuns), "server", foldedRuns);
+    } else {
+      setSourceHighlightHtml(source, payload.html || escapeHtml(source || " "), "server");
+    }
   } catch (error) {
     if (error.name === "AbortError") {
       return;
     }
-    if (requestId !== sourceHighlightRequestId || source !== sourceEditor.value) {
+    if (
+      requestId !== sourceHighlightRequestId
+      || source !== sourceEditorDocumentValue()
+      || displaySource !== (sourceEditor.value || "")
+    ) {
       return;
     }
-    renderPlainSourceHighlight(source, error);
+    renderPlainSourceHighlight(displaySource, error);
   } finally {
     if (activeHighlightRequest === controller) {
       activeHighlightRequest = null;
@@ -688,7 +1248,8 @@ async function showSourceCompletions(options = {}) {
   }
   const requestId = ++sourceCompletionRequestId;
   try {
-    const list = await suggestSourceCompletionsWithWasm(source, cursor);
+    const list = suggestSourceCompletionsFromEditorContext(source, cursor, document)
+      || await suggestSourceCompletionsWithWasm(source, cursor);
     if (requestId !== sourceCompletionRequestId || source !== sourceEditor.value || cursor !== sourceEditor.selectionStart) {
       return false;
     }
@@ -759,6 +1320,75 @@ function filterSourceCompletionsForCurrentRange(items, list, source) {
   return items.filter((item) => (item?.insertText || item?.label || "") !== current);
 }
 
+function suggestSourceCompletionsFromEditorContext(source, cursor, document) {
+  const importContext = sourceImportPathCompletionContext(source, cursor);
+  if (!importContext) {
+    return null;
+  }
+  return {
+    replaceStart: importContext.replaceStart,
+    replaceEnd: importContext.replaceEnd,
+    items: sourceImportPathCompletionItems(importContext, document),
+  };
+}
+
+function sourceImportPathCompletionItems(context, document) {
+  const currentDocumentPath = normalizePath(document?.puzzlePath || "");
+  const preferredRoot = normalizePath(document?.workspaceRoot || workspaceRoot || "");
+  const prefix = normalizePath(context.prefix || "");
+  const seen = new Set();
+  const items = [];
+  for (const candidate of documents) {
+    if (!candidate || !isPuzzleDocument(candidate) || !isTextDocument(candidate)) {
+      continue;
+    }
+    const candidatePath = normalizePath(candidate.puzzlePath || "");
+    if (!candidatePath || candidatePath === currentDocumentPath) {
+      continue;
+    }
+    if (preferredRoot && normalizePath(candidate.workspaceRoot || "") !== preferredRoot) {
+      continue;
+    }
+    const relativePath = sourceRelativeImportPath(document, candidate);
+    if (!relativePath || (prefix && !relativePath.startsWith(prefix)) || seen.has(relativePath)) {
+      continue;
+    }
+    seen.add(relativePath);
+    items.push({
+      label: relativePath,
+      kind: "puzzle",
+      insertText: context.needsClosingQuote ? `${relativePath}"` : relativePath,
+      detail: "path",
+    });
+  }
+  items.sort((left, right) => (left.label || "").localeCompare(right.label || ""));
+  return items.slice(0, 80);
+}
+
+function sourceRelativeImportPath(fromDocument, toDocument) {
+  const baseDir = directoryName(fromDocument?.puzzlePath || "");
+  const targetPath = normalizePath(toDocument?.puzzlePath || "");
+  return sourceRelativePathFromDirectory(baseDir, targetPath);
+}
+
+function sourceRelativePathFromDirectory(baseDir, targetPath) {
+  const baseParts = normalizePath(baseDir).split("/").filter(Boolean);
+  const targetParts = normalizePath(targetPath).split("/").filter(Boolean);
+  let shared = 0;
+  while (
+    shared < baseParts.length
+    && shared < targetParts.length
+    && baseParts[shared] === targetParts[shared]
+  ) {
+    shared += 1;
+  }
+  const parts = [
+    ...baseParts.slice(shared).map(() => ".."),
+    ...targetParts.slice(shared),
+  ];
+  return parts.join("/");
+}
+
 function sourceAutoCompletionEligible(source, cursor) {
   if (
     sourceEditor.selectionStart !== sourceEditor.selectionEnd
@@ -768,7 +1398,8 @@ function sourceAutoCompletionEligible(source, cursor) {
     return false;
   }
   return sourceCursorHasCompletionPrefix(source, cursor)
-    || sourceCursorAfterSelectorTagSeparator(source, cursor);
+    || sourceCursorAfterSelectorTagSeparator(source, cursor)
+    || Boolean(sourceImportPathCompletionContext(source, cursor));
 }
 
 function sourceCursorHasCompletionPrefix(source, cursor) {
@@ -795,6 +1426,9 @@ function sourceCursorBeforeSyntaxBoundaryWithoutPrefix(source, cursor) {
 
 function sourceCompletionMode(options, list, source, cursor) {
   if (options.manual) {
+    return "completion";
+  }
+  if (sourceImportPathCompletionContext(source, cursor)) {
     return "completion";
   }
   const replaceStart = Math.max(0, Math.min(source.length, Number(list?.replaceStart) || 0));
@@ -923,7 +1557,7 @@ function acceptSourceCompletion(index = sourceCompletionState?.selectedIndex ?? 
   hideSourceCompletions();
   updateSourceMeta();
   if (documents[currentDocumentIndex]) {
-    documents[currentDocumentIndex].source = sourceEditor.value;
+    documents[currentDocumentIndex].source = sourceEditorDocumentValue();
   }
   scheduleSourceHighlight();
   scheduleLocalSave();
@@ -1158,6 +1792,12 @@ function replaceCurrentSourceFindMatch() {
 function replaceAllSourceFindMatches() {
   if (!isSourceFindPanelOpen() || !sourceReplaceInput || !sourceFindState.matches.length) {
     return false;
+  }
+  if (expandSourceFoldsForEdit()) {
+    syncSourceFindMatches({ anchor: sourceEditor.selectionStart, select: false });
+    if (!sourceFindState.matches.length) {
+      return false;
+    }
   }
   const matches = [...sourceFindState.matches];
   const replacement = sourceReplaceInput.value || "";
@@ -1482,21 +2122,37 @@ function sourceVisualOffsetFromPoint(clientX, clientY) {
   return best ? Math.max(0, Math.min(source.length, best.offset)) : null;
 }
 
-function sourceOffsetFromVisualPointer(event, source = sourceEditor.value || "") {
+function sourceOffsetFromVisualPointer(event, source = sourceEditorDocumentValue()) {
   if (!event || !sourceEditorWrap?.contains(event.target)) {
     return null;
   }
   const offset = sourceVisualOffsetFromPoint(event.clientX, event.clientY);
-  return Number.isInteger(offset)
-    ? Math.max(0, Math.min(String(source || "").length, offset))
-    : null;
+  if (!Number.isInteger(offset)) {
+    return null;
+  }
+  const documentOffset = sourceFoldsActive()
+    ? sourceViewOffsetToDocumentOffset(offset, "start")
+    : offset;
+  return Math.max(0, Math.min(String(source || "").length, documentOffset));
 }
 
-function sourceOffsetFromVisualPoint(clientX, clientY, source = sourceEditor.value || "") {
+function sourceViewOffsetFromVisualPoint(clientX, clientY) {
   const offset = sourceVisualOffsetFromPoint(clientX, clientY);
-  return Number.isInteger(offset)
-    ? Math.max(0, Math.min(String(source || "").length, offset))
-    : null;
+  if (!Number.isInteger(offset)) {
+    return null;
+  }
+  return Math.max(0, Math.min((sourceEditor.value || "").length, offset));
+}
+
+function sourceOffsetFromVisualPoint(clientX, clientY, source = sourceEditorDocumentValue()) {
+  const offset = sourceViewOffsetFromVisualPoint(clientX, clientY);
+  if (!Number.isInteger(offset)) {
+    return null;
+  }
+  const documentOffset = sourceFoldsActive()
+    ? sourceViewOffsetToDocumentOffset(offset, "start")
+    : offset;
+  return Math.max(0, Math.min(String(source || "").length, documentOffset));
 }
 
 function sourceByteOffset(value, utf16Offset) {
@@ -1804,7 +2460,7 @@ function updateSourceColorFromPopover(options = {}) {
   }
   updateSourceMeta();
   if (documents[currentDocumentIndex]) {
-    documents[currentDocumentIndex].source = sourceEditor.value;
+    documents[currentDocumentIndex].source = sourceEditorDocumentValue();
   }
   scheduleSourceHighlight(true);
   scheduleLocalSave();
@@ -1874,6 +2530,9 @@ function handleSourceBeforeInputTextInsert(event) {
   if (!isTextDocument(documents[currentDocumentIndex])) {
     return;
   }
+  if (sourceFoldsActive() && event.inputType !== "historyUndo" && event.inputType !== "historyRedo") {
+    captureSourceFoldEditSnapshot();
+  }
   ensureSourceUndoHistory();
   if (event.inputType === "historyUndo" || event.inputType === "historyRedo") {
     event.preventDefault();
@@ -1912,6 +2571,15 @@ sourceEditor.addEventListener("input", () => {
   if (!isTextDocument(documents[currentDocumentIndex])) {
     return;
   }
+  if (sourceFoldsActive()) {
+    const changed = commitSourceFoldedDisplayEdit();
+    if (!changed) {
+      clearSourceCompositionPreview();
+      scheduleSourceHighlight(true, { preserveCurrent: false });
+      updateSourceMeta();
+      return;
+    }
+  }
   clearSourceCompositionPreview();
   scheduleSourceHighlight();
   hideSourceImportLinkFrame();
@@ -1923,7 +2591,7 @@ sourceEditor.addEventListener("input", () => {
   refreshSourceFindAfterSourceChange();
   scheduleSourceCompletion();
   if (documents[currentDocumentIndex]) {
-    documents[currentDocumentIndex].source = sourceEditor.value;
+    documents[currentDocumentIndex].source = sourceEditorDocumentValue();
   }
   scheduleLocalSave();
   scheduleLevelBuilderResetFromSource(false);
@@ -2228,7 +2896,7 @@ function handleSourceEditorArrowNavigation(event) {
   }
   const targetClientX = wrapRect.left + sourceEditorPreferredCaretX;
   const targetClientY = wrapRect.top + current.top + (event.key === "ArrowDown" ? lineHeight + 1 : -1);
-  const next = sourceOffsetFromVisualPoint(targetClientX, targetClientY);
+  const next = sourceViewOffsetFromVisualPoint(targetClientX, targetClientY);
   if (Number.isInteger(next)) {
     moveSourceSelection(next, event.shiftKey);
   } else {
@@ -2321,16 +2989,18 @@ function renderSourceLineNumbers() {
   if (!sourceLineNumbers || !sourceEditor || !sourceEditorWrap) {
     return;
   }
-  const source = sourceEditor.value || "";
-  const lines = source.length ? source.split("\n") : [""];
-  const digits = Math.max(2, String(Math.max(1, lines.length)).length);
-  const gutterWidth = Math.max(44, Math.min(88, 24 + (digits * sourceEditorCharWidth())));
-  sourceEditorWrap.style.setProperty("--source-line-gutter-width", `${Math.ceil(gutterWidth)}px`);
+  const visibleSource = sourceEditor.value || "";
+  const documentSource = sourceEditorDocumentValue();
+  const visibleLines = visibleSource.length ? visibleSource.split("\n") : [""];
+  const documentLines = sourceFoldLinesWithOffsets(documentSource);
+  const digits = Math.max(2, String(Math.max(1, documentLines.length)).length);
+  const numberWidth = Math.max(44, Math.min(88, 24 + (digits * sourceEditorCharWidth())));
+  sourceEditorWrap.style.setProperty("--source-line-number-width", `${Math.ceil(numberWidth)}px`);
 
   const lineHeight = sourceEditorLineHeight();
   const columns = sourceEditorTextColumnCapacity();
   if (
-    sourceLineNumberSource === source
+    sourceLineNumberSource === `${visibleSource}\u0000${documentSource}\u0000${Array.from(sourceFoldedBlockKeys).join("|")}`
     && sourceLineNumberColumns === columns
     && sourceLineNumberLineHeight === lineHeight
   ) {
@@ -2338,15 +3008,67 @@ function renderSourceLineNumbers() {
     return;
   }
 
-  sourceLineNumberSource = source;
+  sourceLineNumberSource = `${visibleSource}\u0000${documentSource}\u0000${Array.from(sourceFoldedBlockKeys).join("|")}`;
   sourceLineNumberColumns = columns;
   sourceLineNumberLineHeight = lineHeight;
-  sourceLineNumbers.innerHTML = lines.map((line, index) => {
+  const foldBlocksByLine = sourceFoldBlocksByOpenLine(documentSource);
+  let viewLineStart = 0;
+  sourceLineNumbers.innerHTML = visibleLines.map((line) => {
+    const sourceOffset = sourceViewOffsetToDocumentOffset(viewLineStart, "start");
+    const sourceLineIndex = sourceLineIndexForFoldOffset(documentLines, sourceOffset);
+    const foldBlock = foldBlocksByLine.get(sourceLineIndex) || null;
+    const folded = foldBlock ? sourceFoldedBlockKeys.has(foldBlock.key) : false;
     const visualRows = sourceVisualRowCount(line, columns);
     const height = Math.max(lineHeight, visualRows * lineHeight);
-    return `<span class="source-line-number-row" style="height:${height}px">${index + 1}</span>`;
+    const lineNumber = Number.isInteger(sourceLineIndex) ? sourceLineIndex + 1 : "";
+    const foldIcon = folded
+      ? `<svg class="source-fold-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"></path></svg>`
+      : `<svg class="source-fold-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg>`;
+    const button = foldBlock
+      ? `<button class="source-fold-button${folded ? " is-folded" : ""}" type="button" data-source-fold-key="${escapeHtml(foldBlock.key)}" data-source-fold-line="${sourceLineIndex}" aria-label="${folded ? "Expand" : "Fold"} block at line ${lineNumber}" title="${folded ? "Expand" : "Fold"} block">${foldIcon}</button>`
+      : `<span class="source-fold-spacer" aria-hidden="true"></span>`;
+    viewLineStart += line.length + 1;
+    return `<span class="source-line-number-row" style="height:${height}px"><span class="source-line-number-label">${lineNumber}</span>${button}</span>`;
   }).join("");
   syncSourceLineNumberScroll();
+}
+
+function sourceFoldBlocksByOpenLine(source) {
+  const byLine = new Map();
+  for (const block of sourceFoldableBlocks(source)) {
+    const existing = byLine.get(block.openLine);
+    if (!existing || block.closeLine > existing.closeLine) {
+      byLine.set(block.openLine, block);
+    }
+  }
+  return byLine;
+}
+
+function toggleSourceFoldByKey(key) {
+  const source = sourceEditorDocumentValue();
+  const block = sourceFoldableBlocks(source).find((item) => item.key === key);
+  if (!block) {
+    return false;
+  }
+  if (sourceFoldedBlockKeys.has(block.key)) {
+    sourceFoldedBlockKeys.delete(block.key);
+  } else {
+    sourceFoldedBlockKeys.add(block.key);
+  }
+  applySourceFoldingView();
+  scheduleLocalSave();
+  return true;
+}
+
+function handleSourceFoldGutterClick(event) {
+  const button = event.target?.closest?.("[data-source-fold-key]");
+  if (!button || !sourceLineNumbers?.contains(button)) {
+    return;
+  }
+  event.preventDefault();
+  event.stopPropagation();
+  toggleSourceFoldByKey(button.dataset.sourceFoldKey || "");
+  sourceEditor.focus({ preventScroll: true });
 }
 
 function syncSourceLineNumberScroll() {
@@ -2932,18 +3654,54 @@ function handleSourceRewritePatternTab(event) {
 }
 
 function sourceEditorContentChanged() {
+  if (sourceFoldsActive()) {
+    const changed = commitSourceFoldedDisplayEdit();
+    if (!changed) {
+      scheduleSourceHighlight(true, { preserveCurrent: false });
+      updateSourceMeta();
+      refreshSourceColorEditor();
+      refreshSourceFindAfterSourceChange();
+      scheduleLocalSave();
+      hideSourceCompletions();
+      return;
+    }
+  }
   scheduleSourceHighlight();
   recordSourceUndoSnapshot();
   updateSourceMeta();
   refreshSourceColorEditor();
   refreshSourceFindAfterSourceChange();
   if (documents[currentDocumentIndex]) {
-    documents[currentDocumentIndex].source = sourceEditor.value;
+    documents[currentDocumentIndex].source = sourceEditorDocumentValue();
   }
   scheduleLocalSave();
   scheduleLevelBuilderResetFromSource(false);
   schedulePreview();
   hideSourceCompletions();
+}
+
+function sourcePrintableKeydownEdit(event) {
+  const source = sourceEditor.value || "";
+  const start = Math.max(0, Math.min(source.length, sourceEditor.selectionStart || 0));
+  const end = Math.max(start, Math.min(source.length, sourceEditor.selectionEnd || start));
+  if (event.key !== "\"") {
+    return {
+      replacement: event.key,
+      start,
+      end,
+      selectionStart: start + event.key.length,
+      selectionEnd: start + event.key.length,
+    };
+  }
+  const selection = source.slice(start, end);
+  const replacement = `"${selection}"`;
+  return {
+    replacement,
+    start,
+    end,
+    selectionStart: start + 1,
+    selectionEnd: start + 1 + selection.length,
+  };
 }
 
 function handleSourcePrintableKeydownInput(event) {
@@ -2963,12 +3721,14 @@ function handleSourcePrintableKeydownInput(event) {
   event.stopPropagation();
   hideSourceImportLinkFrame();
   sourceEditorPreferredCaretX = null;
+  const edit = sourcePrintableKeydownEdit(event);
   sourceEditor.setRangeText(
-    event.key,
-    sourceEditor.selectionStart,
-    sourceEditor.selectionEnd,
+    edit.replacement,
+    edit.start,
+    edit.end,
     "end",
   );
+  sourceEditor.setSelectionRange(edit.selectionStart, edit.selectionEnd);
   sourceEditorContentChanged();
   scheduleSourceCompletion();
   syncPreviewModeFromSourceCursor();
@@ -3092,6 +3852,7 @@ function sourceOffsetForRawLines(lines, lineIndex, column = 0) {
 }
 
 function replaceSourceValue(value, selectionStart = null, selectionEnd = selectionStart, selectionDirection = "none") {
+  resetSourceFoldingState();
   sourceEditor.value = value;
   if (selectionStart !== null) {
     sourceEditor.setSelectionRange(selectionStart, selectionEnd ?? selectionStart, selectionDirection);
@@ -3404,6 +4165,57 @@ function sourceImportLinesWithOffsets(source) {
   return lines;
 }
 
+function sourceImportPathCompletionContext(source, cursor) {
+  const lines = sourceImportLinesWithOffsets(source);
+  const lineIndex = sourceLineIndexAtOffset(lines, cursor);
+  const line = lines[lineIndex];
+  if (!line) {
+    return null;
+  }
+  const column = Math.max(0, Math.min(line.raw.length, cursor - line.start));
+  const code = stripSourceImportLineComment(line.raw);
+  if (column > code.length) {
+    return null;
+  }
+  const prefix = code.match(/^(\s*import\s+)"/);
+  if (!prefix) {
+    return null;
+  }
+  const pathStartColumn = prefix[0].length;
+  if (column < pathStartColumn) {
+    return null;
+  }
+  let escaped = false;
+  let closeQuoteColumn = -1;
+  for (let index = pathStartColumn; index < code.length; index += 1) {
+    const char = code[index];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (char === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (char === "\"") {
+      closeQuoteColumn = index;
+      break;
+    }
+  }
+  const pathEndColumn = closeQuoteColumn >= 0 ? closeQuoteColumn : code.length;
+  if (column > pathEndColumn) {
+    return null;
+  }
+  const replaceStart = line.start + pathStartColumn;
+  const replaceEnd = line.start + pathEndColumn;
+  return {
+    replaceStart,
+    replaceEnd,
+    prefix: code.slice(pathStartColumn, column),
+    needsClosingQuote: closeQuoteColumn < 0,
+  };
+}
+
 function sourceImportLinkAtOffset(source, offset, lines = sourceImportLinesWithOffsets(source)) {
   const lineIndex = sourceLineIndexAtOffset(lines, offset);
   const line = lines[lineIndex];
@@ -3658,7 +4470,7 @@ function sourceEditorPositionFromPoint(clientX, clientY, options = {}) {
     return null;
   }
   const rawPosition = sourceEditorRawPositionFromPoint(clientX, clientY, lines);
-  const visualOffset = sourceOffsetFromVisualPoint(clientX, clientY);
+  const visualOffset = sourceViewOffsetFromVisualPoint(clientX, clientY);
   if (Number.isInteger(visualOffset)) {
     const visualPosition = sourceLineColumnForOffset(lines, visualOffset);
     return options.preserveColumn
@@ -3988,6 +4800,9 @@ sourceEditor.addEventListener("keydown", (event) => {
     closeSourceFindPanel();
     return;
   }
+  if (sourceFoldsActive() && sourceKeydownWillEdit(event)) {
+    captureSourceFoldEditSnapshot();
+  }
   if (handleSourceUndoShortcut(event)) {
     return;
   }
@@ -4132,7 +4947,7 @@ function insertAtSelection(value) {
   recordSourceUndoSnapshot();
   updateSourceMeta();
   if (documents[currentDocumentIndex]) {
-    documents[currentDocumentIndex].source = sourceEditor.value;
+    documents[currentDocumentIndex].source = sourceEditorDocumentValue();
   }
   scheduleSourceHighlight();
   scheduleLocalSave();
@@ -4141,6 +4956,7 @@ function insertAtSelection(value) {
 }
 
 function setSourceEditorText(value, selectionStart = null, selectionEnd = selectionStart) {
+  resetSourceFoldingState();
   sourceEditor.value = value || "";
   hideSourceColorEditor();
   hideSourceCompletions();
@@ -4151,7 +4967,7 @@ function setSourceEditorText(value, selectionStart = null, selectionEnd = select
   recordSourceUndoSnapshot();
   updateSourceMeta();
   if (documents[currentDocumentIndex]) {
-    documents[currentDocumentIndex].source = sourceEditor.value;
+    documents[currentDocumentIndex].source = sourceEditorDocumentValue();
   }
   scheduleSourceHighlight();
   resetLevelBuilderFromSource(false);
@@ -4162,6 +4978,7 @@ sourceEditor.addEventListener("scroll", syncSourceHighlightScroll);
 sourceEditor.addEventListener("scroll", hideSourceColorEditor);
 sourceEditor.addEventListener("scroll", hideSourceCompletions);
 sourceEditor.addEventListener("scroll", hideSourceImportLinkFrame);
+sourceLineNumbers?.addEventListener("click", handleSourceFoldGutterClick);
 sourceColorCodeInput?.addEventListener("input", () => updateSourceColorFromPopover({ fromCode: true }));
 sourceColorCodeInput?.addEventListener("change", () => updateSourceColorFromPopover({ fromCode: true }));
 sourceColorCodeInput?.addEventListener("keydown", (event) => {

@@ -1068,7 +1068,9 @@ function activeSpriteEditSource() {
   if (!document || !isTextDocument(document)) {
     return "";
   }
-  return document.id === activeDocument()?.id ? sourceEditor.value : document.source || "";
+  return document.id === activeDocument()?.id
+    ? sourceEditorDocumentValue()
+    : document.source || "";
 }
 
 function spriteLinkIconSvg() {
@@ -2173,7 +2175,7 @@ function loadSpriteFromSourceClick(event = null) {
     setSpriteActionStatus("Source target sync unavailable", "is-error");
     return;
   }
-  const source = sourceEditor.value || "";
+  const source = sourceEditorDocumentValue();
   const clickOffset = typeof sourceOffsetFromEditorClick === "function"
     ? sourceOffsetFromEditorClick(event, source)
     : null;
@@ -2181,7 +2183,9 @@ function loadSpriteFromSourceClick(event = null) {
     force: true,
     recordHistory: true,
     allowInactiveMode: true,
-    position: clickOffset ?? sourceEditor.selectionStart,
+    position: clickOffset ?? (
+      sourceViewOffsetToDocumentOffset(sourceEditor.selectionStart, "start")
+    ),
   });
 }
 
@@ -2189,7 +2193,7 @@ function loadSpriteSourceTarget(target, options = {}) {
   if (!isPuzzleDocument(activeDocument()) || !isTextDocument(activeDocument())) {
     return null;
   }
-  const source = sourceEditor.value || "";
+  const source = sourceEditorDocumentValue();
   if (!Number.isInteger(target?.bodyStart) || !Number.isInteger(target?.bodyEnd)) {
     return null;
   }
