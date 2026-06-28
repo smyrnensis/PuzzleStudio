@@ -11157,6 +11157,40 @@ a
 }
 
 #[test]
+fn schema_selector_direction_symbols_are_relative_to_rule_orientation() {
+    let source = r#"
+title relative_direction_selector
+
+puzzle default {
+empty .
+
+layers {
+actor = Marker:directions
+}
+
+legend {
+r = Marker:right
+}
+
+rules {
+once right [ Marker:> ] -> [ Marker:v ]
+}
+
+levels {
+level start
+r
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    let marker_down = object_named(&loaded, "Marker:down");
+    let state =
+        transition_state(&loaded.game, &loaded.levels[0].initial_state, InputId(0)).unwrap();
+
+    assert!(state.has_object(&loaded.game, 0, 0, marker_down));
+}
+
+#[test]
 fn schema_selector_subset_value_sets_are_positional_for_multiple_axes() {
     let source = r#"
 title subset_selector_two_axes
