@@ -60,6 +60,10 @@ fn block_header_text(line: &str) -> &str {
         .map(str::trim_end)
         .unwrap_or(line)
 }
+
+fn is_block_header_line(line: &str) -> bool {
+    line.trim_end().ends_with('{')
+}
 pub use puzzle_3d::{
     ParseError3, ParsedPuzzle3, VisualFixtureAnimation3, VisualFixtureExportError3,
     export_visual_fixture_json, export_visual_fixture_json_with_title,
@@ -255,8 +259,11 @@ pub fn parse_game2d(source: &str) -> Result<LoadedGame, DiagnosticReport> {
 pub(crate) fn parse_surface_document(source: &str) -> SurfaceDocument {
     let context = scan_source_context(source);
     let mut sink = SurfaceSink::default();
+    let mut option_stack = Vec::<SurfaceOptionBlock>::new();
     for line in &context.lines {
-        record_surface_document_line(line.scope, &line.token_spans, &mut sink);
+        let option_block = active_surface_option_block(&option_stack);
+        record_surface_document_line(option_block, line.scope, &line.token_spans, &mut sink);
+        update_surface_option_block_stack(line, &mut option_stack);
     }
     sink.into_document()
 }
@@ -266,11 +273,15 @@ pub(crate) fn surface_document_semantic_tokens(source: &str) -> Vec<semantic::Se
 }
 
 fn record_surface_document_line(
+    option_block: Option<SurfaceOptionBlock>,
     scope: Option<SourceScope>,
     tokens: &[SourceToken],
     sink: &mut SurfaceSink,
 ) {
     if record_document_prelude_surface_line(scope, tokens, sink) {
+        return;
+    }
+    if record_option_surface_line(option_block, scope, tokens, sink) {
         return;
     }
     if tokens
@@ -298,17 +309,305 @@ fn record_document_prelude_surface_line(
     let Some(first) = tokens.first() else {
         return false;
     };
-    if matches!(
-        first.text.as_str(),
-        "title" | "subtitle" | "author" | "homepage"
-    ) {
+    if let Some(action) = model_top_level_surface_directive(&first.text) {
         add_scene_effect_token_range(sink, first, SurfaceSemanticKind::Keyword);
-        if let Some(value) = tokens.get(1) {
-            add_scene_effect_token_range(sink, value, SurfaceSemanticKind::String);
+        match action {
+            ModelTopLevelDirective::Title
+            | ModelTopLevelDirective::Subtitle
+            | ModelTopLevelDirective::Author
+            | ModelTopLevelDirective::Homepage => {
+                if let Some(value) = tokens.get(1) {
+                    add_scene_effect_token_range(sink, value, SurfaceSemanticKind::String);
+                }
+            }
+            ModelTopLevelDirective::Puzzle | ModelTopLevelDirective::Scene => {
+                if let Some(name) = tokens.get(1) {
+                    add_scene_effect_token_range(sink, name, SurfaceSemanticKind::Scene);
+                }
+            }
+            _ => {}
+        }
+        return true;
+    }
+    if classify_known_mixed_document_section(
+        &tokens
+            .iter()
+            .map(|token| token.text.as_str())
+            .collect::<Vec<_>>(),
+    )
+    .is_some()
+    {
+        add_scene_effect_token_range(sink, first, SurfaceSemanticKind::Keyword);
+        if matches!(first.text.as_str(), "puzzle3")
+            && let Some(name) = tokens.get(1)
+        {
+            add_scene_effect_token_range(sink, name, SurfaceSemanticKind::Scene);
         }
         return true;
     }
     false
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SurfaceOptionBlock {
+    Puzzle2,
+    Puzzle3,
+    Render2,
+    Render3,
+    Camera3,
+    Grid2,
+    Grid3,
+    Pixelate3,
+    Animation,
+    Tween,
+    LevelMenu,
+    Theme,
+    Other,
+}
+
+pub(crate) fn surface_option_block_before_line(
+    lines: &[crate::source::SourceContextLine],
+    line_index: usize,
+) -> Option<SurfaceOptionBlock> {
+    let mut stack = Vec::<SurfaceOptionBlock>::new();
+    for line in lines.iter().take(line_index) {
+        update_surface_option_block_stack(line, &mut stack);
+    }
+    active_surface_option_block(&stack)
+}
+
+fn active_surface_option_block(stack: &[SurfaceOptionBlock]) -> Option<SurfaceOptionBlock> {
+    stack.iter().rev().copied().find(|block| {
+        matches!(
+            block,
+            SurfaceOptionBlock::Render2
+                | SurfaceOptionBlock::Render3
+                | SurfaceOptionBlock::Camera3
+                | SurfaceOptionBlock::Grid2
+                | SurfaceOptionBlock::Grid3
+                | SurfaceOptionBlock::Pixelate3
+                | SurfaceOptionBlock::Animation
+                | SurfaceOptionBlock::Tween
+                | SurfaceOptionBlock::LevelMenu
+                | SurfaceOptionBlock::Theme
+        )
+    })
+}
+
+fn update_surface_option_block_stack(
+    line: &crate::source::SourceContextLine,
+    stack: &mut Vec<SurfaceOptionBlock>,
+) {
+    let trimmed = line.content.trim();
+    if trimmed == "}" {
+        stack.pop();
+        return;
+    }
+    if !surface_line_opens_option_block(line) {
+        return;
+    }
+    let block = surface_option_block_for_opening(&line.tokens, stack);
+    stack.push(block);
+}
+
+fn surface_line_opens_option_block(line: &crate::source::SourceContextLine) -> bool {
+    line.content.trim_end().ends_with('{')
+        || matches!(
+            line.tokens.as_slice(),
+            [name] if matches!(
+                name.as_str(),
+                "puzzle" | "puzzle3" | "render" | "camera" | "grid" | "pixelate"
+                    | "animation" | "tween" | "level_menu" | "theme"
+            )
+        )
+}
+
+fn surface_option_block_for_opening(
+    tokens: &[String],
+    stack: &[SurfaceOptionBlock],
+) -> SurfaceOptionBlock {
+    let Some(first) = tokens.first().map(String::as_str) else {
+        return SurfaceOptionBlock::Other;
+    };
+    match first {
+        "puzzle3" => SurfaceOptionBlock::Puzzle3,
+        "puzzle" => SurfaceOptionBlock::Puzzle2,
+        "render" if stack.contains(&SurfaceOptionBlock::Puzzle3) => SurfaceOptionBlock::Render3,
+        "render" => SurfaceOptionBlock::Render2,
+        "camera" if stack.last() == Some(&SurfaceOptionBlock::Render3) => {
+            SurfaceOptionBlock::Camera3
+        }
+        "grid" if stack.last() == Some(&SurfaceOptionBlock::Render3) => SurfaceOptionBlock::Grid3,
+        "grid" if stack.last() == Some(&SurfaceOptionBlock::Render2) => SurfaceOptionBlock::Grid2,
+        "pixelate" if stack.last() == Some(&SurfaceOptionBlock::Render3) => {
+            SurfaceOptionBlock::Pixelate3
+        }
+        "animation" => SurfaceOptionBlock::Animation,
+        "tween" if stack.last() == Some(&SurfaceOptionBlock::Animation) => {
+            SurfaceOptionBlock::Tween
+        }
+        "level_menu" => SurfaceOptionBlock::LevelMenu,
+        "theme" => SurfaceOptionBlock::Theme,
+        _ => SurfaceOptionBlock::Other,
+    }
+}
+
+fn record_option_surface_line(
+    block: Option<SurfaceOptionBlock>,
+    scope: Option<SourceScope>,
+    tokens: &[SourceToken],
+    sink: &mut SurfaceSink,
+) -> bool {
+    let Some(first) = tokens.first() else {
+        return false;
+    };
+    match block {
+        Some(SurfaceOptionBlock::Puzzle3) if first.text == "render" => {
+            add_scene_effect_token_range(sink, first, SurfaceSemanticKind::Keyword);
+            mark_option_surface_tokens(&tokens[1..], puzzle_3d::RENDER_OPTIONS3, sink);
+            true
+        }
+        Some(SurfaceOptionBlock::Puzzle2) if first.text == "render" => {
+            add_scene_effect_token_range(sink, first, SurfaceSemanticKind::Keyword);
+            mark_option_surface_tokens(&tokens[1..], PUZZLE_RENDER_BLOCK_OPTIONS, sink);
+            true
+        }
+        _ if scope == Some(SourceScope::Puzzle) && first.text == "render" => {
+            add_scene_effect_token_range(sink, first, SurfaceSemanticKind::Keyword);
+            true
+        }
+        Some(SurfaceOptionBlock::Puzzle2 | SurfaceOptionBlock::Puzzle3)
+            if first.text == "animation" =>
+        {
+            add_scene_effect_token_range(sink, first, SurfaceSemanticKind::Keyword);
+            mark_option_surface_tokens(&tokens[1..], ANIMATION_BLOCK_OPTIONS, sink);
+            true
+        }
+        _ if scope == Some(SourceScope::Puzzle) && first.text == "animation" => {
+            add_scene_effect_token_range(sink, first, SurfaceSemanticKind::Keyword);
+            mark_option_surface_tokens(&tokens[1..], ANIMATION_BLOCK_OPTIONS, sink);
+            true
+        }
+        Some(SurfaceOptionBlock::Render3)
+            if puzzle_3d::RENDER_OPTIONS3.contains(&first.text.as_str()) =>
+        {
+            add_scene_effect_token_range(sink, first, SurfaceSemanticKind::Setting);
+            match first.text.as_str() {
+                "camera" => {
+                    mark_option_surface_tokens(&tokens[1..], puzzle_3d::CAMERA_OPTIONS3, sink);
+                }
+                "grid" => {
+                    mark_option_surface_tokens(&tokens[1..], puzzle_3d::GRID_BARE_OPTIONS3, sink);
+                }
+                "pixelate" => {
+                    mark_option_surface_tokens(&tokens[1..], puzzle_3d::PIXELATE_OPTIONS3, sink);
+                }
+                _ => {}
+            }
+            true
+        }
+        Some(SurfaceOptionBlock::Render2)
+            if PUZZLE_RENDER_BLOCK_OPTIONS.contains(&first.text.as_str()) =>
+        {
+            add_scene_effect_token_range(sink, first, SurfaceSemanticKind::Setting);
+            if first.text == "grid" {
+                mark_option_surface_tokens(&tokens[1..], PUZZLE_RENDER_GRID_OPTIONS, sink);
+            }
+            true
+        }
+        Some(SurfaceOptionBlock::Camera3) => {
+            mark_option_surface_tokens(tokens, puzzle_3d::CAMERA_OPTIONS3, sink)
+        }
+        Some(SurfaceOptionBlock::Grid3) => {
+            mark_option_surface_tokens(tokens, puzzle_3d::GRID_BARE_OPTIONS3, sink)
+        }
+        Some(SurfaceOptionBlock::Pixelate3) => {
+            mark_option_surface_tokens(tokens, puzzle_3d::PIXELATE_OPTIONS3, sink)
+        }
+        Some(SurfaceOptionBlock::Grid2) => {
+            mark_option_surface_tokens(tokens, PUZZLE_RENDER_GRID_OPTIONS, sink)
+        }
+        Some(SurfaceOptionBlock::Animation)
+            if ANIMATION_BLOCK_OPTIONS.contains(&first.text.as_str()) =>
+        {
+            add_scene_effect_token_range(sink, first, SurfaceSemanticKind::Setting);
+            if first.text == "tween" {
+                mark_option_surface_tokens(&tokens[1..], ANIMATION_TWEEN_OPTIONS, sink);
+            }
+            true
+        }
+        Some(SurfaceOptionBlock::Tween) => {
+            mark_option_surface_tokens(tokens, ANIMATION_TWEEN_OPTIONS, sink)
+        }
+        Some(SurfaceOptionBlock::LevelMenu) => {
+            mark_option_surface_tokens(tokens, LEVEL_MENU_OPTIONS, sink)
+        }
+        Some(SurfaceOptionBlock::Theme) => mark_theme_setting_surface_tokens(tokens, sink),
+        _ => false,
+    }
+}
+
+fn mark_option_surface_tokens(
+    tokens: &[SourceToken],
+    option_names: &'static [&'static str],
+    sink: &mut SurfaceSink,
+) -> bool {
+    let mut marked_any = false;
+    for token in tokens {
+        let name = token
+            .text
+            .split_once('=')
+            .map_or(token.text.as_str(), |(name, _)| name);
+        if !name.is_empty()
+            && option_names.contains(&name)
+            && mark_token_part(sink, token, name, SurfaceSemanticKind::Setting)
+        {
+            marked_any = true;
+        }
+    }
+    marked_any
+}
+
+fn mark_theme_setting_surface_tokens(tokens: &[SourceToken], sink: &mut SurfaceSink) -> bool {
+    let mut marked_any = false;
+    for token in tokens {
+        let name = token
+            .text
+            .trim_start_matches("--")
+            .split_once('=')
+            .map_or(token.text.as_str(), |(name, _)| name);
+        let normalized = name.replace('_', "-").to_ascii_lowercase();
+        if THEME_SETTING_SPECS.iter().any(|spec| {
+            normalized == spec.canonical.replace('_', "-")
+                || spec.aliases.iter().any(|alias| normalized == *alias)
+        }) && mark_token_part(sink, token, name, SurfaceSemanticKind::Setting)
+        {
+            marked_any = true;
+        }
+    }
+    marked_any
+}
+
+fn mark_token_part(
+    sink: &mut SurfaceSink,
+    token: &SourceToken,
+    part: &str,
+    kind: SurfaceSemanticKind,
+) -> bool {
+    let Some(relative_start) = token.text.find(part) else {
+        return false;
+    };
+    if part.is_empty() {
+        return false;
+    }
+    sink.mark(
+        SourceSpan {
+            start: token.start + relative_start,
+            end: token.start + relative_start + part.len(),
+        },
+        kind,
+    );
+    true
 }
 
 fn is_scene_surface_scope(scope: Option<SourceScope>) -> bool {
@@ -916,6 +1215,35 @@ enum MixedSectionTarget {
     Shared,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MixedSectionRecognition {
+    Target(MixedSectionTarget),
+    Scene,
+}
+
+fn classify_known_mixed_document_section(tokens: &[&str]) -> Option<MixedSectionRecognition> {
+    let target = match tokens {
+        ["title", ..]
+        | ["subtitle", ..]
+        | ["author", ..]
+        | ["homepage", ..]
+        | ["default_wait_time", ..]
+        | ["again_interval", ..]
+        | ["animation", ..]
+        | ["sounds", ..]
+        | ["theme", ..]
+        | ["assets", ..] => MixedSectionTarget::Shared,
+        ["puzzle", ..] | ["levels", ..] | ["sprites", ..] | ["level", ..] => {
+            MixedSectionTarget::Puzzle2d
+        }
+        ["puzzle3", ..] | ["levels3", ..] | ["sprites3", ..] => MixedSectionTarget::Puzzle3d,
+        ["var", ..] | ["const", ..] | ["persistent", ..] => MixedSectionTarget::Puzzle2d,
+        ["scene", ..] => return Some(MixedSectionRecognition::Scene),
+        _ => return None,
+    };
+    Some(MixedSectionRecognition::Target(target))
+}
+
 fn split_mixed_game_document_source(
     source: &str,
 ) -> Result<MixedDocumentSources, DiagnosticReport> {
@@ -933,28 +1261,14 @@ fn split_mixed_game_document_source(
         }
 
         let tokens = split_header_tokens(trimmed);
-        let target = match tokens.as_slice() {
-            ["title", ..]
-            | ["subtitle", ..]
-            | ["author", ..]
-            | ["homepage", ..]
-            | ["default_wait_time", ..]
-            | ["again_interval", ..]
-            | ["animation", ..]
-            | ["sounds", ..]
-            | ["theme", ..]
-            | ["assets", ..] => MixedSectionTarget::Shared,
-            ["puzzle", ..] | ["levels", ..] | ["sprites", ..] | ["level", ..] => {
-                MixedSectionTarget::Puzzle2d
-            }
-            ["puzzle3", ..] | ["levels3", ..] | ["sprites3", ..] => MixedSectionTarget::Puzzle3d,
-            ["scene", ..] => {
+        let target = match classify_known_mixed_document_section(tokens.as_slice()) {
+            Some(MixedSectionRecognition::Target(target)) => target,
+            Some(MixedSectionRecognition::Scene) => {
                 let next = skip_raw_top_level_block(&raw_lines, index);
                 index = next;
                 continue;
             }
-            ["var", ..] | ["const", ..] | ["persistent", ..] => MixedSectionTarget::Puzzle2d,
-            _ => MixedSectionTarget::Puzzle2d,
+            None => MixedSectionTarget::Puzzle2d,
         };
         let is_block = mixed_section_is_block(trimmed);
         let next = if is_block {
@@ -1594,6 +1908,7 @@ struct HeaderChoiceAlternative<Action, ExpectedGroup> {
     label: &'static str,
     action: Action,
     expected_group: Option<ExpectedGroup>,
+    authoring_surface: bool,
 }
 
 const MODEL_TOP_LEVEL_ALTERNATIVES: &[HeaderChoiceAlternative<
@@ -1605,126 +1920,147 @@ const MODEL_TOP_LEVEL_ALTERNATIVES: &[HeaderChoiceAlternative<
         label: "puzzle",
         action: ModelTopLevelDirective::Puzzle,
         expected_group: Some(ModelTopLevelExpectedGroup::Model),
+        authoring_surface: true,
     },
     HeaderChoiceAlternative {
         trigger: "model",
         label: "model",
         action: ModelTopLevelDirective::RemovedModelPrefix,
         expected_group: None,
+        authoring_surface: false,
     },
     HeaderChoiceAlternative {
         trigger: "name",
         label: "name",
         action: ModelTopLevelDirective::RemovedNameMetadata,
         expected_group: None,
+        authoring_surface: false,
     },
     HeaderChoiceAlternative {
         trigger: "title",
         label: "title",
         action: ModelTopLevelDirective::Title,
         expected_group: Some(ModelTopLevelExpectedGroup::Metadata),
+        authoring_surface: true,
     },
     HeaderChoiceAlternative {
         trigger: "subtitle",
         label: "subtitle",
         action: ModelTopLevelDirective::Subtitle,
         expected_group: Some(ModelTopLevelExpectedGroup::Metadata),
+        authoring_surface: true,
     },
     HeaderChoiceAlternative {
         trigger: "author",
         label: "author",
         action: ModelTopLevelDirective::Author,
         expected_group: Some(ModelTopLevelExpectedGroup::Metadata),
+        authoring_surface: true,
     },
     HeaderChoiceAlternative {
         trigger: "homepage",
         label: "homepage",
         action: ModelTopLevelDirective::Homepage,
         expected_group: Some(ModelTopLevelExpectedGroup::Metadata),
+        authoring_surface: true,
     },
     HeaderChoiceAlternative {
         trigger: "var",
         label: "var",
         action: ModelTopLevelDirective::Variable,
         expected_group: Some(ModelTopLevelExpectedGroup::Variables),
+        authoring_surface: true,
     },
     HeaderChoiceAlternative {
         trigger: "const",
         label: "const",
         action: ModelTopLevelDirective::Variable,
         expected_group: Some(ModelTopLevelExpectedGroup::Variables),
+        authoring_surface: true,
     },
     HeaderChoiceAlternative {
         trigger: "persistent",
         label: "persistent var",
         action: ModelTopLevelDirective::Variable,
         expected_group: Some(ModelTopLevelExpectedGroup::Variables),
+        authoring_surface: true,
     },
     HeaderChoiceAlternative {
         trigger: "default_wait_time",
         label: "default_wait_time",
         action: ModelTopLevelDirective::DefaultWaitTime,
         expected_group: Some(ModelTopLevelExpectedGroup::Config),
+        authoring_surface: true,
     },
     HeaderChoiceAlternative {
         trigger: "again_interval",
         label: "again_interval",
         action: ModelTopLevelDirective::AgainInterval,
         expected_group: Some(ModelTopLevelExpectedGroup::Config),
+        authoring_surface: true,
     },
     HeaderChoiceAlternative {
         trigger: "animation",
         label: "animation",
         action: ModelTopLevelDirective::Animation,
         expected_group: Some(ModelTopLevelExpectedGroup::Config),
+        authoring_surface: true,
     },
     HeaderChoiceAlternative {
         trigger: "scene",
         label: "scene",
         action: ModelTopLevelDirective::Scene,
         expected_group: None,
+        authoring_surface: true,
     },
     HeaderChoiceAlternative {
         trigger: "sounds",
         label: "sounds",
         action: ModelTopLevelDirective::Sounds,
         expected_group: Some(ModelTopLevelExpectedGroup::Content),
+        authoring_surface: true,
     },
     HeaderChoiceAlternative {
         trigger: "theme",
         label: "theme",
         action: ModelTopLevelDirective::Theme,
         expected_group: Some(ModelTopLevelExpectedGroup::Content),
+        authoring_surface: true,
     },
     HeaderChoiceAlternative {
         trigger: "assets",
         label: "assets",
         action: ModelTopLevelDirective::Assets,
         expected_group: Some(ModelTopLevelExpectedGroup::Content),
+        authoring_surface: true,
     },
     HeaderChoiceAlternative {
         trigger: BLOCK_CLOSE,
         label: BLOCK_CLOSE,
         action: ModelTopLevelDirective::Close,
         expected_group: None,
+        authoring_surface: false,
     },
     HeaderChoiceAlternative {
         trigger: "sprites",
         label: "sprites",
         action: ModelTopLevelDirective::Sprites,
         expected_group: Some(ModelTopLevelExpectedGroup::Content),
+        authoring_surface: true,
     },
     HeaderChoiceAlternative {
         trigger: "levels",
         label: "levels",
         action: ModelTopLevelDirective::Levels,
         expected_group: Some(ModelTopLevelExpectedGroup::Content),
+        authoring_surface: true,
     },
     HeaderChoiceAlternative {
         trigger: "level",
         label: "level",
         action: ModelTopLevelDirective::Level,
         expected_group: Some(ModelTopLevelExpectedGroup::Content),
+        authoring_surface: true,
     },
 ];
 
@@ -1759,6 +2095,21 @@ fn classify_model_top_level_directive(tokens: &[&str]) -> ModelTopLevelDirective
     }
     classify_header_choice(MODEL_TOP_LEVEL_ALTERNATIVES, first)
         .unwrap_or(ModelTopLevelDirective::Unknown)
+}
+
+fn model_top_level_surface_directive(token: &str) -> Option<ModelTopLevelDirective> {
+    MODEL_TOP_LEVEL_ALTERNATIVES
+        .iter()
+        .find(|alternative| alternative.trigger == token && alternative.authoring_surface)
+        .map(|alternative| alternative.action)
+}
+
+pub(crate) fn model_top_level_completion_keywords() -> Vec<&'static str> {
+    MODEL_TOP_LEVEL_ALTERNATIVES
+        .iter()
+        .filter(|alternative| alternative.authoring_surface)
+        .map(|alternative| alternative.trigger)
+        .collect()
 }
 
 fn format_model_top_level_expected_group(group: ModelTopLevelExpectedGroup) -> String {
@@ -2982,6 +3333,7 @@ fn parse_game2d_expanded_with_shell(
         &prepared_level_bodies,
         &catalog.constant_globals,
     );
+    warnings.extend(collect_visual_overwrite_warnings(&visuals));
     let programs = lower_programs(
         rule_definitions,
         main_statements,
@@ -3157,6 +3509,7 @@ fn collect_dynamic_selector_statement_warnings(
                 condition,
                 then_statements,
                 else_statements,
+                ..
             } => {
                 collect_dynamic_selector_block_warnings(
                     &condition.pattern,
@@ -3328,6 +3681,35 @@ fn scratch_label<'a>(scratch: ScratchId, labels: &HashMap<ScratchId, &'a str>) -
 fn push_unique_warning(warnings: &mut Vec<String>, warning: String) {
     if !warnings.contains(&warning) {
         warnings.push(warning);
+    }
+}
+
+fn collect_visual_overwrite_warnings(visuals: &VisualsDef) -> Vec<String> {
+    let mut warnings = Vec::new();
+    collect_duplicate_output_key_warnings(
+        &mut warnings,
+        visuals.sprites.iter().map(|sprite| sprite.name.as_str()),
+        "visual sprite",
+        "later definition overwrites earlier sprite in generated visuals",
+    );
+    warnings
+}
+
+fn collect_duplicate_output_key_warnings<'a>(
+    warnings: &mut Vec<String>,
+    keys: impl IntoIterator<Item = &'a str>,
+    label: &str,
+    consequence: &str,
+) {
+    let mut seen = HashSet::<&'a str>::new();
+    let mut warned = HashSet::<&'a str>::new();
+    for key in keys {
+        if !seen.insert(key) && warned.insert(key) {
+            push_unique_warning(
+                warnings,
+                format!("{label} `{key}` is defined more than once; {consequence}"),
+            );
+        }
     }
 }
 
@@ -3620,12 +4002,21 @@ fn parse_sounds_block(
                 }
                 let seed = required_sound_setting(settings, "seed", line)?;
                 let type_target = optional_sound_setting(settings, "type").unwrap_or("random");
+                let volume = parse_sound_f64(
+                    optional_sound_setting(settings, "volume").unwrap_or("1"),
+                    line,
+                    "volume",
+                )?;
                 validate_sound_atom(seed, line, "sfx seed")?;
                 validate_sound_atom(type_target, line, "sfx type")?;
+                if !(0.0..=1.0).contains(&volume) {
+                    return Err(parse_error(line, "sfx volume must be between 0 and 1"));
+                }
                 sounds.sfx.push(SfxSoundDef {
                     name: (*name).to_string(),
                     seed: seed.to_string(),
                     type_target: type_target.to_string(),
+                    volume,
                 });
             }
             ["music", name, settings @ ..] => {
@@ -3684,7 +4075,7 @@ fn parse_sounds_block(
             _ => {
                 return Err(parse_error(
                     line,
-                    "sounds entry must be: sfx <name> seed=<seed> type=<type> | music <name> seed=<seed> bars=<8|16|32|64> height=<0..1> bpm=<40..180> volume=<0..1>",
+                    "sounds entry must be: sfx <name> seed=<seed> type=<type> volume=<0..1> | music <name> seed=<seed> bars=<8|16|32|64> height=<0..1> bpm=<40..180> volume=<0..1>",
                 ));
             }
         }
@@ -4338,7 +4729,7 @@ fn parse_puzzle_definition(
                         parse_error(line, "`group { ... }` was removed; use `groups { ... }`")
                             .into_diagnostics(),
                     );
-                    i = recover_after_directive_error(lines, i);
+                    i = skip_logical_block(lines, i);
                 } else {
                     parse_group_directive(
                         &tokens,
@@ -5732,7 +6123,10 @@ fn parse_level_event_sugar(
             other => other,
         })
         .collect();
-    Ok(Some(StatementAst::Effect { effects }))
+    Ok(Some(StatementAst::Effect {
+        source_line: line.to_string(),
+        effects,
+    }))
 }
 
 fn parse_level_legend_block_row(
@@ -6053,6 +6447,7 @@ fn parse_layer_term(
         term,
         &catalog.object_names,
         &catalog.object_schemas,
+        &catalog_value_sets(catalog),
         &catalog.object_groups,
     ) {
         let selector = resolve_object_selector(
@@ -6303,6 +6698,7 @@ fn is_known_object_selector(
     selector: &str,
     object_names: &HashMap<String, ObjectId>,
     object_schemas: &HashMap<String, ObjectSchema>,
+    value_sets: &HashMap<String, Vec<String>>,
     object_groups: &HashMap<String, Vec<ObjectId>>,
 ) -> bool {
     let base = selector
@@ -6312,7 +6708,8 @@ fn is_known_object_selector(
         .map_or(selector, |(base, _)| base);
     object_names.contains_key(selector)
         || object_groups.contains_key(selector)
-        || object_schemas.contains_key(base)
+        || (selector.contains(':') && object_schemas.contains_key(base))
+        || (selector.contains(':') && value_sets.contains_key(base))
         || (base == "*" && selector.contains(':') && !object_schemas.is_empty())
 }
 
@@ -6355,6 +6752,7 @@ fn resolve_or_declare_layer_selector(
         selector,
         &catalog.object_names,
         &catalog.object_schemas,
+        &catalog_value_sets(catalog),
         &catalog.object_groups,
     ) {
         resolve_object_selector(
@@ -6732,6 +7130,7 @@ fn collect_implicit_inputs_from_statements(
             StatementAst::RepeatUntil {
                 condition,
                 statements,
+                ..
             } => {
                 collect_implicit_inputs_from_condition(condition, names);
                 collect_implicit_inputs_from_statements(statements, names);
@@ -6740,6 +7139,7 @@ fn collect_implicit_inputs_from_statements(
                 condition,
                 then_statements,
                 else_statements,
+                ..
             } => {
                 collect_implicit_inputs_from_condition(condition, names);
                 collect_implicit_inputs_from_statements(then_statements, names);
@@ -6794,8 +7194,10 @@ fn add_default_restart_handler(main_statements: Option<&mut Vec<StatementAst>>) 
         return;
     }
     statements.push(StatementAst::If {
+        source_line: "restart".to_string(),
         condition: ConditionAst::InputIs("restart".to_string()),
         then_statements: vec![StatementAst::Effect {
+            source_line: "restart".to_string(),
             effects: vec![EffectAst::Restart],
         }],
         else_statements: Vec::new(),
@@ -8213,6 +8615,7 @@ fn project_surface_semantic_tokens(
                 SurfaceSemanticKind::Condition => semantic::SemanticKind::Condition,
                 SurfaceSemanticKind::Scene => semantic::SemanticKind::Scene,
                 SurfaceSemanticKind::Asset => semantic::SemanticKind::Asset,
+                SurfaceSemanticKind::Setting => semantic::SemanticKind::Setting,
                 SurfaceSemanticKind::Number => semantic::SemanticKind::Number,
                 SurfaceSemanticKind::String => semantic::SemanticKind::String,
             },
@@ -8788,7 +9191,7 @@ pub(crate) fn sound_setting_value_syntax(key: &str) -> Option<SoundSettingValueS
     }
 }
 
-pub(crate) const SFX_SOUND_SETTING_OPTIONS: &[&str] = &["seed", "type"];
+pub(crate) const SFX_SOUND_SETTING_OPTIONS: &[&str] = &["seed", "type", "volume"];
 pub(crate) const MUSIC_SOUND_SETTING_OPTIONS: &[&str] =
     &["seed", "height", "bars", "bpm", "volume"];
 
@@ -10423,7 +10826,7 @@ fn parse_level_menu_component(
     start: usize,
 ) -> Result<(LevelMenuDef, usize), DiagnosticReport> {
     let next = start + 1;
-    if next >= lines.len() || !is_level_menu_option(&split_header_tokens(&lines[next])) {
+    if !lines[start].trim_end().ends_with('{') {
         return Ok((LevelMenuDef::default(), next));
     }
 
@@ -10482,23 +10885,6 @@ pub(crate) const LEVEL_MENU_OPTIONS: &[&str] = &[
     "wrap",
     "locked",
 ];
-
-fn is_level_menu_option(tokens: &[&str]) -> bool {
-    matches!(
-        tokens,
-        ["index", ..]
-            | ["show_index", ..]
-            | ["solved", ..]
-            | ["show_solved", ..]
-            | ["current", ..]
-            | ["show_current", ..]
-            | ["show_current_level", ..]
-            | ["layout", ..]
-            | ["columns", ..]
-            | ["wrap", ..]
-            | ["locked", ..]
-    )
-}
 
 fn parse_boolean_option(value: &str, line: &str) -> Result<bool, DiagnosticReport> {
     match value {
@@ -10732,12 +11118,6 @@ fn define_object_spec(
         if object_names.contains_key(spec) {
             return Err(parse_error(line, "duplicate object"));
         }
-        if object_schemas.contains_key(spec) {
-            return Err(parse_error(
-                line,
-                "object name must not shadow an object family selector",
-            ));
-        }
         let id = add_object_variant(
             spec,
             layer,
@@ -10757,12 +11137,6 @@ fn define_object_spec(
         return Ok(vec![id]);
     }
 
-    if object_names.contains_key(base) {
-        return Err(parse_error(
-            line,
-            "object family name must not shadow an object",
-        ));
-    }
     if object_schemas.contains_key(base) {
         return Err(parse_error(line, "duplicate object family"));
     }
@@ -11036,7 +11410,16 @@ fn parse_visuals_block(
                     continue;
                 }
                 if let Some((shape_name, shape_value, color_exprs, offset, next_i)) =
-                    parse_ps_style_shape_sprite(lines, i, line, &plain_shapes, &shapes, catalog)?
+                    parse_ps_style_shape_sprite(
+                        lines,
+                        i,
+                        line,
+                        &plain_shapes,
+                        &shapes,
+                        &color_aliases,
+                        &colors,
+                        catalog,
+                    )?
                 {
                     if let Some(shape) = shapes.get(&shape_name) {
                         add_ascii_visuals(
@@ -11232,6 +11615,7 @@ fn parse_canonical_sprite_entry(
     catalog: &Catalog,
     visuals: &mut VisualsDef,
 ) -> Result<Option<usize>, DiagnosticReport> {
+    let is_braced = is_block_header_line(&lines[start]);
     let mut i = start + 1;
     while i < lines.len() && lines[i].is_empty() {
         i += 1;
@@ -11260,7 +11644,17 @@ fn parse_canonical_sprite_entry(
     let mut inline_pattern = None::<Vec<String>>;
     let mut rotation = None::<VisualShapeRotation>;
 
-    while i < lines.len() && !is_block_close_line(&lines[i]) {
+    while i < lines.len()
+        && !is_block_close_line(&lines[i])
+        && (is_braced
+            || !is_unbraced_canonical_sprite_boundary(
+                lines,
+                i,
+                color_aliases,
+                color_tables,
+                catalog,
+            ))
+    {
         if lines[i].is_empty() {
             i += 1;
             continue;
@@ -11302,7 +11696,15 @@ fn parse_canonical_sprite_entry(
                 i += 1;
             }
             ["shape"] => {
-                let (pattern, next_i) = parse_visual_rows_until_close(lines, i + 1, start)?;
+                let (pattern, next_i) = parse_visual_rows_until_sprite_boundary(
+                    lines,
+                    i + 1,
+                    start,
+                    is_braced,
+                    color_aliases,
+                    color_tables,
+                    catalog,
+                )?;
                 inline_pattern = Some(pattern);
                 i = next_i;
             }
@@ -11334,7 +11736,15 @@ fn parse_canonical_sprite_entry(
                 i += 1;
             }
             [_] if color_exprs.is_some() && inline_pattern.is_none() && shape_ref.is_none() => {
-                let (pattern, next_i) = parse_visual_rows_until_close(lines, i, start)?;
+                let (pattern, next_i) = parse_visual_rows_until_sprite_boundary(
+                    lines,
+                    i,
+                    start,
+                    is_braced,
+                    color_aliases,
+                    color_tables,
+                    catalog,
+                )?;
                 inline_pattern = Some(pattern);
                 i = next_i;
             }
@@ -11346,7 +11756,7 @@ fn parse_canonical_sprite_entry(
             }
         }
     }
-    if i >= lines.len() {
+    if is_braced && i >= lines.len() {
         return Err(parse_error(
             &lines[start],
             "canonical sprite entry missing closing brace",
@@ -11355,7 +11765,7 @@ fn parse_canonical_sprite_entry(
 
     let color_exprs =
         color_exprs.ok_or_else(|| parse_error(&lines[start], "sprite entry missing colors"))?;
-    let next_i = i + 1;
+    let next_i = if is_braced { i + 1 } else { i };
     if let Some(rotation) = rotation {
         let Some(pattern) = inline_pattern else {
             return Err(parse_error(
@@ -11444,6 +11854,42 @@ fn parse_canonical_sprite_entry(
     Ok(Some(next_i))
 }
 
+fn is_unbraced_canonical_sprite_boundary(
+    lines: &[String],
+    index: usize,
+    color_aliases: &HashMap<String, String>,
+    color_tables: &HashMap<String, VisualColorTable>,
+    _catalog: &Catalog,
+) -> bool {
+    let tokens = split_header_tokens(&lines[index]);
+    match tokens.as_slice() {
+        ["colors"] | ["shapes"] if is_block_header_line(&lines[index]) => true,
+        ["colors", ..]
+        | ["shape", ..]
+        | ["offset", ..]
+        | ["pixels_per_cell", ..]
+        | ["rotate", ..] => false,
+        [selector]
+            if is_block_header_line(&lines[index])
+                && !matches!(
+                    *selector,
+                    "colors" | "offset" | "pixels_per_cell" | "rotate" | "shape"
+                ) =>
+        {
+            true
+        }
+        [selector, source]
+            if is_visual_image_source(source)
+                || (is_visual_color_expr_token(source, color_aliases, color_tables)
+                    && !is_visual_color_expr_token(selector, color_aliases, color_tables)) =>
+        {
+            true
+        }
+        [_selector] => starts_line_style_visual_entry(lines, index, color_aliases, color_tables),
+        _ => false,
+    }
+}
+
 fn visual_colors_from_tokens(
     tokens: &[&str],
     line: &str,
@@ -11478,13 +11924,27 @@ fn parse_i32_value(value: &str, line: &str, label: &str) -> Result<i32, Diagnost
         .map_err(|_| parse_error(line, &format!("{label} must be an integer")))
 }
 
-fn parse_visual_rows_until_close(
+fn parse_visual_rows_until_sprite_boundary(
     lines: &[String],
     mut i: usize,
     start: usize,
+    is_braced: bool,
+    color_aliases: &HashMap<String, String>,
+    color_tables: &HashMap<String, VisualColorTable>,
+    catalog: &Catalog,
 ) -> Result<(Vec<String>, usize), DiagnosticReport> {
     let mut pattern = Vec::new();
-    while i < lines.len() && !is_block_close_line(&lines[i]) {
+    while i < lines.len()
+        && !is_block_close_line(&lines[i])
+        && (is_braced
+            || !is_unbraced_canonical_sprite_boundary(
+                lines,
+                i,
+                color_aliases,
+                color_tables,
+                catalog,
+            ))
+    {
         if lines[i].is_empty() {
             i += 1;
             continue;
@@ -11502,13 +11962,13 @@ fn parse_visual_rows_until_close(
         pattern.push((*row).to_string());
         i += 1;
     }
-    if i >= lines.len() {
+    if is_braced && i >= lines.len() {
         return Err(parse_error(
             &lines[start],
             "visual shape rows missing closing brace",
         ));
     }
-    validate_visual_pattern(&pattern, &lines[i])?;
+    validate_visual_pattern(&pattern, &lines[start])?;
     Ok((pattern, i))
 }
 
@@ -11576,9 +12036,18 @@ fn parse_visual_plain_shape(
     lines: &[String],
     start: usize,
 ) -> Result<(Vec<String>, usize), DiagnosticReport> {
+    let is_braced = is_block_header_line(&lines[start]);
     let mut pattern = Vec::new();
     let mut i = start + 1;
+    let mut width = None::<usize>;
     while i < lines.len() && !is_block_close_line(&lines[i]) {
+        if lines[i].is_empty() {
+            if is_braced {
+                i += 1;
+                continue;
+            }
+            break;
+        }
         let row_tokens = split_header_tokens(&lines[i]);
         let [row] = row_tokens.as_slice() else {
             return Err(parse_error(
@@ -11586,6 +12055,17 @@ fn parse_visual_plain_shape(
                 "visual shape row must be a single token row",
             ));
         };
+        let row_width = row.chars().count();
+        if !is_braced
+            && let Some(expected_width) = width
+            && row_width != expected_width
+        {
+            return Err(parse_error(
+                &lines[i],
+                "visual shape rows must be equal-width ascii",
+            ));
+        }
+        width = Some(row_width);
         pattern.push((*row).to_string());
         i += 1;
     }
@@ -11596,7 +12076,8 @@ fn parse_visual_plain_shape(
         ));
     }
     validate_visual_pattern(&pattern, &lines[start])?;
-    Ok((pattern, i + 1))
+    let next_i = if is_braced { i + 1 } else { i };
+    Ok((pattern, next_i))
 }
 
 fn parse_ps_style_shape_sprite(
@@ -11605,6 +12086,8 @@ fn parse_ps_style_shape_sprite(
     line: &str,
     plain_shapes: &HashMap<String, Vec<String>>,
     shapes: &HashMap<String, VisualShapeTable>,
+    color_aliases: &HashMap<String, String>,
+    color_tables: &HashMap<String, VisualColorTable>,
     catalog: &Catalog,
 ) -> Result<
     Option<(
@@ -11625,17 +12108,28 @@ fn parse_ps_style_shape_sprite(
     }
     let colors = visual_colors_from_row(&lines[i])?;
     if colors.is_empty() {
-        return Err(parse_error(
-            &lines[i],
-            "PS-style reusable sprite missing color row",
-        ));
+        return Err(parse_error(&lines[i], "sprite entry missing color row"));
     }
     i += 1;
     while i < lines.len() && lines[i].is_empty() {
         i += 1;
     }
+    if i < lines.len() && starts_line_style_visual_entry(lines, i, color_aliases, color_tables) {
+        return Ok(None);
+    }
     let tokens = split_header_tokens(lines.get(i).map_or("", String::as_str));
     let shape_ref = match tokens.as_slice() {
+        ["shape", shape_ref]
+            if visual_shape_ref_exists(shape_ref, plain_shapes, shapes, &lines[i])? =>
+        {
+            *shape_ref
+        }
+        ["shape", ..] => {
+            return Err(parse_error(
+                &lines[i],
+                "sprite shape row must be: shape <shape>",
+            ));
+        }
         [shape_ref] if visual_shape_ref_exists(shape_ref, plain_shapes, shapes, &lines[i])? => {
             *shape_ref
         }
@@ -11654,13 +12148,23 @@ fn parse_ps_style_shape_sprite(
     while next_i < lines.len() && lines[next_i].is_empty() {
         next_i += 1;
     }
-    if next_i >= lines.len() || !is_block_close_line(&lines[next_i]) {
+    let entry_has_brace = lines[start].trim_end().ends_with('{');
+    if entry_has_brace {
+        if next_i >= lines.len() || !is_block_close_line(&lines[next_i]) {
+            return Err(parse_error(line, "sprite entry missing closing brace"));
+        }
+        return Ok(Some((shape_name, shape_value, colors, offset, next_i + 1)));
+    }
+    if next_i < lines.len()
+        && !is_block_close_line(&lines[next_i])
+        && !starts_line_style_visual_entry(lines, next_i, color_aliases, color_tables)
+    {
         return Err(parse_error(
-            line,
-            "PS-style reusable sprite missing closing brace",
+            &lines[next_i],
+            "sprite shape reference must be followed by another sprite entry or `}`",
         ));
     }
-    Ok(Some((shape_name, shape_value, colors, offset, next_i + 1)))
+    Ok(Some((shape_name, shape_value, colors, offset, next_i)))
 }
 
 fn visual_shape_ref_exists(
@@ -11697,27 +12201,36 @@ fn parse_line_style_inline_sprite(
         i += 1;
     }
     if i >= lines.len() || is_block_close_line(&lines[i]) {
-        return Err(parse_error(
-            &lines[start],
-            "PS-style sprite missing color row",
-        ));
+        return Err(parse_error(&lines[start], "sprite entry missing color row"));
     }
 
     let colors = visual_colors_from_row(&lines[i])?;
     if colors.is_empty() {
-        return Err(parse_error(&lines[i], "PS-style sprite missing color row"));
+        return Err(parse_error(&lines[i], "sprite entry missing color row"));
     }
 
     let mut pattern = Vec::new();
     i += 1;
     while i < lines.len() && !is_block_close_line(&lines[i]) {
+        if lines[i].is_empty() {
+            break;
+        }
         if !pattern.is_empty() && is_visual_translate_transform_row(&lines[i]) {
             break;
         }
-        if let Some(row) = visual_pattern_row_for_palette(&lines[i], &colors)? {
-            pattern.push(row);
-            i += 1;
-            continue;
+        match visual_pattern_row_for_palette(&lines[i], &colors) {
+            Ok(Some(row)) => {
+                pattern.push(row);
+                i += 1;
+                continue;
+            }
+            Ok(None) => {}
+            Err(report) => {
+                if starts_line_style_visual_entry(lines, i, color_aliases, color_tables) {
+                    break;
+                }
+                return Err(report);
+            }
         }
         if next_line_starts_visual_source(lines, i, color_aliases, color_tables) {
             break;
@@ -11730,14 +12243,20 @@ fn parse_line_style_inline_sprite(
     if i >= lines.len() {
         return Err(parse_error(
             &lines[start],
-            "PS-style sprite missing closing brace",
+            "sprite entry missing closing brace",
         ));
     }
     if !pattern.is_empty() {
         validate_visual_pattern(&pattern, &lines[start])?;
     }
     let offset = parse_visual_transform_offset(lines, &mut i, Some(catalog))?;
-    if visual_end_closes_sprite_entry(lines, i) {
+    if lines[start].trim_end().ends_with('{') {
+        if i >= lines.len() || !is_block_close_line(&lines[i]) {
+            return Err(parse_error(
+                &lines[start],
+                "sprite entry missing closing brace",
+            ));
+        }
         i += 1;
     }
     Ok((colors, pattern, offset, i))
@@ -11751,7 +12270,7 @@ fn visual_pattern_row_for_palette(
     let [row] = row_tokens.as_slice() else {
         return Err(parse_error(
             line,
-            "PS-style sprite row must be a single token row",
+            "sprite pattern row must be a single token row",
         ));
     };
     if row.contains(['{', '}']) {
@@ -11766,6 +12285,14 @@ fn visual_pattern_row_for_palette(
         .all(|token| token == '.' || colors.contains(&token))
     {
         Ok(Some((*row).to_string()))
+    } else if row
+        .chars()
+        .all(|token| token == '.' || token.is_ascii_alphanumeric())
+    {
+        Err(parse_error(
+            line,
+            "sprite pattern references a color outside the color row",
+        ))
     } else {
         Ok(None)
     }
@@ -11855,7 +12382,7 @@ fn visual_colors_from_row(line: &str) -> Result<Vec<(char, String)>, DiagnosticR
         .enumerate()
         .map(|(index, color)| {
             let token = visual_color_token_for_index(index)
-                .ok_or_else(|| parse_error(line, "PS-style sprite supports at most 62 colors"))?;
+                .ok_or_else(|| parse_error(line, "sprite supports at most 62 colors"))?;
             Ok((token, (*color).to_string()))
         })
         .collect::<Result<Vec<_>, DiagnosticReport>>()
@@ -11983,44 +12510,6 @@ fn next_line_starts_visual_source(
         [color, ..] if is_visual_color_expr_token(color, color_aliases, color_tables) => true,
         _ => false,
     }
-}
-
-fn visual_end_closes_sprite_entry(lines: &[String], index: usize) -> bool {
-    if !matches!(lines.get(index).map(String::as_str), Some(BLOCK_CLOSE)) {
-        return false;
-    }
-    let Some(next) = lines.get(index + 1) else {
-        return false;
-    };
-    is_block_close_line(next) || !starts_visual_outer_section(&split_header_tokens(next))
-}
-
-fn starts_visual_outer_section(tokens: &[&str]) -> bool {
-    matches!(
-        tokens,
-        ["map", ..]
-            | ["on_level_start"]
-            | ["on_level_clear"]
-            | ["on_last_level_clear"]
-            | ["on_display"]
-            | ["scratch"]
-            | ["groups"]
-            | ["layers"]
-            | ["collision_layers"]
-            | ["legend"]
-            | ["win_conditions", ..]
-            | ["lose_conditions", ..]
-            | ["sprites"]
-            | ["sounds"]
-            | ["screen"]
-            | ["layout", ..]
-            | ["keys"]
-            | ["routine", ..]
-            | ["rule", ..]
-            | ["rules"]
-            | ["levels"]
-            | ["level", ..]
-    )
 }
 
 pub(crate) fn visual_color_token_for_index(index: usize) -> Option<char> {
@@ -12633,19 +13122,18 @@ fn expand_visual_selector(
     line: &str,
     catalog: &Catalog,
 ) -> Result<Vec<VisualSelectorTarget>, DiagnosticReport> {
-    let selector_base = selector.split_once(':').map_or(selector, |(base, _)| base);
-    if !catalog.object_schemas.contains_key(selector_base) {
-        if let Some(object) = catalog.object_names.get(selector).copied() {
-            let name = catalog
-                .object_labels
-                .get(&object)
-                .cloned()
-                .unwrap_or_else(|| selector.to_string());
-            return Ok(vec![VisualSelectorTarget {
-                object_name: name,
-                bindings: HashMap::new(),
-            }]);
-        }
+    if !selector.contains(':')
+        && let Some(object) = catalog.object_names.get(selector).copied()
+    {
+        let name = catalog
+            .object_labels
+            .get(&object)
+            .cloned()
+            .unwrap_or_else(|| selector.to_string());
+        return Ok(vec![VisualSelectorTarget {
+            object_name: name,
+            bindings: HashMap::new(),
+        }]);
     }
     if let Some(objects) = catalog.object_groups.get(selector) {
         return Ok(objects
@@ -13874,7 +14362,13 @@ fn parse_statement_arrow_consequence(
         ));
     }
     let effects = parse_rewrite_effect(effect_text, line)?;
-    Ok((vec![StatementAst::Effect { effects }], start + 1))
+    Ok((
+        vec![StatementAst::Effect {
+            source_line: line.to_string(),
+            effects,
+        }],
+        start + 1,
+    ))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -14695,6 +15189,7 @@ fn parse_statement_block(
                             rule_params,
                         ));
                     statements.push(StatementAst::If {
+                        source_line: line.to_string(),
                         condition,
                         then_statements,
                         else_statements,
@@ -14754,6 +15249,7 @@ fn parse_statement_block(
                                 (nested, Vec::new(), next_i)
                             };
                         statements.push(StatementAst::Conditional {
+                            source_line: line.to_string(),
                             condition,
                             then_statements,
                             else_statements,
@@ -14766,6 +15262,7 @@ fn parse_statement_block(
                             "routine name"
                         ));
                         statements.push(StatementAst::Conditional {
+                            source_line: line.to_string(),
                             condition,
                             then_statements: vec![StatementAst::Call {
                                 name: trailing.to_string(),
@@ -14830,6 +15327,7 @@ fn parse_statement_block(
                             rule_params,
                         ));
                     statements.push(StatementAst::If {
+                        source_line: line.to_string(),
                         condition,
                         then_statements,
                         else_statements,
@@ -14890,6 +15388,7 @@ fn parse_statement_block(
                         rule_params,
                     ));
                 statements.push(StatementAst::If {
+                    source_line: line.to_string(),
                     condition,
                     then_statements,
                     else_statements,
@@ -14916,7 +15415,10 @@ fn parse_statement_block(
             }
             Some("emit") => {
                 match parse_rewrite_effect(line, line) {
-                    Ok(effects) => statements.push(StatementAst::Effect { effects }),
+                    Ok(effects) => statements.push(StatementAst::Effect {
+                        source_line: line.to_string(),
+                        effects,
+                    }),
                     Err(report) => diagnostics.extend(report.into_diagnostics()),
                 }
                 i += 1;
@@ -14958,6 +15460,7 @@ fn parse_statement_block(
                             rule_params,
                         ));
                     statements.push(StatementAst::If {
+                        source_line: line.to_string(),
                         condition,
                         then_statements,
                         else_statements: Vec::new(),
@@ -14966,8 +15469,12 @@ fn parse_statement_block(
                 } else {
                     match parse_rewrite_effect(effect_text, line) {
                         Ok(effects) => statements.push(StatementAst::If {
+                            source_line: line.to_string(),
                             condition,
-                            then_statements: vec![StatementAst::Effect { effects }],
+                            then_statements: vec![StatementAst::Effect {
+                                source_line: line.to_string(),
+                                effects,
+                            }],
                             else_statements: Vec::new(),
                         }),
                         Err(report) => diagnostics.extend(report.into_diagnostics()),
@@ -14977,7 +15484,10 @@ fn parse_statement_block(
             }
             _ if is_builtin_rewrite_effect_text(line) => {
                 match parse_rewrite_effect(line, line) {
-                    Ok(effects) => statements.push(StatementAst::Effect { effects }),
+                    Ok(effects) => statements.push(StatementAst::Effect {
+                        source_line: line.to_string(),
+                        effects,
+                    }),
                     Err(report) => diagnostics.extend(report.into_diagnostics()),
                 }
                 i += 1;
@@ -15215,6 +15725,7 @@ fn parse_statement_block(
                         rule_params,
                     ));
                     statements.push(StatementAst::RepeatUntil {
+                        source_line: line.to_string(),
                         condition,
                         statements: nested,
                     });
@@ -15624,6 +16135,7 @@ fn parse_conditional_call_statement(
     )?;
 
     Ok(Some(StatementAst::Conditional {
+        source_line: line.to_string(),
         condition,
         then_statements: vec![StatementAst::Call {
             name: rule_name.to_string(),
@@ -16678,9 +17190,15 @@ fn wrap_program_local_frame(
     }
 }
 
-fn input_dependency_error(context: &StatementLoweringContext) -> DiagnosticReport {
+fn input_dependency_error(
+    context: &StatementLoweringContext,
+    source_line: &str,
+) -> DiagnosticReport {
     let scope = context.input_forbidden_context.unwrap_or("this program");
-    DiagnosticReport::error(format!("{scope} cannot depend on input"))
+    if source_line.trim().is_empty() {
+        return DiagnosticReport::error(format!("{scope} cannot depend on input"));
+    }
+    DiagnosticReport::error_at_line(format!("{scope} cannot depend on input"), source_line)
 }
 
 fn lower_condition_defs(
@@ -17128,7 +17646,7 @@ fn lower_goal_expr(
             expected: *value,
         })),
         ConditionAst::InlineConditionValueEquals { kind, value } => {
-            validate_non_visual_condition_value(kind, visual_objects)?;
+            validate_non_visual_condition_value(kind, visual_objects, None)?;
             let kind = lower_condition_value_kind(
                 kind,
                 input_names,
@@ -17144,7 +17662,7 @@ fn lower_goal_expr(
             }))
         }
         ConditionAst::InlineConditionNonZero(kind) => {
-            validate_non_visual_condition_value(kind, visual_objects)?;
+            validate_non_visual_condition_value(kind, visual_objects, None)?;
             let kind = lower_condition_value_kind(
                 kind,
                 input_names,
@@ -17160,7 +17678,7 @@ fn lower_goal_expr(
             }))
         }
         ConditionAst::InlineConditionCompare { kind, op, value } => {
-            validate_non_visual_condition_value(kind, visual_objects)?;
+            validate_non_visual_condition_value(kind, visual_objects, None)?;
             let kind = lower_condition_value_kind(
                 kind,
                 input_names,
@@ -17200,7 +17718,7 @@ fn resolve_non_visual_condition_for_goal(
         .get(name)
         .copied()
         .ok_or_else(|| DiagnosticReport::error(format!("unknown condition in goal: {name}")))?;
-    ensure_non_visual_condition_def(condition, visual_condition_reads)?;
+    ensure_non_visual_condition_def(condition, visual_condition_reads, None)?;
     Ok(condition)
 }
 
@@ -17220,9 +17738,10 @@ fn visual_condition_reads(
 fn ensure_non_visual_condition_def(
     condition: ConditionId,
     visual_condition_reads: &HashSet<ConditionId>,
+    source_line: Option<&str>,
 ) -> Result<(), DiagnosticReport> {
     if visual_condition_reads.contains(&condition) {
-        return Err(main_visual_object_error("condition"));
+        return Err(main_visual_object_error("condition", source_line));
     }
     Ok(())
 }
@@ -17230,9 +17749,10 @@ fn ensure_non_visual_condition_def(
 fn validate_non_visual_condition_value(
     kind: &ConditionValueAst,
     visual_objects: &[ObjectId],
+    source_line: Option<&str>,
 ) -> Result<(), DiagnosticReport> {
     if condition_value_reads_visual_object(kind, visual_objects) {
-        return Err(main_visual_object_error("condition"));
+        return Err(main_visual_object_error("condition", source_line));
     }
     Ok(())
 }
@@ -17258,9 +17778,10 @@ fn condition_value_reads_visual_object(
 fn validate_non_visual_pattern_block(
     pattern: &PatternBlock,
     visual_objects: &[ObjectId],
+    source_line: &str,
 ) -> Result<(), DiagnosticReport> {
     if pattern_block_reads_visual_object(pattern, visual_objects) {
-        return Err(main_visual_object_error("pattern"));
+        return Err(main_visual_object_error("pattern", Some(source_line)));
     }
     Ok(())
 }
@@ -17290,10 +17811,15 @@ fn object_is_visual(object: ObjectId, visual_objects: &[ObjectId]) -> bool {
     visual_objects.contains(&object)
 }
 
-fn main_visual_object_error(context: &str) -> DiagnosticReport {
-    DiagnosticReport::error(format!(
-        "main rules and conditions cannot read or write display objects ({context})"
-    ))
+fn main_visual_object_error(context: &str, source_line: Option<&str>) -> DiagnosticReport {
+    let message =
+        format!("main rules and conditions cannot read or write display objects ({context})");
+    match source_line {
+        Some(source_line) if !source_line.trim().is_empty() => {
+            DiagnosticReport::error_at_line(message, source_line)
+        }
+        _ => DiagnosticReport::error(message),
+    }
 }
 
 fn classify_rewrite_role(
@@ -17302,6 +17828,7 @@ fn classify_rewrite_role(
     effects: &LoweredEffects,
     visual_objects: &[ObjectId],
     context: &StatementLoweringContext,
+    source_line: &str,
 ) -> Result<ClassifiedRuleRole, DiagnosticReport> {
     let reads_visual = pattern_block_reads_visual_object(before, visual_objects);
     let writes_visual = alternatives_write_visual_objects(alternatives, visual_objects);
@@ -17309,8 +17836,9 @@ fn classify_rewrite_role(
     let has_gameplay_effects = lowered_effects_change_gameplay(effects);
 
     if reads_visual && (writes_main || has_gameplay_effects) {
-        return Err(DiagnosticReport::error(
-            "display object matches cannot cause gameplay changes".to_string(),
+        return Err(DiagnosticReport::error_at_line(
+            "display object matches cannot cause gameplay changes",
+            source_line,
         ));
     }
 
@@ -17325,8 +17853,9 @@ fn classify_rewrite_role(
     };
 
     if context.role == RuleRole::Visual && role == ClassifiedRuleRole::Main {
-        return Err(DiagnosticReport::error(
-            "display routines and display blocks can only contain display rules".to_string(),
+        return Err(DiagnosticReport::error_at_line(
+            "display routines and display blocks can only contain display rules",
+            source_line,
         ));
     }
 
@@ -17483,40 +18012,59 @@ impl<'a> ProgramLowerer<'a> {
             StatementAst::DisplayRewrite(rewrite) => self.lower_display_rewrite(rewrite, context),
             StatementAst::DisplayBlock(statements) => self.lower_display_block(statements, context),
             StatementAst::Conditional {
+                source_line,
                 condition,
                 then_statements,
                 else_statements,
-            } => self.lower_conditional(condition, then_statements, else_statements, context),
+            } => self.lower_conditional(
+                source_line,
+                condition,
+                then_statements,
+                else_statements,
+                context,
+            ),
             StatementAst::Block {
                 application,
                 statements,
             } => self.lower_block(*application, statements, context),
             StatementAst::RepeatUntil {
+                source_line,
                 condition,
                 statements,
-            } => self.lower_repeat_until(condition, statements, context),
+            } => self.lower_repeat_until(source_line, condition, statements, context),
             StatementAst::Fix {
                 defaults,
                 statements,
             } => self.lower_fix(defaults, statements, context),
             StatementAst::If {
+                source_line,
                 condition,
                 then_statements,
                 else_statements,
-            } => self.lower_if(condition, then_statements, else_statements, context),
-            StatementAst::Effect { effects } => self.lower_effect_statement(effects, context),
+            } => self.lower_if(
+                source_line,
+                condition,
+                then_statements,
+                else_statements,
+                context,
+            ),
+            StatementAst::Effect {
+                source_line,
+                effects,
+            } => self.lower_effect_statement(source_line, effects, context),
             StatementAst::Rewrite(rewrite) => self.lower_rewrite(rewrite, context),
         }
     }
 
     fn lower_effect_statement(
         &mut self,
+        source_line: &str,
         effects: &[EffectAst],
         context: &StatementLoweringContext,
     ) -> Result<Vec<RuleStep>, DiagnosticReport> {
         let effects = self.lower_effects(effects)?;
         if context.role == RuleRole::Visual {
-            validate_visual_effects(&effects)?;
+            validate_visual_effects(&effects, source_line)?;
         }
         let id = RuleId(self.next_rule_id);
         self.next_rule_id += 1;
@@ -17540,6 +18088,7 @@ impl<'a> ProgramLowerer<'a> {
 
     fn lower_conditional(
         &mut self,
+        source_line: &str,
         condition: &PatternConditionAst,
         then_statements: &[StatementAst],
         else_statements: &[StatementAst],
@@ -17547,12 +18096,12 @@ impl<'a> ProgramLowerer<'a> {
     ) -> Result<Vec<RuleStep>, DiagnosticReport> {
         if else_statements.is_empty() {
             return Ok(vec![RuleStep::ConditionalBlock {
-                condition: self.lower_pattern_condition(condition, context)?,
+                condition: self.lower_pattern_condition(condition, context, source_line)?,
                 steps: self.lower_statements(then_statements, context)?,
             }]);
         }
         Ok(vec![RuleStep::ConditionalBranch {
-            condition: self.lower_pattern_condition(condition, context)?,
+            condition: self.lower_pattern_condition(condition, context, source_line)?,
             then_steps: self.lower_statements(then_statements, context)?,
             else_steps: self.lower_statements(else_statements, context)?,
         }])
@@ -17578,6 +18127,7 @@ impl<'a> ProgramLowerer<'a> {
 
     fn lower_repeat_until(
         &mut self,
+        source_line: &str,
         condition: &ConditionAst,
         statements: &[StatementAst],
         context: &StatementLoweringContext,
@@ -17586,7 +18136,7 @@ impl<'a> ProgramLowerer<'a> {
         if !nested_context.application_fixed {
             nested_context.application = RuleApplication::UntilStable;
         }
-        let stop_condition = self.lower_guard_condition(condition, context)?;
+        let stop_condition = self.lower_guard_condition(condition, context, source_line)?;
         let steps = self.lower_statements(statements, &nested_context)?;
         Ok(vec![RuleStep::Block {
             application: RuleApplication::UntilStable,
@@ -17699,9 +18249,14 @@ impl<'a> ProgramLowerer<'a> {
         &self,
         condition: &PatternConditionAst,
         context: &StatementLoweringContext,
+        source_line: &str,
     ) -> Result<RuleCondition, DiagnosticReport> {
         if context.role == RuleRole::Main {
-            validate_non_visual_pattern_block(&condition.pattern, self.visual_objects)?;
+            validate_non_visual_pattern_block(
+                &condition.pattern,
+                self.visual_objects,
+                source_line,
+            )?;
         }
         let orientation = if matches!(condition.orientation, OrientationExpr::Neutral) {
             context
@@ -17731,7 +18286,7 @@ impl<'a> ProgramLowerer<'a> {
             }
             OrientationExpr::Input => {
                 if !context.input_allowed {
-                    return Err(input_dependency_error(context));
+                    return Err(input_dependency_error(context, source_line));
                 }
                 let mut patterns = Vec::new();
                 for direction in self.directions {
@@ -17751,10 +18306,13 @@ impl<'a> ProgramLowerer<'a> {
             }
             OrientationExpr::InputSet(axis) => {
                 if !context.input_allowed {
-                    return Err(input_dependency_error(context));
+                    return Err(input_dependency_error(context, source_line));
                 }
                 let directions = self.directions_for_orientation_name(axis)?.ok_or_else(|| {
-                    DiagnosticReport::error(format!("unknown input orientation set: {axis}"))
+                    DiagnosticReport::error_at_line(
+                        format!("unknown input orientation set: {axis}"),
+                        source_line,
+                    )
                 })?;
                 let mut patterns = Vec::new();
                 for direction in directions {
@@ -17776,10 +18334,13 @@ impl<'a> ProgramLowerer<'a> {
                 let directions = self
                     .directions_for_orientation_name(&direction_name.0)?
                     .ok_or_else(|| {
-                        DiagnosticReport::error(format!(
-                            "unknown pattern condition orientation: {}",
-                            direction_name.0
-                        ))
+                        DiagnosticReport::error_at_line(
+                            format!(
+                                "unknown pattern condition orientation: {}",
+                                direction_name.0
+                            ),
+                            source_line,
+                        )
                     })?;
                 self.condition_patterns_for_directions(
                     &condition.pattern,
@@ -17801,9 +18362,10 @@ impl<'a> ProgramLowerer<'a> {
         &self,
         condition: &ConditionAst,
         context: &StatementLoweringContext,
+        source_line: &str,
     ) -> Result<RuleCondition, DiagnosticReport> {
         Ok(RuleCondition::GuardBranches(
-            self.lower_condition_branches(condition, context)?,
+            self.lower_condition_branches(condition, context, source_line)?,
         ))
     }
 
@@ -17845,6 +18407,7 @@ impl<'a> ProgramLowerer<'a> {
 
     fn lower_if(
         &mut self,
+        source_line: &str,
         condition: &ConditionAst,
         then_statements: &[StatementAst],
         else_statements: &[StatementAst],
@@ -17852,32 +18415,39 @@ impl<'a> ProgramLowerer<'a> {
     ) -> Result<Vec<RuleStep>, DiagnosticReport> {
         if !else_statements.is_empty() {
             return Ok(vec![RuleStep::ConditionalBranch {
-                condition: self.lower_guard_condition(condition, context)?,
+                condition: self.lower_guard_condition(condition, context, source_line)?,
                 then_steps: self.lower_statements(then_statements, context)?,
                 else_steps: self.lower_statements(else_statements, context)?,
             }]);
         }
         Ok(vec![RuleStep::ConditionalBlock {
-            condition: self.lower_guard_condition(condition, context)?,
+            condition: self.lower_guard_condition(condition, context, source_line)?,
             steps: self.lower_statements(then_statements, context)?,
         }])
     }
 
-    fn input_ids_for_value_set(&self, name: &str) -> Result<Vec<InputId>, DiagnosticReport> {
-        let values = self
-            .value_sets
-            .get(name)
-            .ok_or_else(|| DiagnosticReport::error(format!("unknown input tag set: {name}")))?;
+    fn input_ids_for_value_set(
+        &self,
+        name: &str,
+        source_line: &str,
+    ) -> Result<Vec<InputId>, DiagnosticReport> {
+        let values = self.value_sets.get(name).ok_or_else(|| {
+            DiagnosticReport::error_at_line(format!("unknown input tag set: {name}"), source_line)
+        })?;
         if values.is_empty() {
-            return Err(DiagnosticReport::error(format!(
-                "empty input tag set: {name}"
-            )));
+            return Err(DiagnosticReport::error_at_line(
+                format!("empty input tag set: {name}"),
+                source_line,
+            ));
         }
         values
             .iter()
             .map(|value| {
                 self.input_names.get(value).copied().ok_or_else(|| {
-                    DiagnosticReport::error(format!("unknown input in tag set: {value}"))
+                    DiagnosticReport::error_at_line(
+                        format!("unknown input in tag set: {value}"),
+                        source_line,
+                    )
                 })
             })
             .collect()
@@ -17894,12 +18464,14 @@ impl<'a> ProgramLowerer<'a> {
         &self,
         condition: &ConditionAst,
         context: &StatementLoweringContext,
+        source_line: &str,
     ) -> Result<Vec<Vec<Guard>>, DiagnosticReport> {
         match condition {
             ConditionAst::All(conditions) => {
                 let mut branches = vec![Vec::<Guard>::new()];
                 for condition in conditions {
-                    let next_branches = self.lower_condition_branches(condition, context)?;
+                    let next_branches =
+                        self.lower_condition_branches(condition, context, source_line)?;
                     let mut combined = Vec::new();
                     for branch in &branches {
                         for next_branch in &next_branches {
@@ -17915,21 +18487,29 @@ impl<'a> ProgramLowerer<'a> {
             ConditionAst::Any(conditions) => {
                 let mut branches = Vec::new();
                 for condition in conditions {
-                    branches.extend(self.lower_condition_branches(condition, context)?);
+                    branches.extend(self.lower_condition_branches(
+                        condition,
+                        context,
+                        source_line,
+                    )?);
                 }
                 Ok(branches)
             }
             ConditionAst::InputIn(axis) => {
                 if !context.input_allowed {
-                    return Err(input_dependency_error(context));
+                    return Err(input_dependency_error(context, source_line));
                 }
                 Ok(self
-                    .input_ids_for_value_set(axis)?
+                    .input_ids_for_value_set(axis, source_line)?
                     .into_iter()
                     .map(|input| vec![Guard::InputIs(input)])
                     .collect())
             }
-            _ => Ok(vec![vec![self.lower_condition_clause(condition, context)?]]),
+            _ => Ok(vec![vec![self.lower_condition_clause(
+                condition,
+                context,
+                source_line,
+            )?]]),
         }
     }
 
@@ -17937,35 +18517,38 @@ impl<'a> ProgramLowerer<'a> {
         &self,
         condition: &ConditionAst,
         context: &StatementLoweringContext,
+        source_line: &str,
     ) -> Result<Guard, DiagnosticReport> {
         match condition {
             ConditionAst::InputIs(input_name) => {
                 if !context.input_allowed {
-                    return Err(input_dependency_error(context));
+                    return Err(input_dependency_error(context, source_line));
                 }
                 let input = *self.input_names.get(input_name).ok_or_else(|| {
-                    DiagnosticReport::error(format!("unknown input: {input_name}"))
+                    DiagnosticReport::error_at_line(
+                        format!("unknown input: {input_name}"),
+                        source_line,
+                    )
                 })?;
                 Ok(Guard::InputIs(input))
             }
-            ConditionAst::InputIn(_) => Err(DiagnosticReport::error(
-                "input tag-set condition was not expanded".to_string(),
+            ConditionAst::InputIn(_) => Err(DiagnosticReport::error_at_line(
+                "input tag-set condition was not expanded",
+                source_line,
             )),
             ConditionAst::GlobalEquals { name, value } => {
-                let global = *self
-                    .global_names
-                    .get(name)
-                    .ok_or_else(|| DiagnosticReport::error(format!("unknown global: {name}")))?;
+                let global = *self.global_names.get(name).ok_or_else(|| {
+                    DiagnosticReport::error_at_line(format!("unknown global: {name}"), source_line)
+                })?;
                 Ok(Guard::GlobalEquals {
                     global,
                     value: *value,
                 })
             }
             ConditionAst::GlobalCompare { name, op, value } => {
-                let global = *self
-                    .global_names
-                    .get(name)
-                    .ok_or_else(|| DiagnosticReport::error(format!("unknown global: {name}")))?;
+                let global = *self.global_names.get(name).ok_or_else(|| {
+                    DiagnosticReport::error_at_line(format!("unknown global: {name}"), source_line)
+                })?;
                 Ok(Guard::GlobalCompare {
                     global,
                     op: *op,
@@ -17973,12 +18556,18 @@ impl<'a> ProgramLowerer<'a> {
                 })
             }
             ConditionAst::ConditionEquals { name, value } => {
-                let condition = *self
-                    .condition_names
-                    .get(name)
-                    .ok_or_else(|| DiagnosticReport::error(format!("unknown condition: {name}")))?;
+                let condition = *self.condition_names.get(name).ok_or_else(|| {
+                    DiagnosticReport::error_at_line(
+                        format!("unknown condition: {name}"),
+                        source_line,
+                    )
+                })?;
                 if context.role == RuleRole::Main {
-                    ensure_non_visual_condition_def(condition, self.visual_condition_reads)?;
+                    ensure_non_visual_condition_def(
+                        condition,
+                        self.visual_condition_reads,
+                        Some(source_line),
+                    )?;
                 }
                 Ok(Guard::ConditionEquals {
                     condition,
@@ -17986,22 +18575,34 @@ impl<'a> ProgramLowerer<'a> {
                 })
             }
             ConditionAst::ConditionNonZero(name) => {
-                let condition = *self
-                    .condition_names
-                    .get(name)
-                    .ok_or_else(|| DiagnosticReport::error(format!("unknown condition: {name}")))?;
+                let condition = *self.condition_names.get(name).ok_or_else(|| {
+                    DiagnosticReport::error_at_line(
+                        format!("unknown condition: {name}"),
+                        source_line,
+                    )
+                })?;
                 if context.role == RuleRole::Main {
-                    ensure_non_visual_condition_def(condition, self.visual_condition_reads)?;
+                    ensure_non_visual_condition_def(
+                        condition,
+                        self.visual_condition_reads,
+                        Some(source_line),
+                    )?;
                 }
                 Ok(Guard::ConditionNonZero(condition))
             }
             ConditionAst::ConditionCompare { name, op, value } => {
-                let condition = *self
-                    .condition_names
-                    .get(name)
-                    .ok_or_else(|| DiagnosticReport::error(format!("unknown condition: {name}")))?;
+                let condition = *self.condition_names.get(name).ok_or_else(|| {
+                    DiagnosticReport::error_at_line(
+                        format!("unknown condition: {name}"),
+                        source_line,
+                    )
+                })?;
                 if context.role == RuleRole::Main {
-                    ensure_non_visual_condition_def(condition, self.visual_condition_reads)?;
+                    ensure_non_visual_condition_def(
+                        condition,
+                        self.visual_condition_reads,
+                        Some(source_line),
+                    )?;
                 }
                 Ok(Guard::ConditionCompare {
                     condition,
@@ -18011,7 +18612,11 @@ impl<'a> ProgramLowerer<'a> {
             }
             ConditionAst::InlineConditionValueEquals { kind, value } => {
                 if context.role == RuleRole::Main {
-                    validate_non_visual_condition_value(kind, self.visual_objects)?;
+                    validate_non_visual_condition_value(
+                        kind,
+                        self.visual_objects,
+                        Some(source_line),
+                    )?;
                 }
                 let kind = lower_condition_value_kind(
                     kind,
@@ -18028,7 +18633,11 @@ impl<'a> ProgramLowerer<'a> {
             }
             ConditionAst::InlineConditionNonZero(kind) => {
                 if context.role == RuleRole::Main {
-                    validate_non_visual_condition_value(kind, self.visual_objects)?;
+                    validate_non_visual_condition_value(
+                        kind,
+                        self.visual_objects,
+                        Some(source_line),
+                    )?;
                 }
                 let kind = lower_condition_value_kind(
                     kind,
@@ -18042,7 +18651,11 @@ impl<'a> ProgramLowerer<'a> {
             }
             ConditionAst::InlineConditionCompare { kind, op, value } => {
                 if context.role == RuleRole::Main {
-                    validate_non_visual_condition_value(kind, self.visual_objects)?;
+                    validate_non_visual_condition_value(
+                        kind,
+                        self.visual_objects,
+                        Some(source_line),
+                    )?;
                 }
                 let kind = lower_condition_value_kind(
                     kind,
@@ -18058,8 +18671,9 @@ impl<'a> ProgramLowerer<'a> {
                     value: *value,
                 })
             }
-            ConditionAst::All(_) | ConditionAst::Any(_) => Err(DiagnosticReport::error(
-                "nested condition expression was not expanded".to_string(),
+            ConditionAst::All(_) | ConditionAst::Any(_) => Err(DiagnosticReport::error_at_line(
+                "nested condition expression was not expanded",
+                source_line,
             )),
         }
     }
@@ -18076,7 +18690,11 @@ impl<'a> ProgramLowerer<'a> {
 
         let mut then_steps = Vec::new();
         if !rewrite.after_effects.is_empty() {
-            then_steps.extend(self.lower_effect_statement(&rewrite.after_effects, context)?);
+            then_steps.extend(self.lower_effect_statement(
+                &rewrite.source_line,
+                &rewrite.after_effects,
+                context,
+            )?);
         }
         if let Some(after_call) = &rewrite.after_call {
             then_steps.extend(self.lower_call(after_call, &rewrite.source_line, context)?);
@@ -18120,9 +18738,10 @@ impl<'a> ProgramLowerer<'a> {
                     &effects,
                     self.visual_objects,
                     context,
+                    &rewrite.source_line,
                 )?;
                 if role == ClassifiedRuleRole::Visual {
-                    validate_visual_effects(&effects)?;
+                    validate_visual_effects(&effects, &rewrite.source_line)?;
                 }
                 if rewrite_requires_implicit_cardinal_expansion(rewrite) {
                     let mut rules = Vec::new();
@@ -18154,7 +18773,7 @@ impl<'a> ProgramLowerer<'a> {
             }
             OrientationExpr::Input => {
                 if !context.input_allowed {
-                    return Err(input_dependency_error(context));
+                    return Err(input_dependency_error(context, &rewrite.source_line));
                 }
                 let alternatives = compile_before_after_blocks(
                     &rewrite.before,
@@ -18170,9 +18789,10 @@ impl<'a> ProgramLowerer<'a> {
                     &effects,
                     self.visual_objects,
                     context,
+                    &rewrite.source_line,
                 )?;
                 if role == ClassifiedRuleRole::Visual {
-                    validate_visual_effects(&effects)?;
+                    validate_visual_effects(&effects, &rewrite.source_line)?;
                 }
                 let mut rules = Vec::new();
                 for direction in self.directions {
@@ -18193,10 +18813,13 @@ impl<'a> ProgramLowerer<'a> {
             }
             OrientationExpr::InputSet(axis) => {
                 if !context.input_allowed {
-                    return Err(input_dependency_error(context));
+                    return Err(input_dependency_error(context, &rewrite.source_line));
                 }
                 let directions = self.directions_for_orientation_name(axis)?.ok_or_else(|| {
-                    DiagnosticReport::error(format!("unknown input orientation set: {axis}"))
+                    DiagnosticReport::error_at_line(
+                        format!("unknown input orientation set: {axis}"),
+                        &rewrite.source_line,
+                    )
                 })?;
                 let alternatives = compile_before_after_blocks(
                     &rewrite.before,
@@ -18212,9 +18835,10 @@ impl<'a> ProgramLowerer<'a> {
                     &effects,
                     self.visual_objects,
                     context,
+                    &rewrite.source_line,
                 )?;
                 if role == ClassifiedRuleRole::Visual {
-                    validate_visual_effects(&effects)?;
+                    validate_visual_effects(&effects, &rewrite.source_line)?;
                 }
                 let mut rules = Vec::new();
                 for direction in directions {
@@ -18237,10 +18861,10 @@ impl<'a> ProgramLowerer<'a> {
                 let directions = self
                     .directions_for_orientation_name(&direction_name.0)?
                     .ok_or_else(|| {
-                        DiagnosticReport::error(format!(
-                            "unknown orientation: {}",
-                            direction_name.0
-                        ))
+                        DiagnosticReport::error_at_line(
+                            format!("unknown orientation: {}", direction_name.0),
+                            &rewrite.source_line,
+                        )
                     })?;
                 let alternatives = compile_before_after_blocks(
                     &rewrite.before,
@@ -18256,9 +18880,10 @@ impl<'a> ProgramLowerer<'a> {
                     &effects,
                     self.visual_objects,
                     context,
+                    &rewrite.source_line,
                 )?;
                 if role == ClassifiedRuleRole::Visual {
-                    validate_visual_effects(&effects)?;
+                    validate_visual_effects(&effects, &rewrite.source_line)?;
                 }
                 let mut rules = Vec::new();
                 for direction in directions {
@@ -18505,12 +19130,16 @@ fn wrap_rewrite_steps(application: RuleApplication, steps: Vec<RuleStep>) -> Vec
     }
 }
 
-fn validate_visual_effects(effects: &LoweredEffects) -> Result<(), DiagnosticReport> {
+fn validate_visual_effects(
+    effects: &LoweredEffects,
+    source_line: &str,
+) -> Result<(), DiagnosticReport> {
     if !lowered_effects_change_gameplay(effects) {
         return Ok(());
     }
-    Err(DiagnosticReport::error(
-        "display block rewrites cannot use gameplay effects".to_string(),
+    Err(DiagnosticReport::error_at_line(
+        "display block rewrites cannot use gameplay effects",
+        source_line,
     ))
 }
 
@@ -19420,9 +20049,16 @@ struct ObjectSelector {
     alternatives: Vec<ObjectId>,
     transform: Option<SelectorTransform>,
     family_wildcard: Option<FamilyWildcardSelector>,
+    relative_constraints: Vec<RelativeSelectorConstraint>,
     dynamic_guards: HashMap<ObjectId, Vec<DynamicSelectorGuard>>,
     scratch: Vec<ParsedScratch>,
     occurrence_label: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+struct RelativeSelectorConstraint {
+    relative: RelativeDirection,
+    alternatives_by_direction: HashMap<String, Vec<ObjectId>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -19870,19 +20506,19 @@ fn resolve_object_selector(
     let (selector, scratch) = split_selector_scratch(selector, line)?;
     let (selector, occurrence_label) = split_selector_occurrence_label(selector, line)?;
     let token = labeled_selector_token(selector, occurrence_label.as_deref());
-    let selector_base = selector.split_once(':').map_or(selector, |(base, _)| base);
-    if !object_schemas.contains_key(selector_base) {
-        if let Some(object) = object_names.get(selector).copied() {
-            return Ok(ObjectSelector {
-                token,
-                alternatives: vec![object],
-                transform: None,
-                family_wildcard: None,
-                dynamic_guards: HashMap::new(),
-                scratch,
-                occurrence_label,
-            });
-        }
+    if !selector.contains(':')
+        && let Some(object) = object_names.get(selector).copied()
+    {
+        return Ok(ObjectSelector {
+            token,
+            alternatives: vec![object],
+            transform: None,
+            family_wildcard: None,
+            relative_constraints: Vec::new(),
+            dynamic_guards: HashMap::new(),
+            scratch,
+            occurrence_label,
+        });
     }
 
     if let Some(objects) = object_groups.get(selector) {
@@ -19891,6 +20527,7 @@ fn resolve_object_selector(
             alternatives: objects.clone(),
             transform: None,
             family_wildcard: None,
+            relative_constraints: Vec::new(),
             dynamic_guards: HashMap::new(),
             scratch,
             occurrence_label,
@@ -19911,6 +20548,21 @@ fn resolve_object_selector(
         );
     }
     let Some(schema) = object_schemas.get(parts[0]) else {
+        if parts.len() > 1 && value_sets.contains_key(parts[0]) {
+            return resolve_qualified_value_set_selector(
+                selector,
+                token,
+                scratch,
+                occurrence_label,
+                line,
+                object_names,
+                object_schemas,
+                value_sets,
+                maps,
+                object_groups,
+                global_names,
+            );
+        }
         return Err(parse_error(line, "unknown object selector"));
     };
 
@@ -19935,6 +20587,19 @@ fn resolve_object_selector(
             if value == "*" {
                 source_token_parts.push("*".to_string());
                 return Ok(None);
+            }
+            if let Some(relative) = parse_relative_direction_value(value) {
+                if axis != "directions" {
+                    return Err(parse_error(
+                        line,
+                        "relative direction selector tag requires a directions tag slot",
+                    ));
+                }
+                source_token_parts.push((*value).to_string());
+                return Ok(Some(SelectorConstraint::Relative {
+                    axis_index: index,
+                    relative,
+                }));
             }
             let expr = parse_value_expr(value, line)?;
             if expr == ValueExpr::Binding(axis.clone()) {
@@ -20011,6 +20676,7 @@ fn resolve_object_selector(
                     Some(SelectorConstraint::ValueSet(values)) => {
                         values.contains(&variant.values[index])
                     }
+                    Some(SelectorConstraint::Relative { .. }) => true,
                     Some(SelectorConstraint::Mapped { .. })
                     | Some(SelectorConstraint::DynamicGlobal { .. })
                     | None => true,
@@ -20022,6 +20688,7 @@ fn resolve_object_selector(
     if alternatives.is_empty() {
         return Err(parse_error(line, "object selector matched no objects"));
     }
+    let relative_constraints = relative_selector_constraints(&constraints, schema, &alternatives)?;
 
     if constraints
         .iter()
@@ -20062,6 +20729,7 @@ fn resolve_object_selector(
                 mapped_objects,
             }),
             family_wildcard: None,
+            relative_constraints,
             dynamic_guards: HashMap::new(),
             scratch,
             occurrence_label,
@@ -20074,10 +20742,140 @@ fn resolve_object_selector(
         alternatives,
         transform: None,
         family_wildcard: None,
+        relative_constraints,
         dynamic_guards,
         scratch,
         occurrence_label,
     })
+}
+
+fn resolve_qualified_value_set_selector(
+    selector: &str,
+    token: String,
+    scratch: Vec<ParsedScratch>,
+    occurrence_label: Option<String>,
+    line: &str,
+    object_names: &HashMap<String, ObjectId>,
+    object_schemas: &HashMap<String, ObjectSchema>,
+    value_sets: &HashMap<String, Vec<String>>,
+    maps: &HashMap<String, ValueMap>,
+    object_groups: &HashMap<String, Vec<ObjectId>>,
+    global_names: &HashMap<String, GlobalId>,
+) -> Result<ObjectSelector, DiagnosticReport> {
+    let (name, suffix) = selector
+        .split_once(':')
+        .ok_or_else(|| parse_error(line, "qualified tag selector must use a suffix"))?;
+    if suffix.is_empty() {
+        return Err(parse_error(
+            line,
+            "qualified tag selector suffix must not be empty",
+        ));
+    }
+    let atoms = value_sets
+        .get(name)
+        .ok_or_else(|| parse_error(line, "unknown tag set selector"))?;
+
+    let mut alternatives = Vec::new();
+    let mut dynamic_guards = HashMap::<ObjectId, Vec<DynamicSelectorGuard>>::new();
+    let mut mapped_objects = HashMap::<ObjectId, ObjectId>::new();
+    let mut can_map = true;
+    for atom in atoms {
+        validate_qualified_object_name_atom(atom, line, object_names, object_schemas)?;
+        let expanded = qualify_object_name_atom(atom, suffix, line)?;
+        let resolved = resolve_object_selector(
+            &expanded,
+            line,
+            object_names,
+            object_schemas,
+            value_sets,
+            maps,
+            object_groups,
+            global_names,
+        )?;
+        if resolved.transform.is_some() || resolved.family_wildcard.is_some() {
+            return Err(parse_error(
+                line,
+                "qualified tag selector cannot use mapped selector terms",
+            ));
+        }
+        if resolved.dynamic_guards.is_empty() && resolved.alternatives.len() == 1 {
+            let target = resolved.alternatives[0];
+            for source in object_name_atom_source_objects(atom, object_names, object_schemas) {
+                mapped_objects.insert(source, target);
+            }
+        } else {
+            can_map = false;
+        }
+        for object in resolved.alternatives {
+            if !alternatives.contains(&object) {
+                alternatives.push(object);
+            }
+        }
+        for (object, guards) in resolved.dynamic_guards {
+            dynamic_guards.entry(object).or_default().extend(guards);
+        }
+    }
+    if alternatives.is_empty() {
+        return Err(parse_error(
+            line,
+            "qualified tag selector matched no objects",
+        ));
+    }
+    Ok(ObjectSelector {
+        token,
+        alternatives,
+        transform: None,
+        family_wildcard: (can_map && !mapped_objects.is_empty())
+            .then_some(FamilyWildcardSelector { mapped_objects }),
+        relative_constraints: Vec::new(),
+        dynamic_guards,
+        scratch,
+        occurrence_label,
+    })
+}
+
+fn validate_qualified_object_name_atom(
+    atom: &str,
+    line: &str,
+    object_names: &HashMap<String, ObjectId>,
+    object_schemas: &HashMap<String, ObjectSchema>,
+) -> Result<(), DiagnosticReport> {
+    if object_schemas.contains_key(atom) || object_names.contains_key(atom) {
+        return Ok(());
+    }
+    Err(parse_error(
+        line,
+        "qualified tag selector values must name object families or objects",
+    ))
+}
+
+fn object_name_atom_source_objects(
+    atom: &str,
+    object_names: &HashMap<String, ObjectId>,
+    object_schemas: &HashMap<String, ObjectSchema>,
+) -> Vec<ObjectId> {
+    if let Some(schema) = object_schemas.get(atom) {
+        return schema
+            .variants
+            .iter()
+            .map(|variant| variant.object)
+            .collect();
+    }
+    object_names.get(atom).copied().into_iter().collect()
+}
+
+fn qualify_object_name_atom(
+    atom: &str,
+    suffix: &str,
+    line: &str,
+) -> Result<String, DiagnosticReport> {
+    if atom.contains('{') || atom.contains('#') || atom.contains(':') {
+        return Err(parse_error(
+            line,
+            "qualified tag selector cannot qualify non-atomic object names",
+        ));
+    }
+    Ok(format!("{atom}:{suffix}"))
 }
 
 fn resolve_schema_family_wildcard_selector(
@@ -20174,6 +20972,7 @@ fn resolve_schema_family_wildcard_selector(
         alternatives,
         transform: None,
         family_wildcard,
+        relative_constraints: Vec::new(),
         dynamic_guards: HashMap::new(),
         scratch,
         occurrence_label,
@@ -20372,6 +21171,10 @@ fn is_scratch_name_value_atom(value: &str) -> bool {
 enum SelectorConstraint {
     Fixed(String),
     ValueSet(Vec<String>),
+    Relative {
+        axis_index: usize,
+        relative: RelativeDirection,
+    },
     Mapped {
         axis_index: usize,
         expr: ValueExpr,

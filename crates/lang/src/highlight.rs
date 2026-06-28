@@ -207,7 +207,7 @@ fn collect_puzzle3_symbols(
             symbols.insert(axis.name.clone(), HighlightKind::Group);
             if let puzzle_3d::VariantValueSet3::Named(values) = &axis.values {
                 for value in values {
-                    symbols.insert(value.clone(), HighlightKind::Variant);
+                    symbols.insert(value.clone(), HighlightKind::Object);
                 }
             }
         }
@@ -566,6 +566,7 @@ fn collect_source_symbols(
         collect_line_symbols(
             &tokens,
             scope,
+            line.content.trim_end().ends_with('{'),
             symbols,
             family_bases,
             family_axes,
@@ -584,6 +585,7 @@ fn symbol_collection_scope(scope: Option<SourceScope>) -> Option<SourceScope> {
             | SourceScope::Layers
             | SourceScope::Scratch
             | SourceScope::Visuals
+            | SourceScope::VisualShapeTable
             | SourceScope::Keys),
         ) => Some(scope),
         Some(SourceScope::SceneKeys) => Some(SourceScope::Keys),
@@ -595,6 +597,7 @@ fn symbol_collection_scope(scope: Option<SourceScope>) -> Option<SourceScope> {
 fn collect_line_symbols(
     tokens: &[&str],
     scope: Option<SourceScope>,
+    line_opens_block: bool,
     symbols: &mut HashMap<String, HighlightKind>,
     family_bases: &mut HashSet<String>,
     family_axes: &mut HashMap<String, usize>,
@@ -637,13 +640,13 @@ fn collect_line_symbols(
             insert_declared_source_symbol(symbols, name, HighlightKind::Asset);
         }
         ["shape", table, ..] | ["colors", table, ..] => {
-            if let Some((name, axis)) = table.split_once(':') {
-                insert_source_symbol(symbols, name, HighlightKind::Asset);
-                insert_source_symbol(symbols, axis, HighlightKind::Variant);
-            }
+            collect_visual_table_symbol(table, symbols);
         }
         [name] if scope == Some(SourceScope::Visuals) => {
             insert_source_symbol(symbols, name, HighlightKind::Asset);
+        }
+        [table, ..] if scope == Some(SourceScope::VisualShapeTable) && line_opens_block => {
+            collect_visual_table_symbol(table, symbols);
         }
         ["var" | "const", name, "=", ..] if scope == Some(SourceScope::SceneState) => {
             insert_declared_source_symbol(symbols, name, HighlightKind::State);
@@ -714,10 +717,19 @@ fn collect_line_symbols(
             insert_declared_source_symbol(symbols, name, HighlightKind::Group);
             family_axis_names.insert((*name).to_string());
             for value in values {
-                insert_declared_source_symbol(symbols, value, HighlightKind::Variant);
+                insert_object_name_atom_symbol(symbols, value);
             }
         }
         _ => {}
+    }
+}
+
+fn collect_visual_table_symbol(table: &str, symbols: &mut HashMap<String, HighlightKind>) {
+    if let Some((name, axis)) = table.split_once(':') {
+        insert_source_symbol(symbols, name, HighlightKind::Asset);
+        insert_source_symbol(symbols, axis, HighlightKind::Group);
+    } else {
+        insert_source_symbol(symbols, table, HighlightKind::Asset);
     }
 }
 
@@ -849,7 +861,7 @@ fn collect_object_spec(spec: &str, symbols: &mut HashMap<String, HighlightKind>)
     };
     insert_source_symbol(symbols, base, HighlightKind::Object);
     for part in parts {
-        insert_source_symbol(symbols, part, HighlightKind::Variant);
+        insert_object_name_atom_symbol(symbols, part);
     }
 }
 
@@ -875,6 +887,13 @@ fn insert_scratch_symbol(symbols: &mut HashMap<String, HighlightKind>, name: &st
     } else if is_source_scratch_qualified_identifier(name) && !parser_literal(name) {
         symbols.insert(name.to_string(), HighlightKind::Scratch);
     }
+}
+
+fn insert_object_name_atom_symbol(symbols: &mut HashMap<String, HighlightKind>, name: &str) {
+    if matches!(symbols.get(name), Some(HighlightKind::Group)) {
+        return;
+    }
+    insert_declared_source_symbol(symbols, name, HighlightKind::Object);
 }
 
 fn tag_set_tokens(name: &str, values: &[&str]) -> bool {
@@ -1039,28 +1058,7 @@ fn line_head_keyword(
     }
 
     match scope {
-        None => matches!(
-            keyword,
-            "again_interval"
-                | "assets"
-                | "author"
-                | "default_wait_time"
-                | "homepage"
-                | "import"
-                | "levels"
-                | "levels3"
-                | "puzzle"
-                | "puzzle3"
-                | "scene"
-                | "sounds"
-                | "sprites"
-                | "sprites3"
-                | "theme"
-                | "title"
-                | "var"
-                | "const"
-                | "persistent"
-        ),
+        None => false,
         Some(SourceScope::Puzzle) => is_puzzle_line_head_keyword(keyword),
         Some(SourceScope::Sounds) => matches!(keyword, "sfx" | "music"),
         Some(SourceScope::Assets) => matches!(keyword, "css"),
@@ -1107,19 +1105,8 @@ fn line_head_keyword(
             | SourceScope::VisualColorTable,
         ) => matches!(keyword, "colors" | "shape" | "shapes"),
         Some(SourceScope::Other) => {
-            matches!(
-                keyword,
-                "camera"
-                    | "else"
-                    | "for"
-                    | "if"
-                    | "grid"
-                    | "layers"
-                    | "pixelate"
-                    | "repeat"
-                    | "render"
-                    | "tween"
-            ) || rewrite_application_keyword(keyword)
+            matches!(keyword, "else" | "for" | "if" | "layers" | "repeat")
+                || rewrite_application_keyword(keyword)
         }
     }
 }
@@ -1147,17 +1134,17 @@ fn rewrite_application_keyword(value: &str) -> bool {
 fn classify_bare_word(
     token: &str,
     symbols: &HashMap<String, HighlightKind>,
-    allow_parser_keyword: bool,
+    contextual_keyword: bool,
 ) -> Option<HighlightKind> {
-    classify_word(token, symbols, allow_parser_keyword)
+    classify_word(token, symbols, contextual_keyword)
 }
 
 fn classify_word(
     token: &str,
     symbols: &HashMap<String, HighlightKind>,
-    allow_parser_keyword: bool,
+    contextual_keyword: bool,
 ) -> Option<HighlightKind> {
-    if allow_parser_keyword && parser_keyword(token) {
+    if contextual_keyword && parser_keyword(token) {
         return Some(HighlightKind::Keyword);
     }
     if let Some(kind) = symbols.get(token).copied() {
@@ -1218,7 +1205,7 @@ fn push_word(
         let text = &token[part.start..part.end];
         let semantic_kind = semantic_kind_at(semantic_ranges, absolute_start, absolute_end);
         let symbol_kind = symbols.get(text).copied();
-        let allow_parser_keyword = keyword_ranges.contains(&(absolute_start, absolute_end));
+        let contextual_keyword = keyword_ranges.contains(&(absolute_start, absolute_end));
         let kind = if part.separator_before == Some("#") {
             Some(HighlightKind::Binding)
         } else if qualified_scratch {
@@ -1246,7 +1233,7 @@ fn push_word(
                 family_axes,
             )
         {
-            Some(HighlightKind::Variant)
+            Some(HighlightKind::Object)
         } else if semantic_kind == Some(HighlightKind::Scene)
             && symbol_kind == Some(HighlightKind::State)
         {
@@ -1268,9 +1255,9 @@ fn push_word(
                 Some(HighlightKind::Object)
             }
         } else if token == text {
-            classify_bare_word(text, symbols, allow_parser_keyword)
+            classify_bare_word(text, symbols, contextual_keyword)
         } else {
-            classify_word(text, symbols, allow_parser_keyword)
+            classify_word(text, symbols, contextual_keyword)
         };
         if let Some(kind) = kind {
             push_span(out, kind, text);
@@ -1779,7 +1766,7 @@ fn visual_highlight_opening_scope(
         None if matches!(first, "sprites" | "sprites3") => Some(VisualHighlightScope::Sprites),
         Some(VisualHighlightScope::Sprites) => match first {
             "colors" => Some(VisualHighlightScope::Colors),
-            "shapes" | "shape" => Some(VisualHighlightScope::Other),
+            "shapes" => Some(VisualHighlightScope::Other),
             _ if line.content.trim_end().ends_with('{') => Some(VisualHighlightScope::SpriteEntry),
             _ => None,
         },
@@ -2665,6 +2652,127 @@ P
     }
 
     #[test]
+    fn highlights_model_top_level_keywords_from_parser_surface() {
+        for keyword in crate::model_top_level_completion_keywords() {
+            let source = format!("{keyword}\n");
+            let highlighted = highlight_source(&source);
+
+            assert!(
+                highlighted
+                    .html
+                    .contains(&format!("syntax-keyword\">{keyword}")),
+                "missing parser-surface top-level highlight {keyword}"
+            );
+        }
+    }
+
+    #[test]
+    fn highlights_valid_animation_block_header() {
+        let source = r#"
+title animation_highlight
+
+animation {
+tween {
+duration 90ms
+}
+}
+
+puzzle board {
+layers {
+actor = Player
+}
+rules {
+}
+levels {
+legend {
+. = empty
+P = Player
+}
+level first
+P
+}
+}
+"#;
+        let highlighted = highlight_source(source);
+
+        assert!(highlighted.parsed);
+        assert!(highlighted.html.contains("syntax-keyword\">animation"));
+        assert!(highlighted.html.contains("syntax-keyword\">tween"));
+        assert!(highlighted.html.contains("syntax-keyword\">duration"));
+    }
+
+    #[test]
+    fn highlights_parser_surface_keywords_after_parse_error() {
+        let source = r#"
+title animation_highlight_parse_error
+
+animation {
+tween {
+duration 90ms
+}
+}
+
+puzzle board {
+layers {
+actor = Player
+}
+rules {
+}
+thing Player 1
+levels {
+legend {
+. = empty
+P = Player
+}
+level first
+P
+}
+}
+"#;
+        let highlighted = highlight_source(source);
+
+        assert!(!highlighted.parsed);
+        assert!(highlighted.html.contains("syntax-keyword\">animation"));
+        assert!(highlighted.html.contains("syntax-keyword\">tween"));
+        assert!(highlighted.html.contains("syntax-keyword\">duration"));
+    }
+
+    #[test]
+    fn highlights_puzzle_scoped_animation_from_surface_stack_after_parse_error() {
+        let source = r#"
+title puzzle_animation_highlight_parse_error
+
+puzzle board {
+layers {
+actor = Player
+}
+animation {
+tween {
+duration 90ms
+}
+}
+thing Player 1
+rules {
+}
+levels {
+legend {
+. = empty
+P = Player
+}
+level first
+P
+}
+}
+"#;
+        let highlighted = highlight_source(source);
+
+        assert!(!highlighted.parsed);
+        assert!(highlighted.html.contains("syntax-keyword\">animation"));
+        assert!(highlighted.html.contains("syntax-keyword\">tween"));
+        assert!(highlighted.html.contains("syntax-keyword\">duration"));
+    }
+
+    #[test]
     fn highlights_lifecycle_after_inline_else_brace_continuation() {
         let source = r#"
 title lifecycle_after_else
@@ -2891,11 +2999,11 @@ PB
         assert!(highlighted.html.contains("syntax-scratch\">mark"));
         assert!(highlighted.html.contains("syntax-scratch\">shade"));
         assert!(highlighted.html.contains("syntax-group\">color"));
-        assert!(highlighted.html.contains("syntax-variant\">red"));
+        assert!(highlighted.html.contains("syntax-object\">red"));
     }
 
     #[test]
-    fn highlights_tag_definition_values_as_variants() {
+    fn highlights_tag_definition_values_as_object_name_atoms() {
         let highlighted = highlight_source(
             r#"
 title tag_definition_highlight
@@ -2909,8 +3017,8 @@ facing = left right
         );
 
         assert!(highlighted.html.contains("syntax-group\">facing"));
-        assert!(highlighted.html.contains("syntax-variant\">left"));
-        assert!(highlighted.html.contains("syntax-variant\">right"));
+        assert!(highlighted.html.contains("syntax-object\">left"));
+        assert!(highlighted.html.contains("syntax-object\">right"));
     }
 
     #[test]
@@ -2939,10 +3047,10 @@ level start {
             "syntax-object\">Box</span><span class=\"syntax-operator\">:</span><span class=\"syntax-group\">state"
         ));
         assert!(highlighted.html.contains(
-            "syntax-object\">Box</span><span class=\"syntax-operator\">:</span><span class=\"syntax-variant\">stack"
+            "syntax-object\">Box</span><span class=\"syntax-operator\">:</span><span class=\"syntax-object\">stack"
         ));
         assert!(highlighted.html.contains(
-            "syntax-object\">Box</span><span class=\"syntax-operator\">:</span><span class=\"syntax-variant\">movable"
+            "syntax-object\">Box</span><span class=\"syntax-operator\">:</span><span class=\"syntax-object\">movable"
         ));
     }
 
@@ -2973,10 +3081,10 @@ level start {
         );
 
         assert!(highlighted.html.contains(
-            "syntax-group\">*</span><span class=\"syntax-operator\">:</span><span class=\"syntax-variant\">stack"
+            "syntax-group\">*</span><span class=\"syntax-operator\">:</span><span class=\"syntax-object\">stack"
         ));
         assert!(highlighted.html.contains(
-            "syntax-group\">*</span><span class=\"syntax-operator\">:</span><span class=\"syntax-variant\">movable"
+            "syntax-group\">*</span><span class=\"syntax-operator\">:</span><span class=\"syntax-object\">movable"
         ));
     }
 
@@ -3059,8 +3167,8 @@ scene playing {
         assert!(highlighted.html.contains("syntax-object\">Player"));
         assert!(highlighted.html.contains("syntax-object\">Box"));
         assert!(highlighted.html.contains("syntax-group\">pushable"));
-        assert!(highlighted.html.contains("syntax-variant\">A"));
-        assert!(highlighted.html.contains("syntax-variant\">B"));
+        assert!(highlighted.html.contains("syntax-object\">A"));
+        assert!(highlighted.html.contains("syntax-object\">B"));
         assert!(highlighted.html.contains("syntax-input\">jump"));
         assert!(highlighted.html.contains("syntax-condition\">blocked"));
         assert!(highlighted.html.contains("syntax-asset\">bump"));
@@ -3164,10 +3272,10 @@ level start {
             "syntax-object\">Target</span><span class=\"syntax-operator\">:</span><span class=\"syntax-group\">kind"
         ));
         assert!(highlighted.html.contains(
-            "syntax-object\">Target</span><span class=\"syntax-operator\">:</span><span class=\"syntax-variant\">A"
+            "syntax-object\">Target</span><span class=\"syntax-operator\">:</span><span class=\"syntax-object\">A"
         ));
         assert!(highlighted.html.contains(
-            "syntax-object\">Target</span><span class=\"syntax-operator\">:</span><span class=\"syntax-variant\">B"
+            "syntax-object\">Target</span><span class=\"syntax-operator\">:</span><span class=\"syntax-object\">B"
         ));
         assert_eq!(
             highlighted
@@ -3212,7 +3320,7 @@ level start {
             "syntax-object\">Box</span><span class=\"syntax-operator\">:</span><span class=\"syntax-group\">kind"
         ));
         assert!(highlighted.html.contains(
-            "syntax-object\">Box</span><span class=\"syntax-operator\">:</span><span class=\"syntax-variant\">A"
+            "syntax-object\">Box</span><span class=\"syntax-operator\">:</span><span class=\"syntax-object\">A"
         ));
     }
 
@@ -3655,6 +3763,70 @@ light_green dark_green
                 .html
                 .contains("style=\"--syntax-color-token: #ff004d\">A")
         );
+    }
+
+    #[test]
+    fn highlights_color_alias_rows_after_shape_tables() {
+        let highlighted = highlight_source(
+            r##"
+title locked_style_color_alias_highlight
+
+puzzle default {
+tags {
+num = 1 2
+}
+layers {
+__legacy_layer_0 = Gate:num GoalCount:num
+}
+legend 1 = Gate:1
+legend {
+. = empty
+}
+sprites {
+shapes {
+gate_shape
+010
+111
+010
+}
+
+colors {
+Gate_color_1 = #921e87
+Gate_color_2 = #c2c3c7
+GoalCount = #acacac
+}
+
+Gate:num
+Gate_color_1 Gate_color_2
+01
+shape gate_shape
+
+GoalCount:1
+GoalCount
+0
+}
+rules {
+}
+levels {
+level start
+1
+}
+}
+"##,
+        );
+
+        assert!(highlighted.html.contains(
+            "style=\"--syntax-color-token: #921e87\">Gate_color_1</span> <span class=\"syntax-color\" style=\"--syntax-color-token: #c2c3c7\">Gate_color_2"
+        ));
+        assert!(highlighted.html.contains(
+            "syntax-sprite-pixel\" style=\"--syntax-sprite-pixel-color: #921e87\">0</span><span class=\"syntax-sprite-pixel\" style=\"--syntax-sprite-pixel-color: #c2c3c7\">1</span>"
+        ));
+        assert!(highlighted.html.contains(
+            "style=\"--syntax-color-token: #acacac\">GoalCount</span>\n<span class=\"syntax-sprite-pixel\" style=\"--syntax-sprite-pixel-color: #acacac\">0</span>"
+        ));
+        assert!(highlighted.html.contains(
+            "syntax-object\">GoalCount</span><span class=\"syntax-operator\">:</span><span class=\"syntax-object\">1</span>"
+        ));
     }
 
     #[test]
@@ -4285,12 +4457,69 @@ level start {
         assert!(!highlighted.html.contains("syntax-number\">010</span>"));
         assert!(!highlighted.html.contains("syntax-number\">1</span>A"));
         assert!(highlighted.html.contains("syntax-object\">Box"));
-        assert!(highlighted.html.contains("syntax-variant\">A</span>"));
+        assert!(highlighted.html.contains("syntax-object\">A</span>"));
         assert!(
             highlighted
                 .html
                 .contains("syntax-color\" style=\"--syntax-color-token: #4a4\">#4a4")
         );
+    }
+
+    #[test]
+    fn highlights_visual_shape_table_declarations_as_assets() {
+        let highlighted = highlight_source(
+            r#"
+title visual_shape_table_highlight
+
+puzzle board {
+tags {
+kind = A B
+}
+layers {
+actor = Box:kind
+}
+legend {
+. = empty
+}
+rules {
+}
+sprites {
+shapes {
+mark_shape:kind {
+A {
+010
+111
+010
+}
+B {
+111
+010
+111
+}
+}
+}
+}
+level start {
+.
+}
+}
+"#,
+        );
+
+        assert!(highlighted.html.contains(
+            "syntax-asset\">mark_shape</span><span class=\"syntax-operator\">:</span><span class=\"syntax-group\">kind"
+        ));
+        assert!(
+            highlighted
+                .html
+                .contains("A <span class=\"syntax-brace-depth")
+        );
+        assert!(
+            !highlighted
+                .html
+                .contains("syntax-asset\">A</span> <span class=\"syntax-brace-depth")
+        );
+        assert!(!highlighted.html.contains("syntax-number\">010</span>"));
     }
 
     #[test]
@@ -4925,7 +5154,7 @@ level start {
         assert!(
             highlighted
                 .html
-                .contains("syntax-object\">Target</span><span class=\"syntax-operator\">:</span><span class=\"syntax-variant\">A")
+                .contains("syntax-object\">Target</span><span class=\"syntax-operator\">:</span><span class=\"syntax-object\">A")
         );
         assert!(
             highlighted
@@ -4981,12 +5210,12 @@ level start {
         assert!(
             highlighted
                 .html
-                .contains("syntax-object\">Target</span><span class=\"syntax-operator\">:</span><span class=\"syntax-variant\">A")
+                .contains("syntax-object\">Target</span><span class=\"syntax-operator\">:</span><span class=\"syntax-object\">A")
         );
         assert!(
             highlighted
                 .html
-                .contains("syntax-object\">Target</span><span class=\"syntax-operator\">:</span><span class=\"syntax-variant\">A</span><span class=\"syntax-operator\">:</span><span class=\"syntax-variant\">hot")
+                .contains("syntax-object\">Target</span><span class=\"syntax-operator\">:</span><span class=\"syntax-object\">A</span><span class=\"syntax-operator\">:</span><span class=\"syntax-object\">hot")
         );
     }
 }

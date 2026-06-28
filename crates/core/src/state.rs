@@ -3,9 +3,10 @@ use crate::ids::{GlobalId, LayerId, ObjectId, RuleId, ScratchId};
 use puzzle_kernel::{
     GlobalValueError, GridCoord, GridShape, ObjectCellMask, ScratchSpace, VisibleGlobals, fnv_mix,
 };
+use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::BTreeMap;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct State {
     pub width: u16,
     pub height: u16,
@@ -14,14 +15,16 @@ pub struct State {
     scratch: ScratchSpace<ScratchId>,
     visible_globals: VisibleGlobals<GlobalId>,
     level_fired_rules: Vec<RuleId>,
+    #[serde(skip)]
     derived_cache: DerivedCache,
+    #[serde(skip)]
     hash: u64,
 }
 
 pub type SlotScratch = puzzle_kernel::ScratchValue<ScratchId>;
 pub type SlotScratchIter<'a> = puzzle_kernel::ScratchIter<'a, ScratchId>;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 struct DerivedCache {
     object_counts: Vec<u32>,
     object_positions: Vec<Vec<usize>>,
@@ -34,6 +37,40 @@ struct ScratchPositionKey {
     object: ObjectId,
     scratch: ScratchId,
     value: Option<i64>,
+}
+
+impl<'de> Deserialize<'de> for State {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct StateData {
+            width: u16,
+            height: u16,
+            layer_count: u16,
+            slots: Vec<ObjectId>,
+            scratch: ScratchSpace<ScratchId>,
+            visible_globals: VisibleGlobals<GlobalId>,
+            level_fired_rules: Vec<RuleId>,
+        }
+
+        let data = StateData::deserialize(deserializer)?;
+        let mut state = State {
+            width: data.width,
+            height: data.height,
+            layer_count: data.layer_count,
+            slots: data.slots,
+            scratch: data.scratch,
+            visible_globals: data.visible_globals,
+            level_fired_rules: data.level_fired_rules,
+            derived_cache: DerivedCache::default(),
+            hash: 0,
+        };
+        state.rebuild_derived_cache();
+        state.recompute_hash();
+        Ok(state)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -522,6 +559,38 @@ impl State {
         }
         self.derived_cache.object_counts[index] += 1;
         self.derived_cache.object_positions[index].push(slot_index);
+    }
+
+    fn rebuild_derived_cache(&mut self) {
+        let object_count = self
+            .slots
+            .iter()
+            .map(|object| usize::from(object.0))
+            .max()
+            .unwrap_or(0);
+        let cell_count = usize::from(self.width) * usize::from(self.height);
+        self.derived_cache = DerivedCache {
+            object_counts: vec![0; object_count + 1],
+            object_positions: vec![Vec::new(); object_count + 1],
+            cell_object_masks: vec![ObjectCellMask::default(); cell_count],
+            scratch_positions: BTreeMap::new(),
+        };
+        let mut index = 0;
+        while index < self.slots.len() {
+            let object = self.slots[index];
+            self.add_object_position(object, index);
+            if !object.is_empty() {
+                self.set_cell_object_mask(index, object);
+            }
+            self.add_slot_scratch_positions(index, object);
+            index += 1;
+        }
+        for cell_index in 0..cell_count {
+            let entries = self.cell_scratch_at(cell_index).collect::<Vec<_>>();
+            for entry in entries {
+                self.add_scratch_position(ObjectId::EMPTY, entry.scratch, entry.value, cell_index);
+            }
+        }
     }
 
     fn remove_object_position(&mut self, object: ObjectId, slot_index: usize) {

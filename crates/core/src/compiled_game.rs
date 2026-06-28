@@ -2,10 +2,11 @@ use crate::ids::{ConditionId, GlobalId, InputId, LayerId, ObjectId, RuleId, Scra
 pub use puzzle_kernel::{
     GlobalUpdateOp, LocalFrame, LocalFrameExtent, ScratchKind, ScratchValueMatch,
 };
+use serde::{Deserialize, Serialize};
 pub type ObjectSetMatcher = puzzle_kernel::ObjectSetMatcher<ObjectId, LayerId>;
 pub type ObjectSetScratchPattern = puzzle_kernel::ObjectSetScratchPattern<ScratchId>;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CompiledGame {
     pub layer_count: u16,
     objects: Vec<ObjectDef>,
@@ -274,20 +275,20 @@ fn filter_visual_step(step: &RuleStep, visual_rules: &[RuleId]) -> Option<RuleSt
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ObjectDef {
     pub id: ObjectId,
     pub layer_id: LayerId,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ScratchDef {
     pub id: ScratchId,
     pub kind: ScratchKind,
     pub values: Vec<String>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Rule {
     pub id: RuleId,
     pub guards: Vec<Guard>,
@@ -297,7 +298,7 @@ pub struct Rule {
     pub effects: Vec<Effect>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum RuleStep {
     Rule(Rule),
     ConditionalBlock {
@@ -324,7 +325,7 @@ pub enum RuleStep {
     },
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum RuleCondition {
     AnyMatches(Vec<Pattern>),
     NoMatches(Vec<Pattern>),
@@ -333,7 +334,7 @@ pub enum RuleCondition {
     GuardBranches(Vec<Vec<Guard>>),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Guard {
     InputIs(InputId),
     GlobalEquals {
@@ -367,7 +368,7 @@ pub enum Guard {
     },
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ScratchPattern {
     pub object: ObjectId,
     pub scratch: ScratchId,
@@ -375,7 +376,7 @@ pub struct ScratchPattern {
     pub match_value: ScratchValueMatch,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ComparisonOp {
     Eq,
     NotEq,
@@ -385,7 +386,7 @@ pub enum ComparisonOp {
     LessEq,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Effect {
     Cancel,
     Win,
@@ -401,7 +402,7 @@ pub enum Effect {
     },
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ConditionDef {
     pub id: ConditionId,
     pub kind: ConditionValueKind,
@@ -409,7 +410,7 @@ pub struct ConditionDef {
 
 pub type ConditionValueKind = puzzle_kernel::ConditionValueKind<ObjectId, Pattern, InputId>;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RuleApplication {
     Once,
     OnceAll,
@@ -418,18 +419,18 @@ pub enum RuleApplication {
     UntilStable,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Pattern {
     pub components: Vec<PatternComponent>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PatternComponent {
     pub cells: Vec<MatchCell>,
     pub gap_count: u16,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MatchCell {
     pub offset: Offset,
     pub require_objects: Vec<ObjectId>,
@@ -441,7 +442,7 @@ pub struct MatchCell {
     pub forbid_object_set_scratch: Vec<ObjectSetScratchPattern>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Offset {
     Fixed {
         dx: i16,
@@ -454,14 +455,14 @@ pub enum Offset {
     },
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct GapTerm {
     pub gap_index: u16,
     pub dx: i16,
     pub dy: i16,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum WriteOp {
     Add {
         component: u16,

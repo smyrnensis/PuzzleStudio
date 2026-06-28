@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::fs;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::sync::{
     Arc, Mutex,
@@ -80,7 +81,6 @@ struct PreviewCommandRequest {
     puzzle_path: String,
     workspace_root: Option<String>,
     game_css: String,
-    game_visuals_js: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -161,6 +161,8 @@ fn load_source(
                 .iter()
                 .map(editor_source_value)
                 .collect::<Result<Vec<_>, _>>()?;
+            let loaded_entries = workspace_entries_for_services(&services);
+            write_workspace_entries(&app, LOADED_WORKSPACES_FILE, &loaded_entries)?;
             return workspaces_source_value_with_recent(&app, workspaces, Vec::new());
         }
     }
@@ -227,13 +229,16 @@ fn open_workspace_path(
         if let Err(error) = record_recent_workspace(app, &workspace_root) {
             eprintln!("failed to record recent workspace: {error}");
         }
-        record_loaded_workspace(app, &workspace_root)?;
     }
     let payload = editor_source_value_with_recent(app, &service)?;
     let mut services = state
         .services
         .lock()
         .map_err(|_| "desktop project state is unavailable".to_string())?;
+    if record_loaded {
+        let loaded_entries = loaded_workspace_entries_after_open(&services, &workspace_root);
+        write_workspace_entries(app, LOADED_WORKSPACES_FILE, &loaded_entries)?;
+    }
     replace_workspace_service(&mut services, service);
     drop(services);
     restart_workspace_watcher(app, state, workspace_root, puzzle_path)?;
@@ -271,7 +276,13 @@ fn remove_workspace(
         .iter()
         .any(|service| service.workspace_root() == request.workspace_root)
     {
-        remove_loaded_workspace(&app, &request.workspace_root)?;
+        let remaining_roots = services
+            .iter()
+            .map(|service| service.workspace_root().to_string())
+            .filter(|workspace_root| workspace_root != &request.workspace_root)
+            .collect::<Vec<_>>();
+        let loaded_entries = loaded_workspace_entries_for_roots(&remaining_roots);
+        write_workspace_entries(&app, LOADED_WORKSPACES_FILE, &loaded_entries)?;
     }
     services.retain(|service| service.workspace_root() != request.workspace_root);
     stop_workspace_watcher(&state, &request.workspace_root)?;
@@ -284,12 +295,7 @@ fn compile_preview(
     state: tauri::State<'_, DesktopState>,
 ) -> Result<String, serde_json::Value> {
     let workspace_root = request.workspace_root.clone();
-    let request = PreviewRequest::new(
-        request.source,
-        request.puzzle_path,
-        request.game_css,
-        request.game_visuals_js,
-    );
+    let request = PreviewRequest::new(request.source, request.puzzle_path, request.game_css);
     let services = state
         .services
         .lock()
@@ -337,56 +343,6 @@ fn highlight_source(request: HighlightCommandRequest) -> String {
 #[tauri::command]
 fn sound_tools() -> String {
     html_editor::sound_tools_script()
-}
-
-#[tauri::command]
-async fn pick_screen_color() -> Result<serde_json::Value, String> {
-    tauri::async_runtime::spawn_blocking(pick_screen_color_platform)
-        .await
-        .map_err(|error| format!("screen color picker task failed: {error}"))?
-}
-
-#[cfg(target_os = "macos")]
-fn pick_screen_color_platform() -> Result<serde_json::Value, String> {
-    let output = std::process::Command::new("osascript")
-        .args(["-e", "choose color"])
-        .output()
-        .map_err(|error| format!("failed to open screen color picker: {error}"))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        if stderr.contains("User canceled") {
-            return Ok(serde_json::json!({ "canceled": true }));
-        }
-        let message = stderr.trim();
-        return Err(if message.is_empty() {
-            "screen color picker failed".to_string()
-        } else {
-            message.to_string()
-        });
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let components = stdout
-        .split(',')
-        .map(|part| part.trim().parse::<u32>())
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|_| "screen color picker returned an invalid color".to_string())?;
-    if components.len() != 3 || components.iter().any(|value| *value > 65_535) {
-        return Err("screen color picker returned an invalid color".to_string());
-    }
-    let to_byte = |value: u32| ((value * 255 + 32_767) / 65_535) as u8;
-    Ok(serde_json::json!({
-        "color": format!(
-            "#{:02x}{:02x}{:02x}",
-            to_byte(components[0]),
-            to_byte(components[1]),
-            to_byte(components[2])
-        )
-    }))
-}
-
-#[cfg(not(target_os = "macos"))]
-fn pick_screen_color_platform() -> Result<serde_json::Value, String> {
-    Err("screen color picker is not implemented for this desktop platform".to_string())
 }
 
 #[tauri::command]
@@ -612,7 +568,6 @@ fn empty_source_value() -> serde_json::Value {
         "workspaceRoot": "",
         "source": "",
         "gameCss": "",
-        "gameVisualsJs": "",
         "documents": [],
         "empty": true
     })
@@ -659,13 +614,7 @@ fn source_value_with_recent(
     app: &tauri::AppHandle,
     mut payload: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    let recent = match read_recent_workspaces(app) {
-        Ok(recent) => recent,
-        Err(error) => {
-            eprintln!("failed to read recent workspaces: {error}");
-            Vec::new()
-        }
-    };
+    let recent = read_recent_workspaces(app)?;
     if let serde_json::Value::Object(object) = &mut payload {
         object.insert(
             "recentWorkspaces".to_string(),
@@ -1026,10 +975,13 @@ fn read_workspace_entries(
     max_entries: Option<usize>,
 ) -> Result<Vec<RecentWorkspaceEntry>, String> {
     let path = workspace_entries_path(app, filename)?;
-    let Ok(source) = fs::read_to_string(path) else {
-        return Ok(Vec::new());
+    let source = match fs::read_to_string(&path) {
+        Ok(source) => source,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(format!("failed to read {}: {error}", path.display())),
     };
-    let entries: Vec<RecentWorkspaceEntry> = serde_json::from_str(&source).unwrap_or_default();
+    let entries: Vec<RecentWorkspaceEntry> = serde_json::from_str(&source)
+        .map_err(|error| format!("failed to parse {}: {error}", path.display()))?;
     Ok(clean_workspace_entries(entries, max_entries))
 }
 
@@ -1037,18 +989,6 @@ fn record_recent_workspace(app: &tauri::AppHandle, workspace_root: &str) -> Resu
     let mut entries = read_recent_workspaces(app)?;
     push_recent_workspace(&mut entries, workspace_root);
     write_workspace_entries(app, RECENT_WORKSPACES_FILE, &entries)
-}
-
-fn record_loaded_workspace(app: &tauri::AppHandle, workspace_root: &str) -> Result<(), String> {
-    let mut entries = read_loaded_workspaces(app)?;
-    push_loaded_workspace(&mut entries, workspace_root);
-    write_workspace_entries(app, LOADED_WORKSPACES_FILE, &entries)
-}
-
-fn remove_loaded_workspace(app: &tauri::AppHandle, workspace_root: &str) -> Result<(), String> {
-    let mut entries = read_loaded_workspaces(app)?;
-    entries.retain(|entry| entry.workspace_root != workspace_root);
-    write_workspace_entries(app, LOADED_WORKSPACES_FILE, &entries)
 }
 
 fn write_workspace_entries(
@@ -1078,7 +1018,7 @@ fn push_recent_workspace(entries: &mut Vec<RecentWorkspaceEntry>, workspace_root
 }
 
 fn push_loaded_workspace(entries: &mut Vec<RecentWorkspaceEntry>, workspace_root: &str) {
-    push_workspace_entry(entries, workspace_root);
+    append_workspace_entry(entries, workspace_root);
 }
 
 fn push_workspace_entry(entries: &mut Vec<RecentWorkspaceEntry>, workspace_root: &str) {
@@ -1087,13 +1027,26 @@ fn push_workspace_entry(entries: &mut Vec<RecentWorkspaceEntry>, workspace_root:
         return;
     }
     entries.retain(|entry| entry.workspace_root != workspace_root);
-    entries.insert(
-        0,
-        RecentWorkspaceEntry {
-            workspace_root: workspace_root.to_string(),
-            name: recent_workspace_name(workspace_root),
-        },
-    );
+    entries.insert(0, workspace_entry(workspace_root));
+}
+
+fn append_workspace_entry(entries: &mut Vec<RecentWorkspaceEntry>, workspace_root: &str) {
+    let workspace_root = workspace_root.trim();
+    if workspace_root.is_empty()
+        || entries
+            .iter()
+            .any(|entry| entry.workspace_root == workspace_root)
+    {
+        return;
+    }
+    entries.push(workspace_entry(workspace_root));
+}
+
+fn workspace_entry(workspace_root: &str) -> RecentWorkspaceEntry {
+    RecentWorkspaceEntry {
+        workspace_root: workspace_root.to_string(),
+        name: recent_workspace_name(workspace_root),
+    }
 }
 
 fn restore_workspace_payloads<F>(
@@ -1115,6 +1068,42 @@ where
         }
     }
     (workspaces, errors)
+}
+
+fn workspace_entries_for_services(services: &[EditorService]) -> Vec<RecentWorkspaceEntry> {
+    services
+        .iter()
+        .map(|service| service.workspace_root().to_string())
+        .fold(Vec::new(), |mut entries, workspace_root| {
+            push_loaded_workspace(&mut entries, &workspace_root);
+            entries
+        })
+}
+
+fn loaded_workspace_entries_after_open(
+    services: &[EditorService],
+    opened_root: &str,
+) -> Vec<RecentWorkspaceEntry> {
+    let mut open_roots = services
+        .iter()
+        .map(|service| service.workspace_root().to_string())
+        .collect::<Vec<_>>();
+    if !open_roots
+        .iter()
+        .any(|workspace_root| workspace_root == opened_root)
+    {
+        open_roots.push(opened_root.to_string());
+    }
+    loaded_workspace_entries_for_roots(&open_roots)
+}
+
+fn loaded_workspace_entries_for_roots(open_roots: &[String]) -> Vec<RecentWorkspaceEntry> {
+    open_roots
+        .iter()
+        .fold(Vec::new(), |mut entries, workspace_root| {
+            push_loaded_workspace(&mut entries, workspace_root);
+            entries
+        })
 }
 
 #[cfg(test)]
@@ -1174,7 +1163,6 @@ pub fn run() {
             compile_preview,
             highlight_source,
             sound_tools,
-            pick_screen_color,
             new_puzzle_source,
             save_source,
             export_html,
@@ -1248,7 +1236,7 @@ mod tests {
     }
 
     #[test]
-    fn loaded_workspace_push_preserves_all_loaded_entries() {
+    fn loaded_workspace_push_appends_without_recent_reordering() {
         let mut entries = (0..MAX_RECENT_WORKSPACES)
             .map(|index| RecentWorkspaceEntry {
                 workspace_root: format!("/tmp/project-{index}"),
@@ -1259,7 +1247,11 @@ mod tests {
         push_loaded_workspace(&mut entries, "/tmp/project-extra");
 
         assert_eq!(entries.len(), MAX_RECENT_WORKSPACES + 1);
-        assert_eq!(entries[0].workspace_root, "/tmp/project-extra");
+        assert_eq!(entries[0].workspace_root, "/tmp/project-0");
+        assert_eq!(
+            entries[MAX_RECENT_WORKSPACES].workspace_root,
+            "/tmp/project-extra"
+        );
     }
 
     #[test]
@@ -1275,6 +1267,27 @@ mod tests {
         );
 
         assert_eq!(entries.len(), MAX_RECENT_WORKSPACES + 2);
+    }
+
+    #[test]
+    fn loaded_workspace_entries_follow_open_root_order_and_dedupe() {
+        let open_roots = vec![
+            "/tmp/project-a".to_string(),
+            "/tmp/project-b".to_string(),
+            "/tmp/project-c".to_string(),
+            "/tmp/project-b".to_string(),
+            " ".to_string(),
+        ];
+
+        let entries = loaded_workspace_entries_for_roots(&open_roots);
+
+        assert_eq!(
+            entries
+                .iter()
+                .map(|entry| entry.workspace_root.as_str())
+                .collect::<Vec<_>>(),
+            vec!["/tmp/project-a", "/tmp/project-b", "/tmp/project-c"]
+        );
     }
 
     #[test]

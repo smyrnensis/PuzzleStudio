@@ -35,6 +35,10 @@
     return error;
   }
 
+  function screenColorPickerAvailable() {
+    return typeof window.EyeDropper === "function";
+  }
+
   function diagnosticSummary(diagnostics) {
     if (!Array.isArray(diagnostics) || diagnostics.length === 0) {
       return "";
@@ -88,9 +92,6 @@
 
   window.PuzzleStudioHost = {
     mode() {
-      if ((window.PuzzleStudioStaticSite || document.documentElement.dataset.staticSite === "true") && !tauriInvoke()) {
-        return "static";
-      }
       return tauriInvoke() ? "tauri" : "server";
     },
     async loadSource() {
@@ -187,12 +188,11 @@
       }
       return fetchText("/sound-tools.js");
     },
+    canPickScreenColor() {
+      return screenColorPickerAvailable();
+    },
     async pickScreenColor() {
-      const invoke = tauriInvoke();
-      if (invoke) {
-        return invoke("pick_screen_color");
-      }
-      if ("EyeDropper" in window) {
+      if (screenColorPickerAvailable()) {
         const result = await new window.EyeDropper().open();
         return { color: result.sRGBHex };
       }

@@ -55,7 +55,7 @@ use puzzle_lang::{AssetKind, DiagnosticReport};
 use puzzle_lang::{discover_game_entries, expand_game_imports_for_file, resolve_game_entry};
 use puzzle_play::{
     AnimationEvent, GameSession, LevelProgressSaveData, MessageEvent, PersistentVarSaveData,
-    ProgressSaveData, SoundEvent, WaitEvent, animation_events_for_trace,
+    ProgressSaveData, SoundEvent, WaitEvent, animation_events_for_trace, runtime_sounds_def,
 };
 #[cfg(feature = "solver")]
 use puzzle_solver::{
@@ -1332,6 +1332,23 @@ impl ServerState {
         Ok(())
     }
 
+    fn set_current_state_json(
+        &mut self,
+        state_json: &str,
+        level_index: usize,
+        materialize_level_start: bool,
+    ) -> Result<(), AppError> {
+        if level_index >= self.loaded.levels.len() {
+            return Err(AppError::Config(format!(
+                "level index out of range: {level_index}"
+            )));
+        }
+        let state = state_from_json(&self.loaded, state_json)?;
+        self.session
+            .start_level_from_state(&self.loaded, level_index, state, materialize_level_start)
+            .map_err(AppError::CoreTransition)
+    }
+
     fn progress_save_json(&self) -> String {
         let save = self.session.progress_save_data(&self.loaded);
         let mut out = String::new();
@@ -1439,6 +1456,17 @@ impl StandaloneSessionBridge {
     pub fn apply_command_name(&mut self, command_name: &str) -> Result<(), String> {
         self.state
             .apply_command_name(command_name)
+            .map_err(|error| error.to_string())
+    }
+
+    pub fn set_current_state_json(
+        &mut self,
+        state_json: &str,
+        level_index: usize,
+        materialize_level_start: bool,
+    ) -> Result<(), String> {
+        self.state
+            .set_current_state_json(state_json, level_index, materialize_level_start)
             .map_err(|error| error.to_string())
     }
 
@@ -1954,7 +1982,21 @@ fn goal_condition_value_kind(game: &CompiledGame, state: &State, kind: &Conditio
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StandaloneHostMode {
+    Export,
+    EditorPreview,
+}
+
 fn export_html(state: &ServerState) -> String {
+    export_html_with_host_mode(state, StandaloneHostMode::Export)
+}
+
+fn export_editor_preview_html(state: &ServerState) -> String {
+    export_html_with_host_mode(state, StandaloneHostMode::EditorPreview)
+}
+
+fn export_html_with_host_mode(state: &ServerState, host_mode: StandaloneHostMode) -> String {
     let mut data = String::new();
     push_export_data(&mut data, state);
     let data = escape_script_json(&data);
@@ -1968,7 +2010,7 @@ fn export_html(state: &ServerState) -> String {
     let standalone_js = escape_script(STANDALONE_JS);
     let embedded_wasm_js = embedded_standalone_wasm_script();
     let sound_tools_js = escape_script(&sound_tools_js());
-    let app_js_source = standalone_host_js(state);
+    let app_js_source = standalone_host_js(state, host_mode);
     let app_js = escape_script(&app_js_source);
 
     INDEX_HTML
@@ -2010,11 +2052,13 @@ fn export_html(state: &ServerState) -> String {
         .replace("<body>", &format!("<body{body_theme_attributes}>"))
 }
 
-fn standalone_host_js(state: &ServerState) -> String {
+fn standalone_host_js(state: &ServerState, host_mode: StandaloneHostMode) -> String {
     let mut script = APP_JS.to_string();
     script = strip_optional_host_blocks(&script, "solver");
-    script = strip_optional_host_blocks(&script, "studio-bridge");
-    script = strip_optional_host_blocks(&script, "scene-editor");
+    if host_mode == StandaloneHostMode::Export {
+        script = strip_optional_host_blocks(&script, "studio-bridge");
+        script = strip_optional_host_blocks(&script, "scene-editor");
+    }
     if !loaded_uses_puzzle3_frames(&state.loaded) {
         script = strip_optional_host_blocks(&script, "puzzle3");
     }
@@ -2254,6 +2298,7 @@ fn export_mixed_document_html(
     game_css: String,
     game_visuals_js: String,
     solver: SolverConfig,
+    host_mode: StandaloneHostMode,
 ) -> Result<String, String> {
     let fixture_json = mixed_document_puzzle3_fixture_json(document)?;
     let runtime_sources =
@@ -2267,8 +2312,12 @@ fn export_mixed_document_html(
         game_visuals_js,
         solver,
     );
+    let html = match host_mode {
+        StandaloneHostMode::Export => export_html(&state),
+        StandaloneHostMode::EditorPreview => export_editor_preview_html(&state),
+    };
     Ok(inject_puzzle3_frame_assets(
-        export_html(&state),
+        html,
         &fixture_json,
         &runtime_sources.model_3d,
         &puzzle3_path,
@@ -2437,9 +2486,7 @@ fn sound_tools_js() -> String {
             &[
                 "SFX_TYPE_OPTIONS",
                 "createSfxPlayer",
-                "createPuzzleScriptSfxPlayer",
                 "generateSoundEffect",
-                "generatePuzzleScriptSoundEffect",
                 "randomSfxPreset",
             ],
         ),
@@ -2455,6 +2502,37 @@ pub fn export_html_from_source(
     game_css: &str,
     game_visuals_js: &str,
 ) -> Result<String, DiagnosticReport> {
+    export_html_from_source_with_host_mode(
+        source,
+        puzzle_path,
+        game_css,
+        game_visuals_js,
+        StandaloneHostMode::Export,
+    )
+}
+
+pub fn export_editor_preview_html_from_source(
+    source: &str,
+    puzzle_path: &str,
+    game_css: &str,
+    game_visuals_js: &str,
+) -> Result<String, DiagnosticReport> {
+    export_html_from_source_with_host_mode(
+        source,
+        puzzle_path,
+        game_css,
+        game_visuals_js,
+        StandaloneHostMode::EditorPreview,
+    )
+}
+
+fn export_html_from_source_with_host_mode(
+    source: &str,
+    puzzle_path: &str,
+    game_css: &str,
+    game_visuals_js: &str,
+    host_mode: StandaloneHostMode,
+) -> Result<String, DiagnosticReport> {
     let document = puzzle_lang::parse_game_for_path(source, puzzle_path)?;
     if document.models.len() > 1 {
         let loaded = mixed_document_loaded_game(&document).map_err(DiagnosticReport::error)?;
@@ -2467,6 +2545,7 @@ pub fn export_html_from_source(
             game_css.to_string(),
             game_visuals_js,
             SolverConfig::default(),
+            host_mode,
         )
         .map_err(DiagnosticReport::error);
     }
@@ -2481,7 +2560,10 @@ pub fn export_html_from_source(
                 game_visuals_js,
                 SolverConfig::default(),
             );
-            Ok(export_html(&state))
+            Ok(match host_mode {
+                StandaloneHostMode::Export => export_html(&state),
+                StandaloneHostMode::EditorPreview => export_editor_preview_html(&state),
+            })
         }
         Some(LoadedDocumentModel::Puzzle3d { .. }) => {
             export_puzzle3_document_html(&document, source, puzzle_path, game_css, game_visuals_js)
@@ -2518,6 +2600,7 @@ pub fn export_html_file(path: impl AsRef<Path>) -> Result<String, String> {
             game_css,
             game_visuals_js,
             SolverConfig::default(),
+            StandaloneHostMode::Export,
         );
     }
 
@@ -3681,6 +3764,8 @@ fn push_export_data(out: &mut String, state: &ServerState) {
     out.push(',');
     push_compiled_play_bundle(out, &state.loaded);
     out.push(',');
+    push_runtime_loaded_game_bundle(out, &state.loaded);
+    out.push(',');
     push_puzzle_screen(out, &state.loaded);
     out.push(',');
     push_export_levels(out, &state.loaded);
@@ -3868,43 +3953,10 @@ fn push_export_theme(out: &mut String, theme: &ThemeDef) {
 }
 
 fn push_export_sounds(out: &mut String, sounds: &SoundsDef) {
-    out.push_str("\"sounds\":{");
-    out.push_str("\"sfx\":[");
-    for (index, sfx) in sounds.sfx.iter().enumerate() {
-        if index > 0 {
-            out.push(',');
-        }
-        out.push('{');
-        push_json_pair(out, "name", &sfx.name);
-        out.push(',');
-        push_json_pair(out, "seed", &sfx.seed);
-        out.push(',');
-        push_json_pair(out, "type", &sfx.type_target);
-        out.push('}');
-    }
-    out.push(']');
-    out.push(',');
-    out.push_str("\"music\":[");
-    for (index, music) in sounds.music.iter().enumerate() {
-        if index > 0 {
-            out.push(',');
-        }
-        out.push('{');
-        push_json_pair(out, "name", &music.name);
-        out.push(',');
-        push_json_pair(out, "seed", &music.seed);
-        out.push(',');
-        push_json_f64(out, "height", music.height);
-        out.push(',');
-        push_json_number(out, "bars", u64::from(music.bars));
-        out.push(',');
-        push_json_number(out, "bpm", u64::from(music.bpm));
-        out.push(',');
-        push_json_f64(out, "volume", music.volume);
-        out.push('}');
-    }
-    out.push(']');
-    out.push('}');
+    out.push_str("\"sounds\":");
+    let sounds_json = serde_json::to_string(&runtime_sounds_def(sounds))
+        .expect("runtime sounds contract should serialize");
+    out.push_str(&sounds_json);
 }
 
 fn push_export_animation(out: &mut String, loaded: &LoadedGame) {
@@ -4290,6 +4342,16 @@ fn push_rule_animation(out: &mut String, animation: &RuleAnimation) {
         out.push_str(&object.0.to_string());
     }
     out.push(']');
+    out.push('}');
+}
+
+fn push_runtime_loaded_game_bundle(out: &mut String, loaded: &LoadedGame) {
+    out.push_str("\"runtimeLoadedGame\":{");
+    push_json_number(out, "version", 1);
+    out.push_str(",\"loaded\":");
+    let loaded_json =
+        serde_json::to_string(loaded).expect("runtime loaded game bundle should serialize");
+    out.push_str(&loaded_json);
     out.push('}');
 }
 
@@ -7975,12 +8037,6 @@ fn push_json_i64(out: &mut String, key: &str, value: i64) {
     out.push_str(&value.to_string());
 }
 
-fn push_json_f64(out: &mut String, key: &str, value: f64) {
-    push_json_string(out, key);
-    out.push(':');
-    out.push_str(&value.to_string());
-}
-
 fn push_json_bool(out: &mut String, key: &str, value: bool) {
     push_json_string(out, key);
     out.push(':');
@@ -8453,11 +8509,24 @@ P
     #[test]
     fn html_play_standard_choice_focus_uses_logical_grid() {
         assert!(APP_JS.contains("function standardChoiceFocusCells(scene = currentSceneDef())"));
+        assert!(APP_JS.contains("function sceneMenuFocusCells(scene = currentSceneDef())"));
+        assert!(APP_JS.contains("function levelMenuFocusFootprint(component, context = {})"));
+        assert!(APP_JS.contains("const hasMenuController = sceneHasComponent(scene, \"level_menu\") || sceneHasComponent(scene, \"choice\");"));
+        assert!(
+            APP_JS.contains(
+                "if (!binding && chrome === \"menu\" && profile.menuFocusCells.length > 0)"
+            )
+        );
+        assert!(APP_JS.contains("effects.push({ kind: \"scene_menu\", input: menuInput });"));
+        assert!(APP_JS.contains("syncSceneMenuSelection(screenView);"));
+        assert!(APP_JS.contains("assignSceneMenuControl(button, scope);"));
         assert!(APP_JS.contains("function isControlPointerTarget(target)"));
         assert!(APP_JS.contains("if (isControlPointerTarget(event.target))"));
         assert!(APP_JS.contains("function componentRowFootprint(components, context = {})"));
         assert!(APP_JS.contains("function componentColumnFootprint(components, context = {})"));
         assert!(APP_JS.contains("component.kind === \"choice\""));
+        assert!(APP_JS.contains("(focusKind === \"menu\" && component.kind === \"button\")"));
+        assert!(APP_JS.contains("focusKind === \"menu\" && component.kind === \"level_menu\""));
         assert!(APP_JS.contains("function stackColumnFootprints(footprints)"));
         assert!(APP_JS.contains("viewItems(component, context.scope || {}).map((item)"));
         assert!(APP_JS.contains("[component.binding]: item"));
@@ -8481,7 +8550,6 @@ P
     #[test]
     fn html_play_level_menu_uses_select_command() {
         assert!(APP_JS.contains("sendCommand(`select:${position}`)"));
-        assert!(APP_JS.contains("enter: \"select\""));
         assert!(APP_JS.contains(
             "if (isStandardMenuConfirmKey(key, rawKey, code)) {\n    return \"enter\";\n  }"
         ));
@@ -8489,6 +8557,7 @@ P
         assert!(APP_JS.contains("String(command).split(\":\", 1)[0] === \"select\""));
         assert!(!APP_JS.contains("sendCommand(`enter:${position}`)"));
         assert!(!APP_JS.contains("enter: \"enter\""));
+        assert!(!APP_JS.contains("enter: \"select\""));
     }
 
     #[test]
@@ -8638,11 +8707,59 @@ P
 
     #[test]
     fn html_play_does_not_fallback_to_synthetic_sound_when_generator_is_missing() {
-        assert!(APP_JS.contains("warnMissingGenerator"));
+        assert!(APP_JS.contains("warnSoundIssue"));
         assert!(APP_JS.contains("sound generator is unavailable"));
         assert!(!APP_JS.contains("playMusicNote("));
         assert!(!APP_JS.contains("this.seedValue("));
         assert!(!APP_JS.contains("this.seededRandom("));
+    }
+
+    #[test]
+    fn html_play_passes_sfx_volume_to_sound_generator() {
+        assert!(APP_JS.contains("const volume = Number(def.volume ?? 1);"));
+        assert!(APP_JS.contains("createSfxPlayer(context, effect, { volume })"));
+        assert!(APP_JS.contains("player.start(context.currentTime);"));
+        assert!(!APP_JS.contains("createPuzzleScriptSfxPlayer"));
+        assert!(!APP_JS.contains("generatePuzzleScriptSoundEffect"));
+    }
+
+    #[test]
+    fn standalone_export_includes_sfx_volume() {
+        let source = r#"
+title Sfx Volume
+
+sounds {
+  sfx click seed=click type=select volume=0.25
+}
+
+puzzle board {
+  layers {
+    tiles = Player
+  }
+  empty .
+  rules {
+    [ Player ] -> [ Player ] sfx click
+  }
+}
+
+levels default of board {
+  legend P = Player
+  level one {
+    P
+  }
+}
+
+scene playing {
+  layout {
+    puzzle board
+  }
+}
+"#;
+
+        let html = export_html_from_source(source, "games/sfx_volume.puzzle", "", "")
+            .expect("export should succeed");
+
+        assert!(html.contains(r#"\"sfx\":[{\"name\":\"click\",\"seed\":\"click\",\"type\":\"select\",\"volume\":0.25}]"#));
     }
 
     #[test]
@@ -9113,6 +9230,7 @@ scene mixed_play {
             String::new(),
             VISUALS_JS.to_string(),
             SolverConfig::default(),
+            StandaloneHostMode::Export,
         )
         .unwrap();
         assert!(html.contains("window.Puzzle3DFrameFixture"));
@@ -9389,6 +9507,13 @@ text level.title
         assert!(STANDALONE_JS.contains("this.sessionRuntime.apply_command_name(commandName)"));
         assert!(!STANDALONE_JS.contains("parseRuntimeSceneTarget(value)"));
         assert!(!STANDALONE_JS.contains("parseRuntimeExpr"));
+    }
+
+    #[test]
+    fn editor_preview_input_hook_does_not_swallow_session_commands() {
+        assert!(APP_JS.contains("function isStandaloneEditorSessionCommand(command)"));
+        assert!(APP_JS.contains(r#"name === "undo" || name === "redo" || name === "restart""#));
+        assert!(APP_JS.contains("if (isStandaloneEditorSessionCommand(command))"));
     }
 
     #[test]
@@ -9784,6 +9909,7 @@ scene playing {
 
         assert!(html.contains("window.PuzzleStandaloneEmbeddedWasm"));
         assert!(html.contains("\\\"defaultAgainMs\\\":90"));
+        assert!(html.contains("\\\"runtimeLoadedGame\\\""));
         assert!(html.contains("WasmStandaloneSession"));
         assert!(!html.contains("WasmCoreRuntime"));
         assert!(!html.contains("compile_preview"));
@@ -9802,9 +9928,58 @@ scene playing {
         assert!(STANDALONE_JS.contains("WasmStandaloneSession.fromExport(JSON.stringify"));
         assert!(!STANDALONE_JS.contains("new this.wasmModule.WasmStandaloneSession("));
         assert!(STANDALONE_JS.contains("Puzzle game WASM runtime is unavailable."));
+        assert!(STANDALONE_JS.contains("set_current_state("));
+        assert!(STANDALONE_JS.contains("Editor preview state requires a valid level index."));
         assert!(!STANDALONE_JS.contains("this.initializeCoreRuntime();"));
         assert!(!STANDALONE_JS.contains("WasmCoreRuntime"));
         assert!(!STANDALONE_JS.contains("WasmCompiledCoreRuntime"));
+    }
+
+    #[test]
+    fn editor_preview_export_keeps_studio_bridge_for_state_control() {
+        let source = r#"
+title Editor Preview Export
+
+puzzle board {
+  layers {
+    tiles = Player
+  }
+  empty .
+  rules {
+    [ Player ] -> [ Player ]
+  }
+}
+
+levels default of board {
+  legend P = Player
+  level one {
+    P
+  }
+}
+
+scene playing {
+  layout {
+    puzzle board
+  }
+}
+"#;
+
+        let html = export_editor_preview_html_from_source(
+            source,
+            "games/editor_preview/game.puzzle",
+            "",
+            "",
+        )
+        .expect("editor preview export should succeed");
+
+        assert!(html.contains("PuzzleStudioSetState"));
+        assert!(html.contains("PuzzleStudioKey"));
+        assert!(html.contains("PuzzleStudioCommand"));
+        assert!(html.contains("PuzzleStudioPreviewState"));
+        assert!(html.contains("set_current_state("));
+        assert!(!html.contains("broadcastPuzzle3Key"));
+        assert!(!html.contains("PuzzleStudioSolve"));
+        assert!(!html.contains("loadWasmSolver"));
     }
 
     #[test]
@@ -9853,9 +10028,16 @@ scene playing {
         let mut data = String::new();
         push_export_data(&mut data, &state);
 
-        assert_eq!(data.matches("\"scenes\":[").count(), 1);
-        assert_eq!(data.matches("\"screens\":[").count(), 1);
-        assert!(data.contains("\"persistentVars\":["));
+        let export: serde_json::Value =
+            serde_json::from_str(&data).expect("export data should be JSON");
+        assert!(export.get("scenes").is_some());
+        assert!(export.get("screens").is_some());
+        assert!(
+            export
+                .get("engine")
+                .and_then(|engine| engine.get("persistentVars"))
+                .is_some()
+        );
     }
 
     #[test]

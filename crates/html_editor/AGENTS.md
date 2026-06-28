@@ -27,16 +27,10 @@ Use `tools/serve_web_editor.sh` or `tools/open_web_editor.command` for the
 normal local web editor. These start the Rust editor server so `/api/highlight`,
 preview compilation, save, and other editor backend routes are available.
 
-Use `tools/serve_web_editor.sh --pages` or `tools/open_web_editor.command
---pages` only to inspect the generated Pages site locally. That mode serves
-`docs/` over local HTTP, matching the GitHub Pages asset-loading model, and does
-not provide Rust editor API routes such as `/api/highlight`.
-
-When verifying the generated Pages editor in the Codex in-app browser, do not
-try to open it through `file://`. This environment's browser policy blocks local
-file URLs even though the browser tool may describe `file://` as generally
-supported. Serve `docs/` or the repository over `http://127.0.0.1:<port>/` and
-open that URL instead.
+Do not use a static Pages mode for editor development. The supported local
+entrypoint is the Rust editor server, because preview compilation,
+highlighting, save, and workspace APIs are server-owned instead of browser
+fallback behavior.
 
 For visual feedback, prefer the shortest human-visible loop: open the served
 editor for the user or capture a screenshot of the relevant viewport. DOM-only

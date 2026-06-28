@@ -41,6 +41,7 @@ pub(crate) enum StatementAst {
     DisplayRewrite(OrientedRewriteAst),
     DisplayBlock(Vec<StatementAst>),
     Conditional {
+        source_line: String,
         condition: PatternConditionAst,
         then_statements: Vec<StatementAst>,
         else_statements: Vec<StatementAst>,
@@ -50,6 +51,7 @@ pub(crate) enum StatementAst {
         statements: Vec<StatementAst>,
     },
     RepeatUntil {
+        source_line: String,
         condition: ConditionAst,
         statements: Vec<StatementAst>,
     },
@@ -58,11 +60,13 @@ pub(crate) enum StatementAst {
         statements: Vec<StatementAst>,
     },
     If {
+        source_line: String,
         condition: ConditionAst,
         then_statements: Vec<StatementAst>,
         else_statements: Vec<StatementAst>,
     },
     Effect {
+        source_line: String,
         effects: Vec<EffectAst>,
     },
     Rewrite(OrientedRewriteAst),

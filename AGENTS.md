@@ -33,6 +33,9 @@ cross-crate boundaries.
 
 ## No Fallback Paths
 
+This is a context-critical rule for every task in this repository, not an
+optional style preference.
+
 Do not add fallback behavior. Fallbacks make bugs harder to see by silently
 turning an invalid, stale, unsupported, or miswired path into a different
 execution path. When a required capability, generated artifact, command, host
@@ -40,11 +43,20 @@ API, feature, version, or backend is unavailable, fail visibly with a specific
 error instead of trying an older API, alternate backend, generated artifact,
 default behavior, or compatibility path.
 
-If an existing fallback path is encountered while changing related behavior,
-treat it as technical debt to remove or explicitly report, not as a pattern to
-extend. Compatibility paths are allowed only when the user explicitly requests a
-temporary migration bridge and the code names the migration boundary, the
-failure mode it preserves, and the condition for deleting it.
+If an existing fallback path is encountered during any work, report it
+explicitly. When it is in the area being changed, treat it as technical debt to
+remove or report rather than a pattern to extend. Compatibility paths are
+allowed only when the user explicitly requests a temporary migration bridge and
+the code names the migration boundary, the failure mode it preserves, and the
+condition for deleting it.
+
+Fallback pressure is a signal to stop and identify the missing required path,
+not a reason to make the system keep running by another route. Before coding
+around a missing parser case, runtime API, generated artifact, host command, or
+adapter capability, name which required contract is absent or broken. If that
+contract cannot be repaired in scope, report the blocker instead of adding a
+graceful degradation, guessed default, legacy route, or silent compatibility
+branch.
 
 ## Context Budget And Repository Shape
 
@@ -104,6 +116,30 @@ runtime default, or UI shortcut, do a short cause check:
 The goal is better aim, not slower motion. Use abstraction only until it changes
 what you will do next.
 
+A non-local correction is not a larger patch. It is a patch that changes the
+decision structure that let the visible symptom look acceptable. Before
+implementing, be able to state:
+
+- The mechanism that produced the bad state, not only the bad state itself.
+- The owner of the missing or broken contract: syntax, lowering, runtime,
+  session flow, component behavior, adapter, editor, documentation, or tests.
+- One sibling case that the same cause would also affect.
+- One boundary case where the proposed principle should not apply.
+- The concrete action this diagnosis forces: edit, delete, refuse, ask,
+  inspect, test, or document.
+
+If the cause cannot yet be stated at that level, do not continue into
+implementation as a way to discover it. Gather targeted evidence, read the
+owner-specific guidance, construct a minimal example, or ask the user one narrow
+question. Broad implementation is not a substitute for a missing diagnosis.
+
+Do not preserve an existing implementation, plan, section, generated artifact,
+or wording merely because effort has already gone into it. Existing work has no
+authority by itself. Keep it only if it still belongs to the identified owner
+and satisfies the corrected contract. When the diagnosis shows the current shape
+is at the wrong layer, delete, replace, or move it instead of polishing it in
+place.
+
 ## Boundary Discipline
 
 Many bugs in this project come from putting a useful default in the wrong scope.
@@ -123,6 +159,12 @@ the behavior.
 When a feature feels convenient, ask: "Would this behavior still be correct if
 the same syntax appeared in a different component or screen?" If not, the
 behavior is scoped too broadly.
+
+Boundary problems must be named before they are fixed. State which actor or
+layer has authority to decide the behavior, which layer is only consuming a
+contract, and where the behavior should fail if that contract is absent. Do not
+let an adapter, sample, current UI, or generated output become the de facto
+owner of semantics because it is the easiest place to patch.
 
 ## Defaults
 

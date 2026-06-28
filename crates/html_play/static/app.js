@@ -34,7 +34,7 @@ class PuzzleSoundRuntime {
     this.activeMusic = new Map();
     this.pausedMusic = new Map();
     this.visibilityPausedMusic = new Map();
-    this.missingGeneratorWarnings = new Set();
+    this.soundWarnings = new Set();
   }
 
   configure(sounds) {
@@ -81,19 +81,18 @@ class PuzzleSoundRuntime {
       return;
     }
     const api = window.PuzzleSoundGenerator || window.PuzzleSoundTools || null;
-    if (def.type === "puzzlescript" && api?.generatePuzzleScriptSoundEffect && api?.createPuzzleScriptSfxPlayer) {
-      const effect = api.generatePuzzleScriptSoundEffect(def.seed);
-      const player = api.createPuzzleScriptSfxPlayer(context, effect);
-      player.start();
-      return;
-    }
+    const volume = Number(def.volume ?? 1);
     if (api?.generateSoundEffect && api?.createSfxPlayer) {
-      const effect = api.generateSoundEffect(def.seed, { type: def.type || "random" });
-      const player = api.createSfxPlayer(context, effect);
-      player.start();
+      try {
+        const effect = api.generateSoundEffect(def.seed, { type: def.type || "random" });
+        const player = api.createSfxPlayer(context, effect, { volume });
+        player.start(context.currentTime);
+      } catch (error) {
+        this.warnSoundIssue(`sfx:${name}:${def.type || "random"}`, `Sound effect "${name}" was skipped: ${error?.message || error}`);
+      }
       return;
     }
-    this.warnMissingGenerator(`sfx:${name}`, `Sound effect "${name}" was skipped because the sound generator is unavailable.`);
+    this.warnSoundIssue(`sfx:${name}`, `Sound effect "${name}" was skipped because the sound generator is unavailable.`);
   }
 
   sfxDef(name) {
@@ -129,7 +128,7 @@ class PuzzleSoundRuntime {
       player.start(progress);
       return;
     }
-    this.warnMissingGenerator(`music:${name}`, `Music "${name}" was skipped because the sound generator is unavailable.`);
+    this.warnSoundIssue(`music:${name}`, `Music "${name}" was skipped because the sound generator is unavailable.`);
   }
 
   stopMusic(name = null) {
@@ -207,11 +206,11 @@ class PuzzleSoundRuntime {
     }
   }
 
-  warnMissingGenerator(key, message) {
-    if (this.missingGeneratorWarnings.has(key)) {
+  warnSoundIssue(key, message) {
+    if (this.soundWarnings.has(key)) {
       return;
     }
-    this.missingGeneratorWarnings.add(key);
+    this.soundWarnings.add(key);
     console.warn(message);
   }
 
@@ -234,6 +233,7 @@ const activeSolveRequests = new Map();
 let wasmSolverPromise = null;
 /* puzzle-host:optional:solver:end */
 const standardChoiceCursors = new Map();
+const sceneMenuCursors = new Map();
 let screenScaleSyncFrame = 0;
 let screenScaleSyncPasses = 0;
 const defaultSceneLogicalSize = { width: 4, height: 3 };
@@ -594,6 +594,7 @@ function notifySceneEditorPreview(requestId = sceneEditorPreview?.requestId || "
       __sceneDef: sceneDef,
       __sceneState: sceneEditorPreview.state || currentState?.sceneState || {},
       __standardChoiceCounter: { value: 0 },
+      __sceneMenuCounter: { value: 0 },
     }),
     error: sceneDef ? null : `Unknown scene: ${sceneName}`,
   }, "*");
@@ -650,6 +651,7 @@ function renderSceneEditorLayer(sceneDef, state) {
     __sceneState: layer.sceneState || layer.state || {},
     __sceneMenuLike: isMenuScene,
     __standardChoiceCounter: { value: 0 },
+    __sceneMenuCounter: { value: 0 },
     __componentPath: ["components"],
   };
   const layerEl = document.createElement("div");
@@ -661,6 +663,7 @@ function renderSceneEditorLayer(sceneDef, state) {
   renderSurfaceComponents(components, layerEl, scope);
   markSingleFrameComponentLayer(layerEl);
   screenView.append(layerEl);
+  syncSceneMenuSelection(layerEl);
   syncCleanControlGroupWidths(screenView);
   fitPuzzleFrameComponents(screenView);
 }
@@ -805,6 +808,7 @@ function renderSceneStack(state) {
       __sceneState: layer.sceneState || layer.state || {},
       __sceneMenuLike: isMenuScene,
       __standardChoiceCounter: { value: 0 },
+      __sceneMenuCounter: { value: 0 },
     };
 
     const layerEl = document.createElement("div");
@@ -818,6 +822,7 @@ function renderSceneStack(state) {
     markSingleFrameComponentLayer(layerEl);
     screenView.append(layerEl);
   }
+  syncSceneMenuSelection(screenView);
   syncCleanControlGroupWidths(screenView);
   fitPuzzleFrameComponents(screenView);
 }
@@ -907,6 +912,7 @@ function renderEmbeddedPuzzleComponent(layers) {
       __sceneState: {},
       __sceneMenuLike: false,
       __standardChoiceCounter: { value: 0 },
+      __sceneMenuCounter: { value: 0 },
     };
     screenView.classList.remove("has-scene-stack");
     screenView.append(renderPuzzle3Frame(puzzle3PreviewSurface.component, scope));
@@ -925,6 +931,7 @@ function renderEmbeddedPuzzleComponent(layers) {
     __sceneState: layer.sceneState || layer.state || {},
     __sceneMenuLike: false,
     __standardChoiceCounter: { value: 0 },
+    __sceneMenuCounter: { value: 0 },
   };
   screenView.classList.remove("has-scene-stack");
   screenView.append(renderPuzzle(component, scope));
@@ -1071,10 +1078,14 @@ function currentSceneHasLevelMenu() {
 function sceneInteractionProfile(scene = currentSceneDef(), options = {}) {
   const state = options.state || currentState || {};
   const layer = options.layer || currentSceneLayer(state, scene);
+  const hasMenuController = sceneHasComponent(scene, "level_menu") || sceneHasComponent(scene, "choice");
+  const menuFocusCells = hasMenuController ? sceneMenuFocusCells(scene) : [];
   const standardChoices = scene ? standardChoiceFocusCells(scene) : [];
   return {
     acceptsModelInput: sceneHasModelInputTarget(scene, state, layer),
     hasLevelMenuController: sceneHasComponent(scene, "level_menu"),
+    hasMenuController,
+    menuFocusCells,
     standardChoices,
   };
 }
@@ -1101,7 +1112,7 @@ function sceneChromeProfile(profile) {
   if (profile.acceptsModelInput) {
     return "play";
   }
-  if (profile.hasLevelMenuController || profile.standardChoices.length > 0) {
+  if (profile.menuFocusCells.length > 0) {
     return "menu";
   }
   return "passive";
@@ -1434,6 +1445,33 @@ function renderText(component, scope = {}) {
   return text;
 }
 
+function assignSceneMenuControl(control, scope = {}) {
+  if (!scope.__sceneMenuLike) {
+    return;
+  }
+  const counter = scope.__sceneMenuCounter || { value: 0 };
+  scope.__sceneMenuCounter = counter;
+  control.dataset.sceneMenuIndex = String(counter.value);
+  control.classList.add("scene-menu-control");
+  counter.value += 1;
+}
+
+function selectSceneMenuControl(control, scope = {}) {
+  if (!scope.__sceneMenuLike || !control?.dataset) {
+    return;
+  }
+  const index = Number(control.dataset.sceneMenuIndex);
+  if (!Number.isInteger(index)) {
+    return;
+  }
+  const sceneName = scope.__sceneDef?.name || currentSceneDef()?.name || "";
+  if (!sceneName) {
+    return;
+  }
+  sceneMenuCursors.set(sceneName, index);
+  syncSceneMenuSelection(control.closest(".scene-layer") || screenView);
+}
+
 function renderButton(component, scope = {}) {
   const button = document.createElement("button");
   button.type = "button";
@@ -1442,6 +1480,7 @@ function renderButton(component, scope = {}) {
     resolveLabel(component.label, scope) || sceneTitle(effectLabel(component.effect)),
   );
   annotateSceneEditorComponent(button, component, scope);
+  assignSceneMenuControl(button, scope);
   if (scope.__menuInstance && component.value) {
     const counter = scope.__menuButtonCounter || { value: 0 };
     const index = counter.value;
@@ -1451,6 +1490,7 @@ function renderButton(component, scope = {}) {
       if (selectSceneEditorComponent(component, scope)) {
         return;
       }
+      selectSceneMenuControl(button, scope);
       runActivationConfirm(button, () => sendCommand(`${scope.__menuInstance}.select:${index}`));
     });
   } else {
@@ -1458,6 +1498,7 @@ function renderButton(component, scope = {}) {
       if (selectSceneEditorComponent(component, scope)) {
         return;
       }
+      selectSceneMenuControl(button, scope);
       runEffectActivationConfirm(button, component.effect, scope);
     });
   }
@@ -1475,6 +1516,7 @@ function renderChoice(component, scope = {}) {
   );
   choice.classList.add("standard-choice");
   annotateSceneEditorComponent(choice, component, scope);
+  assignSceneMenuControl(choice, scope);
   const counter = scope.__standardChoiceCounter || { value: 0 };
   scope.__standardChoiceCounter = counter;
   const index = counter.value;
@@ -1485,6 +1527,7 @@ function renderChoice(component, scope = {}) {
     if (selectSceneEditorComponent(component, scope)) {
       return;
     }
+    selectSceneMenuControl(choice, scope);
     standardChoiceCursors.set(scope.__sceneDef.name, index);
     syncStandardChoiceSelection(choice, index);
     runEffectActivationConfirm(choice, component.effect, scope);
@@ -1499,6 +1542,59 @@ function syncStandardChoiceSelection(choice, selectedIndex) {
   root.querySelectorAll(".standard-choice").forEach((item) => {
     item.classList.toggle("is-selected", Number(item.dataset.standardChoiceIndex) === selectedIndex);
   });
+}
+
+function focusedSceneMenuLayer(root = screenView) {
+  if (root?.classList?.contains("scene-layer")) {
+    return root.classList.contains("is-focused") ? root : null;
+  }
+  return root?.querySelector?.(".scene-layer.is-focused") || null;
+}
+
+function sceneMenuControls(root = screenView) {
+  const layer = focusedSceneMenuLayer(root);
+  return layer ? [...layer.querySelectorAll(".scene-menu-control")] : [];
+}
+
+function sceneMenuCursor(scene = currentSceneDef(), controls = sceneMenuControls()) {
+  if (!scene || controls.length === 0) {
+    return 0;
+  }
+  const max = controls.length - 1;
+  const stored = Number(sceneMenuCursors.get(scene.name));
+  if (Number.isInteger(stored)) {
+    return Math.max(0, Math.min(max, stored));
+  }
+  const selected = controls.findIndex((control) => control.classList.contains("is-selected"));
+  return selected >= 0 ? selected : 0;
+}
+
+function syncSceneMenuSelection(root = screenView) {
+  const layer = focusedSceneMenuLayer(root);
+  if (!layer) {
+    return;
+  }
+  const scene = currentSceneDef();
+  const controls = sceneMenuControls(layer);
+  const cells = sceneMenuFocusCells(scene);
+  const count = Math.min(controls.length, cells.length);
+  if (!scene || count === 0) {
+    return;
+  }
+  const cursor = Math.max(0, Math.min(count - 1, sceneMenuCursor(scene, controls)));
+  sceneMenuCursors.set(scene.name, cursor);
+  controls.forEach((control, index) => {
+    const selected = index === cursor;
+    control.classList.toggle("is-selected", selected);
+    if (control.getAttribute("role") === "option") {
+      control.setAttribute("aria-selected", selected ? "true" : "false");
+    }
+  });
+}
+
+function selectedSceneMenuElement() {
+  return document.querySelector(".scene-layer.is-focused .scene-menu-control.is-selected")
+    || document.querySelector(".scene-menu-control.is-selected");
 }
 
 function setControlLabel(control, label) {
@@ -1958,6 +2054,22 @@ function resolveLabel(label, scope = {}) {
   return "";
 }
 
+function levelMenuCursorPosition(state, levels) {
+  const selected = Number(state?.selectedLevelIndex);
+  const levelCount = Number(state?.levelCount);
+  if (!Number.isInteger(selected) || !Number.isInteger(levelCount)) {
+    throw new Error("Level menu rendering requires selectedLevelIndex and levelCount in state snapshot.");
+  }
+  const levelPosition = levels.findIndex(({ index }) => index === selected);
+  if (levelPosition >= 0) {
+    return levelPosition;
+  }
+  if (selected >= levelCount) {
+    return levels.length + selected - levelCount;
+  }
+  return 0;
+}
+
 function renderLevelMenu(state, component = {}, scope = {}) {
   const list = document.createElement("ul");
   list.className = "view-list level-menu";
@@ -1970,12 +2082,15 @@ function renderLevelMenu(state, component = {}, scope = {}) {
     list.style.gridTemplateColumns = `repeat(${columns}, minmax(0, 1fr))`;
   }
   const levels = sceneLevelEntries(scope.__sceneDef);
+  const cursorPosition = levelMenuCursorPosition(state, levels);
   for (const [position, { level, index }] of levels.entries()) {
     const item = document.createElement("li");
+    const selected = position === cursorPosition;
     item.setAttribute("role", "option");
     item.dataset.levelMenuPosition = String(position);
-    item.classList.toggle("is-selected", index === state.selectedLevelIndex);
-    item.setAttribute("aria-selected", index === state.selectedLevelIndex ? "true" : "false");
+    assignSceneMenuControl(item, scope);
+    item.classList.toggle("is-selected", selected);
+    item.setAttribute("aria-selected", selected ? "true" : "false");
 
     if (component.showCleared) {
       const cleared = document.createElement("span");
@@ -1986,37 +2101,53 @@ function renderLevelMenu(state, component = {}, scope = {}) {
 
     const levelName = level?.name || `Level ${index + 1}`;
     item.append(...controlLabelNodes(component.showIndex ? `${position + 1}. ${levelName}` : levelName));
-    item.addEventListener("click", () => runActivationConfirm(item, () => sendCommand(`select:${position}`)));
+    item.addEventListener("click", () => {
+      selectSceneMenuControl(item, scope);
+      runActivationConfirm(item, () => sendCommand(`select:${position}`));
+    });
 
     list.append(item);
   }
   for (const [commandIndex, commandButton] of (component.buttons || []).entries()) {
     const position = levels.length + commandIndex;
-    const index = state.levelCount + commandIndex;
+    const selected = position === cursorPosition;
     const item = document.createElement("li");
     item.className = "level-menu-button";
     item.setAttribute("role", "option");
     item.dataset.levelMenuPosition = String(position);
-    item.classList.toggle("is-selected", index === state.selectedLevelIndex);
-    item.setAttribute("aria-selected", index === state.selectedLevelIndex ? "true" : "false");
+    assignSceneMenuControl(item, scope);
+    item.classList.toggle("is-selected", selected);
+    item.setAttribute("aria-selected", selected ? "true" : "false");
     if (component.showCleared) {
       const cleared = document.createElement("span");
       cleared.className = "level-clear-mark";
       item.append(cleared);
     }
     item.append(...controlLabelNodes(resolveLabel(commandButton.label)));
-    item.addEventListener("click", () => runActivationConfirm(item, () => sendCommand(`select:${position}`)));
+    item.addEventListener("click", () => {
+      selectSceneMenuControl(item, scope);
+      runActivationConfirm(item, () => sendCommand(`select:${position}`));
+    });
     list.append(item);
   }
   return list;
 }
 
 function scheduleSelectedLevelMenuScroll() {
-  requestAnimationFrame(scrollSelectedLevelMenuItemIntoView);
+  requestAnimationFrame(scrollSelectedSceneMenuItemIntoView);
 }
 
 function scrollSelectedLevelMenuItemIntoView() {
   const item = selectedLevelMenuElement();
+  scrollLevelMenuItemIntoView(item);
+}
+
+function scrollSelectedSceneMenuItemIntoView() {
+  const item = selectedSceneMenuElement();
+  scrollLevelMenuItemIntoView(item);
+}
+
+function scrollLevelMenuItemIntoView(item) {
   const list = item?.closest(".level-menu");
   if (!item || !list) {
     return;
@@ -2062,25 +2193,16 @@ function effectsForKey(event) {
   const keyTokens = rawKeyTokens(rawKey, rawCode);
   const scene = currentSceneDef();
   const profile = sceneInteractionProfile(scene);
+  const chrome = sceneChromeProfile(profile);
   const binding = scene?.keys?.find((binding) => binding.keys.some((candidate) => keyTokens.includes(candidate)));
   if (binding) {
     effects.push(binding.effect || { kind: "command", name: binding.command });
   }
 
-  if (profile.hasLevelMenuController) {
+  if (!binding && chrome === "menu" && profile.menuFocusCells.length > 0) {
     const menuInput = menuInputForKey(key, key, rawCode);
     if (menuInput) {
-      const command = {
-        up: "up",
-        down: "down",
-        left: "left",
-        right: "right",
-        enter: "select",
-        back: "back",
-      }[menuInput];
-      if (command) {
-        effects.push({ kind: "command", name: command });
-      }
+      effects.push({ kind: "scene_menu", input: menuInput });
     }
   }
 
@@ -2090,7 +2212,7 @@ function effectsForKey(event) {
     || (input.keys || []).some((candidate) => keyTokens.includes(candidate))
   );
   const standardInput = standardChoiceInputForKey(key, key, rawCode);
-  if (standardInput && profile.standardChoices.length > 0) {
+  if (!binding && chrome !== "menu" && standardInput && profile.standardChoices.length > 0) {
     effects.push({ kind: "standard_choice", input: standardInput });
   }
 
@@ -2268,6 +2390,10 @@ function sceneConditionValue(value) {
 }
 
 async function sendEffect(effect, scope = {}) {
+  if (effect?.kind === "scene_menu") {
+    await handleSceneMenuInput(effect.input);
+    return;
+  }
   if (effect?.kind === "standard_choice") {
     handleStandardChoiceInput(effect.input);
     return;
@@ -2425,7 +2551,15 @@ function puzzle3ControllerForTarget(target) {
 /* puzzle-host:optional:puzzle3:end */
 
 /* puzzle-host:optional:scene-editor:start */
+function isStandaloneEditorSessionCommand(command) {
+  const name = String(command || "").split(":", 1)[0];
+  return name === "undo" || name === "redo" || name === "restart" || name === "__continue_effects";
+}
+
 function applyStandaloneEditorInput(command) {
+  if (isStandaloneEditorSessionCommand(command)) {
+    return false;
+  }
   const acceptsEditorInput = standaloneRuntime?.editorPreviewInputEnabled
     || (standaloneRuntime?.editorPreviewSceneEnabled && currentState?.scene);
   if (!acceptsEditorInput || !standaloneRuntime?.inputIdsByName?.has(command)) {
@@ -2462,6 +2596,21 @@ function standardChoiceFocusCells(scene = currentSceneDef()) {
     return [];
   }
   const footprint = componentColumnFootprint(scene.components || [], {
+    focusKind: "choice",
+    scope: {
+      __sceneDef: scene,
+      __sceneState: currentState?.sceneState || {},
+    },
+  });
+  return footprint.cells.map((cell, index) => ({ ...cell, index }));
+}
+
+function sceneMenuFocusCells(scene = currentSceneDef()) {
+  if (!scene) {
+    return [];
+  }
+  const footprint = componentColumnFootprint(scene.components || [], {
+    focusKind: "menu",
     scope: {
       __sceneDef: scene,
       __sceneState: currentState?.sceneState || {},
@@ -2474,12 +2623,16 @@ function componentFootprint(component, context = {}) {
   if (!component) {
     return emptyFootprint();
   }
-  if (component.kind === "choice") {
+  const focusKind = context.focusKind || "choice";
+  if (component.kind === "choice" || (focusKind === "menu" && component.kind === "button")) {
     return {
       width: 1,
       height: 1,
-      cells: [{ x: 0, y: 0, component, scope: context.scope || {} }],
+      cells: [{ x: 0, y: 0, kind: "component", component, scope: context.scope || {} }],
     };
+  }
+  if (focusKind === "menu" && component.kind === "level_menu") {
+    return levelMenuFocusFootprint(component, context);
   }
   if (["title", "subtitle", "text", "frame", "puzzle", "puzzle3"].includes(component.kind)) {
     return emptyCellFootprint();
@@ -2511,6 +2664,31 @@ function componentFootprint(component, context = {}) {
     return stackColumnFootprints(footprints);
   }
   return emptyCellFootprint();
+}
+
+function levelMenuFocusFootprint(component, context = {}) {
+  const levels = sceneLevelEntries(context.scope?.__sceneDef);
+  const itemCount = levels.length + (component.buttons || []).length;
+  if (itemCount === 0) {
+    return emptyCellFootprint();
+  }
+  const columns = Math.max(1, Math.trunc(Number(component.columns || 1)) || 1);
+  const cells = [];
+  for (let position = 0; position < itemCount; position += 1) {
+    cells.push({
+      x: position % columns,
+      y: Math.floor(position / columns),
+      kind: "level_menu",
+      component,
+      position,
+      scope: context.scope || {},
+    });
+  }
+  return {
+    width: columns,
+    height: Math.ceil(itemCount / columns),
+    cells,
+  };
 }
 
 function stackColumnFootprints(footprints) {
@@ -2582,6 +2760,49 @@ function standardChoiceCursor(scene = currentSceneDef()) {
   const max = Math.max(0, cells.length - 1);
   const cursor = Number(standardChoiceCursors.get(scene?.name) || 0);
   return Math.max(0, Math.min(max, cursor));
+}
+
+async function handleSceneMenuInput(input) {
+  const scene = currentSceneDef();
+  const controls = sceneMenuControls();
+  const cells = sceneMenuFocusCells(scene);
+  const count = Math.min(controls.length, cells.length);
+  if (!scene || count === 0) {
+    return;
+  }
+  syncSceneMenuSelection();
+  const cursor = Math.max(0, Math.min(count - 1, sceneMenuCursor(scene, controls)));
+  if (["up", "down", "left", "right"].includes(input)) {
+    const next = sceneMenuDirectionalTarget(cells.slice(0, count), cursor, input);
+    if (next !== null) {
+      sceneMenuCursors.set(scene.name, next);
+      syncSceneMenuSelection();
+      scrollSelectedSceneMenuItemIntoView();
+    }
+    return;
+  }
+  if (input === "enter") {
+    activateSceneMenuCell(controls[cursor], cells[cursor]);
+    return;
+  }
+  if (input === "back") {
+    await sendCommand("back");
+  }
+}
+
+function activateSceneMenuCell(control, cell) {
+  if (!control || !cell) {
+    return;
+  }
+  if (cell.kind === "level_menu") {
+    runActivationConfirm(control, () => sendCommand(`select:${cell.position}`));
+    return;
+  }
+  runEffectActivationConfirm(control, cell.component?.effect || null, cell.scope || { __sceneDef: currentSceneDef() });
+}
+
+function sceneMenuDirectionalTarget(cells, cursor, direction) {
+  return standardChoiceDirectionalTarget(cells, cursor, direction);
 }
 
 function handleStandardChoiceInput(input) {
@@ -3005,6 +3226,7 @@ window.addEventListener("message", async (event) => {
     return;
   }
 
+  /* puzzle-host:optional:solver:start */
   if (event.data?.type === "PuzzleStudioSolve") {
     const requestId = event.data.requestId;
     const solveRequest = { cancelled: false };
@@ -3052,6 +3274,7 @@ window.addEventListener("message", async (event) => {
     }
     return;
   }
+  /* puzzle-host:optional:solver:end */
 
   if (event.data?.type === "PuzzleStudioKey") {
     if (currentState?.busy) {
@@ -3061,7 +3284,9 @@ window.addEventListener("message", async (event) => {
       key: String(event.data.key || ""),
       code: String(event.data.code || ""),
     };
+    /* puzzle-host:optional:puzzle3:start */
     broadcastPuzzle3Key(keyEvent);
+    /* puzzle-host:optional:puzzle3:end */
     for (const effect of effectsForKey(keyEvent)) {
       sendEffect(effect);
     }

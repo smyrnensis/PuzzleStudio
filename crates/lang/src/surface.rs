@@ -19,6 +19,7 @@ pub(crate) enum SurfaceSemanticKind {
     Condition,
     Scene,
     Asset,
+    Setting,
     Number,
     String,
 }

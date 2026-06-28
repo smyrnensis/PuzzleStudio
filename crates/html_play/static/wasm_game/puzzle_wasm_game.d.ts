@@ -25,6 +25,7 @@ export class WasmStandaloneSession {
     progress_save(): string;
     request_json(method: string, url: string): string;
     restore_progress_save(save_json: string): void;
+    set_current_state(state_json: string, level_index: number, materialize_level_start: boolean): void;
     snapshot(): string;
 }
 
@@ -50,6 +51,7 @@ export interface InitOutput {
     readonly wasmstandalonesession_progress_save: (a: number) => [number, number];
     readonly wasmstandalonesession_request_json: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
     readonly wasmstandalonesession_restore_progress_save: (a: number, b: number, c: number) => [number, number];
+    readonly wasmstandalonesession_set_current_state: (a: number, b: number, c: number, d: number, e: number) => [number, number];
     readonly wasmstandalonesession_snapshot: (a: number) => [number, number];
     readonly __wbindgen_externrefs: WebAssembly.Table;
     readonly __externref_table_dealloc: (a: number) => void;

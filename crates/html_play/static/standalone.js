@@ -81,8 +81,24 @@
       window.dispatchEvent(new CustomEvent("PuzzleStandaloneStateChanged"));
     }
 
-    setCurrentState() {
-      throw new Error("Standalone editor preview state requires the editor runtime.");
+    setCurrentState(state, options = {}) {
+      if (!this.sessionRuntime) {
+        throw new Error("Puzzle game WASM runtime is unavailable.");
+      }
+      if (typeof this.sessionRuntime.set_current_state !== "function") {
+        throw new Error("Puzzle game WASM runtime does not support editor preview state.");
+      }
+      const levelIndex = Number(options.levelIndex);
+      if (!Number.isInteger(levelIndex) || levelIndex < 0) {
+        throw new Error("Editor preview state requires a valid level index.");
+      }
+      this.sessionRuntime.set_current_state(
+        JSON.stringify(state),
+        levelIndex,
+        options.materializeLevelStart === true,
+      );
+      this.editorPreviewInputEnabled = options.acceptModelInput === true;
+      this.editorPreviewSceneEnabled = options.acceptSceneInput === true;
     }
 
     progressSaveVersion() {

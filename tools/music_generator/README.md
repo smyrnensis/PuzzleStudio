@@ -13,8 +13,9 @@ The browser demo has two switchable generator screens. The SFX screen focuses
 on one-shot game sound effects. A seed plus an optional type target expands into:
 
 - compact numeric seeds
-- common game SFX types: random, jump, pickup, hit, lock, explosion, laser,
-  powerup, select, error, and category-less `Wild`
+- user-facing volume control
+- common game SFX types: random, jump, pickup, hit, drag, lock, explosion,
+  laser, powerup, select, error, and category-less `Wild`
 - deterministic tone, noise, and transient layers
 - pitch sweeps and short tonal phrases
 - seeded synthesis profile for arcade, soft synth, bit-crush, and toy-speaker
@@ -43,8 +44,14 @@ plain numeric. `Random` means no type override: the seed hash deterministically
 resolves to one concrete game SFX type. Concrete types such as `pickup` and
 category-less `Wild` are explicit type overrides that should be written
 separately from the seed when the result is moved into PuzzleScript-style data.
-Music keeps loop controls such as height, bars, BPM, and volume on the Music screen only.
+Music keeps loop controls such as height, bars, and BPM on the Music screen only.
 Detailed synthesis choices stay seeded instead of becoming low-level knobs.
+
+`drag` is for pulling a box one cell across a floor. It should read as a
+successful movement sound, not impact: a short static-friction break, sustained
+low or low-mid floor rub, a low crate body layer, and a dull settle near the
+end. Drag variants should not use click transients, highpass noise, or melodic
+generic variation as their main character.
 
 Run the structural tests:
 

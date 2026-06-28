@@ -1,34 +1,40 @@
-title "Locked Room"
-
-theme puzzlescript
+title "Roomban"
 
 default_wait_time = 100ms
 
-theme clean {
+theme blueprint {
 accent_color #2f7d62
 background_color #f7f5ef
 text_color #1d2522
 }
 
+animation {
+	tween {
+		duration = 30ms
+	}
+}
+
 sounds {
-sfx push seed=push type=hit
-sfx bump seed=bump type=hit
+sfx push seed=301193 type=hit volume=0.3
+sfx bump seed=945816 type=hit volume=0.3
 sfx clear seed=clear type=jump
 sfx locked seed=locked type=lock
 sfx fall seed=fall type=hit
-music locked_room seed=locked_room bars=16 height=0.62 bpm=100 volume=0.50
+music locked_room seed=LockedRoom bars=64 height=0.00 bpm=90 volume=0.69
 }
 
 puzzle sokoban {
 
 tags {
-state = movable stack
+state = open close
 num = 0...5
 }
 
-sounds {
-// move Box:* -> sfx push
-// cantmove Box:* -> sfx bump
+map rotate directions {
+up -> right
+right -> down
+down -> left
+left -> up
 }
 
 scratch {
@@ -37,23 +43,27 @@ checked
 
 layers {
 @Floor
-@Check
-room = Room Open Locked
+@Lock
+room = Room Room:state
+Carpet
 Crack Hole
-Goal:num
+Goal:state Door:state
+GoalCount:num
+Key
 solid = Player Box:state Pull:state Wall Gate:num
 @Count:num
-OnPlayer CanEnter
-Debug
+OnPlayer
+each @LockedFrame:directions @LockedCorner:directions
+@Debug
 }
 
 groups {
-separate = Box:* Pull:* Wall Gate:*
-fixed = Box:stack Pull:stack Wall Gate:*
-cantgo = Box:stack Pull:* Wall Gate:*
-cantpush = Box:* Pull:* Wall Gate:*
-accessible = OnPlayer CanEnter
+separate = Box:* Pull:* Wall Gate:* Hole
+fixed = Box:close Pull:close Wall Gate:*
+cantgo = Box:* Pull:* Wall Gate:*
+cantpush = Box:* Pull:* Wall Gate:* Carpet
 heavy = Box:* Pull:* Player
+nonplayer = Box:* Pull:*
 }
 
 var locked_room_count = 0
@@ -67,59 +77,78 @@ routine check_OnPlayer {
 [ OnPlayer ] -> [  ]
 once [ Player ] -> [ Player OnPlayer ]
 repeat {
-[ accessible | no accessible no separate ] -> [ accessible | accessible ] 
-// [ accessible | Box:movable | no cantpush ] -> [ accessible | Box:movable CanEnter |  ]
+[ OnPlayer | no OnPlayer no separate ] -> [ OnPlayer | OnPlayer ] 
+// [ accessible | Box:open | no cantpush ] -> [ accessible | Box:open CanEnter |  ]
 }
 }
 
 // routine check_stacked {
-// [ fixed |  ;  Box:movable | fixed ] -> [ fixed |  ;  Box:stack | fixed ]
-// [ Box:movable | Box:movable ; cantpush | cantpush ] -> [ Box:stack | Box:stack ; cantpush | cantpush ]
+// [ fixed |  ;  Box:open | fixed ] -> [ fixed |  ;  Box:close | fixed ]
+// [ Box:open | Box:open ; cantpush | cantpush ] -> [ Box:close | Box:close ; cantpush | cantpush ]
 // }
 
 // routine check_stacked {
-// [ *:stack ] -> [ *:movable ]
+// [ *:close ] -> [ *:open ]
 // repeat {
-// [ OnPlayer | Box:movable{no checked} | no fixed ] -> [ OnPlayer | Box:movable{checked} |  ]
+// [ OnPlayer | Box:open{no checked} | no fixed ] -> [ OnPlayer | Box:open{checked} |  ]
 
-// [ no fixed | OnPlayer | Pull:movable{no checked} ] -> [  | OnPlayer | Pull:movable{checked} ]
-// [ no cantpush | Box:movable | OnPlayer | Pull:movable{no checked} ] -> [ | = | = | Pull:movable{checked} ]
+// [ no fixed | OnPlayer | Pull:open{no checked} ] -> [  | OnPlayer | Pull:open{checked} ]
+// [ no cantpush | Box:open | OnPlayer | Pull:open{no checked} ] -> [ | = | = | Pull:open{checked} ]
 
-// [ *:movable{no checked} ] -> [ *:stack ]
-// [ *:movable{checked} ] -> [ *:movable ]
+// [ *:open{no checked} ] -> [ *:close ]
+// [ *:open{checked} ] -> [ *:open ]
 // }
 // }
 
 routine check_stacked {
-[ *:stack ] -> [ *:movable ]
-[ OnPlayer | Box:movable{no checked} | no cantpush ] -> [ OnPlayer | Box:movable{checked} |  ]
+for obj in Box Pull {
+[ obj:close ] -> [ obj:open ]
+}
+[ OnPlayer | Box:open{no checked} | no cantpush ] -> [ OnPlayer | Box:open{checked} |  ]
 
-[ no cantgo | OnPlayer | Pull:movable{no checked} ] -> [  | OnPlayer | Pull:movable{checked} ]
-[ no cantpush | Box:movable | OnPlayer | Pull:movable{no checked} ] -> [ | = | = | Pull:movable{checked} ]
+[ no cantgo | OnPlayer | Pull:open{no checked} ] -> [  | OnPlayer | Pull:open{checked} ]
+[ no cantpush | Box:open | OnPlayer | Pull:open{no checked} ] -> [ | = | = | Pull:open{checked} ]
 
-[ *:movable{no checked} ] -> [ *:stack ]
-[ *:movable{checked} ] -> [ *:movable ]
+for obj in Box Pull {
+[ obj:open{no checked} ] -> [ obj:close ]
+[ obj:open{checked} ] -> [ obj:open ]
+}
 }
 
 routine compute_locked_rooms {
-[ no Locked ] -> [ @Check ]
+once_all [ Room:close no separate ] -> [ Room:close @Lock ]
 locked_room_count = 0
 [ room ] -> [  ]
 once_all [ no separate ] -> [ Room ]
-[ *:movable | Room ] -> [ *:movable | Open ]
-[ Open | Room ] -> [ Open | Open ] 
-repeat {
-	once [ Room ] -> [ Locked ] locked_room_count += 1
-	[ Locked | Room ] -> [ Locked | Locked ]
+for obj in Box Pull {
+[ obj:open | Room ] -> [ obj:open | Room:open ]
 }
-[ Locked @Check ] -> [ = ] sfx locked
-[ @Check ] -> [  ]
-[ @Count:* ] -> [ @Count:locked_room_count ]
+[ OnPlayer Crack Room ] -> [ OnPlayer Crack Room:open ]
+[ Room:open | Room ] -> [ Room:open | Room:open ] 
+repeat {
+	once [ Room ] -> [ Room:close ] locked_room_count += 1
+	[ Room:close | Room ] -> [ Room:close | Room:close ]
+}
+once [ Room:close no @Lock ] -> [ Room:close ] sfx locked
+once [ Room:open @Lock ] -> [ = ] sfx locked
+[ @Lock ] -> [  ]
+}
+
+routine @display_locked_frame {
+[ @LockedFrame:* ] -> [  ] 
+[ @LockedCorner:* ] -> [  ]
+[ Room:close | no Room:close ] 
+-> [ Room:close @LockedFrame:> |  ]
+[ Room:close | @LockedFrame:v ; @LockedFrame:> |  ] 
+-> [ Room:close @LockedCorner:> | @LockedFrame:v ; @LockedFrame:> |  ] 
 }
 
 routine move {
-[ > solid | no solid ] -> [  | solid ]
-[ > solid ] -> [ solid ]
+repeat {
+[ > nonplayer | no solid ] -> [  | nonplayer ] sfx push
+[ > Player | no solid ] -> [  | Player ]
+}
+[ > solid ] -> [ solid ] sfx bump
 }
 
 routine open_gate {
@@ -137,11 +166,11 @@ for n in 1...5 {
 
 routine check_win {
 for n in 1...5 {
-	if some([Goal:n{checked}]) {
-		if locked_room_count >= n -> win
+	if locked_room_count == n {
+		[ Goal:close GoalCount:n ] -> [ Goal:open GoalCount:n ]
 	}
 }
-[ Goal:*{checked} ] -> [ Goal:* ]
+[ Player Goal:open ] -> win
 }
 
 routine check_crack {
@@ -153,7 +182,8 @@ routine change_crack {
 }
 
 routine fall {
-[ Hole heavy ] -> [ Hole ] sfx fall
+[ Hole heavy ] -> wait 0.1s
+[ Hole heavy ] -> [ ] sfx fall
 }
 
 on_level_start {
@@ -161,25 +191,31 @@ on_level_start {
 check_OnPlayer
 check_stacked
 locked_room_count = 0
-[ Player ] -> [ Player @Count:0 ]
 compute_locked_rooms
+@display_locked_frame
 }
 
 rules {
+check_crack
+
 input [ Player ] -> [ > Player ]
 
 [ > Player | Gate:* ] -> [ > Player | Gate:*{checked} ] open_gate
 
-[ > Player | Box:movable ] -> [ > Player | > Box:movable ]
-[ < Player | Pull:movable ] -> [ < Player | < Pull:movable ]
-
+[ > Player | Box:open ] -> [ > Player | > Box:open ]
+[ < Player | Pull:open ] -> [ < Player | < Pull:open ]
+[ > nonplayer | Carpet ] -> [ nonplayer | Carpet ] sfx bump
 move
-[ @Count:* | Player ] -> [  | @Count:* Player ]
+
+fall
+change_crack
+
+
 check_OnPlayer
 check_stacked
 compute_locked_rooms
-
-[ Player Goal:* ] -> [ Player Goal:*{checked} ] check_win
+@display_locked_frame
+check_win
 }
 
 on_level_clear {
@@ -191,14 +227,624 @@ next_level
 on_last_level_clear {
 sfx clear
 wait 0.35s
-message final_message
+message "Thanks for playing!"
 stop_music locked_room
 goto level_select
 }
 }
 
-import "locked_levels.puzzle"
-import "locked_sprite.puzzle"
+levels {
+legend {
+. = empty
+P = Player
+B = Box:open
+C = Pull:open
+$ = Carpet
+# = Wall
+* = Crack
+1 = Goal:close GoalCount:1
+2 = Goal:close GoalCount:2
+3 = Goal:close GoalCount:3
+4 = Goal:close GoalCount:4
+a = Gate:1
+b = Gate:2
+}
+
+// #######
+// #######
+// #######
+// #1PB..#
+// #######
+// #######
+// #######
+
+// ######
+// ######
+// #..B.#
+// #1P..#
+// #..B.#
+// ######
+// ######
+
+// #########
+// #.....#.#
+// #.3.B...#
+// #..P..###
+// ##.##.###
+// ##.#...##
+// #########
+
+// ########
+// #......#
+// #.2B.B.#
+// #......#
+// #.PB.B.#
+// #......#
+// ########
+
+// #########
+// #...#...#
+// #.3...B.#
+// #...#...#
+// ##.###.##
+// #...#...#
+// #.B...B.#
+// #...#..P#
+// #########
+
+// ######
+// #$$$$#
+// #..B.#
+// #1P*.#
+// #..B.#
+// #$$$$#
+// ######
+
+// ######
+// #....#
+// #..B.#
+// #1P*.#
+// #..B.#
+// #....#
+// ######
+
+
+// #########
+// #.......#
+// #.PBBBB.#
+// #4......#
+// ##.####.#
+// #..####.#
+// #.......#
+// #########
+
+// #######
+// ###..1#
+// ###...#
+// ###...#
+// #.P.#.#
+// #.C...#
+// #.....#
+// #######
+
+// #######
+// #.....#
+// #..#..#
+// #1P#..#
+// #.BC..#
+// #.....#
+// #######
+
+// #######
+// #.....#
+// #..C..#
+// #.BP..#
+// #1##.##
+// #.##.##
+// #....##
+// #######
+
+// ########
+// #......#
+// #.PBC..#
+// #.....##
+// #.###.##
+// #.###.##
+// #.###.2#
+// #.....##
+// ########
+
+#######
+#....##
+#.CC.##
+#.#..##
+#..BP.#
+###..3#
+#######
+
+#######
+#....##
+#.CC2##
+#.#..##
+#..BP.#
+###...#
+#######
+
+#######
+#....##
+#...C##
+#.#1B##
+#..PC.#
+###...#
+#######
+
+
+// #######
+// #....##
+// #.C.C##
+// #.#.B.#
+// #.P...#
+// ##...1#
+// #######
+
+// #######
+// #.....#
+// #..#..#
+// #2P#..#
+// #.BC..#
+// #.....#
+// #######
+}
+
+sprites {
+
+shapes {
+Box
+.....................
+...000000000000000...
+..00000000000000000..
+.0000111111111100000.
+.0001111111111100000.
+.0011111111111000000.
+.0011111111110001100.
+.0011111111100011100.
+.0011111111000111100.
+.0011111110001111100.
+.0011111100011111100.
+.0011111000111111100.
+.0011110001111111100.
+.0011100011111111100.
+.0011000111111111100.
+.0000001111111111100.
+.0000011111111111000.
+.0000011111111110000.
+..00000000000000000..
+...000000000000000...
+.....................
+
+Pull
+000000000000000000000
+000000000000000000000
+000000000000000000000
+000111111111111111000
+000111111111111111000
+000111111111111111000
+000111111111111111000
+000111111111111111000
+000111111111111111000
+000111111111111111000
+000111111111111111000
+000111111111111111000
+000111111111111111000
+000111111111111111000
+000111111111111111000
+000111111111111111000
+000111111111111111000
+000111111111111111000
+000000000000000000000
+000000000000000000000
+000000000000000000000
+}
+
+colors {
+Gate_color_1 = #921e87
+Gate_color_2 = #c2c3c7
+Count_color = #e5cf29f2
+Player_color = #d85cff
+Box_color = #e6a728
+Pull_color = #3be628
+Stacked_color = #97702c
+Goal_color_2 = #6d4028
+Goal_color_3 = #c2c3c7
+Box_color_2 = #ac7e22
+GoalCount = #acacac
+}
+
+@Debug
+#f00
+
+@Floor
+#8b8b8b
+
+Wall
+#454545
+
+// Room:open
+// #008751c2
+
+// OnPlayer
+// #0059ff85
+
+Room:close
+#95262655
+
+Player
+Player_color
+.......
+..000..
+..000..
+.00000.
+..000..
+..0.0..
+.......
+
+Key
+#ffec27
+.........
+.........
+.000.....
+.0.0.....
+.0.00000.
+.0.0.0.0.
+.000.0.0.
+.........
+.........
+
+Carpet
+#000000
+.0.0.0.
+0.0.0.0
+.0.0.0.
+0.0.0.0
+.0.0.0.
+0.0.0.0
+.0.0.0.
+
+Crack
+#2cc511
+.....
+..0..
+.000.
+..0..
+.....
+
+Hole
+#000
+
+Box:open
+#45667d #2f485d
+shape Box
+
+Box:close
+#34444e #262f38
+shape Box
+
+Pull:open
+Pull_color #008751
+shape Pull
+
+Pull:close {
+Stacked_color #008751
+shape Pull
+}
+
+@LockedFrame:up
+#000000
+.....................
+.0.00.00.00.00.00.00.
+.....................
+.....................
+.....................
+.....................
+.....................
+.....................
+.....................
+.....................
+.....................
+.....................
+.....................
+.....................
+.....................
+.....................
+.....................
+.....................
+.....................
+.....................
+.....................
+
+@LockedFrame:right
+#000000
+.....................
+...................0.
+.....................
+...................0.
+...................0.
+.....................
+...................0.
+...................0.
+.....................
+...................0.
+...................0.
+.....................
+...................0.
+...................0.
+.....................
+...................0.
+...................0.
+.....................
+...................0.
+...................0.
+.....................
+
+@LockedFrame:down
+#000000
+.....................
+.....................
+.....................
+.....................
+.....................
+.....................
+.....................
+.....................
+.....................
+.....................
+.....................
+.....................
+.....................
+.....................
+.....................
+.....................
+.....................
+.....................
+.....................
+.00.00.00.00.00.00.0.
+.....................
+
+@LockedFrame:left
+#000000
+.....................
+.0...................
+.0...................
+.....................
+.0...................
+.0...................
+.....................
+.0...................
+.0...................
+.....................
+.0...................
+.0...................
+.....................
+.0...................
+.0...................
+.....................
+.0...................
+.0...................
+.....................
+.0...................
+.....................
+
+Gate:1
+Gate_color_1 Gate_color_2
+.......
+.00000.
+.00000.
+.00100.
+.00000.
+.00000.
+.......
+
+Gate:2
+Gate_color_1 Gate_color_2
+.......
+.00000.
+.00000.
+.01010.
+.00000.
+.00000.
+.......
+
+Gate:3
+Gate_color_1 Gate_color_2
+.......
+.00000.
+.00100.
+.00000.
+.01010.
+.00000.
+.......
+
+Gate:4
+Gate_color_1 Gate_color_2
+.......
+.00000.
+.01010.
+.00000.
+.01010.
+.00000.
+.......
+
+Gate:5
+Gate_color_1 Gate_color_2
+.......
+.00000.
+.01010.
+.00100.
+.01010.
+.00000.
+.......
+
+GoalCount:1
+GoalCount
+....................
+....................
+....................
+....................
+....................
+....................
+..........00........
+..........00........
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+
+GoalCount:2
+GoalCount
+....................
+....................
+....................
+....................
+....................
+....................
+........00..00......
+........00..00......
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+
+GoalCount:3
+GoalCount
+....................
+....................
+....................
+....................
+..........00........
+..........00........
+....................
+....................
+........00..00......
+........00..00......
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+
+GoalCount:4
+GoalCount
+....................
+....................
+....................
+....................
+........00..00......
+........00..00......
+....................
+....................
+........00..00......
+........00..00......
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+
+GoalCount:5
+GoalCount
+....................
+....................
+....................
+....................
+........00..00......
+........00..00......
+..........00........
+..........00........
+........00..00......
+........00..00......
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+
+Goal:open
+#d85cff Goal_color_2
+....................
+....................
+...11000000000000...
+...11000000000000...
+...11000000000000...
+...11000000000000...
+...11000000000000...
+...11000000000000...
+...11000000000000...
+...11000000000000...
+...11000000000000...
+...11000000000000...
+...11...............
+...11...............
+...11...............
+...11...............
+...11...............
+...11...............
+....................
+....................
+
+Goal:close
+#7b5488 #6d4028
+....................
+....................
+...11000000000000...
+...11000000000000...
+...11000000000000...
+...11000000000000...
+...11000000000000...
+...11000000000000...
+...11000000000000...
+...11000000000000...
+...11000000000000...
+...11000000000000...
+...11...............
+...11...............
+...11...............
+...11...............
+...11...............
+...11...............
+....................
+....................
+}
 
 
 scene title {
@@ -245,7 +891,7 @@ scene level_select {
 			layout {
 				text "Select a level"
 				level_menu
-				button "Back" -> goto title
+				choice "Back" -> goto title
 			}
 		keys {
 			q Escape -> goto title

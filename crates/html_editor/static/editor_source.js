@@ -584,6 +584,40 @@ function sameSourceEditorSnapshot(a, b) {
     && a.selectionDirection === b.selectionDirection;
 }
 
+function sourceChangedRange(before, after) {
+  const beforeText = String(before || "");
+  const afterText = String(after || "");
+  let prefix = 0;
+  const maxPrefix = Math.min(beforeText.length, afterText.length);
+  while (prefix < maxPrefix && beforeText[prefix] === afterText[prefix]) {
+    prefix += 1;
+  }
+
+  let suffix = 0;
+  const maxSuffix = Math.min(beforeText.length - prefix, afterText.length - prefix);
+  while (
+    suffix < maxSuffix
+    && beforeText[beforeText.length - suffix - 1] === afterText[afterText.length - suffix - 1]
+  ) {
+    suffix += 1;
+  }
+
+  return {
+    start: prefix,
+    end: beforeText.length - suffix,
+  };
+}
+
+function sourceSnapshotWithChangedRangeSelection(snapshot, nextValue) {
+  const range = sourceChangedRange(snapshot?.value || "", nextValue || "");
+  return {
+    ...snapshot,
+    selectionStart: range.start,
+    selectionEnd: range.end,
+    selectionDirection: range.start === range.end ? "none" : "forward",
+  };
+}
+
 function resetSourceUndoHistory() {
   sourceUndoStack = [sourceEditorSnapshot()];
   sourceRedoStack = [];
@@ -605,6 +639,10 @@ function recordSourceUndoSnapshot() {
     return;
   }
   const snapshot = sourceEditorSnapshot();
+  const previousSnapshot = sourceUndoStack.at(-1);
+  if (previousSnapshot && previousSnapshot.value !== snapshot.value) {
+    sourceUndoStack[sourceUndoStack.length - 1] = sourceSnapshotWithChangedRangeSelection(previousSnapshot, snapshot.value);
+  }
   if (sameSourceEditorSnapshot(sourceUndoStack.at(-1), snapshot)) {
     return;
   }
@@ -675,11 +713,25 @@ function handleSourceUndoShortcut(event) {
 
 function setSourceEditorValue(value, options = {}) {
   const nextValue = value || "";
-  const preservesUndo = options.preserveUndoOnSameValue === true && sourceEditorDocumentValue() === nextValue;
+  const currentValue = sourceEditorDocumentValue();
+  const preservesUndo = options.preserveUndoOnSameValue === true && currentValue === nextValue;
+  const preserveCurrentHighlight = options.preserveHighlight !== false;
+  const sameUnfoldedValue = sourceFoldBaseSource === null && currentValue === nextValue;
+  if (sameUnfoldedValue && preserveCurrentHighlight && sourceHighlightSource === nextValue) {
+    updateSourceMeta();
+    if (preservesUndo) {
+      ensureSourceUndoHistory();
+    } else if (options.resetUndo === false) {
+      recordSourceUndoSnapshot();
+    } else {
+      resetSourceUndoHistory();
+    }
+    return;
+  }
   resetSourceFoldingState();
   sourceEditor.value = nextValue;
   updateSourceMeta();
-  scheduleSourceHighlight(true, { preserveCurrent: Boolean(options.preserveHighlight) });
+  scheduleSourceHighlight(true, { preserveCurrent: preserveCurrentHighlight });
   if (preservesUndo) {
     ensureSourceUndoHistory();
   } else if (options.resetUndo === false) {
@@ -1253,11 +1305,7 @@ async function showSourceCompletions(options = {}) {
     if (requestId !== sourceCompletionRequestId || source !== sourceEditor.value || cursor !== sourceEditor.selectionStart) {
       return false;
     }
-    const items = filterSourceCompletionsForCurrentRange(
-      filterSourceCompletionsForDocument(list?.items || [], document),
-      list,
-      source,
-    );
+    const items = filterSourceCompletionsForDocument(list?.items || [], document);
     if (!items.length) {
       hideSourceCompletions();
       return false;
@@ -1308,16 +1356,6 @@ function filterSourceCompletionsForDocument(items, document) {
     return items;
   }
   return items.filter((item) => !hidden.has(item?.label || ""));
-}
-
-function filterSourceCompletionsForCurrentRange(items, list, source) {
-  const replaceStart = Math.max(0, Math.min(source.length, Number(list?.replaceStart) || 0));
-  const replaceEnd = Math.max(replaceStart, Math.min(source.length, Number(list?.replaceEnd) || 0));
-  const current = source.slice(replaceStart, replaceEnd);
-  if (!current) {
-    return items;
-  }
-  return items.filter((item) => (item?.insertText || item?.label || "") !== current);
 }
 
 function suggestSourceCompletionsFromEditorContext(source, cursor, document) {
@@ -1590,6 +1628,9 @@ function positionSourceCompletionPopover() {
 }
 
 function sourceFindShortcutRequested(event) {
+  if (sourceBlockSelectionOwnsControlShortcut(event)) {
+    return false;
+  }
   const modifier = (event.metaKey && !event.ctrlKey) || (event.ctrlKey && !event.metaKey);
   if (!modifier || event.shiftKey) {
     return false;
@@ -2622,6 +2663,8 @@ sourceEditor.addEventListener("mouseleave", handleSourceImportEditorMouseLeave);
 sourceEditor.addEventListener("pointermove", updateSourceBlockSelectionDrag);
 sourceEditor.addEventListener("pointerup", finishSourceBlockSelectionDrag);
 sourceEditor.addEventListener("pointercancel", finishSourceBlockSelectionDrag);
+document.addEventListener("pointerup", endSourceNativeSelectionDrag);
+document.addEventListener("pointercancel", endSourceNativeSelectionDrag);
 sourceEditor.addEventListener("keyup", (event) => {
   if (event.key === "Escape") {
     hideSourceColorEditor();
@@ -2650,6 +2693,7 @@ sourceEditor.addEventListener("focus", () => {
 });
 sourceEditor.addEventListener("blur", () => {
   clearSourceCompositionPreview();
+  endSourceNativeSelectionDrag();
   renderSourceBlockSelection();
 });
 document.addEventListener("selectionchange", () => {
@@ -3364,14 +3408,20 @@ function handleSourceRewriteRhsPatternAssist(event) {
   const lineStart = source.lastIndexOf("\n", cursor - 1) + 1;
   const lineEnd = source.indexOf("\n", cursor);
   const safeLineEnd = lineEnd < 0 ? source.length : lineEnd;
-  const lineBeforeCursor = source.slice(lineStart, cursor);
-  const lineAfterCursor = source.slice(cursor, safeLineEnd);
-  const codeBeforeCursor = stripSourceImportLineComment(lineBeforeCursor);
+  const line = source.slice(lineStart, safeLineEnd);
+  const cursorColumn = cursor - lineStart;
+  const code = stripSourceImportLineComment(line);
+  if (cursorColumn > code.length) {
+    return false;
+  }
+  const statementBounds = sourceRewriteStatementBounds(code, cursorColumn);
+  const codeBeforeCursor = code.slice(statementBounds.start, cursorColumn);
   const arrow = codeBeforeCursor.lastIndexOf("->");
   if (arrow < 0 || !/^[\t ]*$/.test(codeBeforeCursor.slice(arrow + 2))) {
     return false;
   }
-  if (stripSourceImportLineComment(lineAfterCursor).trim()) {
+  const statementEnd = statementBounds.end;
+  if (code.slice(cursorColumn, statementEnd).trim()) {
     return false;
   }
   const pattern = sourceRewritePatternBeforeArrow(codeBeforeCursor.slice(0, arrow));
@@ -3390,6 +3440,31 @@ function handleSourceRewriteRhsPatternAssist(event) {
   }
   sourceEditorContentChanged();
   return true;
+}
+
+function sourceRewriteStatementBounds(code, cursorColumn) {
+  let start = 0;
+  let squareDepth = 0;
+  let parenDepth = 0;
+  for (let index = 0; index < code.length; index += 1) {
+    const char = code[index];
+    if (char === "[") {
+      squareDepth += 1;
+    } else if (char === "]") {
+      squareDepth = Math.max(0, squareDepth - 1);
+    } else if (char === "(") {
+      parenDepth += 1;
+    } else if (char === ")") {
+      parenDepth = Math.max(0, parenDepth - 1);
+    } else if (char === ";" && squareDepth === 0 && parenDepth === 0) {
+      if (index < cursorColumn) {
+        start = index + 1;
+      } else {
+        return { start, end: index };
+      }
+    }
+  }
+  return { start, end: code.length };
 }
 
 function sourceRewritePatternBeforeArrow(lineBeforeArrow) {
@@ -3611,19 +3686,25 @@ function handleSourceRewritePatternTab(event) {
   const safeLineEnd = lineEnd < 0 ? source.length : lineEnd;
   const line = source.slice(lineStart, safeLineEnd);
   const code = stripSourceImportLineComment(line);
-  const arrow = code.indexOf("->");
+  const cursorColumn = cursor - lineStart;
+  if (cursorColumn > code.length) {
+    return false;
+  }
+  const statementBounds = sourceRewriteStatementBounds(code, cursorColumn);
+  const statement = code.slice(statementBounds.start, statementBounds.end);
+  const arrow = statement.indexOf("->");
   if (arrow < 0) {
     return false;
   }
-  const rhsStart = lineStart + arrow + 2;
-  const rhsEnd = lineStart + code.length;
+  const rhsStart = lineStart + statementBounds.start + arrow + 2;
+  const rhsEnd = lineStart + statementBounds.end;
   if (cursor < rhsStart || cursor > rhsEnd) {
     return false;
   }
   const rhsTextBeforeCursor = source.slice(rhsStart, cursor);
   const rhsTextAfterCursor = source.slice(cursor, rhsEnd);
   if (!event.shiftKey && /^[\t ]*$/.test(rhsTextBeforeCursor) && /^[\t ]*$/.test(rhsTextAfterCursor)) {
-    const lhsPattern = sourceRewritePatternBeforeArrow(code.slice(0, arrow));
+    const lhsPattern = sourceRewritePatternBeforeArrow(statement.slice(0, arrow));
     if (lhsPattern) {
       event.preventDefault();
       event.stopPropagation();
@@ -4004,12 +4085,31 @@ function insertSourceLineAroundSelection(direction) {
   replaceSourceValue(rawLines.join("\n"), offset, offset);
 }
 
+function beginSourceNativeSelectionDrag(event) {
+  if (
+    event.button !== 0
+    || event.altKey
+    || event.ctrlKey
+    || event.metaKey
+    || !isTextDocument(activeDocument())
+  ) {
+    return;
+  }
+  sourceEditorWrap?.classList.add("is-source-selection-dragging");
+}
+
+function endSourceNativeSelectionDrag() {
+  sourceEditorWrap?.classList.remove("is-source-selection-dragging");
+}
+
 function handleSourceBlockSelectionPointerDown(event) {
   if (sourceEditorBlockSelection && !event.altKey) {
     clearSourceBlockSelection();
+    beginSourceNativeSelectionDrag(event);
     return;
   }
   if (!event.altKey || event.ctrlKey || event.metaKey || !isTextDocument(activeDocument())) {
+    beginSourceNativeSelectionDrag(event);
     return;
   }
   const anchor = sourceEditorPositionFromPoint(event.clientX, event.clientY, { preserveColumn: true });
@@ -4538,6 +4638,7 @@ function renderSourceBlockSelection() {
     return;
   }
   const ranges = sourceEditorBlockSelection?.ranges || [];
+  sourceEditor?.classList.toggle("has-source-block-selection", ranges.length > 0);
   sourceBlockSelectionLayer.replaceChildren();
   if (ranges.length) {
     for (const range of ranges) {
@@ -4663,6 +4764,7 @@ function sourceBlockCaretRectForRange(range) {
 
 function clearSourceBlockSelection() {
   sourceEditorBlockSelection = null;
+  sourceEditor?.classList.remove("has-source-block-selection");
   if (sourceBlockSelectionLayer) {
     sourceBlockSelectionLayer.hidden = true;
     sourceBlockSelectionLayer.replaceChildren();
@@ -4678,6 +4780,95 @@ function sourceBlockSelectionText() {
     .join("\n");
 }
 
+function moveSourceBlockSelectionHorizontal(delta, extend = false) {
+  const ranges = sourceEditorBlockSelection?.ranges || [];
+  if (!ranges.length) {
+    return false;
+  }
+  const direction = delta < 0 ? -1 : 1;
+  const firstLine = Math.min(...ranges.map((range) => range.lineIndex));
+  const lastLine = Math.max(...ranges.map((range) => range.lineIndex));
+  let anchor = null;
+  let focus = null;
+
+  if (extend) {
+    anchor = sourceEditorBlockSelection.anchor || {
+      lineIndex: firstLine,
+      column: ranges[0]?.startCol || 0,
+    };
+    const previousFocus = sourceEditorBlockSelection.focus || {
+      lineIndex: lastLine,
+      column: direction > 0 ? ranges.at(-1)?.endCol || 0 : ranges.at(-1)?.startCol || 0,
+    };
+    focus = {
+      lineIndex: previousFocus.lineIndex,
+      column: Math.max(0, (previousFocus.column || 0) + direction),
+    };
+  } else {
+    const collapsed = ranges.every((range) => range.startCol === range.endCol);
+    const edgeColumn = direction > 0
+      ? Math.max(...ranges.map((range) => range.endCol))
+      : Math.min(...ranges.map((range) => range.startCol));
+    const nextColumn = collapsed
+      ? Math.max(0, edgeColumn + direction)
+      : edgeColumn;
+    anchor = { lineIndex: firstLine, column: nextColumn };
+    focus = { lineIndex: lastLine, column: nextColumn };
+  }
+
+  sourceEditorBlockSelection = {
+    anchor,
+    focus,
+    draggingPointerId: null,
+    ranges: sourceBlockRangesFromPoints(anchor, focus),
+  };
+  syncSourceBlockSelectionNativeCaret();
+  renderSourceBlockSelection();
+  updateSourceMeta();
+  hideSourceColorEditor();
+  hideSourceCompletions();
+  hideSourceImportLinkFrame();
+  sourceEditorPreferredCaretX = null;
+  return true;
+}
+
+function syncSourceBlockSelectionNativeCaret() {
+  const last = sourceEditorBlockSelection?.ranges?.at(-1);
+  if (!last) {
+    return;
+  }
+  const caret = Math.max(0, Math.min(sourceEditor.value.length, last.end));
+  sourceEditor.setSelectionRange(caret, caret);
+}
+
+function sourceBlockSelectionOwnsControlShortcut(event) {
+  if (
+    !sourceEditorBlockSelection?.ranges?.length
+    || document.activeElement !== sourceEditor
+    || !event.ctrlKey
+    || event.metaKey
+    || event.altKey
+  ) {
+    return false;
+  }
+  const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
+  return key === "f" || key === "b";
+}
+
+function sourceBlockSelectionControlShortcutDelta(event) {
+  if (!sourceBlockSelectionOwnsControlShortcut(event)) {
+    return 0;
+  }
+  const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
+  if (key === "f") {
+    return 1;
+  }
+  if (key === "b") {
+    return -1;
+  }
+  return 0;
+}
+
 function handleSourceBlockSelectionKeydown(event) {
   if (!sourceEditorBlockSelection?.ranges?.length) {
     return false;
@@ -4688,10 +4879,14 @@ function handleSourceBlockSelectionKeydown(event) {
     event.stopPropagation();
     return true;
   }
-  if (event.metaKey || event.ctrlKey) {
+  const controlDelta = sourceBlockSelectionControlShortcutDelta(event);
+  if (controlDelta) {
+    moveSourceBlockSelectionHorizontal(controlDelta, event.shiftKey);
+  } else if (event.metaKey || event.ctrlKey) {
     return false;
-  }
-  if (event.key === "Backspace") {
+  } else if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+    moveSourceBlockSelectionHorizontal(event.key === "ArrowRight" ? 1 : -1, event.shiftKey);
+  } else if (event.key === "Backspace") {
     deleteSourceBlockSelection(-1);
   } else if (event.key === "Delete") {
     deleteSourceBlockSelection(1);

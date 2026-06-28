@@ -102,10 +102,29 @@ pub fn suggest_source_completions(source: &str, cursor_offset: usize) -> Complet
         }
     }
 
+    let replace_start = selector_tag_replace_start(context.replace_start, &context.token_text);
+    let replace_end = selector_object_replace_end(
+        source,
+        cursor_offset,
+        context.replace_end,
+        &context.token_text,
+    );
+    let current_typed_replacement = source
+        .get(replace_start..cursor_offset.min(replace_end))
+        .unwrap_or_default()
+        .to_string();
+
     let prefix = completion_prefix(&context.token_text);
     let mut seen = BTreeSet::<(String, CompletionKind)>::new();
     items.retain(|item| {
         if !prefix.is_empty() && !item.label.starts_with(prefix) {
+            return false;
+        }
+        if context.token_text.contains(':')
+            && !current_typed_replacement.is_empty()
+            && item.label == current_typed_replacement
+            && item.insert_text == current_typed_replacement
+        {
             return false;
         }
         seen.insert((item.label.clone(), item.kind))
@@ -117,11 +136,9 @@ pub fn suggest_source_completions(source: &str, cursor_offset: usize) -> Complet
     });
     items.truncate(80);
 
-    let replace_start = selector_tag_replace_start(context.replace_start, &context.token_text);
-
     CompletionList {
         replace_start,
-        replace_end: context.replace_end,
+        replace_end,
         items,
     }
 }
@@ -158,7 +175,7 @@ struct CompletionSymbols {
     states: BTreeSet<String>,
     scratches: BTreeSet<String>,
     value_set_names: BTreeSet<String>,
-    variants: BTreeSet<String>,
+    object_name_atoms: BTreeSet<String>,
     directions: BTreeSet<String>,
     direction_sets: BTreeSet<String>,
     inputs: BTreeSet<String>,
@@ -257,6 +274,13 @@ fn collect_completion_symbols(source: &str) -> CompletionSymbols {
     }
 
     let context = scan_source_context(source);
+    for line in &context.lines {
+        let tokens = line.tokens.iter().map(String::as_str).collect::<Vec<_>>();
+        if tokens.is_empty() {
+            continue;
+        }
+        collect_tag_set_symbols(&tokens, line.scope, &mut symbols);
+    }
     for line in context.lines {
         let tokens = line.tokens.iter().map(String::as_str).collect::<Vec<_>>();
         if tokens.is_empty() {
@@ -265,7 +289,7 @@ fn collect_completion_symbols(source: &str) -> CompletionSymbols {
         collect_line_symbols(&tokens, line.scope, &mut symbols);
     }
     for name in symbols.value_set_names.clone() {
-        symbols.variants.remove(&name);
+        symbols.object_name_atoms.remove(&name);
     }
 
     symbols
@@ -276,6 +300,9 @@ fn collect_line_symbols(
     scope: Option<SourceScope>,
     symbols: &mut CompletionSymbols,
 ) {
+    if collect_tag_set_symbols(tokens, scope, symbols) {
+        return;
+    }
     match tokens {
         ["puzzle", name, ..] => {
             insert_identifier(&mut symbols.puzzles, name);
@@ -310,7 +337,7 @@ fn collect_line_symbols(
         ["shape", table, ..] if scope == Some(SourceScope::Visuals) => {
             if let Some((name, axis)) = table.split_once(':') {
                 insert_identifier(&mut symbols.shapes, name);
-                insert_identifier(&mut symbols.variants, axis);
+                insert_identifier(&mut symbols.object_name_atoms, axis);
             } else {
                 insert_identifier(&mut symbols.shapes, table);
             }
@@ -318,7 +345,7 @@ fn collect_line_symbols(
         ["colors", table, ..] if scope == Some(SourceScope::Visuals) => {
             if let Some((name, axis)) = table.split_once(':') {
                 insert_identifier(&mut symbols.colors, name);
-                insert_identifier(&mut symbols.variants, axis);
+                insert_identifier(&mut symbols.object_name_atoms, axis);
             }
         }
         [name, "=", ..] if scope == Some(SourceScope::VisualColorTable) => {
@@ -327,13 +354,13 @@ fn collect_line_symbols(
         [table_ref] if scope == Some(SourceScope::VisualColorTable) => {
             if let Some((name, axis)) = table_ref.split_once(':') {
                 insert_identifier(&mut symbols.colors, name);
-                insert_identifier(&mut symbols.variants, axis);
+                insert_identifier(&mut symbols.object_name_atoms, axis);
             }
         }
         [name] if scope == Some(SourceScope::VisualShapeTable) => {
             if let Some((name, axis)) = name.split_once(':') {
                 insert_identifier(&mut symbols.shapes, name);
-                insert_identifier(&mut symbols.variants, axis);
+                insert_identifier(&mut symbols.object_name_atoms, axis);
             } else {
                 insert_identifier(&mut symbols.shapes, name);
             }
@@ -346,23 +373,6 @@ fn collect_line_symbols(
         }
         [name, "=", ..] if scope == Some(SourceScope::SceneState) => {
             insert_identifier(&mut symbols.states, name);
-        }
-        [name, "=", values @ ..]
-            if scope == Some(SourceScope::Tags) && tag_set_tokens(name, values) =>
-        {
-            insert_identifier(&mut symbols.value_set_names, name);
-            let values = values
-                .iter()
-                .filter(|value| is_identifier(value))
-                .map(|value| (*value).to_string())
-                .collect::<Vec<_>>();
-            symbols
-                .value_sets
-                .insert((*name).to_string(), values.clone());
-            if values.iter().all(|value| is_direction_value(value)) {
-                symbols.direction_sets.insert((*name).to_string());
-            }
-            symbols.variants.extend(values);
         }
         [name, "=", selectors @ ..] if scope == Some(SourceScope::Group) => {
             insert_identifier(&mut symbols.groups, name);
@@ -382,6 +392,33 @@ fn collect_line_symbols(
         [..] if scope == Some(SourceScope::Keys) => collect_keys(tokens, symbols),
         _ => {}
     }
+}
+
+fn collect_tag_set_symbols(
+    tokens: &[&str],
+    scope: Option<SourceScope>,
+    symbols: &mut CompletionSymbols,
+) -> bool {
+    let [name, "=", values @ ..] = tokens else {
+        return false;
+    };
+    if scope != Some(SourceScope::Tags) || !tag_set_tokens(name, values) {
+        return false;
+    }
+    insert_identifier(&mut symbols.value_set_names, name);
+    let values = values
+        .iter()
+        .filter(|value| is_identifier(value))
+        .map(|value| (*value).to_string())
+        .collect::<Vec<_>>();
+    symbols
+        .value_sets
+        .insert((*name).to_string(), values.clone());
+    if values.iter().all(|value| is_direction_value(value)) {
+        symbols.direction_sets.insert((*name).to_string());
+    }
+    symbols.object_name_atoms.extend(values);
+    true
 }
 
 fn collect_layer_row_symbols(tokens: &[&str], symbols: &mut CompletionSymbols) {
@@ -417,21 +454,25 @@ fn collect_object_spec(spec: &str, symbols: &mut CompletionSymbols) {
         return;
     };
     insert_identifier(&mut symbols.objects, base);
-    if parts.len() > 1 {
-        symbols.object_axes.insert(
-            base.to_string(),
-            parts[1..].iter().map(|part| (*part).to_string()).collect(),
-        );
+    if parts.len() > 1
+        && parts[1..]
+            .iter()
+            .all(|part| symbols.value_set_names.contains(*part))
+    {
+        symbols
+            .object_axes
+            .entry(base.to_string())
+            .or_insert_with(|| parts[1..].iter().map(|part| (*part).to_string()).collect());
     }
     for part in &parts[1..] {
-        insert_identifier(&mut symbols.variants, part);
+        insert_identifier(&mut symbols.object_name_atoms, part);
     }
 }
 
 fn collect_scratch_spec(name: &str, ty: Option<&str>, symbols: &mut CompletionSymbols) {
     insert_identifier(&mut symbols.scratches, name);
     if let Some(ty) = ty.filter(|ty| !matches!(*ty, "bool" | "int")) {
-        insert_identifier(&mut symbols.variants, ty);
+        insert_identifier(&mut symbols.object_name_atoms, ty);
     }
 }
 
@@ -459,20 +500,17 @@ fn selector_axis_items(symbols: &CompletionSymbols, token: &str) -> Option<Vec<C
     if current_tag != "_" && !axis_values.iter().any(|value| value == "_") {
         items.push(CompletionItem {
             label: "_".to_string(),
-            kind: CompletionKind::Variant,
+            kind: CompletionKind::Literal,
             insert_text: "_".to_string(),
-            detail: "tag".to_string(),
+            detail: "wildcard".to_string(),
         });
     }
     for value in axis_values {
-        if value == current_tag {
-            continue;
-        }
         items.push(CompletionItem {
             label: value.clone(),
-            kind: CompletionKind::Variant,
+            kind: CompletionKind::Object,
             insert_text: value.clone(),
-            detail: "tag".to_string(),
+            detail: "object".to_string(),
         });
     }
     for (name, values) in &symbols.value_sets {
@@ -507,6 +545,22 @@ fn selector_tag_replace_start(token_start: usize, token: &str) -> usize {
         .map_or(token_start, |(head, _)| token_start + head.len() + 1)
 }
 
+fn selector_object_replace_end(
+    source: &str,
+    cursor_offset: usize,
+    token_end: usize,
+    token: &str,
+) -> usize {
+    let cursor = cursor_offset.min(source.len());
+    let token_end = token_end.min(source.len());
+    if token.contains(':') || cursor >= token_end {
+        return token_end;
+    }
+    source[cursor..token_end]
+        .find(':')
+        .map_or(token_end, |colon| cursor + colon)
+}
+
 fn add_slot_items(
     items: &mut Vec<CompletionItem>,
     symbols: &CompletionSymbols,
@@ -517,6 +571,16 @@ fn add_slot_items(
             for keyword in keywords {
                 items.push(CompletionItem {
                     label: (*keyword).to_string(),
+                    kind: CompletionKind::Keyword,
+                    insert_text: keyword_insert_text(keyword).to_string(),
+                    detail: "keyword".to_string(),
+                });
+            }
+        }
+        SemanticCompletionSlot::ModelTopLevelKeywords => {
+            for keyword in crate::model_top_level_completion_keywords() {
+                items.push(CompletionItem {
+                    label: keyword.to_string(),
                     kind: CompletionKind::Keyword,
                     insert_text: keyword_insert_text(keyword).to_string(),
                     detail: "keyword".to_string(),
@@ -554,11 +618,11 @@ fn add_slot_items(
             CompletionKind::Scratch,
             "scratch",
         ),
-        SemanticCompletionSlot::Variants => add_named_items(
+        SemanticCompletionSlot::ObjectNameAtoms => add_named_items(
             items,
-            symbols.variants.iter(),
-            CompletionKind::Variant,
-            "tag",
+            symbols.object_name_atoms.iter(),
+            CompletionKind::Object,
+            "object",
         ),
         SemanticCompletionSlot::ValueSets => add_named_items(
             items,
@@ -580,6 +644,16 @@ fn add_slot_items(
         ),
         SemanticCompletionSlot::Inputs => {
             add_named_items(items, symbols.inputs.iter(), CompletionKind::Input, "input")
+        }
+        SemanticCompletionSlot::StandardRuleSteps => {
+            for step in puzzle_authoring::STANDARD_RULE_STEP_NAMES {
+                items.push(CompletionItem {
+                    label: (*step).to_string(),
+                    kind: CompletionKind::Effect,
+                    insert_text: (*step).to_string(),
+                    detail: "standard rule step".to_string(),
+                });
+            }
         }
         SemanticCompletionSlot::ModelEffects => add_named_items(
             items,
@@ -705,7 +779,7 @@ fn remove_current_token_symbols(symbols: &mut CompletionSymbols, token: &str) {
     symbols.states.remove(name);
     symbols.scratches.remove(name);
     symbols.value_set_names.remove(name);
-    symbols.variants.remove(name);
+    symbols.object_name_atoms.remove(name);
     symbols.directions.remove(name);
     symbols.direction_sets.remove(name);
     symbols.inputs.remove(name);
@@ -771,10 +845,7 @@ fn add_effect_commands(
 }
 
 fn tag_set_tokens(name: &str, values: &[&str]) -> bool {
-    is_identifier(name)
-        && !is_completion_keyword(name)
-        && !values.is_empty()
-        && values.iter().all(|value| is_identifier(value))
+    is_identifier(name) && !values.is_empty() && values.iter().all(|value| is_identifier(value))
 }
 
 fn is_direction_value(value: &str) -> bool {
@@ -1018,37 +1089,132 @@ rules {
     }
 
     #[test]
-    fn selector_tag_completion_does_not_suggest_current_tag_segment() {
+    fn selector_object_completion_preserves_existing_tag_suffix() {
+        let source = r#"
+title complete_selector_object
+puzzle board {
+tags {
+kind = tag other
+}
+layers {
+base = object:kind
+}
+rules {
+[ obj:tag
+}
+}
+"#;
+        let cursor = source.rfind("obj:tag").unwrap() + "obj".len();
+        let list = suggest_source_completions(source, cursor);
+
+        assert_eq!(
+            source[list.replace_start..list.replace_end].to_string(),
+            "obj"
+        );
+        let item = list
+            .items
+            .iter()
+            .find(|item| item.kind == CompletionKind::Object && item.label == "object")
+            .expect("object completion");
+        let completed = format!(
+            "{}{}{}",
+            &source[..list.replace_start],
+            item.insert_text,
+            &source[list.replace_end..]
+        );
+        assert!(completed.contains("[ object:tag"));
+    }
+
+    #[test]
+    fn selector_tag_completion_excludes_current_tag_segment() {
         let source = r#"
 title complete_current_variant
 puzzle board {
-tags {
-state = stack movable
-}
 layers {
 actor = Box:state
+}
+tags {
+state = movable stack
+}
+groups {
+solid = Box:*
+fixed = Box:stack
 }
 rules {
 [ Box:stack | Box:movable
 }
 }
 "#;
-        let stack_cursor = source.find("Box:stack").unwrap() + "Box:stack".len();
-        let stack_list = suggest_source_completions(source, stack_cursor);
+        let empty_tag_cursor = source.find("Box:movable").unwrap() + "Box:".len();
+        let empty_tag_list = suggest_source_completions(source, empty_tag_cursor);
+        assert_eq!(
+            source[empty_tag_list.replace_start..empty_tag_list.replace_end].to_string(),
+            "movable"
+        );
         assert!(
-            !stack_list
+            empty_tag_list
                 .items
                 .iter()
-                .any(|item| { item.kind == CompletionKind::Variant && item.label == "stack" })
+                .any(|item| { item.kind == CompletionKind::Object && item.label == "movable" })
+        );
+        assert!(
+            empty_tag_list
+                .items
+                .iter()
+                .any(|item| { item.kind == CompletionKind::Object && item.label == "stack" })
+        );
+
+        let stack_cursor = source.find("Box:stack").unwrap() + "Box:stack".len();
+        let stack_list = suggest_source_completions(source, stack_cursor);
+        assert_eq!(
+            source[stack_list.replace_start..stack_list.replace_end].to_string(),
+            "stack"
+        );
+        assert!(
+            stack_list
+                .items
+                .iter()
+                .all(|item| { item.label != "stack" })
         );
 
         let movable_cursor = source.find("Box:movable").unwrap() + "Box:movable".len();
         let movable_list = suggest_source_completions(source, movable_cursor);
+        assert_eq!(
+            source[movable_list.replace_start..movable_list.replace_end].to_string(),
+            "movable"
+        );
         assert!(
-            !movable_list
+            movable_list
                 .items
                 .iter()
-                .any(|item| { item.kind == CompletionKind::Variant && item.label == "movable" })
+                .all(|item| { item.label != "movable" })
+        );
+    }
+
+    #[test]
+    fn selector_tag_completion_does_not_suggest_current_untyped_axis() {
+        let source = r#"
+title complete_current_axis
+puzzle board {
+layers {
+actor = obj:dir
+}
+rules {
+[ obj:dir
+}
+}
+"#;
+        let cursor = source.rfind("obj:dir").unwrap() + "obj:dir".len();
+        let list = suggest_source_completions(source, cursor);
+
+        assert_eq!(
+            source[list.replace_start..list.replace_end].to_string(),
+            "dir"
+        );
+        assert!(
+            list.items
+                .iter()
+                .all(|item| { item.label != "dir" && item.insert_text != "dir" })
         );
     }
 
@@ -1078,20 +1244,20 @@ for c in co
             !axis_list
                 .items
                 .iter()
-                .any(|item| { item.label == "color" && item.kind == CompletionKind::Variant })
+                .any(|item| { item.label == "color" && item.kind == CompletionKind::Object })
         );
 
         let tag_cursor = source.find("[ Box:r").unwrap() + "[ Box:r".len();
         let tag_list = suggest_source_completions(source, tag_cursor);
         assert!(tag_list.items.iter().any(|item| {
-            item.label == "red" && item.kind == CompletionKind::Variant && item.detail == "tag"
+            item.label == "red" && item.kind == CompletionKind::Object && item.detail == "object"
         }));
 
         let axis_json = completion_list_json(&axis_list);
         assert!(axis_json.contains(r#""label":"color","kind":"tags""#));
-        assert!(!axis_json.contains(r#""label":"color","kind":"tag""#));
+        assert!(!axis_json.contains(r#""label":"color","kind":"object""#));
         let tag_json = completion_list_json(&tag_list);
-        assert!(tag_json.contains(r#""label":"red","kind":"tag""#));
+        assert!(tag_json.contains(r#""label":"red","kind":"object""#));
     }
 
     #[test]
@@ -1260,6 +1426,80 @@ rules {
                 .items
                 .iter()
                 .any(|item| item.label == "input" && item.kind == CompletionKind::Keyword)
+        );
+
+        let move_source = source.replacen("\n\n}", "\nmo\n}", 1);
+        let move_cursor = move_source.find("\nmo\n").unwrap() + "\nmo".len();
+        let move_list = suggest_source_completions(&move_source, move_cursor);
+        assert!(move_list.items.iter().any(|item| {
+            item.label == "move"
+                && item.kind == CompletionKind::Effect
+                && item.detail == "standard rule step"
+        }));
+
+        let effect_source = source.replacen("\n\n}", "\nsf\n}", 1);
+        let effect_cursor = effect_source.find("\nsf\n").unwrap() + "\nsf".len();
+        let effect_list = suggest_source_completions(&effect_source, effect_cursor);
+        assert!(
+            effect_list
+                .items
+                .iter()
+                .any(|item| item.label == "sfx" && item.kind == CompletionKind::Effect)
+        );
+    }
+
+    #[test]
+    fn line_head_suggests_rule_heads_in_statement_blocks() {
+        let source = r#"
+title complete_statement_blocks
+puzzle board {
+routine setup once {
+once_
+}
+on_level_start {
+once_
+}
+rules {
+if true {
+once_
+}
+restart -> {
+once_
+}
+}
+render {
+once_
+}
+}
+"#;
+
+        let routine_cursor = source.find("\nonce_\n}\non_level_start").unwrap() + "\nonce_".len();
+        let lifecycle_cursor = source.find("\nonce_\n}\nrules").unwrap() + "\nonce_".len();
+        let nested_cursor = source.find("\nonce_\n}\nrestart").unwrap() + "\nonce_".len();
+        let input_effect_cursor = source.find("\nonce_\n}\n}\nrender").unwrap() + "\nonce_".len();
+        let render_cursor = source.rfind("\nonce_\n}").unwrap() + "\nonce_".len();
+
+        for cursor in [
+            routine_cursor,
+            lifecycle_cursor,
+            nested_cursor,
+            input_effect_cursor,
+        ] {
+            let list = suggest_source_completions(source, cursor);
+            assert!(
+                list.items
+                    .iter()
+                    .any(|item| item.label == "once_all" && item.kind == CompletionKind::Keyword),
+                "missing once_all at cursor {cursor}"
+            );
+        }
+
+        let render_list = suggest_source_completions(source, render_cursor);
+        assert!(
+            !render_list
+                .items
+                .iter()
+                .any(|item| item.label == "once_all" && item.kind == CompletionKind::Keyword)
         );
     }
 
@@ -1947,6 +2187,22 @@ on_
                     .iter()
                     .any(|item| item.label == *keyword && item.kind == CompletionKind::Keyword),
                 "missing puzzle completion {keyword}"
+            );
+        }
+    }
+
+    #[test]
+    fn suggests_model_top_level_keywords_from_parser_surface() {
+        for keyword in crate::model_top_level_completion_keywords() {
+            let source = keyword.to_string();
+            let cursor = source.len();
+            let list = suggest_source_completions(&source, cursor);
+
+            assert!(
+                list.items
+                    .iter()
+                    .any(|item| item.label == *keyword && item.kind == CompletionKind::Keyword),
+                "missing top-level completion {keyword}"
             );
         }
     }

@@ -1,4 +1,4 @@
-export const SFX_TYPES = ["jump", "pickup", "hit", "lock", "explosion", "laser", "powerup", "select", "error"];
+export const SFX_TYPES = ["jump", "pickup", "hit", "drag", "lock", "explosion", "laser", "powerup", "select", "error"];
 export const SFX_TYPE_OPTIONS = ["random", ...SFX_TYPES, "wild"];
 
 const TYPE_CONFIG = {
@@ -6,7 +6,8 @@ const TYPE_CONFIG = {
   jump: { duration: 0.28, label: "Jump", baseFrequency: [230, 330], shape: "rise" },
   pickup: { duration: 0.42, label: "Pickup", baseFrequency: [620, 880], shape: "spark" },
   hit: { duration: 0.24, label: "Hit", baseFrequency: [90, 160], shape: "impact" },
-  lock: { duration: 0.3, label: "Lock", baseFrequency: [85, 145], shape: "latch" },
+  drag: { duration: 0.5, label: "Drag", baseFrequency: [72, 138], shape: "scrape" },
+  lock: { duration: 0.36, label: "Lock", baseFrequency: [115, 210], shape: "latch" },
   explosion: { duration: 0.82, label: "Explosion", baseFrequency: [45, 82], shape: "blast" },
   laser: { duration: 0.36, label: "Laser", baseFrequency: [460, 760], shape: "sweep" },
   powerup: { duration: 0.72, label: "Power Up", baseFrequency: [260, 430], shape: "climb" },
@@ -19,7 +20,8 @@ const TYPE_PATTERNS = {
   jump: ["hop", "spring", "rubber", "whoosh"],
   pickup: ["coin", "sparkle", "gem", "chord"],
   hit: ["punch", "slash", "metal", "crunch"],
-  lock: ["latch", "deadbolt", "key-turn", "tumblers"],
+  drag: ["wood-floor", "stone-floor", "rough-floor", "stuck-start", "short-pull", "soft-floor"],
+  lock: ["latch", "deadbolt", "key-turn", "tumblers", "old-lock", "padlock"],
   explosion: ["boom", "puff", "crackle", "burst"],
   laser: ["pew", "zap", "down", "charge"],
   powerup: ["arpeggio", "swell", "sparkle", "fanfare"],
@@ -37,7 +39,10 @@ export function generateSoundEffect(seed, options = {}) {
   const length = clamp(Number(options.length ?? rng()), 0, 1);
   const tonalFamily = mood < 0.4 ? "dark" : mood > 0.6 ? "bright" : "neutral";
   const config = TYPE_CONFIG[type];
-  const duration = round3(config.duration * lerp(0.72, 1.45, length) * lerp(0.94, 1.06, rng()));
+  let duration = round3(config.duration * lerp(0.72, 1.45, length) * lerp(0.94, 1.06, rng()));
+  if (type === "drag") {
+    duration = round3(clamp(duration, 0.36, 0.7));
+  }
   const baseFrequency = randomInt(rng, config.baseFrequency[0], config.baseFrequency[1]);
   const profile = buildProfile(rng, type, tonalFamily, intensity);
   const layers = buildLayers(type, baseFrequency, duration, mood, intensity, profile, rng);
@@ -68,14 +73,34 @@ export function randomSfxPreset(seed = Date.now(), targetType = null) {
   };
 }
 
-export function createSfxPlayer(audioContext, effect) {
+export function createSfxPlayer(audioContext, effect, options = {}) {
   const activeSources = new Set();
+  let output = null;
 
-  function start() {
+  function disconnectOutput() {
+    if (output) {
+      output.disconnect();
+      output = null;
+    }
+  }
+
+  function start(startsAt) {
+    if (!Number.isFinite(startsAt)) {
+      throw new Error("SFX player start requires an explicit AudioContext time");
+    }
     stop();
-    const startedAt = audioContext.currentTime + 0.03;
+    output = audioContext.createGain();
+    output.gain.value = clamp(Number(options.volume ?? 1), 0, 1);
+    output.connect(audioContext.destination);
     for (const layer of effect.layers) {
-      playLayer(audioContext, layer, startedAt, activeSources);
+      playLayer(audioContext, layer, startsAt, activeSources, output, () => {
+        if (activeSources.size === 0) {
+          disconnectOutput();
+        }
+      });
+    }
+    if (activeSources.size === 0) {
+      disconnectOutput();
     }
   }
 
@@ -89,6 +114,7 @@ export function createSfxPlayer(audioContext, effect) {
       source.disconnect();
     }
     activeSources.clear();
+    disconnectOutput();
   }
 
   return { start, stop };
@@ -98,15 +124,15 @@ function buildProfile(rng, type, tonalFamily, intensity) {
   const bright = tonalFamily === "bright";
   const dark = tonalFamily === "dark";
   const waveforms = bright ? ["triangle", "sine", "square"] : dark ? ["sawtooth", "square", "triangle"] : ["sine", "triangle", "square"];
-  const variants = type === "error" || type === "lock" ? ["clean", "double", "gritty", "stepped"] : ["clean", "double", "gritty", "hollow", "wide", "stepped"];
+  const variants = type === "drag" ? ["dry", "grainy", "heavy", "stuck", "soft", "rough"] : type === "lock" ? ["dry", "double", "gritty", "stepped", "heavy", "stuck"] : type === "error" ? ["clean", "double", "gritty", "stepped"] : ["clean", "double", "gritty", "hollow", "wide", "stepped"];
   return {
     engine: pick(["arcade", "soft-synth", "bit-crush", "toy-speaker"], rng),
     variant: pick(variants, rng),
     pattern: pick(TYPE_PATTERNS[type], rng),
-    waveform: type === "error" ? pick(["square", "sawtooth"], rng) : type === "lock" ? pick(["square", "triangle"], rng) : pick(waveforms, rng),
-    noiseColor: dark || type === "explosion" || type === "error" || type === "lock" ? "crackle" : "white",
-    filterBias: round2(lerp(0.75, 1.35, intensity) * (type === "error" ? 0.78 : bright ? 1.18 : dark ? 0.82 : 1)),
-    pitchWobble: round2(type === "lock" ? lerp(0, 0.018, rng() * intensity) : lerp(type === "error" ? 0.04 : 0.01, type === "error" ? 0.12 : 0.075, rng() * intensity)),
+    waveform: type === "error" ? pick(["square", "sawtooth"], rng) : type === "drag" ? pick(["sine", "triangle"], rng) : type === "lock" ? pick(["square", "triangle"], rng) : pick(waveforms, rng),
+    noiseColor: dark || type === "explosion" || type === "error" || type === "lock" || type === "drag" ? "crackle" : "white",
+    filterBias: round2(lerp(0.75, 1.35, intensity) * (type === "error" ? 0.78 : type === "drag" ? 0.72 : bright ? 1.18 : dark ? 0.82 : 1)),
+    pitchWobble: round2(type === "lock" ? lerp(0, 0.018, rng() * intensity) : type === "drag" ? lerp(0.004, 0.02, rng() * intensity) : lerp(type === "error" ? 0.04 : 0.01, type === "error" ? 0.12 : 0.075, rng() * intensity)),
   };
 }
 
@@ -246,40 +272,68 @@ function buildLayers(type, baseFrequency, duration, mood, intensity, profile, rn
     return varyLayers(layers, duration, baseFrequency, intensity, profile, rng);
   }
 
+  if (type === "drag") {
+    return buildBoxPullLayers(duration, intensity, profile, rng);
+  }
+
   if (type === "lock") {
     if (profile.pattern === "deadbolt") {
       layers = [
-        clickLayer(0, 0.008, 0.07 + intensity * 0.07, 7600),
-        noiseLayer("bolt-drag", duration * 0.18, duration * 0.3, 0.055 + intensity * 0.07, "bandpass", 4200, 740, profile),
-        toneLayer("bolt-slide", duration * 0.2, duration * 0.22, "square", baseFrequency * 1.2, baseFrequency * 0.78, 0.055, intensity, profile),
-        clickLayer(duration * 0.52, 0.011, 0.22 + intensity * 0.14, 5000),
-        toneLayer("lock-stop", duration * 0.52, duration * 0.14, "square", baseFrequency * 0.9, baseFrequency * 0.52, 0.24, intensity, profile),
+        clickLayer(0, 0.009, 0.08 + intensity * 0.08, 7200),
+        noiseLayer("bolt-drag", duration * 0.1, duration * 0.42, 0.075 + intensity * 0.09, "bandpass", 3600, 540, profile),
+        toneLayer("bolt-slide", duration * 0.16, duration * 0.34, "square", baseFrequency * 1.05, baseFrequency * 0.58, 0.09, intensity, profile),
+        clickLayer(duration * 0.62, 0.014, 0.28 + intensity * 0.18, 3000),
+        toneLayer("lock-stop", duration * 0.62, duration * 0.18, "square", baseFrequency * 1.15, baseFrequency * 0.5, 0.3, intensity, profile),
+        noiseLayer("case-thump", duration * 0.62, duration * 0.16, 0.14 + intensity * 0.16, "lowpass", 1400, 320, profile),
       ];
     } else if (profile.pattern === "key-turn") {
       layers = [
         clickLayer(0, 0.007, 0.08 + intensity * 0.07, 8200),
-        clickLayer(duration * 0.22, 0.008, 0.065 + intensity * 0.065, 6800),
-        noiseLayer("key-scrape", duration * 0.24, duration * 0.22, 0.04 + intensity * 0.045, "highpass", 5600, 2300, profile),
-        toneLayer("key-turn", duration * 0.28, duration * 0.2, "triangle", baseFrequency * 1.35, baseFrequency * 0.72, 0.055, intensity, profile),
-        clickLayer(duration * 0.54, 0.011, 0.2 + intensity * 0.13, 4800),
-        toneLayer("lock-stop", duration * 0.54, duration * 0.14, "square", baseFrequency * 0.95, baseFrequency * 0.5, 0.23, intensity, profile),
+        clickLayer(duration * 0.18, 0.008, 0.07 + intensity * 0.07, 6500),
+        noiseLayer("key-scrape", duration * 0.2, duration * 0.26, 0.05 + intensity * 0.06, "highpass", 5400, 2100, profile),
+        toneLayer("key-turn", duration * 0.26, duration * 0.26, "triangle", baseFrequency * 1.45, baseFrequency * 0.68, 0.075, intensity, profile),
+        clickLayer(duration * 0.56, 0.013, 0.24 + intensity * 0.16, 3300),
+        toneLayer("lock-stop", duration * 0.56, duration * 0.16, "square", baseFrequency * 1.05, baseFrequency * 0.48, 0.28, intensity, profile),
+        noiseLayer("case-thump", duration * 0.56, duration * 0.14, 0.12 + intensity * 0.14, "lowpass", 1200, 300, profile),
       ];
     } else if (profile.pattern === "tumblers") {
       layers = [
         clickLayer(0, 0.007, 0.075 + intensity * 0.06, 8400),
-        clickLayer(duration * 0.18, 0.007, 0.065 + intensity * 0.06, 7200),
-        clickLayer(duration * 0.34, 0.008, 0.07 + intensity * 0.07, 6100),
-        noiseLayer("pin-scrape", duration * 0.24, duration * 0.2, 0.04 + intensity * 0.045, "highpass", 5200, 1900, profile),
-        clickLayer(duration * 0.56, 0.011, 0.19 + intensity * 0.13, 4700),
-        toneLayer("lock-stop", duration * 0.56, duration * 0.14, "square", baseFrequency * 0.88, baseFrequency * 0.48, 0.23, intensity, profile),
+        clickLayer(duration * 0.15, 0.007, 0.065 + intensity * 0.06, 7200),
+        clickLayer(duration * 0.3, 0.008, 0.07 + intensity * 0.07, 6100),
+        noiseLayer("pin-scrape", duration * 0.22, duration * 0.24, 0.045 + intensity * 0.055, "highpass", 5200, 1800, profile),
+        clickLayer(duration * 0.6, 0.013, 0.23 + intensity * 0.16, 3100),
+        toneLayer("lock-stop", duration * 0.6, duration * 0.17, "square", baseFrequency, baseFrequency * 0.46, 0.29, intensity, profile),
+        noiseLayer("case-thump", duration * 0.6, duration * 0.15, 0.13 + intensity * 0.15, "lowpass", 1300, 340, profile),
+      ];
+    } else if (profile.pattern === "old-lock") {
+      layers = [
+        clickLayer(0, 0.011, 0.1 + intensity * 0.08, 6500),
+        noiseLayer("old-bolt-grind", duration * 0.08, duration * 0.5, 0.1 + intensity * 0.12, "bandpass", 2600, 420, profile),
+        clickLayer(duration * 0.28, 0.012, 0.11 + intensity * 0.09, 4700),
+        toneLayer("old-case", duration * 0.3, duration * 0.36, "square", baseFrequency * 0.95, baseFrequency * 0.42, 0.14, intensity, profile),
+        clickLayer(duration * 0.72, 0.017, 0.3 + intensity * 0.2, 2400),
+        toneLayer("lock-stop", duration * 0.72, duration * 0.2, "square", baseFrequency * 0.85, baseFrequency * 0.36, 0.34, intensity, profile),
+        noiseLayer("case-thump", duration * 0.72, duration * 0.18, 0.16 + intensity * 0.18, "lowpass", 1100, 260, profile),
+      ];
+    } else if (profile.pattern === "padlock") {
+      layers = [
+        clickLayer(0, 0.008, 0.09 + intensity * 0.08, 7600),
+        toneLayer("shackle-snap", duration * 0.12, duration * 0.24, "triangle", baseFrequency * 2.3, baseFrequency * 1.1, 0.11, intensity, profile),
+        noiseLayer("metal-shell", duration * 0.14, duration * 0.22, 0.08 + intensity * 0.1, "bandpass", 4800, 1100, profile),
+        clickLayer(duration * 0.5, 0.013, 0.26 + intensity * 0.17, 3600),
+        toneLayer("lock-stop", duration * 0.5, duration * 0.18, "square", baseFrequency * 1.35, baseFrequency * 0.62, 0.27, intensity, profile),
+        noiseLayer("case-thump", duration * 0.5, duration * 0.16, 0.13 + intensity * 0.15, "lowpass", 1500, 380, profile),
+        toneLayer("metal-ring", duration * 0.56, duration * 0.28, "triangle", baseFrequency * 3.1, baseFrequency * 2.2, 0.06, intensity, profile),
       ];
     } else {
       layers = [
         clickLayer(0, 0.008, 0.08 + intensity * 0.07, 7800),
-        noiseLayer("latch-scrape", duration * 0.18, duration * 0.22, 0.05 + intensity * 0.055, "bandpass", 4200, 920, profile),
-        clickLayer(duration * 0.42, 0.009, 0.11 + intensity * 0.09, 5600),
-        clickLayer(duration * 0.54, 0.012, 0.22 + intensity * 0.14, 3900),
-        toneLayer("lock-stop", duration * 0.54, duration * 0.14, "square", baseFrequency, baseFrequency * 0.5, 0.24, intensity, profile),
+        noiseLayer("latch-scrape", duration * 0.16, duration * 0.24, 0.06 + intensity * 0.07, "bandpass", 3900, 840, profile),
+        clickLayer(duration * 0.42, 0.01, 0.13 + intensity * 0.1, 5200),
+        clickLayer(duration * 0.54, 0.014, 0.26 + intensity * 0.17, 3100),
+        toneLayer("lock-stop", duration * 0.54, duration * 0.16, "square", baseFrequency * 1.1, baseFrequency * 0.52, 0.3, intensity, profile),
+        noiseLayer("case-thump", duration * 0.54, duration * 0.14, 0.13 + intensity * 0.15, "lowpass", 1300, 340, profile),
       ];
     }
     return varyLockLayers(layers, duration, intensity, profile, rng);
@@ -471,9 +525,154 @@ function varyLayers(layers, duration, baseFrequency, intensity, profile, rng) {
   return varied.sort((a, b) => a.start - b.start || a.name.localeCompare(b.name));
 }
 
+function buildBoxPullLayers(duration, intensity, profile, rng) {
+  const material = boxPullMaterial(profile.pattern);
+  const stopAt = duration * lerp(0.72, 0.84, rng());
+  const stictionDuration = duration * (profile.variant === "stuck" ? lerp(0.18, 0.26, rng()) : lerp(0.1, 0.17, rng()));
+  const rubStart = duration * lerp(0.035, 0.08, rng());
+  const rubDuration = Math.max(duration * 0.64, stopAt + duration * 0.08 - rubStart);
+  const bodyStart = randomInt(rng, 54, 112);
+  const bodyEnd = randomInt(rng, 36, 68);
+  const bodyGain = (profile.variant === "heavy" ? 0.22 : 0.16) + intensity * 0.1;
+  const rubGain = (profile.variant === "soft" ? 0.12 : 0.17) + intensity * 0.16;
+  const stictionGain = (profile.variant === "stuck" ? 0.15 : 0.09) + intensity * 0.08;
+  const layers = [
+    noiseLayer("stiction-break", 0, stictionDuration, stictionGain, "bandpass", material.stictionStart, material.stictionEnd, profile),
+    noiseLayer("floor-rub", rubStart, rubDuration, rubGain, material.filterType, material.rubStart, material.rubEnd, profile),
+    toneLayer("crate-body", 0, stopAt + duration * 0.12, "sine", bodyStart, bodyEnd, bodyGain, intensity, profile),
+    noiseLayer("settle-dust", stopAt, duration * lerp(0.13, 0.2, rng()), 0.07 + intensity * 0.09, "lowpass", material.settleStart, material.settleEnd, profile),
+    toneLayer("settle-thump", stopAt, duration * lerp(0.16, 0.24, rng()), "sine", randomInt(rng, 52, 82), randomInt(rng, 30, 48), 0.14 + intensity * 0.08, intensity, profile),
+  ];
+
+  if (material.secondary) {
+    layers.push(noiseLayer(
+      material.secondary.name,
+      duration * material.secondary.start,
+      duration * material.secondary.duration,
+      material.secondary.gain + intensity * 0.05,
+      "bandpass",
+      material.secondary.filterStart,
+      material.secondary.filterEnd,
+      profile,
+    ));
+  }
+
+  if (profile.pattern === "stuck-start") {
+    layers.push(toneLayer("crate-strain", duration * 0.04, duration * 0.3, "triangle", randomInt(rng, 120, 180), randomInt(rng, 70, 105), 0.045 + intensity * 0.035, intensity, profile));
+  }
+
+  return varyBoxPullLayers(layers, duration, stopAt, intensity, profile, rng);
+}
+
+function boxPullMaterial(pattern) {
+  if (pattern === "stone-floor") {
+    return {
+      filterType: "lowpass",
+      stictionStart: 980,
+      stictionEnd: 340,
+      rubStart: 760,
+      rubEnd: 170,
+      settleStart: 420,
+      settleEnd: 120,
+      secondary: { name: "stone-grit", start: 0.18, duration: 0.46, gain: 0.045, filterStart: 1180, filterEnd: 440 },
+    };
+  }
+  if (pattern === "rough-floor") {
+    return {
+      filterType: "bandpass",
+      stictionStart: 1180,
+      stictionEnd: 420,
+      rubStart: 980,
+      rubEnd: 260,
+      settleStart: 500,
+      settleEnd: 140,
+      secondary: { name: "rough-grain", start: 0.16, duration: 0.56, gain: 0.06, filterStart: 1500, filterEnd: 620 },
+    };
+  }
+  if (pattern === "stuck-start") {
+    return {
+      filterType: "bandpass",
+      stictionStart: 1050,
+      stictionEnd: 360,
+      rubStart: 860,
+      rubEnd: 220,
+      settleStart: 450,
+      settleEnd: 130,
+      secondary: { name: "stall-rub", start: 0.08, duration: 0.38, gain: 0.06, filterStart: 1020, filterEnd: 320 },
+    };
+  }
+  if (pattern === "short-pull") {
+    return {
+      filterType: "bandpass",
+      stictionStart: 920,
+      stictionEnd: 320,
+      rubStart: 820,
+      rubEnd: 240,
+      settleStart: 440,
+      settleEnd: 120,
+      secondary: null,
+    };
+  }
+  if (pattern === "soft-floor") {
+    return {
+      filterType: "lowpass",
+      stictionStart: 640,
+      stictionEnd: 220,
+      rubStart: 540,
+      rubEnd: 150,
+      settleStart: 320,
+      settleEnd: 100,
+      secondary: { name: "soft-dust", start: 0.22, duration: 0.42, gain: 0.035, filterStart: 520, filterEnd: 170 },
+    };
+  }
+  return {
+    filterType: "bandpass",
+    stictionStart: 820,
+    stictionEnd: 280,
+    rubStart: 700,
+    rubEnd: 210,
+    settleStart: 380,
+    settleEnd: 110,
+    secondary: { name: "wood-grain", start: 0.2, duration: 0.5, gain: 0.045, filterStart: 860, filterEnd: 260 },
+  };
+}
+
+function varyBoxPullLayers(layers, duration, stopAt, intensity, profile, rng) {
+  const varied = layers.map((layer) => {
+    const gainJitter = profile.variant === "soft" ? lerp(0.72, 0.96, rng()) : lerp(0.9, 1.16, rng());
+    if (layer.kind === "tone") {
+      return {
+        ...layer,
+        frequencyStart: Math.round(layer.frequencyStart * lerp(0.95, 1.04, rng())),
+        frequencyEnd: Math.round(layer.frequencyEnd * lerp(0.92, 1.06, rng())),
+        gain: round3(layer.gain * gainJitter),
+      };
+    }
+    if (layer.kind === "noise") {
+      return {
+        ...layer,
+        filterStart: Math.round(layer.filterStart * lerp(0.9, 1.12, rng())),
+        filterEnd: Math.round(layer.filterEnd * lerp(0.88, 1.14, rng())),
+        gain: round3(layer.gain * gainJitter),
+      };
+    }
+    return { ...layer, gain: round3(layer.gain * gainJitter) };
+  });
+
+  if (profile.variant === "grainy" || profile.variant === "rough") {
+    varied.push(noiseLayer("loose-grit", duration * 0.18, duration * 0.46, 0.045 + intensity * 0.055, "bandpass", randomInt(rng, 980, 1500), randomInt(rng, 360, 680), profile));
+  } else if (profile.variant === "heavy") {
+    varied.push(toneLayer("crate-weight", 0, stopAt + duration * 0.1, "sine", randomInt(rng, 38, 62), randomInt(rng, 28, 42), 0.1 + intensity * 0.08, intensity, profile));
+  } else if (profile.variant === "stuck") {
+    varied.push(noiseLayer("stiction-hold", duration * 0.08, duration * 0.24, 0.055 + intensity * 0.06, "bandpass", randomInt(rng, 720, 1100), randomInt(rng, 220, 420), profile));
+  }
+
+  return varied.sort((a, b) => a.start - b.start || a.name.localeCompare(b.name));
+}
+
 function varyLockLayers(layers, duration, intensity, profile, rng) {
   const varied = layers.map((layer) => {
-    const gainJitter = lerp(0.92, 1.14, rng());
+    const gainJitter = lerp(0.96, 1.22, rng());
     if (layer.kind === "tone") {
       return {
         ...layer,
@@ -493,12 +692,19 @@ function varyLockLayers(layers, duration, intensity, profile, rng) {
     return { ...layer, gain: round3(layer.gain * gainJitter) };
   });
 
+  const stopStart = varied.find((layer) => layer.name === "lock-stop")?.start ?? duration * 0.56;
   if (profile.variant === "double") {
-    varied.push(clickLayer(duration * lerp(0.28, 0.42, rng()), 0.008, 0.05 + intensity * 0.06, randomInt(rng, 5800, 8600)));
+    varied.push(clickLayer(stopStart + duration * lerp(0.05, 0.12, rng()), 0.01, 0.08 + intensity * 0.09, randomInt(rng, 2600, 5200)));
   } else if (profile.variant === "gritty") {
-    varied.push(noiseLayer("lock-grit", duration * 0.2, duration * 0.18, 0.03 + intensity * 0.045, "highpass", randomInt(rng, 4600, 7200), randomInt(rng, 1500, 2800), profile));
+    varied.push(noiseLayer("lock-grit", duration * 0.18, duration * 0.28, 0.06 + intensity * 0.08, "bandpass", randomInt(rng, 2600, 5200), randomInt(rng, 520, 1200), profile));
   } else if (profile.variant === "stepped") {
-    varied.push(clickLayer(duration * lerp(0.3, 0.48, rng()), 0.009, 0.06 + intensity * 0.07, randomInt(rng, 5000, 7600)));
+    varied.push(clickLayer(duration * lerp(0.26, 0.46, rng()), 0.009, 0.08 + intensity * 0.08, randomInt(rng, 4200, 7200)));
+  } else if (profile.variant === "heavy") {
+    varied.push(toneLayer("lock-mass", stopStart, duration * 0.24, "triangle", randomInt(rng, 95, 145), randomInt(rng, 48, 82), 0.16 + intensity * 0.08, intensity, profile));
+    varied.push(noiseLayer("lock-wood-hit", stopStart, duration * 0.2, 0.1 + intensity * 0.12, "lowpass", randomInt(rng, 700, 1200), randomInt(rng, 180, 360), profile));
+  } else if (profile.variant === "stuck") {
+    varied.push(noiseLayer("stuck-scrape", duration * 0.08, duration * 0.42, 0.07 + intensity * 0.09, "bandpass", randomInt(rng, 1800, 3800), randomInt(rng, 360, 900), profile));
+    varied.push(clickLayer(duration * lerp(0.34, 0.5, rng()), 0.012, 0.08 + intensity * 0.08, randomInt(rng, 3200, 6000)));
   }
 
   return varied.sort((a, b) => a.start - b.start || a.name.localeCompare(b.name));
@@ -548,18 +754,18 @@ function clickLayer(start, duration, gain, filterFrequency) {
   };
 }
 
-function playLayer(audioContext, layer, effectStart, activeSources) {
+function playLayer(audioContext, layer, effectStart, activeSources, destination, onIdle) {
   const startsAt = effectStart + layer.start;
   if (layer.kind === "tone") {
-    playToneLayer(audioContext, layer, startsAt, activeSources);
+    playToneLayer(audioContext, layer, startsAt, activeSources, destination, onIdle);
   } else if (layer.kind === "noise") {
-    playNoiseLayer(audioContext, layer, startsAt, activeSources);
+    playNoiseLayer(audioContext, layer, startsAt, activeSources, destination, onIdle);
   } else {
-    playClickLayer(audioContext, layer, startsAt, activeSources);
+    playClickLayer(audioContext, layer, startsAt, activeSources, destination, onIdle);
   }
 }
 
-function playToneLayer(audioContext, layer, startsAt, activeSources) {
+function playToneLayer(audioContext, layer, startsAt, activeSources, destination, onIdle) {
   const oscillator = audioContext.createOscillator();
   const filter = audioContext.createBiquadFilter();
   const gain = audioContext.createGain();
@@ -577,13 +783,13 @@ function playToneLayer(audioContext, layer, startsAt, activeSources) {
   gain.gain.setValueAtTime(0.0001, startsAt);
   gain.gain.exponentialRampToValueAtTime(Math.max(0.0001, layer.gain), startsAt + layer.attack);
   gain.gain.exponentialRampToValueAtTime(0.0001, Math.max(startsAt + layer.attack + 0.01, endsAt - layer.release));
-  oscillator.connect(filter).connect(gain).connect(audioContext.destination);
-  trackSource(oscillator, activeSources);
+  oscillator.connect(filter).connect(gain).connect(destination);
+  trackSource(oscillator, activeSources, onIdle);
   oscillator.start(startsAt);
   oscillator.stop(endsAt + 0.03);
 }
 
-function playNoiseLayer(audioContext, layer, startsAt, activeSources) {
+function playNoiseLayer(audioContext, layer, startsAt, activeSources, destination, onIdle) {
   const samples = Math.max(1, Math.floor(audioContext.sampleRate * layer.duration));
   const buffer = audioContext.createBuffer(1, samples, audioContext.sampleRate);
   const data = buffer.getChannelData(0);
@@ -604,12 +810,12 @@ function playNoiseLayer(audioContext, layer, startsAt, activeSources) {
   gain.gain.exponentialRampToValueAtTime(Math.max(0.0001, layer.gain), startsAt + layer.attack);
   gain.gain.exponentialRampToValueAtTime(0.0001, Math.max(startsAt + layer.attack + 0.01, endsAt - layer.release));
   source.buffer = buffer;
-  source.connect(filter).connect(gain).connect(audioContext.destination);
-  trackSource(source, activeSources);
+  source.connect(filter).connect(gain).connect(destination);
+  trackSource(source, activeSources, onIdle);
   source.start(startsAt);
 }
 
-function playClickLayer(audioContext, layer, startsAt, activeSources) {
+function playClickLayer(audioContext, layer, startsAt, activeSources, destination, onIdle) {
   const samples = Math.max(1, Math.floor(audioContext.sampleRate * layer.duration));
   const buffer = audioContext.createBuffer(1, samples, audioContext.sampleRate);
   const data = buffer.getChannelData(0);
@@ -627,16 +833,19 @@ function playClickLayer(audioContext, layer, startsAt, activeSources) {
   gain.gain.setValueAtTime(layer.gain, startsAt);
   gain.gain.exponentialRampToValueAtTime(0.0001, startsAt + layer.duration);
   source.buffer = buffer;
-  source.connect(filter).connect(gain).connect(audioContext.destination);
-  trackSource(source, activeSources);
+  source.connect(filter).connect(gain).connect(destination);
+  trackSource(source, activeSources, onIdle);
   source.start(startsAt);
 }
 
-function trackSource(source, activeSources) {
+function trackSource(source, activeSources, onIdle = null) {
   activeSources.add(source);
   source.addEventListener("ended", () => {
     activeSources.delete(source);
     source.disconnect();
+    if (activeSources.size === 0) {
+      onIdle?.();
+    }
   }, { once: true });
 }
 
@@ -650,7 +859,10 @@ function normalizeType(type) {
   if (type === "wild") {
     return "wild";
   }
-  return SFX_TYPES.includes(type) ? type : null;
+  if (SFX_TYPES.includes(type)) {
+    return type;
+  }
+  throw new Error(`unsupported SFX type: ${type}`);
 }
 
 function typeFromSeed(seed) {
@@ -694,813 +906,6 @@ function round2(value) {
 
 function round3(value) {
   return Math.round(value * 1000) / 1000;
-}
-
-// PuzzleScript-compatible SFX support is adapted from PuzzleScript's sfxr.js.
-//
-// MIT License
-// Copyright (c) 2013 Stephen Lavelle
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in all
-// copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-// SOFTWARE.
-const PS_SFX_SOUND_VOL = 0.25;
-const PS_SFX_SAMPLE_RATE = 5512;
-const PS_SFX_MIN_SAMPLE_RATE = 22050;
-const PS_SQUARE = 0;
-const PS_SAWTOOTH = 1;
-const PS_SINE = 2;
-const PS_NOISE = 3;
-const PS_TRIANGLE = 4;
-const PS_BREAKER = 5;
-const PS_SHAPE_COUNT = 6;
-
-let psSfxRng = null;
-
-export function generatePuzzleScriptSoundEffect(seed) {
-  const numericSeed = Math.max(0, Math.trunc(Number(seed) || 0));
-  const params = psGenerateFromSeed(numericSeed);
-  params.sound_vol = PS_SFX_SOUND_VOL;
-  params.sample_rate = PS_SFX_SAMPLE_RATE;
-  return {
-    seed: String(seed),
-    numericSeed,
-    type: "puzzlescript",
-    params,
-  };
-}
-
-export function createPuzzleScriptSfxPlayer(audioContext, effect) {
-  let source = null;
-  let output = null;
-
-  function stop() {
-    if (source) {
-      try {
-        source.stop();
-      } catch {
-        // Already-ended one-shot sources can be ignored.
-      }
-      source.disconnect();
-      source = null;
-    }
-    if (output) {
-      output.disconnect();
-      output = null;
-    }
-  }
-
-  function start() {
-    stop();
-    const buffer = psRenderBuffer(audioContext, effect.params);
-    source = audioContext.createBufferSource();
-    const filter1 = audioContext.createBiquadFilter();
-    const filter2 = audioContext.createBiquadFilter();
-    const filter3 = audioContext.createBiquadFilter();
-    filter1.frequency.value = 1600;
-    filter2.frequency.value = 1600;
-    filter3.frequency.value = 1600;
-    source.buffer = buffer;
-    source.connect(filter1);
-    filter1.connect(filter2);
-    filter2.connect(filter3);
-    filter3.connect(audioContext.destination);
-    output = filter3;
-    source.addEventListener("ended", stop, { once: true });
-    source.start(audioContext.currentTime);
-  }
-
-  return { start, stop };
-}
-
-function psParams() {
-  return {
-    wave_type: PS_SQUARE,
-    p_env_attack: 0.0,
-    p_env_sustain: 0.3,
-    p_env_punch: 0.0,
-    p_env_decay: 0.4,
-    p_base_freq: 0.3,
-    p_freq_limit: 0.0,
-    p_freq_ramp: 0.0,
-    p_freq_dramp: 0.0,
-    p_vib_strength: 0.0,
-    p_vib_speed: 0.0,
-    p_arp_mod: 0.0,
-    p_arp_speed: 0.0,
-    p_duty: 0.0,
-    p_duty_ramp: 0.0,
-    p_repeat_speed: 0.0,
-    p_pha_offset: 0.0,
-    p_pha_ramp: 0.0,
-    p_lpf_freq: 1.0,
-    p_lpf_ramp: 0.0,
-    p_lpf_resonance: 0.0,
-    p_hpf_freq: 0.0,
-    p_hpf_ramp: 0.0,
-    sound_vol: 0.5,
-    sample_rate: 44100,
-  };
-}
-
-function psFrnd(range) {
-  return (psSfxRng ? psSfxRng.uniform() : Math.random()) * range;
-}
-
-function psRnd(max) {
-  return Math.floor((psSfxRng ? psSfxRng.uniform() : Math.random()) * (max + 1));
-}
-
-function psGenerateFromSeed(seed) {
-  psSfxRng = new PsRng((seed / 100) | 0);
-  const generatorIndex = seed % 100;
-  const generator = PS_GENERATORS[generatorIndex % PS_GENERATORS.length];
-  const params = generator();
-  params.seed = seed;
-  psSfxRng = null;
-  return params;
-}
-
-function psPickupCoin() {
-  const p = psParams();
-  p.wave_type = Math.floor(psFrnd(PS_SHAPE_COUNT));
-  if (p.wave_type === PS_NOISE) {
-    p.wave_type = PS_SQUARE;
-  }
-  p.p_base_freq = 0.4 + psFrnd(0.5);
-  p.p_env_attack = 0.0;
-  p.p_env_sustain = psFrnd(0.1);
-  p.p_env_decay = 0.1 + psFrnd(0.4);
-  p.p_env_punch = 0.3 + psFrnd(0.3);
-  if (psRnd(1)) {
-    p.p_arp_speed = 0.5 + psFrnd(0.2);
-    const num = (psFrnd(7) | 1) + 1;
-    const den = num + (psFrnd(7) | 1) + 2;
-    p.p_arp_mod = num / den;
-  }
-  return p;
-}
-
-function psLaserShoot() {
-  const p = psParams();
-  p.wave_type = Math.floor(psFrnd(PS_SHAPE_COUNT));
-  if (p.wave_type === PS_NOISE) {
-    p.wave_type = PS_SQUARE;
-  }
-  p.p_base_freq = 0.5 + psFrnd(0.5);
-  p.p_freq_limit = Math.max(0.2, p.p_base_freq - 0.2 - psFrnd(0.6));
-  p.p_freq_ramp = -0.15 - psFrnd(0.2);
-  if (psRnd(2) === 0) {
-    p.p_base_freq = 0.3 + psFrnd(0.6);
-    p.p_freq_limit = psFrnd(0.1);
-    p.p_freq_ramp = -0.35 - psFrnd(0.3);
-  }
-  if (psRnd(1)) {
-    p.p_duty = psFrnd(0.5);
-    p.p_duty_ramp = psFrnd(0.2);
-  } else {
-    p.p_duty = 0.4 + psFrnd(0.5);
-    p.p_duty_ramp = -psFrnd(0.7);
-  }
-  p.p_env_attack = 0.0;
-  p.p_env_sustain = 0.1 + psFrnd(0.2);
-  p.p_env_decay = psFrnd(0.4);
-  if (psRnd(1)) {
-    p.p_env_punch = psFrnd(0.3);
-  }
-  if (psRnd(2) === 0) {
-    p.p_pha_offset = psFrnd(0.2);
-    p.p_pha_ramp = -psFrnd(0.2);
-  }
-  if (psRnd(1)) {
-    p.p_hpf_freq = psFrnd(0.3);
-  }
-  return p;
-}
-
-function psExplosion() {
-  const p = psParams();
-  if (psRnd(1)) {
-    p.p_base_freq = 0.1 + psFrnd(0.4);
-    p.p_freq_ramp = -0.1 + psFrnd(0.4);
-  } else {
-    p.p_base_freq = 0.2 + psFrnd(0.7);
-    p.p_freq_ramp = -0.2 - psFrnd(0.2);
-  }
-  p.p_base_freq *= p.p_base_freq;
-  if (psRnd(4) === 0) {
-    p.p_freq_ramp = 0.0;
-  }
-  if (psRnd(2) === 0) {
-    p.p_repeat_speed = 0.3 + psFrnd(0.5);
-  }
-  p.p_env_attack = 0.0;
-  p.p_env_sustain = 0.1 + psFrnd(0.3);
-  p.p_env_decay = psFrnd(0.5);
-  if (psRnd(1) === 0) {
-    p.p_pha_offset = -0.3 + psFrnd(0.9);
-    p.p_pha_ramp = -psFrnd(0.3);
-  }
-  p.p_env_punch = 0.2 + psFrnd(0.6);
-  if (psRnd(1)) {
-    p.p_vib_strength = psFrnd(0.7);
-    p.p_vib_speed = psFrnd(0.6);
-  }
-  if (psRnd(2) === 0) {
-    p.p_arp_speed = 0.6 + psFrnd(0.3);
-    p.p_arp_mod = 0.8 - psFrnd(1.6);
-  }
-  return p;
-}
-
-function psBirdSound() {
-  const p = psParams();
-  if (psFrnd(10) < 1) {
-    p.wave_type = Math.floor(psFrnd(PS_SHAPE_COUNT));
-    if (p.wave_type === PS_NOISE) {
-      p.wave_type = PS_SQUARE;
-    }
-    p.p_env_attack = 0.4304400932967592 + psFrnd(0.2) - 0.1;
-    p.p_env_sustain = 0.15739346034252394 + psFrnd(0.2) - 0.1;
-    p.p_env_punch = 0.004488201744871758 + psFrnd(0.2) - 0.1;
-    p.p_env_decay = 0.07478075528212291 + psFrnd(0.2) - 0.1;
-    p.p_base_freq = 0.9865265720147687 + psFrnd(0.2) - 0.1;
-    p.p_freq_limit = psFrnd(0.2) - 0.1;
-    p.p_freq_ramp = -0.2995018224359539 + psFrnd(0.2) - 0.1;
-    if (psFrnd(1.0) < 0.5) {
-      p.p_freq_ramp = 0.1 + psFrnd(0.15);
-    }
-    p.p_freq_dramp = 0.004598608156964473 + psFrnd(0.1) - 0.05;
-    p.p_vib_strength = -0.2202799497929496 + psFrnd(0.2) - 0.1;
-    p.p_vib_speed = 0.8084998703158364 + psFrnd(0.2) - 0.1;
-    p.p_arp_mod = 0;
-    p.p_arp_speed = 0;
-    p.p_duty = -0.9031808754347107 + psFrnd(0.2) - 0.1;
-    p.p_duty_ramp = -0.8128699999808343 + psFrnd(0.2) - 0.1;
-    p.p_repeat_speed = 0.6014860189319991 + psFrnd(0.2) - 0.1;
-    p.p_pha_offset = -0.9424902314367765 + psFrnd(0.2) - 0.1;
-    p.p_pha_ramp = -0.1055482222272056 + psFrnd(0.2) - 0.1;
-    p.p_lpf_freq = 0.9989765717851521 + psFrnd(0.2) - 0.1;
-    p.p_lpf_ramp = -0.25051720626043017 + psFrnd(0.2) - 0.1;
-    p.p_lpf_resonance = 0.32777871505494693 + psFrnd(0.2) - 0.1;
-    p.p_hpf_freq = 0.0023548750981756753 + psFrnd(0.2) - 0.1;
-    p.p_hpf_ramp = -0.002375673204842568 + psFrnd(0.2) - 0.1;
-    return p;
-  }
-  if (psFrnd(10) < 1) {
-    p.wave_type = Math.floor(psFrnd(PS_SHAPE_COUNT));
-    if (p.wave_type === PS_NOISE) {
-      p.wave_type = PS_SQUARE;
-    }
-    p.p_env_attack = 0.5277795946672003 + psFrnd(0.2) - 0.1;
-    p.p_env_sustain = 0.18243733568468432 + psFrnd(0.2) - 0.1;
-    p.p_env_punch = -0.020159754546840117 + psFrnd(0.2) - 0.1;
-    p.p_env_decay = 0.1561353422051903 + psFrnd(0.2) - 0.1;
-    p.p_base_freq = 0.9028855606533718 + psFrnd(0.2) - 0.1;
-    p.p_freq_limit = -0.008842787837148716;
-    p.p_freq_ramp = -0.1;
-    p.p_freq_dramp = -0.012891241489551925;
-    p.p_vib_strength = -0.17923136138403065 + psFrnd(0.2) - 0.1;
-    p.p_vib_speed = 0.908263385610142 + psFrnd(0.2) - 0.1;
-    p.p_arp_mod = 0.41690153355414894 + psFrnd(0.2) - 0.1;
-    p.p_arp_speed = 0.0010766233195860703 + psFrnd(0.2) - 0.1;
-    p.p_duty = -0.8735363011184684 + psFrnd(0.2) - 0.1;
-    p.p_duty_ramp = -0.7397985366747507 + psFrnd(0.2) - 0.1;
-    p.p_repeat_speed = 0.0591789344172107 + psFrnd(0.2) - 0.1;
-    p.p_pha_offset = -0.9961184222777699 + psFrnd(0.2) - 0.1;
-    p.p_pha_ramp = -0.08234769395850523 + psFrnd(0.2) - 0.1;
-    p.p_lpf_freq = 0.9412475115697335 + psFrnd(0.2) - 0.1;
-    p.p_lpf_ramp = -0.18261358925834958 + psFrnd(0.2) - 0.1;
-    p.p_lpf_resonance = 0.24541438107389477 + psFrnd(0.2) - 0.1;
-    p.p_hpf_freq = -0.01831940280978611 + psFrnd(0.2) - 0.1;
-    p.p_hpf_ramp = -0.03857383633171346 + psFrnd(0.2) - 0.1;
-    return p;
-  }
-  if (psFrnd(10) < 1) {
-    p.wave_type = Math.floor(psFrnd(PS_SHAPE_COUNT));
-    if (p.wave_type === PS_NOISE) {
-      p.wave_type = PS_SQUARE;
-    }
-    p.p_env_attack = 0.4304400932967592 + psFrnd(0.2) - 0.1;
-    p.p_env_sustain = 0.15739346034252394 + psFrnd(0.2) - 0.1;
-    p.p_env_punch = 0.004488201744871758 + psFrnd(0.2) - 0.1;
-    p.p_env_decay = 0.07478075528212291 + psFrnd(0.2) - 0.1;
-    p.p_base_freq = 0.9865265720147687 + psFrnd(0.2) - 0.1;
-    p.p_freq_limit = psFrnd(0.2) - 0.1;
-    p.p_freq_ramp = -0.2995018224359539 + psFrnd(0.2) - 0.1;
-    p.p_freq_dramp = 0.004598608156964473 + psFrnd(0.2) - 0.1;
-    p.p_vib_strength = -0.2202799497929496 + psFrnd(0.2) - 0.1;
-    p.p_vib_speed = 0.8084998703158364 + psFrnd(0.2) - 0.1;
-    p.p_arp_mod = -0.46410459213693644 + psFrnd(0.2) - 0.1;
-    p.p_arp_speed = -0.10955361249587248 + psFrnd(0.2) - 0.1;
-    p.p_duty = -0.9031808754347107 + psFrnd(0.2) - 0.1;
-    p.p_duty_ramp = -0.8128699999808343 + psFrnd(0.2) - 0.1;
-    p.p_repeat_speed = 0.7014860189319991 + psFrnd(0.2) - 0.1;
-    p.p_pha_offset = -0.9424902314367765 + psFrnd(0.2) - 0.1;
-    p.p_pha_ramp = -0.1055482222272056 + psFrnd(0.2) - 0.1;
-    p.p_lpf_freq = 0.9989765717851521 + psFrnd(0.2) - 0.1;
-    p.p_lpf_ramp = -0.25051720626043017 + psFrnd(0.2) - 0.1;
-    p.p_lpf_resonance = 0.32777871505494693 + psFrnd(0.2) - 0.1;
-    p.p_hpf_freq = 0.0023548750981756753 + psFrnd(0.2) - 0.1;
-    p.p_hpf_ramp = -0.002375673204842568 + psFrnd(0.2) - 0.1;
-    return p;
-  }
-  if (psFrnd(5) > 1) {
-    p.wave_type = Math.floor(psFrnd(PS_SHAPE_COUNT));
-    if (p.wave_type === PS_NOISE) {
-      p.wave_type = PS_SQUARE;
-    }
-    if (psRnd(1)) {
-      p.p_arp_mod = 0.2697849293151393 + psFrnd(0.2) - 0.1;
-      p.p_arp_speed = -0.3131172257760948 + psFrnd(0.2) - 0.1;
-      p.p_base_freq = 0.8090588299313949 + psFrnd(0.2) - 0.1;
-      p.p_duty = -0.6210022920964955 + psFrnd(0.2) - 0.1;
-      p.p_duty_ramp = -0.00043441813553182567 + psFrnd(0.2) - 0.1;
-      p.p_env_attack = 0.004321877246874195 + psFrnd(0.2) - 0.1;
-      p.p_env_decay = 0.1 + psFrnd(0.2) - 0.1;
-      p.p_env_punch = 0.061737781504416146 + psFrnd(0.2) - 0.1;
-      p.p_env_sustain = 0.4987252564798832 + psFrnd(0.2) - 0.1;
-      p.p_freq_dramp = 0.31700340314222614 + psFrnd(0.2) - 0.1;
-      p.p_freq_limit = psFrnd(0.2) - 0.1;
-      p.p_freq_ramp = -0.163380391341416 + psFrnd(0.2) - 0.1;
-      p.p_hpf_freq = 0.4709005021145149 + psFrnd(0.2) - 0.1;
-      p.p_hpf_ramp = 0.6924667290539194 + psFrnd(0.2) - 0.1;
-      p.p_lpf_freq = 0.8351398631384511 + psFrnd(0.2) - 0.1;
-      p.p_lpf_ramp = 0.36616557192873134 + psFrnd(0.2) - 0.1;
-      p.p_lpf_resonance = -0.08685777111664439 + psFrnd(0.2) - 0.1;
-      p.p_pha_offset = -0.036084571580025544 + psFrnd(0.2) - 0.1;
-      p.p_pha_ramp = -0.014806445085568108 + psFrnd(0.2) - 0.1;
-      p.p_repeat_speed = -0.8094368475518489 + psFrnd(0.2) - 0.1;
-      p.p_vib_speed = 0.4496665457171294 + psFrnd(0.2) - 0.1;
-      p.p_vib_strength = 0.23413762515532424 + psFrnd(0.2) - 0.1;
-    } else {
-      p.p_arp_mod = -0.35697118026766184 + psFrnd(0.2) - 0.1;
-      p.p_arp_speed = 0.3581140690559588 + psFrnd(0.2) - 0.1;
-      p.p_base_freq = 1.3260897696157528 + psFrnd(0.2) - 0.1;
-      p.p_duty = -0.30984900436710694 + psFrnd(0.2) - 0.1;
-      p.p_duty_ramp = -0.0014374759133411626 + psFrnd(0.2) - 0.1;
-      p.p_env_attack = 0.3160357835682254 + psFrnd(0.2) - 0.1;
-      p.p_env_decay = 0.1 + psFrnd(0.2) - 0.1;
-      p.p_env_punch = 0.24323114016870148 + psFrnd(0.2) - 0.1;
-      p.p_env_sustain = 0.4 + psFrnd(0.2) - 0.1;
-      p.p_freq_dramp = 0.2866475886237244 + psFrnd(0.2) - 0.1;
-      p.p_freq_limit = psFrnd(0.2) - 0.1;
-      p.p_freq_ramp = -0.10956352368742976 + psFrnd(0.2) - 0.1;
-      p.p_hpf_freq = 0.20772718017889846 + psFrnd(0.2) - 0.1;
-      p.p_hpf_ramp = 0.1564090637378835 + psFrnd(0.2) - 0.1;
-      p.p_lpf_freq = 0.6021372770637031 + psFrnd(0.2) - 0.1;
-      p.p_lpf_ramp = 0.24016227139979027 + psFrnd(0.2) - 0.1;
-      p.p_lpf_resonance = -0.08787383821160144 + psFrnd(0.2) - 0.1;
-      p.p_pha_offset = -0.381597686151701 + psFrnd(0.2) - 0.1;
-      p.p_pha_ramp = -0.0002481687661373495 + psFrnd(0.2) - 0.1;
-      p.p_repeat_speed = 0.07812112809425686 + psFrnd(0.2) - 0.1;
-      p.p_vib_speed = -0.13648848579133943 + psFrnd(0.2) - 0.1;
-      p.p_vib_strength = 0.0018874158972302657 + psFrnd(0.2) - 0.1;
-    }
-    return p;
-  }
-  p.wave_type = Math.floor(psFrnd(PS_SHAPE_COUNT));
-  if (p.wave_type === PS_SAWTOOTH || p.wave_type === PS_NOISE) {
-    p.wave_type = PS_SINE;
-  }
-  p.p_base_freq = 0.85 + psFrnd(0.15);
-  p.p_freq_ramp = 0.3 + psFrnd(0.15);
-  p.p_env_attack = psFrnd(0.09);
-  p.p_env_sustain = 0.2 + psFrnd(0.3);
-  p.p_env_decay = psFrnd(0.1);
-  p.p_duty = psFrnd(2.0) - 1.0;
-  p.p_duty_ramp = Math.pow(psFrnd(2.0) - 1.0, 3.0);
-  p.p_repeat_speed = 0.5 + psFrnd(0.1);
-  p.p_pha_offset = -0.3 + psFrnd(0.9);
-  p.p_pha_ramp = -psFrnd(0.3);
-  p.p_arp_speed = 0.4 + psFrnd(0.6);
-  p.p_arp_mod = 0.8 + psFrnd(0.1);
-  p.p_lpf_resonance = psFrnd(2.0) - 1.0;
-  p.p_lpf_freq = 1.0 - Math.pow(psFrnd(1.0), 3.0);
-  p.p_lpf_ramp = Math.pow(psFrnd(2.0) - 1.0, 3.0);
-  if (p.p_lpf_freq < 0.1 && p.p_lpf_ramp < -0.05) {
-    p.p_lpf_ramp = -p.p_lpf_ramp;
-  }
-  p.p_hpf_freq = Math.pow(psFrnd(1.0), 5.0);
-  p.p_hpf_ramp = Math.pow(psFrnd(2.0) - 1.0, 5.0);
-  return p;
-}
-
-function psPowerUp() {
-  const p = psParams();
-  p.wave_type = Math.floor(psFrnd(PS_SHAPE_COUNT));
-  if (p.wave_type === PS_NOISE) {
-    p.wave_type = PS_SQUARE;
-  }
-  if (psRnd(1)) {
-    p.p_base_freq = 0.2 + psFrnd(0.3);
-    p.p_freq_ramp = 0.1 + psFrnd(0.4);
-    p.p_repeat_speed = 0.4 + psFrnd(0.4);
-  } else {
-    p.p_base_freq = 0.2 + psFrnd(0.3);
-    p.p_freq_ramp = 0.05 + psFrnd(0.2);
-    if (psRnd(1)) {
-      p.p_vib_strength = psFrnd(0.7);
-      p.p_vib_speed = psFrnd(0.6);
-    }
-  }
-  p.p_env_attack = 0.0;
-  p.p_env_sustain = psFrnd(0.4);
-  p.p_env_decay = 0.1 + psFrnd(0.4);
-  return p;
-}
-
-function psHitHurt() {
-  const p = psParams();
-  p.wave_type = Math.floor(psFrnd(PS_SHAPE_COUNT));
-  p.p_base_freq = 0.2 + psFrnd(0.6);
-  p.p_freq_ramp = -0.3 - psFrnd(0.4);
-  p.p_env_attack = 0.0;
-  p.p_env_sustain = psFrnd(0.1);
-  p.p_env_decay = 0.1 + psFrnd(0.2);
-  if (psRnd(1)) {
-    p.p_hpf_freq = psFrnd(0.3);
-  }
-  return p;
-}
-
-function psJump() {
-  const p = psParams();
-  p.wave_type = Math.floor(psFrnd(PS_SHAPE_COUNT));
-  if (p.wave_type === PS_NOISE) {
-    p.wave_type = PS_SQUARE;
-  }
-  p.p_duty = psFrnd(0.6);
-  p.p_base_freq = 0.3 + psFrnd(0.3);
-  p.p_freq_ramp = 0.1 + psFrnd(0.2);
-  p.p_env_attack = 0.0;
-  p.p_env_sustain = 0.1 + psFrnd(0.3);
-  p.p_env_decay = 0.1 + psFrnd(0.2);
-  if (psRnd(1)) {
-    p.p_hpf_freq = psFrnd(0.3);
-  }
-  if (psRnd(1)) {
-    p.p_lpf_freq = 1.0 - psFrnd(0.6);
-  }
-  return p;
-}
-
-function psBlipSelect() {
-  const p = psParams();
-  p.wave_type = Math.floor(psFrnd(PS_SHAPE_COUNT));
-  if (p.wave_type === PS_NOISE) {
-    p.wave_type = psRnd(1);
-  }
-  if (p.wave_type === PS_SQUARE) {
-    p.p_duty = psFrnd(0.6);
-  }
-  p.p_base_freq = 0.2 + psFrnd(0.4);
-  p.p_env_attack = 0.0;
-  p.p_env_sustain = 0.1 + psFrnd(0.1);
-  p.p_env_decay = psFrnd(0.2);
-  p.p_hpf_freq = 0.1;
-  return p;
-}
-
-function psPushSound() {
-  const p = psParams();
-  p.wave_type = Math.floor(psFrnd(PS_SHAPE_COUNT));
-  if (p.wave_type === PS_SINE) {
-    p.wave_type += 1;
-  }
-  if (p.wave_type === PS_SQUARE) {
-    p.wave_type = PS_NOISE;
-  }
-  p.p_base_freq = 0.1 + psFrnd(0.4);
-  p.p_freq_ramp = 0.05 + psFrnd(0.2);
-  p.p_env_attack = 0.01 + psFrnd(0.09);
-  p.p_env_sustain = 0.01 + psFrnd(0.09);
-  p.p_env_decay = 0.01 + psFrnd(0.09);
-  p.p_repeat_speed = 0.3 + psFrnd(0.5);
-  p.p_pha_offset = -0.3 + psFrnd(0.9);
-  p.p_pha_ramp = -psFrnd(0.3);
-  p.p_arp_speed = 0.6 + psFrnd(0.3);
-  p.p_arp_mod = 0.8 - psFrnd(1.6);
-  return p;
-}
-
-function psRandomSound() {
-  const p = psParams();
-  p.wave_type = Math.floor(psFrnd(PS_SHAPE_COUNT));
-  p.p_base_freq = Math.pow(psFrnd(2.0) - 1.0, 2.0);
-  if (psRnd(1)) {
-    p.p_base_freq = Math.pow(psFrnd(2.0) - 1.0, 3.0) + 0.5;
-  }
-  p.p_freq_limit = 0.0;
-  p.p_freq_ramp = Math.pow(psFrnd(2.0) - 1.0, 5.0);
-  if (p.p_base_freq > 0.7 && p.p_freq_ramp > 0.2) {
-    p.p_freq_ramp = -p.p_freq_ramp;
-  }
-  if (p.p_base_freq < 0.2 && p.p_freq_ramp < -0.05) {
-    p.p_freq_ramp = -p.p_freq_ramp;
-  }
-  p.p_freq_dramp = Math.pow(psFrnd(2.0) - 1.0, 3.0);
-  p.p_duty = psFrnd(2.0) - 1.0;
-  p.p_duty_ramp = Math.pow(psFrnd(2.0) - 1.0, 3.0);
-  p.p_vib_strength = Math.pow(psFrnd(2.0) - 1.0, 3.0);
-  p.p_vib_speed = psFrnd(2.0) - 1.0;
-  p.p_env_attack = Math.pow(psFrnd(2.0) - 1.0, 3.0);
-  p.p_env_sustain = Math.pow(psFrnd(2.0) - 1.0, 2.0);
-  p.p_env_decay = psFrnd(2.0) - 1.0;
-  p.p_env_punch = Math.pow(psFrnd(0.8), 2.0);
-  if (p.p_env_attack + p.p_env_sustain + p.p_env_decay < 0.2) {
-    p.p_env_sustain += 0.2 + psFrnd(0.3);
-    p.p_env_decay += 0.2 + psFrnd(0.3);
-  }
-  p.p_lpf_resonance = psFrnd(2.0) - 1.0;
-  p.p_lpf_freq = 1.0 - Math.pow(psFrnd(1.0), 3.0);
-  p.p_lpf_ramp = Math.pow(psFrnd(2.0) - 1.0, 3.0);
-  if (p.p_lpf_freq < 0.1 && p.p_lpf_ramp < -0.05) {
-    p.p_lpf_ramp = -p.p_lpf_ramp;
-  }
-  p.p_hpf_freq = Math.pow(psFrnd(1.0), 5.0);
-  p.p_hpf_ramp = Math.pow(psFrnd(2.0) - 1.0, 5.0);
-  p.p_pha_offset = Math.pow(psFrnd(2.0) - 1.0, 3.0);
-  p.p_pha_ramp = Math.pow(psFrnd(2.0) - 1.0, 3.0);
-  p.p_repeat_speed = psFrnd(2.0) - 1.0;
-  p.p_arp_speed = psFrnd(2.0) - 1.0;
-  p.p_arp_mod = psFrnd(2.0) - 1.0;
-  return p;
-}
-
-const PS_GENERATORS = [
-  psPickupCoin,
-  psLaserShoot,
-  psExplosion,
-  psPowerUp,
-  psHitHurt,
-  psJump,
-  psBlipSelect,
-  psPushSound,
-  psRandomSound,
-  psBirdSound,
-];
-
-function psRenderBuffer(audioContext, ps) {
-  let repTime;
-  let fperiod;
-  let period;
-  let fmaxperiod;
-  let fslide;
-  let fdslide;
-  let squareDuty;
-  let squareSlide;
-  let arpMod;
-  let arpLimit;
-
-  function repeat() {
-    repTime = 0;
-    fperiod = 100.0 / (ps.p_base_freq * ps.p_base_freq + 0.001);
-    period = Math.floor(fperiod);
-    fmaxperiod = 100.0 / (ps.p_freq_limit * ps.p_freq_limit + 0.001);
-    fslide = 1.0 - Math.pow(ps.p_freq_ramp, 3.0) * 0.01;
-    fdslide = -Math.pow(ps.p_freq_dramp, 3.0) * 0.000001;
-    squareDuty = 0.5 - ps.p_duty * 0.5;
-    squareSlide = -ps.p_duty_ramp * 0.00005;
-    arpMod = ps.p_arp_mod >= 0.0
-      ? 1.0 - Math.pow(ps.p_arp_mod, 2.0) * 0.9
-      : 1.0 + Math.pow(ps.p_arp_mod, 2.0) * 10.0;
-    arpLimit = Math.floor(Math.pow(1.0 - ps.p_arp_speed, 2.0) * 20000 + 32);
-    if (ps.p_arp_speed === 1.0) {
-      arpLimit = 0;
-    }
-  }
-
-  repeat();
-
-  let fltp = 0.0;
-  let fltdp = 0.0;
-  let fltw = Math.pow(ps.p_lpf_freq, 3.0) * 0.1;
-  const fltwD = 1.0 + ps.p_lpf_ramp * 0.0001;
-  let fltdmp = 5.0 / (1.0 + Math.pow(ps.p_lpf_resonance, 2.0) * 20.0) * (0.01 + fltw);
-  if (fltdmp > 0.8) {
-    fltdmp = 0.8;
-  }
-  let fltphp = 0.0;
-  let flthp = Math.pow(ps.p_hpf_freq, 2.0) * 0.1;
-  const flthpD = 1.0 + ps.p_hpf_ramp * 0.0003;
-  let vibPhase = 0.0;
-  const vibSpeed = Math.pow(ps.p_vib_speed, 2.0) * 0.01;
-  const vibAmp = ps.p_vib_strength * 0.5;
-  let envStage = 0;
-  let envTime = 0;
-  const envLength = [
-    Math.floor(ps.p_env_attack * ps.p_env_attack * 100000.0),
-    Math.floor(ps.p_env_sustain * ps.p_env_sustain * 100000.0),
-    Math.floor(ps.p_env_decay * ps.p_env_decay * 100000.0),
-  ];
-  const envTotalLength = Math.max(1, envLength[0] + envLength[1] + envLength[2]);
-  let fphase = Math.pow(ps.p_pha_offset, 2.0) * 1020.0;
-  if (ps.p_pha_offset < 0.0) {
-    fphase = -fphase;
-  }
-  let fdphase = Math.pow(ps.p_pha_ramp, 2.0);
-  if (ps.p_pha_ramp < 0.0) {
-    fdphase = -fdphase;
-  }
-  let iphase = Math.abs(Math.floor(fphase));
-  let ipp = 0;
-  const phaserBuffer = new Array(1024).fill(0.0);
-  const noiseBuffer = Array.from({ length: 32 }, () => Math.random() * 2.0 - 1.0);
-  let repLimit = Math.floor(Math.pow(1.0 - ps.p_repeat_speed, 2.0) * 20000 + 32);
-  if (ps.p_repeat_speed === 0.0) {
-    repLimit = 0;
-  }
-  const gain = Math.exp(ps.sound_vol) - 1;
-  let sampleSum = 0;
-  let numSummed = 0;
-  const summands = Math.max(1, Math.floor(44100 / ps.sample_rate));
-  const outputRate = ps.sample_rate < PS_SFX_MIN_SAMPLE_RATE ? PS_SFX_MIN_SAMPLE_RATE : ps.sample_rate;
-  const expansion = ps.sample_rate < PS_SFX_MIN_SAMPLE_RATE ? Math.ceil(outputRate / ps.sample_rate) : 1;
-  const bufferLength = Math.ceil(envTotalLength / summands) * expansion + expansion + 8;
-  const audioBuffer = audioContext.createBuffer(1, bufferLength, outputRate);
-  const buffer = audioBuffer.getChannelData(0);
-  let bufferIndex = 0;
-  let phase = 0;
-
-  for (let t = 0; bufferIndex < buffer.length; t += 1) {
-    if (repLimit !== 0 && ++repTime >= repLimit) {
-      repeat();
-    }
-    if (arpLimit !== 0 && t >= arpLimit) {
-      arpLimit = 0;
-      fperiod *= arpMod;
-    }
-    fslide += fdslide;
-    fperiod *= fslide;
-    if (fperiod > fmaxperiod) {
-      fperiod = fmaxperiod;
-      if (ps.p_freq_limit > 0.0) {
-        break;
-      }
-    }
-    let rfperiod = fperiod;
-    if (vibAmp > 0.0) {
-      vibPhase += vibSpeed;
-      rfperiod = fperiod * (1.0 + Math.sin(vibPhase) * vibAmp);
-    }
-    period = Math.max(8, Math.floor(rfperiod));
-    squareDuty = Math.max(0.0, Math.min(0.5, squareDuty + squareSlide));
-    envTime += 1;
-    if (envTime > envLength[envStage]) {
-      envTime = 1;
-      envStage += 1;
-      while (envStage < 3 && envLength[envStage] === 0) {
-        envStage += 1;
-      }
-      if (envStage === 3) {
-        break;
-      }
-    }
-    const envVol = envStage === 0
-      ? envTime / Math.max(1, envLength[0])
-      : envStage === 1
-        ? 1.0 + Math.pow(1.0 - envTime / Math.max(1, envLength[1]), 1.0) * 2.0 * ps.p_env_punch
-        : 1.0 - envTime / Math.max(1, envLength[2]);
-    fphase += fdphase;
-    iphase = Math.min(1023, Math.abs(Math.floor(fphase)));
-    if (flthpD !== 0.0) {
-      flthp = Math.max(0.00001, Math.min(0.1, flthp * flthpD));
-    }
-
-    let sample = 0.0;
-    for (let si = 0; si < 8; si += 1) {
-      let subSample = 0.0;
-      phase += 1;
-      if (phase >= period) {
-        phase %= period;
-        if (ps.wave_type === PS_NOISE) {
-          for (let i = 0; i < 32; i += 1) {
-            noiseBuffer[i] = Math.random() * 2.0 - 1.0;
-          }
-        }
-      }
-      const fp = phase / period;
-      if (ps.wave_type === PS_SQUARE) {
-        subSample = fp < squareDuty ? 0.5 : -0.5;
-      } else if (ps.wave_type === PS_SAWTOOTH) {
-        subSample = 1.0 - fp * 2;
-      } else if (ps.wave_type === PS_SINE) {
-        subSample = Math.sin(fp * 2 * Math.PI);
-      } else if (ps.wave_type === PS_NOISE) {
-        subSample = noiseBuffer[Math.floor(phase * 32 / period)];
-      } else if (ps.wave_type === PS_TRIANGLE) {
-        subSample = Math.abs(1 - fp * 2) - 1;
-      } else if (ps.wave_type === PS_BREAKER) {
-        subSample = Math.abs(1 - fp * fp * 2) - 1;
-      }
-      const previousFltp = fltp;
-      fltw = Math.max(0.0, Math.min(0.1, fltw * fltwD));
-      if (ps.p_lpf_freq !== 1.0) {
-        fltdp += (subSample - fltp) * fltw;
-        fltdp -= fltdp * fltdmp;
-      } else {
-        fltp = subSample;
-        fltdp = 0.0;
-      }
-      fltp += fltdp;
-      fltphp += fltp - previousFltp;
-      fltphp -= fltphp * flthp;
-      subSample = fltphp;
-      phaserBuffer[ipp & 1023] = subSample;
-      subSample += phaserBuffer[(ipp - iphase + 1024) & 1023];
-      ipp = (ipp + 1) & 1023;
-      sample += subSample * envVol;
-    }
-    sampleSum += sample;
-    if (++numSummed < summands) {
-      continue;
-    }
-    numSummed = 0;
-    const value = (sampleSum / summands / 8) * gain;
-    sampleSum = 0;
-    for (let i = 0; i < expansion && bufferIndex < buffer.length; i += 1) {
-      buffer[bufferIndex] = value;
-      bufferIndex += 1;
-    }
-  }
-
-  return audioBuffer;
-}
-
-class PsRng {
-  constructor(seed) {
-    this.state = new PsRc4(JSON.stringify(seed));
-  }
-
-  uniform() {
-    const bytes = 7;
-    let output = 0;
-    for (let i = 0; i < bytes; i += 1) {
-      output *= 256;
-      output += this.state.next();
-    }
-    return output / (Math.pow(2, bytes * 8) - 1);
-  }
-}
-
-class PsRc4 {
-  constructor(seed) {
-    this.s = Array.from({ length: 256 }, (_, index) => index);
-    this.i = 0;
-    this.j = 0;
-    this.mix(seed);
-  }
-
-  mix(seed) {
-    const input = psStringBytes(seed);
-    let j = 0;
-    for (let i = 0; i < this.s.length; i += 1) {
-      j = (j + this.s[i] + input[i % input.length]) % 256;
-      this.swap(i, j);
-    }
-  }
-
-  next() {
-    this.i = (this.i + 1) % 256;
-    this.j = (this.j + this.s[this.i]) % 256;
-    this.swap(this.i, this.j);
-    return this.s[(this.s[this.i] + this.s[this.j]) % 256];
-  }
-
-  swap(i, j) {
-    const tmp = this.s[i];
-    this.s[i] = this.s[j];
-    this.s[j] = tmp;
-  }
-}
-
-function psStringBytes(value) {
-  const output = [];
-  for (let i = 0; i < value.length; i += 1) {
-    let code = value.charCodeAt(i);
-    const bytes = [];
-    do {
-      bytes.push(code & 0xff);
-      code >>= 8;
-    } while (code > 0);
-    output.push(...bytes.reverse());
-  }
-  return output.length ? output : [0];
 }
 
 function clamp(value, min, max) {

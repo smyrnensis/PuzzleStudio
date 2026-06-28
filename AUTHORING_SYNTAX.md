@@ -31,7 +31,7 @@ actor = Player Box Wall
 @overlay = @Cursor @Hint
 }
 
-group {
+groups {
 solid = actor
 }
 
@@ -110,7 +110,7 @@ homepage "https://example.com"
 
 ### Tags / Object Schema
 
-有限で順序を持つ tag set を `tags` block で定義できる。単数 `tag` 行 sugar や bare `color = red blue` は canonical syntax ではない。
+有限で順序を持つ tag set を `tags` block で定義できる。tag set は schema の axis として使う object-name atom の集合であり、値は object 名と同じ名前空間の atom として扱う。単数 `tag` 行 sugar や bare `color = red blue` は canonical syntax ではない。
 
 ```txt
 tags {
@@ -126,7 +126,23 @@ tag value list の中の `<start>...<end>` は inclusive numeric range として
 
 `layers` は object 定義から作られる組み込み tag set。名前付き layer はその名前、匿名 layer は内部名で展開される。各 layer 名は同じ layer に属する object group としても登録される。
 
-tag set を使った object schema は、`layers` の右辺で concrete object variants に展開される。
+tag set を使った object schema は、`layers` の右辺で concrete object に展開される。たとえば `Box:color` は `Box:red` / `Box:blue` のような object identity を作る。
+
+tag set の値が object family 名を表す場合、tag set 名に suffix を付けた selector は各 object-name atom に同じ suffix を機械的に付けて解決する。
+
+```txt
+tags {
+kind = a b
+pair = A B
+}
+layers {
+actor = A:kind B:kind C:kind
+}
+
+win_conditions = count(pair:a) == 2
+```
+
+この `pair:a` は `A:a B:a` と同じ selector 集合として扱われる。`pair:a` の展開先に存在しない selector が含まれる場合は error になる。
 
 ```txt
 layers {
@@ -304,7 +320,7 @@ actor = Player Box Wall
 @overlay = @Cursor @Hint
 }
 
-group {
+groups {
 solid = actor
 @hints = @overlay
 }
@@ -320,6 +336,8 @@ layer 名はそのまま tag selector として使える。たとえば `floor =
 
 右辺は、未知の名前なら新しい object / schema として作られ、既存の object / schema / group / layer tag ならその selector をその layer に割り当てる。
 
+schema family の base 名と同じ単体 object は定義できる。たとえば `Room Room:state` と書いた場合、`Room` は単体 object、`Room:open` / `Room:close` は family variant を指す。`Room` は family 全体の省略形にはならない。family 全体を選ぶときは `Room:*`、特定 variant を選ぶときは `Room:open` のように明示する。`Room` という単体 object が定義されていない場合、裸の `Room` selector は error。
+
 puzzle 直下の declaration/use block は同じ puzzle scope の catalog に対して解決される。したがって `sounds`、`rules`、`win_conditions`、`legend` などの object selector は、同じ puzzle 内の `layers` が作る最終 catalog を見る。block のテキスト順は、statement list や layout child のように順序そのものを表す構文でだけ意味を持つ。
 
 `@Name` は display object を表す。display object は main object と同じ layer order 上に並ぶが、main object と同じ storage layer には入れない。`display @Name` も互換・明示形として読める。`@layer_name = ...` と `@group_name = ...` は display-only の alias であり、右辺に main object を含められない。`@` なしの layer / group は display object を含められない。
@@ -334,7 +352,7 @@ paint = Blob:color
 @overlay = @Cursor:color
 }
 
-group {
+groups {
 solid = actor
 @cursor_marks = @overlay
 }
@@ -346,15 +364,17 @@ semantic selector は layer declaration とは別責務なので、canonical で
 
 同じセルの同じ layer には最大 1 object しか入れない。
 
-### `group`
+### `groups`
 
 ```txt
-group {
+groups {
 pushable_objects = Box Crate
 }
 ```
 
 group は selector の別名。rewrite では object selector と同じ場所で使える。各 row は `<name> = <selector...>` の形で書く。
+
+group は concrete object selector の集合であり、schema family term を後から suffix 展開する機能は持たない。`A:a B:a` のように concrete object selector として解決できるものだけを入れる。object-name atom set に suffix を付けたい場合は `tags` を使う。
 
 同じ selector の複数 occurrence を右辺で明示的に入れ替えたい場合は、scratch より前に `#` で occurrence label を付ける。`#` は object / group / schema 名の一部ではなく、その rewrite 内だけの identity label。
 
@@ -439,7 +459,7 @@ top-level の `var` / `const` は scene / puzzle に属さない session 値、`
 ### `condition`
 
 ```txt
-group {
+groups {
 cargo = Box Crate
 }
 condition cargo_count = count(cargo)
@@ -1243,7 +1263,7 @@ input directions [ player:color | box:color | ] -> [ | player:color | box:color 
 同じ group / schema selector が左辺に複数回出る場合も、各 occurrence は独立に cartesian 展開される。右辺の同名 selector は出現順で対応する左辺 occurrence を保持する。
 
 ```txt
-group {
+groups {
 cargo = Box Crate
 }
 once [ cargo | cargo | ] -> [ | cargo | cargo ]
@@ -1430,7 +1450,7 @@ shape player_shape
 }
 ```
 
-PS / PS Next 風の one-off sprite は、selector block の中に色行、ASCII pattern の順で書ける。canonical では `pixels_per_cell` / `offset` の配置メタデータを上に置き、`rotate from <value>` を使う場合はその次、色行、ASCII pattern または `shape <name>` の順で書く。色行は `colors` keyword を付けてもよいが、省略するのが canonical。色は CSS color として渡されるため、`transparent`、基本 CSS color keywords、`orange`、`grey` / `gray` variants、`brown`、`pink`、`#rrggbbaa` の alpha 付き hex も使える。`.` は透明、`0`..`9`、`a`..`z`、`A`..`Z` は色行の順序に対応する。
+PS / PS Next 風の one-off sprite は、selector block の中に色行、ASCII pattern の順で書ける。canonical では `pixels_per_cell` / `offset` の配置メタデータを上に置き、`rotate from <value>` を使う場合はその次、色行、ASCII pattern または `shape <name>` の順で書く。brace なし sprite entry でも同じ順序で `rotate from <value>` を書ける。色行は `colors` keyword を付けてもよいが、省略するのが canonical。色は CSS color として渡されるため、`transparent`、基本 CSS color keywords、`orange`、`grey` / `gray` variants、`brown`、`pink`、`#rrggbbaa` の alpha 付き hex も使える。`.` は透明、`0`..`9`、`a`..`z`、`A`..`Z` は色行の順序に対応する。
 
 単純な sprite は block braces なしでも書ける。selector の次の行が色 1 つだけで pattern がなければ cell 全体の単色塗りつぶしになる。これは `Background` / `#9CBD0F` のような PuzzleScript 由来の色だけ sprite でも同じで、`00000` のようなダミー ASCII pattern は不要。pattern を続けると、その行数・列数が sprite pixel grid になる。`pixels_per_cell <w> <h>` を省略した場合は ASCII pattern の行数・列数が 1 cell の pixel grid になる。明示した場合は、pattern がその grid より大きくても描画は overflow できる。
 

@@ -13,6 +13,7 @@ pub use puzzle_scene::{
     SceneForSource as ForSource, SceneLayout as SceneLayoutDef, SceneSize as SceneSizeDef,
     SceneTextComponent as SharedSceneTextComponent,
 };
+use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug)]
 pub struct LoadedDocument {
@@ -45,7 +46,7 @@ pub enum LoadedDocumentModel {
     Puzzle3d { name: String, puzzle: ParsedPuzzle3 },
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LoadedGame {
     pub title: String,
     pub subtitle: Option<String>,
@@ -87,20 +88,20 @@ pub struct LoadedGame {
     pub screen: PuzzleScreenDef,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RuleAnimation {
     pub trigger: RuleAnimationTrigger,
     pub name: String,
     pub objects: Vec<ObjectId>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RuleAnimationTrigger {
     Move,
     CantMove,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AnimationDef {
     pub tween: TweenAnimationDef,
 }
@@ -113,7 +114,7 @@ impl Default for AnimationDef {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TweenAnimationDef {
     pub enabled: bool,
     pub interval_ms: u64,
@@ -128,7 +129,7 @@ impl Default for TweenAnimationDef {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RuleEffect {
     Win,
     Restart,
@@ -147,37 +148,38 @@ pub enum RuleEffect {
     Scene(SceneEffect),
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct AssetsDef {
     pub entries: Vec<AssetDef>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AssetDef {
     pub kind: AssetKind,
     pub path: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AssetKind {
     Css,
     Script,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct SoundsDef {
     pub sfx: Vec<SfxSoundDef>,
     pub music: Vec<MusicSoundDef>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SfxSoundDef {
     pub name: String,
     pub seed: String,
     pub type_target: String,
+    pub volume: f64,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MusicSoundDef {
     pub name: String,
     pub seed: String,
@@ -187,7 +189,7 @@ pub struct MusicSoundDef {
     pub volume: f64,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ThemeDef {
     pub name: Option<String>,
     pub variables: Vec<ThemeVariableDef>,
@@ -202,25 +204,25 @@ impl Default for ThemeDef {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ThemeVariableDef {
     pub name: String,
     pub value: String,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct VisualsDef {
     pub aliases: Vec<VisualAliasDef>,
     pub sprites: Vec<VisualSpriteDef>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct VisualAliasDef {
     pub object: String,
     pub sprite: String,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct VisualSpriteDef {
     pub name: String,
     pub kind: VisualSpriteKind,
@@ -228,19 +230,19 @@ pub struct VisualSpriteDef {
     pub pixels_per_cell: Option<VisualSpritePixelsPerCell>,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VisualSpriteOffset {
     pub x: i32,
     pub y: i32,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VisualSpritePixelsPerCell {
     pub width: u32,
     pub height: u32,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum VisualSpriteKind {
     Solid(String),
     Image {
@@ -252,24 +254,24 @@ pub enum VisualSpriteKind {
     },
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct VisualColorDef {
     pub token: char,
     pub color: String,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PuzzleRenderDef {
     pub grid: PuzzleGridRenderDef,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PuzzleGridRenderDef {
     pub occupied_cells: bool,
     pub all_cells: bool,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Level {
     pub name: String,
     pub pack: Option<String>,
@@ -280,7 +282,7 @@ pub struct Level {
     pub level_clear_program: Option<Vec<RuleStep>>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LevelRegionDef {
     pub index: usize,
     pub x: u16,
@@ -289,7 +291,7 @@ pub struct LevelRegionDef {
     pub height: u16,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PuzzleScreenDef {
     pub viewport_size: ViewportSizeDef,
     pub viewport_focus: String,
@@ -308,46 +310,46 @@ impl Default for PuzzleScreenDef {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ViewportSizeDef {
     Full,
     Size { width: u16, height: u16 },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ViewportModeDef {
     Paged,
     Centered,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct GoalCondition {
     pub description: String,
     pub expr: GoalExpr,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum GoalExpr {
     All(Vec<GoalExpr>),
     Any(Vec<GoalExpr>),
     Clause(GoalClause),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct GoalClause {
     pub value: GoalValue,
     pub op: ComparisonOp,
     pub expected: i64,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum GoalValue {
     Global(GlobalId),
     Condition(ConditionId),
     InlineConditionValue(ConditionValueKind),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SceneDef {
     pub name: String,
     pub layout: SceneLayoutDef,
@@ -360,38 +362,38 @@ pub struct SceneDef {
     pub puzzle_rule: Option<ScenePuzzleRule>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SceneRoutineDef {
     pub name: String,
     pub effect: SceneEffect,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ScenePuzzleRule {
     pub target: String,
     pub rule: String,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SceneResources {
     pub levels: ResourceSelection,
     pub sprites: ResourceSelection,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ResourceSelection {
     #[default]
     All,
     Named(Vec<String>),
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct SceneStateDef {
     pub variables: Vec<SceneVarDef>,
     pub puzzles: Vec<ScenePuzzleDef>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SceneVarDef {
     pub name: String,
     pub default: SceneValue,
@@ -399,7 +401,7 @@ pub struct SceneVarDef {
     pub mutable: bool,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ScenePuzzleDef {
     pub name: String,
     pub kind: String,
@@ -408,13 +410,13 @@ pub struct ScenePuzzleDef {
     pub lifetime: SceneStateLifetime,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ScenePuzzleInitializer {
     CurrentLevel,
     Level(String),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SceneValue {
     Bool(bool),
     Int(i64),
@@ -423,7 +425,7 @@ pub enum SceneValue {
     LevelRef(usize),
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SceneStateLifetime {
     #[default]
     Instance,
@@ -437,7 +439,7 @@ pub type SceneTitleDef = SharedSceneTextComponent<SceneExpr>;
 
 pub type SceneTextDef = SharedSceneTextComponent<SceneTextContent>;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SceneTextContent {
     Literal(String),
     Path(Vec<String>),
@@ -447,7 +449,7 @@ pub type SceneButtonDef = SharedSceneButton<SceneEffect, SceneExpr>;
 
 pub type SceneConditionalDef = SharedSceneConditional<SceneEffect, SceneExpr, SceneTextContent>;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SceneEffect {
     Input(String),
     ComponentEffect(String),
@@ -551,13 +553,13 @@ pub enum SceneEffect {
     Sequence(Vec<SceneEffect>),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SceneEffectParam {
     Level(SceneExpr),
     Named { name: String, value: SceneExpr },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SceneExpr {
     Bool(bool),
     Int(i64),
@@ -572,26 +574,26 @@ pub type SceneForDef = SharedSceneFor<SceneEffect, SceneExpr, SceneTextContent>;
 
 pub type LevelMenuDef = puzzle_scene::LevelMenuComponent<SceneEffect, SceneExpr>;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct KeyBinding {
     pub keys: Vec<KeyTrigger>,
     pub effect: SceneEffect,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SceneTransition {
     pub trigger: SceneTransitionTrigger,
     pub effect: SceneEffect,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SceneTransitionTrigger {
     Condition(String),
     SceneStart,
     LevelStart,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum KeyTrigger {
     Char(char),
     Named(String),
@@ -728,7 +730,7 @@ fn compare_i64(left: i64, op: ComparisonOp, right: i64) -> bool {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AsciiLegend {
     chars: Vec<char>,
     ignored: Vec<ObjectId>,
@@ -800,14 +802,14 @@ impl AsciiLegend {
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Controls {
     pub keys: HashMap<u8, InputId>,
     pub arrows: HashMap<ArrowKey, InputId>,
     pub named: HashMap<String, InputId>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ArrowKey {
     Up,
     Down,

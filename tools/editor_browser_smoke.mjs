@@ -29,6 +29,7 @@ async function main() {
       await editorLoads(page);
       await sourceEditorReflectsInputBeforeKeyup(page);
       await sourceEditorPairsDoubleQuote(page);
+      await sourceUndoReturnsToEditedLocationAfterCursorMove(page);
       await sourceUndoSurvivesSameDocumentReload(page);
       await sourceEditorReflectsCompositionBeforeCommit(page);
       await sourceCompletionKeepsKeyboardSelectionAcrossRefresh(page);
@@ -37,6 +38,7 @@ async function main() {
         return;
       }
       await runPreviewStartsRuntime(page);
+      await sourceEditKeepsCompiledPreviewRunning(page);
       await levelPlaytestKeyboardChangesBoardWithoutSavingSource(page);
       await sourceLevelAsciiClickOpensLevelEditor(page);
     });
@@ -95,6 +97,89 @@ async function runPreviewStartsRuntime(page) {
     { timeoutMs: 20_000 }
   );
   await page.assertNoErrors("run preview");
+}
+
+async function sourceEditKeepsCompiledPreviewRunning(page) {
+  const before = await page.evaluateTop(`(() => {
+    const editor = document.querySelector("#sourceEditor");
+    const frame = document.querySelector("#previewFrame");
+    if (!editor || !frame || !latestHtml) {
+      throw new Error("missing compiled preview for source dirty smoke");
+    }
+    const source = editor.value || "";
+    const insertAt = Math.max(0, source.indexOf("\\n"));
+    window.__sourceDirtySmokeOriginal = source;
+    window.__sourceDirtySmokeFrame = frame;
+    window.__sourceDirtySmokeSrcdoc = frame.srcdoc || "";
+    editor.focus();
+    editor.setSelectionRange(insertAt, insertAt);
+    return {
+      source,
+      srcdocLength: frame.srcdoc.length,
+      latestHtmlLength: latestHtml.length,
+    };
+  })()`);
+  assert.ok(before.srcdocLength > 0, "compiled preview frame should have srcdoc before source edit");
+  assert.ok(before.latestHtmlLength > 0, "latest compiled preview HTML should exist before source edit");
+
+  try {
+    await page.evaluateTop(`(() => {
+      if (typeof handleSourcePrintableKeydownInput !== "function") {
+        throw new Error("missing handleSourcePrintableKeydownInput");
+      }
+      handleSourcePrintableKeydownInput({
+        defaultPrevented: false,
+        isComposing: false,
+        altKey: false,
+        ctrlKey: false,
+        metaKey: false,
+        key: " ",
+        preventDefault() {},
+        stopPropagation() {},
+      });
+      return true;
+    })()`);
+    await page.waitForTop(
+      `(() => {
+        const frame = document.querySelector("#previewFrame");
+        return Boolean(
+          frame
+          && frame === window.__sourceDirtySmokeFrame
+          && frame.srcdoc === window.__sourceDirtySmokeSrcdoc
+          && latestHtml.length > 0
+          && previewExport
+          && compiledPreviewStale === true
+          && previewDocumentLoaded === true
+        );
+      })()`,
+      "source edit keeps compiled preview running",
+      { timeoutMs: 5_000 }
+    );
+  } finally {
+    await page.evaluateTop(`(() => {
+      const original = window.__sourceDirtySmokeOriginal;
+      if (typeof original === "string") {
+        setSourceEditorValue(original, { resetUndo: true });
+        if (documents[currentDocumentIndex]) {
+          documents[currentDocumentIndex].source = original;
+        }
+        scheduleSourceHighlight(true);
+        scheduleLocalSave();
+      }
+      delete window.__sourceDirtySmokeOriginal;
+      delete window.__sourceDirtySmokeFrame;
+      delete window.__sourceDirtySmokeSrcdoc;
+      return true;
+    })()`).catch(() => {});
+  }
+
+  await clickTop(page, "#runButton");
+  await page.waitForTop(
+    `Boolean(compiledPreviewStale === false && latestHtml.includes("PuzzleExport"))`,
+    "recompiled preview after source dirty smoke",
+    { timeoutMs: 20_000 }
+  );
+  await page.assertNoErrors("source edit keeps preview running");
 }
 
 async function sourceLevelAsciiClickOpensLevelEditor(page) {
@@ -342,6 +427,75 @@ async function sourceEditorPairsDoubleQuote(page) {
   await page.assertNoErrors("source double quote pairing");
 }
 
+async function sourceUndoReturnsToEditedLocationAfterCursorMove(page) {
+  await page.evaluateTop(`(() => {
+    const editor = document.querySelector("#sourceEditor");
+    if (
+      !editor
+      || typeof handleSourcePrintableKeydownInput !== "function"
+      || typeof handleSourceUndoShortcut !== "function"
+      || typeof resetSourceUndoHistory !== "function"
+    ) {
+      throw new Error("missing source undo cursor helpers");
+    }
+    const original = editor.value || "";
+    const source = "first\\nsecond\\nthird";
+    const editAt = source.indexOf("second") + "second".length;
+    setSourceEditorValue(source, { resetUndo: true });
+    if (documents[currentDocumentIndex]) {
+      documents[currentDocumentIndex].source = source;
+    }
+    editor.focus();
+    editor.setSelectionRange(0, 0);
+    resetSourceUndoHistory();
+    editor.setSelectionRange(editAt, editAt);
+    const editHandled = handleSourcePrintableKeydownInput({
+      defaultPrevented: false,
+      isComposing: false,
+      altKey: false,
+      ctrlKey: false,
+      metaKey: false,
+      key: "!",
+      preventDefault() {},
+      stopPropagation() {},
+    });
+    const edited = "first\\nsecond!\\nthird";
+    if (!editHandled || editor.value !== edited) {
+      throw new Error("source edit did not create expected undo setup");
+    }
+    const undoHandled = handleSourceUndoShortcut({
+      altKey: false,
+      ctrlKey: false,
+      metaKey: true,
+      shiftKey: false,
+      key: "z",
+      preventDefault() {},
+      stopPropagation() {},
+    });
+    const result = {
+      undoHandled,
+      value: editor.value,
+      selectionStart: editor.selectionStart,
+      selectionEnd: editor.selectionEnd,
+    };
+    setSourceEditorValue(original, { resetUndo: true });
+    if (documents[currentDocumentIndex]) {
+      documents[currentDocumentIndex].source = original;
+    }
+    scheduleSourceHighlight(true);
+    if (
+      !result.undoHandled
+      || result.value !== source
+      || result.selectionStart !== editAt
+      || result.selectionEnd !== editAt
+    ) {
+      throw new Error(\`source undo did not return to edited location: \${JSON.stringify(result)}\`);
+    }
+    return true;
+  })()`);
+  await page.assertNoErrors("source undo cursor location");
+}
+
 async function sourceUndoSurvivesSameDocumentReload(page) {
   await page.evaluateTop(`(() => {
     const editor = document.querySelector("#sourceEditor");
@@ -552,6 +706,8 @@ async function sourceRewritePatternTabCopiesLhsToEmptyRhs(page) {
       throw new Error("missing source rewrite pattern tab helper");
     }
     const original = editor.value || "";
+    const originalSourceEditorContentChanged = sourceEditorContentChanged;
+    sourceEditorContentChanged = () => {};
     const source = "puzzle tab_rhs\\nrules\\n[ A B C ] -> ";
     const cursor = source.length;
     setSourceEditorValue(source, { resetUndo: true });
@@ -588,8 +744,12 @@ async function sourceRewritePatternTabCopiesLhsToEmptyRhs(page) {
     if (documents[currentDocumentIndex]) {
       documents[currentDocumentIndex].source = original;
     }
+    sourceEditorContentChanged = originalSourceEditorContentChanged;
     setSourceEditorValue(original, { resetUndo: true });
+    loadEmbeddedDocument(currentDocumentIndex);
     scheduleSourceHighlight(true);
+    scheduleLocalSave();
+    invalidateCompiledPreview?.(activePreviewDocument?.());
     if (
       !handled
       || result.value !== expected
@@ -599,6 +759,112 @@ async function sourceRewritePatternTabCopiesLhsToEmptyRhs(page) {
       || !result.propagationStopped
     ) {
       throw new Error(\`rewrite RHS Tab did not copy LHS pattern: \${JSON.stringify(result)}\`);
+    }
+    return true;
+  })()`);
+  await page.evaluateTop(`(() => {
+    const editor = document.querySelector("#sourceEditor");
+    if (
+      !editor
+      || typeof handleSourceRewritePatternTab !== "function"
+      || typeof handleSourceRewriteRhsPatternAssist !== "function"
+    ) {
+      throw new Error("missing source rewrite pattern helpers");
+    }
+    const original = editor.value || "";
+    const originalSourceEditorContentChanged = sourceEditorContentChanged;
+    sourceEditorContentChanged = () => {};
+    const source = "puzzle semicolon_rhs\\nrules\\n[ X ] -> [ X ]; [ A B C ] -> ;";
+    const cursor = source.lastIndexOf(";");
+    setSourceEditorValue(source, { resetUndo: true });
+    if (documents[currentDocumentIndex]) {
+      documents[currentDocumentIndex].source = source;
+    }
+    editor.focus();
+    editor.setSelectionRange(cursor, cursor);
+    const bracketEvent = {
+      key: "[",
+      altKey: false,
+      ctrlKey: false,
+      metaKey: false,
+      isComposing: false,
+      defaultPrevented: false,
+      propagationStopped: false,
+      preventDefault() {
+        this.defaultPrevented = true;
+      },
+      stopPropagation() {
+        this.propagationStopped = true;
+      },
+    };
+    const bracketHandled = handleSourceRewriteRhsPatternAssist(bracketEvent);
+    const bracketExpected = "puzzle semicolon_rhs\\nrules\\n[ X ] -> [ X ]; [ A B C ] -> [  ];";
+    const bracketResult = {
+      handled: bracketHandled,
+      value: editor.value,
+      selectionStart: editor.selectionStart,
+      selectionEnd: editor.selectionEnd,
+      defaultPrevented: bracketEvent.defaultPrevented,
+      propagationStopped: bracketEvent.propagationStopped,
+    };
+    setSourceEditorValue(source, { resetUndo: true });
+    if (documents[currentDocumentIndex]) {
+      documents[currentDocumentIndex].source = source;
+    }
+    editor.setSelectionRange(cursor, cursor);
+    const tabEvent = {
+      key: "Tab",
+      altKey: false,
+      ctrlKey: false,
+      metaKey: false,
+      shiftKey: false,
+      defaultPrevented: false,
+      propagationStopped: false,
+      preventDefault() {
+        this.defaultPrevented = true;
+      },
+      stopPropagation() {
+        this.propagationStopped = true;
+      },
+    };
+    const tabHandled = handleSourceRewritePatternTab(tabEvent);
+    const tabExpected = "puzzle semicolon_rhs\\nrules\\n[ X ] -> [ X ]; [ A B C ] -> [ A B C ];";
+    const tabResult = {
+      handled: tabHandled,
+      value: editor.value,
+      selectionStart: editor.selectionStart,
+      selectionEnd: editor.selectionEnd,
+      defaultPrevented: tabEvent.defaultPrevented,
+      propagationStopped: tabEvent.propagationStopped,
+    };
+    if (documents[currentDocumentIndex]) {
+      documents[currentDocumentIndex].source = original;
+    }
+    sourceEditorContentChanged = originalSourceEditorContentChanged;
+    setSourceEditorValue(original, { resetUndo: true });
+    loadEmbeddedDocument(currentDocumentIndex);
+    scheduleSourceHighlight(true);
+    scheduleLocalSave();
+    invalidateCompiledPreview?.(activePreviewDocument?.());
+    if (
+      !bracketHandled
+      || bracketResult.value !== bracketExpected
+      || bracketResult.selectionStart <= cursor
+      || bracketResult.selectionEnd !== bracketResult.selectionStart
+      || !bracketResult.defaultPrevented
+      || !bracketResult.propagationStopped
+    ) {
+      throw new Error(\`rewrite RHS [ did not respect semicolon boundary: \${JSON.stringify(bracketResult)}\`);
+    }
+    if (
+      !tabHandled
+      || tabResult.value !== tabExpected
+      || tabResult.selectionStart !== tabExpected.lastIndexOf(";")
+      || tabResult.selectionEnd !== tabExpected.lastIndexOf(";")
+      || !tabResult.defaultPrevented
+      || !tabResult.propagationStopped
+    ) {
+      throw new Error(\`rewrite RHS Tab did not respect semicolon boundary: \${JSON.stringify(tabResult)}\`);
     }
     return true;
   })()`);
