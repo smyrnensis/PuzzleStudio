@@ -21328,6 +21328,42 @@ fn parse_map_call(value: &str) -> Option<(&str, &str)> {
     Some((name, arg))
 }
 
+fn relative_selector_constraints(
+    constraints: &[Option<SelectorConstraint>],
+    schema: &ObjectSchema,
+    alternatives: &[ObjectId],
+) -> Result<Vec<RelativeSelectorConstraint>, DiagnosticReport> {
+    let mut out = Vec::new();
+    for constraint in constraints.iter().flatten() {
+        let SelectorConstraint::Relative {
+            axis_index,
+            relative,
+        } = constraint
+        else {
+            continue;
+        };
+        let axis_values = schema_axis_values(schema, *axis_index)?;
+        let mut alternatives_by_direction = HashMap::<String, Vec<ObjectId>>::new();
+        for value in axis_values {
+            let mut objects = schema
+                .variants
+                .iter()
+                .filter(|variant| {
+                    alternatives.contains(&variant.object) && variant.values[*axis_index] == value
+                })
+                .map(|variant| variant.object)
+                .collect::<Vec<_>>();
+            dedup_objects(&mut objects);
+            alternatives_by_direction.insert(value, objects);
+        }
+        out.push(RelativeSelectorConstraint {
+            relative: *relative,
+            alternatives_by_direction,
+        });
+    }
+    Ok(out)
+}
+
 fn compile_before_after_blocks(
     before: &PatternBlock,
     after: &PatternBlock,
