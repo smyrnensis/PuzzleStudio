@@ -17334,24 +17334,40 @@ fn lower_condition_patterns(
     directions: &[Direction],
 ) -> Result<Vec<Pattern>, DiagnosticReport> {
     let block = &condition_pattern.pattern;
-    let alternatives = compile_before_after_blocks(
-        block,
-        block,
-        object_layers,
-        scratch_names,
-        value_sets,
-        "condition pattern",
-    )?;
     match &condition_pattern.orientation {
         OrientationExpr::Neutral => {
             if pattern_block_requires_implicit_cardinal_expansion(block) {
-                return patterns_from_alternatives(
-                    &alternatives,
-                    directions,
-                    true,
-                    "condition pattern",
-                );
+                let mut patterns = Vec::new();
+                for direction in directions {
+                    let (_, alternatives) = compile_before_after_blocks_for_direction(
+                        block,
+                        block,
+                        object_layers,
+                        scratch_names,
+                        value_sets,
+                        *direction,
+                        true,
+                        "condition pattern",
+                    )?;
+                    patterns.extend(patterns_from_alternatives(
+                        &alternatives,
+                        &[*direction],
+                        true,
+                        "condition pattern",
+                    )?);
+                }
+                return Ok(patterns);
             }
+            let (_, alternatives) = compile_before_after_blocks_for_direction(
+                block,
+                block,
+                object_layers,
+                scratch_names,
+                value_sets,
+                neutral_direction(),
+                false,
+                "condition pattern",
+            )?;
             patterns_from_alternatives(
                 &alternatives,
                 &[neutral_direction()],
@@ -17360,7 +17376,26 @@ fn lower_condition_patterns(
             )
         }
         OrientationExpr::Input => {
-            patterns_from_alternatives(&alternatives, directions, true, "condition pattern")
+            let mut patterns = Vec::new();
+            for direction in directions {
+                let (_, alternatives) = compile_before_after_blocks_for_direction(
+                    block,
+                    block,
+                    object_layers,
+                    scratch_names,
+                    value_sets,
+                    *direction,
+                    true,
+                    "condition pattern",
+                )?;
+                patterns.extend(patterns_from_alternatives(
+                    &alternatives,
+                    &[*direction],
+                    true,
+                    "condition pattern",
+                )?);
+            }
+            Ok(patterns)
         }
         OrientationExpr::InputSet(axis) => {
             let directions =
@@ -17368,7 +17403,26 @@ fn lower_condition_patterns(
                     .ok_or_else(|| {
                         DiagnosticReport::error(format!("unknown input orientation set: {axis}"))
                     })?;
-            patterns_from_alternatives(&alternatives, &directions, true, "condition pattern")
+            let mut patterns = Vec::new();
+            for direction in directions {
+                let (_, alternatives) = compile_before_after_blocks_for_direction(
+                    block,
+                    block,
+                    object_layers,
+                    scratch_names,
+                    value_sets,
+                    direction,
+                    true,
+                    "condition pattern",
+                )?;
+                patterns.extend(patterns_from_alternatives(
+                    &alternatives,
+                    &[direction],
+                    true,
+                    "condition pattern",
+                )?);
+            }
+            Ok(patterns)
         }
         OrientationExpr::Fixed(direction_name) => {
             let directions = directions_for_orientation_name(
@@ -17383,7 +17437,26 @@ fn lower_condition_patterns(
                     direction_name.0
                 ))
             })?;
-            patterns_from_alternatives(&alternatives, &directions, true, "condition pattern")
+            let mut patterns = Vec::new();
+            for direction in directions {
+                let (_, alternatives) = compile_before_after_blocks_for_direction(
+                    block,
+                    block,
+                    object_layers,
+                    scratch_names,
+                    value_sets,
+                    direction,
+                    true,
+                    "condition pattern",
+                )?;
+                patterns.extend(patterns_from_alternatives(
+                    &alternatives,
+                    &[direction],
+                    true,
+                    "condition pattern",
+                )?);
+            }
+            Ok(patterns)
         }
     }
 }
@@ -17397,14 +17470,6 @@ fn lower_condition_input_patterns(
     directions: &[Direction],
 ) -> Result<Vec<(InputId, Pattern)>, DiagnosticReport> {
     let block = &condition_pattern.pattern;
-    let alternatives = compile_before_after_blocks(
-        block,
-        block,
-        object_layers,
-        scratch_names,
-        value_sets,
-        "condition pattern",
-    )?;
     let mut patterns = Vec::new();
     let input_directions = match &condition_pattern.orientation {
         OrientationExpr::Input => directions.to_vec(),
@@ -17416,6 +17481,16 @@ fn lower_condition_input_patterns(
         OrientationExpr::Neutral | OrientationExpr::Fixed(_) => Vec::new(),
     };
     for direction in &input_directions {
+        let (_, alternatives) = compile_before_after_blocks_for_direction(
+            block,
+            block,
+            object_layers,
+            scratch_names,
+            value_sets,
+            *direction,
+            true,
+            "condition pattern",
+        )?;
         for pattern in
             patterns_from_alternatives(&alternatives, &[*direction], true, "condition pattern")?
         {
@@ -18903,6 +18978,49 @@ impl<'a> ProgramLowerer<'a> {
         }
     }
 
+    fn lower_rewrite_rules_for_direction(
+        &mut self,
+        rewrite: &OrientedRewriteAst,
+        context: &StatementLoweringContext,
+        effects: &LoweredEffects,
+        application: RuleApplication,
+        direction: Direction,
+        direction_expanded: bool,
+        guards: Vec<Guard>,
+    ) -> Result<Vec<RuleStep>, DiagnosticReport> {
+        let (before, alternatives) = compile_before_after_blocks_for_direction(
+            &rewrite.before,
+            &rewrite.after,
+            self.object_layers,
+            self.scratch_names,
+            self.value_sets,
+            direction,
+            direction_expanded,
+            &rewrite.source_line,
+        )?;
+        let role = classify_rewrite_role(
+            &before,
+            &alternatives,
+            effects,
+            self.visual_objects,
+            context,
+            &rewrite.source_line,
+        )?;
+        if role == ClassifiedRuleRole::Visual {
+            validate_visual_effects(effects, &rewrite.source_line)?;
+        }
+        self.rules_from_alternatives(
+            alternatives,
+            direction,
+            direction_expanded,
+            guards,
+            effects.core.clone(),
+            effects.ordered.clone(),
+            application,
+            role,
+        )
+    }
+
     fn lower_effects(&self, effects: &[EffectAst]) -> Result<LoweredEffects, DiagnosticReport> {
         let mut lowered = LoweredEffects::default();
         self.lower_effects_into(effects, &mut lowered)?;
@@ -19884,12 +20002,81 @@ fn block_cell_has_relative_direction(cell: &BlockCell) -> bool {
 }
 
 fn selector_has_relative_direction(selector: &ObjectSelector) -> bool {
+    if !selector.relative_constraints.is_empty() {
+        return true;
+    }
     selector.scratch.iter().any(|scratch| {
         scratch.value.as_deref().is_some_and(|value| {
             parse_relative_direction_value(value).is_some()
                 || movement_scratch_set_values(value).is_some()
         })
     })
+}
+
+fn resolve_relative_selectors_in_block(
+    block: &PatternBlock,
+    direction: Direction,
+    direction_expanded: bool,
+    line: &str,
+) -> Result<PatternBlock, DiagnosticReport> {
+    let mut block = block.clone();
+    for component in &mut block.components {
+        for row in &mut component.rows {
+            for part in row {
+                let BlockPart::Cell(cell) = part else {
+                    continue;
+                };
+                for selector in &mut cell.require {
+                    resolve_relative_selector(selector, direction, direction_expanded, line)?;
+                }
+                for selector in &mut cell.forbid {
+                    resolve_relative_selector(selector, direction, direction_expanded, line)?;
+                }
+            }
+        }
+    }
+    Ok(block)
+}
+
+fn resolve_relative_selector(
+    selector: &mut ObjectSelector,
+    direction: Direction,
+    direction_expanded: bool,
+    line: &str,
+) -> Result<(), DiagnosticReport> {
+    if selector.relative_constraints.is_empty() {
+        return Ok(());
+    }
+    if !direction_expanded {
+        return Err(parse_error(
+            line,
+            "relative direction selector tag requires an oriented rule",
+        ));
+    }
+    for constraint in &selector.relative_constraints {
+        let absolute = resolve_relative_direction(
+            constraint.relative,
+            direction,
+            direction_expanded,
+            line,
+        )?;
+        let value = direction_tag_name(absolute, line)?;
+        let allowed = constraint
+            .alternatives_by_direction
+            .get(value)
+            .ok_or_else(|| parse_error(line, "relative direction selector target is unknown"))?;
+        selector
+            .alternatives
+            .retain(|object| allowed.contains(object));
+    }
+    if selector.alternatives.is_empty() {
+        return Err(parse_error(
+            line,
+            "relative direction selector matched no objects",
+        ));
+    }
+    selector.relative_constraints.clear();
+    Ok(())
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -21362,6 +21549,29 @@ fn relative_selector_constraints(
         });
     }
     Ok(out)
+}
+
+fn compile_before_after_blocks_for_direction(
+    before: &PatternBlock,
+    after: &PatternBlock,
+    object_layers: &HashMap<ObjectId, LayerId>,
+    scratch_names: &HashMap<String, ScratchDef>,
+    value_sets: &HashMap<String, Vec<String>>,
+    direction: Direction,
+    direction_expanded: bool,
+    line: &str,
+) -> Result<(PatternBlock, Vec<RuleBodyAlternative>), DiagnosticReport> {
+    let before = resolve_relative_selectors_in_block(before, direction, direction_expanded, line)?;
+    let after = resolve_relative_selectors_in_block(after, direction, direction_expanded, line)?;
+    let alternatives = compile_before_after_blocks(
+        &before,
+        &after,
+        object_layers,
+        scratch_names,
+        value_sets,
+        line,
+    )?;
+    Ok((before, alternatives))
 }
 
 fn compile_before_after_blocks(
@@ -23602,6 +23812,19 @@ fn direction_value(direction: Direction) -> Result<i64, DiagnosticReport> {
         (1, 0) => Ok(3),
         _ => Err(DiagnosticReport::error(
             "unsupported direction scratch".to_string(),
+        )),
+    }
+}
+
+fn direction_tag_name(direction: Direction, line: &str) -> Result<&'static str, DiagnosticReport> {
+    match (direction.dx, direction.dy) {
+        (0, -1) => Ok("up"),
+        (0, 1) => Ok("down"),
+        (-1, 0) => Ok("left"),
+        (1, 0) => Ok("right"),
+        _ => Err(parse_error(
+            line,
+            "relative direction selector only supports cardinal directions",
         )),
     }
 }
