@@ -966,6 +966,41 @@ async function sourceRewritePatternTabCopiesLhsToEmptyRhs(page) {
 }
 
 async function levelPlaytestKeyboardChangesBoardWithoutSavingSource(page) {
+  const source = `title "Level Playtest Smoke"
+
+puzzle main {
+  layers {
+    actor = Player
+  }
+
+  rules {
+    input [ Player ] -> [ > Player ]
+    move
+  }
+}
+
+levels main of main {
+  legend {
+    . = empty
+    P = Player
+  }
+
+  level start
+  P.
+}
+`;
+  await page.evaluateTop(`(() => {
+    const source = ${JSON.stringify(source)};
+    setSourceEditorValue(source, { resetUndo: true });
+    if (documents[currentDocumentIndex]) {
+      documents[currentDocumentIndex].source = source;
+    }
+    sourceEditor.setSelectionRange(0, 0);
+    scheduleSourceHighlight(true);
+    scheduleLocalSave();
+    invalidateCompiledPreview?.(activePreviewDocument?.());
+    return true;
+  })()`);
   await clickTop(page, "#editModeButton");
   await page.waitForTop(
     `(() => {

@@ -1,8 +1,5 @@
 // Source editor state, text-editing commands, highlighting, completions, color editing, and source textarea event binding.
-const sourceColorPopover = createSourceColorPopover();
-const sourceColorCodeInput = sourceColorPopover?.querySelector("[data-source-color-code-input]");
-const sourceColorAdjusterHost = sourceColorPopover?.querySelector("[data-source-color-adjuster]");
-const sourceColorPreview = sourceColorPopover?.querySelector("[data-source-color-preview]");
+const sourceColorInput = createSourceColorInput();
 const sourceCompletionPopover = createSourceCompletionPopover();
 const sourceCompletionTextEncoder = new TextEncoder();
 const sourceBlockSelectionLayer = createSourceBlockSelectionLayer();
@@ -2261,24 +2258,17 @@ function sourceUtf16OffsetFromByteOffset(value, byteOffset) {
   return value.length;
 }
 
-function createSourceColorPopover() {
+function createSourceColorInput() {
   if (!sourceEditorWrap) {
     return null;
   }
-  const popover = document.createElement("div");
-  popover.className = "source-color-popover";
-  popover.hidden = true;
-  popover.innerHTML = `
-    <span class="source-color-editor-header">
-      <input class="source-color-code-input" data-source-color-code-input type="text" spellcheck="false" autocomplete="off" aria-label="Color code">
-      <span class="source-color-live-preview sprite-color-swatch" data-source-color-preview aria-hidden="true"></span>
-    </span>
-    <span class="source-color-adjuster-host" data-source-color-adjuster></span>
-  `;
-  popover.addEventListener("mousedown", (event) => event.stopPropagation());
-  popover.addEventListener("click", (event) => event.stopPropagation());
-  sourceEditorWrap.append(popover);
-  return popover;
+  const input = document.createElement("input");
+  input.type = "color";
+  input.className = "source-native-color-input";
+  input.setAttribute("aria-label", "Source color picker");
+  input.tabIndex = -1;
+  sourceEditorWrap.append(input);
+  return input;
 }
 
 function createSourceImportLinkFrame() {
@@ -2304,7 +2294,7 @@ function createSourceImportLinkFrame() {
 }
 
 function showSourceColorEditor(event = null) {
-  if (!sourceColorPopover || !sourceColorCodeInput) {
+  if (!sourceColorInput) {
     return false;
   }
   if (!isTextDocument(activeDocument())) {
@@ -2326,41 +2316,26 @@ function showSourceColorEditor(event = null) {
     return false;
   }
   sourceColorEdit = token;
-  sourceColorCodeInput.value = token.value.toLowerCase();
-  syncSourceColorPopoverSurfaces(formatHexColorToken(parsed.rgb, parsed.alpha));
-  renderSourceColorAdjuster(formatHexColorToken(parsed.rgb, parsed.alpha));
-  positionSourceColorPopover(event);
-  sourceColorPopover.hidden = false;
+  sourceColorInput.value = parsed.rgb;
+  sourceColorInput.dataset.sourceColorAlpha = String(parsed.alpha);
+  if (event) {
+    openSourceNativeColorPicker();
+  }
   return true;
 }
 
-function renderSourceColorAdjuster(color) {
-  if (!sourceColorAdjusterHost) {
+function openSourceNativeColorPicker() {
+  if (!sourceColorInput) {
     return;
   }
-  sourceColorAdjusterHost.replaceChildren();
-  if (typeof renderSpriteColorAdjuster !== "function") {
-    return;
-  }
-  sourceColorAdjusterHost.append(renderSpriteColorAdjuster({
-    color,
-    ariaLabel: "Source color",
-    onChange: (nextColor) => updateSourceColorFromPopover({ color: nextColor }),
-  }));
-}
-
-function syncSourceColorPopoverSurfaces(color) {
-  const parsed = parseHexColorToken(color);
-  if (!parsed) {
-    return;
-  }
-  const normalized = formatHexColorToken(parsed.rgb, parsed.alpha);
-  sourceColorCodeInput.value = normalized;
-  sourceColorPopover?.style.setProperty("--source-picker-color", normalized);
-  sourceColorPreview?.style.setProperty("--sprite-swatch-color", normalized);
-  const adjuster = sourceColorAdjusterHost?.querySelector(".sprite-color-adjuster");
-  if (typeof adjuster?.syncColor === "function") {
-    adjuster.syncColor(normalized);
+  try {
+    if (typeof sourceColorInput.showPicker === "function") {
+      sourceColorInput.showPicker();
+    } else {
+      sourceColorInput.click();
+    }
+  } catch {
+    sourceColorInput.click();
   }
 }
 
@@ -2378,145 +2353,13 @@ function sourceColorEventTargetsToken(event, token) {
 
 function hideSourceColorEditor() {
   sourceColorEdit = null;
-  if (sourceColorPopover) {
-    sourceColorPopover.hidden = true;
+  if (sourceColorInput) {
+    sourceColorInput.blur();
   }
 }
 
-function positionSourceColorPopover(event = null) {
-  if (!sourceColorPopover || !sourceEditorWrap) {
-    return;
-  }
-  const wasHidden = sourceColorPopover.hidden;
-  if (wasHidden) {
-    sourceColorPopover.style.visibility = "hidden";
-    sourceColorPopover.hidden = false;
-  }
-  const wrapRect = sourceEditorWrap.getBoundingClientRect();
-  const popoverWidth = sourceColorPopover.offsetWidth || 274;
-  const popoverHeight = sourceColorPopover.offsetHeight || 280;
-  const margin = 8;
-  const gap = 10;
-  const localClearance = (sourceEditorLineHeight() * 2) + gap;
-  const maxLeft = Math.max(margin, wrapRect.width - popoverWidth - margin);
-  const maxTop = Math.max(margin, wrapRect.height - popoverHeight - margin);
-  const anchor = sourceColorTokenAnchorRect(event, wrapRect);
-  const textRects = sourceColorTextRects();
-  const candidates = [
-    { left: anchor.right + gap, top: anchor.bottom + localClearance, preference: 0 },
-    { left: anchor.left - popoverWidth - gap, top: anchor.bottom + localClearance, preference: 1 },
-    { left: anchor.right + gap, top: anchor.top - popoverHeight - localClearance, preference: 2 },
-    { left: anchor.left - popoverWidth - gap, top: anchor.top - popoverHeight - localClearance, preference: 3 },
-    { left: anchor.left, top: anchor.bottom + localClearance, preference: 4 },
-    { left: anchor.left, top: anchor.top - popoverHeight - localClearance, preference: 5 },
-    { left: anchor.right + gap, top: anchor.top - margin, preference: 6 },
-    { left: anchor.left - popoverWidth - gap, top: anchor.top - margin, preference: 7 },
-  ].map((candidate) => {
-    const left = Math.max(margin, Math.min(maxLeft, candidate.left));
-    const top = Math.max(margin, Math.min(maxTop, candidate.top));
-    const rect = {
-      left,
-      top,
-      right: left + popoverWidth,
-      bottom: top + popoverHeight,
-    };
-    return {
-      ...rect,
-      score: sourceColorPopoverPositionScore(rect, anchor, wrapRect, textRects) + candidate.preference,
-    };
-  });
-  const best = candidates.sort((a, b) => a.score - b.score)[0];
-  sourceColorPopover.style.left = `${best.left}px`;
-  sourceColorPopover.style.top = `${best.top}px`;
-  if (wasHidden) {
-    sourceColorPopover.hidden = true;
-    sourceColorPopover.style.visibility = "";
-  }
-}
-
-function sourceColorTokenAnchorRect(event, wrapRect) {
-  const lineHeight = sourceEditorLineHeight();
-  if (sourceColorEdit) {
-    const startRect = sourceCaretRectForOffset(sourceColorEdit.start);
-    const endRect = sourceCaretRectForOffset(sourceColorEdit.end);
-    if (startRect && endRect) {
-      const top = Math.min(startRect.top, endRect.top);
-      const bottom = Math.max(startRect.top + startRect.height, endRect.top + endRect.height);
-      return {
-        left: Math.min(startRect.left, endRect.left),
-        right: Math.max(startRect.left, endRect.left + 1),
-        top,
-        bottom,
-      };
-    }
-  }
-  const left = event?.clientX ? event.clientX - wrapRect.left : 18;
-  const top = event?.clientY ? event.clientY - wrapRect.top : 18;
-  return {
-    left,
-    right: left + 1,
-    top,
-    bottom: top + lineHeight,
-  };
-}
-
-function sourceColorPopoverPositionScore(rect, anchor, wrapRect, textRects) {
-  const lineHeight = sourceEditorLineHeight();
-  const protectedRect = {
-    left: 0,
-    right: wrapRect.width,
-    top: Math.max(0, anchor.top - lineHeight),
-    bottom: anchor.bottom + (lineHeight * 2.2),
-  };
-  const textOverlap = sourceColorTextOverlapArea(rect, textRects);
-  const protectedOverlap = sourceRectIntersectionArea(rect, protectedRect);
-  return (textOverlap * 10) + (protectedOverlap * 20);
-}
-
-function sourceColorTextRects() {
-  if (!sourceHighlight || !sourceEditorWrap) {
-    return [];
-  }
-  const wrapRect = sourceEditorWrap.getBoundingClientRect();
-  const walker = document.createTreeWalker(sourceHighlight, NodeFilter.SHOW_TEXT);
-  const range = document.createRange();
-  const rects = [];
-  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-    const length = (node.nodeValue || "").length;
-    if (!length) {
-      continue;
-    }
-    range.setStart(node, 0);
-    range.setEnd(node, length);
-    for (const clientRect of range.getClientRects()) {
-      rects.push({
-        left: clientRect.left - wrapRect.left,
-        right: clientRect.right - wrapRect.left,
-        top: clientRect.top - wrapRect.top,
-        bottom: clientRect.bottom - wrapRect.top,
-      });
-    }
-  }
-  range.detach?.();
-  return rects;
-}
-
-function sourceColorTextOverlapArea(rect, textRects) {
-  let overlap = 0;
-  for (const textRect of textRects) {
-    overlap += sourceRectIntersectionArea(rect, textRect);
-  }
-  return overlap;
-}
-
-function sourceRectIntersectionArea(a, b) {
-  const width = Math.max(0, Math.min(a.right, b.right) - Math.max(a.left, b.left));
-  const height = Math.max(0, Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top));
-  return width * height;
-}
-
-function updateSourceColorFromPopover(options = {}) {
-  if (!sourceColorEdit || !sourceColorCodeInput) {
+function updateSourceColorFromNativeInput() {
+  if (!sourceColorEdit || !sourceColorInput) {
     return;
   }
   const current = hexColorAt(sourceEditor.value, sourceColorEdit.start);
@@ -2524,23 +2367,20 @@ function updateSourceColorFromPopover(options = {}) {
     hideSourceColorEditor();
     return;
   }
-  const parsedColor = options.color ? parseHexColorToken(options.color) : null;
-  const parsedCode = options.fromCode ? parseHexColorToken(sourceColorCodeInput.value) : null;
-  if ((options.fromCode && !parsedCode) || (options.color && !parsedColor)) {
+  const parsedColor = parseHexColorToken(sourceColorInput.value);
+  if (!parsedColor) {
     return;
   }
-  const parsedNextColor = parsedCode || parsedColor;
-  if (!parsedNextColor) {
-    return;
-  }
-  const next = formatHexColorToken(parsedNextColor.rgb, parsedNextColor.alpha);
+  const alpha = Math.max(0, Math.min(255, Number(sourceColorInput.dataset.sourceColorAlpha) || 255));
+  const next = formatHexColorToken(parsedColor.rgb, alpha);
   sourceEditor.setRangeText(next, current.start, current.end, "preserve");
   sourceColorEdit = { start: current.start, end: current.start + next.length, value: next };
   sourceEditor.setSelectionRange(sourceColorEdit.start, sourceColorEdit.end);
   recordSourceUndoSnapshot();
   const parsedNext = parseHexColorToken(next);
   if (parsedNext) {
-    syncSourceColorPopoverSurfaces(next);
+    sourceColorInput.value = parsedNext.rgb;
+    sourceColorInput.dataset.sourceColorAlpha = String(parsedNext.alpha);
   }
   updateSourceMeta();
   if (documents[currentDocumentIndex]) {
@@ -2553,7 +2393,7 @@ function updateSourceColorFromPopover(options = {}) {
 }
 
 function refreshSourceColorEditor() {
-  if (!sourceColorEdit || sourceColorPopover?.hidden) {
+  if (!sourceColorEdit) {
     return;
   }
   const current = hexColorAt(sourceEditor.value, sourceColorEdit.start);
@@ -2697,7 +2537,7 @@ sourceEditor.addEventListener("click", (event) => {
   if (openSourceImportLinkFromPointer(event)) {
     return;
   }
-  window.setTimeout(() => showSourceColorEditor(), 40);
+  showSourceColorEditor(event);
   window.setTimeout(() => showSourceCompletions({ manual: false }), 0);
   syncPreviewModeFromSourcePointer(event);
 });
@@ -5111,7 +4951,7 @@ sourceEditor.addEventListener("keydown", (event) => {
       }
     }
   }
-  if (event.key === "Escape" && sourceColorEdit && !sourceColorPopover?.hidden) {
+  if (event.key === "Escape" && sourceColorEdit) {
     hideSourceColorEditor();
     return;
   }
@@ -5231,25 +5071,8 @@ sourceEditor.addEventListener("scroll", hideSourceColorEditor);
 sourceEditor.addEventListener("scroll", hideSourceCompletions);
 sourceEditor.addEventListener("scroll", hideSourceImportLinkFrame);
 sourceLineNumbers?.addEventListener("click", handleSourceFoldGutterClick);
-sourceColorCodeInput?.addEventListener("input", () => updateSourceColorFromPopover({ fromCode: true }));
-sourceColorCodeInput?.addEventListener("change", () => updateSourceColorFromPopover({ fromCode: true }));
-sourceColorCodeInput?.addEventListener("keydown", (event) => {
-  event.stopPropagation();
-  if (event.key !== "Enter") {
-    return;
-  }
-  event.preventDefault();
-  updateSourceColorFromPopover({ fromCode: true });
-});
-document.addEventListener("mousedown", (event) => {
-  if (sourceColorPopover?.hidden) {
-    return;
-  }
-  if (sourceEditorWrap?.contains(event.target)) {
-    return;
-  }
-  hideSourceColorEditor();
-});
+sourceColorInput?.addEventListener("input", updateSourceColorFromNativeInput);
+sourceColorInput?.addEventListener("change", updateSourceColorFromNativeInput);
 window.addEventListener("resize", syncSourceHighlightScroll);
 window.addEventListener("resize", renderSourceLineNumbers);
 window.addEventListener("resize", hideSourceColorEditor);

@@ -43,10 +43,6 @@
     return runtime;
   }
 
-  function screenColorPickerAvailable() {
-    return typeof window.EyeDropper === "function";
-  }
-
   function diagnosticSummary(diagnostics) {
     if (!Array.isArray(diagnostics) || diagnostics.length === 0) {
       return "";
@@ -177,16 +173,6 @@
         throw backendUnavailableError();
       }
       return fetchText("/sound-tools.js");
-    },
-    canPickScreenColor() {
-      return screenColorPickerAvailable();
-    },
-    async pickScreenColor() {
-      if (screenColorPickerAvailable()) {
-        const result = await new window.EyeDropper().open();
-        return { color: result.sRGBHex };
-      }
-      throw new Error("Screen color picker is unavailable in this host.");
     },
     async newPuzzleSource(payload) {
       throw new Error("New puzzle source is browser-runtime owned, not host-owned.");

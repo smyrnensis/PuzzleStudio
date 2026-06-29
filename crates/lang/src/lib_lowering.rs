@@ -312,20 +312,30 @@ fn collect_statement_reference_diagnostics(
 ) {
     for statement in statements {
         match statement {
-            StatementAst::Call { name, source_line } => {
+            StatementAst::Call {
+                name,
+                source_line,
+                source_line_number,
+            } => {
                 if !definitions_by_name.contains_key(name) {
-                    diagnostics.push(
-                        Diagnostic::error(format!("unknown routine call: {name}"))
-                            .with_source_line(source_line.clone()),
-                    );
+                    diagnostics.push(diagnostic_at_source_line_number(
+                        format!("unknown routine call: {name}"),
+                        source_line,
+                        *source_line_number,
+                    ));
                 }
             }
-            StatementAst::DisplayCall { name, source_line } => {
+            StatementAst::DisplayCall {
+                name,
+                source_line,
+                source_line_number,
+            } => {
                 if !definitions_by_name.contains_key(name) {
-                    diagnostics.push(
-                        Diagnostic::error(format!("unknown display routine call: {name}"))
-                            .with_source_line(source_line.clone()),
-                    );
+                    diagnostics.push(diagnostic_at_source_line_number(
+                        format!("unknown display routine call: {name}"),
+                        source_line,
+                        *source_line_number,
+                    ));
                 }
             }
             StatementAst::DisplayBlock(statements) | StatementAst::Block { statements, .. } => {
@@ -367,8 +377,11 @@ fn collect_statement_reference_diagnostics(
                 if let Some(name) = &rewrite.after_call {
                     if !definitions_by_name.contains_key(name) {
                         diagnostics.push(
-                            Diagnostic::error(format!("unknown routine call: {name}"))
-                                .with_source_line(rewrite.source_line.clone()),
+                            diagnostic_at_source_line_number(
+                                format!("unknown routine call: {name}"),
+                                &rewrite.source_line,
+                                rewrite.source_line_number,
+                            ),
                         );
                     }
                 }
@@ -391,12 +404,41 @@ fn wrap_program_local_frame(
 fn input_dependency_error(
     context: &StatementLoweringContext,
     source_line: &str,
+    source_line_number: Option<usize>,
 ) -> DiagnosticReport {
     let scope = context.input_forbidden_context.unwrap_or("this program");
     if source_line.trim().is_empty() {
         return DiagnosticReport::error(format!("{scope} cannot depend on input"));
     }
-    DiagnosticReport::error_at_line(format!("{scope} cannot depend on input"), source_line)
+    report_at_source_line_number(
+        format!("{scope} cannot depend on input"),
+        source_line,
+        source_line_number,
+    )
+}
+
+fn diagnostic_at_source_line_number(
+    message: impl Into<String>,
+    source_line: &str,
+    source_line_number: Option<usize>,
+) -> Diagnostic {
+    let diagnostic = Diagnostic::error(message);
+    match source_line_number {
+        Some(line) => diagnostic.with_source_line_number(source_line.to_string(), line),
+        None => diagnostic.with_source_line(source_line.to_string()),
+    }
+}
+
+fn report_at_source_line_number(
+    message: impl Into<String>,
+    source_line: &str,
+    source_line_number: Option<usize>,
+) -> DiagnosticReport {
+    DiagnosticReport::from_diagnostic(diagnostic_at_source_line_number(
+        message,
+        source_line,
+        source_line_number,
+    ))
 }
 
 fn lower_condition_defs(
@@ -1076,6 +1118,7 @@ fn classify_rewrite_role(
     visual_objects: &[ObjectId],
     context: &StatementLoweringContext,
     source_line: &str,
+    source_line_number: Option<usize>,
 ) -> Result<ClassifiedRuleRole, DiagnosticReport> {
     let reads_visual = pattern_block_reads_visual_object(before, visual_objects);
     let writes_visual = alternatives_write_visual_objects(alternatives, visual_objects);
@@ -1083,9 +1126,10 @@ fn classify_rewrite_role(
     let has_gameplay_effects = lowered_effects_change_gameplay(effects);
 
     if reads_visual && (writes_main || has_gameplay_effects) {
-        return Err(DiagnosticReport::error_at_line(
+        return Err(report_at_source_line_number(
             "display object matches cannot cause gameplay changes",
             source_line,
+            source_line_number,
         ));
     }
 
@@ -1100,9 +1144,10 @@ fn classify_rewrite_role(
     };
 
     if context.role == RuleRole::Visual && role == ClassifiedRuleRole::Main {
-        return Err(DiagnosticReport::error_at_line(
+        return Err(report_at_source_line_number(
             "display routines and display blocks can only contain display rules",
             source_line,
+            source_line_number,
         ));
     }
 
@@ -1252,19 +1297,29 @@ impl<'a> ProgramLowerer<'a> {
         context: &StatementLoweringContext,
     ) -> Result<Vec<RuleStep>, DiagnosticReport> {
         match statement {
-            StatementAst::Call { name, source_line } => self.lower_call(name, source_line, context),
-            StatementAst::DisplayCall { name, source_line } => {
-                self.lower_display_call(name, source_line, context)
+            StatementAst::Call {
+                name,
+                source_line,
+                source_line_number,
+            } => self.lower_call(name, source_line, *source_line_number, context),
+            StatementAst::DisplayCall {
+                name,
+                source_line,
+                source_line_number,
+            } => {
+                self.lower_display_call(name, source_line, *source_line_number, context)
             }
             StatementAst::DisplayRewrite(rewrite) => self.lower_display_rewrite(rewrite, context),
             StatementAst::DisplayBlock(statements) => self.lower_display_block(statements, context),
             StatementAst::Conditional {
                 source_line,
+                source_line_number,
                 condition,
                 then_statements,
                 else_statements,
             } => self.lower_conditional(
                 source_line,
+                *source_line_number,
                 condition,
                 then_statements,
                 else_statements,
@@ -1276,20 +1331,29 @@ impl<'a> ProgramLowerer<'a> {
             } => self.lower_block(*application, statements, context),
             StatementAst::RepeatUntil {
                 source_line,
+                source_line_number,
                 condition,
                 statements,
-            } => self.lower_repeat_until(source_line, condition, statements, context),
+            } => self.lower_repeat_until(
+                source_line,
+                *source_line_number,
+                condition,
+                statements,
+                context,
+            ),
             StatementAst::Fix {
                 defaults,
                 statements,
             } => self.lower_fix(defaults, statements, context),
             StatementAst::If {
                 source_line,
+                source_line_number,
                 condition,
                 then_statements,
                 else_statements,
             } => self.lower_if(
                 source_line,
+                *source_line_number,
                 condition,
                 then_statements,
                 else_statements,
@@ -1297,8 +1361,9 @@ impl<'a> ProgramLowerer<'a> {
             ),
             StatementAst::Effect {
                 source_line,
+                source_line_number,
                 effects,
-            } => self.lower_effect_statement(source_line, effects, context),
+            } => self.lower_effect_statement(source_line, *source_line_number, effects, context),
             StatementAst::Rewrite(rewrite) => self.lower_rewrite(rewrite, context),
         }
     }
@@ -1306,6 +1371,7 @@ impl<'a> ProgramLowerer<'a> {
     fn lower_effect_statement(
         &mut self,
         source_line: &str,
+        _source_line_number: Option<usize>,
         effects: &[EffectAst],
         context: &StatementLoweringContext,
     ) -> Result<Vec<RuleStep>, DiagnosticReport> {
@@ -1336,6 +1402,7 @@ impl<'a> ProgramLowerer<'a> {
     fn lower_conditional(
         &mut self,
         source_line: &str,
+        source_line_number: Option<usize>,
         condition: &PatternConditionAst,
         then_statements: &[StatementAst],
         else_statements: &[StatementAst],
@@ -1343,12 +1410,22 @@ impl<'a> ProgramLowerer<'a> {
     ) -> Result<Vec<RuleStep>, DiagnosticReport> {
         if else_statements.is_empty() {
             return Ok(vec![RuleStep::ConditionalBlock {
-                condition: self.lower_pattern_condition(condition, context, source_line)?,
+                condition: self.lower_pattern_condition(
+                    condition,
+                    context,
+                    source_line,
+                    source_line_number,
+                )?,
                 steps: self.lower_statements(then_statements, context)?,
             }]);
         }
         Ok(vec![RuleStep::ConditionalBranch {
-            condition: self.lower_pattern_condition(condition, context, source_line)?,
+            condition: self.lower_pattern_condition(
+                condition,
+                context,
+                source_line,
+                source_line_number,
+            )?,
             then_steps: self.lower_statements(then_statements, context)?,
             else_steps: self.lower_statements(else_statements, context)?,
         }])
@@ -1375,6 +1452,7 @@ impl<'a> ProgramLowerer<'a> {
     fn lower_repeat_until(
         &mut self,
         source_line: &str,
+        source_line_number: Option<usize>,
         condition: &ConditionAst,
         statements: &[StatementAst],
         context: &StatementLoweringContext,
@@ -1383,7 +1461,8 @@ impl<'a> ProgramLowerer<'a> {
         if !nested_context.application_fixed {
             nested_context.application = RuleApplication::UntilStable;
         }
-        let stop_condition = self.lower_guard_condition(condition, context, source_line)?;
+        let stop_condition =
+            self.lower_guard_condition(condition, context, source_line, source_line_number)?;
         let steps = self.lower_statements(statements, &nested_context)?;
         Ok(vec![RuleStep::Block {
             application: RuleApplication::UntilStable,
@@ -1413,16 +1492,22 @@ impl<'a> ProgramLowerer<'a> {
         &mut self,
         name: &str,
         source_line: &str,
+        source_line_number: Option<usize>,
         context: &StatementLoweringContext,
     ) -> Result<Vec<RuleStep>, DiagnosticReport> {
         if context.call_stack.iter().any(|active| active == name) {
-            return Err(DiagnosticReport::error_at_line(
+            return Err(report_at_source_line_number(
                 format!("recursive routine call: {name}"),
                 source_line,
+                source_line_number,
             ));
         }
         let definition = self.definitions.get(name).cloned().ok_or_else(|| {
-            DiagnosticReport::error_at_line(format!("unknown routine call: {name}"), source_line)
+            report_at_source_line_number(
+                format!("unknown routine call: {name}"),
+                source_line,
+                source_line_number,
+            )
         })?;
         let mut nested_context = context.clone();
         if context.role == RuleRole::Visual || definition.role == RuleRole::Visual {
@@ -1464,18 +1549,21 @@ impl<'a> ProgramLowerer<'a> {
         &mut self,
         name: &str,
         source_line: &str,
+        source_line_number: Option<usize>,
         context: &StatementLoweringContext,
     ) -> Result<Vec<RuleStep>, DiagnosticReport> {
         if context.call_stack.iter().any(|active| active == name) {
-            return Err(DiagnosticReport::error_at_line(
+            return Err(report_at_source_line_number(
                 format!("recursive routine call: {name}"),
                 source_line,
+                source_line_number,
             ));
         }
         let definition = self.definitions.get(name).cloned().ok_or_else(|| {
-            DiagnosticReport::error_at_line(
+            report_at_source_line_number(
                 format!("unknown display routine call: {name}"),
                 source_line,
+                source_line_number,
             )
         })?;
         let mut nested_context = context.clone();
@@ -1497,6 +1585,7 @@ impl<'a> ProgramLowerer<'a> {
         condition: &PatternConditionAst,
         context: &StatementLoweringContext,
         source_line: &str,
+        source_line_number: Option<usize>,
     ) -> Result<RuleCondition, DiagnosticReport> {
         if context.role == RuleRole::Main {
             validate_non_visual_pattern_block(
@@ -1533,7 +1622,11 @@ impl<'a> ProgramLowerer<'a> {
             }
             OrientationExpr::Input => {
                 if !context.input_allowed {
-                    return Err(input_dependency_error(context, source_line));
+                    return Err(input_dependency_error(
+                        context,
+                        source_line,
+                        source_line_number,
+                    ));
                 }
                 let mut patterns = Vec::new();
                 for direction in self.directions {
@@ -1553,12 +1646,17 @@ impl<'a> ProgramLowerer<'a> {
             }
             OrientationExpr::InputSet(axis) => {
                 if !context.input_allowed {
-                    return Err(input_dependency_error(context, source_line));
+                    return Err(input_dependency_error(
+                        context,
+                        source_line,
+                        source_line_number,
+                    ));
                 }
                 let directions = self.directions_for_orientation_name(axis)?.ok_or_else(|| {
-                    DiagnosticReport::error_at_line(
+                    report_at_source_line_number(
                         format!("unknown input orientation set: {axis}"),
                         source_line,
+                        source_line_number,
                     )
                 })?;
                 let mut patterns = Vec::new();
@@ -1581,12 +1679,13 @@ impl<'a> ProgramLowerer<'a> {
                 let directions = self
                     .directions_for_orientation_name(&direction_name.0)?
                     .ok_or_else(|| {
-                        DiagnosticReport::error_at_line(
+                        report_at_source_line_number(
                             format!(
                                 "unknown pattern condition orientation: {}",
                                 direction_name.0
                             ),
                             source_line,
+                            source_line_number,
                         )
                     })?;
                 self.condition_patterns_for_directions(
@@ -1610,9 +1709,10 @@ impl<'a> ProgramLowerer<'a> {
         condition: &ConditionAst,
         context: &StatementLoweringContext,
         source_line: &str,
+        source_line_number: Option<usize>,
     ) -> Result<RuleCondition, DiagnosticReport> {
         Ok(RuleCondition::GuardBranches(
-            self.lower_condition_branches(condition, context, source_line)?,
+            self.lower_condition_branches(condition, context, source_line, source_line_number)?,
         ))
     }
 
@@ -1657,6 +1757,7 @@ impl<'a> ProgramLowerer<'a> {
     fn lower_if(
         &mut self,
         source_line: &str,
+        source_line_number: Option<usize>,
         condition: &ConditionAst,
         then_statements: &[StatementAst],
         else_statements: &[StatementAst],
@@ -1664,13 +1765,23 @@ impl<'a> ProgramLowerer<'a> {
     ) -> Result<Vec<RuleStep>, DiagnosticReport> {
         if !else_statements.is_empty() {
             return Ok(vec![RuleStep::ConditionalBranch {
-                condition: self.lower_guard_condition(condition, context, source_line)?,
+                condition: self.lower_guard_condition(
+                    condition,
+                    context,
+                    source_line,
+                    source_line_number,
+                )?,
                 then_steps: self.lower_statements(then_statements, context)?,
                 else_steps: self.lower_statements(else_statements, context)?,
             }]);
         }
         Ok(vec![RuleStep::ConditionalBlock {
-            condition: self.lower_guard_condition(condition, context, source_line)?,
+            condition: self.lower_guard_condition(
+                condition,
+                context,
+                source_line,
+                source_line_number,
+            )?,
             steps: self.lower_statements(then_statements, context)?,
         }])
     }
@@ -1679,23 +1790,30 @@ impl<'a> ProgramLowerer<'a> {
         &self,
         name: &str,
         source_line: &str,
+        source_line_number: Option<usize>,
     ) -> Result<Vec<InputId>, DiagnosticReport> {
         let values = self.value_sets.get(name).ok_or_else(|| {
-            DiagnosticReport::error_at_line(format!("unknown input tag set: {name}"), source_line)
+            report_at_source_line_number(
+                format!("unknown input tag set: {name}"),
+                source_line,
+                source_line_number,
+            )
         })?;
         if values.is_empty() {
-            return Err(DiagnosticReport::error_at_line(
+            return Err(report_at_source_line_number(
                 format!("empty input tag set: {name}"),
                 source_line,
+                source_line_number,
             ));
         }
         values
             .iter()
             .map(|value| {
                 self.input_names.get(value).copied().ok_or_else(|| {
-                    DiagnosticReport::error_at_line(
+                    report_at_source_line_number(
                         format!("unknown input in tag set: {value}"),
                         source_line,
+                        source_line_number,
                     )
                 })
             })
@@ -1714,13 +1832,18 @@ impl<'a> ProgramLowerer<'a> {
         condition: &ConditionAst,
         context: &StatementLoweringContext,
         source_line: &str,
+        source_line_number: Option<usize>,
     ) -> Result<Vec<Vec<Guard>>, DiagnosticReport> {
         match condition {
             ConditionAst::All(conditions) => {
                 let mut branches = vec![Vec::<Guard>::new()];
                 for condition in conditions {
-                    let next_branches =
-                        self.lower_condition_branches(condition, context, source_line)?;
+                    let next_branches = self.lower_condition_branches(
+                        condition,
+                        context,
+                        source_line,
+                        source_line_number,
+                    )?;
                     let mut combined = Vec::new();
                     for branch in &branches {
                         for next_branch in &next_branches {
@@ -1740,16 +1863,21 @@ impl<'a> ProgramLowerer<'a> {
                         condition,
                         context,
                         source_line,
+                        source_line_number,
                     )?);
                 }
                 Ok(branches)
             }
             ConditionAst::InputIn(axis) => {
                 if !context.input_allowed {
-                    return Err(input_dependency_error(context, source_line));
+                    return Err(input_dependency_error(
+                        context,
+                        source_line,
+                        source_line_number,
+                    ));
                 }
                 Ok(self
-                    .input_ids_for_value_set(axis, source_line)?
+                    .input_ids_for_value_set(axis, source_line, source_line_number)?
                     .into_iter()
                     .map(|input| vec![Guard::InputIs(input)])
                     .collect())
@@ -1758,6 +1886,7 @@ impl<'a> ProgramLowerer<'a> {
                 condition,
                 context,
                 source_line,
+                source_line_number,
             )?]]),
         }
     }
@@ -1767,27 +1896,38 @@ impl<'a> ProgramLowerer<'a> {
         condition: &ConditionAst,
         context: &StatementLoweringContext,
         source_line: &str,
+        source_line_number: Option<usize>,
     ) -> Result<Guard, DiagnosticReport> {
         match condition {
             ConditionAst::InputIs(input_name) => {
                 if !context.input_allowed {
-                    return Err(input_dependency_error(context, source_line));
+                    return Err(input_dependency_error(
+                        context,
+                        source_line,
+                        source_line_number,
+                    ));
                 }
                 let input = *self.input_names.get(input_name).ok_or_else(|| {
-                    DiagnosticReport::error_at_line(
+                    report_at_source_line_number(
                         format!("unknown input: {input_name}"),
                         source_line,
+                        source_line_number,
                     )
                 })?;
                 Ok(Guard::InputIs(input))
             }
-            ConditionAst::InputIn(_) => Err(DiagnosticReport::error_at_line(
+            ConditionAst::InputIn(_) => Err(report_at_source_line_number(
                 "input tag-set condition was not expanded",
                 source_line,
+                source_line_number,
             )),
             ConditionAst::GlobalEquals { name, value } => {
                 let global = *self.global_names.get(name).ok_or_else(|| {
-                    DiagnosticReport::error_at_line(format!("unknown global: {name}"), source_line)
+                    report_at_source_line_number(
+                        format!("unknown global: {name}"),
+                        source_line,
+                        source_line_number,
+                    )
                 })?;
                 Ok(Guard::GlobalEquals {
                     global,
@@ -1796,7 +1936,11 @@ impl<'a> ProgramLowerer<'a> {
             }
             ConditionAst::GlobalCompare { name, op, value } => {
                 let global = *self.global_names.get(name).ok_or_else(|| {
-                    DiagnosticReport::error_at_line(format!("unknown global: {name}"), source_line)
+                    report_at_source_line_number(
+                        format!("unknown global: {name}"),
+                        source_line,
+                        source_line_number,
+                    )
                 })?;
                 Ok(Guard::GlobalCompare {
                     global,
@@ -1806,9 +1950,10 @@ impl<'a> ProgramLowerer<'a> {
             }
             ConditionAst::ConditionEquals { name, value } => {
                 let condition = *self.condition_names.get(name).ok_or_else(|| {
-                    DiagnosticReport::error_at_line(
+                    report_at_source_line_number(
                         format!("unknown condition: {name}"),
                         source_line,
+                        source_line_number,
                     )
                 })?;
                 if context.role == RuleRole::Main {
@@ -1825,9 +1970,10 @@ impl<'a> ProgramLowerer<'a> {
             }
             ConditionAst::ConditionNonZero(name) => {
                 let condition = *self.condition_names.get(name).ok_or_else(|| {
-                    DiagnosticReport::error_at_line(
+                    report_at_source_line_number(
                         format!("unknown condition: {name}"),
                         source_line,
+                        source_line_number,
                     )
                 })?;
                 if context.role == RuleRole::Main {
@@ -1841,9 +1987,10 @@ impl<'a> ProgramLowerer<'a> {
             }
             ConditionAst::ConditionCompare { name, op, value } => {
                 let condition = *self.condition_names.get(name).ok_or_else(|| {
-                    DiagnosticReport::error_at_line(
+                    report_at_source_line_number(
                         format!("unknown condition: {name}"),
                         source_line,
+                        source_line_number,
                     )
                 })?;
                 if context.role == RuleRole::Main {
@@ -1920,9 +2067,10 @@ impl<'a> ProgramLowerer<'a> {
                     value: *value,
                 })
             }
-            ConditionAst::All(_) | ConditionAst::Any(_) => Err(DiagnosticReport::error_at_line(
+            ConditionAst::All(_) | ConditionAst::Any(_) => Err(report_at_source_line_number(
                 "nested condition expression was not expanded",
                 source_line,
+                source_line_number,
             )),
         }
     }
@@ -1941,12 +2089,18 @@ impl<'a> ProgramLowerer<'a> {
         if !rewrite.after_effects.is_empty() {
             then_steps.extend(self.lower_effect_statement(
                 &rewrite.source_line,
+                rewrite.source_line_number,
                 &rewrite.after_effects,
                 context,
             )?);
         }
         if let Some(after_call) = &rewrite.after_call {
-            then_steps.extend(self.lower_call(after_call, &rewrite.source_line, context)?);
+            then_steps.extend(self.lower_call(
+                after_call,
+                &rewrite.source_line,
+                rewrite.source_line_number,
+                context,
+            )?);
         }
         Ok(vec![RuleStep::AfterTriggered { steps, then_steps }])
     }
@@ -2001,7 +2155,11 @@ impl<'a> ProgramLowerer<'a> {
             }
             OrientationExpr::Input => {
                 if !context.input_allowed {
-                    return Err(input_dependency_error(context, &rewrite.source_line));
+                    return Err(input_dependency_error(
+                        context,
+                        &rewrite.source_line,
+                        rewrite.source_line_number,
+                    ));
                 }
                 let mut rules = Vec::new();
                 for direction in self.directions {
@@ -2021,12 +2179,17 @@ impl<'a> ProgramLowerer<'a> {
             }
             OrientationExpr::InputSet(axis) => {
                 if !context.input_allowed {
-                    return Err(input_dependency_error(context, &rewrite.source_line));
+                    return Err(input_dependency_error(
+                        context,
+                        &rewrite.source_line,
+                        rewrite.source_line_number,
+                    ));
                 }
                 let directions = self.directions_for_orientation_name(axis)?.ok_or_else(|| {
-                    DiagnosticReport::error_at_line(
+                    report_at_source_line_number(
                         format!("unknown input orientation set: {axis}"),
                         &rewrite.source_line,
+                        rewrite.source_line_number,
                     )
                 })?;
                 let mut rules = Vec::new();
@@ -2049,9 +2212,10 @@ impl<'a> ProgramLowerer<'a> {
                 let directions = self
                     .directions_for_orientation_name(&direction_name.0)?
                     .ok_or_else(|| {
-                        DiagnosticReport::error_at_line(
+                        report_at_source_line_number(
                             format!("unknown orientation: {}", direction_name.0),
                             &rewrite.source_line,
+                            rewrite.source_line_number,
                         )
                     })?;
                 let mut rules = Vec::new();
@@ -2099,6 +2263,7 @@ impl<'a> ProgramLowerer<'a> {
             self.visual_objects,
             context,
             &rewrite.source_line,
+            rewrite.source_line_number,
         )?;
         if role == ClassifiedRuleRole::Visual {
             validate_visual_effects(effects, &rewrite.source_line)?;
@@ -2329,4 +2494,3 @@ impl<'a> ProgramLowerer<'a> {
         Ok(rules)
     }
 }
-

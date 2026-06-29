@@ -33,15 +33,18 @@ pub(crate) enum StatementAst {
     Call {
         name: String,
         source_line: String,
+        source_line_number: Option<usize>,
     },
     DisplayCall {
         name: String,
         source_line: String,
+        source_line_number: Option<usize>,
     },
     DisplayRewrite(OrientedRewriteAst),
     DisplayBlock(Vec<StatementAst>),
     Conditional {
         source_line: String,
+        source_line_number: Option<usize>,
         condition: PatternConditionAst,
         then_statements: Vec<StatementAst>,
         else_statements: Vec<StatementAst>,
@@ -52,6 +55,7 @@ pub(crate) enum StatementAst {
     },
     RepeatUntil {
         source_line: String,
+        source_line_number: Option<usize>,
         condition: ConditionAst,
         statements: Vec<StatementAst>,
     },
@@ -61,12 +65,14 @@ pub(crate) enum StatementAst {
     },
     If {
         source_line: String,
+        source_line_number: Option<usize>,
         condition: ConditionAst,
         then_statements: Vec<StatementAst>,
         else_statements: Vec<StatementAst>,
     },
     Effect {
         source_line: String,
+        source_line_number: Option<usize>,
         effects: Vec<EffectAst>,
     },
     Rewrite(OrientedRewriteAst),

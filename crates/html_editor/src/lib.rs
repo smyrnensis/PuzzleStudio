@@ -453,12 +453,7 @@ impl EditorService {
             &request.game_css,
             &self.state.base_game_visuals_js,
         )
-        .map_err(|report| {
-            AppError::Diagnostics(puzzle_lang::resolve_diagnostic_source_locations(
-                report,
-                &request.source,
-            ))
-        })
+        .map_err(AppError::Diagnostics)
     }
 
     pub fn highlight_json(&self, source: &str) -> String {
@@ -4603,48 +4598,48 @@ levels3 demo of push3 {
     }
 
     #[test]
-    fn sprite_hue_edit_colorizes_neutral_starting_colors() {
-        assert!(EDITOR_SPRITE_JS.contains("const makeHueEditVisible = () => {"));
-        assert!(EDITOR_SPRITE_JS.contains("if (hsv.s <= 0)"));
-        assert!(EDITOR_SPRITE_JS.contains("if (hsv.v <= 0)"));
-        assert!(EDITOR_SPRITE_JS.contains("hueInput.addEventListener(\"pointerdown\", () => {"));
-        assert!(EDITOR_SPRITE_JS.contains("window.requestAnimationFrame(activateHueInput);"));
-        assert!(EDITOR_SPRITE_JS.contains("makeHueEditVisible();\n    emit();"));
-    }
-
-    #[test]
-    fn sprite_color_adjuster_preserves_hue_for_self_emitted_color_echoes() {
+    fn sprite_color_adjuster_uses_native_color_input() {
         let adjuster_start = EDITOR_SPRITE_JS
             .find("function renderSpriteColorAdjuster")
             .expect("sprite color adjuster");
         let adjuster_end = EDITOR_SPRITE_JS[adjuster_start..]
-            .find("function spriteEyedropperIconSvg")
+            .find("function renderSpritePalette")
             .map(|index| adjuster_start + index)
-            .expect("sprite eyedropper icon after adjuster");
+            .expect("sprite palette after adjuster");
         let adjuster = &EDITOR_SPRITE_JS[adjuster_start..adjuster_end];
 
-        assert!(adjuster.contains("let selfEmittedColor = \"\";"));
-        assert!(adjuster.contains("if (normalized !== selfEmittedColor) {"));
-        assert!(adjuster.contains("selfEmittedColor = \"\";"));
-        assert!(
-            adjuster.contains("selfEmittedColor = next;\n    syncUi(next);\n    onChange(next);")
-        );
+        assert!(adjuster.contains("colorInput.type = \"color\";"));
+        assert!(adjuster.contains("colorInput.className = \"sprite-native-color-input\";"));
+        assert!(adjuster.contains("colorInput.addEventListener(\"input\", emit);"));
+        assert!(adjuster.contains("colorInput.addEventListener(\"change\", emit);"));
+        assert!(adjuster.contains("spriteColorWithAlpha(colorInput.value, alphaInput.value)"));
+        assert!(!adjuster.contains("window.PuzzleStudioHost?.pickScreenColor"));
+        assert!(!adjuster.contains("EyeDropper"));
     }
 
     #[test]
-    fn sprite_color_editor_eyedropper_uses_browser_eyedropper_only() {
-        assert!(EDITOR_BOOT_JS.contains("async pickScreenColor()"));
-        assert!(EDITOR_BOOT_JS.contains("function screenColorPickerAvailable()"));
-        assert!(EDITOR_BOOT_JS.contains("canPickScreenColor()"));
-        assert!(EDITOR_BOOT_JS.contains(r#"typeof window.EyeDropper === "function""#));
-        assert!(EDITOR_BOOT_JS.contains("new window.EyeDropper().open()"));
+    fn source_color_editor_uses_native_color_input_without_custom_popover() {
+        assert!(EDITOR_SOURCE_JS.contains("const sourceColorInput = createSourceColorInput();"));
+        assert!(EDITOR_SOURCE_JS.contains("input.type = \"color\";"));
+        assert!(EDITOR_SOURCE_JS.contains("input.className = \"source-native-color-input\";"));
+        assert!(EDITOR_SOURCE_JS.contains("sourceColorInput.showPicker();"));
+        assert!(EDITOR_SOURCE_JS.contains("sourceColorInput.click();"));
+        assert!(EDITOR_SOURCE_JS.contains("sourceColorInput?.addEventListener(\"input\", updateSourceColorFromNativeInput);"));
+        assert!(EDITOR_SOURCE_JS.contains("sourceColorInput?.addEventListener(\"change\", updateSourceColorFromNativeInput);"));
+        assert!(!EDITOR_SOURCE_JS.contains("createSourceColorPopover"));
+        assert!(!EDITOR_SOURCE_JS.contains("source-color-popover"));
+        assert!(!EDITOR_SOURCE_JS.contains("renderSourceColorAdjuster"));
+    }
+
+    #[test]
+    fn color_editor_does_not_depend_on_eyedropper_host_api() {
         assert!(!EDITOR_BOOT_JS.contains(r#"invoke("pick_screen_color")"#));
-        assert!(EDITOR_SPRITE_JS.contains("window.PuzzleStudioHost?.pickScreenColor?.()"));
-        assert!(EDITOR_SPRITE_JS.contains("window.PuzzleStudioHost?.canPickScreenColor?.()"));
-        assert!(EDITOR_SPRITE_JS.contains("eyedropperButton.disabled = !canPickScreenColor;"));
-        assert!(EDITOR_SPRITE_JS.contains("function spriteEyedropperIconSvg()"));
-        assert!(EDITOR_SPRITE_JS.contains(r#"<path d="m2 22 1-1h3l9-9"></path>"#));
-        assert!(EDITOR_SPRITE_JS.contains(r#"<path d="M3 21v-3l9-9"></path>"#));
+        assert!(!EDITOR_BOOT_JS.contains("async pickScreenColor()"));
+        assert!(!EDITOR_BOOT_JS.contains("canPickScreenColor()"));
+        assert!(!EDITOR_BOOT_JS.contains("EyeDropper"));
+        assert!(!EDITOR_SPRITE_JS.contains("window.PuzzleStudioHost?.pickScreenColor"));
+        assert!(!EDITOR_SPRITE_JS.contains("window.PuzzleStudioHost?.canPickScreenColor"));
+        assert!(!EDITOR_SPRITE_JS.contains("function spriteEyedropperIconSvg()"));
         assert!(!EDITOR_SPRITE_JS.contains("sprite-palette-eyedropper-button"));
         assert!(!EDITOR_SPRITE_JS.contains("spriteEyedropperActive"));
         assert!(!EDITOR_SPRITE3D_JS.contains("sprite3dEyedropperActive"));
@@ -4743,6 +4738,23 @@ levels3 demo of push3 {
         assert!(!EDITOR_SPRITE_JS.contains("spriteBrushPreviewElement"));
         assert!(!EDITOR_SPRITE_JS.contains("sprite-brush-preview"));
         assert!(!EDITOR_SPRITE_JS.contains("finishSpritePaintMutation();"));
+    }
+
+    #[test]
+    fn sprite_transform_actions_share_paint_tool_row() {
+        assert!(EDITOR_HTML.contains(r#"id="spriteTransformActionBank" hidden"#));
+        assert!(!EDITOR_HTML.contains("sprite-toolbar sprite-edit-actions"));
+        assert!(
+            EDITOR_SPRITE_JS.contains("transformActions.className = \"sprite-paint-transform-actions\";")
+        );
+        assert!(EDITOR_SPRITE_JS.contains("spriteFlipVerticalButton,\n    spriteClearButton,"));
+        assert!(EDITOR_CSS.contains(".sprite-paint-transform-actions {\n  margin-left: auto;"));
+        assert!(EDITOR_CSS.contains(
+            ".sprite-paint-tool-button {\n  border: 0;\n  background: transparent;"
+        ));
+        assert!(!EDITOR_CSS.contains(
+            ".sprite-paint-tool-button {\n  background: var(--bar-bg);"
+        ));
     }
 
     #[test]

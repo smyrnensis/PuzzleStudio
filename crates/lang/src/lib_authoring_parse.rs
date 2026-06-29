@@ -2366,6 +2366,7 @@ fn parse_level_event_sugar(
         .collect();
     Ok(Some(StatementAst::Effect {
         source_line: line.to_string(),
+        source_line_number: None,
         effects,
     }))
 }
@@ -3436,9 +3437,11 @@ fn add_default_restart_handler(main_statements: Option<&mut Vec<StatementAst>>) 
     }
     statements.push(StatementAst::If {
         source_line: "restart".to_string(),
+        source_line_number: None,
         condition: ConditionAst::InputIs("restart".to_string()),
         then_statements: vec![StatementAst::Effect {
             source_line: "restart".to_string(),
+            source_line_number: None,
             effects: vec![EffectAst::Restart],
         }],
         else_statements: Vec::new(),
@@ -10562,6 +10565,7 @@ fn parse_statement_arrow_consequence(
             vec![StatementAst::Call {
                 name: effect_text.to_string(),
                 source_line: line.to_string(),
+                source_line_number: line_numbers.and_then(|line_numbers| line_numbers.get(start).copied()),
             }],
             start + 1,
         ));
@@ -10570,6 +10574,7 @@ fn parse_statement_arrow_consequence(
     Ok((
         vec![StatementAst::Effect {
             source_line: line.to_string(),
+            source_line_number: line_numbers.and_then(|line_numbers| line_numbers.get(start).copied()),
             effects,
         }],
         start + 1,
@@ -11417,6 +11422,7 @@ fn parse_statement_block(
                         ));
                     statements.push(StatementAst::If {
                         source_line: line.to_string(),
+                        source_line_number,
                         condition,
                         then_statements,
                         else_statements,
@@ -11479,6 +11485,7 @@ fn parse_statement_block(
                             };
                         statements.push(StatementAst::Conditional {
                             source_line: line.to_string(),
+                            source_line_number,
                             condition,
                             then_statements,
                             else_statements,
@@ -11492,10 +11499,12 @@ fn parse_statement_block(
                         ));
                         statements.push(StatementAst::Conditional {
                             source_line: line.to_string(),
+                            source_line_number,
                             condition,
                             then_statements: vec![StatementAst::Call {
                                 name: trailing.to_string(),
                                 source_line: line.to_string(),
+                                source_line_number,
                             }],
                             else_statements: Vec::new(),
                         });
@@ -11559,6 +11568,7 @@ fn parse_statement_block(
                         ));
                     statements.push(StatementAst::If {
                         source_line: line.to_string(),
+                        source_line_number,
                         condition,
                         then_statements,
                         else_statements,
@@ -11622,6 +11632,7 @@ fn parse_statement_block(
                     ));
                 statements.push(StatementAst::If {
                     source_line: line.to_string(),
+                    source_line_number,
                     condition,
                     then_statements,
                     else_statements,
@@ -11650,6 +11661,7 @@ fn parse_statement_block(
                 match parse_rewrite_effect(line, line) {
                     Ok(effects) => statements.push(StatementAst::Effect {
                         source_line: line.to_string(),
+                        source_line_number,
                         effects,
                     }),
                     Err(report) => diagnostics.extend(report.into_diagnostics()),
@@ -11695,6 +11707,7 @@ fn parse_statement_block(
                         ));
                     statements.push(StatementAst::If {
                         source_line: line.to_string(),
+                        source_line_number,
                         condition,
                         then_statements,
                         else_statements: Vec::new(),
@@ -11704,9 +11717,11 @@ fn parse_statement_block(
                     match parse_rewrite_effect(effect_text, line) {
                         Ok(effects) => statements.push(StatementAst::If {
                             source_line: line.to_string(),
+                            source_line_number,
                             condition,
                             then_statements: vec![StatementAst::Effect {
                                 source_line: line.to_string(),
+                                source_line_number,
                                 effects,
                             }],
                             else_statements: Vec::new(),
@@ -11720,6 +11735,7 @@ fn parse_statement_block(
                 match parse_rewrite_effect(line, line) {
                     Ok(effects) => statements.push(StatementAst::Effect {
                         source_line: line.to_string(),
+                        source_line_number,
                         effects,
                     }),
                     Err(report) => diagnostics.extend(report.into_diagnostics()),
@@ -11729,6 +11745,7 @@ fn parse_statement_block(
             Some("[") => {
                 if let Some(statement) = match parse_conditional_call_statement(
                     line,
+                    source_line_number,
                     None,
                     rule_params,
                     object_names,
@@ -11973,6 +11990,7 @@ fn parse_statement_block(
                     ));
                     statements.push(StatementAst::RepeatUntil {
                         source_line: line.to_string(),
+                        source_line_number,
                         condition,
                         statements: nested,
                     });
@@ -12001,6 +12019,7 @@ fn parse_statement_block(
             Some(_) if line.starts_with('[') => {
                 if let Some(statement) = match parse_conditional_call_statement(
                     line,
+                    source_line_number,
                     None,
                     rule_params,
                     object_names,
@@ -12079,6 +12098,7 @@ fn parse_statement_block(
             Some(first) if is_oriented_rewrite_line(line, first) => {
                 if let Some(statement) = match parse_conditional_call_statement(
                     line,
+                    source_line_number,
                     Some(first),
                     rule_params,
                     object_names,
@@ -12121,6 +12141,7 @@ fn parse_statement_block(
                 statements.push(StatementAst::Call {
                     name: "move".to_string(),
                     source_line: line.to_string(),
+                    source_line_number,
                 });
                 i += 1;
             }
@@ -12128,6 +12149,7 @@ fn parse_statement_block(
                 statements.push(StatementAst::Call {
                     name: call.to_string(),
                     source_line: line.to_string(),
+                    source_line_number,
                 });
                 i += 1;
             }
@@ -12135,6 +12157,7 @@ fn parse_statement_block(
                 statements.push(StatementAst::DisplayCall {
                     name: call.to_string(),
                     source_line: line.to_string(),
+                    source_line_number,
                 });
                 i += 1;
             }
@@ -12228,6 +12251,7 @@ fn parse_display_statement(
         return Ok(StatementAst::DisplayCall {
             name: tokens[0].to_string(),
             source_line: line.to_string(),
+            source_line_number,
         });
     }
 
@@ -12360,6 +12384,7 @@ fn validate_display_hook_statements(statements: &[StatementAst]) -> Result<(), D
 #[allow(clippy::too_many_arguments)]
 fn parse_conditional_call_statement(
     line: &str,
+    source_line_number: Option<usize>,
     orientation_token: Option<&str>,
     rule_params: &[String],
     object_names: &HashMap<String, ObjectId>,
@@ -12402,10 +12427,12 @@ fn parse_conditional_call_statement(
 
     Ok(Some(StatementAst::Conditional {
         source_line: line.to_string(),
+        source_line_number,
         condition,
         then_statements: vec![StatementAst::Call {
             name: rule_name.to_string(),
             source_line: line.to_string(),
+            source_line_number,
         }],
         else_statements: Vec::new(),
     }))

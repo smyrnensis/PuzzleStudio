@@ -13587,17 +13587,12 @@ P
         Some("[ @Trail ] -> [ @Trail Player ]")
     );
 
-    let report = super::resolve_diagnostic_source_locations(report, source);
-    let expected_line = source
+    let expected_line = modernize_test_source(source)
         .lines()
         .position(|line| line.trim() == "[ @Trail ] -> [ @Trail Player ]")
         .map(|index| index + 1);
     assert_eq!(
-        report
-            .diagnostics()
-            .first()
-            .and_then(|diagnostic| diagnostic.primary_span.as_ref())
-            .and_then(|span| span.line),
+        diagnostic.primary_span.as_ref().and_then(|span| span.line),
         expected_line
     );
 }
@@ -13700,17 +13695,12 @@ P
         Some("[ @Check no group ] -> win")
     );
 
-    let report = super::resolve_diagnostic_source_locations(report, source);
-    let expected_line = source
+    let expected_line = modernize_test_source(source)
         .lines()
         .position(|line| line.trim() == "[ @Check no group ] -> win")
         .map(|index| index + 1);
     assert_eq!(
-        report
-            .diagnostics()
-            .first()
-            .and_then(|diagnostic| diagnostic.primary_span.as_ref())
-            .and_then(|span| span.line),
+        diagnostic.primary_span.as_ref().and_then(|span| span.line),
         expected_line
     );
 }
@@ -15358,7 +15348,6 @@ level first
 }
 "#;
     let report = super::parse_game2d(source).unwrap_err();
-    let report = super::resolve_diagnostic_source_locations(report, source);
     let diagnostics = report.diagnostics();
 
     assert_eq!(diagnostics.len(), 1);
@@ -15437,7 +15426,7 @@ B
 }
 
 #[test]
-fn diagnostic_source_location_does_not_guess_duplicate_lines() {
+fn diagnostic_source_location_uses_statement_line_for_duplicate_lines() {
     let source = r#"title probe
 
 puzzle main {
@@ -15460,15 +15449,19 @@ level first
 }
 "#;
     let report = super::parse_game2d(source).unwrap_err();
-    let report = super::resolve_diagnostic_source_locations(report, source);
     let diagnostics = report.diagnostics();
+    let expected_lines = source
+        .lines()
+        .enumerate()
+        .filter_map(|(index, line)| (line.trim() == "missing").then_some(index + 1))
+        .collect::<Vec<_>>();
 
-    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(diagnostics.len(), 2);
     assert_eq!(
-        diagnostics[0]
-            .primary_span
-            .as_ref()
-            .and_then(|span| span.line),
-        None
+        diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.primary_span.as_ref().and_then(|span| span.line))
+            .collect::<Vec<_>>(),
+        expected_lines.into_iter().map(Some).collect::<Vec<_>>()
     );
 }
