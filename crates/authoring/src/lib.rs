@@ -1,12 +1,7 @@
-pub const NEW_PUZZLE_DEFAULT_TITLE: &str = "New Puzzle";
 pub const NEW_PUZZLE_TEMPLATE: &str = include_str!("../templates/new.puzzle");
 
-pub fn new_puzzle_source(title: &str) -> String {
-    let default_title_line = format!("title {NEW_PUZZLE_DEFAULT_TITLE:?}");
-    let Some(rest) = NEW_PUZZLE_TEMPLATE.strip_prefix(&default_title_line) else {
-        panic!("new puzzle template must start with the default title line");
-    };
-    format!("title {title:?}{rest}")
+pub fn new_puzzle_source(_title: &str) -> String {
+    NEW_PUZZLE_TEMPLATE.to_string()
 }
 
 pub fn is_display_object_token(token: &str) -> bool {
@@ -489,21 +484,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn new_puzzle_source_replaces_only_template_title() {
+    fn new_puzzle_source_is_blank() {
         let source = new_puzzle_source("Custom Puzzle");
 
-        assert!(NEW_PUZZLE_TEMPLATE.starts_with("title \"New Puzzle\"\n"));
+        assert!(NEW_PUZZLE_TEMPLATE.is_empty());
         assert!(!NEW_PUZZLE_TEMPLATE.contains('\t'));
         assert!(
             !NEW_PUZZLE_TEMPLATE
                 .lines()
                 .any(|line| line.starts_with(' '))
         );
-        assert!(source.starts_with("title \"Custom Puzzle\"\n"));
-        assert!(source.contains("puzzle main {"));
-        assert!(source.contains("levels main of main {"));
+        assert_eq!(source, "");
+        assert!(!source.contains("title "));
+        assert!(!source.contains("puzzle main {"));
+        assert!(!source.contains("levels "));
         assert!(!source.contains("keys {"));
-        assert!(source.contains("layers 1"));
+        assert!(!source.contains("layers"));
         assert!(!source.contains("base ="));
         assert!(!source.contains("floor ="));
         assert!(!source.contains("solid ="));

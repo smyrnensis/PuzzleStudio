@@ -2378,13 +2378,8 @@ function createNewFolder() {
   startDraftEntry("folder");
 }
 
-function starterPuzzleTitle(name) {
-  return name.replace(/\.puzzle$/i, "").replace(/[^\w]+/g, " ").trim() || "New Puzzle";
-}
-
-async function newPuzzleSourceForFile(name) {
-  const title = starterPuzzleTitle(name);
-  return starterPuzzleSourceFromTitle(title);
+async function newPuzzleSourceForFile(_name) {
+  return STARTER_PUZZLE_SOURCE;
 }
 
 function startDraftEntry(kind) {
@@ -2684,15 +2679,6 @@ async function deleteTreeNode(nodeId) {
   }
   syncDocumentsFromTree();
   openTabIds = openTabIds.filter((id) => documents.some((document) => document.id === id));
-  if (!documents.length && (editorSeed || !isDesktopHost())) {
-    const fallbackParent = workspaceRootFolder(targetWorkspaceRoot) || fileTree;
-    const file = makeFile("new.puzzle", starterPuzzleSource("new.puzzle"), {
-      parentPath: folderPath(fallbackParent),
-      workspaceRoot: workspaceRootForFolder(fallbackParent),
-    });
-    fallbackParent.children.push(file);
-    syncDocumentsFromTree();
-  }
   if (removedActive || !findNode(fileTree, activeFileId)) {
     activeFileId = documents[0]?.id || "";
   }
@@ -2757,18 +2743,6 @@ async function removeWorkspaceNode(nodeId) {
 }
 
 const STARTER_PUZZLE_SOURCE = "__PUZZLESTUDIO_NEW_PUZZLE_SOURCE__";
-
-function starterPuzzleSource(name) {
-  return starterPuzzleSourceFromTitle(starterPuzzleTitle(name));
-}
-
-function starterPuzzleSourceFromTitle(title) {
-  const defaultTitleLine = "title \"New Puzzle\"";
-  if (!STARTER_PUZZLE_SOURCE.startsWith(`${defaultTitleLine}\n`)) {
-    throw new Error("new puzzle template title line is missing");
-  }
-  return `title ${JSON.stringify(title)}${STARTER_PUZZLE_SOURCE.slice(defaultTitleLine.length)}`;
-}
 
 function activeFolder() {
   const selected = selectedTreeNode();

@@ -5354,23 +5354,26 @@ levels3 demo of push3 {
     }
 
     #[test]
-    fn new_puzzle_starter_source_is_injected_from_authoring_template() {
+    fn new_puzzle_source_is_injected_from_authoring_template() {
         let workspace_js = editor_workspace_js();
 
         assert!(EDITOR_WORKSPACE_JS.contains("\"__PUZZLESTUDIO_NEW_PUZZLE_SOURCE__\""));
         assert!(!workspace_js.contains("__PUZZLESTUDIO_NEW_PUZZLE_SOURCE__"));
         assert!(workspace_js.contains(&js_string_literal(puzzle_authoring::NEW_PUZZLE_TEMPLATE)));
-        assert!(workspace_js.contains("function starterPuzzleSource(name)"));
-        assert!(workspace_js.contains("STARTER_PUZZLE_SOURCE.slice(defaultTitleLine.length)"));
+        assert!(workspace_js.contains("return STARTER_PUZZLE_SOURCE;"));
+        assert!(!workspace_js.contains("starterPuzzleSourceFromTitle"));
     }
 
     #[test]
-    fn new_puzzle_creation_uses_browser_template_source_for_all_hosts() {
+    fn new_puzzle_creation_uses_blank_browser_template_source_for_all_hosts() {
         assert!(EDITOR_BOOT_JS.contains("New puzzle source is browser-runtime owned"));
         assert!(!EDITOR_BOOT_JS.contains(r#"invoke("new_puzzle_source", { request: payload })"#));
-        assert!(EDITOR_WORKSPACE_JS.contains("async function newPuzzleSourceForFile(name)"));
+        assert!(EDITOR_WORKSPACE_JS.contains("async function newPuzzleSourceForFile(_name)"));
         assert!(!EDITOR_WORKSPACE_JS.contains("window.PuzzleStudioHost.newPuzzleSource"));
-        assert!(EDITOR_WORKSPACE_JS.contains("return starterPuzzleSourceFromTitle(title);"));
+        assert!(EDITOR_WORKSPACE_JS.contains("return STARTER_PUZZLE_SOURCE;"));
+        assert!(!EDITOR_WORKSPACE_JS.contains("starterPuzzleTitle"));
+        assert!(!EDITOR_WORKSPACE_JS.contains("starterPuzzleSource("));
+        assert!(!EDITOR_WORKSPACE_JS.contains("!documents.length && (editorSeed || !isDesktopHost())"));
     }
 
     #[test]
