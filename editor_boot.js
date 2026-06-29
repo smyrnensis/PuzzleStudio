@@ -35,6 +35,18 @@
     return error;
   }
 
+  function editorRuntime() {
+    const runtime = window.PuzzleStudioRuntime;
+    if (!runtime) {
+      throw new Error("PuzzleStudio browser runtime is unavailable.");
+    }
+    return runtime;
+  }
+
+  function screenColorPickerAvailable() {
+    return typeof window.EyeDropper === "function";
+  }
+
   function diagnosticSummary(diagnostics) {
     if (!Array.isArray(diagnostics) || diagnostics.length === 0) {
       return "";
@@ -48,7 +60,7 @@
   function hostErrorFromPayload(payload, fallbackMessage) {
     if (payload && typeof payload === "object") {
       const diagnostics = Array.isArray(payload.diagnostics) ? payload.diagnostics : null;
-      const message = payload.error || diagnosticSummary(diagnostics) || fallbackMessage;
+      const message = payload.error || payload.message || diagnosticSummary(diagnostics) || fallbackMessage;
       const error = new Error(message);
       if (diagnostics) {
         error.diagnostics = diagnostics;
@@ -141,38 +153,20 @@
       return listen;
     },
     async preview(payload, options = {}) {
-      const invoke = tauriInvoke();
-      if (invoke) {
-        try {
-          return await invoke("compile_preview", { request: payload });
-        } catch (error) {
-          throw hostErrorFromPayload(error, "Preview compile failed");
-        }
+      if (options.signal?.aborted) {
+        throw new DOMException("Preview request was aborted.", "AbortError");
       }
-      if (!serverBackendAvailable()) {
-        throw backendUnavailableError();
+      try {
+        return await editorRuntime().compilePreview(payload);
+      } catch (error) {
+        throw hostErrorFromPayload(error, "Preview compile failed");
       }
-      return fetchText("/api/preview", {
-        method: "POST",
-        headers: { "Content-Type": "application/json; charset=utf-8" },
-        body: JSON.stringify(payload),
-        signal: options.signal,
-      });
     },
     async highlight(payload, options = {}) {
-      const invoke = tauriInvoke();
-      if (invoke) {
-        return invoke("highlight_source", { request: payload });
+      if (options.signal?.aborted) {
+        throw new DOMException("Highlight request was aborted.", "AbortError");
       }
-      if (!serverBackendAvailable()) {
-        throw backendUnavailableError();
-      }
-      return fetchText("/api/highlight", {
-        method: "POST",
-        headers: { "Content-Type": "application/json; charset=utf-8" },
-        body: JSON.stringify(payload),
-        signal: options.signal,
-      });
+      return editorRuntime().highlightSource(payload);
     },
     async soundTools() {
       const invoke = tauriInvoke();
@@ -184,23 +178,18 @@
       }
       return fetchText("/sound-tools.js");
     },
+    canPickScreenColor() {
+      return screenColorPickerAvailable();
+    },
     async pickScreenColor() {
-      const invoke = tauriInvoke();
-      if (invoke) {
-        return invoke("pick_screen_color");
-      }
-      if ("EyeDropper" in window) {
+      if (screenColorPickerAvailable()) {
         const result = await new window.EyeDropper().open();
         return { color: result.sRGBHex };
       }
       throw new Error("Screen color picker is unavailable in this host.");
     },
     async newPuzzleSource(payload) {
-      const invoke = tauriInvoke();
-      if (!invoke) {
-        throw new Error("New puzzle source is only available from the desktop host.");
-      }
-      return invoke("new_puzzle_source", { request: payload });
+      throw new Error("New puzzle source is browser-runtime owned, not host-owned.");
     },
     async save(payload) {
       const invoke = tauriInvoke();

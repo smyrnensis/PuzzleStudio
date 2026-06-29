@@ -189,6 +189,14 @@ function toggleSprite3dBucketMode() {
   );
 }
 
+function deactivateSprite3dBucketModeAfterUse() {
+  if (!sprite3dBucketActive) {
+    return;
+  }
+  sprite3dBucketActive = false;
+  syncSprite3dBucketButton();
+}
+
 function renderSprite3dPalette() {
   ensureSprite3dPalette();
   sprite3dPalette.replaceChildren();
@@ -1649,6 +1657,9 @@ function floodFillSprite3dComponentAtSliceIndex(index, colorIndex) {
 }
 
 function bucketFillSprite3dFromSliceIndex(index) {
+  if (!Number.isInteger(index) || index < 0 || index >= sprite3d.size * sprite3d.size) {
+    return false;
+  }
   const colorIndex = sprite3d.selectedColorIndex;
   const allScope = sprite3dEditScope() === "all";
   const count = allScope
@@ -1656,13 +1667,15 @@ function bucketFillSprite3dFromSliceIndex(index) {
     : floodFillSprite3dSliceComponentAtIndex(index, colorIndex);
   if (!count) {
     setSprite3dActionStatus("Connected component already has that color", "is-ok");
-    return false;
+    deactivateSprite3dBucketModeAfterUse();
+    return true;
   }
   sprite3d.addPaletteOpen = false;
   sprite3d.editPaletteOpen = false;
   sprite3d.customColorOpen = false;
   sprite3d.addDraftColorIndex = null;
   sprite3d.hoverSlice = null;
+  deactivateSprite3dBucketModeAfterUse();
   renderSprite3dBuilder();
   const nextColorIndex = validSprite3dColorIndex(colorIndex) ? colorIndex : null;
   const message = nextColorIndex === null
@@ -2311,14 +2324,10 @@ async function addEmptySprite3dToSource() {
   }
 
   const source = activeSprite3dEditSource();
-  const cursor = typeof spriteSourceCursorPosition === "function"
-    ? spriteSourceCursorPosition(source, document)
-    : source.length;
+  const cursor = spriteSourceCursorPosition(source, document);
   let target = null;
   try {
-    target = typeof spriteSourceTargetAtCursor === "function"
-      ? await spriteSourceTargetAtCursor(source, cursor)
-      : null;
+    target = await spriteSourceTargetAtCursor(source, cursor);
   } catch (error) {
     setSprite3dActionStatus("Source target sync failed", "is-error");
     setStatus(`Source target sync failed: ${userFacingRuntimeError(error)}`, "is-error");
@@ -2429,12 +2438,10 @@ function insertEmptySprite3dDefinition(source, options = {}) {
   const block = findSprites3dBlock(source);
   const cursor = Number.isInteger(options.cursor)
     ? options.cursor
-    : (typeof spriteSourceCursorPosition === "function" ? spriteSourceCursorPosition(source) : source.length);
+    : spriteSourceCursorPosition(source);
   const target = options.target?.kind === "sprite3d" ? options.target : null;
   if (!block) {
-    const position = typeof spriteSourceInsertionLineEnd === "function"
-      ? spriteSourceInsertionLineEnd(source, cursor)
-      : source.length;
+    const position = spriteSourceInsertionLineEnd(source, cursor);
     const text = "sprites3 {\n\n}";
     return insertSpriteSourceTextAt(source, position, text, "sprites3 {\n".length);
   }
@@ -3288,8 +3295,11 @@ sprite3dPalette?.addEventListener("keydown", (event) => {
   if (!token || (event.key !== "Enter" && event.key !== " ")) {
     return;
   }
-  event.preventDefault();
   const rawIndex = token.dataset.colorIndex;
+  if (rawIndex === undefined) {
+    return;
+  }
+  event.preventDefault();
   selectSprite3dColor(rawIndex === "erase" ? null : Number(rawIndex));
 });
 sprite3dSliceBoard?.addEventListener("pointerdown", startSprite3dPaint);

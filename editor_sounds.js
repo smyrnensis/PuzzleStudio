@@ -1,7 +1,6 @@
 const soundPlayIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><polygon points="8 5 19 12 8 19 8 5"></polygon></svg>';
 const soundPauseIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14"></path><path d="M16 5v14"></path></svg>';
 const soundMusicBarOptions = [8, 16, 32, 64];
-const soundSourceIndentUnit = "  ";
 
 function soundsApi() {
   return window.PuzzleSoundGenerator || window.PuzzleSoundTools || null;
@@ -24,6 +23,7 @@ function resetSoundsBuilder() {
     const musicPreset = api.randomPreset(`${Date.now()}:${Math.random()}`);
     soundsSfxSeedInput.value = sfxPreset.seed;
     soundsSfxTypeSelect.value = sfxPreset.type;
+    soundsSfxVolumeInput.value = 1;
     soundsMusicSeedInput.value = musicPreset.seed;
     soundsMusicHeightInput.value = musicPreset.height ?? 0.5;
     setSoundMusicBars(musicPreset.bars ?? 8);
@@ -53,6 +53,10 @@ function soundSfxEffect() {
   return soundsApi().generateSoundEffect(soundsSfxSeedInput.value, { type: soundsSfxTypeSelect.value });
 }
 
+function soundSfxVolume() {
+  return soundClamp(Number(soundsSfxVolumeInput.value), 0, 1);
+}
+
 function soundMusicSong() {
   return soundsApi().generateSong(soundsMusicSeedInput.value, {
     height: Number(soundsMusicHeightInput.value),
@@ -63,6 +67,8 @@ function soundMusicSong() {
 }
 
 function renderSoundSfx() {
+  soundsSfxVolumeValue.textContent = `${Math.round(soundSfxVolume() * 100)}%`;
+  updateSoundRangeFill(soundsSfxVolumeInput);
   soundsSfxOutput.textContent = soundCurrentLine("sfx");
 }
 
@@ -103,7 +109,7 @@ function soundCurrentDefinition(kind = "sfx", options = {}) {
   return {
     kind: "sfx",
     name,
-    line: `sfx ${name} seed=${soundAtom(soundsSfxSeedInput.value, "123456")} type=${type}`,
+    line: `sfx ${name} seed=${soundAtom(soundsSfxSeedInput.value, "123456")} type=${type} volume=${soundSfxVolume().toFixed(2)}`,
   };
 }
 
@@ -128,8 +134,8 @@ async function playSoundSfx() {
   }
   await ensureAudioContext();
   sounds.sfxPlayer?.stop();
-  sounds.sfxPlayer = api.createSfxPlayer(sounds.context, soundSfxEffect());
-  sounds.sfxPlayer.start();
+  sounds.sfxPlayer = api.createSfxPlayer(sounds.context, soundSfxEffect(), { volume: soundSfxVolume() });
+  sounds.sfxPlayer.start(sounds.context.currentTime);
   renderSoundSfx();
 }
 
@@ -396,6 +402,7 @@ function loadSoundFromSourcePosition(position, options = {}) {
     if (entry.params.type !== undefined) {
       soundsSfxTypeSelect.value = entry.params.type;
     }
+    soundsSfxVolumeInput.value = entry.params.volume ?? 1;
   }
   if (options.switchMode && currentPreviewMode !== "sounds") {
     setPreviewMode("sounds");
@@ -449,6 +456,7 @@ function loadSoundSourceTarget(target, options = {}) {
     if (entry.params.type !== undefined) {
       soundsSfxTypeSelect.value = entry.params.type;
     }
+    soundsSfxVolumeInput.value = entry.params.volume ?? 1;
   }
   if (options.switchMode && currentPreviewMode !== "sounds") {
     setPreviewMode("sounds");
@@ -610,14 +618,13 @@ function insertSoundsDefinitionIntoSource(source, line) {
   const lines = soundSourceLinesWithOffsets(text);
   const soundsBlock = findFirstSoundsBlock(lines);
   if (soundsBlock) {
-    const entryIndent = soundDefinitionIndent(soundsBlock.entryIndent, soundsBlock.indent);
-    const insertText = `${entryIndent}${line}\n`;
+    const insertText = `${line}\n`;
     const nextSource = `${text.slice(0, soundsBlock.insertIndex)}${insertText}${text.slice(soundsBlock.insertIndex)}`;
     const selectionStart = soundsBlock.insertIndex + insertText.length;
     return { source: nextSource, selectionStart, selectionEnd: selectionStart };
   }
 
-  const block = `sounds {\n${soundSourceIndentUnit}${line}\n}\n`;
+  const block = `sounds {\n${line}\n}\n`;
   const afterName = findTopLevelNameInsertionIndex(lines);
   if (afterName > 0) {
     const prefix = text[afterName - 1] === "\n" ? "\n" : "\n\n";
@@ -664,9 +671,8 @@ function replaceSoundsDefinitionInSource(source, definition, options = {}) {
 }
 
 function replaceSoundsDefinitionLine(text, line, soundsBlock, definition) {
-  const indent = soundDefinitionIndent(line.text.match(/^\s*/)?.[0] || soundsBlock.entryIndent, soundsBlock.indent);
   const hasNewline = line.text.endsWith("\n");
-  const replacement = `${indent}${definition.line}${hasNewline ? "\n" : ""}`;
+  const replacement = `${definition.line}${hasNewline ? "\n" : ""}`;
   const nextSource = `${text.slice(0, line.start)}${replacement}${text.slice(line.end)}`;
   const selectionStart = line.start + replacement.length;
   return {
@@ -676,11 +682,6 @@ function replaceSoundsDefinitionLine(text, line, soundsBlock, definition) {
     definitionStart: line.start,
     definitionEnd: line.start + replacement.length,
   };
-}
-
-function soundDefinitionIndent(rawIndent, parentIndent = "") {
-  const indent = rawIndent || `${parentIndent || ""}${soundSourceIndentUnit}`;
-  return indent.replace(/\t/g, soundSourceIndentUnit);
 }
 
 function replaceSoundReferencesInSource(source, kind, oldName, newName, options = {}) {
@@ -1011,6 +1012,7 @@ function soundClamp(value, min, max) {
 
 function updateSoundRangeFills() {
   updateSoundRangeFill(soundsMusicProgress);
+  updateSoundRangeFill(soundsSfxVolumeInput);
   updateSoundRangeFill(soundsMusicHeightInput);
   updateSoundRangeFill(soundsMusicBpmInput);
   updateSoundRangeFill(soundsMusicVolumeInput);
@@ -1035,6 +1037,7 @@ soundsSfxRandomButton.addEventListener("click", randomizeSoundSfx);
 soundsSfxTitleInput.addEventListener("input", renderSoundSfx);
 soundsSfxSeedInput.addEventListener("input", renderSoundSfx);
 soundsSfxTypeSelect.addEventListener("change", renderSoundSfx);
+soundsSfxVolumeInput.addEventListener("input", renderSoundSfx);
 soundsSfxCopyButton.addEventListener("click", () => {
   copySoundLine("sfx").catch((error) => setStatus(`Could not copy sounds: ${error?.message || error}`, "is-error"));
 });
