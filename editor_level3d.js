@@ -1410,6 +1410,14 @@ function level3dLayerFillButton() {
   return button;
 }
 
+function deactivateLevel3dLayerFillModeAfterUse() {
+  if (!level3d.layerFillActive) {
+    return;
+  }
+  level3d.layerFillActive = false;
+  renderLevel3dLayerPalette();
+}
+
 function level3dLayerPaletteCollapseButton() {
   const collapsed = Boolean(level3d.layerPaletteCollapsed);
   const button = document.createElement("button");
@@ -2173,7 +2181,9 @@ function paintLevel3dLayerHoverCell() {
   if (!level3dLayerHover) {
     return false;
   }
-  return paintLevel3dCellAtPosition(level3dLayerHover);
+  return level3d.layerFillActive
+    ? bucketFillLevel3dLayerFromPosition(level3dLayerHover)
+    : paintLevel3dCellAtPosition(level3dLayerHover);
 }
 
 function startLevel3dLayerPaint(event) {
@@ -2239,10 +2249,11 @@ function bucketFillLevel3dLayerFromPosition(position) {
       stack.push({ x: current.x, y: current.y + 1, z: current.z });
     }
   }
+  deactivateLevel3dLayerFillModeAfterUse();
   if (changed) {
     setLevel3dActionStatus(level3d.selectedChar ? "Filled connected slice area" : "Erased connected slice area", "is-ok");
   }
-  return changed;
+  return true;
 }
 
 function continueLevel3dLayerPaint(event) {

@@ -246,6 +246,19 @@ export class WasmStandaloneSession {
         }
     }
     /**
+     * @param {string} state_json
+     * @param {number} level_index
+     * @param {boolean} materialize_level_start
+     */
+    set_current_state(state_json, level_index, materialize_level_start) {
+        const ptr0 = passStringToWasm0(state_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.wasmstandalonesession_set_current_state(this.__wbg_ptr, ptr0, len0, level_index, materialize_level_start);
+        if (ret[1]) {
+            throw takeFromExternrefTable0(ret[0]);
+        }
+    }
+    /**
      * @returns {string}
      */
     snapshot() {

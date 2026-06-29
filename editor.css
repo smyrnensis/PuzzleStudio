@@ -1335,7 +1335,7 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   font-size: 12px;
   line-height: 20px;
   user-select: none;
-  pointer-events: auto;
+  pointer-events: none;
   will-change: transform;
 }
 
@@ -1371,6 +1371,7 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   background: transparent;
   color: color-mix(in srgb, var(--muted) 84%, var(--code-ink));
   cursor: pointer;
+  pointer-events: auto;
 }
 
 .source-fold-button:hover {
@@ -1384,6 +1385,10 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   color: var(--ink);
   outline: 1px solid color-mix(in srgb, var(--accent) 62%, transparent);
   outline-offset: -2px;
+}
+
+.source-editor-wrap.is-source-selection-dragging .source-fold-button {
+  pointer-events: none;
 }
 
 .source-fold-icon {
@@ -1485,6 +1490,10 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   background: transparent;
   color: transparent;
   caret-color: var(--code-ink);
+}
+
+#sourceEditor.has-source-block-selection {
+  caret-color: transparent;
 }
 
 #sourceEditor::selection {
@@ -2989,7 +2998,7 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   --panel: #ffffff;
   --line: #d7dde2;
   --board-bg: #edf1f2;
-  --accent: #2f7ebc;
+  --accent: var(--preview-game-accent, var(--preview-game-ink, #1f2428));
   --button-bg: #263039;
   --button-bg-hover: #313d47;
   --button-bg-active: #1d252c;
@@ -4100,9 +4109,10 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
 }
 
 .sprite-scale-group {
+  height: var(--icon-button-size);
   min-height: var(--icon-button-size);
   display: grid;
-  grid-template-columns: 18px minmax(0, 1fr) var(--icon-button-size) var(--icon-button-size);
+  grid-template-columns: 16px minmax(0, 1fr) var(--icon-button-size) var(--icon-button-size);
   align-items: center;
   overflow: hidden;
   border: 1px solid var(--line-strong);
@@ -4118,12 +4128,13 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
 
 .sprite-scale-prefix {
   height: var(--icon-button-size);
-  display: grid;
-  place-items: center end;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 800;
-  line-height: 1;
+  line-height: var(--icon-button-size);
 }
 
 .sprite-scale-step-button {
@@ -4176,7 +4187,8 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
 .sprite-transform-bar .sprite-scale-group input {
   height: var(--icon-button-size);
   min-height: var(--icon-button-size);
-  padding: 0 5px 0 2px;
+  display: block;
+  padding: 0 5px 0 0;
   border: 0;
   border-right: 1px solid var(--line);
   border-radius: 0;
@@ -4257,14 +4269,100 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   position: relative;
   display: grid;
   justify-items: start;
-  gap: 6px;
+  gap: 5px;
+}
+
+.sprite-paint-tool-row {
+  width: min(100%, var(--sprite3d-slice-size, 320px));
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
 }
 
 .sprite-palette-grid {
+  width: min(100%, var(--sprite3d-slice-size, 320px));
+  min-width: 0;
   display: grid;
-  grid-template-columns: repeat(8, var(--icon-button-size));
+  grid-template-columns: repeat(auto-fill, minmax(var(--icon-button-size), var(--icon-button-size)));
   grid-auto-rows: var(--icon-button-size);
-  gap: 4px;
+  grid-auto-flow: row dense;
+  gap: 3px;
+}
+
+.sprite-marker-tool {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.sprite-brush-size-group {
+  height: var(--icon-button-size);
+  display: inline-flex;
+  align-items: center;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--icon-button-radius);
+  background: color-mix(in srgb, var(--bar-bg) 82%, transparent);
+}
+
+.sprite-brush-size-button {
+  width: 24px;
+  min-width: 24px;
+  height: calc(var(--icon-button-size) - 2px);
+  min-height: calc(var(--icon-button-size) - 2px);
+  padding: 0;
+  display: inline-grid;
+  place-items: center;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted);
+}
+
+.sprite-brush-size-button + .sprite-brush-size-button {
+  border-left: 1px solid var(--line);
+}
+
+.sprite-brush-size-button:hover:not(:disabled),
+.sprite-brush-size-button:focus-visible {
+  background: var(--hover-bg);
+  color: var(--ink);
+}
+
+.sprite-brush-size-button.is-active {
+  background: var(--active-bg);
+  color: var(--ink);
+}
+
+.sprite-brush-size-dot {
+  display: block;
+  border: 1.5px solid currentColor;
+  border-radius: 50%;
+}
+
+.sprite-brush-size-pixel {
+  width: 9px;
+  height: 9px;
+  display: block;
+  border: 1.5px solid currentColor;
+  border-radius: 1px;
+}
+
+.sprite-brush-size-dot.is-thin {
+  width: 4px;
+  height: 4px;
+}
+
+.sprite-brush-size-dot.is-medium {
+  width: 8px;
+  height: 8px;
+}
+
+.sprite-brush-size-dot.is-thick {
+  width: 12px;
+  height: 12px;
 }
 
 .sprite-palette-actions {
@@ -5033,17 +5131,22 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   stroke-linejoin: round;
 }
 
-.sprite-palette-fill-button {
+.sprite-palette-fill-button,
+.sprite-paint-tool-button {
   background: var(--bar-bg);
   color: var(--muted);
 }
 
 .sprite-palette-fill-button:hover:not(:disabled),
-.sprite-palette-fill-button:focus-visible {
+.sprite-palette-fill-button:focus-visible,
+.sprite-paint-tool-button:hover:not(:disabled),
+.sprite-paint-tool-button:focus-visible {
   color: var(--ink);
 }
 
-.sprite-palette-fill-button.is-active {
+.sprite-palette-fill-button.is-active,
+.sprite-paint-tool-button.is-active,
+.sprite-paint-tool-button.is-selected {
   border-color: var(--line-strong);
   background: var(--active-bg);
   color: var(--ink);
@@ -5112,6 +5215,7 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   --sprite-size: 5;
   --sprite-cell: clamp(14px, calc((100cqw - 2px) / var(--sprite-size)), 34px);
   --sprite-puzzle-line: rgba(10, 14, 18, 0.62);
+  position: relative;
   display: grid;
   grid-template-columns: repeat(var(--sprite-size), var(--sprite-cell));
   width: max-content;
@@ -5123,11 +5227,13 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
 }
 
 #spriteBuilder .sprite-board-wrap {
-  width: var(--sprite3d-slice-size, 320px);
+  width: 100%;
+  max-width: 100%;
+  overflow: auto;
 }
 
 #spriteBuilder .sprite-board {
-  --sprite-cell: clamp(14px, calc((var(--sprite3d-slice-size, 320px) - 2px) / var(--sprite-size)), 64px);
+  --sprite-cell: clamp(8px, calc((100cqw - 2px) / var(--sprite-size)), 64px);
 }
 
 .sprite3d-workspace {
@@ -5392,9 +5498,7 @@ html.is-sprite3d-slice-scrubbing * {
   content: "";
 }
 
-.sprite-cell:hover,
-.sprite-cell:focus-visible,
-.sprite-cell:active {
+.sprite-cell:focus-visible {
   background-color: var(--sprite-swatch-bg);
   background-image: var(--sprite-swatch-checker);
   background-size: 8px 8px;
@@ -5410,6 +5514,12 @@ html.is-sprite3d-slice-scrubbing * {
   justify-content: flex-start;
   gap: 3px;
   padding: 2px 0;
+}
+
+.sprite-toolbar.sprite-edit-actions {
+  width: min(100%, var(--sprite3d-slice-size, 320px));
+  gap: 4px;
+  padding: 0;
 }
 
 .sprite-toolbar.sprite3d-edit-actions {
