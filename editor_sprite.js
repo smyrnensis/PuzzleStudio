@@ -151,37 +151,17 @@ function discardSpriteColorEditHistory(kind) {
   spriteColorEditSessions[kind] = null;
 }
 
-function renderSpriteColorAdjuster({ color, ariaLabel, onChange, onPickError = null }) {
+function renderSpriteColorAdjuster({ color, ariaLabel, onChange }) {
   const editor = document.createElement("span");
   editor.className = "sprite-color-adjuster";
-  const colorField = document.createElement("span");
-  colorField.className = "sprite-color-field";
-  colorField.setAttribute("role", "slider");
-  colorField.tabIndex = 0;
-  colorField.setAttribute("aria-label", ariaLabel);
-  const colorThumb = document.createElement("span");
-  colorThumb.className = "sprite-color-field-thumb";
-  colorField.append(colorThumb);
-
-  const hueInput = document.createElement("input");
-  hueInput.type = "range";
-  hueInput.className = "sprite-hue-input";
-  hueInput.min = "0";
-  hueInput.max = "360";
-  hueInput.setAttribute("aria-label", `${ariaLabel} hue`);
 
   const valueRow = document.createElement("span");
   valueRow.className = "sprite-color-value-row";
-  const eyedropperButton = document.createElement("button");
-  eyedropperButton.type = "button";
-  eyedropperButton.className = "sprite-eyedropper-button";
-  const canPickScreenColor = Boolean(window.PuzzleStudioHost?.canPickScreenColor?.());
-  eyedropperButton.disabled = !canPickScreenColor;
-  eyedropperButton.title = canPickScreenColor
-    ? "Pick color from screen"
-    : "Screen color picker is unavailable in this host";
-  eyedropperButton.setAttribute("aria-label", eyedropperButton.title);
-  eyedropperButton.innerHTML = spriteEyedropperIconSvg();
+  const colorInput = document.createElement("input");
+  colorInput.type = "color";
+  colorInput.className = "sprite-native-color-input";
+  colorInput.setAttribute("aria-label", ariaLabel);
+  colorInput.title = "Open system color picker";
   const previewSwatch = document.createElement("span");
   previewSwatch.className = "sprite-color-preview-swatch sprite-color-swatch";
   previewSwatch.setAttribute("aria-hidden", "true");
@@ -197,9 +177,6 @@ function renderSpriteColorAdjuster({ color, ariaLabel, onChange, onPickError = n
   numberWrap.className = "sprite-color-numbers";
   const numberInputs = {};
   for (const [key, label, max] of [
-    ["r", "R", 255],
-    ["g", "G", 255],
-    ["b", "B", 255],
     ["a", "A", 100],
   ]) {
     const wrap = document.createElement("label");
@@ -216,149 +193,38 @@ function renderSpriteColorAdjuster({ color, ariaLabel, onChange, onPickError = n
     wrap.append(text, input);
     numberWrap.append(wrap);
   }
-  valueRow.append(eyedropperButton, previewSwatch, numberWrap);
+  valueRow.append(colorInput, previewSwatch, numberWrap);
 
-  const hsv = spriteHsvFromColor(color);
-  let selfEmittedColor = "";
   const clampNumber = (value, min, max) => Math.max(min, Math.min(max, Math.round(Number(value) || 0)));
   const syncUi = (nextColor) => {
     const normalized = normalizeSpriteColor(nextColor);
-    const rgb = spriteRgbComponents(normalized);
-    hueInput.value = String(Math.round(hsv.h));
+    colorInput.value = spriteRgbHex(normalized);
     alphaInput.value = String(spriteAlphaPercent(normalized));
-    numberInputs.r.value = String(rgb.r);
-    numberInputs.g.value = String(rgb.g);
-    numberInputs.b.value = String(rgb.b);
     numberInputs.a.value = String(spriteAlphaPercent(normalized));
     editor.style.setProperty("--sprite-alpha-color", spriteRgbHex(normalized));
     previewSwatch.style.setProperty("--sprite-swatch-color", normalized);
-    colorField.style.setProperty("--sprite-picker-hue", `hsl(${hsv.h} 100% 50%)`);
-    colorThumb.style.left = `${hsv.s * 100}%`;
-    colorThumb.style.top = `${(1 - hsv.v) * 100}%`;
   };
   const sync = (nextColor = color) => {
-    const normalized = normalizeSpriteColor(nextColor);
-    if (normalized !== selfEmittedColor) {
-      selfEmittedColor = "";
-      const nextHsv = spriteHsvFromColor(normalized);
-      hsv.h = nextHsv.h;
-      hsv.s = nextHsv.s;
-      hsv.v = nextHsv.v;
-    }
-    syncUi(normalized);
+    syncUi(nextColor);
   };
   const emit = () => {
-    const next = spriteColorWithAlpha(spriteRgbFromHsv(hsv), alphaInput.value);
-    selfEmittedColor = next;
+    const next = spriteColorWithAlpha(colorInput.value, alphaInput.value);
     syncUi(next);
     onChange(next);
   };
-  const makeHueEditVisible = () => {
-    let changed = false;
-    if (hsv.s <= 0) {
-      hsv.s = 1;
-      changed = true;
-    }
-    if (hsv.v <= 0) {
-      hsv.v = 1;
-      changed = true;
-    }
-    return changed;
-  };
-  const syncHueFromInput = () => {
-    hsv.h = Number(hueInput.value) || 0;
-  };
-  const activateHueInput = () => {
-    syncHueFromInput();
-    if (makeHueEditVisible()) {
-      emit();
-    }
-  };
-  const emitRgb = () => {
-    const r = clampNumber(numberInputs.r.value, 0, 255).toString(16).padStart(2, "0");
-    const g = clampNumber(numberInputs.g.value, 0, 255).toString(16).padStart(2, "0");
-    const b = clampNumber(numberInputs.b.value, 0, 255).toString(16).padStart(2, "0");
-    const next = spriteColorWithAlpha(`#${r}${g}${b}`, numberInputs.a.value);
-    sync(next);
-    onChange(next);
-  };
-  const setFromField = (event) => {
-    const rect = colorField.getBoundingClientRect();
-    hsv.s = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
-    hsv.v = 1 - Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height));
-    emit();
-  };
-
-  colorField.addEventListener("pointerdown", (event) => {
-    event.preventDefault();
-    colorField.setPointerCapture(event.pointerId);
-    setFromField(event);
-  });
-  colorField.addEventListener("pointermove", (event) => {
-    if (!colorField.hasPointerCapture(event.pointerId)) {
-      return;
-    }
-    setFromField(event);
-  });
-  colorField.addEventListener("pointerup", (event) => {
-    if (colorField.hasPointerCapture(event.pointerId)) {
-      colorField.releasePointerCapture(event.pointerId);
-    }
-  });
-  colorField.addEventListener("pointercancel", (event) => {
-    if (colorField.hasPointerCapture(event.pointerId)) {
-      colorField.releasePointerCapture(event.pointerId);
-    }
-  });
-  hueInput.addEventListener("input", () => {
-    syncHueFromInput();
-    makeHueEditVisible();
-    emit();
-  });
-  hueInput.addEventListener("pointerdown", () => {
-    window.requestAnimationFrame(activateHueInput);
-  });
-  numberInputs.r.addEventListener("input", emitRgb);
-  numberInputs.g.addEventListener("input", emitRgb);
-  numberInputs.b.addEventListener("input", emitRgb);
+  colorInput.addEventListener("input", emit);
+  colorInput.addEventListener("change", emit);
   numberInputs.a.addEventListener("input", () => {
     alphaInput.value = String(clampNumber(numberInputs.a.value, 0, 100));
-    emitRgb();
+    emit();
   });
   alphaInput.addEventListener("input", emit);
   alphaInput.addEventListener("change", emit);
-  eyedropperButton.addEventListener("click", async () => {
-    try {
-      const result = await window.PuzzleStudioHost?.pickScreenColor?.();
-      if (!result || result.canceled) {
-        return;
-      }
-      const pickedColor = parseSpriteHexColor(result.color || result.sRGBHex);
-      if (!pickedColor) {
-        throw new Error("Screen color picker returned an invalid color.");
-      }
-      const picked = spriteColorWithAlpha(pickedColor, alphaInput.value);
-      sync(picked);
-      onChange(picked);
-    } catch (error) {
-      onPickError?.(error?.message || "Screen color picker is unavailable.", "is-error");
-    }
-  });
   alphaWrap.append(alphaInput);
-  editor.append(colorField, hueInput, alphaWrap, valueRow);
+  editor.append(valueRow, alphaWrap);
   editor.syncColor = sync;
   sync(color);
   return editor;
-}
-
-function spriteEyedropperIconSvg() {
-  return `
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path d="m2 22 1-1h3l9-9"></path>
-      <path d="M3 21v-3l9-9"></path>
-      <path d="m15 6 3.4-3.4a2.1 2.1 0 1 1 3 3L18 9l.4.4a1 1 0 1 1-3 3l-3.8-3.8a1 1 0 1 1 3-3z"></path>
-    </svg>
-  `;
 }
 
 function renderSpritePalette() {
@@ -561,6 +427,20 @@ function renderSpritePalette() {
     selectSpriteColor(null);
   });
   paintToolRow.append(eraseButton);
+  const transformActions = document.createElement("span");
+  transformActions.className = "sprite-paint-transform-actions";
+  for (const button of [
+    spriteRotateLeftButton,
+    spriteRotateRightButton,
+    spriteFlipHorizontalButton,
+    spriteFlipVerticalButton,
+    spriteClearButton,
+  ]) {
+    if (button) {
+      transformActions.append(button);
+    }
+  }
+  paintToolRow.append(transformActions);
   spritePalette.append(paintToolRow);
 
   const paletteGrid = document.createElement("span");
@@ -1219,7 +1099,6 @@ function renderSpriteColorMenu({
   customValue,
   customOnly = false,
   inline = false,
-  onPickError = setSpriteActionStatus,
   onPreset = null,
   onChange = null,
   onDiscard = cancelSpriteColorAdd,
@@ -1261,7 +1140,6 @@ function renderSpriteColorMenu({
   presetList.append(renderSpriteColorAdjuster({
     color: customValue,
     ariaLabel: mode === "add" ? "New color" : "Selected color",
-    onPickError,
     onChange: (color) => {
       if (onChange) {
         onChange(color, { deferHistory: true });
@@ -1599,70 +1477,6 @@ function parseSpriteHexColor(value) {
 
 function spriteRgbHex(value) {
   return normalizeSpriteColor(value).slice(0, 7);
-}
-
-function spriteRgbComponents(value) {
-  const rgb = spriteRgbHex(value);
-  return {
-    r: Number.parseInt(rgb.slice(1, 3), 16),
-    g: Number.parseInt(rgb.slice(3, 5), 16),
-    b: Number.parseInt(rgb.slice(5, 7), 16),
-  };
-}
-
-function spriteHsvFromColor(value) {
-  const { r, g, b } = spriteRgbComponents(value);
-  const rn = r / 255;
-  const gn = g / 255;
-  const bn = b / 255;
-  const max = Math.max(rn, gn, bn);
-  const min = Math.min(rn, gn, bn);
-  const delta = max - min;
-  let h = 0;
-  if (delta !== 0) {
-    if (max === rn) {
-      h = 60 * (((gn - bn) / delta) % 6);
-    } else if (max === gn) {
-      h = 60 * ((bn - rn) / delta + 2);
-    } else {
-      h = 60 * ((rn - gn) / delta + 4);
-    }
-  }
-  if (h < 0) {
-    h += 360;
-  }
-  return {
-    h,
-    s: max === 0 ? 0 : delta / max,
-    v: max,
-  };
-}
-
-function spriteRgbFromHsv(hsv) {
-  const h = ((Number(hsv.h) || 0) % 360 + 360) % 360;
-  const s = Math.max(0, Math.min(1, Number(hsv.s) || 0));
-  const v = Math.max(0, Math.min(1, Number(hsv.v) || 0));
-  const c = v * s;
-  const x = c * (1 - Math.abs((h / 60) % 2 - 1));
-  const m = v - c;
-  let rn = 0;
-  let gn = 0;
-  let bn = 0;
-  if (h < 60) {
-    rn = c; gn = x;
-  } else if (h < 120) {
-    rn = x; gn = c;
-  } else if (h < 180) {
-    gn = c; bn = x;
-  } else if (h < 240) {
-    gn = x; bn = c;
-  } else if (h < 300) {
-    rn = x; bn = c;
-  } else {
-    rn = c; bn = x;
-  }
-  const toHex = (value) => Math.round((value + m) * 255).toString(16).padStart(2, "0");
-  return `#${toHex(rn)}${toHex(gn)}${toHex(bn)}`;
 }
 
 function spriteAlphaPercent(value) {
