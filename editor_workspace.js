@@ -2756,7 +2756,7 @@ async function removeWorkspaceNode(nodeId) {
   }
 }
 
-const STARTER_PUZZLE_SOURCE = "title \"New Puzzle\"\n\npuzzle main {\nlayers {\nbase = Floor\n}\n\nsprites {\n}\n\nrules {\n}\n\nlevels {\n}\n}\n\nscene title {\nlayout {\ntitle\nbutton \"Start\" -> goto playing\nbutton \"Levels\" -> goto level_select\n}\n\nkeys {\nEnter Space -> goto playing\nl -> goto level_select\n}\n}\n\nscene level_select {\nlayout {\ntext \"Select Level\"\nlevel_menu\nbutton \"Back\" -> goto title\n}\n\nkeys {\nEscape q -> goto title\n}\n}\n\nscene playing {\nstate {\nboard = puzzle main\n}\n\nlayout {\nboard\n}\n\nkeys {\nEscape q -> goto title\n}\n}\n";
+const STARTER_PUZZLE_SOURCE = "title \"New Puzzle\"\n\npuzzle main {\nlayers {\nfloor = Goal\nsolid = Player Wall\n}\n\nwin_conditions {\nexists(Goal)\nnone([ Goal no Player ])\n}\n\non_level_clear {\nnext_level\n}\n\nrules {\ninput directions [ Player ] -> [ > Player ]\nmove\n}\n}\n\nlevels demo of main {\nlegend {\n. = empty\n# = Wall\nP = Player\nG = Goal\n+ = Player Goal\n}\n\nlevel level_1\n#######\n#P...G#\n#######\n\nlevel level_2\n#######\n#P....#\n#..G..#\n#######\n}\n";
 
 function starterPuzzleSource(name) {
   return starterPuzzleSourceFromTitle(starterPuzzleTitle(name));
