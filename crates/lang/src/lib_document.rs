@@ -2838,19 +2838,26 @@ fn expand_game_imports(
     root: Option<&Path>,
 ) -> Result<String, DiagnosticReport> {
     let mut out = String::new();
-    for line in logical_lines(source)? {
-        let tokens = split_header_tokens(&line);
+    let mut output_line = 1usize;
+    for line in logical_lines_with_locations(source)? {
+        while output_line < line.line {
+            out.push('\n');
+            output_line += 1;
+        }
+        let tokens = split_header_tokens(&line.text);
         if matches!(tokens.as_slice(), ["import", _]) {
-            let path = import_path(tokens[1], &line)?;
+            let path = import_path(tokens[1], &line.text)?;
             let imported = read_import_expanded(base_dir, &path, import_stack, root)?;
             out.push_str(&imported);
             if !imported.ends_with('\n') {
                 out.push('\n');
             }
+            output_line += imported.lines().count().max(1);
             continue;
         }
-        out.push_str(&line);
+        out.push_str(&line.text);
         out.push('\n');
+        output_line += 1;
     }
     Ok(out)
 }

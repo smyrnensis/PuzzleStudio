@@ -2,62 +2,6 @@ pub fn parse_game(source: &str) -> Result<LoadedDocument, DiagnosticReport> {
     parse_game_document(source)
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum DiagnosticSourceLocation {
-    Unique(usize),
-    Ambiguous,
-}
-
-pub fn resolve_diagnostic_source_locations(
-    report: DiagnosticReport,
-    source: &str,
-) -> DiagnosticReport {
-    let Some(locations) = diagnostic_source_locations(source) else {
-        return report;
-    };
-    let diagnostics = report
-        .into_diagnostics()
-        .into_iter()
-        .map(|mut diagnostic| {
-            let Some(span) = diagnostic.primary_span.as_mut() else {
-                return diagnostic;
-            };
-            if span.line.is_some() {
-                return diagnostic;
-            }
-            let Some(source_line) = span.source_line.as_deref() else {
-                return diagnostic;
-            };
-            if let Some(DiagnosticSourceLocation::Unique(line)) = locations.get(source_line) {
-                span.line = Some(*line);
-            }
-            diagnostic
-        })
-        .collect();
-    DiagnosticReport::from_diagnostics(diagnostics)
-}
-
-fn diagnostic_source_locations(source: &str) -> Option<HashMap<String, DiagnosticSourceLocation>> {
-    let lines = logical_lines_with_locations(source).ok()?;
-    if lines
-        .iter()
-        .any(|line| matches!(split_header_tokens(&line.text).as_slice(), ["import", _]))
-    {
-        return None;
-    }
-    let mut locations = HashMap::<String, DiagnosticSourceLocation>::new();
-    for line in lines {
-        locations
-            .entry(line.text)
-            .and_modify(|location| match location {
-                DiagnosticSourceLocation::Unique(existing) if *existing == line.line => {}
-                _ => *location = DiagnosticSourceLocation::Ambiguous,
-            })
-            .or_insert(DiagnosticSourceLocation::Unique(line.line));
-    }
-    Some(locations)
-}
-
 pub fn parse_game_for_path(
     source: &str,
     path: impl AsRef<Path>,

@@ -671,12 +671,8 @@ fn diagnostics_with_file(path: &Path, report: DiagnosticReport) -> Vec<Diagnosti
 fn diagnostics_with_file_and_source(
     path: &Path,
     report: DiagnosticReport,
-    source: Option<&str>,
+    _source: Option<&str>,
 ) -> Vec<Diagnostic> {
-    let report = match source {
-        Some(source) => puzzle_lang::resolve_diagnostic_source_locations(report, source),
-        None => report,
-    };
     diagnostics_with_file(path, report)
 }
 

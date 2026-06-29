@@ -168,11 +168,12 @@ fn load_source(
 #[tauri::command]
 async fn open_workspace(
     app: tauri::AppHandle,
+    window: tauri::Window,
     request: OpenWorkspaceCommandRequest,
     state: tauri::State<'_, DesktopState>,
 ) -> Result<serde_json::Value, String> {
     let kind = request.kind.as_deref();
-    let Some(path) = pick_workspace_path(&app, kind).await? else {
+    let Some(path) = pick_workspace_path(&app, &window, kind).await? else {
         return Ok(serde_json::json!({ "canceled": true }));
     };
     let record_loaded = kind != Some("file");
@@ -232,11 +233,13 @@ fn open_workspace_path(
 #[tauri::command]
 async fn open_project(
     app: tauri::AppHandle,
+    window: tauri::Window,
     _request: OpenWorkspaceCommandRequest,
     state: tauri::State<'_, DesktopState>,
 ) -> Result<serde_json::Value, String> {
     open_workspace(
         app,
+        window,
         OpenWorkspaceCommandRequest {
             kind: Some("folder".to_string()),
         },
@@ -305,12 +308,14 @@ fn save_source(
 #[tauri::command]
 async fn export_html(
     app: tauri::AppHandle,
+    window: tauri::Window,
     request: ExportHtmlCommandRequest,
 ) -> Result<serde_json::Value, String> {
     let filename = export_html_file_name(request.filename.as_deref());
     let (sender, mut receiver) = tauri::async_runtime::channel(1);
     app.dialog()
         .file()
+        .set_parent(&window)
         .set_title("Export HTML")
         .add_filter("HTML", &["html", "htm"])
         .set_file_name(filename)
@@ -865,10 +870,11 @@ fn ensure_html_extension(path: &mut PathBuf) {
 
 async fn pick_workspace_path(
     app: &tauri::AppHandle,
+    window: &tauri::Window,
     kind: Option<&str>,
 ) -> Result<Option<PathBuf>, String> {
     let (sender, mut receiver) = tauri::async_runtime::channel(1);
-    let file_dialog = app.dialog().file();
+    let file_dialog = app.dialog().file().set_parent(window);
     if kind == Some("file") {
         file_dialog
             .set_title("Open a PuzzleStudio file")
@@ -1323,7 +1329,11 @@ mod tests {
 
         assert!(source.starts_with("title \"Desktop Test\"\n"));
         assert!(source.contains("puzzle main {"));
-        assert!(source.contains("scene playing {"));
+        assert!(source.contains("levels main of main {"));
+        assert!(source.contains("layers 1"));
+        assert!(!source.contains("base ="));
+        assert!(!source.contains("scene playing {"));
+        assert!(!source.contains("inputs {"));
     }
 
     #[test]
