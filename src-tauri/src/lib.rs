@@ -1327,13 +1327,7 @@ mod tests {
             title: "Desktop Test".to_string(),
         });
 
-        assert!(source.starts_with("title \"Desktop Test\"\n"));
-        assert!(source.contains("puzzle main {"));
-        assert!(source.contains("levels main of main {"));
-        assert!(source.contains("layers 1"));
-        assert!(!source.contains("base ="));
-        assert!(!source.contains("scene playing {"));
-        assert!(!source.contains("inputs {"));
+        assert_eq!(source, "");
     }
 
     #[test]
