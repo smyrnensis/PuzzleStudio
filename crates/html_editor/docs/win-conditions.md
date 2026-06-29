@@ -4,8 +4,8 @@ Use `win_conditions` for checks that clear the current level.
 ## Object Goals
 ```puzzle
 win_conditions {
-  some Goal
-  all Goal on Box
+some Goal
+all Goal on Box
 }
 ```
 
@@ -14,8 +14,8 @@ This level clears when there is at least one `Goal` and every `Goal` has a `Box`
 ## Expression Checks
 ```puzzle
 win_conditions {
-  exists(Goal)
-  none([ Goal no Box ])
+exists(Goal)
+none([ Goal no Box ])
 }
 ```
 
@@ -24,8 +24,8 @@ Expression checks are useful when the clear condition is easier to read as board
 ## Multiple Lines
 ```puzzle
 win_conditions {
-  all Goal on Box
-  no Enemy
+all Goal on Box
+no Enemy
 }
 ```
 

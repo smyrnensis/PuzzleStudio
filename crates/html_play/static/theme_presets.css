@@ -23,7 +23,7 @@
 body.theme-clean {
   --background: #f5f3ef;
   --text: #1f2428;
-  --accent: #2f7ebc;
+  --accent: var(--text);
   --radius-control: 6px;
   --radius-panel: 8px;
   --button-shadow: none;
@@ -52,6 +52,30 @@ body.theme-clean {
 .theme-clean .view-box > .level-menu {
   width: var(--clean-control-width, auto);
   max-width: 100%;
+}
+
+.theme-clean .level-menu {
+  padding-right: 0;
+  scrollbar-gutter: auto;
+  scrollbar-width: none;
+}
+
+.theme-clean .level-menu::-webkit-scrollbar {
+  display: none;
+}
+
+.theme-clean .is-menu-scene button {
+  justify-items: center;
+  text-align: center;
+}
+
+.theme-clean .is-menu-scene button .ps-control-label {
+  justify-self: center;
+  text-align: center;
+}
+
+.theme-clean .level-menu .ps-control-label {
+  white-space: nowrap;
 }
 
 body.theme-terminal {

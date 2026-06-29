@@ -3,7 +3,7 @@ Use `input` for rules that respond to directional input.
 
 ```puzzle
 rules {
-  input [ Player ] -> [ > Player ]
+input [ Player ] -> [ > Player ]
 }
 ```
 

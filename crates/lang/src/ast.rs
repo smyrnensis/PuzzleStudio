@@ -193,6 +193,7 @@ pub(crate) struct ConditionPatternAst {
 #[derive(Clone, Debug)]
 pub(crate) struct OrientedRewriteAst {
     pub(crate) source_line: String,
+    pub(crate) source_line_number: Option<usize>,
     pub(crate) orientation: OrientationExpr,
     pub(crate) application: Option<RuleApplication>,
     pub(crate) before: PatternBlock,

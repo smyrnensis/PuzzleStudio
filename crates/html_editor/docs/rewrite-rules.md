@@ -3,7 +3,7 @@ Rules describe local state changes.
 
 ```puzzle
 rules {
-  [ Player | Box ] -> [ Player | Crate ]
+[ Player | Box ] -> [ Player | Crate ]
 }
 ```
 

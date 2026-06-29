@@ -1,6 +1,8 @@
 target/
 .DS_Store
 tests/
+!crates/lang/tests/
+!crates/lang/tests/**
 !crates/html_editor/tests/
 !crates/html_editor/tests/**
 

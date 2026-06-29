@@ -20,9 +20,9 @@ condition some_box_on_goal = some([ Goal Box ])
 ## Use A Condition
 ```puzzle
 rules {
-  if no_open_goals {
-    next_level
-  }
+if no_open_goals {
+next_level
+}
 }
 ```
 

@@ -1,25 +1,27 @@
 # Scene Layout
-Use `layout` to describe what a scene shows.
+Use `layout` only when the default puzzle screen is not enough.
+
+Most single-board games do not need a layout block. A lone `puzzle sokoban`
+gets a playable screen automatically.
 
 ```puzzle
-scene playing {
-  state {
-    board = puzzle sokoban
-  }
-
-  layout {
-    title
-    subtitle level.label
-    board
-  }
-
-  rules {
-    step board
-  }
+puzzle sokoban {
+layout {
+title
+sokoban
+}
 }
 ```
 
-The scene state names a puzzle slot. The layout displays that slot.
+The model name, here `sokoban`, displays that puzzle board.
 
-`step board` sends gameplay input into the puzzle.
+Use an explicit `scene` when you need a title screen, menu, or level select screen.
 
+```puzzle
+scene title {
+layout {
+title
+choice "Start" -> goto sokoban
+}
+}
+```

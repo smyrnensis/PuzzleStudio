@@ -27,4 +27,8 @@ done
 
 output_dir="$(dirname "$output")"
 mkdir -p "$output_dir"
-cargo run -p html-editor -- "${args[@]}"
+if ((${#args[@]})); then
+  cargo run -p html-editor -- "${args[@]}"
+else
+  cargo run -p html-editor --
+fi

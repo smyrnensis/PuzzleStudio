@@ -868,6 +868,100 @@ async function sourceRewritePatternTabCopiesLhsToEmptyRhs(page) {
     }
     return true;
   })()`);
+  await page.evaluateTop(`(() => {
+    const editor = document.querySelector("#sourceEditor");
+    if (
+      !editor
+      || typeof handleSourceRewritePatternTab !== "function"
+      || typeof sourceEmptyRewritePattern !== "function"
+      || typeof sourceRewritePatternSlotOffsets !== "function"
+    ) {
+      throw new Error("missing source rewrite pattern semicolon helpers");
+    }
+    const original = editor.value || "";
+    const originalSourceEditorContentChanged = sourceEditorContentChanged;
+    sourceEditorContentChanged = () => {};
+    const emptySingleRow = sourceEmptyRewritePattern("[ ; ]");
+    const emptyMixedRow = sourceEmptyRewritePattern("[ A | ; | B ]");
+    const singleRowSlots = sourceRewritePatternSlotOffsets(emptySingleRow);
+    const mixedRowSlots = sourceRewritePatternSlotOffsets(emptyMixedRow);
+    const cases = [
+      {
+        name: "semicolon row",
+        lhs: "[ ; ]",
+        expected: "[ ; ]",
+      },
+      {
+        name: "pipe and semicolon row",
+        lhs: "[ A | ; | B ]",
+        expected: "[ A | ; | B ]",
+      },
+    ];
+    try {
+      if (emptySingleRow !== "[ ; ]" || singleRowSlots.length !== 2) {
+        throw new Error(\`single-row semicolon shape was not preserved: \${JSON.stringify({ emptySingleRow, singleRowSlots })}\`);
+      }
+      if (emptyMixedRow !== "[  | ; |  ]" || mixedRowSlots.length !== 4) {
+        throw new Error(\`pipe/semicolon shape was not preserved: \${JSON.stringify({ emptyMixedRow, mixedRowSlots })}\`);
+      }
+      for (const testCase of cases) {
+        const source = \`puzzle semicolon_cell_rhs\\nrules\\n\${testCase.lhs} -> \`;
+        const cursor = source.length;
+        setSourceEditorValue(source, { resetUndo: true });
+        if (documents[currentDocumentIndex]) {
+          documents[currentDocumentIndex].source = source;
+        }
+        editor.focus();
+        editor.setSelectionRange(cursor, cursor);
+        const event = {
+          key: "Tab",
+          altKey: false,
+          ctrlKey: false,
+          metaKey: false,
+          shiftKey: false,
+          defaultPrevented: false,
+          propagationStopped: false,
+          preventDefault() {
+            this.defaultPrevented = true;
+          },
+          stopPropagation() {
+            this.propagationStopped = true;
+          },
+        };
+        const handled = handleSourceRewritePatternTab(event);
+        const expected = \`\${source}\${testCase.expected}\`;
+        const result = {
+          handled,
+          value: editor.value,
+          selectionStart: editor.selectionStart,
+          selectionEnd: editor.selectionEnd,
+          defaultPrevented: event.defaultPrevented,
+          propagationStopped: event.propagationStopped,
+        };
+        if (
+          !handled
+          || result.value !== expected
+          || result.selectionStart !== expected.length
+          || result.selectionEnd !== expected.length
+          || !result.defaultPrevented
+          || !result.propagationStopped
+        ) {
+          throw new Error(\`rewrite RHS Tab did not copy \${testCase.name}: \${JSON.stringify(result)}\`);
+        }
+      }
+    } finally {
+      if (documents[currentDocumentIndex]) {
+        documents[currentDocumentIndex].source = original;
+      }
+      sourceEditorContentChanged = originalSourceEditorContentChanged;
+      setSourceEditorValue(original, { resetUndo: true });
+      loadEmbeddedDocument(currentDocumentIndex);
+      scheduleSourceHighlight(true);
+      scheduleLocalSave();
+      invalidateCompiledPreview?.(activePreviewDocument?.());
+    }
+    return true;
+  })()`);
   await page.assertNoErrors("source rewrite RHS Tab copy");
 }
 

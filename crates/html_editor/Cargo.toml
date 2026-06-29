@@ -5,11 +5,18 @@ edition.workspace = true
 license.workspace = true
 build = "build.rs"
 
+[features]
+default = ["embedded-assets", "native-preview", "sound-tools"]
+embedded-assets = ["native-preview", "sound-tools"]
+native-preview = ["dep:html-play"]
+sound-tools = []
+
 [[bin]]
 name = "html-editor"
 path = "src/main.rs"
+required-features = ["embedded-assets"]
 
 [dependencies]
-html-play = { path = "../html_play" }
+html-play = { path = "../html_play", default-features = false, optional = true }
 puzzle-authoring = { path = "../authoring" }
 puzzle-lang = { path = "../lang" }

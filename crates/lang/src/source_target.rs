@@ -547,10 +547,7 @@ fn next_sprite3d_palette_line(
 }
 
 fn sprite_header_scope(scope: Option<SourceScope>) -> bool {
-    matches!(
-        scope,
-        Some(SourceScope::Visuals | SourceScope::VisualShapeTable | SourceScope::VisualShapeEntry)
-    )
+    matches!(scope, Some(SourceScope::Visuals))
 }
 
 #[derive(Default)]
@@ -636,13 +633,11 @@ fn visual_asset_depth_at_line(
 
 fn sprite_name(line: &SourceContextLine) -> Option<String> {
     match line.tokens.as_slice() {
-        [keyword, table_ref, ..] if keyword == "shape" || keyword == "colors" => {
-            Some(clean_table_name(table_ref))
-        }
         [first, ..]
             if first != "}"
                 && first != "{"
                 && !first.contains('=')
+                && sprite_definition_name_token(first)
                 && (line.content.trim_end().ends_with('{') || is_unbraced_sprite_header(line)) =>
         {
             Some(clean_name_token(first))
@@ -673,10 +668,6 @@ fn line_style_sprite_header(
         .map(|token| token.start)
         .unwrap_or_else(|| line_end(line));
     Some((clean_name_token(selector), body_start))
-}
-
-fn clean_table_name(value: &str) -> String {
-    clean_name_token(value.split_once(':').map_or(value, |(name, _)| name))
 }
 
 fn clean_name_token(value: &str) -> String {
@@ -792,6 +783,12 @@ fn starts_next_sprite_entry(
 }
 
 fn sprite_definition_name_token(value: &str) -> bool {
+    if matches!(
+        value,
+        "shape" | "shapes" | "colors" | "ascii" | "sprites" | "sprites3"
+    ) {
+        return false;
+    }
     let cleaned = value.trim_start_matches('@');
     let Some(first) = cleaned.chars().next() else {
         return false;
@@ -1404,6 +1401,56 @@ colors #000 #fff
         let body = &source[target.body_start.unwrap()..target.body_end.unwrap()];
         assert!(body.contains("colors #000 #fff"));
         assert!(body.contains("111"));
+    }
+
+    #[test]
+    fn shape_reference_line_resolves_enclosing_unbraced_sprite() {
+        let source = r##"
+sprites {
+shapes {
+box_shape
+010
+111
+010
+}
+Box
+#111 #eee
+shape box_shape
+Next
+#222
+0
+}
+"##;
+        let cursor = source.find("shape box_shape").unwrap();
+        let target = resolve_source_target(source, cursor).unwrap();
+
+        assert_eq!(target.kind, SourceTargetKind::Sprite);
+        assert_eq!(target.name, "Box");
+        let body = &source[target.body_start.unwrap()..target.body_end.unwrap()];
+        assert!(body.contains("shape box_shape"));
+        assert!(!body.contains("Next"));
+    }
+
+    #[test]
+    fn shape_table_rows_do_not_resolve_as_sprite_targets() {
+        let source = r##"
+sprites {
+shapes {
+mark:kind {
+A {
+010
+111
+}
+}
+}
+Box
+#111
+0
+}
+"##;
+        let cursor = source.find("010").unwrap();
+
+        assert_eq!(resolve_source_target(source, cursor), None);
     }
 
     #[test]

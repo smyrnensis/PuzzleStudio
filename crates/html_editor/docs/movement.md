@@ -3,9 +3,9 @@ Use `move` after rules have marked objects with direction.
 
 ```puzzle
 rules {
-  input [ Player ] -> [ > Player ]
-  [ > Player | Box ] -> [ > Player | > Box ]
-  move
+input [ Player ] -> [ > Player ]
+[ > Player | Box ] -> [ > Player | > Box ]
+move
 }
 ```
 

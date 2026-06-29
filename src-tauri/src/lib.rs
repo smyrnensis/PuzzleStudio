@@ -10,9 +10,8 @@ use std::thread;
 use std::time::{Duration, UNIX_EPOCH};
 
 use html_editor::{
-    AppError as EditorAppError, CreateSourceFileRequest, CreateSourceFolderRequest,
-    DeleteWorkspaceEntryRequest, EditorService, PreviewRequest, RenameWorkspaceEntryRequest,
-    SaveRequest,
+    CreateSourceFileRequest, CreateSourceFolderRequest, DeleteWorkspaceEntryRequest, EditorService,
+    RenameWorkspaceEntryRequest, SaveRequest,
 };
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager};
@@ -72,21 +71,6 @@ struct OpenRecentWorkspaceCommandRequest {
 struct RecentWorkspaceEntry {
     workspace_root: String,
     name: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct PreviewCommandRequest {
-    source: String,
-    puzzle_path: String,
-    workspace_root: Option<String>,
-    game_css: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct HighlightCommandRequest {
-    source: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -287,57 +271,6 @@ fn remove_workspace(
     services.retain(|service| service.workspace_root() != request.workspace_root);
     stop_workspace_watcher(&state, &request.workspace_root)?;
     Ok(serde_json::json!({ "ok": true, "removed": before != services.len() }))
-}
-
-#[tauri::command]
-fn compile_preview(
-    request: PreviewCommandRequest,
-    state: tauri::State<'_, DesktopState>,
-) -> Result<String, serde_json::Value> {
-    let workspace_root = request.workspace_root.clone();
-    let request = PreviewRequest::new(request.source, request.puzzle_path, request.game_css);
-    let services = state
-        .services
-        .lock()
-        .map_err(|_| serde_json::json!({ "error": "desktop project state is unavailable" }))?;
-    let Some(service) = service_for_workspace(&services, workspace_root.as_deref()) else {
-        return Err(serde_json::json!({
-            "error": "No project is open. Open a project folder before running preview."
-        }));
-    };
-    service
-        .compile_preview(&request)
-        .map_err(preview_command_error)
-}
-
-fn preview_command_error(error: EditorAppError) -> serde_json::Value {
-    match error {
-        EditorAppError::Diagnostics(report) => {
-            let diagnostics = report
-                .diagnostics()
-                .iter()
-                .map(|diagnostic| {
-                    let span = diagnostic.primary_span.as_ref();
-                    serde_json::json!({
-                        "severity": diagnostic.severity.as_str(),
-                        "code": diagnostic.code,
-                        "file": span.and_then(|span| span.file.as_deref()).unwrap_or(""),
-                        "line": span.and_then(|span| span.line),
-                        "column": span.and_then(|span| span.column),
-                        "sourceLine": span.and_then(|span| span.source_line.as_deref()),
-                        "message": diagnostic.message,
-                    })
-                })
-                .collect::<Vec<_>>();
-            serde_json::json!({ "diagnostics": diagnostics })
-        }
-        other => serde_json::json!({ "error": other.to_string() }),
-    }
-}
-
-#[tauri::command]
-fn highlight_source(request: HighlightCommandRequest) -> String {
-    EditorService::highlight_source_json(&request.source)
 }
 
 #[tauri::command]
@@ -1160,8 +1093,6 @@ pub fn run() {
             recent_workspaces,
             open_recent_workspace,
             remove_workspace,
-            compile_preview,
-            highlight_source,
             sound_tools,
             new_puzzle_source,
             save_source,

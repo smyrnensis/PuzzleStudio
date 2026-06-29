@@ -1,0 +1,20 @@
+title "Ascii Click Smoke"
+
+puzzle main {
+  layers {
+    actor = Player
+  }
+
+  rules {
+  }
+}
+
+levels main of main {
+  legend {
+    . = empty
+    P = Player
+  }
+
+  level ascii
+  P
+}

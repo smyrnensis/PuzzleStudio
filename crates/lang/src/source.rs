@@ -574,6 +574,7 @@ pub(crate) fn scan_source_context(source: &str) -> SourceContext {
     let mut block_stack = Vec::<SourceScope>::new();
     let mut structural_block_stack = Vec::<String>::new();
     let mut normalize_levels_brace_depth = 0i32;
+    let mut unbraced_visual_shape_body = false;
     let mut offset = 0usize;
 
     for line in source.split_inclusive('\n') {
@@ -584,13 +585,17 @@ pub(crate) fn scan_source_context(source: &str) -> SourceContext {
         let trimmed = raw.trim();
         let tokens = source_context_tokens(trimmed);
         let current = block_stack.last().copied();
+        let in_unbraced_visual_shape_body = unbraced_visual_shape_body
+            && current == Some(SourceScope::VisualShapeTable)
+            && !trimmed.is_empty()
+            && trimmed != "}";
 
         if trimmed.is_empty() {
             close_blank_line(&mut block_stack);
         }
 
         if !trimmed.is_empty() && trimmed != "}" {
-            match source_line_role(current, trimmed, &tokens) {
+            match source_line_role(current, trimmed, &tokens, in_unbraced_visual_shape_body) {
                 SourceLineRole::Normal => {}
                 SourceLineRole::Raw => context.raw.push((offset, content_end)),
                 SourceLineRole::PlainAssignmentLeft => {
@@ -605,6 +610,13 @@ pub(crate) fn scan_source_context(source: &str) -> SourceContext {
                 }
             }
         }
+
+        unbraced_visual_shape_body = next_unbraced_visual_shape_body(
+            current,
+            trimmed,
+            &tokens,
+            in_unbraced_visual_shape_body,
+        );
 
         for stack_line in source_context_stack_lines(
             trimmed,
@@ -668,7 +680,11 @@ fn source_line_role(
     current: Option<SourceScope>,
     trimmed: &str,
     tokens: &[&str],
+    in_unbraced_visual_shape_body: bool,
 ) -> SourceLineRole {
+    if in_unbraced_visual_shape_body {
+        return SourceLineRole::Raw;
+    }
     match current {
         Some(SourceScope::Legend) => SourceLineRole::PlainAssignmentLeft,
         Some(SourceScope::Level) if starts_level_legend(tokens) => {
@@ -678,10 +694,45 @@ fn source_line_role(
         Some(SourceScope::VisualShapeEntry) if trimmed.ends_with('{') => {
             SourceLineRole::PlainFirstToken
         }
+        Some(SourceScope::VisualShapeEntry) if is_visual_sprite_directive_row(tokens) => {
+            SourceLineRole::Normal
+        }
         Some(SourceScope::VisualShapeEntry) => SourceLineRole::Raw,
         Some(SourceScope::VisualColorTable) => SourceLineRole::PlainAssignmentLeft,
         _ => SourceLineRole::Normal,
     }
+}
+
+fn is_visual_sprite_directive_row(tokens: &[&str]) -> bool {
+    matches!(
+        tokens,
+        ["colors", ..] | ["offset", ..] | ["pixels_per_cell", ..] | ["rotate", ..] | ["shape", ..]
+    )
+}
+
+fn next_unbraced_visual_shape_body(
+    current: Option<SourceScope>,
+    trimmed: &str,
+    tokens: &[&str],
+    in_unbraced_visual_shape_body: bool,
+) -> bool {
+    if current != Some(SourceScope::VisualShapeTable) || trimmed.is_empty() || trimmed == "}" {
+        return false;
+    }
+    if in_unbraced_visual_shape_body {
+        return true;
+    }
+    matches!(tokens, [name] if is_source_context_identifier(name)) && !trimmed.ends_with('{')
+}
+
+fn is_source_context_identifier(value: &str) -> bool {
+    let Some(first) = value.chars().next() else {
+        return false;
+    };
+    (first == '_' || first.is_ascii_alphabetic())
+        && value
+            .chars()
+            .all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
 }
 
 fn starts_level_legend(tokens: &[&str]) -> bool {
@@ -1037,5 +1088,31 @@ on_level_start {
                 .iter()
                 .any(|token| token.text == "//" || token.text == "comment")
         );
+    }
+
+    #[test]
+    fn source_context_keeps_unbraced_visual_shape_rows_raw() {
+        let source = r#"
+sprites {
+shapes {
+Box
+aaa
+111
+
+Pull
+0
+}
+}
+"#;
+        let context = scan_source_context(source);
+        let box_header = source.find("Box").unwrap();
+        let box_row = source.find("aaa").unwrap();
+        let pull_header = source.find("Pull").unwrap();
+        let pull_row = source.rfind("\n0").unwrap() + 1;
+
+        assert_eq!(context.raw_range_starting_at(box_header), None);
+        assert!(context.raw_range_starting_at(box_row).is_some());
+        assert_eq!(context.raw_range_starting_at(pull_header), None);
+        assert!(context.raw_range_starting_at(pull_row).is_some());
     }
 }

@@ -1450,21 +1450,21 @@ shape player_shape
 }
 ```
 
-PS / PS Next 風の one-off sprite は、selector block の中に色行、ASCII pattern の順で書ける。canonical では `pixels_per_cell` / `offset` の配置メタデータを上に置き、`rotate from <value>` を使う場合はその次、色行、ASCII pattern または `shape <name>` の順で書く。brace なし sprite entry でも同じ順序で `rotate from <value>` を書ける。色行は `colors` keyword を付けてもよいが、省略するのが canonical。色は CSS color として渡されるため、`transparent`、基本 CSS color keywords、`orange`、`grey` / `gray` variants、`brown`、`pink`、`#rrggbbaa` の alpha 付き hex も使える。`.` は透明、`0`..`9`、`a`..`z`、`A`..`Z` は色行の順序に対応する。
+sprite entry は、selector block の中に色行、ASCII pattern の順で書ける。canonical では `pixels_per_cell` / `offset` の配置メタデータを上に置き、`rotate from <value>` を使う場合はその次、色行、ASCII pattern または `shape <name>` の順で書く。brace なし sprite entry でも同じ順序で `rotate from <value>` を書ける。色行は `colors` keyword を付けてもよいが、省略するのが canonical。色は CSS color として渡されるため、`transparent`、基本 CSS color keywords、`orange`、`grey` / `gray` variants、`brown`、`pink`、`#rrggbbaa` の alpha 付き hex も使える。`.` は透明、`0`..`9`、`a`..`z`、`A`..`Z` は色行の順序に対応する。
 
 単純な sprite は block braces なしでも書ける。selector の次の行が色 1 つだけで pattern がなければ cell 全体の単色塗りつぶしになる。これは `Background` / `#9CBD0F` のような PuzzleScript 由来の色だけ sprite でも同じで、`00000` のようなダミー ASCII pattern は不要。pattern を続けると、その行数・列数が sprite pixel grid になる。`pixels_per_cell <w> <h>` を省略した場合は ASCII pattern の行数・列数が 1 cell の pixel grid になる。明示した場合は、pattern がその grid より大きくても描画は overflow できる。
 
 外部画像は `Box sprites/box.png` のように selector と画像パスを 1 行に書ける。パスは game folder からの相対パスとして HTML renderer に渡される。
 
-shape lookup は value expression を読める。たとえば `edge:rotate(directions)` は、selector で bind された `directions` 値を `rotate` map で置換してから shape table を引く。再利用したい pattern は `shape` と object block 内の色行 + `shape <ref>` で分けて書く。旧互換として bare shape ref も読む。
+shape lookup は value expression を読める。たとえば `edge:rotate(directions)` は、selector で bind された `directions` 値を `rotate` map で置換してから shape table を引く。再利用したい pattern は `shape` と object block 内の色行 + `shape <ref>` で分けて書く。
 
-`offset <x> <y>` は描画位置だけをずらす。基準は sprite pixel grid の左上で、正の x は右、正の y は下。object の実セル、collision、rule matching は変えない。Pattern:Script 互換として ASCII pattern または shape ref の後の `translate:<direction>:<pixels>` transform も読むが、canonical では `offset` を使う。
+`offset <x> <y>` は描画位置だけをずらす。基準は sprite pixel grid の左上で、正の x は右、正の y は下。object の実セル、collision、rule matching は変えない。
 
-`sprites` は HTML renderer 用の sprite alias と ASCII pattern を定義する。`shapes` 内の `<name>:<tag_set>` は value ごとの ASCII pattern table。table 内または sprite entry 内で `rotate from <value>` の後に pattern rows を書くと、その pattern を `<value>` として登録し、同じ `<tag_set>` の `map rotate <tag_set>` を使って他の value の pattern を生成する。
+`sprites` は HTML renderer 用の sprite alias と ASCII pattern を定義する。`shapes` 内の `<name>:<tag_set>` は value ごとの ASCII pattern table。table 内または sprite entry 内で `rotate from <value>` の後に pattern rows を書くと、その pattern を `<value>` として登録し、標準方向 tag set では `up -> right -> down -> left -> up` の内蔵 cycle で他の value の pattern を生成する。
 
 HTML renderer が生成する sprite 名と CSS class は、object 名の大文字・小文字を保持する。CSS class として危ない区切り文字だけ `-` に置き換える。例: `Player` は `.sprite.Player`、`Box:A` は `.sprite.Box-A`。
 
-別名の map を使う場合は table 内で `rotate using <map_name> from <value>` の後に pattern rows を書く。既存 table entry と分けたい場合は、`<value> { ... }` の後に `rotate from <value>` だけを書く形も読む。旧互換として `rotate from <value> { ... }`、`shape <name>:<tag_set> rotate from <value>`、`shape <name>:<tag_set> rotate <map_name> from <value>` も読むが、canonical では table header や source value に余分な block を足さない。rotation は parse/lowering 時点で通常の shape entries に展開されるため、runtime state や renderer は tag set 固有の挙動を持たない。
+標準方向以外の tag set や別順の cycle を使う場合は table 内で `rotate using <map_name> from <value>` の後に pattern rows を書く。既存 table entry と分けたい場合は、`<value> { ... }` の後に `rotate from <value>` だけを書く形も読む。旧互換として `rotate from <value> { ... }`、`shape <name>:<tag_set> rotate from <value>`、`shape <name>:<tag_set> rotate <map_name> from <value>` も読むが、canonical では table header や source value に余分な block を足さない。rotation は parse/lowering 時点で通常の shape entries に展開されるため、runtime state や renderer は tag set 固有の挙動を持たない。
 
 ### `legend`
 
@@ -1521,7 +1521,7 @@ music loop seed=123456 tone=0.62 bpm=104 volume=0.8
 }
 ```
 
-`sfx` は one-shot sound effect、`music` は loop 用の background track。`seed` は必須。`sfx type` は省略時 `random`。`type=puzzlescript` は PuzzleScript の numeric sound seed 互換 generator を選ぶための import 用 type。`music tone` / `bpm` / `volume` は省略時 `0.62` / `104` / `0.8`。
+`sfx` は one-shot sound effect、`music` は loop 用の background track。`seed` は必須。`sfx type` は省略時 `random`。標準の seeded SFX type は `jump`、`step`、`pickup`、`hit`、`drag`、`water`、`lock`、`explosion`、`laser`、`powerup`、`select`、`error`。`type=puzzlescript` は PuzzleScript の numeric sound seed 互換 generator を選ぶための import 用 type。`music tone` / `bpm` / `volume` は省略時 `0.62` / `104` / `0.8`。
 
 presentation として明示的に鳴らす音は scene / component の effect が所有する。
 
@@ -1643,6 +1643,8 @@ puzzle sokoban {
 sounds {
 move Box -> sfx push
 cantmove Box -> sfx bump
+undo -> sfx back
+restart -> sfx reset
 }
 
 layers {
@@ -1652,6 +1654,8 @@ actor = Player Box
 ```
 
 `move <selector> -> sfx <name>` / `cantmove <selector> -> sfx <name>` の `<selector>` は通常の object selector / group / schema selector。`sounds` が `layers` より前にあっても、同じ puzzle scope の最終 catalog に対して解決する。これは runtime event watcher ではなく lowering sugar で、rewrite alternative が standard move の move / blocked move に対応するときだけ、その rule に `sfx` emission を付ける。remove+add として書かれた変化は move ではないので対象外。
+
+`undo -> sfx <name>` / `restart -> sfx <name>` は、同じ model の session 操作が成功したときに one-shot SFX を鳴らす。これは rule input ではなく play/session 操作の presentation event なので、undo stack が空の undo では鳴らず、active puzzle がない restart でも鳴らない。top-level `sounds` は音源定義だけを持つため、これらの操作割り当ては puzzle 内の `sounds` に書く。
 
 PuzzleScript の `Sounds` section は object move / create / SFX0 などの runtime event に seed を結びつける。importer は `sfx0 12345` のような単純な named seed を `sounds { sfx sfx0 seed=12345 type=puzzlescript }` に lower し、rule suffix の `SFX0` は明示的な `sfx sfx0` として鳴らす。PuzzleScript importer の event-based sounds、たとえば object movement / create sounds はまだ canonical syntax へ自動変換しない。
 

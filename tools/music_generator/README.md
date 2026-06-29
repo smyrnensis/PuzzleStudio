@@ -14,8 +14,8 @@ on one-shot game sound effects. A seed plus an optional type target expands into
 
 - compact numeric seeds
 - user-facing volume control
-- common game SFX types: random, jump, pickup, hit, drag, lock, explosion,
-  laser, powerup, select, error, and category-less `Wild`
+- common game SFX types: random, jump, step, pickup, hit, drag, water, lock,
+  explosion, laser, powerup, select, error, and category-less `Wild`
 - deterministic tone, noise, and transient layers
 - pitch sweeps and short tonal phrases
 - seeded synthesis profile for arcade, soft synth, bit-crush, and toy-speaker

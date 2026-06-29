@@ -557,7 +557,7 @@ fn collect_source_symbols(
     family_axis_names: &mut HashSet<String>,
 ) {
     let context = scan_source_context(source);
-    for line in context.lines {
+    for (line_index, line) in context.lines.iter().enumerate() {
         if line.tokens.is_empty() {
             continue;
         }
@@ -572,7 +572,39 @@ fn collect_source_symbols(
             family_axes,
             family_axis_names,
         );
+        if let Some(name) = unbraced_visual_shape_symbol(&context, line_index) {
+            insert_source_symbol(symbols, name, HighlightKind::Asset);
+        }
     }
+}
+
+fn unbraced_visual_shape_symbol<'a>(
+    context: &'a crate::source::SourceContext,
+    line_index: usize,
+) -> Option<&'a str> {
+    let line = context.lines.get(line_index)?;
+    if line.scope != Some(SourceScope::VisualShapeTable)
+        || line.content.trim_end().ends_with('{')
+        || is_visual_closing_line(line)
+    {
+        return None;
+    }
+    let [name] = line.tokens.as_slice() else {
+        return None;
+    };
+    if !is_source_identifier(name) {
+        return None;
+    }
+    for previous in context.lines[..line_index].iter().rev() {
+        let trimmed = code_trim(&previous.content);
+        if trimmed.is_empty() {
+            return Some(name);
+        }
+        return (previous.scope != Some(SourceScope::VisualShapeTable)
+            || is_visual_closing_line(previous))
+        .then_some(name);
+    }
+    Some(name)
 }
 
 fn symbol_collection_scope(scope: Option<SourceScope>) -> Option<SourceScope> {
@@ -997,8 +1029,8 @@ fn scan_contextual_keyword_ranges(
             .filter_map(highlight_token_identifier)
             .collect::<Vec<_>>();
         for index in 0..tokens.len() {
-            let (text, start, end) = tokens[index];
-            if parser_keyword(text) && contextual_keyword_token(line.scope, &tokens, index) {
+            let (_text, start, end) = tokens[index];
+            if contextual_keyword_token(line.scope, &tokens, index) {
                 ranges.insert((start, end));
             }
         }
@@ -1041,8 +1073,41 @@ fn contextual_keyword_token(
         }
         "input" => is_rule_like_scope(scope) && index > 0 && before_pattern_token(tokens, index),
         "puzzle" | "puzzle3" => index > 0,
+        "rotate" | "from" | "using" => visual_rotation_keyword(scope, tokens, index),
         _ => false,
     }
+}
+
+fn visual_rotation_keyword(
+    scope: Option<SourceScope>,
+    tokens: &[(&str, usize, usize)],
+    index: usize,
+) -> bool {
+    if !matches!(
+        scope,
+        Some(
+            SourceScope::Visuals
+                | SourceScope::VisualShapeTable
+                | SourceScope::VisualShapeEntry
+                | SourceScope::VisualColorTable
+        )
+    ) {
+        return false;
+    }
+    let rotate_index = if tokens
+        .first()
+        .is_some_and(|(first, _, _)| *first == "rotate")
+    {
+        0
+    } else if tokens
+        .get(1)
+        .is_some_and(|(second, _, _)| *second == "rotate")
+    {
+        1
+    } else {
+        return false;
+    };
+    index >= rotate_index
 }
 
 fn line_head_keyword(
@@ -1060,7 +1125,7 @@ fn line_head_keyword(
     match scope {
         None => false,
         Some(SourceScope::Puzzle) => is_puzzle_line_head_keyword(keyword),
-        Some(SourceScope::Sounds) => matches!(keyword, "sfx" | "music"),
+        Some(SourceScope::Sounds) => matches!(keyword, "sfx" | "music" | "undo" | "restart"),
         Some(SourceScope::Assets) => matches!(keyword, "css"),
         Some(SourceScope::Tags) => matches!(keyword, "for"),
         Some(SourceScope::Group) => matches!(keyword, "for"),
@@ -1103,7 +1168,10 @@ fn line_head_keyword(
             | SourceScope::VisualShapeTable
             | SourceScope::VisualShapeEntry
             | SourceScope::VisualColorTable,
-        ) => matches!(keyword, "colors" | "shape" | "shapes"),
+        ) => matches!(
+            keyword,
+            "colors" | "offset" | "pixels_per_cell" | "rotate" | "shape" | "shapes"
+        ),
         Some(SourceScope::Other) => {
             matches!(keyword, "else" | "for" | "if" | "layers" | "repeat")
                 || rewrite_application_keyword(keyword)
@@ -1144,7 +1212,7 @@ fn classify_word(
     symbols: &HashMap<String, HighlightKind>,
     contextual_keyword: bool,
 ) -> Option<HighlightKind> {
-    if contextual_keyword && parser_keyword(token) {
+    if contextual_keyword {
         return Some(HighlightKind::Keyword);
     }
     if let Some(kind) = symbols.get(token).copied() {
@@ -1210,6 +1278,12 @@ fn push_word(
             Some(HighlightKind::Binding)
         } else if qualified_scratch {
             qualified_scratch_part_kind(index, text, symbol_kind, family_axis_names)
+        } else if semantic_kind == Some(HighlightKind::Scene)
+            && symbol_kind == Some(HighlightKind::State)
+        {
+            symbol_kind
+        } else if let Some(kind) = semantic_kind {
+            Some(kind)
         } else if use_schema_selector_coloring
             && index > 0
             && local_binding_at(binding_ranges, absolute_start, absolute_end, text)
@@ -1234,12 +1308,6 @@ fn push_word(
             )
         {
             Some(HighlightKind::Object)
-        } else if semantic_kind == Some(HighlightKind::Scene)
-            && symbol_kind == Some(HighlightKind::State)
-        {
-            symbol_kind
-        } else if let Some(kind) = semantic_kind {
-            Some(kind)
         } else if local_binding_at(binding_ranges, absolute_start, absolute_end, text) {
             Some(HighlightKind::Binding)
         } else if use_schema_selector_coloring && index == 0 && text == "*" {
@@ -1943,6 +2011,9 @@ fn visual_sprite_entry_header_line(
     let tokens = line.tokens.iter().map(String::as_str).collect::<Vec<_>>();
     match tokens.as_slice() {
         [selector] => visual_sprite_selector_token(selector),
+        [selector, "rotate", "from", _]
+        | [selector, "rotate", "using", _, "from", _]
+        | [selector, "rotate", _, "from", _] => visual_sprite_selector_token(selector),
         [selector, source] => {
             visual_sprite_selector_token(selector)
                 && (is_visual_image_source(source)
@@ -1981,6 +2052,13 @@ fn visual_sprite_entry_boundary(
     let tokens = line.tokens.iter().map(String::as_str).collect::<Vec<_>>();
     match tokens.as_slice() {
         ["colors" | "shape" | "shapes", ..] => true,
+        [selector, "rotate", "from", _]
+        | [selector, "rotate", "using", _, "from", _]
+        | [selector, "rotate", _, "from", _]
+            if visual_sprite_selector_token(selector) =>
+        {
+            true
+        }
         [selector, source]
             if visual_sprite_selector_token(selector)
                 && (is_visual_image_source(source)
@@ -2011,7 +2089,7 @@ fn visual_line_starts_sprite_source(
 ) -> bool {
     let tokens = line.tokens.iter().map(String::as_str).collect::<Vec<_>>();
     match tokens.as_slice() {
-        ["pixels_per_cell" | "offset" | "rotate", ..] => true,
+        ["pixels_per_cell" | "offset" | "rotate" | "shape", ..] => true,
         ["colors", colors @ ..] => {
             !colors.is_empty()
                 && colors
@@ -2036,13 +2114,25 @@ fn visual_sprite_selector_token(value: &str) -> bool {
         return false;
     }
     let cleaned = value.trim_start_matches('@');
-    let Some(first) = cleaned.chars().next() else {
+    let mut parts = cleaned.split(':');
+    let Some(first) = parts.next() else {
         return false;
     };
-    (first.is_ascii_alphabetic() || first == '_')
-        && cleaned
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | ':'))
+    is_source_identifier(first) && parts.all(visual_sprite_selector_part_token)
+}
+
+fn visual_sprite_selector_part_token(value: &str) -> bool {
+    value == "*" || is_source_value_atom(value) || visual_sprite_selector_map_call(value)
+}
+
+fn visual_sprite_selector_map_call(value: &str) -> bool {
+    let Some((name, rest)) = value.split_once('(') else {
+        return false;
+    };
+    let Some(arg) = rest.strip_suffix(')') else {
+        return false;
+    };
+    is_source_identifier(name) && is_source_identifier(arg)
 }
 
 fn is_visual_image_source(value: &str) -> bool {
@@ -3647,6 +3737,91 @@ P
     }
 
     #[test]
+    fn highlights_unbraced_rotated_sprite_entry_with_map_selector() {
+        let highlighted = highlight_source(
+            r#"
+title rotated_sprite_highlight
+
+puzzle default {
+map rotate directions {
+up -> right
+right -> down
+down -> left
+left -> up
+}
+layers {
+each @Boundary:directions
+}
+sprites {
+@Boundary:rotate(directions)
+rotate from up
+#000 #fff
+10
+00
+}
+rules {
+}
+levels {
+legend {
+. = empty
+}
+level start
+.
+}
+}
+"#,
+        );
+        assert!(highlighted.parsed);
+        assert!(highlighted.html.contains(
+            "<span class=\"syntax-keyword\">rotate</span> <span class=\"syntax-keyword\">from</span>"
+        ));
+        assert!(
+            highlighted
+                .html
+                .contains("syntax-sprite-pixel\" style=\"--syntax-sprite-pixel-color: #fff\">1</span><span class=\"syntax-sprite-pixel\" style=\"--syntax-sprite-pixel-color: #000\">0</span>")
+        );
+    }
+
+    #[test]
+    fn highlights_unbraced_rotated_sprite_entry_with_rotation_on_selector_line() {
+        let highlighted = highlight_source(
+            r#"
+title rotated_sprite_header_highlight
+
+puzzle default {
+layers {
+each @WallFrame:directions
+}
+sprites {
+@WallFrame:directions rotate from up
+#585858
+0000000
+.......
+}
+rules {
+}
+levels {
+legend {
+. = empty
+}
+level start
+.
+}
+}
+"#,
+        );
+        assert!(highlighted.parsed);
+        assert!(highlighted.html.contains(
+            "<span class=\"syntax-keyword\">rotate</span> <span class=\"syntax-keyword\">from</span>"
+        ));
+        assert!(
+            highlighted
+                .html
+                .contains("syntax-sprite-pixel\" style=\"--syntax-sprite-pixel-color: #585858\">0</span><span class=\"syntax-sprite-pixel\" style=\"--syntax-sprite-pixel-color: #585858\">0</span>")
+        );
+    }
+
+    #[test]
     fn highlights_sprites3_pixels_across_blank_slice_separators() {
         let highlighted = highlight_source(
             r#"
@@ -4520,6 +4695,107 @@ level start {
                 .contains("syntax-asset\">A</span> <span class=\"syntax-brace-depth")
         );
         assert!(!highlighted.html.contains("syntax-number\">010</span>"));
+    }
+
+    #[test]
+    fn visual_shape_slots_override_object_symbol_fallback() {
+        let source = r#"
+title visual_shape_scope_highlight
+
+puzzle board {
+tags {
+kind = A B
+}
+layers {
+actor = Block:kind
+}
+rules {
+}
+sprites {
+shapes {
+Block:kind {
+A {
+0
+}
+B {
+0
+}
+}
+}
+Block:kind {
+#111
+shape Block:kind
+}
+}
+}
+levels default of board {
+legend {
+. = empty
+}
+level start {
+.
+}
+}
+"#;
+        crate::parse_game(source).unwrap();
+        let highlighted = highlight_source(source);
+
+        assert!(highlighted.parsed);
+        assert!(highlighted.html.contains(
+            "syntax-asset\">Block</span><span class=\"syntax-operator\">:</span><span class=\"syntax-group\">kind"
+        ));
+        assert!(highlighted.html.contains(
+            "syntax-keyword\">shape</span> <span class=\"syntax-asset\">Block</span><span class=\"syntax-operator\">:</span><span class=\"syntax-variant\">kind"
+        ));
+        assert!(
+            !highlighted
+                .html
+                .contains("syntax-keyword\">shape</span> <span class=\"syntax-object\">Block")
+        );
+    }
+
+    #[test]
+    fn highlights_unbraced_visual_shape_declarations_as_assets() {
+        let highlighted = highlight_source(
+            r#"
+title unbraced_visual_shape_highlight
+
+puzzle board {
+layers {
+actor = Box
+}
+rules {
+}
+sprites {
+shapes {
+box_shape
+aaa
+aaa
+aaa
+}
+Box
+#000 #111 #222 #333 #444 #555 #666 #777 #888 #999 #aaa
+shape box_shape
+}
+levels {
+legend {
+. = empty
+}
+level start
+.
+}
+}
+"#,
+        );
+
+        assert!(highlighted.parsed);
+        assert!(
+            highlighted.html.matches("syntax-asset\">box_shape").count() >= 2,
+            "{}",
+            highlighted.html
+        );
+        assert!(highlighted.html.contains("syntax-keyword\">shape</span>"));
+        assert!(!highlighted.html.contains("syntax-asset\">aaa</span>"));
     }
 
     #[test]

@@ -1,15 +1,19 @@
 let spriteActionClearTimer = 0;
 let spriteBucketActive = false;
-let spriteMarkerActive = false;
-let spriteMarkerSize = 3;
+let spriteBrushPreset = "pixel";
+let spriteLastPaintColorIndex = 0;
 const spriteColorEditSessions = {
   sprite: null,
   sprite3d: null,
 };
 const SOLID_SPRITE_EDITOR_SIZE = 5;
 const SPRITE_EDITOR_MAX_SIZE = 64;
-const SPRITE_MARKER_MIN_SIZE = 1;
-const SPRITE_MARKER_MAX_SIZE = 16;
+const SPRITE_BRUSH_PRESETS = {
+  pixel: { label: "1px", diameterCells: 1 },
+  thin: { label: "Marker S", ratio: 1 / 32 },
+  medium: { label: "Marker M", ratio: 1 / 20 },
+  thick: { label: "Marker L", ratio: 1 / 12 },
+};
 
 function resetSpriteBuilder(size = sprite.size) {
   sprite.size = clampSpriteSize(size);
@@ -69,9 +73,6 @@ function syncSpriteBucketButton() {
 
 function toggleSpriteBucketMode() {
   spriteBucketActive = !spriteBucketActive;
-  if (spriteBucketActive) {
-    spriteMarkerActive = false;
-  }
   syncSpritePaintToolControls();
   setSpriteActionStatus(
     spriteBucketActive ? "Bucket: click a connected area" : spritePaintToolStatusText(),
@@ -79,40 +80,56 @@ function toggleSpriteBucketMode() {
   );
 }
 
-function syncSpriteMarkerButton() {
-  spriteMarkerSize = clampSpriteMarkerSize(spriteMarkerSize);
-  spriteMarkerButton.classList.toggle("is-active", spriteMarkerActive);
-  spriteMarkerButton.setAttribute("aria-pressed", String(spriteMarkerActive));
-  spriteMarkerButton.setAttribute("aria-label", `Marker ${spriteMarkerSize}px`);
-  spriteMarkerButton.title = spriteMarkerActive ? `Marker active: ${spriteMarkerSize}px` : `Marker: ${spriteMarkerSize}px`;
-  spriteMarkerSizeInput.min = String(SPRITE_MARKER_MIN_SIZE);
-  spriteMarkerSizeInput.max = String(SPRITE_MARKER_MAX_SIZE);
-  spriteMarkerSizeInput.value = String(spriteMarkerSize);
+function deactivateSpriteBucketModeAfterUse() {
+  if (!spriteBucketActive) {
+    return;
+  }
+  spriteBucketActive = false;
+  syncSpritePaintToolControls();
 }
 
-function toggleSpriteMarkerMode() {
-  spriteMarkerActive = !spriteMarkerActive;
-  if (spriteMarkerActive) {
-    spriteBucketActive = false;
+function syncSpriteMarkerButton() {
+  spriteBrushPreset = normalizeSpriteBrushPreset(spriteBrushPreset);
+  for (const button of spriteBrushPresetButtons()) {
+    const preset = normalizeSpriteBrushPreset(button.dataset.spriteBrushPreset);
+    const selected = preset === spriteBrushPreset;
+    const label = spriteBrushPresetLabel(preset);
+    button.classList.toggle("is-active", selected);
+    button.setAttribute("aria-pressed", String(selected));
+    button.title = label;
+    button.setAttribute("aria-label", `Brush: ${label}`);
+  }
+}
+
+function selectSpriteBrushPreset(preset) {
+  spriteBrushPreset = normalizeSpriteBrushPreset(preset);
+  spriteBucketActive = false;
+  if (!validSpriteColorIndex(sprite.selectedColorIndex)) {
+    sprite.selectedColorIndex = validSpriteColorIndex(spriteLastPaintColorIndex) ? spriteLastPaintColorIndex : 0;
+    renderSpritePalette();
   }
   syncSpritePaintToolControls();
   setSpriteActionStatus(spritePaintToolStatusText(), "is-ok");
 }
 
-function updateSpriteMarkerSize(value) {
-  spriteMarkerSize = clampSpriteMarkerSize(value);
-  syncSpriteMarkerButton();
-  setSpriteActionStatus(spritePaintToolStatusText(), "is-ok");
+function normalizeSpriteBrushPreset(preset) {
+  return Object.prototype.hasOwnProperty.call(SPRITE_BRUSH_PRESETS, preset) ? preset : "pixel";
 }
 
-function clampSpriteMarkerSize(value) {
-  const numeric = Number(value);
-  const size = Number.isFinite(numeric) ? Math.trunc(numeric) : spriteMarkerSize || 3;
-  return Math.max(SPRITE_MARKER_MIN_SIZE, Math.min(SPRITE_MARKER_MAX_SIZE, size));
+function spriteBrushPresetLabel(preset = spriteBrushPreset) {
+  return SPRITE_BRUSH_PRESETS[normalizeSpriteBrushPreset(preset)].label;
+}
+
+function spriteBrushPresetButtons() {
+  return spriteMarkerTool.querySelectorAll("[data-sprite-brush-preset]");
+}
+
+function spriteBrushIsPixel(preset = spriteBrushPreset) {
+  return normalizeSpriteBrushPreset(preset) === "pixel";
 }
 
 function spritePaintToolStatusText() {
-  return spriteMarkerActive ? `Marker: ${spriteMarkerSize}px` : "Brush: paint individual cells";
+  return `Brush: ${spriteBrushPresetLabel(spriteBrushPreset).toLowerCase()}`;
 }
 
 function beginSpriteColorEditHistory(kind) {
@@ -516,19 +533,18 @@ function renderSpritePalette() {
     }
   }
 
-  const paletteGrid = document.createElement("span");
-  paletteGrid.className = "sprite-palette-grid";
-
-  paletteGrid.append(spriteMarkerTool);
+  const paintToolRow = document.createElement("span");
+  paintToolRow.className = "sprite-paint-tool-row";
+  paintToolRow.append(spriteMarkerTool);
 
   if (spriteFillButton) {
-    paletteGrid.append(spriteFillButton);
+    paintToolRow.append(spriteFillButton);
   }
 
   const eraseButton = document.createElement("button");
   eraseButton.type = "button";
-  eraseButton.className = "sprite-token sprite-color-swatch sprite-token-erase";
-  eraseButton.classList.toggle("is-selected", sprite.selectedColorIndex === null);
+  eraseButton.className = "sprite-token sprite-token-erase sprite-icon-button sprite-paint-tool-button";
+  eraseButton.classList.toggle("is-selected", sprite.selectedColorIndex === null && !spriteBucketActive);
   eraseButton.dataset.colorIndex = "erase";
   eraseButton.style.setProperty("--sprite-swatch-color", "#00000000");
   eraseButton.title = "Paint transparent";
@@ -540,8 +556,15 @@ function renderSpritePalette() {
       <path d="m5 11 9 9"></path>
     </svg>
   `;
-  eraseButton.addEventListener("click", () => selectSpriteColor(null));
-  paletteGrid.append(eraseButton);
+  eraseButton.addEventListener("click", () => {
+    spriteBucketActive = false;
+    selectSpriteColor(null);
+  });
+  paintToolRow.append(eraseButton);
+  spritePalette.append(paintToolRow);
+
+  const paletteGrid = document.createElement("span");
+  paletteGrid.className = "sprite-palette-grid";
 
   for (const [index, entry] of sprite.palette.entries()) {
     const item = document.createElement("span");
@@ -1285,22 +1308,39 @@ function renderSpriteBoard() {
   spriteBoard.style.setProperty("--sprite-size", sprite.size);
   for (let index = 0; index < sprite.cells.length; index += 1) {
     const button = document.createElement("button");
-    const colorIndex = validSpriteColorIndex(sprite.cells[index]) ? sprite.cells[index] : null;
-    const char = spriteExportCharForColorIndex(colorIndex);
     button.type = "button";
     button.className = "sprite-cell sprite-color-swatch";
-    button.dataset.index = String(index);
-    button.dataset.colorIndex = colorIndex === null ? "erase" : String(colorIndex);
-    button.style.setProperty("--sprite-swatch-color", spriteColorForColorIndex(colorIndex));
-    button.style.setProperty("--sprite-cell-ink", spriteInkForColorIndex(colorIndex));
-    button.setAttribute("aria-label", `Sprite cell ${index + 1}: ${char}`);
+    syncSpriteCellElement(button, index);
     spriteBoard.append(button);
+  }
+}
+
+function syncSpriteCellElement(button, index) {
+  const colorIndex = validSpriteColorIndex(sprite.cells[index]) ? sprite.cells[index] : null;
+  const char = spriteExportCharForColorIndex(colorIndex);
+  button.dataset.index = String(index);
+  button.dataset.colorIndex = colorIndex === null ? "erase" : String(colorIndex);
+  button.style.setProperty("--sprite-swatch-color", spriteColorForColorIndex(colorIndex));
+  button.style.setProperty("--sprite-cell-ink", spriteInkForColorIndex(colorIndex));
+  button.setAttribute("aria-label", `Sprite cell ${index + 1}: ${char}`);
+}
+
+function renderSpriteCellsAtIndices(indices) {
+  for (const index of new Set(indices)) {
+    const cell = spriteBoard.children[index];
+    if (!cell || !cell.classList.contains("sprite-cell") || cell.dataset.index !== String(index)) {
+      throw new Error(`Sprite cell element missing for changed cell ${index}`);
+    }
+    syncSpriteCellElement(cell, index);
   }
 }
 
 function selectSpriteColor(index) {
   commitSpriteColorEditHistory("sprite");
   sprite.selectedColorIndex = validSpriteColorIndex(index) ? index : null;
+  if (validSpriteColorIndex(sprite.selectedColorIndex)) {
+    spriteLastPaintColorIndex = sprite.selectedColorIndex;
+  }
   sprite.addPaletteOpen = false;
   sprite.editPaletteOpen = false;
   sprite.customColorOpen = false;
@@ -1915,10 +1955,12 @@ function bucketFillSpriteFromIndex(index) {
   const count = floodFillSpriteComponentAtIndex(index, sprite.selectedColorIndex);
   if (!count) {
     setSpriteActionStatus("Connected area already has that color", "is-ok");
+    deactivateSpriteBucketModeAfterUse();
     return false;
   }
   const colorIndex = validSpriteColorIndex(sprite.selectedColorIndex) ? sprite.selectedColorIndex : null;
   const message = colorIndex === null ? "Filled connected area with transparent" : "Filled connected area";
+  deactivateSpriteBucketModeAfterUse();
   setSpriteActionStatus(message, "is-ok");
   setStatus(message, "is-ok");
   return true;
@@ -1930,7 +1972,7 @@ function bucketFillSpriteFromElement(element) {
 
 function paintSpriteCellFromElement(element) {
   const index = spriteCellIndexFromElement(element);
-  return paintSpriteAtIndex(index, sprite.selectedColorIndex);
+  return paintSpriteAtPoint(spritePointForCellIndex(index), sprite.selectedColorIndex);
 }
 
 function spriteCellIndexFromElement(element) {
@@ -1942,31 +1984,34 @@ function spriteCellIndexFromElement(element) {
   return Number.isInteger(index) && index >= 0 && index < sprite.cells.length ? index : -1;
 }
 
-function paintSpriteCellAtIndex(index, colorIndex) {
-  if (!setSpriteCellColorAtIndex(index, colorIndex)) {
-    return false;
+function spritePointForCellIndex(index) {
+  if (!Number.isInteger(index) || index < 0 || index >= sprite.cells.length) {
+    return null;
   }
-  finishSpritePaintMutation();
-  return true;
+  return {
+    x: (index % sprite.size) + 0.5,
+    y: Math.floor(index / sprite.size) + 0.5,
+  };
 }
 
-function paintSpriteAtIndex(index, colorIndex) {
-  const indices = spritePaintIndicesForCenter(index);
-  if (!indices.length || !paintSpriteCellsAtIndices(indices, colorIndex)) {
+function paintSpriteAtPoint(point, colorIndex) {
+  const indices = spritePaintIndicesForPoint(point);
+  const changedIndices = paintSpriteCellsAtIndices(indices, colorIndex);
+  if (!changedIndices.length) {
     return false;
   }
-  finishSpritePaintMutation();
+  finishSpritePaintMutation(changedIndices);
   return true;
 }
 
 function paintSpriteCellsAtIndices(indices, colorIndex) {
-  let changed = false;
+  const changedIndices = [];
   for (const index of indices) {
     if (setSpriteCellColorAtIndex(index, colorIndex)) {
-      changed = true;
+      changedIndices.push(index);
     }
   }
-  return changed;
+  return changedIndices;
 }
 
 function setSpriteCellColorAtIndex(index, colorIndex) {
@@ -1981,100 +2026,149 @@ function setSpriteCellColorAtIndex(index, colorIndex) {
   return true;
 }
 
-function finishSpritePaintMutation() {
+function finishSpritePaintMutation(changedIndices, options = {}) {
   sprite.solidSource = false;
-  updateSpriteBoundShapeDefinition();
-  renderSpriteBoard();
-  syncSpriteSourceActionButtons();
+  if (!options.deferSourceSync) {
+    updateSpriteBoundShapeDefinition();
+  }
+  renderSpriteCellsAtIndices(changedIndices);
+  if (!options.deferSourceSync) {
+    syncSpriteSourceActionButtons();
+  }
 }
 
 function paintSpriteCellFromPoint(clientX, clientY, colorIndex) {
-  return paintSpriteAtIndex(
-    spriteCellIndexFromElement(document.elementFromPoint(clientX, clientY)),
-    colorIndex,
-  );
+  return paintSpriteAtPoint(spriteBoardPointFromClient(clientX, clientY), colorIndex);
 }
 
-function spritePaintIndicesForCenter(index) {
-  if (!Number.isInteger(index) || index < 0 || index >= sprite.cells.length) {
+function spriteBoardGeometry() {
+  const rect = spriteBoard.getBoundingClientRect();
+  return {
+    left: rect.left,
+    top: rect.top,
+    right: rect.right,
+    bottom: rect.bottom,
+    width: rect.width,
+    height: rect.height,
+    size: sprite.size,
+  };
+}
+
+function spriteBoardPointFromClient(clientX, clientY, geometry = spriteBoardGeometry()) {
+  if (
+    geometry.width <= 0
+    || geometry.height <= 0
+    || clientX < geometry.left
+    || clientX > geometry.right
+    || clientY < geometry.top
+    || clientY > geometry.bottom
+  ) {
+    return null;
+  }
+  return {
+    x: ((clientX - geometry.left) / geometry.width) * geometry.size,
+    y: ((clientY - geometry.top) / geometry.height) * geometry.size,
+  };
+}
+
+function spriteCellIndexFromPoint(point) {
+  if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) {
+    return -1;
+  }
+  const x = Math.floor(point.x);
+  const y = Math.floor(point.y);
+  if (x < 0 || x >= sprite.size || y < 0 || y >= sprite.size) {
+    return -1;
+  }
+  return y * sprite.size + x;
+}
+
+function spriteBrushDiameterCells(preset = spriteBrushPreset) {
+  const config = SPRITE_BRUSH_PRESETS[normalizeSpriteBrushPreset(preset)];
+  if (Number.isFinite(config.diameterCells)) {
+    return Math.min(sprite.size, config.diameterCells);
+  }
+  return Math.min(sprite.size, sprite.size * config.ratio);
+}
+
+function spritePaintIndicesForPoint(point) {
+  if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) {
     return [];
   }
-  if (!spriteMarkerActive) {
-    return [index];
+  if (spriteBrushIsPixel()) {
+    const index = spriteCellIndexFromPoint(point);
+    return index >= 0 ? [index] : [];
   }
-  const markerSize = clampSpriteMarkerSize(spriteMarkerSize);
-  if (markerSize <= 1) {
-    return [index];
-  }
-  const centerX = index % sprite.size;
-  const centerY = Math.floor(index / sprite.size);
-  const before = Math.floor((markerSize - 1) / 2);
-  const after = markerSize - before - 1;
+  const diameter = spriteBrushDiameterCells();
+  const radius = diameter / 2;
+  const minX = Math.max(0, Math.floor(point.x - radius - 0.5));
+  const maxX = Math.min(sprite.size - 1, Math.ceil(point.x + radius - 0.5));
+  const minY = Math.max(0, Math.floor(point.y - radius - 0.5));
+  const maxY = Math.min(sprite.size - 1, Math.ceil(point.y + radius - 0.5));
   const indices = [];
-  for (let y = centerY - before; y <= centerY + after; y += 1) {
-    if (y < 0 || y >= sprite.size) {
-      continue;
-    }
-    for (let x = centerX - before; x <= centerX + after; x += 1) {
-      if (x < 0 || x >= sprite.size) {
-        continue;
+  for (let y = minY; y <= maxY; y += 1) {
+    for (let x = minX; x <= maxX; x += 1) {
+      const dx = x + 0.5 - point.x;
+      const dy = y + 0.5 - point.y;
+      if ((dx * dx) + (dy * dy) <= radius * radius) {
+        indices.push(y * sprite.size + x);
       }
-      indices.push(y * sprite.size + x);
+    }
+  }
+  if (!indices.length) {
+    const index = spriteCellIndexFromPoint(point);
+    if (index >= 0) {
+      indices.push(index);
     }
   }
   return indices;
 }
 
-function spritePaintDragIndices(index) {
-  if (!spritePaintDrag || !Number.isInteger(index) || index < 0 || index >= sprite.cells.length) {
+function spritePaintDragIndices(point) {
+  if (!spritePaintDrag || !point) {
     return [];
   }
-  const lastIndex = spritePaintDrag.lastIndex;
-  if (!Number.isInteger(lastIndex) || lastIndex < 0 || lastIndex >= sprite.cells.length) {
-    return spritePaintIndicesForCenter(index);
+  const lastPoint = spritePaintDrag.lastPoint;
+  if (!lastPoint) {
+    return spritePaintIndicesForPoint(point);
   }
-  if (lastIndex === index) {
-    return [];
-  }
-  const centers = spriteInterpolatedCellCenters(lastIndex, index);
+  const points = spriteInterpolatedBrushPoints(lastPoint, point);
   const indices = new Set();
-  for (const center of centers) {
-    for (const cellIndex of spritePaintIndicesForCenter(center)) {
+  for (const brushPoint of points) {
+    for (const cellIndex of spritePaintIndicesForPoint(brushPoint)) {
       indices.add(cellIndex);
     }
   }
   return [...indices];
 }
 
-function spriteInterpolatedCellCenters(fromIndex, toIndex) {
-  const x0 = fromIndex % sprite.size;
-  const y0 = Math.floor(fromIndex / sprite.size);
-  const x1 = toIndex % sprite.size;
-  const y1 = Math.floor(toIndex / sprite.size);
-  const steps = Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0));
+function spriteInterpolatedBrushPoints(fromPoint, toPoint) {
+  const dx = toPoint.x - fromPoint.x;
+  const dy = toPoint.y - fromPoint.y;
+  const distance = Math.hypot(dx, dy);
+  const steps = Math.max(1, Math.ceil(distance * 2));
   if (steps <= 0) {
-    return [toIndex];
+    return [toPoint];
   }
-  const centers = [];
-  let previous = -1;
+  const points = [];
   for (let step = 1; step <= steps; step += 1) {
-    const x = Math.round(x0 + ((x1 - x0) * step) / steps);
-    const y = Math.round(y0 + ((y1 - y0) * step) / steps);
-    const index = y * sprite.size + x;
-    if (index !== previous) {
-      centers.push(index);
-      previous = index;
-    }
+    const t = step / steps;
+    points.push({
+      x: fromPoint.x + dx * t,
+      y: fromPoint.y + dy * t,
+    });
   }
-  return centers;
+  return points;
 }
 
 function startSpritePaint(event) {
   if (event.button !== 0) {
     return;
   }
-  const index = spriteCellIndexFromElement(document.elementFromPoint(event.clientX, event.clientY));
-  if (!Number.isInteger(index) || index < 0) {
+  const geometry = spriteBoardGeometry();
+  const point = spriteBoardPointFromClient(event.clientX, event.clientY, geometry);
+  const index = spriteCellIndexFromPoint(point);
+  if (!point || index < 0) {
     return;
   }
   event.preventDefault();
@@ -2088,22 +2182,25 @@ function startSpritePaint(event) {
   spritePaintDrag = {
     pointerId: event.pointerId,
     colorIndex: sprite.selectedColorIndex,
-    lastIndex: -1,
+    lastPoint: null,
+    geometry,
     beforeSnapshot: visualEditSnapshot("sprite"),
     changed: false,
   };
   if (spriteBoard.setPointerCapture) {
     spriteBoard.setPointerCapture(event.pointerId);
   }
-  paintSpriteDragIndex(index);
+  paintSpriteDragPoint(point);
 }
 
 function continueSpritePaint(event) {
+  const geometry = spritePaintDrag?.geometry || spriteBoardGeometry();
+  const point = spriteBoardPointFromClient(event.clientX, event.clientY, geometry);
   if (!spritePaintDrag || spritePaintDrag.pointerId !== event.pointerId) {
     return;
   }
   event.preventDefault();
-  paintSpriteDragIndex(spriteCellIndexFromElement(document.elementFromPoint(event.clientX, event.clientY)));
+  paintSpriteDragPoint(point);
 }
 
 function stopSpritePaint(event) {
@@ -2114,19 +2211,22 @@ function stopSpritePaint(event) {
     spriteBoard.releasePointerCapture(event.pointerId);
   }
   if (spritePaintDrag.changed) {
+    updateSpriteBoundShapeDefinition();
+    syncSpriteSourceActionButtons();
     pushVisualEditUndoSnapshot("sprite", spritePaintDrag.beforeSnapshot);
   }
   spritePaintDrag = null;
 }
 
-function paintSpriteDragIndex(index) {
-  if (!spritePaintDrag || !Number.isInteger(index) || index < 0) {
+function paintSpriteDragPoint(point) {
+  if (!spritePaintDrag || !point) {
     return;
   }
-  const indices = spritePaintDragIndices(index);
-  spritePaintDrag.lastIndex = index;
-  if (indices.length && paintSpriteCellsAtIndices(indices, spritePaintDrag.colorIndex)) {
-    finishSpritePaintMutation();
+  const indices = spritePaintDragIndices(point);
+  spritePaintDrag.lastPoint = point;
+  const changedIndices = paintSpriteCellsAtIndices(indices, spritePaintDrag.colorIndex);
+  if (changedIndices.length) {
+    finishSpritePaintMutation(changedIndices, { deferSourceSync: true });
     spritePaintDrag.changed = true;
   }
 }
@@ -2590,6 +2690,10 @@ function parseSpriteShapeAssets(source) {
     }
   }
 
+  collectSpriteUnbracedShapeDefinitions(source, shapesBlock, (name, rows) => {
+    raw.set(name, rows);
+  });
+
   const pattern = /(^|\n)([\t ]*)([A-Za-z_][\w]*)\s*\{/g;
   let match = null;
   while ((match = pattern.exec(body))) {
@@ -2611,6 +2715,123 @@ function parseSpriteShapeAssets(source) {
     }
   }
   return raw;
+}
+
+function collectSpriteUnbracedShapeDefinitions(source, shapesBlock, callback) {
+  const body = source.slice(shapesBlock.bodyStart, shapesBlock.bodyEnd);
+  const lines = spriteSourceBlockLines(body, shapesBlock.bodyStart);
+  let index = 0;
+  while (index < lines.length) {
+    const line = lines[index];
+    const bodyLineStart = line.start - shapesBlock.bodyStart;
+    const name = stripSpriteAssetComment(line.text).trim();
+    const nameMatch = /^([A-Za-z_][\w]*)$/.exec(name);
+    if (!nameMatch || topLevelDepthAt(body, bodyLineStart) !== 0) {
+      index += 1;
+      continue;
+    }
+
+    const rows = [];
+    let rowIndex = index + 1;
+    let bodyStart = null;
+    let bodyEnd = null;
+    while (rowIndex < lines.length) {
+      const rowLine = lines[rowIndex];
+      const rowLineStart = rowLine.start - shapesBlock.bodyStart;
+      const row = stripSpriteAssetComment(rowLine.text).trim();
+      if (
+        !row
+        || topLevelDepthAt(body, rowLineStart) !== 0
+        || spriteUnbracedShapeRowIsBoundary(lines, rowIndex, rows, body, shapesBlock)
+      ) {
+        break;
+      }
+      if (bodyStart === null) {
+        bodyStart = rowLine.start;
+      }
+      rows.push(row);
+      bodyEnd = rowLine.start + rowLine.text.length;
+      rowIndex += 1;
+    }
+    if (rows.length) {
+      callback(nameMatch[1], rows, {
+        indent: /^\s*/.exec(line.text)?.[0] || spriteSourceChildIndent(shapesBlock.indent),
+        braced: false,
+        tableRow: false,
+        bodyStart,
+        bodyEnd,
+      });
+      index = rowIndex;
+    } else {
+      index += 1;
+    }
+  }
+}
+
+function spriteUnbracedShapeRowIsBoundary(lines, rowIndex, rows, body, shapesBlock) {
+  const row = stripSpriteAssetComment(lines[rowIndex]?.text || "").trim();
+  if (!row) {
+    return true;
+  }
+  if (row.includes("{") || row.includes("}")) {
+    return true;
+  }
+  if (!rows.length) {
+    return false;
+  }
+  const width = spriteAsciiRowWidth(rows[0]);
+  const rowWidth = spriteAsciiRowWidth(row);
+  if (!/^([A-Za-z_][\w]*)$/.test(row)) {
+    return false;
+  }
+  if (rowWidth !== width) {
+    return true;
+  }
+  const next = spriteNextTopLevelShapeLine(lines, rowIndex + 1, body, shapesBlock);
+  if (!next) {
+    return false;
+  }
+  return spriteAsciiRowWidth(next) !== width;
+}
+
+function spriteNextTopLevelShapeLine(lines, startIndex, body, shapesBlock) {
+  for (let index = startIndex; index < lines.length; index += 1) {
+    const line = lines[index];
+    const lineStart = line.start - shapesBlock.bodyStart;
+    const text = stripSpriteAssetComment(line.text).trim();
+    if (!text) {
+      continue;
+    }
+    if (topLevelDepthAt(body, lineStart) !== 0) {
+      return "";
+    }
+    return text;
+  }
+  return "";
+}
+
+function spriteAsciiRowWidth(row) {
+  return Array.from(String(row || "")).length;
+}
+
+function spriteSourceBlockLines(text, absoluteStart) {
+  const lines = [];
+  let start = 0;
+  while (start <= text.length) {
+    const newline = text.indexOf("\n", start);
+    const end = newline < 0 ? text.length : newline;
+    const lineEnd = end > start && text[end - 1] === "\r" ? end - 1 : end;
+    lines.push({
+      text: text.slice(start, lineEnd),
+      start: absoluteStart + start,
+      end: absoluteStart + lineEnd,
+    });
+    if (newline < 0) {
+      break;
+    }
+    start = newline + 1;
+  }
+  return lines;
 }
 
 function parseSpriteValueMaps(source) {
@@ -3412,14 +3633,13 @@ function ensureSpriteShapeDefinition(source, name, rows) {
   const shapesBlock = findVisualAssetBlock(source, spritesBlock, "shapes");
   if (shapesBlock) {
     const indent = spriteSourceChildIndent(shapesBlock.indent);
-    const rowIndent = spriteSourceChildIndent(indent);
-    const text = `\n${indent}${name} {\n${shapeRows.map((row) => `${rowIndent}${row}`).join("\n")}\n${indent}}\n`;
+    const bodyHasContent = source.slice(shapesBlock.bodyStart, shapesBlock.bodyEnd).trim().length > 0;
+    const text = `${bodyHasContent ? "\n\n" : "\n"}${spritePlainShapeDefinitionText(indent, name, shapeRows)}\n`;
     return `${source.slice(0, shapesBlock.bodyEnd).trimEnd()}${text}${source.slice(shapesBlock.bodyEnd)}`;
   }
   const blockIndent = spriteSourceChildIndent(spritesBlock.indent);
   const shapeIndent = spriteSourceChildIndent(blockIndent);
-  const rowIndent = spriteSourceChildIndent(shapeIndent);
-  const text = `\n${blockIndent}shapes {\n${shapeIndent}${name} {\n${shapeRows.map((row) => `${rowIndent}${row}`).join("\n")}\n${shapeIndent}}\n${blockIndent}}\n`;
+  const text = `\n${blockIndent}shapes {\n${spritePlainShapeDefinitionText(shapeIndent, name, shapeRows)}\n${blockIndent}}\n`;
   return `${source.slice(0, spritesBlock.bodyStart)}${text}${source.slice(spritesBlock.bodyStart)}`;
 }
 
@@ -3433,10 +3653,36 @@ function replaceSpriteShapeDefinition(source, name, rows) {
   if (!range) {
     return null;
   }
+  if (range.braced && !range.tableRow) {
+    const replacement = spritePlainShapeDefinitionText(range.indent, name, shapeRows);
+    const boundary = spritePlainShapeDefinitionTrailingBoundary(source, range.declarationEnd);
+    return `${source.slice(0, range.declarationStart)}${replacement}${boundary}${source.slice(range.declarationEnd)}`;
+  }
+  if (!range.braced) {
+    const indent = spriteSourceChildIndent(range.indent);
+    const body = shapeRows.map((row) => `${indent}${row}`).join("\n");
+    return `${source.slice(0, range.bodyStart)}${body}${source.slice(range.bodyEnd)}`;
+  }
   const rangeIndent = spriteSourceIndent(range.indent);
   const indent = spriteSourceChildIndent(rangeIndent);
   const body = `\n${shapeRows.map((row) => `${indent}${row}`).join("\n")}\n${rangeIndent}`;
   return `${source.slice(0, range.bodyStart)}${body}${source.slice(range.bodyEnd)}`;
+}
+
+function spritePlainShapeDefinitionText(indent, name, rows) {
+  const rowIndent = spriteSourceChildIndent(indent);
+  return `${indent}${name}\n${rows.map((row) => `${rowIndent}${row}`).join("\n")}`;
+}
+
+function spritePlainShapeDefinitionTrailingBoundary(source, position) {
+  const suffix = String(source || "").slice(position);
+  if (!suffix) {
+    return "";
+  }
+  if (/^\r?\n[\t ]*\r?\n/.test(suffix) || /^\r?\n[\t ]*\}/.test(suffix)) {
+    return "";
+  }
+  return "\n";
 }
 
 function spriteShapeDefinitionRows(rows) {
@@ -3475,10 +3721,24 @@ function findSpriteShapeDefinitionRange(source, name) {
       continue;
     }
     return {
+      name,
       indent: match[2] || spriteSourceChildIndent(shapesBlock.indent),
+      braced: true,
+      tableRow: false,
+      declarationStart: shapesBlock.bodyStart + bodyMatchStart,
+      declarationEnd: closeIndex + 1,
       bodyStart: openIndex + 1,
       bodyEnd: closeIndex,
     };
+  }
+  let unbracedRange = null;
+  collectSpriteUnbracedShapeDefinitions(source, shapesBlock, (shapeName, _rows, range) => {
+    if (!unbracedRange && shapeName === name) {
+      unbracedRange = range;
+    }
+  });
+  if (unbracedRange) {
+    return unbracedRange;
   }
   return null;
 }
@@ -3514,6 +3774,8 @@ function findSpriteShapeTableRowRange(source, shapesBlock, tableName, value = ""
       }
       const range = {
         indent: rowMatch[2] || spriteSourceChildIndent(tableMatch[2]),
+        braced: true,
+        tableRow: true,
         bodyStart: openIndex + 1,
         bodyEnd: closeIndex,
       };
@@ -3668,7 +3930,7 @@ function topLevelDepthAt(text, endIndex) {
   return depth;
 }
 
-for (const input of [spriteNameInput, spriteSizeInput, spriteScaleInput, spriteMarkerSizeInput]) {
+for (const input of [spriteNameInput, spriteSizeInput, spriteScaleInput]) {
   if (input) {
     installSelectAllOnFocus(input);
   }
@@ -3691,14 +3953,9 @@ spriteScaleInput.addEventListener("keydown", (event) => {
   }
   event.preventDefault();
 });
-spriteMarkerSizeInput.addEventListener("change", () => updateSpriteMarkerSize(spriteMarkerSizeInput.value));
-spriteMarkerSizeInput.addEventListener("keydown", (event) => {
-  if (event.key !== "Enter") {
-    return;
-  }
-  event.preventDefault();
-  updateSpriteMarkerSize(spriteMarkerSizeInput.value);
-});
+for (const button of spriteBrushPresetButtons()) {
+  button.addEventListener("click", () => selectSpriteBrushPreset(button.dataset.spriteBrushPreset));
+}
 spriteNameInput.addEventListener("input", syncSpriteSourceActionButtons);
 sourceEditor.addEventListener("input", () => {
   invalidateSpriteEditSourceForDocument(activeDocument());
@@ -3716,6 +3973,9 @@ spritePalette.addEventListener("keydown", (event) => {
     }
     event.preventDefault();
     const nextIndex = rawIndex === "erase" ? null : Number(rawIndex);
+    if (nextIndex === null) {
+      spriteBucketActive = false;
+    }
     selectSpriteColor(nextIndex);
   }
 });
@@ -3744,7 +4004,6 @@ spriteRotateLeftButton.addEventListener("click", rotateSpriteLeft);
 spriteRotateRightButton.addEventListener("click", rotateSpriteRight);
 spriteFlipHorizontalButton.addEventListener("click", flipSpriteHorizontal);
 spriteFlipVerticalButton.addEventListener("click", flipSpriteVertical);
-spriteMarkerButton.addEventListener("click", toggleSpriteMarkerMode);
 spriteFillButton.addEventListener("click", toggleSpriteBucketMode);
 sourceEditor.addEventListener("click", loadSpriteFromSourceClick);
 resetSpriteBuilder();

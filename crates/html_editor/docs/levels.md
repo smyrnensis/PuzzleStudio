@@ -3,15 +3,15 @@ Use `levels` to store playable maps.
 
 ```puzzle
 levels {
-  level first
-  #####
-  #PBG#
-  #####
+level first
+#####
+#PBG#
+#####
 
-  level second
-  #######
-  #P.BG#
-  #######
+level second
+#######
+#P.BG#
+#######
 }
 ```
 
