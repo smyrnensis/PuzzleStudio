@@ -3,9 +3,9 @@ Use `if` when a block should run only when a check is true.
 
 ```puzzle
 rules {
-  if count(Box) == 0 {
-    next_level
-  }
+if count(Box) == 0 {
+next_level
+}
 }
 ```
 

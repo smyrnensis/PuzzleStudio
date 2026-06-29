@@ -1,0 +1,55 @@
+title "Microban 3D Preview Contract"
+
+puzzle3 sokoban {
+render {
+  camera {
+    yaw = 10
+    pitch = 55
+    zoom = 1.1
+  }
+}
+
+layers {
+  floor = Floor
+  target = Goal
+  solid = Player Box Wall
+}
+
+groups {
+  solid = Player Box Wall
+}
+
+rules {
+  input horizontal [ Player | Box | no solid ] -> [ | Player | Box ]
+  input horizontal [ Player | no solid ] -> [ | Player ]
+}
+}
+
+levels3 microban of sokoban {
+legend {
+. = empty
+, = Floor
+G = Floor Goal
+P = Player
+B = Box
+# = Wall
+}
+
+level microban_01 {
+####..
+#..#..
+#..###
+#BP..#
+#..B.#
+#..###
+####..
+
+,,,,,,
+,,G,,,
+,,,,,,
+,G,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+}
+}

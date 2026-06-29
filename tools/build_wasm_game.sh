@@ -30,3 +30,7 @@ if grep -aEq "solve_state|puzzle_solver|PuzzleDomain|SearchBudget|suggest_source
   echo "generated game WASM binary includes editor, solver, or core-runtime symbols" >&2
   exit 1
 fi
+
+mkdir -p crates/html_editor/static/wasm_game
+cp crates/html_play/static/wasm_game/puzzle_wasm_game.js crates/html_editor/static/wasm_game/puzzle_wasm_game.js
+cp crates/html_play/static/wasm_game/puzzle_wasm_game_bg.wasm crates/html_editor/static/wasm_game/puzzle_wasm_game_bg.wasm

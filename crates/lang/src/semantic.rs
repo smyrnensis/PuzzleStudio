@@ -88,8 +88,9 @@ pub(crate) enum SettingCompletionSet {
 pub fn semantic_tokens(source: &str) -> Vec<SemanticToken> {
     let context = scan_source_context(source);
     let mut tokens = Vec::new();
-    for line in &context.lines {
+    for (line_index, line) in context.lines.iter().enumerate() {
         let line_tokens = source_tokens_as_line_tokens(&line.token_spans);
+        scan_visual_semantic_line(&context, line_index, &line_tokens, &mut tokens);
         scan_semantic_line(line.scope, &line_tokens, &mut tokens);
     }
     tokens.extend(crate::surface_document_semantic_tokens(source));
@@ -122,7 +123,10 @@ pub(crate) fn semantic_completion_context(
         vec![SemanticCompletionSlot::Puzzles]
     } else if previous.as_deref() == Some("theme") {
         vec![SemanticCompletionSlot::Themes]
-    } else if previous.as_deref() == Some("sfx") && !sounds_definition_scope {
+    } else if previous.as_deref() == Some("sfx")
+        && (!sounds_definition_scope
+            || sounds_operation_sfx_target_context(source, token.replace_start))
+    {
         vec![SemanticCompletionSlot::SfxAssets]
     } else if matches!(
         previous.as_deref(),
@@ -854,7 +858,7 @@ fn is_completion_char(ch: char) -> bool {
     ch == '@' || ch == '_' || ch == ':' || ch == '.' || ch == '-' || ch.is_ascii_alphanumeric()
 }
 
-const SOUNDS_COMPLETION_KEYWORDS: &[&str] = &["music", "sfx"];
+const SOUNDS_COMPLETION_KEYWORDS: &[&str] = &["music", "restart", "sfx", "undo"];
 
 const ASSET_COMPLETION_KEYWORDS: &[&str] = &["css", "script"];
 
@@ -1032,8 +1036,30 @@ fn scan_sounds_semantic_line(tokens: &[LineToken<'_>], ranges: &mut Vec<Semantic
                 scan_sounds_setting_token(*setting, ranges);
             }
         }
+        [operation, arrow, sfx, name]
+            if matches!(operation.text, "undo" | "restart")
+                && arrow.text == "->"
+                && sfx.text == "sfx" =>
+        {
+            add_token_range(ranges, *operation, SemanticKind::Keyword);
+            add_token_range(ranges, *sfx, SemanticKind::Keyword);
+            add_token_range(ranges, *name, SemanticKind::Asset);
+        }
         _ => {}
     }
+}
+
+fn sounds_operation_sfx_target_context(source: &str, cursor: usize) -> bool {
+    let line_start = source[..cursor].rfind('\n').map_or(0, |index| index + 1);
+    let before = source[line_start..cursor].trim();
+    matches!(
+        split_completion_line_tokens(before).as_slice(),
+        ["undo", "->", "sfx"] | ["restart", "->", "sfx"]
+    )
+}
+
+fn split_completion_line_tokens(line: &str) -> Vec<&str> {
+    line.split_whitespace().collect()
 }
 
 fn scan_sounds_setting_token(token: LineToken<'_>, ranges: &mut Vec<SemanticToken>) {
@@ -1104,6 +1130,119 @@ fn scan_authoring_semantic_line(
             SceneStateLhsSyntax::PuzzleSlot | SceneStateLhsSyntax::Variable => SemanticKind::State,
         };
         add_token_range(ranges, name, kind);
+    }
+}
+
+fn scan_visual_semantic_line(
+    context: &crate::source::SourceContext,
+    line_index: usize,
+    tokens: &[LineToken<'_>],
+    ranges: &mut Vec<SemanticToken>,
+) {
+    let Some(line) = context.lines.get(line_index) else {
+        return;
+    };
+    if visual_semantic_closing_line(line) {
+        return;
+    }
+    let token_texts = tokens.iter().map(|token| token.text).collect::<Vec<_>>();
+    match line.scope {
+        Some(SourceScope::Visuals) => match token_texts.as_slice() {
+            ["shape", shape_ref, ..] => {
+                add_token_range(ranges, tokens[0], SemanticKind::Keyword);
+                add_visual_table_expr_token(ranges, tokens[1], shape_ref);
+            }
+            ["colors", ..] | ["pixels_per_cell", ..] | ["offset", ..] | ["rotate", ..] => {
+                add_token_range(ranges, tokens[0], SemanticKind::Keyword);
+                add_visual_rotation_keywords(ranges, tokens);
+            }
+            _ => {}
+        },
+        Some(SourceScope::VisualShapeTable) => {
+            let Some(first) = tokens.first().copied() else {
+                return;
+            };
+            match token_texts.as_slice() {
+                ["rotate", ..] => {
+                    add_token_range(ranges, first, SemanticKind::Keyword);
+                    add_visual_rotation_keywords(ranges, tokens);
+                }
+                ["shape" | "shapes" | "colors", ..] => {
+                    add_token_range(ranges, first, SemanticKind::Keyword);
+                }
+                _ => add_visual_table_ref_token(ranges, first),
+            }
+        }
+        Some(SourceScope::VisualColorTable) => {
+            let Some(first) = tokens.first().copied() else {
+                return;
+            };
+            if token_texts
+                .as_slice()
+                .get(1)
+                .is_some_and(|token| *token == "=")
+            {
+                return;
+            }
+            match first.text {
+                "shape" | "shapes" | "colors" | "rotate" => {
+                    add_token_range(ranges, first, SemanticKind::Keyword);
+                }
+                _ => add_visual_table_ref_token(ranges, first),
+            }
+        }
+        Some(SourceScope::VisualShapeEntry) => match token_texts.as_slice() {
+            ["shape", shape_ref, ..] => {
+                add_token_range(ranges, tokens[0], SemanticKind::Keyword);
+                add_visual_table_expr_token(ranges, tokens[1], shape_ref);
+            }
+            ["rotate" | "colors", ..] => {
+                add_token_range(ranges, tokens[0], SemanticKind::Keyword);
+                add_visual_rotation_keywords(ranges, tokens);
+            }
+            _ => {}
+        },
+        _ => {}
+    }
+}
+
+fn visual_semantic_closing_line(line: &crate::source::SourceContextLine) -> bool {
+    crate::source::strip_line_comment(&line.content).trim() == "}"
+}
+
+fn add_visual_table_ref_token(ranges: &mut Vec<SemanticToken>, token: LineToken<'_>) {
+    let Some((start, end)) = first_identifier_bounds(token.text) else {
+        return;
+    };
+    add_token_subrange(ranges, token, start, end, SemanticKind::Asset);
+    let suffix = &token.text[end..];
+    if let Some(axis_start) = suffix.find(':') {
+        let axis_start = end + axis_start + 1;
+        if let Some(axis_end) = identifier_end(token.text, axis_start) {
+            add_token_subrange(ranges, token, axis_start, axis_end, SemanticKind::Group);
+        }
+    }
+}
+
+fn add_visual_table_expr_token(ranges: &mut Vec<SemanticToken>, token: LineToken<'_>, text: &str) {
+    let Some((start, end)) = first_identifier_bounds(text) else {
+        return;
+    };
+    add_token_subrange(ranges, token, start, end, SemanticKind::Asset);
+    let suffix = &text[end..];
+    if let Some(value_start) = suffix.find(':') {
+        let value_start = end + value_start + 1;
+        if let Some(value_end) = identifier_end(text, value_start) {
+            add_token_subrange(ranges, token, value_start, value_end, SemanticKind::Variant);
+        }
+    }
+}
+
+fn add_visual_rotation_keywords(ranges: &mut Vec<SemanticToken>, tokens: &[LineToken<'_>]) {
+    for token in tokens.iter().skip(1) {
+        if matches!(token.text, "from" | "using") {
+            add_token_range(ranges, *token, SemanticKind::Keyword);
+        }
     }
 }
 
@@ -1985,6 +2124,63 @@ title
             token.start == component_title_start
                 && token.end == component_title_start + "title".len()
                 && token.kind == SemanticKind::Keyword
+        }));
+    }
+
+    #[test]
+    fn classifies_visual_shape_refs_by_visual_grammar_slots() {
+        let source = r#"
+title visual_shape_semantics
+
+puzzle board {
+tags {
+kind = A B
+}
+layers {
+actor = Block:kind
+}
+sprites {
+shapes {
+Block:kind {
+A {
+0
+}
+B {
+0
+}
+}
+}
+Block:kind {
+#111
+shape Block:kind
+}
+}
+}
+"#;
+        let tokens = semantic_tokens(source);
+        let shape_table_start = source.find("shapes {\nBlock:kind").unwrap() + "shapes {\n".len();
+        let shape_ref_start = source.rfind("Block:kind").unwrap();
+        let shape_value_start = shape_ref_start + "Block:".len();
+
+        assert!(tokens.iter().any(|token| {
+            token.start == shape_table_start
+                && token.end == shape_table_start + "Block".len()
+                && token.kind == SemanticKind::Asset
+        }));
+        assert!(tokens.iter().any(|token| {
+            token.start == shape_table_start + "Block:".len()
+                && token.end == shape_table_start + "Block:kind".len()
+                && token.kind == SemanticKind::Group
+        }));
+        assert!(tokens.iter().any(|token| {
+            token.start == shape_ref_start
+                && token.end == shape_ref_start + "Block".len()
+                && token.kind == SemanticKind::Asset
+        }));
+        assert!(tokens.iter().any(|token| {
+            token.start == shape_value_start
+                && token.end == shape_value_start + "kind".len()
+                && token.kind == SemanticKind::Variant
         }));
     }
 

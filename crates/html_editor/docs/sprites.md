@@ -3,16 +3,16 @@ Use `sprites` to define how objects look.
 
 ```puzzle
 puzzle sokoban {
-  sprites {
-    Box {
-      #b5651d #f4a261
-      00000
-      01110
-      01110
-      01110
-      00000
-    }
-  }
+sprites {
+Box {
+#b5651d #f4a261
+00000
+01110
+01110
+01110
+00000
+}
+}
 }
 ```
 

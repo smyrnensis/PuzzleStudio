@@ -26,8 +26,27 @@ Platform divergence belongs at the host adapter/file-access boundary.
 
 Current shell behavior opens the shared HTML editor from the editor crate's
 static assets, uses Rust-side native dialogs for project selection, scopes save
-and preview operations to the opened workspace root, and preserves app-side
-unsaved edits when external file changes conflict.
+operations to the opened workspace root, and preserves app-side unsaved edits
+when external file changes conflict. Browser preview/highlight behavior belongs
+to the editor runtime assets that Tauri serves through `frontendDist`.
+
+Before changing the desktop/editor asset boundary, run:
+
+```bash
+node tools/check_desktop_asset_boundary.mjs
+```
+
+Before shipping a desktop asset boundary change, run the same guard in enforcing
+mode:
+
+```bash
+node tools/check_desktop_asset_boundary.mjs --enforce
+```
+
+Do not treat a prose note as sufficient safety for this refactor. The executable
+guard must fail if `src-tauri` enables editor asset/export features or if
+desktop-owned Rust code embeds web assets through `include_str!` or
+`include_bytes!`.
 
 Build command:
 

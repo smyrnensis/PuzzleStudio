@@ -32,6 +32,15 @@ impl DiagnosticSpan {
             source_line: Some(source_line.into()),
         }
     }
+
+    pub fn source_line_number(source_line: impl Into<String>, line: usize) -> Self {
+        Self {
+            file: None,
+            line: Some(line),
+            column: None,
+            source_line: Some(source_line.into()),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -69,6 +78,11 @@ impl Diagnostic {
 
     pub fn with_source_line(mut self, source_line: impl Into<String>) -> Self {
         self.primary_span = Some(DiagnosticSpan::source_line(source_line));
+        self
+    }
+
+    pub fn with_source_line_number(mut self, source_line: impl Into<String>, line: usize) -> Self {
+        self.primary_span = Some(DiagnosticSpan::source_line_number(source_line, line));
         self
     }
 
@@ -110,6 +124,14 @@ impl DiagnosticReport {
 
     pub fn error_at_line(message: impl Into<String>, source_line: impl Into<String>) -> Self {
         Self::from_diagnostic(Diagnostic::error(message).with_source_line(source_line))
+    }
+
+    pub fn error_at_source_line_number(
+        message: impl Into<String>,
+        source_line: impl Into<String>,
+        line: usize,
+    ) -> Self {
+        Self::from_diagnostic(Diagnostic::error(message).with_source_line_number(source_line, line))
     }
 
     pub fn diagnostics(&self) -> &[Diagnostic] {

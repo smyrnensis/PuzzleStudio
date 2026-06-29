@@ -3,9 +3,9 @@ Use `on_*` blocks for named moments in a puzzle or scene.
 
 ```puzzle
 scene title {
-  on_scene_start {
-    stop_music theme
-  }
+on_scene_start {
+stop_music theme
+}
 }
 ```
 

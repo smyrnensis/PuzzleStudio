@@ -1,0 +1,800 @@
+title Quantum Rails
+author crb233
+
+noaction
+key_repeat_interval 0.16
+again_interval 0.08
+run_rules_on_level_start
+
+text_color #8fefff
+
+verbose_logging
+
+
+
+========
+OBJECTS
+========
+
+Background
+#979797 #9f9f9f #a7a7a7
+22211
+21111
+21110
+11110
+11000
+
+Void
+black
+
+Player
+#dfaf3f #004f9f
+.000.
+.000.
+00000
+01110
+.1.1.
+
+PlayerFall1
+#bf8f2f #003f7f
+.000.
+.000.
+00000
+01110
+.1.1.
+
+PlayerFall2
+#9f6f1f #002f5f
+.000.
+.000.
+00000
+01110
+.1.1.
+
+PlayerFall3
+#7f4f0f #001f3f
+.000.
+.000.
+00000
+01110
+.1.1.
+
+Coin
+#dfcf2f #efdf2f #ffef3f
+.....
+.221.
+.210.
+.100.
+.....
+
+CoinFall1
+#bfaf1f #cfbf1f #dfcf2f
+.....
+.221.
+.210.
+.100.
+.....
+
+CoinFall2
+#9f8f0f #af9f0f #bfaf1f
+.....
+.221.
+.210.
+.100.
+.....
+
+CoinFall3
+#7f6f00 #8f7f00 #9f8f0f
+.....
+.221.
+.210.
+.100.
+.....
+
+Rock
+#2f2f3f #3f3f4f #4f4f5f
+.....
+.221.
+.210.
+.100.
+.....
+
+RockFall1
+#2f2f3f #3f3f4f #4f4f5f
+.....
+.221.
+.210.
+.100.
+.....
+
+RockFall2
+#1f1f2f #2f2f37 #373747
+.....
+.221.
+.210.
+.100.
+.....
+
+RockFall3
+#0f0f17 #17171f #1f1f27
+.....
+.221.
+.210.
+.100.
+.....
+
+Wall
+#2f2f3f #3f3f4f #4f4f5f
+22221
+21110
+21110
+21110
+10000
+
+RailV
+#9f2f4f
+.....
+..0..
+..0..
+..0..
+.....
+
+RailH
+#9f2f4f
+.....
+.....
+.000.
+.....
+.....
+
+LockV
+#ff005f
+.....
+..0..
+..0..
+..0..
+.....
+
+LockH
+#ff005f
+.....
+.....
+.000.
+.....
+.....
+
+CoreV
+#00bfff
+.....
+..0..
+..0..
+..0..
+.....
+
+CoreH
+#00bfff
+.....
+.....
+.000.
+.....
+.....
+
+HoldV
+#8fefff
+.....
+..0..
+..0..
+..0..
+.....
+
+HoldH
+#8fefff
+.....
+.....
+.000.
+.....
+.....
+
+StuckU1
+#ffff00
+.000.
+.....
+.....
+.....
+.....
+
+StuckU2
+#ffff00
+..0..
+.....
+.....
+.....
+.....
+
+StuckD1
+#ffff00
+.....
+.....
+.....
+.....
+.000.
+
+StuckD2
+#ffff00
+.....
+.....
+.....
+.....
+..0..
+
+StuckL1
+#ffff00
+.....
+0....
+0....
+0....
+.....
+
+StuckL2
+#ffff00
+.....
+.....
+0....
+.....
+.....
+
+StuckR1
+#ffff00
+.....
+....0
+....0
+....0
+.....
+
+StuckR2
+#ffff00
+.....
+.....
+....0
+.....
+.....
+
+StuckV1
+#ffff00
+.000.
+.....
+.....
+.....
+.000.
+
+StuckV2
+#ffff00
+..0..
+.....
+.....
+.....
+..0..
+
+StuckH1
+#ffff00
+.....
+0...0
+0...0
+0...0
+.....
+
+StuckH2
+#ffff00
+.....
+.....
+0...0
+.....
+.....
+
+Input
+transparent
+
+Fall
+transparent
+
+
+
+=======
+LEGEND
+=======
+
+( What can Rails and Cores be connected to? )
+Grab = Player or Coin or Rock or Wall
+
+( What can move? )
+Move = Player or Coin or Rock
+
+( What stops different objects? )
+StopP = Player or         Rock or Wall
+StopC =           Coin or Rock or Wall
+StopR = Player or Coin or Rock or Wall
+
+( Cores and Rails are both Tech)
+TechV = CoreV or RailV
+TechH = CoreH or RailH
+Tech = TechV or TechH
+
+( Which Rails are locked to Cores and which Cores are holding Rails )
+Lock = LockV or LockH
+Hold = HoldV or HoldH
+
+( Which objects are stuck )
+Stuck = StuckU1 or StuckD1 or StuckL1 or StuckR1 or StuckV1 or StuckH1
+
+( Falling animations )
+PlayerFall = PlayerFall1 or PlayerFall2 or PlayerFall3
+CoinFall   = CoinFall1   or CoinFall2   or CoinFall3
+RockFall   = RockFall1   or RockFall2   or RockFall3
+
+( Losing states )
+Lost = PlayerFall or CoinFall
+
+
+
+. = Background
+x = Void
+
+a = Player
+b = Player and RailV
+c = Player and RailH
+d = Player and RailV and RailH
+e = Player and CoreV
+f = Player and CoreH
+g = Player and CoreV and CoreH
+
+0 = Coin
+1 = Coin and RailV
+2 = Coin and RailH
+3 = Coin and RailV and RailH
+4 = Coin and CoreV
+5 = Coin and CoreH
+6 = Coin and CoreV and CoreH
+
+o = Rock
+│ = Rock and RailV
+─ = Rock and RailH
+┼ = Rock and RailV and RailH
+║ = Rock and CoreV
+═ = Rock and CoreH
+╬ = Rock and CoreV and CoreH
+
+▫ = Wall
+▯ = Wall and RailV
+▭ = Wall and RailH
+□ = Wall and RailV and RailH
+▮ = Wall and CoreV
+▬ = Wall and CoreH
+■ = Wall and CoreV and CoreH
+
+
+
+=======
+SOUNDS
+=======
+
+( Player move )
+sfx1 69119307 (51655107)
+
+( Player can't move )
+sfx2 99171702
+
+( Collect coin )
+sfx3 14818303
+
+( Player or coin fall )
+sfx4 72532502
+
+( Rock fall )
+sfx5 32170502
+
+( Core powered )
+(sfx6 56221903)
+
+
+
+================
+COLLISIONLAYERS
+================
+
+Background
+Void
+CoinFall, PlayerFall, RockFall
+Player, Coin, Rock, Wall
+
+RailV
+RailH
+LockV
+LockH
+CoreV
+CoreH
+HoldV
+HoldH
+
+StuckU1, StuckU2
+StuckD1, StuckD2
+StuckL1, StuckL2
+StuckR1, StuckR2
+StuckV1, StuckV2
+StuckH1, StuckH2
+
+Input
+Fall
+
+
+
+======
+RULES
+======
+
+( Stopping animation )
+[ StuckU2 ] -> [ ]
+[ StuckD2 ] -> [ ]
+[ StuckL2 ] -> [ ]
+[ StuckR2 ] -> [ ]
+[ StuckV2 ] -> [ ]
+[ StuckH2 ] -> [ ]
+[ StuckU1 ] -> [ StuckU2 ] again
+[ StuckD1 ] -> [ StuckD2 ] again
+[ StuckL1 ] -> [ StuckL2 ] again
+[ StuckR1 ] -> [ StuckR2 ] again
+[ StuckV1 ] -> [ StuckV2 ] again
+[ StuckH1 ] -> [ StuckH2 ] again
+
+( Falling animations )
+[ PlayerFall2 ] -> [ PlayerFall3 ]
+[ PlayerFall1 ] -> [ PlayerFall2 ] again
+
+[ CoinFall2   ] -> [ CoinFall3   ]
+[ CoinFall1   ] -> [ CoinFall2   ] again
+
+[ RockFall3   ] -> [             ]
+[ RockFall2   ] -> [ RockFall3   ] again
+[ RockFall1   ] -> [ RockFall2   ] again
+
+( Remember when there's player input )
+[ moving Player ] -> [ moving Player Input ]
+
+( Do nothing else when there's a fallen player or coin )
+[ Lost ] [ Player ] -> [ Lost ] [ stationary Player ]
+[ Lost ] [ Input  ] -> [ Lost ] [ ]
+
+( Remove all locks and holds. These are purely visual )
+[ Lock ] -> [ ]
+[ Hold ] -> [ ]
+
+( Players move connected Tech )
+vertical   [ parallel Player TechV ] -> [ parallel Player parallel TechV ]
+horizontal [ parallel Player TechH ] -> [ parallel Player parallel TechH ]
+
+( Cores move parallel Tech )
+startloop
+vertical   [ parallel CoreV | ... | TechV ] -> [ parallel CoreV | ... | parallel TechV ]
+horizontal [ parallel CoreH | ... | TechH ] -> [ parallel CoreH | ... | parallel TechH ]
+vertical   [ parallel TechV | ... | CoreV ] -> [ parallel TechV | ... | parallel CoreV ]
+horizontal [ parallel TechH | ... | CoreH ] -> [ parallel TechH | ... | parallel CoreH ]
+endloop
+
+( Tech tries to move connected objects )
+[ > Tech Move ] -> [ > Tech > Move ]
+
+( Iteratively stop objects )
+startloop
+
+( Stop for obstacles )
+vertical   [ > Tech Wall ] -> [ Tech Wall StuckV1 ] again
+horizontal [ > Tech Wall ] -> [ Tech Wall StuckH1 ] again
+up    [ > Player | stationary StopP no Stuck ] -> [ Player StuckU1 | StopP ] again
+up    [ > Coin   | stationary StopC no Stuck ] -> [ Coin   StuckU1 | StopC ] again
+up    [ > Rock   | stationary StopR no Stuck ] -> [ Rock   StuckU1 | StopR ] again
+down  [ > Player | stationary StopP no Stuck ] -> [ Player StuckD1 | StopP ] again
+down  [ > Coin   | stationary StopC no Stuck ] -> [ Coin   StuckD1 | StopC ] again
+down  [ > Rock   | stationary StopR no Stuck ] -> [ Rock   StuckD1 | StopR ] again
+left  [ > Player | stationary StopP no Stuck ] -> [ Player StuckL1 | StopP ] again
+left  [ > Coin   | stationary StopC no Stuck ] -> [ Coin   StuckL1 | StopC ] again
+left  [ > Rock   | stationary StopR no Stuck ] -> [ Rock   StuckL1 | StopR ] again
+right [ > Player | stationary StopP no Stuck ] -> [ Player StuckR1 | StopP ] again
+right [ > Coin   | stationary StopC no Stuck ] -> [ Coin   StuckR1 | StopC ] again
+right [ > Rock   | stationary StopR no Stuck ] -> [ Rock   StuckR1 | StopR ] again
+[ > Player | stationary StopP ] -> [ Player | StopP ]
+[ > Coin   | stationary StopC ] -> [ Coin   | StopC ]
+[ > Rock   | stationary StopR ] -> [ Rock   | StopR ]
+
+( Stop connected tech )
+[ Tech stationary Grab ] -> [ stationary Tech Grab ]
+
+( Stopped tech stops parallel tech )
+vertical   [ parallel TechV | ... | stationary TechV ] -> [ TechV | ... | TechV ]
+horizontal [ parallel TechH | ... | stationary TechH ] -> [ TechH | ... | TechH ]
+
+( Stopped tech stops connected objects )
+vertical   [ stationary TechV parallel Grab ] -> [ TechV Grab ]
+horizontal [ stationary TechH parallel Grab ] -> [ TechH Grab ]
+endloop
+
+( Objects move connected tech )
+[ > Move Tech ] -> [ > Move > Tech ]
+
+( Player collects coins )
+[ > Coin   | stationary Player ] -> [          | Player ] sfx3
+[ > Player | stationary Coin   ] -> [ > Player |        ] sfx3
+
+( Unattached tech is destroyed )
+[ Tech no Grab ] -> [ ]
+
+( If any player moved on input, play the move sound effect )
+[ Input ] [ > Player ] -> sfx1
+
+( If no players moved on input, play the stop sound effect )
+[ Input ] [ > Player ] [ stationary Player ] -> [ Input ] [ > Player ] [ action Player ]
+[ Input ] [ stationary Player ] -> sfx2
+[ Input ] [ action Player ] -> [ Input ] [ Player ]
+
+( Which objects are over a void )
+late [ Move Void ] -> [ Move Fall Void ]
+
+( Which objects are indirectly held up by the floor )
+startloop
+late vertical   [ CoreV no Fall | ... | TechV Fall ] -> [ CoreV | ... | TechV ]
+late horizontal [ CoreH no Fall | ... | TechH Fall ] -> [ CoreH | ... | TechH ]
+late vertical   [ TechV no Fall | ... | CoreV Fall ] -> [ TechV | ... | CoreV ]
+late horizontal [ TechH no Fall | ... | CoreH Fall ] -> [ TechH | ... | CoreH ]
+endloop
+
+( Make players and objects fall )
+late [ Player Fall ] -> [ PlayerFall1 no Tech ] sfx4 again
+late [ Coin   Fall ] -> [ CoinFall1   no Tech ] sfx4 again
+late [ Rock   Fall ] -> [ ROckFall1   no Tech ] sfx5 again
+
+( Remove falling markers )
+late [ Fall ] -> [ ]
+
+( Show which cores and rails are locked to each other )
+late vertical   [ CoreV | ... | CoreV ] -> [ CoreV HoldV | ... | CoreV HoldV ]
+late horizontal [ CoreH | ... | CoreH ] -> [ CoreH HoldH | ... | CoreH HoldH ]
+late vertical   [ CoreV | ... | RailV ] -> [ CoreV HoldV | ... | RailV LockV ]
+late horizontal [ CoreH | ... | RailH ] -> [ CoreH HoldH | ... | RailH LockH ]
+
+( Remove player input )
+late [ Input ] -> [ ]
+
+
+
+==============
+WINCONDITIONS
+==============
+
+no Lost
+no Coin
+
+
+
+=======
+LEVELS
+=======
+
+(
+
+. = Background
+x = Void
+
+a = Player
+b = Player and RailV
+c = Player and RailH
+d = Player and RailV and RailH
+e = Player and CoreV
+f = Player and CoreH
+g = Player and CoreV and CoreH
+
+0 = Coin
+1 = Coin and RailV
+2 = Coin and RailH
+3 = Coin and RailV and RailH
+4 = Coin and CoreV
+5 = Coin and CoreH
+6 = Coin and CoreV and CoreH
+
+o = Rock
+│ = Rock and RailV
+─ = Rock and RailH
+┼ = Rock and RailV and RailH
+║ = Rock and CoreV
+═ = Rock and CoreH
+╬ = Rock and CoreV and CoreH
+
+▫ = Wall
+▭ = Wall and RailV
+▯ = Wall and RailH
+□ = Wall and RailV and RailH
+▬ = Wall and CoreV
+▮ = Wall and CoreH
+■ = Wall and CoreV and CoreH
+
+)
+
+(
+▫▫▫▫▫▫▫▫▫
+▫g.▫..─▫▫
+▫.....│▫▫
+▫..│.│.▫▫
+▫─..▫▫.0▫
+▫─..▫▫┼.▫
+▫▫▫▫▫▫▫▫▫
+
+▫▫▫▫▫▫▫▫▫
+▫.......▫
+▫.......▫
+▫.......▫
+▫.......▫
+▫.......▫
+▫▫▫▫▫▫▫▫▫
+)
+
+message That's our new quantum core. It locks your movement with all parallel rails. Try it out!
+
+message 1 / 15
+
+▫▫▫▫▫▫▫▫▫▫
+▫g▫──....▫
+▫.▫.─..▫.▫
+▫...─..▫0▫
+▫▫▫▫▫▫▫▫▫▫
+
+message 2 / 15
+
+▫▫▫▫▫▫▫▫▫
+▫▫▫▫│.││▫
+▫▫▫▫.│..▫
+▫▫▫▫▫▫▫▫▫
+▫.─▫.g..▫
+▫─.▫....▫
+▫─.▫....▫
+▫─.▫...0▫
+▫▫▫▫▫▫▫▫▫
+
+message 3 / 15
+
+▫▫▫▫▫▫▫▫▫
+▫│.│││▫▫▫
+▫─│─....▫
+▫▫▫▫▫▫..▫
+▫g......▫
+▫.....▫▫▫
+▫...▫▫▫▫▫
+▫0▫▫▫▫▫▫▫
+▫▫▫▫▫▫▫▫▫
+
+message Without the core, we'd never be able to move these blocks around.
+
+message 4 / 15
+
+▫▫▫▫▫▫▫▫▫
+▫g0▫...─▫
+▫.▫.┼─..▫
+▫.┼.─...▫
+▫▫▫▫▫▫▫▫▫
+
+message 5 / 15
+
+▫▫▫▫▫▫▫
+▫...┼▫▫
+▫...─g▫
+▫▫▫..▫▫
+▫..┼▫▫▫
+▫0▫▫▫▫▫
+▫▫▫▫▫▫▫
+
+message 6 / 15
+
+▫▫▫▫▫▫▫▫▫
+▫g.│.▫▫▫▫
+▫.│││.▫0▫
+▫....─..▫
+▫.│..▫▫▫▫
+▫▫▫▫▫▫▫▫▫
+
+( TODO more levels )
+
+message That rail is stuck to the wall. It just won't budge.
+
+message 7 / 15
+
+▫▫▫▫▫▫▫
+▫..0.─▫
+▫...─.▫
+▫g..─.▫
+▫▫▫▯▫▫▫
+
+message 8 / 15
+
+▫▫▫▯▫▫▫
+▫.0─│.▫
+▫.▫..g▫
+▫┼....▫
+▫▫▫▫..▫
+▫▫▫▫.▫▫
+▫▫▫▫▫▫▫
+
+( TODO more wall with rail levels )
+
+message Even that coin has a rail. Maybe try grabing it from the side.
+
+message 9 / 15
+
+▫▫▫▫▫▫▫▫▫
+▫▫▫..▫g2▫
+▫▫.─┼..▫▫
+▫.─..┼.▫▫
+▫▫▫▫▫▫▫▫▫
+
+message 10 / 15
+
+▫▫▫▫▫▫▫▫
+▫....┼.▫
+▫─..─..▫
+▫...▫▫1▫
+▫▫│...g▫
+▫▫▫│▫▫▫▫
+▫▫▫▫▫▫▫▫
+
+message 11 / 15
+
+▫▫▫▫▫▫▫▫▫
+▫┼.g.2▫▫▫
+▫..│▫▫▫▫▫
+▫...▫.─.▫
+▫▫▫▫▫▫▫▫▫
+
+( TODO more coin with rail levels )
+
+message Watch out for the pit!
+
+message 12 / 15
+
+▫▫▫▫▫▫▫▫▫
+▫.g..┼▫▫▫
+▫.....▫▫▫
+▫▫x▫▫▫▫▫▫
+▫...▫─..▫
+▫...x─.0▫
+▫...▫─..▫
+▫▫▫▫▫▫▫▫▫
+
+message 13 / 15
+
+▫▫▫▫▫▫▫▫▫▫
+▫..─xxxx▫▫
+▫g.─xxxx▫▫
+▫...xxx.▫▫
+▫▫▫▫▫▫▫│0▫
+▫▫▫▫▫▫▫▫▫▫
+
+message 14 / 15
+
+▫▫▫▫▫▫▫▫▫
+▫.──xx.▫▫
+▫2.xx1.▫▫
+▫...─g▫▫▫
+▫▫▫▫▫▫▫▫▫
+
+message 15 / 15
+
+▫▫▫▫▫▫▫▫
+▫..x.▫▫▫
+▫..x..2▫
+▫.┼g▫▫▫▫
+▫▫▫▫▫▫▫▫
+
+( TODO more pit levels )
+
+( TODO introduce multiple players )
+
+( TODO introduce polarized cores )
+
+( TODO introduce players with rails rather than cores )
+
+( TODO introduce rocks and coins with cores rather than rails )

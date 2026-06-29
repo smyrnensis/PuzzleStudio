@@ -10,6 +10,8 @@ const documentStoreKey = "PuzzleStudioFileTree:v4";
 const legacyDocumentStoreKey = "PuzzleStudioEditorStore:v1";
 let sourceCursorPreviewKey = "";
 let sourceTargetRequestId = 0;
+let sourceCursorResolveSignature = null;
+let sourceCursorResolveRegion = null;
 let sourceNavigationBackStack = [];
 let sourceNavigationForwardStack = [];
 let sourceNavigationRestoring = false;
@@ -2382,12 +2384,6 @@ function starterPuzzleTitle(name) {
 
 async function newPuzzleSourceForFile(name) {
   const title = starterPuzzleTitle(name);
-  if (!editorSeed && isDesktopHost()) {
-    if (typeof window.PuzzleStudioHost.newPuzzleSource !== "function") {
-      throw new Error("desktop new puzzle source command is unavailable");
-    }
-    return window.PuzzleStudioHost.newPuzzleSource({ title });
-  }
   return starterPuzzleSourceFromTitle(title);
 }
 

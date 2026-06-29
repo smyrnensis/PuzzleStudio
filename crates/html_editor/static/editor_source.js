@@ -71,6 +71,7 @@ let sourceCompositionPreviewSource = "";
 let sourceCompositionRange = null;
 let sourceLevelBuilderResetFrame = 0;
 let sourceLevelBuilderResetCells = false;
+let sourceLevelBuilderResetSignature = null;
 let sourceLineNumberSource = null;
 let sourceLineNumberColumns = 0;
 let sourceLineNumberLineHeight = 0;
@@ -1007,6 +1008,29 @@ function clearSourceCompositionPreview() {
 }
 
 function scheduleLevelBuilderResetFromSource(resetCells = false) {
+  // The level builder is rebuilt from the last *compiled* preview export, which
+  // typing alone never changes, so a reset here only matters while the level
+  // pane is actually on screen. When it is hidden the board is re-rendered the
+  // moment the pane is shown (mode switch / compile), so skipping the per-frame
+  // render avoids a full board + solver re-render on every keystroke.
+  if (!(isPaneVisible("level") && levelBuilder && !levelBuilder.hidden)) {
+    return;
+  }
+  // The board is rebuilt from the compiled preview export, which typing never
+  // changes (a recompile does). When no export exists yet the palette falls back
+  // to the live source, so include that in the signature. Skipping unchanged
+  // resets avoids a full board + solver re-render on every keystroke while the
+  // level pane is open. Cell-resetting requests always run.
+  if (!resetCells && !sourceLevelBuilderResetCells) {
+    const exportData = currentPreviewExportData();
+    const signature = exportData || `live:${sourceEditorDocumentValue()}`;
+    if (signature === sourceLevelBuilderResetSignature) {
+      return;
+    }
+    sourceLevelBuilderResetSignature = signature;
+  } else {
+    sourceLevelBuilderResetSignature = null;
+  }
   sourceLevelBuilderResetCells = sourceLevelBuilderResetCells || Boolean(resetCells);
   if (sourceLevelBuilderResetFrame) {
     return;
@@ -1305,7 +1329,12 @@ async function showSourceCompletions(options = {}) {
     if (requestId !== sourceCompletionRequestId || source !== sourceEditor.value || cursor !== sourceEditor.selectionStart) {
       return false;
     }
-    const items = filterSourceCompletionsForDocument(list?.items || [], document);
+    const items = filterSourceCompletionsForTypedReplacement(
+      filterSourceCompletionsForDocument(list?.items || [], document),
+      list,
+      source,
+      cursor,
+    );
     if (!items.length) {
       hideSourceCompletions();
       return false;
@@ -1356,6 +1385,20 @@ function filterSourceCompletionsForDocument(items, document) {
     return items;
   }
   return items.filter((item) => !hidden.has(item?.label || ""));
+}
+
+function filterSourceCompletionsForTypedReplacement(items, list, source, cursor) {
+  const replaceStart = Math.max(0, Math.min(source.length, Number(list?.replaceStart) || 0));
+  const safeCursor = Math.max(replaceStart, Math.min(source.length, Number(cursor) || replaceStart));
+  const replaceEnd = Math.max(safeCursor, Math.min(source.length, Number(list?.replaceEnd) || safeCursor));
+  // The full token under the caret, not just the prefix before it: when the
+  // cursor lands inside an existing word we must still suppress a suggestion
+  // that would replace it with the identical text.
+  const current = source.slice(replaceStart, replaceEnd);
+  if (!current) {
+    return items;
+  }
+  return items.filter((item) => (item?.insertText || item?.label || "") !== current);
 }
 
 function suggestSourceCompletionsFromEditorContext(source, cursor, document) {
@@ -2636,7 +2679,7 @@ sourceEditor.addEventListener("input", () => {
   }
   scheduleLocalSave();
   scheduleLevelBuilderResetFromSource(false);
-  syncPreviewModeFromSourceCursor();
+  scheduleSourceCursorPreviewSync();
   schedulePreview();
 });
 sourceEditor.addEventListener("compositionend", () => {
@@ -2683,7 +2726,7 @@ sourceEditor.addEventListener("keyup", (event) => {
   if (event.key.startsWith("Arrow") || event.key === "Home" || event.key === "End") {
     showSourceColorEditor();
     showSourceCompletions({ manual: false });
-    syncPreviewModeFromSourceCursor();
+    scheduleSourceCursorPreviewSync();
   }
   renderSourceBlockSelection();
 });
@@ -2701,7 +2744,7 @@ document.addEventListener("selectionchange", () => {
     renderSourceBlockSelection();
     return;
   }
-  syncPreviewModeFromSourceCursor();
+  scheduleSourceCursorPreviewSync();
   syncSourceFindIndexFromSelection();
   renderSourceBlockSelection();
 });
@@ -3056,10 +3099,16 @@ function renderSourceLineNumbers() {
   sourceLineNumberColumns = columns;
   sourceLineNumberLineHeight = lineHeight;
   const foldBlocksByLine = sourceFoldBlocksByOpenLine(documentSource);
+  // Without active folds, view lines map 1:1 to document lines, so the line
+  // index is just the loop counter. Resolving it via sourceLineIndexForFoldOffset
+  // is an O(lines) scan per line -> O(lines^2) per keystroke; only pay that when
+  // folds actually remap the view.
+  const foldsRemapLines = sourceFoldsActive();
   let viewLineStart = 0;
-  sourceLineNumbers.innerHTML = visibleLines.map((line) => {
-    const sourceOffset = sourceViewOffsetToDocumentOffset(viewLineStart, "start");
-    const sourceLineIndex = sourceLineIndexForFoldOffset(documentLines, sourceOffset);
+  sourceLineNumbers.innerHTML = visibleLines.map((line, viewLineIndex) => {
+    const sourceLineIndex = foldsRemapLines
+      ? sourceLineIndexForFoldOffset(documentLines, sourceViewOffsetToDocumentOffset(viewLineStart, "start"))
+      : viewLineIndex;
     const foldBlock = foldBlocksByLine.get(sourceLineIndex) || null;
     const folded = foldBlock ? sourceFoldedBlockKeys.has(foldBlock.key) : false;
     const visualRows = sourceVisualRowCount(line, columns);
@@ -3503,11 +3552,19 @@ function sourceMatchingPatternOpen(text, closeIndex) {
   return -1;
 }
 
+function sourcePatternCellSeparator(char) {
+  return char === "|" || char === ";";
+}
+
 function sourceEmptyRewritePattern(pattern) {
   return String(pattern || "").replace(/\[[^\]\[]*\]/g, (cell) => {
     const body = cell.slice(1, -1);
-    const parts = body.split("|");
-    return `[ ${Array(parts.length).fill("").join(" | ")} ]`;
+    const separators = Array.from(body).filter(sourcePatternCellSeparator);
+    if (!separators.length) {
+      return "[  ]";
+    }
+    const emptyBody = separators.map((separator) => separator === "|" ? " | " : ";").join("");
+    return `[ ${emptyBody} ]`;
   });
 }
 
@@ -3527,7 +3584,7 @@ function sourceRewritePatternSlotOffsets(pattern) {
       segmentStart = segmentEnd + 1;
     };
     for (let index = 0; index <= body.length; index += 1) {
-      if (index === body.length || body[index] === "|") {
+      if (index === body.length || sourcePatternCellSeparator(body[index])) {
         pushSegment(index);
       }
     }
@@ -3566,7 +3623,7 @@ function sourceRuleBracketCellSlots(source, cursor) {
     segmentStart = segmentEnd + 1;
   };
   for (let index = 0; index <= body.length; index += 1) {
-    if (index === body.length || body[index] === "|") {
+    if (index === body.length || sourcePatternCellSeparator(body[index])) {
       pushSegment(index);
     }
   }

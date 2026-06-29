@@ -221,6 +221,7 @@ impl StandaloneSessionBridge {
             "currentScene": current_scene,
             "focusedScreen": current_scene,
             "focusedScene": current_scene,
+            "acceptsModelInput": self.session.accepts_model_input(&self.loaded),
             "visibleScenes": self.session.visible_scenes(),
             "gameState": scene_values_value(self.session.session_values()),
             "sceneState": scene_state,
@@ -454,6 +455,9 @@ fn focused_scene_value(loaded: &LoadedGame, session: &GameSession) -> Value {
             level,
             scene_resources(loaded, session.focused_scene()),
         );
+    }
+    if !loaded.scenes.is_empty() {
+        return Value::Null;
     }
     scene_value_for_state(
         loaded,
@@ -1942,9 +1946,13 @@ A
 
     #[test]
     fn standalone_session_bridge_uses_rust_session_for_requests() {
-        let source = include_str!("../../../games/spec_2d.puzzle");
-        let mut bridge =
-            StandaloneSessionBridge::from_source(source, "games/spec_2d.puzzle").unwrap();
+        let source =
+            include_str!("../../../crates/lang/tests/fixtures/spec_2d_microban_basic.puzzle");
+        let mut bridge = StandaloneSessionBridge::from_source(
+            source,
+            "crates/lang/tests/fixtures/spec_2d_microban_basic.puzzle",
+        )
+        .unwrap();
 
         let title: Value =
             serde_json::from_str(&bridge.request_json("GET", "/api/state").unwrap()).unwrap();
@@ -1964,6 +1972,71 @@ A
 
         let save: Value = serde_json::from_str(&bridge.progress_save_json()).unwrap();
         assert_eq!(save["currentLevel"], "microban.1");
+    }
+
+    #[test]
+    fn standalone_session_bridge_reports_no_scene_for_non_model_focus() {
+        let source = r#"
+title runtime_focus
+sounds {
+sfx step seed=step type=jump
+}
+puzzle default {
+layers {
+actor = Player
+}
+empty .
+rules {
+down [ Player | no Player ] -> [ | Player ] sfx step
+}
+levels {
+legend {
+. = empty
+P = Player
+}
+level start {
+P
+.
+}
+}
+}
+
+scene playing {
+state {
+board = puzzle default
+}
+layout {
+board
+}
+rules {
+step board
+}
+}
+
+scene level_select {
+layout {
+level_menu
+}
+}
+"#;
+        let mut bridge =
+            StandaloneSessionBridge::from_source(source, "games/runtime_focus.puzzle").unwrap();
+
+        let select: Value = serde_json::from_str(
+            &bridge
+                .request_json("POST", "/api/command/goto%20level_select")
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(select["currentScene"], json!("level_select"));
+        assert!(select["scene"].is_null());
+        assert!(select["sceneLayers"][0]["scene"].is_null());
+
+        let after_input: Value =
+            serde_json::from_str(&bridge.request_json("POST", "/api/input/down").unwrap()).unwrap();
+        assert_eq!(after_input["currentScene"], json!("level_select"));
+        assert!(after_input["scene"].is_null());
+        assert_eq!(after_input["soundEvents"], json!([]));
     }
 
     #[test]
@@ -2041,9 +2114,13 @@ step board
 
     #[test]
     fn spec_2d_new_game_uses_scene_input_and_scene_puzzle_state() {
-        let source = include_str!("../../../games/spec_2d.puzzle");
-        let mut bridge =
-            StandaloneSessionBridge::from_source(source, "games/spec_2d.puzzle").unwrap();
+        let source =
+            include_str!("../../../crates/lang/tests/fixtures/spec_2d_microban_basic.puzzle");
+        let mut bridge = StandaloneSessionBridge::from_source(
+            source,
+            "crates/lang/tests/fixtures/spec_2d_microban_basic.puzzle",
+        )
+        .unwrap();
 
         let title: Value =
             serde_json::from_str(&bridge.request_json("GET", "/api/state").unwrap()).unwrap();
@@ -2117,12 +2194,16 @@ step board
 
     #[test]
     fn spec_2d_direction_input_changes_state_after_new_game() {
-        let source = include_str!("../../../games/spec_2d.puzzle");
+        let source =
+            include_str!("../../../crates/lang/tests/fixtures/spec_2d_microban_basic.puzzle");
         let mut changed_input = None;
 
         for input in ["up", "down", "left", "right"] {
-            let mut bridge =
-                StandaloneSessionBridge::from_source(source, "games/spec_2d.puzzle").unwrap();
+            let mut bridge = StandaloneSessionBridge::from_source(
+                source,
+                "crates/lang/tests/fixtures/spec_2d_microban_basic.puzzle",
+            )
+            .unwrap();
             let before = start_spec_2d_new_game(&mut bridge);
             let after: Value = serde_json::from_str(
                 &bridge
@@ -2239,9 +2320,13 @@ rules {
 
     #[test]
     fn standalone_session_bridge_restores_progress_save() {
-        let source = include_str!("../../../games/spec_2d.puzzle");
-        let mut bridge =
-            StandaloneSessionBridge::from_source(source, "games/spec_2d.puzzle").unwrap();
+        let source =
+            include_str!("../../../crates/lang/tests/fixtures/spec_2d_microban_basic.puzzle");
+        let mut bridge = StandaloneSessionBridge::from_source(
+            source,
+            "crates/lang/tests/fixtures/spec_2d_microban_basic.puzzle",
+        )
+        .unwrap();
         bridge
             .restore_progress_save_json(
                 r#"{"version":1,"levels":[{"name":"microban.2","cleared":true}],"currentLevel":"microban.2","persistentVars":[]}"#,

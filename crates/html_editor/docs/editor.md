@@ -4,60 +4,60 @@ PuzzleStudio reads `.puzzle` files. Start with one `puzzle` block, then add the 
 ## Smallest Shape
 ```puzzle
 puzzle my_game {
-  layers {
-    target = Goal
-    solid = Player Wall
-  }
+layers {
+Goal
+Player Wall
+}
 
-  sprites {
-    Goal {
-      #ffd166
-      .....
-      .000.
-      .0.0.
-      .000.
-      .....
-    }
-    Player {
-      #2d6cdf
-      .000.
-      .0.0.
-      .000.
-      ..0..
-      .0.0.
-    }
-    Wall {
-      #6c757d
-      00000
-      00000
-      00000
-      00000
-      00000
-    }
-  }
+sprites {
+Goal {
+#ffd166
+.....
+.000.
+.0.0.
+.000.
+.....
+}
+Player {
+#2d6cdf
+.000.
+.0.0.
+.000.
+..0..
+.0.0.
+}
+Wall {
+#6c757d
+00000
+00000
+00000
+00000
+00000
+}
+}
 
-  win_conditions {
-    all Goal on Player
-  }
+win_conditions {
+all Goal on Player
+}
 
-  rules {
-    input [ Player ] -> [ > Player ]
-    move
-  }
+rules {
+input [ Player ] -> [ > Player ]
+move
+}
 
-  levels {
-    legend {
-      . = empty
-      G = Goal
-      # = Wall
-      P = Player
-    }
+levels {
+legend {
+. = empty
+G = Goal
+# = Wall
+P = Player
+}
 
-    level start
-    #####
-    #P.G#
-    #####
-  }
+level start
+#####
+#P.G#
+#####
+}
 }
 ```
 
@@ -77,7 +77,7 @@ Read Rewrite Rules, Input Rules, Movement, Guards, and Fix.
 Read Variables, Scratch, Conditions, and Win Conditions.
 
 ## Screen Flow
-Read Scenes, Scene Layout, Inputs, Menus, and Lifecycle.
+Read Scenes, Scene Layout, Semantic Inputs, Menus, and Lifecycle.
 
 ## Presentation
 Read Sprites, Display, Theme, and Sounds.

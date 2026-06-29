@@ -3,22 +3,21 @@ Use display objects for rendered helpers such as floors, cursors, hints, and hig
 
 ```puzzle
 puzzle sokoban {
-  layers {
-    @floor = @Floor
-    solid = Player Box Wall
-  }
+layers {
+Player Box Wall
+@Floor
+}
 
-  routine @fill_floor repeat {
-    [ no @Floor ] -> [ @Floor ]
-  }
+routine @fill_floor repeat {
+[ no @Floor ] -> [ @Floor ]
+}
 
-  on_display {
-    @fill_floor
-  }
+on_display {
+@fill_floor
+}
 }
 ```
 
 Names starting with `@` are display objects.
 
 `on_display` can produce visual helpers without changing saved play state.
-

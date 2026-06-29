@@ -3,26 +3,37 @@ Use a `puzzle` block for one playable ruleset.
 
 ```puzzle
 puzzle sokoban {
-  layers {
-    target = Goal
-    solid = Player Box Wall
-  }
+layers {
+Goal
+Player Box Wall
+}
 
-  rules {
-    input [ Player ] -> [ > Player ]
-    move
-  }
+win_conditions {
+all Goal on Box
+}
 
-  levels {
-    level start
-    #####
-    #PBG#
-    #####
-  }
+rules {
+input [ Player ] -> [ > Player ]
+[ > Player | Box ] -> [ > Player | > Box ]
+move
+}
+
+levels {
+legend {
+. = empty
+P = Player
+B = Box
+G = Goal
+}
+
+level start
+#####
+#PBG#
+#####
+}
 }
 ```
 
 A puzzle usually contains layers, sprites, rules, win conditions, and levels.
 
 Files can contain more than one puzzle when scenes need to switch between them.
-

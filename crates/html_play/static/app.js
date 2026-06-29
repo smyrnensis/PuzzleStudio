@@ -34,6 +34,8 @@ class PuzzleSoundRuntime {
     this.activeMusic = new Map();
     this.pausedMusic = new Map();
     this.visibilityPausedMusic = new Map();
+    this.sfxEffectCache = new Map();
+    this.sfxEffectApi = null;
     this.soundWarnings = new Set();
   }
 
@@ -71,6 +73,10 @@ class PuzzleSoundRuntime {
     return this.context;
   }
 
+  primePlayback() {
+    this.ensureContext();
+  }
+
   playSfx(name) {
     if (this.shouldSuppressPlayback()) {
       return;
@@ -84,7 +90,7 @@ class PuzzleSoundRuntime {
     const volume = Number(def.volume ?? 1);
     if (api?.generateSoundEffect && api?.createSfxPlayer) {
       try {
-        const effect = api.generateSoundEffect(def.seed, { type: def.type || "random" });
+        const effect = this.sfxEffect(api, def);
         const player = api.createSfxPlayer(context, effect, { volume });
         player.start(context.currentTime);
       } catch (error) {
@@ -97,6 +103,21 @@ class PuzzleSoundRuntime {
 
   sfxDef(name) {
     return (this.sounds.sfx || []).find((entry) => entry.name === name);
+  }
+
+  sfxEffect(api, def) {
+    if (this.sfxEffectApi !== api) {
+      this.sfxEffectApi = api;
+      this.sfxEffectCache.clear();
+    }
+    const type = def.type || "random";
+    const key = `${String(def.seed)}\u0000${type}`;
+    let effect = this.sfxEffectCache.get(key);
+    if (!effect) {
+      effect = api.generateSoundEffect(def.seed, { type });
+      this.sfxEffectCache.set(key, effect);
+    }
+    return effect;
   }
 
   playMusic(name, resume = {}) {
@@ -221,6 +242,9 @@ const standaloneRuntime = window.PuzzleStandaloneRuntime
   : null;
 const soundRuntime = new PuzzleSoundRuntime();
 
+document.addEventListener("keydown", () => soundRuntime.primePlayback(), { capture: true });
+document.addEventListener("pointerdown", () => soundRuntime.primePlayback(), { capture: true });
+
 let currentState = null;
 let swipeStart = null;
 const puzzleViewports = new Map();
@@ -333,7 +357,6 @@ function render(state) {
   scheduleSelectedLevelMenuScroll();
   scheduleScreenScaleSync(3);
   notifyPreviewState(state);
-  focusShell();
   applyMessageEvents(state?.messageEvents || []);
 }
 
@@ -342,6 +365,7 @@ function scheduleScreenScaleSync(passes = 2) {
     return;
   }
   screenScaleSyncPasses = Math.max(screenScaleSyncPasses, Math.max(1, Math.trunc(Number(passes) || 1)));
+  clampScreenScaleToFrame();
   if (screenScaleSyncFrame) {
     return;
   }
@@ -354,6 +378,50 @@ function scheduleScreenScaleSync(passes = 2) {
     }
   };
   screenScaleSyncFrame = requestAnimationFrame(tick);
+}
+
+function clampScreenScaleToFrame() {
+  if (componentEmbedMode || !screenFrame || !screenView) {
+    return;
+  }
+  const virtualWidth = Number.parseFloat(screenView.style.getPropertyValue("--screen-virtual-width") || "");
+  const virtualHeight = Number.parseFloat(screenView.style.getPropertyValue("--screen-virtual-height") || "");
+  const currentScale = Number.parseFloat(screenView.style.getPropertyValue("--screen-scale") || "");
+  if (!(virtualWidth > 0) || !(virtualHeight > 0) || !(currentScale > 0)) {
+    return;
+  }
+  const frame = screenFrame.getBoundingClientRect();
+  if (!(frame.width > 0) || !(frame.height > 0)) {
+    return;
+  }
+  const nextScale = Math.max(
+    0.0001,
+    Math.min(currentScale, frame.width / virtualWidth, frame.height / virtualHeight),
+  );
+  if (nextScale < currentScale) {
+    screenView.style.setProperty("--screen-scale", nextScale.toFixed(6));
+  }
+}
+
+function installScreenScaleResizeHooks() {
+  if (!screenFrame || !screenView || !playSurface || !shell) {
+    return;
+  }
+  if (typeof ResizeObserver !== "function") {
+    throw new Error("PuzzleStudio HTML play requires ResizeObserver for responsive screen scaling.");
+  }
+  const resizeObserver = new ResizeObserver(() => scheduleScreenScaleSync(4));
+  resizeObserver.observe(shell);
+  resizeObserver.observe(playSurface);
+  window.addEventListener("resize", () => scheduleScreenScaleSync(4));
+  window.addEventListener("orientationchange", () => scheduleScreenScaleSync(6));
+  window.addEventListener("pageshow", () => scheduleScreenScaleSync(4));
+  document.addEventListener("fullscreenchange", () => scheduleScreenScaleSync(6));
+  window.visualViewport?.addEventListener("resize", () => scheduleScreenScaleSync(6));
+  window.addEventListener("load", () => {
+    scheduleScreenScaleSync(4);
+  });
+  document.fonts?.ready.then(() => scheduleScreenScaleSync(3)).catch(() => {});
 }
 
 function syncScreenScale() {
@@ -381,8 +449,8 @@ function syncScreenScale() {
   screenView.style.setProperty("--screen-virtual-width", `${virtualSize.width}px`);
   screenView.style.setProperty("--screen-virtual-height", `${virtualSize.height}px`);
   screenView.style.setProperty("--screen-scale", scale.toFixed(6));
-  screenFrame.style.width = `${Math.ceil(fit.width)}px`;
-  screenFrame.style.height = `${Math.ceil(fit.height)}px`;
+  screenFrame.style.width = `min(${Math.ceil(fit.width)}px, 100%)`;
+  screenFrame.style.height = `min(${Math.ceil(fit.height)}px, 100%)`;
   screenFrame.dataset.screenScale = scale.toFixed(6);
   screenFrame.dataset.screenWidth = String(logicalSize.width);
   screenFrame.dataset.screenHeight = String(logicalSize.height);
@@ -435,15 +503,33 @@ function fitLogicalSceneSize(virtualSize, available) {
 
 function elementContentBox(element) {
   const style = window.getComputedStyle(element);
-  const width = element.clientWidth
+  const rect = element.getBoundingClientRect();
+  const viewport = visibleViewportSize();
+  const visibleWidth = Math.min(
+    element.clientWidth,
+    Math.max(0, Math.min(rect.right, viewport.width) - Math.max(rect.left, 0)),
+  );
+  const visibleHeight = Math.min(
+    element.clientHeight,
+    Math.max(0, Math.min(rect.bottom, viewport.height) - Math.max(rect.top, 0)),
+  );
+  const width = visibleWidth
     - parseFloat(style.paddingLeft || "0")
     - parseFloat(style.paddingRight || "0");
-  const height = element.clientHeight
+  const height = visibleHeight
     - parseFloat(style.paddingTop || "0")
     - parseFloat(style.paddingBottom || "0");
   return {
     width: Math.max(0, width),
     height: Math.max(0, height),
+  };
+}
+
+function visibleViewportSize() {
+  const visual = window.visualViewport;
+  return {
+    width: Math.max(1, Number(visual?.width) || Number(window.innerWidth) || document.documentElement.clientWidth || 1),
+    height: Math.max(1, Number(visual?.height) || Number(window.innerHeight) || document.documentElement.clientHeight || 1),
   };
 }
 
@@ -1060,7 +1146,7 @@ function currentSceneHasPuzzle() {
 }
 
 function currentSceneAcceptsModelInput() {
-  return sceneInteractionProfile(currentSceneDef()).acceptsModelInput;
+  return stateAcceptsModelInput(currentState || window.PuzzleExport || {});
 }
 
 function isControlPointerTarget(target) {
@@ -1077,12 +1163,11 @@ function currentSceneHasLevelMenu() {
 
 function sceneInteractionProfile(scene = currentSceneDef(), options = {}) {
   const state = options.state || currentState || {};
-  const layer = options.layer || currentSceneLayer(state, scene);
   const hasMenuController = sceneHasComponent(scene, "level_menu") || sceneHasComponent(scene, "choice");
   const menuFocusCells = hasMenuController ? sceneMenuFocusCells(scene) : [];
   const standardChoices = scene ? standardChoiceFocusCells(scene) : [];
   return {
-    acceptsModelInput: sceneHasModelInputTarget(scene, state, layer),
+    acceptsModelInput: stateAcceptsModelInput(state),
     hasLevelMenuController: sceneHasComponent(scene, "level_menu"),
     hasMenuController,
     menuFocusCells,
@@ -1098,14 +1183,9 @@ function currentSceneLayer(state = currentState, scene = currentSceneDef()) {
     || null;
 }
 
-function sceneHasModelInputTarget(scene, state = currentState, layer = currentSceneLayer(state, scene)) {
-  return Boolean(
-    layer?.scene
-    || state?.scene
-    || nonEmptyArray(layer?.scenePuzzles)
-    || nonEmptyArray(state?.scenePuzzles)
-    || scene?.puzzleRule,
-  );
+function stateAcceptsModelInput(state = currentState || window.PuzzleExport || {}) {
+  return state?.acceptsModelInput === true
+    || standaloneRuntime?.editorPreviewInputEnabled === true;
 }
 
 function sceneChromeProfile(profile) {
@@ -2152,8 +2232,11 @@ function scrollLevelMenuItemIntoView(item) {
   if (!item || !list) {
     return;
   }
-  const itemTop = item.offsetTop;
-  const itemBottom = itemTop + item.offsetHeight;
+  const listRect = list.getBoundingClientRect();
+  const itemRect = item.getBoundingClientRect();
+  const scale = listRect.height > 0 ? list.clientHeight / listRect.height : 1;
+  const itemTop = list.scrollTop + (itemRect.top - listRect.top) * scale;
+  const itemBottom = itemTop + itemRect.height * scale;
   const visibleTop = list.scrollTop;
   const visibleBottom = visibleTop + list.clientHeight;
   if (itemTop < visibleTop) {
@@ -2164,7 +2247,7 @@ function scrollLevelMenuItemIntoView(item) {
 }
 
 function focusShell() {
-  if (!shell) {
+  if (!shell || document.activeElement === shell || shell.contains(document.activeElement)) {
     return;
   }
   shell.focus({ preventScroll: true });
@@ -3277,6 +3360,7 @@ window.addEventListener("message", async (event) => {
   /* puzzle-host:optional:solver:end */
 
   if (event.data?.type === "PuzzleStudioKey") {
+    soundRuntime.primePlayback();
     if (currentState?.busy) {
       return;
     }
@@ -3298,6 +3382,7 @@ window.addEventListener("message", async (event) => {
   }
   const command = String(event.data.command || "");
   if (command) {
+    soundRuntime.primePlayback();
     /* puzzle-host:optional:puzzle3:start */
     if (puzzle3PreviewSurface) {
       for (const entry of puzzle3Controllers.values()) {
@@ -3354,7 +3439,6 @@ loadState().catch((error) => {
 });
 
 if (!componentEmbedMode) {
-  document.addEventListener("DOMContentLoaded", focusShell);
   document.addEventListener("pointerdown", focusShell);
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "hidden") {
@@ -3363,15 +3447,7 @@ if (!componentEmbedMode) {
       soundRuntime.resumeAfterVisibleDocument();
     }
   });
-  window.addEventListener("resize", () => scheduleScreenScaleSync(2));
-  window.addEventListener("load", () => {
-    scheduleScreenScaleSync(3);
-    focusShell();
-    requestAnimationFrame(focusShell);
-    setTimeout(focusShell, 0);
-  });
-  window.addEventListener("focus", focusShell);
-  document.fonts?.ready.then(() => scheduleScreenScaleSync(2)).catch(() => {});
+  installScreenScaleResizeHooks();
 }
 
 function showError(error) {

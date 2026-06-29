@@ -813,8 +813,10 @@ mod tests {
 
     #[test]
     fn inspect_document_lists_scenes_levels_and_inputs() {
-        let document = puzzle_lang::parse_game(include_str!("../../../games/spec_2d.puzzle"))
-            .expect("parse sample game");
+        let document = puzzle_lang::parse_game(include_str!(
+            "../../../crates/lang/tests/fixtures/spec_2d_microban_basic.puzzle"
+        ))
+        .expect("parse sample game");
         let text = inspect_document_text(&document);
 
         assert!(text.contains("scenes:\n"));

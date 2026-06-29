@@ -10,9 +10,9 @@ use puzzle_core::{
     transition_program_segment_trace,
 };
 use puzzle_lang::{
-    AsciiLegend, Level, LevelMenuDef, LoadedGame, ResourceSelection, RuleAnimation,
-    RuleAnimationTrigger, RuleEffect, SceneComponent, SceneEffect, SceneEffectParam, SceneExpr,
-    ScenePuzzleInitializer, SceneTransitionTrigger, SceneValue,
+    AsciiLegend, Level, LevelMenuDef, LoadedGame, ModelOperationSound, ResourceSelection,
+    RuleAnimation, RuleAnimationTrigger, RuleEffect, SceneComponent, SceneEffect, SceneEffectParam,
+    SceneExpr, ScenePuzzleInitializer, SceneTransitionTrigger, SceneValue,
 };
 
 mod runtime_sounds;
@@ -267,6 +267,10 @@ impl GameSession {
 
     pub fn focused_scene(&self) -> &str {
         &self.focused_scene
+    }
+
+    pub fn accepts_model_input(&self, game: &LoadedGame) -> bool {
+        self.current_scene_accepts_model_input(game)
     }
 
     pub fn level_index(&self) -> usize {
@@ -543,6 +547,12 @@ impl GameSession {
         self.current_input = game.input_labels.get(&input).cloned();
         let undo_base_len = self.undo_stack.len();
         let owns_turn_sfx = self.begin_turn_sfx_dedup();
+        if !self.current_scene_accepts_model_input(game) {
+            let result = self.apply_focused_scene_input_transition(game, undo_base_len);
+            self.current_input = previous_input;
+            self.end_turn_sfx_dedup(owns_turn_sfx);
+            return result;
+        }
         let result = match self.apply_model_input(game, input, undo_base_len) {
             Ok(result) => result,
             Err(error) => {
@@ -1111,6 +1121,19 @@ impl GameSession {
         seen.insert(name.to_string())
     }
 
+    fn emit_model_operation_sfx(&mut self, game: &LoadedGame, operation: ModelOperationSound) {
+        for sound in &game.model_operation_sounds {
+            if sound.operation != operation {
+                continue;
+            }
+            let name = &sound.sfx_name;
+            if self.should_emit_turn_sfx(name) {
+                self.sound_events
+                    .push(SoundEvent::PlaySfx { name: name.clone() });
+            }
+        }
+    }
+
     pub fn apply_command(
         &mut self,
         game: &LoadedGame,
@@ -1174,7 +1197,7 @@ impl GameSession {
         let previous_input = self.current_input.clone();
         self.current_input = Some(input.to_string());
         let undo_base_len = self.undo_stack.len();
-        let result = self.apply_turn_completion(game, Vec::new(), undo_base_len);
+        let result = self.apply_focused_scene_input_transition(game, undo_base_len);
         self.current_input = previous_input;
         result?;
         Ok(true)
@@ -1202,7 +1225,7 @@ impl GameSession {
             let previous_input = self.current_input.clone();
             self.current_input = Some(input.to_string());
             let undo_base_len = self.undo_stack.len();
-            let result = self.apply_turn_completion(game, Vec::new(), undo_base_len);
+            let result = self.apply_focused_scene_input_transition(game, undo_base_len);
             self.current_input = previous_input;
             result?;
         }
@@ -1241,6 +1264,15 @@ impl GameSession {
             self.is_screen_condition_true_with_forced_win(game, condition, forced_win_targets)
                 .then(|| transition.effect.clone())
         })
+    }
+
+    fn apply_focused_scene_input_transition(
+        &mut self,
+        game: &LoadedGame,
+        undo_base_len: usize,
+    ) -> Result<(), TransitionError> {
+        let condition_effect = self.condition_transition_effect(game, &[]);
+        self.resolve_turn_effects(game, Vec::new(), condition_effect, undo_base_len)
     }
 
     fn apply_model_level_clear(
@@ -1907,6 +1939,7 @@ impl GameSession {
         if self.active_level_index.is_none() {
             return;
         }
+        self.emit_model_operation_sfx(game, ModelOperationSound::Restart);
         if let Some(checkpoint) = &self.level_checkpoint_state {
             let mut next = checkpoint.clone();
             self.apply_persistent_vars(game, &mut next);
@@ -2083,6 +2116,7 @@ impl GameSession {
             return;
         }
         if let Some(previous) = self.undo_stack.pop() {
+            self.emit_model_operation_sfx(game, ModelOperationSound::Undo);
             self.redo_stack.push(self.state.clone());
             self.state = previous;
             self.sync_persistent_vars_to_scene_states(game);
@@ -2608,6 +2642,7 @@ impl GameSession {
         else {
             return;
         };
+        self.emit_model_operation_sfx(game, ModelOperationSound::Restart);
         if scene_puzzle_initializer(game, &scene_name, &puzzle_name)
             == Some(ScenePuzzleInitializer::CurrentLevel)
         {
@@ -2784,10 +2819,10 @@ impl GameSession {
     }
 
     fn current_scene_accepts_model_input(&self, game: &LoadedGame) -> bool {
-        game.scenes
-            .iter()
-            .find(|screen| screen.name == self.focused_scene)
-            .is_some_and(|screen| screen.puzzle_rule.is_some())
+        if game.scenes.is_empty() {
+            return self.active_level_index.is_some();
+        }
+        scene_is_level_scene(game, &self.focused_scene)
     }
 
     fn apply_level_menu_command(&mut self, game: &LoadedGame, command: &str) -> bool {
@@ -4828,6 +4863,64 @@ P.
     }
 
     #[test]
+    fn model_operation_sounds_emit_for_undo_and_restart() {
+        let loaded = parse_game(
+            r#"
+title operation_sfx_fixture
+sounds {
+sfx undo_tick seed=undo01 type=hit
+sfx restart_tick seed=restart01 type=jump
+}
+puzzle default {
+sounds {
+undo -> sfx undo_tick
+restart -> sfx restart_tick
+}
+layers {
+__legacy_layer_0 = Player
+}
+empty .
+rules {
+right [ Player | ] -> [ | Player ]
+}
+levels {
+legend {
+. = empty
+P = Player
+}
+level start {
+P.
+}
+}
+}
+"#,
+        )
+        .unwrap();
+        let right = input_named(&loaded, "right");
+        let mut session = GameSession::new(&loaded);
+        assert!(session.take_sound_events().is_empty());
+
+        session.apply_input(&loaded, right).unwrap();
+        assert!(session.take_sound_events().is_empty());
+
+        session.undo(&loaded);
+        assert_eq!(
+            session.take_sound_events(),
+            vec![SoundEvent::PlaySfx {
+                name: "undo_tick".to_string()
+            }]
+        );
+
+        session.restart_level(&loaded);
+        assert_eq!(
+            session.take_sound_events(),
+            vec![SoundEvent::PlaySfx {
+                name: "restart_tick".to_string()
+            }]
+        );
+    }
+
+    #[test]
     fn puzzle_rule_music_effect_queues_sound_event_on_match() {
         let loaded = parse_game(
             r#"
@@ -6010,7 +6103,8 @@ A
 
     #[test]
     fn render_ascii_top_uses_loaded_legend() {
-        let source = include_str!("../../../games/spec_2d.puzzle");
+        let source =
+            include_str!("../../../crates/lang/tests/fixtures/spec_2d_microban_basic.puzzle");
         let loaded = parse_game(source).unwrap();
 
         assert_eq!(
@@ -6057,7 +6151,8 @@ B = Box
 
     #[test]
     fn session_supports_undo_redo_and_restart() {
-        let source = include_str!("../../../games/spec_2d.puzzle");
+        let source =
+            include_str!("../../../crates/lang/tests/fixtures/spec_2d_microban_basic.puzzle");
         let loaded = parse_game(source).unwrap();
         let mut session = GameSession::new(&loaded);
         session.start_level(&loaded, 0);
@@ -6237,7 +6332,8 @@ P
 
     #[test]
     fn spec_2d_goto_level_params_select_progress_level() {
-        let source = include_str!("../../../games/spec_2d.puzzle");
+        let source =
+            include_str!("../../../crates/lang/tests/fixtures/spec_2d_microban_basic.puzzle");
         let loaded = parse_game(source).unwrap();
         let cleared_current_level = loaded.levels[1].name.clone();
         let save = ProgressSaveData {
@@ -6480,7 +6576,8 @@ P
 
     #[test]
     fn default_actions_work_from_playing() {
-        let source = include_str!("../../../games/spec_2d.puzzle");
+        let source =
+            include_str!("../../../crates/lang/tests/fixtures/spec_2d_microban_basic.puzzle");
         let loaded = parse_game(source).unwrap();
         let mut session = GameSession::new(&loaded);
         session.apply_command(&loaded, "goto playing").unwrap();
@@ -6806,7 +6903,8 @@ text "clear"
 
     #[test]
     fn puzzle_transition_only_runs_on_scenes_that_enable_main() {
-        let source = include_str!("../../../games/spec_2d.puzzle");
+        let source =
+            include_str!("../../../crates/lang/tests/fixtures/spec_2d_microban_basic.puzzle");
         let loaded = parse_game(source).unwrap();
         let mut session = GameSession::new(&loaded);
         session.apply_command(&loaded, "goto playing").unwrap();
@@ -6817,6 +6915,127 @@ text "clear"
 
         session.apply_command(&loaded, "right").unwrap();
         assert_eq!(session.state(), &initial);
+    }
+
+    #[test]
+    fn direct_model_input_does_not_reach_level_when_level_select_is_focused() {
+        let loaded = parse_game(
+            r#"
+title focused_input
+sounds {
+sfx step seed=step type=jump
+}
+puzzle default {
+layers {
+actor = Player
+}
+empty .
+
+rules {
+down [ Player | no Player ] -> [ | Player ] sfx step
+}
+
+levels {
+legend {
+. = empty
+P = Player
+}
+level start {
+P
+.
+}
+}
+}
+
+scene playing {
+state {
+board = puzzle default
+}
+layout {
+board
+}
+rules {
+step board
+}
+}
+
+scene level_select {
+layout {
+level_menu
+}
+}
+"#,
+        )
+        .unwrap();
+        let mut session = GameSession::new(&loaded);
+        let down = input_named(&loaded, "down");
+        let initial = session.state().clone();
+
+        session.apply_command(&loaded, "goto level_select").unwrap();
+        assert_eq!(session.screen(), "level_select");
+        assert!(!session.accepts_model_input(&loaded));
+
+        session.apply_input(&loaded, down).unwrap();
+
+        assert_eq!(session.screen(), "level_select");
+        assert_eq!(session.state(), &initial);
+        assert!(!session.can_undo());
+        assert!(session.take_sound_events().is_empty());
+    }
+
+    #[test]
+    fn direct_input_can_still_drive_focused_scene_input_transition() {
+        let loaded = parse_game(
+            r#"
+title scene_input_focus
+puzzle default {
+layers {
+actor = Player
+}
+empty .
+input open
+rules {
+}
+levels {
+legend P = Player
+level start {
+P
+}
+}
+}
+
+scene title {
+layout {
+text "Title"
+}
+rules {
+if input == open -> goto playing
+}
+}
+
+scene playing {
+state {
+board = puzzle default
+}
+layout {
+board
+}
+rules {
+step board
+}
+}
+"#,
+        )
+        .unwrap();
+        let mut session = GameSession::new(&loaded);
+
+        session
+            .apply_input(&loaded, input_named(&loaded, "open"))
+            .unwrap();
+
+        assert_eq!(session.screen(), "playing");
+        assert!(session.accepts_model_input(&loaded));
+        assert_eq!(session.active_level_index(), Some(0));
     }
 
     #[test]
@@ -7252,7 +7471,44 @@ A
 
     #[test]
     fn screen_transition_can_goto_level_with_payload() {
-        let source = include_str!("../../../games/spec_2d.puzzle");
+        let source = r#"
+title level_select_payload
+
+puzzle default {
+layers {
+__legacy_layer_0 = Player
+}
+empty .
+
+rules {
+}
+
+levels {
+legend P = Player
+level first {
+P
+}
+level second {
+P
+}
+}
+}
+
+scene playing {
+state {
+board = puzzle default
+}
+layout {
+board
+}
+}
+
+scene level_select {
+layout {
+level_menu
+}
+}
+"#;
         let loaded = parse_game(source).unwrap();
         let mut session = GameSession::new(&loaded);
         session.apply_command(&loaded, "goto playing").unwrap();
@@ -7265,6 +7521,74 @@ A
         assert_eq!(session.level_index(), 1);
         assert_eq!(session.screen(), "playing");
         assert_eq!(session.state(), &loaded.levels[1].initial_state);
+    }
+
+    #[test]
+    fn level_menu_position_select_restarts_current_level_state() {
+        let source = r#"
+title level_menu_position_restart
+
+puzzle default {
+layers {
+__legacy_layer_0 = Player
+}
+empty .
+
+rules {
+right [ Player | no Player ] -> [ | Player ]
+}
+
+levels {
+legend {
+. = empty
+P = Player
+}
+
+level first {
+P.
+}
+level second {
+P.
+}
+}
+}
+
+scene playing {
+state {
+board = puzzle default
+}
+layout {
+board
+}
+rules {
+step board
+}
+}
+
+scene level_select {
+layout {
+level_menu
+}
+}
+"#;
+        let loaded = parse_game(source).unwrap();
+        let mut session = GameSession::new(&loaded);
+        session.start_level(&loaded, 1);
+        let initial = loaded.levels[1].initial_state.clone();
+
+        session.apply_command(&loaded, "right").unwrap();
+        assert_ne!(session.state(), &initial);
+
+        session.apply_command(&loaded, "goto level_select").unwrap();
+        assert_eq!(session.level_index(), 1);
+        assert_eq!(session.screen(), "level_select");
+
+        session.apply_command(&loaded, "select:1").unwrap();
+
+        assert_eq!(session.level_index(), 1);
+        assert_eq!(session.screen(), "playing");
+        assert_eq!(session.state(), &initial);
+        assert!(!session.can_undo());
     }
 
     #[test]

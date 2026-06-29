@@ -3,13 +3,13 @@ Use `keys` to map physical keys to named semantic inputs.
 
 ```puzzle
 puzzle sokoban {
-  keys {
-    w ArrowUp -> up
-    s ArrowDown -> down
-    a ArrowLeft -> left
-    d ArrowRight -> right
-    r -> restart
-  }
+keys {
+w ArrowUp -> up
+s ArrowDown -> down
+a ArrowLeft -> left
+d ArrowRight -> right
+r -> restart
+}
 }
 ```
 

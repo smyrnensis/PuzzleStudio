@@ -1,76 +1,189 @@
 use std::collections::{HashMap, HashSet, VecDeque};
+#[cfg(feature = "embedded-assets")]
 use std::env;
 use std::fs;
-use std::io::{self, Read, Write};
+use std::io;
+#[cfg(feature = "embedded-assets")]
+use std::io::{Read, Write};
+#[cfg(feature = "embedded-assets")]
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
+#[cfg(feature = "embedded-assets")]
 use std::sync::Arc;
 
-use puzzle_lang::{Diagnostic, DiagnosticReport};
+#[cfg(feature = "embedded-assets")]
+use puzzle_lang::Diagnostic;
+use puzzle_lang::DiagnosticReport;
 
+#[cfg(feature = "embedded-assets")]
 const EDITOR_HTML: &str = include_str!("../static/editor.html");
+#[cfg(feature = "embedded-assets")]
 const EDITOR_DOCS_MARKDOWN: &str = include_str!("../docs/editor.md");
+#[cfg(feature = "embedded-assets")]
 const EDITOR_DOCS_METADATA_MARKDOWN: &str = include_str!("../docs/metadata.md");
+#[cfg(feature = "embedded-assets")]
 const EDITOR_DOCS_PUZZLE_BLOCK_MARKDOWN: &str = include_str!("../docs/puzzle-block.md");
+#[cfg(feature = "embedded-assets")]
 const EDITOR_DOCS_LAYERS_MARKDOWN: &str = include_str!("../docs/layers.md");
+#[cfg(feature = "embedded-assets")]
 const EDITOR_DOCS_GROUPS_MARKDOWN: &str = include_str!("../docs/groups.md");
+#[cfg(feature = "embedded-assets")]
 const EDITOR_DOCS_TAGS_MARKDOWN: &str = include_str!("../docs/tags.md");
+#[cfg(feature = "embedded-assets")]
 const EDITOR_DOCS_LEGEND_MARKDOWN: &str = include_str!("../docs/legend.md");
+#[cfg(feature = "embedded-assets")]
 const EDITOR_DOCS_LEVELS_MARKDOWN: &str = include_str!("../docs/levels.md");
+#[cfg(feature = "embedded-assets")]
 const EDITOR_DOCS_LEVEL_LOCAL_LEGEND_MARKDOWN: &str = include_str!("../docs/level-local-legend.md");
+#[cfg(feature = "embedded-assets")]
 const EDITOR_DOCS_MESSAGES_MARKDOWN: &str = include_str!("../docs/messages.md");
+#[cfg(feature = "embedded-assets")]
 const EDITOR_DOCS_REWRITE_RULES_MARKDOWN: &str = include_str!("../docs/rewrite-rules.md");
+#[cfg(feature = "embedded-assets")]
 const EDITOR_DOCS_INPUT_RULES_MARKDOWN: &str = include_str!("../docs/input-rules.md");
+#[cfg(feature = "embedded-assets")]
 const EDITOR_DOCS_MOVEMENT_MARKDOWN: &str = include_str!("../docs/movement.md");
+#[cfg(feature = "embedded-assets")]
 const EDITOR_DOCS_GUARDS_MARKDOWN: &str = include_str!("../docs/guards.md");
+#[cfg(feature = "embedded-assets")]
 const EDITOR_DOCS_FIX_MARKDOWN: &str = include_str!("../docs/fix.md");
+#[cfg(feature = "embedded-assets")]
 const EDITOR_DOCS_VARIABLES_MARKDOWN: &str = include_str!("../docs/variables.md");
+#[cfg(feature = "embedded-assets")]
 const EDITOR_DOCS_SCRATCH_MARKDOWN: &str = include_str!("../docs/scratch.md");
+#[cfg(feature = "embedded-assets")]
 const EDITOR_DOCS_CONDITIONS_MARKDOWN: &str = include_str!("../docs/conditions.md");
+#[cfg(feature = "embedded-assets")]
 const EDITOR_DOCS_WIN_CONDITIONS_MARKDOWN: &str = include_str!("../docs/win-conditions.md");
+#[cfg(feature = "embedded-assets")]
 const EDITOR_DOCS_SCENES_MARKDOWN: &str = include_str!("../docs/scenes.md");
+#[cfg(feature = "embedded-assets")]
 const EDITOR_DOCS_SCENE_LAYOUT_MARKDOWN: &str = include_str!("../docs/scene-layout.md");
+#[cfg(feature = "embedded-assets")]
 const EDITOR_DOCS_SEMANTIC_INPUTS_MARKDOWN: &str = include_str!("../docs/semantic-inputs.md");
+#[cfg(feature = "embedded-assets")]
 const EDITOR_DOCS_MENUS_MARKDOWN: &str = include_str!("../docs/menus.md");
+#[cfg(feature = "embedded-assets")]
 const EDITOR_DOCS_LIFECYCLE_MARKDOWN: &str = include_str!("../docs/lifecycle.md");
+#[cfg(feature = "embedded-assets")]
 const EDITOR_DOCS_SPRITES_MARKDOWN: &str = include_str!("../docs/sprites.md");
+#[cfg(feature = "embedded-assets")]
 const EDITOR_DOCS_DISPLAY_MARKDOWN: &str = include_str!("../docs/display.md");
+#[cfg(feature = "embedded-assets")]
 const EDITOR_DOCS_THEME_MARKDOWN: &str = include_str!("../docs/theme.md");
+#[cfg(feature = "embedded-assets")]
 const EDITOR_DOCS_SOUNDS_MARKDOWN: &str = include_str!("../docs/sounds.md");
+#[cfg(feature = "embedded-assets")]
 const EDITOR_CSS: &str = include_str!("../static/editor.css");
+#[cfg(feature = "embedded-assets")]
+const EDITOR_RUNTIME_JS: &str = include_str!("../static/editor_runtime.js");
+#[cfg(feature = "embedded-assets")]
 const EDITOR_BOOT_JS: &str = include_str!("../static/editor_boot.js");
+#[cfg(feature = "embedded-assets")]
 const EDITOR_DOM_JS: &str = include_str!("../static/editor_dom.js");
+#[cfg(feature = "embedded-assets")]
 const EDITOR_WORKSPACE_JS: &str = include_str!("../static/editor_workspace.js");
+#[cfg(feature = "embedded-assets")]
 const EDITOR_SOURCE_JS: &str = include_str!("../static/editor_source.js");
+#[cfg(feature = "embedded-assets")]
 const EDITOR_LEVEL3D_JS: &str = include_str!("../static/editor_level3d.js");
+#[cfg(feature = "embedded-assets")]
 const EDITOR_WORKBENCH_JS: &str = include_str!("../static/editor_workbench.js");
+#[cfg(feature = "embedded-assets")]
+const EDITOR_IMPORT_EXPORT_JS: &str = include_str!("../static/editor_import_export.js");
+#[cfg(feature = "embedded-assets")]
 const EDITOR_JS: &str = include_str!("../static/editor.js");
+#[cfg(feature = "embedded-assets")]
 const EDITOR_SPRITE_JS: &str = include_str!("../static/editor_sprite.js");
+#[cfg(feature = "embedded-assets")]
 const PUZZLE3_VISUAL_CORE_JS: &str = include_str!("../../html_play/static/puzzle3_visual_core.js");
-#[cfg(test)]
+#[cfg(all(test, feature = "embedded-assets"))]
 const EDITOR_STATIC_PUZZLE3_VISUAL_CORE_JS: &str = include_str!("../static/puzzle3_visual_core.js");
+#[cfg(feature = "embedded-assets")]
 const EDITOR_SPRITE3D_JS: &str = include_str!("../static/editor_sprite3d.js");
+#[cfg(feature = "embedded-assets")]
 const EDITOR_SOUNDS_JS: &str = include_str!("../static/editor_sounds.js");
+#[cfg(feature = "embedded-assets")]
 const FAVICON_SVG: &str = include_str!("../static/favicon.svg");
+#[cfg(feature = "embedded-assets")]
 const PUZZLE_WASM_JS: &str = include_str!("../static/wasm/puzzle_wasm.js");
+#[cfg(feature = "embedded-assets")]
 const PUZZLE_WASM_BG: &[u8] = include_bytes!("../static/wasm/puzzle_wasm_bg.wasm");
+#[cfg(feature = "embedded-assets")]
 const PUZZLE_GAME_WASM_JS: &str =
     include_str!("../../html_play/static/wasm_game/puzzle_wasm_game.js");
+#[cfg(feature = "embedded-assets")]
 const PUZZLE_GAME_WASM_BG: &[u8] =
     include_bytes!("../../html_play/static/wasm_game/puzzle_wasm_game_bg.wasm");
+#[cfg(feature = "embedded-assets")]
 const PUZZLE_CORE_WASM_JS: &str = include_str!("../../wasm_core/static/puzzle_core_wasm.js");
+#[cfg(feature = "embedded-assets")]
 const PUZZLE_CORE_WASM_BG: &[u8] =
     include_bytes!("../../wasm_core/static/puzzle_core_wasm_bg.wasm");
+#[cfg(feature = "sound-tools")]
 const SEEDED_SFX_JS: &str = include_str!("../../../tools/music_generator/seeded_sfx.mjs");
+#[cfg(feature = "sound-tools")]
 const SEEDED_MUSIC_JS: &str = include_str!("../../../tools/music_generator/seeded_music.mjs");
+#[cfg(feature = "sound-tools")]
 const SEEDED_MUSIC_PLAYER_JS: &str =
     include_str!("../../../tools/music_generator/seeded_music_player.mjs");
+#[cfg(feature = "sound-tools")]
 const SEEDED_TIMBRE_FIELDS_JS: &str =
     include_str!("../../../tools/music_generator/seeded_timbre_fields.mjs");
+#[cfg(feature = "sound-tools")]
 const SOUND_EXPORT_JS: &str = include_str!("../../../tools/music_generator/audio_export.mjs");
+#[cfg(feature = "embedded-assets")]
 const RENDERER_CSS: &str = include_str!("../../html_play/static/renderer.css");
+#[cfg(feature = "embedded-assets")]
 const VISUALS_JS: &str = include_str!("../../html_play/static/visuals.js");
+#[cfg(feature = "embedded-assets")]
 const RENDERER_JS: &str = include_str!("../../html_play/static/renderer.js");
+#[cfg(feature = "embedded-assets")]
+const PAGES_EXAMPLE_PUZZLE_PATH: &str = "examples/puzzlestudio-example.puzzle";
+#[cfg(feature = "embedded-assets")]
+const PAGES_EXAMPLE_PUZZLE_SOURCE: &str = r#"title "PuzzleStudio Example"
+subtitle "Push the box onto the goal"
+
+puzzle sokoban {
+layers {
+Floor
+Goal
+Player Box Wall
+}
+
+win_conditions {
+all Goal on Box
+}
+
+on_level_start {
+[ no Floor ] -> [ Floor ]
+}
+
+rules {
+input [ Player ] -> [ > Player ]
+[ > Player | Box ] -> [ > Player | > Box ]
+move
+}
+}
+
+levels {
+legend {
+. = empty
+# = Wall
+P = Player
+B = Box
+G = Goal
+* = Box Goal
+}
+
+level start
+#######
+#.....#
+#.PB.G#
+#.....#
+#######
+}
+"#;
 const SKIPPED_WORKSPACE_DIRS: &[&str] = &[
     ".cache",
     ".git",
@@ -85,17 +198,28 @@ const SKIPPED_WORKSPACE_DIRS: &[&str] = &[
     "target",
 ];
 
+#[cfg(feature = "embedded-assets")]
 pub fn run_cli() -> Result<(), AppError> {
     run_cli_with_args(env::args().skip(1))
 }
 
+#[cfg(feature = "embedded-assets")]
 pub fn run_cli_with_args(args: impl IntoIterator<Item = String>) -> Result<(), AppError> {
     run(args)
 }
 
+#[cfg(feature = "embedded-assets")]
 fn run(args: impl IntoIterator<Item = String>) -> Result<(), AppError> {
     let config = Config::from_args(args)?;
-    let service = EditorService::open(&config.puzzle_path)?;
+    let service = if let Some(puzzle_path) = &config.puzzle_path {
+        EditorService::open(puzzle_path)?
+    } else if config.serve {
+        let puzzle_path = puzzle_lang::resolve_game_entry(&PathBuf::from("games/spec_2d.puzzle"))
+            .map_err(|error| AppError::Config(error.to_string()))?;
+        EditorService::open(&puzzle_path)?
+    } else {
+        EditorService::open_pages_example()
+    };
 
     if !config.serve {
         let output_path = config.output_path();
@@ -108,7 +232,7 @@ fn run(args: impl IntoIterator<Item = String>) -> Result<(), AppError> {
     let (listener, port) = bind_listener(config.port)?;
 
     println!("html-editor serving http://127.0.0.1:{port}/editor");
-    println!("puzzle: {}", config.puzzle_path.display());
+    println!("puzzle: {}", service.puzzle_path());
 
     for stream in listener.incoming() {
         let stream = stream?;
@@ -121,14 +245,16 @@ fn run(args: impl IntoIterator<Item = String>) -> Result<(), AppError> {
     Ok(())
 }
 
+#[cfg(feature = "embedded-assets")]
 #[derive(Clone, Debug)]
 struct Config {
-    puzzle_path: PathBuf,
+    puzzle_path: Option<PathBuf>,
     output_path: Option<PathBuf>,
     serve: bool,
     port: u16,
 }
 
+#[cfg(feature = "embedded-assets")]
 impl Config {
     fn from_args(args: impl IntoIterator<Item = String>) -> Result<Self, AppError> {
         let mut puzzle_path = None;
@@ -167,10 +293,12 @@ impl Config {
             }
         }
 
-        let puzzle_path = puzzle_lang::resolve_game_entry(
-            &puzzle_path.unwrap_or_else(|| PathBuf::from("games/spec_2d.puzzle")),
-        )
-        .map_err(|error| AppError::Config(error.to_string()))?;
+        let puzzle_path = puzzle_path
+            .map(|path| {
+                puzzle_lang::resolve_game_entry(&path)
+                    .map_err(|error| AppError::Config(error.to_string()))
+            })
+            .transpose()?;
 
         Ok(Self {
             puzzle_path,
@@ -193,6 +321,33 @@ pub struct EditorService {
 }
 
 impl EditorService {
+    #[cfg(feature = "embedded-assets")]
+    fn open_pages_example() -> Self {
+        let source = PAGES_EXAMPLE_PUZZLE_SOURCE.to_string();
+        Self {
+            state: EditorState {
+                puzzle_path: PAGES_EXAMPLE_PUZZLE_PATH.to_string(),
+                workspace_root: String::new(),
+                source: source.clone(),
+                game_css: String::new(),
+                #[cfg(any(feature = "native-preview", feature = "embedded-assets"))]
+                base_game_visuals_js: String::new(),
+                documents: vec![EditorDocument {
+                    puzzle_path: PAGES_EXAMPLE_PUZZLE_PATH.to_string(),
+                    encoding: "text".to_string(),
+                    mime_type: mime_type(Path::new(PAGES_EXAMPLE_PUZZLE_PATH)).to_string(),
+                    source,
+                    data_url: String::new(),
+                    preview_html: String::new(),
+                    preview_error: String::new(),
+                    game_css: String::new(),
+                    imported_by: Vec::new(),
+                    parent_game_path: PAGES_EXAMPLE_PUZZLE_PATH.to_string(),
+                }],
+            },
+        }
+    }
+
     pub fn open_game_entry(path: &Path) -> Result<Self, AppError> {
         let puzzle_path = match puzzle_lang::resolve_game_entry(path) {
             Ok(puzzle_path) => puzzle_path,
@@ -230,6 +385,7 @@ impl EditorService {
                 workspace_root: workspace_root.display().to_string(),
                 source: String::new(),
                 game_css: String::new(),
+                #[cfg(any(feature = "native-preview", feature = "embedded-assets"))]
                 base_game_visuals_js: String::new(),
                 documents: load_editor_documents(&workspace_root, &workspace_root)?,
             },
@@ -254,6 +410,7 @@ impl EditorService {
             )));
         }
         let source = fs::read_to_string(&puzzle_path)?;
+        #[cfg(any(feature = "native-preview", feature = "embedded-assets"))]
         let base_game_visuals_js = load_base_game_visuals_js(&puzzle_path, &workspace_root)?;
         Ok(Self {
             state: EditorState {
@@ -261,6 +418,7 @@ impl EditorService {
                 workspace_root: workspace_root.display().to_string(),
                 source,
                 game_css: load_game_css(&puzzle_path, &workspace_root)?,
+                #[cfg(any(feature = "native-preview", feature = "embedded-assets"))]
                 base_game_visuals_js,
                 documents: load_editor_documents(&puzzle_path, &workspace_root)?,
             },
@@ -283,6 +441,7 @@ impl EditorService {
         source_json(&self.state)
     }
 
+    #[cfg(feature = "native-preview")]
     pub fn compile_preview(&self, request: &PreviewRequest) -> Result<String, AppError> {
         let workspace_root = PathBuf::from(&self.state.workspace_root);
         let preview_path = resolve_workspace_request_path(&request.puzzle_path, &workspace_root)?;
@@ -342,11 +501,13 @@ impl EditorService {
         delete_workspace_entry(request, &self.state)
     }
 
+    #[cfg(feature = "embedded-assets")]
     pub fn export_pages_editor_html(&self) -> Result<String, AppError> {
         export_pages_editor_html(&self.state)
     }
 }
 
+#[cfg(feature = "sound-tools")]
 pub fn sound_tools_script() -> String {
     sound_tools_js()
 }
@@ -361,6 +522,7 @@ pub struct EditorState {
     workspace_root: String,
     source: String,
     game_css: String,
+    #[cfg(any(feature = "native-preview", feature = "embedded-assets"))]
     base_game_visuals_js: String,
     documents: Vec<EditorDocument>,
 }
@@ -409,14 +571,14 @@ fn load_game_css(puzzle_path: &Path, workspace_root: &Path) -> Result<String, Ap
     }
 }
 
+#[cfg(any(feature = "native-preview", feature = "embedded-assets"))]
 fn load_base_game_visuals_js(
     puzzle_path: &Path,
     workspace_root: &Path,
 ) -> Result<String, AppError> {
-    let mut scripts = vec![
-        asset_resolver_js(puzzle_path, workspace_root)?,
-        VISUALS_JS.to_string(),
-    ];
+    let mut scripts = vec![asset_resolver_js(puzzle_path, workspace_root)?];
+    #[cfg(feature = "embedded-assets")]
+    scripts.push(VISUALS_JS.to_string());
     let visuals_path = puzzle_path
         .parent()
         .unwrap_or_else(|| Path::new("."))
@@ -465,6 +627,7 @@ fn inline_css_urls(css: &str, base_dir: &Path, workspace_root: &Path) -> Result<
     Ok(out)
 }
 
+#[cfg(any(feature = "native-preview", feature = "embedded-assets"))]
 fn asset_resolver_js(puzzle_path: &Path, workspace_root: &Path) -> Result<String, AppError> {
     let parent = puzzle_path.parent().unwrap_or_else(|| Path::new("."));
     let mut files = String::new();
@@ -477,6 +640,7 @@ fn asset_resolver_js(puzzle_path: &Path, workspace_root: &Path) -> Result<String
     ))
 }
 
+#[cfg(any(feature = "native-preview", feature = "embedded-assets"))]
 fn collect_asset_resolver_entries(
     root: &Path,
     dir: &Path,
@@ -531,6 +695,7 @@ fn collect_asset_resolver_entries(
     Ok(())
 }
 
+#[cfg(any(feature = "native-preview", feature = "embedded-assets"))]
 fn percent_encode(value: &str) -> String {
     let mut out = String::new();
     for byte in value.bytes() {
@@ -543,6 +708,7 @@ fn percent_encode(value: &str) -> String {
     out
 }
 
+#[cfg(feature = "native-preview")]
 fn expand_preview_source_under_root(
     source: &str,
     puzzle_path: &Path,
@@ -968,6 +1134,7 @@ fn base64_encode(bytes: &[u8]) -> String {
     out
 }
 
+#[cfg(feature = "embedded-assets")]
 fn escape_html(value: &str) -> String {
     value
         .replace('&', "&amp;")
@@ -976,6 +1143,7 @@ fn escape_html(value: &str) -> String {
         .replace('"', "&quot;")
 }
 
+#[cfg(feature = "embedded-assets")]
 fn bind_listener(preferred_port: u16) -> io::Result<(TcpListener, u16)> {
     for offset in 0..100 {
         let port = preferred_port.saturating_add(offset);
@@ -992,6 +1160,7 @@ fn bind_listener(preferred_port: u16) -> io::Result<(TcpListener, u16)> {
     ))
 }
 
+#[cfg(feature = "embedded-assets")]
 fn handle_connection(mut stream: TcpStream, service: Arc<EditorService>) -> Result<(), AppError> {
     let Some(request) = read_request(&mut stream)? else {
         return Ok(());
@@ -1002,6 +1171,7 @@ fn handle_connection(mut stream: TcpStream, service: Arc<EditorService>) -> Resu
     Ok(())
 }
 
+#[cfg(feature = "embedded-assets")]
 #[derive(Debug)]
 struct HttpRequest {
     method: String,
@@ -1009,6 +1179,7 @@ struct HttpRequest {
     body: String,
 }
 
+#[cfg(feature = "embedded-assets")]
 fn read_request(stream: &mut TcpStream) -> Result<Option<HttpRequest>, AppError> {
     let mut bytes = Vec::new();
     let mut buffer = [0_u8; 8192];
@@ -1057,10 +1228,12 @@ fn read_request(stream: &mut TcpStream) -> Result<Option<HttpRequest>, AppError>
     Ok(Some(HttpRequest { method, path, body }))
 }
 
+#[cfg(feature = "embedded-assets")]
 fn find_header_end(bytes: &[u8]) -> Option<usize> {
     bytes.windows(4).position(|window| window == b"\r\n\r\n")
 }
 
+#[cfg(feature = "embedded-assets")]
 fn parse_content_length(header: &[u8]) -> usize {
     String::from_utf8_lossy(header)
         .lines()
@@ -1073,6 +1246,7 @@ fn parse_content_length(header: &[u8]) -> usize {
         .unwrap_or(0)
 }
 
+#[cfg(feature = "embedded-assets")]
 fn route(request: &HttpRequest, service: &EditorService) -> Vec<u8> {
     match (request.method.as_str(), request.path.as_str()) {
         ("GET", "/") | ("GET", "/editor") => {
@@ -1087,6 +1261,9 @@ fn route(request: &HttpRequest, service: &EditorService) -> Vec<u8> {
         ("GET", "/renderer.css") => http_ok("text/css; charset=utf-8", RENDERER_CSS),
         ("GET", "/game.css") => http_ok("text/css; charset=utf-8", &service.state().game_css),
         ("GET", "/editor_boot.js") => http_ok("text/javascript; charset=utf-8", EDITOR_BOOT_JS),
+        ("GET", "/editor_runtime.js") => {
+            http_ok("text/javascript; charset=utf-8", EDITOR_RUNTIME_JS)
+        }
         ("GET", "/editor_dom.js") => http_ok("text/javascript; charset=utf-8", EDITOR_DOM_JS),
         ("GET", "/editor_workspace.js") => {
             http_ok("text/javascript; charset=utf-8", &editor_workspace_js())
@@ -1097,6 +1274,9 @@ fn route(request: &HttpRequest, service: &EditorService) -> Vec<u8> {
         }
         ("GET", "/editor_workbench.js") => {
             http_ok("text/javascript; charset=utf-8", EDITOR_WORKBENCH_JS)
+        }
+        ("GET", "/editor_import_export.js") => {
+            http_ok("text/javascript; charset=utf-8", EDITOR_IMPORT_EXPORT_JS)
         }
         ("GET", "/editor.js") => http_ok("text/javascript; charset=utf-8", EDITOR_JS),
         ("GET", "/editor_sprite.js") => http_ok("text/javascript; charset=utf-8", EDITOR_SPRITE_JS),
@@ -1592,6 +1772,7 @@ fn json_string_field(source: &str, key: &str) -> Option<String> {
     None
 }
 
+#[cfg(feature = "embedded-assets")]
 fn export_pages_editor_html(state: &EditorState) -> Result<String, AppError> {
     let mut data = String::new();
     editor_seed_json(&mut data, state);
@@ -1613,6 +1794,7 @@ fn export_pages_editor_html(state: &EditorState) -> Result<String, AppError> {
         ))
 }
 
+#[cfg(feature = "embedded-assets")]
 fn write_pages_editor_site(output_path: &Path, html: String) -> Result<(), AppError> {
     let output_dir = output_path
         .parent()
@@ -1623,12 +1805,18 @@ fn write_pages_editor_site(output_path: &Path, html: String) -> Result<(), AppEr
 
     write_text_asset(output_dir, "favicon.svg", FAVICON_SVG)?;
     write_text_asset(output_dir, "editor.css", EDITOR_CSS)?;
+    write_text_asset(output_dir, "editor_runtime.js", EDITOR_RUNTIME_JS)?;
     write_text_asset(output_dir, "editor_boot.js", EDITOR_BOOT_JS)?;
     write_text_asset(output_dir, "editor_dom.js", EDITOR_DOM_JS)?;
     write_text_asset(output_dir, "editor_workspace.js", &editor_workspace_js())?;
     write_text_asset(output_dir, "editor_source.js", EDITOR_SOURCE_JS)?;
     write_text_asset(output_dir, "editor_level3d.js", EDITOR_LEVEL3D_JS)?;
     write_text_asset(output_dir, "editor_workbench.js", EDITOR_WORKBENCH_JS)?;
+    write_text_asset(
+        output_dir,
+        "editor_import_export.js",
+        EDITOR_IMPORT_EXPORT_JS,
+    )?;
     write_text_asset(output_dir, "editor.js", EDITOR_JS)?;
     write_text_asset(output_dir, "editor_sprite.js", EDITOR_SPRITE_JS)?;
     write_text_asset(output_dir, "editor_sprite3d.js", EDITOR_SPRITE3D_JS)?;
@@ -1667,15 +1855,18 @@ fn write_pages_editor_site(output_path: &Path, html: String) -> Result<(), AppEr
     Ok(())
 }
 
+#[cfg(feature = "embedded-assets")]
 fn write_text_asset(output_dir: &Path, name: &str, contents: &str) -> Result<(), AppError> {
     fs::write(output_dir.join(name), contents)?;
     Ok(())
 }
 
+#[cfg(feature = "embedded-assets")]
 fn editor_html_with_docs() -> String {
     EDITOR_HTML.replace("<!-- PUZZLESTUDIO_EDITOR_DOCS -->", &render_editor_docs())
 }
 
+#[cfg(feature = "embedded-assets")]
 fn editor_workspace_js() -> String {
     const PLACEHOLDER: &str = "\"__PUZZLESTUDIO_NEW_PUZZLE_SOURCE__\"";
     if !EDITOR_WORKSPACE_JS.contains(PLACEHOLDER) {
@@ -1687,12 +1878,14 @@ fn editor_workspace_js() -> String {
     )
 }
 
+#[cfg(feature = "embedded-assets")]
 struct EditorDocsPage {
     id: &'static str,
     title: &'static str,
     markdown: &'static str,
 }
 
+#[cfg(feature = "embedded-assets")]
 const EDITOR_DOCS_PAGES: &[EditorDocsPage] = &[
     EditorDocsPage {
         id: "start",
@@ -1836,6 +2029,7 @@ const EDITOR_DOCS_PAGES: &[EditorDocsPage] = &[
     },
 ];
 
+#[cfg(feature = "embedded-assets")]
 fn render_editor_docs() -> String {
     let mut out = String::from(
         "<div class=\"docs-layout\">\n<nav class=\"docs-nav\" role=\"tablist\" aria-label=\"Documents\">\n",
@@ -1861,6 +2055,7 @@ fn render_editor_docs() -> String {
     out
 }
 
+#[cfg(feature = "embedded-assets")]
 fn render_editor_docs_markdown(page: &EditorDocsPage, active: bool) -> String {
     let hidden = if active { "" } else { " hidden" };
     let mut out = format!(
@@ -1943,6 +2138,7 @@ fn render_editor_docs_markdown(page: &EditorDocsPage, active: bool) -> String {
     out
 }
 
+#[cfg(feature = "embedded-assets")]
 fn flush_docs_paragraph(out: &mut String, paragraph: &mut Vec<String>) {
     if paragraph.is_empty() {
         return;
@@ -1953,6 +2149,7 @@ fn flush_docs_paragraph(out: &mut String, paragraph: &mut Vec<String>) {
     paragraph.clear();
 }
 
+#[cfg(feature = "embedded-assets")]
 fn close_docs_header(out: &mut String, in_header: &mut bool, header_closed: &mut bool) {
     if *in_header && !*header_closed {
         out.push_str("</header>\n");
@@ -1961,6 +2158,7 @@ fn close_docs_header(out: &mut String, in_header: &mut bool, header_closed: &mut
     }
 }
 
+#[cfg(feature = "embedded-assets")]
 fn close_docs_section(out: &mut String, in_section: &mut bool) {
     if *in_section {
         out.push_str("</section>\n");
@@ -1968,6 +2166,7 @@ fn close_docs_section(out: &mut String, in_section: &mut bool) {
     }
 }
 
+#[cfg(feature = "embedded-assets")]
 fn render_docs_inline(value: &str) -> String {
     let mut out = String::new();
     for (index, part) in value.split('`').enumerate() {
@@ -1982,6 +2181,7 @@ fn render_docs_inline(value: &str) -> String {
     out
 }
 
+#[cfg(feature = "sound-tools")]
 fn sound_tools_js() -> String {
     fn module_body(source: &str) -> String {
         source
@@ -2056,6 +2256,7 @@ fn source_json(state: &EditorState) -> Result<String, AppError> {
     Ok(out)
 }
 
+#[cfg(feature = "embedded-assets")]
 fn editor_seed_json(out: &mut String, state: &EditorState) {
     out.push('{');
     push_json_pair(out, "puzzlePath", &state.puzzle_path);
@@ -2154,6 +2355,7 @@ fn push_json_string_array(out: &mut String, key: &str, values: &[String]) {
     out.push(']');
 }
 
+#[cfg(feature = "embedded-assets")]
 fn push_diagnostics_json(out: &mut String, diagnostics: &[Diagnostic]) {
     out.push_str("{\"diagnostics\":[");
     for (index, diagnostic) in diagnostics.iter().enumerate() {
@@ -2165,6 +2367,7 @@ fn push_diagnostics_json(out: &mut String, diagnostics: &[Diagnostic]) {
     out.push_str("]}");
 }
 
+#[cfg(feature = "embedded-assets")]
 fn push_diagnostic_json(out: &mut String, diagnostic: &Diagnostic) {
     let span = diagnostic.primary_span.as_ref();
     out.push('{');
@@ -2192,6 +2395,7 @@ fn push_diagnostic_json(out: &mut String, diagnostic: &Diagnostic) {
     out.push('}');
 }
 
+#[cfg(feature = "embedded-assets")]
 fn push_json_option_number(out: &mut String, key: &str, value: Option<usize>) {
     push_json_string(out, key);
     out.push(':');
@@ -2201,6 +2405,7 @@ fn push_json_option_number(out: &mut String, key: &str, value: Option<usize>) {
     }
 }
 
+#[cfg(feature = "embedded-assets")]
 fn push_json_option_string(out: &mut String, key: &str, value: Option<&str>) {
     push_json_string(out, key);
     out.push(':');
@@ -2210,12 +2415,14 @@ fn push_json_option_string(out: &mut String, key: &str, value: Option<&str>) {
     }
 }
 
+#[cfg(feature = "embedded-assets")]
 fn js_string_literal(value: &str) -> String {
     let mut out = String::new();
     push_json_string(&mut out, value);
     out
 }
 
+#[cfg(feature = "embedded-assets")]
 fn escape_script_json(value: &str) -> String {
     let mut escaped = String::new();
     for ch in value.chars() {
@@ -2235,14 +2442,17 @@ fn escape_script_json(value: &str) -> String {
     escaped
 }
 
+#[cfg(feature = "embedded-assets")]
 fn escape_script(value: &str) -> String {
     value.replace("</script", "<\\/script")
 }
 
+#[cfg(feature = "embedded-assets")]
 fn http_ok(content_type: &str, body: &str) -> Vec<u8> {
     http_response(200, "OK", content_type, body)
 }
 
+#[cfg(feature = "embedded-assets")]
 fn http_error(status: u16, message: &str) -> Vec<u8> {
     let mut body = String::new();
     body.push_str("{\"error\":");
@@ -2256,6 +2466,7 @@ fn http_error(status: u16, message: &str) -> Vec<u8> {
     http_response(status, reason, "application/json; charset=utf-8", &body)
 }
 
+#[cfg(feature = "embedded-assets")]
 fn http_diagnostic_error(status: u16, report: &DiagnosticReport) -> Vec<u8> {
     let mut body = String::new();
     push_diagnostics_json(&mut body, report.diagnostics());
@@ -2267,6 +2478,7 @@ fn http_diagnostic_error(status: u16, report: &DiagnosticReport) -> Vec<u8> {
     http_response(status, reason, "application/json; charset=utf-8", &body)
 }
 
+#[cfg(feature = "embedded-assets")]
 fn http_response(status: u16, reason: &str, content_type: &str, body: &str) -> Vec<u8> {
     let response = format!(
         "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n{body}",
@@ -2275,6 +2487,7 @@ fn http_response(status: u16, reason: &str, content_type: &str, body: &str) -> V
     response.into_bytes()
 }
 
+#[cfg(feature = "embedded-assets")]
 fn http_bytes(content_type: &str, body: &[u8]) -> Vec<u8> {
     let mut response = format!(
         "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
@@ -2401,6 +2614,55 @@ step board
             .iter()
             .find(|document| document.puzzle_path.replace('\\', "/").ends_with(suffix))
             .expect("document with suffix")
+    }
+
+    #[test]
+    fn pages_export_default_does_not_resolve_games_workspace() {
+        let config = Config::from_args(Vec::<String>::new()).expect("default config");
+        assert!(
+            config.puzzle_path.is_none(),
+            "default Pages export must use the managed example seed, not games/"
+        );
+
+        let service = EditorService::open_pages_example();
+        let state = service.state();
+        assert_eq!(state.workspace_root, "");
+        assert_eq!(state.puzzle_path, PAGES_EXAMPLE_PUZZLE_PATH);
+        assert_eq!(state.documents.len(), 1);
+        assert_eq!(state.documents[0].puzzle_path, PAGES_EXAMPLE_PUZZLE_PATH);
+        assert!(state.source.contains("PuzzleStudio Example"));
+
+        let html = service
+            .export_pages_editor_html()
+            .expect("export managed Pages editor html");
+        assert!(html.contains("PuzzleStudio Example"));
+        assert!(html.contains("Push the box onto the goal"));
+        assert!(html.contains("all Goal on Box"));
+        assert!(html.contains("input [ Player ]"));
+        assert!(!html.contains("Player{&gt;}"));
+        assert!(!html.contains("Player{>}"));
+        assert!(html.contains(PAGES_EXAMPLE_PUZZLE_PATH));
+        assert!(!html.contains("games/spec_2d.puzzle"));
+        assert!(!html.contains("/games/"));
+        assert!(!html.contains("Managed GitHub Pages starter"));
+        assert!(!html.contains("levels demo of starter"));
+    }
+
+    #[test]
+    fn pages_example_compiles_as_playable_sokoban() {
+        let workspace = TestWorkspace::new();
+        let example_path = workspace.write(PAGES_EXAMPLE_PUZZLE_PATH, PAGES_EXAMPLE_PUZZLE_SOURCE);
+        let service = EditorService::open(&example_path).expect("open managed Pages example");
+        let html = service
+            .compile_preview(&PreviewRequest::new(
+                PAGES_EXAMPLE_PUZZLE_SOURCE,
+                example_path.display().to_string(),
+                String::new(),
+            ))
+            .expect("managed Pages example should compile");
+
+        assert!(html.contains("PuzzleStudio Example"));
+        assert!(html.contains("Push the box onto the goal"));
     }
 
     #[test]
@@ -2825,6 +3087,28 @@ step board
             "request CSS should flow into the generated preview"
         );
         assert!(!html.contains("Preview Before"));
+    }
+
+    #[test]
+    fn compile_preview_accepts_top_level_sounds_without_duplicate_error() {
+        let workspace = TestWorkspace::new();
+        let source = editor_fixture_source("Top Level Sounds").replace(
+            "puzzle default {",
+            "sounds {\nsfx push seed=301193 type=hit volume=0.3\n}\n\npuzzle default {",
+        );
+        let game_path = workspace.write("games/top_level_sounds/game.puzzle", &source);
+        let service = EditorService::open(&game_path).expect("open editor fixture");
+
+        let html = service
+            .compile_preview(&PreviewRequest::new(
+                source,
+                game_path.display().to_string(),
+                service.state().game_css.clone(),
+            ))
+            .expect("compile preview with top-level sounds");
+
+        assert!(html.contains("<!doctype html>"));
+        assert!(html.contains(r#"\"name\":\"push\""#));
     }
 
     #[test]
@@ -3496,7 +3780,7 @@ levels3 demo of push3 {
     fn puzzlescript_import_requires_explicit_convert_action() {
         assert!(EDITOR_HTML.contains(r#"id="psImportConvertButton""#));
         assert!(EDITOR_HTML.contains("lucide-file-plus-icon lucide-file-plus"));
-        assert!(EDITOR_JS.contains("function resetPuzzleScriptImportConversion()"));
+        assert!(EDITOR_IMPORT_EXPORT_JS.contains("function resetPuzzleScriptImportConversion()"));
         assert!(EDITOR_JS.contains(
             "psImportSourceInput?.addEventListener(\"input\", resetPuzzleScriptImportConversion);"
         ));
@@ -3819,6 +4103,15 @@ levels3 demo of push3 {
     }
 
     #[test]
+    fn editor_compile_diagnostic_links_require_explicit_line_numbers() {
+        assert!(EDITOR_JS.contains("const line = positiveInteger(diagnostic?.line);"));
+        assert!(EDITOR_JS.contains("if (!line) {\n    return null;\n  }"));
+        assert!(!EDITOR_JS.contains("sourceLocationForDiagnosticLine"));
+        assert!(!EDITOR_JS.contains("sourceCodeForDiagnosticMatch"));
+        assert!(!EDITOR_JS.contains("searchStart"));
+    }
+
+    #[test]
     fn editor_source_line_numbers_are_loaded_by_static_editor() {
         assert!(EDITOR_HTML.contains(r#"id="sourceLineNumbers""#));
         assert!(EDITOR_DOM_JS.contains(
@@ -3847,6 +4140,20 @@ levels3 demo of push3 {
         assert!(EDITOR_JS.contains("function syncSolverLevelSelector("));
         assert!(EDITOR_JS.contains("function selectSolverLevel("));
         assert!(EDITOR_JS.contains("function setSolverTargetFromState("));
+        assert!(EDITOR_JS.contains("function syncSolverTargetFromActiveLevel("));
+        assert!(EDITOR_JS.contains("function syncSolverTargetFromSourceTarget("));
+        assert!(EDITOR_JS.contains("async function syncSolverTargetFromSourceCursor("));
+        assert!(EDITOR_JS.contains("function openSolverPaneForCurrentLevel("));
+        assert!(
+            EDITOR_JS
+                .contains("const target = await resolveSourceTargetFromWasm(source, position);")
+        );
+        assert!(EDITOR_JS.contains("return syncSolverTargetFromSourceTarget(target, exportData);"));
+        assert!(
+            EDITOR_JS.contains(
+                "solverModeButton.addEventListener(\"click\", () => {\n  openSolverPaneForCurrentLevel().catch((error) => {"
+            )
+        );
         assert!(EDITOR_JS.contains("compilingMessage: \"Compiling preview for solve\""));
         assert!(EDITOR_JS.contains("async function solveEditedLevelFromEditor()"));
         assert!(EDITOR_JS.contains("function compiledLevelStateData("));
@@ -3970,7 +4277,10 @@ levels3 demo of push3 {
         assert!(!EDITOR_JS.contains("topbar-editor-actions"));
         assert!(!EDITOR_CSS.contains("topbar-editor-actions"));
         assert!(EDITOR_WORKBENCH_JS.contains("function toolPaneHeaderActionGroups(paneId)"));
-        assert!(EDITOR_WORKBENCH_JS.contains("title.append(group);"));
+        assert!(EDITOR_WORKBENCH_JS.contains("const actions = document.createElement(\"div\");"));
+        assert!(EDITOR_WORKBENCH_JS.contains("actions.className = \"pane-actions\";"));
+        assert!(EDITOR_WORKBENCH_JS.contains("actions.append(group);"));
+        assert!(EDITOR_WORKBENCH_JS.contains("header.append(title, actions);"));
         assert!(EDITOR_WORKBENCH_JS.contains("syncToolPaneHeaderActionGroups();"));
         assert!(EDITOR_JS.contains("const tracksSource = kind === \"level3d\" || kind === \"sprite\" || kind === \"sprite3d\";"));
         assert!(!EDITOR_JS.contains("nextExport.levels[levelIndex].initialState = stateData"));
@@ -4106,7 +4416,7 @@ levels3 demo of push3 {
 
     #[test]
     fn level3d_microban_01_supplies_preview_contract_data() {
-        let source = include_str!("../../../games/spec_3d.puzzle3");
+        let source = include_str!("../../lang/tests/fixtures/spec_3d_preview_contract.puzzle3");
         let document = puzzle_lang::parse_game(source).expect("parse Microban 3D fixture");
         let fixture_json = puzzle_lang::export_loaded_document_visual_fixture_json(&document)
             .expect("export Microban 3D fixture");
@@ -4116,24 +4426,25 @@ levels3 demo of push3 {
         assert!(fixture_json.contains("\"label\": \"Microban 01\""));
         assert!(fixture_json.contains("\"size\": { \"width\": 6, \"depth\": 7, \"height\": 2 }"));
         assert!(fixture_json.contains(
-            "\"position\": { \"x\": 2, \"y\": 3, \"z\": 1 }, \"objects\": [{ \"id\": 3, \"name\": \"Player\", \"sprite\": \"Player\" }]"
+            "\"position\": { \"x\": 2, \"y\": 3, \"z\": 1 }, \"objects\": [{ \"id\": 3, \"name\": \"Player\", \"sprite\": null }]"
         ));
         assert!(fixture_json.contains(
-            "\"position\": { \"x\": 1, \"y\": 3, \"z\": 1 }, \"objects\": [{ \"id\": 4, \"name\": \"Box\", \"sprite\": \"Box\" }]"
+            "\"position\": { \"x\": 1, \"y\": 3, \"z\": 1 }, \"objects\": [{ \"id\": 4, \"name\": \"Box\", \"sprite\": null }]"
         ));
         assert!(fixture_json.contains(
-            "\"position\": { \"x\": 2, \"y\": 5, \"z\": 0 }, \"objects\": [{ \"id\": 1, \"name\": \"Floor\", \"sprite\": \"Floor\" }, { \"id\": 2, \"name\": \"Goal\", \"sprite\": \"Goal\" }]"
+            "\"position\": { \"x\": 2, \"y\": 5, \"z\": 0 }, \"objects\": [{ \"id\": 1, \"name\": \"Floor\", \"sprite\": null }, { \"id\": 2, \"name\": \"Goal\", \"sprite\": null }]"
         ));
 
         assert!(fixture_json.contains("\"layerCount\": 3"));
         assert!(fixture_json.contains(
-            "\"Player\": { \"id\": 3, \"name\": \"Player\", \"sprite\": \"Player\", \"layer\": 2 }"
+            "\"Player\": { \"id\": 3, \"name\": \"Player\", \"sprite\": null, \"layer\": 2 }"
         ));
-        assert!(fixture_json.contains(
-            "\"Box\": { \"id\": 4, \"name\": \"Box\", \"sprite\": \"Box\", \"layer\": 2 }"
-        ));
+        assert!(
+            fixture_json.contains(
+                "\"Box\": { \"id\": 4, \"name\": \"Box\", \"sprite\": null, \"layer\": 2 }"
+            )
+        );
         assert!(fixture_json.contains("\"sprites\": {"));
-        assert!(fixture_json.contains("\"Player\": {"));
         assert!(
             fixture_json.contains(
                 "\"camera\": { \"yawDegrees\": 10, \"pitchDegrees\": 55, \"zoom\": 1.1 }"
@@ -4360,7 +4671,7 @@ levels3 demo of push3 {
         ));
         assert!(EDITOR_SPRITE_JS.contains("function deactivateSpriteBucketModeAfterUse()"));
         assert!(EDITOR_SPRITE_JS.contains(
-            "setSpriteActionStatus(\"Connected area already has that color\", \"is-ok\");\n    deactivateSpriteBucketModeAfterUse();\n    return true;"
+            "setSpriteActionStatus(\"Connected area already has that color\", \"is-ok\");\n    deactivateSpriteBucketModeAfterUse();\n    return false;"
         ));
         assert!(EDITOR_SPRITE_JS.contains(
             "const message = colorIndex === null ? \"Filled connected area with transparent\" : \"Filled connected area\";\n  deactivateSpriteBucketModeAfterUse();"
@@ -4387,8 +4698,51 @@ levels3 demo of push3 {
     fn sprite_cell_hover_preserves_pixel_color_surface() {
         assert!(EDITOR_CSS.contains("--sprite-swatch-checker: url("));
         assert!(EDITOR_CSS.contains(
-            ".sprite-cell:hover,\n.sprite-cell:focus-visible,\n.sprite-cell:active {\n  background-color: var(--sprite-swatch-bg);\n  background-image: var(--sprite-swatch-checker);"
+            ".sprite-cell:focus-visible {\n  background-color: var(--sprite-swatch-bg);\n  background-image: var(--sprite-swatch-checker);"
         ));
+        assert!(
+            !EDITOR_CSS.contains(
+                ".sprite-cell:hover,\n.sprite-cell:focus-visible,\n.sprite-cell:active {"
+            )
+        );
+        assert!(!EDITOR_CSS.contains(".sprite-brush-preview"));
+    }
+
+    #[test]
+    fn sprite_brush_presets_are_relative_and_paint_updates_changed_cells() {
+        assert!(EDITOR_CSS.contains(
+            "#spriteBuilder .sprite-board {\n  --sprite-cell: clamp(8px, calc((100cqw - 2px) / var(--sprite-size)), 64px);\n}"
+        ));
+        assert!(EDITOR_SPRITE_JS.contains("let spriteBrushPreset = \"pixel\";"));
+        assert!(EDITOR_SPRITE_JS.contains("pixel: { label: \"1px\", diameterCells: 1 },"));
+        assert!(EDITOR_SPRITE_JS.contains("thin: { label: \"Marker S\", ratio: 1 / 32 },"));
+        assert!(EDITOR_SPRITE_JS.contains("medium: { label: \"Marker M\", ratio: 1 / 20 },"));
+        assert!(EDITOR_SPRITE_JS.contains("thick: { label: \"Marker L\", ratio: 1 / 12 },"));
+        assert!(EDITOR_SPRITE_JS.contains(
+            "if (spriteBrushIsPixel()) {\n    const index = spriteCellIndexFromPoint(point);\n    return index >= 0 ? [index] : [];\n  }"
+        ));
+        assert!(
+            EDITOR_SPRITE_JS.contains("return Math.min(sprite.size, sprite.size * config.ratio);")
+        );
+        assert!(!EDITOR_SPRITE_JS.contains("Math.round(sprite.size * config.ratio)"));
+        assert!(EDITOR_SPRITE_JS.contains("function renderSpriteCellsAtIndices(indices)"));
+        assert!(EDITOR_SPRITE_JS.contains("finishSpritePaintMutation(changedIndices);"));
+        assert!(
+            EDITOR_SPRITE_JS
+                .contains("finishSpritePaintMutation(changedIndices, { deferSourceSync: true });")
+        );
+        assert!(EDITOR_SPRITE_JS.contains(
+            "if (!options.deferSourceSync) {\n    updateSpriteBoundShapeDefinition();\n  }"
+        ));
+        assert!(EDITOR_SPRITE_JS.contains(
+            "if (!options.deferSourceSync) {\n    syncSpriteSourceActionButtons();\n  }"
+        ));
+        assert!(EDITOR_SPRITE_JS.contains(
+            "updateSpriteBoundShapeDefinition();\n    syncSpriteSourceActionButtons();\n    pushVisualEditUndoSnapshot(\"sprite\", spritePaintDrag.beforeSnapshot);"
+        ));
+        assert!(!EDITOR_SPRITE_JS.contains("spriteBrushPreviewElement"));
+        assert!(!EDITOR_SPRITE_JS.contains("sprite-brush-preview"));
+        assert!(!EDITOR_SPRITE_JS.contains("finishSpritePaintMutation();"));
     }
 
     #[test]
@@ -4398,7 +4752,17 @@ levels3 demo of push3 {
             EDITOR_SOURCE_JS.contains("function sourceRewriteStatementBounds(code, cursorColumn)")
         );
         assert!(EDITOR_SOURCE_JS.contains("sourceRewritePatternBeforeArrow(lineBeforeArrow)"));
+        assert!(EDITOR_SOURCE_JS.contains("function sourcePatternCellSeparator(char)"));
+        assert!(EDITOR_SOURCE_JS.contains("return char === \"|\" || char === \";\";"));
         assert!(EDITOR_SOURCE_JS.contains("function sourceEmptyRewritePattern(pattern)"));
+        assert!(
+            EDITOR_SOURCE_JS.contains(
+                "const separators = Array.from(body).filter(sourcePatternCellSeparator);"
+            )
+        );
+        assert!(EDITOR_SOURCE_JS.contains(
+            "const emptyBody = separators.map((separator) => separator === \"|\" ? \" | \" : \";\").join(\"\");"
+        ));
         assert!(EDITOR_SOURCE_JS.contains("function handleSourceRewritePatternTab(event)"));
         assert!(
             EDITOR_SOURCE_JS.contains(
@@ -4433,6 +4797,7 @@ levels3 demo of push3 {
     #[test]
     fn source_editor_tab_exits_rule_bracket_cell() {
         assert!(EDITOR_SOURCE_JS.contains("function handleSourceRuleBracketCellSlotTab(event)"));
+        assert!(EDITOR_SOURCE_JS.contains("sourcePatternCellSeparator(body[index])"));
         assert!(
             EDITOR_SOURCE_JS.contains(
                 "const targetIndex = event.shiftKey\n    ? (currentIndex + slots.length - 1) % slots.length\n    : (currentIndex + 1) % slots.length;"
@@ -4552,11 +4917,20 @@ levels3 demo of push3 {
     }
 
     #[test]
-    fn source_completion_keeps_current_replacement_item() {
+    fn source_completion_filters_full_replacement_token() {
         assert!(EDITOR_SOURCE_JS.contains(
-            "const items = filterSourceCompletionsForDocument(list?.items || [], document);"
+            "const items = filterSourceCompletionsForTypedReplacement(\n      filterSourceCompletionsForDocument(list?.items || [], document),\n      list,\n      source,\n      cursor,\n    );"
         ));
+        assert!(EDITOR_SOURCE_JS.contains(
+            "function filterSourceCompletionsForTypedReplacement(items, list, source, cursor)"
+        ));
+        assert!(
+            EDITOR_SOURCE_JS.contains("const current = source.slice(replaceStart, replaceEnd);")
+        );
         assert!(!EDITOR_SOURCE_JS.contains("function filterSourceCompletionsForCurrentRange"));
+        assert!(
+            EDITOR_SOURCE_JS.contains("full token under the caret, not just the prefix before it")
+        );
     }
 
     #[test]
@@ -4746,10 +5120,21 @@ levels3 demo of push3 {
 
     #[test]
     fn editor_preview_theme_resolver_accepts_canonical_theme_variables() {
+        assert!(EDITOR_JS.contains("accent: \"var(--preview-game-ink)\","));
+        assert!(EDITOR_JS.contains(
+            "root.style.setProperty(\"--preview-game-accent\", theme.accent || theme.ink);"
+        ));
+        assert!(
+            EDITOR_CSS.contains(
+                "--accent: var(--preview-game-accent, var(--preview-game-ink, #1f2428));"
+            )
+        );
         assert!(EDITOR_JS.contains("if (name === \"bg\" || name === \"background\") {"));
         assert!(EDITOR_JS.contains("} else if (name === \"ink\" || name === \"text\") {"));
         assert!(
-            EDITOR_JS.contains("} else if (name === \"accent\") {\n      resolved.line = value;")
+            EDITOR_JS.contains(
+                "} else if (name === \"accent\") {\n      resolved.accent = value;\n      resolved.line = value;"
+            )
         );
     }
 
@@ -4842,6 +5227,34 @@ levels3 demo of push3 {
     }
 
     #[test]
+    fn sprite_shape_registration_uses_unbraced_plain_shapes() {
+        assert!(
+            EDITOR_SPRITE_JS
+                .contains("function spritePlainShapeDefinitionText(indent, name, rows)")
+        );
+        assert!(
+            EDITOR_SPRITE_JS.contains("spritePlainShapeDefinitionText(indent, name, shapeRows)")
+        );
+        assert!(
+            EDITOR_SPRITE_JS
+                .contains("spritePlainShapeDefinitionText(shapeIndent, name, shapeRows)")
+        );
+        assert!(EDITOR_SPRITE_JS.contains("range.braced && !range.tableRow"));
+        assert!(!EDITOR_SPRITE_JS.contains("${name} {\\n${shapeRows.map"));
+    }
+
+    #[test]
+    fn sprite_shape_update_preserves_following_shape_header_boundary() {
+        assert!(EDITOR_SPRITE_JS.contains("function spriteUnbracedShapeRowIsBoundary("));
+        assert!(EDITOR_SPRITE_JS.contains("row.includes(\"{\") || row.includes(\"}\")"));
+        assert!(EDITOR_SPRITE_JS.contains("spriteAsciiRowWidth(next) !== width"));
+        assert!(EDITOR_SPRITE_JS.contains("function spritePlainShapeDefinitionTrailingBoundary("));
+        assert!(EDITOR_SPRITE_JS.contains(
+            "const boundary = spritePlainShapeDefinitionTrailingBoundary(source, range.declarationEnd);"
+        ));
+    }
+
+    #[test]
     fn sprite_source_loader_projects_generic_table_refs() {
         assert!(EDITOR_SPRITE_JS.contains("function spriteSelectorSingleTagBinding("));
         assert!(EDITOR_SPRITE_JS.contains("function firstSpriteTableAssetKey(tableName, assets)"));
@@ -4861,12 +5274,14 @@ levels3 demo of push3 {
         assert!(EDITOR_SPRITE_JS.contains("function expandSpriteShapeRotationRows("));
         assert!(EDITOR_SPRITE_JS.contains("function rotateSpriteAsciiRowsClockwise(rows)"));
         assert!(EDITOR_SPRITE_JS.contains("markSpriteTableBindingAsset(raw, bindingKey);"));
-        assert!(EDITOR_SPRITE_JS.contains(
-            "if (assets.has(name) && !spriteTableAssetIsBinding(assets, name))"
-        ));
-        assert!(EDITOR_SPRITE_JS.contains(
-            "if (selectorValue && assets.has(`${tableName}:${selectorValue}`))"
-        ));
+        assert!(
+            EDITOR_SPRITE_JS
+                .contains("if (assets.has(name) && !spriteTableAssetIsBinding(assets, name))")
+        );
+        assert!(
+            EDITOR_SPRITE_JS
+                .contains("if (selectorValue && assets.has(`${tableName}:${selectorValue}`))")
+        );
     }
 
     #[test]
@@ -4938,14 +5353,11 @@ levels3 demo of push3 {
     }
 
     #[test]
-    fn tauri_new_puzzle_creation_uses_desktop_host_template_source() {
-        assert!(EDITOR_BOOT_JS.contains("async newPuzzleSource(payload)"));
-        assert!(EDITOR_BOOT_JS.contains(r#"invoke("new_puzzle_source", { request: payload })"#));
+    fn new_puzzle_creation_uses_browser_template_source_for_all_hosts() {
+        assert!(EDITOR_BOOT_JS.contains("New puzzle source is browser-runtime owned"));
+        assert!(!EDITOR_BOOT_JS.contains(r#"invoke("new_puzzle_source", { request: payload })"#));
         assert!(EDITOR_WORKSPACE_JS.contains("async function newPuzzleSourceForFile(name)"));
-        assert!(
-            EDITOR_WORKSPACE_JS
-                .contains("return window.PuzzleStudioHost.newPuzzleSource({ title });")
-        );
+        assert!(!EDITOR_WORKSPACE_JS.contains("window.PuzzleStudioHost.newPuzzleSource"));
         assert!(EDITOR_WORKSPACE_JS.contains("return starterPuzzleSourceFromTitle(title);"));
     }
 
@@ -4953,8 +5365,13 @@ levels3 demo of push3 {
     fn level3d_stage_resize_tools_support_expand_and_shrink() {
         assert!(EDITOR_LEVEL3D_JS.contains("function level3dShrinkModeButton()"));
         assert!(EDITOR_LEVEL3D_JS.contains("mode: \"shrink\""));
-        assert!(EDITOR_LEVEL3D_JS.contains("edge: \"backward\""));
-        assert!(EDITOR_LEVEL3D_JS.contains("edge: \"forward\""));
+        assert!(EDITOR_LEVEL3D_JS.contains("dimension: \"width\""));
+        assert!(EDITOR_LEVEL3D_JS.contains("edge: \"left\""));
+        assert!(EDITOR_LEVEL3D_JS.contains("edge: \"right\""));
+        assert!(EDITOR_LEVEL3D_JS.contains("dimension: \"depth\""));
+        assert!(EDITOR_LEVEL3D_JS.contains("edge: \"front\""));
+        assert!(EDITOR_LEVEL3D_JS.contains("edge: \"back\""));
+        assert!(EDITOR_LEVEL3D_JS.contains("dimension: \"height\""));
         assert!(EDITOR_LEVEL3D_JS.contains("edge: \"down\""));
         assert!(EDITOR_LEVEL3D_JS.contains("edge: \"up\""));
         assert!(EDITOR_LEVEL3D_JS.contains("function level3dStageResizeFrameEdges(size, hit)"));
@@ -5273,6 +5690,7 @@ levels3 demo of push3 {
         assert!(
             html.contains(r#"<script src="editor.js?v=level-editor-import-reference"></script>"#)
         );
+        assert!(html.contains(r#"<script src="editor_import_export.js"></script>"#));
         assert!(html.contains(r#"<script src="editor_dom.js"></script>"#));
         assert!(!html.contains("<script>\nwindow.PuzzleAssets ="));
         assert!(!html.contains("PuzzleEditorThemeImports"));
@@ -5298,15 +5716,33 @@ levels3 demo of push3 {
     }
 
     #[test]
-    fn browser_preview_compile_requires_host_api() {
+    fn browser_preview_compile_uses_browser_runtime_not_host_api() {
+        assert!(EDITOR_RUNTIME_JS.contains("window.PuzzleStudioRuntime"));
+        assert!(EDITOR_RUNTIME_JS.contains("compile_preview"));
+        assert!(EDITOR_RUNTIME_JS.contains("highlight_source_html"));
+        assert!(EDITOR_HTML.contains("editor_runtime.js"));
+        assert!(
+            EDITOR_HTML.find("editor_runtime.js").unwrap()
+                < EDITOR_HTML.find("editor_boot.js").unwrap()
+        );
+        assert!(EDITOR_BOOT_JS.contains("editorRuntime().compilePreview(payload)"));
+        assert!(EDITOR_BOOT_JS.contains("editorRuntime().highlightSource(payload)"));
+        assert!(EDITOR_RUNTIME_JS.contains("gameRuntimeAssets()"));
+        assert!(EDITOR_RUNTIME_JS.contains("./wasm_game/puzzle_wasm_game.js"));
+        assert!(EDITOR_RUNTIME_JS.contains("./wasm_game/puzzle_wasm_game_bg.wasm"));
+        assert!(EDITOR_JS.contains("PuzzleStudioRuntimeAssetRequest"));
+        assert!(EDITOR_JS.contains("PuzzleStudioRuntimeAssetResponse"));
+        assert!(EDITOR_JS.contains("previewRuntimeAssetWindows"));
+        assert!(!EDITOR_BOOT_JS.contains("invoke(\"compile_preview\""));
+        assert!(!EDITOR_BOOT_JS.contains("invoke(\"highlight_source\""));
+        assert!(!EDITOR_BOOT_JS.contains("fetchText(\"/api/preview\""));
+        assert!(!EDITOR_BOOT_JS.contains("fetchText(\"/api/highlight\""));
         assert!(!EDITOR_JS.contains("function compilePreviewWithWasm"));
         assert!(!EDITOR_JS.contains("function embedStandaloneRuntimeWasm"));
-        assert!(!EDITOR_JS.contains("Compiling in browser"));
         assert!(!EDITOR_JS.contains("window.PuzzleStudioGameWasmAssets"));
         assert!(!EDITOR_JS.contains("previewDirty"));
         assert!(!EDITOR_JS.contains("document.previewHtml = html"));
         assert!(!EDITOR_JS.contains("previewDocument.previewHtml = nextHtml"));
-        assert!(!EDITOR_BOOT_JS.contains("\"static\""));
         assert!(!EDITOR_WORKSPACE_JS.contains("Preview will compile in browser"));
         assert!(!EDITOR_WORKSPACE_JS.contains("queuePreviewCompile"));
         assert!(!EDITOR_WORKSPACE_JS.contains("treeWithEmbeddedFallbacks"));
@@ -5342,6 +5778,8 @@ levels3 demo of push3 {
         assert!(script.contains("generateSong"));
         assert!(script.contains("exportSoundEffect"));
         assert!(script.contains("PuzzleSoundToolsReady"));
+        assert!(script.contains("ui-tap"));
+        assert!(script.contains("buildSelectLayers"));
     }
 
     #[test]
@@ -5432,11 +5870,16 @@ levels3 demo of push3 {
         let editor = EDITOR_HTML
             .find(r#"<script src="editor.js?v=level-editor-import-reference"></script>"#)
             .expect("editor loads main editor script");
+        let import_export = EDITOR_HTML
+            .find(r#"<script src="editor_import_export.js"></script>"#)
+            .expect("editor loads import/export helpers");
         let sprite3d = EDITOR_HTML
             .find(r#"<script src="editor_sprite3d.js"#)
             .expect("editor loads 3D sprite editor");
 
         assert!(core < level3d);
+        assert!(level3d < import_export);
+        assert!(import_export < editor);
         assert!(core < editor);
         assert!(core < sprite3d);
     }
@@ -5457,6 +5900,7 @@ levels3 demo of push3 {
             EDITOR_HTML
                 .contains(r#"<script src="editor_workspace.js?v=import-parent-preview"></script>"#)
         );
+        assert!(EDITOR_HTML.contains(r#"<script src="editor_import_export.js"></script>"#));
         assert!(
             EDITOR_HTML
                 .contains(r#"<script src="editor.js?v=level-editor-import-reference"></script>"#)
@@ -5553,19 +5997,13 @@ levels3 demo of push3 {
         assert!(EDITOR_LEVEL3D_JS.contains("zoom: 1,"));
         assert!(EDITOR_LEVEL3D_JS.contains("function level3dPalettePreviewOptions(camera)"));
         assert!(EDITOR_LEVEL3D_JS.contains("origin: { x: 0, y: 0, z: 0 },"));
-        assert!(
-            EDITOR_LEVEL3D_JS.contains(
-                "function level3dPaletteObjectDescriptor(name, exportData = previewExport)"
-            )
-        );
+        assert!(EDITOR_LEVEL3D_JS.contains("function level3dPaletteObjectDescriptor("));
         assert!(EDITOR_LEVEL3D_JS.contains("function level3dPreviewSprites("));
         assert!(EDITOR_LEVEL3D_JS.contains("function sourceLevel3dSprites(source)"));
         assert!(EDITOR_LEVEL3D_JS.contains("...sourceLevel3dSprites(source),"));
-        assert!(
-            EDITOR_LEVEL3D_JS.contains(
-                "return level3dObjectHasPreviewSprite(object, exportData) ? object : null;"
-            )
-        );
+        assert!(EDITOR_LEVEL3D_JS.contains(
+            "return level3dObjectHasPreviewSprite(object, exportData, sprites) ? object : null;"
+        ));
         assert!(
             EDITOR_LEVEL3D_JS.contains("drawLevel3dCellsPreview(ctx, width, height, snapshot, [{")
         );

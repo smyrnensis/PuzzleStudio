@@ -2,7 +2,7 @@
   color-scheme: light;
   --background: #f5f3ef;
   --text: #1f2428;
-  --accent: #2f7ebc;
+  --accent: var(--text);
   --muted: color-mix(in srgb, var(--text) 66%, transparent);
   --line: color-mix(in srgb, var(--text) 24%, transparent);
   --button-bg: color-mix(in srgb, var(--accent) 14%, transparent);

@@ -1,6 +1,19 @@
 use std::{env, fs, path::PathBuf};
 
 fn main() {
+    let embedded_assets = env::var_os("CARGO_FEATURE_EMBEDDED_ASSETS").is_some();
+    if !embedded_assets {
+        println!("cargo:rerun-if-changed=build.rs");
+        if env::var_os("CARGO_FEATURE_SOUND_TOOLS").is_some() {
+            println!("cargo:rerun-if-changed=../../tools/music_generator/seeded_sfx.mjs");
+            println!("cargo:rerun-if-changed=../../tools/music_generator/seeded_music.mjs");
+            println!("cargo:rerun-if-changed=../../tools/music_generator/seeded_music_player.mjs");
+            println!("cargo:rerun-if-changed=../../tools/music_generator/seeded_timbre_fields.mjs");
+            println!("cargo:rerun-if-changed=../../tools/music_generator/audio_export.mjs");
+        }
+        return;
+    }
+
     println!("cargo:rerun-if-changed=static/editor.html");
     println!("cargo:rerun-if-changed=docs/editor.md");
     println!("cargo:rerun-if-changed=docs/metadata.md");
@@ -31,11 +44,13 @@ fn main() {
     println!("cargo:rerun-if-changed=docs/theme.md");
     println!("cargo:rerun-if-changed=docs/sounds.md");
     println!("cargo:rerun-if-changed=static/editor_boot.js");
+    println!("cargo:rerun-if-changed=static/editor_runtime.js");
     println!("cargo:rerun-if-changed=static/editor_dom.js");
     println!("cargo:rerun-if-changed=static/editor_workspace.js");
     println!("cargo:rerun-if-changed=static/editor_source.js");
     println!("cargo:rerun-if-changed=static/editor_level3d.js");
     println!("cargo:rerun-if-changed=static/editor_workbench.js");
+    println!("cargo:rerun-if-changed=static/editor_import_export.js");
     println!("cargo:rerun-if-changed=static/editor.js");
     println!("cargo:rerun-if-changed=static/editor_sprite.js");
     println!("cargo:rerun-if-changed=../html_play/static/puzzle3_visual_core.js");

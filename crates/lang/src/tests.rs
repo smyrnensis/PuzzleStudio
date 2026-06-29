@@ -688,6 +688,58 @@ move
 }
 
 #[test]
+fn model_sounds_parse_undo_and_restart_sfx_operations() {
+    let source = r#"
+title operation_sounds
+
+sounds {
+sfx back seed=back01 type=hit
+sfx reset seed=reset01 type=jump
+}
+
+puzzle sokoban {
+sounds {
+undo -> sfx back
+restart -> sfx reset
+}
+
+layers {
+actor = Player
+}
+
+levels {
+legend {
+. = empty
+P = Player
+}
+
+level start
+P
+}
+
+rules {
+
+}
+}
+"#;
+
+    let loaded = parse_game(source).unwrap();
+    assert_eq!(
+        loaded.model_operation_sounds,
+        vec![
+            ModelOperationSoundDef {
+                operation: ModelOperationSound::Undo,
+                sfx_name: "back".to_string(),
+            },
+            ModelOperationSoundDef {
+                operation: ModelOperationSound::Restart,
+                sfx_name: "reset".to_string(),
+            },
+        ]
+    );
+}
+
+#[test]
 fn model_sounds_report_selector_errors_at_sound_entry() {
     let source = r#"
 title bad_model_sound_selector
@@ -2278,13 +2330,16 @@ puzzle board {
 layers {
 actor = Player
 }
-legend {
-. = empty
-P = Player
-}
 rules {
 
 [ Player ] -> [ Player ]
+}
+}
+
+levels default of board {
+legend {
+. = empty
+P = Player
 }
 level start {
 P
@@ -2523,7 +2578,7 @@ button "Resume" -> resume
 "#;
     let error = parse_game(source).unwrap_err().to_string();
 
-    assert!(error.contains("unknown scene routine: resume"));
+    assert!(error.contains("unknown scene action: resume"), "{error}");
 }
 
 #[test]
@@ -4287,7 +4342,7 @@ title display_level_start_main_write
 
 puzzle default {
 layers {
-__legacy_layer_1 = A
+__legacy_layer_1 = Player
 }
 empty .
 
@@ -4691,25 +4746,28 @@ title old_keyword
 
 puzzle default {
 layers {
-__legacy_layer_1 = A
+__legacy_layer_1 = Player
 }
-empty .
-
 thing Player 1
-legend P = Player
 
 rules {
 
 }
+}
 
-level start
+levels default_levels of default {
+legend {
+. = empty
+P = Player
+}
+level start {
 P
 }
 }
 "#;
 
     let error = parse_game(source).unwrap_err().to_string();
-    assert!(error.contains("unknown puzzle directive thing"));
+    assert!(error.contains("unknown puzzle directive thing"), "{error}");
 }
 
 #[test]
@@ -5463,7 +5521,7 @@ fn folder_without_game_prelude_is_not_auto_resolved() {
 fn parses_spec_2d_display_floor_object() {
     let loaded = super::parse_game2d_file(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../games/spec_2d.puzzle"
+        "/tests/fixtures/spec_2d_microban_basic.puzzle"
     ))
     .unwrap();
 
@@ -5561,9 +5619,9 @@ A.
 }
 
 #[test]
-fn puzzle_sprites_accept_ps_style_one_off_sprite() {
+fn puzzle_sprites_accept_braced_inline_ascii_sprite() {
     let source = r##"
-title ps_style_sprite
+title braced_inline_ascii_sprite
 
 puzzle default {
 layers {
@@ -6284,7 +6342,7 @@ B
 "##;
     let error = parse_game(source).unwrap_err().to_string();
     assert!(
-        !error.contains("only translate:<direction>:<pixels> sprite transforms are supported"),
+        !error.contains("translate sprite transforms were removed"),
         "{error}"
     );
 }
@@ -6325,9 +6383,9 @@ B
 }
 
 #[test]
-fn puzzle_sprites_accept_translate_transform_offset() {
+fn puzzle_sprites_reject_translate_transform_offset() {
     let source = r##"
-title translated_sprite
+title translated_sprite_removed
 
 puzzle default {
 layers {
@@ -6357,19 +6415,15 @@ P
 }
 }
 "##;
-    let loaded = parse_game(source).unwrap();
-    let player_sprite = loaded
-        .visuals
-        .sprites
-        .iter()
-        .find(|sprite| sprite.name == "Player")
-        .unwrap();
-    assert_eq!(player_sprite.offset.x, 2);
-    assert_eq!(player_sprite.offset.y, -1);
+    let error = parse_game(source).unwrap_err().to_string();
+    assert!(
+        error.contains("translate sprite transforms were removed; use `offset <x> <y>`"),
+        "{error}"
+    );
 }
 
 #[test]
-fn puzzle_sprites_reject_malformed_translate_transform_as_transform() {
+fn puzzle_sprites_reject_malformed_translate_transform() {
     let source = r##"
 title malformed_translated_sprite
 
@@ -6399,7 +6453,7 @@ P
 "##;
     let error = parse_game(source).unwrap_err().to_string();
     assert!(
-        error.contains("translate transform missing pixel amount"),
+        error.contains("translate sprite transforms were removed; use `offset <x> <y>`"),
         "{error}"
     );
 }
@@ -6456,6 +6510,203 @@ B
             assert_eq!(colors[1].color, "#eee");
         }
         _ => panic!("Box should be an ascii sprite"),
+    }
+}
+
+#[test]
+fn puzzle_sprites_accept_bare_shape_reference_after_colors() {
+    let source = r##"
+title bare_shape_reference
+
+puzzle default {
+layers {
+__legacy_layer_0 = Box
+}
+sprites {
+shapes {
+box_shape {
+01
+10
+}
+}
+Box {
+#111 #eee
+box_shape
+}
+}
+rules {
+
+}
+levels {
+legend {
+. = empty
+B = Box
+}
+level start
+B
+}
+}
+"##;
+    let loaded = parse_game(source).unwrap();
+    let box_sprite = loaded
+        .visuals
+        .sprites
+        .iter()
+        .find(|sprite| sprite.name == "Box")
+        .unwrap();
+    match &box_sprite.kind {
+        VisualSpriteKind::Ascii { pattern, .. } => {
+            assert_eq!(
+                pattern.as_slice(),
+                ["01".to_string(), "10".to_string()].as_slice()
+            );
+        }
+        _ => panic!("Box should be an ascii sprite"),
+    }
+}
+
+#[test]
+fn puzzle_sprites_accept_unbraced_shape_table_values_and_bare_refs() {
+    let source = r##"
+title unbraced_shape_table_values
+
+puzzle default {
+tags {
+kind = A B
+}
+layers {
+__legacy_layer_0 = Box:kind
+each @Floor
+}
+legend B = Box:B
+legend {
+. = empty
+}
+sprites {
+colors {
+piece_color:kind {
+A = #4a4
+B = #a4a
+}
+}
+shapes {
+mark:kind {
+A
+01
+10
+B
+11
+00
+}
+floor
+0
+}
+Box:kind {
+piece_color:kind transparent
+mark:kind
+}
+@Floor {
+#111 #eee
+floor
+}
+}
+rules {
+
+}
+levels {
+level start
+B
+}
+}
+"##;
+    let loaded = parse_game(source).unwrap();
+    let box_sprite = loaded
+        .visuals
+        .sprites
+        .iter()
+        .find(|sprite| sprite.name == "Box-B")
+        .unwrap();
+    match &box_sprite.kind {
+        VisualSpriteKind::Ascii { pattern, colors } => {
+            assert_eq!(
+                pattern.as_slice(),
+                ["11".to_string(), "00".to_string()].as_slice()
+            );
+            assert_eq!(colors[0].color, "#a4a");
+            assert_eq!(colors[1].color, "transparent");
+        }
+        _ => panic!("Box:B should be an ascii sprite"),
+    }
+
+    let floor_sprite = loaded
+        .visuals
+        .sprites
+        .iter()
+        .find(|sprite| sprite.name == "Floor")
+        .unwrap();
+    match &floor_sprite.kind {
+        VisualSpriteKind::Ascii { pattern, .. } => {
+            assert_eq!(pattern.as_slice(), ["0".to_string()].as_slice());
+        }
+        _ => panic!("@Floor should be an ascii sprite"),
+    }
+}
+
+#[test]
+fn puzzle_sprites_accept_individual_shape_table_values() {
+    let source = r##"
+title individual_shape_table_values
+
+puzzle default {
+tags {
+kind = A B
+}
+layers {
+__legacy_layer_0 = Box:kind
+}
+legend B = Box:B
+legend {
+. = empty
+}
+sprites {
+shapes {
+mark:A
+01
+10
+
+mark:B
+11
+00
+}
+Box:kind {
+#111 #eee
+mark:kind
+}
+}
+rules {
+
+}
+levels {
+level start
+B
+}
+}
+"##;
+    let loaded = parse_game(source).unwrap();
+    let box_sprite = loaded
+        .visuals
+        .sprites
+        .iter()
+        .find(|sprite| sprite.name == "Box-B")
+        .unwrap();
+    match &box_sprite.kind {
+        VisualSpriteKind::Ascii { pattern, .. } => {
+            assert_eq!(
+                pattern.as_slice(),
+                ["11".to_string(), "00".to_string()].as_slice()
+            );
+        }
+        _ => panic!("Box:B should be an ascii sprite"),
     }
 }
 
@@ -6787,9 +7038,9 @@ B
 }
 
 #[test]
-fn puzzle_sprites_accept_more_than_ten_ps_style_colors() {
+fn puzzle_sprites_accept_more_than_ten_inline_colors() {
     let source = r##"
-title ps_style_many_colors
+title inline_sprite_many_colors
 
 puzzle default {
 layers {
@@ -6837,7 +7088,7 @@ P
 #[test]
 fn puzzle_sprites_accept_alpha_hex_colors() {
     let source = r##"
-title ps_style_alpha_colors
+title inline_sprite_alpha_colors
 
 puzzle default {
 layers {
@@ -7028,9 +7279,9 @@ P
 }
 
 #[test]
-fn puzzle_sprites_accept_ps_style_reusable_shape_sprite() {
+fn puzzle_sprites_accept_bare_reusable_shape_ref() {
     let source = r##"
-title ps_style_reusable_sprite
+title bare_reusable_shape_ref
 
 puzzle default {
 layers {
@@ -7070,20 +7321,10 @@ P
         .find(|sprite| sprite.name == "Player")
         .unwrap();
     match &sprite.kind {
-        VisualSpriteKind::Ascii { pattern, colors } => {
+        VisualSpriteKind::Ascii { pattern, .. } => {
             assert_eq!(
                 pattern.as_slice(),
                 ["0.".to_string(), ".1".to_string()].as_slice()
-            );
-            assert!(
-                colors
-                    .iter()
-                    .any(|color| { color.token == '0' && color.color == "#e94f64" })
-            );
-            assert!(
-                colors
-                    .iter()
-                    .any(|color| { color.token == '1' && color.color == "#2f80ed" })
             );
         }
         _ => panic!("Player should be an ascii sprite"),
@@ -7422,6 +7663,229 @@ level start
 }
 
 #[test]
+fn unbraced_display_sprite_entry_can_put_rotation_on_selector_line() {
+    let source = r#"
+title unbraced_display_rotated_sprite_header
+
+puzzle default {
+layers {
+each @WallFrame:directions
+}
+sprites {
+@WallFrame:directions rotate from up
+#585858
+0000000
+.......
+.......
+.......
+.......
+.......
+.......
+}
+rules {
+
+}
+levels {
+legend {
+. = empty
+}
+level start
+.
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    let expected = [
+        (
+            "WallFrame-up",
+            vec![
+                "0000000", ".......", ".......", ".......", ".......", ".......", ".......",
+            ],
+        ),
+        (
+            "WallFrame-right",
+            vec![
+                "......0", "......0", "......0", "......0", "......0", "......0", "......0",
+            ],
+        ),
+        (
+            "WallFrame-down",
+            vec![
+                ".......", ".......", ".......", ".......", ".......", ".......", "0000000",
+            ],
+        ),
+        (
+            "WallFrame-left",
+            vec![
+                "0......", "0......", "0......", "0......", "0......", "0......", "0......",
+            ],
+        ),
+    ];
+
+    for (name, pattern) in expected {
+        let sprite = loaded
+            .visuals
+            .sprites
+            .iter()
+            .find(|sprite| sprite.name == name)
+            .unwrap();
+        match &sprite.kind {
+            VisualSpriteKind::Ascii {
+                pattern: actual, ..
+            } => {
+                let expected = pattern.into_iter().map(str::to_string).collect::<Vec<_>>();
+                assert_eq!(actual.as_slice(), expected.as_slice());
+            }
+            _ => panic!("{name} should be an ascii sprite"),
+        }
+    }
+}
+
+#[test]
+fn consecutive_unbraced_display_sprite_entries_can_use_rotation_and_shape_metadata() {
+    let source = r#"
+title unbraced_display_rotated_sprites
+
+puzzle default {
+map rotate directions {
+up -> right
+right -> down
+down -> left
+left -> up
+}
+tags {
+state = open close
+}
+layers {
+each @Boundary:directions
+each @Corner:directions
+actor = Goal:state
+}
+legend {
+. = empty
+}
+sprites {
+shapes {
+Flag
+11
+00
+}
+@Boundary:directions
+rotate from up
+#000 #fff
+100
+000
+000
+
+@Corner:directions
+rotate from up
+#111 #fff
+010
+000
+000
+
+Goal:state
+shape Flag
+#222 #333
+}
+rules {
+
+}
+levels {
+level start
+.
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    let sprite_names = loaded
+        .visuals
+        .sprites
+        .iter()
+        .map(|sprite| sprite.name.as_str())
+        .collect::<Vec<_>>();
+
+    for expected in [
+        "Boundary-up",
+        "Boundary-right",
+        "Corner-up",
+        "Corner-right",
+        "Goal-open",
+        "Goal-close",
+    ] {
+        assert!(
+            sprite_names.contains(&expected),
+            "missing sprite {expected}; got {sprite_names:?}"
+        );
+    }
+}
+
+#[test]
+fn unbraced_shape_sprite_entry_can_be_followed_by_braced_rotated_display_sprite() {
+    let source = r#"
+title shape_before_braced_rotated_display_sprite
+
+puzzle default {
+map rotate directions {
+up -> right
+right -> down
+down -> left
+left -> up
+}
+tags {
+state = open close
+}
+layers {
+actor = Goal:state
+each @LockedFrame:directions
+}
+legend {
+. = empty
+}
+sprites {
+shapes {
+Flag
+11
+00
+}
+Goal:state
+#222 #333
+shape Flag
+
+@LockedFrame:directions {
+rotate from up
+#000 #fff
+100
+000
+000
+}
+}
+rules {
+
+}
+levels {
+level start
+.
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    let sprite_names = loaded
+        .visuals
+        .sprites
+        .iter()
+        .map(|sprite| sprite.name.as_str())
+        .collect::<Vec<_>>();
+
+    for expected in ["Goal-open", "LockedFrame-up", "LockedFrame-right"] {
+        assert!(
+            sprite_names.contains(&expected),
+            "missing sprite {expected}; got {sprite_names:?}"
+        );
+    }
+}
+
+#[test]
 fn sprite_shape_rotation_can_use_named_map_directive() {
     let source = r#"
 title rotated_sprites_named_map
@@ -7550,12 +8014,6 @@ fn sprite_entry_can_rotate_inline_ascii_from_selector_axis() {
 title inline_rotated_sprite
 
 puzzle default {
-map rotate directions {
-up -> right
-right -> down
-down -> left
-left -> up
-}
 layers {
 __legacy_layer_0 = Boundary:directions
 }
@@ -7604,6 +8062,117 @@ level start
             }
             _ => panic!("{name} should be an ascii sprite"),
         }
+    }
+}
+
+#[test]
+fn sprite_rotation_does_not_depend_on_user_map_named_rotate() {
+    let source = r#"
+title inline_rotated_sprite_with_unrelated_rotate_map
+
+puzzle default {
+tags {
+state = open close
+}
+map rotate state {
+open -> close
+close -> open
+}
+layers {
+__legacy_layer_0 = Boundary:directions
+}
+legend {
+. = empty
+}
+sprites {
+Boundary:directions {
+rotate from up
+transparent #555
+111
+000
+000
+}
+}
+rules {
+
+}
+levels {
+level start
+.
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    let boundary_right = loaded
+        .visuals
+        .sprites
+        .iter()
+        .find(|sprite| sprite.name == "Boundary-right")
+        .unwrap();
+
+    match &boundary_right.kind {
+        VisualSpriteKind::Ascii { pattern, .. } => {
+            assert_eq!(
+                pattern.as_slice(),
+                ["001".to_string(), "001".to_string(), "001".to_string()].as_slice()
+            );
+        }
+        _ => panic!("Boundary-right should be an ascii sprite"),
+    }
+}
+
+#[test]
+fn sprite_rotation_ignores_user_map_named_rotate_on_same_axis() {
+    let source = r#"
+title inline_rotated_sprite_with_same_axis_rotate_map
+
+puzzle default {
+map rotate directions {
+up -> left
+left -> down
+down -> right
+right -> up
+}
+layers {
+__legacy_layer_0 = Boundary:directions
+}
+legend {
+. = empty
+}
+sprites {
+Boundary:directions {
+rotate from up
+transparent #555
+111
+000
+000
+}
+}
+rules {
+
+}
+levels {
+level start
+.
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    let boundary_right = loaded
+        .visuals
+        .sprites
+        .iter()
+        .find(|sprite| sprite.name == "Boundary-right")
+        .unwrap();
+
+    match &boundary_right.kind {
+        VisualSpriteKind::Ascii { pattern, .. } => {
+            assert_eq!(
+                pattern.as_slice(),
+                ["001".to_string(), "001".to_string(), "001".to_string()].as_slice()
+            );
+        }
+        _ => panic!("Boundary-right should be an ascii sprite"),
     }
 }
 
@@ -12784,7 +13353,7 @@ P
 
 #[test]
 fn spec_2d_display_floor_is_a_non_colliding_projection_layer() {
-    let source = include_str!("../../../games/spec_2d.puzzle");
+    let source = include_str!("../tests/fixtures/spec_2d_microban_basic.puzzle");
     let loaded = parse_game(source).unwrap();
     let goal = object_named(&loaded, "Goal");
     let floor = object_named(&loaded, "@Floor");
@@ -13874,6 +14443,16 @@ fn parse_game2d_document_owns_scene_blocks() {
     let source = r#"
 title "Two Dee"
 
+animation {
+  tween {
+    duration = 30ms
+  }
+}
+
+sounds {
+  sfx push seed=push01 type=hit
+}
+
 puzzle default {
 layers {
 __legacy_layer_0 = Player
@@ -13906,15 +14485,11 @@ scene title {
 
     let parts = super::parse_document_source_parts(source).unwrap();
     assert!(matches!(parts.scenes.as_slice(), [scene] if scene.name == "title"));
-    assert!(!parts.model_source_without_shell.contains("scene title"));
-    assert!(
-        !parts
-            .model_source_without_shell
-            .contains("title \"Two Dee\"")
-    );
+    assert!(!parts.model_source.contains("scene title"));
+    assert!(!parts.model_source.contains("title \"Two Dee\""));
+    assert!(!parts.model_source.contains("sfx push"));
     let model_game =
-        super::parse_game2d_expanded_with_shell(&parts.model_source_without_shell, &parts.shell)
-            .unwrap();
+        super::parse_game2d_expanded_with_shell(&parts.model_source, &parts.shell).unwrap();
     assert!(model_game.scenes.is_empty());
 }
 
@@ -14498,17 +15073,9 @@ model puzzle default {
 layers {
 __legacy_layer_0 = Player
 }
-empty .
 
 rules {
 
-}
-}
-
-levels {
-legend P = Player
-level start {
-P
 }
 }
 "#,
@@ -14516,7 +15083,10 @@ P
     .unwrap_err()
     .to_string();
 
-    assert!(error.contains("top-level puzzle definition must be: puzzle <name>"));
+    assert!(
+        error.contains("top-level puzzle definition must be: puzzle <name>"),
+        "{error}"
+    );
 }
 
 #[test]
@@ -14810,6 +15380,63 @@ level first
 }
 
 #[test]
+fn split_rewrite_selector_diagnostic_keeps_source_line_and_dedupes_calls() {
+    let source = r#"title split_selector_diagnostic
+
+puzzle main {
+layers {
+actor = Box Crate
+}
+groups {
+solid = Box Crate
+}
+rules {
+bad
+bad
+}
+routine bad {
+[ Box ]
+-> [ solid ]
+}
+levels {
+legend {
+. = empty
+B = Box
+}
+level first
+B
+}
+}
+"#;
+    let report = super::parse_game2d(source).unwrap_err();
+    let diagnostics = report.diagnostics();
+    let expected_line = source
+        .lines()
+        .position(|line| line.trim() == "[ Box ]")
+        .map(|line| line + 1);
+
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(
+        diagnostics[0].message,
+        "after selector with alternatives must also appear in before"
+    );
+    assert_eq!(
+        diagnostics[0]
+            .primary_span
+            .as_ref()
+            .and_then(|span| span.line),
+        expected_line
+    );
+    assert_eq!(
+        diagnostics[0]
+            .primary_span
+            .as_ref()
+            .and_then(|span| span.source_line.as_deref()),
+        Some("[ Box ] -> [ solid ]")
+    );
+}
+
+#[test]
 fn diagnostic_source_location_does_not_guess_duplicate_lines() {
     let source = r#"title probe
 
@@ -14836,11 +15463,12 @@ level first
     let report = super::resolve_diagnostic_source_locations(report, source);
     let diagnostics = report.diagnostics();
 
-    assert_eq!(diagnostics.len(), 2);
-    for diagnostic in diagnostics {
-        assert_eq!(
-            diagnostic.primary_span.as_ref().and_then(|span| span.line),
-            None
-        );
-    }
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(
+        diagnostics[0]
+            .primary_span
+            .as_ref()
+            .and_then(|span| span.line),
+        None
+    );
 }

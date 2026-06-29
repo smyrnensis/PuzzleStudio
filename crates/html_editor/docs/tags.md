@@ -3,13 +3,13 @@ Use `tags` to define ordered sets of object-name atoms for schema axes.
 
 ```puzzle
 tags {
-  color = red blue
+color = red blue
 }
 
 puzzle color_boxes {
-  layers {
-    solid = Player Box:color Wall
-  }
+layers {
+Player Box:color Wall
+}
 }
 ```
 

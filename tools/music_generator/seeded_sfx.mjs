@@ -1,33 +1,40 @@
-export const SFX_TYPES = ["jump", "pickup", "hit", "drag", "lock", "explosion", "laser", "powerup", "select", "error"];
+export const SFX_TYPES = ["jump", "step", "pickup", "hit", "drag", "water", "lock", "explosion", "laser", "powerup", "select", "error"];
 export const SFX_TYPE_OPTIONS = ["random", ...SFX_TYPES, "wild"];
 
 const TYPE_CONFIG = {
   wild: { duration: 0.5, label: "Wild", baseFrequency: [60, 1400], shape: "freeform" },
   jump: { duration: 0.28, label: "Jump", baseFrequency: [230, 330], shape: "rise" },
+  step: { duration: 0.18, label: "Step", baseFrequency: [160, 360], shape: "footfall" },
   pickup: { duration: 0.42, label: "Pickup", baseFrequency: [620, 880], shape: "spark" },
   hit: { duration: 0.24, label: "Hit", baseFrequency: [90, 160], shape: "impact" },
   drag: { duration: 0.5, label: "Drag", baseFrequency: [72, 138], shape: "scrape" },
+  water: { duration: 0.46, label: "Water", baseFrequency: [90, 220], shape: "liquid" },
   lock: { duration: 0.36, label: "Lock", baseFrequency: [115, 210], shape: "latch" },
   explosion: { duration: 0.82, label: "Explosion", baseFrequency: [45, 82], shape: "blast" },
   laser: { duration: 0.36, label: "Laser", baseFrequency: [460, 760], shape: "sweep" },
   powerup: { duration: 0.72, label: "Power Up", baseFrequency: [260, 430], shape: "climb" },
-  select: { duration: 0.14, label: "Select", baseFrequency: [540, 820], shape: "tap" },
+  select: { duration: 0.12, label: "Select", baseFrequency: [720, 1120], shape: "ui-tap" },
   error: { duration: 0.42, label: "Error", baseFrequency: [170, 260], shape: "fall" },
 };
 
 const TYPE_PATTERNS = {
   wild: ["tone", "noise", "clicks", "sweep", "broken", "stack"],
   jump: ["hop", "spring", "rubber", "whoosh"],
+  step: ["tap", "wood", "stone", "grass", "heavy", "soft"],
   pickup: ["coin", "sparkle", "gem", "chord"],
   hit: ["punch", "slash", "metal", "crunch"],
   drag: ["wood-floor", "stone-floor", "rough-floor", "stuck-start", "short-pull", "soft-floor"],
+  water: ["splash", "plop", "ripple", "bubble", "pour", "drip"],
   lock: ["latch", "deadbolt", "key-turn", "tumblers", "old-lock", "padlock"],
   explosion: ["boom", "puff", "crackle", "burst"],
   laser: ["pew", "zap", "down", "charge"],
   powerup: ["arpeggio", "swell", "sparkle", "fanfare"],
-  select: ["tick", "blip", "confirm", "soft"],
+  select: ["cursor", "blip", "press", "soft"],
   error: ["buzzer", "fall", "double", "glitch"],
 };
+
+const renderedBufferCaches = new WeakMap();
+const SFX_START_LOOKAHEAD_SECONDS = 0.008;
 
 export function generateSoundEffect(seed, options = {}) {
   const seedText = String(seed);
@@ -42,10 +49,14 @@ export function generateSoundEffect(seed, options = {}) {
   let duration = round3(config.duration * lerp(0.72, 1.45, length) * lerp(0.94, 1.06, rng()));
   if (type === "drag") {
     duration = round3(clamp(duration, 0.36, 0.7));
+  } else if (type === "step") {
+    duration = round3(clamp(duration, 0.09, 0.3));
+  } else if (type === "water") {
+    duration = round3(clamp(duration, 0.18, 0.85));
   }
   const baseFrequency = randomInt(rng, config.baseFrequency[0], config.baseFrequency[1]);
   const profile = buildProfile(rng, type, tonalFamily, intensity);
-  const layers = buildLayers(type, baseFrequency, duration, mood, intensity, profile, rng);
+  const normalized = alignLayersToAttack(buildLayers(type, baseFrequency, duration, mood, intensity, profile, rng), duration);
 
   return {
     seed: seedText,
@@ -56,9 +67,9 @@ export function generateSoundEffect(seed, options = {}) {
     intensity,
     length,
     tonalFamily,
-    duration,
+    duration: normalized.duration,
     profile,
-    layers,
+    layers: normalized.layers,
   };
 }
 
@@ -92,8 +103,10 @@ export function createSfxPlayer(audioContext, effect, options = {}) {
     output = audioContext.createGain();
     output.gain.value = clamp(Number(options.volume ?? 1), 0, 1);
     output.connect(audioContext.destination);
-    for (const layer of effect.layers) {
-      playLayer(audioContext, layer, startsAt, activeSources, output, () => {
+    const preparedLayers = effect.layers.map((layer) => prepareLayer(audioContext, layer));
+    const scheduledStart = Math.max(startsAt, audioContext.currentTime + SFX_START_LOOKAHEAD_SECONDS);
+    for (const layer of preparedLayers) {
+      playLayer(audioContext, layer, scheduledStart, activeSources, output, () => {
         if (activeSources.size === 0) {
           disconnectOutput();
         }
@@ -120,19 +133,35 @@ export function createSfxPlayer(audioContext, effect, options = {}) {
   return { start, stop };
 }
 
+function alignLayersToAttack(layers, duration) {
+  const firstStart = Math.min(...layers.map((layer) => layer.start));
+  if (!Number.isFinite(firstStart) || firstStart <= 0) {
+    return { duration, layers };
+  }
+  const shifted = layers.map((layer) => ({
+    ...layer,
+    start: round3(layer.start - firstStart),
+  }));
+  const audibleEnd = Math.max(...shifted.map((layer) => layer.start + layer.duration));
+  return {
+    duration: round3(Math.max(duration - firstStart, audibleEnd)),
+    layers: shifted.sort((a, b) => a.start - b.start || a.name.localeCompare(b.name)),
+  };
+}
+
 function buildProfile(rng, type, tonalFamily, intensity) {
   const bright = tonalFamily === "bright";
   const dark = tonalFamily === "dark";
   const waveforms = bright ? ["triangle", "sine", "square"] : dark ? ["sawtooth", "square", "triangle"] : ["sine", "triangle", "square"];
-  const variants = type === "drag" ? ["dry", "grainy", "heavy", "stuck", "soft", "rough"] : type === "lock" ? ["dry", "double", "gritty", "stepped", "heavy", "stuck"] : type === "error" ? ["clean", "double", "gritty", "stepped"] : ["clean", "double", "gritty", "hollow", "wide", "stepped"];
+  const variants = type === "drag" ? ["dry", "grainy", "heavy", "stuck", "soft", "rough"] : type === "lock" ? ["dry", "double", "gritty", "stepped", "heavy", "stuck"] : type === "step" ? ["dry", "double", "soft", "heavy", "wood", "gravel"] : type === "water" ? ["small", "deep", "bubbly", "wide", "soft", "choppy"] : type === "error" ? ["clean", "double", "gritty", "stepped"] : ["clean", "double", "gritty", "hollow", "wide", "stepped"];
   return {
     engine: pick(["arcade", "soft-synth", "bit-crush", "toy-speaker"], rng),
     variant: pick(variants, rng),
     pattern: pick(TYPE_PATTERNS[type], rng),
-    waveform: type === "error" ? pick(["square", "sawtooth"], rng) : type === "drag" ? pick(["sine", "triangle"], rng) : type === "lock" ? pick(["square", "triangle"], rng) : pick(waveforms, rng),
-    noiseColor: dark || type === "explosion" || type === "error" || type === "lock" || type === "drag" ? "crackle" : "white",
-    filterBias: round2(lerp(0.75, 1.35, intensity) * (type === "error" ? 0.78 : type === "drag" ? 0.72 : bright ? 1.18 : dark ? 0.82 : 1)),
-    pitchWobble: round2(type === "lock" ? lerp(0, 0.018, rng() * intensity) : type === "drag" ? lerp(0.004, 0.02, rng() * intensity) : lerp(type === "error" ? 0.04 : 0.01, type === "error" ? 0.12 : 0.075, rng() * intensity)),
+    waveform: type === "error" ? pick(["square", "sawtooth"], rng) : type === "drag" || type === "water" ? pick(["sine", "triangle"], rng) : type === "lock" ? pick(["square", "triangle"], rng) : pick(waveforms, rng),
+    noiseColor: type === "drag" || type === "step" || type === "water" ? "white" : dark || type === "explosion" || type === "error" || type === "lock" ? "crackle" : "white",
+    filterBias: round2(lerp(0.75, 1.35, intensity) * (type === "error" ? 0.78 : type === "drag" ? 0.72 : type === "water" ? 0.86 : type === "step" ? 0.9 : bright ? 1.18 : dark ? 0.82 : 1)),
+    pitchWobble: round2(type === "lock" ? lerp(0, 0.018, rng() * intensity) : type === "drag" ? lerp(0.004, 0.02, rng() * intensity) : type === "water" ? lerp(0.006, 0.035, rng() * intensity) : type === "step" ? lerp(0.002, 0.014, rng() * intensity) : lerp(type === "error" ? 0.04 : 0.01, type === "error" ? 0.12 : 0.075, rng() * intensity)),
   };
 }
 
@@ -213,6 +242,10 @@ function buildLayers(type, baseFrequency, duration, mood, intensity, profile, rn
     return varyLayers(layers, duration, baseFrequency, intensity, profile, rng);
   }
 
+  if (type === "step") {
+    return buildStepLayers(baseFrequency, duration, intensity, profile, rng);
+  }
+
   if (type === "pickup") {
     const interval = duration / 4.8;
     if (profile.pattern === "coin") {
@@ -276,64 +309,68 @@ function buildLayers(type, baseFrequency, duration, mood, intensity, profile, rn
     return buildBoxPullLayers(duration, intensity, profile, rng);
   }
 
+  if (type === "water") {
+    return buildWaterLayers(baseFrequency, duration, intensity, profile, rng);
+  }
+
   if (type === "lock") {
     if (profile.pattern === "deadbolt") {
       layers = [
-        clickLayer(0, 0.009, 0.08 + intensity * 0.08, 7200),
-        noiseLayer("bolt-drag", duration * 0.1, duration * 0.42, 0.075 + intensity * 0.09, "bandpass", 3600, 540, profile),
-        toneLayer("bolt-slide", duration * 0.16, duration * 0.34, "square", baseFrequency * 1.05, baseFrequency * 0.58, 0.09, intensity, profile),
-        clickLayer(duration * 0.62, 0.014, 0.28 + intensity * 0.18, 3000),
-        toneLayer("lock-stop", duration * 0.62, duration * 0.18, "square", baseFrequency * 1.15, baseFrequency * 0.5, 0.3, intensity, profile),
-        noiseLayer("case-thump", duration * 0.62, duration * 0.16, 0.14 + intensity * 0.16, "lowpass", 1400, 320, profile),
+        clickLayer(0, 0.012, 0.1 + intensity * 0.08, 3600),
+        noiseLayer("bolt-drag", duration * 0.1, duration * 0.42, 0.1 + intensity * 0.1, "bandpass", 2400, 460, profile),
+        toneLayer("bolt-slide", duration * 0.16, duration * 0.32, "triangle", baseFrequency * 0.9, baseFrequency * 0.6, 0.07, intensity, profile),
+        ...lockStopLayers(duration * 0.62, duration, baseFrequency, intensity, profile, {
+          impactGain: 0.36, impactFilter: 2400, clackMul: 0.88, bodyGain: 0.28, thumpGain: 0.24, thumpFilter: 820,
+        }),
       ];
     } else if (profile.pattern === "key-turn") {
       layers = [
-        clickLayer(0, 0.007, 0.08 + intensity * 0.07, 8200),
-        clickLayer(duration * 0.18, 0.008, 0.07 + intensity * 0.07, 6500),
-        noiseLayer("key-scrape", duration * 0.2, duration * 0.26, 0.05 + intensity * 0.06, "highpass", 5400, 2100, profile),
-        toneLayer("key-turn", duration * 0.26, duration * 0.26, "triangle", baseFrequency * 1.45, baseFrequency * 0.68, 0.075, intensity, profile),
-        clickLayer(duration * 0.56, 0.013, 0.24 + intensity * 0.16, 3300),
-        toneLayer("lock-stop", duration * 0.56, duration * 0.16, "square", baseFrequency * 1.05, baseFrequency * 0.48, 0.28, intensity, profile),
-        noiseLayer("case-thump", duration * 0.56, duration * 0.14, 0.12 + intensity * 0.14, "lowpass", 1200, 300, profile),
+        clickLayer(0, 0.009, 0.08 + intensity * 0.07, 5200),
+        clickLayer(duration * 0.18, 0.01, 0.08 + intensity * 0.07, 4200),
+        noiseLayer("key-scrape", duration * 0.2, duration * 0.26, 0.055 + intensity * 0.06, "bandpass", 3600, 1400, profile),
+        toneLayer("key-turn", duration * 0.26, duration * 0.24, "triangle", baseFrequency * 1.3, baseFrequency * 0.7, 0.06, intensity, profile),
+        ...lockStopLayers(duration * 0.56, duration, baseFrequency, intensity, profile, {
+          impactGain: 0.32, impactFilter: 2600, clackMul: 0.84, bodyGain: 0.26, thumpGain: 0.22, thumpFilter: 780,
+        }),
       ];
     } else if (profile.pattern === "tumblers") {
       layers = [
-        clickLayer(0, 0.007, 0.075 + intensity * 0.06, 8400),
-        clickLayer(duration * 0.15, 0.007, 0.065 + intensity * 0.06, 7200),
-        clickLayer(duration * 0.3, 0.008, 0.07 + intensity * 0.07, 6100),
-        noiseLayer("pin-scrape", duration * 0.22, duration * 0.24, 0.045 + intensity * 0.055, "highpass", 5200, 1800, profile),
-        clickLayer(duration * 0.6, 0.013, 0.23 + intensity * 0.16, 3100),
-        toneLayer("lock-stop", duration * 0.6, duration * 0.17, "square", baseFrequency, baseFrequency * 0.46, 0.29, intensity, profile),
-        noiseLayer("case-thump", duration * 0.6, duration * 0.15, 0.13 + intensity * 0.15, "lowpass", 1300, 340, profile),
+        clickLayer(0, 0.008, 0.07 + intensity * 0.06, 5400),
+        clickLayer(duration * 0.15, 0.008, 0.065 + intensity * 0.06, 4800),
+        clickLayer(duration * 0.3, 0.009, 0.07 + intensity * 0.07, 4200),
+        noiseLayer("pin-scrape", duration * 0.22, duration * 0.24, 0.05 + intensity * 0.055, "bandpass", 3400, 1200, profile),
+        ...lockStopLayers(duration * 0.6, duration, baseFrequency, intensity, profile, {
+          impactGain: 0.32, impactFilter: 2500, clackMul: 0.8, bodyGain: 0.26, thumpGain: 0.22, thumpFilter: 800,
+        }),
       ];
     } else if (profile.pattern === "old-lock") {
       layers = [
-        clickLayer(0, 0.011, 0.1 + intensity * 0.08, 6500),
-        noiseLayer("old-bolt-grind", duration * 0.08, duration * 0.5, 0.1 + intensity * 0.12, "bandpass", 2600, 420, profile),
-        clickLayer(duration * 0.28, 0.012, 0.11 + intensity * 0.09, 4700),
-        toneLayer("old-case", duration * 0.3, duration * 0.36, "square", baseFrequency * 0.95, baseFrequency * 0.42, 0.14, intensity, profile),
-        clickLayer(duration * 0.72, 0.017, 0.3 + intensity * 0.2, 2400),
-        toneLayer("lock-stop", duration * 0.72, duration * 0.2, "square", baseFrequency * 0.85, baseFrequency * 0.36, 0.34, intensity, profile),
-        noiseLayer("case-thump", duration * 0.72, duration * 0.18, 0.16 + intensity * 0.18, "lowpass", 1100, 260, profile),
+        clickLayer(0, 0.013, 0.11 + intensity * 0.08, 4200),
+        noiseLayer("old-bolt-grind", duration * 0.08, duration * 0.5, 0.12 + intensity * 0.12, "bandpass", 2000, 360, profile),
+        clickLayer(duration * 0.28, 0.013, 0.12 + intensity * 0.09, 3200),
+        toneLayer("old-case", duration * 0.3, duration * 0.32, "triangle", baseFrequency * 0.85, baseFrequency * 0.46, 0.1, intensity, profile),
+        ...lockStopLayers(duration * 0.72, duration, baseFrequency, intensity, profile, {
+          impactGain: 0.4, impactFilter: 2000, clackMul: 0.72, bodyGain: 0.32, thumpGain: 0.28, thumpFilter: 700,
+        }),
       ];
     } else if (profile.pattern === "padlock") {
       layers = [
-        clickLayer(0, 0.008, 0.09 + intensity * 0.08, 7600),
-        toneLayer("shackle-snap", duration * 0.12, duration * 0.24, "triangle", baseFrequency * 2.3, baseFrequency * 1.1, 0.11, intensity, profile),
-        noiseLayer("metal-shell", duration * 0.14, duration * 0.22, 0.08 + intensity * 0.1, "bandpass", 4800, 1100, profile),
-        clickLayer(duration * 0.5, 0.013, 0.26 + intensity * 0.17, 3600),
-        toneLayer("lock-stop", duration * 0.5, duration * 0.18, "square", baseFrequency * 1.35, baseFrequency * 0.62, 0.27, intensity, profile),
-        noiseLayer("case-thump", duration * 0.5, duration * 0.16, 0.13 + intensity * 0.15, "lowpass", 1500, 380, profile),
-        toneLayer("metal-ring", duration * 0.56, duration * 0.28, "triangle", baseFrequency * 3.1, baseFrequency * 2.2, 0.06, intensity, profile),
+        clickLayer(0, 0.009, 0.09 + intensity * 0.08, 5600),
+        toneLayer("shackle-snap", duration * 0.12, duration * 0.2, "triangle", baseFrequency * 2.1, baseFrequency * 1.1, 0.08, intensity, profile),
+        noiseLayer("metal-shell", duration * 0.14, duration * 0.22, 0.085 + intensity * 0.1, "bandpass", 4200, 1000, profile),
+        ...lockStopLayers(duration * 0.5, duration, baseFrequency, intensity, profile, {
+          impactGain: 0.32, impactFilter: 2900, clackMul: 1.0, bodyGain: 0.24, thumpGain: 0.2, thumpFilter: 900,
+        }),
+        toneLayer("metal-ring", duration * 0.56, duration * 0.26, "triangle", baseFrequency * 3.1, baseFrequency * 2.2, 0.05, intensity, profile),
       ];
     } else {
       layers = [
-        clickLayer(0, 0.008, 0.08 + intensity * 0.07, 7800),
-        noiseLayer("latch-scrape", duration * 0.16, duration * 0.24, 0.06 + intensity * 0.07, "bandpass", 3900, 840, profile),
-        clickLayer(duration * 0.42, 0.01, 0.13 + intensity * 0.1, 5200),
-        clickLayer(duration * 0.54, 0.014, 0.26 + intensity * 0.17, 3100),
-        toneLayer("lock-stop", duration * 0.54, duration * 0.16, "square", baseFrequency * 1.1, baseFrequency * 0.52, 0.3, intensity, profile),
-        noiseLayer("case-thump", duration * 0.54, duration * 0.14, 0.13 + intensity * 0.15, "lowpass", 1300, 340, profile),
+        clickLayer(0, 0.01, 0.09 + intensity * 0.07, 4600),
+        noiseLayer("latch-scrape", duration * 0.16, duration * 0.24, 0.07 + intensity * 0.08, "bandpass", 2800, 720, profile),
+        clickLayer(duration * 0.42, 0.011, 0.13 + intensity * 0.1, 3600),
+        ...lockStopLayers(duration * 0.54, duration, baseFrequency, intensity, profile, {
+          impactGain: 0.34, impactFilter: 2600, clackMul: 0.86, bodyGain: 0.26, thumpGain: 0.22, thumpFilter: 820,
+        }),
       ];
     }
     return varyLockLayers(layers, duration, intensity, profile, rng);
@@ -431,24 +468,7 @@ function buildLayers(type, baseFrequency, duration, mood, intensity, profile, rn
   }
 
   if (type === "select") {
-    if (profile.pattern === "tick") {
-      layers = [clickLayer(0, 0.014, 0.16 + intensity * 0.1, 5800)];
-    } else if (profile.pattern === "confirm") {
-      layers = [
-        toneLayer("confirm-1", 0, duration * 0.62, "sine", baseFrequency, baseFrequency, 0.16, intensity, profile),
-        toneLayer("confirm-2", duration * 0.34, duration * 0.58, "triangle", baseFrequency * 1.5, baseFrequency * 1.5, 0.18, intensity, profile),
-      ];
-    } else if (profile.pattern === "soft") {
-      layers = [
-        toneLayer("soft", 0, duration * 1.3, "sine", baseFrequency * 0.8, baseFrequency * 0.82, 0.16, intensity, profile),
-      ];
-    } else {
-      layers = [
-        toneLayer("tap", 0, duration, "triangle", baseFrequency, baseFrequency * 1.08, 0.2, intensity, profile),
-        clickLayer(0, 0.015, 0.1 + intensity * 0.07, 4200 * profile.filterBias),
-      ];
-    }
-    return varyLayers(layers, duration, baseFrequency, intensity, profile, rng);
+    return buildSelectLayers(baseFrequency, duration, intensity, profile, rng);
   }
 
   if (profile.pattern === "fall") {
@@ -525,23 +545,251 @@ function varyLayers(layers, duration, baseFrequency, intensity, profile, rng) {
   return varied.sort((a, b) => a.start - b.start || a.name.localeCompare(b.name));
 }
 
+function buildStepLayers(baseFrequency, duration, intensity, profile, rng) {
+  let layers;
+  if (profile.pattern === "wood") {
+    layers = [
+      clickLayer(0, 0.01, 0.09 + intensity * 0.07, randomInt(rng, 1800, 3600)),
+      noiseLayer("wood-sole", 0.006, duration * 0.62, 0.055 + intensity * 0.06, "bandpass", randomInt(rng, 720, 1400), randomInt(rng, 260, 620), profile),
+      toneLayer("foot-wood", 0, duration * 0.58, "triangle", baseFrequency * 0.78, baseFrequency * 0.46, 0.08, intensity, profile),
+    ];
+  } else if (profile.pattern === "stone") {
+    layers = [
+      clickLayer(0, 0.012, 0.11 + intensity * 0.08, randomInt(rng, 2200, 4200)),
+      noiseLayer("stone-scuff", 0.004, duration * 0.52, 0.06 + intensity * 0.07, "bandpass", randomInt(rng, 980, 1900), randomInt(rng, 320, 760), profile),
+      toneLayer("foot-stone", 0.004, duration * 0.42, "sine", baseFrequency * 0.72, baseFrequency * 0.5, 0.065, intensity, profile),
+    ];
+  } else if (profile.pattern === "grass") {
+    layers = [
+      noiseLayer("grass-brush", 0, duration * 0.72, 0.075 + intensity * 0.07, "bandpass", randomInt(rng, 1100, 2400), randomInt(rng, 360, 920), profile),
+      noiseLayer("grass-foot", duration * 0.12, duration * 0.48, 0.045 + intensity * 0.04, "lowpass", randomInt(rng, 680, 1100), randomInt(rng, 180, 360), profile),
+    ];
+  } else if (profile.pattern === "heavy") {
+    layers = [
+      toneLayer("foot-weight", 0, duration * 0.7, "sine", randomInt(rng, 72, 125), randomInt(rng, 42, 72), 0.13, intensity, profile),
+      noiseLayer("sole-dust", 0.012, duration * 0.48, 0.055 + intensity * 0.06, "lowpass", randomInt(rng, 520, 980), randomInt(rng, 120, 260), profile),
+      clickLayer(0, 0.012, 0.06 + intensity * 0.055, randomInt(rng, 1000, 2200)),
+    ];
+  } else if (profile.pattern === "soft") {
+    layers = [
+      toneLayer("soft-foot", 0, duration * 0.52, "sine", baseFrequency * 0.62, baseFrequency * 0.5, 0.055, intensity, profile),
+      noiseLayer("soft-sole", 0.01, duration * 0.46, 0.035 + intensity * 0.035, "lowpass", randomInt(rng, 420, 820), randomInt(rng, 110, 260), profile),
+    ];
+  } else {
+    layers = [
+      clickLayer(0, 0.009, 0.075 + intensity * 0.06, randomInt(rng, 1600, 3400)),
+      toneLayer("foot-tap", 0.002, duration * 0.48, "triangle", baseFrequency, baseFrequency * lerp(0.62, 0.82, rng()), 0.07, intensity, profile),
+    ];
+  }
+  return varyStepLayers(layers, duration, intensity, profile, rng);
+}
+
+function varyStepLayers(layers, duration, intensity, profile, rng) {
+  const varied = layers.map((layer) => {
+    const gainJitter = profile.variant === "soft" ? lerp(0.72, 0.96, rng()) : lerp(0.86, 1.12, rng());
+    if (layer.kind === "tone") {
+      return {
+        ...layer,
+        duration: round3(Math.min(layer.duration, duration * 0.82)),
+        frequencyStart: Math.round(layer.frequencyStart * lerp(0.94, 1.06, rng())),
+        frequencyEnd: Math.round(layer.frequencyEnd * lerp(0.9, 1.08, rng())),
+        gain: round3(Math.min(0.22, layer.gain * gainJitter)),
+        filterFrequency: Math.round(clamp(layer.filterFrequency, 360, 2600)),
+        wobble: round2(Math.min(0.016, layer.wobble)),
+      };
+    }
+    if (layer.kind === "noise") {
+      return {
+        ...layer,
+        duration: round3(Math.min(layer.duration, duration * 0.86)),
+        filterStart: Math.round(clamp(layer.filterStart * lerp(0.9, 1.12, rng()), 120, 2600)),
+        filterEnd: Math.round(clamp(layer.filterEnd * lerp(0.88, 1.14, rng()), 80, 1200)),
+        gain: round3(Math.min(0.2, layer.gain * gainJitter)),
+      };
+    }
+    return {
+      ...layer,
+      duration: round3(Math.min(layer.duration, 0.014)),
+      gain: round3(Math.min(0.2, layer.gain * gainJitter)),
+      filterFrequency: Math.round(clamp(layer.filterFrequency * lerp(0.9, 1.08, rng()), 800, 4600)),
+    };
+  });
+
+  if (profile.variant === "double") {
+    varied.push(noiseLayer("step-follow", duration * lerp(0.34, 0.48, rng()), duration * 0.28, 0.026 + intensity * 0.025, "lowpass", randomInt(rng, 480, 920), randomInt(rng, 130, 300), profile));
+  } else if (profile.variant === "gravel") {
+    varied.push(noiseLayer("step-grit", duration * 0.12, duration * 0.42, 0.035 + intensity * 0.04, "bandpass", randomInt(rng, 900, 1800), randomInt(rng, 260, 680), profile));
+  } else if (profile.variant === "heavy") {
+    varied.push(toneLayer("step-mass", 0, duration * 0.62, "sine", randomInt(rng, 58, 88), randomInt(rng, 38, 58), 0.07 + intensity * 0.04, intensity, profile));
+  }
+
+  return varied
+    .map((layer) => layer.kind === "tone"
+      ? { ...layer, duration: round3(Math.min(layer.duration, Math.max(0.025, duration - layer.start))), release: round3(Math.min(layer.release, duration * 0.32)) }
+      : layer)
+    .sort((a, b) => a.start - b.start || a.name.localeCompare(b.name));
+}
+
+function buildWaterLayers(baseFrequency, duration, intensity, profile, rng) {
+  let layers;
+  if (profile.pattern === "plop") {
+    layers = [
+      toneLayer("water-plop", 0, duration * 0.48, "sine", baseFrequency * 0.92, baseFrequency * 0.48, 0.15, intensity, profile),
+      noiseLayer("plop-ring", duration * 0.05, duration * 0.52, 0.095 + intensity * 0.08, "bandpass", randomInt(rng, 720, 1500), randomInt(rng, 180, 420), profile),
+      noiseLayer("water-tail", duration * 0.28, duration * 0.52, 0.045 + intensity * 0.04, "lowpass", randomInt(rng, 380, 760), randomInt(rng, 80, 180), profile),
+    ];
+  } else if (profile.pattern === "ripple") {
+    layers = [
+      noiseLayer("water-ripple", 0, duration * 0.86, 0.075 + intensity * 0.055, "bandpass", randomInt(rng, 520, 980), randomInt(rng, 180, 420), profile),
+      toneLayer("ripple-ring", duration * 0.08, duration * 0.48, "sine", baseFrequency * 1.25, baseFrequency * 0.92, 0.055, intensity, profile),
+    ];
+  } else if (profile.pattern === "bubble") {
+    layers = [
+      toneLayer("bubble-1", 0, duration * 0.24, "sine", baseFrequency * 1.5, baseFrequency * 1.9, 0.075, intensity, profile),
+      toneLayer("bubble-2", duration * lerp(0.16, 0.28, rng()), duration * 0.22, "sine", baseFrequency * 1.2, baseFrequency * 1.7, 0.065, intensity, profile),
+      noiseLayer("bubble-fizz", 0, duration * 0.68, 0.055 + intensity * 0.055, "bandpass", randomInt(rng, 900, 2100), randomInt(rng, 360, 900), profile),
+    ];
+  } else if (profile.pattern === "pour") {
+    layers = [
+      noiseLayer("water-pour", 0, duration * 0.96, 0.12 + intensity * 0.1, "bandpass", randomInt(rng, 640, 1400), randomInt(rng, 180, 420), profile),
+      noiseLayer("pour-spray", duration * 0.08, duration * 0.64, 0.055 + intensity * 0.05, "bandpass", randomInt(rng, 1600, 3200), randomInt(rng, 720, 1300), profile),
+      toneLayer("basin-body", duration * 0.12, duration * 0.52, "sine", baseFrequency * 0.72, baseFrequency * 0.52, 0.065, intensity, profile),
+    ];
+  } else if (profile.pattern === "drip") {
+    layers = [
+      toneLayer("water-drip", 0, duration * 0.26, "sine", baseFrequency * 1.8, baseFrequency * 1.1, 0.095, intensity, profile),
+      noiseLayer("drip-ring", duration * 0.04, duration * 0.5, 0.045 + intensity * 0.04, "bandpass", randomInt(rng, 740, 1500), randomInt(rng, 220, 520), profile),
+    ];
+  } else {
+    layers = [
+      noiseLayer("water-splash", 0, duration * 0.72, 0.16 + intensity * 0.14, "bandpass", randomInt(rng, 900, 2200), randomInt(rng, 220, 560), profile),
+      noiseLayer("splash-spray", 0, duration * 0.38, 0.08 + intensity * 0.08, "bandpass", randomInt(rng, 2200, 4200), randomInt(rng, 900, 1600), profile),
+      toneLayer("water-body", 0.01, duration * 0.44, "sine", baseFrequency, baseFrequency * 0.52, 0.105, intensity, profile),
+      noiseLayer("water-tail", duration * 0.36, duration * 0.5, 0.05 + intensity * 0.045, "lowpass", randomInt(rng, 420, 820), randomInt(rng, 90, 220), profile),
+    ];
+  }
+  return varyWaterLayers(layers, duration, intensity, profile, rng);
+}
+
+function varyWaterLayers(layers, duration, intensity, profile, rng) {
+  const varied = layers.map((layer) => {
+    const gainJitter = profile.variant === "soft" ? lerp(0.72, 0.98, rng()) : lerp(0.88, 1.16, rng());
+    if (layer.kind === "tone") {
+      return {
+        ...layer,
+        frequencyStart: Math.round(layer.frequencyStart * lerp(0.92, 1.08, rng())),
+        frequencyEnd: Math.round(layer.frequencyEnd * lerp(0.88, 1.12, rng())),
+        gain: round3(Math.min(0.24, layer.gain * gainJitter)),
+        filterFrequency: Math.round(clamp(layer.filterFrequency, 320, 3000)),
+      };
+    }
+    if (layer.kind === "noise") {
+      return {
+        ...layer,
+        filterStart: Math.round(clamp(layer.filterStart * lerp(0.82, 1.22, rng()), 80, 5200)),
+        filterEnd: Math.round(clamp(layer.filterEnd * lerp(0.82, 1.22, rng()), 60, 2400)),
+        gain: round3(Math.min(0.34, layer.gain * gainJitter)),
+      };
+    }
+    return { ...layer, gain: round3(Math.min(0.16, layer.gain * gainJitter)) };
+  });
+
+  if (profile.variant === "deep") {
+    varied.push(toneLayer("water-depth", 0, duration * 0.58, "sine", randomInt(rng, 54, 92), randomInt(rng, 38, 64), 0.08 + intensity * 0.05, intensity, profile));
+  } else if (profile.variant === "bubbly") {
+    varied.push(toneLayer("bubble-extra", duration * lerp(0.32, 0.56, rng()), duration * 0.18, "sine", randomInt(rng, 240, 520), randomInt(rng, 380, 760), 0.045 + intensity * 0.035, intensity, profile));
+  } else if (profile.variant === "choppy") {
+    varied.push(noiseLayer("water-chop", duration * lerp(0.16, 0.34, rng()), duration * 0.34, 0.055 + intensity * 0.055, "bandpass", randomInt(rng, 1200, 2600), randomInt(rng, 420, 940), profile));
+  } else if (profile.variant === "wide") {
+    varied.push(noiseLayer("wide-ripple", duration * 0.24, duration * 0.58, 0.04 + intensity * 0.035, "bandpass", randomInt(rng, 460, 900), randomInt(rng, 140, 320), profile));
+  }
+
+  return varied.sort((a, b) => a.start - b.start || a.name.localeCompare(b.name));
+}
+
+function buildSelectLayers(baseFrequency, duration, intensity, profile, rng) {
+  let layers;
+  if (profile.pattern === "cursor") {
+    layers = [
+      clickLayer(0, 0.008, 0.085 + intensity * 0.055, randomInt(rng, 4200, 7200)),
+      toneLayer("ui-pip", 0.004, duration * lerp(0.38, 0.56, rng()), "triangle", baseFrequency, baseFrequency * lerp(1.02, 1.12, rng()), 0.085, intensity, profile),
+    ];
+  } else if (profile.pattern === "press") {
+    layers = [
+      clickLayer(0, 0.01, 0.075 + intensity * 0.05, randomInt(rng, 3600, 6200)),
+      toneLayer("ui-press", 0.006, duration * lerp(0.44, 0.62, rng()), "sine", baseFrequency * 0.82, baseFrequency * lerp(0.72, 0.86, rng()), 0.075, intensity, profile),
+    ];
+  } else if (profile.pattern === "soft") {
+    layers = [
+      toneLayer("ui-soft", 0, duration * lerp(0.48, 0.68, rng()), "sine", baseFrequency * 0.76, baseFrequency * lerp(0.74, 0.82, rng()), 0.07, intensity, profile),
+    ];
+  } else {
+    layers = [
+      toneLayer("ui-blip", 0, duration * lerp(0.42, 0.6, rng()), "triangle", baseFrequency, baseFrequency * lerp(1.22, 1.42, rng()), 0.095, intensity, profile),
+      clickLayer(0, 0.007, 0.055 + intensity * 0.045, randomInt(rng, 4800, 7600)),
+    ];
+  }
+  return varySelectLayers(layers, duration, intensity, profile, rng);
+}
+
+function varySelectLayers(layers, duration, intensity, profile, rng) {
+  const varied = layers.map((layer) => {
+    const gainJitter = lerp(0.88, 1.08, rng());
+    if (layer.kind === "tone") {
+      return {
+        ...layer,
+        duration: round3(Math.min(layer.duration, duration * 0.72)),
+        frequencyStart: Math.round(layer.frequencyStart * lerp(0.97, 1.04, rng())),
+        frequencyEnd: Math.round(layer.frequencyEnd * lerp(0.97, 1.04, rng())),
+        gain: round3(Math.min(0.18, layer.gain * gainJitter)),
+        wobble: round2(Math.min(0.012, layer.wobble)),
+      };
+    }
+    return {
+      ...layer,
+      duration: round3(Math.min(layer.duration, 0.012)),
+      gain: round3(Math.min(0.16, layer.gain * gainJitter)),
+      filterFrequency: Math.round(clamp(layer.filterFrequency * lerp(0.92, 1.08, rng()), 3200, 8200)),
+    };
+  });
+
+  if (profile.variant === "double" || profile.variant === "stepped") {
+    varied.push(clickLayer(duration * lerp(0.2, 0.34, rng()), 0.006, 0.035 + intensity * 0.035, randomInt(rng, 3600, 6800)));
+  } else if (profile.variant === "wide") {
+    varied.push(toneLayer("ui-air", duration * 0.08, duration * 0.34, "sine", randomInt(rng, 1500, 2200), randomInt(rng, 1500, 2400), 0.035, intensity, { filterBias: 1.1, pitchWobble: 0 }));
+  }
+
+  return varied
+    .map((layer) => {
+      if (layer.kind !== "tone") {
+        return layer;
+      }
+      return {
+        ...layer,
+        duration: round3(Math.min(layer.duration, Math.max(0.025, duration - layer.start))),
+        release: round3(Math.min(layer.release, duration * 0.28)),
+        filterFrequency: Math.round(clamp(layer.filterFrequency, 2600, 7800)),
+      };
+    })
+    .sort((a, b) => a.start - b.start || a.name.localeCompare(b.name));
+}
+
 function buildBoxPullLayers(duration, intensity, profile, rng) {
   const material = boxPullMaterial(profile.pattern);
-  const stopAt = duration * lerp(0.72, 0.84, rng());
+  const releaseAt = duration * lerp(0.7, 0.82, rng());
   const stictionDuration = duration * (profile.variant === "stuck" ? lerp(0.18, 0.26, rng()) : lerp(0.1, 0.17, rng()));
   const rubStart = duration * lerp(0.035, 0.08, rng());
-  const rubDuration = Math.max(duration * 0.64, stopAt + duration * 0.08 - rubStart);
+  const rubDuration = Math.max(duration * 0.76, releaseAt + duration * lerp(0.12, 0.22, rng()) - rubStart);
   const bodyStart = randomInt(rng, 54, 112);
   const bodyEnd = randomInt(rng, 36, 68);
-  const bodyGain = (profile.variant === "heavy" ? 0.22 : 0.16) + intensity * 0.1;
-  const rubGain = (profile.variant === "soft" ? 0.12 : 0.17) + intensity * 0.16;
-  const stictionGain = (profile.variant === "stuck" ? 0.15 : 0.09) + intensity * 0.08;
+  const bodyGain = (profile.variant === "heavy" ? 0.18 : 0.13) + intensity * 0.075;
+  const rubGain = (profile.variant === "soft" ? 0.11 : 0.15) + intensity * 0.13;
+  const stictionGain = (profile.variant === "stuck" ? 0.13 : 0.075) + intensity * 0.065;
   const layers = [
     noiseLayer("stiction-break", 0, stictionDuration, stictionGain, "bandpass", material.stictionStart, material.stictionEnd, profile),
     noiseLayer("floor-rub", rubStart, rubDuration, rubGain, material.filterType, material.rubStart, material.rubEnd, profile),
-    toneLayer("crate-body", 0, stopAt + duration * 0.12, "sine", bodyStart, bodyEnd, bodyGain, intensity, profile),
-    noiseLayer("settle-dust", stopAt, duration * lerp(0.13, 0.2, rng()), 0.07 + intensity * 0.09, "lowpass", material.settleStart, material.settleEnd, profile),
-    toneLayer("settle-thump", stopAt, duration * lerp(0.16, 0.24, rng()), "sine", randomInt(rng, 52, 82), randomInt(rng, 30, 48), 0.14 + intensity * 0.08, intensity, profile),
+    toneLayer("crate-body", 0, releaseAt + duration * 0.1, "sine", bodyStart, bodyEnd, bodyGain, intensity, profile),
+    noiseLayer("release-dust", releaseAt, duration * lerp(0.18, 0.3, rng()), 0.035 + intensity * 0.045, "lowpass", material.releaseStart, material.releaseEnd, profile),
   ];
 
   if (material.secondary) {
@@ -561,7 +809,7 @@ function buildBoxPullLayers(duration, intensity, profile, rng) {
     layers.push(toneLayer("crate-strain", duration * 0.04, duration * 0.3, "triangle", randomInt(rng, 120, 180), randomInt(rng, 70, 105), 0.045 + intensity * 0.035, intensity, profile));
   }
 
-  return varyBoxPullLayers(layers, duration, stopAt, intensity, profile, rng);
+  return varyBoxPullLayers(layers, duration, releaseAt, intensity, profile, rng);
 }
 
 function boxPullMaterial(pattern) {
@@ -572,8 +820,8 @@ function boxPullMaterial(pattern) {
       stictionEnd: 340,
       rubStart: 760,
       rubEnd: 170,
-      settleStart: 420,
-      settleEnd: 120,
+      releaseStart: 340,
+      releaseEnd: 90,
       secondary: { name: "stone-grit", start: 0.18, duration: 0.46, gain: 0.045, filterStart: 1180, filterEnd: 440 },
     };
   }
@@ -584,8 +832,8 @@ function boxPullMaterial(pattern) {
       stictionEnd: 420,
       rubStart: 980,
       rubEnd: 260,
-      settleStart: 500,
-      settleEnd: 140,
+      releaseStart: 400,
+      releaseEnd: 110,
       secondary: { name: "rough-grain", start: 0.16, duration: 0.56, gain: 0.06, filterStart: 1500, filterEnd: 620 },
     };
   }
@@ -596,8 +844,8 @@ function boxPullMaterial(pattern) {
       stictionEnd: 360,
       rubStart: 860,
       rubEnd: 220,
-      settleStart: 450,
-      settleEnd: 130,
+      releaseStart: 360,
+      releaseEnd: 100,
       secondary: { name: "stall-rub", start: 0.08, duration: 0.38, gain: 0.06, filterStart: 1020, filterEnd: 320 },
     };
   }
@@ -608,8 +856,8 @@ function boxPullMaterial(pattern) {
       stictionEnd: 320,
       rubStart: 820,
       rubEnd: 240,
-      settleStart: 440,
-      settleEnd: 120,
+      releaseStart: 340,
+      releaseEnd: 95,
       secondary: null,
     };
   }
@@ -620,8 +868,8 @@ function boxPullMaterial(pattern) {
       stictionEnd: 220,
       rubStart: 540,
       rubEnd: 150,
-      settleStart: 320,
-      settleEnd: 100,
+      releaseStart: 260,
+      releaseEnd: 80,
       secondary: { name: "soft-dust", start: 0.22, duration: 0.42, gain: 0.035, filterStart: 520, filterEnd: 170 },
     };
   }
@@ -631,13 +879,13 @@ function boxPullMaterial(pattern) {
     stictionEnd: 280,
     rubStart: 700,
     rubEnd: 210,
-    settleStart: 380,
-    settleEnd: 110,
+    releaseStart: 300,
+    releaseEnd: 90,
     secondary: { name: "wood-grain", start: 0.2, duration: 0.5, gain: 0.045, filterStart: 860, filterEnd: 260 },
   };
 }
 
-function varyBoxPullLayers(layers, duration, stopAt, intensity, profile, rng) {
+function varyBoxPullLayers(layers, duration, releaseAt, intensity, profile, rng) {
   const varied = layers.map((layer) => {
     const gainJitter = profile.variant === "soft" ? lerp(0.72, 0.96, rng()) : lerp(0.9, 1.16, rng());
     if (layer.kind === "tone") {
@@ -662,12 +910,41 @@ function varyBoxPullLayers(layers, duration, stopAt, intensity, profile, rng) {
   if (profile.variant === "grainy" || profile.variant === "rough") {
     varied.push(noiseLayer("loose-grit", duration * 0.18, duration * 0.46, 0.045 + intensity * 0.055, "bandpass", randomInt(rng, 980, 1500), randomInt(rng, 360, 680), profile));
   } else if (profile.variant === "heavy") {
-    varied.push(toneLayer("crate-weight", 0, stopAt + duration * 0.1, "sine", randomInt(rng, 38, 62), randomInt(rng, 28, 42), 0.1 + intensity * 0.08, intensity, profile));
+    varied.push(toneLayer("crate-weight", 0, releaseAt + duration * 0.08, "sine", randomInt(rng, 38, 62), randomInt(rng, 28, 42), 0.075 + intensity * 0.055, intensity, profile));
   } else if (profile.variant === "stuck") {
-    varied.push(noiseLayer("stiction-hold", duration * 0.08, duration * 0.24, 0.055 + intensity * 0.06, "bandpass", randomInt(rng, 720, 1100), randomInt(rng, 220, 420), profile));
+    varied.push(noiseLayer("stiction-hold", duration * 0.08, duration * 0.24, 0.045 + intensity * 0.045, "bandpass", randomInt(rng, 720, 1100), randomInt(rng, 220, 420), profile));
   }
 
   return varied.sort((a, b) => a.start - b.start || a.name.localeCompare(b.name));
+}
+
+// Models the moment a bolt reaches its stop as a struck-metal impact rather than
+// a pitched oscillator (a sustained square tone is what reads as "electronic"). Per
+// modal synthesis, a metal impact is a noise excitation plus a sum of inharmonic,
+// exponentially-decaying sinusoids where higher modes decay faster, over a low body
+// mode (the door/frame) that carries the weight and rings longest.
+function lockStopLayers(stopAt, duration, baseFrequency, intensity, profile, opts) {
+  const {
+    impactGain = 0.34,
+    impactFilter = 2600,
+    clackMul = 0.86,
+    bodyGain = 0.26,
+    thumpGain = 0.22,
+    thumpFilter = 820,
+  } = opts;
+  const ring = baseFrequency * clackMul;
+  return [
+    // metal-on-metal contact: the broadband transient heard as the "clack"
+    clickLayer(stopAt, 0.013, impactGain, impactFilter),
+    // door/frame body mode: low, carries the weight, decays slowest
+    toneLayer("lock-body", stopAt, duration * 0.26, "sine", 98, 60, bodyGain, intensity, profile),
+    // bolt/strike-plate ring: inharmonic partials, higher modes shorter (decay faster)
+    toneLayer("lock-stop", stopAt, duration * 0.15, "triangle", ring, ring * 0.84, 0.13, intensity, profile),
+    toneLayer("lock-mode-2", stopAt, duration * 0.09, "sine", ring * 1.73, ring * 1.5, 0.075, intensity, profile),
+    toneLayer("lock-mode-3", stopAt, duration * 0.055, "sine", ring * 2.62, ring * 2.3, 0.045, intensity, profile),
+    // case rattle under the ring: low broadband thump
+    noiseLayer("case-thump", stopAt, duration * 0.2, thumpGain, "lowpass", thumpFilter, thumpFilter * 0.32, profile),
+  ];
 }
 
 function varyLockLayers(layers, duration, intensity, profile, rng) {
@@ -754,6 +1031,22 @@ function clickLayer(start, duration, gain, filterFrequency) {
   };
 }
 
+function prepareLayer(audioContext, layer) {
+  if (layer.kind === "noise") {
+    return {
+      ...layer,
+      buffer: cachedSfxBuffer(audioContext, noiseLayerBufferKey(audioContext, layer), () => renderNoiseBuffer(audioContext, layer)),
+    };
+  }
+  if (layer.kind === "click") {
+    return {
+      ...layer,
+      buffer: cachedSfxBuffer(audioContext, clickLayerBufferKey(audioContext, layer), () => renderClickBuffer(audioContext, layer)),
+    };
+  }
+  return layer;
+}
+
 function playLayer(audioContext, layer, effectStart, activeSources, destination, onIdle) {
   const startsAt = effectStart + layer.start;
   if (layer.kind === "tone") {
@@ -790,15 +1083,6 @@ function playToneLayer(audioContext, layer, startsAt, activeSources, destination
 }
 
 function playNoiseLayer(audioContext, layer, startsAt, activeSources, destination, onIdle) {
-  const samples = Math.max(1, Math.floor(audioContext.sampleRate * layer.duration));
-  const buffer = audioContext.createBuffer(1, samples, audioContext.sampleRate);
-  const data = buffer.getChannelData(0);
-  const rng = mulberry32(hashSeed(`${layer.name}:${layer.start}:${layer.duration}:${layer.gain}`));
-  for (let i = 0; i < samples; i += 1) {
-    const white = rng() * 2 - 1;
-    data[i] = layer.color === "crackle" && rng() > 0.72 ? white : white * 0.55;
-  }
-
   const source = audioContext.createBufferSource();
   const filter = audioContext.createBiquadFilter();
   const gain = audioContext.createGain();
@@ -809,13 +1093,39 @@ function playNoiseLayer(audioContext, layer, startsAt, activeSources, destinatio
   gain.gain.setValueAtTime(0.0001, startsAt);
   gain.gain.exponentialRampToValueAtTime(Math.max(0.0001, layer.gain), startsAt + layer.attack);
   gain.gain.exponentialRampToValueAtTime(0.0001, Math.max(startsAt + layer.attack + 0.01, endsAt - layer.release));
-  source.buffer = buffer;
+  source.buffer = layer.buffer;
   source.connect(filter).connect(gain).connect(destination);
   trackSource(source, activeSources, onIdle);
   source.start(startsAt);
 }
 
+function renderNoiseBuffer(audioContext, layer) {
+  const samples = Math.max(1, Math.floor(audioContext.sampleRate * layer.duration));
+  const buffer = audioContext.createBuffer(1, samples, audioContext.sampleRate);
+  const data = buffer.getChannelData(0);
+  const rng = mulberry32(hashSeed(`${layer.name}:${layer.start}:${layer.duration}:${layer.gain}`));
+  for (let i = 0; i < samples; i += 1) {
+    const white = rng() * 2 - 1;
+    data[i] = layer.color === "crackle" && rng() > 0.72 ? white : white * 0.55;
+  }
+  return buffer;
+}
+
 function playClickLayer(audioContext, layer, startsAt, activeSources, destination, onIdle) {
+  const source = audioContext.createBufferSource();
+  const filter = audioContext.createBiquadFilter();
+  const gain = audioContext.createGain();
+  filter.type = "highpass";
+  filter.frequency.value = layer.filterFrequency;
+  gain.gain.setValueAtTime(layer.gain, startsAt);
+  gain.gain.exponentialRampToValueAtTime(0.0001, startsAt + layer.duration);
+  source.buffer = layer.buffer;
+  source.connect(filter).connect(gain).connect(destination);
+  trackSource(source, activeSources, onIdle);
+  source.start(startsAt);
+}
+
+function renderClickBuffer(audioContext, layer) {
   const samples = Math.max(1, Math.floor(audioContext.sampleRate * layer.duration));
   const buffer = audioContext.createBuffer(1, samples, audioContext.sampleRate);
   const data = buffer.getChannelData(0);
@@ -824,18 +1134,44 @@ function playClickLayer(audioContext, layer, startsAt, activeSources, destinatio
     const t = i / audioContext.sampleRate;
     data[i] = (rng() * 2 - 1) * Math.exp(-120 * t);
   }
+  return buffer;
+}
 
-  const source = audioContext.createBufferSource();
-  const filter = audioContext.createBiquadFilter();
-  const gain = audioContext.createGain();
-  filter.type = "highpass";
-  filter.frequency.value = layer.filterFrequency;
-  gain.gain.setValueAtTime(layer.gain, startsAt);
-  gain.gain.exponentialRampToValueAtTime(0.0001, startsAt + layer.duration);
-  source.buffer = buffer;
-  source.connect(filter).connect(gain).connect(destination);
-  trackSource(source, activeSources, onIdle);
-  source.start(startsAt);
+function cachedSfxBuffer(audioContext, key, render) {
+  let cache = renderedBufferCaches.get(audioContext);
+  if (!cache) {
+    cache = new Map();
+    renderedBufferCaches.set(audioContext, cache);
+  }
+  let buffer = cache.get(key);
+  if (!buffer) {
+    buffer = render();
+    cache.set(key, buffer);
+  }
+  return buffer;
+}
+
+function noiseLayerBufferKey(audioContext, layer) {
+  return [
+    "noise",
+    audioContext.sampleRate,
+    layer.name,
+    layer.start,
+    layer.duration,
+    layer.gain,
+    layer.color,
+  ].join("|");
+}
+
+function clickLayerBufferKey(audioContext, layer) {
+  return [
+    "click",
+    audioContext.sampleRate,
+    layer.name,
+    layer.duration,
+    layer.gain,
+    layer.filterFrequency,
+  ].join("|");
 }
 
 function trackSource(source, activeSources, onIdle = null) {

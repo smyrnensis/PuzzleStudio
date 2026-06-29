@@ -12,7 +12,7 @@ pub fn compile_preview(
     } else {
         puzzle_path
     };
-    html_play::export_html_from_source(source, path, game_css, game_visuals_js)
+    html_play::export_editor_preview_html_from_source(source, path, game_css, game_visuals_js)
         .map_err(|error| JsValue::from_str(&error.to_string()))
 }
 
@@ -101,5 +101,9 @@ level start
 
         assert!(html.contains("<!doctype html>"));
         assert!(html.contains("#eeeeee"));
+        assert!(html.contains("PuzzleStudioPreviewState"));
+        assert!(html.contains("PuzzleRuntimeWasmLoader"));
+        assert!(html.contains("ui-tap"));
+        assert!(html.contains("buildSelectLayers"));
     }
 }

@@ -81,6 +81,8 @@ pub struct LoadedGame {
     pub goal: Option<GoalCondition>,
     pub lose: Option<GoalCondition>,
     pub sounds: SoundsDef,
+    #[serde(default)]
+    pub model_operation_sounds: Vec<ModelOperationSoundDef>,
     pub theme: ThemeDef,
     pub assets: AssetsDef,
     pub visuals: VisualsDef,
@@ -187,6 +189,19 @@ pub struct MusicSoundDef {
     pub bars: u16,
     pub bpm: u16,
     pub volume: f64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModelOperationSoundDef {
+    pub operation: ModelOperationSound,
+    pub sfx_name: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelOperationSound {
+    Undo,
+    Restart,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

@@ -3,10 +3,10 @@ Use `fix` when a group of rules should repeat or be limited together.
 
 ```puzzle
 rules {
-  fix once {
-    [ Player | Coin ] -> [ Player | ]
-    [ Player | Key ] -> [ Player | ]
-  }
+fix once {
+[ Player | Coin ] -> [ Player | ]
+[ Player | Key ] -> [ Player | ]
+}
 }
 ```
 

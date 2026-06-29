@@ -3,15 +3,15 @@ Use `legend` to map level characters to objects.
 
 ```puzzle
 levels {
-  legend {
-    . = empty
-    # = Wall
-    P = Player
-    B = Box
-    G = Goal
-    * = Goal Box
-    + = Goal Player
-  }
+legend {
+. = empty
+# = Wall
+P = Player
+B = Box
+G = Goal
+* = Goal Box
++ = Goal Player
+}
 }
 ```
 

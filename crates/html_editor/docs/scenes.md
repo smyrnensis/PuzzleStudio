@@ -3,10 +3,10 @@ Use `scene` blocks for screen flow outside the board.
 
 ```puzzle
 scene title {
-  layout {
-    title
-    choice "Start" -> goto playing
-  }
+layout {
+title
+choice "Start" -> goto playing
+}
 }
 ```
 
