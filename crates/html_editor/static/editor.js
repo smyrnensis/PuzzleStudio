@@ -3768,18 +3768,22 @@ function loadLevelFromSourceClick(event = null) {
   if (!isPuzzleDocument(activeDocument()) || !isTextDocument(activeDocument())) {
     return;
   }
-  const source = sourceEditorDocumentValue();
-  const clickOffset = sourceOffsetFromEditorClick(event, source);
-  const position = clickOffset ?? (
-      sourceViewOffsetToDocumentOffset(sourceEditor.selectionStart, "start")
-  );
-  if (typeof loadSourceEditableTargetFromPosition === "function") {
-    const key = loadSourceEditableTargetFromPosition(position);
-    if (key) {
-      event?.preventDefault();
-      event?.stopImmediatePropagation?.();
-    }
+  if (typeof syncPreviewModeFromSourceCursor !== "function") {
+    setStatus("Source target sync unavailable", "is-error");
+    return;
   }
+  const source = sourceEditorDocumentValue();
+  const clickOffset = typeof sourceOffsetFromEditorClick === "function"
+    ? sourceOffsetFromEditorClick(event, source)
+    : null;
+  syncPreviewModeFromSourceCursor({
+    force: true,
+    recordHistory: true,
+    allowInactiveMode: true,
+    position: clickOffset ?? (
+      sourceViewOffsetToDocumentOffset(sourceEditor.selectionStart, "start")
+    ),
+  });
 }
 
 function loadLevelFromSourcePosition(position, options = {}) {
@@ -8749,7 +8753,6 @@ paneSplitter.addEventListener("lostpointercapture", stopPaneResize);
 previewLogSplitter?.addEventListener("lostpointercapture", stopPreviewLogResize);
 explorerSplitter.addEventListener("lostpointercapture", stopExplorerResize);
 window.addEventListener("blur", () => stopActiveResize());
-sourceEditor.addEventListener("click", loadLevelFromSourceClick);
 playModeButton.addEventListener("click", () => {
   openPreviewModePane("play");
 });
@@ -9004,6 +9007,7 @@ solutionSeekInput.addEventListener("change", seekSolutionStep);
 installEditorHoverTooltips();
 bindSourceEditorEvents();
 bindSourceEditorPopoverEvents();
+sourceEditor.addEventListener("click", loadLevelFromSourceClick);
 registerSourceEditableTarget?.("level", {
   find: findLevelDefinitionAtPosition,
   load: loadLevelFromSourcePosition,

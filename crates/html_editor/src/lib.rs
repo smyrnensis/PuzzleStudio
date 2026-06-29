@@ -4529,6 +4529,36 @@ levels3 demo of push3 {
     }
 
     #[test]
+    fn level_source_click_uses_rust_target_sync_after_source_click_binding() {
+        let click_start = EDITOR_JS
+            .find("function loadLevelFromSourceClick(event = null)")
+            .expect("level source click handler");
+        let click_end = EDITOR_JS[click_start..]
+            .find("function loadLevelFromSourcePosition")
+            .map(|index| click_start + index)
+            .expect("level source position loader");
+        let click = &EDITOR_JS[click_start..click_end];
+
+        assert!(click.contains("syncPreviewModeFromSourceCursor({"));
+        assert!(click.contains("allowInactiveMode: true,"));
+        assert!(click.contains("position: clickOffset ?? ("));
+        assert!(
+            click.contains(
+                "sourceViewOffsetToDocumentOffset(sourceEditor.selectionStart, \"start\")"
+            )
+        );
+        assert!(!click.contains("loadSourceEditableTargetFromPosition"));
+
+        let source_bind = EDITOR_JS
+            .find("bindSourceEditorEvents();")
+            .expect("source click handlers are bound");
+        let level_bind = EDITOR_JS
+            .find("sourceEditor.addEventListener(\"click\", loadLevelFromSourceClick);")
+            .expect("level click handler is bound");
+        assert!(source_bind < level_bind);
+    }
+
+    #[test]
     fn sprite_header_duplicates_selected_sprite_below_source_range() {
         assert!(EDITOR_HTML.contains(r#"id="duplicateSpriteButton""#));
         assert!(EDITOR_HTML.contains(r#"aria-label="Duplicate sprite""#));
