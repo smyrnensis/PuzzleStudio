@@ -4,15 +4,28 @@ enum StandaloneHostMode {
     EditorPreview,
 }
 
+#[derive(Clone, Copy, Debug)]
+enum StandaloneRuntimeWasm<'a> {
+    HostDefault,
+    EmbeddedBase64 {
+        module_source: &'a str,
+        wasm_base64: &'a str,
+    },
+}
+
 fn export_html(state: &ServerState) -> String {
     export_html_with_host_mode(state, StandaloneHostMode::Export)
 }
 
-fn export_editor_preview_html(state: &ServerState) -> String {
-    export_html_with_host_mode(state, StandaloneHostMode::EditorPreview)
+fn export_html_with_host_mode(state: &ServerState, host_mode: StandaloneHostMode) -> String {
+    export_html_with_runtime_wasm(state, host_mode, StandaloneRuntimeWasm::HostDefault)
 }
 
-fn export_html_with_host_mode(state: &ServerState, host_mode: StandaloneHostMode) -> String {
+fn export_html_with_runtime_wasm(
+    state: &ServerState,
+    host_mode: StandaloneHostMode,
+    runtime_wasm: StandaloneRuntimeWasm<'_>,
+) -> String {
     let mut data = String::new();
     push_export_data(&mut data, state);
     let data = escape_script_json(&data);
@@ -24,7 +37,7 @@ fn export_html_with_host_mode(state: &ServerState, host_mode: StandaloneHostMode
     let game_visuals_js = escape_script(&state.game_visuals_js);
     let renderer_js = escape_script(RENDERER_JS);
     let standalone_js = escape_script(STANDALONE_JS);
-    let runtime_wasm_js = standalone_runtime_wasm_script(host_mode);
+    let runtime_wasm_js = standalone_runtime_wasm_script(host_mode, runtime_wasm);
     let sound_tools_js = escape_script(&sound_tools_js());
     let app_js_source = standalone_host_js(state, host_mode);
     let app_js = escape_script(&app_js_source);
@@ -122,7 +135,17 @@ fn remove_optional_host_markers(source: &str) -> String {
     script
 }
 
-fn standalone_runtime_wasm_script(host_mode: StandaloneHostMode) -> String {
+fn standalone_runtime_wasm_script(
+    host_mode: StandaloneHostMode,
+    runtime_wasm: StandaloneRuntimeWasm<'_>,
+) -> String {
+    if let StandaloneRuntimeWasm::EmbeddedBase64 {
+        module_source,
+        wasm_base64,
+    } = runtime_wasm
+    {
+        return embedded_base64_wasm_loader_script(module_source, wasm_base64);
+    }
     match host_mode {
         StandaloneHostMode::Export => embedded_standalone_wasm_script(),
         StandaloneHostMode::EditorPreview => editor_preview_runtime_wasm_script(),
@@ -155,8 +178,13 @@ fn embedded_standalone_wasm_script() -> String {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn embedded_wasm_loader_script(module_source: &str, wasm: &[u8]) -> String {
-    let module_source = escape_script_json(module_source);
     let wasm_base64 = base64_encode(wasm);
+    embedded_base64_wasm_loader_script(module_source, &wasm_base64)
+}
+
+fn embedded_base64_wasm_loader_script(module_source: &str, wasm_base64: &str) -> String {
+    let module_source = escape_script_json(module_source);
+    let wasm_base64 = escape_script_json(wasm_base64);
     format!(
         r#"window.PuzzleStandaloneEmbeddedWasm = {{ moduleSource: "{module_source}", wasmBase64: "{wasm_base64}" }};
 window.PuzzleRuntimeWasmLoader = window.PuzzleRuntimeWasmLoader || (() => {{
@@ -335,6 +363,24 @@ fn export_puzzle3_document_html(
     game_css: &str,
     game_visuals_js: &str,
 ) -> Result<String, String> {
+    export_puzzle3_document_html_with_runtime_wasm(
+        document,
+        source,
+        puzzle_path,
+        game_css,
+        game_visuals_js,
+        StandaloneRuntimeWasm::HostDefault,
+    )
+}
+
+fn export_puzzle3_document_html_with_runtime_wasm(
+    document: &puzzle_lang::LoadedDocument,
+    source: &str,
+    puzzle_path: &str,
+    game_css: &str,
+    game_visuals_js: &str,
+    runtime_wasm: StandaloneRuntimeWasm<'_>,
+) -> Result<String, String> {
     let fixture_json = puzzle_lang::export_loaded_document_visual_fixture_json(document)
         .map_err(|error| error.to_string())?;
     let runtime_sources =
@@ -349,7 +395,7 @@ fn export_puzzle3_document_html(
         SolverConfig::default(),
     );
     Ok(inject_puzzle3_frame_assets(
-        export_html(&state),
+        export_html_with_runtime_wasm(&state, StandaloneHostMode::Export, runtime_wasm),
         &fixture_json,
         &runtime_sources.model_3d,
         puzzle_path,
@@ -417,6 +463,7 @@ fn export_mixed_document_html(
     game_visuals_js: String,
     solver: SolverConfig,
     host_mode: StandaloneHostMode,
+    runtime_wasm: StandaloneRuntimeWasm<'_>,
 ) -> Result<String, String> {
     let fixture_json = mixed_document_puzzle3_fixture_json(document)?;
     let runtime_sources =
@@ -430,10 +477,7 @@ fn export_mixed_document_html(
         game_visuals_js,
         solver,
     );
-    let html = match host_mode {
-        StandaloneHostMode::Export => export_html(&state),
-        StandaloneHostMode::EditorPreview => export_editor_preview_html(&state),
-    };
+    let html = export_html_with_runtime_wasm(&state, host_mode, runtime_wasm);
     Ok(inject_puzzle3_frame_assets(
         html,
         &fixture_json,
@@ -629,6 +673,37 @@ pub fn export_html_from_source(
     )
 }
 
+pub fn export_html_from_source_with_embedded_wasm(
+    source: &str,
+    puzzle_path: &str,
+    game_css: &str,
+    game_visuals_js: &str,
+    game_runtime_module_js: &str,
+    game_runtime_wasm_base64: &str,
+) -> Result<String, DiagnosticReport> {
+    if game_runtime_module_js.trim().is_empty() {
+        return Err(DiagnosticReport::error(
+            "Standalone HTML export requires puzzle_wasm_game.js content.",
+        ));
+    }
+    if game_runtime_wasm_base64.trim().is_empty() {
+        return Err(DiagnosticReport::error(
+            "Standalone HTML export requires puzzle_wasm_game_bg.wasm content.",
+        ));
+    }
+    export_html_from_source_with_runtime_wasm(
+        source,
+        puzzle_path,
+        game_css,
+        game_visuals_js,
+        StandaloneHostMode::Export,
+        StandaloneRuntimeWasm::EmbeddedBase64 {
+            module_source: game_runtime_module_js,
+            wasm_base64: game_runtime_wasm_base64,
+        },
+    )
+}
+
 pub fn export_editor_preview_html_from_source(
     source: &str,
     puzzle_path: &str,
@@ -651,6 +726,24 @@ fn export_html_from_source_with_host_mode(
     game_visuals_js: &str,
     host_mode: StandaloneHostMode,
 ) -> Result<String, DiagnosticReport> {
+    export_html_from_source_with_runtime_wasm(
+        source,
+        puzzle_path,
+        game_css,
+        game_visuals_js,
+        host_mode,
+        StandaloneRuntimeWasm::HostDefault,
+    )
+}
+
+fn export_html_from_source_with_runtime_wasm(
+    source: &str,
+    puzzle_path: &str,
+    game_css: &str,
+    game_visuals_js: &str,
+    host_mode: StandaloneHostMode,
+    runtime_wasm: StandaloneRuntimeWasm<'_>,
+) -> Result<String, DiagnosticReport> {
     let document = puzzle_lang::parse_game_for_path(source, puzzle_path)?;
     if document.models.len() > 1 {
         let loaded = mixed_document_loaded_game(&document).map_err(DiagnosticReport::error)?;
@@ -664,6 +757,7 @@ fn export_html_from_source_with_host_mode(
             game_visuals_js,
             SolverConfig::default(),
             host_mode,
+            runtime_wasm,
         )
         .map_err(DiagnosticReport::error);
     }
@@ -678,14 +772,18 @@ fn export_html_from_source_with_host_mode(
                 game_visuals_js,
                 SolverConfig::default(),
             );
-            Ok(match host_mode {
-                StandaloneHostMode::Export => export_html(&state),
-                StandaloneHostMode::EditorPreview => export_editor_preview_html(&state),
-            })
+            Ok(export_html_with_runtime_wasm(&state, host_mode, runtime_wasm))
         }
         Some(LoadedDocumentModel::Puzzle3d { .. }) => {
-            export_puzzle3_document_html(&document, source, puzzle_path, game_css, game_visuals_js)
-                .map_err(DiagnosticReport::error)
+            export_puzzle3_document_html_with_runtime_wasm(
+                &document,
+                source,
+                puzzle_path,
+                game_css,
+                game_visuals_js,
+                runtime_wasm,
+            )
+            .map_err(DiagnosticReport::error)
         }
         None => Err(DiagnosticReport::error(
             "HTML export requires a single puzzle model",
@@ -719,6 +817,7 @@ pub fn export_html_file(path: impl AsRef<Path>) -> Result<String, String> {
             game_visuals_js,
             SolverConfig::default(),
             StandaloneHostMode::Export,
+            StandaloneRuntimeWasm::HostDefault,
         );
     }
 

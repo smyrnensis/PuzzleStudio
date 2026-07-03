@@ -328,7 +328,7 @@ fn collect_line_symbols(
         ["music", name, ..] if scope == Some(SourceScope::Sounds) => {
             insert_identifier(&mut symbols.music, name);
         }
-        ["css" | "script", path, ..] if scope == Some(SourceScope::Assets) => {
+        ["css" | "script" | "file", path, ..] if scope == Some(SourceScope::Assets) => {
             insert_path_like(&mut symbols.assets, path);
         }
         ["shape", table, ..] if scope == Some(SourceScope::Visuals) => {
@@ -368,7 +368,12 @@ fn collect_line_symbols(
         | ["persistent", name, ..] => {
             insert_identifier(&mut symbols.states, name);
         }
-        [name, "=", ..] if scope == Some(SourceScope::SceneState) => {
+        [name, "=", ..]
+            if matches!(
+                scope,
+                Some(SourceScope::SceneLayout | SourceScope::SceneState)
+            ) =>
+        {
             insert_identifier(&mut symbols.states, name);
         }
         [name, "=", selectors @ ..] if scope == Some(SourceScope::Group) => {
@@ -932,6 +937,72 @@ rules {
         let list = suggest_source_completions(source, cursor);
 
         assert!(list.items.iter().any(|item| item.label == "Player"));
+    }
+
+    #[test]
+    fn suggests_selector_rhs_objects_after_assignment() {
+        let source = r#"
+title complete_selector_rhs
+puzzle board {
+layers {
+__legacy_layer_0 = Player
+__legacy_layer_1 = Box
+}
+groups {
+Actors = Player Box
+Movers =
+}
+legend {
+A =
+B = Pl
+}
+}
+"#;
+        let empty_legend_cursor = source.find("A = ").unwrap() + "A = ".len();
+        let empty_legend_list = suggest_source_completions(source, empty_legend_cursor);
+        assert!(
+            empty_legend_list
+                .items
+                .iter()
+                .any(|item| item.label == "Player" && item.kind == CompletionKind::Object)
+        );
+        assert!(
+            empty_legend_list
+                .items
+                .iter()
+                .any(|item| item.label == "Actors" && item.kind == CompletionKind::Group)
+        );
+        assert!(
+            empty_legend_list
+                .items
+                .iter()
+                .any(|item| item.label == "empty" && item.kind == CompletionKind::Keyword)
+        );
+
+        let prefixed_legend_cursor = source.find("B = Pl").unwrap() + "B = Pl".len();
+        let prefixed_legend_list = suggest_source_completions(source, prefixed_legend_cursor);
+        assert!(
+            prefixed_legend_list
+                .items
+                .iter()
+                .any(|item| item.label == "Player" && item.kind == CompletionKind::Object)
+        );
+
+        let group_cursor = source.find("Movers = ").unwrap() + "Movers = ".len();
+        let group_list = suggest_source_completions(source, group_cursor);
+        assert!(
+            group_list
+                .items
+                .iter()
+                .any(|item| item.label == "Player" && item.kind == CompletionKind::Object)
+        );
+        assert!(
+            group_list
+                .items
+                .iter()
+                .any(|item| item.label == "Actors" && item.kind == CompletionKind::Group)
+        );
+        assert!(group_list.items.iter().all(|item| item.label != "empty"));
     }
 
     #[test]
@@ -1534,10 +1605,8 @@ rules {
         let source = r#"
 title complete_scene_for_source
 scene menu {
-state {
-items = 0
-}
 layout {
+items = 0
 for item in 
 }
 }
@@ -1946,6 +2015,61 @@ Box spr
             list.items.iter().any(|item| {
                 item.label == "sprites/box.png" && item.kind == CompletionKind::Asset
             })
+        );
+    }
+
+    #[test]
+    fn suggests_sprite_selector_objects_at_visual_line_head() {
+        let source = r#"
+title complete_sprite_selector_line_head
+puzzle board {
+tags {
+kind = Red Blue
+}
+layers {
+__legacy_layer_0 = Player
+__legacy_layer_1 = Box:kind
+}
+groups {
+Actors = Player Box:kind
+}
+}
+sprites {
+
+}
+"#;
+        let cursor = source.find("\n\n}").unwrap() + 1;
+        let list = suggest_source_completions(source, cursor);
+
+        assert!(
+            list.items
+                .iter()
+                .any(|item| item.label == "Player" && item.kind == CompletionKind::Object)
+        );
+        assert!(
+            list.items
+                .iter()
+                .any(|item| item.label == "Box" && item.kind == CompletionKind::Object)
+        );
+        assert!(
+            list.items
+                .iter()
+                .any(|item| item.label == "Actors" && item.kind == CompletionKind::Group)
+        );
+        assert!(
+            list.items
+                .iter()
+                .any(|item| item.label == "colors" && item.kind == CompletionKind::Keyword)
+        );
+
+        let prefix_source = source.replacen("\n\n}", "\nBo\n}", 1);
+        let prefix_cursor = prefix_source.find("\nBo\n").unwrap() + "\nBo".len();
+        let prefix_list = suggest_source_completions(&prefix_source, prefix_cursor);
+        assert!(
+            prefix_list
+                .items
+                .iter()
+                .any(|item| item.label == "Box" && item.kind == CompletionKind::Object)
         );
     }
 

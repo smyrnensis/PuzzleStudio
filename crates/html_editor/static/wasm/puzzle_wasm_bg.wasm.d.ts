@@ -2,13 +2,26 @@
 /* eslint-disable */
 export const memory: WebAssembly.Memory;
 export const compile_preview: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
+export const export_html: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => [number, number, number, number];
 export const generate_visuals_js: (a: number, b: number, c: number, d: number) => [number, number, number, number];
 export const highlight_source_html: (a: number, b: number) => [number, number];
 export const resolve_source_target: (a: number, b: number, c: number) => [number, number];
 export const solve_request_json: (a: number, b: number) => [number, number, number, number];
+export const solve_solver_task_json: (a: number, b: number) => [number, number, number, number];
+export const solve_solver_task_json_with_progress: (a: number, b: number, c: any) => [number, number, number, number];
 export const solve_state: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => [number, number, number, number];
 export const suggest_source_completions: (a: number, b: number, c: number) => [number, number];
 export const translate_puzzlescript: (a: number, b: number) => [number, number, number, number];
+export const __wbg_wasmcompiledcoreruntime_free: (a: number, b: number) => void;
+export const wasmcompiledcoreruntime_current_state: (a: number) => [number, number, number, number];
+export const wasmcompiledcoreruntime_current_state_hash: (a: number) => [number, number, number, number];
+export const wasmcompiledcoreruntime_new: (a: number, b: number) => [number, number, number];
+export const wasmcompiledcoreruntime_restore_saved_state: (a: number, b: number) => [number, number];
+export const wasmcompiledcoreruntime_save_current_state: (a: number) => [number, number, number];
+export const wasmcompiledcoreruntime_set_state: (a: number, b: number, c: number) => [number, number];
+export const wasmcompiledcoreruntime_transition_current_outcome: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
+export const __wbindgen_exn_store: (a: number) => void;
+export const __externref_table_alloc: () => number;
 export const __wbindgen_externrefs: WebAssembly.Table;
 export const __wbindgen_malloc: (a: number, b: number) => number;
 export const __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;

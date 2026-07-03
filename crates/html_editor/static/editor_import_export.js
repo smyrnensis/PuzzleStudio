@@ -7,14 +7,34 @@ function escapeHtml(value) {
 }
 
 async function downloadHtml() {
-  if (!latestHtml) {
+  persistCurrentDocument();
+  const document = activePreviewDocument();
+  if (!isPuzzleDocument(document)) {
+    setEditorStatus("No game entry for export", "is-error");
     return;
   }
+  const source = currentSourceForDocument(document);
+  const requestSource = previewRequestSourceForDocument(document, source);
   const filename = htmlDownloadFileName();
+  setEditorStatus(`Exporting ${filename}`, "");
+  let html = "";
+  try {
+    html = await window.PuzzleStudioHost.exportStandaloneHtml({
+      source: requestSource,
+      puzzlePath: document.puzzlePath,
+      workspaceRoot: document.workspaceRoot || "",
+      gameCss: effectiveGameCss(document),
+      gameVisualsJs: effectiveGameVisualsJs(document),
+    });
+  } catch (error) {
+    appendCompileDiagnostics(error, { source: "compiler", document, sourceText: requestSource });
+    setEditorStatus("Export failed", "is-error");
+    return;
+  }
   if (window.PuzzleStudioHost?.mode?.() === "tauri" && window.PuzzleStudioHost?.exportHtml) {
     try {
       const result = await window.PuzzleStudioHost.exportHtml({
-        html: latestHtml,
+        html,
         filename,
       });
       if (result?.canceled) {
@@ -31,8 +51,9 @@ async function downloadHtml() {
       return;
     }
   }
-  const blob = new Blob([latestHtml], { type: "text/html;charset=utf-8" });
+  const blob = new Blob([html], { type: "text/html;charset=utf-8" });
   downloadBlob(blob, filename);
+  setEditorStatus(`Exported ${filename}`, "is-ok");
 }
 
 function htmlDownloadFileName() {
@@ -270,16 +291,6 @@ async function importFilesIntoFolder(fileList, targetFolder) {
   saveDocumentStore(false);
   const folderName = targetFolder && targetFolder !== fileTree ? folderPath(targetFolder) || targetFolder.name : "Files";
   setEditorStatus(`Imported to ${folderName}`, "is-ok");
-  if (!editorSeed) {
-    try {
-      await renderPreview();
-    } catch (error) {
-      console.error(error);
-      const message = importErrorMessage(error);
-      setEditorStatus(`Imported; preview failed: ${message}`, "is-error");
-      setStatus(`Preview failed: ${message}`, "is-error");
-    }
-  }
 }
 
 function importErrorMessage(error) {

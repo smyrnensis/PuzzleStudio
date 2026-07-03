@@ -165,6 +165,7 @@ pub struct AssetDef {
 pub enum AssetKind {
     Css,
     Script,
+    File,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -448,7 +449,7 @@ pub enum SceneStateLifetime {
     Persistent,
 }
 
-pub type SceneComponent = SharedSceneComponent<SceneEffect, SceneExpr, SceneTextContent>;
+pub type SceneComponent = SharedSceneComponent<SceneEffect, SceneExpr, SceneTextContent, SceneExpr>;
 
 pub type SceneTitleDef = SharedSceneTextComponent<SceneExpr>;
 
@@ -458,11 +459,13 @@ pub type SceneTextDef = SharedSceneTextComponent<SceneTextContent>;
 pub enum SceneTextContent {
     Literal(String),
     Path(Vec<String>),
+    Expr(SceneExpr),
 }
 
 pub type SceneButtonDef = SharedSceneButton<SceneEffect, SceneExpr>;
 
-pub type SceneConditionalDef = SharedSceneConditional<SceneEffect, SceneExpr, SceneTextContent>;
+pub type SceneConditionalDef =
+    SharedSceneConditional<SceneEffect, SceneExpr, SceneTextContent, SceneExpr>;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SceneEffect {
@@ -476,7 +479,7 @@ pub enum SceneEffect {
         milliseconds: Option<u64>,
     },
     Conditional {
-        condition: String,
+        condition: SceneExpr,
         effect: Box<SceneEffect>,
     },
     PlaySfx {
@@ -580,12 +583,33 @@ pub enum SceneExpr {
     Int(i64),
     Text(String),
     Path(Vec<String>),
-    Call { name: String, args: Vec<SceneExpr> },
+    Call {
+        name: String,
+        args: Vec<SceneExpr>,
+    },
+    Binary {
+        op: SceneBinaryOp,
+        left: Box<SceneExpr>,
+        right: Box<SceneExpr>,
+    },
+    If {
+        condition: Box<SceneExpr>,
+        then_branch: Box<SceneExpr>,
+        else_branch: Box<SceneExpr>,
+    },
 }
 
-pub type SceneContainerDef = SharedSceneContainer<SceneEffect, SceneExpr, SceneTextContent>;
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SceneBinaryOp {
+    And,
+    Eq,
+    NotEq,
+}
 
-pub type SceneForDef = SharedSceneFor<SceneEffect, SceneExpr, SceneTextContent>;
+pub type SceneContainerDef =
+    SharedSceneContainer<SceneEffect, SceneExpr, SceneTextContent, SceneExpr>;
+
+pub type SceneForDef = SharedSceneFor<SceneEffect, SceneExpr, SceneTextContent, SceneExpr>;
 
 pub type LevelMenuDef = puzzle_scene::LevelMenuComponent<SceneEffect, SceneExpr>;
 
@@ -603,7 +627,7 @@ pub struct SceneTransition {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SceneTransitionTrigger {
-    Condition(String),
+    Condition(SceneExpr),
     SceneStart,
     LevelStart,
 }

@@ -198,18 +198,22 @@ cargo run -p ascii-play -- games/spec_2d.puzzle
 
 ## Game Entries And Imports
 
-A game entry is a `.puzzle` file with top-level game metadata such as:
+A game entry is a `.puzzle` or `.puzzle3` file that declares a top-level puzzle
+model, such as:
 
 ```txt
-title "Microban"
-author "David Skinner"
+puzzle sokoban {
+  rules {
+  }
+}
 ```
 
-When a folder is passed to a tool, PuzzleStudio looks for a prelude-bearing
-entry file in that folder. `game.puzzle` is preferred, but it is a convention,
-not a requirement.
+Top-level metadata such as `title`, `author`, and `homepage` is display
+metadata; it does not make a source file a game entry by itself. When a folder
+is passed to a tool, PuzzleStudio looks for a model-declaring entry file in that
+folder. `game.puzzle` is preferred, but it is a convention, not a requirement.
 
-Files without top-level game metadata are import fragments. They are not loaded
+Files without a top-level puzzle model are import fragments. They are not loaded
 automatically; the entry file must import them explicitly.
 
 ## Project Layout

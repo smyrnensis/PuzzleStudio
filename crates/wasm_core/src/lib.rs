@@ -98,7 +98,7 @@ impl WasmCompiledCoreRuntime {
     }
 }
 
-struct CompiledEngine {
+pub struct CompiledEngine {
     game: CompiledGame,
     level_start_program: Vec<RuleStep>,
     level_clear_program: Vec<RuleStep>,
@@ -110,7 +110,11 @@ struct CompiledEngine {
 }
 
 impl CompiledEngine {
-    fn program(&self, key: &str, level_index: i32) -> Option<&[RuleStep]> {
+    pub fn game(&self) -> &CompiledGame {
+        &self.game
+    }
+
+    pub fn program(&self, key: &str, level_index: i32) -> Option<&[RuleStep]> {
         match key {
             "main" | "run_rules_on_level_start" => Some(self.game.program()),
             "level_start" => Some(&self.level_start_program),
@@ -154,7 +158,7 @@ fn decode_engine(source: &str) -> Result<CompiledEngine, String> {
     Err("compiled play export is missing compiledPlay".to_string())
 }
 
-fn decode_compiled_play(value: &Value) -> Result<CompiledEngine, String> {
+pub fn decode_compiled_play(value: &Value) -> Result<CompiledEngine, String> {
     let model = string_field(value, "model")?;
     if model != "grid2" {
         return Err(format!("unsupported compiled play model: {model}"));
@@ -308,6 +312,7 @@ fn decode_compact_application(value: u16) -> Result<RuleApplication, String> {
         1 => Ok(RuleApplication::OnceAll),
         2 => Ok(RuleApplication::OncePerLevel),
         3 => Ok(RuleApplication::UntilStable),
+        4 => Ok(RuleApplication::Random),
         other => Err(format!("unknown compact rule application: {other}")),
     }
 }
@@ -447,46 +452,37 @@ fn decode_compact_pattern(value: &Value) -> Result<Pattern, String> {
 
 fn decode_compact_match_cell(value: &Value) -> Result<MatchCell, String> {
     let items = value_array(value, "match cell")?;
+    if items.len() != 9 {
+        return Err(format!(
+            "match cell must have 9 fields, got {}",
+            items.len()
+        ));
+    }
     Ok(MatchCell {
         offset: decode_compact_offset(value_at(items, 0, "offset")?)?,
         require_objects: decode_compact_object_ids(value_at(items, 1, "require objects")?)?,
-        require_object_sets: if items.len() >= 8 {
-            decode_compact_object_sets(value_at(items, 2, "require object sets")?)?
-        } else {
-            Vec::new()
-        },
-        forbid_objects: decode_compact_object_ids(value_at(
+        require_object_sets: decode_compact_object_sets(value_at(
             items,
-            if items.len() >= 8 { 3 } else { 2 },
-            "forbid objects",
+            2,
+            "require object sets",
         )?)?,
-        require_scratch: decode_compact_scratch_patterns(value_at(
+        forbid_objects: decode_compact_object_ids(value_at(items, 3, "forbid objects")?)?,
+        require_scratch: decode_compact_scratch_patterns(value_at(items, 4, "require scratch")?)?,
+        require_object_set_scratch: decode_compact_object_set_scratch_patterns(value_at(
             items,
-            if items.len() >= 8 { 4 } else { 3 },
-            "require scratch",
+            5,
+            "require object set scratch",
         )?)?,
-        require_object_set_scratch: if items.len() >= 8 {
-            decode_compact_object_set_scratch_patterns(value_at(
-                items,
-                5,
-                "require object set scratch",
-            )?)?
-        } else {
-            Vec::new()
-        },
-        forbid_scratch: decode_compact_scratch_patterns(value_at(
+        forbid_scratch: decode_compact_scratch_patterns(value_at(items, 6, "forbid scratch")?)?,
+        forbid_object_set_scratch: decode_compact_object_set_scratch_patterns(value_at(
             items,
-            if items.len() >= 8 { 6 } else { 4 },
-            "forbid scratch",
+            7,
+            "forbid object set scratch",
         )?)?,
-        forbid_object_set_scratch: if items.len() >= 8 {
-            decode_compact_object_set_scratch_patterns(value_at(
-                items,
-                7,
-                "forbid object set scratch",
-            )?)?
-        } else {
-            Vec::new()
+        require_null: match u16_at(items, 8, "require null")? {
+            0 => false,
+            1 => true,
+            other => return Err(format!("unknown compact require null value: {other}")),
         },
     })
 }
@@ -713,7 +709,7 @@ fn decode_compact_scratch_match(value: u16) -> Result<ScratchValueMatch, String>
     }
 }
 
-fn decode_state(game: &CompiledGame, source: &str) -> Result<State, String> {
+pub fn decode_state(game: &CompiledGame, source: &str) -> Result<State, String> {
     let value: Value = serde_json::from_str(source).map_err(|error| error.to_string())?;
     let width = u16_field(&value, "width")?;
     let height = u16_field(&value, "height")?;

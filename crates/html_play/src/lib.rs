@@ -41,14 +41,19 @@ use puzzle_core::{
     RuleId, RuleStep, ScratchPattern, ScratchValueMatch, State, TransitionCommand, WriteOp,
     transition_program, transition_program_outcome, transition_program_trace,
 };
+#[cfg(feature = "solver")]
+use puzzle_core::{ConditionId, GlobalId, MatchCell, PatternComponent, ScratchId};
 #[cfg(not(target_arch = "wasm32"))]
 use puzzle_lang::AssetsDef;
+#[cfg(feature = "solver")]
+use puzzle_lang::GoalClause;
 use puzzle_lang::{
     AnimationDef, ArrowKey, GoalCondition, GoalExpr, GoalValue, KeyTrigger, Level,
     LoadedDocumentModel, LoadedGame, ResourceSelection, RuleAnimation, RuleAnimationTrigger,
-    RuleEffect, SceneAlignXDef, SceneAlignYDef, SceneComponent, SceneDef, SceneEffect, SceneExpr,
-    SceneLayoutDef, ScenePuzzleInitializer, SceneTextContent, SceneTransitionTrigger, SceneValue,
-    SoundsDef, ThemeDef, VisualSpriteDef, VisualSpriteKind, parse_game2d as parse_game,
+    RuleEffect, SceneAlignXDef, SceneAlignYDef, SceneBinaryOp, SceneComponent, SceneDef,
+    SceneEffect, SceneExpr, SceneLayoutDef, ScenePuzzleInitializer, SceneTextContent,
+    SceneTransitionTrigger, SceneValue, SoundsDef, ThemeDef, VisualSpriteDef, VisualSpriteKind,
+    parse_game2d as parse_game,
 };
 use puzzle_lang::{AssetKind, DiagnosticReport};
 #[cfg(not(target_arch = "wasm32"))]
@@ -145,6 +150,68 @@ mod tests {
         let json_text: String = serde_json::from_str(&format!("\"{encoded}\""))
             .expect("PuzzleExport should be a JSON string literal");
         serde_json::from_str(&json_text).expect("PuzzleExport should contain JSON")
+    }
+
+    #[test]
+    fn standalone_export_embeds_only_manifest_file_assets() {
+        let dir = std::env::temp_dir().join(format!(
+            "puzzle_assets_manifest_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time should be after epoch")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(dir.join("sprites")).expect("create asset fixture directory");
+        std::fs::write(
+            dir.join("sprites/player.svg"),
+            r##"<svg xmlns="http://www.w3.org/2000/svg"><rect fill="#f00"/></svg>"##,
+        )
+        .expect("write declared asset");
+        std::fs::write(dir.join("secret.pdf"), b"not declared").expect("write undeclared asset");
+
+        let source = r#"
+title Manifest Assets
+
+assets {
+file "sprites/player.svg"
+}
+
+puzzle default {
+layers {
+actor = Player
+}
+rules {
+}
+}
+
+levels {
+legend {
+. = empty
+P = Player
+}
+level "one"
+P
+}
+
+scene playing {
+layout {
+default
+}
+rules {
+step default
+}
+}
+"#;
+
+        let game_path = dir.join("game.puzzle");
+        std::fs::write(&game_path, source).expect("write game source");
+        let html = export_html_file(&game_path).expect("export with manifest asset");
+
+        assert!(html.contains("\"sprites/player.svg\":\"data:image/svg+xml;charset=utf-8,"));
+        assert!(!html.contains("secret.pdf"));
+        assert!(!html.contains("not declared"));
+        assert!(html.contains("Puzzle asset is not embedded"));
     }
 
     #[test]
@@ -806,7 +873,8 @@ P
 title Sfx Volume
 
 sounds {
-  sfx click seed=click type=select volume=0.25
+  sfx click seed=click type=select volume=1.25
+  music loop seed=loop bars=16 height=0.62 bpm=104 volume=1.5
 }
 
 puzzle board {
@@ -821,7 +889,7 @@ puzzle board {
 
 levels default of board {
   legend P = Player
-  level one {
+  level "one" {
     P
   }
 }
@@ -836,7 +904,8 @@ scene playing {
         let html = export_html_from_source(source, "games/sfx_volume.puzzle", "", "")
             .expect("export should succeed");
 
-        assert!(html.contains(r#"\"sfx\":[{\"name\":\"click\",\"seed\":\"click\",\"type\":\"select\",\"volume\":0.25}]"#));
+        assert!(html.contains(r#"\"sfx\":[{\"name\":\"click\",\"seed\":\"click\",\"type\":\"select\",\"volume\":1.25}]"#));
+        assert!(html.contains(r#"\"music\":[{\"name\":\"loop\",\"seed\":\"loop\",\"height\":0.62,\"bars\":16,\"bpm\":104,\"volume\":1.5}]"#));
     }
 
     #[test]
@@ -1308,6 +1377,7 @@ scene mixed_play {
             VISUALS_JS.to_string(),
             SolverConfig::default(),
             StandaloneHostMode::Export,
+            StandaloneRuntimeWasm::HostDefault,
         )
         .unwrap();
         assert!(html.contains("window.Puzzle3DFrameFixture"));
@@ -1651,6 +1721,211 @@ text level.title
 
     #[cfg(feature = "solver")]
     #[test]
+    fn solver_task_request_solves_compiled_2d_without_source_fallback() {
+        let source = r#"
+title solver_task_compiled
+
+puzzle board {
+  layers {
+    floor = Goal
+    actor = Player Box Wall
+  }
+  keys {
+    d ArrowRight -> right
+  }
+  rules {
+    input right [ Player | Box | Goal no actor ] -> [ | Player | Goal Box ]
+  }
+  win_conditions {
+    all Goal on Box
+  }
+}
+
+levels default of board {
+  legend {
+    . = empty
+    P = Player
+    B = Box
+    G = Goal
+  }
+  level start {
+    PBG
+  }
+}
+"#;
+        let html = export_editor_preview_html_from_source(source, "game.puzzle", "", "")
+            .expect("preview export");
+        let export = embedded_puzzle_export_json(&html);
+        assert!(
+            export["compiledPlay"]["inputLabels"]
+                .as_object()
+                .expect("compiled input labels")
+                .values()
+                .any(|label| label == "right")
+        );
+        let level = &export["levels"][0];
+        let request = json!({
+            "version": 1,
+            "rules": {
+                "compileId": "test-compile",
+                "documentId": "test-document",
+                "modelKind": "2d",
+                "compiledPlay": export["compiledPlay"].clone(),
+                "runRulesOnLevelStart": export["engine"]["runRulesOnLevelStart"].clone(),
+                "goal": export["goal"].clone(),
+                "lose": export["lose"].clone()
+            },
+            "target": {
+                "origin": "preview-level",
+                "compileId": "test-compile",
+                "documentId": "test-document",
+                "level": {
+                    "index": 0,
+                    "levelName": level["name"].clone()
+                },
+                "state": {
+                    "kind": "compiled-start",
+                    "lifecycle": "playable-start",
+                    "data": level["initialState"].clone()
+                }
+            },
+            "maxDepth": 4,
+            "maxNodes": 1000,
+            "maxMs": 0
+        });
+
+        let response = solve_solver_task_json(&request.to_string()).unwrap();
+
+        assert!(response.contains(r#""result":"solved""#));
+        assert!(response.contains(r#""depth":1"#));
+        assert!(response.contains(r#""name":"right""#));
+        assert!(!response.contains("input_"));
+        assert!(!request.to_string().contains("source"));
+    }
+
+    #[cfg(feature = "solver")]
+    #[test]
+    fn solver_task_request_treats_win_command_as_goal_without_win_conditions() {
+        let source = r#"
+title solver_task_win_command
+
+puzzle board {
+  layers {
+    actor = Player Exit
+  }
+  keys {
+    d ArrowRight -> right
+  }
+  rules {
+    input right [ Player | Exit ] -> win
+    input right [ Player | no actor ] -> [ | Player ]
+  }
+}
+
+levels default of board {
+  legend {
+    . = empty
+    P = Player
+    E = Exit
+  }
+  level start {
+    PE
+  }
+}
+"#;
+        let html = export_editor_preview_html_from_source(source, "game.puzzle", "", "")
+            .expect("preview export");
+        let export = embedded_puzzle_export_json(&html);
+        assert!(export["goal"].is_null());
+        assert!(export["compiledPlay"].is_object());
+        assert!(export["engine"]["objects"].is_array());
+        let level = &export["levels"][0];
+        let request = json!({
+            "version": 1,
+            "rules": {
+                "compileId": "test-compile",
+                "documentId": "test-document",
+                "modelKind": "2d",
+                "compiledPlay": export["compiledPlay"].clone(),
+                "runRulesOnLevelStart": export["engine"]["runRulesOnLevelStart"].clone(),
+                "goal": export["goal"].clone(),
+                "lose": export["lose"].clone()
+            },
+            "target": {
+                "origin": "preview-level",
+                "compileId": "test-compile",
+                "documentId": "test-document",
+                "level": {
+                    "index": 0,
+                    "levelName": level["name"].clone()
+                },
+                "state": {
+                    "kind": "compiled-start",
+                    "lifecycle": "playable-start",
+                    "data": level["initialState"].clone()
+                }
+            },
+            "maxDepth": 2,
+            "maxNodes": 100,
+            "maxMs": 0
+        });
+
+        let response = solve_solver_task_json(&request.to_string()).unwrap();
+
+        assert!(response.contains(r#""result":"solved""#));
+        assert!(response.contains(r#""depth":1"#));
+        assert!(!request.to_string().contains("source"));
+    }
+
+    #[cfg(feature = "solver")]
+    #[test]
+    fn solver_task_accepts_locked_win_command_sample() {
+        let source = include_str!("../../../games/TPGJ6/locked.puzzle");
+        let html = export_editor_preview_html_from_source(source, "locked.puzzle", "", "")
+            .expect("preview export");
+        let export = embedded_puzzle_export_json(&html);
+        assert!(export["goal"].is_null());
+        assert!(export["compiledPlay"].is_object());
+        let level = &export["levels"][0];
+        let request = json!({
+            "version": 1,
+            "rules": {
+                "compileId": "test-compile",
+                "documentId": "test-document",
+                "modelKind": "2d",
+                "compiledPlay": export["compiledPlay"].clone(),
+                "runRulesOnLevelStart": export["engine"]["runRulesOnLevelStart"].clone(),
+                "goal": export["goal"].clone(),
+                "lose": export["lose"].clone()
+            },
+            "target": {
+                "origin": "preview-level",
+                "compileId": "test-compile",
+                "documentId": "test-document",
+                "level": {
+                    "index": 0,
+                    "levelName": level["name"].clone()
+                },
+                "state": {
+                    "kind": "compiled-start",
+                    "lifecycle": "playable-start",
+                    "data": level["initialState"].clone()
+                }
+            },
+            "maxDepth": 80,
+            "maxNodes": 200_000,
+            "maxMs": 0
+        });
+
+        let response = solve_solver_task_json(&request.to_string()).unwrap();
+
+        assert!(response.contains(r#""result":"solved""#));
+        assert!(response.contains(r#""observations":["#));
+        assert!(response.contains(r#""progress":{"#));
+    }
+
+    #[cfg(feature = "solver")]
+    #[test]
     fn solver_solution_steps_materialize_display_objects_for_display() {
         let source = r#"
 title display_solver
@@ -1677,7 +1952,10 @@ puzzle board {
 }
 
 levels default of board {
-  legend P = Player
+  legend {
+    . = empty
+    P = Player
+  }
   level start {
     P
   }
@@ -1699,6 +1977,101 @@ scene playing {
 
         assert!(response.contains(r#""result":"solved""#));
         assert!(response.contains(r#""object":"@Cursor""#));
+    }
+
+    #[cfg(feature = "solver")]
+    #[test]
+    fn compiled_solver_observations_materialize_display_objects_for_display() {
+        let source = r#"
+title compiled_display_solver
+
+puzzle board {
+  layers {
+    actor = Player
+    @cursor = @Cursor
+  }
+  keys {
+    d ArrowRight -> right
+  }
+  rules {
+    input right [ Player ] -> win
+  }
+  routine @paint once {
+    [ Player no @Cursor ] -> [ Player @Cursor ]
+  }
+  on_display {
+    @paint
+  }
+}
+
+levels default of board {
+  legend {
+    . = empty
+    P = Player
+  }
+  level start {
+    P
+  }
+}
+"#;
+        let html = export_editor_preview_html_from_source(source, "game.puzzle", "", "")
+            .expect("preview export");
+        let export = embedded_puzzle_export_json(&html);
+        let cursor_id = export["engine"]["objects"]
+            .as_array()
+            .expect("engine objects")
+            .iter()
+            .find(|object| object["name"] == "@Cursor")
+            .and_then(|object| object["id"].as_u64())
+            .expect("@Cursor id");
+        let level = &export["levels"][0];
+        let request = json!({
+            "version": 1,
+            "rules": {
+                "compileId": "test-compile",
+                "documentId": "test-document",
+                "modelKind": "2d",
+                "compiledPlay": export["compiledPlay"].clone(),
+                "runRulesOnLevelStart": export["engine"]["runRulesOnLevelStart"].clone(),
+                "goal": export["goal"].clone(),
+                "lose": export["lose"].clone()
+            },
+            "target": {
+                "origin": "preview-level",
+                "compileId": "test-compile",
+                "documentId": "test-document",
+                "level": {
+                    "index": 0,
+                    "levelName": level["name"].clone()
+                },
+                "state": {
+                    "kind": "compiled-start",
+                    "lifecycle": "playable-start",
+                    "data": level["initialState"].clone()
+                }
+            },
+            "maxDepth": 2,
+            "maxNodes": 100,
+            "maxMs": 0
+        });
+
+        let response = parse_json_object(&solve_solver_task_json(&request.to_string()).unwrap());
+
+        assert_eq!(response["result"], "solved");
+        assert!(
+            response["observations"][0]["state"]["slots"]
+                .as_array()
+                .expect("observation slots")
+                .iter()
+                .any(|slot| slot.as_u64() == Some(cursor_id))
+        );
+        assert!(
+            response["steps"][0]["state"]["slots"]
+                .as_array()
+                .expect("step slots")
+                .iter()
+                .any(|slot| slot.as_u64() == Some(cursor_id))
+        );
     }
 
     #[cfg(feature = "solver")]
@@ -1966,9 +2339,6 @@ scene title {
 }
 
 scene playing {
-  state {
-    puzzle board
-  }
   keys {
     Escape -> back
   }
@@ -1976,7 +2346,7 @@ scene playing {
     goto title
   }
   layout {
-    puzzle board
+    board = puzzle board
   }
 }
 "#;
@@ -2129,7 +2499,7 @@ puzzle board {
 
 levels default of board {
   legend P = Player
-  level one {
+  level "one" {
     P
   }
 }
@@ -2170,6 +2540,51 @@ scene playing {
         assert!(!STANDALONE_JS.contains("this.initializeCoreRuntime();"));
         assert!(!STANDALONE_JS.contains("WasmCoreRuntime"));
         assert!(!STANDALONE_JS.contains("WasmCompiledCoreRuntime"));
+    }
+
+    #[test]
+    fn standalone_export_can_embed_browser_supplied_game_runtime_assets() {
+        let source = r#"
+title Browser Supplied Runtime
+
+puzzle board {
+  layers {
+    tiles = Player
+  }
+  empty .
+  rules {
+  }
+}
+
+levels default of board {
+  legend P = Player
+  level "one" {
+    P
+  }
+}
+
+scene playing {
+  layout {
+    puzzle board
+  }
+}
+"#;
+
+        let html = export_html_from_source_with_embedded_wasm(
+            source,
+            "game.puzzle",
+            "",
+            "",
+            "export const runtimeMarker = 1;",
+            "AA==",
+        )
+        .expect("browser-supplied runtime export should succeed");
+
+        assert!(html.contains("window.PuzzleStandaloneEmbeddedWasm"));
+        assert!(html.contains("export const runtimeMarker = 1;"));
+        assert!(html.contains(r#"wasmBase64: "AA==""#));
+        assert!(!html.contains("PuzzleStudioRuntimeAssetRequest"));
+        assert!(!html.contains("Timed out waiting for editor preview runtime asset"));
     }
 
     #[test]

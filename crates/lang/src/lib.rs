@@ -21,7 +21,7 @@ use std::path::PathBuf;
 
 use ast::{
     ConditionAst, ConditionDefinitionAst, ConditionPatternAst, ConditionValueAst, Direction,
-    DirectionName, EffectAst, FixDefaults, OrientationExpr, OrientedRewriteAst,
+    DirectionName, EffectAst, FixDefaults, GlobalValueAst, OrientationExpr, OrientedRewriteAst,
     PatternConditionAst, PatternPredicateAst, RuleDefinitionAst, RuleRole, StatementAst,
 };
 use catalog::{Catalog, ObjectSchema, ObjectVariant, ValueMap};
@@ -38,7 +38,7 @@ pub use loaded::{
     LevelMenuLocked, LevelRegionDef, LoadedDocument, LoadedDocumentModel, LoadedGame,
     ModelOperationSound, ModelOperationSoundDef, MusicSoundDef, PuzzleGridRenderDef,
     PuzzleRenderDef, PuzzleScreenDef, PuzzleViewDef, ResourceSelection, RuleAnimation,
-    RuleAnimationTrigger, RuleEffect, SceneAlignDef, SceneAlignXDef, SceneAlignYDef,
+    RuleAnimationTrigger, RuleEffect, SceneAlignDef, SceneAlignXDef, SceneAlignYDef, SceneBinaryOp,
     SceneButtonDef, SceneComponent, SceneConditionalDef, SceneContainerDef, SceneDef, SceneEffect,
     SceneEffectParam, SceneExpr, SceneForDef, SceneLayoutDef, ScenePuzzleDef,
     ScenePuzzleInitializer, ScenePuzzleRule, SceneResources, SceneRoutineDef, SceneSizeDef,

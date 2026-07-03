@@ -189,6 +189,28 @@ once [ Box:count ] -> [ Box:count ]
 dynamic selector に使う場合は warning が出る。`const` は値が変わらないので
 warning しない。
 
+rewrite 左辺の schema slot 名は、その rewrite の effect で match した tag 値として
+参照できる。slot 名参照は同じ rewrite 内で一意に束縛される場合だけ有効で、
+複数の selector が同じ slot 名を束縛する場合は `kind#1` のように label を付ける。
+single-slot schema では `*` / `*#1` も tag 値 capture として使える。
+
+```txt
+var captured = 0
+var first = 0
+var second = 0
+
+rules {
+once [ Obj:kind Detector ] -> captured = kind
+once [ A:kind#1 | B:kind#2 ] -> first = kind#1
+once [ Obj:* ] -> captured = *
+once [ Obj:*#1 ] -> captured = *#1
+}
+```
+
+`[ A:kind | B:kind ] -> captured = kind` は `kind` がどちらの selector を指すか
+曖昧なので error。capture 値を `var` に書く場合、tag 値は `true` / `false` /
+integer として読める必要がある。
+
 同じ名前が tag value、tag set、`var` / `const` の複数に見える場合は ambiguous
 selector として error になる。黙って tag set や var のどちらかを優先しない。
 
@@ -722,9 +744,9 @@ P = Player
 
 ### Imports
 
-ゲーム folder の実行 entry は、top-level `title` などの game prelude metadata を持つ `.puzzle`。folder を play / build / editor に渡すと、その folder 内の prelude-bearing `.puzzle` を entry として読む。複数ある場合は `game.puzzle`、`<folder>.puzzle`、`main.puzzle`、その他の順で優先する。
+ゲーム folder の実行 entry は、top-level `puzzle` または `puzzle3` model を宣言する `.puzzle` / `.puzzle3`。`title` などの top-level metadata は表示情報であり、entry 資格ではない。folder を play / build / editor に渡すと、その folder 内の model-declaring source を entry として読む。複数ある場合は `game.puzzle`、`game.puzzle3`、`<folder>.puzzle`、`<folder>.puzzle3`、`main.puzzle`、`main.puzzle3`、その他の順で優先する。
 
-`levels.puzzle`、`sprites.puzzle`、`menus/title.puzzle` のような prelude を持たない分割 file は import fragment。直接開いた場合、preview / build / play は同じ folder から親 folder へ向かって最初の game entry を探す。entry から明示的に import する。
+`levels.puzzle`、`sprites.puzzle`、`menus/title.puzzle` のような model を宣言しない分割 file は import fragment。直接開いた場合、preview / build / play は同じ folder から親 folder へ向かって最初の game entry を探す。entry から明示的に import する。
 
 `parse_game_file` で読む file は、同じ場所へ別 file の内容を展開できる。
 
@@ -1285,6 +1307,17 @@ once [ cargo | cargo | ] -> [ | cargo | cargo ]
 
 不存在を要求するときは `no` を使う。`no` の右側には object / schema selector / group を書ける。
 
+盤面外セルを要求するときは `null` を使う。`null` は object ではなく、対応する
+pattern cell が stage の外にあることを検知するための atom。`no Wall` は盤面内
+cell に `Wall` がないこと、`null` は cell 自体が盤面外であることを意味する。
+`null` は同じ cell 内で他の token と混ぜられず、`no null` も書けない。
+
+```txt
+once right [ no Edge | null ] -> [ Edge | ]
+```
+
+この例は、右隣が盤面外である右端の cell に `Edge` を置く。
+
 右辺で object を追加するセルは、その object の layer が空いていることを暗黙に要求する。ただし、通常のプレイヤー移動は direct rewrite ではなく、movement scratch と標準 `move` routine で書く。
 
 ```txt
@@ -1518,12 +1551,12 @@ render_overlay <selector> <selector> [selector...] <char>
 
 ```txt
 sounds {
-sfx click seed=746670 type=jump
-music loop seed=123456 tone=0.62 bpm=104 volume=0.8
+sfx click seed=746670 type=jump volume=1.2
+music loop seed=123456 tone=0.62 bpm=104 volume=1.4
 }
 ```
 
-`sfx` は one-shot sound effect、`music` は loop 用の background track。`seed` は必須。`sfx type` は省略時 `random`。標準の seeded SFX type は `jump`、`step`、`pickup`、`hit`、`drag`、`water`、`lock`、`explosion`、`laser`、`powerup`、`select`、`error`。`type=puzzlescript` は PuzzleScript の numeric sound seed 互換 generator を選ぶための import 用 type。`music tone` / `bpm` / `volume` は省略時 `0.62` / `104` / `0.8`。
+`sfx` は one-shot sound effect、`music` は loop 用の background track。`seed` は必須。`sfx type` は省略時 `random`。標準の seeded SFX type は `jump`、`step`、`pickup`、`hit`、`drag`、`water`、`lock`、`explosion`、`laser`、`powerup`、`select`、`error`。`type=puzzlescript` は PuzzleScript の numeric sound seed 互換 generator を選ぶための import 用 type。`music tone` / `bpm` / `volume` は省略時 `0.62` / `104` / `0.8`。`volume` は 0 以上の gain multiplier で、1 より大きい値は増幅として扱われる。
 
 presentation として明示的に鳴らす音は scene / component の effect が所有する。
 
@@ -1572,10 +1605,11 @@ UI の線、選択状態、panel、popup、盤面背景は preset がこの 3 �
 assets {
 css "game.css"
 script "visuals.js"
+file "sprites/player.png"
 }
 ```
 
-`css` は HTML adapter が stylesheet として読み込む。`script` は rendered scene snapshot から追加表示を作るための補助 JS で、puzzle state、transition、undo stack、level index を直接変更してはならない。script が盤面に追従する場合は `window.PuzzleStudio.registerAssetScript({ setup(api) { api.onRender(...) } })` を使う。
+`css` は HTML adapter が stylesheet として読み込む。`script` は rendered scene snapshot から追加表示を作るための補助 JS で、puzzle state、transition、undo stack、level index を直接変更してはならない。`file` は script や visual sprite から `api.assetUrl("sprites/player.png")` / `source: "sprites/player.png"` として参照する静的 asset を standalone HTML export に埋め込む。script が盤面に追従する場合は `window.PuzzleStudio.registerAssetScript({ setup(api) { api.onRender(...) } })` を使う。
 
 scene では、scene が focus されたタイミングを `on_scene_start` lifecycle block として扱える。BGM の開始/停止など、puzzle 初期化ではなく presentation に属する処理に使う。`on_level_start` は puzzle lifecycle block なので scene には置けない。
 

@@ -12,8 +12,8 @@ use puzzle_3d::{
 use puzzle_core::{InputId, State as PuzzleState, transition_program};
 use puzzle_lang::{
     ArrowKey, DiagnosticReport, ForSource, KeyTrigger, LoadedDocumentModel, LoadedGame,
-    ResourceSelection, SceneComponent, SceneEffect, SceneExpr, SceneTextContent, SceneValue,
-    VisualSpriteKind, discover_game_entries, parse_game_file, resolve_game_entry,
+    ResourceSelection, SceneBinaryOp, SceneComponent, SceneEffect, SceneExpr, SceneTextContent,
+    SceneValue, VisualSpriteKind, discover_game_entries, parse_game_file, resolve_game_entry,
 };
 use puzzle_play::{GameSession, MessageEvent, SoundEvent, WaitEvent, cell_objects};
 
@@ -931,6 +931,7 @@ fn eval_text(
     match content {
         SceneTextContent::Literal(value) => value.clone(),
         SceneTextContent::Path(path) => resolve_path(loaded, session, path, scope),
+        SceneTextContent::Expr(expr) => eval_expr(loaded, session, expr, scope),
     }
 }
 
@@ -953,6 +954,63 @@ fn eval_expr(
                 .join(", ");
             format!("{name}({args})")
         }
+        SceneExpr::Binary { .. } => eval_bool_expr(loaded, session, expr, scope)
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| {
+                format!(
+                    "<invalid boolean expression: {}>",
+                    expr_source(loaded, session, expr, scope)
+                )
+            }),
+        SceneExpr::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => match eval_bool_expr(loaded, session, condition, scope) {
+            Some(true) => eval_expr(loaded, session, then_branch, scope),
+            Some(false) => eval_expr(loaded, session, else_branch, scope),
+            None => format!(
+                "<invalid boolean expression: {}>",
+                expr_source(loaded, session, condition, scope)
+            ),
+        },
+    }
+}
+
+fn eval_bool_expr(
+    loaded: &LoadedGame,
+    session: &GameSession,
+    expr: &SceneExpr,
+    scope: &RenderScope,
+) -> Option<bool> {
+    match expr {
+        SceneExpr::Bool(value) => Some(*value),
+        SceneExpr::Binary { op, left, right } => match op {
+            SceneBinaryOp::And => {
+                if !eval_bool_expr(loaded, session, left, scope)? {
+                    return Some(false);
+                }
+                eval_bool_expr(loaded, session, right, scope)
+            }
+            SceneBinaryOp::Eq => Some(
+                eval_expr(loaded, session, left, scope) == eval_expr(loaded, session, right, scope),
+            ),
+            SceneBinaryOp::NotEq => Some(
+                eval_expr(loaded, session, left, scope) != eval_expr(loaded, session, right, scope),
+            ),
+        },
+        SceneExpr::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            if eval_bool_expr(loaded, session, condition, scope)? {
+                eval_bool_expr(loaded, session, then_branch, scope)
+            } else {
+                eval_bool_expr(loaded, session, else_branch, scope)
+            }
+        }
+        _ => eval_expr(loaded, session, expr, scope).parse::<bool>().ok(),
     }
 }
 
@@ -1627,6 +1685,30 @@ fn expr_source(
                 .join(", ");
             format!("{name}({args})")
         }
+        SceneExpr::Binary { op, left, right } => format!(
+            "{} {} {}",
+            expr_source(loaded, session, left, scope),
+            scene_binary_op_source(*op),
+            expr_source(loaded, session, right, scope)
+        ),
+        SceneExpr::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => format!(
+            "if {} then {} else {}",
+            expr_source(loaded, session, condition, scope),
+            expr_source(loaded, session, then_branch, scope),
+            expr_source(loaded, session, else_branch, scope)
+        ),
+    }
+}
+
+fn scene_binary_op_source(op: SceneBinaryOp) -> &'static str {
+    match op {
+        SceneBinaryOp::And => "and",
+        SceneBinaryOp::Eq => "==",
+        SceneBinaryOp::NotEq => "!=",
     }
 }
 
@@ -1826,7 +1908,7 @@ legend {
 . = empty
 P = Player
 }
-level start
+level "start"
 P
 }
 }
@@ -1889,7 +1971,7 @@ G = Goal
 B = Box
 * = Goal Box
 }
-level start
+level "start"
 *
 }
 }
@@ -1933,7 +2015,7 @@ legend {
 . = empty
 P = Player
 }
-level start
+level "start"
 .
 }
 }

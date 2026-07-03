@@ -430,11 +430,14 @@ class FakeAudioContext {
     this.sourceStartTimes = [];
     this.bufferCreateCount = 0;
     this.bufferRenderSeconds = Number(options.bufferRenderSeconds ?? 0);
+    this.gainNodes = [];
     this.destination = new FakeAudioNode(this.sourceStartTimes, false);
   }
 
   createGain() {
-    return new FakeAudioNode(this.sourceStartTimes, false);
+    const node = new FakeAudioNode(this.sourceStartTimes, false);
+    this.gainNodes.push(node);
+    return node;
   }
 
   createOscillator() {
@@ -518,6 +521,18 @@ const earliestLayerStart = Math.min(...timedEffect.layers.map((layer) => layer.s
 assert.ok(
   fakeAudio.sourceStartTimes.some((time) => Math.abs(time - (12.5 + earliestLayerStart)) < 0.000001),
   "SFX layer scheduling should be relative to the adapter-provided start time",
+);
+
+const loudAudio = new FakeAudioContext();
+const loudPlayer = createSfxPlayer(loudAudio, timedEffect, { volume: 1.75 });
+loudPlayer.start(12.5);
+assert.equal(loudAudio.gainNodes[0].gain.value, 1.75, "SFX playback volume should preserve gain above 1");
+
+const negativeVolumePlayer = createSfxPlayer(new FakeAudioContext(), timedEffect, { volume: -0.1 });
+assert.throws(
+  () => negativeVolumePlayer.start(12.5),
+  /SFX volume must be zero or greater/,
+  "negative SFX volume should fail visibly",
 );
 
 const cachedBufferEffect = {

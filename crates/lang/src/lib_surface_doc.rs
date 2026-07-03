@@ -37,7 +37,14 @@ pub(crate) fn parse_surface_document(source: &str) -> SurfaceDocument {
     let mut option_stack = Vec::<SurfaceOptionBlock>::new();
     for line in &context.lines {
         let option_block = active_surface_option_block(&option_stack);
-        record_surface_document_line(option_block, line.scope, &line.token_spans, &mut sink);
+        record_surface_document_line(
+            option_block,
+            line.scope,
+            line.start,
+            &line.content,
+            &line.structural_token_spans,
+            &mut sink,
+        );
         update_surface_option_block_stack(line, &mut option_stack);
     }
     sink.into_document()
@@ -50,6 +57,8 @@ pub(crate) fn surface_document_semantic_tokens(source: &str) -> Vec<semantic::Se
 fn record_surface_document_line(
     option_block: Option<SurfaceOptionBlock>,
     scope: Option<SourceScope>,
+    line_start: usize,
+    line: &str,
     tokens: &[SourceToken],
     sink: &mut SurfaceSink,
 ) {
@@ -63,14 +72,214 @@ fn record_surface_document_line(
         .first()
         .is_some_and(|token| token.text.as_str() == "scene")
     {
-        record_scene_surface_line(scope, tokens, sink);
+        record_scene_surface_line(scope, line_start, line, tokens, sink);
         return;
     }
     if is_scene_surface_scope(scope) {
-        record_scene_surface_line(scope, tokens, sink);
+        record_scene_surface_line(scope, line_start, line, tokens, sink);
         return;
     }
+    record_fix_default_surface_tokens(scope, tokens, line, sink);
+    record_rule_statement_surface_tokens(scope, tokens, sink);
+    record_rule_line_surface_tokens(scope, line_start, line, sink);
+    record_oriented_pattern_arg_surface_line(scope, line_start, line, sink);
     record_rewrite_surface_line(scope, tokens, sink);
+}
+
+fn record_fix_default_surface_tokens(
+    scope: Option<SourceScope>,
+    structural_tokens: &[SourceToken],
+    line: &str,
+    sink: &mut SurfaceSink,
+) {
+    if scope != Some(SourceScope::Other) {
+        return;
+    }
+    if !structural_tokens
+        .first()
+        .is_some_and(|token| token.text == "fix")
+    {
+        return;
+    }
+    let token_texts = structural_tokens
+        .iter()
+        .map(|token| token.text.as_str())
+        .collect::<Vec<_>>();
+    if parse_fix_defaults(&token_texts, line, &[]).is_err() {
+        return;
+    }
+    for token in structural_tokens {
+        add_scene_effect_token_range(sink, token, SurfaceSemanticKind::Keyword);
+    }
+}
+
+fn record_rule_statement_surface_tokens(
+    scope: Option<SourceScope>,
+    tokens: &[SourceToken],
+    sink: &mut SurfaceSink,
+) {
+    if scope != Some(SourceScope::Other) {
+        return;
+    }
+    let line = tokens
+        .iter()
+        .map(|token| token.text.as_str())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let Ok(surface) = puzzle_authoring::rule_statement_surface(&line) else {
+        return;
+    };
+    if matches!(
+        surface,
+        puzzle_authoring::RuleStatementSurface::ApplicationBlock { .. }
+    ) && let Some(first) = tokens.first()
+    {
+        sink.mark(
+            SourceSpan {
+                start: first.start,
+                end: first.end,
+            },
+            SurfaceSemanticKind::Keyword,
+        );
+    }
+}
+
+fn record_rule_line_surface_tokens(
+    scope: Option<SourceScope>,
+    line_start: usize,
+    line: &str,
+    sink: &mut SurfaceSink,
+) {
+    if scope != Some(SourceScope::Other) {
+        return;
+    }
+    let Ok(surface) = puzzle_authoring::rule_line_surface_spans(line) else {
+        return;
+    };
+    match surface {
+        puzzle_authoring::RuleLineSurfaceSpans::StandardStep { .. } => {}
+        puzzle_authoring::RuleLineSurfaceSpans::InputRewrite {
+            application,
+            surface,
+        } => {
+            mark_rule_application_surface_span(line_start, application, sink);
+            mark_surface_span(
+                line_start,
+                surface.input,
+                SurfaceSemanticKind::Keyword,
+                sink,
+            );
+            if let Some(orientation) = surface.orientation {
+                mark_surface_span(line_start, orientation, SurfaceSemanticKind::Keyword, sink);
+            }
+        }
+        puzzle_authoring::RuleLineSurfaceSpans::NeutralRewrite {
+            application,
+            rewrite: _,
+        } => {
+            mark_rule_application_surface_span(line_start, application, sink);
+        }
+        puzzle_authoring::RuleLineSurfaceSpans::OrientedRewrite {
+            application,
+            orientation,
+            rewrite: _,
+        } => {
+            mark_rule_application_surface_span(line_start, application, sink);
+            mark_surface_span(line_start, orientation, SurfaceSemanticKind::Keyword, sink);
+        }
+    }
+}
+
+fn mark_rule_application_surface_span(
+    line_start: usize,
+    application: Option<puzzle_authoring::RuleApplicationSurfaceSpan>,
+    sink: &mut SurfaceSink,
+) {
+    if let Some(application) = application {
+        mark_surface_span(
+            line_start,
+            application.span,
+            SurfaceSemanticKind::Keyword,
+            sink,
+        );
+    }
+}
+
+fn record_oriented_pattern_arg_surface_line(
+    scope: Option<SourceScope>,
+    line_start: usize,
+    line: &str,
+    sink: &mut SurfaceSink,
+) {
+    if scope != Some(SourceScope::Other) {
+        return;
+    }
+    for arg in parenthesized_arg_spans(line) {
+        let Ok(Some(surface)) = oriented_pattern_arg_surface(&line[arg.clone()], line) else {
+            continue;
+        };
+        match surface.orientation {
+            OrientedPatternArgOrientationSurface::Neutral => {}
+            OrientedPatternArgOrientationSurface::Input { input, axis } => {
+                mark_surface_span(
+                    line_start + arg.start,
+                    input,
+                    SurfaceSemanticKind::Keyword,
+                    sink,
+                );
+                if let Some(axis) = axis {
+                    mark_surface_span(
+                        line_start + arg.start,
+                        axis,
+                        SurfaceSemanticKind::Keyword,
+                        sink,
+                    );
+                }
+            }
+            OrientedPatternArgOrientationSurface::Orientation { orientation } => {
+                mark_surface_span(
+                    line_start + arg.start,
+                    orientation,
+                    SurfaceSemanticKind::Keyword,
+                    sink,
+                );
+            }
+        }
+    }
+}
+
+fn parenthesized_arg_spans(line: &str) -> Vec<std::ops::Range<usize>> {
+    let mut spans = Vec::new();
+    let mut stack = Vec::new();
+    for (index, ch) in line.char_indices() {
+        match ch {
+            '(' => stack.push(index),
+            ')' => {
+                if let Some(open) = stack.pop() {
+                    if let Some(span) = trimmed_range(line, open + 1, index) {
+                        spans.push(span);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    spans
+}
+
+fn mark_surface_span(
+    line_start: usize,
+    range: std::ops::Range<usize>,
+    kind: SurfaceSemanticKind,
+    sink: &mut SurfaceSink,
+) {
+    sink.mark(
+        SourceSpan {
+            start: line_start + range.start,
+            end: line_start + range.end,
+        },
+        kind,
+    );
 }
 
 fn record_document_prelude_surface_line(
@@ -173,22 +382,28 @@ fn update_surface_option_block_stack(
     line: &crate::source::SourceContextLine,
     stack: &mut Vec<SurfaceOptionBlock>,
 ) {
-    let trimmed = line.content.trim();
-    if trimmed == "}" {
-        stack.pop();
-        return;
+    for structural_line in &line.structural_lines {
+        let trimmed = structural_line.trim();
+        if trimmed == "}" {
+            stack.pop();
+            continue;
+        }
+        let tokens = split_header_tokens(trimmed)
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        if !surface_structural_line_opens_option_block(trimmed, &tokens) {
+            continue;
+        }
+        let block = surface_option_block_for_opening(&tokens, stack);
+        stack.push(block);
     }
-    if !surface_line_opens_option_block(line) {
-        return;
-    }
-    let block = surface_option_block_for_opening(&line.tokens, stack);
-    stack.push(block);
 }
 
-fn surface_line_opens_option_block(line: &crate::source::SourceContextLine) -> bool {
-    line.content.trim_end().ends_with('{')
+fn surface_structural_line_opens_option_block(line: &str, tokens: &[String]) -> bool {
+    line.ends_with('{')
         || matches!(
-            line.tokens.as_slice(),
+            tokens,
             [name] if matches!(
                 name.as_str(),
                 "puzzle" | "puzzle3" | "render" | "camera" | "grid" | "pixelate"
@@ -401,6 +616,8 @@ fn is_scene_surface_scope(scope: Option<SourceScope>) -> bool {
 
 fn record_scene_surface_line(
     scope: Option<SourceScope>,
+    line_start: usize,
+    line: &str,
     tokens: &[SourceToken],
     sink: &mut SurfaceSink,
 ) {
@@ -431,7 +648,11 @@ fn record_scene_surface_line(
             return;
         }
         if matches!(first.text.as_str(), "button" | "choice") {
-            sink.extend(scene_expr_surface_document(&tokens[1..arrow]));
+            if let Some((label, label_start)) =
+                scene_line_button_label_source(line_start, line, first)
+            {
+                sink.extend(scene_expr_surface_document_from_source(label, label_start));
+            }
         }
         record_scene_condition_surface_tokens(&tokens[..arrow], sink);
         sink.extend(scene_effect_surface_document(&tokens[arrow + 1..]));
@@ -439,7 +660,17 @@ fn record_scene_surface_line(
     }
     match first.text.as_str() {
         "title" | "subtitle" | "text" if tokens.len() > 1 => {
-            sink.extend(scene_expr_surface_document(&tokens[1..]));
+            let expr_start = first.end.saturating_sub(line_start);
+            if expr_start <= line.len() {
+                let expr = line[expr_start..].trim_start();
+                let trim_offset = line[expr_start..]
+                    .find(|ch: char| !ch.is_whitespace())
+                    .unwrap_or(0);
+                sink.extend(scene_expr_surface_document_from_source(
+                    expr,
+                    first.end + trim_offset,
+                ));
+            }
             return;
         }
         _ => {}
@@ -448,6 +679,29 @@ fn record_scene_surface_line(
         return;
     }
     sink.extend(scene_effect_surface_document(tokens));
+}
+
+fn scene_line_button_label_source<'a>(
+    line_start: usize,
+    line: &'a str,
+    first: &SourceToken,
+) -> Option<(&'a str, usize)> {
+    let label_start = first.end.checked_sub(line_start)?;
+    let arrow = line[label_start..]
+        .find("->")
+        .map(|offset| label_start + offset)?;
+    let raw = &line[label_start..arrow];
+    let trim_start = raw
+        .find(|ch: char| !ch.is_whitespace())
+        .unwrap_or(raw.len());
+    let trim_end = raw
+        .rfind(|ch: char| !ch.is_whitespace())
+        .map(|index| index + raw[index..].chars().next().map(char::len_utf8).unwrap_or(0))
+        .unwrap_or(trim_start);
+    (trim_start < trim_end).then_some((
+        &raw[trim_start..trim_end],
+        line_start + label_start + trim_start,
+    ))
 }
 
 fn record_scene_layout_attr_surface_tokens(tokens: &[SourceToken], sink: &mut SurfaceSink) {
@@ -540,11 +794,8 @@ fn mark_scene_layout_attr_token(token: &SourceToken, sink: &mut SurfaceSink) {
     }
 }
 
-fn scene_expr_surface_document(tokens: &[SourceToken]) -> SurfaceDocument {
+fn scene_expr_surface_document_from_source(source: &str, base_start: usize) -> SurfaceDocument {
     let mut sink = SurfaceSink::default();
-    let Some((source, base_start)) = source_tokens_text(tokens) else {
-        return sink.into_document();
-    };
     let trimmed_start = source
         .find(|ch: char| !ch.is_whitespace())
         .unwrap_or(source.len());
@@ -568,20 +819,6 @@ fn scene_expr_surface_document(tokens: &[SourceToken]) -> SurfaceDocument {
         add_scene_expr_surface_tokens(&parsed, expr, expr_start, &mut sink);
     }
     sink.into_document()
-}
-
-fn source_tokens_text(tokens: &[SourceToken]) -> Option<(String, usize)> {
-    let first = tokens.first()?;
-    let mut out = String::new();
-    let mut cursor = first.start;
-    for token in tokens {
-        if token.start > cursor {
-            out.push_str(&" ".repeat(token.start - cursor));
-        }
-        out.push_str(&token.text);
-        cursor = token.end;
-    }
-    Some((out, first.start))
 }
 
 fn add_scene_expr_surface_tokens(
@@ -629,7 +866,112 @@ fn add_scene_expr_surface_tokens(
                 }
             }
         }
+        SceneExpr::Binary { op, left, right } => {
+            let operator = match op {
+                SceneBinaryOp::And => "and",
+                SceneBinaryOp::Eq => "==",
+                SceneBinaryOp::NotEq => "!=",
+            };
+            if let Some(operator_start) = source.find(operator) {
+                add_scene_expr_surface_tokens(
+                    left,
+                    &source[..operator_start],
+                    absolute_start,
+                    sink,
+                );
+                sink.mark(
+                    SourceSpan {
+                        start: absolute_start + operator_start,
+                        end: absolute_start + operator_start + operator.len(),
+                    },
+                    SurfaceSemanticKind::Keyword,
+                );
+                add_scene_expr_surface_tokens(
+                    right,
+                    &source[operator_start + operator.len()..],
+                    absolute_start + operator_start + operator.len(),
+                    sink,
+                );
+            }
+        }
+        SceneExpr::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            if let Some(if_start) = source.find("if") {
+                sink.mark(
+                    SourceSpan {
+                        start: absolute_start + if_start,
+                        end: absolute_start + if_start + 2,
+                    },
+                    SurfaceSemanticKind::Keyword,
+                );
+            }
+            if let Some(else_start) = source.rfind("else") {
+                sink.mark(
+                    SourceSpan {
+                        start: absolute_start + else_start,
+                        end: absolute_start + else_start + 4,
+                    },
+                    SurfaceSemanticKind::Keyword,
+                );
+            }
+            for (branch, branch_source) in scene_if_expr_surface_parts(source).into_iter().zip([
+                condition.as_ref(),
+                then_branch.as_ref(),
+                else_branch.as_ref(),
+            ]) {
+                add_scene_expr_surface_tokens(
+                    branch_source,
+                    &source[branch.clone()],
+                    absolute_start + branch.start,
+                    sink,
+                );
+            }
+        }
     }
+}
+
+fn scene_if_expr_surface_parts(source: &str) -> Vec<std::ops::Range<usize>> {
+    let Some(if_end) = source.find("if").map(|index| index + 2) else {
+        return Vec::new();
+    };
+    let Some(then_open) = source[if_end..].find('{').map(|offset| if_end + offset) else {
+        return Vec::new();
+    };
+    let Some(then_close) = source[then_open + 1..]
+        .find('}')
+        .map(|offset| then_open + 1 + offset)
+    else {
+        return Vec::new();
+    };
+    let Some(else_start) = source[then_close + 1..]
+        .find("else")
+        .map(|offset| then_close + 1 + offset)
+    else {
+        return Vec::new();
+    };
+    let Some(else_open) = source[else_start + 4..]
+        .find('{')
+        .map(|offset| else_start + 4 + offset)
+    else {
+        return Vec::new();
+    };
+    let Some(else_close) = source[else_open + 1..]
+        .rfind('}')
+        .map(|offset| else_open + 1 + offset)
+    else {
+        return Vec::new();
+    };
+    [
+        if_end..then_open,
+        then_open + 1..then_close,
+        else_open + 1..else_close,
+    ]
+    .into_iter()
+    .filter_map(|range| trimmed_range(source, range.start, range.end))
+    .collect()
 }
 
 fn mark_scene_expr_trimmed(

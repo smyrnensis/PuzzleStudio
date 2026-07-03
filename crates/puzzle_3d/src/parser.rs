@@ -737,7 +737,7 @@ impl Parser3 {
                 return Ok(index + 1);
             }
             if !line.is_empty() {
-                self.input_specs.push(parse_key_input_spec(line)?);
+                self.input_specs.push(input_spec_from_key_surface(line)?);
             }
             index += 1;
         }
@@ -819,96 +819,52 @@ impl Parser3 {
         block: puzzle_authoring::RuleProgramBlockSurface<'_>,
         start: usize,
     ) -> Result<usize, ParseError3> {
-        match block {
-            puzzle_authoring::RuleProgramBlockSurface::Rules { modifier } => {
-                self.local_frame_modifier =
-                    (!modifier.trim().is_empty()).then(|| modifier.trim().to_string());
-                self.parse_rules_block(start)
-            }
-            puzzle_authoring::RuleProgramBlockSurface::OnLevelStart { modifier } => {
-                self.on_level_start_local_frame_modifier =
-                    (!modifier.trim().is_empty()).then(|| modifier.trim().to_string());
-                self.parse_on_level_start_block(start)
-            }
-            puzzle_authoring::RuleProgramBlockSurface::OnLevelClear => {
-                self.parse_on_level_clear_block(start)
-            }
-            puzzle_authoring::RuleProgramBlockSurface::OnLastLevelClear => {
-                self.parse_on_last_level_clear_block(start)
-            }
-        }
-    }
-
-    fn parse_rules_block(&mut self, mut index: usize) -> Result<usize, ParseError3> {
-        while index < self.lines.len() {
-            let line = &self.lines[index];
-            if line == "}" {
-                return Ok(index + 1);
-            }
-            if line.is_empty() {
-                index += 1;
-                continue;
-            }
-            let (rule_line, next_index) = collect_multiline_rule_line(&self.lines, index)?;
-            self.rule_lines.push(rule_line);
-            index = next_index;
-        }
-        Err(message("rules block missing }"))
-    }
-
-    fn parse_on_level_start_block(&mut self, mut index: usize) -> Result<usize, ParseError3> {
-        while index < self.lines.len() {
-            let line = &self.lines[index];
-            if line == "}" {
-                return Ok(index + 1);
-            }
-            if line.is_empty() {
-                index += 1;
-                continue;
-            }
-            self.on_level_start_lines.push(line.clone());
-            index += 1;
-        }
-        Err(message("on_level_start block missing }"))
-    }
-
-    fn parse_on_level_clear_block(&mut self, mut index: usize) -> Result<usize, ParseError3> {
-        while index < self.lines.len() {
-            let line = &self.lines[index];
-            if line == "}" {
-                return Ok(index + 1);
-            }
-            if line.is_empty() {
-                index += 1;
-                continue;
-            }
-            self.on_level_clear_lines.push(line.clone());
-            index += 1;
-        }
-        Err(message("on_level_clear block missing }"))
-    }
-
-    fn parse_on_last_level_clear_block(&mut self, mut index: usize) -> Result<usize, ParseError3> {
-        if self.on_last_level_clear_lines.is_some() {
+        if matches!(
+            block,
+            puzzle_authoring::RuleProgramBlockSurface::OnLastLevelClear
+        ) && self.on_last_level_clear_lines.is_some()
+        {
             return Err(message(
                 "multiple last_level_clear blocks are not supported",
             ));
         }
-        let mut lines = Vec::new();
-        while index < self.lines.len() {
-            let line = &self.lines[index];
-            if line == "}" {
+
+        let (body, next_index) =
+            puzzle_authoring::collect_rule_program_block_body(&self.lines, start, block)
+                .map_err(|error| message(error.message()))?;
+
+        match block {
+            puzzle_authoring::RuleProgramBlockSurface::Rules { modifier } => {
+                self.local_frame_modifier =
+                    (!modifier.trim().is_empty()).then(|| modifier.trim().to_string());
+                let puzzle_authoring::RuleProgramBlockBody::RuleStatements(lines) = body else {
+                    unreachable!("rules blocks collect rule statement bodies");
+                };
+                self.rule_lines.extend(lines);
+            }
+            puzzle_authoring::RuleProgramBlockSurface::OnLevelStart { modifier } => {
+                self.on_level_start_local_frame_modifier =
+                    (!modifier.trim().is_empty()).then(|| modifier.trim().to_string());
+                let puzzle_authoring::RuleProgramBlockBody::RuleStatements(lines) = body else {
+                    unreachable!("on_level_start blocks collect rule statement bodies");
+                };
+                self.on_level_start_lines.extend(lines);
+            }
+            puzzle_authoring::RuleProgramBlockSurface::OnLevelClear => {
+                let puzzle_authoring::RuleProgramBlockBody::LifecycleCommands(lines) = body else {
+                    unreachable!("on_level_clear blocks collect lifecycle command bodies");
+                };
+                self.on_level_clear_lines.extend(lines);
+            }
+            puzzle_authoring::RuleProgramBlockSurface::OnLastLevelClear => {
+                let puzzle_authoring::RuleProgramBlockBody::LifecycleCommands(lines) = body else {
+                    unreachable!("on_last_level_clear blocks collect lifecycle command bodies");
+                };
                 self.on_last_level_clear_lines = Some(lines);
-                return Ok(index + 1);
             }
-            if line.is_empty() {
-                index += 1;
-                continue;
-            }
-            lines.push(line.clone());
-            index += 1;
         }
-        Err(message("on_last_level_clear block missing }"))
+
+        Ok(next_index)
     }
 
     fn parse_win_conditions_block(&mut self, mut index: usize) -> Result<usize, ParseError3> {
@@ -1460,24 +1416,12 @@ fn parse_object_spec(line: &str) -> Result<ObjectSpec3, ParseError3> {
     })
 }
 
-fn parse_key_input_spec(line: &str) -> Result<InputSpec3, ParseError3> {
-    let (keys, name) = line
-        .split_once("->")
-        .ok_or_else(|| message("keys row must be: <key...> -> <input>"))?;
-    let name = name.trim();
-    if name.is_empty() {
-        return Err(message("keys row must name an input after ->"));
-    }
-    let keys = keys
-        .split_whitespace()
-        .map(str::to_string)
-        .collect::<Vec<_>>();
-    if keys.is_empty() {
-        return Err(message("keys row must include at least one key before ->"));
-    }
+fn input_spec_from_key_surface(line: &str) -> Result<InputSpec3, ParseError3> {
+    let surface =
+        puzzle_authoring::key_binding_surface(line).map_err(|error| message(error.message()))?;
     Ok(InputSpec3 {
-        name: name.to_string(),
-        keys,
+        name: surface.target.to_string(),
+        keys: surface.keys.into_iter().map(str::to_string).collect(),
     })
 }
 
@@ -2079,82 +2023,6 @@ fn is_inline_selector_brace3(line: &str, index: usize) -> bool {
 
 fn is_selector_token_char3(ch: char) -> bool {
     ch.is_ascii_alphanumeric() || matches!(ch, '_' | '@' | ':' | '*')
-}
-
-fn collect_multiline_rule_line(
-    lines: &[String],
-    start: usize,
-) -> Result<(String, usize), ParseError3> {
-    let first = lines[start].trim();
-    if !looks_like_rule_line_start(first) {
-        return Ok((first.to_string(), start + 1));
-    }
-
-    let mut joined = String::new();
-    let mut bracket_depth = 0usize;
-    let mut saw_arrow = false;
-    let mut index = start;
-    while index < lines.len() {
-        let line = lines[index].trim();
-        if line == "}" {
-            break;
-        }
-        if index > start && bracket_depth == 0 && !saw_arrow && !line.starts_with("->") {
-            return Ok((first.to_string(), start + 1));
-        }
-        if !joined.is_empty() {
-            if bracket_depth > 0 {
-                joined.push_str("; ");
-            } else {
-                joined.push(' ');
-            }
-        }
-        joined.push_str(line);
-        bracket_depth = update_square_bracket_depth3(bracket_depth, line);
-        saw_arrow |= line.contains("->");
-
-        if index == start && bracket_depth == 0 {
-            return Ok((first.to_string(), start + 1));
-        }
-        if index > start && bracket_depth == 0 && saw_arrow {
-            return Ok((joined, index + 1));
-        }
-        index += 1;
-    }
-
-    Ok((first.to_string(), start + 1))
-}
-
-fn looks_like_rule_line_start(line: &str) -> bool {
-    line.contains('[')
-        && (line.starts_with("input ")
-            || line
-                .split_once(' ')
-                .is_some_and(|(prefix, _)| !prefix.is_empty()))
-}
-
-fn update_square_bracket_depth3(mut depth: usize, line: &str) -> usize {
-    let mut in_string = false;
-    let mut escaped = false;
-    for ch in line.chars() {
-        if in_string {
-            if escaped {
-                escaped = false;
-            } else if ch == '\\' {
-                escaped = true;
-            } else if ch == '"' {
-                in_string = false;
-            }
-            continue;
-        }
-        match ch {
-            '"' => in_string = true,
-            '[' => depth += 1,
-            ']' => depth = depth.saturating_sub(1),
-            _ => {}
-        }
-    }
-    depth
 }
 
 fn parse_local_frame_extent3(token: &str) -> Result<LocalFrameExtent, ParseError3> {

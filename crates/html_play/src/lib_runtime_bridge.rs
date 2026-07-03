@@ -699,6 +699,99 @@ pub fn solve_request_json(request_json: &str) -> Result<String, String> {
 }
 
 #[cfg(feature = "solver")]
+pub fn solve_solver_task_json(request_json: &str) -> Result<String, String> {
+    solve_solver_task_json_inner(request_json).map_err(|error| error.to_string())
+}
+
+#[cfg(feature = "solver")]
+pub fn solve_solver_task_json_with_progress<O>(
+    request_json: &str,
+    on_observation: O,
+) -> Result<String, String>
+where
+    O: FnMut(&str),
+{
+    solve_solver_task_json_inner_with_progress(request_json, Some(on_observation))
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(feature = "solver")]
+fn solve_solver_task_json_inner(request_json: &str) -> Result<String, AppError> {
+    solve_solver_task_json_inner_with_progress(request_json, None::<fn(&str)>)
+}
+
+#[cfg(feature = "solver")]
+fn solve_solver_task_json_inner_with_progress<O>(
+    request_json: &str,
+    mut on_observation: Option<O>,
+) -> Result<String, AppError>
+where
+    O: FnMut(&str),
+{
+    let request: serde_json::Value = serde_json::from_str(request_json)
+        .map_err(|error| AppError::Config(format!("solver task JSON is invalid: {error}")))?;
+    let request = json_object(&request, "solver task")?;
+    let rules = required_json_object(request, "rules")?;
+    let model_kind = required_json_string(rules, "modelKind")?;
+    let target = required_json_object(request, "target")?;
+    validate_solver_target_origin(target)?;
+    required_json_object(target, "level")?;
+    let target_state = required_json_object(target, "state")?;
+    let state_data = required_json_value(target_state, "data")?.to_string();
+    let max_depth = json_u32_value(request.get("maxDepth"), "maxDepth")?;
+    let max_nodes = json_usize_value(request.get("maxNodes"), "maxNodes")?;
+    let max_ms = json_u64_value(request.get("maxMs"), "maxMs")?;
+
+    match model_kind {
+        "2d" => {
+            let compiled_play = required_json_value(rules, "compiledPlay")?;
+            let input_labels = decode_compiled_input_labels(compiled_play)?;
+            let engine =
+                puzzle_core_wasm::decode_compiled_play(compiled_play).map_err(AppError::Config)?;
+            validate_compiled_solver_input_labels(engine.game(), &input_labels)?;
+            let mut state = puzzle_core_wasm::decode_state(engine.game(), &state_data)
+                .map_err(AppError::Config)?;
+            if solver_request_materializes_level_start(target_state)? {
+                let level_index = solver_task_level_index(target)?;
+                state = materialize_compiled_level_start_state(
+                    &engine,
+                    state,
+                    level_index,
+                    rules
+                        .get("runRulesOnLevelStart")
+                        .and_then(serde_json::Value::as_bool)
+                        .unwrap_or(false),
+                )?;
+            }
+            let mut progress_json = |state: &State, progress: SearchProgress| {
+                if let Some(on_observation) = on_observation.as_mut() {
+                    let mut out = String::new();
+                    push_search_observation(&mut out, state, &progress);
+                    on_observation(&out);
+                }
+            };
+            let response = solve_compiled_state_with_budget_and_progress(
+                &engine,
+                decode_optional_goal_expr(rules.get("goal"))?,
+                decode_optional_goal_expr(rules.get("lose"))?,
+                state,
+                solver_request_budget(max_depth, max_nodes, max_ms)?,
+                Some(&mut progress_json),
+            )?;
+            let mut out = String::new();
+            push_compiled_solution_response(&mut out, &response, &input_labels)?;
+            Ok(out)
+        }
+        "3d" => Err(AppError::Config(
+            "compiled 3D solver task decoding is not implemented".to_string(),
+        )),
+        other => Err(AppError::Config(format!(
+            "unsupported solver task modelKind {other:?}"
+        ))),
+    }
+}
+
+#[cfg(feature = "solver")]
 fn solve_request_json_inner(request_json: &str) -> Result<String, AppError> {
     let request: serde_json::Value = serde_json::from_str(request_json)
         .map_err(|error| AppError::Config(format!("solver request JSON is invalid: {error}")))?;
@@ -757,7 +850,7 @@ fn solve_request2_json_from_source_inner(
     if solver_request_materializes_level_start(target_state)? {
         state = materialize_level_start_state(&loaded, state, level_index)?;
     }
-    let budget = solver_request_budget(max_depth, max_nodes, max_ms);
+    let budget = solver_request_budget(max_depth, max_nodes, max_ms)?;
     let response = solve_current_state_with_budget(&loaded, state, budget)?;
     let mut out = String::new();
     push_solution_response(&mut out, &loaded, &response);
@@ -780,7 +873,7 @@ fn solve_request3_json_from_source_inner(
     if solver_request_materializes_level_start(target_state)? {
         state = materialize_level_start_state3(&parsed, state)?;
     }
-    let budget = solver_request_budget(max_depth, max_nodes, max_ms);
+    let budget = solver_request_budget(max_depth, max_nodes, max_ms)?;
     let response = solve_current_state3_with_budget(&parsed, state, budget)?;
     let mut out = String::new();
     push_solution_response3(&mut out, &parsed, &response);
@@ -788,8 +881,18 @@ fn solve_request3_json_from_source_inner(
 }
 
 #[cfg(feature = "solver")]
-fn solver_request_budget(max_depth: u32, max_nodes: usize, max_ms: u64) -> SearchBudget {
+fn solver_request_budget(
+    max_depth: u32,
+    max_nodes: usize,
+    max_ms: u64,
+) -> Result<SearchBudget, AppError> {
+    #[cfg(target_arch = "wasm32")]
     if max_ms > 0 {
+        return Err(AppError::Config(
+            "WASM solver does not support maxMs time budgets".to_string(),
+        ));
+    }
+    let budget = if max_ms > 0 {
         SearchBudget::bounded(max_depth, max_nodes, Duration::from_millis(max_ms))
     } else {
         SearchBudget {
@@ -798,6 +901,319 @@ fn solver_request_budget(max_depth: u32, max_nodes: usize, max_ms: u64) -> Searc
             max_frontier: None,
             max_duration: None,
         }
+    };
+    Ok(budget)
+}
+
+#[cfg(feature = "solver")]
+fn solver_task_level_index(
+    target: &serde_json::Map<String, serde_json::Value>,
+) -> Result<usize, AppError> {
+    let level = required_json_object(target, "level")?;
+    json_usize_value(level.get("index"), "level.index")
+}
+
+#[cfg(feature = "solver")]
+fn materialize_compiled_level_start_state(
+    engine: &puzzle_core_wasm::CompiledEngine,
+    state: State,
+    level_index: usize,
+    run_rules_on_level_start: bool,
+) -> Result<State, AppError> {
+    let mut state = state;
+    let mut cancelled = false;
+    let level_start = engine.program("level_start", -1).ok_or_else(|| {
+        AppError::Config("compiled solver task missing level_start program".to_string())
+    })?;
+    if !level_start.is_empty() {
+        let outcome = transition_program_outcome(engine.game(), level_start, &state, InputId(0))?;
+        state = outcome.next_state;
+        cancelled |= outcome.cancelled;
+    } else if run_rules_on_level_start {
+        let outcome =
+            transition_program_outcome(engine.game(), engine.game().program(), &state, InputId(0))?;
+        state = outcome.next_state;
+        cancelled |= outcome.cancelled;
+    }
+    if !cancelled {
+        let level_index = i32::try_from(level_index)
+            .map_err(|_| AppError::Config("solver task level index out of range".to_string()))?;
+        let local = engine
+            .program("level_start_local", level_index)
+            .ok_or_else(|| {
+                AppError::Config(format!(
+                "compiled solver task missing local level_start program for level {level_index}"
+            ))
+            })?;
+        if !local.is_empty() {
+            let outcome = transition_program_outcome(engine.game(), local, &state, InputId(0))?;
+            state = outcome.next_state;
+        }
+    }
+    Ok(state)
+}
+
+#[cfg(feature = "solver")]
+fn decode_optional_goal_expr(
+    value: Option<&serde_json::Value>,
+) -> Result<Option<GoalExpr>, AppError> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    let goal = json_object(value, "solver task goal")?;
+    let expr = required_json_value(goal, "expr")?;
+    decode_goal_expr(expr).map(Some)
+}
+
+#[cfg(feature = "solver")]
+fn decode_goal_expr(value: &serde_json::Value) -> Result<GoalExpr, AppError> {
+    let object = json_object(value, "goal expr")?;
+    match required_json_string(object, "kind")? {
+        "all" => Ok(GoalExpr::All(decode_goal_exprs(required_json_value(
+            object, "exprs",
+        )?)?)),
+        "any" => Ok(GoalExpr::Any(decode_goal_exprs(required_json_value(
+            object, "exprs",
+        )?)?)),
+        "clause" => Ok(GoalExpr::Clause(GoalClause {
+            value: decode_goal_value(required_json_value(object, "value")?)?,
+            op: decode_json_comparison(required_json_string(object, "op")?)?,
+            expected: required_json_value(object, "expected")?
+                .as_i64()
+                .ok_or_else(|| AppError::Config("goal expected must be an integer".to_string()))?,
+        })),
+        other => Err(AppError::Config(format!(
+            "unsupported goal expr kind {other:?}"
+        ))),
+    }
+}
+
+#[cfg(feature = "solver")]
+fn decode_goal_exprs(value: &serde_json::Value) -> Result<Vec<GoalExpr>, AppError> {
+    value
+        .as_array()
+        .ok_or_else(|| AppError::Config("goal exprs must be an array".to_string()))?
+        .iter()
+        .map(decode_goal_expr)
+        .collect()
+}
+
+#[cfg(feature = "solver")]
+fn decode_goal_value(value: &serde_json::Value) -> Result<GoalValue, AppError> {
+    let object = json_object(value, "goal value")?;
+    match required_json_string(object, "kind")? {
+        "global" => Ok(GoalValue::Global(GlobalId(json_u16_value(
+            required_json_value(object, "global")?,
+            "goal global",
+        )?))),
+        "condition" => Ok(GoalValue::Condition(ConditionId(json_u16_value(
+            required_json_value(object, "condition")?,
+            "goal condition",
+        )?))),
+        "condition_value" => Ok(GoalValue::InlineConditionValue(
+            decode_condition_value_kind(required_json_value(object, "conditionValueKind")?)?,
+        )),
+        other => Err(AppError::Config(format!(
+            "unsupported goal value kind {other:?}"
+        ))),
+    }
+}
+
+#[cfg(feature = "solver")]
+fn decode_condition_value_kind(value: &serde_json::Value) -> Result<ConditionValueKind, AppError> {
+    let object = json_object(value, "condition value kind")?;
+    match required_json_string(object, "kind")? {
+        "count_objects" => Ok(ConditionValueKind::CountObjects(decode_object_ids(
+            required_json_value(object, "objects")?,
+        )?)),
+        "exists_objects" => Ok(ConditionValueKind::ExistsObjects(decode_object_ids(
+            required_json_value(object, "objects")?,
+        )?)),
+        "none_objects" => Ok(ConditionValueKind::NoneObjects(decode_object_ids(
+            required_json_value(object, "objects")?,
+        )?)),
+        "count_matches" => Ok(ConditionValueKind::CountMatches(decode_patterns(
+            required_json_value(object, "patterns")?,
+        )?)),
+        "exists_matches" => Ok(ConditionValueKind::ExistsMatches(decode_patterns(
+            required_json_value(object, "patterns")?,
+        )?)),
+        "none_matches" => Ok(ConditionValueKind::NoneMatches(decode_patterns(
+            required_json_value(object, "patterns")?,
+        )?)),
+        "count_input_matches" => Ok(ConditionValueKind::CountInputMatches(
+            decode_input_patterns(required_json_value(object, "patterns")?)?,
+        )),
+        "exists_input_matches" => Ok(ConditionValueKind::ExistsInputMatches(
+            decode_input_patterns(required_json_value(object, "patterns")?)?,
+        )),
+        "none_input_matches" => Ok(ConditionValueKind::NoneInputMatches(decode_input_patterns(
+            required_json_value(object, "patterns")?,
+        )?)),
+        other => Err(AppError::Config(format!(
+            "unsupported condition value kind {other:?}"
+        ))),
+    }
+}
+
+#[cfg(feature = "solver")]
+fn decode_patterns(value: &serde_json::Value) -> Result<Vec<Pattern>, AppError> {
+    value
+        .as_array()
+        .ok_or_else(|| AppError::Config("patterns must be an array".to_string()))?
+        .iter()
+        .map(decode_pattern)
+        .collect()
+}
+
+#[cfg(feature = "solver")]
+fn decode_input_patterns(value: &serde_json::Value) -> Result<Vec<(InputId, Pattern)>, AppError> {
+    value
+        .as_array()
+        .ok_or_else(|| AppError::Config("input patterns must be an array".to_string()))?
+        .iter()
+        .map(|value| {
+            let object = json_object(value, "input pattern")?;
+            Ok((
+                InputId(json_u16_value(
+                    required_json_value(object, "input")?,
+                    "input pattern input",
+                )?),
+                decode_pattern(required_json_value(object, "pattern")?)?,
+            ))
+        })
+        .collect()
+}
+
+#[cfg(feature = "solver")]
+fn decode_pattern(value: &serde_json::Value) -> Result<Pattern, AppError> {
+    let object = json_object(value, "pattern")?;
+    let object = match object.get("pattern") {
+        Some(pattern) => json_object(pattern, "pattern")?,
+        None => object,
+    };
+    let components = required_json_value(object, "components")?
+        .as_array()
+        .ok_or_else(|| AppError::Config("pattern components must be an array".to_string()))?
+        .iter()
+        .map(|value| {
+            let object = json_object(value, "pattern component")?;
+            Ok(PatternComponent {
+                gap_count: json_u16_value(
+                    required_json_value(object, "gapCount")?,
+                    "pattern gapCount",
+                )?,
+                cells: required_json_value(object, "cells")?
+                    .as_array()
+                    .ok_or_else(|| {
+                        AppError::Config("pattern component cells must be an array".to_string())
+                    })?
+                    .iter()
+                    .map(decode_match_cell)
+                    .collect::<Result<Vec<_>, _>>()?,
+            })
+        })
+        .collect::<Result<Vec<_>, AppError>>()?;
+    Ok(Pattern { components })
+}
+
+#[cfg(feature = "solver")]
+fn decode_match_cell(value: &serde_json::Value) -> Result<MatchCell, AppError> {
+    let object = json_object(value, "match cell")?;
+    let require_null = required_json_value(object, "requireNull")?
+        .as_bool()
+        .ok_or_else(|| AppError::Config("match cell requireNull must be a bool".to_string()))?;
+    Ok(MatchCell {
+        offset: decode_offset(required_json_value(object, "offset")?)?,
+        require_null,
+        require_objects: decode_object_ids(required_json_value(object, "requireObjects")?)?,
+        require_object_sets: Vec::new(),
+        forbid_objects: decode_object_ids(required_json_value(object, "forbidObjects")?)?,
+        require_scratch: decode_scratch_patterns(required_json_value(object, "requireScratch")?)?,
+        require_object_set_scratch: Vec::new(),
+        forbid_scratch: decode_scratch_patterns(required_json_value(object, "forbidScratch")?)?,
+        forbid_object_set_scratch: Vec::new(),
+    })
+}
+
+#[cfg(feature = "solver")]
+fn decode_offset(value: &serde_json::Value) -> Result<Offset, AppError> {
+    let object = json_object(value, "offset")?;
+    match required_json_string(object, "kind")? {
+        "fixed" => Ok(Offset::Fixed {
+            dx: json_i16_value(required_json_value(object, "dx")?, "offset dx")?,
+            dy: json_i16_value(required_json_value(object, "dy")?, "offset dy")?,
+        }),
+        other => Err(AppError::Config(format!(
+            "unsupported offset kind {other:?}"
+        ))),
+    }
+}
+
+#[cfg(feature = "solver")]
+fn decode_object_ids(value: &serde_json::Value) -> Result<Vec<ObjectId>, AppError> {
+    value
+        .as_array()
+        .ok_or_else(|| AppError::Config("object ids must be an array".to_string()))?
+        .iter()
+        .map(|value| Ok(ObjectId(json_u16_value(value, "object id")?)))
+        .collect()
+}
+
+#[cfg(feature = "solver")]
+fn decode_scratch_patterns(value: &serde_json::Value) -> Result<Vec<ScratchPattern>, AppError> {
+    value
+        .as_array()
+        .ok_or_else(|| AppError::Config("scratch patterns must be an array".to_string()))?
+        .iter()
+        .map(|value| {
+            let object = json_object(value, "scratch pattern")?;
+            Ok(ScratchPattern {
+                object: ObjectId(json_u16_value(
+                    required_json_value(object, "object")?,
+                    "scratch object",
+                )?),
+                scratch: ScratchId(json_u16_value(
+                    required_json_value(object, "scratch")?,
+                    "scratch id",
+                )?),
+                value: object
+                    .get("value")
+                    .map(|value| {
+                        value.as_i64().ok_or_else(|| {
+                            AppError::Config("scratch value must be an integer".to_string())
+                        })
+                    })
+                    .transpose()?,
+                match_value: match required_json_string(object, "match")? {
+                    "any" => ScratchValueMatch::Any,
+                    "exact" => ScratchValueMatch::Exact,
+                    other => {
+                        return Err(AppError::Config(format!(
+                            "unsupported scratch match {other:?}"
+                        )));
+                    }
+                },
+            })
+        })
+        .collect()
+}
+
+#[cfg(feature = "solver")]
+fn decode_json_comparison(value: &str) -> Result<ComparisonOp, AppError> {
+    match value {
+        "eq" => Ok(ComparisonOp::Eq),
+        "not_eq" => Ok(ComparisonOp::NotEq),
+        "greater" => Ok(ComparisonOp::Greater),
+        "greater_eq" => Ok(ComparisonOp::GreaterEq),
+        "less" => Ok(ComparisonOp::Less),
+        "less_eq" => Ok(ComparisonOp::LessEq),
+        other => Err(AppError::Config(format!(
+            "unsupported comparison op {other:?}"
+        ))),
     }
 }
 
@@ -809,10 +1225,9 @@ fn validate_solver_request_level2d(
     validate_solver_target_origin(target)?;
     let level = required_json_object(target, "level")?;
     let index = json_usize_value(level.get("index"), "level.index")?;
-    let expected = loaded
-        .levels
-        .get(index)
-        .ok_or_else(|| AppError::Config(format!("solver target level index out of range: {index}")))?;
+    let expected = loaded.levels.get(index).ok_or_else(|| {
+        AppError::Config(format!("solver target level index out of range: {index}"))
+    })?;
     let name = required_json_string(level, "levelName")?;
     if name != expected.name {
         return Err(AppError::Config(format!(
@@ -864,10 +1279,11 @@ fn validate_solver_request_level3d(
         .level_bundle
         .as_ref()
         .ok_or_else(|| AppError::Config("3D solver target requires levels3".to_string()))?;
-    let expected = bundle
-        .levels
-        .get(index)
-        .ok_or_else(|| AppError::Config(format!("3D solver target level index out of range: {index}")))?;
+    let expected = bundle.levels.get(index).ok_or_else(|| {
+        AppError::Config(format!(
+            "3D solver target level index out of range: {index}"
+        ))
+    })?;
     let name = required_json_string(level, "levelName")?;
     if name != expected.name {
         return Err(AppError::Config(format!(
@@ -876,6 +1292,51 @@ fn validate_solver_request_level3d(
         )));
     }
     Ok(index)
+}
+
+#[cfg(feature = "solver")]
+fn decode_compiled_input_labels(
+    compiled_play: &serde_json::Value,
+) -> Result<Vec<(InputId, String)>, AppError> {
+    let compiled_play = json_object(compiled_play, "compiledPlay")?;
+    let labels = required_json_object(compiled_play, "inputLabels")?;
+    let mut out = Vec::with_capacity(labels.len());
+    for (key, value) in labels {
+        let id = key.parse::<u16>().map_err(|error| {
+            AppError::Config(format!(
+                "compiled input label id {key:?} is invalid: {error}"
+            ))
+        })?;
+        let label = value.as_str().ok_or_else(|| {
+            AppError::Config(format!("compiled input label {key:?} must be a string"))
+        })?;
+        if label.trim().is_empty() {
+            return Err(AppError::Config(format!(
+                "compiled input label {key:?} must not be empty"
+            )));
+        }
+        out.push((InputId(id), label.to_string()));
+    }
+    out.sort_by_key(|(id, _)| *id);
+    Ok(out)
+}
+
+#[cfg(feature = "solver")]
+fn validate_compiled_solver_input_labels(
+    game: &CompiledGame,
+    input_labels: &[(InputId, String)],
+) -> Result<(), AppError> {
+    let mut inputs = BTreeSet::new();
+    collect_solver_inputs(game.program(), &mut inputs);
+    for input in inputs {
+        if !input_labels.iter().any(|(id, _)| *id == input) {
+            return Err(AppError::Config(format!(
+                "compiled solver input label is missing for input {}",
+                input.0
+            )));
+        }
+    }
+    Ok(())
 }
 
 #[cfg(feature = "solver")]
@@ -972,6 +1433,22 @@ fn json_u64_value(value: Option<&serde_json::Value>, key: &str) -> Result<u64, A
     value.and_then(serde_json::Value::as_u64).ok_or_else(|| {
         AppError::Config(format!("solver request {key} must be an unsigned integer"))
     })
+}
+
+#[cfg(feature = "solver")]
+fn json_u16_value(value: &serde_json::Value, key: &str) -> Result<u16, AppError> {
+    let raw = value
+        .as_u64()
+        .ok_or_else(|| AppError::Config(format!("{key} must be an unsigned integer")))?;
+    u16::try_from(raw).map_err(|_| AppError::Config(format!("{key} is out of range")))
+}
+
+#[cfg(feature = "solver")]
+fn json_i16_value(value: &serde_json::Value, key: &str) -> Result<i16, AppError> {
+    let raw = value
+        .as_i64()
+        .ok_or_else(|| AppError::Config(format!("{key} must be an integer")))?;
+    i16::try_from(raw).map_err(|_| AppError::Config(format!("{key} is out of range")))
 }
 
 #[cfg(feature = "solver")]

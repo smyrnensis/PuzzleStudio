@@ -1335,7 +1335,7 @@ fn push_scenes(out: &mut String, key: &str, loaded: &LoadedGame) {
             out.push('{');
             match &transition.trigger {
                 SceneTransitionTrigger::Condition(condition) => {
-                    push_json_pair(out, "condition", condition);
+                    push_json_expr_named(out, "condition", condition);
                 }
                 SceneTransitionTrigger::SceneStart => {
                     push_json_pair(out, "lifecycle", "scene_start");
@@ -1557,6 +1557,11 @@ fn push_scene_component(out: &mut String, component: &SceneComponent) {
                     out.push(',');
                     push_json_pair(out, "path", &path.join("."));
                 }
+                SceneTextContent::Expr(expr) => {
+                    push_json_pair(out, "source", "expr");
+                    out.push(',');
+                    push_json_expr_named(out, "content", expr);
+                }
             }
         }
         SceneComponent::Button(button) => {
@@ -1597,7 +1602,7 @@ fn push_scene_component(out: &mut String, component: &SceneComponent) {
         SceneComponent::Conditional(conditional) => {
             push_json_pair(out, "kind", "conditional");
             out.push(',');
-            push_json_pair(out, "condition", &conditional.condition);
+            push_json_expr_named(out, "condition", &conditional.condition);
             out.push(',');
             push_scene_children(out, &conditional.children);
             out.push(',');
@@ -1696,7 +1701,7 @@ fn push_json_effect_fields(out: &mut String, effect: &SceneEffect) {
         SceneEffect::Conditional { condition, effect } => {
             push_json_pair(out, "kind", "conditional");
             out.push(',');
-            push_json_pair(out, "condition", condition);
+            push_json_expr_named(out, "condition", condition);
             out.push(',');
             out.push_str("\"effect\":{");
             push_json_effect_fields(out, effect);
@@ -1991,6 +1996,33 @@ fn push_json_expr_fields(out: &mut String, expr: &SceneExpr) {
                 push_json_expr_object(out, arg);
             }
             out.push(']');
+        }
+        SceneExpr::Binary { op, left, right } => {
+            push_json_pair(out, "kind", "binary");
+            out.push(',');
+            let op = match op {
+                SceneBinaryOp::And => "and",
+                SceneBinaryOp::Eq => "eq",
+                SceneBinaryOp::NotEq => "neq",
+            };
+            push_json_pair(out, "op", op);
+            out.push(',');
+            push_json_expr_named(out, "left", left);
+            out.push(',');
+            push_json_expr_named(out, "right", right);
+        }
+        SceneExpr::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            push_json_pair(out, "kind", "if");
+            out.push(',');
+            push_json_expr_named(out, "condition", condition);
+            out.push(',');
+            push_json_expr_named(out, "then", then_branch);
+            out.push(',');
+            push_json_expr_named(out, "else", else_branch);
         }
     }
 }

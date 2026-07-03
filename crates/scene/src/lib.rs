@@ -173,35 +173,41 @@ impl SceneInputMap {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SceneTransition<Effect = SceneCommand> {
-    pub trigger: SceneTransitionTrigger,
+pub struct SceneTransition<Effect = SceneCommand, ConditionExpr = String> {
+    pub trigger: SceneTransitionTrigger<ConditionExpr>,
     pub effect: Effect,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum SceneTransitionTrigger {
-    Condition(String),
+pub enum SceneTransitionTrigger<ConditionExpr = String> {
+    Condition(ConditionExpr),
     SceneStart,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum SceneComponent<Effect = SceneCommand, LabelExpr = SceneTextExpr, TextExpr = SceneTextExpr>
-{
+pub enum SceneComponent<
+    Effect = SceneCommand,
+    LabelExpr = SceneTextExpr,
+    TextExpr = SceneTextExpr,
+    ConditionExpr = String,
+> {
     Frame(FrameComponent),
     Title(SceneTextComponent<LabelExpr>),
     Subtitle(SceneTextComponent<LabelExpr>),
     Text(SceneTextComponent<TextExpr>),
     Button(SceneButton<Effect, LabelExpr>),
     Choice(SceneButton<Effect, LabelExpr>),
-    Row(SceneContainer<Effect, LabelExpr, TextExpr>),
-    Column(SceneContainer<Effect, LabelExpr, TextExpr>),
-    Box(SceneContainer<Effect, LabelExpr, TextExpr>),
-    Conditional(SceneConditional<Effect, LabelExpr, TextExpr>),
-    For(SceneFor<Effect, LabelExpr, TextExpr>),
+    Row(SceneContainer<Effect, LabelExpr, TextExpr, ConditionExpr>),
+    Column(SceneContainer<Effect, LabelExpr, TextExpr, ConditionExpr>),
+    Box(SceneContainer<Effect, LabelExpr, TextExpr, ConditionExpr>),
+    Conditional(SceneConditional<Effect, LabelExpr, TextExpr, ConditionExpr>),
+    For(SceneFor<Effect, LabelExpr, TextExpr, ConditionExpr>),
     LevelMenu(LevelMenuComponent<Effect, LabelExpr>),
 }
 
-impl<Effect, LabelExpr, TextExpr> SceneComponent<Effect, LabelExpr, TextExpr> {
+impl<Effect, LabelExpr, TextExpr, ConditionExpr>
+    SceneComponent<Effect, LabelExpr, TextExpr, ConditionExpr>
+{
     pub fn kind(&self) -> SceneComponentKind {
         match self {
             Self::Frame(_) => SceneComponentKind::Frame,
@@ -219,7 +225,7 @@ impl<Effect, LabelExpr, TextExpr> SceneComponent<Effect, LabelExpr, TextExpr> {
         }
     }
 
-    pub fn children(&self) -> &[SceneComponent<Effect, LabelExpr, TextExpr>] {
+    pub fn children(&self) -> &[SceneComponent<Effect, LabelExpr, TextExpr, ConditionExpr>] {
         match self {
             Self::Row(container) | Self::Column(container) | Self::Box(container) => {
                 &container.children
@@ -232,7 +238,7 @@ impl<Effect, LabelExpr, TextExpr> SceneComponent<Effect, LabelExpr, TextExpr> {
 
     pub fn children_mut(
         &mut self,
-    ) -> Option<&mut Vec<SceneComponent<Effect, LabelExpr, TextExpr>>> {
+    ) -> Option<&mut Vec<SceneComponent<Effect, LabelExpr, TextExpr, ConditionExpr>>> {
         match self {
             Self::Row(container) | Self::Column(container) | Self::Box(container) => {
                 Some(&mut container.children)
@@ -374,8 +380,9 @@ pub struct SceneContainer<
     Effect = SceneCommand,
     LabelExpr = SceneTextExpr,
     TextExpr = SceneTextExpr,
+    ConditionExpr = String,
 > {
-    pub children: Vec<SceneComponent<Effect, LabelExpr, TextExpr>>,
+    pub children: Vec<SceneComponent<Effect, LabelExpr, TextExpr, ConditionExpr>>,
     pub layout: SceneLayout,
 }
 
@@ -384,17 +391,23 @@ pub struct SceneConditional<
     Effect = SceneCommand,
     LabelExpr = SceneTextExpr,
     TextExpr = SceneTextExpr,
+    ConditionExpr = String,
 > {
-    pub condition: String,
-    pub children: Vec<SceneComponent<Effect, LabelExpr, TextExpr>>,
-    pub else_children: Vec<SceneComponent<Effect, LabelExpr, TextExpr>>,
+    pub condition: ConditionExpr,
+    pub children: Vec<SceneComponent<Effect, LabelExpr, TextExpr, ConditionExpr>>,
+    pub else_children: Vec<SceneComponent<Effect, LabelExpr, TextExpr, ConditionExpr>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SceneFor<Effect = SceneCommand, LabelExpr = SceneTextExpr, TextExpr = SceneTextExpr> {
+pub struct SceneFor<
+    Effect = SceneCommand,
+    LabelExpr = SceneTextExpr,
+    TextExpr = SceneTextExpr,
+    ConditionExpr = String,
+> {
     pub binding: String,
     pub source: SceneForSource,
-    pub children: Vec<SceneComponent<Effect, LabelExpr, TextExpr>>,
+    pub children: Vec<SceneComponent<Effect, LabelExpr, TextExpr, ConditionExpr>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

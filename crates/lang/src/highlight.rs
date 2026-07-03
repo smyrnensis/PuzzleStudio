@@ -173,6 +173,7 @@ fn collect_loaded_game_symbols(
     }
     for level in &game.levels {
         symbols.insert(level.name.clone(), HighlightKind::Scene);
+        symbols.insert(quoted_source_string(&level.name), HighlightKind::Scene);
     }
     for scene in &game.scenes {
         symbols.insert(scene.name.clone(), HighlightKind::Scene);
@@ -221,6 +222,7 @@ fn collect_puzzle3_symbols(
     if let Some(level_bundle) = &puzzle.level_bundle {
         for level in &level_bundle.levels {
             symbols.insert(level.name.clone(), HighlightKind::Scene);
+            symbols.insert(quoted_source_string(&level.name), HighlightKind::Scene);
         }
     }
     if let Some(sprite_set) = &puzzle.sprite_set {
@@ -229,6 +231,10 @@ fn collect_puzzle3_symbols(
             symbols.insert(sprite.name.clone(), HighlightKind::Asset);
         }
     }
+}
+
+fn quoted_source_string(value: &str) -> String {
+    format!("\"{}\"", value.replace('"', "\\\""))
 }
 
 fn highlight_html(
@@ -335,7 +341,9 @@ fn highlight_html(
                     break;
                 }
             }
-            push_span(&mut out, HighlightKind::String, &source[index..end]);
+            let token = &source[index..end];
+            let kind = symbols.get(token).copied().unwrap_or(HighlightKind::String);
+            push_span(&mut out, kind, token);
             continue;
         }
 
@@ -677,28 +685,42 @@ fn collect_line_symbols(
         [table, ..] if scope == Some(SourceScope::VisualShapeTable) && line_opens_block => {
             collect_visual_table_symbol(table, symbols);
         }
-        ["var" | "const", name, "=", ..] if scope == Some(SourceScope::SceneState) => {
-            insert_declared_source_symbol(symbols, name, HighlightKind::State);
-        }
-        ["persistent", "var" | "const", name, "=", ..]
-            if scope == Some(SourceScope::SceneState) =>
+        ["var" | "const", name, "=", ..]
+            if matches!(
+                scope,
+                Some(SourceScope::SceneLayout | SourceScope::SceneState)
+            ) =>
         {
             insert_declared_source_symbol(symbols, name, HighlightKind::State);
         }
-        ["persistent", name, "=", ..] if scope == Some(SourceScope::SceneState) => {
+        ["persistent", "var" | "const", name, "=", ..]
+            if matches!(
+                scope,
+                Some(SourceScope::SceneLayout | SourceScope::SceneState)
+            ) =>
+        {
             insert_declared_source_symbol(symbols, name, HighlightKind::State);
         }
-        [name, "=", ..] if scope == Some(SourceScope::SceneState) => {
+        ["persistent", name, "=", ..]
+            if matches!(
+                scope,
+                Some(SourceScope::SceneLayout | SourceScope::SceneState)
+            ) =>
+        {
+            insert_declared_source_symbol(symbols, name, HighlightKind::State);
+        }
+        [name, "=", ..]
+            if matches!(
+                scope,
+                Some(SourceScope::SceneLayout | SourceScope::SceneState)
+            ) =>
+        {
             insert_declared_source_symbol(symbols, name, HighlightKind::State);
         }
         ["var" | "const", name, "=", ..]
         | ["persistent", "var" | "const", name, "=", ..]
         | ["persistent", name, "=", ..] => {
             insert_declared_source_symbol(symbols, name, HighlightKind::State);
-        }
-        ["group", name, "=", selectors @ ..] => {
-            insert_declared_source_symbol(symbols, name, HighlightKind::Group);
-            collect_selector_specs(selectors, symbols);
         }
         [name, "=", values @ ..] if scope == Some(SourceScope::Group) => {
             insert_declared_source_symbol(symbols, name, HighlightKind::Group);
@@ -1117,7 +1139,7 @@ fn line_head_keyword(
         None => false,
         Some(SourceScope::Puzzle) => is_puzzle_line_head_keyword(keyword),
         Some(SourceScope::Sounds) => matches!(keyword, "sfx" | "music" | "undo" | "restart"),
-        Some(SourceScope::Assets) => matches!(keyword, "css"),
+        Some(SourceScope::Assets) => matches!(keyword, "css" | "file" | "script"),
         Some(SourceScope::Tags) => matches!(keyword, "for"),
         Some(SourceScope::Group) => matches!(keyword, "for"),
         Some(SourceScope::Layers) => matches!(keyword, "each" | "for"),
@@ -1163,10 +1185,7 @@ fn line_head_keyword(
             keyword,
             "colors" | "offset" | "pixels_per_cell" | "rotate" | "shape" | "shapes"
         ),
-        Some(SourceScope::Other) => {
-            matches!(keyword, "else" | "for" | "if" | "layers" | "repeat")
-                || rewrite_application_keyword(keyword)
-        }
+        Some(SourceScope::Other) => matches!(keyword, "else" | "for" | "if" | "layers"),
     }
 }
 
@@ -1181,13 +1200,6 @@ fn before_pattern_token(tokens: &[(&str, usize, usize)], index: usize) -> bool {
     tokens
         .get(index + 1)
         .is_some_and(|(next, _, _)| matches!(*next, "[" | "{"))
-}
-
-fn rewrite_application_keyword(value: &str) -> bool {
-    matches!(
-        value,
-        "fix" | "once" | "once_all" | "once_per_level" | "repeat"
-    )
 }
 
 fn classify_bare_word(
@@ -1416,10 +1428,20 @@ fn split_highlight_word(token: &str) -> Vec<HighlightWordPart> {
 }
 
 fn semantic_kind_at(ranges: &[SemanticToken], start: usize, end: usize) -> Option<HighlightKind> {
-    ranges
+    if let Some(kind) = ranges
         .iter()
         .rev()
         .find(|range| range.start == start && range.end == end)
+        .map(|range| highlight_kind_for_semantic(range.kind))
+    {
+        return Some(kind);
+    }
+    ranges
+        .iter()
+        .rev()
+        .find(|range| {
+            range.kind == SemanticKind::Keyword && range.start <= start && end <= range.end
+        })
         .map(|range| highlight_kind_for_semantic(range.kind))
 }
 
@@ -2312,6 +2334,7 @@ fn parser_literal(token: &str) -> bool {
             | "left"
             | "mirrored"
             | "no"
+            | "null"
             | "none"
             | "or"
             | "right"
@@ -2628,7 +2651,7 @@ legend {
 . = empty
 P = Player
 }
-level start
+level "start"
 P
 }
 "#;
@@ -2700,7 +2723,7 @@ legend {
 . = empty
 P = Player
 }
-level start
+level "start"
 P
 }
 "#;
@@ -2769,7 +2792,7 @@ legend {
 . = empty
 P = Player
 }
-level first
+level "first"
 P
 }
 }
@@ -2805,7 +2828,7 @@ legend {
 . = empty
 P = Player
 }
-level first
+level "first"
 P
 }
 }
@@ -2840,7 +2863,7 @@ legend {
 . = empty
 P = Player
 }
-level first
+level "first"
 P
 }
 }
@@ -2885,7 +2908,7 @@ locked_room_count -= n
 }
 on_level_start {
 }
-level start {
+level "start" {
 1
 }
 }
@@ -2895,9 +2918,7 @@ level start {
         assert!(highlighted.html.contains(
             "<span class=\"syntax-keyword\">on_level_start</span> <span class=\"syntax-brace-depth-1\">{</span>"
         ));
-        assert!(highlighted.html.contains(
-            "<span class=\"syntax-keyword\">level</span> <span class=\"syntax-scene\">start</span>"
-        ));
+        assert!(highlighted.html.contains("syntax-keyword\">level</span>"));
         assert_eq!(highlighted.html.matches("syntax-brace-invalid").count(), 0);
     }
 
@@ -2990,6 +3011,24 @@ global moved = false
     }
 
     #[test]
+    fn removed_singular_group_directive_is_not_highlighted_as_keyword() {
+        let highlighted = highlight_source(
+            r#"
+title no_group_directive_highlight
+puzzle board {
+layers {
+actor = Player Wall
+}
+group solid = Wall
+}
+"#,
+        );
+
+        assert!(!highlighted.html.contains("syntax-keyword\">group"));
+        assert!(!highlighted.html.contains("syntax-group\">solid"));
+    }
+
+    #[test]
     fn highlights_scene_step_rule_directive() {
         let highlighted = highlight_source(
             r#"
@@ -3020,7 +3059,7 @@ __legacy_layer_0 = Player Box
 rules {
 [ Player ]->[ Box ]
 }
-level start {
+level "start" {
 .
 }
 }
@@ -3047,11 +3086,11 @@ __legacy_layer_0 = Player Box:color
 }
 groups {
 pushable = Player Box:red
+active = Player Box:blue
 }
 layers {
 @__legacy_layer_0 = @Cursor @Aura:color
 }
-group active = Player Box:blue
 var moves = 0
 persistent var best = 0
 scratch {
@@ -3064,7 +3103,7 @@ legend B = Box:red
 main {
 once [ Player{mark} | Box:red ] -> [ @Cursor | Box:blue{shade:blue} ]
 }
-level start {
+level "start" {
 PB
 }
 }
@@ -3118,7 +3157,7 @@ actor = Box:state
 rules {
 [ Box:state | Box:stack | Box:movable ] -> [ Box:movable ]
 }
-level start {
+level "start" {
 .
 }
 }
@@ -3154,7 +3193,7 @@ movable = Crate:movable
 rules {
 [ *:stack ] -> [ *:movable ]
 }
-level start {
+level "start" {
 .
 }
 }
@@ -3187,7 +3226,7 @@ empty .
 rules {
 [ Box:count ] -> [ Box:count ]
 }
-level start {
+level "start" {
 .
 }
 }
@@ -3310,7 +3349,7 @@ for k in kind {
 [ Box:k | Player ] -> [ Player | Box:k ]
 }
 }
-level start {
+level "start" {
 .
 }
 }
@@ -3342,7 +3381,7 @@ __legacy_layer_0 = Target:kind
 rules {
 [ Target:kind | Target:A | Target ] -> [ Target:B | Target ]
 }
-level start {
+level "start" {
 .
 }
 }
@@ -3390,7 +3429,7 @@ actor = Box:kind Wall
 rules {
 [ Box:kind | Box:A ] -> [ Box:B | Box:kind ]
 }
-level start {
+level "start" {
 .
 }
 }
@@ -3420,7 +3459,7 @@ for dir in directions {
 [ Facing:directions | Facing:up ] -> [ Facing:dir | Facing:down ]
 }
 }
-level start {
+level "start" {
 .
 }
 }
@@ -3453,7 +3492,7 @@ rules {
 [ Player{>} ] -> [ Player{<} ]
 [ Player{^} ] -> [ Player{v} ]
 }
-level start {
+level "start" {
 .
 }
 }
@@ -3500,7 +3539,7 @@ legend P = Player
 main {
 once input [ Player | no blocked ] -> [ | Player ]
 }
-level start {
+level "start" {
 P
 }
 }
@@ -3556,7 +3595,7 @@ blocked = solid
 rules {
 once [ Player | no solid ] -> [ | Player ]
 }
-level start {
+level "start" {
 .
 }
 }
@@ -3595,7 +3634,7 @@ Floor
 Wall
 #444
 }
-level accidental {
+level "accidental" {
 #.#BBb#
 }
 "#,
@@ -3666,7 +3705,7 @@ red blue
 
     #[test]
     fn highlights_sprite_pixels_with_attached_braces_and_tabs() {
-        let source = "title attached_sprite_braces\n\npuzzle default {\nlayers {\n__legacy_layer_0 = Player\n}\nsprites{\n\tPlayer{\n\t\t#ff0000 #0000ff\n\t\t01.\n\t}\n}\nrules {\n}\n}\nlevels {\nlegend {\n. = empty\nP = Player\n}\nlevel start\nP\n}\n";
+        let source = "title attached_sprite_braces\n\npuzzle default {\nlayers {\n__legacy_layer_0 = Player\n}\nsprites{\n\tPlayer{\n\t\t#ff0000 #0000ff\n\t\t01.\n\t}\n}\nrules {\n}\n}\nlevels {\nlegend {\n. = empty\nP = Player\n}\nlevel \"start\"\nP\n}\n";
         let highlighted = highlight_source(source);
 
         assert!(highlighted.parsed);
@@ -3708,7 +3747,7 @@ legend {
 P = Player
 B = Box
 }
-level start
+level "start"
 P
 }
 "##,
@@ -3756,7 +3795,7 @@ levels {
 legend {
 . = empty
 }
-level start
+level "start"
 .
 }
 }
@@ -3795,7 +3834,7 @@ levels {
 legend {
 . = empty
 }
-level start
+level "start"
 .
 }
 }
@@ -3974,7 +4013,7 @@ GoalCount
 rules {
 }
 levels {
-level start
+level "start"
 1
 }
 }
@@ -4030,16 +4069,33 @@ title rewrite_direction_highlight
 
 puzzle board {
 layers {
-actor = Player
+actor = Player Wall
 }
 rules {
 right [ Player | ] -> [ | Player ]
+random left [ Player | ] -> [ | Player ]
 once left [ Player | ] -> [ | Player ]
+input [ Player | ] -> [ | Player ]
+input directions [ Player | ] -> [ | Player ]
+once input [ Player | ] -> [ | Player ]
+once input directions [ Player | ] -> [ | Player ]
+input horizontal [ Player | ] -> [ | Player ]
+input [ Player | Wall ] -> push_player
+input directions [ Player | Wall ] -> push_player
+if some(input directions [ Player | Wall ]) {
+[ Player ] -> [ Player ]
+}
+if some(input [ Player | Wall ]) {
+[ Player ] -> [ Player ]
+}
 fix once up {
 [ Player ] -> [ Player ]
 }
+routine push_player {
+[ Player ] -> [ Player ]
 }
-level start {
+}
+level "start" {
 .
 }
 }
@@ -4049,8 +4105,38 @@ level start {
         assert!(highlighted.html.contains("syntax-keyword\">right"));
         assert!(highlighted.html.contains("syntax-keyword\">left"));
         assert!(highlighted.html.contains("syntax-keyword\">up"));
+        assert!(highlighted.html.contains("syntax-keyword\">input"));
         assert!(!highlighted.html.contains("syntax-input\">right"));
         assert!(!highlighted.html.contains("syntax-input\">left"));
+        assert!(!highlighted.html.contains("syntax-effect\">input"));
+    }
+
+    #[test]
+    fn does_not_highlight_invalid_rule_prefixes_without_parser_surface() {
+        let highlighted = highlight_source(
+            r#"
+title invalid_rule_prefix_highlight
+
+puzzle board {
+layers {
+actor = Player Wall
+}
+rules {
+once nonsense
+random nonsense
+input nonsense
+fix {
+[ Player ] -> [ Player ]
+}
+}
+}
+"#,
+        );
+
+        assert!(!highlighted.html.contains("syntax-keyword\">once"));
+        assert!(!highlighted.html.contains("syntax-keyword\">random"));
+        assert!(!highlighted.html.contains("syntax-keyword\">input"));
+        assert!(!highlighted.html.contains("syntax-keyword\">fix"));
     }
 
     #[test]
@@ -4069,7 +4155,7 @@ legend {
 rules {
 [ Player ] -> [ Player ]
 }
-level start {
+level "start" {
 .
 }
 }
@@ -4130,7 +4216,7 @@ scene menu {
     }
 
     #[test]
-    fn highlights_keyword_named_scene_state_slot_as_state_reference() {
+    fn highlights_scene_layout_slot_as_state_reference() {
         let highlighted = highlight_source(
             r#"
 title state_slot_highlight
@@ -4146,21 +4232,19 @@ levels {
 legend {
 . = empty
 }
-level start {
+level "start" {
 .
 }
 }
 }
 
 scene playing {
-state {
-state = puzzle board
-}
 layout {
-puzzle state
-text state.level.label
+board = puzzle board
+puzzle board
+text board.level.label
 }
-button "Restart" -> state.restart
+button "Restart" -> board.restart
 }
 "#,
         );
@@ -4170,16 +4254,7 @@ button "Restart" -> state.restart
             "test fixture should parse before checking contextual highlight"
         );
         assert!(highlighted.html.contains(
-            "<span class=\"syntax-keyword\">state</span> <span class=\"syntax-brace-depth-1\">{</span>"
-        ));
-        assert!(highlighted.html.contains(
-            "<span class=\"syntax-state\">state</span> <span class=\"syntax-operator\">=</span> <span class=\"syntax-keyword\">puzzle"
-        ));
-        assert!(highlighted.html.contains(
-            "<span class=\"syntax-keyword\">puzzle</span> <span class=\"syntax-state\">state"
-        ));
-        assert!(highlighted.html.contains(
-            "syntax-state\">state</span><span class=\"syntax-operator\">.</span><span class=\"syntax-effect\">restart"
+            "<span class=\"syntax-state\">board</span> <span class=\"syntax-operator\">=</span> <span class=\"syntax-keyword\">puzzle"
         ));
     }
 
@@ -4221,7 +4296,7 @@ B = Box
 G = Goal
 }
 
-level push3d_01 {
+level "push3d_01" {
 .....
 .P.B.
 .....
@@ -4233,10 +4308,8 @@ level push3d_01 {
 }
 
 scene playing3d {
-state {
-board = puzzle3 push3d
-}
 layout size 4 3 {
+board = puzzle3 push3d
 column gap 1 align center top {
 puzzle3 board
 row gap 1 {
@@ -4297,7 +4370,7 @@ levels3 basic of same_name {
 legend {
 , = Floor
 }
-level start {
+level "start" {
 ,
 }
 }
@@ -4376,7 +4449,7 @@ __legacy_layer_0 = Player
 rules {
 [ Player ] -> [ Player ]
 }
-level start {
+level "start" {
 .
 }
 }
@@ -4479,7 +4552,7 @@ up -> right
 rules {
 [ Player ] -> [ Player ]
 }
-level start {
+level "start" {
 .
 }
 }
@@ -4610,7 +4683,7 @@ A {
 }
 }
 }
-level start {
+level "start" {
 1A
 }
 }
@@ -4665,7 +4738,7 @@ B {
 }
 }
 }
-level start {
+level "start" {
 .
 }
 }
@@ -4723,7 +4796,7 @@ levels default of board {
 legend {
 . = empty
 }
-level start {
+level "start" {
 .
 }
 }
@@ -4772,7 +4845,7 @@ levels {
 legend {
 . = empty
 }
-level start
+level "start"
 .
 }
 }
@@ -4860,7 +4933,7 @@ legend {
 A = Box:B
 }
 levels {
-level start {
+level "start" {
 1A
 }
 }
@@ -4892,10 +4965,10 @@ rules {
 }
 
 levels {
-level start {
+level "start" {
 P1
 }
-level second {
+level "second" {
 P
 }
 }
@@ -4936,7 +5009,7 @@ legend {
 G = Goal
 }
 
-level microban_01 {
+level "microban_01" {
     ####..
     #..#..
 
@@ -4998,7 +5071,7 @@ G = Goal
 * = Goal Box
 }
 
-level microban_01
+level "microban_01"
 G*
 }
 "#,
@@ -5012,11 +5085,9 @@ G*
         );
         assert!(highlighted.html.contains("syntax-object\">Goal"));
         assert!(highlighted.html.contains("syntax-object\">Box"));
-        assert!(
-            highlighted
-                .html
-                .contains("syntax-keyword\">level</span> <span class=\"syntax-scene\">microban_01")
-        );
+        assert!(highlighted.html.contains(
+            "syntax-keyword\">level</span> <span class=\"syntax-scene\">&quot;microban_01&quot;"
+        ));
         assert!(!highlighted.html.contains("syntax-object\">G</span>*"));
     }
 
@@ -5038,10 +5109,10 @@ rules {
 }
 
 levels {
-level start
+level "start"
 P1
 
-level second
+level "second"
 P
 }
 "#,
@@ -5078,11 +5149,11 @@ rules {
 }
 
 levels {
-level start {
+level "start" {
 PX
 legend X = Box
 }
-level second {
+level "second" {
 X
 }
 }
@@ -5127,7 +5198,7 @@ move_player
 rules {
 move_player
 }
-level start {
+level "start" {
 .
 }
 }
@@ -5183,7 +5254,7 @@ layers {
 __legacy_layer_1 = Player
 }
 }
-level start {
+level "start" {
 .
 }
 }
@@ -5261,7 +5332,7 @@ __legacy_layer_0 = flag
 rules {
 [ flag ] -> [ flag ]
 }
-level start {
+level "start" {
 .
 }
 }
@@ -5291,7 +5362,7 @@ flag
 rules {
 [ Player ] -> [ Player{flag} ]
 }
-level start {
+level "start" {
 .
 }
 }
@@ -5319,7 +5390,7 @@ mark
 rules {
 [ Player{} | Player{mark} ] -> [ Player{mark} | Player ]
 }
-level start {
+level "start" {
 .
 }
 }
@@ -5360,7 +5431,7 @@ count:3
 rules {
 [ Player ] -> [ Player{enter:directions paint:red push:> count:3} ]
 }
-level start {
+level "start" {
 .
 }
 }
@@ -5406,7 +5477,7 @@ target = Target:*
 rules {
 [ Target:A | Target:* ] -> [ Target:B | Target:* ]
 }
-level start {
+level "start" {
 .
 }
 }
@@ -5463,7 +5534,7 @@ actor = Target:kind:phase
 rules {
 [ Target:A | Target:A:hot ] -> [ Target:B | Target:B:cold ]
 }
-level start {
+level "start" {
 .
 }
 }

@@ -11,8 +11,9 @@ use puzzle_core::{
 };
 use puzzle_lang::{
     AsciiLegend, Level, LevelMenuDef, LoadedGame, ModelOperationSound, ResourceSelection,
-    RuleAnimation, RuleAnimationTrigger, RuleEffect, SceneComponent, SceneEffect, SceneEffectParam,
-    SceneExpr, ScenePuzzleInitializer, SceneTransitionTrigger, SceneValue,
+    RuleAnimation, RuleAnimationTrigger, RuleEffect, SceneBinaryOp, SceneComponent, SceneEffect,
+    SceneEffectParam, SceneExpr, ScenePuzzleInitializer, SceneTransitionTrigger, SceneValue,
+    parse_scene_effect_params, parse_scene_expression,
 };
 
 mod runtime_sounds;
@@ -1154,10 +1155,6 @@ impl GameSession {
             _ => {}
         }
 
-        if runtime_command_has_quoted_level_arg(command) {
-            return Err(TransitionError::InvalidCommand(command.to_string()));
-        }
-
         if let Some(effect) = parse_runtime_command(command, game.default_wait_ms) {
             self.apply_screen_effect(game, &effect, &HashMap::new())?;
             return Ok(());
@@ -1529,59 +1526,83 @@ impl GameSession {
         Ok(effects)
     }
 
-    fn is_screen_condition_true(&self, game: &LoadedGame, condition: &str) -> bool {
+    fn is_screen_condition_true(&self, game: &LoadedGame, condition: &SceneExpr) -> bool {
         self.is_screen_condition_true_with_forced_win(game, condition, &[])
     }
 
     fn is_screen_condition_true_with_forced_win(
         &self,
         game: &LoadedGame,
-        condition: &str,
+        condition: &SceneExpr,
         forced_win_targets: &[Option<String>],
     ) -> bool {
-        condition.split(" and ").all(|part| {
-            self.is_screen_condition_atom_true_with_forced_win(
-                game,
-                part.trim(),
-                forced_win_targets,
-            )
-        })
+        self.eval_screen_condition_bool(game, condition, forced_win_targets)
+            .unwrap_or(false)
     }
 
-    fn is_screen_condition_atom_true_with_forced_win(
+    fn eval_screen_condition_bool(
         &self,
         game: &LoadedGame,
-        condition: &str,
+        condition: &SceneExpr,
         forced_win_targets: &[Option<String>],
-    ) -> bool {
-        if let Some((left, right)) = condition.split_once(" == ") {
-            return self
-                .screen_condition_value(game, left.trim())
-                .zip(self.screen_condition_value(game, right.trim()))
-                .is_some_and(|(left, right)| left == right);
+    ) -> Option<bool> {
+        match condition {
+            SceneExpr::Bool(value) => Some(*value),
+            SceneExpr::Binary { op, left, right } => match op {
+                SceneBinaryOp::And => {
+                    if !self.eval_screen_condition_bool(game, left, forced_win_targets)? {
+                        return Some(false);
+                    }
+                    self.eval_screen_condition_bool(game, right, forced_win_targets)
+                }
+                SceneBinaryOp::Eq => {
+                    let left = self.screen_condition_value(game, left)?;
+                    let right = self.screen_condition_value(game, right)?;
+                    Some(left == right)
+                }
+                SceneBinaryOp::NotEq => {
+                    let left = self.screen_condition_value(game, left)?;
+                    let right = self.screen_condition_value(game, right)?;
+                    Some(left != right)
+                }
+            },
+            SceneExpr::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                if self.eval_screen_condition_bool(game, condition, forced_win_targets)? {
+                    self.eval_screen_condition_bool(game, then_branch, forced_win_targets)
+                } else {
+                    self.eval_screen_condition_bool(game, else_branch, forced_win_targets)
+                }
+            }
+            SceneExpr::Path(path) => {
+                let condition = path.join(".");
+                if let Some(value) = self.level_path_value(game, &condition) {
+                    return value.parse::<bool>().ok();
+                }
+                if self.forced_win_condition_atom_true(game, &condition, forced_win_targets) {
+                    return Some(true);
+                }
+                let scoped = self.condition_state_and_name(game, &condition);
+                if let Some((state, condition_name)) = scoped.or_else(|| {
+                    self.active_level_index
+                        .is_some()
+                        .then_some((&self.state, condition_name(&condition)))
+                }) {
+                    return Some(
+                        game.is_condition_true(condition_name, state)
+                            || game.is_global_truthy(condition_name, state),
+                    );
+                }
+                self.screen_condition_value(game, &SceneExpr::Path(path.clone()))
+                    .and_then(|value| value.parse::<bool>().ok())
+            }
+            _ => self
+                .eval_effect_value(game, condition, &HashMap::new())
+                .and_then(|value| scene_value_bool(&value)),
         }
-        if let Some((left, right)) = condition.split_once(" != ") {
-            return self
-                .screen_condition_value(game, left.trim())
-                .zip(self.screen_condition_value(game, right.trim()))
-                .is_some_and(|(left, right)| left != right);
-        }
-        if let Some(value) = self.level_path_value(game, condition) {
-            return value == "true";
-        }
-        if self.forced_win_condition_atom_true(game, condition, forced_win_targets) {
-            return true;
-        }
-        let scoped = self.condition_state_and_name(game, condition);
-        let Some((state, condition_name)) = scoped.or_else(|| {
-            self.active_level_index
-                .is_some()
-                .then_some((&self.state, condition_name(condition)))
-        }) else {
-            return false;
-        };
-        game.is_condition_true(condition_name, state)
-            || game.is_global_truthy(condition_name, state)
     }
 
     fn forced_win_condition_atom_true(
@@ -1612,23 +1633,27 @@ impl GameSession {
         })
     }
 
-    fn screen_condition_value(&self, game: &LoadedGame, value: &str) -> Option<String> {
-        match value {
-            "input" => self.current_input.clone(),
-            "true" | "false" => Some(value.to_string()),
+    fn screen_condition_value(&self, game: &LoadedGame, expr: &SceneExpr) -> Option<String> {
+        match expr {
+            SceneExpr::Path(path) if path.len() == 1 && path[0] == "input" => {
+                self.current_input.clone()
+            }
+            SceneExpr::Path(path) => {
+                let value = path.join(".");
+                self.scene_path_value(game, &value)
+                    .map(|value| scene_value_to_string(&value))
+                    .or_else(|| {
+                        level_index_from_value(game, &value)
+                            .map(SceneValue::LevelRef)
+                            .map(|value| scene_value_to_string(&value))
+                    })
+                    .or_else(|| self.scene_value_string(&value))
+                    .or_else(|| self.level_path_value(game, &value))
+                    .or_else(|| is_simple_identifier(&value).then(|| value.to_string()))
+            }
             _ => self
-                .scene_path_value(game, value)
-                .map(|value| scene_value_to_string(&value))
-                .or_else(|| {
-                    level_index_from_value(game, value)
-                        .map(SceneValue::LevelRef)
-                        .map(|value| scene_value_to_string(&value))
-                })
-                .or_else(|| self.scene_value_string(value))
-                .or_else(|| self.level_path_value(game, value))
-                .or_else(|| parse_runtime_quoted_text(value))
-                .or_else(|| value.parse::<i64>().ok().map(|number| number.to_string()))
-                .or_else(|| is_simple_identifier(value).then(|| value.to_string())),
+                .eval_effect_value(game, expr, &HashMap::new())
+                .map(|value| scene_value_to_string(&value)),
         }
     }
 
@@ -2403,13 +2428,103 @@ impl GameSession {
                 .level_path_value(game, &path.join("."))
                 .map(SceneValue::Symbol),
             SceneExpr::Path(path) => Some(SceneValue::Symbol(path.join("."))),
+            SceneExpr::Call { name, args } if name == "join" => {
+                let mut out = String::new();
+                for arg in args {
+                    let value = self.eval_effect_value(game, arg, bindings)?;
+                    out.push_str(&scene_value_to_string(&value));
+                }
+                Some(SceneValue::Text(out))
+            }
             SceneExpr::Call { name, args } if name == "next" && args.len() == 1 => {
                 let index = self.eval_effect_level_index(game, &args[0], bindings)?;
                 Some(SceneValue::LevelRef(
                     index.saturating_add(1).min(game.levels.len() - 1),
                 ))
             }
+            SceneExpr::Call { name, args } if level_selector_call_base(name).is_some() => {
+                let index = self.eval_level_selector_call(game, name, args, bindings)?;
+                if let Some(field) = level_selector_call_field(name) {
+                    return level_ref_field(game, self, index, field);
+                }
+                Some(SceneValue::LevelRef(index))
+            }
+            SceneExpr::Binary { op, left, right } => {
+                let left = self.eval_effect_value(game, left, bindings)?;
+                match op {
+                    SceneBinaryOp::And => {
+                        if !scene_value_bool(&left)? {
+                            return Some(SceneValue::Bool(false));
+                        }
+                        let right = self.eval_effect_value(game, right, bindings)?;
+                        Some(SceneValue::Bool(scene_value_bool(&right)?))
+                    }
+                    SceneBinaryOp::Eq => {
+                        let right = self.eval_effect_value(game, right, bindings)?;
+                        Some(SceneValue::Bool(left == right))
+                    }
+                    SceneBinaryOp::NotEq => {
+                        let right = self.eval_effect_value(game, right, bindings)?;
+                        Some(SceneValue::Bool(left != right))
+                    }
+                }
+            }
+            SceneExpr::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                let condition = self.eval_effect_value(game, condition, bindings)?;
+                if scene_value_bool(&condition)? {
+                    self.eval_effect_value(game, then_branch, bindings)
+                } else {
+                    self.eval_effect_value(game, else_branch, bindings)
+                }
+            }
             SceneExpr::Call { .. } => None,
+        }
+    }
+
+    fn eval_level_selector_call(
+        &self,
+        game: &LoadedGame,
+        name: &str,
+        args: &[SceneExpr],
+        bindings: &HashMap<String, String>,
+    ) -> Option<usize> {
+        match level_selector_call_base(name)? {
+            "level" => match args {
+                [level] => {
+                    let id = self.eval_effect_string(game, level, bindings)?;
+                    level_index_by_id(game, &id)
+                }
+                [pack, level] => {
+                    let pack = self.eval_effect_string(game, pack, bindings)?;
+                    let id = self.eval_effect_string(game, level, bindings)?;
+                    level_index_by_pack_id(game, &pack, &id)
+                }
+                _ => None,
+            },
+            "level_in" => match args {
+                [pack, level] => {
+                    let pack = self.eval_effect_string(game, pack, bindings)?;
+                    let id = self.eval_effect_string(game, level, bindings)?;
+                    level_index_by_pack_id(game, &pack, &id)
+                }
+                _ => None,
+            },
+            "level_at" => match args {
+                [pack, level] => {
+                    let pack = self.eval_effect_string(game, pack, bindings)?;
+                    let index = self.eval_effect_value(game, level, bindings)?;
+                    let SceneValue::Int(index) = index else {
+                        return None;
+                    };
+                    level_index_by_pack_ordinal(game, &pack, usize::try_from(index).ok()?)
+                }
+                _ => None,
+            },
+            _ => None,
         }
     }
 
@@ -3075,6 +3190,13 @@ fn scene_value_to_string(value: &SceneValue) -> String {
     }
 }
 
+fn scene_value_bool(value: &SceneValue) -> Option<bool> {
+    match value {
+        SceneValue::Bool(value) => Some(*value),
+        _ => None,
+    }
+}
+
 fn scene_value_from_effect_atom(game: &LoadedGame, value: &str) -> SceneValue {
     level_index_from_value(game, value)
         .map(SceneValue::LevelRef)
@@ -3184,8 +3306,7 @@ fn parse_runtime_command(command_text: &str, default_wait_ms: u64) -> Option<Sce
     }
     if let Some(text) = command_text.strip_prefix("message ") {
         return Some(SceneEffect::Message {
-            text: parse_runtime_expr(text.trim())
-                .unwrap_or_else(|| SceneExpr::Text(text.trim().to_string())),
+            text: parse_runtime_expr(text.trim())?,
         });
     }
     if command_text == "wait" {
@@ -3318,32 +3439,14 @@ fn parse_runtime_scene_target(value: &str) -> Option<(&str, Vec<SceneEffectParam
     }
     if let Some((screen, args)) = value.split_once('(') {
         let args = args.strip_suffix(')')?.trim();
-        let params = if args.is_empty() {
-            Vec::new()
-        } else if !args.contains('=') && !args.contains(',') {
-            vec![SceneEffectParam::Level(parse_runtime_level_expr(args)?)]
-        } else {
-            parse_runtime_params(&args.replace(" = ", "="))?
-        };
+        let params = parse_runtime_params(args)?;
         return Some((screen.trim(), params));
     }
     Some((value, Vec::new()))
 }
 
 fn parse_runtime_params(value: &str) -> Option<Vec<SceneEffectParam>> {
-    value
-        .split(',')
-        .map(str::trim)
-        .filter(|param| !param.is_empty())
-        .map(|param| {
-            let (name, value) = param.split_once('=')?;
-            let name = name.trim();
-            is_simple_identifier(name).then_some(SceneEffectParam::Named {
-                name: name.to_string(),
-                value: parse_runtime_expr(value.trim())?,
-            })
-        })
-        .collect()
+    parse_scene_effect_params(value).ok()
 }
 
 fn parse_runtime_wait_duration_ms(value: &str) -> Option<u64> {
@@ -3673,10 +3776,44 @@ fn split_effects_at_program_boundary(
             _ => {}
         }
     }
-    let (before_end, after_start, milliseconds) = boundary?;
-    let before = effects[..before_end].to_vec();
-    let after = effects[after_start..].to_vec();
+    if let Some((before_end, after_start, milliseconds)) = boundary {
+        let before = effects[..before_end].to_vec();
+        let after = effects[after_start..].to_vec();
+        return Some((before, milliseconds, after));
+    }
+
+    let milliseconds = animation_wait_milliseconds(game, animations)?;
+    let (before, after) = split_effects_for_implicit_animation_boundary(effects);
     Some((before, milliseconds, after))
+}
+
+fn split_effects_for_implicit_animation_boundary(
+    effects: Vec<QueuedRuleEffect>,
+) -> (Vec<QueuedRuleEffect>, Vec<QueuedRuleEffect>) {
+    let mut before = Vec::new();
+    let mut after = Vec::new();
+    for effect in effects {
+        if rule_effect_waits_for_animation_boundary(&effect.effect) {
+            after.push(effect);
+        } else {
+            before.push(effect);
+        }
+    }
+    (before, after)
+}
+
+fn rule_effect_waits_for_animation_boundary(effect: &RuleEffect) -> bool {
+    matches!(
+        effect,
+        RuleEffect::Win
+            | RuleEffect::Restart
+            | RuleEffect::NextLevel
+            | RuleEffect::Again
+            | RuleEffect::Wait { .. }
+            | RuleEffect::WaitAnimation
+            | RuleEffect::Message { .. }
+            | RuleEffect::Scene(_)
+    )
 }
 
 fn animation_wait_milliseconds(game: &LoadedGame, animations: &[AnimationEvent]) -> Option<u64> {
@@ -3698,92 +3835,11 @@ fn animation_duration_milliseconds(game: &LoadedGame, name: &str) -> u64 {
 }
 
 fn parse_runtime_expr(value: &str) -> Option<SceneExpr> {
-    if value == "true" {
-        return Some(SceneExpr::Bool(true));
-    }
-    if value == "false" {
-        return Some(SceneExpr::Bool(false));
-    }
-    if let Ok(number) = value.parse::<i64>() {
-        return Some(SceneExpr::Int(number));
-    }
-    if let Some(text) = parse_runtime_quoted_text(value) {
-        return Some(SceneExpr::Text(text));
-    }
-    if let Some((name, rest)) = value.split_once('(') {
-        let args = rest.strip_suffix(')')?;
-        if !is_simple_identifier(name) {
-            return None;
-        }
-        let args = if args.trim().is_empty() {
-            Vec::new()
-        } else {
-            args.split(',')
-                .map(str::trim)
-                .map(parse_runtime_expr)
-                .collect::<Option<Vec<_>>>()?
-        };
-        return Some(SceneExpr::Call {
-            name: name.to_string(),
-            args,
-        });
-    }
-    let parts = value.split('.').collect::<Vec<_>>();
-    parts
-        .iter()
-        .all(|part| is_simple_identifier(part))
-        .then(|| SceneExpr::Path(parts.into_iter().map(ToString::to_string).collect()))
+    parse_scene_expression(value).ok()
 }
 
 fn parse_runtime_level_expr(value: &str) -> Option<SceneExpr> {
-    if parse_runtime_quoted_text(value).is_some() {
-        return None;
-    }
-    if is_dotted_level_atom(value) {
-        return Some(SceneExpr::Text(value.to_string()));
-    }
     parse_runtime_expr(value)
-}
-
-fn runtime_command_has_quoted_level_arg(command: &str) -> bool {
-    let command = command.trim();
-    if let Some(value) = command.strip_prefix("current_level = ") {
-        return parse_runtime_quoted_text(value.trim()).is_some();
-    }
-    if let Some(rest) = command.strip_prefix("level(") {
-        return rest
-            .split_once(").cleared = ")
-            .is_some_and(|(level, _)| parse_runtime_quoted_text(level.trim()).is_some());
-    }
-    if let Some(rest) = command
-        .strip_prefix("goto ")
-        .or_else(|| command.strip_prefix("start "))
-    {
-        return runtime_scene_target_has_quoted_level_arg(rest);
-    }
-    if let Some((target_command, level)) = command.split_once(' ') {
-        return target_command
-            .split_once('.')
-            .is_some_and(|(_, action)| action == "goto")
-            && parse_runtime_quoted_text(level.trim()).is_some();
-    }
-    false
-}
-
-fn runtime_scene_target_has_quoted_level_arg(target: &str) -> bool {
-    let Some((_, args)) = target.trim().split_once('(') else {
-        return false;
-    };
-    let Some(args) = args.strip_suffix(')') else {
-        return false;
-    };
-    let args = args.trim();
-    !args.contains('=') && !args.contains(',') && parse_runtime_quoted_text(args).is_some()
-}
-
-fn parse_runtime_quoted_text(value: &str) -> Option<String> {
-    let inner = value.strip_prefix('"')?.strip_suffix('"')?;
-    Some(inner.replace("\\\"", "\""))
 }
 
 fn is_simple_identifier(value: &str) -> bool {
@@ -3795,23 +3851,42 @@ fn is_simple_identifier(value: &str) -> bool {
         && chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
 }
 
-fn is_dotted_level_atom(value: &str) -> bool {
-    let parts = value.split('.').collect::<Vec<_>>();
-    parts.len() > 1
-        && parts.iter().all(|part| {
-            !part.is_empty()
-                && part
-                    .chars()
-                    .all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
-        })
+fn level_index_from_value(game: &LoadedGame, value: &str) -> Option<usize> {
+    level_index_by_id(game, value)
 }
 
-fn level_index_from_value(game: &LoadedGame, value: &str) -> Option<usize> {
-    value
-        .parse::<usize>()
-        .ok()
-        .filter(|index| *index < game.levels.len())
-        .or_else(|| game.levels.iter().position(|level| level.name == value))
+fn level_index_by_id(game: &LoadedGame, id: &str) -> Option<usize> {
+    unique_level_match(
+        game.levels
+            .iter()
+            .enumerate()
+            .filter_map(|(index, level)| (level.name == id).then_some(index)),
+    )
+}
+
+fn level_index_by_pack_id(game: &LoadedGame, pack: &str, id: &str) -> Option<usize> {
+    if pack == "levels" {
+        return level_index_by_id(game, id);
+    }
+    unique_level_match(game.levels.iter().enumerate().filter_map(|(index, level)| {
+        (level.pack.as_deref() == Some(pack) && level.name == id).then_some(index)
+    }))
+}
+
+fn level_index_by_pack_ordinal(game: &LoadedGame, pack: &str, ordinal: usize) -> Option<usize> {
+    if pack == "levels" {
+        return (ordinal < game.levels.len()).then_some(ordinal);
+    }
+    game.levels
+        .iter()
+        .enumerate()
+        .filter_map(|(index, level)| (level.pack.as_deref() == Some(pack)).then_some(index))
+        .nth(ordinal)
+}
+
+fn unique_level_match(mut indices: impl Iterator<Item = usize>) -> Option<usize> {
+    let first = indices.next()?;
+    indices.next().is_none().then_some(first)
 }
 
 fn scene_level_indices(game: &LoadedGame, scene_name: &str) -> Vec<usize> {
@@ -3827,7 +3902,7 @@ fn scene_level_indices(game: &LoadedGame, scene_name: &str) -> Vec<usize> {
             .filter_map(|(index, level)| {
                 names
                     .iter()
-                    .any(|name| level_resource_matches(name, &level.name))
+                    .any(|name| level_resource_matches(name, level))
                     .then_some(index)
             })
             .collect(),
@@ -3841,9 +3916,7 @@ fn first_level_index_for_scene(
 ) -> Option<usize> {
     scene_level_indices(game, scene_name)
         .into_iter()
-        .find(|index| {
-            scope.is_none_or(|scope| level_resource_matches(scope, &game.levels[*index].name))
-        })
+        .find(|index| scope.is_none_or(|scope| level_resource_matches(scope, &game.levels[*index])))
 }
 
 fn level_has_next_in_scene(game: &LoadedGame, scene_name: &str, level_index: usize) -> bool {
@@ -3864,18 +3937,64 @@ fn transition_condition_mentions_input(trigger: &SceneTransitionTrigger, input: 
     let SceneTransitionTrigger::Condition(condition) = trigger else {
         return false;
     };
-    condition.split(" and ").any(|part| {
-        let part = part.trim();
-        part.strip_prefix("input == ")
-            .is_some_and(|name| name.trim() == input)
-    })
+    scene_expr_mentions_input_value(condition, input)
 }
 
-fn level_resource_matches(resource: &str, level_name: &str) -> bool {
-    level_name == resource
-        || level_name
-            .strip_prefix(resource)
-            .is_some_and(|rest| rest.starts_with('.'))
+fn scene_expr_mentions_input_value(expr: &SceneExpr, input: &str) -> bool {
+    match expr {
+        SceneExpr::Binary {
+            op: SceneBinaryOp::Eq,
+            left,
+            right,
+        } => {
+            (scene_expr_is_input_path(left)
+                && scene_expr_atom_name(right).as_deref() == Some(input))
+                || (scene_expr_is_input_path(right)
+                    && scene_expr_atom_name(left).as_deref() == Some(input))
+        }
+        SceneExpr::Binary { left, right, .. } => {
+            scene_expr_mentions_input_value(left, input)
+                || scene_expr_mentions_input_value(right, input)
+        }
+        SceneExpr::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            scene_expr_mentions_input_value(condition, input)
+                || scene_expr_mentions_input_value(then_branch, input)
+                || scene_expr_mentions_input_value(else_branch, input)
+        }
+        SceneExpr::Call { args, .. } => args
+            .iter()
+            .any(|arg| scene_expr_mentions_input_value(arg, input)),
+        _ => false,
+    }
+}
+
+fn scene_expr_is_input_path(expr: &SceneExpr) -> bool {
+    matches!(expr, SceneExpr::Path(path) if path.len() == 1 && path[0] == "input")
+}
+
+fn scene_expr_atom_name(expr: &SceneExpr) -> Option<String> {
+    match expr {
+        SceneExpr::Path(path) if path.len() == 1 => Some(path[0].clone()),
+        SceneExpr::Text(value) => Some(value.clone()),
+        _ => None,
+    }
+}
+
+fn level_resource_matches(resource: &str, level: &Level) -> bool {
+    level.name == resource || level.pack.as_deref() == Some(resource)
+}
+
+fn level_selector_call_base(name: &str) -> Option<&str> {
+    let base = name.split_once('.').map_or(name, |(base, _)| base);
+    matches!(base, "level" | "level_in" | "level_at").then_some(base)
+}
+
+fn level_selector_call_field(name: &str) -> Option<&str> {
+    name.split_once('.').map(|(_, field)| field)
 }
 
 fn component_has_level_menu(component: &SceneComponent) -> bool {
@@ -4014,6 +4133,44 @@ mod tests {
     }
 
     #[test]
+    fn runtime_command_uses_scene_expression_parser_for_message() {
+        let effect = parse_runtime_command(
+            r#"message join("Save: ", if true { "yes" } else { "no" })"#,
+            100,
+        )
+        .unwrap();
+
+        let SceneEffect::Message { text } = effect else {
+            panic!("expected message effect");
+        };
+        assert!(matches!(&text, SceneExpr::Call { name, args }
+            if name == "join"
+                && matches!(args.as_slice(), [SceneExpr::Text(_), SceneExpr::If { .. }])));
+    }
+
+    #[test]
+    fn runtime_command_uses_scene_parser_for_goto_params() {
+        let effect = parse_runtime_command(
+            r#"goto detail with selected = join("a, ", if true { "b" } else { "c" })"#,
+            100,
+        )
+        .unwrap();
+
+        let SceneEffect::Goto { scene, params } = effect else {
+            panic!("expected goto effect");
+        };
+        assert_eq!(scene, "detail");
+        assert!(matches!(params.as_slice(),
+            [SceneEffectParam::Named { name, value: SceneExpr::Call { name: call, args } }]
+            if name == "selected" && call == "join" && args.len() == 2));
+    }
+
+    #[test]
+    fn runtime_message_rejects_unparsed_text_instead_of_falling_back() {
+        assert!(parse_runtime_command("message plain text", 100).is_none());
+    }
+
+    #[test]
     fn again_command_runs_no_input_follow_up_turn() {
         let loaded = parse_game(
             r#"
@@ -4075,7 +4232,7 @@ A = A
 B = B
 C = C
 }
-level start {
+level "start" {
 A
 }
 }
@@ -4161,7 +4318,7 @@ clear_checkpoint
 levels {
 legend P = Player
 
-level start {
+level "start" {
 P..
 }
 }
@@ -4404,11 +4561,8 @@ P
 }
 
 scene playing {
-state {
-board = puzzle board
-}
 layout {
-board
+board = puzzle board
 }
 rules {
 step board
@@ -4456,11 +4610,8 @@ X
 }
 
 scene playing {
-state {
-board = puzzle board
-}
 layout {
-board
+board = puzzle board
 }
 rules {
 step board
@@ -4505,17 +4656,14 @@ legend {
 . = empty
 P = Player
 }
-level start {
+level "start" {
 P
 }
 }
 }
 scene playing {
-state {
-board = puzzle default
-}
 layout {
-board
+board = puzzle default
 }
 rules {
 step board
@@ -4548,7 +4696,9 @@ layers {
 floor = Goal
 actor = Player Box Wall
 }
-group solid = Player Box Wall
+groups {
+solid = Player Box Wall
+}
 win_conditions {
 some Goal
 all Goal on Box
@@ -4566,12 +4716,12 @@ G = Goal
 P = Player
 B = Box
 }
-level first {
+level "first" {
 #######
 #P.B.G#
 #######
 }
-level second {
+level "second" {
 #######
 #P.B.G#
 #######
@@ -4579,11 +4729,8 @@ level second {
 }
 }
 scene playing {
-state {
-board = puzzle sokoban
-}
 layout {
-board
+board = puzzle sokoban
 }
 rules {
 step board
@@ -4651,7 +4798,7 @@ O = Portal
 # = Wall
 }
 
-level hub {
+level "hub" {
 ####
 #PO#
 #..#
@@ -4731,18 +4878,15 @@ once [ Player ] -> moved = true
 
 levels {
 legend P = Player
-level start {
+level "start" {
 P
 }
 }
 }
 
 scene playing {
-state {
-board = puzzle default
-}
 layout {
-board
+board = puzzle default
 }
 rules {
 step board
@@ -4783,7 +4927,7 @@ rules {
 }
 levels {
 legend P = Player
-level start {
+level "start" {
 P
 }
 }
@@ -4841,7 +4985,7 @@ legend {
 . = empty
 P = Player
 }
-level start {
+level "start" {
 P.
 }
 }
@@ -4888,7 +5032,7 @@ legend {
 . = empty
 P = Player
 }
-level start {
+level "start" {
 P.
 }
 }
@@ -4941,7 +5085,7 @@ legend {
 . = empty
 P = Player
 }
-level start {
+level "start" {
 P.
 }
 }
@@ -4986,7 +5130,7 @@ legend {
 P = Player
 B = Box
 }
-level start {
+level "start" {
 PB.
 }
 }
@@ -5034,7 +5178,7 @@ P = Player
 B = Box
 # = Wall
 }
-level start {
+level "start" {
 PB#
 }
 }
@@ -5078,7 +5222,7 @@ legend {
 . = empty
 A = A
 }
-level start {
+level "start" {
 A
 }
 }
@@ -5121,7 +5265,7 @@ A = A
 B = B
 # = Wall
 }
-level start {
+level "start" {
 B#
 }
 }
@@ -5161,7 +5305,7 @@ legend {
 . = empty
 A = A
 }
-level start {
+level "start" {
 A.A
 }
 }
@@ -5210,7 +5354,7 @@ legend {
 . = empty
 A = A
 }
-level start {
+level "start" {
 A.
 .A
 }
@@ -5261,7 +5405,7 @@ legend {
 . = empty
 A = A
 }
-level start {
+level "start" {
 A.A
 .A.
 }
@@ -5317,7 +5461,7 @@ legend {
 A = A
 # = Wall
 }
-level start {
+level "start" {
 A#
 }
 }
@@ -5366,7 +5510,7 @@ legend {
 . = empty
 A = A
 }
-level start {
+level "start" {
 A.
 }
 }
@@ -5416,7 +5560,7 @@ legend {
 A = A
 # = Wall
 }
-level start {
+level "start" {
 A#.A.
 }
 }
@@ -5463,7 +5607,7 @@ legend {
 . = empty
 A = A
 }
-level start {
+level "start" {
 AA.
 }
 }
@@ -5502,7 +5646,7 @@ legend {
 . = empty
 B = Box
 }
-level start {
+level "start" {
 B.B.
 }
 }
@@ -5543,7 +5687,7 @@ legend {
 . = empty
 B = Box
 }
-level start {
+level "start" {
 B..
 }
 }
@@ -5590,7 +5734,7 @@ legend {
 . = empty
 P = Player
 }
-level start {
+level "start" {
 P
 }
 }
@@ -5631,7 +5775,7 @@ legend {
 . = empty
 P = Player
 }
-level start {
+level "start" {
 P
 }
 }
@@ -5690,7 +5834,7 @@ legend {
 . = empty
 P = Player
 }
-level start {
+level "start" {
 P.
 }
 }
@@ -5734,6 +5878,77 @@ P.
     }
 
     #[test]
+    fn tween_move_pauses_following_routine_until_animation_completes() {
+        let loaded = parse_game(
+            r#"
+title tween_routine_boundary
+animation {
+tween {
+duration = 80ms
+}
+}
+puzzle default {
+layers {
+actor = Player
+marker = Marker
+}
+rules {
+input right [ Player ] -> [ > Player ]
+move
+routine_after_move
+}
+routine routine_after_move {
+[ Player no Marker ] -> [ Player Marker ]
+}
+levels {
+legend {
+. = empty
+P = Player
+}
+level "start" {
+P.
+}
+}
+}
+"#,
+        )
+        .unwrap();
+        let player = object_named(&loaded, "Player");
+        let marker = object_named(&loaded, "Marker");
+        let mut session = GameSession::new(&loaded);
+
+        session
+            .apply_input(&loaded, input_named(&loaded, "right"))
+            .unwrap();
+
+        assert!(session.state().has_object(&loaded.game, 1, 0, player));
+        assert!(!session.state().has_object(&loaded.game, 1, 0, marker));
+        assert_eq!(
+            session.take_wait_events(),
+            vec![WaitEvent::ContinueEffects { milliseconds: 80 }]
+        );
+        assert_eq!(
+            session.take_animation_events(),
+            vec![AnimationEvent::Move {
+                name: "tween".to_string(),
+                object: player,
+                from_x: 0,
+                from_y: 0,
+                from_z: 0,
+                to_x: 1,
+                to_y: 0,
+                to_z: 0,
+            }]
+        );
+
+        session
+            .apply_command(&loaded, "__continue_effects")
+            .unwrap();
+
+        assert!(session.state().has_object(&loaded.game, 1, 0, marker));
+    }
+
+    #[test]
     fn wait_animation_without_animation_is_noop() {
         let loaded = parse_game(
             r#"
@@ -5752,7 +5967,7 @@ legend {
 . = empty
 P = Player
 }
-level start {
+level "start" {
 P
 }
 }
@@ -5791,7 +6006,7 @@ legend {
 P = Player
 }
 
-level start {
+level "start" {
 P
 }
 }
@@ -5838,10 +6053,10 @@ levels {
 legend {
 P = Player
 }
-level first
+level "first"
 P
 
-level second
+level "second"
 P
 }
 }
@@ -5894,7 +6109,7 @@ G = Goal
 * = Player Goal
 }
 
-level start {
+level "start" {
 *
 }
 }
@@ -5941,7 +6156,7 @@ A = A
 B = B
 C = C
 }
-level start {
+level "start" {
 A
 }
 }
@@ -6002,7 +6217,7 @@ A = A
 B = B
 C = C
 }
-level start {
+level "start" {
 A
 }
 }
@@ -6064,7 +6279,7 @@ legend {
 A = A
 B = B
 }
-level start {
+level "start" {
 A
 }
 }
@@ -6203,10 +6418,10 @@ legend {
 . = empty
 P = Player
 }
-level authored {
+level "authored" {
 .P
 }
-level editor_state {
+level "editor_state" {
 P.
 }
 }
@@ -6271,10 +6486,10 @@ rules {
 levels {
 legend P = Player
 
-level first
+level "first"
 P
 
-level second
+level "second"
 P
 }
 }
@@ -6362,7 +6577,7 @@ P
         );
 
         session
-            .apply_command(&loaded, "goto playing(microban.1)")
+            .apply_command(&loaded, "goto playing(\"microban.1\")")
             .unwrap();
 
         assert_eq!(session.screen(), "playing");
@@ -6377,7 +6592,7 @@ P
     }
 
     #[test]
-    fn goto_level_param_accepts_dotted_level_name_without_digits() {
+    fn goto_level_param_accepts_quoted_dotted_level_name() {
         let loaded = parse_game(
             r#"
 title dotted_level
@@ -6391,21 +6606,18 @@ rules {
 }
 levels {
 legend P = Player
-level first {
+level "first" {
 P
 }
-level test.chain {
+level "test.chain" {
 P
 }
 }
 }
 
 scene playing(level) {
-state {
-board = puzzle default
-}
 layout {
-board
+board = puzzle default
 }
 rules {
 step board
@@ -6417,7 +6629,7 @@ step board
         let mut session = GameSession::new(&loaded);
 
         session
-            .apply_command(&loaded, "goto playing(test.chain)")
+            .apply_command(&loaded, "goto playing(\"test.chain\")")
             .unwrap();
 
         assert_eq!(session.scene(), "playing");
@@ -6425,7 +6637,7 @@ step board
     }
 
     #[test]
-    fn goto_level_param_rejects_quoted_level_name() {
+    fn goto_level_param_rejects_legacy_dotted_level_atom() {
         let loaded = parse_game(
             r#"
 title quoted_level
@@ -6439,18 +6651,15 @@ rules {
 }
 levels {
 legend P = Player
-level microban.1 {
+level "microban.1" {
 P
 }
 }
 }
 
 scene playing(level) {
-state {
-board = puzzle default
-}
 layout {
-board
+board = puzzle default
 }
 rules {
 step board
@@ -6462,12 +6671,12 @@ step board
         let mut session = GameSession::new(&loaded);
 
         let error = session
-            .apply_command(&loaded, "goto playing(\"microban.1\")")
+            .apply_command(&loaded, "goto playing(microban.1)")
             .unwrap_err();
 
         assert_eq!(
             error,
-            TransitionError::InvalidCommand("goto playing(\"microban.1\")".to_string())
+            TransitionError::InvalidCommand("goto playing(microban.1)".to_string())
         );
     }
 
@@ -6491,10 +6700,10 @@ rules {
 levels {
 legend P = Player
 
-level first
+level "first"
 P
 
-level second
+level "second"
 P
 }
 }
@@ -6507,7 +6716,7 @@ P
             .apply_command(&loaded, "current_level = second")
             .unwrap();
         session
-            .apply_command(&loaded, "level(second).cleared = true")
+            .apply_command(&loaded, "level(\"second\").cleared = true")
             .unwrap();
         assert_eq!(session.selected_level_index(), 1);
         assert_eq!(session.cleared_levels(), &[false, true]);
@@ -6556,7 +6765,7 @@ rules {
 levels {
 legend P = Player
 
-level start {
+level "start" {
 P
 }
 }
@@ -6630,12 +6839,12 @@ legend {
 * = Goal Box
 P = Player
 }
-level one {
+level "one" {
 *
 P
 }
 
-level two {
+level "two" {
 P
 }
 }
@@ -6697,7 +6906,7 @@ once right [ Player | no Player ] -> [ | Player ] cleared = true
 levels {
 legend P = Player
 
-level start {
+level "start" {
 P.
 }
 }
@@ -6757,11 +6966,11 @@ once right [ Player | ] -> [ | Player ]
 levels {
 legend P = Player
 
-level first {
+level "first" {
 P.
 }
 
-level second {
+level "second" {
 P..
 }
 }
@@ -6866,7 +7075,7 @@ once [ A ] -> cancel
 levels {
 legend A = A
 
-level start {
+level "start" {
 A
 }
 }
@@ -6940,7 +7149,7 @@ legend {
 . = empty
 P = Player
 }
-level start {
+level "start" {
 P
 .
 }
@@ -6998,7 +7207,7 @@ rules {
 }
 levels {
 legend P = Player
-level start {
+level "start" {
 P
 }
 }
@@ -7166,11 +7375,11 @@ legend {
 P = Player
 }
 
-level hub {
+level "hub" {
 P
 }
 
-level level {
+level "level" {
 P
 }
 }
@@ -7303,7 +7512,7 @@ P = Player
 B = Box
 # = Wall
 }
-level start {
+level "start" {
 #####
 #PBG#
 #####
@@ -7374,12 +7583,12 @@ B = Box
 # = Wall
 * = Goal Box
 }
-level first {
+level "first" {
 #####
 #PBG#
 #####
 }
-level second {
+level "second" {
 #####
 #P.G#
 #####
@@ -7441,7 +7650,7 @@ A = A
 B = B
 C = C
 }
-level start {
+level "start" {
 A
 }
 }
@@ -7485,10 +7694,10 @@ rules {
 
 levels {
 legend P = Player
-level first {
+level "first" {
 P
 }
-level second {
+level "second" {
 P
 }
 }
@@ -7544,10 +7753,10 @@ legend {
 P = Player
 }
 
-level first {
+level "first" {
 P.
 }
-level second {
+level "second" {
 P.
 }
 }
@@ -7605,13 +7814,13 @@ rules {
 }
 levels {
 legend P = Player
-level first {
+level "first" {
 P
 }
-level second {
+level "second" {
 P
 }
-level third {
+level "third" {
 P
 }
 }
@@ -7681,10 +7890,10 @@ rules {
 levels {
 legend P = Player
 
-level first {
+level "first" {
 P
 }
-level second {
+level "second" {
 P
 }
 }
@@ -7736,17 +7945,17 @@ rules {
 
 levels worldA of default {
 legend P = Player
-level 1
+level "1"
 P
-level 2
+level "2"
 P
 }
 
 levels worldB of default {
 legend P = Player
-level 1
+level "1"
 P
-level 2
+level "2"
 P
 }
 
@@ -7804,19 +8013,19 @@ rules {
 levels {
 legend P = Player
 
-level first {
+level "first" {
 P
 }
-level second {
+level "second" {
 P
 }
-level third {
+level "third" {
 P
 }
-level fourth {
+level "fourth" {
 P
 }
-level fifth {
+level "fifth" {
 P
 }
 }
@@ -7875,10 +8084,10 @@ rules {
 levels {
 legend P = Player
 
-level first {
+level "first" {
 P
 }
-level second {
+level "second" {
 P
 }
 }
@@ -7928,10 +8137,10 @@ rules {
 
 levels {
 legend P = Player
-level first {
+level "first" {
 P
 }
-level second {
+level "second" {
 P
 }
 }
@@ -7989,7 +8198,7 @@ rules {
 levels {
 legend P = Player
 
-level start {
+level "start" {
 P
 }
 }
@@ -8058,7 +8267,7 @@ rules {
 levels {
 legend P = Player
 
-level start {
+level "start" {
 P
 }
 }
@@ -8117,7 +8326,7 @@ rules {
 levels {
 legend P = Player
 
-level start {
+level "start" {
 P
 }
 }
@@ -8168,7 +8377,7 @@ rules {
 levels {
 legend P = Player
 
-level first {
+level "first" {
 P
 }
 }
@@ -8242,11 +8451,11 @@ rules {
 levels {
 legend P = Player
 
-level first {
+level "first" {
 P
 }
 
-level second {
+level "second" {
 P
 }
 }
@@ -8262,7 +8471,7 @@ text selected.solved
         let mut session = GameSession::new(&loaded);
 
         session
-            .apply_command(&loaded, "level(first).cleared = true")
+            .apply_command(&loaded, "level(\"first\").cleared = true")
             .unwrap();
         session
             .apply_command(&loaded, "goto detail with selected = first")
@@ -8304,7 +8513,7 @@ rules {
 
 levels {
 legend P = Player
-level start {
+level "start" {
 P
 }
 }
@@ -8363,7 +8572,7 @@ legend {
 . = empty
 P = Player
 }
-level start {
+level "start" {
 P
 }
 }
@@ -8457,12 +8666,12 @@ legend {
 * = Goal Box
 P = Player
 }
-level one {
+level "one" {
 *
 P
 }
 
-level two {
+level "two" {
 P
 }
 }
@@ -8523,12 +8732,12 @@ legend {
 * = Goal Box
 P = Player
 }
-level one {
+level "one" {
 *
 P
 }
 
-level two {
+level "two" {
 P
 }
 }
@@ -8589,7 +8798,7 @@ P = Player
 S = Started
 }
 
-level one {
+level "one" {
 P
 }
 }
@@ -8655,7 +8864,7 @@ legend {
 P = Player
 }
 
-level one {
+level "one" {
 message "enter one"
 P
 message "clear one"
@@ -8723,7 +8932,7 @@ legend {
 P = Player
 }
 
-level one {
+level "one" {
 message "enter one"
 P
 }
@@ -8801,12 +9010,12 @@ legend {
 * = Goal Box
 P = Player
 }
-level one {
+level "one" {
 *
 P
 }
 
-level two {
+level "two" {
 P
 }
 }
