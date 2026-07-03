@@ -46,7 +46,7 @@ impl SelectorCatalog3 {
             token,
             alternatives,
             transform: None,
-            scratch: Vec::new(),
+            mark: Vec::new(),
         })
     }
 
@@ -880,7 +880,7 @@ pub struct ResolvedSelector3 {
     pub token: String,
     pub alternatives: Vec<ObjectId>,
     pub transform: Option<SelectorTransform3>,
-    pub scratch: Vec<SelectorScratch3>,
+    pub mark: Vec<SelectorMark3>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -890,7 +890,7 @@ pub struct SelectorTransform3 {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SelectorScratch3 {
+pub struct SelectorMark3 {
     pub name: String,
     pub value: Option<String>,
     pub negated: bool,

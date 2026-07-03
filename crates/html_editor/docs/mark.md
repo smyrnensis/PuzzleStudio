@@ -1,15 +1,17 @@
-# Scratch
-Use scratch for short-lived marks that help one step of rules run.
+# Marks
+Use marks for short-lived facts that help a rule chain run.
 
-## Declare Scratch
+## Declare Marks
 ```puzzle
-scratch {
+marks {
 visited
 armed = bool
+intent = directions
+count = int
 }
 ```
 
-A bare scratch name is a flag. A typed scratch name can store a small value.
+A bare mark name is a flag. A typed mark stores either a boolean, an integer, or one value from a named value set.
 
 ## Mark Objects
 ```puzzle
@@ -19,7 +21,7 @@ rules {
 }
 ```
 
-Scratch marks can be added to objects and removed again inside rules.
+Marks can be added to objects and removed again inside rules.
 
 ## Movement Intent
 ```puzzle
@@ -30,4 +32,3 @@ move
 ```
 
 Directional movement uses a temporary direction mark. `move` applies that direction after the input rule runs.
-

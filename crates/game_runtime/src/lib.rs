@@ -289,7 +289,7 @@ fn compiled_state_value(state: &PuzzleState) -> Value {
         "height": state.height,
         "layerCount": state.layer_count,
         "slots": state.slots().iter().map(|object| object.0).collect::<Vec<_>>(),
-        "scratch": [],
+        "mark": [],
         "globals": state.visible_globals(),
         "levelFiredRules": state.level_fired_rules().iter().map(|rule| rule.0).collect::<Vec<_>>(),
     })

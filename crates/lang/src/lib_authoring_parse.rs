@@ -137,7 +137,7 @@ fn starts_authoring_block(tokens: &[&str], line: &str) -> bool {
         | ["on_level_clear"]
         | ["on_last_level_clear"]
         | ["on_display"]
-        | ["scratch"]
+        | ["marks"]
         | ["groups"]
         | ["layers"]
         | ["win_conditions", ..]
@@ -890,8 +890,8 @@ fn parse_puzzle_definition(
                 *empty_char = Some(parse_char(tokens.get(1), line, "missing empty char")?);
                 i += 1;
             }
-            "scratch" => {
-                i = parse_scratch_block(lines, i, catalog)?;
+            "marks" => {
+                i = parse_mark_block(lines, i, catalog)?;
             }
             "input" => {
                 let (direction, next_i) = parse_command_definition(lines, i, catalog)?;
@@ -2308,7 +2308,6 @@ fn parse_level_body(
     level: &LevelBlock,
     catalog: &Catalog,
     empty_char: char,
-    default_wait_ms: u64,
     named_conditions: &HashMap<String, (String, ConditionAst)>,
 ) -> Result<ParsedLevelBody, DiagnosticReport> {
     let mut body = ParsedLevelBody::default();
@@ -2358,7 +2357,7 @@ fn parse_level_body(
             ));
         }
 
-        if let Some(statement) = parse_level_event_sugar(line, default_wait_ms)? {
+        if let Some(statement) = parse_level_event_sugar(line)? {
             if saw_map_row {
                 body.level_clear_statements.push(statement);
             } else {
@@ -2401,10 +2400,7 @@ fn parse_level_body(
     Ok(body)
 }
 
-fn parse_level_event_sugar(
-    line: &str,
-    default_wait_ms: u64,
-) -> Result<Option<StatementAst>, DiagnosticReport> {
+fn parse_level_event_sugar(line: &str) -> Result<Option<StatementAst>, DiagnosticReport> {
     let tokens = split_header_tokens(line);
     let is_level_event = matches!(tokens.as_slice(), ["sfx", _] | ["wait"] | ["wait", _])
         || line.strip_prefix("message ").is_some();
@@ -2426,15 +2422,6 @@ fn parse_level_event_sugar(
             "level body sugar only supports message, sfx, and wait; put other behavior in on_level_start/on_level_clear",
         ));
     }
-    let effects = effects
-        .into_iter()
-        .map(|effect| match effect {
-            EffectAst::Wait { milliseconds: None } => EffectAst::Wait {
-                milliseconds: Some(default_wait_ms),
-            },
-            other => other,
-        })
-        .collect();
     Ok(Some(StatementAst::Effect {
         source_line: line.to_string(),
         source_line_number: None,
@@ -2646,6 +2633,9 @@ fn parse_tag_set_directive(
     if values.is_empty() {
         return Err(parse_error(line, "tag set must have at least one value"));
     }
+    if matches!(values.first().copied(), Some("rotation" | "translation")) {
+        return parse_typed_axis_directive(name, values, line, catalog);
+    }
     let expanded_values =
         expand_numeric_ranges_in_value_list(values, &catalog.numeric_global_defaults, line)?;
     if expanded_values.is_empty() {
@@ -2661,6 +2651,262 @@ fn parse_tag_set_directive(
         .object_axes
         .insert(name.to_string(), expanded_values);
     Ok(())
+}
+
+fn parse_typed_axis_directive(
+    name: &str,
+    values: &[&str],
+    line: &str,
+    catalog: &mut Catalog,
+) -> Result<(), DiagnosticReport> {
+    if is_builtin_value_set(name) {
+        return Err(parse_error(line, "built-in tag set cannot be redefined"));
+    }
+    if catalog.value_sets.contains_key(name)
+        || catalog.object_axes.contains_key(name)
+        || catalog.axis_kinds.contains_key(name)
+    {
+        return Err(parse_error(line, "duplicate tag set"));
+    }
+
+    let kind = match values.first().copied() {
+        Some("rotation") => AxisKind::Rotation,
+        Some("translation") => AxisKind::Translation,
+        _ => return Err(parse_error(line, "axis declaration must start with rotation or translation")),
+    };
+    let body = values[1..].join(" ");
+    let expanded_values = match kind {
+        AxisKind::Rotation => parse_rotation_axis_values(&body, line)?,
+        AxisKind::Translation => parse_translation_axis_values(&body, line)?,
+    };
+    if expanded_values.is_empty() {
+        return Err(parse_error(line, "axis must have at least one value"));
+    }
+    catalog.object_axes.insert(name.to_string(), expanded_values);
+    catalog.axis_kinds.insert(name.to_string(), kind);
+    Ok(())
+}
+
+fn parse_rotation_axis_values(body: &str, line: &str) -> Result<Vec<String>, DiagnosticReport> {
+    let body = body.trim();
+    if let Some(step) = body.strip_prefix("step ").map(str::trim) {
+        let step = parse_degree_value(step, line)?;
+        return expand_rotation_range(
+            Rational::ZERO,
+            Rational::integer(360),
+            false,
+            step,
+            line,
+        );
+    }
+    let (range, step) = split_axis_range_and_step(body, line)?;
+    let (start, end, inclusive) = parse_degree_range(range, line)?;
+    let step = parse_degree_value(step, line)?;
+    expand_rotation_range(start, end, inclusive, step, line)
+}
+
+fn parse_translation_axis_values(body: &str, line: &str) -> Result<Vec<String>, DiagnosticReport> {
+    let body = body.trim();
+    let scalar_values = if let Some(step) = body.strip_prefix("step ").map(str::trim) {
+        let step = parse_rational_value(step, line)?;
+        expand_rational_range(Rational::ZERO, Rational::integer(1), false, step, line)?
+    } else if body.contains(" step ") {
+        let (range, step) = split_axis_range_and_step(body, line)?;
+        let (start, end, inclusive) = parse_rational_range(range, line)?;
+        let step = parse_rational_value(step, line)?;
+        expand_rational_range(start, end, inclusive, step, line)?
+    } else {
+        parse_rational_list(body, line)?
+    };
+
+    let mut values = Vec::new();
+    for x in &scalar_values {
+        for y in &scalar_values {
+            values.push(format!("{},{}", x.format(), y.format()));
+        }
+    }
+    Ok(values)
+}
+
+fn split_axis_range_and_step<'a>(
+    body: &'a str,
+    line: &str,
+) -> Result<(&'a str, &'a str), DiagnosticReport> {
+    let Some((range, step)) = body.split_once(" step ") else {
+        return Err(parse_error(line, "axis range declaration must include step"));
+    };
+    let range = range.trim();
+    let step = step.trim();
+    if range.is_empty() || step.is_empty() {
+        return Err(parse_error(line, "axis range and step must not be empty"));
+    }
+    Ok((range, step))
+}
+
+fn parse_degree_range(
+    value: &str,
+    line: &str,
+) -> Result<(Rational, Rational, bool), DiagnosticReport> {
+    if let Some((start, end)) = value.split_once("..<") {
+        return Ok((
+            parse_degree_value(start.trim(), line)?,
+            parse_degree_value(end.trim(), line)?,
+            false,
+        ));
+    }
+    let Some((start, end)) = value.split_once("...") else {
+        return Err(parse_error(line, "rotation range must use ... or ..<"));
+    };
+    Ok((
+        parse_degree_value(start.trim(), line)?,
+        parse_degree_value(end.trim(), line)?,
+        true,
+    ))
+}
+
+fn parse_rational_range(
+    value: &str,
+    line: &str,
+) -> Result<(Rational, Rational, bool), DiagnosticReport> {
+    if let Some((start, end)) = value.split_once("..<") {
+        return Ok((
+            parse_rational_value(start.trim(), line)?,
+            parse_rational_value(end.trim(), line)?,
+            false,
+        ));
+    }
+    let Some((start, end)) = value.split_once("...") else {
+        return Err(parse_error(line, "translation range must use ... or ..<"));
+    };
+    Ok((
+        parse_rational_value(start.trim(), line)?,
+        parse_rational_value(end.trim(), line)?,
+        true,
+    ))
+}
+
+fn expand_rotation_range(
+    start: Rational,
+    end: Rational,
+    inclusive: bool,
+    step: Rational,
+    line: &str,
+) -> Result<Vec<String>, DiagnosticReport> {
+    expand_rational_range(start, end, inclusive, step, line).map(|values| {
+        values
+            .into_iter()
+            .map(|value| format!("{}deg", value.format()))
+            .collect()
+    })
+}
+
+fn expand_rational_range(
+    start: Rational,
+    end: Rational,
+    inclusive: bool,
+    step: Rational,
+    line: &str,
+) -> Result<Vec<Rational>, DiagnosticReport> {
+    if step.is_zero() {
+        return Err(parse_error(line, "axis step must not be zero"));
+    }
+    if step.cmp(Rational::ZERO) == std::cmp::Ordering::Less {
+        return Err(parse_error(line, "axis step must be positive"));
+    }
+    if start.cmp(end) == std::cmp::Ordering::Greater {
+        return Err(parse_error(line, "axis range start must be less than or equal to end"));
+    }
+    let mut values = Vec::new();
+    let mut current = start;
+    let mut guard = 0usize;
+    loop {
+        let order = current.cmp(end);
+        if order == std::cmp::Ordering::Greater || (!inclusive && order == std::cmp::Ordering::Equal)
+        {
+            break;
+        }
+        values.push(current);
+        current = current.add(step);
+        guard += 1;
+        if guard > 10_000 {
+            return Err(parse_error(line, "axis range produced too many values"));
+        }
+    }
+    if inclusive {
+        if values.last().copied() != Some(end) {
+            return Err(parse_error(line, "axis step must land exactly on inclusive range end"));
+        }
+    } else if current != end {
+        return Err(parse_error(line, "axis step must land exactly on exclusive range end"));
+    }
+    Ok(values)
+}
+
+fn parse_rational_list(body: &str, line: &str) -> Result<Vec<Rational>, DiagnosticReport> {
+    let mut values = Vec::new();
+    for value in body.split(',') {
+        let value = value.trim();
+        if value.is_empty() {
+            return Err(parse_error(line, "translation value list must not contain empty values"));
+        }
+        let value = parse_rational_value(value, line)?;
+        if !values.contains(&value) {
+            values.push(value);
+        }
+    }
+    Ok(values)
+}
+
+fn parse_degree_value(value: &str, line: &str) -> Result<Rational, DiagnosticReport> {
+    let value = value
+        .trim()
+        .strip_suffix("deg")
+        .ok_or_else(|| parse_error(line, "rotation values must use deg"))?;
+    parse_rational_value(value.trim(), line)
+}
+
+fn parse_rational_value(value: &str, line: &str) -> Result<Rational, DiagnosticReport> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Err(parse_error(line, "rational value must not be empty"));
+    }
+    let value = value.strip_prefix('+').unwrap_or(value);
+    if let Some((numerator, denominator)) = value.split_once('/') {
+        let numerator = parse_decimal_integer(numerator.trim(), line)?;
+        let denominator = parse_decimal_integer(denominator.trim(), line)?;
+        return Rational::new(numerator, denominator)
+            .ok_or_else(|| parse_error(line, "rational denominator must not be zero"));
+    }
+    if let Some((integer, fractional)) = value.split_once('.') {
+        if fractional.is_empty() || !fractional.chars().all(|ch| ch.is_ascii_digit()) {
+            return Err(parse_error(line, "decimal rational value is malformed"));
+        }
+        let negative = integer.starts_with('-');
+        let integer_abs = integer.strip_prefix('-').unwrap_or(integer);
+        if integer_abs.is_empty() || !integer_abs.chars().all(|ch| ch.is_ascii_digit()) {
+            return Err(parse_error(line, "decimal rational value is malformed"));
+        }
+        let denominator = 10_i64.pow(fractional.len() as u32);
+        let numerator = integer_abs
+            .parse::<i64>()
+            .map_err(|_| parse_error(line, "decimal rational value is malformed"))?
+            * denominator
+            + fractional
+                .parse::<i64>()
+                .map_err(|_| parse_error(line, "decimal rational value is malformed"))?;
+        return Rational::new(if negative { -numerator } else { numerator }, denominator)
+            .ok_or_else(|| parse_error(line, "decimal rational value is malformed"));
+    }
+    parse_decimal_integer(value, line).map(Rational::integer)
+}
+
+fn parse_decimal_integer(value: &str, line: &str) -> Result<i64, DiagnosticReport> {
+    if value.is_empty() || value == "+" || value == "-" {
+        return Err(parse_error(line, "integer value is malformed"));
+    }
+    value
+        .parse::<i64>()
+        .map_err(|_| parse_error(line, "integer value is malformed"))
 }
 
 fn parse_assignment_directive(
@@ -2794,12 +3040,14 @@ fn parse_layer_term(
         selector.alternatives
     } else {
         let value_sets = catalog_value_sets(catalog);
+        let axis_kinds = catalog.axis_kinds.clone();
         define_object_spec(
             term,
             layer,
             None,
             line,
             &value_sets,
+            &axis_kinds,
             &mut catalog.object_schemas,
             &mut catalog.object_names,
             &mut catalog.object_labels,
@@ -2819,7 +3067,7 @@ fn push_terms(objects: &mut Vec<ObjectId>, terms: &[ObjectId]) {
     }
 }
 
-fn parse_scratch_block(
+fn parse_mark_block(
     lines: &[String],
     start: usize,
     catalog: &mut Catalog,
@@ -2830,51 +3078,52 @@ fn parse_scratch_block(
         let tokens = split_header_tokens(line);
         match tokens.as_slice() {
             [name, "=", ty] => {
-                parse_scratch_directive(name, Some(*ty), line, catalog)?;
+                parse_mark_directive(name, Some(*ty), line, catalog)?;
                 i += 1;
             }
             [spec] => {
                 let (name, ty) = spec
                     .split_once('=')
                     .map_or((*spec, None), |(name, ty)| (name, Some(ty)));
-                parse_scratch_directive(name, ty, line, catalog)?;
+                parse_mark_directive(name, ty, line, catalog)?;
                 i += 1;
             }
             [] => i += 1,
             _ => {
                 return Err(parse_error(
                     line,
-                    "scratch row must be: <name> or <name> = <type>",
+                    "mark row must be: <name> or <name> = <type>",
                 ));
             }
         }
     }
     if i >= lines.len() {
-        return Err(parse_error(&lines[start], "scratch missing closing brace"));
+        return Err(parse_error(&lines[start], "mark missing closing brace"));
     }
     Ok(i + 1)
 }
 
-fn parse_scratch_directive(
+fn parse_mark_directive(
     name: &str,
     ty: Option<&str>,
     line: &str,
     catalog: &mut Catalog,
 ) -> Result<(), DiagnosticReport> {
     let (name, kind, values) = if let Some(ty) = ty {
-        validate_scratch_name(name, line)?;
+        validate_mark_name(name, line)?;
         if ty.is_empty() {
-            return Err(parse_error(line, "scratch type must not be empty"));
+            return Err(parse_error(line, "mark type must not be empty"));
         }
         match ty {
-            "int" => (name, ScratchKind::Int, Vec::new()),
-            "bool" => (name, ScratchKind::Bool, Vec::new()),
+            "int" => (name, MarkKind::Int, Vec::new()),
+            "bool" => (name, MarkKind::Bool, Vec::new()),
+            "flag" => (name, MarkKind::Flag, Vec::new()),
             axis if catalog.value_sets.contains_key(axis)
                 || catalog.object_axes.contains_key(axis) =>
             {
                 (
                     name,
-                    ScratchKind::Enum,
+                    MarkKind::Enum,
                     catalog
                         .value_sets
                         .get(axis)
@@ -2883,19 +3132,19 @@ fn parse_scratch_directive(
                         .unwrap_or_default(),
                 )
             }
-            _ => return Err(parse_error(line, "unknown scratch type")),
+            _ => return Err(parse_error(line, "unknown mark type")),
         }
     } else {
-        validate_scratch_name(name, line)?;
-        (name, ScratchKind::Bool, Vec::new())
+        validate_mark_name(name, line)?;
+        (name, MarkKind::Flag, Vec::new())
     };
-    if catalog.scratch_names.contains_key(name) {
-        return Err(parse_error(line, "duplicate scratch"));
+    if catalog.mark_names.contains_key(name) {
+        return Err(parse_error(line, "duplicate mark"));
     }
-    let id = ScratchId(catalog.scratch_defs.len() as u16);
-    let def = ScratchDef { id, kind, values };
-    catalog.scratch_defs.push(def.clone());
-    catalog.scratch_names.insert(name.to_string(), def);
+    let id = MarkId(catalog.mark_defs.len() as u16);
+    let def = MarkDef { id, kind, values };
+    catalog.mark_defs.push(def.clone());
+    catalog.mark_names.insert(name.to_string(), def);
     Ok(())
 }
 
@@ -3095,12 +3344,15 @@ fn resolve_or_declare_layer_selector(
         )?
         .alternatives
     } else {
+        let value_sets = catalog_value_sets(catalog);
+        let axis_kinds = catalog.axis_kinds.clone();
         define_object_spec(
             selector,
             UNASSIGNED_LAYER,
             None,
             line,
-            &catalog_value_sets(catalog),
+            &value_sets,
+            &axis_kinds,
             &mut catalog.object_schemas,
             &mut catalog.object_names,
             &mut catalog.object_labels,
@@ -7770,6 +8022,7 @@ fn define_object_spec(
     render_spec: Option<&str>,
     line: &str,
     value_sets: &HashMap<String, Vec<String>>,
+    axis_kinds: &HashMap<String, AxisKind>,
     object_schemas: &mut HashMap<String, ObjectSchema>,
     object_names: &mut HashMap<String, ObjectId>,
     object_labels: &mut HashMap<ObjectId, String>,
@@ -7819,6 +8072,7 @@ fn define_object_spec(
             Ok((*axis).to_string())
         })
         .collect::<Result<Vec<_>, DiagnosticReport>>()?;
+    let schema_axis_kinds = validate_object_schema_axes(&axes, axis_kinds, line)?;
     let value_combinations = expand_axis_values(&axes, value_sets, line)?;
     let render_chars_for_variants = render_spec
         .map(|render| render_chars_for_variants(render, value_combinations.len(), line))
@@ -7849,8 +8103,55 @@ fn define_object_spec(
         variants.push(ObjectVariant { values, object: id });
     }
 
-    object_schemas.insert(base.to_string(), ObjectSchema { axes, variants });
+    object_schemas.insert(
+        base.to_string(),
+        ObjectSchema {
+            axes,
+            axis_kinds: schema_axis_kinds,
+            variants,
+        },
+    );
     Ok(created)
+}
+
+fn validate_object_schema_axes(
+    axes: &[String],
+    axis_kinds: &HashMap<String, AxisKind>,
+    line: &str,
+) -> Result<Vec<Option<AxisKind>>, DiagnosticReport> {
+    let mut seen = Vec::<String>::new();
+    let mut has_rotation = false;
+    let mut has_translation = false;
+    let mut kinds = Vec::with_capacity(axes.len());
+    for axis in axes {
+        if seen.contains(axis) {
+            return Err(parse_error(
+                line,
+                "object schema cannot repeat the same tag slot",
+            ));
+        }
+        seen.push(axis.clone());
+        let kind = axis_kinds.get(axis).copied();
+        match kind {
+            Some(AxisKind::Rotation) if has_rotation => {
+                return Err(parse_error(
+                    line,
+                    "object schema can have at most one rotation axis",
+                ));
+            }
+            Some(AxisKind::Translation) if has_translation => {
+                return Err(parse_error(
+                    line,
+                    "object schema can have at most one translation axis",
+                ));
+            }
+            Some(AxisKind::Rotation) => has_rotation = true,
+            Some(AxisKind::Translation) => has_translation = true,
+            None => {}
+        }
+        kinds.push(kind);
+    }
+    Ok(kinds)
 }
 
 fn add_object_variant(
@@ -11464,24 +11765,33 @@ fn numeric_range_values(
     numeric_globals: &HashMap<String, i64>,
     line: &str,
 ) -> Result<Option<Vec<String>>, DiagnosticReport> {
-    let Some((start, end)) = source.split_once("...") else {
+    let (start, end, inclusive) = if let Some((start, end)) = source.split_once("..<") {
+        (start, end, false)
+    } else if let Some((start, end)) = source.split_once("...") {
+        (start, end, true)
+    } else {
         return Ok(None);
     };
-    if start.is_empty() || end.is_empty() || end.contains("...") {
+    if start.is_empty() || end.is_empty() || end.contains("...") || end.contains("..<") {
         return Err(parse_error(
             line,
-            "numeric range must be: <integer>...<integer>",
+            "numeric range must be: <integer>...<integer> or <integer>..<integer>",
         ));
     }
     let start = parse_numeric_range_endpoint(start, numeric_globals, line)?;
     let end = parse_numeric_range_endpoint(end, numeric_globals, line)?;
-    if start > end {
+    if start > end || (!inclusive && start == end) {
         return Err(parse_error(
             line,
-            "numeric range start must be less than or equal to end",
+            "numeric range start must be less than range end",
         ));
     }
-    Ok(Some((start..=end).map(|value| value.to_string()).collect()))
+    let values = if inclusive {
+        (start..=end).map(|value| value.to_string()).collect()
+    } else {
+        (start..end).map(|value| value.to_string()).collect()
+    };
+    Ok(Some(values))
 }
 
 fn parse_numeric_range_endpoint(

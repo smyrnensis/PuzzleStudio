@@ -25,7 +25,7 @@ enum HighlightKind {
     Input,
     State,
     Group,
-    Scratch,
+    Mark,
     Variant,
     Condition,
     Scene,
@@ -60,7 +60,7 @@ impl HighlightKind {
             HighlightKind::Input => "syntax-input",
             HighlightKind::State => "syntax-state",
             HighlightKind::Group => "syntax-group",
-            HighlightKind::Scratch => "syntax-scratch",
+            HighlightKind::Mark => "syntax-mark",
             HighlightKind::Variant => "syntax-variant",
             HighlightKind::Condition => "syntax-condition",
             HighlightKind::Scene => "syntax-scene",
@@ -615,7 +615,7 @@ fn symbol_collection_scope(scope: Option<SourceScope>) -> Option<SourceScope> {
             | SourceScope::Tags
             | SourceScope::Group
             | SourceScope::Layers
-            | SourceScope::Scratch
+            | SourceScope::Mark
             | SourceScope::Visuals
             | SourceScope::VisualShapeTable
             | SourceScope::Keys),
@@ -746,14 +746,14 @@ fn collect_line_symbols(
             collect_selector_spec(first, symbols);
             collect_selector_specs(selectors, symbols);
         }
-        [name, "=", ty] if scope == Some(SourceScope::Scratch) => {
-            collect_scratch_spec(name, Some(*ty), symbols)
+        [name, "=", ty] if scope == Some(SourceScope::Mark) => {
+            collect_mark_spec(name, Some(*ty), symbols)
         }
-        [spec] if scope == Some(SourceScope::Scratch) => {
+        [spec] if scope == Some(SourceScope::Mark) => {
             let (name, ty) = spec
                 .split_once('=')
                 .map_or((*spec, None), |(name, ty)| (name, Some(ty)));
-            collect_scratch_spec(name, ty, symbols);
+            collect_mark_spec(name, ty, symbols);
         }
         [..] if matches!(scope, Some(SourceScope::Keys | SourceScope::SceneKeys)) => {
             collect_key_binding_symbols(tokens, symbols)
@@ -917,22 +917,22 @@ fn clean_object_spec(spec: &str) -> &str {
     spec.split_once('{').map_or(spec, |(head, _)| head)
 }
 
-fn collect_scratch_spec(
+fn collect_mark_spec(
     name: &str,
     ty: Option<&str>,
     symbols: &mut HashMap<String, HighlightKind>,
 ) {
-    insert_scratch_symbol(symbols, name);
+    insert_mark_symbol(symbols, name);
     if let Some(ty) = ty.filter(|ty| !matches!(*ty, "bool" | "int")) {
         insert_source_symbol(symbols, ty, HighlightKind::Variant);
     }
 }
 
-fn insert_scratch_symbol(symbols: &mut HashMap<String, HighlightKind>, name: &str) {
+fn insert_mark_symbol(symbols: &mut HashMap<String, HighlightKind>, name: &str) {
     if is_source_symbol_name(name) {
-        insert_source_symbol(symbols, name, HighlightKind::Scratch);
-    } else if is_source_scratch_qualified_identifier(name) && !parser_literal(name) {
-        symbols.insert(name.to_string(), HighlightKind::Scratch);
+        insert_source_symbol(symbols, name, HighlightKind::Mark);
+    } else if is_source_mark_qualified_identifier(name) && !parser_literal(name) {
+        symbols.insert(name.to_string(), HighlightKind::Mark);
     }
 }
 
@@ -986,7 +986,7 @@ fn symbol_priority(kind: HighlightKind) -> u8 {
         HighlightKind::Object => 6,
         HighlightKind::Group => 5,
         HighlightKind::State
-        | HighlightKind::Scratch
+        | HighlightKind::Mark
         | HighlightKind::Input
         | HighlightKind::Effect
         | HighlightKind::Emission
@@ -1014,12 +1014,12 @@ fn is_source_identifier(name: &str) -> bool {
         && chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
 }
 
-fn is_source_scratch_qualified_identifier(name: &str) -> bool {
+fn is_source_mark_qualified_identifier(name: &str) -> bool {
     let mut parts = name.split(':');
     let Some(first) = parts.next() else {
         return false;
     };
-    is_source_identifier(first) && parts.all(is_source_scratch_value_atom)
+    is_source_identifier(first) && parts.all(is_source_mark_value_atom)
 }
 
 fn is_source_value_atom(name: &str) -> bool {
@@ -1029,7 +1029,7 @@ fn is_source_value_atom(name: &str) -> bool {
             .all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
 }
 
-fn is_source_scratch_value_atom(name: &str) -> bool {
+fn is_source_mark_value_atom(name: &str) -> bool {
     is_source_value_atom(name) || matches!(name, ">" | "<" | "^" | "v")
 }
 
@@ -1139,7 +1139,7 @@ fn line_head_keyword(
         Some(SourceScope::Tags) => matches!(keyword, "for"),
         Some(SourceScope::Group) => matches!(keyword, "for"),
         Some(SourceScope::Layers) => matches!(keyword, "each" | "for"),
-        Some(SourceScope::Scratch) => matches!(keyword, "var" | "const"),
+        Some(SourceScope::Mark) => matches!(keyword, "var" | "const"),
         Some(SourceScope::Keys | SourceScope::SceneKeys) => {
             matches!(keyword, "input" | "direction")
         }
@@ -1253,16 +1253,16 @@ fn push_word(
     semantic_ranges: &[SemanticToken],
     keyword_ranges: &HashSet<(usize, usize)>,
 ) {
-    let qualified_scratch = matches!(symbols.get(token), Some(HighlightKind::Scratch));
-    if qualified_scratch && !token.contains(':') {
-        push_span(out, HighlightKind::Scratch, token);
+    let qualified_mark = matches!(symbols.get(token), Some(HighlightKind::Mark));
+    if qualified_mark && !token.contains(':') {
+        push_span(out, HighlightKind::Mark, token);
         return;
     }
 
     let parts = split_highlight_word(token);
     let supplied_axes = token.matches(':').count();
     let use_schema_selector_coloring =
-        token.contains(':') && !token.contains('.') && !qualified_scratch;
+        token.contains(':') && !token.contains('.') && !qualified_mark;
     let schema_selector_head = parts.first().map(|part| &token[part.start..part.end]);
 
     for (index, part) in parts.iter().enumerate() {
@@ -1282,8 +1282,8 @@ fn push_word(
         let contextual_keyword = keyword_ranges.contains(&(absolute_start, absolute_end));
         let kind = if part.separator_before == Some("#") {
             Some(HighlightKind::Binding)
-        } else if qualified_scratch {
-            qualified_scratch_part_kind(index, text, symbol_kind, family_axis_names)
+        } else if qualified_mark {
+            qualified_mark_part_kind(index, text, symbol_kind, family_axis_names)
         } else if semantic_kind == Some(HighlightKind::Scene)
             && symbol_kind == Some(HighlightKind::State)
         {
@@ -1346,19 +1346,19 @@ fn push_word(
     }
 }
 
-fn qualified_scratch_part_kind(
+fn qualified_mark_part_kind(
     index: usize,
     text: &str,
     symbol_kind: Option<HighlightKind>,
     family_axis_names: &HashSet<String>,
 ) -> Option<HighlightKind> {
     if index == 0 {
-        return Some(HighlightKind::Scratch);
+        return Some(HighlightKind::Mark);
     }
     if family_axis_names.contains(text) || symbol_kind == Some(HighlightKind::Group) {
         return Some(HighlightKind::Group);
     }
-    if symbol_kind == Some(HighlightKind::Variant) || is_source_scratch_value_atom(text) {
+    if symbol_kind == Some(HighlightKind::Variant) || is_source_mark_value_atom(text) {
         return Some(HighlightKind::Variant);
     }
     symbol_kind
@@ -2471,9 +2471,9 @@ fn push_operator_run(
                 push_span(out, HighlightKind::Operator, &source[plain_start..index]);
             }
             let display_kind = if kind != HighlightKind::InvalidBrace
-                && is_inline_selector_scratch_brace(source, index, ch)
+                && is_inline_selector_mark_brace(source, index, ch)
             {
-                HighlightKind::Scratch
+                HighlightKind::Mark
             } else {
                 kind
             };
@@ -2499,24 +2499,24 @@ fn push_operator_run(
     }
 }
 
-fn is_inline_selector_scratch_brace(source: &str, index: usize, brace: char) -> bool {
+fn is_inline_selector_mark_brace(source: &str, index: usize, brace: char) -> bool {
     match brace {
         '{' => {
-            is_inline_selector_scratch_open(source, index)
-                && inline_selector_scratch_close(source, index).is_some()
+            is_inline_selector_mark_open(source, index)
+                && inline_selector_mark_close(source, index).is_some()
         }
-        '}' => matching_inline_selector_scratch_open(source, index).is_some(),
+        '}' => matching_inline_selector_mark_open(source, index).is_some(),
         _ => false,
     }
 }
 
-fn is_inline_selector_scratch_open(source: &str, index: usize) -> bool {
+fn is_inline_selector_mark_open(source: &str, index: usize) -> bool {
     let before = source[..index].chars().next_back();
     let after = source[index + 1..].chars().next();
     before.is_some_and(is_selector_token_char) && after.is_some_and(|ch| !ch.is_whitespace())
 }
 
-fn inline_selector_scratch_close(source: &str, open: usize) -> Option<usize> {
+fn inline_selector_mark_close(source: &str, open: usize) -> Option<usize> {
     let line_end = source[open + 1..]
         .find('\n')
         .map(|offset| open + 1 + offset)
@@ -2532,7 +2532,7 @@ fn inline_selector_scratch_close(source: &str, open: usize) -> Option<usize> {
     None
 }
 
-fn matching_inline_selector_scratch_open(source: &str, close: usize) -> Option<usize> {
+fn matching_inline_selector_mark_open(source: &str, close: usize) -> Option<usize> {
     let line_start = source[..close]
         .rfind('\n')
         .map(|index| index + 1)
@@ -2540,7 +2540,7 @@ fn matching_inline_selector_scratch_open(source: &str, close: usize) -> Option<u
     for (offset, ch) in source[line_start..close].char_indices().rev() {
         let index = line_start + offset;
         match ch {
-            '{' if is_inline_selector_scratch_open(source, index) => return Some(index),
+            '{' if is_inline_selector_mark_open(source, index) => return Some(index),
             '[' | ']' | '|' | ';' | ',' | '(' | ')' | '}' => return None,
             _ => {}
         }
@@ -2877,7 +2877,7 @@ puzzle board {
 tags {
 gate_no = 1...5
 }
-scratch {
+marks {
 checked
 }
 var locked_room_count = 3
@@ -3069,7 +3069,7 @@ layers {
 group active = Player Box:blue
 var moves = 0
 persistent var best = 0
-scratch {
+marks {
 mark
 shade = color
 steps = int
@@ -3092,8 +3092,8 @@ PB
         assert!(highlighted.html.contains("syntax-group\">active"));
         assert!(highlighted.html.contains("syntax-state\">moves"));
         assert!(highlighted.html.contains("syntax-state\">best"));
-        assert!(highlighted.html.contains("syntax-scratch\">mark"));
-        assert!(highlighted.html.contains("syntax-scratch\">shade"));
+        assert!(highlighted.html.contains("syntax-mark\">mark"));
+        assert!(highlighted.html.contains("syntax-mark\">shade"));
         assert!(highlighted.html.contains("syntax-group\">color"));
         assert!(highlighted.html.contains("syntax-object\">red"));
     }
@@ -3480,10 +3480,10 @@ level start {
         assert!(highlighted.html.contains("syntax-literal\">^"));
         assert!(highlighted.html.contains("syntax-literal\">v"));
         assert!(
-            highlighted.html.contains("syntax-object\">Player</span><span class=\"syntax-scratch\">{</span><span class=\"syntax-literal\">&gt;</span><span class=\"syntax-scratch\">}")
+            highlighted.html.contains("syntax-object\">Player</span><span class=\"syntax-mark\">{</span><span class=\"syntax-literal\">&gt;</span><span class=\"syntax-mark\">}")
         );
         assert!(
-            highlighted.html.contains("syntax-object\">Player</span><span class=\"syntax-scratch\">{</span><span class=\"syntax-literal\">&lt;</span><span class=\"syntax-scratch\">}")
+            highlighted.html.contains("syntax-object\">Player</span><span class=\"syntax-mark\">{</span><span class=\"syntax-literal\">&lt;</span><span class=\"syntax-mark\">}")
         );
         assert!(
             !highlighted
@@ -5281,10 +5281,10 @@ level start {
     }
 
     #[test]
-    fn flag_can_be_used_as_a_scratch_name_without_literal_color() {
+    fn flag_can_be_used_as_a_mark_name_without_literal_color() {
         let highlighted = highlight_source(
             r#"
-title flag_scratch_highlight
+title flag_mark_highlight
 
 puzzle board {
 layers 2
@@ -5292,7 +5292,7 @@ legend . = empty
 layers {
 __legacy_layer_0 = Player
 }
-scratch {
+marks {
 flag
 }
 rules {
@@ -5305,22 +5305,22 @@ level start {
 "#,
         );
 
-        assert!(highlighted.html.contains("syntax-scratch\">flag</span>"));
+        assert!(highlighted.html.contains("syntax-mark\">flag</span>"));
         assert!(!highlighted.html.contains("syntax-literal\">flag</span>"));
         assert!(!highlighted.html.contains("syntax-keyword\">flag</span>"));
     }
 
     #[test]
-    fn highlights_selector_scratch_braces_apart_from_block_braces() {
+    fn highlights_selector_mark_braces_apart_from_block_braces() {
         let highlighted = highlight_source(
             r#"
-title scratch_brace_highlight
+title mark_brace_highlight
 
 puzzle board {
 layers {
 actor = Player
 }
-scratch {
+marks {
 mark
 }
 rules {
@@ -5334,20 +5334,20 @@ level start {
         );
 
         assert!(highlighted.html.contains(
-            "syntax-object\">Player</span><span class=\"syntax-scratch\">{</span><span class=\"syntax-scratch\">}</span>"
+            "syntax-object\">Player</span><span class=\"syntax-mark\">{</span><span class=\"syntax-mark\">}</span>"
         ));
         assert!(highlighted.html.contains(
-            "syntax-object\">Player</span><span class=\"syntax-scratch\">{</span><span class=\"syntax-scratch\">mark</span><span class=\"syntax-scratch\">}</span>"
+            "syntax-object\">Player</span><span class=\"syntax-mark\">{</span><span class=\"syntax-mark\">mark</span><span class=\"syntax-mark\">}</span>"
         ));
         assert!(highlighted.html.contains("syntax-brace-depth-0\">{</span>"));
         assert!(highlighted.html.contains("syntax-brace-depth-1\">{</span>"));
     }
 
     #[test]
-    fn qualified_scratch_names_highlight_tag_parts_with_tag_colors() {
+    fn qualified_mark_names_highlight_tag_parts_with_tag_colors() {
         let highlighted = highlight_source(
             r#"
-title qualified_scratch_highlight
+title qualified_mark_highlight
 
 puzzle board {
 tags {
@@ -5358,7 +5358,7 @@ legend . = empty
 layers {
 __legacy_layer_0 = Player
 }
-scratch {
+marks {
 enter:directions = bool
 paint:red
 push:>
@@ -5375,21 +5375,21 @@ level start {
         );
 
         assert!(highlighted.html.contains(
-            "syntax-scratch\">enter</span><span class=\"syntax-operator\">:</span><span class=\"syntax-group\">directions</span>"
+            "syntax-mark\">enter</span><span class=\"syntax-operator\">:</span><span class=\"syntax-group\">directions</span>"
         ));
         assert!(highlighted.html.contains(
-            "syntax-scratch\">paint</span><span class=\"syntax-operator\">:</span><span class=\"syntax-variant\">red</span>"
+            "syntax-mark\">paint</span><span class=\"syntax-operator\">:</span><span class=\"syntax-variant\">red</span>"
         ));
         assert!(highlighted.html.contains(
-            "syntax-scratch\">push</span><span class=\"syntax-operator\">:</span><span class=\"syntax-variant\">&gt;</span>"
+            "syntax-mark\">push</span><span class=\"syntax-operator\">:</span><span class=\"syntax-variant\">&gt;</span>"
         ));
         assert!(highlighted.html.contains(
-            "syntax-scratch\">count</span><span class=\"syntax-operator\">:</span><span class=\"syntax-variant\">3</span>"
+            "syntax-mark\">count</span><span class=\"syntax-operator\">:</span><span class=\"syntax-variant\">3</span>"
         ));
         assert!(
             !highlighted
                 .html
-                .contains("syntax-scratch\">enter:directions</span>")
+                .contains("syntax-mark\">enter:directions</span>")
         );
     }
 

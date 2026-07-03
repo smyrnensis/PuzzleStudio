@@ -5,9 +5,9 @@ use crate::{
     DirectionSet3, FrameOrientation3, FrameSlot3, Game3, InputDef3, InputId3, LayerId, Level3,
     LevelBundle3, LevelCell3, LevelEntry3, Lifecycle3, LifecycleCommand3, LineMatchCellTemplate3,
     LineOrientation3, LinePatternTemplate3, LineRuleTemplate3, LineWriteOpTemplate3,
-    LocalWriteOpTemplate3, MatchCell3, ObjectDef3, ObjectFamily3, ObjectId, ObjectSelector3,
-    ObjectSetMatcher3, ObjectVariant3, Offset3, Pattern3, Rule3, RuleEffect3, ScratchId3,
-    SelectorCatalog3, SelectorGroup3, SelectorScratch3, SelectorTag3, Size3, Sprite3, SpriteColor3,
+    LocalWriteOpTemplate3, MarkId3, MatchCell3, ObjectDef3, ObjectFamily3, ObjectId,
+    ObjectSelector3, ObjectSetMatcher3, ObjectVariant3, Offset3, Pattern3, Rule3, RuleEffect3,
+    SelectorCatalog3, SelectorGroup3, SelectorMark3, SelectorTag3, Size3, Sprite3, SpriteColor3,
     SpriteSet3, SpriteVoxels3, VariantAxis3, WinCondition3, WriteOp3, lower_dense_rule_template,
     lower_line_rule_template,
 };
@@ -2191,12 +2191,12 @@ fn standard_move_rules3(game: &Game3) -> Vec<Rule3> {
                 layer,
                 objects: objects.clone(),
             });
-            cell.require_object_set_scratch
-                .push(crate::ObjectSetScratchPattern3 {
+            cell.require_object_set_mark
+                .push(crate::ObjectSetMarkPattern3 {
                     binding,
-                    scratch: ScratchId3(puzzle_authoring::ANONYMOUS_MOVEMENT_SCRATCH_INDEX),
+                    mark: MarkId3(puzzle_authoring::ANONYMOUS_MOVEMENT_MARK_INDEX),
                     value: Some(direction_index as i64),
-                    match_value: puzzle_kernel::ScratchValueMatch::Exact,
+                    match_value: puzzle_kernel::MarkValueMatch::Exact,
                 });
             let mut destination = MatchCell3::new(direction.offset);
             for layer_object in &objects {
@@ -2211,13 +2211,13 @@ fn standard_move_rules3(game: &Game3) -> Vec<Rule3> {
                         to_offset: direction.offset,
                         binding,
                     },
-                    WriteOp3::RemoveObjectSetScratch {
+                    WriteOp3::RemoveObjectSetMark {
                         component: 0,
                         offset: direction.offset,
                         binding,
-                        scratch: ScratchId3(puzzle_authoring::ANONYMOUS_MOVEMENT_SCRATCH_INDEX),
+                        mark: MarkId3(puzzle_authoring::ANONYMOUS_MOVEMENT_MARK_INDEX),
                         value: None,
-                        match_value: puzzle_kernel::ScratchValueMatch::Any,
+                        match_value: puzzle_kernel::MarkValueMatch::Any,
                     },
                 ],
             ));
@@ -2596,7 +2596,7 @@ fn lower_line_rewrite(
         return Err("line rewrite sides must contain the same number of ... gaps".to_string());
     }
     let mut rules = Vec::new();
-    for (before, after) in expand_line_movement_scratch_sets3(&before, &after) {
+    for (before, after) in expand_line_movement_mark_sets3(&before, &after) {
         let writes = infer_line_writes_from_patterns(&before, &after);
         for gaps in line_gap_assignments(before.gap_count, line_gap_limit) {
             let rule = LineRuleTemplate3::once(
@@ -2625,7 +2625,7 @@ fn lower_input_line_rewrite(
         return Err("line rewrite sides must contain the same number of ... gaps".to_string());
     }
     let mut rules = Vec::new();
-    for (before, after) in expand_line_movement_scratch_sets3(&before, &after) {
+    for (before, after) in expand_line_movement_mark_sets3(&before, &after) {
         let writes = infer_line_writes_from_patterns(&before, &after);
         for gaps in line_gap_assignments(before.gap_count, line_gap_limit) {
             for direction in directions_for_line_orientation(orientation.clone()) {
@@ -2655,47 +2655,47 @@ fn directions_for_line_orientation(orientation: LineOrientation3) -> Vec<Directi
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct ScratchSetBinding3 {
+struct MarkSetBinding3 {
     key: String,
     values: &'static [&'static str],
 }
 
-fn expand_line_movement_scratch_sets3(
+fn expand_line_movement_mark_sets3(
     before: &LinePatternWithGaps3,
     after: &LinePatternWithGaps3,
 ) -> Vec<(LinePatternWithGaps3, LinePatternWithGaps3)> {
-    let mut bindings = Vec::<ScratchSetBinding3>::new();
-    collect_line_movement_scratch_set_bindings3(before, &mut bindings);
-    collect_line_movement_scratch_set_bindings3(after, &mut bindings);
-    dedup_line_scratch_set_bindings3(&mut bindings);
+    let mut bindings = Vec::<MarkSetBinding3>::new();
+    collect_line_movement_mark_set_bindings3(before, &mut bindings);
+    collect_line_movement_mark_set_bindings3(after, &mut bindings);
+    dedup_line_mark_set_bindings3(&mut bindings);
 
     if bindings.is_empty() {
         return vec![(before.clone(), after.clone())];
     }
 
     let mut assignments = Vec::<HashMap<String, String>>::new();
-    expand_line_scratch_set_assignments3(&bindings, 0, &mut HashMap::new(), &mut assignments);
+    expand_line_mark_set_assignments3(&bindings, 0, &mut HashMap::new(), &mut assignments);
     assignments
         .into_iter()
         .map(|assignment| {
             (
-                apply_line_movement_scratch_set_assignment3(before, &assignment),
-                apply_line_movement_scratch_set_assignment3(after, &assignment),
+                apply_line_movement_mark_set_assignment3(before, &assignment),
+                apply_line_movement_mark_set_assignment3(after, &assignment),
             )
         })
         .collect()
 }
 
-fn collect_line_movement_scratch_set_bindings3(
+fn collect_line_movement_mark_set_bindings3(
     pattern: &LinePatternWithGaps3,
-    bindings: &mut Vec<ScratchSetBinding3>,
+    bindings: &mut Vec<MarkSetBinding3>,
 ) {
     let mut selector_counts = HashMap::<String, usize>::new();
     for (cell_index, cell) in pattern.cells.iter().enumerate() {
         for selector in &cell.require {
             let ordinal = *selector_counts.get(&selector.token()).unwrap_or(&0);
             selector_counts.insert(selector.token(), ordinal + 1);
-            collect_selector_scratch_set_bindings3(
+            collect_selector_mark_set_bindings3(
                 selector,
                 &format!("cell:{cell_index}:require:{}:{ordinal}", selector.token()),
                 bindings,
@@ -2704,7 +2704,7 @@ fn collect_line_movement_scratch_set_bindings3(
         for selector in &cell.forbid {
             let ordinal = *selector_counts.get(&selector.token()).unwrap_or(&0);
             selector_counts.insert(selector.token(), ordinal + 1);
-            collect_selector_scratch_set_bindings3(
+            collect_selector_mark_set_bindings3(
                 selector,
                 &format!("cell:{cell_index}:forbid:{}:{ordinal}", selector.token()),
                 bindings,
@@ -2713,26 +2713,26 @@ fn collect_line_movement_scratch_set_bindings3(
     }
 }
 
-fn collect_selector_scratch_set_bindings3(
+fn collect_selector_mark_set_bindings3(
     selector: &ObjectSelector3,
     anchor: &str,
-    bindings: &mut Vec<ScratchSetBinding3>,
+    bindings: &mut Vec<MarkSetBinding3>,
 ) {
     match selector {
         ObjectSelector3::Labeled { selector, .. } => {
-            collect_selector_scratch_set_bindings3(selector, anchor, bindings);
+            collect_selector_mark_set_bindings3(selector, anchor, bindings);
         }
-        ObjectSelector3::WithScratch { selector, scratch } => {
-            collect_selector_scratch_set_bindings3(selector, anchor, bindings);
-            for (scratch_index, scratch) in scratch.iter().enumerate() {
-                let Some(value) = scratch.value.as_deref() else {
+        ObjectSelector3::WithMark { selector, mark } => {
+            collect_selector_mark_set_bindings3(selector, anchor, bindings);
+            for (mark_index, mark) in mark.iter().enumerate() {
+                let Some(value) = mark.value.as_deref() else {
                     continue;
                 };
-                let Some(values) = line_movement_scratch_set_values3(value) else {
+                let Some(values) = line_movement_mark_set_values3(value) else {
                     continue;
                 };
-                bindings.push(ScratchSetBinding3 {
-                    key: format!("{anchor}:scratch:{scratch_index}:{value}"),
+                bindings.push(MarkSetBinding3 {
+                    key: format!("{anchor}:mark:{mark_index}:{value}"),
                     values,
                 });
             }
@@ -2743,12 +2743,12 @@ fn collect_selector_scratch_set_bindings3(
     }
 }
 
-fn dedup_line_scratch_set_bindings3(bindings: &mut Vec<ScratchSetBinding3>) {
+fn dedup_line_mark_set_bindings3(bindings: &mut Vec<MarkSetBinding3>) {
     let mut deduped = Vec::with_capacity(bindings.len());
     for binding in bindings.drain(..) {
         if !deduped
             .iter()
-            .any(|existing: &ScratchSetBinding3| existing.key == binding.key)
+            .any(|existing: &MarkSetBinding3| existing.key == binding.key)
         {
             deduped.push(binding);
         }
@@ -2756,8 +2756,8 @@ fn dedup_line_scratch_set_bindings3(bindings: &mut Vec<ScratchSetBinding3>) {
     *bindings = deduped;
 }
 
-fn expand_line_scratch_set_assignments3(
-    bindings: &[ScratchSetBinding3],
+fn expand_line_mark_set_assignments3(
+    bindings: &[MarkSetBinding3],
     index: usize,
     current: &mut HashMap<String, String>,
     out: &mut Vec<HashMap<String, String>>,
@@ -2769,12 +2769,12 @@ fn expand_line_scratch_set_assignments3(
     let binding = &bindings[index];
     for value in binding.values {
         current.insert(binding.key.clone(), (*value).to_string());
-        expand_line_scratch_set_assignments3(bindings, index + 1, current, out);
+        expand_line_mark_set_assignments3(bindings, index + 1, current, out);
     }
     current.remove(&binding.key);
 }
 
-fn apply_line_movement_scratch_set_assignment3(
+fn apply_line_movement_mark_set_assignment3(
     pattern: &LinePatternWithGaps3,
     assignment: &HashMap<String, String>,
 ) -> LinePatternWithGaps3 {
@@ -2785,7 +2785,7 @@ fn apply_line_movement_scratch_set_assignment3(
             let token = selector.token();
             let ordinal = *selector_counts.get(&token).unwrap_or(&0);
             selector_counts.insert(token.clone(), ordinal + 1);
-            apply_selector_scratch_set_assignment3(
+            apply_selector_mark_set_assignment3(
                 selector,
                 &format!("cell:{cell_index}:require:{token}:{ordinal}"),
                 assignment,
@@ -2795,7 +2795,7 @@ fn apply_line_movement_scratch_set_assignment3(
             let token = selector.token();
             let ordinal = *selector_counts.get(&token).unwrap_or(&0);
             selector_counts.insert(token.clone(), ordinal + 1);
-            apply_selector_scratch_set_assignment3(
+            apply_selector_mark_set_assignment3(
                 selector,
                 &format!("cell:{cell_index}:forbid:{token}:{ordinal}"),
                 assignment,
@@ -2805,27 +2805,27 @@ fn apply_line_movement_scratch_set_assignment3(
     pattern
 }
 
-fn apply_selector_scratch_set_assignment3(
+fn apply_selector_mark_set_assignment3(
     selector: &mut ObjectSelector3,
     anchor: &str,
     assignment: &HashMap<String, String>,
 ) {
     match selector {
         ObjectSelector3::Labeled { selector, .. } => {
-            apply_selector_scratch_set_assignment3(selector, anchor, assignment);
+            apply_selector_mark_set_assignment3(selector, anchor, assignment);
         }
-        ObjectSelector3::WithScratch { selector, scratch } => {
-            apply_selector_scratch_set_assignment3(selector, anchor, assignment);
-            for (scratch_index, scratch) in scratch.iter_mut().enumerate() {
-                let Some(value) = scratch.value.as_deref() else {
+        ObjectSelector3::WithMark { selector, mark } => {
+            apply_selector_mark_set_assignment3(selector, anchor, assignment);
+            for (mark_index, mark) in mark.iter_mut().enumerate() {
+                let Some(value) = mark.value.as_deref() else {
                     continue;
                 };
-                if line_movement_scratch_set_values3(value).is_none() {
+                if line_movement_mark_set_values3(value).is_none() {
                     continue;
                 }
-                let key = format!("{anchor}:scratch:{scratch_index}:{value}");
+                let key = format!("{anchor}:mark:{mark_index}:{value}");
                 if let Some(concrete) = assignment.get(&key) {
-                    scratch.value = Some(concrete.clone());
+                    mark.value = Some(concrete.clone());
                 }
             }
         }
@@ -2835,9 +2835,9 @@ fn apply_selector_scratch_set_assignment3(
     }
 }
 
-fn line_movement_scratch_set_values3(value: &str) -> Option<&'static [&'static str]> {
+fn line_movement_mark_set_values3(value: &str) -> Option<&'static [&'static str]> {
     match value {
-        "horizontal" | "vertical" => puzzle_authoring::movement_scratch_set_values(value, 3),
+        "horizontal" | "vertical" => puzzle_authoring::movement_mark_set_values(value, 3),
         _ => None,
     }
 }
@@ -2936,10 +2936,10 @@ enum LineWriteWithGapStep3 {
         to: LineStepExpr3,
         object: ObjectSelector3,
     },
-    SetScratch {
+    SetMark {
         at: LineStepExpr3,
         object: ObjectSelector3,
-        scratch: SelectorScratch3,
+        mark: SelectorMark3,
     },
 }
 
@@ -2949,7 +2949,7 @@ fn infer_line_writes_from_patterns(
 ) -> Vec<LineWriteWithGapStep3> {
     let before = positive_line_cells_from_pattern(before);
     let after = positive_line_cells_from_pattern(after);
-    let after_for_scratch = after.clone();
+    let after_for_mark = after.clone();
     let mut writes = Vec::new();
     let mut used_after = vec![false; after.len()];
     for (from, object) in &before {
@@ -2982,12 +2982,12 @@ fn infer_line_writes_from_patterns(
             writes.push(LineWriteWithGapStep3::Add { to, object });
         }
     }
-    for (at, object) in after_for_scratch {
-        for scratch in object.scratch() {
-            writes.push(LineWriteWithGapStep3::SetScratch {
+    for (at, object) in after_for_mark {
+        for mark in object.mark() {
+            writes.push(LineWriteWithGapStep3::SetMark {
                 at: at.clone(),
                 object: object.clone(),
-                scratch: scratch.clone(),
+                mark: mark.clone(),
             });
         }
     }
@@ -3026,15 +3026,13 @@ fn materialize_line_writes(
                 to_step: to.materialize(gaps)?,
                 object: object.clone(),
             }),
-            LineWriteWithGapStep3::SetScratch {
-                at,
-                object,
-                scratch,
-            } => Ok(LineWriteOpTemplate3::SetScratch {
-                step: at.materialize(gaps)?,
-                object: object.clone(),
-                scratch: scratch.clone(),
-            }),
+            LineWriteWithGapStep3::SetMark { at, object, mark } => {
+                Ok(LineWriteOpTemplate3::SetMark {
+                    step: at.materialize(gaps)?,
+                    object: object.clone(),
+                    mark: mark.clone(),
+                })
+            }
         })
         .collect()
 }
@@ -3116,9 +3114,13 @@ fn parse_cell(cell: &str, catalog: &SelectorCatalog3) -> Result<ParsedCell3, Par
     let mut forbid = Vec::new();
     let tokens = puzzle_authoring::split_cell_tokens(cell).map_err(|error| match error {
         puzzle_authoring::CellTokenError::UnmatchedCloseBrace => {
-            message("scratch block has unmatched }")
+            message("mark block has unmatched }")
         }
-        puzzle_authoring::CellTokenError::MissingCloseBrace => message("scratch block missing }"),
+        puzzle_authoring::CellTokenError::MissingCloseBrace => message("mark block missing }"),
+        puzzle_authoring::CellTokenError::UnmatchedCloseParen => {
+            message("cell selector has unmatched )")
+        }
+        puzzle_authoring::CellTokenError::MissingCloseParen => message("cell selector missing )"),
     })?;
     let mut index = 0;
     while index < tokens.len() {
@@ -3132,17 +3134,17 @@ fn parse_cell(cell: &str, catalog: &SelectorCatalog3) -> Result<ParsedCell3, Par
                 &catalog.groups,
             )?);
             index += 2;
-        } else if puzzle_authoring::scratch_sugar_kind(&tokens[index]).is_some() {
+        } else if puzzle_authoring::mark_sugar_kind(&tokens[index]).is_some() {
             let selector = tokens
                 .get(index + 1)
-                .ok_or_else(|| message("scratch sugar must be followed by a selector"))?;
-            if selector == "no" || puzzle_authoring::scratch_sugar_kind(selector).is_some() {
-                return Err(message("scratch sugar must be followed by a selector"));
+                .ok_or_else(|| message("mark sugar must be followed by a selector"))?;
+            if selector == "no" || puzzle_authoring::mark_sugar_kind(selector).is_some() {
+                return Err(message("mark sugar must be followed by a selector"));
             }
             let selector = parse_selector(selector, &catalog.families, &catalog.groups)?;
-            require.push(ObjectSelector3::with_scratch(
+            require.push(ObjectSelector3::with_mark(
                 selector,
-                vec![anonymous_selector_scratch(&tokens[index], false)],
+                vec![anonymous_selector_mark(&tokens[index], false)],
             ));
             index += 2;
         } else {
@@ -3265,7 +3267,7 @@ fn parse_selector(
     families: &[ObjectFamily3],
     groups: &[SelectorGroup3],
 ) -> Result<ObjectSelector3, ParseError3> {
-    let (selector, scratch) = split_selector_scratch3(token)?;
+    let (selector, mark) = split_selector_mark3(token)?;
     let (selector, occurrence_label) = split_selector_occurrence_label3(selector)?;
     let parts = selector.split(':').collect::<Vec<_>>();
     let parsed = if parts.len() > 1 {
@@ -3298,24 +3300,24 @@ fn parse_selector(
         Some(label) => ObjectSelector3::labeled(format!("{selector}#{label}"), parsed),
         None => parsed,
     };
-    Ok(ObjectSelector3::with_scratch(parsed, scratch))
+    Ok(ObjectSelector3::with_mark(parsed, mark))
 }
 
-fn split_selector_scratch3(selector: &str) -> Result<(&str, Vec<SelectorScratch3>), ParseError3> {
+fn split_selector_mark3(selector: &str) -> Result<(&str, Vec<SelectorMark3>), ParseError3> {
     let Some(open_index) = selector.find('{') else {
         return Ok((selector, Vec::new()));
     };
     let base = &selector[..open_index];
     let attrs = selector[open_index + 1..]
         .strip_suffix('}')
-        .ok_or_else(|| message("scratch selector must end with }"))?;
+        .ok_or_else(|| message("mark selector must end with }"))?;
     if base.is_empty() {
-        return Err(message("scratch selector must attach to an object"));
+        return Err(message("mark selector must attach to an object"));
     }
-    Ok((base, parse_selector_scratch3(attrs)?))
+    Ok((base, parse_selector_mark3(attrs)?))
 }
 
-fn parse_selector_scratch3(attrs: &str) -> Result<Vec<SelectorScratch3>, ParseError3> {
+fn parse_selector_mark3(attrs: &str) -> Result<Vec<SelectorMark3>, ParseError3> {
     let mut parsed = Vec::new();
     let tokens = attrs.split_whitespace().collect::<Vec<_>>();
     let mut index = 0;
@@ -3323,7 +3325,7 @@ fn parse_selector_scratch3(attrs: &str) -> Result<Vec<SelectorScratch3>, ParseEr
         let (negated, spec) = if tokens[index] == "no" {
             let spec = tokens
                 .get(index + 1)
-                .ok_or_else(|| message("no must be followed by a scratch"))?;
+                .ok_or_else(|| message("no must be followed by a mark"))?;
             index += 2;
             (true, *spec)
         } else {
@@ -3331,17 +3333,17 @@ fn parse_selector_scratch3(attrs: &str) -> Result<Vec<SelectorScratch3>, ParseEr
             index += 1;
             (false, spec)
         };
-        if puzzle_authoring::scratch_sugar_kind(spec).is_some() {
-            parsed.push(anonymous_selector_scratch(spec, negated));
+        if puzzle_authoring::mark_sugar_kind(spec).is_some() {
+            parsed.push(anonymous_selector_mark(spec, negated));
             continue;
         }
         let (name, value) = spec
             .split_once('=')
             .map_or((spec, None), |(name, value)| (name, Some(value)));
         if !puzzle_authoring::is_identifier(name) {
-            return Err(message("scratch name must start with an identifier"));
+            return Err(message("mark name must start with an identifier"));
         }
-        parsed.push(SelectorScratch3 {
+        parsed.push(SelectorMark3 {
             name: name.to_string(),
             value: value.map(str::to_string),
             negated,
@@ -3350,8 +3352,8 @@ fn parse_selector_scratch3(attrs: &str) -> Result<Vec<SelectorScratch3>, ParseEr
     Ok(parsed)
 }
 
-fn anonymous_selector_scratch(value: &str, negated: bool) -> SelectorScratch3 {
-    SelectorScratch3 {
+fn anonymous_selector_mark(value: &str, negated: bool) -> SelectorMark3 {
+    SelectorMark3 {
         name: String::new(),
         value: Some(value.to_string()),
         negated,

@@ -606,14 +606,14 @@ fn push_transition_patches(out: &mut String, patches: &[Patch]) {
                     out.push(',');
                     push_json_number(out, "objectId", object.0 as u64);
                 }
-                PatchOp::RemoveScratch {
+                PatchOp::RemoveMark {
                     x,
                     y,
                     object,
-                    scratch,
+                    mark,
                     ..
                 } => {
-                    push_json_pair(out, "kind", "remove_scratch");
+                    push_json_pair(out, "kind", "remove_mark");
                     out.push(',');
                     push_json_number(out, "x", *x as u64);
                     out.push(',');
@@ -621,7 +621,7 @@ fn push_transition_patches(out: &mut String, patches: &[Patch]) {
                     out.push(',');
                     push_json_number(out, "objectId", object.0 as u64);
                     out.push(',');
-                    push_json_number(out, "scratch", scratch.0 as u64);
+                    push_json_number(out, "mark", mark.0 as u64);
                 }
                 PatchOp::Add { x, y, object } => {
                     push_json_pair(out, "kind", "add");
@@ -652,14 +652,14 @@ fn push_transition_patches(out: &mut String, patches: &[Patch]) {
                     out.push(',');
                     push_json_number(out, "add", add.0 as u64);
                 }
-                PatchOp::SetScratch {
+                PatchOp::SetMark {
                     x,
                     y,
                     object,
-                    scratch,
+                    mark,
                     ..
                 } => {
-                    push_json_pair(out, "kind", "set_scratch");
+                    push_json_pair(out, "kind", "set_mark");
                     out.push(',');
                     push_json_number(out, "x", *x as u64);
                     out.push(',');
@@ -667,7 +667,7 @@ fn push_transition_patches(out: &mut String, patches: &[Patch]) {
                     out.push(',');
                     push_json_number(out, "objectId", object.0 as u64);
                     out.push(',');
-                    push_json_number(out, "scratch", scratch.0 as u64);
+                    push_json_number(out, "mark", mark.0 as u64);
                 }
                 PatchOp::UpdateGlobal { global, .. } => {
                     push_json_pair(out, "kind", "update_global");
@@ -1132,10 +1132,10 @@ fn decode_match_cell(value: &serde_json::Value) -> Result<MatchCell, AppError> {
         require_objects: decode_object_ids(required_json_value(object, "requireObjects")?)?,
         require_object_sets: Vec::new(),
         forbid_objects: decode_object_ids(required_json_value(object, "forbidObjects")?)?,
-        require_scratch: decode_scratch_patterns(required_json_value(object, "requireScratch")?)?,
-        require_object_set_scratch: Vec::new(),
-        forbid_scratch: decode_scratch_patterns(required_json_value(object, "forbidScratch")?)?,
-        forbid_object_set_scratch: Vec::new(),
+        require_mark: decode_mark_patterns(required_json_value(object, "requireMark")?)?,
+        require_object_set_mark: Vec::new(),
+        forbid_mark: decode_mark_patterns(required_json_value(object, "forbidMark")?)?,
+        forbid_object_set_mark: Vec::new(),
     })
 }
 
@@ -1164,36 +1164,36 @@ fn decode_object_ids(value: &serde_json::Value) -> Result<Vec<ObjectId>, AppErro
 }
 
 #[cfg(feature = "solver")]
-fn decode_scratch_patterns(value: &serde_json::Value) -> Result<Vec<ScratchPattern>, AppError> {
+fn decode_mark_patterns(value: &serde_json::Value) -> Result<Vec<MarkPattern>, AppError> {
     value
         .as_array()
-        .ok_or_else(|| AppError::Config("scratch patterns must be an array".to_string()))?
+        .ok_or_else(|| AppError::Config("mark patterns must be an array".to_string()))?
         .iter()
         .map(|value| {
-            let object = json_object(value, "scratch pattern")?;
-            Ok(ScratchPattern {
+            let object = json_object(value, "mark pattern")?;
+            Ok(MarkPattern {
                 object: ObjectId(json_u16_value(
                     required_json_value(object, "object")?,
-                    "scratch object",
+                    "mark object",
                 )?),
-                scratch: ScratchId(json_u16_value(
-                    required_json_value(object, "scratch")?,
-                    "scratch id",
+                mark: MarkId(json_u16_value(
+                    required_json_value(object, "mark")?,
+                    "mark id",
                 )?),
                 value: object
                     .get("value")
                     .map(|value| {
                         value.as_i64().ok_or_else(|| {
-                            AppError::Config("scratch value must be an integer".to_string())
+                            AppError::Config("mark value must be an integer".to_string())
                         })
                     })
                     .transpose()?,
                 match_value: match required_json_string(object, "match")? {
-                    "any" => ScratchValueMatch::Any,
-                    "exact" => ScratchValueMatch::Exact,
+                    "any" => MarkValueMatch::Any,
+                    "exact" => MarkValueMatch::Exact,
                     other => {
                         return Err(AppError::Config(format!(
-                            "unsupported scratch match {other:?}"
+                            "unsupported mark match {other:?}"
                         )));
                     }
                 },

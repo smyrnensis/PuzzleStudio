@@ -31,7 +31,7 @@ pub enum CompletionKind {
     Object,
     Group,
     State,
-    Scratch,
+    Mark,
     ValueSet,
     Variant,
     Direction,
@@ -62,7 +62,7 @@ impl CompletionKind {
             CompletionKind::Object => "object",
             CompletionKind::Group => "group",
             CompletionKind::State => "state",
-            CompletionKind::Scratch => "scratch",
+            CompletionKind::Mark => "mark",
             CompletionKind::ValueSet => "tags",
             CompletionKind::Variant => "tag",
             CompletionKind::Direction => "direction",
@@ -173,7 +173,7 @@ struct CompletionSymbols {
     objects: BTreeSet<String>,
     groups: BTreeSet<String>,
     states: BTreeSet<String>,
-    scratches: BTreeSet<String>,
+    markes: BTreeSet<String>,
     value_set_names: BTreeSet<String>,
     object_name_atoms: BTreeSet<String>,
     directions: BTreeSet<String>,
@@ -381,15 +381,15 @@ fn collect_line_symbols(
             collect_selector_specs(selectors, symbols);
         }
         [..] if scope == Some(SourceScope::Layers) => collect_layer_row_symbols(tokens, symbols),
-        [name, "=", ty] if scope == Some(SourceScope::Scratch) => {
-            collect_scratch_spec(name, Some(*ty), symbols)
+        [name, "=", ty] if scope == Some(SourceScope::Mark) => {
+            collect_mark_spec(name, Some(*ty), symbols)
         }
-        [spec] if scope == Some(SourceScope::Scratch) => {
+        [spec] if scope == Some(SourceScope::Mark) => {
             let cleaned = clean_spec(spec);
             let (name, ty) = cleaned
                 .split_once('=')
                 .map_or((cleaned, None), |(name, ty)| (name, Some(ty)));
-            collect_scratch_spec(name, ty, symbols);
+            collect_mark_spec(name, ty, symbols);
         }
         [..] if scope == Some(SourceScope::Keys) => collect_keys(tokens, symbols),
         _ => {}
@@ -471,8 +471,8 @@ fn collect_object_spec(spec: &str, symbols: &mut CompletionSymbols) {
     }
 }
 
-fn collect_scratch_spec(name: &str, ty: Option<&str>, symbols: &mut CompletionSymbols) {
-    insert_identifier(&mut symbols.scratches, name);
+fn collect_mark_spec(name: &str, ty: Option<&str>, symbols: &mut CompletionSymbols) {
+    insert_identifier(&mut symbols.markes, name);
     if let Some(ty) = ty.filter(|ty| !matches!(*ty, "bool" | "int")) {
         insert_identifier(&mut symbols.object_name_atoms, ty);
     }
@@ -614,12 +614,9 @@ fn add_slot_items(
         SemanticCompletionSlot::States => {
             add_named_items(items, symbols.states.iter(), CompletionKind::State, "state")
         }
-        SemanticCompletionSlot::Scratches => add_named_items(
-            items,
-            symbols.scratches.iter(),
-            CompletionKind::Scratch,
-            "scratch",
-        ),
+        SemanticCompletionSlot::Markes => {
+            add_named_items(items, symbols.markes.iter(), CompletionKind::Mark, "mark")
+        }
         SemanticCompletionSlot::ObjectNameAtoms => add_named_items(
             items,
             symbols.object_name_atoms.iter(),
@@ -779,7 +776,7 @@ fn remove_current_token_symbols(symbols: &mut CompletionSymbols, token: &str) {
     symbols.objects.remove(name);
     symbols.groups.remove(name);
     symbols.states.remove(name);
-    symbols.scratches.remove(name);
+    symbols.markes.remove(name);
     symbols.value_set_names.remove(name);
     symbols.object_name_atoms.remove(name);
     symbols.directions.remove(name);
@@ -809,7 +806,7 @@ fn keyword_insert_text(keyword: &str) -> &str {
     match keyword {
         "layers"
         | "groups"
-        | "scratch"
+        | "marks"
         | "legend"
         | "rules"
         | "levels"
@@ -958,7 +955,7 @@ B = Pl
 }
 }
 "#;
-        let empty_legend_cursor = source.find("A = ").unwrap() + "A = ".len();
+        let empty_legend_cursor = source.find("A =").unwrap() + "A =".len();
         let empty_legend_list = suggest_source_completions(source, empty_legend_cursor);
         assert!(
             empty_legend_list
@@ -988,7 +985,7 @@ B = Pl
                 .any(|item| item.label == "Player" && item.kind == CompletionKind::Object)
         );
 
-        let group_cursor = source.find("Movers = ").unwrap() + "Movers = ".len();
+        let group_cursor = source.find("Movers =").unwrap() + "Movers =".len();
         let group_list = suggest_source_completions(source, group_cursor);
         assert!(
             group_list
@@ -1371,15 +1368,15 @@ once hori [
             })
         );
 
-        let scratch_cursor = source.find("Player{hori").unwrap() + "Player{hori".len();
-        let scratch_list = suggest_source_completions(source, scratch_cursor);
+        let mark_cursor = source.find("Player{hori").unwrap() + "Player{hori".len();
+        let mark_list = suggest_source_completions(source, mark_cursor);
         assert!(
-            scratch_list.items.iter().any(|item| {
+            mark_list.items.iter().any(|item| {
                 item.label == "horizontal" && item.kind == CompletionKind::Direction
             })
         );
         assert!(
-            !scratch_list.items.iter().any(|item| {
+            !mark_list.items.iter().any(|item| {
                 item.label == "horizontal" && item.kind == CompletionKind::ValueSet
             })
         );

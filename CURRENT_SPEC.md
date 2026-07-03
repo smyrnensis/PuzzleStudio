@@ -281,7 +281,7 @@ OrientationExpr::Neutral
 
 `directions` / `horizontal` / `vertical` は orientation set prefix として使える。runtime で式評価するのではなく、lowering でそれぞれの方向 variants に展開する。`horizontal [ ... ]` は `left [ ... ]` と `right [ ... ]`、`directions [ ... ]` は `up` / `down` / `left` / `right` の rewrite として読む。
 
-`input horizontal [ ... ]` / `input directions [ ... ]` は input guard 付きの orientation set。通常の入力方向移動では、この形で builtin movement scratch を付け、標準 `move` routine で実際の移動と collision を処理する。これは lowering 上、現在の input が set の member だったときだけその member の oriented rewrite を評価する。
+`input horizontal [ ... ]` / `input directions [ ... ]` は input guard 付きの orientation set。通常の入力方向移動では、この形で builtin movement mark を付け、標準 `move` routine で実際の移動と collision を処理する。これは lowering 上、現在の input が set の member だったときだけその member の oriented rewrite を評価する。
 
 prefix なしの単独セル pattern は neutral として扱い、offset を方向回転しない。
 
@@ -293,7 +293,7 @@ pattern cell の `null` は盤面外セル要求であり、object selector で�
 `no X` は盤面内 cell に `X` がないことを要求し、`null` はその pattern cell 自体が
 盤面外であることを要求する。`null` cell は他 token と混在できず、`no null` は
 invalid。rewrite では `null` は match 側の検知専用であり、対応する RHS cell へ
-object や scratch を書けない。
+object や mark を書けない。
 
 ```txt
 [ A | ] -> [ | A ]
@@ -685,11 +685,11 @@ set count += 1
 [ Player Trap ] -> [ Player Trap Flash ] cancel
 ```
 
-`cancel` が match した場合、その transition 全体は開始 state に戻って正常終了する。発火した rule は trace に残せるが、board / scratch / var の変更は残らない。
+`cancel` が match した場合、その transition 全体は開始 state に戻って正常終了する。発火した rule は trace に残せるが、board / mark / var の変更は残らない。
 
-`scratch { ... }` で宣言した一時 fact は transition-local。値付き scratch は `count = int` / `intent = directions` のように宣言し、`Box{count=3}` のように書く。`bool` scratch だけは presence / absence として `Box{flag}` / `Box{no flag}` と書ける。`{mark}` は cell-anchored、`Box{mark}` は occurrence-anchored。どちらも rule chain 内では match / write できるが、transition / lifecycle block 終了時に自動消去され、solver key / level state / renderer には残らない。
+`marks { ... }` で宣言した一時 fact は transition-local。値付き mark は `count = int` / `intent = directions` のように宣言し、`Box{count=3}` のように書く。`bool` mark だけは presence / absence として `Box{flag}` / `Box{no flag}` と書ける。`{mark}` は cell-anchored、`Box{mark}` は occurrence-anchored。どちらも rule chain 内では match / write できるが、transition / lifecycle block 終了時に自動消去され、solver key / level state / renderer には残らない。
 
-`Box{mark}` と `Box {mark}` は別の anchor を指す。同じ scratch 名の anchor 変換や同じ cell pattern 内での同居は valid だが warning になる。`>` / `<` / `^` / `v` sugar は builtin occurrence scratch `__move` へ lower される。`parallel` / `perpendicular` は movement scratch の相対方向 set sugar で、oriented lowering 時にそれぞれ `<` / `>`、`^` / `v` alternatives へ展開される。
+`Box{mark}` と `Box {mark}` は別の anchor を指す。同じ mark 名の anchor 変換や同じ cell pattern 内での同居は valid だが warning になる。`>` / `<` / `^` / `v` sugar は builtin occurrence mark `__move` へ lower される。`parallel` / `perpendicular` は movement mark の相対方向 set sugar で、oriented lowering 時にそれぞれ `<` / `>`、`^` / `v` alternatives へ展開される。
 
 ## Condition
 
@@ -932,7 +932,7 @@ cargo = Box Crate
 
 これは `Box Box` / `Box Crate` / `Crate Box` / `Crate Crate` の variants に展開される。
 
-右辺で occurrence order とは別の対応を明示したい場合、selector に `#<label>` を付ける。`#` 以降は selector 名ではなく rewrite-local な occurrence label で、selector 解決は `#` より前だけに対して行う。scratch も付ける場合は `<selector>#<label>{scratch...}` の順で書く。
+右辺で occurrence order とは別の対応を明示したい場合、selector に `#<label>` を付ける。`#` 以降は selector 名ではなく rewrite-local な occurrence label で、selector 解決は `#` より前だけに対して行う。mark も付ける場合は `<selector>#<label>{mark...}` の順で書く。
 
 ```txt
 [ cargo#1 | cargo#2 ] -> [ cargo#2 | cargo#1 ]

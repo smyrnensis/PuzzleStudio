@@ -35,7 +35,7 @@ pub use selector::{
     LineRuleTemplate3, LineWriteOpTemplate3, LocalWriteOpTemplate3, MatchCellTemplate3,
     ObjectFamily3, ObjectSelector3, ObjectVariant3, PatternLoweringError3, PatternTemplate3,
     ResolvedSelector3, RuleLoweringError3, RuleTemplate3, SelectorCatalog3, SelectorCatalogError3,
-    SelectorError3, SelectorGroup3, SelectorScratch3, SelectorTag3, SelectorTransform3,
+    SelectorError3, SelectorGroup3, SelectorMark3, SelectorTag3, SelectorTransform3,
     VariantAxis3, VariantValueSet3, WriteOpTemplate3, lower_dense_pattern, lower_dense_pattern_set,
     lower_dense_pattern_set_to_patterns, lower_dense_pattern_to_patterns,
     lower_dense_rule_template, lower_line_rule_template, lower_pattern_template,
@@ -693,7 +693,7 @@ horizontal [ Player | no solid ] -> [ | Player ]
         assert_eq!(resolved.token, "Player");
         assert_eq!(resolved.alternatives, vec![PLAYER]);
         assert_eq!(resolved.transform, None);
-        assert_eq!(resolved.scratch, Vec::<SelectorScratch3>::new());
+        assert_eq!(resolved.mark, Vec::<SelectorMark3>::new());
     }
 
     #[test]
@@ -706,7 +706,7 @@ horizontal [ Player | no solid ] -> [ | Player ]
                 token: "solid".to_string(),
                 alternatives: vec![PLAYER, BOX, WALL],
                 transform: None,
-                scratch: Vec::new(),
+                mark: Vec::new(),
             }
         );
     }

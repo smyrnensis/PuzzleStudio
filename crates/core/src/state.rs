@@ -1,7 +1,7 @@
 use crate::compiled_game::{CompiledGame, GlobalUpdateOp};
-use crate::ids::{GlobalId, LayerId, ObjectId, RuleId, ScratchId};
+use crate::ids::{GlobalId, LayerId, MarkId, ObjectId, RuleId};
 use puzzle_kernel::{
-    GlobalValueError, GridCoord, GridShape, ObjectCellMask, ScratchSpace, VisibleGlobals, fnv_mix,
+    GlobalValueError, GridCoord, GridShape, MarkSpace, ObjectCellMask, VisibleGlobals, fnv_mix,
 };
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::BTreeMap;
@@ -12,7 +12,7 @@ pub struct State {
     pub height: u16,
     pub layer_count: u16,
     slots: Vec<ObjectId>,
-    scratch: ScratchSpace<ScratchId>,
+    mark: MarkSpace<MarkId>,
     visible_globals: VisibleGlobals<GlobalId>,
     level_fired_rules: Vec<RuleId>,
     #[serde(skip)]
@@ -21,21 +21,21 @@ pub struct State {
     hash: u64,
 }
 
-pub type SlotScratch = puzzle_kernel::ScratchValue<ScratchId>;
-pub type SlotScratchIter<'a> = puzzle_kernel::ScratchIter<'a, ScratchId>;
+pub type SlotMark = puzzle_kernel::MarkValue<MarkId>;
+pub type SlotMarkIter<'a> = puzzle_kernel::MarkIter<'a, MarkId>;
 
 #[derive(Clone, Debug, Default)]
 struct DerivedCache {
     object_counts: Vec<u32>,
     object_positions: Vec<Vec<usize>>,
     cell_object_masks: Vec<ObjectCellMask>,
-    scratch_positions: BTreeMap<ScratchPositionKey, Vec<usize>>,
+    mark_positions: BTreeMap<MarkPositionKey, Vec<usize>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-struct ScratchPositionKey {
+struct MarkPositionKey {
     object: ObjectId,
-    scratch: ScratchId,
+    mark: MarkId,
     value: Option<i64>,
 }
 
@@ -50,7 +50,7 @@ impl<'de> Deserialize<'de> for State {
             height: u16,
             layer_count: u16,
             slots: Vec<ObjectId>,
-            scratch: ScratchSpace<ScratchId>,
+            mark: MarkSpace<MarkId>,
             visible_globals: VisibleGlobals<GlobalId>,
             level_fired_rules: Vec<RuleId>,
         }
@@ -61,7 +61,7 @@ impl<'de> Deserialize<'de> for State {
             height: data.height,
             layer_count: data.layer_count,
             slots: data.slots,
-            scratch: data.scratch,
+            mark: data.mark,
             visible_globals: data.visible_globals,
             level_fired_rules: data.level_fired_rules,
             derived_cache: DerivedCache::default(),
@@ -139,14 +139,14 @@ impl State {
             height,
             layer_count,
             slots: vec![ObjectId::EMPTY; slot_count],
-            scratch: ScratchSpace::new(cell_count, slot_count),
+            mark: MarkSpace::new(cell_count, slot_count),
             visible_globals: VisibleGlobals::new(visible_globals),
             level_fired_rules: Vec::new(),
             derived_cache: DerivedCache {
                 object_counts: vec![0; object_count + 1],
                 object_positions: vec![Vec::new(); object_count + 1],
                 cell_object_masks: vec![ObjectCellMask::default(); cell_count],
-                scratch_positions: BTreeMap::new(),
+                mark_positions: BTreeMap::new(),
             },
             hash: 0,
         };
@@ -164,22 +164,22 @@ impl State {
         &self.slots
     }
 
-    pub fn slot_scratch(&self) -> Vec<Vec<SlotScratch>> {
-        self.scratch.slot_values()
+    pub fn slot_mark(&self) -> Vec<Vec<SlotMark>> {
+        self.mark.slot_values()
     }
 
-    pub fn cell_scratch(&self) -> Vec<Vec<SlotScratch>> {
-        self.scratch.cell_values()
-    }
-
-    #[inline]
-    pub fn cell_scratch_at(&self, index: usize) -> SlotScratchIter<'_> {
-        self.scratch.cell_at(index)
+    pub fn cell_mark(&self) -> Vec<Vec<SlotMark>> {
+        self.mark.cell_values()
     }
 
     #[inline]
-    pub fn slot_scratch_at(&self, index: usize) -> SlotScratchIter<'_> {
-        self.scratch.slot_at(index)
+    pub fn cell_mark_at(&self, index: usize) -> SlotMarkIter<'_> {
+        self.mark.cell_at(index)
+    }
+
+    #[inline]
+    pub fn slot_mark_at(&self, index: usize) -> SlotMarkIter<'_> {
+        self.mark.slot_at(index)
     }
 
     #[inline]
@@ -224,7 +224,7 @@ impl State {
                 continue;
             }
             next.set_slot_index_unchecked(index, ObjectId::EMPTY);
-            next.scratch.clear_slot(index);
+            next.mark.clear_slot(index);
         }
         next.recompute_hash();
         next
@@ -297,19 +297,14 @@ impl State {
     }
 
     #[inline]
-    pub fn scratch_positions(
-        &self,
-        object: ObjectId,
-        scratch: ScratchId,
-        value: Option<i64>,
-    ) -> &[usize] {
-        let key = ScratchPositionKey {
+    pub fn mark_positions(&self, object: ObjectId, mark: MarkId, value: Option<i64>) -> &[usize] {
+        let key = MarkPositionKey {
             object,
-            scratch,
+            mark,
             value,
         };
         self.derived_cache
-            .scratch_positions
+            .mark_positions
             .get(&key)
             .map(Vec::as_slice)
             .unwrap_or(&[])
@@ -348,17 +343,17 @@ impl State {
         self.derived_cache.cell_object_masks[index].contains_raw(object.0)
     }
 
-    pub fn has_scratch(
+    pub fn has_mark(
         &self,
         game: &CompiledGame,
         x: u16,
         y: u16,
         object: ObjectId,
-        scratch: ScratchId,
+        mark: MarkId,
         value: Option<i64>,
     ) -> bool {
         if object.is_empty() {
-            return self.has_cell_scratch(x, y, scratch, value);
+            return self.has_cell_mark(x, y, mark, value);
         }
         let Some(layer) = game.object_layer(object) else {
             return false;
@@ -366,19 +361,19 @@ impl State {
         let Ok(index) = self.slot_index(x, y, layer) else {
             return false;
         };
-        self.slots[index] == object && self.scratch.has_slot(index, scratch, value)
+        self.slots[index] == object && self.mark.has_slot(index, mark, value)
     }
 
-    pub fn has_scratch_key(
+    pub fn has_mark_key(
         &self,
         game: &CompiledGame,
         x: u16,
         y: u16,
         object: ObjectId,
-        scratch: ScratchId,
+        mark: MarkId,
     ) -> bool {
         if object.is_empty() {
-            return self.has_cell_scratch_key(x, y, scratch);
+            return self.has_cell_mark_key(x, y, mark);
         }
         let Some(layer) = game.object_layer(object) else {
             return false;
@@ -386,21 +381,21 @@ impl State {
         let Ok(index) = self.slot_index(x, y, layer) else {
             return false;
         };
-        self.slots[index] == object && self.scratch.has_slot_key(index, scratch)
+        self.slots[index] == object && self.mark.has_slot_key(index, mark)
     }
 
-    pub fn has_cell_scratch(&self, x: u16, y: u16, scratch: ScratchId, value: Option<i64>) -> bool {
+    pub fn has_cell_mark(&self, x: u16, y: u16, mark: MarkId, value: Option<i64>) -> bool {
         let Ok(index) = self.cell_index(x, y) else {
             return false;
         };
-        self.scratch.has_cell(index, scratch, value)
+        self.mark.has_cell(index, mark, value)
     }
 
-    pub fn has_cell_scratch_key(&self, x: u16, y: u16, scratch: ScratchId) -> bool {
+    pub fn has_cell_mark_key(&self, x: u16, y: u16, mark: MarkId) -> bool {
         let Ok(index) = self.cell_index(x, y) else {
             return false;
         };
-        self.scratch.has_cell_key(index, scratch)
+        self.mark.has_cell_key(index, mark)
     }
 
     pub fn place_object(
@@ -426,8 +421,8 @@ impl State {
         }
 
         self.set_slot_index_unchecked(index, object);
-        self.clear_slot_scratch_positions(index, existing);
-        self.scratch.clear_slot(index);
+        self.clear_slot_mark_positions(index, existing);
+        self.mark.clear_slot(index);
         self.recompute_hash();
         Ok(())
     }
@@ -436,8 +431,8 @@ impl State {
         let index = self.slot_index_unchecked(x, y, layer);
         let existing = self.slots[index];
         if object.is_empty() {
-            self.clear_slot_scratch_positions(index, existing);
-            self.scratch.clear_slot(index);
+            self.clear_slot_mark_positions(index, existing);
+            self.mark.clear_slot(index);
         }
         self.set_slot_index_unchecked(index, object);
     }
@@ -447,12 +442,12 @@ impl State {
         x: u16,
         y: u16,
         layer: LayerId,
-    ) -> Vec<SlotScratch> {
+    ) -> Vec<SlotMark> {
         let index = self.slot_index_unchecked(x, y, layer);
         let object = self.slots[index];
-        self.clear_slot_scratch_positions(index, object);
+        self.clear_slot_mark_positions(index, object);
         self.set_slot_index_unchecked(index, ObjectId::EMPTY);
-        self.scratch.take_slot(index)
+        self.mark.take_slot(index)
     }
 
     pub(crate) fn place_moved_slot_unchecked(
@@ -461,76 +456,76 @@ impl State {
         y: u16,
         layer: LayerId,
         object: ObjectId,
-        scratch: Vec<SlotScratch>,
+        mark: Vec<SlotMark>,
     ) {
         let index = self.slot_index_unchecked(x, y, layer);
         let existing = self.slots[index];
-        self.clear_slot_scratch_positions(index, existing);
+        self.clear_slot_mark_positions(index, existing);
         self.set_slot_index_unchecked(index, object);
-        self.scratch.replace_slot(index, scratch);
-        self.add_slot_scratch_positions(index, object);
+        self.mark.replace_slot(index, mark);
+        self.add_slot_mark_positions(index, object);
     }
 
-    pub(crate) fn set_scratch_unchecked(
+    pub(crate) fn set_mark_unchecked(
         &mut self,
         x: u16,
         y: u16,
         layer: LayerId,
-        scratch: ScratchId,
+        mark: MarkId,
         value: Option<i64>,
     ) {
         let index = self.slot_index_unchecked(x, y, layer);
         let object = self.slots[index];
-        self.remove_slot_scratch_key_positions(index, object, scratch);
-        self.scratch.set_slot(index, scratch, value);
-        self.add_scratch_position(object, scratch, value, index);
+        self.remove_slot_mark_key_positions(index, object, mark);
+        self.mark.set_slot(index, mark, value);
+        self.add_mark_position(object, mark, value, index);
     }
 
-    pub(crate) fn set_cell_scratch_unchecked(
+    pub(crate) fn set_cell_mark_unchecked(
         &mut self,
         x: u16,
         y: u16,
-        scratch: ScratchId,
+        mark: MarkId,
         value: Option<i64>,
     ) {
         let index = self.cell_index_unchecked(x, y);
-        self.remove_cell_scratch_key_positions(index, scratch);
-        self.scratch.set_cell(index, scratch, value);
-        self.add_scratch_position(ObjectId::EMPTY, scratch, value, index);
+        self.remove_cell_mark_key_positions(index, mark);
+        self.mark.set_cell(index, mark, value);
+        self.add_mark_position(ObjectId::EMPTY, mark, value, index);
     }
 
-    pub(crate) fn remove_scratch_unchecked(
+    pub(crate) fn remove_mark_unchecked(
         &mut self,
         x: u16,
         y: u16,
         layer: LayerId,
-        scratch: ScratchId,
+        mark: MarkId,
         value: Option<i64>,
     ) {
         let index = self.slot_index_unchecked(x, y, layer);
         let object = self.slots[index];
-        self.remove_matching_slot_scratch_positions(index, object, scratch, value);
-        self.scratch.remove_slot(index, scratch, value);
+        self.remove_matching_slot_mark_positions(index, object, mark, value);
+        self.mark.remove_slot(index, mark, value);
     }
 
-    pub(crate) fn remove_cell_scratch_unchecked(
+    pub(crate) fn remove_cell_mark_unchecked(
         &mut self,
         x: u16,
         y: u16,
-        scratch: ScratchId,
+        mark: MarkId,
         value: Option<i64>,
     ) {
         let index = self.cell_index_unchecked(x, y);
-        self.remove_matching_cell_scratch_positions(index, scratch, value);
-        self.scratch.remove_cell(index, scratch, value);
+        self.remove_matching_cell_mark_positions(index, mark, value);
+        self.mark.remove_cell(index, mark, value);
     }
 
-    pub(crate) fn clear_scratch(&mut self) {
-        if self.scratch.is_empty() {
+    pub(crate) fn clear_mark(&mut self) {
+        if self.mark.is_empty() {
             return;
         }
-        self.scratch.clear_all();
-        self.derived_cache.scratch_positions.clear();
+        self.mark.clear_all();
+        self.derived_cache.mark_positions.clear();
         self.recompute_hash();
     }
 
@@ -573,7 +568,7 @@ impl State {
             object_counts: vec![0; object_count + 1],
             object_positions: vec![Vec::new(); object_count + 1],
             cell_object_masks: vec![ObjectCellMask::default(); cell_count],
-            scratch_positions: BTreeMap::new(),
+            mark_positions: BTreeMap::new(),
         };
         let mut index = 0;
         while index < self.slots.len() {
@@ -582,13 +577,13 @@ impl State {
             if !object.is_empty() {
                 self.set_cell_object_mask(index, object);
             }
-            self.add_slot_scratch_positions(index, object);
+            self.add_slot_mark_positions(index, object);
             index += 1;
         }
         for cell_index in 0..cell_count {
-            let entries = self.cell_scratch_at(cell_index).collect::<Vec<_>>();
+            let entries = self.cell_mark_at(cell_index).collect::<Vec<_>>();
             for entry in entries {
-                self.add_scratch_position(ObjectId::EMPTY, entry.scratch, entry.value, cell_index);
+                self.add_mark_position(ObjectId::EMPTY, entry.mark, entry.value, cell_index);
             }
         }
     }
@@ -620,120 +615,115 @@ impl State {
         self.derived_cache.cell_object_masks[cell_index].remove_raw(object.0);
     }
 
-    fn add_slot_scratch_positions(&mut self, index: usize, object: ObjectId) {
+    fn add_slot_mark_positions(&mut self, index: usize, object: ObjectId) {
         if object.is_empty() {
             return;
         }
-        let scratch = self.slot_scratch_at(index).collect::<Vec<_>>();
-        for entry in scratch {
-            self.add_scratch_position(object, entry.scratch, entry.value, index);
+        let mark = self.slot_mark_at(index).collect::<Vec<_>>();
+        for entry in mark {
+            self.add_mark_position(object, entry.mark, entry.value, index);
         }
     }
 
-    fn clear_slot_scratch_positions(&mut self, index: usize, object: ObjectId) {
+    fn clear_slot_mark_positions(&mut self, index: usize, object: ObjectId) {
         if object.is_empty() {
             return;
         }
-        let scratch = self.slot_scratch_at(index).collect::<Vec<_>>();
-        for entry in scratch {
-            self.remove_scratch_position(object, entry.scratch, entry.value, index);
+        let mark = self.slot_mark_at(index).collect::<Vec<_>>();
+        for entry in mark {
+            self.remove_mark_position(object, entry.mark, entry.value, index);
         }
     }
 
-    fn remove_slot_scratch_key_positions(
-        &mut self,
-        index: usize,
-        object: ObjectId,
-        scratch: ScratchId,
-    ) {
+    fn remove_slot_mark_key_positions(&mut self, index: usize, object: ObjectId, mark: MarkId) {
         if object.is_empty() {
             return;
         }
-        let scratch_entries = self.slot_scratch_at(index).collect::<Vec<_>>();
-        for entry in scratch_entries {
-            if entry.scratch == scratch {
-                self.remove_scratch_position(object, entry.scratch, entry.value, index);
+        let mark_entries = self.slot_mark_at(index).collect::<Vec<_>>();
+        for entry in mark_entries {
+            if entry.mark == mark {
+                self.remove_mark_position(object, entry.mark, entry.value, index);
             }
         }
     }
 
-    fn remove_matching_slot_scratch_positions(
+    fn remove_matching_slot_mark_positions(
         &mut self,
         index: usize,
         object: ObjectId,
-        scratch: ScratchId,
+        mark: MarkId,
         value: Option<i64>,
     ) {
         if object.is_empty() {
             return;
         }
-        let scratch_entries = self.slot_scratch_at(index).collect::<Vec<_>>();
-        for entry in scratch_entries {
-            if entry.scratch == scratch && (value.is_none() || entry.value == value) {
-                self.remove_scratch_position(object, entry.scratch, entry.value, index);
+        let mark_entries = self.slot_mark_at(index).collect::<Vec<_>>();
+        for entry in mark_entries {
+            if entry.mark == mark && (value.is_none() || entry.value == value) {
+                self.remove_mark_position(object, entry.mark, entry.value, index);
             }
         }
     }
 
-    fn remove_cell_scratch_key_positions(&mut self, index: usize, scratch: ScratchId) {
-        let scratch_entries = self.cell_scratch_at(index).collect::<Vec<_>>();
-        for entry in scratch_entries {
-            if entry.scratch == scratch {
-                self.remove_scratch_position(ObjectId::EMPTY, entry.scratch, entry.value, index);
+    fn remove_cell_mark_key_positions(&mut self, index: usize, mark: MarkId) {
+        let mark_entries = self.cell_mark_at(index).collect::<Vec<_>>();
+        for entry in mark_entries {
+            if entry.mark == mark {
+                self.remove_mark_position(ObjectId::EMPTY, entry.mark, entry.value, index);
             }
         }
     }
 
-    fn remove_matching_cell_scratch_positions(
+    fn remove_matching_cell_mark_positions(
         &mut self,
         index: usize,
-        scratch: ScratchId,
+        mark: MarkId,
         value: Option<i64>,
     ) {
-        let scratch_entries = self.cell_scratch_at(index).collect::<Vec<_>>();
-        for entry in scratch_entries {
-            if entry.scratch == scratch && (value.is_none() || entry.value == value) {
-                self.remove_scratch_position(ObjectId::EMPTY, entry.scratch, entry.value, index);
+        let mark_entries = self.cell_mark_at(index).collect::<Vec<_>>();
+        for entry in mark_entries {
+            if entry.mark == mark && (value.is_none() || entry.value == value) {
+                self.remove_mark_position(ObjectId::EMPTY, entry.mark, entry.value, index);
             }
         }
     }
 
-    fn add_scratch_position(
+    fn add_mark_position(
         &mut self,
         object: ObjectId,
-        scratch: ScratchId,
+        mark: MarkId,
         value: Option<i64>,
         index: usize,
     ) {
-        let key = ScratchPositionKey {
+        let key = MarkPositionKey {
             object,
-            scratch,
+            mark,
             value,
         };
-        let positions = self.derived_cache.scratch_positions.entry(key).or_default();
+        let positions = self.derived_cache.mark_positions.entry(key).or_default();
         if !positions.contains(&index) {
             positions.push(index);
         }
     }
 
-    fn remove_scratch_position(
+    fn remove_mark_position(
         &mut self,
         object: ObjectId,
-        scratch: ScratchId,
+        mark: MarkId,
         value: Option<i64>,
         index: usize,
     ) {
-        let key = ScratchPositionKey {
+        let key = MarkPositionKey {
             object,
-            scratch,
+            mark,
             value,
         };
-        if let Some(positions) = self.derived_cache.scratch_positions.get_mut(&key) {
+        if let Some(positions) = self.derived_cache.mark_positions.get_mut(&key) {
             if let Some(position_index) = positions.iter().position(|position| *position == index) {
                 positions.swap_remove(position_index);
             }
             if positions.is_empty() {
-                self.derived_cache.scratch_positions.remove(&key);
+                self.derived_cache.mark_positions.remove(&key);
             }
         }
     }
@@ -746,7 +736,7 @@ impl State {
         for object in &self.slots {
             hash = fnv_mix(hash, u64::from(object.0));
         }
-        hash = self.scratch.hash_into(hash, |scratch| u64::from(scratch.0));
+        hash = self.mark.hash_into(hash, |mark| u64::from(mark.0));
         for value in self.visible_globals.as_slice() {
             hash = fnv_mix(hash, *value as u64);
         }
@@ -810,7 +800,7 @@ impl PartialEq for State {
             && self.height == other.height
             && self.layer_count == other.layer_count
             && self.slots == other.slots
-            && self.scratch == other.scratch
+            && self.mark == other.mark
             && self.visible_globals == other.visible_globals
             && self.level_fired_rules == other.level_fired_rules
     }

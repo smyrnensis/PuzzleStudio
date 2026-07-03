@@ -47,11 +47,8 @@ scene title {
 }
 
 scene playing {
-  state {
-    board = puzzle main
-  }
   layout {
-    puzzle board
+    board = puzzle main
   }
   keys {
     Escape q -> back
@@ -332,9 +329,6 @@ scene title {
 }
 
 scene playing(level) {
-  state {
-    sokoban(level)
-  }
   layout {
     sokoban
   }

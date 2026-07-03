@@ -31,7 +31,7 @@ fn main() {
     println!("cargo:rerun-if-changed=docs/guards.md");
     println!("cargo:rerun-if-changed=docs/fix.md");
     println!("cargo:rerun-if-changed=docs/variables.md");
-    println!("cargo:rerun-if-changed=docs/scratch.md");
+    println!("cargo:rerun-if-changed=docs/mark.md");
     println!("cargo:rerun-if-changed=docs/conditions.md");
     println!("cargo:rerun-if-changed=docs/win-conditions.md");
     println!("cargo:rerun-if-changed=docs/scenes.md");

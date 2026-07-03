@@ -74,7 +74,7 @@ Read Layers, Groups, Tags, Legend, Levels, Level Legend, and Messages.
 Read Rewrite Rules, Input Rules, Movement, Guards, and Fix.
 
 ## State And Checks
-Read Variables, Scratch, Conditions, and Win Conditions.
+Read Variables, Marks, Conditions, and Win Conditions.
 
 ## Screen Flow
 Read Scenes, Scene Layout, Semantic Inputs, Menus, and Lifecycle.

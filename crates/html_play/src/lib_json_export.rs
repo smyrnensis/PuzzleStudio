@@ -899,19 +899,19 @@ fn push_state_data(out: &mut String, state: &State) {
     }
     out.push(']');
     out.push(',');
-    out.push_str("\"scratch\":[");
+    out.push_str("\"mark\":[");
     for index in 0..state.slots().len() {
         if index > 0 {
             out.push(',');
         }
         out.push('[');
-        for (scratch_index, scratch) in state.slot_scratch_at(index).enumerate() {
-            if scratch_index > 0 {
+        for (mark_index, mark) in state.slot_mark_at(index).enumerate() {
+            if mark_index > 0 {
                 out.push(',');
             }
             out.push('{');
-            push_json_number(out, "scratch", scratch.scratch.0 as u64);
-            if let Some(value) = scratch.value {
+            push_json_number(out, "mark", mark.mark.0 as u64);
+            if let Some(value) = mark.value {
                 out.push(',');
                 push_json_i64(out, "value", value);
             }
@@ -1545,13 +1545,13 @@ fn push_compact_match_cell(out: &mut String, cell: &puzzle_core::MatchCell) {
     out.push(',');
     push_compact_object_ids(out, &cell.forbid_objects);
     out.push(',');
-    push_compact_scratch_patterns(out, &cell.require_scratch);
+    push_compact_mark_patterns(out, &cell.require_mark);
     out.push(',');
-    push_compact_object_set_scratch_patterns(out, &cell.require_object_set_scratch);
+    push_compact_object_set_mark_patterns(out, &cell.require_object_set_mark);
     out.push(',');
-    push_compact_scratch_patterns(out, &cell.forbid_scratch);
+    push_compact_mark_patterns(out, &cell.forbid_mark);
     out.push(',');
-    push_compact_object_set_scratch_patterns(out, &cell.forbid_object_set_scratch);
+    push_compact_object_set_mark_patterns(out, &cell.forbid_object_set_mark);
     out.push(',');
     out.push_str(if cell.require_null { "1" } else { "0" });
     out.push(']');
@@ -1574,42 +1574,42 @@ fn push_compact_object_sets(out: &mut String, object_sets: &[puzzle_core::Object
     out.push(']');
 }
 
-fn push_compact_object_set_scratch_patterns(
+fn push_compact_object_set_mark_patterns(
     out: &mut String,
-    scratch: &[puzzle_core::ObjectSetScratchPattern],
+    mark: &[puzzle_core::ObjectSetMarkPattern],
 ) {
     out.push('[');
-    for (index, pattern) in scratch.iter().enumerate() {
+    for (index, pattern) in mark.iter().enumerate() {
         if index > 0 {
             out.push(',');
         }
         out.push('[');
         out.push_str(&pattern.binding.to_string());
         out.push(',');
-        out.push_str(&pattern.scratch.0.to_string());
+        out.push_str(&pattern.mark.0.to_string());
         out.push(',');
         push_compact_optional_i64(out, pattern.value);
         out.push(',');
-        push_compact_scratch_match(out, pattern.match_value);
+        push_compact_mark_match(out, pattern.match_value);
         out.push(']');
     }
     out.push(']');
 }
 
-fn push_compact_scratch_patterns(out: &mut String, scratch: &[ScratchPattern]) {
+fn push_compact_mark_patterns(out: &mut String, mark: &[MarkPattern]) {
     out.push('[');
-    for (index, pattern) in scratch.iter().enumerate() {
+    for (index, pattern) in mark.iter().enumerate() {
         if index > 0 {
             out.push(',');
         }
         out.push('[');
         out.push_str(&pattern.object.0.to_string());
         out.push(',');
-        out.push_str(&pattern.scratch.0.to_string());
+        out.push_str(&pattern.mark.0.to_string());
         out.push(',');
         push_compact_optional_i64(out, pattern.value);
         out.push(',');
-        push_compact_scratch_match(out, pattern.match_value);
+        push_compact_mark_match(out, pattern.match_value);
         out.push(']');
     }
     out.push(']');
@@ -1758,11 +1758,11 @@ fn push_compact_write(out: &mut String, write: &WriteOp) {
             out.push(',');
             out.push_str(&add.0.to_string());
         }
-        WriteOp::SetScratch {
+        WriteOp::SetMark {
             component,
             offset,
             object,
-            scratch,
+            mark,
             value,
         } => {
             out.push('4');
@@ -1773,15 +1773,15 @@ fn push_compact_write(out: &mut String, write: &WriteOp) {
             out.push(',');
             out.push_str(&object.0.to_string());
             out.push(',');
-            out.push_str(&scratch.0.to_string());
+            out.push_str(&mark.0.to_string());
             out.push(',');
             push_compact_optional_i64(out, *value);
         }
-        WriteOp::SetObjectSetScratch {
+        WriteOp::SetObjectSetMark {
             component,
             offset,
             binding,
-            scratch,
+            mark,
             value,
         } => {
             out.push('9');
@@ -1792,15 +1792,15 @@ fn push_compact_write(out: &mut String, write: &WriteOp) {
             out.push(',');
             out.push_str(&binding.to_string());
             out.push(',');
-            out.push_str(&scratch.0.to_string());
+            out.push_str(&mark.0.to_string());
             out.push(',');
             push_compact_optional_i64(out, *value);
         }
-        WriteOp::RemoveScratch {
+        WriteOp::RemoveMark {
             component,
             offset,
             object,
-            scratch,
+            mark,
             value,
             match_value,
         } => {
@@ -1812,17 +1812,17 @@ fn push_compact_write(out: &mut String, write: &WriteOp) {
             out.push(',');
             out.push_str(&object.0.to_string());
             out.push(',');
-            out.push_str(&scratch.0.to_string());
+            out.push_str(&mark.0.to_string());
             out.push(',');
             push_compact_optional_i64(out, *value);
             out.push(',');
-            push_compact_scratch_match(out, *match_value);
+            push_compact_mark_match(out, *match_value);
         }
-        WriteOp::RemoveObjectSetScratch {
+        WriteOp::RemoveObjectSetMark {
             component,
             offset,
             binding,
-            scratch,
+            mark,
             value,
             match_value,
         } => {
@@ -1834,11 +1834,11 @@ fn push_compact_write(out: &mut String, write: &WriteOp) {
             out.push(',');
             out.push_str(&binding.to_string());
             out.push(',');
-            out.push_str(&scratch.0.to_string());
+            out.push_str(&mark.0.to_string());
             out.push(',');
             push_compact_optional_i64(out, *value);
             out.push(',');
-            push_compact_scratch_match(out, *match_value);
+            push_compact_mark_match(out, *match_value);
         }
     }
     out.push(']');
@@ -1897,10 +1897,10 @@ fn push_compact_object_ids(out: &mut String, objects: &[ObjectId]) {
     out.push(']');
 }
 
-fn push_compact_scratch_match(out: &mut String, value: ScratchValueMatch) {
+fn push_compact_mark_match(out: &mut String, value: MarkValueMatch) {
     out.push_str(match value {
-        ScratchValueMatch::Any => "0",
-        ScratchValueMatch::Exact => "1",
+        MarkValueMatch::Any => "0",
+        MarkValueMatch::Exact => "1",
     });
 }
 
@@ -1957,9 +1957,9 @@ fn push_pattern(out: &mut String, pattern: &Pattern) {
             out.push(',');
             push_object_ids(out, "forbidObjects", &cell.forbid_objects);
             out.push(',');
-            push_scratch_patterns(out, "requireScratch", &cell.require_scratch);
+            push_mark_patterns(out, "requireMark", &cell.require_mark);
             out.push(',');
-            push_scratch_patterns(out, "forbidScratch", &cell.forbid_scratch);
+            push_mark_patterns(out, "forbidMark", &cell.forbid_mark);
             out.push('}');
         }
         out.push(']');
@@ -1968,18 +1968,18 @@ fn push_pattern(out: &mut String, pattern: &Pattern) {
     out.push_str("]}");
 }
 
-fn push_scratch_patterns(out: &mut String, key: &str, scratch: &[ScratchPattern]) {
+fn push_mark_patterns(out: &mut String, key: &str, mark: &[MarkPattern]) {
     push_json_string(out, key);
     out.push_str(":[");
-    for (index, scratch) in scratch.iter().enumerate() {
+    for (index, mark) in mark.iter().enumerate() {
         if index > 0 {
             out.push(',');
         }
         out.push('{');
-        push_json_number(out, "object", scratch.object.0 as u64);
+        push_json_number(out, "object", mark.object.0 as u64);
         out.push(',');
-        push_json_number(out, "scratch", scratch.scratch.0 as u64);
-        if let Some(value) = scratch.value {
+        push_json_number(out, "mark", mark.mark.0 as u64);
+        if let Some(value) = mark.value {
             out.push(',');
             push_json_i64(out, "value", value);
         }
@@ -1987,9 +1987,9 @@ fn push_scratch_patterns(out: &mut String, key: &str, scratch: &[ScratchPattern]
         push_json_pair(
             out,
             "match",
-            match scratch.match_value {
-                ScratchValueMatch::Any => "any",
-                ScratchValueMatch::Exact => "exact",
+            match mark.match_value {
+                MarkValueMatch::Any => "any",
+                MarkValueMatch::Exact => "exact",
             },
         );
         out.push('}');

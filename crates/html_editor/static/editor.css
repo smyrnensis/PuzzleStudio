@@ -55,7 +55,7 @@
   --sprite-ascii-color-retain: 80%;
   --syntax-sprite-pixel-adjust: var(--sprite-ascii-color-adjust);
   --syntax-sprite-pixel-retain: var(--sprite-ascii-color-retain);
-  --syntax-scratch: #ff9da4;
+  --syntax-mark: #ff9da4;
   --syntax-state: #b8d7a3;
   --syntax-string: #ce9178;
   --syntax-variant: #c8d982;
@@ -129,7 +129,7 @@ html[data-theme="light"] {
   --sprite-ascii-color-retain: 80%;
   --syntax-sprite-pixel-adjust: var(--sprite-ascii-color-adjust);
   --syntax-sprite-pixel-retain: var(--sprite-ascii-color-retain);
-  --syntax-scratch: #a8324a;
+  --syntax-mark: #a8324a;
   --syntax-state: #4f7b2f;
   --syntax-string: #9a4d2f;
   --syntax-variant: #677800;
@@ -1724,7 +1724,7 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
 .source-completion-kind-object { color: var(--syntax-object); }
 .source-completion-kind-group { color: var(--syntax-group); }
 .source-completion-kind-state { color: var(--syntax-state); }
-.source-completion-kind-scratch { color: var(--syntax-scratch); }
+.source-completion-kind-mark { color: var(--syntax-mark); }
 .source-completion-kind-tags,
 .source-completion-kind-tag,
 .source-completion-kind-value_set,
@@ -1920,7 +1920,7 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   font-weight: 600;
 }
 
-.syntax-scratch { color: var(--syntax-scratch); }
+.syntax-mark { color: var(--syntax-mark); }
 .syntax-state { color: var(--syntax-state); }
 .syntax-string { color: var(--syntax-string); }
 .syntax-variant { color: var(--syntax-variant); }

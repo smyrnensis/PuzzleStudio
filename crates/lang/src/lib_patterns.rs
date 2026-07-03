@@ -57,13 +57,13 @@ fn validate_visual_writes(
             WriteOp::AddObjectSet { .. }
             | WriteOp::RemoveObjectSet { .. }
             | WriteOp::MoveObjectSet { .. }
-            | WriteOp::SetObjectSetScratch { .. }
-            | WriteOp::RemoveObjectSetScratch { .. } => {}
+            | WriteOp::SetObjectSetMark { .. }
+            | WriteOp::RemoveObjectSetMark { .. } => {}
             WriteOp::Replace { remove, add, .. } => {
                 ensure_visual_write_object(*remove, visual_objects)?;
                 ensure_visual_write_object(*add, visual_objects)?;
             }
-            WriteOp::SetScratch { object, .. } | WriteOp::RemoveScratch { object, .. } => {
+            WriteOp::SetMark { object, .. } | WriteOp::RemoveMark { object, .. } => {
                 if !object.is_empty() {
                     ensure_visual_write_object(*object, visual_objects)?;
                 }
@@ -146,27 +146,27 @@ fn cantmove_intent_is_consumed(
     trigger: &ModelSoundTrigger,
 ) -> bool {
     writes.iter().any(|write| match write {
-        WriteOpTemplate::RemoveScratch {
+        WriteOpTemplate::RemoveMark {
             component,
             offset,
             object,
-            scratch,
+            mark,
             ..
         } => {
-            *scratch == ANONYMOUS_MOVEMENT_SCRATCH
+            *mark == ANONYMOUS_MOVEMENT_MARK
                 && trigger.objects.contains(object)
                 && component_cell_has_object_movement_intent(
                     components, *component, offset, *object,
                 )
         }
-        WriteOpTemplate::RemoveObjectSetScratch {
+        WriteOpTemplate::RemoveObjectSetMark {
             component,
             offset,
             binding,
-            scratch,
+            mark,
             ..
         } => {
-            *scratch == ANONYMOUS_MOVEMENT_SCRATCH
+            *mark == ANONYMOUS_MOVEMENT_MARK
                 && component_cell_has_object_set_movement_intent(
                     components, *component, offset, *binding, trigger,
                 )
@@ -182,8 +182,8 @@ fn component_cell_has_object_movement_intent(
     object: ObjectId,
 ) -> bool {
     component_cell(components, component, offset).is_some_and(|cell| {
-        cell.require_scratch.iter().any(|scratch| {
-            scratch.scratch == ANONYMOUS_MOVEMENT_SCRATCH && scratch.object == object
+        cell.require_mark.iter().any(|mark| {
+            mark.mark == ANONYMOUS_MOVEMENT_MARK && mark.object == object
         })
     })
 }
@@ -204,8 +204,8 @@ fn component_cell_has_object_set_movement_intent(
                     .any(|object| trigger.objects.contains(object))
         });
         binding_matches_trigger
-            && cell.require_object_set_scratch.iter().any(|scratch| {
-                scratch.scratch == ANONYMOUS_MOVEMENT_SCRATCH && scratch.binding == binding
+            && cell.require_object_set_mark.iter().any(|mark| {
+                mark.mark == ANONYMOUS_MOVEMENT_MARK && mark.binding == binding
             })
     })
 }
@@ -470,10 +470,10 @@ fn parse_rewrite_effect_value(
         {
             parse_simple_rewrite_effects(tokens, line)
         }
-        ["wait"] => Ok(vec![EffectAst::Wait { milliseconds: None }]),
+        ["wait"] => Ok(vec![EffectAst::WaitAnimation]),
         ["wait", "animation"] | ["wait", "tween"] => Ok(vec![EffectAst::WaitAnimation]),
         ["wait", duration] => Ok(vec![EffectAst::Wait {
-            milliseconds: Some(parse_wait_duration_ms(duration, line)?),
+            milliseconds: parse_wait_duration_ms(duration, line)?,
         }]),
         ["sfx", name] => {
             validate_qualified_identifier(name, line, "sfx sounds name")?;
@@ -588,11 +588,11 @@ fn parse_simple_rewrite_effects(
                     && !is_rewrite_effect_command_token(tokens[index + 1])
                 {
                     effects.push(EffectAst::Wait {
-                        milliseconds: Some(parse_wait_duration_ms(tokens[index + 1], line)?),
+                        milliseconds: parse_wait_duration_ms(tokens[index + 1], line)?,
                     });
                     index += 2;
                 } else {
-                    effects.push(EffectAst::Wait { milliseconds: None });
+                    effects.push(EffectAst::WaitAnimation);
                     index += 1;
                 }
             }
@@ -804,10 +804,10 @@ fn selector_has_relative_direction(selector: &ObjectSelector) -> bool {
     if !selector.relative_constraints.is_empty() {
         return true;
     }
-    selector.scratch.iter().any(|scratch| {
-        scratch.value.as_deref().is_some_and(|value| {
+    selector.mark.iter().any(|mark| {
+        mark.value.as_deref().is_some_and(|value| {
             parse_relative_direction_value(value).is_some()
-                || movement_scratch_set_values(value).is_some()
+                || movement_mark_set_values(value).is_some()
         })
     })
 }
@@ -894,32 +894,32 @@ struct MatchCellTemplate {
     require_objects: Vec<ObjectId>,
     require_object_sets: Vec<ObjectSetMatcher>,
     forbid_objects: Vec<ObjectId>,
-    require_scratch: Vec<ScratchPatternTemplate>,
-    require_object_set_scratch: Vec<ObjectSetScratchPatternTemplate>,
-    forbid_scratch: Vec<ScratchPatternTemplate>,
-    forbid_object_set_scratch: Vec<ObjectSetScratchPatternTemplate>,
+    require_mark: Vec<MarkPatternTemplate>,
+    require_object_set_mark: Vec<ObjectSetMarkPatternTemplate>,
+    forbid_mark: Vec<MarkPatternTemplate>,
+    forbid_object_set_mark: Vec<ObjectSetMarkPatternTemplate>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct ScratchPatternTemplate {
+struct MarkPatternTemplate {
     object: ObjectId,
-    scratch: ScratchId,
-    value: Option<ScratchValueTemplate>,
-    match_value: ScratchValueMatch,
-    is_marker: bool,
+    mark: MarkId,
+    value: Option<MarkValueTemplate>,
+    match_value: MarkValueMatch,
+    is_flag: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct ObjectSetScratchPatternTemplate {
+struct ObjectSetMarkPatternTemplate {
     binding: u16,
-    scratch: ScratchId,
-    value: Option<ScratchValueTemplate>,
-    match_value: ScratchValueMatch,
-    is_marker: bool,
+    mark: MarkId,
+    value: Option<MarkValueTemplate>,
+    match_value: MarkValueMatch,
+    is_flag: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-enum ScratchValueTemplate {
+enum MarkValueTemplate {
     Literal(i64),
     Relative(RelativeDirection),
 }
@@ -969,35 +969,35 @@ enum WriteOpTemplate {
         binding: u16,
         objects: Vec<ObjectId>,
     },
-    SetScratch {
+    SetMark {
         component: u16,
         offset: OffsetTemplate,
         object: ObjectId,
-        scratch: ScratchId,
-        value: Option<ScratchValueTemplate>,
+        mark: MarkId,
+        value: Option<MarkValueTemplate>,
     },
-    SetObjectSetScratch {
+    SetObjectSetMark {
         component: u16,
         offset: OffsetTemplate,
         binding: u16,
-        scratch: ScratchId,
-        value: Option<ScratchValueTemplate>,
+        mark: MarkId,
+        value: Option<MarkValueTemplate>,
     },
-    RemoveScratch {
+    RemoveMark {
         component: u16,
         offset: OffsetTemplate,
         object: ObjectId,
-        scratch: ScratchId,
-        value: Option<ScratchValueTemplate>,
-        match_value: ScratchValueMatch,
+        mark: MarkId,
+        value: Option<MarkValueTemplate>,
+        match_value: MarkValueMatch,
     },
-    RemoveObjectSetScratch {
+    RemoveObjectSetMark {
         component: u16,
         offset: OffsetTemplate,
         binding: u16,
-        scratch: ScratchId,
-        value: Option<ScratchValueTemplate>,
-        match_value: ScratchValueMatch,
+        mark: MarkId,
+        value: Option<MarkValueTemplate>,
+        match_value: MarkValueMatch,
     },
 }
 
@@ -1023,8 +1023,8 @@ struct BlockCell {
     require_null: bool,
     require: Vec<ObjectSelector>,
     forbid: Vec<ObjectSelector>,
-    require_cell_scratch: Vec<ParsedScratch>,
-    forbid_cell_scratch: Vec<ParsedScratch>,
+    require_cell_mark: Vec<ParsedMark>,
+    forbid_cell_mark: Vec<ParsedMark>,
 }
 
 #[derive(Clone, Debug)]
@@ -1036,7 +1036,7 @@ struct ObjectSelector {
     relative_constraints: Vec<RelativeSelectorConstraint>,
     dynamic_guards: HashMap<ObjectId, Vec<DynamicSelectorGuard>>,
     tag_captures: HashMap<ObjectId, Vec<TagCapture>>,
-    scratch: Vec<ParsedScratch>,
+    mark: Vec<ParsedMark>,
     occurrence_label: Option<String>,
 }
 
@@ -1143,26 +1143,26 @@ struct OccurrencePlacement {
     component: u16,
     offset: OffsetTemplate,
     matched: ResolvedObjectMatch,
-    require_scratch: Vec<ScratchPatternTemplate>,
-    require_object_set_scratch: Vec<ObjectSetScratchPatternTemplate>,
+    require_mark: Vec<MarkPatternTemplate>,
+    require_object_set_mark: Vec<ObjectSetMarkPatternTemplate>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct ParsedScratch {
+struct ParsedMark {
     name: String,
     value: Option<String>,
     negated: bool,
-    anonymous: Option<AnonymousScratch>,
+    anonymous: Option<AnonymousMark>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-enum AnonymousScratch {
+enum AnonymousMark {
     Movement,
     Bool,
     Int,
 }
 
-impl ParsedScratch {
+impl ParsedMark {
     fn named(name: &str, value: Option<&str>, negated: bool) -> Self {
         Self {
             name: name.to_string(),
@@ -1172,7 +1172,7 @@ impl ParsedScratch {
         }
     }
 
-    fn anonymous(kind: AnonymousScratch, value: &str, negated: bool) -> Self {
+    fn anonymous(kind: AnonymousMark, value: &str, negated: bool) -> Self {
         Self {
             name: String::new(),
             value: Some(value.to_string()),
@@ -1390,24 +1390,24 @@ fn parse_block_cell(
     }
     let mut tokens = cell_tokens.iter().map(String::as_str).peekable();
     while let Some(token) = tokens.next() {
-        if let Some(scratch) = parse_cell_scratch_token(token, line)? {
+        if let Some(mark) = parse_cell_mark_token(token, line)? {
             if parsed.require_null {
                 return Err(parse_error(line, "`null` cell pattern cannot contain other tokens"));
             }
-            parsed.require_cell_scratch.extend(scratch);
+            parsed.require_cell_mark.extend(mark);
             continue;
         }
-        if let Some(anonymous) = anonymous_scratch_for_token(token) {
+        if let Some(anonymous) = anonymous_mark_for_token(token) {
             if parsed.require_null {
                 return Err(parse_error(line, "`null` cell pattern cannot contain other tokens"));
             }
             let selector = tokens
                 .next()
-                .ok_or_else(|| parse_error(line, "scratch sugar must be followed by a selector"))?;
-            if selector == "no" || anonymous_scratch_for_token(selector).is_some() {
+                .ok_or_else(|| parse_error(line, "mark sugar must be followed by a selector"))?;
+            if selector == "no" || anonymous_mark_for_token(selector).is_some() {
                 return Err(parse_error(
                     line,
-                    "scratch sugar must be followed by a selector",
+                    "mark sugar must be followed by a selector",
                 ));
             }
             let mut selector = resolve_object_selector(
@@ -1421,8 +1421,8 @@ fn parse_block_cell(
                 global_names,
             )?;
             selector
-                .scratch
-                .push(ParsedScratch::anonymous(anonymous, token, false));
+                .mark
+                .push(ParsedMark::anonymous(anonymous, token, false));
             parsed.require.push(selector);
             continue;
         }
@@ -1439,8 +1439,8 @@ fn parse_block_cell(
             if selector == "null" {
                 return Err(parse_error(line, "`no null` is not a valid cell pattern"));
             }
-            if let Some(scratch) = parse_cell_scratch_token(selector, line)? {
-                parsed.forbid_cell_scratch.extend(scratch);
+            if let Some(mark) = parse_cell_mark_token(selector, line)? {
+                parsed.forbid_cell_mark.extend(mark);
                 continue;
             }
             parsed.forbid.push(resolve_object_selector(
@@ -1458,8 +1458,8 @@ fn parse_block_cell(
                 if parsed.require_null
                     || !parsed.require.is_empty()
                     || !parsed.forbid.is_empty()
-                    || !parsed.require_cell_scratch.is_empty()
-                    || !parsed.forbid_cell_scratch.is_empty()
+                    || !parsed.require_cell_mark.is_empty()
+                    || !parsed.forbid_cell_mark.is_empty()
                 {
                     return Err(parse_error(
                         line,
@@ -1488,34 +1488,40 @@ fn parse_block_cell(
     Ok(parsed)
 }
 
-fn parse_cell_scratch_token(
+fn parse_cell_mark_token(
     token: &str,
     line: &str,
-) -> Result<Option<Vec<ParsedScratch>>, DiagnosticReport> {
+) -> Result<Option<Vec<ParsedMark>>, DiagnosticReport> {
     let Some(inner) = token
         .strip_prefix('{')
         .and_then(|rest| rest.strip_suffix('}'))
     else {
         return Ok(None);
     };
-    Ok(Some(parse_selector_scratch(inner, line)?))
+    Ok(Some(parse_selector_mark(inner, line)?))
 }
 
-fn anonymous_scratch_for_token(token: &str) -> Option<AnonymousScratch> {
-    match puzzle_authoring::scratch_sugar_kind(token)? {
-        puzzle_authoring::ScratchSugarKind::Movement => Some(AnonymousScratch::Movement),
-        puzzle_authoring::ScratchSugarKind::Bool => Some(AnonymousScratch::Bool),
-        puzzle_authoring::ScratchSugarKind::Int => Some(AnonymousScratch::Int),
+fn anonymous_mark_for_token(token: &str) -> Option<AnonymousMark> {
+    match puzzle_authoring::mark_sugar_kind(token)? {
+        puzzle_authoring::MarkSugarKind::Movement => Some(AnonymousMark::Movement),
+        puzzle_authoring::MarkSugarKind::Bool => Some(AnonymousMark::Bool),
+        puzzle_authoring::MarkSugarKind::Int => Some(AnonymousMark::Int),
     }
 }
 
 fn split_cell_tokens(cell: &str, line: &str) -> Result<Vec<String>, DiagnosticReport> {
     puzzle_authoring::split_cell_tokens(cell).map_err(|error| match error {
         puzzle_authoring::CellTokenError::UnmatchedCloseBrace => {
-            parse_error(line, "scratch block has unmatched }")
+            parse_error(line, "mark block has unmatched }")
         }
         puzzle_authoring::CellTokenError::MissingCloseBrace => {
-            parse_error(line, "scratch block missing }")
+            parse_error(line, "mark block missing }")
+        }
+        puzzle_authoring::CellTokenError::UnmatchedCloseParen => {
+            parse_error(line, "computed selector has unmatched )")
+        }
+        puzzle_authoring::CellTokenError::MissingCloseParen => {
+            parse_error(line, "computed selector missing )")
         }
     })
 }
@@ -1530,7 +1536,7 @@ fn resolve_object_selector(
     object_groups: &HashMap<String, Vec<ObjectId>>,
     global_names: &HashMap<String, GlobalId>,
 ) -> Result<ObjectSelector, DiagnosticReport> {
-    let (selector, scratch) = split_selector_scratch(selector, line)?;
+    let (selector, mark) = split_selector_mark(selector, line)?;
     let (selector, occurrence_label) = split_selector_occurrence_label(selector, line)?;
     let token = labeled_selector_token(selector, occurrence_label.as_deref());
     if !selector.contains(':')
@@ -1544,7 +1550,7 @@ fn resolve_object_selector(
             relative_constraints: Vec::new(),
             dynamic_guards: HashMap::new(),
             tag_captures: HashMap::new(),
-            scratch,
+            mark,
             occurrence_label,
         });
     }
@@ -1558,7 +1564,7 @@ fn resolve_object_selector(
             relative_constraints: Vec::new(),
             dynamic_guards: HashMap::new(),
             tag_captures: HashMap::new(),
-            scratch,
+            mark,
             occurrence_label,
         });
     }
@@ -1568,7 +1574,7 @@ fn resolve_object_selector(
         return resolve_schema_family_wildcard_selector(
             &parts,
             token,
-            scratch,
+            mark,
             occurrence_label,
             line,
             object_schemas,
@@ -1581,7 +1587,7 @@ fn resolve_object_selector(
             return resolve_qualified_value_set_selector(
                 selector,
                 token,
-                scratch,
+                mark,
                 occurrence_label,
                 line,
                 object_names,
@@ -1622,6 +1628,15 @@ fn resolve_object_selector(
                     key,
                 }));
             }
+            if let Some(kind) = schema.axis_kinds.get(index).copied().flatten()
+                && let Some(expr) = parse_axis_computed_selector_value(value, axis, kind, line)?
+            {
+                source_token_parts.push(axis.clone());
+                return Ok(Some(SelectorConstraint::AxisComputed {
+                    axis_index: index,
+                    expr,
+                }));
+            }
             if let Some(relative) = parse_relative_direction_value(value) {
                 if axis != "directions" {
                     return Err(parse_error(
@@ -1634,6 +1649,11 @@ fn resolve_object_selector(
                     axis_index: index,
                     relative,
                 }));
+            }
+            if schema.axis_kinds.get(index).copied().flatten().is_some() && value != axis {
+                let value = normalize_axis_literal(value, schema, index, line)?;
+                source_token_parts.push(value.clone());
+                return Ok(Some(SelectorConstraint::Fixed(value)));
             }
             let expr = parse_value_expr(value, line)?;
             if expr == ValueExpr::Binding(axis.clone()) {
@@ -1681,8 +1701,9 @@ fn resolve_object_selector(
                     source_token_parts.push(name.clone());
                     Ok(Some(SelectorConstraint::ValueSet(values.clone())))
                 } else if names_axis_value {
-                    source_token_parts.push(name.clone());
-                    Ok(Some(SelectorConstraint::Fixed(name.clone())))
+                    let value = normalize_axis_literal(name, schema, index, line)?;
+                    source_token_parts.push(value.clone());
+                    Ok(Some(SelectorConstraint::Fixed(value)))
                 } else if let Some(global) = global {
                     source_token_parts.push(name.clone());
                     Ok(Some(SelectorConstraint::DynamicGlobal {
@@ -1691,15 +1712,19 @@ fn resolve_object_selector(
                         global,
                     }))
                 } else {
-                    source_token_parts.push(name.clone());
-                    Ok(Some(SelectorConstraint::Fixed(name.clone())))
+                    let value = normalize_axis_literal(name, schema, index, line)?;
+                    source_token_parts.push(value.clone());
+                    Ok(Some(SelectorConstraint::Fixed(value)))
                 }
             } else {
-                source_token_parts.push((*value).to_string());
-                Ok(Some(SelectorConstraint::Fixed((*value).to_string())))
+                let value = normalize_axis_literal(value, schema, index, line)?;
+                source_token_parts.push(value.clone());
+                Ok(Some(SelectorConstraint::Fixed(value)))
             }
         })
         .collect::<Result<Vec<_>, DiagnosticReport>>()?;
+
+    validate_axis_computed_source_constraints(&constraints, schema, &source_token_parts, line)?;
 
     let alternatives = schema
         .variants
@@ -1716,6 +1741,7 @@ fn resolve_object_selector(
                     Some(SelectorConstraint::Relative { .. }) => true,
                     Some(SelectorConstraint::Capture { .. }) => true,
                     Some(SelectorConstraint::Mapped { .. })
+                    | Some(SelectorConstraint::AxisComputed { .. })
                     | Some(SelectorConstraint::DynamicGlobal { .. })
                     | None => true,
                 })
@@ -1728,9 +1754,12 @@ fn resolve_object_selector(
     }
     let relative_constraints = relative_selector_constraints(&constraints, schema, &alternatives)?;
 
-    if constraints
-        .iter()
-        .any(|constraint| matches!(constraint, Some(SelectorConstraint::Mapped { .. })))
+    if constraints.iter().any(|constraint| {
+        matches!(
+            constraint,
+            Some(SelectorConstraint::Mapped { .. } | SelectorConstraint::AxisComputed { .. })
+        )
+    })
     {
         let source_token = labeled_selector_token(
             &format!("{}:{}", parts[0], source_token_parts.join(":")),
@@ -1741,11 +1770,18 @@ fn resolve_object_selector(
         for source in &schema.variants {
             let mut values = source.values.clone();
             for constraint in constraints.iter().flatten() {
-                if let SelectorConstraint::Mapped { axis_index, expr } = constraint {
-                    let axis = &schema.axes[*axis_index];
-                    let mut env = ValueEnv::default();
-                    env.bind(axis, axis, &source.values[*axis_index]);
-                    values[*axis_index] = eval_bound_value_expr(expr, &env, maps, line)?;
+                match constraint {
+                    SelectorConstraint::Mapped { axis_index, expr } => {
+                        let axis = &schema.axes[*axis_index];
+                        let mut env = ValueEnv::default();
+                        env.bind(axis, axis, &source.values[*axis_index]);
+                        values[*axis_index] = eval_bound_value_expr(expr, &env, maps, line)?;
+                    }
+                    SelectorConstraint::AxisComputed { axis_index, expr } => {
+                        values[*axis_index] =
+                            eval_axis_computed_selector_value(expr, schema, source, line)?;
+                    }
+                    _ => {}
                 }
             }
             let target = schema
@@ -1770,7 +1806,7 @@ fn resolve_object_selector(
             relative_constraints,
             dynamic_guards: HashMap::new(),
             tag_captures: HashMap::new(),
-            scratch,
+            mark,
             occurrence_label,
         });
     }
@@ -1785,7 +1821,7 @@ fn resolve_object_selector(
         relative_constraints,
         dynamic_guards,
         tag_captures,
-        scratch,
+        mark,
         occurrence_label,
     })
 }
@@ -1793,7 +1829,7 @@ fn resolve_object_selector(
 fn resolve_qualified_value_set_selector(
     selector: &str,
     token: String,
-    scratch: Vec<ParsedScratch>,
+    mark: Vec<ParsedMark>,
     occurrence_label: Option<String>,
     line: &str,
     object_names: &HashMap<String, ObjectId>,
@@ -1871,7 +1907,7 @@ fn resolve_qualified_value_set_selector(
         relative_constraints: Vec::new(),
         dynamic_guards,
         tag_captures: HashMap::new(),
-        scratch,
+        mark,
         occurrence_label,
     })
 }
@@ -1923,7 +1959,7 @@ fn qualify_object_name_atom(
 fn resolve_schema_family_wildcard_selector(
     parts: &[&str],
     token: String,
-    scratch: Vec<ParsedScratch>,
+    mark: Vec<ParsedMark>,
     occurrence_label: Option<String>,
     line: &str,
     object_schemas: &HashMap<String, ObjectSchema>,
@@ -2017,7 +2053,7 @@ fn resolve_schema_family_wildcard_selector(
         relative_constraints: Vec::new(),
         dynamic_guards: HashMap::new(),
         tag_captures: HashMap::new(),
-        scratch,
+        mark,
         occurrence_label,
     })
 }
@@ -2219,73 +2255,73 @@ fn labeled_selector_token(selector: &str, occurrence_label: Option<&str>) -> Str
     }
 }
 
-fn split_selector_scratch<'a>(
+fn split_selector_mark<'a>(
     selector: &'a str,
     line: &str,
-) -> Result<(&'a str, Vec<ParsedScratch>), DiagnosticReport> {
+) -> Result<(&'a str, Vec<ParsedMark>), DiagnosticReport> {
     let Some(open_index) = selector.find('{') else {
         return Ok((selector, Vec::new()));
     };
     let base = &selector[..open_index];
     let attrs = selector[open_index + 1..]
         .strip_suffix('}')
-        .ok_or_else(|| parse_error(line, "scratch selector must end with }"))?;
+        .ok_or_else(|| parse_error(line, "mark selector must end with }"))?;
     if base.is_empty() {
         return Err(parse_error(
             line,
-            "scratch selector must attach to an object",
+            "mark selector must attach to an object",
         ));
     }
-    let attrs = parse_selector_scratch(attrs, line)?;
+    let attrs = parse_selector_mark(attrs, line)?;
     Ok((base, attrs))
 }
 
-fn parse_selector_scratch(attrs: &str, line: &str) -> Result<Vec<ParsedScratch>, DiagnosticReport> {
+fn parse_selector_mark(attrs: &str, line: &str) -> Result<Vec<ParsedMark>, DiagnosticReport> {
     let mut parsed = Vec::new();
     let mut tokens = attrs.split_whitespace().peekable();
     while let Some(token) = tokens.next() {
         let (negated, spec) = if token == "no" {
             let spec = tokens
                 .next()
-                .ok_or_else(|| parse_error(line, "`no` must be followed by an scratch"))?;
+                .ok_or_else(|| parse_error(line, "`no` must be followed by an mark"))?;
             (true, spec)
         } else {
             (false, token)
         };
-        if let Some(anonymous) = anonymous_scratch_for_token(spec) {
-            parsed.push(ParsedScratch::anonymous(anonymous, spec, negated));
+        if let Some(anonymous) = anonymous_mark_for_token(spec) {
+            parsed.push(ParsedMark::anonymous(anonymous, spec, negated));
             continue;
         }
         let (name, value) = spec
             .split_once('=')
             .map_or((spec, None), |(name, value)| (name, Some(value)));
-        validate_scratch_name(name, line)?;
+        validate_mark_name(name, line)?;
         if value.is_some_and(str::is_empty) {
-            return Err(parse_error(line, "scratch value must not be empty"));
+            return Err(parse_error(line, "mark value must not be empty"));
         }
-        parsed.push(ParsedScratch::named(name, value, negated));
+        parsed.push(ParsedMark::named(name, value, negated));
     }
     Ok(parsed)
 }
 
-fn validate_scratch_name(value: &str, line: &str) -> Result<(), DiagnosticReport> {
+fn validate_mark_name(value: &str, line: &str) -> Result<(), DiagnosticReport> {
     let mut parts = value.split(':');
     let Some(first) = parts.next() else {
         return Err(parse_error(
             line,
-            "scratch name must start with an identifier and may use :value parts",
+            "mark name must start with an identifier and may use :value parts",
         ));
     };
-    if !is_identifier(first) || !parts.all(is_scratch_name_value_atom) {
+    if !is_identifier(first) || !parts.all(is_mark_name_value_atom) {
         return Err(parse_error(
             line,
-            "scratch name must start with an identifier and may use :value parts",
+            "mark name must start with an identifier and may use :value parts",
         ));
     }
     Ok(())
 }
 
-fn is_scratch_name_value_atom(value: &str) -> bool {
+fn is_mark_name_value_atom(value: &str) -> bool {
     is_value_atom(value) || matches!(value, ">" | "<" | "^" | "v")
 }
 
@@ -2305,11 +2341,42 @@ enum SelectorConstraint {
         axis_index: usize,
         expr: ValueExpr,
     },
+    AxisComputed {
+        axis_index: usize,
+        expr: AxisComputedExpr,
+    },
     DynamicGlobal {
         axis_index: usize,
         name: String,
         global: GlobalId,
     },
+}
+
+#[derive(Clone, Debug)]
+enum AxisComputedExpr {
+    RotationDelta { delta: Rational },
+    TranslationDelta { terms: Vec<TranslationDeltaTerm> },
+}
+
+#[derive(Clone, Debug)]
+enum TranslationDeltaTerm {
+    Coordinate { dx: Rational, dy: Rational },
+    AbsoluteDirection {
+        amount: Rational,
+        direction: AbsoluteOffsetDirection,
+    },
+    RelativeDirection {
+        amount: Rational,
+        direction: RelativeDirection,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AbsoluteOffsetDirection {
+    Left,
+    Right,
+    Up,
+    Down,
 }
 
 fn dynamic_selector_guards(
@@ -2448,6 +2515,408 @@ fn ambiguous_selector_tag_error(
     )
 }
 
+fn parse_axis_computed_selector_value(
+    value: &str,
+    axis: &str,
+    kind: AxisKind,
+    line: &str,
+) -> Result<Option<AxisComputedExpr>, DiagnosticReport> {
+    let value = value.trim();
+    let Some(inner) = value.strip_prefix('(').and_then(|value| value.strip_suffix(')')) else {
+        return Ok(None);
+    };
+    let inner = inner.trim();
+    let Some((expr_axis, _)) = split_axis_delta_expr(inner) else {
+        return Err(parse_error(
+            line,
+            "computed selector must start with its axis name",
+        ));
+    };
+    if expr_axis != axis {
+        return Err(parse_error(
+            line,
+            "computed selector axis name must match the selector slot",
+        ));
+    }
+    let expr = match kind {
+        AxisKind::Rotation => AxisComputedExpr::RotationDelta {
+            delta: parse_rotation_delta_expr(inner, line)?,
+        },
+        AxisKind::Translation => AxisComputedExpr::TranslationDelta {
+            terms: parse_translation_delta_expr(inner, line)?,
+        },
+    };
+    Ok(Some(expr))
+}
+
+fn parse_rotation_delta_expr(expr: &str, line: &str) -> Result<Rational, DiagnosticReport> {
+    let Some((_, delta)) = split_axis_delta_expr(expr) else {
+        return Err(parse_error(
+            line,
+            "rotation computed selector must be: (axis + <deg>) or (axis - <deg>)",
+        ));
+    };
+    parse_signed_degree_delta(delta, line)
+}
+
+fn parse_translation_delta_expr(
+    expr: &str,
+    line: &str,
+) -> Result<Vec<TranslationDeltaTerm>, DiagnosticReport> {
+    let Some((_, delta)) = split_axis_delta_expr(expr) else {
+        return Err(parse_error(
+            line,
+            "translation computed selector must start with axis + or axis -",
+        ));
+    };
+    if delta.contains(',') {
+        let parts = delta.split(',').map(str::trim).collect::<Vec<_>>();
+        if parts.len() != 2 || parts[0].is_empty() || parts[1].is_empty() {
+            return Err(parse_error(
+                line,
+                "translation coordinate delta must be: (axis + <x>, <y>)",
+            ));
+        }
+        return Ok(vec![TranslationDeltaTerm::Coordinate {
+            dx: parse_signed_rational_delta(parts[0], line)?,
+            dy: parse_rational_value(parts[1], line)?,
+        }]);
+    }
+
+    let mut terms = Vec::new();
+    for term in split_signed_terms(delta) {
+        let tokens = term.split_whitespace().collect::<Vec<_>>();
+        let (amount, direction) = match tokens.as_slice() {
+            [amount, direction] => ((*amount).to_string(), *direction),
+            [sign @ ("+" | "-"), amount, direction] => (format!("{sign}{amount}"), *direction),
+            _ => {
+                return Err(parse_error(
+                    line,
+                    "translation direction delta must use terms like + 1/2 left",
+                ));
+            }
+        };
+        let amount = parse_signed_rational_delta(&amount, line)?;
+        if let Some(direction) = parse_absolute_offset_direction(direction) {
+            terms.push(TranslationDeltaTerm::AbsoluteDirection { amount, direction });
+        } else if let Some(direction) = parse_relative_direction_value(direction) {
+            terms.push(TranslationDeltaTerm::RelativeDirection { amount, direction });
+        } else {
+            return Err(parse_error(line, "unknown translation direction"));
+        }
+    }
+    if terms.is_empty() {
+        return Err(parse_error(line, "translation computed selector has no delta"));
+    }
+    Ok(terms)
+}
+
+fn split_axis_delta_expr(expr: &str) -> Option<(&str, &str)> {
+    let expr = expr.trim();
+    for (index, ch) in expr.char_indices() {
+        if (ch == '+' || ch == '-') && index > 0 {
+            let (axis, delta) = expr.split_at(index);
+            let axis = axis.trim();
+            if is_identifier(axis) {
+                return Some((axis, delta.trim()));
+            }
+        }
+    }
+    None
+}
+
+fn split_signed_terms(value: &str) -> Vec<String> {
+    let mut terms = Vec::new();
+    let mut current = String::new();
+    for (index, ch) in value.char_indices() {
+        if (ch == '+' || ch == '-') && index > 0 {
+            let trimmed = current.trim();
+            if !trimmed.is_empty() {
+                terms.push(trimmed.to_string());
+            }
+            current.clear();
+        }
+        current.push(ch);
+    }
+    let trimmed = current.trim();
+    if !trimmed.is_empty() {
+        terms.push(trimmed.to_string());
+    }
+    terms
+}
+
+fn parse_signed_degree_delta(value: &str, line: &str) -> Result<Rational, DiagnosticReport> {
+    let value = normalize_signed_delta_text(value);
+    parse_degree_value(&value, line)
+}
+
+fn parse_signed_rational_delta(value: &str, line: &str) -> Result<Rational, DiagnosticReport> {
+    let value = normalize_signed_delta_text(value);
+    parse_rational_value(&value, line)
+}
+
+fn normalize_signed_delta_text(value: &str) -> String {
+    value
+        .trim()
+        .strip_prefix('+')
+        .map(str::trim_start)
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            value
+                .trim()
+                .strip_prefix('-')
+                .map(str::trim_start)
+                .map(|rest| format!("-{rest}"))
+                .unwrap_or_else(|| value.trim().to_string())
+        })
+}
+
+fn parse_absolute_offset_direction(value: &str) -> Option<AbsoluteOffsetDirection> {
+    match value {
+        "left" => Some(AbsoluteOffsetDirection::Left),
+        "right" => Some(AbsoluteOffsetDirection::Right),
+        "up" => Some(AbsoluteOffsetDirection::Up),
+        "down" => Some(AbsoluteOffsetDirection::Down),
+        _ => None,
+    }
+}
+
+fn normalize_axis_literal(
+    value: &str,
+    schema: &ObjectSchema,
+    axis_index: usize,
+    line: &str,
+) -> Result<String, DiagnosticReport> {
+    match schema.axis_kinds.get(axis_index).copied().flatten() {
+        Some(AxisKind::Rotation) => Ok(format!("{}deg", parse_degree_value(value, line)?.format())),
+        Some(AxisKind::Translation) => normalize_translation_value(value, line),
+        None => Ok(value.to_string()),
+    }
+}
+
+fn normalize_translation_value(value: &str, line: &str) -> Result<String, DiagnosticReport> {
+    let (x, y) = parse_translation_value(value, line)?;
+    Ok(format!("{},{}", x.format(), y.format()))
+}
+
+fn parse_translation_value(
+    value: &str,
+    line: &str,
+) -> Result<(Rational, Rational), DiagnosticReport> {
+    let parts = value.split(',').map(str::trim).collect::<Vec<_>>();
+    if parts.len() != 2 || parts[0].is_empty() || parts[1].is_empty() {
+        return Err(parse_error(line, "translation value must be: <x>,<y>"));
+    }
+    Ok((
+        parse_rational_value(parts[0], line)?,
+        parse_rational_value(parts[1], line)?,
+    ))
+}
+
+fn validate_axis_computed_source_constraints(
+    constraints: &[Option<SelectorConstraint>],
+    schema: &ObjectSchema,
+    source_token_parts: &[String],
+    line: &str,
+) -> Result<(), DiagnosticReport> {
+    let relative_translation = constraints.iter().flatten().any(|constraint| {
+        matches!(
+            constraint,
+            SelectorConstraint::AxisComputed {
+                expr: AxisComputedExpr::TranslationDelta { terms },
+                ..
+            } if terms
+                .iter()
+                .any(|term| matches!(term, TranslationDeltaTerm::RelativeDirection { .. }))
+        )
+    });
+    if !relative_translation {
+        return Ok(());
+    }
+    let Some(rotation_index) = schema
+        .axis_kinds
+        .iter()
+        .position(|kind| *kind == Some(AxisKind::Rotation))
+    else {
+        return Err(parse_error(
+            line,
+            "relative translation requires a rotation axis on the same object",
+        ));
+    };
+    if source_token_parts.get(rotation_index) != schema.axes.get(rotation_index) {
+        return Err(parse_error(
+            line,
+            "relative translation requires the rotation axis to be captured",
+        ));
+    }
+    Ok(())
+}
+
+fn eval_axis_computed_selector_value(
+    expr: &AxisComputedExpr,
+    schema: &ObjectSchema,
+    source: &ObjectVariant,
+    line: &str,
+) -> Result<String, DiagnosticReport> {
+    match expr {
+        AxisComputedExpr::RotationDelta { delta } => {
+            let Some(axis_index) = schema
+                .axis_kinds
+                .iter()
+                .position(|kind| *kind == Some(AxisKind::Rotation))
+            else {
+                return Err(parse_error(line, "rotation computed selector requires rotation axis"));
+            };
+            let current = source
+                .values
+                .get(axis_index)
+                .ok_or_else(|| parse_error(line, "internal schema variant missing axis value"))?;
+            let target = parse_degree_value(current, line)?.add(*delta);
+            resolve_rotation_axis_value(schema, axis_index, target, line)
+        }
+        AxisComputedExpr::TranslationDelta { terms } => {
+            let Some(axis_index) = schema
+                .axis_kinds
+                .iter()
+                .position(|kind| *kind == Some(AxisKind::Translation))
+            else {
+                return Err(parse_error(
+                    line,
+                    "translation computed selector requires translation axis",
+                ));
+            };
+            let current = source
+                .values
+                .get(axis_index)
+                .ok_or_else(|| parse_error(line, "internal schema variant missing axis value"))?;
+            let (mut x, mut y) = parse_translation_value(current, line)?;
+            let facing = source_rotation_degrees(schema, source, line)?;
+            for term in terms {
+                let (dx, dy) = translation_delta_vector(term, facing, line)?;
+                x = x.add(dx);
+                y = y.add(dy);
+            }
+            let target = format!("{},{}", x.format(), y.format());
+            let axis_values = schema_axis_values(schema, axis_index)?;
+            if axis_values.contains(&target) {
+                Ok(target)
+            } else {
+                Err(parse_error(line, "translation computed selector target is not declared"))
+            }
+        }
+    }
+}
+
+fn resolve_rotation_axis_value(
+    schema: &ObjectSchema,
+    axis_index: usize,
+    target: Rational,
+    line: &str,
+) -> Result<String, DiagnosticReport> {
+    let axis_values = schema_axis_values(schema, axis_index)?;
+    let exact = format!("{}deg", target.format());
+    if axis_values.contains(&exact) {
+        return Ok(exact);
+    }
+    for value in axis_values {
+        let candidate = parse_degree_value(&value, line)?;
+        if degrees_congruent(candidate, target) {
+            return Ok(value);
+        }
+    }
+    Err(parse_error(line, "rotation computed selector target is not declared"))
+}
+
+fn degrees_congruent(left: Rational, right: Rational) -> bool {
+    let diff = left.sub(right);
+    diff.numerator % (360 * diff.denominator) == 0
+}
+
+fn source_rotation_degrees(
+    schema: &ObjectSchema,
+    source: &ObjectVariant,
+    line: &str,
+) -> Result<Option<Rational>, DiagnosticReport> {
+    let Some(axis_index) = schema
+        .axis_kinds
+        .iter()
+        .position(|kind| *kind == Some(AxisKind::Rotation))
+    else {
+        return Ok(None);
+    };
+    let value = source
+        .values
+        .get(axis_index)
+        .ok_or_else(|| parse_error(line, "internal schema variant missing axis value"))?;
+    Ok(Some(parse_degree_value(value, line)?))
+}
+
+fn translation_delta_vector(
+    term: &TranslationDeltaTerm,
+    facing: Option<Rational>,
+    line: &str,
+) -> Result<(Rational, Rational), DiagnosticReport> {
+    match term {
+        TranslationDeltaTerm::Coordinate { dx, dy } => Ok((*dx, *dy)),
+        TranslationDeltaTerm::AbsoluteDirection { amount, direction } => {
+            Ok(scale_offset_vector(*amount, absolute_offset_vector(*direction)))
+        }
+        TranslationDeltaTerm::RelativeDirection { amount, direction } => {
+            let facing = facing.ok_or_else(|| {
+                parse_error(
+                    line,
+                    "relative translation requires a rotation axis on the same object",
+                )
+            })?;
+            let vector = relative_offset_vector(facing, *direction, line)?;
+            Ok(scale_offset_vector(*amount, vector))
+        }
+    }
+}
+
+fn absolute_offset_vector(direction: AbsoluteOffsetDirection) -> (i64, i64) {
+    match direction {
+        AbsoluteOffsetDirection::Left => (-1, 0),
+        AbsoluteOffsetDirection::Right => (1, 0),
+        AbsoluteOffsetDirection::Up => (0, -1),
+        AbsoluteOffsetDirection::Down => (0, 1),
+    }
+}
+
+fn relative_offset_vector(
+    facing: Rational,
+    direction: RelativeDirection,
+    line: &str,
+) -> Result<(i64, i64), DiagnosticReport> {
+    let base = if degrees_congruent(facing, Rational::integer(0)) {
+        (1, 0)
+    } else if degrees_congruent(facing, Rational::integer(90)) {
+        (0, 1)
+    } else if degrees_congruent(facing, Rational::integer(180)) {
+        (-1, 0)
+    } else if degrees_congruent(facing, Rational::integer(270)) {
+        (0, -1)
+    } else {
+        return Err(parse_error(
+            line,
+            "relative translation requires cardinal rotation values",
+        ));
+    };
+    Ok(match direction {
+        RelativeDirection::Forward => base,
+        RelativeDirection::Backward => (-base.0, -base.1),
+        RelativeDirection::Left => (base.1, -base.0),
+        RelativeDirection::Right => (-base.1, base.0),
+    })
+}
+
+fn scale_offset_vector(amount: Rational, vector: (i64, i64)) -> (Rational, Rational) {
+    (
+        Rational::integer(vector.0).mul(amount),
+        Rational::integer(vector.1).mul(amount),
+    )
+}
+
 fn parse_map_call(value: &str) -> Option<(&str, &str)> {
     let (name, rest) = value.split_once('(')?;
     let arg = rest.strip_suffix(')')?;
@@ -2494,7 +2963,7 @@ fn compile_before_after_blocks_for_direction(
     before: &PatternBlock,
     after: &PatternBlock,
     object_layers: &HashMap<ObjectId, LayerId>,
-    scratch_names: &HashMap<String, ScratchDef>,
+    mark_names: &HashMap<String, MarkDef>,
     value_sets: &HashMap<String, Vec<String>>,
     direction: Direction,
     direction_expanded: bool,
@@ -2507,7 +2976,7 @@ fn compile_before_after_blocks_for_direction(
         &before,
         &after,
         object_layers,
-        scratch_names,
+        mark_names,
         value_sets,
         line,
         source_line_number,
@@ -2519,7 +2988,7 @@ fn compile_before_after_blocks(
     before: &PatternBlock,
     after: &PatternBlock,
     object_layers: &HashMap<ObjectId, LayerId>,
-    scratch_names: &HashMap<String, ScratchDef>,
+    mark_names: &HashMap<String, MarkDef>,
     _value_sets: &HashMap<String, Vec<String>>,
     line: &str,
     source_line_number: Option<usize>,
@@ -2545,7 +3014,7 @@ fn compile_before_after_blocks(
         .filter_map(|(object, layer)| (layer.0 > 0).then_some(*object))
         .collect::<Vec<_>>();
 
-    let expanded_blocks = expand_movement_scratch_sets(before, after);
+    let expanded_blocks = expand_movement_mark_sets(before, after);
     let mut alternatives = Vec::new();
 
     for (before, after) in expanded_blocks {
@@ -2660,16 +3129,16 @@ fn compile_before_after_blocks(
                                 possible_objects_for_occurrences(&before_occurrences);
                             let mut after_objects =
                                 possible_objects_for_occurrences(&after_occurrences);
-                            let before_scratch = block_cell_scratch(
+                            let before_mark = block_cell_mark(
                                 before_cell,
                                 &before_occurrences,
-                                scratch_names,
+                                mark_names,
                                 line,
                             )?;
-                            let after_scratch = block_cell_scratch(
+                            let after_mark = block_cell_mark(
                                 after_cell,
                                 &after_occurrences,
-                                scratch_names,
+                                mark_names,
                                 line,
                             )?;
                             dedup_objects(&mut before_objects);
@@ -2687,7 +3156,7 @@ fn compile_before_after_blocks(
                                             component: component_index,
                                             offset: offset.clone(),
                                             matched: occurrence.matched.clone(),
-                                            require_scratch: before_scratch
+                                            require_mark: before_mark
                                                 .require
                                                 .iter()
                                                 .filter(|attr| {
@@ -2698,7 +3167,7 @@ fn compile_before_after_blocks(
                                                 })
                                                 .cloned()
                                                 .collect(),
-                                            require_object_set_scratch: before_scratch
+                                            require_object_set_mark: before_mark
                                                 .require_object_set
                                                 .iter()
                                                 .filter(|attr| {
@@ -2725,7 +3194,7 @@ fn compile_before_after_blocks(
                                         component: component_index,
                                         offset: offset.clone(),
                                         matched: occurrence.matched.clone(),
-                                        require_scratch: after_scratch
+                                        require_mark: after_mark
                                             .require
                                             .iter()
                                             .filter(|attr| {
@@ -2736,7 +3205,7 @@ fn compile_before_after_blocks(
                                             })
                                             .cloned()
                                             .collect(),
-                                        require_object_set_scratch: after_scratch
+                                        require_object_set_mark: after_mark
                                             .require_object_set
                                             .iter()
                                             .filter(|attr| {
@@ -2772,12 +3241,12 @@ fn compile_before_after_blocks(
                                 require_objects,
                                 require_object_sets,
                                 forbid_objects,
-                                require_scratch: before_scratch.require.clone(),
-                                require_object_set_scratch: before_scratch
+                                require_mark: before_mark.require.clone(),
+                                require_object_set_mark: before_mark
                                     .require_object_set
                                     .clone(),
-                                forbid_scratch: before_scratch.forbid.clone(),
-                                forbid_object_set_scratch: before_scratch.forbid_object_set.clone(),
+                                forbid_mark: before_mark.forbid.clone(),
+                                forbid_object_set_mark: before_mark.forbid_object_set.clone(),
                             });
 
                             let before_object_set_objects =
@@ -2814,53 +3283,53 @@ fn compile_before_after_blocks(
                                 &mut writes,
                             );
 
-                            for attr in scratch_to_set(
-                                &after_scratch.require,
-                                &before_scratch.require,
+                            for attr in mark_to_set(
+                                &after_mark.require,
+                                &before_mark.require,
                                 line,
                             )? {
-                                writes.push(WriteOpTemplate::SetScratch {
+                                writes.push(WriteOpTemplate::SetMark {
                                     component: component_index,
                                     offset: offset.clone(),
                                     object: attr.object,
-                                    scratch: attr.scratch,
+                                    mark: attr.mark,
                                     value: attr.value.clone(),
                                 });
                             }
-                            for attr in scratch_to_set_object_set(
-                                &after_scratch.require_object_set,
-                                &before_scratch.require_object_set,
+                            for attr in mark_to_set_object_set(
+                                &after_mark.require_object_set,
+                                &before_mark.require_object_set,
                                 line,
                             )? {
-                                writes.push(WriteOpTemplate::SetObjectSetScratch {
+                                writes.push(WriteOpTemplate::SetObjectSetMark {
                                     component: component_index,
                                     offset: offset.clone(),
                                     binding: attr.binding,
-                                    scratch: attr.scratch,
+                                    mark: attr.mark,
                                     value: attr.value.clone(),
                                 });
                             }
 
                             for attr in
-                                scratch_to_remove(&before_scratch.require, &after_scratch.require)
+                                mark_to_remove(&before_mark.require, &after_mark.require)
                                     .into_iter()
                                     .filter(|attr| {
                                         attr.object.is_empty()
                                             || after_objects.contains(&attr.object)
                                     })
                             {
-                                writes.push(WriteOpTemplate::RemoveScratch {
+                                writes.push(WriteOpTemplate::RemoveMark {
                                     component: component_index,
                                     offset: offset.clone(),
                                     object: attr.object,
-                                    scratch: attr.scratch,
+                                    mark: attr.mark,
                                     value: attr.value.clone(),
                                     match_value: attr.match_value,
                                 });
                             }
-                            for attr in scratch_to_remove_object_set(
-                                &before_scratch.require_object_set,
-                                &after_scratch.require_object_set,
+                            for attr in mark_to_remove_object_set(
+                                &before_mark.require_object_set,
+                                &after_mark.require_object_set,
                             )
                             .into_iter()
                             .filter(|attr| {
@@ -2872,32 +3341,32 @@ fn compile_before_after_blocks(
                                     )
                                 })
                             }) {
-                                writes.push(WriteOpTemplate::RemoveObjectSetScratch {
+                                writes.push(WriteOpTemplate::RemoveObjectSetMark {
                                     component: component_index,
                                     offset: offset.clone(),
                                     binding: attr.binding,
-                                    scratch: attr.scratch,
+                                    mark: attr.mark,
                                     value: attr.value.clone(),
                                     match_value: attr.match_value,
                                 });
                             }
 
-                            for attr in &after_scratch.forbid {
-                                writes.push(WriteOpTemplate::RemoveScratch {
+                            for attr in &after_mark.forbid {
+                                writes.push(WriteOpTemplate::RemoveMark {
                                     component: component_index,
                                     offset: offset.clone(),
                                     object: attr.object,
-                                    scratch: attr.scratch,
+                                    mark: attr.mark,
                                     value: attr.value.clone(),
                                     match_value: attr.match_value,
                                 });
                             }
-                            for attr in &after_scratch.forbid_object_set {
-                                writes.push(WriteOpTemplate::RemoveObjectSetScratch {
+                            for attr in &after_mark.forbid_object_set {
+                                writes.push(WriteOpTemplate::RemoveObjectSetMark {
                                     component: component_index,
                                     offset: offset.clone(),
                                     binding: attr.binding,
-                                    scratch: attr.scratch,
+                                    mark: attr.mark,
                                     value: attr.value.clone(),
                                     match_value: attr.match_value,
                                 });
@@ -2913,7 +3382,7 @@ fn compile_before_after_blocks(
                     });
                 }
 
-                writes = preserve_moved_occurrence_scratch(
+                writes = preserve_moved_occurrence_mark(
                     writes,
                     &before_placements,
                     &after_placements,
@@ -3080,40 +3549,40 @@ fn selector_at_location_mut(
 }
 
 #[derive(Clone, Debug)]
-struct ScratchSetBinding {
+struct MarkSetBinding {
     key: String,
     values: &'static [&'static str],
 }
 
-fn expand_movement_scratch_sets(
+fn expand_movement_mark_sets(
     before: &PatternBlock,
     after: &PatternBlock,
 ) -> Vec<(PatternBlock, PatternBlock)> {
-    let before = expand_negated_movement_scratch_sets(before);
-    let after = expand_negated_movement_scratch_sets(after);
-    let mut bindings = Vec::<ScratchSetBinding>::new();
-    collect_movement_scratch_set_bindings(&before, &mut bindings);
-    collect_movement_scratch_set_bindings(&after, &mut bindings);
-    dedup_scratch_set_bindings(&mut bindings);
+    let before = expand_negated_movement_mark_sets(before);
+    let after = expand_negated_movement_mark_sets(after);
+    let mut bindings = Vec::<MarkSetBinding>::new();
+    collect_movement_mark_set_bindings(&before, &mut bindings);
+    collect_movement_mark_set_bindings(&after, &mut bindings);
+    dedup_mark_set_bindings(&mut bindings);
 
     if bindings.is_empty() {
         return vec![(before, after)];
     }
 
     let mut assignments = Vec::<HashMap<String, String>>::new();
-    expand_scratch_set_assignments(&bindings, 0, &mut HashMap::new(), &mut assignments);
+    expand_mark_set_assignments(&bindings, 0, &mut HashMap::new(), &mut assignments);
     assignments
         .into_iter()
         .map(|assignment| {
             (
-                apply_movement_scratch_set_assignment(&before, &assignment),
-                apply_movement_scratch_set_assignment(&after, &assignment),
+                apply_movement_mark_set_assignment(&before, &assignment),
+                apply_movement_mark_set_assignment(&after, &assignment),
             )
         })
         .collect()
 }
 
-fn expand_negated_movement_scratch_sets(block: &PatternBlock) -> PatternBlock {
+fn expand_negated_movement_mark_sets(block: &PatternBlock) -> PatternBlock {
     let mut block = block.clone();
     for component in &mut block.components {
         for row in &mut component.rows {
@@ -3121,13 +3590,13 @@ fn expand_negated_movement_scratch_sets(block: &PatternBlock) -> PatternBlock {
                 let BlockPart::Cell(cell) = part else {
                     continue;
                 };
-                expand_negated_movement_scratch_set_list(&mut cell.require_cell_scratch);
-                expand_negated_movement_scratch_set_list(&mut cell.forbid_cell_scratch);
+                expand_negated_movement_mark_set_list(&mut cell.require_cell_mark);
+                expand_negated_movement_mark_set_list(&mut cell.forbid_cell_mark);
                 for selector in &mut cell.require {
-                    expand_negated_movement_scratch_set_list(&mut selector.scratch);
+                    expand_negated_movement_mark_set_list(&mut selector.mark);
                 }
                 for selector in &mut cell.forbid {
-                    expand_negated_movement_scratch_set_list(&mut selector.scratch);
+                    expand_negated_movement_mark_set_list(&mut selector.mark);
                 }
             }
         }
@@ -3135,28 +3604,28 @@ fn expand_negated_movement_scratch_sets(block: &PatternBlock) -> PatternBlock {
     block
 }
 
-fn expand_negated_movement_scratch_set_list(scratch: &mut Vec<ParsedScratch>) {
-    let mut expanded = Vec::with_capacity(scratch.len());
-    for scratch in scratch.drain(..) {
-        if scratch.negated
-            && let Some(value) = scratch.value.as_deref()
-            && let Some(values) = movement_scratch_set_values(value)
+fn expand_negated_movement_mark_set_list(mark: &mut Vec<ParsedMark>) {
+    let mut expanded = Vec::with_capacity(mark.len());
+    for mark in mark.drain(..) {
+        if mark.negated
+            && let Some(value) = mark.value.as_deref()
+            && let Some(values) = movement_mark_set_values(value)
         {
             expanded.extend(values.iter().map(|value| {
-                let mut scratch = scratch.clone();
-                scratch.value = Some((*value).to_string());
-                scratch
+                let mut mark = mark.clone();
+                mark.value = Some((*value).to_string());
+                mark
             }));
         } else {
-            expanded.push(scratch);
+            expanded.push(mark);
         }
     }
-    *scratch = expanded;
+    *mark = expanded;
 }
 
-fn collect_movement_scratch_set_bindings(
+fn collect_movement_mark_set_bindings(
     block: &PatternBlock,
-    bindings: &mut Vec<ScratchSetBinding>,
+    bindings: &mut Vec<MarkSetBinding>,
 ) {
     let mut selector_counts = HashMap::<String, usize>::new();
     for (component_index, component) in block.components.iter().enumerate() {
@@ -3165,21 +3634,21 @@ fn collect_movement_scratch_set_bindings(
                 let BlockPart::Cell(cell) = part else {
                     continue;
                 };
-                collect_cell_scratch_set_bindings(
-                    &cell.require_cell_scratch,
+                collect_cell_mark_set_bindings(
+                    &cell.require_cell_mark,
                     format!("cell:{component_index}:{row_index}:{part_index}:require"),
                     bindings,
                 );
-                collect_cell_scratch_set_bindings(
-                    &cell.forbid_cell_scratch,
+                collect_cell_mark_set_bindings(
+                    &cell.forbid_cell_mark,
                     format!("cell:{component_index}:{row_index}:{part_index}:forbid"),
                     bindings,
                 );
                 for selector in &cell.require {
                     let ordinal = *selector_counts.get(&selector.token).unwrap_or(&0);
                     selector_counts.insert(selector.token.clone(), ordinal + 1);
-                    collect_cell_scratch_set_bindings(
-                        &selector.scratch,
+                    collect_cell_mark_set_bindings(
+                        &selector.mark,
                         format!("object:{}:{ordinal}", selector.token),
                         bindings,
                     );
@@ -3189,31 +3658,31 @@ fn collect_movement_scratch_set_bindings(
     }
 }
 
-fn collect_cell_scratch_set_bindings(
-    scratch: &[ParsedScratch],
+fn collect_cell_mark_set_bindings(
+    mark: &[ParsedMark],
     anchor: String,
-    bindings: &mut Vec<ScratchSetBinding>,
+    bindings: &mut Vec<MarkSetBinding>,
 ) {
-    for (scratch_index, scratch) in scratch.iter().enumerate() {
-        let Some(value) = scratch.value.as_deref() else {
+    for (mark_index, mark) in mark.iter().enumerate() {
+        let Some(value) = mark.value.as_deref() else {
             continue;
         };
-        let Some(values) = movement_scratch_set_values(value) else {
+        let Some(values) = movement_mark_set_values(value) else {
             continue;
         };
-        bindings.push(ScratchSetBinding {
-            key: format!("{anchor}:{scratch_index}:{value}"),
+        bindings.push(MarkSetBinding {
+            key: format!("{anchor}:{mark_index}:{value}"),
             values,
         });
     }
 }
 
-fn dedup_scratch_set_bindings(bindings: &mut Vec<ScratchSetBinding>) {
+fn dedup_mark_set_bindings(bindings: &mut Vec<MarkSetBinding>) {
     let mut deduped = Vec::with_capacity(bindings.len());
     for binding in bindings.drain(..) {
         if !deduped
             .iter()
-            .any(|existing: &ScratchSetBinding| existing.key == binding.key)
+            .any(|existing: &MarkSetBinding| existing.key == binding.key)
         {
             deduped.push(binding);
         }
@@ -3221,8 +3690,8 @@ fn dedup_scratch_set_bindings(bindings: &mut Vec<ScratchSetBinding>) {
     *bindings = deduped;
 }
 
-fn expand_scratch_set_assignments(
-    bindings: &[ScratchSetBinding],
+fn expand_mark_set_assignments(
+    bindings: &[MarkSetBinding],
     index: usize,
     current: &mut HashMap<String, String>,
     out: &mut Vec<HashMap<String, String>>,
@@ -3234,12 +3703,12 @@ fn expand_scratch_set_assignments(
     let binding = &bindings[index];
     for value in binding.values {
         current.insert(binding.key.clone(), (*value).to_string());
-        expand_scratch_set_assignments(bindings, index + 1, current, out);
+        expand_mark_set_assignments(bindings, index + 1, current, out);
     }
     current.remove(&binding.key);
 }
 
-fn apply_movement_scratch_set_assignment(
+fn apply_movement_mark_set_assignment(
     block: &PatternBlock,
     assignment: &HashMap<String, String>,
 ) -> PatternBlock {
@@ -3251,21 +3720,21 @@ fn apply_movement_scratch_set_assignment(
                 let BlockPart::Cell(cell) = part else {
                     continue;
                 };
-                apply_cell_scratch_set_assignment(
-                    &mut cell.require_cell_scratch,
+                apply_cell_mark_set_assignment(
+                    &mut cell.require_cell_mark,
                     &format!("cell:{component_index}:{row_index}:{part_index}:require"),
                     assignment,
                 );
-                apply_cell_scratch_set_assignment(
-                    &mut cell.forbid_cell_scratch,
+                apply_cell_mark_set_assignment(
+                    &mut cell.forbid_cell_mark,
                     &format!("cell:{component_index}:{row_index}:{part_index}:forbid"),
                     assignment,
                 );
                 for selector in &mut cell.require {
                     let ordinal = *selector_counts.get(&selector.token).unwrap_or(&0);
                     selector_counts.insert(selector.token.clone(), ordinal + 1);
-                    apply_cell_scratch_set_assignment(
-                        &mut selector.scratch,
+                    apply_cell_mark_set_assignment(
+                        &mut selector.mark,
                         &format!("object:{}:{ordinal}", selector.token),
                         assignment,
                     );
@@ -3276,21 +3745,21 @@ fn apply_movement_scratch_set_assignment(
     block
 }
 
-fn apply_cell_scratch_set_assignment(
-    scratch: &mut [ParsedScratch],
+fn apply_cell_mark_set_assignment(
+    mark: &mut [ParsedMark],
     anchor: &str,
     assignment: &HashMap<String, String>,
 ) {
-    for (scratch_index, scratch) in scratch.iter_mut().enumerate() {
-        let Some(value) = scratch.value.as_deref() else {
+    for (mark_index, mark) in mark.iter_mut().enumerate() {
+        let Some(value) = mark.value.as_deref() else {
             continue;
         };
-        if movement_scratch_set_values(value).is_none() {
+        if movement_mark_set_values(value).is_none() {
             continue;
         }
-        let key = format!("{anchor}:{scratch_index}:{value}");
+        let key = format!("{anchor}:{mark_index}:{value}");
         if let Some(concrete) = assignment.get(&key) {
-            scratch.value = Some(concrete.clone());
+            mark.value = Some(concrete.clone());
         }
     }
 }
@@ -3352,7 +3821,7 @@ fn occurrence_key_has_label(key: &OccurrenceKey) -> bool {
     key.token.contains('#')
 }
 
-fn preserve_moved_occurrence_scratch(
+fn preserve_moved_occurrence_mark(
     writes: Vec<WriteOpTemplate>,
     before_placements: &HashMap<OccurrenceKey, OccurrencePlacement>,
     after_placements: &HashMap<OccurrenceKey, OccurrencePlacement>,
@@ -3395,25 +3864,25 @@ fn preserve_moved_occurrence_scratch(
             }
         }
 
-        for attr in scratch_to_remove(&before.require_scratch, &after.require_scratch) {
-            out.push(WriteOpTemplate::RemoveScratch {
+        for attr in mark_to_remove(&before.require_mark, &after.require_mark) {
+            out.push(WriteOpTemplate::RemoveMark {
                 component: after.component,
                 offset: after.offset.clone(),
                 object: attr.object,
-                scratch: attr.scratch,
+                mark: attr.mark,
                 value: attr.value,
                 match_value: attr.match_value,
             });
         }
-        for attr in scratch_to_remove_object_set(
-            &before.require_object_set_scratch,
-            &after.require_object_set_scratch,
+        for attr in mark_to_remove_object_set(
+            &before.require_object_set_mark,
+            &after.require_object_set_mark,
         ) {
-            out.push(WriteOpTemplate::RemoveObjectSetScratch {
+            out.push(WriteOpTemplate::RemoveObjectSetMark {
                 component: after.component,
                 offset: after.offset.clone(),
                 binding: attr.binding,
-                scratch: attr.scratch,
+                mark: attr.mark,
                 value: attr.value,
                 match_value: attr.match_value,
             });
@@ -3424,24 +3893,24 @@ fn preserve_moved_occurrence_scratch(
         !moves.iter().any(|(before, after)| {
             write_removes_match_at(write, before)
                 || write_adds_match_at(write, after)
-                || write_removes_moved_scratch_at_before(write, before)
+                || write_removes_moved_mark_at_before(write, before)
         })
     }));
 
     Ok(out)
 }
 
-fn write_removes_moved_scratch_at_before(
+fn write_removes_moved_mark_at_before(
     write: &WriteOpTemplate,
     placement: &OccurrencePlacement,
 ) -> bool {
     match (write, &placement.matched) {
         (
-            WriteOpTemplate::RemoveObjectSetScratch {
+            WriteOpTemplate::RemoveObjectSetMark {
                 component,
                 offset,
                 binding,
-                scratch,
+                mark,
                 ..
             },
             ResolvedObjectMatch::ObjectSet {
@@ -3453,9 +3922,9 @@ fn write_removes_moved_scratch_at_before(
                 && offset == &placement.offset
                 && binding == placement_binding
                 && placement
-                    .require_object_set_scratch
+                    .require_object_set_mark
                     .iter()
-                    .any(|attr| attr.binding == *binding && attr.scratch == *scratch)
+                    .any(|attr| attr.binding == *binding && attr.mark == *mark)
         }
         _ => false,
     }
@@ -3599,8 +4068,8 @@ fn block_cell_is_empty_or_null(cell: &BlockCell) -> bool {
     !cell.keep
         && cell.require.is_empty()
         && cell.forbid.is_empty()
-        && cell.require_cell_scratch.is_empty()
-        && cell.forbid_cell_scratch.is_empty()
+        && cell.require_cell_mark.is_empty()
+        && cell.forbid_cell_mark.is_empty()
 }
 
 fn block_cell_forbid_objects(cell: &BlockCell) -> Vec<ObjectId> {
@@ -3613,38 +4082,38 @@ fn block_cell_forbid_objects(cell: &BlockCell) -> Vec<ObjectId> {
 }
 
 #[derive(Clone, Debug, Default)]
-struct BlockCellScratch {
-    require: Vec<ScratchPatternTemplate>,
-    require_object_set: Vec<ObjectSetScratchPatternTemplate>,
-    forbid: Vec<ScratchPatternTemplate>,
-    forbid_object_set: Vec<ObjectSetScratchPatternTemplate>,
+struct BlockCellMark {
+    require: Vec<MarkPatternTemplate>,
+    require_object_set: Vec<ObjectSetMarkPatternTemplate>,
+    forbid: Vec<MarkPatternTemplate>,
+    forbid_object_set: Vec<ObjectSetMarkPatternTemplate>,
 }
 
-fn block_cell_scratch(
+fn block_cell_mark(
     cell: &BlockCell,
     occurrences: &[ResolvedObjectOccurrence],
-    scratch_names: &HashMap<String, ScratchDef>,
+    mark_names: &HashMap<String, MarkDef>,
     line: &str,
-) -> Result<BlockCellScratch, DiagnosticReport> {
-    let mut out = BlockCellScratch::default();
-    for scratch in &cell.require_cell_scratch {
-        let pattern = parsed_scratch_pattern(ObjectId::EMPTY, scratch, scratch_names, line)?;
-        if scratch.negated {
+) -> Result<BlockCellMark, DiagnosticReport> {
+    let mut out = BlockCellMark::default();
+    for mark in &cell.require_cell_mark {
+        let pattern = parsed_mark_pattern(ObjectId::EMPTY, mark, mark_names, line)?;
+        if mark.negated {
             out.forbid.push(pattern);
         } else {
             out.require.push(pattern);
         }
     }
-    for scratch in &cell.forbid_cell_scratch {
-        let pattern = parsed_scratch_pattern(ObjectId::EMPTY, scratch, scratch_names, line)?;
+    for mark in &cell.forbid_cell_mark {
+        let pattern = parsed_mark_pattern(ObjectId::EMPTY, mark, mark_names, line)?;
         out.forbid.push(pattern);
     }
     for (selector, occurrence) in cell.require.iter().zip(occurrences) {
-        for scratch in &selector.scratch {
+        for mark in &selector.mark {
             match &occurrence.matched {
                 ResolvedObjectMatch::Object(object) => {
-                    let pattern = parsed_scratch_pattern(*object, scratch, scratch_names, line)?;
-                    if scratch.negated {
+                    let pattern = parsed_mark_pattern(*object, mark, mark_names, line)?;
+                    if mark.negated {
                         out.forbid.push(pattern);
                     } else {
                         out.require.push(pattern);
@@ -3652,8 +4121,8 @@ fn block_cell_scratch(
                 }
                 ResolvedObjectMatch::ObjectSet { binding, .. } => {
                     let pattern =
-                        parsed_object_set_scratch_pattern(*binding, scratch, scratch_names, line)?;
-                    if scratch.negated {
+                        parsed_object_set_mark_pattern(*binding, mark, mark_names, line)?;
+                    if mark.negated {
                         out.forbid_object_set.push(pattern);
                     } else {
                         out.require_object_set.push(pattern);
@@ -3662,16 +4131,16 @@ fn block_cell_scratch(
             }
         }
     }
-    dedup_scratch_patterns(&mut out.require);
-    dedup_scratch_patterns(&mut out.forbid);
-    dedup_object_set_scratch_patterns(&mut out.require_object_set);
-    dedup_object_set_scratch_patterns(&mut out.forbid_object_set);
-    reject_duplicate_scratch_patterns(&out.require, line)?;
-    reject_duplicate_object_set_scratch_patterns(&out.require_object_set, line)?;
+    dedup_mark_patterns(&mut out.require);
+    dedup_mark_patterns(&mut out.forbid);
+    dedup_object_set_mark_patterns(&mut out.require_object_set);
+    dedup_object_set_mark_patterns(&mut out.forbid_object_set);
+    reject_duplicate_mark_patterns(&out.require, line)?;
+    reject_duplicate_object_set_mark_patterns(&out.require_object_set, line)?;
     Ok(out)
 }
 
-fn dedup_scratch_patterns(patterns: &mut Vec<ScratchPatternTemplate>) {
+fn dedup_mark_patterns(patterns: &mut Vec<MarkPatternTemplate>) {
     let mut deduped = Vec::with_capacity(patterns.len());
     for pattern in patterns.drain(..) {
         if !deduped.contains(&pattern) {
@@ -3681,7 +4150,7 @@ fn dedup_scratch_patterns(patterns: &mut Vec<ScratchPatternTemplate>) {
     *patterns = deduped;
 }
 
-fn dedup_object_set_scratch_patterns(patterns: &mut Vec<ObjectSetScratchPatternTemplate>) {
+fn dedup_object_set_mark_patterns(patterns: &mut Vec<ObjectSetMarkPatternTemplate>) {
     let mut deduped = Vec::with_capacity(patterns.len());
     for pattern in patterns.drain(..) {
         if !deduped.contains(&pattern) {
@@ -3691,156 +4160,156 @@ fn dedup_object_set_scratch_patterns(patterns: &mut Vec<ObjectSetScratchPatternT
     *patterns = deduped;
 }
 
-fn parsed_object_set_scratch_pattern(
+fn parsed_object_set_mark_pattern(
     binding: u16,
-    scratch: &ParsedScratch,
-    scratch_names: &HashMap<String, ScratchDef>,
+    mark: &ParsedMark,
+    mark_names: &HashMap<String, MarkDef>,
     line: &str,
-) -> Result<ObjectSetScratchPatternTemplate, DiagnosticReport> {
-    let pattern = parsed_scratch_pattern(ObjectId::EMPTY, scratch, scratch_names, line)?;
-    Ok(ObjectSetScratchPatternTemplate {
+) -> Result<ObjectSetMarkPatternTemplate, DiagnosticReport> {
+    let pattern = parsed_mark_pattern(ObjectId::EMPTY, mark, mark_names, line)?;
+    Ok(ObjectSetMarkPatternTemplate {
         binding,
-        scratch: pattern.scratch,
+        mark: pattern.mark,
         value: pattern.value,
         match_value: pattern.match_value,
-        is_marker: pattern.is_marker,
+        is_flag: pattern.is_flag,
     })
 }
 
-fn parsed_scratch_pattern(
+fn parsed_mark_pattern(
     object: ObjectId,
-    scratch: &ParsedScratch,
-    scratch_names: &HashMap<String, ScratchDef>,
+    mark: &ParsedMark,
+    mark_names: &HashMap<String, MarkDef>,
     line: &str,
-) -> Result<ScratchPatternTemplate, DiagnosticReport> {
-    if let Some(anonymous) = &scratch.anonymous {
-        return parsed_anonymous_scratch_pattern(object, anonymous, scratch, line);
+) -> Result<MarkPatternTemplate, DiagnosticReport> {
+    if let Some(anonymous) = &mark.anonymous {
+        return parsed_anonymous_mark_pattern(object, anonymous, mark, line);
     }
-    let def = scratch_names
-        .get(&scratch.name)
-        .ok_or_else(|| parse_error(line, "unknown scratch"))?;
+    let def = mark_names
+        .get(&mark.name)
+        .ok_or_else(|| parse_error(line, "unknown mark"))?;
     let value = match def.kind {
-        ScratchKind::Marker => {
-            if scratch.value.is_some() {
-                return Err(parse_error(line, "marker scratch cannot have a value"));
+        MarkKind::Flag => {
+            if mark.value.is_some() {
+                return Err(parse_error(line, "flag mark cannot have a value"));
             }
             None
         }
-        ScratchKind::Bool => {
-            if scratch.value.is_some() {
+        MarkKind::Bool => {
+            if mark.value.is_some() {
                 return Err(parse_error(
                     line,
-                    "bool scratch uses presence syntax; write `flag` or `no flag`",
+                    "bool mark uses presence syntax; write `flag` or `no flag`",
                 ));
             }
-            Some(ScratchValueTemplate::Literal(1))
+            Some(MarkValueTemplate::Literal(1))
         }
-        ScratchKind::Int => scratch
+        MarkKind::Int => mark
             .value
             .as_deref()
             .map(|value| {
                 value
                     .parse::<i64>()
-                    .map(ScratchValueTemplate::Literal)
-                    .map_err(|_| parse_error(line, "expected integer scratch value"))
+                    .map(MarkValueTemplate::Literal)
+                    .map_err(|_| parse_error(line, "expected integer mark value"))
             })
             .transpose()?,
-        ScratchKind::Enum => scratch
+        MarkKind::Enum => mark
             .value
             .as_deref()
-            .map(|value| parse_enum_scratch_value(value, def, line))
+            .map(|value| parse_enum_mark_value(value, def, line))
             .transpose()?,
     };
     let match_value = if value.is_some() {
-        ScratchValueMatch::Exact
+        MarkValueMatch::Exact
     } else {
-        ScratchValueMatch::Any
+        MarkValueMatch::Any
     };
-    Ok(ScratchPatternTemplate {
+    Ok(MarkPatternTemplate {
         object,
-        scratch: def.id,
+        mark: def.id,
         value,
         match_value,
-        is_marker: matches!(def.kind, ScratchKind::Marker | ScratchKind::Bool),
+        is_flag: matches!(def.kind, MarkKind::Flag | MarkKind::Bool),
     })
 }
 
-fn parsed_anonymous_scratch_pattern(
+fn parsed_anonymous_mark_pattern(
     object: ObjectId,
-    anonymous: &AnonymousScratch,
-    scratch: &ParsedScratch,
+    anonymous: &AnonymousMark,
+    mark: &ParsedMark,
     line: &str,
-) -> Result<ScratchPatternTemplate, DiagnosticReport> {
-    let value = scratch
+) -> Result<MarkPatternTemplate, DiagnosticReport> {
+    let value = mark
         .value
         .as_deref()
-        .ok_or_else(|| parse_error(line, "anonymous scratch must specify a value"))?;
-    let (scratch_id, value, match_value) = match anonymous {
-        AnonymousScratch::Movement if value == "directions" => {
-            (ANONYMOUS_MOVEMENT_SCRATCH, None, ScratchValueMatch::Any)
+        .ok_or_else(|| parse_error(line, "anonymous mark must specify a value"))?;
+    let (mark_id, value, match_value) = match anonymous {
+        AnonymousMark::Movement if value == "directions" => {
+            (ANONYMOUS_MOVEMENT_MARK, None, MarkValueMatch::Any)
         }
-        AnonymousScratch::Movement => (
-            ANONYMOUS_MOVEMENT_SCRATCH,
+        AnonymousMark::Movement => (
+            ANONYMOUS_MOVEMENT_MARK,
             Some(parse_anonymous_movement_value(value, line)?),
-            ScratchValueMatch::Exact,
+            MarkValueMatch::Exact,
         ),
-        AnonymousScratch::Bool => (
-            ANONYMOUS_BOOL_SCRATCH,
-            Some(ScratchValueTemplate::Literal(match value {
+        AnonymousMark::Bool => (
+            ANONYMOUS_BOOL_MARK,
+            Some(MarkValueTemplate::Literal(match value {
                 "false" => 0,
                 "true" => 1,
-                _ => return Err(parse_error(line, "expected boolean scratch value")),
+                _ => return Err(parse_error(line, "expected boolean mark value")),
             })),
-            ScratchValueMatch::Exact,
+            MarkValueMatch::Exact,
         ),
-        AnonymousScratch::Int => (
-            ANONYMOUS_INT_SCRATCH,
-            Some(ScratchValueTemplate::Literal(
+        AnonymousMark::Int => (
+            ANONYMOUS_INT_MARK,
+            Some(MarkValueTemplate::Literal(
                 value
                     .parse::<i64>()
-                    .map_err(|_| parse_error(line, "expected integer scratch value"))?,
+                    .map_err(|_| parse_error(line, "expected integer mark value"))?,
             )),
-            ScratchValueMatch::Exact,
+            MarkValueMatch::Exact,
         ),
     };
-    Ok(ScratchPatternTemplate {
+    Ok(MarkPatternTemplate {
         object,
-        scratch: scratch_id,
+        mark: mark_id,
         value,
         match_value,
-        is_marker: false,
+        is_flag: false,
     })
 }
 
 fn parse_anonymous_movement_value(
     value: &str,
     line: &str,
-) -> Result<ScratchValueTemplate, DiagnosticReport> {
+) -> Result<MarkValueTemplate, DiagnosticReport> {
     if let Some(relative) = parse_relative_direction_value(value) {
-        return Ok(ScratchValueTemplate::Relative(relative));
+        return Ok(MarkValueTemplate::Relative(relative));
     }
-    puzzle_authoring::movement_scratch_index(value, puzzle_authoring::MOVEMENT_DIRECTIONS_2D)
-        .map(|index| ScratchValueTemplate::Literal(i64::from(index)))
-        .ok_or_else(|| parse_error(line, "unknown movement scratch value"))
+    puzzle_authoring::movement_mark_index(value, puzzle_authoring::MOVEMENT_DIRECTIONS_2D)
+        .map(|index| MarkValueTemplate::Literal(i64::from(index)))
+        .ok_or_else(|| parse_error(line, "unknown movement mark value"))
 }
 
-fn movement_scratch_set_values(value: &str) -> Option<&'static [&'static str]> {
-    puzzle_authoring::movement_scratch_set_values(value, 2)
+fn movement_mark_set_values(value: &str) -> Option<&'static [&'static str]> {
+    puzzle_authoring::movement_mark_set_values(value, 2)
 }
 
-fn parse_enum_scratch_value(
+fn parse_enum_mark_value(
     value: &str,
-    def: &ScratchDef,
+    def: &MarkDef,
     line: &str,
-) -> Result<ScratchValueTemplate, DiagnosticReport> {
+) -> Result<MarkValueTemplate, DiagnosticReport> {
     if let Some(relative) = parse_relative_direction_value(value) {
-        return Ok(ScratchValueTemplate::Relative(relative));
+        return Ok(MarkValueTemplate::Relative(relative));
     }
     def.values
         .iter()
         .position(|candidate| candidate == value)
-        .map(|index| ScratchValueTemplate::Literal(index as i64))
-        .ok_or_else(|| parse_error(line, "unknown enum scratch value"))
+        .map(|index| MarkValueTemplate::Literal(index as i64))
+        .ok_or_else(|| parse_error(line, "unknown enum mark value"))
 }
 
 fn parse_relative_direction_value(value: &str) -> Option<RelativeDirection> {
@@ -3853,17 +4322,17 @@ fn parse_relative_direction_value(value: &str) -> Option<RelativeDirection> {
     }
 }
 
-fn reject_duplicate_scratch_patterns(
-    scratch: &[ScratchPatternTemplate],
+fn reject_duplicate_mark_patterns(
+    mark: &[MarkPatternTemplate],
     line: &str,
 ) -> Result<(), DiagnosticReport> {
-    let mut seen = Vec::<(ObjectId, ScratchId)>::new();
-    for attr in scratch {
-        let key = (attr.object, attr.scratch);
+    let mut seen = Vec::<(ObjectId, MarkId)>::new();
+    for attr in mark {
+        let key = (attr.object, attr.mark);
         if seen.contains(&key) {
             return Err(parse_error(
                 line,
-                "same object occurrence cannot mention the same scratch twice",
+                "same object occurrence cannot mention the same mark twice",
             ));
         }
         seen.push(key);
@@ -3871,17 +4340,17 @@ fn reject_duplicate_scratch_patterns(
     Ok(())
 }
 
-fn reject_duplicate_object_set_scratch_patterns(
-    scratch: &[ObjectSetScratchPatternTemplate],
+fn reject_duplicate_object_set_mark_patterns(
+    mark: &[ObjectSetMarkPatternTemplate],
     line: &str,
 ) -> Result<(), DiagnosticReport> {
-    let mut seen = Vec::<(u16, ScratchId)>::new();
-    for attr in scratch {
-        let key = (attr.binding, attr.scratch);
+    let mut seen = Vec::<(u16, MarkId)>::new();
+    for attr in mark {
+        let key = (attr.binding, attr.mark);
         if seen.contains(&key) {
             return Err(parse_error(
                 line,
-                "same object occurrence cannot mention the same scratch twice",
+                "same object occurrence cannot mention the same mark twice",
             ));
         }
         seen.push(key);
@@ -3889,15 +4358,15 @@ fn reject_duplicate_object_set_scratch_patterns(
     Ok(())
 }
 
-fn scratch_to_set(
-    after: &[ScratchPatternTemplate],
-    before: &[ScratchPatternTemplate],
+fn mark_to_set(
+    after: &[MarkPatternTemplate],
+    before: &[MarkPatternTemplate],
     line: &str,
-) -> Result<Vec<ScratchPatternTemplate>, DiagnosticReport> {
+) -> Result<Vec<MarkPatternTemplate>, DiagnosticReport> {
     let mut writes = Vec::new();
     for attr in after {
-        if !attr.is_marker && attr.value.is_none() {
-            return Err(parse_error(line, "valued RHS scratch must specify a value"));
+        if !attr.is_flag && attr.value.is_none() {
+            return Err(parse_error(line, "valued RHS mark must specify a value"));
         }
         if !before.iter().any(|before| before == attr) {
             writes.push(attr.clone());
@@ -3906,15 +4375,15 @@ fn scratch_to_set(
     Ok(writes)
 }
 
-fn scratch_to_set_object_set(
-    after: &[ObjectSetScratchPatternTemplate],
-    before: &[ObjectSetScratchPatternTemplate],
+fn mark_to_set_object_set(
+    after: &[ObjectSetMarkPatternTemplate],
+    before: &[ObjectSetMarkPatternTemplate],
     line: &str,
-) -> Result<Vec<ObjectSetScratchPatternTemplate>, DiagnosticReport> {
+) -> Result<Vec<ObjectSetMarkPatternTemplate>, DiagnosticReport> {
     let mut writes = Vec::new();
     for attr in after {
-        if !attr.is_marker && attr.value.is_none() {
-            return Err(parse_error(line, "valued RHS scratch must specify a value"));
+        if !attr.is_flag && attr.value.is_none() {
+            return Err(parse_error(line, "valued RHS mark must specify a value"));
         }
         if !before.iter().any(|before| before == attr) {
             writes.push(attr.clone());
@@ -3923,10 +4392,10 @@ fn scratch_to_set_object_set(
     Ok(writes)
 }
 
-fn scratch_to_remove(
-    before: &[ScratchPatternTemplate],
-    after: &[ScratchPatternTemplate],
-) -> Vec<ScratchPatternTemplate> {
+fn mark_to_remove(
+    before: &[MarkPatternTemplate],
+    after: &[MarkPatternTemplate],
+) -> Vec<MarkPatternTemplate> {
     before
         .iter()
         .filter(|before| !after.iter().any(|after| after == *before))
@@ -3934,10 +4403,10 @@ fn scratch_to_remove(
         .collect()
 }
 
-fn scratch_to_remove_object_set(
-    before: &[ObjectSetScratchPatternTemplate],
-    after: &[ObjectSetScratchPatternTemplate],
-) -> Vec<ObjectSetScratchPatternTemplate> {
+fn mark_to_remove_object_set(
+    before: &[ObjectSetMarkPatternTemplate],
+    after: &[ObjectSetMarkPatternTemplate],
+) -> Vec<ObjectSetMarkPatternTemplate> {
     before
         .iter()
         .filter(|before| !after.iter().any(|after| after == *before))
@@ -4713,90 +5182,90 @@ fn resolve_write(
                 binding: *binding,
             })
         }
-        WriteOpTemplate::SetScratch {
+        WriteOpTemplate::SetMark {
             component,
             offset,
             object,
-            scratch,
+            mark,
             value,
         } => {
             let offset = resolve_offset(offset.clone(), direction, dir_any, line)?;
-            Ok(WriteOp::SetScratch {
+            Ok(WriteOp::SetMark {
                 component: *component,
                 offset,
                 object: *object,
-                scratch: *scratch,
-                value: resolve_scratch_value(value.as_ref(), direction, dir_any, line)?,
+                mark: *mark,
+                value: resolve_mark_value(value.as_ref(), direction, dir_any, line)?,
             })
         }
-        WriteOpTemplate::SetObjectSetScratch {
+        WriteOpTemplate::SetObjectSetMark {
             component,
             offset,
             binding,
-            scratch,
+            mark,
             value,
         } => {
             let offset = resolve_offset(offset.clone(), direction, dir_any, line)?;
-            Ok(WriteOp::SetObjectSetScratch {
+            Ok(WriteOp::SetObjectSetMark {
                 component: *component,
                 offset,
                 binding: *binding,
-                scratch: *scratch,
-                value: resolve_scratch_value(value.as_ref(), direction, dir_any, line)?,
+                mark: *mark,
+                value: resolve_mark_value(value.as_ref(), direction, dir_any, line)?,
             })
         }
-        WriteOpTemplate::RemoveScratch {
+        WriteOpTemplate::RemoveMark {
             component,
             offset,
             object,
-            scratch,
+            mark,
             value,
             match_value,
         } => {
             let offset = resolve_offset(offset.clone(), direction, dir_any, line)?;
-            Ok(WriteOp::RemoveScratch {
+            Ok(WriteOp::RemoveMark {
                 component: *component,
                 offset,
                 object: *object,
-                scratch: *scratch,
-                value: resolve_scratch_value(value.as_ref(), direction, dir_any, line)?,
+                mark: *mark,
+                value: resolve_mark_value(value.as_ref(), direction, dir_any, line)?,
                 match_value: *match_value,
             })
         }
-        WriteOpTemplate::RemoveObjectSetScratch {
+        WriteOpTemplate::RemoveObjectSetMark {
             component,
             offset,
             binding,
-            scratch,
+            mark,
             value,
             match_value,
         } => {
             let offset = resolve_offset(offset.clone(), direction, dir_any, line)?;
-            Ok(WriteOp::RemoveObjectSetScratch {
+            Ok(WriteOp::RemoveObjectSetMark {
                 component: *component,
                 offset,
                 binding: *binding,
-                scratch: *scratch,
-                value: resolve_scratch_value(value.as_ref(), direction, dir_any, line)?,
+                mark: *mark,
+                value: resolve_mark_value(value.as_ref(), direction, dir_any, line)?,
                 match_value: *match_value,
             })
         }
     }
 }
 
-fn resolve_scratch_patterns(
-    patterns: Vec<ScratchPatternTemplate>,
+fn resolve_mark_patterns(
+    patterns: Vec<MarkPatternTemplate>,
     direction: Direction,
     direction_expanded: bool,
     line: &str,
-) -> Result<Vec<ScratchPattern>, DiagnosticReport> {
+) -> Result<Vec<MarkPattern>, DiagnosticReport> {
     patterns
         .into_iter()
         .map(|pattern| {
-            Ok(ScratchPattern {
+            Ok(MarkPattern {
                 object: pattern.object,
-                scratch: pattern.scratch,
-                value: resolve_scratch_value(
+                mark: pattern.mark,
+                value: resolve_mark_value(
                     pattern.value.as_ref(),
                     direction,
                     direction_expanded,
@@ -4808,19 +5277,19 @@ fn resolve_scratch_patterns(
         .collect()
 }
 
-fn resolve_object_set_scratch_patterns(
-    patterns: Vec<ObjectSetScratchPatternTemplate>,
+fn resolve_object_set_mark_patterns(
+    patterns: Vec<ObjectSetMarkPatternTemplate>,
     direction: Direction,
     direction_expanded: bool,
     line: &str,
-) -> Result<Vec<ObjectSetScratchPattern>, DiagnosticReport> {
+) -> Result<Vec<ObjectSetMarkPattern>, DiagnosticReport> {
     patterns
         .into_iter()
         .map(|pattern| {
-            Ok(ObjectSetScratchPattern {
+            Ok(ObjectSetMarkPattern {
                 binding: pattern.binding,
-                scratch: pattern.scratch,
-                value: resolve_scratch_value(
+                mark: pattern.mark,
+                value: resolve_mark_value(
                     pattern.value.as_ref(),
                     direction,
                     direction_expanded,
@@ -4832,15 +5301,15 @@ fn resolve_object_set_scratch_patterns(
         .collect()
 }
 
-fn resolve_scratch_value(
-    value: Option<&ScratchValueTemplate>,
+fn resolve_mark_value(
+    value: Option<&MarkValueTemplate>,
     direction: Direction,
     direction_expanded: bool,
     line: &str,
 ) -> Result<Option<i64>, DiagnosticReport> {
     match value {
-        Some(ScratchValueTemplate::Literal(value)) => Ok(Some(*value)),
-        Some(ScratchValueTemplate::Relative(relative)) => {
+        Some(MarkValueTemplate::Literal(value)) => Ok(Some(*value)),
+        Some(MarkValueTemplate::Relative(relative)) => {
             let direction =
                 resolve_relative_direction(*relative, direction, direction_expanded, line)?;
             Ok(Some(direction_value(direction)?))
@@ -4858,7 +5327,7 @@ fn resolve_relative_direction(
     if !direction_expanded {
         return Err(parse_error(
             line,
-            "relative direction scratch value requires an oriented rule",
+            "relative direction mark value requires an oriented rule",
         ));
     }
     let (dx, dy) = match relative {
@@ -4881,7 +5350,7 @@ fn direction_value(direction: Direction) -> Result<i64, DiagnosticReport> {
         (-1, 0) => Ok(2),
         (1, 0) => Ok(3),
         _ => Err(DiagnosticReport::error(
-            "unsupported direction scratch".to_string(),
+            "unsupported direction mark".to_string(),
         )),
     }
 }

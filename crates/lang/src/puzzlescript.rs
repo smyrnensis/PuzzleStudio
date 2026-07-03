@@ -122,7 +122,7 @@ pub fn translate_puzzlescript_to_canonical(source: &str) -> Result<String, Diagn
     push_groups(&mut out, &aliases);
     push_sprites(&mut out, &object_defs);
     push_win_conditions(&mut out, &sections.win_conditions, &object_defs, &aliases);
-    push_ps_sound_scratch(&mut out, &sounds);
+    push_ps_sound_mark(&mut out, &sounds);
     push_ps_sound_routines(&mut out, &sounds, &object_defs, &aliases);
     push_rules(
         &mut out,
@@ -436,20 +436,20 @@ fn push_sounds(out: &mut Vec<String>, sounds: &[PsSoundDef]) {
     out.push(String::new());
 }
 
-fn push_ps_sound_scratch(out: &mut Vec<String>, sounds: &[PsSoundDef]) {
+fn push_ps_sound_mark(out: &mut Vec<String>, sounds: &[PsSoundDef]) {
     if !has_event_sounds(sounds) {
         return;
     }
-    out.push("scratch {".to_string());
+    out.push("marks {".to_string());
     let mut emitted = Vec::new();
     for sound in sounds {
         let PsSoundTrigger::Event { target, event } = &sound.trigger else {
             continue;
         };
-        let key = ps_sound_scratch_key(target);
+        let key = ps_sound_mark_key(target);
         match event {
             PsSoundEvent::Create => {
-                push_unique_scratch(out, &mut emitted, format!("__ps_sound_existing_{key}"))
+                push_unique_mark(out, &mut emitted, format!("__ps_sound_existing_{key}"))
             }
             PsSoundEvent::Move => {}
         }
@@ -480,7 +480,7 @@ fn push_ps_sound_routines(
         let target = ps_sound_target_selector(target, objects, aliases);
         out.push(format!(
             "  once_all [ {target} ] -> [ {target}{{__ps_sound_existing_{}}} ]",
-            ps_sound_scratch_key(&target)
+            ps_sound_mark_key(&target)
         ));
     }
     out.push("}".to_string());
@@ -492,7 +492,7 @@ fn push_ps_sound_routines(
             continue;
         };
         let target = ps_sound_target_selector(target, objects, aliases);
-        let key = ps_sound_scratch_key(&target);
+        let key = ps_sound_mark_key(&target);
         match event {
             PsSoundEvent::Create => out.push(format!(
                 "  once [ {target}{{no __ps_sound_existing_{key}}} ] -> sfx {}",
@@ -505,7 +505,7 @@ fn push_ps_sound_routines(
     out.push(String::new());
 }
 
-fn push_unique_scratch(out: &mut Vec<String>, emitted: &mut Vec<String>, name: String) {
+fn push_unique_mark(out: &mut Vec<String>, emitted: &mut Vec<String>, name: String) {
     if emitted.iter().any(|existing| existing == &name) {
         return;
     }
@@ -531,7 +531,7 @@ fn has_event_sounds(sounds: &[PsSoundDef]) -> bool {
     })
 }
 
-fn ps_sound_scratch_key(target: &str) -> String {
+fn ps_sound_mark_key(target: &str) -> String {
     let mut key = String::new();
     for ch in target.chars() {
         if ch.is_ascii_alphanumeric() || ch == '_' {
@@ -1371,7 +1371,7 @@ fn attach_direction_prefixes(
                 .get(i + 1)
                 .filter(|selector| resolve_name(selector, objects, aliases).is_some())
         {
-            attached.push(append_scratch_to_selector(selector, direction));
+            attached.push(append_mark_to_selector(selector, direction));
             i += 2;
             continue;
         }
@@ -1450,7 +1450,7 @@ fn translate_motion_qualifiers_on_side(
             if !is_lhs && (is_moving || is_stationary) {
                 translated.push(selector.clone());
             } else {
-                let scratch = if is_moving {
+                let mark = if is_moving {
                     "directions"
                 } else if is_action {
                     "__action"
@@ -1459,7 +1459,7 @@ fn translate_motion_qualifiers_on_side(
                 } else {
                     "no directions"
                 };
-                translated.push(append_scratch_to_selector(selector, scratch));
+                translated.push(append_mark_to_selector(selector, mark));
             }
             i += 2;
             continue;
@@ -1470,11 +1470,11 @@ fn translate_motion_qualifiers_on_side(
     translated
 }
 
-fn append_scratch_to_selector(selector: &str, scratch: &str) -> String {
+fn append_mark_to_selector(selector: &str, mark: &str) -> String {
     if let Some(stripped) = selector.strip_suffix('}') {
-        format!("{stripped} {scratch}}}")
+        format!("{stripped} {mark}}}")
     } else {
-        format!("{selector}{{{scratch}}}")
+        format!("{selector}{{{mark}}}")
     }
 }
 
@@ -1586,9 +1586,9 @@ fn resolve_rule_token(token: &str, objects: &[PsObjectDef], aliases: &[PsAliasDe
     if token == "..." || token.eq_ignore_ascii_case("no") {
         return token.to_ascii_lowercase();
     }
-    if let Some((base, scratch)) = token.split_once('{') {
+    if let Some((base, mark)) = token.split_once('{') {
         if let Some(name) = resolve_name(base, objects, aliases) {
-            return format!("{name}{{{scratch}");
+            return format!("{name}{{{mark}");
         }
     }
     resolve_name(token, objects, aliases).unwrap_or_else(|| token.to_string())

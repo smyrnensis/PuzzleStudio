@@ -52,7 +52,7 @@ const EDITOR_DOCS_FIX_MARKDOWN: &str = include_str!("../docs/fix.md");
 #[cfg(feature = "editor-docs")]
 const EDITOR_DOCS_VARIABLES_MARKDOWN: &str = include_str!("../docs/variables.md");
 #[cfg(feature = "editor-docs")]
-const EDITOR_DOCS_SCRATCH_MARKDOWN: &str = include_str!("../docs/scratch.md");
+const EDITOR_DOCS_MARK_MARKDOWN: &str = include_str!("../docs/mark.md");
 #[cfg(feature = "editor-docs")]
 const EDITOR_DOCS_CONDITIONS_MARKDOWN: &str = include_str!("../docs/conditions.md");
 #[cfg(feature = "editor-docs")]
@@ -2159,9 +2159,9 @@ const EDITOR_DOCS_PAGES: &[EditorDocsPage] = &[
         markdown: EDITOR_DOCS_VARIABLES_MARKDOWN,
     },
     EditorDocsPage {
-        id: "scratch",
-        title: "Scratch",
-        markdown: EDITOR_DOCS_SCRATCH_MARKDOWN,
+        id: "mark",
+        title: "Marks",
+        markdown: EDITOR_DOCS_MARK_MARKDOWN,
     },
     EditorDocsPage {
         id: "conditions",

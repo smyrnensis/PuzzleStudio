@@ -39,7 +39,7 @@ down -> left
 left -> up
 }
 
-scratch {
+marks {
 checked
 }
 

@@ -18,7 +18,7 @@ owners:
 
 3D authoring must stay logically isomorphic with the 2D authoring path. Do not
 add an independent parser interpretation for non-spatial syntax. Shared
-authoring concepts such as selectors, `no`, scratch blocks, prefix scratch sugar
+authoring concepts such as selectors, `no`, mark blocks, prefix mark sugar
 like `> Player`, inputs, lifecycle names, and scene commands must use shared
 authoring helpers or the same lowered meaning as 2D. 3D-specific authoring code
 may branch only at the thin spatial boundary: coordinates, offsets,

@@ -30,7 +30,7 @@ sounds {
 // cantmove Box:* -> sfx bump
 }
 
-scratch {
+marks {
 checked
 can_deform
 }

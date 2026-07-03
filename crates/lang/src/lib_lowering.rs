@@ -6,13 +6,12 @@ struct ProgramLowerer<'a> {
     constant_globals: &'a [GlobalId],
     condition_names: &'a HashMap<String, ConditionId>,
     visual_condition_reads: &'a HashSet<ConditionId>,
-    scratch_names: &'a HashMap<String, ScratchDef>,
+    mark_names: &'a HashMap<String, MarkDef>,
     model_sound_triggers: &'a [ModelSoundTrigger],
     animation: &'a AnimationDef,
     value_sets: &'a HashMap<String, Vec<String>>,
     directions: &'a [Direction],
     visual_objects: &'a [ObjectId],
-    default_wait_ms: u64,
     next_rule_id: u16,
     visual_rules: Vec<RuleId>,
     rule_animations: HashMap<RuleId, Vec<RuleAnimation>>,
@@ -75,12 +74,11 @@ fn lower_programs(
     constant_globals: &[GlobalId],
     condition_names: &HashMap<String, ConditionId>,
     visual_condition_reads: &HashSet<ConditionId>,
-    scratch_names: &HashMap<String, ScratchDef>,
+    mark_names: &HashMap<String, MarkDef>,
     model_sound_triggers: &[ModelSoundTrigger],
     animation: &AnimationDef,
     value_sets: &HashMap<String, Vec<String>>,
     directions: &[Direction],
-    default_wait_ms: u64,
 ) -> Result<LoweredPrograms, DiagnosticReport> {
     let mut definitions_by_name = HashMap::new();
     for definition in definitions {
@@ -118,13 +116,12 @@ fn lower_programs(
         constant_globals,
         condition_names,
         visual_condition_reads,
-        scratch_names,
+        mark_names,
         model_sound_triggers,
         animation,
         value_sets,
         directions,
         visual_objects,
-        default_wait_ms,
         next_rule_id: 1,
         visual_rules: Vec::new(),
         rule_animations: HashMap::new(),
@@ -443,7 +440,7 @@ fn report_at_source_line_number(
 fn lower_condition_defs(
     definitions: Vec<ConditionDefinitionAst>,
     object_layers: &HashMap<ObjectId, LayerId>,
-    scratch_names: &HashMap<String, ScratchDef>,
+    mark_names: &HashMap<String, MarkDef>,
     value_sets: &HashMap<String, Vec<String>>,
     input_names: &HashMap<String, InputId>,
     directions: &[Direction],
@@ -455,7 +452,7 @@ fn lower_condition_defs(
                 &definition.kind,
                 input_names,
                 object_layers,
-                scratch_names,
+                mark_names,
                 value_sets,
                 directions,
             )?;
@@ -471,7 +468,7 @@ fn lower_condition_value_kind(
     kind: &ConditionValueAst,
     input_names: &HashMap<String, InputId>,
     object_layers: &HashMap<ObjectId, LayerId>,
-    scratch_names: &HashMap<String, ScratchDef>,
+    mark_names: &HashMap<String, MarkDef>,
     value_sets: &HashMap<String, Vec<String>>,
     directions: &[Direction],
 ) -> Result<ConditionValueKind, DiagnosticReport> {
@@ -490,7 +487,7 @@ fn lower_condition_value_kind(
             ConditionMatchKind::Count,
             input_names,
             object_layers,
-            scratch_names,
+            mark_names,
             value_sets,
             directions,
         ),
@@ -499,7 +496,7 @@ fn lower_condition_value_kind(
             ConditionMatchKind::Exists,
             input_names,
             object_layers,
-            scratch_names,
+            mark_names,
             value_sets,
             directions,
         ),
@@ -508,7 +505,7 @@ fn lower_condition_value_kind(
             ConditionMatchKind::None,
             input_names,
             object_layers,
-            scratch_names,
+            mark_names,
             value_sets,
             directions,
         ),
@@ -527,7 +524,7 @@ fn lower_condition_match_kind(
     kind: ConditionMatchKind,
     input_names: &HashMap<String, InputId>,
     object_layers: &HashMap<ObjectId, LayerId>,
-    scratch_names: &HashMap<String, ScratchDef>,
+    mark_names: &HashMap<String, MarkDef>,
     value_sets: &HashMap<String, Vec<String>>,
     directions: &[Direction],
 ) -> Result<ConditionValueKind, DiagnosticReport> {
@@ -539,7 +536,7 @@ fn lower_condition_match_kind(
             condition_pattern,
             input_names,
             object_layers,
-            scratch_names,
+            mark_names,
             value_sets,
             directions,
         )?;
@@ -552,7 +549,7 @@ fn lower_condition_match_kind(
     let patterns = lower_condition_patterns(
         condition_pattern,
         object_layers,
-        scratch_names,
+        mark_names,
         value_sets,
         input_names,
         directions,
@@ -567,7 +564,7 @@ fn lower_condition_match_kind(
 fn lower_condition_patterns(
     condition_pattern: &ConditionPatternAst,
     object_layers: &HashMap<ObjectId, LayerId>,
-    scratch_names: &HashMap<String, ScratchDef>,
+    mark_names: &HashMap<String, MarkDef>,
     value_sets: &HashMap<String, Vec<String>>,
     input_names: &HashMap<String, InputId>,
     directions: &[Direction],
@@ -579,7 +576,7 @@ fn lower_condition_patterns(
                 return lower_condition_patterns_for_directions(
                     block,
                     object_layers,
-                    scratch_names,
+                    mark_names,
                     value_sets,
                     directions,
                     true,
@@ -588,7 +585,7 @@ fn lower_condition_patterns(
             lower_condition_patterns_for_directions(
                 block,
                 object_layers,
-                scratch_names,
+                mark_names,
                 value_sets,
                 &[neutral_direction()],
                 false,
@@ -597,7 +594,7 @@ fn lower_condition_patterns(
         OrientationExpr::Input => lower_condition_patterns_for_directions(
             block,
             object_layers,
-            scratch_names,
+            mark_names,
             value_sets,
             directions,
             true,
@@ -611,7 +608,7 @@ fn lower_condition_patterns(
             lower_condition_patterns_for_directions(
                 block,
                 object_layers,
-                scratch_names,
+                mark_names,
                 value_sets,
                 &directions,
                 true,
@@ -633,7 +630,7 @@ fn lower_condition_patterns(
             lower_condition_patterns_for_directions(
                 block,
                 object_layers,
-                scratch_names,
+                mark_names,
                 value_sets,
                 &directions,
                 true,
@@ -645,7 +642,7 @@ fn lower_condition_patterns(
 fn lower_condition_patterns_for_directions(
     block: &PatternBlock,
     object_layers: &HashMap<ObjectId, LayerId>,
-    scratch_names: &HashMap<String, ScratchDef>,
+    mark_names: &HashMap<String, MarkDef>,
     value_sets: &HashMap<String, Vec<String>>,
     directions: &[Direction],
     direction_expanded: bool,
@@ -656,7 +653,7 @@ fn lower_condition_patterns_for_directions(
             block,
             block,
             object_layers,
-            scratch_names,
+            mark_names,
             value_sets,
             *direction,
             direction_expanded,
@@ -677,7 +674,7 @@ fn lower_condition_input_patterns(
     condition_pattern: &ConditionPatternAst,
     input_names: &HashMap<String, InputId>,
     object_layers: &HashMap<ObjectId, LayerId>,
-    scratch_names: &HashMap<String, ScratchDef>,
+    mark_names: &HashMap<String, MarkDef>,
     value_sets: &HashMap<String, Vec<String>>,
     directions: &[Direction],
 ) -> Result<Vec<(InputId, Pattern)>, DiagnosticReport> {
@@ -697,7 +694,7 @@ fn lower_condition_input_patterns(
             block,
             block,
             object_layers,
-            scratch_names,
+            mark_names,
             value_sets,
             *direction,
             true,
@@ -777,26 +774,26 @@ fn patterns_from_alternatives(
                                 require_objects: cell.require_objects.clone(),
                                 require_object_sets: cell.require_object_sets.clone(),
                                 forbid_objects: cell.forbid_objects.clone(),
-                                require_scratch: resolve_scratch_patterns(
-                                    cell.require_scratch.clone(),
+                                require_mark: resolve_mark_patterns(
+                                    cell.require_mark.clone(),
                                     *direction,
                                     direction_expanded,
                                     line,
                                 )?,
-                                require_object_set_scratch: resolve_object_set_scratch_patterns(
-                                    cell.require_object_set_scratch.clone(),
+                                require_object_set_mark: resolve_object_set_mark_patterns(
+                                    cell.require_object_set_mark.clone(),
                                     *direction,
                                     direction_expanded,
                                     line,
                                 )?,
-                                forbid_scratch: resolve_scratch_patterns(
-                                    cell.forbid_scratch.clone(),
+                                forbid_mark: resolve_mark_patterns(
+                                    cell.forbid_mark.clone(),
                                     *direction,
                                     direction_expanded,
                                     line,
                                 )?,
-                                forbid_object_set_scratch: resolve_object_set_scratch_patterns(
-                                    cell.forbid_object_set_scratch.clone(),
+                                forbid_object_set_mark: resolve_object_set_mark_patterns(
+                                    cell.forbid_object_set_mark.clone(),
                                     *direction,
                                     direction_expanded,
                                     line,
@@ -823,7 +820,7 @@ fn lower_goal_condition(
     global_names: &HashMap<String, GlobalId>,
     condition_names: &HashMap<String, ConditionId>,
     visual_condition_reads: &HashSet<ConditionId>,
-    scratch_names: &HashMap<String, ScratchDef>,
+    mark_names: &HashMap<String, MarkDef>,
     visual_objects: &[ObjectId],
     value_sets: &HashMap<String, Vec<String>>,
     input_names: &HashMap<String, InputId>,
@@ -837,7 +834,7 @@ fn lower_goal_condition(
             global_names,
             condition_names,
             visual_condition_reads,
-            scratch_names,
+            mark_names,
             visual_objects,
             value_sets,
             input_names,
@@ -852,7 +849,7 @@ fn lower_goal_expr(
     global_names: &HashMap<String, GlobalId>,
     condition_names: &HashMap<String, ConditionId>,
     visual_condition_reads: &HashSet<ConditionId>,
-    scratch_names: &HashMap<String, ScratchDef>,
+    mark_names: &HashMap<String, MarkDef>,
     visual_objects: &[ObjectId],
     value_sets: &HashMap<String, Vec<String>>,
     input_names: &HashMap<String, InputId>,
@@ -869,7 +866,7 @@ fn lower_goal_expr(
                         global_names,
                         condition_names,
                         visual_condition_reads,
-                        scratch_names,
+                        mark_names,
                         visual_objects,
                         value_sets,
                         input_names,
@@ -888,7 +885,7 @@ fn lower_goal_expr(
                         global_names,
                         condition_names,
                         visual_condition_reads,
-                        scratch_names,
+                        mark_names,
                         visual_objects,
                         value_sets,
                         input_names,
@@ -940,7 +937,7 @@ fn lower_goal_expr(
                 kind,
                 input_names,
                 object_layers,
-                scratch_names,
+                mark_names,
                 value_sets,
                 directions,
             )?;
@@ -956,7 +953,7 @@ fn lower_goal_expr(
                 kind,
                 input_names,
                 object_layers,
-                scratch_names,
+                mark_names,
                 value_sets,
                 directions,
             )?;
@@ -972,7 +969,7 @@ fn lower_goal_expr(
                 kind,
                 input_names,
                 object_layers,
-                scratch_names,
+                mark_names,
                 value_sets,
                 directions,
             )?;
@@ -1194,12 +1191,12 @@ fn write_template_touches_visual_object(
         | WriteOpTemplate::RemoveObjectSet { objects, .. } => objects
             .iter()
             .any(|object| object_is_visual(*object, visual_objects)),
-        WriteOpTemplate::SetObjectSetScratch { binding, .. }
-        | WriteOpTemplate::RemoveObjectSetScratch { binding, .. } => {
+        WriteOpTemplate::SetObjectSetMark { binding, .. }
+        | WriteOpTemplate::RemoveObjectSetMark { binding, .. } => {
             object_set_binding_touches_visual_object(*binding, alternative, visual_objects)
         }
-        WriteOpTemplate::SetScratch { object, .. }
-        | WriteOpTemplate::RemoveScratch { object, .. } => {
+        WriteOpTemplate::SetMark { object, .. }
+        | WriteOpTemplate::RemoveMark { object, .. } => {
             !object.is_empty() && object_is_visual(*object, visual_objects)
         }
     }
@@ -1221,12 +1218,12 @@ fn write_template_touches_main_state(
         | WriteOpTemplate::RemoveObjectSet { objects, .. } => objects
             .iter()
             .any(|object| !object_is_visual(*object, visual_objects)),
-        WriteOpTemplate::SetObjectSetScratch { binding, .. }
-        | WriteOpTemplate::RemoveObjectSetScratch { binding, .. } => {
+        WriteOpTemplate::SetObjectSetMark { binding, .. }
+        | WriteOpTemplate::RemoveObjectSetMark { binding, .. } => {
             object_set_binding_touches_main_state(*binding, alternative, visual_objects)
         }
-        WriteOpTemplate::SetScratch { object, .. }
-        | WriteOpTemplate::RemoveScratch { object, .. } => {
+        WriteOpTemplate::SetMark { object, .. }
+        | WriteOpTemplate::RemoveMark { object, .. } => {
             object.is_empty() || !object_is_visual(*object, visual_objects)
         }
     }
@@ -1715,7 +1712,7 @@ impl<'a> ProgramLowerer<'a> {
             pattern,
             pattern,
             self.object_layers,
-            self.scratch_names,
+            self.mark_names,
             self.value_sets,
             line,
             None,
@@ -1734,7 +1731,7 @@ impl<'a> ProgramLowerer<'a> {
             pattern,
             pattern,
             self.object_layers,
-            self.scratch_names,
+            self.mark_names,
             self.value_sets,
             line,
             None,
@@ -2006,7 +2003,7 @@ impl<'a> ProgramLowerer<'a> {
                     kind,
                     self.input_names,
                     self.object_layers,
-                    self.scratch_names,
+                    self.mark_names,
                     self.value_sets,
                     self.directions,
                 )?;
@@ -2027,7 +2024,7 @@ impl<'a> ProgramLowerer<'a> {
                     kind,
                     self.input_names,
                     self.object_layers,
-                    self.scratch_names,
+                    self.mark_names,
                     self.value_sets,
                     self.directions,
                 )?;
@@ -2045,7 +2042,7 @@ impl<'a> ProgramLowerer<'a> {
                     kind,
                     self.input_names,
                     self.object_layers,
-                    self.scratch_names,
+                    self.mark_names,
                     self.value_sets,
                     self.directions,
                 )?;
@@ -2236,7 +2233,7 @@ impl<'a> ProgramLowerer<'a> {
             &rewrite.before,
             &rewrite.after,
             self.object_layers,
-            self.scratch_names,
+            self.mark_names,
             self.value_sets,
             direction,
             direction_expanded,
@@ -2347,8 +2344,9 @@ impl<'a> ProgramLowerer<'a> {
                         .push(RuleEffect::StopMusic { name: name.clone() });
                 }
                 EffectAst::Wait { milliseconds } => {
-                    let milliseconds = milliseconds.unwrap_or(self.default_wait_ms);
-                    lowered.ordered.push(RuleEffect::Wait { milliseconds });
+                    lowered.ordered.push(RuleEffect::Wait {
+                        milliseconds: *milliseconds,
+                    });
                 }
                 EffectAst::WaitAnimation => {
                     lowered.ordered.push(RuleEffect::WaitAnimation);
@@ -2443,26 +2441,26 @@ impl<'a> ProgramLowerer<'a> {
                                 require_objects: cell.require_objects.clone(),
                                 require_object_sets: cell.require_object_sets.clone(),
                                 forbid_objects: cell.forbid_objects.clone(),
-                                require_scratch: resolve_scratch_patterns(
-                                    cell.require_scratch.clone(),
+                                require_mark: resolve_mark_patterns(
+                                    cell.require_mark.clone(),
                                     direction,
                                     direction_expanded,
                                     "statement",
                                 )?,
-                                require_object_set_scratch: resolve_object_set_scratch_patterns(
-                                    cell.require_object_set_scratch.clone(),
+                                require_object_set_mark: resolve_object_set_mark_patterns(
+                                    cell.require_object_set_mark.clone(),
                                     direction,
                                     direction_expanded,
                                     "statement",
                                 )?,
-                                forbid_scratch: resolve_scratch_patterns(
-                                    cell.forbid_scratch.clone(),
+                                forbid_mark: resolve_mark_patterns(
+                                    cell.forbid_mark.clone(),
                                     direction,
                                     direction_expanded,
                                     "statement",
                                 )?,
-                                forbid_object_set_scratch: resolve_object_set_scratch_patterns(
-                                    cell.forbid_object_set_scratch.clone(),
+                                forbid_object_set_mark: resolve_object_set_mark_patterns(
+                                    cell.forbid_object_set_mark.clone(),
                                     direction,
                                     direction_expanded,
                                     "statement",

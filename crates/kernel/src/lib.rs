@@ -146,7 +146,7 @@ impl<const D: usize> GridShape<D> {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum GridPatchOp<Position, ObjectId, GlobalId, ScratchId> {
+pub enum GridPatchOp<Position, ObjectId, GlobalId, MarkId> {
     Add {
         position: Position,
         object: ObjectId,
@@ -170,18 +170,18 @@ pub enum GridPatchOp<Position, ObjectId, GlobalId, ScratchId> {
         op: GlobalUpdateOp,
         value: i64,
     },
-    SetScratch {
+    SetMark {
         position: Position,
         object: ObjectId,
-        scratch: ScratchId,
+        mark: MarkId,
         value: Option<i64>,
     },
-    RemoveScratch {
+    RemoveMark {
         position: Position,
         object: ObjectId,
-        scratch: ScratchId,
+        mark: MarkId,
         value: Option<i64>,
-        match_value: ScratchValueMatch,
+        match_value: MarkValueMatch,
     },
 }
 
@@ -593,15 +593,15 @@ fn apply_global_update<GlobalId: Copy>(
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ScratchKind {
-    Marker,
+pub enum MarkKind {
+    Flag,
     Bool,
     Int,
     Enum,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ScratchValueMatch {
+pub enum MarkValueMatch {
     Any,
     Exact,
 }
@@ -614,11 +614,11 @@ pub struct ObjectSetMatcher<ObjectId, LayerId> {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ObjectSetScratchPattern<ScratchId> {
+pub struct ObjectSetMarkPattern<MarkId> {
     pub binding: u16,
-    pub scratch: ScratchId,
+    pub mark: MarkId,
     pub value: Option<i64>,
-    pub match_value: ScratchValueMatch,
+    pub match_value: MarkValueMatch,
 }
 
 pub fn object_set_matcher_for_same_layer<ObjectId, LayerId>(
@@ -645,43 +645,43 @@ where
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ScratchValue<ScratchId> {
-    pub scratch: ScratchId,
+pub struct MarkValue<MarkId> {
+    pub mark: MarkId,
     pub value: Option<i64>,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
-struct ScratchEntry<ScratchId> {
-    scratch: ScratchValue<ScratchId>,
+struct MarkEntry<MarkId> {
+    mark: MarkValue<MarkId>,
     next: Option<NonZeroU32>,
 }
 
 #[derive(Clone)]
-pub struct ScratchIter<'a, ScratchId> {
-    entries: &'a [ScratchEntry<ScratchId>],
+pub struct MarkIter<'a, MarkId> {
+    entries: &'a [MarkEntry<MarkId>],
     next: Option<NonZeroU32>,
 }
 
-impl<ScratchId: Copy> Iterator for ScratchIter<'_, ScratchId> {
-    type Item = ScratchValue<ScratchId>;
+impl<MarkId: Copy> Iterator for MarkIter<'_, MarkId> {
+    type Item = MarkValue<MarkId>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let id = self.next?;
-        let entry = self.entries.get(scratch_entry_index(id))?;
+        let entry = self.entries.get(mark_entry_index(id))?;
         self.next = entry.next;
-        Some(entry.scratch)
+        Some(entry.mark)
     }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ScratchSpace<ScratchId> {
+pub struct MarkSpace<MarkId> {
     cell_heads: Vec<Option<NonZeroU32>>,
     slot_heads: Vec<Option<NonZeroU32>>,
-    entries: Vec<ScratchEntry<ScratchId>>,
+    entries: Vec<MarkEntry<MarkId>>,
     free_entries: Vec<NonZeroU32>,
 }
 
-impl<ScratchId> ScratchSpace<ScratchId> {
+impl<MarkId> MarkSpace<MarkId> {
     pub fn new(cell_count: usize, slot_count: usize) -> Self {
         Self {
             cell_heads: vec![None; cell_count],
@@ -707,134 +707,134 @@ impl<ScratchId> ScratchSpace<ScratchId> {
     }
 }
 
-impl<ScratchId: Copy> ScratchSpace<ScratchId> {
-    pub fn cell_values(&self) -> Vec<Vec<ScratchValue<ScratchId>>> {
+impl<MarkId: Copy> MarkSpace<MarkId> {
+    pub fn cell_values(&self) -> Vec<Vec<MarkValue<MarkId>>> {
         (0..self.cell_heads.len())
             .map(|index| self.cell_at(index).collect())
             .collect()
     }
 
-    pub fn slot_values(&self) -> Vec<Vec<ScratchValue<ScratchId>>> {
+    pub fn slot_values(&self) -> Vec<Vec<MarkValue<MarkId>>> {
         (0..self.slot_heads.len())
             .map(|index| self.slot_at(index).collect())
             .collect()
     }
 
     #[inline]
-    pub fn cell_at(&self, index: usize) -> ScratchIter<'_, ScratchId> {
-        ScratchIter {
+    pub fn cell_at(&self, index: usize) -> MarkIter<'_, MarkId> {
+        MarkIter {
             entries: &self.entries,
             next: self.cell_heads.get(index).copied().flatten(),
         }
     }
 
     #[inline]
-    pub fn slot_at(&self, index: usize) -> ScratchIter<'_, ScratchId> {
-        ScratchIter {
+    pub fn slot_at(&self, index: usize) -> MarkIter<'_, MarkId> {
+        MarkIter {
             entries: &self.entries,
             next: self.slot_heads.get(index).copied().flatten(),
         }
     }
 
-    pub fn has_cell(&self, index: usize, scratch: ScratchId, value: Option<i64>) -> bool
+    pub fn has_cell(&self, index: usize, mark: MarkId, value: Option<i64>) -> bool
     where
-        ScratchId: PartialEq,
+        MarkId: PartialEq,
     {
         self.cell_at(index)
-            .any(|entry| entry.scratch == scratch && entry.value == value)
+            .any(|entry| entry.mark == mark && entry.value == value)
     }
 
-    pub fn has_cell_key(&self, index: usize, scratch: ScratchId) -> bool
+    pub fn has_cell_key(&self, index: usize, mark: MarkId) -> bool
     where
-        ScratchId: PartialEq,
+        MarkId: PartialEq,
     {
-        self.cell_at(index).any(|entry| entry.scratch == scratch)
+        self.cell_at(index).any(|entry| entry.mark == mark)
     }
 
-    pub fn has_slot(&self, index: usize, scratch: ScratchId, value: Option<i64>) -> bool
+    pub fn has_slot(&self, index: usize, mark: MarkId, value: Option<i64>) -> bool
     where
-        ScratchId: PartialEq,
+        MarkId: PartialEq,
     {
         self.slot_at(index)
-            .any(|entry| entry.scratch == scratch && entry.value == value)
+            .any(|entry| entry.mark == mark && entry.value == value)
     }
 
-    pub fn has_slot_key(&self, index: usize, scratch: ScratchId) -> bool
+    pub fn has_slot_key(&self, index: usize, mark: MarkId) -> bool
     where
-        ScratchId: PartialEq,
+        MarkId: PartialEq,
     {
-        self.slot_at(index).any(|entry| entry.scratch == scratch)
+        self.slot_at(index).any(|entry| entry.mark == mark)
     }
 
-    pub fn set_cell(&mut self, index: usize, scratch: ScratchId, value: Option<i64>)
+    pub fn set_cell(&mut self, index: usize, mark: MarkId, value: Option<i64>)
     where
-        ScratchId: PartialEq,
+        MarkId: PartialEq,
     {
-        set_scratch(
+        set_mark(
             &mut self.cell_heads,
             &mut self.entries,
             &mut self.free_entries,
             index,
-            scratch,
+            mark,
             value,
         );
     }
 
-    pub fn set_slot(&mut self, index: usize, scratch: ScratchId, value: Option<i64>)
+    pub fn set_slot(&mut self, index: usize, mark: MarkId, value: Option<i64>)
     where
-        ScratchId: PartialEq,
+        MarkId: PartialEq,
     {
-        set_scratch(
+        set_mark(
             &mut self.slot_heads,
             &mut self.entries,
             &mut self.free_entries,
             index,
-            scratch,
+            mark,
             value,
         );
     }
 
-    pub fn remove_cell(&mut self, index: usize, scratch: ScratchId, value: Option<i64>)
+    pub fn remove_cell(&mut self, index: usize, mark: MarkId, value: Option<i64>)
     where
-        ScratchId: PartialEq,
+        MarkId: PartialEq,
     {
         let mut entries = self.take_cell(index);
-        retain_scratch(&mut entries, scratch, value);
+        retain_mark(&mut entries, mark, value);
         self.replace_cell(index, entries);
     }
 
-    pub fn remove_slot(&mut self, index: usize, scratch: ScratchId, value: Option<i64>)
+    pub fn remove_slot(&mut self, index: usize, mark: MarkId, value: Option<i64>)
     where
-        ScratchId: PartialEq,
+        MarkId: PartialEq,
     {
         let mut entries = self.take_slot(index);
-        retain_scratch(&mut entries, scratch, value);
+        retain_mark(&mut entries, mark, value);
         self.replace_slot(index, entries);
     }
 
-    pub fn take_cell(&mut self, index: usize) -> Vec<ScratchValue<ScratchId>> {
-        let scratch = self.cell_at(index).collect::<Vec<_>>();
+    pub fn take_cell(&mut self, index: usize) -> Vec<MarkValue<MarkId>> {
+        let mark = self.cell_at(index).collect::<Vec<_>>();
         self.clear_cell(index);
-        scratch
+        mark
     }
 
-    pub fn take_slot(&mut self, index: usize) -> Vec<ScratchValue<ScratchId>> {
-        let scratch = self.slot_at(index).collect::<Vec<_>>();
+    pub fn take_slot(&mut self, index: usize) -> Vec<MarkValue<MarkId>> {
+        let mark = self.slot_at(index).collect::<Vec<_>>();
         self.clear_slot(index);
-        scratch
+        mark
     }
 
-    pub fn replace_cell(&mut self, index: usize, scratch: Vec<ScratchValue<ScratchId>>) {
+    pub fn replace_cell(&mut self, index: usize, mark: Vec<MarkValue<MarkId>>) {
         self.clear_cell(index);
-        for scratch in scratch {
-            self.push_cell(index, scratch);
+        for mark in mark {
+            self.push_cell(index, mark);
         }
     }
 
-    pub fn replace_slot(&mut self, index: usize, scratch: Vec<ScratchValue<ScratchId>>) {
+    pub fn replace_slot(&mut self, index: usize, mark: Vec<MarkValue<MarkId>>) {
         self.clear_slot(index);
-        for scratch in scratch {
-            self.push_slot(index, scratch);
+        for mark in mark {
+            self.push_slot(index, mark);
         }
     }
 
@@ -863,41 +863,41 @@ impl<ScratchId: Copy> ScratchSpace<ScratchId> {
         self.free_entries.clear();
     }
 
-    pub fn hash_into<F>(&self, mut hash: u64, mut scratch_raw: F) -> u64
+    pub fn hash_into<F>(&self, mut hash: u64, mut mark_raw: F) -> u64
     where
-        F: FnMut(ScratchId) -> u64,
+        F: FnMut(MarkId) -> u64,
     {
         for index in 0..self.cell_heads.len() {
-            hash = hash_scratch_iter(hash, self.cell_at(index), &mut scratch_raw);
+            hash = hash_mark_iter(hash, self.cell_at(index), &mut mark_raw);
         }
         for index in 0..self.slot_heads.len() {
-            hash = hash_scratch_iter(hash, self.slot_at(index), &mut scratch_raw);
+            hash = hash_mark_iter(hash, self.slot_at(index), &mut mark_raw);
         }
         hash
     }
 
-    fn push_cell(&mut self, index: usize, scratch: ScratchValue<ScratchId>) {
-        push_scratch(
+    fn push_cell(&mut self, index: usize, mark: MarkValue<MarkId>) {
+        push_mark(
             &mut self.cell_heads,
             &mut self.entries,
             &mut self.free_entries,
             index,
-            scratch,
+            mark,
         );
     }
 
-    fn push_slot(&mut self, index: usize, scratch: ScratchValue<ScratchId>) {
-        push_scratch(
+    fn push_slot(&mut self, index: usize, mark: MarkValue<MarkId>) {
+        push_mark(
             &mut self.slot_heads,
             &mut self.entries,
             &mut self.free_entries,
             index,
-            scratch,
+            mark,
         );
     }
 }
 
-impl<ScratchId: Copy + PartialEq> PartialEq for ScratchSpace<ScratchId> {
+impl<MarkId: Copy + PartialEq> PartialEq for MarkSpace<MarkId> {
     fn eq(&self, other: &Self) -> bool {
         self.cell_heads.len() == other.cell_heads.len()
             && self.slot_heads.len() == other.slot_heads.len()
@@ -906,63 +906,63 @@ impl<ScratchId: Copy + PartialEq> PartialEq for ScratchSpace<ScratchId> {
     }
 }
 
-impl<ScratchId: Copy + Eq> Eq for ScratchSpace<ScratchId> {}
+impl<MarkId: Copy + Eq> Eq for MarkSpace<MarkId> {}
 
-fn set_scratch<ScratchId: Copy + PartialEq>(
+fn set_mark<MarkId: Copy + PartialEq>(
     heads: &mut [Option<NonZeroU32>],
-    entries: &mut Vec<ScratchEntry<ScratchId>>,
+    entries: &mut Vec<MarkEntry<MarkId>>,
     free_entries: &mut Vec<NonZeroU32>,
     index: usize,
-    scratch: ScratchId,
+    mark: MarkId,
     value: Option<i64>,
 ) {
     let mut current = heads[index];
     while let Some(id) = current {
-        let entry_index = scratch_entry_index(id);
+        let entry_index = mark_entry_index(id);
         let entry = &mut entries[entry_index];
-        if entry.scratch.scratch == scratch {
-            entry.scratch.value = value;
+        if entry.mark.mark == mark {
+            entry.mark.value = value;
             return;
         }
         current = entry.next;
     }
-    push_scratch(
+    push_mark(
         heads,
         entries,
         free_entries,
         index,
-        ScratchValue { scratch, value },
+        MarkValue { mark, value },
     );
 }
 
-fn retain_scratch<ScratchId: PartialEq>(
-    entries: &mut Vec<ScratchValue<ScratchId>>,
-    scratch: ScratchId,
+fn retain_mark<MarkId: PartialEq>(
+    entries: &mut Vec<MarkValue<MarkId>>,
+    mark: MarkId,
     value: Option<i64>,
 ) {
     entries.retain(|entry| {
-        if entry.scratch != scratch {
+        if entry.mark != mark {
             return true;
         }
         value.is_some_and(|value| entry.value != Some(value))
     });
 }
 
-fn push_scratch<ScratchId: Copy>(
+fn push_mark<MarkId: Copy>(
     heads: &mut [Option<NonZeroU32>],
-    entries: &mut Vec<ScratchEntry<ScratchId>>,
+    entries: &mut Vec<MarkEntry<MarkId>>,
     free_entries: &mut Vec<NonZeroU32>,
     index: usize,
-    scratch: ScratchValue<ScratchId>,
+    mark: MarkValue<MarkId>,
 ) {
-    let new_id = allocate_scratch_entry(entries, free_entries, scratch);
+    let new_id = allocate_mark_entry(entries, free_entries, mark);
     let Some(mut current) = heads[index] else {
         heads[index] = Some(new_id);
         return;
     };
 
     loop {
-        let entry_index = scratch_entry_index(current);
+        let entry_index = mark_entry_index(current);
         let Some(next) = entries[entry_index].next else {
             entries[entry_index].next = Some(new_id);
             return;
@@ -971,68 +971,62 @@ fn push_scratch<ScratchId: Copy>(
     }
 }
 
-fn clear_head<ScratchId>(
+fn clear_head<MarkId>(
     heads: &mut [Option<NonZeroU32>],
-    entries: &mut [ScratchEntry<ScratchId>],
+    entries: &mut [MarkEntry<MarkId>],
     free_entries: &mut Vec<NonZeroU32>,
     index: usize,
 ) {
     let mut current = heads[index].take();
     while let Some(id) = current {
-        let entry_index = scratch_entry_index(id);
+        let entry_index = mark_entry_index(id);
         current = entries[entry_index].next;
         entries[entry_index].next = None;
         free_entries.push(id);
     }
 }
 
-fn allocate_scratch_entry<ScratchId: Copy>(
-    entries: &mut Vec<ScratchEntry<ScratchId>>,
+fn allocate_mark_entry<MarkId: Copy>(
+    entries: &mut Vec<MarkEntry<MarkId>>,
     free_entries: &mut Vec<NonZeroU32>,
-    scratch: ScratchValue<ScratchId>,
+    mark: MarkValue<MarkId>,
 ) -> NonZeroU32 {
     if let Some(id) = free_entries.pop() {
-        let index = scratch_entry_index(id);
-        entries[index] = ScratchEntry {
-            scratch,
-            next: None,
-        };
+        let index = mark_entry_index(id);
+        entries[index] = MarkEntry { mark, next: None };
         return id;
     }
 
     let raw_index = entries.len();
-    let id = scratch_entry_id(raw_index);
-    entries.push(ScratchEntry {
-        scratch,
-        next: None,
-    });
+    let id = mark_entry_id(raw_index);
+    entries.push(MarkEntry { mark, next: None });
     id
 }
 
-fn hash_scratch_iter<ScratchId: Copy, F>(
+fn hash_mark_iter<MarkId: Copy, F>(
     mut hash: u64,
-    scratch: ScratchIter<'_, ScratchId>,
-    scratch_raw: &mut F,
+    mark: MarkIter<'_, MarkId>,
+    mark_raw: &mut F,
 ) -> u64
 where
-    F: FnMut(ScratchId) -> u64,
+    F: FnMut(MarkId) -> u64,
 {
-    let count = scratch.clone().count();
+    let count = mark.clone().count();
     hash = fnv_mix(hash, count as u64);
-    for scratch in scratch {
-        hash = fnv_mix(hash, scratch_raw(scratch.scratch));
-        hash = fnv_mix(hash, scratch.value.unwrap_or(i64::MIN) as u64);
+    for mark in mark {
+        hash = fnv_mix(hash, mark_raw(mark.mark));
+        hash = fnv_mix(hash, mark.value.unwrap_or(i64::MIN) as u64);
     }
     hash
 }
 
-fn scratch_entry_index(id: NonZeroU32) -> usize {
-    usize::try_from(id.get() - 1).expect("scratch entry id must fit usize")
+fn mark_entry_index(id: NonZeroU32) -> usize {
+    usize::try_from(id.get() - 1).expect("mark entry id must fit usize")
 }
 
-fn scratch_entry_id(index: usize) -> NonZeroU32 {
-    let raw = u32::try_from(index + 1).expect("too many scratch entries");
-    NonZeroU32::new(raw).expect("scratch entry ids are one-based")
+fn mark_entry_id(index: usize) -> NonZeroU32 {
+    let raw = u32::try_from(index + 1).expect("too many mark entries");
+    NonZeroU32::new(raw).expect("mark entry ids are one-based")
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1312,16 +1306,16 @@ mod tests {
     }
 
     #[test]
-    fn scratch_space_moves_values_without_preserving_free_list_identity() {
-        let mut scratch = ScratchSpace::new(2, 2);
-        scratch.set_slot(0, TestId(1), Some(9));
-        let moved = scratch.take_slot(0);
-        scratch.replace_slot(1, moved);
+    fn mark_space_moves_values_without_preserving_free_list_identity() {
+        let mut mark = MarkSpace::new(2, 2);
+        mark.set_slot(0, TestId(1), Some(9));
+        let moved = mark.take_slot(0);
+        mark.replace_slot(1, moved);
 
-        let mut expected = ScratchSpace::new(2, 2);
+        let mut expected = MarkSpace::new(2, 2);
         expected.set_slot(1, TestId(1), Some(9));
 
-        assert_eq!(scratch, expected);
-        assert!(scratch.has_slot(1, TestId(1), Some(9)));
+        assert_eq!(mark, expected);
+        assert!(mark.has_slot(1, TestId(1), Some(9)));
     }
 }

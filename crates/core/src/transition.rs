@@ -1,8 +1,8 @@
 use crate::compiled_game::{
-    CompiledGame, ConditionValueKind, Effect, Guard, LocalFrame, MatchCell, Offset, Pattern,
-    PatternComponent, Rule, RuleApplication, RuleCondition, RuleStep, ScratchValueMatch, WriteOp,
+    CompiledGame, ConditionValueKind, Effect, Guard, LocalFrame, MarkValueMatch, MatchCell, Offset,
+    Pattern, PatternComponent, Rule, RuleApplication, RuleCondition, RuleStep, WriteOp,
 };
-use crate::ids::{ConditionId, InputId, ObjectId, RuleId, ScratchId};
+use crate::ids::{ConditionId, InputId, MarkId, ObjectId, RuleId};
 use crate::patch::{CorePatch, CorePatchOp, Patch, PatchError};
 use crate::state::State;
 use puzzle_kernel::{
@@ -256,7 +256,7 @@ fn run_program_transition(
     skip_visual_rules: bool,
 ) -> TransitionResult<StepTrace> {
     let mut original = state.clone();
-    original.clear_scratch();
+    original.clear_mark();
     let mut current = original.clone();
     let mut fired_rules = Vec::new();
     let mut patches = Vec::new();
@@ -291,7 +291,7 @@ fn run_program_transition(
         }
     }
 
-    current.clear_scratch();
+    current.clear_mark();
 
     Ok(StepTrace {
         input,
@@ -314,7 +314,7 @@ where
     F: FnMut(ProgramBoundarySnapshot<'_>) -> bool,
 {
     let mut original = state.clone();
-    original.clear_scratch();
+    original.clear_mark();
     let mut current = original.clone();
     let mut fired_rules = Vec::new();
     let mut patches = Vec::new();
@@ -340,7 +340,7 @@ where
         )?;
         if let Some(mut remaining_program) = outcome.remaining_program {
             remaining_program.extend_rule_steps(&program[index + 1..]);
-            current.clear_scratch();
+            current.clear_mark();
             return Ok(ProgramSegmentTrace {
                 trace: StepTrace {
                     input,
@@ -368,7 +368,7 @@ where
         }
     }
 
-    current.clear_scratch();
+    current.clear_mark();
 
     Ok(ProgramSegmentTrace {
         trace: StepTrace {
@@ -394,7 +394,7 @@ where
     F: FnMut(ProgramBoundarySnapshot<'_>) -> bool,
 {
     let mut original = state.clone();
-    original.clear_scratch();
+    original.clear_mark();
     let mut current = original.clone();
     let mut fired_rules = Vec::new();
     let mut patches = Vec::new();
@@ -418,7 +418,7 @@ where
         should_stop,
     )?;
     if let Some(remaining_program) = outcome.remaining_program {
-        current.clear_scratch();
+        current.clear_mark();
         return Ok(ProgramSegmentTrace {
             trace: StepTrace {
                 input,
@@ -445,7 +445,7 @@ where
         });
     }
 
-    current.clear_scratch();
+    current.clear_mark();
 
     Ok(ProgramSegmentTrace {
         trace: StepTrace {
@@ -2408,13 +2408,13 @@ enum ComponentAnchorKind {
     ObjectSet {
         objects: Vec<ObjectId>,
     },
-    SlotScratch {
+    SlotMark {
         object: ObjectId,
-        scratch: ScratchId,
+        mark: MarkId,
         value: Option<i64>,
     },
-    CellScratch {
-        scratch: ScratchId,
+    CellMark {
+        mark: MarkId,
         value: Option<i64>,
     },
 }
@@ -2489,22 +2489,22 @@ fn anchor_positions(
             }
             positions.into_iter().map(|(y, x)| (x, y)).collect()
         }
-        ComponentAnchorKind::SlotScratch {
+        ComponentAnchorKind::SlotMark {
             object,
-            scratch,
+            mark,
             value,
         } => {
             if game.object_layer(*object).is_none() {
                 return Vec::new();
             }
             state
-                .scratch_positions(*object, *scratch, *value)
+                .mark_positions(*object, *mark, *value)
                 .iter()
                 .filter_map(|slot| state.slot_position(*slot))
                 .collect()
         }
-        ComponentAnchorKind::CellScratch { scratch, value } => state
-            .scratch_positions(ObjectId::EMPTY, *scratch, *value)
+        ComponentAnchorKind::CellMark { mark, value } => state
+            .mark_positions(ObjectId::EMPTY, *mark, *value)
             .iter()
             .filter_map(|cell| state.cell_position(*cell))
             .collect(),
@@ -2576,27 +2576,27 @@ fn component_anchor(
                 ));
             }
         }
-        for scratch in &cell.require_scratch {
-            if scratch.match_value != ScratchValueMatch::Exact {
+        for mark in &cell.require_mark {
+            if mark.match_value != MarkValueMatch::Exact {
                 continue;
             }
             let count = state
-                .scratch_positions(scratch.object, scratch.scratch, scratch.value)
+                .mark_positions(mark.object, mark.mark, mark.value)
                 .len() as u32;
             if best
                 .as_ref()
                 .is_none_or(|(best_count, _)| count < *best_count)
             {
-                let kind = if scratch.object.is_empty() {
-                    ComponentAnchorKind::CellScratch {
-                        scratch: scratch.scratch,
-                        value: scratch.value,
+                let kind = if mark.object.is_empty() {
+                    ComponentAnchorKind::CellMark {
+                        mark: mark.mark,
+                        value: mark.value,
                     }
                 } else {
-                    ComponentAnchorKind::SlotScratch {
-                        object: scratch.object,
-                        scratch: scratch.scratch,
-                        value: scratch.value,
+                    ComponentAnchorKind::SlotMark {
+                        object: mark.object,
+                        mark: mark.mark,
+                        value: mark.value,
                     }
                 };
                 best = Some((count, ComponentAnchor { kind, dx, dy }));
@@ -2638,16 +2638,16 @@ fn placement_writes_within_local_frame(
             | WriteOp::Replace {
                 component, offset, ..
             }
-            | WriteOp::SetScratch {
+            | WriteOp::SetMark {
                 component, offset, ..
             }
-            | WriteOp::SetObjectSetScratch {
+            | WriteOp::SetObjectSetMark {
                 component, offset, ..
             }
-            | WriteOp::RemoveScratch {
+            | WriteOp::RemoveMark {
                 component, offset, ..
             }
-            | WriteOp::RemoveObjectSetScratch {
+            | WriteOp::RemoveObjectSetMark {
                 component, offset, ..
             } => {
                 let Some((x, y)) = write_position_for_components(components, *component, offset)
@@ -2730,10 +2730,10 @@ fn write_component(write: &WriteOp) -> u16 {
         | WriteOp::Move { component, .. }
         | WriteOp::MoveObjectSet { component, .. }
         | WriteOp::Replace { component, .. }
-        | WriteOp::SetScratch { component, .. }
-        | WriteOp::SetObjectSetScratch { component, .. }
-        | WriteOp::RemoveObjectSetScratch { component, .. }
-        | WriteOp::RemoveScratch { component, .. } => *component,
+        | WriteOp::SetMark { component, .. }
+        | WriteOp::SetObjectSetMark { component, .. }
+        | WriteOp::RemoveObjectSetMark { component, .. }
+        | WriteOp::RemoveMark { component, .. } => *component,
     }
 }
 
@@ -2744,10 +2744,10 @@ fn fixed_write_offset(write: &WriteOp) -> Option<(i16, i16)> {
         | WriteOp::Remove { offset, .. }
         | WriteOp::RemoveObjectSet { offset, .. }
         | WriteOp::Replace { offset, .. }
-        | WriteOp::SetScratch { offset, .. }
-        | WriteOp::SetObjectSetScratch { offset, .. }
-        | WriteOp::RemoveObjectSetScratch { offset, .. }
-        | WriteOp::RemoveScratch { offset, .. } => fixed_offset(offset),
+        | WriteOp::SetMark { offset, .. }
+        | WriteOp::SetObjectSetMark { offset, .. }
+        | WriteOp::RemoveObjectSetMark { offset, .. }
+        | WriteOp::RemoveMark { offset, .. } => fixed_offset(offset),
         WriteOp::Move { to_offset, .. } | WriteOp::MoveObjectSet { to_offset, .. } => {
             fixed_offset(to_offset)
         }
@@ -2927,29 +2927,23 @@ fn match_cell(
         }
     }
 
-    for scratch in &cell.require_scratch {
-        let matched = match scratch.match_value {
-            ScratchValueMatch::Any => {
-                state.has_scratch_key(game, x, y, scratch.object, scratch.scratch)
-            }
-            ScratchValueMatch::Exact => {
-                state.has_scratch(game, x, y, scratch.object, scratch.scratch, scratch.value)
-            }
+    for mark in &cell.require_mark {
+        let matched = match mark.match_value {
+            MarkValueMatch::Any => state.has_mark_key(game, x, y, mark.object, mark.mark),
+            MarkValueMatch::Exact => state.has_mark(game, x, y, mark.object, mark.mark, mark.value),
         };
         if !matched {
             return false;
         }
     }
 
-    for scratch in &cell.require_object_set_scratch {
-        let Some(object) = bound_object_shared(object_bindings, scratch.binding) else {
+    for mark in &cell.require_object_set_mark {
+        let Some(object) = bound_object_shared(object_bindings, mark.binding) else {
             return false;
         };
-        let matched = match scratch.match_value {
-            ScratchValueMatch::Any => state.has_scratch_key(game, x, y, object, scratch.scratch),
-            ScratchValueMatch::Exact => {
-                state.has_scratch(game, x, y, object, scratch.scratch, scratch.value)
-            }
+        let matched = match mark.match_value {
+            MarkValueMatch::Any => state.has_mark_key(game, x, y, object, mark.mark),
+            MarkValueMatch::Exact => state.has_mark(game, x, y, object, mark.mark, mark.value),
         };
         if !matched {
             return false;
@@ -2968,29 +2962,23 @@ fn match_cell(
         }
     }
 
-    for scratch in &cell.forbid_object_set_scratch {
-        let Some(object) = bound_object_shared(object_bindings, scratch.binding) else {
+    for mark in &cell.forbid_object_set_mark {
+        let Some(object) = bound_object_shared(object_bindings, mark.binding) else {
             return false;
         };
-        let matched = match scratch.match_value {
-            ScratchValueMatch::Any => state.has_scratch_key(game, x, y, object, scratch.scratch),
-            ScratchValueMatch::Exact => {
-                state.has_scratch(game, x, y, object, scratch.scratch, scratch.value)
-            }
+        let matched = match mark.match_value {
+            MarkValueMatch::Any => state.has_mark_key(game, x, y, object, mark.mark),
+            MarkValueMatch::Exact => state.has_mark(game, x, y, object, mark.mark, mark.value),
         };
         if matched {
             return false;
         }
     }
 
-    for scratch in &cell.forbid_scratch {
-        let matched = match scratch.match_value {
-            ScratchValueMatch::Any => {
-                state.has_scratch_key(game, x, y, scratch.object, scratch.scratch)
-            }
-            ScratchValueMatch::Exact => {
-                state.has_scratch(game, x, y, scratch.object, scratch.scratch, scratch.value)
-            }
+    for mark in &cell.forbid_mark {
+        let matched = match mark.match_value {
+            MarkValueMatch::Any => state.has_mark_key(game, x, y, mark.object, mark.mark),
+            MarkValueMatch::Exact => state.has_mark(game, x, y, mark.object, mark.mark, mark.value),
         };
         if matched {
             return false;
@@ -3084,64 +3072,64 @@ fn build_patch(rule: &Rule, placement: &MatchPlacement) -> TransitionResult<Patc
                     add: *add,
                 });
             }
-            WriteOp::SetScratch {
+            WriteOp::SetMark {
                 component,
                 offset,
                 object,
-                scratch,
+                mark,
                 value,
             } => {
-                patch.push(CorePatchOp::SetScratch {
+                patch.push(CorePatchOp::SetMark {
                     position: write_grid_position(placement, *component, offset)?,
                     object: *object,
-                    scratch: *scratch,
+                    mark: *mark,
                     value: *value,
                 });
             }
-            WriteOp::SetObjectSetScratch {
+            WriteOp::SetObjectSetMark {
                 component,
                 offset,
                 binding,
-                scratch,
+                mark,
                 value,
             } => {
                 let object = placement_object_binding(placement, *binding)?;
-                patch.push(CorePatchOp::SetScratch {
+                patch.push(CorePatchOp::SetMark {
                     position: write_grid_position(placement, *component, offset)?,
                     object,
-                    scratch: *scratch,
+                    mark: *mark,
                     value: *value,
                 });
             }
-            WriteOp::RemoveScratch {
+            WriteOp::RemoveMark {
                 component,
                 offset,
                 object,
-                scratch,
+                mark,
                 value,
                 match_value,
             } => {
-                patch.push(CorePatchOp::RemoveScratch {
+                patch.push(CorePatchOp::RemoveMark {
                     position: write_grid_position(placement, *component, offset)?,
                     object: *object,
-                    scratch: *scratch,
+                    mark: *mark,
                     value: *value,
                     match_value: *match_value,
                 });
             }
-            WriteOp::RemoveObjectSetScratch {
+            WriteOp::RemoveObjectSetMark {
                 component,
                 offset,
                 binding,
-                scratch,
+                mark,
                 value,
                 match_value,
             } => {
                 let object = placement_object_binding(placement, *binding)?;
-                patch.push(CorePatchOp::RemoveScratch {
+                patch.push(CorePatchOp::RemoveMark {
                     position: write_grid_position(placement, *component, offset)?,
                     object,
-                    scratch: *scratch,
+                    mark: *mark,
                     value: *value,
                     match_value: *match_value,
                 });
@@ -3254,15 +3242,15 @@ fn offset_pos(x: u16, y: u16, dx: i16, dy: i16) -> Option<(u16, u16)> {
 mod tests {
     use super::*;
     use crate::compiled_game::{
-        GlobalUpdateOp, Guard, MatchCell, ObjectDef, Offset, Pattern, PatternComponent, Rule,
-        RuleApplication, ScratchDef, ScratchKind, ScratchPattern, WriteOp,
+        GlobalUpdateOp, Guard, MarkDef, MarkKind, MarkPattern, MatchCell, ObjectDef, Offset,
+        Pattern, PatternComponent, Rule, RuleApplication, WriteOp,
     };
     use crate::ids::{GlobalId, InputId, LayerId, ObjectId, RuleId};
 
     const PLAYER: ObjectId = ObjectId(1);
     const BOX: ObjectId = ObjectId(2);
     const WALL: ObjectId = ObjectId(3);
-    const MARK: ScratchId = ScratchId(1);
+    const MARK: MarkId = MarkId(1);
     const RIGHT: InputId = InputId(1);
 
     fn fixed(dx: i16, dy: i16) -> Offset {
@@ -3281,18 +3269,18 @@ mod tests {
             require_objects,
             require_object_sets: Vec::new(),
             forbid_objects,
-            require_scratch: Vec::new(),
-            require_object_set_scratch: Vec::new(),
-            forbid_scratch: Vec::new(),
-            forbid_object_set_scratch: Vec::new(),
+            require_mark: Vec::new(),
+            require_object_set_mark: Vec::new(),
+            forbid_mark: Vec::new(),
+            forbid_object_set_mark: Vec::new(),
         }
     }
 
-    fn scratch_cell(
+    fn mark_cell(
         dx: i16,
         dy: i16,
         object: ObjectId,
-        scratch: ScratchId,
+        mark: MarkId,
         value: Option<i64>,
     ) -> MatchCell {
         MatchCell {
@@ -3301,15 +3289,15 @@ mod tests {
             require_objects: Vec::new(),
             require_object_sets: Vec::new(),
             forbid_objects: Vec::new(),
-            require_scratch: vec![ScratchPattern {
+            require_mark: vec![MarkPattern {
                 object,
-                scratch,
+                mark,
                 value,
-                match_value: ScratchValueMatch::Exact,
+                match_value: MarkValueMatch::Exact,
             }],
-            require_object_set_scratch: Vec::new(),
-            forbid_scratch: Vec::new(),
-            forbid_object_set_scratch: Vec::new(),
+            require_object_set_mark: Vec::new(),
+            forbid_mark: Vec::new(),
+            forbid_object_set_mark: Vec::new(),
         }
     }
 
@@ -3442,7 +3430,7 @@ mod tests {
             writes: vec![replace(0, 0, PLAYER, BOX)],
             effects: Vec::new(),
         };
-        let game = CompiledGame::new_with_scratch_condition_defs_program_roles(
+        let game = CompiledGame::new_with_mark_condition_defs_program_roles(
             3,
             objects,
             Vec::new(),
@@ -3519,7 +3507,7 @@ mod tests {
         assert_eq!(next.object_count(PLAYER), 1);
     }
 
-    fn scratch_anchor_game() -> CompiledGame {
+    fn mark_anchor_game() -> CompiledGame {
         let objects = vec![
             ObjectDef {
                 id: PLAYER,
@@ -3530,69 +3518,63 @@ mod tests {
                 layer_id: LayerId(2),
             },
         ];
-        let scratch = vec![ScratchDef {
+        let mark = vec![MarkDef {
             id: MARK,
-            kind: ScratchKind::Marker,
+            kind: MarkKind::Flag,
             values: Vec::new(),
         }];
-        CompiledGame::new_with_scratch_condition_defs_and_program(
-            3,
-            objects,
-            scratch,
-            Vec::new(),
-            vec![],
-        )
+        CompiledGame::new_with_mark_condition_defs_and_program(3, objects, mark, Vec::new(), vec![])
     }
 
     #[test]
-    fn scratch_position_cache_tracks_slot_scratch_moves_and_clears() {
-        let game = scratch_anchor_game();
+    fn mark_position_cache_tracks_slot_mark_moves_and_clears() {
+        let game = mark_anchor_game();
         let mut state = State::empty(4, 1, game.layer_count, game.object_count()).unwrap();
         state.place_object(&game, 1, 0, BOX).unwrap();
 
-        state.set_scratch_unchecked(1, 0, LayerId(2), MARK, Some(7));
+        state.set_mark_unchecked(1, 0, LayerId(2), MARK, Some(7));
         assert_eq!(
             state
-                .scratch_positions(BOX, MARK, Some(7))
+                .mark_positions(BOX, MARK, Some(7))
                 .iter()
                 .filter_map(|slot| state.slot_position(*slot))
                 .collect::<Vec<_>>(),
             vec![(1, 0)]
         );
 
-        let scratch = state.take_slot_for_move_unchecked(1, 0, LayerId(2));
-        state.place_moved_slot_unchecked(3, 0, LayerId(2), BOX, scratch);
+        let mark = state.take_slot_for_move_unchecked(1, 0, LayerId(2));
+        state.place_moved_slot_unchecked(3, 0, LayerId(2), BOX, mark);
         assert_eq!(
             state
-                .scratch_positions(BOX, MARK, Some(7))
+                .mark_positions(BOX, MARK, Some(7))
                 .iter()
                 .filter_map(|slot| state.slot_position(*slot))
                 .collect::<Vec<_>>(),
             vec![(3, 0)]
         );
 
-        state.remove_scratch_unchecked(3, 0, LayerId(2), MARK, Some(7));
-        assert!(state.scratch_positions(BOX, MARK, Some(7)).is_empty());
+        state.remove_mark_unchecked(3, 0, LayerId(2), MARK, Some(7));
+        assert!(state.mark_positions(BOX, MARK, Some(7)).is_empty());
 
-        state.set_scratch_unchecked(3, 0, LayerId(2), MARK, Some(9));
-        state.clear_scratch();
-        assert!(state.scratch_positions(BOX, MARK, Some(9)).is_empty());
+        state.set_mark_unchecked(3, 0, LayerId(2), MARK, Some(9));
+        state.clear_mark();
+        assert!(state.mark_positions(BOX, MARK, Some(9)).is_empty());
     }
 
     #[test]
-    fn component_candidates_anchor_on_rarest_required_exact_scratch() {
-        let game = scratch_anchor_game();
+    fn component_candidates_anchor_on_rarest_required_exact_mark() {
+        let game = mark_anchor_game();
         let mut state = State::empty(5, 1, game.layer_count, game.object_count()).unwrap();
         state.place_object(&game, 0, 0, PLAYER).unwrap();
         state.place_object(&game, 1, 0, PLAYER).unwrap();
         state.place_object(&game, 3, 0, PLAYER).unwrap();
         state.place_object(&game, 2, 0, BOX).unwrap();
-        state.set_scratch_unchecked(2, 0, LayerId(2), MARK, Some(1));
+        state.set_mark_unchecked(2, 0, LayerId(2), MARK, Some(1));
 
         let component = PatternComponent {
             cells: vec![
                 cell(0, 0, vec![PLAYER], Vec::new()),
-                scratch_cell(1, 0, BOX, MARK, Some(1)),
+                mark_cell(1, 0, BOX, MARK, Some(1)),
             ],
             gap_count: 0,
         };
