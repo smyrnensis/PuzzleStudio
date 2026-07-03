@@ -157,7 +157,7 @@ pub(crate) enum EffectAst {
         name: Option<String>,
     },
     Wait {
-        milliseconds: Option<u64>,
+        milliseconds: u64,
     },
     WaitAnimation,
     Message {

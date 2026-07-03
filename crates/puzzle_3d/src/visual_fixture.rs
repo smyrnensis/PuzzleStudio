@@ -688,79 +688,79 @@ fn write_write_op_json(out: &mut String, write_op: &WriteOp3) {
             )
             .unwrap();
         }
-        WriteOp3::SetScratch {
+        WriteOp3::SetMark {
             component,
             offset,
             object,
-            scratch,
+            mark,
             value,
         } => {
             write!(
                 out,
-                "{{ \"kind\": \"set_scratch\", \"component\": {}, \"offset\": {{ \"dx\": {}, \"dy\": {}, \"dz\": {} }}, \"object\": {}, \"scratch\": {}, \"value\": ",
-                component, offset.dx, offset.dy, offset.dz, object.0, scratch.0
+                "{{ \"kind\": \"set_mark\", \"component\": {}, \"offset\": {{ \"dx\": {}, \"dy\": {}, \"dz\": {} }}, \"object\": {}, \"mark\": {}, \"value\": ",
+                component, offset.dx, offset.dy, offset.dz, object.0, mark.0
             )
             .unwrap();
             write_optional_i64(out, *value);
             out.push_str(" }");
         }
-        WriteOp3::SetObjectSetScratch {
+        WriteOp3::SetObjectSetMark {
             component,
             offset,
             binding,
-            scratch,
+            mark,
             value,
         } => {
             write!(
                 out,
-                "{{ \"kind\": \"set_object_set_scratch\", \"component\": {}, \"offset\": {{ \"dx\": {}, \"dy\": {}, \"dz\": {} }}, \"binding\": {}, \"scratch\": {}, \"value\": ",
-                component, offset.dx, offset.dy, offset.dz, binding, scratch.0
+                "{{ \"kind\": \"set_object_set_mark\", \"component\": {}, \"offset\": {{ \"dx\": {}, \"dy\": {}, \"dz\": {} }}, \"binding\": {}, \"mark\": {}, \"value\": ",
+                component, offset.dx, offset.dy, offset.dz, binding, mark.0
             )
             .unwrap();
             write_optional_i64(out, *value);
             out.push_str(" }");
         }
-        WriteOp3::RemoveScratch {
+        WriteOp3::RemoveMark {
             component,
             offset,
             object,
-            scratch,
+            mark,
             value,
             match_value,
         } => {
             write!(
                 out,
-                "{{ \"kind\": \"remove_scratch\", \"component\": {}, \"offset\": {{ \"dx\": {}, \"dy\": {}, \"dz\": {} }}, \"object\": {}, \"scratch\": {}, \"value\": ",
-                component, offset.dx, offset.dy, offset.dz, object.0, scratch.0
+                "{{ \"kind\": \"remove_mark\", \"component\": {}, \"offset\": {{ \"dx\": {}, \"dy\": {}, \"dz\": {} }}, \"object\": {}, \"mark\": {}, \"value\": ",
+                component, offset.dx, offset.dy, offset.dz, object.0, mark.0
             )
             .unwrap();
             write_optional_i64(out, *value);
             write!(
                 out,
                 ", \"match\": \"{}\" }}",
-                scratch_value_match_name(*match_value)
+                mark_value_match_name(*match_value)
             )
             .unwrap();
         }
-        WriteOp3::RemoveObjectSetScratch {
+        WriteOp3::RemoveObjectSetMark {
             component,
             offset,
             binding,
-            scratch,
+            mark,
             value,
             match_value,
         } => {
             write!(
                 out,
-                "{{ \"kind\": \"remove_object_set_scratch\", \"component\": {}, \"offset\": {{ \"dx\": {}, \"dy\": {}, \"dz\": {} }}, \"binding\": {}, \"scratch\": {}, \"value\": ",
-                component, offset.dx, offset.dy, offset.dz, binding, scratch.0
+                "{{ \"kind\": \"remove_object_set_mark\", \"component\": {}, \"offset\": {{ \"dx\": {}, \"dy\": {}, \"dz\": {} }}, \"binding\": {}, \"mark\": {}, \"value\": ",
+                component, offset.dx, offset.dy, offset.dz, binding, mark.0
             )
             .unwrap();
             write_optional_i64(out, *value);
             write!(
                 out,
                 ", \"match\": \"{}\" }}",
-                scratch_value_match_name(*match_value)
+                mark_value_match_name(*match_value)
             )
             .unwrap();
         }
@@ -774,10 +774,10 @@ fn write_optional_i64(out: &mut String, value: Option<i64>) {
     }
 }
 
-fn scratch_value_match_name(match_value: puzzle_kernel::ScratchValueMatch) -> &'static str {
+fn mark_value_match_name(match_value: puzzle_kernel::MarkValueMatch) -> &'static str {
     match match_value {
-        puzzle_kernel::ScratchValueMatch::Any => "any",
-        puzzle_kernel::ScratchValueMatch::Exact => "exact",
+        puzzle_kernel::MarkValueMatch::Any => "any",
+        puzzle_kernel::MarkValueMatch::Exact => "exact",
     }
 }
 

@@ -118,14 +118,11 @@ scene title {
 }
 
 scene playing {
-  state {
-    board = puzzle main
-  }
   layout {
     row {
       title "Basic PS Sokoban"
     }
-    puzzle board
+    board = puzzle main
   }
   keys {
     Escape q -> back

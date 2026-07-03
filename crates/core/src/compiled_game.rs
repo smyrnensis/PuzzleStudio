@@ -1,16 +1,14 @@
-use crate::ids::{ConditionId, GlobalId, InputId, LayerId, ObjectId, RuleId, ScratchId};
-pub use puzzle_kernel::{
-    GlobalUpdateOp, LocalFrame, LocalFrameExtent, ScratchKind, ScratchValueMatch,
-};
+use crate::ids::{ConditionId, GlobalId, InputId, LayerId, MarkId, ObjectId, RuleId};
+pub use puzzle_kernel::{GlobalUpdateOp, LocalFrame, LocalFrameExtent, MarkKind, MarkValueMatch};
 use serde::{Deserialize, Serialize};
 pub type ObjectSetMatcher = puzzle_kernel::ObjectSetMatcher<ObjectId, LayerId>;
-pub type ObjectSetScratchPattern = puzzle_kernel::ObjectSetScratchPattern<ScratchId>;
+pub type ObjectSetMarkPattern = puzzle_kernel::ObjectSetMarkPattern<MarkId>;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CompiledGame {
     pub layer_count: u16,
     objects: Vec<ObjectDef>,
-    scratch: Vec<ScratchDef>,
+    mark: Vec<MarkDef>,
     condition_defs: Vec<ConditionDef>,
     rules: Vec<Rule>,
     program: Vec<RuleStep>,
@@ -24,7 +22,7 @@ impl CompiledGame {
         Self {
             layer_count,
             objects,
-            scratch: Vec::new(),
+            mark: Vec::new(),
             condition_defs: Vec::new(),
             rules,
             program,
@@ -47,7 +45,7 @@ impl CompiledGame {
         condition_defs: Vec<ConditionDef>,
         program: Vec<RuleStep>,
     ) -> Self {
-        Self::new_with_scratch_condition_defs_and_program(
+        Self::new_with_mark_condition_defs_and_program(
             layer_count,
             objects,
             Vec::new(),
@@ -56,17 +54,17 @@ impl CompiledGame {
         )
     }
 
-    pub fn new_with_scratch_condition_defs_and_program(
+    pub fn new_with_mark_condition_defs_and_program(
         layer_count: u16,
         objects: Vec<ObjectDef>,
-        scratch: Vec<ScratchDef>,
+        mark: Vec<MarkDef>,
         condition_defs: Vec<ConditionDef>,
         program: Vec<RuleStep>,
     ) -> Self {
-        Self::new_with_scratch_condition_defs_program_roles(
+        Self::new_with_mark_condition_defs_program_roles(
             layer_count,
             objects,
-            scratch,
+            mark,
             condition_defs,
             program,
             Vec::new(),
@@ -74,10 +72,10 @@ impl CompiledGame {
         )
     }
 
-    pub fn new_with_scratch_condition_defs_program_roles(
+    pub fn new_with_mark_condition_defs_program_roles(
         layer_count: u16,
         objects: Vec<ObjectDef>,
-        scratch: Vec<ScratchDef>,
+        mark: Vec<MarkDef>,
         condition_defs: Vec<ConditionDef>,
         program: Vec<RuleStep>,
         mut visual_objects: Vec<ObjectId>,
@@ -92,7 +90,7 @@ impl CompiledGame {
         Self {
             layer_count,
             objects,
-            scratch,
+            mark,
             condition_defs,
             rules,
             program,
@@ -107,8 +105,8 @@ impl CompiledGame {
     }
 
     #[inline]
-    pub fn scratch(&self) -> &[ScratchDef] {
-        &self.scratch
+    pub fn mark(&self) -> &[MarkDef] {
+        &self.mark
     }
 
     #[inline]
@@ -178,10 +176,10 @@ impl CompiledGame {
 
     pub fn solver_core(&self) -> Self {
         let program = filter_visual_steps(&self.program, &self.visual_rules);
-        Self::new_with_scratch_condition_defs_program_roles(
+        Self::new_with_mark_condition_defs_program_roles(
             self.layer_count,
             self.objects.clone(),
-            self.scratch.clone(),
+            self.mark.clone(),
             self.condition_defs.clone(),
             program,
             self.visual_objects.clone(),
@@ -282,9 +280,9 @@ pub struct ObjectDef {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ScratchDef {
-    pub id: ScratchId,
-    pub kind: ScratchKind,
+pub struct MarkDef {
+    pub id: MarkId,
+    pub kind: MarkKind,
     pub values: Vec<String>,
 }
 
@@ -369,11 +367,11 @@ pub enum Guard {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ScratchPattern {
+pub struct MarkPattern {
     pub object: ObjectId,
-    pub scratch: ScratchId,
+    pub mark: MarkId,
     pub value: Option<i64>,
-    pub match_value: ScratchValueMatch,
+    pub match_value: MarkValueMatch,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -438,10 +436,10 @@ pub struct MatchCell {
     pub require_objects: Vec<ObjectId>,
     pub require_object_sets: Vec<ObjectSetMatcher>,
     pub forbid_objects: Vec<ObjectId>,
-    pub require_scratch: Vec<ScratchPattern>,
-    pub require_object_set_scratch: Vec<ObjectSetScratchPattern>,
-    pub forbid_scratch: Vec<ScratchPattern>,
-    pub forbid_object_set_scratch: Vec<ObjectSetScratchPattern>,
+    pub require_mark: Vec<MarkPattern>,
+    pub require_object_set_mark: Vec<ObjectSetMarkPattern>,
+    pub forbid_mark: Vec<MarkPattern>,
+    pub forbid_object_set_mark: Vec<ObjectSetMarkPattern>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -504,34 +502,34 @@ pub enum WriteOp {
         remove: ObjectId,
         add: ObjectId,
     },
-    SetScratch {
+    SetMark {
         component: u16,
         offset: Offset,
         object: ObjectId,
-        scratch: ScratchId,
+        mark: MarkId,
         value: Option<i64>,
     },
-    SetObjectSetScratch {
+    SetObjectSetMark {
         component: u16,
         offset: Offset,
         binding: u16,
-        scratch: ScratchId,
+        mark: MarkId,
         value: Option<i64>,
     },
-    RemoveScratch {
+    RemoveMark {
         component: u16,
         offset: Offset,
         object: ObjectId,
-        scratch: ScratchId,
+        mark: MarkId,
         value: Option<i64>,
-        match_value: ScratchValueMatch,
+        match_value: MarkValueMatch,
     },
-    RemoveObjectSetScratch {
+    RemoveObjectSetMark {
         component: u16,
         offset: Offset,
         binding: u16,
-        scratch: ScratchId,
+        mark: MarkId,
         value: Option<i64>,
-        match_value: ScratchValueMatch,
+        match_value: MarkValueMatch,
     },
 }

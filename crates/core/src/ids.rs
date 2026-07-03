@@ -29,7 +29,7 @@ pub struct GlobalId(pub u16);
 pub struct ConditionId(pub u16);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-pub struct ScratchId(pub u16);
+pub struct MarkId(pub u16);
 
 impl KernelId for GlobalId {
     fn raw(self) -> u16 {
@@ -37,7 +37,7 @@ impl KernelId for GlobalId {
     }
 }
 
-impl KernelId for ScratchId {
+impl KernelId for MarkId {
     fn raw(self) -> u16 {
         self.0
     }

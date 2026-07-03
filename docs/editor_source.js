@@ -1,5 +1,5 @@
 // Source editor state, text-editing commands, highlighting, completions, color editing, and source textarea event binding.
-const sourceColorInput = createSourceColorInput();
+const sourceColorPopover = createSourceColorPopover();
 const sourceCompletionPopover = createSourceCompletionPopover();
 const sourceCompletionTextEncoder = new TextEncoder();
 const sourceBlockSelectionLayer = createSourceBlockSelectionLayer();
@@ -2258,17 +2258,21 @@ function sourceUtf16OffsetFromByteOffset(value, byteOffset) {
   return value.length;
 }
 
-function createSourceColorInput() {
-  if (!sourceEditorWrap) {
+function createSourceColorPopover() {
+  if (!document.body) {
     return null;
   }
-  const input = document.createElement("input");
-  input.type = "color";
-  input.className = "source-native-color-input";
-  input.setAttribute("aria-label", "Source color picker");
-  input.tabIndex = -1;
-  sourceEditorWrap.append(input);
-  return input;
+  const popover = document.createElement("span");
+  popover.className = "source-color-popover";
+  popover.hidden = true;
+  popover.addEventListener("mousedown", (event) => {
+    event.stopPropagation();
+  });
+  popover.addEventListener("click", (event) => {
+    event.stopPropagation();
+  });
+  document.body.append(popover);
+  return popover;
 }
 
 function createSourceImportLinkFrame() {
@@ -2294,7 +2298,7 @@ function createSourceImportLinkFrame() {
 }
 
 function showSourceColorEditor(event = null) {
-  if (!sourceColorInput) {
+  if (!sourceColorPopover) {
     return false;
   }
   if (!isTextDocument(activeDocument())) {
@@ -2316,35 +2320,57 @@ function showSourceColorEditor(event = null) {
     return false;
   }
   sourceColorEdit = token;
-  sourceColorInput.value = parsed.rgb;
-  sourceColorInput.dataset.sourceColorAlpha = String(parsed.alpha);
-  if (event) {
-    openSourceNativeColorPicker();
-  }
+  renderSourceColorPopover(formatHexColorToken(parsed.rgb, parsed.alpha), token);
   return true;
 }
 
-function openSourceNativeColorPicker() {
-  if (!sourceColorInput) {
+function renderSourceColorPopover(color, token) {
+  if (!sourceColorPopover || !window.PuzzleStudioColorEditor) {
     return;
   }
-  try {
-    if (typeof sourceColorInput.showPicker === "function") {
-      sourceColorInput.showPicker();
-    } else {
-      sourceColorInput.click();
-    }
-  } catch {
-    sourceColorInput.click();
+  sourceColorPopover.replaceChildren(window.PuzzleStudioColorEditor.create({
+    color,
+    ariaLabel: "Source color",
+    onInput: applySourceColorRgb,
+  }));
+  positionSourceColorPopoverForToken(token);
+  sourceColorPopover.hidden = false;
+}
+
+function positionSourceColorPopoverForToken(token) {
+  if (!sourceColorPopover || !sourceEditorWrap || !token) {
+    return;
   }
+  const startRect = sourceCaretRectForOffset(token.start);
+  if (!startRect) {
+    return;
+  }
+  const wrapRect = sourceEditorWrap.getBoundingClientRect();
+  const menuRect = sourceColorPopover.getBoundingClientRect();
+  const margin = 8;
+  const gap = 6;
+  const width = menuRect.width || 238;
+  const height = menuRect.height || 220;
+  const viewportWidth = document.documentElement.clientWidth || window.innerWidth;
+  const viewportHeight = document.documentElement.clientHeight || window.innerHeight;
+  const anchorLeft = wrapRect.left + startRect.left;
+  const anchorTop = wrapRect.top + startRect.top + (startRect.height || sourceEditorLineHeight());
+  let left = anchorLeft;
+  let top = anchorTop + gap;
+  if (top + height > viewportHeight - margin) {
+    top = wrapRect.top + startRect.top - height - gap;
+  }
+  left = Math.max(margin, Math.min(left, viewportWidth - width - margin));
+  top = Math.max(margin, Math.min(top, viewportHeight - height - margin));
+  sourceColorPopover.style.left = `${Math.round(left)}px`;
+  sourceColorPopover.style.top = `${Math.round(top)}px`;
 }
 
 function sourceColorEventTargetsToken(event, token) {
-  if (!sourceEditor || !event || typeof document.caretPositionFromPoint !== "function") {
+  if (!event || !token) {
     return true;
   }
-  const position = document.caretPositionFromPoint(event.clientX, event.clientY);
-  const offset = position?.offsetNode === sourceEditor ? position.offset : null;
+  const offset = sourceViewOffsetFromVisualPoint(event.clientX, event.clientY);
   if (!Number.isInteger(offset)) {
     return true;
   }
@@ -2353,13 +2379,34 @@ function sourceColorEventTargetsToken(event, token) {
 
 function hideSourceColorEditor() {
   sourceColorEdit = null;
-  if (sourceColorInput) {
-    sourceColorInput.blur();
+  if (sourceColorPopover) {
+    sourceColorPopover.hidden = true;
+    sourceColorPopover.replaceChildren();
   }
 }
 
-function updateSourceColorFromNativeInput() {
-  if (!sourceColorEdit || !sourceColorInput) {
+function hideSourceColorEditorForOutsidePointer(event) {
+  if (!sourceColorEdit || sourceColorPopover?.hidden) {
+    return;
+  }
+  const target = event.target;
+  if (sourceColorPopover?.contains(target) || sourceEditorWrap?.contains(target)) {
+    return;
+  }
+  hideSourceColorEditor();
+}
+
+function sourceColorSelectionTargetsToken(token) {
+  if (!token) {
+    return false;
+  }
+  const start = sourceEditor.selectionStart || 0;
+  const end = sourceEditor.selectionEnd || start;
+  return start >= token.start && end <= token.end;
+}
+
+function applySourceColorRgb(rgb) {
+  if (!sourceColorEdit) {
     return;
   }
   const current = hexColorAt(sourceEditor.value, sourceColorEdit.start);
@@ -2367,21 +2414,18 @@ function updateSourceColorFromNativeInput() {
     hideSourceColorEditor();
     return;
   }
-  const parsedColor = parseHexColorToken(sourceColorInput.value);
+  const parsedColor = parseHexColorToken(rgb);
   if (!parsedColor) {
     return;
   }
-  const alpha = Math.max(0, Math.min(255, Number(sourceColorInput.dataset.sourceColorAlpha) || 255));
-  const next = formatHexColorToken(parsedColor.rgb, alpha);
+  const next = formatHexColorToken(parsedColor.rgb, parsedColor.alpha);
   sourceEditor.setRangeText(next, current.start, current.end, "preserve");
   sourceColorEdit = { start: current.start, end: current.start + next.length, value: next };
   sourceEditor.setSelectionRange(sourceColorEdit.start, sourceColorEdit.end);
   recordSourceUndoSnapshot();
   const parsedNext = parseHexColorToken(next);
-  if (parsedNext) {
-    sourceColorInput.value = parsedNext.rgb;
-    sourceColorInput.dataset.sourceColorAlpha = String(parsedNext.alpha);
-  }
+  sourceColorPopover?.querySelector(".color-editor")?.syncColor?.(parsedNext ? next : rgb);
+  positionSourceColorPopoverForToken(sourceColorEdit);
   updateSourceMeta();
   if (documents[currentDocumentIndex]) {
     documents[currentDocumentIndex].source = sourceEditorDocumentValue();
@@ -2398,6 +2442,10 @@ function refreshSourceColorEditor() {
   }
   const current = hexColorAt(sourceEditor.value, sourceColorEdit.start);
   if (!current || current.start !== sourceColorEdit.start) {
+    hideSourceColorEditor();
+    return;
+  }
+  if (document.activeElement === sourceEditor && !sourceColorSelectionTargetsToken(current)) {
     hideSourceColorEditor();
   }
 }
@@ -4227,7 +4275,7 @@ function sourceImportLinkAtOffset(source, offset, lines = sourceImportLinesWithO
   if (!sourceLineIsInAssetsBlock(lines, lineIndex)) {
     return null;
   }
-  const assetMatch = code.match(/^(\s*(?:css|script)\s*)"((?:\\.|[^"\\])*)"/);
+  const assetMatch = code.match(/^(\s*(?:css|script|file)\s*)"((?:\\.|[^"\\])*)"/);
   if (assetMatch) {
     return sourceQuotedPathLinkForMatch(assetMatch, line, lineIndex, offset, "asset");
   }
@@ -5071,8 +5119,7 @@ sourceEditor.addEventListener("scroll", hideSourceColorEditor);
 sourceEditor.addEventListener("scroll", hideSourceCompletions);
 sourceEditor.addEventListener("scroll", hideSourceImportLinkFrame);
 sourceLineNumbers?.addEventListener("click", handleSourceFoldGutterClick);
-sourceColorInput?.addEventListener("input", updateSourceColorFromNativeInput);
-sourceColorInput?.addEventListener("change", updateSourceColorFromNativeInput);
+document.addEventListener("pointerdown", hideSourceColorEditorForOutsidePointer);
 window.addEventListener("resize", syncSourceHighlightScroll);
 window.addEventListener("resize", renderSourceLineNumbers);
 window.addEventListener("resize", hideSourceColorEditor);

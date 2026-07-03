@@ -1,9 +1,9 @@
 use puzzle_core::{
     ComparisonOp, CompiledGame, ConditionDef, ConditionId, ConditionValueKind, Effect, GapTerm,
-    GlobalId, GlobalUpdateOp, Guard, InputId, LayerId, LocalFrame, LocalFrameExtent, MatchCell,
-    ObjectDef, ObjectId, ObjectSetMatcher, ObjectSetScratchPattern, Offset, Pattern,
-    PatternComponent, Rule, RuleApplication, RuleCondition, RuleId, RuleStep, ScratchId,
-    ScratchPattern, ScratchValueMatch, State, TransitionCommand, WriteOp,
+    GlobalId, GlobalUpdateOp, Guard, InputId, LayerId, LocalFrame, LocalFrameExtent, MarkId,
+    MarkPattern, MarkValueMatch, MatchCell, ObjectDef, ObjectId, ObjectSetMarkPattern,
+    ObjectSetMatcher, Offset, Pattern, PatternComponent, Rule, RuleApplication, RuleCondition,
+    RuleId, RuleStep, State, TransitionCommand, WriteOp,
 };
 use serde_json::Value;
 use wasm_bindgen::prelude::*;
@@ -182,7 +182,7 @@ pub fn decode_compiled_play(value: &Value) -> Result<CompiledEngine, String> {
         .collect::<Result<Vec<_>, String>>()?;
     let programs = array_at(data, 4, "transition programs")?;
     let program = decode_compact_program(value_at(programs, 0, "main program")?)?;
-    let game = CompiledGame::new_with_scratch_condition_defs_program_roles(
+    let game = CompiledGame::new_with_mark_condition_defs_program_roles(
         layer_count,
         objects,
         Vec::new(),
@@ -467,17 +467,17 @@ fn decode_compact_match_cell(value: &Value) -> Result<MatchCell, String> {
             "require object sets",
         )?)?,
         forbid_objects: decode_compact_object_ids(value_at(items, 3, "forbid objects")?)?,
-        require_scratch: decode_compact_scratch_patterns(value_at(items, 4, "require scratch")?)?,
-        require_object_set_scratch: decode_compact_object_set_scratch_patterns(value_at(
+        require_mark: decode_compact_mark_patterns(value_at(items, 4, "require mark")?)?,
+        require_object_set_mark: decode_compact_object_set_mark_patterns(value_at(
             items,
             5,
-            "require object set scratch",
+            "require object set mark",
         )?)?,
-        forbid_scratch: decode_compact_scratch_patterns(value_at(items, 6, "forbid scratch")?)?,
-        forbid_object_set_scratch: decode_compact_object_set_scratch_patterns(value_at(
+        forbid_mark: decode_compact_mark_patterns(value_at(items, 6, "forbid mark")?)?,
+        forbid_object_set_mark: decode_compact_object_set_mark_patterns(value_at(
             items,
             7,
-            "forbid object set scratch",
+            "forbid object set mark",
         )?)?,
         require_null: match u16_at(items, 8, "require null")? {
             0 => false,
@@ -538,20 +538,20 @@ fn decode_compact_write(value: &Value) -> Result<WriteOp, String> {
             remove: ObjectId(u16_at(items, 3, "remove")?),
             add: ObjectId(u16_at(items, 4, "add")?),
         }),
-        4 => Ok(WriteOp::SetScratch {
+        4 => Ok(WriteOp::SetMark {
             component: u16_at(items, 1, "component")?,
             offset: decode_compact_offset(value_at(items, 2, "offset")?)?,
             object: ObjectId(u16_at(items, 3, "object")?),
-            scratch: ScratchId(u16_at(items, 4, "scratch")?),
-            value: optional_i64_at(items, 5, "scratch value")?,
+            mark: MarkId(u16_at(items, 4, "mark")?),
+            value: optional_i64_at(items, 5, "mark value")?,
         }),
-        5 => Ok(WriteOp::RemoveScratch {
+        5 => Ok(WriteOp::RemoveMark {
             component: u16_at(items, 1, "component")?,
             offset: decode_compact_offset(value_at(items, 2, "offset")?)?,
             object: ObjectId(u16_at(items, 3, "object")?),
-            scratch: ScratchId(u16_at(items, 4, "scratch")?),
-            value: optional_i64_at(items, 5, "scratch value")?,
-            match_value: decode_compact_scratch_match(u16_at(items, 6, "scratch match")?)?,
+            mark: MarkId(u16_at(items, 4, "mark")?),
+            value: optional_i64_at(items, 5, "mark value")?,
+            match_value: decode_compact_mark_match(u16_at(items, 6, "mark match")?)?,
         }),
         6 => Ok(WriteOp::AddObjectSet {
             component: u16_at(items, 1, "component")?,
@@ -569,20 +569,20 @@ fn decode_compact_write(value: &Value) -> Result<WriteOp, String> {
             to_offset: decode_compact_offset(value_at(items, 3, "to offset")?)?,
             binding: u16_at(items, 4, "binding")?,
         }),
-        9 => Ok(WriteOp::SetObjectSetScratch {
+        9 => Ok(WriteOp::SetObjectSetMark {
             component: u16_at(items, 1, "component")?,
             offset: decode_compact_offset(value_at(items, 2, "offset")?)?,
             binding: u16_at(items, 3, "binding")?,
-            scratch: ScratchId(u16_at(items, 4, "scratch")?),
-            value: optional_i64_at(items, 5, "scratch value")?,
+            mark: MarkId(u16_at(items, 4, "mark")?),
+            value: optional_i64_at(items, 5, "mark value")?,
         }),
-        10 => Ok(WriteOp::RemoveObjectSetScratch {
+        10 => Ok(WriteOp::RemoveObjectSetMark {
             component: u16_at(items, 1, "component")?,
             offset: decode_compact_offset(value_at(items, 2, "offset")?)?,
             binding: u16_at(items, 3, "binding")?,
-            scratch: ScratchId(u16_at(items, 4, "scratch")?),
-            value: optional_i64_at(items, 5, "scratch value")?,
-            match_value: decode_compact_scratch_match(u16_at(items, 6, "scratch match")?)?,
+            mark: MarkId(u16_at(items, 4, "mark")?),
+            value: optional_i64_at(items, 5, "mark value")?,
+            match_value: decode_compact_mark_match(u16_at(items, 6, "mark match")?)?,
         }),
         tag => Err(format!("unknown compact write tag: {tag}")),
     }
@@ -607,16 +607,16 @@ fn decode_compact_effect(value: &Value) -> Result<Effect, String> {
     }
 }
 
-fn decode_compact_scratch_patterns(value: &Value) -> Result<Vec<ScratchPattern>, String> {
-    value_array(value, "scratch patterns")?
+fn decode_compact_mark_patterns(value: &Value) -> Result<Vec<MarkPattern>, String> {
+    value_array(value, "mark patterns")?
         .iter()
         .map(|entry| {
-            let entry = value_array(entry, "scratch pattern")?;
-            Ok(ScratchPattern {
+            let entry = value_array(entry, "mark pattern")?;
+            Ok(MarkPattern {
                 object: ObjectId(u16_at(entry, 0, "object")?),
-                scratch: ScratchId(u16_at(entry, 1, "scratch")?),
+                mark: MarkId(u16_at(entry, 1, "mark")?),
                 value: optional_i64_at(entry, 2, "value")?,
-                match_value: decode_compact_scratch_match(u16_at(entry, 3, "scratch match")?)?,
+                match_value: decode_compact_mark_match(u16_at(entry, 3, "mark match")?)?,
             })
         })
         .collect()
@@ -636,18 +636,18 @@ fn decode_compact_object_sets(value: &Value) -> Result<Vec<ObjectSetMatcher>, St
         .collect()
 }
 
-fn decode_compact_object_set_scratch_patterns(
+fn decode_compact_object_set_mark_patterns(
     value: &Value,
-) -> Result<Vec<ObjectSetScratchPattern>, String> {
-    value_array(value, "object set scratch patterns")?
+) -> Result<Vec<ObjectSetMarkPattern>, String> {
+    value_array(value, "object set mark patterns")?
         .iter()
         .map(|entry| {
-            let entry = value_array(entry, "object set scratch pattern")?;
-            Ok(ObjectSetScratchPattern {
+            let entry = value_array(entry, "object set mark pattern")?;
+            Ok(ObjectSetMarkPattern {
                 binding: u16_at(entry, 0, "binding")?,
-                scratch: ScratchId(u16_at(entry, 1, "scratch")?),
+                mark: MarkId(u16_at(entry, 1, "mark")?),
                 value: optional_i64_at(entry, 2, "value")?,
-                match_value: decode_compact_scratch_match(u16_at(entry, 3, "scratch match")?)?,
+                match_value: decode_compact_mark_match(u16_at(entry, 3, "mark match")?)?,
             })
         })
         .collect()
@@ -701,11 +701,11 @@ fn decode_compact_global_update(value: u16) -> Result<GlobalUpdateOp, String> {
     }
 }
 
-fn decode_compact_scratch_match(value: u16) -> Result<ScratchValueMatch, String> {
+fn decode_compact_mark_match(value: u16) -> Result<MarkValueMatch, String> {
     match value {
-        0 => Ok(ScratchValueMatch::Any),
-        1 => Ok(ScratchValueMatch::Exact),
-        other => Err(format!("unknown compact scratch match: {other}")),
+        0 => Ok(MarkValueMatch::Any),
+        1 => Ok(MarkValueMatch::Exact),
+        other => Err(format!("unknown compact mark match: {other}")),
     }
 }
 
@@ -766,7 +766,7 @@ fn encode_state(state: &State) -> String {
         }
         out.push_str(&object.0.to_string());
     }
-    out.push_str("],\"scratch\":[],\"globals\":[");
+    out.push_str("],\"mark\":[],\"globals\":[");
     for (index, value) in state.visible_globals().iter().enumerate() {
         if index > 0 {
             out.push(',');

@@ -84,6 +84,19 @@
       );
     },
 
+    async exportHtml(payload = {}) {
+      const exportHtml = await requireWasmFunction("export_html");
+      const runtimeAssets = await window.PuzzleStudioRuntime.gameRuntimeAssets();
+      return exportHtml(
+        asString(payload.source),
+        asString(payload.puzzlePath) || "game.puzzle",
+        asString(payload.gameCss),
+        asString(payload.gameVisualsJs),
+        asString(runtimeAssets.moduleSource),
+        asString(runtimeAssets.wasmBase64),
+      );
+    },
+
     async highlightSource(payload = {}) {
       const highlight = await requireWasmFunction("highlight_source_html");
       return JSON.stringify({

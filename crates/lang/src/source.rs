@@ -451,7 +451,7 @@ fn starts_inline_block(tokens: &[&str], line: &str) -> bool {
         tokens,
         ["map", ..]
             | ["on_display"]
-            | ["scratch"]
+            | ["marks"]
             | ["groups"]
             | ["layers"]
             | ["collision_layers"]
@@ -563,7 +563,7 @@ pub(crate) enum SourceScope {
     Tags,
     Group,
     Layers,
-    Scratch,
+    Mark,
     Keys,
     Legend,
     Levels,
@@ -908,7 +908,7 @@ fn source_opens_block(line: &str, tokens: &[&str], current: Option<SourceScope>)
                 | ["tags"]
                 | ["layers"]
                 | ["collision_layers"]
-                | ["scratch"]
+                | ["marks"]
                 | ["keys"]
                 | ["inputs"]
                 | ["resources"]
@@ -1030,7 +1030,7 @@ fn source_scope_for_name(name: &str) -> Option<SourceScope> {
         "tags" => Some(SourceScope::Tags),
         "layers" | "collision_layers" => Some(SourceScope::Layers),
         "groups" => Some(SourceScope::Group),
-        "scratch" => Some(SourceScope::Scratch),
+        "marks" => Some(SourceScope::Mark),
         "keys" | "inputs" => Some(SourceScope::Keys),
         "resources" => Some(SourceScope::Other),
         "legend" => Some(SourceScope::Legend),

@@ -15,13 +15,13 @@ Current vanilla PuzzleScript import scope:
 - Empty PS `WINCONDITIONS` sections are omitted from canonical output.
 - `RULES` rows are copied as canonical rules. Prefixless rules containing PS movement markers (`>`, `<`, `^`, `v`) rely on canonical implicit cardinal expansion.
 - PS's special `Player` movement is represented by inserting `input directions [ Player ] -> [ Player{>} ]`.
-- PS movement markers use the canonical anonymous movement scratch, and the existing built-in `move` routine resolves the movement phase.
+- PS movement markers use the canonical anonymous movement mark, and the existing built-in `move` routine resolves the movement phase.
 - PS `again` rule suffixes become canonical `again` effects. Runtime-owned
   automatic no-input follow-up turns handle the repeat; the importer does not
   synthesize `__ps_again` state or duplicate movement guards.
 - PS `late` rules are emitted after `move`.
 - Imported level clear handlers emit `wait 0.3s` before `next_level`.
-- PS `moving` / `stationary` qualifiers become anonymous movement scratch predicates such as `Crate{directions}` and `Crate{no directions}` on LHS; RHS `stationary` is emitted as the bare object.
+- PS `moving` / `stationary` qualifiers become anonymous movement mark predicates such as `Crate{directions}` and `Crate{no directions}` on LHS; RHS `stationary` is emitted as the bare object.
 - Simple PS `SOUNDS` rows such as `sfx0 12345` become canonical `sounds { sfx sfx0 seed=12345 type=puzzlescript }`; PS rule suffixes such as `SFX0` become `sfx sfx0`.
 - `LEVELS` splits blank-line-separated PS levels into canonical unnamed levels.
 - A default `scene title` and `scene playing` are generated. The title scene maps `Enter Space x -> continue_game` and `n -> new_game`, then routes those keys through scene-local routines before `goto playing`.

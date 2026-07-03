@@ -1,5 +1,5 @@
-use crate::{Coord3, Game3, GlobalId3, LayerId, ObjectId, ScratchId3, State3, StateError3};
-use puzzle_kernel::{GlobalUpdateOp, GridPatchOp, ScratchValueMatch};
+use crate::{Coord3, Game3, GlobalId3, LayerId, MarkId3, ObjectId, State3, StateError3};
+use puzzle_kernel::{GlobalUpdateOp, GridPatchOp, MarkValueMatch};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Patch3 {
@@ -112,14 +112,14 @@ impl Patch3 {
                     let next = validate_global_update(state, global, op, value)?;
                     changed |= state.global_value(global) != Some(next);
                 }
-                PatchOp3::SetScratch {
+                PatchOp3::SetMark {
                     position,
                     object,
-                    scratch,
+                    mark,
                     value,
                 } => {
                     if object.is_empty() {
-                        changed |= !state.has_cell_scratch(position, scratch, value);
+                        changed |= !state.has_cell_mark(position, mark, value);
                     } else {
                         let layer =
                             expect_object_in_overlay(game, state, &slots, position, object)?;
@@ -127,29 +127,27 @@ impl Patch3 {
                             .get_layer(position, layer)
                             .is_ok_and(|found| found == object)
                         {
-                            changed |= !state.has_scratch(game, position, object, scratch, value);
+                            changed |= !state.has_mark(game, position, object, mark, value);
                         } else {
                             changed = true;
                         }
                     }
                 }
-                PatchOp3::RemoveScratch {
+                PatchOp3::RemoveMark {
                     position,
                     object,
-                    scratch,
+                    mark,
                     value,
                     match_value,
                 } => {
                     let value = match match_value {
-                        ScratchValueMatch::Any => None,
-                        ScratchValueMatch::Exact => value,
+                        MarkValueMatch::Any => None,
+                        MarkValueMatch::Exact => value,
                     };
                     if object.is_empty() {
                         changed |= match match_value {
-                            ScratchValueMatch::Any => state.has_cell_scratch_key(position, scratch),
-                            ScratchValueMatch::Exact => {
-                                state.has_cell_scratch(position, scratch, value)
-                            }
+                            MarkValueMatch::Any => state.has_cell_mark_key(position, mark),
+                            MarkValueMatch::Exact => state.has_cell_mark(position, mark, value),
                         };
                     } else {
                         let layer =
@@ -159,11 +157,11 @@ impl Patch3 {
                             .is_ok_and(|found| found == object)
                         {
                             changed |= match match_value {
-                                ScratchValueMatch::Any => {
-                                    state.has_scratch_key(game, position, object, scratch)
+                                MarkValueMatch::Any => {
+                                    state.has_mark_key(game, position, object, mark)
                                 }
-                                ScratchValueMatch::Exact => {
-                                    state.has_scratch(game, position, object, scratch, value)
+                                MarkValueMatch::Exact => {
+                                    state.has_mark(game, position, object, mark, value)
                                 }
                             };
                         } else {
@@ -228,7 +226,7 @@ impl SlotOverlay3 {
     }
 }
 
-pub type PatchOp3 = GridPatchOp<Coord3, ObjectId, GlobalId3, ScratchId3>;
+pub type PatchOp3 = GridPatchOp<Coord3, ObjectId, GlobalId3, MarkId3>;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PatchError3 {
@@ -246,8 +244,8 @@ fn apply_remove_phase(game: &Game3, state: &mut State3, op: &PatchOp3) -> Result
         PatchOp3::Add { .. }
         | PatchOp3::Move { .. }
         | PatchOp3::UpdateGlobal { .. }
-        | PatchOp3::SetScratch { .. }
-        | PatchOp3::RemoveScratch { .. } => {}
+        | PatchOp3::SetMark { .. }
+        | PatchOp3::RemoveMark { .. } => {}
         PatchOp3::Remove { position, object } => {
             state.remove_object(game, position, object)?;
         }
@@ -273,25 +271,25 @@ fn apply_add_phase(game: &Game3, state: &mut State3, op: &PatchOp3) -> Result<()
         PatchOp3::UpdateGlobal { global, op, value } => {
             state.update_visible_global(global, op, value)?;
         }
-        PatchOp3::SetScratch {
+        PatchOp3::SetMark {
             position,
             object,
-            scratch,
+            mark,
             value,
         } => {
-            apply_set_scratch(game, state, position, object, scratch, value)?;
+            apply_set_mark(game, state, position, object, mark, value)?;
         }
-        PatchOp3::RemoveScratch {
+        PatchOp3::RemoveMark {
             position,
             object,
-            scratch,
+            mark,
             value,
             match_value,
         } => {
-            if matches!(match_value, ScratchValueMatch::Any) {
-                apply_remove_scratch(game, state, position, object, scratch, None)?;
+            if matches!(match_value, MarkValueMatch::Any) {
+                apply_remove_mark(game, state, position, object, mark, None)?;
             } else {
-                apply_remove_scratch(game, state, position, object, scratch, value)?;
+                apply_remove_mark(game, state, position, object, mark, value)?;
             }
         }
     }
@@ -345,11 +343,11 @@ fn apply_moves(game: &Game3, state: &mut State3, ops: &[PatchOp3]) -> Result<(),
 
     let mut moved = Vec::with_capacity(moves.len());
     for (from, to, layer, object) in moves {
-        let scratch = state.take_slot_for_move_unchecked(from, layer);
-        moved.push((to, layer, object, scratch));
+        let mark = state.take_slot_for_move_unchecked(from, layer);
+        moved.push((to, layer, object, mark));
     }
-    for (to, layer, object, scratch) in moved {
-        state.place_moved_slot_unchecked(to, layer, object, scratch);
+    for (to, layer, object, mark) in moved {
+        state.place_moved_slot_unchecked(to, layer, object, mark);
     }
     Ok(())
 }
@@ -414,16 +412,16 @@ fn validate_moves(
     Ok(())
 }
 
-fn apply_set_scratch(
+fn apply_set_mark(
     game: &Game3,
     state: &mut State3,
     position: Coord3,
     object: ObjectId,
-    scratch: ScratchId3,
+    mark: MarkId3,
     value: Option<i64>,
 ) -> Result<(), PatchError3> {
     if object.is_empty() {
-        state.set_cell_scratch_unchecked(position, scratch, value);
+        state.set_cell_mark_unchecked(position, mark, value);
         return Ok(());
     }
     let layer = checked_object_layer(game, object)?;
@@ -431,20 +429,20 @@ fn apply_set_scratch(
     if found != object {
         return Err(StateError3::ObjectNotPresent { position, object }.into());
     }
-    state.set_scratch_unchecked(position, layer, scratch, value);
+    state.set_mark_unchecked(position, layer, mark, value);
     Ok(())
 }
 
-fn apply_remove_scratch(
+fn apply_remove_mark(
     game: &Game3,
     state: &mut State3,
     position: Coord3,
     object: ObjectId,
-    scratch: ScratchId3,
+    mark: MarkId3,
     value: Option<i64>,
 ) -> Result<(), PatchError3> {
     if object.is_empty() {
-        state.remove_cell_scratch_unchecked(position, scratch, value);
+        state.remove_cell_mark_unchecked(position, mark, value);
         return Ok(());
     }
     let layer = checked_object_layer(game, object)?;
@@ -452,7 +450,7 @@ fn apply_remove_scratch(
     if found != object {
         return Err(StateError3::ObjectNotPresent { position, object }.into());
     }
-    state.remove_scratch_unchecked(position, layer, scratch, value);
+    state.remove_mark_unchecked(position, layer, mark, value);
     Ok(())
 }
 

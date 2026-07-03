@@ -1547,7 +1547,7 @@ fn logical_line_opens_block(tokens: &[&str]) -> bool {
             | ["layers", ..]
             | ["tags", ..]
             | ["map", ..]
-            | ["scratch", ..]
+            | ["marks", ..]
             | ["groups", ..]
             | ["legend", ..]
             | ["win_conditions", ..]
@@ -2415,7 +2415,6 @@ fn parse_game2d_expanded_lines_with_shell_inner(
                 &level,
                 &catalog,
                 empty_char,
-                default_wait_ms,
                 &named_conditions,
             )?;
             let mut char_objects = catalog.char_objects.clone();
@@ -2461,7 +2460,7 @@ fn parse_game2d_expanded_lines_with_shell_inner(
     let condition_defs = lower_condition_defs(
         condition_definitions,
         &catalog.object_layers,
-        &catalog.scratch_names,
+        &catalog.mark_names,
         &value_sets,
         &catalog.input_names,
         &effective_directions,
@@ -2476,7 +2475,7 @@ fn parse_game2d_expanded_lines_with_shell_inner(
                 &catalog.global_names,
                 &catalog.condition_names,
                 &visual_condition_reads,
-                &catalog.scratch_names,
+                &catalog.mark_names,
                 &catalog.visual_objects,
                 &value_sets,
                 &catalog.input_names,
@@ -2546,17 +2545,16 @@ fn parse_game2d_expanded_lines_with_shell_inner(
         &catalog.constant_globals,
         &catalog.condition_names,
         &visual_condition_reads,
-        &catalog.scratch_names,
+        &catalog.mark_names,
         &model_sound_triggers,
         &animation,
         &value_sets,
         &effective_directions,
-        default_wait_ms,
     )?;
-    let game = CompiledGame::new_with_scratch_condition_defs_program_roles(
+    let game = CompiledGame::new_with_mark_condition_defs_program_roles(
         layer_count,
         catalog.object_defs,
-        catalog.scratch_defs,
+        catalog.mark_defs,
         condition_defs,
         programs.main,
         visual_objects.clone(),
@@ -2595,7 +2593,7 @@ fn parse_game2d_expanded_lines_with_shell_inner(
         })
         .collect::<Result<Vec<_>, DiagnosticReport>>()?;
 
-    warnings.extend(collect_scratch_warnings(&game, &catalog.scratch_names));
+    warnings.extend(collect_mark_warnings(&game, &catalog.mark_names));
 
     Ok(LoadedGame {
         title,
@@ -2827,11 +2825,11 @@ fn collect_dynamic_selector_block_warnings(
     }
 }
 
-fn collect_scratch_warnings(
+fn collect_mark_warnings(
     game: &CompiledGame,
-    scratch_names: &HashMap<String, ScratchDef>,
+    mark_names: &HashMap<String, MarkDef>,
 ) -> Vec<String> {
-    let labels = scratch_names
+    let labels = mark_names
         .iter()
         .map(|(name, def)| (def.id, name.as_str()))
         .collect::<HashMap<_, _>>();
@@ -2840,21 +2838,21 @@ fn collect_scratch_warnings(
         for component in &rule.pattern.components {
             for cell in &component.cells {
                 for cell_attr in cell
-                    .require_scratch
+                    .require_mark
                     .iter()
                     .filter(|attr| attr.object.is_empty())
                 {
                     for object_attr in cell
-                        .require_scratch
+                        .require_mark
                         .iter()
                         .filter(|attr| !attr.object.is_empty())
                     {
-                        if cell_attr.scratch == object_attr.scratch {
+                        if cell_attr.mark == object_attr.mark {
                             push_unique_warning(
                                 &mut warnings,
                                 format!(
-                                    "scratch `{}` appears on both a cell and an object occurrence in the same cell pattern",
-                                    scratch_label(cell_attr.scratch, &labels)
+                                    "mark `{}` appears on both a cell and an object occurrence in the same cell pattern",
+                                    mark_label(cell_attr.mark, &labels)
                                 ),
                             );
                         }
@@ -2868,13 +2866,13 @@ fn collect_scratch_warnings(
             .components
             .iter()
             .flat_map(|component| component.cells.iter())
-            .flat_map(|cell| cell.require_scratch.iter())
+            .flat_map(|cell| cell.require_mark.iter())
         {
             for write in &rule.writes {
-                let Some((write_object, write_scratch)) = write_scratch_target(write) else {
+                let Some((write_object, write_mark)) = write_mark_target(write) else {
                     continue;
                 };
-                if pattern_attr.scratch != write_scratch {
+                if pattern_attr.mark != write_mark {
                     continue;
                 }
                 if pattern_attr.object.is_empty() != write_object.is_empty() {
@@ -2891,8 +2889,8 @@ fn collect_scratch_warnings(
                     push_unique_warning(
                         &mut warnings,
                         format!(
-                            "scratch `{}` changes anchor from {from} to {to} in a rewrite",
-                            scratch_label(pattern_attr.scratch, &labels)
+                            "mark `{}` changes anchor from {from} to {to} in a rewrite",
+                            mark_label(pattern_attr.mark, &labels)
                         ),
                     );
                 }
@@ -2902,18 +2900,18 @@ fn collect_scratch_warnings(
     warnings
 }
 
-fn write_scratch_target(write: &WriteOp) -> Option<(ObjectId, ScratchId)> {
+fn write_mark_target(write: &WriteOp) -> Option<(ObjectId, MarkId)> {
     match write {
-        WriteOp::SetScratch {
-            object, scratch, ..
-        } => Some((*object, *scratch)),
+        WriteOp::SetMark {
+            object, mark, ..
+        } => Some((*object, *mark)),
         _ => None,
     }
 }
 
-fn scratch_label<'a>(scratch: ScratchId, labels: &HashMap<ScratchId, &'a str>) -> String {
+fn mark_label<'a>(mark: MarkId, labels: &HashMap<MarkId, &'a str>) -> String {
     labels
-        .get(&scratch)
+        .get(&mark)
         .copied()
         .unwrap_or("__anonymous")
         .to_string()

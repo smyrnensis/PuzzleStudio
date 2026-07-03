@@ -16,19 +16,18 @@ pub use parser::{
 pub use puzzle_grid3d::{
     Axis3, Coord3, Direction3, DirectionSet3, Frame3, FrameChirality3, FrameError3, FrameExpr3,
     FrameSet3, FrameSlot3, Game3, GameError3, GlobalId3, InputDef3, InputId3, LayerId, Level3,
-    LevelBundle3, LevelBundleError3, LevelCell3, LevelEntry3, LevelError3, ObjectDef3, ObjectId,
-    Offset3, Patch3, PatchError3, PatchOp3, RuleId3, ScratchId3, Size3,
+    LevelBundle3, LevelBundleError3, LevelCell3, LevelEntry3, LevelError3, MarkId3, ObjectDef3,
+    ObjectId, Offset3, Patch3, PatchError3, PatchOp3, RuleId3, Size3,
 };
 pub use puzzle_grid3d::{
-    CellView3, ConditionValueKind3, GlobalUpdateOp, Guard3, LocalFrame, LocalFrameExtent,
-    MatchCell3, ObjectSetMatcher3, ObjectSetScratchPattern3, Pattern3, PatternComponent3, Rule3,
-    RuleApplication3, RuleEffect3, ScratchKind, ScratchPattern3, ScratchValueMatch, SlotScratch3,
-    State3, StateError3, TransitionError3, WinCondition3, WriteOp3, count_pattern_matches,
-    eval_condition_kind, has_pattern_match, transition_once, transition_once_all,
-    transition_once_per_level, transition_once_with_input, transition_program,
-    transition_program_with_local_frame, transition_program_without_input,
-    transition_program_without_input_with_local_frame, transition_repeated,
-    transition_solver_program,
+    CellView3, ConditionValueKind3, GlobalUpdateOp, Guard3, LocalFrame, LocalFrameExtent, MarkKind,
+    MarkPattern3, MarkValueMatch, MatchCell3, ObjectSetMarkPattern3, ObjectSetMatcher3, Pattern3,
+    PatternComponent3, Rule3, RuleApplication3, RuleEffect3, SlotMark3, State3, StateError3,
+    TransitionError3, WinCondition3, WriteOp3, count_pattern_matches, eval_condition_kind,
+    has_pattern_match, transition_once, transition_once_all, transition_once_per_level,
+    transition_once_with_input, transition_program, transition_program_with_local_frame,
+    transition_program_without_input, transition_program_without_input_with_local_frame,
+    transition_repeated, transition_solver_program,
 };
 pub use selector::{
     ConcreteObject3, DenseCell3, DensePattern3, DenseRow3, DenseRuleTemplate3, DenseSlice3,
@@ -36,8 +35,8 @@ pub use selector::{
     LineRuleTemplate3, LineWriteOpTemplate3, LocalWriteOpTemplate3, MatchCellTemplate3,
     ObjectFamily3, ObjectSelector3, ObjectVariant3, PatternLoweringError3, PatternTemplate3,
     ResolvedSelector3, RuleLoweringError3, RuleTemplate3, SelectorCatalog3, SelectorCatalogError3,
-    SelectorError3, SelectorGroup3, SelectorScratch3, SelectorTag3, SelectorTransform3,
-    VariantAxis3, VariantValueSet3, WriteOpTemplate3, lower_dense_pattern, lower_dense_pattern_set,
+    SelectorError3, SelectorGroup3, SelectorMark3, SelectorTag3, SelectorTransform3, VariantAxis3,
+    VariantValueSet3, WriteOpTemplate3, lower_dense_pattern, lower_dense_pattern_set,
     lower_dense_pattern_set_to_patterns, lower_dense_pattern_to_patterns,
     lower_dense_rule_template, lower_line_rule_template, lower_pattern_template,
     lower_rule_template,
@@ -721,7 +720,7 @@ horizontal [ Player | no solid ] -> [ | Player ]
         assert_eq!(resolved.token, "Player");
         assert_eq!(resolved.alternatives, vec![PLAYER]);
         assert_eq!(resolved.transform, None);
-        assert_eq!(resolved.scratch, Vec::<SelectorScratch3>::new());
+        assert_eq!(resolved.mark, Vec::<SelectorMark3>::new());
     }
 
     #[test]
@@ -734,7 +733,7 @@ horizontal [ Player | no solid ] -> [ | Player ]
                 token: "solid".to_string(),
                 alternatives: vec![PLAYER, BOX, WALL],
                 transform: None,
-                scratch: Vec::new(),
+                mark: Vec::new(),
             }
         );
     }
@@ -2035,7 +2034,7 @@ input [ Player | no solid ] -> [ | Player ]
     }
 
     #[test]
-    fn parser_expands_3d_horizontal_and_vertical_movement_scratch_sets() {
+    fn parser_expands_3d_horizontal_and_vertical_movement_mark_sets() {
         let parsed = parse_puzzle3d(
             r#"
 layers {
@@ -2053,7 +2052,7 @@ right [ Box{horizontal} ] -> [ Box{vertical} ]
     }
 
     #[test]
-    fn parser_lowers_input_rule_with_forward_marker_rhs_sugar_as_movement_scratch() {
+    fn parser_lowers_input_rule_with_forward_marker_rhs_sugar_as_movement_mark() {
         let parsed = parse_puzzle3d(
             r#"
 layers {
@@ -2071,18 +2070,18 @@ input [ Player ] -> [ > Player ]
         assert!(parsed.rules.iter().any(|rule| {
             rule.guards == vec![Guard3::InputIs(INPUT_RIGHT)]
                 && rule.writes
-                    == vec![WriteOp3::SetScratch {
+                    == vec![WriteOp3::SetMark {
                         component: 0,
                         object: PLAYER,
                         offset: Offset3::ZERO,
-                        scratch: ScratchId3(0),
+                        mark: MarkId3(0),
                         value: Some(3),
                     }]
         }));
     }
 
     #[test]
-    fn parser_lowers_standard_move_step_for_3d_movement_scratch() {
+    fn parser_lowers_standard_move_step_for_3d_movement_mark() {
         let parsed = parse_puzzle3d(
             r#"
 puzzle3 push3 {
@@ -2122,17 +2121,11 @@ P.
 
         assert!(!moved.has_object(&parsed.game, Coord3::new(0, 0, 0), player));
         assert!(moved.has_object(&parsed.game, Coord3::new(1, 0, 0), player));
-        assert!(!moved.has_scratch(
-            &parsed.game,
-            Coord3::new(1, 0, 0),
-            player,
-            ScratchId3(0),
-            None
-        ));
+        assert!(!moved.has_mark(&parsed.game, Coord3::new(1, 0, 0), player, MarkId3(0), None));
     }
 
     #[test]
-    fn neutral_3d_rewrite_expands_relative_movement_scratch_by_direction() {
+    fn neutral_3d_rewrite_expands_relative_movement_mark_by_direction() {
         let parsed = parse_puzzle3d(
             r#"
 puzzle3 push3 {
@@ -4292,7 +4285,7 @@ input backward [ Player | ] -> [ | Player ]
     }
 
     #[test]
-    fn patch_can_update_3d_visible_globals_and_scratch() {
+    fn patch_can_update_3d_visible_globals_and_mark() {
         let game = game();
         let mut state = State3::empty_with_globals(Size3::new(1, 1, 1), 1, vec![2]).unwrap();
         state
@@ -4306,16 +4299,16 @@ input backward [ Player | ] -> [ | Player ]
                     op: GlobalUpdateOp::Add,
                     value: 3,
                 },
-                PatchOp3::SetScratch {
+                PatchOp3::SetMark {
                     position: Coord3::new(0, 0, 0),
                     object: PLAYER,
-                    scratch: ScratchId3(1),
+                    mark: MarkId3(1),
                     value: Some(7),
                 },
-                PatchOp3::SetScratch {
+                PatchOp3::SetMark {
                     position: Coord3::new(0, 0, 0),
                     object: ObjectId::EMPTY,
-                    scratch: ScratchId3(2),
+                    mark: MarkId3(2),
                     value: None,
                 },
             ],
@@ -4324,8 +4317,8 @@ input backward [ Player | ] -> [ | Player ]
         patch.apply(&game, &mut state).unwrap();
 
         assert_eq!(state.global_value(GlobalId3(0)), Some(5));
-        assert!(state.has_scratch(&game, Coord3::new(0, 0, 0), PLAYER, ScratchId3(1), Some(7)));
-        assert!(state.has_cell_scratch_key(Coord3::new(0, 0, 0), ScratchId3(2)));
+        assert!(state.has_mark(&game, Coord3::new(0, 0, 0), PLAYER, MarkId3(1), Some(7)));
+        assert!(state.has_cell_mark_key(Coord3::new(0, 0, 0), MarkId3(2)));
     }
 
     #[test]
@@ -4351,7 +4344,7 @@ input backward [ Player | ] -> [ | Player ]
     }
 
     #[test]
-    fn write_op3_can_set_scratch_for_later_rule_like_core() {
+    fn write_op3_can_set_mark_for_later_rule_like_core() {
         let game = game();
         let mut state = empty_state(1, 1, 1);
         state
@@ -4359,18 +4352,18 @@ input backward [ Player | ] -> [ | Player ]
             .unwrap();
         let mark_player = Rule3::once(
             Pattern3::new(vec![MatchCell3::new(Offset3::ZERO).require(PLAYER)]),
-            vec![WriteOp3::SetScratch {
+            vec![WriteOp3::SetMark {
                 component: 0,
                 offset: Offset3::ZERO,
                 object: PLAYER,
-                scratch: ScratchId3(1),
+                mark: MarkId3(1),
                 value: Some(7),
             }],
         );
         let consume_mark = Rule3::once(
-            Pattern3::new(vec![MatchCell3::new(Offset3::ZERO).require_scratch(
+            Pattern3::new(vec![MatchCell3::new(Offset3::ZERO).require_mark(
                 PLAYER,
-                ScratchId3(1),
+                MarkId3(1),
                 Some(7),
             )]),
             vec![WriteOp3::Replace {
@@ -4386,21 +4379,21 @@ input backward [ Player | ] -> [ | Player ]
 
         assert!(!next.has_object(&game, Coord3::new(0, 0, 0), PLAYER));
         assert!(next.has_object(&game, Coord3::new(0, 0, 0), WALL));
-        assert!(!next.has_scratch(&game, Coord3::new(0, 0, 0), PLAYER, ScratchId3(1), Some(7)));
+        assert!(!next.has_mark(&game, Coord3::new(0, 0, 0), PLAYER, MarkId3(1), Some(7)));
     }
 
     #[test]
-    fn move_patch_preserves_3d_slot_scratch() {
+    fn move_patch_preserves_3d_slot_mark() {
         let game = game();
         let mut state = empty_state(2, 1, 1);
         state
             .place_object(&game, Coord3::new(0, 0, 0), PLAYER)
             .unwrap();
         Patch3 {
-            ops: vec![PatchOp3::SetScratch {
+            ops: vec![PatchOp3::SetMark {
                 position: Coord3::new(0, 0, 0),
                 object: PLAYER,
-                scratch: ScratchId3(1),
+                mark: MarkId3(1),
                 value: Some(9),
             }],
         }
@@ -4417,8 +4410,8 @@ input backward [ Player | ] -> [ | Player ]
         .apply(&game, &mut state)
         .unwrap();
 
-        assert!(!state.has_scratch(&game, Coord3::new(0, 0, 0), PLAYER, ScratchId3(1), Some(9)));
-        assert!(state.has_scratch(&game, Coord3::new(1, 0, 0), PLAYER, ScratchId3(1), Some(9)));
+        assert!(!state.has_mark(&game, Coord3::new(0, 0, 0), PLAYER, MarkId3(1), Some(9)));
+        assert!(state.has_mark(&game, Coord3::new(1, 0, 0), PLAYER, MarkId3(1), Some(9)));
     }
 
     #[test]

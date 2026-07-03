@@ -158,6 +158,16 @@
         throw hostErrorFromPayload(error, "Preview compile failed");
       }
     },
+    async exportStandaloneHtml(payload, options = {}) {
+      if (options.signal?.aborted) {
+        throw new DOMException("Export request was aborted.", "AbortError");
+      }
+      try {
+        return await editorRuntime().exportHtml(payload);
+      } catch (error) {
+        throw hostErrorFromPayload(error, "HTML export failed");
+      }
+    },
     async highlight(payload, options = {}) {
       if (options.signal?.aborted) {
         throw new DOMException("Highlight request was aborted.", "AbortError");
@@ -174,6 +184,13 @@
       }
       return fetchText("/sound-tools.js");
     },
+    async editorDocsHtml() {
+      const invoke = tauriInvoke();
+      if (invoke) {
+        return invoke("editor_docs");
+      }
+      throw new Error("Editor documents must be embedded in the editor HTML outside desktop mode.");
+    },
     async newPuzzleSource(payload) {
       throw new Error("New puzzle source is browser-runtime owned, not host-owned.");
     },
@@ -186,6 +203,20 @@
         throw backendUnavailableError();
       }
       return fetchText("/api/save", {
+        method: "POST",
+        headers: { "Content-Type": "application/json; charset=utf-8" },
+        body: JSON.stringify(payload),
+      });
+    },
+    async loadWorkspaceDocument(payload) {
+      const invoke = tauriInvoke();
+      if (invoke) {
+        return invoke("load_workspace_document", { request: payload });
+      }
+      if (!serverBackendAvailable()) {
+        throw backendUnavailableError();
+      }
+      return fetchJson("/api/load-workspace-document", {
         method: "POST",
         headers: { "Content-Type": "application/json; charset=utf-8" },
         body: JSON.stringify(payload),

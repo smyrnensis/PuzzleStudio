@@ -37,12 +37,12 @@ use puzzle_3d::{Rule3, WinCondition3, transition_program as transition_program3}
 use puzzle_core::transition_state;
 use puzzle_core::{
     ComparisonOp, CompiledGame, ConditionValueKind, Effect, GlobalUpdateOp, Guard, InputId,
-    LayerId, ObjectId, Offset, Patch, PatchOp, Pattern, Rule, RuleApplication, RuleCondition,
-    RuleId, RuleStep, ScratchPattern, ScratchValueMatch, State, TransitionCommand, WriteOp,
+    LayerId, MarkPattern, MarkValueMatch, ObjectId, Offset, Patch, PatchOp, Pattern, Rule,
+    RuleApplication, RuleCondition, RuleId, RuleStep, State, TransitionCommand, WriteOp,
     transition_program, transition_program_outcome, transition_program_trace,
 };
 #[cfg(feature = "solver")]
-use puzzle_core::{ConditionId, GlobalId, MatchCell, PatternComponent, ScratchId};
+use puzzle_core::{ConditionId, GlobalId, MarkId, MatchCell, PatternComponent};
 #[cfg(not(target_arch = "wasm32"))]
 use puzzle_lang::AssetsDef;
 #[cfg(feature = "solver")]
@@ -1345,14 +1345,10 @@ levels3 cube_levels of cube {
 }
 
 scene mixed_play {
-  state {
-    flat_board = puzzle flat
-    cube_board = puzzle3 cube
-  }
   layout size 4 3 {
     row {
-      puzzle flat_board
-      puzzle3 cube_board
+      flat_board = puzzle flat
+      cube_board = puzzle3 cube
     }
   }
 }
@@ -2676,11 +2672,8 @@ rules {
 }
 
 scene playing {
-    state {
-        board = puzzle default
-    }
     layout {
-        puzzle board
+        board = puzzle default
     }
 }
 "#;
@@ -2831,11 +2824,8 @@ P
 }
 
 scene playing {
-state {
-board = puzzle default
-}
 layout {
-board
+board = puzzle default
 }
 rules {
 step board
@@ -2898,11 +2888,8 @@ P.
 }
 
 scene playing {
-state {
-board = puzzle default
-}
 layout {
-board
+board = puzzle default
 }
 rules {
 step board
@@ -2984,14 +2971,11 @@ levels default of board {
 }
 
 scene playing {
-  state {
-    board = puzzle board
-  }
   rules {
     step board
   }
   layout {
-    board
+    board = puzzle board
   }
 }
 "#;
@@ -3169,11 +3153,8 @@ scene title {
 }
 
 scene playing {
-  state {
-    board = puzzle3 cube
-  }
   layout {
-    puzzle3 board
+    board = puzzle3 cube
   }
 }
 
@@ -3404,11 +3385,8 @@ puzzle3 cube {
 }
 
 scene playing {
-  state {
-    board = puzzle3 cube
-  }
   layout {
-    puzzle3 board
+    board = puzzle3 cube
   }
 }
 
@@ -3462,11 +3440,8 @@ scene title {
 }
 
 scene playing {
-  state {
-    board = puzzle3 cube
-  }
   layout {
-    puzzle3 board
+    board = puzzle3 cube
   }
 }
 

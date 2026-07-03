@@ -10,7 +10,7 @@ const solverObservationPlaybackMinStepMs = 20;
 const solverObservationPlaybackMaxStepMs = 80;
 const solutionPlaybackBaseIntervalMs = 350;
 const WASM_SECTION_BLOCK_NAMES = Object.freeze({
-  scratch: "scratch",
+  marks: "marks",
   group: "group",
   groups: "group",
   layer: "layers",
@@ -55,7 +55,7 @@ const WASM_SECTION_BOUNDARY_BLOCKS = new Set([
   "on_level_start",
   "on_level_clear",
   "on_display",
-  "scratch",
+  "marks",
   "group",
   "layers",
   "collision_layers",
@@ -1743,7 +1743,7 @@ function sectionBoundaryForWasm(block, tokens) {
   if (block === "legend") {
     return !isLegendRowForWasm(tokens);
   }
-  if (["scratch", "group", "layers", "collision_layers", "win_conditions", "lose_conditions", "transitions", "levels", "sprites", "assets", "on_display"].includes(block)) {
+  if (["marks", "group", "layers", "collision_layers", "win_conditions", "lose_conditions", "transitions", "levels", "sprites", "assets", "on_display"].includes(block)) {
     return startsPuzzleSectionForWasm(tokens);
   }
   return false;

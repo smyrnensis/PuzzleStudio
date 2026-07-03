@@ -347,20 +347,6 @@ function renderSprite3dPalette() {
     button.addEventListener("click", () => selectSprite3dColor(index));
     item.append(button);
 
-    const colorInput = document.createElement("input");
-    colorInput.type = "color";
-    colorInput.className = "sprite-token-color-input";
-    colorInput.value = spriteRgbHex(entry.color);
-    colorInput.setAttribute("aria-label", `Edit 3D sprite color ${index + 1}`);
-    colorInput.addEventListener("input", () => {
-      sprite3d.selectedColorIndex = index;
-      updateSelectedSprite3dColor(colorInput.value, { deferHistory: true });
-    });
-    colorInput.addEventListener("change", () => {
-      sprite3d.selectedColorIndex = index;
-      updateSelectedSprite3dColor(colorInput.value, { commitHistory: true });
-    });
-    item.append(colorInput);
     paletteGrid.append(item);
   }
   const addWrap = document.createElement("span");

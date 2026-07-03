@@ -302,9 +302,9 @@ PBG
     }
 
     #[test]
-    fn solver_handles_transition_local_scratch_rules() {
+    fn solver_handles_transition_local_mark_rules() {
         let source = r#"
-title scratch_solver
+title mark_solver
 
 puzzle default {
 layers {
@@ -312,7 +312,7 @@ floor = Goal
 actor = Player Box Wall
 }
 
-scratch {
+marks {
 push
 dest
 }
@@ -370,8 +370,8 @@ PBG
             )
             .unwrap();
         assert!(loaded.is_goal_complete(solved.state()));
-        assert!(solved.state().slot_scratch().iter().all(Vec::is_empty));
-        assert!(solved.state().cell_scratch().iter().all(Vec::is_empty));
+        assert!(solved.state().slot_mark().iter().all(Vec::is_empty));
+        assert!(solved.state().cell_mark().iter().all(Vec::is_empty));
     }
 
     #[test]

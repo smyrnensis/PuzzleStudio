@@ -8,10 +8,10 @@ pub fn is_display_object_token(token: &str) -> bool {
     let Some(rest) = token.strip_prefix('@') else {
         return false;
     };
-    let without_scratch = rest.split_once('{').map_or(rest, |(base, _)| base);
-    let base = without_scratch
+    let without_mark = rest.split_once('{').map_or(rest, |(base, _)| base);
+    let base = without_mark
         .split_once(':')
-        .map_or(without_scratch, |(base, _)| base);
+        .map_or(without_mark, |(base, _)| base);
     is_identifier(base)
 }
 
@@ -747,17 +747,17 @@ fn is_word_continue(ch: char) -> bool {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ScratchSugarKind {
+pub enum MarkSugarKind {
     Movement,
     Bool,
     Int,
 }
 
-pub const ANONYMOUS_MOVEMENT_SCRATCH_INDEX: u16 = 0;
+pub const ANONYMOUS_MOVEMENT_MARK_INDEX: u16 = 0;
 pub const MOVEMENT_DIRECTIONS_2D: &[&str] = &["up", "down", "left", "right"];
 pub const MOVEMENT_DIRECTIONS_3D: &[&str] = &["up", "down", "left", "right", "front", "back"];
 
-pub fn scratch_sugar_kind(token: &str) -> Option<ScratchSugarKind> {
+pub fn mark_sugar_kind(token: &str) -> Option<MarkSugarKind> {
     if matches!(
         token,
         ">" | "<"
@@ -777,11 +777,11 @@ pub fn scratch_sugar_kind(token: &str) -> Option<ScratchSugarKind> {
             | "parallel"
             | "perpendicular"
     ) {
-        Some(ScratchSugarKind::Movement)
+        Some(MarkSugarKind::Movement)
     } else if matches!(token, "true" | "false") {
-        Some(ScratchSugarKind::Bool)
+        Some(MarkSugarKind::Bool)
     } else if token.parse::<i64>().is_ok() {
-        Some(ScratchSugarKind::Int)
+        Some(MarkSugarKind::Int)
     } else {
         None
     }
@@ -795,21 +795,21 @@ pub fn canonical_3d_movement_direction_name(value: &str) -> &str {
     }
 }
 
-pub fn movement_scratch_index(value: &str, directions: &[&str]) -> Option<u16> {
+pub fn movement_mark_index(value: &str, directions: &[&str]) -> Option<u16> {
     directions
         .iter()
         .position(|direction| *direction == value)
         .and_then(|index| u16::try_from(index).ok())
 }
 
-pub fn movement_scratch_index_3d(value: &str) -> Option<u16> {
-    movement_scratch_index(
+pub fn movement_mark_index_3d(value: &str) -> Option<u16> {
+    movement_mark_index(
         canonical_3d_movement_direction_name(value),
         MOVEMENT_DIRECTIONS_3D,
     )
 }
 
-pub fn movement_scratch_set_values(value: &str, dimensions: u8) -> Option<&'static [&'static str]> {
+pub fn movement_mark_set_values(value: &str, dimensions: u8) -> Option<&'static [&'static str]> {
     match (value, dimensions) {
         ("directions", 2) => Some(MOVEMENT_DIRECTIONS_2D),
         ("directions", 3) => Some(MOVEMENT_DIRECTIONS_3D),
@@ -862,12 +862,15 @@ pub fn standard_move_rule_plans(
 pub enum CellTokenError {
     UnmatchedCloseBrace,
     MissingCloseBrace,
+    UnmatchedCloseParen,
+    MissingCloseParen,
 }
 
 pub fn split_cell_tokens(cell: &str) -> Result<Vec<String>, CellTokenError> {
     let mut tokens = Vec::new();
     let mut token = String::new();
     let mut brace_depth = 0_u16;
+    let mut paren_depth = 0_u16;
     for ch in cell.chars() {
         match ch {
             '{' => {
@@ -881,7 +884,18 @@ pub fn split_cell_tokens(cell: &str) -> Result<Vec<String>, CellTokenError> {
                 brace_depth -= 1;
                 token.push(ch);
             }
-            ch if ch.is_whitespace() && brace_depth == 0 => {
+            '(' => {
+                paren_depth += 1;
+                token.push(ch);
+            }
+            ')' => {
+                if paren_depth == 0 {
+                    return Err(CellTokenError::UnmatchedCloseParen);
+                }
+                paren_depth -= 1;
+                token.push(ch);
+            }
+            ch if ch.is_whitespace() && brace_depth == 0 && paren_depth == 0 => {
                 if !token.is_empty() {
                     tokens.push(std::mem::take(&mut token));
                 }
@@ -891,6 +905,9 @@ pub fn split_cell_tokens(cell: &str) -> Result<Vec<String>, CellTokenError> {
     }
     if brace_depth != 0 {
         return Err(CellTokenError::MissingCloseBrace);
+    }
+    if paren_depth != 0 {
+        return Err(CellTokenError::MissingCloseParen);
     }
     if !token.is_empty() {
         tokens.push(token);
@@ -936,15 +953,12 @@ mod tests {
     }
 
     #[test]
-    fn shared_scratch_sugar_recognizes_2d_and_3d_direction_words() {
-        assert_eq!(scratch_sugar_kind(">"), Some(ScratchSugarKind::Movement));
-        assert_eq!(
-            scratch_sugar_kind("front"),
-            Some(ScratchSugarKind::Movement)
-        );
-        assert_eq!(scratch_sugar_kind("true"), Some(ScratchSugarKind::Bool));
-        assert_eq!(scratch_sugar_kind("7"), Some(ScratchSugarKind::Int));
-        assert_eq!(scratch_sugar_kind("Player"), None);
+    fn shared_mark_sugar_recognizes_2d_and_3d_direction_words() {
+        assert_eq!(mark_sugar_kind(">"), Some(MarkSugarKind::Movement));
+        assert_eq!(mark_sugar_kind("front"), Some(MarkSugarKind::Movement));
+        assert_eq!(mark_sugar_kind("true"), Some(MarkSugarKind::Bool));
+        assert_eq!(mark_sugar_kind("7"), Some(MarkSugarKind::Int));
+        assert_eq!(mark_sugar_kind("Player"), None);
     }
 
     #[test]
@@ -1228,31 +1242,39 @@ mod tests {
     #[test]
     fn shared_movement_contract_resolves_direction_aliases_and_sets() {
         assert_eq!(
-            movement_scratch_index("right", MOVEMENT_DIRECTIONS_2D),
+            movement_mark_index("right", MOVEMENT_DIRECTIONS_2D),
             Some(3)
         );
-        assert_eq!(movement_scratch_index_3d("forward"), Some(4));
+        assert_eq!(movement_mark_index_3d("forward"), Some(4));
         assert_eq!(
-            movement_scratch_index("forward", MOVEMENT_DIRECTIONS_2D),
+            movement_mark_index("forward", MOVEMENT_DIRECTIONS_2D),
             None,
             "forward/backward aliases are 3D-specific"
         );
         assert_eq!(
-            movement_scratch_set_values("horizontal", 3),
+            movement_mark_set_values("horizontal", 3),
             Some(["left", "right", "front", "back"].as_slice())
         );
         assert_eq!(
-            movement_scratch_set_values("perpendicular", 3),
+            movement_mark_set_values("perpendicular", 3),
             None,
             "relative 2D movement sets are not defined for 3D line space"
         );
     }
 
     #[test]
-    fn shared_cell_tokenizer_keeps_scratch_blocks_together() {
+    fn shared_cell_tokenizer_keeps_mark_blocks_together() {
         assert_eq!(
             split_cell_tokens("Player{> no flag} no Wall").unwrap(),
             vec!["Player{> no flag}", "no", "Wall"]
+        );
+    }
+
+    #[test]
+    fn shared_cell_tokenizer_keeps_computed_axis_selectors_together() {
+        assert_eq!(
+            split_cell_tokens("Box:(facing + 90deg):red no Wall").unwrap(),
+            vec!["Box:(facing + 90deg):red", "no", "Wall"]
         );
     }
 

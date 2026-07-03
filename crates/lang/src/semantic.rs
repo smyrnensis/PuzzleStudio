@@ -55,7 +55,7 @@ pub(crate) enum SemanticCompletionSlot {
     Objects,
     Groups,
     States,
-    Scratches,
+    Markes,
     ObjectNameAtoms,
     ValueSets,
     Directions,
@@ -187,11 +187,11 @@ fn contextual_completion_slots(
         return Some(slots);
     }
 
-    if inside_scratch_selector_attrs(before) {
+    if inside_mark_selector_attrs(before) {
         return Some(vec![
             SemanticCompletionSlot::Directions,
             SemanticCompletionSlot::DirectionSets,
-            SemanticCompletionSlot::Scratches,
+            SemanticCompletionSlot::Markes,
         ]);
     }
 
@@ -334,7 +334,7 @@ fn line_head_completion_slots(
             | SourceScope::Tags
             | SourceScope::Group
             | SourceScope::Layers
-            | SourceScope::Scratch
+            | SourceScope::Mark
             | SourceScope::Keys
             | SourceScope::Legend
             | SourceScope::Levels
@@ -524,7 +524,7 @@ fn visual_completion_slots(
     }
 }
 
-fn inside_scratch_selector_attrs(before: &str) -> bool {
+fn inside_mark_selector_attrs(before: &str) -> bool {
     let Some(open) = before.rfind('{') else {
         return false;
     };
@@ -560,7 +560,7 @@ fn symbol_definition_scope(scope: Option<SourceScope>) -> bool {
             SourceScope::Group
                 | SourceScope::Layers
                 | SourceScope::Tags
-                | SourceScope::Scratch
+                | SourceScope::Mark
                 | SourceScope::Keys
                 | SourceScope::SceneKeys
                 | SourceScope::SceneState
@@ -718,7 +718,7 @@ fn fallback_completion_slots(scope: Option<SourceScope>) -> Vec<SemanticCompleti
             SemanticCompletionSlot::Objects,
             SemanticCompletionSlot::Groups,
         ],
-        Some(SourceScope::Scratch) => vec![
+        Some(SourceScope::Mark) => vec![
             SemanticCompletionSlot::Keywords(completion_keywords_for_scope(scope)),
             SemanticCompletionSlot::ObjectNameAtoms,
             SemanticCompletionSlot::Directions,
@@ -793,7 +793,7 @@ fn rule_expression_completion_slots() -> Vec<SemanticCompletionSlot> {
         SemanticCompletionSlot::Objects,
         SemanticCompletionSlot::Groups,
         SemanticCompletionSlot::States,
-        SemanticCompletionSlot::Scratches,
+        SemanticCompletionSlot::Markes,
         SemanticCompletionSlot::ObjectNameAtoms,
         SemanticCompletionSlot::Directions,
         SemanticCompletionSlot::DirectionSets,
@@ -814,7 +814,7 @@ fn completion_keywords_for_scope(scope: Option<SourceScope>) -> &'static [&'stat
         Some(SourceScope::Tags) => TAG_COMPLETION_KEYWORDS,
         Some(SourceScope::Group) => GROUP_COMPLETION_KEYWORDS,
         Some(SourceScope::Layers) => LAYER_COMPLETION_KEYWORDS,
-        Some(SourceScope::Scratch) => SCRATCH_COMPLETION_KEYWORDS,
+        Some(SourceScope::Mark) => MARK_COMPLETION_KEYWORDS,
         Some(SourceScope::Keys) | Some(SourceScope::SceneKeys) => KEY_COMPLETION_KEYWORDS,
         Some(SourceScope::Legend) => LEGEND_COMPLETION_KEYWORDS,
         Some(SourceScope::Levels) | Some(SourceScope::Level) | Some(SourceScope::UnbracedLevel) => {
@@ -918,7 +918,7 @@ const ASSET_COMPLETION_KEYWORDS: &[&str] = &["css", "file", "script"];
 const TAG_COMPLETION_KEYWORDS: &[&str] = &[];
 const GROUP_COMPLETION_KEYWORDS: &[&str] = &["each"];
 const LAYER_COMPLETION_KEYWORDS: &[&str] = &["each"];
-const SCRATCH_COMPLETION_KEYWORDS: &[&str] = &["const", "persistent", "var"];
+const MARK_COMPLETION_KEYWORDS: &[&str] = &["const", "persistent", "var"];
 const KEY_COMPLETION_KEYWORDS: &[&str] = &["direction", "input"];
 const LEGEND_COMPLETION_KEYWORDS: &[&str] = &["empty"];
 const LEVEL_COMPLETION_KEYWORDS: &[&str] = &["legend", "level", "of"];
@@ -1015,7 +1015,7 @@ const COMPLETION_KEYWORDS: &[&str] = &[
     "rule",
     "rules",
     "scene",
-    "scratch",
+    "marks",
     "sfx",
     "shape",
     "show_index",

@@ -398,7 +398,7 @@ group は selector の別名。rewrite では object selector と同じ場所で
 
 group は concrete object selector の集合であり、schema family term を後から suffix 展開する機能は持たない。`A:a B:a` のように concrete object selector として解決できるものだけを入れる。object-name atom set に suffix を付けたい場合は `tags` を使う。
 
-同じ selector の複数 occurrence を右辺で明示的に入れ替えたい場合は、scratch より前に `#` で occurrence label を付ける。`#` は object / group / schema 名の一部ではなく、その rewrite 内だけの identity label。
+同じ selector の複数 occurrence を右辺で明示的に入れ替えたい場合は、mark より前に `#` で occurrence label を付ける。`#` は object / group / schema 名の一部ではなく、その rewrite 内だけの identity label。
 
 ```txt
 [ pushable_objects#1 | pushable_objects#2 ] -> [ pushable_objects#2 | pushable_objects#1 ]
@@ -411,10 +411,10 @@ group は concrete object selector の集合であり、schema family term を�
 [ pushable_objects#1 | pushable_objects#2 ] -> [ pushable_objects#1 | pushable_objects#1 ]
 ```
 
-### `scratch`
+### `marks`
 
 ```txt
-scratch {
+marks {
 visited
 frontier
 intent = directions
@@ -423,33 +423,33 @@ armed = bool
 }
 ```
 
-`scratch` は rule chain の中だけで使う transition-local な一時 fact を宣言する block。scratch は `State` に保存されず、level / undo / solver key / renderer には残らない。通常 transition、`level_start`、display lifecycle の各実行が終わるとすべて消える。
+`marks` は rule chain の中だけで使う transition-local な一時 fact を宣言する block。mark は `State` に保存されず、level / undo / solver key / renderer には残らない。通常 transition、`level_start`、display lifecycle の各実行が終わるとすべて消える。
 
-scratch は宣言時に cell 用 / object 用を分けない。書いた位置が anchor を決める。
+mark は宣言時に cell 用 / object 用を分けない。書いた位置が anchor を決める。
 
 ```txt
-{visited}          // cell に付く scratch
-Box{visited}       // Box occurrence に付く scratch
-Box {visited}      // Box object + cell scratch
-Box{intent=right}  // Box occurrence に値付き scratch
-no {visited}       // cell scratch の不存在
-Box{no visited}    // Box occurrence scratch の不存在
+{visited}          // cell に付く mark
+Box{visited}       // Box occurrence に付く mark
+Box {visited}      // Box object + cell mark
+Box{intent=right}  // Box occurrence に値付き mark
+no {visited}       // cell mark の不存在
+Box{no visited}    // Box occurrence mark の不存在
 ```
 
-`bool` scratch は例外的に object-like な presence / absence として書く。`Box{armed}` は armed scratch を足す / 持つこと、`Box{no armed}` は armed scratch を消す / 持たないことを表す。
+型を書かない mark は `flag`。`Box{visited}` は visited flag を足す / 持つこと、`Box{no visited}` は visited flag を消す / 持たないことを表す。`= bool` も presence / absence syntax で使う。
 
-cell scratch と occurrence scratch は同じ名前を使えるが、互いに match しない。`Box{mark}` と `Box {mark}` は別の意味を持つため、anchor が変わる rewrite や同じ cell pattern 内での同居は valid だが warning になる。
+cell mark と occurrence mark は同じ名前を使えるが、互いに match しない。`Box{mark}` と `Box {mark}` は別の意味を持つため、anchor が変わる rewrite や同じ cell pattern 内での同居は valid だが warning になる。
 
-`>` / `<` / `^` / `v` と direction token の prefix sugar は、builtin movement scratch へ lower される。内部名は `__move`。
+`>` / `<` / `^` / `v` と direction token の prefix sugar は、builtin movement mark へ lower される。内部名は `__move`。
 
 ```txt
 > Box
 Box{__move=right}
 ```
 
-上の2つは概念的に同じ occurrence scratch を表す。通常は sugar か標準 `move` rule 経由で使い、author-defined scratch 名として `__move` を再宣言しない。
+上の2つは概念的に同じ occurrence mark を表す。通常は sugar か標準 `move` rule 経由で使い、author-defined mark 名として `__move` を再宣言しない。
 
-movement scratch では相対方向 set も使える。
+movement mark では相対方向 set も使える。
 
 ```txt
 Box{parallel}       // Box{<} または > Box
@@ -988,9 +988,9 @@ once [ Door ] -> [ ClosedDoor ]
 
 ### Input-Gated Direction Rewrite
 
-入力方向に合わせて object を動かす基本形は、まず movement scratch を付け、最後に標準搭載の `move` routine を呼ぶ。
+入力方向に合わせて object を動かす基本形は、まず movement mark を付け、最後に標準搭載の `move` routine を呼ぶ。
 
-`input` は key から読み替えられた semantic input の名前。`input directions [ ... ]` は、現在の input が `directions` の member だったときだけ、その member を rewrite orientation として使う。`> Player` は「その rewrite orientation へ移動したい」という builtin movement scratch。実際に隣の cell へ移す処理と collision は標準 `move` routine が担当する。通常の移動例では、直接 `[ | Player ]` へ書き換えたり、`for d in directions { if input == d { ... } }` へ展開して書かない。
+`input` は key から読み替えられた semantic input の名前。`input directions [ ... ]` は、現在の input が `directions` の member だったときだけ、その member を rewrite orientation として使う。`> Player` は「その rewrite orientation へ移動したい」という builtin movement mark。実際に隣の cell へ移す処理と collision は標準 `move` routine が担当する。通常の移動例では、直接 `[ | Player ]` へ書き換えたり、`for d in directions { if input == d { ... } }` へ展開して書かない。
 
 ```txt
 rules {
@@ -1042,7 +1042,7 @@ for tag in tag_1 tag_2 tag_3 tag_4
 for x in a b 1...3 z
 ```
 
-`directions` / `horizontal` / `vertical` はそれ自体を offset の単位としては使わない。展開後の `up` / `right` などが orientation prefix や movement scratch として解釈される。
+`directions` / `horizontal` / `vertical` はそれ自体を offset の単位としては使わない。展開後の `up` / `right` などが orientation prefix や movement mark として解釈される。
 
 `<start>...<end>` は inclusive numeric range。`1...3` は `1` / `2` / `3` へ展開される。endpoint は整数 literal または同じ puzzle 内で整数 literal に初期化された `var` / `const` を使える。これは authoring-time expansion なので、turn 中に var を更新しても展開数は変わらない。同じ range token は `tags` の value list でも使える。
 
@@ -1071,7 +1071,7 @@ d [ d l | no l ] -> [ | l ]
 }
 ```
 
-`gameplay_layers` は説明用の名前で、author-facing な tag set ではない。`d l` は「gameplay layer `l` の object が方向 `d` の builtin movement scratch を持つ」ことを表す。右辺の `l` は左辺で一致した concrete object を保持し、movement scratch は transition 終了時に消える。
+`gameplay_layers` は説明用の名前で、author-facing な tag set ではない。`d l` は「gameplay layer `l` の object が方向 `d` の builtin movement mark を持つ」ことを表す。右辺の `l` は左辺で一致した concrete object を保持し、movement mark は transition 終了時に消える。
 
 これは概念的には、各方向について block 内の statement を順番ごと複製する。
 
@@ -1135,7 +1135,7 @@ score %= 10
 
 右辺 pattern を省略して `-> count += 1` のように書くと、盤面は変更せず、左辺 pattern が match したときだけ effect を発火する。演算は `i64` の checked arithmetic で、overflow と 0 除算は transition error になる。
 
-`cancel` は rewrite effect として書ける。左辺 pattern が match すると、その transition 全体を入力前の state に戻して正常終了する。途中の board write、scratch write、var write は残らない。
+`cancel` は rewrite effect として書ける。左辺 pattern が match すると、その transition 全体を入力前の state に戻して正常終了する。途中の board write、mark write、var write は残らない。
 
 ```txt
 once [ Player Trap ] -> cancel
@@ -1154,7 +1154,7 @@ if win_conditions -> next_level
 
 `again` は PuzzleScript 互換の puzzle rule effect。現在の turn を commit した後、runtime に no-input follow-up turn を要求する。
 
-`again` が「again」するのは物理 key や直前の semantic input ではない。直前に押された `left` / `x` / `Enter` を再送しない。`again` は、同じ puzzle target の通常 rule entrypoint、たとえば scene の `rules { step sokoban }` で指定された `sokoban` を、input なしで 1 turn だけもう一度実行する。したがって `if input == left` のような input guard は `again` turn では false になり、input に依存しない rule や、前 turn が盤面に残した object / scratch ではない状態だけが進む。
+`again` が「again」するのは物理 key や直前の semantic input ではない。直前に押された `left` / `x` / `Enter` を再送しない。`again` は、同じ puzzle target の通常 rule entrypoint、たとえば scene の `rules { step sokoban }` で指定された `sokoban` を、input なしで 1 turn だけもう一度実行する。したがって `if input == left` のような input guard は `again` turn では false になり、input に依存しない rule や、前 turn が盤面に残した object / mark ではない状態だけが進む。
 
 1つの follow-up turn がまた `again` を出すと、さらに次の no-input follow-up turn が予約される。自動 turn は最大 256 回で止まり、`cancel` が出た場合はその自動 turn だけを取り消して停止する。standalone HTML export では follow-up turn は既定で 120ms ごとに 1 turn ずつ実行され、top-level の `again_interval = 100ms` / `again_interval = 0.1s` で変更できる。PuzzleScript import 互換として `again_interval 0.1` も秒指定として読める。各 follow-up turn は別 snapshot として公開されるため、その turn で発火した `sfx` / `message` も turn ごとに処理される。
 
@@ -1188,10 +1188,10 @@ wait animation
 [ Player ResetCheckpoint ] -> clear_checkpoint
 ```
 
-scratch は transition 終了時に自動消去される。明示的な var clear effect は持たない。
+mark は transition 終了時に自動消去される。明示的な var clear effect は持たない。
 
 ```txt
-scratch {
+marks {
 checked
 }
 
@@ -1318,7 +1318,7 @@ once right [ no Edge | null ] -> [ Edge | ]
 
 この例は、右隣が盤面外である右端の cell に `Edge` を置く。
 
-右辺で object を追加するセルは、その object の layer が空いていることを暗黙に要求する。ただし、通常のプレイヤー移動は direct rewrite ではなく、movement scratch と標準 `move` routine で書く。
+右辺で object を追加するセルは、その object の layer が空いていることを暗黙に要求する。ただし、通常のプレイヤー移動は direct rewrite ではなく、movement mark と標準 `move` routine で書く。
 
 ```txt
 input directions [ Player ] -> [ > Player ]

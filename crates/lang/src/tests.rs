@@ -1,6 +1,7 @@
 use super::*;
 use puzzle_core::{
-    LocalFrameExtent, RuleStep, transition_program, transition_solver_state, transition_state,
+    LocalFrameExtent, RuleStep, State, transition_program, transition_solver_state,
+    transition_state,
 };
 
 fn parse_game(source: &str) -> Result<LoadedGame, DiagnosticReport> {
@@ -197,6 +198,16 @@ fn input_named(loaded: &LoadedGame, name: &str) -> InputId {
         .iter()
         .find_map(|(input, label)| (label == name).then_some(*input))
         .unwrap()
+}
+
+fn labels_at(loaded: &LoadedGame, state: &State, x: u16, y: u16) -> Vec<String> {
+    state
+        .cell_view(x, y)
+        .unwrap()
+        .objects
+        .iter()
+        .filter_map(|object| loaded.object_labels.get(object).cloned())
+        .collect()
 }
 
 #[test]
@@ -1424,11 +1435,57 @@ P
             .iter()
             .any(|effect| { matches!(effect, RuleEffect::PlaySfx { name } if name == "pushed") })
     );
-    assert!(effects.iter().any(|effect| {
-        matches!(effect, RuleEffect::Wait { milliseconds } if *milliseconds == 350)
-    }));
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, RuleEffect::WaitAnimation))
+    );
     assert!(effects.iter().any(|effect| {
         matches!(effect, RuleEffect::Wait { milliseconds } if *milliseconds == 25)
+    }));
+}
+
+#[test]
+fn rewrite_suffix_wait_lowers_to_after_triggered_animation_barrier() {
+    let source = r#"
+title rewrite_wait_suffix
+
+puzzle default {
+layers {
+__legacy_layer_0 = Player Goal
+}
+legend {
+. = empty
+P = Player
+G = Goal
+}
+rules {
+[ Player ] -> [ Goal ] wait
+}
+level "start" {
+P
+}
+}
+"#;
+
+    let loaded = parse_game(source).unwrap();
+    assert!(loaded.game.program().iter().any(|step| {
+        matches!(
+            step,
+            puzzle_core::RuleStep::AfterTriggered { then_steps, .. }
+                if then_steps.iter().any(|then_step| {
+                    matches!(
+                        then_step,
+                        puzzle_core::RuleStep::Rule(rule)
+                            if loaded
+                                .rule_effects
+                                .get(&rule.id)
+                                .is_some_and(|effects| effects.iter().any(|effect| {
+                                    matches!(effect, RuleEffect::WaitAnimation)
+                                }))
+                    )
+                })
+        )
     }));
 }
 
@@ -3255,9 +3312,9 @@ next_level
 }
 
 #[test]
-fn occurrence_scratch_supports_multiple_marks_direction_and_int_values() {
+fn occurrence_mark_supports_multiple_marks_direction_and_int_values() {
     let source = r#"
-title scratch_marks
+title mark_marks
 
 puzzle default {
 layers {
@@ -3266,7 +3323,7 @@ __legacy_layer_1 = Box
 }
 empty .
 
-scratch {
+marks {
 checked
 move = directions
 count = int
@@ -3290,14 +3347,14 @@ B
     let marker = object_named(&loaded, "Marker");
 
     assert!(moved.has_object(&loaded.game, 0, 0, marker));
-    assert!(moved.slot_scratch().iter().all(Vec::is_empty));
-    assert!(moved.cell_scratch().iter().all(Vec::is_empty));
+    assert!(moved.slot_mark().iter().all(Vec::is_empty));
+    assert!(moved.cell_mark().iter().all(Vec::is_empty));
 }
 
 #[test]
-fn bool_scratch_uses_presence_and_no_syntax() {
+fn bool_mark_uses_presence_and_no_syntax() {
     let source = r#"
-title bool_scratch
+title bool_mark
 
 puzzle default {
 layers {
@@ -3306,7 +3363,7 @@ __legacy_layer_1 = Box
 }
 empty .
 
-scratch {
+marks {
 flag = bool
 }
 
@@ -3323,18 +3380,19 @@ B
 }
 "#;
     let loaded = parse_game(source).unwrap();
+    eprintln!("rules: {:?}", loaded.game.rules());
     let moved =
         transition_state(&loaded.game, &loaded.levels[0].initial_state, InputId(0)).unwrap();
     let marker = object_named(&loaded, "Marker");
 
     assert!(moved.has_object(&loaded.game, 0, 0, marker));
-    assert!(moved.slot_scratch().iter().all(Vec::is_empty));
+    assert!(moved.slot_mark().iter().all(Vec::is_empty));
 }
 
 #[test]
-fn colon_scratch_name_does_not_mean_value_assignment() {
+fn colon_mark_name_does_not_mean_value_assignment() {
     let source = r#"
-title scratch_colon
+title mark_colon
 
 puzzle default {
 layers {
@@ -3342,7 +3400,7 @@ __legacy_layer_0 = Box
 }
 empty .
 
-scratch {
+marks {
 count = int
 }
 
@@ -3358,13 +3416,13 @@ B
 }
 "#;
     let error = parse_game(source).unwrap_err().to_string();
-    assert!(error.contains("unknown scratch"));
+    assert!(error.contains("unknown mark"));
 }
 
 #[test]
-fn scratch_names_can_use_numeric_colon_parts() {
+fn mark_names_can_use_numeric_colon_parts() {
     let source = r#"
-title numeric_qualified_scratch
+title numeric_qualified_mark
 
 puzzle default {
 layers {
@@ -3373,7 +3431,7 @@ __legacy_layer_1 = Box
 }
 empty .
 
-scratch {
+marks {
 count:3
 }
 
@@ -3395,13 +3453,13 @@ B
     let marker = object_named(&loaded, "Marker");
 
     assert!(moved.has_object(&loaded.game, 0, 0, marker));
-    assert!(moved.slot_scratch().iter().all(Vec::is_empty));
+    assert!(moved.slot_mark().iter().all(Vec::is_empty));
 }
 
 #[test]
-fn scratch_names_can_use_direction_glyph_colon_parts() {
+fn mark_names_can_use_direction_glyph_colon_parts() {
     let source = r#"
-title glyph_qualified_scratch
+title glyph_qualified_mark
 
 puzzle default {
 layers {
@@ -3410,7 +3468,7 @@ __legacy_layer_1 = Box
 }
 empty .
 
-scratch {
+marks {
 push:>
 pull:<
 rise:^
@@ -3435,13 +3493,13 @@ B
     let marker = object_named(&loaded, "Marker");
 
     assert!(moved.has_object(&loaded.game, 0, 0, marker));
-    assert!(moved.slot_scratch().iter().all(Vec::is_empty));
+    assert!(moved.slot_mark().iter().all(Vec::is_empty));
 }
 
 #[test]
-fn qualified_scratch_names_can_use_colons() {
+fn qualified_mark_names_can_use_colons() {
     let source = r#"
-title qualified_scratch
+title qualified_mark
 
 puzzle default {
 layers {
@@ -3450,7 +3508,7 @@ __legacy_layer_1 = Box
 }
 empty .
 
-scratch {
+marks {
 enter:directions = bool
 intent:move = directions
 }
@@ -3473,13 +3531,13 @@ B
     let marker = object_named(&loaded, "Marker");
 
     assert!(moved.has_object(&loaded.game, 0, 0, marker));
-    assert!(moved.slot_scratch().iter().all(Vec::is_empty));
+    assert!(moved.slot_mark().iter().all(Vec::is_empty));
 }
 
 #[test]
-fn unmentioned_occurrence_scratch_is_preserved_when_same_occurrence_moves() {
+fn unmentioned_occurrence_mark_is_preserved_when_same_occurrence_moves() {
     let source = r#"
-title moving_scratch
+title moving_mark
 
 puzzle default {
 layers {
@@ -3488,7 +3546,7 @@ __legacy_layer_1 = Box
 }
 empty .
 
-scratch {
+marks {
 hot
 }
 
@@ -3511,13 +3569,13 @@ B.
     let marker = object_named(&loaded, "Marker");
 
     assert!(moved.has_object(&loaded.game, 1, 0, marker));
-    assert!(moved.slot_scratch().iter().all(Vec::is_empty));
+    assert!(moved.slot_mark().iter().all(Vec::is_empty));
 }
 
 #[test]
-fn omitted_rhs_scratch_removes_explicit_lhs_scratch_on_moved_occurrence() {
+fn omitted_rhs_mark_removes_explicit_lhs_mark_on_moved_occurrence() {
     let source = r#"
-title moving_scratch_remove
+title moving_mark_remove
 
 puzzle default {
 layers {
@@ -3525,7 +3583,7 @@ __legacy_layer_1 = Box
 }
 empty .
 
-scratch {
+marks {
 hot
 }
 
@@ -3546,7 +3604,7 @@ B.
         transition_state(&loaded.game, &loaded.levels[0].initial_state, InputId(0)).unwrap();
     let box_object = object_named(&loaded, "Box");
     assert!(moved.has_object(&loaded.game, 1, 0, box_object));
-    assert!(!moved.has_scratch_key(&loaded.game, 1, 0, box_object, puzzle_core::ScratchId(3),));
+    assert!(!moved.has_mark_key(&loaded.game, 1, 0, box_object, puzzle_core::MarkId(3),));
 }
 
 #[test]
@@ -3561,7 +3619,7 @@ __legacy_layer_1 = Box
 }
 empty .
 
-scratch {
+marks {
 hot
 }
 
@@ -3587,13 +3645,13 @@ B.
     assert!(moved.has_object(&loaded.game, 0, 0, box_object));
     assert!(moved.has_object(&loaded.game, 1, 0, box_object));
     assert!(moved.has_object(&loaded.game, 1, 0, marker));
-    assert!(moved.slot_scratch().iter().all(Vec::is_empty));
+    assert!(moved.slot_mark().iter().all(Vec::is_empty));
 }
 
 #[test]
-fn group_selectors_accept_scratch_blocks() {
+fn group_selectors_accept_mark_blocks() {
     let source = r#"
-title group_scratch
+title group_mark
 
 puzzle default {
 layers {
@@ -3602,7 +3660,7 @@ __legacy_layer_1 = Box Crate
 }
 empty .
 
-scratch {
+marks {
 hot
 }
 
@@ -3627,13 +3685,13 @@ B
     let marker = object_named(&loaded, "Marker");
 
     assert!(moved.has_object(&loaded.game, 0, 0, marker));
-    assert!(moved.slot_scratch().iter().all(Vec::is_empty));
+    assert!(moved.slot_mark().iter().all(Vec::is_empty));
 }
 
 #[test]
-fn group_selector_removal_also_removes_movement_scratch() {
+fn group_selector_removal_also_removes_movement_mark() {
     let source = r#"
-title group_remove_movement_scratch
+title group_remove_movement_mark
 
 puzzle default {
 layers {
@@ -3672,13 +3730,13 @@ PKL
     assert!(moved.has_object(&loaded.game, 0, 0, player));
     assert!(!moved.has_object(&loaded.game, 1, 0, key));
     assert!(!moved.has_object(&loaded.game, 2, 0, lock));
-    assert!(moved.slot_scratch().iter().all(Vec::is_empty));
+    assert!(moved.slot_mark().iter().all(Vec::is_empty));
 }
 
 #[test]
-fn cell_and_occurrence_scratch_share_names_but_have_distinct_anchors() {
+fn cell_and_occurrence_mark_share_names_but_have_distinct_anchors() {
     let source = r#"
-title cell_scratch
+title cell_mark
 
 puzzle default {
 layers {
@@ -3687,7 +3745,7 @@ __legacy_layer_1 = Box
 }
 empty .
 
-scratch {
+marks {
 mark
 }
 
@@ -3711,8 +3769,8 @@ B
     let marker = object_named(&loaded, "Marker");
 
     assert!(moved.has_object(&loaded.game, 0, 0, marker));
-    assert!(moved.slot_scratch().iter().all(Vec::is_empty));
-    assert!(moved.cell_scratch().iter().all(Vec::is_empty));
+    assert!(moved.slot_mark().iter().all(Vec::is_empty));
+    assert!(moved.cell_mark().iter().all(Vec::is_empty));
     assert!(
         loaded
             .warnings
@@ -3758,9 +3816,9 @@ P
 }
 
 #[test]
-fn movement_scratch_prefix_and_legacy_inline_sugar_work_with_transition_local_lifetime() {
+fn movement_mark_prefix_and_legacy_inline_sugar_work_with_transition_local_lifetime() {
     let source = r#"
-title anonymous_scratch
+title anonymous_mark
 
 puzzle default {
 layers {
@@ -3769,7 +3827,7 @@ __legacy_layer_1 = Box
 }
 empty .
 
-scratch {
+marks {
 checked
 }
 
@@ -3797,7 +3855,7 @@ B
 
     assert!(moved.has_object(&loaded.game, 0, 0, box_object));
     assert!(!moved.has_object(&loaded.game, 0, 0, marker));
-    assert!(moved.slot_scratch().iter().all(Vec::is_empty));
+    assert!(moved.slot_mark().iter().all(Vec::is_empty));
 }
 
 #[test]
@@ -4045,7 +4103,7 @@ PBK.
 }
 
 #[test]
-fn directions_scratch_sugar_matches_any_movement_value() {
+fn directions_mark_sugar_matches_any_movement_value() {
     let source = r#"
 title directions_sugar
 
@@ -4090,9 +4148,9 @@ B
 }
 
 #[test]
-fn prefix_movement_scratch_sugar_matches_braced_selector_scratch() {
+fn prefix_movement_mark_sugar_matches_braced_selector_mark() {
     let source = r#"
-title prefix_movement_scratch_sugar
+title prefix_movement_mark_sugar
 
 puzzle default {
 layers {
@@ -4132,9 +4190,9 @@ P
 }
 
 #[test]
-fn prefix_directions_scratch_sugar_matches_any_movement_value() {
+fn prefix_directions_mark_sugar_matches_any_movement_value() {
     let source = r#"
-title prefix_directions_scratch_sugar
+title prefix_directions_mark_sugar
 
 puzzle default {
 layers {
@@ -4174,7 +4232,7 @@ P
 }
 
 #[test]
-fn no_directions_scratch_sugar_forbids_any_movement_value() {
+fn no_directions_mark_sugar_forbids_any_movement_value() {
     let source = r#"
 title no_directions_sugar
 
@@ -4216,7 +4274,7 @@ B
 }
 
 #[test]
-fn parallel_and_perpendicular_scratch_sets_expand_relative_to_rule_orientation() {
+fn parallel_and_perpendicular_mark_sets_expand_relative_to_rule_orientation() {
     let source = r#"
 title relative_movement_sets
 
@@ -4262,7 +4320,7 @@ BC
 }
 
 #[test]
-fn parallel_scratch_prefix_sugar_matches_object_movement_set() {
+fn parallel_mark_prefix_sugar_matches_object_movement_set() {
     let source = r#"
 title parallel_prefix_sugar
 
@@ -4301,7 +4359,7 @@ B
 }
 
 #[test]
-fn prefixless_parallel_scratch_pattern_expands_cardinal_directions() {
+fn prefixless_parallel_mark_pattern_expands_cardinal_directions() {
     let source = r#"
 title prefixless_parallel
 
@@ -4340,9 +4398,9 @@ B
 }
 
 #[test]
-fn variant_axis_values_can_define_scratch_without_becoming_value_sets() {
+fn variant_axis_values_can_define_mark_without_becoming_value_sets() {
     let source = r#"
-title variant_scratch
+title variant_mark
 
 puzzle default {
 layers {
@@ -4355,7 +4413,7 @@ tags {
 color = red blue
 }
 
-scratch {
+marks {
 color
 paint = color
 }
@@ -4378,7 +4436,7 @@ B
     let marker = object_named(&loaded, "Marker");
 
     assert!(moved.has_object(&loaded.game, 0, 0, marker));
-    assert!(moved.slot_scratch().iter().all(Vec::is_empty));
+    assert!(moved.slot_mark().iter().all(Vec::is_empty));
 }
 
 #[test]
@@ -5266,7 +5324,7 @@ white = #ffffff
 black = #000000
 }
 shapes {
-mark {
+marks {
 0
 }
 }
@@ -11243,7 +11301,7 @@ __legacy_layer_1 = Box
 }
 empty .
 
-scratch {
+marks {
 count = int
 }
 
@@ -11283,7 +11341,7 @@ empty .
 
 var L = 3
 
-scratch {
+marks {
 count = int
 }
 
@@ -11389,13 +11447,13 @@ B
 #[test]
 fn for_statement_body_uses_balanced_brace_depth() {
     let source = r#"
-title for_if_else_checked_scratch
+title for_if_else_checked_mark
 
 puzzle default {
 tags {
 gate_no = 1...5
 }
-scratch {
+marks {
 checked
 }
 var locked_room_count = 1
@@ -11484,7 +11542,7 @@ puzzle default {
 tags {
 gate_no = 1...5
 }
-scratch {
+marks {
 checked
 }
 var locked_room_count = 1
@@ -11540,7 +11598,7 @@ tags {
 gate_no = 1...5
 count_value = 0 1
 }
-scratch {
+marks {
 checked
 }
 var locked_room_count = 1
@@ -11600,7 +11658,7 @@ tags {
 gate_no = 1...5
 count_value = 0 1 2
 }
-scratch {
+marks {
 checked
 }
 var locked_room_count = 2
@@ -11663,7 +11721,7 @@ puzzle default {
 tags {
 gate_no = 1...5
 }
-scratch {
+marks {
 checked
 }
 var locked_room_count = 0
@@ -11707,7 +11765,7 @@ level "start" {
 
     assert_eq!(next.visible_globals(), &[0]);
     assert!(next.has_object(&loaded.game, 0, 0, gate));
-    assert!(next.slot_scratch().iter().all(Vec::is_empty));
+    assert!(next.slot_mark().iter().all(Vec::is_empty));
 }
 
 #[test]
@@ -12848,6 +12906,157 @@ r.
 }
 
 #[test]
+fn geometric_axes_declare_rotation_and_translation_variants() {
+    let source = r#"
+title geometric_axes
+
+puzzle default {
+empty .
+
+tags {
+color = red blue
+facing = rotation step 90deg
+offset = translation step 1/2
+}
+
+layers {
+__legacy_layer_1 = Box:facing:color Ball:offset:color
+}
+
+legend b = Box:0deg:red
+legend o = Ball:0,0:red
+
+rules {
+
+}
+
+level "start" {
+bo
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+
+    object_named(&loaded, "Box:270deg:blue");
+    object_named(&loaded, "Ball:1/2,1/2:blue");
+}
+
+#[test]
+fn computed_rotation_axis_replacement_uses_captured_axis() {
+    let source = r#"
+title computed_rotation
+
+puzzle default {
+empty .
+
+tags {
+color = red blue
+facing = rotation step 90deg
+}
+
+layers {
+__legacy_layer_1 = Box:facing:color
+}
+
+legend b = Box:0deg:red
+
+rules {
+once [ Box:facing:red ] -> [ Box:(facing + 90deg):red ]
+}
+
+level "start" {
+b
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    eprintln!("computed rotation rules: {:?}", loaded.game.rules());
+    let moved =
+        transition_state(&loaded.game, &loaded.levels[0].initial_state, InputId(0)).unwrap();
+
+    assert!(
+        moved.has_object(&loaded.game, 0, 0, object_named(&loaded, "Box:90deg:red")),
+        "objects at 0,0: {:?}",
+        labels_at(&loaded, &moved, 0, 0)
+    );
+}
+
+#[test]
+fn computed_translation_axis_accepts_coordinate_and_direction_sum() {
+    let source = r#"
+title computed_translation
+
+puzzle default {
+empty .
+
+tags {
+offset = translation step 1/2
+facing = rotation step 90deg
+}
+
+layers {
+__legacy_layer_1 = Ball:offset Arrow:facing:offset
+}
+
+legend b = Ball:0,0
+legend a = Arrow:0deg:1/2,1/2
+
+rules {
+once [ Ball:offset ] -> [ Ball:(offset + 0, 0) ]
+once [ Arrow:facing:offset ] -> [ Arrow:facing:(offset + 1/2 < + 1/2 >) ]
+}
+
+level "start" {
+ba
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    let moved =
+        transition_state(&loaded.game, &loaded.levels[0].initial_state, InputId(0)).unwrap();
+
+    assert!(moved.has_object(&loaded.game, 0, 0, object_named(&loaded, "Ball:0,0")));
+    assert!(moved.has_object(
+        &loaded.game,
+        1,
+        0,
+        object_named(&loaded, "Arrow:0deg:1/2,1/2")
+    ));
+}
+
+#[test]
+fn computed_translation_rejects_undeclared_offset_target() {
+    let source = r#"
+title computed_translation_error
+
+puzzle default {
+empty .
+
+tags {
+offset = translation 0, 1/2
+}
+
+layers {
+__legacy_layer_1 = Ball:offset
+}
+
+legend b = Ball:1/2,0
+
+rules {
+once [ Ball:offset ] -> [ Ball:(offset + 1/2, 0) ]
+}
+
+level "start" {
+b
+}
+}
+"#;
+    let error = parse_game(source).unwrap_err().to_string();
+
+    assert!(error.contains("translation computed selector target is not declared"));
+}
+
+#[test]
 fn underscore_selector_wildcard_is_rejected() {
     let source = r#"
 title underscore_selector
@@ -13940,16 +14149,16 @@ BC
 }
 
 #[test]
-fn object_occurrence_labels_swap_occurrence_scratch() {
+fn object_occurrence_labels_swap_occurrence_mark() {
     let source = r#"
-title object_occurrence_label_scratch_swap
+title object_occurrence_label_mark_swap
 
 puzzle swap {
 layers {
 marker = HotMarker ColdMarker
 actor = Box
 }
-scratch {
+marks {
 hot
 cold
 }
@@ -14697,9 +14906,9 @@ P
 }
 
 #[test]
-fn display_match_can_write_display_group_movement_scratch() {
+fn display_match_can_write_display_group_movement_mark() {
     let source = r#"
-title display_group_movement_scratch
+title display_group_movement_mark
 
 puzzle default {
 tags {

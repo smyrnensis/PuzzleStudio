@@ -1,5 +1,5 @@
-use crate::compiled_game::{CompiledGame, GlobalUpdateOp, ScratchValueMatch};
-use crate::ids::{GlobalId, LayerId, ObjectId, ScratchId};
+use crate::compiled_game::{CompiledGame, GlobalUpdateOp, MarkValueMatch};
+use crate::ids::{GlobalId, LayerId, MarkId, ObjectId};
 use crate::state::{State, StateError};
 use puzzle_kernel::{GridCoord, GridPatchOp};
 
@@ -9,7 +9,7 @@ pub struct Patch {
     ops: Vec<PatchOp>,
 }
 
-pub(crate) type CorePatchOp = GridPatchOp<GridCoord<2>, ObjectId, GlobalId, ScratchId>;
+pub(crate) type CorePatchOp = GridPatchOp<GridCoord<2>, ObjectId, GlobalId, MarkId>;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct CorePatch {
@@ -57,24 +57,24 @@ impl CorePatch {
                 CorePatchOp::UpdateGlobal { global, op, value } => {
                     state.update_visible_global(global, op, value)?;
                 }
-                CorePatchOp::SetScratch {
+                CorePatchOp::SetMark {
                     position,
                     object,
-                    scratch,
+                    mark,
                     value,
                 } => {
                     let (x, y) = coord_xy(position);
-                    apply_set_scratch(game, state, x, y, object, scratch, value)?;
+                    apply_set_mark(game, state, x, y, object, mark, value)?;
                 }
-                CorePatchOp::RemoveScratch {
+                CorePatchOp::RemoveMark {
                     position,
                     object,
-                    scratch,
+                    mark,
                     value,
                     match_value,
                 } => {
                     let (x, y) = coord_xy(position);
-                    apply_remove_scratch(game, state, x, y, object, scratch, value, match_value)?;
+                    apply_remove_mark(game, state, x, y, object, mark, value, match_value)?;
                 }
             }
         }
@@ -174,45 +174,43 @@ impl CorePatch {
                     let next = validate_global_update(state, global, op, value)?;
                     changed |= state.global_value(global) != Some(next);
                 }
-                CorePatchOp::SetScratch {
+                CorePatchOp::SetMark {
                     position,
                     object,
-                    scratch,
+                    mark,
                     value,
                 } => {
                     let (x, y) = coord_xy(position);
                     if object.is_empty() {
-                        changed |= !state.has_cell_scratch(x, y, scratch, value);
+                        changed |= !state.has_cell_mark(x, y, mark, value);
                     } else {
                         let layer = expect_object_in_overlay(game, state, &slots, x, y, object)?;
                         if state
                             .get_layer(x, y, layer)
                             .is_ok_and(|found| found == object)
                         {
-                            changed |= !state.has_scratch(game, x, y, object, scratch, value);
+                            changed |= !state.has_mark(game, x, y, object, mark, value);
                         } else {
                             changed = true;
                         }
                     }
                 }
-                CorePatchOp::RemoveScratch {
+                CorePatchOp::RemoveMark {
                     position,
                     object,
-                    scratch,
+                    mark,
                     value,
                     match_value,
                 } => {
                     let (x, y) = coord_xy(position);
                     let value = match match_value {
-                        ScratchValueMatch::Any => None,
-                        ScratchValueMatch::Exact => value,
+                        MarkValueMatch::Any => None,
+                        MarkValueMatch::Exact => value,
                     };
                     if object.is_empty() {
                         changed |= match match_value {
-                            ScratchValueMatch::Any => state.has_cell_scratch_key(x, y, scratch),
-                            ScratchValueMatch::Exact => {
-                                state.has_cell_scratch(x, y, scratch, value)
-                            }
+                            MarkValueMatch::Any => state.has_cell_mark_key(x, y, mark),
+                            MarkValueMatch::Exact => state.has_cell_mark(x, y, mark, value),
                         };
                     } else {
                         let layer = game
@@ -240,11 +238,9 @@ impl CorePatch {
                             .is_ok_and(|found| found == object)
                         {
                             changed |= match match_value {
-                                ScratchValueMatch::Any => {
-                                    state.has_scratch_key(game, x, y, object, scratch)
-                                }
-                                ScratchValueMatch::Exact => {
-                                    state.has_scratch(game, x, y, object, scratch, value)
+                                MarkValueMatch::Any => state.has_mark_key(game, x, y, object, mark),
+                                MarkValueMatch::Exact => {
+                                    state.has_mark(game, x, y, object, mark, value)
                                 }
                             };
                         } else {
@@ -289,20 +285,20 @@ pub enum PatchOp {
         op: GlobalUpdateOp,
         value: i64,
     },
-    SetScratch {
+    SetMark {
         x: u16,
         y: u16,
         object: ObjectId,
-        scratch: ScratchId,
+        mark: MarkId,
         value: Option<i64>,
     },
-    RemoveScratch {
+    RemoveMark {
         x: u16,
         y: u16,
         object: ObjectId,
-        scratch: ScratchId,
+        mark: MarkId,
         value: Option<i64>,
-        match_value: ScratchValueMatch,
+        match_value: MarkValueMatch,
     },
 }
 
@@ -414,34 +410,34 @@ impl From<CorePatchOp> for PatchOp {
             CorePatchOp::UpdateGlobal { global, op, value } => {
                 Self::UpdateGlobal { global, op, value }
             }
-            CorePatchOp::SetScratch {
+            CorePatchOp::SetMark {
                 position,
                 object,
-                scratch,
+                mark,
                 value,
             } => {
                 let [x, y] = position.axes();
-                Self::SetScratch {
+                Self::SetMark {
                     x,
                     y,
                     object,
-                    scratch,
+                    mark,
                     value,
                 }
             }
-            CorePatchOp::RemoveScratch {
+            CorePatchOp::RemoveMark {
                 position,
                 object,
-                scratch,
+                mark,
                 value,
                 match_value,
             } => {
                 let [x, y] = position.axes();
-                Self::RemoveScratch {
+                Self::RemoveMark {
                     x,
                     y,
                     object,
-                    scratch,
+                    mark,
                     value,
                     match_value,
                 }
@@ -478,29 +474,29 @@ impl From<PatchOp> for CorePatchOp {
                 add,
             },
             PatchOp::UpdateGlobal { global, op, value } => Self::UpdateGlobal { global, op, value },
-            PatchOp::SetScratch {
+            PatchOp::SetMark {
                 x,
                 y,
                 object,
-                scratch,
+                mark,
                 value,
-            } => Self::SetScratch {
+            } => Self::SetMark {
                 position: GridCoord::new([x, y]),
                 object,
-                scratch,
+                mark,
                 value,
             },
-            PatchOp::RemoveScratch {
+            PatchOp::RemoveMark {
                 x,
                 y,
                 object,
-                scratch,
+                mark,
                 value,
                 match_value,
-            } => Self::RemoveScratch {
+            } => Self::RemoveMark {
                 position: GridCoord::new([x, y]),
                 object,
-                scratch,
+                mark,
                 value,
                 match_value,
             },
@@ -741,50 +737,50 @@ fn apply_moves(
 
     let mut moved = Vec::with_capacity(moves.len());
     for (from_x, from_y, to_x, to_y, layer, object) in moves {
-        let scratch = state.take_slot_for_move_unchecked(from_x, from_y, layer);
-        moved.push((to_x, to_y, layer, object, scratch));
+        let mark = state.take_slot_for_move_unchecked(from_x, from_y, layer);
+        moved.push((to_x, to_y, layer, object, mark));
     }
-    for (to_x, to_y, layer, object, scratch) in moved {
-        state.place_moved_slot_unchecked(to_x, to_y, layer, object, scratch);
+    for (to_x, to_y, layer, object, mark) in moved {
+        state.place_moved_slot_unchecked(to_x, to_y, layer, object, mark);
     }
     Ok(())
 }
 
-fn apply_set_scratch(
+fn apply_set_mark(
     game: &CompiledGame,
     state: &mut State,
     x: u16,
     y: u16,
     object: ObjectId,
-    scratch: ScratchId,
+    mark: MarkId,
     value: Option<i64>,
 ) -> Result<(), PatchError> {
     if object.is_empty() {
-        state.set_cell_scratch_unchecked(x, y, scratch, value);
+        state.set_cell_mark_unchecked(x, y, mark, value);
         return Ok(());
     }
     let layer = expect_object_at(game, state, x, y, object)?;
-    state.set_scratch_unchecked(x, y, layer, scratch, value);
+    state.set_mark_unchecked(x, y, layer, mark, value);
     Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
-fn apply_remove_scratch(
+fn apply_remove_mark(
     game: &CompiledGame,
     state: &mut State,
     x: u16,
     y: u16,
     object: ObjectId,
-    scratch: ScratchId,
+    mark: MarkId,
     value: Option<i64>,
-    match_value: ScratchValueMatch,
+    match_value: MarkValueMatch,
 ) -> Result<(), PatchError> {
     if object.is_empty() {
         let value = match match_value {
-            ScratchValueMatch::Any => None,
-            ScratchValueMatch::Exact => value,
+            MarkValueMatch::Any => None,
+            MarkValueMatch::Exact => value,
         };
-        state.remove_cell_scratch_unchecked(x, y, scratch, value);
+        state.remove_cell_mark_unchecked(x, y, mark, value);
         return Ok(());
     }
     let Some(layer) = game.object_layer(object) else {
@@ -794,10 +790,10 @@ fn apply_remove_scratch(
         return Ok(());
     }
     let value = match match_value {
-        ScratchValueMatch::Any => None,
-        ScratchValueMatch::Exact => value,
+        MarkValueMatch::Any => None,
+        MarkValueMatch::Exact => value,
     };
-    state.remove_scratch_unchecked(x, y, layer, scratch, value);
+    state.remove_mark_unchecked(x, y, layer, mark, value);
     Ok(())
 }
 
@@ -894,13 +890,13 @@ mod tests {
                 to_y: 4,
                 object: ObjectId(5),
             },
-            PatchOp::RemoveScratch {
+            PatchOp::RemoveMark {
                 x: 6,
                 y: 7,
                 object: ObjectId(8),
-                scratch: ScratchId(9),
+                mark: MarkId(9),
                 value: Some(10),
-                match_value: ScratchValueMatch::Exact,
+                match_value: MarkValueMatch::Exact,
             },
             PatchOp::UpdateGlobal {
                 global: GlobalId(11),
@@ -913,9 +909,9 @@ mod tests {
     }
 
     #[test]
-    fn scratch_cleanup_after_same_patch_object_removal_is_noop() {
+    fn mark_cleanup_after_same_patch_object_removal_is_noop() {
         let object = ObjectId(1);
-        let scratch = ScratchId(0);
+        let mark = MarkId(0);
         let game = CompiledGame::new(
             1,
             vec![ObjectDef {
@@ -926,28 +922,28 @@ mod tests {
         );
         let mut state = State::empty(1, 1, 1, 1).unwrap();
         state.place_object(&game, 0, 0, object).unwrap();
-        state.set_scratch_unchecked(0, 0, LayerId(0), scratch, Some(7));
+        state.set_mark_unchecked(0, 0, LayerId(0), mark, Some(7));
 
         let patch = Patch::from_ops(vec![
             PatchOp::Remove { x: 0, y: 0, object },
-            PatchOp::RemoveScratch {
+            PatchOp::RemoveMark {
                 x: 0,
                 y: 0,
                 object,
-                scratch,
+                mark,
                 value: Some(7),
-                match_value: ScratchValueMatch::Exact,
+                match_value: MarkValueMatch::Exact,
             },
         ]);
 
         let next = patch.apply(&game, &state).unwrap();
 
         assert_eq!(next.get_layer(0, 0, LayerId(0)).unwrap(), ObjectId::EMPTY);
-        assert!(next.slot_scratch().iter().all(Vec::is_empty));
+        assert!(next.slot_mark().iter().all(Vec::is_empty));
     }
 
     #[test]
-    fn scratch_cleanup_still_rejects_initially_missing_object() {
+    fn mark_cleanup_still_rejects_initially_missing_object() {
         let object = ObjectId(1);
         let game = CompiledGame::new(
             1,
@@ -958,13 +954,13 @@ mod tests {
             Vec::new(),
         );
         let state = State::empty(1, 1, 1, 1).unwrap();
-        let patch = Patch::from_ops(vec![PatchOp::RemoveScratch {
+        let patch = Patch::from_ops(vec![PatchOp::RemoveMark {
             x: 0,
             y: 0,
             object,
-            scratch: ScratchId(0),
+            mark: MarkId(0),
             value: Some(7),
-            match_value: ScratchValueMatch::Exact,
+            match_value: MarkValueMatch::Exact,
         }]);
 
         assert!(matches!(

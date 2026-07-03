@@ -3697,17 +3697,13 @@ pub fn animation_events_for_trace(
                 }
                 RuleAnimationTrigger::CantMove => {
                     for op in patch.ops() {
-                        let PatchOp::RemoveScratch {
-                            x,
-                            y,
-                            object,
-                            scratch,
-                            ..
+                        let PatchOp::RemoveMark {
+                            x, y, object, mark, ..
                         } = op
                         else {
                             continue;
                         };
-                        if scratch.0 != 0 {
+                        if mark.0 != 0 {
                             continue;
                         }
                         if object.0 != 0 {
@@ -4811,12 +4807,10 @@ scene hub {
 resources {
 levels spec
 }
-state {
-board = puzzle sokoban
-spec_board = puzzle sokoban
-}
 layout {
-board
+spec_board.visible = false
+spec_board = puzzle sokoban
+board = puzzle sokoban
 }
 rules {
 step spec_board
@@ -4834,11 +4828,8 @@ scene checkpoint {
 resources {
 levels spec
 }
-state {
-spec_board = puzzle sokoban
-}
 layout {
-spec_board
+spec_board = puzzle sokoban
 }
 rules {
 step spec_board
@@ -5756,7 +5747,7 @@ P
     }
 
     #[test]
-    fn puzzle_wait_effect_queues_wait_event() {
+    fn puzzle_wait_effect_waits_for_animation_or_explicit_duration() {
         let loaded = parse_game(
             r#"
 title rule_wait_fixture
@@ -5787,15 +5778,6 @@ P
         let mut session = GameSession::new(&loaded);
 
         session.apply_input(&loaded, right).unwrap();
-
-        assert_eq!(
-            session.take_wait_events(),
-            vec![WaitEvent::ContinueEffects { milliseconds: 300 }]
-        );
-
-        session
-            .apply_command(&loaded, "__continue_effects")
-            .unwrap();
 
         assert_eq!(
             session.take_wait_events(),
@@ -5949,6 +5931,60 @@ P.
     }
 
     #[test]
+    fn rewrite_suffix_wait_duration_runs_once_after_repeated_rewrite() {
+        let loaded = parse_game(
+            r#"
+title rewrite_suffix_wait_duration_fixture
+puzzle default {
+layers {
+A = A
+B = B
+marker = Marker
+}
+rules {
+[ A ] -> [ B ] wait 25ms
+[ B no Marker ] -> [ B Marker ]
+}
+levels {
+legend {
+. = empty
+A = A
+}
+level "start" {
+AA
+}
+}
+}
+"#,
+        )
+        .unwrap();
+        let marker = object_named(&loaded, "Marker");
+        let b = object_named(&loaded, "B");
+        let mut session = GameSession::new(&loaded);
+
+        session
+            .apply_input(&loaded, input_named(&loaded, "right"))
+            .unwrap();
+
+        assert_eq!(
+            session.take_wait_events(),
+            vec![WaitEvent::ContinueEffects { milliseconds: 25 }]
+        );
+        assert!(session.state().has_object(&loaded.game, 0, 0, b));
+        assert!(session.state().has_object(&loaded.game, 1, 0, b));
+        assert!(!session.state().has_object(&loaded.game, 0, 0, marker));
+        assert!(!session.state().has_object(&loaded.game, 1, 0, marker));
+
+        session
+            .apply_command(&loaded, "__continue_effects")
+            .unwrap();
+
+        assert!(session.take_wait_events().is_empty());
+        assert!(session.state().has_object(&loaded.game, 0, 0, marker));
+        assert!(session.state().has_object(&loaded.game, 1, 0, marker));
+    }
+
+    #[test]
     fn wait_animation_without_animation_is_noop() {
         let loaded = parse_game(
             r#"
@@ -6061,10 +6097,9 @@ P
 }
 }
 scene playing {
-state {
-board = puzzle default
-}
 layout {
+board.visible = false
+board = puzzle default
 text "Playing"
 }
 on_scene_start {
@@ -6428,11 +6463,8 @@ P.
 }
 
 scene playing {
-state {
-board = puzzle board
-}
 layout {
-board
+board = puzzle board
 }
 rules {
 step board
@@ -6858,11 +6890,8 @@ rules {
 }
 
 scene playing {
-state {
-board = puzzle board
-}
 layout {
-board
+board = puzzle board
 }
 rules {
 step board
@@ -6913,11 +6942,8 @@ P.
 }
 
 scene playing {
-state {
-board = puzzle default
-}
 layout {
-board
+board = puzzle default
 }
 rules {
 step board
@@ -6985,11 +7011,8 @@ rules {
 }
 
 scene play {
-state {
-board = puzzle default
-}
 layout {
-board
+board = puzzle default
 }
 keys {
 d -> input right
@@ -7082,11 +7105,8 @@ A
 }
 
 scene playing {
-state {
-board = puzzle default
-}
 layout {
-board
+board = puzzle default
 }
 rules {
 step board
@@ -7157,11 +7177,8 @@ P
 }
 
 scene playing {
-state {
-board = puzzle default
-}
 layout {
-board
+board = puzzle default
 }
 rules {
 step board
@@ -7223,11 +7240,8 @@ if input == open -> goto playing
 }
 
 scene playing {
-state {
-board = puzzle default
-}
 layout {
-board
+board = puzzle default
 }
 rules {
 step board
@@ -7386,11 +7400,8 @@ P
 }
 
 scene hub {
-state {
-board = puzzle default level hub
-}
 layout {
-board
+board = puzzle default level hub
 }
 rules {
 step board
@@ -7398,11 +7409,8 @@ step board
 }
 
 scene playing {
-state {
-board = puzzle default
-}
 layout {
-board
+board = puzzle default
 }
 rules {
 if input == done -> {
@@ -7520,11 +7528,8 @@ level "start" {
 }
 }
 scene playing {
-state {
-board = puzzle sokoban
-}
 layout {
-board
+board = puzzle sokoban
 }
 rules {
 step board
@@ -7596,11 +7601,8 @@ level "second" {
 }
 }
 scene playing {
-state {
-board = puzzle sokoban
-}
 layout {
-board
+board = puzzle sokoban
 }
 rules {
 step board
@@ -7704,11 +7706,8 @@ P
 }
 
 scene playing {
-state {
-board = puzzle default
-}
 layout {
-board
+board = puzzle default
 }
 }
 
@@ -7763,11 +7762,8 @@ P.
 }
 
 scene playing {
-state {
-board = puzzle default
-}
 layout {
-board
+board = puzzle default
 }
 rules {
 step board
@@ -7827,20 +7823,14 @@ P
 }
 
 scene playing {
-state {
-board = puzzle default
-}
 layout {
-board
+board = puzzle default
 }
 }
 
 scene level_clear {
-state {
-board = puzzle default
-}
 layout {
-board
+board = puzzle default
 }
 rules {
 }
@@ -7900,11 +7890,8 @@ P
 }
 
 scene playing {
-state {
-board = puzzle default
-}
 layout {
-board
+board = puzzle default
 }
 }
 
@@ -7972,11 +7959,8 @@ scene playing {
 resources {
 levels worldB
 }
-state {
-board = puzzle default
-}
 layout {
-board
+board = puzzle default
 }
 }
 "#;
@@ -8032,11 +8016,8 @@ P
 }
 
 scene playing {
-state {
-board = puzzle default
-}
 layout {
-board
+board = puzzle default
 }
 }
 
@@ -8094,11 +8075,8 @@ P
 }
 
 scene playing {
-state {
-board = puzzle default
-}
 layout {
-board
+board = puzzle default
 }
 }
 
@@ -8147,11 +8125,8 @@ P
 }
 
 scene playing {
-state {
-board = puzzle default
-}
 layout {
-board
+board = puzzle default
 }
 }
 
@@ -8211,19 +8186,15 @@ text "A"
 }
 
 scene b {
-state {
-mark = empty
-}
 layout {
+mark = empty
 text "B"
 }
 }
 
 scene c {
-state {
-mark = empty
-}
 layout {
+mark = empty
 text "C"
 }
 }
@@ -8520,11 +8491,8 @@ P
 }
 
 scene playing {
-state {
-board = puzzle default
-}
 layout {
-board
+board = puzzle default
 }
 }
 
@@ -8579,14 +8547,11 @@ P
 }
 
 scene playing {
-state {
+layout {
 board = puzzle default
 message_visible = true
 moves = 0
 message = "Read this"
-}
-layout {
-board
 }
 keys {
 q -> goto level_select
@@ -8594,10 +8559,8 @@ q -> goto level_select
 }
 
 scene level_select {
-state {
-message = "Browse"
-}
 layout {
+message = "Browse"
 level_menu
 }
 keys {
@@ -8678,11 +8641,8 @@ P
 }
 
 scene playing {
-state {
-board = puzzle board
-}
 layout {
-board
+board = puzzle board
 }
 rules {
 step board
@@ -8744,11 +8704,8 @@ P
 }
 
 scene playing {
-state {
-board = puzzle board
-}
 layout {
-board
+board = puzzle board
 }
 rules {
 step board
@@ -8805,11 +8762,8 @@ P
 }
 
 scene playing {
-state {
-board = puzzle board
-}
 layout {
-board
+board = puzzle board
 }
 rules {
 step board
@@ -8873,11 +8827,8 @@ message "clear one"
 }
 
 scene playing {
-state {
-board = puzzle board
-}
 layout {
-board
+board = puzzle board
 }
 rules {
 step board
@@ -8944,11 +8895,8 @@ button "Play" -> goto playing
 }
 
 scene playing {
-state {
-board = puzzle board
-}
 layout {
-board
+board = puzzle board
 }
 rules {
 step board
@@ -9022,11 +8970,8 @@ P
 }
 
 scene playing {
-state {
-board = puzzle board
-}
 layout {
-board
+board = puzzle board
 }
 rules {
 step board

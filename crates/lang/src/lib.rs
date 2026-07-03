@@ -24,7 +24,7 @@ use ast::{
     DirectionName, EffectAst, FixDefaults, GlobalValueAst, OrientationExpr, OrientedRewriteAst,
     PatternConditionAst, PatternPredicateAst, RuleDefinitionAst, RuleRole, StatementAst,
 };
-use catalog::{Catalog, ObjectSchema, ObjectVariant, ValueMap};
+use catalog::{AxisKind, Catalog, ObjectSchema, ObjectVariant, Rational, ValueMap};
 pub use completion::{
     CompletionItem, CompletionKind, CompletionList, completion_list_json,
     suggest_source_completions,
@@ -73,10 +73,10 @@ pub use puzzle_3d::{
 };
 use puzzle_core::{
     ComparisonOp, CompiledGame, ConditionDef, ConditionId, ConditionValueKind, Effect, GapTerm,
-    GlobalId, GlobalUpdateOp, Guard, InputId, LayerId, LocalFrame, LocalFrameExtent, MatchCell,
-    ObjectDef, ObjectId, ObjectSetMatcher, ObjectSetScratchPattern, Offset, Pattern,
-    PatternComponent, Rule, RuleApplication, RuleCondition, RuleId, RuleStep, ScratchDef,
-    ScratchId, ScratchKind, ScratchPattern, ScratchValueMatch, WriteOp,
+    GlobalId, GlobalUpdateOp, Guard, InputId, LayerId, LocalFrame, LocalFrameExtent, MarkDef,
+    MarkId, MarkKind, MarkPattern, MarkValueMatch, MatchCell, ObjectDef, ObjectId,
+    ObjectSetMarkPattern, ObjectSetMatcher, Offset, Pattern, PatternComponent, Rule,
+    RuleApplication, RuleCondition, RuleId, RuleStep, WriteOp,
 };
 pub use puzzlescript::translate_puzzlescript_to_canonical;
 pub use semantic::{SemanticKind, SemanticToken, semantic_tokens};
@@ -94,10 +94,9 @@ use surface::{
 };
 use syntax::puzzle_lifecycle_event;
 
-const ANONYMOUS_MOVEMENT_SCRATCH: ScratchId =
-    ScratchId(puzzle_authoring::ANONYMOUS_MOVEMENT_SCRATCH_INDEX);
-const ANONYMOUS_BOOL_SCRATCH: ScratchId = ScratchId(1);
-const ANONYMOUS_INT_SCRATCH: ScratchId = ScratchId(2);
+const ANONYMOUS_MOVEMENT_MARK: MarkId = MarkId(puzzle_authoring::ANONYMOUS_MOVEMENT_MARK_INDEX);
+const ANONYMOUS_BOOL_MARK: MarkId = MarkId(1);
+const ANONYMOUS_INT_MARK: MarkId = MarkId(2);
 const UNASSIGNED_LAYER: u16 = u16::MAX;
 pub(crate) const THEME_PRESET_NAMES: &[&str] = &[
     "clean",
