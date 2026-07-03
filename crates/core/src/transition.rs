@@ -2891,9 +2891,12 @@ fn match_cell(
         return false;
     };
     let Some((x, y)) = offset_pos(origin_x, origin_y, dx, dy) else {
-        return false;
+        return cell.require_null;
     };
     if x >= state.width || y >= state.height {
+        return cell.require_null;
+    }
+    if cell.require_null {
         return false;
     }
     if !scope.contains_cell(x, y) {
@@ -3274,6 +3277,7 @@ mod tests {
     ) -> MatchCell {
         MatchCell {
             offset: fixed(dx, dy),
+            require_null: false,
             require_objects,
             require_object_sets: Vec::new(),
             forbid_objects,
@@ -3293,6 +3297,7 @@ mod tests {
     ) -> MatchCell {
         MatchCell {
             offset: fixed(dx, dy),
+            require_null: false,
             require_objects: Vec::new(),
             require_object_sets: Vec::new(),
             forbid_objects: Vec::new(),

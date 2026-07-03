@@ -1569,6 +1569,38 @@ horizontal [ Player | no solid ] -> [ | Player ]
     }
 
     #[test]
+    fn parser_collects_on_level_start_rules_through_shared_block_body() {
+        let parsed = parse_puzzle3d(
+            r#"
+layers {
+actor
+}
+
+objects {
+Player actor
+Wall actor
+}
+
+group solid = Player Wall
+
+on_level_start {
+right [ Player
+| no solid ]
+-> [
+| Player ]
+}
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(parsed.lifecycle.on_level_start.len(), 1);
+        assert_eq!(
+            parsed.lifecycle.on_level_start[0].pattern.cells[1].offset,
+            Direction3::RIGHT.offset
+        );
+    }
+
+    #[test]
     fn parser_lowers_3d_line_gap_rules_against_level_extent() {
         let parsed = parse_puzzle3d(
             r#"
@@ -3405,6 +3437,33 @@ input right [ Player | ] -> [ | Player ]
         let restart = parsed.game.input_by_name("restart").unwrap();
         assert_eq!(restart.direction, None);
         assert_eq!(restart.keys, vec!["r"]);
+    }
+
+    #[test]
+    fn parser_rejects_non_arrow_3d_key_rows_through_shared_surface() {
+        let err = parse_puzzle3d(
+            r#"
+puzzle3 scoped_inputs {
+layers {
+solid = Player
+}
+
+keys {
+d ArrowRight = right
+}
+}
+"#,
+        )
+        .unwrap_err();
+
+        assert!(
+            matches!(
+                err,
+                ParseError3::Message(ref message)
+                    if message.contains("keys row must use `->`")
+            ),
+            "{err:?}"
+        );
     }
 
     #[test]

@@ -168,8 +168,14 @@ pub(crate) enum EffectAst {
     UpdateGlobal {
         name: String,
         op: GlobalUpdateOp,
-        value: i64,
+        value: GlobalValueAst,
     },
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum GlobalValueAst {
+    Literal(i64),
+    TagCapture(String),
 }
 
 #[derive(Clone, Debug)]

@@ -1,0 +1,135 @@
+puzzle possesion {
+
+tags {
+state = norm poss
+}
+
+layers {
+@Floor @Floor2
+Wall Alien Crab:state
+each @LockedFrame:directions @LockedCorner:directions
+each @WallFrame:directions @WallCorner:directions
+Stop
+}
+
+groups {
+playable = Alien *:poss
+solid = Crab:*
+}
+
+routine @initial_displays {
+once [ no @Floor ] -> [ @Floor ]
+repeat {
+[ @Floor | no @Floor2 ] -> [ @Floor | @Floor2 ]
+[ @Floor2 | no @Floor ] -> [ @Floor2 | @Floor ]
+}
+[ Wall | no Wall ] -> [ Wall @WallFrame:> |  ]
+[ Wall | Wall ; Wall | no Wall ] -> [ Wall @WallCorner:> | Wall ; Wall |  ]
+}
+
+on_level_start {
+@initial_displays
+}
+
+rules {
+input [ playable ] -> [ > playable ]
+[ > Alien | Crab:norm ] -> [  | Crab:poss ]
+[ > Crab:poss | Crab:norm ] -> [ > Crab:poss | > Crab:norm ]
+[ Wall ] -> [ Wall Stop ]
+[ > solid | Stop ] -> [ solid Stop | Stop ]
+[ > solid ] ->
+move
+}
+
+sprites {
+colors {
+Alien_skin = #00949b
+}
+
+Wall
+#4b4b4b
+
+Alien
+Alien_skin #c2c3c7 #000000
+..........
+..........
+....00....
+...0120...
+...0110...
+....00....
+...0..0...
+..........
+..........
+..........
+
+Crab:norm
+#b51a00 #000000
+..........
+..........
+...1..1...
+...1..1...
+..000000..
+.00000000.
+.00000000.
+.00....00.
+..0....0..
+..........
+
+Crab:poss
+#b51a00 Alien_skin #000000
+..........
+..........
+...2..2...
+...1..1...
+..000000..
+.00000000.
+.00000000.
+.00....00.
+..0....0..
+..........
+
+@Floor
+#8b8b8b
+
+@Floor2
+#808080
+
+@WallFrame:directions
+rotate from up
+#585858
+0000000
+.......
+.......
+.......
+.......
+.......
+.......
+
+
+@WallCorner:directions
+rotate from up
+#585858
+......0
+.......
+.......
+.......
+.......
+.......
+.......
+}
+
+levels {
+legend {
+. = empty
+# = Wall
+@ = Alien
+* = Crab:norm
+}
+
+#########
+#.......#
+#...@**.#
+#.......#
+#########
+}
+}

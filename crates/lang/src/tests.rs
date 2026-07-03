@@ -214,7 +214,7 @@ legend {
 P = Player
 A = A
 }
-level one {
+level "one" {
 PA.A
 }
 }
@@ -250,7 +250,7 @@ legend {
 P = Player
 A = A
 }
-level one {
+level "one" {
 PA.A
 }
 }
@@ -298,7 +298,7 @@ once [ Player ] -> [ Player ]
 ======
 LEVELS
 ======
-level start {
+level "start" {
 *
 }
 }
@@ -318,7 +318,7 @@ groups { solid = Box Wall; pushable = Box }
 legend { . = empty; P = Player; B = Box; W = Wall; G = Goal }
 rules { once [ Player | ] -> [ | Player ] }
 levels {
-level start {
+level "start" {
 P.G
 }
 }
@@ -331,6 +331,75 @@ P.G
     let moved = transition_state(&loaded.game, &loaded.levels[0].initial_state, right).unwrap();
 
     assert!(moved.has_object(&loaded.game, 1, 0, player));
+}
+
+#[test]
+fn null_pattern_matches_outside_board_cell() {
+    let source = r#"
+title null_pattern
+
+puzzle board {
+layers { mark = Edge }
+legend { . = empty; E = Edge }
+rules { once right [ no Edge | null ] -> [ Edge | ] }
+levels {
+level "start" {
+.
+}
+}
+}
+"#;
+
+    let loaded = parse_game(source).unwrap();
+    let edge = object_named(&loaded, "Edge");
+    let right = input_named(&loaded, "right");
+    let moved = transition_state(&loaded.game, &loaded.levels[0].initial_state, right).unwrap();
+
+    assert!(moved.has_object(&loaded.game, 0, 0, edge));
+}
+
+#[test]
+fn no_null_pattern_is_rejected() {
+    let source = r#"
+title no_null_pattern
+
+puzzle board {
+layers { mark = Edge }
+legend { . = empty; E = Edge }
+rules { once right [ no null | null ] -> [ Edge | ] }
+levels {
+level "start" {
+.
+}
+}
+}
+"#;
+
+    let error = parse_game(source).unwrap_err().to_string();
+
+    assert!(error.contains("`no null` is not a valid cell pattern"));
+}
+
+#[test]
+fn rhs_only_null_pattern_is_rejected() {
+    let source = r#"
+title rhs_only_null_pattern
+
+puzzle board {
+layers { mark = Edge }
+legend { . = empty; E = Edge }
+rules { once right [ no Edge | ] -> [ Edge | null ] }
+levels {
+level "start" {
+.
+}
+}
+}
+"#;
+
+    let error = parse_game(source).unwrap_err().to_string();
+
+    assert!(error.contains("`null` can only be matched on the before side"));
 }
 
 #[test]
@@ -347,7 +416,7 @@ B ] -> [ C
 C ]
 }
 levels {
-level start {
+level "start" {
 A
 B
 }
@@ -394,7 +463,7 @@ rules {
 }
 
 levels {
-level start
+level "start"
 P
 }
 }
@@ -441,7 +510,7 @@ rules {
 }
 
 levels {
-level start
+level "start"
 P
 }
 }
@@ -472,7 +541,7 @@ rules {
 }
 
 levels {
-level start {
+level "start" {
 legend {
 G = Ghost
 }
@@ -505,7 +574,7 @@ P = Player
 H = Hidden
 }
 
-level start {
+level "start" {
 PH
 }
 }
@@ -527,6 +596,49 @@ rules {
     );
     assert!(loaded.visuals.sprites.is_empty());
     assert!(loaded.visuals.aliases.is_empty());
+}
+
+#[test]
+fn layers_schema_terms_can_use_later_tag_sets() {
+    let source = r#"
+title layers_schema_later_tags
+
+puzzle board {
+layers {
+solid = Wall Alien Crab:state
+}
+
+tags {
+state = norm poss
+}
+
+levels {
+legend {
+. = empty
+C = Crab:norm
+}
+
+level "start" {
+C
+}
+}
+
+rules {
+[ Crab:norm ] -> [ Crab:poss ]
+}
+}
+"#;
+
+    let loaded = parse_game(source).unwrap();
+    let crab_norm = object_named(&loaded, "Crab:norm");
+    let crab_poss = object_named(&loaded, "Crab:poss");
+
+    assert!(
+        loaded.levels[0]
+            .initial_state
+            .has_object(&loaded.game, 0, 0, crab_norm)
+    );
+    assert!(loaded.game.object(crab_poss).is_some());
 }
 
 #[test]
@@ -554,7 +666,7 @@ rules {
 }
 
 levels {
-level one
+level "one"
 P
 }
 }
@@ -599,7 +711,7 @@ rules {
 }
 
 levels {
-level one
+level "one"
 P
 }
 }
@@ -610,12 +722,13 @@ P
 }
 
 #[test]
-fn top_level_sfx_rejects_out_of_range_volume() {
+fn top_level_sounds_allow_volume_above_full_gain() {
     let source = r#"
 title sounds_game
 
 sounds {
   sfx effect seed=746670 type=jump volume=1.5
+  music loop seed=123456 bars=16 height=0.62 bpm=104 volume=1.25
 }
 
 puzzle board {
@@ -633,15 +746,84 @@ rules {
 }
 
 levels {
-level one
+level "one"
 P
 }
 }
 "#;
 
-    let error = parse_game(source).unwrap_err().to_string();
+    let loaded = parse_game(source).unwrap();
+    assert_eq!(loaded.sounds.sfx[0].volume, 1.5);
+    assert_eq!(loaded.sounds.music[0].volume, 1.25);
+}
+
+#[test]
+fn top_level_sounds_reject_negative_volume() {
+    let sfx_source = r#"
+title sounds_game
+
+sounds {
+  sfx effect seed=746670 type=jump volume=-0.1
+}
+
+puzzle board {
+layers {
+background = Player
+}
+
+legend {
+. = empty
+P = Player
+}
+
+rules {
+
+}
+
+levels {
+level "one"
+P
+}
+}
+"#;
+
+    let error = parse_game(sfx_source).unwrap_err().to_string();
     assert!(
-        error.contains("sfx volume must be between 0 and 1"),
+        error.contains("sfx volume must be zero or greater"),
+        "{error}"
+    );
+
+    let music_source = r#"
+title sounds_game
+
+sounds {
+  music loop seed=123456 bars=16 height=0.62 bpm=104 volume=-0.1
+}
+
+puzzle board {
+layers {
+background = Player
+}
+
+legend {
+. = empty
+P = Player
+}
+
+rules {
+
+}
+
+levels {
+level "one"
+P
+}
+}
+"#;
+
+    let error = parse_game(music_source).unwrap_err().to_string();
+    assert!(
+        error.contains("music volume must be zero or greater"),
         "{error}"
     );
 }
@@ -672,7 +854,7 @@ P = Player
 B = Box
 }
 
-level start
+level "start"
 PB
 }
 
@@ -713,7 +895,7 @@ legend {
 P = Player
 }
 
-level start
+level "start"
 P
 }
 
@@ -763,7 +945,7 @@ legend {
 P = Player
 }
 
-level start
+level "start"
 P
 }
 
@@ -843,7 +1025,7 @@ P = Player
 rules {
 
 }
-level start {
+level "start" {
 P
 }
 }
@@ -889,7 +1071,7 @@ P = Player
 rules {
 
 }
-level start {
+level "start" {
 P
 }
 }
@@ -943,7 +1125,7 @@ legend {
 . = empty
 P = Player
 }
-level first
+level "first"
 P
 }
 }
@@ -973,7 +1155,7 @@ legend {
 . = empty
 P = Player
 }
-level first
+level "first"
 P
 }
 }
@@ -1005,7 +1187,7 @@ legend {
 . = empty
 P = Player
 }
-level first
+level "first"
 P
 }
 }
@@ -1039,7 +1221,7 @@ legend {
 . = empty
 P = Player
 }
-level first
+level "first"
 P
 }
 }
@@ -1072,7 +1254,7 @@ legend {
 . = empty
 P = Player
 }
-level first
+level "first"
 P.
 }
 }
@@ -1106,7 +1288,7 @@ P = Player
 rules {
 
 }
-level start {
+level "start" {
 P
 }
 }
@@ -1143,7 +1325,7 @@ P = Player
 rules {
 
 }
-level start {
+level "start" {
 P
 }
 }
@@ -1182,7 +1364,7 @@ rules {
 [ Player Goal ] -> message "Found"
 [ Player ] -> message hint
 }
-level start {
+level "start" {
 P
 }
 }
@@ -1225,7 +1407,7 @@ rules {
 wait
 wait 25ms
 }
-level start {
+level "start" {
 P
 }
 }
@@ -1268,7 +1450,7 @@ legend {
 . = empty
 P = Player
 }
-level start {
+level "start" {
 P
 }
 }
@@ -1307,7 +1489,7 @@ legend {
 . = empty
 P = Player
 }
-level start {
+level "start" {
 P
 }
 }
@@ -1349,7 +1531,7 @@ P = Player
 rules {
 wait animation
 }
-level start {
+level "start" {
 P
 }
 }
@@ -1381,7 +1563,7 @@ rules {
 
 emit sfx tick
 }
-level start {
+level "start" {
 P
 }
 }
@@ -1410,7 +1592,7 @@ rules {
 
 emit moved = true
 }
-level start {
+level "start" {
 P
 }
 }
@@ -1438,7 +1620,7 @@ rules {
 
 do sfx tick
 }
-level start {
+level "start" {
 P
 }
 }
@@ -1473,7 +1655,7 @@ rules {
 ready_feedback
 ready_feedback
 }
-level start {
+level "start" {
 P
 }
 }
@@ -1531,7 +1713,7 @@ P = Player
 effect feedback {
 sfx tick
 }
-level start {
+level "start" {
 P
 }
 }
@@ -1561,7 +1743,7 @@ legend {
 . = empty
 P = Player
 }
-level start {
+level "start" {
 P
 }
 }
@@ -1597,7 +1779,7 @@ legend {
 . = empty
 P = Player
 }
-level start {
+level "start" {
 P
 }
 }
@@ -1628,7 +1810,7 @@ rules {
 
 [ Player ] -> [ Player ]
 }
-level start {
+level "start" {
 P
 }
 }
@@ -1670,7 +1852,7 @@ P = Player
 rules {
 [ Player ] -> [ Player ]
 }
-level start {
+level "start" {
 P
 }
 }
@@ -1711,7 +1893,7 @@ P = Player
 rules {
 [ Player ] -> [ Player ]
 }
-level start {
+level "start" {
 P
 }
 }
@@ -1741,7 +1923,32 @@ text "Playing"
     let SceneTransitionTrigger::Condition(condition) = &scene.transitions[0].trigger else {
         panic!("expected condition block to lower to condition transition");
     };
-    assert_eq!(condition, "input == confirm and has_progress_save == false");
+    let SceneExpr::Binary {
+        op: SceneBinaryOp::And,
+        left,
+        right,
+    } = condition
+    else {
+        panic!("expected condition block rows to combine as an and expression");
+    };
+    assert!(matches!(
+        left.as_ref(),
+        SceneExpr::Binary {
+            op: SceneBinaryOp::Eq,
+            left,
+            right,
+        } if matches!(left.as_ref(), SceneExpr::Path(path) if path == &vec!["input".to_string()])
+            && matches!(right.as_ref(), SceneExpr::Path(path) if path == &vec!["confirm".to_string()])
+    ));
+    assert!(matches!(
+        right.as_ref(),
+        SceneExpr::Binary {
+            op: SceneBinaryOp::Eq,
+            left,
+            right,
+        } if matches!(left.as_ref(), SceneExpr::Path(path) if path == &vec!["has_progress_save".to_string()])
+            && matches!(right.as_ref(), SceneExpr::Bool(false))
+    ));
     assert!(matches!(
         &scene.transitions[0].effect,
         SceneEffect::Goto { scene, .. } if scene == "playing"
@@ -1764,7 +1971,7 @@ P = Player
 rules {
 [ Player ] -> [ Player ]
 }
-level start {
+level "start" {
 P
 }
 }
@@ -1784,6 +1991,13 @@ button "New Game" -> input new_game
     let Some(SceneComponent::Conditional(conditional)) = scene.components.first() else {
         panic!("expected layout if to lower to a conditional component");
     };
+    assert!(matches!(
+        &conditional.condition,
+        SceneExpr::Binary {
+            op: SceneBinaryOp::Eq,
+            ..
+        }
+    ));
     assert_eq!(conditional.children.len(), 1);
     assert_eq!(conditional.else_children.len(), 1);
 }
@@ -1804,7 +2018,7 @@ P = Player
 rules {
 [ Player ] -> [ Player ]
 }
-level start {
+level "start" {
 P
 }
 }
@@ -1853,7 +2067,7 @@ P = Player
 rules {
 [ Player ] -> [ Player ]
 }
-level start {
+level "start" {
 P
 }
 }
@@ -1898,7 +2112,7 @@ P = Player
 rules {
 [ Player ] -> [ Player ]
 }
-level start {
+level "start" {
 P
 }
 }
@@ -1922,7 +2136,7 @@ goto title
     assert!(matches!(
         &effects[0],
         SceneEffect::Conditional { condition, effect }
-            if condition == "has_progress_save"
+            if matches!(condition, SceneExpr::Path(path) if path == &vec!["has_progress_save".to_string()])
                 && matches!(effect.as_ref(), SceneEffect::Goto { scene, params }
                     if scene == "playing" && params.is_empty())
     ));
@@ -1948,7 +2162,7 @@ P = Player
 rules {
 [ Player ] -> [ Player ]
 }
-level start {
+level "start" {
 P
 }
 }
@@ -1983,7 +2197,7 @@ Escape q -> goto title
 rules {
 [ Player ] -> [ Player ]
 }
-level start {
+level "start" {
 P
 }
 }
@@ -2027,7 +2241,7 @@ P = Player
 rules {
 [ Player ] -> [ Player ]
 }
-level start {
+level "start" {
 P
 }
 }
@@ -2062,7 +2276,7 @@ P = Player
 rules {
 [ Player ] -> [ Player ]
 }
-level start {
+level "start" {
 P
 }
 }
@@ -2102,7 +2316,7 @@ P = Player
 rules {
 [ Player ] -> [ Player ]
 }
-level start {
+level "start" {
 P
 }
 }
@@ -2144,15 +2358,12 @@ P = Player
 rules {
 [ Player ] -> [ Player ]
 }
-level start {
+level "start" {
 P
 }
 }
 
 scene playing {
-state {
-puzzle sokoban
-}
 layout {
 sokoban
 }
@@ -2190,15 +2401,12 @@ P = Player
 rules {
 [ Player ] -> [ Player ]
 }
-level start {
+level "start" {
 P
 }
 }
 
 scene playing {
-state {
-board = puzzle board
-}
 layout {
 board
 }
@@ -2228,23 +2436,21 @@ rules {
 
 }
 levels {
-level start
+level "start"
 P
 }
 }
 
 scene playing {
-state {
-board = puzzle board
-}
 layout {
+board = puzzle board
 frame board
 }
 }
 "#;
     let loaded = parse_game(source).unwrap();
     assert!(matches!(
-        &loaded.scenes[0].components[0],
+        &loaded.scenes[0].components[1],
         SceneComponent::Frame(frame) if frame.kind == "frame" && frame.source == "board"
     ));
 }
@@ -2265,19 +2471,15 @@ P = Player
 rules {
 [ Player ] -> [ Player ]
 }
-level start {
+level "start" {
 P
 }
 }
 
 scene playing {
-state {
+layout {
 sokoban1 = puzzle sokoban
 sokoban2 = puzzle sokoban
-}
-layout {
-sokoban1
-sokoban2
 }
 rules {
 step sokoban1
@@ -2312,7 +2514,7 @@ rules {
 
 input directions [ Player | no Player ] -> [ | Player ]
 }
-level start {
+level "start" {
 P.
 }
 }
@@ -2341,7 +2543,7 @@ legend {
 . = empty
 P = Player
 }
-level start {
+level "start" {
 P
 }
 }
@@ -2377,7 +2579,7 @@ legend {
 . = empty
 P = Player
 }
-level start {
+level "start" {
 P
 }
 }
@@ -2422,7 +2624,7 @@ legend {
 . = empty
 P = Player
 }
-level start {
+level "start" {
 P
 }
 }
@@ -2472,15 +2674,15 @@ rules {
 
 [ Player ] -> [ Player ]
 }
-level start {
+level "start" {
 P
 }
 input right
 }
 
 scene playing {
-state {
-board = puzzle board
+layout {
+board
 }
 keys {
 ArrowRight -> input right
@@ -2527,25 +2729,25 @@ rules {
 
 [ Player ] -> [ Player ]
 }
-level start {
+level "start" {
 P
 }
 }
 
 scene playing {
-state {
-board = puzzle board
+layout {
+board
 }
 button "Restart" -> board.restart
 }
 "#;
 
     let loaded = parse_game(source).unwrap();
-    assert!(matches!(
-        &loaded.scenes[0].components[0],
+    assert!(loaded.scenes[0].components.iter().any(|component| matches!(
+        component,
         SceneComponent::Button(button)
             if matches!(&button.effect, SceneEffect::ResetPuzzle { target } if target == "board")
-    ));
+    )));
 }
 
 #[test]
@@ -2565,7 +2767,7 @@ rules {
 
 [ Player ] -> [ Player ]
 }
-level start {
+level "start" {
 P
 }
 }
@@ -2599,10 +2801,10 @@ rules {
 [ Player ] -> [ Player ]
 }
 levels {
-level first {
+level "first" {
 P
 }
-level second {
+level "second" {
 P
 }
 }
@@ -2661,7 +2863,7 @@ rules {
 [ Player ] -> [ Player ]
 }
 levels {
-level first {
+level "first" {
 P
 }
 }
@@ -2715,7 +2917,7 @@ rules {
 
 [ Player ] -> [ Player ]
 }
-level start {
+level "start" {
 P
 }
 }
@@ -2763,7 +2965,7 @@ P = Player
 }
 rules {
 }
-level start {
+level "start" {
 P
 }
 }
@@ -2808,7 +3010,7 @@ rules {
 
 [ Player ] -> [ Player ]
 }
-level start {
+level "start" {
 P
 }
 }
@@ -2839,7 +3041,7 @@ rules {
 
 [ Player ] -> [ Player ]
 }
-level start {
+level "start" {
 P
 }
 }
@@ -2876,7 +3078,7 @@ rules {
 }
 
 levels microban of sokoban {
-level start {
+level "start" {
 P
 }
 }
@@ -2911,7 +3113,7 @@ rules {
 once right [ Player | no Player ] -> [ | Player ]
 }
 
-level start {
+level "start" {
 P.
 }
 }
@@ -2959,7 +3161,7 @@ rules {
 
 }
 
-level start {
+level "start" {
 P
 }
 }
@@ -3001,7 +3203,7 @@ rules {
 
 }
 
-level start {
+level "start" {
 P
 }
 }
@@ -3077,7 +3279,7 @@ once right [ Box ] -> [ Box{checked move=> count=3} ]
 once right [ Box{checked move=> count=3} no Marker ] -> [ Box{no checked no move count=2} Marker ]
 }
 
-level start {
+level "start" {
 B
 }
 }
@@ -3115,7 +3317,7 @@ once [ Box ] -> [ Box{flag} ]
 once [ Box{flag} no Marker ] -> [ Box{no flag} Marker ]
 }
 
-level start {
+level "start" {
 B
 }
 }
@@ -3150,7 +3352,7 @@ rules {
 once [ Box ] -> [ Box{count:3} ]
 }
 
-level start {
+level "start" {
 B
 }
 }
@@ -3182,7 +3384,7 @@ once [ Box ] -> [ Box{count:3} ]
 once [ Box{count:3} no Marker ] -> [ Box Marker ]
 }
 
-level start {
+level "start" {
 B
 }
 }
@@ -3222,7 +3424,7 @@ once [ Box ] -> [ Box{push:> pull:< rise:^ fall:v} ]
 once [ Box{push:> pull:< rise:^ fall:v} no Marker ] -> [ Box Marker ]
 }
 
-level start {
+level "start" {
 B
 }
 }
@@ -3260,7 +3462,7 @@ once [ Box ] -> [ Box{enter:directions intent:move=right} ]
 once [ Box{enter:directions intent:move=right} no Marker ] -> [ Box Marker ]
 }
 
-level start {
+level "start" {
 B
 }
 }
@@ -3298,7 +3500,7 @@ once right [ Box | ] -> [ | Box ]
 once [ Box{hot} no Marker ] -> [ Box Marker ]
 }
 
-level start {
+level "start" {
 B.
 }
 }
@@ -3334,7 +3536,7 @@ once [ Box ] -> [ Box{hot} ]
 once right [ Box{hot} | ] -> [ | Box ]
 }
 
-level start {
+level "start" {
 B.
 }
 }
@@ -3371,7 +3573,7 @@ once right [ Box | no Box ] -> [ Box | Box ]
 once [ Box{hot} | Box no Marker ] -> [ Box{hot} | Box Marker ]
 }
 
-level start {
+level "start" {
 B.
 }
 }
@@ -3404,7 +3606,9 @@ scratch {
 hot
 }
 
-group mover = Box Crate
+groups {
+mover = Box Crate
+}
 legend B = Box
 
 rules {
@@ -3412,7 +3616,7 @@ once [ Box ] -> [ Box{hot} ]
 once [ mover{hot} no Marker ] -> [ mover{hot} Marker ]
 }
 
-level start {
+level "start" {
 B
 }
 }
@@ -3438,9 +3642,11 @@ layers {
 }
 empty .
 
-group key = Key
-group lock = Lock
-group pushable = Key
+groups {
+key = Key
+lock = Lock
+pushable = Key
+}
 legend P = Player
 legend K = Key
 legend L = Lock
@@ -3451,7 +3657,7 @@ rules {
   move
 }
 
-level start {
+level "start" {
 PKL
 }
 }
@@ -3494,7 +3700,7 @@ once [ Box {mark} no Marker ] -> [ Box Marker ]
 once [ Box{mark} {mark} ] -> [ Box ]
 }
 
-level start {
+level "start" {
 B
 }
 }
@@ -3538,7 +3744,7 @@ rules {
 [ Player ] -> [ Player Box ]
 }
 
-level start {
+level "start" {
 P
 }
 }
@@ -3578,7 +3784,7 @@ once right [ true Box Marker ] -> [ false Box Marker ]
 once right [ false Box Marker ] -> [ Box ]
 }
 
-level start {
+level "start" {
 B
 }
 }
@@ -3615,14 +3821,14 @@ rules {
 action Player
 once [ Player{__action} | Target ] -> [ Player | Open ]
 }
-level start {
+level "start" {
 PT
 }
 }
 
 scene playing {
-state {
-board = puzzle board
+layout {
+board
 }
 keys {
 x -> input action
@@ -3658,7 +3864,7 @@ once [ > Box ] -> [ Box Marker ]
 }
 
 levels {
-level start
+level "start"
 BW
 }
 }
@@ -3699,7 +3905,7 @@ move
 }
 
 levels {
-level start
+level "start"
 B..
 }
 }
@@ -3740,7 +3946,7 @@ move
 }
 
 levels {
-level start
+level "start"
 BB..
 }
 }
@@ -3785,7 +3991,7 @@ move
 }
 
 levels {
-level start
+level "start"
 PBK.
 }
 }
@@ -3864,7 +4070,7 @@ levels {
 legend {
 . = empty
 }
-level start
+level "start"
 B
 }
 }
@@ -3906,7 +4112,7 @@ once [ right Player ] -> [ Player Marker ]
 }
 
 levels {
-level start
+level "start"
 P
 }
 }
@@ -3948,7 +4154,7 @@ once [ directions Player ] -> [ Player Marker ]
 }
 
 levels {
-level start
+level "start"
 P
 }
 }
@@ -3990,7 +4196,7 @@ once [ Box{no directions} ] -> [ Box Marker ]
 }
 
 levels {
-level start
+level "start"
 B
 }
 }
@@ -4035,7 +4241,7 @@ once right [ Crate{perpendicular} ] -> [ Crate PerpendicularMarker ]
 }
 
 levels {
-level start
+level "start"
 BC
 }
 }
@@ -4077,7 +4283,7 @@ once right [ parallel Box ] -> [ Box Marker ]
 }
 
 levels {
-level start
+level "start"
 B
 }
 }
@@ -4116,7 +4322,7 @@ once [ Box{parallel} ] -> [ Box Marker ]
 }
 
 levels {
-level start
+level "start"
 B
 }
 }
@@ -4161,7 +4367,7 @@ once [ Box ] -> [ Box{color paint=blue} ]
 once [ Box{color paint=blue} no Marker ] -> [ Box Marker ]
 }
 
-level start {
+level "start" {
 B
 }
 }
@@ -4197,7 +4403,7 @@ rules {
 
 }
 
-level start {
+level "start" {
 S
 }
 }
@@ -4238,7 +4444,7 @@ rules {
 
 }
 
-level start {
+level "start" {
 P.
 }
 }
@@ -4278,7 +4484,7 @@ rules {
 
 }
 
-level start {
+level "start" {
 S
 }
 }
@@ -4325,7 +4531,7 @@ rules {
 
 }
 
-level start {
+level "start" {
 P.
 }
 }
@@ -4365,7 +4571,7 @@ rules {
 
 }
 
-level start {
+level "start" {
 S
 }
 }
@@ -4400,7 +4606,7 @@ rules {
 
 }
 
-level start {
+level "start" {
 P.
 }
 }
@@ -4439,7 +4645,7 @@ rules {
 
 }
 
-level start {
+level "start" {
 P.
 }
 }
@@ -4482,7 +4688,7 @@ legend {
 . = empty
 P = Player
 }
-level start {
+level "start" {
 P
 }
 }
@@ -4537,7 +4743,7 @@ legend {
 . = empty
 P = Player
 }
-level start {
+level "start" {
 P
 }
 }
@@ -4584,7 +4790,7 @@ rules {
 
 }
 
-level start {
+level "start" {
 P
 }
 }
@@ -4617,7 +4823,7 @@ rules {
 [ Player | Wall ] -> Mark
 }
 
-level start {
+level "start" {
 PW
 }
 }
@@ -4653,7 +4859,7 @@ rules {
 if none([ Player | Wall ]) Mark
 }
 
-level start {
+level "start" {
 P.
 }
 }
@@ -4690,7 +4896,7 @@ once [ Box ] -> [ Wall ]
 }
 }
 
-level start {
+level "start" {
 B.
 }
 }
@@ -4726,7 +4932,7 @@ rules {
 [ < Player | Wall ] -> Mark
 }
 
-level start {
+level "start" {
 WP
 }
 }
@@ -4760,7 +4966,7 @@ legend {
 . = empty
 P = Player
 }
-level start {
+level "start" {
 P
 }
 }
@@ -4790,6 +4996,23 @@ solid = Wall
 }
 
 #[test]
+fn singular_group_directive_is_rejected() {
+    let source = r#"
+title old_group_directive
+
+puzzle default {
+layers {
+actor = Player Wall
+}
+group solid = Wall
+}
+"#;
+
+    let error = parse_game(source).unwrap_err().to_string();
+    assert!(error.contains("`group <name> = ...` was removed; use `groups { <name> = ... }`"));
+}
+
+#[test]
 fn domain_keyword_is_not_part_of_public_syntax() {
     let source = r#"
 title old_domain
@@ -4807,7 +5030,7 @@ rules {
 
 }
 
-level start
+level "start"
 B
 }
 }
@@ -4901,7 +5124,7 @@ levels {
 legend {
 . = empty
 }
-level start
+level "start"
 .
 }
 }
@@ -4929,7 +5152,7 @@ rules {
 once input directions [ Player | ] -> [ | Player ]
 }
 levels {
-level start
+level "start"
 P.
 }
 }
@@ -4947,6 +5170,7 @@ title assets_test
 assets {
 css "game.css"
 script "visuals.js"
+file "sprites/player.png"
 }
 
 puzzle sokoban {
@@ -4961,18 +5185,20 @@ rules {
 
 }
 levels {
-level one
+level "one"
 P
 }
 }
 "#;
     let loaded = parse_game(source).unwrap();
 
-    assert_eq!(loaded.assets.entries.len(), 2);
+    assert_eq!(loaded.assets.entries.len(), 3);
     assert_eq!(loaded.assets.entries[0].kind, AssetKind::Css);
     assert_eq!(loaded.assets.entries[0].path, "game.css");
     assert_eq!(loaded.assets.entries[1].kind, AssetKind::Script);
     assert_eq!(loaded.assets.entries[1].path, "visuals.js");
+    assert_eq!(loaded.assets.entries[2].kind, AssetKind::File);
+    assert_eq!(loaded.assets.entries[2].path, "sprites/player.png");
 }
 
 #[test]
@@ -4996,7 +5222,7 @@ Player #fff
 }
 
 levels worldA of default {
-level 1
+level "1"
 P
 
 level {
@@ -5007,12 +5233,145 @@ P
     let loaded = parse_game(source).unwrap();
 
     assert_eq!(loaded.levels.len(), 2);
-    assert_eq!(loaded.levels[0].name, "worldA.1");
+    assert_eq!(loaded.levels[0].name, "1");
     assert_eq!(loaded.levels[0].pack.as_deref(), Some("worldA"));
     assert_eq!(loaded.levels[0].puzzle, "default");
     assert_eq!(loaded.levels[1].name, "worldA.2");
     assert_eq!(loaded.visuals.sprites.len(), 1);
     assert_eq!(loaded.scenes[0].resources.levels, ResourceSelection::All);
+}
+
+#[test]
+fn top_level_sprites_with_nested_tables_do_not_leak_after_prior_model_error() {
+    let source = r##"
+title recovered_sprites_scope
+
+puzzle default {
+layers {
+__legacy_layer_0 = Player
+}
+empty .
+legend P = Player
+lose_conditions {
+no [ Missing ]
+}
+rules {
+
+}
+}
+
+sprites {
+colors {
+white = #ffffff
+black = #000000
+}
+shapes {
+mark {
+0
+}
+}
+Player {
+white black
+shape mark
+}
+}
+
+levels worldA of default {
+legend {
+. = empty
+P = Player
+}
+level "1"
+P
+}
+"##;
+    let error = parse_game(source).unwrap_err().to_string();
+
+    assert!(
+        error.contains("unknown object selector: [ Missing ]"),
+        "{error}"
+    );
+    assert!(
+        !error.contains("unknown top-level directive `white`"),
+        "{error}"
+    );
+    assert!(
+        !error.contains("unknown top-level directive `Player`"),
+        "{error}"
+    );
+    assert!(
+        !error.contains("unknown top-level directive `shape`"),
+        "{error}"
+    );
+}
+
+#[test]
+fn model_error_recovery_keeps_scope_after_prior_if_else_block() {
+    let dir = std::env::temp_dir().join(format!(
+        "puzzlestudio_error_recovery_scope_test_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let game_path = dir.join("game.puzzle");
+    std::fs::write(
+        &game_path,
+        r##"
+title recovered_after_if_else
+
+puzzle default {
+tags {
+state = open close
+}
+layers {
+__legacy_layer_0 = Player Gate:state Box:state Goal:state
+}
+rules {
+if some([ Gate:open ]) {
+[ Gate:open ] -> [ Gate:close ]
+} else {
+[ Gate:close ] -> [ Gate:open ]
+}
+}
+lose_conditions {
+no [ Missing ]
+}
+}
+
+levels worldA of default {
+legend {
+. = empty
+P = Player
+}
+level "1"
+P
+}
+
+sprites {
+colors {
+white = #ffffff
+}
+Player
+white
+0
+}
+"##,
+    )
+    .unwrap();
+
+    let error = super::parse_game_file(&game_path).unwrap_err().to_string();
+
+    assert!(
+        error.contains("unknown object selector: [ Missing ]"),
+        "{error}"
+    );
+    assert!(
+        !error.contains("unknown top-level directive `lose_conditions`"),
+        "{error}"
+    );
+    assert!(
+        !error.contains("unknown top-level directive `Player`"),
+        "{error}"
+    );
 }
 
 #[test]
@@ -5037,7 +5396,7 @@ Box #000
 }
 
 levels worldA of default {
-level 1
+level "1"
 P
 }
 
@@ -5096,7 +5455,7 @@ legend {
 . = empty
 P = Player
 }
-level start {
+level "start" {
 P
 }
 }
@@ -5124,6 +5483,65 @@ accent_color #2f7ebc
 }
 
 #[test]
+fn game_file_import_expansion_preserves_top_level_resource_braces() {
+    let dir = std::env::temp_dir().join(format!(
+        "puzzlestudio_import_resource_scope_test_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let game_path = dir.join("game.puzzle");
+    let source = r##"
+title file_resources
+
+puzzle default {
+layers {
+__legacy_layer_0 = Player
+}
+rules {
+
+}
+}
+
+sprites {
+colors {
+white = #ffffff
+}
+Player
+white
+0
+}
+
+levels worldA of default {
+legend {
+. = empty
+P = Player
+}
+level "1"
+P
+}
+"##;
+    std::fs::write(&game_path, source).unwrap();
+
+    assert_eq!(
+        super::expand_game_imports_for_file(source, &game_path).unwrap(),
+        source
+    );
+    let parsed_from_source = super::parse_game(source).unwrap();
+    let Some(LoadedDocumentModel::Puzzle2d { game, .. }) = parsed_from_source.single_model() else {
+        panic!("expected 2D model");
+    };
+    assert_eq!(game.visuals.sprites.len(), 1);
+
+    let document = super::parse_game_file(&game_path).unwrap();
+
+    let Some(LoadedDocumentModel::Puzzle2d { game, .. }) = document.single_model() else {
+        panic!("expected 2D model");
+    };
+    assert_eq!(game.visuals.sprites.len(), 1);
+    assert_eq!(game.levels.len(), 1);
+}
+
+#[test]
 fn theme_background_alias_sets_background_variable() {
     let loaded = parse_game(
         r##"
@@ -5142,7 +5560,7 @@ P = Player
 rules {
 [ Player ] -> [ Player ]
 }
-level start {
+level "start" {
 P
 }
 }
@@ -5214,7 +5632,7 @@ P = Player
 rules {
 [ Player ] -> [ Player ]
 }
-level start {
+level "start" {
 P
 }
 }
@@ -5246,7 +5664,7 @@ P = Player
 rules {
 [ Player ] -> [ Player ]
 }
-level start {
+level "start" {
 P
 }
 }
@@ -5294,7 +5712,7 @@ P = Player
 rules {
 [ Player ] -> [ Player ]
 }
-level start {
+level "start" {
 P
 }
 }
@@ -5327,7 +5745,7 @@ P = Player
 rules {
 [ Player ] -> [ Player ]
 }
-level start {
+level "start" {
 P
 }
 }
@@ -5364,7 +5782,7 @@ P = Player
 rules {
 [ Player ] -> [ Player ]
 }
-level start {
+level "start" {
 P
 }
 }
@@ -5377,7 +5795,7 @@ P
 }
 
 #[test]
-fn game_entry_resolution_uses_prelude_puzzle_files() {
+fn game_entry_resolution_uses_declared_puzzle_models() {
     let dir = std::env::temp_dir().join(format!(
         "puzzlestudio_entry_resolution_test_{}",
         std::process::id()
@@ -5385,7 +5803,7 @@ fn game_entry_resolution_uses_prelude_puzzle_files() {
     std::fs::create_dir_all(&dir).unwrap();
     let game_path = dir.join("game.puzzle");
     let levels_path = dir.join("levels.puzzle");
-    std::fs::write(&game_path, "title Entry\n").unwrap();
+    std::fs::write(&game_path, "puzzle entry {}\n").unwrap();
     std::fs::write(&levels_path, "levels {}\n").unwrap();
 
     assert_eq!(super::resolve_game_entry(&dir).unwrap(), game_path);
@@ -5397,7 +5815,7 @@ fn game_entry_resolution_uses_prelude_puzzle_files() {
 }
 
 #[test]
-fn game_entry_resolution_allows_non_game_named_prelude_files() {
+fn game_entry_resolution_allows_non_game_named_model_files() {
     let dir = std::env::temp_dir().join(format!(
         "puzzlestudio_named_entry_resolution_test_{}",
         std::process::id()
@@ -5405,7 +5823,7 @@ fn game_entry_resolution_allows_non_game_named_prelude_files() {
     std::fs::create_dir_all(dir.join("fragments")).unwrap();
     let entry_path = dir.join("arcade.puzzle");
     let fragment_path = dir.join("fragments").join("levels.puzzle");
-    std::fs::write(&entry_path, "title Arcade\n").unwrap();
+    std::fs::write(&entry_path, "puzzle arcade {}\n").unwrap();
     std::fs::write(&fragment_path, "levels {}\n").unwrap();
 
     assert_eq!(super::resolve_game_entry(&dir).unwrap(), entry_path);
@@ -5493,7 +5911,7 @@ puzzle board {
   }
   rules {
   }
-  level start {
+  level "start" {
     P
   }
 }
@@ -5506,7 +5924,7 @@ puzzle board {
 }
 
 #[test]
-fn folder_without_game_prelude_is_not_auto_resolved() {
+fn folder_without_puzzle_model_is_not_auto_resolved() {
     let dir = std::env::temp_dir().join(format!(
         "puzzlestudio_entry_missing_test_{}",
         std::process::id()
@@ -5518,12 +5936,8 @@ fn folder_without_game_prelude_is_not_auto_resolved() {
 }
 
 #[test]
-fn parses_spec_2d_display_floor_object() {
-    let loaded = super::parse_game2d_file(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/fixtures/spec_2d_microban_basic.puzzle"
-    ))
-    .unwrap();
+fn parses_display_floor_projection_object() {
+    let loaded = parse_game(display_floor_projection_source()).unwrap();
 
     assert!(loaded.object_labels.values().any(|label| label == "@Floor"));
 }
@@ -5581,7 +5995,7 @@ rules {
 [ Box:A | ] -> [ | Box:A ]
 }
 levels {
-level start
+level "start"
 A.
 }
 }
@@ -5642,7 +6056,7 @@ rules {
 
 }
 levels {
-level start
+level "start"
 P
 }
 }
@@ -5696,7 +6110,7 @@ rules {
 
 }
 levels {
-level start
+level "start"
 B
 }
 }
@@ -5736,7 +6150,7 @@ rules {
 
 }
 levels {
-level start
+level "start"
 .
 }
 }
@@ -5776,7 +6190,7 @@ rules {
 
 }
 levels {
-level start
+level "start"
 .
 }
 }
@@ -5792,6 +6206,97 @@ level start
         VisualSpriteKind::Solid(color) => assert_eq!(color, "#eeeeee"),
         _ => panic!("@Floor should be a solid sprite"),
     }
+}
+
+#[test]
+fn puzzle_levels_can_reference_layers_declared_later_and_keep_order() {
+    let source = r##"
+title levels_before_layers
+
+puzzle default {
+levels {
+legend {
+. = empty
+P = Player
+B = Box
+}
+level "first"
+P
+
+level "second"
+B
+}
+layers {
+actor = Player Box
+}
+rules {
+
+}
+}
+"##;
+    let loaded = parse_game(source).unwrap();
+
+    assert_eq!(loaded.levels.len(), 2);
+    assert_eq!(loaded.levels[0].name, "first");
+    assert_eq!(loaded.levels[1].name, "second");
+    assert!(loaded.levels[0].initial_state.has_object(
+        &loaded.game,
+        0,
+        0,
+        object_named(&loaded, "Player")
+    ));
+    assert!(loaded.levels[1].initial_state.has_object(
+        &loaded.game,
+        0,
+        0,
+        object_named(&loaded, "Box")
+    ));
+}
+
+#[test]
+fn top_level_levels_can_reference_puzzle_declared_later_and_keep_order() {
+    let source = r##"
+title top_level_levels_before_puzzle
+
+levels of default {
+legend {
+. = empty
+P = Player
+B = Box
+}
+level "first"
+P
+
+level "second"
+B
+}
+
+puzzle default {
+layers {
+actor = Player Box
+}
+rules {
+
+}
+}
+"##;
+    let loaded = parse_game(source).unwrap();
+
+    assert_eq!(loaded.levels.len(), 2);
+    assert_eq!(loaded.levels[0].name, "first");
+    assert_eq!(loaded.levels[1].name, "second");
+    assert!(loaded.levels[0].initial_state.has_object(
+        &loaded.game,
+        0,
+        0,
+        object_named(&loaded, "Player")
+    ));
+    assert!(loaded.levels[1].initial_state.has_object(
+        &loaded.game,
+        0,
+        0,
+        object_named(&loaded, "Box")
+    ));
 }
 
 #[test]
@@ -5818,7 +6323,7 @@ rules {
 
 }
 levels {
-level start
+level "start"
 P
 }
 }
@@ -5870,7 +6375,7 @@ rules {
 
 }
 levels {
-level start
+level "start"
 P
 }
 }
@@ -5907,7 +6412,7 @@ rules {
 
 }
 levels {
-level start
+level "start"
 rb
 }
 }
@@ -5965,7 +6470,7 @@ rules {
 
 }
 levels {
-level start
+level "start"
 .
 }
 }
@@ -6014,7 +6519,7 @@ rules {
 
 }
 levels {
-level start
+level "start"
 B
 }
 }
@@ -6099,7 +6604,7 @@ rules {
 
 }
 levels {
-level start
+level "start"
 HB
 }
 }
@@ -6171,7 +6676,7 @@ rules {
 
 }
 levels {
-level start
+level "start"
 C
 }
 }
@@ -6221,7 +6726,7 @@ rules {
 
 }
 levels {
-level start
+level "start"
 B
 }
 }
@@ -6276,7 +6781,7 @@ rules {
 
 }
 levels {
-level start
+level "start"
 1
 }
 }
@@ -6335,7 +6840,7 @@ rules {
 
 }
 levels {
-level start
+level "start"
 B
 }
 }
@@ -6372,7 +6877,7 @@ Box
 rules {
 }
 levels {
-level start
+level "start"
 B
 }
 }
@@ -6410,7 +6915,7 @@ rules {
 
 }
 levels {
-level start
+level "start"
 P
 }
 }
@@ -6446,7 +6951,7 @@ rules {
 
 }
 levels {
-level start
+level "start"
 P
 }
 }
@@ -6488,7 +6993,7 @@ rules {
 
 }
 levels {
-level start
+level "start"
 B
 }
 }
@@ -6542,7 +7047,7 @@ legend {
 . = empty
 B = Box
 }
-level start
+level "start"
 B
 }
 }
@@ -6614,7 +7119,7 @@ rules {
 
 }
 levels {
-level start
+level "start"
 B
 }
 }
@@ -6687,7 +7192,7 @@ rules {
 
 }
 levels {
-level start
+level "start"
 B
 }
 }
@@ -6744,7 +7249,7 @@ rules {
 
 }
 levels {
-level start
+level "start"
 B
 }
 }
@@ -6818,7 +7323,7 @@ rules {
 
 }
 levels {
-level start
+level "start"
 BP
 }
 }
@@ -6896,7 +7401,7 @@ rules {
 
 }
 levels {
-level start
+level "start"
 BP
 }
 }
@@ -6970,7 +7475,7 @@ rules {
 
 }
 levels {
-level start
+level "start"
 B
 }
 }
@@ -7017,7 +7522,7 @@ rules {
 
 }
 levels {
-level start
+level "start"
 B
 }
 }
@@ -7060,7 +7565,7 @@ rules {
 
 }
 levels {
-level start
+level "start"
 P
 }
 }
@@ -7108,7 +7613,7 @@ rules {
 
 }
 levels {
-level start
+level "start"
 P
 }
 }
@@ -7161,7 +7666,7 @@ rules {
 
 }
 levels {
-level start
+level "start"
 P
 }
 }
@@ -7215,7 +7720,7 @@ rules {
 
 }
 levels {
-level start
+level "start"
 P
 }
 }
@@ -7269,7 +7774,7 @@ rules {
 
 }
 levels {
-level start
+level "start"
 P
 }
 }
@@ -7308,7 +7813,7 @@ rules {
 
 }
 levels {
-level start
+level "start"
 P
 }
 }
@@ -7361,7 +7866,7 @@ rules {
 
 }
 levels {
-level start
+level "start"
 P
 }
 }
@@ -7395,7 +7900,7 @@ rules {
 
 }
 levels {
-level start
+level "start"
 P
 }
 }
@@ -7455,7 +7960,7 @@ once d [ Player | ] -> [ | Player ]
 }
 }
 levels {
-level start
+level "start"
 .P.
 }
 }
@@ -7511,7 +8016,7 @@ levels {
 legend {
 . = empty
 }
-level start
+level "start"
 B
 }
 }
@@ -7568,7 +8073,7 @@ rules {
 
 }
 levels {
-level start
+level "start"
 .
 }
 }
@@ -7630,7 +8135,7 @@ rules {
 
 }
 levels {
-level start
+level "start"
 .
 }
 }
@@ -7689,7 +8194,7 @@ levels {
 legend {
 . = empty
 }
-level start
+level "start"
 .
 }
 }
@@ -7792,7 +8297,7 @@ rules {
 
 }
 levels {
-level start
+level "start"
 .
 }
 }
@@ -7864,7 +8369,7 @@ rules {
 
 }
 levels {
-level start
+level "start"
 .
 }
 }
@@ -7921,7 +8426,7 @@ rules {
 
 }
 levels {
-level start
+level "start"
 .
 }
 }
@@ -7973,7 +8478,7 @@ rules {
 
 }
 levels {
-level start
+level "start"
 P
 }
 }
@@ -8033,7 +8538,7 @@ rules {
 
 }
 levels {
-level start
+level "start"
 .
 }
 }
@@ -8097,7 +8602,7 @@ rules {
 
 }
 levels {
-level start
+level "start"
 .
 }
 }
@@ -8152,7 +8657,7 @@ rules {
 
 }
 levels {
-level start
+level "start"
 .
 }
 }
@@ -8212,7 +8717,7 @@ rules {
 
 }
 levels {
-level start
+level "start"
 .
 }
 }
@@ -8280,7 +8785,7 @@ rules {
 
 }
 levels {
-level start
+level "start"
 .
 }
 }
@@ -8331,7 +8836,7 @@ once input directions [ Player | ] -> [ | Player ]
 }
 }
 levels {
-level start
+level "start"
 .P.
 }
 }
@@ -8364,7 +8869,7 @@ rules {
 once horizontal [ Player | Wall ] -> [ Player | OpenWall ]
 }
 levels {
-level start
+level "start"
 .P#.
 }
 }
@@ -8399,7 +8904,7 @@ rules {
 once directions [ Player | Wall ] -> [ Player | OpenWall ]
 }
 levels {
-level start
+level "start"
 .P#.
 }
 }
@@ -8437,7 +8942,7 @@ once [ Door ] -> [ OpenDoor ]
 }
 }
 levels {
-level start
+level "start"
 PD
 #.
 }
@@ -8469,7 +8974,7 @@ rules {
 once input horizontal [ Player | ] -> [ | Player ]
 }
 levels {
-level start
+level "start"
 ...
 .P.
 ...
@@ -8507,7 +9012,7 @@ rules {
 once input [ Player | ] -> [ | Player ]
 }
 levels {
-level start
+level "start"
 .P.
 }
 }
@@ -8543,7 +9048,7 @@ once [ Door ] -> [ OpenDoor ]
 }
 }
 levels {
-level start
+level "start"
 P#D
 }
 }
@@ -8583,7 +9088,7 @@ once [ Door ] -> [ OpenDoor ]
 }
 }
 levels {
-level start
+level "start"
 P#D
 }
 }
@@ -8628,7 +9133,7 @@ once d [ Player | ] -> [ | Player ]
 }
 }
 levels {
-level start
+level "start"
 ...
 .P.
 ...
@@ -8661,7 +9166,7 @@ rules {
 once [ A | ] -> [ | A ]
 }
 
-level start {
+level "start" {
 .A.
 }
 }
@@ -8708,7 +9213,7 @@ once [ B ] ->
 [ C ]
 }
 
-level start {
+level "start" {
 A
 }
 }
@@ -8739,7 +9244,7 @@ rules {
 [ B ] -> [ C ]
 }
 
-level start {
+level "start" {
 A
 }
 }
@@ -8772,7 +9277,7 @@ rules {
 [ Player | Wall ] -> Mark
 }
 
-level start {
+level "start" {
 WP
 }
 }
@@ -8808,7 +9313,7 @@ once [ Player ] -> [ Flag ]
 }
 }
 
-level start {
+level "start" {
 WP
 }
 }
@@ -8846,7 +9351,7 @@ checkpoint
 }
 }
 
-level start {
+level "start" {
 P
 }
 }
@@ -8880,7 +9385,7 @@ once [ Player ] -> [ Player Flag ]
 }
 }
 
-level start {
+level "start" {
 P
 }
 }
@@ -8912,7 +9417,7 @@ right [ A | ] -> [ | A ]
 }
 }
 
-level start {
+level "start" {
 A..
 }
 }
@@ -8946,7 +9451,7 @@ repeat right [ A | ] -> [ | A ]
 }
 }
 
-level start {
+level "start" {
 A..
 }
 }
@@ -8981,7 +9486,7 @@ rules {
 once_all [ A ] -> [ B ]
 }
 
-level start {
+level "start" {
 AAA
 }
 }
@@ -9015,7 +9520,7 @@ rules {
 random [ A ] -> [ B ]
 }
 
-level start {
+level "start" {
 AAA
 }
 }
@@ -9052,7 +9557,7 @@ random {
 }
 }
 
-level start {
+level "start" {
 AA
 }
 }
@@ -9090,7 +9595,7 @@ rules {
 choose
 }
 
-level start {
+level "start" {
 AA
 }
 }
@@ -9124,7 +9629,7 @@ rules {
 once_per_level [ A ] -> [ A ] count += 1
 }
 
-level start {
+level "start" {
 A
 }
 }
@@ -9165,7 +9670,7 @@ rules {
 bump
 }
 
-level start {
+level "start" {
 A
 }
 }
@@ -9200,7 +9705,7 @@ rules {
 advance
 }
 
-level start {
+level "start" {
 A
 }
 }
@@ -9238,7 +9743,7 @@ rules {
 spread
 }
 
-level start {
+level "start" {
 AC
 }
 }
@@ -9274,7 +9779,7 @@ rules {
 [ A ] -> [ B ] feedback
 }
 
-level start {
+level "start" {
 AC
 }
 }
@@ -9311,7 +9816,7 @@ rules {
 [ A ] -> [ A ] feedback
 }
 
-level start {
+level "start" {
 A
 }
 }
@@ -9341,7 +9846,7 @@ rules {
 once [ A | B ] -> [ = | C ]
 }
 
-level start {
+level "start" {
 AB
 }
 }
@@ -9372,7 +9877,7 @@ rules {
 [ = | B ] -> [ A | B ]
 }
 
-level start {
+level "start" {
 AB
 }
 }
@@ -9393,7 +9898,7 @@ rules {
 [ A ] -> [ = B ]
 }
 
-level start {
+level "start" {
 A
 }
 }
@@ -9423,7 +9928,7 @@ right [ A | ] -> [ | A ]
 }
 }
 
-level start {
+level "start" {
 A..
 }
 }
@@ -9458,7 +9963,7 @@ rules {
 
 }
 
-level start {
+level "start" {
 .
 }
 }
@@ -9489,7 +9994,7 @@ rules {
 once input directions [ Player | ] -> [ | Player ]
 }
 
-level start {
+level "start" {
 P.
 }
 }
@@ -9574,7 +10079,7 @@ rules {
 once [ Player ] -> [ Player ]
 }
 
-level start {
+level "start" {
 P
 }
 }
@@ -9659,7 +10164,7 @@ rules {
 once [ Player ] -> [ Player ]
 }
 
-level start {
+level "start" {
 P
 }
 }
@@ -9711,7 +10216,7 @@ rules {
 once [ Player ] -> [ Player ]
 }
 
-level start {
+level "start" {
 P
 }
 }
@@ -9799,7 +10304,7 @@ rules {
 once [ Player ] -> [ Player ]
 }
 
-level start {
+level "start" {
 P
 }
 }
@@ -9827,7 +10332,7 @@ rules {
 once [ Player ] -> [ Player ]
 }
 
-level first {
+level "first" {
 P
 }
 }
@@ -9855,13 +10360,13 @@ board = puzzle default
 
 #[test]
 fn scene_effect_parser_retains_semantic_tokens() {
-    let line = "goto playing(first)";
+    let line = "goto playing(\"first\")";
     let parsed = parse_scene_effect_with_semantic_tokens(line, line).unwrap();
     assert!(matches!(
         parsed.surface.effect,
         SceneEffect::Goto { ref scene, ref params }
             if scene == "playing"
-                && matches!(params.as_slice(), [SceneEffectParam::Level(SceneExpr::Path(path))] if path == &vec!["first".to_string()])
+                && matches!(params.as_slice(), [SceneEffectParam::Level(SceneExpr::Text(level))] if level == "first")
     ));
     assert!(parsed.semantic_tokens.iter().any(|token| {
         &line[token.start..token.end] == "goto" && token.kind == SemanticKind::Effect
@@ -9876,8 +10381,8 @@ fn scene_effect_parser_retains_semantic_tokens() {
 }
 
 #[test]
-fn scene_effect_level_call_accepts_dotted_level_atom() {
-    let line = "goto playing(microban.1)";
+fn scene_effect_level_call_accepts_quoted_id_and_selectors() {
+    let line = "goto playing(\"microban.1\")";
     let parsed = parse_scene_effect_with_semantic_tokens(line, line).unwrap();
     assert!(matches!(
         parsed.surface.effect,
@@ -9886,27 +10391,25 @@ fn scene_effect_level_call_accepts_dotted_level_atom() {
                 && matches!(params.as_slice(), [SceneEffectParam::Level(SceneExpr::Text(level))] if level == "microban.1")
     ));
 
-    let line = "goto playing(test.chain)";
+    let line = "goto playing(level(\"first state\"))";
     let parsed = parse_scene_effect_with_semantic_tokens(line, line).unwrap();
     assert!(matches!(
         parsed.surface.effect,
         SceneEffect::Goto { ref scene, ref params }
             if scene == "playing"
-                && matches!(params.as_slice(), [SceneEffectParam::Level(SceneExpr::Text(level))] if level == "test.chain")
+                && matches!(params.as_slice(), [SceneEffectParam::Level(SceneExpr::Call { name, args })]
+                    if name == "level" && matches!(args.as_slice(), [SceneExpr::Text(level)] if level == "first state"))
     ));
 }
 
 #[test]
-fn scene_effect_level_call_rejects_quoted_level_atom() {
-    let error = parse_scene_effect(
-        "goto playing(\"microban.1\")",
-        "goto playing(\"microban.1\")",
-    )
-    .unwrap_err()
-    .to_string();
+fn scene_effect_level_call_rejects_legacy_dotted_level_atom() {
+    let error = parse_scene_effect("goto playing(microban.1)", "goto playing(microban.1)")
+        .unwrap_err()
+        .to_string();
 
     assert!(
-        error.contains("scene level arguments must not be quoted"),
+        error.contains("expression must be"),
         "unexpected error: {error}"
     );
 }
@@ -10083,8 +10586,8 @@ fn progress_scene_effects_parse() {
     ));
     assert!(matches!(
         parse_scene_effect(
-            "level(microban.2).cleared = false",
-            "level(microban.2).cleared = false"
+            "level(\"microban.2\").cleared = false",
+            "level(\"microban.2\").cleared = false"
         )
         .unwrap(),
         SceneEffect::SetLevelCleared {
@@ -10129,7 +10632,7 @@ rules {
 once [ Player ] -> moved = true
 }
 
-level start {
+level "start" {
 P
 }
 }
@@ -10192,7 +10695,7 @@ once input directions [ Player | Box | no solid ] -> [ | Player | Box ]
 once input directions [ Player | no solid ] -> [ | Player ]
 }
 
-level start {
+level "start" {
 #P.BG
 }
 }
@@ -10238,13 +10741,13 @@ rules {
 }
 
 levels {
-level local
+level "local"
 legend {
 x = Goal Box
 }
 x
 
-level plain
+level "plain"
 P
 }
 }
@@ -10291,11 +10794,11 @@ rules {
 }
 
 levels {
-level first
+level "first"
 legend x = Goal Box
 x
 
-level second
+level "second"
 x
 }
 }
@@ -10328,7 +10831,7 @@ once right [ Player | ] -> [ > Player | ]
 move
 }
 
-level start {
+level "start" {
 P.
 }
 }
@@ -10370,12 +10873,12 @@ once input directions [ Player | Box | no solid ] -> [ | Player | Box ]
 once input directions [ Player | no solid ] -> [ | Player ]
 }
 levels {
-level first
+level "first"
 #######
 #P.B.G#
 #######
 
-level second
+level "second"
 #######
 #P.B.G#
 #######
@@ -10422,12 +10925,12 @@ once input directions [ Player | Box | no solid ] -> [ | Player | Box ]
 once input directions [ Player | no solid ] -> [ | Player ]
 }
 levels {
-level first
+level "first"
 #######
 #P.B.G#
 #######
 
-level second
+level "second"
 #######
 #P.B.G#
 #######
@@ -10468,7 +10971,7 @@ rules {
 
 }
 levels {
-level start
+level "start"
 .#
 B#
 }
@@ -10505,7 +11008,7 @@ rules {
 
 }
 levels {
-level start
+level "start"
 .#
 B#
 }
@@ -10514,6 +11017,95 @@ B#
     let loaded = parse_game(source).unwrap();
 
     assert!(loaded.is_lose_complete(&loaded.levels[0].initial_state));
+}
+
+#[test]
+fn condition_prefix_patterns_accept_wrapping_parentheses() {
+    let source = r#"
+title condition_prefix_pattern_parens
+puzzle default {
+layers {
+__legacy_layer_0 = Goal
+__legacy_layer_1 = Box
+}
+legend * = Goal Box
+legend {
+. = empty
+}
+win_conditions {
+no ([ Box no Goal ])
+some ([ Box ] [ Goal ])
+}
+rules {
+
+}
+levels {
+level "start"
+*
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+
+    assert!(loaded.is_goal_complete(&loaded.levels[0].initial_state));
+}
+
+#[test]
+fn condition_patterns_accept_family_wildcard_tag_selector() {
+    let source = r#"
+title condition_family_wildcard_tag
+puzzle default {
+tags {
+state = open close
+}
+layers {
+__legacy_layer_0 = Door:state Switch:state
+}
+legend d = Door:open
+legend {
+. = empty
+}
+win_conditions {
+some [ *:open ]
+}
+rules {
+
+}
+levels {
+level "start"
+d
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+
+    assert!(loaded.is_goal_complete(&loaded.levels[0].initial_state));
+}
+
+#[test]
+fn no_function_alias_accepts_pattern_conditions() {
+    let source = r#"
+title no_function_pattern_alias
+puzzle default {
+layers {
+__legacy_layer_0 = Goal
+}
+legend {
+. = empty
+}
+win_conditions = no([ Goal ])
+rules {
+
+}
+levels {
+level "start"
+.
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+
+    assert!(loaded.is_goal_complete(&loaded.levels[0].initial_state));
 }
 
 #[test]
@@ -10543,7 +11135,7 @@ rules {
 
 }
 levels {
-level start
+level "start"
 *#
 }
 }
@@ -10581,7 +11173,7 @@ rules {
 
 }
 levels {
-level start
+level "start"
 AB
 }
 }
@@ -10627,7 +11219,7 @@ rules {
 
 }
 levels {
-level start
+level "start"
 A
 }
 }
@@ -10664,7 +11256,7 @@ once [ Box ] -> [ Box{count=i} ]
 once [ Box{count=3} no Marker ] -> [ Box Marker ]
 }
 
-level start {
+level "start" {
 B
 }
 }
@@ -10704,7 +11296,7 @@ once [ Box ] -> [ Box{count=i} ]
 once [ Box{count=3} no Marker ] -> [ Box Marker ]
 }
 
-level start {
+level "start" {
 B
 }
 }
@@ -10741,7 +11333,7 @@ levels {
 legend {
 . = empty
 }
-level start
+level "start"
 W
 }
 }
@@ -10781,7 +11373,7 @@ levels {
 legend {
 . = empty
 }
-level start
+level "start"
 B
 }
 }
@@ -10815,7 +11407,7 @@ empty .
 levels {
 legend 1 = Gate:1
 
-level start {
+level "start" {
 1
 }
 }
@@ -10864,7 +11456,7 @@ if count <= 2 {
 }
 
 levels {
-level start
+level "start"
 B
 }
 }
@@ -10923,7 +11515,7 @@ open_gate
 levels {
 legend 1 = Gate:1
 
-level start {
+level "start" {
 1
 }
 }
@@ -10980,7 +11572,7 @@ levels {
 legend 1 = Gate:1
 legend c = @Count:1
 
-level start {
+level "start" {
 1
 c
 }
@@ -11040,7 +11632,7 @@ levels {
 legend 1 = Gate:1
 legend c = @Count:2
 
-level start {
+level "start" {
 1
 c
 }
@@ -11102,7 +11694,7 @@ open_gate
 levels {
 legend 1 = Gate:1
 
-level start {
+level "start" {
 1
 }
 }
@@ -11145,7 +11737,7 @@ rules {
 once [ Box:count no Marker ] -> [ Box:count Marker ]
 }
 
-level start {
+level "start" {
 B
 }
 }
@@ -11159,6 +11751,265 @@ B
     assert!(loaded.warnings.iter().any(|warning| {
         warning.contains("dynamic selector `Box:count` uses mutable var `count`")
     }));
+}
+
+#[test]
+fn schema_tag_slot_capture_updates_var_from_matched_variant() {
+    let source = r#"
+title schema_tag_slot_capture
+
+puzzle default {
+var captured = 0
+
+tags {
+kind = 1 2 3
+}
+
+layers {
+floor = Detector
+actor = Obj:kind
+}
+empty .
+
+legend {
+. = empty
+X = Detector Obj:2
+}
+
+rules {
+once [ Obj:kind Detector ] -> captured = kind
+}
+
+level "start" {
+X
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    let next = transition_state(&loaded.game, &loaded.levels[0].initial_state, InputId(0)).unwrap();
+
+    assert_eq!(next.visible_globals(), &[2]);
+}
+
+#[test]
+fn schema_tag_slot_labeled_capture_updates_var_from_matched_variant() {
+    let source = r#"
+title schema_tag_slot_labeled_capture
+
+puzzle default {
+var captured = 0
+
+tags {
+kind = 1 2 3
+}
+
+layers {
+actor = Obj:kind
+}
+empty .
+
+legend {
+. = empty
+X = Obj:3
+}
+
+rules {
+once [ Obj:kind#1 ] -> captured = kind#1
+}
+
+level "start" {
+X
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    let next = transition_state(&loaded.game, &loaded.levels[0].initial_state, InputId(0)).unwrap();
+
+    assert_eq!(next.visible_globals(), &[3]);
+}
+
+#[test]
+fn schema_wildcard_capture_updates_var_when_single_tag_slot_is_unambiguous() {
+    let source = r#"
+title schema_wildcard_capture
+
+puzzle default {
+var captured = 0
+
+tags {
+kind = 1 2 3
+}
+
+layers {
+actor = Obj:kind
+}
+empty .
+
+legend {
+. = empty
+X = Obj:1
+}
+
+rules {
+once [ Obj:* ] -> captured = *
+}
+
+level "start" {
+X
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    let next = transition_state(&loaded.game, &loaded.levels[0].initial_state, InputId(0)).unwrap();
+
+    assert_eq!(next.visible_globals(), &[1]);
+}
+
+#[test]
+fn schema_wildcard_labeled_capture_updates_var() {
+    let source = r#"
+title schema_wildcard_labeled_capture
+
+puzzle default {
+var captured = 0
+
+tags {
+kind = 1 2 3
+}
+
+layers {
+actor = Obj:kind
+}
+empty .
+
+legend {
+. = empty
+X = Obj:2
+}
+
+rules {
+once [ Obj:*#1 ] -> captured = *#1
+}
+
+level "start" {
+X
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    let next = transition_state(&loaded.game, &loaded.levels[0].initial_state, InputId(0)).unwrap();
+
+    assert_eq!(next.visible_globals(), &[2]);
+}
+
+#[test]
+fn schema_tag_capture_reference_is_rejected_when_ambiguous() {
+    let source = r#"
+title schema_tag_capture_ambiguous
+
+puzzle default {
+var captured = 0
+
+tags {
+kind = 1 2
+}
+
+layers {
+a = A:kind
+b = B:kind
+}
+empty .
+
+legend {
+. = empty
+1 = A:1
+2 = B:2
+}
+
+rules {
+once [ A:kind | B:kind ] -> captured = kind
+}
+
+level "start" {
+12
+}
+}
+"#;
+    let error = parse_game(source).unwrap_err().to_string();
+
+    assert!(error.contains("tag capture reference `kind` is ambiguous"));
+}
+
+#[test]
+fn schema_tag_capture_reference_requires_matching_lhs_binding() {
+    let source = r#"
+title schema_tag_capture_missing
+
+puzzle default {
+var captured = 0
+
+tags {
+kind = 1 2
+}
+
+layers {
+actor = Obj:kind
+}
+empty .
+
+legend {
+. = empty
+X = Obj:1
+}
+
+rules {
+once [ Obj:kind ] -> captured = kind#1
+}
+
+level "start" {
+X
+}
+}
+"#;
+    let error = parse_game(source).unwrap_err().to_string();
+
+    assert!(error.contains("unknown tag capture reference: kind#1"));
+}
+
+#[test]
+fn schema_tag_capture_var_update_requires_numeric_tag_value() {
+    let source = r#"
+title schema_tag_capture_non_numeric
+
+puzzle default {
+var captured = 0
+
+tags {
+color = red blue
+}
+
+layers {
+actor = Obj:color
+}
+empty .
+
+legend {
+. = empty
+R = Obj:red
+}
+
+rules {
+once [ Obj:color ] -> captured = color
+}
+
+level "start" {
+R
+}
+}
+"#;
+    let error = parse_game(source).unwrap_err().to_string();
+
+    assert!(error.contains("tag capture values used in var updates"));
 }
 
 #[test]
@@ -11194,7 +12045,7 @@ once [ Box:count no Flag ] -> [ Box:count Flag ]
 }
 }
 
-level start {
+level "start" {
 BC
 }
 }
@@ -11238,7 +12089,7 @@ count += 1
 once [ Count:* ] -> [ Count:count ]
 }
 
-level start {
+level "start" {
 0
 }
 }
@@ -11280,7 +12131,7 @@ count += 1
 [ Count:* ] -> [ Count:count ]
 }
 
-level start {
+level "start" {
 0
 }
 }
@@ -11321,7 +12172,7 @@ rules {
 once [ Count:* ] -> [ Count:count ]
 }
 
-level start {
+level "start" {
 0
 }
 }
@@ -11362,7 +12213,7 @@ rules {
 once [ Count:* ] -> [ Count:count ]
 }
 
-level start {
+level "start" {
 0
 }
 }
@@ -11403,7 +12254,7 @@ rules {
 once [ Count:* ] -> [ Count:count ]
 }
 
-level start {
+level "start" {
 0
 }
 }
@@ -11464,7 +12315,7 @@ rules {
 [ Count:* ] -> [ Count:count ] count += 1
 }
 
-level start {
+level "start" {
 0
 }
 }
@@ -11508,7 +12359,7 @@ once [ Box:count no Flag ] -> [ Box:count Flag ]
 count = 4
 }
 
-level start {
+level "start" {
 BC
 }
 }
@@ -11550,7 +12401,7 @@ rules {
 once [ Box:count no Marker ] -> [ Box:count Marker ]
 }
 
-level start {
+level "start" {
 B
 }
 }
@@ -11588,7 +12439,7 @@ rules {
 once [ Box:count ] -> [ Box:count ]
 }
 
-level start {
+level "start" {
 B
 }
 }
@@ -11624,7 +12475,7 @@ rules {
 once [ Box:count ] -> [ Box:count ]
 }
 
-level start {
+level "start" {
 B
 }
 }
@@ -11662,7 +12513,7 @@ rules {
 
 }
 levels {
-level start
+level "start"
 *#
 }
 }
@@ -11695,7 +12546,7 @@ rules {
 
 }
 levels {
-level start
+level "start"
 *
 }
 }
@@ -11750,7 +12601,7 @@ rules {
 
 }
 
-level start {
+level "start" {
 abcd
 }
 }
@@ -11787,7 +12638,7 @@ rules {
 
 }
 
-level start {
+level "start" {
 a
 }
 }
@@ -11822,7 +12673,7 @@ rules {
 
 }
 
-level start {
+level "start" {
 a
 }
 }
@@ -11854,7 +12705,7 @@ once right [ Marker:> ] -> [ Marker:v ]
 }
 
 levels {
-level start
+level "start"
 r
 }
 }
@@ -11903,7 +12754,7 @@ rules {
 
 }
 
-level start {
+level "start" {
 abcx
 }
 }
@@ -11943,7 +12794,7 @@ rules {
 
 }
 
-level start {
+level "start" {
 a
 }
 }
@@ -11980,7 +12831,7 @@ rules {
 once input directions [ player:* | ] -> [ | player:* ]
 }
 
-level start {
+level "start" {
 r.
 }
 }
@@ -12019,7 +12870,7 @@ rules {
 once [ player:_ ] -> [ player:_ ]
 }
 
-level start
+level "start"
 l
 }
 }
@@ -12054,7 +12905,7 @@ rules {
 once [ player ] -> [ player ]
 }
 
-level start
+level "start"
 l
 }
 }
@@ -12094,7 +12945,7 @@ rules {
 
 }
 
-level start {
+level "start" {
 abx
 }
 }
@@ -12130,7 +12981,7 @@ rules {
 
 }
 
-level start {
+level "start" {
 dsx
 }
 }
@@ -12163,7 +13014,7 @@ rules {
 once [ *:A ] -> [ *:B ]
 }
 
-level start {
+level "start" {
 ds
 }
 }
@@ -12203,7 +13054,7 @@ rules {
 once [ *:stack ] -> [ *:movable ]
 }
 
-level start {
+level "start" {
 c
 }
 }
@@ -12242,7 +13093,7 @@ rules {
 
 }
 
-level start {
+level "start" {
 abc
 }
 }
@@ -12281,7 +13132,7 @@ rules {
 
 }
 
-level start {
+level "start" {
 a
 }
 }
@@ -12316,7 +13167,7 @@ rules {
 once [ pair:a ] -> [ pair:b ]
 }
 
-level start {
+level "start" {
 xyz
 }
 }
@@ -12358,7 +13209,7 @@ rules {
 
 }
 
-level start {
+level "start" {
 a#
 }
 }
@@ -12396,7 +13247,7 @@ rules {
 
 }
 
-level start {
+level "start" {
 a
 }
 }
@@ -12435,7 +13286,7 @@ O = Room:open
 K = Marker:open
 }
 
-level start
+level "start"
 RM
 }
 }
@@ -12483,7 +13334,7 @@ legend {
 r = marker:red
 }
 
-level start
+level "start"
 r
 }
 }
@@ -12510,7 +13361,7 @@ rules {
 once input directions [ Player | ] -> [ | Player ]
 }
 
-level start {
+level "start" {
 P.
 ..
 
@@ -12556,10 +13407,10 @@ rules {
 
 }
 levels {
-level intro
+level "intro"
 P
 
-level followup
+level "followup"
 B
 }
 }
@@ -12670,7 +13521,7 @@ legend P = Player
 rules {
 }
 levels {
-level start {
+level "start" {
 P{
 }
 }
@@ -12702,7 +13553,7 @@ rules {
 once input directions [ Player | ] -> [ | Player ]
 }
 
-level start {
+level "start" {
 P..
 }
 }
@@ -12735,7 +13586,7 @@ rules {
 
 }
 
-level start {
+level "start" {
 .
 }
 }
@@ -12759,7 +13610,7 @@ rules {
 
 }
 
-level start {
+level "start" {
 .
 }
 }
@@ -12783,7 +13634,7 @@ rules {
 
 }
 
-level start {
+level "start" {
 .
 }
 }
@@ -12807,7 +13658,7 @@ rules {
 
 }
 
-level start {
+level "start" {
 .
 }
 }
@@ -12840,7 +13691,7 @@ rules {
 
 }
 
-level start {
+level "start" {
 .
 }
 }
@@ -12870,7 +13721,7 @@ rules {
 
 }
 
-level start {
+level "start" {
 .
 }
 }
@@ -12890,7 +13741,9 @@ __legacy_layer_1 = Box Crate
 }
 empty .
 
-group cargo = Box Crate
+groups {
+cargo = Box Crate
+}
 
 legend B = Box
 legend C = Crate
@@ -12899,7 +13752,7 @@ rules {
 once [ cargo | cargo | ] -> [ | cargo | cargo ]
 }
 
-level start
+level "start"
 BC.
 }
 }
@@ -13149,7 +14002,7 @@ rules {
 once [ box:color | box:color | ] -> [ | box:color | box:color ]
 }
 
-level start
+level "start"
 rb.
 }
 }
@@ -13181,7 +14034,7 @@ empty .
 levels {
 legend B = Button
 
-level start {
+level "start" {
 B
 }
 }
@@ -13229,7 +14082,7 @@ once [ Door ] -> [ OpenDoor ]
 }
 
 levels {
-level start
+level "start"
 BD
 }
 }
@@ -13265,7 +14118,7 @@ rules {
 
 }
 levels {
-level start
+level "start"
 *
 }
 }
@@ -13298,7 +14151,7 @@ rules {
 
 }
 
-level start
+level "start"
 X
 }
 }
@@ -13344,7 +14197,7 @@ move
 }
 
 levels {
-level start
+level "start"
 P.
 }
 }
@@ -13387,7 +14240,7 @@ legend {
 P = Player
 }
 
-level start
+level "start"
 P
 }
 
@@ -13439,7 +14292,7 @@ rules {
 }
 
 levels {
-level start
+level "start"
 P
 }
 }
@@ -13461,8 +14314,7 @@ P
 
 #[test]
 fn spec_2d_display_floor_is_a_non_colliding_projection_layer() {
-    let source = include_str!("../tests/fixtures/spec_2d_microban_basic.puzzle");
-    let loaded = parse_game(source).unwrap();
+    let loaded = parse_game(display_floor_projection_source()).unwrap();
     let goal = object_named(&loaded, "Goal");
     let floor = object_named(&loaded, "@Floor");
     let initial = &loaded.levels[0].initial_state;
@@ -13478,6 +14330,43 @@ fn spec_2d_display_floor_is_a_non_colliding_projection_layer() {
     assert!(displayed.has_object(&loaded.game, 2, 1, goal));
     assert!(displayed.has_object(&loaded.game, 2, 1, floor));
     assert!(displayed.has_object(&loaded.game, 5, 1, floor));
+}
+
+fn display_floor_projection_source() -> &'static str {
+    r#"
+title display_floor_projection
+
+puzzle default {
+layers {
+@display_floor = @Floor
+target = Goal
+}
+
+legend {
+. = empty
+G = Goal
+}
+
+routine @fill_floor repeat {
+[ no @Floor ] -> [ @Floor ]
+}
+
+on_display {
+@fill_floor
+}
+
+rules {
+
+}
+
+levels {
+level "start" {
+......
+..G...
+}
+}
+}
+"#
 }
 
 #[test]
@@ -13514,7 +14403,7 @@ rules {
 }
 
 levels {
-level start
+level "start"
 P.
 }
 }
@@ -13549,7 +14438,7 @@ rules {
 }
 
 levels {
-level start
+level "start"
 P
 }
 }
@@ -13589,7 +14478,7 @@ rules {
 }
 
 levels {
-level start
+level "start"
 P
 }
 }
@@ -13636,7 +14525,7 @@ routine @paint once {
 }
 
 levels {
-level start
+level "start"
 P
 }
 }
@@ -13672,7 +14561,7 @@ rules {
 }
 
 levels {
-level start
+level "start"
 P
 }
 }
@@ -13728,7 +14617,7 @@ rules {
 }
 
 levels {
-level start
+level "start"
 P
 }
 }
@@ -13777,7 +14666,7 @@ rules {
 }
 
 levels {
-level start
+level "start"
 P
 }
 }
@@ -13834,7 +14723,7 @@ move
 }
 
 levels {
-level start
+level "start"
 A
 }
 }
@@ -13873,7 +14762,7 @@ paint
 }
 
 levels {
-level start
+level "start"
 P
 }
 }
@@ -13922,7 +14811,7 @@ move
 }
 
 levels {
-level start
+level "start"
 P.
 }
 }
@@ -13972,7 +14861,7 @@ rules {
 }
 
 levels {
-level start
+level "start"
 P.
 }
 }
@@ -14014,7 +14903,7 @@ P = Player
 B = Box
 }
 
-level start
+level "start"
 PB.
 }
 }
@@ -14060,7 +14949,7 @@ if trail_count > 0 {
 }
 
 levels {
-level start
+level "start"
 P
 }
 }
@@ -14096,7 +14985,7 @@ rules {{
 }}
 
 levels {{
-level start
+level "start"
 .
 }}
 }}
@@ -14131,7 +15020,7 @@ P = Player
 }}
 
 levels {{
-level start
+level "start"
 P
 }}
 }}
@@ -14167,7 +15056,7 @@ rules {
 }
 
 levels {
-level start
+level "start"
 P
 }
 }
@@ -14225,7 +15114,7 @@ rules {
 }
 
 levels {
-level start
+level "start"
 P
 }
 }
@@ -14269,7 +15158,7 @@ rules {
 }
 
 levels {
-level start
+level "start"
 P
 }
 }
@@ -14298,7 +15187,7 @@ rules {
 }
 
 levels {
-level start
+level "start"
 P
 }
 }
@@ -14329,7 +15218,7 @@ rules {
 }
 
 levels {
-level start
+level "start"
 P
 }
 }
@@ -14365,7 +15254,7 @@ rules {
 }
 
 levels {
-level start
+level "start"
 P
 }
 }
@@ -14401,7 +15290,7 @@ rules {
 }
 
 levels {
-level start
+level "start"
 P
 }
 }
@@ -14433,7 +15322,7 @@ rules {
 }
 
 levels {
-level start
+level "start"
 #
 }
 }
@@ -14473,7 +15362,9 @@ puzzle3 push3 {
     actor = Player Box Wall
   }
 
-  group solid = Player Box Wall
+  groups {
+    solid = Player Box Wall
+  }
 
   rules {
 
@@ -14490,7 +15381,7 @@ levels3 demo of push3 {
     # = Wall
   }
 
-  level start {
+  level "start" {
     ####
     #PB#
     #..#
@@ -14531,7 +15422,7 @@ rules {
 
 levels {
 legend P = Player
-level start {
+level "start" {
 P
 }
 }
@@ -14593,7 +15484,7 @@ rules {
 
 levels {
 legend P = Player
-level start {
+level "start" {
 P
 }
 }
@@ -14637,7 +15528,7 @@ legend {
 . = empty
 P = Player
 }
-level first
+level "first"
 P
 }
 }
@@ -14678,7 +15569,7 @@ legend {
 . = empty
 P = Player
 }
-level first {
+level "first" {
 P
 }
 }
@@ -14734,7 +15625,9 @@ puzzle3 push3 {
     actor = Player Box Wall
   }
 
-  group solid = Player Box Wall
+  groups {
+    solid = Player Box Wall
+  }
 
   rules {
 
@@ -14751,7 +15644,7 @@ levels3 demo of push3 {
     # = Wall
   }
 
-  level start {
+  level "start" {
     ####
     #PB#
     #..#
@@ -14840,7 +15733,7 @@ levels3 demo of push3 {
     P = Player
   }
 
-  level start {
+  level "start" {
     P.
   }
 }
@@ -14873,7 +15766,7 @@ levels3 demo of push3 {
   legend {
     P = Player
   }
-  level start {
+  level "start" {
     P
   }
 }
@@ -14906,7 +15799,7 @@ rules {
 
 levels flat_levels of flat {
 legend P = Player
-level start {
+level "start" {
 P
 }
 }
@@ -14923,19 +15816,15 @@ levels3 cube_levels of cube {
 legend {
 P = Player
 }
-level start {
+level "start" {
 P
 }
 }
 
 scene mixed_play {
-state {
+layout {
 flat_board = puzzle flat
 cube_board = puzzle3 cube
-}
-layout {
-puzzle flat_board
-puzzle3 cube_board
 }
 }
 "#;
@@ -14977,7 +15866,7 @@ levels3 demo of push3 {
 legend {
 P = Player
 }
-level first {
+level "first" {
 P
 }
 }
@@ -15046,7 +15935,7 @@ rules {
 
 levels flat_levels of flat {
 legend P = Player
-level start {
+level "start" {
 P
 }
 }
@@ -15063,26 +15952,20 @@ levels3 cube_levels of cube {
 legend {
 P = Player
 }
-level start {
+level "start" {
 P
 }
 }
 
 scene flat_play {
-state {
-flat
-}
 layout {
-puzzle flat
+flat
 }
 }
 
 scene cube_play {
-state {
-puzzle3 cube
-}
 layout {
-puzzle3 cube
+cube
 }
 }
 "#,
@@ -15156,11 +16039,8 @@ scene level_select {
 }
 
 scene playing {
-  state {
-    board = puzzle3 demo
-  }
   layout {
-    puzzle3 board
+    board = puzzle3 demo
   }
 }
 
@@ -15171,7 +16051,7 @@ legend {
   P = Player
 }
 
-level first {
+level "first" {
 P
 
 ,
@@ -15257,7 +16137,7 @@ rules {
 
 levels flat_levels of flat {
 legend P = Player
-level start {
+level "start" {
 P
 }
 }
@@ -15267,7 +16147,9 @@ puzzle3 cube {
     actor = Player Box Wall
   }
 
-  group solid = Player Box Wall
+  groups {
+    solid = Player Box Wall
+  }
 
   rules {
 
@@ -15280,19 +16162,15 @@ levels3 cube_levels of cube {
     P = Player
   }
 
-  level start {
+  level "start" {
     P
   }
 }
 
 scene mixed_play {
-  state {
+  layout {
     flat_board = puzzle flat
     cube_board = puzzle3 cube
-  }
-  layout {
-    puzzle flat_board
-    puzzle3 cube_board
   }
 }
 "#,
@@ -15384,7 +16262,7 @@ legend {
 . = empty
 P = Player
 }
-level start
+level "start"
 P
 }
 }
@@ -15426,7 +16304,7 @@ levels {
 legend {
 . = empty
 }
-level first
+level "first"
 .
 }
 }
@@ -15479,7 +16357,7 @@ levels {
 legend {
 . = empty
 }
-level first
+level "first"
 .
 }
 }
@@ -15529,7 +16407,7 @@ legend {
 . = empty
 B = Box
 }
-level first
+level "first"
 B
 }
 }
@@ -15580,7 +16458,7 @@ levels {
 legend {
 . = empty
 }
-level first
+level "first"
 .
 }
 }
@@ -15600,5 +16478,98 @@ level first
             .map(|diagnostic| diagnostic.primary_span.as_ref().and_then(|span| span.line))
             .collect::<Vec<_>>(),
         expected_lines.into_iter().map(Some).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn statement_parse_diagnostic_carries_source_line_number() {
+    let source = r#"title probe
+
+puzzle main {
+layers {
+base = Floor
+}
+
+rules {
+action jump
+}
+
+levels {
+legend {
+. = empty
+}
+level "first"
+.
+}
+}
+"#;
+    let report = super::parse_game2d(source).unwrap_err();
+    let diagnostic = report.diagnostics().first().expect("statement diagnostic");
+    let expected_line = source
+        .lines()
+        .position(|line| line.trim() == "action jump")
+        .map(|line| line + 1);
+
+    assert_eq!(
+        diagnostic.message,
+        "`action` statements were removed; use explicit input guards and rewrites"
+    );
+    assert_eq!(
+        diagnostic
+            .primary_span
+            .as_ref()
+            .and_then(|span| span.source_line.as_deref()),
+        Some("action jump")
+    );
+    assert_eq!(
+        diagnostic.primary_span.as_ref().and_then(|span| span.line),
+        expected_line
+    );
+}
+
+#[test]
+fn parser_boundary_resolves_source_line_only_diagnostic_line_number() {
+    let source = r#"title probe
+
+unknown_top_level
+
+puzzle main {
+layers {
+base = Floor
+}
+
+rules {
+}
+
+levels {
+legend {
+. = empty
+}
+level "first"
+.
+}
+}
+"#;
+    let report = super::parse_game2d(source).unwrap_err();
+    let diagnostic = report
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.message.contains("unknown"))
+        .expect("unknown top-level diagnostic");
+    let expected_line = source
+        .lines()
+        .position(|line| line.trim() == "unknown_top_level")
+        .map(|line| line + 1);
+
+    assert_eq!(
+        diagnostic
+            .primary_span
+            .as_ref()
+            .and_then(|span| span.source_line.as_deref()),
+        Some("unknown_top_level")
+    );
+    assert_eq!(
+        diagnostic.primary_span.as_ref().and_then(|span| span.line),
+        expected_line
     );
 }

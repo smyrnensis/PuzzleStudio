@@ -1714,19 +1714,16 @@ fn push_playing_scene(
     out.push(String::new());
 
     out.push("scene playing {".to_string());
-    out.push("  state {".to_string());
-    out.push("    board = puzzle main".to_string());
-    out.push("  }".to_string());
     if viewport_size.is_some() {
         out.push("  layout {".to_string());
-        out.push("    puzzle board".to_string());
+        out.push("    board = puzzle main".to_string());
         out.push("  }".to_string());
     } else {
         out.push("  layout {".to_string());
         out.push("    row {".to_string());
         out.push(format!("      title \"{}\"", escape_scene_text(title)));
         out.push("    }".to_string());
-        out.push("    puzzle board".to_string());
+        out.push("    board = puzzle main".to_string());
         out.push("  }".to_string());
     }
     out.push("  keys {".to_string());

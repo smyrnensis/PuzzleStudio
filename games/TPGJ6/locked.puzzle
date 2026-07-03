@@ -8,11 +8,11 @@ background_color #454545
 text_color #c4d0cb
 }
 
-// animation {
-	// tween {
-		// duration = 30ms
-	// }
-// }
+animation {
+	tween {
+		duration = 300ms
+	}
+}
 
 sounds {
 sfx push seed=301193 type=hit volume=0.2
@@ -22,7 +22,7 @@ sfx locked seed=locked type=lock
 sfx fall seed=fall type=hit
 sfx restart seed=560993 type=jump volume=0.8
 sfx undo seed=613236 type=select volume=0.50
-music locked_room seed=LockedRoom bars=64 height=0.00 bpm=90 volume=0.69
+music locked_room seed=LockedRoom bars=64 height=0.00 bpm=90 volume=1
 }
 
 puzzle main {
@@ -215,6 +215,11 @@ compute_locked_rooms
 check_win
 }
 
+
+lose_conditions {
+no ([ *:open ]) and no([ Goal:open ])
+}
+
 on_level_clear {
 sfx clear
 wait 0.35s
@@ -246,7 +251,7 @@ a = Gate:1
 b = Gate:2
 }
 
-level level 1
+level "level 1"
 #######
 #######
 #######
@@ -255,7 +260,7 @@ level level 1
 #######
 #######
 
-level level 2
+level "level 2"
 ######
 ######
 #..B.#
@@ -264,7 +269,7 @@ level level 2
 ######
 ######
 
-level level 3
+level "level 3"
 #########
 #.....#.#
 #.3.B...#
@@ -273,7 +278,7 @@ level level 3
 ##.#...##
 #########
 
-level level 4
+level "level 4"
 ########
 #......#
 #.2B.B.#
@@ -282,7 +287,7 @@ level level 4
 #......#
 ########
 
-level level 5
+level "level 5"
 #########
 #...#...#
 #.3...B.#
@@ -293,7 +298,7 @@ level level 5
 #...#..P#
 #########
 
-level level 6
+level "level 6"
 #########
 #.......#
 #.PBBBB.#
@@ -303,7 +308,7 @@ level level 6
 #.......#
 #########
 
-level level 7
+level "level 7"
 ########
 #.B.B.B#
 #..B.B.#
@@ -313,7 +318,7 @@ level level 7
 #....B.#
 ########
 
-level level 8
+level "level 8"
 #######
 ###..1#
 ###...#
@@ -323,7 +328,7 @@ level level 8
 #.....#
 #######
 
-level level 9
+level "level 9"
 #######
 #.....#
 #..#..#
@@ -332,7 +337,7 @@ level level 9
 #.....#
 #######
 
-level level 10
+level "level 10"
 #######
 #....##
 #.CC.##
@@ -341,7 +346,7 @@ level level 10
 ###..3#
 #######
 
-level level 11
+level "level 11"
 #######
 #....##
 #.CC2##
@@ -350,7 +355,7 @@ level level 11
 ###...#
 #######
 
-level level 12
+level "level 12"
 #######
 #....##
 #.C.C##
@@ -912,10 +917,7 @@ scene title {
 	}
 }
 
-scene playing(level) {
-	state {
-		main
-	}
+scene playing {
 	layout {
 		main
 	}

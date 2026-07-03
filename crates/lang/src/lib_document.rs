@@ -59,6 +59,10 @@ pub fn parse_game2d_file(path: impl AsRef<Path>) -> Result<LoadedGame, Diagnosti
     parse_game2d_document(&expanded)
 }
 
+pub fn parse_document_assets(source: &str) -> Result<AssetsDef, DiagnosticReport> {
+    Ok(parse_document_shell(source)?.assets)
+}
+
 fn parse_game2d_document(source: &str) -> Result<LoadedGame, DiagnosticReport> {
     let parts = parse_document_source_parts(source)?;
     parse_game2d_from_document_parts(parts)
@@ -386,9 +390,36 @@ fn resolve_inferred_scene_puzzle_slots<'a>(
             };
             puzzle.kind = kind.clone();
         }
+        let resolved_puzzle_kinds = scene
+            .state
+            .puzzles
+            .iter()
+            .map(|puzzle| (puzzle.name.clone(), puzzle.kind.clone()))
+            .collect::<HashMap<_, _>>();
+        resolve_inferred_scene_component_frames(&mut scene.components, &resolved_puzzle_kinds);
     }
 
     Ok(())
+}
+
+fn resolve_inferred_scene_component_frames(
+    components: &mut [SceneComponent],
+    puzzle_kinds: &HashMap<String, String>,
+) {
+    for component in components {
+        match component {
+            SceneComponent::Frame(frame) if frame.kind == INFERRED_SCENE_PUZZLE_KIND => {
+                if let Some(kind) = puzzle_kinds.get(&frame.source) {
+                    frame.kind = kind.clone();
+                }
+            }
+            _ => {
+                if let Some(children) = component.children_mut() {
+                    resolve_inferred_scene_component_frames(children, puzzle_kinds);
+                }
+            }
+        }
+    }
 }
 
 fn implicit_model_scene(kind: &str, model_name: &str) -> SceneDef {
@@ -578,7 +609,7 @@ fn puzzle3_scene_component_json(
         SceneComponent::Conditional(conditional) => {
             let mut out = format!(
                 "{{ \"kind\": \"conditional\", \"condition\": {}, \"children\": [",
-                json_string(&conditional.condition)
+                puzzle3_scene_expr_json(&conditional.condition)
             );
             let mut wrote = false;
             for child in &conditional.children {
@@ -715,6 +746,31 @@ fn puzzle3_scene_expr_json(expr: &SceneExpr) -> String {
             out.push_str("] }");
             out
         }
+        SceneExpr::Binary { op, left, right } => {
+            let op = match op {
+                SceneBinaryOp::And => "and",
+                SceneBinaryOp::Eq => "eq",
+                SceneBinaryOp::NotEq => "neq",
+            };
+            format!(
+                "{{ \"kind\": \"binary\", \"op\": {}, \"left\": {}, \"right\": {} }}",
+                json_string(op),
+                puzzle3_scene_expr_json(left),
+                puzzle3_scene_expr_json(right)
+            )
+        }
+        SceneExpr::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            format!(
+                "{{ \"kind\": \"if\", \"condition\": {}, \"then\": {}, \"else\": {} }}",
+                puzzle3_scene_expr_json(condition),
+                puzzle3_scene_expr_json(then_branch),
+                puzzle3_scene_expr_json(else_branch)
+            )
+        }
     }
 }
 
@@ -725,6 +781,8 @@ fn scene_expr_fixture_text(expr: &SceneExpr) -> String {
         SceneExpr::Int(value) => value.to_string(),
         SceneExpr::Bool(value) => value.to_string(),
         SceneExpr::Call { name, .. } => name.clone(),
+        SceneExpr::Binary { .. } => "<binary>".to_string(),
+        SceneExpr::If { .. } => "<if>".to_string(),
     }
 }
 
@@ -1531,8 +1589,7 @@ fn skip_logical_block(lines: &[String], start: usize) -> usize {
             }
             continue;
         }
-        if logical_line_opens_block(tokens.as_slice()) && !logical_line_is_inline_if(&lines[index])
-        {
+        if line_opens_recovery_block(&lines[index], tokens.as_slice()) {
             depth += 1;
         }
         index += 1;
@@ -1542,11 +1599,16 @@ fn skip_logical_block(lines: &[String], start: usize) -> usize {
 
 fn recover_after_directive_error(lines: &[String], index: usize) -> usize {
     let tokens = split_header_tokens(&lines[index]);
-    if logical_line_opens_block(tokens.as_slice()) && !logical_line_is_inline_if(&lines[index]) {
+    if line_opens_recovery_block(&lines[index], tokens.as_slice()) {
         skip_logical_block(lines, index)
     } else {
         index + 1
     }
+}
+
+fn line_opens_recovery_block(line: &str, tokens: &[&str]) -> bool {
+    (is_block_header_line(line) || logical_line_opens_block(tokens))
+        && !logical_line_is_inline_if(line)
 }
 
 fn logical_line_is_inline_if(line: &str) -> bool {
@@ -1872,7 +1934,7 @@ pub fn resolve_game_entry(path: impl AsRef<Path>) -> Result<PathBuf, DiagnosticR
             return Ok(entry);
         }
         return Err(DiagnosticReport::error(format!(
-            "game folder must contain a .puzzle or .puzzle3 file with game prelude metadata such as title: {}",
+            "game folder must contain a .puzzle or .puzzle3 file that declares a puzzle model: {}",
             path.display()
         )));
     }
@@ -1890,7 +1952,7 @@ pub fn resolve_game_entry(path: impl AsRef<Path>) -> Result<PathBuf, DiagnosticR
                 path.display()
             ))
         })?;
-        if source_has_game_prelude(&source) {
+        if source_declares_game_entry(&source) {
             return Ok(path.to_path_buf());
         }
         let mut dir = path.parent();
@@ -1901,7 +1963,7 @@ pub fn resolve_game_entry(path: impl AsRef<Path>) -> Result<PathBuf, DiagnosticR
             dir = current.parent();
         }
         return Err(DiagnosticReport::error(format!(
-            "puzzle source file has no game prelude and no containing game entry was found: {}",
+            "puzzle source file declares no puzzle model and no containing game entry was found: {}",
             path.display()
         )));
     }
@@ -1912,14 +1974,14 @@ pub fn resolve_game_entry(path: impl AsRef<Path>) -> Result<PathBuf, DiagnosticR
     )))
 }
 
-pub fn source_has_game_prelude(source: &str) -> bool {
+pub fn source_declares_game_entry(source: &str) -> bool {
     let mut depth = 0_i32;
     for raw_line in source.lines() {
         let code = raw_line.split("//").next().unwrap_or("");
         let trimmed = code.trim();
         if depth == 0 {
             let first = trimmed.split_whitespace().next().unwrap_or("");
-            if matches!(first, "title" | "subtitle" | "author" | "homepage") {
+            if matches!(first, "puzzle" | "puzzle3") {
                 return true;
             }
         }
@@ -1969,7 +2031,7 @@ fn game_entry_in_directory(dir: &Path) -> Result<Option<PathBuf>, DiagnosticRepo
                 path.display()
             ))
         })?;
-        if source_has_game_prelude(&source) {
+        if source_declares_game_entry(&source) {
             candidates.push(path);
         }
     }
@@ -2035,7 +2097,7 @@ pub fn discover_game_entries(root: impl AsRef<Path>) -> Result<Vec<PathBuf>, Dia
                     path.display()
                 ))
             })?;
-            if source_has_game_prelude(&source) {
+            if source_declares_game_entry(&source) {
                 candidates.push(path);
             }
         }
@@ -2095,6 +2157,15 @@ fn parse_game2d_expanded_lines_with_shell(
         .into_iter()
         .map(|line| line.text)
         .collect::<Vec<_>>();
+    parse_game2d_expanded_lines_with_shell_inner(&lines, &line_numbers, shell)
+        .map_err(|report| report_with_source_line_numbers(report, &lines, &line_numbers))
+}
+
+fn parse_game2d_expanded_lines_with_shell_inner(
+    lines: &[String],
+    line_numbers: &[usize],
+    shell: &DocumentShell,
+) -> Result<LoadedGame, DiagnosticReport> {
     let mut title = shell.title.clone();
     let mut subtitle = shell.subtitle.clone();
     let mut author = shell.author.clone();
@@ -2136,6 +2207,7 @@ fn parse_game2d_expanded_lines_with_shell(
 
     let mut diagnostics = Vec::new();
     let mut pending_visual_blocks = Vec::<usize>::new();
+    let mut pending_level_blocks = Vec::<PendingLevelBlock>::new();
     let mut i = 0;
     while i < lines.len() {
         let line = &lines[i];
@@ -2167,7 +2239,6 @@ fn parse_game2d_expanded_lines_with_shell(
                 &mut last_level_clear_statements,
                 &mut last_level_clear_local_frame,
                 &mut display_statements,
-                &mut level_blocks,
                 &mut render_overlays,
                 &mut model_sound_triggers,
                 &mut model_operation_sounds,
@@ -2177,6 +2248,7 @@ fn parse_game2d_expanded_lines_with_shell(
                 &mut render,
                 &mut animation,
                 &mut puzzle_screen,
+                &mut pending_level_blocks,
             ) {
                 Ok((next_i, puzzle_name)) => {
                     puzzle_models.push(puzzle_name);
@@ -2273,19 +2345,13 @@ fn parse_game2d_expanded_lines_with_shell(
                 i = next_i;
             }
             ModelTopLevelDirective::Levels => {
-                i = parse_levels_block(
-                    &lines,
-                    i,
-                    &mut level_blocks,
-                    &mut catalog,
-                    &mut render_overlays,
-                    &mut empty_char,
-                    None,
-                )?;
+                pending_level_blocks.push(PendingLevelBlock::levels(i, None));
+                let (_, next_i) = collect_levels_authoring_entry(&lines, i)?;
+                i = next_i;
             }
             ModelTopLevelDirective::Level => {
-                let (level, next_i) = parse_level_block(&lines, i, level_blocks.len())?;
-                level_blocks.push(level);
+                pending_level_blocks.push(PendingLevelBlock::level(i, None));
+                let (_, next_i) = parse_level_block(&lines, i, 0)?;
                 i = next_i;
             }
             ModelTopLevelDirective::PuzzleLifecycle => {
@@ -2302,6 +2368,18 @@ fn parse_game2d_expanded_lines_with_shell(
                 );
                 i = recover_after_directive_error(&lines, i);
             }
+        }
+    }
+    for pending_level in &pending_level_blocks {
+        if let Err(report) = parse_pending_level_block(
+            &lines,
+            pending_level,
+            &mut level_blocks,
+            &mut catalog,
+            &mut render_overlays,
+            &mut empty_char,
+        ) {
+            diagnostics.extend(report.into_diagnostics());
         }
     }
     for visual_start in pending_visual_blocks {
@@ -2560,6 +2638,54 @@ fn parse_game2d_expanded_lines_with_shell(
         render,
         screen: puzzle_screen,
     })
+}
+
+fn report_with_source_line_numbers(
+    report: DiagnosticReport,
+    lines: &[String],
+    line_numbers: &[usize],
+) -> DiagnosticReport {
+    let mut next_search_start_by_source_line = HashMap::<String, usize>::new();
+    let diagnostics = report
+        .into_diagnostics()
+        .into_iter()
+        .map(|mut diagnostic| {
+            if let Some(span) = &mut diagnostic.primary_span
+                && span.line.is_none()
+                && let Some(source_line) = span.source_line.as_deref()
+                && let Some(line_number) = next_source_line_number(
+                    source_line,
+                    lines,
+                    line_numbers,
+                    &mut next_search_start_by_source_line,
+                )
+            {
+                span.line = Some(line_number);
+            }
+            diagnostic
+        })
+        .collect();
+    DiagnosticReport::from_diagnostics(diagnostics)
+}
+
+fn next_source_line_number(
+    source_line: &str,
+    lines: &[String],
+    line_numbers: &[usize],
+    next_search_start_by_source_line: &mut HashMap<String, usize>,
+) -> Option<usize> {
+    let start = next_search_start_by_source_line
+        .get(source_line)
+        .copied()
+        .unwrap_or(0);
+    let found = lines
+        .iter()
+        .enumerate()
+        .skip(start)
+        .find(|(_, line)| line.as_str() == source_line)
+        .map(|(index, _)| index)?;
+    next_search_start_by_source_line.insert(source_line.to_string(), found + 1);
+    line_numbers.get(found).copied()
 }
 
 fn collect_dynamic_selector_warnings(
@@ -2836,26 +2962,20 @@ fn expand_game_imports(
     root: Option<&Path>,
 ) -> Result<String, DiagnosticReport> {
     let mut out = String::new();
-    let mut output_line = 1usize;
-    for line in logical_lines_with_locations(source)? {
-        while output_line < line.line {
-            out.push('\n');
-            output_line += 1;
-        }
-        let tokens = split_header_tokens(&line.text);
+    for raw_line in source.split_inclusive('\n') {
+        let content = raw_line.strip_suffix('\n').unwrap_or(raw_line);
+        let line = strip_line_comment(content).trim();
+        let tokens = split_header_tokens(line);
         if matches!(tokens.as_slice(), ["import", _]) {
-            let path = import_path(tokens[1], &line.text)?;
+            let path = import_path(tokens[1], line)?;
             let imported = read_import_expanded(base_dir, &path, import_stack, root)?;
             out.push_str(&imported);
             if !imported.ends_with('\n') {
                 out.push('\n');
             }
-            output_line += imported.lines().count().max(1);
             continue;
         }
-        out.push_str(&line.text);
-        out.push('\n');
-        output_line += 1;
+        out.push_str(raw_line);
     }
     Ok(out)
 }

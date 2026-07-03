@@ -1,6 +1,7 @@
 use puzzle_core::InputId;
 use puzzle_lang::{
-    KeyTrigger, SceneComponent, SceneEffect, SceneEffectParam, parse_game2d as parse_game,
+    KeyTrigger, SceneComponent, SceneEffect, SceneEffectParam, SceneExpr, SceneTextContent,
+    parse_game2d as parse_game,
 };
 
 #[test]
@@ -185,7 +186,10 @@ scene title {
     let Some(SceneComponent::Conditional(conditional)) = title.components.first() else {
         panic!("expected conditional component");
     };
-    assert_eq!(conditional.condition, "game.has_progress_save");
+    assert!(matches!(
+        &conditional.condition,
+        SceneExpr::Path(path) if path == &vec!["game".to_string(), "has_progress_save".to_string()]
+    ));
     assert!(matches!(
         conditional.children.as_slice(),
         [SceneComponent::Choice(choice)] if choice.effect == SceneEffect::Input("continue_game".to_string())
@@ -193,6 +197,105 @@ scene title {
     assert!(matches!(
         conditional.else_children.as_slice(),
         [SceneComponent::Choice(choice)] if choice.effect == SceneEffect::Input("new_game".to_string())
+    ));
+}
+
+#[test]
+fn scene_if_is_runtime_value_and_fragment_syntax() {
+    let source = r##"
+title "conditional values"
+
+puzzle main {
+layers {
+  layer_1 = Player
+}
+sprites {
+  Player
+    #ffffff
+}
+rules {
+}
+levels {
+  legend {
+    . = empty
+    P = Player
+  }
+  P
+}
+}
+
+scene title {
+  layout {
+    text if game.has_progress_save { "Continue" } else { "New Game" }
+    button join("Save: ", if game.has_progress_save { "yes" } else { "no" }) -> input confirm
+    if game.has_progress_save {
+      choice "Continue" -> input continue_game
+    } else {
+      choice "New Game" -> input new_game
+    }
+  }
+}
+"##;
+
+    let loaded = parse_game(source).unwrap();
+    let title = &loaded.scenes[0];
+    assert!(matches!(
+        &title.components[0],
+        SceneComponent::Text(text)
+            if matches!(&text.content, SceneTextContent::Expr(SceneExpr::If { .. }))
+    ));
+    assert!(matches!(
+        &title.components[1],
+        SceneComponent::Button(button)
+            if matches!(&button.label, SceneExpr::Call { name, args }
+                if name == "join" && args.iter().any(|arg| matches!(arg, SceneExpr::If { .. })))
+    ));
+    assert!(matches!(
+        &title.components[2],
+        SceneComponent::Conditional(conditional)
+            if matches!(&conditional.condition, SceneExpr::Path(path)
+                if path == &vec!["game".to_string(), "has_progress_save".to_string()])
+    ));
+}
+
+#[test]
+fn scene_if_value_uses_universal_balanced_brace_groups() {
+    let source = r##"
+title "nested conditional values"
+
+puzzle main {
+layers {
+  layer_1 = Player
+}
+sprites {
+  Player
+    #ffffff
+}
+rules {
+}
+levels {
+  legend {
+    . = empty
+    P = Player
+  }
+  P
+}
+}
+
+scene title {
+  layout {
+    text if game.has_progress_save { if game.has_progress_save { "Continue }" } else { "Resume" } } else { "New Game" }
+  }
+}
+"##;
+
+    let loaded = parse_game(source).unwrap();
+    assert!(matches!(
+        &loaded.scenes[0].components[0],
+        SceneComponent::Text(text)
+            if matches!(&text.content,
+                SceneTextContent::Expr(SceneExpr::If { then_branch, .. })
+                    if matches!(then_branch.as_ref(), SceneExpr::If { .. }))
     ));
 }
 
@@ -216,7 +319,7 @@ levels {
     . = empty
     P = Player
   }
-  level one {
+  level "one" {
     P
   }
 }
@@ -224,7 +327,7 @@ levels {
 
 scene title {
   layout {
-    choice "Start" -> goto playing(one)
+    choice "Start" -> goto playing("one")
   }
 }
 

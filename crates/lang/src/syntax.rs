@@ -72,7 +72,6 @@ pub(crate) const PUZZLE_LINE_HEAD_KEYWORDS: &[&str] = &[
     "const",
     "direction",
     "for",
-    "group",
     "groups",
     "if",
     "input",
@@ -106,7 +105,6 @@ pub(crate) const PUZZLE_COMPLETION_KEYWORDS: &[&str] = &[
     "const",
     "direction",
     "for",
-    "group",
     "groups",
     "if",
     "input",
@@ -161,6 +159,7 @@ pub(crate) const PARSER_KEYWORDS: &[&str] = &[
     "effect",
     "each",
     "else",
+    "file",
     "flickscreen",
     "for",
     "gap",
@@ -169,7 +168,6 @@ pub(crate) const PARSER_KEYWORDS: &[&str] = &[
     "grid",
     "homepage",
     "puzzle",
-    "group",
     "groups",
     "if",
     "in",
@@ -237,3 +235,85 @@ pub(crate) const PARSER_KEYWORDS: &[&str] = &[
     PUZZLE_LIFECYCLE_BLOCKS[1],
     PUZZLE_LIFECYCLE_BLOCKS[2],
 ];
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ExpectedCompletionValue {
+    Selector,
+    LegendEmpty,
+    VisualDirective,
+    SpriteSelector,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct AssignmentSyntax {
+    pub(crate) rhs_start: usize,
+    pub(crate) expected_completion_values: &'static [ExpectedCompletionValue],
+}
+
+const SELECTOR_EXPECTED: &[ExpectedCompletionValue] = &[ExpectedCompletionValue::Selector];
+const LEGEND_EXPECTED: &[ExpectedCompletionValue] = &[
+    ExpectedCompletionValue::LegendEmpty,
+    ExpectedCompletionValue::Selector,
+];
+const VISUAL_LINE_HEAD_EXPECTED: &[ExpectedCompletionValue] = &[
+    ExpectedCompletionValue::VisualDirective,
+    ExpectedCompletionValue::SpriteSelector,
+];
+
+pub(crate) fn visual_line_head_expected_completion_values() -> &'static [ExpectedCompletionValue] {
+    VISUAL_LINE_HEAD_EXPECTED
+}
+
+pub(crate) fn legend_block_row_syntax(
+    tokens: &[&str],
+    require_rhs: bool,
+) -> Option<AssignmentSyntax> {
+    assignment_syntax(tokens, 1, require_rhs, LEGEND_EXPECTED)
+}
+
+pub(crate) fn legend_directive_syntax(
+    tokens: &[&str],
+    require_rhs: bool,
+) -> Option<AssignmentSyntax> {
+    if tokens.first().copied()? != "legend" {
+        return None;
+    }
+    assignment_syntax(tokens, 2, require_rhs, LEGEND_EXPECTED)
+}
+
+pub(crate) fn level_legend_directive_syntax(
+    tokens: &[&str],
+    require_rhs: bool,
+) -> Option<AssignmentSyntax> {
+    if tokens.first().copied()? != "legend" {
+        return None;
+    }
+    assignment_syntax(tokens, 2, require_rhs, SELECTOR_EXPECTED)
+}
+
+pub(crate) fn named_selector_assignment_syntax(
+    tokens: &[&str],
+    require_rhs: bool,
+) -> Option<AssignmentSyntax> {
+    assignment_syntax(tokens, 1, require_rhs, SELECTOR_EXPECTED)
+}
+
+fn assignment_syntax(
+    tokens: &[&str],
+    lhs_token_count: usize,
+    require_rhs: bool,
+    expected_completion_values: &'static [ExpectedCompletionValue],
+) -> Option<AssignmentSyntax> {
+    let separator = lhs_token_count;
+    if tokens.get(separator).copied()? != "=" {
+        return None;
+    }
+    let rhs_start = separator + 1;
+    if require_rhs && tokens.len() <= rhs_start {
+        return None;
+    }
+    Some(AssignmentSyntax {
+        rhs_start,
+        expected_completion_values,
+    })
+}

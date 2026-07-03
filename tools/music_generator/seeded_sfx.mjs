@@ -101,7 +101,7 @@ export function createSfxPlayer(audioContext, effect, options = {}) {
     }
     stop();
     output = audioContext.createGain();
-    output.gain.value = clamp(Number(options.volume ?? 1), 0, 1);
+    output.gain.value = normalizePlaybackVolume(options.volume ?? 1, "SFX volume");
     output.connect(audioContext.destination);
     const preparedLayers = effect.layers.map((layer) => prepareLayer(audioContext, layer));
     const scheduledStart = Math.max(startsAt, audioContext.currentTime + SFX_START_LOOKAHEAD_SECONDS);
@@ -131,6 +131,17 @@ export function createSfxPlayer(audioContext, effect, options = {}) {
   }
 
   return { start, stop };
+}
+
+function normalizePlaybackVolume(value, label) {
+  const volume = Number(value);
+  if (!Number.isFinite(volume)) {
+    throw new Error(`${label} must be finite`);
+  }
+  if (volume < 0) {
+    throw new Error(`${label} must be zero or greater`);
+  }
+  return volume;
 }
 
 function alignLayersToAttack(layers, duration) {

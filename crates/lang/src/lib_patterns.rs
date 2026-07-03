@@ -90,6 +90,7 @@ struct RuleBodyAlternative {
     guards: Vec<Guard>,
     components: Vec<PatternComponentTemplate>,
     writes: Vec<WriteOpTemplate>,
+    tag_captures: TagCaptureValues,
 }
 
 fn append_move_sound_effects(
@@ -510,7 +511,7 @@ fn parse_rewrite_effect_value(
         [name, op, value] if is_global_update_operator(op) => Ok(vec![EffectAst::UpdateGlobal {
             name: (*name).to_string(),
             op: parse_global_update_op(op, line)?,
-            value: parse_global_value(value, line)?,
+            value: parse_global_update_value(value, line)?,
         }]),
         _ => Err(parse_error(
             line,
@@ -658,7 +659,7 @@ fn parse_simple_rewrite_effects(
                 effects.push(EffectAst::UpdateGlobal {
                     name: name.to_string(),
                     op: parse_global_update_op(tokens[index + 1], line)?,
-                    value: parse_global_value(tokens[index + 2], line)?,
+                    value: parse_global_update_value(tokens[index + 2], line)?,
                 });
                 index += 3;
             }
@@ -731,6 +732,39 @@ fn parse_global_update_op(op: &str, line: &str) -> Result<GlobalUpdateOp, Diagno
         "%=" => Ok(GlobalUpdateOp::Remainder),
         _ => Err(parse_error(line, "unknown global update operator")),
     }
+}
+
+fn parse_global_update_value(token: &str, line: &str) -> Result<GlobalValueAst, DiagnosticReport> {
+    if let Ok(value) = parse_global_value(token, line) {
+        return Ok(GlobalValueAst::Literal(value));
+    }
+    validate_tag_capture_reference(token, line)?;
+    Ok(GlobalValueAst::TagCapture(token.to_string()))
+}
+
+fn validate_tag_capture_reference(token: &str, line: &str) -> Result<(), DiagnosticReport> {
+    if token == "*" {
+        return Ok(());
+    }
+    if let Some(label) = token.strip_prefix("*#") {
+        return validate_tag_capture_label(label, line);
+    }
+    if let Some((name, label)) = token.split_once('#') {
+        if !is_identifier(name) {
+            return Err(parse_error(
+                line,
+                "tag capture reference must be *, *#label, name, or name#label",
+            ));
+        }
+        return validate_tag_capture_label(label, line);
+    }
+    if is_identifier(token) {
+        return Ok(());
+    }
+    Err(parse_error(
+        line,
+        "global update value must be true, false, integer, or tag capture reference",
+    ))
 }
 
 fn neutral_direction() -> Direction {
@@ -856,6 +890,7 @@ struct PatternComponentTemplate {
 #[derive(Clone, Debug)]
 struct MatchCellTemplate {
     offset: OffsetTemplate,
+    require_null: bool,
     require_objects: Vec<ObjectId>,
     require_object_sets: Vec<ObjectSetMatcher>,
     forbid_objects: Vec<ObjectId>,
@@ -985,6 +1020,7 @@ enum BlockPart {
 #[derive(Clone, Debug, Default)]
 struct BlockCell {
     keep: bool,
+    require_null: bool,
     require: Vec<ObjectSelector>,
     forbid: Vec<ObjectSelector>,
     require_cell_scratch: Vec<ParsedScratch>,
@@ -999,8 +1035,61 @@ struct ObjectSelector {
     family_wildcard: Option<FamilyWildcardSelector>,
     relative_constraints: Vec<RelativeSelectorConstraint>,
     dynamic_guards: HashMap<ObjectId, Vec<DynamicSelectorGuard>>,
+    tag_captures: HashMap<ObjectId, Vec<TagCapture>>,
     scratch: Vec<ParsedScratch>,
     occurrence_label: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct TagCapture {
+    key: String,
+    value: String,
+}
+
+#[derive(Clone, Debug, Default)]
+struct TagCaptureValues {
+    values: HashMap<String, TagCaptureValue>,
+}
+
+#[derive(Clone, Debug)]
+struct TagCaptureValue {
+    count: usize,
+    value: String,
+}
+
+impl TagCaptureValues {
+    fn insert(&mut self, capture: &TagCapture) {
+        self.values
+            .entry(capture.key.clone())
+            .and_modify(|existing| {
+                existing.count += 1;
+            })
+            .or_insert_with(|| TagCaptureValue {
+                count: 1,
+                value: capture.value.clone(),
+            });
+    }
+
+    fn resolve(&self, key: &str, line: &str) -> Result<i64, DiagnosticReport> {
+        let Some(value) = self.values.get(key) else {
+            return Err(parse_error(
+                line,
+                &format!("unknown tag capture reference: {key}"),
+            ));
+        };
+        if value.count != 1 {
+            return Err(parse_error(
+                line,
+                &format!("tag capture reference `{key}` is ambiguous"),
+            ));
+        }
+        parse_global_value(&value.value, line).map_err(|_| {
+            parse_error(
+                line,
+                "tag capture values used in var updates must be true, false, or integers",
+            )
+        })
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -1302,10 +1391,16 @@ fn parse_block_cell(
     let mut tokens = cell_tokens.iter().map(String::as_str).peekable();
     while let Some(token) = tokens.next() {
         if let Some(scratch) = parse_cell_scratch_token(token, line)? {
+            if parsed.require_null {
+                return Err(parse_error(line, "`null` cell pattern cannot contain other tokens"));
+            }
             parsed.require_cell_scratch.extend(scratch);
             continue;
         }
         if let Some(anonymous) = anonymous_scratch_for_token(token) {
+            if parsed.require_null {
+                return Err(parse_error(line, "`null` cell pattern cannot contain other tokens"));
+            }
             let selector = tokens
                 .next()
                 .ok_or_else(|| parse_error(line, "scratch sugar must be followed by a selector"))?;
@@ -1332,11 +1427,17 @@ fn parse_block_cell(
             continue;
         }
         if token == "no" {
+            if parsed.require_null {
+                return Err(parse_error(line, "`null` cell pattern cannot contain other tokens"));
+            }
             let selector = tokens
                 .next()
                 .ok_or_else(|| parse_error(line, "`no` must be followed by a selector"))?;
             if selector == "no" {
                 return Err(parse_error(line, "`no no` is not a valid cell pattern"));
+            }
+            if selector == "null" {
+                return Err(parse_error(line, "`no null` is not a valid cell pattern"));
             }
             if let Some(scratch) = parse_cell_scratch_token(selector, line)? {
                 parsed.forbid_cell_scratch.extend(scratch);
@@ -1353,6 +1454,24 @@ fn parse_block_cell(
                 global_names,
             )?);
         } else {
+            if token == "null" {
+                if parsed.require_null
+                    || !parsed.require.is_empty()
+                    || !parsed.forbid.is_empty()
+                    || !parsed.require_cell_scratch.is_empty()
+                    || !parsed.forbid_cell_scratch.is_empty()
+                {
+                    return Err(parse_error(
+                        line,
+                        "`null` cell pattern cannot contain other tokens",
+                    ));
+                }
+                parsed.require_null = true;
+                continue;
+            }
+            if parsed.require_null {
+                return Err(parse_error(line, "`null` cell pattern cannot contain other tokens"));
+            }
             parsed.require.push(resolve_object_selector(
                 token,
                 line,
@@ -1424,6 +1543,7 @@ fn resolve_object_selector(
             family_wildcard: None,
             relative_constraints: Vec::new(),
             dynamic_guards: HashMap::new(),
+            tag_captures: HashMap::new(),
             scratch,
             occurrence_label,
         });
@@ -1437,6 +1557,7 @@ fn resolve_object_selector(
             family_wildcard: None,
             relative_constraints: Vec::new(),
             dynamic_guards: HashMap::new(),
+            tag_captures: HashMap::new(),
             scratch,
             occurrence_label,
         });
@@ -1492,9 +1613,14 @@ fn resolve_object_selector(
                 source_token_parts.push(axis.clone());
                 return Ok(None);
             };
+            let (value, tag_capture_key) =
+                selector_tag_capture_key(value, axis, schema.axes.len(), line)?;
             if value == "*" {
                 source_token_parts.push("*".to_string());
-                return Ok(None);
+                return Ok(tag_capture_key.map(|key| SelectorConstraint::Capture {
+                    axis_index: index,
+                    key,
+                }));
             }
             if let Some(relative) = parse_relative_direction_value(value) {
                 if axis != "directions" {
@@ -1515,7 +1641,10 @@ fn resolve_object_selector(
                     return Err(ambiguous_selector_tag_error(axis, parts[0], axis, line));
                 }
                 source_token_parts.push(axis.clone());
-                Ok(None)
+                Ok(Some(SelectorConstraint::Capture {
+                    axis_index: index,
+                    key: tag_capture_key.unwrap_or_else(|| axis.clone()),
+                }))
             } else if let ValueExpr::MapCall { arg, .. } = &expr {
                 if arg != axis {
                     return Err(parse_error(
@@ -1585,6 +1714,7 @@ fn resolve_object_selector(
                         values.contains(&variant.values[index])
                     }
                     Some(SelectorConstraint::Relative { .. }) => true,
+                    Some(SelectorConstraint::Capture { .. }) => true,
                     Some(SelectorConstraint::Mapped { .. })
                     | Some(SelectorConstraint::DynamicGlobal { .. })
                     | None => true,
@@ -1639,12 +1769,14 @@ fn resolve_object_selector(
             family_wildcard: None,
             relative_constraints,
             dynamic_guards: HashMap::new(),
+            tag_captures: HashMap::new(),
             scratch,
             occurrence_label,
         });
     }
 
     let dynamic_guards = dynamic_selector_guards(&constraints, schema, line)?;
+    let tag_captures = selector_tag_captures(&constraints, schema, &alternatives)?;
     Ok(ObjectSelector {
         token,
         alternatives,
@@ -1652,6 +1784,7 @@ fn resolve_object_selector(
         family_wildcard: None,
         relative_constraints,
         dynamic_guards,
+        tag_captures,
         scratch,
         occurrence_label,
     })
@@ -1737,6 +1870,7 @@ fn resolve_qualified_value_set_selector(
             .then_some(FamilyWildcardSelector { mapped_objects }),
         relative_constraints: Vec::new(),
         dynamic_guards,
+        tag_captures: HashMap::new(),
         scratch,
         occurrence_label,
     })
@@ -1882,6 +2016,7 @@ fn resolve_schema_family_wildcard_selector(
         family_wildcard,
         relative_constraints: Vec::new(),
         dynamic_guards: HashMap::new(),
+        tag_captures: HashMap::new(),
         scratch,
         occurrence_label,
     })
@@ -1977,6 +2112,9 @@ fn split_selector_occurrence_label<'a>(
     selector: &'a str,
     line: &str,
 ) -> Result<(&'a str, Option<String>), DiagnosticReport> {
+    if selector.contains(':') {
+        return Ok((selector, None));
+    }
     let Some((base, label)) = selector.split_once('#') else {
         return Ok((selector, None));
     };
@@ -1996,6 +2134,82 @@ fn split_selector_occurrence_label<'a>(
         ));
     }
     Ok((base, Some(label.to_string())))
+}
+
+fn selector_tag_capture_key<'a>(
+    value: &'a str,
+    axis: &str,
+    axis_count: usize,
+    line: &str,
+) -> Result<(&'a str, Option<String>), DiagnosticReport> {
+    let Some((base, label)) = value.split_once('#') else {
+        if value == axis {
+            return Ok((value, Some(axis.to_string())));
+        }
+        if value == "*" && axis_count == 1 {
+            return Ok((value, Some("*".to_string())));
+        }
+        return Ok((value, None));
+    };
+    validate_tag_capture_label(label, line)?;
+    if base == "*" {
+        return Ok((base, Some(format!("*#{label}"))));
+    }
+    if base == axis {
+        return Ok((base, Some(format!("{axis}#{label}"))));
+    }
+    Err(parse_error(
+        line,
+        "tag capture labels must attach to * or the schema tag slot name",
+    ))
+}
+
+fn validate_tag_capture_label(label: &str, line: &str) -> Result<(), DiagnosticReport> {
+    if label.is_empty()
+        || !label
+            .chars()
+            .all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
+    {
+        return Err(parse_error(
+            line,
+            "tag capture label may only contain letters, numbers, and _",
+        ));
+    }
+    Ok(())
+}
+
+fn selector_tag_captures(
+    constraints: &[Option<SelectorConstraint>],
+    schema: &ObjectSchema,
+    alternatives: &[ObjectId],
+) -> Result<HashMap<ObjectId, Vec<TagCapture>>, DiagnosticReport> {
+    let capture_constraints = constraints
+        .iter()
+        .flatten()
+        .filter_map(|constraint| match constraint {
+            SelectorConstraint::Capture { axis_index, key } => Some((*axis_index, key)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    if capture_constraints.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let mut out = HashMap::<ObjectId, Vec<TagCapture>>::new();
+    for variant in &schema.variants {
+        if !alternatives.contains(&variant.object) {
+            continue;
+        }
+        for (axis_index, key) in &capture_constraints {
+            let value = variant.values.get(*axis_index).ok_or_else(|| {
+                DiagnosticReport::error("internal schema variant missing tag value".to_string())
+            })?;
+            out.entry(variant.object).or_default().push(TagCapture {
+                key: (*key).clone(),
+                value: value.clone(),
+            });
+        }
+    }
+    Ok(out)
 }
 
 fn labeled_selector_token(selector: &str, occurrence_label: Option<&str>) -> String {
@@ -2079,6 +2293,10 @@ fn is_scratch_name_value_atom(value: &str) -> bool {
 enum SelectorConstraint {
     Fixed(String),
     ValueSet(Vec<String>),
+    Capture {
+        axis_index: usize,
+        key: String,
+    },
     Relative {
         axis_index: usize,
         relative: RelativeDirection,
@@ -2319,6 +2537,8 @@ fn compile_before_after_blocks(
                 "before and after blocks must have matching cell and ellipsis layout",
             ));
         }
+        validate_null_component_has_anchor_cell(before_component, line)?;
+        validate_null_cell_rewrite(before_component, after_component, line)?;
     }
     let occupancy_objects = object_layers
         .iter()
@@ -2344,6 +2564,7 @@ fn compile_before_after_blocks(
             let before_by_token = before_occurrences_by_token(&before_occurrences);
             'assignment_loop: for assignment in assignments {
                 let all_before_occurrences = &before_occurrences;
+                let tag_captures = tag_captures_for_assignment(&before_occurrences, &assignment);
                 let mut components = Vec::new();
                 let mut writes = Vec::new();
                 let mut before_token_counts = HashMap::<String, usize>::new();
@@ -2547,6 +2768,7 @@ fn compile_before_after_blocks(
 
                             component_cells.push(MatchCellTemplate {
                                 offset: offset.clone(),
+                                require_null: before_cell.require_null,
                                 require_objects,
                                 require_object_sets,
                                 forbid_objects,
@@ -2702,6 +2924,7 @@ fn compile_before_after_blocks(
                     guards: dynamic_guards.clone(),
                     components,
                     writes,
+                    tag_captures,
                 });
             }
         }
@@ -3320,6 +3543,66 @@ fn block_shapes_match(before: &BlockComponent, after: &BlockComponent) -> bool {
         })
 }
 
+fn validate_null_cell_rewrite(
+    before: &BlockComponent,
+    after: &BlockComponent,
+    line: &str,
+) -> Result<(), DiagnosticReport> {
+    for (before_part, after_part) in before.rows.iter().flatten().zip(after.rows.iter().flatten()) {
+        let (BlockPart::Cell(before_cell), BlockPart::Cell(after_cell)) =
+            (before_part, after_part)
+        else {
+            continue;
+        };
+        if after_cell.require_null && !before_cell.require_null {
+            return Err(parse_error(
+                line,
+                "`null` can only be matched on the before side of a rewrite",
+            ));
+        }
+        if before_cell.require_null && !block_cell_is_empty_or_null(after_cell) {
+            return Err(parse_error(
+                line,
+                "`null` matched cells cannot be written to",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_null_component_has_anchor_cell(
+    component: &BlockComponent,
+    line: &str,
+) -> Result<(), DiagnosticReport> {
+    let mut has_null = false;
+    let mut has_non_null_cell = false;
+    for part in component.rows.iter().flatten() {
+        let BlockPart::Cell(cell) = part else {
+            continue;
+        };
+        if cell.require_null {
+            has_null = true;
+        } else {
+            has_non_null_cell = true;
+        }
+    }
+    if has_null && !has_non_null_cell {
+        return Err(parse_error(
+            line,
+            "`null` patterns must include at least one non-null cell",
+        ));
+    }
+    Ok(())
+}
+
+fn block_cell_is_empty_or_null(cell: &BlockCell) -> bool {
+    !cell.keep
+        && cell.require.is_empty()
+        && cell.forbid.is_empty()
+        && cell.require_cell_scratch.is_empty()
+        && cell.forbid_cell_scratch.is_empty()
+}
+
 fn block_cell_forbid_objects(cell: &BlockCell) -> Vec<ObjectId> {
     let mut objects = Vec::new();
     for selector in &cell.forbid {
@@ -3703,6 +3986,7 @@ struct SelectorOccurrence {
     token: String,
     alternatives: Vec<ObjectId>,
     occurrence_label: Option<String>,
+    tag_captures: HashMap<ObjectId, Vec<TagCapture>>,
     cell_index: usize,
     binding: u16,
 }
@@ -3730,6 +4014,7 @@ fn collect_before_occurrences(block: &PatternBlock) -> Vec<SelectorOccurrence> {
                             token: selector.token.clone(),
                             alternatives: selector.alternatives.clone(),
                             occurrence_label: selector.occurrence_label.clone(),
+                            tag_captures: selector.tag_captures.clone(),
                             cell_index,
                             binding: next_binding,
                         });
@@ -3949,6 +4234,24 @@ fn before_occurrences_by_token(occurrences: &[SelectorOccurrence]) -> HashMap<St
             .push(index);
     }
     by_token
+}
+
+fn tag_captures_for_assignment(
+    occurrences: &[SelectorOccurrence],
+    assignment: &[SelectorAssignmentValue],
+) -> TagCaptureValues {
+    let mut captures = TagCaptureValues::default();
+    for (occurrence, value) in occurrences.iter().zip(assignment) {
+        let Some(object) = assignment_concrete_object(value) else {
+            continue;
+        };
+        if let Some(object_captures) = occurrence.tag_captures.get(&object) {
+            for capture in object_captures {
+                captures.insert(capture);
+            }
+        }
+    }
+    captures
 }
 
 fn block_cell_object_occurrences(

@@ -67,7 +67,7 @@ mod tests {
                 name: "push".to_string(),
                 seed: "push".to_string(),
                 type_target: "hit".to_string(),
-                volume: 0.25,
+                volume: 1.25,
             }],
             music: vec![MusicSoundDef {
                 name: "theme".to_string(),
@@ -75,7 +75,7 @@ mod tests {
                 height: 0.7,
                 bars: 2,
                 bpm: 120,
-                volume: 0.5,
+                volume: 1.5,
             }],
         };
 
@@ -89,7 +89,7 @@ mod tests {
                     "name": "push",
                     "seed": "push",
                     "type": "hit",
-                    "volume": 0.25,
+                    "volume": 1.25,
                 }],
                 "music": [{
                     "name": "theme",
@@ -97,7 +97,7 @@ mod tests {
                     "height": 0.7,
                     "bars": 2,
                     "bpm": 120,
-                    "volume": 0.5,
+                    "volume": 1.5,
                 }],
             })
         );

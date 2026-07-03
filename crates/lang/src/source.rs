@@ -222,7 +222,9 @@ fn split_structural_line(
 
         if inline_brace_depth > 0 {
             current.push(ch);
-            if ch == '{' {
+            if ch == '"' {
+                in_string = true;
+            } else if ch == '{' {
                 inline_brace_depth += 1;
             } else if ch == '}' {
                 inline_brace_depth = inline_brace_depth.saturating_sub(1);
@@ -248,7 +250,7 @@ fn split_structural_line(
                 current.push(ch);
             }
             '{' if square_depth == 0 && paren_depth == 0 => {
-                if is_inline_selector_brace(line, index) {
+                if is_inline_brace_group(line, index, &current) {
                     inline_brace_depth = 1;
                     current.push(ch);
                     continue;
@@ -282,7 +284,7 @@ fn split_structural_line(
     if inline_brace_depth > 0 {
         return Err(parse_error(
             line,
-            "inline selector scratch is missing closing brace",
+            "inline brace group is missing closing brace",
         ));
     }
     push_trimmed_piece(&mut pieces, &current);
@@ -296,14 +298,42 @@ fn push_trimmed_piece(pieces: &mut Vec<String>, piece: &str) {
     }
 }
 
-fn is_inline_selector_brace(line: &str, index: usize) -> bool {
-    let before = line[..index].chars().next_back();
-    let after = line[index + 1..].chars().next();
-    before.is_some_and(is_selector_token_char) && after.is_some_and(|ch| !ch.is_whitespace())
+fn is_inline_brace_group(line: &str, index: usize, current_segment: &str) -> bool {
+    if matching_inline_brace(line, index).is_none() {
+        return false;
+    }
+    !is_structural_block_open_segment(current_segment)
 }
 
-fn is_selector_token_char(ch: char) -> bool {
-    ch.is_ascii_alphanumeric() || matches!(ch, '_' | '@' | ':' | '*')
+fn matching_inline_brace(line: &str, open: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+    for (relative, ch) in line[open..].char_indices() {
+        let index = open + relative;
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match ch {
+            '"' => in_string = true,
+            '{' => depth += 1,
+            '}' => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0 {
+                    return Some(index);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 fn normalize_brace_blocks(lines: &[LogicalLine]) -> Result<Vec<LogicalLine>, DiagnosticReport> {
@@ -397,7 +427,7 @@ fn normalize_brace_block_line(
         return Ok(());
     }
 
-    let structural_view = strip_inline_scratch_blocks(line)?;
+    let structural_view = strip_inline_brace_groups(line);
     if structural_view.contains('{') || structural_view.contains('}') {
         return Err(parse_error(line, "braces must be used at block boundaries"));
     }
@@ -461,29 +491,53 @@ fn starts_inline_block(tokens: &[&str], line: &str) -> bool {
     ) || matches!(tokens, ["button", ..] if line.trim_end().ends_with(" with"))
 }
 
-fn strip_inline_scratch_blocks(line: &str) -> Result<String, DiagnosticReport> {
+fn is_structural_block_open_segment(segment: &str) -> bool {
+    let segment = segment.trim();
+    if segment.is_empty() || segment == "else" || segment.ends_with("->") {
+        return true;
+    }
+    let tokens = split_header_tokens(segment);
+    starts_inline_block(&tokens, segment)
+}
+
+fn strip_inline_brace_groups(line: &str) -> String {
     let mut out = String::with_capacity(line.len());
-    let mut chars = line.chars().peekable();
-    while let Some(ch) = chars.next() {
-        if ch != '{' {
+    let mut index = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+    while index < line.len() {
+        let ch = line[index..]
+            .chars()
+            .next()
+            .expect("index is within string");
+        if in_string {
             out.push(ch);
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            index += ch.len_utf8();
             continue;
         }
-        let mut closed = false;
-        for inner in chars.by_ref() {
-            if inner == '{' {
-                return Err(parse_error(line, "nested inline braces are not supported"));
-            }
-            if inner == '}' {
-                closed = true;
-                break;
+        if ch == '"' {
+            in_string = true;
+            out.push(ch);
+            index += ch.len_utf8();
+            continue;
+        }
+        if ch == '{' {
+            if let Some(close) = matching_inline_brace(line, index) {
+                index = close + 1;
+                continue;
             }
         }
-        if !closed {
-            out.push('{');
-        }
+        out.push(ch);
+        index += ch.len_utf8();
     }
-    Ok(out)
+    out
 }
 
 #[cfg(test)]
@@ -542,6 +596,8 @@ pub(crate) struct SourceToken {
 pub(crate) struct SourceContextLine {
     pub(crate) tokens: Vec<String>,
     pub(crate) token_spans: Vec<SourceToken>,
+    pub(crate) structural_token_spans: Vec<SourceToken>,
+    pub(crate) structural_lines: Vec<String>,
     pub(crate) scope: Option<SourceScope>,
     pub(crate) start: usize,
     pub(crate) content: String,
@@ -617,11 +673,12 @@ pub(crate) fn scan_source_context(source: &str) -> SourceContext {
             in_unbraced_visual_shape_body,
         );
 
-        for stack_line in source_context_stack_lines(
+        let structural_lines = source_context_stack_lines(
             trimmed,
             &mut structural_block_stack,
             &mut normalize_levels_brace_depth,
-        ) {
+        );
+        for stack_line in &structural_lines {
             let tokens = source_context_tokens(&stack_line);
             let current = block_stack.last().copied();
             if stack_line == "}" {
@@ -636,6 +693,8 @@ pub(crate) fn scan_source_context(source: &str) -> SourceContext {
         context.lines.push(SourceContextLine {
             tokens: tokens.iter().map(|token| (*token).to_string()).collect(),
             token_spans: source_line_tokens(raw, offset),
+            structural_token_spans: source_context_token_spans(raw, offset),
+            structural_lines,
             scope: current,
             start: offset,
             content: content.to_string(),
@@ -742,6 +801,32 @@ fn source_context_tokens(line: &str) -> Vec<&str> {
     line.split(|ch: char| ch.is_whitespace() || matches!(ch, '{' | '}' | ',' | ';'))
         .filter(|token| !token.is_empty())
         .collect()
+}
+
+fn source_context_token_spans(line: &str, line_offset: usize) -> Vec<SourceToken> {
+    let mut tokens = Vec::new();
+    let mut start = None;
+    for (index, ch) in line.char_indices() {
+        if ch.is_whitespace() || matches!(ch, '{' | '}' | ',' | ';') {
+            if let Some(token_start) = start.take() {
+                tokens.push(SourceToken {
+                    text: line[token_start..index].to_string(),
+                    start: line_offset + token_start,
+                    end: line_offset + index,
+                });
+            }
+        } else if start.is_none() {
+            start = Some(index);
+        }
+    }
+    if let Some(token_start) = start {
+        tokens.push(SourceToken {
+            text: line[token_start..].to_string(),
+            start: line_offset + token_start,
+            end: line_offset + line.len(),
+        });
+    }
+    tokens
 }
 
 pub(crate) fn source_line_tokens(line: &str, line_offset: usize) -> Vec<SourceToken> {
@@ -1037,6 +1122,33 @@ if some([ Gate:1{checked} ]) {
 
         assert!(lines.iter().any(|line| line == "else {"), "{lines:?}");
         assert!(!lines.iter().any(|line| line == "else"), "{lines:?}");
+    }
+
+    #[test]
+    fn logical_lines_classify_braces_by_structural_header_not_keyword_exception() {
+        let lines = logical_lines(
+            r#"
+scene title {
+layout {
+text if outer { if inner { "A }" } else { "B" } } else { "C" }
+if outer { text "A" } else { text "B" }
+}
+}
+"#,
+        )
+        .unwrap();
+
+        assert!(
+            lines
+                .iter()
+                .any(|line| line
+                    == r#"text if outer { if inner { "A }" } else { "B" } } else { "C" }"#),
+            "{lines:?}"
+        );
+        assert!(lines.iter().any(|line| line == "if outer {"), "{lines:?}");
+        assert!(lines.iter().any(|line| line == r#"text "A""#), "{lines:?}");
+        assert!(lines.iter().any(|line| line == "else {"), "{lines:?}");
+        assert!(lines.iter().any(|line| line == r#"text "B""#), "{lines:?}");
     }
 
     #[test]

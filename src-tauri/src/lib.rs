@@ -11,7 +11,7 @@ use std::time::{Duration, UNIX_EPOCH};
 
 use html_editor::{
     CreateSourceFileRequest, CreateSourceFolderRequest, DeleteWorkspaceEntryRequest, EditorService,
-    RenameWorkspaceEntryRequest, SaveRequest,
+    LoadWorkspaceDocumentRequest, RenameWorkspaceEntryRequest, SaveRequest,
 };
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager};
@@ -83,6 +83,13 @@ struct NewPuzzleSourceCommandRequest {
 #[serde(rename_all = "camelCase")]
 struct SaveCommandRequest {
     source: String,
+    puzzle_path: String,
+    workspace_root: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LoadWorkspaceDocumentCommandRequest {
     puzzle_path: String,
     workspace_root: Option<String>,
 }
@@ -308,6 +315,25 @@ fn save_source(
         .save_source_file(&request)
         .map_err(|error| error.to_string())?;
     Ok("{\"ok\":true}".to_string())
+}
+
+#[tauri::command]
+fn load_workspace_document(
+    request: LoadWorkspaceDocumentCommandRequest,
+    state: tauri::State<'_, DesktopState>,
+) -> Result<serde_json::Value, String> {
+    let services = state
+        .services
+        .lock()
+        .map_err(|_| "desktop project state is unavailable".to_string())?;
+    let Some(service) = service_for_workspace(&services, request.workspace_root.as_deref()) else {
+        return Err("No project is open. Open a project folder before loading files.".to_string());
+    };
+    let request = LoadWorkspaceDocumentRequest::new(request.puzzle_path);
+    let source = service
+        .load_workspace_document_json(&request)
+        .map_err(|error| error.to_string())?;
+    serde_json::from_str(&source).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -748,7 +774,11 @@ fn watch_workspace(
 }
 
 fn editor_workspace_changed_value(service: &EditorService) -> Result<serde_json::Value, String> {
-    let mut payload = editor_source_value(service)?;
+    let source = service
+        .source_json_with_content()
+        .map_err(|error| error.to_string())?;
+    let mut payload: serde_json::Value =
+        serde_json::from_str(&source).map_err(|error| error.to_string())?;
     if let serde_json::Value::Object(object) = &mut payload {
         object.insert("external".to_string(), serde_json::Value::Bool(true));
     }
@@ -1108,6 +1138,7 @@ pub fn run() {
             editor_docs,
             new_puzzle_source,
             save_source,
+            load_workspace_document,
             export_html,
             create_source_file,
             create_source_folder,
@@ -1328,7 +1359,7 @@ mod tests {
     }
 
     #[test]
-    fn desktop_new_puzzle_source_uses_authoring_template() {
+    fn desktop_new_puzzle_source_is_blank() {
         let source = new_puzzle_source(NewPuzzleSourceCommandRequest {
             title: "Desktop Test".to_string(),
         });

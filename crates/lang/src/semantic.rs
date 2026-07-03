@@ -1,14 +1,14 @@
 use crate::source::{SourceScope, SourceToken, scan_source_context};
-use crate::syntax::{PUZZLE_COMPLETION_KEYWORDS, PUZZLE_LIFECYCLE_BLOCKS};
+use crate::syntax::{ExpectedCompletionValue, PUZZLE_COMPLETION_KEYWORDS, PUZZLE_LIFECYCLE_BLOCKS};
 use crate::{
     ANIMATION_BLOCK_OPTIONS, ANIMATION_TWEEN_OPTIONS, LEVEL_MENU_OPTIONS, LevelPathPartSyntax,
     MUSIC_SOUND_SETTING_OPTIONS, MapHeaderTokenSyntax, PUZZLE_RENDER_BLOCK_OPTIONS,
     PUZZLE_RENDER_GRID_OPTIONS, RewriteEffectCommandSyntax, SFX_SOUND_SETTING_OPTIONS,
     SceneStateLhsSyntax, SoundSettingValueSyntax, SurfaceOptionBlock, THEME_SETTING_SPECS,
     level_path_part_syntax, map_header_token_syntax, metadata_directive_value_token_index,
-    rewrite_direction_prefix_token_index, rewrite_effect_command_syntax,
-    rewrite_effect_semantic_tokens, scene_effect_command_syntax, scene_effect_semantic_tokens,
-    scene_state_lhs_syntax, sound_setting_value_syntax, surface_option_block_before_line,
+    rewrite_effect_command_syntax, rewrite_effect_semantic_tokens, scene_effect_command_syntax,
+    scene_effect_semantic_tokens, scene_state_lhs_syntax, sound_setting_value_syntax,
+    surface_option_block_before_line,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -183,6 +183,10 @@ fn contextual_completion_slots(
         return Some(slots);
     }
 
+    if let Some(slots) = grammar_completion_slots(scope, before) {
+        return Some(slots);
+    }
+
     if inside_scratch_selector_attrs(before) {
         return Some(vec![
             SemanticCompletionSlot::Directions,
@@ -221,6 +225,53 @@ fn contextual_completion_slots(
     }
 
     None
+}
+
+fn grammar_completion_slots(
+    scope: Option<SourceScope>,
+    before: &str,
+) -> Option<Vec<SemanticCompletionSlot>> {
+    let tokens = split_completion_line_tokens(before);
+    let classes = grammar_completion_value_classes(scope, &tokens)?;
+    Some(completion_slots_for_value_classes(classes))
+}
+
+fn grammar_completion_value_classes(
+    scope: Option<SourceScope>,
+    tokens: &[&str],
+) -> Option<&'static [ExpectedCompletionValue]> {
+    let syntax = match scope {
+        Some(SourceScope::Legend) => crate::syntax::legend_block_row_syntax(tokens, false),
+        Some(SourceScope::Puzzle) => crate::syntax::legend_directive_syntax(tokens, false),
+        Some(SourceScope::Level | SourceScope::UnbracedLevel) => {
+            crate::syntax::level_legend_directive_syntax(tokens, false)
+        }
+        Some(SourceScope::Group) => crate::syntax::named_selector_assignment_syntax(tokens, false),
+        Some(SourceScope::Layers) => crate::syntax::named_selector_assignment_syntax(tokens, false),
+        _ => None,
+    }?;
+    Some(syntax.expected_completion_values)
+}
+
+fn completion_slots_for_value_classes(
+    classes: &[ExpectedCompletionValue],
+) -> Vec<SemanticCompletionSlot> {
+    let mut slots = Vec::new();
+    for class in classes {
+        match class {
+            ExpectedCompletionValue::Selector | ExpectedCompletionValue::SpriteSelector => {
+                slots.push(SemanticCompletionSlot::Objects);
+                slots.push(SemanticCompletionSlot::Groups);
+            }
+            ExpectedCompletionValue::LegendEmpty => {
+                slots.push(SemanticCompletionSlot::Keywords(LEGEND_COMPLETION_KEYWORDS));
+            }
+            ExpectedCompletionValue::VisualDirective => {
+                slots.push(SemanticCompletionSlot::Keywords(VISUAL_COMPLETION_KEYWORDS));
+            }
+        }
+    }
+    slots
 }
 
 fn cursor_is_after_effect_arrow(before: &str) -> bool {
@@ -289,13 +340,15 @@ fn line_head_completion_slots(
             | SourceScope::Levels
             | SourceScope::Level
             | SourceScope::UnbracedLevel
-            | SourceScope::Visuals
             | SourceScope::VisualShapeTable
             | SourceScope::VisualShapeEntry
             | SourceScope::VisualColorTable,
         ) => vec![SemanticCompletionSlot::Keywords(
             completion_keywords_for_scope(scope),
         )],
+        Some(SourceScope::Visuals) => completion_slots_for_value_classes(
+            crate::syntax::visual_line_head_expected_completion_values(),
+        ),
         Some(SourceScope::Other) if current_statement_block_before_line(context, line_index) => {
             vec![
                 SemanticCompletionSlot::Keywords(puzzle_authoring::RULE_STATEMENT_HEAD_KEYWORDS),
@@ -860,7 +913,7 @@ fn is_completion_char(ch: char) -> bool {
 
 const SOUNDS_COMPLETION_KEYWORDS: &[&str] = &["music", "restart", "sfx", "undo"];
 
-const ASSET_COMPLETION_KEYWORDS: &[&str] = &["css", "script"];
+const ASSET_COMPLETION_KEYWORDS: &[&str] = &["css", "file", "script"];
 
 const TAG_COMPLETION_KEYWORDS: &[&str] = &[];
 const GROUP_COMPLETION_KEYWORDS: &[&str] = &["each"];
@@ -920,10 +973,10 @@ const COMPLETION_KEYWORDS: &[&str] = &[
     "css",
     "direction",
     "each",
+    "file",
     "else",
     "for",
     "from",
-    "group",
     "groups",
     "homepage",
     "if",
@@ -1004,7 +1057,6 @@ fn scan_semantic_line(
         return;
     }
     scan_authoring_semantic_line(scope, tokens, ranges);
-    scan_rewrite_direction_prefix(tokens, ranges);
     if !is_scene_semantic_scope(scope) && first.text != "scene" {
         scan_rewrite_effect_line(scope, tokens, ranges);
         return;
@@ -1514,16 +1566,6 @@ fn is_semantic_identifier(value: &str) -> bool {
         && chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
 }
 
-fn scan_rewrite_direction_prefix(tokens: &[LineToken<'_>], ranges: &mut Vec<SemanticToken>) {
-    let token_texts = tokens.iter().map(|token| token.text).collect::<Vec<_>>();
-    let Some(index) = rewrite_direction_prefix_token_index(&token_texts)
-        .or_else(|| rewrite3_prefix_token_index(&token_texts))
-    else {
-        return;
-    };
-    add_frame_orientation_token(ranges, tokens[index]);
-}
-
 fn scan_rewrite_effect_line(
     scope: Option<SourceScope>,
     tokens: &[LineToken<'_>],
@@ -1550,74 +1592,6 @@ fn scan_rewrite_effect_line(
 fn scan_rewrite_effect_tokens(tokens: &[LineToken<'_>], ranges: &mut Vec<SemanticToken>) {
     let source_tokens = line_tokens_as_source_tokens(tokens);
     ranges.extend(rewrite_effect_semantic_tokens(&source_tokens));
-}
-
-fn rewrite3_prefix_token_index(tokens: &[&str]) -> Option<usize> {
-    let mut index = 0usize;
-    while tokens.get(index).is_some_and(|token| {
-        matches!(
-            *token,
-            "fix" | "once" | "once_all" | "once_per_level" | "repeat"
-        )
-    }) {
-        index += 1;
-    }
-    let direction = tokens.get(index).copied()?;
-    if !rewrite3_orientation_word(direction) {
-        return None;
-    }
-    tokens
-        .get(index + 1)
-        .is_some_and(|token| matches!(*token, "[" | "{"))
-        .then_some(index)
-}
-
-fn rewrite3_orientation_word(value: &str) -> bool {
-    matches!(
-        value,
-        "forward" | "backward" | "frames" | "canonical" | "mirrored"
-    ) || frame_orientation_word(value)
-}
-
-fn frame_orientation_word(value: &str) -> bool {
-    let parts = value.split(':').collect::<Vec<_>>();
-    matches!(parts.len(), 2 | 3) && parts.into_iter().all(frame_slot_word)
-}
-
-fn frame_slot_word(value: &str) -> bool {
-    matches!(
-        value,
-        "_" | "up"
-            | "down"
-            | "left"
-            | "right"
-            | "forward"
-            | "backward"
-            | "directions"
-            | "horizontal"
-            | "vertical"
-    )
-}
-
-fn add_frame_orientation_token(ranges: &mut Vec<SemanticToken>, token: LineToken<'_>) {
-    if !token.text.contains(':') {
-        add_token_range(ranges, token, SemanticKind::Keyword);
-        return;
-    }
-
-    let mut offset = 0usize;
-    for part in token.text.split(':') {
-        if !part.is_empty() {
-            add_token_subrange(
-                ranges,
-                token,
-                offset,
-                offset + part.len(),
-                SemanticKind::Keyword,
-            );
-        }
-        offset += part.len() + 1;
-    }
 }
 
 fn scan_scene_semantic_line(
@@ -1943,6 +1917,114 @@ move
                 && token.end == move_start + "move".len()
                 && token.kind == SemanticKind::Effect
         }));
+    }
+
+    #[test]
+    fn classifies_parser_owned_rewrite_prefixes_as_keywords() {
+        let source = r#"
+title rewrite_prefix_semantics
+
+puzzle board {
+layers {
+actor = Player Wall
+}
+rules {
+input [ Player | ] -> [ | Player ]
+input directions [ Player | ] -> [ | Player ]
+once input [ Player | ] -> [ | Player ]
+once input directions [ Player | ] -> [ | Player ]
+input horizontal [ Player | ] -> [ | Player ]
+input [ Player | Wall ] -> push_player
+input directions [ Player | Wall ] -> push_player
+if some(input directions [ Player | Wall ]) {
+[ Player ] -> [ Player ]
+}
+if some(input [ Player | Wall ]) {
+[ Player ] -> [ Player ]
+}
+random left [ Player | ] -> [ | Player ]
+routine push_player {
+[ Player ] -> [ Player ]
+}
+}
+}
+"#;
+        let tokens = semantic_tokens(source);
+        let input_start = source.find("input [").unwrap();
+        let input_directions_start = source.find("input directions").unwrap();
+        let once_input_start = source.find("once input").unwrap() + "once ".len();
+        let once_input_directions_start =
+            source.find("once input directions").unwrap() + "once ".len();
+        let input_horizontal_start = source.find("input horizontal").unwrap();
+        let conditional_call_input_start = source.find("input [ Player | Wall ]").unwrap();
+        let conditional_call_input_directions_start =
+            source.find("input directions [ Player | Wall ]").unwrap();
+        let condition_input_start = source.rfind("input directions [ Player | Wall ]").unwrap();
+        let condition_directions_start = condition_input_start + "input ".len();
+        let condition_shorthand_input_start = source.rfind("input [ Player | Wall ]").unwrap();
+        let random_left_start = source.find("random left").unwrap() + "random ".len();
+
+        for (start, text) in [
+            (input_start, "input"),
+            (input_directions_start, "input"),
+            (once_input_start, "input"),
+            (once_input_directions_start, "input"),
+            (input_horizontal_start, "input"),
+            (conditional_call_input_start, "input"),
+            (conditional_call_input_directions_start, "input"),
+            (condition_input_start, "input"),
+            (condition_directions_start, "directions"),
+            (condition_shorthand_input_start, "input"),
+            (random_left_start, "left"),
+        ] {
+            assert!(tokens.iter().any(|token| {
+                token.start == start
+                    && token.end == start + text.len()
+                    && token.kind == SemanticKind::Keyword
+            }));
+        }
+    }
+
+    #[test]
+    fn preserves_all_parser_surface_semantic_tokens() {
+        let source = r#"
+title surface_semantic_projection
+
+puzzle board {
+layers {
+actor = Player Wall
+}
+rules {
+input [ Player | ] -> [ | Player ]
+input directions [ Player | ] -> [ | Player ]
+once input [ Player | ] -> [ | Player ]
+once input directions [ Player | ] -> [ | Player ]
+input [ Player | Wall ] -> push_player
+input directions [ Player | Wall ] -> push_player
+if some(input [ Player | Wall ]) {
+[ Player ] -> [ Player ]
+}
+if some(input directions [ Player | Wall ]) {
+[ Player ] -> [ Player ]
+}
+routine push_player {
+[ Player ] -> [ Player ]
+}
+}
+}
+"#;
+        let surface_tokens = crate::surface_document_semantic_tokens(source);
+        let semantic_tokens = semantic_tokens(source);
+        assert!(
+            !surface_tokens.is_empty(),
+            "fixture must exercise parser-owned surface tokens"
+        );
+        for surface_token in surface_tokens {
+            assert!(
+                semantic_tokens.contains(&surface_token),
+                "semantic tokens must preserve parser-owned surface token {surface_token:?}"
+            );
+        }
     }
 
     #[test]

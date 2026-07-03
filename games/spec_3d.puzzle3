@@ -46,9 +46,6 @@ layout {
 }
 
 scene playing {
-state {
-  puzzle3 sokoban
-}
 keys {
 q Escape -> goto level_select	
 }
@@ -60,7 +57,7 @@ layout {
   row {
     title "Microban 3D"
   }
-  puzzle3 sokoban size 8 8
+  sokoban = puzzle3 sokoban size 8 8
 }
 }
 

@@ -8,9 +8,10 @@ use puzzle_core::{
 };
 use puzzle_lang::{
     ArrowKey, KeyTrigger, Level, LoadedDocumentModel, LoadedGame, ResourceSelection,
-    SceneAlignXDef, SceneAlignYDef, SceneComponent, SceneDef, SceneEffect, SceneEffectParam,
-    SceneExpr, SceneLayoutDef, ScenePuzzleInitializer, SceneStateLifetime, SceneTextContent,
-    SceneTransitionTrigger, SceneValue, ThemeDef, ViewportModeDef, ViewportSizeDef, parse_game2d,
+    SceneAlignXDef, SceneAlignYDef, SceneBinaryOp, SceneComponent, SceneDef, SceneEffect,
+    SceneEffectParam, SceneExpr, SceneLayoutDef, ScenePuzzleInitializer, SceneStateLifetime,
+    SceneTextContent, SceneTransitionTrigger, SceneValue, ThemeDef, ViewportModeDef,
+    ViewportSizeDef, parse_game2d,
 };
 use puzzle_play::{
     AnimationEvent, GameSession, LevelProgressSaveData, MessageEvent, PersistentVarSaveData,
@@ -614,7 +615,7 @@ fn scene_def_value(scene: &SceneDef) -> Value {
             let mut value = serde_json::Map::new();
             match &transition.trigger {
                 SceneTransitionTrigger::Condition(condition) => {
-                    value.insert("condition".to_string(), Value::String(condition.clone()));
+                    value.insert("condition".to_string(), scene_expr_value(condition));
                 }
                 SceneTransitionTrigger::SceneStart => {
                     value.insert("lifecycle".to_string(), Value::String("scene_start".to_string()));
@@ -756,6 +757,10 @@ fn scene_component_value(component: &SceneComponent) -> Value {
                 SceneTextContent::Path(path) => {
                     value.insert("source".to_string(), Value::String("path".to_string()));
                     value.insert("path".to_string(), Value::String(path.join(".")));
+                }
+                SceneTextContent::Expr(expr) => {
+                    value.insert("source".to_string(), Value::String("expr".to_string()));
+                    value.insert("content".to_string(), scene_expr_value(expr));
                 }
             }
             Value::Object(value)
@@ -949,6 +954,30 @@ fn scene_expr_value(expr: &SceneExpr) -> Value {
             "name": name,
             "args": args.iter().map(scene_expr_value).collect::<Vec<_>>(),
         }),
+        SceneExpr::Binary { op, left, right } => json!({
+            "kind": "binary",
+            "op": scene_binary_op_value(*op),
+            "left": scene_expr_value(left),
+            "right": scene_expr_value(right),
+        }),
+        SceneExpr::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => json!({
+            "kind": "if",
+            "condition": scene_expr_value(condition),
+            "then": scene_expr_value(then_branch),
+            "else": scene_expr_value(else_branch),
+        }),
+    }
+}
+
+fn scene_binary_op_value(op: SceneBinaryOp) -> &'static str {
+    match op {
+        SceneBinaryOp::And => "and",
+        SceneBinaryOp::Eq => "eq",
+        SceneBinaryOp::NotEq => "neq",
     }
 }
 
@@ -2160,9 +2189,10 @@ step board
 
     #[test]
     fn transition_flickscreen_focuses_player_group() {
-        let source = include_str!("../../../games/Transition.puzzle");
+        let source =
+            include_str!("../../../crates/lang/tests/fixtures/puzzlescript/gallery/transition.ps");
         let mut bridge =
-            StandaloneSessionBridge::from_source(source, "games/Transition.puzzle").unwrap();
+            StandaloneSessionBridge::from_source(source, "fixtures/transition.ps").unwrap();
 
         let playing: Value = serde_json::from_str(
             &bridge

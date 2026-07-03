@@ -42,6 +42,14 @@ const defaultSong = generateSong("default-check", { tone: 0.5 });
 assert.equal(defaultSong.input.bpm, 100);
 assert.equal(defaultSong.input.bars, 32);
 assert.equal(generateSong("wide-bpm-check", { bpm: 175 }).input.bpm, 175, "non-UI callers should keep access to the wider BPM range");
+const loudSong = generateSong("loud-check", { volume: 1.6 });
+assert.equal(loudSong.input.volume, 1.6, "music input volume should preserve gain above 1");
+assert.equal(loudSong.playbackScore.mix.volume, 1.6, "music playback volume should preserve gain above 1");
+assert.throws(
+  () => generateSong("negative-volume-check", { volume: -0.1 }),
+  /music volume must be zero or greater/,
+  "negative music volume should fail visibly",
+);
 
 const long = generateSong("same-seed", { tone: 0.5, bpm: 110, bars: 64 });
 assert.equal(long.debug.sectionPlan.length, 8);

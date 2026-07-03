@@ -15,6 +15,6 @@ levels main of main {
     P = Player
   }
 
-  level ascii
+  level "ascii"
   P
 }

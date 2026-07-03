@@ -13,7 +13,9 @@ layers {
 actor = Chain Left Right UpMover Wall
 }
 
-group movers = Chain Left Right UpMover
+groups {
+movers = Chain Left Right UpMover
+}
 
 sprites {
 Chain
@@ -81,55 +83,52 @@ U = UpMover
 # = Wall
 }
 
-level chain {
+level "chain" {
 CC.
 }
 
-level head_on {
+level "head_on" {
 L.R
 }
 
-level corner {
+level "corner" {
 L.
 .U
 }
 
-level three_way {
+level "three_way" {
 L.R
 .U.
 }
 
-level wall_block {
+level "wall_block" {
 L#
 }
 
-level cantmove_plus_move {
+level "cantmove_plus_move" {
 L#.C.
 }
 }
 
 scene title {
 title
-choice "Play" -> goto playing(test.chain)
+choice "Play" -> goto playing
 choice "Level Select" -> goto level_select
 }
 
 scene playing {
-state {
-board = puzzle move_collision
-}
 layout {
 row {
 title
 subtitle level.label
 }
-board
+move_collision
 }
 keys {
 q Escape -> level_select
 }
 rules {
-step board
+step move_collision
 }
 routine level_select {
 goto level_select

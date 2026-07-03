@@ -3,391 +3,389 @@ subtitle "Canonical Fixban with movement tween"
 author "PuzzleStudio"
 
 theme puzzlescript {
-	background_color #444
+background_color #444
 }
 
 default_wait_time = 100ms
 
 animation {
-	tween {
-		duration = 300ms
-	}
+tween {
+duration = 30ms
+}
 }
 
 puzzle fixban {
-	tags {
-		kind = A B C P
-		box_kind = A B C
-	}
+tags {
+kind = A B C P
+box_kind = A B C
+}
 
-	map rotate directions {
-		up -> right
-		right -> down
-		down -> left
-		left -> up
-	}
+map rotate directions {
+up -> right
+right -> down
+down -> left
+left -> up
+}
 
-	layers {
-		@Floor
-		@Shade
-		target = Target:kind
-		each Safe:kind
-		@light = @LightBase @Light:kind
-		solid = Box:kind Wall
-		each @Boundary:directions
-		each @Corner:directions
-	}
+layers {
+@Floor
+@Shade
+target = Target:kind
+each Safe:kind
+@light = @LightBase @Light:kind
+solid = Box:kind Wall
+each @Boundary:directions
+each @Corner:directions
+}
 
-	groups {
-		@wall_visual = @Boundary:directions @Corner:directions
-	}
+groups {
+@wall_visual = @Boundary:directions @Corner:directions
+}
 
-	win_conditions {
-		count(target) == 0
-	}
+win_conditions {
+count(target) == 0
+}
 
-	lose_conditions any {
-		some [ Wall | ; Box:kind no Box:P | Wall ]
-		for k in box_kind {
-			some [ Box:k no Safe:k ]
-		}
-	}
+lose_conditions any {
+some [ Wall | ; Box:kind no Box:P | Wall ]
+for k in box_kind {
+some [ Box:k no Safe:k ]
+}
+}
 
-	routine @fill_floor {
-		[ no @Floor ] -> [ @Floor ]
-	}
+routine @fill_floor {
+[ no @Floor ] -> [ @Floor ]
+}
 
-	routine @wall_edges {
-		for d in directions {
-			d [ Wall no @Boundary:d | no Wall ] -> [ Wall @Boundary:d | ]
-		}
-	}
+routine @wall_edges {
+for d in directions {
+d [ Wall no @Boundary:d | no Wall ] -> [ Wall @Boundary:d | ]
+}
+}
 
-	routine @wall_corners_270 {
-		for d in directions {
-			d [ Wall no @Corner:d | Wall ; Wall | no Wall ] -> [ Wall @Corner:d | Wall ; Wall | ]
-		}
-	}
+routine @wall_corners_270 {
+for d in directions {
+d [ Wall no @Corner:d | Wall ; Wall | no Wall ] -> [ Wall @Corner:d | Wall ; Wall | ]
+}
+}
 
-	routine mark_safe {
-		[ Safe:kind ] -> []
-		for k in box_kind {
-			[ Target:k no Safe:k ] -> [ Target:k Safe:k ]
-			[ no Wall | no Wall no Safe:k | Safe:k ] -> [ | Safe:k | Safe:k ]
-		}
-	}
+routine mark_safe {
+[ Safe:kind ] -> []
+for k in box_kind {
+[ Target:k no Safe:k ] -> [ Target:k Safe:k ]
+[ no Wall | no Wall no Safe:k | Safe:k ] -> [ | Safe:k | Safe:k ]
+}
+}
 
-	routine @refresh_board {
-		[ @wall_visual ] -> []
-		[ @light ] -> []
-		[ @Shade ] -> []
-		[ Box:kind no @light ] -> [ Box:kind @LightBase ]
-		down [ Box:kind | no @Shade ] -> [ Box:kind | @Shade ]
-		for k in kind {
-			repeat [ @LightBase Target:k ] -> [ @Light:k Target:k ]
-		}
-		@wall_edges
-		@wall_corners_270
-	}
+routine @refresh_board {
+[ @wall_visual ] -> []
+[ @light ] -> []
+[ @Shade ] -> []
+[ Box:kind no @light ] -> [ Box:kind @LightBase ]
+down [ Box:kind | no @Shade ] -> [ Box:kind | @Shade ]
+for k in kind {
+repeat [ @LightBase Target:k ] -> [ @Light:k Target:k ]
+}
+@wall_edges
+@wall_corners_270
+}
 
-	on_level_start {
-		mark_safe
-	}
+on_level_start {
+mark_safe
+@fill_floor
+@refresh_board
+}
 
-	on_display {
-		@fill_floor
-		@refresh_board
-	}
-	rules {
-		input [ Box:P ] -> [ > Box:P ]
-		[ > Box:* | Box:* ] -> [ > Box:* | > Box:* ]
-		[ > Box:* @light ] -> [ > Box:* > @light ]
-		move
-		for k in kind {
-			[ Box:k Target:k ] -> [ Wall ]
-		}
-	}
+rules {
+input [ Box:P ] -> [ > Box:P ]
+[ > Box:* | Box:* ] -> [ > Box:* | > Box:* ]
+[ > Box:* @light ] -> [ > Box:* > @light ]
+move
+for k in kind {
+[ Box:k Target:k ] -> [ Wall ]
+}
+@refresh_board
+}
 
-	sprites {
-		colors {
-			piece_color:kind {
-				A = #4a4
-				B = #a4a
-				C = #46c
-				P = #000
-			}
-		}
+on_level_clear {
+wait 0.3s
+next_level
+}
 
-		shapes {
-			mark:kind {
-				A {
-					00000
-					01010
-					00100
-					01010
-					00000
-				}
-				B {
-					00000
-					00100
-					01010
-					00100
-					00000
-				}
-				C {
-					00000
-					00100
-					00100
-					00100
-					00000
-				}
-				P {
-					00000
-					00000
-					01010
-					00000
-					00000
-				}
-			}
+sprites {
+colors {
+piece_color:kind {
+A = #4a4
+B = #a4a
+C = #46c
+P = #000
+}
+}
 
-			edge:directions rotate from up {
-				11111
-				00000
-				00000
-				00000
-				00000
-			}
+shapes {
+mark:kind {
+A {
+00000
+01010
+00100
+01010
+00000
+}
+B {
+00000
+00100
+01010
+00100
+00000
+}
+C {
+00000
+00100
+00100
+00100
+00000
+}
+P {
+00000
+00000
+01010
+00000
+00000
+}
+}
 
-			corner:directions rotate from up {
-				00001
-				00000
-				00000
-				00000
-				00000
-			}
+edge:directions rotate from up {
+11111
+00000
+00000
+00000
+00000
+}
 
-			floor {
-				00000
-				00000
-				00100
-				00000
-				00000
-			}
+corner:directions rotate from up {
+00001
+00000
+00000
+00000
+00000
+}
 
-			shade {
-				00000
-				00000
-				00000
-				.....
-				.....
-			}
-		}
+floor {
+00000
+00000
+00100
+00000
+00000
+}
 
-		@Floor {
-			#cfcfcf #c5c5c5
-			floor
-		}
+shade {
+00000
+00000
+00000
+.....
+.....
+}
+}
 
-		@Shade {
-			#0002
-			shade
-		}
+@Floor {
+#cfcfcf #c5c5c5
+floor
+}
 
-		Box:kind {
-			piece_color:kind #00000000
-			mark:kind
-		}
+@Shade {
+#0002
+shade
+}
 
-		Target:kind {
-			#00000000 piece_color:kind
-			mark:kind
-		}
+Box:kind {
+piece_color:kind #00000000
+mark:kind
+}
 
-		Safe:kind {
-			#00000000
-		}
+Target:kind {
+#00000000 piece_color:kind
+mark:kind
+}
 
-		@LightBase {
-			#fff
-		}
+Safe:kind {
+#00000000
+}
 
-		@Light:kind {
-			piece_color:kind
-		}
+@LightBase {
+#fff
+}
 
-		@Boundary:directions {
-			#00000000 #555
-			edge:directions
-		}
+@Light:kind {
+piece_color:kind
+}
 
-		@Corner:directions {
-			#00000000 #555
-			corner:directions
-		}
+@Boundary:directions {
+#00000000 #555
+edge:directions
+}
 
-		Wall {
-			#444
-		}
-	}
+@Corner:directions {
+#00000000 #555
+corner:directions
+}
+
+Wall {
+#444
+}
+}
 }
 
 levels fixban of fixban {
-	legend {
-		. = empty
-		a = Target:A
-		b = Target:B
-		c = Target:C
-		p = Target:P
-		A = Box:A
-		B = Box:B
-		C = Box:C
-		P = Box:P
-		# = Wall
-		1 = Box:A Target:B
-		2 = Box:B Target:A
-	}
+legend {
+. = empty
+a = Target:A
+b = Target:B
+c = Target:C
+p = Target:P
+A = Box:A
+B = Box:B
+C = Box:C
+P = Box:P
+# = Wall
+1 = Box:A Target:B
+2 = Box:B Target:A
+}
 
-	level level_1
-	########
-	##.a####
-	##A.####
-	##a...##
-	##..A.##
-	##P.####
-	########
+level level_1
+########
+##.a####
+##A.####
+##a...##
+##..A.##
+##P.####
+########
 
-	level level_2
-	########
-	#...####
-	#P.AA..#
-	###Aa..#
-	##.....#
-	##a.a.##
-	########
+level level_2
+########
+#...####
+#P.AA..#
+###Aa..#
+##.....#
+##a.a.##
+########
 
-	level level_3
-	#######
-	###..##
-	#.AB..#
-	#.#.P.#
-	#.ab.##
-	#######
+level level_3
+#######
+###..##
+#.AB..#
+#.#.P.#
+#.ab.##
+#######
 
-	level level_4
-	#########
-	###..####
-	###A.####
-	##.bBa.##
-	##.P...##
-	###..####
-	#########
+level level_4
+#########
+###..####
+###A.####
+##.bBa.##
+##.P...##
+###..####
+#########
 
-	level level_5
-	#######
-	###..##
-	#Pb..##
-	#.#BBb#
-	#..aA.#
-	#....##
-	#######
+level level_5
+#######
+###..##
+#Pb..##
+#.#BBb#
+#..aA.#
+#....##
+#######
 
-	level level_6
-	########
-	#......#
-	#.2..1.#
-	#.#.P#.#
-	#.#2.1.#
-	#......#
-	########
+level level_6
+########
+#......#
+#.2..1.#
+#.#.P#.#
+#.#2.1.#
+#......#
+########
 
-	level level_7
-	########
-	#....#p#
-	#.B.Bb.#
-	##.Aa..#
-	###.b.P#
-	########
+level level_7
+########
+#....#p#
+#.B.Bb.#
+##.Aa..#
+###.b.P#
+########
 
-	level level_8
-	########
-	####...#
-	#PA.b2.#
-	#.1p.B.#
-	#...a..#
-	########
+level level_8
+########
+####...#
+#PA.b2.#
+#.1p.B.#
+#...a..#
+########
 }
 
 scene title {
-	title
-	subtitle
-	choice "Continue" -> goto playing
-	choice "New Game" -> input new_game
-	choice "Level Select" -> goto level_select
-	rules {
-		new_game -> {
-			clear_game_progress
-			start playing(fixban.level_1)
-		}
-	}
+title
+subtitle
+choice "Continue" -> goto playing
+choice "New Game" -> {
+clear_game_progress
+start playing
+}
+choice "Level Select" -> goto level_select
 }
 
 scene playing {
-	state {
-		board = puzzle fixban
-	}
-	layout {
-		row {
-			title
-			subtitle level.label
-		}
-		puzzle
-	}
-	keys {
-		Escape -> open_menu
-		q -> level_select
-	}
-	rules {
-		step board
-	}
-	routine open_menu {
-		goto menu
-	}
-	routine level_select {
-		goto level_select
-	}
+layout {
+row {
+title
+subtitle level.label
+}
+board = puzzle fixban
+}
+keys {
+Escape -> open_menu
+q -> level_select
+}
+rules {
+step board
+}
+routine open_menu {
+goto menu
+}
+routine level_select {
+goto level_select
+}
 }
 
 scene menu {
-	layout {
-		text "Menu"
-		column {
-			button "Resume" -> goto playing
-			button "Restart" -> playing.restart
-			button "Level Select" -> goto level_select
-		}
-	}
-	keys {
-		Escape Enter Space -> resume
-		q -> level_select
-	}
-	routine resume {
-		goto playing
-	}
-	routine level_select {
-		goto level_select
-	}
+layout {
+text "Menu"
+column {
+button "Resume" -> goto playing
+button "Restart" -> playing.restart
+button "Level Select" -> goto level_select
+}
+}
+keys {
+Escape Enter Space -> resume
+q -> level_select
+}
+routine resume {
+goto playing
+}
+routine level_select {
+goto level_select
+}
 }
 
 scene level_select {
-	layout {
-		text "Select a level"
-		level_menu
-		button "Back" -> goto title
-	}
-	keys {
-		q Escape -> back_to_title
-	}
-	routine back_to_title {
-		goto title
-	}
+layout {
+text "Select a level"
+level_menu
+button "Back" -> goto title
+}
+keys {
+q Escape -> back_to_title
+}
+routine back_to_title {
+goto title
+}
 }

@@ -103,6 +103,7 @@ fn collect_levels_authoring_entry(
     let first = &lines[start];
     let mut entry = vec![first.clone()];
     let mut depth = 1usize;
+
     let mut i = start + 1;
     while i < lines.len() {
         let line = &lines[i];
@@ -200,8 +201,8 @@ fn parse_sounds_block(
                 )?;
                 validate_sound_atom(seed, line, "sfx seed")?;
                 validate_sound_atom(type_target, line, "sfx type")?;
-                if !(0.0..=1.0).contains(&volume) {
-                    return Err(parse_error(line, "sfx volume must be between 0 and 1"));
+                if volume < 0.0 {
+                    return Err(parse_error(line, "sfx volume must be zero or greater"));
                 }
                 sounds.sfx.push(SfxSoundDef {
                     name: (*name).to_string(),
@@ -251,8 +252,8 @@ fn parse_sounds_block(
                 if !(40..=180).contains(&bpm) {
                     return Err(parse_error(line, "music bpm must be between 40 and 180"));
                 }
-                if !(0.0..=1.0).contains(&volume) {
-                    return Err(parse_error(line, "music volume must be between 0 and 1"));
+                if volume < 0.0 {
+                    return Err(parse_error(line, "music volume must be zero or greater"));
                 }
                 sounds.music.push(MusicSoundDef {
                     name: (*name).to_string(),
@@ -266,7 +267,7 @@ fn parse_sounds_block(
             _ => {
                 return Err(parse_error(
                     line,
-                    "sounds entry must be: sfx <name> seed=<seed> type=<type> volume=<0..1> | music <name> seed=<seed> bars=<8|16|32|64> height=<0..1> bpm=<40..180> volume=<0..1>",
+                    "sounds entry must be: sfx <name> seed=<seed> type=<type> volume=<gain> | music <name> seed=<seed> bars=<8|16|32|64> height=<0..1> bpm=<40..180> volume=<gain>",
                 ));
             }
         }
@@ -576,10 +577,14 @@ fn parse_assets_block(
                 kind: AssetKind::Script,
                 path: parse_asset_path(path, line)?,
             }),
+            ["file", path] => assets.entries.push(AssetDef {
+                kind: AssetKind::File,
+                path: parse_asset_path(path, line)?,
+            }),
             _ => {
                 return Err(parse_error(
                     line,
-                    "assets entry must be: css \"path\" | script \"path\"",
+                    "assets entry must be: css \"path\" | script \"path\" | file \"path\"",
                 ));
             }
         }
@@ -745,7 +750,6 @@ fn parse_puzzle_definition(
     last_level_clear_statements: &mut Option<Vec<StatementAst>>,
     last_level_clear_local_frame: &mut Option<LocalFrame<ObjectId>>,
     display_statements: &mut Option<Vec<StatementAst>>,
-    level_blocks: &mut Vec<LevelBlock>,
     render_overlays: &mut OverlayDefs,
     model_sound_triggers: &mut Vec<ModelSoundTriggerSpec>,
     model_operation_sounds: &mut Vec<ModelOperationSoundSpec>,
@@ -755,6 +759,7 @@ fn parse_puzzle_definition(
     render: &mut PuzzleRenderDef,
     animation: &mut AnimationDef,
     puzzle_screen: &mut PuzzleScreenDef,
+    pending_level_blocks: &mut Vec<PendingLevelBlock>,
 ) -> Result<(usize, String), DiagnosticReport> {
     let header = split_header_tokens(&lines[start]);
     let name = match header.as_slice() {
@@ -767,6 +772,8 @@ fn parse_puzzle_definition(
         }
     };
     validate_qualified_identifier(name, &lines[start], "puzzle name")?;
+
+    collect_puzzle_tag_declarations(lines, start + 1, catalog)?;
 
     let mut i = start + 1;
     let mut diagnostics = Vec::new();
@@ -788,7 +795,7 @@ fn parse_puzzle_definition(
                 if tokens.len() != 1 {
                     return Err(parse_error(line, "tags header must be: tags"));
                 }
-                i = parse_tags_block(lines, i, catalog)?;
+                i = skip_tags_block(lines, i)?;
             }
             "map" => {
                 let value_sets = catalog_value_sets(catalog);
@@ -955,25 +962,13 @@ fn parse_puzzle_definition(
                 }
             }
             "group" => {
-                if tokens.len() == 1 {
-                    diagnostics.extend(
-                        parse_error(line, "`group { ... }` was removed; use `groups { ... }`")
-                            .into_diagnostics(),
-                    );
-                    i = skip_logical_block(lines, i);
+                let message = if tokens.len() == 1 {
+                    "`group { ... }` was removed; use `groups { ... }`"
                 } else {
-                    parse_group_directive(
-                        &tokens,
-                        line,
-                        &catalog.object_names,
-                        &catalog.object_schemas,
-                        &catalog_value_sets(&catalog),
-                        &catalog.maps,
-                        &catalog.visual_objects,
-                        &mut catalog.object_groups,
-                    )?;
-                    i += 1;
-                }
+                    "`group <name> = ...` was removed; use `groups { <name> = ... }`"
+                };
+                diagnostics.extend(parse_error(line, message).into_diagnostics());
+                i = recover_after_directive_error(lines, i);
             }
             "direction" => {
                 if let Some(direction) = parse_direction_directive(&tokens, line, catalog)? {
@@ -1165,19 +1160,13 @@ fn parse_puzzle_definition(
                 i = recover_after_directive_error(lines, i);
             }
             "levels" => {
-                i = parse_levels_block(
-                    lines,
-                    i,
-                    level_blocks,
-                    catalog,
-                    render_overlays,
-                    empty_char,
-                    Some(name),
-                )?;
+                pending_level_blocks.push(PendingLevelBlock::levels(i, Some(name.to_string())));
+                let (_, next_i) = collect_levels_authoring_entry(lines, i)?;
+                i = next_i;
             }
             "level" => {
-                let (level, next_i) = parse_level_block(lines, i, level_blocks.len())?;
-                level_blocks.push(level);
+                pending_level_blocks.push(PendingLevelBlock::level(i, Some(name.to_string())));
+                let (_, next_i) = parse_level_block(lines, i, 0)?;
                 i = next_i;
             }
             other => {
@@ -1264,9 +1253,88 @@ fn parse_level_block(
     start: usize,
     existing_count: usize,
 ) -> Result<(LevelBlock, usize), DiagnosticReport> {
+    parse_level_block_with_default_puzzle(lines, start, existing_count, None)
+}
+
+fn parse_level_block_with_default_puzzle(
+    lines: &[String],
+    start: usize,
+    existing_count: usize,
+    default_puzzle: Option<&str>,
+) -> Result<(LevelBlock, usize), DiagnosticReport> {
     let level_name =
         parse_level_header_name_or_auto(&lines[start], unnamed_level_name(existing_count))?;
-    parse_named_level_body(lines, start, level_name, &LevelsHeader::default())
+    parse_named_level_body(
+        lines,
+        start,
+        level_name,
+        &LevelsHeader {
+            pack: None,
+            puzzle: default_puzzle.map(str::to_string),
+        },
+    )
+}
+
+#[derive(Clone, Debug)]
+struct PendingLevelBlock {
+    start: usize,
+    default_puzzle: Option<String>,
+    kind: PendingLevelBlockKind,
+}
+
+impl PendingLevelBlock {
+    fn levels(start: usize, default_puzzle: Option<String>) -> Self {
+        Self {
+            start,
+            default_puzzle,
+            kind: PendingLevelBlockKind::Levels,
+        }
+    }
+
+    fn level(start: usize, default_puzzle: Option<String>) -> Self {
+        Self {
+            start,
+            default_puzzle,
+            kind: PendingLevelBlockKind::Level,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PendingLevelBlockKind {
+    Levels,
+    Level,
+}
+
+fn parse_pending_level_block(
+    lines: &[String],
+    pending: &PendingLevelBlock,
+    level_blocks: &mut Vec<LevelBlock>,
+    catalog: &mut Catalog,
+    render_overlays: &mut OverlayDefs,
+    empty_char: &mut Option<char>,
+) -> Result<usize, DiagnosticReport> {
+    match pending.kind {
+        PendingLevelBlockKind::Levels => parse_levels_block(
+            lines,
+            pending.start,
+            level_blocks,
+            catalog,
+            render_overlays,
+            empty_char,
+            pending.default_puzzle.as_deref(),
+        ),
+        PendingLevelBlockKind::Level => {
+            let (level, next_i) = parse_level_block_with_default_puzzle(
+                lines,
+                pending.start,
+                level_blocks.len(),
+                pending.default_puzzle.as_deref(),
+            )?;
+            level_blocks.push(level);
+            Ok(next_i)
+        }
+    }
 }
 
 fn parse_levels_block(
@@ -1309,8 +1377,7 @@ fn parse_levels_block(
                     level_blocks.len(),
                     namespace_count,
                 );
-                let level_name = parse_level_header_name_or_auto(&lines[i], auto_name)
-                    .map(|name| namespaced_level_name_if_needed(header.pack.as_deref(), name))?;
+                let level_name = parse_level_header_name_or_auto(&lines[i], auto_name)?;
                 let (level, next_i) = if is_braced_level_header(&lines[i]) {
                     parse_named_level_body(lines, i, level_name, &header)?
                 } else {
@@ -1432,14 +1499,27 @@ fn parse_level_header_name_or_auto(
     line: &str,
     auto_name: String,
 ) -> Result<String, DiagnosticReport> {
-    let tokens = split_header_tokens(line);
-    if tokens.len() == 1 {
+    let Some(rest) = line.trim().strip_prefix("level") else {
+        return Err(parse_error(line, "level header must be: level \"<id>\""));
+    };
+    if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
+        return Err(parse_error(line, "level header must be: level \"<id>\""));
+    }
+    let name_text = strip_level_header_block_opener(rest.trim()).trim();
+    if name_text.is_empty() {
         return Ok(auto_name);
     }
-    if tokens.len() < 2 {
-        return Err(parse_error(line, "level header must be: level <name>"));
+    let Some(name) = parse_quoted_text(name_text) else {
+        return Err(parse_error(line, "level header must be: level \"<id>\""));
+    };
+    if name.is_empty() {
+        return Err(parse_error(line, "level id must not be empty"));
     }
-    Ok(tokens[1..].join(" "))
+    Ok(name)
+}
+
+fn strip_level_header_block_opener(value: &str) -> &str {
+    value.strip_suffix('{').map(str::trim_end).unwrap_or(value)
 }
 
 fn is_braced_level_header(line: &str) -> bool {
@@ -1448,15 +1528,6 @@ fn is_braced_level_header(line: &str) -> bool {
 
 fn unnamed_level_name(existing_count: usize) -> String {
     format!("unnamed level {}", existing_count + 1)
-}
-
-fn namespaced_level_name_if_needed(namespace: Option<&str>, name: String) -> String {
-    match namespace {
-        Some(namespace) if !name.starts_with(&format!("{namespace}.")) => {
-            format!("{namespace}.{name}")
-        }
-        _ => name,
-    }
 }
 
 fn namespaced_unnamed_level_name(
@@ -1996,6 +2067,21 @@ fn parse_condition_block_row(
     condition_name: &str,
     catalog: &Catalog,
 ) -> Result<ConditionAst, DiagnosticReport> {
+    if let Ok(condition) = parse_condition_expr(
+        line,
+        line,
+        &catalog.input_names,
+        &catalog.global_names,
+        &catalog.condition_names,
+        &catalog.object_names,
+        &catalog.object_schemas,
+        &catalog_value_sets(catalog),
+        &catalog.maps,
+        &catalog.object_groups,
+    ) {
+        return Ok(condition);
+    }
+
     if let Some(pattern) = line.trim().strip_prefix("some ") {
         let pattern = pattern.trim();
         if let Some(pattern) = parse_condition_pattern_arg(
@@ -2027,21 +2113,6 @@ fn parse_condition_block_row(
                 ConditionValueAst::NoneMatches(pattern),
             ));
         }
-    }
-
-    if let Ok(condition) = parse_condition_expr(
-        line,
-        line,
-        &catalog.input_names,
-        &catalog.global_names,
-        &catalog.condition_names,
-        &catalog.object_names,
-        &catalog.object_schemas,
-        &catalog_value_sets(catalog),
-        &catalog.maps,
-        &catalog.object_groups,
-    ) {
-        return Ok(condition);
     }
 
     let tokens = split_header_tokens(line);
@@ -2378,12 +2449,12 @@ fn parse_level_legend_block_row(
     local_char_objects: &mut HashMap<char, Vec<ObjectId>>,
 ) -> Result<(), DiagnosticReport> {
     let tokens = split_header_tokens(line);
-    if tokens.len() < 3 || tokens.get(1).copied() != Some("=") {
+    let Some(_) = crate::syntax::legend_block_row_syntax(&tokens, true) else {
         return Err(parse_error(
             line,
             "level legend row must be: <char> = <selector...>",
         ));
-    }
+    };
 
     let mut directive_tokens = vec!["legend"];
     directive_tokens.extend(tokens);
@@ -2398,19 +2469,19 @@ fn parse_level_legend_directive(
     catalog: &Catalog,
     empty_char: char,
 ) -> Result<(char, Vec<ObjectId>), DiagnosticReport> {
-    if tokens.len() < 4 || tokens.get(2).copied() != Some("=") {
+    let Some(syntax) = crate::syntax::level_legend_directive_syntax(tokens, true) else {
         return Err(parse_error(
             line,
             "level legend must be: legend <char> = <selector...>",
         ));
-    }
+    };
 
     let ch = parse_char(tokens.get(1), line, "missing legend char")?;
-    if ch == empty_char || tokens[3..] == ["empty"] {
+    if ch == empty_char || tokens[syntax.rhs_start..] == ["empty"] {
         return Err(parse_error(line, "level-local legend cannot define empty"));
     }
     let selector_sets = selector_sets(
-        &tokens[3..],
+        &tokens[syntax.rhs_start..],
         line,
         &catalog.object_names,
         &catalog.object_schemas,
@@ -2522,6 +2593,41 @@ fn parse_tags_block(
                 return Err(parse_error(line, "tag row must be: <name> = <value...>"));
             }
         }
+        i += 1;
+    }
+    if i >= lines.len() {
+        return Err(parse_error(&lines[start], "tags missing closing brace"));
+    }
+    Ok(i + 1)
+}
+
+fn collect_puzzle_tag_declarations(
+    lines: &[String],
+    start: usize,
+    catalog: &mut Catalog,
+) -> Result<(), DiagnosticReport> {
+    let mut i = start;
+    while i < lines.len() && !is_block_close_line(&lines[i]) {
+        let tokens = split_header_tokens(&lines[i]);
+        match tokens.as_slice() {
+            [] => i += 1,
+            ["tags"] => {
+                i = parse_tags_block(lines, i, catalog)?;
+            }
+            ["tags", ..] => {
+                return Err(parse_error(&lines[i], "tags header must be: tags"));
+            }
+            _ => {
+                i = recover_after_directive_error(lines, i);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn skip_tags_block(lines: &[String], start: usize) -> Result<usize, DiagnosticReport> {
+    let mut i = start + 1;
+    while i < lines.len() && !is_block_close_line(&lines[i]) {
         i += 1;
     }
     if i >= lines.len() {
@@ -2852,7 +2958,12 @@ fn parse_layers_block(
                     false,
                 )?;
             }
-            [name, "=", selectors @ ..] => {
+            [name, ..]
+                if crate::syntax::named_selector_assignment_syntax(&tokens, true).is_some() =>
+            {
+                let syntax = crate::syntax::named_selector_assignment_syntax(&tokens, true)
+                    .expect("guarded named layer assignment syntax");
+                let selectors = &tokens[syntax.rhs_start..];
                 let layer = layer_id_for_name(name, &lines[i], named_layers, layer_count, catalog)?;
                 let objects =
                     define_or_assign_terms_to_layer(selectors, &lines[i], layer, catalog, false)?;
@@ -3246,15 +3357,15 @@ fn parse_legend_block_row(
     empty_char: &mut Option<char>,
 ) -> Result<(), DiagnosticReport> {
     let tokens = split_header_tokens(line);
-    if tokens.len() < 3 || tokens.get(1).copied() != Some("=") {
+    let Some(syntax) = crate::syntax::legend_block_row_syntax(&tokens, true) else {
         return Err(parse_error(
             line,
             "legend row must be: <char> = <empty | selector...>",
         ));
-    }
+    };
 
     let ch = parse_char(tokens.first(), line, "missing legend char")?;
-    if tokens[2..] == ["empty"] {
+    if tokens[syntax.rhs_start..] == ["empty"] {
         *empty_char = Some(ch);
         return Ok(());
     }
@@ -3627,9 +3738,23 @@ fn resolve_scene_actions(
 ) -> Result<(), DiagnosticReport> {
     let input_names = input_labels.values().cloned().collect::<HashSet<_>>();
     for scene in scenes {
+        validate_scene_puzzle_slots(scene)?;
         resolve_scene_actions_for_scene(scene, &input_names)?;
         validate_scene_routines(scene)?;
         validate_scene_puzzle_rule(scene)?;
+    }
+    Ok(())
+}
+
+fn validate_scene_puzzle_slots(scene: &SceneDef) -> Result<(), DiagnosticReport> {
+    let mut names = HashSet::<&str>::new();
+    for puzzle in &scene.state.puzzles {
+        if !names.insert(puzzle.name.as_str()) {
+            return Err(DiagnosticReport::error(format!(
+                "scene `{}` declares duplicate puzzle slot `{}`",
+                scene.name, puzzle.name
+            )));
+        }
     }
     Ok(())
 }
@@ -4051,10 +4176,10 @@ impl puzzle_scene::SceneBlockHandler for Scene2dBlockHandler<'_> {
         lines: &[String],
         start: usize,
     ) -> Result<usize, DiagnosticReport> {
-        let (state, next_i) = parse_scene_state_block(lines, start, SceneStateLifetime::Instance)?;
-        self.screen.state.variables.extend(state.variables);
-        self.screen.state.puzzles.extend(state.puzzles);
-        Ok(next_i)
+        Err(parse_error(
+            &lines[start],
+            "`state { ... }` was removed; declare scene slots and variables in `layout { ... }`",
+        ))
     }
 
     fn parse_layout_block(
@@ -4263,7 +4388,7 @@ fn parse_screen_view_like_block(
 ) -> Result<(ParsedScreenLayoutBlock, usize), DiagnosticReport> {
     let layout = parse_scene_layout_from_header(&lines[start], block_name)?;
     let mut variables = Vec::new();
-    let mut puzzles = Vec::new();
+    let mut puzzles = Vec::<ScenePuzzleDef>::new();
     let mut components = Vec::new();
     let mut hidden = Vec::<String>::new();
     let mut i = start + 1;
@@ -4271,14 +4396,11 @@ fn parse_screen_view_like_block(
         if let Some((slot, visible)) = parse_layer_visibility(&lines[i])? {
             if visible {
                 hidden.retain(|name| name != &slot);
-                if puzzles
-                    .iter()
-                    .any(|puzzle: &ScenePuzzleDef| puzzle.name == slot)
-                    && !components.iter().any(|component| {
-                        scene_puzzle_component_source(component).is_some_and(|name| name == slot)
-                    })
+                if !components.iter().any(|component| {
+                    scene_puzzle_component_source(component).is_some_and(|name| name == slot)
+                }) && let Some(puzzle) = puzzles.iter().find(|puzzle| puzzle.name == slot)
                 {
-                    components.push(scene_puzzle_component(slot));
+                    components.push(scene_puzzle_slot_component(puzzle));
                 }
             } else {
                 hidden.push(slot.clone());
@@ -4308,15 +4430,39 @@ fn parse_screen_view_like_block(
         }
 
         if lines[i].contains('=') {
-            match parse_scene_state_entry(&lines[i], SceneStateLifetime::Instance)? {
-                ParsedSceneStateEntry::Puzzle(puzzle) => {
-                    if !hidden.iter().any(|name| name == &puzzle.name) {
-                        components.push(scene_puzzle_component(puzzle.name.clone()));
-                    }
-                    puzzles.push(puzzle);
+            if let Some(declaration) =
+                parse_scene_puzzle_layout_declaration(&lines[i], SceneStateLifetime::Instance)?
+            {
+                if !hidden.iter().any(|name| name == &declaration.puzzle.name) {
+                    components.push(scene_puzzle_slot_component_with_layout(
+                        &declaration.puzzle,
+                        declaration.layout,
+                    ));
                 }
-                ParsedSceneStateEntry::Variable(variable) => variables.push(variable),
+                puzzles.push(declaration.puzzle);
+            } else {
+                match parse_scene_state_entry(&lines[i], SceneStateLifetime::Instance)? {
+                    ParsedSceneStateEntry::Puzzle(puzzle) => {
+                        if !hidden.iter().any(|name| name == &puzzle.name) {
+                            components.push(scene_puzzle_slot_component(&puzzle));
+                        }
+                        puzzles.push(puzzle);
+                    }
+                    ParsedSceneStateEntry::Variable(variable) => variables.push(variable),
+                }
             }
+            i += 1;
+            continue;
+        }
+
+        if let [slot] = tokens.as_slice()
+            && is_identifier(slot)
+        {
+            let puzzle = inferred_scene_puzzle_slot(slot, SceneStateLifetime::Instance);
+            if !hidden.iter().any(|name| name == &puzzle.name) {
+                components.push(scene_puzzle_slot_component(&puzzle));
+            }
+            puzzles.push(puzzle);
             i += 1;
             continue;
         }
@@ -4382,8 +4528,15 @@ fn scene_frame_component_with_layout(
     })
 }
 
-fn scene_puzzle_component(source: impl Into<String>) -> SceneComponent {
-    scene_frame_component("puzzle", source)
+fn scene_puzzle_slot_component(puzzle: &ScenePuzzleDef) -> SceneComponent {
+    scene_puzzle_slot_component_with_layout(puzzle, SceneLayoutDef::default())
+}
+
+fn scene_puzzle_slot_component_with_layout(
+    puzzle: &ScenePuzzleDef,
+    layout: SceneLayoutDef,
+) -> SceneComponent {
+    scene_frame_component_with_layout(puzzle.kind.clone(), puzzle.name.clone(), layout)
 }
 
 fn scene_puzzle_component_source(component: &SceneComponent) -> Option<&str> {
@@ -4583,10 +4736,10 @@ fn parse_text_component(line: &str) -> Result<SceneComponent, DiagnosticReport> 
             layout: SceneLayoutDef::default(),
         }));
     }
-    Err(parse_error(
-        line,
-        "text must be: text \"<text>\" | text <state>",
-    ))
+    Ok(SceneComponent::Text(SceneTextDef {
+        content: SceneTextContent::Expr(parse_scene_expr(rest, line)?),
+        layout: SceneLayoutDef::default(),
+    }))
 }
 
 fn parse_button_like_def(
@@ -4667,7 +4820,7 @@ fn parse_view_if_component(
         .strip_prefix("if ")
         .ok_or_else(|| parse_error(line, "layout condition must be: if <condition>"))?
         .trim();
-    validate_screen_condition(condition, line)?;
+    let condition = parse_scene_expr(condition, line)?;
     let (entry, next_i) = collect_authoring_entry(lines, start)?;
     let body = &entry[1..entry.len().saturating_sub(1)];
     let (else_body, next_i) = collect_view_else_body(lines, next_i, line)?;
@@ -4685,7 +4838,7 @@ fn parse_view_if_component(
     };
     Ok((
         SceneComponent::Conditional(SceneConditionalDef {
-            condition: condition.to_string(),
+            condition,
             children,
             else_children,
         }),
@@ -5395,35 +5548,6 @@ fn matches_rewrite_effect_command(token: &str, syntax: RewriteEffectCommandSynta
     rewrite_effect_command_syntax(&token.to_ascii_lowercase()) == Some(syntax)
 }
 
-pub(crate) fn rewrite_direction_prefix_token_index(tokens: &[&str]) -> Option<usize> {
-    let mut index = 0usize;
-    while tokens
-        .get(index)
-        .is_some_and(|token| rewrite_application_keyword(token))
-    {
-        index += 1;
-    }
-    let direction = tokens.get(index).copied()?;
-    if !direction_word(direction) {
-        return None;
-    }
-    tokens
-        .get(index + 1)
-        .is_some_and(|token| matches!(*token, "[" | "{"))
-        .then_some(index)
-}
-
-fn rewrite_application_keyword(value: &str) -> bool {
-    matches!(
-        value,
-        "fix" | "once" | "once_all" | "once_per_level" | "repeat"
-    )
-}
-
-fn direction_word(value: &str) -> bool {
-    matches!(value, "up" | "down" | "left" | "right")
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SoundSettingValueSyntax {
     String,
@@ -6093,21 +6217,26 @@ fn parse_rule_call_expr(
     value: &str,
     line: &str,
 ) -> Result<(String, Vec<SceneExpr>), DiagnosticReport> {
-    let Some((name, args)) = value.split_once('(') else {
+    let value = value.trim();
+    let Some(open) = find_top_level_char(value, '(') else {
         validate_qualified_identifier(value, line, "rule name")?;
         return Ok((value.to_string(), Vec::new()));
     };
+    let name = value[..open].trim();
     validate_qualified_identifier(name, line, "rule name")?;
-    let args = args
-        .strip_suffix(')')
+    let close = matching_delimiter(value, open, '(', ')')
         .ok_or_else(|| parse_error(line, "rule call args must end with )"))?;
+    if !value[close + 1..].trim().is_empty() {
+        return Err(parse_error(
+            line,
+            "rule call expression must not have trailing text",
+        ));
+    }
+    let args = &value[open + 1..close];
     let args = if args.trim().is_empty() {
         Vec::new()
     } else {
-        args.split(',')
-            .map(str::trim)
-            .map(|arg| parse_scene_expr(arg, line))
-            .collect::<Result<Vec<_>, DiagnosticReport>>()?
+        parse_scene_call_args(args, line)?
     };
     Ok((name.to_string(), args))
 }
@@ -6129,7 +6258,10 @@ fn parse_scene_call_params(
         return Ok(Some((scene.to_string(), Vec::new())));
     }
 
-    let parts = args.split(',').map(str::trim).collect::<Vec<_>>();
+    let parts = split_top_level_commas(args)
+        .into_iter()
+        .map(str::trim)
+        .collect::<Vec<_>>();
     let params = if parts.len() == 1 && !parts[0].contains('=') {
         vec![SceneEffectParam::Level(parse_scene_level_expr(
             parts[0], line,
@@ -6148,7 +6280,10 @@ fn parse_scene_target_params(
     if let Some((scene, params)) = value.split_once(" with ") {
         let scene = scene.trim();
         validate_qualified_identifier(scene, line, "scene name")?;
-        let parts = params.split(',').map(str::trim).collect::<Vec<_>>();
+        let parts = split_top_level_commas(params)
+            .into_iter()
+            .map(str::trim)
+            .collect::<Vec<_>>();
         return Ok((scene.to_string(), parse_scene_named_params(&parts, line)?));
     }
     if let Some((scene, params)) = parse_scene_call_params(value, line)? {
@@ -6177,15 +6312,41 @@ fn parse_scene_named_params(
     Ok(params)
 }
 
-fn parse_scene_level_expr(value: &str, line: &str) -> Result<SceneExpr, DiagnosticReport> {
-    if parse_quoted_text(value).is_some() {
-        return Err(parse_error(
-            line,
-            "scene level arguments must not be quoted; use `goto <scene>(<level_name>)`",
-        ));
+pub fn parse_scene_expression(value: &str) -> Result<SceneExpr, DiagnosticReport> {
+    parse_scene_expr(value, value)
+}
+
+pub fn parse_scene_expression_args(value: &str) -> Result<Vec<SceneExpr>, DiagnosticReport> {
+    parse_scene_call_args(value.trim(), value)
+}
+
+pub fn parse_scene_effect_params(value: &str) -> Result<Vec<SceneEffectParam>, DiagnosticReport> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(Vec::new());
     }
-    if is_dotted_level_atom(value) {
-        return Ok(SceneExpr::Text(value.to_string()));
+    split_top_level_commas(value)
+        .into_iter()
+        .map(|param| {
+            let param = param.trim();
+            if let Some((name, value)) = param.split_once('=') {
+                let name = name.trim();
+                validate_identifier(name, param, "scene effect parameter name")?;
+                return Ok(SceneEffectParam::Named {
+                    name: name.to_string(),
+                    value: parse_scene_expr(value.trim(), param)?,
+                });
+            }
+            Ok(SceneEffectParam::Level(parse_scene_level_expr(
+                param, param,
+            )?))
+        })
+        .collect()
+}
+
+fn parse_scene_level_expr(value: &str, line: &str) -> Result<SceneExpr, DiagnosticReport> {
+    if let Some(expr) = parse_level_selector_expr(value, line)? {
+        return Ok(expr);
     }
     match parse_scene_expr(value, line) {
         Ok(expr) => Ok(expr),
@@ -6194,6 +6355,34 @@ fn parse_scene_level_expr(value: &str, line: &str) -> Result<SceneExpr, Diagnost
 }
 
 fn parse_scene_expr(value: &str, line: &str) -> Result<SceneExpr, DiagnosticReport> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Err(parse_error(line, "expression must not be empty"));
+    }
+    if let Some(expr) = parse_scene_if_expr(value, line)? {
+        return Ok(expr);
+    }
+    if let Some((left, right)) = split_top_level_keyword_once(value, "and") {
+        return Ok(SceneExpr::Binary {
+            op: SceneBinaryOp::And,
+            left: Box::new(parse_scene_expr(left.trim(), line)?),
+            right: Box::new(parse_scene_expr(right.trim(), line)?),
+        });
+    }
+    if let Some((left, right)) = split_top_level_operator_once(value, "==") {
+        return Ok(SceneExpr::Binary {
+            op: SceneBinaryOp::Eq,
+            left: Box::new(parse_scene_expr(left.trim(), line)?),
+            right: Box::new(parse_scene_expr(right.trim(), line)?),
+        });
+    }
+    if let Some((left, right)) = split_top_level_operator_once(value, "!=") {
+        return Ok(SceneExpr::Binary {
+            op: SceneBinaryOp::NotEq,
+            left: Box::new(parse_scene_expr(left.trim(), line)?),
+            right: Box::new(parse_scene_expr(right.trim(), line)?),
+        });
+    }
     if value == "true" {
         return Ok(SceneExpr::Bool(true));
     }
@@ -6205,6 +6394,9 @@ fn parse_scene_expr(value: &str, line: &str) -> Result<SceneExpr, DiagnosticRepo
     }
     if let Some(text) = parse_quoted_text(value) {
         return Ok(SceneExpr::Text(text));
+    }
+    if let Some(expr) = parse_level_selector_expr(value, line)? {
+        return Ok(expr);
     }
     if value.contains('(') {
         let (name, args) = parse_rule_call_expr(value, line)?;
@@ -6221,19 +6413,278 @@ fn parse_scene_expr(value: &str, line: &str) -> Result<SceneExpr, DiagnosticRepo
     }
     Err(parse_error(
         line,
-        "expression must be true, false, integer, quoted text, or path",
+        "expression must be true, false, integer, quoted text, path, call, or if expression",
     ))
 }
 
-fn is_dotted_level_atom(value: &str) -> bool {
-    let parts = value.split('.').collect::<Vec<_>>();
-    parts.len() > 1
-        && parts.iter().all(|part| {
-            !part.is_empty()
-                && part
-                    .chars()
-                    .all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
-        })
+fn parse_scene_if_expr(value: &str, line: &str) -> Result<Option<SceneExpr>, DiagnosticReport> {
+    let Some(rest) = value.strip_prefix("if ") else {
+        return Ok(None);
+    };
+    let rest = rest.trim_start();
+    let Some(open) = find_top_level_char(rest, '{') else {
+        return Err(parse_error(
+            line,
+            "scene if expression must be: if <bool> { <value> } else { <value> }",
+        ));
+    };
+    let condition = rest[..open].trim();
+    if condition.is_empty() {
+        return Err(parse_error(
+            line,
+            "scene if expression requires a condition",
+        ));
+    }
+    let close = matching_delimiter(rest, open, '{', '}')
+        .ok_or_else(|| parse_error(line, "scene if expression branch must close with `}`"))?;
+    let then_branch = rest[open + 1..close].trim();
+    let after_then = rest[close + 1..].trim_start();
+    let Some(after_else) = after_then.strip_prefix("else") else {
+        return Err(parse_error(
+            line,
+            "scene if expression requires an else branch",
+        ));
+    };
+    let after_else = after_else.trim_start();
+    if !after_else.starts_with('{') {
+        return Err(parse_error(
+            line,
+            "scene if expression else branch must start with `{`",
+        ));
+    }
+    let else_close = matching_delimiter(after_else, 0, '{', '}')
+        .ok_or_else(|| parse_error(line, "scene if expression else branch must close with `}`"))?;
+    if !after_else[else_close + 1..].trim().is_empty() {
+        return Err(parse_error(
+            line,
+            "scene if expression must not have trailing text after else branch",
+        ));
+    }
+    let else_branch = after_else[1..else_close].trim();
+    Ok(Some(SceneExpr::If {
+        condition: Box::new(parse_scene_expr(condition, line)?),
+        then_branch: Box::new(parse_scene_expr(then_branch, line)?),
+        else_branch: Box::new(parse_scene_expr(else_branch, line)?),
+    }))
+}
+
+fn parse_level_selector_expr(
+    value: &str,
+    line: &str,
+) -> Result<Option<SceneExpr>, DiagnosticReport> {
+    let value = value.trim();
+    if let Some(expr) = parse_level_call_selector_expr(value, line)? {
+        return Ok(Some(expr));
+    }
+    parse_pack_level_selector_expr(value, line)
+}
+
+fn parse_level_call_selector_expr(
+    value: &str,
+    line: &str,
+) -> Result<Option<SceneExpr>, DiagnosticReport> {
+    let Some(rest) = value.strip_prefix("level(") else {
+        return Ok(None);
+    };
+    let Some(close) = rest.find(')') else {
+        return Err(parse_error(line, "level selector must close with `)`"));
+    };
+    let args_text = rest[..close].trim();
+    let suffix = rest[close + 1..].trim();
+    let args = parse_scene_call_args(args_text, line)?;
+    let name = if suffix.is_empty() {
+        "level".to_string()
+    } else if let Some(field) = suffix.strip_prefix('.') {
+        validate_identifier(field, line, "level property")?;
+        format!("level.{field}")
+    } else {
+        return Err(parse_error(
+            line,
+            "level selector suffix must be empty or `.property`",
+        ));
+    };
+    Ok(Some(SceneExpr::Call { name, args }))
+}
+
+fn parse_pack_level_selector_expr(
+    value: &str,
+    line: &str,
+) -> Result<Option<SceneExpr>, DiagnosticReport> {
+    let Some(open) = value.find('[') else {
+        return Ok(None);
+    };
+    let Some(close) = value[open + 1..].find(']').map(|offset| open + 1 + offset) else {
+        return Err(parse_error(line, "level pack selector must close with `]`"));
+    };
+    let pack = value[..open].trim();
+    if pack.is_empty() || !is_qualified_identifier(pack) {
+        return Ok(None);
+    }
+    let key = value[open + 1..close].trim();
+    let suffix = value[close + 1..].trim();
+    let mut args = vec![SceneExpr::Path(vec![pack.to_string()])];
+    let base = if let Some(id) = parse_quoted_text(key) {
+        args.push(SceneExpr::Text(id));
+        "level_in"
+    } else if let Ok(index) = key.parse::<i64>() {
+        args.push(SceneExpr::Int(index));
+        "level_at"
+    } else {
+        return Err(parse_error(
+            line,
+            "level pack selector key must be a quoted id or integer index",
+        ));
+    };
+    let name = if suffix.is_empty() {
+        base.to_string()
+    } else if let Some(field) = suffix.strip_prefix('.') {
+        validate_identifier(field, line, "level property")?;
+        format!("{base}.{field}")
+    } else {
+        return Err(parse_error(
+            line,
+            "level pack selector suffix must be empty or `.property`",
+        ));
+    };
+    Ok(Some(SceneExpr::Call { name, args }))
+}
+
+fn parse_scene_call_args(value: &str, line: &str) -> Result<Vec<SceneExpr>, DiagnosticReport> {
+    if value.is_empty() {
+        return Ok(Vec::new());
+    }
+    split_top_level_commas(value)
+        .into_iter()
+        .map(|arg| parse_scene_expr(arg.trim(), line))
+        .collect()
+}
+
+fn split_top_level_commas(value: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut start = 0usize;
+    for index in top_level_char_indexes(value, ',') {
+        parts.push(&value[start..index]);
+        start = index + 1;
+    }
+    parts.push(&value[start..]);
+    parts
+}
+
+fn split_top_level_keyword_once<'a>(value: &'a str, keyword: &str) -> Option<(&'a str, &'a str)> {
+    for (index, _) in top_level_scan(value) {
+        if !value[index..].starts_with(keyword) {
+            continue;
+        }
+        let before = value[..index].chars().next_back();
+        let after = value[index + keyword.len()..].chars().next();
+        if before.is_none_or(|ch| !is_identifier_continue(ch))
+            && after.is_none_or(|ch| !is_identifier_continue(ch))
+        {
+            return Some((&value[..index], &value[index + keyword.len()..]));
+        }
+    }
+    None
+}
+
+fn split_top_level_operator_once<'a>(value: &'a str, operator: &str) -> Option<(&'a str, &'a str)> {
+    for (index, _) in top_level_scan(value) {
+        if value[index..].starts_with(operator) {
+            return Some((&value[..index], &value[index + operator.len()..]));
+        }
+    }
+    None
+}
+
+fn find_top_level_char(value: &str, target: char) -> Option<usize> {
+    top_level_char_indexes(value, target).into_iter().next()
+}
+
+fn top_level_char_indexes(value: &str, target: char) -> Vec<usize> {
+    top_level_scan(value)
+        .into_iter()
+        .filter_map(|(index, ch)| (ch == target).then_some(index))
+        .collect()
+}
+
+fn top_level_scan(value: &str) -> Vec<(usize, char)> {
+    let mut out = Vec::new();
+    let mut paren_depth = 0usize;
+    let mut brace_depth = 0usize;
+    let mut bracket_depth = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+    for (index, ch) in value.char_indices() {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match ch {
+            '"' => in_string = true,
+            '(' => {
+                if paren_depth == 0 && brace_depth == 0 && bracket_depth == 0 {
+                    out.push((index, ch));
+                }
+                paren_depth += 1;
+            }
+            ')' => paren_depth = paren_depth.saturating_sub(1),
+            '{' => {
+                if paren_depth == 0 && brace_depth == 0 && bracket_depth == 0 {
+                    out.push((index, ch));
+                }
+                brace_depth += 1;
+            }
+            '}' => brace_depth = brace_depth.saturating_sub(1),
+            '[' => {
+                if paren_depth == 0 && brace_depth == 0 && bracket_depth == 0 {
+                    out.push((index, ch));
+                }
+                bracket_depth += 1;
+            }
+            ']' => bracket_depth = bracket_depth.saturating_sub(1),
+            _ if paren_depth == 0 && brace_depth == 0 && bracket_depth == 0 => {
+                out.push((index, ch));
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+fn matching_delimiter(value: &str, open: usize, open_ch: char, close_ch: char) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+    for (index, ch) in value[open..].char_indices() {
+        let index = open + index;
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match ch {
+            '"' => in_string = true,
+            _ if ch == open_ch => depth += 1,
+            _ if ch == close_ch => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0 {
+                    return Some(index);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 fn parse_input_name<'a>(value: &'a str, line: &str) -> Result<&'a str, DiagnosticReport> {
@@ -6334,25 +6785,108 @@ enum ParsedSceneStateEntry {
     Puzzle(ScenePuzzleDef),
 }
 
-fn parse_scene_state_block(
-    lines: &[String],
-    start: usize,
+struct ParsedScenePuzzleLayoutDeclaration {
+    puzzle: ScenePuzzleDef,
+    layout: SceneLayoutDef,
+}
+
+fn inferred_scene_puzzle_slot(name: &str, lifetime: SceneStateLifetime) -> ScenePuzzleDef {
+    ScenePuzzleDef {
+        name: name.to_string(),
+        kind: INFERRED_SCENE_PUZZLE_KIND.to_string(),
+        model: name.to_string(),
+        initializer: ScenePuzzleInitializer::CurrentLevel,
+        lifetime,
+    }
+}
+
+fn parse_scene_puzzle_layout_declaration(
+    line: &str,
     lifetime: SceneStateLifetime,
-) -> Result<(ParsedScreenStateBlock, usize), DiagnosticReport> {
-    let mut variables = Vec::new();
-    let mut puzzles = Vec::new();
-    let mut i = start + 1;
-    while i < lines.len() && !is_block_close_line(&lines[i]) {
-        match parse_scene_state_entry(&lines[i], lifetime)? {
-            ParsedSceneStateEntry::Variable(variable) => variables.push(variable),
-            ParsedSceneStateEntry::Puzzle(puzzle) => puzzles.push(puzzle),
+) -> Result<Option<ParsedScenePuzzleLayoutDeclaration>, DiagnosticReport> {
+    let Some((name, value)) = line.split_once('=') else {
+        return Ok(None);
+    };
+    let name = name.trim();
+    if !is_identifier(name) {
+        return Ok(None);
+    }
+    let value = value.trim();
+    let tokens = split_header_tokens(value);
+    let Some((kind, model, initializer, attrs)) =
+        parse_scene_puzzle_initializer_tokens(tokens.as_slice(), line)?
+    else {
+        return Ok(None);
+    };
+    Ok(Some(ParsedScenePuzzleLayoutDeclaration {
+        puzzle: ScenePuzzleDef {
+            name: name.to_string(),
+            kind,
+            model,
+            initializer,
+            lifetime,
+        },
+        layout: parse_scene_layout_attrs_for_line(attrs, line)?,
+    }))
+}
+
+fn parse_scene_puzzle_initializer_tokens<'a>(
+    tokens: &'a [&'a str],
+    line: &str,
+) -> Result<Option<(String, String, ScenePuzzleInitializer, &'a [&'a str])>, DiagnosticReport> {
+    match tokens {
+        ["puzzle", "current_level", ..] => Err(parse_error(
+            line,
+            "current_level is not scene syntax; use `puzzle <name>` for the current level",
+        )),
+        ["puzzle", puzzle_name, "level", level_name, attrs @ ..] => {
+            validate_qualified_identifier(puzzle_name, line, "puzzle name")?;
+            validate_qualified_identifier(level_name, line, "level name")?;
+            Ok(Some((
+                "puzzle".to_string(),
+                (*puzzle_name).to_string(),
+                ScenePuzzleInitializer::Level((*level_name).to_string()),
+                attrs,
+            )))
         }
-        i += 1;
+        ["puzzle", puzzle_name, attrs @ ..] => {
+            validate_qualified_identifier(puzzle_name, line, "puzzle name")?;
+            Ok(Some((
+                "puzzle".to_string(),
+                (*puzzle_name).to_string(),
+                ScenePuzzleInitializer::CurrentLevel,
+                attrs,
+            )))
+        }
+        ["puzzle3", puzzle_name, "level", level_name, attrs @ ..] => {
+            validate_qualified_identifier(puzzle_name, line, "puzzle3 model name")?;
+            validate_qualified_identifier(level_name, line, "level name")?;
+            Ok(Some((
+                "puzzle3".to_string(),
+                (*puzzle_name).to_string(),
+                ScenePuzzleInitializer::Level((*level_name).to_string()),
+                attrs,
+            )))
+        }
+        ["puzzle3", puzzle_name, attrs @ ..] => {
+            validate_qualified_identifier(puzzle_name, line, "puzzle3 model name")?;
+            Ok(Some((
+                "puzzle3".to_string(),
+                (*puzzle_name).to_string(),
+                ScenePuzzleInitializer::CurrentLevel,
+                attrs,
+            )))
+        }
+        ["puzzle", ..] => Err(parse_error(
+            line,
+            "scene puzzle initializer must be: puzzle <name> | puzzle <name> level <level>",
+        )),
+        ["puzzle3", ..] => Err(parse_error(
+            line,
+            "scene puzzle3 initializer must be: puzzle3 <name> | puzzle3 <name> level <level>",
+        )),
+        _ => Ok(None),
     }
-    if i >= lines.len() {
-        return Err(parse_error(&lines[start], "state missing closing brace"));
-    }
-    Ok((ParsedScreenStateBlock { variables, puzzles }, i + 1))
 }
 
 fn parse_scene_state_entry(
@@ -6360,9 +6894,6 @@ fn parse_scene_state_entry(
     lifetime: SceneStateLifetime,
 ) -> Result<ParsedSceneStateEntry, DiagnosticReport> {
     let line = line.trim();
-    if let Some(puzzle) = parse_implicit_scene_puzzle_state_entry(line, lifetime)? {
-        return Ok(ParsedSceneStateEntry::Puzzle(puzzle));
-    }
     let mut prefixed_variable = false;
     let (line, lifetime, mutable) = if let Some(rest) = line.strip_prefix("persistent var ") {
         prefixed_variable = true;
@@ -6408,101 +6939,6 @@ fn parse_scene_state_entry(
         lifetime,
         mutable,
     }))
-}
-
-fn parse_implicit_scene_puzzle_state_entry(
-    line: &str,
-    lifetime: SceneStateLifetime,
-) -> Result<Option<ScenePuzzleDef>, DiagnosticReport> {
-    if let Some((puzzle_name, param)) = parse_scene_puzzle_state_call(line) {
-        validate_qualified_identifier(puzzle_name, line, "puzzle name")?;
-        validate_identifier(param, line, "scene level param")?;
-        if param != "level" {
-            return Err(parse_error(
-                line,
-                "scene puzzle state call must be `<puzzle>(level)`",
-            ));
-        }
-        return Ok(Some(ScenePuzzleDef {
-            name: puzzle_name.to_string(),
-            kind: INFERRED_SCENE_PUZZLE_KIND.to_string(),
-            model: puzzle_name.to_string(),
-            initializer: ScenePuzzleInitializer::CurrentLevel,
-            lifetime,
-        }));
-    }
-    let tokens = split_header_tokens(line);
-    match tokens.as_slice() {
-        [puzzle_name] if is_qualified_identifier(puzzle_name) => Ok(Some(ScenePuzzleDef {
-            name: (*puzzle_name).to_string(),
-            kind: INFERRED_SCENE_PUZZLE_KIND.to_string(),
-            model: (*puzzle_name).to_string(),
-            initializer: ScenePuzzleInitializer::CurrentLevel,
-            lifetime,
-        })),
-        ["puzzle", puzzle_name] => {
-            validate_qualified_identifier(puzzle_name, line, "puzzle name")?;
-            Ok(Some(ScenePuzzleDef {
-                name: (*puzzle_name).to_string(),
-                kind: "puzzle".to_string(),
-                model: (*puzzle_name).to_string(),
-                initializer: ScenePuzzleInitializer::CurrentLevel,
-                lifetime,
-            }))
-        }
-        ["puzzle", puzzle_name, "level", level_name] => {
-            validate_qualified_identifier(puzzle_name, line, "puzzle name")?;
-            validate_qualified_identifier(level_name, line, "level name")?;
-            Ok(Some(ScenePuzzleDef {
-                name: (*puzzle_name).to_string(),
-                kind: "puzzle".to_string(),
-                model: (*puzzle_name).to_string(),
-                initializer: ScenePuzzleInitializer::Level((*level_name).to_string()),
-                lifetime,
-            }))
-        }
-        ["puzzle3", puzzle_name] => {
-            validate_qualified_identifier(puzzle_name, line, "puzzle3 model name")?;
-            Ok(Some(ScenePuzzleDef {
-                name: (*puzzle_name).to_string(),
-                kind: "puzzle3".to_string(),
-                model: (*puzzle_name).to_string(),
-                initializer: ScenePuzzleInitializer::CurrentLevel,
-                lifetime,
-            }))
-        }
-        ["puzzle3", puzzle_name, "level", level_name] => {
-            validate_qualified_identifier(puzzle_name, line, "puzzle3 model name")?;
-            validate_qualified_identifier(level_name, line, "level name")?;
-            Ok(Some(ScenePuzzleDef {
-                name: (*puzzle_name).to_string(),
-                kind: "puzzle3".to_string(),
-                model: (*puzzle_name).to_string(),
-                initializer: ScenePuzzleInitializer::Level((*level_name).to_string()),
-                lifetime,
-            }))
-        }
-        ["puzzle", ..] => Err(parse_error(
-            line,
-            "scene puzzle state must be: puzzle <name> | puzzle <name> level <level>",
-        )),
-        ["puzzle3", ..] => Err(parse_error(
-            line,
-            "scene puzzle3 state must be: puzzle3 <name> | puzzle3 <name> level <level>",
-        )),
-        _ => Ok(None),
-    }
-}
-
-fn parse_scene_puzzle_state_call(line: &str) -> Option<(&str, &str)> {
-    let (name, rest) = line.split_once('(')?;
-    let param = rest.strip_suffix(')')?;
-    let name = name.trim();
-    let param = param.trim();
-    if name.is_empty() || param.is_empty() || param.contains(',') {
-        return None;
-    }
-    Some((name, param))
 }
 
 fn parse_top_level_var_directive(
@@ -6754,8 +7190,7 @@ fn parse_screen_condition_arrow_block(
     let mut conditions = Vec::new();
     let mut i = start + 1;
     while i < lines.len() && !is_block_close_line(&lines[i]) {
-        validate_screen_condition(&lines[i], &lines[i])?;
-        conditions.push(lines[i].clone());
+        conditions.push(parse_scene_condition_expr(&lines[i], &lines[i])?);
         i += 1;
     }
     if i >= lines.len() {
@@ -6788,7 +7223,7 @@ fn parse_screen_condition_arrow_block(
         parse_scene_effect_with_optional_block(effect_text.trim(), lines, arrow_i)?;
     Ok((
         SceneTransition {
-            trigger: SceneTransitionTrigger::Condition(conditions.join(" and ")),
+            trigger: SceneTransitionTrigger::Condition(combine_scene_condition_exprs(conditions)),
             effect,
         },
         next_i,
@@ -6804,7 +7239,7 @@ fn parse_screen_condition_block(
         .strip_prefix("if ")
         .ok_or_else(|| parse_error(line, "condition block must be: if <condition>"))?
         .trim();
-    validate_screen_condition(condition, line)?;
+    let condition = parse_scene_condition_expr(condition, line)?;
     let (body, next_i) = collect_authoring_entry(lines, start)?;
     let body = &body[1..body.len().saturating_sub(1)];
     if body.is_empty() {
@@ -6815,7 +7250,7 @@ fn parse_screen_condition_block(
     }
     Ok((
         SceneTransition {
-            trigger: SceneTransitionTrigger::Condition(condition.to_string()),
+            trigger: SceneTransitionTrigger::Condition(condition),
             effect: parse_scene_handler_effects(body, line)?,
         },
         next_i,
@@ -6904,7 +7339,7 @@ fn parse_scene_handler_effects_range(
         match tokens.as_slice() {
             ["if", condition @ ..] => {
                 let condition = condition.join(" ");
-                validate_screen_condition(&condition, line)?;
+                let condition = parse_scene_condition_expr(&condition, line)?;
                 let block_end = matching_effect_block_end(lines, i, end)?;
                 let effect = parse_scene_handler_effects_range(lines, i + 1, block_end, line)?;
                 effects.push(SceneEffect::Conditional {
@@ -7012,15 +7447,16 @@ fn parse_transition_trigger(
     }
     if let Some(condition) = value.strip_prefix("if ") {
         let condition = condition.trim();
-        validate_screen_condition(condition, line)?;
-        return Ok(SceneTransitionTrigger::Condition(condition.to_string()));
+        return Ok(SceneTransitionTrigger::Condition(
+            parse_scene_condition_expr(condition, line)?,
+        ));
     }
     let tokens = split_header_tokens(value);
     if let [input] = tokens.as_slice() {
         let input = parse_input_name(input, line)?;
-        return Ok(SceneTransitionTrigger::Condition(format!(
-            "input == {input}"
-        )));
+        return Ok(SceneTransitionTrigger::Condition(
+            scene_input_condition_expr(&input),
+        ));
     }
     Err(parse_error(
         line,
@@ -7028,44 +7464,27 @@ fn parse_transition_trigger(
     ))
 }
 
-fn validate_screen_condition(value: &str, line: &str) -> Result<(), DiagnosticReport> {
-    if value.is_empty() {
-        return Err(parse_error(line, "condition must not be empty"));
-    }
-    for part in value.split(" and ") {
-        if validate_screen_condition_atom(part.trim()).is_err() {
-            return Err(parse_error(
-                line,
-                "condition must be identifier paths or path comparisons joined by and",
-            ));
-        }
-    }
-    Ok(())
+fn parse_scene_condition_expr(value: &str, line: &str) -> Result<SceneExpr, DiagnosticReport> {
+    parse_scene_expr(value, line)
 }
 
-fn validate_screen_condition_atom(value: &str) -> Result<(), ()> {
-    if parse_view_path(value).is_some() {
-        return Ok(());
-    }
-    for op in [" == ", " != "] {
-        if let Some((left, right)) = value.split_once(op) {
-            if parse_view_path(left.trim()).is_none() {
-                return Err(());
-            }
-            return validate_screen_condition_value(right.trim());
-        }
-    }
-    Err(())
+fn combine_scene_condition_exprs(mut conditions: Vec<SceneExpr>) -> SceneExpr {
+    let first = conditions.remove(0);
+    conditions
+        .into_iter()
+        .fold(first, |left, right| SceneExpr::Binary {
+            op: SceneBinaryOp::And,
+            left: Box::new(left),
+            right: Box::new(right),
+        })
 }
 
-fn validate_screen_condition_value(value: &str) -> Result<(), ()> {
-    if value == "true" || value == "false" || value.parse::<i64>().is_ok() {
-        return Ok(());
+fn scene_input_condition_expr(input: &str) -> SceneExpr {
+    SceneExpr::Binary {
+        op: SceneBinaryOp::Eq,
+        left: Box::new(SceneExpr::Path(vec!["input".to_string()])),
+        right: Box::new(SceneExpr::Path(vec![input.to_string()])),
     }
-    if parse_quoted_text(value).is_some() {
-        return Ok(());
-    }
-    parse_view_path(value).map(|_| ()).ok_or(())
 }
 
 fn parse_level_menu_component(
@@ -7782,14 +8201,12 @@ fn parse_visual_shapes_block(
                 if let Some((name, axis, value)) =
                     parse_visual_shape_value_ref(table_ref, line, catalog)?
                 {
-                    let (pattern, next_i) =
-                        parse_visual_shape_value_pattern(lines, i, &[], false)?;
+                    let (pattern, next_i) = parse_visual_shape_value_pattern(lines, i, &[], false)?;
                     insert_visual_shape_value(shapes, name, axis, value, pattern, line)?;
                     i = next_i;
                 } else {
                     let (name, axis) = parse_visual_table_ref(table_ref, line)?;
-                    let (table, next_i) =
-                        parse_visual_shape_table(lines, i, &axis, None, catalog)?;
+                    let (table, next_i) = parse_visual_shape_table(lines, i, &axis, None, catalog)?;
                     shapes.insert(name, table);
                     i = next_i;
                 }
@@ -7901,10 +8318,11 @@ fn parse_sprite_entry(
                 shape_ref = Some(parse_sprite_shape_ref(shape, line)?);
                 i += 1;
             }
-            [shape] if color_exprs.is_some()
-                && inline_pattern.is_none()
-                && shape_ref.is_none()
-                && is_known_visual_shape_ref(shape, plain_shapes, shapes) =>
+            [shape]
+                if color_exprs.is_some()
+                    && inline_pattern.is_none()
+                    && shape_ref.is_none()
+                    && is_known_visual_shape_ref(shape, plain_shapes, shapes) =>
             {
                 shape_ref = Some(parse_sprite_shape_ref(shape, line)?);
                 i += 1;
@@ -8557,7 +8975,12 @@ fn infer_visual_shape_value_axis(
 ) -> Result<String, DiagnosticReport> {
     let axes = catalog_value_sets(catalog)
         .into_iter()
-        .filter_map(|(axis, values)| values.iter().any(|candidate| candidate == value).then_some(axis))
+        .filter_map(|(axis, values)| {
+            values
+                .iter()
+                .any(|candidate| candidate == value)
+                .then_some(axis)
+        })
         .collect::<Vec<_>>();
     let [axis] = axes.as_slice() else {
         return Err(parse_error(
@@ -9456,7 +9879,7 @@ fn sprite_name_for_object(object_name: &str) -> String {
     }
 }
 
-fn parse_group_directive(
+fn parse_group_definition(
     tokens: &[&str],
     line: &str,
     object_names: &HashMap<String, ObjectId>,
@@ -9466,14 +9889,14 @@ fn parse_group_directive(
     visual_objects: &[ObjectId],
     object_groups: &mut HashMap<String, Vec<ObjectId>>,
 ) -> Result<(), DiagnosticReport> {
-    if tokens.len() < 4 || tokens.get(2).copied() != Some("=") {
+    let Some(syntax) = crate::syntax::named_selector_assignment_syntax(tokens, true) else {
         return Err(parse_error(
             line,
-            "group must be: group <name> = <selector...>",
+            "group row must be: <name> = <selector...>",
         ));
-    }
+    };
 
-    let name = tokens[1];
+    let name = tokens[0];
     validate_selector_alias_name(name, line, "group name")?;
     if selector_name_conflicts_with(name, object_names, object_schemas, object_groups) {
         return Err(parse_error(
@@ -9483,7 +9906,7 @@ fn parse_group_directive(
     }
 
     let selector_sets = selector_sets(
-        &tokens[3..],
+        &tokens[syntax.rhs_start..],
         line,
         object_names,
         object_schemas,
@@ -9520,17 +9943,15 @@ fn parse_group_block(
             i += 1;
             continue;
         }
-        if tokens.len() < 3 || tokens.get(1).copied() != Some("=") {
+        let Some(_) = crate::syntax::named_selector_assignment_syntax(&tokens, true) else {
             return Err(parse_error(
                 &lines[i],
                 "group row must be: <name> = <selector...>",
             ));
-        }
+        };
 
-        let mut group_tokens = vec!["group"];
-        group_tokens.extend(tokens);
-        parse_group_directive(
-            &group_tokens,
+        parse_group_definition(
+            &tokens,
             &lines[i],
             &catalog.object_names,
             &catalog.object_schemas,
@@ -9560,16 +9981,16 @@ fn parse_legend_directive(
     char_objects: &mut HashMap<char, Vec<ObjectId>>,
     render_overlays: &mut OverlayDefs,
 ) -> Result<(), DiagnosticReport> {
-    if tokens.len() < 4 || tokens.get(2).copied() != Some("=") {
+    let Some(syntax) = crate::syntax::legend_directive_syntax(tokens, true) else {
         return Err(parse_error(
             line,
             "legend must be: legend <char> = <selector...>",
         ));
-    }
+    };
 
     let ch = parse_char(tokens.get(1), line, "missing legend char")?;
     let selector_sets = selector_sets(
-        &tokens[3..],
+        &tokens[syntax.rhs_start..],
         line,
         object_names,
         object_schemas,
@@ -9854,7 +10275,7 @@ fn parse_condition_value_expr(
         "exists" | "some" if pattern_arg.is_some() => Ok(ConditionValueAst::ExistsMatches(
             pattern_arg.expect("checked"),
         )),
-        "none" if pattern_arg.is_some() => Ok(ConditionValueAst::NoneMatches(
+        "none" | "no" if pattern_arg.is_some() => Ok(ConditionValueAst::NoneMatches(
             pattern_arg.expect("checked"),
         )),
         "exists" => Ok(ConditionValueAst::ExistsObjects(
@@ -9883,7 +10304,7 @@ fn parse_condition_value_expr(
             )?
             .alternatives,
         )),
-        "none" => Ok(ConditionValueAst::NoneObjects(
+        "none" | "no" => Ok(ConditionValueAst::NoneObjects(
             resolve_object_selector(
                 arg,
                 line,
@@ -9927,53 +10348,183 @@ fn parse_condition_pattern_arg(
     }))
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct OrientedPatternArgSurface {
+    pub(crate) orientation: OrientedPatternArgOrientationSurface,
+    pub(crate) pattern: std::ops::Range<usize>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum OrientedPatternArgOrientationSurface {
+    Neutral,
+    Input {
+        input: std::ops::Range<usize>,
+        axis: Option<std::ops::Range<usize>>,
+    },
+    Orientation {
+        orientation: std::ops::Range<usize>,
+    },
+}
+
+pub(crate) fn oriented_pattern_arg_surface(
+    arg: &str,
+    line: &str,
+) -> Result<Option<OrientedPatternArgSurface>, DiagnosticReport> {
+    let trimmed = strip_wrapping_pattern_parens_range(arg, trim_arg_range(arg, 0..arg.len()));
+    if arg[trimmed.clone()].starts_with('[') {
+        return Ok(Some(OrientedPatternArgSurface {
+            orientation: OrientedPatternArgOrientationSurface::Neutral,
+            pattern: trimmed,
+        }));
+    }
+
+    let Some(open_offset) = arg[trimmed.clone()].find('[') else {
+        return Ok(None);
+    };
+    let open_index = trimmed.start + open_offset;
+    let orientation = trim_arg_range(arg, trimmed.start..open_index);
+    let pattern = trim_arg_range(arg, open_index..trimmed.end);
+    if orientation.is_empty() {
+        return Ok(Some(OrientedPatternArgSurface {
+            orientation: OrientedPatternArgOrientationSurface::Neutral,
+            pattern,
+        }));
+    }
+    let orientation_tokens = pattern_arg_token_spans(arg, orientation.clone());
+    let orientation = match orientation_tokens.as_slice() {
+        [input] if input.text == "input" => OrientedPatternArgOrientationSurface::Input {
+            input: input.range.clone(),
+            axis: None,
+        },
+        [input, axis] if input.text == "input" => {
+            if !is_identifier(axis.text) {
+                return Err(parse_error(
+                    line,
+                    "input orientation set must be a single identifier",
+                ));
+            }
+            OrientedPatternArgOrientationSurface::Input {
+                input: input.range.clone(),
+                axis: Some(axis.range.clone()),
+            }
+        }
+        _ => {
+            let orientation_text = &arg[orientation.clone()];
+            if !is_identifier(orientation_text) {
+                return Err(parse_error(
+                    line,
+                    "pattern orientation must be a single identifier or input <set>",
+                ));
+            }
+            OrientedPatternArgOrientationSurface::Orientation { orientation }
+        }
+    };
+    if normalize_embedded_direction_marker(&arg[pattern.clone()])
+        .0
+        .is_some()
+    {
+        return Err(parse_error(
+            line,
+            "pattern cannot combine orientation prefix and embedded direction marker",
+        ));
+    }
+    Ok(Some(OrientedPatternArgSurface {
+        orientation,
+        pattern,
+    }))
+}
+
 fn split_oriented_pattern_arg(
     arg: &str,
     line: &str,
 ) -> Result<Option<(OrientationExpr, String)>, DiagnosticReport> {
-    let trimmed = arg.trim();
-    if trimmed.starts_with('[') {
-        let (embedded_orientation, pattern) = normalize_embedded_direction_marker(trimmed);
+    let Some(surface) = oriented_pattern_arg_surface(arg, line)? else {
+        return Ok(None);
+    };
+    let pattern = &arg[surface.pattern.clone()];
+    if matches!(
+        surface.orientation,
+        OrientedPatternArgOrientationSurface::Neutral
+    ) {
+        let (embedded_orientation, pattern) = normalize_embedded_direction_marker(pattern);
         return Ok(Some((
             embedded_orientation.unwrap_or(OrientationExpr::Neutral),
             pattern,
         )));
     }
 
-    let Some(open_index) = trimmed.find('[') else {
-        return Ok(None);
-    };
-    let orientation = trimmed[..open_index].trim();
-    let pattern = trimmed[open_index..].trim();
-    if orientation.is_empty() {
-        return Ok(Some((OrientationExpr::Neutral, pattern.to_string())));
-    }
-    let orientation = if let Some(axis) = orientation.strip_prefix("input ").map(str::trim) {
-        if !is_identifier(axis) {
-            return Err(parse_error(
-                line,
-                "input orientation set must be a single identifier",
-            ));
+    let orientation = match surface.orientation {
+        OrientedPatternArgOrientationSurface::Neutral => unreachable!("handled above"),
+        OrientedPatternArgOrientationSurface::Input { axis, .. } => {
+            let axis = axis.map(|axis| &arg[axis]).unwrap_or("directions");
+            OrientationExpr::InputSet(axis.to_string())
         }
-        OrientationExpr::InputSet(axis.to_string())
-    } else if orientation == "input" {
-        OrientationExpr::InputSet("directions".to_string())
-    } else if !is_identifier(orientation) {
-        return Err(parse_error(
-            line,
-            "pattern orientation must be a single identifier or input <set>",
-        ));
-    } else {
-        parse_statement_orientation_expr(orientation, &[])
+        OrientedPatternArgOrientationSurface::Orientation { orientation } => {
+            parse_statement_orientation_expr(&arg[orientation], &[])
+        }
     };
-    let (embedded_orientation, pattern) = normalize_embedded_direction_marker(pattern);
-    if embedded_orientation.is_some() {
-        return Err(parse_error(
-            line,
-            "pattern cannot combine orientation prefix and embedded direction marker",
-        ));
+    Ok(Some((orientation, pattern.to_string())))
+}
+
+fn strip_wrapping_pattern_parens_range(
+    value: &str,
+    range: std::ops::Range<usize>,
+) -> std::ops::Range<usize> {
+    if !value[range.clone()].starts_with('(') {
+        return range;
     }
-    Ok(Some((orientation, pattern)))
+    let after_open_start = range.start + 1;
+    let after_open = &value[after_open_start..range.end];
+    let Some(close_index) = matching_close_paren(after_open) else {
+        return range;
+    };
+    if close_index + 1 != after_open.len() {
+        return range;
+    }
+    trim_arg_range(value, after_open_start..after_open_start + close_index)
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PatternArgTokenSpan<'a> {
+    text: &'a str,
+    range: std::ops::Range<usize>,
+}
+
+fn pattern_arg_token_spans(
+    arg: &str,
+    range: std::ops::Range<usize>,
+) -> Vec<PatternArgTokenSpan<'_>> {
+    let mut tokens = Vec::new();
+    let mut index = range.start;
+    while index < range.end {
+        let Some(start_offset) = arg[index..range.end].find(|ch: char| !ch.is_whitespace()) else {
+            break;
+        };
+        let start = index + start_offset;
+        let end = arg[start..range.end]
+            .find(char::is_whitespace)
+            .map_or(range.end, |offset| start + offset);
+        tokens.push(PatternArgTokenSpan {
+            text: &arg[start..end],
+            range: start..end,
+        });
+        index = end;
+    }
+    tokens
+}
+
+fn trim_arg_range(arg: &str, range: std::ops::Range<usize>) -> std::ops::Range<usize> {
+    let start = arg[range.clone()]
+        .find(|ch: char| !ch.is_whitespace())
+        .map_or(range.end, |offset| range.start + offset);
+    let end = arg[start..range.end]
+        .rfind(|ch: char| !ch.is_whitespace())
+        .map(|offset| {
+            let index = start + offset;
+            index + arg[index..].chars().next().map(char::len_utf8).unwrap_or(0)
+        })
+        .unwrap_or(start);
+    start..end
 }
 
 fn parse_call_expr<'a>(expr: &'a str, line: &str) -> Result<(&'a str, &'a str), DiagnosticReport> {
@@ -10527,7 +11078,8 @@ fn parse_statement_arrow_consequence(
             vec![StatementAst::Call {
                 name: effect_text.to_string(),
                 source_line: line.to_string(),
-                source_line_number: line_numbers.and_then(|line_numbers| line_numbers.get(start).copied()),
+                source_line_number: line_numbers
+                    .and_then(|line_numbers| line_numbers.get(start).copied()),
             }],
             start + 1,
         ));
@@ -10536,7 +11088,8 @@ fn parse_statement_arrow_consequence(
     Ok((
         vec![StatementAst::Effect {
             source_line: line.to_string(),
-            source_line_number: line_numbers.and_then(|line_numbers| line_numbers.get(start).copied()),
+            source_line_number: line_numbers
+                .and_then(|line_numbers| line_numbers.get(start).copied()),
             effects,
         }],
         start + 1,
@@ -11177,7 +11730,13 @@ fn parse_statement_block(
             match $result {
                 Ok(value) => value,
                 Err(report) => {
-                    diagnostics.extend(report.into_diagnostics());
+                    let report_line = lines.get(i).map(String::as_str).unwrap_or("");
+                    let report_line_number =
+                        line_numbers.and_then(|line_numbers| line_numbers.get(i).copied());
+                    diagnostics.extend(
+                        report_with_source_line_number(report, report_line, report_line_number)
+                            .into_diagnostics(),
+                    );
                     i = recover_after_directive_error(lines, i);
                     continue;
                 }
@@ -11206,7 +11765,10 @@ fn parse_statement_block(
             }
             Ok(None) => source_line.as_str(),
             Err(report) => {
-                diagnostics.extend(report.into_diagnostics());
+                diagnostics.extend(
+                    report_with_source_line_number(report, source_line, source_line_number)
+                        .into_diagnostics(),
+                );
                 i += 1;
                 continue;
             }
@@ -11217,16 +11779,21 @@ fn parse_statement_block(
         match tokens.first().copied() {
             Some("for") => {
                 if !opens_block {
-                    diagnostics.extend(
-                        parse_error(line, "for block must use `{ ... }`").into_diagnostics(),
+                    extend_report_with_source_line_number(
+                        &mut diagnostics,
+                        parse_error(line, "for block must use `{ ... }`"),
+                        line,
+                        source_line_number,
                     );
                     i += 1;
                     continue;
                 }
                 let ["for", binding, "in", sources @ ..] = tokens.as_slice() else {
-                    diagnostics.extend(
-                        parse_error(line, "for directive must be: for <binding> in <source...>")
-                            .into_diagnostics(),
+                    extend_report_with_source_line_number(
+                        &mut diagnostics,
+                        parse_error(line, "for directive must be: for <binding> in <source...>"),
+                        line,
+                        source_line_number,
                     );
                     i = recover_after_directive_error(lines, i);
                     continue;
@@ -11251,7 +11818,12 @@ fn parse_statement_block(
                     ) {
                         Ok(lines) => lines,
                         Err(report) => {
-                            diagnostics.extend(report.into_diagnostics());
+                            extend_report_with_source_line_number(
+                                &mut diagnostics,
+                                report,
+                                line,
+                                source_line_number,
+                            );
                             continue;
                         }
                     };
@@ -11293,8 +11865,12 @@ fn parse_statement_block(
                         }
                     };
                     if parsed_i != expanded_lines.len() {
-                        diagnostics
-                            .extend(parse_error(line, "for expansion failed").into_diagnostics());
+                        extend_report_with_source_line_number(
+                            &mut diagnostics,
+                            parse_error(line, "for expansion failed"),
+                            line,
+                            source_line_number,
+                        );
                         continue;
                     }
                     statements.extend(nested);
@@ -11569,8 +12145,11 @@ fn parse_statement_block(
                     rule_params,
                 ));
                 if next_i == 0 {
-                    diagnostics.extend(
-                        parse_error(line, "if block missing closing brace").into_diagnostics(),
+                    extend_report_with_source_line_number(
+                        &mut diagnostics,
+                        parse_error(line, "if block missing closing brace"),
+                        line,
+                        source_line_number,
                     );
                     i = recover_after_directive_error(lines, i);
                     continue;
@@ -11602,20 +12181,32 @@ fn parse_statement_block(
                 i = next_i;
             }
             Some("else") => {
-                diagnostics.extend(parse_error(line, "else without if").into_diagnostics());
+                extend_report_with_source_line_number(
+                    &mut diagnostics,
+                    parse_error(line, "else without if"),
+                    line,
+                    source_line_number,
+                );
                 i += 1;
             }
             Some("when") => {
-                diagnostics.extend(parse_error(line, "use `if` for conditions").into_diagnostics());
+                extend_report_with_source_line_number(
+                    &mut diagnostics,
+                    parse_error(line, "use `if` for conditions"),
+                    line,
+                    source_line_number,
+                );
                 i += 1;
             }
             Some("action") if tokens.len() > 1 => {
-                diagnostics.extend(
+                extend_report_with_source_line_number(
+                    &mut diagnostics,
                     parse_error(
                         line,
                         "`action` statements were removed; use explicit input guards and rewrites",
-                    )
-                    .into_diagnostics(),
+                    ),
+                    line,
+                    source_line_number,
                 );
                 i += 1;
             }
@@ -11626,17 +12217,24 @@ fn parse_statement_block(
                         source_line_number,
                         effects,
                     }),
-                    Err(report) => diagnostics.extend(report.into_diagnostics()),
+                    Err(report) => extend_report_with_source_line_number(
+                        &mut diagnostics,
+                        report,
+                        line,
+                        source_line_number,
+                    ),
                 }
                 i += 1;
             }
             Some("do") => {
-                diagnostics.extend(
+                extend_report_with_source_line_number(
+                    &mut diagnostics,
                     parse_error(
                         line,
                         "`do` is obsolete; write the effect statement directly",
-                    )
-                    .into_diagnostics(),
+                    ),
+                    line,
+                    source_line_number,
                 );
                 i += 1;
             }
@@ -11688,7 +12286,12 @@ fn parse_statement_block(
                             }],
                             else_statements: Vec::new(),
                         }),
-                        Err(report) => diagnostics.extend(report.into_diagnostics()),
+                        Err(report) => extend_report_with_source_line_number(
+                            &mut diagnostics,
+                            report,
+                            line,
+                            source_line_number,
+                        ),
                     }
                     i += 1;
                 }
@@ -11700,7 +12303,12 @@ fn parse_statement_block(
                         source_line_number,
                         effects,
                     }),
-                    Err(report) => diagnostics.extend(report.into_diagnostics()),
+                    Err(report) => extend_report_with_source_line_number(
+                        &mut diagnostics,
+                        report,
+                        line,
+                        source_line_number,
+                    ),
                 }
                 i += 1;
             }
@@ -11719,7 +12327,12 @@ fn parse_statement_block(
                 ) {
                     Ok(statement) => statement,
                     Err(report) => {
-                        diagnostics.extend(report.into_diagnostics());
+                        extend_report_with_source_line_number(
+                            &mut diagnostics,
+                            report,
+                            line,
+                            source_line_number,
+                        );
                         i = next_statement_i;
                         continue;
                     }
@@ -11739,7 +12352,12 @@ fn parse_statement_block(
                         Ok(rewrite) => statements.push(StatementAst::Rewrite(
                             rewrite_with_source_line_number(rewrite, source_line_number),
                         )),
-                        Err(report) => diagnostics.extend(report.into_diagnostics()),
+                        Err(report) => extend_report_with_source_line_number(
+                            &mut diagnostics,
+                            report,
+                            line,
+                            source_line_number,
+                        ),
                     }
                 }
                 i = next_statement_i;
@@ -11784,7 +12402,12 @@ fn parse_statement_block(
                         Ok(rewrite) => statements.push(StatementAst::Rewrite(
                             rewrite_with_source_line_number(rewrite, source_line_number),
                         )),
-                        Err(report) => diagnostics.extend(report.into_diagnostics()),
+                        Err(report) => extend_report_with_source_line_number(
+                            &mut diagnostics,
+                            report,
+                            line,
+                            source_line_number,
+                        ),
                     }
                     i = next_statement_i;
                 }
@@ -11829,7 +12452,12 @@ fn parse_statement_block(
                         Ok(rewrite) => statements.push(StatementAst::Rewrite(
                             rewrite_with_source_line_number(rewrite, source_line_number),
                         )),
-                        Err(report) => diagnostics.extend(report.into_diagnostics()),
+                        Err(report) => extend_report_with_source_line_number(
+                            &mut diagnostics,
+                            report,
+                            line,
+                            source_line_number,
+                        ),
                     }
                     i = next_statement_i;
                 }
@@ -11874,7 +12502,12 @@ fn parse_statement_block(
                         Ok(rewrite) => statements.push(StatementAst::Rewrite(
                             rewrite_with_source_line_number(rewrite, source_line_number),
                         )),
-                        Err(report) => diagnostics.extend(report.into_diagnostics()),
+                        Err(report) => extend_report_with_source_line_number(
+                            &mut diagnostics,
+                            report,
+                            line,
+                            source_line_number,
+                        ),
                     }
                     i = next_statement_i;
                 }
@@ -11919,7 +12552,12 @@ fn parse_statement_block(
                         Ok(rewrite) => statements.push(StatementAst::Rewrite(
                             rewrite_with_source_line_number(rewrite, source_line_number),
                         )),
-                        Err(report) => diagnostics.extend(report.into_diagnostics()),
+                        Err(report) => extend_report_with_source_line_number(
+                            &mut diagnostics,
+                            report,
+                            line,
+                            source_line_number,
+                        ),
                     }
                     i = next_statement_i;
                 }
@@ -11955,12 +12593,14 @@ fn parse_statement_block(
                         .map(str::trim)
                         .unwrap_or("");
                     if condition_text.is_empty() {
-                        diagnostics.extend(
+                        extend_report_with_source_line_number(
+                            &mut diagnostics,
                             parse_error(
                                 line,
                                 "repeat until block must be: repeat until <condition>",
-                            )
-                            .into_diagnostics(),
+                            ),
+                            line,
+                            source_line_number,
                         );
                         i += 1;
                         continue;
@@ -12018,7 +12658,12 @@ fn parse_statement_block(
                         Ok(rewrite) => statements.push(StatementAst::Rewrite(
                             rewrite_with_source_line_number(rewrite, source_line_number),
                         )),
-                        Err(report) => diagnostics.extend(report.into_diagnostics()),
+                        Err(report) => extend_report_with_source_line_number(
+                            &mut diagnostics,
+                            report,
+                            line,
+                            source_line_number,
+                        ),
                     }
                     i = next_statement_i;
                 }
@@ -12038,7 +12683,12 @@ fn parse_statement_block(
                 ) {
                     Ok(statement) => statement,
                     Err(report) => {
-                        diagnostics.extend(report.into_diagnostics());
+                        extend_report_with_source_line_number(
+                            &mut diagnostics,
+                            report,
+                            line,
+                            source_line_number,
+                        );
                         i = next_statement_i;
                         continue;
                     }
@@ -12058,7 +12708,12 @@ fn parse_statement_block(
                         Ok(rewrite) => statements.push(StatementAst::Rewrite(
                             rewrite_with_source_line_number(rewrite, source_line_number),
                         )),
-                        Err(report) => diagnostics.extend(report.into_diagnostics()),
+                        Err(report) => extend_report_with_source_line_number(
+                            &mut diagnostics,
+                            report,
+                            line,
+                            source_line_number,
+                        ),
                     }
                 }
                 i = next_statement_i;
@@ -12082,16 +12737,26 @@ fn parse_statement_block(
                         named_conditions,
                         rule_params,
                     ));
-                    diagnostics.extend(parse_error(
+                    extend_report_with_source_line_number(
+                        &mut diagnostics,
+                        parse_error(
+                            line,
+                            "`display ...` syntax was removed; use @routine calls or bare display rewrites",
+                        ),
                         line,
-                        "`display ...` syntax was removed; use @routine calls or bare display rewrites",
-                    ).into_diagnostics());
+                        source_line_number,
+                    );
                     i = next_i;
                 } else {
-                    diagnostics.extend(parse_error(
+                    extend_report_with_source_line_number(
+                        &mut diagnostics,
+                        parse_error(
+                            line,
+                            "`display ...` syntax was removed; use @routine calls or bare display rewrites",
+                        ),
                         line,
-                        "`display ...` syntax was removed; use @routine calls or bare display rewrites",
-                    ).into_diagnostics());
+                        source_line_number,
+                    );
                     i += 1;
                 }
             }
@@ -12110,7 +12775,12 @@ fn parse_statement_block(
                 ) {
                     Ok(statement) => statement,
                     Err(report) => {
-                        diagnostics.extend(report.into_diagnostics());
+                        extend_report_with_source_line_number(
+                            &mut diagnostics,
+                            report,
+                            line,
+                            source_line_number,
+                        );
                         i = next_statement_i;
                         continue;
                     }
@@ -12132,7 +12802,12 @@ fn parse_statement_block(
                         Ok(rewrite) => statements.push(StatementAst::Rewrite(
                             rewrite_with_source_line_number(rewrite, source_line_number),
                         )),
-                        Err(report) => diagnostics.extend(report.into_diagnostics()),
+                        Err(report) => extend_report_with_source_line_number(
+                            &mut diagnostics,
+                            report,
+                            line,
+                            source_line_number,
+                        ),
                     }
                 }
                 i = next_statement_i;
@@ -12162,7 +12837,8 @@ fn parse_statement_block(
                 i += 1;
             }
             Some(other) if scene_effect_command_syntax(other).is_some() => {
-                diagnostics.extend(
+                extend_report_with_source_line_number(
+                    &mut diagnostics,
                     parse_error(
                         line,
                         &format!(
@@ -12170,15 +12846,18 @@ fn parse_statement_block(
                          put scene effects in a scene lifecycle, scene routine, \
                          or scene component effect"
                         ),
-                    )
-                    .into_diagnostics(),
+                    ),
+                    line,
+                    source_line_number,
                 );
                 i += 1;
             }
             Some(other) => {
-                diagnostics.extend(
-                    parse_error(line, &format!("unknown statement directive {other}"))
-                        .into_diagnostics(),
+                extend_report_with_source_line_number(
+                    &mut diagnostics,
+                    parse_error(line, &format!("unknown statement directive {other}")),
+                    line,
+                    source_line_number,
                 );
                 i += 1;
             }
@@ -12225,8 +12904,7 @@ fn rewrite_with_source_line_number(
 fn validate_display_hook_statements(statements: &[StatementAst]) -> Result<(), DiagnosticReport> {
     for statement in statements {
         match statement {
-            StatementAst::DisplayCall { .. }
-            | StatementAst::Rewrite(_) => {}
+            StatementAst::DisplayCall { .. } | StatementAst::Rewrite(_) => {}
             StatementAst::Conditional {
                 then_statements,
                 else_statements,
@@ -12970,6 +13648,40 @@ fn is_input_effect_statement(line: &str) -> bool {
         return false;
     };
     is_identifier(left.trim())
+}
+
+fn report_with_source_line_number(
+    report: DiagnosticReport,
+    source_line: &str,
+    source_line_number: Option<usize>,
+) -> DiagnosticReport {
+    let Some(source_line_number) = source_line_number else {
+        return report;
+    };
+    let diagnostics = report
+        .into_diagnostics()
+        .into_iter()
+        .map(|mut diagnostic| {
+            if let Some(span) = &mut diagnostic.primary_span {
+                if span.line.is_none() && span.source_line.as_deref() == Some(source_line) {
+                    span.line = Some(source_line_number);
+                }
+            }
+            diagnostic
+        })
+        .collect();
+    DiagnosticReport::from_diagnostics(diagnostics)
+}
+
+fn extend_report_with_source_line_number(
+    diagnostics: &mut Vec<crate::Diagnostic>,
+    report: DiagnosticReport,
+    source_line: &str,
+    source_line_number: Option<usize>,
+) {
+    diagnostics.extend(
+        report_with_source_line_number(report, source_line, source_line_number).into_diagnostics(),
+    );
 }
 
 fn split_comparison(condition: &str) -> Option<(&str, ComparisonOp, &str)> {

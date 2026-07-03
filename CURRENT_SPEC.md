@@ -20,7 +20,7 @@ Top-level metadata は `title <text>` と省略可能な `subtitle <text>` / `au
 
 ## Game Entry And Imports
 
-ゲーム folder は package の単位で、実行 entry は top-level `title` などの game prelude metadata を持つ `.puzzle` とする。
+ゲーム folder は package の単位で、実行 entry は top-level `puzzle` または `puzzle3` model を宣言する `.puzzle` / `.puzzle3` とする。`title` / `subtitle` / `author` / `homepage` は表示 metadata であり、entry 資格ではない。
 
 ```txt
 games/fixban/
@@ -29,9 +29,9 @@ games/fixban/
   sprites.puzzle
 ```
 
-adapter / editor / build tool に folder を渡した場合は、その folder 内の prelude-bearing `.puzzle` に解決する。複数ある場合は `game.puzzle`、`<folder>.puzzle`、`main.puzzle`、その他の順で優先する。prelude-bearing `.puzzle` がない folder は error。`levels.puzzle` や `sprites.puzzle` のような prelude を持たない分割 file は import fragment であり、それ自体は実行対象ではない。
+adapter / editor / build tool に folder を渡した場合は、その folder 内の model-declaring `.puzzle` / `.puzzle3` に解決する。複数ある場合は `game.puzzle`、`game.puzzle3`、`<folder>.puzzle`、`<folder>.puzzle3`、`main.puzzle`、`main.puzzle3`、その他の順で優先する。model-declaring source がない folder は error。`levels.puzzle` や `sprites.puzzle` のような model を宣言しない分割 file は import fragment であり、それ自体は実行対象ではない。
 
-`.puzzle` file を直接渡す場合、その file 自体が prelude を持てば実行対象になる。prelude を持たない fragment を渡した場合は、同じ folder から親 folder へ向かって最初の game entry を探す。
+`.puzzle` / `.puzzle3` file を直接渡す場合、その file 自体が puzzle model を宣言していれば実行対象になる。model を宣言しない fragment を渡した場合は、同じ folder から親 folder へ向かって最初の game entry を探す。
 
 `import "<path>"` は source composition である。同じ folder にある `.puzzle` は自動では読まれず、entry から明示的に import する。
 
@@ -289,8 +289,15 @@ prefix なしの空間 pattern、つまり複数セル、複数行、ellipsis、
 
 この規則は rewrite だけでなく、pattern condition と condition pattern にも適用される。
 
+pattern cell の `null` は盤面外セル要求であり、object selector ではない。
+`no X` は盤面内 cell に `X` がないことを要求し、`null` はその pattern cell 自体が
+盤面外であることを要求する。`null` cell は他 token と混在できず、`no null` は
+invalid。rewrite では `null` は match 側の検知専用であり、対応する RHS cell へ
+object や scratch を書けない。
+
 ```txt
 [ A | ] -> [ | A ]
+[ no Edge | null ] -> [ Edge | ]
 some([ Player | Wall ])
 some(down [ Rock | ])
 some(horizontal [ Rock | ])
@@ -561,11 +568,11 @@ pointer drag の所有者は開始点で決まる。pointer down が `puzzle3` �
 
 `scene level_menu [name]` の typed scene template は読まない。level list は通常 scene の `layout` 内に `level_menu` component として置く。`show_index = <true|false>`、`show_solved = <true|false>`、`layout = list`、`columns = <n>`、`wrap = <true|false>`、`locked = disabled|hidden`、`button ...` などの option は `level_menu { ... }` 内に書く。matrix では `left` / `right` が隣の item、`up` / `down` が列数ぶん前後の item に移動する。
 
-`sounds { ... }` は top-level の音源定義。`sfx <name> seed=<seed> type=<type>` と `music <name> seed=<seed> tone=<0..1> bpm=<60..160> volume=<0..1>` を持つ。`sfx type=puzzlescript` は PuzzleScript numeric sound seed 互換 generator を選ぶ import 用 type。scene/component RHS の canonical form は `input <name>`、`component_effect <name>`、または direct scene effect。scene effect は `sfx <name>`、`play_music <name>`、`pause_music [name]`、`resume_music [name]`、`stop_music [name]`、`goto <scene>`、`goto <scene>(<level>)`、`start <scene>`、`start <scene>(<level>)`、`clear_undo_history`、`clear_game_progress`、`<target>.restart` などを書ける。scene navigation の canonical form は `goto` と `start` だけ。`goto` は固定 scene node へ切り替え、既存の scene state を保持する。`start` は target scene state を初期化してから `goto` する。level scene への入場も `goto sokoban`、`goto sokoban(level_name)`、`goto playing(level)` のように scene call として書く。level 指定なしの `goto <level scene>` は保存済みまたは選択中の `current_level` を使い、なければ最初の level に入る。`resume` / `continue` / `open` / `enter` / `back` / `close` は canonical scene navigation ではない。旧 `start levels ... in <scene>` / `continue levels ... in <scene>` は読まず、同じ形へ誘導する error を出す。通常の clear / advance / restart は model window component と puzzle lifecycle の責務なので、scene effect は明示的な介入に限る。game progress は scene effect として `clear_game_progress`、`set current_level = <level>`、`clear current_level`、`set level.cleared = true|false`、`set level(<level>).cleared = true|false`、`reset persistent_vars`、`reset <persistent var>` で操作できる。undo/redo 履歴だけを捨てる場合は `clear_undo_history` を使う。`play_sfx <name>` は読まない。`message <expr>` は popup message を出す presentation effect で、quoted text、scene `var`、top-level `var`、effect binding を参照でき、既定で `default_wait_time` だけ待つ。`wait [duration]` は `wait 0.1s` / `wait 1s` / `wait 100ms` のように書く scene presentation wait で、`wait` 単体は既定で `0.2s`。top-level `default_wait_time = 500ms` のように bare `wait` と message の既定待ち時間を変更できる。scene 直下の lifecycle block は `on_scene_start { ... }` のみ。`on_level_start { ... }` は puzzle lifecycle block であり、scene には置けない。複数 effect は block に 1 行ずつ書き、`then` は使わない。音声、message、wait は presentation adapter の責務で、core rule state には入らない。
+`sounds { ... }` は top-level の音源定義。`sfx <name> seed=<seed> type=<type> volume=<gain>` と `music <name> seed=<seed> tone=<0..1> bpm=<60..160> volume=<gain>` を持つ。`volume` は 0 以上の gain multiplier で、1 より大きい値は増幅として扱われる。`sfx type=puzzlescript` は PuzzleScript numeric sound seed 互換 generator を選ぶ import 用 type。scene/component RHS の canonical form は `input <name>`、`component_effect <name>`、または direct scene effect。scene effect は `sfx <name>`、`play_music <name>`、`pause_music [name]`、`resume_music [name]`、`stop_music [name]`、`goto <scene>`、`goto <scene>(<level>)`、`start <scene>`、`start <scene>(<level>)`、`clear_undo_history`、`clear_game_progress`、`<target>.restart` などを書ける。scene navigation の canonical form は `goto` と `start` だけ。`goto` は固定 scene node へ切り替え、既存の scene state を保持する。`start` は target scene state を初期化してから `goto` する。level scene への入場も `goto sokoban`、`goto sokoban(level_name)`、`goto playing(level)` のように scene call として書く。level 指定なしの `goto <level scene>` は保存済みまたは選択中の `current_level` を使い、なければ最初の level に入る。`resume` / `continue` / `open` / `enter` / `back` / `close` は canonical scene navigation ではない。旧 `start levels ... in <scene>` / `continue levels ... in <scene>` は読まず、同じ形へ誘導する error を出す。通常の clear / advance / restart は model window component と puzzle lifecycle の責務なので、scene effect は明示的な介入に限る。game progress は scene effect として `clear_game_progress`、`set current_level = <level>`、`clear current_level`、`set level.cleared = true|false`、`set level(<level>).cleared = true|false`、`reset persistent_vars`、`reset <persistent var>` で操作できる。undo/redo 履歴だけを捨てる場合は `clear_undo_history` を使う。`play_sfx <name>` は読まない。`message <expr>` は popup message を出す presentation effect で、quoted text、scene `var`、top-level `var`、effect binding を参照でき、既定で `default_wait_time` だけ待つ。`wait [duration]` は `wait 0.1s` / `wait 1s` / `wait 100ms` のように書く scene presentation wait で、`wait` 単体は既定で `0.2s`。top-level `default_wait_time = 500ms` のように bare `wait` と message の既定待ち時間を変更できる。scene 直下の lifecycle block は `on_scene_start { ... }` のみ。`on_level_start { ... }` は puzzle lifecycle block であり、scene には置けない。複数 effect は block に 1 行ずつ書き、`then` は使わない。音声、message、wait は presentation adapter の責務で、core rule state には入らない。
 
 `theme <theme>` / `theme <theme> { ... }` は top-level の表示 theme metadata。theme の見た目の identity は HTML adapter の CSS preset が持ち、`.puzzle` の theme 宣言は preset 名の選択と、作者に公開する少数の調整項目だけを持つ。theme block の canonical entry は `<setting> <value>` で、互換 syntax として `<setting> = <value>` も読む。公開色は `accent_color`、`background_color`、`text_color` の 3 つだけである。UI の線、選択状態、panel、popup、盤面背景は HTML adapter の preset がこの 3 色の alpha だけで作り、別の実色を持たない。追加の非色設定は `ui_font`、`title_font`、`control_radius`、`panel_radius`。これらは HTML adapter が `--accent` / `--bg` / `--ink` などの CSS custom property へ lower し、preset CSS の値を上書きする。theme は `puzzle-core` の state、rule、transition には入らない。複数 theme 宣言は import 後の順序で preset 名または同じ項目を上書きする。theme 未指定時の default theme name は `clean`。標準 preset は `clean`、`terminal`、`paper`、`pixel`、`candy`、`blueprint`、`noir` で、HTML adapter は対応する CSS preset を同梱する。
 
-`assets { ... }` は top-level の外部 file manifest。`css "game.css"` と `script "visuals.js"` を持てる。path は game folder からの相対 path だけ。HTML adapter は宣言された CSS / script だけを読み込む。`script` は rendered scene snapshot から追加表示を作るための補助 JS で、puzzle state、transition、undo stack、level index を直接変更してはならない。盤面に追従する script は `window.PuzzleStudio.registerAssetScript({ setup(api) { api.onRender(...) } })` を使う。
+`assets { ... }` は top-level の外部 file manifest。`css "game.css"`、`script "visuals.js"`、`file "sprites/player.png"` を持てる。path は game folder からの相対 path だけ。HTML adapter は宣言された CSS / script だけを読み込み、standalone HTML export は宣言された `file` だけを `PuzzleAssets` に埋め込む。puzzle folder 内の未宣言 file は asset として扱わない。`script` は rendered scene snapshot から追加表示を作るための補助 JS で、puzzle state、transition、undo stack、level index を直接変更してはならない。盤面に追従する script は `window.PuzzleStudio.registerAssetScript({ setup(api) { api.onRender(...) } })` を使う。
 
 ```txt
 scene play_level {
@@ -898,6 +905,17 @@ runtime / core は dynamic schema lookup を持たず、通常の object id patt
 値が tag slot 外へ出ると no-match になる warning を出す。`const` は warning しない。
 同じ名前が tag value、tag set、`var` / `const` の複数に見える場合は ambiguous
 selector として error。
+
+rewrite 左辺の schema slot 名は tag value capture になる。`[ Obj:kind ] -> captured = kind`
+は `Obj` の `kind` slot で match した concrete tag 値を `captured` に書く。
+`kind` 参照は同じ rewrite 内で一意に束縛される場合だけ valid。`[ A:kind B:kind ] -> captured = kind`
+は、2つの independent occurrence が同じ capture key を持つため ambiguous error になる。
+独立した値を使う場合は `[ A:kind#1 B:kind#2 ] -> first = kind#1` のように
+tag slot label を付ける。single-slot schema では `[ Obj:* ] -> captured = *` と
+`[ Obj:*#1 ] -> captured = *#1` も同じ capture sugar として使える。RHS の `#1`
+単体参照は読まず、`*#1` または `kind#1` のように capture key 全体を書く。
+capture を puzzle `var` update value として使う場合は、tag value が `true` / `false` /
+integer として読める必要がある。
 
 同じ selector が rewrite 左辺と右辺に出る場合、右辺は左辺で一致した concrete object を保持する。
 

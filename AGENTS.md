@@ -194,6 +194,28 @@ payload bindings over special words tied to one widget or adapter.
 Use `on_*` only for scoped lifecycle handlers. The scope must determine what the
 event means. Do not make `on` a grab bag for unrelated command shortcuts.
 
+## PuzzleStudio Syntax Shape
+
+PuzzleStudio syntax should optimize for stable author intent rather than parser
+convenience. When adding or changing syntax, preserve these surface principles:
+
+- When exactly one object of a requested type exists in the current scope, the
+  type name may identify that object. If the surrounding syntax already requires
+  that type, the reference may be omitted entirely. This shorthand is valid only
+  when uniqueness is checked and ambiguity fails visibly.
+- Nested blocks form a tree of owner-scoped declarations or content. A structure
+  such as `a { b { } c { } }` expresses containment and ownership first; source
+  order is meaningful only when the owner syntax defines an ordered sequence,
+  such as levels, layout children, or rule statements.
+- Compilation must not use sibling source order as an implicit declaration
+  availability rule. References should resolve against the complete owning
+  scope after its declarations have been collected, while ordered constructs
+  still preserve their authored item order for runtime or presentation meaning.
+- A block body may contain child nodes and owner-scoped special forms, such as
+  replacement rules or `ascii` content. Special forms must be interpreted by the
+  owner of the containing block, not by a generic tree walker guessing from
+  appearance.
+
 ## Generated Artifacts
 
 Generated artifacts must not be edited directly. Patch the source owner and

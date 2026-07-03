@@ -265,6 +265,7 @@ fn push_export_assets(out: &mut String, loaded: &LoadedGame) {
             match asset.kind {
                 AssetKind::Css => "css",
                 AssetKind::Script => "script",
+                AssetKind::File => "file",
             },
         );
         out.push(',');
@@ -536,6 +537,8 @@ fn push_compiled_play_bundle(out: &mut String, loaded: &LoadedGame) {
     push_json_number(out, "version", 1);
     out.push(',');
     push_json_pair(out, "model", "grid2");
+    out.push(',');
+    push_compiled_input_labels(out, loaded);
     out.push_str(",\"transition\":[");
     out.push_str(&loaded.game.layer_count.to_string());
     out.push(',');
@@ -556,6 +559,26 @@ fn push_compiled_play_bundle(out: &mut String, loaded: &LoadedGame) {
     out.push(',');
     push_compact_level_programs(out, loaded);
     out.push_str("]}");
+}
+
+fn push_compiled_input_labels(out: &mut String, loaded: &LoadedGame) {
+    let mut labels = loaded
+        .input_labels
+        .iter()
+        .map(|(id, label)| (*id, label.as_str()))
+        .collect::<Vec<_>>();
+    labels.sort_by_key(|(id, _)| *id);
+
+    out.push_str("\"inputLabels\":{");
+    for (index, (id, label)) in labels.iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        push_json_string(out, &id.0.to_string());
+        out.push(':');
+        push_json_string(out, label);
+    }
+    out.push('}');
 }
 
 fn push_rule_effects(out: &mut String, loaded: &LoadedGame) {
@@ -1529,6 +1552,8 @@ fn push_compact_match_cell(out: &mut String, cell: &puzzle_core::MatchCell) {
     push_compact_scratch_patterns(out, &cell.forbid_scratch);
     out.push(',');
     push_compact_object_set_scratch_patterns(out, &cell.forbid_object_set_scratch);
+    out.push(',');
+    out.push_str(if cell.require_null { "1" } else { "0" });
     out.push(']');
 }
 
@@ -1926,6 +1951,8 @@ fn push_pattern(out: &mut String, pattern: &Pattern) {
             out.push('{');
             push_offset_named(out, "offset", &cell.offset);
             out.push(',');
+            push_json_bool(out, "requireNull", cell.require_null);
+            out.push(',');
             push_object_ids(out, "requireObjects", &cell.require_objects);
             out.push(',');
             push_object_ids(out, "forbidObjects", &cell.forbid_objects);
@@ -2226,6 +2253,7 @@ fn push_solution_response(out: &mut String, loaded: &LoadedGame, response: &Solu
             depth,
             moves,
             steps,
+            observations,
         } => {
             push_json_pair(out, "result", "solved");
             out.push(',');
@@ -2234,26 +2262,210 @@ fn push_solution_response(out: &mut String, loaded: &LoadedGame, response: &Solu
             push_solution_moves(out, loaded, moves);
             out.push(',');
             push_solution_steps(out, loaded, steps);
+            out.push(',');
+            push_search_observations(out, observations);
         }
-        SolutionResponse::Exhausted(stats) => {
+        SolutionResponse::Exhausted {
+            stats,
+            observations,
+        } => {
             push_json_pair(out, "result", "exhausted");
             out.push(',');
             push_search_stats(out, stats);
+            out.push(',');
+            push_search_observations(out, observations);
         }
-        SolutionResponse::BudgetExceeded(stats) => {
+        SolutionResponse::BudgetExceeded {
+            stats,
+            observations,
+        } => {
             push_json_pair(out, "result", "budget_exceeded");
             out.push(',');
             push_search_stats(out, stats);
+            out.push(',');
+            push_search_observations(out, observations);
         }
-        SolutionResponse::Failed { depth, error } => {
+        SolutionResponse::Failed {
+            depth,
+            error,
+            observations,
+        } => {
             push_json_pair(out, "result", "failed");
             out.push(',');
             push_json_number(out, "depth", *depth as u64);
             out.push(',');
             push_json_pair(out, "error", error);
+            out.push(',');
+            push_search_observations(out, observations);
         }
     }
     out.push('}');
+}
+
+#[cfg(feature = "solver")]
+fn push_compiled_solution_response(
+    out: &mut String,
+    response: &SolutionResponse,
+    input_labels: &[(InputId, String)],
+) -> Result<(), AppError> {
+    out.push('{');
+    match response {
+        SolutionResponse::Solved {
+            depth,
+            moves,
+            steps,
+            observations,
+        } => {
+            push_json_pair(out, "result", "solved");
+            out.push(',');
+            push_json_number(out, "depth", *depth as u64);
+            out.push(',');
+            push_compiled_solution_moves(out, moves, input_labels)?;
+            out.push(',');
+            push_compiled_solution_steps(out, steps, input_labels)?;
+            out.push(',');
+            push_search_observations(out, observations);
+        }
+        SolutionResponse::Exhausted {
+            stats,
+            observations,
+        } => {
+            push_json_pair(out, "result", "exhausted");
+            out.push(',');
+            push_search_stats(out, stats);
+            out.push(',');
+            push_search_observations(out, observations);
+        }
+        SolutionResponse::BudgetExceeded {
+            stats,
+            observations,
+        } => {
+            push_json_pair(out, "result", "budget_exceeded");
+            out.push(',');
+            push_search_stats(out, stats);
+            out.push(',');
+            push_search_observations(out, observations);
+        }
+        SolutionResponse::Failed {
+            depth,
+            error,
+            observations,
+        } => {
+            push_json_pair(out, "result", "failed");
+            out.push(',');
+            push_json_number(out, "depth", *depth as u64);
+            out.push(',');
+            push_json_pair(out, "error", error);
+            out.push(',');
+            push_search_observations(out, observations);
+        }
+    }
+    out.push('}');
+    Ok(())
+}
+
+#[cfg(feature = "solver")]
+fn push_search_observations(out: &mut String, observations: &[SearchObservation]) {
+    out.push_str("\"observations\":[");
+    for (index, observation) in observations.iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        push_search_observation(out, &observation.state, &observation.progress);
+    }
+    out.push(']');
+}
+
+#[cfg(feature = "solver")]
+fn push_search_observation(out: &mut String, state: &State, progress: &SearchProgress) {
+    out.push('{');
+    push_search_progress(out, progress);
+    out.push_str(",\"state\":");
+    push_state_data(out, state);
+    out.push('}');
+}
+
+#[cfg(feature = "solver")]
+fn push_search_progress(out: &mut String, progress: &SearchProgress) {
+    out.push_str("\"progress\":{");
+    push_json_number(out, "visited", progress.visited as u64);
+    out.push(',');
+    push_json_number(out, "expanded", progress.expanded as u64);
+    out.push(',');
+    push_json_number(out, "frontier", progress.frontier as u64);
+    out.push(',');
+    push_json_number(out, "maxDepthReached", progress.max_depth_reached as u64);
+    out.push(',');
+    push_json_number(out, "depth", progress.depth as u64);
+    out.push('}');
+}
+
+#[cfg(feature = "solver")]
+fn push_compiled_solution_moves(
+    out: &mut String,
+    inputs: &[InputId],
+    input_labels: &[(InputId, String)],
+) -> Result<(), AppError> {
+    out.push_str("\"moves\":[");
+    for (index, input) in inputs.iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        push_compiled_input_move(out, *input, input_labels)?;
+    }
+    out.push(']');
+    Ok(())
+}
+
+#[cfg(feature = "solver")]
+fn push_compiled_solution_steps(
+    out: &mut String,
+    steps: &[SolutionStep],
+    input_labels: &[(InputId, String)],
+) -> Result<(), AppError> {
+    out.push_str("\"steps\":[");
+    for (index, step) in steps.iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        out.push('{');
+        push_json_number(out, "index", step.index as u64);
+        out.push(',');
+        if let Some(input) = step.input {
+            out.push_str("\"move\":");
+            push_compiled_input_move(out, input, input_labels)?;
+        } else {
+            out.push_str("\"move\":null");
+        }
+        out.push_str(",\"state\":");
+        push_state_data(out, &step.state);
+        out.push('}');
+    }
+    out.push(']');
+    Ok(())
+}
+
+#[cfg(feature = "solver")]
+fn push_compiled_input_move(
+    out: &mut String,
+    input: InputId,
+    input_labels: &[(InputId, String)],
+) -> Result<(), AppError> {
+    let name = input_labels
+        .iter()
+        .find_map(|(id, label)| (*id == input).then_some(label.as_str()))
+        .ok_or_else(|| {
+            AppError::Config(format!(
+                "compiled solver input label is missing for input {}",
+                input.0
+            ))
+        })?;
+    out.push('{');
+    push_json_number(out, "id", input.0 as u64);
+    out.push(',');
+    push_json_pair(out, "name", name);
+    out.push('}');
+    Ok(())
 }
 
 #[cfg(feature = "solver")]
@@ -2266,6 +2478,7 @@ fn push_solution_response3(out: &mut String, parsed: &ParsedPuzzle3, response: &
             depth,
             moves,
             steps,
+            observations,
         } => {
             push_json_pair(out, "result", "solved");
             out.push(',');
@@ -2274,24 +2487,63 @@ fn push_solution_response3(out: &mut String, parsed: &ParsedPuzzle3, response: &
             push_solution_moves3(out, parsed, moves);
             out.push(',');
             push_solution_steps3(out, parsed, steps);
+            out.push(',');
+            push_search_observations3(out, observations);
         }
-        SolutionResponse3::Exhausted(stats) => {
+        SolutionResponse3::Exhausted {
+            stats,
+            observations,
+        } => {
             push_json_pair(out, "result", "exhausted");
             out.push(',');
             push_search_stats(out, stats);
+            out.push(',');
+            push_search_observations3(out, observations);
         }
-        SolutionResponse3::BudgetExceeded(stats) => {
+        SolutionResponse3::BudgetExceeded {
+            stats,
+            observations,
+        } => {
             push_json_pair(out, "result", "budget_exceeded");
             out.push(',');
             push_search_stats(out, stats);
+            out.push(',');
+            push_search_observations3(out, observations);
         }
-        SolutionResponse3::Failed { depth, error } => {
+        SolutionResponse3::Failed {
+            depth,
+            error,
+            observations,
+        } => {
             push_json_pair(out, "result", "failed");
             out.push(',');
             push_json_number(out, "depth", *depth as u64);
             out.push(',');
             push_json_pair(out, "error", error);
+            out.push(',');
+            push_search_observations3(out, observations);
         }
     }
+    out.push('}');
+}
+
+#[cfg(feature = "solver")]
+fn push_search_observations3(out: &mut String, observations: &[SearchObservation3]) {
+    out.push_str("\"observations\":[");
+    for (index, observation) in observations.iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        push_search_observation3(out, &observation.state, &observation.progress);
+    }
+    out.push(']');
+}
+
+#[cfg(feature = "solver")]
+fn push_search_observation3(out: &mut String, state: &State3, progress: &SearchProgress) {
+    out.push('{');
+    push_search_progress(out, progress);
+    out.push_str(",\"state\":");
+    push_state3_data(out, state);
     out.push('}');
 }

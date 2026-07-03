@@ -1,7 +1,7 @@
-pub const NEW_PUZZLE_TEMPLATE: &str = include_str!("../templates/new.puzzle");
+use std::ops::Range;
 
 pub fn new_puzzle_source(_title: &str) -> String {
-    NEW_PUZZLE_TEMPLATE.to_string()
+    String::new()
 }
 
 pub fn is_display_object_token(token: &str) -> bool {
@@ -48,6 +48,47 @@ pub fn split_header_tokens(line: &str) -> Vec<&str> {
     tokens
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KeyBindingSurface<'a> {
+    pub keys: Vec<&'a str>,
+    pub target: &'a str,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KeyBindingSurfaceError {
+    UseArrow,
+    MissingTarget,
+    MissingKeys,
+}
+
+impl KeyBindingSurfaceError {
+    pub fn message(self) -> &'static str {
+        match self {
+            Self::UseArrow => "keys row must use `->`: <key...> -> <input-or-command>",
+            Self::MissingTarget => "keys row must name a target after ->",
+            Self::MissingKeys => "keys row must include at least one key before ->",
+        }
+    }
+}
+
+pub fn key_binding_surface(line: &str) -> Result<KeyBindingSurface<'_>, KeyBindingSurfaceError> {
+    if line.contains('=') {
+        return Err(KeyBindingSurfaceError::UseArrow);
+    }
+    let (keys, target) = line
+        .split_once("->")
+        .ok_or(KeyBindingSurfaceError::UseArrow)?;
+    let target = target.trim();
+    if target.is_empty() {
+        return Err(KeyBindingSurfaceError::MissingTarget);
+    }
+    let keys = keys.split_whitespace().collect::<Vec<_>>();
+    if keys.is_empty() {
+        return Err(KeyBindingSurfaceError::MissingKeys);
+    }
+    Ok(KeyBindingSurface { keys, target })
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RuleProgramBlockSurface<'a> {
     Rules { modifier: &'a str },
@@ -70,6 +111,52 @@ pub fn rule_program_block_surface(line: &str) -> Option<RuleProgramBlockSurface<
         return Some(RuleProgramBlockSurface::OnLastLevelClear);
     }
     None
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RuleProgramBlockBody {
+    RuleStatements(Vec<String>),
+    LifecycleCommands(Vec<String>),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RuleProgramBlockBodyError {
+    MissingClosingBrace { block_name: &'static str },
+}
+
+impl RuleProgramBlockBodyError {
+    pub fn message(self) -> String {
+        match self {
+            Self::MissingClosingBrace { block_name } => {
+                format!("{block_name} block missing }}")
+            }
+        }
+    }
+}
+
+pub fn collect_rule_program_block_body(
+    lines: &[String],
+    start: usize,
+    block: RuleProgramBlockSurface<'_>,
+) -> Result<(RuleProgramBlockBody, usize), RuleProgramBlockBodyError> {
+    match block {
+        RuleProgramBlockSurface::Rules { .. } => {
+            collect_rule_statement_block_body(lines, start, "rules")
+                .map(|(body, next)| (RuleProgramBlockBody::RuleStatements(body), next))
+        }
+        RuleProgramBlockSurface::OnLevelStart { .. } => {
+            collect_rule_statement_block_body(lines, start, "on_level_start")
+                .map(|(body, next)| (RuleProgramBlockBody::RuleStatements(body), next))
+        }
+        RuleProgramBlockSurface::OnLevelClear => {
+            collect_lifecycle_command_block_body(lines, start, "on_level_clear")
+                .map(|(body, next)| (RuleProgramBlockBody::LifecycleCommands(body), next))
+        }
+        RuleProgramBlockSurface::OnLastLevelClear => {
+            collect_lifecycle_command_block_body(lines, start, "on_last_level_clear")
+                .map(|(body, next)| (RuleProgramBlockBody::LifecycleCommands(body), next))
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -215,6 +302,40 @@ pub enum RuleLineSurface<'a> {
     },
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RuleApplicationSurfaceSpan {
+    pub application: RuleApplicationSurface,
+    pub span: Range<usize>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InputRewriteSurfaceSpans {
+    pub input: Range<usize>,
+    pub orientation: Option<Range<usize>>,
+    pub rewrite: Range<usize>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RuleLineSurfaceSpans {
+    StandardStep {
+        step: StandardRuleStepSurface,
+        span: Range<usize>,
+    },
+    InputRewrite {
+        application: Option<RuleApplicationSurfaceSpan>,
+        surface: InputRewriteSurfaceSpans,
+    },
+    NeutralRewrite {
+        application: Option<RuleApplicationSurfaceSpan>,
+        rewrite: Range<usize>,
+    },
+    OrientedRewrite {
+        application: Option<RuleApplicationSurfaceSpan>,
+        orientation: Range<usize>,
+        rewrite: Range<usize>,
+    },
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RuleLineSurfaceError {
     Input(InputRewriteSurfaceError),
@@ -234,51 +355,98 @@ impl RuleLineSurfaceError {
 }
 
 pub fn rule_line_surface(line: &str) -> Result<RuleLineSurface<'_>, RuleLineSurfaceError> {
-    let line = line.trim();
-    if let Some(step) = standard_rule_step_surface(line) {
-        return Ok(RuleLineSurface::StandardStep(step));
+    Ok(match rule_line_surface_spans(line)? {
+        RuleLineSurfaceSpans::StandardStep { step, .. } => RuleLineSurface::StandardStep(step),
+        RuleLineSurfaceSpans::InputRewrite {
+            application,
+            surface,
+        } => RuleLineSurface::InputRewrite {
+            application: application.map(|application| application.application),
+            surface: InputRewriteSurface {
+                orientation: surface.orientation.map(|range| &line[range]),
+                rewrite: &line[surface.rewrite],
+            },
+        },
+        RuleLineSurfaceSpans::NeutralRewrite {
+            application,
+            rewrite,
+        } => RuleLineSurface::NeutralRewrite {
+            application: application.map(|application| application.application),
+            rewrite: &line[rewrite],
+        },
+        RuleLineSurfaceSpans::OrientedRewrite {
+            application,
+            orientation,
+            rewrite,
+        } => RuleLineSurface::OrientedRewrite {
+            application: application.map(|application| application.application),
+            orientation: &line[orientation],
+            rewrite: &line[rewrite],
+        },
+    })
+}
+
+pub fn rule_line_surface_spans(line: &str) -> Result<RuleLineSurfaceSpans, RuleLineSurfaceError> {
+    let line_range = trimmed_range(line);
+    let line_text = &line[line_range.clone()];
+    if let Some(step) = standard_rule_step_surface(line_text) {
+        return Ok(RuleLineSurfaceSpans::StandardStep {
+            step,
+            span: line_range,
+        });
     }
-    let (application, line) = split_rule_application_prefix(line)?;
-    if let Some(surface) = input_rewrite_surface(line).map_err(RuleLineSurfaceError::Input)? {
-        return Ok(RuleLineSurface::InputRewrite {
+    let (application, rest) = split_rule_application_prefix_spans(line, line_range)?;
+    if let Some(surface) =
+        input_rewrite_surface_spans_in(line, rest.clone()).map_err(RuleLineSurfaceError::Input)?
+    {
+        return Ok(RuleLineSurfaceSpans::InputRewrite {
             application,
             surface,
         });
     }
-    if line.starts_with('[') {
-        return Ok(RuleLineSurface::NeutralRewrite {
+    if line[rest.clone()].starts_with('[') {
+        return Ok(RuleLineSurfaceSpans::NeutralRewrite {
             application,
-            rewrite: line,
+            rewrite: rest,
         });
     }
-    let (orientation, rewrite) = line
-        .split_once(' ')
-        .ok_or(RuleLineSurfaceError::MissingOrientation)?;
-    let rewrite = rewrite.trim_start();
-    if !rewrite.starts_with('[') {
+    let tokens = header_token_spans(line, rest.clone());
+    let Some(orientation) = tokens.first() else {
+        return Err(RuleLineSurfaceError::MissingOrientation);
+    };
+    let rewrite = trim_start_range(line, orientation.range.end..rest.end);
+    if !line[rewrite.clone()].starts_with('[') {
         return Err(RuleLineSurfaceError::RewriteMustStartWithPattern);
     }
-    Ok(RuleLineSurface::OrientedRewrite {
+    Ok(RuleLineSurfaceSpans::OrientedRewrite {
         application,
-        orientation,
+        orientation: orientation.range.clone(),
         rewrite,
     })
 }
 
-fn split_rule_application_prefix(
+fn split_rule_application_prefix_spans(
     line: &str,
-) -> Result<(Option<RuleApplicationSurface>, &str), RuleLineSurfaceError> {
-    let Some((first, rest)) = line.split_once(char::is_whitespace) else {
-        return Ok((None, line));
+    range: Range<usize>,
+) -> Result<(Option<RuleApplicationSurfaceSpan>, Range<usize>), RuleLineSurfaceError> {
+    let tokens = header_token_spans(line, range.clone());
+    let Some(first) = tokens.first() else {
+        return Ok((None, range));
     };
-    let Some(application) = rule_application_surface(first) else {
-        return Ok((None, line));
+    let Some(application) = rule_application_surface(first.text) else {
+        return Ok((None, range));
     };
-    let rest = rest.trim_start();
+    let rest = trim_start_range(line, first.range.end..range.end);
     if rest.is_empty() {
         return Err(RuleLineSurfaceError::MissingOrientation);
     }
-    Ok((Some(application), rest))
+    Ok((
+        Some(RuleApplicationSurfaceSpan {
+            application,
+            span: first.range.clone(),
+        }),
+        rest,
+    ))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -307,27 +475,275 @@ impl InputRewriteSurfaceError {
 pub fn input_rewrite_surface(
     line: &str,
 ) -> Result<Option<InputRewriteSurface<'_>>, InputRewriteSurfaceError> {
-    let Some(rest) = line.trim().strip_prefix("input ").map(str::trim_start) else {
+    Ok(
+        input_rewrite_surface_spans(line)?.map(|surface| InputRewriteSurface {
+            orientation: surface.orientation.map(|range| &line[range]),
+            rewrite: &line[surface.rewrite],
+        }),
+    )
+}
+
+pub fn input_rewrite_surface_spans(
+    line: &str,
+) -> Result<Option<InputRewriteSurfaceSpans>, InputRewriteSurfaceError> {
+    input_rewrite_surface_spans_in(line, trimmed_range(line))
+}
+
+fn input_rewrite_surface_spans_in(
+    line: &str,
+    range: Range<usize>,
+) -> Result<Option<InputRewriteSurfaceSpans>, InputRewriteSurfaceError> {
+    let tokens = header_token_spans(line, range.clone());
+    let Some(first) = tokens.first() else {
         return Ok(None);
     };
-    if rest.starts_with('[') {
-        return Ok(Some(InputRewriteSurface {
+    if first.text != "input" {
+        return Ok(None);
+    }
+    let rest = trim_start_range(line, first.range.end..range.end);
+    if rest.is_empty() {
+        return Err(InputRewriteSurfaceError::MissingRewrite);
+    }
+    if line[rest.clone()].starts_with('[') {
+        return Ok(Some(InputRewriteSurfaceSpans {
+            input: first.range.clone(),
             orientation: None,
             rewrite: rest,
         }));
     }
 
-    let (orientation, rewrite) = rest
-        .split_once(' ')
-        .ok_or(InputRewriteSurfaceError::MissingRewrite)?;
-    let rewrite = rewrite.trim_start();
-    if !rewrite.starts_with('[') {
+    let rest_tokens = header_token_spans(line, rest.clone());
+    let Some(orientation) = rest_tokens.first() else {
+        return Err(InputRewriteSurfaceError::MissingRewrite);
+    };
+    let rewrite = trim_start_range(line, orientation.range.end..range.end);
+    if !line[rewrite.clone()].starts_with('[') {
         return Err(InputRewriteSurfaceError::RewriteMustStartWithPattern);
     }
-    Ok(Some(InputRewriteSurface {
-        orientation: Some(orientation),
+    Ok(Some(InputRewriteSurfaceSpans {
+        input: first.range.clone(),
+        orientation: Some(orientation.range.clone()),
         rewrite,
     }))
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InputOrientedPatternSurface {
+    pub input: Range<usize>,
+    pub orientation: Option<Range<usize>>,
+}
+
+pub fn input_oriented_pattern_surfaces(line: &str) -> Vec<InputOrientedPatternSurface> {
+    let mut surfaces = Vec::new();
+    let mut search_start = 0usize;
+    while let Some(offset) = line[search_start..].find("input") {
+        let input_start = search_start + offset;
+        let input_end = input_start + "input".len();
+        if !word_boundary_before(line, input_start) || !word_boundary_after(line, input_end) {
+            search_start = input_end;
+            continue;
+        }
+        if let Ok(Some(surface)) = input_rewrite_surface_spans_in(line, input_start..line.len()) {
+            surfaces.push(InputOrientedPatternSurface {
+                input: surface.input,
+                orientation: surface.orientation,
+            });
+        }
+        search_start = input_end;
+    }
+    surfaces
+}
+
+pub fn collect_rule_statement_line(lines: &[String], start: usize) -> (String, usize) {
+    let first = lines[start].trim();
+    if !looks_like_multiline_rule_line_start(first) {
+        return (first.to_string(), start + 1);
+    }
+
+    let mut joined = String::new();
+    let mut bracket_depth = 0usize;
+    let mut saw_arrow = false;
+    let mut index = start;
+    while index < lines.len() {
+        let line = lines[index].trim();
+        if line == "}" {
+            break;
+        }
+        if index > start && bracket_depth == 0 && !saw_arrow && !line.starts_with("->") {
+            return (first.to_string(), start + 1);
+        }
+        if !joined.is_empty() {
+            if bracket_depth > 0 {
+                if line.starts_with('|') || joined.trim_end().ends_with('|') {
+                    joined.push(' ');
+                } else {
+                    joined.push_str(" ; ");
+                }
+            } else {
+                joined.push(' ');
+            }
+        }
+        joined.push_str(line);
+        bracket_depth = update_square_bracket_depth(bracket_depth, line);
+        saw_arrow |= line.contains("->");
+
+        if index == start && bracket_depth == 0 {
+            return (first.to_string(), start + 1);
+        }
+        if index > start && bracket_depth == 0 && saw_arrow {
+            return (joined, index + 1);
+        }
+        index += 1;
+    }
+
+    (first.to_string(), start + 1)
+}
+
+fn collect_rule_statement_block_body(
+    lines: &[String],
+    mut index: usize,
+    block_name: &'static str,
+) -> Result<(Vec<String>, usize), RuleProgramBlockBodyError> {
+    let mut body = Vec::new();
+    while index < lines.len() {
+        let line = lines[index].trim();
+        if line == "}" {
+            return Ok((body, index + 1));
+        }
+        if line.is_empty() {
+            index += 1;
+            continue;
+        }
+        let (rule_line, next_index) = collect_rule_statement_line(lines, index);
+        body.push(rule_line);
+        index = next_index;
+    }
+    Err(RuleProgramBlockBodyError::MissingClosingBrace { block_name })
+}
+
+fn collect_lifecycle_command_block_body(
+    lines: &[String],
+    mut index: usize,
+    block_name: &'static str,
+) -> Result<(Vec<String>, usize), RuleProgramBlockBodyError> {
+    let mut body = Vec::new();
+    while index < lines.len() {
+        let line = lines[index].trim();
+        if line == "}" {
+            return Ok((body, index + 1));
+        }
+        if line.is_empty() {
+            index += 1;
+            continue;
+        }
+        body.push(line.to_string());
+        index += 1;
+    }
+    Err(RuleProgramBlockBodyError::MissingClosingBrace { block_name })
+}
+
+fn looks_like_multiline_rule_line_start(line: &str) -> bool {
+    line.contains('[')
+        && (line.starts_with("input ")
+            || line
+                .split_once(' ')
+                .is_some_and(|(prefix, _)| !prefix.is_empty()))
+}
+
+fn update_square_bracket_depth(mut depth: usize, line: &str) -> usize {
+    let mut in_string = false;
+    let mut escaped = false;
+    for ch in line.chars() {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match ch {
+            '"' => in_string = true,
+            '[' => depth += 1,
+            ']' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+    }
+    depth
+}
+
+#[derive(Clone, Debug)]
+struct HeaderTokenSpan<'a> {
+    text: &'a str,
+    range: Range<usize>,
+}
+
+fn header_token_spans(line: &str, range: Range<usize>) -> Vec<HeaderTokenSpan<'_>> {
+    let mut tokens = Vec::new();
+    let mut index = range.start;
+    while index < range.end {
+        let Some(start_offset) = line[index..range.end].find(|ch: char| !ch.is_whitespace()) else {
+            break;
+        };
+        let start = index + start_offset;
+        let end = line[start..range.end]
+            .find(char::is_whitespace)
+            .map_or(range.end, |offset| start + offset);
+        tokens.push(HeaderTokenSpan {
+            text: &line[start..end],
+            range: start..end,
+        });
+        index = end;
+    }
+    if tokens.len() > 1 && tokens.last().is_some_and(|token| token.text == "{") {
+        tokens.pop();
+    }
+    tokens
+}
+
+fn trimmed_range(line: &str) -> Range<usize> {
+    let start = line
+        .find(|ch: char| !ch.is_whitespace())
+        .unwrap_or(line.len());
+    let end = line
+        .rfind(|ch: char| !ch.is_whitespace())
+        .map(|index| {
+            index
+                + line[index..]
+                    .chars()
+                    .next()
+                    .map(char::len_utf8)
+                    .unwrap_or(0)
+        })
+        .unwrap_or(start);
+    start..end
+}
+
+fn trim_start_range(line: &str, range: Range<usize>) -> Range<usize> {
+    let start = line[range.clone()]
+        .find(|ch: char| !ch.is_whitespace())
+        .map_or(range.end, |offset| range.start + offset);
+    start..range.end
+}
+
+fn word_boundary_before(value: &str, index: usize) -> bool {
+    value[..index]
+        .chars()
+        .next_back()
+        .is_none_or(|ch| !is_word_continue(ch))
+}
+
+fn word_boundary_after(value: &str, index: usize) -> bool {
+    value[index..]
+        .chars()
+        .next()
+        .is_none_or(|ch| !is_word_continue(ch))
+}
+
+fn is_word_continue(ch: char) -> bool {
+    ch == '_' || ch.is_ascii_alphanumeric()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -490,13 +906,6 @@ mod tests {
     fn new_puzzle_source_is_blank() {
         let source = new_puzzle_source("Custom Puzzle");
 
-        assert!(NEW_PUZZLE_TEMPLATE.is_empty());
-        assert!(!NEW_PUZZLE_TEMPLATE.contains('\t'));
-        assert!(
-            !NEW_PUZZLE_TEMPLATE
-                .lines()
-                .any(|line| line.starts_with(' '))
-        );
         assert_eq!(source, "");
         assert!(!source.contains("title "));
         assert!(!source.contains("puzzle main {"));
@@ -540,6 +949,25 @@ mod tests {
 
     #[test]
     fn shared_rule_surface_recognizes_common_input_rewrite_and_move_step() {
+        assert_eq!(
+            key_binding_surface("q Escape -> restart").unwrap(),
+            KeyBindingSurface {
+                keys: vec!["q", "Escape"],
+                target: "restart",
+            }
+        );
+        assert_eq!(
+            key_binding_surface("q Escape = restart").unwrap_err(),
+            KeyBindingSurfaceError::UseArrow
+        );
+        assert_eq!(
+            key_binding_surface("-> restart").unwrap_err(),
+            KeyBindingSurfaceError::MissingKeys
+        );
+        assert_eq!(
+            key_binding_surface("q ->").unwrap_err(),
+            KeyBindingSurfaceError::MissingTarget
+        );
         assert_eq!(
             split_header_tokens("rules local_frame 3 full {"),
             vec!["rules", "local_frame", "3", "full"]
@@ -625,11 +1053,145 @@ mod tests {
             }
         );
         assert_eq!(
+            rule_line_surface_spans("once input directions [ Player ] -> [ > Player ]").unwrap(),
+            RuleLineSurfaceSpans::InputRewrite {
+                application: Some(RuleApplicationSurfaceSpan {
+                    application: RuleApplicationSurface::Once,
+                    span: 0..4,
+                }),
+                surface: InputRewriteSurfaceSpans {
+                    input: 5..10,
+                    orientation: Some(11..21),
+                    rewrite: 22..48,
+                },
+            }
+        );
+        assert_eq!(
             input_rewrite_surface("input horizontal [ Player ] -> [ > Player ]").unwrap(),
             Some(InputRewriteSurface {
                 orientation: Some("horizontal"),
                 rewrite: "[ Player ] -> [ > Player ]",
             })
+        );
+        assert_eq!(
+            input_oriented_pattern_surfaces("if some(input directions [ Player | Wall ]) {"),
+            vec![InputOrientedPatternSurface {
+                input: 8..13,
+                orientation: Some(14..24),
+            }]
+        );
+        assert_eq!(
+            input_oriented_pattern_surfaces("if some(input [ Player | Wall ]) {"),
+            vec![InputOrientedPatternSurface {
+                input: 8..13,
+                orientation: None,
+            }]
+        );
+        assert_eq!(
+            input_oriented_pattern_surfaces("input directions [ Player | Wall ] -> push_player"),
+            vec![InputOrientedPatternSurface {
+                input: 0..5,
+                orientation: Some(6..16),
+            }]
+        );
+        assert_eq!(
+            input_oriented_pattern_surfaces("input [ Player | Wall ] -> push_player"),
+            vec![InputOrientedPatternSurface {
+                input: 0..5,
+                orientation: None,
+            }]
+        );
+        assert_eq!(
+            input_oriented_pattern_surfaces(
+                "once input directions [ Player | Wall ] -> [ Player ]"
+            ),
+            vec![InputOrientedPatternSurface {
+                input: 5..10,
+                orientation: Some(11..21),
+            }]
+        );
+        assert_eq!(
+            input_oriented_pattern_surfaces("once input [ Player | Wall ] -> [ Player ]"),
+            vec![InputOrientedPatternSurface {
+                input: 5..10,
+                orientation: None,
+            }]
+        );
+        assert!(
+            input_oriented_pattern_surfaces("input right").is_empty(),
+            "scene/input commands without a following pattern are not input-oriented pattern surfaces"
+        );
+        let multiline = vec![
+            "input directions [ Player".to_string(),
+            "| no Wall ]".to_string(),
+            "-> [".to_string(),
+            "| Player ]".to_string(),
+            "move".to_string(),
+        ];
+        assert_eq!(
+            collect_rule_statement_line(&multiline, 0),
+            (
+                "input directions [ Player | no Wall ] -> [ | Player ]".to_string(),
+                4,
+            )
+        );
+        assert_eq!(
+            collect_rule_statement_line(&multiline, 4),
+            ("move".to_string(), 5)
+        );
+        let rule_program_lines = vec![
+            "input directions [ Player".to_string(),
+            "| no Wall ]".to_string(),
+            "-> [".to_string(),
+            "| Player ]".to_string(),
+            "move".to_string(),
+            "}".to_string(),
+        ];
+        assert_eq!(
+            collect_rule_program_block_body(
+                &rule_program_lines,
+                0,
+                RuleProgramBlockSurface::Rules { modifier: "" },
+            )
+            .unwrap(),
+            (
+                RuleProgramBlockBody::RuleStatements(vec![
+                    "input directions [ Player | no Wall ] -> [ | Player ]".to_string(),
+                    "move".to_string(),
+                ]),
+                6,
+            )
+        );
+        let dense_multiline = vec![
+            "right:up [ Player".to_string(),
+            "Box ] -> [ Player".to_string(),
+            "Box ]".to_string(),
+        ];
+        assert_eq!(
+            collect_rule_statement_line(&dense_multiline, 0),
+            (
+                "right:up [ Player ; Box ] -> [ Player ; Box ]".to_string(),
+                3,
+            )
+        );
+        let lifecycle_lines = vec![
+            "".to_string(),
+            "if win_conditions -> next_level".to_string(),
+            "}".to_string(),
+        ];
+        assert_eq!(
+            collect_rule_program_block_body(
+                &lifecycle_lines,
+                0,
+                RuleProgramBlockSurface::OnLevelClear,
+            )
+            .unwrap(),
+            (
+                RuleProgramBlockBody::LifecycleCommands(vec![
+                    "if win_conditions -> next_level".to_string()
+                ]),
+                3,
+            )
         );
         assert_eq!(
             rule_line_surface("right [ Player ] -> [ > Player ]").unwrap(),

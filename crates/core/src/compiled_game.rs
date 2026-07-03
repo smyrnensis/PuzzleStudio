@@ -434,6 +434,7 @@ pub struct PatternComponent {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MatchCell {
     pub offset: Offset,
+    pub require_null: bool,
     pub require_objects: Vec<ObjectId>,
     pub require_object_sets: Vec<ObjectSetMatcher>,
     pub forbid_objects: Vec<ObjectId>,

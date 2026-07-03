@@ -33,6 +33,17 @@ const BAR_OPTIONS = [8, 16, 32, 64];
 const TRANSITION_BRIDGE_IMPACT = 0.22;
 const TRANSITION_ENVELOPE_IMPACT = 0.46;
 
+function normalizePlaybackVolume(value) {
+  const volume = Number(value);
+  if (!Number.isFinite(volume)) {
+    throw new Error("music volume must be finite");
+  }
+  if (volume < 0) {
+    throw new Error("music volume must be zero or greater");
+  }
+  return volume;
+}
+
 const COMPOSITION_ROLES = ["identity", "time", "tone", "motion", "color", "boundary"];
 
 function splitCompositionSeed(seedText) {
@@ -57,7 +68,7 @@ export function generateSong(seed, options = {}) {
   const presence = clamp(Number(options.presence ?? DEFAULT_PRESENCE), 0, 1);
   const attack = clamp(Number(options.attack ?? options.punch ?? DEFAULT_ATTACK), 0, 1);
   const bpm = clamp(Math.round(Number(options.bpm ?? DEFAULT_BPM)), 40, 180);
-  const volume = clamp(Number(options.volume ?? DEFAULT_VOLUME), 0, 1);
+  const volume = normalizePlaybackVolume(options.volume ?? DEFAULT_VOLUME);
   const bars = normalizeBars(options.bars);
   const [key, tonic] = pick(KEYS, styleRng);
   const scaleName = weightedPick([

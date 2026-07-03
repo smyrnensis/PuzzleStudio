@@ -377,13 +377,11 @@ fn collect_statement_reference_diagnostics(
             StatementAst::Rewrite(rewrite) => {
                 if let Some(name) = &rewrite.after_call {
                     if !definitions_by_name.contains_key(name) {
-                        diagnostics.push(
-                            diagnostic_at_source_line_number(
-                                format!("unknown routine call: {name}"),
-                                &rewrite.source_line,
-                                rewrite.source_line_number,
-                            ),
-                        );
+                        diagnostics.push(diagnostic_at_source_line_number(
+                            format!("unknown routine call: {name}"),
+                            &rewrite.source_line,
+                            rewrite.source_line_number,
+                        ));
                     }
                 }
             }
@@ -775,6 +773,7 @@ fn patterns_from_alternatives(
                                     direction_expanded,
                                     line,
                                 )?,
+                                require_null: cell.require_null,
                                 require_objects: cell.require_objects.clone(),
                                 require_object_sets: cell.require_object_sets.clone(),
                                 forbid_objects: cell.forbid_objects.clone(),
@@ -1307,9 +1306,7 @@ impl<'a> ProgramLowerer<'a> {
                 name,
                 source_line,
                 source_line_number,
-            } => {
-                self.lower_display_call(name, source_line, *source_line_number, context)
-            }
+            } => self.lower_display_call(name, source_line, *source_line_number, context),
             StatementAst::Conditional {
                 source_line,
                 source_line_number,
@@ -2101,11 +2098,10 @@ impl<'a> ProgramLowerer<'a> {
         rewrite: &OrientedRewriteAst,
         context: &StatementLoweringContext,
     ) -> Result<Vec<RuleStep>, DiagnosticReport> {
-        let effects = self.lower_effects(&rewrite.effects)?;
-        let application = if effects
-            .core
+        let application = if rewrite
+            .effects
             .iter()
-            .any(|effect| matches!(effect, Effect::Win | Effect::NextLevel))
+            .any(|effect| matches!(effect, EffectAst::Win | EffectAst::NextLevel))
         {
             RuleApplication::Once
         } else {
@@ -2124,7 +2120,7 @@ impl<'a> ProgramLowerer<'a> {
                         rules.extend(self.lower_rewrite_rules_for_direction(
                             rewrite,
                             context,
-                            &effects,
+                            &rewrite.effects,
                             application,
                             *direction,
                             true,
@@ -2136,7 +2132,7 @@ impl<'a> ProgramLowerer<'a> {
                 self.lower_rewrite_rules_for_direction(
                     rewrite,
                     context,
-                    &effects,
+                    &rewrite.effects,
                     application,
                     neutral_direction(),
                     false,
@@ -2159,7 +2155,7 @@ impl<'a> ProgramLowerer<'a> {
                     rules.extend(self.lower_rewrite_rules_for_direction(
                         rewrite,
                         context,
-                        &effects,
+                        &rewrite.effects,
                         application,
                         *direction,
                         true,
@@ -2190,7 +2186,7 @@ impl<'a> ProgramLowerer<'a> {
                     rules.extend(self.lower_rewrite_rules_for_direction(
                         rewrite,
                         context,
-                        &effects,
+                        &rewrite.effects,
                         application,
                         direction,
                         true,
@@ -2214,7 +2210,7 @@ impl<'a> ProgramLowerer<'a> {
                     rules.extend(self.lower_rewrite_rules_for_direction(
                         rewrite,
                         context,
-                        &effects,
+                        &rewrite.effects,
                         application,
                         direction,
                         true,
@@ -2230,7 +2226,7 @@ impl<'a> ProgramLowerer<'a> {
         &mut self,
         rewrite: &OrientedRewriteAst,
         context: &StatementLoweringContext,
-        effects: &LoweredEffects,
+        effects: &[EffectAst],
         application: RuleApplication,
         direction: Direction,
         direction_expanded: bool,
@@ -2247,25 +2243,30 @@ impl<'a> ProgramLowerer<'a> {
             &rewrite.source_line,
             rewrite.source_line_number,
         )?;
+        let role_effects = match alternatives.first() {
+            Some(alternative) => {
+                self.lower_effects_for_rewrite(effects, &alternative.tag_captures)?
+            }
+            None => self.lower_effects(effects)?,
+        };
         let role = classify_rewrite_role(
             &before,
             &alternatives,
-            effects,
+            &role_effects,
             self.visual_objects,
             context,
             &rewrite.source_line,
             rewrite.source_line_number,
         )?;
         if role == ClassifiedRuleRole::Visual {
-            validate_visual_effects(effects, &rewrite.source_line)?;
+            validate_visual_effects(&role_effects, &rewrite.source_line)?;
         }
         self.rules_from_alternatives(
             alternatives,
             direction,
             direction_expanded,
             guards,
-            effects.core.clone(),
-            effects.ordered.clone(),
+            effects,
             application,
             role,
         )
@@ -2273,13 +2274,24 @@ impl<'a> ProgramLowerer<'a> {
 
     fn lower_effects(&self, effects: &[EffectAst]) -> Result<LoweredEffects, DiagnosticReport> {
         let mut lowered = LoweredEffects::default();
-        self.lower_effects_into(effects, &mut lowered)?;
+        self.lower_effects_into(effects, None, &mut lowered)?;
+        Ok(lowered)
+    }
+
+    fn lower_effects_for_rewrite(
+        &self,
+        effects: &[EffectAst],
+        tag_captures: &TagCaptureValues,
+    ) -> Result<LoweredEffects, DiagnosticReport> {
+        let mut lowered = LoweredEffects::default();
+        self.lower_effects_into(effects, Some(tag_captures), &mut lowered)?;
         Ok(lowered)
     }
 
     fn lower_effects_into(
         &self,
         effects: &[EffectAst],
+        tag_captures: Option<&TagCaptureValues>,
         lowered: &mut LoweredEffects,
     ) -> Result<(), DiagnosticReport> {
         for effect in effects {
@@ -2359,10 +2371,21 @@ impl<'a> ProgramLowerer<'a> {
                             "cannot update const: {name}"
                         )));
                     }
+                    let value = match value {
+                        GlobalValueAst::Literal(value) => *value,
+                        GlobalValueAst::TagCapture(key) => {
+                            let captures = tag_captures.ok_or_else(|| {
+                                DiagnosticReport::error(format!(
+                                    "tag capture reference `{key}` can only be used in rewrite effects"
+                                ))
+                            })?;
+                            captures.resolve(key, "rewrite effect")?
+                        }
+                    };
                     lowered.core.push(Effect::UpdateGlobal {
                         global,
                         op: *op,
-                        value: *value,
+                        value,
                     });
                 }
             }
@@ -2376,16 +2399,17 @@ impl<'a> ProgramLowerer<'a> {
         direction: Direction,
         direction_expanded: bool,
         guards: Vec<Guard>,
-        effects: Vec<Effect>,
-        ordered_effects: Vec<RuleEffect>,
+        effects: &[EffectAst],
         application: RuleApplication,
         role: ClassifiedRuleRole,
     ) -> Result<Vec<RuleStep>, DiagnosticReport> {
         let mut rules = Vec::with_capacity(alternatives.len());
         for alternative in alternatives {
+            let lowered_effects =
+                self.lower_effects_for_rewrite(effects, &alternative.tag_captures)?;
             let mut guards = guards.clone();
             guards.extend(alternative.guards.clone());
-            let mut rule_effects = ordered_effects.clone();
+            let mut rule_effects = lowered_effects.ordered.clone();
             append_move_sound_effects(
                 &alternative.components,
                 &alternative.writes,
@@ -2415,6 +2439,7 @@ impl<'a> ProgramLowerer<'a> {
                                     direction_expanded,
                                     "statement",
                                 )?,
+                                require_null: cell.require_null,
                                 require_objects: cell.require_objects.clone(),
                                 require_object_sets: cell.require_object_sets.clone(),
                                 forbid_objects: cell.forbid_objects.clone(),
@@ -2479,7 +2504,7 @@ impl<'a> ProgramLowerer<'a> {
                     components: compiled_components,
                 },
                 writes: compiled_writes,
-                effects: effects.clone(),
+                effects: lowered_effects.core,
             }));
         }
         Ok(rules)

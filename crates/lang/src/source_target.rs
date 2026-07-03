@@ -973,12 +973,12 @@ mod tests {
     fn resolves_level_body_to_named_level() {
         let source = r#"
 levels microban of sokoban {
-level microban_01
+level "microban_01"
 #####
 #@$.#
 #####
 
-level microban_02
+level "microban_02"
 #####
 #.@ #
 #####
@@ -996,7 +996,7 @@ level microban_02
     fn resolves_levels3_body_to_3d_level() {
         let source = r#"
 levels3 basic of push3d {
-level push3d_01 {
+level "push3d_01" {
 ___
 _P_
 }

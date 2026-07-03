@@ -45,7 +45,10 @@ fn load_asset_css(puzzle_path: &Path, assets: &AssetsDef) -> Result<String, AppE
 
 #[cfg(not(target_arch = "wasm32"))]
 fn load_game_visuals_js(puzzle_path: &Path, loaded: &LoadedGame) -> Result<String, AppError> {
-    let mut scripts = vec![asset_resolver_js(puzzle_path)?, VISUALS_JS.to_string()];
+    let mut scripts = vec![
+        asset_resolver_js(puzzle_path, &loaded.assets)?,
+        VISUALS_JS.to_string(),
+    ];
     let base_dir = puzzle_path.parent().unwrap_or_else(|| Path::new("."));
     for asset in loaded
         .assets
@@ -122,63 +125,61 @@ fn inline_css_urls(css: &str, base_dir: &Path) -> Result<String, AppError> {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn asset_resolver_js(puzzle_path: &Path) -> Result<String, AppError> {
+fn asset_resolver_js(puzzle_path: &Path, assets: &AssetsDef) -> Result<String, AppError> {
     let parent = puzzle_path.parent().unwrap_or_else(|| Path::new("."));
     let mut files = String::new();
     files.push('{');
     let mut first = true;
-    collect_asset_resolver_entries(parent, parent, &mut files, &mut first)?;
+    for asset in assets
+        .entries
+        .iter()
+        .filter(|asset| asset.kind == AssetKind::File)
+    {
+        let path = resolve_asset_path(parent, &asset.path)?;
+        push_asset_resolver_entry(parent, &path, &mut files, &mut first)?;
+    }
     files.push('}');
     Ok(format!(
-        "window.PuzzleAssets = {{ files: {files}, url(path) {{ return this.files[String(path || '').replaceAll('\\\\\\\\', '/')] || String(path || ''); }} }};"
+        "window.PuzzleAssets = {{ files: {files}, url(path) {{ const key = String(path || '').replaceAll('\\\\\\\\', '/'); if (Object.prototype.hasOwnProperty.call(this.files, key)) return this.files[key]; if (/^(?:data:|https?:|#)/.test(key)) return key; throw new Error(`Puzzle asset is not embedded: ${{key}}. Declare it with file \\\"${{key}}\\\" in assets.`); }} }};"
     ))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn collect_asset_resolver_entries(
+fn push_asset_resolver_entry(
     root: &Path,
-    dir: &Path,
+    path: &Path,
     files: &mut String,
     first: &mut bool,
 ) -> Result<(), AppError> {
-    for entry in fs::read_dir(dir)? {
-        let path = entry?.path();
-        if path.is_dir() {
-            collect_asset_resolver_entries(root, &path, files, first)?;
-            continue;
-        }
-        let file_name = path.file_name().and_then(|value| value.to_str());
-        let extension = path.extension().and_then(|value| value.to_str());
-        if !path.is_file() || file_name == Some("game.puzzle") || extension == Some("html") {
-            continue;
-        }
-        let Ok(relative) = path.strip_prefix(root) else {
-            continue;
-        };
-        let Some(name) = relative.to_str() else {
-            continue;
-        };
-        if !*first {
-            files.push(',');
-        }
-        *first = false;
-        push_json_string(files, &name.replace('\\', "/"));
-        files.push(':');
-        let url = if is_text_file(&path) {
-            format!(
-                "data:{};charset=utf-8,{}",
-                mime_type(&path),
-                percent_encode(&fs::read_to_string(&path)?)
-            )
-        } else {
-            format!(
-                "data:{};base64,{}",
-                mime_type(&path),
-                base64_encode(&fs::read(&path)?)
-            )
-        };
-        push_json_string(files, &url);
+    let relative = path.strip_prefix(root).map_err(|_| {
+        AppError::Config(format!(
+            "asset file is outside game folder: {}",
+            path.display()
+        ))
+    })?;
+    let name = relative.to_str().ok_or_else(|| {
+        AppError::Config(format!("asset path is not valid UTF-8: {}", path.display()))
+    })?;
+    if !*first {
+        files.push(',');
     }
+    *first = false;
+    push_json_string(files, &name.replace('\\', "/"));
+    files.push(':');
+    let url = if is_text_file(path) {
+        format!(
+            "data:{};charset=utf-8,{}",
+            mime_type(path),
+            percent_encode(&fs::read_to_string(path)?)
+        )
+    } else {
+        format!(
+            "data:{};base64,{}",
+            mime_type(path),
+            base64_encode(&fs::read(path)?)
+        )
+    };
+    push_json_string(files, &url);
     Ok(())
 }
 
@@ -336,4 +337,3 @@ fn push_visual_sprite(out: &mut String, sprite: &VisualSpriteDef) {
         out.push('}');
     }
 }
-

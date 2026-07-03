@@ -14,6 +14,7 @@ path = "src/main.rs"
 
 [dependencies]
 puzzle-core = { path = "../core" }
+puzzle-core-wasm = { package = "puzzle-wasm-core", path = "../wasm_core" }
 puzzle-3d = { path = "../puzzle_3d" }
 puzzle-lang = { path = "../lang" }
 puzzle-play = { path = "../play" }

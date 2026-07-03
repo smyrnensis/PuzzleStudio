@@ -171,6 +171,17 @@
               <div id="soundsHeaderTools" class="sounds-header-tools" hidden></div>
             </div>
             <div class="pane-actions">
+              <button id="previewSolveButton" class="pane-header-icon-button preview-solve-button" type="button" aria-label="Solve" title="Solve">
+                <svg class="solve-level-icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <circle cx="6" cy="19" r="3"></circle>
+                  <path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"></path>
+                  <circle cx="18" cy="5" r="3"></circle>
+                </svg>
+                <svg class="cancel-solve-icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M6 6l12 12"></path>
+                  <path d="M18 6 6 18"></path>
+                </svg>
+              </button>
               <button id="previewRefreshButton" class="pane-header-icon-button preview-refresh-button" type="button" aria-label="Refresh preview" title="Refresh preview">
                 <svg viewBox="0 0 24 24" aria-hidden="true" class="lucide lucide-refresh-cw-icon lucide-refresh-cw">
                   <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"></path>
@@ -1176,6 +1187,7 @@
     <script src="sound-generator.js"></script>
     <script src="editor_dom.js"></script>
     <script src="editor_workspace.js?v=delete-active-source-sync"></script>
+    <script src="editor_color.js"></script>
     <script src="editor_source.js?v=source-folding-state"></script>
     <script src="puzzle3_visual_core.js"></script>
     <script src="editor_level3d.js"></script>

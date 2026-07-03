@@ -1515,7 +1515,9 @@ function syncPuzzle3ControllerLevel(entry) {
 function renderText(component, scope = {}) {
   const text = document.createElement("p");
   text.className = "view-text";
-  if (component.source === "path") {
+  if (component.source === "expr") {
+    text.textContent = resolveLabel(component.content, scope);
+  } else if (component.source === "path") {
     text.textContent = String(resolveViewPath(component.path, scope) ?? "");
   } else {
     text.textContent = component.value || "";
@@ -1878,12 +1880,13 @@ function renderContainer(component, scope = {}) {
 
 function renderConditional(component, scope = {}) {
   const fragment = document.createDocumentFragment();
-  const children = isSceneConditionTrue(component.condition)
+  const conditionTrue = isSceneConditionTrue(component.condition, scope);
+  const children = conditionTrue
     ? component.children || []
     : component.elseChildren || [];
   renderSurfaceComponents(children, fragment, {
     ...scope,
-    __componentPath: [...(scope.__componentPath || []), isSceneConditionTrue(component.condition) ? "children" : "elseChildren"],
+    __componentPath: [...(scope.__componentPath || []), conditionTrue ? "children" : "elseChildren"],
   });
   return fragment;
 }
@@ -2070,7 +2073,9 @@ function findComponent(components, predicate) {
 }
 
 function resolveViewPath(path, scope = {}) {
-  const parts = String(path || "").split(".").filter(Boolean);
+  const parts = Array.isArray(path)
+    ? path.map(String).filter(Boolean)
+    : String(path || "").split(".").filter(Boolean);
   if (parts.length === 0) {
     return "";
   }
@@ -2131,7 +2136,60 @@ function resolveLabel(label, scope = {}) {
     }
     return exprSource(label, scope);
   }
+  if (label.kind === "binary") {
+    const value = resolveExprValue(label, scope);
+    return value === undefined || value === null ? "" : String(value);
+  }
+  if (label.kind === "if") {
+    return resolveLabel(resolveBoolExpr(label.condition, scope) ? label.then : label.else, scope);
+  }
   return "";
+}
+
+function resolveBoolExpr(expr, scope = {}) {
+  const value = resolveExprValue(expr, scope);
+  return typeof value === "boolean" ? value : false;
+}
+
+function resolveExprValue(expr, scope = {}) {
+  if (!expr) {
+    return undefined;
+  }
+  if (typeof expr === "string") {
+    return expr;
+  }
+  if (expr.kind === "bool" || expr.kind === "int" || expr.kind === "text") {
+    return expr.value;
+  }
+  if (expr.kind === "path") {
+    return resolveViewPath(expr.path, scope);
+  }
+  if (expr.kind === "call") {
+    if (expr.name === "join") {
+      return (expr.args || []).map((arg) => resolveLabel(arg, scope)).join("");
+    }
+    return undefined;
+  }
+  if (expr.kind === "binary") {
+    if (expr.op === "and") {
+      return resolveBoolExpr(expr.left, scope) && resolveBoolExpr(expr.right, scope);
+    }
+    const left = resolveExprValue(expr.left, scope);
+    const right = resolveExprValue(expr.right, scope);
+    if (left === undefined || right === undefined) {
+      return undefined;
+    }
+    if (expr.op === "eq") {
+      return left === right;
+    }
+    if (expr.op === "neq") {
+      return left !== right;
+    }
+  }
+  if (expr.kind === "if") {
+    return resolveExprValue(resolveBoolExpr(expr.condition, scope) ? expr.then : expr.else, scope);
+  }
+  return undefined;
 }
 
 function levelMenuCursorPosition(state, levels) {
@@ -2425,51 +2483,11 @@ function nonEmptyArray(value) {
   return Array.isArray(value) && value.length > 0 ? value : null;
 }
 
-function isSceneConditionTrue(condition) {
-  return String(condition || "")
-    .split(" and ")
-    .every((part) => isSceneConditionAtomTrue(part.trim()));
-}
-
-function isSceneConditionAtomTrue(condition) {
-  const equalMatch = String(condition || "").match(/^(.+?)\s*==\s*(.+)$/);
-  if (equalMatch) {
-    const left = sceneConditionValue(equalMatch[1].trim());
-    const right = sceneConditionValue(equalMatch[2].trim());
-    return left !== undefined && right !== undefined && left === right;
+function isSceneConditionTrue(condition, scope = {}) {
+  if (!condition || typeof condition !== "object") {
+    throw new Error("Scene condition must be an expression object");
   }
-  const notEqualMatch = String(condition || "").match(/^(.+?)\s*!=\s*(.+)$/);
-  if (notEqualMatch) {
-    const left = sceneConditionValue(notEqualMatch[1].trim());
-    const right = sceneConditionValue(notEqualMatch[2].trim());
-    return left !== undefined && right !== undefined && left !== right;
-  }
-  const levelValue = resolveViewPath(condition);
-  if (typeof levelValue === "boolean") {
-    return levelValue;
-  }
-  return false;
-}
-
-function sceneConditionValue(value) {
-  if (value === "true" || value === "false") {
-    return value;
-  }
-  const levelValue = resolveViewPath(value);
-  if (levelValue !== undefined && levelValue !== null && typeof levelValue !== "object") {
-    return String(levelValue);
-  }
-  if (/^-?\d+$/.test(String(value))) {
-    return String(Number(value));
-  }
-  const quoted = String(value).match(/^"(.*)"$/);
-  if (quoted) {
-    return quoted[1].replace(/\\"/g, "\"");
-  }
-  if (/^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$/.test(String(value))) {
-    return String(value);
-  }
-  return undefined;
+  return resolveBoolExpr(condition, scope);
 }
 
 async function sendEffect(effect, scope = {}) {
@@ -2496,7 +2514,7 @@ async function sendEffect(effect, scope = {}) {
     return;
   }
   if (effect?.kind === "conditional") {
-    if (isSceneConditionTrue(effect.condition)) {
+    if (isSceneConditionTrue(effect.condition, scope)) {
       await sendEffect(effect.effect?.effect || effect.effect, scope);
     }
     return;
@@ -2728,7 +2746,7 @@ function componentFootprint(component, context = {}) {
   }
   if (component.kind === "conditional") {
     return componentColumnFootprint(
-      isSceneConditionTrue(component.condition)
+      isSceneConditionTrue(component.condition, context.scope || {})
         ? component.children || []
         : component.elseChildren || [],
       context,
@@ -3027,7 +3045,7 @@ function effectToCommand(effect, scope = {}) {
     return commands.at(-1) || "";
   }
   if (effect.kind === "conditional") {
-    return isSceneConditionTrue(effect.condition)
+    return isSceneConditionTrue(effect.condition, scope)
       ? effectToCommand(effect.effect?.effect || effect.effect, scope)
       : "";
   }
@@ -3143,6 +3161,13 @@ function exprSource(expr, scope = {}) {
   }
   if (expr.kind === "call") {
     return `${expr.name}(${(expr.args || []).map((arg) => exprSource(arg, scope)).join(", ")})`;
+  }
+  if (expr.kind === "binary") {
+    const op = expr.op === "and" ? "and" : expr.op === "eq" ? "==" : "!=";
+    return `${exprSource(expr.left, scope)} ${op} ${exprSource(expr.right, scope)}`;
+  }
+  if (expr.kind === "if") {
+    return `if ${exprSource(expr.condition, scope)} { ${exprSource(expr.then, scope)} } else { ${exprSource(expr.else, scope)} }`;
   }
   return "";
 }

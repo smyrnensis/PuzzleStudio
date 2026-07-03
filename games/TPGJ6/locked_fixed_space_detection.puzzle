@@ -218,15 +218,12 @@ scene title {
 }
 
 scene playing(level) {
-	state {
-		sokoban
-	}
 	layout {
 		row {
 			title
 			subtitle level.label
 		}
-		sokoban
+			board = puzzle sokoban
 	}
 	keys {
 		q Escape -> {

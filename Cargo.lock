@@ -1245,6 +1245,7 @@ dependencies = [
  "puzzle-lang",
  "puzzle-play",
  "puzzle-solver",
+ "puzzle-wasm-core",
  "serde_json",
 ]
 
@@ -2421,6 +2422,7 @@ name = "puzzle-wasm"
 version = "0.1.0"
 dependencies = [
  "html-play",
+ "js-sys",
  "puzzle-lang",
  "wasm-bindgen",
 ]
