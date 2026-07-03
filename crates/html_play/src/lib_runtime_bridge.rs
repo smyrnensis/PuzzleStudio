@@ -694,6 +694,287 @@ fn source_looks_puzzle3d(source: &str) -> bool {
 }
 
 #[cfg(feature = "solver")]
+pub fn solve_request_json(request_json: &str) -> Result<String, String> {
+    solve_request_json_inner(request_json).map_err(|error| error.to_string())
+}
+
+#[cfg(feature = "solver")]
+fn solve_request_json_inner(request_json: &str) -> Result<String, AppError> {
+    let request: serde_json::Value = serde_json::from_str(request_json)
+        .map_err(|error| AppError::Config(format!("solver request JSON is invalid: {error}")))?;
+    let request = json_object(&request, "solver request")?;
+    let source = required_json_string(request, "source")?;
+    let puzzle_path = required_json_string(request, "puzzlePath")?;
+    let model_kind = required_json_string(request, "modelKind")?;
+    let target = required_json_object(request, "target")?;
+    let target_state = required_json_object(target, "state")?;
+    let state_data = required_json_value(target_state, "data")?.to_string();
+    let max_depth = json_u32_value(request.get("maxDepth"), "maxDepth")?;
+    let max_nodes = json_usize_value(request.get("maxNodes"), "maxNodes")?;
+    let max_ms = json_u64_value(request.get("maxMs"), "maxMs")?;
+
+    puzzle_lang::validate_source_profile_for_path(source, puzzle_path)?;
+    match model_kind {
+        "2d" => solve_request2_json_from_source_inner(
+            source,
+            puzzle_path,
+            target,
+            target_state,
+            &state_data,
+            max_depth,
+            max_nodes,
+            max_ms,
+        ),
+        "3d" => solve_request3_json_from_source_inner(
+            source,
+            target,
+            target_state,
+            &state_data,
+            max_depth,
+            max_nodes,
+            max_ms,
+        ),
+        other => Err(AppError::Config(format!(
+            "unsupported solver request modelKind {other:?}"
+        ))),
+    }
+}
+
+#[cfg(feature = "solver")]
+fn solve_request2_json_from_source_inner(
+    source: &str,
+    _puzzle_path: &str,
+    target: &serde_json::Map<String, serde_json::Value>,
+    target_state: &serde_json::Map<String, serde_json::Value>,
+    state_json: &str,
+    max_depth: u32,
+    max_nodes: usize,
+    max_ms: u64,
+) -> Result<String, AppError> {
+    let loaded = parse_game(source)?;
+    let level_index = validate_solver_request_level2d(&loaded, target)?;
+    let mut state = state_from_json(&loaded, state_json)?;
+    if solver_request_materializes_level_start(target_state)? {
+        state = materialize_level_start_state(&loaded, state, level_index)?;
+    }
+    let budget = solver_request_budget(max_depth, max_nodes, max_ms);
+    let response = solve_current_state_with_budget(&loaded, state, budget)?;
+    let mut out = String::new();
+    push_solution_response(&mut out, &loaded, &response);
+    Ok(out)
+}
+
+#[cfg(feature = "solver")]
+fn solve_request3_json_from_source_inner(
+    source: &str,
+    target: &serde_json::Map<String, serde_json::Value>,
+    target_state: &serde_json::Map<String, serde_json::Value>,
+    state_json: &str,
+    max_depth: u32,
+    max_nodes: usize,
+    max_ms: u64,
+) -> Result<String, AppError> {
+    let parsed = parse_puzzle3d_for_solver(source)?;
+    validate_solver_request_level3d(&parsed, target)?;
+    let mut state = state3_from_json(&parsed.game, state_json)?;
+    if solver_request_materializes_level_start(target_state)? {
+        state = materialize_level_start_state3(&parsed, state)?;
+    }
+    let budget = solver_request_budget(max_depth, max_nodes, max_ms);
+    let response = solve_current_state3_with_budget(&parsed, state, budget)?;
+    let mut out = String::new();
+    push_solution_response3(&mut out, &parsed, &response);
+    Ok(out)
+}
+
+#[cfg(feature = "solver")]
+fn solver_request_budget(max_depth: u32, max_nodes: usize, max_ms: u64) -> SearchBudget {
+    if max_ms > 0 {
+        SearchBudget::bounded(max_depth, max_nodes, Duration::from_millis(max_ms))
+    } else {
+        SearchBudget {
+            max_depth: Some(max_depth),
+            max_nodes: Some(max_nodes),
+            max_frontier: None,
+            max_duration: None,
+        }
+    }
+}
+
+#[cfg(feature = "solver")]
+fn validate_solver_request_level2d(
+    loaded: &LoadedGame,
+    target: &serde_json::Map<String, serde_json::Value>,
+) -> Result<usize, AppError> {
+    validate_solver_target_origin(target)?;
+    let level = required_json_object(target, "level")?;
+    let index = json_usize_value(level.get("index"), "level.index")?;
+    let expected = loaded
+        .levels
+        .get(index)
+        .ok_or_else(|| AppError::Config(format!("solver target level index out of range: {index}")))?;
+    let name = required_json_string(level, "levelName")?;
+    if name != expected.name {
+        return Err(AppError::Config(format!(
+            "solver target levelName mismatch: expected {:?}, got {:?}",
+            expected.name, name
+        )));
+    }
+    let puzzle = required_json_string(level, "levelPuzzle")?;
+    if puzzle != expected.puzzle {
+        return Err(AppError::Config(format!(
+            "solver target levelPuzzle mismatch: expected {:?}, got {:?}",
+            expected.puzzle, puzzle
+        )));
+    }
+    let pack = required_json_value(level, "levelPack")?;
+    match (&expected.pack, pack) {
+        (Some(expected), serde_json::Value::String(actual)) if actual == expected => {}
+        (None, serde_json::Value::Null) => {}
+        (Some(expected), serde_json::Value::String(actual)) => {
+            return Err(AppError::Config(format!(
+                "solver target levelPack mismatch: expected {:?}, got {:?}",
+                expected, actual
+            )));
+        }
+        (Some(expected), _) => {
+            return Err(AppError::Config(format!(
+                "solver target levelPack mismatch: expected {:?}",
+                expected
+            )));
+        }
+        (None, _) => {
+            return Err(AppError::Config(
+                "solver target levelPack mismatch: expected null".to_string(),
+            ));
+        }
+    }
+    Ok(index)
+}
+
+#[cfg(feature = "solver")]
+fn validate_solver_request_level3d(
+    parsed: &ParsedPuzzle3,
+    target: &serde_json::Map<String, serde_json::Value>,
+) -> Result<usize, AppError> {
+    validate_solver_target_origin(target)?;
+    let level = required_json_object(target, "level")?;
+    let index = json_usize_value(level.get("index"), "level.index")?;
+    let bundle = parsed
+        .level_bundle
+        .as_ref()
+        .ok_or_else(|| AppError::Config("3D solver target requires levels3".to_string()))?;
+    let expected = bundle
+        .levels
+        .get(index)
+        .ok_or_else(|| AppError::Config(format!("3D solver target level index out of range: {index}")))?;
+    let name = required_json_string(level, "levelName")?;
+    if name != expected.name {
+        return Err(AppError::Config(format!(
+            "3D solver target levelName mismatch: expected {:?}, got {:?}",
+            expected.name, name
+        )));
+    }
+    Ok(index)
+}
+
+#[cfg(feature = "solver")]
+fn validate_solver_target_origin(
+    target: &serde_json::Map<String, serde_json::Value>,
+) -> Result<(), AppError> {
+    match required_json_string(target, "origin")? {
+        "preview-level" | "level-editor" => Ok(()),
+        other => Err(AppError::Config(format!(
+            "unsupported solver target origin {other:?}"
+        ))),
+    }
+}
+
+#[cfg(feature = "solver")]
+fn solver_request_materializes_level_start(
+    target_state: &serde_json::Map<String, serde_json::Value>,
+) -> Result<bool, AppError> {
+    match required_json_string(target_state, "kind")? {
+        "compiled-start" | "editor-staged" => {}
+        other => {
+            return Err(AppError::Config(format!(
+                "unsupported solver target state kind {other:?}"
+            )));
+        }
+    }
+    match required_json_string(target_state, "lifecycle")? {
+        "playable-start" => Ok(true),
+        "already-materialized" => Ok(false),
+        other => Err(AppError::Config(format!(
+            "unsupported solver target state lifecycle {other:?}"
+        ))),
+    }
+}
+
+#[cfg(feature = "solver")]
+fn json_object<'a>(
+    value: &'a serde_json::Value,
+    label: &str,
+) -> Result<&'a serde_json::Map<String, serde_json::Value>, AppError> {
+    value
+        .as_object()
+        .ok_or_else(|| AppError::Config(format!("{label} must be a JSON object")))
+}
+
+#[cfg(feature = "solver")]
+fn required_json_object<'a>(
+    object: &'a serde_json::Map<String, serde_json::Value>,
+    key: &str,
+) -> Result<&'a serde_json::Map<String, serde_json::Value>, AppError> {
+    json_object(required_json_value(object, key)?, key)
+}
+
+#[cfg(feature = "solver")]
+fn required_json_value<'a>(
+    object: &'a serde_json::Map<String, serde_json::Value>,
+    key: &str,
+) -> Result<&'a serde_json::Value, AppError> {
+    object
+        .get(key)
+        .ok_or_else(|| AppError::Config(format!("solver request missing {key}")))
+}
+
+#[cfg(feature = "solver")]
+fn required_json_string<'a>(
+    object: &'a serde_json::Map<String, serde_json::Value>,
+    key: &str,
+) -> Result<&'a str, AppError> {
+    required_json_value(object, key)?
+        .as_str()
+        .ok_or_else(|| AppError::Config(format!("solver request {key} must be a string")))
+}
+
+#[cfg(feature = "solver")]
+fn json_u32_value(value: Option<&serde_json::Value>, key: &str) -> Result<u32, AppError> {
+    let raw = value.and_then(serde_json::Value::as_u64).ok_or_else(|| {
+        AppError::Config(format!("solver request {key} must be an unsigned integer"))
+    })?;
+    u32::try_from(raw)
+        .map_err(|_| AppError::Config(format!("solver request {key} is out of range")))
+}
+
+#[cfg(feature = "solver")]
+fn json_usize_value(value: Option<&serde_json::Value>, key: &str) -> Result<usize, AppError> {
+    let raw = value.and_then(serde_json::Value::as_u64).ok_or_else(|| {
+        AppError::Config(format!("solver request {key} must be an unsigned integer"))
+    })?;
+    usize::try_from(raw)
+        .map_err(|_| AppError::Config(format!("solver request {key} is out of range")))
+}
+
+#[cfg(feature = "solver")]
+fn json_u64_value(value: Option<&serde_json::Value>, key: &str) -> Result<u64, AppError> {
+    value.and_then(serde_json::Value::as_u64).ok_or_else(|| {
+        AppError::Config(format!("solver request {key} must be an unsigned integer"))
+    })
+}
+
+#[cfg(feature = "solver")]
 pub fn solve_state_json_from_source(
     source: &str,
     puzzle_path: &str,
@@ -1007,4 +1288,3 @@ fn materialize_level_start_state3(
     )
     .map_err(|error| AppError::Config(format!("{error:?}")))
 }
-

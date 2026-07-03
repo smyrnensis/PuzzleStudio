@@ -28,7 +28,7 @@ if (htmlEditor) {
   );
   if (!defaultFeaturesDisabled || forbiddenFeatures.length > 0) {
     const message = [
-      "src-tauri may depend on html-editor only as a service/sound-tools dependency:",
+      "src-tauri may depend on html-editor only as a service/docs/sound-tools dependency:",
       "set default-features = false and do not enable embedded-assets or native-preview",
     ].join(" ");
     (enforce ? failures : warnings).push(message);
@@ -50,6 +50,8 @@ if (!fs.existsSync(path.join(repoRoot, "crates/html_editor/static/editor.html"))
 }
 
 for (const asset of [
+  "crates/html_editor/static/renderer.css",
+  "crates/html_editor/static/renderer.js",
   "crates/html_editor/static/wasm_game/puzzle_wasm_game.js",
   "crates/html_editor/static/wasm_game/puzzle_wasm_game_bg.wasm",
 ]) {

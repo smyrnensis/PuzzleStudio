@@ -282,6 +282,11 @@ fn sound_tools() -> String {
 }
 
 #[tauri::command]
+fn editor_docs() -> String {
+    html_editor::editor_docs_html()
+}
+
+#[tauri::command]
 fn new_puzzle_source(request: NewPuzzleSourceCommandRequest) -> String {
     html_editor::new_puzzle_source(&request.title)
 }
@@ -1100,6 +1105,7 @@ pub fn run() {
             open_recent_workspace,
             remove_workspace,
             sound_tools,
+            editor_docs,
             new_puzzle_source,
             save_source,
             export_html,

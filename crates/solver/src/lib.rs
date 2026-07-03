@@ -13,6 +13,6 @@ pub use best_first::{
 pub use bfs::exact_bfs;
 pub use budget::SearchBudget;
 pub use domain::SearchDomain;
-pub use puzzle_domain::{PuzzleDomain, PuzzleStateKey};
+pub use puzzle_domain::{PuzzleDomain, PuzzleSearchState, PuzzleStateKey};
 pub use puzzle3_domain::{Puzzle3Domain, Puzzle3StateKey};
 pub use report::{SearchFailure, SearchOutcome, SearchProgress, SearchStats, Witness};

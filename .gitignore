@@ -1,10 +1,21 @@
 target/
 .DS_Store
-tests/
-!crates/lang/tests/
-!crates/lang/tests/**
-!crates/html_editor/tests/
-!crates/html_editor/tests/**
+archive/
+
+# Local tool and editor state.
+.claude/settings.local.json
+
+# Local environment files may contain host paths or secrets.
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# Temporary files from editors and failed merges.
+*.tmp
+*.bak
+*.orig
+*~
 
 # External PS Next checkout used for PS 3D extraction work.
 # Keep notes/patches/examples in this repo, but do not vendor the fork body.

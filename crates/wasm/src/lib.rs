@@ -67,6 +67,11 @@ pub fn solve_state(
     .map_err(|error| JsValue::from_str(&error))
 }
 
+#[wasm_bindgen]
+pub fn solve_request_json(request_json: &str) -> Result<String, JsValue> {
+    html_play::solve_request_json(request_json).map_err(|error| JsValue::from_str(&error))
+}
+
 #[cfg(test)]
 mod tests {
     use super::compile_preview;

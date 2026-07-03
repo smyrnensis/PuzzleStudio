@@ -7,7 +7,8 @@ build = "build.rs"
 
 [features]
 default = ["embedded-assets", "native-preview", "sound-tools"]
-embedded-assets = ["native-preview", "sound-tools"]
+embedded-assets = ["editor-docs", "native-preview", "sound-tools"]
+editor-docs = []
 native-preview = ["dep:html-play"]
 sound-tools = []
 

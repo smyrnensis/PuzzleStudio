@@ -1283,6 +1283,7 @@ fn push_compact_rule_application(out: &mut String, application: RuleApplication)
         RuleApplication::OnceAll => "1",
         RuleApplication::OncePerLevel => "2",
         RuleApplication::UntilStable => "3",
+        RuleApplication::Random => "4",
     });
 }
 
@@ -2294,4 +2295,3 @@ fn push_solution_response3(out: &mut String, parsed: &ParsedPuzzle3, response: &
     }
     out.push('}');
 }
-

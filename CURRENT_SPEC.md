@@ -67,17 +67,19 @@ move
 
 routine の application はデフォルトで `once`。
 
-`routine @name` は display-only assertion 付き routine を定義する。中に書けるのは display rule だけで、normal rule や normal rule with display effect が混ざるとエラーになる。`routine display <name>` は同じ意味の明示形。
+`random` は rule application keyword。`random [ ... ] -> [ ... ]` は適用可能な match のうち1つだけを選ぶ。`random { ... }` と `routine name random { ... }` は発火可能な statement のうち1つだけを選ぶ。選択は hidden RNG ではなく、compiled game、rule、input、solver-visible state、候補数から決まる deterministic tie-breaker であり、同じ state と input では同じ next state になる。確率的に毎回違う結果を得る機能ではない。
 
-短い表示派生は routine 宣言なしで `display [ ... ] -> ...` と書ける。複数行なら `rules` や `on_level_start` の中に statement block として `display { ... }` を置ける。どちらも置いた位置で実行される。
+`routine @name` は display-only assertion 付き routine を定義する。中に書けるのは display rule だけで、normal rule や normal rule with display effect が混ざるとエラーになる。`routine display <name>` は旧構文であり読まない。
+
+短い表示派生は routine 宣言なしで `[ ... ] -> ...` と書く。rule の match または write に `@Name` などの display object が現れることで display rule と認識される。`display [ ... ] -> ...` や `display { ... }` は旧構文であり読まない。
 
 rule の role は routine 単位ではなく rewrite 単位で決まる。match に display object があり normal state を変えない rule、または match に display object がなく display object だけを書く rule は display rule になる。match に display object がある rule が normal state を変えようとするとエラー。match に display object がなく、normal state と display object を同時に変える rule は normal rule with display effect として扱う。normal routine から display routine を bare call してもよい。
 
 main rules と gameplay condition は display object を読めない。display object に依存する見た目は display rule に閉じ、gameplay / solver の因果には入れない。solver は display rule を実行せず、display object を state key から外す。
 
-`on_level_start` / `on_level_clear` でも `@routine` / `display <routine>` を書ける。ただし lifecycle block は通常入力ではないため、そこで呼ばれた display routine は `input` orientation / `if input == ...` を使えない。
+`on_level_start` / `on_level_clear` でも `@routine` を書ける。ただし lifecycle block は通常入力ではないため、そこで呼ばれた display routine は `input` orientation / `if input == ...` を使えない。
 
-`on_display { ... }` は renderer / editor が表示 snapshot を作る直前に走る display-only hook。中には `@routine`、`display <routine>`、`display <rewrite>`、`display { ... }` などの display statement だけを書ける。`on_display` は gameplay state、solver、win condition、undo key を変えるための hook ではなく、editor でセルを直接編集した状態にも同じ visual derivation をかけるための projection である。
+`on_display { ... }` は renderer / editor が表示 snapshot を作る直前に走る display-only hook。中には `@routine` と display rewrite だけを書ける。`display <routine>`、`display <rewrite>`、`display { ... }` は旧構文であり読まない。`on_display` は gameplay state、solver、win condition、undo key を変えるための hook ではなく、editor でセルを直接編集した状態にも同じ visual derivation をかけるための projection である。
 
 main object と display object は layer order 上は同じ列に並ぶが、同じ storage layer には入れない。1つの layer row は gameplay object だけ、または display object だけを含む。`@Name` は display object を表し、object vocabulary は `layers` の右辺だけが作る。`@overlay = @Name ...` のような display 専用 layer 名も使える。`@group = ...` も display-only alias であり、右辺に main object を含められない。逆に `@` なしの layer / group は display object を含められない。
 

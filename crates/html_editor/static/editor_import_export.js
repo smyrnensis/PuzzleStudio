@@ -267,12 +267,23 @@ async function importFilesIntoFolder(fileList, targetFolder) {
   currentDocumentIndex = activeDocumentIndex();
   renderDocumentSelect();
   loadEmbeddedDocument(currentDocumentIndex);
-  if (!editorSeed) {
-    await renderPreview();
-  }
   saveDocumentStore(false);
   const folderName = targetFolder && targetFolder !== fileTree ? folderPath(targetFolder) || targetFolder.name : "Files";
   setEditorStatus(`Imported to ${folderName}`, "is-ok");
+  if (!editorSeed) {
+    try {
+      await renderPreview();
+    } catch (error) {
+      console.error(error);
+      const message = importErrorMessage(error);
+      setEditorStatus(`Imported; preview failed: ${message}`, "is-error");
+      setStatus(`Preview failed: ${message}`, "is-error");
+    }
+  }
+}
+
+function importErrorMessage(error) {
+  return String(error?.message || error || "unknown error");
 }
 
 async function importZipFile(file, targetFolder) {

@@ -21,6 +21,7 @@ move
 levels {
 legend {
 . = empty
+# = Wall
 P = Player
 B = Box
 G = Goal

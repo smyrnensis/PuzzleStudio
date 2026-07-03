@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::{DiagnosticReport, source::strip_line_comment};
+use crate::{Diagnostic, DiagnosticReport, source::strip_line_comment};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PsSection {
@@ -29,8 +29,16 @@ struct PsSections {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct PsObjectDef {
     name: String,
+    aliases: Vec<String>,
     shorthand: Option<char>,
     sprite: Option<PsSpriteDef>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PsObjectHeader {
+    name: String,
+    aliases: Vec<String>,
+    shorthand: Option<char>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -72,6 +80,7 @@ enum PsSoundEvent {
 
 pub fn translate_puzzlescript_to_canonical(source: &str) -> Result<String, DiagnosticReport> {
     let sections = collect_sections(source);
+    reject_unsupported_rule_modifiers(&sections.rules)?;
     let title = parse_title(&sections.prelude);
     let author = parse_author(&sections.prelude);
     let homepage = parse_homepage(&sections.prelude);
@@ -81,6 +90,7 @@ pub fn translate_puzzlescript_to_canonical(source: &str) -> Result<String, Diagn
     let viewport_size = parse_viewport_size(&sections.prelude);
     let sounds = parse_sound_defs(&sections.sounds);
     let startgame_sfx = ps_sound_name(&sounds, "startgame");
+    let uses_action_input = ps_rules_use_action_input(&sections.rules);
     let object_defs = parse_object_defs(&sections.objects);
     let background_object = ps_background_object(&object_defs);
     let aliases = parse_alias_defs(&sections.legend, &object_defs);
@@ -107,7 +117,8 @@ pub fn translate_puzzlescript_to_canonical(source: &str) -> Result<String, Diagn
         ps_viewport_focus(&object_defs, &aliases).as_deref(),
     );
     push_layers(&mut out, &collision_layers);
-    push_default_inputs(&mut out);
+    push_action_input(&mut out, uses_action_input);
+    push_default_inputs(&mut out, uses_action_input);
     push_groups(&mut out, &aliases);
     push_sprites(&mut out, &object_defs);
     push_win_conditions(&mut out, &sections.win_conditions, &object_defs, &aliases);
@@ -121,6 +132,7 @@ pub fn translate_puzzlescript_to_canonical(source: &str) -> Result<String, Diagn
         run_rules_on_level_start,
         background_object.as_deref(),
         &sounds,
+        uses_action_input,
     );
     push_ps_level_clear(&mut out);
     push_levels(
@@ -563,16 +575,16 @@ fn parse_object_defs(lines: &[String]) -> Vec<PsObjectDef> {
             continue;
         }
 
-        if let Some((name, shorthand)) =
-            parse_object_header(trimmed, previous_meaningful.as_deref())
+        if let Some(header) = parse_object_header(trimmed, previous_meaningful.as_deref())
             && !objects
                 .iter()
-                .any(|existing: &PsObjectDef| existing.name == name)
+                .any(|existing: &PsObjectDef| existing.name == header.name)
         {
             let (sprite, next_i) = parse_object_sprite(lines, i + 1);
             objects.push(PsObjectDef {
-                name,
-                shorthand,
+                name: header.name,
+                aliases: header.aliases,
+                shorthand: header.shorthand,
                 sprite,
             });
             previous_meaningful = objects
@@ -590,25 +602,41 @@ fn parse_object_defs(lines: &[String]) -> Vec<PsObjectDef> {
     objects
 }
 
-fn parse_object_header(line: &str, previous: Option<&str>) -> Option<(String, Option<char>)> {
-    let tokens = line.split_whitespace().collect::<Vec<_>>();
-    let [name] = tokens.as_slice() else {
-        let [name, shorthand] = tokens.as_slice() else {
-            return None;
-        };
-        if !is_identifier(name) || shorthand.chars().count() != 1 {
-            return None;
-        }
-        return previous
-            .is_none_or(is_sprite_row)
-            .then(|| ((*name).to_string(), shorthand.chars().next()));
-    };
-    if !is_identifier(name) {
+fn parse_object_header(line: &str, previous: Option<&str>) -> Option<PsObjectHeader> {
+    if !previous.is_none_or(is_sprite_row) {
         return None;
     }
-    previous
-        .is_none_or(is_sprite_row)
-        .then(|| ((*name).to_string(), None))
+    let tokens = line.split_whitespace().collect::<Vec<_>>();
+    match tokens.as_slice() {
+        [name] if is_identifier(name) => Some(PsObjectHeader {
+            name: (*name).to_string(),
+            aliases: Vec::new(),
+            shorthand: None,
+        }),
+        [name, shorthand] if is_identifier(name) && is_ps_object_shorthand(shorthand) => {
+            Some(PsObjectHeader {
+                name: (*name).to_string(),
+                aliases: Vec::new(),
+                shorthand: shorthand.chars().next(),
+            })
+        }
+        [name, aliases @ .., shorthand]
+            if is_identifier(name)
+                && is_ps_object_shorthand(shorthand)
+                && aliases.iter().all(|alias| is_identifier(alias)) =>
+        {
+            Some(PsObjectHeader {
+                name: (*name).to_string(),
+                aliases: aliases.iter().map(|alias| (*alias).to_string()).collect(),
+                shorthand: shorthand.chars().next(),
+            })
+        }
+        _ => None,
+    }
+}
+
+fn is_ps_object_shorthand(token: &str) -> bool {
+    token.chars().count() == 1 && !token.chars().all(char::is_whitespace)
 }
 
 fn parse_object_sprite(lines: &[String], start: usize) -> (Option<PsSpriteDef>, usize) {
@@ -697,6 +725,17 @@ fn is_sprite_row_for_palette(line: &str, color_count: usize, width: Option<usize
 
 fn parse_alias_defs(lines: &[String], objects: &[PsObjectDef]) -> Vec<PsAliasDef> {
     let mut aliases = Vec::new();
+    for object in objects {
+        for alias in &object.aliases {
+            push_alias_def(
+                &mut aliases,
+                PsAliasDef {
+                    name: alias.clone(),
+                    terms: vec![object.name.clone()],
+                },
+            );
+        }
+    }
     for line in lines.iter().filter(|line| !line.trim().is_empty()) {
         let Some((left, rhs)) = line.split_once('=') else {
             continue;
@@ -710,13 +749,26 @@ fn parse_alias_defs(lines: &[String], objects: &[PsObjectDef]) -> Vec<PsAliasDef
             .filter_map(|term| resolve_name(term, objects, &aliases))
             .collect::<Vec<_>>();
         if !terms.is_empty() {
-            aliases.push(PsAliasDef {
-                name: name.to_string(),
-                terms,
-            });
+            push_alias_def(
+                &mut aliases,
+                PsAliasDef {
+                    name: name.to_string(),
+                    terms,
+                },
+            );
         }
     }
     aliases
+}
+
+fn push_alias_def(aliases: &mut Vec<PsAliasDef>, alias: PsAliasDef) {
+    if aliases
+        .iter()
+        .any(|existing| existing.name.eq_ignore_ascii_case(&alias.name))
+    {
+        return;
+    }
+    aliases.push(alias);
 }
 
 fn parse_collision_layers(
@@ -799,12 +851,23 @@ fn push_layers(out: &mut Vec<String>, layers: &[(String, Vec<String>)]) {
     out.push(String::new());
 }
 
-fn push_default_inputs(out: &mut Vec<String>) {
+fn push_action_input(out: &mut Vec<String>, uses_action_input: bool) {
+    if !uses_action_input {
+        return;
+    }
+    out.push("input action".to_string());
+    out.push(String::new());
+}
+
+fn push_default_inputs(out: &mut Vec<String>, uses_action_input: bool) {
     out.push("keys {".to_string());
     out.push("  w ArrowUp -> up".to_string());
     out.push("  s ArrowDown -> down".to_string());
     out.push("  a ArrowLeft -> left".to_string());
     out.push("  d ArrowRight -> right".to_string());
+    if uses_action_input {
+        out.push("  x Space Enter c -> action".to_string());
+    }
     out.push("  r -> restart".to_string());
     out.push("}".to_string());
     out.push(String::new());
@@ -996,6 +1059,13 @@ fn push_win_conditions(
     }
     out.push("win_conditions {".to_string());
     for line in lines.iter().filter(|line| !line.trim().is_empty()) {
+        let line = line
+            .split_once('(')
+            .map_or(line.as_str(), |(before, _)| before)
+            .trim();
+        if line.is_empty() {
+            continue;
+        }
         out.push(format!(
             "  {}",
             canonical_condition_row(line, objects, aliases)
@@ -1054,6 +1124,7 @@ fn push_rules(
     run_rules_on_level_start: bool,
     background_object: Option<&str>,
     sounds: &[PsSoundDef],
+    uses_action_input: bool,
 ) {
     let player_selector = ps_player_selector(objects, aliases);
     if run_rules_on_level_start {
@@ -1072,6 +1143,7 @@ fn push_rules(
         out.push(format!(
             "  input directions [ {player_selector} ] -> [ {player_selector}{{>}} ]"
         ));
+        push_ps_action_bridge(out, uses_action_input, &player_selector, "  ");
         out.push("  __ps_main".to_string());
         out.push("}".to_string());
         out.push(String::new());
@@ -1089,9 +1161,25 @@ fn push_rules(
     out.push(format!(
         "  input directions [ {player_selector} ] -> [ {player_selector}{{>}} ]"
     ));
+    push_ps_action_bridge(out, uses_action_input, &player_selector, "  ");
     push_ps_main_rule_body(out, lines, objects, aliases, sounds, "  ");
     out.push("}".to_string());
     out.push(String::new());
+}
+
+fn push_ps_action_bridge(
+    out: &mut Vec<String>,
+    uses_action_input: bool,
+    player_selector: &str,
+    indent: &str,
+) {
+    if uses_action_input {
+        out.push(format!("{indent}if input == action {{"));
+        out.push(format!(
+            "{indent}  once_all [ {player_selector} ] -> [ {player_selector}{{__action}} ]"
+        ));
+        out.push(format!("{indent}}}"));
+    }
 }
 
 fn push_ps_level_clear(out: &mut Vec<String>) {
@@ -1170,8 +1258,8 @@ fn push_canonical_rule_rows<'a>(
         if !is_continuation {
             flush_canonical_rule_group(out, &mut group, indent);
         }
-        if let Some(rule) = canonical_rule_row(line, objects, aliases) {
-            group.push(rule);
+        if let Some(rules) = canonical_rule_rows(line, objects, aliases) {
+            group.extend(rules);
         }
     }
     flush_canonical_rule_group(out, &mut group, indent);
@@ -1202,11 +1290,11 @@ fn is_late_rule(line: &str) -> bool {
         .is_some_and(|token| token.eq_ignore_ascii_case("late"))
 }
 
-fn canonical_rule_row(
+fn canonical_rule_rows(
     line: &str,
     objects: &[PsObjectDef],
     aliases: &[PsAliasDef],
-) -> Option<String> {
+) -> Option<Vec<String>> {
     let trimmed = line.trim().trim_start_matches('+').trim();
     if !trimmed.contains("->") {
         return None;
@@ -1219,6 +1307,20 @@ fn canonical_rule_row(
     if !tokens.iter().any(|token| token == "->") {
         return None;
     }
+    let variants = direction_prefix_variants(tokens);
+    let rows = variants
+        .into_iter()
+        .map(|tokens| canonical_rule_tokens_to_row(tokens, objects, aliases, has_again))
+        .collect::<Vec<_>>();
+    Some(rows)
+}
+
+fn canonical_rule_tokens_to_row(
+    mut tokens: Vec<String>,
+    objects: &[PsObjectDef],
+    aliases: &[PsAliasDef],
+    has_again: bool,
+) -> String {
     tokens = translate_motion_qualifiers(tokens, objects, aliases);
     tokens = attach_direction_prefixes(tokens, objects, aliases);
     let tokens = tokens
@@ -1230,7 +1332,7 @@ fn canonical_rule_row(
     if has_again {
         row.push_str(" again");
     }
-    Some(row)
+    row
 }
 
 fn expand_ps_sfx_effect_tokens(tokens: Vec<String>) -> Vec<String> {
@@ -1279,6 +1381,33 @@ fn attach_direction_prefixes(
     attached
 }
 
+fn direction_prefix_variants(tokens: Vec<String>) -> Vec<Vec<String>> {
+    let Some(pattern_start) = tokens.iter().position(|token| token == "[") else {
+        return vec![tokens];
+    };
+    let prefix_count = tokens[..pattern_start]
+        .iter()
+        .take_while(|token| ps_rule_direction_prefix(token).is_some())
+        .count();
+    if prefix_count <= 1 {
+        return vec![tokens];
+    }
+
+    let prefixes = tokens[..prefix_count]
+        .iter()
+        .filter_map(|token| ps_rule_direction_prefix(token))
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    prefixes
+        .into_iter()
+        .map(|prefix| {
+            let mut variant = vec![prefix];
+            variant.extend(tokens[prefix_count..].iter().cloned());
+            variant
+        })
+        .collect()
+}
+
 fn translate_motion_qualifiers(
     tokens: Vec<String>,
     objects: &[PsObjectDef],
@@ -1311,20 +1440,26 @@ fn translate_motion_qualifiers_on_side(
         let token = &tokens[i];
         let is_moving = token.eq_ignore_ascii_case("moving");
         let is_stationary = token.eq_ignore_ascii_case("stationary");
-        if (is_moving || is_stationary)
+        let is_action = token.eq_ignore_ascii_case("action");
+        let relative = ps_relative_motion_qualifier(token);
+        if (is_moving || is_stationary || is_action || relative.is_some())
             && let Some(selector) = tokens
                 .get(i + 1)
                 .filter(|selector| resolve_name(selector, objects, aliases).is_some())
         {
-            if is_lhs {
+            if !is_lhs && (is_moving || is_stationary) {
+                translated.push(selector.clone());
+            } else {
                 let scratch = if is_moving {
                     "directions"
+                } else if is_action {
+                    "__action"
+                } else if let Some(relative) = relative {
+                    relative
                 } else {
                     "no directions"
                 };
                 translated.push(append_scratch_to_selector(selector, scratch));
-            } else {
-                translated.push(selector.clone());
             }
             i += 2;
             continue;
@@ -1448,6 +1583,9 @@ fn resolve_rule_token(token: &str, objects: &[PsObjectDef], aliases: &[PsAliasDe
     if matches!(token, "[" | "]" | "|" | ">" | "<" | "^" | "v" | "->") {
         return token.to_string();
     }
+    if token == "..." || token.eq_ignore_ascii_case("no") {
+        return token.to_ascii_lowercase();
+    }
     if let Some((base, scratch)) = token.split_once('{') {
         if let Some(name) = resolve_name(base, objects, aliases) {
             return format!("{name}{{{scratch}");
@@ -1466,8 +1604,53 @@ fn canonical_direction_token(token: &str) -> Option<&'static str> {
         "down" => Some("down"),
         "left" => Some("left"),
         "right" => Some("right"),
+        "horizontal" => Some("horizontal"),
+        "vertical" => Some("vertical"),
+        "orthogonal" => Some("directions"),
         _ => None,
     }
+}
+
+fn ps_rule_direction_prefix(token: &str) -> Option<&'static str> {
+    match token.to_ascii_lowercase().as_str() {
+        "up" => Some("up"),
+        "down" => Some("down"),
+        "left" => Some("left"),
+        "right" => Some("right"),
+        "horizontal" => Some("horizontal"),
+        "vertical" => Some("vertical"),
+        "orthogonal" => Some("directions"),
+        _ => None,
+    }
+}
+
+fn ps_relative_motion_qualifier(token: &str) -> Option<&'static str> {
+    match token.to_ascii_lowercase().as_str() {
+        "parallel" => Some("parallel"),
+        "perpendicular" => Some("perpendicular"),
+        _ => None,
+    }
+}
+
+fn reject_unsupported_rule_modifiers(lines: &[String]) -> Result<(), DiagnosticReport> {
+    for line in lines.iter().filter(|line| !line.trim().is_empty()) {
+        let trimmed = line.trim().trim_start_matches('+').trim();
+        let first = trimmed.split_whitespace().next();
+        if first.is_some_and(|token| token.eq_ignore_ascii_case("random")) {
+            return Err(DiagnosticReport::from_diagnostic(
+                Diagnostic::error("PuzzleScript random rules are not supported by this importer")
+                    .with_source_line(line.clone()),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn ps_rules_use_action_input(lines: &[String]) -> bool {
+    lines
+        .iter()
+        .flat_map(|line| tokenize_ps_rule(line))
+        .any(|token| token.eq_ignore_ascii_case("action"))
 }
 
 fn push_levels(

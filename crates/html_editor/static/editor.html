@@ -390,21 +390,6 @@
             </div>
             <div class="level-palette-toolbar" aria-label="Palette display controls" hidden></div>
             <div id="levelPalette" class="level-palette" aria-label="Level tile palette">
-              <button id="levelPaletteCollapseButton" class="level-palette-toggle-button" type="button" aria-expanded="true" aria-label="Hide palette" title="Hide palette">
-                <svg class="palette-open-icon" viewBox="0 0 24 24" aria-hidden="true">
-                  <rect x="4" y="4" width="6" height="6" rx="1"></rect>
-                  <rect x="14" y="4" width="6" height="6" rx="1"></rect>
-                  <rect x="4" y="14" width="6" height="6" rx="1"></rect>
-                  <rect x="14" y="14" width="6" height="6" rx="1"></rect>
-                </svg>
-                <svg class="palette-closed-icon" viewBox="0 0 24 24" aria-hidden="true">
-                  <rect x="4" y="4" width="6" height="6" rx="1"></rect>
-                  <rect x="14" y="4" width="6" height="6" rx="1"></rect>
-                  <rect x="4" y="14" width="6" height="6" rx="1"></rect>
-                  <rect x="14" y="14" width="6" height="6" rx="1"></rect>
-                  <path d="M3 21 21 3"></path>
-                </svg>
-              </button>
               <button id="levelFillButton" class="level-palette-tool-button sprite-fill-button sprite-icon-button" type="button" aria-label="Fill" aria-pressed="false" title="Fill" data-tooltip="Fill">
                 <svg viewBox="0 0 24 24" aria-hidden="true">
                   <path d="m19 11-8-8-8.6 8.6a2 2 0 0 0 0 2.8l5.2 5.2a2 2 0 0 0 2.8 0L19 11Z"></path>
@@ -431,10 +416,10 @@
           <div id="solverPanel" class="solver-panel" hidden>
             <div class="tool-pane-scroll">
               <div class="solver-level-strip">
-                <label class="solver-level-control">
-                <span>Level</span>
-                <select id="solverLevelSelect" aria-label="Solver level" title="Solver level"></select>
-                </label>
+                <div class="solver-level-control">
+                  <span>Task</span>
+                  <output id="solverTaskSummary" class="solver-task-summary" aria-live="polite">No solver task</output>
+                </div>
               </div>
               <div class="solver-controls">
               <span class="solver-action-buttons" aria-label="Solver controls">
@@ -1190,13 +1175,13 @@
     <script src="renderer.js"></script>
     <script src="sound-generator.js"></script>
     <script src="editor_dom.js"></script>
-    <script src="editor_workspace.js?v=import-parent-preview"></script>
+    <script src="editor_workspace.js?v=delete-active-source-sync"></script>
     <script src="editor_source.js?v=source-folding-state"></script>
     <script src="puzzle3_visual_core.js"></script>
     <script src="editor_level3d.js"></script>
     <script src="editor_workbench.js"></script>
-    <script src="editor_import_export.js"></script>
-    <script src="editor.js?v=level-editor-import-reference"></script>
+    <script src="editor_import_export.js?v=file-import-commit-before-preview"></script>
+    <script src="editor.js?v=file-import-error-detail"></script>
     <script src="editor_sprite.js"></script>
     <script src="editor_sprite3d.js?v=sprite3d-preview-base-zoom"></script>
     <script src="editor_sounds.js"></script>

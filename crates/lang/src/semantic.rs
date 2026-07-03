@@ -863,8 +863,8 @@ const SOUNDS_COMPLETION_KEYWORDS: &[&str] = &["music", "restart", "sfx", "undo"]
 const ASSET_COMPLETION_KEYWORDS: &[&str] = &["css", "script"];
 
 const TAG_COMPLETION_KEYWORDS: &[&str] = &[];
-const GROUP_COMPLETION_KEYWORDS: &[&str] = &["display", "each"];
-const LAYER_COMPLETION_KEYWORDS: &[&str] = &["display", "each"];
+const GROUP_COMPLETION_KEYWORDS: &[&str] = &["each"];
+const LAYER_COMPLETION_KEYWORDS: &[&str] = &["each"];
 const SCRATCH_COMPLETION_KEYWORDS: &[&str] = &["const", "persistent", "var"];
 const KEY_COMPLETION_KEYWORDS: &[&str] = &["direction", "input"];
 const LEGEND_COMPLETION_KEYWORDS: &[&str] = &["empty"];
@@ -919,7 +919,6 @@ const COMPLETION_KEYWORDS: &[&str] = &[
     "component_effect",
     "css",
     "direction",
-    "display",
     "each",
     "else",
     "for",
@@ -1281,13 +1280,7 @@ fn scan_routine_header(tokens: &[LineToken<'_>], ranges: &mut Vec<SemanticToken>
     }
 
     add_token_range(ranges, kind, SemanticKind::Keyword);
-    let mut name_index = 1usize;
-    if let Some(display) = tokens.get(name_index).copied()
-        && display.text == "display"
-    {
-        add_token_range(ranges, display, SemanticKind::Keyword);
-        name_index += 1;
-    }
+    let name_index = 1usize;
     if let Some(name) = tokens.get(name_index).copied() {
         add_token_range(ranges, name, SemanticKind::Effect);
     }

@@ -18,6 +18,6 @@ pub use transition::{
     TransitionCommand, TransitionError, TransitionOutcome, TransitionResult, count_pattern_matches,
     has_pattern_match, transition_outcome, transition_program,
     transition_program_continuation_segment_trace, transition_program_outcome,
-    transition_program_segment_trace, transition_program_trace, transition_solver_state,
-    transition_state, transition_trace,
+    transition_program_segment_trace, transition_program_trace, transition_solver_outcome,
+    transition_solver_state, transition_state, transition_trace,
 };
