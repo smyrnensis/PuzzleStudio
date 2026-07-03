@@ -1,9 +1,0 @@
-scene title {
-	title "Microban Basic"
-	subtitle "Levels by David Skinner"
-	button "Play" -> playing.goto 0
-	button "Levels" -> goto level_select
-	on_scene_start {
-		stop_music music_name
-	}
-}

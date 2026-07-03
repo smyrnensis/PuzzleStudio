@@ -59,8 +59,8 @@ use puzzle_play::{
 };
 #[cfg(feature = "solver")]
 use puzzle_solver::{
-    Puzzle3Domain, PuzzleDomain, SearchBudget, SearchOutcome, SearchProgress, SearchStats,
-    best_first_with_dead_states_and_progress,
+    Puzzle3Domain, PuzzleDomain, PuzzleSearchState, SearchBudget, SearchOutcome, SearchProgress,
+    SearchStats, best_first_with_dead_states_and_progress,
 };
 
 const INDEX_HTML: &str = include_str!("../static/index.html");
@@ -1757,6 +1757,161 @@ scene playing {
 
         assert!(response.contains(r#""result":"solved""#));
         assert!(response.contains(r#""depth":0"#));
+    }
+
+    #[cfg(feature = "solver")]
+    #[test]
+    fn solver_request_materializes_level_start_from_explicit_target() {
+        let source = r#"
+title solver_request_level_start
+
+puzzle board {
+  layers {
+    floor = Goal
+    actor = Player
+  }
+  keys {
+    Space -> noop
+  }
+  rules {
+    if input == noop {
+      [ Player ] -> [ Player ]
+    }
+  }
+  on_level_start {
+    [ Goal no Player ] -> [ Goal Player ]
+  }
+  win_conditions {
+    all Goal on Player
+  }
+}
+
+levels default of board {
+  legend {
+    . = empty
+    P = Player
+    G = Goal
+  }
+  level start {
+    PG
+  }
+}
+"#;
+
+        let loaded = parse_game(source).unwrap();
+        let mut state_json = String::new();
+        push_state_data(&mut state_json, &loaded.levels[0].initial_state);
+        let state: Value = serde_json::from_str(&state_json).unwrap();
+        let request = json!({
+            "source": source,
+            "puzzlePath": "game.puzzle",
+            "modelKind": "2d",
+            "target": {
+                "origin": "level-editor",
+                "compileId": "test-compile",
+                "documentId": "test-document",
+                "level": {
+                    "index": 0,
+                    "levelName": loaded.levels[0].name,
+                    "levelPuzzle": loaded.levels[0].puzzle,
+                    "levelPack": loaded.levels[0].pack,
+                },
+                "state": {
+                    "kind": "editor-staged",
+                    "lifecycle": "playable-start",
+                    "data": state,
+                },
+            },
+            "maxDepth": 0,
+            "maxNodes": 1000,
+            "maxMs": 0,
+        });
+
+        let response = solve_request_json(&request.to_string()).unwrap();
+
+        assert!(response.contains(r#""result":"solved""#));
+        assert!(response.contains(r#""depth":0"#));
+    }
+
+    #[cfg(feature = "solver")]
+    #[test]
+    fn solver_treats_win_command_as_goal() {
+        let source = r#"
+title solver_win_command
+
+puzzle board {
+  layers {
+    actor = Player Exit
+  }
+  keys {
+    d ArrowRight -> right
+  }
+  rules {
+    input right [ Player | Exit ] -> win
+    input right [ Player | no actor ] -> [ | Player ]
+  }
+}
+
+levels default of board {
+  legend {
+    . = empty
+    P = Player
+    E = Exit
+  }
+  level start {
+    PE
+  }
+}
+"#;
+
+        let loaded = parse_game(source).unwrap();
+        let mut state_json = String::new();
+        push_state_data(&mut state_json, &loaded.levels[0].initial_state);
+
+        let response =
+            solve_state_json_from_source(source, "game.puzzle", &state_json, 2, 100, 0).unwrap();
+
+        assert!(response.contains(r#""result":"solved""#));
+        assert!(response.contains(r#""depth":1"#));
+    }
+
+    #[cfg(feature = "solver")]
+    #[test]
+    fn solver_request_rejects_mismatched_level_identity() {
+        let source =
+            include_str!("../../../crates/lang/tests/fixtures/spec_2d_microban_basic.puzzle");
+        let loaded = parse_game(source).unwrap();
+        let mut state_json = String::new();
+        push_state_data(&mut state_json, &loaded.levels[0].initial_state);
+        let state: Value = serde_json::from_str(&state_json).unwrap();
+        let request = json!({
+            "source": source,
+            "puzzlePath": "game.puzzle",
+            "modelKind": "2d",
+            "target": {
+                "origin": "preview-level",
+                "compileId": "test-compile",
+                "documentId": "test-document",
+                "level": {
+                    "index": 0,
+                    "levelName": "not_the_compiled_level",
+                    "levelPuzzle": loaded.levels[0].puzzle,
+                    "levelPack": loaded.levels[0].pack,
+                },
+                "state": {
+                    "kind": "compiled-start",
+                    "lifecycle": "playable-start",
+                    "data": state,
+                },
+            },
+            "maxDepth": 8,
+            "maxNodes": 1000,
+            "maxMs": 0,
+        });
+
+        let error = solve_request_json(&request.to_string()).unwrap_err();
+
+        assert!(error.contains("solver target levelName mismatch"));
     }
 
     #[cfg(feature = "solver")]

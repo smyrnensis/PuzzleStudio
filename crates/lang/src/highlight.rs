@@ -636,9 +636,6 @@ fn collect_line_symbols(
     family_axis_names: &mut HashSet<String>,
 ) {
     match tokens {
-        ["routine", "display", name, ..] | ["rule", "display", name, ..] => {
-            insert_declared_source_symbol(symbols, name, HighlightKind::Effect);
-        }
         ["routine", name, ..] | ["rule", name, ..] => {
             insert_declared_source_symbol(symbols, name, HighlightKind::Effect);
         }
@@ -785,7 +782,7 @@ fn collect_key_binding_symbols(tokens: &[&str], symbols: &mut HashMap<String, Hi
 
 fn collect_selector_specs(specs: &[&str], symbols: &mut HashMap<String, HighlightKind>) {
     for spec in specs {
-        if matches!(*spec, "=" | "display" | "each") || parser_keyword(spec) {
+        if matches!(*spec, "=" | "each") || parser_keyword(spec) {
             continue;
         }
         collect_selector_spec(spec, symbols);
@@ -801,7 +798,7 @@ fn collect_layer_selector_specs(
     family_axis_names: &mut HashSet<String>,
 ) {
     for spec in specs {
-        if matches!(*spec, "=" | "display" | "each") || parser_keyword(spec) {
+        if matches!(*spec, "=" | "each") || parser_keyword(spec) {
             continue;
         }
         collect_layer_selector_spec(
@@ -854,7 +851,7 @@ fn collect_schema_object_specs(
     family_axis_names: &mut HashSet<String>,
 ) {
     for spec in specs {
-        if matches!(*spec, "=" | "display" | "each") || parser_keyword(spec) {
+        if matches!(*spec, "=" | "each") || parser_keyword(spec) {
             continue;
         }
         collect_schema_object_spec(spec, symbols, family_bases, family_axes, family_axis_names);
@@ -1065,12 +1062,6 @@ fn contextual_keyword_token(
         "of" => tokens
             .first()
             .is_some_and(|(first, _, _)| matches!(*first, "levels" | "levels3" | "sprites3")),
-        "display" => {
-            index == 1
-                && tokens
-                    .first()
-                    .is_some_and(|(first, _, _)| matches!(*first, "routine" | "rule"))
-        }
         "input" => is_rule_like_scope(scope) && index > 0 && before_pattern_token(tokens, index),
         "puzzle" | "puzzle3" => index > 0,
         "rotate" | "from" | "using" => visual_rotation_keyword(scope, tokens, index),
@@ -5126,12 +5117,12 @@ routine move_player once {
 routine slide repeat {
 [ Player ] -> [ Player ]
 }
-rule display paint once {
-display [ Player ] -> [ Player ]
+rule @paint once {
+[ Player ] -> [ Player @Paint ]
 }
 on_level_start {
 move_player
-display paint
+@paint
 }
 rules {
 move_player
@@ -5149,7 +5140,7 @@ level start {
         assert!(highlighted.html.contains("syntax-keyword\">repeat"));
         assert!(highlighted.html.contains("syntax-effect\">move_player"));
         assert!(highlighted.html.contains("syntax-effect\">slide"));
-        assert!(highlighted.html.contains("syntax-effect\">paint"));
+        assert!(highlighted.html.contains("syntax-effect\">@paint"));
     }
 
     #[test]

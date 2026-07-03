@@ -13,6 +13,7 @@ const args = parseArgs(process.argv.slice(2));
 const editorBin = requiredPath(args.editorBin, "--editor-bin");
 const fixture2d = path.resolve(repoRoot, args.fixture || "games/spec_2d.puzzle");
 const fixture3d = path.resolve(repoRoot, args.fixture3d || "games/spec_3d.puzzle3");
+const importFileOnly = args.importFileOnly ? path.resolve(repoRoot, args.importFileOnly) : "";
 const chromePath = resolveChrome(args.chrome);
 const headless = !args.headed;
 const sourceInputOnly = Boolean(args.sourceInputOnly);
@@ -27,6 +28,10 @@ async function main() {
     await withEditorServer(fixture2d, async (server) => {
       await page.navigate(server.url);
       await editorLoads(page);
+      if (importFileOnly) {
+        await fileInputImportAddsExternalPuzzleDocument(page, importFileOnly);
+        return;
+      }
       await sourceEditorReflectsInputBeforeKeyup(page);
       await sourceEditorPairsDoubleQuote(page);
       await sourceUndoReturnsToEditedLocationAfterCursorMove(page);
@@ -34,6 +39,7 @@ async function main() {
       await sourceEditorReflectsCompositionBeforeCommit(page);
       await sourceCompletionKeepsKeyboardSelectionAcrossRefresh(page);
       await sourceRewritePatternTabCopiesLhsToEmptyRhs(page);
+      await fileInputImportAddsPuzzleDocument(page);
       if (sourceInputOnly) {
         return;
       }
@@ -43,7 +49,7 @@ async function main() {
       await sourceLevelAsciiClickOpensLevelEditor(page);
     });
 
-    if (!sourceInputOnly) {
+    if (!sourceInputOnly && !importFileOnly) {
       await withEditorServer(fixture3d, async (server) => {
         await page.navigate(server.url);
         await editorLoads(page);
@@ -965,6 +971,104 @@ async function sourceRewritePatternTabCopiesLhsToEmptyRhs(page) {
   await page.assertNoErrors("source rewrite RHS Tab copy");
 }
 
+async function fileInputImportAddsPuzzleDocument(page) {
+  const source = `title "File Import Smoke"
+
+puzzle main {
+  layers {
+    actor = Player
+  }
+
+  rules {
+  }
+}
+
+levels main of main {
+  legend {
+    . = empty
+    P = Player
+  }
+
+  level imported
+  P
+}
+`;
+  const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "puzzlestudio-import-smoke-"));
+  const importPath = path.join(tempDir, "browser_import_smoke.puzzle");
+  try {
+    await fs.promises.writeFile(importPath, source, "utf8");
+    const beforeCount = await page.evaluateTop(`documents.length`);
+    await page.setFileInputFiles("#importFileInput", [importPath]);
+    await page.evaluateTop(`document.querySelector("#importFileInput")?.dispatchEvent(new Event("change", { bubbles: true }))`);
+    await waitForTopWithDiagnostics(
+      page,
+      `(() => {
+        const imported = documents.find((document) => document.name === "browser_import_smoke.puzzle");
+        return Boolean(
+          imported
+          && documents.length === ${beforeCount + 1}
+          && activeDocument()?.id === imported.id
+          && document.querySelector("#sourceEditor")?.value.includes("File Import Smoke")
+          && !document.querySelector("#editorStatusLabel")?.textContent.includes("Import failed")
+          && window.localStorage.getItem("PuzzleStudioFileTree:v4")?.includes("browser_import_smoke.puzzle")
+        );
+      })()`,
+      "file input import adds puzzle document",
+      { timeoutMs: 20_000 }
+    );
+    await page.assertNoErrors("file input import");
+  } finally {
+    await fs.promises.rm(tempDir, { recursive: true, force: true });
+  }
+}
+
+async function fileInputImportAddsExternalPuzzleDocument(page, importPath) {
+  const name = path.basename(importPath);
+  if (!fs.existsSync(importPath)) {
+    throw new Error(`import file does not exist: ${importPath}`);
+  }
+  const beforeCount = await page.evaluateTop(`documents.length`);
+  await page.setFileInputFiles("#importFileInput", [importPath]);
+  await page.evaluateTop(`document.querySelector("#importFileInput")?.dispatchEvent(new Event("change", { bubbles: true }))`);
+  await waitForTopWithDiagnostics(
+    page,
+    `(() => {
+      const imported = documents.find((document) => document.name === ${JSON.stringify(name)});
+      return Boolean(imported);
+    })()`,
+    `file input import adds ${name}`,
+    { timeoutMs: 20_000 }
+  );
+  const result = await page.evaluateTop(`(() => {
+    const imported = documents.find((document) => document.name === ${JSON.stringify(name)});
+    const status = document.querySelector("#editorStatusLabel")?.textContent || "";
+    return {
+      documentCount: documents.length,
+      importedName: imported?.name || "",
+      activeName: activeDocument()?.name || "",
+      sourceHead: (document.querySelector("#sourceEditor")?.value || "").slice(0, 160),
+      status,
+      previewLogTail: Array.from(document.querySelectorAll("#previewLog [data-preview-log-message], #previewLog li, #previewLog .preview-log-entry"), (item) => item.textContent.trim()).filter(Boolean).slice(-5),
+      localStorageHasFile: window.localStorage.getItem("PuzzleStudioFileTree:v4")?.includes(${JSON.stringify(name)}) || false,
+    };
+  })()`);
+  if (result.documentCount !== beforeCount + 1) {
+    throw new Error(`expected document count ${beforeCount + 1}, got ${result.documentCount}`);
+  }
+  const activeBaseName = result.activeName.replace(/-\d+(?=\.puzzle$)/, "");
+  if (activeBaseName !== name) {
+    throw new Error(`expected active imported file based on ${name}, got ${result.activeName}`);
+  }
+  if (result.status.includes("Import failed")) {
+    throw new Error(`import reported failure: ${result.status}`);
+  }
+  if (!result.localStorageHasFile) {
+    throw new Error(`${name} was not persisted in localStorage`);
+  }
+  await page.assertNoErrors(`file input import ${name}`);
+  console.log(JSON.stringify(result, null, 2));
+}
+
 async function levelPlaytestKeyboardChangesBoardWithoutSavingSource(page) {
   const source = `title "Level Playtest Smoke"
 
@@ -1376,6 +1480,7 @@ class CdpPage {
     });
     this.ws.addEventListener("message", (event) => this.handleMessage(event.data));
     await this.send("Page.enable");
+    await this.send("DOM.enable");
     await this.send("Runtime.enable");
     await this.send("Log.enable");
   }
@@ -1469,6 +1574,21 @@ class CdpPage {
       }
     }
     return values;
+  }
+
+  async setFileInputFiles(selector, files) {
+    const root = await this.send("DOM.getDocument", { depth: 1, pierce: true });
+    const node = await this.send("DOM.querySelector", {
+      nodeId: root.root.nodeId,
+      selector,
+    });
+    if (!node.nodeId) {
+      throw new Error(`missing file input: ${selector}`);
+    }
+    await this.send("DOM.setFileInputFiles", {
+      nodeId: node.nodeId,
+      files,
+    });
   }
 
   async assertNoErrors(label) {
@@ -1734,6 +1854,10 @@ function parseArgs(argv) {
     }
     if (arg === "--fixture3d") {
       parsed.fixture3d = argv[++index];
+      continue;
+    }
+    if (arg === "--import-file-only") {
+      parsed.importFileOnly = argv[++index];
       continue;
     }
     throw new Error(`unknown argument: ${arg}`);

@@ -1,8 +1,0 @@
-title CandyThemeTest
-
-theme candy
-
-const theme_title = "Candy Theme Test"
-const theme_subtitle = "Soft playful controls"
-
-import "../theme_test_common/game_body.puzzle"

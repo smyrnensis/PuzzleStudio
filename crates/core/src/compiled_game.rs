@@ -415,6 +415,7 @@ pub enum RuleApplication {
     Once,
     OnceAll,
     OncePerLevel,
+    Random,
     #[default]
     UntilStable,
 }

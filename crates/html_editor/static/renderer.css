@@ -1,0 +1,106 @@
+.board {
+  --cols: 1;
+  --rows: 1;
+  --cell-size: 56px;
+  --cell-background: transparent;
+  display: grid;
+  grid-template-columns: repeat(var(--cols), var(--cell-size));
+  gap: 0;
+  align-content: center;
+  justify-content: center;
+  width: calc(var(--cols) * var(--cell-size));
+  max-width: 100%;
+  max-height: 100%;
+  aspect-ratio: var(--cols) / var(--rows);
+}
+
+.cell {
+  width: var(--cell-size);
+  aspect-ratio: 1;
+  position: relative;
+  display: grid;
+  place-items: center;
+  overflow: visible;
+  background: var(--cell-background);
+}
+
+.board.has-occupied-cell-grid .cell.has-objects {
+  box-shadow: inset 0 0 0 1px rgba(30, 41, 59, 0.34);
+}
+
+.board.has-all-cell-grid .cell {
+  box-shadow: inset 0 0 0 1px rgba(30, 41, 59, 0.34);
+}
+
+.board-canvas {
+  grid-column: 1 / -1;
+  width: 100%;
+  height: auto;
+  display: block;
+  image-rendering: pixelated;
+}
+
+.scene-layer > .board.is-canvas-renderer:only-child {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.scene-layer > .board.is-canvas-renderer:only-child .board-canvas {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+body.is-component-embed .board {
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  place-items: center;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+body.is-component-embed .board-canvas {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.sprite {
+  position: absolute;
+  display: block;
+  pointer-events: none;
+}
+
+.visual-sprite {
+  left: 0;
+  top: 0;
+  width: calc(100% * var(--sprite-cols, 1) / var(--sprite-cell-cols, var(--sprite-cols, 1)));
+  height: calc(100% * var(--sprite-rows, 1) / var(--sprite-cell-rows, var(--sprite-rows, 1)));
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: 100% 100%;
+  transform: translate(
+    calc(var(--sprite-offset-x, 0) * 100% / var(--sprite-cols, 1)),
+    calc(var(--sprite-offset-y, 0) * 100% / var(--sprite-rows, 1))
+  );
+}
+
+.visual-pixel {
+  display: block;
+}
+
+.visual-image,
+.visual-pattern {
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: 100% 100%;
+  image-rendering: pixelated;
+}
+
+@media (max-width: 720px) {
+  .board {
+    gap: 0;
+  }
+}

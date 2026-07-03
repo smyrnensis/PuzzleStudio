@@ -373,7 +373,7 @@ puzzle board {
 layers {
 actor = Player
 @cursor = @Cursor
-@hint = display @Hint
+@hint = @Hint
 }
 
 legend {
@@ -382,7 +382,7 @@ P = Player
 }
 
 routine @paint once {
-[ Player no @Cursor no display @Hint ] -> [ Player @Cursor display @Hint ]
+[ Player no @Cursor no @Hint ] -> [ Player @Cursor @Hint ]
 }
 
 on_display {
@@ -390,7 +390,7 @@ on_display {
 }
 
 rules {
-display @paint
+@paint
 }
 
 levels {
@@ -4266,12 +4266,12 @@ __legacy_layer_0 = Source
 
 legend S = Source
 
-routine display mark_initial once {
+routine @mark_initial once {
 [ Source no @Marker ] -> [ Source @Marker ]
 }
 
 on_level_start {
-display mark_initial
+@mark_initial
 }
 
 rules {
@@ -4313,12 +4313,12 @@ __legacy_layer_0 = Player
 
 legend P = Player
 
-routine display mark_initial once {
+routine @mark_initial once {
 input directions [ Player no @Marker | ] -> [ Player @Marker | ]
 }
 
 on_level_start {
-display mark_initial
+@mark_initial
 }
 
 rules {
@@ -4353,12 +4353,12 @@ __legacy_layer_1 = Marker
 
 legend S = Source
 
-routine display mark_initial once {
+routine @mark_initial once {
 [ Source no Marker ] -> [ Source Marker ]
 }
 
 on_level_start {
-display mark_initial
+@mark_initial
 }
 
 rules {
@@ -8998,6 +8998,114 @@ AAA
 }
 
 #[test]
+fn random_rewrite_applies_to_one_current_match() {
+    let source = r#"
+title random_rewrite
+
+puzzle default {
+layers {
+actor = A B
+}
+empty .
+
+legend A = A
+legend B = B
+
+rules {
+random [ A ] -> [ B ]
+}
+
+level start {
+AAA
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    let moved =
+        transition_state(&loaded.game, &loaded.levels[0].initial_state, InputId(0)).unwrap();
+    let object_a = object_named(&loaded, "A");
+    let object_b = object_named(&loaded, "B");
+
+    assert_eq!(moved.object_count(object_b), 1);
+    assert_eq!(moved.object_count(object_a), 2);
+    assert_eq!(loaded.game.rules()[0].application, RuleApplication::Random);
+}
+
+#[test]
+fn random_block_applies_one_firing_statement() {
+    let source = r#"
+title random_block
+
+puzzle default {
+layers {
+actor = A B
+}
+empty .
+
+legend A = A
+legend B = B
+
+rules {
+random {
+[ A | A ] -> [ B | A ]
+[ A | A ] -> [ A | B ]
+}
+}
+
+level start {
+AA
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    let moved =
+        transition_state(&loaded.game, &loaded.levels[0].initial_state, InputId(0)).unwrap();
+    let object_a = object_named(&loaded, "A");
+    let object_b = object_named(&loaded, "B");
+
+    assert_eq!(moved.object_count(object_b), 1);
+    assert_eq!(moved.object_count(object_a), 1);
+}
+
+#[test]
+fn random_routine_applies_one_firing_statement() {
+    let source = r#"
+title random_routine
+
+puzzle default {
+layers {
+actor = A B
+}
+empty .
+
+legend A = A
+legend B = B
+
+routine choose random {
+[ A | A ] -> [ B | A ]
+[ A | A ] -> [ A | B ]
+}
+
+rules {
+choose
+}
+
+level start {
+AA
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    let moved =
+        transition_state(&loaded.game, &loaded.levels[0].initial_state, InputId(0)).unwrap();
+    let object_a = object_named(&loaded, "A");
+    let object_b = object_named(&loaded, "B");
+
+    assert_eq!(moved.object_count(object_b), 1);
+    assert_eq!(moved.object_count(object_a), 1);
+}
+
+#[test]
 fn once_per_level_rewrite_fires_only_once_for_current_level_state() {
     let source = r#"
 title once_per_level_rewrite
@@ -13226,13 +13334,13 @@ routine move once {
 input directions [ Player | ] -> [ | Player ]
 }
 
-routine display paint once {
+routine @paint once {
 [ Player no @Trail ] -> [ Player @Trail ]
 }
 
 rules {
 move
-display paint
+@paint
 }
 
 levels {
@@ -13318,12 +13426,12 @@ P = Player
 t = @Trail
 }
 
-routine display paint once {
+routine @paint once {
 [ Player no @Trail ] -> [ Player @Trail ]
 }
 
 on_display {
-display paint
+@paint
 }
 
 rules {
@@ -13393,12 +13501,12 @@ legend {
 P = Player
 }
 
-routine display paint once {
+routine @paint once {
 input directions [ Player no @Trail | ] -> [ Player @Trail | ]
 }
 
 on_display {
-display paint
+@paint
 }
 
 rules {
@@ -13448,7 +13556,7 @@ P
 "#;
     let error = parse_game(source).unwrap_err().to_string();
 
-    assert!(error.contains("on_display can only contain display statements"));
+    assert!(error.contains("display routines and display blocks can only contain display rules"));
 }
 
 #[test]
@@ -13472,12 +13580,12 @@ legend {
 P = Player
 }
 
-routine display paint once {
+routine @paint once {
 [ Player no @Trail ] -> [ Player @Trail ]
 }
 
 rules {
-paint
+@paint
 }
 
 levels {
@@ -13520,10 +13628,10 @@ P = Player
 }
 
 rules {
-display paint
+@paint
 }
 
-routine display paint once {
+routine @paint once {
 [ Player ] -> [ ]
 }
 
@@ -13570,10 +13678,7 @@ P
 }
 "#;
     let report = parse_game(source).unwrap_err();
-    let diagnostic = report
-        .diagnostics()
-        .first()
-        .expect("display match diagnostic");
+    let diagnostic = report.diagnostics().first().expect("match diagnostic");
 
     assert_eq!(
         diagnostic.message,
@@ -13678,10 +13783,7 @@ P
 }
 "#;
     let report = parse_game(source).unwrap_err();
-    let diagnostic = report
-        .diagnostics()
-        .first()
-        .expect("display match diagnostic");
+    let diagnostic = report.diagnostics().first().expect("match diagnostic");
 
     assert_eq!(
         diagnostic.message,
@@ -13976,7 +14078,7 @@ fn non_canonical_display_aliases_are_rejected() {
     for header in [
         "main_objects",
         "main objects",
-        "display objects",
+        "objects",
         "visual_objects",
         "visuals",
         "visual",
@@ -14004,6 +14106,41 @@ level start
         assert!(
             parse_game(&source).is_err(),
             "{header} should not be accepted as canonical syntax"
+        );
+    }
+}
+
+#[test]
+fn legacy_display_keyword_syntax_is_rejected() {
+    for legacy in [
+        "layers {\nactor = Player\n@marker = display @Trail\n}\nrules {\n}",
+        "layers {\nactor = Player\n@marker = @Trail\n}\nroutine display paint once {\n[ Player no @Trail ] -> [ Player @Trail ]\n}\nrules {\n}",
+        "layers {\nactor = Player\n@marker = @Trail\n}\nroutine @paint once {\n[ Player no @Trail ] -> [ Player @Trail ]\n}\nrules {\ndisplay @paint\n}",
+        "layers {\nactor = Player\n@marker = @Trail\n}\nrules {\ndisplay [ Player no @Trail ] -> [ Player @Trail ]\n}",
+    ] {
+        let source = format!(
+            r#"
+title legacy_display_keyword_rejection
+
+puzzle default {{
+{legacy}
+
+legend {{
+. = empty
+P = Player
+}}
+
+levels {{
+level start
+P
+}}
+}}
+"#
+        );
+
+        assert!(
+            parse_game(&source).is_err(),
+            "{legacy} should not be accepted as canonical syntax"
         );
     }
 }

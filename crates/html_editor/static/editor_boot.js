@@ -174,6 +174,13 @@
       }
       return fetchText("/sound-tools.js");
     },
+    async editorDocsHtml() {
+      const invoke = tauriInvoke();
+      if (invoke) {
+        return invoke("editor_docs");
+      }
+      throw new Error("Editor documents must be embedded in the editor HTML outside desktop mode.");
+    },
     async newPuzzleSource(payload) {
       throw new Error("New puzzle source is browser-runtime owned, not host-owned.");
     },

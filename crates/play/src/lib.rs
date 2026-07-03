@@ -7280,7 +7280,7 @@ layers {
 floor = Goal
 actor = Player Box Wall
 marker = ClearMark
-@visual = display @ClearVisual
+@visual = @ClearVisual
 }
 group solid = Player Box Wall
 win_conditions {
@@ -7289,7 +7289,7 @@ all Goal on Box
 }
 on_level_clear {
 [ Goal Box no ClearMark ] -> [ Goal Box ClearMark ]
-display [ Goal Box no @ClearVisual ] -> [ Goal Box @ClearVisual ]
+[ Goal Box no @ClearVisual ] -> [ Goal Box @ClearVisual ]
 }
 rules {
 once input directions [ Player | Box | no solid ] -> [ | Player | Box ]

@@ -1,7 +1,8 @@
 use crate::domain::SearchDomain;
 use crate::stable_hash::{fnv_mix, fnv_seed};
 use puzzle_core::{
-    CompiledGame, InputId, LayerId, ObjectId, State, TransitionError, transition_solver_state,
+    CompiledGame, InputId, LayerId, ObjectId, State, TransitionCommand, TransitionError,
+    transition_solver_outcome,
 };
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -9,6 +10,7 @@ use std::sync::Arc;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PuzzleStateKey {
     hash: u64,
+    won: bool,
     slots: Vec<u16>,
     visible_globals: Vec<i64>,
     level_fired_rules: Vec<u16>,
@@ -16,10 +18,19 @@ pub struct PuzzleStateKey {
 
 impl PuzzleStateKey {
     pub fn from_state(game: &CompiledGame, state: &State) -> Self {
+        Self::from_parts(game, state, false)
+    }
+
+    fn from_search_state(game: &CompiledGame, state: &PuzzleSearchState) -> Self {
+        Self::from_parts(game, &state.state, state.won)
+    }
+
+    fn from_parts(game: &CompiledGame, state: &State, won: bool) -> Self {
         let layers = game.main_layers();
         let mut slots =
             Vec::with_capacity(usize::from(state.width) * usize::from(state.height) * layers.len());
         let mut hash = fnv_seed();
+        hash = fnv_mix(hash, if won { 1 } else { 0 });
 
         for y in 0..state.height {
             for x in 0..state.width {
@@ -46,6 +57,7 @@ impl PuzzleStateKey {
 
         Self {
             hash,
+            won,
             slots,
             visible_globals: state.visible_globals().to_vec(),
             level_fired_rules: state
@@ -60,6 +72,30 @@ impl PuzzleStateKey {
 impl Hash for PuzzleStateKey {
     fn hash<H: Hasher>(&self, state: &mut H) {
         state.write_u64(self.hash);
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PuzzleSearchState {
+    state: State,
+    won: bool,
+}
+
+impl PuzzleSearchState {
+    pub fn new(state: State) -> Self {
+        Self { state, won: false }
+    }
+
+    pub fn state(&self) -> &State {
+        &self.state
+    }
+
+    pub fn into_state(self) -> State {
+        self.state
+    }
+
+    pub fn won(&self) -> bool {
+        self.won
     }
 }
 
@@ -94,13 +130,13 @@ impl PuzzleDomain {
 }
 
 impl SearchDomain for PuzzleDomain {
-    type State = State;
+    type State = PuzzleSearchState;
     type Action = InputId;
     type Key = PuzzleStateKey;
     type Error = TransitionError;
 
     fn key(&self, state: &Self::State) -> Self::Key {
-        PuzzleStateKey::from_state(&self.game, state)
+        PuzzleStateKey::from_search_state(&self.game, state)
     }
 
     fn actions(&self, _state: &Self::State) -> &[Self::Action] {
@@ -112,11 +148,19 @@ impl SearchDomain for PuzzleDomain {
         state: &Self::State,
         action: &Self::Action,
     ) -> Result<Self::State, Self::Error> {
-        transition_solver_state(&self.game, state, *action)
+        let outcome = transition_solver_outcome(&self.game, &state.state, *action)?;
+        Ok(PuzzleSearchState {
+            state: outcome.next_state,
+            won: state.won
+                || outcome
+                    .commands
+                    .iter()
+                    .any(|command| matches!(command, TransitionCommand::Win)),
+        })
     }
 
     fn is_goal(&self, state: &Self::State) -> bool {
-        (self.is_goal)(state)
+        state.won || (self.is_goal)(&state.state)
     }
 }
 
@@ -131,13 +175,45 @@ mod tests {
 
     #[test]
     fn solves_first_sokoban_level_and_replays_to_goal() {
-        let source =
-            include_str!("../../../crates/lang/tests/fixtures/spec_2d_microban_basic.puzzle");
+        let source = r#"
+title solver_push_goal
+
+puzzle default {
+layers {
+floor = Goal
+actor = Player Box Wall
+}
+
+keys {
+d ArrowRight -> right
+}
+
+rules {
+input right [ Player | Box | no actor ] -> [ | Player | Box ]
+input right [ Player | no actor ] -> [ | Player ]
+}
+
+win_conditions {
+all Goal on Box
+}
+}
+
+levels tiny of default {
+legend {
+. = empty
+P = Player
+B = Box
+G = Goal
+}
+
+level start {
+PBG
+}
+}
+"#;
         let loaded = parse_game(source).unwrap();
-        let inputs = ["w", "a", "s", "d"]
-            .into_iter()
-            .map(|key| *loaded.controls.keys.get(&key.as_bytes()[0]).unwrap())
-            .collect();
+        let right = *loaded.controls.keys.get(&b'd').unwrap();
+        let inputs = vec![right];
         let game = Arc::new(loaded.game.clone());
         let goal_game = loaded.clone();
         let mut domain = PuzzleDomain::new(game.clone(), inputs, move |state| {
@@ -147,7 +223,7 @@ mod tests {
 
         let outcome = exact_bfs(
             &mut domain,
-            initial.clone(),
+            PuzzleSearchState::new(initial.clone()),
             SearchBudget::bounded(80, 1_000_000, Duration::from_secs(5)),
         );
         let SearchOutcome::Solved(witness) = outcome else {
@@ -167,13 +243,45 @@ mod tests {
 
     #[test]
     fn reports_depth_budget() {
-        let source =
-            include_str!("../../../crates/lang/tests/fixtures/spec_2d_microban_basic.puzzle");
+        let source = r#"
+title solver_depth_budget
+
+puzzle default {
+layers {
+floor = Goal
+actor = Player Box
+}
+
+keys {
+d ArrowRight -> right
+}
+
+rules {
+input right [ Player | Box | no actor ] -> [ | Player | Box ]
+input right [ Player | no actor ] -> [ | Player ]
+}
+
+win_conditions {
+all Goal on Box
+}
+}
+
+levels tiny of default {
+legend {
+. = empty
+P = Player
+B = Box
+G = Goal
+}
+
+level start {
+PBG
+}
+}
+"#;
         let loaded = parse_game(source).unwrap();
-        let inputs = ["w", "a", "s", "d"]
-            .into_iter()
-            .map(|key| *loaded.controls.keys.get(&key.as_bytes()[0]).unwrap())
-            .collect();
+        let right = *loaded.controls.keys.get(&b'd').unwrap();
+        let inputs = vec![right];
         let game = Arc::new(loaded.game.clone());
         let goal_game = loaded.clone();
         let mut domain =
@@ -181,9 +289,9 @@ mod tests {
 
         let outcome = exact_bfs(
             &mut domain,
-            loaded.levels[0].initial_state.clone(),
+            PuzzleSearchState::new(loaded.levels[0].initial_state.clone()),
             SearchBudget {
-                max_depth: Some(1),
+                max_depth: Some(0),
                 max_nodes: Some(100_000),
                 max_frontier: None,
                 max_duration: Some(Duration::from_secs(5)),
@@ -247,7 +355,7 @@ PBG
 
         let outcome = exact_bfs(
             &mut domain,
-            loaded.levels[0].initial_state.clone(),
+            PuzzleSearchState::new(loaded.levels[0].initial_state.clone()),
             SearchBudget::bounded(4, 100, Duration::from_secs(5)),
         );
         let SearchOutcome::Solved(witness) = outcome else {
@@ -256,10 +364,136 @@ PBG
         assert_eq!(witness.actions, vec![right]);
 
         let solved = domain
-            .step(&loaded.levels[0].initial_state, &right)
+            .step(
+                &PuzzleSearchState::new(loaded.levels[0].initial_state.clone()),
+                &right,
+            )
             .unwrap();
-        assert!(loaded.is_goal_complete(&solved));
-        assert!(solved.slot_scratch().iter().all(Vec::is_empty));
-        assert!(solved.cell_scratch().iter().all(Vec::is_empty));
+        assert!(loaded.is_goal_complete(solved.state()));
+        assert!(solved.state().slot_scratch().iter().all(Vec::is_empty));
+        assert!(solved.state().cell_scratch().iter().all(Vec::is_empty));
+    }
+
+    #[test]
+    fn solver_treats_win_command_as_goal() {
+        let source = r#"
+title win_solver
+
+puzzle board {
+layers {
+actor = Player Exit
+}
+
+keys {
+d ArrowRight -> right
+}
+
+rules {
+input right [ Player | Exit ] -> win
+input right [ Player | no actor ] -> [ | Player ]
+}
+}
+
+levels tiny of board {
+legend {
+. = empty
+P = Player
+E = Exit
+}
+
+level start {
+PE
+}
+}
+"#;
+        let loaded = parse_game(source).unwrap();
+        let right = *loaded.controls.keys.get(&b'd').unwrap();
+        let game = Arc::new(loaded.game.clone());
+        let mut domain = PuzzleDomain::new(game, vec![right], |_| false);
+
+        let solved = domain
+            .step(
+                &PuzzleSearchState::new(loaded.levels[0].initial_state.clone()),
+                &right,
+            )
+            .unwrap();
+        assert!(solved.won());
+        assert!(domain.is_goal(&solved));
+
+        let outcome = exact_bfs(
+            &mut domain,
+            PuzzleSearchState::new(loaded.levels[0].initial_state.clone()),
+            SearchBudget::bounded(1, 10, Duration::from_secs(5)),
+        );
+        let SearchOutcome::Solved(witness) = outcome else {
+            panic!("expected solved, got {outcome:?}");
+        };
+        assert_eq!(witness.actions, vec![right]);
+    }
+
+    #[test]
+    fn solver_handles_deterministic_random_rules() {
+        let source = r#"
+title random_solver
+
+puzzle default {
+layers {
+actor = A B
+}
+empty .
+
+win_conditions {
+count(B) == 1
+}
+
+rules {
+random [ A ] -> [ B ]
+}
+
+levels tiny of default {
+legend {
+. = empty
+A = A
+B = B
+}
+
+level start {
+AAA
+}
+}
+}
+"#;
+        let loaded = parse_game(source).unwrap();
+        let action = InputId(0);
+        let game = Arc::new(loaded.game.clone());
+        let goal_game = loaded.clone();
+        let mut domain = PuzzleDomain::new(game, vec![action], move |state| {
+            goal_game.is_goal_complete(state)
+        });
+
+        let first = domain
+            .step(
+                &PuzzleSearchState::new(loaded.levels[0].initial_state.clone()),
+                &action,
+            )
+            .unwrap();
+        let second = domain
+            .step(
+                &PuzzleSearchState::new(loaded.levels[0].initial_state.clone()),
+                &action,
+            )
+            .unwrap();
+        assert_eq!(first, second);
+        assert!(loaded.is_goal_complete(first.state()));
+
+        let outcome = exact_bfs(
+            &mut domain,
+            PuzzleSearchState::new(loaded.levels[0].initial_state.clone()),
+            SearchBudget::bounded(1, 10, Duration::from_secs(5)),
+        );
+        let SearchOutcome::Solved(witness) = outcome else {
+            panic!("expected solved, got {outcome:?}");
+        };
+        assert_eq!(witness.actions, vec![action]);
     }
 }

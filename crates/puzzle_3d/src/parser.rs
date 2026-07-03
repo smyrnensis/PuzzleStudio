@@ -2225,7 +2225,7 @@ fn parse_rule_line(
                 lower_input_line_rewrite(catalog, orientation, lhs, rhs, line_gap_limit).map_err(
                     |error| message(format!("failed to lower input line rule: {error}")),
                 )?;
-            apply_rule_application(&mut rules, application);
+            apply_rule_application(&mut rules, application)?;
             attach_rule_effects(&mut rules, &effects);
             return Ok(rules);
         }
@@ -2242,7 +2242,7 @@ fn parse_rule_line(
                 line_gap_limit,
             )
             .map_err(|error| message(format!("failed to lower line rule: {error}")))?;
-            apply_rule_application(&mut rules, application);
+            apply_rule_application(&mut rules, application)?;
             attach_rule_effects(&mut rules, &effects);
             return Ok(rules);
         }
@@ -2262,7 +2262,7 @@ fn parse_rule_line(
         );
         let mut rules = lower_dense_rule_template(catalog, &rule)
             .map_err(|error| message(format!("failed to lower dense rule: {error:?}")))?;
-        apply_rule_application(&mut rules, application);
+        apply_rule_application(&mut rules, application)?;
         attach_rule_effects(&mut rules, &effects);
         return Ok(rules);
     }
@@ -2270,7 +2270,7 @@ fn parse_rule_line(
     let orientation = parse_line_orientation(prefix)?;
     let mut rules = lower_line_rewrite(catalog, orientation, lhs, rhs, line_gap_limit)
         .map_err(|error| message(format!("failed to lower line rule: {error}")))?;
-    apply_rule_application(&mut rules, application);
+    apply_rule_application(&mut rules, application)?;
     attach_rule_effects(&mut rules, &effects);
     Ok(rules)
 }
@@ -2278,9 +2278,9 @@ fn parse_rule_line(
 fn apply_rule_application(
     rules: &mut [Rule3],
     application: Option<puzzle_authoring::RuleApplicationSurface>,
-) {
+) -> Result<(), ParseError3> {
     let Some(application) = application else {
-        return;
+        return Ok(());
     };
     let application = match application {
         puzzle_authoring::RuleApplicationSurface::Once => crate::RuleApplication3::Once,
@@ -2288,11 +2288,17 @@ fn apply_rule_application(
         puzzle_authoring::RuleApplicationSurface::OncePerLevel => {
             crate::RuleApplication3::OncePerLevel
         }
+        puzzle_authoring::RuleApplicationSurface::Random => {
+            return Err(message(
+                "random rule application is not supported for puzzle3 rules",
+            ));
+        }
         puzzle_authoring::RuleApplicationSurface::Repeat => crate::RuleApplication3::UntilStable,
     };
     for rule in rules {
         rule.application = application;
     }
+    Ok(())
 }
 
 fn standard_move_rules3(game: &Game3) -> Vec<Rule3> {

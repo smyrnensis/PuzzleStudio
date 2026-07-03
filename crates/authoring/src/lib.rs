@@ -144,6 +144,7 @@ pub enum RuleApplicationSurface {
     Once,
     OnceAll,
     OncePerLevel,
+    Random,
     Repeat,
 }
 
@@ -155,6 +156,7 @@ pub const RULE_STATEMENT_HEAD_KEYWORDS: &[&str] = &[
     "once",
     "once_all",
     "once_per_level",
+    "random",
     "repeat",
 ];
 
@@ -163,6 +165,7 @@ pub fn rule_application_surface(token: &str) -> Option<RuleApplicationSurface> {
         "once" => Some(RuleApplicationSurface::Once),
         "once_all" => Some(RuleApplicationSurface::OnceAll),
         "once_per_level" => Some(RuleApplicationSurface::OncePerLevel),
+        "random" => Some(RuleApplicationSurface::Random),
         "repeat" => Some(RuleApplicationSurface::Repeat),
         _ => None,
     }

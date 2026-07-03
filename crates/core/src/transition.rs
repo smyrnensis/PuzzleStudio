@@ -16,6 +16,8 @@ use puzzle_kernel::{
 use std::collections::{BTreeMap, BTreeSet};
 
 const UNTIL_STABLE_REPEAT_LIMIT: usize = 200;
+const FNV_OFFSET: u64 = 0xcbf29ce484222325;
+const FNV_PRIME: u64 = 0x100000001b3;
 
 pub type TransitionResult<T = State> = Result<T, TransitionError>;
 
@@ -139,9 +141,24 @@ pub fn transition_solver_state(
     state: &State,
     input: InputId,
 ) -> TransitionResult<State> {
+    transition_solver_outcome(game, state, input).map(|result| result.next_state)
+}
+
+pub fn transition_solver_outcome(
+    game: &CompiledGame,
+    state: &State,
+    input: InputId,
+) -> TransitionResult<TransitionOutcome> {
     let state = state.without_visual_objects(game);
-    run_program_transition(game, game.program(), &state, input, false, true)
-        .map(|result| result.next_state.without_visual_objects(game))
+    run_program_transition(game, game.program(), &state, input, false, true).map(|trace| {
+        TransitionOutcome {
+            input: trace.input,
+            next_state: trace.next_state.without_visual_objects(game),
+            cancelled: trace.cancelled,
+            commands: trace.commands,
+            fired_rules: trace.fired_rules,
+        }
+    })
 }
 
 pub fn transition_outcome(
@@ -527,6 +544,17 @@ fn apply_step(
                     skip_visual_rules,
                 )
             }
+            RuleApplication::Random => apply_block_random(
+                game,
+                steps,
+                context,
+                current,
+                fired_rules,
+                patches,
+                commands,
+                collect_trace,
+                skip_visual_rules,
+            ),
             RuleApplication::UntilStable => apply_block_until_stable(
                 game,
                 stop_condition.as_ref(),
@@ -699,6 +727,39 @@ where
                     should_stop,
                 )
             }
+            RuleApplication::Random => {
+                let before_fired_len = fired_rules.len();
+                let outcome = apply_block_random(
+                    game,
+                    steps,
+                    context,
+                    current,
+                    fired_rules,
+                    patches,
+                    commands,
+                    collect_trace,
+                    skip_visual_rules,
+                )?;
+                if outcome.fired
+                    && !outcome.cancelled
+                    && fired_rules.len() > before_fired_len
+                    && should_stop(ProgramBoundarySnapshot {
+                        input: context.input,
+                        next_state: current,
+                        cancelled: false,
+                        commands,
+                        fired_rules,
+                        patches,
+                    })
+                {
+                    return Ok(SegmentApplyOutcome {
+                        fired: true,
+                        cancelled: false,
+                        remaining_program: Some(ProgramContinuation::empty()),
+                    });
+                }
+                Ok(SegmentApplyOutcome::from_apply(outcome))
+            }
             RuleApplication::UntilStable => apply_block_until_stable_segment(
                 game,
                 stop_condition.as_ref(),
@@ -850,6 +911,16 @@ fn apply_rule_step(
             game,
             rule,
             context.local_frame,
+            current,
+            fired_rules,
+            patches,
+            commands,
+            collect_trace,
+        ),
+        RuleApplication::Random => apply_rule_random(
+            game,
+            rule,
+            context,
             current,
             fired_rules,
             patches,
@@ -1080,6 +1151,73 @@ where
             should_stop,
         ),
     }
+}
+
+#[derive(Clone, Debug)]
+struct RandomBlockCandidate {
+    next_state: State,
+    fired_rules: Vec<RuleId>,
+    patches: Vec<Patch>,
+    commands: Vec<TransitionCommand>,
+    cancelled: bool,
+}
+
+fn apply_block_random(
+    game: &CompiledGame,
+    steps: &[RuleStep],
+    context: &TransitionContext,
+    current: &mut State,
+    fired_rules: &mut Vec<RuleId>,
+    patches: &mut Vec<Patch>,
+    commands: &mut Vec<TransitionCommand>,
+    collect_trace: bool,
+    skip_visual_rules: bool,
+) -> TransitionResult<ApplyOutcome> {
+    let mut candidates = Vec::new();
+    for step in steps {
+        let mut candidate_state = current.clone();
+        let mut candidate_fired_rules = Vec::new();
+        let mut candidate_patches = Vec::new();
+        let mut candidate_commands = Vec::new();
+        let outcome = apply_step(
+            game,
+            step,
+            context,
+            &mut candidate_state,
+            &mut candidate_fired_rules,
+            &mut candidate_patches,
+            &mut candidate_commands,
+            true,
+            skip_visual_rules,
+        )?;
+        if outcome.fired {
+            candidates.push(RandomBlockCandidate {
+                next_state: candidate_state,
+                fired_rules: candidate_fired_rules,
+                patches: candidate_patches,
+                commands: candidate_commands,
+                cancelled: outcome.cancelled,
+            });
+        }
+    }
+    if candidates.is_empty() {
+        return Ok(ApplyOutcome::idle());
+    }
+
+    let index = random_choice_index(game, current, context.input, RuleId(0), candidates.len());
+    let candidate = candidates.swap_remove(index);
+    *current = candidate.next_state;
+    fired_rules.extend(candidate.fired_rules);
+    if collect_trace {
+        patches.extend(candidate.patches);
+    }
+    if !candidate.cancelled {
+        commands.extend(candidate.commands);
+    }
+    Ok(ApplyOutcome {
+        fired: true,
+        cancelled: candidate.cancelled,
+    })
 }
 
 fn apply_block_until_stable(
@@ -1411,6 +1549,59 @@ impl StateHistory {
     }
 }
 
+fn deterministic_mix(hash: u64, value: u64) -> u64 {
+    hash.wrapping_mul(FNV_PRIME) ^ value
+}
+
+fn random_state_projection_hash(game: &CompiledGame, state: &State) -> u64 {
+    let mut hash = FNV_OFFSET;
+    hash = deterministic_mix(hash, u64::from(state.width));
+    hash = deterministic_mix(hash, u64::from(state.height));
+    hash = deterministic_mix(hash, u64::from(state.layer_count));
+
+    let main_layers = game.main_layers();
+    hash = deterministic_mix(hash, main_layers.len() as u64);
+    for y in 0..state.height {
+        for x in 0..state.width {
+            for layer in &main_layers {
+                let index = ((usize::from(y) * usize::from(state.width) + usize::from(x))
+                    * usize::from(state.layer_count))
+                    + usize::from(layer.0);
+                let object = state.slots()[index];
+                let object = if game.is_main_object(object) {
+                    object
+                } else {
+                    ObjectId::EMPTY
+                };
+                hash = deterministic_mix(hash, u64::from(object.0));
+            }
+        }
+    }
+    hash = deterministic_mix(hash, state.visible_globals().len() as u64);
+    for value in state.visible_globals() {
+        hash = deterministic_mix(hash, *value as u64);
+    }
+    hash = deterministic_mix(hash, state.level_fired_rules().len() as u64);
+    for rule in state.level_fired_rules() {
+        hash = deterministic_mix(hash, u64::from(rule.0));
+    }
+    hash
+}
+
+fn random_choice_index(
+    game: &CompiledGame,
+    state: &State,
+    input: InputId,
+    rule: RuleId,
+    candidate_count: usize,
+) -> usize {
+    let mut hash = random_state_projection_hash(game, state);
+    hash = deterministic_mix(hash, u64::from(input.0));
+    hash = deterministic_mix(hash, u64::from(rule.0));
+    hash = deterministic_mix(hash, candidate_count as u64);
+    (hash as usize) % candidate_count
+}
+
 fn apply_rule_once(
     game: &CompiledGame,
     rule: &Rule,
@@ -1427,6 +1618,50 @@ fn apply_rule_once(
     };
 
     let patch = build_patch(rule, &placement)?;
+    let cancels = rule
+        .effects
+        .iter()
+        .any(|effect| matches!(effect, Effect::Cancel));
+    if cancels {
+        patch.validate(game, current)?;
+    } else {
+        patch.apply_in_place(game, current)?;
+    }
+    fired_rules.push(rule.id);
+    if collect_trace {
+        patches.push(patch);
+    }
+    if cancels {
+        return Ok(ApplyOutcome {
+            fired: true,
+            cancelled: true,
+        });
+    }
+    push_rule_commands(rule, commands);
+    Ok(ApplyOutcome {
+        fired: true,
+        cancelled: false,
+    })
+}
+
+fn apply_rule_random(
+    game: &CompiledGame,
+    rule: &Rule,
+    context: &TransitionContext,
+    current: &mut State,
+    fired_rules: &mut Vec<RuleId>,
+    patches: &mut Vec<Patch>,
+    commands: &mut Vec<TransitionCommand>,
+    collect_trace: bool,
+) -> TransitionResult<ApplyOutcome> {
+    let scope = LocalFrameScope2::new(current, context.local_frame);
+    let placements = find_all_matches(game, current, rule, &scope);
+    if placements.is_empty() {
+        return Ok(ApplyOutcome::idle());
+    }
+    let index = random_choice_index(game, current, context.input, rule.id, placements.len());
+    let placement = &placements[index];
+    let patch = build_patch(rule, placement)?;
     let cancels = rule
         .effects
         .iter()
@@ -3176,6 +3411,107 @@ mod tests {
         };
 
         CompiledGame::new(2, objects, vec![push_right])
+    }
+
+    #[test]
+    fn random_rule_is_deterministic_and_uses_solver_visible_state_projection() {
+        let objects = vec![
+            ObjectDef {
+                id: PLAYER,
+                layer_id: LayerId(1),
+            },
+            ObjectDef {
+                id: BOX,
+                layer_id: LayerId(1),
+            },
+            ObjectDef {
+                id: WALL,
+                layer_id: LayerId(2),
+            },
+        ];
+        let random_player_to_box = Rule {
+            id: RuleId(7),
+            guards: Vec::new(),
+            application: RuleApplication::Random,
+            pattern: pattern(vec![cell(0, 0, vec![PLAYER], vec![])]),
+            writes: vec![replace(0, 0, PLAYER, BOX)],
+            effects: Vec::new(),
+        };
+        let game = CompiledGame::new_with_scratch_condition_defs_program_roles(
+            3,
+            objects,
+            Vec::new(),
+            Vec::new(),
+            vec![RuleStep::Rule(random_player_to_box)],
+            vec![WALL],
+            Vec::new(),
+        );
+        let mut plain = State::empty(3, 1, game.layer_count, game.object_count()).unwrap();
+        plain.place_object(&game, 0, 0, PLAYER).unwrap();
+        plain.place_object(&game, 2, 0, PLAYER).unwrap();
+        let mut with_visual = plain.clone();
+        with_visual.place_object(&game, 1, 0, WALL).unwrap();
+
+        let first = transition_state(&game, &plain, RIGHT).unwrap();
+        let repeated = transition_state(&game, &plain, RIGHT).unwrap();
+        let visual = transition_state(&game, &with_visual, RIGHT)
+            .unwrap()
+            .without_visual_objects(&game);
+
+        assert_eq!(first, repeated);
+        assert_eq!(first, visual);
+        assert_eq!(first.object_count(BOX), 1);
+        assert_eq!(first.object_count(PLAYER), 1);
+    }
+
+    #[test]
+    fn random_block_applies_one_firing_step() {
+        let objects = vec![
+            ObjectDef {
+                id: PLAYER,
+                layer_id: LayerId(1),
+            },
+            ObjectDef {
+                id: BOX,
+                layer_id: LayerId(1),
+            },
+        ];
+        let left_player_to_box = Rule {
+            id: RuleId(10),
+            guards: Vec::new(),
+            application: RuleApplication::Once,
+            pattern: pattern(vec![cell(0, 0, vec![PLAYER], vec![])]),
+            writes: vec![replace(0, 0, PLAYER, BOX)],
+            effects: Vec::new(),
+        };
+        let right_player_to_box = Rule {
+            id: RuleId(11),
+            guards: Vec::new(),
+            application: RuleApplication::Once,
+            pattern: pattern(vec![cell(1, 0, vec![PLAYER], vec![])]),
+            writes: vec![replace(1, 0, PLAYER, BOX)],
+            effects: Vec::new(),
+        };
+        let game = CompiledGame::new_with_program(
+            2,
+            objects,
+            vec![RuleStep::Block {
+                application: RuleApplication::Random,
+                stop_condition: None,
+                steps: vec![
+                    RuleStep::Rule(left_player_to_box),
+                    RuleStep::Rule(right_player_to_box),
+                ],
+            }],
+        );
+        let mut state = State::empty(2, 1, game.layer_count, game.object_count()).unwrap();
+        state.place_object(&game, 0, 0, PLAYER).unwrap();
+        state.place_object(&game, 1, 0, PLAYER).unwrap();
+
+        let next = transition_state(&game, &state, RIGHT).unwrap();
+
+        assert_eq!(next.object_count(BOX), 1);
+        assert_eq!(next.object_count(PLAYER), 1);
     }
 
     fn scratch_anchor_game() -> CompiledGame {

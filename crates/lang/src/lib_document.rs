@@ -1511,7 +1511,6 @@ fn logical_line_opens_block(tokens: &[&str]) -> bool {
             | ["once_all"]
             | ["once_per_level"]
             | ["repeat", ..]
-            | ["display"]
             | ["->"]
             | ["sounds"]
             | ["theme", ..]
@@ -2615,7 +2614,7 @@ fn collect_dynamic_selector_statement_warnings(
 ) {
     for statement in statements {
         match statement {
-            StatementAst::Rewrite(rewrite) | StatementAst::DisplayRewrite(rewrite) => {
+            StatementAst::Rewrite(rewrite) => {
                 collect_dynamic_selector_block_warnings(
                     &rewrite.before,
                     constant_globals,
@@ -2645,7 +2644,6 @@ fn collect_dynamic_selector_statement_warnings(
                 );
             }
             StatementAst::Block { statements, .. }
-            | StatementAst::DisplayBlock(statements)
             | StatementAst::Fix { statements, .. }
             | StatementAst::RepeatUntil { statements, .. } => {
                 collect_dynamic_selector_statement_warnings(statements, constant_globals, warnings);

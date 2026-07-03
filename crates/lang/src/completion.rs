@@ -313,9 +313,6 @@ fn collect_line_symbols(
         ["level", name, ..] => {
             insert_identifier(&mut symbols.levels, name);
         }
-        ["routine", "display", name, ..] | ["rule", "display", name, ..] => {
-            insert_identifier(&mut symbols.routines, name);
-        }
         ["routine", name, ..] | ["rule", name, ..] => {
             insert_identifier(&mut symbols.routines, name);
         }
@@ -440,7 +437,7 @@ fn collect_layer_row_symbols(tokens: &[&str], symbols: &mut CompletionSymbols) {
 
 fn collect_selector_specs(specs: &[&str], symbols: &mut CompletionSymbols) {
     for spec in specs {
-        if matches!(*spec, "=" | "display" | "each") || is_completion_keyword(spec) {
+        if matches!(*spec, "=" | "each") || is_completion_keyword(spec) {
             continue;
         }
         collect_object_spec(spec, symbols);
@@ -944,7 +941,7 @@ title complete_display_objects
 puzzle board {
 layers {
 @Count
-display @Badge
+@Badge
 each @Spark @Flash
 }
 rules {

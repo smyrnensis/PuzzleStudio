@@ -1,8 +1,0 @@
-title PaperThemeTest
-
-theme paper
-
-const theme_title = "Paper Theme Test"
-const theme_subtitle = "Notebook puzzle sheet"
-
-import "../theme_test_common/game_body.puzzle"

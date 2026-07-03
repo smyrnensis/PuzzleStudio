@@ -458,7 +458,6 @@ fn starts_inline_block(tokens: &[&str], line: &str) -> bool {
             | ["once"]
             | ["once_all"]
             | ["once_per_level"]
-            | ["display"]
     ) || matches!(tokens, ["button", ..] if line.trim_end().ends_with(" with"))
 }
 

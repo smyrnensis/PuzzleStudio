@@ -1,5 +1,8 @@
 fn wrap_rewrite_steps(application: RuleApplication, steps: Vec<RuleStep>) -> Vec<RuleStep> {
-    if application == RuleApplication::UntilStable {
+    if matches!(
+        application,
+        RuleApplication::Random | RuleApplication::UntilStable
+    ) {
         vec![RuleStep::Block {
             application,
             stop_condition: None,
@@ -1298,20 +1301,6 @@ fn parse_block_cell(
     }
     let mut tokens = cell_tokens.iter().map(String::as_str).peekable();
     while let Some(token) = tokens.next() {
-        if token == "display" {
-            let selector = display_selector_token(&mut tokens, line)?;
-            parsed.require.push(resolve_object_selector(
-                selector,
-                line,
-                object_names,
-                object_schemas,
-                value_sets,
-                maps,
-                object_groups,
-                global_names,
-            )?);
-            continue;
-        }
         if let Some(scratch) = parse_cell_scratch_token(token, line)? {
             parsed.require_cell_scratch.extend(scratch);
             continue;
@@ -1320,11 +1309,6 @@ fn parse_block_cell(
             let selector = tokens
                 .next()
                 .ok_or_else(|| parse_error(line, "scratch sugar must be followed by a selector"))?;
-            let selector = if selector == "display" {
-                display_selector_token(&mut tokens, line)?
-            } else {
-                selector
-            };
             if selector == "no" || anonymous_scratch_for_token(selector).is_some() {
                 return Err(parse_error(
                     line,
@@ -1351,11 +1335,6 @@ fn parse_block_cell(
             let selector = tokens
                 .next()
                 .ok_or_else(|| parse_error(line, "`no` must be followed by a selector"))?;
-            let selector = if selector == "display" {
-                display_selector_token(&mut tokens, line)?
-            } else {
-                selector
-            };
             if selector == "no" {
                 return Err(parse_error(line, "`no no` is not a valid cell pattern"));
             }
@@ -1388,22 +1367,6 @@ fn parse_block_cell(
     }
 
     Ok(parsed)
-}
-
-fn display_selector_token<'a, I>(
-    tokens: &mut std::iter::Peekable<I>,
-    line: &str,
-) -> Result<&'a str, DiagnosticReport>
-where
-    I: Iterator<Item = &'a str>,
-{
-    let selector = tokens
-        .next()
-        .ok_or_else(|| parse_error(line, "`display` must be followed by a display object"))?;
-    if !is_display_role_token(selector) {
-        return Err(parse_error(line, "display object must use an @ name"));
-    }
-    Ok(selector)
 }
 
 fn parse_cell_scratch_token(

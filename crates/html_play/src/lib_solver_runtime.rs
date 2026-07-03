@@ -541,18 +541,18 @@ where
     let mut domain = PuzzleDomain::new(game.clone(), inputs, move |state: &State| {
         goal_game.is_goal_complete(state)
     });
-    let solver_initial = initial.without_visual_objects(domain.game());
+    let solver_initial = PuzzleSearchState::new(initial.without_visual_objects(domain.game()));
     let score_game = loaded.clone();
     let lose_game = loaded.clone();
     let outcome = best_first_with_dead_states_and_progress(
         &mut domain,
         solver_initial,
         budget,
-        move |state| goal_score(&score_game, state),
-        move |state| lose_game.is_lose_complete(state),
+        move |state| goal_score(&score_game, state.state()),
+        move |state| lose_game.is_lose_complete(state.state()),
         |state, progress| {
             if let Some(on_progress) = on_progress.as_mut() {
-                on_progress(state, progress);
+                on_progress(state.state(), progress);
             }
         },
     );
@@ -941,4 +941,3 @@ fn goal_condition_value_kind(game: &CompiledGame, state: &State, kind: &Conditio
         | ConditionValueKind::NoneInputMatches(_) => 0,
     }
 }
-

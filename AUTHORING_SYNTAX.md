@@ -790,9 +790,9 @@ move
 }
 ```
 
-`routine <name> repeat` は routine block 全体の application を明示的に `repeat` にする。block 内の statement sequence を、block 全体が変化しなくなるまで繰り返す。
+`routine <name> repeat` は routine block 全体の application を明示的に `repeat` にする。block 内の statement sequence を、block 全体が変化しなくなるまで繰り返す。`routine <name> random` は、発火可能な statement のうち1つだけを deterministic に選んで実行する。
 
-rewrite 行も application を持つ。plain rewrite のデフォルトも `repeat` で、必要なら行ごとに `once` / `once_all` / `once_per_level` / `repeat` を明示できる。
+rewrite 行も application を持つ。plain rewrite のデフォルトも `repeat` で、必要なら行ごとに `once` / `once_all` / `once_per_level` / `random` / `repeat` を明示できる。
 
 ```txt
 routine spread repeat {
@@ -808,6 +808,8 @@ rewrite-level `repeat` は、同じ concrete rewrite rule の match origin が�
 rewrite-level `once_all` は、適用開始時点の全マッチを row-major order で集め、それぞれを最大1回ずつ適用する。各マッチは開始 state に対する write proposal を出し、同じ slot に複数 proposal が来た場合は row-major 後続マッチの proposal が勝つ。途中で作られた新しいマッチは同じ `once_all` では拾わない。
 
 rewrite-level `once_per_level` は、その concrete rule が現在の level state 内でまだ発火していない場合だけ、最初の1マッチに適用する。restart / next level で初期 state に戻ると発火済み記録もリセットされる。
+
+rewrite-level `random` は、適用可能な match のうち1つだけを選ぶ。選択は hidden RNG ではなく solver-visible state から決まるため、同じ state と input では同じ next state になる。`random { ... }` は発火可能な statement のうち1つだけを選ぶ。
 
 `repeat` は変化しなくなるまで実行する。途中で同一 state が再出現した場合は cycle として検出し、巻き戻さず、その再訪 state で repeat を終了する。state が発散して cycle にならない場合も、repeat は内部上限で打ち切り、その時点の state で次の statement へ進む。`cancel` は例外で、repeat の cycle / 上限より優先して turn 全体を取り消す。
 

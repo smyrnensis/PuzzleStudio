@@ -17,61 +17,61 @@ use puzzle_lang::DiagnosticReport;
 
 #[cfg(feature = "embedded-assets")]
 const EDITOR_HTML: &str = include_str!("../static/editor.html");
-#[cfg(feature = "embedded-assets")]
+#[cfg(feature = "editor-docs")]
 const EDITOR_DOCS_MARKDOWN: &str = include_str!("../docs/editor.md");
-#[cfg(feature = "embedded-assets")]
+#[cfg(feature = "editor-docs")]
 const EDITOR_DOCS_METADATA_MARKDOWN: &str = include_str!("../docs/metadata.md");
-#[cfg(feature = "embedded-assets")]
+#[cfg(feature = "editor-docs")]
 const EDITOR_DOCS_PUZZLE_BLOCK_MARKDOWN: &str = include_str!("../docs/puzzle-block.md");
-#[cfg(feature = "embedded-assets")]
+#[cfg(feature = "editor-docs")]
 const EDITOR_DOCS_LAYERS_MARKDOWN: &str = include_str!("../docs/layers.md");
-#[cfg(feature = "embedded-assets")]
+#[cfg(feature = "editor-docs")]
 const EDITOR_DOCS_GROUPS_MARKDOWN: &str = include_str!("../docs/groups.md");
-#[cfg(feature = "embedded-assets")]
+#[cfg(feature = "editor-docs")]
 const EDITOR_DOCS_TAGS_MARKDOWN: &str = include_str!("../docs/tags.md");
-#[cfg(feature = "embedded-assets")]
+#[cfg(feature = "editor-docs")]
 const EDITOR_DOCS_LEGEND_MARKDOWN: &str = include_str!("../docs/legend.md");
-#[cfg(feature = "embedded-assets")]
+#[cfg(feature = "editor-docs")]
 const EDITOR_DOCS_LEVELS_MARKDOWN: &str = include_str!("../docs/levels.md");
-#[cfg(feature = "embedded-assets")]
+#[cfg(feature = "editor-docs")]
 const EDITOR_DOCS_LEVEL_LOCAL_LEGEND_MARKDOWN: &str = include_str!("../docs/level-local-legend.md");
-#[cfg(feature = "embedded-assets")]
+#[cfg(feature = "editor-docs")]
 const EDITOR_DOCS_MESSAGES_MARKDOWN: &str = include_str!("../docs/messages.md");
-#[cfg(feature = "embedded-assets")]
+#[cfg(feature = "editor-docs")]
 const EDITOR_DOCS_REWRITE_RULES_MARKDOWN: &str = include_str!("../docs/rewrite-rules.md");
-#[cfg(feature = "embedded-assets")]
+#[cfg(feature = "editor-docs")]
 const EDITOR_DOCS_INPUT_RULES_MARKDOWN: &str = include_str!("../docs/input-rules.md");
-#[cfg(feature = "embedded-assets")]
+#[cfg(feature = "editor-docs")]
 const EDITOR_DOCS_MOVEMENT_MARKDOWN: &str = include_str!("../docs/movement.md");
-#[cfg(feature = "embedded-assets")]
+#[cfg(feature = "editor-docs")]
 const EDITOR_DOCS_GUARDS_MARKDOWN: &str = include_str!("../docs/guards.md");
-#[cfg(feature = "embedded-assets")]
+#[cfg(feature = "editor-docs")]
 const EDITOR_DOCS_FIX_MARKDOWN: &str = include_str!("../docs/fix.md");
-#[cfg(feature = "embedded-assets")]
+#[cfg(feature = "editor-docs")]
 const EDITOR_DOCS_VARIABLES_MARKDOWN: &str = include_str!("../docs/variables.md");
-#[cfg(feature = "embedded-assets")]
+#[cfg(feature = "editor-docs")]
 const EDITOR_DOCS_SCRATCH_MARKDOWN: &str = include_str!("../docs/scratch.md");
-#[cfg(feature = "embedded-assets")]
+#[cfg(feature = "editor-docs")]
 const EDITOR_DOCS_CONDITIONS_MARKDOWN: &str = include_str!("../docs/conditions.md");
-#[cfg(feature = "embedded-assets")]
+#[cfg(feature = "editor-docs")]
 const EDITOR_DOCS_WIN_CONDITIONS_MARKDOWN: &str = include_str!("../docs/win-conditions.md");
-#[cfg(feature = "embedded-assets")]
+#[cfg(feature = "editor-docs")]
 const EDITOR_DOCS_SCENES_MARKDOWN: &str = include_str!("../docs/scenes.md");
-#[cfg(feature = "embedded-assets")]
+#[cfg(feature = "editor-docs")]
 const EDITOR_DOCS_SCENE_LAYOUT_MARKDOWN: &str = include_str!("../docs/scene-layout.md");
-#[cfg(feature = "embedded-assets")]
+#[cfg(feature = "editor-docs")]
 const EDITOR_DOCS_SEMANTIC_INPUTS_MARKDOWN: &str = include_str!("../docs/semantic-inputs.md");
-#[cfg(feature = "embedded-assets")]
+#[cfg(feature = "editor-docs")]
 const EDITOR_DOCS_MENUS_MARKDOWN: &str = include_str!("../docs/menus.md");
-#[cfg(feature = "embedded-assets")]
+#[cfg(feature = "editor-docs")]
 const EDITOR_DOCS_LIFECYCLE_MARKDOWN: &str = include_str!("../docs/lifecycle.md");
-#[cfg(feature = "embedded-assets")]
+#[cfg(feature = "editor-docs")]
 const EDITOR_DOCS_SPRITES_MARKDOWN: &str = include_str!("../docs/sprites.md");
-#[cfg(feature = "embedded-assets")]
+#[cfg(feature = "editor-docs")]
 const EDITOR_DOCS_DISPLAY_MARKDOWN: &str = include_str!("../docs/display.md");
-#[cfg(feature = "embedded-assets")]
+#[cfg(feature = "editor-docs")]
 const EDITOR_DOCS_THEME_MARKDOWN: &str = include_str!("../docs/theme.md");
-#[cfg(feature = "embedded-assets")]
+#[cfg(feature = "editor-docs")]
 const EDITOR_DOCS_SOUNDS_MARKDOWN: &str = include_str!("../docs/sounds.md");
 #[cfg(feature = "embedded-assets")]
 const EDITOR_CSS: &str = include_str!("../static/editor.css");
@@ -134,10 +134,14 @@ const SEEDED_TIMBRE_FIELDS_JS: &str =
 const SOUND_EXPORT_JS: &str = include_str!("../../../tools/music_generator/audio_export.mjs");
 #[cfg(feature = "embedded-assets")]
 const RENDERER_CSS: &str = include_str!("../../html_play/static/renderer.css");
+#[cfg(all(test, feature = "embedded-assets"))]
+const EDITOR_STATIC_RENDERER_CSS: &str = include_str!("../static/renderer.css");
 #[cfg(feature = "embedded-assets")]
 const VISUALS_JS: &str = include_str!("../../html_play/static/visuals.js");
 #[cfg(feature = "embedded-assets")]
 const RENDERER_JS: &str = include_str!("../../html_play/static/renderer.js");
+#[cfg(all(test, feature = "embedded-assets"))]
+const EDITOR_STATIC_RENDERER_JS: &str = include_str!("../static/renderer.js");
 #[cfg(feature = "embedded-assets")]
 const PAGES_EXAMPLE_PUZZLE_PATH: &str = "examples/puzzlestudio-example.puzzle";
 #[cfg(feature = "embedded-assets")]
@@ -1129,7 +1133,7 @@ fn base64_encode(bytes: &[u8]) -> String {
     out
 }
 
-#[cfg(feature = "embedded-assets")]
+#[cfg(feature = "editor-docs")]
 fn escape_html(value: &str) -> String {
     value
         .replace('&', "&amp;")
@@ -1858,7 +1862,7 @@ fn write_text_asset(output_dir: &Path, name: &str, contents: &str) -> Result<(),
 
 #[cfg(feature = "embedded-assets")]
 fn editor_html_with_docs() -> String {
-    EDITOR_HTML.replace("<!-- PUZZLESTUDIO_EDITOR_DOCS -->", &render_editor_docs())
+    EDITOR_HTML.replace("<!-- PUZZLESTUDIO_EDITOR_DOCS -->", &editor_docs_html())
 }
 
 #[cfg(feature = "embedded-assets")]
@@ -1873,14 +1877,19 @@ fn editor_workspace_js() -> String {
     )
 }
 
-#[cfg(feature = "embedded-assets")]
+#[cfg(feature = "editor-docs")]
+pub fn editor_docs_html() -> String {
+    render_editor_docs()
+}
+
+#[cfg(feature = "editor-docs")]
 struct EditorDocsPage {
     id: &'static str,
     title: &'static str,
     markdown: &'static str,
 }
 
-#[cfg(feature = "embedded-assets")]
+#[cfg(feature = "editor-docs")]
 const EDITOR_DOCS_PAGES: &[EditorDocsPage] = &[
     EditorDocsPage {
         id: "start",
@@ -2024,7 +2033,7 @@ const EDITOR_DOCS_PAGES: &[EditorDocsPage] = &[
     },
 ];
 
-#[cfg(feature = "embedded-assets")]
+#[cfg(feature = "editor-docs")]
 fn render_editor_docs() -> String {
     let mut out = String::from(
         "<div class=\"docs-layout\">\n<nav class=\"docs-nav\" role=\"tablist\" aria-label=\"Documents\">\n",
@@ -2044,14 +2053,14 @@ fn render_editor_docs() -> String {
     }
     out.push_str("</nav>\n<div class=\"docs-pages\">\n");
     for (index, page) in EDITOR_DOCS_PAGES.iter().enumerate() {
-        out.push_str(&render_editor_docs_markdown(page, index == 0));
+        out.push_str(&render_editor_docs_markdown(page, index, index == 0));
     }
     out.push_str("</div>\n</div>");
     out
 }
 
-#[cfg(feature = "embedded-assets")]
-fn render_editor_docs_markdown(page: &EditorDocsPage, active: bool) -> String {
+#[cfg(feature = "editor-docs")]
+fn render_editor_docs_markdown(page: &EditorDocsPage, page_index: usize, active: bool) -> String {
     let hidden = if active { "" } else { " hidden" };
     let mut out = format!(
         "<article class=\"docs-article\" data-docs-article=\"{}\"{hidden}>\n",
@@ -2061,16 +2070,18 @@ fn render_editor_docs_markdown(page: &EditorDocsPage, active: bool) -> String {
     let mut in_header = false;
     let mut header_closed = false;
     let mut in_section = false;
-    let mut in_code = false;
+    let mut code_language = None::<String>;
+    let mut code_lines = Vec::<String>::new();
 
     for line in page.markdown.lines() {
-        if in_code {
+        if let Some(language) = &code_language {
             if line.trim_start().starts_with("```") {
-                out.push_str("</code></pre>\n");
-                in_code = false;
+                let source = code_lines.join("\n");
+                render_docs_code_block(&mut out, language, &source);
+                code_language = None;
+                code_lines.clear();
             } else {
-                out.push_str(&escape_html(line));
-                out.push('\n');
+                code_lines.push(line.to_string());
             }
             continue;
         }
@@ -2084,8 +2095,7 @@ fn render_editor_docs_markdown(page: &EditorDocsPage, active: bool) -> String {
         if trimmed.starts_with("```") {
             flush_docs_paragraph(&mut out, &mut paragraph);
             close_docs_header(&mut out, &mut in_header, &mut header_closed);
-            out.push_str("<pre><code>");
-            in_code = true;
+            code_language = Some(docs_code_language(trimmed).to_string());
             continue;
         }
 
@@ -2123,17 +2133,87 @@ fn render_editor_docs_markdown(page: &EditorDocsPage, active: bool) -> String {
         paragraph.push(trimmed.to_string());
     }
 
-    if in_code {
-        out.push_str("</code></pre>\n");
+    if let Some(language) = &code_language {
+        let source = code_lines.join("\n");
+        render_docs_code_block(&mut out, language, &source);
     }
     flush_docs_paragraph(&mut out, &mut paragraph);
     close_docs_header(&mut out, &mut in_header, &mut header_closed);
     close_docs_section(&mut out, &mut in_section);
+    out.push_str(&render_editor_docs_page_links(page_index));
     out.push_str("</article>");
     out
 }
 
-#[cfg(feature = "embedded-assets")]
+#[cfg(feature = "editor-docs")]
+fn docs_code_language(fence: &str) -> &str {
+    fence.trim_start_matches('`').trim()
+}
+
+#[cfg(feature = "editor-docs")]
+fn render_docs_code_block(out: &mut String, language: &str, source: &str) {
+    out.push_str("<pre><code");
+    if is_puzzle_docs_code_language(language) {
+        out.push_str(" class=\"language-puzzle\"");
+        out.push('>');
+        out.push_str(&puzzle_lang::highlight_source(source).html);
+    } else {
+        out.push('>');
+        out.push_str(&escape_html(source));
+    }
+    out.push_str("</code></pre>\n");
+}
+
+#[cfg(feature = "editor-docs")]
+fn is_puzzle_docs_code_language(language: &str) -> bool {
+    matches!(language.trim(), "puzzle" | ".puzzle")
+}
+
+#[cfg(feature = "editor-docs")]
+fn render_editor_docs_page_links(page_index: usize) -> String {
+    let previous = page_index
+        .checked_sub(1)
+        .and_then(|index| EDITOR_DOCS_PAGES.get(index));
+    let next = EDITOR_DOCS_PAGES.get(page_index + 1);
+    if previous.is_none() && next.is_none() {
+        return String::new();
+    }
+
+    let mut out =
+        String::from("<footer class=\"docs-page-links\" aria-label=\"Related documents\">\n");
+    if let Some(page) = previous {
+        out.push_str(&render_editor_docs_page_link(
+            page,
+            "docs-page-link-previous",
+            "Previous",
+        ));
+    }
+    if let Some(page) = next {
+        out.push_str(&render_editor_docs_page_link(
+            page,
+            "docs-page-link-next",
+            "Next",
+        ));
+    }
+    out.push_str("</footer>\n");
+    out
+}
+
+#[cfg(feature = "editor-docs")]
+fn render_editor_docs_page_link(
+    page: &EditorDocsPage,
+    direction_class: &str,
+    direction_label: &str,
+) -> String {
+    format!(
+        "<button class=\"docs-page-link {direction_class}\" type=\"button\" data-docs-page=\"{}\"><span class=\"docs-page-link-label\">{}</span><span class=\"docs-page-link-title\">{}</span></button>\n",
+        escape_html(page.id),
+        escape_html(direction_label),
+        escape_html(page.title),
+    )
+}
+
+#[cfg(feature = "editor-docs")]
 fn flush_docs_paragraph(out: &mut String, paragraph: &mut Vec<String>) {
     if paragraph.is_empty() {
         return;
@@ -2144,7 +2224,7 @@ fn flush_docs_paragraph(out: &mut String, paragraph: &mut Vec<String>) {
     paragraph.clear();
 }
 
-#[cfg(feature = "embedded-assets")]
+#[cfg(feature = "editor-docs")]
 fn close_docs_header(out: &mut String, in_header: &mut bool, header_closed: &mut bool) {
     if *in_header && !*header_closed {
         out.push_str("</header>\n");
@@ -2153,7 +2233,7 @@ fn close_docs_header(out: &mut String, in_header: &mut bool, header_closed: &mut
     }
 }
 
-#[cfg(feature = "embedded-assets")]
+#[cfg(feature = "editor-docs")]
 fn close_docs_section(out: &mut String, in_section: &mut bool) {
     if *in_section {
         out.push_str("</section>\n");
@@ -2161,7 +2241,7 @@ fn close_docs_section(out: &mut String, in_section: &mut bool) {
     }
 }
 
-#[cfg(feature = "embedded-assets")]
+#[cfg(feature = "editor-docs")]
 fn render_docs_inline(value: &str) -> String {
     let mut out = String::new();
     for (index, part) in value.split('`').enumerate() {
@@ -3712,6 +3792,37 @@ levels3 demo of push3 {
     }
 
     #[test]
+    fn desktop_workspace_delete_does_not_persist_old_source_into_next_active_file() {
+        assert!(
+            EDITOR_WORKSPACE_JS
+                .contains("function saveDocumentStore(showStatus = true, options = {})")
+        );
+        assert!(EDITOR_WORKSPACE_JS.contains("if (options.persistCurrent !== false)"));
+        let delete_start = EDITOR_WORKSPACE_JS
+            .find("async function deleteTreeNode(nodeId)")
+            .expect("delete tree node handler");
+        let delete_end = EDITOR_WORKSPACE_JS[delete_start..]
+            .find("async function removeWorkspaceNode(nodeId)")
+            .expect("delete handler end")
+            + delete_start;
+        let delete_handler = &EDITOR_WORKSPACE_JS[delete_start..delete_end];
+        let active_switch = delete_handler
+            .find("activeFileId = documents[0]?.id || \"\";")
+            .expect("delete selects a replacement active document");
+        let load_next = delete_handler
+            .find("loadEmbeddedDocument(currentDocumentIndex);")
+            .expect("delete loads the replacement document before persisting the tree");
+        let persist_tree = delete_handler
+            .find("saveDocumentStore(false, { persistCurrent: false });")
+            .expect("delete persists the tree without reading the stale source editor");
+        assert!(active_switch < load_next);
+        assert!(load_next < persist_tree);
+        assert!(!delete_handler.contains(
+            "currentDocumentIndex = activeDocumentIndex();\n  saveDocumentStore(false);"
+        ));
+    }
+
+    #[test]
     fn desktop_workspace_mutations_defer_external_reload() {
         assert!(EDITOR_WORKSPACE_JS.contains("let workspaceHostMutationDepth = 0;"));
         assert!(EDITOR_WORKSPACE_JS.contains("let deferredWorkspaceChangedPayload = null;"));
@@ -3759,6 +3870,50 @@ levels3 demo of push3 {
             .find("endWorkspaceHostMutation();")
             .expect("desktop delete releases the host mutation guard");
         assert!(delete_release > 0);
+        let move_start = EDITOR_WORKSPACE_JS
+            .find("async function moveNodeToFolder(nodeId, targetFolderId)")
+            .expect("drag/drop move handler");
+        let move_end = EDITOR_WORKSPACE_JS[move_start..]
+            .find("function dropFolderIdForEvent(event)")
+            .expect("drag/drop move handler end")
+            + move_start;
+        let move_handler = &EDITOR_WORKSPACE_JS[move_start..move_end];
+        let move_guard = move_handler
+            .find("beginWorkspaceHostMutation();\n    try {\n      await window.PuzzleStudioHost.renameWorkspaceEntry({")
+            .expect("desktop drag/drop move is guarded while host IO runs");
+        let move_release = move_handler[move_guard..]
+            .find("endWorkspaceHostMutation();")
+            .expect("desktop drag/drop move releases the host mutation guard");
+        assert!(move_release > 0);
+    }
+
+    #[test]
+    fn workspace_drag_drop_moves_entries_through_host_boundary() {
+        assert!(
+            EDITOR_WORKSPACE_JS.contains("async function moveNodeToFolder(nodeId, targetFolderId)")
+        );
+        assert!(
+            EDITOR_WORKSPACE_JS
+                .contains("throw new Error(\"Cannot move entries between workspaces.\");")
+        );
+        assert!(EDITOR_WORKSPACE_JS.contains(
+            "throw new Error(\"Desktop workspace move requires the host rename command.\");"
+        ));
+        assert!(
+            EDITOR_WORKSPACE_JS
+                .contains("fromPath: hostPathForEditorPath(sourcePath, sourceWorkspaceRoot),")
+        );
+        assert!(
+            EDITOR_WORKSPACE_JS
+                .contains("toPath: hostPathForEditorPath(targetPath, sourceWorkspaceRoot),")
+        );
+        assert!(EDITOR_WORKSPACE_JS.contains("workspaceRoot: sourceWorkspaceRoot,"));
+        assert!(
+            EDITOR_JS.contains("moveNodeToFolder(draggedNodeId, targetFolderId).then((moved) => {")
+        );
+        assert!(EDITOR_JS.contains(
+            "setEditorStatus(workspaceMutationErrorMessage(\"Move failed\", error), \"is-error\");"
+        ));
     }
 
     #[test]
@@ -3785,6 +3940,27 @@ levels3 demo of push3 {
         assert!(
             EDITOR_CSS.contains(".ps-import-actions .source-action-button:hover:not(:disabled)")
         );
+    }
+
+    #[test]
+    fn file_import_commits_workspace_before_preview_refresh() {
+        let load_imported = EDITOR_IMPORT_EXPORT_JS
+            .find("loadEmbeddedDocument(currentDocumentIndex);")
+            .expect("file import loads the imported document");
+        let save_imported = EDITOR_IMPORT_EXPORT_JS[load_imported..]
+            .find("saveDocumentStore(false);")
+            .expect("file import persists the imported workspace before preview");
+        let status_imported = EDITOR_IMPORT_EXPORT_JS[load_imported..]
+            .find("setEditorStatus(`Imported to ${folderName}`, \"is-ok\");")
+            .expect("file import reports import success before preview");
+        let preview_refresh = EDITOR_IMPORT_EXPORT_JS[load_imported..]
+            .find("await renderPreview();")
+            .expect("file import refreshes preview after committing import");
+
+        assert!(save_imported < preview_refresh);
+        assert!(status_imported < preview_refresh);
+        assert!(EDITOR_IMPORT_EXPORT_JS.contains("Imported; preview failed: ${message}"));
+        assert!(EDITOR_JS.contains("Import failed: ${importErrorMessage(error)}"));
     }
 
     #[test]
@@ -3819,9 +3995,12 @@ levels3 demo of push3 {
             EDITOR_JS
                 .contains("levelBoard?.classList.toggle(\"has-all-cell-grid\", levelGridVisible);")
         );
-        assert!(EDITOR_JS.contains(
-            "levelRenderer.render(levelScene(visibleCells, exportData));\n    syncLevelGridVisibility();"
-        ));
+        assert!(EDITOR_JS.contains("levelRenderer.render(levelScene(visibleCells, exportData));"));
+        assert!(!EDITOR_JS.contains("renderEditorLevelBoardDom(visibleCells, exportData);"));
+        assert!(
+            EDITOR_JS
+                .contains("syncLevelGridVisibility();\n  levelBoard.querySelectorAll(\".cell\")")
+        );
         assert!(
             EDITOR_JS.contains("levelGridButton?.addEventListener(\"click\", toggleLevelGrid);")
         );
@@ -3855,6 +4034,14 @@ levels3 demo of push3 {
         assert!(play < expand);
         assert!(expand < palette);
         assert!(palette < board);
+    }
+
+    #[test]
+    fn level_editor_palette_has_no_hide_button() {
+        assert!(!EDITOR_HTML.contains("levelPaletteCollapseButton"));
+        assert!(!EDITOR_DOM_JS.contains("levelPaletteCollapseButton"));
+        assert!(!EDITOR_JS.contains("levelPaletteCollapseButton"));
+        assert!(!EDITOR_JS.contains("paletteCollapsed"));
     }
 
     #[test]
@@ -3970,17 +4157,60 @@ levels3 demo of push3 {
         assert!(!EDITOR_JS.contains("previewDirty"));
         assert!(EDITOR_JS.contains("previewExport = null;"));
         assert!(EDITOR_JS.contains(
-            "return !compiledPreviewStale && exportData?.levels?.length ? exportData : null;"
+            "return !compiledPreviewStale && Array.isArray(exportData?.engine?.objects) ? exportData : null;"
         ));
         assert!(
             EDITOR_JS.contains(
-                "if (!compiledPreviewStale && exportData === currentPreviewExportData()) {"
+                "if (levelPlaytestActive && !compiledPreviewStale && exportData === currentPreviewExportData()) {"
             )
         );
+        assert!(EDITOR_JS.contains(
+            "function activePreviewModeAcceptsLevelState() {\n  return currentPreviewMode === \"edit\" && levelPlaytestActive;\n}"
+        ));
         assert!(EDITOR_JS.contains("function levelEditorCurrentExportData()"));
         assert!(EDITOR_JS.contains("async function loadLevelSourceEntryAfterPreviewCompile("));
+        assert!(EDITOR_JS.contains("async function compileLevelEditorPreviewData()"));
         assert!(EDITOR_JS.contains("function loadLevelSourceEntryWithExportData("));
         assert!(EDITOR_JS.contains("function reportLevelSourceLoadFailure("));
+        let level_editor_compile = EDITOR_JS
+            .find("async function compileLevelEditorPreviewData()")
+            .expect("level editor metadata compiler");
+        let level_editor_compile_end = EDITOR_JS[level_editor_compile..]
+            .find("function loadLevelSourceEntryWithExportData(")
+            .map(|index| level_editor_compile + index)
+            .expect("level editor metadata compiler end");
+        let level_editor_compile_source =
+            &EDITOR_JS[level_editor_compile..level_editor_compile_end];
+        assert!(level_editor_compile_source.contains("window.PuzzleStudioHost.preview({"));
+        assert!(
+            level_editor_compile_source.contains("const exportData = extractPreviewExport(html);")
+        );
+        assert!(
+            level_editor_compile_source
+                .contains("if (!exportData || !Array.isArray(exportData?.engine?.objects))")
+        );
+        assert!(
+            level_editor_compile_source
+                .contains("applyGameVisuals(compiledPreviewGameVisualsJs(html));")
+        );
+        assert!(
+            level_editor_compile_source.contains("previewFrameHasCurrentCompiledPreview = false;")
+        );
+        assert!(!level_editor_compile_source.contains("setPreviewFrameHtml("));
+        assert!(!level_editor_compile_source.contains("await renderPreview();"));
+        assert!(EDITOR_JS.contains("requirePreviewFrame: true,"));
+        assert!(EDITOR_JS.contains("setPaneStatus(\"level\", \"Locating level metadata\", \"\");"));
+        assert!(EDITOR_JS.contains(
+            "const levels = exportData?.levels || [];\n  let levelIndex = levels.length"
+        ));
+        assert!(EDITOR_JS.contains("activeLevelIndex = levelIndex;"));
+        assert!(
+            EDITOR_JS
+                .contains("return generatedUnnamedLevelName(fallbackName) ? \"\" : fallbackName;")
+        );
+        assert!(EDITOR_JS.contains("function generatedUnnamedLevelName(value)"));
+        assert!(!EDITOR_JS.contains("function renderEditorLevelBoardDom("));
+        assert!(!EDITOR_CSS.contains(".level-board .level-cell-token"));
         assert!(EDITOR_JS.contains("function currentFocused2dLevelEntry("));
         assert!(EDITOR_JS.contains("function focusedLevelEntryForPaneMode("));
         assert!(EDITOR_JS.contains("function loadLevelPaneEntryForMode("));
@@ -4131,10 +4361,16 @@ levels3 demo of push3 {
     fn solver_pane_has_level_selector() {
         assert!(EDITOR_HTML.contains(r#"id="solverLevelSelect""#));
         assert!(EDITOR_DOM_JS.contains("const solverLevelSelect = document.querySelector"));
-        assert!(EDITOR_JS.contains("let solverLevelIndex = 0;"));
+        assert!(EDITOR_JS.contains("let activeSolverTarget = null;"));
+        assert!(!EDITOR_JS.contains("let solverLevelIndex = 0;"));
+        assert!(!EDITOR_JS.contains("solverStateOverride"));
+        assert!(!EDITOR_JS.contains("solverSceneOverride"));
+        assert!(!EDITOR_JS.contains("stagedSolverCells"));
         assert!(EDITOR_JS.contains("function syncSolverLevelSelector("));
         assert!(EDITOR_JS.contains("function selectSolverLevel("));
-        assert!(EDITOR_JS.contains("function setSolverTargetFromState("));
+        assert!(EDITOR_JS.contains("function createPreviewSolverTarget("));
+        assert!(EDITOR_JS.contains("function createEditorSolverTarget("));
+        assert!(EDITOR_JS.contains("function setActiveSolverTarget("));
         assert!(EDITOR_JS.contains("function syncSolverTargetFromActiveLevel("));
         assert!(EDITOR_JS.contains("function syncSolverTargetFromSourceTarget("));
         assert!(EDITOR_JS.contains("async function syncSolverTargetFromSourceCursor("));
@@ -4153,11 +4389,18 @@ levels3 demo of push3 {
         assert!(EDITOR_JS.contains("async function solveEditedLevelFromEditor()"));
         assert!(EDITOR_JS.contains("function compiledLevelStateData("));
         assert!(EDITOR_JS.contains("function solverPuzzle3dPreviewSnapshot("));
+        assert!(EDITOR_JS.contains("const solve = module.solve_request_json;"));
+        assert!(EDITOR_JS.contains("const solutionJson = solve(JSON.stringify(data.request));"));
+        assert!(EDITOR_JS.contains("function solverRequestForTarget(target)"));
+        assert!(!EDITOR_JS.contains("const solve = module.solve_state;"));
+        assert!(!EDITOR_JS.contains("stateJson: JSON.stringify(stateData)"));
         assert!(!EDITOR_JS.contains("function solveLevelInMainThread("));
         assert!(!EDITOR_JS.contains("backend: \"wasm-main\""));
         assert!(!EDITOR_JS.contains("Solving in this browser tab"));
         assert!(EDITOR_JS.contains("Solver worker failed:"));
-        assert!(EDITOR_JS.contains("return currentPreviewMode === \"edit\";"));
+        assert!(
+            EDITOR_JS.contains("return currentPreviewMode === \"edit\" && levelPlaytestActive;")
+        );
         assert!(!EDITOR_JS.contains("requestFocusedPreviewState();"));
         assert!(
             !EDITOR_JS.contains("syncPreviewStateFromLevel();\n  try {\n    worker.postMessage")
@@ -4368,10 +4611,8 @@ levels3 demo of push3 {
             "renderLevel3dLayerBoard();\n  renderLevel3dStageOverlay();\n  refreshLevel3dRuntimePreviews();\n  return true;"
         ));
         assert!(EDITOR_JS.contains("currentPreviewMode === \"level3d\" && typeof sendLevel3dSnapshotToRuntime === \"function\""));
-        assert!(
-            EDITOR_JS
-                .contains("const stateData = options.stateData || solverStateData(exportData);")
-        );
+        assert!(EDITOR_JS.contains("const target = activeSolverTarget;"));
+        assert!(!EDITOR_JS.contains("solverStateData(exportData)"));
         assert!(EDITOR_JS.contains(
             "isPuzzle3dExport(exportData) && typeof sendLevel3dSnapshotToRuntime === \"function\""
         ));
@@ -4505,6 +4746,12 @@ levels3 demo of push3 {
     }
 
     #[test]
+    fn editor_js_does_not_embed_raw_nul_bytes() {
+        assert!(!EDITOR_JS.as_bytes().contains(&0));
+        assert!(EDITOR_JS.contains(r#"const resolveSignature = `${position}\u0000${source}`;"#));
+    }
+
+    #[test]
     fn sprite_source_click_uses_rust_target_sync() {
         let click_start = EDITOR_SPRITE_JS
             .find("function loadSpriteFromSourceClick(event = null)")
@@ -4541,7 +4788,11 @@ levels3 demo of push3 {
 
         assert!(click.contains("syncPreviewModeFromSourceCursor({"));
         assert!(click.contains("allowInactiveMode: true,"));
-        assert!(click.contains("position: clickOffset ?? ("));
+        assert!(click.contains("const position = clickOffset ?? ("));
+        assert!(click.contains("if (findLevelDefinitionAtPosition(source, position)) {"));
+        assert!(click.contains("openPreviewModePane(\"edit\");"));
+        assert!(click.contains("setPaneStatus(\"level\", \"Locating level metadata\", \"\");"));
+        assert!(click.contains("position,"));
         assert!(
             click.contains(
                 "sourceViewOffsetToDocumentOffset(sourceEditor.selectionStart, \"start\")"
@@ -4654,8 +4905,12 @@ levels3 demo of push3 {
         assert!(EDITOR_SOURCE_JS.contains("input.className = \"source-native-color-input\";"));
         assert!(EDITOR_SOURCE_JS.contains("sourceColorInput.showPicker();"));
         assert!(EDITOR_SOURCE_JS.contains("sourceColorInput.click();"));
-        assert!(EDITOR_SOURCE_JS.contains("sourceColorInput?.addEventListener(\"input\", updateSourceColorFromNativeInput);"));
-        assert!(EDITOR_SOURCE_JS.contains("sourceColorInput?.addEventListener(\"change\", updateSourceColorFromNativeInput);"));
+        assert!(EDITOR_SOURCE_JS.contains(
+            "sourceColorInput?.addEventListener(\"input\", updateSourceColorFromNativeInput);"
+        ));
+        assert!(EDITOR_SOURCE_JS.contains(
+            "sourceColorInput?.addEventListener(\"change\", updateSourceColorFromNativeInput);"
+        ));
         assert!(!EDITOR_SOURCE_JS.contains("createSourceColorPopover"));
         assert!(!EDITOR_SOURCE_JS.contains("source-color-popover"));
         assert!(!EDITOR_SOURCE_JS.contains("renderSourceColorAdjuster"));
@@ -4775,16 +5030,16 @@ levels3 demo of push3 {
         assert!(EDITOR_HTML.contains(r#"id="spriteTransformActionBank" hidden"#));
         assert!(!EDITOR_HTML.contains("sprite-toolbar sprite-edit-actions"));
         assert!(
-            EDITOR_SPRITE_JS.contains("transformActions.className = \"sprite-paint-transform-actions\";")
+            EDITOR_SPRITE_JS
+                .contains("transformActions.className = \"sprite-paint-transform-actions\";")
         );
         assert!(EDITOR_SPRITE_JS.contains("spriteFlipVerticalButton,\n    spriteClearButton,"));
         assert!(EDITOR_CSS.contains(".sprite-paint-transform-actions {\n  margin-left: auto;"));
-        assert!(EDITOR_CSS.contains(
-            ".sprite-paint-tool-button {\n  border: 0;\n  background: transparent;"
-        ));
-        assert!(!EDITOR_CSS.contains(
-            ".sprite-paint-tool-button {\n  background: var(--bar-bg);"
-        ));
+        assert!(
+            EDITOR_CSS
+                .contains(".sprite-paint-tool-button {\n  border: 0;\n  background: transparent;")
+        );
+        assert!(!EDITOR_CSS.contains(".sprite-paint-tool-button {\n  background: var(--bar-bg);"));
     }
 
     #[test]
@@ -5403,7 +5658,9 @@ levels3 demo of push3 {
         assert!(EDITOR_WORKSPACE_JS.contains("return STARTER_PUZZLE_SOURCE;"));
         assert!(!EDITOR_WORKSPACE_JS.contains("starterPuzzleTitle"));
         assert!(!EDITOR_WORKSPACE_JS.contains("starterPuzzleSource("));
-        assert!(!EDITOR_WORKSPACE_JS.contains("!documents.length && (editorSeed || !isDesktopHost())"));
+        assert!(
+            !EDITOR_WORKSPACE_JS.contains("!documents.length && (editorSeed || !isDesktopHost())")
+        );
     }
 
     #[test]
@@ -5532,6 +5789,30 @@ levels3 demo of push3 {
         assert!(renamed.ends_with("renamed.puzzle"));
         assert!(!game_path.exists());
         assert!(game_path.with_file_name("renamed.puzzle").exists());
+    }
+
+    #[test]
+    fn rename_workspace_entry_moves_real_folders_inside_workspace() {
+        let workspace = TestWorkspace::new();
+        let game_path = workspace.write(
+            "games/editor_fixture/game.puzzle",
+            editor_fixture_source("Move Folder"),
+        );
+        let fragment_path = workspace.write(
+            "games/editor_fixture/old/fragment.puzzle",
+            "title \"Fragment\"",
+        );
+        let project_dir = game_path.parent().expect("project dir");
+        fs::create_dir(project_dir.join("new")).expect("create destination parent");
+        let service = EditorService::open_game_entry(project_dir).expect("open editor fixture");
+
+        let moved = service
+            .rename_workspace_entry(&RenameWorkspaceEntryRequest::new("old", "new/old"))
+            .expect("move folder");
+
+        assert!(moved.ends_with("new/old"));
+        assert!(!fragment_path.exists());
+        assert!(project_dir.join("new/old/fragment.puzzle").exists());
     }
 
     #[test]
@@ -5733,7 +6014,7 @@ levels3 demo of push3 {
             r#"<link rel="stylesheet" href="editor.css?v=source-folding-tabs-compact-close-left">"#
         ));
         assert!(
-            html.contains(r#"<script src="editor.js?v=level-editor-import-reference"></script>"#)
+            html.contains(r#"<script src="editor.js?v=level-editor-renderer-assets"></script>"#)
         );
         assert!(html.contains(r#"<script src="editor_import_export.js"></script>"#));
         assert!(html.contains(r#"<script src="editor_dom.js"></script>"#));
@@ -5892,6 +6173,14 @@ levels3 demo of push3 {
     }
 
     #[test]
+    fn tauri_static_editor_includes_renderer_assets() {
+        assert_eq!(EDITOR_STATIC_RENDERER_JS, RENDERER_JS);
+        assert_eq!(EDITOR_STATIC_RENDERER_CSS, RENDERER_CSS);
+        assert!(EDITOR_HTML.contains(r#"<link rel="stylesheet" href="renderer.css">"#));
+        assert!(EDITOR_HTML.contains(r#"<script src="renderer.js"></script>"#));
+    }
+
+    #[test]
     fn sprite3d_editor_resyncs_if_script_loads_after_pane_selection() {
         assert!(EDITOR_SPRITE3D_JS.contains("function syncSprite3dBuilderAfterScriptLoad()"));
         assert!(EDITOR_SPRITE3D_JS.contains("currentPreviewMode === \"sprite3d\""));
@@ -5913,7 +6202,7 @@ levels3 demo of push3 {
             .find(r#"<script src="editor_level3d.js"></script>"#)
             .expect("editor loads 3D level editor");
         let editor = EDITOR_HTML
-            .find(r#"<script src="editor.js?v=level-editor-import-reference"></script>"#)
+            .find(r#"<script src="editor.js?v=level-editor-renderer-assets"></script>"#)
             .expect("editor loads main editor script");
         let import_export = EDITOR_HTML
             .find(r#"<script src="editor_import_export.js"></script>"#)
@@ -5941,14 +6230,13 @@ levels3 demo of push3 {
             EDITOR_HTML
                 .contains(r#"<script src="editor_source.js?v=source-folding-state"></script>"#)
         );
-        assert!(
-            EDITOR_HTML
-                .contains(r#"<script src="editor_workspace.js?v=import-parent-preview"></script>"#)
-        );
+        assert!(EDITOR_HTML.contains(
+            r#"<script src="editor_workspace.js?v=delete-active-source-sync"></script>"#
+        ));
         assert!(EDITOR_HTML.contains(r#"<script src="editor_import_export.js"></script>"#));
         assert!(
             EDITOR_HTML
-                .contains(r#"<script src="editor.js?v=level-editor-import-reference"></script>"#)
+                .contains(r#"<script src="editor.js?v=level-editor-renderer-assets"></script>"#)
         );
         assert!(EDITOR_WORKSPACE_JS.contains("document-tab-unsaved-dot"));
         assert!(EDITOR_WORKSPACE_JS.contains("updateDocumentTabUnsavedStates"));
@@ -6018,6 +6306,68 @@ levels3 demo of push3 {
     }
 
     #[test]
+    fn editor_docs_html_renders_documents_nav() {
+        let html = editor_docs_html();
+        assert!(html.contains("class=\"docs-layout\""));
+        assert!(html.contains("data-docs-article=\"start\""));
+        assert!(html.contains("PuzzleStudio Documents"));
+        assert!(html.contains("class=\"language-puzzle\""));
+        assert!(html.contains("syntax-keyword"));
+    }
+
+    #[test]
+    fn editor_docs_articles_have_mutual_adjacent_links() {
+        let html = editor_docs_html();
+        for (index, pair) in EDITOR_DOCS_PAGES.windows(2).enumerate() {
+            let current = &pair[0];
+            let next = &pair[1];
+            let current_article = editor_docs_article_html(&html, index);
+            let next_article = editor_docs_article_html(&html, index + 1);
+            assert!(
+                current_article.contains(&format!(
+                    "class=\"docs-page-link docs-page-link-next\" type=\"button\" data-docs-page=\"{}\"",
+                    next.id
+                )),
+                "{} should link forward to {}",
+                current.id,
+                next.id
+            );
+            assert!(
+                next_article.contains(&format!(
+                    "class=\"docs-page-link docs-page-link-previous\" type=\"button\" data-docs-page=\"{}\"",
+                    current.id
+                )),
+                "{} should link back to {}",
+                next.id,
+                current.id
+            );
+        }
+    }
+
+    #[cfg(feature = "editor-docs")]
+    fn editor_docs_article_html(html: &str, page_index: usize) -> &str {
+        let page = &EDITOR_DOCS_PAGES[page_index];
+        let start = html
+            .find(&format!("data-docs-article=\"{}\"", page.id))
+            .expect("docs article should be rendered");
+        let end = EDITOR_DOCS_PAGES
+            .get(page_index + 1)
+            .and_then(|next| html[start + 1..].find(&format!("data-docs-article=\"{}\"", next.id)))
+            .map(|offset| start + 1 + offset)
+            .unwrap_or(html.len());
+        &html[start..end]
+    }
+
+    #[test]
+    fn static_editor_loads_desktop_documents_from_host() {
+        assert!(EDITOR_HTML.contains("<!-- PUZZLESTUDIO_EDITOR_DOCS -->"));
+        assert!(EDITOR_BOOT_JS.contains("async editorDocsHtml()"));
+        assert!(EDITOR_BOOT_JS.contains("invoke(\"editor_docs\")"));
+        assert!(EDITOR_JS.contains("function ensureEditorDocsLoaded()"));
+        assert!(EDITOR_JS.contains("window.PuzzleStudioHost.editorDocsHtml()"));
+    }
+
+    #[test]
     fn level3d_temporary_legend_chars_stay_out_of_palette() {
         assert!(
             EDITOR_LEVEL3D_JS.contains("const LEVEL3D_LEGEND_CHAR_CANDIDATES = \"@$%&?!~^:;_+-*/")
@@ -6079,7 +6429,7 @@ levels3 demo of push3 {
             .find("window.PuzzleEditorSeed = JSON.parse")
             .expect("seeded editor should define seed before workspace scripts load");
         let embedded_documents_index = html
-            .find(r#"<script src="editor_workspace.js?v=import-parent-preview"></script>"#)
+            .find(r#"<script src="editor_workspace.js?v=delete-active-source-sync"></script>"#)
             .expect("seeded editor should load workspace code after seed data");
 
         assert!(

@@ -187,6 +187,7 @@ fn lower_programs(
     };
     let display = if let Some(statements) = display_statements {
         let mut context = StatementLoweringContext::default();
+        context.role = RuleRole::Visual;
         context.input_allowed = false;
         context.input_forbidden_context = Some("on_display");
         match lowerer.lower_statements(&statements, &context) {
@@ -338,7 +339,7 @@ fn collect_statement_reference_diagnostics(
                     ));
                 }
             }
-            StatementAst::DisplayBlock(statements) | StatementAst::Block { statements, .. } => {
+            StatementAst::Block { statements, .. } => {
                 collect_statement_reference_diagnostics(
                     statements,
                     definitions_by_name,
@@ -373,7 +374,7 @@ fn collect_statement_reference_diagnostics(
                     diagnostics,
                 );
             }
-            StatementAst::DisplayRewrite(rewrite) | StatementAst::Rewrite(rewrite) => {
+            StatementAst::Rewrite(rewrite) => {
                 if let Some(name) = &rewrite.after_call {
                     if !definitions_by_name.contains_key(name) {
                         diagnostics.push(
@@ -1309,8 +1310,6 @@ impl<'a> ProgramLowerer<'a> {
             } => {
                 self.lower_display_call(name, source_line, *source_line_number, context)
             }
-            StatementAst::DisplayRewrite(rewrite) => self.lower_display_rewrite(rewrite, context),
-            StatementAst::DisplayBlock(statements) => self.lower_display_block(statements, context),
             StatementAst::Conditional {
                 source_line,
                 source_line_number,
@@ -1439,7 +1438,11 @@ impl<'a> ProgramLowerer<'a> {
     ) -> Result<Vec<RuleStep>, DiagnosticReport> {
         let mut nested_context = context.clone();
         if !nested_context.application_fixed {
-            nested_context.application = RuleApplication::UntilStable;
+            nested_context.application = if application == RuleApplication::Random {
+                RuleApplication::Once
+            } else {
+                RuleApplication::UntilStable
+            };
         }
         let steps = self.lower_statements(statements, &nested_context)?;
         Ok(vec![RuleStep::Block {
@@ -1514,7 +1517,11 @@ impl<'a> ProgramLowerer<'a> {
             nested_context.role = RuleRole::Visual;
         }
         nested_context.call_stack.push(name.to_string());
-        nested_context.application = RuleApplication::UntilStable;
+        nested_context.application = if definition.application == RuleApplication::Random {
+            RuleApplication::Once
+        } else {
+            RuleApplication::UntilStable
+        };
         nested_context.application_fixed = false;
         nested_context.orientation = None;
         let steps = self.lower_statements(&definition.statements, &nested_context)?;
@@ -1523,26 +1530,6 @@ impl<'a> ProgramLowerer<'a> {
             stop_condition: None,
             steps,
         }])
-    }
-
-    fn lower_display_block(
-        &mut self,
-        statements: &[StatementAst],
-        context: &StatementLoweringContext,
-    ) -> Result<Vec<RuleStep>, DiagnosticReport> {
-        let mut nested_context = context.clone();
-        nested_context.role = RuleRole::Visual;
-        self.lower_statements(statements, &nested_context)
-    }
-
-    fn lower_display_rewrite(
-        &mut self,
-        rewrite: &OrientedRewriteAst,
-        context: &StatementLoweringContext,
-    ) -> Result<Vec<RuleStep>, DiagnosticReport> {
-        let mut nested_context = context.clone();
-        nested_context.role = RuleRole::Visual;
-        self.lower_rewrite(rewrite, &nested_context)
     }
 
     fn lower_display_call(
@@ -1569,7 +1556,11 @@ impl<'a> ProgramLowerer<'a> {
         let mut nested_context = context.clone();
         nested_context.role = RuleRole::Visual;
         nested_context.call_stack.push(name.to_string());
-        nested_context.application = RuleApplication::UntilStable;
+        nested_context.application = if definition.application == RuleApplication::Random {
+            RuleApplication::Once
+        } else {
+            RuleApplication::UntilStable
+        };
         nested_context.application_fixed = false;
         nested_context.orientation = None;
         let steps = self.lower_statements(&definition.statements, &nested_context)?;

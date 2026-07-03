@@ -5,6 +5,7 @@ export const compile_preview: (a: number, b: number, c: number, d: number, e: nu
 export const generate_visuals_js: (a: number, b: number, c: number, d: number) => [number, number, number, number];
 export const highlight_source_html: (a: number, b: number) => [number, number];
 export const resolve_source_target: (a: number, b: number, c: number) => [number, number];
+export const solve_request_json: (a: number, b: number) => [number, number, number, number];
 export const solve_state: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => [number, number, number, number];
 export const suggest_source_completions: (a: number, b: number, c: number) => [number, number];
 export const translate_puzzlescript: (a: number, b: number) => [number, number, number, number];

@@ -49,6 +49,69 @@ fn object_id_by_label(loaded: &LoadedGame, label: &str) -> ObjectId {
         .unwrap_or_else(|| panic!("expected object `{label}`"))
 }
 
+fn scene_by_name<'a>(loaded: &'a LoadedGame, name: &str) -> &'a puzzle_lang::SceneDef {
+    loaded
+        .scenes
+        .iter()
+        .find(|scene| scene.name == name)
+        .unwrap_or_else(|| panic!("expected scene `{name}`"))
+}
+
+fn assert_imported_output_uses_current_canonical_surface(source: &str) {
+    parse_game(source).expect("imported source should parse");
+
+    assert!(!source.contains('\t'), "generated output must use spaces");
+    for forbidden in [
+        "\nobjects {",
+        "\ncollisionlayers",
+        "\ntransitions {",
+        "\nmain {",
+        "\ninputs {",
+        "\nrule ",
+        "-> effect ",
+        "play_sfx ",
+        "board.next_level",
+        "board.level.has_next",
+        "level imported_",
+    ] {
+        assert!(
+            !source.to_ascii_lowercase().contains(forbidden),
+            "generated output contains non-canonical surface `{forbidden}`:\n{source}"
+        );
+    }
+
+    for line in source.lines() {
+        let trimmed = line.trim_start();
+        let lowercase = trimmed.to_ascii_lowercase();
+        if trimmed.starts_with("message \"") {
+            continue;
+        }
+        assert!(
+            !matches!(
+                lowercase.split_whitespace().next(),
+                Some("objects" | "collisionlayers" | "action" | "emit" | "do" | "random" | "late")
+            ),
+            "generated output leaked non-canonical line: {line}"
+        );
+        for leaked in [
+            " moving ",
+            " stationary ",
+            "{moving}",
+            "{stationary}",
+            "Horizontal [",
+            "Vertical [",
+            "Orthogonal [",
+            "Perpendicular ",
+            "Parallel ",
+        ] {
+            assert!(
+                !line.contains(leaked),
+                "generated output leaked PuzzleScript token `{leaked}` in line: {line}"
+            );
+        }
+    }
+}
+
 #[test]
 fn translates_basic_vanilla_puzzlescript_to_canonical_fixture() {
     let source = include_str!("fixtures/puzzlescript/basic_sokoban.ps");
@@ -87,28 +150,28 @@ fn translated_basic_vanilla_puzzlescript_parses_as_loaded_game() {
 
     assert_eq!(loaded.levels.len(), 1);
     assert_eq!(loaded.levels[0].name, "unnamed level 1");
-    assert_eq!(loaded.scenes[0].name, "title");
-    assert_eq!(loaded.scenes[1].name, "playing");
-    assert!(!loaded.scenes[1].key_bindings.is_empty());
+    let title_scene = scene_by_name(&loaded, "title");
+    let playing_scene = scene_by_name(&loaded, "playing");
+    assert!(!playing_scene.key_bindings.is_empty());
     assert!(
-        loaded.scenes[0]
+        title_scene
             .components
             .iter()
             .any(|component| matches!(component, SceneComponent::Choice(_)))
     );
-    let continue_button = find_choice_by_label(&loaded.scenes[0].components, "Continue")
+    let continue_button = find_choice_by_label(&title_scene.components, "Continue")
         .expect("expected title continue choice");
     assert_eq!(
         continue_button.effect,
         SceneEffect::Input("continue_game".to_string())
     );
-    let new_game_button = find_choice_by_label(&loaded.scenes[0].components, "New Game")
+    let new_game_button = find_choice_by_label(&title_scene.components, "New Game")
         .expect("expected title new game choice");
     assert_eq!(
         new_game_button.effect,
         SceneEffect::Input("new_game".to_string())
     );
-    assert!(loaded.scenes[1].components.iter().any(|component| matches!(
+    assert!(playing_scene.components.iter().any(|component| matches!(
         component,
         SceneComponent::Frame(frame) if frame.kind == "puzzle" && frame.source == "board"
     )));
@@ -419,17 +482,18 @@ P
     ));
 
     let loaded = parse_game(&translated).unwrap();
-    let button = find_choice_by_label(&loaded.scenes[0].components, "Continue")
+    let title_scene = scene_by_name(&loaded, "title");
+    let button = find_choice_by_label(&title_scene.components, "Continue")
         .expect("expected title continue choice");
     assert_eq!(
         button.effect,
         SceneEffect::Input("continue_game".to_string())
     );
     assert_eq!(
-        loaded.scenes[0].key_bindings[0].effect,
+        title_scene.key_bindings[0].effect,
         SceneEffect::RoutineCall("continue_game".to_string())
     );
-    assert!(loaded.scenes[0].routines.iter().any(|routine| {
+    assert!(title_scene.routines.iter().any(|routine| {
         matches!(
             &routine.effect,
             SceneEffect::Sequence(effects)
@@ -442,7 +506,7 @@ P
                 )
         )
     }));
-    assert!(loaded.scenes[0].routines.iter().any(|routine| {
+    assert!(title_scene.routines.iter().any(|routine| {
         matches!(
             &routine.effect,
             SceneEffect::Sequence(effects)
@@ -828,6 +892,62 @@ fn translates_official_simple_block_sliding_with_groups_and_again_effects() {
     let down = input_named(&loaded, "down");
     let moved = transition_state(&loaded.game, &loaded.levels[0].initial_state, down).unwrap();
     assert_ne!(moved, loaded.levels[0].initial_state);
+}
+
+#[test]
+fn imports_supported_official_gallery_samples_as_current_canonical_syntax() {
+    for (name, source) in [
+        (
+            "2d_whale_world",
+            include_str!("fixtures/puzzlescript/gallery/2d_whale_world.ps"),
+        ),
+        (
+            "icecrates",
+            include_str!("fixtures/puzzlescript/gallery/icecrates.ps"),
+        ),
+        (
+            "lime_rick",
+            include_str!("fixtures/puzzlescript/gallery/lime_rick.ps"),
+        ),
+        (
+            "mad_queens",
+            include_str!("fixtures/puzzlescript/gallery/mad_queens.ps"),
+        ),
+        (
+            "microban",
+            include_str!("fixtures/puzzlescript/gallery/microban.ps"),
+        ),
+        (
+            "midas",
+            include_str!("fixtures/puzzlescript/gallery/midas.ps"),
+        ),
+        (
+            "quantum_rails",
+            include_str!("fixtures/puzzlescript/gallery/quantum_rails.ps"),
+        ),
+        (
+            "transition",
+            include_str!("fixtures/puzzlescript/gallery/transition.ps"),
+        ),
+    ] {
+        let translated = translate_puzzlescript_to_canonical(source)
+            .unwrap_or_else(|err| panic!("{name} should translate: {err}"));
+        assert_imported_output_uses_current_canonical_surface(&translated);
+    }
+}
+
+#[test]
+fn puzzlescript_random_rules_fail_at_import_boundary() {
+    let source = include_str!("fixtures/puzzlescript/gallery/collapse.ps");
+
+    let error = translate_puzzlescript_to_canonical(source)
+        .expect_err("collapse uses random rules and should be rejected")
+        .to_string();
+
+    assert!(
+        error.contains("PuzzleScript random rules are not supported by this importer"),
+        "{error}"
+    );
 }
 
 #[test]

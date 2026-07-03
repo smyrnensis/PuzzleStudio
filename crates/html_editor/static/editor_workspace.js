@@ -953,8 +953,10 @@ function storeTree(node) {
   };
 }
 
-function saveDocumentStore(showStatus = true) {
-  persistCurrentDocument();
+function saveDocumentStore(showStatus = true, options = {}) {
+  if (options.persistCurrent !== false) {
+    persistCurrentDocument();
+  }
   try {
     window.localStorage.setItem(documentStoreKey, JSON.stringify({
       version: 1,
@@ -2456,7 +2458,7 @@ async function commitDraftEntry(rawName) {
   saveDocumentStore(false);
 }
 
-function moveNodeToFolder(nodeId, targetFolderId) {
+async function moveNodeToFolder(nodeId, targetFolderId) {
   if (!nodeId) {
     return false;
   }
@@ -2475,8 +2477,43 @@ function moveNodeToFolder(nodeId, targetFolderId) {
     return false;
   }
 
+  persistCurrentDocument();
+  const sourceWorkspaceRoot = workspaceRootForNode(source.node);
+  const targetWorkspaceRoot = targetFolder === fileTree
+    ? sourceWorkspaceRoot
+    : workspaceRootForFolder(targetFolder);
+  if (sourceWorkspaceRoot && targetWorkspaceRoot && sourceWorkspaceRoot !== targetWorkspaceRoot) {
+    throw new Error("Cannot move entries between workspaces.");
+  }
+  const sourcePath = source.node.kind === "folder"
+    ? folderPath(source.node)
+    : source.node.puzzlePath;
+  const targetPath = joinPath(folderPath(targetFolder), source.node.name || "item");
+  if (!sourcePath || !targetPath) {
+    throw new Error("Cannot move an entry without a workspace path.");
+  }
+  if (!editorSeed && isDesktopHost()) {
+    if (typeof window.PuzzleStudioHost.renameWorkspaceEntry !== "function") {
+      throw new Error("Desktop workspace move requires the host rename command.");
+    }
+    beginWorkspaceHostMutation();
+    try {
+      await window.PuzzleStudioHost.renameWorkspaceEntry({
+        fromPath: hostPathForEditorPath(sourcePath, sourceWorkspaceRoot),
+        toPath: hostPathForEditorPath(targetPath, sourceWorkspaceRoot),
+        workspaceRoot: sourceWorkspaceRoot,
+      });
+    } finally {
+      endWorkspaceHostMutation();
+    }
+  }
+
   source.parent.children = source.parent.children.filter((child) => child.id !== nodeId);
-  source.node.name = uniqueChildName(targetFolder, source.node.name || "item");
+  if (!editorSeed && isDesktopHost()) {
+    source.node.name = source.node.name || "item";
+  } else {
+    source.node.name = uniqueChildName(targetFolder, source.node.name || "item");
+  }
   targetFolder.children.push(source.node);
   targetFolder.expanded = true;
   selectedFolderId = targetFolder.id;
@@ -2515,6 +2552,13 @@ function canDropNodeOnFolder(nodeId, targetFolderId) {
     return false;
   }
   if (source.node.isWorkspaceRoot || targetFolder.isWorkspaceRoot && source.node.workspaceRoot && source.node.workspaceRoot !== targetFolder.workspaceRoot) {
+    return false;
+  }
+  const sourceWorkspaceRoot = workspaceRootForNode(source.node);
+  const targetWorkspaceRoot = targetFolder === fileTree
+    ? sourceWorkspaceRoot
+    : workspaceRootForFolder(targetFolder);
+  if (sourceWorkspaceRoot && targetWorkspaceRoot && sourceWorkspaceRoot !== targetWorkspaceRoot) {
     return false;
   }
   if (source.node.kind === "folder" && containsNode(source.node, targetFolder.id)) {
@@ -2684,7 +2728,6 @@ async function deleteTreeNode(nodeId) {
   }
   selectedTreeId = activeFileId;
   currentDocumentIndex = activeDocumentIndex();
-  saveDocumentStore(false);
   if (!activeFileId) {
     selectedTreeId = target.parent === fileTree ? "" : target.parent.id;
     selectedFolderId = selectedTreeId;
@@ -2697,10 +2740,12 @@ async function deleteTreeNode(nodeId) {
     previewExport = null;
     setPreviewFrameHtml(emptyPreviewDocument());
     resetPreviewLog("No puzzle selected");
+    saveDocumentStore(false);
     setEditorStatus("Deleted", "is-ok");
     return;
   }
   loadEmbeddedDocument(currentDocumentIndex);
+  saveDocumentStore(false, { persistCurrent: false });
   setEditorStatus("Deleted", "is-ok");
 }
 
@@ -2731,11 +2776,12 @@ async function removeWorkspaceNode(nodeId) {
   selectedTreeId = activeFileId || "";
   selectedFolderId = activeFileId ? findParentFolder(fileTree, activeFileId)?.id || "" : "";
   currentDocumentIndex = activeDocumentIndex();
-  saveDocumentStore(false);
   if (activeFileId) {
     loadEmbeddedDocument(currentDocumentIndex);
+    saveDocumentStore(false, { persistCurrent: false });
   } else {
     resetEditorForNoOpenProject({ status: "Closed workspace", statusClass: "is-ok" });
+    saveDocumentStore(false, { persistCurrent: false });
   }
   if (activeFileId) {
     setEditorStatus("Closed workspace", "is-ok");

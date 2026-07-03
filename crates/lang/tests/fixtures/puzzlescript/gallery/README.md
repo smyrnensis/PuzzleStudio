@@ -14,3 +14,4 @@ Retrieved on 2026-06-29 via the official player loader endpoint `https://ded.inc
 | `collapse.ps` | Collapse | Terry Cavanagh | https://www.puzzlescript.net/play.html?p=11358856 |
 | `mad_queens.ps` | Mad Queens | Chris Pickel | https://www.puzzlescript.net/play.html?p=8ba10d6a0a5a0edd640e0b9431858259 |
 | `quantum_rails.ps` | Quantum Rails | crb233 | https://www.puzzlescript.net/play.html?p=e614e414e570294e45533109426245d4 |
+| `transition.ps` | Transition | NinaBirb | https://www.puzzlescript.net/play.html?p=95dc770efe45854e528fa80a48eeca0a |

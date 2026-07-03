@@ -1160,7 +1160,7 @@ fn parse_puzzle_definition(
             "display" => {
                 diagnostics.extend(parse_error(
                     line,
-                    "display blocks are not supported; use `display <rule>` inside transitions, on_level_start, or on_level_clear",
+                    "`display ...` syntax was removed; use @ display objects and @routine calls",
                 ).into_diagnostics());
                 i = recover_after_directive_error(lines, i);
             }
@@ -2628,26 +2628,6 @@ fn looks_like_condition_expr(expr: &str) -> bool {
             .any(|token| matches!(token, "and" | "or"))
 }
 
-fn display_object_spec<'a>(
-    tokens: &[&'a str],
-    index: &mut usize,
-    line: &str,
-) -> Result<Option<&'a str>, DiagnosticReport> {
-    if tokens.get(*index).copied() != Some("display") {
-        return Ok(None);
-    }
-    *index += 1;
-    let spec = tokens
-        .get(*index)
-        .copied()
-        .ok_or_else(|| parse_error(line, "`display` must be followed by a display object"))?;
-    if !is_display_role_token(spec) {
-        return Err(parse_error(line, "display object must use an @ name"));
-    }
-    *index += 1;
-    Ok(Some(spec))
-}
-
 fn is_display_role_token(token: &str) -> bool {
     puzzle_authoring::is_display_object_token(token)
 }
@@ -2923,11 +2903,6 @@ fn define_or_assign_terms_to_layer(
     let mut objects = Vec::new();
     let mut i = 0;
     while i < terms.len() {
-        if let Some(term) = display_object_spec(terms, &mut i, line)? {
-            let declared = parse_layer_term(term, line, layer, true, catalog)?;
-            push_terms(&mut objects, &declared);
-            continue;
-        }
         let term = terms[i];
         let declared = parse_layer_term(term, line, layer, visual, catalog)?;
         push_terms(&mut objects, &declared);
@@ -3364,9 +3339,7 @@ fn collect_implicit_inputs_from_statements(
 ) {
     for statement in statements {
         match statement {
-            StatementAst::DisplayBlock(statements)
-            | StatementAst::Block { statements, .. }
-            | StatementAst::Fix { statements, .. } => {
+            StatementAst::Block { statements, .. } | StatementAst::Fix { statements, .. } => {
                 collect_implicit_inputs_from_statements(statements, names);
             }
             StatementAst::RepeatUntil {
@@ -3397,7 +3370,6 @@ fn collect_implicit_inputs_from_statements(
             }
             StatementAst::Call { .. }
             | StatementAst::DisplayCall { .. }
-            | StatementAst::DisplayRewrite(_)
             | StatementAst::Effect { .. }
             | StatementAst::Rewrite(_) => {}
         }
@@ -10077,20 +10049,15 @@ fn parse_rule_definition(
 ) -> Result<(RuleDefinitionAst, usize), DiagnosticReport> {
     let header = split_header_tokens(&lines[start]);
     let declaration = header.first().copied().unwrap_or("routine");
-    let role = if header.get(1).copied() == Some("display")
-        || header
-            .get(1)
-            .is_some_and(|name| is_display_role_token(name))
+    let role = if header
+        .get(1)
+        .is_some_and(|name| is_display_role_token(name))
     {
         RuleRole::Visual
     } else {
         RuleRole::Main
     };
-    let name_index = if header.get(1).copied() == Some("display") {
-        2
-    } else {
-        1
-    };
+    let name_index = 1;
     let name_spec = expect(
         header.get(name_index),
         &lines[start],
@@ -10288,16 +10255,10 @@ fn parse_rule_application(
 ) -> Result<RuleApplication, DiagnosticReport> {
     match (role, tokens) {
         (RuleRole::Main, [kind, _]) if *kind == declaration => Ok(RuleApplication::Once),
-        (RuleRole::Visual, [kind, "display", _]) if *kind == declaration => {
-            Ok(RuleApplication::Once)
-        }
         (RuleRole::Visual, [kind, name]) if *kind == declaration && is_display_role_token(name) => {
             Ok(RuleApplication::Once)
         }
         (RuleRole::Main, [kind, _, application]) if *kind == declaration => {
-            parse_application_keyword(application, line)
-        }
-        (RuleRole::Visual, [kind, "display", _, application]) if *kind == declaration => {
             parse_application_keyword(application, line)
         }
         (RuleRole::Visual, [kind, name, application])
@@ -10307,7 +10268,7 @@ fn parse_rule_application(
         }
         _ => Err(parse_error(
             line,
-            "routine header must be: routine [display] <name> [once | once_all | once_per_level | repeat]",
+            "routine header must be: routine <name> [once | once_all | once_per_level | random | repeat]",
         )),
     }
 }
@@ -10317,10 +10278,11 @@ fn parse_application_keyword(token: &str, line: &str) -> Result<RuleApplication,
         "once" => Ok(RuleApplication::Once),
         "once_all" => Ok(RuleApplication::OnceAll),
         "once_per_level" => Ok(RuleApplication::OncePerLevel),
+        "random" => Ok(RuleApplication::Random),
         "repeat" => Ok(RuleApplication::UntilStable),
         _ => Err(parse_error(
             line,
-            "application must be one of: once, once_all, once_per_level, repeat",
+            "application must be one of: once, once_all, once_per_level, random, repeat",
         )),
     }
 }
@@ -10333,14 +10295,14 @@ fn parse_fix_defaults(
     if tokens.len() < 2 {
         return Err(parse_error(
             line,
-            "fix block must be: fix <once | repeat | orientation...>",
+            "fix block must be: fix <once | random | repeat | orientation...>",
         ));
     }
 
     let mut defaults = FixDefaults::default();
     for token in &tokens[1..] {
         match *token {
-            "once" | "once_all" | "once_per_level" | "repeat" => {
+            "once" | "once_all" | "once_per_level" | "random" | "repeat" => {
                 let application = parse_application_keyword(token, line)?;
                 if defaults.application.replace(application).is_some() {
                     return Err(parse_error(line, "fix can specify application only once"));
@@ -11151,7 +11113,7 @@ fn is_rewrite_application_prefix(token: &str) -> bool {
 fn is_non_rewrite_statement_prefix(token: &str) -> bool {
     matches!(
         token,
-        "for" | "fix" | "if" | "else" | "when" | "action" | "emit" | "do" | "display"
+        "for" | "fix" | "if" | "else" | "when" | "action" | "emit" | "do"
     )
 }
 
@@ -11917,6 +11879,51 @@ fn parse_statement_block(
                     i = next_statement_i;
                 }
             }
+            Some("random") => {
+                if tokens.len() == 1 {
+                    let (nested, next_i) = recover_current_statement!(parse_statement_block(
+                        lines,
+                        line_numbers,
+                        i + 1,
+                        &[BLOCK_CLOSE],
+                        object_names,
+                        object_schemas,
+                        value_sets,
+                        maps,
+                        object_groups,
+                        input_names,
+                        global_names,
+                        numeric_globals,
+                        condition_names,
+                        named_conditions,
+                        rule_params,
+                    ));
+                    statements.push(StatementAst::Block {
+                        application: RuleApplication::Random,
+                        statements: nested,
+                    });
+                    i = next_i;
+                } else {
+                    match parse_application_prefixed_rewrite_statement(
+                        line,
+                        "random",
+                        RuleApplication::Random,
+                        rule_params,
+                        object_names,
+                        object_schemas,
+                        value_sets,
+                        maps,
+                        object_groups,
+                        global_names,
+                    ) {
+                        Ok(rewrite) => statements.push(StatementAst::Rewrite(
+                            rewrite_with_source_line_number(rewrite, source_line_number),
+                        )),
+                        Err(report) => diagnostics.extend(report.into_diagnostics()),
+                    }
+                    i = next_statement_i;
+                }
+            }
             Some("repeat") => {
                 if tokens.len() == 1 {
                     let (nested, next_i) = recover_current_statement!(parse_statement_block(
@@ -12058,7 +12065,7 @@ fn parse_statement_block(
             }
             Some("display") => {
                 if tokens.len() == 1 {
-                    let (nested, next_i) = recover_current_statement!(parse_statement_block(
+                    let (_, next_i) = recover_current_statement!(parse_statement_block(
                         lines,
                         line_numbers,
                         i + 1,
@@ -12075,23 +12082,16 @@ fn parse_statement_block(
                         named_conditions,
                         rule_params,
                     ));
-                    statements.push(StatementAst::DisplayBlock(nested));
+                    diagnostics.extend(parse_error(
+                        line,
+                        "`display ...` syntax was removed; use @routine calls or bare display rewrites",
+                    ).into_diagnostics());
                     i = next_i;
                 } else {
-                    match parse_display_statement(
+                    diagnostics.extend(parse_error(
                         line,
-                        source_line_number,
-                        rule_params,
-                        object_names,
-                        object_schemas,
-                        value_sets,
-                        maps,
-                        object_groups,
-                        global_names,
-                    ) {
-                        Ok(statement) => statements.push(statement),
-                        Err(report) => diagnostics.extend(report.into_diagnostics()),
-                    }
+                        "`display ...` syntax was removed; use @routine calls or bare display rewrites",
+                    ).into_diagnostics());
                     i += 1;
                 }
             }
@@ -12222,130 +12222,11 @@ fn rewrite_with_source_line_number(
     rewrite
 }
 
-#[allow(clippy::too_many_arguments)]
-fn parse_display_statement(
-    line: &str,
-    source_line_number: Option<usize>,
-    rule_params: &[String],
-    object_names: &HashMap<String, ObjectId>,
-    object_schemas: &HashMap<String, ObjectSchema>,
-    value_sets: &HashMap<String, Vec<String>>,
-    maps: &HashMap<String, ValueMap>,
-    object_groups: &HashMap<String, Vec<ObjectId>>,
-    global_names: &HashMap<String, GlobalId>,
-) -> Result<StatementAst, DiagnosticReport> {
-    let rest = line
-        .strip_prefix("display")
-        .ok_or_else(|| parse_error(line, "display statement must start with display"))?
-        .trim_start();
-    if rest.is_empty() {
-        return Err(parse_error(
-            line,
-            "display statement must be: display <rule> or display <rewrite>",
-        ));
-    }
-
-    let tokens = split_header_tokens(rest);
-    if tokens.len() == 1 && (is_qualified_identifier(tokens[0]) || is_display_role_token(tokens[0]))
-    {
-        return Ok(StatementAst::DisplayCall {
-            name: tokens[0].to_string(),
-            source_line: line.to_string(),
-            source_line_number,
-        });
-    }
-
-    let rewrite = match tokens.first().copied() {
-        Some("once") => parse_application_prefixed_rewrite_statement(
-            rest,
-            "once",
-            RuleApplication::Once,
-            rule_params,
-            object_names,
-            object_schemas,
-            value_sets,
-            maps,
-            object_groups,
-            &HashMap::new(),
-        )?,
-        Some("once_all") => parse_application_prefixed_rewrite_statement(
-            rest,
-            "once_all",
-            RuleApplication::OnceAll,
-            rule_params,
-            object_names,
-            object_schemas,
-            value_sets,
-            maps,
-            object_groups,
-            &HashMap::new(),
-        )?,
-        Some("once_per_level") => parse_application_prefixed_rewrite_statement(
-            rest,
-            "once_per_level",
-            RuleApplication::OncePerLevel,
-            rule_params,
-            object_names,
-            object_schemas,
-            value_sets,
-            maps,
-            object_groups,
-            &HashMap::new(),
-        )?,
-        Some("repeat") => parse_application_prefixed_rewrite_statement(
-            rest,
-            "repeat",
-            RuleApplication::UntilStable,
-            rule_params,
-            object_names,
-            object_schemas,
-            value_sets,
-            maps,
-            object_groups,
-            global_names,
-        )?,
-        Some(first) if is_oriented_rewrite_line(rest, first) => parse_oriented_rewrite_statement(
-            rest,
-            first,
-            None,
-            rule_params,
-            object_names,
-            object_schemas,
-            value_sets,
-            maps,
-            object_groups,
-            global_names,
-        )?,
-        Some(_) if rest.starts_with('[') => parse_neutral_rewrite_statement(
-            rest,
-            None,
-            object_names,
-            object_schemas,
-            value_sets,
-            maps,
-            object_groups,
-            global_names,
-        )?,
-        Some(other) => {
-            return Err(parse_error(
-                line,
-                &format!("unknown display statement directive {other}"),
-            ));
-        }
-        None => unreachable!("empty display statement already rejected"),
-    };
-
-    Ok(StatementAst::DisplayRewrite(
-        rewrite_with_source_line_number(rewrite, source_line_number),
-    ))
-}
-
 fn validate_display_hook_statements(statements: &[StatementAst]) -> Result<(), DiagnosticReport> {
     for statement in statements {
         match statement {
             StatementAst::DisplayCall { .. }
-            | StatementAst::DisplayRewrite(_)
-            | StatementAst::DisplayBlock(_) => {}
+            | StatementAst::Rewrite(_) => {}
             StatementAst::Conditional {
                 then_statements,
                 else_statements,
@@ -12371,7 +12252,7 @@ fn validate_display_hook_statements(statements: &[StatementAst]) -> Result<(), D
                 validate_display_hook_statements(then_statements)?;
                 validate_display_hook_statements(else_statements)?;
             }
-            StatementAst::Call { .. } | StatementAst::Effect { .. } | StatementAst::Rewrite(_) => {
+            StatementAst::Call { .. } | StatementAst::Effect { .. } => {
                 return Err(DiagnosticReport::error(
                     "on_display can only contain display statements".to_string(),
                 ));
@@ -12780,6 +12661,7 @@ fn rule_application_from_surface(
         puzzle_authoring::RuleApplicationSurface::Once => RuleApplication::Once,
         puzzle_authoring::RuleApplicationSurface::OnceAll => RuleApplication::OnceAll,
         puzzle_authoring::RuleApplicationSurface::OncePerLevel => RuleApplication::OncePerLevel,
+        puzzle_authoring::RuleApplicationSurface::Random => RuleApplication::Random,
         puzzle_authoring::RuleApplicationSurface::Repeat => RuleApplication::UntilStable,
     }
 }

@@ -40,8 +40,6 @@ pub(crate) enum StatementAst {
         source_line: String,
         source_line_number: Option<usize>,
     },
-    DisplayRewrite(OrientedRewriteAst),
-    DisplayBlock(Vec<StatementAst>),
     Conditional {
         source_line: String,
         source_line_number: Option<usize>,

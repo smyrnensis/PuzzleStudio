@@ -158,7 +158,6 @@ pub(crate) const PARSER_KEYWORDS: &[&str] = &[
     "css",
     "direction",
     "default_wait_time",
-    "display",
     "effect",
     "each",
     "else",
