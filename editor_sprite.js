@@ -2,6 +2,11 @@ let spriteActionClearTimer = 0;
 let spriteBucketActive = false;
 let spriteBrushPreset = "pixel";
 let spriteLastPaintColorIndex = 0;
+let spriteClipActive = false;
+let spriteClipSelection = null;
+let spriteClipDrag = null;
+let spriteClipClipboard = null;
+let spriteClipFloating = null;
 const spriteColorEditSessions = {
   sprite: null,
   sprite3d: null,
@@ -72,8 +77,14 @@ function syncSpriteBucketButton() {
 }
 
 function toggleSpriteBucketMode() {
+  const wasClipActive = spriteClipActive || spriteClipSelection;
+  deactivateSpriteClipMode({ render: false });
   spriteBucketActive = !spriteBucketActive;
   syncSpritePaintToolControls();
+  renderSpritePalette();
+  if (wasClipActive) {
+    renderSpriteBoard();
+  }
   setSpriteActionStatus(
     spriteBucketActive ? "Bucket: click a connected area" : spritePaintToolStatusText(),
     "is-ok",
@@ -92,7 +103,7 @@ function syncSpriteMarkerButton() {
   spriteBrushPreset = normalizeSpriteBrushPreset(spriteBrushPreset);
   for (const button of spriteBrushPresetButtons()) {
     const preset = normalizeSpriteBrushPreset(button.dataset.spriteBrushPreset);
-    const selected = preset === spriteBrushPreset;
+    const selected = !spriteBucketActive && !spriteClipActive && preset === spriteBrushPreset;
     const label = spriteBrushPresetLabel(preset);
     button.classList.toggle("is-active", selected);
     button.setAttribute("aria-pressed", String(selected));
@@ -102,13 +113,21 @@ function syncSpriteMarkerButton() {
 }
 
 function selectSpriteBrushPreset(preset) {
+  const wasBucketActive = spriteBucketActive;
+  const wasClipActive = spriteClipActive || spriteClipSelection;
   spriteBrushPreset = normalizeSpriteBrushPreset(preset);
   spriteBucketActive = false;
+  deactivateSpriteClipMode({ render: false });
   if (!validSpriteColorIndex(sprite.selectedColorIndex)) {
     sprite.selectedColorIndex = validSpriteColorIndex(spriteLastPaintColorIndex) ? spriteLastPaintColorIndex : 0;
-    renderSpritePalette();
   }
   syncSpritePaintToolControls();
+  if (wasBucketActive || wasClipActive) {
+    renderSpritePalette();
+  }
+  if (wasClipActive) {
+    renderSpriteBoard();
+  }
   setSpriteActionStatus(spritePaintToolStatusText(), "is-ok");
 }
 
@@ -152,78 +171,12 @@ function discardSpriteColorEditHistory(kind) {
 }
 
 function renderSpriteColorAdjuster({ color, ariaLabel, onChange }) {
-  const editor = document.createElement("span");
-  editor.className = "sprite-color-adjuster";
-
-  const valueRow = document.createElement("span");
-  valueRow.className = "sprite-color-value-row";
-  const colorInput = document.createElement("input");
-  colorInput.type = "color";
-  colorInput.className = "sprite-native-color-input";
-  colorInput.setAttribute("aria-label", ariaLabel);
-  colorInput.title = "Open system color picker";
-  const previewSwatch = document.createElement("span");
-  previewSwatch.className = "sprite-color-preview-swatch sprite-color-swatch";
-  previewSwatch.setAttribute("aria-hidden", "true");
-
-  const alphaWrap = document.createElement("label");
-  alphaWrap.className = "sprite-current-alpha-control";
-  const alphaInput = document.createElement("input");
-  alphaInput.type = "range";
-  alphaInput.min = "0";
-  alphaInput.max = "100";
-  alphaInput.setAttribute("aria-label", `${ariaLabel} alpha`);
-  const numberWrap = document.createElement("span");
-  numberWrap.className = "sprite-color-numbers";
-  const numberInputs = {};
-  for (const [key, label, max] of [
-    ["a", "A", 100],
-  ]) {
-    const wrap = document.createElement("label");
-    wrap.className = "sprite-color-number";
-    const text = document.createElement("span");
-    text.textContent = label;
-    const input = document.createElement("input");
-    input.type = "number";
-    input.min = "0";
-    input.max = String(max);
-    input.inputMode = "numeric";
-    input.setAttribute("aria-label", `${ariaLabel} ${label}`);
-    numberInputs[key] = input;
-    wrap.append(text, input);
-    numberWrap.append(wrap);
-  }
-  valueRow.append(colorInput, previewSwatch, numberWrap);
-
-  const clampNumber = (value, min, max) => Math.max(min, Math.min(max, Math.round(Number(value) || 0)));
-  const syncUi = (nextColor) => {
-    const normalized = normalizeSpriteColor(nextColor);
-    colorInput.value = spriteRgbHex(normalized);
-    alphaInput.value = String(spriteAlphaPercent(normalized));
-    numberInputs.a.value = String(spriteAlphaPercent(normalized));
-    editor.style.setProperty("--sprite-alpha-color", spriteRgbHex(normalized));
-    previewSwatch.style.setProperty("--sprite-swatch-color", normalized);
-  };
-  const sync = (nextColor = color) => {
-    syncUi(nextColor);
-  };
-  const emit = () => {
-    const next = spriteColorWithAlpha(colorInput.value, alphaInput.value);
-    syncUi(next);
-    onChange(next);
-  };
-  colorInput.addEventListener("input", emit);
-  colorInput.addEventListener("change", emit);
-  numberInputs.a.addEventListener("input", () => {
-    alphaInput.value = String(clampNumber(numberInputs.a.value, 0, 100));
-    emit();
+  const editor = window.PuzzleStudioColorEditor.create({
+    color,
+    ariaLabel,
+    className: "sprite-color-adjuster",
+    onInput: onChange,
   });
-  alphaInput.addEventListener("input", emit);
-  alphaInput.addEventListener("change", emit);
-  alphaWrap.append(alphaInput);
-  editor.append(valueRow, alphaWrap);
-  editor.syncColor = sync;
-  sync(color);
   return editor;
 }
 
@@ -235,6 +188,7 @@ function renderSpritePalette() {
     currentWrap.className = "sprite-current-color-wrap";
     const selected = selectedIsTransparent ? { color: "#00000000" } : sprite.palette[sprite.selectedColorIndex];
     const selectedBind = selectedIsTransparent ? { available: false, linked: false, label: "" } : spritePaletteEntryBindInfo(selected);
+    const selectedDisplayName = selectedIsTransparent ? "" : spritePaletteEntryDisplayName(selected);
     const currentButton = document.createElement("button");
     currentButton.type = "button";
     currentButton.className = "sprite-current-color-button";
@@ -244,10 +198,12 @@ function renderSpritePalette() {
     currentButton.style.setProperty("--sprite-current-color", normalizeSpriteColor(selected.color));
     currentButton.title = selectedIsTransparent
       ? "Transparent eraser cannot be edited"
-      : selectedBind.available ? `Pick selected color (${selectedBind.label})` : "Pick selected color";
+      : selectedDisplayName ? `Pick selected color ${selectedDisplayName}` : selectedBind.available ? `Pick selected color (${selectedBind.label})` : "Pick selected color";
     currentButton.setAttribute(
       "aria-label",
-      selectedIsTransparent ? "Selected transparent eraser color #00000000, not editable" : `Pick selected color ${selected.color}`,
+      selectedIsTransparent
+        ? "Selected transparent eraser color #00000000, not editable"
+        : selectedDisplayName ? `Pick selected color ${selectedDisplayName}` : `Pick selected color ${selected.color}`,
     );
     currentButton.setAttribute("aria-disabled", String(selectedIsTransparent));
     currentButton.setAttribute("aria-expanded", String(!selectedIsTransparent && sprite.editPaletteOpen));
@@ -277,10 +233,11 @@ function renderSpritePalette() {
     const currentHexInput = document.createElement("input");
     currentHexInput.type = "text";
     currentHexInput.className = "sprite-current-value-input sprite-current-hex-input";
-    currentHexInput.value = selectedIsTransparent
+    currentHexInput.value = selectedDisplayName || (selectedIsTransparent
       ? "#00000000"
-      : normalizeSpriteColor(selected.color);
-    currentHexInput.placeholder = "#rrggbbaa";
+      : normalizeSpriteColor(selected.color));
+    currentHexInput.classList.toggle("is-name-mode", Boolean(selectedDisplayName));
+    currentHexInput.placeholder = selectedDisplayName ? "color_name" : "#rrggbbaa";
     currentHexInput.spellcheck = false;
     currentHexInput.autocomplete = "off";
     currentHexInput.readOnly = selectedIsTransparent;
@@ -288,7 +245,7 @@ function renderSpritePalette() {
       "aria-label",
       selectedIsTransparent
         ? "Transparent color code"
-        : "Selected color code",
+        : selectedDisplayName ? "Selected color tag" : "Selected color code",
     );
     const currentTagButton = selectedIsTransparent ? null : renderSpriteCurrentColorTagButton(selected);
     const currentTagUnlinkButton = !selectedIsTransparent && selectedBind.linked && selectedBind.name
@@ -302,12 +259,19 @@ function renderSpritePalette() {
       selected.color = normalized;
       updateSpriteBoundColorDefinition(selected, normalized);
       currentButton.style.setProperty("--sprite-current-color", normalized);
-      currentButton.setAttribute("aria-label", `Pick selected color ${normalized}`);
-      currentHexInput.value = normalized;
+      currentButton.setAttribute("aria-label", selectedDisplayName ? `Pick selected color ${selectedDisplayName}` : `Pick selected color ${normalized}`);
+      currentHexInput.value = selectedDisplayName || normalized;
       renderSpriteColorSurfaces();
     };
     let pendingEditMenu = null;
     const applyCurrentHex = (options = {}) => {
+      if (currentHexInput.classList.contains("is-name-mode")) {
+        const ok = applyCurrentColorName(sprite.selectedColorIndex, currentHexInput.value, { reportError: true });
+        if (ok && options.commitHistory) {
+          commitSpriteColorEditHistory("sprite");
+        }
+        return;
+      }
       const parsed = parseSpriteHexColor(currentHexInput.value);
       if (!parsed) {
         if (options.reportError) {
@@ -334,7 +298,9 @@ function renderSpritePalette() {
         renderSpritePalette();
       });
       currentHexInput.addEventListener("input", () => {
-        applyCurrentHex();
+        if (!currentHexInput.classList.contains("is-name-mode")) {
+          applyCurrentHex();
+        }
       });
       currentHexInput.addEventListener("change", () => applyCurrentHex({ reportError: true, commitHistory: true }));
       currentHexInput.addEventListener("keydown", (event) => {
@@ -427,6 +393,49 @@ function renderSpritePalette() {
     selectSpriteColor(null);
   });
   paintToolRow.append(eraseButton);
+
+  const clipActions = document.createElement("span");
+  clipActions.className = "sprite-clip-actions";
+  clipActions.append(
+    renderSpriteClipButton({
+      title: spriteClipActive ? "Exit clip mode" : "Clip",
+      ariaLabel: "Clip sprite area",
+      active: spriteClipActive,
+      onClick: toggleSpriteClipMode,
+      icon: spriteLucideIconSvg("mouse-pointer-2"),
+    }),
+    renderSpriteClipButton({
+      title: "Copy clip",
+      ariaLabel: "Copy selected sprite area",
+      disabled: !spriteClipSelection,
+      onClick: copySpriteClipSelection,
+      icon: spriteLucideIconSvg("copy"),
+    }),
+    renderSpriteClipButton({
+      title: "Cut clip",
+      ariaLabel: "Cut selected sprite area",
+      disabled: !spriteClipSelection,
+      onClick: cutSpriteClipSelection,
+      icon: spriteLucideIconSvg("scissors"),
+    }),
+    renderSpriteClipButton({
+      title: "Paste clip",
+      ariaLabel: "Paste copied sprite area",
+      disabled: !spriteClipClipboard,
+      onClick: pasteSpriteClipClipboard,
+      icon: spriteLucideIconSvg("clipboard-paste"),
+    }),
+    renderSpriteClipButton({
+      title: "Clear clip",
+      ariaLabel: "Clear selected sprite area",
+      disabled: !spriteClipSelection,
+      danger: true,
+      onClick: clearSpriteClipSelection,
+      icon: spriteLucideIconSvg("trash-2"),
+    }),
+  );
+  paintToolRow.append(clipActions);
+
   const transformActions = document.createElement("span");
   transformActions.className = "sprite-paint-transform-actions";
   for (const button of [
@@ -461,25 +470,12 @@ function renderSpritePalette() {
     const bind = spritePaletteEntryBindInfo(entry);
     button.classList.toggle("is-bound", bind.available && bind.linked);
     button.classList.toggle("is-unlinked", bind.available && !bind.linked);
-    button.title = bind.available ? `Paint ${entry.color} (${bind.label})` : `Paint ${entry.color}`;
-    button.setAttribute("aria-label", bind.available ? `Paint bound color ${index}: ${bind.label}` : `Paint color ${index}`);
+    const displayName = spritePaletteEntryDisplayName(entry);
+    button.title = displayName ? `Paint ${displayName} (${entry.color})` : `Paint ${entry.color}`;
+    button.setAttribute("aria-label", displayName ? `Paint color ${index}: ${displayName}` : `Paint color ${index}`);
     button.addEventListener("click", () => selectSpriteColor(index));
     item.append(button);
 
-    const colorInput = document.createElement("input");
-    colorInput.type = "color";
-    colorInput.className = "sprite-token-color-input";
-    colorInput.value = spriteRgbHex(entry.color);
-    colorInput.setAttribute("aria-label", `Edit color ${index}`);
-    colorInput.addEventListener("input", () => {
-      sprite.selectedColorIndex = index;
-      updateSelectedSpriteColor(colorInput.value, { deferHistory: true });
-    });
-    colorInput.addEventListener("change", () => {
-      sprite.selectedColorIndex = index;
-      updateSelectedSpriteColor(colorInput.value, { commitHistory: true });
-    });
-    item.append(colorInput);
     const bindMarker = renderSpriteBindMarker(entry);
     if (bindMarker) {
       item.append(bindMarker);
@@ -541,6 +537,11 @@ function spritePaletteEntryBindInfo(entry) {
     return { available: true, linked, name, label: name ? `Bound to ${name}` : "Bound color" };
   }
   return { available: true, linked: true, name: "", label: "Bound color" };
+}
+
+function spritePaletteEntryDisplayName(entry) {
+  const bind = spritePaletteEntryBindInfo(entry);
+  return bind.linked && bind.name ? bind.name : "";
 }
 
 function renderSpriteCurrentColorTagButton(entry) {
@@ -1181,9 +1182,309 @@ function spriteTrashIconSvg() {
   `;
 }
 
+function spriteLucideIconSvg(name) {
+  const icons = {
+    "mouse-pointer-2": `
+      <path d="M4.037 4.688a.495.495 0 0 1 .651-.651l16 6.5a.5.5 0 0 1-.063.947l-6.124 1.58a2 2 0 0 0-1.438 1.435l-1.579 6.126a.5.5 0 0 1-.947.063z"></path>
+    `,
+    copy: `
+      <rect width="14" height="14" x="8" y="8" rx="2" ry="2"></rect>
+      <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path>
+    `,
+    scissors: `
+      <circle cx="6" cy="6" r="3"></circle>
+      <path d="M8.12 8.12 12 12"></path>
+      <path d="M20 4 8.12 15.88"></path>
+      <circle cx="6" cy="18" r="3"></circle>
+      <path d="M14.47 14.48 20 20"></path>
+    `,
+    "clipboard-paste": `
+      <path d="M15 2H9a1 1 0 0 0-1 1v2c0 .6.4 1 1 1h6c.6 0 1-.4 1-1V3c0-.6-.4-1-1-1Z"></path>
+      <path d="M8 4H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"></path>
+      <path d="M16 4h2a2 2 0 0 1 2 2v4"></path>
+      <path d="M21 14H11"></path>
+      <path d="m15 10-4 4 4 4"></path>
+    `,
+    "trash-2": `
+      <path d="M3 6h18"></path>
+      <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"></path>
+      <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"></path>
+      <line x1="10" x2="10" y1="11" y2="17"></line>
+      <line x1="14" x2="14" y1="11" y2="17"></line>
+    `,
+  };
+  const paths = icons[name];
+  if (!paths) {
+    throw new Error(`Unknown sprite lucide icon ${name}`);
+  }
+  return `
+    <svg xmlns="http://www.w3.org/2000/svg" class="lucide lucide-${name}-icon lucide-${name}" viewBox="0 0 24 24" aria-hidden="true">
+      ${paths}
+    </svg>
+  `;
+}
+
+function renderSpriteClipButton({ title, ariaLabel, icon, active = false, disabled = false, danger = false, onClick }) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "sprite-icon-button sprite-clip-button";
+  button.classList.toggle("is-active", active);
+  button.classList.toggle("is-danger", danger);
+  button.disabled = Boolean(disabled);
+  button.title = title;
+  button.setAttribute("aria-label", ariaLabel);
+  button.setAttribute("aria-pressed", String(active));
+  button.innerHTML = icon;
+  button.addEventListener("click", onClick);
+  return button;
+}
+
+function toggleSpriteClipMode() {
+  if (spriteClipActive) {
+    deactivateSpriteClipMode();
+    setSpriteActionStatus(spritePaintToolStatusText(), "is-ok");
+    return;
+  }
+  spriteBucketActive = false;
+  spriteClipActive = true;
+  spriteClipSelection = null;
+  spriteClipDrag = null;
+  renderSpriteBuilder();
+  setSpriteActionStatus("Clip: drag to select sprite area", "is-ok");
+}
+
+function deactivateSpriteClipMode(options = {}) {
+  const wasActive = spriteClipActive || spriteClipSelection || spriteClipDrag || spriteClipFloating;
+  spriteClipActive = false;
+  spriteClipSelection = null;
+  spriteClipDrag = null;
+  spriteClipFloating = null;
+  if (options.render === false || !wasActive) {
+    return;
+  }
+  renderSpriteBuilder();
+}
+
+function normalizeSpriteClipRect(rect) {
+  if (!rect) {
+    return null;
+  }
+  const x = Math.trunc(Number(rect.x));
+  const y = Math.trunc(Number(rect.y));
+  const width = Math.trunc(Number(rect.width));
+  const height = Math.trunc(Number(rect.height));
+  if (width <= 0 || height <= 0) {
+    return null;
+  }
+  if (x < 0 || y < 0 || x + width > sprite.size || y + height > sprite.size) {
+    return null;
+  }
+  return { x, y, width, height };
+}
+
+function spriteClipRectFromCells(start, end) {
+  return normalizeSpriteClipRect({
+    x: Math.min(start.x, end.x),
+    y: Math.min(start.y, end.y),
+    width: Math.abs(end.x - start.x) + 1,
+    height: Math.abs(end.y - start.y) + 1,
+  });
+}
+
+function spriteClipSelectionContainsCell(cell, rect = spriteClipSelection) {
+  const normalized = normalizeSpriteClipRect(rect);
+  return Boolean(
+    normalized
+    && cell
+    && cell.x >= normalized.x
+    && cell.x < normalized.x + normalized.width
+    && cell.y >= normalized.y
+    && cell.y < normalized.y + normalized.height
+  );
+}
+
+function spriteClipRectContainsIndex(rect, index) {
+  const normalized = normalizeSpriteClipRect(rect);
+  if (!normalized || !Number.isInteger(index) || index < 0) {
+    return false;
+  }
+  const x = index % sprite.size;
+  const y = Math.floor(index / sprite.size);
+  return x >= normalized.x
+    && x < normalized.x + normalized.width
+    && y >= normalized.y
+    && y < normalized.y + normalized.height;
+}
+
+function spriteClipCellFromClient(clientX, clientY, geometry = spriteBoardGeometry()) {
+  if (geometry.width <= 0 || geometry.height <= 0) {
+    return null;
+  }
+  return {
+    x: Math.max(0, Math.min(sprite.size - 1, Math.floor(((clientX - geometry.left) / geometry.width) * geometry.size))),
+    y: Math.max(0, Math.min(sprite.size - 1, Math.floor(((clientY - geometry.top) / geometry.height) * geometry.size))),
+  };
+}
+
+function spriteClipRectCells(rect) {
+  const normalized = normalizeSpriteClipRect(rect);
+  if (!normalized) {
+    return [];
+  }
+  const cells = [];
+  for (let y = 0; y < normalized.height; y += 1) {
+    for (let x = 0; x < normalized.width; x += 1) {
+      const index = (normalized.y + y) * sprite.size + normalized.x + x;
+      const colorIndex = sprite.cells[index];
+      cells.push(validSpriteColorIndex(colorIndex) ? colorIndex : null);
+    }
+  }
+  return cells;
+}
+
+function setSpriteClipRectCells(rect, cells) {
+  const normalized = normalizeSpriteClipRect(rect);
+  if (!normalized || !Array.isArray(cells) || cells.length !== normalized.width * normalized.height) {
+    return [];
+  }
+  const changedIndices = [];
+  for (let y = 0; y < normalized.height; y += 1) {
+    for (let x = 0; x < normalized.width; x += 1) {
+      const index = (normalized.y + y) * sprite.size + normalized.x + x;
+      const next = cells[y * normalized.width + x];
+      if (setSpriteCellColorAtIndex(index, next)) {
+        changedIndices.push(index);
+      }
+    }
+  }
+  return changedIndices;
+}
+
+function clearSpriteClipRect(rect) {
+  const normalized = normalizeSpriteClipRect(rect);
+  if (!normalized) {
+    return [];
+  }
+  const changedIndices = [];
+  for (let y = normalized.y; y < normalized.y + normalized.height; y += 1) {
+    for (let x = normalized.x; x < normalized.x + normalized.width; x += 1) {
+      const index = y * sprite.size + x;
+      if (setSpriteCellColorAtIndex(index, null)) {
+        changedIndices.push(index);
+      }
+    }
+  }
+  return changedIndices;
+}
+
+function commitSpriteClipMutation(before, changedIndices, message) {
+  if (!changedIndices.length) {
+    setSpriteActionStatus("Clip did not change sprite", "is-ok");
+    renderSpriteBuilder();
+    return false;
+  }
+  sprite.solidSource = false;
+  updateSpriteBoundShapeDefinition();
+  renderSpriteBuilder();
+  syncSpriteSourceActionButtons();
+  setSpriteActionStatus(message, "is-ok");
+  setStatus(message, "is-ok");
+  pushVisualEditUndoSnapshot("sprite", before);
+  return true;
+}
+
+function copySpriteClipSelection() {
+  const rect = normalizeSpriteClipRect(spriteClipSelection);
+  if (!rect) {
+    setSpriteActionStatus("No clip selection", "is-error");
+    return false;
+  }
+  spriteClipClipboard = {
+    width: rect.width,
+    height: rect.height,
+    cells: spriteClipRectCells(rect),
+  };
+  spriteClipFloating = { kind: "copy" };
+  spriteClipActive = true;
+  spriteClipSelection = rect;
+  renderSpriteBuilder();
+  setSpriteActionStatus(`Copied ${rect.width}x${rect.height} clip: drag target, Command+V to paste`, "is-ok");
+  return true;
+}
+
+function cutSpriteClipSelection() {
+  const rect = normalizeSpriteClipRect(spriteClipSelection);
+  if (!rect) {
+    setSpriteActionStatus("No clip selection", "is-error");
+    return false;
+  }
+  const before = visualEditSnapshot("sprite");
+  spriteClipClipboard = {
+    width: rect.width,
+    height: rect.height,
+    cells: spriteClipRectCells(rect),
+  };
+  spriteClipFloating = { kind: "cut" };
+  spriteClipActive = true;
+  spriteClipSelection = rect;
+  const changedIndices = clearSpriteClipRect(rect);
+  commitSpriteClipMutation(before, changedIndices, `Cut ${rect.width}x${rect.height} clip`);
+  setSpriteActionStatus(`Cut ${rect.width}x${rect.height} clip: drag target, Command+V to paste`, "is-ok");
+  return true;
+}
+
+function clearSpriteClipSelection() {
+  const rect = normalizeSpriteClipRect(spriteClipSelection);
+  if (!rect) {
+    setSpriteActionStatus("No clip selection", "is-error");
+    return false;
+  }
+  const before = visualEditSnapshot("sprite");
+  const changedIndices = clearSpriteClipRect(rect);
+  return commitSpriteClipMutation(before, changedIndices, "Cleared clip");
+}
+
+function pasteSpriteClipClipboard() {
+  if (!spriteClipClipboard) {
+    setSpriteActionStatus("No copied clip", "is-error");
+    return false;
+  }
+  if (spriteClipClipboard.width > sprite.size || spriteClipClipboard.height > sprite.size) {
+    setSpriteActionStatus("Copied clip is larger than sprite", "is-error");
+    return false;
+  }
+  const base = normalizeSpriteClipRect(spriteClipSelection) || { x: 0, y: 0, width: 1, height: 1 };
+  const rect = normalizeSpriteClipRect({
+    x: base.x,
+    y: base.y,
+    width: spriteClipClipboard.width,
+    height: spriteClipClipboard.height,
+  });
+  if (!rect) {
+    setSpriteActionStatus("Copied clip does not fit at selection", "is-error");
+    return false;
+  }
+  const before = visualEditSnapshot("sprite");
+  const changedIndices = setSpriteClipRectCells(rect, spriteClipClipboard.cells);
+  spriteClipActive = true;
+  spriteClipSelection = rect;
+  spriteClipFloating = null;
+  commitSpriteClipMutation(before, changedIndices, `Pasted ${rect.width}x${rect.height} clip`);
+  setSpriteActionStatus(`Pasted ${rect.width}x${rect.height} clip`, "is-ok");
+  return true;
+}
+
+function moveSpriteClipRange(target, message = "Moved clip range") {
+  spriteClipSelection = target;
+  renderSpriteBuilder();
+  setSpriteActionStatus(message, "is-ok");
+}
+
 function renderSpriteBoard() {
   spriteBoard.replaceChildren();
   spriteBoard.style.setProperty("--sprite-size", sprite.size);
+  spriteBoard.classList.toggle("is-clip-active", spriteClipActive);
+  spriteClipSelection = normalizeSpriteClipRect(spriteClipSelection);
   for (let index = 0; index < sprite.cells.length; index += 1) {
     const button = document.createElement("button");
     button.type = "button";
@@ -1191,13 +1492,29 @@ function renderSpriteBoard() {
     syncSpriteCellElement(button, index);
     spriteBoard.append(button);
   }
+  renderSpriteClipSelectionFrame();
+}
+
+function renderSpriteClipSelectionFrame() {
+  const rect = spriteClipActive ? normalizeSpriteClipRect(spriteClipSelection) : null;
+  if (!rect) {
+    return;
+  }
+  const frame = document.createElement("div");
+  frame.className = "sprite-clip-selection-frame";
+  frame.style.gridColumn = `${rect.x + 1} / span ${rect.width}`;
+  frame.style.gridRow = `${rect.y + 1} / span ${rect.height}`;
+  frame.setAttribute("aria-hidden", "true");
+  spriteBoard.append(frame);
 }
 
 function syncSpriteCellElement(button, index) {
   const colorIndex = validSpriteColorIndex(sprite.cells[index]) ? sprite.cells[index] : null;
   const char = spriteExportCharForColorIndex(colorIndex);
+  const isClipSelected = spriteClipActive && spriteClipRectContainsIndex(spriteClipSelection, index);
   button.dataset.index = String(index);
   button.dataset.colorIndex = colorIndex === null ? "erase" : String(colorIndex);
+  button.classList.toggle("is-clip-selected", isClipSelected);
   button.style.setProperty("--sprite-swatch-color", spriteColorForColorIndex(colorIndex));
   button.style.setProperty("--sprite-cell-ink", spriteInkForColorIndex(colorIndex));
   button.setAttribute("aria-label", `Sprite cell ${index + 1}: ${char}`);
@@ -1215,6 +1532,8 @@ function renderSpriteCellsAtIndices(indices) {
 
 function selectSpriteColor(index) {
   commitSpriteColorEditHistory("sprite");
+  const wasClipActive = spriteClipActive || spriteClipSelection;
+  deactivateSpriteClipMode({ render: false });
   sprite.selectedColorIndex = validSpriteColorIndex(index) ? index : null;
   if (validSpriteColorIndex(sprite.selectedColorIndex)) {
     spriteLastPaintColorIndex = sprite.selectedColorIndex;
@@ -1225,6 +1544,9 @@ function selectSpriteColor(index) {
   sprite.addDraftColorIndex = null;
   renderSpriteControls();
   renderSpritePalette();
+  if (wasClipActive) {
+    renderSpriteBoard();
+  }
 }
 
 function updateSelectedSpriteColor(value, options = {}) {
@@ -1263,19 +1585,6 @@ function updateSelectedSpriteColor(value, options = {}) {
     return;
   }
   pushVisualEditUndoSnapshot("sprite", before);
-}
-
-function openColorInput(input) {
-  input.focus({ preventScroll: true });
-  if (typeof input.showPicker === "function") {
-    try {
-      input.showPicker();
-      return;
-    } catch (_error) {
-      // Fall through to click for browsers that expose showPicker but reject it.
-    }
-  }
-  input.click();
 }
 
 function toggleSpriteAddPalette() {
@@ -1507,18 +1816,21 @@ function renderSpriteColorSurfaces() {
 function syncSpritePaletteSwatches() {
   for (const [index, entry] of sprite.palette.entries()) {
     const color = normalizeSpriteColor(entry.color);
+    const displayName = spritePaletteEntryDisplayName(entry);
     for (const token of spritePalette.querySelectorAll(`[data-color-index="${index}"]`)) {
       token.style.setProperty("--sprite-swatch-color", color);
       token.style.setProperty("--sprite-token-ink", readableInkForColor(color));
-      token.title = `Paint ${color}`;
+      token.title = displayName ? `Paint ${displayName} (${color})` : `Paint ${color}`;
+      token.setAttribute("aria-label", displayName ? `Paint color ${index}: ${displayName}` : `Paint color ${index}`);
     }
   }
   const selected = sprite.palette[sprite.selectedColorIndex];
   const currentButton = spritePalette.querySelector(".sprite-current-color-button");
   if (currentButton && selected) {
     const normalized = normalizeSpriteColor(selected.color);
+    const displayName = spritePaletteEntryDisplayName(selected);
     currentButton.style.setProperty("--sprite-current-color", normalized);
-    currentButton.setAttribute("aria-label", `Pick selected color ${normalized}`);
+    currentButton.setAttribute("aria-label", displayName ? `Pick selected color ${displayName}` : `Pick selected color ${normalized}`);
     const currentHexInput = spritePalette.querySelector(".sprite-current-hex-input");
     if (currentHexInput && !currentHexInput.classList.contains("is-name-mode") && document.activeElement !== currentHexInput) {
       currentHexInput.value = normalized;
@@ -1975,6 +2287,154 @@ function spriteInterpolatedBrushPoints(fromPoint, toPoint) {
   return points;
 }
 
+function startSpriteClip(event, geometry, cell) {
+  event.preventDefault();
+  spriteClipActive = true;
+  if (spriteClipSelectionContainsCell(cell)) {
+    spriteClipDrag = {
+      mode: "move",
+      pointerId: event.pointerId,
+      geometry,
+      startCell: cell,
+      origin: spriteClipSelection,
+      preview: spriteClipSelection,
+    };
+  } else {
+    spriteClipSelection = spriteClipRectFromCells(cell, cell);
+    spriteClipDrag = {
+      mode: "select",
+      pointerId: event.pointerId,
+      geometry,
+      startCell: cell,
+    };
+  }
+  if (spriteBoard.setPointerCapture) {
+    spriteBoard.setPointerCapture(event.pointerId);
+  }
+  renderSpriteBoard();
+}
+
+function continueSpriteClip(event) {
+  if (!spriteClipDrag || spriteClipDrag.pointerId !== event.pointerId) {
+    return false;
+  }
+  const cell = spriteClipCellFromClient(event.clientX, event.clientY, spriteClipDrag.geometry);
+  if (!cell) {
+    return true;
+  }
+  event.preventDefault();
+  if (spriteClipDrag.mode === "select") {
+    spriteClipSelection = spriteClipRectFromCells(spriteClipDrag.startCell, cell);
+    renderSpriteBoard();
+    return true;
+  }
+  if (spriteClipDrag.mode === "move") {
+    const origin = spriteClipDrag.origin;
+    const dx = cell.x - spriteClipDrag.startCell.x;
+    const dy = cell.y - spriteClipDrag.startCell.y;
+    const nextX = Math.max(0, Math.min(sprite.size - origin.width, origin.x + dx));
+    const nextY = Math.max(0, Math.min(sprite.size - origin.height, origin.y + dy));
+    const next = normalizeSpriteClipRect({ ...origin, x: nextX, y: nextY });
+    if (next && (!spriteClipDrag.preview || next.x !== spriteClipDrag.preview.x || next.y !== spriteClipDrag.preview.y)) {
+      spriteClipSelection = next;
+      spriteClipDrag.preview = next;
+      renderSpriteBoard();
+    }
+    return true;
+  }
+  return true;
+}
+
+function stopSpriteClip(event) {
+  if (!spriteClipDrag || spriteClipDrag.pointerId !== event.pointerId) {
+    return false;
+  }
+  if (spriteBoard.hasPointerCapture?.(event.pointerId)) {
+    spriteBoard.releasePointerCapture(event.pointerId);
+  }
+  event.preventDefault();
+  const drag = spriteClipDrag;
+  spriteClipDrag = null;
+  spriteClipSelection = normalizeSpriteClipRect(spriteClipSelection);
+  renderSpriteBuilder();
+  if (!spriteClipSelection) {
+    return true;
+  }
+  const verb = drag.mode === "move" ? "Clip range moved" : "Clip range selected";
+  setSpriteActionStatus(`${verb} ${spriteClipSelection.width}x${spriteClipSelection.height}`, "is-ok");
+  return true;
+}
+
+function spriteClipShortcutTargetIsText(target) {
+  const tagName = target?.tagName || "";
+  return target?.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(tagName);
+}
+
+function spriteClipShortcutsAreActive() {
+  return currentPreviewMode === "sprite" && spriteClipActive && !spriteBuilder.hidden;
+}
+
+function moveSpriteClipRangeBy(dx, dy) {
+  const origin = normalizeSpriteClipRect(spriteClipSelection);
+  if (!origin) {
+    return false;
+  }
+  const target = normalizeSpriteClipRect({
+    ...origin,
+    x: origin.x + dx,
+    y: origin.y + dy,
+  });
+  if (!target) {
+    setSpriteActionStatus("Clip must stay inside sprite", "is-error");
+    return true;
+  }
+  moveSpriteClipRange(target);
+  return true;
+}
+
+function handleSpriteClipKeyboard(event) {
+  if (!spriteClipShortcutsAreActive() || spriteClipShortcutTargetIsText(event.target)) {
+    return false;
+  }
+  const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
+  const modifier = (event.metaKey && !event.ctrlKey) || (event.ctrlKey && !event.metaKey);
+  let handled = false;
+  if (modifier && !event.altKey && !event.shiftKey && key === "c") {
+    handled = copySpriteClipSelection();
+  } else if (modifier && !event.altKey && !event.shiftKey && key === "x") {
+    handled = cutSpriteClipSelection();
+  } else if (modifier && !event.altKey && !event.shiftKey && key === "v") {
+    handled = pasteSpriteClipClipboard();
+  } else if (!modifier && !event.altKey && (key === "Backspace" || key === "Delete")) {
+    handled = clearSpriteClipSelection();
+  } else if (!modifier && !event.altKey && key === "Escape") {
+    if (spriteClipSelection) {
+      spriteClipSelection = null;
+      spriteClipDrag = null;
+      renderSpriteBuilder();
+      setSpriteActionStatus("Clip selection cleared", "is-ok");
+    } else {
+      deactivateSpriteClipMode();
+      setSpriteActionStatus(spritePaintToolStatusText(), "is-ok");
+    }
+    handled = true;
+  } else if (!modifier && !event.altKey && key === "ArrowLeft") {
+    handled = moveSpriteClipRangeBy(-1, 0);
+  } else if (!modifier && !event.altKey && key === "ArrowRight") {
+    handled = moveSpriteClipRangeBy(1, 0);
+  } else if (!modifier && !event.altKey && key === "ArrowUp") {
+    handled = moveSpriteClipRangeBy(0, -1);
+  } else if (!modifier && !event.altKey && key === "ArrowDown") {
+    handled = moveSpriteClipRangeBy(0, 1);
+  }
+  if (!handled) {
+    return false;
+  }
+  event.preventDefault();
+  event.stopPropagation();
+  return true;
+}
+
 function startSpritePaint(event) {
   if (event.button !== 0) {
     return;
@@ -1982,6 +2442,14 @@ function startSpritePaint(event) {
   const geometry = spriteBoardGeometry();
   const point = spriteBoardPointFromClient(event.clientX, event.clientY, geometry);
   const index = spriteCellIndexFromPoint(point);
+  if (spriteClipActive) {
+    const cell = spriteClipCellFromClient(event.clientX, event.clientY, geometry);
+    if (!cell) {
+      return;
+    }
+    startSpriteClip(event, geometry, cell);
+    return;
+  }
   if (!point || index < 0) {
     return;
   }
@@ -2008,6 +2476,9 @@ function startSpritePaint(event) {
 }
 
 function continueSpritePaint(event) {
+  if (continueSpriteClip(event)) {
+    return;
+  }
   const geometry = spritePaintDrag?.geometry || spriteBoardGeometry();
   const point = spriteBoardPointFromClient(event.clientX, event.clientY, geometry);
   if (!spritePaintDrag || spritePaintDrag.pointerId !== event.pointerId) {
@@ -2018,6 +2489,9 @@ function continueSpritePaint(event) {
 }
 
 function stopSpritePaint(event) {
+  if (stopSpriteClip(event)) {
+    return;
+  }
   if (!spritePaintDrag || spritePaintDrag.pointerId !== event.pointerId) {
     return;
   }
@@ -3798,6 +4272,9 @@ spriteBoard.addEventListener("pointermove", continueSpritePaint);
 spriteBoard.addEventListener("pointerup", stopSpritePaint);
 spriteBoard.addEventListener("pointercancel", stopSpritePaint);
 spriteBoard.addEventListener("keydown", (event) => {
+  if (handleSpriteClipKeyboard(event)) {
+    return;
+  }
   if (event.key === "Enter" || event.key === " ") {
     const mutate = spriteBucketActive ? bucketFillSpriteFromElement : paintSpriteCellFromElement;
     if (withVisualEditHistory("sprite", () => mutate(event.target))) {
@@ -3806,6 +4283,7 @@ spriteBoard.addEventListener("keydown", (event) => {
     }
   }
 });
+document.addEventListener("keydown", handleSpriteClipKeyboard);
 document.addEventListener("pointerdown", closeSpriteColorEditorFromOutside);
 spriteClearButton.addEventListener("click", clearSpriteBuilder);
 spriteExportButton.addEventListener("click", exportSpriteAscii);
