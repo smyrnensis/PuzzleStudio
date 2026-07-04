@@ -2109,6 +2109,25 @@ function setStatus(text, className) {
   setPaneStatus(activeStatusPaneId(), text, className);
 }
 
+function setPaneStatusLink(paneId, prefixText, linkText, options = {}) {
+  const normalized = typeof normalizePaneId === "function"
+    ? normalizePaneId(paneId)
+    : (paneId || "");
+  const timer = paneStatusClearTimers.get(normalized);
+  if (timer) {
+    window.clearTimeout(timer);
+    paneStatusClearTimers.delete(normalized);
+  }
+  const element = statusElementForPane(normalized);
+  if (!element) {
+    return null;
+  }
+  element.className = paneStatusClassName(options.className || "");
+  renderStatusLink(element, prefixText, linkText, options);
+  schedulePreviewViewportSync(2);
+  return element;
+}
+
 function setEditorStatus(text, className) {
   window.clearTimeout(editorStatusClearTimer);
   editorStatusLabel.className = `document-status ${className || ""}`.trim();
@@ -2121,6 +2140,30 @@ function setEditorStatus(text, className) {
       }
     }, 1800);
   }
+}
+
+function setEditorStatusLink(prefixText, linkText, options = {}) {
+  window.clearTimeout(editorStatusClearTimer);
+  editorStatusLabel.className = `document-status ${options.className || ""}`.trim();
+  renderStatusLink(editorStatusLabel, prefixText, linkText, options);
+}
+
+function renderStatusLink(element, prefixText, linkText, options = {}) {
+  element.textContent = "";
+  element.append(document.createTextNode(prefixText || ""));
+  const link = document.createElement("a");
+  link.href = options.href || "#";
+  link.textContent = linkText || "";
+  if (options.title) {
+    link.title = options.title;
+  }
+  if (options.download) {
+    link.download = options.download;
+  }
+  if (typeof options.onClick === "function") {
+    link.addEventListener("click", options.onClick);
+  }
+  element.append(link);
 }
 
 function resetPreviewLog(message = "waiting for preview output") {
@@ -3137,7 +3180,7 @@ function addEmptyLevel3dToFocusedSource() {
     setPaneStatus("level", "No puzzle source for 3D level", "is-error");
     return false;
   }
-  const name = "level_1";
+  const name = "level 1";
   const bundle = "levels";
   const sourceData = defaultEmptyLevel3dSourceData();
   const nextSource = insertLevel3dWithDefaultBlock(focusedPuzzleTextSource(document), name, sourceData, bundle);
@@ -4794,16 +4837,18 @@ function findLevelHeaderAtPosition(source, position) {
   if (tokens[0] !== "level") {
     return null;
   }
-  const nameTokens = tokens.at(-1) === "{" ? tokens.slice(1, -1) : tokens.slice(1);
+  const name = sourcePuzzleLevelHeaderName(code);
+  if (name === null) {
+    return null;
+  }
   let levelIndex = 0;
   for (const previous of lines.slice(0, lineIndex)) {
-    const previousTokens = splitLevelTokens(levelScannerCode(previous.raw));
-    if (previousTokens[0] === "level") {
+    if (sourcePuzzleLevelHeaderName(levelScannerCode(previous.raw)) !== null) {
       levelIndex += 1;
     }
   }
   return {
-    name: levelNameFromTokens(nameTokens),
+    name,
     start: firstCodeIndex(line),
     end: line.absoluteEnd,
     nextIndex: lineIndex + 1,
@@ -4951,23 +4996,16 @@ function findLevelDefinitions(source, levelsRange) {
     let sourceName = "";
     const ordinal = entries.length + 1;
     if (tokens[0] === "level") {
-      const nameTokens = tokens.at(-1) === "{" ? tokens.slice(1, -1) : tokens.slice(1);
-      sourceName = levelNameFromTokens(nameTokens);
+      sourceName = sourcePuzzleLevelHeaderName(code);
+      if (sourceName === null) {
+        break;
+      }
       const name = levelDefinitionName(levelsRange, sourceName, ordinal);
-      entry = tokens.at(-1) === "{"
+      entry = code.endsWith("{")
         ? bracedLevelEntry(source, lines, index, name, levelsRange.bodyEnd)
         : unbracedLevelEntry(lines, index, index + 1, name, levelsRange.bodyEnd);
     } else if (tokens.length === 1 && tokens[0] === "{") {
       entry = bracedLevelEntry(source, lines, index, levelDefinitionName(levelsRange, "", ordinal), levelsRange.bodyEnd);
-    } else if (tokens.at(-1) === "{") {
-      sourceName = levelNameFromTokens(tokens.slice(0, -1));
-      entry = bracedLevelEntry(
-        source,
-        lines,
-        index,
-        levelDefinitionName(levelsRange, sourceName, ordinal),
-        levelsRange.bodyEnd,
-      );
     } else {
       entry = unbracedLevelEntry(lines, index, index, levelDefinitionName(levelsRange, "", ordinal), levelsRange.bodyEnd);
     }
@@ -4992,9 +5030,13 @@ function findStandaloneLevelDefinitionAtPosition(source, position) {
     if (tokens[0] !== "level") {
       continue;
     }
-    const entry = tokens.at(-1) === "{"
-      ? bracedLevelEntry(source, lines, index, levelNameFromTokens(tokens.slice(1, -1)), source.length)
-      : endDelimitedStandaloneLevelEntry(lines, index, levelNameFromTokens(tokens.slice(1)));
+    const name = sourcePuzzleLevelHeaderName(code);
+    if (name === null) {
+      continue;
+    }
+    const entry = code.endsWith("{")
+      ? bracedLevelEntry(source, lines, index, name, source.length)
+      : endDelimitedStandaloneLevelEntry(lines, index, name);
     if (entry && position >= entry.start && position <= entry.end) {
       return assignLevelLevelIndexes([entry])[0] || null;
     }
@@ -5094,18 +5136,13 @@ function startsLevelBodyBlock(tokens, line) {
 }
 
 function startsLevelNestedBlock(tokens, line) {
-  return (tokens[0] === "level" && tokens.at(-1) === "{")
+  return (tokens[0] === "level" && sourcePuzzleLevelHeaderName(line) !== null && String(line || "").trim().endsWith("{"))
     || (tokens.length === 1 && tokens[0] === "{")
-    || (tokens.at(-1) === "{" && tokens[0] !== "level")
     || (tokens[0] !== "level" && startsInlineBlockForWasm(tokens, line));
 }
 
 function isLevelsSectionBoundary(tokens) {
   return startsPuzzleSectionForWasm(tokens) && !["level"].includes(tokens[0] || "");
-}
-
-function levelNameFromTokens(tokens) {
-  return tokens.filter(Boolean).join(" ");
 }
 
 function levelsNamespaceFromTokens(tokens) {
@@ -6400,15 +6437,7 @@ function stopLevelPlaytest(options = {}) {
   updateLevelPlaytestControls();
   renderLevelBoard();
   if (options.syncPreview !== false) {
-    const exportData = previewExport || extractPreviewExport(latestHtml);
-    const stateData = exportData ? levelStateData(exportData) : null;
-    if (stateData) {
-      sendLevelStateToPreview(currentEditableLevelIndex(exportData), stateData, {
-        materializeLevelStart: false,
-        materializeDisplay: false,
-        silent: true,
-      });
-    }
+    restoreCompiledGamePreview();
   }
 }
 
@@ -7935,11 +7964,7 @@ function replacePreviewExport(html, exportData) {
 }
 
 function sanitizeLevelName(value) {
-  const cleaned = editableLevelName(value)
-    .trim()
-    .replace(/[^\w]+/g, "_")
-    .replace(/^_+|_+$/g, "");
-  return cleaned;
+  return sourcePuzzleLevelName(editableLevelName(value));
 }
 
 function sanitizeLevelNamespace(value) {
@@ -8447,14 +8472,15 @@ function sourceLevelLocalRanges(source) {
 
       let entry = null;
       if (tokens[0] === "level") {
-        const nameTokens = tokens.at(-1) === "{" ? tokens.slice(1, -1) : tokens.slice(1);
-        entry = tokens.at(-1) === "{"
-          ? bracedLevelEntry(source, lines, index, levelNameFromTokens(nameTokens), levelsRange.bodyEnd)
-          : unbracedLevelEntry(lines, index, index + 1, levelNameFromTokens(nameTokens), levelsRange.bodyEnd);
+        const name = sourcePuzzleLevelHeaderName(code);
+        if (name === null) {
+          break;
+        }
+        entry = code.endsWith("{")
+          ? bracedLevelEntry(source, lines, index, name, levelsRange.bodyEnd)
+          : unbracedLevelEntry(lines, index, index + 1, name, levelsRange.bodyEnd);
       } else if (tokens.length === 1 && tokens[0] === "{") {
         entry = bracedLevelEntry(source, lines, index, "", levelsRange.bodyEnd);
-      } else if (tokens.at(-1) === "{" && tokens[0] !== "legend") {
-        entry = bracedLevelEntry(source, lines, index, levelNameFromTokens(tokens.slice(0, -1)), levelsRange.bodyEnd);
       }
 
       if (!entry) {
@@ -8535,7 +8561,7 @@ function replaceLevelByName(source, name, levelData, namespace = "") {
 
 function levelDefinitionSource(name, levelData, levelIndent, options = {}) {
   const { rows, localLegends } = normalizeLevelSourceData(levelData);
-  const levelName = sanitizeLevelName(name);
+  const levelName = sourcePuzzleLevelName(name);
   const lifecycle = options.lifecycle || {};
   const startLifecycleLines = Array.isArray(lifecycle.start) ? lifecycle.start : [];
   const clearLifecycleLines = Array.isArray(lifecycle.clear) ? lifecycle.clear : [];
@@ -8545,7 +8571,7 @@ function levelDefinitionSource(name, levelData, levelIndent, options = {}) {
   const hasLifecycle = startLifecycleLines.length > 0 || clearLifecycleLines.length > 0;
   const lines = hasRegionBreak || hasLocalLegends || hasLifecycle
     ? [
-      levelName ? `${levelIndent}level ${levelName} {` : `${levelIndent}{`,
+      levelName ? sourcePuzzleLevelHeaderSource(levelName, levelIndent, { openBlock: true }) : `${levelIndent}{`,
       ...levelBodyBlockSourceLines(startLifecycleLines, rowIndent),
       ...levelLegendSourceLines(localLegends, rowIndent),
       ...rows.map((row) => levelMapRowSourceLine(row, rowIndent)),
@@ -8554,7 +8580,7 @@ function levelDefinitionSource(name, levelData, levelIndent, options = {}) {
     ]
     : levelName
       ? [
-        `${levelIndent}level ${levelName}`,
+        sourcePuzzleLevelHeaderSource(levelName, levelIndent),
         ...rows.map((row) => levelMapRowSourceLine(row, rowIndent)),
       ]
       : rows.map((row) => levelMapRowSourceLine(row, rowIndent));
@@ -8708,17 +8734,15 @@ function levelDefinitionIndent(source, entry) {
 
 function sourceTitleMatches(existing, title, namespace = "") {
   const existingTitle = String(existing || "").trim();
-  const requested = editableLevelName(title);
+  const requested = String(title || "").trim();
   const requestedNamespace = sanitizeLevelNamespace(editableLevelNamespace(title) || namespace);
   const existingNamespace = sanitizeLevelNamespace(editableLevelNamespace(existingTitle) || namespace);
   const editableExisting = editableLevelName(existingTitle);
-  const normalizedExisting = sanitizeLevelName(editableExisting);
-  const normalizedRequested = sanitizeLevelName(requested);
+  const editableRequested = editableLevelName(requested);
   return existingTitle === requested
-    || existingTitle.endsWith(`.${requested}`)
-    || (normalizedExisting && normalizedRequested && normalizedExisting === normalizedRequested)
+    || (editableRequested && existingTitle.endsWith(`.${editableRequested}`))
     || (
-      editableExisting === requested
+      editableExisting === editableRequested
       && (!requestedNamespace || !existingNamespace || requestedNamespace === existingNamespace)
     );
 }

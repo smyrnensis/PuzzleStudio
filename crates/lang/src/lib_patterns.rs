@@ -91,6 +91,7 @@ struct RuleBodyAlternative {
     components: Vec<PatternComponentTemplate>,
     writes: Vec<WriteOpTemplate>,
     tag_captures: TagCaptureValues,
+    preserves_once_group: bool,
 }
 
 fn append_move_sound_effects(
@@ -1186,6 +1187,7 @@ impl ParsedMark {
 struct SelectorTransform {
     source_token: String,
     mapped_objects: HashMap<ObjectId, ObjectId>,
+    preserves_once_group: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -1765,6 +1767,9 @@ fn resolve_object_selector(
             &format!("{}:{}", parts[0], source_token_parts.join(":")),
             occurrence_label.as_deref(),
         );
+        let preserves_once_group = constraints.iter().any(|constraint| {
+            matches!(constraint, Some(SelectorConstraint::AxisComputed { .. }))
+        });
         let mut mapped_objects = HashMap::new();
         let mut target_objects = Vec::new();
         for source in &schema.variants {
@@ -1801,6 +1806,7 @@ fn resolve_object_selector(
             transform: Some(SelectorTransform {
                 source_token,
                 mapped_objects,
+                preserves_once_group,
             }),
             family_wildcard: None,
             relative_constraints,
@@ -2801,7 +2807,10 @@ fn eval_axis_computed_selector_value(
             if axis_values.contains(&target) {
                 Ok(target)
             } else {
-                Err(parse_error(line, "translation computed selector target is not declared"))
+                Err(parse_error(
+                    line,
+                    "translation computed selector target is not declared",
+                ))
             }
         }
     }
@@ -3020,6 +3029,7 @@ fn compile_before_after_blocks(
     for (before, after) in expanded_blocks {
         let dynamic_blocks = expand_dynamic_selector_blocks(&before, &after);
         for (dynamic_guards, before, after) in dynamic_blocks {
+            let preserves_once_group = pattern_block_preserves_once_group(&after);
             let before_occurrences = collect_before_occurrences(&before);
             reject_duplicate_labeled_occurrences(&before_occurrences, line)?;
             let mut assignments =
@@ -3394,12 +3404,31 @@ fn compile_before_after_blocks(
                     components,
                     writes,
                     tag_captures,
+                    preserves_once_group,
                 });
             }
         }
     }
 
     Ok(alternatives)
+}
+
+fn pattern_block_preserves_once_group(block: &PatternBlock) -> bool {
+    block.components.iter().any(|component| {
+        component.rows.iter().any(|row| {
+            row.iter().any(|part| {
+                let BlockPart::Cell(cell) = part else {
+                    return false;
+                };
+                cell.require.iter().any(|selector| {
+                    selector
+                        .transform
+                        .as_ref()
+                        .is_some_and(|transform| transform.preserves_once_group)
+                })
+            })
+        })
+    })
 }
 
 fn expand_dynamic_selector_blocks(

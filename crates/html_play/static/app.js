@@ -263,6 +263,7 @@ let screenScaleSyncPasses = 0;
 const defaultSceneLogicalSize = { width: 4, height: 3 };
 const defaultSceneLayoutUnit = 180;
 const pendingCommandQueue = [];
+const activeWaitTimers = new Set();
 let drainingCommandQueue = false;
 let sceneEditorPreview = null;
 
@@ -338,7 +339,7 @@ function render(state) {
   if (state) {
     state.soundEvents = [];
   }
-  applyWaitEvents(state?.waitEvents || []);
+  const waitEvents = state?.waitEvents || [];
   if (state) {
     state.busy = state.busy === true || clientPendingWaits > 0;
     state.waitEvents = [];
@@ -358,6 +359,7 @@ function render(state) {
   scheduleScreenScaleSync(3);
   notifyPreviewState(state);
   applyMessageEvents(state?.messageEvents || []);
+  applyWaitEvents(waitEvents);
 }
 
 function scheduleScreenScaleSync(passes = 2) {
@@ -2539,7 +2541,20 @@ function applyWaitEvents(events) {
     if (currentState) {
       currentState.busy = true;
     }
-    setTimeout(() => {
+    const waitTimer = {
+      event,
+      startedAt: 0,
+      timeoutId: 0,
+      done: false,
+      fastForwardRequested: false,
+      config: inputBufferConfig(),
+    };
+    waitTimer.complete = () => {
+      if (waitTimer.done) {
+        return;
+      }
+      waitTimer.done = true;
+      activeWaitTimers.delete(waitTimer);
       clientPendingWaits = Math.max(0, clientPendingWaits - 1);
       if (currentState) {
         currentState.busy = clientPendingWaits > 0;
@@ -2549,13 +2564,69 @@ function applyWaitEvents(events) {
       } else {
         drainQueuedCommands();
       }
-    }, Math.max(0, Number(event.milliseconds || event.ms || 0)));
+    };
+    activeWaitTimers.add(waitTimer);
+    requestAnimationFrame(() => {
+      if (waitTimer.done) {
+        return;
+      }
+      waitTimer.startedAt = performance.now();
+      waitTimer.timeoutId = setTimeout(
+        waitTimer.complete,
+        Math.max(0, Number(event.milliseconds || event.ms || 0)),
+      );
+      if (waitTimer.fastForwardRequested) {
+        fastForwardWaitTimer(waitTimer);
+      }
+    });
   }
+}
+
+function inputBufferConfig() {
+  const source =
+    currentState?.inputBuffer ||
+    currentState?.scene?.settings?.inputBuffer ||
+    window.PuzzleExport?.inputBuffer ||
+    {};
+  return {
+    queueDuringWait: source.queueDuringWait !== false,
+    fastForwardWait: source.fastForwardWait !== false,
+    minWaitMs: Math.max(0, Number(source.minWaitMs ?? 50)),
+  };
+}
+
+function fastForwardActiveWaitsForQueuedInput(config = inputBufferConfig()) {
+  if (!config.fastForwardWait) {
+    return;
+  }
+  for (const waitTimer of activeWaitTimers) {
+    waitTimer.config = config;
+    fastForwardWaitTimer(waitTimer);
+  }
+}
+
+function fastForwardWaitTimer(waitTimer) {
+  if (waitTimer.done) {
+    return;
+  }
+  if (!waitTimer.startedAt) {
+    waitTimer.fastForwardRequested = true;
+    return;
+  }
+  clearTimeout(waitTimer.timeoutId);
+  const elapsed = performance.now() - waitTimer.startedAt;
+  const remaining = Math.max(0, waitTimer.config.minWaitMs - elapsed);
+  waitTimer.timeoutId = setTimeout(waitTimer.complete, remaining);
 }
 
 function sendCommand(command) {
   if (currentState?.busy || clientPendingWaits > 0) {
+    const config = inputBufferConfig();
+    if (!config.queueDuringWait) {
+      return undefined;
+    }
     pendingCommandQueue.push(command);
+    fastForwardActiveWaitsForQueuedInput(config);
     return undefined;
   }
   return sendCommandNow(command);
@@ -2563,7 +2634,12 @@ function sendCommand(command) {
 
 function sendModelInput(input) {
   if (currentState?.busy || clientPendingWaits > 0) {
+    const config = inputBufferConfig();
+    if (!config.queueDuringWait) {
+      return undefined;
+    }
     pendingCommandQueue.push({ kind: "model_input", name: input });
+    fastForwardActiveWaitsForQueuedInput(config);
     return undefined;
   }
   return sendModelInputNow(input);
@@ -3315,7 +3391,7 @@ window.addEventListener("message", async (event) => {
 
   if (event.data?.type === "PuzzleStudioSetState") {
     if (standaloneRuntime && event.data.state) {
-      standaloneRuntime.setCurrentState(event.data.state, {
+      await standaloneRuntime.setCurrentState(event.data.state, {
         levelIndex: event.data.levelIndex,
         regions: event.data.regions,
         animationEvents: event.data.animationEvents,
@@ -3341,7 +3417,7 @@ window.addEventListener("message", async (event) => {
     activeSolveRequests.set(requestId, solveRequest);
     try {
       if (standaloneRuntime && event.data.state) {
-        standaloneRuntime.setCurrentState(event.data.state, {
+        await standaloneRuntime.setCurrentState(event.data.state, {
           levelIndex: event.data.levelIndex,
           regions: event.data.regions,
           animationEvents: event.data.animationEvents,

@@ -10,7 +10,7 @@ text_color #c4d0cb
 
 animation {
 	tween {
-		duration = 300ms
+		duration = 50ms
 	}
 }
 
@@ -22,7 +22,7 @@ sfx locked seed=locked type=lock
 sfx fall seed=fall type=hit
 sfx restart seed=560993 type=jump volume=0.8
 sfx undo seed=613236 type=select volume=0.50
-music locked_room seed=LockedRoom bars=64 height=0.00 bpm=90 volume=1
+music locked_room seed=LockedRoom bars=64 height=0.00 bpm=90 volume=4
 }
 
 puzzle main {
@@ -146,6 +146,7 @@ repeat {
 [ > Player | no solid ] -> [  | Player ]
 }
 [ > solid ] -> [ solid ] sfx bump
+wait
 }
 
 routine open_gate {

@@ -99,7 +99,7 @@ rules {
 
 levels scene_host_levels of scene_host {
 legend M = Marker
-level scene_host {
+level "scene_host" {
 M
 }
 }
@@ -370,8 +370,23 @@ levels3 default of board {
     #[test]
     fn renderer_paints_tween_layers_after_static_board_layers() {
         assert!(RENDERER_JS.contains("let startedAt = null;"));
+        assert!(RENDERER_JS.contains("let animationFrameIndex = 0;"));
         assert!(RENDERER_JS.contains("if (!this.root.isConnected)"));
         assert!(RENDERER_JS.contains("startedAt ??= performance.now();"));
+        assert!(RENDERER_JS.contains(
+            "this.animationProgressForFrame(performance.now() - startedAt, duration, animationFrameIndex)"
+        ));
+        assert!(RENDERER_JS.contains("animationFrameIndex += 1;"));
+        assert!(
+            RENDERER_JS.contains("animationProgressForFrame(elapsedMs, durationMs, frameIndex)")
+        );
+        assert!(
+            RENDERER_JS.contains("const finalFrameIndex = this.minimumAnimationFrameCount() - 1;")
+        );
+        assert!(RENDERER_JS.contains("if (frameIndex < finalFrameIndex && timeProgress >= 1)"));
+        assert!(RENDERER_JS.contains("return frameIndex / finalFrameIndex;"));
+        assert!(RENDERER_JS.contains("minimumAnimationFrameCount()"));
+        assert!(RENDERER_JS.contains("return 3;"));
         assert!(RENDERER_JS.contains("requestAnimationFrame(draw);"));
         assert!(RENDERER_JS.contains("const animatedLayers = [];"));
         assert!(RENDERER_JS.contains("animatedLayers.push({ layer, x, y, animation });"));
@@ -798,6 +813,11 @@ P
             APP_JS.contains("pendingCommandQueue.push({ kind: \"model_input\", name: input });")
         );
         assert!(APP_JS.contains("currentState?.busy || clientPendingWaits > 0"));
+        assert!(APP_JS.contains("function inputBufferConfig()"));
+        assert!(APP_JS.contains("if (!config.queueDuringWait)"));
+        assert!(APP_JS.contains("function fastForwardActiveWaitsForQueuedInput"));
+        assert!(APP_JS.contains("source.fastForwardWait !== false"));
+        assert!(APP_JS.contains("Number(source.minWaitMs ?? 50)"));
         assert!(
             !APP_JS.contains("if (currentState.busy) {\n    return;\n  }\n  broadcastPuzzle3Key")
         );
@@ -2531,6 +2551,8 @@ scene playing {
         assert!(STANDALONE_JS.contains("WasmStandaloneSession.fromExport(JSON.stringify"));
         assert!(!STANDALONE_JS.contains("new this.wasmModule.WasmStandaloneSession("));
         assert!(STANDALONE_JS.contains("Puzzle game WASM runtime is unavailable."));
+        assert!(STANDALONE_JS.contains("async setCurrentState(state, options = {})"));
+        assert!(STANDALONE_JS.contains("await this.ensureInitialized();"));
         assert!(STANDALONE_JS.contains("set_current_state("));
         assert!(STANDALONE_JS.contains("Editor preview state requires a valid level index."));
         assert!(!STANDALONE_JS.contains("this.initializeCoreRuntime();"));
@@ -2600,7 +2622,7 @@ puzzle board {
 
 levels default of board {
   legend P = Player
-  level one {
+  level "one" {
     P
   }
 }
@@ -2626,6 +2648,7 @@ scene playing {
         assert!(html.contains("PuzzleStudioPreviewState"));
         assert!(html.contains("PuzzleRuntimeWasmLoader"));
         assert!(html.contains("set_current_state("));
+        assert!(APP_JS.contains("await standaloneRuntime.setCurrentState(event.data.state, {"));
         assert!(html.contains("ui-tap"));
         assert!(html.contains("buildSelectLayers"));
         assert!(!html.contains("broadcastPuzzle3Key"));
@@ -2965,7 +2988,7 @@ levels default of board {
     . = empty
     P = Player
   }
-  level first {
+  level "first" {
     P.
   }
 }
@@ -3008,6 +3031,93 @@ scene playing {
                 }
             ])
         );
+    }
+
+    #[test]
+    fn standalone_session_bridge_exposes_default_move_wait_boundary() {
+        let source = r#"
+title "Standalone Default Move Wait Fixture"
+
+input_buffer {
+  queue_during_wait = true
+  fast_forward_wait = true
+  min_wait = 75ms
+}
+
+animation {
+  tween {
+    duration = 80ms
+  }
+}
+
+puzzle board {
+  layers {
+    actor = Player
+    marker = Done
+  }
+  rules {
+    input right [ Player ] -> [ > Player ]
+    move
+    [ Player no Done ] -> [ Player Done ]
+  }
+}
+
+levels default of board {
+  legend {
+    . = empty
+    P = Player
+  }
+  level "first" {
+    P.
+  }
+}
+
+scene playing {
+  rules {
+    step board
+  }
+  layout {
+    board = puzzle board
+  }
+}
+"#;
+        let mut bridge =
+            StandaloneSessionBridge::from_source(source, "standalone_default_move_wait.puzzle")
+                .unwrap();
+
+        bridge
+            .request_json("POST", "/api/command/goto%20playing(default.first)")
+            .unwrap();
+
+        let moved = bridge.request_json("POST", "/api/input/right").unwrap();
+        let moved: serde_json::Value = serde_json::from_str(&moved).unwrap();
+        assert_eq!(
+            moved["inputBuffer"],
+            json!({
+                "queueDuringWait": true,
+                "fastForwardWait": true,
+                "minWaitMs": 75
+            })
+        );
+        assert!(cell_has_object(&moved["scene"]["cells"][1], "Player"));
+        assert!(!cell_has_object(&moved["scene"]["cells"][1], "Done"));
+        assert_eq!(
+            moved["waitEvents"],
+            json!([
+                {
+                    "kind": "continue_effects",
+                    "milliseconds": 80
+                }
+            ])
+        );
+
+        let continued = bridge
+            .request_json("POST", "/api/command/__continue_effects")
+            .unwrap();
+        let continued: serde_json::Value = serde_json::from_str(&continued).unwrap();
+        assert!(cell_has_object(&continued["scene"]["cells"][1], "Player"));
+        assert!(cell_has_object(&continued["scene"]["cells"][1], "Done"));
+        assert_eq!(continued["waitEvents"], json!([]));
     }
 
     #[test]

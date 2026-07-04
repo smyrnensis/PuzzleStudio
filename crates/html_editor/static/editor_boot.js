@@ -229,6 +229,13 @@
       }
       return { handled: false };
     },
+    async openExportedFile(payload) {
+      const invoke = tauriInvoke();
+      if (!invoke) {
+        throw new Error("Opening exported files is only available in the desktop app.");
+      }
+      return invoke("open_exported_file", { request: payload });
+    },
     async createSourceFile(payload) {
       const invoke = tauriInvoke();
       if (invoke) {

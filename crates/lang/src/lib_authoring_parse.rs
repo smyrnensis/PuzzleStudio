@@ -7239,6 +7239,51 @@ fn parse_default_wait_time_directive(tokens: &[&str], line: &str) -> Result<u64,
     parse_wait_duration_ms(duration, line)
 }
 
+fn parse_input_buffer_block(
+    lines: &[String],
+    start: usize,
+    input_buffer: &mut InputBufferDef,
+) -> Result<usize, DiagnosticReport> {
+    let header = split_header_tokens(&lines[start]);
+    if !matches!(header.as_slice(), ["input_buffer"]) {
+        return Err(parse_error(
+            &lines[start],
+            "input_buffer header must be: input_buffer",
+        ));
+    }
+
+    let mut parsed = input_buffer.clone();
+    let mut i = start + 1;
+    while i < lines.len() {
+        let line = &lines[i];
+        if is_block_close_line(line) {
+            *input_buffer = parsed;
+            return Ok(i + 1);
+        }
+        let tokens = split_header_tokens(line);
+        match tokens.as_slice() {
+            ["queue_during_wait", "=", value] => {
+                parsed.queue_during_wait = parse_boolean_option(value, line)?;
+            }
+            ["fast_forward_wait", "=", value] => {
+                parsed.fast_forward_wait = parse_boolean_option(value, line)?;
+            }
+            ["min_wait", "=", value] => {
+                parsed.min_wait_ms = parse_wait_duration_ms(value, line)?;
+            }
+            _ => {
+                return Err(parse_error(
+                    line,
+                    "input_buffer entry must be: queue_during_wait = <true|false> | fast_forward_wait = <true|false> | min_wait = <duration>",
+                ));
+            }
+        }
+        i += 1;
+    }
+
+    Err(parse_error(&lines[start], "input_buffer missing closing brace"))
+}
+
 fn parse_again_interval_directive(tokens: &[&str], line: &str) -> Result<u64, DiagnosticReport> {
     match tokens {
         ["again_interval", "=", duration] => parse_wait_duration_ms(duration, line),
@@ -10950,6 +10995,7 @@ fn parse_rule_definition(
 #[allow(clippy::too_many_arguments)]
 fn add_standard_move_rule_if_missing(
     definitions: &mut Vec<RuleDefinitionAst>,
+    animation: &AnimationDef,
     object_names: &HashMap<String, ObjectId>,
     object_schemas: &HashMap<String, ObjectSchema>,
     object_layers: &HashMap<ObjectId, LayerId>,
@@ -11036,11 +11082,22 @@ fn add_standard_move_rule_if_missing(
         ));
     }
 
+    let mut public_statements = vec![StatementAst::Block {
+        application: RuleApplication::UntilStable,
+        statements,
+    }];
+    if animation.tween.enabled {
+        public_statements.push(StatementAst::Effect {
+            source_line: "wait".to_string(),
+            source_line_number: None,
+            effects: vec![EffectAst::WaitAnimation],
+        });
+    }
     definitions.push(RuleDefinitionAst {
         name: "move".to_string(),
         role: RuleRole::Main,
-        application: RuleApplication::UntilStable,
-        statements,
+        application: RuleApplication::Once,
+        statements: public_statements,
     });
     Ok(())
 }

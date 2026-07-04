@@ -23,6 +23,7 @@ pub struct LoadedDocument {
     pub homepage: Option<String>,
     pub default_wait_ms: u64,
     pub default_again_ms: u64,
+    pub input_buffer: InputBufferDef,
     pub animation: AnimationDef,
     pub sounds: SoundsDef,
     pub theme: ThemeDef,
@@ -56,6 +57,7 @@ pub struct LoadedGame {
     pub warnings: Vec<String>,
     pub default_wait_ms: u64,
     pub default_again_ms: u64,
+    pub input_buffer: InputBufferDef,
     pub animation: AnimationDef,
     pub rule_animations: HashMap<RuleId, Vec<RuleAnimation>>,
     pub rule_effects: HashMap<RuleId, Vec<RuleEffect>>,
@@ -88,6 +90,23 @@ pub struct LoadedGame {
     pub visuals: VisualsDef,
     pub render: PuzzleRenderDef,
     pub screen: PuzzleScreenDef,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InputBufferDef {
+    pub queue_during_wait: bool,
+    pub fast_forward_wait: bool,
+    pub min_wait_ms: u64,
+}
+
+impl Default for InputBufferDef {
+    fn default() -> Self {
+        Self {
+            queue_during_wait: true,
+            fast_forward_wait: true,
+            min_wait_ms: 50,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

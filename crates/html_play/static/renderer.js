@@ -218,6 +218,7 @@ class PuzzleRenderer {
     context.imageSmoothingEnabled = false;
     const animations = this.prepareAnimations(scene.animationEvents || [], frame);
     let startedAt = null;
+    let animationFrameIndex = 0;
     const duration = this.animationDurationMs(scene);
     const draw = () => {
       if (!this.root.isConnected) {
@@ -226,10 +227,13 @@ class PuzzleRenderer {
       }
       startedAt ??= performance.now();
       const progress = animations.length
-        ? Math.min(1, Math.max(0, (performance.now() - startedAt) / duration))
+        ? this.animationProgressForFrame(performance.now() - startedAt, duration, animationFrameIndex)
         : 1;
       context.clearRect(0, 0, canvas.width, canvas.height);
       this.paintCanvas(context, scene, frame, unit, animations, progress);
+      if (animations.length) {
+        animationFrameIndex += 1;
+      }
       if (progress < 1 && this.root.isConnected) {
         requestAnimationFrame(draw);
       }
@@ -303,6 +307,19 @@ class PuzzleRenderer {
   animationDurationMs(scene) {
     const tween = scene?.settings?.animation?.tween || scene?.animation?.tween || null;
     return Math.max(1, Number(tween?.intervalMs || scene?.animationDurationMs || 250));
+  }
+
+  animationProgressForFrame(elapsedMs, durationMs, frameIndex) {
+    const timeProgress = Math.min(1, Math.max(0, elapsedMs / durationMs));
+    const finalFrameIndex = this.minimumAnimationFrameCount() - 1;
+    if (frameIndex < finalFrameIndex && timeProgress >= 1) {
+      return frameIndex / finalFrameIndex;
+    }
+    return timeProgress;
+  }
+
+  minimumAnimationFrameCount() {
+    return 3;
   }
 
   animationForLayer(animations, cell, layer) {

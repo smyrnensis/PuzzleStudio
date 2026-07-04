@@ -428,6 +428,7 @@ fn puzzle3_document_scene_host_loaded_game(
     loaded.homepage = document.homepage.clone();
     loaded.default_wait_ms = document.default_wait_ms;
     loaded.default_again_ms = document.default_again_ms;
+    loaded.input_buffer = document.input_buffer.clone();
     loaded.animation = document.animation.clone();
     loaded.sounds = document.sounds.clone();
     loaded.theme = document.theme.clone();
@@ -503,6 +504,7 @@ fn mixed_document_loaded_game(
     loaded.homepage = document.homepage.clone();
     loaded.default_wait_ms = document.default_wait_ms;
     loaded.default_again_ms = document.default_again_ms;
+    loaded.input_buffer = document.input_buffer.clone();
     loaded.sounds = document.sounds.clone();
     loaded.theme = document.theme.clone();
     loaded.assets = document.assets.clone();
@@ -558,6 +560,7 @@ fn mixed_document_puzzle3_fixture_json(
         homepage: document.homepage.clone(),
         default_wait_ms: document.default_wait_ms,
         default_again_ms: document.default_again_ms,
+        input_buffer: document.input_buffer.clone(),
         animation: document.animation.clone(),
         sounds: document.sounds.clone(),
         theme: document.theme.clone(),

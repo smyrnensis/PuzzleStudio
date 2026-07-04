@@ -131,6 +131,8 @@ fn push_export_data(out: &mut String, state: &ServerState) {
     out.push(',');
     push_json_number(out, "defaultAgainMs", state.loaded.default_again_ms);
     out.push(',');
+    push_export_input_buffer(out, &state.loaded);
+    out.push(',');
     push_export_animation(out, &state.loaded);
     out.push(',');
     push_export_goal(out, "goal", state.loaded.goal.as_ref());
@@ -310,6 +312,24 @@ fn push_export_animation(out: &mut String, loaded: &LoadedGame) {
     out.push(',');
     push_json_number(out, "intervalMs", loaded.animation.tween.interval_ms);
     out.push('}');
+    out.push('}');
+}
+
+fn push_export_input_buffer(out: &mut String, loaded: &LoadedGame) {
+    out.push_str("\"inputBuffer\":{");
+    push_json_bool(
+        out,
+        "queueDuringWait",
+        loaded.input_buffer.queue_during_wait,
+    );
+    out.push(',');
+    push_json_bool(
+        out,
+        "fastForwardWait",
+        loaded.input_buffer.fast_forward_wait,
+    );
+    out.push(',');
+    push_json_number(out, "minWaitMs", loaded.input_buffer.min_wait_ms);
     out.push('}');
 }
 

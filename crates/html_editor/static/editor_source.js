@@ -82,6 +82,51 @@ let sourceFoldBlockCacheSource = "";
 let sourceFoldBlockCache = [];
 let sourceFoldEditSnapshot = null;
 
+function sourcePuzzleLevelName(value, defaultName = "") {
+  const text = String(value ?? "").trim();
+  return text || String(defaultName ?? "").trim();
+}
+
+function sourcePuzzleQuotedText(value, context = "source text") {
+  const text = String(value ?? "");
+  if (/[\r\n]/.test(text)) {
+    throw new Error(`${context} cannot contain line breaks`);
+  }
+  return `"${text.replace(/"/g, "\\\"")}"`;
+}
+
+function parseSourcePuzzleQuotedText(value) {
+  const text = String(value ?? "").trim();
+  if (!text.startsWith("\"") || !text.endsWith("\"")) {
+    return null;
+  }
+  return text.slice(1, -1).replace(/\\"/g, "\"");
+}
+
+function sourcePuzzleLevelHeaderName(code) {
+  const text = String(code || "").trim();
+  if (!/^level(?:\s|$)/.test(text)) {
+    return null;
+  }
+  let rest = text.slice("level".length).trim();
+  if (rest.endsWith("{")) {
+    rest = rest.slice(0, -1).trim();
+  }
+  if (!rest) {
+    return "";
+  }
+  return parseSourcePuzzleQuotedText(rest);
+}
+
+function sourcePuzzleLevelHeaderSource(name, indent = "", options = {}) {
+  const levelName = sourcePuzzleLevelName(name, options.defaultName || "");
+  const opensBlock = options.openBlock === true;
+  if (!levelName) {
+    return opensBlock ? `${indent}{` : `${indent}level`;
+  }
+  return `${indent}level ${sourcePuzzleQuotedText(levelName, "level name")}${opensBlock ? " {" : ""}`;
+}
+
 function sourceEditorDocumentValue() {
   return sourceFoldBaseSource !== null
     ? sourceFoldBaseSource

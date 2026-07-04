@@ -755,62 +755,76 @@ fn patterns_from_alternatives(
                         .to_string(),
                 ));
             }
-            let components = alternative
-                .components
-                .iter()
-                .map(|component| {
-                    let cells = component
-                        .cells
-                        .iter()
-                        .map(|cell| {
-                            Ok(MatchCell {
-                                offset: resolve_offset(
-                                    cell.offset.clone(),
-                                    *direction,
-                                    direction_expanded,
-                                    line,
-                                )?,
-                                require_null: cell.require_null,
-                                require_objects: cell.require_objects.clone(),
-                                require_object_sets: cell.require_object_sets.clone(),
-                                forbid_objects: cell.forbid_objects.clone(),
-                                require_mark: resolve_mark_patterns(
-                                    cell.require_mark.clone(),
-                                    *direction,
-                                    direction_expanded,
-                                    line,
-                                )?,
-                                require_object_set_mark: resolve_object_set_mark_patterns(
-                                    cell.require_object_set_mark.clone(),
-                                    *direction,
-                                    direction_expanded,
-                                    line,
-                                )?,
-                                forbid_mark: resolve_mark_patterns(
-                                    cell.forbid_mark.clone(),
-                                    *direction,
-                                    direction_expanded,
-                                    line,
-                                )?,
-                                forbid_object_set_mark: resolve_object_set_mark_patterns(
-                                    cell.forbid_object_set_mark.clone(),
-                                    *direction,
-                                    direction_expanded,
-                                    line,
-                                )?,
-                            })
-                        })
-                        .collect::<Result<Vec<_>, DiagnosticReport>>()?;
-                    Ok(PatternComponent {
-                        cells,
-                        gap_count: component.gap_count,
-                    })
-                })
-                .collect::<Result<Vec<_>, DiagnosticReport>>()?;
-            patterns.push(Pattern { components });
+            patterns.push(pattern_from_alternative(
+                alternative,
+                *direction,
+                direction_expanded,
+                line,
+            )?);
         }
     }
     Ok(patterns)
+}
+
+fn pattern_from_alternative(
+    alternative: &RuleBodyAlternative,
+    direction: Direction,
+    direction_expanded: bool,
+    line: &str,
+) -> Result<Pattern, DiagnosticReport> {
+    let components = alternative
+        .components
+        .iter()
+        .map(|component| {
+            let cells = component
+                .cells
+                .iter()
+                .map(|cell| {
+                    Ok(MatchCell {
+                        offset: resolve_offset(
+                            cell.offset.clone(),
+                            direction,
+                            direction_expanded,
+                            line,
+                        )?,
+                        require_null: cell.require_null,
+                        require_objects: cell.require_objects.clone(),
+                        require_object_sets: cell.require_object_sets.clone(),
+                        forbid_objects: cell.forbid_objects.clone(),
+                        require_mark: resolve_mark_patterns(
+                            cell.require_mark.clone(),
+                            direction,
+                            direction_expanded,
+                            line,
+                        )?,
+                        require_object_set_mark: resolve_object_set_mark_patterns(
+                            cell.require_object_set_mark.clone(),
+                            direction,
+                            direction_expanded,
+                            line,
+                        )?,
+                        forbid_mark: resolve_mark_patterns(
+                            cell.forbid_mark.clone(),
+                            direction,
+                            direction_expanded,
+                            line,
+                        )?,
+                        forbid_object_set_mark: resolve_object_set_mark_patterns(
+                            cell.forbid_object_set_mark.clone(),
+                            direction,
+                            direction_expanded,
+                            line,
+                        )?,
+                    })
+                })
+                .collect::<Result<Vec<_>, DiagnosticReport>>()?;
+            Ok(PatternComponent {
+                cells,
+                gap_count: component.gap_count,
+            })
+        })
+        .collect::<Result<Vec<_>, DiagnosticReport>>()?;
+    Ok(Pattern { components })
 }
 
 fn lower_goal_condition(
@@ -2401,6 +2415,32 @@ impl<'a> ProgramLowerer<'a> {
         application: RuleApplication,
         role: ClassifiedRuleRole,
     ) -> Result<Vec<RuleStep>, DiagnosticReport> {
+        let preserve_once_group = application == RuleApplication::Once
+            && alternatives.len() > 1
+            && guards.is_empty()
+            && alternatives
+                .iter()
+                .any(|alternative| alternative.preserves_once_group)
+            && alternatives
+                .iter()
+                .all(|alternative| alternative.guards.is_empty());
+        let condition_patterns = if preserve_once_group {
+            Some(
+                alternatives
+                    .iter()
+                    .map(|alternative| {
+                        pattern_from_alternative(
+                            alternative,
+                            direction,
+                            direction_expanded,
+                            "statement",
+                        )
+                    })
+                    .collect::<Result<Vec<_>, DiagnosticReport>>()?,
+            )
+        } else {
+            None
+        };
         let mut rules = Vec::with_capacity(alternatives.len());
         for alternative in alternatives {
             let lowered_effects =
@@ -2505,6 +2545,23 @@ impl<'a> ProgramLowerer<'a> {
                 effects: lowered_effects.core,
             }));
         }
+        if let Some(condition_patterns) = condition_patterns {
+            return Ok(vec![once_alternative_chain(condition_patterns, rules)]);
+        }
         Ok(rules)
     }
+}
+
+fn once_alternative_chain(patterns: Vec<Pattern>, rules: Vec<RuleStep>) -> RuleStep {
+    let mut else_steps = Vec::new();
+    for (pattern, rule) in patterns.into_iter().zip(rules).rev() {
+        else_steps = vec![RuleStep::ConditionalBranch {
+            condition: RuleCondition::AnyMatches(vec![pattern]),
+            then_steps: vec![rule],
+            else_steps,
+        }];
+    }
+    else_steps
+        .pop()
+        .expect("once alternative chain requires at least one rule")
 }

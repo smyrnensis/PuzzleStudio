@@ -1,7 +1,8 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},
@@ -40,6 +41,7 @@ const SKIPPED_WORKSPACE_DIRS: &[&str] = &[
 #[derive(Default)]
 struct DesktopState {
     services: Mutex<Vec<EditorService>>,
+    exported_files: Mutex<BTreeSet<PathBuf>>,
     watchers: Mutex<Vec<WorkspaceWatcher>>,
 }
 
@@ -99,6 +101,12 @@ struct LoadWorkspaceDocumentCommandRequest {
 struct ExportHtmlCommandRequest {
     html: String,
     filename: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenExportedFileCommandRequest {
+    path: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -341,6 +349,7 @@ async fn export_html(
     app: tauri::AppHandle,
     window: tauri::Window,
     request: ExportHtmlCommandRequest,
+    state: tauri::State<'_, DesktopState>,
 ) -> Result<serde_json::Value, String> {
     let filename = export_html_file_name(request.filename.as_deref());
     let (sender, mut receiver) = tauri::async_runtime::channel(1);
@@ -369,10 +378,95 @@ async fn export_html(
             path.display()
         )
     })?;
+    let path = path.canonicalize().map_err(|error| {
+        format!(
+            "failed to resolve exported HTML path {}: {error}",
+            path.display()
+        )
+    })?;
+    state
+        .exported_files
+        .lock()
+        .map_err(|_| "desktop export state is unavailable".to_string())?
+        .insert(path.clone());
     Ok(serde_json::json!({
         "ok": true,
         "path": path.display().to_string(),
     }))
+}
+
+#[tauri::command]
+fn open_exported_file(
+    request: OpenExportedFileCommandRequest,
+    state: tauri::State<'_, DesktopState>,
+) -> Result<serde_json::Value, String> {
+    let path = PathBuf::from(&request.path)
+        .canonicalize()
+        .map_err(|error| {
+            format!(
+                "failed to resolve exported file path {}: {error}",
+                request.path
+            )
+        })?;
+    if !path.is_file() {
+        return Err(format!(
+            "exported file is not available: {}",
+            path.display()
+        ));
+    }
+    let exported_files = state
+        .exported_files
+        .lock()
+        .map_err(|_| "desktop export state is unavailable".to_string())?;
+    if !exported_files.contains(&path) {
+        return Err("can only open files exported during the current desktop session".to_string());
+    }
+    drop(exported_files);
+    open_file_with_system_handler(&path)?;
+    Ok(serde_json::json!({ "ok": true }))
+}
+
+fn open_file_with_system_handler(path: &Path) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    let mut command = {
+        let mut command = Command::new("open");
+        command.arg(path);
+        command
+    };
+
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        let mut command = Command::new("explorer.exe");
+        command.arg(path);
+        command
+    };
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut command = {
+        let mut command = Command::new("xdg-open");
+        command.arg(path);
+        command
+    };
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows", unix)))]
+    {
+        let _ = path;
+        return Err("opening exported files is not supported on this platform".to_string());
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "windows", unix))]
+    {
+        let status = command
+            .status()
+            .map_err(|error| format!("failed to open exported file {}: {error}", path.display()))?;
+        if !status.success() {
+            return Err(format!(
+                "system file opener failed for {} with status {status}",
+                path.display()
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[tauri::command]
@@ -1140,6 +1234,7 @@ pub fn run() {
             save_source,
             load_workspace_document,
             export_html,
+            open_exported_file,
             create_source_file,
             create_source_folder,
             rename_workspace_entry,

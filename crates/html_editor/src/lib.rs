@@ -184,7 +184,7 @@ G = Goal
 * = Box Goal
 }
 
-level start
+level "start"
 #######
 #.....#
 #.PB.G#
@@ -2937,7 +2937,7 @@ legend {{
 P = Player
 }}
 
-level start {{
+level "start" {{
 P
 }}
 }}
@@ -3540,7 +3540,7 @@ levels {
 legend {
 . = empty
 }
-level start
+level "start"
 .
 }
 }
@@ -3589,7 +3589,7 @@ legend {
 . = empty
 }
 legend B = Box:base
-level start
+level "start"
 B
 }
 }
@@ -3785,7 +3785,7 @@ legend {
 . = empty
 P = Player
 }
-level first
+level "first"
 P
 }
 }
@@ -3852,7 +3852,7 @@ legend {
 . = empty
 P = Player
 }
-level first
+level "first"
 P
 }
 }
@@ -3936,7 +3936,7 @@ levels3 demo of push3 {
     P = Player
   }
 
-  level start {
+  level "start" {
     P.
   }
 }
@@ -4210,6 +4210,26 @@ levels3 demo of push3 {
     }
 
     #[test]
+    fn same_preview_target_reload_keeps_live_preview_frame() {
+        let load_document = EDITOR_WORKSPACE_JS
+            .split("function loadEmbeddedDocument(index) {")
+            .nth(1)
+            .and_then(|tail| tail.split("\nfunction loadFolderPreview").next())
+            .expect("loadEmbeddedDocument source");
+        assert!(load_document.contains("const previousPreviewDocument = activePreviewDocument();"));
+        assert!(load_document.contains(
+            "const previewTargetUnchanged = previewDocument\n    && previousPreviewKey\n    && documentIdentityKey(previewDocument) === previousPreviewKey;"
+        ));
+        let unchanged = load_document
+            .find("if (previewTargetUnchanged) {\n    markPreviewDirty();")
+            .expect("unchanged preview target marks stale without replacing iframe");
+        let changed = load_document[unchanged..]
+            .find("} else {\n    invalidateCompiledPreview(previewDocument);\n  }")
+            .expect("changed preview target discards compiled preview");
+        assert!(changed > 0);
+    }
+
+    #[test]
     fn workspace_drag_drop_moves_entries_through_host_boundary() {
         assert!(
             EDITOR_WORKSPACE_JS.contains("async function moveNodeToFolder(nodeId, targetFolderId)")
@@ -4286,6 +4306,37 @@ levels3 demo of push3 {
     }
 
     #[test]
+    fn desktop_export_reports_clickable_exported_file() {
+        assert!(EDITOR_BOOT_JS.contains(r#"invoke("open_exported_file", { request: payload })"#));
+        assert!(EDITOR_IMPORT_EXPORT_JS.contains("setExportedFileStatus(result.path, filename);"));
+        assert!(
+            EDITOR_IMPORT_EXPORT_JS.contains("function setExportedFileStatus(path, fallbackName)")
+        );
+        assert!(
+            EDITOR_IMPORT_EXPORT_JS
+                .contains("await window.PuzzleStudioHost.openExportedFile({ path });")
+        );
+        assert!(
+            EDITOR_IMPORT_EXPORT_JS.contains(
+                "setEditorStatus(`Open failed: ${error.message || error}`, \"is-error\");"
+            )
+        );
+        assert!(
+            EDITOR_JS.contains("function setEditorStatusLink(prefixText, linkText, options = {})")
+        );
+        assert!(
+            EDITOR_JS
+                .contains("function setPaneStatusLink(paneId, prefixText, linkText, options = {})")
+        );
+        assert!(
+            EDITOR_IMPORT_EXPORT_JS.contains(
+                "setPaneStatusLink(activeStatusPaneId(), \"Exported \", label, options);"
+            )
+        );
+        assert!(EDITOR_CSS.contains(".pane-footer .document-status a"));
+    }
+
+    #[test]
     fn level_editor_grid_is_owned_by_editor_toggle() {
         assert!(EDITOR_HTML.contains(r#"id="levelGridButton""#));
         assert!(
@@ -4345,6 +4396,19 @@ levels3 demo of push3 {
     }
 
     #[test]
+    fn level_editor_board_uses_continuous_sprite_checkerboard_background() {
+        assert!(EDITOR_CSS.contains("--sprite-swatch-checker: url("));
+        assert!(EDITOR_CSS.contains(
+            ".level-board.board {\n  background-color: var(--sprite-swatch-bg);\n  background-image: var(--sprite-swatch-checker);\n  background-size: 8px 8px;\n  box-shadow:"
+        ));
+        assert!(
+            !EDITOR_CSS.contains(
+                ".level-board.board .cell {\n  background-color: var(--sprite-swatch-bg);"
+            )
+        );
+    }
+
+    #[test]
     fn level_editor_controls_are_ordered_before_palette_and_preview() {
         let level_name = EDITOR_HTML.find(r#"id="levelNameInput""#).unwrap();
         let play = EDITOR_HTML.find(r#"id="levelPlaytestButton""#).unwrap();
@@ -4377,6 +4441,10 @@ levels3 demo of push3 {
         assert!(EDITOR_JS.contains("function startLevelPlaytest()"));
         assert!(EDITOR_JS.contains("compilingMessage: \"Compiling preview for play\""));
         assert!(EDITOR_JS.contains("function stopLevelPlaytest(options = {})"));
+        assert!(!EDITOR_JS.contains("PuzzleStudioStopPreviewSession"));
+        assert!(EDITOR_JS.contains(
+            "if (options.syncPreview !== false) {\n    restoreCompiledGamePreview();\n  }"
+        ));
         assert!(EDITOR_JS.contains("function focusLevelInputTarget()"));
         assert!(EDITOR_JS.contains("const stateData = levelStateData(exportData);"));
         assert!(
@@ -4419,6 +4487,7 @@ levels3 demo of push3 {
         assert!(EDITOR_LEVEL3D_JS.contains("await ensurePreviewExportForLevelAction({"));
         assert!(EDITOR_LEVEL3D_JS.contains("compilingMessage: \"Compiling preview for play\""));
         assert!(EDITOR_LEVEL3D_JS.contains("function stopLevel3dPlaytest(options = {})"));
+        assert!(!EDITOR_LEVEL3D_JS.contains("PuzzleStudioStopPreviewSession"));
         assert!(EDITOR_LEVEL3D_JS.contains("function sendLevel3dPlaytestKey(event)"));
         assert!(
             EDITOR_LEVEL3D_JS.contains(
@@ -4577,6 +4646,9 @@ levels3 demo of push3 {
         assert!(EDITOR_JS.contains(
             "levelDefinitionSource(levelName, levelSourceData(), \"\", { leadingBlank: false, bodyIndent: \"\" })"
         ));
+        assert!(EDITOR_SOURCE_JS.contains("function sourcePuzzleLevelHeaderSource("));
+        assert!(EDITOR_JS.contains("sourcePuzzleLevelHeaderSource(levelName, levelIndent"));
+        assert!(EDITOR_LEVEL3D_JS.contains("sourcePuzzleLevelHeaderSource(levelName, indent"));
         assert!(EDITOR_JS.contains(
             "const rowIndent = Object.prototype.hasOwnProperty.call(options, \"bodyIndent\") ? options.bodyIndent : levelIndent;"
         ));
@@ -4589,6 +4661,17 @@ levels3 demo of push3 {
     }
 
     #[test]
+    fn level_source_previews_use_canonical_quoted_level_headers() {
+        assert!(EDITOR_SOURCE_JS.contains("function sourcePuzzleQuotedText("));
+        assert!(EDITOR_SOURCE_JS.contains("function sourcePuzzleLevelHeaderName("));
+        assert!(EDITOR_JS.contains("sourcePuzzleLevelHeaderSource(levelName, levelIndent, { openBlock: true })"));
+        assert!(EDITOR_JS.contains("sourcePuzzleLevelHeaderSource(levelName, levelIndent)"));
+        assert!(EDITOR_LEVEL3D_JS.contains("sourcePuzzleLevelHeaderSource(levelName, indent, { defaultName: \"level 1\", openBlock: true })"));
+        assert!(EDITOR_HTML.contains(r#"id="level3dNameInput" type="text" value="level 1""#));
+        assert!(!EDITOR_LEVEL3D_JS.contains("level ${sanitizeLevel3dName(name)}"));
+    }
+
+    #[test]
     fn level_editor_allows_unnamed_2d_levels() {
         assert!(EDITOR_HTML.contains(r#"id="levelNameInput" type="text" value="""#));
         assert!(
@@ -4596,10 +4679,10 @@ levels3 demo of push3 {
                 "const name = \"\";\n  const sourceData = defaultEmptyLevel2dSourceData();"
             )
         );
-        assert!(EDITOR_JS.contains("return cleaned;\n}"));
+        assert!(EDITOR_JS.contains("return sourcePuzzleLevelName(editableLevelName(value));"));
         assert!(
             EDITOR_JS
-                .contains("levelName ? `${levelIndent}level ${levelName} {` : `${levelIndent}{`")
+                .contains("levelName ? sourcePuzzleLevelHeaderSource(levelName, levelIndent, { openBlock: true }) : `${levelIndent}{`")
         );
         assert!(EDITOR_JS.contains("setStatus(levelName ? `Updated level ${levelName}` : \"Updated unnamed level\", \"is-ok\");"));
     }
@@ -5858,18 +5941,32 @@ levels3 demo of push3 {
 
     #[test]
     fn level_and_solver_boards_use_preview_theme_colors() {
-        for selector in [".level-board-wrap {", ".solver-board-wrap {"] {
-            let start = EDITOR_CSS.find(selector).expect("board wrap CSS block");
-            let end = EDITOR_CSS[start..]
-                .find("\n}")
-                .map(|offset| start + offset)
-                .expect("board wrap CSS block end");
-            let block = &EDITOR_CSS[start..end];
-            assert!(block.contains("border: 1px solid var(--preview-game-line);"));
-            assert!(block.contains("background: var(--preview-game-background);"));
-            assert!(block.contains("color: var(--preview-game-ink);"));
-            assert!(!block.contains("background: var(--bg);"));
-        }
+        let level_start = EDITOR_CSS
+            .find(".level-board-wrap {")
+            .expect("level board wrap CSS block");
+        let level_end = EDITOR_CSS[level_start..]
+            .find("\n}")
+            .map(|offset| level_start + offset)
+            .expect("level board wrap CSS block end");
+        let level_block = &EDITOR_CSS[level_start..level_end];
+        assert!(level_block.contains("border: 1px solid var(--preview-game-line);"));
+        assert!(level_block.contains("background-color: var(--sprite-swatch-bg);"));
+        assert!(level_block.contains("background-image: var(--sprite-swatch-checker);"));
+        assert!(level_block.contains("color: var(--preview-game-ink);"));
+        assert!(!level_block.contains("background: var(--bg);"));
+
+        let solver_start = EDITOR_CSS
+            .find(".solver-board-wrap {")
+            .expect("solver board wrap CSS block");
+        let solver_end = EDITOR_CSS[solver_start..]
+            .find("\n}")
+            .map(|offset| solver_start + offset)
+            .expect("solver board wrap CSS block end");
+        let solver_block = &EDITOR_CSS[solver_start..solver_end];
+        assert!(solver_block.contains("border: 1px solid var(--preview-game-line);"));
+        assert!(solver_block.contains("background: var(--preview-game-background);"));
+        assert!(solver_block.contains("color: var(--preview-game-ink);"));
+        assert!(!solver_block.contains("background: var(--bg);"));
     }
 
     #[test]
@@ -6498,13 +6595,15 @@ levels3 demo of push3 {
         assert!(html.contains("Exported Editor"));
         assert!(!html.contains("gameVisualsJs"));
         assert!(html.contains(r#"<link rel="icon" type="image/svg+xml" href="favicon.svg">"#));
-        assert!(html.contains(
-            r#"<link rel="stylesheet" href="editor.css?v=source-folding-tabs-compact-close-left">"#
-        ));
         assert!(
-            html.contains(r#"<script src="editor.js?v=level-editor-renderer-assets"></script>"#)
+            html.contains(r#"<link rel="stylesheet" href="editor.css?v=desktop-export-link">"#)
         );
-        assert!(html.contains(r#"<script src="editor_import_export.js"></script>"#));
+        assert!(html.contains(r#"<script src="editor.js?v=desktop-export-link"></script>"#));
+        assert!(
+            html.contains(
+                r#"<script src="editor_import_export.js?v=desktop-export-link"></script>"#
+            )
+        );
         assert!(html.contains(r#"<script src="editor_dom.js"></script>"#));
         assert!(!html.contains("<script>\nwindow.PuzzleAssets ="));
         assert!(!html.contains("PuzzleEditorThemeImports"));
@@ -6572,7 +6671,12 @@ levels3 demo of push3 {
         assert!(!EDITOR_WORKSPACE_JS.contains("editorSeed.previewError"));
         assert!(!EDITOR_WORKSPACE_JS.contains("document.previewHtml ||"));
         assert!(!EDITOR_WORKSPACE_JS.contains("previewDocument?.previewHtml"));
-        assert!(EDITOR_WORKSPACE_JS.contains("invalidateCompiledPreview(previewDocument);"));
+        assert!(EDITOR_WORKSPACE_JS.contains("const previewTargetUnchanged = previewDocument"));
+        assert!(EDITOR_WORKSPACE_JS.contains("markPreviewDirty();"));
+        assert!(
+            EDITOR_WORKSPACE_JS
+                .contains("} else {\n    invalidateCompiledPreview(previewDocument);\n  }")
+        );
         assert!(EDITOR_WORKSPACE_JS.contains("Run preview to compile."));
     }
 
@@ -6698,10 +6802,10 @@ levels3 demo of push3 {
             .find(r#"<script src="editor_level3d.js"></script>"#)
             .expect("editor loads 3D level editor");
         let editor = EDITOR_HTML
-            .find(r#"<script src="editor.js?v=level-editor-renderer-assets"></script>"#)
+            .find(r#"<script src="editor.js?v=desktop-export-link"></script>"#)
             .expect("editor loads main editor script");
         let import_export = EDITOR_HTML
-            .find(r#"<script src="editor_import_export.js"></script>"#)
+            .find(r#"<script src="editor_import_export.js?v=desktop-export-link"></script>"#)
             .expect("editor loads import/export helpers");
         let sprite3d = EDITOR_HTML
             .find(r#"<script src="editor_sprite3d.js"#)
@@ -6717,11 +6821,12 @@ levels3 demo of push3 {
     #[test]
     fn tauri_editor_busts_cache_for_theme_css_and_tab_unsaved_assets() {
         assert!(
-            EDITOR_HTML.contains(r#"<script src="editor_boot.js?v=host-mode-required"></script>"#)
+            EDITOR_HTML.contains(r#"<script src="editor_boot.js?v=desktop-export-link"></script>"#)
         );
-        assert!(EDITOR_HTML.contains(
-            r#"<link rel="stylesheet" href="editor.css?v=source-folding-tabs-compact-close-left">"#
-        ));
+        assert!(
+            EDITOR_HTML
+                .contains(r#"<link rel="stylesheet" href="editor.css?v=desktop-export-link">"#)
+        );
         assert!(
             EDITOR_HTML
                 .contains(r#"<script src="editor_source.js?v=source-folding-state"></script>"#)
@@ -6729,11 +6834,12 @@ levels3 demo of push3 {
         assert!(EDITOR_HTML.contains(
             r#"<script src="editor_workspace.js?v=delete-active-source-sync"></script>"#
         ));
-        assert!(EDITOR_HTML.contains(r#"<script src="editor_import_export.js"></script>"#));
         assert!(
-            EDITOR_HTML
-                .contains(r#"<script src="editor.js?v=level-editor-renderer-assets"></script>"#)
+            EDITOR_HTML.contains(
+                r#"<script src="editor_import_export.js?v=desktop-export-link"></script>"#
+            )
         );
+        assert!(EDITOR_HTML.contains(r#"<script src="editor.js?v=desktop-export-link"></script>"#));
         assert!(EDITOR_WORKSPACE_JS.contains("document-tab-unsaved-dot"));
         assert!(EDITOR_WORKSPACE_JS.contains("updateDocumentTabUnsavedStates"));
         assert!(EDITOR_WORKSPACE_JS.contains("setSourceEditorValue(sourceText, {\n    preserveUndoOnSameValue: document.id === previousActiveFileId,\n  });\n  if (isTextDocument(document)) {\n    restoreSourceFoldState(document.sourceFoldedBlockKeys);\n  }\n  updateDocumentTabUnsavedStates();"));

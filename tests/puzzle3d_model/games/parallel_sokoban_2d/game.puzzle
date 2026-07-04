@@ -108,12 +108,8 @@ puzzle sokoban_2d {
 }
 
 scene playing {
-  state {
+  layout {
     board = puzzle sokoban_2d
-  }
-
-  view {
-    puzzle board
   }
 
   rules {

@@ -2425,6 +2425,8 @@ function loadEmbeddedDocument(index) {
     return;
   }
   const previousActiveFileId = activeFileId;
+  const previousPreviewDocument = activePreviewDocument();
+  const previousPreviewKey = previousPreviewDocument ? documentIdentityKey(previousPreviewDocument) : "";
   showWorkPane(SOURCE_WORK_PANE_ID);
   currentDocumentIndex = index;
   activeFileId = document.id;
@@ -2470,7 +2472,14 @@ function loadEmbeddedDocument(index) {
     restoreSourceFoldState(document.sourceFoldedBlockKeys);
   }
   updateDocumentTabUnsavedStates();
-  invalidateCompiledPreview(previewDocument);
+  const previewTargetUnchanged = previewDocument
+    && previousPreviewKey
+    && documentIdentityKey(previewDocument) === previousPreviewKey;
+  if (previewTargetUnchanged) {
+    markPreviewDirty();
+  } else {
+    invalidateCompiledPreview(previewDocument);
+  }
   if (typeof syncPaneModesFromFocusedPuzzleSource === "function") {
     syncPaneModesFromFocusedPuzzleSource({ switchOpenPane: true });
   }

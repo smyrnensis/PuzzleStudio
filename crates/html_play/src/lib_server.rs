@@ -943,6 +943,22 @@ fn push_puzzle_settings(out: &mut String, loaded: &LoadedGame) {
     push_json_bool(out, "all_cells", all_cells);
     out.push('}');
     out.push(',');
+    out.push_str("\"inputBuffer\":{");
+    push_json_bool(
+        out,
+        "queueDuringWait",
+        loaded.input_buffer.queue_during_wait,
+    );
+    out.push(',');
+    push_json_bool(
+        out,
+        "fastForwardWait",
+        loaded.input_buffer.fast_forward_wait,
+    );
+    out.push(',');
+    push_json_number(out, "minWaitMs", loaded.input_buffer.min_wait_ms);
+    out.push('}');
+    out.push(',');
     out.push_str("\"animation\":{");
     out.push_str("\"tween\":{");
     push_json_bool(out, "enabled", loaded.animation.tween.enabled);

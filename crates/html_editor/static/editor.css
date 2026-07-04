@@ -53,6 +53,8 @@
   --syntax-level-cell-invalid: #ff9da4;
   --sprite-ascii-color-adjust: #ffffff;
   --sprite-ascii-color-retain: 80%;
+  --sprite-swatch-bg: #d7dde2;
+  --sprite-swatch-checker: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='8' viewBox='0 0 8 8'%3E%3Cpath fill='%23f5f3ef' d='M0 0h4v4H0zm4 4h4v4H4z'/%3E%3Cpath fill='%23aeb6be' d='M4 0h4v4H4zM0 4h4v4H0z'/%3E%3C/svg%3E");
   --syntax-sprite-pixel-adjust: var(--sprite-ascii-color-adjust);
   --syntax-sprite-pixel-retain: var(--sprite-ascii-color-retain);
   --syntax-mark: #ff9da4;
@@ -1289,6 +1291,13 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   font-weight: 700;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.pane-footer .pane-status a,
+.pane-footer .document-status a {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
 .pane-footer .pane-status.is-ok,
@@ -3123,7 +3132,9 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   padding: 12px;
   border: 1px solid var(--preview-game-line);
   border-radius: 8px;
-  background: var(--preview-game-background);
+  background-color: var(--sprite-swatch-bg);
+  background-image: var(--sprite-swatch-checker);
+  background-size: 8px 8px;
   color: var(--preview-game-ink);
 }
 
@@ -3220,6 +3231,15 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
 .solver-board.board {
   grid-template-columns: repeat(var(--cols), var(--editor-board-cell-size)) !important;
   width: calc(var(--cols) * var(--editor-board-cell-size)) !important;
+}
+
+.level-board.board {
+  background-color: var(--sprite-swatch-bg);
+  background-image: var(--sprite-swatch-checker);
+  background-size: 8px 8px;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.78),
+    0 0 0 2px rgba(30, 41, 59, 0.58);
 }
 
 .level-board.board .cell,
@@ -4938,8 +4958,6 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
 
 .sprite-color-swatch {
   --sprite-swatch-color: transparent;
-  --sprite-swatch-bg: #d7dde2;
-  --sprite-swatch-checker: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='8' viewBox='0 0 8 8'%3E%3Cpath fill='%23f5f3ef' d='M0 0h4v4H0zm4 4h4v4H4z'/%3E%3Cpath fill='%23aeb6be' d='M4 0h4v4H4zM0 4h4v4H0z'/%3E%3C/svg%3E");
   position: relative;
   overflow: hidden;
   isolation: isolate;

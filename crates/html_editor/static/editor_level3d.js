@@ -156,7 +156,7 @@ function syncLevel3dControlsFromPreview() {
   if (!sourceDefinition) {
     syncLevel3dPaletteWithoutLoadedLevel(source, sourceDocument);
     if (level3dNameInput && !level3dNameInput.dataset.userEdited) {
-      level3dNameInput.value = "level_1";
+      level3dNameInput.value = "level 1";
     }
     if (level3dBundleInput && !level3dBundleInput.dataset.userEdited) {
       level3dBundleInput.value = currentLevel3dBundleName(exportData);
@@ -791,7 +791,7 @@ function renderLevel3dSourcePreview() {
     return;
   }
   syncLevel3dNameOptions();
-  const levelName = sanitizeLevel3dName(level3dNameInput?.value || currentLevel3dSourceDefinition(level3dEditorSource())?.name || "level_1");
+  const levelName = sanitizeLevel3dName(level3dNameInput?.value || currentLevel3dSourceDefinition(level3dEditorSource())?.name || "level 1");
   const sourceData = level3dSourceData();
   level3dSourcePreview.textContent = level3dSnippetSource(levelName, sourceData, "", { bodyIndent: "" });
 }
@@ -2521,9 +2521,10 @@ function level3dSnippetSource(name, levelData, indent = "", options = {}) {
 
 function levelDefinition3dSource(name, levelData, indent = "", options = {}) {
   const { rows } = normalizeLevel3dSourceData(levelData);
+  const levelName = sanitizeLevel3dName(name);
   const bodyIndent = Object.prototype.hasOwnProperty.call(options, "bodyIndent") ? options.bodyIndent : `${indent}  `;
   return [
-    `${indent}level ${sanitizeLevel3dName(name)} {`,
+    sourcePuzzleLevelHeaderSource(levelName, indent, { defaultName: "level 1", openBlock: true }),
     ...rows.map((row) => String(row || "").length ? `${bodyIndent}${row}` : ""),
     `${indent}}`,
   ].join("\n") + (options.trailingNewline === false ? "" : "\n");
@@ -2569,8 +2570,7 @@ function level3dUsedCharsInRows(rows) {
 }
 
 function sanitizeLevel3dName(value) {
-  const cleaned = String(value || "").trim().replace(/[^\w:.]/g, "_").replace(/^_+/, "");
-  return cleaned || "level_1";
+  return sourcePuzzleLevelName(value, "level 1");
 }
 
 function sanitizeLevel3dBundle(value) {
@@ -2641,8 +2641,8 @@ function findLevel3dDefinitions(source, range) {
   const startIndex = lines.findIndex((line) => line.start >= range.bodyStart);
   for (let index = Math.max(0, startIndex); index < lines.length && lines[index].start < range.bodyEnd; index += 1) {
     const code = level3dScannerCode(lines[index].raw);
-    const match = code.match(/^level\s+([A-Za-z_][\w:.]*)\s*\{$/);
-    if (!match) {
+    const name = sourcePuzzleLevelHeaderName(code);
+    if (name === null || !name || !code.endsWith("{")) {
       continue;
     }
     const close = findLevel3dBlockClose(lines, index);
@@ -2650,7 +2650,7 @@ function findLevel3dDefinitions(source, range) {
       continue;
     }
     definitions.push({
-      name: match[1],
+      name,
       start: lines[index].start,
       bodyStart: lines[index].end + 1,
       bodyEnd: close.start,
@@ -2908,7 +2908,7 @@ function loadLevel3dSourceTarget(target, options = {}) {
   const entry = Number.isInteger(target?.bodyStart) && Number.isInteger(target?.bodyEnd)
     ? sourceEditableEntryFromTarget(source, target, {
       find: findLevel3dDefinitionAtPosition,
-      defaultName: "level_1",
+      defaultName: "level 1",
       body: (_source, entry) => ({
         bundle: entry.bundle || entry.params?.bundle || "",
         model: entry.model || entry.params?.model || "",
@@ -2944,7 +2944,7 @@ function loadLevel3dSourceDefinition(entry, source, options = {}) {
     setActiveLevelIndex(levelIndex, exportData);
   }
   if (level3dNameInput) {
-    level3dNameInput.value = entry.name || "level_1";
+    level3dNameInput.value = entry.name || "level 1";
     delete level3dNameInput.dataset.userEdited;
   }
   if (level3dBundleInput) {
@@ -3206,7 +3206,7 @@ function level3dNormalizePlaytestSnapshot(snapshot) {
   next.cells = cells;
   if (!Array.isArray(next.levels) || !next.levels.length) {
     next.levels = [{
-      name: level3dNameInput?.value || "level_1",
+      name: level3dNameInput?.value || "level 1",
       label: level3dNameInput?.value || "Level 1",
       size: { ...next.size },
       cells,
@@ -3283,7 +3283,7 @@ function level3dRuntimePreviewUpdate() {
   return {
     levelIndex,
     level: {
-      name: levelEntry.name || level3dNameInput?.value || "level_1",
+      name: levelEntry.name || level3dNameInput?.value || "level 1",
       label: levelEntry.label || levelEntry.name || level3dNameInput?.value || "Level 1",
       size: size ? { ...size } : undefined,
       cells: JSON.parse(JSON.stringify(cells)),
@@ -4234,7 +4234,7 @@ function level3dRuntimePreviewDocument(update) {
     const target = levels[levelIndex] || {};
     levels[levelIndex] = {
       ...target,
-      name: level.name || target.name || "level_1",
+      name: level.name || target.name || "level 1",
       label: level.label || target.label || level.name || target.name || "Level 1",
       size: { ...size },
       cells: JSON.parse(JSON.stringify(cells)),
@@ -4519,7 +4519,7 @@ function level3dPreviewUpdateFromSnapshot(snapshot) {
   return {
     levelIndex,
     level: {
-      name: levelEntry.name || level3dNameInput?.value || "level_1",
+      name: levelEntry.name || level3dNameInput?.value || "level 1",
       label: levelEntry.label || levelEntry.name || level3dNameInput?.value || "Level 1",
       size: size ? { ...size } : undefined,
       cells: level3dCellsWithObjectDescriptors(cells, resources.objects),
@@ -5931,7 +5931,7 @@ function level3dClampNumber(value, min, max) {
 }
 
 async function copyLevel3dToClipboard() {
-  const levelName = sanitizeLevel3dName(level3dNameInput?.value || currentLevel3dEntry()?.name || "level_1");
+  const levelName = sanitizeLevel3dName(level3dNameInput?.value || currentLevel3dEntry()?.name || "level 1");
   await copyTextToClipboard(level3dSnippetSource(levelName, level3dSourceData(), "", { bodyIndent: "" }));
   setLevel3dActionStatus("Copied 3D level", "is-ok");
 }
@@ -5942,7 +5942,7 @@ function addLevel3dToSource() {
     setLevel3dActionStatus("No game entry for 3D level", "is-error");
     return;
   }
-  const levelName = sanitizeLevel3dName(level3dNameInput?.value || "level_1");
+  const levelName = sanitizeLevel3dName(level3dNameInput?.value || "level 1");
   const bundle = sanitizeLevel3dBundle(level3dBundleInput?.value || "");
   const nextSource = insertLevel3d(level3dEditorSource(sourceDocument), levelName, level3dSourceData(), bundle);
   if (!nextSource) {
@@ -5961,7 +5961,7 @@ function updateLevel3dInSource() {
     setLevel3dActionStatus("No game entry for 3D level", "is-error");
     return;
   }
-  const levelName = sanitizeLevel3dName(level3dNameInput?.value || "level_1");
+  const levelName = sanitizeLevel3dName(level3dNameInput?.value || "level 1");
   const bundle = sanitizeLevel3dBundle(level3dBundleInput?.value || "");
   const result = replaceLevel3dByName(level3dEditorSource(sourceDocument), levelName, level3dSourceData(), bundle);
   if (!result) {
