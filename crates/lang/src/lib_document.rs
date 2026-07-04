@@ -101,6 +101,7 @@ fn parse_game_document(source: &str) -> Result<LoadedDocument, DiagnosticReport>
                 homepage: shell.homepage,
                 default_wait_ms: shell.default_wait_ms,
                 default_again_ms: shell.default_again_ms,
+                input_buffer: shell.input_buffer,
                 animation: shell.animation,
                 sounds: shell.sounds,
                 theme: shell.theme,
@@ -132,6 +133,7 @@ fn parse_game_document(source: &str) -> Result<LoadedDocument, DiagnosticReport>
                 homepage: parts.shell.homepage,
                 default_wait_ms: parts.shell.default_wait_ms,
                 default_again_ms: parts.shell.default_again_ms,
+                input_buffer: parts.shell.input_buffer,
                 animation: parts.shell.animation,
                 sounds: parts.shell.sounds,
                 theme: parts.shell.theme,
@@ -176,6 +178,7 @@ fn parse_mixed_game_document(source: &str) -> Result<LoadedDocument, DiagnosticR
         homepage: parts.shell.homepage,
         default_wait_ms: parts.shell.default_wait_ms,
         default_again_ms: parts.shell.default_again_ms,
+        input_buffer: parts.shell.input_buffer,
         animation: parts.shell.animation,
         sounds: parts.shell.sounds,
         theme: parts.shell.theme,
@@ -221,6 +224,7 @@ fn classify_known_mixed_document_section(tokens: &[&str]) -> Option<MixedSection
         | ["homepage", ..]
         | ["default_wait_time", ..]
         | ["again_interval", ..]
+        | ["input_buffer", ..]
         | ["animation", ..]
         | ["sounds", ..]
         | ["theme", ..]
@@ -882,6 +886,7 @@ struct DocumentShell {
     homepage: Option<String>,
     default_wait_ms: u64,
     default_again_ms: u64,
+    input_buffer: InputBufferDef,
     animation: AnimationDef,
     sounds: SoundsDef,
     theme: ThemeDef,
@@ -906,6 +911,7 @@ impl Default for DocumentShell {
             homepage: None,
             default_wait_ms: DEFAULT_WAIT_MS,
             default_again_ms: DEFAULT_AGAIN_MS,
+            input_buffer: InputBufferDef::default(),
             animation: AnimationDef::default(),
             sounds: SoundsDef::default(),
             theme: ThemeDef::default(),
@@ -926,6 +932,7 @@ enum ModelTopLevelDirective {
     Variable,
     DefaultWaitTime,
     AgainInterval,
+    InputBuffer,
     Animation,
     Scene,
     Sounds,
@@ -1042,6 +1049,13 @@ const MODEL_TOP_LEVEL_ALTERNATIVES: &[HeaderChoiceAlternative<
         trigger: "again_interval",
         label: "again_interval",
         action: ModelTopLevelDirective::AgainInterval,
+        expected_group: Some(ModelTopLevelExpectedGroup::Config),
+        authoring_surface: true,
+    },
+    HeaderChoiceAlternative {
+        trigger: "input_buffer",
+        label: "input_buffer",
+        action: ModelTopLevelDirective::InputBuffer,
         expected_group: Some(ModelTopLevelExpectedGroup::Config),
         authoring_surface: true,
     },
@@ -1237,6 +1251,9 @@ fn parse_document_shell(source: &str) -> Result<DocumentShell, DiagnosticReport>
                 shell.default_again_ms = parse_again_interval_directive(&tokens, &lines[index])?;
                 index += 1;
             }
+            ["input_buffer", ..] => {
+                index = parse_input_buffer_block(&lines, index, &mut shell.input_buffer)?;
+            }
             ["animation", ..] => {
                 index = parse_animation_block(&lines, index, &mut shell.animation)?;
             }
@@ -1287,7 +1304,7 @@ fn strip_document_shell_source(source: &str) -> Result<String, DiagnosticReport>
                     index += 1;
                     continue;
                 }
-                ["animation", ..] | ["sounds", ..] | ["assets", ..] => {
+                ["input_buffer", ..] | ["animation", ..] | ["sounds", ..] | ["assets", ..] => {
                     index = skip_context_shell_block_by_syntax(&context, index);
                     continue;
                 }
@@ -1312,6 +1329,7 @@ fn strip_document_shell_source(source: &str) -> Result<String, DiagnosticReport>
                     | ["homepage", ..]
                     | ["default_wait_time", ..]
                     | ["again_interval", ..]
+                    | ["input_buffer", ..]
                     | ["animation", ..]
                     | ["sounds", ..]
                     | ["assets", ..]
@@ -1345,7 +1363,7 @@ fn strip_document_shell_lines(lines: &[source::LogicalLine]) -> Vec<source::Logi
                     index += 1;
                     continue;
                 }
-                ["animation", ..] | ["sounds", ..] | ["assets", ..] => {
+                ["input_buffer", ..] | ["animation", ..] | ["sounds", ..] | ["assets", ..] => {
                     index = skip_shell_logical_block_by_syntax(lines, index);
                     continue;
                 }
@@ -1370,6 +1388,7 @@ fn strip_document_shell_lines(lines: &[source::LogicalLine]) -> Vec<source::Logi
                     | ["homepage", ..]
                     | ["default_wait_time", ..]
                     | ["again_interval", ..]
+                    | ["input_buffer", ..]
                     | ["animation", ..]
                     | ["sounds", ..]
                     | ["assets", ..]
@@ -1473,7 +1492,7 @@ fn strip_document_shell_source_raw(source: &str) -> String {
                     index += 1;
                     continue;
                 }
-                ["animation"] | ["animation", ..] | ["sounds"] | ["assets"] => {
+                ["input_buffer", ..] | ["animation"] | ["animation", ..] | ["sounds"] | ["assets"] => {
                     index = skip_raw_top_level_block(&raw_lines, index);
                     continue;
                 }
@@ -1516,6 +1535,7 @@ fn logical_line_starts_document_boundary(tokens: &[&str]) -> bool {
             | ["homepage", ..]
             | ["default_wait_time", ..]
             | ["again_interval", ..]
+            | ["input_buffer", ..]
             | ["puzzle", ..]
             | ["puzzle3", ..]
             | ["levels", ..]
@@ -2204,6 +2224,7 @@ fn parse_game2d_expanded_lines_with_shell_inner(
     let mut puzzle_screen = PuzzleScreenDef::default();
     let mut default_wait_ms = shell.default_wait_ms;
     let mut default_again_ms = shell.default_again_ms;
+    let mut input_buffer = shell.input_buffer.clone();
 
     let mut diagnostics = Vec::new();
     let mut pending_visual_blocks = Vec::<usize>::new();
@@ -2306,6 +2327,9 @@ fn parse_game2d_expanded_lines_with_shell_inner(
             ModelTopLevelDirective::AgainInterval => {
                 default_again_ms = parse_again_interval_directive(&tokens, line)?;
                 i += 1;
+            }
+            ModelTopLevelDirective::InputBuffer => {
+                i = parse_input_buffer_block(&lines, i, &mut input_buffer)?;
             }
             ModelTopLevelDirective::Animation => {
                 i = parse_animation_block(&lines, i, &mut animation)?;
@@ -2501,6 +2525,7 @@ fn parse_game2d_expanded_lines_with_shell_inner(
     }
     add_standard_move_rule_if_missing(
         &mut rule_definitions,
+        &animation,
         &catalog.object_names,
         &catalog.object_schemas,
         &catalog.object_layers,
@@ -2604,6 +2629,7 @@ fn parse_game2d_expanded_lines_with_shell_inner(
         warnings,
         default_wait_ms,
         default_again_ms,
+        input_buffer,
         animation: animation.clone(),
         rule_animations: programs.rule_animations,
         rule_effects: programs.rule_effects,

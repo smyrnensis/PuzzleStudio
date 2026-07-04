@@ -35,8 +35,8 @@ pub use selector::{
     LineRuleTemplate3, LineWriteOpTemplate3, LocalWriteOpTemplate3, MatchCellTemplate3,
     ObjectFamily3, ObjectSelector3, ObjectVariant3, PatternLoweringError3, PatternTemplate3,
     ResolvedSelector3, RuleLoweringError3, RuleTemplate3, SelectorCatalog3, SelectorCatalogError3,
-    SelectorError3, SelectorGroup3, SelectorMark3, SelectorTag3, SelectorTransform3,
-    VariantAxis3, VariantValueSet3, WriteOpTemplate3, lower_dense_pattern, lower_dense_pattern_set,
+    SelectorError3, SelectorGroup3, SelectorMark3, SelectorTag3, SelectorTransform3, VariantAxis3,
+    VariantValueSet3, WriteOpTemplate3, lower_dense_pattern, lower_dense_pattern_set,
     lower_dense_pattern_set_to_patterns, lower_dense_pattern_to_patterns,
     lower_dense_rule_template, lower_line_rule_template, lower_pattern_template,
     lower_rule_template,
@@ -101,10 +101,8 @@ mod tests {
         })
     }
 
-    fn level_menu_component(levels: &str, action: SceneAction) -> SceneComponent {
+    fn level_menu_component() -> SceneComponent {
         SceneComponent::LevelMenu(puzzle_scene::LevelMenuComponent {
-            source: Some(levels.to_string()),
-            action: Some(action),
             ..puzzle_scene::LevelMenuComponent::default()
         })
     }
@@ -2162,14 +2160,10 @@ level one {
 }
 
 scene playing {
-state {
-board = puzzle3 layout_test
-}
-
-view {
+layout {
 row gap 1 align center {
 box size 8 8 align right bottom {
-puzzle3 board size 7 4 align left top
+board = puzzle3 layout_test size 7 4 align left top
 }
 column gap 2 scroll=true {
 title "Stats" size 5 1
@@ -2252,16 +2246,12 @@ P
 }
 
 scene playing {
-  state {
-    board = puzzle3 control_test
-  }
-
   rules {
     step board
   }
 
-  view {
-    puzzle3 board {
+  layout {
+    board = puzzle3 control_test {
       inputs {
         forward = w arrow_up
         backward = s arrow_down
@@ -2324,10 +2314,6 @@ P
 }
 
 scene playing {
-  state {
-    board = puzzle3 control_test
-  }
-
   rules {
     board.rules
   }
@@ -2611,8 +2597,7 @@ scene playing {
                 title_component("Sokoban Literally in 3D"),
                 button_component(
                     "Start",
-                    SceneAction::StartLevels {
-                        levels: "handmade".to_string(),
+                    SceneAction::Goto {
                         scene: "playing".to_string()
                     }
                 ),
@@ -2629,13 +2614,7 @@ scene playing {
             parsed.scenes[1].components,
             vec![
                 title_component("Select Level"),
-                level_menu_component(
-                    "handmade",
-                    SceneAction::StartLevels {
-                        levels: "handmade".to_string(),
-                        scene: "playing".to_string()
-                    }
-                ),
+                level_menu_component(),
                 button_component(
                     "Back",
                     SceneAction::Goto {

@@ -173,6 +173,7 @@ pub(crate) const PARSER_KEYWORDS: &[&str] = &[
     "in",
     "import",
     "input",
+    "input_buffer",
     "interactive_look",
     "interactive_zoom",
     "keys",

@@ -6,11 +6,11 @@ use crate::{
     LevelBundle3, LevelCell3, LevelEntry3, Lifecycle3, LifecycleCommand3, LineMatchCellTemplate3,
     LineOrientation3, LinePatternTemplate3, LineRuleTemplate3, LineWriteOpTemplate3,
     LocalWriteOpTemplate3, MatchCell3, ObjectDef3, ObjectFamily3, ObjectId, ObjectSelector3,
-    ObjectVariant3, Offset3, Pattern3, Rule3, Scene, SceneAction, SceneComponent, SceneControl,
-    SceneControlTarget, SceneInputBinding, SceneInputMap, SceneKeyBinding, SceneLayout3,
-    ScenePuzzle3, SceneRuleCall, SelectorCatalog3, SelectorGroup3, SelectorTag3, Size3, Sprite3,
-    SpriteColor3, SpriteSet3, SpriteVoxels3, VariantAxis3, WinCondition3,
-    lower_dense_rule_template, lower_line_rule_template,
+    ObjectVariant3, Offset3, Pattern3, Rule3, Scene, SceneAction, SceneComponent,
+    SceneInputBinding, SceneKeyBinding, SceneLayout3, ScenePuzzle3, SceneRuleCall,
+    SelectorCatalog3, SelectorGroup3, SelectorTag3, Size3, Sprite3, SpriteColor3, SpriteSet3,
+    SpriteVoxels3, VariantAxis3, WinCondition3, lower_dense_rule_template,
+    lower_line_rule_template,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -369,7 +369,7 @@ impl Parser3 {
     fn parse_scene_block(&mut self, mut index: usize, name: String) -> Result<usize, ParseError3> {
         let mut state = Vec::new();
         let mut keys = Vec::new();
-        let mut controls = Vec::new();
+        let controls = Vec::new();
         let mut rules = Vec::new();
         let mut components = Vec::new();
         while index < self.lines.len() {
@@ -383,14 +383,9 @@ impl Parser3 {
                 index += 1;
                 continue;
             }
-            if line == "state {" {
-                let (next, parsed) = self.parse_scene_state_block(index + 1)?;
-                state.extend(parsed);
-                index = next;
-                continue;
-            }
-            if line == "view {" {
-                let (next, parsed) = self.parse_scene_view_block(index + 1)?;
+            if line == "layout {" {
+                let (next, parsed_state, parsed) = self.parse_scene_layout_block(index + 1)?;
+                state.extend(parsed_state);
                 components.extend(parsed);
                 index = next;
                 continue;
@@ -402,10 +397,9 @@ impl Parser3 {
                 continue;
             }
             if line == "controls {" {
-                let (next, parsed) = self.parse_scene_controls_block(index + 1)?;
-                controls.extend(parsed);
-                index = next;
-                continue;
+                return Err(message(
+                    "scene controls were removed; use keys { <key...> -> <scene action> }",
+                ));
             }
             if line == "rules {" {
                 let (next, parsed) = self.parse_scene_rules_block(index + 1)?;
@@ -418,63 +412,100 @@ impl Parser3 {
         Err(message(format!("scene {name} block missing }}")))
     }
 
-    fn parse_scene_state_block(
-        &self,
-        mut index: usize,
-    ) -> Result<(usize, Vec<ScenePuzzle3>), ParseError3> {
-        let mut state = Vec::new();
-        while index < self.lines.len() {
-            let line = self.lines[index].clone();
-            if line == "}" {
-                return Ok((index + 1, state));
-            }
-            if line.is_empty() {
-                index += 1;
-                continue;
-            }
-            state.push(parse_scene_puzzle_state(&line)?);
-            index += 1;
-        }
-        Err(message("scene state block missing }"))
-    }
-
-    fn parse_scene_view_block(
+    fn parse_scene_layout_block(
         &self,
         index: usize,
-    ) -> Result<(usize, Vec<SceneComponent>), ParseError3> {
-        self.parse_scene_components_block(index, "view")
+    ) -> Result<(usize, Vec<ScenePuzzle3>, Vec<SceneComponent>), ParseError3> {
+        self.parse_scene_components_block(index, "layout")
     }
 
     fn parse_scene_components_block(
         &self,
         index: usize,
         block_name: &str,
-    ) -> Result<(usize, Vec<SceneComponent>), ParseError3> {
+    ) -> Result<(usize, Vec<ScenePuzzle3>, Vec<SceneComponent>), ParseError3> {
+        let mut state = Vec::new();
         let mut parse_leaf =
             |_: &[String], index: usize| -> Result<(usize, SceneComponent), ParseError3> {
-                self.parse_scene_leaf_component_at(index)
+                let (next, puzzle_state, component) = self.parse_scene_leaf_component_at(index)?;
+                if let Some(puzzle_state) = puzzle_state {
+                    state.push(puzzle_state);
+                }
+                Ok((next, component))
             };
-        puzzle_scene::parse_scene_component_block(
+        let (next, components) = puzzle_scene::parse_scene_component_block(
             &self.lines,
             index,
             block_name,
             puzzle_scene::SceneBlockSyntax::Braces,
             &mut parse_leaf,
             &build_scene_container3,
-        )
+        )?;
+        Ok((next, state, components))
     }
 
     fn parse_scene_leaf_component_at(
         &self,
         index: usize,
-    ) -> Result<(usize, SceneComponent), ParseError3> {
+    ) -> Result<(usize, Option<ScenePuzzle3>, SceneComponent), ParseError3> {
         let line = self.lines[index].clone();
+        if line.contains('=') {
+            if line.trim_end().ends_with('{') {
+                return self.parse_puzzle3_layout_declaration_block(index, &line);
+            }
+            let (puzzle_state, component) = parse_scene_puzzle_layout_declaration(&line)?;
+            return Ok((index + 1, Some(puzzle_state), component));
+        }
         if let Some(rest) = line.strip_prefix("puzzle3 ").map(str::trim) {
             if rest.ends_with('{') {
-                return self.parse_puzzle3_component_block(index, rest);
+                let (next, component) = self.parse_puzzle3_component_block(index, rest)?;
+                return Ok((next, None, component));
             }
         }
-        Ok((index + 1, parse_scene_component(&line)?))
+        Ok((index + 1, None, parse_scene_component(&line)?))
+    }
+
+    fn parse_puzzle3_layout_declaration_block(
+        &self,
+        index: usize,
+        line: &str,
+    ) -> Result<(usize, Option<ScenePuzzle3>, SceneComponent), ParseError3> {
+        let header = line
+            .strip_suffix('{')
+            .map(str::trim)
+            .ok_or_else(|| message("puzzle3 layout declaration must open a block with {"))?;
+        let (puzzle_state, source, layout) = parse_scene_puzzle_layout_header(header)?;
+        let mut inputs = Vec::new();
+        let mut cursor = index + 1;
+        while cursor < self.lines.len() {
+            let line = self.lines[cursor].clone();
+            if line == "}" {
+                return Ok((
+                    cursor + 1,
+                    Some(puzzle_state),
+                    SceneComponent::Frame(puzzle_scene::FrameComponent {
+                        kind: "puzzle3".to_string(),
+                        source,
+                        inputs,
+                        layout,
+                    }),
+                ));
+            }
+            if line.is_empty() {
+                cursor += 1;
+                continue;
+            }
+            if line == "inputs {" {
+                let (next, parsed) = self.parse_component_inputs_block(cursor + 1)?;
+                inputs.extend(parsed);
+                cursor = next;
+                continue;
+            }
+            return Err(message(format!(
+                "unknown puzzle3 component directive: {line}"
+            )));
+        }
+        Err(message("puzzle3 component block missing }"))
     }
 
     fn parse_puzzle3_component_block(
@@ -563,26 +594,6 @@ impl Parser3 {
         Err(message("scene keys block missing }"))
     }
 
-    fn parse_scene_controls_block(
-        &self,
-        mut index: usize,
-    ) -> Result<(usize, Vec<SceneControl>), ParseError3> {
-        let mut controls = Vec::new();
-        while index < self.lines.len() {
-            let line = self.lines[index].clone();
-            if line == "}" {
-                return Ok((index + 1, controls));
-            }
-            if line.is_empty() {
-                index += 1;
-                continue;
-            }
-            controls.push(parse_scene_control(&line)?);
-            index += 1;
-        }
-        Err(message("scene controls block missing }"))
-    }
-
     fn parse_scene_rules_block(
         &self,
         mut index: usize,
@@ -598,37 +609,16 @@ impl Parser3 {
                 continue;
             }
             if let Some(head) = line.strip_suffix("with input {").map(str::trim) {
-                let (target, rule) = parse_scene_step_call_head(head)?;
-                let (next, input_map) = self.parse_scene_input_map_block(index + 1)?;
-                rules.push(SceneRuleCall::new(target, rule, input_map));
-                index = next;
-                continue;
+                let _ = head;
+                return Err(message(
+                    "scene input maps are not shared scene syntax; use step <puzzle>",
+                ));
             }
             let (target, rule) = parse_scene_step_call_head(&line)?;
             rules.push(SceneRuleCall::new(target, rule, Vec::new()));
             index += 1;
         }
         Err(message("scene rules block missing }"))
-    }
-
-    fn parse_scene_input_map_block(
-        &self,
-        mut index: usize,
-    ) -> Result<(usize, Vec<SceneInputMap>), ParseError3> {
-        let mut input_map = Vec::new();
-        while index < self.lines.len() {
-            let line = self.lines[index].clone();
-            if line == "}" {
-                return Ok((index + 1, input_map));
-            }
-            if line.is_empty() {
-                index += 1;
-                continue;
-            }
-            input_map.push(parse_scene_input_map_line(&line)?);
-            index += 1;
-        }
-        Err(message("scene input map block missing }"))
     }
 
     fn parse_sprites3_block(
@@ -1288,20 +1278,44 @@ fn parse_scene_header(line: &str) -> Option<String> {
     (!name.is_empty()).then(|| name.to_string())
 }
 
-fn parse_scene_puzzle_state(line: &str) -> Result<ScenePuzzle3, ParseError3> {
+fn parse_scene_puzzle_layout_declaration(
+    line: &str,
+) -> Result<(ScenePuzzle3, SceneComponent), ParseError3> {
+    let (puzzle_state, source, layout) = parse_scene_puzzle_layout_header(line)?;
+    Ok((
+        puzzle_state,
+        SceneComponent::Frame(puzzle_scene::FrameComponent {
+            kind: "puzzle3".to_string(),
+            source,
+            inputs: Vec::new(),
+            layout,
+        }),
+    ))
+}
+
+fn parse_scene_puzzle_layout_header(
+    line: &str,
+) -> Result<(ScenePuzzle3, String, SceneLayout3), ParseError3> {
     let (slot, value) = line
         .split_once('=')
-        .ok_or_else(|| message("scene puzzle state must be: <slot> = puzzle3 <model>"))?;
+        .ok_or_else(|| message("scene puzzle layout row must be: <slot> = puzzle3 <model>"))?;
     let slot = slot.trim();
-    let model = value
+    let rest = value
         .trim()
         .strip_prefix("puzzle3 ")
         .map(str::trim)
-        .ok_or_else(|| message("scene puzzle state must be: <slot> = puzzle3 <model>"))?;
+        .ok_or_else(|| message("scene puzzle layout row must be: <slot> = puzzle3 <model>"))?;
+    let (model, attrs) = split_name_and_attrs(rest)?;
     if slot.is_empty() || model.is_empty() {
-        return Err(message("scene puzzle state must name a slot and model"));
+        return Err(message(
+            "scene puzzle layout row must name a slot and model",
+        ));
     }
-    Ok(ScenePuzzle3::new(slot, model))
+    Ok((
+        ScenePuzzle3::new(slot, model),
+        slot.to_string(),
+        parse_scene_layout_attrs(attrs)?,
+    ))
 }
 
 fn parse_scene_component(line: &str) -> Result<SceneComponent, ParseError3> {
@@ -1324,22 +1338,17 @@ fn parse_scene_component(line: &str) -> Result<SceneComponent, ParseError3> {
             layout,
         }));
     }
-    if let Some(rest) = line.strip_prefix("level_menu ").map(str::trim) {
-        let (left, action_text) = rest.split_once("->").ok_or_else(|| {
-            message(
-                "level_menu component must be: level_menu <levels> -> start <levels> in <scene>",
-            )
-        })?;
-        let (levels, attrs) = split_name_and_attrs(left.trim())?;
-        if levels.is_empty() {
-            return Err(message("level_menu component must name a levels source"));
+    if let Some(attrs) = line.strip_prefix("level_menu").map(str::trim) {
+        if attrs.contains("->") || attrs.split_whitespace().next().is_some() {
+            return Err(message(
+                "level_menu takes no inline source or effect; use the shared scene level_menu contract",
+            ));
         }
         let layout = parse_scene_layout_attrs(attrs)?;
-        let action = parse_scene_action(&format!("-> {}", action_text.trim()))?;
         return Ok(SceneComponent::LevelMenu(
             puzzle_scene::LevelMenuComponent {
-                source: Some(levels.to_string()),
-                action: Some(action),
+                source: None,
+                action: None,
                 layout,
                 ..puzzle_scene::LevelMenuComponent::default()
             },
@@ -1358,7 +1367,7 @@ fn parse_scene_component(line: &str) -> Result<SceneComponent, ParseError3> {
             layout,
         }));
     }
-    Err(message(format!("unknown scene view component: {line}")))
+    Err(message(format!("unknown scene layout component: {line}")))
 }
 
 fn split_scene_attrs_before_action(value: &str) -> Result<(&str, &str), ParseError3> {
@@ -1480,33 +1489,6 @@ fn is_key_code_token(value: &str) -> bool {
             .is_some_and(|rest| rest.len() == 1 && rest.chars().all(|ch| ch.is_ascii_digit()))
 }
 
-fn parse_scene_control(line: &str) -> Result<SceneControl, ParseError3> {
-    let rest = line
-        .strip_prefix("key ")
-        .map(str::trim)
-        .ok_or_else(|| message("scene control must be: key <key> -> <input-or-action>"))?;
-    let (key, target_text) = rest
-        .split_once("->")
-        .ok_or_else(|| message("scene control must be: key <key> -> <input-or-action>"))?;
-    let key = key.trim();
-    let target_text = target_text.trim();
-    if key.is_empty() || target_text.is_empty() {
-        return Err(message("scene control must name a key and target"));
-    }
-    let target = match parse_scene_action(&format!("-> {target_text}")) {
-        Ok(action) => SceneControlTarget::Action(action),
-        Err(_) => {
-            if !is_plain_identifier(target_text) {
-                return Err(message(format!(
-                    "scene control input target must be a single input name: {target_text}"
-                )));
-            }
-            SceneControlTarget::Input(target_text.to_string())
-        }
-    };
-    Ok(SceneControl::new(key, target))
-}
-
 fn parse_scene_step_call_head(line: &str) -> Result<(String, String), ParseError3> {
     let tokens = line.split_whitespace().collect::<Vec<_>>();
     match tokens.as_slice() {
@@ -1518,20 +1500,6 @@ fn parse_scene_step_call_head(line: &str) -> Result<(String, String), ParseError
         )),
         _ => Err(message("scene rule call must be: step <puzzle>")),
     }
-}
-
-fn parse_scene_input_map_line(line: &str) -> Result<SceneInputMap, ParseError3> {
-    let (from, to) = line.split_once("->").ok_or_else(|| {
-        message("scene input map row must be: <scene-input> -> <component-input>")
-    })?;
-    let from = from.trim();
-    let to = to.trim();
-    if !is_plain_identifier(from) || !is_plain_identifier(to) {
-        return Err(message(
-            "scene input map row must use single input names on both sides",
-        ));
-    }
-    Ok(SceneInputMap::new(from, to))
 }
 
 fn is_plain_identifier(value: &str) -> bool {
@@ -1554,19 +1522,10 @@ fn parse_scene_action(value: &str) -> Result<SceneAction, ParseError3> {
             scene: scene.to_string(),
         });
     }
-    if let Some(rest) = command.strip_prefix("start ").map(str::trim) {
-        let (levels, scene) = rest
-            .split_once(" in ")
-            .ok_or_else(|| message("start action must be: start <levels> in <scene>"))?;
-        let levels = levels.trim();
-        let scene = scene.trim();
-        if levels.is_empty() || scene.is_empty() {
-            return Err(message("start action must name levels and scene"));
-        }
-        return Ok(SceneAction::StartLevels {
-            levels: levels.to_string(),
-            scene: scene.to_string(),
-        });
+    if command.starts_with("start ") {
+        return Err(message(
+            "start <levels> in <scene> is not shared scene syntax; use goto <scene>",
+        ));
     }
     Err(message(format!("unknown scene action: {command}")))
 }

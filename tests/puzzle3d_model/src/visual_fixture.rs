@@ -4,8 +4,8 @@ use std::fmt::Write;
 use crate::{
     Direction3, Guard3, Lifecycle3, LifecycleCommand3, MatchCell3, ObjectId, ParsedPuzzle3,
     Pattern3, Rule3, RuleApplication3, SceneAction, SceneAlignX3, SceneAlignY3, SceneComponent,
-    SceneControlTarget, SceneInputBinding, SceneInputMap, SceneLayout3, SceneRuleCall,
-    SelectorCatalog3, Size3, SpriteColor3, SpriteSet3, WinCondition3, WriteOp3,
+    SceneInputBinding, SceneInputMap, SceneLayout3, SceneRuleCall, SelectorCatalog3, Size3,
+    SpriteColor3, SpriteSet3, WinCondition3, WriteOp3,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -501,20 +501,6 @@ fn write_scenes(out: &mut String, parsed: &ParsedPuzzle3) {
                 .unwrap();
             }
             out.push_str("],\n");
-            out.push_str("      \"controls\": {");
-            for (control_index, control) in scene.controls.iter().enumerate() {
-                if control_index > 0 {
-                    out.push_str(", ");
-                }
-                write!(
-                    out,
-                    "{}: {}",
-                    json_string(&control.key),
-                    scene_control_target_json(&control.target)
-                )
-                .unwrap();
-            }
-            out.push_str("},\n");
             out.push_str("      \"keys\": {");
             for (key_index, key) in scene.keys.iter().enumerate() {
                 if key_index > 0 {
@@ -568,7 +554,7 @@ fn write_scene_component_json(out: &mut String, component: &SceneComponent) {
             write_layout_json(out, &title.layout);
             out.push_str(" }");
         }
-        SceneComponent::Button(button) => {
+        SceneComponent::Button(button) | SceneComponent::Choice(button) => {
             write!(
                 out,
                 "{{ \"kind\": \"button\", \"label\": {}, \"action\": {}",
@@ -581,17 +567,15 @@ fn write_scene_component_json(out: &mut String, component: &SceneComponent) {
         }
         SceneComponent::LevelMenu(menu) => {
             let levels = menu.source.as_deref().unwrap_or("levels");
-            let action = menu
-                .action
-                .as_ref()
-                .expect("3D level_menu fixture action must be set");
             write!(
                 out,
-                "{{ \"kind\": \"level_menu\", \"levels\": {}, \"action\": {}",
-                json_string(levels),
-                scene_action_json(action)
+                "{{ \"kind\": \"level_menu\", \"levels\": {}",
+                json_string(levels)
             )
             .unwrap();
+            if let Some(action) = menu.action.as_ref() {
+                write!(out, ", \"action\": {}", scene_action_json(action)).unwrap();
+            }
             write_layout_json(out, &menu.layout);
             out.push_str(" }");
         }
@@ -637,8 +621,8 @@ fn write_scene_component_json(out: &mut String, component: &SceneComponent) {
         }
         SceneComponent::Subtitle(_)
         | SceneComponent::Text(_)
-        | SceneComponent::For(_)
-        | SceneComponent::Menu(_) => {}
+        | SceneComponent::Conditional(_)
+        | SceneComponent::For(_) => {}
     }
 }
 
@@ -743,25 +727,6 @@ fn scene_action_json(action: &SceneAction) -> String {
                 json_string(scene)
             )
         }
-        SceneAction::StartLevels { levels, scene } => {
-            format!(
-                "{{ \"kind\": \"start_levels\", \"levels\": {}, \"scene\": {} }}",
-                json_string(levels),
-                json_string(scene)
-            )
-        }
-    }
-}
-
-fn scene_control_target_json(target: &SceneControlTarget) -> String {
-    match target {
-        SceneControlTarget::Input(input) => {
-            format!(
-                "{{ \"kind\": \"input\", \"input\": {} }}",
-                json_string(input)
-            )
-        }
-        SceneControlTarget::Action(action) => scene_action_json(action),
     }
 }
 
@@ -835,7 +800,9 @@ fn write_level_bundles(out: &mut String, parsed: &ParsedPuzzle3) {
     for scene in &parsed.scenes {
         for component in &scene.components {
             match component {
-                SceneComponent::Button(button) => collect_action_levels(&mut names, &button.effect),
+                SceneComponent::Button(button) | SceneComponent::Choice(button) => {
+                    collect_action_levels(&mut names, &button.effect)
+                }
                 SceneComponent::LevelMenu(menu) => {
                     let levels = menu.source.as_deref().unwrap_or("levels");
                     push_unique_string(&mut names, levels);
@@ -852,8 +819,8 @@ fn write_level_bundles(out: &mut String, parsed: &ParsedPuzzle3) {
                 | SceneComponent::Title(_)
                 | SceneComponent::Subtitle(_)
                 | SceneComponent::Text(_)
-                | SceneComponent::For(_)
-                | SceneComponent::Menu(_) => {}
+                | SceneComponent::Conditional(_)
+                | SceneComponent::For(_) => {}
             }
         }
     }
@@ -881,7 +848,9 @@ fn write_level_bundles(out: &mut String, parsed: &ParsedPuzzle3) {
 fn collect_component_levels(names: &mut Vec<String>, components: &[SceneComponent]) {
     for component in components {
         match component {
-            SceneComponent::Button(button) => collect_action_levels(names, &button.effect),
+            SceneComponent::Button(button) | SceneComponent::Choice(button) => {
+                collect_action_levels(names, &button.effect)
+            }
             SceneComponent::LevelMenu(menu) => {
                 let levels = menu.source.as_deref().unwrap_or("levels");
                 push_unique_string(names, levels);
@@ -898,16 +867,15 @@ fn collect_component_levels(names: &mut Vec<String>, components: &[SceneComponen
             | SceneComponent::Title(_)
             | SceneComponent::Subtitle(_)
             | SceneComponent::Text(_)
-            | SceneComponent::For(_)
-            | SceneComponent::Menu(_) => {}
+            | SceneComponent::Conditional(_)
+            | SceneComponent::For(_) => {}
         }
     }
 }
 
 fn collect_action_levels(names: &mut Vec<String>, action: &SceneAction) {
-    if let SceneAction::StartLevels { levels, .. } = action {
-        push_unique_string(names, levels);
-    }
+    let _ = names;
+    let _ = action;
 }
 
 fn push_unique_string(names: &mut Vec<String>, value: &str) {

@@ -81,7 +81,8 @@
       window.dispatchEvent(new CustomEvent("PuzzleStandaloneStateChanged"));
     }
 
-    setCurrentState(state, options = {}) {
+    async setCurrentState(state, options = {}) {
+      await this.ensureInitialized();
       if (!this.sessionRuntime) {
         throw new Error("Puzzle game WASM runtime is unavailable.");
       }

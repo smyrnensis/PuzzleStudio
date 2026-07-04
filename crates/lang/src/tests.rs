@@ -1211,6 +1211,42 @@ P
 }
 
 #[test]
+fn top_level_input_buffer_parses_to_game_settings() {
+    let loaded = parse_game(
+        r#"
+title input_buffer_fixture
+input_buffer {
+queue_during_wait = false
+fast_forward_wait = true
+min_wait = 75ms
+}
+
+puzzle main {
+layers {
+actor = Player
+}
+rules {
+
+}
+levels {
+legend {
+. = empty
+P = Player
+}
+level "first"
+P
+}
+}
+"#,
+    )
+    .unwrap();
+
+    assert!(!loaded.input_buffer.queue_during_wait);
+    assert!(loaded.input_buffer.fast_forward_wait);
+    assert_eq!(loaded.input_buffer.min_wait_ms, 75);
+}
+
+#[test]
 fn animation_tween_rejects_old_enabled_assignment() {
     let source = r#"
 title tween_fixture
@@ -12970,7 +13006,6 @@ b
 }
 "#;
     let loaded = parse_game(source).unwrap();
-    eprintln!("computed rotation rules: {:?}", loaded.game.rules());
     let moved =
         transition_state(&loaded.game, &loaded.levels[0].initial_state, InputId(0)).unwrap();
 

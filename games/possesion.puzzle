@@ -1,3 +1,7 @@
+sounds {
+music possesion seed=517275 bars=8 height=0.50 bpm=100 volume=0.50
+}
+
 puzzle possesion {
 
 tags {
@@ -36,8 +40,9 @@ input [ playable ] -> [ > playable ]
 [ > Alien | Crab:norm ] -> [  | Crab:poss ]
 [ > Crab:poss | Crab:norm ] -> [ > Crab:poss | > Crab:norm ]
 [ Wall ] -> [ Wall Stop ]
-[ > solid | Stop ] -> [ solid Stop | Stop ]
-[ > solid ] ->
+[ > solid | Stop ] -> [ > solid Stop | Stop ]
+[ > *:poss | Crab:norm Stop ] -> [ *:norm | Crab:poss Stop ]
+[ Stop ] -> [  ]
 move
 }
 

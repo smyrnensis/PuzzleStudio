@@ -38,30 +38,22 @@ puzzle3 sokoban_literally_in_3d {
 }
 
 scene title {
-  view {
+  layout {
     title "Microban Basic 3D"
-    button "Start" -> start microban in playing
+    button "Start" -> goto playing
     button "Level Select" -> goto level_select
   }
 }
 
 scene level_select {
-  state {
-    board = puzzle3 sokoban_literally_in_3d
-  }
-
-  view {
+  layout {
     title "Select Level"
-    level_menu microban -> start microban in playing
+    level_menu
     button "Back" -> goto title
   }
 }
 
 scene playing {
-  state {
-    board = puzzle3 sokoban_literally_in_3d
-  }
-
   keys {
     q Escape -> goto level_select
   }
@@ -70,9 +62,9 @@ scene playing {
     step board
   }
 
-  view {
+  layout {
     box size 8 8 {
-      puzzle3 board size 7 7
+      board = puzzle3 sokoban_literally_in_3d size 7 7
     }
   }
 }

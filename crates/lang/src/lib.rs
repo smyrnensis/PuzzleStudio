@@ -34,8 +34,8 @@ pub use highlight::{HighlightedSource, highlight_source};
 use level::{LevelBlock, parse_level};
 pub use loaded::{
     AnimationDef, ArrowKey, AsciiLegend, AssetDef, AssetKind, AssetsDef, Controls, ForSource,
-    GoalClause, GoalCondition, GoalExpr, GoalValue, KeyBinding, KeyTrigger, Level, LevelMenuDef,
-    LevelMenuLocked, LevelRegionDef, LoadedDocument, LoadedDocumentModel, LoadedGame,
+    GoalClause, GoalCondition, GoalExpr, GoalValue, InputBufferDef, KeyBinding, KeyTrigger, Level,
+    LevelMenuDef, LevelMenuLocked, LevelRegionDef, LoadedDocument, LoadedDocumentModel, LoadedGame,
     ModelOperationSound, ModelOperationSoundDef, MusicSoundDef, PuzzleGridRenderDef,
     PuzzleRenderDef, PuzzleScreenDef, PuzzleViewDef, ResourceSelection, RuleAnimation,
     RuleAnimationTrigger, RuleEffect, SceneAlignDef, SceneAlignXDef, SceneAlignYDef, SceneBinaryOp,

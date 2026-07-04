@@ -18,6 +18,8 @@ keys {
   Enter Space Escape -> action
 }
 
+input action
+
 sprites {
   Player
     #ffffff
@@ -48,13 +50,13 @@ scene title {
 
 scene playing {
   layout {
-    board = puzzle main
+    main
   }
   keys {
     Escape q -> back
   }
   rules {
-    step board
+    step main
   }
   routine back {
     goto title
@@ -69,7 +71,11 @@ scene playing {
     assert_eq!(loaded.controls.named.get("Space"), Some(&action));
     assert_eq!(loaded.controls.named.get("Escape"), Some(&action));
 
-    let title = &loaded.scenes[0];
+    let title = loaded
+        .scenes
+        .iter()
+        .find(|scene| scene.name == "title")
+        .unwrap();
     assert_eq!(title.key_bindings.len(), 1);
     assert_eq!(
         title.key_bindings[0].keys,
@@ -88,7 +94,11 @@ scene playing {
         Some(SceneComponent::Button(button)) if button.effect == SceneEffect::Input("confirm".to_string())
     ));
 
-    let playing = &loaded.scenes[1];
+    let playing = loaded
+        .scenes
+        .iter()
+        .find(|scene| scene.name == "playing")
+        .unwrap();
     assert_eq!(
         playing.key_bindings[0].effect,
         SceneEffect::RoutineCall("back".to_string())

@@ -42,7 +42,7 @@ async function downloadHtml() {
         return;
       }
       if (result?.ok) {
-        setEditorStatus(`Exported ${fileName(result.path) || filename}`);
+        setExportedFileStatus(result.path, filename);
         return;
       }
     } catch (error) {
@@ -54,6 +54,50 @@ async function downloadHtml() {
   const blob = new Blob([html], { type: "text/html;charset=utf-8" });
   downloadBlob(blob, filename);
   setEditorStatus(`Exported ${filename}`, "is-ok");
+}
+
+function setExportedFileStatus(path, fallbackName) {
+  const label = fileName(path) || fallbackName || "exported file";
+  const options = exportedFileStatusLinkOptions(path, label);
+  setEditorStatusLink("Exported ", label, options);
+  const activePaneElement = setPaneStatusLink(activeStatusPaneId(), "Exported ", label, options);
+  if (!activePaneElement) {
+    setPaneStatusLink("preview", "Exported ", label, options);
+  }
+}
+
+function exportedFileStatusLinkOptions(path, label) {
+  return {
+    className: "is-ok",
+    href: fileUrlForPath(path),
+    title: path,
+    download: label,
+    onClick: async (event) => {
+      event.preventDefault();
+      try {
+        await window.PuzzleStudioHost.openExportedFile({ path });
+      } catch (error) {
+        console.error(error);
+        setEditorStatus(`Open failed: ${error.message || error}`, "is-error");
+      }
+    },
+  };
+}
+
+function fileUrlForPath(path) {
+  const raw = String(path || "");
+  const normalized = raw.replaceAll("\\", "/");
+  const encodedPath = normalized
+    .split("/")
+    .map((segment, index) => (index === 0 && /^[A-Za-z]:$/.test(segment) ? segment : encodeURIComponent(segment)))
+    .join("/");
+  if (normalized.startsWith("//")) {
+    return `file:${encodedPath}`;
+  }
+  if (normalized.startsWith("/")) {
+    return `file://${encodedPath}`;
+  }
+  return `file:///${encodedPath}`;
 }
 
 function htmlDownloadFileName() {

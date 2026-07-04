@@ -149,6 +149,8 @@ impl ServerState {
         out.push(',');
         push_json_number(&mut out, "defaultAgainMs", self.loaded.default_again_ms);
         out.push(',');
+        push_export_input_buffer(&mut out, &self.loaded);
+        out.push(',');
         push_export_animation(&mut out, &self.loaded);
         out.push(',');
         push_sound_events(&mut out, &sound_events);

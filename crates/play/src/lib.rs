@@ -3778,38 +3778,7 @@ fn split_effects_at_program_boundary(
         return Some((before, milliseconds, after));
     }
 
-    let milliseconds = animation_wait_milliseconds(game, animations)?;
-    let (before, after) = split_effects_for_implicit_animation_boundary(effects);
-    Some((before, milliseconds, after))
-}
-
-fn split_effects_for_implicit_animation_boundary(
-    effects: Vec<QueuedRuleEffect>,
-) -> (Vec<QueuedRuleEffect>, Vec<QueuedRuleEffect>) {
-    let mut before = Vec::new();
-    let mut after = Vec::new();
-    for effect in effects {
-        if rule_effect_waits_for_animation_boundary(&effect.effect) {
-            after.push(effect);
-        } else {
-            before.push(effect);
-        }
-    }
-    (before, after)
-}
-
-fn rule_effect_waits_for_animation_boundary(effect: &RuleEffect) -> bool {
-    matches!(
-        effect,
-        RuleEffect::Win
-            | RuleEffect::Restart
-            | RuleEffect::NextLevel
-            | RuleEffect::Again
-            | RuleEffect::Wait { .. }
-            | RuleEffect::WaitAnimation
-            | RuleEffect::Message { .. }
-            | RuleEffect::Scene(_)
-    )
+    None
 }
 
 fn animation_wait_milliseconds(game: &LoadedGame, animations: &[AnimationEvent]) -> Option<u64> {
@@ -5921,6 +5890,219 @@ P.
                 to_y: 0,
                 to_z: 0,
             }]
+        );
+
+        session
+            .apply_command(&loaded, "__continue_effects")
+            .unwrap();
+
+        assert!(session.state().has_object(&loaded.game, 1, 0, marker));
+    }
+
+    #[test]
+    fn tween_animation_without_wait_does_not_pause_following_routine() {
+        let loaded = parse_game(
+            r#"
+title tween_without_wait_boundary
+animation {
+tween {
+duration = 80ms
+}
+}
+puzzle default {
+layers {
+actor = Player
+marker = Marker
+}
+rules {
+input right [ Player | ] -> [ | Player ]
+routine_after_move
+}
+routine routine_after_move {
+[ Player no Marker ] -> [ Player Marker ]
+}
+levels {
+legend {
+. = empty
+P = Player
+}
+level "start" {
+P.
+}
+}
+}
+"#,
+        )
+        .unwrap();
+        let player = object_named(&loaded, "Player");
+        let marker = object_named(&loaded, "Marker");
+        let mut session = GameSession::new(&loaded);
+
+        session
+            .apply_input(&loaded, input_named(&loaded, "right"))
+            .unwrap();
+
+        assert!(session.state().has_object(&loaded.game, 1, 0, player));
+        assert!(session.state().has_object(&loaded.game, 1, 0, marker));
+        assert!(session.take_wait_events().is_empty());
+        assert_eq!(
+            session.take_animation_events(),
+            vec![AnimationEvent::Move {
+                name: "tween".to_string(),
+                object: player,
+                from_x: 0,
+                from_y: 0,
+                from_z: 0,
+                to_x: 1,
+                to_y: 0,
+                to_z: 0,
+            }]
+        );
+    }
+
+    #[test]
+    fn standard_move_tween_waits_after_chain_resolution() {
+        let loaded = parse_game(
+            r#"
+title standard_move_tween_chain_boundary
+animation {
+tween {
+duration = 80ms
+}
+}
+puzzle default {
+layers {
+actor = Player Box
+marker = Marker
+}
+rules {
+input right [ Player | Box | no Player no Box ] -> [ > Player | > Box | ]
+move
+routine_after_move
+}
+routine routine_after_move {
+[ Player no Marker ] -> [ Player Marker ]
+}
+levels {
+legend {
+. = empty
+P = Player
+B = Box
+}
+level "start" {
+PB.
+}
+}
+}
+"#,
+        )
+        .unwrap();
+        let player = object_named(&loaded, "Player");
+        let box_object = object_named(&loaded, "Box");
+        let marker = object_named(&loaded, "Marker");
+        let mut session = GameSession::new(&loaded);
+
+        session
+            .apply_input(&loaded, input_named(&loaded, "right"))
+            .unwrap();
+
+        assert!(!session.state().has_object(&loaded.game, 0, 0, player));
+        assert!(session.state().has_object(&loaded.game, 1, 0, player));
+        assert!(session.state().has_object(&loaded.game, 2, 0, box_object));
+        assert!(!session.state().has_object(&loaded.game, 1, 0, marker));
+        assert_eq!(
+            session.take_wait_events(),
+            vec![WaitEvent::ContinueEffects { milliseconds: 80 }]
+        );
+        let mut animation_events = session.take_animation_events();
+        animation_events.sort_by_key(|event| match event {
+            AnimationEvent::Move { object, .. } | AnimationEvent::CantMove { object, .. } => {
+                object.0
+            }
+        });
+        assert_eq!(
+            animation_events,
+            vec![
+                AnimationEvent::Move {
+                    name: "tween".to_string(),
+                    object: player,
+                    from_x: 0,
+                    from_y: 0,
+                    from_z: 0,
+                    to_x: 1,
+                    to_y: 0,
+                    to_z: 0,
+                },
+                AnimationEvent::Move {
+                    name: "tween".to_string(),
+                    object: box_object,
+                    from_x: 1,
+                    from_y: 0,
+                    from_z: 0,
+                    to_x: 2,
+                    to_y: 0,
+                    to_z: 0,
+                },
+            ]
+        );
+
+        session
+            .apply_command(&loaded, "__continue_effects")
+            .unwrap();
+
+        assert!(session.state().has_object(&loaded.game, 1, 0, marker));
+        assert!(session.take_wait_events().is_empty());
+    }
+
+    #[test]
+    fn standard_move_tween_waits_before_following_direct_rewrite() {
+        let loaded = parse_game(
+            r#"
+title standard_move_tween_direct_rule_boundary
+animation {
+tween {
+duration = 80ms
+}
+}
+puzzle default {
+layers {
+actor = Player Box
+marker = Marker
+}
+rules {
+input right [ Player | Box | no Player no Box ] -> [ > Player | > Box | ]
+move
+[ Player no Marker ] -> [ Player Marker ]
+}
+levels {
+legend {
+. = empty
+P = Player
+B = Box
+}
+level "start" {
+PB.
+}
+}
+}
+"#,
+        )
+        .unwrap();
+        let player = object_named(&loaded, "Player");
+        let box_object = object_named(&loaded, "Box");
+        let marker = object_named(&loaded, "Marker");
+        let mut session = GameSession::new(&loaded);
+
+        session
+            .apply_input(&loaded, input_named(&loaded, "right"))
+            .unwrap();
+
+        assert!(session.state().has_object(&loaded.game, 1, 0, player));
+        assert!(session.state().has_object(&loaded.game, 2, 0, box_object));
+        assert!(!session.state().has_object(&loaded.game, 1, 0, marker));
+        assert_eq!(
+            session.take_wait_events(),
+            vec![WaitEvent::ContinueEffects { milliseconds: 80 }]
         );
 
         session
