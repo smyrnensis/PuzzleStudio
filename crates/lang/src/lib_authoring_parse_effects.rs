@@ -422,6 +422,20 @@ pub(crate) fn rewrite_effect_command_syntax(token: &str) -> Option<RewriteEffect
         .map(|effect| effect.command_syntax())
 }
 
+pub(crate) fn is_level_event_sugar(trimmed: &str, tokens: &[&str]) -> bool {
+    let Some(command) = tokens.first().copied() else {
+        return false;
+    };
+    if rewrite_effect_command_syntax(command) != Some(RewriteEffectCommandSyntax::Emission) {
+        return false;
+    }
+    match tokens {
+        ["message", ..] => trimmed.strip_prefix("message ").is_some(),
+        ["sfx", _] | ["wait"] | ["wait", _] => true,
+        _ => false,
+    }
+}
+
 pub(crate) fn rewrite_effect_semantic_tokens(
     tokens: &[SourceToken],
 ) -> Vec<semantic::SemanticToken> {

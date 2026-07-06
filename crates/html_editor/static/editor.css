@@ -2734,6 +2734,26 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   text-transform: uppercase;
 }
 
+.solver-level-select {
+  width: 100%;
+  min-width: 0;
+  height: 32px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--control-bg);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: none;
+}
+
+.solver-level-select:disabled {
+  color: var(--muted);
+  opacity: 0.75;
+}
+
 .solver-task-summary {
   width: 100%;
   min-width: 0;
@@ -4107,10 +4127,10 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   width: 100%;
   min-width: 0;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) max-content;
+  grid-template-columns: minmax(160px, 220px) max-content minmax(0, 1fr);
   grid-template-areas:
-    "name actions"
-    "transform shape";
+    "name . ."
+    "transform shape .";
   align-items: start;
   gap: 6px;
 }
@@ -4216,8 +4236,8 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
 
 #spriteBuilder .sprite-controls .sprite-name-control {
   grid-area: name;
-  width: auto;
-  max-width: none;
+  width: 100%;
+  max-width: 220px;
 }
 
 #spriteBuilder .sprite-controls .sprite-shape-field {
@@ -4234,15 +4254,16 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   align-items: start;
 }
 
-#spriteBuilder .sprite-controls .sprite-source-actions {
-  grid-area: actions;
+#spriteBuilder .sprite-source-actions {
   width: auto;
   min-width: 0;
-  justify-self: end;
+  justify-self: start;
   align-self: start;
+  display: inline-flex;
   align-items: center;
-  justify-content: flex-end;
-  gap: 6px;
+  justify-content: flex-start;
+  gap: 3px;
+  margin: 0;
 }
 
 .sprite-update-source-button {
@@ -4256,22 +4277,20 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   align-items: center;
   place-items: center;
   justify-content: center;
-  border: 1px solid color-mix(in srgb, var(--accent) 48%, var(--line));
-  background: color-mix(in srgb, var(--accent) 18%, var(--button-bg));
-  color: var(--ink);
+  border: 0;
+  background: transparent;
+  color: var(--muted);
   font-size: 12px;
   font-weight: 800;
 }
 
 .sprite-update-source-button:hover:not(:disabled),
 .sprite-update-source-button:focus-visible:not(:disabled) {
-  border-color: color-mix(in srgb, var(--accent) 68%, var(--line));
-  background: color-mix(in srgb, var(--accent) 28%, var(--button-bg-hover));
+  background: var(--active-bg);
   color: var(--ink);
 }
 
 .sprite-update-source-button:disabled {
-  border-color: var(--line);
   background: transparent;
   color: var(--muted);
   opacity: 0.55;
@@ -4293,16 +4312,17 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
 
 @container (max-width: 620px) {
   .sprite-source-fields {
-    grid-template-columns: minmax(0, 1fr) max-content;
+    grid-template-columns: minmax(160px, 220px) max-content minmax(0, 1fr);
     grid-template-areas:
-      "name actions"
-      "transform shape";
+      "name . ."
+      "transform shape .";
     width: 100%;
     max-width: 100%;
   }
 
   #spriteBuilder .sprite-controls .sprite-name-control {
     width: 100%;
+    max-width: 220px;
   }
 
   #spriteBuilder .sprite-controls .sprite-transform-bar {
@@ -4654,6 +4674,43 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   border-left: 1px solid var(--line);
 }
 
+.sprite-global-edit-actions {
+  gap: 4px;
+}
+
+.sprite-global-edit-actions > * + * {
+  margin-left: 2px;
+}
+
+.sprite-clip-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+}
+
+.sprite-clip-actions.is-expanded {
+  padding: 1px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--control-bg) 78%, var(--panel));
+}
+
+.sprite-clip-actions .sprite-clip-button {
+  color: var(--muted);
+}
+
+.sprite-clip-actions .sprite-clip-button:hover:not(:disabled),
+.sprite-clip-actions .sprite-clip-button:focus-visible {
+  background: var(--active-bg);
+  color: var(--ink);
+}
+
+.sprite-clip-actions .sprite-clip-button.is-active {
+  background: var(--active-bg);
+  color: var(--ink);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
 .sprite-paint-transform-actions {
   flex: 0 0 auto;
   display: inline-flex;
@@ -4682,6 +4739,11 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
 .sprite-palette-grid > .sprite-token,
 .sprite-palette-grid > .sprite-add-wrap {
   justify-self: center;
+}
+
+.sprite-palette-grid > .sprite-clip-actions {
+  grid-column: 1 / -1;
+  justify-self: end;
 }
 
 .sprite-marker-tool {
@@ -4716,8 +4778,9 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
 }
 
 .sprite-brush-size-button:hover:not(:disabled),
+.sprite-brush-size-button:has(:hover),
 .sprite-brush-size-button:focus-visible {
-  background: var(--hover-bg);
+  background: var(--active-bg);
   color: var(--ink);
 }
 
@@ -5395,7 +5458,7 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
 .sprite-board {
   --sprite-size: 5;
   --sprite-cell: clamp(14px, calc((100cqw - 2px) / var(--sprite-size)), 34px);
-  --sprite-puzzle-line: color-mix(in srgb, var(--ink) 28%, transparent);
+  --sprite-puzzle-line: #1d242b;
   position: relative;
   display: grid;
   grid-template-columns: repeat(var(--sprite-size), var(--sprite-cell));
@@ -5699,7 +5762,7 @@ html.is-sprite3d-slice-scrubbing * {
   inset: 0;
   z-index: 2;
   pointer-events: none;
-  box-shadow: inset 0 0 0 1px var(--sprite-puzzle-line);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--sprite-puzzle-line) 38%, transparent);
   content: "";
 }
 
@@ -5768,7 +5831,7 @@ html.is-sprite3d-slice-scrubbing * {
   inset: 0;
   z-index: 1;
   pointer-events: none;
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-ink) 54%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--sprite-puzzle-line) 38%, transparent);
   content: "";
 }
 
@@ -5786,10 +5849,52 @@ html.is-sprite3d-slice-scrubbing * {
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 68%, transparent);
 }
 
+.sprite-clip-selection-edge,
 .sprite-clip-selection-handle {
   position: absolute;
+  pointer-events: auto;
+}
+
+.sprite-clip-selection-edge {
+  z-index: 1;
+}
+
+.sprite-clip-selection-edge-n {
+  left: 0;
+  right: 0;
+  top: -5px;
+  height: 10px;
+  cursor: ns-resize;
+}
+
+.sprite-clip-selection-edge-e {
+  right: -5px;
+  top: 0;
+  bottom: 0;
+  width: 10px;
+  cursor: ew-resize;
+}
+
+.sprite-clip-selection-edge-s {
+  left: 0;
+  right: 0;
+  bottom: -5px;
+  height: 10px;
+  cursor: ns-resize;
+}
+
+.sprite-clip-selection-edge-w {
+  left: -5px;
+  top: 0;
+  bottom: 0;
+  width: 10px;
+  cursor: ew-resize;
+}
+
+.sprite-clip-selection-handle {
   width: 7px;
   height: 7px;
+  z-index: 2;
   border: 1px solid color-mix(in srgb, var(--accent-ink) 74%, var(--accent));
   background: var(--accent);
   box-shadow: none;
@@ -5798,21 +5903,25 @@ html.is-sprite3d-slice-scrubbing * {
 .sprite-clip-selection-handle-nw {
   left: -4px;
   top: -4px;
+  cursor: nwse-resize;
 }
 
 .sprite-clip-selection-handle-ne {
   right: -4px;
   top: -4px;
+  cursor: nesw-resize;
 }
 
 .sprite-clip-selection-handle-sw {
   left: -4px;
   bottom: -4px;
+  cursor: nesw-resize;
 }
 
 .sprite-clip-selection-handle-se {
   right: -4px;
   bottom: -4px;
+  cursor: nwse-resize;
 }
 
 .sprite-toolbar {
@@ -5835,8 +5944,8 @@ html.is-sprite3d-slice-scrubbing * {
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
-  gap: 3px;
-  padding-left: 2px;
+  gap: 0;
+  padding-left: 0;
 }
 
 .sprite-clip-button.is-danger:hover:not(:disabled),
@@ -6107,37 +6216,93 @@ html.is-sprite3d-slice-scrubbing * {
   min-width: 0;
   min-height: 0;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
-  gap: 10px;
-  padding: 12px;
-  overflow: auto;
+  grid-template-rows: minmax(0, 1fr) auto;
+  overflow: hidden;
   background: var(--workspace-bg);
   color: var(--ink);
+  container-type: inline-size;
 }
 
 .ps-import-panel[hidden] {
   display: none;
 }
 
+.ps-import-panel > .tool-pane-scroll {
+  height: 100%;
+  min-height: 0;
+  padding: 12px;
+  align-content: stretch;
+  overflow: hidden;
+}
+
+.ps-import-workflow {
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
+}
+
 .ps-import-grid {
   min-width: 0;
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: repeat(2, minmax(0, 1fr));
-  gap: 10px;
+  grid-template-columns: minmax(0, 1fr) 38px minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  align-items: stretch;
+  gap: 0;
 }
 
 .ps-import-field {
   min-width: 0;
   min-height: 0;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  gap: 6px;
+  grid-template-rows: 34px minmax(0, 1fr);
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--side-bg) 72%, var(--panel));
+}
+
+.ps-import-output-field {
+  grid-template-rows: 34px minmax(0, 1fr) 38px;
+}
+
+.ps-import-field-header {
+  min-width: 0;
+  padding: 0 10px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--bar-bg) 82%, var(--workspace-bg));
   color: var(--muted);
   font-size: 12px;
-  font-weight: 800;
+  font-weight: 900;
   text-transform: uppercase;
+}
+
+.ps-import-field-header label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ps-import-format-chip {
+  min-width: 0;
+  max-width: 96px;
+  padding: 2px 6px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--control-bg);
+  color: var(--muted);
+  font: 800 10px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  text-overflow: ellipsis;
+  text-transform: none;
+  white-space: nowrap;
 }
 
 .ps-import-field textarea {
@@ -6147,8 +6312,7 @@ html.is-sprite3d-slice-scrubbing * {
   min-height: 0;
   resize: none;
   padding: 10px 12px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
+  border: 0;
   outline: none;
   background: var(--code-bg);
   color: var(--code-ink);
@@ -6157,14 +6321,53 @@ html.is-sprite3d-slice-scrubbing * {
 }
 
 .ps-import-field textarea:focus {
-  border-color: var(--line-strong);
+  box-shadow: inset 0 0 0 1px var(--line-strong);
+}
+
+.ps-import-output-field textarea {
+  background:
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--ok) 10%, transparent),
+      transparent 18px
+    ),
+    var(--code-bg);
+}
+
+.ps-import-flow-marker {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+}
+
+.ps-import-flow-marker svg {
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .ps-import-actions {
   align-items: center;
-  align-self: start;
-  width: 100%;
   min-width: 0;
+}
+
+.ps-import-output-actions {
+  min-height: 38px;
+  padding: 4px 8px;
+  justify-content: flex-end;
+  align-self: stretch;
+  border-top: 1px solid var(--line);
+  background: color-mix(in srgb, var(--bar-bg) 82%, var(--workspace-bg));
+}
+
+.ps-import-actions .source-action-button {
+  color: var(--muted);
 }
 
 .ps-import-actions .source-action-button:hover:not(:disabled),
@@ -6172,6 +6375,11 @@ html.is-sprite3d-slice-scrubbing * {
   background: var(--hover-bg);
   color: var(--ink);
   box-shadow: inset 0 0 0 1px var(--line-strong);
+}
+
+.ps-import-actions .source-action-button.is-primary:not(:disabled) {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--ok) 18%, transparent);
 }
 
 .ps-import-status {
@@ -6184,6 +6392,18 @@ html.is-sprite3d-slice-scrubbing * {
 
 .ps-import-status.is-error {
   color: #f0898f;
+}
+
+@container (max-width: 760px) {
+  .ps-import-grid {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(120px, 1fr) 30px minmax(120px, 1fr);
+    gap: 8px;
+  }
+
+  .ps-import-flow-marker svg {
+    transform: rotate(90deg);
+  }
 }
 
 .docs-panel {

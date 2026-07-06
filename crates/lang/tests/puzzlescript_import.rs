@@ -60,7 +60,17 @@ fn scene_by_name<'a>(loaded: &'a LoadedGame, name: &str) -> &'a puzzle_lang::Sce
 fn assert_imported_output_uses_current_canonical_surface(source: &str) {
     parse_game(source).expect("imported source should parse");
 
-    assert!(!source.contains('\t'), "generated output must use spaces");
+    assert!(
+        !source.contains('\t'),
+        "generated output must not contain tabs"
+    );
+    for line in source.lines() {
+        assert_eq!(
+            line,
+            line.trim_start(),
+            "generated output must not indent lines: {line}"
+        );
+    }
     for forbidden in [
         "\nobjects {",
         "\ncollisionlayers",
@@ -73,9 +83,21 @@ fn assert_imported_output_uses_current_canonical_surface(source: &str) {
         "board.next_level",
         "board.level.has_next",
         "level imported_",
+        "w ArrowUp -> up",
+        "s ArrowDown -> down",
+        "a ArrowLeft -> left",
+        "d ArrowRight -> right",
+        "r -> restart",
+        "choice \"Continue\" -> input",
+        "choice \"New Game\" -> input",
+        "Enter Space x -> continue_game",
+        "n -> new_game",
+        "puzzle board = main",
+        "step board",
     ] {
+        let forbidden_lowercase = forbidden.to_ascii_lowercase();
         assert!(
-            !source.to_ascii_lowercase().contains(forbidden),
+            !source.to_ascii_lowercase().contains(&forbidden_lowercase),
             "generated output contains non-canonical surface `{forbidden}`:\n{source}"
         );
     }
@@ -125,18 +147,21 @@ fn translates_basic_vanilla_puzzlescript_to_canonical_fixture() {
     assert!(!translated.contains("Player {"));
     assert!(!translated.contains("level imported_1 {"));
     assert!(!translated.contains("-> effect "));
-    assert!(
-        translated
-            .contains("if has_progress_save {\n      choice \"Continue\" -> input continue_game")
-    );
-    assert!(translated.contains("choice \"New Game\" -> input new_game"));
-    assert!(translated.contains("Enter Space x -> continue_game"));
-    assert!(translated.contains("n -> new_game"));
+    assert!(translated.contains("if has_progress_save {\nchoice \"Continue\" -> continue_game"));
+    assert!(translated.contains("choice \"New Game\" -> new_game"));
+    assert!(!translated.contains("choice \"Continue\" -> input"));
+    assert!(!translated.contains("choice \"New Game\" -> input"));
+    assert!(!translated.contains("Enter Space x -> continue_game"));
+    assert!(!translated.contains("n -> new_game"));
+    assert!(!translated.contains("w ArrowUp -> up"));
+    assert!(!translated.contains("r -> restart"));
+    assert!(translated.contains("layout {\nrow {\ntitle \"Basic PS Sokoban\"\n}\nmain\n}"));
+    assert!(translated.contains("rules {\nstep main\n}"));
     assert!(translated.contains("Escape q -> back"));
-    assert!(translated.contains("routine continue_game {\n    goto playing"));
-    assert!(translated.contains("routine new_game {\n    clear_game_progress"));
-    assert!(translated.contains("routine back {\n    goto title"));
-    assert!(translated.contains("on_level_clear {\n  wait 0.3s\n  next_level\n}"));
+    assert!(translated.contains("routine continue_game {\ngoto playing"));
+    assert!(translated.contains("routine new_game {\nclear_game_progress"));
+    assert!(translated.contains("routine back {\ngoto title"));
+    assert!(translated.contains("on_level_clear {\nwait 0.3s\nnext_level\n}"));
     assert!(!translated.contains("board.next_level"));
     assert!(!translated.contains("board.level.has_next"));
 }
@@ -163,17 +188,17 @@ fn translated_basic_vanilla_puzzlescript_parses_as_loaded_game() {
         .expect("expected title continue choice");
     assert_eq!(
         continue_button.effect,
-        SceneEffect::Input("continue_game".to_string())
+        SceneEffect::RoutineCall("continue_game".to_string())
     );
     let new_game_button = find_choice_by_label(&title_scene.components, "New Game")
         .expect("expected title new game choice");
     assert_eq!(
         new_game_button.effect,
-        SceneEffect::Input("new_game".to_string())
+        SceneEffect::RoutineCall("new_game".to_string())
     );
     assert!(playing_scene.components.iter().any(|component| matches!(
         component,
-        SceneComponent::Frame(frame) if frame.kind == "puzzle" && frame.source == "board"
+        SceneComponent::Frame(frame) if frame.kind == "puzzle" && frame.source == "main"
     )));
     assert!(
         loaded
@@ -317,13 +342,13 @@ LEVELS
 P
 "##;
     let translated = translate_puzzlescript_to_canonical(source).unwrap();
-    assert!(translated.contains("  Background\n    #9CBD0F\n\n  Player"));
-    assert!(!translated.contains("Background\n    #9CBD0F\n    00000"));
+    assert!(translated.contains("Background\n#9CBD0F\n\nPlayer"));
+    assert!(!translated.contains("Background\n#9CBD0F\n00000"));
     assert!(
-        translated.contains("on_level_start {\n  once_all [ no Background ] -> [ Background ]\n}")
+        translated.contains("on_level_start {\nonce_all [ no Background ] -> [ Background ]\n}")
     );
-    assert!(translated.contains("  P = Player"));
-    assert!(!translated.contains("  P = Background Player"));
+    assert!(translated.contains("P = Player"));
+    assert!(!translated.contains("P = Background Player"));
 
     let loaded = parse_game(&translated).unwrap();
     let background_sprite = loaded
@@ -386,10 +411,8 @@ P12
 
     let translated = translate_puzzlescript_to_canonical(source).unwrap();
 
-    assert!(translated.contains(
-        "  pcrate1\n    #800080\n    00000\n    0...0\n    0...0\n    0...0\n    00000\n\n  pcrate2"
-    ));
-    assert!(!translated.contains("00000\n    pcrate2"));
+    assert!(translated.contains("pcrate1\n#800080\n00000\n0...0\n0...0\n0...0\n00000\n\npcrate2"));
+    assert!(!translated.contains("00000\npcrate2"));
     parse_game(&translated).unwrap();
 }
 
@@ -426,7 +449,8 @@ P
     assert!(
         translated.contains("puzzle main {\nflickscreen 13 13\nscreen_focus Player\n\nlayers {")
     );
-    assert!(translated.contains("  layout {\n    puzzle board = main\n  }"));
+    assert!(translated.contains("layout {\nmain\n}"));
+    assert!(!translated.contains("puzzle board = main"));
     assert!(!translated.contains("layout size 13 13"));
     assert!(!translated.contains("puzzle board size 13 13"));
     assert!(!translated.contains("      title \"Flick Fit\""));
@@ -469,17 +493,17 @@ P
 
     let translated = translate_puzzlescript_to_canonical(source).unwrap();
 
+    assert!(translated.contains("if has_progress_save {\nchoice \"Continue\" -> continue_game"));
+    assert!(translated.contains("choice \"New Game\" -> new_game"));
+    assert!(!translated.contains("choice \"Continue\" -> input"));
+    assert!(!translated.contains("choice \"New Game\" -> input"));
+    assert!(!translated.contains("Enter Space x -> continue_game"));
+    assert!(!translated.contains("n -> new_game"));
+    assert!(translated.contains("routine continue_game {\nsfx startgame\ngoto playing"));
     assert!(
         translated
-            .contains("if has_progress_save {\n      choice \"Continue\" -> input continue_game")
+            .contains("routine new_game {\nsfx startgame\nclear_game_progress\ngoto playing(0)")
     );
-    assert!(translated.contains("choice \"New Game\" -> input new_game"));
-    assert!(translated.contains("Enter Space x -> continue_game"));
-    assert!(translated.contains("n -> new_game"));
-    assert!(translated.contains("routine continue_game {\n    sfx startgame\n    goto playing"));
-    assert!(translated.contains(
-        "routine new_game {\n    sfx startgame\n    clear_game_progress\n    goto playing(0)"
-    ));
 
     let loaded = parse_game(&translated).unwrap();
     let title_scene = scene_by_name(&loaded, "title");
@@ -487,12 +511,9 @@ P
         .expect("expected title continue choice");
     assert_eq!(
         button.effect,
-        SceneEffect::Input("continue_game".to_string())
-    );
-    assert_eq!(
-        title_scene.key_bindings[0].effect,
         SceneEffect::RoutineCall("continue_game".to_string())
     );
+    assert!(title_scene.key_bindings.is_empty());
     assert!(title_scene.routines.iter().any(|routine| {
         matches!(
             &routine.effect,
@@ -585,9 +606,9 @@ fn translated_basic_vanilla_puzzlescript_uses_player_move_bridge() {
 fn translated_basic_vanilla_puzzlescript_uses_prefixless_move_marker_rule() {
     let source = include_str!("fixtures/puzzlescript/basic_sokoban.ps");
     let translated = translate_puzzlescript_to_canonical(source).unwrap();
-    assert!(translated.contains("[ Player{>} | Crate ] -> [ Player{>} | Crate{>} ]"));
-    assert!(!translated.contains("once_all [ Player{>} | Crate ]"));
-    assert!(!translated.contains("directions [ Player{>} | Crate ]"));
+    assert!(translated.contains("[ > Player | Crate ] -> [ > Player | > Crate ]"));
+    assert!(!translated.contains("once_all [ > Player | Crate ]"));
+    assert!(!translated.contains("directions [ > Player | Crate ]"));
 
     let loaded = parse_game(&translated).unwrap();
     let right = input_named(&loaded, "right");
@@ -650,8 +671,8 @@ P
 
     let translated = translate_puzzlescript_to_canonical(source).unwrap();
 
-    assert!(translated.contains("groups {\n  player = Player_u Player_d\n}"));
-    assert!(translated.contains("input directions [ player ] -> [ player{>} ]"));
+    assert!(translated.contains("groups {\nplayer = Player_u Player_d\n}"));
+    assert!(translated.contains("input directions [ player ] -> [ > player ]"));
     assert!(!translated.contains("input directions [ Player ]"));
     parse_game(&translated).unwrap();
 }
@@ -701,7 +722,7 @@ p
 
     let translated = translate_puzzlescript_to_canonical(source).unwrap();
 
-    assert!(translated.contains("win_conditions {\n  some Dog\n}"));
+    assert!(translated.contains("win_conditions {\nsome Dog\n}"));
     parse_game(&translated).unwrap();
 }
 
@@ -761,7 +782,7 @@ P
     let translated = translate_puzzlescript_to_canonical(source).unwrap();
 
     assert!(!translated.contains("win_conditions {"));
-    assert!(translated.contains("on_level_clear {\n  wait 0.3s\n  next_level\n}"));
+    assert!(translated.contains("on_level_clear {\nwait 0.3s\nnext_level\n}"));
     let loaded = parse_game(&translated).unwrap();
     assert!(loaded.level_clear_program.is_some());
 }
@@ -827,22 +848,21 @@ fn translates_official_sumo_demo_with_disconnected_pattern() {
     let translated = translate_puzzlescript_to_canonical(source).unwrap();
 
     assert_eq!(translated.trim_end(), expected.trim_end());
-    assert!(translated.contains("[ Player{>} ] [ Sumo ] -> [ Player{>} ] [ Sumo{>} ]"));
+    assert!(translated.contains("[ > Player ] [ Sumo ] -> [ > Player ] [ > Sumo ]"));
     assert!(!translated.contains("win_conditions {"));
     assert!(!translated.contains("-> effect "));
-    assert!(
-        translated
-            .contains("if has_progress_save {\n      choice \"Continue\" -> input continue_game")
-    );
-    assert!(translated.contains("choice \"New Game\" -> input new_game"));
-    assert!(translated.contains("Enter Space x -> continue_game"));
-    assert!(translated.contains("n -> new_game"));
+    assert!(translated.contains("if has_progress_save {\nchoice \"Continue\" -> continue_game"));
+    assert!(translated.contains("choice \"New Game\" -> new_game"));
+    assert!(!translated.contains("choice \"Continue\" -> input"));
+    assert!(!translated.contains("choice \"New Game\" -> input"));
+    assert!(!translated.contains("Enter Space x -> continue_game"));
+    assert!(!translated.contains("n -> new_game"));
     assert!(translated.contains("Escape q -> back"));
-    assert!(translated.contains("routine continue_game {\n    goto playing"));
-    assert!(translated.contains("routine new_game {\n    clear_game_progress"));
-    assert!(translated.contains("routine back {\n    goto title"));
+    assert!(translated.contains("routine continue_game {\ngoto playing"));
+    assert!(translated.contains("routine new_game {\nclear_game_progress"));
+    assert!(translated.contains("routine back {\ngoto title"));
     assert!(!translated.contains("if board.win_conditions -> {"));
-    assert!(translated.contains("on_level_clear {\n  wait 0.3s\n  next_level\n}"));
+    assert!(translated.contains("on_level_clear {\nwait 0.3s\nnext_level\n}"));
 
     let loaded = parse_game(&translated).unwrap();
     let right = input_named(&loaded, "right");
@@ -861,22 +881,19 @@ fn translates_official_simple_block_sliding_with_groups_and_again_effects() {
 
     let translated = translate_puzzlescript_to_canonical(source).unwrap();
 
-    assert!(translated.contains("groups {\n  crate = Crate1 Crate2 Crate3"));
-    assert!(translated.contains("  1 = Crate1"));
-    assert!(translated.contains("  , = nospawn"));
+    assert!(translated.contains("groups {\ncrate = Crate1 Crate2 Crate3"));
+    assert!(translated.contains("1 = Crate1"));
+    assert!(translated.contains(", = nospawn"));
     assert!(!translated.contains("var __ps_again"));
     assert!(!translated.contains("repeat until __ps_again"));
-    assert!(translated.contains("[ Player{up} ] -> [ Player{up} slideup ] again"));
-    assert!(translated.contains("[ slideup ] [ crate ] -> [ slideup ] [ crate{up} ] again"));
-    assert!(translated.contains("[ crate{>} | obs{no directions} ] -> [ crate | obs ]"));
+    assert!(translated.contains("[ up Player ] -> [ up Player slideup ] again"));
+    assert!(translated.contains("[ slideup ] [ crate ] -> [ slideup ] [ up crate ] again"));
+    assert!(translated.contains("[ > crate | obs{no directions} ] -> [ crate | obs ]"));
     assert!(
-        translated
-            .contains("[ Crate1{directions} | Crate1{no directions} ] -> [ Crate1 | Crate1 ]")
+        translated.contains("[ directions Crate1 | Crate1{no directions} ] -> [ Crate1 | Crate1 ]")
     );
-    assert!(
-        translated.contains("repeat {\n    [ crate{>} | obs{no directions} ] -> [ crate | obs ]")
-    );
-    assert!(translated.contains("  move\n  [ Target crate ] -> [ Target ]"));
+    assert!(translated.contains("repeat {\n[ > crate | obs{no directions} ] -> [ crate | obs ]"));
+    assert!(translated.contains("move\n[ Target crate ] -> [ Target ]"));
     assert!(translated.contains(" again"));
     assert!(!translated.contains("level imported_"));
     assert!(!translated.contains("\nobjects {"));
@@ -1000,12 +1017,11 @@ LEVELS
 
     let translated = translate_puzzlescript_to_canonical(source).unwrap();
 
-    assert!(translated.contains("routine __ps_main once {\n  [ Wall ] -> [ Player ]\n  move\n}"));
+    assert!(translated.contains("routine __ps_main once {\n[ Wall ] -> [ Player ]\nmove\n}"));
     assert!(translated.contains("on_level_start {\n"));
-    assert!(translated.contains("  __ps_main\n}"));
+    assert!(translated.contains("__ps_main\n}"));
     assert!(
-        translated
-            .contains("rules {\n  input directions [ Player ] -> [ Player{>} ]\n  __ps_main\n}")
+        translated.contains("rules {\ninput directions [ Player ] -> [ > Player ]\n__ps_main\n}")
     );
     assert!(!translated.contains("run_rules_on_level_start"));
 
@@ -1079,7 +1095,7 @@ E..
 
     let translated = translate_puzzlescript_to_canonical(source).unwrap();
 
-    assert!(translated.contains("routine __ps_main once {\n  move\n  right [ Emitter | no Beam ]"));
+    assert!(translated.contains("routine __ps_main once {\nmove\nright [ Emitter | no Beam ]"));
     let loaded = parse_game(&translated).unwrap();
     let beam = object_named(&loaded, "Beam");
     let started = transition_program(
@@ -1146,9 +1162,7 @@ vB.
 
     let translated = translate_puzzlescript_to_canonical(source).unwrap();
 
-    assert!(
-        translated.contains("[ victimSolo{>} | pushBlock ] -> [ victimSolo{>} | pushBlock{>} ]")
-    );
+    assert!(translated.contains("[ > victimSolo | pushBlock ] -> [ > victimSolo | > pushBlock ]"));
     assert!(!translated.contains("v ictimSolo"));
     parse_game(&translated).unwrap();
 }
@@ -1259,7 +1273,7 @@ P#
 
     let translated = translate_puzzlescript_to_canonical(source).unwrap();
 
-    assert!(translated.contains("sounds {\n  sfx sfx1 seed=26 type=puzzlescript\n}"));
+    assert!(translated.contains("sounds {\nsfx sfx1 seed=26 type=puzzlescript\n}"));
     assert!(translated.contains("[ Player | Wall ] -> [ Player | ] sfx sfx1"));
     let parsed = parse_game(&translated).unwrap();
     assert_eq!(parsed.sounds.sfx.len(), 1);
@@ -1369,7 +1383,7 @@ P
 
     assert!(
         translated
-            .contains("theme puzzlescript {\n  background_color #000000\n  text_color #9CBD0F\n}")
+            .contains("theme puzzlescript {\nbackground_color #000000\ntext_color #9CBD0F\n}")
     );
     let loaded = parse_game(&translated).unwrap();
     assert_eq!(loaded.theme.name.as_deref(), Some("puzzlescript"));

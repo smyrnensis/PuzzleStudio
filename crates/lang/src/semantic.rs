@@ -1,4 +1,4 @@
-use crate::source::{SourceScope, SourceToken, scan_source_context};
+use crate::source::{SourceScope, SourceToken, scan_source_context, strip_line_comment};
 use crate::syntax::{ExpectedCompletionValue, PUZZLE_COMPLETION_KEYWORDS, PUZZLE_LIFECYCLE_BLOCKS};
 use crate::{
     ANIMATION_BLOCK_OPTIONS, ANIMATION_TWEEN_OPTIONS, LEVEL_MENU_OPTIONS, LevelPathPartSyntax,
@@ -91,7 +91,7 @@ pub fn semantic_tokens(source: &str) -> Vec<SemanticToken> {
     for (line_index, line) in context.lines.iter().enumerate() {
         let line_tokens = source_tokens_as_line_tokens(&line.token_spans);
         scan_visual_semantic_line(&context, line_index, &line_tokens, &mut tokens);
-        scan_semantic_line(line.scope, &line_tokens, &mut tokens);
+        scan_semantic_line(line.scope, &line.content, &line_tokens, &mut tokens);
     }
     tokens.extend(crate::surface_document_semantic_tokens(source));
     tokens
@@ -1042,6 +1042,7 @@ struct LineToken<'a> {
 
 fn scan_semantic_line(
     scope: Option<SourceScope>,
+    line: &str,
     tokens: &[LineToken<'_>],
     ranges: &mut Vec<SemanticToken>,
 ) {
@@ -1058,7 +1059,7 @@ fn scan_semantic_line(
     }
     scan_authoring_semantic_line(scope, tokens, ranges);
     if !is_scene_semantic_scope(scope) && first.text != "scene" {
-        scan_rewrite_effect_line(scope, tokens, ranges);
+        scan_rewrite_effect_line(scope, line, tokens, ranges);
         return;
     }
     scan_scene_semantic_line(scope, tokens, ranges);
@@ -1568,6 +1569,7 @@ fn is_semantic_identifier(value: &str) -> bool {
 
 fn scan_rewrite_effect_line(
     scope: Option<SourceScope>,
+    line: &str,
     tokens: &[LineToken<'_>],
     ranges: &mut Vec<SemanticToken>,
 ) {
@@ -1580,6 +1582,16 @@ fn scan_rewrite_effect_line(
         if effect_start < rhs.len() {
             scan_rewrite_effect_tokens(&rhs[effect_start..], ranges);
         }
+        return;
+    }
+
+    let token_texts = tokens.iter().map(|token| token.text).collect::<Vec<_>>();
+    if matches!(
+        scope,
+        Some(SourceScope::Levels | SourceScope::Level | SourceScope::UnbracedLevel)
+    ) && crate::is_level_event_sugar(strip_line_comment(line).trim(), &token_texts)
+    {
+        scan_rewrite_effect_tokens(tokens, ranges);
         return;
     }
 
@@ -1893,6 +1905,44 @@ score = 1
                 && token.end == score_start + "score".len()
                 && token.kind == SemanticKind::State
         }));
+    }
+
+    #[test]
+    fn classifies_implicit_level_event_sugar_from_parser_owned_tokens() {
+        let source = r#"
+title implicit_level_event_semantics
+
+puzzle board {
+layers {
+actor = Player
+}
+legend P = Player
+rules {
+}
+}
+
+levels {
+legend {
+. = empty
+P = Player
+}
+
+message "one"
+message "two"
+P
+}
+"#;
+        let tokens = semantic_tokens(source);
+        let first_message_start = source.find("message \"one\"").unwrap();
+        let second_message_start = source.find("message \"two\"").unwrap();
+
+        for start in [first_message_start, second_message_start] {
+            assert!(tokens.iter().any(|token| {
+                token.start == start
+                    && token.end == start + "message".len()
+                    && token.kind == SemanticKind::Emission
+            }));
+        }
     }
 
     #[test]

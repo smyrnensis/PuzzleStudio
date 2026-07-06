@@ -1139,9 +1139,7 @@ fn parse_level_body(
 
 fn parse_level_event_sugar(line: &str) -> Result<Option<StatementAst>, DiagnosticReport> {
     let tokens = split_header_tokens(line);
-    let is_level_event = matches!(tokens.as_slice(), ["sfx", _] | ["wait"] | ["wait", _])
-        || line.strip_prefix("message ").is_some();
-    if !is_level_event {
+    if !is_level_event_sugar(line, &tokens) {
         return Ok(None);
     }
     let effects = parse_rewrite_effect(line, line)?;

@@ -5982,7 +5982,7 @@ LEVELS
     )
     .unwrap();
 
-    assert!(canonical.contains("theme puzzlescript {\n  background_color #123456\n}"));
+    assert!(canonical.contains("theme puzzlescript {\nbackground_color #123456\n}"));
 }
 
 #[test]

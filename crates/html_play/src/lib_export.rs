@@ -705,6 +705,11 @@ fn export_html_from_source_with_runtime_wasm(
     }
     let loaded =
         loaded_document_scene_host_loaded_game(&document).map_err(DiagnosticReport::error)?;
+    runtime_loaded_game_json(&loaded).map_err(|error| {
+        DiagnosticReport::error(format!(
+            "runtime loaded game bundle failed to serialize: {error}"
+        ))
+    })?;
     let game_visuals_js = join_visuals_js(game_visuals_js, &generated_visuals_js(&loaded));
     if document.models.len() > 1 {
         export_mixed_document_html(

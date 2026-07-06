@@ -761,6 +761,11 @@ fn source_line_role(
         Some(SourceScope::Level) if starts_level_legend(tokens) => {
             SourceLineRole::PlainAfterKeywordAssignmentLeft
         }
+        Some(SourceScope::Level | SourceScope::UnbracedLevel)
+            if crate::is_level_event_sugar(trimmed, tokens) =>
+        {
+            SourceLineRole::Normal
+        }
         Some(SourceScope::Level | SourceScope::UnbracedLevel) => SourceLineRole::Raw,
         Some(SourceScope::VisualShapeEntry) if trimmed.ends_with('{') => {
             SourceLineRole::PlainFirstToken

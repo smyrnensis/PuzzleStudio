@@ -814,9 +814,13 @@ fn push_runtime_loaded_game_bundle(out: &mut String, loaded: &LoadedGame) {
     push_json_number(out, "version", 1);
     out.push_str(",\"loaded\":");
     let loaded_json =
-        serde_json::to_string(loaded).expect("runtime loaded game bundle should serialize");
+        runtime_loaded_game_json(loaded).expect("runtime loaded game bundle should serialize");
     out.push_str(&loaded_json);
     out.push('}');
+}
+
+fn runtime_loaded_game_json(loaded: &LoadedGame) -> Result<String, serde_json::Error> {
+    serde_json::to_string(loaded)
 }
 
 fn push_compact_objects(out: &mut String, loaded: &LoadedGame) {

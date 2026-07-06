@@ -12,7 +12,6 @@ const spriteColorEditSessions = {
   sprite: null,
   sprite3d: null,
 };
-const SOLID_SPRITE_EDITOR_SIZE = 5;
 const SPRITE_EDITOR_MAX_SIZE = 64;
 const SPRITE_BRUSH_PRESETS = {
   pixel: { label: "1px", diameterCells: 1 },
@@ -34,7 +33,8 @@ function resetSpriteBuilder(size = sprite.size) {
 }
 
 function clampSpriteSize(value) {
-  const size = Math.trunc(Number(value) || 5);
+  const parsed = Math.trunc(Number(value));
+  const size = Number.isFinite(parsed) ? parsed : 5;
   return Math.max(1, Math.min(SPRITE_EDITOR_MAX_SIZE, size));
 }
 
@@ -184,6 +184,7 @@ function renderSpriteColorAdjuster({ color, ariaLabel, onChange }) {
 }
 
 function renderSpritePalette() {
+  const sourceActions = document.querySelector("#spriteBuilder .sprite-source-actions");
   spritePalette.replaceChildren();
   const selectedIsTransparent = sprite.selectedColorIndex === null;
   if (selectedIsTransparent || validSpriteColorIndex(sprite.selectedColorIndex)) {
@@ -444,6 +445,51 @@ function renderSpritePalette() {
   removeButton.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"></path></svg>`;
   removeButton.addEventListener("click", deleteSelectedSpriteColor);
   paletteGrid.append(removeButton);
+
+  const clipActions = document.createElement("span");
+  clipActions.className = "sprite-clip-actions";
+  clipActions.classList.toggle("is-expanded", spriteClipActive);
+  clipActions.append(renderSpriteClipButton({
+    title: spriteClipActive ? "Close clip tools" : "Clip",
+    ariaLabel: spriteClipActive ? "Close clip tools" : "Open clip tools",
+    active: spriteClipActive,
+    onClick: toggleSpriteClipMode,
+    icon: spriteLucideIconSvg("mouse-pointer-2"),
+  }));
+  if (spriteClipActive) {
+    clipActions.append(
+      renderSpriteClipButton({
+        title: "Copy clip",
+        ariaLabel: "Copy selected sprite area",
+        disabled: !spriteClipSelection,
+        onClick: copySpriteClipSelection,
+        icon: spriteLucideIconSvg("copy"),
+      }),
+      renderSpriteClipButton({
+        title: "Cut clip",
+        ariaLabel: "Cut selected sprite area",
+        disabled: !spriteClipSelection,
+        onClick: cutSpriteClipSelection,
+        icon: spriteLucideIconSvg("scissors"),
+      }),
+      renderSpriteClipButton({
+        title: "Paste clip",
+        ariaLabel: "Paste copied sprite area",
+        disabled: !spriteClipClipboard,
+        onClick: pasteSpriteClipClipboard,
+        icon: spriteLucideIconSvg("clipboard-paste"),
+      }),
+      renderSpriteClipButton({
+        title: spriteClipFloating ? "Discard clip preview" : "Clear clip",
+        ariaLabel: spriteClipFloating ? "Discard clipped sprite preview" : "Clear selected sprite area",
+        disabled: !spriteClipSelection && !spriteClipFloating,
+        danger: true,
+        onClick: clearSpriteClipSelection,
+        icon: spriteLucideIconSvg("trash-2"),
+      }),
+    );
+  }
+  paletteGrid.append(clipActions);
   spritePalette.append(paletteGrid);
 
   if (sprite.addPaletteOpen) {
@@ -470,57 +516,15 @@ function renderSpritePalette() {
   }
   paintToolRow.append(brushActions);
 
+  const globalEditActions = document.createElement("span");
+  globalEditActions.className = "sprite-paint-tool-group sprite-global-edit-actions";
+
   if (spriteGridButton) {
-    const viewActions = document.createElement("span");
-    viewActions.className = "sprite-paint-tool-group sprite-view-actions";
-    viewActions.append(spriteGridButton);
-    paintToolRow.append(viewActions);
+    globalEditActions.append(spriteGridButton);
   }
 
-  const clipActions = document.createElement("span");
-  clipActions.className = "sprite-paint-tool-group sprite-clip-actions";
-  clipActions.append(
-    renderSpriteClipButton({
-      title: spriteClipActive ? "Exit clip mode" : "Clip",
-      ariaLabel: "Clip sprite area",
-      active: spriteClipActive,
-      onClick: toggleSpriteClipMode,
-      icon: spriteLucideIconSvg("mouse-pointer-2"),
-    }),
-    renderSpriteClipButton({
-      title: "Copy clip",
-      ariaLabel: "Copy selected sprite area",
-      disabled: !spriteClipSelection,
-      onClick: copySpriteClipSelection,
-      icon: spriteLucideIconSvg("copy"),
-    }),
-    renderSpriteClipButton({
-      title: "Cut clip",
-      ariaLabel: "Cut selected sprite area",
-      disabled: !spriteClipSelection,
-      onClick: cutSpriteClipSelection,
-      icon: spriteLucideIconSvg("scissors"),
-    }),
-    renderSpriteClipButton({
-      title: "Paste clip",
-      ariaLabel: "Paste copied sprite area",
-      disabled: !spriteClipClipboard,
-      onClick: pasteSpriteClipClipboard,
-      icon: spriteLucideIconSvg("clipboard-paste"),
-    }),
-    renderSpriteClipButton({
-      title: spriteClipFloating ? "Discard clip preview" : "Clear clip",
-      ariaLabel: spriteClipFloating ? "Discard clipped sprite preview" : "Clear selected sprite area",
-      disabled: !spriteClipSelection && !spriteClipFloating,
-      danger: true,
-      onClick: clearSpriteClipSelection,
-      icon: spriteLucideIconSvg("trash-2"),
-    }),
-  );
-  paintToolRow.append(clipActions);
-
   const transformActions = document.createElement("span");
-  transformActions.className = "sprite-paint-tool-group sprite-paint-transform-actions";
+  transformActions.className = "sprite-paint-transform-actions";
   for (const button of [
     spriteRotateLeftButton,
     spriteRotateRightButton,
@@ -532,7 +536,11 @@ function renderSpritePalette() {
       transformActions.append(button);
     }
   }
-  paintToolRow.append(transformActions);
+  globalEditActions.append(transformActions);
+  if (sourceActions) {
+    globalEditActions.append(sourceActions);
+  }
+  paintToolRow.append(globalEditActions);
   spritePalette.append(paintToolRow);
 }
 
@@ -1305,12 +1313,8 @@ function renderSpriteClipButton({ title, ariaLabel, icon, active = false, disabl
 
 function toggleSpriteClipMode() {
   if (spriteClipActive) {
-    deactivateSpriteClipMode({ clearSelection: false });
-    const rect = normalizeSpriteClipRect(spriteClipSelection);
-    setSpriteActionStatus(
-      rect ? `Clip selection kept ${rect.width}x${rect.height}` : spritePaintToolStatusText(),
-      "is-ok",
-    );
+    deactivateSpriteClipMode();
+    setSpriteActionStatus(spritePaintToolStatusText(), "is-ok");
     return;
   }
   spriteBucketActive = false;
@@ -1647,9 +1651,20 @@ function renderSpriteClipSelectionFrame(target = spriteBoard) {
   frame.style.setProperty("--sprite-clip-width", String(rect.width));
   frame.style.setProperty("--sprite-clip-height", String(rect.height));
   frame.setAttribute("aria-hidden", "true");
+  if (!spriteClipFloating) {
+    for (const edge of ["n", "e", "s", "w"]) {
+      const node = document.createElement("span");
+      node.className = `sprite-clip-selection-edge sprite-clip-selection-edge-${edge}`;
+      node.dataset.spriteClipResize = edge;
+      frame.append(node);
+    }
+  }
   for (const handle of ["nw", "ne", "sw", "se"]) {
     const node = document.createElement("span");
     node.className = `sprite-clip-selection-handle sprite-clip-selection-handle-${handle}`;
+    if (!spriteClipFloating) {
+      node.dataset.spriteClipResize = handle;
+    }
     frame.append(node);
   }
   target.append(frame);
@@ -1675,6 +1690,7 @@ function renderSpriteClipFloatingPreview(rect, target = spriteBoard) {
     cell.dataset.colorIndex = validIndex === null ? "erase" : String(validIndex);
     cell.style.setProperty("--sprite-swatch-color", spriteColorForColorIndex(validIndex));
     cell.style.setProperty("--sprite-cell-ink", spriteInkForColorIndex(validIndex));
+    cell.style.setProperty("--sprite-puzzle-line", spriteGridLineForColorIndex(validIndex));
     preview.append(cell);
   }
   target.append(preview);
@@ -1689,6 +1705,7 @@ function syncSpriteCellElement(button, index) {
   button.classList.toggle("is-clip-selected", isClipSelected);
   button.style.setProperty("--sprite-swatch-color", spriteColorForColorIndex(colorIndex));
   button.style.setProperty("--sprite-cell-ink", spriteInkForColorIndex(colorIndex));
+  button.style.setProperty("--sprite-puzzle-line", spriteGridLineForColorIndex(colorIndex));
   button.setAttribute("aria-label", `Sprite cell ${index + 1}: ${char}`);
 }
 
@@ -2043,6 +2060,10 @@ function spriteColorForColorIndex(index) {
 
 function spriteInkForColorIndex(index) {
   return validSpriteColorIndex(index) ? readableInkForColor(sprite.palette[index].color) : "#8d969f";
+}
+
+function spriteGridLineForColorIndex(index) {
+  return validSpriteColorIndex(index) ? readableInkForColor(sprite.palette[index].color) : "#1d242b";
 }
 
 function readableInkForColor(color) {
@@ -2462,7 +2483,20 @@ function spriteInterpolatedBrushPoints(fromPoint, toPoint) {
 function startSpriteClip(event, geometry, cell) {
   event.preventDefault();
   spriteClipActive = true;
-  if (spriteClipSelectionContainsCell(cell)) {
+  const resizeHandle = !spriteClipFloating && spriteClipSelection
+    ? event.target.closest("[data-sprite-clip-resize]")
+    : null;
+  if (resizeHandle) {
+    spriteClipDrag = {
+      mode: "resize",
+      pointerId: event.pointerId,
+      geometry,
+      startCell: cell,
+      origin: spriteClipSelection,
+      preview: spriteClipSelection,
+      edge: resizeHandle.dataset.spriteClipResize,
+    };
+  } else if (spriteClipSelectionContainsCell(cell)) {
     spriteClipDrag = {
       mode: "move",
       pointerId: event.pointerId,
@@ -2528,6 +2562,19 @@ function continueSpriteClip(event) {
     }
     return true;
   }
+  if (spriteClipDrag.mode === "resize") {
+    const next = spriteClipResizeRect(spriteClipDrag.origin, spriteClipDrag.edge, cell);
+    if (next && (!spriteClipDrag.preview
+      || next.x !== spriteClipDrag.preview.x
+      || next.y !== spriteClipDrag.preview.y
+      || next.width !== spriteClipDrag.preview.width
+      || next.height !== spriteClipDrag.preview.height)) {
+      spriteClipSelection = next;
+      spriteClipDrag.preview = next;
+      renderSpriteBoard();
+    }
+    return true;
+  }
   return true;
 }
 
@@ -2546,9 +2593,42 @@ function stopSpriteClip(event) {
   if (!spriteClipSelection) {
     return true;
   }
-  const verb = drag.mode === "move" ? "Clip range moved" : "Clip range selected";
+  const verb = drag.mode === "move"
+    ? "Clip range moved"
+    : drag.mode === "resize"
+      ? "Clip range resized"
+      : "Clip range selected";
   setSpriteActionStatus(`${verb} ${spriteClipSelection.width}x${spriteClipSelection.height}`, "is-ok");
   return true;
+}
+
+function spriteClipResizeRect(origin, edge, cell) {
+  const rect = normalizeSpriteClipRect(origin);
+  if (!rect || !edge || !cell) {
+    return null;
+  }
+  let left = rect.x;
+  let right = rect.x + rect.width - 1;
+  let top = rect.y;
+  let bottom = rect.y + rect.height - 1;
+  if (edge.includes("w")) {
+    left = Math.max(0, Math.min(cell.x, right));
+  }
+  if (edge.includes("e")) {
+    right = Math.min(sprite.size - 1, Math.max(cell.x, left));
+  }
+  if (edge.includes("n")) {
+    top = Math.max(0, Math.min(cell.y, bottom));
+  }
+  if (edge.includes("s")) {
+    bottom = Math.min(sprite.size - 1, Math.max(cell.y, top));
+  }
+  return normalizeSpriteClipRect({
+    x: left,
+    y: top,
+    width: right - left + 1,
+    height: bottom - top + 1,
+  });
 }
 
 function spriteClipShortcutTargetIsText(target) {
@@ -2594,15 +2674,8 @@ function handleSpriteClipKeyboard(event) {
   } else if (!modifier && !event.altKey && (key === "Backspace" || key === "Delete")) {
     handled = clearSpriteClipSelection();
   } else if (!modifier && !event.altKey && key === "Escape") {
-    if (spriteClipSelection) {
-      spriteClipSelection = null;
-      spriteClipDrag = null;
-      renderSpriteBuilder();
-      setSpriteActionStatus("Clip selection cleared", "is-ok");
-    } else {
-      deactivateSpriteClipMode();
-      setSpriteActionStatus(spritePaintToolStatusText(), "is-ok");
-    }
+    deactivateSpriteClipMode();
+    setSpriteActionStatus(spritePaintToolStatusText(), "is-ok");
     handled = true;
   } else if (!modifier && !event.altKey && key === "ArrowLeft") {
     handled = moveSpriteClipRangeBy(-1, 0);
@@ -3052,14 +3125,13 @@ function parseSpriteDefinitionSource(contract, selectorName = "") {
     if (palette.length !== 1) {
       return null;
     }
-    const size = SOLID_SPRITE_EDITOR_SIZE;
     return {
-      size,
+      size: 1,
       palette,
       shapeBind: null,
       solid: true,
       sourcePreludeRows,
-      cells: Array.from({ length: size * size }, () => 0),
+      cells: [0],
     };
   }
   const width = Math.max(...asciiRows.map((row) => row.length));
