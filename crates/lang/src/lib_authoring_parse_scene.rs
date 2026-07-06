@@ -30,7 +30,7 @@ fn parse_scene_definition(
     };
     let (name, _params) = parse_scene_name_and_params(name, &lines[start])?;
 
-    let mut screen = SceneDef {
+    let mut scene = SceneDef {
         name: name.clone(),
         layout: SceneLayoutDef::default(),
         resources: SceneResources::default(),
@@ -42,7 +42,7 @@ fn parse_scene_definition(
         puzzle_rule: None,
     };
     let mut handler = Scene2dBlockHandler {
-        screen: &mut screen,
+        scene: &mut scene,
     };
     let next = puzzle_scene::parse_scene_block_with_handler(
         lines,
@@ -52,7 +52,7 @@ fn parse_scene_definition(
         &mut handler,
     )?;
 
-    Ok((screen, next))
+    Ok((scene, next))
 }
 
 fn parse_scene_name_and_params(
@@ -515,7 +515,7 @@ fn collect_scene_effect_routine_calls<'a>(effect: &'a SceneEffect, calls: &mut V
 }
 
 struct Scene2dBlockHandler<'a> {
-    screen: &'a mut SceneDef,
+    scene: &'a mut SceneDef,
 }
 
 impl puzzle_scene::SceneBlockHandler for Scene2dBlockHandler<'_> {
@@ -537,14 +537,14 @@ impl puzzle_scene::SceneBlockHandler for Scene2dBlockHandler<'_> {
         lines: &[String],
         start: usize,
     ) -> Result<usize, DiagnosticReport> {
-        let (layout_block, next_i) = parse_screen_layout_block(lines, start)?;
-        self.screen.layout = layout_block.layout;
-        self.screen
+        let (layout_block, next_i) = parse_scene_layout_block(lines, start)?;
+        self.scene.layout = layout_block.layout;
+        self.scene
             .state
             .variables
             .extend(layout_block.state.variables);
-        self.screen.state.puzzles.extend(layout_block.state.puzzles);
-        self.screen.components.extend(layout_block.components);
+        self.scene.state.puzzles.extend(layout_block.state.puzzles);
+        self.scene.components.extend(layout_block.components);
         Ok(next_i)
     }
 
@@ -565,7 +565,7 @@ impl puzzle_scene::SceneBlockHandler for Scene2dBlockHandler<'_> {
         start: usize,
     ) -> Result<usize, DiagnosticReport> {
         let (bindings, next_i) = parse_scene_keys_block(lines, start)?;
-        self.screen.key_bindings.extend(bindings);
+        self.scene.key_bindings.extend(bindings);
         Ok(next_i)
     }
 
@@ -574,10 +574,9 @@ impl puzzle_scene::SceneBlockHandler for Scene2dBlockHandler<'_> {
         lines: &[String],
         start: usize,
     ) -> Result<usize, DiagnosticReport> {
-        let (block, next_i) = parse_screen_transitions_block(lines, start)?;
-        self.screen.transitions.extend(block.transitions);
+        let (block, next_i) = parse_scene_rules_block(lines, start)?;
         if let Some(puzzle_rule) = block.puzzle_rule {
-            self.screen.puzzle_rule = Some(puzzle_rule);
+            self.scene.puzzle_rule = Some(puzzle_rule);
         }
         Ok(next_i)
     }
@@ -588,7 +587,7 @@ impl puzzle_scene::SceneBlockHandler for Scene2dBlockHandler<'_> {
         start: usize,
     ) -> Result<usize, DiagnosticReport> {
         let (transition, next_i) = parse_scene_lifecycle_block(lines, start)?;
-        self.screen.transitions.push(transition);
+        self.scene.transitions.push(transition);
         Ok(next_i)
     }
 
@@ -599,14 +598,14 @@ impl puzzle_scene::SceneBlockHandler for Scene2dBlockHandler<'_> {
     ) -> Result<usize, DiagnosticReport> {
         let tokens = split_header_tokens(&lines[start]);
         match tokens.as_slice() {
-            ["resources"] => parse_scene_resources_block(lines, start, &mut self.screen.resources),
+            ["resources"] => parse_scene_resources_block(lines, start, &mut self.scene.resources),
             ["var", ..]
             | ["const", ..]
             | ["persistent", "var", ..]
             | ["persistent", "const", ..] => {
                 match parse_scene_state_entry(&lines[start], SceneStateLifetime::Instance)? {
                     ParsedSceneStateEntry::Variable(variable) => {
-                        self.screen.state.variables.push(variable);
+                        self.scene.state.variables.push(variable);
                     }
                     ParsedSceneStateEntry::Puzzle(_) => {
                         return Err(parse_error(
@@ -632,25 +631,25 @@ impl puzzle_scene::SceneBlockHandler for Scene2dBlockHandler<'_> {
             ["routine", ..] => {
                 let (routine, next_i) = parse_scene_routine_block(lines, start)?;
                 if self
-                    .screen
+                    .scene
                     .routines
                     .iter()
                     .any(|existing| existing.name == routine.name)
                 {
                     return Err(parse_error(&lines[start], "duplicate scene routine"));
                 }
-                self.screen.routines.push(routine);
+                self.scene.routines.push(routine);
                 Ok(next_i)
             }
             ["if", ..] => {
-                let (transition, next_i) = parse_screen_condition_block(lines, start)?;
-                self.screen.transitions.push(transition);
+                let (transition, next_i) = parse_scene_condition_block(lines, start)?;
+                self.scene.transitions.push(transition);
                 Ok(next_i)
             }
             [] => Ok(start + 1),
             _ if scene_entry_is_component(&tokens) => {
-                let (component, next_i) = parse_screen_component(lines, start)?;
-                self.screen.components.push(component);
+                let (component, next_i) = parse_scene_component(lines, start)?;
+                self.scene.components.push(component);
                 Ok(next_i)
             }
             [other, ..] => Err(parse_error(
@@ -718,24 +717,24 @@ fn parse_resource_selection(
     }
 }
 
-struct ParsedScreenLayoutBlock {
+struct ParsedSceneLayoutBlock {
     layout: SceneLayoutDef,
-    state: ParsedScreenStateBlock,
+    state: ParsedSceneStateBlock,
     components: Vec<SceneComponent>,
 }
 
-fn parse_screen_layout_block(
+fn parse_scene_layout_block(
     lines: &[String],
     start: usize,
-) -> Result<(ParsedScreenLayoutBlock, usize), DiagnosticReport> {
-    parse_screen_view_like_block(lines, start, "layout")
+) -> Result<(ParsedSceneLayoutBlock, usize), DiagnosticReport> {
+    parse_scene_view_like_block(lines, start, "layout")
 }
 
-fn parse_screen_view_like_block(
+fn parse_scene_view_like_block(
     lines: &[String],
     start: usize,
     block_name: &str,
-) -> Result<(ParsedScreenLayoutBlock, usize), DiagnosticReport> {
+) -> Result<(ParsedSceneLayoutBlock, usize), DiagnosticReport> {
     let layout = parse_scene_layout_from_header(&lines[start], block_name)?;
     let mut variables = Vec::new();
     let mut puzzles = Vec::<ScenePuzzleDef>::new();
@@ -773,7 +772,7 @@ fn parse_screen_view_like_block(
             continue;
         }
         if scene_entry_is_component(&tokens) || matches!(tokens.as_slice(), ["puzzle", ..]) {
-            let (component, next_i, nested_puzzles) = parse_screen_component_with_puzzles(
+            let (component, next_i, nested_puzzles) = parse_scene_component_with_puzzles(
                 lines,
                 i,
                 SceneStateLifetime::Instance,
@@ -784,7 +783,7 @@ fn parse_screen_view_like_block(
             continue;
         }
 
-        if lines[i].contains('=') {
+        if parse_assignment_row(&lines[i]).is_some() {
             if let Some(declaration) =
                 parse_scene_puzzle_layout_declaration(&lines[i], SceneStateLifetime::Instance)?
             {
@@ -822,7 +821,7 @@ fn parse_screen_view_like_block(
             continue;
         }
 
-        let (component, next_i, nested_puzzles) = parse_screen_component_with_puzzles(
+        let (component, next_i, nested_puzzles) = parse_scene_component_with_puzzles(
             lines,
             i,
             SceneStateLifetime::Instance,
@@ -839,9 +838,9 @@ fn parse_screen_view_like_block(
     }
 
     Ok((
-        ParsedScreenLayoutBlock {
+        ParsedSceneLayoutBlock {
             layout,
-            state: ParsedScreenStateBlock { variables, puzzles },
+            state: ParsedSceneStateBlock { variables, puzzles },
             components,
         },
         i + 1,
@@ -906,7 +905,7 @@ fn scene_puzzle_component_source(component: &SceneComponent) -> Option<&str> {
     }
 }
 
-fn parse_screen_components_block(
+fn parse_scene_components_block(
     lines: &[String],
     start: usize,
     block_name: &str,
@@ -914,7 +913,7 @@ fn parse_screen_components_block(
     let mut parse_leaf =
         |lines: &[String], index: usize| -> Result<(usize, SceneComponent), DiagnosticReport> {
             let (component, next, _) =
-                parse_screen_leaf_component(lines, index, SceneStateLifetime::Instance)?;
+                parse_scene_leaf_component(lines, index, SceneStateLifetime::Instance)?;
             Ok((next, component))
         };
     let (next, components) = puzzle_scene::parse_scene_component_block(
@@ -928,16 +927,16 @@ fn parse_screen_components_block(
     Ok((components, next))
 }
 
-fn parse_screen_component(
+fn parse_scene_component(
     lines: &[String],
     start: usize,
 ) -> Result<(SceneComponent, usize), DiagnosticReport> {
     let (component, next, _) =
-        parse_screen_component_with_puzzles(lines, start, SceneStateLifetime::Instance)?;
+        parse_scene_component_with_puzzles(lines, start, SceneStateLifetime::Instance)?;
     Ok((component, next))
 }
 
-fn parse_screen_component_with_puzzles(
+fn parse_scene_component_with_puzzles(
     lines: &[String],
     start: usize,
     lifetime: SceneStateLifetime,
@@ -945,7 +944,7 @@ fn parse_screen_component_with_puzzles(
     let nested_puzzles = std::cell::RefCell::new(Vec::<ScenePuzzleDef>::new());
     let mut parse_leaf =
         |lines: &[String], index: usize| -> Result<(usize, SceneComponent), DiagnosticReport> {
-            let (component, next, puzzle) = parse_screen_leaf_component(lines, index, lifetime)?;
+            let (component, next, puzzle) = parse_scene_leaf_component(lines, index, lifetime)?;
             if let Some(puzzle) = puzzle {
                 nested_puzzles.borrow_mut().push(puzzle);
             }
@@ -980,7 +979,7 @@ fn build_scene_container_component(
     }
 }
 
-fn parse_screen_leaf_component(
+fn parse_scene_leaf_component(
     lines: &[String],
     start: usize,
     lifetime: SceneStateLifetime,
@@ -1161,7 +1160,7 @@ fn parse_button_like_def(
         ));
     }
 
-    let (label, effect, next_i) = if rest.contains('=') {
+    let (label, effect, next_i) = if parse_assignment_row(rest).is_some() {
         return Err(parse_error(
             line,
             &format!("{keyword} command must use `->`; `=` action assignment was removed"),
@@ -1227,11 +1226,11 @@ fn parse_view_if_component(
             "layout condition requires at least one component",
         ));
     }
-    let children = parse_screen_component_body(body, "if")?;
+    let children = parse_scene_component_body(body, "if")?;
     let else_children = if else_body.is_empty() {
         Vec::new()
     } else {
-        parse_screen_component_body(&else_body, "else")?
+        parse_scene_component_body(&else_body, "else")?
     };
     Ok((
         SceneComponent::Conditional(SceneConditionalDef {
@@ -1286,7 +1285,7 @@ fn collect_view_else_body(
     ))
 }
 
-fn parse_screen_component_body(
+fn parse_scene_component_body(
     body: &[String],
     block_name: &str,
 ) -> Result<Vec<SceneComponent>, DiagnosticReport> {
@@ -1295,7 +1294,7 @@ fn parse_screen_component_body(
     let mut parse_leaf =
         |lines: &[String], index: usize| -> Result<(usize, SceneComponent), DiagnosticReport> {
             let (component, next, _) =
-                parse_screen_leaf_component(lines, index, SceneStateLifetime::Instance)?;
+                parse_scene_leaf_component(lines, index, SceneStateLifetime::Instance)?;
             Ok((next, component))
         };
     let (next, components) = puzzle_scene::parse_scene_component_block(
@@ -1328,7 +1327,7 @@ fn parse_for_component(
         ));
     }
     let source = parse_for_source(source, &lines[start])?;
-    let (children, next_i) = parse_screen_components_block(lines, start, "for")?;
+    let (children, next_i) = parse_scene_components_block(lines, start, "for")?;
     Ok((
         SceneComponent::For(SceneForDef {
             binding: (*binding).to_string(),

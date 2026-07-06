@@ -468,7 +468,6 @@ fn starts_inline_block(tokens: &[&str], line: &str) -> bool {
             | ["rule", ..]
             | ["rules"]
             | ["main"]
-            | ["transitions"]
             | ["levels", ..]
             | ["level", ..]
             | ["state"]
@@ -598,9 +597,16 @@ pub(crate) struct SourceContextLine {
     pub(crate) token_spans: Vec<SourceToken>,
     pub(crate) structural_token_spans: Vec<SourceToken>,
     pub(crate) structural_lines: Vec<String>,
+    pub(crate) structural_events: Vec<SourceStructureEvent>,
     pub(crate) scope: Option<SourceScope>,
     pub(crate) start: usize,
     pub(crate) content: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum SourceStructureEvent {
+    Open { header: String, scope: SourceScope },
+    Close,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -645,8 +651,10 @@ pub(crate) fn scan_source_context(source: &str) -> SourceContext {
             && !trimmed.is_empty()
             && trimmed != "}";
 
+        let mut structural_events = Vec::<SourceStructureEvent>::new();
+
         if trimmed.is_empty() {
-            close_blank_line(&mut block_stack);
+            push_close_events(close_blank_line(&mut block_stack), &mut structural_events);
         }
 
         if !trimmed.is_empty() && trimmed != "}" {
@@ -682,10 +690,14 @@ pub(crate) fn scan_source_context(source: &str) -> SourceContext {
             let tokens = source_context_tokens(&stack_line);
             let current = block_stack.last().copied();
             if stack_line == "}" {
-                close_block_line(&mut block_stack);
+                push_close_events(close_block_line(&mut block_stack), &mut structural_events);
             } else if source_opens_block(&stack_line, &tokens, current)
                 && let Some(opened) = opening_scope(&stack_line, &tokens, current)
             {
+                structural_events.push(SourceStructureEvent::Open {
+                    header: structural_header(stack_line),
+                    scope: opened,
+                });
                 block_stack.push(opened);
             }
         }
@@ -695,6 +707,7 @@ pub(crate) fn scan_source_context(source: &str) -> SourceContext {
             token_spans: source_line_tokens(raw, offset),
             structural_token_spans: source_context_token_spans(raw, offset),
             structural_lines,
+            structural_events,
             scope: current,
             start: offset,
             content: content.to_string(),
@@ -855,21 +868,35 @@ pub(crate) fn source_line_tokens(line: &str, line_offset: usize) -> Vec<SourceTo
     tokens
 }
 
-fn close_blank_line(block_stack: &mut Vec<SourceScope>) {
-    if block_stack.last() == Some(&SourceScope::UnbracedLevel) {
-        block_stack.pop();
-    }
+fn push_close_events(count: usize, events: &mut Vec<SourceStructureEvent>) {
+    events.extend((0..count).map(|_| SourceStructureEvent::Close));
 }
 
-fn close_block_line(block_stack: &mut Vec<SourceScope>) {
+fn structural_header(line: &str) -> String {
+    line.strip_suffix('{')
+        .map(str::trim)
+        .unwrap_or_else(|| line.trim())
+        .to_string()
+}
+
+fn close_blank_line(block_stack: &mut Vec<SourceScope>) -> usize {
+    if block_stack.last() == Some(&SourceScope::UnbracedLevel) {
+        block_stack.pop();
+        return 1;
+    }
+    0
+}
+
+fn close_block_line(block_stack: &mut Vec<SourceScope>) -> usize {
     if block_stack.last() == Some(&SourceScope::UnbracedLevel) {
         block_stack.pop();
         if block_stack.last() == Some(&SourceScope::Levels) {
             block_stack.pop();
+            return 2;
         }
-        return;
+        return 1;
     }
-    block_stack.pop();
+    usize::from(block_stack.pop().is_some())
 }
 
 fn source_opens_block(line: &str, tokens: &[&str], current: Option<SourceScope>) -> bool {

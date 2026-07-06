@@ -494,6 +494,7 @@ fn parse_puzzle_definition(
                     &catalog.global_names,
                     &catalog.numeric_global_defaults,
                     &catalog.condition_names,
+                    named_conditions,
                 ) {
                     Ok((definition, next_i)) => {
                         rule_definitions.push(definition);
@@ -549,9 +550,9 @@ fn parse_puzzle_definition(
                     }
                 }
             }
-            "main" | "transitions" => {
+            "main" => {
                 diagnostics.extend(
-                    parse_error(line, "`main`/`transitions` were removed; use `rules`")
+                    parse_error(line, "`main` was removed; use `rules`")
                         .into_diagnostics(),
                 );
                 i = recover_after_directive_error(lines, i);

@@ -86,6 +86,7 @@ let sourceFoldBlockCacheSource = "";
 let sourceFoldBlockCache = [];
 let sourceFoldEditSnapshot = null;
 let sourceOutlineItems = [];
+let sourceOutlineExpandedItemIds = new Set();
 
 function sourcePuzzleLevelName(value, defaultName = "") {
   const text = String(value ?? "").trim();
@@ -767,7 +768,7 @@ function setSourceEditorValue(value, options = {}) {
   const sameUnfoldedValue = sourceFoldBaseSource === null && currentValue === nextValue;
   if (sameUnfoldedValue && preserveCurrentHighlight && sourceHighlightSource === nextValue) {
     updateSourceMeta();
-    scheduleSourceOutlineRefresh(true);
+    scheduleSourceOutlineRefresh(true, { force: true });
     if (preservesUndo) {
       ensureSourceUndoHistory();
     } else if (options.resetUndo === false) {
@@ -781,7 +782,7 @@ function setSourceEditorValue(value, options = {}) {
   sourceEditor.value = nextValue;
   updateSourceMeta();
   scheduleSourceHighlight(true, { preserveCurrent: preserveCurrentHighlight });
-  scheduleSourceOutlineRefresh(true);
+  scheduleSourceOutlineRefresh(true, { force: true });
   if (preservesUndo) {
     ensureSourceUndoHistory();
   } else if (options.resetUndo === false) {
@@ -1153,6 +1154,17 @@ function syncSourceHighlightMetrics() {
     sourceHighlightScrollHeight = scrollHeight;
     sourceHighlight.style.height = `${scrollHeight}px`;
   }
+  syncSourceOverlayLayerMetrics(clientWidth, scrollHeight);
+}
+
+function syncSourceOverlayLayerMetrics(clientWidth, scrollHeight) {
+  for (const layer of [sourceBlockSelectionLayer, sourceFindMatchLayer]) {
+    if (!layer) {
+      continue;
+    }
+    layer.style.width = `${clientWidth}px`;
+    layer.style.height = `${scrollHeight}px`;
+  }
 }
 
 function syncSourceHighlightScroll() {
@@ -1161,19 +1173,20 @@ function syncSourceHighlightScroll() {
   }
   syncSourceHighlightMetrics();
   syncSourceHighlightTransform();
-  if (isSourceFindPanelOpen() && sourceFindState.matches.length) {
-    renderSourceFindMatches();
-  }
-  if (sourceEditorBlockSelection?.ranges?.length) {
-    renderSourceBlockSelection();
-  }
 }
 
 function syncSourceHighlightTransform() {
   if (!sourceHighlight) {
     return;
   }
-  sourceHighlight.style.transform = `translate(${-sourceEditor.scrollLeft}px, ${-sourceEditor.scrollTop}px)`;
+  const transform = `translate(${-sourceEditor.scrollLeft}px, ${-sourceEditor.scrollTop}px)`;
+  sourceHighlight.style.transform = transform;
+  if (sourceBlockSelectionLayer) {
+    sourceBlockSelectionLayer.style.transform = transform;
+  }
+  if (sourceFindMatchLayer) {
+    sourceFindMatchLayer.style.transform = transform;
+  }
   syncSourceLineNumberScroll();
 }
 
@@ -1408,6 +1421,7 @@ async function refreshSourceOutline() {
 
 function applySourceOutlinePayload(payload, source) {
   sourceOutlineItems = normalizeSourceOutlineItems(payload?.items, source);
+  pruneSourceOutlineExpandedItems();
   sourceOutlineDirty = false;
   sourceOutlineSignature = sourceOutlineStructuralSignature(source);
   renderSourceOutline();
@@ -1430,6 +1444,43 @@ function normalizeSourceOutlineItems(items, source) {
   }).filter((item) => item.id && Number.isFinite(item.start));
 }
 
+function sourceOutlineItemById() {
+  return new Map(sourceOutlineItems.map((item) => [item.id, item]));
+}
+
+function sourceOutlineParentIdsWithChildren() {
+  const parentIds = new Set();
+  for (const item of sourceOutlineItems) {
+    if (item.parent) {
+      parentIds.add(item.parent);
+    }
+  }
+  return parentIds;
+}
+
+function pruneSourceOutlineExpandedItems() {
+  const ids = new Set(sourceOutlineItems.map((item) => item.id));
+  sourceOutlineExpandedItemIds = new Set(
+    [...sourceOutlineExpandedItemIds].filter((id) => ids.has(id)),
+  );
+}
+
+function sourceOutlineItemHiddenByCollapsedParent(item, itemsById = sourceOutlineItemById()) {
+  let parentId = item?.parent || "";
+  while (parentId) {
+    if (!sourceOutlineExpandedItemIds.has(parentId)) {
+      return true;
+    }
+    parentId = itemsById.get(parentId)?.parent || "";
+  }
+  return false;
+}
+
+function visibleSourceOutlineItems() {
+  const itemsById = sourceOutlineItemById();
+  return sourceOutlineItems.filter((item) => !sourceOutlineItemHiddenByCollapsedParent(item, itemsById));
+}
+
 function renderSourceOutline() {
   if (!sourceOutlineList) {
     return;
@@ -1438,7 +1489,10 @@ function renderSourceOutline() {
     renderSourceOutlineEmpty("No outline");
     return;
   }
-  sourceOutlineList.replaceChildren(...sourceOutlineItems.map((item) => {
+  const parentIdsWithChildren = sourceOutlineParentIdsWithChildren();
+  sourceOutlineList.replaceChildren(...visibleSourceOutlineItems().map((item) => {
+    const hasChildren = parentIdsWithChildren.has(item.id);
+    const expanded = sourceOutlineExpandedItemIds.has(item.id);
     const button = document.createElement("button");
     button.type = "button";
     button.className = "source-outline-row";
@@ -1446,15 +1500,26 @@ function renderSourceOutline() {
     button.dataset.sourceOutlineStart = String(item.start);
     button.style.setProperty("--depth", String(item.depth));
     button.setAttribute("role", "treeitem");
+    button.setAttribute("aria-level", String(item.depth + 1));
     button.setAttribute("aria-label", item.label);
-    button.title = item.label;
+    if (hasChildren) {
+      button.setAttribute("aria-expanded", String(expanded));
+    }
+    const chevron = document.createElement("span");
+    chevron.className = hasChildren
+      ? "source-outline-chevron"
+      : "source-outline-chevron source-outline-chevron-spacer";
+    if (hasChildren) {
+      chevron.dataset.sourceOutlineToggle = item.id;
+      chevron.innerHTML = sourceOutlineChevronSvg(expanded);
+    }
     const kind = document.createElement("span");
     kind.className = "source-outline-kind";
     kind.innerHTML = sourceOutlineKindIconSvg(item.kind);
     const label = document.createElement("span");
     label.className = "source-outline-label";
     label.textContent = item.label;
-    button.append(kind, label);
+    button.append(chevron, kind, label);
     return button;
   }));
 }
@@ -1469,109 +1534,199 @@ function renderSourceOutlineEmpty(message) {
   sourceOutlineList.replaceChildren(empty);
 }
 
+function sourceOutlineChevronSvg(expanded) {
+  const path = expanded ? "M4 6l4 4 4-4" : "M6 4l4 4-4 4";
+  return `<svg class="source-outline-chevron-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="${path}"></path></svg>`;
+}
+
+const SOURCE_OUTLINE_KIND_ICON_NAMES = Object.freeze({
+  "puzzle": "puzzle",
+  "puzzle3": "puzzle",
+  "levels": "puzzle",
+  "levels3": "puzzle",
+  "level": "puzzle",
+  "sprites": "image",
+  "sprites3": "image",
+  "sprite": "image",
+  "objects": "boxes",
+  "object": "box",
+  "groups": "group",
+  "tags": "tag",
+  "marks": "bookmark",
+  "render": "scan-eye",
+  "camera": "camera",
+  "animation": "circle-play",
+  "tween": "chart-spline",
+  "row": "rows-3",
+  "column": "columns-3",
+  "choice": "mouse-pointer-click",
+  "button": "square-mouse-pointer",
+  "text": "message-square",
+  "message": "message-square",
+  "title": "file-text",
+  "subtitle": "file-text",
+  "author": "file-text",
+  "homepage": "file-text",
+  "import": "import",
+  "rules": "list-checks",
+  "rule": "list-checks",
+  "routine": "workflow",
+  "win_conditions": "flag",
+  "lose_conditions": "flag-off",
+  "scene": "panels-top-left",
+  "screen": "panels-top-left",
+  "layout": "panels-top-left",
+  "level_menu": "panels-top-left",
+  "assets": "package",
+  "resources": "package",
+  "legend": "move-horizontal",
+  "map": "arrow-right",
+  "theme": "swatch-book",
+  "colors": "palette",
+  "shapes": "shapes",
+  "sounds": "volume-2",
+  "keys": "keyboard",
+  "layers": "layers",
+  "collision_layers": "layers",
+  "metadata": "info",
+  "fix": "wrench",
+});
+
+const SOURCE_OUTLINE_LIFECYCLE_ICON_NAME = "zap";
+const SOURCE_OUTLINE_DEFAULT_ICON_NAME = "file-code-2";
+
 function sourceOutlineKindIconName(kind) {
   const text = String(kind || "").trim();
-  if (text === "puzzle" || text === "puzzle3") {
-    return "box";
-  }
-  if (text === "levels" || text === "levels3") {
-    return "map";
-  }
-  if (text === "level") {
-    return "grid-3x3";
-  }
-  if (text === "sprites" || text === "sprites3" || text === "sprite") {
-    return "image";
-  }
-  if (text === "objects" || text === "object" || text === "groups" || text === "tags") {
-    return "circle-dot";
-  }
-  if (text === "rules" || text === "rule") {
-    return "git-branch";
-  }
-  if (text === "win_conditions") {
-    return "trophy";
-  }
-  if (text === "lose_conditions") {
-    return "circle-x";
-  }
-  if (text === "scene" || text === "screen" || text === "layout" || text === "level_menu") {
-    return "panels-top-left";
-  }
-  if (text === "assets" || text === "resources") {
-    return "package";
-  }
-  if (text === "theme" || text === "colors" || text === "legend") {
-    return "palette";
-  }
-  if (text === "sounds") {
-    return "volume-2";
-  }
-  if (text === "keys") {
-    return "keyboard";
-  }
-  if (text === "layers" || text === "collision_layers") {
-    return "layers";
-  }
-  if (text === "metadata") {
-    return "info";
-  }
-  if (text === "fix") {
-    return "wrench";
+  if (Object.prototype.hasOwnProperty.call(SOURCE_OUTLINE_KIND_ICON_NAMES, text)) {
+    return SOURCE_OUTLINE_KIND_ICON_NAMES[text];
   }
   if (text.startsWith("on_")) {
-    return "zap";
+    return SOURCE_OUTLINE_LIFECYCLE_ICON_NAME;
   }
-  return "file-code-2";
+  return SOURCE_OUTLINE_DEFAULT_ICON_NAME;
 }
 
 function sourceOutlineKindIconSvg(kind) {
   const name = sourceOutlineKindIconName(kind);
   const icons = {
+    puzzle: `
+      <path d="M15.39 4.39a1 1 0 0 0 1.68-.474 2.5 2.5 0 1 1 3.014 3.015 1 1 0 0 0-.474 1.68l1.683 1.682a2.414 2.414 0 0 1 0 3.414L19.61 15.39a1 1 0 0 1-1.68-.474 2.5 2.5 0 1 0-3.014 3.015 1 1 0 0 1 .474 1.68l-1.683 1.682a2.414 2.414 0 0 1-3.414 0L8.61 19.61a1 1 0 0 0-1.68.474 2.5 2.5 0 1 1-3.014-3.015 1 1 0 0 0 .474-1.68l-1.683-1.682a2.414 2.414 0 0 1 0-3.414L4.39 8.61a1 1 0 0 1 1.68.474 2.5 2.5 0 1 0 3.014-3.015 1 1 0 0 1-.474-1.68l1.683-1.682a2.414 2.414 0 0 1 3.414 0z"></path>
+    `,
     box: `
       <path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"></path>
       <path d="m3.3 7 8.7 5 8.7-5"></path>
       <path d="M12 22V12"></path>
     `,
-    map: `
-      <path d="M14.106 5.553a2 2 0 0 0 1.788 0l3.659-1.83A1 1 0 0 1 21 4.619v12.764a1 1 0 0 1-.553.894l-4.553 2.277a2 2 0 0 1-1.788 0l-4.212-2.106a2 2 0 0 0-1.788 0l-3.659 1.83A1 1 0 0 1 3 19.381V6.618a1 1 0 0 1 .553-.894l4.553-2.277a2 2 0 0 1 1.788 0z"></path>
-      <path d="M15 5.764v15"></path>
-      <path d="M9 3.236v15"></path>
-    `,
-    "grid-3x3": `
-      <rect width="18" height="18" x="3" y="3" rx="2"></rect>
-      <path d="M3 9h18"></path>
-      <path d="M3 15h18"></path>
-      <path d="M9 3v18"></path>
-      <path d="M15 3v18"></path>
+    boxes: `
+      <path d="M2.97 12.92A2 2 0 0 0 2 14.63v3.24a2 2 0 0 0 .97 1.71l3 1.8a2 2 0 0 0 2.06 0L12 19v-5.5l-5-3-4.03 2.42Z"></path>
+      <path d="m7 16.5-4.74-2.85"></path>
+      <path d="m7 16.5 5-3"></path>
+      <path d="M7 16.5v5.17"></path>
+      <path d="M12 13.5V19l3.97 2.38a2 2 0 0 0 2.06 0l3-1.8a2 2 0 0 0 .97-1.71v-3.24a2 2 0 0 0-.97-1.71L17 10.5l-5 3Z"></path>
+      <path d="m17 16.5-5-3"></path>
+      <path d="m17 16.5 4.74-2.85"></path>
+      <path d="M17 16.5v5.17"></path>
+      <path d="M7.97 4.42A2 2 0 0 0 7 6.13v4.37l5 3 5-3V6.13a2 2 0 0 0-.97-1.71l-3-1.8a2 2 0 0 0-2.06 0l-3 1.8Z"></path>
+      <path d="M12 8 7.26 5.15"></path>
+      <path d="m12 8 4.74-2.85"></path>
+      <path d="M12 13.5V8"></path>
     `,
     image: `
       <rect width="18" height="18" x="3" y="3" rx="2" ry="2"></rect>
       <circle cx="9" cy="9" r="2"></circle>
       <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"></path>
     `,
-    "circle-dot": `
-      <circle cx="12" cy="12" r="10"></circle>
+    group: `
+      <path d="M3 7V5c0-1.1.9-2 2-2h2"></path>
+      <path d="M17 3h2c1.1 0 2 .9 2 2v2"></path>
+      <path d="M21 17v2c0 1.1-.9 2-2 2h-2"></path>
+      <path d="M7 21H5c-1.1 0-2-.9-2-2v-2"></path>
+      <rect width="7" height="5" x="7" y="7" rx="1"></rect>
+      <rect width="7" height="5" x="10" y="12" rx="1"></rect>
+    `,
+    tag: `
+      <path d="M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704 8.704a2.426 2.426 0 0 0 3.42 0l6.58-6.58a2.426 2.426 0 0 0 0-3.42z"></path>
+      <circle cx="7.5" cy="7.5" r=".5" fill="currentColor"></circle>
+    `,
+    bookmark: `
+      <path d="M17 3a2 2 0 0 1 2 2v15a1 1 0 0 1-1.496.868l-4.512-2.578a2 2 0 0 0-1.984 0l-4.512 2.578A1 1 0 0 1 5 20V5a2 2 0 0 1 2-2z"></path>
+    `,
+    "scan-eye": `
+      <path d="M3 7V5a2 2 0 0 1 2-2h2"></path>
+      <path d="M17 3h2a2 2 0 0 1 2 2v2"></path>
+      <path d="M21 17v2a2 2 0 0 1-2 2h-2"></path>
+      <path d="M7 21H5a2 2 0 0 1-2-2v-2"></path>
       <circle cx="12" cy="12" r="1"></circle>
+      <path d="M18.944 12.33a1 1 0 0 0 0-.66 7.5 7.5 0 0 0-13.888 0 1 1 0 0 0 0 .66 7.5 7.5 0 0 0 13.888 0"></path>
     `,
-    "git-branch": `
-      <line x1="6" x2="6" y1="3" y2="15"></line>
-      <circle cx="18" cy="6" r="3"></circle>
-      <circle cx="6" cy="18" r="3"></circle>
-      <path d="M18 9a9 9 0 0 1-9 9"></path>
+    camera: `
+      <path d="M13.997 4a2 2 0 0 1 1.76 1.05l.486.9A2 2 0 0 0 18.003 7H20a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h1.997a2 2 0 0 0 1.759-1.048l.489-.904A2 2 0 0 1 10.004 4z"></path>
+      <circle cx="12" cy="13" r="3"></circle>
     `,
-    trophy: `
-      <path d="M10 14.66v1.626a2 2 0 0 1-.976 1.696A5 5 0 0 0 7 21.978"></path>
-      <path d="M14 14.66v1.626a2 2 0 0 0 .976 1.696A5 5 0 0 1 17 21.978"></path>
-      <path d="M18 9h1.5a1 1 0 0 0 0-5H18"></path>
-      <path d="M4 22h16"></path>
-      <path d="M6 9a6 6 0 0 0 12 0V3a1 1 0 0 0-1-1H7a1 1 0 0 0-1 1z"></path>
-      <path d="M6 9H4.5a1 1 0 0 1 0-5H6"></path>
+    "chart-spline": `
+      <path d="M3 3v16a2 2 0 0 0 2 2h16"></path>
+      <path d="M7 16c.5-2 1.5-7 4-7 2 0 2 3 4 3 2.5 0 4.5-5 5-7"></path>
     `,
-    "circle-x": `
+    "circle-play": `
+      <path d="M9 9.003a1 1 0 0 1 1.517-.859l4.997 2.997a1 1 0 0 1 0 1.718l-4.997 2.997A1 1 0 0 1 9 14.996z"></path>
       <circle cx="12" cy="12" r="10"></circle>
-      <path d="m15 9-6 6"></path>
-      <path d="m9 9 6 6"></path>
+    `,
+    "rows-3": `
+      <rect width="18" height="18" x="3" y="3" rx="2"></rect>
+      <path d="M21 9H3"></path>
+      <path d="M21 15H3"></path>
+    `,
+    "columns-3": `
+      <rect width="18" height="18" x="3" y="3" rx="2"></rect>
+      <path d="M9 3v18"></path>
+      <path d="M15 3v18"></path>
+    `,
+    "mouse-pointer-click": `
+      <path d="M14 4.1 12 6"></path>
+      <path d="m5.1 8-2.9-.8"></path>
+      <path d="m6 12-1.9 2"></path>
+      <path d="M7.2 2.2 8 5.1"></path>
+      <path d="M9.037 9.69a.498.498 0 0 1 .653-.653l11 4.5a.5.5 0 0 1-.074.949l-4.349 1.041a1 1 0 0 0-.74.739l-1.04 4.35a.5.5 0 0 1-.95.074z"></path>
+    `,
+    "square-mouse-pointer": `
+      <path d="M12.034 12.681a.498.498 0 0 1 .647-.647l9 3.5a.5.5 0 0 1-.033.943l-3.444 1.068a1 1 0 0 0-.66.66l-1.067 3.443a.5.5 0 0 1-.943.033z"></path>
+      <path d="M21 11V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h6"></path>
+    `,
+    "message-square": `
+      <path d="M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z"></path>
+    `,
+    "file-text": `
+      <path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z"></path>
+      <path d="M14 2v5a1 1 0 0 0 1 1h5"></path>
+      <path d="M10 9H8"></path>
+      <path d="M16 13H8"></path>
+      <path d="M16 17H8"></path>
+    `,
+    "import": `
+      <path d="M12 3v12"></path>
+      <path d="m8 11 4 4 4-4"></path>
+      <path d="M8 5H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-4"></path>
+    `,
+    "list-checks": `
+      <path d="M13 5h8"></path>
+      <path d="M13 12h8"></path>
+      <path d="M13 19h8"></path>
+      <path d="m3 17 2 2 4-4"></path>
+      <path d="m3 7 2 2 4-4"></path>
+    `,
+    workflow: `
+      <rect width="8" height="8" x="3" y="3" rx="2"></rect>
+      <path d="M7 11v4a2 2 0 0 0 2 2h4"></path>
+      <rect width="8" height="8" x="13" y="13" rx="2"></rect>
+    `,
+    flag: `
+      <path d="M4 22V4a1 1 0 0 1 .4-.8A6 6 0 0 1 8 2c3 0 5 2 7.333 2q2 0 3.067-.8A1 1 0 0 1 20 4v10a1 1 0 0 1-.4.8A6 6 0 0 1 16 16c-3 0-5-2-8-2a6 6 0 0 0-4 1.528"></path>
+    `,
+    "flag-off": `
+      <path d="M16 16c-3 0-5-2-8-2a6 6 0 0 0-4 1.528"></path>
+      <path d="m2 2 20 20"></path>
+      <path d="M4 22V4"></path>
+      <path d="M7.656 2H8c3 0 5 2 7.333 2q2 0 3.067-.8A1 1 0 0 1 20 4v10.347"></path>
     `,
     "panels-top-left": `
       <rect width="18" height="18" x="3" y="3" rx="2"></rect>
@@ -1590,6 +1745,26 @@ function sourceOutlineKindIconSvg(kind) {
       <circle cx="8.5" cy="7.5" r=".5" fill="currentColor"></circle>
       <circle cx="6.5" cy="12.5" r=".5" fill="currentColor"></circle>
       <path d="M12 22C6.477 22 2 17.523 2 12S6.477 2 12 2s10 4.477 10 10c0 1.657-1.343 3-3 3h-1.5a2.5 2.5 0 0 0 0 5H19a3 3 0 0 1-3 3z"></path>
+    `,
+    "swatch-book": `
+      <path d="M11 17a4 4 0 0 1-8 0V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2Z"></path>
+      <path d="M16.7 13H19a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2H7"></path>
+      <path d="M 7 17h.01"></path>
+      <path d="m11 8 2.3-2.3a2.4 2.4 0 0 1 3.404.004L18.6 7.6a2.4 2.4 0 0 1 .026 3.434L9.9 19.8"></path>
+    `,
+    shapes: `
+      <path d="M8.3 10a.7.7 0 0 1-.626-1.079L11.4 3a.7.7 0 0 1 1.198-.043L16.3 8.9a.7.7 0 0 1-.572 1.1Z"></path>
+      <rect x="3" y="14" width="7" height="7" rx="1"></rect>
+      <circle cx="17.5" cy="17.5" r="3.5"></circle>
+    `,
+    "move-horizontal": `
+      <path d="m18 8 4 4-4 4"></path>
+      <path d="M2 12h20"></path>
+      <path d="m6 8-4 4 4 4"></path>
+    `,
+    "arrow-right": `
+      <path d="M5 12h14"></path>
+      <path d="m12 5 7 7-7 7"></path>
     `,
     "volume-2": `
       <path d="M11 4.702a1 1 0 0 0-1.664-.747L5.23 7.5H3a1 1 0 0 0-1 1v7a1 1 0 0 0 1 1h2.23l4.106 3.545A1 1 0 0 0 11 19.298z"></path>
@@ -1641,6 +1816,25 @@ function sourceOutlineKindIconSvg(kind) {
   `;
 }
 
+function toggleSourceOutlineItem(itemId, expanded = null) {
+  const parentIdsWithChildren = sourceOutlineParentIdsWithChildren();
+  if (!parentIdsWithChildren.has(itemId)) {
+    return false;
+  }
+  const nextExpanded = expanded ?? !sourceOutlineExpandedItemIds.has(itemId);
+  if (nextExpanded) {
+    sourceOutlineExpandedItemIds.add(itemId);
+  } else {
+    sourceOutlineExpandedItemIds.delete(itemId);
+  }
+  renderSourceOutline();
+  syncSourceOutlineActiveItem();
+  sourceOutlineList
+    ?.querySelector(`[data-source-outline-id="${CSS.escape(itemId)}"]`)
+    ?.focus({ preventScroll: true });
+  return true;
+}
+
 function openSourceOutlineItem(itemId) {
   const item = sourceOutlineItems.find((entry) => entry.id === itemId);
   const document = activeDocument();
@@ -1658,11 +1852,13 @@ function openSourceOutlineItem(itemId) {
   return opened;
 }
 
-function syncSourceOutlineActiveItem() {
+function syncSourceOutlineActiveItem(options = {}) {
   if (!sourceOutlineList || !sourceOutlineItems.length) {
     return;
   }
-  const cursor = sourceViewOffsetToDocumentOffset(sourceEditor.selectionStart || 0, "start");
+  const cursor = Number.isInteger(options.position)
+    ? options.position
+    : sourceViewOffsetToDocumentOffset(sourceEditor.selectionStart || 0, "start");
   let active = null;
   for (const item of sourceOutlineItems) {
     if (cursor >= item.start && cursor <= Math.max(item.end, item.start)) {
@@ -1671,10 +1867,21 @@ function syncSourceOutlineActiveItem() {
       }
     } else if (!active && cursor >= item.start) {
       active = item;
+    } else if (cursor >= item.start && item.start > active.start) {
+      active = item;
     }
   }
+  const itemsById = sourceOutlineItemById();
+  let activeId = active?.id || "";
+  let parentId = active?.parent || "";
+  while (parentId) {
+    if (!sourceOutlineExpandedItemIds.has(parentId)) {
+      activeId = parentId;
+    }
+    parentId = itemsById.get(parentId)?.parent || "";
+  }
   for (const row of sourceOutlineList.querySelectorAll("[data-source-outline-id]")) {
-    row.classList.toggle("is-active", active?.id === row.dataset.sourceOutlineId);
+    row.classList.toggle("is-active", activeId === row.dataset.sourceOutlineId);
   }
 }
 
@@ -3108,6 +3315,7 @@ document.addEventListener("selectionchange", () => {
     return;
   }
   scheduleSourceCursorPreviewSync();
+  syncSourceOutlineActiveItem();
   syncSourceFindIndexFromSelection();
   renderSourceBlockSelection();
 });
@@ -5082,8 +5290,8 @@ function appendSourceBlockRange(range) {
   }
   const caret = document.createElement("div");
   caret.className = "source-block-selection-caret";
-  caret.style.left = `${rect.left}px`;
-  caret.style.top = `${rect.top}px`;
+  caret.style.left = `${rect.left + sourceEditor.scrollLeft}px`;
+  caret.style.top = `${rect.top + sourceEditor.scrollTop}px`;
   caret.style.height = `${rect.height}px`;
   sourceBlockSelectionLayer.append(caret);
 }
@@ -5127,9 +5335,9 @@ function sourceSelectionRectsForOffsets(start, end) {
       const rectHeight = rect.height || lineHeight;
       const height = Math.max(lineHeight, rectHeight);
       return {
-        left: rect.left - wrapRect.left,
-        right: rect.right - wrapRect.left,
-        top: rect.top - wrapRect.top - Math.max(0, (lineHeight - rectHeight) / 2),
+        left: rect.left - wrapRect.left + sourceEditor.scrollLeft,
+        right: rect.right - wrapRect.left + sourceEditor.scrollLeft,
+        top: rect.top - wrapRect.top + sourceEditor.scrollTop - Math.max(0, (lineHeight - rectHeight) / 2),
         height,
       };
     });
@@ -5604,10 +5812,15 @@ sourceOutlineList?.addEventListener("click", (event) => {
   if (!row || !sourceOutlineList.contains(row)) {
     return;
   }
+  if (event.target.closest("[data-source-outline-toggle]")) {
+    event.preventDefault();
+    toggleSourceOutlineItem(row.dataset.sourceOutlineId);
+    return;
+  }
   openSourceOutlineItem(row.dataset.sourceOutlineId);
 });
 sourceOutlineList?.addEventListener("keydown", (event) => {
-  if (!["Enter", " "].includes(event.key)) {
+  if (!["Enter", " ", "ArrowRight", "ArrowLeft"].includes(event.key)) {
     return;
   }
   const row = event.target.closest("[data-source-outline-id]");
@@ -5615,6 +5828,10 @@ sourceOutlineList?.addEventListener("keydown", (event) => {
     return;
   }
   event.preventDefault();
+  if (event.key === "ArrowRight" || event.key === "ArrowLeft") {
+    toggleSourceOutlineItem(row.dataset.sourceOutlineId, event.key === "ArrowRight");
+    return;
+  }
   openSourceOutlineItem(row.dataset.sourceOutlineId);
 });
 document.addEventListener("pointerdown", hideSourceColorEditorForOutsidePointer);

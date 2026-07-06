@@ -438,10 +438,10 @@ fn parse_assignment_directive(
     if !is_identifier(name) {
         return Err(parse_error(line, "assignment name must be an identifier"));
     }
-    let Some((_, expr)) = line.split_once('=') else {
-        return Err(parse_error(line, "assignment must be: <name> = <value>"));
-    };
-    let expr = expr.trim();
+    let (parsed_name, expr) = require_assignment_row(line, "assignment must be: <name> = <value>")?;
+    if parsed_name != name {
+        return Err(parse_error(line, "assignment name does not match directive"));
+    }
     if looks_like_condition_expr(expr) {
         if named_conditions.contains_key(name) {
             return Err(parse_error(line, "duplicate condition"));
@@ -602,9 +602,8 @@ fn parse_mark_block(
                 i += 1;
             }
             [spec] => {
-                let (name, ty) = spec
-                    .split_once('=')
-                    .map_or((*spec, None), |(name, ty)| (name, Some(ty)));
+                let (name, ty) =
+                    parse_assignment_row(spec).map_or((*spec, None), |(name, ty)| (name, Some(ty)));
                 parse_mark_directive(name, ty, line, catalog)?;
                 i += 1;
             }
@@ -1222,6 +1221,9 @@ fn collect_implicit_inputs_from_statements(
 ) {
     for statement in statements {
         match statement {
+            StatementAst::LocalRoutine { definition, .. } => {
+                collect_implicit_inputs_from_statements(&definition.statements, names);
+            }
             StatementAst::Block { statements, .. } | StatementAst::Fix { statements, .. } => {
                 collect_implicit_inputs_from_statements(statements, names);
             }

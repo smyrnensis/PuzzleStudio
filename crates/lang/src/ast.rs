@@ -30,6 +30,11 @@ pub(crate) enum RuleRole {
 
 #[derive(Clone, Debug)]
 pub(crate) enum StatementAst {
+    LocalRoutine {
+        definition: RuleDefinitionAst,
+        source_line: String,
+        source_line_number: Option<usize>,
+    },
     Call {
         name: String,
         source_line: String,

@@ -28,6 +28,13 @@ struct StatementLoweringContext {
     input_allowed: bool,
     input_forbidden_context: Option<&'static str>,
     role: RuleRole,
+    local_definitions: Vec<HashMap<String, RuleDefinitionAst>>,
+}
+
+#[derive(Clone, Debug)]
+struct ResolvedRoutineDefinition {
+    definition: RuleDefinitionAst,
+    is_local: bool,
 }
 
 struct LoweredPrograms {
@@ -273,10 +280,16 @@ fn collect_program_reference_diagnostics(
         collect_statement_reference_diagnostics(
             &definition.statements,
             definitions_by_name,
+            &mut Vec::new(),
             &mut diagnostics,
         );
     }
-    collect_statement_reference_diagnostics(main_statements, definitions_by_name, &mut diagnostics);
+    collect_statement_reference_diagnostics(
+        main_statements,
+        definitions_by_name,
+        &mut Vec::new(),
+        &mut diagnostics,
+    );
     for statements in [
         level_start_statements,
         level_clear_statements,
@@ -286,17 +299,24 @@ fn collect_program_reference_diagnostics(
     .into_iter()
     .flatten()
     {
-        collect_statement_reference_diagnostics(statements, definitions_by_name, &mut diagnostics);
+        collect_statement_reference_diagnostics(
+            statements,
+            definitions_by_name,
+            &mut Vec::new(),
+            &mut diagnostics,
+        );
     }
     for level in level_bodies {
         collect_statement_reference_diagnostics(
             &level.level_start_statements,
             definitions_by_name,
+            &mut Vec::new(),
             &mut diagnostics,
         );
         collect_statement_reference_diagnostics(
             &level.level_clear_statements,
             definitions_by_name,
+            &mut Vec::new(),
             &mut diagnostics,
         );
     }
@@ -306,16 +326,31 @@ fn collect_program_reference_diagnostics(
 fn collect_statement_reference_diagnostics(
     statements: &[StatementAst],
     definitions_by_name: &HashMap<String, RuleDefinitionAst>,
+    local_scopes: &mut Vec<HashMap<String, RuleDefinitionAst>>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
+    let local_definitions = local_routine_definitions_with_diagnostics(statements, diagnostics);
+    let has_local_definitions = !local_definitions.is_empty();
+    if has_local_definitions {
+        local_scopes.push(local_definitions);
+    }
+
     for statement in statements {
         match statement {
+            StatementAst::LocalRoutine { definition, .. } => {
+                collect_statement_reference_diagnostics(
+                    &definition.statements,
+                    definitions_by_name,
+                    local_scopes,
+                    diagnostics,
+                );
+            }
             StatementAst::Call {
                 name,
                 source_line,
                 source_line_number,
             } => {
-                if !definitions_by_name.contains_key(name) {
+                if !routine_definition_exists(name, definitions_by_name, local_scopes) {
                     diagnostics.push(diagnostic_at_source_line_number(
                         format!("unknown routine call: {name}"),
                         source_line,
@@ -328,7 +363,7 @@ fn collect_statement_reference_diagnostics(
                 source_line,
                 source_line_number,
             } => {
-                if !definitions_by_name.contains_key(name) {
+                if !routine_definition_exists(name, definitions_by_name, local_scopes) {
                     diagnostics.push(diagnostic_at_source_line_number(
                         format!("unknown display routine call: {name}"),
                         source_line,
@@ -340,6 +375,7 @@ fn collect_statement_reference_diagnostics(
                 collect_statement_reference_diagnostics(
                     statements,
                     definitions_by_name,
+                    local_scopes,
                     diagnostics,
                 );
             }
@@ -356,11 +392,13 @@ fn collect_statement_reference_diagnostics(
                 collect_statement_reference_diagnostics(
                     then_statements,
                     definitions_by_name,
+                    local_scopes,
                     diagnostics,
                 );
                 collect_statement_reference_diagnostics(
                     else_statements,
                     definitions_by_name,
+                    local_scopes,
                     diagnostics,
                 );
             }
@@ -368,12 +406,13 @@ fn collect_statement_reference_diagnostics(
                 collect_statement_reference_diagnostics(
                     statements,
                     definitions_by_name,
+                    local_scopes,
                     diagnostics,
                 );
             }
             StatementAst::Rewrite(rewrite) => {
                 if let Some(name) = &rewrite.after_call {
-                    if !definitions_by_name.contains_key(name) {
+                    if !routine_definition_exists(name, definitions_by_name, local_scopes) {
                         diagnostics.push(diagnostic_at_source_line_number(
                             format!("unknown routine call: {name}"),
                             &rewrite.source_line,
@@ -385,6 +424,60 @@ fn collect_statement_reference_diagnostics(
             StatementAst::Effect { .. } => {}
         }
     }
+    if has_local_definitions {
+        local_scopes.pop();
+    }
+}
+
+fn local_routine_definitions(statements: &[StatementAst]) -> HashMap<String, RuleDefinitionAst> {
+    let mut definitions = HashMap::new();
+    for statement in statements {
+        if let StatementAst::LocalRoutine { definition, .. } = statement {
+            definitions
+                .entry(definition.name.clone())
+                .or_insert_with(|| definition.clone());
+        }
+    }
+    definitions
+}
+
+fn local_routine_definitions_with_diagnostics(
+    statements: &[StatementAst],
+    diagnostics: &mut Vec<Diagnostic>,
+) -> HashMap<String, RuleDefinitionAst> {
+    let mut definitions = HashMap::new();
+    for statement in statements {
+        if let StatementAst::LocalRoutine {
+            definition,
+            source_line,
+            source_line_number,
+        } = statement
+        {
+            if definitions
+                .insert(definition.name.clone(), definition.clone())
+                .is_some()
+            {
+                diagnostics.push(diagnostic_at_source_line_number(
+                    format!("duplicate local routine definition: {}", definition.name),
+                    source_line,
+                    *source_line_number,
+                ));
+            }
+        }
+    }
+    definitions
+}
+
+fn routine_definition_exists(
+    name: &str,
+    definitions_by_name: &HashMap<String, RuleDefinitionAst>,
+    local_scopes: &[HashMap<String, RuleDefinitionAst>],
+) -> bool {
+    local_scopes
+        .iter()
+        .rev()
+        .any(|scope| scope.contains_key(name))
+        || definitions_by_name.contains_key(name)
 }
 
 fn wrap_program_local_frame(
@@ -1295,9 +1388,15 @@ impl<'a> ProgramLowerer<'a> {
         statements: &[StatementAst],
         context: &StatementLoweringContext,
     ) -> Result<Vec<RuleStep>, DiagnosticReport> {
+        let mut scoped_context = context.clone();
+        let local_definitions = local_routine_definitions(statements);
+        if !local_definitions.is_empty() {
+            scoped_context.local_definitions.push(local_definitions);
+        }
+
         let mut rules = Vec::new();
         for statement in statements {
-            rules.extend(self.lower_statement(statement, context)?);
+            rules.extend(self.lower_statement(statement, &scoped_context)?);
         }
         Ok(rules)
     }
@@ -1308,6 +1407,7 @@ impl<'a> ProgramLowerer<'a> {
         context: &StatementLoweringContext,
     ) -> Result<Vec<RuleStep>, DiagnosticReport> {
         match statement {
+            StatementAst::LocalRoutine { .. } => Ok(Vec::new()),
             StatementAst::Call {
                 name,
                 source_line,
@@ -1513,14 +1613,13 @@ impl<'a> ProgramLowerer<'a> {
                 source_line_number,
             ));
         }
-        let definition = self.definitions.get(name).cloned().ok_or_else(|| {
-            report_at_source_line_number(
-                format!("unknown routine call: {name}"),
-                source_line,
-                source_line_number,
-            )
-        })?;
+        let resolved =
+            self.resolve_routine_definition(name, source_line, source_line_number, context)?;
+        let definition = resolved.definition;
         let mut nested_context = context.clone();
+        if !resolved.is_local {
+            nested_context.local_definitions.clear();
+        }
         if context.role == RuleRole::Visual || definition.role == RuleRole::Visual {
             nested_context.role = RuleRole::Visual;
         }
@@ -1554,14 +1653,13 @@ impl<'a> ProgramLowerer<'a> {
                 source_line_number,
             ));
         }
-        let definition = self.definitions.get(name).cloned().ok_or_else(|| {
-            report_at_source_line_number(
-                format!("unknown display routine call: {name}"),
-                source_line,
-                source_line_number,
-            )
-        })?;
+        let resolved =
+            self.resolve_display_routine_definition(name, source_line, source_line_number, context)?;
+        let definition = resolved.definition;
         let mut nested_context = context.clone();
+        if !resolved.is_local {
+            nested_context.local_definitions.clear();
+        }
         nested_context.role = RuleRole::Visual;
         nested_context.call_stack.push(name.to_string());
         nested_context.application = if definition.application == RuleApplication::Random {
@@ -1577,6 +1675,68 @@ impl<'a> ProgramLowerer<'a> {
             stop_condition: None,
             steps,
         }])
+    }
+
+    fn resolve_routine_definition(
+        &self,
+        name: &str,
+        source_line: &str,
+        source_line_number: Option<usize>,
+        context: &StatementLoweringContext,
+    ) -> Result<ResolvedRoutineDefinition, DiagnosticReport> {
+        for scope in context.local_definitions.iter().rev() {
+            if let Some(definition) = scope.get(name) {
+                return Ok(ResolvedRoutineDefinition {
+                    definition: definition.clone(),
+                    is_local: true,
+                });
+            }
+        }
+        self.definitions
+            .get(name)
+            .cloned()
+            .map(|definition| ResolvedRoutineDefinition {
+                definition,
+                is_local: false,
+            })
+            .ok_or_else(|| {
+                report_at_source_line_number(
+                    format!("unknown routine call: {name}"),
+                    source_line,
+                    source_line_number,
+                )
+            })
+    }
+
+    fn resolve_display_routine_definition(
+        &self,
+        name: &str,
+        source_line: &str,
+        source_line_number: Option<usize>,
+        context: &StatementLoweringContext,
+    ) -> Result<ResolvedRoutineDefinition, DiagnosticReport> {
+        for scope in context.local_definitions.iter().rev() {
+            if let Some(definition) = scope.get(name) {
+                return Ok(ResolvedRoutineDefinition {
+                    definition: definition.clone(),
+                    is_local: true,
+                });
+            }
+        }
+        self.definitions
+            .get(name)
+            .cloned()
+            .map(|definition| ResolvedRoutineDefinition {
+                definition,
+                is_local: false,
+            })
+            .ok_or_else(|| {
+                report_at_source_line_number(
+                    format!("unknown display routine call: {name}"),
+                    source_line,
+                    source_line_number,
+                )
+            })
     }
 
     fn lower_pattern_condition(

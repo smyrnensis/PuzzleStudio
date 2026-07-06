@@ -596,7 +596,7 @@ function voxelInstances(frame, position, object, sourceKey, objectOrder = 0) {
   base.y += offset.y;
   base.z += offset.z;
   return visual.voxels.map((voxel) => {
-    const local = spriteVoxelLocalPosition(voxel, step);
+    const local = spriteVoxelLocalPosition(voxel, size, step);
     const layerY = object.layer * 0.08;
     const renderPosition = {
       x: base.x + local.x,
@@ -901,11 +901,11 @@ function faceMaterialKey(fill) {
   return color ? `${formatRgbColor(color)}:${Math.max(0, Math.min(1, color.a))}` : `${fill}:1`;
 }
 
-function spriteVoxelLocalPosition(voxel, step) {
+function spriteVoxelLocalPosition(voxel, size, step) {
   return {
-    x: (voxel.x + 0.5) * step - 0.5,
-    y: (voxel.y + 0.5) * step - 0.5,
-    z: (voxel.z + 0.5) * step - 0.5,
+    x: (voxel.x + 0.5 - size.width / 2) * step,
+    y: (voxel.y + 0.5 - size.depth / 2) * step,
+    z: (voxel.z + 0.5 - size.height / 2) * step,
   };
 }
 

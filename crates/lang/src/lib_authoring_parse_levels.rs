@@ -599,7 +599,7 @@ fn parse_animation_tween_options(
         ));
     }
     for option in options {
-        let Some((name, value)) = option.split_once('=') else {
+        let Some((name, value)) = parse_assignment_row(option) else {
             return Err(parse_error(
                 line,
                 "tween option must be name=value in inline form",

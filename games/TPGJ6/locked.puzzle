@@ -9,9 +9,9 @@ text_color #c4d0cb
 }
 
 animation {
-	tween {
-		duration = 50ms
-	}
+tween {
+duration = 50ms
+}
 }
 
 sounds {

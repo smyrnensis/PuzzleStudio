@@ -290,8 +290,26 @@ function normalizeScenePreviewTheme(theme) {
   }
   return {
     name,
-    variables: theme.variables && typeof theme.variables === "object" ? theme.variables : {},
+    variables: normalizeThemeVariables(theme.variables),
   };
+}
+
+function normalizeThemeVariables(variables) {
+  if (Array.isArray(variables)) {
+    return Object.fromEntries(variables.map((variable, index) => {
+      if (!variable || typeof variable !== "object" || Array.isArray(variable)) {
+        throw new Error(`Puzzle3 theme.variables[${index}] is invalid.`);
+      }
+      if (typeof variable.name !== "string" || variable.name.length === 0) {
+        throw new Error(`Puzzle3 theme.variables[${index}].name must be a non-empty string.`);
+      }
+      if (typeof variable.value !== "string") {
+        throw new Error(`Puzzle3 theme.variables[${index}].value must be a string.`);
+      }
+      return [variable.name, variable.value];
+    }));
+  }
+  return variables && typeof variables === "object" ? variables : {};
 }
 
 function normalizeThemeName(name) {
@@ -313,8 +331,9 @@ function normalizePuzzle3RendererMode(value) {
 
 async function createPuzzle3Runtime(initialSnapshot) {
   const fixtureJson = JSON.stringify(requirePuzzle3Snapshot(initialSnapshot, "Puzzle3 runtime fixture"));
+  const runtimeContract = requireRuntimeContract(initialSnapshot);
   const module = await window.PuzzleRuntimeWasmLoader.load(
-    String(initialSnapshot.runtimeContractVersion || fixtureJson.length || Date.now()),
+    String(runtimeContract.version),
   );
   if (typeof module.WasmPuzzle3Runtime?.fromFixture !== "function") {
     throw new Error("Puzzle3 source-free WASM runtime is unavailable.");
@@ -325,11 +344,15 @@ async function createPuzzle3Runtime(initialSnapshot) {
 class Puzzle3SessionRuntime {
   constructor(initialSnapshot, coreRuntime) {
     this.base = cloneRuntimeSnapshot(initialSnapshot);
+    this.runtimeContract = this.base.runtimeContract;
+    this.runtimeGame = requireRuntimeContractGame(this.runtimeContract);
+    this.runtimeLevelBundle = requireRuntimeContractLevelBundle(this.runtimeContract);
+    this.runtimeLayerCountValue = runtimeLayerCount(this.runtimeGame);
+    this.semanticObjectsById = runtimeSemanticObjectsById(this.runtimeGame);
+    this.presentationObjectsById = runtimePresentationObjectsById(this.base.objects);
     this.coreRuntime = coreRuntime;
     this.camera = cloneCamera(initialSnapshot.camera);
-    this.levels = cloneRuntimeLevels(initialSnapshot.levels?.length
-      ? initialSnapshot.levels
-      : [runtimeSnapshotLevel(initialSnapshot)]);
+    this.levels = cloneRuntimeContractLevels(this.runtimeLevelBundle, initialSnapshot.levels || []);
     this.levelIndex = clampIndex(initialSnapshot.levelIndex || 0, this.levels.length);
     this.undoStack = [];
     this.moveCount = 0;
@@ -365,9 +388,6 @@ class Puzzle3SessionRuntime {
 
   applyInput(inputName) {
     const inputId = this.inputIdForName(inputName);
-    if (inputId === undefined) {
-      return false;
-    }
     const before = this.historyEntry();
     const outcome = this.transitionCurrent("main", inputId);
     if (outcome.changed !== true) {
@@ -502,17 +522,18 @@ class Puzzle3SessionRuntime {
   }
 
   applyRuntimeCells(cells) {
-    for (const cell of cells || []) {
-      const position = cell.position || {};
-      const normalized = {
-        x: Number(position.x || 0),
-        y: Number(position.y || 0),
-        z: Number(position.z || 0),
-      };
+    const level = this.currentLevel();
+    for (const [index, cell] of (cells || []).entries()) {
+      const normalized = runtimeCellPosition(cell, `runtime cells[${index}]`);
+      if (!runtimePositionInBounds(normalized, level.size)) {
+        throw new Error(
+          `Puzzle3 runtime cell ${cellKey(normalized)} is outside current level bounds `
+          + `${runtimeSizeLabel(level.size)}.`,
+        );
+      }
       const key = cellKey(normalized);
-      const objects = (cell.objects || [])
-        .map((object) => this.objectForId(Number(object?.id ?? object ?? 0)))
-        .filter((object) => object.id);
+      const objects = runtimeCellObjectIds(cell, `runtime cell ${key}`)
+        .map((objectId) => this.objectForId(objectId));
       if (!objects.length) {
         this.cellsByKey.delete(key);
         continue;
@@ -524,19 +545,44 @@ class Puzzle3SessionRuntime {
 
   inputIdForName(inputName) {
     const canonicalName = canonicalPuzzle3InputName(inputName);
-    const input = (this.base.inputs || [])
+    const input = (this.runtimeGame.inputs || [])
       .find((candidate) => canonicalPuzzle3InputName(candidate.name) === canonicalName);
-    return input ? Number(input.id) : undefined;
+    if (!input) {
+      throw new Error(`Unknown Puzzle3 runtime input: ${inputName}`);
+    }
+    return runtimeInputId(input, `runtimeContract.game.inputs.${input.name || canonicalName}`);
   }
 
   objectForId(objectId) {
-    const object = Object.values(this.base.objects || {}).find((candidate) => candidate.id === Number(objectId));
-    return object ? { ...object } : { id: Number(objectId), name: `Object ${objectId}`, sprite: `Object ${objectId}` };
+    const semantic = this.semanticObjectForId(objectId);
+    const object = this.presentationObjectsById.get(Number(objectId));
+    if (!object) {
+      throw new Error(
+        `Puzzle3 visual fixture is missing presentation object metadata for runtime object id ${objectId}.`,
+      );
+    }
+    return {
+      ...object,
+      id: semantic.id,
+      layer: semantic.layerId,
+    };
   }
 
   objectLayer(objectId) {
-    const object = Object.values(this.base.objects || {}).find((candidate) => candidate.id === Number(objectId));
-    return Number(object?.layer ?? 0);
+    return this.semanticObjectForId(objectId).layerId;
+  }
+
+  semanticObjectForId(objectId) {
+    const id = runtimeObjectId(objectId, "runtime object id");
+    const object = this.semanticObjectsById.get(id);
+    if (!object) {
+      throw new Error(`Unknown Puzzle3 runtime object id: ${id}`);
+    }
+    return object;
+  }
+
+  runtimeLayerCount() {
+    return this.runtimeLayerCountValue;
   }
 }
 
@@ -2646,9 +2692,9 @@ function buildSpriteVoxelTemplate(sprite) {
         }
         const grid = standardSpriteGridPosition({ width, depth, height }, col, row, z);
         const localPosition = {
-          x: (grid.x + 0.5) * scale - 0.5,
-          y: (grid.y + 0.5) * scale - 0.5,
-          z: (grid.z + 0.5) * scale - 0.5,
+          x: (grid.x + 0.5 - width / 2) * scale,
+          y: (grid.y + 0.5 - depth / 2) * scale,
+          z: (grid.z + 0.5 - height / 2) * scale,
         };
         voxels.push({
           fill,
@@ -2715,9 +2761,9 @@ function spriteVoxels(position, blocks, palette, sourceKey = null, objectOrder =
         const grid = standardSpriteGridPosition({ width, depth, height }, col, row, z);
         occupied.add(voxelKey(grid.x, grid.y, grid.z));
         const voxelPosition = {
-          x: position.x + (grid.x + 0.5) * scale - 0.5,
-          y: position.y + (grid.y + 0.5) * scale - 0.5,
-          z: position.z + (grid.z + 0.5) * scale - 0.5,
+          x: position.x + (grid.x + 0.5 - width / 2) * scale,
+          y: position.y + (grid.y + 0.5 - depth / 2) * scale,
+          z: position.z + (grid.z + 0.5 - height / 2) * scale,
         };
         voxels.push({
           fill,
@@ -3743,6 +3789,9 @@ controllerApi.ready = loadPuzzle3ControllerSnapshot();
 
 function cloneRuntimeSnapshot(source) {
   const runtimeContract = requireRuntimeContract(source);
+  const runtimeGame = requireRuntimeContractGame(runtimeContract);
+  const runtimeLevelBundle = requireRuntimeContractLevelBundle(runtimeContract);
+  const lifecycle = requireRuntimeContractLifecycle(runtimeContract);
   return {
     ...source,
     size: { ...source.size },
@@ -3753,19 +3802,24 @@ function cloneRuntimeSnapshot(source) {
     controls: {
       keys: { ...(source.controls?.keys || {}) },
     },
-    inputs: JSON.parse(JSON.stringify(source.inputs || [])),
+    layerCount: runtimeLayerCount(runtimeGame),
+    inputs: cloneRuntimeInputs(runtimeGame.inputs),
+    rules: cloneRequiredJsonArray(runtimeContract.rules, "runtimeContract.rules"),
+    winCondition: runtimeContract.winCondition
+      ? JSON.parse(JSON.stringify(runtimeContract.winCondition))
+      : null,
     runtimeContract: JSON.parse(JSON.stringify(runtimeContract)),
     lifecycle: {
-      onLevelStart: JSON.parse(JSON.stringify(runtimeContract.lifecycle?.onLevelStart || [])),
-      onLevelClear: [...(runtimeContract.lifecycle?.onLevelClear || [])],
-      onLastLevelClear: runtimeContract.lifecycle?.onLastLevelClear
-        ? [...runtimeContract.lifecycle.onLastLevelClear]
+      onLevelStart: JSON.parse(JSON.stringify(lifecycle.onLevelStart)),
+      onLevelClear: [...lifecycle.onLevelClear],
+      onLastLevelClear: lifecycle.onLastLevelClear
+        ? [...lifecycle.onLastLevelClear]
         : null,
     },
     objects: cloneRuntimeObjects(source.objects || {}),
     sprites: cloneRuntimeSprites(source.sprites || {}),
     cells: cloneRuntimeCells(source.cells || []),
-    levels: cloneRuntimeLevels(source.levels || []),
+    levels: cloneRuntimeContractLevels(runtimeLevelBundle, source.levels || []),
     levelBundles: cloneRuntimeLevelBundles(source.levelBundles || {}),
   };
 }
@@ -3778,7 +3832,56 @@ function requireRuntimeContract(source) {
   if (Number(contract.version) !== 1) {
     throw new Error(`Unsupported Puzzle3 runtimeContract version: ${contract.version}`);
   }
+  requireRuntimeContractGame(contract);
+  requireRuntimeContractLevelBundle(contract);
+  requireRuntimeContractLifecycle(contract);
   return contract;
+}
+
+function requireRuntimeContractGame(contract) {
+  const game = contract?.game;
+  if (!game || typeof game !== "object" || Array.isArray(game)) {
+    throw new Error("Puzzle3 runtimeContract.game is missing or invalid.");
+  }
+  runtimeLayerCount(game);
+  if (!Array.isArray(game.objects)) {
+    throw new Error("Puzzle3 runtimeContract.game.objects is missing or invalid.");
+  }
+  if (!Array.isArray(game.inputs)) {
+    throw new Error("Puzzle3 runtimeContract.game.inputs is missing or invalid.");
+  }
+  return game;
+}
+
+function requireRuntimeContractLevelBundle(contract) {
+  const levelBundle = contract?.levelBundle;
+  if (!levelBundle || typeof levelBundle !== "object" || Array.isArray(levelBundle)) {
+    throw new Error("Puzzle3 runtimeContract.levelBundle is missing or invalid.");
+  }
+  if (!Array.isArray(levelBundle.levels) || levelBundle.levels.length === 0) {
+    throw new Error("Puzzle3 runtimeContract.levelBundle.levels is missing or empty.");
+  }
+  return levelBundle;
+}
+
+function requireRuntimeContractLifecycle(contract) {
+  const lifecycle = contract?.lifecycle;
+  if (!lifecycle || typeof lifecycle !== "object" || Array.isArray(lifecycle)) {
+    throw new Error("Puzzle3 runtimeContract.lifecycle is missing or invalid.");
+  }
+  if (!Array.isArray(lifecycle.onLevelStart)) {
+    throw new Error("Puzzle3 runtimeContract.lifecycle.onLevelStart is missing or invalid.");
+  }
+  if (!Array.isArray(lifecycle.onLevelClear)) {
+    throw new Error("Puzzle3 runtimeContract.lifecycle.onLevelClear is missing or invalid.");
+  }
+  if (lifecycle.onLastLevelClear !== null
+    && lifecycle.onLastLevelClear !== undefined
+    && !Array.isArray(lifecycle.onLastLevelClear)
+  ) {
+    throw new Error("Puzzle3 runtimeContract.lifecycle.onLastLevelClear is invalid.");
+  }
+  return lifecycle;
 }
 
 function cloneRuntimeRecord(record) {
@@ -3812,17 +3915,69 @@ function cloneRuntimeSprites(sprites) {
 function cloneRuntimeCells(cells) {
   return cells.map((cell) => ({
     position: { ...cell.position },
-    objects: (cell.objects || []).map((object) => ({ ...object })),
+    objects: (cell.objects || []).map((object) => (
+      object && typeof object === "object" ? { ...object } : object
+    )),
   }));
 }
 
-function cloneRuntimeLevels(levels) {
-  return levels.map((level, index) => ({
-    name: level.name || `level_${index + 1}`,
-    label: level.label || level.name || `Level ${index + 1}`,
-    size: { ...level.size },
-    cells: cloneRuntimeCells(level.cells || []),
+function cloneRuntimeInputs(inputs) {
+  return inputs.map((input, index) => ({
+    ...input,
+    id: runtimeInputId(input, `runtimeContract.game.inputs[${index}]`),
+    name: runtimeInputName(input, `runtimeContract.game.inputs[${index}]`),
+    keys: Array.isArray(input.keys) ? [...input.keys] : [],
   }));
+}
+
+function cloneRequiredJsonArray(value, label) {
+  if (!Array.isArray(value)) {
+    throw new Error(`Puzzle3 ${label} must be an array.`);
+  }
+  return JSON.parse(JSON.stringify(value));
+}
+
+function cloneRuntimeContractLevels(levelBundle, presentationLevels = []) {
+  const levels = levelBundle.levels.map((entry, index) => {
+    const label = `runtimeContract.levelBundle.levels[${index}]`;
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      throw new Error(`Puzzle3 ${label} is missing or invalid.`);
+    }
+    const name = runtimeString(entry.name, `${label}.name`);
+    const level = entry.level;
+    if (!level || typeof level !== "object" || Array.isArray(level)) {
+      throw new Error(`Puzzle3 ${label}.level is missing or invalid.`);
+    }
+    const size = runtimeSize(level.size, `${label}.level.size`);
+    if (!Array.isArray(level.cells)) {
+      throw new Error(`Puzzle3 ${label}.level.cells must be an array.`);
+    }
+    const cells = level.cells.map((cell, cellIndex) => {
+      const cellLabel = `${label}.level.cells[${cellIndex}]`;
+      const position = runtimeCellPosition(cell, cellLabel);
+      if (!runtimePositionInBounds(position, size)) {
+        throw new Error(
+          `Puzzle3 ${cellLabel}.position ${cellKey(position)} is outside level bounds `
+          + `${runtimeSizeLabel(size)}.`,
+        );
+      }
+      return {
+        position,
+        objects: runtimeCellObjectIds(cell, cellLabel),
+      };
+    });
+    const presentation = presentationLevels[index] || {};
+    return {
+      name,
+      label: presentation.label || name,
+      size,
+      cells,
+    };
+  });
+  if (levels.length === 0) {
+    throw new Error("Puzzle3 runtimeContract.levelBundle.levels is empty.");
+  }
+  return levels;
 }
 
 function cloneRuntimeLevelBundles(levelBundles) {
@@ -3834,36 +3989,148 @@ function cloneRuntimeLevelBundles(levelBundles) {
   );
 }
 
-function runtimeSnapshotLevel(source) {
+function runtimeLayerCount(game) {
+  return runtimePositiveInteger(game.layer_count, "runtimeContract.game.layer_count");
+}
+
+function runtimeSemanticObjectsById(game) {
+  const layerCount = runtimeLayerCount(game);
+  const objects = new Map();
+  for (const [index, object] of game.objects.entries()) {
+    const label = `runtimeContract.game.objects[${index}]`;
+    if (!object || typeof object !== "object" || Array.isArray(object)) {
+      throw new Error(`Puzzle3 ${label} is missing or invalid.`);
+    }
+    const id = runtimeObjectId(object.id, `${label}.id`);
+    const layerId = runtimeLayerId(object.layer_id, `${label}.layer_id`);
+    if (layerId >= layerCount) {
+      throw new Error(`Puzzle3 ${label}.layer_id ${layerId} is outside layer count ${layerCount}.`);
+    }
+    if (objects.has(id)) {
+      throw new Error(`Puzzle3 runtimeContract.game.objects contains duplicate object id ${id}.`);
+    }
+    objects.set(id, { id, layerId });
+  }
+  return objects;
+}
+
+function runtimePresentationObjectsById(objects) {
+  const map = new Map();
+  for (const [name, object] of Object.entries(objects || {})) {
+    if (!object || typeof object !== "object" || Array.isArray(object)) {
+      throw new Error(`Puzzle3 visual object metadata for ${name} is invalid.`);
+    }
+    const id = runtimeObjectId(object.id, `visual object ${name}.id`);
+    if (map.has(id)) {
+      throw new Error(`Puzzle3 visual object metadata contains duplicate object id ${id}.`);
+    }
+    map.set(id, { ...object });
+  }
+  return map;
+}
+
+function runtimeSize(size, label) {
+  if (!size || typeof size !== "object" || Array.isArray(size)) {
+    throw new Error(`Puzzle3 ${label} is missing or invalid.`);
+  }
   return {
-    name: source.levelName || "level_1",
-    label: source.levelLabel || source.levelName || "Level 1",
-    size: { ...source.size },
-    cells: cloneRuntimeCells(source.cells || []),
+    width: runtimePositiveInteger(size.width, `${label}.width`),
+    depth: runtimePositiveInteger(size.depth, `${label}.depth`),
+    height: runtimePositiveInteger(size.height, `${label}.height`),
   };
 }
 
+function runtimeCellPosition(cell, label) {
+  if (!cell || typeof cell !== "object" || Array.isArray(cell)) {
+    throw new Error(`Puzzle3 ${label} is missing or invalid.`);
+  }
+  const position = cell.position;
+  if (!position || typeof position !== "object" || Array.isArray(position)) {
+    throw new Error(`Puzzle3 ${label}.position is missing or invalid.`);
+  }
+  return {
+    x: runtimeUnsignedInteger(position.x, `${label}.position.x`),
+    y: runtimeUnsignedInteger(position.y, `${label}.position.y`),
+    z: runtimeUnsignedInteger(position.z, `${label}.position.z`),
+  };
+}
+
+function runtimeCellObjectIds(cell, label) {
+  if (!Array.isArray(cell.objects)) {
+    throw new Error(`Puzzle3 ${label}.objects must be an array.`);
+  }
+  return cell.objects.map((object, index) => {
+    const value = object && typeof object === "object" ? object.id : object;
+    return runtimeObjectId(value, `${label}.objects[${index}]`);
+  });
+}
+
+function runtimePositionInBounds(position, size) {
+  return position.x < size.width
+    && position.y < size.depth
+    && position.z < size.height;
+}
+
+function runtimeSizeLabel(size) {
+  return `${size.width}x${size.depth}x${size.height}`;
+}
+
+function runtimeObjectId(value, label) {
+  return runtimePositiveInteger(value, label);
+}
+
+function runtimeInputId(input, label) {
+  return runtimeUnsignedInteger(input?.id, `${label}.id`);
+}
+
+function runtimeInputName(input, label) {
+  return runtimeString(input?.name, `${label}.name`);
+}
+
+function runtimeLayerId(value, label) {
+  return runtimeUnsignedInteger(value, label);
+}
+
+function runtimeString(value, label) {
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error(`Puzzle3 ${label} must be a non-empty string.`);
+  }
+  return value;
+}
+
+function runtimePositiveInteger(value, label) {
+  const number = runtimeUnsignedInteger(value, label);
+  if (number <= 0) {
+    throw new Error(`Puzzle3 ${label} must be greater than zero.`);
+  }
+  return number;
+}
+
+function runtimeUnsignedInteger(value, label) {
+  const number = Number(value);
+  if (!Number.isInteger(number) || number < 0) {
+    throw new Error(`Puzzle3 ${label} must be an unsigned integer.`);
+  }
+  return number;
+}
+
 function stateFromRuntimeCells(runtime, cells, size) {
-  const layerCount = Number(runtime.base.layerCount || 1);
-  const width = Number(size.width || 1);
-  const depth = Number(size.depth || 1);
-  const height = Number(size.height || 1);
+  const layerCount = runtime.runtimeLayerCount();
+  const width = runtimePositiveInteger(size.width, "runtime level size.width");
+  const depth = runtimePositiveInteger(size.depth, "runtime level size.depth");
+  const height = runtimePositiveInteger(size.height, "runtime level size.height");
   const slots = new Array(width * depth * height * layerCount).fill(0);
-  for (const cell of cells || []) {
-    const position = cell.position || {};
-    const x = Number(position.x || 0);
-    const y = Number(position.y || 0);
-    const z = Number(position.z || 0);
-    if (x < 0 || x >= width || y < 0 || y >= depth || z < 0 || z >= height) {
-      continue;
+  for (const [index, cell] of cells.entries()) {
+    const position = runtimeCellPosition(cell, `runtime level cells[${index}]`);
+    if (!runtimePositionInBounds(position, { width, depth, height })) {
+      throw new Error(
+        `Puzzle3 runtime level cell ${cellKey(position)} is outside level bounds `
+        + `${runtimeSizeLabel({ width, depth, height })}.`,
+      );
     }
-    for (const object of cell.objects || []) {
-      const objectId = Number(object.id || 0);
-      if (!objectId) {
-        continue;
-      }
+    for (const objectId of runtimeCellObjectIds(cell, `runtime level cells[${index}]`)) {
       const layer = runtime.objectLayer(objectId);
-      slots[runtimeSlotIndex(width, depth, layerCount, x, y, z, layer)] = objectId;
+      slots[runtimeSlotIndex(width, depth, layerCount, position.x, position.y, position.z, layer)] = objectId;
     }
   }
   return {
@@ -3879,16 +4146,33 @@ function stateFromRuntimeCells(runtime, cells, size) {
 
 function cellsFromRuntimeState(runtime, state) {
   const cells = [];
-  const width = Number(state.width || 1);
-  const depth = Number(state.depth || 1);
-  const height = Number(state.height || 1);
-  const layerCount = Number(state.layerCount || runtime.base.layerCount || 1);
+  const width = runtimePositiveInteger(state.width, "runtime state.width");
+  const depth = runtimePositiveInteger(state.depth, "runtime state.depth");
+  const height = runtimePositiveInteger(state.height, "runtime state.height");
+  const layerCount = runtimeUnsignedInteger(state.layerCount, "runtime state.layerCount");
+  if (layerCount !== runtime.runtimeLayerCount()) {
+    throw new Error(
+      `Puzzle3 runtime state layerCount ${layerCount} does not match contract layer count `
+      + `${runtime.runtimeLayerCount()}.`,
+    );
+  }
+  if (!Array.isArray(state.slots)) {
+    throw new Error("Puzzle3 runtime state.slots must be an array.");
+  }
+  const expectedSlots = width * depth * height * layerCount;
+  if (state.slots.length !== expectedSlots) {
+    throw new Error(
+      `Puzzle3 runtime state.slots length ${state.slots.length} does not match expected `
+      + `${expectedSlots}.`,
+    );
+  }
   for (let z = 0; z < height; z += 1) {
     for (let y = 0; y < depth; y += 1) {
       for (let x = 0; x < width; x += 1) {
         const objects = [];
         for (let layer = 0; layer < layerCount; layer += 1) {
-          const objectId = Number(state.slots?.[runtimeSlotIndex(width, depth, layerCount, x, y, z, layer)] || 0);
+          const slotIndex = runtimeSlotIndex(width, depth, layerCount, x, y, z, layer);
+          const objectId = runtimeUnsignedInteger(state.slots[slotIndex], `runtime state.slots[${slotIndex}]`);
           if (objectId) {
             objects.push(runtime.objectForId(objectId));
           }
@@ -3926,110 +4210,21 @@ function runtimeStateKey(state) {
 }
 
 function normalizeSnapshot(source) {
-  if (Array.isArray(source.levels) && source.levels.length > 0) {
-    const levels = source.levels.map((level, index) => normalizeLevel(source, level, index));
-    const levelIndex = clampIndex(source.levelIndex || 0, levels.length);
-    const currentLevel = levels[levelIndex];
-    return {
-      ...source,
-      levelIndex,
-      levels,
-      size: currentLevel.size,
-      cells: currentLevel.cells,
-      levelName: currentLevel.name,
-      levelLabel: currentLevel.label,
-    };
-  }
-  if (Array.isArray(source.cells)) {
-    return source;
-  }
-  if (!Array.isArray(source.levelRows) || !source.legend || !source.objects) {
-    return source;
-  }
-  const cells = [];
-  for (let y = 0; y < source.levelRows.length; y += 1) {
-    const row = source.levelRows[y];
-    for (let x = 0; x < row.length; x += 1) {
-      const objectNames = source.legend[row[x]] || [];
-      const byZ = new Map();
-      for (const name of objectNames) {
-        const object = source.objects[name];
-        if (!object) {
-          continue;
-        }
-        const z = source.objectZ?.[name] ?? 0;
-        const objects = byZ.get(z) || [];
-        objects.push({ ...object });
-        byZ.set(z, objects);
-      }
-      for (const [z, objects] of byZ) {
-        cells.push({ position: { x, y, z }, objects });
-      }
-    }
-  }
-  return { ...source, cells };
-}
-
-function normalizeLevel(source, level, index) {
-  if (Array.isArray(level.cells)) {
-    return {
-      name: level.name || `level_${index + 1}`,
-      label: level.label || level.name || `Level ${index + 1}`,
-      size: { ...(level.size || source.size) },
-      cells: level.cells,
-    };
-  }
-  if (Array.isArray(level.slices)) {
-    const cells = cellsFromSlices(source, level.slices);
-    return {
-      name: level.name || `level_${index + 1}`,
-      label: level.label || level.name || `Level ${index + 1}`,
-      size: { ...(level.size || sizeFromSlices(level.slices)) },
-      cells,
-    };
-  }
-  if (Array.isArray(level.levelRows)) {
-    return {
-      name: level.name || `level_${index + 1}`,
-      label: level.label || level.name || `Level ${index + 1}`,
-      size: { ...(level.size || source.size) },
-      cells: cellsFromRows(source, level.levelRows),
-    };
-  }
+  const runtimeContract = requireRuntimeContract(source);
+  const levels = cloneRuntimeContractLevels(
+    requireRuntimeContractLevelBundle(runtimeContract),
+    source.levels || [],
+  );
+  const levelIndex = clampIndex(source.levelIndex || 0, levels.length);
+  const currentLevel = levels[levelIndex];
   return {
-    name: level.name || `level_${index + 1}`,
-    label: level.label || level.name || `Level ${index + 1}`,
-    size: { ...(level.size || source.size) },
-    cells: [],
-  };
-}
-
-function cellsFromSlices(source, slices) {
-  const cells = [];
-  const size = sizeFromSlices(slices);
-  for (let z = 0; z < slices.length; z += 1) {
-    const rows = slices[z] || [];
-    for (let y = 0; y < rows.length; y += 1) {
-      const row = rows[y];
-      for (let x = 0; x < row.length; x += 1) {
-        const objects = objectsForLegendChar(source, row[x]);
-        if (objects.length > 0) {
-          cells.push({
-            position: standardTextGridPosition(size, x, y, z),
-            objects,
-          });
-        }
-      }
-    }
-  }
-  return cells;
-}
-
-function standardTextGridPosition(size, column, row, slice) {
-  return {
-    x: column,
-    y: Math.max(0, Number(size.depth || 1) - 1 - row),
-    z: Math.max(0, Number(size.height || 1) - 1 - slice),
+    ...source,
+    levelIndex,
+    levels,
+    size: currentLevel.size,
+    cells: currentLevel.cells,
+    levelName: currentLevel.name,
+    levelLabel: currentLevel.label,
   };
 }
 
@@ -4039,44 +4234,6 @@ function standardSpriteGridPosition(size, column, row, slice) {
     y: Math.max(0, Number(size.depth || 1) - 1 - row),
     z: Math.max(0, Number(size.height || 1) - 1 - slice),
   };
-}
-
-function cellsFromRows(source, rows) {
-  const cells = [];
-  for (let y = 0; y < rows.length; y += 1) {
-    const row = rows[y];
-    for (let x = 0; x < row.length; x += 1) {
-      const objectNames = source.legend[row[x]] || [];
-      const byZ = new Map();
-      for (const name of objectNames) {
-        const object = source.objects[name];
-        if (!object) {
-          continue;
-        }
-        const z = source.objectZ?.[name] ?? 0;
-        const objects = byZ.get(z) || [];
-        objects.push({ ...object });
-        byZ.set(z, objects);
-      }
-      for (const [z, objects] of byZ) {
-        cells.push({ position: { x, y, z }, objects });
-      }
-    }
-  }
-  return cells;
-}
-
-function objectsForLegendChar(source, char) {
-  return (source.legend?.[char] || [])
-    .map((name) => source.objects?.[name])
-    .filter(Boolean)
-    .map((object) => ({ ...object }));
-}
-
-function sizeFromSlices(slices) {
-  const depth = Math.max(1, ...slices.map((rows) => rows.length));
-  const width = Math.max(1, ...slices.flatMap((rows) => rows.map((row) => row.length)));
-  return { width, depth, height: Math.max(1, slices.length) };
 }
 
 function clampIndex(index, length) {

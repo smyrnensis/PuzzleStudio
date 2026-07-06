@@ -987,6 +987,7 @@ fn parse_statement_block(
 ) -> Result<(Vec<StatementAst>, usize), DiagnosticReport> {
     let mut statements = Vec::new();
     let mut diagnostics = Vec::new();
+    let mut local_routine_names = HashSet::<String>::new();
     let mut i = start;
     macro_rules! recover_current_statement {
         ($result:expr) => {
@@ -1040,6 +1041,49 @@ fn parse_statement_block(
         let line = block_header_text(line);
         let tokens = split_header_tokens(line);
         match tokens.first().copied() {
+            Some("routine") => {
+                if !opens_block {
+                    extend_report_with_source_line_number(
+                        &mut diagnostics,
+                        parse_error(line, "local routine block must use `{ ... }`"),
+                        line,
+                        source_line_number,
+                    );
+                    i += 1;
+                    continue;
+                }
+                let (definition, next_i) = recover_current_statement!(parse_rule_definition(
+                    lines,
+                    line_numbers,
+                    i,
+                    object_names,
+                    object_schemas,
+                    value_sets,
+                    maps,
+                    object_groups,
+                    input_names,
+                    global_names,
+                    numeric_globals,
+                    condition_names,
+                    named_conditions,
+                ));
+                if !local_routine_names.insert(definition.name.clone()) {
+                    extend_report_with_source_line_number(
+                        &mut diagnostics,
+                        parse_error(line, "duplicate local routine"),
+                        line,
+                        source_line_number,
+                    );
+                    i = next_i;
+                    continue;
+                }
+                statements.push(StatementAst::LocalRoutine {
+                    definition,
+                    source_line: line.to_string(),
+                    source_line_number,
+                });
+                i = next_i;
+            }
             Some("for") => {
                 if !opens_block {
                     extend_report_with_source_line_number(
@@ -2167,6 +2211,9 @@ fn rewrite_with_source_line_number(
 fn validate_display_hook_statements(statements: &[StatementAst]) -> Result<(), DiagnosticReport> {
     for statement in statements {
         match statement {
+            StatementAst::LocalRoutine { definition, .. } => {
+                validate_display_hook_statements(&definition.statements)?;
+            }
             StatementAst::DisplayCall { .. } | StatementAst::Rewrite(_) => {}
             StatementAst::Conditional {
                 then_statements,
