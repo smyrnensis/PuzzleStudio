@@ -1,14 +1,18 @@
 (function () {
   class PuzzleStandaloneRuntime {
-    constructor(exportData) {
-      this.data = exportData;
+    constructor(bootData, runtimeExportJson) {
+      if (typeof runtimeExportJson !== "string" || runtimeExportJson.trim() === "") {
+        throw new Error("Standalone runtime requires embedded raw export JSON.");
+      }
+      this.data = bootData;
+      this.exportJson = runtimeExportJson;
       this.wasmModule = null;
       this.sessionRuntime = null;
       this.usesRustSession = false;
       this.initialized = false;
       this.editorPreviewSceneEnabled = false;
       this.editorPreviewInputEnabled = false;
-      this.inputIdsByName = new Map((exportData.inputs || []).map((input) => [input.name, input.id]));
+      this.inputIdsByName = new Map((bootData.inputs || []).map((input) => [input.name, input.id]));
       this.initializationPromise = this.initializeRuntime();
     }
 
@@ -41,10 +45,24 @@
       if (typeof this.wasmModule?.WasmStandaloneSession?.fromExport !== "function") {
         return false;
       }
-      this.sessionRuntime = this.wasmModule.WasmStandaloneSession.fromExport(JSON.stringify(this.data || {}));
+      this.sessionRuntime = this.wasmModule.WasmStandaloneSession.fromExport(this.exportJson);
+      this.releaseWasmOwnedExportPayload();
       this.restoreSessionProgressSave();
       this.usesRustSession = true;
       return true;
+    }
+
+    releaseWasmOwnedExportPayload() {
+      if (window.PuzzleRuntimeExportJson === this.exportJson) {
+        window.PuzzleRuntimeExportJson = "";
+      }
+      this.exportJson = "";
+      if (!this.data || typeof this.data !== "object") {
+        return;
+      }
+      delete this.data.runtimeLoadedGame;
+      delete this.data.compiledPlay;
+      delete this.data.engine;
     }
 
     sessionRequestJson(method, url) {
@@ -148,9 +166,8 @@
         this.sessionRuntime.restore_progress_save(raw);
         this.sessionRuntime.mark_progress_save_written();
       } catch (error) {
-        console.warn(
-          `Progress save could not be restored for ${this.progressSaveStorageKey()}; starting from defaults.`,
-          error,
+        throw new Error(
+          `Progress save could not be restored for ${this.progressSaveStorageKey()}. The saved progress was kept and was not overwritten. Clear progress to start a fresh save. ${error?.message || error}`,
         );
       }
     }

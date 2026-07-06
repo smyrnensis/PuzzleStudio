@@ -117,6 +117,26 @@ fn print_warnings(loaded: &LoadedGame) {
 #[cfg(not(target_arch = "wasm32"))]
 fn print_wasm_freshness_status() {
     print_wasm_artifact_status(
+        "puzzle_wasm_player",
+        &[
+            Path::new("crates/html_play/static/wasm_player/puzzle_wasm_player.js"),
+            Path::new("crates/html_play/static/wasm_player/puzzle_wasm_player_bg.wasm"),
+        ],
+        &[
+            Path::new("crates/wasm_player/src"),
+            Path::new("crates/wasm_player/Cargo.toml"),
+            Path::new("crates/game_runtime/src"),
+            Path::new("crates/core/src"),
+            Path::new("crates/lang/src"),
+            Path::new("crates/play/src"),
+            Path::new("crates/puzzle_3d/src"),
+            Path::new("crates/scene/src"),
+            Path::new("crates/kernel/src"),
+            Path::new("Cargo.lock"),
+        ],
+        "tools/build_wasm_player.sh",
+    );
+    print_wasm_artifact_status(
         "puzzle_wasm_game",
         &[
             Path::new("crates/html_play/static/wasm_game/puzzle_wasm_game.js"),
@@ -387,4 +407,3 @@ impl Config {
         })
     }
 }
-

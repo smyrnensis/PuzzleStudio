@@ -21,6 +21,16 @@ impl WasmPuzzle3Runtime {
         })
     }
 
+    #[wasm_bindgen(js_name = fromFixture)]
+    pub fn from_fixture(fixture_json: &str) -> Result<WasmPuzzle3Runtime, JsValue> {
+        Ok(Self {
+            inner: puzzle_game_runtime::Puzzle3RuntimeBridge::from_visual_fixture_json(
+                fixture_json,
+            )
+            .map_err(|error| JsValue::from_str(&error))?,
+        })
+    }
+
     pub fn transition_current_outcome(
         &mut self,
         program_key: &str,

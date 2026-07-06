@@ -16,6 +16,7 @@ members = [
     "crates/cli",
     "crates/wasm",
     "crates/wasm_game",
+    "crates/wasm_player",
     "crates/wasm_core",
     "src-tauri",
 ]

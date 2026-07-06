@@ -1,10 +1,16 @@
 use puzzle_3d::{
-    Coord3, Game3, InputId3, ObjectId as ObjectId3, ParsedPuzzle3, RuleId3, Size3, State3,
+    Coord3, Direction3, Game3, GlobalId3, Guard3, InputDef3, InputId3, LayerId as LayerId3, Level3,
+    LevelBundle3, LevelCell3, LevelEntry3, Lifecycle3, LifecycleCommand3, MarkId3, MarkPattern3,
+    MarkValueMatch as MarkValueMatch3, MatchCell3, ModelSettings3, ObjectDef3,
+    ObjectId as ObjectId3, ObjectSetMarkPattern3, ObjectSetMatcher3, Offset3, ParsedPuzzle3,
+    Pattern3, Rule3, RuleApplication3, RuleEffect3, RuleId3, SelectorCatalog3, Size3, State3,
+    WinCondition3, WriteOp3,
     transition_program_with_local_frame as transition_program_with_local_frame3,
     transition_program_without_input_with_local_frame,
 };
 use puzzle_core::{
-    CompiledGame, InputId, ObjectId, RuleId, State as PuzzleState, transition_program,
+    CompiledGame, GlobalUpdateOp, InputId, ObjectId, RuleId, State as PuzzleState, TransitionError,
+    transition_program,
 };
 use puzzle_lang::{
     ArrowKey, KeyTrigger, Level, LoadedDocumentModel, LoadedGame, ResourceSelection,
@@ -334,6 +340,18 @@ impl Puzzle3RuntimeBridge {
         })
     }
 
+    pub fn from_visual_fixture_json(fixture_json: &str) -> Result<Self, String> {
+        let value: Value = serde_json::from_str(fixture_json).map_err(|error| error.to_string())?;
+        let parsed = parsed_puzzle3_from_fixture(&value)?;
+        let animation = animation_def_from_fixture(&value)?;
+        Ok(Self {
+            parsed,
+            animation,
+            current_state: None,
+            saved_states: SavedStateStore::new(),
+        })
+    }
+
     pub fn set_state_json(&mut self, state_json: &str) -> Result<(), String> {
         self.current_state = Some(state3_from_json(&self.parsed.game, state_json)?);
         Ok(())
@@ -402,6 +420,747 @@ impl Puzzle3RuntimeBridge {
     }
 }
 
+fn parsed_puzzle3_from_fixture(value: &Value) -> Result<ParsedPuzzle3, String> {
+    let version = fixture_u16_field(value, "runtimeContractVersion", "Puzzle3 fixture")?;
+    if version != 1 {
+        return Err(format!(
+            "unsupported Puzzle3 fixture runtimeContractVersion: {version}"
+        ));
+    }
+    let game = game3_from_fixture(value)?;
+    let object_layers = game
+        .objects
+        .iter()
+        .map(|object| (object.id, object.layer_id))
+        .collect::<Vec<_>>();
+    let rules = rules3_from_fixture_array(fixture_array_field(value, "rules", "Puzzle3 fixture")?)?;
+    let lifecycle = lifecycle3_from_fixture(value)?;
+    let level_bundle = level_bundle3_from_fixture(&game, value)?;
+    let win_condition = value
+        .get("winCondition")
+        .filter(|condition| !condition.is_null())
+        .map(win_condition3_from_fixture)
+        .transpose()?;
+    Ok(ParsedPuzzle3 {
+        game,
+        catalog: SelectorCatalog3::new_with_object_layers(
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            object_layers,
+        ),
+        settings: ModelSettings3::default(),
+        local_frame: None,
+        rules,
+        level_bundle: Some(level_bundle),
+        win_condition,
+        lifecycle,
+        sprite_set: None,
+    })
+}
+
+fn game3_from_fixture(value: &Value) -> Result<Game3, String> {
+    let layer_count = fixture_u16_field(value, "layerCount", "Puzzle3 fixture")?;
+    let objects_value = fixture_object_field(value, "objects", "Puzzle3 fixture")?;
+    let mut objects = Vec::new();
+    for object_value in objects_value.values() {
+        objects.push(ObjectDef3 {
+            id: ObjectId3(fixture_u16_field(
+                object_value,
+                "id",
+                "Puzzle3 fixture object",
+            )?),
+            layer_id: LayerId3(fixture_u16_field(
+                object_value,
+                "layer",
+                "Puzzle3 fixture object",
+            )?),
+        });
+    }
+    objects.sort_by_key(|object| object.id.0);
+
+    let mut inputs = Vec::new();
+    for input_value in fixture_array_field(value, "inputs", "Puzzle3 fixture")? {
+        let id = InputId3(fixture_u16_field(
+            input_value,
+            "id",
+            "Puzzle3 fixture input",
+        )?);
+        let name = fixture_string_field(input_value, "name", "Puzzle3 fixture input")?;
+        let input = match input_value.get("direction") {
+            Some(direction_value) => {
+                let direction_name = direction_value.as_str().ok_or_else(|| {
+                    "Puzzle3 fixture input direction must be a string".to_string()
+                })?;
+                let direction = Direction3::by_name(direction_name).ok_or_else(|| {
+                    format!("Puzzle3 fixture input has unknown direction: {direction_name}")
+                })?;
+                InputDef3::directional(id, name, direction)
+            }
+            None => InputDef3::action(id, name),
+        }
+        .with_keys(fixture_string_array_field(
+            input_value,
+            "keys",
+            "Puzzle3 fixture input",
+        )?);
+        inputs.push(input);
+    }
+
+    Game3::checked_new_with_inputs(layer_count, objects, inputs)
+        .map_err(|error| format!("invalid Puzzle3 fixture game: {error:?}"))
+}
+
+fn level_bundle3_from_fixture(game: &Game3, value: &Value) -> Result<LevelBundle3, String> {
+    let mut levels = Vec::new();
+    for level_value in fixture_array_field(value, "levels", "Puzzle3 fixture")? {
+        let name = fixture_string_field(level_value, "name", "Puzzle3 fixture level")?;
+        let size = size3_from_fixture(fixture_required_field(
+            level_value,
+            "size",
+            "Puzzle3 fixture level",
+        )?)?;
+        let mut cells = Vec::new();
+        for cell_value in fixture_array_field(level_value, "cells", "Puzzle3 fixture level")? {
+            let position = coord3_from_fixture(fixture_required_field(
+                cell_value,
+                "position",
+                "Puzzle3 fixture level cell",
+            )?)?;
+            let mut objects = Vec::new();
+            for object_value in
+                fixture_array_field(cell_value, "objects", "Puzzle3 fixture level cell")?
+            {
+                objects.push(ObjectId3(fixture_u16_field(
+                    object_value,
+                    "id",
+                    "Puzzle3 fixture level cell object",
+                )?));
+            }
+            cells.push(LevelCell3::new(position, objects));
+        }
+        levels.push(LevelEntry3::new(name, Level3::new(size, cells)));
+    }
+    LevelBundle3::checked_new(game.clone(), levels)
+        .map_err(|error| format!("invalid Puzzle3 fixture levels: {error:?}"))
+}
+
+fn lifecycle3_from_fixture(value: &Value) -> Result<Lifecycle3, String> {
+    let lifecycle = fixture_required_field(value, "lifecycle", "Puzzle3 fixture")?;
+    let on_level_start = rules3_from_fixture_array(fixture_array_field(
+        lifecycle,
+        "onLevelStart",
+        "Puzzle3 fixture lifecycle",
+    )?)?;
+    let on_level_clear = lifecycle_commands3_from_fixture(fixture_array_field(
+        lifecycle,
+        "onLevelClear",
+        "Puzzle3 fixture lifecycle",
+    )?)?;
+    let on_last_level_clear = match lifecycle.get("onLastLevelClear") {
+        Some(value) if value.is_null() => None,
+        Some(value) => Some(lifecycle_commands3_from_fixture(
+            value.as_array().map(Vec::as_slice).ok_or_else(|| {
+                "Puzzle3 fixture lifecycle onLastLevelClear must be an array or null".to_string()
+            })?,
+        )?),
+        None => None,
+    };
+    Ok(Lifecycle3 {
+        on_level_start,
+        on_level_start_local_frame: None,
+        on_level_clear,
+        on_last_level_clear,
+    })
+}
+
+fn lifecycle_commands3_from_fixture(values: &[Value]) -> Result<Vec<LifecycleCommand3>, String> {
+    values
+        .iter()
+        .map(|value| match value.as_str() {
+            Some("next_level") => Ok(LifecycleCommand3::NextLevel),
+            Some(other) => Err(format!("unknown Puzzle3 lifecycle command: {other}")),
+            None => Err("Puzzle3 lifecycle command must be a string".to_string()),
+        })
+        .collect()
+}
+
+fn rules3_from_fixture_array(values: &[Value]) -> Result<Vec<Rule3>, String> {
+    values
+        .iter()
+        .map(rule3_from_fixture)
+        .collect::<Result<Vec<_>, _>>()
+}
+
+fn rule3_from_fixture(value: &Value) -> Result<Rule3, String> {
+    Ok(Rule3 {
+        id: RuleId3(fixture_u16_field(value, "id", "Puzzle3 fixture rule")?),
+        guards: guards3_from_fixture(fixture_array_field(
+            value,
+            "guards",
+            "Puzzle3 fixture rule",
+        )?)?,
+        application: rule_application3_from_fixture(fixture_string_field(
+            value,
+            "application",
+            "Puzzle3 fixture rule",
+        )?)?,
+        pattern: pattern3_from_fixture(fixture_required_field(
+            value,
+            "pattern",
+            "Puzzle3 fixture rule",
+        )?)?,
+        writes: write_ops3_from_fixture(fixture_array_field(
+            value,
+            "writes",
+            "Puzzle3 fixture rule",
+        )?)?,
+        effects: rule_effects3_from_fixture(fixture_array_field(
+            value,
+            "effects",
+            "Puzzle3 fixture rule",
+        )?)?,
+    })
+}
+
+fn guards3_from_fixture(values: &[Value]) -> Result<Vec<Guard3>, String> {
+    values
+        .iter()
+        .map(
+            |value| match fixture_string_field(value, "kind", "Puzzle3 fixture guard")? {
+                "input_is" => Ok(Guard3::InputIs(InputId3(fixture_u16_field(
+                    value,
+                    "input",
+                    "Puzzle3 fixture guard",
+                )?))),
+                other => Err(format!("unknown Puzzle3 guard kind: {other}")),
+            },
+        )
+        .collect()
+}
+
+fn rule_application3_from_fixture(value: &str) -> Result<RuleApplication3, String> {
+    match value {
+        "once" => Ok(RuleApplication3::Once),
+        "once_all" => Ok(RuleApplication3::OnceAll),
+        "once_per_level" => Ok(RuleApplication3::OncePerLevel),
+        "until_stable" => Ok(RuleApplication3::UntilStable),
+        other => Err(format!("unknown Puzzle3 rule application: {other}")),
+    }
+}
+
+fn pattern3_from_fixture(value: &Value) -> Result<Pattern3, String> {
+    let cells = fixture_array_field(value, "cells", "Puzzle3 fixture pattern")?
+        .iter()
+        .map(match_cell3_from_fixture)
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(Pattern3::new(cells))
+}
+
+fn match_cell3_from_fixture(value: &Value) -> Result<MatchCell3, String> {
+    let mut cell = MatchCell3::new(offset3_from_fixture(fixture_required_field(
+        value,
+        "offset",
+        "Puzzle3 fixture match cell",
+    )?)?);
+    cell.require_objects =
+        object_ids3_from_fixture_field(value, "require", "Puzzle3 fixture match cell")?;
+    cell.require_object_sets =
+        fixture_array_field(value, "requireObjectSets", "Puzzle3 fixture match cell")?
+            .iter()
+            .map(object_set_matcher3_from_fixture)
+            .collect::<Result<Vec<_>, _>>()?;
+    cell.forbid_objects =
+        object_ids3_from_fixture_field(value, "forbid", "Puzzle3 fixture match cell")?;
+    cell.require_mark =
+        mark_patterns3_from_fixture_field(value, "requireMark", "Puzzle3 fixture match cell")?;
+    cell.require_object_set_mark = object_set_mark_patterns3_from_fixture_field(
+        value,
+        "requireObjectSetMark",
+        "Puzzle3 fixture match cell",
+    )?;
+    cell.forbid_mark =
+        mark_patterns3_from_fixture_field(value, "forbidMark", "Puzzle3 fixture match cell")?;
+    cell.forbid_object_set_mark = object_set_mark_patterns3_from_fixture_field(
+        value,
+        "forbidObjectSetMark",
+        "Puzzle3 fixture match cell",
+    )?;
+    Ok(cell)
+}
+
+fn object_set_matcher3_from_fixture(value: &Value) -> Result<ObjectSetMatcher3, String> {
+    Ok(ObjectSetMatcher3 {
+        binding: fixture_u16_field(value, "binding", "Puzzle3 fixture object set matcher")?,
+        layer: LayerId3(fixture_u16_field(
+            value,
+            "layer",
+            "Puzzle3 fixture object set matcher",
+        )?),
+        objects: object_ids3_from_fixture_field(
+            value,
+            "objects",
+            "Puzzle3 fixture object set matcher",
+        )?,
+    })
+}
+
+fn mark_patterns3_from_fixture_field(
+    value: &Value,
+    key: &str,
+    context: &str,
+) -> Result<Vec<MarkPattern3>, String> {
+    fixture_optional_array_field(value, key, context)?
+        .iter()
+        .map(|mark| {
+            Ok(MarkPattern3 {
+                object: ObjectId3(fixture_u16_field(mark, "object", "Puzzle3 fixture mark")?),
+                mark: MarkId3(fixture_u16_field(mark, "mark", "Puzzle3 fixture mark")?),
+                value: fixture_optional_i64_field(mark, "value", "Puzzle3 fixture mark")?,
+                match_value: mark_value_match3_from_fixture(fixture_string_field(
+                    mark,
+                    "match",
+                    "Puzzle3 fixture mark",
+                )?)?,
+            })
+        })
+        .collect()
+}
+
+fn object_set_mark_patterns3_from_fixture_field(
+    value: &Value,
+    key: &str,
+    context: &str,
+) -> Result<Vec<ObjectSetMarkPattern3>, String> {
+    fixture_optional_array_field(value, key, context)?
+        .iter()
+        .map(|mark| {
+            Ok(ObjectSetMarkPattern3 {
+                binding: fixture_u16_field(mark, "binding", "Puzzle3 fixture object set mark")?,
+                mark: MarkId3(fixture_u16_field(
+                    mark,
+                    "mark",
+                    "Puzzle3 fixture object set mark",
+                )?),
+                value: fixture_optional_i64_field(
+                    mark,
+                    "value",
+                    "Puzzle3 fixture object set mark",
+                )?,
+                match_value: mark_value_match3_from_fixture(fixture_string_field(
+                    mark,
+                    "match",
+                    "Puzzle3 fixture object set mark",
+                )?)?,
+            })
+        })
+        .collect()
+}
+
+fn mark_value_match3_from_fixture(value: &str) -> Result<MarkValueMatch3, String> {
+    match value {
+        "any" => Ok(MarkValueMatch3::Any),
+        "exact" => Ok(MarkValueMatch3::Exact),
+        other => Err(format!("unknown Puzzle3 mark match mode: {other}")),
+    }
+}
+
+fn write_ops3_from_fixture(values: &[Value]) -> Result<Vec<WriteOp3>, String> {
+    values
+        .iter()
+        .map(write_op3_from_fixture)
+        .collect::<Result<Vec<_>, _>>()
+}
+
+fn write_op3_from_fixture(value: &Value) -> Result<WriteOp3, String> {
+    let kind = fixture_string_field(value, "kind", "Puzzle3 fixture write op")?;
+    let component = fixture_u16_field(value, "component", "Puzzle3 fixture write op")?;
+    match kind {
+        "add" => Ok(WriteOp3::Add {
+            component,
+            offset: offset3_field(value, "offset", "Puzzle3 fixture write op")?,
+            object: object_id3_field(value, "object", "Puzzle3 fixture write op")?,
+        }),
+        "add_object_set" => Ok(WriteOp3::AddObjectSet {
+            component,
+            offset: offset3_field(value, "offset", "Puzzle3 fixture write op")?,
+            binding: fixture_u16_field(value, "binding", "Puzzle3 fixture write op")?,
+        }),
+        "remove" => Ok(WriteOp3::Remove {
+            component,
+            offset: offset3_field(value, "offset", "Puzzle3 fixture write op")?,
+            object: object_id3_field(value, "object", "Puzzle3 fixture write op")?,
+        }),
+        "remove_object_set" => Ok(WriteOp3::RemoveObjectSet {
+            component,
+            offset: offset3_field(value, "offset", "Puzzle3 fixture write op")?,
+            binding: fixture_u16_field(value, "binding", "Puzzle3 fixture write op")?,
+        }),
+        "replace" => Ok(WriteOp3::Replace {
+            component,
+            offset: offset3_field(value, "offset", "Puzzle3 fixture write op")?,
+            remove: object_id3_field(value, "remove", "Puzzle3 fixture write op")?,
+            add: object_id3_field(value, "add", "Puzzle3 fixture write op")?,
+        }),
+        "move" => Ok(WriteOp3::Move {
+            component,
+            from_offset: offset3_field(value, "fromOffset", "Puzzle3 fixture write op")?,
+            to_offset: offset3_field(value, "toOffset", "Puzzle3 fixture write op")?,
+            object: object_id3_field(value, "object", "Puzzle3 fixture write op")?,
+        }),
+        "move_object_set" => Ok(WriteOp3::MoveObjectSet {
+            component,
+            from_offset: offset3_field(value, "fromOffset", "Puzzle3 fixture write op")?,
+            to_offset: offset3_field(value, "toOffset", "Puzzle3 fixture write op")?,
+            binding: fixture_u16_field(value, "binding", "Puzzle3 fixture write op")?,
+        }),
+        "set_mark" => Ok(WriteOp3::SetMark {
+            component,
+            offset: offset3_field(value, "offset", "Puzzle3 fixture write op")?,
+            object: object_id3_field(value, "object", "Puzzle3 fixture write op")?,
+            mark: MarkId3(fixture_u16_field(
+                value,
+                "mark",
+                "Puzzle3 fixture write op",
+            )?),
+            value: fixture_optional_i64_field(value, "value", "Puzzle3 fixture write op")?,
+        }),
+        "set_object_set_mark" => Ok(WriteOp3::SetObjectSetMark {
+            component,
+            offset: offset3_field(value, "offset", "Puzzle3 fixture write op")?,
+            binding: fixture_u16_field(value, "binding", "Puzzle3 fixture write op")?,
+            mark: MarkId3(fixture_u16_field(
+                value,
+                "mark",
+                "Puzzle3 fixture write op",
+            )?),
+            value: fixture_optional_i64_field(value, "value", "Puzzle3 fixture write op")?,
+        }),
+        "remove_mark" => Ok(WriteOp3::RemoveMark {
+            component,
+            offset: offset3_field(value, "offset", "Puzzle3 fixture write op")?,
+            object: object_id3_field(value, "object", "Puzzle3 fixture write op")?,
+            mark: MarkId3(fixture_u16_field(
+                value,
+                "mark",
+                "Puzzle3 fixture write op",
+            )?),
+            value: fixture_optional_i64_field(value, "value", "Puzzle3 fixture write op")?,
+            match_value: mark_value_match3_from_fixture(fixture_string_field(
+                value,
+                "match",
+                "Puzzle3 fixture write op",
+            )?)?,
+        }),
+        "remove_object_set_mark" => Ok(WriteOp3::RemoveObjectSetMark {
+            component,
+            offset: offset3_field(value, "offset", "Puzzle3 fixture write op")?,
+            binding: fixture_u16_field(value, "binding", "Puzzle3 fixture write op")?,
+            mark: MarkId3(fixture_u16_field(
+                value,
+                "mark",
+                "Puzzle3 fixture write op",
+            )?),
+            value: fixture_optional_i64_field(value, "value", "Puzzle3 fixture write op")?,
+            match_value: mark_value_match3_from_fixture(fixture_string_field(
+                value,
+                "match",
+                "Puzzle3 fixture write op",
+            )?)?,
+        }),
+        other => Err(format!("unknown Puzzle3 write op kind: {other}")),
+    }
+}
+
+fn rule_effects3_from_fixture(values: &[Value]) -> Result<Vec<RuleEffect3>, String> {
+    values
+        .iter()
+        .map(rule_effect3_from_fixture)
+        .collect::<Result<Vec<_>, _>>()
+}
+
+fn rule_effect3_from_fixture(value: &Value) -> Result<RuleEffect3, String> {
+    match fixture_string_field(value, "kind", "Puzzle3 fixture rule effect")? {
+        "update_global" => Ok(RuleEffect3::UpdateGlobal {
+            global: GlobalId3(fixture_u16_field(
+                value,
+                "global",
+                "Puzzle3 fixture rule effect",
+            )?),
+            op: global_update_op_from_fixture(fixture_string_field(
+                value,
+                "op",
+                "Puzzle3 fixture rule effect",
+            )?)?,
+            value: fixture_i64_field(value, "value", "Puzzle3 fixture rule effect")?,
+        }),
+        "set_camera" => {
+            match fixture_string_field(value, "variable", "Puzzle3 fixture rule effect")? {
+                "yaw" => Ok(RuleEffect3::SetCameraYaw(fixture_i16_field(
+                    value,
+                    "value",
+                    "Puzzle3 fixture rule effect",
+                )?)),
+                "pitch" => Ok(RuleEffect3::SetCameraPitch(fixture_i16_field(
+                    value,
+                    "value",
+                    "Puzzle3 fixture rule effect",
+                )?)),
+                "zoom" => Ok(RuleEffect3::SetCameraZoom(fixture_zoom_milli_field(
+                    value,
+                    "value",
+                    "Puzzle3 fixture rule effect",
+                )?)),
+                other => Err(format!("unknown Puzzle3 camera effect variable: {other}")),
+            }
+        }
+        "reset_camera" => Ok(RuleEffect3::ResetCamera),
+        other => Err(format!("unknown Puzzle3 rule effect kind: {other}")),
+    }
+}
+
+fn global_update_op_from_fixture(value: &str) -> Result<GlobalUpdateOp, String> {
+    match value {
+        "set" => Ok(GlobalUpdateOp::Set),
+        "add" => Ok(GlobalUpdateOp::Add),
+        "subtract" => Ok(GlobalUpdateOp::Subtract),
+        "multiply" => Ok(GlobalUpdateOp::Multiply),
+        "divide" => Ok(GlobalUpdateOp::Divide),
+        "remainder" => Ok(GlobalUpdateOp::Remainder),
+        other => Err(format!("unknown Puzzle3 global update op: {other}")),
+    }
+}
+
+fn win_condition3_from_fixture(value: &Value) -> Result<WinCondition3, String> {
+    match fixture_string_field(value, "kind", "Puzzle3 fixture win condition")? {
+        "all" => Ok(WinCondition3::All(win_condition_list3_from_fixture(value)?)),
+        "any" => Ok(WinCondition3::Any(win_condition_list3_from_fixture(value)?)),
+        "some_object" => Ok(WinCondition3::SomeObject(object_id3_field(
+            value,
+            "object",
+            "Puzzle3 fixture win condition",
+        )?)),
+        "no_object" => Ok(WinCondition3::NoObject(object_id3_field(
+            value,
+            "object",
+            "Puzzle3 fixture win condition",
+        )?)),
+        "some_pattern" => Ok(WinCondition3::SomePattern(pattern3_from_fixture(
+            fixture_required_field(value, "pattern", "Puzzle3 fixture win condition")?,
+        )?)),
+        "no_pattern" => Ok(WinCondition3::NoPattern(pattern3_from_fixture(
+            fixture_required_field(value, "pattern", "Puzzle3 fixture win condition")?,
+        )?)),
+        "all_objects_covered_by_pattern" => Ok(WinCondition3::AllObjectsCoveredByPattern {
+            object: object_id3_field(value, "object", "Puzzle3 fixture win condition")?,
+            cover_pattern: pattern3_from_fixture(fixture_required_field(
+                value,
+                "coverPattern",
+                "Puzzle3 fixture win condition",
+            )?)?,
+        }),
+        other => Err(format!("unknown Puzzle3 win condition kind: {other}")),
+    }
+}
+
+fn win_condition_list3_from_fixture(value: &Value) -> Result<Vec<WinCondition3>, String> {
+    fixture_array_field(value, "conditions", "Puzzle3 fixture win condition")?
+        .iter()
+        .map(win_condition3_from_fixture)
+        .collect()
+}
+
+fn animation_def_from_fixture(value: &Value) -> Result<puzzle_lang::AnimationDef, String> {
+    let mut animation = puzzle_lang::AnimationDef::default();
+    let Some(tween) = value
+        .get("settings")
+        .and_then(|settings| settings.get("animation"))
+        .and_then(|animation| animation.get("tween"))
+    else {
+        return Ok(animation);
+    };
+    if let Some(enabled) = tween.get("enabled") {
+        animation.tween.enabled = enabled.as_bool().ok_or_else(|| {
+            "Puzzle3 fixture animation tween enabled must be a boolean".to_string()
+        })?;
+    }
+    if let Some(interval) = tween.get("intervalMs") {
+        animation.tween.interval_ms = interval.as_u64().ok_or_else(|| {
+            "Puzzle3 fixture animation tween intervalMs must be an unsigned integer".to_string()
+        })?;
+    }
+    Ok(animation)
+}
+
+fn object_ids3_from_fixture_field(
+    value: &Value,
+    key: &str,
+    context: &str,
+) -> Result<Vec<ObjectId3>, String> {
+    fixture_array_field(value, key, context)?
+        .iter()
+        .map(|object| {
+            object
+                .as_u64()
+                .ok_or_else(|| format!("{context} {key} item must be an unsigned integer"))
+                .and_then(|object| {
+                    u16::try_from(object).map_err(|_| format!("{context} {key} item out of range"))
+                })
+                .map(ObjectId3)
+        })
+        .collect()
+}
+
+fn size3_from_fixture(value: &Value) -> Result<Size3, String> {
+    Ok(Size3::new(
+        fixture_u16_field(value, "width", "Puzzle3 fixture size")?,
+        fixture_u16_field(value, "depth", "Puzzle3 fixture size")?,
+        fixture_u16_field(value, "height", "Puzzle3 fixture size")?,
+    ))
+}
+
+fn coord3_from_fixture(value: &Value) -> Result<Coord3, String> {
+    Ok(Coord3::new(
+        fixture_u16_field(value, "x", "Puzzle3 fixture coordinate")?,
+        fixture_u16_field(value, "y", "Puzzle3 fixture coordinate")?,
+        fixture_u16_field(value, "z", "Puzzle3 fixture coordinate")?,
+    ))
+}
+
+fn offset3_field(value: &Value, key: &str, context: &str) -> Result<Offset3, String> {
+    offset3_from_fixture(fixture_required_field(value, key, context)?)
+}
+
+fn offset3_from_fixture(value: &Value) -> Result<Offset3, String> {
+    Ok(Offset3::new(
+        fixture_i16_field(value, "dx", "Puzzle3 fixture offset")?,
+        fixture_i16_field(value, "dy", "Puzzle3 fixture offset")?,
+        fixture_i16_field(value, "dz", "Puzzle3 fixture offset")?,
+    ))
+}
+
+fn object_id3_field(value: &Value, key: &str, context: &str) -> Result<ObjectId3, String> {
+    fixture_u16_field(value, key, context).map(ObjectId3)
+}
+
+fn fixture_required_field<'a>(
+    value: &'a Value,
+    key: &str,
+    context: &str,
+) -> Result<&'a Value, String> {
+    value
+        .get(key)
+        .ok_or_else(|| format!("{context} missing {key}"))
+}
+
+fn fixture_object_field<'a>(
+    value: &'a Value,
+    key: &str,
+    context: &str,
+) -> Result<&'a serde_json::Map<String, Value>, String> {
+    fixture_required_field(value, key, context)?
+        .as_object()
+        .ok_or_else(|| format!("{context} {key} must be an object"))
+}
+
+fn fixture_array_field<'a>(
+    value: &'a Value,
+    key: &str,
+    context: &str,
+) -> Result<&'a [Value], String> {
+    fixture_required_field(value, key, context)?
+        .as_array()
+        .map(Vec::as_slice)
+        .ok_or_else(|| format!("{context} {key} must be an array"))
+}
+
+fn fixture_optional_array_field<'a>(
+    value: &'a Value,
+    key: &str,
+    context: &str,
+) -> Result<&'a [Value], String> {
+    match value.get(key) {
+        Some(value) => value
+            .as_array()
+            .map(Vec::as_slice)
+            .ok_or_else(|| format!("{context} {key} must be an array")),
+        None => Ok(&[]),
+    }
+}
+
+fn fixture_string_field<'a>(value: &'a Value, key: &str, context: &str) -> Result<&'a str, String> {
+    fixture_required_field(value, key, context)?
+        .as_str()
+        .ok_or_else(|| format!("{context} {key} must be a string"))
+}
+
+fn fixture_string_array_field(
+    value: &Value,
+    key: &str,
+    context: &str,
+) -> Result<Vec<String>, String> {
+    fixture_optional_array_field(value, key, context)?
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .ok_or_else(|| format!("{context} {key} item must be a string"))
+                .map(str::to_string)
+        })
+        .collect()
+}
+
+fn fixture_u16_field(value: &Value, key: &str, context: &str) -> Result<u16, String> {
+    fixture_required_field(value, key, context)?
+        .as_u64()
+        .ok_or_else(|| format!("{context} {key} must be an unsigned integer"))
+        .and_then(|value| u16::try_from(value).map_err(|_| format!("{context} {key} out of range")))
+}
+
+fn fixture_i16_field(value: &Value, key: &str, context: &str) -> Result<i16, String> {
+    fixture_required_field(value, key, context)?
+        .as_i64()
+        .ok_or_else(|| format!("{context} {key} must be an integer"))
+        .and_then(|value| i16::try_from(value).map_err(|_| format!("{context} {key} out of range")))
+}
+
+fn fixture_i64_field(value: &Value, key: &str, context: &str) -> Result<i64, String> {
+    fixture_required_field(value, key, context)?
+        .as_i64()
+        .ok_or_else(|| format!("{context} {key} must be an integer"))
+}
+
+fn fixture_optional_i64_field(
+    value: &Value,
+    key: &str,
+    context: &str,
+) -> Result<Option<i64>, String> {
+    match value.get(key) {
+        Some(value) if value.is_null() => Ok(None),
+        Some(value) => value
+            .as_i64()
+            .map(Some)
+            .ok_or_else(|| format!("{context} {key} must be an integer or null")),
+        None => Ok(None),
+    }
+}
+
+fn fixture_zoom_milli_field(value: &Value, key: &str, context: &str) -> Result<u16, String> {
+    let value = fixture_required_field(value, key, context)?
+        .as_f64()
+        .ok_or_else(|| format!("{context} {key} must be a number"))?;
+    if !value.is_finite() || value < 0.0 {
+        return Err(format!(
+            "{context} {key} must be a finite non-negative number"
+        ));
+    }
+    let milli = (value * 1000.0).round();
+    if (milli - (value * 1000.0)).abs() > 0.001 || milli > f64::from(u16::MAX) {
+        return Err(format!("{context} {key} out of range"));
+    }
+    Ok(milli as u16)
+}
+
 struct SavedStateStore<T> {
     states: Vec<Option<T>>,
 }
@@ -454,29 +1213,52 @@ fn scene_value_for_state(
     level: Option<&Level>,
     resources: Option<&puzzle_lang::SceneResources>,
 ) -> Value {
-    let display_state = materialize_display_state(loaded, state);
+    let display_state = match materialize_display_state(loaded, state) {
+        Ok(display_state) => display_state,
+        Err(error) => {
+            return scene_value_for_materialized_state(
+                loaded,
+                state,
+                level,
+                resources,
+                Some(format!("Display program failed: {error:?}")),
+            );
+        }
+    };
     let state = display_state.as_ref().unwrap_or(state);
+    scene_value_for_materialized_state(loaded, state, level, resources, None)
+}
+
+fn scene_value_for_materialized_state(
+    loaded: &LoadedGame,
+    state: &PuzzleState,
+    level: Option<&Level>,
+    resources: Option<&puzzle_lang::SceneResources>,
+    display_error: Option<String>,
+) -> Value {
     let mut cells = Vec::new();
-    for y in 0..state.height {
-        for x in 0..state.width {
-            let mut layers = Vec::new();
-            for layer in 0..state.layer_count {
-                let slot = ((usize::from(y) * usize::from(state.width)) + usize::from(x))
-                    * usize::from(state.layer_count)
-                    + usize::from(layer);
-                let object = state.slots()[slot];
-                if object.is_empty() {
-                    continue;
+    if display_error.is_none() {
+        for y in 0..state.height {
+            for x in 0..state.width {
+                let mut layers = Vec::new();
+                for layer in 0..state.layer_count {
+                    let slot = ((usize::from(y) * usize::from(state.width)) + usize::from(x))
+                        * usize::from(state.layer_count)
+                        + usize::from(layer);
+                    let object = state.slots()[slot];
+                    if object.is_empty() {
+                        continue;
+                    }
+                    let name = object_name(loaded, object);
+                    layers.push(json!({
+                        "layer": layer,
+                        "objectId": object.0,
+                        "object": name,
+                        "sprite": name,
+                    }));
                 }
-                let name = object_name(loaded, object);
-                layers.push(json!({
-                    "layer": layer,
-                    "objectId": object.0,
-                    "object": name,
-                    "sprite": name,
-                }));
+                cells.push(json!({ "x": x, "y": y, "layers": layers }));
             }
-            cells.push(json!({ "x": x, "y": y, "layers": layers }));
         }
     }
     let regions = level
@@ -506,12 +1288,18 @@ fn scene_value_for_state(
         "regions": regions,
         "resources": scene_resources_value(resources),
         "cells": cells,
+        "displayError": display_error,
     })
 }
 
-fn materialize_display_state(loaded: &LoadedGame, state: &PuzzleState) -> Option<PuzzleState> {
-    let program = loaded.display_program.as_deref()?;
-    transition_program(&loaded.game, program, state, InputId(0)).ok()
+fn materialize_display_state(
+    loaded: &LoadedGame,
+    state: &PuzzleState,
+) -> Result<Option<PuzzleState>, TransitionError> {
+    let Some(program) = loaded.display_program.as_deref() else {
+        return Ok(None);
+    };
+    transition_program(&loaded.game, program, state, InputId(0)).map(Some)
 }
 
 fn scene_layers_value(loaded: &LoadedGame, session: &GameSession) -> Vec<Value> {
@@ -1726,6 +2514,10 @@ fn adjacent_coord3(left: Coord3, right: Coord3) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use puzzle_core::{
+        Guard, MatchCell, Offset, Pattern, PatternComponent, Rule, RuleApplication, RuleStep,
+        WriteOp,
+    };
     use serde_json::json;
 
     fn cell_has_object(cell: &Value, object: &str) -> bool {
@@ -1734,9 +2526,38 @@ mod tests {
             .is_some_and(|layers| layers.iter().any(|layer| layer["object"] == object))
     }
 
+    fn display_overflow_program() -> Vec<RuleStep> {
+        vec![RuleStep::Rule(Rule {
+            id: RuleId(9000),
+            guards: Vec::<Guard>::new(),
+            application: RuleApplication::Once,
+            pattern: Pattern {
+                components: vec![PatternComponent {
+                    cells: vec![MatchCell {
+                        offset: Offset::Fixed { dx: 0, dy: 0 },
+                        require_null: false,
+                        require_objects: vec![ObjectId(1)],
+                        require_object_sets: Vec::new(),
+                        forbid_objects: Vec::new(),
+                        require_mark: Vec::new(),
+                        require_object_set_mark: Vec::new(),
+                        forbid_mark: Vec::new(),
+                        forbid_object_set_mark: Vec::new(),
+                    }],
+                    gap_count: 0,
+                }],
+            },
+            writes: vec![WriteOp::Add {
+                component: 0,
+                offset: Offset::Fixed { dx: 1, dy: 0 },
+                object: ObjectId(1),
+            }],
+            effects: Vec::new(),
+        })]
+    }
+
     fn standalone_export(source: &str) -> Value {
-        let document =
-            puzzle_lang::parse_game_for_path(source, "games/export_test.puzzle").unwrap();
+        let document = puzzle_lang::parse_game_for_path(source, "export_test.puzzle").unwrap();
         let loaded = match document.single_model() {
             Some(LoadedDocumentModel::Puzzle2d { game, .. }) => game.clone(),
             Some(LoadedDocumentModel::Puzzle3d { .. }) => {
@@ -1753,10 +2574,54 @@ mod tests {
     }
 
     #[test]
+    fn scene_value_reports_display_program_errors_without_raw_cells() {
+        let mut loaded = puzzle_lang::parse_game2d(
+            r#"
+title display_error
+
+puzzle default {
+layers {
+actor = Player
+}
+empty .
+rules {
+}
+levels {
+legend {
+P = Player
+}
+level "start" {
+P
+}
+}
+}
+"#,
+        )
+        .unwrap();
+        loaded.display_program = Some(display_overflow_program());
+        let level = loaded.levels.first().unwrap();
+
+        let scene = scene_value_for_state(&loaded, &level.initial_state, Some(level), None);
+
+        assert!(
+            level
+                .initial_state
+                .has_object(&loaded.game, 0, 0, ObjectId(1))
+        );
+        assert_eq!(scene["cells"], json!([]));
+        let display_error = scene["displayError"].as_str().unwrap_or_default();
+        assert!(
+            display_error.contains("Display program failed")
+                && display_error.contains("PositionOutOfBounds"),
+            "unexpected scene JSON: {scene}"
+        );
+    }
+
+    #[test]
     fn standalone_session_from_export_requires_runtime_loaded_game() {
         let export = json!({
             "source": "title invalid\nlevels {\nlegend {\nP = Player\n}\nP\n}\n",
-            "puzzlePath": "games/compiled_export.puzzle",
+            "puzzlePath": "compiled_export.puzzle",
             "compiledPlay": {"version": 1, "model": "grid2", "transition": [1, [[1, 0]], [], [], [[], [], [], [], [], []], [[[], []]]]},
         });
 
@@ -1782,7 +2647,7 @@ levels {
 legend {
 P = Player
 }
-level start {
+level "start" {
 P
 }
 }
@@ -1790,7 +2655,7 @@ P
 "#;
         let mut export = standalone_export(source);
         export["source"] = json!("this is not puzzle syntax");
-        export["puzzlePath"] = json!("games/bad_source_path.puzzle");
+        export["puzzlePath"] = json!("bad_source_path.puzzle");
 
         let mut bridge = StandaloneSessionBridge::from_export_json(&export.to_string()).unwrap();
         let snapshot: Value = serde_json::from_str(&bridge.snapshot_json()).unwrap();
@@ -1821,7 +2686,7 @@ A = A
 B = B
 C = C
 }
-level start {
+level "start" {
 A
 }
 }
@@ -1915,7 +2780,7 @@ legend {
 . = empty
 P = Player
 }
-level start {
+level "start" {
 P
 .
 }
@@ -1923,11 +2788,8 @@ P
 }
 
 scene playing {
-state {
-board = puzzle default
-}
 layout {
-board
+board = puzzle default
 }
 rules {
 step board
@@ -1941,7 +2803,7 @@ level_menu
 }
 "#;
         let mut bridge =
-            StandaloneSessionBridge::from_source(source, "games/runtime_focus.puzzle").unwrap();
+            StandaloneSessionBridge::from_source(source, "runtime_focus.puzzle").unwrap();
 
         let select: Value = serde_json::from_str(
             &bridge
@@ -1979,21 +2841,18 @@ legend {
 . = empty
 P = Player
 }
-level authored {
+level "authored" {
 .P
 }
-level editor_state {
+level "editor_state" {
 P.
 }
 }
 }
 
 scene playing {
-state {
-board = puzzle board
-}
 layout {
-board
+board = puzzle board
 }
 rules {
 step board
@@ -2003,8 +2862,7 @@ step board
         let loaded = puzzle_lang::parse_game2d(source).unwrap();
         let editor_state = compiled_state_value(&loaded.levels[1].initial_state).to_string();
         let mut bridge =
-            StandaloneSessionBridge::from_source(source, "games/editor_state_start.puzzle")
-                .unwrap();
+            StandaloneSessionBridge::from_source(source, "editor_state_start.puzzle").unwrap();
 
         bridge
             .set_current_state_json(&editor_state, 0, false)
@@ -2081,10 +2939,11 @@ step board
 
     #[test]
     fn transition_flickscreen_focuses_player_group() {
-        let source =
+        let puzzlescript =
             include_str!("../../../crates/lang/tests/fixtures/puzzlescript/gallery/transition.ps");
+        let source = puzzle_lang::translate_puzzlescript_to_canonical(puzzlescript).unwrap();
         let mut bridge =
-            StandaloneSessionBridge::from_source(source, "fixtures/transition.ps").unwrap();
+            StandaloneSessionBridge::from_source(&source, "fixtures/transition.puzzle").unwrap();
 
         let playing: Value = serde_json::from_str(
             &bridge
@@ -2156,14 +3015,51 @@ step board
     }
 
     #[test]
-    fn standalone_session_bridge_emits_fixban_tween_on_first_input() {
-        let source = include_str!("../../../games/fixban_tween.puzzle");
+    fn standalone_session_bridge_emits_tween_on_first_input() {
+        let source = r#"
+title "Runtime Tween Fixture"
+
+animation {
+  tween {
+    duration = 300ms
+  }
+}
+
+puzzle mover {
+  layers {
+    actor = Player
+  }
+  rules {
+    input directions [ Player ] -> [ Player{>} ]
+    move
+  }
+}
+
+levels default of mover {
+  legend {
+    . = empty
+    P = Player
+  }
+  level "first" {
+    P.
+  }
+}
+
+scene playing {
+  rules {
+    step board
+  }
+  layout {
+    board = puzzle mover
+  }
+}
+"#;
         let mut bridge =
-            StandaloneSessionBridge::from_source(source, "games/fixban_tween.puzzle").unwrap();
+            StandaloneSessionBridge::from_source(source, "runtime_tween_fixture.puzzle").unwrap();
 
         let playing: Value = serde_json::from_str(
             &bridge
-                .request_json("POST", "/api/command/goto%20playing(fixban.level_1)")
+                .request_json("POST", "/api/command/goto%20playing(default.first)")
                 .unwrap(),
         )
         .unwrap();
@@ -2171,22 +3067,24 @@ step board
         assert_eq!(playing["levelIndex"], 0);
 
         let moved: Value =
-            serde_json::from_str(&bridge.request_json("POST", "/api/input/up").unwrap()).unwrap();
+            serde_json::from_str(&bridge.request_json("POST", "/api/input/right").unwrap())
+                .unwrap();
         assert_eq!(
             moved["animationEvents"],
             json!([
                 {
                     "kind": "move",
                     "name": "tween",
-                    "objectId": 19,
-                    "fromX": 2,
-                    "fromY": 5,
+                    "objectId": 1,
+                    "fromX": 0,
+                    "fromY": 0,
                     "fromZ": 0,
-                    "toX": 2,
-                    "toY": 4,
+                    "toX": 1,
+                    "toY": 0,
                     "toZ": 0
                 }
-            ])
+            ]),
+            "unexpected moved snapshot: {moved}"
         );
     }
 
@@ -2241,6 +3139,78 @@ rules {
     }
 
     #[test]
+    fn puzzle3_runtime_bridge_runs_from_visual_fixture_json() {
+        let source = r#"
+title "3D Fixture Runtime"
+
+animation {
+  tween {
+    duration = 300ms
+  }
+}
+
+puzzle3 sokoban {
+layers {
+  solid = Player
+}
+
+rules {
+  input horizontal [ Player | no Player ] -> [ | Player ]
+}
+}
+
+levels3 default of sokoban {
+legend {
+P = Player
+. = empty
+}
+level "one" {
+P.
+}
+}
+"#;
+        let document = puzzle_lang::parse_game(source).unwrap();
+        let fixture_json = puzzle_lang::export_loaded_document_visual_fixture_json(&document)
+            .expect("visual fixture should export");
+        let mut bridge = Puzzle3RuntimeBridge::from_visual_fixture_json(&fixture_json)
+            .expect("fixture runtime bridge should decode");
+        bridge
+            .set_state_json(
+                r#"{"kind":"puzzle3d","width":2,"depth":1,"height":1,"layerCount":1,"slots":[1,0],"levelFiredRules":[]}"#,
+            )
+            .unwrap();
+
+        let moved: Value =
+            serde_json::from_str(&bridge.transition_current_outcome_json("main", 1).unwrap())
+                .unwrap();
+
+        assert_eq!(moved["changed"], json!(true));
+        assert_eq!(
+            moved["changedCells"],
+            json!([
+                {"position":{"x":0,"y":0,"z":0},"objects":[]},
+                {"position":{"x":1,"y":0,"z":0},"objects":[1]}
+            ])
+        );
+        assert_eq!(
+            moved["animationEvents"],
+            json!([
+                {
+                    "kind": "move",
+                    "name": "tween",
+                    "objectId": 1,
+                    "fromX": 0,
+                    "fromY": 0,
+                    "fromZ": 0,
+                    "toX": 1,
+                    "toY": 0,
+                    "toZ": 0
+                }
+            ])
+        );
+    }
+
+    #[test]
     fn standalone_session_bridge_restores_progress_save() {
         let source =
             include_str!("../../../crates/lang/tests/fixtures/spec_2d_microban_basic.puzzle");
@@ -2264,11 +3234,36 @@ rules {
 
     #[test]
     fn standalone_session_bridge_supports_single_puzzle3_document() {
-        let source = include_str!("../../../games/spec_3d.puzzle3");
+        let source = r#"
+title "Inline 3D"
+
+puzzle3 sokoban {
+layers {
+  solid = Player
+}
+rules {
+}
+}
+
+scene title {
+layout {
+  title "Inline 3D"
+}
+}
+
+levels3 default of sokoban {
+legend {
+P = Player
+}
+level "one" {
+P
+}
+}
+"#;
         let mut bridge =
-            StandaloneSessionBridge::from_source(source, "games/spec_3d.puzzle3").unwrap();
+            StandaloneSessionBridge::from_source(source, "inline_3d_fixture.puzzle3").unwrap();
         let snapshot: Value = serde_json::from_str(&bridge.snapshot_json()).unwrap();
         assert_eq!(snapshot["currentScene"], json!("title"));
-        assert_eq!(snapshot["title"], json!("Microban 3D"));
+        assert_eq!(snapshot["title"], json!("Inline 3D"));
     }
 }

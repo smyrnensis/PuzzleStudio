@@ -38,8 +38,8 @@ use puzzle_core::transition_state;
 use puzzle_core::{
     ComparisonOp, CompiledGame, ConditionValueKind, Effect, GlobalUpdateOp, Guard, InputId,
     LayerId, MarkPattern, MarkValueMatch, ObjectId, Offset, Patch, PatchOp, Pattern, Rule,
-    RuleApplication, RuleCondition, RuleId, RuleStep, State, TransitionCommand, WriteOp,
-    transition_program, transition_program_outcome, transition_program_trace,
+    RuleApplication, RuleCondition, RuleId, RuleStep, State, TransitionCommand, TransitionError,
+    WriteOp, transition_program, transition_program_outcome, transition_program_trace,
 };
 #[cfg(feature = "solver")]
 use puzzle_core::{ConditionId, GlobalId, MarkId, MatchCell, PatternComponent};
@@ -80,6 +80,11 @@ const STANDALONE_JS: &str = include_str!("../static/standalone.js");
 const PUZZLE_GAME_WASM_JS: &str = include_str!("../static/wasm_game/puzzle_wasm_game.js");
 #[cfg(not(target_arch = "wasm32"))]
 const PUZZLE_GAME_WASM_BG: &[u8] = include_bytes!("../static/wasm_game/puzzle_wasm_game_bg.wasm");
+#[cfg(not(target_arch = "wasm32"))]
+const PUZZLE_PLAYER_WASM_JS: &str = include_str!("../static/wasm_player/puzzle_wasm_player.js");
+#[cfg(not(target_arch = "wasm32"))]
+const PUZZLE_PLAYER_WASM_BG: &[u8] =
+    include_bytes!("../static/wasm_player/puzzle_wasm_player_bg.wasm");
 const PUZZLE3_STYLE_CSS: &str = include_str!("../static/puzzle3.css");
 const PUZZLE3_VISUAL_CORE_JS: &str = include_str!("../static/puzzle3_visual_core.js");
 const PUZZLE3_THREE_RENDERER_JS: &str = include_str!("../static/puzzle3_three_renderer.js");
@@ -120,17 +125,49 @@ mod tests {
             })
     }
 
-    fn embedded_puzzle_export_json(html: &str) -> Value {
-        let marker = "window.PuzzleExport = JSON.parse(\"";
-        let start = html.find(marker).expect("html should embed PuzzleExport") + marker.len();
+    fn embedded_puzzle_runtime_export_json(html: &str) -> Value {
+        embedded_puzzle_json_assignment(
+            html,
+            "window.PuzzleRuntimeExportJson = \"",
+            "\";",
+            "PuzzleRuntimeExportJson",
+        )
+    }
+
+    fn embedded_puzzle_boot_json(html: &str) -> Value {
+        embedded_puzzle_json_assignment(
+            html,
+            "window.PuzzleBoot = JSON.parse(\"",
+            "\");",
+            "PuzzleBoot",
+        )
+    }
+
+    fn embedded_puzzle_json_assignment(
+        html: &str,
+        marker: &str,
+        terminator: &str,
+        name: &str,
+    ) -> Value {
+        let start = html
+            .find(marker)
+            .unwrap_or_else(|| panic!("html should embed raw {name} JSON"))
+            + marker.len();
         let rest = &html[start..];
         let end = rest
-            .find("\");")
-            .expect("PuzzleExport JSON.parse should close");
+            .find(terminator)
+            .unwrap_or_else(|| panic!("{name} assignment should close"));
         let encoded = &rest[..end];
         let json_text: String = serde_json::from_str(&format!("\"{encoded}\""))
-            .expect("PuzzleExport should be a JSON string literal");
-        serde_json::from_str(&json_text).expect("PuzzleExport should contain JSON")
+            .unwrap_or_else(|_| panic!("{name} should be a JSON string literal"));
+        serde_json::from_str(&json_text).unwrap_or_else(|_| panic!("{name} should contain JSON"))
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn bytes_contain(haystack: &[u8], needle: &[u8]) -> bool {
+        haystack
+            .windows(needle.len())
+            .any(|window| window == needle)
     }
 
     #[test]
@@ -434,8 +471,9 @@ P
         assert!(!RENDERER_JS.contains("leastCommonMultiple("));
         assert!(RENDERER_JS.contains("const pixelWidth = unit / cellCols;"));
         assert!(
-            RENDERER_JS
-                .contains("const { cols: width, rows: height } = this.spritePatternSize(definition);")
+            RENDERER_JS.contains(
+                "const { cols: width, rows: height } = this.spritePatternSize(definition);"
+            )
         );
         assert!(!RENDERER_JS.contains("domPatternCellUnit()"));
         assert!(!RENDERER_JS.contains("scaledPixelEdge(index, sourceUnits, targetPixels)"));
@@ -797,11 +835,17 @@ P
     }
 
     #[test]
-    fn html_play_queues_busy_inputs_instead_of_dropping_them() {
-        assert!(APP_JS.contains("pendingCommandQueue.push(command);"));
-        assert!(
-            APP_JS.contains("pendingCommandQueue.push({ kind: \"model_input\", name: input });")
-        );
+    fn html_play_buffers_one_busy_model_input_without_queueing_commands() {
+        assert!(APP_JS.contains("let pendingModelInput = null;"));
+        assert!(APP_JS.contains("let drainingQueuedModelInput = false;"));
+        assert!(!APP_JS.contains("pendingCommandQueue"));
+        assert!(APP_JS.contains("pendingModelInput = input;"));
+        assert!(APP_JS.contains("function drainQueuedModelInput()"));
+        assert!(APP_JS.contains("if (currentState?.busy || clientPendingWaits > 0) {\n    return undefined;\n  }\n  return sendCommandNow(command);"));
+        assert!(APP_JS.contains(
+            "const dispatchEffects = event.repeat && (currentState?.busy || clientPendingWaits > 0)"
+        ));
+        assert!(APP_JS.contains("effects.filter((effect) => effect?.kind !== \"model_input\")"));
         assert!(APP_JS.contains("currentState?.busy || clientPendingWaits > 0"));
         assert!(APP_JS.contains("function inputBufferConfig()"));
         assert!(APP_JS.contains("if (!config.queueDuringWait)"));
@@ -1377,13 +1421,29 @@ scene mixed_play {
 
         let html = export_mixed_document_html(
             &document,
-            loaded,
+            loaded.clone(),
             source.to_string(),
             "mixed.puzzle".to_string(),
             String::new(),
             VISUALS_JS.to_string(),
             SolverConfig::default(),
             StandaloneHostMode::Export,
+            StandaloneRuntimeWasm::HostDefault,
+        )
+        .unwrap();
+        assert!(html.contains("puzzle_wasm_player_bg.wasm"));
+        assert!(html.contains("WasmPuzzle3Runtime"));
+        assert!(html.contains("fromFixture"));
+
+        let preview_html = export_mixed_document_html(
+            &document,
+            loaded,
+            source.to_string(),
+            "mixed.puzzle".to_string(),
+            String::new(),
+            VISUALS_JS.to_string(),
+            SolverConfig::default(),
+            StandaloneHostMode::EditorPreview,
             StandaloneRuntimeWasm::HostDefault,
         )
         .unwrap();
@@ -1395,9 +1455,10 @@ scene mixed_play {
         assert!(html.contains("window.Puzzle3Controller"));
         assert!(!html.contains("iframe.puzzle3-frame"));
         assert!(html.contains("\\\"kind\\\":\\\"puzzle3\\\""));
-        assert!(html.contains("\\npuzzle3 cube"));
+        assert!(!html.contains("\\npuzzle3 cube"));
         assert!(!html.contains("\\nscene mixed_play"));
         assert!(!html.contains("\\npuzzle3 cube_board"));
+        assert!(preview_html.contains("window.Puzzle3DFrameFixture"));
     }
 
     #[test]
@@ -1702,9 +1763,11 @@ text level.title
                 "function sceneInteractionProfile(scene = currentSceneDef(), options = {})"
             )
         );
-        assert!(APP_JS.contains(
-            "function stateAcceptsModelInput(state = currentState || window.PuzzleExport || {})"
-        ));
+        assert!(
+            APP_JS.contains(
+                "function stateAcceptsModelInput(state = currentState || puzzleBoot || {})"
+            )
+        );
         assert!(APP_JS.contains("state?.acceptsModelInput === true"));
         assert!(APP_JS.contains("standaloneRuntime?.editorPreviewInputEnabled === true"));
         assert!(!APP_JS.contains("nonEmptyArray(layer?.scenePuzzles)"));
@@ -1762,7 +1825,7 @@ levels default of board {
 "#;
         let html = export_editor_preview_html_from_source(source, "game.puzzle", "", "")
             .expect("preview export");
-        let export = embedded_puzzle_export_json(&html);
+        let export = embedded_puzzle_runtime_export_json(&html);
         assert!(
             export["compiledPlay"]["inputLabels"]
                 .as_object()
@@ -1842,7 +1905,7 @@ levels default of board {
 "#;
         let html = export_editor_preview_html_from_source(source, "game.puzzle", "", "")
             .expect("preview export");
-        let export = embedded_puzzle_export_json(&html);
+        let export = embedded_puzzle_runtime_export_json(&html);
         assert!(export["goal"].is_null());
         assert!(export["compiledPlay"].is_object());
         assert!(export["engine"]["objects"].is_array());
@@ -1890,7 +1953,7 @@ levels default of board {
         let source = include_str!("../../../games/TPGJ6/locked.puzzle");
         let html = export_editor_preview_html_from_source(source, "locked.puzzle", "", "")
             .expect("preview export");
-        let export = embedded_puzzle_export_json(&html);
+        let export = embedded_puzzle_runtime_export_json(&html);
         assert!(export["goal"].is_null());
         assert!(export["compiledPlay"].is_object());
         let level = &export["levels"][0];
@@ -2023,7 +2086,7 @@ levels default of board {
 "#;
         let html = export_editor_preview_html_from_source(source, "game.puzzle", "", "")
             .expect("preview export");
-        let export = embedded_puzzle_export_json(&html);
+        let export = embedded_puzzle_runtime_export_json(&html);
         let cursor_id = export["engine"]["objects"]
             .as_array()
             .expect("engine objects")
@@ -2526,22 +2589,52 @@ scene playing {
         assert!(html.contains("window.PuzzleStandaloneEmbeddedWasm"));
         assert!(html.contains("\\\"defaultAgainMs\\\":90"));
         assert!(html.contains("\\\"runtimeLoadedGame\\\""));
+        assert!(html.contains("puzzle_wasm_player_bg.wasm"));
         assert!(html.contains("WasmStandaloneSession"));
+        assert!(html.contains("WasmPuzzle3Runtime"));
         assert!(!html.contains("WasmCoreRuntime"));
         assert!(!html.contains("compile_preview"));
         assert!(!html.contains("highlight_source_html"));
         assert!(!html.contains("suggest_source_completions"));
         assert!(!html.contains("solve_state"));
         assert!(!html.contains("solve_state_with_progress"));
+        assert!(!html.contains("solver"));
+        assert!(!html.contains("puzzle_solver"));
+        assert!(!html.contains("SearchBudget"));
+        assert!(!html.contains("best_first"));
+        assert!(html.contains("Uint8Array.fromBase64"));
+        assert!(html.contains("embedded.wasmBase64 = \"\";"));
+        assert!(!html.contains("atob("));
+        assert!(!html.contains("base64ToUint8Array"));
         assert!(!html.contains("PuzzleStudioSolve"));
         assert!(!html.contains("PuzzleStudioPreviewState"));
         assert!(!html.contains("PuzzleStudioScenePreview"));
         assert!(!html.contains("loadWasmSolver"));
         assert!(!html.contains("renderPuzzle3Frame"));
         assert!(!html.contains("Puzzle3DFrameAssets"));
+        assert!(html.contains("window.PuzzleBoot = JSON.parse("));
+        assert!(html.contains("window.PuzzleRuntimeExportJson = "));
+        assert!(!html.contains("window.PuzzleExport = JSON.parse("));
+        assert!(!html.contains("window.PuzzleExportJson = "));
+        let boot = embedded_puzzle_boot_json(&html);
+        assert!(boot.get("runtimeLoadedGame").is_none());
+        assert!(boot.get("compiledPlay").is_none());
+        assert!(boot.get("engine").is_none());
+        assert!(boot.get("source").is_none());
+        assert!(boot.get("puzzlePath").is_none());
+        assert!(boot["inputs"].is_array());
+        assert!(boot["theme"].is_object());
+        let runtime_export = embedded_puzzle_runtime_export_json(&html);
+        assert!(runtime_export["runtimeLoadedGame"].is_object());
+        assert!(runtime_export.get("compiledPlay").is_none());
+        assert!(runtime_export.get("engine").is_none());
+        assert!(runtime_export.get("source").is_none());
         assert!(STANDALONE_JS.contains("loadRuntimeModule()"));
         assert!(STANDALONE_JS.contains("initializeSessionRuntime()"));
-        assert!(STANDALONE_JS.contains("WasmStandaloneSession.fromExport(JSON.stringify"));
+        assert!(STANDALONE_JS.contains("WasmStandaloneSession.fromExport(this.exportJson)"));
+        assert!(STANDALONE_JS.contains("releaseWasmOwnedExportPayload()"));
+        assert!(STANDALONE_JS.contains("delete this.data.runtimeLoadedGame;"));
+        assert!(!STANDALONE_JS.contains("WasmStandaloneSession.fromExport(JSON.stringify"));
         assert!(!STANDALONE_JS.contains("new this.wasmModule.WasmStandaloneSession("));
         assert!(STANDALONE_JS.contains("Puzzle game WASM runtime is unavailable."));
         assert!(STANDALONE_JS.contains("async setCurrentState(state, options = {})"));
@@ -2551,6 +2644,18 @@ scene playing {
         assert!(!STANDALONE_JS.contains("this.initializeCoreRuntime();"));
         assert!(!STANDALONE_JS.contains("WasmCoreRuntime"));
         assert!(!STANDALONE_JS.contains("WasmCompiledCoreRuntime"));
+        assert!(PUZZLE_PLAYER_WASM_JS.contains("WasmStandaloneSession"));
+        assert!(PUZZLE_PLAYER_WASM_JS.contains("WasmPuzzle3Runtime"));
+        assert!(PUZZLE_PLAYER_WASM_JS.contains("fromFixture"));
+        assert!(!PUZZLE_PLAYER_WASM_JS.contains("compile_preview"));
+        assert!(!PUZZLE_PLAYER_WASM_JS.contains("solve_state"));
+        assert!(!PUZZLE_GAME_WASM_JS.contains("solve_state"));
+        assert!(!PUZZLE_GAME_WASM_JS.contains("solver"));
+        assert!(!PUZZLE_GAME_WASM_JS.contains("puzzle_solver"));
+        assert!(!bytes_contain(PUZZLE_GAME_WASM_BG, b"solve_state"));
+        assert!(!bytes_contain(PUZZLE_GAME_WASM_BG, b"puzzle_solver"));
+        assert!(!bytes_contain(PUZZLE_GAME_WASM_BG, b"SearchBudget"));
+        assert!(!bytes_contain(PUZZLE_GAME_WASM_BG, b"best_first"));
     }
 
     #[test]
@@ -2647,6 +2752,16 @@ scene playing {
         assert!(!html.contains("broadcastPuzzle3Key"));
         assert!(!html.contains("PuzzleStudioSolve"));
         assert!(!html.contains("loadWasmSolver"));
+        let boot = embedded_puzzle_boot_json(&html);
+        assert!(
+            boot["source"]
+                .as_str()
+                .is_some_and(|value| value.contains("Editor Preview Export"))
+        );
+        assert_eq!(
+            boot["puzzlePath"],
+            json!("games/editor_preview/game.puzzle")
+        );
     }
 
     #[test]
@@ -2768,6 +2883,7 @@ rules {
         assert!(STANDALONE_JS.contains("snapshot()"));
         assert!(STANDALONE_JS.contains("restoreSessionProgressSave()"));
         assert!(STANDALONE_JS.contains("writeSessionProgressSave()"));
+        assert!(STANDALONE_JS.contains("saved progress was kept and was not overwritten"));
         assert!(STANDALONE_JS.contains("next.has_progress_save = true;"));
         assert!(APP_JS.contains("animationEvents: event.data.animationEvents"));
         assert!(APP_JS.contains("standaloneRuntime.snapshot({ forceJs: true })"));
@@ -2782,6 +2898,21 @@ rules {
         assert!(!STANDALONE_JS.contains("clearedLevels[index]"));
         assert!(!STANDALONE_JS.contains("currentSaveLevelName()"));
         assert!(!STANDALONE_JS.contains("persistentVarSaveData()"));
+        assert!(!STANDALONE_JS.contains("starting from defaults"));
+    }
+
+    #[test]
+    fn standalone_export_surfaces_display_projection_errors_without_raw_fallback() {
+        let server_source = include_str!("lib_server.rs");
+        assert!(server_source.contains("push_display_error_scene_object"));
+        assert!(server_source.contains(r#"\"cells\":[],\"displayError\":"#));
+        assert!(
+            !server_source
+                .contains("transition_program(&loaded.game, program, state, InputId(0)).ok()")
+        );
+        assert!(APP_JS.contains("function firstDisplayError(state)"));
+        assert!(APP_JS.contains("showError(new Error(displayError));"));
+        assert!(APP_CSS.contains(".runtime-error"));
     }
 
     #[test]
@@ -2830,10 +2961,7 @@ rules {
 
         assert_eq!(playing["currentScene"], "playing");
         assert_eq!(playing["scene"]["settings"]["render"]["cellSize"], 40);
-        assert_eq!(
-            playing["scene"]["settings"]["inputBuffer"]["minWaitMs"],
-            50
-        );
+        assert_eq!(playing["scene"]["settings"]["inputBuffer"]["minWaitMs"], 50);
         assert_eq!(
             playing["scene"]["settings"]["animation"]["tween"]["intervalMs"],
             50
@@ -3251,12 +3379,29 @@ rules {
             "body { --accent: #123456; }",
             "",
         )
-        .expect("export puzzle3 document");
+        .expect("release export should use source-free 3D runtime");
 
-        assert!(html.contains("window.Puzzle3DFixture"));
+        assert!(html.contains("window.Puzzle3DFrameFixture"));
+        assert!(html.contains("runtimeContractVersion"));
+        assert!(html.contains("puzzle_wasm_player_bg.wasm"));
         assert!(html.contains("WasmPuzzle3Runtime"));
+        assert!(html.contains("fromFixture"));
         assert!(html.contains("WasmStandaloneSession"));
-        assert!(!html.contains("Puzzle3DTestRuntime"));
+        assert!(!html.contains("puzzle_wasm_game_bg.wasm"));
+        assert!(!html.contains("\\npuzzle3 microban3d"));
+
+        let preview_html = export_editor_preview_html_from_source(
+            source,
+            "games/spec_3d.puzzle3",
+            "body { --accent: #123456; }",
+            "",
+        )
+        .expect("editor preview should embed preview runtime assets");
+
+        assert!(preview_html.contains("window.Puzzle3DFixture"));
+        assert!(preview_html.contains("WasmPuzzle3Runtime"));
+        assert!(preview_html.contains("WasmStandaloneSession"));
+        assert!(!preview_html.contains("Puzzle3DTestRuntime"));
         assert!(html.contains("Microban 3D"));
         assert!(html.contains("--accent: #123456"));
         let mut bridge = StandaloneSessionBridge::from_source(source, "games/spec_3d.puzzle3")
@@ -3266,7 +3411,44 @@ rules {
     }
 
     #[test]
-    fn puzzle3_export_embeds_frame_source_and_path_as_strings() {
+    fn puzzle3_source_free_export_rejects_local_frame_until_fixture_contract_supports_it() {
+        let source = r#"title "Local Frame"
+
+puzzle3 cube {
+  layers {
+    actor = Player
+  }
+
+  rules local_frame 1 1 full {
+    [ Player ] -> [ Player ]
+  }
+}
+
+scene playing {
+  layout {
+    board = puzzle3 cube
+  }
+}
+
+levels3 default of cube {
+  legend {
+    P = Player
+  }
+  level "one" {
+    P
+  }
+}
+"#;
+        let error = export_html_from_source(source, "games/local_frame.puzzle3", "", "")
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("local_frame"));
+        assert!(error.contains("source-free fixture runtime contract"));
+    }
+
+    #[test]
+    fn puzzle3_export_embeds_source_free_frame_fixture_and_path() {
         let source = r#"title "Tiny"
 
 puzzle3 cube {
@@ -3299,7 +3481,7 @@ levels3 default of cube {
 }
 "#;
         let html = export_html_from_source(source, "games/tiny.puzzle3", "", "")
-            .expect("export puzzle3 document");
+            .expect("release puzzle3 document should use source-free runtime");
 
         assert!(html.contains("window.Puzzle3DFrameFixture = JSON.parse"));
         assert!(html.contains("window.Puzzle3DFrameAssets = {"));
@@ -3491,9 +3673,11 @@ levels3 default of cube {
         ));
         assert!(!html.contains("iframe.puzzle3-frame"));
         assert!(html.contains("case \"choice\""));
-        assert!(html.contains("\\\"kind\\\":\\\"choice\\\""));
-        assert!(html.contains("\\\"kind\\\":\\\"puzzle3\\\""));
-        assert!(html.contains("\\npuzzle3 cube"));
+        let runtime_export = embedded_puzzle_runtime_export_json(&html);
+        assert!(runtime_export["runtimeLoadedGame"].is_object());
+        assert!(runtime_export.get("engine").is_none());
+        assert!(runtime_export.get("compiledPlay").is_none());
+        assert!(!html.contains("\\npuzzle3 cube"));
         assert!(!html.contains("\"source\":\"title \\\\\\\"Tiny\\\\\\\"\\n"));
         assert!(html.contains("\"puzzlePath\":\"games/tiny.puzzle3\""));
         assert!(!html.contains("window.Puzzle3DSource ="));
@@ -3531,12 +3715,12 @@ levels3 default of cube {
 }
 "##;
         let html = export_html_from_source(source, "games/themed_3d.puzzle3", "", "")
-            .expect("export themed puzzle3 document");
-        let export = embedded_puzzle_export_json(&html);
+            .expect("release themed puzzle3 document should use source-free runtime");
+        let boot = embedded_puzzle_boot_json(&html);
 
         assert!(html.contains(r#"<body class="theme-clean" style="--background:#123456;">"#));
-        assert_eq!(export["theme"]["name"], json!("clean"));
-        assert_eq!(export["theme"]["variables"]["background"], json!("#123456"));
+        assert_eq!(boot["theme"]["name"], json!("clean"));
+        assert_eq!(boot["theme"]["variables"]["background"], json!("#123456"));
         assert!(html.contains("window.Puzzle3DFrameAssets = {"));
         assert!(html.contains("window.Puzzle3ControllerAutoBoot = false"));
         assert!(html.contains("window.Puzzle3Controller"));

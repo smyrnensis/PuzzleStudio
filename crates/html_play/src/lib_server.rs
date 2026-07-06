@@ -903,7 +903,13 @@ fn push_scene_object(
     level: Option<&Level>,
     resources: Option<&puzzle_lang::SceneResources>,
 ) {
-    let display_state = materialize_display_state(loaded, state);
+    let display_state = match materialize_display_state(loaded, state) {
+        Ok(display_state) => display_state,
+        Err(error) => {
+            push_display_error_scene_object(out, loaded, state, level, resources, &error);
+            return;
+        }
+    };
     let state = display_state.as_ref().unwrap_or(state);
     out.push('{');
     push_json_number(out, "width", state.width as u64);
@@ -928,6 +934,41 @@ fn push_scene_object(
     push_scene_regions(out, level);
     out.push(',');
     push_cells(out, loaded, state);
+    out.push('}');
+}
+
+fn push_display_error_scene_object(
+    out: &mut String,
+    loaded: &LoadedGame,
+    state: &puzzle_core::State,
+    level: Option<&Level>,
+    resources: Option<&puzzle_lang::SceneResources>,
+    error: &TransitionError,
+) {
+    out.push('{');
+    push_json_number(out, "width", state.width as u64);
+    out.push(',');
+    push_json_number(out, "height", state.height as u64);
+    out.push(',');
+    push_json_number(out, "layerCount", state.layer_count as u64);
+    out.push(',');
+    push_puzzle_settings(out, loaded);
+    out.push(',');
+    push_puzzle_screen(out, loaded);
+    out.push(',');
+    out.push_str("\"resources\":");
+    if let Some(resources) = resources {
+        out.push('{');
+        push_scene_resources_object(out, resources);
+        out.push('}');
+    } else {
+        out.push_str("null");
+    }
+    out.push(',');
+    push_scene_regions(out, level);
+    out.push(',');
+    out.push_str("\"cells\":[],\"displayError\":");
+    push_json_string(out, &format!("Display program failed: {error:?}"));
     out.push('}');
 }
 
@@ -975,9 +1016,14 @@ fn push_puzzle_settings(out: &mut String, loaded: &LoadedGame) {
     out.push('}');
 }
 
-fn materialize_display_state(loaded: &LoadedGame, state: &puzzle_core::State) -> Option<State> {
-    let program = loaded.display_program.as_deref()?;
-    transition_program(&loaded.game, program, state, InputId(0)).ok()
+fn materialize_display_state(
+    loaded: &LoadedGame,
+    state: &puzzle_core::State,
+) -> Result<Option<State>, TransitionError> {
+    let Some(program) = loaded.display_program.as_deref() else {
+        return Ok(None);
+    };
+    transition_program(&loaded.game, program, state, InputId(0)).map(Some)
 }
 
 fn push_puzzle_screen(out: &mut String, loaded: &LoadedGame) {

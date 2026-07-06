@@ -56,7 +56,12 @@ fn join_visuals_js(base: &str, generated: &str) -> String {
     }
 }
 
+#[cfg(test)]
 fn push_export_data(out: &mut String, state: &ServerState) {
+    push_export_data_with_source(out, state, true);
+}
+
+fn push_export_data_with_source(out: &mut String, state: &ServerState, include_source: bool) {
     out.push('{');
     push_json_pair(out, "title", &state.loaded.title);
     out.push(',');
@@ -80,8 +85,10 @@ fn push_export_data(out: &mut String, state: &ServerState) {
     } else {
         out.push_str("null");
     }
-    out.push(',');
-    push_json_pair(out, "source", &state.source);
+    if include_source {
+        out.push(',');
+        push_json_pair(out, "source", &state.source);
+    }
     out.push(',');
     push_json_pair(out, "puzzlePath", &state.puzzle_path);
     out.push(',');
@@ -140,6 +147,77 @@ fn push_export_data(out: &mut String, state: &ServerState) {
     push_export_goal(out, "lose", state.loaded.lose.as_ref());
     out.push(',');
     push_export_conditions(out, &state.loaded);
+    out.push('}');
+}
+
+fn push_runtime_export_data(out: &mut String, state: &ServerState) {
+    out.push('{');
+    push_runtime_loaded_game_bundle(out, &state.loaded);
+    out.push('}');
+}
+
+fn push_export_boot_data(out: &mut String, state: &ServerState, include_source: bool) {
+    out.push('{');
+    push_json_pair(out, "title", &state.loaded.title);
+    out.push(',');
+    out.push_str("\"subtitle\":");
+    if let Some(subtitle) = &state.loaded.subtitle {
+        push_json_string(out, subtitle);
+    } else {
+        out.push_str("null");
+    }
+    out.push(',');
+    out.push_str("\"author\":");
+    if let Some(author) = &state.loaded.author {
+        push_json_string(out, author);
+    } else {
+        out.push_str("null");
+    }
+    out.push(',');
+    out.push_str("\"homepage\":");
+    if let Some(homepage) = &state.loaded.homepage {
+        push_json_string(out, homepage);
+    } else {
+        out.push_str("null");
+    }
+    if include_source {
+        out.push(',');
+        push_json_pair(out, "source", &state.source);
+        out.push(',');
+        push_json_pair(out, "puzzlePath", &state.puzzle_path);
+    }
+    out.push(',');
+    push_json_pair(
+        out,
+        "saveKey",
+        &progress_save_key(&state.loaded, &state.puzzle_path),
+    );
+    out.push(',');
+    push_json_number(
+        out,
+        "progressSaveVersion",
+        u64::from(puzzle_play::PROGRESS_SAVE_VERSION),
+    );
+    out.push(',');
+    push_json_bool(
+        out,
+        "acceptsModelInput",
+        state.session.accepts_model_input(&state.loaded),
+    );
+    out.push(',');
+    push_inputs(out, &state.loaded);
+    out.push(',');
+    push_export_sounds(out, &state.loaded.sounds);
+    out.push(',');
+    push_export_theme(out, &state.loaded.theme);
+    out.push(',');
+    push_json_number(out, "defaultWaitMs", state.loaded.default_wait_ms);
+    out.push(',');
+    push_json_number(out, "defaultAgainMs", state.loaded.default_again_ms);
+    out.push(',');
+    push_export_input_buffer(out, &state.loaded);
+    out.push(',');
+    push_export_animation(out, &state.loaded);
     out.push('}');
 }
 

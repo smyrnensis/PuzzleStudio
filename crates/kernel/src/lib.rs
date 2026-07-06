@@ -501,6 +501,16 @@ pub enum GlobalUpdateOp {
     Remainder,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RuleApplication {
+    Once,
+    OnceAll,
+    OncePerLevel,
+    Random,
+    #[default]
+    UntilStable,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum GlobalValueError<GlobalId> {
     OutOfBounds { global: GlobalId },
@@ -604,6 +614,101 @@ pub enum MarkKind {
 pub enum MarkValueMatch {
     Any,
     Exact,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuleMarkPattern<ObjectId, MarkId> {
+    pub object: ObjectId,
+    pub mark: MarkId,
+    pub value: Option<i64>,
+    pub match_value: MarkValueMatch,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RulePatternComponent<MatchCell> {
+    pub cells: Vec<MatchCell>,
+    pub gap_count: u16,
+}
+
+impl<MatchCell> RulePatternComponent<MatchCell> {
+    pub fn new(cells: Vec<MatchCell>) -> Self {
+        Self {
+            cells,
+            gap_count: 0,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RuleWriteOp<Offset, ObjectId, MarkId> {
+    Add {
+        component: u16,
+        offset: Offset,
+        object: ObjectId,
+    },
+    AddObjectSet {
+        component: u16,
+        offset: Offset,
+        binding: u16,
+    },
+    Remove {
+        component: u16,
+        offset: Offset,
+        object: ObjectId,
+    },
+    RemoveObjectSet {
+        component: u16,
+        offset: Offset,
+        binding: u16,
+    },
+    Move {
+        component: u16,
+        from_offset: Offset,
+        to_offset: Offset,
+        object: ObjectId,
+    },
+    MoveObjectSet {
+        component: u16,
+        from_offset: Offset,
+        to_offset: Offset,
+        binding: u16,
+    },
+    Replace {
+        component: u16,
+        offset: Offset,
+        remove: ObjectId,
+        add: ObjectId,
+    },
+    SetMark {
+        component: u16,
+        offset: Offset,
+        object: ObjectId,
+        mark: MarkId,
+        value: Option<i64>,
+    },
+    SetObjectSetMark {
+        component: u16,
+        offset: Offset,
+        binding: u16,
+        mark: MarkId,
+        value: Option<i64>,
+    },
+    RemoveMark {
+        component: u16,
+        offset: Offset,
+        object: ObjectId,
+        mark: MarkId,
+        value: Option<i64>,
+        match_value: MarkValueMatch,
+    },
+    RemoveObjectSetMark {
+        component: u16,
+        offset: Offset,
+        binding: u16,
+        mark: MarkId,
+        value: Option<i64>,
+        match_value: MarkValueMatch,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

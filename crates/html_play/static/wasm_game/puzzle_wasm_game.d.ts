@@ -5,6 +5,7 @@ export class WasmPuzzle3Runtime {
     free(): void;
     [Symbol.dispose](): void;
     current_cells(): string;
+    static fromFixture(fixture_json: string): WasmPuzzle3Runtime;
     is_current_complete(): boolean;
     constructor(source: string, puzzle_path: string);
     restore_saved_state(handle: number): void;
@@ -36,6 +37,7 @@ export interface InitOutput {
     readonly __wbg_wasmpuzzle3runtime_free: (a: number, b: number) => void;
     readonly __wbg_wasmstandalonesession_free: (a: number, b: number) => void;
     readonly wasmpuzzle3runtime_current_cells: (a: number) => [number, number, number, number];
+    readonly wasmpuzzle3runtime_fromFixture: (a: number, b: number) => [number, number, number];
     readonly wasmpuzzle3runtime_is_current_complete: (a: number) => [number, number, number];
     readonly wasmpuzzle3runtime_new: (a: number, b: number, c: number, d: number) => [number, number, number];
     readonly wasmpuzzle3runtime_restore_saved_state: (a: number, b: number) => [number, number];

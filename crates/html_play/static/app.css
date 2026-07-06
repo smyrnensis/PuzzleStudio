@@ -133,6 +133,18 @@ button:disabled {
   pointer-events: none;
 }
 
+.runtime-error {
+  max-width: min(680px, calc(100vw - 32px));
+  padding: 16px 18px;
+  border: 1px solid color-mix(in srgb, var(--text) 26%, transparent);
+  border-radius: var(--radius-panel);
+  background: var(--panel-bg);
+  color: var(--text);
+  font-size: 15px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
 .shell {
   position: relative;
   width: min(1100px, 100vw);
