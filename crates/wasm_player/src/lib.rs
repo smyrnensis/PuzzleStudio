@@ -12,15 +12,6 @@ pub struct WasmStandaloneSession {
 
 #[wasm_bindgen]
 impl WasmPuzzle3Runtime {
-    #[wasm_bindgen(constructor)]
-    pub fn new(source: &str, puzzle_path: &str) -> Result<WasmPuzzle3Runtime, JsValue> {
-        let _ = puzzle_path;
-        Ok(Self {
-            inner: puzzle_game_runtime::Puzzle3RuntimeBridge::from_source(source)
-                .map_err(|error| JsValue::from_str(&error))?,
-        })
-    }
-
     #[wasm_bindgen(js_name = fromFixture)]
     pub fn from_fixture(fixture_json: &str) -> Result<WasmPuzzle3Runtime, JsValue> {
         Ok(Self {
@@ -74,14 +65,6 @@ impl WasmPuzzle3Runtime {
 
 #[wasm_bindgen]
 impl WasmStandaloneSession {
-    #[wasm_bindgen(constructor)]
-    pub fn new(source: &str, puzzle_path: &str) -> Result<WasmStandaloneSession, JsValue> {
-        Ok(Self {
-            inner: puzzle_game_runtime::StandaloneSessionBridge::from_source(source, puzzle_path)
-                .map_err(|error| JsValue::from_str(&error))?,
-        })
-    }
-
     #[wasm_bindgen(js_name = fromExport)]
     pub fn from_export(export_json: &str) -> Result<WasmStandaloneSession, JsValue> {
         Ok(Self {

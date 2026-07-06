@@ -312,13 +312,14 @@ function normalizePuzzle3RendererMode(value) {
 }
 
 async function createPuzzle3Runtime(initialSnapshot) {
-  const source = String(controllerOptions.source ?? window.Puzzle3DSource ?? initialSnapshot.source ?? "");
-  const puzzlePath = String(controllerOptions.puzzlePath ?? window.Puzzle3DPath ?? initialSnapshot.puzzlePath ?? "game.puzzle");
-  const module = await window.PuzzleRuntimeWasmLoader.load(source.length || Date.now());
-  if (typeof module.WasmPuzzle3Runtime !== "function") {
-    throw new Error("Puzzle3 WASM runtime is unavailable.");
+  const fixtureJson = JSON.stringify(requirePuzzle3Snapshot(initialSnapshot, "Puzzle3 runtime fixture"));
+  const module = await window.PuzzleRuntimeWasmLoader.load(
+    String(initialSnapshot.runtimeContractVersion || fixtureJson.length || Date.now()),
+  );
+  if (typeof module.WasmPuzzle3Runtime?.fromFixture !== "function") {
+    throw new Error("Puzzle3 source-free WASM runtime is unavailable.");
   }
-  return new Puzzle3SessionRuntime(initialSnapshot, new module.WasmPuzzle3Runtime(source, puzzlePath));
+  return new Puzzle3SessionRuntime(initialSnapshot, module.WasmPuzzle3Runtime.fromFixture(fixtureJson));
 }
 
 class Puzzle3SessionRuntime {

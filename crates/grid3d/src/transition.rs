@@ -4,7 +4,7 @@ use crate::{
 };
 use puzzle_kernel::{
     ComponentPlacement, GlobalUpdateOp, GridOffset, LocalFrame, MarkValueMatch, MatchPlacement,
-    ObjectBinding, bind_object, bound_object as bound_object_in_bindings,
+    ObjectBinding, RuleApplication, bind_object, bound_object as bound_object_in_bindings,
     collect_component_placements as collect_component_placements_shared,
     complete_component_placements as complete_component_placements_shared,
     placement_object_binding, write_position as write_position_shared,
@@ -12,8 +12,12 @@ use puzzle_kernel::{
 use std::collections::HashSet;
 
 pub type ConditionValueKind3 = puzzle_kernel::ConditionValueKind<ObjectId, Pattern3, InputId3>;
+pub type MarkPattern3 = puzzle_kernel::RuleMarkPattern<ObjectId, MarkId3>;
 pub type ObjectSetMatcher3 = puzzle_kernel::ObjectSetMatcher<ObjectId, LayerId>;
 pub type ObjectSetMarkPattern3 = puzzle_kernel::ObjectSetMarkPattern<MarkId3>;
+pub type PatternComponent3 = puzzle_kernel::RulePatternComponent<MatchCell3>;
+pub type RuleApplication3 = RuleApplication;
+pub type WriteOp3 = puzzle_kernel::RuleWriteOp<Offset3, ObjectId, MarkId3>;
 
 const UNTIL_STABLE_REPEAT_LIMIT3: usize = 200;
 
@@ -94,14 +98,6 @@ impl MatchCell3 {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct MarkPattern3 {
-    pub object: ObjectId,
-    pub mark: MarkId3,
-    pub value: Option<i64>,
-    pub match_value: MarkValueMatch,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Pattern3 {
     pub components: Vec<PatternComponent3>,
@@ -127,21 +123,6 @@ impl Pattern3 {
 
     pub fn components(&self) -> &[PatternComponent3] {
         &self.components
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PatternComponent3 {
-    pub cells: Vec<MatchCell3>,
-    pub gap_count: u16,
-}
-
-impl PatternComponent3 {
-    pub fn new(cells: Vec<MatchCell3>) -> Self {
-        Self {
-            cells,
-            gap_count: 0,
-        }
     }
 }
 
@@ -217,14 +198,6 @@ impl Rule3 {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RuleApplication3 {
-    Once,
-    OnceAll,
-    OncePerLevel,
-    UntilStable,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Guard3 {
     InputIs(InputId3),
 }
@@ -243,82 +216,11 @@ pub enum RuleEffect3 {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum WriteOp3 {
-    Add {
-        component: u16,
-        offset: Offset3,
-        object: ObjectId,
-    },
-    AddObjectSet {
-        component: u16,
-        offset: Offset3,
-        binding: u16,
-    },
-    Remove {
-        component: u16,
-        offset: Offset3,
-        object: ObjectId,
-    },
-    RemoveObjectSet {
-        component: u16,
-        offset: Offset3,
-        binding: u16,
-    },
-    Replace {
-        component: u16,
-        offset: Offset3,
-        remove: ObjectId,
-        add: ObjectId,
-    },
-    Move {
-        component: u16,
-        from_offset: Offset3,
-        to_offset: Offset3,
-        object: ObjectId,
-    },
-    MoveObjectSet {
-        component: u16,
-        from_offset: Offset3,
-        to_offset: Offset3,
-        binding: u16,
-    },
-    SetMark {
-        component: u16,
-        offset: Offset3,
-        object: ObjectId,
-        mark: MarkId3,
-        value: Option<i64>,
-    },
-    SetObjectSetMark {
-        component: u16,
-        offset: Offset3,
-        binding: u16,
-        mark: MarkId3,
-        value: Option<i64>,
-    },
-    RemoveMark {
-        component: u16,
-        offset: Offset3,
-        object: ObjectId,
-        mark: MarkId3,
-        value: Option<i64>,
-        match_value: MarkValueMatch,
-    },
-    RemoveObjectSetMark {
-        component: u16,
-        offset: Offset3,
-        binding: u16,
-        mark: MarkId3,
-        value: Option<i64>,
-        match_value: MarkValueMatch,
-    },
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TransitionError3 {
     Patch(PatchError3),
     OffsetOutOfBounds,
     UnboundObjectSet { binding: u16 },
+    UnsupportedRuleApplication { application: RuleApplication3 },
 }
 
 impl From<PatchError3> for TransitionError3 {
@@ -387,6 +289,11 @@ pub fn transition_program_with_local_frame(
             RuleApplication3::UntilStable => {
                 transition_rule_repeated(game, &current, rule, Some(input), local_frame)?
             }
+            RuleApplication3::Random => {
+                return Err(TransitionError3::UnsupportedRuleApplication {
+                    application: rule.application,
+                });
+            }
         };
     }
     current.clear_mark();
@@ -441,6 +348,11 @@ pub fn transition_program_without_input_with_local_frame(
             }
             RuleApplication3::UntilStable => {
                 transition_rule_repeated(game, &current, rule, None, local_frame)?
+            }
+            RuleApplication3::Random => {
+                return Err(TransitionError3::UnsupportedRuleApplication {
+                    application: rule.application,
+                });
             }
         };
     }
@@ -1317,4 +1229,28 @@ fn once_all_patch_became_stale(error: &PatchError3) -> bool {
 
 fn offset_pos(origin: Coord3, offset: Offset3) -> Option<Coord3> {
     origin.checked_offset(offset)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Size3;
+
+    #[test]
+    fn transition_rejects_unsupported_shared_random_application() {
+        let game = Game3::checked_new(1, Vec::new()).expect("valid empty game");
+        let state = State3::empty(Size3::new(1, 1, 1), 1).expect("valid empty state");
+        let mut rule = Rule3::once(Pattern3::new(Vec::new()), Vec::new());
+        rule.application = RuleApplication3::Random;
+
+        let error = transition_program(&game, &state, &[rule], InputId3(0))
+            .expect_err("3D transition must not reinterpret random rules");
+
+        assert_eq!(
+            error,
+            TransitionError3::UnsupportedRuleApplication {
+                application: RuleApplication3::Random
+            }
+        );
+    }
 }

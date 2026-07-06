@@ -76,6 +76,7 @@ pub fn export_visual_fixture_json_with_title_scenes_and_animation(
     let mut out = String::new();
     out.push_str("{\n");
     write_json_string_field(&mut out, 1, "title", &title, true);
+    out.push_str("  \"runtimeContractVersion\": 1,\n");
     let _ = writeln!(out, "  \"layerCount\": {},", parsed.game.layer_count);
     write_size_field(&mut out, 1, "size", bundle.levels[0].level.size, true);
     write_camera(&mut out, parsed);
@@ -434,16 +435,16 @@ fn write_rule_array(out: &mut String, rules: &[Rule3]) {
         if index > 0 {
             out.push_str(", ");
         }
-        write_rule_json(out, rule, index);
+        write_rule_json(out, rule);
     }
     out.push(']');
 }
 
-fn write_rule_json(out: &mut String, rule: &Rule3, index: usize) {
+fn write_rule_json(out: &mut String, rule: &Rule3) {
     write!(
         out,
         "{{ \"id\": {}, \"application\": {}, \"guards\": [",
-        index + 1,
+        rule.id.0,
         json_string(rule_application_name(rule.application))
     )
     .unwrap();
@@ -534,6 +535,7 @@ fn rule_application_name(application: RuleApplication3) -> &'static str {
         RuleApplication3::Once => "once",
         RuleApplication3::OnceAll => "once_all",
         RuleApplication3::OncePerLevel => "once_per_level",
+        RuleApplication3::Random => "random",
         RuleApplication3::UntilStable => "until_stable",
     }
 }
@@ -573,7 +575,57 @@ fn write_match_cell_json(out: &mut String, cell: &MatchCell3) {
     }
     out.push_str("], \"forbid\": [");
     write_object_id_array(out, &cell.forbid_objects);
+    out.push_str("], \"requireMark\": [");
+    write_mark_pattern_array(out, &cell.require_mark);
+    out.push_str("], \"requireObjectSetMark\": [");
+    write_object_set_mark_pattern_array(out, &cell.require_object_set_mark);
+    out.push_str("], \"forbidMark\": [");
+    write_mark_pattern_array(out, &cell.forbid_mark);
+    out.push_str("], \"forbidObjectSetMark\": [");
+    write_object_set_mark_pattern_array(out, &cell.forbid_object_set_mark);
     out.push_str("] }");
+}
+
+fn write_mark_pattern_array(out: &mut String, marks: &[crate::MarkPattern3]) {
+    for (index, mark) in marks.iter().enumerate() {
+        if index > 0 {
+            out.push_str(", ");
+        }
+        write!(
+            out,
+            "{{ \"object\": {}, \"mark\": {}, \"value\": ",
+            mark.object.0, mark.mark.0
+        )
+        .unwrap();
+        write_optional_i64(out, mark.value);
+        write!(
+            out,
+            ", \"match\": \"{}\" }}",
+            mark_value_match_name(mark.match_value)
+        )
+        .unwrap();
+    }
+}
+
+fn write_object_set_mark_pattern_array(out: &mut String, marks: &[crate::ObjectSetMarkPattern3]) {
+    for (index, mark) in marks.iter().enumerate() {
+        if index > 0 {
+            out.push_str(", ");
+        }
+        write!(
+            out,
+            "{{ \"binding\": {}, \"mark\": {}, \"value\": ",
+            mark.binding, mark.mark.0
+        )
+        .unwrap();
+        write_optional_i64(out, mark.value);
+        write!(
+            out,
+            ", \"match\": \"{}\" }}",
+            mark_value_match_name(mark.match_value)
+        )
+        .unwrap();
+    }
 }
 
 fn write_object_id_array(out: &mut String, objects: &[ObjectId]) {

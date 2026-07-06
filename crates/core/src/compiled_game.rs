@@ -1,8 +1,13 @@
 use crate::ids::{ConditionId, GlobalId, InputId, LayerId, MarkId, ObjectId, RuleId};
-pub use puzzle_kernel::{GlobalUpdateOp, LocalFrame, LocalFrameExtent, MarkKind, MarkValueMatch};
+pub use puzzle_kernel::{
+    GlobalUpdateOp, LocalFrame, LocalFrameExtent, MarkKind, MarkValueMatch, RuleApplication,
+};
 use serde::{Deserialize, Serialize};
+pub type MarkPattern = puzzle_kernel::RuleMarkPattern<ObjectId, MarkId>;
 pub type ObjectSetMatcher = puzzle_kernel::ObjectSetMatcher<ObjectId, LayerId>;
 pub type ObjectSetMarkPattern = puzzle_kernel::ObjectSetMarkPattern<MarkId>;
+pub type PatternComponent = puzzle_kernel::RulePatternComponent<MatchCell>;
+pub type WriteOp = puzzle_kernel::RuleWriteOp<Offset, ObjectId, MarkId>;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CompiledGame {
@@ -367,14 +372,6 @@ pub enum Guard {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct MarkPattern {
-    pub object: ObjectId,
-    pub mark: MarkId,
-    pub value: Option<i64>,
-    pub match_value: MarkValueMatch,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ComparisonOp {
     Eq,
     NotEq,
@@ -408,25 +405,9 @@ pub struct ConditionDef {
 
 pub type ConditionValueKind = puzzle_kernel::ConditionValueKind<ObjectId, Pattern, InputId>;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub enum RuleApplication {
-    Once,
-    OnceAll,
-    OncePerLevel,
-    Random,
-    #[default]
-    UntilStable,
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Pattern {
     pub components: Vec<PatternComponent>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct PatternComponent {
-    pub cells: Vec<MatchCell>,
-    pub gap_count: u16,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -442,7 +423,7 @@ pub struct MatchCell {
     pub forbid_object_set_mark: Vec<ObjectSetMarkPattern>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Offset {
     Fixed {
         dx: i16,
@@ -455,81 +436,9 @@ pub enum Offset {
     },
 }
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GapTerm {
     pub gap_index: u16,
     pub dx: i16,
     pub dy: i16,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum WriteOp {
-    Add {
-        component: u16,
-        offset: Offset,
-        object: ObjectId,
-    },
-    AddObjectSet {
-        component: u16,
-        offset: Offset,
-        binding: u16,
-    },
-    Remove {
-        component: u16,
-        offset: Offset,
-        object: ObjectId,
-    },
-    RemoveObjectSet {
-        component: u16,
-        offset: Offset,
-        binding: u16,
-    },
-    Move {
-        component: u16,
-        from_offset: Offset,
-        to_offset: Offset,
-        object: ObjectId,
-    },
-    MoveObjectSet {
-        component: u16,
-        from_offset: Offset,
-        to_offset: Offset,
-        binding: u16,
-    },
-    Replace {
-        component: u16,
-        offset: Offset,
-        remove: ObjectId,
-        add: ObjectId,
-    },
-    SetMark {
-        component: u16,
-        offset: Offset,
-        object: ObjectId,
-        mark: MarkId,
-        value: Option<i64>,
-    },
-    SetObjectSetMark {
-        component: u16,
-        offset: Offset,
-        binding: u16,
-        mark: MarkId,
-        value: Option<i64>,
-    },
-    RemoveMark {
-        component: u16,
-        offset: Offset,
-        object: ObjectId,
-        mark: MarkId,
-        value: Option<i64>,
-        match_value: MarkValueMatch,
-    },
-    RemoveObjectSetMark {
-        component: u16,
-        offset: Offset,
-        binding: u16,
-        mark: MarkId,
-        value: Option<i64>,
-        match_value: MarkValueMatch,
-    },
 }

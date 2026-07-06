@@ -1,4 +1,4 @@
-/* @ts-self-types="./puzzle_wasm_game.d.ts" */
+/* @ts-self-types="./puzzle_wasm_player.d.ts" */
 
 export class WasmPuzzle3Runtime {
     static __wrap(ptr) {
@@ -60,23 +60,6 @@ export class WasmPuzzle3Runtime {
             throw takeFromExternrefTable0(ret[1]);
         }
         return ret[0] !== 0;
-    }
-    /**
-     * @param {string} source
-     * @param {string} puzzle_path
-     */
-    constructor(source, puzzle_path) {
-        const ptr0 = passStringToWasm0(source, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len0 = WASM_VECTOR_LEN;
-        const ptr1 = passStringToWasm0(puzzle_path, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len1 = WASM_VECTOR_LEN;
-        const ret = wasm.wasmpuzzle3runtime_new(ptr0, len0, ptr1, len1);
-        if (ret[2]) {
-            throw takeFromExternrefTable0(ret[1]);
-        }
-        this.__wbg_ptr = ret[0];
-        WasmPuzzle3RuntimeFinalization.register(this, this.__wbg_ptr, this);
-        return this;
     }
     /**
      * @param {number} handle
@@ -195,23 +178,6 @@ export class WasmStandaloneSession {
         wasm.wasmstandalonesession_mark_progress_save_written(this.__wbg_ptr);
     }
     /**
-     * @param {string} source
-     * @param {string} puzzle_path
-     */
-    constructor(source, puzzle_path) {
-        const ptr0 = passStringToWasm0(source, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len0 = WASM_VECTOR_LEN;
-        const ptr1 = passStringToWasm0(puzzle_path, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len1 = WASM_VECTOR_LEN;
-        const ret = wasm.wasmstandalonesession_new(ptr0, len0, ptr1, len1);
-        if (ret[2]) {
-            throw takeFromExternrefTable0(ret[1]);
-        }
-        this.__wbg_ptr = ret[0];
-        WasmStandaloneSessionFinalization.register(this, this.__wbg_ptr, this);
-        return this;
-    }
-    /**
      * @returns {string}
      */
     progress_save() {
@@ -317,7 +283,7 @@ function __wbg_get_imports() {
     };
     return {
         __proto__: null,
-        "./puzzle_wasm_game_bg.js": import0,
+        "./puzzle_wasm_player_bg.js": import0,
     };
 }
 
@@ -490,7 +456,7 @@ async function __wbg_init(module_or_path) {
     }
 
     if (module_or_path === undefined) {
-        module_or_path = new URL('puzzle_wasm_game_bg.wasm', import.meta.url);
+        module_or_path = new URL('puzzle_wasm_player_bg.wasm', import.meta.url);
     }
     const imports = __wbg_get_imports();
 

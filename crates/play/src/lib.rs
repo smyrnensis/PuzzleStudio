@@ -761,10 +761,10 @@ impl GameSession {
         undo_base_len: usize,
     ) -> Result<ModelInputResult, TransitionError> {
         let Some((scene_name, puzzle_name)) = self.resolve_puzzle_target(game, target) else {
-            return self.apply_model_input_to_current_level(game, input, undo_base_len);
+            return Err(invalid_puzzle_target_error(target));
         };
         let Some(initializer) = scene_puzzle_initializer(game, &scene_name, &puzzle_name) else {
-            return self.apply_model_input_to_current_level(game, input, undo_base_len);
+            return Err(invalid_puzzle_target_error(target));
         };
 
         let undo_anchor = self.state.clone();
@@ -775,7 +775,7 @@ impl GameSession {
             .and_then(|scene_state| scene_state.puzzles.get(&puzzle_name))
             .cloned()
         else {
-            return Ok(ModelInputResult::default());
+            return Err(invalid_puzzle_target_error(target));
         };
         self.apply_persistent_vars(game, &mut state.state);
         let outcome = transition_program_segment_outcome(
@@ -1020,15 +1020,14 @@ impl GameSession {
         let undo_base_len = continuation.undo_base_len;
         let mut undo_anchor = continuation.undo_anchor;
         let mut state = if let Some(target) = target {
-            if let Some((scene_name, puzzle_name)) = self.resolve_puzzle_target(game, target) {
-                self.scene_states
-                    .get(&scene_name)
-                    .and_then(|scene_state| scene_state.puzzles.get(&puzzle_name))
-                    .map(|puzzle| puzzle.state.clone())
-                    .unwrap_or_else(|| self.state.clone())
-            } else {
-                self.state.clone()
-            }
+            let (scene_name, puzzle_name) = self
+                .resolve_puzzle_target(game, target)
+                .ok_or_else(|| invalid_puzzle_target_error(target))?;
+            self.scene_states
+                .get(&scene_name)
+                .and_then(|scene_state| scene_state.puzzles.get(&puzzle_name))
+                .map(|puzzle| puzzle.state.clone())
+                .ok_or_else(|| invalid_puzzle_target_error(target))?
         } else {
             self.state.clone()
         };
@@ -1041,31 +1040,29 @@ impl GameSession {
             target,
         )?;
         if let Some(target) = target {
-            if let Some((scene_name, puzzle_name)) = self.resolve_puzzle_target(game, target) {
-                let initializer = scene_puzzle_initializer(game, &scene_name, &puzzle_name);
-                if let Some(puzzle) = self
-                    .scene_states
-                    .get_mut(&scene_name)
-                    .and_then(|scene_state| scene_state.puzzles.get_mut(&puzzle_name))
-                {
-                    puzzle.state = outcome.next_state.clone();
-                }
-                if initializer == Some(ScenePuzzleInitializer::CurrentLevel)
-                    && scene_name == self.focused_scene
-                {
-                    let state_changed = match undo_anchor.clone() {
-                        Some(anchor) => self.replace_state_if_changed_from_anchor(
-                            game,
-                            outcome.next_state,
-                            anchor,
-                        ),
-                        None => {
-                            self.replace_state_if_changed_without_undo(game, outcome.next_state)
-                        }
-                    };
-                    if state_changed {
-                        undo_anchor = None;
+            let (scene_name, puzzle_name) = self
+                .resolve_puzzle_target(game, target)
+                .ok_or_else(|| invalid_puzzle_target_error(target))?;
+            let initializer = scene_puzzle_initializer(game, &scene_name, &puzzle_name);
+            let Some(puzzle) = self
+                .scene_states
+                .get_mut(&scene_name)
+                .and_then(|scene_state| scene_state.puzzles.get_mut(&puzzle_name))
+            else {
+                return Err(invalid_puzzle_target_error(target));
+            };
+            puzzle.state = outcome.next_state.clone();
+            if initializer == Some(ScenePuzzleInitializer::CurrentLevel)
+                && scene_name == self.focused_scene
+            {
+                let state_changed = match undo_anchor.clone() {
+                    Some(anchor) => {
+                        self.replace_state_if_changed_from_anchor(game, outcome.next_state, anchor)
                     }
+                    None => self.replace_state_if_changed_without_undo(game, outcome.next_state),
+                };
+                if state_changed {
+                    undo_anchor = None;
                 }
             }
         } else {
@@ -3606,6 +3603,10 @@ fn validate_runtime_target_path(value: &str) -> bool {
         .trim()
         .split('.')
         .all(|part| is_simple_identifier(part))
+}
+
+fn invalid_puzzle_target_error(target: &str) -> TransitionError {
+    TransitionError::InvalidCommand(format!("unknown puzzle target: {target}"))
 }
 
 fn parse_puzzle_runtime_command(command_text: &str) -> Option<SceneEffect> {
@@ -7159,6 +7160,131 @@ P
     }
 
     #[test]
+    fn explicit_model_input_target_must_resolve() {
+        let loaded = parse_game(
+            r#"
+title explicit_target_error
+
+puzzle board {
+input right
+
+layers {
+actor = Player
+}
+empty .
+
+rules {
+input right [ Player | no Player ] -> [ | Player ]
+}
+
+levels {
+legend {
+. = empty
+P = Player
+}
+level "start" {
+P.
+}
+}
+}
+
+scene playing {
+layout {
+puzzle board
+}
+}
+"#,
+        )
+        .unwrap();
+        let mut session = GameSession::new(&loaded);
+        session.apply_command(&loaded, "goto playing").unwrap();
+        let initial = session.state().clone();
+
+        let error = session
+            .apply_model_input_to_target(
+                &loaded,
+                "missing_board",
+                input_named(&loaded, "right"),
+                session.undo_stack.len(),
+            )
+            .unwrap_err();
+
+        assert_eq!(
+            error,
+            TransitionError::InvalidCommand("unknown puzzle target: missing_board".to_string())
+        );
+        assert_eq!(session.state(), &initial);
+    }
+
+    #[test]
+    fn targeted_model_input_continuation_must_keep_resolving_target() {
+        let loaded = parse_game(
+            r#"
+title targeted_continuation_target_error
+
+default_wait_time = 100ms
+
+puzzle board {
+input right
+
+layers {
+actor = Player
+}
+empty .
+
+rules {
+right [ Player ] -> wait 100ms
+}
+
+levels {
+legend {
+P = Player
+}
+level "start" {
+P
+}
+}
+}
+
+scene playing {
+layout {
+board = puzzle board
+}
+rules {
+step board
+}
+}
+"#,
+        )
+        .unwrap();
+        let mut session = GameSession::new(&loaded);
+        session.apply_command(&loaded, "goto playing").unwrap();
+        session
+            .apply_input(&loaded, input_named(&loaded, "right"))
+            .unwrap();
+        assert_eq!(
+            session.take_wait_events(),
+            vec![WaitEvent::ContinueEffects { milliseconds: 100 }]
+        );
+        session
+            .pending_program_continuation
+            .as_mut()
+            .unwrap()
+            .target = Some("missing.board".to_string());
+        let initial = session.state().clone();
+
+        let error = session
+            .apply_command(&loaded, "__continue_effects")
+            .unwrap_err();
+
+        assert_eq!(
+            error,
+            TransitionError::InvalidCommand("unknown puzzle target: missing.board".to_string())
+        );
+        assert_eq!(session.state(), &initial);
+    }
+
+    #[test]
     fn puzzle_next_level_restarts_the_target_scene_not_the_initial_scene() {
         let loaded = parse_game(
             r#"
@@ -7815,7 +7941,9 @@ actor = Player Box Wall
 marker = ClearMark
 @visual = @ClearVisual
 }
-group solid = Player Box Wall
+groups {
+solid = Player Box Wall
+}
 win_conditions {
 some Goal
 all Goal on Box
@@ -7882,7 +8010,9 @@ layers {
 floor = Goal
 actor = Player Box Wall
 }
-group solid = Player Box Wall
+groups {
+solid = Player Box Wall
+}
 win_conditions {
 some Goal
 all Goal on Box

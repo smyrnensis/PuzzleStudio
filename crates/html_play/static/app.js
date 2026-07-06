@@ -237,8 +237,9 @@ class PuzzleSoundRuntime {
 
 }
 
+const puzzleBoot = window.PuzzleBoot || {};
 const standaloneRuntime = window.PuzzleStandaloneRuntime
-  ? new window.PuzzleStandaloneRuntime(window.PuzzleExport)
+  ? new window.PuzzleStandaloneRuntime(puzzleBoot, window.PuzzleRuntimeExportJson)
   : null;
 const soundRuntime = new PuzzleSoundRuntime();
 
@@ -262,9 +263,9 @@ let screenScaleSyncFrame = 0;
 let screenScaleSyncPasses = 0;
 const defaultSceneLogicalSize = { width: 4, height: 3 };
 const defaultSceneLayoutUnit = 180;
-const pendingCommandQueue = [];
+let pendingModelInput = null;
 const activeWaitTimers = new Set();
-let drainingCommandQueue = false;
+let drainingQueuedModelInput = false;
 let sceneEditorPreview = null;
 
 async function requestJson(url, options = {}) {
@@ -302,13 +303,13 @@ async function solveStandaloneCurrentState(options = {}) {
   if (!standaloneRuntime) {
     return requestJson("/api/solve", { method: "POST" });
   }
-  if (!window.PuzzleExport?.source) {
-    throw new Error("standalone solve requires PuzzleExport.source");
+  if (!puzzleBoot.source) {
+    throw new Error("standalone solve requires PuzzleBoot.source");
   }
   const solver = await loadWasmSolver();
   return JSON.parse(solver.solve_state(
-    window.PuzzleExport.source,
-    window.PuzzleExport.puzzlePath || "game.puzzle",
+    puzzleBoot.source,
+    puzzleBoot.puzzlePath || "game.puzzle",
     JSON.stringify(standaloneRuntime.state),
     Number(options.maxDepth ?? 512),
     Number(options.maxNodes ?? 5_000_000),
@@ -333,9 +334,15 @@ async function post(url) {
 function render(state) {
   currentState = state;
   window.__PuzzleCurrentState = state;
-  applyTheme(state?.theme || window.PuzzleExport?.theme || null);
-  soundRuntime.configure(state?.sounds || window.PuzzleExport?.sounds || { sfx: [], music: [] });
+  applyTheme(state?.theme || puzzleBoot.theme || null);
+  soundRuntime.configure(state?.sounds || puzzleBoot.sounds || { sfx: [], music: [] });
   soundRuntime.applyEvents(state?.soundEvents || []);
+  const displayError = firstDisplayError(state);
+  if (displayError) {
+    showError(new Error(displayError));
+    notifyPreviewState(state);
+    return;
+  }
   if (state) {
     state.soundEvents = [];
   }
@@ -360,6 +367,18 @@ function render(state) {
   notifyPreviewState(state);
   applyMessageEvents(state?.messageEvents || []);
   applyWaitEvents(waitEvents);
+}
+
+function firstDisplayError(state) {
+  if (state?.scene?.displayError) {
+    return String(state.scene.displayError);
+  }
+  for (const layer of state?.sceneLayers || []) {
+    if (layer?.scene?.displayError) {
+      return String(layer.scene.displayError);
+    }
+  }
+  return "";
 }
 
 function scheduleScreenScaleSync(passes = 2) {
@@ -660,7 +679,7 @@ function notifyPreviewState(state) {
     inputs: state.inputs,
     screen: state.currentScene || state.screen,
     screenHasPuzzle: currentSceneAcceptsModelInput() || Boolean(state.scene),
-    theme: state.theme || window.PuzzleExport?.theme || null,
+    theme: state.theme || puzzleBoot.theme || null,
   }, "*");
 }
 
@@ -675,7 +694,7 @@ function notifySceneEditorPreview(requestId = sceneEditorPreview?.requestId || "
     type: "PuzzleStudioScenePreview",
     requestId,
     scene: sceneName,
-    theme: sceneEditorPreview.theme || currentState?.theme || window.PuzzleExport?.theme || null,
+    theme: sceneEditorPreview.theme || currentState?.theme || puzzleBoot.theme || null,
     layout,
     logicalSize: logicalSceneSize(layout?.size),
     components: sceneEditorComponentMetadata(sceneDef?.components || [], {
@@ -694,7 +713,7 @@ function renderSceneEditorPreview(config = {}) {
   sceneEditorPreview = {
     requestId: String(config.requestId || ""),
     sceneName,
-    theme: normalizeScenePreviewTheme(config.theme) || currentState?.theme || window.PuzzleExport?.theme || null,
+    theme: normalizeScenePreviewTheme(config.theme) || currentState?.theme || puzzleBoot.theme || null,
     layout: normalizeScenePreviewLayout(config.layout),
     state: normalizeScenePreviewState(config.state),
     inspect: config.inspect || {},
@@ -703,7 +722,7 @@ function renderSceneEditorPreview(config = {}) {
     notifySceneEditorPreview(sceneEditorPreview.requestId);
     return;
   }
-  const baseState = currentState || window.PuzzleExport || {};
+  const baseState = currentState || puzzleBoot || {};
   const existingLayer = sceneLayers(baseState).find((layer) => layer.name === sceneName);
   const previewState = {
     ...baseState,
@@ -1148,7 +1167,7 @@ function currentSceneHasPuzzle() {
 }
 
 function currentSceneAcceptsModelInput() {
-  return stateAcceptsModelInput(currentState || window.PuzzleExport || {});
+  return stateAcceptsModelInput(currentState || puzzleBoot || {});
 }
 
 function isControlPointerTarget(target) {
@@ -1185,7 +1204,7 @@ function currentSceneLayer(state = currentState, scene = currentSceneDef()) {
     || null;
 }
 
-function stateAcceptsModelInput(state = currentState || window.PuzzleExport || {}) {
+function stateAcceptsModelInput(state = currentState || puzzleBoot || {}) {
   return state?.acceptsModelInput === true
     || standaloneRuntime?.editorPreviewInputEnabled === true;
 }
@@ -1308,12 +1327,9 @@ function renderPuzzle3Frame(component, scope = {}) {
     canvas.setAttribute("aria-label", `${sceneTitle(sceneName)} ${source}`);
     root.append(canvas);
     const fixture = puzzle3FrameFixture(sceneName);
-    const assets = window.Puzzle3DFrameAssets || {};
     const controller = window.Puzzle3Controller.attach(canvas, {
       screenView: root,
       fixture,
-      source: assets.source || "",
-      puzzlePath: assets.puzzlePath || "game.puzzle",
       scene: sceneName,
       component,
     });
@@ -2456,14 +2472,14 @@ function inputByName(name) {
 }
 
 function currentSceneDef() {
-  const source = currentState || window.PuzzleExport || {};
+  const source = currentState || puzzleBoot || {};
   const name = source.currentScene || source.screen || "playing";
   const scenes = sceneDefinitionsForSource(source);
   return scenes.find((scene) => scene.name === name) || null;
 }
 
 function sceneDefByName(name) {
-  const source = currentState || window.PuzzleExport || {};
+  const source = currentState || puzzleBoot || {};
   const scenes = sceneDefinitionsForSource(source);
   return scenes.find((scene) => scene.name === name) || null;
 }
@@ -2560,9 +2576,9 @@ function applyWaitEvents(events) {
         currentState.busy = clientPendingWaits > 0;
       }
       if (event.kind === "continue_effects") {
-        sendCommandNow("__continue_effects").then(drainQueuedCommands);
+        sendCommandNow("__continue_effects").then(drainQueuedModelInput);
       } else {
-        drainQueuedCommands();
+        drainQueuedModelInput();
       }
     };
     activeWaitTimers.add(waitTimer);
@@ -2586,7 +2602,7 @@ function inputBufferConfig() {
   const source =
     currentState?.inputBuffer ||
     currentState?.scene?.settings?.inputBuffer ||
-    window.PuzzleExport?.inputBuffer ||
+    puzzleBoot.inputBuffer ||
     {};
   return {
     queueDuringWait: source.queueDuringWait !== false,
@@ -2621,12 +2637,6 @@ function fastForwardWaitTimer(waitTimer) {
 
 function sendCommand(command) {
   if (currentState?.busy || clientPendingWaits > 0) {
-    const config = inputBufferConfig();
-    if (!config.queueDuringWait) {
-      return undefined;
-    }
-    pendingCommandQueue.push(command);
-    fastForwardActiveWaitsForQueuedInput(config);
     return undefined;
   }
   return sendCommandNow(command);
@@ -2638,7 +2648,7 @@ function sendModelInput(input) {
     if (!config.queueDuringWait) {
       return undefined;
     }
-    pendingCommandQueue.push({ kind: "model_input", name: input });
+    pendingModelInput = input;
     fastForwardActiveWaitsForQueuedInput(config);
     return undefined;
   }
@@ -2672,22 +2682,17 @@ async function sendCommandNow(command) {
   return post(`/api/command/${encodeURIComponent(command)}`);
 }
 
-async function drainQueuedCommands() {
-  if (drainingCommandQueue || clientPendingWaits > 0 || currentState?.busy) {
+async function drainQueuedModelInput() {
+  if (drainingQueuedModelInput || clientPendingWaits > 0 || currentState?.busy || !pendingModelInput) {
     return;
   }
-  drainingCommandQueue = true;
+  drainingQueuedModelInput = true;
+  const input = pendingModelInput;
+  pendingModelInput = null;
   try {
-    while (pendingCommandQueue.length > 0 && clientPendingWaits === 0 && !currentState?.busy) {
-      const queued = pendingCommandQueue.shift();
-      if (queued?.kind === "model_input") {
-        await sendModelInputNow(queued.name);
-      } else {
-        await sendCommandNow(queued);
-      }
-    }
+    await sendModelInputNow(input);
   } finally {
-    drainingCommandQueue = false;
+    drainingQueuedModelInput = false;
   }
 }
 
@@ -3307,7 +3312,10 @@ document.addEventListener("keydown", (event) => {
   const effects = effectsForKey(event);
   if (effects.length > 0) {
     event.preventDefault();
-    for (const effect of effects) {
+    const dispatchEffects = event.repeat && (currentState?.busy || clientPendingWaits > 0)
+      ? effects.filter((effect) => effect?.kind !== "model_input")
+      : effects;
+    for (const effect of dispatchEffects) {
       const confirmTarget = activationConfirmTargetForCommand(effect);
       if (confirmTarget) {
         runEffectActivationConfirm(confirmTarget, effect);
@@ -3553,4 +3561,14 @@ if (!componentEmbedMode) {
 
 function showError(error) {
   console.error(error);
+  const message = String(error?.message || error || "Unknown runtime error");
+  if (!screenView) {
+    return;
+  }
+  const panel = document.createElement("div");
+  panel.className = "runtime-error";
+  panel.setAttribute("role", "alert");
+  panel.textContent = message;
+  screenView.replaceChildren(panel);
+  scheduleScreenScaleSync(2);
 }

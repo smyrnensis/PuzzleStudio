@@ -23,6 +23,19 @@ read the more specific crate `AGENTS.md` when present.
   independently reinterpret non-spatial authoring syntax; share the 2D/authoring
   helpers and branch only for spatial concerns.
 
+## 2D / 3D Drift Guard
+
+Do not introduce new `*3` semantic types when the difference is only dimensional.
+Rules, pattern application, write operations, marks, win conditions, session
+lifecycle, and export runtime contracts should move toward shared kernel,
+language, play, or adapter-owned contracts. `*3` names are acceptable for true
+spatial/rendering boundaries such as coordinates, directions, frames, camera,
+3D levels, and temporary migration shims that name their deletion boundary.
+
+When a shared contract exposes a variant that 3D cannot support yet, reject it
+visibly at the owning boundary instead of mapping it to a nearby supported
+behavior.
+
 ## Commands
 
 Prefer owner-local commands while developing:

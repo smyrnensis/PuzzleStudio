@@ -2445,6 +2445,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "puzzle-wasm-player"
+version = "0.1.0"
+dependencies = [
+ "puzzle-game-runtime",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "puzzlestudio"
 version = "0.1.0"
 dependencies = [
