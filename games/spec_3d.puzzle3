@@ -83,7 +83,7 @@ B = Box
 # = Wall
 }
 
-level microban_01 {
+level "microban 1" {
 ####..
 #..#..
 #..###
@@ -101,7 +101,7 @@ level microban_01 {
 ,,,,,,
 }
 
-level microban_02 {
+level "microban 2" {
 ######
 #....#
 #.#P.#
@@ -119,7 +119,7 @@ level microban_02 {
 ,,,,,,
 }
 
-level microban_03 {
+level "microban 3" {
 ..####...
 ###..####
 #.....B.#

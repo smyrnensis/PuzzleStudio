@@ -40,9 +40,13 @@ const SOURCE_EDITABLE_TARGETS = [
 const sourceEditableTargetHandlers = new Map();
 let sourceHighlightTimer = 0;
 let sourceCompletionTimer = 0;
+let sourceOutlineTimer = 0;
 let activeHighlightRequest = null;
 let sourceHighlightRequestId = 0;
 let sourceCompletionRequestId = 0;
+let sourceOutlineRequestId = 0;
+let sourceOutlineSignature = "";
+let sourceOutlineDirty = true;
 let sourceColorEdit = null;
 let sourceCompletionState = null;
 let sourceImportLinkState = null;
@@ -81,6 +85,7 @@ let sourceFoldViewMap = [];
 let sourceFoldBlockCacheSource = "";
 let sourceFoldBlockCache = [];
 let sourceFoldEditSnapshot = null;
+let sourceOutlineItems = [];
 
 function sourcePuzzleLevelName(value, defaultName = "") {
   const text = String(value ?? "").trim();
@@ -762,6 +767,7 @@ function setSourceEditorValue(value, options = {}) {
   const sameUnfoldedValue = sourceFoldBaseSource === null && currentValue === nextValue;
   if (sameUnfoldedValue && preserveCurrentHighlight && sourceHighlightSource === nextValue) {
     updateSourceMeta();
+    scheduleSourceOutlineRefresh(true);
     if (preservesUndo) {
       ensureSourceUndoHistory();
     } else if (options.resetUndo === false) {
@@ -775,6 +781,7 @@ function setSourceEditorValue(value, options = {}) {
   sourceEditor.value = nextValue;
   updateSourceMeta();
   scheduleSourceHighlight(true, { preserveCurrent: preserveCurrentHighlight });
+  scheduleSourceOutlineRefresh(true);
   if (preservesUndo) {
     ensureSourceUndoHistory();
   } else if (options.resetUndo === false) {
@@ -794,7 +801,10 @@ function scheduleSourceHighlight(immediate = false, options = {}) {
     renderPlainSourceHighlight();
   }
   window.clearTimeout(sourceHighlightTimer);
-  sourceHighlightTimer = window.setTimeout(refreshSourceHighlight, immediate ? 0 : 140);
+  sourceHighlightTimer = window.setTimeout(() => {
+    sourceHighlightTimer = 0;
+    refreshSourceHighlight();
+  }, immediate ? 0 : 140);
 }
 
 function renderOptimisticSourceHighlight(source = sourceEditor.value) {
@@ -1192,6 +1202,100 @@ function sourceDocumentSupportsEditableTargets() {
     && isTextDocument(activeDocument());
 }
 
+function sourceOutlineVisible() {
+  if (!sourceOutlineList) {
+    return false;
+  }
+  const section = sourceOutlineList.closest("[data-explorer-section='outline']");
+  if (section?.classList.contains("is-collapsed")) {
+    return false;
+  }
+  const sections = sourceOutlineList.closest(".explorer-sections");
+  return !sections?.classList.contains("is-outline-collapsed");
+}
+
+function stripSourceStructureLineComment(line) {
+  let quote = "";
+  let escaped = false;
+  for (let index = 0; index < line.length; index += 1) {
+    const ch = line[index];
+    if (quote) {
+      if (escaped) {
+        escaped = false;
+      } else if (ch === "\\") {
+        escaped = true;
+      } else if (ch === quote) {
+        quote = "";
+      }
+      continue;
+    }
+    if (ch === "\"" || ch === "'") {
+      quote = ch;
+      continue;
+    }
+    if (ch === "/" && line[index + 1] === "/") {
+      return line.slice(0, index);
+    }
+  }
+  return line;
+}
+
+function sourceLineHasStructuralBrace(line) {
+  let quote = "";
+  let escaped = false;
+  for (let index = 0; index < line.length; index += 1) {
+    const ch = line[index];
+    if (quote) {
+      if (escaped) {
+        escaped = false;
+      } else if (ch === "\\") {
+        escaped = true;
+      } else if (ch === quote) {
+        quote = "";
+      }
+      continue;
+    }
+    if (ch === "\"" || ch === "'") {
+      quote = ch;
+      continue;
+    }
+    if (ch === "/" && line[index + 1] === "/") {
+      return false;
+    }
+    if (ch === "{" || ch === "}") {
+      return true;
+    }
+  }
+  return false;
+}
+
+function sourceOutlineStructuralSignature(source) {
+  const lines = String(source || "").split("\n");
+  const structural = [];
+  for (const line of lines) {
+    if (!sourceLineHasStructuralBrace(line)) {
+      continue;
+    }
+    structural.push(stripSourceStructureLineComment(line).trim());
+  }
+  return structural.join("\n");
+}
+
+function markSourceOutlineDirtyForSource(source, options = {}) {
+  const signature = sourceOutlineStructuralSignature(source);
+  if (options.force === true || signature !== sourceOutlineSignature) {
+    sourceOutlineSignature = signature;
+    sourceOutlineDirty = true;
+    return true;
+  }
+  return false;
+}
+
+function sourceOutlineShouldRefreshForSource(source, options = {}) {
+  markSourceOutlineDirtyForSource(source, options);
+  return sourceOutlineDirty && sourceOutlineVisible();
+}
+
 async function refreshSourceHighlight() {
   const document = activeDocument();
   if (!sourceHighlight || !isPuzzleDocument(document) || !isTextDocument(document)) {
@@ -1206,13 +1310,14 @@ async function refreshSourceHighlight() {
   }
   const source = sourceEditorDocumentValue();
   const displaySource = sourceEditor.value || "";
+  const includeOutline = sourceOutlineShouldRefreshForSource(source);
   const requestId = ++sourceHighlightRequestId;
   const controller = new AbortController();
   activeHighlightRequest = controller;
 
   try {
     const text = await window.PuzzleStudioHost.highlight(
-      { source },
+      { source, includeOutline },
       { signal: controller.signal },
     );
     if (
@@ -1224,6 +1329,9 @@ async function refreshSourceHighlight() {
     }
     syncSourceHighlightMetrics();
     const payload = JSON.parse(text);
+    if (payload.outline) {
+      applySourceOutlinePayload(payload.outline, source);
+    }
     if (sourceFoldsActive()) {
       const foldedRuns = sourceFoldHighlightRuns(sourceHighlightRunsFromHtml(payload.html || escapeHtml(source || " ")), source);
       setSourceHighlightHtml(displaySource, sourceHighlightRunsToHtml(foldedRuns), "server", foldedRuns);
@@ -1246,6 +1354,327 @@ async function refreshSourceHighlight() {
     if (activeHighlightRequest === controller) {
       activeHighlightRequest = null;
     }
+  }
+}
+
+function scheduleSourceOutlineRefresh(immediate = false, options = {}) {
+  const source = sourceEditorDocumentValue();
+  if (!sourceOutlineShouldRefreshForSource(source, options)) {
+    return;
+  }
+  if (sourceHighlightTimer) {
+    return;
+  }
+  window.clearTimeout(sourceOutlineTimer);
+  sourceOutlineTimer = window.setTimeout(() => {
+    sourceOutlineTimer = 0;
+    refreshSourceOutline();
+  }, immediate ? 0 : 160);
+}
+
+async function refreshSourceOutline() {
+  const document = activeDocument();
+  const requestId = ++sourceOutlineRequestId;
+  if (!sourceOutlineList) {
+    return;
+  }
+  if (!document || !isPuzzleDocument(document) || !isTextDocument(document)) {
+    sourceOutlineItems = [];
+    renderSourceOutlineEmpty("No outline");
+    return;
+  }
+  const source = sourceEditorDocumentValue();
+  if (!sourceOutlineShouldRefreshForSource(source)) {
+    return;
+  }
+  try {
+    const text = await window.PuzzleStudioHost.sourceOutline({ source });
+    if (requestId !== sourceOutlineRequestId || source !== sourceEditorDocumentValue()) {
+      return;
+    }
+    const payload = JSON.parse(text || "{}");
+    applySourceOutlinePayload(payload, source);
+  } catch (error) {
+    if (error.name === "AbortError") {
+      return;
+    }
+    if (requestId !== sourceOutlineRequestId) {
+      return;
+    }
+    sourceOutlineItems = [];
+    renderSourceOutlineEmpty(`Outline unavailable: ${userFacingRuntimeError(error)}`);
+  }
+}
+
+function applySourceOutlinePayload(payload, source) {
+  sourceOutlineItems = normalizeSourceOutlineItems(payload?.items, source);
+  sourceOutlineDirty = false;
+  sourceOutlineSignature = sourceOutlineStructuralSignature(source);
+  renderSourceOutline();
+  syncSourceOutlineActiveItem();
+}
+
+function normalizeSourceOutlineItems(items, source) {
+  return (Array.isArray(items) ? items : []).map((item) => {
+    const start = sourceUtf16OffsetFromByteOffset(source, Number(item?.start) || 0);
+    const end = sourceUtf16OffsetFromByteOffset(source, Number(item?.end) || Number(item?.start) || 0);
+    return {
+      id: String(item?.id || ""),
+      kind: String(item?.kind || "item"),
+      label: String(item?.label || item?.kind || "item"),
+      start,
+      end: Math.max(start, end),
+      depth: Math.max(0, Math.min(8, Number(item?.depth) || 0)),
+      parent: item?.parent == null ? "" : String(item.parent),
+    };
+  }).filter((item) => item.id && Number.isFinite(item.start));
+}
+
+function renderSourceOutline() {
+  if (!sourceOutlineList) {
+    return;
+  }
+  if (!sourceOutlineItems.length) {
+    renderSourceOutlineEmpty("No outline");
+    return;
+  }
+  sourceOutlineList.replaceChildren(...sourceOutlineItems.map((item) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "source-outline-row";
+    button.dataset.sourceOutlineId = item.id;
+    button.dataset.sourceOutlineStart = String(item.start);
+    button.style.setProperty("--depth", String(item.depth));
+    button.setAttribute("role", "treeitem");
+    button.setAttribute("aria-label", item.label);
+    button.title = item.label;
+    const kind = document.createElement("span");
+    kind.className = "source-outline-kind";
+    kind.innerHTML = sourceOutlineKindIconSvg(item.kind);
+    const label = document.createElement("span");
+    label.className = "source-outline-label";
+    label.textContent = item.label;
+    button.append(kind, label);
+    return button;
+  }));
+}
+
+function renderSourceOutlineEmpty(message) {
+  if (!sourceOutlineList) {
+    return;
+  }
+  const empty = document.createElement("div");
+  empty.className = "source-outline-empty";
+  empty.textContent = message;
+  sourceOutlineList.replaceChildren(empty);
+}
+
+function sourceOutlineKindIconName(kind) {
+  const text = String(kind || "").trim();
+  if (text === "puzzle" || text === "puzzle3") {
+    return "box";
+  }
+  if (text === "levels" || text === "levels3") {
+    return "map";
+  }
+  if (text === "level") {
+    return "grid-3x3";
+  }
+  if (text === "sprites" || text === "sprites3" || text === "sprite") {
+    return "image";
+  }
+  if (text === "objects" || text === "object" || text === "groups" || text === "tags") {
+    return "circle-dot";
+  }
+  if (text === "rules" || text === "rule") {
+    return "git-branch";
+  }
+  if (text === "win_conditions") {
+    return "trophy";
+  }
+  if (text === "lose_conditions") {
+    return "circle-x";
+  }
+  if (text === "scene" || text === "screen" || text === "layout" || text === "level_menu") {
+    return "panels-top-left";
+  }
+  if (text === "assets" || text === "resources") {
+    return "package";
+  }
+  if (text === "theme" || text === "colors" || text === "legend") {
+    return "palette";
+  }
+  if (text === "sounds") {
+    return "volume-2";
+  }
+  if (text === "keys") {
+    return "keyboard";
+  }
+  if (text === "layers" || text === "collision_layers") {
+    return "layers";
+  }
+  if (text === "metadata") {
+    return "info";
+  }
+  if (text === "fix") {
+    return "wrench";
+  }
+  if (text.startsWith("on_")) {
+    return "zap";
+  }
+  return "file-code-2";
+}
+
+function sourceOutlineKindIconSvg(kind) {
+  const name = sourceOutlineKindIconName(kind);
+  const icons = {
+    box: `
+      <path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"></path>
+      <path d="m3.3 7 8.7 5 8.7-5"></path>
+      <path d="M12 22V12"></path>
+    `,
+    map: `
+      <path d="M14.106 5.553a2 2 0 0 0 1.788 0l3.659-1.83A1 1 0 0 1 21 4.619v12.764a1 1 0 0 1-.553.894l-4.553 2.277a2 2 0 0 1-1.788 0l-4.212-2.106a2 2 0 0 0-1.788 0l-3.659 1.83A1 1 0 0 1 3 19.381V6.618a1 1 0 0 1 .553-.894l4.553-2.277a2 2 0 0 1 1.788 0z"></path>
+      <path d="M15 5.764v15"></path>
+      <path d="M9 3.236v15"></path>
+    `,
+    "grid-3x3": `
+      <rect width="18" height="18" x="3" y="3" rx="2"></rect>
+      <path d="M3 9h18"></path>
+      <path d="M3 15h18"></path>
+      <path d="M9 3v18"></path>
+      <path d="M15 3v18"></path>
+    `,
+    image: `
+      <rect width="18" height="18" x="3" y="3" rx="2" ry="2"></rect>
+      <circle cx="9" cy="9" r="2"></circle>
+      <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"></path>
+    `,
+    "circle-dot": `
+      <circle cx="12" cy="12" r="10"></circle>
+      <circle cx="12" cy="12" r="1"></circle>
+    `,
+    "git-branch": `
+      <line x1="6" x2="6" y1="3" y2="15"></line>
+      <circle cx="18" cy="6" r="3"></circle>
+      <circle cx="6" cy="18" r="3"></circle>
+      <path d="M18 9a9 9 0 0 1-9 9"></path>
+    `,
+    trophy: `
+      <path d="M10 14.66v1.626a2 2 0 0 1-.976 1.696A5 5 0 0 0 7 21.978"></path>
+      <path d="M14 14.66v1.626a2 2 0 0 0 .976 1.696A5 5 0 0 1 17 21.978"></path>
+      <path d="M18 9h1.5a1 1 0 0 0 0-5H18"></path>
+      <path d="M4 22h16"></path>
+      <path d="M6 9a6 6 0 0 0 12 0V3a1 1 0 0 0-1-1H7a1 1 0 0 0-1 1z"></path>
+      <path d="M6 9H4.5a1 1 0 0 1 0-5H6"></path>
+    `,
+    "circle-x": `
+      <circle cx="12" cy="12" r="10"></circle>
+      <path d="m15 9-6 6"></path>
+      <path d="m9 9 6 6"></path>
+    `,
+    "panels-top-left": `
+      <rect width="18" height="18" x="3" y="3" rx="2"></rect>
+      <path d="M3 9h18"></path>
+      <path d="M9 21V9"></path>
+    `,
+    package: `
+      <path d="m7.5 4.27 9 5.15"></path>
+      <path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"></path>
+      <path d="m3.3 7 8.7 5 8.7-5"></path>
+      <path d="M12 22V12"></path>
+    `,
+    palette: `
+      <circle cx="13.5" cy="6.5" r=".5" fill="currentColor"></circle>
+      <circle cx="17.5" cy="10.5" r=".5" fill="currentColor"></circle>
+      <circle cx="8.5" cy="7.5" r=".5" fill="currentColor"></circle>
+      <circle cx="6.5" cy="12.5" r=".5" fill="currentColor"></circle>
+      <path d="M12 22C6.477 22 2 17.523 2 12S6.477 2 12 2s10 4.477 10 10c0 1.657-1.343 3-3 3h-1.5a2.5 2.5 0 0 0 0 5H19a3 3 0 0 1-3 3z"></path>
+    `,
+    "volume-2": `
+      <path d="M11 4.702a1 1 0 0 0-1.664-.747L5.23 7.5H3a1 1 0 0 0-1 1v7a1 1 0 0 0 1 1h2.23l4.106 3.545A1 1 0 0 0 11 19.298z"></path>
+      <path d="M16 9a5 5 0 0 1 0 6"></path>
+      <path d="M19.364 18.364a9 9 0 0 0 0-12.728"></path>
+    `,
+    keyboard: `
+      <path d="M10 8h.01"></path>
+      <path d="M12 12h.01"></path>
+      <path d="M14 8h.01"></path>
+      <path d="M16 12h.01"></path>
+      <path d="M18 8h.01"></path>
+      <path d="M6 8h.01"></path>
+      <path d="M7 16h10"></path>
+      <path d="M8 12h.01"></path>
+      <rect width="20" height="16" x="2" y="4" rx="2"></rect>
+    `,
+    layers: `
+      <path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83z"></path>
+      <path d="m22 12.5-9.17 4.18a2 2 0 0 1-1.66 0L2 12.5"></path>
+      <path d="m22 17.5-9.17 4.18a2 2 0 0 1-1.66 0L2 17.5"></path>
+    `,
+    info: `
+      <circle cx="12" cy="12" r="10"></circle>
+      <path d="M12 16v-4"></path>
+      <path d="M12 8h.01"></path>
+    `,
+    wrench: `
+      <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94z"></path>
+    `,
+    zap: `
+      <path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"></path>
+    `,
+    "file-code-2": `
+      <path d="M4 22h14a2 2 0 0 0 2-2V7l-5-5H6a2 2 0 0 0-2 2v4"></path>
+      <path d="M14 2v4a2 2 0 0 0 2 2h4"></path>
+      <path d="m5 12-3 3 3 3"></path>
+      <path d="m9 18 3-3-3-3"></path>
+    `,
+  };
+  const paths = icons[name];
+  if (!paths) {
+    throw new Error(`Unknown source outline lucide icon ${name}`);
+  }
+  return `
+    <svg xmlns="http://www.w3.org/2000/svg" class="source-outline-icon lucide lucide-${name}-icon lucide-${name}" viewBox="0 0 24 24" aria-hidden="true">
+      ${paths}
+    </svg>
+  `;
+}
+
+function openSourceOutlineItem(itemId) {
+  const item = sourceOutlineItems.find((entry) => entry.id === itemId);
+  const document = activeDocument();
+  if (!item || !document) {
+    return false;
+  }
+  const opened = revealSourceLocation({
+    document,
+    start: item.start,
+  });
+  if (opened) {
+    syncSourceOutlineActiveItem();
+    sourceEditor.focus({ preventScroll: true });
+  }
+  return opened;
+}
+
+function syncSourceOutlineActiveItem() {
+  if (!sourceOutlineList || !sourceOutlineItems.length) {
+    return;
+  }
+  const cursor = sourceViewOffsetToDocumentOffset(sourceEditor.selectionStart || 0, "start");
+  let active = null;
+  for (const item of sourceOutlineItems) {
+    if (cursor >= item.start && cursor <= Math.max(item.end, item.start)) {
+      if (!active || item.start >= active.start) {
+        active = item;
+      }
+    } else if (!active && cursor >= item.start) {
+      active = item;
+    }
+  }
+  for (const row of sourceOutlineList.querySelectorAll("[data-source-outline-id]")) {
+    row.classList.toggle("is-active", active?.id === row.dataset.sourceOutlineId);
   }
 }
 
@@ -2599,6 +3028,7 @@ sourceEditor.addEventListener("input", () => {
   }
   clearSourceCompositionPreview();
   scheduleSourceHighlight();
+  scheduleSourceOutlineRefresh();
   hideSourceImportLinkFrame();
   clearSourceBlockSelection();
   sourceEditorPreferredCaretX = null;
@@ -3738,6 +4168,7 @@ function sourceEditorContentChanged() {
     }
   }
   scheduleSourceHighlight();
+  scheduleSourceOutlineRefresh();
   recordSourceUndoSnapshot();
   updateSourceMeta();
   refreshSourceColorEditor();
@@ -5135,6 +5566,7 @@ function insertAtSelection(value) {
     documents[currentDocumentIndex].source = sourceEditorDocumentValue();
   }
   scheduleSourceHighlight();
+  scheduleSourceOutlineRefresh();
   scheduleLocalSave();
   schedulePreview();
   hideSourceCompletions();
@@ -5155,6 +5587,7 @@ function setSourceEditorText(value, selectionStart = null, selectionEnd = select
     documents[currentDocumentIndex].source = sourceEditorDocumentValue();
   }
   scheduleSourceHighlight();
+  scheduleSourceOutlineRefresh(true);
   resetLevelBuilderFromSource(false);
 }
 
@@ -5163,7 +5596,27 @@ sourceEditor.addEventListener("scroll", syncSourceHighlightScroll);
 sourceEditor.addEventListener("scroll", hideSourceColorEditor);
 sourceEditor.addEventListener("scroll", hideSourceCompletions);
 sourceEditor.addEventListener("scroll", hideSourceImportLinkFrame);
+sourceEditor.addEventListener("click", syncSourceOutlineActiveItem);
+sourceEditor.addEventListener("keyup", syncSourceOutlineActiveItem);
 sourceLineNumbers?.addEventListener("click", handleSourceFoldGutterClick);
+sourceOutlineList?.addEventListener("click", (event) => {
+  const row = event.target.closest("[data-source-outline-id]");
+  if (!row || !sourceOutlineList.contains(row)) {
+    return;
+  }
+  openSourceOutlineItem(row.dataset.sourceOutlineId);
+});
+sourceOutlineList?.addEventListener("keydown", (event) => {
+  if (!["Enter", " "].includes(event.key)) {
+    return;
+  }
+  const row = event.target.closest("[data-source-outline-id]");
+  if (!row || !sourceOutlineList.contains(row)) {
+    return;
+  }
+  event.preventDefault();
+  openSourceOutlineItem(row.dataset.sourceOutlineId);
+});
 document.addEventListener("pointerdown", hideSourceColorEditorForOutsidePointer);
 window.addEventListener("resize", syncSourceHighlightScroll);
 window.addEventListener("resize", renderSourceLineNumbers);

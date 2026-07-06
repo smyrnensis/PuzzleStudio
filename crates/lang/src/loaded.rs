@@ -298,6 +298,7 @@ pub struct VisualColorDef {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PuzzleRenderDef {
     pub grid: PuzzleGridRenderDef,
+    pub cell_size: Option<u16>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

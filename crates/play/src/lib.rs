@@ -10,9 +10,10 @@ use puzzle_core::{
     transition_program_segment_trace,
 };
 use puzzle_lang::{
-    AsciiLegend, Level, LevelMenuDef, LoadedGame, ModelOperationSound, ResourceSelection,
-    RuleAnimation, RuleAnimationTrigger, RuleEffect, SceneBinaryOp, SceneComponent, SceneEffect,
-    SceneEffectParam, SceneExpr, ScenePuzzleInitializer, SceneTransitionTrigger, SceneValue,
+    AsciiLegend, Level, LevelMenuDef, LoadedDocument, LoadedDocumentModel, LoadedGame,
+    ModelOperationSound, ResourceSelection, RuleAnimation, RuleAnimationTrigger, RuleEffect,
+    SceneBinaryOp, SceneComponent, SceneDef, SceneEffect, SceneEffectParam, SceneExpr,
+    ScenePuzzleInitializer, SceneTransitionTrigger, SceneValue, parse_game2d,
     parse_scene_effect_params, parse_scene_expression,
 };
 
@@ -21,6 +22,128 @@ mod runtime_sounds;
 pub use runtime_sounds::{
     RuntimeMusicSoundDef, RuntimeSfxSoundDef, RuntimeSoundsDef, runtime_sounds_def,
 };
+
+const PUZZLE3_SCENE_HOST_SOURCE: &str = r#"
+title "__puzzle3_scene_host__"
+
+puzzle scene_host {
+layers {
+  marker = Marker
+}
+empty .
+rules {
+}
+}
+
+levels scene_host_levels of scene_host {
+legend M = Marker
+level "scene_host" {
+M
+}
+}
+"#;
+
+pub fn mixed_document_loaded_game(document: &LoadedDocument) -> Result<LoadedGame, String> {
+    let Some(LoadedDocumentModel::Puzzle2d { game, .. }) = document
+        .models
+        .iter()
+        .find(|model| matches!(model, LoadedDocumentModel::Puzzle2d { .. }))
+    else {
+        return Err("mixed document runtime requires a 2D puzzle model host".to_string());
+    };
+    let mut loaded = game.clone();
+    copy_document_shell_to_loaded_game(document, &mut loaded);
+    loaded.scenes = document
+        .scenes
+        .iter()
+        .cloned()
+        .map(scene_with_only_2d_puzzle_state)
+        .collect();
+    Ok(loaded)
+}
+
+pub fn puzzle3_document_scene_host_loaded_game(
+    document: &LoadedDocument,
+) -> Result<LoadedGame, String> {
+    let mut loaded = parse_game2d(PUZZLE3_SCENE_HOST_SOURCE).map_err(|error| error.to_string())?;
+    let prototype_level = loaded
+        .levels
+        .first()
+        .cloned()
+        .ok_or_else(|| "puzzle3 scene host must contain a prototype level".to_string())?;
+    let Some(LoadedDocumentModel::Puzzle3d { name, puzzle }) = document
+        .models
+        .iter()
+        .find(|model| matches!(model, LoadedDocumentModel::Puzzle3d { .. }))
+    else {
+        return Err("puzzle3 scene host requires a 3D puzzle model".to_string());
+    };
+    let Some(bundle) = puzzle.level_bundle.as_ref() else {
+        return Err("puzzle3 scene host requires 3D levels".to_string());
+    };
+
+    copy_document_shell_to_loaded_game(document, &mut loaded);
+    loaded.scenes = document
+        .scenes
+        .iter()
+        .cloned()
+        .map(scene_without_model_puzzle_state)
+        .collect();
+    loaded.levels = bundle
+        .levels
+        .iter()
+        .map(|entry| Level {
+            name: entry.name.clone(),
+            pack: None,
+            puzzle: name.clone(),
+            initial_state: prototype_level.initial_state.clone(),
+            regions: Vec::new(),
+            level_start_program: None,
+            level_clear_program: None,
+        })
+        .collect();
+    Ok(loaded)
+}
+
+fn copy_document_shell_to_loaded_game(document: &LoadedDocument, loaded: &mut LoadedGame) {
+    loaded.title = document.title.clone();
+    loaded.subtitle = document.subtitle.clone();
+    loaded.author = document.author.clone();
+    loaded.homepage = document.homepage.clone();
+    loaded.default_wait_ms = document.default_wait_ms;
+    loaded.default_again_ms = document.default_again_ms;
+    loaded.input_buffer = document.input_buffer.clone();
+    loaded.animation = document.animation.clone();
+    loaded.sounds = document.sounds.clone();
+    loaded.theme = document.theme.clone();
+    loaded.assets = document.assets.clone();
+}
+
+fn scene_with_only_2d_puzzle_state(mut scene: SceneDef) -> SceneDef {
+    scene.state.puzzles.retain(|puzzle| puzzle.kind == "puzzle");
+    if let Some(rule) = &scene.puzzle_rule {
+        let target = rule
+            .target
+            .split('.')
+            .next_back()
+            .unwrap_or(rule.target.as_str());
+        if !scene
+            .state
+            .puzzles
+            .iter()
+            .any(|puzzle| puzzle.name == target)
+        {
+            scene.puzzle_rule = None;
+        }
+    }
+    scene
+}
+
+fn scene_without_model_puzzle_state(mut scene: SceneDef) -> SceneDef {
+    scene.state.puzzles.clear();
+    scene.puzzle_rule = None;
+    scene
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SoundEvent {
@@ -4095,6 +4218,17 @@ mod tests {
             .iter()
             .find_map(|(input, label)| (label == name).then_some(*input))
             .unwrap()
+    }
+
+    #[test]
+    fn puzzle3_scene_host_loaded_game_uses_shared_level_header_syntax() {
+        let source = include_str!("../../../games/spec_3d.puzzle3");
+        let document = puzzle_lang::parse_game_for_path(source, "games/spec_3d.puzzle3").unwrap();
+        let loaded = puzzle3_document_scene_host_loaded_game(&document).unwrap();
+
+        assert_eq!(loaded.title, "Microban 3D");
+        assert_eq!(loaded.levels.len(), 3);
+        assert_eq!(loaded.levels[0].name, "microban 1");
     }
 
     #[test]

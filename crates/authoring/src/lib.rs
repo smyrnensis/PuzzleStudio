@@ -48,6 +48,72 @@ pub fn split_header_tokens(line: &str) -> Vec<&str> {
     tokens
 }
 
+pub fn parse_quoted_text(value: &str) -> Option<String> {
+    let inner = value.strip_prefix('"')?.strip_suffix('"')?;
+    Some(inner.replace("\\\"", "\""))
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LevelHeaderNameError {
+    InvalidSyntax,
+    EmptyName,
+}
+
+impl LevelHeaderNameError {
+    pub fn message(self) -> &'static str {
+        match self {
+            Self::InvalidSyntax => "level header must be: level \"<id>\"",
+            Self::EmptyName => "level id must not be empty",
+        }
+    }
+}
+
+pub fn parse_level_header_name_or_auto(
+    line: &str,
+    auto_name: String,
+) -> Result<String, LevelHeaderNameError> {
+    let Some(rest) = line.trim().strip_prefix("level") else {
+        return Err(LevelHeaderNameError::InvalidSyntax);
+    };
+    if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
+        return Err(LevelHeaderNameError::InvalidSyntax);
+    }
+    let name_text = strip_level_header_block_opener(rest.trim()).trim();
+    if name_text.is_empty() {
+        return Ok(auto_name);
+    }
+    let Some(name) = parse_quoted_text(name_text) else {
+        return Err(LevelHeaderNameError::InvalidSyntax);
+    };
+    if name.is_empty() {
+        return Err(LevelHeaderNameError::EmptyName);
+    }
+    Ok(name)
+}
+
+pub fn strip_level_header_block_opener(value: &str) -> &str {
+    value.strip_suffix('{').map(str::trim_end).unwrap_or(value)
+}
+
+pub fn is_braced_level_header(line: &str) -> bool {
+    line.trim_end().ends_with('{') && matches!(split_header_tokens(line).as_slice(), ["level", ..])
+}
+
+pub fn unnamed_level_name(existing_count: usize) -> String {
+    format!("unnamed level {}", existing_count + 1)
+}
+
+pub fn namespaced_unnamed_level_name(
+    namespace: Option<&str>,
+    existing_count: usize,
+    namespace_count: usize,
+) -> String {
+    match namespace {
+        Some(namespace) => format!("{namespace}.{namespace_count}"),
+        None => unnamed_level_name(existing_count),
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KeyBindingSurface<'a> {
     pub keys: Vec<&'a str>,

@@ -98,10 +98,13 @@
     },
 
     async highlightSource(payload = {}) {
-      const highlight = await requireWasmFunction("highlight_source_html");
-      return JSON.stringify({
-        html: highlight(asString(payload.source)),
-      });
+      const highlight = await requireWasmFunction("highlight_source_json");
+      return highlight(asString(payload.source), Boolean(payload.includeOutline));
+    },
+
+    async sourceOutline(payload = {}) {
+      const outline = await requireWasmFunction("source_outline_json");
+      return outline(asString(payload.source));
     },
 
     async translatePuzzleScript(source) {

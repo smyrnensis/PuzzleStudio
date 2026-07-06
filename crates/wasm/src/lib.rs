@@ -53,6 +53,47 @@ pub fn highlight_source_html(source: &str) -> String {
 }
 
 #[wasm_bindgen]
+pub fn highlight_source_json(source: &str, include_outline: bool) -> String {
+    if include_outline {
+        let highlighted = puzzle_lang::highlight_source_with_outline(source);
+        return highlighted_source_json(
+            &highlighted.highlighted,
+            Some(highlighted.outline.as_slice()),
+        );
+    }
+    let highlighted = puzzle_lang::highlight_source(source);
+    highlighted_source_json(&highlighted, None)
+}
+
+fn highlighted_source_json(
+    highlighted: &puzzle_lang::HighlightedSource,
+    outline: Option<&[puzzle_lang::SourceOutlineItem]>,
+) -> String {
+    let mut out = String::from("{");
+    out.push_str("\"parsed\":");
+    out.push_str(if highlighted.parsed { "true" } else { "false" });
+    out.push(',');
+    push_json_pair(&mut out, "html", &highlighted.html);
+    if let Some(items) = outline {
+        out.push_str(",\"outline\":{\"items\":[");
+        for (index, item) in items.iter().enumerate() {
+            if index > 0 {
+                out.push(',');
+            }
+            push_source_outline_item_json(&mut out, item);
+        }
+        out.push_str("]}");
+    }
+    out.push('}');
+    out
+}
+
+#[wasm_bindgen]
+pub fn source_outline_json(source: &str) -> String {
+    puzzle_lang::source_outline_json(source)
+}
+
+#[wasm_bindgen]
 pub fn translate_puzzlescript(source: &str) -> Result<String, JsValue> {
     puzzle_lang::translate_puzzlescript_to_canonical(source)
         .map_err(|error| JsValue::from_str(&error.to_string()))
@@ -174,11 +215,37 @@ fn push_diagnostic_json(out: &mut String, diagnostic: &puzzle_lang::Diagnostic) 
     out.push('}');
 }
 
-#[cfg(test)]
+fn push_source_outline_item_json(out: &mut String, item: &puzzle_lang::SourceOutlineItem) {
+    out.push('{');
+    push_json_pair(out, "id", &item.id);
+    out.push(',');
+    push_json_pair(out, "kind", &item.kind);
+    out.push(',');
+    push_json_pair(out, "label", &item.label);
+    out.push(',');
+    push_json_number(out, "start", item.start);
+    out.push(',');
+    push_json_number(out, "end", item.end);
+    out.push(',');
+    push_json_number(out, "depth", item.depth);
+    out.push_str(",\"parent\":");
+    match item.parent.as_deref() {
+        Some(parent) => push_json_string(out, parent),
+        None => out.push_str("null"),
+    }
+    out.push('}');
+}
+
 fn push_json_pair(out: &mut String, key: &str, value: &str) {
     push_json_string(out, key);
     out.push(':');
     push_json_string(out, value);
+}
+
+fn push_json_number(out: &mut String, key: &str, value: usize) {
+    push_json_string(out, key);
+    out.push(':');
+    out.push_str(&value.to_string());
 }
 
 #[cfg(test)]
@@ -201,7 +268,6 @@ fn push_json_option_string(out: &mut String, key: &str, value: Option<&str>) {
     }
 }
 
-#[cfg(test)]
 fn push_json_string(out: &mut String, value: &str) {
     out.push('"');
     for ch in value.chars() {
@@ -257,7 +323,7 @@ fn set_js_optional_string(payload: &js_sys::Object, key: &str, value: Option<&st
 
 #[cfg(test)]
 mod tests {
-    use super::{compile_preview, diagnostic_report_json};
+    use super::{compile_preview, diagnostic_report_json, highlight_source_json};
 
     #[test]
     fn compile_preview_accepts_display_object_single_color_sprite() {
@@ -309,5 +375,25 @@ level "start"
         assert!(json.contains(r#""line":9"#));
         assert!(json.contains(r#""sourceLine":"action jump""#));
         assert!(json.contains(r#""message":"`action` statements were removed""#));
+    }
+
+    #[test]
+    fn highlight_source_json_includes_outline_only_when_requested() {
+        let source = r#"
+puzzle board {
+  rules {
+  }
+}
+"#;
+
+        let without_outline = highlight_source_json(source, false);
+        assert!(without_outline.contains(r#""html":"#));
+        assert!(!without_outline.contains(r#""outline":"#));
+
+        let with_outline = highlight_source_json(source, true);
+        assert!(with_outline.contains(r#""html":"#));
+        assert!(with_outline.contains(r#""outline":{"items":["#));
+        assert!(with_outline.contains(r#""label":"puzzle board""#));
+        assert!(with_outline.contains(r#""label":"rules""#));
     }
 }

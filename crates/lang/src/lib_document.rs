@@ -2551,6 +2551,7 @@ fn parse_game2d_expanded_lines_with_shell_inner(
         &catalog.constant_globals,
     );
     warnings.extend(collect_visual_overwrite_warnings(&visuals));
+    warnings.extend(collect_visual_sprite_grid_warnings(&visuals));
     let programs = lower_programs(
         rule_definitions,
         main_statements,
@@ -2958,6 +2959,67 @@ fn collect_visual_overwrite_warnings(visuals: &VisualsDef) -> Vec<String> {
         "later definition overwrites earlier sprite in generated visuals",
     );
     warnings
+}
+
+#[derive(Clone, Copy)]
+struct VisualSpriteGrid {
+    width: u32,
+    height: u32,
+}
+
+fn collect_visual_sprite_grid_warnings(visuals: &VisualsDef) -> Vec<String> {
+    let grids = visuals
+        .sprites
+        .iter()
+        .filter_map(|sprite| visual_sprite_grid(sprite).map(|grid| (sprite.name.as_str(), grid)))
+        .collect::<Vec<_>>();
+    let largest = grids
+        .iter()
+        .flat_map(|(_, grid)| [grid.width, grid.height])
+        .max()
+        .unwrap_or(1);
+    if largest <= 1 {
+        return Vec::new();
+    }
+
+    let mut warnings = Vec::new();
+    for (name, grid) in grids {
+        if largest % grid.width == 0 && largest % grid.height == 0 {
+            continue;
+        }
+        push_unique_warning(
+            &mut warnings,
+            format!(
+                "visual sprite `{name}` uses a {}x{} cell grid that does not divide the largest sprite grid {largest}; sprite grids should divide the largest grid because the renderer uses the largest sprite grid as the canvas unit",
+                grid.width, grid.height
+            ),
+        );
+    }
+    warnings
+}
+
+fn visual_sprite_grid(sprite: &VisualSpriteDef) -> Option<VisualSpriteGrid> {
+    if let Some(pixels) = sprite.pixels_per_cell {
+        return Some(VisualSpriteGrid {
+            width: pixels.width,
+            height: pixels.height,
+        });
+    }
+    match &sprite.kind {
+        VisualSpriteKind::Solid(_) => Some(VisualSpriteGrid {
+            width: 1,
+            height: 1,
+        }),
+        VisualSpriteKind::Image { .. } => None,
+        VisualSpriteKind::Ascii { pattern, .. } => Some(VisualSpriteGrid {
+            width: pattern
+                .iter()
+                .map(|row| row.chars().count() as u32)
+                .max()
+                .unwrap_or(1),
+            height: pattern.len().max(1) as u32,
+        }),
+    }
 }
 
 fn collect_duplicate_output_key_warnings<'a>(

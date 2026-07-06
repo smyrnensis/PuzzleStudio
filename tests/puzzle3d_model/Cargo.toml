@@ -5,6 +5,7 @@ edition = "2024"
 license = "UNLICENSED"
 
 [dependencies]
+puzzle-authoring = { path = "../../crates/authoring" }
 puzzle-scene = { path = "../../crates/scene" }
 
 [workspace]

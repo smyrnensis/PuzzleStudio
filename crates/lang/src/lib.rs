@@ -8,6 +8,7 @@ mod loaded;
 mod puzzlescript;
 mod semantic;
 mod source;
+mod source_outline;
 mod source_target;
 mod surface;
 mod syntax;
@@ -30,7 +31,10 @@ pub use completion::{
     suggest_source_completions,
 };
 pub use error::{Diagnostic, DiagnosticReport, DiagnosticSeverity, DiagnosticSpan};
-pub use highlight::{HighlightedSource, highlight_source};
+pub use highlight::{
+    HighlightedSource, HighlightedSourceWithOutline, highlight_source,
+    highlight_source_with_outline,
+};
 use level::{LevelBlock, parse_level};
 pub use loaded::{
     AnimationDef, ArrowKey, AsciiLegend, AssetDef, AssetKind, AssetsDef, Controls, ForSource,
@@ -84,9 +88,11 @@ use source::{
     SourceScope, SourceToken, logical_lines, logical_lines_with_locations, scan_source_context,
     source_line_tokens, split_header_tokens, strip_line_comment,
 };
+pub use source_outline::{SourceOutlineItem, source_outline, source_outline_json};
 pub use source_target::{
-    SoundSourceTargetKind, SourceTarget, SourceTargetKind, resolve_source_target,
-    source_target_json,
+    SoundSourceTargetKind, SourceSpriteColorAsset, SourceSpritePaletteEntry,
+    SourceSpriteShapeAsset, SourceSpriteTarget, SourceTarget, SourceTargetKind,
+    resolve_source_target, source_target_json,
 };
 use surface::{
     SourceSpan, SurfaceDocument, SurfaceNodeKind, SurfaceRewriteEffect, SurfaceSceneEffect,

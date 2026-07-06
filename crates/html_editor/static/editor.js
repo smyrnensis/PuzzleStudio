@@ -424,6 +424,8 @@ let previewTimer = 0;
 let previewFrameObjectUrl = "";
 let previewFrameLoadId = 0;
 const previewRuntimeAssetWindows = new WeakSet();
+const editorPreviewProgressSaves = new Map();
+const editorPreviewProgressSaveStoreKey = "PuzzleStudioPreviewProgressSaves:v1";
 let previewViewportSyncFrame = 0;
 let previewViewportSyncPasses = 0;
 let currentPreviewTheme = null;
@@ -448,6 +450,35 @@ let completedSolverTaskKey = "";
 let levelSolutionPreview = null;
 let solverObservationPreview = null;
 let levelSolveSummaryText = "";
+
+function loadEditorPreviewProgressSaves() {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(editorPreviewProgressSaveStoreKey) || "{}");
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return;
+    }
+    for (const [key, value] of Object.entries(parsed)) {
+      if (typeof key === "string" && typeof value === "string") {
+        editorPreviewProgressSaves.set(key, value);
+      }
+    }
+  } catch (error) {
+    console.warn("Preview progress could not be loaded from editor storage.", error);
+  }
+}
+
+function saveEditorPreviewProgressSaves() {
+  try {
+    window.localStorage.setItem(
+      editorPreviewProgressSaveStoreKey,
+      JSON.stringify(Object.fromEntries(editorPreviewProgressSaves)),
+    );
+  } catch (error) {
+    console.warn("Preview progress could not be saved to editor storage.", error);
+  }
+}
+
+loadEditorPreviewProgressSaves();
 let levelSolutionTimer = 0;
 let solverObservationTimer = 0;
 let levelSolveFlashTimer = 0;
@@ -492,6 +523,7 @@ let sprite = {
   editSourceBodyStart: null,
   editSourceBodyEnd: null,
   editSourceName: "",
+  sourceSpriteContract: null,
   selectedColorIndex: 0,
   addPaletteOpen: false,
   editPaletteOpen: false,
@@ -500,6 +532,7 @@ let sprite = {
   paletteBind: null,
   shapeBind: null,
   solidSource: false,
+  sourcePreludeRows: [],
   cells: [],
   palette: [
     { color: "#ff004d" },
@@ -610,6 +643,8 @@ function visualEditSnapshot(kind) {
         paletteBind: cloneVisualEditValue(sprite.paletteBind || null),
         shapeBind: cloneVisualEditValue(sprite.shapeBind || null),
         solidSource: Boolean(sprite.solidSource),
+        sourcePreludeRows: cloneVisualEditValue(sprite.sourcePreludeRows || []),
+        sourceSpriteContract: cloneVisualEditValue(sprite.sourceSpriteContract || null),
       },
     };
   }
@@ -712,6 +747,8 @@ function restoreVisualEditSnapshot(snapshot) {
     sprite.paletteBind = cloneVisualEditValue(state.paletteBind || null);
     sprite.shapeBind = cloneVisualEditValue(state.shapeBind || null);
     sprite.solidSource = Boolean(state.solidSource);
+    sprite.sourcePreludeRows = cloneVisualEditValue(state.sourcePreludeRows || []);
+    sprite.sourceSpriteContract = cloneVisualEditValue(state.sourceSpriteContract || null);
     sprite.addPaletteOpen = false;
     sprite.editPaletteOpen = false;
     sprite.customColorOpen = false;
@@ -904,7 +941,13 @@ function updateToolPaneSourceForMode(mode) {
     if (typeof updateSpriteInSource !== "function") {
       return reportToolPaneSourceUpdateUnavailable("sprite", "Sprite source update unavailable");
     }
-    updateSpriteInSource();
+    const update = updateSpriteInSource();
+    if (update && typeof update.catch === "function") {
+      update.catch((error) => {
+        console.error(error);
+        reportToolPaneSourceUpdateUnavailable("sprite", "Sprite source update failed");
+      });
+    }
     return true;
   }
   if (mode === "sprite3d") {
@@ -1165,6 +1208,31 @@ function terminatePreviewGame() {
   compiledPreviewStale = false;
   setPreviewDocumentLoaded(false);
   setPreviewFrameHtml(emptyPreviewDocument());
+}
+
+function suspendCompiledPreviewRuntime() {
+  if (!previewFrameHasCurrentCompiledPreview && !previewFrameHasEditorLevelState) {
+    return;
+  }
+  previewFrameHasCurrentCompiledPreview = false;
+  previewFrameHasEditorLevelState = false;
+  latestPreviewState = null;
+  latestPreviewRuntimeStatus = null;
+  pendingPreviewKeyStateSync = 0;
+  setPreviewFrameHtml(emptyPreviewDocument());
+}
+
+function syncPreviewFrameLifecycleForPaneVisibility() {
+  if (typeof isPaneVisible !== "function") {
+    return;
+  }
+  if (!isPaneVisible("preview")) {
+    suspendCompiledPreviewRuntime();
+    return;
+  }
+  if (currentPreviewMode === "play" && latestHtml && !previewFrameHasCurrentCompiledPreview) {
+    restoreCompiledGamePreview();
+  }
 }
 
 function applyUnloadedPreviewTheme() {
@@ -1450,7 +1518,8 @@ async function renderPreview() {
 async function ensurePreviewExportForLevelAction(options = {}) {
   ensurePreviewTargetsActiveDocument();
   let exportData = previewExport || extractPreviewExport(latestHtml);
-  if (exportData && (!options.requirePreviewFrame || previewFrameHasCurrentCompiledPreview)) {
+  const freshEnough = !options.requireFresh || !compiledPreviewStale;
+  if (exportData && freshEnough && (!options.requirePreviewFrame || previewFrameHasCurrentCompiledPreview)) {
     return exportData;
   }
 
@@ -1483,6 +1552,36 @@ async function ensurePreviewExportForLevelAction(options = {}) {
     return null;
   }
   return exportData;
+}
+
+function ensureLevel3dRuntimePreviewForOpenPane() {
+  if (
+    currentPreviewMode !== "level3d"
+    || !level3dBuilder
+    || level3dBuilder.hidden
+    || typeof level3dRuntimeSnapshot !== "function"
+    || !level3dRuntimeSnapshot()
+  ) {
+    return;
+  }
+  ensurePreviewExportForLevelAction({
+    status: setLevel3dActionStatus,
+    compilingMessage: "Compiling 3D preview",
+    failureMessage: "3D preview compile failed",
+    requireFresh: true,
+  }).then((exportData) => {
+    if (
+      exportData
+      && currentPreviewMode === "level3d"
+      && level3dBuilder
+      && !level3dBuilder.hidden
+      && typeof renderLevel3dBuilder === "function"
+    ) {
+      renderLevel3dBuilder();
+    }
+  }).catch((error) => {
+    setLevel3dActionStatus(`3D preview compile failed: ${userFacingRuntimeError(error)}`, "is-error");
+  });
 }
 
 async function runPreviewFromSourcePane() {
@@ -2451,6 +2550,10 @@ function setPreviewFrameHtml(html) {
 }
 
 function editorPreviewDocument(html) {
+  const progressSaveData = JSON.stringify(Object.fromEntries(editorPreviewProgressSaves)).replace(/<\//g, "<\\/");
+  const progressSaveScript = `<script id="puzzle-studio-editor-preview-progress-save-script">
+window.PuzzleStudioEditorPreviewProgressSaves = ${progressSaveData};
+<\/script>`;
   const consoleScript = `<script id="puzzle-studio-editor-preview-log-script">
 (() => {
   const isEditorSaveShortcut = (event) => {
@@ -2582,6 +2685,15 @@ function editorPreviewDocument(html) {
 })();
 <\/script>`;
   let next = html;
+  if (!next.includes("puzzle-studio-editor-preview-progress-save-script")) {
+    if (next.includes("</head>")) {
+      next = next.replace("</head>", `${progressSaveScript}\n  </head>`);
+    } else if (next.includes("<body")) {
+      next = next.replace("<body", `${progressSaveScript}\n<body`);
+    } else {
+      next = `${progressSaveScript}\n${next}`;
+    }
+  }
   if (!next.includes("puzzle-studio-editor-preview-log-script")) {
     if (next.includes("</head>")) {
       next = next.replace("</head>", `${consoleScript}\n  </head>`);
@@ -3450,6 +3562,7 @@ function setPreviewMode(mode, options = {}) {
   }
   if (level3dMode) {
     renderLevel3dBuilder();
+    ensureLevel3dRuntimePreviewForOpenPane();
   }
   if (soundsMode) {
     renderSoundsBuilder();
@@ -3468,7 +3581,10 @@ function requestFocusedPreviewState() {
 }
 
 function restoreCompiledGamePreview() {
-  if (!previewFrameHasEditorLevelState || !latestHtml || !previewFrame) {
+  if (!latestHtml || !previewFrame) {
+    return;
+  }
+  if (!previewFrameHasEditorLevelState && previewFrameHasCurrentCompiledPreview) {
     return;
   }
   previewFrameHasEditorLevelState = false;
@@ -9085,6 +9201,7 @@ documentList.addEventListener("pointerdown", (event) => {
     startY: event.clientY,
     active: false,
   };
+  resetTreeDragDecisionCache();
 });
 document.addEventListener("pointermove", (event) => {
   if (!treePointerDrag || event.pointerId !== treePointerDrag.pointerId) {
@@ -9115,6 +9232,7 @@ document.addEventListener("pointerup", (event) => {
   treePointerDrag = null;
   drag.row.classList.remove("is-dragging");
   clearDropTargets();
+  resetTreeDragDecisionCache();
   draggedNodeId = "";
   if (!drag.active) {
     return;
@@ -9135,6 +9253,7 @@ document.addEventListener("pointercancel", (event) => {
   treePointerDrag = null;
   draggedNodeId = "";
   clearDropTargets();
+  resetTreeDragDecisionCache();
 });
 documentList.addEventListener("dragstart", (event) => {
   const row = event.target.closest(".tree-row");
@@ -9143,21 +9262,26 @@ documentList.addEventListener("dragstart", (event) => {
     return;
   }
   draggedNodeId = row.dataset.dragId;
+  resetTreeDragDecisionCache();
   row.classList.add("is-dragging");
   event.dataTransfer.effectAllowed = "move";
   event.dataTransfer.setData("text/plain", draggedNodeId);
 });
+function dataTransferHasFiles(dataTransfer) {
+  return Array.from(dataTransfer?.types || []).includes("Files");
+}
+
 documentList.addEventListener("dragover", (event) => {
-  const fileCount = event.dataTransfer?.files?.length || 0;
+  const hasExternalFiles = dataTransferHasFiles(event.dataTransfer);
   const targetFolderId = dropFolderIdForEvent(event);
-  if (fileCount && isDesktopHost()) {
+  if (hasExternalFiles && isDesktopHost()) {
     return;
   }
-  if (!fileCount && !canDropNodeOnFolder(draggedNodeId, targetFolderId)) {
+  if (!hasExternalFiles && !canDropNodeOnFolder(draggedNodeId, targetFolderId)) {
     return;
   }
   event.preventDefault();
-  event.dataTransfer.dropEffect = fileCount ? "copy" : "move";
+  event.dataTransfer.dropEffect = hasExternalFiles ? "copy" : "move";
   markDropTarget(targetFolderId);
 });
 documentList.addEventListener("dragleave", (event) => {
@@ -9189,6 +9313,7 @@ documentList.addEventListener("drop", (event) => {
 documentList.addEventListener("dragend", () => {
   draggedNodeId = "";
   clearDropTargets();
+  resetTreeDragDecisionCache();
   documentList.querySelectorAll(".is-dragging").forEach((row) => row.classList.remove("is-dragging"));
 });
 initializePhysicalWorkPanes();
@@ -9279,6 +9404,31 @@ window.addEventListener("message", (event) => {
       if (levelSolutionPreview) {
         updateSolutionControls();
       }
+    }
+    return;
+  }
+  if (event.data?.type === "PuzzleStudioPreviewProgressSave") {
+    if (event.source && previewFrame?.contentWindow && event.source !== previewFrame.contentWindow) {
+      return;
+    }
+    const key = String(event.data.storageKey || "");
+    const saveJson = String(event.data.saveJson || "");
+    if (key && saveJson) {
+      editorPreviewProgressSaves.set(key, saveJson);
+      saveEditorPreviewProgressSaves();
+      scheduleLocalSave();
+    }
+    return;
+  }
+  if (event.data?.type === "PuzzleStudioPreviewProgressSaveClear") {
+    if (event.source && previewFrame?.contentWindow && event.source !== previewFrame.contentWindow) {
+      return;
+    }
+    const key = String(event.data.storageKey || "");
+    if (key) {
+      editorPreviewProgressSaves.delete(key);
+      saveEditorPreviewProgressSaves();
+      scheduleLocalSave();
     }
     return;
   }

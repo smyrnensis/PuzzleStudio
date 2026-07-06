@@ -1,5 +1,6 @@
 let spriteActionClearTimer = 0;
 let spriteBucketActive = false;
+let spriteGridVisible = true;
 let spriteBrushPreset = "pixel";
 let spriteLastPaintColorIndex = 0;
 let spriteClipActive = false;
@@ -25,6 +26,7 @@ function resetSpriteBuilder(size = sprite.size) {
   sprite.cells = Array.from({ length: sprite.size * sprite.size }, () => null);
   sprite.shapeBind = null;
   sprite.solidSource = false;
+  sprite.sourcePreludeRows = [];
   if (!Number.isInteger(sprite.selectedColorIndex) || !sprite.palette[sprite.selectedColorIndex]) {
     sprite.selectedColorIndex = 0;
   }
@@ -49,6 +51,7 @@ function renderSpriteBuilder() {
 function renderSpriteControls() {
   spriteSizeInput.value = String(sprite.size);
   syncSpritePaintToolControls();
+  syncSpriteGridButton();
   renderSpriteShapeBindRow(spriteShapeField);
   renderSpriteScaleControl({
     size: sprite.size,
@@ -372,6 +375,9 @@ function renderSpritePalette() {
   if (spriteFillButton) {
     paintToolRow.append(spriteFillButton);
   }
+  if (spriteGridButton) {
+    paintToolRow.append(spriteGridButton);
+  }
 
   const eraseButton = document.createElement("button");
   eraseButton.type = "button";
@@ -426,9 +432,9 @@ function renderSpritePalette() {
       icon: spriteLucideIconSvg("clipboard-paste"),
     }),
     renderSpriteClipButton({
-      title: "Clear clip",
-      ariaLabel: "Clear selected sprite area",
-      disabled: !spriteClipSelection,
+      title: spriteClipFloating ? "Discard clip preview" : "Clear clip",
+      ariaLabel: spriteClipFloating ? "Discard clipped sprite preview" : "Clear selected sprite area",
+      disabled: !spriteClipSelection && !spriteClipFloating,
       danger: true,
       onClick: clearSpriteClipSelection,
       icon: spriteLucideIconSvg("trash-2"),
@@ -652,11 +658,59 @@ function focusSpriteTagPickerInput(tagPicker) {
 }
 
 function spriteColorAssetNames() {
-  return [...parseSpriteColorAssets(activeSpriteEditSource()).keys()].sort((a, b) => a.localeCompare(b));
+  return [...spriteSourceColorAssets().keys()].sort((a, b) => a.localeCompare(b));
 }
 
 function spriteShapeAssetNames() {
-  return [...parseSpriteShapeAssets(activeSpriteEditSource()).keys()].sort((a, b) => a.localeCompare(b));
+  return [...spriteSourceShapeAssets().keys()].sort((a, b) => a.localeCompare(b));
+}
+
+function activeSpriteSourceContract() {
+  return sprite.sourceSpriteContract && typeof sprite.sourceSpriteContract === "object"
+    ? sprite.sourceSpriteContract
+    : null;
+}
+
+function spriteSourceColorAssets() {
+  const assets = new Map();
+  const contract = activeSpriteSourceContract();
+  for (const entry of Array.isArray(contract?.colorAssets) ? contract.colorAssets : []) {
+    const name = String(entry?.name || "").trim();
+    const color = String(entry?.color || "").trim();
+    if (name && color) {
+      assets.set(name, color);
+    }
+  }
+  for (const entry of Array.isArray(contract?.resolvedPalette) ? contract.resolvedPalette : []) {
+    const name = String(entry?.source || "").trim();
+    const color = String(entry?.color || "").trim();
+    if (entry?.linked && name && color) {
+      assets.set(name, color);
+    }
+  }
+  return assets;
+}
+
+function spriteSourceShapeAssets() {
+  const assets = new Map();
+  const contract = activeSpriteSourceContract();
+  for (const entry of Array.isArray(contract?.shapeAssets) ? contract.shapeAssets : []) {
+    const name = String(entry?.name || "").trim();
+    const rows = Array.isArray(entry?.rows)
+      ? entry.rows.map((row) => String(row || "").trim()).filter(Boolean)
+      : [];
+    if (name && rows.length) {
+      assets.set(name, rows);
+    }
+  }
+  const shapeName = typeof contract?.shapeRef === "string" ? contract.shapeRef.trim() : "";
+  const resolvedRows = Array.isArray(contract?.resolvedShapeRows)
+    ? contract.resolvedShapeRows.map((row) => String(row || "").trim()).filter(Boolean)
+    : [];
+  if (shapeName && resolvedRows.length) {
+    assets.set(shapeName, resolvedRows);
+  }
+  return assets;
 }
 
 function applyCurrentColorName(index, rawName, options = {}) {
@@ -671,11 +725,10 @@ function applyCurrentColorName(index, rawName, options = {}) {
     }
     return false;
   }
-  const source = activeSpriteEditSource();
-  const colorAssets = parseSpriteColorAssets(source);
+  const colorAssets = spriteSourceColorAssets();
   let status = `Using color ${name}`;
   if (colorAssets.has(name)) {
-    const resolved = resolveSpriteColorAssetToken(name, colorAssets);
+    const resolved = colorAssets.get(name);
     if (!resolved) {
       if (options.reportError) {
         setSpriteActionStatus(`Cannot resolve color ${name}`, "is-error");
@@ -1008,6 +1061,9 @@ function setSpriteEditSource(entry, document = activeDocument()) {
   sprite.editSourceBodyStart = Number.isInteger(entry?.bodyStart) ? entry.bodyStart : null;
   sprite.editSourceBodyEnd = Number.isInteger(entry?.bodyEnd) ? entry.bodyEnd : null;
   sprite.editSourceName = entry?.name || "";
+  sprite.sourceSpriteContract = entry?.sourceSprite && typeof entry.sourceSprite === "object"
+    ? cloneVisualEditValue(entry.sourceSprite)
+    : null;
 }
 
 function clearSpriteEditSource() {
@@ -1016,6 +1072,7 @@ function clearSpriteEditSource() {
   sprite.editSourceBodyStart = null;
   sprite.editSourceBodyEnd = null;
   sprite.editSourceName = "";
+  sprite.sourceSpriteContract = null;
 }
 
 function invalidateSpriteEditSourceForDocument(document = activeDocument()) {
@@ -1434,6 +1491,14 @@ function cutSpriteClipSelection() {
 }
 
 function clearSpriteClipSelection() {
+  if (spriteClipFloating) {
+    spriteClipFloating = null;
+    spriteClipSelection = null;
+    spriteClipDrag = null;
+    renderSpriteBuilder();
+    setSpriteActionStatus("Clip preview discarded", "is-ok");
+    return true;
+  }
   const rect = normalizeSpriteClipRect(spriteClipSelection);
   if (!rect) {
     setSpriteActionStatus("No clip selection", "is-error");
@@ -1480,32 +1545,120 @@ function moveSpriteClipRange(target, message = "Moved clip range") {
   setSpriteActionStatus(message, "is-ok");
 }
 
+function spriteClipFloatingRectAtCell(cell) {
+  if (!cell || !spriteClipClipboard) {
+    return null;
+  }
+  const width = Math.min(sprite.size, spriteClipClipboard.width);
+  const height = Math.min(sprite.size, spriteClipClipboard.height);
+  return normalizeSpriteClipRect({
+    x: Math.max(0, Math.min(sprite.size - width, cell.x)),
+    y: Math.max(0, Math.min(sprite.size - height, cell.y)),
+    width,
+    height,
+  });
+}
+
+function spriteClipFloatingCellsForSelection(rect) {
+  const normalized = normalizeSpriteClipRect(rect);
+  if (!normalized || !spriteClipFloating || !spriteClipClipboard) {
+    return null;
+  }
+  if (spriteClipClipboard.width !== normalized.width || spriteClipClipboard.height !== normalized.height) {
+    return null;
+  }
+  if (!Array.isArray(spriteClipClipboard.cells) || spriteClipClipboard.cells.length !== normalized.width * normalized.height) {
+    return null;
+  }
+  return spriteClipClipboard.cells;
+}
+
 function renderSpriteBoard() {
-  spriteBoard.replaceChildren();
   spriteBoard.style.setProperty("--sprite-size", sprite.size);
+  syncSpriteGridVisibility();
   spriteBoard.classList.toggle("is-clip-active", spriteClipActive);
+  spriteBoard.classList.toggle("is-clip-floating", Boolean(spriteClipActive && spriteClipFloating && spriteClipClipboard));
   spriteClipSelection = normalizeSpriteClipRect(spriteClipSelection);
+  const nextBoard = document.createDocumentFragment();
   for (let index = 0; index < sprite.cells.length; index += 1) {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "sprite-cell sprite-color-swatch";
     syncSpriteCellElement(button, index);
-    spriteBoard.append(button);
+    nextBoard.append(button);
   }
-  renderSpriteClipSelectionFrame();
+  renderSpriteClipSelectionFrame(nextBoard);
+  spriteBoard.replaceChildren(nextBoard);
 }
 
-function renderSpriteClipSelectionFrame() {
+function syncSpriteGridVisibility() {
+  if (!spriteBoard) {
+    return;
+  }
+  spriteBoard.classList.toggle("is-grid-hidden", !spriteGridVisible);
+  syncSpriteGridButton();
+}
+
+function syncSpriteGridButton() {
+  if (!spriteGridButton) {
+    return;
+  }
+  spriteGridButton.classList.toggle("is-active", spriteGridVisible);
+  spriteGridButton.setAttribute("aria-pressed", spriteGridVisible ? "true" : "false");
+  spriteGridButton.title = "Toggle grid";
+  spriteGridButton.setAttribute("aria-label", "Toggle sprite grid");
+}
+
+function toggleSpriteGrid() {
+  spriteGridVisible = !spriteGridVisible;
+  syncSpriteGridVisibility();
+  setSpriteActionStatus(spriteGridVisible ? "Sprite grid visible" : "Sprite grid hidden", "is-ok");
+}
+
+function renderSpriteClipSelectionFrame(target = spriteBoard) {
   const rect = spriteClipActive ? normalizeSpriteClipRect(spriteClipSelection) : null;
   if (!rect) {
     return;
   }
+  renderSpriteClipFloatingPreview(rect, target);
   const frame = document.createElement("div");
   frame.className = "sprite-clip-selection-frame";
-  frame.style.gridColumn = `${rect.x + 1} / span ${rect.width}`;
-  frame.style.gridRow = `${rect.y + 1} / span ${rect.height}`;
+  frame.style.setProperty("--sprite-clip-x", String(rect.x));
+  frame.style.setProperty("--sprite-clip-y", String(rect.y));
+  frame.style.setProperty("--sprite-clip-width", String(rect.width));
+  frame.style.setProperty("--sprite-clip-height", String(rect.height));
   frame.setAttribute("aria-hidden", "true");
-  spriteBoard.append(frame);
+  for (const handle of ["nw", "ne", "sw", "se"]) {
+    const node = document.createElement("span");
+    node.className = `sprite-clip-selection-handle sprite-clip-selection-handle-${handle}`;
+    frame.append(node);
+  }
+  target.append(frame);
+}
+
+function renderSpriteClipFloatingPreview(rect, target = spriteBoard) {
+  const cells = spriteClipFloatingCellsForSelection(rect);
+  if (!cells) {
+    return;
+  }
+  const preview = document.createElement("div");
+  preview.className = `sprite-clip-floating-preview is-${spriteClipFloating.kind || "copy"}`;
+  preview.style.setProperty("--sprite-clip-x", String(rect.x));
+  preview.style.setProperty("--sprite-clip-y", String(rect.y));
+  preview.style.setProperty("--sprite-clip-width", String(rect.width));
+  preview.style.setProperty("--sprite-clip-height", String(rect.height));
+  preview.style.setProperty("--sprite-clip-preview-cols", String(rect.width));
+  preview.setAttribute("aria-hidden", "true");
+  for (const colorIndex of cells) {
+    const cell = document.createElement("span");
+    const validIndex = validSpriteColorIndex(colorIndex) ? colorIndex : null;
+    cell.className = "sprite-clip-preview-cell sprite-color-swatch";
+    cell.dataset.colorIndex = validIndex === null ? "erase" : String(validIndex);
+    cell.style.setProperty("--sprite-swatch-color", spriteColorForColorIndex(validIndex));
+    cell.style.setProperty("--sprite-cell-ink", spriteInkForColorIndex(validIndex));
+    preview.append(cell);
+  }
+  target.append(preview);
 }
 
 function syncSpriteCellElement(button, index) {
@@ -2299,6 +2452,20 @@ function startSpriteClip(event, geometry, cell) {
       origin: spriteClipSelection,
       preview: spriteClipSelection,
     };
+  } else if (spriteClipFloating && spriteClipClipboard) {
+    const target = spriteClipFloatingRectAtCell(cell);
+    if (!target) {
+      return;
+    }
+    spriteClipSelection = target;
+    spriteClipDrag = {
+      mode: "move",
+      pointerId: event.pointerId,
+      geometry,
+      startCell: cell,
+      origin: target,
+      preview: target,
+    };
   } else {
     spriteClipSelection = spriteClipRectFromCells(cell, cell);
     spriteClipDrag = {
@@ -2680,8 +2847,7 @@ function setSpriteShapeSync(sync, rawName) {
     setSpriteActionStatus("Enter a shape name", "is-error");
     return false;
   }
-  const source = activeSpriteEditSource();
-  const shapes = parseSpriteShapeAssets(source);
+  const shapes = spriteSourceShapeAssets();
   let status = `Using shape ${name}`;
   if (shapes.has(name)) {
     const parsed = spriteCellsFromAsciiRows(shapes.get(name), sprite.palette.length);
@@ -2692,7 +2858,8 @@ function setSpriteShapeSync(sync, rawName) {
     sprite.size = parsed.size;
     sprite.cells = parsed.cells;
   } else {
-    status = `Tagged shape ${name}`;
+    setSpriteActionStatus(`Cannot resolve shape ${name}`, "is-error");
+    return false;
   }
   sprite.shapeBind = { type: "shape", name, linked: true };
   setSpriteActionStatus(status, "is-ok");
@@ -2751,7 +2918,7 @@ function loadSpriteSourceTarget(target, options = {}) {
     return null;
   }
   const targetName = target.name || spriteObjectName();
-  const loaded = parseSpriteDefinitionSource(source.slice(target.bodyStart, target.bodyEnd), source, targetName);
+  const loaded = parseSpriteDefinitionSource(target.sourceSprite, targetName);
   if (!loaded) {
     if (isIncompleteSpriteSourceTarget(source, target)) {
       applyIncompleteSpriteSourceTarget(targetName, target);
@@ -2777,6 +2944,7 @@ function loadSpriteSourceTarget(target, options = {}) {
   sprite.palette = loaded.palette;
   sprite.shapeBind = loaded.shapeBind || null;
   sprite.solidSource = Boolean(loaded.solid);
+  sprite.sourcePreludeRows = Array.isArray(loaded.sourcePreludeRows) ? loaded.sourcePreludeRows : [];
   sprite.cells = loaded.cells;
   sprite.selectedColorIndex = sprite.palette.length ? 0 : null;
   sprite.addPaletteOpen = false;
@@ -2791,22 +2959,9 @@ function loadSpriteSourceTarget(target, options = {}) {
   return `sprite:${targetName}:${target.start ?? target.bodyStart}`;
 }
 
-function isIncompleteSpriteSourceTarget(source, target) {
-  if (!Number.isInteger(target?.bodyStart) || !Number.isInteger(target?.bodyEnd)) {
-    return false;
-  }
-  const body = String(source || "").slice(target.bodyStart, target.bodyEnd);
-  const rows = body
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean);
-  if (!rows.length) {
-    return true;
-  }
-  return !rows[0]
-    .split(/\s+/)
-    .filter(Boolean)
-    .every((token) => Boolean(spritePaletteEntryFromSourceToken(token, parseSpriteColorAssets(source), target.name || "")));
+function isIncompleteSpriteSourceTarget(_source, target) {
+  const paletteTokens = target?.sourceSprite?.paletteTokens;
+  return Array.isArray(paletteTokens) && paletteTokens.length === 0;
 }
 
 function applyIncompleteSpriteSourceTarget(name, target) {
@@ -2818,6 +2973,7 @@ function applyIncompleteSpriteSourceTarget(name, target) {
   sprite.palette = [];
   sprite.shapeBind = null;
   sprite.solidSource = false;
+  sprite.sourcePreludeRows = [];
   sprite.cells = Array.from({ length: sprite.size * sprite.size }, () => null);
   sprite.selectedColorIndex = null;
   sprite.addPaletteOpen = false;
@@ -2827,39 +2983,51 @@ function applyIncompleteSpriteSourceTarget(name, target) {
   renderSpriteBuilder();
 }
 
-function parseSpriteDefinitionSource(body, source = "", selectorName = "") {
-  const rows = body
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean);
-  if (rows.length < 1) {
+function parseSpriteDefinitionSource(contract, selectorName = "") {
+  if (!contract || typeof contract !== "object") {
     return null;
   }
-  const colorAssets = parseSpriteColorAssets(source);
+  const sourcePreludeRows = Array.isArray(contract.preludeRows)
+    ? contract.preludeRows.map((row) => String(row || "").trim()).filter(Boolean)
+    : [];
+  const paletteTokens = Array.isArray(contract.paletteTokens)
+    ? contract.paletteTokens.map((token) => String(token || "").trim()).filter(Boolean)
+    : [];
+  const asciiRows = Array.isArray(contract.pixelRows)
+    ? contract.pixelRows.map((line) => String(line || "").trim()).filter(Boolean)
+    : [];
+  const shapeName = typeof contract.shapeRef === "string" ? contract.shapeRef.trim() : "";
+  const resolvedPalette = Array.isArray(contract.resolvedPalette)
+    ? contract.resolvedPalette
+    : [];
+  if (!paletteTokens.length || !resolvedPalette.length) {
+    return null;
+  }
   let shapeBind = null;
-  const palette = rows[0]
-    .split(/\s+/)
-    .map((token) => spritePaletteEntryFromSourceToken(token, colorAssets, selectorName));
+  const palette = resolvedPalette.map((entry, index) => {
+    const color = String(entry?.color || "").trim();
+    const source = String(entry?.source || paletteTokens[index] || "").trim();
+    if (!color) {
+      return null;
+    }
+    const paletteEntry = { color };
+    if (entry?.linked && source) {
+      paletteEntry.bind = { type: "color", name: source, linked: true };
+    }
+    return paletteEntry;
+  });
   if (!palette.length || palette.some((entry) => !entry)) {
     return null;
   }
-  let asciiRows = rows.slice(1);
-  const shapeAssets = parseSpriteShapeAssets(source);
-  if (asciiRows[0]?.startsWith("shape ")) {
-    const shapeName = asciiRows[0].slice("shape ".length).trim();
-    const shapeRows = resolveSpriteShapeAssetToken(shapeName, shapeAssets, selectorName);
-    if (!shapeRows) {
+  if (shapeName) {
+    const shapeRows = Array.isArray(contract.resolvedShapeRows)
+      ? contract.resolvedShapeRows.map((row) => String(row || "").trim()).filter(Boolean)
+      : [];
+    if (!shapeRows.length) {
       return null;
     }
     shapeBind = { type: "shape", name: shapeName, linked: true };
-    asciiRows = shapeRows;
-  } else if (asciiRows.length === 1) {
-    const shapeName = asciiRows[0].trim();
-    const shapeRows = resolveSpriteShapeAssetToken(shapeName, shapeAssets, selectorName);
-    if (shapeRows) {
-      shapeBind = { type: "shape", name: shapeName, linked: true };
-      asciiRows = shapeRows;
-    }
+    asciiRows.splice(0, asciiRows.length, ...shapeRows);
   }
   if (asciiRows.length === 0) {
     if (palette.length !== 1) {
@@ -2871,6 +3039,7 @@ function parseSpriteDefinitionSource(body, source = "", selectorName = "") {
       palette,
       shapeBind: null,
       solid: true,
+      sourcePreludeRows,
       cells: Array.from({ length: size * size }, () => 0),
     };
   }
@@ -2891,22 +3060,8 @@ function parseSpriteDefinitionSource(body, source = "", selectorName = "") {
     size,
     palette,
     shapeBind,
+    sourcePreludeRows,
     cells,
-  };
-}
-
-function spritePaletteEntryFromSourceToken(token, colorAssets = null, selectorName = "") {
-  const color = parseSpriteHexColor(token);
-  if (color) {
-    return { color };
-  }
-  const resolved = resolveSpriteColorAssetToken(token, colorAssets, [], selectorName);
-  if (!resolved) {
-    return null;
-  }
-  return {
-    color: resolved,
-    bind: { type: "color", name: token, linked: true },
   };
 }
 
@@ -2916,93 +3071,6 @@ function spritePaletteEntrySourceToken(entry) {
     return bind.name;
   }
   return normalizeSpriteColor(entry.color);
-}
-
-function parseSpriteColorAssets(source) {
-  const raw = new Map();
-  const spritesBlock = findSpritesBlock(source);
-  const colorsBlock = spritesBlock ? findVisualAssetBlock(source, spritesBlock, "colors") : null;
-  if (!colorsBlock) {
-    return raw;
-  }
-  collectSpriteFlatAssetRows(source, colorsBlock, (name, value) => {
-    raw.set(name, value);
-  });
-  collectSpriteAssetTables(source, colorsBlock, (tableName, rowName, value) => {
-    raw.set(`${tableName}:${rowName}`, value);
-  });
-  return raw;
-}
-
-function parseSpriteShapeAssets(source) {
-  const raw = new Map();
-  const spritesBlock = findSpritesBlock(source);
-  const shapesBlock = spritesBlock ? findVisualAssetBlock(source, spritesBlock, "shapes") : null;
-  if (!shapesBlock) {
-    return raw;
-  }
-  const valueMaps = parseSpriteValueMaps(source);
-  const body = source.slice(shapesBlock.bodyStart, shapesBlock.bodyEnd);
-  const tablePattern = /(^|\n)([\t ]*)([A-Za-z_][\w]*):([A-Za-z_][\w]*)([^\n{]*)\{/g;
-  let tableMatch = null;
-  while ((tableMatch = tablePattern.exec(body))) {
-    const bodyMatchStart = tableMatch.index + tableMatch[1].length;
-    if (topLevelDepthAt(body, bodyMatchStart) !== 0) {
-      continue;
-    }
-    const openIndex = source.indexOf("{", shapesBlock.bodyStart + bodyMatchStart);
-    const closeIndex = findMatchingBrace(source, openIndex);
-    if (openIndex < 0 || closeIndex < 0 || closeIndex > shapesBlock.bodyEnd) {
-      continue;
-    }
-    const tableBody = source.slice(openIndex + 1, closeIndex);
-    const tableName = tableMatch[3];
-    const axis = tableMatch[4];
-    collectSpriteShapeTableRows(source, openIndex + 1, closeIndex, tableName, tableBody, raw);
-    collectSpriteShapeRotationBlocks(source, openIndex + 1, closeIndex, tableName, axis, tableBody, raw, valueMaps);
-    if (!tableBody.includes("{")) {
-      const rows = spriteShapeRowsFromText(tableBody);
-      if (rows.length) {
-        const bodyRotation = parseSpriteShapeRotationDirective(rows[0]);
-        const headerRotation = parseSpriteShapeRotationDirective(tableMatch[5]);
-        if (bodyRotation) {
-          addRotatedSpriteShapeRows(raw, tableName, axis, rows.slice(1), bodyRotation, valueMaps);
-        } else if (headerRotation) {
-          addRotatedSpriteShapeRows(raw, tableName, axis, rows, headerRotation, valueMaps);
-        } else {
-          raw.set(`${tableName}:${axis}`, rows);
-        }
-      }
-    } else {
-      applySpriteShapeRotationDirectives(tableBody, tableName, axis, raw, valueMaps);
-    }
-  }
-
-  collectSpriteUnbracedShapeDefinitions(source, shapesBlock, (name, rows) => {
-    raw.set(name, rows);
-  });
-
-  const pattern = /(^|\n)([\t ]*)([A-Za-z_][\w]*)\s*\{/g;
-  let match = null;
-  while ((match = pattern.exec(body))) {
-    const bodyMatchStart = match.index + match[1].length;
-    if (topLevelDepthAt(body, bodyMatchStart) !== 0) {
-      continue;
-    }
-    const openIndex = source.indexOf("{", shapesBlock.bodyStart + bodyMatchStart);
-    const closeIndex = findMatchingBrace(source, openIndex);
-    if (openIndex < 0 || closeIndex < 0 || closeIndex > shapesBlock.bodyEnd) {
-      continue;
-    }
-    const rows = source.slice(openIndex + 1, closeIndex)
-      .split("\n")
-      .map((line) => line.trim())
-      .filter(Boolean);
-    if (rows.length) {
-      raw.set(match[3], rows);
-    }
-  }
-  return raw;
 }
 
 function collectSpriteUnbracedShapeDefinitions(source, shapesBlock, callback) {
@@ -3122,227 +3190,6 @@ function spriteSourceBlockLines(text, absoluteStart) {
   return lines;
 }
 
-function parseSpriteValueMaps(source) {
-  const maps = new Map();
-  const mapPattern = /(^|\n)([\t ]*)map\s+([A-Za-z_][\w]*)\s+([A-Za-z_][\w]*)\s*\{/g;
-  let match = null;
-  while ((match = mapPattern.exec(source))) {
-    const bodyMatchStart = match.index + match[1].length;
-    const openIndex = source.indexOf("{", bodyMatchStart);
-    const closeIndex = findMatchingBrace(source, openIndex);
-    if (openIndex < 0 || closeIndex < 0) {
-      continue;
-    }
-    const values = new Map();
-    for (const line of source.slice(openIndex + 1, closeIndex).split("\n")) {
-      const row = stripSpriteAssetComment(line).trim();
-      const rowMatch = /^([A-Za-z_][\w]*)\s*->\s*([A-Za-z_][\w]*)$/.exec(row);
-      if (rowMatch) {
-        values.set(rowMatch[1], rowMatch[2]);
-      }
-    }
-    maps.set(spriteValueMapKey(match[3], match[4]), values);
-  }
-  return maps;
-}
-
-function spriteValueMapKey(name, axis) {
-  return `${name}:${axis}`;
-}
-
-function spriteShapeRowsFromText(text) {
-  return String(text || "")
-    .split("\n")
-    .map((line) => stripSpriteAssetComment(line).trim())
-    .filter(Boolean);
-}
-
-function collectSpriteShapeTableRows(source, bodyStart, bodyEnd, tableName, tableBody, raw) {
-  const rowPattern = /(^|\n)([\t ]*)([A-Za-z_][\w]*)\s*\{/g;
-  let match = null;
-  while ((match = rowPattern.exec(tableBody))) {
-    const bodyMatchStart = match.index + match[1].length;
-    if (topLevelDepthAt(tableBody, bodyMatchStart) !== 0) {
-      continue;
-    }
-    const openIndex = source.indexOf("{", bodyStart + bodyMatchStart);
-    const closeIndex = findMatchingBrace(source, openIndex);
-    if (openIndex < 0 || closeIndex < 0 || closeIndex > bodyEnd) {
-      continue;
-    }
-    const rows = source.slice(openIndex + 1, closeIndex)
-      .split("\n")
-      .map((line) => line.trim())
-      .filter(Boolean);
-    if (!rows.length) {
-      continue;
-    }
-    raw.set(`${tableName}:${match[3]}`, rows);
-  }
-}
-
-function collectSpriteShapeRotationBlocks(source, bodyStart, bodyEnd, tableName, axis, tableBody, raw, valueMaps) {
-  const rowPattern = /(^|\n)([\t ]*)rotate(?:\s+using\s+[A-Za-z_][\w]*|\s+[A-Za-z_][\w]*)?\s+from\s+[A-Za-z_][\w]*\s*\{/g;
-  let match = null;
-  while ((match = rowPattern.exec(tableBody))) {
-    const bodyMatchStart = match.index + match[1].length;
-    if (topLevelDepthAt(tableBody, bodyMatchStart) !== 0) {
-      continue;
-    }
-    const openIndex = source.indexOf("{", bodyStart + bodyMatchStart);
-    const closeIndex = findMatchingBrace(source, openIndex);
-    if (openIndex < 0 || closeIndex < 0 || closeIndex > bodyEnd) {
-      continue;
-    }
-    const rotation = parseSpriteShapeRotationDirective(match[0]);
-    const rows = spriteShapeRowsFromText(source.slice(openIndex + 1, closeIndex));
-    addRotatedSpriteShapeRows(raw, tableName, axis, rows, rotation, valueMaps);
-  }
-}
-
-function applySpriteShapeRotationDirectives(tableBody, tableName, axis, raw, valueMaps) {
-  let depth = 0;
-  for (const line of String(tableBody || "").split("\n")) {
-    const trimmed = stripSpriteAssetComment(line).trim();
-    const rotation = depth === 0 ? parseSpriteShapeRotationDirective(trimmed) : null;
-    if (rotation) {
-      const rows = raw.get(`${tableName}:${rotation.from}`);
-      if (rows) {
-        addRotatedSpriteShapeRows(raw, tableName, axis, rows, rotation, valueMaps);
-      }
-    }
-    for (const char of line) {
-      if (char === "{") {
-        depth += 1;
-      } else if (char === "}") {
-        depth = Math.max(0, depth - 1);
-      }
-    }
-  }
-}
-
-function parseSpriteShapeRotationDirective(text) {
-  const tokens = String(text || "")
-    .replace(/\s*\{\s*$/, "")
-    .trim()
-    .split(/\s+/)
-    .filter(Boolean);
-  if (tokens[0] !== "rotate") {
-    return null;
-  }
-  if (tokens.length === 3 && tokens[1] === "from") {
-    return { map: "rotate", from: tokens[2] };
-  }
-  if (tokens.length === 5 && tokens[1] === "using" && tokens[3] === "from") {
-    return { map: tokens[2], from: tokens[4] };
-  }
-  if (tokens.length === 4 && tokens[2] === "from") {
-    return { map: tokens[1], from: tokens[3] };
-  }
-  return null;
-}
-
-function addRotatedSpriteShapeRows(raw, tableName, axis, rows, rotation, valueMaps) {
-  const baseRows = spriteShapeDefinitionRows(rows);
-  if (!baseRows || !rotation?.from) {
-    return;
-  }
-  const bindingKey = `${tableName}:${axis}`;
-  raw.set(bindingKey, baseRows);
-  markSpriteTableBindingAsset(raw, bindingKey);
-  raw.set(`${tableName}:${rotation.from}`, baseRows);
-  expandSpriteShapeRotationRows(raw, tableName, axis, baseRows, rotation, valueMaps);
-}
-
-function expandSpriteShapeRotationRows(raw, tableName, axis, rows, rotation, valueMaps) {
-  const map = valueMaps.get(spriteValueMapKey(rotation.map, axis));
-  if (!map) {
-    return;
-  }
-  let value = rotation.from;
-  let pattern = rows;
-  const visited = new Set();
-  while (!visited.has(value)) {
-    visited.add(value);
-    const next = map.get(value);
-    if (!next || next === rotation.from) {
-      break;
-    }
-    const nextPattern = rotateSpriteAsciiRowsClockwise(pattern);
-    if (!nextPattern.length) {
-      break;
-    }
-    const key = `${tableName}:${next}`;
-    if (!raw.has(key)) {
-      raw.set(key, nextPattern);
-    }
-    value = next;
-    pattern = nextPattern;
-  }
-}
-
-function rotateSpriteAsciiRowsClockwise(rows) {
-  if (!Array.isArray(rows) || rows.length === 0) {
-    return [];
-  }
-  const width = rows[0].length;
-  if (!width || rows.some((row) => row.length !== width)) {
-    return [];
-  }
-  const rotated = [];
-  for (let x = 0; x < width; x += 1) {
-    let row = "";
-    for (let y = rows.length - 1; y >= 0; y -= 1) {
-      row += rows[y][x];
-    }
-    rotated.push(row);
-  }
-  return rotated;
-}
-
-function markSpriteTableBindingAsset(assets, key) {
-  if (!assets.spriteTableBindings) {
-    assets.spriteTableBindings = new Set();
-  }
-  assets.spriteTableBindings.add(key);
-}
-
-function spriteTableAssetIsBinding(assets, key) {
-  return Boolean(assets?.spriteTableBindings?.has(key));
-}
-
-function resolveSpriteShapeAssetToken(token, shapeAssets, selectorName = "") {
-  const key = spriteTableAssetKey(token, shapeAssets, selectorName);
-  return key ? shapeAssets.get(key) : null;
-}
-
-function spriteTableAssetKey(token, assets, selectorName = "") {
-  const name = String(token || "").trim();
-  if (!name) {
-    return "";
-  }
-  if (assets.has(name) && !spriteTableAssetIsBinding(assets, name)) {
-    return name;
-  }
-  const separator = name.indexOf(":");
-  if (separator < 1) {
-    return assets.has(name) ? name : "";
-  }
-  const tableName = name.slice(0, separator);
-  const selectorValue = spriteSelectorSingleTagValue(selectorName, name.slice(separator + 1));
-  if (selectorValue && assets.has(`${tableName}:${selectorValue}`)) {
-    return `${tableName}:${selectorValue}`;
-  }
-  if (assets.has(name)) {
-    return name;
-  }
-  const selectorBinding = spriteSelectorSingleTagBinding(selectorName, name.slice(separator + 1));
-  if (selectorBinding) {
-    return firstSpriteTableAssetKey(tableName, assets);
-  }
-  return "";
-}
-
 function spriteSelectorSingleTagValue(selectorName, bindingName = "") {
   const parts = String(selectorName || "").split(":").filter(Boolean);
   if (parts.length !== 2) {
@@ -3350,40 +3197,6 @@ function spriteSelectorSingleTagValue(selectorName, bindingName = "") {
   }
   const value = parts[1];
   return value && value !== bindingName ? value : "";
-}
-
-function spriteSelectorSingleTagBinding(selectorName, bindingName = "") {
-  const parts = String(selectorName || "").split(":").filter(Boolean);
-  if (parts.length !== 2 || !bindingName) {
-    return "";
-  }
-  const value = parts[1];
-  return value === bindingName ? value : "";
-}
-
-function firstSpriteTableAssetKey(tableName, assets) {
-  const prefix = `${tableName}:`;
-  for (const key of assets.keys()) {
-    if (key.startsWith(prefix)) {
-      return key;
-    }
-  }
-  return "";
-}
-
-function resolveSpriteColorAssetToken(token, colorAssets = null, stack = [], selectorName = "") {
-  const direct = parseSpriteHexColor(token);
-  if (direct) {
-    return direct;
-  }
-  const assets = colorAssets || parseSpriteColorAssets(activePreviewSource());
-  const name = String(token || "").trim();
-  const key = assets.has(name) ? name : spriteTableAssetKey(name, assets, selectorName);
-  if (!name || stack.includes(name) || !key || !assets.has(key)) {
-    return null;
-  }
-  const raw = String(assets.get(key) || "").trim().split(/\s+/)[0];
-  return resolveSpriteColorAssetToken(raw, assets, [...stack, name], selectorName);
 }
 
 function collectSpriteFlatAssetRows(source, block, callback) {
@@ -3480,7 +3293,7 @@ function addSpriteToSource() {
   setStatus("Added sprite", "is-ok");
 }
 
-function updateSpriteInSource() {
+async function updateSpriteInSource() {
   const document = activeSpriteEditDocument();
   if (!document || !isTextDocument(document)) {
     setSpriteActionStatus("No puzzle source", "is-error");
@@ -3488,17 +3301,16 @@ function updateSpriteInSource() {
     return;
   }
 
-  const replaced = replaceSpriteDefinition(activeSpriteEditSource());
-  if (!replaced) {
+  const stagedSource = sourceWithStagedSpriteAssetDefinitions(activeSpriteEditSource());
+  if (!stagedSource) {
+    return;
+  }
+  const result = await replaceCurrentSpriteDefinitionFromParser(stagedSource);
+  if (!result) {
     setSpriteActionStatus("No selected sprite source range", "is-error");
     setStatus("No selected sprite source range", "is-error");
     return;
   }
-  const stagedSource = sourceWithStagedSpriteAssetDefinitions(replaced.source);
-  if (!stagedSource) {
-    return;
-  }
-  const result = { ...replaced, source: stagedSource };
   document.source = result.source;
   if (document.id === activeDocument()?.id) {
     setSourceEditorValue(result.source, { resetUndo: false });
@@ -3506,7 +3318,7 @@ function updateSpriteInSource() {
   }
   scheduleLocalSave();
   schedulePreview();
-  setSpriteEditSource({ start: result.start, end: result.end, name: spriteObjectName() }, document);
+  setSpriteEditSource({ ...result.target, start: result.start, end: result.end, name: spriteObjectName() }, document);
   sourceEditor.focus({ preventScroll: true });
   setSpriteActionStatus("Updated sprite", "is-ok");
   setStatus("Updated sprite", "is-ok");
@@ -3645,6 +3457,45 @@ async function spriteSourceTargetAtCursor(source, cursor) {
   return resolveSourceTargetFromWasm(source, cursor);
 }
 
+async function spriteSourceTargetByName(source, name) {
+  const targetName = String(name || "").trim();
+  if (!targetName) {
+    return null;
+  }
+  const text = String(source || "");
+  const candidates = [];
+  let index = text.indexOf(targetName);
+  while (index >= 0) {
+    candidates.push(index);
+    index = text.indexOf(targetName, index + Math.max(1, targetName.length));
+  }
+  const unique = new Map();
+  for (const candidate of candidates) {
+    const target = await spriteSourceTargetAtCursor(text, candidate);
+    if (target?.kind !== "sprite" || target.name !== targetName) {
+      continue;
+    }
+    const key = `${target.start}:${target.end}`;
+    if (!unique.has(key)) {
+      unique.set(key, target);
+    }
+  }
+  return unique.size === 1 ? [...unique.values()][0] : null;
+}
+
+async function replaceCurrentSpriteDefinitionFromParser(source, name = sprite.editSourceName || spriteObjectName()) {
+  const target = await spriteSourceTargetByName(source, name);
+  if (!target || !Number.isInteger(target.start) || !Number.isInteger(target.end)) {
+    return null;
+  }
+  const range = {
+    ...target,
+    indent: spriteSourceIndent(source.slice(source.lastIndexOf("\n", target.start - 1) + 1, target.start)),
+  };
+  const replaced = replaceSpriteDefinition(source, range);
+  return replaced ? { ...replaced, target } : null;
+}
+
 function spriteSourceInsertionLineEnd(source, position) {
   const text = String(source || "");
   const safePosition = Math.max(0, Math.min(text.length, Math.trunc(Number(position) || 0)));
@@ -3673,8 +3524,8 @@ function insertSpriteSourceTextAt(source, position, text, innerOffset = 0) {
   return { source: next, start, end };
 }
 
-function replaceSpriteDefinition(source) {
-  const entry = currentSpriteEditSourceRange(source);
+function replaceSpriteDefinition(source, sourceRange = currentSpriteEditSourceRange(source)) {
+  const entry = sourceRange;
   if (!entry) {
     return null;
   }
@@ -4174,14 +4025,17 @@ function spriteObjectDefinitionText(indent) {
   const shapeInfo = spriteAssetBindInfo(sprite.shapeBind, "shape");
   const colorRow = spritePaletteSourceTokens().join(" ");
   const solidRow = sprite.solidSource ? spriteSolidDefinitionRow(shapeInfo) : null;
+  const preludeRows = spriteSourcePreludeRows().map((row) => `${rowIndent}${row}`);
   if (solidRow) {
     return [
       `${normalizedIndent}${spriteObjectName()}`,
+      ...preludeRows,
       `${rowIndent}${solidRow}`,
     ].join("\n");
   }
   const lines = [
     `${normalizedIndent}${spriteObjectName()}`,
+    ...preludeRows,
     `${rowIndent}${colorRow}`,
   ];
   if (shapeInfo.linked && shapeInfo.name) {
@@ -4190,6 +4044,12 @@ function spriteObjectDefinitionText(indent) {
     lines.push(...spriteAscii().split("\n").map((row) => `${rowIndent}${row}`));
   }
   return lines.join("\n");
+}
+
+function spriteSourcePreludeRows() {
+  return (Array.isArray(sprite.sourcePreludeRows) ? sprite.sourcePreludeRows : [])
+    .map((row) => String(row || "").trim())
+    .filter(Boolean);
 }
 
 function spriteSolidDefinitionRow(shapeInfo) {
@@ -4287,8 +4147,13 @@ document.addEventListener("keydown", handleSpriteClipKeyboard);
 document.addEventListener("pointerdown", closeSpriteColorEditorFromOutside);
 spriteClearButton.addEventListener("click", clearSpriteBuilder);
 spriteExportButton.addEventListener("click", exportSpriteAscii);
-spriteInsertButton.addEventListener("click", addSpriteToSource);
-spriteUpdateButton.addEventListener("click", updateSpriteInSource);
+spriteUpdateButton.addEventListener("click", () => {
+  updateSpriteInSource().catch((error) => {
+    console.error(error);
+    setSpriteActionStatus("Sprite source update failed", "is-error");
+    setStatus("Sprite source update failed", "is-error");
+  });
+});
 duplicateSpriteButton?.addEventListener("click", duplicateSpriteInSource);
 spriteScaleDownButton.addEventListener("click", scaleDownSprite);
 spriteScaleUpButton.addEventListener("click", scaleUpSprite);
@@ -4297,5 +4162,6 @@ spriteRotateRightButton.addEventListener("click", rotateSpriteRight);
 spriteFlipHorizontalButton.addEventListener("click", flipSpriteHorizontal);
 spriteFlipVerticalButton.addEventListener("click", flipSpriteVertical);
 spriteFillButton.addEventListener("click", toggleSpriteBucketMode);
+spriteGridButton?.addEventListener("click", toggleSpriteGrid);
 sourceEditor.addEventListener("click", loadSpriteFromSourceClick);
 resetSpriteBuilder();

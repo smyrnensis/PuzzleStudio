@@ -21,6 +21,8 @@ export function generate_visuals_js(source: string, base_visuals_js: string): st
 
 export function highlight_source_html(source: string): string;
 
+export function highlight_source_json(source: string, include_outline: boolean): string;
+
 export function resolve_source_target(source: string, cursor_offset: number): string;
 
 export function solve_request_json(request_json: string): string;
@@ -30,6 +32,8 @@ export function solve_solver_task_json(request_json: string): string;
 export function solve_solver_task_json_with_progress(request_json: string, on_observation: Function): string;
 
 export function solve_state(source: string, puzzle_path: string, state_json: string, max_depth: number, max_nodes: number, max_ms: number): string;
+
+export function source_outline_json(source: string): string;
 
 export function suggest_source_completions(source: string, cursor_offset: number): string;
 
@@ -43,11 +47,13 @@ export interface InitOutput {
     readonly export_html: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => [number, number, number, number];
     readonly generate_visuals_js: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly highlight_source_html: (a: number, b: number) => [number, number];
+    readonly highlight_source_json: (a: number, b: number, c: number) => [number, number];
     readonly resolve_source_target: (a: number, b: number, c: number) => [number, number];
     readonly solve_request_json: (a: number, b: number) => [number, number, number, number];
     readonly solve_solver_task_json: (a: number, b: number) => [number, number, number, number];
     readonly solve_solver_task_json_with_progress: (a: number, b: number, c: any) => [number, number, number, number];
     readonly solve_state: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => [number, number, number, number];
+    readonly source_outline_json: (a: number, b: number) => [number, number];
     readonly suggest_source_completions: (a: number, b: number, c: number) => [number, number];
     readonly translate_puzzlescript: (a: number, b: number) => [number, number, number, number];
     readonly __wbg_wasmcompiledcoreruntime_free: (a: number, b: number) => void;

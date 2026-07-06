@@ -79,7 +79,7 @@ levels3 microban of sokoban_literally_in_3d {
     # = Wall
   }
 
-  level microban_01 {
+  level "microban_01" {
     ####..
     #..#..
     #..###
@@ -97,7 +97,7 @@ levels3 microban of sokoban_literally_in_3d {
     ,,,,,,
   }
 
-  level microban_02 {
+  level "microban_02" {
     ######
     #....#
     #.#P.#
@@ -115,7 +115,7 @@ levels3 microban of sokoban_literally_in_3d {
     ,,,,,,
   }
 
-  level microban_03 {
+  level "microban_03" {
     ..####...
     ###..####
     #.....B.#

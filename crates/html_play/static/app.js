@@ -1152,7 +1152,7 @@ function currentSceneAcceptsModelInput() {
 }
 
 function isControlPointerTarget(target) {
-  return Boolean(target?.closest?.("button, a, input, select, textarea, [role='button'], [tabindex]"));
+  return Boolean(target?.closest?.("button, a, input, select, textarea, [role='button'], [role='option'], .scene-menu-control"));
 }
 
 function currentSceneHasPuzzle3() {

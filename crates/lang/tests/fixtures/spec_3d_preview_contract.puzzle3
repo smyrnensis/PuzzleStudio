@@ -35,7 +35,7 @@ B = Box
 # = Wall
 }
 
-level microban_01 {
+level "microban_01" {
 ####..
 #..#..
 #..###

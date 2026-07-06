@@ -1783,7 +1783,7 @@ G = Goal
 * = Goal Box
 }
 
-level stacked {
+level "stacked" {
 ...
 .G.
 ...
@@ -1826,7 +1826,7 @@ legend {
 P = Player
 }
 
-level default_dot {
+level "default_dot" {
 P.
 }
 }
@@ -1858,7 +1858,7 @@ _ = empty
 P = Player
 }
 
-level override_empty {
+level "override_empty" {
 P.
 }
 }
@@ -1950,7 +1950,7 @@ legend {
 P = Player
 }
 
-level bad {
+level "bad" {
 PX
 }
 }
@@ -1986,7 +1986,7 @@ G = Goal
 B = Box
 }
 
-level solved {
+level "solved" {
 ...
 .B.
 ...
@@ -1996,7 +1996,7 @@ level solved {
 ...
 }
 
-level unsolved {
+level "unsolved" {
 ...
 ..B
 ...
@@ -2070,7 +2070,7 @@ G = Goal
 B = Box
 }
 
-level solved {
+level "solved" {
 ...
 .B.
 ...
@@ -2152,7 +2152,7 @@ legend {
 P = Player
 }
 
-level one {
+level "one" {
 ...
 .P.
 ...
@@ -2240,7 +2240,7 @@ legend {
 P = Player
 }
 
-level one {
+level "one" {
 P
 }
 }
@@ -2308,7 +2308,7 @@ legend {
 P = Player
 }
 
-level one {
+level "one" {
 P
 }
 }
@@ -2347,7 +2347,7 @@ legend {
 P = Player
 }
 
-level one {
+level "one" {
 P
 }
 }

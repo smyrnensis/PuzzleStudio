@@ -50,17 +50,17 @@ use puzzle_lang::GoalClause;
 use puzzle_lang::{
     AnimationDef, ArrowKey, GoalCondition, GoalExpr, GoalValue, KeyTrigger, Level,
     LoadedDocumentModel, LoadedGame, ResourceSelection, RuleAnimation, RuleAnimationTrigger,
-    RuleEffect, SceneAlignXDef, SceneAlignYDef, SceneBinaryOp, SceneComponent, SceneDef,
-    SceneEffect, SceneExpr, SceneLayoutDef, ScenePuzzleInitializer, SceneTextContent,
-    SceneTransitionTrigger, SceneValue, SoundsDef, ThemeDef, VisualSpriteDef, VisualSpriteKind,
-    parse_game2d as parse_game,
+    RuleEffect, SceneAlignXDef, SceneAlignYDef, SceneBinaryOp, SceneComponent, SceneEffect,
+    SceneExpr, SceneLayoutDef, ScenePuzzleInitializer, SceneTextContent, SceneTransitionTrigger,
+    SceneValue, SoundsDef, ThemeDef, VisualSpriteDef, VisualSpriteKind, parse_game2d as parse_game,
 };
 use puzzle_lang::{AssetKind, DiagnosticReport};
 #[cfg(not(target_arch = "wasm32"))]
 use puzzle_lang::{discover_game_entries, expand_game_imports_for_file, resolve_game_entry};
 use puzzle_play::{
     AnimationEvent, GameSession, LevelProgressSaveData, MessageEvent, PersistentVarSaveData,
-    ProgressSaveData, SoundEvent, WaitEvent, animation_events_for_trace, runtime_sounds_def,
+    ProgressSaveData, SoundEvent, WaitEvent, animation_events_for_trace,
+    mixed_document_loaded_game, puzzle3_document_scene_host_loaded_game, runtime_sounds_def,
 };
 #[cfg(feature = "solver")]
 use puzzle_solver::{
@@ -85,25 +85,6 @@ const PUZZLE3_VISUAL_CORE_JS: &str = include_str!("../static/puzzle3_visual_core
 const PUZZLE3_THREE_RENDERER_JS: &str = include_str!("../static/puzzle3_three_renderer.js");
 const PUZZLE3_APP_JS: &str = include_str!("../static/puzzle3_app.js");
 const THREE_MODULE_JS: &str = include_str!("../static/vendor/three/three.module.min.js");
-const PUZZLE3_SCENE_HOST_SOURCE: &str = r#"
-title "__puzzle3_scene_host__"
-
-puzzle scene_host {
-layers {
-  marker = Marker
-}
-empty .
-rules {
-}
-}
-
-levels scene_host_levels of scene_host {
-legend M = Marker
-level "scene_host" {
-M
-}
-}
-"#;
 const SEEDED_SFX_JS: &str = include_str!("../../../tools/music_generator/seeded_sfx.mjs");
 const SEEDED_MUSIC_JS: &str = include_str!("../../../tools/music_generator/seeded_music.mjs");
 const SEEDED_MUSIC_PLAYER_JS: &str =
@@ -215,13 +196,6 @@ step default
     }
 
     #[test]
-    fn puzzle3_scene_host_source_uses_current_2d_syntax() {
-        let loaded =
-            parse_game(PUZZLE3_SCENE_HOST_SOURCE).expect("puzzle3 scene host source should parse");
-        assert_eq!(loaded.levels.len(), 1);
-    }
-
-    #[test]
     fn stateful_core_runtime_exposes_changed_cells_for_2d() {
         let source = r#"
 animation {
@@ -240,7 +214,7 @@ puzzle board {
 
 levels default of board {
   legend P = Player
-  level one {
+  level "one" {
     P.
   }
 }
@@ -323,7 +297,7 @@ levels3 default of board {
     . = empty
     P = Player
   }
-  level one {
+  level "one" {
     P.
   }
 }
@@ -394,6 +368,10 @@ levels3 default of board {
         assert!(RENDERER_JS.contains(
             "this.paintCanvasLayer(context, item.layer, item.x, item.y, unit, item.animation, progress);"
         ));
+        assert!(RENDERER_JS.contains("return hasImage ? Math.max(unit, 32) : unit;"));
+        assert!(!RENDERER_JS.contains("leastCommonMultiple("));
+        assert!(!RENDERER_JS.contains("maximumCanvasCellUnit()"));
+        assert!(!RENDERER_JS.contains("scaledPixelEdge(index, sourceUnits, targetPixels)"));
         assert!(!RENDERER_JS.contains("animationForVisualCompanion"));
     }
 
@@ -438,7 +416,7 @@ legend {
 . = empty
 P = Player
 }
-level start {
+level "start" {
 P
 }
 }
@@ -452,7 +430,15 @@ P
         assert!(RENDERER_JS.contains("visualSpriteOffset(definition, unit)"));
         assert!(RENDERER_JS.contains("definition.pixelsPerCell?.width"));
         assert!(RENDERER_JS.contains("solidColor && this.canPaintAsFullCellSolid(definition)"));
-        assert!(RENDERER_JS.contains("unit = this.leastCommonMultiple(unit, cellCols);"));
+        assert!(RENDERER_JS.contains("unit = Math.max(unit, cellCols, cellRows);"));
+        assert!(!RENDERER_JS.contains("leastCommonMultiple("));
+        assert!(RENDERER_JS.contains("const pixelWidth = unit / cellCols;"));
+        assert!(
+            RENDERER_JS
+                .contains("const { cols: width, rows: height } = this.spritePatternSize(definition);")
+        );
+        assert!(!RENDERER_JS.contains("domPatternCellUnit()"));
+        assert!(!RENDERER_JS.contains("scaledPixelEdge(index, sourceUnits, targetPixels)"));
         assert!(!RENDERER_JS.contains("boundedLeastCommonMultiple"));
         assert!(RENDERER_CSS.contains("overflow: visible;"));
     }
@@ -476,7 +462,7 @@ legend {
 . = empty
 P = Player
 }
-level start {
+level "start" {
 P
 }
 }
@@ -493,7 +479,7 @@ P
         );
 
         assert!(scene.contains(
-            r#""settings":{"grid":{"visibility":1,"occupied_cells":true,"all_cells":true},"animation":{"tween":{"enabled":false,"intervalMs":250}}}"#
+            r#""settings":{"render":{},"grid":{"visibility":1,"occupied_cells":true,"all_cells":true},"inputBuffer":{"queueDuringWait":true,"fastForwardWait":true,"minWaitMs":50},"animation":{"tween":{"enabled":false,"intervalMs":250}}}"#
         ));
         assert!(RENDERER_JS.contains("gridSettings(scene)"));
         assert!(RENDERER_JS.contains("scene.settings?.grid"));
@@ -587,6 +573,8 @@ P
             RENDERER_CSS.contains("grid-template-columns: repeat(var(--cols), var(--cell-size));")
         );
         assert!(RENDERER_JS.contains("this.root.style.setProperty(\"--rows\", viewport.height);"));
+        assert!(!RENDERER_JS.contains("renderCellSize(scene)"));
+        assert!(!RENDERER_JS.contains("this.root.dataset.cellSize"));
         assert!(RENDERER_JS.contains("this.root.classList.toggle(\"is-canvas-renderer\""));
         assert!(RENDERER_JS.contains("scene.screen?.viewportFocusObjects"));
         assert!(RENDERER_JS.contains("focusObjects.has(Number(layer.objectId))"));
@@ -633,6 +621,8 @@ P
         );
         assert!(!APP_JS.contains("const itemTop = item.offsetTop;"));
         assert!(APP_JS.contains("function isControlPointerTarget(target)"));
+        assert!(APP_JS.contains("[role='option'], .scene-menu-control"));
+        assert!(!APP_JS.contains("[role='button'], [tabindex]"));
         assert!(APP_JS.contains("if (isControlPointerTarget(event.target))"));
         assert!(APP_JS.contains("function componentRowFootprint(components, context = {})"));
         assert!(APP_JS.contains("function componentColumnFootprint(components, context = {})"));
@@ -1336,7 +1326,7 @@ legend {
 . = empty
 P = Player
 }
-level start {
+level "start" {
 P
 }
 }
@@ -1346,7 +1336,9 @@ puzzle3 cube {
     actor = Player Box Wall
   }
 
-  group solid = Player Box Wall
+  groups {
+    solid = Player Box Wall
+  }
 
   rules {
 
@@ -1359,13 +1351,13 @@ levels3 cube_levels of cube {
     P = Player
   }
 
-  level start {
+  level "start" {
     P
   }
 }
 
 scene mixed_play {
-  layout size 4 3 {
+  layout {
     row {
       flat_board = puzzle flat
       cube_board = puzzle3 cube
@@ -1373,7 +1365,6 @@ scene mixed_play {
   }
 }
 "#;
-        Puzzle3RuntimeBridge::from_source(source).expect("mixed source should expose a 3D runtime");
         let document = puzzle_lang::parse_game(source).unwrap();
         let loaded = mixed_document_loaded_game(&document).unwrap();
         let mixed_scene = loaded
@@ -1429,11 +1420,11 @@ legend {
 P = Player
 }
 
-level microban_01 {
+level "microban_01" {
 P.
 }
 
-level microban_02 {
+level "microban_02" {
 .P
 }
 }
@@ -1453,11 +1444,11 @@ legend {
 P = Player
 }
 
-level microban_03 {
+level "microban_03" {
 P.
 }
 
-level microban_04 {
+level "microban_04" {
 .P
 }
 }
@@ -1486,7 +1477,7 @@ text level.title
             LoadedDocumentModel::Puzzle2d { name, game }
                 if name == "microban2d"
                     && game.levels.iter().map(|level| level.name.as_str()).collect::<Vec<_>>()
-                        == ["microban.microban_01", "microban.microban_02"]
+                        == ["microban_01", "microban_02"]
         ));
         assert!(matches!(
             &document.models[1],
@@ -1527,7 +1518,7 @@ text level.title
                 .iter()
                 .map(|level| level.name.as_str())
                 .collect::<Vec<_>>(),
-            ["microban.microban_01", "microban.microban_02"]
+            ["microban_01", "microban_02"]
         );
 
         let mut host_data = String::new();
@@ -1764,7 +1755,7 @@ levels default of board {
     B = Box
     G = Goal
   }
-  level start {
+  level "start" {
     PBG
   }
 }
@@ -1844,7 +1835,7 @@ levels default of board {
     P = Player
     E = Exit
   }
-  level start {
+  level "start" {
     PE
   }
 }
@@ -1972,7 +1963,7 @@ levels default of board {
     . = empty
     P = Player
   }
-  level start {
+  level "start" {
     P
   }
 }
@@ -2025,7 +2016,7 @@ levels default of board {
     . = empty
     P = Player
   }
-  level start {
+  level "start" {
     P
   }
 }
@@ -2123,7 +2114,7 @@ levels default of board {
     P = Player
     G = Goal
   }
-  level start {
+  level "start" {
     PG
   }
 }
@@ -2181,7 +2172,7 @@ levels default of board {
     P = Player
     G = Goal
   }
-  level start {
+  level "start" {
     PG
   }
 }
@@ -2247,7 +2238,7 @@ levels default of board {
     P = Player
     E = Exit
   }
-  level start {
+  level "start" {
     PE
   }
 }
@@ -2337,7 +2328,7 @@ levels default of board {
     B = Box
     G = Goal
   }
-  level one {
+  level "one" {
     PBG
   }
 }
@@ -2393,7 +2384,9 @@ d ArrowRight -> right
 r -> restart
 }
 
-group solid = Player Box Wall
+groups {
+solid = Player Box Wall
+}
 
 rules {
 input right [ Player | Box | no solid ] -> [ | Player | Box ]
@@ -2418,7 +2411,7 @@ B = Box
 G = Goal
 }
 
-level one {
+level "one" {
 PB.
 
 ..G
@@ -2475,7 +2468,7 @@ puzzle board {
 levels default of board {
   legend A = A
   legend B = B
-  level start {
+  level "start" {
     AAA
   }
 }
@@ -2685,7 +2678,7 @@ levels {
         P = Player
     }
 
-    level one
+    level "one"
     P
 }
 
@@ -2742,10 +2735,10 @@ levels {
         P = Player
     }
 
-    level one
+    level "one"
     P
 
-    level two
+    level "two"
     P
 }
 
@@ -2775,9 +2768,12 @@ rules {
         assert!(STANDALONE_JS.contains("snapshot()"));
         assert!(STANDALONE_JS.contains("restoreSessionProgressSave()"));
         assert!(STANDALONE_JS.contains("writeSessionProgressSave()"));
+        assert!(STANDALONE_JS.contains("next.has_progress_save = true;"));
         assert!(APP_JS.contains("animationEvents: event.data.animationEvents"));
         assert!(APP_JS.contains("standaloneRuntime.snapshot({ forceJs: true })"));
         assert!(STANDALONE_JS.contains("this.sessionRuntime.progress_save()"));
+        assert!(STANDALONE_JS.contains("PuzzleStudioPreviewProgressSave"));
+        assert!(STANDALONE_JS.contains("PuzzleStudioEditorPreviewProgressSaves"));
         assert!(STANDALONE_JS.contains("window.localStorage?.setItem"));
         assert!(STANDALONE_JS.contains("window.localStorage?.getItem"));
         assert!(!STANDALONE_JS.contains("progressSaveData()"));
@@ -2798,27 +2794,50 @@ rules {
         )
         .unwrap();
 
-        let title = bridge.request_json("GET", "/api/state").unwrap();
-        let title: serde_json::Value = serde_json::from_str(&title).unwrap();
-        assert_eq!(title["currentScene"], "title");
-        assert_eq!(title["title"], "Microban Basic");
-        let title = title.as_object().unwrap();
-        assert!(title.contains_key("visibleScenes"));
-        assert!(title.contains_key("sceneState"));
-        assert!(title.contains_key("scenePuzzles"));
-        assert!(!title.contains_key("visibleScreens"));
-        assert!(!title.contains_key("screenState"));
-        assert!(!title.contains_key("screenPuzzles"));
+        let initial = bridge.request_json("GET", "/api/state").unwrap();
+        let initial: serde_json::Value = serde_json::from_str(&initial).unwrap();
+        assert_eq!(initial["currentScene"], "main");
+        assert_eq!(initial["title"], "Ascii Click Smoke");
+        let initial = initial.as_object().unwrap();
+        assert!(initial.contains_key("visibleScenes"));
+        assert!(initial.contains_key("sceneState"));
+        assert!(initial.contains_key("scenePuzzles"));
+        assert!(!initial.contains_key("visibleScreens"));
+        assert!(!initial.contains_key("screenState"));
+        assert!(!initial.contains_key("screenPuzzles"));
+
+        let playing = bridge
+            .request_json("POST", "/api/command/goto%20main")
+            .unwrap();
+        let playing: serde_json::Value = serde_json::from_str(&playing).unwrap();
+        assert_eq!(playing["currentScene"], "main");
+        assert_eq!(playing["levelIndex"], 0);
+
+        let save: serde_json::Value = serde_json::from_str(&bridge.progress_save_json()).unwrap();
+        assert_eq!(save["currentLevel"], "ascii");
+    }
+
+    #[test]
+    fn standalone_session_scene_preserves_2d_render_settings_after_goto() {
+        let source = include_str!("../../../games/TPGJ6/locked.puzzle");
+        let mut bridge =
+            StandaloneSessionBridge::from_source(source, "games/TPGJ6/locked.puzzle").unwrap();
 
         let playing = bridge
             .request_json("POST", "/api/command/goto%20playing")
             .unwrap();
         let playing: serde_json::Value = serde_json::from_str(&playing).unwrap();
-        assert_eq!(playing["currentScene"], "playing");
-        assert_eq!(playing["levelIndex"], 0);
 
-        let save: serde_json::Value = serde_json::from_str(&bridge.progress_save_json()).unwrap();
-        assert_eq!(save["currentLevel"], "microban.1");
+        assert_eq!(playing["currentScene"], "playing");
+        assert_eq!(playing["scene"]["settings"]["render"]["cellSize"], 40);
+        assert_eq!(
+            playing["scene"]["settings"]["inputBuffer"]["minWaitMs"],
+            50
+        );
+        assert_eq!(
+            playing["scene"]["settings"]["animation"]["tween"]["intervalMs"],
+            50
+        );
     }
 
     #[test]
@@ -2839,7 +2858,7 @@ legend {
 . = empty
 P = Player
 }
-level first {
+level "first" {
 P
 .
 }
@@ -2901,10 +2920,10 @@ legend {
 . = empty
 P = Player
 }
-level first {
+level "first" {
 P.
 }
-level second {
+level "second" {
 P.
 }
 }
@@ -3131,15 +3150,15 @@ scene playing {
         .unwrap();
         bridge
             .restore_progress_save_json(
-                r#"{"version":1,"levels":[{"name":"microban.2","cleared":true}],"currentLevel":"microban.2","persistentVars":[]}"#,
+                r#"{"version":1,"levels":[{"name":"ascii","cleared":true}],"currentLevel":"ascii","persistentVars":[]}"#,
             )
             .unwrap();
 
         let snapshot = bridge.request_json("GET", "/api/state").unwrap();
         let snapshot: serde_json::Value = serde_json::from_str(&snapshot).unwrap();
-        assert_eq!(snapshot["selectedLevelIndex"], 1);
+        assert_eq!(snapshot["selectedLevelIndex"], 0);
         assert_eq!(snapshot["has_progress_save"], true);
-        assert_eq!(snapshot["levels"][1]["cleared"], true);
+        assert_eq!(snapshot["levels"][0]["cleared"], true);
     }
 
     #[test]
@@ -3153,7 +3172,9 @@ layers {
   actor = Player1 Player2
 }
 empty .
-group player = Player1 Player2
+groups {
+  player = Player1 Player2
+}
 flickscreen 5 5
 screen_focus player
 
@@ -3206,7 +3227,7 @@ levels {
         P = Player
     }
 
-    level one
+    level "one"
     P
 }
 
@@ -3272,7 +3293,7 @@ levels3 default of cube {
   legend {
     P = Player
   }
-  level one {
+  level "one" {
     P
   }
 }
@@ -3504,7 +3525,7 @@ levels3 default of cube {
   legend {
     P = Player
   }
-  level one {
+  level "one" {
     P
   }
 }
@@ -3559,7 +3580,7 @@ levels3 basic of cube {
   legend {
     P = Player
   }
-  level one {
+  level "one" {
     P
   }
 }

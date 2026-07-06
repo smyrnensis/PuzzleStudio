@@ -8,6 +8,7 @@
 // compiler internals, or tool-specific editing state.
 const documentStoreKey = "PuzzleStudioFileTree:v4";
 const legacyDocumentStoreKey = "PuzzleStudioEditorStore:v1";
+const explorerSectionStoreKey = "PuzzleStudioExplorerSections:v1";
 let sourceCursorPreviewKey = "";
 let sourceTargetRequestId = 0;
 let sourceCursorResolveSignature = null;
@@ -27,10 +28,19 @@ let openTabIds = [];
 let draftEntry = null;
 let renameEntry = null;
 let draggedNodeId = "";
+let treeRowByNodeId = new Map();
+let treeDragDecisionCache = null;
+let currentDropTargetId = null;
+let currentDropTargetElement = null;
 let workspaceChangeUnlisten = null;
 let workspaceHostMutationDepth = 0;
 let deferredWorkspaceChangedPayload = null;
 let recentWorkspaces = [];
+let explorerFilesCollapsed = false;
+let explorerOutlineCollapsed = false;
+let explorerOutlineHeight = "35%";
+let draggingOutlineSplitter = false;
+let draggingOutlineSplitterPointerId = null;
 
 function configureFolderImport() {
   if (!importFolderInput || !importFolderButton || "webkitdirectory" in importFolderInput) {
@@ -1032,6 +1042,7 @@ function normalizeTree(node, parentPath = "") {
 }
 
 function syncDocumentsFromTree() {
+  resetTreeDragDecisionCache();
   documents = [];
   collectFiles(fileTree, "");
 }
@@ -1515,7 +1526,10 @@ function normalizedDocumentTabWheelDelta(event) {
 function activePreviewDocument() {
   const selected = selectedTreeNode();
   if (selected?.kind === "folder") {
-    return previewDocumentForFolder(selected);
+    const folderPreview = previewDocumentForFolder(selected);
+    if (folderPreview) {
+      return folderPreview;
+    }
   }
   return previewDocumentFor(activeDocument());
 }
@@ -1828,6 +1842,8 @@ function activeEmbeddedDocumentIndex() {
 }
 
 function renderDocumentSelect() {
+  treeRowByNodeId = new Map();
+  clearDropTargets();
   documentList.replaceChildren();
   renderTreeNode(fileTree, documentList, 0);
   renderExplorerEmptyState();
@@ -1887,6 +1903,148 @@ document.addEventListener("click", (event) => {
   });
 });
 
+function loadExplorerSectionState() {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(explorerSectionStoreKey) || "{}");
+    explorerFilesCollapsed = parsed.filesCollapsed === true;
+    explorerOutlineCollapsed = parsed.outlineCollapsed === true;
+    explorerOutlineHeight = validExplorerOutlineHeight(parsed.outlineHeight) || explorerOutlineHeight;
+  } catch {
+    explorerFilesCollapsed = false;
+    explorerOutlineCollapsed = false;
+    explorerOutlineHeight = "35%";
+  }
+  if (explorerFilesCollapsed && explorerOutlineCollapsed) {
+    explorerOutlineCollapsed = false;
+  }
+  applyExplorerSectionLayout();
+}
+
+function saveExplorerSectionState() {
+  try {
+    window.localStorage.setItem(explorerSectionStoreKey, JSON.stringify({
+      filesCollapsed: explorerFilesCollapsed,
+      outlineCollapsed: explorerOutlineCollapsed,
+      outlineHeight: explorerOutlineHeight,
+    }));
+  } catch {
+  }
+}
+
+function validExplorerOutlineHeight(value) {
+  const text = String(value || "").trim();
+  if (!/^\d+(?:\.\d+)?%$/.test(text)) {
+    return "";
+  }
+  const numeric = Number.parseFloat(text);
+  return Number.isFinite(numeric) && numeric >= 18 && numeric <= 75 ? text : "";
+}
+
+function explorerSectionsElement() {
+  return document.querySelector(".explorer-sections");
+}
+
+function explorerSectionElement(id) {
+  return document.querySelector(`[data-explorer-section="${id}"]`);
+}
+
+function applyExplorerSectionLayout() {
+  const sections = explorerSectionsElement();
+  if (!sections) {
+    return;
+  }
+  sections.classList.toggle("is-files-collapsed", explorerFilesCollapsed);
+  sections.classList.toggle("is-outline-collapsed", explorerOutlineCollapsed);
+  sections.style.setProperty("--source-outline-height", explorerOutlineHeight);
+  syncExplorerSectionToggle("files", explorerFilesCollapsed);
+  syncExplorerSectionToggle("outline", explorerOutlineCollapsed);
+}
+
+function syncExplorerSectionToggle(id, collapsed) {
+  explorerSectionElement(id)?.classList.toggle("is-collapsed", collapsed);
+  const toggle = document.querySelector(`[data-explorer-section-toggle="${id}"]`);
+  if (toggle) {
+    toggle.setAttribute("aria-expanded", String(!collapsed));
+  }
+}
+
+function toggleExplorerSection(id) {
+  if (id === "files") {
+    explorerFilesCollapsed = !explorerFilesCollapsed;
+    if (explorerFilesCollapsed && explorerOutlineCollapsed) {
+      explorerOutlineCollapsed = false;
+    }
+  } else if (id === "outline") {
+    explorerOutlineCollapsed = !explorerOutlineCollapsed;
+    if (explorerOutlineCollapsed && explorerFilesCollapsed) {
+      explorerFilesCollapsed = false;
+    }
+  } else {
+    return;
+  }
+  applyExplorerSectionLayout();
+  saveExplorerSectionState();
+  if (id === "outline" && !explorerOutlineCollapsed && typeof scheduleSourceOutlineRefresh === "function") {
+    scheduleSourceOutlineRefresh(true);
+  }
+}
+
+function resizeExplorerOutlineFromPointer(clientY) {
+  const sections = explorerSectionsElement();
+  if (!sections || explorerFilesCollapsed || explorerOutlineCollapsed) {
+    return;
+  }
+  const rect = sections.getBoundingClientRect();
+  const headerHeight = 24 * 2;
+  const splitterHeight = outlineSplitter?.offsetHeight || 5;
+  const available = Math.max(1, rect.height - headerHeight - splitterHeight);
+  const outlinePixels = rect.bottom - clientY - 12;
+  const percent = Math.max(18, Math.min(75, (outlinePixels / available) * 100));
+  explorerOutlineHeight = `${percent.toFixed(1)}%`;
+  applyExplorerSectionLayout();
+}
+
+document.addEventListener("click", (event) => {
+  const toggle = event.target.closest("[data-explorer-section-toggle]");
+  if (!toggle) {
+    return;
+  }
+  event.preventDefault();
+  toggleExplorerSection(toggle.dataset.explorerSectionToggle);
+});
+
+outlineSplitter?.addEventListener("pointerdown", (event) => {
+  if (event.button !== 0 || explorerFilesCollapsed || explorerOutlineCollapsed) {
+    return;
+  }
+  draggingOutlineSplitter = true;
+  draggingOutlineSplitterPointerId = event.pointerId;
+  outlineSplitter.setPointerCapture?.(event.pointerId);
+  outlineSplitter.classList.add("is-active-splitter");
+  event.preventDefault();
+});
+
+document.addEventListener("pointermove", (event) => {
+  if (!draggingOutlineSplitter || event.pointerId !== draggingOutlineSplitterPointerId) {
+    return;
+  }
+  resizeExplorerOutlineFromPointer(event.clientY);
+});
+
+function stopExplorerOutlineResize(event) {
+  if (!draggingOutlineSplitter || event.pointerId !== draggingOutlineSplitterPointerId) {
+    return;
+  }
+  draggingOutlineSplitter = false;
+  draggingOutlineSplitterPointerId = null;
+  outlineSplitter?.classList.remove("is-active-splitter");
+  saveExplorerSectionState();
+}
+
+document.addEventListener("pointerup", stopExplorerOutlineResize);
+document.addEventListener("pointercancel", stopExplorerOutlineResize);
+loadExplorerSectionState();
+
 function renderTreeNode(node, parent, depth) {
   if (!node) {
     return;
@@ -1897,6 +2055,7 @@ function renderTreeNode(node, parent, depth) {
       row.className = "tree-row folder-row";
       row.dataset.nodeId = node.id;
       row.dataset.dragId = node.id;
+      treeRowByNodeId.set(node.id, row);
       row.draggable = true;
       row.tabIndex = 0;
       row.style.setProperty("--depth", depth);
@@ -1923,6 +2082,7 @@ function renderTreeNode(node, parent, depth) {
   row.className = "tree-row file-row";
   row.dataset.fileId = node.id;
   row.dataset.dragId = node.id;
+  treeRowByNodeId.set(node.id, row);
   row.draggable = true;
   row.tabIndex = 0;
   row.style.setProperty("--depth", depth);
@@ -2682,7 +2842,7 @@ async function moveNodeToFolder(nodeId, targetFolderId) {
   if (source.node === fileTree || source.parent === targetFolder) {
     return false;
   }
-  if (source.node.isWorkspaceRoot || targetFolder.isWorkspaceRoot && source.node.workspaceRoot && source.node.workspaceRoot !== targetFolder.workspaceRoot) {
+  if (source.node.isWorkspaceRoot) {
     return false;
   }
   if (source.node.kind === "folder" && containsNode(source.node, targetFolder.id)) {
@@ -2694,9 +2854,6 @@ async function moveNodeToFolder(nodeId, targetFolderId) {
   const targetWorkspaceRoot = targetFolder === fileTree
     ? sourceWorkspaceRoot
     : workspaceRootForFolder(targetFolder);
-  if (sourceWorkspaceRoot && targetWorkspaceRoot && sourceWorkspaceRoot !== targetWorkspaceRoot) {
-    throw new Error("Cannot move entries between workspaces.");
-  }
   const sourcePath = source.node.kind === "folder"
     ? folderPath(source.node)
     : source.node.puzzlePath;
@@ -2712,8 +2869,9 @@ async function moveNodeToFolder(nodeId, targetFolderId) {
     try {
       await window.PuzzleStudioHost.renameWorkspaceEntry({
         fromPath: hostPathForEditorPath(sourcePath, sourceWorkspaceRoot),
-        toPath: hostPathForEditorPath(targetPath, sourceWorkspaceRoot),
+        toPath: hostPathForEditorPath(targetPath, targetWorkspaceRoot),
         workspaceRoot: sourceWorkspaceRoot,
+        targetWorkspaceRoot,
       });
     } finally {
       endWorkspaceHostMutation();
@@ -2726,6 +2884,7 @@ async function moveNodeToFolder(nodeId, targetFolderId) {
   } else {
     source.node.name = uniqueChildName(targetFolder, source.node.name || "item");
   }
+  setWorkspaceRootForNode(source.node, targetWorkspaceRoot);
   targetFolder.children.push(source.node);
   targetFolder.expanded = true;
   selectedFolderId = targetFolder.id;
@@ -2763,41 +2922,78 @@ function canDropNodeOnFolder(nodeId, targetFolderId) {
   if (!nodeId) {
     return false;
   }
-  const source = findNodeWithParent(fileTree, nodeId);
+  const cache = treeDragCacheForNode(nodeId);
+  if (!cache?.source?.node || !cache.source.parent) {
+    return false;
+  }
+  const targetKey = targetFolderId || "";
+  if (cache.targetDecisions.has(targetKey)) {
+    return cache.targetDecisions.get(targetKey);
+  }
+  const source = cache.source;
   const targetFolder = targetFolderId ? findNode(fileTree, targetFolderId) : fileTree;
-  if (!source?.node || !source.parent || targetFolder?.kind !== "folder") {
-    return false;
+  let allowed = true;
+  if (targetFolder?.kind !== "folder") {
+    allowed = false;
   }
-  if (source.parent === targetFolder) {
-    return false;
+  if (allowed && source.parent === targetFolder) {
+    allowed = false;
   }
-  if (source.node.isWorkspaceRoot || targetFolder.isWorkspaceRoot && source.node.workspaceRoot && source.node.workspaceRoot !== targetFolder.workspaceRoot) {
-    return false;
+  if (allowed && source.node.isWorkspaceRoot) {
+    allowed = false;
   }
-  const sourceWorkspaceRoot = workspaceRootForNode(source.node);
-  const targetWorkspaceRoot = targetFolder === fileTree
-    ? sourceWorkspaceRoot
-    : workspaceRootForFolder(targetFolder);
-  if (sourceWorkspaceRoot && targetWorkspaceRoot && sourceWorkspaceRoot !== targetWorkspaceRoot) {
-    return false;
+  if (allowed && source.node.kind === "folder" && containsNode(source.node, targetFolder.id)) {
+    allowed = false;
   }
-  if (source.node.kind === "folder" && containsNode(source.node, targetFolder.id)) {
-    return false;
-  }
-  return true;
+  cache.targetDecisions.set(targetKey, allowed);
+  return allowed;
 }
 
 function markDropTarget(folderId) {
+  const targetId = folderId || "";
+  const target = targetId ? treeRowByNodeId.get(targetId) : documentList;
+  if (currentDropTargetId === targetId && currentDropTargetElement === target) {
+    return;
+  }
   clearDropTargets();
-  const target = folderId
-    ? Array.from(documentList.querySelectorAll("[data-node-id]")).find((row) => row.dataset.nodeId === folderId)
-    : documentList;
-  target?.classList.add("is-drop-target");
+  currentDropTargetId = targetId;
+  currentDropTargetElement = target || null;
+  currentDropTargetElement?.classList.add("is-drop-target");
 }
 
 function clearDropTargets() {
-  documentList.classList.remove("is-drop-target");
-  documentList.querySelectorAll(".is-drop-target").forEach((row) => row.classList.remove("is-drop-target"));
+  currentDropTargetElement?.classList.remove("is-drop-target");
+  currentDropTargetId = null;
+  currentDropTargetElement = null;
+}
+
+function resetTreeDragDecisionCache() {
+  treeDragDecisionCache = null;
+}
+
+function treeDragCacheForNode(nodeId) {
+  if (treeDragDecisionCache?.nodeId === nodeId) {
+    return treeDragDecisionCache;
+  }
+  const source = findNodeWithParent(fileTree, nodeId);
+  treeDragDecisionCache = {
+    nodeId,
+    source,
+    targetDecisions: new Map(),
+  };
+  return treeDragDecisionCache;
+}
+
+function setWorkspaceRootForNode(node, nextRoot) {
+  if (!node) {
+    return;
+  }
+  node.workspaceRoot = nextRoot || "";
+  if (node.kind === "folder") {
+    for (const child of node.children || []) {
+      setWorkspaceRootForNode(child, nextRoot);
+    }
+  }
 }
 
 function findNodeWithParent(folder, nodeId, parent = null) {
@@ -3094,7 +3290,7 @@ function ensurePuzzleExtension(name) {
   if (!cleaned) {
     return "";
   }
-  return cleaned.endsWith(".puzzle") ? cleaned : `${cleaned}.puzzle`;
+  return /\.(?:puzzle|puzzle3)$/i.test(cleaned) ? cleaned : `${cleaned}.puzzle`;
 }
 
 function sanitizeFileName(name) {

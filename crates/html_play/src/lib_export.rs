@@ -402,59 +402,6 @@ fn export_puzzle3_document_html_with_runtime_wasm(
     ))
 }
 
-fn puzzle3_document_scene_host_loaded_game(
-    document: &puzzle_lang::LoadedDocument,
-) -> Result<LoadedGame, String> {
-    let mut loaded = parse_game(PUZZLE3_SCENE_HOST_SOURCE).map_err(|error| error.to_string())?;
-    let prototype_level = loaded
-        .levels
-        .first()
-        .cloned()
-        .ok_or_else(|| "puzzle3 scene host must contain a prototype level".to_string())?;
-    let Some(LoadedDocumentModel::Puzzle3d { name, puzzle }) = document
-        .models
-        .iter()
-        .find(|model| matches!(model, LoadedDocumentModel::Puzzle3d { .. }))
-    else {
-        return Err("puzzle3 scene host requires a 3D puzzle model".to_string());
-    };
-    let Some(bundle) = puzzle.level_bundle.as_ref() else {
-        return Err("puzzle3 scene host requires 3D levels".to_string());
-    };
-
-    loaded.title = document.title.clone();
-    loaded.subtitle = document.subtitle.clone();
-    loaded.author = document.author.clone();
-    loaded.homepage = document.homepage.clone();
-    loaded.default_wait_ms = document.default_wait_ms;
-    loaded.default_again_ms = document.default_again_ms;
-    loaded.input_buffer = document.input_buffer.clone();
-    loaded.animation = document.animation.clone();
-    loaded.sounds = document.sounds.clone();
-    loaded.theme = document.theme.clone();
-    loaded.assets = document.assets.clone();
-    loaded.scenes = document
-        .scenes
-        .iter()
-        .cloned()
-        .map(scene_without_model_puzzle_state)
-        .collect();
-    loaded.levels = bundle
-        .levels
-        .iter()
-        .map(|entry| Level {
-            name: entry.name.clone(),
-            pack: None,
-            puzzle: name.clone(),
-            initial_state: prototype_level.initial_state.clone(),
-            regions: Vec::new(),
-            level_start_program: None,
-            level_clear_program: None,
-        })
-        .collect();
-    Ok(loaded)
-}
-
 fn export_mixed_document_html(
     document: &puzzle_lang::LoadedDocument,
     loaded: LoadedGame,
@@ -485,62 +432,6 @@ fn export_mixed_document_html(
         &runtime_sources.model_3d,
         &puzzle3_path,
     ))
-}
-
-fn mixed_document_loaded_game(
-    document: &puzzle_lang::LoadedDocument,
-) -> Result<LoadedGame, String> {
-    let Some(LoadedDocumentModel::Puzzle2d { game, .. }) = document
-        .models
-        .iter()
-        .find(|model| matches!(model, LoadedDocumentModel::Puzzle2d { .. }))
-    else {
-        return Err("mixed HTML export requires a 2D puzzle model host".to_string());
-    };
-    let mut loaded = game.clone();
-    loaded.title = document.title.clone();
-    loaded.subtitle = document.subtitle.clone();
-    loaded.author = document.author.clone();
-    loaded.homepage = document.homepage.clone();
-    loaded.default_wait_ms = document.default_wait_ms;
-    loaded.default_again_ms = document.default_again_ms;
-    loaded.input_buffer = document.input_buffer.clone();
-    loaded.sounds = document.sounds.clone();
-    loaded.theme = document.theme.clone();
-    loaded.assets = document.assets.clone();
-    loaded.scenes = document
-        .scenes
-        .iter()
-        .cloned()
-        .map(scene_with_only_2d_puzzle_state)
-        .collect();
-    Ok(loaded)
-}
-
-fn scene_with_only_2d_puzzle_state(mut scene: SceneDef) -> SceneDef {
-    scene.state.puzzles.retain(|puzzle| puzzle.kind == "puzzle");
-    if let Some(rule) = &scene.puzzle_rule {
-        let target = rule
-            .target
-            .split('.')
-            .next_back()
-            .unwrap_or(rule.target.as_str());
-        if !scene
-            .state
-            .puzzles
-            .iter()
-            .any(|puzzle| puzzle.name == target)
-        {
-            scene.puzzle_rule = None;
-        }
-    }
-    scene
-}
-
-fn scene_without_model_puzzle_state(mut scene: SceneDef) -> SceneDef {
-    scene.state.puzzles.clear();
-    scene.puzzle_rule = None;
-    scene
 }
 
 fn mixed_document_puzzle3_fixture_json(
