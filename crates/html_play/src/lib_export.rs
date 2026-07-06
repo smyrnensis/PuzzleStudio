@@ -406,9 +406,6 @@ fn export_puzzle3_document_html_with_runtime_wasm(
     host_mode: StandaloneHostMode,
     runtime_wasm: StandaloneRuntimeWasm<'_>,
 ) -> Result<String, String> {
-    if host_mode == StandaloneHostMode::Export {
-        ensure_puzzle3_source_free_export_supported(document)?;
-    }
     let fixture_json = puzzle_lang::export_loaded_document_visual_fixture_json(document)
         .map_err(|error| error.to_string())?;
     let runtime_sources = if host_mode == StandaloneHostMode::EditorPreview {
@@ -451,9 +448,6 @@ fn export_mixed_document_html(
     host_mode: StandaloneHostMode,
     runtime_wasm: StandaloneRuntimeWasm<'_>,
 ) -> Result<String, String> {
-    if host_mode == StandaloneHostMode::Export && loaded_uses_puzzle3_frames(&loaded) {
-        ensure_puzzle3_source_free_export_supported(document)?;
-    }
     let fixture_json = mixed_document_puzzle3_fixture_json(document)?;
     let runtime_sources = if host_mode == StandaloneHostMode::EditorPreview {
         Some(puzzle_lang::split_document_runtime_sources(&source).map_err(|error| error.to_string())?)
@@ -482,27 +476,6 @@ fn export_mixed_document_html(
             .map(|sources| sources.model_3d.as_str()),
         Some(&puzzle3_path),
     ))
-}
-
-fn ensure_puzzle3_source_free_export_supported(
-    document: &puzzle_lang::LoadedDocument,
-) -> Result<(), String> {
-    for model in &document.models {
-        let LoadedDocumentModel::Puzzle3d { name, puzzle } = model else {
-            continue;
-        };
-        if puzzle.local_frame.is_some() {
-            return Err(format!(
-                "3D standalone export does not support local_frame in puzzle3 model {name:?} yet; local_frame is not part of the source-free fixture runtime contract."
-            ));
-        }
-        if puzzle.lifecycle.on_level_start_local_frame.is_some() {
-            return Err(format!(
-                "3D standalone export does not support on_level_start local_frame in puzzle3 model {name:?} yet; local_frame is not part of the source-free fixture runtime contract."
-            ));
-        }
-    }
-    Ok(())
 }
 
 fn mixed_document_puzzle3_fixture_json(

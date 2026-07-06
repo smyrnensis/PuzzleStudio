@@ -2,16 +2,18 @@ use std::collections::BTreeMap;
 use std::fmt::Write;
 
 use crate::{
-    Direction3, Guard3, Lifecycle3, LifecycleCommand3, MatchCell3, ObjectId, ObjectSelector3,
-    ParsedPuzzle3, Pattern3, Rule3, RuleApplication3, RuleEffect3, SelectorCatalog3, SelectorTag3,
-    Size3, SpriteColor3, SpriteSet3, ViewportFollow3, ViewportHeight3, ViewportMode3,
-    WinCondition3, WriteOp3,
+    Direction3, ObjectId, ObjectSelector3, ParsedPuzzle3, SelectorCatalog3, SelectorTag3, Size3,
+    SpriteColor3, SpriteSet3, ViewportFollow3, ViewportHeight3, ViewportMode3,
+};
+use puzzle_runtime_contract::{
+    PUZZLE3_RUNTIME_CONTRACT_VERSION, Puzzle3RuntimeContract, puzzle3_runtime_contract_json,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum VisualFixtureExportError3 {
     MissingLevelBundle,
     MissingObjectName { object: ObjectId },
+    RuntimeContract(String),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -76,7 +78,12 @@ pub fn export_visual_fixture_json_with_title_scenes_and_animation(
     let mut out = String::new();
     out.push_str("{\n");
     write_json_string_field(&mut out, 1, "title", &title, true);
-    out.push_str("  \"runtimeContractVersion\": 1,\n");
+    let _ = writeln!(
+        out,
+        "  \"runtimeContractVersion\": {},",
+        PUZZLE3_RUNTIME_CONTRACT_VERSION
+    );
+    write_runtime_contract(&mut out, parsed, bundle)?;
     let _ = writeln!(out, "  \"layerCount\": {},", parsed.game.layer_count);
     write_size_field(&mut out, 1, "size", bundle.levels[0].level.size, true);
     write_camera(&mut out, parsed);
@@ -86,11 +93,6 @@ pub fn export_visual_fixture_json_with_title_scenes_and_animation(
     write_direction_sets(&mut out);
     write_controls(&mut out, parsed);
     write_inputs(&mut out, parsed);
-    write_rules(&mut out, "rules", &parsed.rules);
-    write_lifecycle(&mut out, &parsed.lifecycle);
-    if let Some(condition) = parsed.win_condition.as_ref() {
-        write_win_condition(&mut out, condition);
-    }
     write_objects(&mut out, parsed, &object_names)?;
     write_scenes(&mut out, scene_fields_json);
     write_levels(&mut out, parsed, &object_names)?;
@@ -98,6 +100,28 @@ pub fn export_visual_fixture_json_with_title_scenes_and_animation(
     write_sprites(&mut out, parsed.sprite_set.as_ref());
     out.push_str("}\n");
     Ok(out)
+}
+
+fn write_runtime_contract(
+    out: &mut String,
+    parsed: &ParsedPuzzle3,
+    bundle: &crate::LevelBundle3,
+) -> Result<(), VisualFixtureExportError3> {
+    let contract = Puzzle3RuntimeContract::checked_new(
+        parsed.game.clone(),
+        parsed.local_frame.clone(),
+        parsed.rules.clone(),
+        bundle.clone(),
+        parsed.win_condition.clone(),
+        parsed.lifecycle.clone(),
+    )
+    .map_err(|error| VisualFixtureExportError3::RuntimeContract(error.to_string()))?;
+    let contract_json = puzzle3_runtime_contract_json(&contract)
+        .map_err(|error| VisualFixtureExportError3::RuntimeContract(error.to_string()))?;
+    out.push_str("  \"runtimeContract\": ");
+    out.push_str(&contract_json);
+    out.push_str(",\n");
+    Ok(())
 }
 
 fn write_camera(out: &mut String, parsed: &ParsedPuzzle3) {
@@ -387,519 +411,6 @@ fn write_inputs(out: &mut String, parsed: &ParsedPuzzle3) {
         out.push_str(" }");
     }
     out.push_str("],\n");
-}
-
-fn write_lifecycle(out: &mut String, lifecycle: &Lifecycle3) {
-    out.push_str("  \"lifecycle\": {\n");
-    out.push_str("    \"onLevelStart\": ");
-    write_rule_array(out, &lifecycle.on_level_start);
-    out.push_str(",\n");
-    out.push_str("    \"onLevelClear\": [");
-    for (index, command) in lifecycle.on_level_clear.iter().enumerate() {
-        if index > 0 {
-            out.push_str(", ");
-        }
-        match command {
-            LifecycleCommand3::NextLevel => out.push_str("\"next_level\""),
-        }
-    }
-    out.push_str("],\n");
-    out.push_str("    \"onLastLevelClear\": ");
-    if let Some(commands) = lifecycle.on_last_level_clear.as_ref() {
-        out.push('[');
-        for (index, command) in commands.iter().enumerate() {
-            if index > 0 {
-                out.push_str(", ");
-            }
-            match command {
-                LifecycleCommand3::NextLevel => out.push_str("\"next_level\""),
-            }
-        }
-        out.push_str("]\n");
-    } else {
-        out.push_str("null\n");
-    }
-    out.push_str("  },\n");
-}
-
-fn write_rules(out: &mut String, name: &str, rules: &[Rule3]) {
-    write_indent(out, 1);
-    write!(out, "{}: ", json_string(name)).unwrap();
-    write_rule_array(out, rules);
-    out.push_str(",\n");
-}
-
-fn write_rule_array(out: &mut String, rules: &[Rule3]) {
-    out.push('[');
-    for (index, rule) in rules.iter().enumerate() {
-        if index > 0 {
-            out.push_str(", ");
-        }
-        write_rule_json(out, rule);
-    }
-    out.push(']');
-}
-
-fn write_rule_json(out: &mut String, rule: &Rule3) {
-    write!(
-        out,
-        "{{ \"id\": {}, \"application\": {}, \"guards\": [",
-        rule.id.0,
-        json_string(rule_application_name(rule.application))
-    )
-    .unwrap();
-    for (guard_index, guard) in rule.guards.iter().enumerate() {
-        if guard_index > 0 {
-            out.push_str(", ");
-        }
-        match guard {
-            Guard3::InputIs(input) => {
-                write!(out, "{{ \"kind\": \"input_is\", \"input\": {} }}", input.0).unwrap();
-            }
-        }
-    }
-    out.push_str("], \"pattern\": ");
-    write_pattern_json(out, &rule.pattern);
-    out.push_str(", \"writes\": [");
-    for (write_index, write_op) in rule.writes.iter().enumerate() {
-        if write_index > 0 {
-            out.push_str(", ");
-        }
-        write_write_op_json(out, write_op);
-    }
-    out.push_str("], \"effects\": [");
-    for (effect_index, effect) in rule.effects.iter().enumerate() {
-        if effect_index > 0 {
-            out.push_str(", ");
-        }
-        write_rule_effect_json(out, effect);
-    }
-    out.push_str("] }");
-}
-
-fn write_rule_effect_json(out: &mut String, effect: &RuleEffect3) {
-    match effect {
-        RuleEffect3::UpdateGlobal { global, op, value } => {
-            write!(
-                out,
-                "{{ \"kind\": \"update_global\", \"global\": {}, \"op\": \"{}\", \"value\": {} }}",
-                global.0,
-                global_update_op_name(*op),
-                value
-            )
-            .unwrap();
-        }
-        RuleEffect3::SetCameraYaw(value) => {
-            write!(
-                out,
-                "{{ \"kind\": \"set_camera\", \"variable\": \"yaw\", \"value\": {} }}",
-                value
-            )
-            .unwrap();
-        }
-        RuleEffect3::SetCameraPitch(value) => {
-            write!(
-                out,
-                "{{ \"kind\": \"set_camera\", \"variable\": \"pitch\", \"value\": {} }}",
-                value
-            )
-            .unwrap();
-        }
-        RuleEffect3::SetCameraZoom(value) => {
-            write!(
-                out,
-                "{{ \"kind\": \"set_camera\", \"variable\": \"zoom\", \"value\": {} }}",
-                format_zoom(*value)
-            )
-            .unwrap();
-        }
-        RuleEffect3::ResetCamera => {
-            out.push_str("{ \"kind\": \"reset_camera\" }");
-        }
-    }
-}
-
-fn global_update_op_name(op: puzzle_kernel::GlobalUpdateOp) -> &'static str {
-    match op {
-        puzzle_kernel::GlobalUpdateOp::Set => "set",
-        puzzle_kernel::GlobalUpdateOp::Add => "add",
-        puzzle_kernel::GlobalUpdateOp::Subtract => "subtract",
-        puzzle_kernel::GlobalUpdateOp::Multiply => "multiply",
-        puzzle_kernel::GlobalUpdateOp::Divide => "divide",
-        puzzle_kernel::GlobalUpdateOp::Remainder => "remainder",
-    }
-}
-
-fn rule_application_name(application: RuleApplication3) -> &'static str {
-    match application {
-        RuleApplication3::Once => "once",
-        RuleApplication3::OnceAll => "once_all",
-        RuleApplication3::OncePerLevel => "once_per_level",
-        RuleApplication3::Random => "random",
-        RuleApplication3::UntilStable => "until_stable",
-    }
-}
-
-fn write_pattern_json(out: &mut String, pattern: &Pattern3) {
-    out.push_str("{ \"cells\": [");
-    for (index, cell) in pattern.cells.iter().enumerate() {
-        if index > 0 {
-            out.push_str(", ");
-        }
-        write_match_cell_json(out, cell);
-    }
-    out.push_str("] }");
-}
-
-fn write_match_cell_json(out: &mut String, cell: &MatchCell3) {
-    write!(
-        out,
-        "{{ \"offset\": {{ \"dx\": {}, \"dy\": {}, \"dz\": {} }}, \"require\": [",
-        cell.offset.dx, cell.offset.dy, cell.offset.dz
-    )
-    .unwrap();
-    write_object_id_array(out, &cell.require_objects);
-    out.push_str("], \"requireObjectSets\": [");
-    for (index, object_set) in cell.require_object_sets.iter().enumerate() {
-        if index > 0 {
-            out.push_str(", ");
-        }
-        write!(
-            out,
-            "{{ \"binding\": {}, \"layer\": {}, \"objects\": [",
-            object_set.binding, object_set.layer.0
-        )
-        .unwrap();
-        write_object_id_array(out, &object_set.objects);
-        out.push_str("] }");
-    }
-    out.push_str("], \"forbid\": [");
-    write_object_id_array(out, &cell.forbid_objects);
-    out.push_str("], \"requireMark\": [");
-    write_mark_pattern_array(out, &cell.require_mark);
-    out.push_str("], \"requireObjectSetMark\": [");
-    write_object_set_mark_pattern_array(out, &cell.require_object_set_mark);
-    out.push_str("], \"forbidMark\": [");
-    write_mark_pattern_array(out, &cell.forbid_mark);
-    out.push_str("], \"forbidObjectSetMark\": [");
-    write_object_set_mark_pattern_array(out, &cell.forbid_object_set_mark);
-    out.push_str("] }");
-}
-
-fn write_mark_pattern_array(out: &mut String, marks: &[crate::MarkPattern3]) {
-    for (index, mark) in marks.iter().enumerate() {
-        if index > 0 {
-            out.push_str(", ");
-        }
-        write!(
-            out,
-            "{{ \"object\": {}, \"mark\": {}, \"value\": ",
-            mark.object.0, mark.mark.0
-        )
-        .unwrap();
-        write_optional_i64(out, mark.value);
-        write!(
-            out,
-            ", \"match\": \"{}\" }}",
-            mark_value_match_name(mark.match_value)
-        )
-        .unwrap();
-    }
-}
-
-fn write_object_set_mark_pattern_array(out: &mut String, marks: &[crate::ObjectSetMarkPattern3]) {
-    for (index, mark) in marks.iter().enumerate() {
-        if index > 0 {
-            out.push_str(", ");
-        }
-        write!(
-            out,
-            "{{ \"binding\": {}, \"mark\": {}, \"value\": ",
-            mark.binding, mark.mark.0
-        )
-        .unwrap();
-        write_optional_i64(out, mark.value);
-        write!(
-            out,
-            ", \"match\": \"{}\" }}",
-            mark_value_match_name(mark.match_value)
-        )
-        .unwrap();
-    }
-}
-
-fn write_object_id_array(out: &mut String, objects: &[ObjectId]) {
-    for (index, object) in objects.iter().enumerate() {
-        if index > 0 {
-            out.push_str(", ");
-        }
-        write!(out, "{}", object.0).unwrap();
-    }
-}
-
-fn write_write_op_json(out: &mut String, write_op: &WriteOp3) {
-    match write_op {
-        WriteOp3::Add {
-            component,
-            offset,
-            object,
-        } => {
-            write!(
-                out,
-                "{{ \"kind\": \"add\", \"component\": {}, \"offset\": {{ \"dx\": {}, \"dy\": {}, \"dz\": {} }}, \"object\": {} }}",
-                component, offset.dx, offset.dy, offset.dz, object.0
-            )
-            .unwrap();
-        }
-        WriteOp3::AddObjectSet {
-            component,
-            offset,
-            binding,
-        } => {
-            write!(
-                out,
-                "{{ \"kind\": \"add_object_set\", \"component\": {}, \"offset\": {{ \"dx\": {}, \"dy\": {}, \"dz\": {} }}, \"binding\": {} }}",
-                component, offset.dx, offset.dy, offset.dz, binding
-            )
-            .unwrap();
-        }
-        WriteOp3::Remove {
-            component,
-            offset,
-            object,
-        } => {
-            write!(
-                out,
-                "{{ \"kind\": \"remove\", \"component\": {}, \"offset\": {{ \"dx\": {}, \"dy\": {}, \"dz\": {} }}, \"object\": {} }}",
-                component, offset.dx, offset.dy, offset.dz, object.0
-            )
-            .unwrap();
-        }
-        WriteOp3::RemoveObjectSet {
-            component,
-            offset,
-            binding,
-        } => {
-            write!(
-                out,
-                "{{ \"kind\": \"remove_object_set\", \"component\": {}, \"offset\": {{ \"dx\": {}, \"dy\": {}, \"dz\": {} }}, \"binding\": {} }}",
-                component, offset.dx, offset.dy, offset.dz, binding
-            )
-            .unwrap();
-        }
-        WriteOp3::Replace {
-            component,
-            offset,
-            remove,
-            add,
-        } => {
-            write!(
-                out,
-                "{{ \"kind\": \"replace\", \"component\": {}, \"offset\": {{ \"dx\": {}, \"dy\": {}, \"dz\": {} }}, \"remove\": {}, \"add\": {} }}",
-                component, offset.dx, offset.dy, offset.dz, remove.0, add.0
-            )
-            .unwrap();
-        }
-        WriteOp3::Move {
-            component,
-            from_offset,
-            to_offset,
-            object,
-        } => {
-            write!(
-                out,
-                "{{ \"kind\": \"move\", \"component\": {}, \"fromOffset\": {{ \"dx\": {}, \"dy\": {}, \"dz\": {} }}, \"toOffset\": {{ \"dx\": {}, \"dy\": {}, \"dz\": {} }}, \"object\": {} }}",
-                component,
-                from_offset.dx,
-                from_offset.dy,
-                from_offset.dz,
-                to_offset.dx,
-                to_offset.dy,
-                to_offset.dz,
-                object.0
-            )
-            .unwrap();
-        }
-        WriteOp3::MoveObjectSet {
-            component,
-            from_offset,
-            to_offset,
-            binding,
-        } => {
-            write!(
-                out,
-                "{{ \"kind\": \"move_object_set\", \"component\": {}, \"fromOffset\": {{ \"dx\": {}, \"dy\": {}, \"dz\": {} }}, \"toOffset\": {{ \"dx\": {}, \"dy\": {}, \"dz\": {} }}, \"binding\": {} }}",
-                component,
-                from_offset.dx,
-                from_offset.dy,
-                from_offset.dz,
-                to_offset.dx,
-                to_offset.dy,
-                to_offset.dz,
-                binding
-            )
-            .unwrap();
-        }
-        WriteOp3::SetMark {
-            component,
-            offset,
-            object,
-            mark,
-            value,
-        } => {
-            write!(
-                out,
-                "{{ \"kind\": \"set_mark\", \"component\": {}, \"offset\": {{ \"dx\": {}, \"dy\": {}, \"dz\": {} }}, \"object\": {}, \"mark\": {}, \"value\": ",
-                component, offset.dx, offset.dy, offset.dz, object.0, mark.0
-            )
-            .unwrap();
-            write_optional_i64(out, *value);
-            out.push_str(" }");
-        }
-        WriteOp3::SetObjectSetMark {
-            component,
-            offset,
-            binding,
-            mark,
-            value,
-        } => {
-            write!(
-                out,
-                "{{ \"kind\": \"set_object_set_mark\", \"component\": {}, \"offset\": {{ \"dx\": {}, \"dy\": {}, \"dz\": {} }}, \"binding\": {}, \"mark\": {}, \"value\": ",
-                component, offset.dx, offset.dy, offset.dz, binding, mark.0
-            )
-            .unwrap();
-            write_optional_i64(out, *value);
-            out.push_str(" }");
-        }
-        WriteOp3::RemoveMark {
-            component,
-            offset,
-            object,
-            mark,
-            value,
-            match_value,
-        } => {
-            write!(
-                out,
-                "{{ \"kind\": \"remove_mark\", \"component\": {}, \"offset\": {{ \"dx\": {}, \"dy\": {}, \"dz\": {} }}, \"object\": {}, \"mark\": {}, \"value\": ",
-                component, offset.dx, offset.dy, offset.dz, object.0, mark.0
-            )
-            .unwrap();
-            write_optional_i64(out, *value);
-            write!(
-                out,
-                ", \"match\": \"{}\" }}",
-                mark_value_match_name(*match_value)
-            )
-            .unwrap();
-        }
-        WriteOp3::RemoveObjectSetMark {
-            component,
-            offset,
-            binding,
-            mark,
-            value,
-            match_value,
-        } => {
-            write!(
-                out,
-                "{{ \"kind\": \"remove_object_set_mark\", \"component\": {}, \"offset\": {{ \"dx\": {}, \"dy\": {}, \"dz\": {} }}, \"binding\": {}, \"mark\": {}, \"value\": ",
-                component, offset.dx, offset.dy, offset.dz, binding, mark.0
-            )
-            .unwrap();
-            write_optional_i64(out, *value);
-            write!(
-                out,
-                ", \"match\": \"{}\" }}",
-                mark_value_match_name(*match_value)
-            )
-            .unwrap();
-        }
-    }
-}
-
-fn write_optional_i64(out: &mut String, value: Option<i64>) {
-    match value {
-        Some(value) => write!(out, "{}", value).unwrap(),
-        None => out.push_str("null"),
-    }
-}
-
-fn mark_value_match_name(match_value: puzzle_kernel::MarkValueMatch) -> &'static str {
-    match match_value {
-        puzzle_kernel::MarkValueMatch::Any => "any",
-        puzzle_kernel::MarkValueMatch::Exact => "exact",
-    }
-}
-
-fn write_win_condition(out: &mut String, condition: &WinCondition3) {
-    out.push_str("  \"winCondition\": ");
-    write_win_condition_json(out, condition);
-    out.push_str(",\n");
-}
-
-fn write_win_condition_json(out: &mut String, condition: &WinCondition3) {
-    match condition {
-        WinCondition3::All(conditions) => {
-            out.push_str("{ \"kind\": \"all\", \"conditions\": [");
-            write_win_condition_list(out, conditions);
-            out.push_str("] }");
-        }
-        WinCondition3::Any(conditions) => {
-            out.push_str("{ \"kind\": \"any\", \"conditions\": [");
-            write_win_condition_list(out, conditions);
-            out.push_str("] }");
-        }
-        WinCondition3::SomeObject(object) => {
-            write!(
-                out,
-                "{{ \"kind\": \"some_object\", \"object\": {} }}",
-                object.0
-            )
-            .unwrap();
-        }
-        WinCondition3::NoObject(object) => {
-            write!(
-                out,
-                "{{ \"kind\": \"no_object\", \"object\": {} }}",
-                object.0
-            )
-            .unwrap();
-        }
-        WinCondition3::SomePattern(pattern) => {
-            out.push_str("{ \"kind\": \"some_pattern\", \"pattern\": ");
-            write_pattern_json(out, pattern);
-            out.push_str(" }");
-        }
-        WinCondition3::NoPattern(pattern) => {
-            out.push_str("{ \"kind\": \"no_pattern\", \"pattern\": ");
-            write_pattern_json(out, pattern);
-            out.push_str(" }");
-        }
-        WinCondition3::AllObjectsCoveredByPattern {
-            object,
-            cover_pattern,
-        } => {
-            write!(
-                out,
-                "{{ \"kind\": \"all_objects_covered_by_pattern\", \"object\": {}, \"coverPattern\": ",
-                object.0
-            )
-            .unwrap();
-            write_pattern_json(out, cover_pattern);
-            out.push_str(" }");
-        }
-    }
-}
-
-fn write_win_condition_list(out: &mut String, conditions: &[WinCondition3]) {
-    for (index, condition) in conditions.iter().enumerate() {
-        if index > 0 {
-            out.push_str(", ");
-        }
-        write_win_condition_json(out, condition);
-    }
 }
 
 fn write_objects(

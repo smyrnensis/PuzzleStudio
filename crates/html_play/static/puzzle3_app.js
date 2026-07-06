@@ -3742,6 +3742,7 @@ resizeCanvas();
 controllerApi.ready = loadPuzzle3ControllerSnapshot();
 
 function cloneRuntimeSnapshot(source) {
+  const runtimeContract = requireRuntimeContract(source);
   return {
     ...source,
     size: { ...source.size },
@@ -3753,11 +3754,13 @@ function cloneRuntimeSnapshot(source) {
       keys: { ...(source.controls?.keys || {}) },
     },
     inputs: JSON.parse(JSON.stringify(source.inputs || [])),
-    rules: JSON.parse(JSON.stringify(source.rules || [])),
-    winCondition: source.winCondition ? JSON.parse(JSON.stringify(source.winCondition)) : undefined,
+    runtimeContract: JSON.parse(JSON.stringify(runtimeContract)),
     lifecycle: {
-      onLevelStart: JSON.parse(JSON.stringify(source.lifecycle?.onLevelStart || [])),
-      onLevelClear: [...(source.lifecycle?.onLevelClear || [])],
+      onLevelStart: JSON.parse(JSON.stringify(runtimeContract.lifecycle?.onLevelStart || [])),
+      onLevelClear: [...(runtimeContract.lifecycle?.onLevelClear || [])],
+      onLastLevelClear: runtimeContract.lifecycle?.onLastLevelClear
+        ? [...runtimeContract.lifecycle.onLastLevelClear]
+        : null,
     },
     objects: cloneRuntimeObjects(source.objects || {}),
     sprites: cloneRuntimeSprites(source.sprites || {}),
@@ -3765,6 +3768,17 @@ function cloneRuntimeSnapshot(source) {
     levels: cloneRuntimeLevels(source.levels || []),
     levelBundles: cloneRuntimeLevelBundles(source.levelBundles || {}),
   };
+}
+
+function requireRuntimeContract(source) {
+  const contract = source?.runtimeContract;
+  if (!contract || typeof contract !== "object") {
+    throw new Error("Puzzle3 runtime fixture is missing runtimeContract.");
+  }
+  if (Number(contract.version) !== 1) {
+    throw new Error(`Unsupported Puzzle3 runtimeContract version: ${contract.version}`);
+  }
+  return contract;
 }
 
 function cloneRuntimeRecord(record) {

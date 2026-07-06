@@ -2338,6 +2338,7 @@ dependencies = [
  "puzzle-authoring",
  "puzzle-grid3d",
  "puzzle-kernel",
+ "puzzle-runtime-contract",
  "puzzle-scene",
 ]
 
@@ -2361,6 +2362,7 @@ dependencies = [
  "puzzle-core",
  "puzzle-lang",
  "puzzle-play",
+ "puzzle-runtime-contract",
  "serde_json",
 ]
 
@@ -2369,6 +2371,7 @@ name = "puzzle-grid3d"
 version = "0.1.0"
 dependencies = [
  "puzzle-kernel",
+ "serde",
 ]
 
 [[package]]
@@ -2396,6 +2399,15 @@ version = "0.1.0"
 dependencies = [
  "puzzle-core",
  "puzzle-lang",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "puzzle-runtime-contract"
+version = "0.1.0"
+dependencies = [
+ "puzzle-grid3d",
  "serde",
  "serde_json",
 ]

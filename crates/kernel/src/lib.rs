@@ -511,6 +511,134 @@ pub enum RuleApplication {
     UntilStable,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ComparisonOp {
+    Eq,
+    NotEq,
+    Greater,
+    GreaterEq,
+    Less,
+    LessEq,
+}
+
+pub trait RuleInputGuard<InputId> {
+    fn input_is(input: InputId) -> Self;
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RuleGuard<GlobalId, ConditionId, ConditionValueKind, InputId> {
+    InputIs(InputId),
+    GlobalEquals {
+        global: GlobalId,
+        value: i64,
+    },
+    GlobalCompare {
+        global: GlobalId,
+        op: ComparisonOp,
+        value: i64,
+    },
+    ConditionEquals {
+        condition: ConditionId,
+        value: i64,
+    },
+    ConditionNonZero(ConditionId),
+    ConditionCompare {
+        condition: ConditionId,
+        op: ComparisonOp,
+        value: i64,
+    },
+    InlineConditionValue {
+        kind: ConditionValueKind,
+        value: i64,
+    },
+    InlineConditionNonZero(ConditionValueKind),
+    InlineConditionCompare {
+        kind: ConditionValueKind,
+        op: ComparisonOp,
+        value: i64,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuleConditionDef<ConditionId, ConditionValueKind> {
+    pub id: ConditionId,
+    pub kind: ConditionValueKind,
+}
+
+impl<GlobalId, ConditionId, ConditionValueKind, InputId> RuleInputGuard<InputId>
+    for RuleGuard<GlobalId, ConditionId, ConditionValueKind, InputId>
+{
+    fn input_is(input: InputId) -> Self {
+        Self::InputIs(input)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuleModel<RuleId, Guard, Pattern, WriteOp, Effect> {
+    pub id: RuleId,
+    pub guards: Vec<Guard>,
+    pub application: RuleApplication,
+    pub pattern: Pattern,
+    pub writes: Vec<WriteOp>,
+    pub effects: Vec<Effect>,
+}
+
+impl<RuleId, Guard, Pattern, WriteOp, Effect> RuleModel<RuleId, Guard, Pattern, WriteOp, Effect>
+where
+    RuleId: Default,
+{
+    pub fn once(pattern: Pattern, writes: Vec<WriteOp>) -> Self {
+        Self::with_application(RuleApplication::Once, pattern, writes)
+    }
+
+    pub fn repeated(pattern: Pattern, writes: Vec<WriteOp>) -> Self {
+        Self::with_application(RuleApplication::UntilStable, pattern, writes)
+    }
+
+    pub fn once_all(pattern: Pattern, writes: Vec<WriteOp>) -> Self {
+        Self::with_application(RuleApplication::OnceAll, pattern, writes)
+    }
+
+    pub fn once_per_level(pattern: Pattern, writes: Vec<WriteOp>) -> Self {
+        Self::with_application(RuleApplication::OncePerLevel, pattern, writes)
+    }
+
+    pub fn with_application(
+        application: RuleApplication,
+        pattern: Pattern,
+        writes: Vec<WriteOp>,
+    ) -> Self {
+        Self {
+            id: RuleId::default(),
+            guards: Vec::new(),
+            application,
+            pattern,
+            writes,
+            effects: Vec::new(),
+        }
+    }
+}
+
+impl<RuleId, Guard, Pattern, WriteOp, Effect> RuleModel<RuleId, Guard, Pattern, WriteOp, Effect> {
+    pub fn with_id(mut self, id: RuleId) -> Self {
+        self.id = id;
+        self
+    }
+
+    pub fn when_input<InputId>(mut self, input: InputId) -> Self
+    where
+        Guard: RuleInputGuard<InputId>,
+    {
+        self.guards.push(Guard::input_is(input));
+        self
+    }
+
+    pub fn with_effects(mut self, effects: Vec<Effect>) -> Self {
+        self.effects = effects;
+        self
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum GlobalValueError<GlobalId> {
     OutOfBounds { global: GlobalId },

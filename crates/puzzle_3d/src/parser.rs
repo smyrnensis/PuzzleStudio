@@ -2208,11 +2208,7 @@ fn apply_rule_application(
         puzzle_authoring::RuleApplicationSurface::OncePerLevel => {
             crate::RuleApplication3::OncePerLevel
         }
-        puzzle_authoring::RuleApplicationSurface::Random => {
-            return Err(message(
-                "random rule application is not supported for puzzle3 rules",
-            ));
-        }
+        puzzle_authoring::RuleApplicationSurface::Random => crate::RuleApplication3::Random,
         puzzle_authoring::RuleApplicationSurface::Repeat => crate::RuleApplication3::UntilStable,
     };
     for rule in rules {

@@ -6,3 +6,4 @@ license = "UNLICENSED"
 
 [dependencies]
 puzzle-kernel = { path = "../kernel" }
+serde = { version = "1", features = ["derive"] }

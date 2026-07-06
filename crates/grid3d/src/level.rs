@@ -1,8 +1,9 @@
 use std::collections::BTreeSet;
 
 use crate::{Coord3, Game3, GameError3, ObjectId, Size3, State3, StateError3};
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Level3 {
     pub size: Size3,
     pub cells: Vec<LevelCell3>,
@@ -30,7 +31,7 @@ impl Level3 {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LevelEntry3 {
     pub name: String,
     pub level: Level3,
@@ -45,7 +46,7 @@ impl LevelEntry3 {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LevelBundle3 {
     pub game: Game3,
     pub levels: Vec<LevelEntry3>,
@@ -129,7 +130,7 @@ impl LevelBundle3 {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LevelCell3 {
     pub position: Coord3,
     pub objects: Vec<ObjectId>,

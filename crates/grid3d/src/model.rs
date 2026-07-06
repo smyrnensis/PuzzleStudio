@@ -1,9 +1,11 @@
-use crate::RuleId3;
+use crate::{ConditionDef3, ConditionId3, RuleId3};
 use crate::{InputId3, LayerId, ObjectId};
 use puzzle_kernel::{GridCoord, GridOffset, ObjectRoleSet};
+use serde::de::Error as _;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::BTreeSet;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Coord3 {
     /// Horizontal X axis. `left` is -X and `right` is +X.
     pub x: u16,
@@ -46,7 +48,7 @@ impl From<GridCoord<3>> for Coord3 {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Offset3 {
     pub dx: i16,
     pub dy: i16,
@@ -94,7 +96,7 @@ impl From<GridOffset<3>> for Offset3 {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Size3 {
     /// Number of cells along X.
     pub width: u16,
@@ -118,6 +120,34 @@ impl Size3 {
 pub struct Direction3 {
     pub name: &'static str,
     pub offset: Offset3,
+}
+
+impl Serialize for Direction3 {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self.name)
+    }
+}
+
+impl<'de> Deserialize<'de> for Direction3 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        match String::deserialize(deserializer)?.as_str() {
+            "up" => Ok(Self::UP),
+            "down" => Ok(Self::DOWN),
+            "left" => Ok(Self::LEFT),
+            "right" => Ok(Self::RIGHT),
+            "front" => Ok(Self::FORWARD),
+            "back" => Ok(Self::BACKWARD),
+            other => Err(D::Error::custom(format!(
+                "unknown runtime contract direction: {other}"
+            ))),
+        }
+    }
 }
 
 impl Direction3 {
@@ -541,13 +571,13 @@ fn push_unique_frame(frames: &mut Vec<Frame3>, frame: Frame3) {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ObjectDef3 {
     pub id: ObjectId,
     pub layer_id: LayerId,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InputDef3 {
     pub id: InputId3,
     pub name: String,
@@ -580,11 +610,12 @@ impl InputDef3 {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Game3 {
     pub layer_count: u16,
     pub objects: Vec<ObjectDef3>,
     pub inputs: Vec<InputDef3>,
+    condition_defs: Vec<ConditionDef3>,
     visual_objects: ObjectRoleSet<ObjectId>,
     visual_rules: ObjectRoleSet<RuleId3>,
 }
@@ -595,6 +626,7 @@ impl Game3 {
             layer_count,
             objects,
             inputs: Vec::new(),
+            condition_defs: Vec::new(),
             visual_objects: ObjectRoleSet::default(),
             visual_rules: ObjectRoleSet::default(),
         }
@@ -609,6 +641,23 @@ impl Game3 {
             layer_count,
             objects,
             inputs,
+            condition_defs: Vec::new(),
+            visual_objects: ObjectRoleSet::default(),
+            visual_rules: ObjectRoleSet::default(),
+        }
+    }
+
+    pub fn new_with_condition_defs(
+        layer_count: u16,
+        objects: Vec<ObjectDef3>,
+        inputs: Vec<InputDef3>,
+        condition_defs: Vec<ConditionDef3>,
+    ) -> Self {
+        Self {
+            layer_count,
+            objects,
+            inputs,
+            condition_defs,
             visual_objects: ObjectRoleSet::default(),
             visual_rules: ObjectRoleSet::default(),
         }
@@ -625,6 +674,7 @@ impl Game3 {
             layer_count,
             objects,
             inputs,
+            condition_defs: Vec::new(),
             visual_objects: ObjectRoleSet::new(visual_objects),
             visual_rules: ObjectRoleSet::new(visual_rules),
         }
@@ -678,6 +728,15 @@ impl Game3 {
             }
         }
 
+        let mut condition_ids = BTreeSet::new();
+        for condition in &self.condition_defs {
+            if !condition_ids.insert(condition.id) {
+                return Err(GameError3::DuplicateConditionId {
+                    condition: condition.id,
+                });
+            }
+        }
+
         Ok(())
     }
 
@@ -697,6 +756,14 @@ impl Game3 {
 
     pub fn input_by_name(&self, name: &str) -> Option<&InputDef3> {
         self.inputs.iter().find(|def| def.name == name)
+    }
+
+    pub fn condition_defs(&self) -> &[ConditionDef3] {
+        &self.condition_defs
+    }
+
+    pub fn condition_def(&self, condition: ConditionId3) -> Option<&ConditionDef3> {
+        self.condition_defs.get(usize::from(condition.0))
     }
 
     pub fn direction_for_input(&self, input: InputId3) -> Option<Direction3> {
@@ -728,4 +795,5 @@ pub enum GameError3 {
     ObjectLayerOutOfBounds { object: ObjectId, layer: LayerId },
     DuplicateInputId { input: InputId3 },
     DuplicateInputName { name: String },
+    DuplicateConditionId { condition: ConditionId3 },
 }

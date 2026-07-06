@@ -20,14 +20,20 @@ pub use puzzle_grid3d::{
     ObjectId, Offset3, Patch3, PatchError3, PatchOp3, RuleId3, Size3,
 };
 pub use puzzle_grid3d::{
-    CellView3, ConditionValueKind3, GlobalUpdateOp, Guard3, LocalFrame, LocalFrameExtent, MarkKind,
-    MarkPattern3, MarkValueMatch, MatchCell3, ObjectSetMarkPattern3, ObjectSetMatcher3, Pattern3,
-    PatternComponent3, Rule3, RuleApplication3, RuleEffect3, SlotMark3, State3, StateError3,
-    TransitionError3, WinCondition3, WriteOp3, count_pattern_matches, eval_condition_kind,
-    has_pattern_match, transition_once, transition_once_all, transition_once_per_level,
-    transition_once_with_input, transition_program, transition_program_with_local_frame,
-    transition_program_without_input, transition_program_without_input_with_local_frame,
-    transition_repeated, transition_solver_program,
+    CellView3, ConditionDef3, ConditionId3, ConditionValueKind3, GlobalUpdateOp, Guard3,
+    LocalFrame, LocalFrameExtent, MarkKind, MarkPattern3, MarkValueMatch, MatchCell3,
+    ObjectSetMarkPattern3, ObjectSetMatcher3, Pattern3, PatternComponent3, Rule3, RuleApplication3,
+    RuleEffect3, SlotMark3, State3, StateError3, TransitionError3, WinCondition3, WriteOp3,
+    count_pattern_matches, eval_condition_kind, has_pattern_match, transition_once,
+    transition_once_all, transition_once_per_level, transition_once_with_input, transition_program,
+    transition_program_with_local_frame, transition_program_without_input,
+    transition_program_without_input_with_local_frame, transition_repeated,
+    transition_solver_program,
+};
+pub use puzzle_runtime_contract::{
+    Lifecycle3, LifecycleCommand3, PUZZLE3_RUNTIME_CONTRACT_VERSION, Puzzle3RuntimeContract,
+    puzzle3_runtime_contract_from_fixture_json, puzzle3_runtime_contract_from_fixture_value,
+    puzzle3_runtime_contract_json,
 };
 pub use selector::{
     ConcreteObject3, DenseCell3, DensePattern3, DenseRow3, DenseRuleTemplate3, DenseSlice3,
@@ -41,9 +47,7 @@ pub use selector::{
     lower_dense_rule_template, lower_line_rule_template, lower_pattern_template,
     lower_rule_template,
 };
-pub use session::{
-    GameSession3, GameSessionError3, Lifecycle3, LifecycleCommand3, SessionLifecycleResult3,
-};
+pub use session::{GameSession3, GameSessionError3, SessionLifecycleResult3};
 pub use snapshot::{BoardCell3, BoardSnapshot3};
 pub use sprite::{Sprite3, SpriteColor3, SpriteSet3, SpriteVoxels3};
 pub use visual::{ObjectVisual3, VisualCell3, VisualObject3, VisualSnapshot3};
@@ -2186,6 +2190,7 @@ rules {
 once [ Player ] -> [ Player ]
 once_all [ > Player | Box ] -> [ > Player | > Box ]
 once_per_level input [ Player ] -> [ > Player ]
+random [ Player ] -> [ Player ]
 repeat right [ Box | ] -> [ | Box ]
 }
 }
@@ -2210,6 +2215,12 @@ repeat right [ Box | ] -> [ | Box ]
                 .rules
                 .iter()
                 .any(|rule| rule.application == RuleApplication3::OncePerLevel)
+        );
+        assert!(
+            parsed
+                .rules
+                .iter()
+                .any(|rule| rule.application == RuleApplication3::Random)
         );
         assert!(
             parsed
@@ -2404,10 +2415,11 @@ P
         assert_eq!(parsed.rules[2].effects, vec![RuleEffect3::ResetCamera]);
 
         let fixture = export_visual_fixture_json(&parsed).unwrap();
-        assert!(fixture.contains(r#""effects": ["#));
-        assert!(fixture.contains(r#""kind": "set_camera""#));
-        assert!(fixture.contains(r#""variable": "yaw""#));
-        assert!(fixture.contains(r#""kind": "reset_camera""#));
+        let contract =
+            puzzle3_runtime_contract_from_fixture_json(&fixture).expect("runtime contract decodes");
+        assert_eq!(contract.rules[0].effects, parsed.rules[0].effects);
+        assert_eq!(contract.rules[1].effects, parsed.rules[1].effects);
+        assert_eq!(contract.rules[2].effects, parsed.rules[2].effects);
     }
 
     #[test]
@@ -3179,9 +3191,14 @@ on_last_level_clear {
         );
         let fixture_json = export_visual_fixture_json(&parsed).unwrap();
         assert!(fixture_json.contains("\"shade\": true"));
-        assert!(fixture_json.contains("\"rules\": ["));
-        assert!(fixture_json.contains("\"onLevelClear\": [\"next_level\"]"));
-        assert!(fixture_json.contains("\"kind\": \"no_pattern\""));
+        let contract = puzzle3_runtime_contract_from_fixture_json(&fixture_json)
+            .expect("runtime contract decodes");
+        assert!(!contract.rules.is_empty());
+        assert_eq!(
+            contract.lifecycle.on_level_clear,
+            vec![LifecycleCommand3::NextLevel]
+        );
+        assert!(contract.win_condition.is_some());
         assert!(fixture_json.contains("\"Box\": {"));
         assert!(fixture_json.contains("\"bitmap\": ["));
 

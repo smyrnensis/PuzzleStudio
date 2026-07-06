@@ -1,0 +1,10 @@
+[package]
+name = "puzzle-runtime-contract"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+puzzle-grid3d = { path = "../grid3d" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

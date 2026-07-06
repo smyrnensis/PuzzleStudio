@@ -1,32 +1,8 @@
 use crate::{
-    Direction3, InputId3, LevelBundle3, LevelBundleError3, LocalFrame, ObjectId, Rule3, State3,
-    TransitionError3, WinCondition3, transition_program,
-    transition_program_without_input_with_local_frame,
+    Direction3, InputId3, LevelBundle3, LevelBundleError3, Rule3, State3, TransitionError3,
+    WinCondition3, transition_program, transition_program_without_input_with_local_frame,
 };
-
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Lifecycle3 {
-    pub on_level_start: Vec<Rule3>,
-    pub on_level_start_local_frame: Option<LocalFrame<ObjectId>>,
-    pub on_level_clear: Vec<LifecycleCommand3>,
-    pub on_last_level_clear: Option<Vec<LifecycleCommand3>>,
-}
-
-impl Lifecycle3 {
-    pub fn new(on_level_start: Vec<Rule3>, on_level_clear: Vec<LifecycleCommand3>) -> Self {
-        Self {
-            on_level_start,
-            on_level_start_local_frame: None,
-            on_level_clear,
-            on_last_level_clear: None,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum LifecycleCommand3 {
-    NextLevel,
-}
+use puzzle_runtime_contract::{Lifecycle3, LifecycleCommand3};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct SessionLifecycleResult3 {
