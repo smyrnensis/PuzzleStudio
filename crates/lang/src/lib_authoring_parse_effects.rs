@@ -969,11 +969,11 @@ fn parse_scene_effect_value(value: &str, line: &str) -> Result<SceneEffect, Diag
 }
 
 fn parse_scene_variable_assignment(value: &str) -> Option<(&str, &str)> {
-    let (name, rhs) = parse_assignment_row(value)?;
-    if rhs.is_empty() || !is_identifier(name) || reserved_scene_assignment_target(name) {
+    let (name, value) = parse_assignment_row(value)?;
+    if value.is_empty() || !is_identifier(name) || reserved_scene_assignment_target(name) {
         return None;
     }
-    Some((name, rhs))
+    Some((name, value))
 }
 
 fn reserved_scene_assignment_target(name: &str) -> bool {
@@ -1260,58 +1260,47 @@ fn parse_rule_call_expr(
     line: &str,
 ) -> Result<(String, Vec<SceneExpr>), DiagnosticReport> {
     let value = value.trim();
-    let Some(open) = find_top_level_char(value, '(') else {
+    let Some(call) = parse_complete_call_surface(
+        value,
+        line,
+        "rule call args must end with )",
+        "rule call expression must not have trailing text",
+    )?
+    else {
         validate_qualified_identifier(value, line, "rule name")?;
         return Ok((value.to_string(), Vec::new()));
     };
-    let name = value[..open].trim();
-    validate_qualified_identifier(name, line, "rule name")?;
-    let close = matching_delimiter(value, open, '(', ')')
-        .ok_or_else(|| parse_error(line, "rule call args must end with )"))?;
-    if !value[close + 1..].trim().is_empty() {
-        return Err(parse_error(
-            line,
-            "rule call expression must not have trailing text",
-        ));
-    }
-    let args = &value[open + 1..close];
-    let args = if args.trim().is_empty() {
-        Vec::new()
-    } else {
-        parse_scene_call_args(args, line)?
-    };
-    Ok((name.to_string(), args))
+    validate_qualified_identifier(call.name, line, "rule name")?;
+    let args = parse_scene_call_arg_surfaces(&call.args, line)?;
+    Ok((call.name.to_string(), args))
 }
 
 fn parse_scene_call_params(
     value: &str,
     line: &str,
 ) -> Result<Option<(String, Vec<SceneEffectParam>)>, DiagnosticReport> {
-    let Some(open) = value.find('(') else {
+    let Some((call, suffix)) =
+        parse_optional_call_surface_with_suffix(value, line, "scene call must close with `)`")?
+    else {
         return Ok(None);
     };
-    if !value.ends_with(')') {
+    if !suffix.is_empty() {
         return Err(parse_error(line, "scene call must close with `)`"));
     }
-    let scene = value[..open].trim();
-    validate_qualified_identifier(scene, line, "scene name")?;
-    let args = value[open + 1..value.len() - 1].trim();
-    if args.is_empty() {
-        return Ok(Some((scene.to_string(), Vec::new())));
+    validate_qualified_identifier(call.name, line, "scene name")?;
+    if call.args.is_empty() {
+        return Ok(Some((call.name.to_string(), Vec::new())));
     }
 
-    let parts = split_top_level_commas(args)
-        .into_iter()
-        .map(str::trim)
-        .collect::<Vec<_>>();
-    let params = if parts.len() == 1 && !parts[0].contains('=') {
+    let params = if call.args.len() == 1 && parse_assignment_row(call.args[0]).is_none() {
         vec![SceneEffectParam::Level(parse_scene_level_expr(
-            parts[0], line,
+            call.args[0],
+            line,
         )?)]
     } else {
-        parse_scene_named_params(&parts, line)?
+        parse_scene_named_params(&call.args, line)?
     };
-    Ok(Some((scene.to_string(), params)))
+    Ok(Some((call.name.to_string(), params)))
 }
 
 fn parse_scene_target_params(
@@ -1322,10 +1311,7 @@ fn parse_scene_target_params(
     if let Some((scene, params)) = value.split_once(" with ") {
         let scene = scene.trim();
         validate_qualified_identifier(scene, line, "scene name")?;
-        let parts = split_top_level_commas(params)
-            .into_iter()
-            .map(str::trim)
-            .collect::<Vec<_>>();
+        let parts = parse_call_argument_surfaces(params);
         return Ok((scene.to_string(), parse_scene_named_params(&parts, line)?));
     }
     if let Some((scene, params)) = parse_scene_call_params(value, line)? {
@@ -1341,12 +1327,12 @@ fn parse_scene_named_params(
 ) -> Result<Vec<SceneEffectParam>, DiagnosticReport> {
     let mut params = Vec::new();
     for part in parts {
-        let (name, rhs) =
+        let (name, value) =
             require_assignment_row(part, "scene params must be named `<name> = <expr>`")?;
         validate_identifier(name, line, "scene param name")?;
         params.push(SceneEffectParam::Named {
             name: name.to_string(),
-            value: parse_scene_expr(rhs, line)?,
+            value: parse_scene_expr(value, line)?,
         });
     }
     Ok(params)
@@ -1365,15 +1351,14 @@ pub fn parse_scene_effect_params(value: &str) -> Result<Vec<SceneEffectParam>, D
     if value.is_empty() {
         return Ok(Vec::new());
     }
-    split_top_level_commas(value)
+    parse_call_argument_surfaces(value)
         .into_iter()
         .map(|param| {
-            let param = param.trim();
-            if let Some((name, rhs)) = parse_assignment_row(param) {
+            if let Some((name, value)) = parse_assignment_row(param) {
                 validate_identifier(name, param, "scene effect parameter name")?;
                 return Ok(SceneEffectParam::Named {
                     name: name.to_string(),
-                    value: parse_scene_expr(rhs, param)?,
+                    value: parse_scene_expr(value, param)?,
                 });
             }
             Ok(SceneEffectParam::Level(parse_scene_level_expr(
@@ -1522,15 +1507,15 @@ fn parse_level_call_selector_expr(
     value: &str,
     line: &str,
 ) -> Result<Option<SceneExpr>, DiagnosticReport> {
-    let Some(rest) = value.strip_prefix("level(") else {
+    let Some((call, suffix)) =
+        parse_optional_call_surface_with_suffix(value, line, "level selector must close with `)`")?
+    else {
         return Ok(None);
     };
-    let Some(close) = rest.find(')') else {
-        return Err(parse_error(line, "level selector must close with `)`"));
-    };
-    let args_text = rest[..close].trim();
-    let suffix = rest[close + 1..].trim();
-    let args = parse_scene_call_args(args_text, line)?;
+    if call.name != "level" {
+        return Ok(None);
+    }
+    let args = parse_scene_call_arg_surfaces(&call.args, line)?;
     let name = if suffix.is_empty() {
         "level".to_string()
     } else if let Some(field) = suffix.strip_prefix('.') {
@@ -1589,11 +1574,15 @@ fn parse_pack_level_selector_expr(
 }
 
 fn parse_scene_call_args(value: &str, line: &str) -> Result<Vec<SceneExpr>, DiagnosticReport> {
-    if value.is_empty() {
-        return Ok(Vec::new());
-    }
-    split_top_level_commas(value)
-        .into_iter()
+    let args = parse_call_argument_surfaces(value);
+    parse_scene_call_arg_surfaces(&args, line)
+}
+
+fn parse_scene_call_arg_surfaces(
+    args: &[&str],
+    line: &str,
+) -> Result<Vec<SceneExpr>, DiagnosticReport> {
+    args.iter()
         .map(|arg| parse_scene_expr(arg.trim(), line))
         .collect()
 }

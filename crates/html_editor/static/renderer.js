@@ -179,10 +179,12 @@ class PuzzleRenderer {
     sprite.style.zIndex = String(definition.zIndex ?? layer.layer + 1);
     const { cols: spriteCols, rows: spriteRows } = this.spritePatternSize(definition);
     const { cols: cellCols, rows: cellRows } = this.spriteCellGrid(definition);
+    const fitSize = Math.max(cellCols, cellRows);
     sprite.style.setProperty("--sprite-cols", String(spriteCols));
     sprite.style.setProperty("--sprite-rows", String(spriteRows));
     sprite.style.setProperty("--sprite-cell-cols", String(cellCols));
     sprite.style.setProperty("--sprite-cell-rows", String(cellRows));
+    sprite.style.setProperty("--sprite-cell-fit", String(fitSize));
     sprite.style.setProperty("--sprite-offset-x", String(Number(definition.offset?.x) || 0));
     sprite.style.setProperty("--sprite-offset-y", String(Number(definition.offset?.y) || 0));
     sprite.setAttribute("aria-hidden", "true");
@@ -358,8 +360,17 @@ class PuzzleRenderer {
     if (definition.source) {
       const image = this.cachedImage(definition.source);
       if (image?.complete && image.naturalWidth > 0) {
-        const offset = this.visualSpriteOffset(definition, unit);
-        context.drawImage(image, x + offset.x, y + offset.y, unit, unit);
+        const fit = this.visualSpriteFit(definition, unit, {
+          cols: image.naturalWidth,
+          rows: image.naturalHeight,
+        });
+        context.drawImage(
+          image,
+          x + fit.x + (Number(definition.offset?.x) || 0) * fit.scale,
+          y + fit.y + (Number(definition.offset?.y) || 0) * fit.scale,
+          fit.width,
+          fit.height,
+        );
       }
       if (transform) {
         context.restore();
@@ -378,7 +389,8 @@ class PuzzleRenderer {
     }
 
     const offset = this.visualSpriteOffset(definition, unit);
-    this.paintPattern(context, definition, x + offset.x, y + offset.y, unit);
+    const fit = this.visualSpriteFit(definition, unit);
+    this.paintPattern(context, definition, x + fit.x + offset.x, y + fit.y + offset.y, fit.scale);
     if (transform) {
       context.restore();
     }
@@ -416,11 +428,10 @@ class PuzzleRenderer {
     return transform;
   }
 
-  paintPattern(context, definition, x, y, unit) {
+  paintPattern(context, definition, x, y, pixelSize) {
     const pattern = definition.pattern || [];
-    const { cols: cellCols, rows: cellRows } = this.spriteCellGrid(definition);
-    const pixelWidth = unit / cellCols;
-    const pixelHeight = unit / cellRows;
+    const pixelWidth = pixelSize;
+    const pixelHeight = pixelSize;
     pattern.forEach((row, rowIndex) => {
       [...row].forEach((token, colIndex) => {
         const color = definition.colors?.[token] || "transparent";
@@ -428,21 +439,41 @@ class PuzzleRenderer {
           return;
         }
         context.fillStyle = color;
+        const left = Math.round(x + colIndex * pixelWidth);
+        const right = Math.round(x + (colIndex + 1) * pixelWidth);
+        const top = Math.round(y + rowIndex * pixelHeight);
+        const bottom = Math.round(y + (rowIndex + 1) * pixelHeight);
         context.fillRect(
-          x + colIndex * pixelWidth,
-          y + rowIndex * pixelHeight,
-          pixelWidth,
-          pixelHeight,
+          left,
+          top,
+          Math.max(1, right - left),
+          Math.max(1, bottom - top),
         );
       });
     });
   }
 
-  visualSpriteOffset(definition, unit) {
-    const { cols: cellCols, rows: cellRows } = this.spriteCellGrid(definition);
+  visualSpriteFit(definition, unit, sourceSize = null) {
+    const grid = sourceSize || this.spriteCellGrid(definition);
+    const cols = Math.max(1, Number(grid.cols) || Number(grid.width) || 1);
+    const rows = Math.max(1, Number(grid.rows) || Number(grid.height) || 1);
+    const scale = unit / Math.max(cols, rows);
+    const width = cols * scale;
+    const height = rows * scale;
     return {
-      x: (Number(definition.offset?.x) || 0) * unit / cellCols,
-      y: (Number(definition.offset?.y) || 0) * unit / cellRows,
+      x: (unit - width) / 2,
+      y: (unit - height) / 2,
+      width,
+      height,
+      scale,
+    };
+  }
+
+  visualSpriteOffset(definition, unit) {
+    const fit = this.visualSpriteFit(definition, unit);
+    return {
+      x: (Number(definition.offset?.x) || 0) * fit.scale,
+      y: (Number(definition.offset?.y) || 0) * fit.scale,
     };
   }
 

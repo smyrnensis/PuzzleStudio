@@ -26,20 +26,20 @@ use std::time::Instant;
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::SystemTime;
 
-use puzzle_3d::{
-    Coord3, Game3, InputId3, LifecycleCommand3, ObjectId as ObjectId3, ParsedPuzzle3, RuleId3,
-    Size3, State3, transition_program_with_local_frame as transition_program_with_local_frame3,
-    transition_program_without_input_with_local_frame,
-};
 #[cfg(feature = "solver")]
-use puzzle_3d::{Rule3, WinCondition3, transition_program as transition_program3};
+use puzzle_3d::{transition_program as transition_program3, Rule3, WinCondition3};
+use puzzle_3d::{
+    transition_program_with_local_frame as transition_program_with_local_frame3,
+    transition_program_without_input_with_local_frame, Coord3, Game3, InputId3, LifecycleCommand3,
+    ObjectId as ObjectId3, ParsedPuzzle3, RuleId3, Size3, State3,
+};
 #[cfg(feature = "solver")]
 use puzzle_core::transition_state;
 use puzzle_core::{
-    ComparisonOp, CompiledGame, ConditionValueKind, Effect, GlobalUpdateOp, Guard, InputId,
-    LayerId, MarkPattern, MarkValueMatch, ObjectId, Offset, Patch, PatchOp, Pattern, Rule,
-    RuleApplication, RuleCondition, RuleId, RuleStep, State, TransitionCommand, TransitionError,
-    WriteOp, transition_program, transition_program_outcome, transition_program_trace,
+    transition_program, transition_program_outcome, transition_program_trace, ComparisonOp,
+    CompiledGame, ConditionValueKind, Effect, GlobalUpdateOp, Guard, InputId, LayerId, MarkPattern,
+    MarkValueMatch, ObjectId, Offset, Patch, PatchOp, Pattern, Rule, RuleApplication,
+    RuleCondition, RuleId, RuleStep, State, TransitionCommand, TransitionError, WriteOp,
 };
 #[cfg(feature = "solver")]
 use puzzle_core::{ConditionId, GlobalId, MarkId, MatchCell, PatternComponent};
@@ -47,25 +47,27 @@ use puzzle_core::{ConditionId, GlobalId, MarkId, MatchCell, PatternComponent};
 use puzzle_lang::AssetsDef;
 #[cfg(feature = "solver")]
 use puzzle_lang::GoalClause;
-use puzzle_lang::{
-    AnimationDef, ArrowKey, GoalCondition, GoalExpr, GoalValue, KeyTrigger, Level,
-    LoadedDocumentModel, LoadedGame, ResourceSelection, RuleAnimation, RuleAnimationTrigger,
-    RuleEffect, SceneAlignXDef, SceneAlignYDef, SceneBinaryOp, SceneComponent, SceneEffect,
-    SceneExpr, SceneLayoutDef, ScenePuzzleInitializer, SceneTextContent, SceneTransitionTrigger,
-    SceneValue, SoundsDef, ThemeDef, VisualSpriteDef, VisualSpriteKind, parse_game2d as parse_game,
-};
-use puzzle_lang::{AssetKind, DiagnosticReport};
 #[cfg(not(target_arch = "wasm32"))]
 use puzzle_lang::{discover_game_entries, expand_game_imports_for_file, resolve_game_entry};
+use puzzle_lang::{
+    parse_game2d as parse_game, AnimationDef, ArrowKey, GoalCondition, GoalExpr, GoalValue,
+    KeyTrigger, Level, LoadedDocumentModel, LoadedGame, ResourceSelection, RuleAnimation,
+    RuleAnimationTrigger, RuleEffect, SceneAlignXDef, SceneAlignYDef, SceneBinaryOp,
+    SceneComponent, SceneEffect, SceneExpr, SceneLayoutDef, ScenePuzzleInitializer,
+    SceneTextContent, SceneTransitionTrigger, SceneValue, SoundsDef, ThemeDef, VisualSpriteDef,
+    VisualSpriteKind,
+};
+use puzzle_lang::{AssetKind, DiagnosticReport};
 use puzzle_play::{
-    AnimationEvent, GameSession, LevelProgressSaveData, MessageEvent, PersistentVarSaveData,
-    ProgressSaveData, SoundEvent, WaitEvent, animation_events_for_trace,
-    mixed_document_loaded_game, puzzle3_document_scene_host_loaded_game, runtime_sounds_def,
+    animation_events_for_trace, mixed_document_loaded_game,
+    puzzle3_document_scene_host_loaded_game, runtime_sounds_def, AnimationEvent, GameSession,
+    LevelProgressSaveData, MessageEvent, PersistentVarSaveData, ProgressSaveData, SoundEvent,
+    WaitEvent,
 };
 #[cfg(feature = "solver")]
 use puzzle_solver::{
-    Puzzle3Domain, PuzzleDomain, PuzzleSearchState, SearchBudget, SearchOutcome, SearchProgress,
-    SearchStats, best_first_with_dead_states_and_progress,
+    best_first_with_dead_states_and_progress, Puzzle3Domain, PuzzleDomain, PuzzleSearchState,
+    SearchBudget, SearchOutcome, SearchProgress, SearchStats,
 };
 
 const INDEX_HTML: &str = include_str!("../static/index.html");
@@ -109,7 +111,7 @@ include!("lib_server.rs");
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
-    use serde_json::{Value, json};
+    use serde_json::{json, Value};
 
     fn parse_json_object(source: &str) -> Value {
         serde_json::from_str(source).expect("runtime outcome should be valid JSON")
@@ -140,6 +142,15 @@ mod tests {
             "window.PuzzleBoot = JSON.parse(\"",
             "\");",
             "PuzzleBoot",
+        )
+    }
+
+    fn embedded_puzzle3_frame_fixture_json(html: &str) -> Value {
+        embedded_puzzle_json_assignment(
+            html,
+            "window.Puzzle3DFrameFixture = JSON.parse(\"",
+            "\");",
+            "Puzzle3DFrameFixture",
         )
     }
 
@@ -465,16 +476,20 @@ P
         assert!(visuals.contains("\"offset\":{\"x\":2,\"y\":-1}"));
         assert!(visuals.contains("\"pixelsPerCell\":{\"width\":5,\"height\":5}"));
         assert!(RENDERER_JS.contains("visualSpriteOffset(definition, unit)"));
+        assert!(RENDERER_JS.contains("visualSpriteFit(definition, unit, sourceSize = null)"));
         assert!(RENDERER_JS.contains("definition.pixelsPerCell?.width"));
         assert!(RENDERER_JS.contains("solidColor && this.canPaintAsFullCellSolid(definition)"));
         assert!(RENDERER_JS.contains("unit = Math.max(unit, cellCols, cellRows);"));
+        assert!(RENDERER_JS.contains("const scale = unit / Math.max(cols, rows);"));
+        assert!(RENDERER_JS.contains("context.drawImage(\n          image,"));
+        assert!(RENDERER_CSS.contains("--sprite-cell-fit"));
+        assert!(RENDERER_CSS.contains("background-size: contain;"));
         assert!(!RENDERER_JS.contains("leastCommonMultiple("));
-        assert!(RENDERER_JS.contains("const pixelWidth = unit / cellCols;"));
-        assert!(
-            RENDERER_JS.contains(
-                "const { cols: width, rows: height } = this.spritePatternSize(definition);"
-            )
-        );
+        assert!(RENDERER_JS.contains("const pixelWidth = pixelSize;"));
+        assert!(RENDERER_JS.contains("const left = Math.round(x + colIndex * pixelWidth);"));
+        assert!(RENDERER_JS.contains("Math.max(1, right - left)"));
+        assert!(RENDERER_JS
+            .contains("const { cols: width, rows: height } = this.spritePatternSize(definition);"));
         assert!(!RENDERER_JS.contains("domPatternCellUnit()"));
         assert!(!RENDERER_JS.contains("scaledPixelEdge(index, sourceUnits, targetPixels)"));
         assert!(!RENDERER_JS.contains("boundedLeastCommonMultiple"));
@@ -556,10 +571,8 @@ P
         ));
         assert!(APP_JS.contains("resizeObserver.observe(shell);"));
         assert!(APP_JS.contains("resizeObserver.observe(playSurface);"));
-        assert!(
-            APP_JS
-                .contains("window.addEventListener(\"resize\", () => scheduleScreenScaleSync(4));")
-        );
+        assert!(APP_JS
+            .contains("window.addEventListener(\"resize\", () => scheduleScreenScaleSync(4));"));
         assert!(APP_JS.contains(
             "window.addEventListener(\"orientationchange\", () => scheduleScreenScaleSync(6));"
         ));
@@ -644,19 +657,13 @@ P
         assert!(APP_JS.contains("function sceneMenuFocusCells(scene = currentSceneDef())"));
         assert!(APP_JS.contains("function levelMenuFocusFootprint(component, context = {})"));
         assert!(APP_JS.contains("const hasMenuController = sceneHasComponent(scene, \"level_menu\") || sceneHasComponent(scene, \"choice\");"));
-        assert!(
-            APP_JS.contains(
-                "if (!binding && chrome === \"menu\" && profile.menuFocusCells.length > 0)"
-            )
-        );
+        assert!(APP_JS
+            .contains("if (!binding && chrome === \"menu\" && profile.menuFocusCells.length > 0)"));
         assert!(APP_JS.contains("effects.push({ kind: \"scene_menu\", input: menuInput });"));
         assert!(APP_JS.contains("syncSceneMenuSelection(screenView);"));
         assert!(APP_JS.contains("assignSceneMenuControl(button, scope);"));
-        assert!(
-            APP_JS.contains(
-                "const itemTop = list.scrollTop + (itemRect.top - listRect.top) * scale;"
-            )
-        );
+        assert!(APP_JS
+            .contains("const itemTop = list.scrollTop + (itemRect.top - listRect.top) * scale;"));
         assert!(!APP_JS.contains("const itemTop = item.offsetTop;"));
         assert!(APP_JS.contains("function isControlPointerTarget(target)"));
         assert!(APP_JS.contains("[role='option'], .scene-menu-control"));
@@ -735,27 +742,18 @@ P
         assert!(THEME_PRESETS_CSS.contains(".theme-clean .view-column > .level-menu,"));
         assert!(THEME_PRESETS_CSS.contains(".theme-clean .view-box > button,"));
         assert!(THEME_PRESETS_CSS.contains(".theme-clean .view-box > .level-menu {"));
-        assert!(
-            THEME_PRESETS_CSS
-                .contains("width: var(--clean-control-width, auto);\n  max-width: 100%;")
-        );
+        assert!(THEME_PRESETS_CSS
+            .contains("width: var(--clean-control-width, auto);\n  max-width: 100%;"));
         assert!(THEME_PRESETS_CSS.contains(".theme-clean .level-menu {"));
         assert!(THEME_PRESETS_CSS.contains("scrollbar-width: none;"));
         assert!(!THEME_PRESETS_CSS.contains("max-height: min(62vh"));
-        assert!(
-            !THEME_PRESETS_CSS
-                .contains(".theme-clean .level-menu li,\n.theme-clean .is-menu-scene button")
-        );
+        assert!(!THEME_PRESETS_CSS
+            .contains(".theme-clean .level-menu li,\n.theme-clean .is-menu-scene button"));
         assert!(!THEME_PRESETS_CSS.contains("text-overflow: ellipsis;"));
-        assert!(
-            THEME_PRESETS_CSS
-                .contains(".theme-clean .level-menu::-webkit-scrollbar {\n  display: none;\n}")
-        );
-        assert!(
-            THEME_PRESETS_CSS.contains(
-                ".theme-clean .level-menu .ps-control-label {\n  white-space: nowrap;\n}"
-            )
-        );
+        assert!(THEME_PRESETS_CSS
+            .contains(".theme-clean .level-menu::-webkit-scrollbar {\n  display: none;\n}"));
+        assert!(THEME_PRESETS_CSS
+            .contains(".theme-clean .level-menu .ps-control-label {\n  white-space: nowrap;\n}"));
         assert!(THEME_PRESETS_CSS.contains(".theme-clean .is-menu-scene button {\n  justify-items: center;\n  text-align: center;\n}"));
         assert!(THEME_PRESETS_CSS.contains(".theme-clean .is-menu-scene button .ps-control-label {\n  justify-self: center;\n  text-align: center;\n}"));
     }
@@ -790,10 +788,8 @@ P
         assert!(!APP_JS.contains("--ps-confirm-before"));
         assert!(!APP_JS.contains("--ps-confirm-after"));
         assert!(THEME_PRESETS_CSS.contains("--ps-terminal-control-width: 36ch;"));
-        assert!(
-            !THEME_PRESETS_CSS
-                .contains("--ps-confirm-fill: \"####################################\";")
-        );
+        assert!(!THEME_PRESETS_CSS
+            .contains("--ps-confirm-fill: \"####################################\";"));
         assert!(THEME_PRESETS_CSS.contains("width: min(100%, var(--ps-terminal-control-width));"));
         assert!(THEME_PRESETS_CSS.contains("white-space: nowrap;"));
         assert!(THEME_PRESETS_CSS.contains("position: relative;"));
@@ -802,10 +798,8 @@ P
             "grid-template-columns: minmax(0, 1fr) minmax(0, max-content) minmax(0, 1fr);"
         ));
         assert!(THEME_PRESETS_CSS.contains(".theme-puzzlescript .ps-control-label {"));
-        assert!(
-            !THEME_PRESETS_CSS
-                .contains(".theme-puzzlescript .level-menu li > span:not(.level-clear-mark)")
-        );
+        assert!(!THEME_PRESETS_CSS
+            .contains(".theme-puzzlescript .level-menu li > span:not(.level-clear-mark)"));
         assert!(THEME_PRESETS_CSS.contains(".theme-puzzlescript .ps-control-edge {"));
         assert!(THEME_PRESETS_CSS.contains("display: block;"));
         assert!(THEME_PRESETS_CSS.contains(".theme-puzzlescript .ps-control-edge.is-left {"));
@@ -1024,17 +1018,13 @@ scene playing {
             "const PREVIEW_SURFACE_UPDATE_MESSAGE = \"PuzzleStudioPreviewSurfaceUpdate\";"
         ));
         assert!(PUZZLE3_APP_JS.contains("function puzzle3PreviewUpdateFromSurface(update = {})"));
-        assert!(
-            PUZZLE3_APP_JS.contains("if (event.data?.type === PREVIEW_SURFACE_UPDATE_MESSAGE)")
-        );
+        assert!(PUZZLE3_APP_JS.contains("if (event.data?.type === PREVIEW_SURFACE_UPDATE_MESSAGE)"));
         assert!(PUZZLE3_APP_JS.contains("levelIndex: payload.levelIndex"));
         assert!(PUZZLE3_APP_JS.contains("camera: payload.camera"));
         assert!(PUZZLE3_APP_JS.contains("view: payload.view"));
         assert!(PUZZLE3_APP_JS.contains("settings: payload.settings || {}"));
         assert!(APP_JS.contains("if (puzzle3PreviewSurface) {\n    return puzzle3PreviewSurfaceFixture(fixture, sceneName);\n  }"));
-        assert!(
-            APP_JS.contains("if (componentEmbedMode && renderEmbeddedPuzzleComponent(layers))")
-        );
+        assert!(APP_JS.contains("if (componentEmbedMode && renderEmbeddedPuzzleComponent(layers))"));
         assert!(
             APP_JS.contains("if (puzzle3PreviewSurface && renderEmbeddedPuzzleComponent(layers))")
         );
@@ -1053,20 +1043,16 @@ scene playing {
         assert!(PUZZLE3_APP_JS.contains("PuzzleStudioUpdatePuzzle3Preview"));
         assert!(PUZZLE3_APP_JS.contains("PuzzleStudioRenderPuzzle3ModelComponent"));
         assert!(PUZZLE3_APP_JS.contains("PuzzleStudioInitialModelComponentPreview"));
-        assert!(
-            PUZZLE3_APP_JS
-                .contains("function applyPuzzle3ModelComponentPreviewUpdate(update = {})")
-        );
+        assert!(PUZZLE3_APP_JS
+            .contains("function applyPuzzle3ModelComponentPreviewUpdate(update = {})"));
         assert!(PUZZLE3_APP_JS.contains(
             "const initialModelPreview = window.PuzzleStudioInitialModelComponentPreview;"
         ));
         assert!(PUZZLE3_APP_JS.contains(
             "await loadSnapshotData(next, puzzle3ModelComponentPreviewLoadOptions(initialModelPreview));"
         ));
-        assert!(
-            PUZZLE3_APP_JS
-                .contains("window.PuzzleStudioInitialModelComponentPreviewConsumed = true;")
-        );
+        assert!(PUZZLE3_APP_JS
+            .contains("window.PuzzleStudioInitialModelComponentPreviewConsumed = true;"));
         assert!(PUZZLE3_APP_JS.contains(
             "function puzzle3PreviewSnapshot(update = {}, source = requireLoadedPuzzle3Snapshot(\"Puzzle3 preview source snapshot\"))"
         ));
@@ -1076,15 +1062,11 @@ scene playing {
         assert!(PUZZLE3_APP_JS.contains("modelComponentPreview: {"));
         assert!(PUZZLE3_APP_JS.contains("if (editorModelComponentPreview)"));
         assert!(PUZZLE3_APP_JS.contains("mergePuzzle3PreviewSettings"));
-        assert!(
-            PUZZLE3_APP_JS
-                .contains("applyPuzzle3PreviewResources(next, update.resources || update)")
-        );
+        assert!(PUZZLE3_APP_JS
+            .contains("applyPuzzle3PreviewResources(next, update.resources || update)"));
         assert!(PUZZLE3_APP_JS.contains("function applyPuzzle3PreviewResources"));
-        assert!(
-            PUZZLE3_APP_JS
-                .contains("target.sprites = JSON.parse(JSON.stringify(resources.sprites));")
-        );
+        assert!(PUZZLE3_APP_JS
+            .contains("target.sprites = JSON.parse(JSON.stringify(resources.sprites));"));
         assert!(PUZZLE3_APP_JS.contains("next.levels[levelIndex]"));
         assert!(APP_JS.contains("zoom: view.zoom,"));
         assert!(PUZZLE3_APP_JS.contains("zoom: update.camera.zoom ?? update.view?.zoom,"));
@@ -1120,10 +1102,8 @@ scene playing {
 
     #[test]
     fn puzzle3_app_supports_focus_relative_viewport_framing() {
-        assert!(
-            PUZZLE3_APP_JS
-                .contains("function fitProjectionToViewport(renderContext, options = {})")
-        );
+        assert!(PUZZLE3_APP_JS
+            .contains("function fitProjectionToViewport(renderContext, options = {})"));
         assert!(PUZZLE3_APP_JS.contains(
             "function viewportFramingProjectionBounds(size, camera, viewport, focusCell)"
         ));
@@ -1153,11 +1133,8 @@ scene playing {
             "function viewportFitForFrame(frame, viewportBounds, centerPoint = null, zoom = 1, follow = \"snap\")"
         ));
         assert!(!PUZZLE3_APP_JS.contains("function viewportFramingProjectionCenter"));
-        assert!(
-            PUZZLE3_APP_JS.contains(
-                "function viewportFocusProjectionAnchor(size, camera, viewport, focusCell)"
-            )
-        );
+        assert!(PUZZLE3_APP_JS
+            .contains("function viewportFocusProjectionAnchor(size, camera, viewport, focusCell)"));
         assert!(PUZZLE3_APP_JS.contains(
             "function viewportFocusVisualProjectionAnchor(size, camera, viewport, focusCell)"
         ));
@@ -1178,19 +1155,14 @@ scene playing {
             ": viewportCellRange(Number(position.z) || 0, viewport.framingBox.height, viewport.mode);"
         ));
         assert!(PUZZLE3_APP_JS.contains("function virtualPagedCellRange(center, span)"));
-        assert!(
-            PUZZLE3_APP_JS
-                .contains("viewport?.mode === \"centered\" || viewport?.mode === \"paged\"")
-        );
+        assert!(PUZZLE3_APP_JS
+            .contains("viewport?.mode === \"centered\" || viewport?.mode === \"paged\""));
         assert!(!PUZZLE3_APP_JS.contains("function centeredCellRange(center, span, limit)"));
         assert!(PUZZLE3_APP_JS.contains(
             "const anchorPoint = viewportFocusProjectionAnchor(size, camera, viewport, focus);"
         ));
-        assert!(
-            PUZZLE3_APP_JS.contains(
-                "const anchorX = Number.isFinite(centerX) ? centerX : (minX + maxX) / 2;"
-            )
-        );
+        assert!(PUZZLE3_APP_JS
+            .contains("const anchorX = Number.isFinite(centerX) ? centerX : (minX + maxX) / 2;"));
         assert!(PUZZLE3_APP_JS.contains("originY: frameHeight / 2 - anchorY * effectiveScale"));
         assert!(PUZZLE3_APP_JS.contains("viewportFitForFrame("));
         assert!(PUZZLE3_APP_JS.contains("function puzzle3RenderContext(width = canvas.clientWidth, height = canvas.clientHeight)"));
@@ -1199,32 +1171,24 @@ scene playing {
         assert!(PUZZLE3_APP_JS.contains("const frame = canvasLayoutFrame();"));
         assert!(PUZZLE3_APP_JS.contains("function normalizeFrame(frame)"));
         assert!(PUZZLE3_APP_JS.contains("function normalizeModelSize(size)"));
-        assert!(
-            PUZZLE3_APP_JS
-                .contains("function fitScaleForProjectedBounds(frame, bounds, margin = 0)")
-        );
+        assert!(PUZZLE3_APP_JS
+            .contains("function fitScaleForProjectedBounds(frame, bounds, margin = 0)"));
         assert!(PUZZLE3_APP_JS.contains("const candidates = renderCellCandidates(renderContext);"));
-        assert!(
-            PUZZLE3_APP_JS
-                .contains("function renderCellCandidates(renderContext = puzzle3RenderContext())")
-        );
+        assert!(PUZZLE3_APP_JS
+            .contains("function renderCellCandidates(renderContext = puzzle3RenderContext())"));
         assert!(PUZZLE3_APP_JS.contains("function viewportRenderCullingEnabled(renderContext)"));
         assert!(!PUZZLE3_APP_JS.contains("function viewportRenderPixelMargin"));
         assert!(!PUZZLE3_APP_JS.contains("function projectedCellPixelMargin"));
         assert!(PUZZLE3_APP_JS.contains("function cellProjectsIntoFrame(position, frame)"));
-        assert!(
-            PUZZLE3_APP_JS
-                .contains("cellProjectsIntoFrame(cell.position || {}, renderContext.frame)")
-        );
+        assert!(PUZZLE3_APP_JS
+            .contains("cellProjectsIntoFrame(cell.position || {}, renderContext.frame)"));
         assert!(PUZZLE3_APP_JS.contains("bounds.maxX >= 0"));
         assert!(PUZZLE3_APP_JS.contains("bounds.minX <= frame.width"));
         assert!(PUZZLE3_APP_JS.contains("bounds.maxY >= 0"));
         assert!(PUZZLE3_APP_JS.contains("bounds.minY <= frame.height"));
         assert!(PUZZLE3_APP_JS.contains("cellHasRenderableVoxels(cell)"));
-        assert!(
-            PUZZLE3_APP_JS
-                .contains("const effectiveScale = baseScale * Math.max(0.1, Number(zoom) || 1);")
-        );
+        assert!(PUZZLE3_APP_JS
+            .contains("const effectiveScale = baseScale * Math.max(0.1, Number(zoom) || 1);"));
         assert!(PUZZLE3_APP_JS.contains("cellScale: baseScale"));
     }
 
@@ -1245,15 +1209,11 @@ scene playing {
         assert!(PUZZLE3_APP_JS.contains(
             "if (inlineComponentMount) {\n  // Inline controllers receive input through the host controller contract.\n} else if (!effectiveComponentEmbedMode()) {"
         ));
-        assert!(
-            PUZZLE3_APP_JS
-                .contains("window.addEventListener(\"keydown\", handleComponentEmbedKeydown);")
-        );
+        assert!(PUZZLE3_APP_JS
+            .contains("window.addEventListener(\"keydown\", handleComponentEmbedKeydown);"));
         assert!(PUZZLE3_APP_JS.contains("function handleComponentEmbedKeyup(event)"));
-        assert!(
-            PUZZLE3_APP_JS
-                .contains("window.addEventListener(\"keyup\", handleComponentEmbedKeyup);")
-        );
+        assert!(PUZZLE3_APP_JS
+            .contains("window.addEventListener(\"keyup\", handleComponentEmbedKeyup);"));
         assert!(PUZZLE3_APP_JS.contains("function startHeldSceneInput(holdId, input)"));
         assert!(PUZZLE3_APP_JS.contains("heldSceneInputs.set(holdId, input);"));
         assert!(PUZZLE3_APP_JS.contains("function applyPuzzle3CommandKey(event)"));
@@ -1280,16 +1240,12 @@ scene playing {
         assert!(PUZZLE3_APP_JS.contains("function renderOpaqueOcclusion(renderContext)"));
         assert!(PUZZLE3_APP_JS.contains("for (const cell of snapshot.cells || [])"));
         assert!(PUZZLE3_APP_JS.contains("renderContext.opaqueOcclusion = occupied;"));
-        assert!(
-            PUZZLE3_APP_JS
-                .contains("function cellVisibleVoxelsForRender(cell, renderContext = null)")
-        );
+        assert!(PUZZLE3_APP_JS
+            .contains("function cellVisibleVoxelsForRender(cell, renderContext = null)"));
         assert!(PUZZLE3_APP_JS.contains("renderContext.visibleVoxelCells = new Map();"));
         assert!(PUZZLE3_APP_JS.contains("function isVoxelFaceOccluded(voxel, offset, occupied)"));
-        assert!(
-            PUZZLE3_APP_JS
-                .contains("if (voxel.opaque !== false && occupied.opaque.has(adjacentKey))")
-        );
+        assert!(PUZZLE3_APP_JS
+            .contains("if (voxel.opaque !== false && occupied.opaque.has(adjacentKey))"));
         assert!(PUZZLE3_APP_JS.contains("occupied.bySource.has(`${sourceKey}|${adjacentKey}`)"));
     }
 
@@ -1314,14 +1270,15 @@ scene playing {
         assert!(PUZZLE3_APP_JS.contains("spriteVoxelTemplateCache.get(sprite)"));
         assert!(PUZZLE3_APP_JS.contains("spriteVoxelTemplateCache.set(sprite, template)"));
         assert!(PUZZLE3_APP_JS.contains("localBounds: voxelBounds(localPosition, scale)"));
+        assert!(PUZZLE3_APP_JS.contains("x: (grid.x + 0.5 - width / 2) * scale"));
+        assert!(PUZZLE3_APP_JS.contains("y: (grid.y + 0.5 - depth / 2) * scale"));
+        assert!(PUZZLE3_APP_JS.contains("z: (grid.z + 0.5 - height / 2) * scale"));
         assert!(PUZZLE3_APP_JS.contains("const source = voxel.color || parseColor(voxel.fill);"));
     }
 
     #[test]
     fn puzzle3_app_caches_render_geometry_by_dirty_cells() {
-        assert!(
-            PUZZLE3_APP_JS.contains("const renderGeometryCache = createRenderGeometryCache();")
-        );
+        assert!(PUZZLE3_APP_JS.contains("const renderGeometryCache = createRenderGeometryCache();"));
         assert!(PUZZLE3_APP_JS.contains("function syncRenderGeometryCache(renderContext = null)"));
         assert!(PUZZLE3_APP_JS.contains("function renderCellSignature(cell)"));
         assert!(PUZZLE3_APP_JS.contains("function expandDirtyCellKeys(keys)"));
@@ -1330,23 +1287,17 @@ scene playing {
             PUZZLE3_APP_JS.contains("function rebuildVisibleCellGeometry(key, cell, signature)")
         );
         assert!(PUZZLE3_APP_JS.contains("function rebuildCachedCellFaces(key, cell)"));
-        assert!(
-            PUZZLE3_APP_JS
-                .contains("renderGeometryCache.occupied = renderCachedOpaqueOcclusion();")
-        );
-        assert!(
-            PUZZLE3_APP_JS
-                .contains("function cellFaceGeometriesForRender(cell, renderContext = null)")
-        );
+        assert!(PUZZLE3_APP_JS
+            .contains("renderGeometryCache.occupied = renderCachedOpaqueOcclusion();"));
+        assert!(PUZZLE3_APP_JS
+            .contains("function cellFaceGeometriesForRender(cell, renderContext = null)"));
         assert!(PUZZLE3_APP_JS.contains("faces.push(...cellFaceGeometriesForRender(cell, renderContext).map(projectFaceGeometry));"));
         assert!(PUZZLE3_APP_JS.contains("face: (group, rect) => faceGeometry("));
         assert!(PUZZLE3_APP_JS.contains("function projectFaceGeometry(geometry)"));
         assert!(PUZZLE3_APP_JS.contains("const primitive = geometry.primitive || {"));
         assert!(PUZZLE3_APP_JS.contains("geometry.primitive = primitive;"));
-        assert!(
-            PUZZLE3_APP_JS
-                .contains("primitive.ownerCell = projectCellRenderOwner(geometry.ownerCell);")
-        );
+        assert!(PUZZLE3_APP_JS
+            .contains("primitive.ownerCell = projectCellRenderOwner(geometry.ownerCell);"));
         assert!(!PUZZLE3_APP_JS.contains("compoundFace:"));
         assert!(!PUZZLE3_APP_JS.contains("function compoundPolygonPaths(paths, fill)"));
     }
@@ -1665,10 +1616,8 @@ text level.title
         assert!(PUZZLE3_VISUAL_CORE_JS.contains("function cameraOrderBasis(view)"));
         assert!(PUZZLE3_VISUAL_CORE_JS.contains("plane: signed.x + signed.y + signed.z"));
         assert!(PUZZLE3_VISUAL_CORE_JS.contains("const axes = [\"x\", \"y\", \"z\"].sort"));
-        assert!(
-            PUZZLE3_VISUAL_CORE_JS
-                .contains("const faceRects = adapter.rectsFromCells || rectsFromCells;")
-        );
+        assert!(PUZZLE3_VISUAL_CORE_JS
+            .contains("const faceRects = adapter.rectsFromCells || rectsFromCells;"));
         assert!(!PUZZLE3_VISUAL_CORE_JS.contains("adapter.compoundFace"));
         assert!(!PUZZLE3_VISUAL_CORE_JS.contains("const depthDiff ="));
         assert!(PUZZLE3_APP_JS.contains("primitives = orderScenePrimitives(primitives);"));
@@ -1682,14 +1631,10 @@ text level.title
         assert!(PUZZLE3_APP_JS.contains("function primitiveSortCacheKey(primitives)"));
         assert!(PUZZLE3_APP_JS.contains("cameraOrderKey(),"));
         assert!(PUZZLE3_VISUAL_CORE_JS.contains("compareNumber(a.frameIndex, b.frameIndex)"));
-        assert!(
-            PUZZLE3_APP_JS
-                .contains("return Puzzle3VisualCore.cameraOrderKey(puzzle3VisualView());")
-        );
-        assert!(
-            PUZZLE3_APP_JS
-                .contains("return Puzzle3VisualCore.faceGridOrder(corners, puzzle3VisualView());")
-        );
+        assert!(PUZZLE3_APP_JS
+            .contains("return Puzzle3VisualCore.cameraOrderKey(puzzle3VisualView());"));
+        assert!(PUZZLE3_APP_JS
+            .contains("return Puzzle3VisualCore.faceGridOrder(corners, puzzle3VisualView());"));
     }
 
     #[test]
@@ -1752,22 +1697,13 @@ text level.title
         assert!(!STANDALONE_JS.contains("normalizeAnimationEvents"));
         assert!(!STANDALONE_JS.contains("animationsForCoreOutcome"));
         assert!(!STANDALONE_JS.contains("animateEmissions"));
-        assert!(
-            APP_JS.contains(
-                "screenHasPuzzle: currentSceneAcceptsModelInput() || Boolean(state.scene)"
-            )
-        );
+        assert!(APP_JS
+            .contains("screenHasPuzzle: currentSceneAcceptsModelInput() || Boolean(state.scene)"));
         assert!(APP_JS.contains("function currentSceneAcceptsModelInput()"));
-        assert!(
-            APP_JS.contains(
-                "function sceneInteractionProfile(scene = currentSceneDef(), options = {})"
-            )
-        );
-        assert!(
-            APP_JS.contains(
-                "function stateAcceptsModelInput(state = currentState || puzzleBoot || {})"
-            )
-        );
+        assert!(APP_JS
+            .contains("function sceneInteractionProfile(scene = currentSceneDef(), options = {})"));
+        assert!(APP_JS
+            .contains("function stateAcceptsModelInput(state = currentState || puzzleBoot || {})"));
         assert!(APP_JS.contains("state?.acceptsModelInput === true"));
         assert!(APP_JS.contains("standaloneRuntime?.editorPreviewInputEnabled === true"));
         assert!(!APP_JS.contains("nonEmptyArray(layer?.scenePuzzles)"));
@@ -1779,11 +1715,8 @@ text level.title
         assert!(!APP_JS.contains("const hasPuzzle = sceneHasComponent(sceneDef, \"puzzle\") || sceneHasComponent(sceneDef, \"frame\")"));
         assert!(APP_JS.contains("acceptModelInput: event.data.acceptModelInput === true"));
         assert!(APP_JS.contains("function applyStandaloneEditorInput(command)"));
-        assert!(
-            APP_JS.contains(
-                "const acceptsEditorInput = standaloneRuntime?.editorPreviewInputEnabled"
-            )
-        );
+        assert!(APP_JS
+            .contains("const acceptsEditorInput = standaloneRuntime?.editorPreviewInputEnabled"));
         assert!(APP_JS.contains("standaloneRuntime?.inputIdsByName?.has(command)"));
         assert!(APP_JS.contains("standaloneRuntime.applyInputName(command);"));
         assert!(STANDALONE_JS.contains("this.editorPreviewInputEnabled = false;"));
@@ -1826,13 +1759,11 @@ levels default of board {
         let html = export_editor_preview_html_from_source(source, "game.puzzle", "", "")
             .expect("preview export");
         let export = embedded_puzzle_runtime_export_json(&html);
-        assert!(
-            export["compiledPlay"]["inputLabels"]
-                .as_object()
-                .expect("compiled input labels")
-                .values()
-                .any(|label| label == "right")
-        );
+        assert!(export["compiledPlay"]["inputLabels"]
+            .as_object()
+            .expect("compiled input labels")
+            .values()
+            .any(|label| label == "right"));
         let level = &export["levels"][0];
         let request = json!({
             "version": 1,
@@ -2128,20 +2059,16 @@ levels default of board {
         let response = parse_json_object(&solve_solver_task_json(&request.to_string()).unwrap());
 
         assert_eq!(response["result"], "solved");
-        assert!(
-            response["observations"][0]["state"]["slots"]
-                .as_array()
-                .expect("observation slots")
-                .iter()
-                .any(|slot| slot.as_u64() == Some(cursor_id))
-        );
-        assert!(
-            response["steps"][0]["state"]["slots"]
-                .as_array()
-                .expect("step slots")
-                .iter()
-                .any(|slot| slot.as_u64() == Some(cursor_id))
-        );
+        assert!(response["observations"][0]["state"]["slots"]
+            .as_array()
+            .expect("observation slots")
+            .iter()
+            .any(|slot| slot.as_u64() == Some(cursor_id)));
+        assert!(response["steps"][0]["state"]["slots"]
+            .as_array()
+            .expect("step slots")
+            .iter()
+            .any(|slot| slot.as_u64() == Some(cursor_id)));
     }
 
     #[cfg(feature = "solver")]
@@ -2753,11 +2680,9 @@ scene playing {
         assert!(!html.contains("PuzzleStudioSolve"));
         assert!(!html.contains("loadWasmSolver"));
         let boot = embedded_puzzle_boot_json(&html);
-        assert!(
-            boot["source"]
-                .as_str()
-                .is_some_and(|value| value.contains("Editor Preview Export"))
-        );
+        assert!(boot["source"]
+            .as_str()
+            .is_some_and(|value| value.contains("Editor Preview Export")));
         assert_eq!(
             boot["puzzlePath"],
             json!("games/editor_preview/game.puzzle")
@@ -2771,9 +2696,7 @@ scene playing {
         assert!(source.contains("PuzzleStudioRuntimeAssetResponse"));
         assert!(source.contains("puzzle_wasm_game.js"));
         assert!(source.contains("puzzle_wasm_game_bg.wasm.base64"));
-        assert!(
-            source.contains("Standalone HTML export requires embedded puzzle_wasm_game assets")
-        );
+        assert!(source.contains("Standalone HTML export requires embedded puzzle_wasm_game assets"));
         assert!(source.contains("missing_embedded_wasm_loader_script"));
     }
 
@@ -2824,12 +2747,10 @@ scene playing {
             serde_json::from_str(&data).expect("export data should be JSON");
         assert!(export.get("scenes").is_some());
         assert!(export.get("screens").is_some());
-        assert!(
-            export
-                .get("engine")
-                .and_then(|engine| engine.get("persistentVars"))
-                .is_some()
-        );
+        assert!(export
+            .get("engine")
+            .and_then(|engine| engine.get("persistentVars"))
+            .is_some());
     }
 
     #[test]
@@ -2906,10 +2827,8 @@ rules {
         let server_source = include_str!("lib_server.rs");
         assert!(server_source.contains("push_display_error_scene_object"));
         assert!(server_source.contains(r#"\"cells\":[],\"displayError\":"#));
-        assert!(
-            !server_source
-                .contains("transition_program(&loaded.game, program, state, InputId(0)).ok()")
-        );
+        assert!(!server_source
+            .contains("transition_program(&loaded.game, program, state, InputId(0)).ok()"));
         assert!(APP_JS.contains("function firstDisplayError(state)"));
         assert!(APP_JS.contains("showError(new Error(displayError));"));
         assert!(APP_CSS.contains(".runtime-error"));
@@ -3495,10 +3414,8 @@ levels3 default of cube {
         assert!(!APP_JS.contains("frame.setAttribute(\"allowtransparency\", \"true\");"));
         assert!(!APP_JS.contains("frame.style.backgroundColor"));
         assert!(!APP_JS.contains("<html lang=\"en\" style=\"background:transparent;\">"));
-        assert!(
-            !APP_JS
-                .contains("<body class=\"is-component-embed\" style=\"background:transparent;\">")
-        );
+        assert!(!APP_JS
+            .contains("<body class=\"is-component-embed\" style=\"background:transparent;\">"));
         assert!(
             PUZZLE3_APP_JS.contains(
                 "const ctx = puzzle3RendererMode === \"three\" ? null : canvas.getContext(\"2d\", { alpha: true });"
@@ -3524,21 +3441,15 @@ levels3 default of cube {
         assert!(PUZZLE3_THREE_RENDERER_JS.contains("new THREE.PerspectiveCamera"));
         assert!(PUZZLE3_THREE_RENDERER_JS.contains("new THREE.OrthographicCamera"));
         assert!(PUZZLE3_THREE_RENDERER_JS.contains("projection === \"orthographic\""));
-        assert!(
-            PUZZLE3_THREE_RENDERER_JS
-                .contains("const yaw = degreesToRadians(cameraSettings.yawDegrees ?? 0);")
-        );
+        assert!(PUZZLE3_THREE_RENDERER_JS
+            .contains("const yaw = degreesToRadians(cameraSettings.yawDegrees ?? 0);"));
         assert!(PUZZLE3_THREE_RENDERER_JS.contains("const pitch = degreesToRadians(clamp(Number(cameraSettings.pitchDegrees ?? 35) || 35, -90, 90));"));
         assert!(PUZZLE3_THREE_RENDERER_JS.contains("camera.up.set(0, 1, 0);"));
-        assert!(
-            PUZZLE3_THREE_RENDERER_JS
-                .contains("targetPoint.x - Math.sin(yaw) * horizontal * distance")
-        );
+        assert!(PUZZLE3_THREE_RENDERER_JS
+            .contains("targetPoint.x - Math.sin(yaw) * horizontal * distance"));
         assert!(PUZZLE3_THREE_RENDERER_JS.contains("targetPoint.y + Math.sin(pitch) * distance"));
-        assert!(
-            PUZZLE3_THREE_RENDERER_JS
-                .contains("targetPoint.z + Math.cos(yaw) * horizontal * distance")
-        );
+        assert!(PUZZLE3_THREE_RENDERER_JS
+            .contains("targetPoint.z + Math.cos(yaw) * horizontal * distance"));
         assert!(PUZZLE3_THREE_RENDERER_JS.contains("function threeBackground(THREE, value)"));
         assert!(PUZZLE3_THREE_RENDERER_JS.contains("disposeScene(this.scene);"));
         assert!(PUZZLE3_THREE_RENDERER_JS.contains("function addGrid(THREE, scene, frame)"));
@@ -3546,25 +3457,17 @@ levels3 default of cube {
         assert!(PUZZLE3_THREE_RENDERER_JS.contains("function visibleVoxelStack(stack)"));
         assert!(PUZZLE3_THREE_RENDERER_JS.contains("function mergedVoxelFaces(voxels, occupied)"));
         assert!(PUZZLE3_THREE_RENDERER_JS.contains("Puzzle3VisualCore.mergeVoxelFaces(voxels"));
-        assert!(
-            PUZZLE3_THREE_RENDERER_JS
-                .contains("function isVoxelFaceOccluded(voxel, offset, occupied)")
-        );
-        assert!(
-            PUZZLE3_THREE_RENDERER_JS
-                .contains("if (voxel.opaque !== false && occupied.opaque.has(adjacentKey))")
-        );
-        assert!(
-            PUZZLE3_THREE_RENDERER_JS
-                .contains("occupied.bySource.has(`${sourceKey}|${adjacentKey}`)")
-        );
+        assert!(PUZZLE3_THREE_RENDERER_JS
+            .contains("function isVoxelFaceOccluded(voxel, offset, occupied)"));
+        assert!(PUZZLE3_THREE_RENDERER_JS
+            .contains("if (voxel.opaque !== false && occupied.opaque.has(adjacentKey))"));
+        assert!(PUZZLE3_THREE_RENDERER_JS
+            .contains("occupied.bySource.has(`${sourceKey}|${adjacentKey}`)"));
         assert!(PUZZLE3_THREE_RENDERER_JS.contains("function faceBufferGeometry(THREE, faces)"));
         assert!(PUZZLE3_THREE_RENDERER_JS.contains("function parseColor(fill)"));
         assert!(PUZZLE3_THREE_RENDERER_JS.contains("opaque: !source || source.a >= 0.999"));
-        assert!(
-            PUZZLE3_THREE_RENDERER_JS
-                .contains("if (renderVoxel.opaque) {\n      visible.length = 0;")
-        );
+        assert!(PUZZLE3_THREE_RENDERER_JS
+            .contains("if (renderVoxel.opaque) {\n      visible.length = 0;"));
         assert!(PUZZLE3_THREE_RENDERER_JS.contains("transparent: alpha < 0.999"));
         assert!(PUZZLE3_THREE_RENDERER_JS.contains("opacity: Math.max(0, Math.min(1, alpha))"));
         assert!(PUZZLE3_THREE_RENDERER_JS.contains("depthWrite: alpha >= 0.999"));
@@ -3582,24 +3485,19 @@ levels3 default of cube {
         assert!(PUZZLE3_THREE_RENDERER_JS.contains("x: position.x - (frame.size.width - 1) / 2"));
         assert!(PUZZLE3_THREE_RENDERER_JS.contains("y: position.z - (frame.size.height - 1) / 2"));
         assert!(PUZZLE3_THREE_RENDERER_JS.contains("z: (frame.size.depth - 1) / 2 - position.y"));
-        assert!(
-            PUZZLE3_THREE_RENDERER_JS.contains("function spriteVoxelLocalPosition(voxel, step)")
-        );
-        assert!(PUZZLE3_THREE_RENDERER_JS.contains("x: (voxel.x + 0.5) * step - 0.5"));
-        assert!(PUZZLE3_THREE_RENDERER_JS.contains("y: (voxel.y + 0.5) * step - 0.5"));
-        assert!(PUZZLE3_THREE_RENDERER_JS.contains("z: (voxel.z + 0.5) * step - 0.5"));
+        assert!(PUZZLE3_THREE_RENDERER_JS
+            .contains("function spriteVoxelLocalPosition(voxel, size, step)"));
+        assert!(PUZZLE3_THREE_RENDERER_JS.contains("x: (voxel.x + 0.5 - size.width / 2) * step"));
+        assert!(PUZZLE3_THREE_RENDERER_JS.contains("y: (voxel.y + 0.5 - size.depth / 2) * step"));
+        assert!(PUZZLE3_THREE_RENDERER_JS.contains("z: (voxel.z + 0.5 - size.height / 2) * step"));
         assert!(PUZZLE3_THREE_RENDERER_JS.contains("const layerY = object.layer * 0.08;"));
         assert!(PUZZLE3_THREE_RENDERER_JS.contains("y: base.y + layerY + local.z"));
         assert!(PUZZLE3_THREE_RENDERER_JS.contains("z: base.z - local.y"));
         assert!(PUZZLE3_THREE_RENDERER_JS.contains("function viewportRanges(frame)"));
-        assert!(
-            PUZZLE3_THREE_RENDERER_JS
-                .contains("function viewportProjectedVisibleHeight(frame, target, aspect)")
-        );
-        assert!(
-            PUZZLE3_THREE_RENDERER_JS
-                .contains("function smoothViewportTarget(next, target, frame)")
-        );
+        assert!(PUZZLE3_THREE_RENDERER_JS
+            .contains("function viewportProjectedVisibleHeight(frame, target, aspect)"));
+        assert!(PUZZLE3_THREE_RENDERER_JS
+            .contains("function smoothViewportTarget(next, target, frame)"));
         assert!(PUZZLE3_THREE_RENDERER_JS.contains("function smoothViewportMaxLag(frame)"));
         assert!(
             PUZZLE3_THREE_RENDERER_JS.contains("const catchUp = (distance - maxLag) / distance;")
@@ -3609,31 +3507,19 @@ levels3 default of cube {
         assert!(
             PUZZLE3_THREE_RENDERER_JS.contains("function viewportFocusVisualRenderBounds(frame)")
         );
-        assert!(
-            PUZZLE3_THREE_RENDERER_JS
-                .contains("function projectRenderPointForCamera(point, cameraSettings)")
-        );
-        assert!(
-            PUZZLE3_THREE_RENDERER_JS
-                .contains("applyProjectedRenderCulling(THREE, frame, camera, this.canvas);")
-        );
-        assert!(
-            PUZZLE3_THREE_RENDERER_JS
-                .contains("function applyProjectedRenderCulling(THREE, frame, camera, canvas)")
-        );
+        assert!(PUZZLE3_THREE_RENDERER_JS
+            .contains("function projectRenderPointForCamera(point, cameraSettings)"));
+        assert!(PUZZLE3_THREE_RENDERER_JS
+            .contains("applyProjectedRenderCulling(THREE, frame, camera, this.canvas);"));
+        assert!(PUZZLE3_THREE_RENDERER_JS
+            .contains("function applyProjectedRenderCulling(THREE, frame, camera, canvas)"));
         assert!(PUZZLE3_THREE_RENDERER_JS.contains("camera.updateMatrixWorld?.();"));
-        assert!(
-            PUZZLE3_THREE_RENDERER_JS.contains("function projectedRenderCullingEnabled(frame)")
-        );
-        assert!(
-            PUZZLE3_THREE_RENDERER_JS
-                .contains("function cellCoordinateRenderBounds(frame, cell, extent")
-        );
+        assert!(PUZZLE3_THREE_RENDERER_JS.contains("function projectedRenderCullingEnabled(frame)"));
+        assert!(PUZZLE3_THREE_RENDERER_JS
+            .contains("function cellCoordinateRenderBounds(frame, cell, extent"));
         assert!(PUZZLE3_THREE_RENDERER_JS.contains("function conservativeCellRenderExtent(frame)"));
-        assert!(
-            PUZZLE3_THREE_RENDERER_JS
-                .contains("function projectedRenderBounds(THREE, bounds, camera)")
-        );
+        assert!(PUZZLE3_THREE_RENDERER_JS
+            .contains("function projectedRenderBounds(THREE, bounds, camera)"));
         assert!(!PUZZLE3_THREE_RENDERER_JS.contains("function cellRenderBounds(frame, cell)"));
         assert!(
             !PUZZLE3_THREE_RENDERER_JS.contains("objectVoxels(frame, cell.position || {}, object")
@@ -3646,10 +3532,8 @@ levels3 default of cube {
         assert!(PUZZLE3_THREE_RENDERER_JS.contains(
             "if ((!Number.isFinite(Number(merged.id)) && !name && !spriteName) || !visual)"
         ));
-        assert!(
-            PUZZLE3_THREE_RENDERER_JS
-                .contains("id: Number.isFinite(Number(merged.id)) ? Number(merged.id) : name")
-        );
+        assert!(PUZZLE3_THREE_RENDERER_JS
+            .contains("id: Number.isFinite(Number(merged.id)) ? Number(merged.id) : name"));
         assert!(PUZZLE3_APP_JS.contains("viewportSnapNext: view.viewportSnapNext"));
         assert!(PUZZLE3_APP_JS.contains("pixelateBuffer.getContext(\"2d\", { alpha: true })"));
         assert!(APP_JS.contains("window.Puzzle3Controller.attach(canvas"));
@@ -3657,10 +3541,8 @@ levels3 default of cube {
             ".scene-ratio-slot > [data-frame-component=\"true\"] {\n  width: 100%;\n  height: 100%;"
         ));
         assert!(!APP_CSS.contains(".puzzle3-component[data-frame-component=\"true\"] > canvas"));
-        assert!(
-            PUZZLE3_STYLE_CSS
-                .contains(".puzzle3-component > canvas {\n  position: absolute;\n  inset: 0;")
-        );
+        assert!(PUZZLE3_STYLE_CSS
+            .contains(".puzzle3-component > canvas {\n  position: absolute;\n  inset: 0;"));
         assert!(APP_CSS.contains(
             ".scene-layer.has-ratio-content > :not(.has-ratio-content):not(.scene-ratio-slot),"
         ));
@@ -3717,10 +3599,17 @@ levels3 default of cube {
         let html = export_html_from_source(source, "games/themed_3d.puzzle3", "", "")
             .expect("release themed puzzle3 document should use source-free runtime");
         let boot = embedded_puzzle_boot_json(&html);
+        let fixture = embedded_puzzle3_frame_fixture_json(&html);
 
         assert!(html.contains(r#"<body class="theme-clean" style="--background:#123456;">"#));
         assert_eq!(boot["theme"]["name"], json!("clean"));
         assert_eq!(boot["theme"]["variables"]["background"], json!("#123456"));
+        assert_eq!(fixture["theme"]["name"], json!("clean"));
+        assert_eq!(
+            fixture["theme"]["variables"][0]["name"],
+            json!("background")
+        );
+        assert_eq!(fixture["theme"]["variables"][0]["value"], json!("#123456"));
         assert!(html.contains("window.Puzzle3DFrameAssets = {"));
         assert!(html.contains("window.Puzzle3ControllerAutoBoot = false"));
         assert!(html.contains("window.Puzzle3Controller"));

@@ -81,10 +81,6 @@ fn modernize_test_source(source: &str) -> String {
                 i = next_i;
                 continue;
             }
-            ["transition"] if in_scene => {
-                scene_depth += 1;
-                out.push("rules".to_string());
-            }
             ["levels", ..] => {
                 levels_depth = 1;
                 out.push(line.clone());
@@ -111,10 +107,7 @@ fn modernize_test_source(source: &str) -> String {
             }
             _ => out.push(line.clone()),
         }
-        if in_scene
-            && !matches!(tokens.as_slice(), ["keys"] | ["transition"])
-            && test_starts_block(&tokens)
-        {
+        if in_scene && !matches!(tokens.as_slice(), ["keys"]) && test_starts_block(&tokens) {
             scene_depth += 1;
         }
         i += 1;
@@ -140,11 +133,11 @@ fn collect_test_legend_entry(lines: &[String], start: usize) -> (Vec<String>, us
 
 fn modern_scene_header(tokens: &[&str]) -> Option<String> {
     match tokens {
-        ["scene" | "screen", "puzzle", name] => Some(format!("scene {name}")),
-        ["scene" | "screen", "puzzle"] => Some("scene puzzle".to_string()),
-        ["scene" | "screen", "menu", name] => Some(format!("scene {name}")),
-        ["scene" | "screen", "menu"] => Some("scene menu".to_string()),
-        ["scene" | "screen", name] => Some(format!("scene {name}")),
+        ["scene", "puzzle", name] => Some(format!("scene {name}")),
+        ["scene", "puzzle"] => Some("scene puzzle".to_string()),
+        ["scene", "menu", name] => Some(format!("scene {name}")),
+        ["scene", "menu"] => Some("scene menu".to_string()),
+        ["scene", name] => Some(format!("scene {name}")),
         _ => None,
     }
 }
@@ -154,7 +147,6 @@ fn test_starts_block(tokens: &[&str]) -> bool {
         tokens,
         ["layers"]
             | ["rules"]
-            | ["transitions"]
             | ["legend"]
             | ["win_conditions", ..]
             | ["lose_conditions", ..]
@@ -1930,7 +1922,7 @@ goto title
 }
 
 #[test]
-fn scene_rules_accept_input_trigger_sugar() {
+fn scene_keys_accept_routine_target() {
     let source = r#"
 title input_sugar
 
@@ -1971,7 +1963,7 @@ goto level_select
 }
 
 #[test]
-fn scene_rules_accept_condition_block_arrow() {
+fn scene_rejects_old_condition_arrow_rules() {
     let source = r#"
 title scene_condition_block_arrow
 
@@ -2011,30 +2003,53 @@ text "Playing"
 }
 }
 "#;
+    let error = parse_game(source).unwrap_err().to_string();
+    assert!(
+        error.contains("scene transition rows were removed"),
+        "{error}"
+    );
+}
+
+#[test]
+fn scene_if_block_lowers_to_condition_transition() {
+    let source = r#"
+title scene_if_block
+
+puzzle board {
+layers {
+actor = Player
+}
+legend {
+. = empty
+P = Player
+}
+rules {
+[ Player ] -> [ Player ]
+}
+level "start" {
+P
+}
+}
+
+scene title {
+if has_progress_save == false {
+goto playing
+}
+}
+
+scene playing {
+layout {
+text "Playing"
+}
+}
+"#;
     let loaded = parse_game(source).unwrap();
     let scene = &loaded.scenes[0];
     let SceneTransitionTrigger::Condition(condition) = &scene.transitions[0].trigger else {
         panic!("expected condition block to lower to condition transition");
     };
-    let SceneExpr::Binary {
-        op: SceneBinaryOp::And,
-        left,
-        right,
-    } = condition
-    else {
-        panic!("expected condition block rows to combine as an and expression");
-    };
     assert!(matches!(
-        left.as_ref(),
-        SceneExpr::Binary {
-            op: SceneBinaryOp::Eq,
-            left,
-            right,
-        } if matches!(left.as_ref(), SceneExpr::Path(path) if path == &vec!["input".to_string()])
-            && matches!(right.as_ref(), SceneExpr::Path(path) if path == &vec!["confirm".to_string()])
-    ));
-    assert!(matches!(
-        right.as_ref(),
+        condition,
         SceneExpr::Binary {
             op: SceneBinaryOp::Eq,
             left,
@@ -2681,12 +2696,6 @@ scene menu {
 layout {
 button "Resume" -> input resume
 }
-rules {
-
-resume -> {
-goto playing
-}
-}
 }
 "#;
     let loaded = parse_game(source).unwrap();
@@ -2779,12 +2788,8 @@ board
 }
 keys {
 ArrowRight -> input right
-ArrowDown -> input down
-r -> input restart
-}
-rules {
-down -> component_effect down
-restart -> board.restart
+ArrowDown -> component_effect down
+r -> board.restart
 }
 }
 "#;
@@ -2792,10 +2797,10 @@ restart -> board.restart
     let scene = &loaded.scenes[0];
     assert!(matches!(&scene.key_bindings[0].effect, SceneEffect::Input(input) if input == "right"));
     assert!(
-        matches!(&scene.transitions[0].effect, SceneEffect::ComponentEffect(effect) if effect == "down")
+        matches!(&scene.key_bindings[1].effect, SceneEffect::ComponentEffect(effect) if effect == "down")
     );
     assert!(matches!(
-        &scene.transitions[1].effect,
+        &scene.key_bindings[2].effect,
         SceneEffect::ResetPuzzle { target } if target == "board"
     ));
     assert_eq!(
@@ -4514,6 +4519,157 @@ S
 }
 
 #[test]
+fn rules_block_accepts_scope_local_routine() {
+    let source = r#"
+title local_rules_routine
+
+puzzle default {
+layers {
+base = Player
+marker = Marker
+}
+empty .
+
+legend P = Player
+
+rules {
+mark
+
+routine mark {
+[ Player no Marker ] -> [ Player Marker ]
+}
+}
+
+level "start" {
+P
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    let marker = object_named(&loaded, "Marker");
+    let moved =
+        transition_state(&loaded.game, &loaded.levels[0].initial_state, InputId(0)).unwrap();
+
+    assert!(moved.has_object(&loaded.game, 0, 0, marker));
+}
+
+#[test]
+fn level_start_accepts_scope_local_routine() {
+    let source = r#"
+title local_level_start_routine
+
+puzzle default {
+layers {
+base = Source
+marker = Marker
+}
+empty .
+
+legend S = Source
+
+on_level_start {
+mark_initial
+
+routine mark_initial {
+[ Source no Marker ] -> [ Source Marker ]
+}
+}
+
+rules {
+}
+
+level "start" {
+S
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    let marker = object_named(&loaded, "Marker");
+    let initial = &loaded.levels[0].initial_state;
+
+    assert!(!initial.has_object(&loaded.game, 0, 0, marker));
+
+    let started = transition_program(
+        &loaded.game,
+        loaded.level_start_program.as_deref().unwrap(),
+        initial,
+        InputId(0),
+    )
+    .unwrap();
+    assert!(started.has_object(&loaded.game, 0, 0, marker));
+}
+
+#[test]
+fn scope_local_routine_does_not_leak_to_lifecycle_block() {
+    let source = r#"
+title local_routine_no_leak
+
+puzzle default {
+layers {
+base = Source
+marker = Marker
+}
+empty .
+
+legend S = Source
+
+rules {
+routine mark_initial {
+[ Source no Marker ] -> [ Source Marker ]
+}
+}
+
+on_level_start {
+mark_initial
+}
+
+level "start" {
+S
+}
+}
+"#;
+    let error = parse_game(source).unwrap_err().to_string();
+
+    assert!(error.contains("unknown routine call: mark_initial"));
+}
+
+#[test]
+fn global_routine_does_not_capture_caller_local_routine() {
+    let source = r#"
+title local_routine_lexical_scope
+
+puzzle default {
+layers {
+base = Source
+marker = Marker
+}
+empty .
+
+legend S = Source
+
+routine global_mark {
+mark_initial
+}
+
+rules {
+global_mark
+
+routine mark_initial {
+[ Source no Marker ] -> [ Source Marker ]
+}
+}
+
+level "start" {
+S
+}
+}
+"#;
+    let error = parse_game(source).unwrap_err().to_string();
+
+    assert!(error.contains("unknown routine call: mark_initial"));
+}
+
+#[test]
 fn level_start_rejects_input_dependent_rules() {
     let source = r#"
 title level_start_input
@@ -4532,6 +4688,45 @@ P = Player
 
 on_level_start {
 input directions [ Player | ] -> [ | Player ]
+}
+
+rules {
+
+}
+
+level "start" {
+P.
+}
+}
+"#;
+    let error = parse_game(source).unwrap_err().to_string();
+
+    assert!(error.contains("on_level_start cannot depend on input"));
+}
+
+#[test]
+fn level_start_rejects_input_dependent_local_routine() {
+    let source = r#"
+title level_start_local_input
+
+puzzle default {
+layers {
+actor = Player
+}
+layers {
+__legacy_layer_0 = Player actor
+}
+legend {
+. = empty
+P = Player
+}
+
+on_level_start {
+mark_initial
+
+routine mark_initial {
+input directions [ Player | ] -> [ | Player ]
+}
 }
 
 rules {
@@ -6873,10 +7068,12 @@ B
 "##;
     let loaded = parse_game(source).unwrap();
 
-    assert!(!loaded
-        .warnings
-        .iter()
-        .any(|warning| warning.contains("largest sprite grid")));
+    assert!(
+        !loaded
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("largest sprite grid"))
+    );
 }
 
 #[test]
@@ -10407,8 +10604,8 @@ layout {
 button "New Game" -> goto playing play_music music
 button "Continue" -> sfx click wait 100ms goto playing
 }
-rules {
-start -> goto playing play_music music
+routine start {
+goto playing play_music music
 }
 }
 
@@ -10445,7 +10642,7 @@ board = puzzle default
     ));
 
     assert!(matches!(
-        &loaded.scenes[0].transitions[0].effect,
+        &loaded.scenes[0].routines[0].effect,
         SceneEffect::Sequence(effects)
             if matches!(effects.as_slice(), [
                 SceneEffect::Goto { scene, .. },
@@ -10580,6 +10777,56 @@ fn scene_effect_level_call_accepts_quoted_id_and_selectors() {
             if scene == "playing"
                 && matches!(params.as_slice(), [SceneEffectParam::Level(SceneExpr::Call { name, args })]
                     if name == "level" && matches!(args.as_slice(), [SceneExpr::Text(level)] if level == "first state"))
+    ));
+}
+
+#[test]
+fn scene_call_surface_splits_nested_arguments_for_multiple_owners() {
+    let line = r#"goto playing(selected = level("a,b"), label = join("x,y", level(0).title))"#;
+    let parsed = parse_scene_effect_with_semantic_tokens(line, line).unwrap();
+    assert!(matches!(
+        parsed.surface.effect,
+        SceneEffect::Goto { ref scene, ref params }
+            if scene == "playing"
+                && matches!(
+                    params.as_slice(),
+                    [
+                        SceneEffectParam::Named {
+                            name: selected,
+                            value: SceneExpr::Call { name: level_name, args: level_args }
+                        },
+                        SceneEffectParam::Named {
+                            name: label,
+                            value: SceneExpr::Call { name: join_name, args: join_args }
+                        },
+                    ] if selected == "selected"
+                        && level_name == "level"
+                        && matches!(level_args.as_slice(), [SceneExpr::Text(text)] if text == "a,b")
+                        && label == "label"
+                        && join_name == "join"
+                        && matches!(join_args.as_slice(), [
+                            SceneExpr::Text(text),
+                            SceneExpr::Call { name, .. }
+                        ] if text == "x,y" && name == "level.title")
+                )
+    ));
+
+    let line = r#"apply sync(level("a,b"),join("x,y",level(0)))"#;
+    let parsed = parse_scene_effect_with_semantic_tokens(line, line).unwrap();
+    assert!(matches!(
+        parsed.surface.effect,
+        SceneEffect::Apply { ref rule, ref args, target: None }
+            if rule == "sync"
+                && matches!(args.as_slice(), [
+                    SceneExpr::Call { name: level_name, args: level_args },
+                    SceneExpr::Call { name: join_name, args: join_args },
+                ] if level_name == "level"
+                    && matches!(level_args.as_slice(), [SceneExpr::Text(text)] if text == "a,b")
+                    && join_name == "join"
+                    && matches!(join_args.as_slice(), [
+                        SceneExpr::Text(text),
+                        SceneExpr::Call { name, .. }
+                    ] if text == "x,y" && name == "level"))
     ));
 }
 
@@ -15780,7 +16027,8 @@ levels3 demo of push3 {
     assert_eq!(parsed.rules.len(), 8);
     assert_eq!(parsed.level_bundle.as_ref().unwrap().level_count(), 1);
     let fixture_json = crate::export_visual_fixture_json(&parsed).unwrap();
-    assert!(fixture_json.contains("\"rules\": ["));
+    let contract = puzzle_3d::puzzle3_runtime_contract_from_fixture_json(&fixture_json).unwrap();
+    assert_eq!(contract.rules.len(), parsed.rules.len());
     assert!(!fixture_json.contains("pushableObjectIds"));
     assert!(!fixture_json.contains("blocksMovement"));
 }
@@ -16088,6 +16336,8 @@ scene level_select {
     assert_eq!(puzzle.level_bundle.as_ref().unwrap().level_count(), 1);
     let fixture_json = crate::export_loaded_document_visual_fixture_json(&document).unwrap();
     assert!(fixture_json.contains("\"title\": \"Three Dee\""));
+    assert!(fixture_json.contains("\"theme\": {\"name\":\"clean\""));
+    assert!(fixture_json.contains("\"variables\":[{\"name\":\"accent\",\"value\":\"#ff0000\"}]"));
     assert!(fixture_json.contains("\"currentScene\": \"title\""));
     assert!(fixture_json.contains("\"layout\": {"));
     assert!(fixture_json.contains("\"width\": 4"));

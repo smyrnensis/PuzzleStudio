@@ -6,11 +6,14 @@ pub fn export_loaded_document_visual_fixture_json(
             "visual fixture export currently requires a single puzzle3 model".to_string(),
         ));
     };
-    let (scene_fields, level_bundle_names) = puzzle3_scene_fixture_fields(document);
+    let (document_fields, level_bundle_names) =
+        puzzle3_document_fixture_fields(document).map_err(|error| {
+            DiagnosticReport::error(format!("failed to serialize puzzle3 document fields: {error}"))
+        })?;
     export_visual_fixture_json_with_title_scenes_and_animation(
         puzzle,
         Some(&document.title),
-        scene_fields.as_deref(),
+        document_fields.as_deref(),
         &level_bundle_names,
         VisualFixtureAnimation3 {
             tween_enabled: document.animation.tween.enabled,
@@ -450,6 +453,30 @@ fn implicit_model_scene(kind: &str, model_name: &str) -> SceneDef {
             rule: "rules".to_string(),
         }),
     }
+}
+
+fn puzzle3_document_fixture_fields(
+    document: &LoadedDocument,
+) -> Result<(Option<String>, Vec<String>), serde_json::Error> {
+    let theme = serde_json::to_string(&document.theme)?;
+    let (scene_fields, level_bundle_names) = puzzle3_scene_fixture_fields(document);
+    let mut out = String::new();
+    out.push_str("  \"theme\": ");
+    out.push_str(&theme);
+    out.push_str(",\n");
+    if let Some(scene_fields) = scene_fields {
+        out.push_str(&scene_fields);
+    } else {
+        out.push_str("  \"currentScene\": \"playing\",\n");
+        out.push_str("  \"scenes\": [\n");
+        out.push_str("    {\n");
+        out.push_str("      \"name\": \"playing\",\n");
+        out.push_str("      \"puzzles\": [{ \"slot\": \"board\", \"model\": \"default\" }],\n");
+        out.push_str("      \"components\": [{ \"kind\": \"puzzle3\", \"source\": \"board\" }]\n");
+        out.push_str("    }\n");
+        out.push_str("  ],");
+    }
+    Ok((Some(out), level_bundle_names))
 }
 
 fn puzzle3_scene_fixture_fields(document: &LoadedDocument) -> (Option<String>, Vec<String>) {
@@ -1580,7 +1607,6 @@ fn logical_line_opens_block(tokens: &[&str]) -> bool {
             | ["on_last_level_clear", ..]
             | ["keys", ..]
             | ["inputs", ..]
-            | ["transitions", ..]
             | ["on_scene_start", ..]
             | ["if", ..]
             | ["for", ..]
@@ -1814,7 +1840,7 @@ fn parse_default_model_scene(
 ) -> Result<SceneDef, DiagnosticReport> {
     let mut layout_lines = lines[start..end].to_vec();
     rewrite_default_model_layout_components(&mut layout_lines, kind, name);
-    let (layout_block, next_i) = parse_screen_layout_block(&layout_lines, 0)?;
+    let (layout_block, next_i) = parse_scene_layout_block(&layout_lines, 0)?;
     debug_assert_eq!(next_i, layout_lines.len());
     let mut scene = implicit_model_scene(kind, name);
     scene.layout = layout_block.layout;
@@ -2765,6 +2791,13 @@ fn collect_dynamic_selector_statement_warnings(
 ) {
     for statement in statements {
         match statement {
+            StatementAst::LocalRoutine { definition, .. } => {
+                collect_dynamic_selector_statement_warnings(
+                    &definition.statements,
+                    constant_globals,
+                    warnings,
+                );
+            }
             StatementAst::Rewrite(rewrite) => {
                 collect_dynamic_selector_block_warnings(
                     &rewrite.before,

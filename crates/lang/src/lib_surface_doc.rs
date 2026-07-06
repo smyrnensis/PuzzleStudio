@@ -1100,7 +1100,7 @@ fn record_scene_condition_surface_tokens(tokens: &[SourceToken], sink: &mut Surf
 fn scene_block_keyword(value: &str) -> bool {
     matches!(
         value,
-        "keys" | "on_scene_start" | "resources" | "rules" | "state" | "transitions" | "layout"
+        "keys" | "on_scene_start" | "resources" | "rules" | "state" | "layout"
     )
 }
 

@@ -88,12 +88,20 @@ pub struct SourceSpriteShapeAsset {
 pub fn resolve_source_target(source: &str, cursor_offset: usize) -> Option<SourceTarget> {
     let cursor = cursor_offset.min(source.len());
     let context = scan_source_context(source);
-    let visual_refs = collect_visual_sprite_refs(source, &context);
-    resolve_sounds_target(&context, cursor)
-        .or_else(|| resolve_level3d_target(source, &context, cursor))
-        .or_else(|| resolve_level_target(source, &context, cursor))
-        .or_else(|| resolve_sprite3d_target(source, &context, cursor))
-        .or_else(|| resolve_sprite_target(source, &context, cursor, &visual_refs))
+    resolve_source_target_from_context(source, &context, cursor)
+}
+
+pub(crate) fn resolve_source_target_from_context(
+    source: &str,
+    context: &SourceContext,
+    cursor: usize,
+) -> Option<SourceTarget> {
+    let visual_refs = collect_visual_sprite_refs(source, context);
+    resolve_sounds_target(context, cursor)
+        .or_else(|| resolve_level3d_target(source, context, cursor))
+        .or_else(|| resolve_level_target(source, context, cursor))
+        .or_else(|| resolve_sprite3d_target(source, context, cursor))
+        .or_else(|| resolve_sprite_target(source, context, cursor, &visual_refs))
 }
 
 pub fn source_target_json(target: Option<&SourceTarget>) -> String {

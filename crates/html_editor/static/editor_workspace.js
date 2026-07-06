@@ -1362,7 +1362,7 @@ function openDocumentTab(documentId = activeFileId) {
 function closeDocumentTab(documentId) {
   openTabIds = openTabIds.filter((id) => id !== documentId);
   if (documentId === activeFileId) {
-    const nextId = openTabIds[openTabIds.length - 1] || documents.find((document) => document.id !== documentId)?.id || "";
+    const nextId = openTabIds[openTabIds.length - 1] || "";
     if (nextId) {
       persistCurrentDocument();
       activeFileId = nextId;
@@ -1969,6 +1969,7 @@ function syncExplorerSectionToggle(id, collapsed) {
 }
 
 function toggleExplorerSection(id) {
+  const outlineWasCollapsed = explorerOutlineCollapsed;
   if (id === "files") {
     explorerFilesCollapsed = !explorerFilesCollapsed;
     if (explorerFilesCollapsed && explorerOutlineCollapsed) {
@@ -1984,8 +1985,8 @@ function toggleExplorerSection(id) {
   }
   applyExplorerSectionLayout();
   saveExplorerSectionState();
-  if (id === "outline" && !explorerOutlineCollapsed && typeof scheduleSourceOutlineRefresh === "function") {
-    scheduleSourceOutlineRefresh(true);
+  if (outlineWasCollapsed && !explorerOutlineCollapsed && typeof scheduleSourceOutlineRefresh === "function") {
+    scheduleSourceOutlineRefresh(true, { force: true });
   }
 }
 
@@ -2004,13 +2005,12 @@ function resizeExplorerOutlineFromPointer(clientY) {
   applyExplorerSectionLayout();
 }
 
-document.addEventListener("click", (event) => {
-  const toggle = event.target.closest("[data-explorer-section-toggle]");
-  if (!toggle) {
-    return;
-  }
-  event.preventDefault();
-  toggleExplorerSection(toggle.dataset.explorerSectionToggle);
+document.querySelectorAll("[data-explorer-section-toggle]").forEach((toggle) => {
+  toggle.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    toggleExplorerSection(toggle.dataset.explorerSectionToggle);
+  });
 });
 
 outlineSplitter?.addEventListener("pointerdown", (event) => {

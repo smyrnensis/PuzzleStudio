@@ -2391,6 +2391,7 @@ dependencies = [
  "puzzle-kernel",
  "puzzle-scene",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

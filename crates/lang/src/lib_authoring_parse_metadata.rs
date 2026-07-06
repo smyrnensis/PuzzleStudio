@@ -234,8 +234,8 @@ fn required_sound_setting<'a>(
 
 fn optional_sound_setting<'a>(settings: &'a [&'a str], key: &str) -> Option<&'a str> {
     settings.iter().find_map(|setting| {
-        let (found_key, value) = setting.split_once('=')?;
-        (found_key == key).then_some(value)
+        let (name, value) = parse_assignment_row(setting)?;
+        (name == key).then_some(value)
     })
 }
 

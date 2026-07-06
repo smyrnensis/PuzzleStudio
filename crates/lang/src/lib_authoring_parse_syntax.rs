@@ -1,14 +1,30 @@
-fn require_arrow_row<'a>(line: &'a str, message: &str) -> Result<(&'a str, &'a str), DiagnosticReport> {
+fn require_arrow_row<'a>(
+    line: &'a str,
+    message: &str,
+) -> Result<(&'a str, &'a str), DiagnosticReport> {
     line.split_once("->")
         .map(|(lhs, rhs)| (lhs.trim(), rhs.trim()))
         .ok_or_else(|| parse_error(line, message))
 }
 
 fn parse_assignment_row(line: &str) -> Option<(&str, &str)> {
-    line.split_once('=').map(|(lhs, rhs)| (lhs.trim(), rhs.trim()))
+    for (index, ch) in top_level_scan(line) {
+        let previous = line[..index].chars().next_back();
+        let next = line[index + 1..].chars().next();
+        if ch == '='
+            && !matches!(previous, Some('=' | '!' | '<' | '>'))
+            && !matches!(next, Some('='))
+        {
+            return Some((line[..index].trim(), line[index + 1..].trim()));
+        }
+    }
+    None
 }
 
-fn require_assignment_row<'a>(line: &'a str, message: &str) -> Result<(&'a str, &'a str), DiagnosticReport> {
+fn require_assignment_row<'a>(
+    line: &'a str,
+    message: &str,
+) -> Result<(&'a str, &'a str), DiagnosticReport> {
     parse_assignment_row(line).ok_or_else(|| parse_error(line, message))
 }
 
@@ -22,7 +38,7 @@ fn parse_keys_surface_row<'a>(
     target: &str,
     reject_equals: bool,
 ) -> Result<KeysSurfaceRow<'a>, DiagnosticReport> {
-    if reject_equals && line.contains('=') {
+    if reject_equals && parse_assignment_row(line).is_some() {
         return Err(parse_error(
             line,
             &format!("keys row must use `->`: <key...> -> <{target}>"),
@@ -36,8 +52,68 @@ fn parse_keys_surface_row<'a>(
     }
     Ok(KeysSurfaceRow {
         keys,
-        target: target_text.trim(),
+        target: target_text,
     })
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct CallSurface<'a> {
+    name: &'a str,
+    args: Vec<&'a str>,
+}
+
+fn parse_optional_call_surface_with_suffix<'a>(
+    value: &'a str,
+    line: &str,
+    close_message: &str,
+) -> Result<Option<(CallSurface<'a>, &'a str)>, DiagnosticReport> {
+    let value = value.trim();
+    let Some(open) = find_top_level_char(value, '(') else {
+        return Ok(None);
+    };
+    let close = matching_delimiter(value, open, '(', ')')
+        .ok_or_else(|| parse_error(line, close_message))?;
+    let name = value[..open].trim();
+    let args = parse_call_argument_surfaces(&value[open + 1..close]);
+    let suffix = value[close + 1..].trim();
+    Ok(Some((CallSurface { name, args }, suffix)))
+}
+
+fn require_call_surface_with_suffix<'a>(
+    value: &'a str,
+    line: &str,
+    missing_message: &str,
+    close_message: &str,
+) -> Result<(CallSurface<'a>, &'a str), DiagnosticReport> {
+    parse_optional_call_surface_with_suffix(value, line, close_message)?
+        .ok_or_else(|| parse_error(line, missing_message))
+}
+
+fn parse_complete_call_surface<'a>(
+    value: &'a str,
+    line: &str,
+    close_message: &str,
+    trailing_message: &str,
+) -> Result<Option<CallSurface<'a>>, DiagnosticReport> {
+    let Some((call, suffix)) =
+        parse_optional_call_surface_with_suffix(value, line, close_message)?
+    else {
+        return Ok(None);
+    };
+    if !suffix.is_empty() {
+        return Err(parse_error(line, trailing_message));
+    }
+    Ok(Some(call))
+}
+
+fn parse_call_argument_surfaces(value: &str) -> Vec<&str> {
+    if value.trim().is_empty() {
+        return Vec::new();
+    }
+    split_top_level_commas(value)
+        .into_iter()
+        .map(str::trim)
+        .collect()
 }
 
 fn parse_view_path(value: &str) -> Option<Vec<String>> {
@@ -174,4 +250,46 @@ fn matching_delimiter(value: &str, open: usize, open_ch: char, close_ch: char) -
         }
     }
     None
+}
+
+#[cfg(test)]
+mod authoring_parse_syntax_tests {
+    use super::*;
+
+    #[test]
+    fn call_surface_splits_only_top_level_arguments() {
+        let (call, suffix) = require_call_surface_with_suffix(
+            r#"foo(a, bar("x, y"), if ready { level(0) } else { level(1) })"#,
+            "test line",
+            "missing call",
+            "call must close",
+        )
+        .expect("call surface");
+
+        assert_eq!(call.name, "foo");
+        assert_eq!(suffix, "");
+        assert_eq!(
+            call.args,
+            vec![
+                "a",
+                r#"bar("x, y")"#,
+                "if ready { level(0) } else { level(1) }"
+            ]
+        );
+    }
+
+    #[test]
+    fn call_surface_preserves_suffix_for_owner_handling() {
+        let (call, suffix) = require_call_surface_with_suffix(
+            "level(0).title",
+            "test line",
+            "missing call",
+            "call must close",
+        )
+        .expect("call surface");
+
+        assert_eq!(call.name, "level");
+        assert_eq!(call.args, vec!["0"]);
+        assert_eq!(suffix, ".title");
+    }
 }

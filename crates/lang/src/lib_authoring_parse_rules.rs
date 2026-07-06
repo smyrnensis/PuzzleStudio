@@ -329,20 +329,17 @@ fn parse_condition_directive(
             "condition must be: condition <name> = <condition_expr>",
         ));
     };
-    let Some((name, expr)) = rest.split_once('=') else {
-        return Err(parse_error(
-            line,
-            "condition must be: condition <name> = <condition_expr>",
-        ));
-    };
-    let name = name.trim();
+    let (name, value) = require_assignment_row(
+        rest,
+        "condition must be: condition <name> = <condition_expr>",
+    )?;
     validate_qualified_identifier(name, line, "condition name")?;
     if condition_names.contains_key(name) {
         return Err(parse_error(line, "duplicate condition"));
     }
     let id = ConditionId(condition_names.len() as u16);
     let kind = parse_condition_value_expr(
-        expr.trim(),
+        value,
         line,
         object_names,
         object_schemas,
@@ -647,22 +644,31 @@ fn trim_arg_range(arg: &str, range: std::ops::Range<usize>) -> std::ops::Range<u
 }
 
 fn parse_call_expr<'a>(expr: &'a str, line: &str) -> Result<(&'a str, &'a str), DiagnosticReport> {
-    let Some((name, rest)) = expr.split_once('(') else {
+    let (call, suffix) = require_call_surface_with_suffix(
+        expr,
+        line,
+        "condition expression must be a function call",
+        "condition expression missing closing )",
+    )?;
+    if !suffix.is_empty() {
         return Err(parse_error(
             line,
-            "condition expression must be a function call",
+            "condition expression must not have trailing text",
         ));
-    };
-    if !is_identifier(name) {
+    }
+    if !is_identifier(call.name) {
         return Err(parse_error(
             line,
             "condition function name must be an identifier",
         ));
     }
-    let Some(arg) = rest.strip_suffix(')') else {
-        return Err(parse_error(line, "condition expression missing closing )"));
+    let [arg] = call.args.as_slice() else {
+        return Err(parse_error(
+            line,
+            "condition expression must have exactly one argument",
+        ));
     };
-    Ok((name, arg.trim()))
+    Ok((call.name, arg))
 }
 
 fn default_cardinal_directions(input_names: &HashMap<String, InputId>) -> Vec<Direction> {
@@ -716,6 +722,7 @@ fn parse_rule_definition(
     global_names: &HashMap<String, GlobalId>,
     numeric_globals: &HashMap<String, i64>,
     condition_names: &HashMap<String, ConditionId>,
+    named_conditions: &HashMap<String, (String, ConditionAst)>,
 ) -> Result<(RuleDefinitionAst, usize), DiagnosticReport> {
     let header = split_header_tokens(&lines[start]);
     let declaration = header.first().copied().unwrap_or("routine");
@@ -750,7 +757,7 @@ fn parse_rule_definition(
         global_names,
         numeric_globals,
         condition_names,
-        &HashMap::new(),
+        named_conditions,
         &params,
     )?;
 

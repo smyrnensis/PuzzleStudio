@@ -74,16 +74,16 @@ body.is-component-embed .board-canvas {
 }
 
 .visual-sprite {
-  left: 0;
-  top: 0;
-  width: calc(100% * var(--sprite-cols, 1) / var(--sprite-cell-cols, var(--sprite-cols, 1)));
-  height: calc(100% * var(--sprite-rows, 1) / var(--sprite-cell-rows, var(--sprite-rows, 1)));
+  left: calc((100% - (100% * var(--sprite-cell-cols, var(--sprite-cols, 1)) / var(--sprite-cell-fit, var(--sprite-cell-cols, var(--sprite-cols, 1))))) / 2);
+  top: calc((100% - (100% * var(--sprite-cell-rows, var(--sprite-rows, 1)) / var(--sprite-cell-fit, var(--sprite-cell-rows, var(--sprite-rows, 1))))) / 2);
+  width: calc(100% * var(--sprite-cols, 1) / var(--sprite-cell-fit, var(--sprite-cell-cols, var(--sprite-cols, 1))));
+  height: calc(100% * var(--sprite-rows, 1) / var(--sprite-cell-fit, var(--sprite-cell-rows, var(--sprite-rows, 1))));
   background-position: center;
   background-repeat: no-repeat;
   background-size: 100% 100%;
   transform: translate(
-    calc(var(--sprite-offset-x, 0) * 100% / var(--sprite-cols, 1)),
-    calc(var(--sprite-offset-y, 0) * 100% / var(--sprite-rows, 1))
+    calc(var(--sprite-offset-x, 0) * 100% / var(--sprite-cell-fit, var(--sprite-cell-cols, var(--sprite-cols, 1)))),
+    calc(var(--sprite-offset-y, 0) * 100% / var(--sprite-cell-fit, var(--sprite-cell-rows, var(--sprite-rows, 1))))
   );
 }
 
@@ -97,6 +97,10 @@ body.is-component-embed .board-canvas {
   background-repeat: no-repeat;
   background-size: 100% 100%;
   image-rendering: pixelated;
+}
+
+.visual-image {
+  background-size: contain;
 }
 
 @media (max-width: 720px) {

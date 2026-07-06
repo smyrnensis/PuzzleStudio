@@ -5460,9 +5460,9 @@ function level3dObjectPreviewVoxels(position, object, snapshot) {
           z: Math.max(0, spriteHeight - 1 - z),
         };
         const voxelPosition = {
-          x: Number(position.x) + (grid.x + 0.5) * scale - 0.5,
-          y: Number(position.y) + (grid.y + 0.5) * scale - 0.5,
-          z: Number(position.z) + (grid.z + 0.5) * scale - 0.5,
+          x: Number(position.x) + (grid.x + 0.5 - spriteWidth / 2) * scale,
+          y: Number(position.y) + (grid.y + 0.5 - spriteDepth / 2) * scale,
+          z: Number(position.z) + (grid.z + 0.5 - spriteHeight / 2) * scale,
         };
         voxels.push({
           fill,

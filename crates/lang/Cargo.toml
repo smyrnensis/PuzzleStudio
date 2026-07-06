@@ -11,3 +11,4 @@ puzzle-kernel = { path = "../kernel" }
 puzzle-scene = { path = "../scene" }
 puzzle-3d = { path = "../puzzle_3d" }
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"

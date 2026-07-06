@@ -229,7 +229,12 @@ let editorHoverTooltipTarget = null;
 
 function editorTooltipTargetFromEventTarget(target) {
   const element = target instanceof Element ? target.closest(editorHoverTooltipSelector) : null;
-  if (!element || element.classList.contains("sprite-cell") || !element.querySelector("svg")) {
+  if (
+    !element
+    || element.classList.contains("sprite-cell")
+    || element.classList.contains("source-outline-row")
+    || !element.querySelector("svg")
+  ) {
     return null;
   }
   return element;

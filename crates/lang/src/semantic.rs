@@ -2143,7 +2143,7 @@ if board.win_conditions -> goto title
     }
 
     #[test]
-    fn classifies_scene_step_rule_as_scene_transition_directive() {
+    fn classifies_scene_step_rule_target() {
         let source = r#"
 title scene_step_semantics
 

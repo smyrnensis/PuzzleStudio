@@ -483,15 +483,15 @@ button:disabled {
 }
 
 .explorer-sections.is-files-collapsed {
-  grid-template-rows: auto 0 minmax(0, 1fr);
+  grid-template-rows: 24px 0 minmax(0, 1fr);
 }
 
 .explorer-sections.is-outline-collapsed {
-  grid-template-rows: minmax(0, 1fr) 0 auto;
+  grid-template-rows: minmax(0, 1fr) 0 24px;
 }
 
 .explorer-sections.is-files-collapsed.is-outline-collapsed {
-  grid-template-rows: auto 0 auto;
+  grid-template-rows: 24px 0 24px;
 }
 
 .explorer-section {
@@ -502,6 +502,7 @@ button:disabled {
 }
 
 .explorer-section.is-collapsed {
+  min-height: 24px;
   grid-template-rows: auto;
 }
 
@@ -786,10 +787,10 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
 .source-outline-row {
   width: 100%;
   min-height: 26px;
-  padding: 0 8px 0 calc(10px + var(--depth, 0) * 14px);
+  padding: 0 8px 0 calc(6px + var(--depth, 0) * 14px);
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
   border: 0;
   border-left: 2px solid transparent;
   border-radius: 0;
@@ -807,6 +808,35 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
 .source-outline-row.is-active {
   border-left-color: var(--accent);
   background: var(--tree-active-bg);
+}
+
+.source-outline-chevron {
+  width: 13px;
+  min-width: 13px;
+  height: 13px;
+  display: inline-grid;
+  place-items: center;
+  color: var(--muted);
+}
+
+.source-outline-row:hover .source-outline-chevron,
+.source-outline-row:focus-visible .source-outline-chevron,
+.source-outline-row.is-active .source-outline-chevron {
+  color: var(--ink);
+}
+
+.source-outline-chevron-spacer {
+  visibility: hidden;
+}
+
+.source-outline-chevron-icon {
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .source-outline-kind {

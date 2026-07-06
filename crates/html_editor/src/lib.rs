@@ -2878,6 +2878,7 @@ impl std::fmt::Display for AppError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeSet;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -2916,6 +2917,109 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.root);
         }
+    }
+
+    fn js_object_string_map(source: &str, const_name: &str) -> HashMap<String, String> {
+        let marker = format!("const {const_name} = Object.freeze({{");
+        let start = source.find(&marker).expect("find JS object map") + marker.len();
+        let end = source[start..]
+            .find("\n});")
+            .map(|offset| start + offset)
+            .expect("find JS object map end");
+        source[start..end]
+            .lines()
+            .filter_map(|line| {
+                let line = line.trim();
+                if line.is_empty() {
+                    return None;
+                }
+                let line = line.strip_suffix(',').unwrap_or(line);
+                let (key, value) = line.split_once(": ")?;
+                Some((js_quoted_string(key), js_quoted_string(value)))
+            })
+            .collect()
+    }
+
+    fn js_const_string(source: &str, const_name: &str) -> String {
+        let marker = format!("const {const_name} = \"");
+        let start = source.find(&marker).expect("find JS string const") + marker.len();
+        let end = source[start..]
+            .find('"')
+            .map(|offset| start + offset)
+            .expect("find JS string const end");
+        source[start..end].to_string()
+    }
+
+    fn source_outline_icon_names() -> HashSet<String> {
+        let marker = "  const icons = {\n";
+        let start = EDITOR_SOURCE_JS.find(marker).expect("find outline icon registry")
+            + marker.len();
+        let end = EDITOR_SOURCE_JS[start..]
+            .find("\n  };\n  const paths")
+            .map(|offset| start + offset)
+            .expect("find outline icon registry end");
+        EDITOR_SOURCE_JS[start..end]
+            .lines()
+            .filter_map(|line| {
+                let trimmed = line.trim();
+                let key = trimmed.strip_suffix(": `")?;
+                Some(js_property_name(key))
+            })
+            .collect()
+    }
+
+    fn js_quoted_string(value: &str) -> String {
+        value
+            .trim()
+            .strip_prefix('"')
+            .and_then(|value| value.strip_suffix('"'))
+            .expect("quoted JS string")
+            .to_string()
+    }
+
+    fn js_property_name(value: &str) -> String {
+        let value = value.trim();
+        if value.starts_with('"') {
+            js_quoted_string(value)
+        } else {
+            value.to_string()
+        }
+    }
+
+    fn collect_outline_kinds_from_source(source: &str, kinds: &mut BTreeSet<String>) {
+        for item in puzzle_lang::source_outline(source) {
+            kinds.insert(item.kind);
+        }
+    }
+
+    fn collect_puzzle_fence_outline_kinds(markdown: &str, kinds: &mut BTreeSet<String>) {
+        let mut in_puzzle_fence = false;
+        let mut block = String::new();
+        for line in markdown.lines() {
+            let trimmed = line.trim_start();
+            if in_puzzle_fence {
+                if trimmed.starts_with("```") {
+                    collect_outline_kinds_from_source(&block, kinds);
+                    block.clear();
+                    in_puzzle_fence = false;
+                } else {
+                    block.push_str(line);
+                    block.push('\n');
+                }
+            } else if trimmed.starts_with("```puzzle") {
+                in_puzzle_fence = true;
+            }
+        }
+    }
+
+    fn outline_kind_requires_explicit_icon(kind: &str) -> bool {
+        if kind.starts_with("on_") || kind.contains(':') {
+            return false;
+        }
+        !kind
+            .chars()
+            .next()
+            .is_some_and(|first| first.is_ascii_uppercase())
     }
 
     fn editor_fixture_source(title: &str) -> String {
@@ -4236,8 +4340,14 @@ levels3 demo of push3 {
             .nth(1)
             .and_then(|tail| tail.split("\nfunction previewDocumentForFolder").next())
             .expect("activePreviewDocument source");
-        assert!(active_preview_document.contains("const folderPreview = previewDocumentForFolder(selected);"));
-        assert!(active_preview_document.contains("if (folderPreview) {\n      return folderPreview;\n    }"));
+        assert!(
+            active_preview_document
+                .contains("const folderPreview = previewDocumentForFolder(selected);")
+        );
+        assert!(
+            active_preview_document
+                .contains("if (folderPreview) {\n      return folderPreview;\n    }")
+        );
         assert!(active_preview_document.contains("return previewDocumentFor(activeDocument());"));
     }
 
@@ -4934,14 +5044,177 @@ levels3 demo of push3 {
         assert!(EDITOR_CSS.contains(
             "grid-template-rows: minmax(88px, calc(100% - var(--source-outline-height) - 5px)) 5px minmax(88px, var(--source-outline-height));"
         ));
+        assert!(EDITOR_CSS.contains("grid-template-rows: minmax(0, 1fr) 0 24px;"));
+        assert!(EDITOR_CSS.contains(".explorer-section.is-collapsed {\n  min-height: 24px;"));
+        assert!(EDITOR_CSS.contains(".source-outline-chevron"));
+        assert!(EDITOR_SOURCE_JS.contains("const SOURCE_OUTLINE_KIND_ICON_NAMES"));
+        assert!(EDITOR_SOURCE_JS.contains("const SOURCE_OUTLINE_LIFECYCLE_ICON_NAME"));
+        assert!(EDITOR_SOURCE_JS.contains("const SOURCE_OUTLINE_DEFAULT_ICON_NAME"));
         assert!(EDITOR_SOURCE_JS.contains("function sourceOutlineKindIconSvg(kind)"));
+        assert!(EDITOR_SOURCE_JS.contains("let sourceOutlineExpandedItemIds = new Set();"));
+        assert!(EDITOR_SOURCE_JS.contains("function visibleSourceOutlineItems()"));
+        assert!(
+            EDITOR_SOURCE_JS.contains("button.setAttribute(\"aria-expanded\", String(expanded));")
+        );
+        assert!(EDITOR_SOURCE_JS.contains("chevron.dataset.sourceOutlineToggle = item.id;"));
+        assert!(EDITOR_SOURCE_JS.contains("\"ArrowRight\", \"ArrowLeft\""));
         assert!(EDITOR_SOURCE_JS.contains("kind.innerHTML = sourceOutlineKindIconSvg(item.kind);"));
-        assert!(EDITOR_SOURCE_JS.contains("class=\"source-outline-icon lucide lucide-${name}-icon lucide-${name}\""));
+        assert!(
+            EDITOR_SOURCE_JS.contains(
+                "class=\"source-outline-icon lucide lucide-${name}-icon lucide-${name}\""
+            )
+        );
         assert!(!EDITOR_SOURCE_JS.contains("function sourceOutlineKindInitial(kind)"));
-        assert!(!EDITOR_SOURCE_JS.contains("kind.textContent = sourceOutlineKindInitial(item.kind);"));
+        assert!(
+            !EDITOR_SOURCE_JS.contains("kind.textContent = sourceOutlineKindInitial(item.kind);")
+        );
         assert!(EDITOR_WORKSPACE_JS.contains(
             "if (explorerFilesCollapsed && explorerOutlineCollapsed) {\n    explorerOutlineCollapsed = false;"
         ));
+        assert!(
+            EDITOR_WORKSPACE_JS.contains("const outlineWasCollapsed = explorerOutlineCollapsed;")
+        );
+        assert!(
+            EDITOR_WORKSPACE_JS.contains("scheduleSourceOutlineRefresh(true, { force: true });")
+        );
+        assert!(EDITOR_WORKSPACE_JS.contains(
+            "document.querySelectorAll(\"[data-explorer-section-toggle]\").forEach((toggle) => {"
+        ));
+    }
+
+    #[test]
+    fn source_outline_icon_mapping_matches_lucide_registry() {
+        let kind_icons = js_object_string_map(EDITOR_SOURCE_JS, "SOURCE_OUTLINE_KIND_ICON_NAMES");
+        let lifecycle_icon = js_const_string(EDITOR_SOURCE_JS, "SOURCE_OUTLINE_LIFECYCLE_ICON_NAME");
+        let default_icon = js_const_string(EDITOR_SOURCE_JS, "SOURCE_OUTLINE_DEFAULT_ICON_NAME");
+        let icon_names = source_outline_icon_names();
+        let used_icons = kind_icons
+            .values()
+            .cloned()
+            .chain([lifecycle_icon, default_icon])
+            .collect::<HashSet<_>>();
+
+        let missing_icons = used_icons
+            .difference(&icon_names)
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        assert!(
+            missing_icons.is_empty(),
+            "source outline icon mapping references missing SVG definitions: {missing_icons:?}"
+        );
+
+        let unused_icons = icon_names
+            .difference(&used_icons)
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        assert!(
+            unused_icons.is_empty(),
+            "source outline SVG definitions are not reachable from kind mapping: {unused_icons:?}"
+        );
+
+        assert_eq!(kind_icons.get("puzzle").map(String::as_str), Some("puzzle"));
+        assert_eq!(kind_icons.get("puzzle3").map(String::as_str), Some("puzzle"));
+        assert_eq!(kind_icons.get("levels").map(String::as_str), Some("puzzle"));
+        assert_eq!(kind_icons.get("level").map(String::as_str), Some("puzzle"));
+        assert_eq!(kind_icons.get("tags").map(String::as_str), Some("tag"));
+        assert_eq!(kind_icons.get("groups").map(String::as_str), Some("group"));
+        assert_eq!(
+            kind_icons.get("win_conditions").map(String::as_str),
+            Some("flag")
+        );
+        assert_eq!(
+            kind_icons.get("lose_conditions").map(String::as_str),
+            Some("flag-off")
+        );
+        assert_eq!(kind_icons.get("theme").map(String::as_str), Some("swatch-book"));
+        assert_eq!(kind_icons.get("shapes").map(String::as_str), Some("shapes"));
+        assert_eq!(
+            kind_icons.get("animation").map(String::as_str),
+            Some("circle-play")
+        );
+        assert_eq!(
+            kind_icons.get("tween").map(String::as_str),
+            Some("chart-spline")
+        );
+        assert_eq!(kind_icons.get("routine").map(String::as_str), Some("workflow"));
+    }
+
+    #[test]
+    fn source_outline_icon_mapping_covers_canonical_examples() {
+        let kind_icons = js_object_string_map(EDITOR_SOURCE_JS, "SOURCE_OUTLINE_KIND_ICON_NAMES");
+        let mut kinds = BTreeSet::new();
+
+        for markdown in [
+            EDITOR_DOCS_MARKDOWN,
+            EDITOR_DOCS_METADATA_MARKDOWN,
+            EDITOR_DOCS_PUZZLE_BLOCK_MARKDOWN,
+            EDITOR_DOCS_LAYERS_MARKDOWN,
+            EDITOR_DOCS_GROUPS_MARKDOWN,
+            EDITOR_DOCS_TAGS_MARKDOWN,
+            EDITOR_DOCS_LEGEND_MARKDOWN,
+            EDITOR_DOCS_LEVELS_MARKDOWN,
+            EDITOR_DOCS_LEVEL_LOCAL_LEGEND_MARKDOWN,
+            EDITOR_DOCS_MESSAGES_MARKDOWN,
+            EDITOR_DOCS_REWRITE_RULES_MARKDOWN,
+            EDITOR_DOCS_INPUT_RULES_MARKDOWN,
+            EDITOR_DOCS_MOVEMENT_MARKDOWN,
+            EDITOR_DOCS_GUARDS_MARKDOWN,
+            EDITOR_DOCS_FIX_MARKDOWN,
+            EDITOR_DOCS_VARIABLES_MARKDOWN,
+            EDITOR_DOCS_MARK_MARKDOWN,
+            EDITOR_DOCS_CONDITIONS_MARKDOWN,
+            EDITOR_DOCS_WIN_CONDITIONS_MARKDOWN,
+            EDITOR_DOCS_SCENES_MARKDOWN,
+            EDITOR_DOCS_SCENE_LAYOUT_MARKDOWN,
+            EDITOR_DOCS_SEMANTIC_INPUTS_MARKDOWN,
+            EDITOR_DOCS_MENUS_MARKDOWN,
+            EDITOR_DOCS_LIFECYCLE_MARKDOWN,
+            EDITOR_DOCS_SPRITES_MARKDOWN,
+            EDITOR_DOCS_DISPLAY_MARKDOWN,
+            EDITOR_DOCS_THEME_MARKDOWN,
+            EDITOR_DOCS_SOUNDS_MARKDOWN,
+        ] {
+            collect_puzzle_fence_outline_kinds(markdown, &mut kinds);
+        }
+
+        for source in [
+            include_str!("../../../games/spec_2d.puzzle"),
+            include_str!("../../../games/spec_3d.puzzle3"),
+            include_str!("../../lang/tests/fixtures/spec_3d_preview_contract.puzzle3"),
+            include_str!("../../lang/tests/fixtures/puzzlescript/basic_sokoban.puzzle"),
+        ] {
+            collect_outline_kinds_from_source(source, &mut kinds);
+        }
+
+        let missing_kinds = kinds
+            .into_iter()
+            .filter(|kind| outline_kind_requires_explicit_icon(kind))
+            .filter(|kind| !kind_icons.contains_key(kind))
+            .collect::<BTreeSet<_>>();
+        assert!(
+            missing_kinds.is_empty(),
+            "canonical outline examples emit kinds with no explicit icon mapping: {missing_kinds:?}"
+        );
+    }
+
+    #[test]
+    fn source_document_load_forces_outline_refresh() {
+        assert!(EDITOR_SOURCE_JS.contains("function setSourceEditorValue(value, options = {})"));
+        assert!(EDITOR_SOURCE_JS.contains("scheduleSourceOutlineRefresh(true, { force: true });"));
+    }
+
+    #[test]
+    fn closing_active_tab_does_not_select_hidden_workspace_document() {
+        let close_start = EDITOR_WORKSPACE_JS
+            .find("function closeDocumentTab(documentId)")
+            .expect("close tab handler");
+        let close_end = EDITOR_WORKSPACE_JS[close_start..]
+            .find("function renderDocumentTabs()")
+            .expect("close tab handler end")
+            + close_start;
+        let close_handler = &EDITOR_WORKSPACE_JS[close_start..close_end];
+        assert!(close_handler.contains("const nextId = openTabIds[openTabIds.length - 1] || \"\";"));
+        assert!(!close_handler.contains("documents.find((document) => document.id !== documentId)"));
     }
 
     #[test]
@@ -6000,6 +6273,20 @@ levels3 demo of push3 {
     }
 
     #[test]
+    fn source_overlay_layers_share_highlight_scroll_transform() {
+        assert!(EDITOR_SOURCE_JS.contains("function syncSourceOverlayLayerMetrics(clientWidth, scrollHeight)"));
+        assert!(EDITOR_SOURCE_JS.contains("const transform = `translate(${-sourceEditor.scrollLeft}px, ${-sourceEditor.scrollTop}px)`;"));
+        assert!(EDITOR_SOURCE_JS.contains("sourceHighlight.style.transform = transform;"));
+        assert!(EDITOR_SOURCE_JS.contains("sourceBlockSelectionLayer.style.transform = transform;"));
+        assert!(EDITOR_SOURCE_JS.contains("sourceFindMatchLayer.style.transform = transform;"));
+        assert!(EDITOR_SOURCE_JS.contains("caret.style.left = `${rect.left + sourceEditor.scrollLeft}px`;"));
+        assert!(EDITOR_SOURCE_JS.contains("caret.style.top = `${rect.top + sourceEditor.scrollTop}px`;"));
+        assert!(EDITOR_SOURCE_JS.contains("left: rect.left - wrapRect.left + sourceEditor.scrollLeft,"));
+        assert!(EDITOR_SOURCE_JS.contains("top: rect.top - wrapRect.top + sourceEditor.scrollTop"));
+        assert!(!EDITOR_SOURCE_JS.contains("sourceEditor.addEventListener(\"scroll\", syncSourceEditorScrollCursor);"));
+    }
+
+    #[test]
     fn source_block_selection_uses_normal_selection_fill() {
         assert!(EDITOR_CSS.contains(
             "--source-selection-bg: color-mix(in srgb, var(--accent) 34%, transparent);"
@@ -6299,8 +6586,12 @@ levels3 demo of push3 {
         assert!(EDITOR_SPRITE_JS.contains("sourceEditor.focus({ preventScroll: true });"));
         assert!(EDITOR_SPRITE_JS.contains("function currentSpriteEditSourceRange(source)"));
         assert!(EDITOR_SPRITE_JS.contains("end: entry.start + replacement.length"));
-        assert!(EDITOR_SPRITE_JS.contains("async function replaceCurrentSpriteDefinitionFromParser"));
-        assert!(EDITOR_SPRITE_JS.contains("const result = await replaceCurrentSpriteDefinitionFromParser(stagedSource);"));
+        assert!(
+            EDITOR_SPRITE_JS.contains("async function replaceCurrentSpriteDefinitionFromParser")
+        );
+        assert!(EDITOR_SPRITE_JS.contains(
+            "const result = await replaceCurrentSpriteDefinitionFromParser(stagedSource);"
+        ));
         assert!(EDITOR_SPRITE_JS.contains(
             "setSpriteEditSource({ ...result.target, start: result.start, end: result.end, name: spriteObjectName() }, document);"
         ));
@@ -6994,12 +7285,14 @@ levels3 demo of push3 {
                 .contains(r#"<link rel="stylesheet" href="editor.css?v=desktop-export-link">"#)
         );
         assert!(
-            EDITOR_HTML
-                .contains(r#"<script src="editor_source.js?v=outline-pane-layout"></script>"#)
+            EDITOR_HTML.contains(
+                r#"<script src="editor_source.js?v=source-overlay-scroll-sync"></script>"#
+            )
         );
-        assert!(EDITOR_HTML.contains(
-            r#"<script src="editor_workspace.js?v=outline-pane-layout"></script>"#
-        ));
+        assert!(
+            EDITOR_HTML
+                .contains(r#"<script src="editor_workspace.js?v=outline-pane-layout"></script>"#)
+        );
         assert!(
             EDITOR_HTML.contains(
                 r#"<script src="editor_import_export.js?v=desktop-export-link"></script>"#

@@ -2,7 +2,7 @@ fn parse_button_label(value: &str, line: &str) -> Result<SceneExpr, DiagnosticRe
     parse_scene_expr(value, line)
 }
 
-struct ParsedScreenStateBlock {
+struct ParsedSceneStateBlock {
     variables: Vec<SceneVarDef>,
     puzzles: Vec<ScenePuzzleDef>,
 }
@@ -139,7 +139,7 @@ fn parse_scene_state_entry(
     if !is_identifier(name) {
         return Err(parse_error(line, "scene state name must be an identifier"));
     }
-    if let Some(initializer) = parse_screen_puzzle_initializer(value, line)? {
+    if let Some(initializer) = parse_scene_puzzle_initializer(value, line)? {
         if prefixed_variable {
             return Err(parse_error(
                 line,
@@ -270,7 +270,7 @@ struct ParsedScenePuzzleInitializer {
     initializer: ScenePuzzleInitializer,
 }
 
-fn parse_screen_puzzle_initializer(
+fn parse_scene_puzzle_initializer(
     value: &str,
     line: &str,
 ) -> Result<Option<ParsedScenePuzzleInitializer>, DiagnosticReport> {
@@ -365,16 +365,14 @@ fn parse_quoted_text(value: &str) -> Option<String> {
     puzzle_authoring::parse_quoted_text(value)
 }
 
-struct ParsedScreenTransitionsBlock {
-    transitions: Vec<SceneTransition>,
+struct ParsedSceneRulesBlock {
     puzzle_rule: Option<ScenePuzzleRule>,
 }
 
-fn parse_screen_transitions_block(
+fn parse_scene_rules_block(
     lines: &[String],
     start: usize,
-) -> Result<(ParsedScreenTransitionsBlock, usize), DiagnosticReport> {
-    let mut transitions = Vec::new();
+) -> Result<(ParsedSceneRulesBlock, usize), DiagnosticReport> {
     let mut puzzle_rule = None;
     let mut i = start + 1;
     while i < lines.len() && !is_block_close_line(&lines[i]) {
@@ -393,104 +391,35 @@ fn parse_screen_transitions_block(
                     "scene rules do not call component rules by path; use `step <puzzle>`",
                 ));
             }
-            ["if"] | ["if", "all"] if lines[i].trim_end().ends_with('{') => {
-                let (transition, next_i) = parse_screen_condition_arrow_block(lines, i)?;
-                transitions.push(transition);
-                i = next_i;
-                continue;
+            ["if", ..] => {
+                return Err(parse_error(
+                    &lines[i],
+                    "scene transition rows were removed; use scene-level `if <condition> { ... }`",
+                ));
             }
             _ if lines[i].contains("->") => {
-                let (transition, next_i) = parse_transition_row(lines, i)?;
-                transitions.push(transition);
-                i = next_i;
-                continue;
+                return Err(parse_error(
+                    &lines[i],
+                    "scene transition rows were removed; use `keys`, `routine`, or scene-level `if <condition> { ... }`",
+                ));
             }
             _ => {
                 return Err(parse_error(
                     &lines[i],
-                    "transitions row must be: step <puzzle> | <input> -> <effect> | if <condition> -> <effect>",
+                    "scene rules row must be: step <puzzle>",
                 ));
             }
         }
         i += 1;
     }
     if i >= lines.len() {
-        return Err(parse_error(
-            &lines[start],
-            "transitions missing closing brace",
-        ));
+        return Err(parse_error(&lines[start], "scene rules missing closing brace"));
     }
 
-    Ok((
-        ParsedScreenTransitionsBlock {
-            transitions,
-            puzzle_rule,
-        },
-        i + 1,
-    ))
+    Ok((ParsedSceneRulesBlock { puzzle_rule }, i + 1))
 }
 
-fn parse_screen_condition_arrow_block(
-    lines: &[String],
-    start: usize,
-) -> Result<(SceneTransition, usize), DiagnosticReport> {
-    let header = block_header_text(&lines[start]);
-    match split_header_tokens(header).as_slice() {
-        ["if"] | ["if", "all"] => {}
-        ["if", "any"] => {
-            return Err(parse_error(
-                &lines[start],
-                "scene condition blocks only support all conditions",
-            ));
-        }
-        _ => {
-            return Err(parse_error(
-                &lines[start],
-                "scene condition block must be: if [all] {",
-            ));
-        }
-    }
-
-    let mut conditions = Vec::new();
-    let mut i = start + 1;
-    while i < lines.len() && !is_block_close_line(&lines[i]) {
-        conditions.push(parse_scene_condition_expr(&lines[i], &lines[i])?);
-        i += 1;
-    }
-    if i >= lines.len() {
-        return Err(parse_error(
-            &lines[start],
-            "scene condition block missing closing brace",
-        ));
-    }
-    if conditions.is_empty() {
-        return Err(parse_error(
-            &lines[start],
-            "scene condition block requires at least one condition",
-        ));
-    }
-
-    let arrow_i = i + 1;
-    let Some(arrow_line) = lines.get(arrow_i) else {
-        return Err(parse_error(
-            &lines[start],
-            "scene condition block must be followed by ->",
-        ));
-    };
-    let (_, effect_text) =
-        require_arrow_row(arrow_line, "scene condition block must be followed by ->")?;
-    let (effect, next_i) =
-        parse_scene_effect_with_optional_block(effect_text, lines, arrow_i)?;
-    Ok((
-        SceneTransition {
-            trigger: SceneTransitionTrigger::Condition(combine_scene_condition_exprs(conditions)),
-            effect,
-        },
-        next_i,
-    ))
-}
-
-fn parse_screen_condition_block(
+fn parse_scene_condition_block(
     lines: &[String],
     start: usize,
 ) -> Result<(SceneTransition, usize), DiagnosticReport> {
@@ -654,95 +583,8 @@ fn matching_effect_block_end(
     ))
 }
 
-fn parse_transition_row(
-    lines: &[String],
-    start: usize,
-) -> Result<(SceneTransition, usize), DiagnosticReport> {
-    let (pattern, effect) = require_arrow_row(
-        &lines[start],
-        "transition must be: if <condition> -> <effect>",
-    )?;
-    let (effect, next_i) = parse_scene_effect_with_optional_block(effect, lines, start)?;
-    Ok((
-        SceneTransition {
-            trigger: parse_transition_trigger(pattern.trim(), &lines[start])?,
-            effect,
-        },
-        next_i,
-    ))
-}
-
-fn parse_transition_trigger(
-    value: &str,
-    line: &str,
-) -> Result<SceneTransitionTrigger, DiagnosticReport> {
-    if value == "scene_start" {
-        return Err(parse_error(
-            line,
-            "scene_start is a lifecycle block; write `on_scene_start { ... }` instead",
-        ));
-    }
-    if value == "on_scene_start" {
-        return Err(parse_error(
-            line,
-            "on_scene_start is a lifecycle block; write `on_scene_start { ... }` instead",
-        ));
-    }
-    if value == "level_start" {
-        return Err(parse_error(
-            line,
-            "level_start is a puzzle lifecycle block; put `on_level_start { ... }` inside puzzle",
-        ));
-    }
-    if matches!(
-        value,
-        "on_level_start" | "on_level_clear" | "on_last_level_clear"
-    ) {
-        return Err(parse_error(
-            line,
-            "level lifecycle blocks belong inside puzzle",
-        ));
-    }
-    if let Some(condition) = value.strip_prefix("if ") {
-        let condition = condition.trim();
-        return Ok(SceneTransitionTrigger::Condition(
-            parse_scene_condition_expr(condition, line)?,
-        ));
-    }
-    let tokens = split_header_tokens(value);
-    if let [input] = tokens.as_slice() {
-        let input = parse_input_name(input, line)?;
-        return Ok(SceneTransitionTrigger::Condition(
-            scene_input_condition_expr(&input),
-        ));
-    }
-    Err(parse_error(
-        line,
-        "scene transition triggers must be `<input>` or `if <condition>`",
-    ))
-}
-
 fn parse_scene_condition_expr(value: &str, line: &str) -> Result<SceneExpr, DiagnosticReport> {
     parse_scene_expr(value, line)
-}
-
-fn combine_scene_condition_exprs(mut conditions: Vec<SceneExpr>) -> SceneExpr {
-    let first = conditions.remove(0);
-    conditions
-        .into_iter()
-        .fold(first, |left, right| SceneExpr::Binary {
-            op: SceneBinaryOp::And,
-            left: Box::new(left),
-            right: Box::new(right),
-        })
-}
-
-fn scene_input_condition_expr(input: &str) -> SceneExpr {
-    SceneExpr::Binary {
-        op: SceneBinaryOp::Eq,
-        left: Box::new(SceneExpr::Path(vec!["input".to_string()])),
-        right: Box::new(SceneExpr::Path(vec![input.to_string()])),
-    }
 }
 
 fn parse_level_menu_component(
