@@ -252,10 +252,7 @@ function toolPaneHeaderActionGroups(paneId) {
     ].filter(Boolean);
   }
   if (paneId === "sprite") {
-    return [
-      document.querySelector("#spriteExportButton")?.closest(".source-action-group"),
-      document.querySelector("#sprite3dExportButton")?.closest(".source-action-group"),
-    ].filter(Boolean);
+    return [];
   }
   return [];
 }
@@ -722,9 +719,6 @@ function closeWorkPane(paneId) {
   }
   selectFallbackPreviewPane(normalized);
   applyPaneVisibility();
-  if (normalized === PREVIEW_WORK_PANE_ID && typeof terminatePreviewGame === "function") {
-    terminatePreviewGame();
-  }
   return true;
 }
 
@@ -918,6 +912,9 @@ function applyPaneVisibility() {
   syncPreviewModeButtonState();
   scheduleBoardScaleSync();
   requestAnimationFrame(syncPreviewViewportScale);
+  if (typeof syncPreviewFrameLifecycleForPaneVisibility === "function") {
+    syncPreviewFrameLifecycleForPaneVisibility();
+  }
 }
 
 function toggleWorkPaneMaximized(paneId) {

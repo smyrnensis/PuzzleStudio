@@ -117,7 +117,9 @@ fn collect_levels_authoring_entry(
             i += 1;
             continue;
         }
-        if depth == 1 && (is_braced_level_header(line) || matches!(tokens.as_slice(), ["{"])) {
+        if depth == 1
+            && (puzzle_authoring::is_braced_level_header(line) || matches!(tokens.as_slice(), ["{"]))
+        {
             depth += 1;
         } else if !matches!(tokens.as_slice(), ["level", ..])
             && starts_authoring_block(&tokens, line)
@@ -1262,8 +1264,10 @@ fn parse_level_block_with_default_puzzle(
     existing_count: usize,
     default_puzzle: Option<&str>,
 ) -> Result<(LevelBlock, usize), DiagnosticReport> {
-    let level_name =
-        parse_level_header_name_or_auto(&lines[start], unnamed_level_name(existing_count))?;
+    let level_name = parse_level_header_name_or_auto(
+        &lines[start],
+        puzzle_authoring::unnamed_level_name(existing_count),
+    )?;
     parse_named_level_body(
         lines,
         start,
@@ -1372,13 +1376,13 @@ fn parse_levels_block(
             }
             ["level", ..] => {
                 namespace_count += 1;
-                let auto_name = namespaced_unnamed_level_name(
+                let auto_name = puzzle_authoring::namespaced_unnamed_level_name(
                     header.pack.as_deref(),
                     level_blocks.len(),
                     namespace_count,
                 );
                 let level_name = parse_level_header_name_or_auto(&lines[i], auto_name)?;
-                let (level, next_i) = if is_braced_level_header(&lines[i]) {
+                let (level, next_i) = if puzzle_authoring::is_braced_level_header(&lines[i]) {
                     parse_named_level_body(lines, i, level_name, &header)?
                 } else {
                     parse_unbraced_level_body(lines, i + 1, level_name, &header)?
@@ -1388,7 +1392,7 @@ fn parse_levels_block(
             }
             ["{"] => {
                 namespace_count += 1;
-                let name = namespaced_unnamed_level_name(
+                let name = puzzle_authoring::namespaced_unnamed_level_name(
                     header.pack.as_deref(),
                     level_blocks.len(),
                     namespace_count,
@@ -1406,7 +1410,7 @@ fn parse_levels_block(
             }
             _ => {
                 namespace_count += 1;
-                let name = namespaced_unnamed_level_name(
+                let name = puzzle_authoring::namespaced_unnamed_level_name(
                     header.pack.as_deref(),
                     level_blocks.len(),
                     namespace_count,
@@ -1499,46 +1503,8 @@ fn parse_level_header_name_or_auto(
     line: &str,
     auto_name: String,
 ) -> Result<String, DiagnosticReport> {
-    let Some(rest) = line.trim().strip_prefix("level") else {
-        return Err(parse_error(line, "level header must be: level \"<id>\""));
-    };
-    if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
-        return Err(parse_error(line, "level header must be: level \"<id>\""));
-    }
-    let name_text = strip_level_header_block_opener(rest.trim()).trim();
-    if name_text.is_empty() {
-        return Ok(auto_name);
-    }
-    let Some(name) = parse_quoted_text(name_text) else {
-        return Err(parse_error(line, "level header must be: level \"<id>\""));
-    };
-    if name.is_empty() {
-        return Err(parse_error(line, "level id must not be empty"));
-    }
-    Ok(name)
-}
-
-fn strip_level_header_block_opener(value: &str) -> &str {
-    value.strip_suffix('{').map(str::trim_end).unwrap_or(value)
-}
-
-fn is_braced_level_header(line: &str) -> bool {
-    line.trim_end().ends_with('{') && matches!(split_header_tokens(line).as_slice(), ["level", ..])
-}
-
-fn unnamed_level_name(existing_count: usize) -> String {
-    format!("unnamed level {}", existing_count + 1)
-}
-
-fn namespaced_unnamed_level_name(
-    namespace: Option<&str>,
-    existing_count: usize,
-    namespace_count: usize,
-) -> String {
-    match namespace {
-        Some(namespace) => format!("{namespace}.{namespace_count}"),
-        None => unnamed_level_name(existing_count),
-    }
+    puzzle_authoring::parse_level_header_name_or_auto(line, auto_name)
+        .map_err(|error| parse_error(line, error.message()))
 }
 
 fn parse_conditions_block(
@@ -1742,6 +1708,16 @@ fn parse_puzzle_render_block(
                 parse_puzzle_render_grid_options(options, line, &mut parsed.grid)?;
                 i += 1;
             }
+            [name, value] if *name == PUZZLE_RENDER_BLOCK_OPTIONS[1] => {
+                parsed.cell_size = Some(parse_puzzle_render_cell_size(value, line)?);
+                i += 1;
+            }
+            [name, ..] if *name == PUZZLE_RENDER_BLOCK_OPTIONS[1] => {
+                return Err(parse_error(
+                    line,
+                    "cell_size directive must be: cell_size <pixels>",
+                ));
+            }
             [other, ..] => {
                 return Err(parse_error(
                     line,
@@ -1760,10 +1736,20 @@ fn parse_puzzle_render_block(
     Ok(i + 1)
 }
 
-pub(crate) const PUZZLE_RENDER_BLOCK_OPTIONS: &[&str] = &["grid"];
+pub(crate) const PUZZLE_RENDER_BLOCK_OPTIONS: &[&str] = &["grid", "cell_size"];
 pub(crate) const PUZZLE_RENDER_GRID_OPTIONS: &[&str] = &["occupied_cells", "all_cells"];
 pub(crate) const ANIMATION_BLOCK_OPTIONS: &[&str] = &["tween"];
 pub(crate) const ANIMATION_TWEEN_OPTIONS: &[&str] = &["duration"];
+
+fn parse_puzzle_render_cell_size(value: &str, line: &str) -> Result<u16, DiagnosticReport> {
+    let size = value
+        .parse::<u16>()
+        .map_err(|_| parse_error(line, "cell_size must be an integer from 1 to 256"))?;
+    if !(1..=256).contains(&size) {
+        return Err(parse_error(line, "cell_size must be an integer from 1 to 256"));
+    }
+    Ok(size)
+}
 
 fn parse_animation_block(
     lines: &[String],
@@ -4675,8 +4661,13 @@ fn parse_screen_view_like_block(
             continue;
         }
         if scene_entry_is_component(&tokens) || matches!(tokens.as_slice(), ["puzzle", ..]) {
-            let (component, next_i) = parse_screen_component(lines, i)?;
+            let (component, next_i, nested_puzzles) = parse_screen_component_with_puzzles(
+                lines,
+                i,
+                SceneStateLifetime::Instance,
+            )?;
             components.push(component);
+            puzzles.extend(nested_puzzles);
             i = next_i;
             continue;
         }
@@ -4719,8 +4710,13 @@ fn parse_screen_view_like_block(
             continue;
         }
 
-        let (component, next_i) = parse_screen_component(lines, i)?;
+        let (component, next_i, nested_puzzles) = parse_screen_component_with_puzzles(
+            lines,
+            i,
+            SceneStateLifetime::Instance,
+        )?;
         components.push(component);
+        puzzles.extend(nested_puzzles);
         i = next_i;
     }
     if i >= lines.len() {
@@ -4805,7 +4801,8 @@ fn parse_screen_components_block(
 ) -> Result<(Vec<SceneComponent>, usize), DiagnosticReport> {
     let mut parse_leaf =
         |lines: &[String], index: usize| -> Result<(usize, SceneComponent), DiagnosticReport> {
-            let (component, next) = parse_screen_leaf_component(lines, index)?;
+            let (component, next, _) =
+                parse_screen_leaf_component(lines, index, SceneStateLifetime::Instance)?;
             Ok((next, component))
         };
     let (next, components) = puzzle_scene::parse_scene_component_block(
@@ -4823,9 +4820,23 @@ fn parse_screen_component(
     lines: &[String],
     start: usize,
 ) -> Result<(SceneComponent, usize), DiagnosticReport> {
+    let (component, next, _) =
+        parse_screen_component_with_puzzles(lines, start, SceneStateLifetime::Instance)?;
+    Ok((component, next))
+}
+
+fn parse_screen_component_with_puzzles(
+    lines: &[String],
+    start: usize,
+    lifetime: SceneStateLifetime,
+) -> Result<(SceneComponent, usize, Vec<ScenePuzzleDef>), DiagnosticReport> {
+    let nested_puzzles = std::cell::RefCell::new(Vec::<ScenePuzzleDef>::new());
     let mut parse_leaf =
         |lines: &[String], index: usize| -> Result<(usize, SceneComponent), DiagnosticReport> {
-            let (component, next) = parse_screen_leaf_component(lines, index)?;
+            let (component, next, puzzle) = parse_screen_leaf_component(lines, index, lifetime)?;
+            if let Some(puzzle) = puzzle {
+                nested_puzzles.borrow_mut().push(puzzle);
+            }
             Ok((next, component))
         };
     let (next, component) = puzzle_scene::parse_scene_component_at(
@@ -4835,7 +4846,7 @@ fn parse_screen_component(
         &mut parse_leaf,
         &build_scene_container_component,
     )?;
-    Ok((component, next))
+    Ok((component, next, nested_puzzles.into_inner()))
 }
 
 fn build_scene_container_component(
@@ -4860,7 +4871,15 @@ fn build_scene_container_component(
 fn parse_screen_leaf_component(
     lines: &[String],
     start: usize,
-) -> Result<(SceneComponent, usize), DiagnosticReport> {
+    lifetime: SceneStateLifetime,
+) -> Result<(SceneComponent, usize, Option<ScenePuzzleDef>), DiagnosticReport> {
+    if let Some(declaration) = parse_scene_puzzle_layout_declaration(&lines[start], lifetime)? {
+        return Ok((
+            scene_puzzle_slot_component_with_layout(&declaration.puzzle, declaration.layout),
+            start + 1,
+            Some(declaration.puzzle),
+        ));
+    }
     let tokens = split_header_tokens(&lines[start]);
     match tokens.as_slice() {
         ["puzzle", "current_level"] => Err(parse_error(
@@ -4884,6 +4903,7 @@ fn parse_screen_leaf_component(
             Ok((
                 scene_frame_component_with_layout("puzzle", (*state_name).to_string(), layout),
                 start + 1,
+                None,
             ))
         }
         ["frame", source, attrs @ ..] => {
@@ -4897,6 +4917,7 @@ fn parse_screen_leaf_component(
             Ok((
                 scene_frame_component_with_layout("frame", (*source).to_string(), layout),
                 start + 1,
+                None,
             ))
         }
         ["puzzle3", source, attrs @ ..] => {
@@ -4910,18 +4931,31 @@ fn parse_screen_leaf_component(
             Ok((
                 scene_frame_component_with_layout("puzzle3", (*source).to_string(), layout),
                 start + 1,
+                None,
             ))
         }
-        ["text", ..] => Ok((parse_text_component(&lines[start])?, start + 1)),
-        ["title", ..] => Ok((parse_title_component(&lines[start], true)?, start + 1)),
-        ["subtitle", ..] => Ok((parse_title_component(&lines[start], false)?, start + 1)),
-        ["button", ..] => parse_button_component(lines, start),
-        ["choice", ..] => parse_choice_component(lines, start),
-        ["if", ..] => parse_view_if_component(lines, start),
-        ["for", ..] => parse_for_component(lines, start),
+        ["text", ..] => Ok((parse_text_component(&lines[start])?, start + 1, None)),
+        ["title", ..] => Ok((parse_title_component(&lines[start], true)?, start + 1, None)),
+        ["subtitle", ..] => Ok((parse_title_component(&lines[start], false)?, start + 1, None)),
+        ["button", ..] => {
+            let (component, next) = parse_button_component(lines, start)?;
+            Ok((component, next, None))
+        }
+        ["choice", ..] => {
+            let (component, next) = parse_choice_component(lines, start)?;
+            Ok((component, next, None))
+        }
+        ["if", ..] => {
+            let (component, next) = parse_view_if_component(lines, start)?;
+            Ok((component, next, None))
+        }
+        ["for", ..] => {
+            let (component, next) = parse_for_component(lines, start)?;
+            Ok((component, next, None))
+        }
         ["level_menu"] => {
             let (menu, next_i) = parse_level_menu_component(lines, start)?;
-            Ok((SceneComponent::LevelMenu(menu), next_i))
+            Ok((SceneComponent::LevelMenu(menu), next_i, None))
         }
         ["level_menu", ..] => Err(parse_error(
             &lines[start],
@@ -4930,6 +4964,7 @@ fn parse_screen_leaf_component(
         [state_name] if is_identifier(state_name) => Ok((
             scene_frame_component("puzzle", (*state_name).to_string()),
             start + 1,
+            None,
         )),
         [other, ..] => Err(parse_error(
             &lines[start],
@@ -5149,7 +5184,8 @@ fn parse_screen_component_body(
     lines.push(BLOCK_CLOSE.to_string());
     let mut parse_leaf =
         |lines: &[String], index: usize| -> Result<(usize, SceneComponent), DiagnosticReport> {
-            let (component, next) = parse_screen_leaf_component(lines, index)?;
+            let (component, next, _) =
+                parse_screen_leaf_component(lines, index, SceneStateLifetime::Instance)?;
             Ok((next, component))
         };
     let (next, components) = puzzle_scene::parse_scene_component_block(
@@ -7394,8 +7430,7 @@ fn parse_scene_value(value: &str, line: &str) -> Result<SceneValue, DiagnosticRe
 }
 
 fn parse_quoted_text(value: &str) -> Option<String> {
-    let inner = value.strip_prefix('"')?.strip_suffix('"')?;
-    Some(inner.replace("\\\"", "\""))
+    puzzle_authoring::parse_quoted_text(value)
 }
 
 struct ParsedScreenTransitionsBlock {

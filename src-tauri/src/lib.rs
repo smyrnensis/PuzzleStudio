@@ -130,6 +130,7 @@ struct RenameWorkspaceEntryCommandRequest {
     from_path: String,
     to_path: String,
     workspace_root: Option<String>,
+    target_workspace_root: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -546,6 +547,28 @@ fn rename_workspace_entry(
 
     let service = &services[service_index];
     let workspace_root = PathBuf::from(service.workspace_root());
+    let target_workspace_root = request
+        .target_workspace_root
+        .as_deref()
+        .unwrap_or_default()
+        .trim();
+    if !target_workspace_root.is_empty() && target_workspace_root != service.workspace_root() {
+        let Some(target_service_index) =
+            service_index_for_workspace(&services, Some(target_workspace_root))
+        else {
+            return Err(
+                "Target workspace is not open. Open it before moving files there.".to_string(),
+            );
+        };
+        return rename_workspace_entry_between_workspaces(
+            &app,
+            &state,
+            &mut services,
+            service_index,
+            target_service_index,
+            &request,
+        );
+    }
     let from_path = resolve_desktop_workspace_command_path(&request.from_path, &workspace_root)
         .canonicalize()
         .map_err(|error| error.to_string())?;
@@ -581,6 +604,90 @@ fn rename_workspace_entry(
     Ok(serde_json::json!({
         "ok": true,
         "path": path.display().to_string()
+    }))
+}
+
+fn rename_workspace_entry_between_workspaces(
+    app: &tauri::AppHandle,
+    state: &tauri::State<'_, DesktopState>,
+    services: &mut [EditorService],
+    source_service_index: usize,
+    target_service_index: usize,
+    request: &RenameWorkspaceEntryCommandRequest,
+) -> Result<serde_json::Value, String> {
+    let source_workspace_root = PathBuf::from(services[source_service_index].workspace_root())
+        .canonicalize()
+        .map_err(|error| error.to_string())?;
+    let target_workspace_root = PathBuf::from(services[target_service_index].workspace_root())
+        .canonicalize()
+        .map_err(|error| error.to_string())?;
+    let from_path =
+        resolve_desktop_workspace_command_path(&request.from_path, &source_workspace_root)
+            .canonicalize()
+            .map_err(|error| error.to_string())?;
+    if from_path == source_workspace_root {
+        return Err("cannot move the workspace root".to_string());
+    }
+    if !from_path.starts_with(&source_workspace_root) {
+        return Err(format!(
+            "can only move files under {}",
+            source_workspace_root.display()
+        ));
+    }
+    let to_path = resolve_desktop_workspace_command_path(&request.to_path, &target_workspace_root);
+    if to_path.exists() {
+        return Err(format!("destination already exists: {}", to_path.display()));
+    }
+    let parent = to_path
+        .parent()
+        .ok_or_else(|| "moved entry needs a parent folder".to_string())?
+        .canonicalize()
+        .map_err(|error| error.to_string())?;
+    if !parent.starts_with(&target_workspace_root) {
+        return Err(format!(
+            "can only move files under {}",
+            target_workspace_root.display()
+        ));
+    }
+    let metadata = fs::metadata(&from_path).map_err(|error| error.to_string())?;
+    if metadata.is_file() && !is_desktop_workspace_file(&from_path) {
+        return Err("can only move workspace files".to_string());
+    }
+    let active_entry_tail =
+        active_entry_tail_under_path(services[source_service_index].puzzle_path(), &from_path)?;
+    if active_entry_tail.is_some()
+        && from_path.is_file()
+        && !is_desktop_puzzle_source_path(&to_path)
+    {
+        return Err("cannot move the active game entry to a non-puzzle source file".to_string());
+    }
+
+    fs::rename(&from_path, &to_path).map_err(|error| error.to_string())?;
+    let moved_path = to_path.canonicalize().map_err(|error| error.to_string())?;
+
+    if let Some(tail) = active_entry_tail {
+        let next_entry_path = if tail.as_os_str().is_empty() {
+            moved_path.clone()
+        } else {
+            moved_path.join(tail)
+        };
+        let source_service = EditorService::open_workspace_root(&source_workspace_root)
+            .map_err(|error| error.to_string())?;
+        let target_service =
+            EditorService::open_game_entry(&next_entry_path).map_err(|error| error.to_string())?;
+        let source_workspace_root = source_service.workspace_root().to_string();
+        let source_puzzle_path = source_service.puzzle_path().to_string();
+        let target_workspace_root = target_service.workspace_root().to_string();
+        let target_puzzle_path = target_service.puzzle_path().to_string();
+        services[source_service_index] = source_service;
+        services[target_service_index] = target_service;
+        restart_workspace_watcher(app, state, source_workspace_root, source_puzzle_path)?;
+        restart_workspace_watcher(app, state, target_workspace_root, target_puzzle_path)?;
+    }
+
+    Ok(serde_json::json!({
+        "ok": true,
+        "path": moved_path.display().to_string()
     }))
 }
 
@@ -757,6 +864,31 @@ fn is_desktop_puzzle_source_path(path: &Path) -> bool {
             .and_then(|value| value.to_str())
             .unwrap_or(""),
         "puzzle" | "puzzle3"
+    )
+}
+
+fn is_desktop_workspace_file(path: &Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or(""),
+        "puzzle"
+            | "puzzle3"
+            | "css"
+            | "js"
+            | "mjs"
+            | "svg"
+            | "png"
+            | "jpg"
+            | "jpeg"
+            | "webp"
+            | "gif"
+            | "mp3"
+            | "wav"
+            | "ogg"
+            | "json"
+            | "txt"
+            | "md"
     )
 }
 

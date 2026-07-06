@@ -31,6 +31,33 @@ behavior you are about to make true when the request could be interpreted in
 multiple ways, especially for syntax, lifecycle behavior, UI defaults, and
 cross-crate boundaries.
 
+## Reproduce Before Fixing
+
+Do not invent a problem in order to solve it. When a task is prompted by a bug,
+failed behavior, regression, visual defect, or mismatch between intent and
+observed output, first reproduce or directly observe the problem before
+designing the fix.
+
+Reproduction can be a failing test, a command output, a trace, a minimal
+`.puzzle` case, a local UI run, or another concrete observation that shows the
+bad state. If the issue cannot be reproduced with the available tools, say that
+explicitly and ask for the missing artifact or narrow the work to the evidence
+that is actually present. Do not proceed by filling the gap with a guessed
+failure mode.
+
+For visual issues, a user-provided screenshot counts as direct observation of
+the visual state shown in that screenshot. Treat it as evidence, not as
+permission to infer unseen states. Do not claim a visual problem is present,
+fixed, or verified from code intuition alone. If the required visual state is
+not visible in the screenshot, reproduce it with a local render, screenshot, or
+browser check before acting on that part of the claim.
+
+When the user is asking for speculative design, a new feature, or an instruction
+change rather than a reported failure, name that as design work and do not
+pretend there is a reproduced bug. The same honesty rule applies: separate
+observed evidence from assumptions, proposed behavior, and implementation
+judgment.
+
 ## No Fallback Paths
 
 This is a context-critical rule for every task in this repository, not an

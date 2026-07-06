@@ -1,10 +1,12 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::semantic::{SemanticKind, SemanticToken, first_identifier_bounds, semantic_tokens};
-use crate::source::{SourceScope, scan_source_context, split_header_tokens, strip_line_comment};
+use crate::source::{
+    SourceContext, SourceScope, scan_source_context, split_header_tokens, strip_line_comment,
+};
 use crate::syntax::{is_parser_keyword, is_puzzle_line_head_keyword};
 use crate::{
-    LoadedDocumentModel, RewriteEffectCommandSyntax, is_visual_color_token,
+    LoadedDocumentModel, RewriteEffectCommandSyntax, SourceOutlineItem, is_visual_color_token,
     rewrite_effect_command_syntax, scene_effect_command_syntax, visual_color_token_for_index,
 };
 
@@ -12,6 +14,12 @@ use crate::{
 pub struct HighlightedSource {
     pub html: String,
     pub parsed: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HighlightedSourceWithOutline {
+    pub highlighted: HighlightedSource,
+    pub outline: Vec<SourceOutlineItem>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -86,6 +94,19 @@ impl HighlightKind {
 }
 
 pub fn highlight_source(source: &str) -> HighlightedSource {
+    let context = scan_source_context(source);
+    highlight_source_with_context(source, &context)
+}
+
+pub fn highlight_source_with_outline(source: &str) -> HighlightedSourceWithOutline {
+    let context = scan_source_context(source);
+    HighlightedSourceWithOutline {
+        highlighted: highlight_source_with_context(source, &context),
+        outline: crate::source_outline::source_outline_from_context(&context),
+    }
+}
+
+fn highlight_source_with_context(source: &str, context: &SourceContext) -> HighlightedSource {
     let parsed = crate::parse_game(source).ok();
     let mut symbols = HashMap::<String, HighlightKind>::new();
     let mut family_bases = HashSet::<String>::new();
@@ -130,7 +151,7 @@ pub fn highlight_source(source: &str) -> HighlightedSource {
     }
 
     collect_source_symbols(
-        source,
+        context,
         &mut symbols,
         &mut family_bases,
         &mut family_axes,
@@ -140,6 +161,7 @@ pub fn highlight_source(source: &str) -> HighlightedSource {
     HighlightedSource {
         html: highlight_html(
             source,
+            context,
             &symbols,
             &family_bases,
             &family_axes,
@@ -239,21 +261,22 @@ fn quoted_source_string(value: &str) -> String {
 
 fn highlight_html(
     source: &str,
+    context: &SourceContext,
     symbols: &HashMap<String, HighlightKind>,
     family_bases: &HashSet<String>,
     family_axes: &HashMap<String, usize>,
     family_axis_names: &HashSet<String>,
 ) -> String {
     let mut out = String::with_capacity(source.len().saturating_add(source.len() / 8));
-    let context = scan_source_context(source);
     let binding_ranges = scan_for_binding_ranges(source);
     let semantic_ranges = semantic_tokens(source);
-    let keyword_ranges = scan_contextual_keyword_ranges(&context);
+    let keyword_ranges = scan_contextual_keyword_ranges(context);
     let brace_ranges = scan_brace_ranges(source);
-    let level_ascii_ranges = scan_level_ascii_ranges(&context);
-    let visual_color_aliases = scan_visual_color_aliases(&context);
-    let visual_named_color_ranges = scan_visual_named_color_ranges(&context, &visual_color_aliases);
-    let visual_ascii_color_ranges = scan_visual_ascii_color_ranges(&context, &visual_color_aliases);
+    let mut level_ascii_ranges = scan_level_ascii_ranges(context);
+    level_ascii_ranges.extend(scan_visual_shape_ascii_ranges(context));
+    let visual_color_aliases = scan_visual_color_aliases(context);
+    let visual_named_color_ranges = scan_visual_named_color_ranges(context, &visual_color_aliases);
+    let visual_ascii_color_ranges = scan_visual_ascii_color_ranges(context, &visual_color_aliases);
     let mut chars = source.char_indices().peekable();
 
     while let Some((index, ch)) = chars.next() {
@@ -558,13 +581,12 @@ fn brace_highlight_kind(depth: usize) -> HighlightKind {
 }
 
 fn collect_source_symbols(
-    source: &str,
+    context: &SourceContext,
     symbols: &mut HashMap<String, HighlightKind>,
     family_bases: &mut HashSet<String>,
     family_axes: &mut HashMap<String, usize>,
     family_axis_names: &mut HashSet<String>,
 ) {
-    let context = scan_source_context(source);
     for (line_index, line) in context.lines.iter().enumerate() {
         if line.tokens.is_empty() {
             continue;
@@ -1753,6 +1775,50 @@ fn add_level_ascii_line_ranges(
         }
         column += ch.len_utf8();
     }
+}
+
+fn scan_visual_shape_ascii_ranges(context: &crate::source::SourceContext) -> Vec<LevelAsciiRange> {
+    let mut ranges = Vec::new();
+    let mut in_shapes_block = false;
+
+    for line in &context.lines {
+        let raw = strip_line_comment(&line.content);
+        let trimmed = raw.trim();
+        let tokens = line.tokens.iter().map(String::as_str).collect::<Vec<_>>();
+
+        if in_shapes_block
+            && matches!(
+                line.scope,
+                Some(SourceScope::VisualShapeTable | SourceScope::VisualShapeEntry)
+            )
+            && context.raw_range_starting_at(line.start).is_some()
+        {
+            add_known_ascii_line_ranges(&mut ranges, line);
+        }
+
+        if in_shapes_block && line.scope == Some(SourceScope::VisualShapeTable) && trimmed == "}" {
+            in_shapes_block = false;
+            continue;
+        }
+
+        if line.scope == Some(SourceScope::Visuals) && matches!(tokens.as_slice(), ["shapes"]) {
+            in_shapes_block = true;
+        }
+    }
+
+    ranges
+}
+
+fn add_known_ascii_line_ranges(
+    ranges: &mut Vec<LevelAsciiRange>,
+    line: &crate::source::SourceContextLine,
+) {
+    let known_chars = line
+        .content
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect::<HashSet<_>>();
+    add_level_ascii_line_ranges(ranges, line, &known_chars);
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -4909,6 +4975,77 @@ B {
                 .contains("B <span class=\"syntax-brace-depth-4\">{</span>")
         );
         assert!(!highlighted.html.contains("syntax-number\">01010</span>"));
+    }
+
+    #[test]
+    fn highlights_visual_shape_ascii_rows_like_level_cells() {
+        let highlighted = highlight_source(
+            r#"
+title shape_ascii_highlight
+
+puzzle board {
+tags {
+kind = A B
+}
+layers {
+actor = Box:kind Pull
+}
+rules {
+}
+sprites {
+shapes {
+plain_shape
+010
+111
+
+mark:kind {
+A {
+000
+010
+000
+}
+B {
+111
+101
+111
+}
+}
+}
+Box {
+#111 #eee
+shape plain_shape
+}
+Pull {
+#222 #0f0
+01.
+}
+}
+levels {
+legend {
+. = empty
+B = Box:A
+P = Pull
+}
+level "start"
+BP
+}
+}
+"#,
+        );
+
+        assert!(highlighted.parsed);
+        assert!(highlighted.html.contains(
+            "\n<span class=\"syntax-level-cell\">0</span><span class=\"syntax-level-cell\">1</span><span class=\"syntax-level-cell\">0</span>\n"
+        ));
+        assert!(highlighted.html.contains(
+            "\n<span class=\"syntax-level-cell\">1</span><span class=\"syntax-level-cell\">0</span><span class=\"syntax-level-cell\">1</span>\n"
+        ));
+        assert!(!highlighted.html.contains("syntax-number\">010</span>"));
+        assert!(
+            highlighted
+                .html
+                .contains("syntax-sprite-pixel\" style=\"--syntax-sprite-pixel-color: #222\">0</span><span class=\"syntax-sprite-pixel\" style=\"--syntax-sprite-pixel-color: #0f0\">1</span><span class=\"syntax-sprite-pixel is-transparent\" style=\"--syntax-sprite-pixel-color: transparent\">.</span>")
+        );
     }
 
     #[test]

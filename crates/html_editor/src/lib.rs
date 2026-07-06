@@ -4230,6 +4230,18 @@ levels3 demo of push3 {
     }
 
     #[test]
+    fn empty_folder_preview_selection_falls_back_to_active_document() {
+        let active_preview_document = EDITOR_WORKSPACE_JS
+            .split("function activePreviewDocument() {")
+            .nth(1)
+            .and_then(|tail| tail.split("\nfunction previewDocumentForFolder").next())
+            .expect("activePreviewDocument source");
+        assert!(active_preview_document.contains("const folderPreview = previewDocumentForFolder(selected);"));
+        assert!(active_preview_document.contains("if (folderPreview) {\n      return folderPreview;\n    }"));
+        assert!(active_preview_document.contains("return previewDocumentFor(activeDocument());"));
+    }
+
+    #[test]
     fn workspace_drag_drop_moves_entries_through_host_boundary() {
         assert!(
             EDITOR_WORKSPACE_JS.contains("async function moveNodeToFolder(nodeId, targetFolderId)")
@@ -4664,7 +4676,9 @@ levels3 demo of push3 {
     fn level_source_previews_use_canonical_quoted_level_headers() {
         assert!(EDITOR_SOURCE_JS.contains("function sourcePuzzleQuotedText("));
         assert!(EDITOR_SOURCE_JS.contains("function sourcePuzzleLevelHeaderName("));
-        assert!(EDITOR_JS.contains("sourcePuzzleLevelHeaderSource(levelName, levelIndent, { openBlock: true })"));
+        assert!(EDITOR_JS.contains(
+            "sourcePuzzleLevelHeaderSource(levelName, levelIndent, { openBlock: true })"
+        ));
         assert!(EDITOR_JS.contains("sourcePuzzleLevelHeaderSource(levelName, levelIndent)"));
         assert!(EDITOR_LEVEL3D_JS.contains("sourcePuzzleLevelHeaderSource(levelName, indent, { defaultName: \"level 1\", openBlock: true })"));
         assert!(EDITOR_HTML.contains(r#"id="level3dNameInput" type="text" value="level 1""#));
@@ -4912,6 +4926,25 @@ levels3 demo of push3 {
     }
 
     #[test]
+    fn explorer_keeps_files_and_outline_in_one_visible_column() {
+        assert!(EDITOR_HTML.contains(r#"class="explorer-sections""#));
+        assert!(EDITOR_HTML.contains(r#"data-explorer-section="files""#));
+        assert!(EDITOR_HTML.contains(r#"id="sourceOutlineList""#));
+        assert!(EDITOR_CSS.contains(".explorer-sections {\n  grid-row: 2;"));
+        assert!(EDITOR_CSS.contains(
+            "grid-template-rows: minmax(88px, calc(100% - var(--source-outline-height) - 5px)) 5px minmax(88px, var(--source-outline-height));"
+        ));
+        assert!(EDITOR_SOURCE_JS.contains("function sourceOutlineKindIconSvg(kind)"));
+        assert!(EDITOR_SOURCE_JS.contains("kind.innerHTML = sourceOutlineKindIconSvg(item.kind);"));
+        assert!(EDITOR_SOURCE_JS.contains("class=\"source-outline-icon lucide lucide-${name}-icon lucide-${name}\""));
+        assert!(!EDITOR_SOURCE_JS.contains("function sourceOutlineKindInitial(kind)"));
+        assert!(!EDITOR_SOURCE_JS.contains("kind.textContent = sourceOutlineKindInitial(item.kind);"));
+        assert!(EDITOR_WORKSPACE_JS.contains(
+            "if (explorerFilesCollapsed && explorerOutlineCollapsed) {\n    explorerOutlineCollapsed = false;"
+        ));
+    }
+
+    #[test]
     fn closing_preview_pane_terminates_preview_game() {
         assert!(EDITOR_JS.contains("function terminatePreviewGame()"));
         assert!(EDITOR_JS.contains("setPreviewFrameHtml(emptyPreviewDocument());"));
@@ -5028,6 +5061,13 @@ levels3 demo of push3 {
         );
         assert!(EDITOR_JS.contains("const globalName = exportData?.__kind === \"puzzle3d\" ? \"Puzzle3DFrameFixture\" : \"PuzzleExport\";"));
         assert!(EDITOR_LEVEL3D_JS.contains("function level3dRuntimePreviewUpdate()"));
+        assert!(EDITOR_JS.contains("function ensureLevel3dRuntimePreviewForOpenPane()"));
+        assert!(EDITOR_JS.contains("requireFresh: true,"));
+        assert!(EDITOR_JS.contains("compilingMessage: \"Compiling 3D preview\""));
+        assert!(
+            EDITOR_JS
+                .contains("renderLevel3dBuilder();\n    ensureLevel3dRuntimePreviewForOpenPane();")
+        );
         assert!(EDITOR_LEVEL3D_JS.contains(
             "const LEVEL3D_PREVIEW_SURFACE_MESSAGE = \"PuzzleStudioPreviewSurfaceUpdate\";"
         ));
@@ -5493,6 +5533,54 @@ levels3 demo of push3 {
             )
         );
         assert!(!EDITOR_CSS.contains(".sprite-brush-preview"));
+    }
+
+    #[test]
+    fn sprite_clip_selection_is_positioned_overlay_not_cell_paint() {
+        assert!(
+            EDITOR_SPRITE_JS
+                .contains("frame.style.setProperty(\"--sprite-clip-x\", String(rect.x));")
+        );
+        assert!(
+            EDITOR_SPRITE_JS.contains(
+                "frame.style.setProperty(\"--sprite-clip-height\", String(rect.height));"
+            )
+        );
+        assert!(!EDITOR_SPRITE_JS.contains("frame.style.gridColumn"));
+        assert!(!EDITOR_SPRITE_JS.contains("frame.style.gridRow"));
+        assert!(!EDITOR_SPRITE_JS.contains("is-clip-selected"));
+        assert!(EDITOR_CSS.contains(".sprite-clip-selection-frame {\n  position: absolute;"));
+        assert!(EDITOR_CSS.contains("left: calc(var(--sprite-clip-x) * var(--sprite-cell));"));
+        assert!(EDITOR_CSS.contains("background: transparent;"));
+    }
+
+    #[test]
+    fn sprite_board_rerender_does_not_empty_scroll_content_before_replace() {
+        assert!(EDITOR_SPRITE_JS.contains("const nextBoard = document.createDocumentFragment();"));
+        assert!(EDITOR_SPRITE_JS.contains("renderSpriteClipSelectionFrame(nextBoard);"));
+        assert!(EDITOR_SPRITE_JS.contains("spriteBoard.replaceChildren(nextBoard);"));
+        assert!(!EDITOR_SPRITE_JS.contains("spriteBoard.replaceChildren();"));
+    }
+
+    #[test]
+    fn sprite_clip_toolbar_keeps_clip_and_clear_only() {
+        assert!(EDITOR_SPRITE_JS.contains("ariaLabel: \"Clip sprite area\","));
+        assert!(EDITOR_SPRITE_JS.contains("ariaLabel: \"Clear selected sprite area\","));
+        assert!(!EDITOR_SPRITE_JS.contains("ariaLabel: \"Copy selected sprite area\","));
+        assert!(!EDITOR_SPRITE_JS.contains("ariaLabel: \"Cut selected sprite area\","));
+        assert!(!EDITOR_SPRITE_JS.contains("ariaLabel: \"Paste copied sprite area\","));
+    }
+
+    #[test]
+    fn sprite_source_actions_stay_inside_sprite_pane() {
+        assert!(EDITOR_HTML.contains(
+            r#"<div class="source-action-group source-preview-actions sprite-source-actions sprite-header-actions" role="group" aria-label="Sprite source actions">"#
+        ));
+        assert!(EDITOR_HTML.contains(
+            r#"<div class="source-action-group source-preview-actions sprite-source-actions sprite-header-actions" role="group" aria-label="3D sprite source actions">"#
+        ));
+        assert!(EDITOR_WORKBENCH_JS.contains("if (paneId === \"sprite\") {\n    return [];\n  }"));
+        assert!(!EDITOR_CSS.contains(".pane-title .sprite-header-actions"));
     }
 
     #[test]
@@ -6016,13 +6104,38 @@ levels3 demo of push3 {
     }
 
     #[test]
-    fn sprite_asset_tables_require_explicit_selector_keys() {
+    fn sprite_source_loader_consumes_lang_sprite_contract_instead_of_source_parsing() {
         assert!(!EDITOR_SPRITE_JS.contains("`${tableName}:*`"));
         assert!(!EDITOR_SPRITE_JS.contains(":*"));
         assert!(EDITOR_SPRITE_JS.contains(
-            "const key = assets.has(name) ? name : spriteTableAssetKey(name, assets, selectorName);"
+            "sprite.sourceSpriteContract = entry?.sourceSprite && typeof entry.sourceSprite === \"object\""
         ));
-        assert!(EDITOR_SPRITE_JS.contains("return \"\";\n}"));
+        assert!(EDITOR_SPRITE_JS.contains("function spriteSourceColorAssets()"));
+        assert!(EDITOR_SPRITE_JS.contains("function spriteSourceShapeAssets()"));
+        assert!(EDITOR_SPRITE_JS.contains("Array.isArray(contract?.colorAssets)"));
+        assert!(EDITOR_SPRITE_JS.contains("Array.isArray(contract?.shapeAssets)"));
+        assert!(EDITOR_SPRITE_JS.contains("Array.isArray(contract?.resolvedPalette)"));
+        assert!(EDITOR_SPRITE_JS.contains("Array.isArray(contract?.resolvedShapeRows)"));
+        for forbidden in [
+            "parseSpriteColorAssets",
+            "parseSpriteShapeAssets",
+            "resolveSpriteColorAssetToken",
+            "resolveSpriteShapeAssetToken",
+            "spritePaletteEntryFromSourceToken",
+            "parseSpriteValueMaps",
+            "collectSpriteShapeTableRows",
+            "collectSpriteShapeRotationBlocks",
+            "parseSpriteShapeRotationDirective",
+            "expandSpriteShapeRotationRows",
+            "spriteTableAssetKey",
+            "firstSpriteTableAssetKey",
+            "spriteSelectorSingleTagBinding",
+        ] {
+            assert!(
+                !EDITOR_SPRITE_JS.contains(forbidden),
+                "{forbidden} should not exist in editor sprite source loading"
+            );
+        }
     }
 
     #[test]
@@ -6057,11 +6170,17 @@ levels3 demo of push3 {
 
     #[test]
     fn sprite_source_loader_accepts_bare_shape_refs() {
-        assert!(EDITOR_SPRITE_JS.contains("const shapeAssets = parseSpriteShapeAssets(source);"));
-        assert!(EDITOR_SPRITE_JS.contains("} else if (asciiRows.length === 1) {"));
         assert!(EDITOR_SPRITE_JS.contains(
-            "const shapeRows = resolveSpriteShapeAssetToken(shapeName, shapeAssets, selectorName);"
+            "const loaded = parseSpriteDefinitionSource(target.sourceSprite, targetName);"
         ));
+        assert!(
+            EDITOR_SPRITE_JS
+                .contains("const resolvedPalette = Array.isArray(contract.resolvedPalette)")
+        );
+        assert!(
+            EDITOR_SPRITE_JS
+                .contains("const shapeRows = Array.isArray(contract.resolvedShapeRows)")
+        );
         assert!(
             EDITOR_SPRITE_JS
                 .contains("shapeBind = { type: \"shape\", name: shapeName, linked: true };")
@@ -6106,33 +6225,65 @@ levels3 demo of push3 {
     }
 
     #[test]
-    fn sprite_source_loader_projects_generic_table_refs() {
-        assert!(EDITOR_SPRITE_JS.contains("function spriteSelectorSingleTagBinding("));
-        assert!(EDITOR_SPRITE_JS.contains("function firstSpriteTableAssetKey(tableName, assets)"));
+    fn sprite_source_loader_projects_generic_refs_from_lang_contract() {
         assert!(EDITOR_SPRITE_JS.contains(
-            "const selectorBinding = spriteSelectorSingleTagBinding(selectorName, name.slice(separator + 1));"
+            "for (const entry of Array.isArray(contract?.resolvedPalette) ? contract.resolvedPalette : [])"
         ));
-        assert!(EDITOR_SPRITE_JS.contains("return firstSpriteTableAssetKey(tableName, assets);"));
+        assert!(EDITOR_SPRITE_JS.contains("if (entry?.linked && name && color)"));
+        assert!(EDITOR_SPRITE_JS.contains(
+            "const source = String(entry?.source || paletteTokens[index] || \"\").trim();"
+        ));
+        assert!(
+            EDITOR_SPRITE_JS
+                .contains("paletteEntry.bind = { type: \"color\", name: source, linked: true };")
+        );
     }
 
     #[test]
-    fn sprite_source_loader_reads_rotated_shape_table_base_rows() {
+    fn sprite_source_loader_reads_resolved_shape_rows_from_lang_contract() {
+        assert!(EDITOR_SPRITE_JS.contains("const shapes = spriteSourceShapeAssets();"));
+        assert!(EDITOR_SPRITE_JS.contains("const rows = Array.isArray(entry?.rows)"));
+        assert!(
+            EDITOR_SPRITE_JS
+                .contains("const resolvedRows = Array.isArray(contract?.resolvedShapeRows)")
+        );
+        assert!(EDITOR_SPRITE_JS.contains("assets.set(shapeName, resolvedRows);"));
+        assert!(EDITOR_SPRITE_JS.contains("if (!shapeRows.length)"));
+        assert!(EDITOR_SPRITE_JS.contains("Cannot resolve shape ${name}"));
+    }
+
+    #[test]
+    fn sprite_source_loader_preserves_sprite_prelude_rows() {
+        assert!(EDITOR_JS.contains("sourcePreludeRows: [],"));
+        assert!(
+            EDITOR_JS.contains(
+                "sourcePreludeRows: cloneVisualEditValue(sprite.sourcePreludeRows || []),"
+            )
+        );
         assert!(EDITOR_SPRITE_JS.contains(
-            "const tablePattern = /(^|\\n)([\\t ]*)([A-Za-z_][\\w]*):([A-Za-z_][\\w]*)([^\\n{]*)\\{/g;"
+            "const loaded = parseSpriteDefinitionSource(target.sourceSprite, targetName);"
         ));
-        assert!(EDITOR_SPRITE_JS.contains("function parseSpriteValueMaps(source)"));
-        assert!(EDITOR_SPRITE_JS.contains("function parseSpriteShapeRotationDirective(text)"));
-        assert!(EDITOR_SPRITE_JS.contains("function expandSpriteShapeRotationRows("));
-        assert!(EDITOR_SPRITE_JS.contains("function rotateSpriteAsciiRowsClockwise(rows)"));
-        assert!(EDITOR_SPRITE_JS.contains("markSpriteTableBindingAsset(raw, bindingKey);"));
+        assert!(!EDITOR_SPRITE_JS.contains(
+            "parseSpriteDefinitionSource(source.slice(target.bodyStart, target.bodyEnd)"
+        ));
+        assert!(!EDITOR_SPRITE_JS.contains("function isSpriteSourcePreludeRow(row)"));
         assert!(
             EDITOR_SPRITE_JS
-                .contains("if (assets.has(name) && !spriteTableAssetIsBinding(assets, name))")
+                .contains("const sourcePreludeRows = Array.isArray(contract.preludeRows)")
         );
         assert!(
             EDITOR_SPRITE_JS
-                .contains("if (selectorValue && assets.has(`${tableName}:${selectorValue}`))")
+                .contains("const paletteTokens = Array.isArray(contract.paletteTokens)")
         );
+        assert!(EDITOR_SPRITE_JS.contains("const asciiRows = Array.isArray(contract.pixelRows)"));
+        assert!(
+            EDITOR_SPRITE_JS.contains("const shapeName = typeof contract.shapeRef === \"string\"")
+        );
+        assert!(EDITOR_SPRITE_JS.contains("sourcePreludeRows,"));
+        assert!(EDITOR_SPRITE_JS.contains(
+            "const preludeRows = spriteSourcePreludeRows().map((row) => `${rowIndent}${row}`);"
+        ));
+        assert!(EDITOR_SPRITE_JS.contains("...preludeRows,"));
     }
 
     #[test]
@@ -6148,8 +6299,10 @@ levels3 demo of push3 {
         assert!(EDITOR_SPRITE_JS.contains("sourceEditor.focus({ preventScroll: true });"));
         assert!(EDITOR_SPRITE_JS.contains("function currentSpriteEditSourceRange(source)"));
         assert!(EDITOR_SPRITE_JS.contains("end: entry.start + replacement.length"));
+        assert!(EDITOR_SPRITE_JS.contains("async function replaceCurrentSpriteDefinitionFromParser"));
+        assert!(EDITOR_SPRITE_JS.contains("const result = await replaceCurrentSpriteDefinitionFromParser(stagedSource);"));
         assert!(EDITOR_SPRITE_JS.contains(
-            "setSpriteEditSource({ start: result.start, end: result.end, name: spriteObjectName() }, document);"
+            "setSpriteEditSource({ ...result.target, start: result.start, end: result.end, name: spriteObjectName() }, document);"
         ));
         assert!(EDITOR_SPRITE_JS.contains("const start = sprite.editSourceStart;"));
         assert!(EDITOR_SPRITE_JS.contains("const end = sprite.editSourceEnd;"));
@@ -6234,6 +6387,7 @@ levels3 demo of push3 {
         assert!(EDITOR_BOOT_JS.contains("New puzzle source is browser-runtime owned"));
         assert!(!EDITOR_BOOT_JS.contains(r#"invoke("new_puzzle_source", { request: payload })"#));
         assert!(EDITOR_WORKSPACE_JS.contains("async function newPuzzleSourceForFile(_name)"));
+        assert!(EDITOR_WORKSPACE_JS.contains("/\\.(?:puzzle|puzzle3)$/i.test(cleaned)"));
         assert!(!EDITOR_WORKSPACE_JS.contains("window.PuzzleStudioHost.newPuzzleSource"));
         assert!(
             EDITOR_WORKSPACE_JS
@@ -6336,6 +6490,18 @@ levels3 demo of push3 {
         assert_eq!(
             fs::read_to_string(&created).expect("read created file"),
             editor_fixture_source("Imported")
+        );
+
+        let created_puzzle3 = service
+            .create_source_file(&CreateSourceFileRequest::new(
+                "puzzle3 imported3 {}\n",
+                "imported3.puzzle3",
+            ))
+            .expect("create new puzzle3 file");
+        assert!(created_puzzle3.ends_with("imported3.puzzle3"));
+        assert_eq!(
+            fs::read_to_string(&created_puzzle3).expect("read created puzzle3 file"),
+            "puzzle3 imported3 {}\n"
         );
 
         let outside_error = service
@@ -6829,10 +6995,10 @@ levels3 demo of push3 {
         );
         assert!(
             EDITOR_HTML
-                .contains(r#"<script src="editor_source.js?v=source-folding-state"></script>"#)
+                .contains(r#"<script src="editor_source.js?v=outline-pane-layout"></script>"#)
         );
         assert!(EDITOR_HTML.contains(
-            r#"<script src="editor_workspace.js?v=delete-active-source-sync"></script>"#
+            r#"<script src="editor_workspace.js?v=outline-pane-layout"></script>"#
         ));
         assert!(
             EDITOR_HTML.contains(
@@ -7031,7 +7197,7 @@ levels3 demo of push3 {
             .find("window.PuzzleEditorSeed = JSON.parse")
             .expect("seeded editor should define seed before workspace scripts load");
         let embedded_documents_index = html
-            .find(r#"<script src="editor_workspace.js?v=delete-active-source-sync"></script>"#)
+            .find(r#"<script src="editor_workspace.js?v=outline-pane-layout"></script>"#)
             .expect("seeded editor should load workspace code after seed data");
 
         assert!(

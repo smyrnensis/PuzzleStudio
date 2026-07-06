@@ -174,6 +174,12 @@
       }
       return editorRuntime().highlightSource(payload);
     },
+    async sourceOutline(payload, options = {}) {
+      if (options.signal?.aborted) {
+        throw new DOMException("Outline request was aborted.", "AbortError");
+      }
+      return editorRuntime().sourceOutline(payload);
+    },
     async soundTools() {
       const invoke = tauriInvoke();
       if (invoke) {

@@ -478,28 +478,10 @@ class PuzzleRenderer {
           continue;
         }
         const { cols: cellCols, rows: cellRows } = this.spriteCellGrid(definition);
-        unit = this.leastCommonMultiple(unit, cellCols);
-        unit = this.leastCommonMultiple(unit, cellRows);
+        unit = Math.max(unit, cellCols, cellRows);
       }
     }
-    return hasImage ? this.leastCommonMultiple(unit, 32) : unit;
-  }
-
-  leastCommonMultiple(a, b) {
-    const left = Math.max(1, Math.trunc(Number(a) || 1));
-    const right = Math.max(1, Math.trunc(Number(b) || 1));
-    return (left * right) / this.greatestCommonDivisor(left, right);
-  }
-
-  greatestCommonDivisor(a, b) {
-    let left = Math.abs(a);
-    let right = Math.abs(b);
-    while (right) {
-      const next = left % right;
-      left = right;
-      right = next;
-    }
-    return left || 1;
+    return hasImage ? Math.max(unit, 32) : unit;
   }
 
   canvasFloorColor() {

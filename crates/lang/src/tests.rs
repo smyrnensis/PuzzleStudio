@@ -6793,6 +6793,93 @@ C
 }
 
 #[test]
+fn puzzle_sprites_warn_when_sprite_grid_does_not_divide_largest_grid() {
+    let source = r##"
+title sprite_grid_warning
+
+puzzle default {
+layers {
+__legacy_layer_0 = Box Pull
+}
+legend B = Box
+legend {
+. = empty
+}
+sprites {
+Box
+#aaa
+0000
+0000
+0000
+0000
+
+Pull
+#bbb
+000
+000
+000
+}
+rules {
+
+}
+levels {
+level "start"
+B
+}
+}
+"##;
+    let loaded = parse_game(source).unwrap();
+
+    assert!(loaded.warnings.iter().any(|warning| {
+        warning.contains("visual sprite `Pull` uses a 3x3 cell grid")
+            && warning.contains("does not divide the largest sprite grid 4")
+    }));
+}
+
+#[test]
+fn puzzle_sprites_do_not_warn_when_sprite_grid_divides_largest_grid() {
+    let source = r##"
+title sprite_grid_divides
+
+puzzle default {
+layers {
+__legacy_layer_0 = Box Pull
+}
+legend B = Box
+legend {
+. = empty
+}
+sprites {
+Box
+#aaa
+0000
+0000
+0000
+0000
+
+Pull
+#bbb
+00
+00
+}
+rules {
+
+}
+levels {
+level "start"
+B
+}
+}
+"##;
+    let loaded = parse_game(source).unwrap();
+
+    assert!(!loaded
+        .warnings
+        .iter()
+        .any(|warning| warning.contains("largest sprite grid")));
+}
+
+#[test]
 fn puzzle_sprites_accept_line_style_tagged_ascii_sprite_after_pattern() {
     let source = r##"
 title line_style_tagged_ascii_sprite
@@ -13947,6 +14034,60 @@ level "start" {
 }
 
 #[test]
+fn puzzle_render_parses_cell_size() {
+    let source = r#"
+title cell_size_render
+
+puzzle default {
+layers 1
+empty .
+
+render {
+cell_size 64
+}
+
+rules {
+
+}
+
+level "start" {
+.
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+
+    assert_eq!(loaded.render.cell_size, Some(64));
+}
+
+#[test]
+fn puzzle_render_rejects_invalid_cell_size() {
+    let source = r#"
+title cell_size_render
+
+puzzle default {
+layers 1
+empty .
+
+render {
+cell_size 0
+}
+
+rules {
+
+}
+
+level "start" {
+.
+}
+}
+"#;
+    let err = parse_game(source).unwrap_err().to_string();
+
+    assert!(err.contains("cell_size must be an integer from 1 to 256"));
+}
+
+#[test]
 fn puzzle_render_rejects_old_boolean_grid_assignments() {
     let source = r#"
 title grid_render
@@ -16067,8 +16208,10 @@ P
 
 scene mixed_play {
 layout {
+row {
 flat_board = puzzle flat
 cube_board = puzzle3 cube
+}
 }
 }
 "#;
@@ -16413,8 +16556,10 @@ levels3 cube_levels of cube {
 
 scene mixed_play {
   layout {
-    flat_board = puzzle flat
-    cube_board = puzzle3 cube
+    row {
+      flat_board = puzzle flat
+      cube_board = puzzle3 cube
+    }
   }
 }
 "#,

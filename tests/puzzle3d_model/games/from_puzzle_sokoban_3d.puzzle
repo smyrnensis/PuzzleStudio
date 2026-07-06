@@ -32,7 +32,7 @@ levels3 handmade of from_puzzle_sokoban_3d {
     # = Wall
   }
 
-  level push_once {
+  level "push_once" {
     #####
     #...#
     #PB.#
@@ -46,7 +46,7 @@ levels3 handmade of from_puzzle_sokoban_3d {
     ,,,,,
   }
 
-  level corner_lift {
+  level "corner_lift" {
     #####
     #...#
     #.B.#

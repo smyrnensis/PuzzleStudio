@@ -52,6 +52,7 @@
       const next = JSON.parse(raw);
       if (method === "POST") {
         this.writeSessionProgressSave();
+        next.has_progress_save = true;
       }
       return next;
     }
@@ -111,15 +112,34 @@
       return `PuzzleStudio.progress.v${this.progressSaveVersion()}:${key}`;
     }
 
+    editorPreviewProgressSave() {
+      if (window.parent === window) {
+        return "";
+      }
+      const saves = window.PuzzleStudioEditorPreviewProgressSaves;
+      const value = saves && saves[this.progressSaveStorageKey()];
+      return typeof value === "string" ? value : "";
+    }
+
+    notifyEditorPreviewProgressSave(type, saveJson = "") {
+      if (window.parent === window) {
+        return;
+      }
+      window.parent.postMessage({
+        type,
+        storageKey: this.progressSaveStorageKey(),
+        saveJson,
+      }, "*");
+    }
+
     restoreSessionProgressSave() {
       if (!this.sessionRuntime) {
         return;
       }
-      let raw;
+      let raw = this.editorPreviewProgressSave();
       try {
-        raw = window.localStorage?.getItem(this.progressSaveStorageKey());
+        raw = raw || window.localStorage?.getItem(this.progressSaveStorageKey());
       } catch (_error) {
-        return;
       }
       if (!raw) {
         return;
@@ -139,18 +159,21 @@
       if (!this.sessionRuntime) {
         return;
       }
+      const saveJson = this.sessionRuntime.progress_save();
+      this.notifyEditorPreviewProgressSave("PuzzleStudioPreviewProgressSave", saveJson);
       try {
-        window.localStorage?.setItem(this.progressSaveStorageKey(), this.sessionRuntime.progress_save());
-        this.sessionRuntime.mark_progress_save_written();
+        window.localStorage?.setItem(this.progressSaveStorageKey(), saveJson);
       } catch (_error) {
         // Browsers can deny storage for local files, private windows, or quota limits.
       }
+      this.sessionRuntime.mark_progress_save_written();
     }
 
     clearSessionProgressSave() {
       if (this.sessionRuntime) {
         this.sessionRuntime.clear_progress_save();
       }
+      this.notifyEditorPreviewProgressSave("PuzzleStudioPreviewProgressSaveClear");
       try {
         window.localStorage?.removeItem(this.progressSaveStorageKey());
       } catch (_error) {

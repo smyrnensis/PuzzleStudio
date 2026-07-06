@@ -1,7 +1,8 @@
 use crate::source::{
-    SourceContext, SourceContextLine, SourceScope, scan_source_context, strip_line_comment,
+    SourceContext, SourceContextLine, SourceScope, scan_source_context, split_header_tokens,
+    strip_line_comment,
 };
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SourceTargetKind {
@@ -50,6 +51,38 @@ pub struct SourceTarget {
     pub level_index: Option<usize>,
     pub sound_kind: Option<SoundSourceTargetKind>,
     pub params: Vec<(String, String)>,
+    pub source_sprite: Option<SourceSpriteTarget>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SourceSpriteTarget {
+    pub prelude_rows: Vec<String>,
+    pub palette_tokens: Vec<String>,
+    pub resolved_palette: Vec<SourceSpritePaletteEntry>,
+    pub pixel_rows: Vec<String>,
+    pub shape_ref: Option<String>,
+    pub resolved_shape_rows: Vec<String>,
+    pub color_assets: Vec<SourceSpriteColorAsset>,
+    pub shape_assets: Vec<SourceSpriteShapeAsset>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SourceSpritePaletteEntry {
+    pub source: String,
+    pub color: String,
+    pub linked: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SourceSpriteColorAsset {
+    pub name: String,
+    pub color: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SourceSpriteShapeAsset {
+    pub name: String,
+    pub rows: Vec<String>,
 }
 
 pub fn resolve_source_target(source: &str, cursor_offset: usize) -> Option<SourceTarget> {
@@ -111,7 +144,81 @@ fn push_target_json(out: &mut String, target: &SourceTarget) {
         }
         out.push('}');
     }
+    if let Some(sprite) = &target.source_sprite {
+        out.push_str(",\"sourceSprite\":");
+        push_source_sprite_json(out, sprite);
+    }
     out.push('}');
+}
+
+fn push_source_sprite_json(out: &mut String, sprite: &SourceSpriteTarget) {
+    out.push('{');
+    push_json_string_array(out, "preludeRows", &sprite.prelude_rows);
+    out.push(',');
+    push_json_string_array(out, "paletteTokens", &sprite.palette_tokens);
+    out.push_str(",\"resolvedPalette\":");
+    push_source_sprite_palette_json(out, &sprite.resolved_palette);
+    out.push(',');
+    push_json_string_array(out, "pixelRows", &sprite.pixel_rows);
+    out.push_str(",\"shapeRef\":");
+    match &sprite.shape_ref {
+        Some(shape_ref) => push_json_string_value(out, shape_ref),
+        None => out.push_str("null"),
+    }
+    out.push_str(",\"resolvedShapeRows\":");
+    push_json_string_array_value(out, &sprite.resolved_shape_rows);
+    out.push_str(",\"colorAssets\":");
+    push_source_sprite_color_assets_json(out, &sprite.color_assets);
+    out.push_str(",\"shapeAssets\":");
+    push_source_sprite_shape_assets_json(out, &sprite.shape_assets);
+    out.push('}');
+}
+
+fn push_source_sprite_palette_json(out: &mut String, entries: &[SourceSpritePaletteEntry]) {
+    out.push('[');
+    for (index, entry) in entries.iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        out.push('{');
+        push_json_string(out, "source", &entry.source);
+        out.push(',');
+        push_json_string(out, "color", &entry.color);
+        out.push_str(",\"linked\":");
+        out.push_str(if entry.linked { "true" } else { "false" });
+        out.push('}');
+    }
+    out.push(']');
+}
+
+fn push_source_sprite_color_assets_json(out: &mut String, entries: &[SourceSpriteColorAsset]) {
+    out.push('[');
+    for (index, entry) in entries.iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        out.push('{');
+        push_json_string(out, "name", &entry.name);
+        out.push(',');
+        push_json_string(out, "color", &entry.color);
+        out.push('}');
+    }
+    out.push(']');
+}
+
+fn push_source_sprite_shape_assets_json(out: &mut String, entries: &[SourceSpriteShapeAsset]) {
+    out.push('[');
+    for (index, entry) in entries.iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        out.push('{');
+        push_json_string(out, "name", &entry.name);
+        out.push_str(",\"rows\":");
+        push_json_string_array_value(out, &entry.rows);
+        out.push('}');
+    }
+    out.push(']');
 }
 
 fn resolve_sounds_target(context: &SourceContext, cursor: usize) -> Option<SourceTarget> {
@@ -131,6 +238,7 @@ fn resolve_sounds_target(context: &SourceContext, cursor: usize) -> Option<Sourc
             level_index: None,
             sound_kind: Some(sound_kind),
             params,
+            source_sprite: None,
         });
     }
     None
@@ -206,6 +314,7 @@ fn resolve_level_target(
             level_index: Some(current_index),
             sound_kind: None,
             params: Vec::new(),
+            source_sprite: None,
         });
     }
     None
@@ -253,6 +362,7 @@ fn resolve_level3d_target(
                 level_index: Some(current_index),
                 sound_kind: None,
                 params: vec![("bundle".to_string(), bundle), ("model".to_string(), model)],
+                source_sprite: None,
             });
         }
     }
@@ -312,7 +422,11 @@ fn resolve_sprite_target(
     visual_refs: &VisualSpriteRefs,
 ) -> Option<SourceTarget> {
     let sprite3d_blocks = sprite3d_blocks(source, context);
+    let mut covered_until = 0usize;
     for (index, line) in context.lines.iter().enumerate() {
+        if line.start < covered_until {
+            continue;
+        }
         if !sprite_header_scope(line.scope) {
             continue;
         }
@@ -327,6 +441,8 @@ fn resolve_sprite_target(
             if cursor < line.start || cursor > line_end {
                 continue;
             }
+            let source_sprite =
+                source_sprite_target(source, &name, body_start, line_end, visual_refs);
             return Some(SourceTarget {
                 kind: SourceTargetKind::Sprite,
                 name,
@@ -337,6 +453,7 @@ fn resolve_sprite_target(
                 level_index: None,
                 sound_kind: None,
                 params: Vec::new(),
+                source_sprite,
             });
         }
         let Some(name) = sprite_name(line) else {
@@ -347,9 +464,20 @@ fn resolve_sprite_target(
             .map(|offset| line.start + offset)
         {
             let end = find_matching_brace(source, open_index)? + 1;
-            if cursor < line.start || cursor > end {
+            if cursor < line.start {
                 continue;
             }
+            if cursor > end {
+                covered_until = end;
+                continue;
+            }
+            let source_sprite = source_sprite_target(
+                source,
+                &name,
+                open_index + 1,
+                end.saturating_sub(1),
+                visual_refs,
+            );
             return Some(SourceTarget {
                 kind: SourceTargetKind::Sprite,
                 name,
@@ -360,15 +488,21 @@ fn resolve_sprite_target(
                 level_index: None,
                 sound_kind: None,
                 params: Vec::new(),
+                source_sprite,
             });
         }
         let Some((end, body_start, body_end)) = unbraced_sprite_range(context, index, visual_refs)
         else {
             continue;
         };
-        if cursor < line.start || cursor > end {
+        if cursor < line.start {
             continue;
         }
+        if cursor > end {
+            covered_until = end;
+            continue;
+        }
+        let source_sprite = source_sprite_target(source, &name, body_start, body_end, visual_refs);
         return Some(SourceTarget {
             kind: SourceTargetKind::Sprite,
             name,
@@ -379,9 +513,174 @@ fn resolve_sprite_target(
             level_index: None,
             sound_kind: None,
             params: Vec::new(),
+            source_sprite,
         });
     }
     None
+}
+
+fn source_sprite_target(
+    source: &str,
+    target_name: &str,
+    body_start: usize,
+    body_end: usize,
+    visual_refs: &VisualSpriteRefs,
+) -> Option<SourceSpriteTarget> {
+    let body = source.get(body_start..body_end)?;
+    let mut target = SourceSpriteTarget::default();
+    let mut saw_palette = false;
+    for raw_line in body.lines() {
+        let trimmed = code_trim(raw_line);
+        if trimmed.is_empty() {
+            continue;
+        }
+        let tokens = split_header_tokens(trimmed);
+        match tokens.as_slice() {
+            ["rotate", ..] | ["pixels_per_cell", ..] | ["offset", ..] => {
+                target.prelude_rows.push(trimmed.to_string());
+            }
+            ["colors", colors @ ..] if !saw_palette && !colors.is_empty() => {
+                target.palette_tokens = colors.iter().map(|token| (*token).to_string()).collect();
+                saw_palette = true;
+            }
+            ["shape", shape] => {
+                target.shape_ref = Some((*shape).to_string());
+            }
+            [shape]
+                if saw_palette
+                    && target.shape_ref.is_none()
+                    && target.pixel_rows.is_empty()
+                    && visual_refs.contains_shape(shape) =>
+            {
+                target.shape_ref = Some((*shape).to_string());
+            }
+            _ if !saw_palette && is_sprite_entry_start_color_row(trimmed, visual_refs) => {
+                target.palette_tokens = tokens.iter().map(|token| (*token).to_string()).collect();
+                saw_palette = true;
+            }
+            _ if saw_palette && target.shape_ref.is_none() => {
+                target.pixel_rows.push(trimmed.to_string());
+            }
+            _ => {}
+        }
+    }
+    target.color_assets = visual_refs
+        .color_assets
+        .iter()
+        .map(|(name, color)| SourceSpriteColorAsset {
+            name: name.clone(),
+            color: color.clone(),
+        })
+        .collect();
+    target
+        .color_assets
+        .sort_by(|left, right| left.name.cmp(&right.name));
+    target.shape_assets = visual_refs
+        .shape_assets
+        .iter()
+        .map(|(name, rows)| SourceSpriteShapeAsset {
+            name: name.clone(),
+            rows: rows.clone(),
+        })
+        .collect();
+    target
+        .shape_assets
+        .sort_by(|left, right| left.name.cmp(&right.name));
+    enrich_source_sprite_target_from_loaded_visual(source, target_name, &mut target);
+    if target.resolved_palette.is_empty() {
+        target.resolved_palette = direct_source_sprite_palette(&target.palette_tokens);
+    }
+    Some(target)
+}
+
+fn enrich_source_sprite_target_from_loaded_visual(
+    source: &str,
+    target_name: &str,
+    target: &mut SourceSpriteTarget,
+) {
+    let Some(sprite) = loaded_visual_sprite_for_source_target(source, target_name) else {
+        return;
+    };
+    match sprite.kind {
+        crate::VisualSpriteKind::Solid(color) => {
+            let source = target
+                .palette_tokens
+                .first()
+                .cloned()
+                .unwrap_or_else(|| color.clone());
+            target.resolved_palette = vec![SourceSpritePaletteEntry {
+                linked: source != color && !is_sprite_color(&source),
+                source,
+                color,
+            }];
+        }
+        crate::VisualSpriteKind::Ascii { pattern, colors } => {
+            target.resolved_palette = colors
+                .into_iter()
+                .enumerate()
+                .map(|(index, color)| {
+                    let source = target
+                        .palette_tokens
+                        .get(index)
+                        .cloned()
+                        .unwrap_or_else(|| color.color.clone());
+                    SourceSpritePaletteEntry {
+                        linked: source != color.color && !is_sprite_color(&source),
+                        source,
+                        color: color.color,
+                    }
+                })
+                .collect();
+            if target.shape_ref.is_some() {
+                target.resolved_shape_rows = pattern;
+            }
+        }
+        crate::VisualSpriteKind::Image { .. } => {}
+    }
+}
+
+fn loaded_visual_sprite_for_source_target(
+    source: &str,
+    target_name: &str,
+) -> Option<crate::VisualSpriteDef> {
+    let document = crate::parse_game_document(source).ok()?;
+    let clean_target = clean_name_token(target_name);
+    let mut candidate_sprite_names = HashSet::<String>::new();
+    candidate_sprite_names.insert(clean_target.clone());
+    candidate_sprite_names.insert(crate::sprite_name_for_object(&clean_target));
+    for model in &document.models {
+        let crate::LoadedDocumentModel::Puzzle2d { game, .. } = model else {
+            continue;
+        };
+        for alias in &game.visuals.aliases {
+            if alias.object == clean_target {
+                candidate_sprite_names.insert(alias.sprite.clone());
+            }
+        }
+        if let Some(sprite) = game
+            .visuals
+            .sprites
+            .iter()
+            .find(|sprite| candidate_sprite_names.contains(&sprite.name))
+        {
+            return Some(sprite.clone());
+        }
+    }
+    None
+}
+
+fn direct_source_sprite_palette(tokens: &[String]) -> Vec<SourceSpritePaletteEntry> {
+    if tokens.is_empty() || !tokens.iter().all(|token| is_sprite_color(token)) {
+        return Vec::new();
+    }
+    tokens
+        .iter()
+        .map(|token| SourceSpritePaletteEntry {
+            source: token.clone(),
+            color: token.clone(),
+            linked: false,
+        })
+        .collect()
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -493,6 +792,7 @@ fn resolve_sprite3d_target(
                 level_index: None,
                 sound_kind: None,
                 params: Vec::new(),
+                source_sprite: None,
             });
         }
     }
@@ -553,24 +853,37 @@ fn sprite_header_scope(scope: Option<SourceScope>) -> bool {
 #[derive(Default)]
 struct VisualSpriteRefs {
     color_names: HashSet<String>,
+    shape_names: HashSet<String>,
+    color_assets: HashMap<String, String>,
+    shape_assets: HashMap<String, Vec<String>>,
 }
 
 impl VisualSpriteRefs {
     fn contains(&self, value: &str) -> bool {
         self.color_names.contains(value)
     }
+
+    fn contains_shape(&self, value: &str) -> bool {
+        self.shape_names.contains(value)
+    }
 }
 
 fn collect_visual_sprite_refs(source: &str, context: &SourceContext) -> VisualSpriteRefs {
     let mut refs = VisualSpriteRefs::default();
     for line in &context.lines {
-        if !matches!(line.scope, Some(SourceScope::Visuals)) {
-            continue;
-        }
         let Some(kind) = line.tokens.first().map(String::as_str) else {
             continue;
         };
-        if kind != "colors" {
+        if !matches!(
+            (kind, line.scope),
+            (
+                "colors",
+                Some(SourceScope::Visuals | SourceScope::VisualColorTable)
+            ) | (
+                "shapes",
+                Some(SourceScope::Visuals | SourceScope::VisualShapeTable)
+            )
+        ) {
             continue;
         }
         let line_end = line_end(line);
@@ -583,7 +896,13 @@ fn collect_visual_sprite_refs(source: &str, context: &SourceContext) -> VisualSp
         let Some(close_index) = find_matching_brace(source, open_index) else {
             continue;
         };
-        collect_visual_flat_asset_names(context, open_index, close_index, &mut refs);
+        match kind {
+            "colors" => {
+                collect_visual_flat_asset_names(context, open_index, close_index, &mut refs)
+            }
+            "shapes" => collect_visual_shape_names(context, open_index, close_index, &mut refs),
+            _ => {}
+        }
     }
     refs
 }
@@ -601,13 +920,92 @@ fn collect_visual_flat_asset_names(
         if visual_asset_depth_at_line(context, open_index, line.start) != 0 {
             continue;
         }
-        let [name, equals, ..] = line.tokens.as_slice() else {
-            continue;
-        };
-        if equals == "=" && is_identifier_token(name) {
-            refs.color_names.insert(name.clone());
+        match line.tokens.as_slice() {
+            [name, equals, ..] if equals == "=" && is_identifier_token(name) => {
+                refs.color_names.insert(name.clone());
+                if let Some(color) = visual_color_assignment_value(&line.content) {
+                    refs.color_assets.insert(name.clone(), color);
+                }
+            }
+            [name]
+                if line.scope == Some(SourceScope::VisualColorTable)
+                    && is_identifier_token(name) =>
+            {
+                refs.color_names.insert(name.clone());
+                if let Some(color) = visual_color_assignment_value(&line.content) {
+                    refs.color_assets.insert(name.clone(), color);
+                }
+            }
+            _ => {}
         }
     }
+}
+
+fn collect_visual_shape_names(
+    context: &SourceContext,
+    open_index: usize,
+    close_index: usize,
+    refs: &mut VisualSpriteRefs,
+) {
+    for line in &context.lines {
+        if line.start <= open_index || line.start >= close_index {
+            continue;
+        }
+        if visual_asset_depth_at_line(context, open_index, line.start) != 0 {
+            continue;
+        }
+        let Some(first) = line.tokens.first() else {
+            continue;
+        };
+        if first == "shape" {
+            if let Some(name) = line.tokens.get(1) {
+                refs.shape_names.insert(name.clone());
+                if let Some(rows) = visual_plain_shape_rows(context, line, close_index) {
+                    refs.shape_assets.insert(name.clone(), rows);
+                }
+            }
+        } else if sprite_definition_name_token(first) {
+            refs.shape_names.insert(first.clone());
+            if let Some(rows) = visual_plain_shape_rows(context, line, close_index) {
+                refs.shape_assets.insert(first.clone(), rows);
+            }
+        }
+    }
+}
+
+fn visual_color_assignment_value(line: &str) -> Option<String> {
+    let (_, value) = strip_line_comment(line).split_once('=')?;
+    let value = value.trim().split_whitespace().next()?.trim();
+    (!value.is_empty()).then(|| value.to_string())
+}
+
+fn visual_plain_shape_rows(
+    context: &SourceContext,
+    header: &SourceContextLine,
+    close_index: usize,
+) -> Option<Vec<String>> {
+    let mut rows = Vec::new();
+    for line in context
+        .lines
+        .iter()
+        .filter(|line| line.start > header.start && line.start < close_index)
+    {
+        let row = code_trim(&line.content);
+        if row.is_empty() {
+            if rows.is_empty() {
+                continue;
+            }
+            break;
+        }
+        if row == "}" {
+            break;
+        }
+        if !rows.is_empty() && sprite_definition_name_token(row) {
+            break;
+        }
+        rows.push(row.to_string());
+    }
+    (!rows.is_empty()).then_some(rows)
 }
 
 fn visual_asset_depth_at_line(
@@ -946,6 +1344,23 @@ fn push_json_string(out: &mut String, key: &str, value: &str) {
     push_json_string_value(out, value);
 }
 
+fn push_json_string_array(out: &mut String, key: &str, values: &[String]) {
+    push_json_string_value(out, key);
+    out.push(':');
+    push_json_string_array_value(out, values);
+}
+
+fn push_json_string_array_value(out: &mut String, values: &[String]) {
+    out.push('[');
+    for (index, value) in values.iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        push_json_string_value(out, value);
+    }
+    out.push(']');
+}
+
 fn push_json_string_value(out: &mut String, value: &str) {
     out.push('"');
     escape_json_string(out, value);
@@ -967,7 +1382,9 @@ fn escape_json_string(out: &mut String, value: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::{SoundSourceTargetKind, SourceTargetKind, resolve_source_target};
+    use super::{
+        SoundSourceTargetKind, SourceSpritePaletteEntry, SourceTargetKind, resolve_source_target,
+    };
 
     #[test]
     fn resolves_level_body_to_named_level() {
@@ -1210,6 +1627,129 @@ Box
     }
 
     #[test]
+    fn tagged_sprite_color_name_row_stays_in_current_sprite_target() {
+        let source = r##"
+sprites {
+colors {
+GoalCount = #acacac
+}
+GoalCount:5
+GoalCount
+....................
+..........00........
+}
+"##;
+        let cursor = source.find("GoalCount\n....................").unwrap();
+        let target = resolve_source_target(source, cursor).unwrap();
+
+        assert_eq!(target.kind, SourceTargetKind::Sprite);
+        assert_eq!(target.name, "GoalCount:5");
+        let source_sprite = target
+            .source_sprite
+            .as_ref()
+            .expect("source sprite contract");
+        assert_eq!(source_sprite.palette_tokens, vec!["GoalCount".to_string()]);
+        assert_eq!(
+            source_sprite.pixel_rows,
+            vec![
+                "....................".to_string(),
+                "..........00........".to_string()
+            ]
+        );
+        let body = &source[target.body_start.unwrap()..target.body_end.unwrap()];
+        assert!(body.contains("GoalCount"));
+        assert!(body.contains("..........00........"));
+    }
+
+    #[test]
+    fn sprite_source_contract_resolves_palette_from_parser_visuals() {
+        let source = r##"
+puzzle main {
+layers {
+Player
+}
+
+rules {
+}
+}
+
+levels main of main {
+legend {
+. = empty
+P = Player
+}
+level "one"
+P
+}
+
+sprites {
+colors {
+accent = #e94f64
+}
+Player
+accent
+0
+}
+"##;
+        let cursor = source.find("accent\n0").unwrap();
+        let target = resolve_source_target(source, cursor).unwrap();
+        let source_sprite = target
+            .source_sprite
+            .as_ref()
+            .expect("source sprite contract");
+
+        assert_eq!(target.name, "Player");
+        assert_eq!(source_sprite.palette_tokens, vec!["accent".to_string()]);
+        assert_eq!(
+            source_sprite.resolved_palette,
+            vec![SourceSpritePaletteEntry {
+                source: "accent".to_string(),
+                color: "#e94f64".to_string(),
+                linked: true,
+            }]
+        );
+    }
+
+    #[test]
+    fn consecutive_tagged_sprite_color_name_rows_do_not_become_sprite_headers() {
+        let source = r##"
+sprites {
+colors {
+GoalCount = #acacac
+}
+GoalCount:1
+GoalCount
+....................
+..........00........
+GoalCount:2
+GoalCount
+....................
+........00..00......
+}
+"##;
+        let cursor = source
+            .find("GoalCount:2\nGoalCount\n....................")
+            .unwrap()
+            + "GoalCount:2\n".len();
+        let target = resolve_source_target(source, cursor).unwrap();
+
+        assert_eq!(target.kind, SourceTargetKind::Sprite);
+        assert_eq!(target.name, "GoalCount:2");
+        let source_sprite = target
+            .source_sprite
+            .as_ref()
+            .expect("source sprite contract");
+        assert_eq!(source_sprite.palette_tokens, vec!["GoalCount".to_string()]);
+        assert_eq!(
+            source_sprite.pixel_rows,
+            vec![
+                "....................".to_string(),
+                "........00..00......".to_string()
+            ]
+        );
+    }
+
+    #[test]
     fn line_style_sprite_accepts_user_named_color() {
         let source = r##"
 sprites {
@@ -1429,6 +1969,43 @@ Next
         let body = &source[target.body_start.unwrap()..target.body_end.unwrap()];
         assert!(body.contains("shape box_shape"));
         assert!(!body.contains("Next"));
+    }
+
+    #[test]
+    fn rotated_unbraced_sprite_prelude_stays_in_current_sprite_target() {
+        let source = r##"
+sprites {
+@LockedFrame:directions
+rotate from up
+#000000
+....................
+.000..000..000..000.
+}
+"##;
+        let cursor = source.find(".000..000").unwrap();
+        let target = resolve_source_target(source, cursor).unwrap();
+
+        assert_eq!(target.kind, SourceTargetKind::Sprite);
+        assert_eq!(target.name, "@LockedFrame:directions");
+        let source_sprite = target
+            .source_sprite
+            .as_ref()
+            .expect("source sprite contract");
+        assert_eq!(
+            source_sprite.prelude_rows,
+            vec!["rotate from up".to_string()]
+        );
+        assert_eq!(source_sprite.palette_tokens, vec!["#000000".to_string()]);
+        assert_eq!(
+            source_sprite.pixel_rows,
+            vec![
+                "....................".to_string(),
+                ".000..000..000..000.".to_string()
+            ]
+        );
+        let body = &source[target.body_start.unwrap()..target.body_end.unwrap()];
+        assert!(body.contains("rotate from up"));
+        assert!(body.contains(".000..000..000..000."));
     }
 
     #[test]

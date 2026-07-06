@@ -933,6 +933,12 @@ fn push_scene_object(
 
 fn push_puzzle_settings(out: &mut String, loaded: &LoadedGame) {
     out.push_str("\"settings\":{");
+    out.push_str("\"render\":{");
+    if let Some(cell_size) = loaded.render.cell_size {
+        push_json_number(out, "cellSize", u64::from(cell_size));
+    }
+    out.push('}');
+    out.push(',');
     out.push_str("\"grid\":{");
     let occupied_cells = loaded.render.grid.occupied_cells;
     let all_cells = loaded.render.grid.all_cells;

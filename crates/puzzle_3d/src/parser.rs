@@ -243,7 +243,8 @@ impl Parser3 {
             } else if line == "legend {" {
                 index = self.parse_legend_block(index + 1)?;
             } else if is_levels3_header(&line) {
-                index = self.parse_levels_block(index + 1)?;
+                let pack = parse_levels3_header(&line)?;
+                index = self.parse_levels_block(index + 1, pack.as_deref())?;
             } else if is_sprites3_header(&line) {
                 index = self.parse_sprites3_block(index + 1, &line)?;
             } else if let Some(name) = parse_scene_header(&line) {
@@ -776,7 +777,12 @@ impl Parser3 {
         Err(message("legend block missing }"))
     }
 
-    fn parse_levels_block(&mut self, mut index: usize) -> Result<usize, ParseError3> {
+    fn parse_levels_block(
+        &mut self,
+        mut index: usize,
+        pack: Option<&str>,
+    ) -> Result<usize, ParseError3> {
+        let mut namespace_count = 0usize;
         while index < self.lines.len() {
             let line = self.lines[index].clone();
             if line == "}" {
@@ -790,11 +796,39 @@ impl Parser3 {
                 index = self.parse_legend_block(index + 1)?;
                 continue;
             }
-            if let Some(name) = parse_level_header(&line) {
+            if puzzle_authoring::is_braced_level_header(&line) {
+                namespace_count += 1;
+                let auto_name = puzzle_authoring::namespaced_unnamed_level_name(
+                    pack,
+                    self.level_specs.len(),
+                    namespace_count,
+                );
+                let name = parse_level_header(&line, auto_name)?;
                 let (next, rows) = self.collect_level_body(index + 1)?;
                 self.level_specs.push(LevelSpec3 { name, rows });
                 index = next;
                 continue;
+            }
+            if line == "{" {
+                namespace_count += 1;
+                let name = puzzle_authoring::namespaced_unnamed_level_name(
+                    pack,
+                    self.level_specs.len(),
+                    namespace_count,
+                );
+                let (next, rows) = self.collect_level_body(index + 1)?;
+                self.level_specs.push(LevelSpec3 { name, rows });
+                index = next;
+                continue;
+            }
+            if line.trim_start().starts_with("level") {
+                let auto_name = puzzle_authoring::namespaced_unnamed_level_name(
+                    pack,
+                    self.level_specs.len(),
+                    namespace_count + 1,
+                );
+                parse_level_header(&line, auto_name)?;
+                return Err(message("3D level header must open a block with {"));
             }
             return Err(message(format!("unknown levels directive: {line}")));
         }
@@ -1497,10 +1531,9 @@ fn parse_legend_char(token: &str) -> Result<char, ParseError3> {
     Ok(ch)
 }
 
-fn parse_level_header(line: &str) -> Option<String> {
-    let rest = line.strip_prefix("level ")?;
-    let name = rest.strip_suffix('{')?.trim();
-    (!name.is_empty()).then(|| name.to_string())
+fn parse_level_header(line: &str, auto_name: String) -> Result<String, ParseError3> {
+    puzzle_authoring::parse_level_header_name_or_auto(line, auto_name)
+        .map_err(|error| message(format!("{}: {line}", error.message())))
 }
 
 fn parse_scene_header(line: &str) -> Option<String> {
@@ -1548,6 +1581,25 @@ fn is_levels3_header(line: &str) -> bool {
         || line
             .strip_prefix("levels3 ")
             .is_some_and(|rest| rest.ends_with('{'))
+}
+
+fn parse_levels3_header(line: &str) -> Result<Option<String>, ParseError3> {
+    let header = line
+        .strip_prefix("levels3")
+        .and_then(|rest| rest.strip_suffix('{'))
+        .ok_or_else(|| message("levels3 block must end with {"))?
+        .trim();
+    if header.is_empty() {
+        return Ok(None);
+    }
+    let parts = header.split_whitespace().collect::<Vec<_>>();
+    match parts.as_slice() {
+        [name] => Ok(Some((*name).to_string())),
+        [name, "of", _model] => Ok(Some((*name).to_string())),
+        _ => Err(message(
+            "levels3 header must be: levels3 [name [of model]] {",
+        )),
+    }
 }
 
 fn is_sprites3_header(line: &str) -> bool {

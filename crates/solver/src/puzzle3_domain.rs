@@ -149,7 +149,7 @@ B = Box
 G = Goal
 }
 
-level one {
+level "one" {
 PB.
 
 ..G

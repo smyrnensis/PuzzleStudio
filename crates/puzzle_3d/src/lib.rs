@@ -1621,7 +1621,7 @@ P = Player
 G = Goal
 }
 
-level start {
+level "start" {
 P..G
 }
 }
@@ -1901,7 +1901,7 @@ legend {
 P = Player
 }
 
-level one {
+level "one" {
 P
 }
 }
@@ -1934,7 +1934,7 @@ legend {
 P = Player
 }
 
-level one {
+level "one" {
 P
 }
 }
@@ -2101,7 +2101,7 @@ legend {
 P = Player
 }
 
-level start {
+level "start" {
 P.
 }
 }
@@ -2147,7 +2147,7 @@ P = Player
 B = Box
 }
 
-level start {
+level "start" {
 PB.
 }
 }
@@ -2290,7 +2290,7 @@ P = Player
 W = Wall
 }
 
-level start {
+level "start" {
 PW
 }
 }
@@ -2337,7 +2337,7 @@ legend {
 B = Box
 }
 
-level start {
+level "start" {
 BB..
 }
 }
@@ -2382,7 +2382,7 @@ legend {
 P = Player
 }
 
-level one {
+level "one" {
 P
 }
 }
@@ -2468,7 +2468,7 @@ B = Box
 C = Crate
 }
 
-level start {
+level "start" {
 B.C
 }
 }
@@ -2664,7 +2664,7 @@ G = Goal
 * = Goal Box
 }
 
-level stacked {
+level "stacked" {
 ...
 .G.
 ...
@@ -2695,6 +2695,32 @@ level stacked {
     }
 
     #[test]
+    fn parser_rejects_unquoted_3d_level_header_names() {
+        let err = parse_puzzle3d(
+            r#"
+layers {
+actor = Player
+}
+
+levels3 {
+legend {
+P = Player
+}
+
+level old_style {
+P
+}
+}
+"#,
+        )
+        .unwrap_err();
+
+        assert!(
+            matches!(err, ParseError3::Message(message) if message.contains("level header must be: level \"<id>\""))
+        );
+    }
+
+    #[test]
     fn parser_uses_dot_as_default_empty_char_for_3d_levels() {
         let parsed = parse_puzzle3d(
             r#"
@@ -2707,7 +2733,7 @@ legend {
 P = Player
 }
 
-level default_dot {
+level "default_dot" {
 P.
 }
 }
@@ -2739,7 +2765,7 @@ _ = empty
 P = Player
 }
 
-level override_empty {
+level "override_empty" {
 P.
 }
 }
@@ -2927,7 +2953,7 @@ legend {
 P = Player
 }
 
-level bad {
+level "bad" {
 PX
 }
 }
@@ -2963,7 +2989,7 @@ G = Goal
 B = Box
 }
 
-level solved {
+level "solved" {
 ...
 .B.
 ...
@@ -2973,7 +2999,7 @@ level solved {
 ...
 }
 
-level unsolved {
+level "unsolved" {
 ...
 ..B
 ...
@@ -3047,7 +3073,7 @@ G = Goal
 B = Box
 }
 
-level solved {
+level "solved" {
 ...
 .B.
 ...
@@ -3121,9 +3147,9 @@ on_last_level_clear {
         let win = parsed.win_condition.as_ref().expect("win condition exists");
 
         assert_eq!(bundle.level_count(), 3);
-        assert_eq!(bundle.level(0).unwrap().name, "microban_01");
-        assert_eq!(bundle.level(1).unwrap().name, "microban_02");
-        assert_eq!(bundle.level(2).unwrap().name, "microban_03");
+        assert_eq!(bundle.level(0).unwrap().name, "microban 1");
+        assert_eq!(bundle.level(1).unwrap().name, "microban 2");
+        assert_eq!(bundle.level(2).unwrap().name, "microban 3");
         assert_eq!(bundle.level(0).unwrap().level.size, Size3::new(6, 7, 2));
         assert_eq!(bundle.level(1).unwrap().level.size, Size3::new(6, 7, 2));
         assert_eq!(bundle.level(2).unwrap().level.size, Size3::new(9, 6, 2));
@@ -3293,8 +3319,8 @@ on_last_level_clear {
         let sprites = parsed.sprite_set.as_ref().expect("sprite set exists");
 
         assert_eq!(bundle.level_count(), 3);
-        assert_eq!(bundle.level(0).unwrap().name, "microban_01");
-        assert_eq!(bundle.level(1).unwrap().name, "microban_02");
+        assert_eq!(bundle.level(0).unwrap().name, "microban 1");
+        assert_eq!(bundle.level(1).unwrap().name, "microban 2");
         assert_eq!(bundle.level(0).unwrap().level.size, Size3::new(6, 7, 2));
         assert_eq!(
             sprites.sprite("Floor").unwrap().voxels.size,
