@@ -295,21 +295,51 @@ fn resolve_level_target(
 ) -> Option<SourceTarget> {
     let level3d_blocks = level3d_blocks(source, context);
     let mut level_index = 0usize;
-    for (index, line) in context.lines.iter().enumerate() {
+    let mut index = 0usize;
+    while index < context.lines.len() {
+        let line = &context.lines[index];
         if level3d_blocks
             .iter()
             .any(|block| line.start > block.open_index && line.start < block.close_index)
         {
+            index += 1;
             continue;
         }
-        let Some(name) = level_name(line) else {
+
+        let target = if let Some(name) = level_name(line) {
+            let start = line.start;
+            let (end, body_start, body_end) = level_range(source, context, index);
+            Some((
+                name,
+                start,
+                end,
+                body_start,
+                body_end,
+                next_level_scan_index(context, index, end),
+            ))
+        } else if is_unnamed_level_start(line) {
+            let start = line.start;
+            let (end, body_start, body_end) = unnamed_level_range(source, context, index);
+            Some((
+                String::new(),
+                start,
+                end,
+                body_start,
+                body_end,
+                next_level_scan_index(context, index, end),
+            ))
+        } else {
+            None
+        };
+
+        let Some((name, start, end, body_start, body_end, next_index)) = target else {
+            index += 1;
             continue;
         };
-        let start = line.start;
-        let (end, body_start, body_end) = level_range(source, context, index);
         let current_index = level_index;
         level_index += 1;
         if cursor < start || cursor > end {
+            index = next_index;
             continue;
         }
         return Some(SourceTarget {
@@ -326,6 +356,73 @@ fn resolve_level_target(
         });
     }
     None
+}
+
+fn is_unnamed_level_start(line: &SourceContextLine) -> bool {
+    if line.scope != Some(SourceScope::Levels) {
+        return false;
+    }
+    !matches!(
+        line.tokens.first().map(String::as_str),
+        None | Some("legend" | "level" | "levels" | "levels3" | "}")
+    )
+}
+
+fn unnamed_level_range(
+    source: &str,
+    context: &SourceContext,
+    start_index: usize,
+) -> (usize, usize, usize) {
+    let line = &context.lines[start_index];
+    let header_end = line_end(line);
+    if let Some(open_index) = source[line.start..header_end]
+        .find('{')
+        .map(|offset| line.start + offset)
+    {
+        let end = find_matching_brace(source, open_index)
+            .map(|index| index + 1)
+            .unwrap_or(header_end);
+        return (end, open_index + 1, end.saturating_sub(1));
+    }
+
+    let body_start = line.start;
+    let mut end = header_end;
+    let mut body_end = if code_trim(&line.content).is_empty() {
+        body_start
+    } else {
+        header_end
+    };
+    for next in context.lines.iter().skip(start_index + 1) {
+        let next_trimmed = code_trim(&next.content);
+        let in_level = matches!(
+            next.scope,
+            Some(SourceScope::Level | SourceScope::UnbracedLevel | SourceScope::Legend)
+        );
+        if level_name(next).is_some() || is_unnamed_level_start(next) {
+            break;
+        }
+        if !in_level && !next_trimmed.is_empty() {
+            break;
+        }
+        end = line_end(next);
+        if !next_trimmed.is_empty() {
+            body_end = line_end(next);
+        }
+        if next.scope == Some(SourceScope::UnbracedLevel) && next_trimmed.is_empty() {
+            break;
+        }
+    }
+    (end, body_start, body_end)
+}
+
+fn next_level_scan_index(context: &SourceContext, start_index: usize, end: usize) -> usize {
+    context
+        .lines
+        .iter()
+        .enumerate()
+        .skip(start_index + 1)
+        .find_map(|(index, line)| (line.start > end).then_some(index))
+        .unwrap_or(context.lines.len())
 }
 
 fn resolve_level3d_target(
@@ -1415,6 +1512,32 @@ level "microban_02"
         assert_eq!(target.kind, SourceTargetKind::Level);
         assert_eq!(target.name, "microban_01");
         assert_eq!(target.level_index, Some(0));
+    }
+
+    #[test]
+    fn resolves_message_prefixed_unnamed_level_body() {
+        let source = r#"
+levels {
+legend {
+. = Background
+P = Player
+}
+
+message "Level 1"
+P
+
+message "Level 2"
+PP
+}
+"#;
+        let cursor = source.find("Level 2").unwrap();
+        let target = resolve_source_target(source, cursor).unwrap();
+
+        assert_eq!(target.kind, SourceTargetKind::Level);
+        assert_eq!(target.name, "");
+        assert_eq!(target.level_index, Some(1));
+        assert!(target.start <= cursor);
+        assert!(target.end >= source.find("PP").unwrap());
     }
 
     #[test]

@@ -4379,10 +4379,6 @@ levels3 demo of push3 {
         assert!(
             EDITOR_WORKSPACE_JS.contains("async function moveNodeToFolder(nodeId, targetFolderId)")
         );
-        assert!(
-            EDITOR_WORKSPACE_JS
-                .contains("throw new Error(\"Cannot move entries between workspaces.\");")
-        );
         assert!(EDITOR_WORKSPACE_JS.contains(
             "throw new Error(\"Desktop workspace move requires the host rename command.\");"
         ));
@@ -4393,13 +4389,36 @@ levels3 demo of push3 {
         assert!(
             EDITOR_WORKSPACE_JS
                 .contains("toPath: hostPathForEditorPath(targetPath, sourceWorkspaceRoot),")
+                || EDITOR_WORKSPACE_JS
+                    .contains("toPath: hostPathForEditorPath(targetPath, targetWorkspaceRoot),")
         );
         assert!(EDITOR_WORKSPACE_JS.contains("workspaceRoot: sourceWorkspaceRoot,"));
+        assert!(EDITOR_WORKSPACE_JS.contains("targetWorkspaceRoot,"));
         assert!(EDITOR_WORKSPACE_JS.contains("function dropFolderIdForPoint(x, y)"));
+        assert!(
+            EDITOR_WORKSPACE_JS
+                .contains("function moveTargetFolderForSource(sourceNode, targetFolderId)")
+        );
+        assert!(EDITOR_WORKSPACE_JS.contains(
+            "const sourceWorkspaceFolder = sourceWorkspaceRoot ? workspaceRootFolder(sourceWorkspaceRoot) : null;"
+        ));
+        assert!(EDITOR_WORKSPACE_JS.contains(
+            "if (sourceWorkspaceFolder) {\n    return sourceWorkspaceFolder;\n  }\n  return fileTree;"
+        ));
+        assert!(
+            EDITOR_WORKSPACE_JS
+                .contains("selectedFolderId = targetFolder === fileTree ? \"\" : targetFolder.id;")
+        );
         assert!(EDITOR_JS.contains("function finishTreeMove(nodeId, targetFolderId)"));
         assert!(EDITOR_JS.contains("documentList.addEventListener(\"pointerdown\", (event) => {"));
         assert!(EDITOR_JS.contains(
             "const targetFolderId = dropFolderIdForPoint(event.clientX, event.clientY);"
+        ));
+        assert!(EDITOR_JS.contains(
+            "markDropTarget(resolvedDropFolderIdForNode(treePointerDrag.nodeId, targetFolderId));"
+        ));
+        assert!(EDITOR_JS.contains(
+            "markDropTarget(\n    hasExternalFiles ? targetFolderId : resolvedDropFolderIdForNode(draggedNodeId, targetFolderId),\n  );"
         ));
         assert!(EDITOR_JS.contains(
             "setEditorStatus(workspaceMutationErrorMessage(\"Move failed\", error), \"is-error\");"
@@ -4417,19 +4436,30 @@ levels3 demo of push3 {
     }
 
     #[test]
-    fn puzzlescript_import_requires_explicit_convert_action() {
-        assert!(EDITOR_HTML.contains(r#"id="psImportConvertButton""#));
+    fn puzzlescript_import_converts_from_source_input() {
+        assert!(!EDITOR_HTML.contains(r#"id="psImportConvertButton""#));
+        assert!(!EDITOR_DOM_JS.contains("psImportConvertButton"));
+        assert!(!EDITOR_JS.contains("Generate .puzzle translation"));
         assert!(EDITOR_HTML.contains("lucide-file-plus-icon lucide-file-plus"));
+        assert!(EDITOR_HTML.contains("ps-import-output-actions"));
         assert!(EDITOR_IMPORT_EXPORT_JS.contains("function resetPuzzleScriptImportConversion()"));
-        assert!(EDITOR_JS.contains(
-            "psImportSourceInput?.addEventListener(\"input\", resetPuzzleScriptImportConversion);"
-        ));
-        assert!(EDITOR_JS.contains("psImportConvertButton?.addEventListener(\"click\", () => {"));
-        assert!(!EDITOR_JS.contains("schedulePuzzleScriptImportConversion"));
+        assert!(
+            EDITOR_IMPORT_EXPORT_JS.contains("function schedulePuzzleScriptImportConversion()")
+        );
+        assert!(EDITOR_IMPORT_EXPORT_JS.contains("convertPuzzleScriptImport(generation)"));
+        assert!(EDITOR_IMPORT_EXPORT_JS.contains("window.PuzzleStudioImportExport = {"));
+        assert!(EDITOR_IMPORT_EXPORT_JS.contains("schedulePuzzleScriptImportConversion,"));
+        assert!(
+            EDITOR_JS.contains("typeof api?.schedulePuzzleScriptImportConversion === \"function\"")
+        );
+        assert!(EDITOR_JS.contains("api.schedulePuzzleScriptImportConversion();"));
+        assert!(!EDITOR_JS.contains("psImportConvertButton?.addEventListener"));
         assert!(!EDITOR_JS.contains("await convertPuzzleScriptImport()"));
+        assert!(EDITOR_IMPORT_EXPORT_JS.contains("No converted .puzzle yet"));
         assert!(
             EDITOR_CSS.contains(".ps-import-actions .source-action-button:hover:not(:disabled)")
         );
+        assert!(EDITOR_CSS.contains("#psImportStatus,\n#levelSolveStatus"));
     }
 
     #[test]
@@ -4968,7 +4998,11 @@ levels3 demo of push3 {
         assert!(EDITOR_CSS.contains(".preview-solve-button.is-solving"));
         assert!(EDITOR_HTML.contains(r#"id="solverTaskSummary""#));
         assert!(EDITOR_DOM_JS.contains("const solverTaskSummary = document.querySelector"));
+        assert!(EDITOR_HTML.contains(r#"id="solverLevelSelect""#));
+        assert!(EDITOR_DOM_JS.contains("const solverLevelSelect = document.querySelector"));
+        assert!(EDITOR_CSS.contains(".solver-level-select"));
         assert!(EDITOR_JS.contains("let activeSolverTask = null;"));
+        assert!(EDITOR_JS.contains("let solverSelectedLevelIndex = null;"));
         assert!(EDITOR_JS.contains("let completedSolverTaskKey = \"\";"));
         assert!(!EDITOR_JS.contains("let solverLevelIndex = 0;"));
         assert!(!EDITOR_JS.contains("solverStateOverride"));
@@ -4989,8 +5023,11 @@ levels3 demo of push3 {
         assert!(!EDITOR_JS.contains("return `${producer}: ${level} (${state})`;"));
         assert!(EDITOR_JS.contains("refreshVisiblePreviewSolverTask(previewExport);"));
         assert!(EDITOR_JS.contains("if (!activeSolverTask && currentPreviewMode === \"solver\")"));
-        assert!(!EDITOR_JS.contains("function syncSolverLevelSelector("));
-        assert!(!EDITOR_JS.contains("function selectSolverLevel("));
+        assert!(EDITOR_JS.contains("function syncSolverLevelSelector("));
+        assert!(EDITOR_JS.contains("function selectSolverLevel("));
+        assert!(EDITOR_JS.contains("solverSelectedLevelIndex = levelIndex;"));
+        assert!(EDITOR_JS.contains("const task = createPreviewSolverTask(exportData, levelIndex);"));
+        assert!(EDITOR_JS.contains("solverLevelSelect?.addEventListener(\"change\""));
         assert!(!EDITOR_JS.contains("function createPreviewSolverTarget("));
         assert!(!EDITOR_JS.contains("function createEditorSolverTarget("));
         assert!(!EDITOR_JS.contains("function setActiveSolverTarget("));
@@ -5008,6 +5045,7 @@ levels3 demo of push3 {
         let open_solver_source = &EDITOR_JS[open_solver..open_solver_end];
         assert!(!open_solver_source.contains("ensurePreviewTargetsActiveDocument();"));
         assert!(!open_solver_source.contains("syncSourceFromPreviewPane(\"solver\")"));
+        assert!(open_solver_source.contains("solverSelectedLevelIndex = null;"));
         assert!(open_solver_source.contains("await ensurePreviewSolverExportData();"));
         assert!(EDITOR_JS.contains("async function ensurePreviewSolverExportData()"));
         assert!(EDITOR_JS.contains("exportData = await compileLevelEditorPreviewData();"));
@@ -5040,7 +5078,7 @@ levels3 demo of push3 {
         assert!(EDITOR_JS.contains("if (isSolverTaskComplete(task))"));
         assert!(
             EDITOR_JS.contains(
-                "setLevelSolveStatus(\"Solve already ran for this task\", \"is-error\");"
+                "setLevelSolveStatus(\"This level has already been solved\", \"is-error\");"
             )
         );
         assert!(EDITOR_JS.contains("markActiveSolverTaskComplete();"));
@@ -5061,13 +5099,42 @@ levels3 demo of push3 {
         assert!(
             !EDITOR_JS.contains("syncPreviewStateFromLevel();\n  try {\n    worker.postMessage")
         );
-        assert!(!EDITOR_JS.contains("solverLevelSelect?.addEventListener(\"change\""));
         assert!(EDITOR_LEVEL3D_JS.contains("function level3dEditedSnapshotAppliesToLevel("));
         assert!(EDITOR_LEVEL3D_JS.contains("function level3dCellsWithObjectDescriptors("));
         assert!(
             EDITOR_JS
                 .contains("isPuzzle3dExport(exportData) && typeof renderPuzzle3dSolverPreview")
         );
+    }
+
+    #[test]
+    fn preview_solve_uses_runtime_current_level() {
+        assert!(EDITOR_JS.contains("function previewSolverTaskLevelIndex("));
+        assert!(
+            EDITOR_JS.contains(
+                "return normalizedLevelIndex(solverSelectedLevelIndex, exportData);"
+            )
+        );
+        assert!(
+            EDITOR_JS.contains(
+                "const levelIndex = previewSolverTaskLevelIndex(exportData);"
+            )
+        );
+        assert!(
+            EDITOR_JS.contains("latestPreviewState?.screenHasPuzzle !== false")
+        );
+        assert!(
+            EDITOR_JS.contains("Number.isInteger(Number(latestPreviewState?.levelIndex))")
+        );
+        assert!(
+            EDITOR_JS.contains(
+                "return normalizedLevelIndex(Math.trunc(Number(latestPreviewState.levelIndex)), exportData);"
+            )
+        );
+        assert!(
+            EDITOR_JS.contains("setLevelSolveStatus(\"No current preview level\", \"is-error\");")
+        );
+        assert!(!EDITOR_JS.contains("return currentEditableLevelIndex(exportData);"));
     }
 
     #[test]
@@ -5942,12 +6009,47 @@ levels3 demo of push3 {
         ));
         assert!(EDITOR_WORKBENCH_JS.contains("if (paneId === \"sprite\") {\n    return [];\n  }"));
         assert!(!EDITOR_CSS.contains(".pane-title .sprite-header-actions"));
+        assert!(EDITOR_CSS.contains("\"name . .\"\n    \"transform shape .\""));
+        assert!(
+            EDITOR_CSS.contains(
+                "grid-template-columns: minmax(160px, 220px) max-content minmax(0, 1fr);"
+            )
+        );
+        assert!(EDITOR_CSS.contains("max-width: 220px;"));
+        assert!(EDITOR_CSS.contains("#spriteBuilder .sprite-source-actions {\n  width: auto;"));
+        assert!(
+            EDITOR_CSS.contains("border: 0;\n  background: transparent;\n  color: var(--muted);")
+        );
+        assert!(EDITOR_SPRITE_JS.contains("globalEditActions.append(sourceActions);"));
+        let sprite_palette = EDITOR_HTML
+            .find(r#"id="spritePalette""#)
+            .expect("sprite palette exists");
+        let sprite_actions = EDITOR_HTML[sprite_palette..]
+            .find(r#"aria-label="Sprite source actions""#)
+            .expect("sprite source actions follow palette")
+            + sprite_palette;
+        let sprite_board = EDITOR_HTML[sprite_actions..]
+            .find(r#"class="sprite-board-wrap""#)
+            .expect("sprite board follows source actions")
+            + sprite_actions;
+        assert!(sprite_palette < sprite_actions);
+        assert!(sprite_actions < sprite_board);
     }
 
     #[test]
     fn sprite_brush_presets_are_relative_and_paint_updates_changed_cells() {
         assert!(EDITOR_CSS.contains(
             "#spriteBuilder .sprite-board {\n  --sprite-cell: clamp(8px, calc((100cqw - 2px) / var(--sprite-size)), 64px);\n}"
+        ));
+        assert!(EDITOR_CSS.contains("--sprite-puzzle-line: #1d242b;"));
+        assert!(EDITOR_CSS.contains(
+            "box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--sprite-puzzle-line) 38%, transparent);"
+        ));
+        assert!(EDITOR_SPRITE_JS.contains(
+            "button.style.setProperty(\"--sprite-puzzle-line\", spriteGridLineForColorIndex(colorIndex));"
+        ));
+        assert!(EDITOR_SPRITE_JS.contains(
+            "return validSpriteColorIndex(index) ? readableInkForColor(sprite.palette[index].color) : \"#1d242b\";"
         ));
         assert!(EDITOR_SPRITE_JS.contains("let spriteBrushPreset = \"pixel\";"));
         assert!(EDITOR_SPRITE_JS.contains("pixel: { label: \"1px\", diameterCells: 1 },"));
@@ -5982,6 +6084,17 @@ levels3 demo of push3 {
     }
 
     #[test]
+    fn solid_sprite_source_loads_without_fabricated_editor_grid() {
+        assert!(!EDITOR_SPRITE_JS.contains("SOLID_SPRITE_EDITOR_SIZE"));
+        assert!(EDITOR_SPRITE_JS.contains("const size = Number.isFinite(parsed) ? parsed : 5;"));
+        assert!(!EDITOR_SPRITE_JS.contains("Math.trunc(Number(value) || 5)"));
+        assert!(EDITOR_SPRITE_JS.contains(
+            "return {\n      size: 1,\n      palette,\n      shapeBind: null,\n      solid: true,\n      sourcePreludeRows,\n      cells: [0],"
+        ));
+        assert!(!EDITOR_SPRITE_JS.contains("const size = 5;"));
+    }
+
+    #[test]
     fn sprite_marker_preserves_paint_material_and_fill_owns_fill_mode() {
         assert!(
             EDITOR_SPRITE_JS
@@ -5999,6 +6112,14 @@ levels3 demo of push3 {
         assert!(!EDITOR_SPRITE_JS.contains(
             "sprite.selectedColorIndex = validSpriteColorIndex(spriteLastPaintColorIndex)"
         ));
+    }
+
+    #[test]
+    fn sprite_marker_buttons_have_visible_hover_state() {
+        assert!(EDITOR_CSS.contains(
+            ".sprite-brush-size-button:hover:not(:disabled),\n.sprite-brush-size-button:has(:hover),\n.sprite-brush-size-button:focus-visible {\n  background: var(--active-bg);"
+        ));
+        assert!(EDITOR_JS.contains("|| element.classList.contains(\"sprite-brush-size-button\");"));
     }
 
     #[test]
@@ -6023,7 +6144,7 @@ levels3 demo of push3 {
                 .contains("transformActions.className = \"sprite-paint-transform-actions\";")
         );
         assert!(EDITOR_SPRITE_JS.contains("spriteFlipVerticalButton,\n    spriteClearButton,"));
-        assert!(EDITOR_CSS.contains(".sprite-paint-transform-actions {\n  margin-left: auto;"));
+        assert!(EDITOR_CSS.contains(".sprite-paint-tool-group + .sprite-paint-tool-group {"));
         assert!(
             EDITOR_CSS
                 .contains(".sprite-paint-tool-button {\n  border: 0;\n  background: transparent;")
@@ -7166,11 +7287,9 @@ levels3 demo of push3 {
         assert!(
             html.contains(r#"<link rel="stylesheet" href="editor.css?v=desktop-export-link">"#)
         );
-        assert!(html.contains(r#"<script src="editor.js?v=desktop-export-link"></script>"#));
+        assert!(html.contains(r#"<script src="editor.js?v=import-export-api"></script>"#));
         assert!(
-            html.contains(
-                r#"<script src="editor_import_export.js?v=desktop-export-link"></script>"#
-            )
+            html.contains(r#"<script src="editor_import_export.js?v=import-export-api"></script>"#)
         );
         assert!(html.contains(r#"<script src="editor_dom.js"></script>"#));
         assert!(!html.contains("<script>\nwindow.PuzzleAssets ="));
@@ -7370,10 +7489,10 @@ levels3 demo of push3 {
             .find(r#"<script src="editor_level3d.js"></script>"#)
             .expect("editor loads 3D level editor");
         let editor = EDITOR_HTML
-            .find(r#"<script src="editor.js?v=desktop-export-link"></script>"#)
+            .find(r#"<script src="editor.js?v=import-export-api"></script>"#)
             .expect("editor loads main editor script");
         let import_export = EDITOR_HTML
-            .find(r#"<script src="editor_import_export.js?v=desktop-export-link"></script>"#)
+            .find(r#"<script src="editor_import_export.js?v=import-export-api"></script>"#)
             .expect("editor loads import/export helpers");
         let sprite3d = EDITOR_HTML
             .find(r#"<script src="editor_sprite3d.js"#)
@@ -7405,11 +7524,10 @@ levels3 demo of push3 {
                 .contains(r#"<script src="editor_workspace.js?v=outline-pane-layout"></script>"#)
         );
         assert!(
-            EDITOR_HTML.contains(
-                r#"<script src="editor_import_export.js?v=desktop-export-link"></script>"#
-            )
+            EDITOR_HTML
+                .contains(r#"<script src="editor_import_export.js?v=import-export-api"></script>"#)
         );
-        assert!(EDITOR_HTML.contains(r#"<script src="editor.js?v=desktop-export-link"></script>"#));
+        assert!(EDITOR_HTML.contains(r#"<script src="editor.js?v=import-export-api"></script>"#));
         assert!(EDITOR_WORKSPACE_JS.contains("document-tab-unsaved-dot"));
         assert!(EDITOR_WORKSPACE_JS.contains("updateDocumentTabUnsavedStates"));
         assert!(EDITOR_WORKSPACE_JS.contains("setSourceEditorValue(sourceText, {\n    preserveUndoOnSameValue: document.id === previousActiveFileId,\n  });\n  if (isTextDocument(document)) {\n    restoreSourceFoldState(document.sourceFoldedBlockKeys);\n  }\n  updateDocumentTabUnsavedStates();"));

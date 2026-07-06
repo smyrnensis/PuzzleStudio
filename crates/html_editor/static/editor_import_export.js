@@ -530,31 +530,66 @@ function setPuzzleScriptImportStatus(message, tone = "") {
   setPaneStatus("psimport", message, tone);
 }
 
+let puzzleScriptImportConversionTimer = 0;
+let puzzleScriptImportConversionGeneration = 0;
+
+function setPuzzleScriptImportOutputReady(ready) {
+  if (psImportCopyButton) {
+    psImportCopyButton.disabled = !ready;
+  }
+  if (psImportAddFileButton) {
+    psImportAddFileButton.disabled = !ready;
+  }
+}
+
 function resetPuzzleScriptImportConversion() {
+  puzzleScriptImportConversionGeneration += 1;
+  if (puzzleScriptImportConversionTimer) {
+    window.clearTimeout(puzzleScriptImportConversionTimer);
+    puzzleScriptImportConversionTimer = 0;
+  }
   if (psImportOutput) {
     psImportOutput.value = "";
   }
-  if (psImportCopyButton) {
-    psImportCopyButton.disabled = true;
-  }
-  if (psImportAddFileButton) {
-    psImportAddFileButton.disabled = true;
-  }
+  setPuzzleScriptImportOutputReady(false);
   setPuzzleScriptImportStatus("", "");
 }
 
-async function convertPuzzleScriptImport() {
+function schedulePuzzleScriptImportConversion() {
+  const source = psImportSourceInput?.value || "";
+  if (!source.trim()) {
+    resetPuzzleScriptImportConversion();
+    return;
+  }
+  const generation = puzzleScriptImportConversionGeneration + 1;
+  puzzleScriptImportConversionGeneration = generation;
+  if (puzzleScriptImportConversionTimer) {
+    window.clearTimeout(puzzleScriptImportConversionTimer);
+  }
+  if (psImportOutput) {
+    psImportOutput.value = "";
+  }
+  setPuzzleScriptImportOutputReady(false);
+  setPuzzleScriptImportStatus("", "");
+  puzzleScriptImportConversionTimer = window.setTimeout(() => {
+    puzzleScriptImportConversionTimer = 0;
+    convertPuzzleScriptImport(generation).catch((error) => {
+      if (generation !== puzzleScriptImportConversionGeneration) {
+        return;
+      }
+      console.error(error);
+      setPuzzleScriptImportStatus(error.message || String(error), "is-error");
+    });
+  }, 180);
+}
+
+async function convertPuzzleScriptImport(generation = ++puzzleScriptImportConversionGeneration) {
   const source = psImportSourceInput?.value || "";
   if (!source.trim()) {
     if (psImportOutput) {
       psImportOutput.value = "";
     }
-    if (psImportCopyButton) {
-      psImportCopyButton.disabled = true;
-    }
-    if (psImportAddFileButton) {
-      psImportAddFileButton.disabled = true;
-    }
+    setPuzzleScriptImportOutputReady(false);
     setPuzzleScriptImportStatus("", "");
     return "";
   }
@@ -564,15 +599,13 @@ async function convertPuzzleScriptImport() {
     throw new Error("PuzzleScript import is unavailable in this editor build.");
   }
   const canonical = compiler.translate_puzzlescript(source);
+  if (generation !== puzzleScriptImportConversionGeneration || source !== (psImportSourceInput?.value || "")) {
+    return "";
+  }
   if (psImportOutput) {
     psImportOutput.value = canonical;
   }
-  if (psImportCopyButton) {
-    psImportCopyButton.disabled = false;
-  }
-  if (psImportAddFileButton) {
-    psImportAddFileButton.disabled = false;
-  }
+  setPuzzleScriptImportOutputReady(true);
   setPuzzleScriptImportStatus("Converted", "is-ok");
   return canonical;
 }
@@ -606,7 +639,7 @@ function puzzleScriptImportTitle(source, canonical) {
 async function copyPuzzleScriptImportOutput() {
   const output = psImportOutput?.value || "";
   if (!output.trim()) {
-    setPuzzleScriptImportStatus("Generate import first", "is-error");
+    setPuzzleScriptImportStatus("No converted .puzzle yet", "is-error");
     return;
   }
   try {
@@ -622,7 +655,7 @@ async function copyPuzzleScriptImportOutput() {
 async function addPuzzleScriptImportFile() {
   const output = psImportOutput?.value || "";
   if (!output.trim()) {
-    setPuzzleScriptImportStatus("Generate import first", "is-error");
+    setPuzzleScriptImportStatus("No converted .puzzle yet", "is-error");
     return;
   }
 
@@ -657,3 +690,12 @@ async function addPuzzleScriptImportFile() {
   saveDocumentStore(false);
   setPuzzleScriptImportStatus(`Added ${fileNameValue}`, "is-ok");
 }
+
+window.PuzzleStudioImportExport = {
+  ...(window.PuzzleStudioImportExport || {}),
+  addPuzzleScriptImportFile,
+  copyPuzzleScriptImportOutput,
+  resetPuzzleScriptImportConversion,
+  schedulePuzzleScriptImportConversion,
+  setPuzzleScriptImportStatus,
+};

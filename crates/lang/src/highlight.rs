@@ -328,6 +328,11 @@ fn highlight_html(
             continue;
         }
 
+        if context.is_plain_range(index, index + ch.len_utf8()) {
+            escape_char_into(&mut out, ch);
+            continue;
+        }
+
         if ch == '/' && chars.peek().is_some_and(|(_, next)| *next == '/') {
             let end = source[index..]
                 .find('\n')
@@ -1746,12 +1751,7 @@ fn is_level_ascii_map_row(
     ) {
         return false;
     }
-    !is_level_event_sugar(trimmed, tokens)
-}
-
-fn is_level_event_sugar(trimmed: &str, tokens: &[&str]) -> bool {
-    matches!(tokens, ["sfx", _] | ["wait"] | ["wait", _])
-        || trimmed.strip_prefix("message ").is_some()
+    !crate::is_level_event_sugar(trimmed, tokens)
 }
 
 fn add_level_ascii_line_ranges(
@@ -5122,6 +5122,83 @@ P
     }
 
     #[test]
+    fn level_event_sugar_messages_highlight_as_effects_not_map_cells() {
+        let highlighted = highlight_source(
+            r#"
+title level_message_highlight
+
+puzzle board {
+layers {
+__legacy_layer_0 = Player
+}
+legend P = Player
+rules {
+[ Player ] -> [ Player ]
+}
+}
+
+levels {
+level "start"
+message "first"
+message "second"
+P1
+}
+"#,
+        );
+
+        assert!(highlighted.html.contains(
+            "<span class=\"syntax-emission\">message</span> <span class=\"syntax-string\">&quot;first&quot;</span>"
+        ));
+        assert!(highlighted.html.contains(
+            "<span class=\"syntax-emission\">message</span> <span class=\"syntax-string\">&quot;second&quot;</span>"
+        ));
+        assert!(highlighted.html.contains(
+            "\n<span class=\"syntax-level-cell\">P</span><span class=\"syntax-level-cell-invalid\">1</span>\n"
+        ));
+        assert!(!highlighted.html.contains("syntax-level-cell\">m</span>"));
+    }
+
+    #[test]
+    fn implicit_level_event_sugar_messages_highlight_as_effects_not_map_cells() {
+        let highlighted = highlight_source(
+            r#"
+title implicit_level_message_highlight
+
+puzzle board {
+layers {
+__legacy_layer_0 = Player
+}
+legend P = Player
+rules {
+}
+}
+
+levels {
+legend {
+. = empty
+P = Player
+}
+
+message "first"
+message "second"
+P1
+}
+"#,
+        );
+
+        assert!(highlighted.html.contains(
+            "<span class=\"syntax-emission\">message</span> <span class=\"syntax-string\">&quot;first&quot;</span>"
+        ));
+        assert!(highlighted.html.contains(
+            "<span class=\"syntax-emission\">message</span> <span class=\"syntax-string\">&quot;second&quot;</span>"
+        ));
+        assert!(highlighted.html.contains(
+            "\n<span class=\"syntax-level-cell\">P</span><span class=\"syntax-level-cell-invalid\">1</span>\n"
+        ));
+        assert!(!highlighted.html.contains("syntax-level-cell\">m</span>"));
+    }
+
+    #[test]
     fn braced_levels3_keeps_blank_separated_slices_plain() {
         let highlighted = highlight_source(
             r#"
@@ -5222,6 +5299,56 @@ G*
             "syntax-keyword\">level</span> <span class=\"syntax-scene\">&quot;microban_01&quot;"
         ));
         assert!(!highlighted.html.contains("syntax-object\">G</span>*"));
+    }
+
+    #[test]
+    fn legend_left_side_uses_plain_assignment_contract() {
+        let highlighted = highlight_source(
+            r##"
+title legend_plain_assignment_left
+
+puzzle board {
+layers {
+actor = Wall2d ArrowWall One
+}
+rules {
+}
+}
+
+levels {
+legend {
+. = empty
+' = Wall2d
+> = ArrowWall
+1 = One
+}
+level "start"
+'1
+}
+"##,
+        );
+
+        assert!(highlighted.parsed);
+        assert!(highlighted.html.contains(
+            "\n' <span class=\"syntax-operator\">=</span> <span class=\"syntax-object\">Wall2d</span>"
+        ));
+        assert!(highlighted.html.contains(
+            "\n&gt; <span class=\"syntax-operator\">=</span> <span class=\"syntax-object\">ArrowWall</span>"
+        ));
+        assert!(highlighted.html.contains(
+            "\n1 <span class=\"syntax-operator\">=</span> <span class=\"syntax-object\">One</span>"
+        ));
+        assert!(
+            !highlighted
+                .html
+                .contains("<span class=\"syntax-string\">' = Wall2d")
+        );
+        assert!(!highlighted.html.contains(
+            "<span class=\"syntax-literal\">&gt;</span> <span class=\"syntax-operator\">=</span>"
+        ));
+        assert!(!highlighted.html.contains(
+            "<span class=\"syntax-number\">1</span> <span class=\"syntax-operator\">=</span>"
+        ));
     }
 
     #[test]

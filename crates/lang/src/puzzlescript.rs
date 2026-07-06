@@ -151,7 +151,15 @@ pub fn translate_puzzlescript_to_canonical(source: &str) -> Result<String, Diagn
         startgame_sfx.as_deref(),
         viewport_size,
     );
-    Ok(out.join("\n"))
+    Ok(canonical_without_line_indents(&out.join("\n")))
+}
+
+fn canonical_without_line_indents(source: &str) -> String {
+    source
+        .lines()
+        .map(str::trim_start)
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn collect_sections(source: &str) -> PsSections {
@@ -860,15 +868,11 @@ fn push_action_input(out: &mut Vec<String>, uses_action_input: bool) {
 }
 
 fn push_default_inputs(out: &mut Vec<String>, uses_action_input: bool) {
-    out.push("keys {".to_string());
-    out.push("  w ArrowUp -> up".to_string());
-    out.push("  s ArrowDown -> down".to_string());
-    out.push("  a ArrowLeft -> left".to_string());
-    out.push("  d ArrowRight -> right".to_string());
-    if uses_action_input {
-        out.push("  x Space Enter c -> action".to_string());
+    if !uses_action_input {
+        return;
     }
-    out.push("  r -> restart".to_string());
+    out.push("keys {".to_string());
+    out.push("  x Space Enter c -> action".to_string());
     out.push("}".to_string());
     out.push(String::new());
 }
@@ -1141,7 +1145,7 @@ fn push_rules(
 
         out.push("rules {".to_string());
         out.push(format!(
-            "  input directions [ {player_selector} ] -> [ {player_selector}{{>}} ]"
+            "  input directions [ {player_selector} ] -> [ > {player_selector} ]"
         ));
         push_ps_action_bridge(out, uses_action_input, &player_selector, "  ");
         out.push("  __ps_main".to_string());
@@ -1159,7 +1163,7 @@ fn push_rules(
 
     out.push("rules {".to_string());
     out.push(format!(
-        "  input directions [ {player_selector} ] -> [ {player_selector}{{>}} ]"
+        "  input directions [ {player_selector} ] -> [ > {player_selector} ]"
     ));
     push_ps_action_bridge(out, uses_action_input, &player_selector, "  ");
     push_ps_main_rule_body(out, lines, objects, aliases, sounds, "  ");
@@ -1371,7 +1375,9 @@ fn attach_direction_prefixes(
                 .get(i + 1)
                 .filter(|selector| resolve_name(selector, objects, aliases).is_some())
         {
-            attached.push(append_mark_to_selector(selector, direction));
+            attached.push(append_mark_to_selector(
+                selector, direction, objects, aliases,
+            ));
             i += 2;
             continue;
         }
@@ -1459,7 +1465,7 @@ fn translate_motion_qualifiers_on_side(
                 } else {
                     "no directions"
                 };
-                translated.push(append_mark_to_selector(selector, mark));
+                translated.push(append_mark_to_selector(selector, mark, objects, aliases));
             }
             i += 2;
             continue;
@@ -1470,7 +1476,16 @@ fn translate_motion_qualifiers_on_side(
     translated
 }
 
-fn append_mark_to_selector(selector: &str, mark: &str) -> String {
+fn append_mark_to_selector(
+    selector: &str,
+    mark: &str,
+    objects: &[PsObjectDef],
+    aliases: &[PsAliasDef],
+) -> String {
+    let selector = resolve_name(selector, objects, aliases).unwrap_or_else(|| selector.to_string());
+    if puzzle_authoring::mark_sugar_kind(mark) == Some(puzzle_authoring::MarkSugarKind::Movement) {
+        return format!("{mark} {selector}");
+    }
     if let Some(stripped) = selector.strip_suffix('}') {
         format!("{stripped} {mark}}}")
     } else {
@@ -1695,13 +1710,9 @@ fn push_playing_scene(
         out.push(format!("    subtitle \"by {}\"", escape_scene_text(author)));
     }
     out.push("    if has_progress_save {".to_string());
-    out.push("      choice \"Continue\" -> input continue_game".to_string());
+    out.push("      choice \"Continue\" -> continue_game".to_string());
     out.push("    }".to_string());
-    out.push("    choice \"New Game\" -> input new_game".to_string());
-    out.push("  }".to_string());
-    out.push("  keys {".to_string());
-    out.push("    Enter Space x -> continue_game".to_string());
-    out.push("    n -> new_game".to_string());
+    out.push("    choice \"New Game\" -> new_game".to_string());
     out.push("  }".to_string());
     push_scene_routine(out, "continue_game", &["goto playing"], startgame_sfx);
     push_scene_routine(
@@ -1716,21 +1727,21 @@ fn push_playing_scene(
     out.push("scene playing {".to_string());
     if viewport_size.is_some() {
         out.push("  layout {".to_string());
-        out.push("    puzzle board = main".to_string());
+        out.push("    main".to_string());
         out.push("  }".to_string());
     } else {
         out.push("  layout {".to_string());
         out.push("    row {".to_string());
         out.push(format!("      title \"{}\"", escape_scene_text(title)));
         out.push("    }".to_string());
-        out.push("    puzzle board = main".to_string());
+        out.push("    main".to_string());
         out.push("  }".to_string());
     }
     out.push("  keys {".to_string());
     out.push("    Escape q -> back".to_string());
     out.push("  }".to_string());
     out.push("  rules {".to_string());
-    out.push("    step board".to_string());
+    out.push("    step main".to_string());
     out.push("  }".to_string());
     push_scene_routine(out, "back", &["goto title"], None);
     out.push("}".to_string());

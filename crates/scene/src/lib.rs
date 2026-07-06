@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
 
 mod parse;
 
@@ -539,8 +539,7 @@ pub enum SceneAction {
     Goto { scene: String },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SceneEffect {
     Input(String),
     ComponentEffect(String),
@@ -644,6 +643,355 @@ pub enum SceneEffect {
     Sequence {
         effects: Vec<SceneEffect>,
     },
+}
+
+#[derive(Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum SceneEffectSerialize<'a> {
+    Input {
+        name: &'a str,
+    },
+    ComponentEffect {
+        name: &'a str,
+    },
+    RoutineCall {
+        name: &'a str,
+    },
+    Message {
+        text: &'a SceneExpr,
+    },
+    Wait {
+        milliseconds: &'a Option<u64>,
+    },
+    Conditional {
+        condition: &'a SceneExpr,
+        effect: &'a SceneEffect,
+    },
+    PlaySfx {
+        name: &'a str,
+    },
+    PlayMusic {
+        name: &'a str,
+    },
+    PauseMusic {
+        name: &'a Option<String>,
+    },
+    ResumeMusic {
+        name: &'a Option<String>,
+    },
+    StopMusic {
+        name: &'a Option<String>,
+    },
+    Goto {
+        scene: &'a str,
+        params: &'a [SceneEffectParam],
+    },
+    Enter {
+        scene: &'a str,
+        params: &'a [SceneEffectParam],
+    },
+    Back,
+    Create {
+        scene: &'a str,
+    },
+    Reset {
+        scene: &'a str,
+    },
+    Delete {
+        scene: &'a str,
+    },
+    Show {
+        scene: &'a str,
+    },
+    Hide {
+        scene: &'a str,
+    },
+    Toggle {
+        scene: &'a str,
+    },
+    Focus {
+        scene: &'a str,
+    },
+    PuzzleNextLevel {
+        target: &'a str,
+    },
+    PuzzlePreviousLevel {
+        target: &'a str,
+    },
+    GotoLevel {
+        target: &'a str,
+        level: &'a SceneExpr,
+    },
+    ResetPuzzle {
+        target: &'a str,
+    },
+    LoadPuzzle {
+        target: &'a str,
+        source: &'a str,
+    },
+    Apply {
+        rule: &'a str,
+        args: &'a [SceneExpr],
+        target: &'a Option<String>,
+    },
+    Copy {
+        source: &'a str,
+        target: &'a str,
+    },
+    SetVariable {
+        name: &'a str,
+        value: &'a SceneExpr,
+    },
+    ClearUndoHistory,
+    ClearGameProgress,
+    SetCurrentLevel {
+        level: &'a SceneExpr,
+    },
+    ClearCurrentLevel,
+    SetLevelCleared {
+        level: &'a Option<SceneExpr>,
+        cleared: bool,
+    },
+    ResetPersistentVars,
+    Sequence {
+        effects: &'a [SceneEffect],
+    },
+}
+
+impl<'a> From<&'a SceneEffect> for SceneEffectSerialize<'a> {
+    fn from(effect: &'a SceneEffect) -> Self {
+        match effect {
+            SceneEffect::Input(name) => Self::Input { name },
+            SceneEffect::ComponentEffect(name) => Self::ComponentEffect { name },
+            SceneEffect::RoutineCall(name) => Self::RoutineCall { name },
+            SceneEffect::Message { text } => Self::Message { text },
+            SceneEffect::Wait { milliseconds } => Self::Wait { milliseconds },
+            SceneEffect::Conditional { condition, effect } => {
+                Self::Conditional { condition, effect }
+            }
+            SceneEffect::PlaySfx { name } => Self::PlaySfx { name },
+            SceneEffect::PlayMusic { name } => Self::PlayMusic { name },
+            SceneEffect::PauseMusic { name } => Self::PauseMusic { name },
+            SceneEffect::ResumeMusic { name } => Self::ResumeMusic { name },
+            SceneEffect::StopMusic { name } => Self::StopMusic { name },
+            SceneEffect::Goto { scene, params } => Self::Goto { scene, params },
+            SceneEffect::Enter { scene, params } => Self::Enter { scene, params },
+            SceneEffect::Back => Self::Back,
+            SceneEffect::Create { scene } => Self::Create { scene },
+            SceneEffect::Reset { scene } => Self::Reset { scene },
+            SceneEffect::Delete { scene } => Self::Delete { scene },
+            SceneEffect::Show { scene } => Self::Show { scene },
+            SceneEffect::Hide { scene } => Self::Hide { scene },
+            SceneEffect::Toggle { scene } => Self::Toggle { scene },
+            SceneEffect::Focus { scene } => Self::Focus { scene },
+            SceneEffect::PuzzleNextLevel { target } => Self::PuzzleNextLevel { target },
+            SceneEffect::PuzzlePreviousLevel { target } => Self::PuzzlePreviousLevel { target },
+            SceneEffect::GotoLevel { target, level } => Self::GotoLevel { target, level },
+            SceneEffect::ResetPuzzle { target } => Self::ResetPuzzle { target },
+            SceneEffect::LoadPuzzle { target, source } => Self::LoadPuzzle { target, source },
+            SceneEffect::Apply { rule, args, target } => Self::Apply { rule, args, target },
+            SceneEffect::Copy { source, target } => Self::Copy { source, target },
+            SceneEffect::SetVariable { name, value } => Self::SetVariable { name, value },
+            SceneEffect::ClearUndoHistory => Self::ClearUndoHistory,
+            SceneEffect::ClearGameProgress => Self::ClearGameProgress,
+            SceneEffect::SetCurrentLevel { level } => Self::SetCurrentLevel { level },
+            SceneEffect::ClearCurrentLevel => Self::ClearCurrentLevel,
+            SceneEffect::SetLevelCleared { level, cleared } => Self::SetLevelCleared {
+                level,
+                cleared: *cleared,
+            },
+            SceneEffect::ResetPersistentVars => Self::ResetPersistentVars,
+            SceneEffect::Sequence { effects } => Self::Sequence { effects },
+        }
+    }
+}
+
+impl Serialize for SceneEffect {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        SceneEffectSerialize::from(self).serialize(serializer)
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum SceneEffectDeserialize {
+    Input {
+        name: String,
+    },
+    ComponentEffect {
+        name: String,
+    },
+    RoutineCall {
+        name: String,
+    },
+    Message {
+        text: SceneExpr,
+    },
+    Wait {
+        milliseconds: Option<u64>,
+    },
+    Conditional {
+        condition: SceneExpr,
+        effect: Box<SceneEffect>,
+    },
+    PlaySfx {
+        name: String,
+    },
+    PlayMusic {
+        name: String,
+    },
+    PauseMusic {
+        name: Option<String>,
+    },
+    ResumeMusic {
+        name: Option<String>,
+    },
+    StopMusic {
+        name: Option<String>,
+    },
+    Goto {
+        scene: String,
+        params: Vec<SceneEffectParam>,
+    },
+    Enter {
+        scene: String,
+        params: Vec<SceneEffectParam>,
+    },
+    Back,
+    Create {
+        scene: String,
+    },
+    Reset {
+        scene: String,
+    },
+    Delete {
+        scene: String,
+    },
+    Show {
+        scene: String,
+    },
+    Hide {
+        scene: String,
+    },
+    Toggle {
+        scene: String,
+    },
+    Focus {
+        scene: String,
+    },
+    PuzzleNextLevel {
+        target: String,
+    },
+    PuzzlePreviousLevel {
+        target: String,
+    },
+    GotoLevel {
+        target: String,
+        level: SceneExpr,
+    },
+    ResetPuzzle {
+        target: String,
+    },
+    LoadPuzzle {
+        target: String,
+        source: String,
+    },
+    Apply {
+        rule: String,
+        args: Vec<SceneExpr>,
+        target: Option<String>,
+    },
+    Copy {
+        source: String,
+        target: String,
+    },
+    SetVariable {
+        name: String,
+        value: SceneExpr,
+    },
+    ClearUndoHistory,
+    ClearGameProgress,
+    SetCurrentLevel {
+        level: SceneExpr,
+    },
+    ClearCurrentLevel,
+    SetLevelCleared {
+        level: Option<SceneExpr>,
+        cleared: bool,
+    },
+    ResetPersistentVars,
+    Sequence {
+        effects: Vec<SceneEffect>,
+    },
+}
+
+impl From<SceneEffectDeserialize> for SceneEffect {
+    fn from(effect: SceneEffectDeserialize) -> Self {
+        match effect {
+            SceneEffectDeserialize::Input { name } => Self::Input(name),
+            SceneEffectDeserialize::ComponentEffect { name } => Self::ComponentEffect(name),
+            SceneEffectDeserialize::RoutineCall { name } => Self::RoutineCall(name),
+            SceneEffectDeserialize::Message { text } => Self::Message { text },
+            SceneEffectDeserialize::Wait { milliseconds } => Self::Wait { milliseconds },
+            SceneEffectDeserialize::Conditional { condition, effect } => {
+                Self::Conditional { condition, effect }
+            }
+            SceneEffectDeserialize::PlaySfx { name } => Self::PlaySfx { name },
+            SceneEffectDeserialize::PlayMusic { name } => Self::PlayMusic { name },
+            SceneEffectDeserialize::PauseMusic { name } => Self::PauseMusic { name },
+            SceneEffectDeserialize::ResumeMusic { name } => Self::ResumeMusic { name },
+            SceneEffectDeserialize::StopMusic { name } => Self::StopMusic { name },
+            SceneEffectDeserialize::Goto { scene, params } => Self::Goto { scene, params },
+            SceneEffectDeserialize::Enter { scene, params } => Self::Enter { scene, params },
+            SceneEffectDeserialize::Back => Self::Back,
+            SceneEffectDeserialize::Create { scene } => Self::Create { scene },
+            SceneEffectDeserialize::Reset { scene } => Self::Reset { scene },
+            SceneEffectDeserialize::Delete { scene } => Self::Delete { scene },
+            SceneEffectDeserialize::Show { scene } => Self::Show { scene },
+            SceneEffectDeserialize::Hide { scene } => Self::Hide { scene },
+            SceneEffectDeserialize::Toggle { scene } => Self::Toggle { scene },
+            SceneEffectDeserialize::Focus { scene } => Self::Focus { scene },
+            SceneEffectDeserialize::PuzzleNextLevel { target } => Self::PuzzleNextLevel { target },
+            SceneEffectDeserialize::PuzzlePreviousLevel { target } => {
+                Self::PuzzlePreviousLevel { target }
+            }
+            SceneEffectDeserialize::GotoLevel { target, level } => {
+                Self::GotoLevel { target, level }
+            }
+            SceneEffectDeserialize::ResetPuzzle { target } => Self::ResetPuzzle { target },
+            SceneEffectDeserialize::LoadPuzzle { target, source } => {
+                Self::LoadPuzzle { target, source }
+            }
+            SceneEffectDeserialize::Apply { rule, args, target } => {
+                Self::Apply { rule, args, target }
+            }
+            SceneEffectDeserialize::Copy { source, target } => Self::Copy { source, target },
+            SceneEffectDeserialize::SetVariable { name, value } => {
+                Self::SetVariable { name, value }
+            }
+            SceneEffectDeserialize::ClearUndoHistory => Self::ClearUndoHistory,
+            SceneEffectDeserialize::ClearGameProgress => Self::ClearGameProgress,
+            SceneEffectDeserialize::SetCurrentLevel { level } => Self::SetCurrentLevel { level },
+            SceneEffectDeserialize::ClearCurrentLevel => Self::ClearCurrentLevel,
+            SceneEffectDeserialize::SetLevelCleared { level, cleared } => {
+                Self::SetLevelCleared { level, cleared }
+            }
+            SceneEffectDeserialize::ResetPersistentVars => Self::ResetPersistentVars,
+            SceneEffectDeserialize::Sequence { effects } => Self::Sequence { effects },
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for SceneEffect {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        SceneEffectDeserialize::deserialize(deserializer).map(Self::from)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1683,6 +2031,25 @@ mod tests {
             Some(SceneSize::new(4, 3))
         );
         assert!(component.layout().is_some_and(|layout| layout.scroll));
+    }
+
+    #[test]
+    fn scene_effect_input_serde_uses_named_payload() {
+        let effect = SceneEffect::Sequence {
+            effects: vec![
+                SceneEffect::Input("continue_game".to_string()),
+                SceneEffect::ComponentEffect("down".to_string()),
+                SceneEffect::RoutineCall("open_menu".to_string()),
+            ],
+        };
+
+        let json = serde_json::to_string(&effect).unwrap();
+
+        assert!(json.contains(r#""kind":"input","name":"continue_game""#));
+        assert!(json.contains(r#""kind":"component_effect","name":"down""#));
+        assert!(json.contains(r#""kind":"routine_call","name":"open_menu""#));
+        let roundtrip: SceneEffect = serde_json::from_str(&json).unwrap();
+        assert_eq!(roundtrip, effect);
     }
 
     #[test]

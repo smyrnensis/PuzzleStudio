@@ -4,133 +4,121 @@ theme puzzlescript
 
 puzzle main {
 layers {
-  layer_1 = Background
-  layer_2 = Target
-  layer_3 = Player Wall Crate
-}
-
-keys {
-  w ArrowUp -> up
-  s ArrowDown -> down
-  a ArrowLeft -> left
-  d ArrowRight -> right
-  r -> restart
+layer_1 = Background
+layer_2 = Target
+layer_3 = Player Wall Crate
 }
 
 sprites {
-  Background
-    #000000
-    .....
-    .....
-    .....
-    .....
-    .....
+Background
+#000000
+.....
+.....
+.....
+.....
+.....
 
-  Target
-    #ffff00
-    .....
-    .000.
-    .0.0.
-    .000.
-    .....
+Target
+#ffff00
+.....
+.000.
+.0.0.
+.000.
+.....
 
-  Wall
-    #808080
-    00000
-    00000
-    00000
-    00000
-    00000
+Wall
+#808080
+00000
+00000
+00000
+00000
+00000
 
-  Crate
-    #a06020
-    00000
-    0...0
-    0...0
-    0...0
-    00000
+Crate
+#a06020
+00000
+0...0
+0...0
+0...0
+00000
 
-  Player
-    #0000ff
-    .000.
-    .0.0.
-    .000.
-    ..0..
-    .0.0.
+Player
+#0000ff
+.000.
+.0.0.
+.000.
+..0..
+.0.0.
 }
 
 win_conditions {
-  all Target on Crate
+all Target on Crate
 }
 
 on_level_start {
-  once_all [ no Background ] -> [ Background ]
+once_all [ no Background ] -> [ Background ]
 }
 
 rules {
-  input directions [ Player ] -> [ Player{>} ]
-  [ Player{>} | Crate ] -> [ Player{>} | Crate{>} ]
-  move
+input directions [ Player ] -> [ > Player ]
+[ > Player | Crate ] -> [ > Player | > Crate ]
+move
 }
 
 on_level_clear {
-  wait 0.3s
-  next_level
+wait 0.3s
+next_level
 }
 
 levels {
-  legend {
-    . = Background
-    # = Wall
-    P = Player
-    B = Crate
-    T = Target
-    * = Crate Target
-    _ = empty
-  }
+legend {
+. = Background
+# = Wall
+P = Player
+B = Crate
+T = Target
+* = Crate Target
+_ = empty
+}
 
-  #######
-  #P.BT.#
-  #..*..#
-  #######
+#######
+#P.BT.#
+#..*..#
+#######
 }
 }
 
 scene title {
-  layout {
-    title "Basic PS Sokoban"
-    if has_progress_save {
-      choice "Continue" -> input continue_game
-    }
-    choice "New Game" -> input new_game
-  }
-  keys {
-    Enter Space x -> continue_game
-    n -> new_game
-  }
-  routine continue_game {
-    goto playing
-  }
-  routine new_game {
-    clear_game_progress
-    goto playing(0)
-  }
+layout {
+title "Basic PS Sokoban"
+if has_progress_save {
+choice "Continue" -> continue_game
+}
+choice "New Game" -> new_game
+}
+routine continue_game {
+goto playing
+}
+routine new_game {
+clear_game_progress
+goto playing(0)
+}
 }
 
 scene playing {
-  layout {
-    row {
-      title "Basic PS Sokoban"
-    }
-    puzzle board = main
-  }
-  keys {
-    Escape q -> back
-  }
-  rules {
-    step board
-  }
-  routine back {
-    goto title
-  }
+layout {
+row {
+title "Basic PS Sokoban"
+}
+main
+}
+keys {
+Escape q -> back
+}
+rules {
+step main
+}
+routine back {
+goto title
+}
 }

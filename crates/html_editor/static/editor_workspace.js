@@ -2836,8 +2836,8 @@ async function moveNodeToFolder(nodeId, targetFolderId) {
   if (!nodeId) {
     return false;
   }
-  const targetFolder = targetFolderId ? findNode(fileTree, targetFolderId) : fileTree;
   const source = findNodeWithParent(fileTree, nodeId);
+  const targetFolder = source?.node ? moveTargetFolderForSource(source.node, targetFolderId) : null;
   if (!source || !source.parent || !source.node || targetFolder?.kind !== "folder") {
     return false;
   }
@@ -2889,7 +2889,7 @@ async function moveNodeToFolder(nodeId, targetFolderId) {
   setWorkspaceRootForNode(source.node, targetWorkspaceRoot);
   targetFolder.children.push(source.node);
   targetFolder.expanded = true;
-  selectedFolderId = targetFolder.id;
+  selectedFolderId = targetFolder === fileTree ? "" : targetFolder.id;
   selectedTreeId = source.node.id;
   syncDocumentsFromTree();
   currentDocumentIndex = activeDocumentIndex();
@@ -2920,6 +2920,28 @@ function dropFolderIdForPoint(x, y) {
   return dropFolderIdForElement(document.elementFromPoint(x, y));
 }
 
+function moveTargetFolderForSource(sourceNode, targetFolderId) {
+  const requestedFolder = targetFolderId ? findNode(fileTree, targetFolderId) : fileTree;
+  if (requestedFolder !== fileTree) {
+    return requestedFolder;
+  }
+  const sourceWorkspaceRoot = workspaceRootForNode(sourceNode);
+  const sourceWorkspaceFolder = sourceWorkspaceRoot ? workspaceRootFolder(sourceWorkspaceRoot) : null;
+  if (sourceWorkspaceFolder) {
+    return sourceWorkspaceFolder;
+  }
+  return fileTree;
+}
+
+function resolvedDropFolderIdForNode(nodeId, targetFolderId) {
+  const source = treeDragCacheForNode(nodeId)?.source;
+  const targetFolder = source?.node ? moveTargetFolderForSource(source.node, targetFolderId) : null;
+  if (!targetFolder || targetFolder === fileTree) {
+    return "";
+  }
+  return targetFolder.id;
+}
+
 function canDropNodeOnFolder(nodeId, targetFolderId) {
   if (!nodeId) {
     return false;
@@ -2933,7 +2955,7 @@ function canDropNodeOnFolder(nodeId, targetFolderId) {
     return cache.targetDecisions.get(targetKey);
   }
   const source = cache.source;
-  const targetFolder = targetFolderId ? findNode(fileTree, targetFolderId) : fileTree;
+  const targetFolder = moveTargetFolderForSource(source.node, targetFolderId);
   let allowed = true;
   if (targetFolder?.kind !== "folder") {
     allowed = false;

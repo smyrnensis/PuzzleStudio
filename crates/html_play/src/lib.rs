@@ -2734,6 +2734,57 @@ scene playing {
     }
 
     #[test]
+    fn editor_preview_runtime_bundle_serializes_scene_input_effects() {
+        let source = r#"
+title Scene Input Runtime Bundle
+
+puzzle board {
+  layers {
+    tiles = Player
+  }
+  empty .
+  rules {
+  }
+}
+
+levels default of board {
+  legend P = Player
+  level "one" {
+    P
+  }
+}
+
+scene title {
+  layout {
+    choice "Continue" -> input continue_game
+  }
+  keys {
+    Enter -> continue_game
+  }
+  routine continue_game {
+    goto playing
+  }
+}
+
+scene playing {
+  layout {
+    puzzle board
+  }
+}
+"#;
+
+        let html = export_editor_preview_html_from_source(source, "game.puzzle", "", "")
+            .expect("editor preview should serialize scene input effects");
+        let runtime_export = embedded_puzzle_runtime_export_json(&html);
+
+        assert!(runtime_export["runtimeLoadedGame"].is_object());
+        assert!(
+            html.contains(r#"\"kind\":\"input\",\"name\":\"continue_game\""#),
+            "runtime bundle should encode SceneEffect::Input as a named payload"
+        );
+    }
+
+    #[test]
     fn standalone_export_can_embed_browser_supplied_game_runtime_assets() {
         let source = r#"
 title Browser Supplied Runtime

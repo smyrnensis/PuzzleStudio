@@ -229,11 +229,15 @@ let editorHoverTooltipTarget = null;
 
 function editorTooltipTargetFromEventTarget(target) {
   const element = target instanceof Element ? target.closest(editorHoverTooltipSelector) : null;
+  if (!element) {
+    return null;
+  }
+  const hasIconGlyph = element.querySelector("svg")
+    || element.classList.contains("sprite-brush-size-button");
   if (
-    !element
-    || element.classList.contains("sprite-cell")
+    element.classList.contains("sprite-cell")
     || element.classList.contains("source-outline-row")
-    || !element.querySelector("svg")
+    || !hasIconGlyph
   ) {
     return null;
   }
@@ -254,7 +258,6 @@ function compactEditorTooltipText(text) {
     ["Copy SFX sound line", "Copy SFX"],
     ["Copy solution", "Copy"],
     ["Discard new color", "Discard"],
-    ["Generate .puzzle translation", "Generate"],
     ["Hide current tool pane", "Hide pane"],
     ["Hide explorer pane", "Hide explorer"],
     ["Maximize Preview pane", "Maximize"],
@@ -450,6 +453,7 @@ let pendingPreviewKeyStateSync = 0;
 let previewPaneSourceKey = "";
 let activeLevelIndex = 0;
 let activeSolverTask = null;
+let solverSelectedLevelIndex = null;
 let activeLevelSolveRequest = null;
 let completedSolverTaskKey = "";
 let levelSolutionPreview = null;
@@ -1645,6 +1649,7 @@ function applyCompiledPreviewHtml(html, document, source) {
     resetLevelBuilderFromPreviewSource();
   }
   refreshVisiblePreviewSolverTask(previewExport);
+  syncSolverLevelSelector(previewExport);
   syncSolverTaskSummary();
   if (!level3dBuilder.hidden) {
     renderLevel3dBuilder();
@@ -3555,6 +3560,7 @@ function setPreviewMode(mode, options = {}) {
     }
   }
   if (solverMode) {
+    syncSolverLevelSelector();
     syncSolverTaskSummary();
     renderSolverBoard();
     updateSolutionControls();
@@ -3850,12 +3856,14 @@ function solverCompileId(exportData) {
 
 function clearSolverTask() {
   activeSolverTask = null;
+  syncSolverLevelSelector();
   syncSolverTaskSummary();
   setSolveLevelButtonState(Boolean(activeLevelSolveRequest));
 }
 
 function setActiveSolverTask(task) {
   activeSolverTask = task ? cloneJson(task) : null;
+  syncSolverLevelSelector();
   syncSolverTaskSummary();
   setSolveLevelButtonState(Boolean(activeLevelSolveRequest));
   return activeSolverTask;
@@ -3902,7 +3910,7 @@ function solverTaskProducerLabel(producer) {
 
 function solverTaskSummaryText(task = activeSolverTask) {
   if (!task) {
-    return "No solver task";
+    return "Choose a level to solve";
   }
   const producer = solverTaskProducerLabel(task.producer);
   const level = task.level?.levelName || `Level ${(task.level?.index ?? 0) + 1}`;
@@ -3915,6 +3923,62 @@ function syncSolverTaskSummary() {
   }
   solverTaskSummary.textContent = solverTaskSummaryText();
   solverTaskSummary.title = solverTaskSummary.textContent;
+}
+
+function solverLevelOptionLabel(level, index) {
+  return level?.name || `Level ${index + 1}`;
+}
+
+function syncSolverLevelSelector(exportData = previewExport || extractPreviewExport(latestHtml)) {
+  if (!solverLevelSelect) {
+    return;
+  }
+  const levels = Array.isArray(exportData?.levels) ? exportData.levels : [];
+  const selectedIndex = solverTaskLevelIndex(activeSolverTask)
+    ?? solverSelectedLevelIndex
+    ?? currentEditableLevelIndex(exportData);
+  const selectedValue = String(normalizedLevelIndex(selectedIndex, exportData));
+  const nextSignature = levels
+    .map((level, index) => `${index}:${solverLevelOptionLabel(level, index)}`)
+    .join("\n");
+  if (solverLevelSelect.dataset.levelSignature !== nextSignature) {
+    solverLevelSelect.replaceChildren(...levels.map((level, index) => {
+      const option = document.createElement("option");
+      option.value = String(index);
+      option.textContent = solverLevelOptionLabel(level, index);
+      return option;
+    }));
+    solverLevelSelect.dataset.levelSignature = nextSignature;
+  }
+  solverLevelSelect.disabled = !levels.length || activeLevelSolveRequest !== null;
+  solverLevelSelect.value = levels.length ? selectedValue : "";
+}
+
+function selectSolverLevel(index, exportData = previewExport || extractPreviewExport(latestHtml)) {
+  if (activeLevelSolveRequest) {
+    syncSolverLevelSelector(exportData);
+    return false;
+  }
+  const levels = Array.isArray(exportData?.levels) ? exportData.levels : [];
+  if (!levels.length) {
+    clearSolverTask();
+    renderSolverBoard();
+    return false;
+  }
+  const levelIndex = setActiveLevelIndex(index, exportData);
+  solverSelectedLevelIndex = levelIndex;
+  const task = createPreviewSolverTask(exportData, levelIndex);
+  if (!task) {
+    clearSolverTask();
+    renderSolverBoard();
+    setLevelSolveStatus("No level to solve", "is-error");
+    return false;
+  }
+  setActiveSolverTask(task);
+  clearSolutionPreview({ preserveSolverTask: true });
+  setLevelSolveStatus("");
+  renderSolverBoard();
+  return true;
 }
 
 function createSolverTask({ producer, exportData, levelIndex, stateKind, lifecycle, stateData, scene = null, puzzle3dSnapshot = null } = {}) {
@@ -3988,11 +4052,30 @@ function createEditorSolverTask({ exportData, levelIndex, stateData, scene = nul
   });
 }
 
+function previewSolverTaskLevelIndex(exportData = previewExport || extractPreviewExport(latestHtml)) {
+  if (Number.isInteger(solverSelectedLevelIndex)) {
+    return normalizedLevelIndex(solverSelectedLevelIndex, exportData);
+  }
+  if (
+    latestPreviewState
+    && latestPreviewState?.screenHasPuzzle !== false
+    && Number.isInteger(Number(latestPreviewState?.levelIndex))
+  ) {
+    return normalizedLevelIndex(Math.trunc(Number(latestPreviewState.levelIndex)), exportData);
+  }
+  return null;
+}
+
 function setPreviewSolverTaskFromActiveLevel(exportData = previewExport || extractPreviewExport(latestHtml)) {
-  const levelIndex = currentEditableLevelIndex(exportData);
+  const levelIndex = previewSolverTaskLevelIndex(exportData);
+  if (levelIndex === null) {
+    clearSolverTask();
+    setLevelSolveStatus("No current preview level", "is-error");
+    return false;
+  }
   const task = createPreviewSolverTask(exportData, levelIndex);
   if (!task) {
-    syncSolverTaskSummary();
+    clearSolverTask();
     return false;
   }
   setActiveSolverTask(task);
@@ -4008,7 +4091,9 @@ function refreshVisiblePreviewSolverTask(exportData = previewExport || extractPr
   if (setPreviewSolverTaskFromActiveLevel(exportData)) {
     return true;
   }
-  setLevelSolveStatus("No preview solver task", "is-error");
+  if (!levelSolveStatus?.textContent?.trim()) {
+    setLevelSolveStatus("No level to solve", "is-error");
+  }
   return false;
 }
 
@@ -4034,6 +4119,7 @@ async function ensurePreviewSolverExportData() {
 
 async function openSolverPaneForCurrentLevel() {
   openPreviewModePane("solver");
+  solverSelectedLevelIndex = null;
   const exportData = await ensurePreviewSolverExportData();
   if (!exportData) {
     clearSolverTask();
@@ -4053,7 +4139,7 @@ async function solvePreviewPaneCurrentLevel() {
   const ready = await openSolverPaneForCurrentLevel();
   if (!ready) {
     if (!levelSolveStatus?.textContent?.trim()) {
-      setLevelSolveStatus("No preview solver task", "is-error");
+      setLevelSolveStatus("No level to solve", "is-error");
     }
     return;
   }
@@ -4278,6 +4364,7 @@ async function compileLevelEditorPreviewData() {
     applyGameCss(effectiveGameCss(document));
     applyGameVisuals(compiledPreviewGameVisualsJs(html));
     refreshVisiblePreviewSolverTask(previewExport);
+    syncSolverLevelSelector(previewExport);
     syncSolverTaskSummary();
     downloadButton.disabled = false;
     appendPreviewLog("system", "Level metadata ready", { source: "compiler" });
@@ -6742,12 +6829,12 @@ async function solveLevel(options = {}) {
   }
   const task = activeSolverTask;
   if (!task) {
-    setLevelSolveStatus("No solver task", "is-error");
+    setLevelSolveStatus("No level to solve", "is-error");
     return;
   }
   if (isSolverTaskComplete(task)) {
     setSolveLevelButtonState(false);
-    setLevelSolveStatus("Solve already ran for this task", "is-error");
+    setLevelSolveStatus("This level has already been solved", "is-error");
     return;
   }
   let solveRequest = null;
@@ -6906,7 +6993,8 @@ function setSolveLevelButtonState(isSolving) {
   const taskComplete = !isSolving && isSolverTaskComplete();
   const label = isSolving ? "Cancel" : "Solve";
   const visibleLabel = label;
-  const title = taskComplete ? "Solve already ran for this task" : visibleLabel;
+  const title = taskComplete ? "This level has already been solved" : visibleLabel;
+  syncSolverLevelSelector();
   for (const button of [solveLevelButton, previewSolveButton, levelSolveShortcutButton, level3dSolveShortcutButton]) {
     if (!button) {
       continue;
@@ -9271,7 +9359,7 @@ document.addEventListener("pointermove", (event) => {
   }
   const targetFolderId = dropFolderIdForPoint(event.clientX, event.clientY);
   if (canDropNodeOnFolder(treePointerDrag.nodeId, targetFolderId)) {
-    markDropTarget(targetFolderId);
+    markDropTarget(resolvedDropFolderIdForNode(treePointerDrag.nodeId, targetFolderId));
   } else {
     clearDropTargets();
   }
@@ -9334,7 +9422,9 @@ documentList.addEventListener("dragover", (event) => {
   }
   event.preventDefault();
   event.dataTransfer.dropEffect = hasExternalFiles ? "copy" : "move";
-  markDropTarget(targetFolderId);
+  markDropTarget(
+    hasExternalFiles ? targetFolderId : resolvedDropFolderIdForNode(draggedNodeId, targetFolderId),
+  );
 });
 documentList.addEventListener("dragleave", (event) => {
   if (!documentList.contains(event.relatedTarget)) {
@@ -9539,6 +9629,9 @@ previewSolveButton?.addEventListener("click", () => {
     setLevelSolveStatus(`Solve failed: ${userFacingRuntimeError(error)}`, "is-error");
   });
 });
+solverLevelSelect?.addEventListener("change", () => {
+  selectSolverLevel(Number(solverLevelSelect.value));
+});
 playModeButton.addEventListener("click", () => {
   openPreviewModePane("play");
 });
@@ -9611,6 +9704,12 @@ soundsTopbarButton.addEventListener("click", () => {
 });
 psImportTopbarButton?.addEventListener("click", () => {
   openPreviewModePane("psimport");
+  const api = window.PuzzleStudioImportExport;
+  if (typeof api?.schedulePuzzleScriptImportConversion === "function") {
+    api.schedulePuzzleScriptImportConversion();
+  } else {
+    setEditorStatus("PuzzleScript import is unavailable", "is-error");
+  }
 });
 let editorDocsLoadPromise = null;
 
@@ -9681,23 +9780,34 @@ docsPanel?.addEventListener("click", (event) => {
   }
   activateEditorDocsPage(button.dataset.docsPage || "");
 });
-psImportSourceInput?.addEventListener("input", resetPuzzleScriptImportConversion);
-psImportConvertButton?.addEventListener("click", () => {
-  convertPuzzleScriptImport().catch((error) => {
-    console.error(error);
-    setPuzzleScriptImportStatus(error.message || String(error), "is-error");
-  });
+psImportSourceInput?.addEventListener("input", () => {
+  const api = window.PuzzleStudioImportExport;
+  if (typeof api?.schedulePuzzleScriptImportConversion === "function") {
+    api.schedulePuzzleScriptImportConversion();
+  } else {
+    setEditorStatus("PuzzleScript import is unavailable", "is-error");
+  }
 });
 psImportCopyButton?.addEventListener("click", () => {
-  copyPuzzleScriptImportOutput().catch((error) => {
+  const api = window.PuzzleStudioImportExport;
+  if (typeof api?.copyPuzzleScriptImportOutput !== "function") {
+    setEditorStatus("PuzzleScript import is unavailable", "is-error");
+    return;
+  }
+  api.copyPuzzleScriptImportOutput().catch((error) => {
     console.error(error);
-    setPuzzleScriptImportStatus("Copy failed", "is-error");
+    api.setPuzzleScriptImportStatus?.("Copy failed", "is-error");
   });
 });
 psImportAddFileButton?.addEventListener("click", () => {
-  addPuzzleScriptImportFile().catch((error) => {
+  const api = window.PuzzleStudioImportExport;
+  if (typeof api?.addPuzzleScriptImportFile !== "function") {
+    setEditorStatus("PuzzleScript import is unavailable", "is-error");
+    return;
+  }
+  api.addPuzzleScriptImportFile().catch((error) => {
     console.error(error);
-    setPuzzleScriptImportStatus(error.message || String(error), "is-error");
+    api.setPuzzleScriptImportStatus?.(error.message || String(error), "is-error");
   });
 });
 levelPlaytestButton?.addEventListener("click", toggleLevelPlaytest);
