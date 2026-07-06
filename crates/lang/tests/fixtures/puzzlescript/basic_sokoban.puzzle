@@ -122,7 +122,7 @@ scene playing {
     row {
       title "Basic PS Sokoban"
     }
-    board = puzzle main
+    puzzle board = main
   }
   keys {
     Escape q -> back

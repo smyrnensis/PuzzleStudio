@@ -23,6 +23,7 @@ pub struct ParsedPuzzle3 {
     pub local_frame: Option<LocalFrame<ObjectId>>,
     pub rules: Vec<Rule3>,
     pub level_bundle: Option<LevelBundle3>,
+    pub level_packs: Vec<Option<String>>,
     pub win_condition: Option<WinCondition3>,
     pub lifecycle: Lifecycle3,
     pub sprite_set: Option<SpriteSet3>,
@@ -151,6 +152,10 @@ pub enum ViewportHeight3 {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ParseError3 {
     Message(String),
+    MessageAtSourceLine {
+        message: String,
+        source_line: String,
+    },
 }
 
 impl From<puzzle_scene::SceneBlockParseError> for ParseError3 {
@@ -351,6 +356,11 @@ impl Parser3 {
             local_frame,
             rules,
             level_bundle,
+            level_packs: self
+                .level_specs
+                .iter()
+                .map(|spec| spec.pack.clone())
+                .collect(),
             win_condition,
             lifecycle,
             sprite_set: self.sprite_set,
@@ -805,7 +815,11 @@ impl Parser3 {
                 );
                 let name = parse_level_header(&line, auto_name)?;
                 let (next, rows) = self.collect_level_body(index + 1)?;
-                self.level_specs.push(LevelSpec3 { name, rows });
+                self.level_specs.push(LevelSpec3 {
+                    name,
+                    pack: pack.map(str::to_string),
+                    rows,
+                });
                 index = next;
                 continue;
             }
@@ -817,7 +831,11 @@ impl Parser3 {
                     namespace_count,
                 );
                 let (next, rows) = self.collect_level_body(index + 1)?;
-                self.level_specs.push(LevelSpec3 { name, rows });
+                self.level_specs.push(LevelSpec3 {
+                    name,
+                    pack: pack.map(str::to_string),
+                    rows,
+                });
                 index = next;
                 continue;
             }
@@ -947,6 +965,7 @@ struct LegendSpec3 {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct LevelSpec3 {
     name: String,
+    pack: Option<String>,
     rows: Vec<String>,
 }
 
@@ -1899,14 +1918,8 @@ fn push_unique_object(objects: &mut Vec<ObjectId>, object: ObjectId) {
 }
 
 fn parse_lifecycle_command_line(line: &str) -> Result<LifecycleCommand3, ParseError3> {
-    let command = line
-        .strip_prefix("if win_conditions ->")
-        .map(str::trim)
-        .unwrap_or(line.trim());
-    match command {
-        "next_level" => Ok(LifecycleCommand3::NextLevel),
-        _ => Err(message(format!("unknown lifecycle command: {line}"))),
-    }
+    puzzle_scene::parse_scene_effect_at(line, line)
+        .map_err(|error| message_at_source_line(error.message(), error.source_line()))
 }
 
 fn parse_optional_program_local_frame(
@@ -2628,6 +2641,7 @@ fn lower_line_patterns(
 fn parse_error_message(error: ParseError3) -> String {
     match error {
         ParseError3::Message(message) => message,
+        ParseError3::MessageAtSourceLine { message, .. } => message,
     }
 }
 
@@ -3504,4 +3518,11 @@ fn strip_comment(line: &str) -> &str {
 
 fn message(message: impl Into<String>) -> ParseError3 {
     ParseError3::Message(message.into())
+}
+
+fn message_at_source_line(message: impl Into<String>, source_line: &str) -> ParseError3 {
+    ParseError3::MessageAtSourceLine {
+        message: message.into(),
+        source_line: source_line.to_string(),
+    }
 }

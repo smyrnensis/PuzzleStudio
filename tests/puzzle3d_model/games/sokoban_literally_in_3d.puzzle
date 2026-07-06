@@ -64,7 +64,7 @@ scene playing {
 
   layout {
     box size 8 8 {
-      board = puzzle3 sokoban_literally_in_3d size 7 7
+      puzzle3 board = sokoban_literally_in_3d size 7 7
     }
   }
 }

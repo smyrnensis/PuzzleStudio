@@ -473,6 +473,17 @@ body.theme-puzzlescript {
   content: "";
 }
 
+.theme-puzzlescript .view-list {
+  width: min(100%, var(--ps-terminal-control-width));
+  justify-items: stretch;
+}
+
+.theme-puzzlescript .view-list > li {
+  width: 100%;
+  display: grid;
+  justify-items: center;
+}
+
 .theme-puzzlescript button::before,
 .theme-puzzlescript button::after,
 .theme-puzzlescript .level-menu li::before,

@@ -13,35 +13,20 @@ use puzzle_lang::{
     AsciiLegend, Level, LevelMenuDef, LoadedDocument, LoadedDocumentModel, LoadedGame,
     ModelOperationSound, ResourceSelection, RuleAnimation, RuleAnimationTrigger, RuleEffect,
     SceneBinaryOp, SceneComponent, SceneDef, SceneEffect, SceneEffectParam, SceneExpr,
-    ScenePuzzleInitializer, SceneTransitionTrigger, SceneValue, parse_game2d,
-    parse_scene_effect_params, parse_scene_expression,
+    ScenePuzzleInitializer, SceneTransitionTrigger, SceneValue, parse_scene_effect_params,
+    parse_scene_expression,
 };
 
 mod runtime_sounds;
+mod session3;
+mod session_history;
 
 pub use runtime_sounds::{
     RuntimeMusicSoundDef, RuntimeSfxSoundDef, RuntimeSoundsDef, runtime_sounds_def,
 };
+pub use session3::{GameSession3, GameSessionError3, SessionLifecycleResult3};
 
-const PUZZLE3_SCENE_HOST_SOURCE: &str = r#"
-title "__puzzle3_scene_host__"
-
-puzzle scene_host {
-layers {
-  marker = Marker
-}
-empty .
-rules {
-}
-}
-
-levels scene_host_levels of scene_host {
-legend M = Marker
-level "scene_host" {
-M
-}
-}
-"#;
+use session_history::SessionHistory;
 
 pub fn mixed_document_loaded_game(document: &LoadedDocument) -> Result<LoadedGame, String> {
     let Some(LoadedDocumentModel::Puzzle2d { game, .. }) = document
@@ -65,7 +50,7 @@ pub fn mixed_document_loaded_game(document: &LoadedDocument) -> Result<LoadedGam
 pub fn puzzle3_document_scene_host_loaded_game(
     document: &LoadedDocument,
 ) -> Result<LoadedGame, String> {
-    let mut loaded = parse_game2d(PUZZLE3_SCENE_HOST_SOURCE).map_err(|error| error.to_string())?;
+    let mut loaded = LoadedGame::empty_scene_host(&document.title, "scene_host", "scene_host");
     let prototype_level = loaded
         .levels
         .first()
@@ -92,9 +77,10 @@ pub fn puzzle3_document_scene_host_loaded_game(
     loaded.levels = bundle
         .levels
         .iter()
-        .map(|entry| Level {
+        .enumerate()
+        .map(|(index, entry)| Level {
             name: entry.name.clone(),
-            pack: None,
+            pack: puzzle.level_packs.get(index).cloned().flatten(),
             puzzle: name.clone(),
             initial_state: prototype_level.initial_state.clone(),
             regions: Vec::new(),
@@ -313,8 +299,7 @@ pub struct GameSession {
     level_index: usize,
     active_level_index: Option<usize>,
     state: PuzzleState,
-    undo_stack: Vec<PuzzleState>,
-    redo_stack: Vec<PuzzleState>,
+    history: SessionHistory<PuzzleState>,
     cleared_levels: Vec<bool>,
     focused_scene: String,
     visible_scenes: Vec<String>,
@@ -342,8 +327,7 @@ impl GameSession {
             level_index: 0,
             active_level_index: None,
             state: neutral_state,
-            undo_stack: Vec::new(),
-            redo_stack: Vec::new(),
+            history: SessionHistory::new(),
             cleared_levels: vec![false; game.levels.len()],
             focused_scene: initial_scene_name(game).to_string(),
             visible_scenes: vec![initial_scene_name(game).to_string()],
@@ -430,11 +414,11 @@ impl GameSession {
     }
 
     pub fn can_undo(&self) -> bool {
-        !self.undo_stack.is_empty()
+        self.history.can_undo()
     }
 
     pub fn can_redo(&self) -> bool {
-        !self.redo_stack.is_empty()
+        self.history.can_redo()
     }
 
     pub fn cleared_levels(&self) -> &[bool] {
@@ -558,8 +542,7 @@ impl GameSession {
     }
 
     fn clear_undo_history(&mut self) {
-        self.undo_stack.clear();
-        self.redo_stack.clear();
+        self.history.clear();
     }
 
     fn clear_game_progress(&mut self, game: &LoadedGame) {
@@ -669,7 +652,7 @@ impl GameSession {
     ) -> Result<(), TransitionError> {
         let previous_input = self.current_input.clone();
         self.current_input = game.input_labels.get(&input).cloned();
-        let undo_base_len = self.undo_stack.len();
+        let undo_base_len = self.history.undo_len();
         let owns_turn_sfx = self.begin_turn_sfx_dedup();
         if !self.current_scene_accepts_model_input(game) {
             let result = self.apply_focused_scene_input_transition(game, undo_base_len);
@@ -1206,8 +1189,8 @@ impl GameSession {
 
     fn compress_undo_stack_to_turn_boundary(&mut self, undo_base_len: usize) {
         let keep_len = undo_base_len.saturating_add(1);
-        if self.undo_stack.len() > keep_len {
-            self.undo_stack.truncate(keep_len);
+        if self.history.undo_len() > keep_len {
+            self.history.truncate_undo(keep_len);
         }
     }
 
@@ -1313,7 +1296,7 @@ impl GameSession {
         }
         let previous_input = self.current_input.clone();
         self.current_input = Some(input.to_string());
-        let undo_base_len = self.undo_stack.len();
+        let undo_base_len = self.history.undo_len();
         let result = self.apply_focused_scene_input_transition(game, undo_base_len);
         self.current_input = previous_input;
         result?;
@@ -1341,7 +1324,7 @@ impl GameSession {
         } else {
             let previous_input = self.current_input.clone();
             self.current_input = Some(input.to_string());
-            let undo_base_len = self.undo_stack.len();
+            let undo_base_len = self.history.undo_len();
             let result = self.apply_focused_scene_input_transition(game, undo_base_len);
             self.current_input = previous_input;
             result?;
@@ -1434,7 +1417,7 @@ impl GameSession {
         if emit_events && !outcome.cancelled {
             let effects =
                 queued_effects_for_outcome(game, None, &outcome.commands, &outcome.fired_rules);
-            let undo_base_len = self.undo_stack.len();
+            let undo_base_len = self.history.undo_len();
             self.resolve_turn_effects(game, effects, None, undo_base_len)?;
         }
         Ok(())
@@ -1978,7 +1961,7 @@ impl GameSession {
                     .unwrap_or_else(|| rule.clone());
                 if let Some(input) = input_id_by_label(game, &input_name) {
                     if let Some(target) = target {
-                        let undo_base_len = self.undo_stack.len();
+                        let undo_base_len = self.history.undo_len();
                         self.apply_model_input_to_target(game, target, input, undo_base_len)?;
                     } else {
                         self.apply_input(game, input)?;
@@ -2043,8 +2026,7 @@ impl GameSession {
                     if let Some(index) = self.eval_effect_level_index(game, level, bindings) {
                         if scene_accepts_level(game, scene_name, index) {
                             let _ = self.activate_level(game, index, true);
-                            self.undo_stack.clear();
-                            self.redo_stack.clear();
+                            self.history.clear();
                             level_changed = true;
                         }
                     }
@@ -2153,8 +2135,7 @@ impl GameSession {
         };
 
         let _ = self.activate_level(game, next_level, true);
-        self.undo_stack.clear();
-        self.redo_stack.clear();
+        self.history.clear();
         self.start_scene(game, scene);
         self.sync_current_level_puzzles(game);
         self.selected_level_index = next_level;
@@ -2177,8 +2158,7 @@ impl GameSession {
         };
 
         let _ = self.activate_level(game, previous_level, true);
-        self.undo_stack.clear();
-        self.redo_stack.clear();
+        self.history.clear();
         self.start_scene(game, scene);
         self.sync_current_level_puzzles(game);
         self.selected_level_index = previous_level;
@@ -2190,8 +2170,7 @@ impl GameSession {
         }
 
         let _ = self.activate_level(game, level_index, true);
-        self.undo_stack.clear();
-        self.redo_stack.clear();
+        self.history.clear();
         self.start_scene(game, initial_level_scene_name(game));
         self.sync_current_level_puzzles(game);
     }
@@ -2217,8 +2196,7 @@ impl GameSession {
             state: state.clone(),
             materialize_level_start,
         });
-        self.undo_stack.clear();
-        self.redo_stack.clear();
+        self.history.clear();
         self.apply_persistent_vars(game, &mut state);
         self.state = state;
         if materialize_level_start {
@@ -2247,8 +2225,7 @@ impl GameSession {
                 return;
             }
             let _ = self.activate_level(game, index, true);
-            self.undo_stack.clear();
-            self.redo_stack.clear();
+            self.history.clear();
             self.goto_scene(game, target);
             self.sync_current_level_puzzles(game);
             return;
@@ -2260,9 +2237,9 @@ impl GameSession {
         if self.active_level_index.is_none() {
             return;
         }
-        if let Some(previous) = self.undo_stack.pop() {
+        if let Some(previous) = self.history.pop_undo() {
             self.emit_model_operation_sfx(game, ModelOperationSound::Undo);
-            self.redo_stack.push(self.state.clone());
+            self.history.push_redo(self.state.clone());
             self.state = previous;
             self.sync_persistent_vars_to_scene_states(game);
             self.sync_current_level_puzzles(game);
@@ -2273,8 +2250,8 @@ impl GameSession {
         if self.active_level_index.is_none() {
             return;
         }
-        if let Some(next) = self.redo_stack.pop() {
-            self.undo_stack.push(self.state.clone());
+        if let Some(next) = self.history.pop_redo() {
+            self.history.push_undo(self.state.clone());
             self.state = next;
             self.sync_persistent_vars_to_scene_states(game);
             self.sync_current_level_puzzles(game);
@@ -2322,10 +2299,10 @@ impl GameSession {
         }
 
         if let Some(undo_state) = undo_state {
-            self.undo_stack.push(undo_state);
+            self.history.push_undo(undo_state);
         }
         self.state = next;
-        self.redo_stack.clear();
+        self.history.clear_redo();
         self.sync_persistent_vars_to_scene_states(game);
         true
     }
@@ -2992,8 +2969,7 @@ impl GameSession {
             self.active_level_index = Some(level_index);
             self.selected_level_index = level_index;
             self.state = state;
-            self.undo_stack.clear();
-            self.redo_stack.clear();
+            self.history.clear();
             self.sync_current_level_puzzles_for_scene(game, &scene_name);
         }
     }
@@ -4228,8 +4204,11 @@ mod tests {
         let loaded = puzzle3_document_scene_host_loaded_game(&document).unwrap();
 
         assert_eq!(loaded.title, "Microban 3D");
+        assert_eq!(loaded.game.object_count(), 0);
+        assert!(loaded.object_labels.is_empty());
         assert_eq!(loaded.levels.len(), 3);
         assert_eq!(loaded.levels[0].name, "microban 1");
+        assert_eq!(loaded.levels[0].pack.as_deref(), Some("microban"));
     }
 
     #[test]
@@ -4305,7 +4284,7 @@ B
                     command: TransitionCommand::Again,
                 }],
                 None,
-                session.undo_stack.len(),
+                session.history.undo_len(),
             )
             .unwrap();
 
@@ -4662,7 +4641,7 @@ P
 
 scene playing {
 layout {
-board = puzzle board
+puzzle board = board
 }
 rules {
 step board
@@ -4711,7 +4690,7 @@ X
 
 scene playing {
 layout {
-board = puzzle board
+puzzle board = board
 }
 rules {
 step board
@@ -4763,7 +4742,7 @@ P
 }
 scene playing {
 layout {
-board = puzzle default
+puzzle board = default
 }
 rules {
 step board
@@ -4830,7 +4809,7 @@ level "second" {
 }
 scene playing {
 layout {
-board = puzzle sokoban
+puzzle board = sokoban
 }
 rules {
 step board
@@ -4913,8 +4892,8 @@ levels spec
 }
 layout {
 spec_board.visible = false
-spec_board = puzzle sokoban
-board = puzzle sokoban
+puzzle spec_board = sokoban
+puzzle board = sokoban
 }
 rules {
 step spec_board
@@ -4933,7 +4912,7 @@ resources {
 levels spec
 }
 layout {
-spec_board = puzzle sokoban
+puzzle spec_board = sokoban
 }
 rules {
 step spec_board
@@ -4981,7 +4960,7 @@ P
 
 scene playing {
 layout {
-board = puzzle default
+puzzle board = default
 }
 rules {
 step board
@@ -6416,7 +6395,7 @@ P
 scene playing {
 layout {
 board.visible = false
-board = puzzle default
+puzzle board = default
 text "Playing"
 }
 on_scene_start {
@@ -6781,7 +6760,7 @@ P.
 
 scene playing {
 layout {
-board = puzzle board
+puzzle board = board
 }
 rules {
 step board
@@ -6966,7 +6945,7 @@ P
 
 scene playing(level) {
 layout {
-board = puzzle default
+puzzle board = default
 }
 rules {
 step board
@@ -7008,7 +6987,7 @@ P
 
 scene playing(level) {
 layout {
-board = puzzle default
+puzzle board = default
 }
 rules {
 step board
@@ -7205,7 +7184,7 @@ puzzle board
                 &loaded,
                 "missing_board",
                 input_named(&loaded, "right"),
-                session.undo_stack.len(),
+                session.history.undo_len(),
             )
             .unwrap_err();
 
@@ -7248,7 +7227,7 @@ P
 
 scene playing {
 layout {
-board = puzzle board
+puzzle board = board
 }
 rules {
 step board
@@ -7333,7 +7312,7 @@ rules {
 
 scene playing {
 layout {
-board = puzzle board
+puzzle board = board
 }
 rules {
 step board
@@ -7385,7 +7364,7 @@ P.
 
 scene playing {
 layout {
-board = puzzle default
+puzzle board = default
 }
 rules {
 step board
@@ -7454,7 +7433,7 @@ rules {
 
 scene play {
 layout {
-board = puzzle default
+puzzle board = default
 }
 keys {
 d -> input right
@@ -7548,7 +7527,7 @@ A
 
 scene playing {
 layout {
-board = puzzle default
+puzzle board = default
 }
 rules {
 step board
@@ -7620,7 +7599,7 @@ P
 
 scene playing {
 layout {
-board = puzzle default
+puzzle board = default
 }
 rules {
 step board
@@ -7683,7 +7662,7 @@ if input == open -> goto playing
 
 scene playing {
 layout {
-board = puzzle default
+puzzle board = default
 }
 rules {
 step board
@@ -7843,7 +7822,7 @@ P
 
 scene hub {
 layout {
-board = puzzle default level hub
+puzzle board = default level hub
 }
 rules {
 step board
@@ -7852,7 +7831,7 @@ step board
 
 scene playing {
 layout {
-board = puzzle default
+puzzle board = default
 }
 rules {
 if input == done -> {
@@ -7973,7 +7952,7 @@ level "start" {
 }
 scene playing {
 layout {
-board = puzzle sokoban
+puzzle board = sokoban
 }
 rules {
 step board
@@ -8048,7 +8027,7 @@ level "second" {
 }
 scene playing {
 layout {
-board = puzzle sokoban
+puzzle board = sokoban
 }
 rules {
 step board
@@ -8153,7 +8132,7 @@ P
 
 scene playing {
 layout {
-board = puzzle default
+puzzle board = default
 }
 }
 
@@ -8209,7 +8188,7 @@ P.
 
 scene playing {
 layout {
-board = puzzle default
+puzzle board = default
 }
 rules {
 step board
@@ -8270,13 +8249,13 @@ P
 
 scene playing {
 layout {
-board = puzzle default
+puzzle board = default
 }
 }
 
 scene level_clear {
 layout {
-board = puzzle default
+puzzle board = default
 }
 rules {
 }
@@ -8337,7 +8316,7 @@ P
 
 scene playing {
 layout {
-board = puzzle default
+puzzle board = default
 }
 }
 
@@ -8406,7 +8385,7 @@ resources {
 levels worldB
 }
 layout {
-board = puzzle default
+puzzle board = default
 }
 }
 "#;
@@ -8463,7 +8442,7 @@ P
 
 scene playing {
 layout {
-board = puzzle default
+puzzle board = default
 }
 }
 
@@ -8522,7 +8501,7 @@ P
 
 scene playing {
 layout {
-board = puzzle default
+puzzle board = default
 }
 }
 
@@ -8572,7 +8551,7 @@ P
 
 scene playing {
 layout {
-board = puzzle default
+puzzle board = default
 }
 }
 
@@ -8938,7 +8917,7 @@ P
 
 scene playing {
 layout {
-board = puzzle default
+puzzle board = default
 }
 }
 
@@ -8994,7 +8973,7 @@ P
 
 scene playing {
 layout {
-board = puzzle default
+puzzle board = default
 message_visible = true
 moves = 0
 message = "Read this"
@@ -9088,7 +9067,7 @@ P
 
 scene playing {
 layout {
-board = puzzle board
+puzzle board = board
 }
 rules {
 step board
@@ -9151,7 +9130,7 @@ P
 
 scene playing {
 layout {
-board = puzzle board
+puzzle board = board
 }
 rules {
 step board
@@ -9209,7 +9188,7 @@ P
 
 scene playing {
 layout {
-board = puzzle board
+puzzle board = board
 }
 rules {
 step board
@@ -9274,7 +9253,7 @@ message "clear one"
 
 scene playing {
 layout {
-board = puzzle board
+puzzle board = board
 }
 rules {
 step board
@@ -9342,7 +9321,7 @@ button "Play" -> goto playing
 
 scene playing {
 layout {
-board = puzzle board
+puzzle board = board
 }
 rules {
 step board
@@ -9417,7 +9396,7 @@ P
 
 scene playing {
 layout {
-board = puzzle board
+puzzle board = board
 }
 rules {
 step board

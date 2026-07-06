@@ -1,6 +1,8 @@
-use crate::{
-    Direction3, InputId3, LevelBundle3, LevelBundleError3, Rule3, State3, TransitionError3,
-    WinCondition3, transition_program, transition_program_without_input_with_local_frame,
+use crate::session_history::SessionHistory;
+use puzzle_3d::{
+    Direction3, InputId3, LevelBundle3, LevelBundleError3, LocalFrame, ObjectId, Rule3, State3,
+    TransitionError3, WinCondition3, transition_program, transition_program_with_local_frame,
+    transition_program_without_input_with_local_frame,
 };
 use puzzle_runtime_contract::{Lifecycle3, LifecycleCommand3};
 
@@ -16,7 +18,7 @@ pub struct GameSession3 {
     current_level_index: usize,
     initial_state: State3,
     current_state: State3,
-    undo_stack: Vec<SessionHistoryEntry3>,
+    history: SessionHistory<SessionHistoryEntry3>,
     move_count: u32,
     completed: bool,
 }
@@ -58,7 +60,7 @@ impl GameSession3 {
             current_level_index: level_index,
             current_state: initial_state.clone(),
             initial_state,
-            undo_stack: Vec::new(),
+            history: SessionHistory::new(),
             move_count: 0,
             completed: false,
         })
@@ -84,12 +86,20 @@ impl GameSession3 {
         self.completed
     }
 
+    pub fn replace_current_state(&mut self, state: State3) {
+        self.current_state = state.clone();
+        self.initial_state = state;
+        self.history.clear();
+        self.move_count = 0;
+        self.completed = false;
+    }
+
     pub fn can_undo(&self) -> bool {
-        !self.undo_stack.is_empty()
+        self.history.can_undo()
     }
 
     pub fn undo_depth(&self) -> usize {
-        self.undo_stack.len()
+        self.history.undo_len()
     }
 
     pub fn has_next_level(&self, bundle: &LevelBundle3) -> bool {
@@ -115,17 +125,57 @@ impl GameSession3 {
         input: InputId3,
     ) -> Result<bool, GameSessionError3> {
         let next = transition_program(&bundle.game, &self.current_state, rules, input)?;
+        Ok(self.apply_next_state(next))
+    }
+
+    pub fn apply_input_with_local_frame(
+        &mut self,
+        bundle: &LevelBundle3,
+        rules: &[Rule3],
+        input: InputId3,
+        local_frame: Option<&LocalFrame<ObjectId>>,
+    ) -> Result<bool, GameSessionError3> {
+        let next = transition_program_with_local_frame(
+            &bundle.game,
+            &self.current_state,
+            rules,
+            input,
+            local_frame,
+        )?;
+        Ok(self.apply_next_state(next))
+    }
+
+    fn apply_next_state(&mut self, next: State3) -> bool {
         if next == self.current_state {
-            return Ok(false);
+            return false;
         }
 
-        self.undo_stack.push(SessionHistoryEntry3 {
+        self.history.push_undo(SessionHistoryEntry3 {
             state: self.current_state.clone(),
             move_count: self.move_count,
             completed: self.completed,
         });
         self.current_state = next;
         self.move_count = self.move_count.saturating_add(1);
+        self.completed = false;
+        true
+    }
+
+    pub fn run_level_start_lifecycle_on_current_state(
+        &mut self,
+        bundle: &LevelBundle3,
+        lifecycle: &Lifecycle3,
+    ) -> Result<bool, GameSessionError3> {
+        let next = transition_program_without_input_with_local_frame(
+            &bundle.game,
+            &self.current_state,
+            &lifecycle.on_level_start,
+            lifecycle.on_level_start_local_frame.as_ref(),
+        )?;
+        if next == self.current_state {
+            return Ok(false);
+        }
+        self.current_state = next;
         self.completed = false;
         Ok(true)
     }
@@ -208,7 +258,7 @@ impl GameSession3 {
     }
 
     pub fn undo(&mut self) -> bool {
-        let Some(previous) = self.undo_stack.pop() else {
+        let Some(previous) = self.history.pop_undo() else {
             return false;
         };
         self.current_state = previous.state;
@@ -221,9 +271,9 @@ impl GameSession3 {
         let changed = self.current_state != self.initial_state
             || self.move_count != 0
             || self.completed
-            || !self.undo_stack.is_empty();
+            || self.history.can_undo();
         self.current_state = self.initial_state.clone();
-        self.undo_stack.clear();
+        self.history.clear();
         self.move_count = 0;
         self.completed = false;
         changed
@@ -239,10 +289,10 @@ impl GameSession3 {
         let changed = self.current_state != initial_state
             || self.move_count != 0
             || self.completed
-            || !self.undo_stack.is_empty();
+            || self.history.can_undo();
         self.current_state = initial_state.clone();
         self.initial_state = initial_state;
-        self.undo_stack.clear();
+        self.history.clear();
         self.move_count = 0;
         self.completed = false;
         Ok(changed)
@@ -268,11 +318,11 @@ impl GameSession3 {
             || self.current_state != initial_state
             || self.move_count != 0
             || self.completed
-            || !self.undo_stack.is_empty();
+            || self.history.can_undo();
         self.current_level_index = level_index;
         self.current_state = initial_state.clone();
         self.initial_state = initial_state;
-        self.undo_stack.clear();
+        self.history.clear();
         self.move_count = 0;
         self.completed = false;
         Ok(changed)
@@ -324,10 +374,15 @@ impl GameSession3 {
         };
         for command in commands {
             match command {
-                LifecycleCommand3::NextLevel => {
+                LifecycleCommand3::PuzzleNextLevel { target } if target.is_empty() => {
                     if self.next_level_with_lifecycle(bundle, lifecycle)? {
                         level_changed = true;
                     }
+                }
+                other => {
+                    return Err(GameSessionError3::UnsupportedLifecycleEffect(format!(
+                        "{other:?}"
+                    )));
                 }
             }
         }
@@ -354,6 +409,7 @@ pub enum GameSessionError3 {
     LevelBundle(LevelBundleError3),
     Transition(TransitionError3),
     MissingInputForDirection { direction: &'static str },
+    UnsupportedLifecycleEffect(String),
 }
 
 impl From<LevelBundleError3> for GameSessionError3 {
@@ -371,7 +427,7 @@ impl From<TransitionError3> for GameSessionError3 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
+    use puzzle_3d::{
         Coord3, Direction3, Game3, InputDef3, LayerId, Level3, LevelCell3, LevelEntry3, MatchCell3,
         ObjectDef3, ObjectId, Offset3, Pattern3, Size3, WriteOp3,
     };

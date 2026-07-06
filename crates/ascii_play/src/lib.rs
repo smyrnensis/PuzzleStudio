@@ -5,17 +5,17 @@ use std::io::{self, IsTerminal, Read, Write};
 use std::path::PathBuf;
 use std::process::Command;
 
-use puzzle_3d::{
-    Coord3, GameSession3, GameSessionError3, InputDef3, ObjectId as ObjectId3, ParsedPuzzle3,
-    State3,
-};
+use puzzle_3d::{Coord3, InputDef3, ObjectId as ObjectId3, ParsedPuzzle3, State3};
 use puzzle_core::{InputId, State as PuzzleState, transition_program};
 use puzzle_lang::{
     ArrowKey, DiagnosticReport, ForSource, KeyTrigger, LoadedDocumentModel, LoadedGame,
     ResourceSelection, SceneBinaryOp, SceneComponent, SceneEffect, SceneExpr, SceneTextContent,
     SceneValue, VisualSpriteKind, discover_game_entries, parse_game_file, resolve_game_entry,
 };
-use puzzle_play::{GameSession, MessageEvent, SoundEvent, WaitEvent, cell_objects};
+use puzzle_play::{
+    GameSession, GameSession3, GameSessionError3, MessageEvent, SessionLifecycleResult3,
+    SoundEvent, WaitEvent, cell_objects,
+};
 
 pub fn run_terminal_from_env() -> Result<(), AppError> {
     run_terminal_from_args(env::args().skip(1))
@@ -494,7 +494,7 @@ impl Puzzle3TerminalSession {
                 .session
                 .apply_input(bundle, &parsed.rules, input)
                 .map_err(AppError::from)?;
-            puzzle_3d::SessionLifecycleResult3 {
+            SessionLifecycleResult3 {
                 changed,
                 cleared: false,
                 level_changed: false,
@@ -2046,7 +2046,7 @@ T = Top
 B = Bottom
 }
 
-level one {
+level "one" {
 T.
 
 .B

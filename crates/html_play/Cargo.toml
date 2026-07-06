@@ -17,6 +17,7 @@ puzzle-core = { path = "../core" }
 puzzle-core-wasm = { package = "puzzle-wasm-core", path = "../wasm_core" }
 puzzle-3d = { path = "../puzzle_3d" }
 puzzle-lang = { path = "../lang" }
+puzzle-scene = { path = "../scene" }
 puzzle-play = { path = "../play" }
 puzzle-solver = { path = "../solver", optional = true }
 serde_json = "1"

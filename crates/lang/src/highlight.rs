@@ -4302,7 +4302,7 @@ level "start" {
 
 scene playing {
 layout {
-board = puzzle board
+puzzle board = board
 puzzle board
 text board.level.label
 }
@@ -4316,7 +4316,7 @@ button "Restart" -> board.restart
             "test fixture should parse before checking contextual highlight"
         );
         assert!(highlighted.html.contains(
-            "<span class=\"syntax-state\">board</span> <span class=\"syntax-operator\">=</span> <span class=\"syntax-keyword\">puzzle"
+            "<span class=\"syntax-keyword\">puzzle</span> <span class=\"syntax-state\">board</span> <span class=\"syntax-operator\">=</span>"
         ));
     }
 
@@ -4371,7 +4371,7 @@ level "push3d_01" {
 
 scene playing3d {
 layout size 4 3 {
-board = puzzle3 push3d
+puzzle3 board = push3d
 column gap 1 align center top {
 puzzle3 board
 row gap 1 {
@@ -4620,7 +4620,7 @@ level "start" {
 }
 
 scene playing {
-board = puzzle fixban
+puzzle board = fixban
 subtitle board.level.label
 if board.level.last {
 goto title
@@ -4653,7 +4653,7 @@ goto title
         assert!(
             highlighted
                 .html
-                .contains("syntax-state\">board</span> <span class=\"syntax-operator\">=</span> <span class=\"syntax-keyword\">puzzle</span> <span class=\"syntax-scene\">fixban")
+                .contains("syntax-keyword\">puzzle</span> <span class=\"syntax-state\">board</span> <span class=\"syntax-operator\">=</span> <span class=\"syntax-scene\">fixban")
         );
         assert!(highlighted.html.contains(
             "syntax-state\">board</span><span class=\"syntax-operator\">.</span>level<span class=\"syntax-operator\">.</span><span class=\"syntax-string\">label"

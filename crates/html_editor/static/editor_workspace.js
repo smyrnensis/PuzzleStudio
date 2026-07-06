@@ -1249,8 +1249,8 @@ function editorNavigationLocation() {
     documentId: document?.id || activeFileId || "",
     selectionStart,
     selectionEnd,
-    scrollTop: sourceEditor?.scrollTop || 0,
-    scrollLeft: sourceEditor?.scrollLeft || 0,
+    scrollTop: sourceScrollTop(),
+    scrollLeft: sourceScrollLeft(),
     previewMode: currentPreviewMode || "play",
     levelIndex: Number.isInteger(activeLevelIndex) ? activeLevelIndex : 0,
   };
@@ -1308,8 +1308,8 @@ function restoreEditorNavigationLocation(location) {
     const start = sourceDocumentOffsetToViewOffset(sourceStart, "start");
     const end = sourceDocumentOffsetToViewOffset(sourceEnd, "end");
     sourceEditor.setSelectionRange(start, end);
-    sourceEditor.scrollTop = Math.max(0, location.scrollTop || 0);
-    sourceEditor.scrollLeft = Math.max(0, location.scrollLeft || 0);
+    setSourceScrollTop(location.scrollTop || 0);
+    setSourceScrollLeft(location.scrollLeft || 0);
     if (typeof syncSourceHighlightScroll === "function") {
       syncSourceHighlightScroll();
     }
@@ -1985,7 +1985,9 @@ function toggleExplorerSection(id) {
   }
   applyExplorerSectionLayout();
   saveExplorerSectionState();
-  if (outlineWasCollapsed && !explorerOutlineCollapsed && typeof scheduleSourceOutlineRefresh === "function") {
+  const outlineShouldRefresh = !explorerOutlineCollapsed
+    && (outlineWasCollapsed || (id === "files" && explorerFilesCollapsed));
+  if (outlineShouldRefresh && typeof scheduleSourceOutlineRefresh === "function") {
     scheduleSourceOutlineRefresh(true, { force: true });
   }
 }

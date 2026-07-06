@@ -206,7 +206,7 @@ B = Box
 G = Goal
 }
 
-level start {
+level "start" {
 PBG
 }
 }
@@ -274,7 +274,7 @@ B = Box
 G = Goal
 }
 
-level start {
+level "start" {
 PBG
 }
 }
@@ -339,7 +339,7 @@ G = Goal
 * = Goal Box
 }
 
-level start {
+level "start" {
 PBG
 }
 }
@@ -401,7 +401,7 @@ P = Player
 E = Exit
 }
 
-level start {
+level "start" {
 PE
 }
 }
@@ -457,7 +457,7 @@ A = A
 B = B
 }
 
-level start {
+level "start" {
 AAA
 }
 }

@@ -31,6 +31,12 @@ fn parse_scene_puzzle_layout_declaration(
     line: &str,
     lifetime: SceneStateLifetime,
 ) -> Result<Option<ParsedScenePuzzleLayoutDeclaration>, DiagnosticReport> {
+    if let Some((declaration, attrs)) = parse_typed_scene_puzzle_declaration(line, lifetime)? {
+        return Ok(Some(ParsedScenePuzzleLayoutDeclaration {
+            puzzle: declaration,
+            layout: parse_scene_layout_attrs_for_line(&attrs, line)?,
+        }));
+    }
     let Some((name, value)) = parse_assignment_row(line) else {
         return Ok(None);
     };
@@ -38,79 +44,104 @@ fn parse_scene_puzzle_layout_declaration(
         return Ok(None);
     }
     let tokens = split_header_tokens(value);
-    let Some((kind, model, initializer, attrs)) =
-        parse_scene_puzzle_initializer_tokens(tokens.as_slice(), line)?
-    else {
+    reject_old_scene_puzzle_initializer(tokens.as_slice(), line)?;
+    Ok(None)
+}
+
+fn parse_typed_scene_puzzle_declaration<'a>(
+    line: &'a str,
+    lifetime: SceneStateLifetime,
+) -> Result<Option<(ScenePuzzleDef, Vec<&'a str>)>, DiagnosticReport> {
+    let Some((lhs, rhs)) = parse_assignment_row(line) else {
         return Ok(None);
     };
-    Ok(Some(ParsedScenePuzzleLayoutDeclaration {
-        puzzle: ScenePuzzleDef {
+    let lhs_tokens = split_header_tokens(lhs);
+    let rhs_tokens = split_header_tokens(rhs);
+    let (kind, name) = match lhs_tokens.as_slice() {
+        ["puzzle", name] => ("puzzle", *name),
+        ["puzzle3", name] => ("puzzle3", *name),
+        ["puzzle", ..] => {
+            return Err(parse_error(
+                line,
+                "scene puzzle declaration must be: puzzle <slot> = <model> | puzzle <slot> = <model> level <level>",
+            ));
+        }
+        ["puzzle3", ..] => {
+            return Err(parse_error(
+                line,
+                "scene puzzle3 declaration must be: puzzle3 <slot> = <model> | puzzle3 <slot> = <model> level <level>",
+            ));
+        }
+        _ => return Ok(None),
+    };
+    validate_identifier(name, line, "puzzle slot name")?;
+    let (model, initializer, attrs) =
+        parse_scene_puzzle_initializer_rhs(rhs_tokens.as_slice(), line, kind)?;
+    Ok(Some((
+        ScenePuzzleDef {
             name: name.to_string(),
-            kind,
+            kind: kind.to_string(),
             model,
             initializer,
             lifetime,
         },
-        layout: parse_scene_layout_attrs_for_line(attrs, line)?,
-    }))
+        attrs,
+    )))
 }
 
-fn parse_scene_puzzle_initializer_tokens<'a>(
-    tokens: &'a [&'a str],
+fn parse_scene_puzzle_initializer_rhs<'a>(
+    tokens: &[&'a str],
     line: &str,
-) -> Result<Option<(String, String, ScenePuzzleInitializer, &'a [&'a str])>, DiagnosticReport> {
+    kind: &str,
+) -> Result<(String, ScenePuzzleInitializer, Vec<&'a str>), DiagnosticReport> {
     match tokens {
-        ["puzzle", "current_level", ..] => Err(parse_error(
-            line,
-            "current_level is not scene syntax; use `puzzle <name>` for the current level",
-        )),
-        ["puzzle", puzzle_name, "level", level_name, attrs @ ..] => {
-            validate_qualified_identifier(puzzle_name, line, "puzzle name")?;
-            validate_qualified_identifier(level_name, line, "level name")?;
-            Ok(Some((
-                "puzzle".to_string(),
-                (*puzzle_name).to_string(),
-                ScenePuzzleInitializer::Level((*level_name).to_string()),
-                attrs,
-            )))
-        }
-        ["puzzle", puzzle_name, attrs @ ..] => {
-            validate_qualified_identifier(puzzle_name, line, "puzzle name")?;
-            Ok(Some((
-                "puzzle".to_string(),
-                (*puzzle_name).to_string(),
-                ScenePuzzleInitializer::CurrentLevel,
-                attrs,
-            )))
-        }
-        ["puzzle3", puzzle_name, "level", level_name, attrs @ ..] => {
-            validate_qualified_identifier(puzzle_name, line, "puzzle3 model name")?;
-            validate_qualified_identifier(level_name, line, "level name")?;
-            Ok(Some((
-                "puzzle3".to_string(),
-                (*puzzle_name).to_string(),
-                ScenePuzzleInitializer::Level((*level_name).to_string()),
-                attrs,
-            )))
-        }
-        ["puzzle3", puzzle_name, attrs @ ..] => {
-            validate_qualified_identifier(puzzle_name, line, "puzzle3 model name")?;
-            Ok(Some((
-                "puzzle3".to_string(),
-                (*puzzle_name).to_string(),
-                ScenePuzzleInitializer::CurrentLevel,
-                attrs,
-            )))
-        }
         ["puzzle", ..] => Err(parse_error(
             line,
-            "scene puzzle initializer must be: puzzle <name> | puzzle <name> level <level>",
+            "scene puzzle declaration must put the kind on the left: puzzle <slot> = <model>",
         )),
         ["puzzle3", ..] => Err(parse_error(
             line,
-            "scene puzzle3 initializer must be: puzzle3 <name> | puzzle3 <name> level <level>",
+            "scene puzzle3 declaration must put the kind on the left: puzzle3 <slot> = <model>",
         )),
-        _ => Ok(None),
+        ["current_level", ..] => Err(parse_error(
+            line,
+            "current_level is not scene syntax; use `<model>` for the current level",
+        )),
+        [model, "level", level_name, attrs @ ..] => {
+            validate_qualified_identifier(model, line, "puzzle model name")?;
+            validate_qualified_identifier(level_name, line, "level name")?;
+            Ok((
+                (*model).to_string(),
+                ScenePuzzleInitializer::Level((*level_name).to_string()),
+                attrs.to_vec(),
+            ))
+        }
+        [model, attrs @ ..] => {
+            validate_qualified_identifier(model, line, "puzzle model name")?;
+            Ok((
+                (*model).to_string(),
+                ScenePuzzleInitializer::CurrentLevel,
+                attrs.to_vec(),
+            ))
+        }
+        [] => Err(parse_error(
+            line,
+            &format!("scene {kind} declaration must name a model"),
+        )),
+    }
+}
+
+fn reject_old_scene_puzzle_initializer(tokens: &[&str], line: &str) -> Result<(), DiagnosticReport> {
+    match tokens {
+        ["puzzle", ..] => Err(parse_error(
+            line,
+            "scene puzzle declaration must be: puzzle <slot> = <model>",
+        )),
+        ["puzzle3", ..] => Err(parse_error(
+            line,
+            "scene puzzle3 declaration must be: puzzle3 <slot> = <model>",
+        )),
+        _ => Ok(()),
     }
 }
 
@@ -135,25 +166,26 @@ fn parse_scene_state_entry(
     } else {
         (line, lifetime, true)
     };
-    let (name, value) = require_assignment_row(line, "scene state must be: <name> = <value>")?;
-    if !is_identifier(name) {
-        return Err(parse_error(line, "scene state name must be an identifier"));
-    }
-    if let Some(initializer) = parse_scene_puzzle_initializer(value, line)? {
+    if let Some((puzzle, attrs)) = parse_typed_scene_puzzle_declaration(line, lifetime)? {
+        if !attrs.is_empty() {
+            return Err(parse_error(
+                line,
+                "scene state puzzle declarations do not accept layout attributes",
+            ));
+        }
         if prefixed_variable {
             return Err(parse_error(
                 line,
                 "var or const cannot define a puzzle slot",
             ));
         }
-        return Ok(ParsedSceneStateEntry::Puzzle(ScenePuzzleDef {
-            name: name.to_string(),
-            kind: initializer.kind,
-            model: initializer.model,
-            initializer: initializer.initializer,
-            lifetime,
-        }));
+        return Ok(ParsedSceneStateEntry::Puzzle(puzzle));
     }
+    let (name, value) = require_assignment_row(line, "scene state must be: <name> = <value>")?;
+    if !is_identifier(name) {
+        return Err(parse_error(line, "scene state name must be an identifier"));
+    }
+    reject_old_scene_puzzle_initializer(split_header_tokens(value).as_slice(), line)?;
     Ok(ParsedSceneStateEntry::Variable(SceneVarDef {
         name: name.to_string(),
         default: parse_scene_value(value, line)?,
@@ -260,82 +292,6 @@ fn parse_again_interval_directive(tokens: &[&str], line: &str) -> Result<u64, Di
             line,
             "again_interval must be: again_interval = <duration> or again_interval <seconds>",
         )),
-    }
-}
-
-#[derive(Clone, Debug)]
-struct ParsedScenePuzzleInitializer {
-    kind: String,
-    model: String,
-    initializer: ScenePuzzleInitializer,
-}
-
-fn parse_scene_puzzle_initializer(
-    value: &str,
-    line: &str,
-) -> Result<Option<ParsedScenePuzzleInitializer>, DiagnosticReport> {
-    let tokens = split_header_tokens(value);
-    match tokens.as_slice() {
-        ["puzzle", "current_level"] => Err(parse_error(
-            line,
-            "current_level is not scene syntax; use `puzzle <name>` for the current level",
-        )),
-        ["puzzle", puzzle_name, "level", level_name] => {
-            validate_qualified_identifier(puzzle_name, line, "puzzle name")?;
-            validate_qualified_identifier(level_name, line, "level name")?;
-            Ok(Some(ParsedScenePuzzleInitializer {
-                kind: "puzzle".to_string(),
-                model: (*puzzle_name).to_string(),
-                initializer: ScenePuzzleInitializer::Level((*level_name).to_string()),
-            }))
-        }
-        ["puzzle", puzzle_name] => {
-            if *puzzle_name == "current_level" {
-                return Err(parse_error(
-                    line,
-                    "current_level is not scene syntax; use `puzzle <name>` for the current level",
-                ));
-            }
-            validate_qualified_identifier(puzzle_name, line, "puzzle name")?;
-            Ok(Some(ParsedScenePuzzleInitializer {
-                kind: "puzzle".to_string(),
-                model: (*puzzle_name).to_string(),
-                initializer: ScenePuzzleInitializer::CurrentLevel,
-            }))
-        }
-        ["puzzle3", puzzle_name] => {
-            validate_qualified_identifier(puzzle_name, line, "puzzle3 model name")?;
-            Ok(Some(ParsedScenePuzzleInitializer {
-                kind: "puzzle3".to_string(),
-                model: (*puzzle_name).to_string(),
-                initializer: ScenePuzzleInitializer::CurrentLevel,
-            }))
-        }
-        ["puzzle3", puzzle_name, "level", level_name] => {
-            validate_qualified_identifier(puzzle_name, line, "puzzle3 model name")?;
-            validate_qualified_identifier(level_name, line, "level name")?;
-            Ok(Some(ParsedScenePuzzleInitializer {
-                kind: "puzzle3".to_string(),
-                model: (*puzzle_name).to_string(),
-                initializer: ScenePuzzleInitializer::Level((*level_name).to_string()),
-            }))
-        }
-        ["puzzle", puzzle_name, "current_level"] => {
-            validate_qualified_identifier(puzzle_name, line, "puzzle name")?;
-            Err(parse_error(
-                line,
-                "current_level is not scene syntax; use `puzzle <name>` for the current level",
-            ))
-        }
-        ["puzzle", ..] => Err(parse_error(
-            line,
-            "scene puzzle initializer must be: puzzle <name> | puzzle <name> level <level>",
-        )),
-        ["puzzle3", ..] => Err(parse_error(
-            line,
-            "scene puzzle3 initializer must be: puzzle3 <name> | puzzle3 <name> level <level>",
-        )),
-        _ => Ok(None),
     }
 }
 
