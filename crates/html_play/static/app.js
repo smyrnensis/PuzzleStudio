@@ -1332,6 +1332,14 @@ function renderPuzzle3Frame(component, scope = {}) {
       fixture,
       scene: sceneName,
       component,
+      onLifecycleEffects(effects) {
+        sendPuzzle3LifecycleEffects(effects, {
+          ...scope,
+          __sceneDef: scope.__sceneDef || currentSceneDef(),
+          __puzzle3Source: source,
+          __effectTargetScene: sceneName,
+        });
+      },
     });
     entry = { root, canvas, controller, levelIndex: null };
     if (shouldPostPuzzle3ControllerMessages()) {
@@ -1356,6 +1364,20 @@ function renderPuzzle3Frame(component, scope = {}) {
   }
   syncPuzzle3ControllerLevel(entry);
   return entry.root;
+}
+
+function sendPuzzle3LifecycleEffects(effects, scope = {}) {
+  const list = Array.isArray(effects) ? effects : [];
+  if (list.length === 0) {
+    return;
+  }
+  Promise.resolve()
+    .then(async () => {
+      for (const effect of list) {
+        await sendEffect(effect?.effect || effect, scope);
+      }
+    })
+    .catch((error) => showError(error));
 }
 
 function puzzle3FrameFixture(sceneName) {
@@ -3116,16 +3138,16 @@ function effectLabel(effect) {
     return `goto ${effect.scene}`;
   }
   if (effect.kind === "puzzle_next_level") {
-    return `${effect.target}.next_level`;
+    return effect.target ? `${effect.target}.next_level` : "next_level";
   }
   if (effect.kind === "puzzle_previous_level") {
-    return `${effect.target}.previous_level`;
+    return effect.target ? `${effect.target}.previous_level` : "previous_level";
   }
   if (effect.kind === "puzzle_reset") {
-    return `${effect.target}.restart`;
+    return effect.target ? `${effect.target}.restart` : "restart";
   }
   if (effect.kind === "puzzle_goto_level") {
-    return `${effect.target}.goto`;
+    return effect.target ? `${effect.target}.goto` : "goto";
   }
   if (effect.kind === "back") {
     return "back";
@@ -3189,16 +3211,16 @@ function effectToCommand(effect, scope = {}) {
     return `goto ${effect.scene}`;
   }
   if (effect.kind === "puzzle_next_level") {
-    return `${effect.target}.next_level`;
+    return puzzleEffectCommand(effect, "next_level", "", scope);
   }
   if (effect.kind === "puzzle_previous_level") {
-    return `${effect.target}.previous_level`;
+    return puzzleEffectCommand(effect, "previous_level", "", scope);
   }
   if (effect.kind === "puzzle_reset") {
-    return `${effect.target}.restart`;
+    return puzzleEffectCommand(effect, "restart", "", scope);
   }
   if (effect.kind === "puzzle_goto_level") {
-    return `${effect.target}.goto ${effectValueToCommand(effect.level, scope)}`;
+    return puzzleEffectCommand(effect, "goto", effectValueToCommand(effect.level, scope), scope);
   }
   if (effect.kind === "set_variable") {
     return `${effect.name} = ${exprSource(effect.value, scope)}`;
@@ -3223,6 +3245,17 @@ function effectToCommand(effect, scope = {}) {
 
 function effectCommandName(effect) {
   return effect?.scene || effect?.screen || "";
+}
+
+function puzzleEffectCommand(effect, command, payload = "", scope = {}) {
+  const explicitTarget = String(effect?.target || "").trim();
+  const target = explicitTarget
+    || String(scope.__effectTargetScene || scope.__sceneDef?.name || currentState?.currentScene || currentState?.screen || "").trim();
+  if (!target) {
+    return "";
+  }
+  const suffix = payload ? ` ${payload}` : "";
+  return `${target}.${command}${suffix}`;
 }
 
 function effectValueToCommand(value, scope = {}) {

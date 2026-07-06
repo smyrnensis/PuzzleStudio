@@ -12,6 +12,18 @@ pub trait KernelId: Copy {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct VariableId(pub u16);
+
+impl KernelId for VariableId {
+    fn raw(self) -> u16 {
+        self.0
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct InputId(pub u16);
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct GridCoord<const D: usize> {
     axes: [u16; D],
@@ -146,7 +158,7 @@ impl<const D: usize> GridShape<D> {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum GridPatchOp<Position, ObjectId, GlobalId, MarkId> {
+pub enum GridPatchOp<Position, ObjectId, VariableId, MarkId> {
     Add {
         position: Position,
         object: ObjectId,
@@ -165,9 +177,9 @@ pub enum GridPatchOp<Position, ObjectId, GlobalId, MarkId> {
         remove: ObjectId,
         add: ObjectId,
     },
-    UpdateGlobal {
-        global: GlobalId,
-        op: GlobalUpdateOp,
+    UpdateVariable {
+        variable: VariableId,
+        op: VariableUpdateOp,
         value: i64,
     },
     SetMark {
@@ -492,13 +504,22 @@ impl<ObjectId> LocalFrame<ObjectId> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum GlobalUpdateOp {
+pub enum VariableUpdateOp {
     Set,
     Add,
     Subtract,
     Multiply,
     Divide,
     Remainder,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum VariableEffect<VariableId> {
+    UpdateVariable {
+        variable: VariableId,
+        op: VariableUpdateOp,
+        value: i64,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -526,14 +547,14 @@ pub trait RuleInputGuard<InputId> {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum RuleGuard<GlobalId, ConditionId, ConditionValueKind, InputId> {
+pub enum RuleGuard<VariableId, ConditionId, ConditionValueKind, InputId> {
     InputIs(InputId),
-    GlobalEquals {
-        global: GlobalId,
+    VariableEquals {
+        variable: VariableId,
         value: i64,
     },
-    GlobalCompare {
-        global: GlobalId,
+    VariableCompare {
+        variable: VariableId,
         op: ComparisonOp,
         value: i64,
     },
@@ -565,8 +586,8 @@ pub struct RuleConditionDef<ConditionId, ConditionValueKind> {
     pub kind: ConditionValueKind,
 }
 
-impl<GlobalId, ConditionId, ConditionValueKind, InputId> RuleInputGuard<InputId>
-    for RuleGuard<GlobalId, ConditionId, ConditionValueKind, InputId>
+impl<VariableId, ConditionId, ConditionValueKind, InputId> RuleInputGuard<InputId>
+    for RuleGuard<VariableId, ConditionId, ConditionValueKind, InputId>
 {
     fn input_is(input: InputId) -> Self {
         Self::InputIs(input)
@@ -640,19 +661,19 @@ impl<RuleId, Guard, Pattern, WriteOp, Effect> RuleModel<RuleId, Guard, Pattern, 
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum GlobalValueError<GlobalId> {
-    OutOfBounds { global: GlobalId },
-    Overflow { global: GlobalId },
-    DivisionByZero { global: GlobalId },
+pub enum VariableValueError<VariableId> {
+    OutOfBounds { variable: VariableId },
+    Overflow { variable: VariableId },
+    DivisionByZero { variable: VariableId },
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct VisibleGlobals<GlobalId> {
+pub struct VisibleVariables<VariableId> {
     values: Vec<i64>,
-    _id: PhantomData<GlobalId>,
+    _id: PhantomData<VariableId>,
 }
 
-impl<GlobalId: KernelId> VisibleGlobals<GlobalId> {
+impl<VariableId: KernelId> VisibleVariables<VariableId> {
     pub fn new(values: Vec<i64>) -> Self {
         Self {
             values,
@@ -666,66 +687,70 @@ impl<GlobalId: KernelId> VisibleGlobals<GlobalId> {
     }
 
     #[inline]
-    pub fn get(&self, global: GlobalId) -> Option<i64> {
-        self.values.get(global.index()).copied()
+    pub fn get(&self, variable: VariableId) -> Option<i64> {
+        self.values.get(variable.index()).copied()
     }
 
-    pub fn set(&mut self, global: GlobalId, value: i64) -> Result<(), GlobalValueError<GlobalId>> {
+    pub fn set(
+        &mut self,
+        variable: VariableId,
+        value: i64,
+    ) -> Result<(), VariableValueError<VariableId>> {
         let slot = self
             .values
-            .get_mut(global.index())
-            .ok_or(GlobalValueError::OutOfBounds { global })?;
+            .get_mut(variable.index())
+            .ok_or(VariableValueError::OutOfBounds { variable })?;
         *slot = value;
         Ok(())
     }
 
     pub fn update(
         &mut self,
-        global: GlobalId,
-        op: GlobalUpdateOp,
+        variable: VariableId,
+        op: VariableUpdateOp,
         value: i64,
-    ) -> Result<(), GlobalValueError<GlobalId>> {
+    ) -> Result<(), VariableValueError<VariableId>> {
         let slot = self
             .values
-            .get_mut(global.index())
-            .ok_or(GlobalValueError::OutOfBounds { global })?;
-        *slot = apply_global_update(*slot, op, value, global)?;
+            .get_mut(variable.index())
+            .ok_or(VariableValueError::OutOfBounds { variable })?;
+        *slot = apply_variable_update(*slot, op, value, variable)?;
         Ok(())
     }
 }
 
-fn apply_global_update<GlobalId: Copy>(
+fn apply_variable_update<VariableId: Copy>(
     current: i64,
-    op: GlobalUpdateOp,
+    op: VariableUpdateOp,
     value: i64,
-    global: GlobalId,
-) -> Result<i64, GlobalValueError<GlobalId>> {
+    variable: VariableId,
+) -> Result<i64, VariableValueError<VariableId>> {
     match op {
-        GlobalUpdateOp::Set => Ok(value),
-        GlobalUpdateOp::Add => current
+        VariableUpdateOp::Set => Ok(value),
+        VariableUpdateOp::Add => current
             .checked_add(value)
-            .ok_or(GlobalValueError::Overflow { global }),
-        GlobalUpdateOp::Subtract => current
+            .ok_or(VariableValueError::Overflow { variable }),
+        VariableUpdateOp::Subtract => current
             .checked_sub(value)
-            .ok_or(GlobalValueError::Overflow { global }),
-        GlobalUpdateOp::Multiply => current
+            .ok_or(VariableValueError::Overflow { variable }),
+        VariableUpdateOp::Multiply => current
             .checked_mul(value)
-            .ok_or(GlobalValueError::Overflow { global }),
-        GlobalUpdateOp::Divide => {
+            .ok_or(VariableValueError::Overflow { variable }),
+        VariableUpdateOp::Divide => {
             if value == 0 {
-                return Err(GlobalValueError::DivisionByZero { global });
+                return Err(VariableValueError::DivisionByZero { variable });
             }
             current
                 .checked_div(value)
-                .ok_or(GlobalValueError::Overflow { global })
+                .ok_or(VariableValueError::Overflow { variable })
         }
-        GlobalUpdateOp::Remainder => {
+        VariableUpdateOp::Remainder => {
             if value == 0 {
-                return Err(GlobalValueError::DivisionByZero { global });
+                return Err(VariableValueError::DivisionByZero { variable });
             }
             current
                 .checked_rem(value)
-                .ok_or(GlobalValueError::Overflow { global })
+                .ok_or(VariableValueError::Overflow { variable })
         }
     }
 }
@@ -1348,13 +1373,15 @@ mod tests {
     }
 
     #[test]
-    fn visible_globals_update_with_checked_arithmetic() {
-        let mut globals = VisibleGlobals::new(vec![4]);
-        globals.update(TestId(0), GlobalUpdateOp::Add, 3).unwrap();
-        assert_eq!(globals.get(TestId(0)), Some(7));
+    fn visible_variables_update_with_checked_arithmetic() {
+        let mut variables = VisibleVariables::new(vec![4]);
+        variables
+            .update(TestId(0), VariableUpdateOp::Add, 3)
+            .unwrap();
+        assert_eq!(variables.get(TestId(0)), Some(7));
         assert!(matches!(
-            globals.update(TestId(0), GlobalUpdateOp::Divide, 0),
-            Err(GlobalValueError::DivisionByZero { .. })
+            variables.update(TestId(0), VariableUpdateOp::Divide, 0),
+            Err(VariableValueError::DivisionByZero { .. })
         ));
     }
 

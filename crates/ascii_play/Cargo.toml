@@ -10,6 +10,6 @@ path = "src/main.rs"
 
 [dependencies]
 puzzle-core = { path = "../core" }
-puzzle-3d = { path = "../puzzle_3d" }
+puzzle-grid3d = { path = "../grid3d" }
 puzzle-lang = { path = "../lang" }
 puzzle-play = { path = "../play" }

@@ -1,6 +1,6 @@
-use crate::{ConditionDef3, ConditionId3, RuleId3};
-use crate::{InputId3, LayerId, ObjectId};
-use puzzle_kernel::{GridCoord, GridOffset, ObjectRoleSet};
+use crate::{ConditionDef3, ConditionId3};
+use crate::{InputId, LayerId, ObjectId};
+use puzzle_kernel::{GridCoord, GridOffset};
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::BTreeSet;
@@ -579,14 +579,14 @@ pub struct ObjectDef3 {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InputDef3 {
-    pub id: InputId3,
+    pub id: InputId,
     pub name: String,
     pub direction: Option<Direction3>,
     pub keys: Vec<String>,
 }
 
 impl InputDef3 {
-    pub fn directional(id: InputId3, name: impl Into<String>, direction: Direction3) -> Self {
+    pub fn directional(id: InputId, name: impl Into<String>, direction: Direction3) -> Self {
         Self {
             id,
             name: name.into(),
@@ -595,7 +595,7 @@ impl InputDef3 {
         }
     }
 
-    pub fn action(id: InputId3, name: impl Into<String>) -> Self {
+    pub fn action(id: InputId, name: impl Into<String>) -> Self {
         Self {
             id,
             name: name.into(),
@@ -616,8 +616,6 @@ pub struct Game3 {
     pub objects: Vec<ObjectDef3>,
     pub inputs: Vec<InputDef3>,
     condition_defs: Vec<ConditionDef3>,
-    visual_objects: ObjectRoleSet<ObjectId>,
-    visual_rules: ObjectRoleSet<RuleId3>,
 }
 
 impl Game3 {
@@ -627,8 +625,6 @@ impl Game3 {
             objects,
             inputs: Vec::new(),
             condition_defs: Vec::new(),
-            visual_objects: ObjectRoleSet::default(),
-            visual_rules: ObjectRoleSet::default(),
         }
     }
 
@@ -642,8 +638,6 @@ impl Game3 {
             objects,
             inputs,
             condition_defs: Vec::new(),
-            visual_objects: ObjectRoleSet::default(),
-            visual_rules: ObjectRoleSet::default(),
         }
     }
 
@@ -658,25 +652,6 @@ impl Game3 {
             objects,
             inputs,
             condition_defs,
-            visual_objects: ObjectRoleSet::default(),
-            visual_rules: ObjectRoleSet::default(),
-        }
-    }
-
-    pub fn new_with_inputs_and_roles(
-        layer_count: u16,
-        objects: Vec<ObjectDef3>,
-        inputs: Vec<InputDef3>,
-        visual_objects: Vec<ObjectId>,
-        visual_rules: Vec<RuleId3>,
-    ) -> Self {
-        Self {
-            layer_count,
-            objects,
-            inputs,
-            condition_defs: Vec::new(),
-            visual_objects: ObjectRoleSet::new(visual_objects),
-            visual_rules: ObjectRoleSet::new(visual_rules),
         }
     }
 
@@ -750,7 +725,7 @@ impl Game3 {
             .map(|def| def.layer_id)
     }
 
-    pub fn input(&self, input: InputId3) -> Option<&InputDef3> {
+    pub fn input(&self, input: InputId) -> Option<&InputDef3> {
         self.inputs.iter().find(|def| def.id == input)
     }
 
@@ -766,24 +741,8 @@ impl Game3 {
         self.condition_defs.get(usize::from(condition.0))
     }
 
-    pub fn direction_for_input(&self, input: InputId3) -> Option<Direction3> {
+    pub fn direction_for_input(&self, input: InputId) -> Option<Direction3> {
         self.input(input).and_then(|def| def.direction)
-    }
-
-    pub fn is_visual_object(&self, object: ObjectId) -> bool {
-        self.visual_objects.contains(object)
-    }
-
-    pub fn visual_objects(&self) -> &[ObjectId] {
-        self.visual_objects.as_slice()
-    }
-
-    pub fn is_visual_rule(&self, rule: RuleId3) -> bool {
-        self.visual_rules.contains(rule)
-    }
-
-    pub fn visual_rules(&self) -> &[RuleId3] {
-        self.visual_rules.as_slice()
     }
 }
 
@@ -793,7 +752,7 @@ pub enum GameError3 {
     EmptyObjectId,
     DuplicateObjectId { object: ObjectId },
     ObjectLayerOutOfBounds { object: ObjectId, layer: LayerId },
-    DuplicateInputId { input: InputId3 },
+    DuplicateInputId { input: InputId },
     DuplicateInputName { name: String },
     DuplicateConditionId { condition: ConditionId3 },
 }

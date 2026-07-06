@@ -147,7 +147,7 @@ fn print_snapshot(label: &str, game: &LoadedGame, session: &GameSession, args: &
         state.height,
         state.layer_count
     );
-    print_globals(game, state.visible_globals());
+    print_variables(game, state.visible_variables());
     println!("ascii:");
     println!("{}", render_ascii_top(state, &game.legend));
     println!("watched:");
@@ -174,12 +174,12 @@ fn active_state<'a>(_game: &'a LoadedGame, session: &'a GameSession) -> &'a puzz
     session.state()
 }
 
-fn print_globals(game: &LoadedGame, values: &[i64]) {
+fn print_variables(game: &LoadedGame, values: &[i64]) {
     if values.is_empty() {
         return;
     }
     let names_by_index = game
-        .global_labels
+        .variable_labels
         .iter()
         .map(|(id, name)| (usize::from(id.0), name.as_str()))
         .collect::<BTreeMap<_, _>>();
@@ -192,7 +192,7 @@ fn print_globals(game: &LoadedGame, values: &[i64]) {
         })
         .collect::<Vec<_>>()
         .join(", ");
-    println!("globals: {rendered}");
+    println!("variables: {rendered}");
 }
 
 fn print_named_positions(game: &LoadedGame, state: &puzzle_core::State, name: &str) {

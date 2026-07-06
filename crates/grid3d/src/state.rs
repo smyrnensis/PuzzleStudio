@@ -1,7 +1,7 @@
-use crate::{Coord3, Game3, GlobalId3, LayerId, MarkId3, ObjectId, RuleId3, Size3};
+use crate::{Coord3, Game3, LayerId, MarkId3, ObjectId, RuleId3, Size3, VariableId};
 use puzzle_kernel::{
-    FnvBuilder, GlobalUpdateOp, GlobalValueError, GridShape, MarkSpace, MarkValue, ObjectCellMask,
-    VisibleGlobals, fnv_mix,
+    FnvBuilder, GridShape, MarkSpace, MarkValue, ObjectCellMask, VariableUpdateOp,
+    VariableValueError, VisibleVariables, fnv_mix,
 };
 
 #[derive(Clone, Debug)]
@@ -10,7 +10,7 @@ pub struct State3 {
     pub layer_count: u16,
     slots: Vec<ObjectId>,
     mark: MarkSpace<MarkId3>,
-    visible_globals: VisibleGlobals<GlobalId3>,
+    visible_variables: VisibleVariables<VariableId>,
     level_fired_rules: Vec<RuleId3>,
     cell_object_masks: Vec<ObjectCellMask>,
     hash: u64,
@@ -40,14 +40,14 @@ pub enum StateError3 {
         position: Coord3,
         object: ObjectId,
     },
-    GlobalOutOfBounds {
-        global: GlobalId3,
+    VariableOutOfBounds {
+        variable: VariableId,
     },
-    GlobalOverflow {
-        global: GlobalId3,
+    VariableOverflow {
+        variable: VariableId,
     },
-    GlobalDivisionByZero {
-        global: GlobalId3,
+    VariableDivisionByZero {
+        variable: VariableId,
     },
 }
 
@@ -58,13 +58,13 @@ pub struct CellView3 {
 
 impl State3 {
     pub fn empty(size: Size3, layer_count: u16) -> Result<Self, StateError3> {
-        Self::empty_with_globals(size, layer_count, Vec::new())
+        Self::empty_with_variables(size, layer_count, Vec::new())
     }
 
-    pub fn empty_with_globals(
+    pub fn empty_with_variables(
         size: Size3,
         layer_count: u16,
-        visible_globals: Vec<i64>,
+        visible_variables: Vec<i64>,
     ) -> Result<Self, StateError3> {
         let shape = grid_shape(size, layer_count).ok_or(StateError3::InvalidDimensions)?;
         let cell_count = shape.cell_count().ok_or(StateError3::InvalidDimensions)?;
@@ -74,7 +74,7 @@ impl State3 {
             layer_count,
             slots: vec![ObjectId::EMPTY; slot_count],
             mark: MarkSpace::new(cell_count, slot_count),
-            visible_globals: VisibleGlobals::new(visible_globals),
+            visible_variables: VisibleVariables::new(visible_variables),
             level_fired_rules: Vec::new(),
             cell_object_masks: vec![ObjectCellMask::default(); cell_count],
             hash: 0,
@@ -99,31 +99,35 @@ impl State3 {
         self.mark.cell_values()
     }
 
-    pub fn visible_globals(&self) -> &[i64] {
-        self.visible_globals.as_slice()
+    pub fn visible_variables(&self) -> &[i64] {
+        self.visible_variables.as_slice()
     }
 
-    pub fn global_value(&self, global: GlobalId3) -> Option<i64> {
-        self.visible_globals.get(global)
+    pub fn variable_value(&self, variable: VariableId) -> Option<i64> {
+        self.visible_variables.get(variable)
     }
 
-    pub fn set_visible_global(&mut self, global: GlobalId3, value: i64) -> Result<(), StateError3> {
-        self.visible_globals
-            .set(global, value)
-            .map_err(map_global_error)?;
+    pub fn set_visible_variable(
+        &mut self,
+        variable: VariableId,
+        value: i64,
+    ) -> Result<(), StateError3> {
+        self.visible_variables
+            .set(variable, value)
+            .map_err(map_variable_error)?;
         self.recompute_hash();
         Ok(())
     }
 
-    pub fn update_visible_global(
+    pub fn update_visible_variable(
         &mut self,
-        global: GlobalId3,
-        op: GlobalUpdateOp,
+        variable: VariableId,
+        op: VariableUpdateOp,
         value: i64,
     ) -> Result<(), StateError3> {
-        self.visible_globals
-            .update(global, op, value)
-            .map_err(map_global_error)?;
+        self.visible_variables
+            .update(variable, op, value)
+            .map_err(map_variable_error)?;
         self.recompute_hash();
         Ok(())
     }
@@ -144,11 +148,12 @@ impl State3 {
         self.recompute_hash();
     }
 
-    pub fn without_visual_objects(&self, game: &Game3) -> Self {
-        if self
-            .slots
-            .iter()
-            .all(|object| object.is_empty() || !game.is_visual_object(*object))
+    pub fn without_objects(&self, objects: &[ObjectId]) -> Self {
+        if objects.is_empty()
+            || self
+                .slots
+                .iter()
+                .all(|object| object.is_empty() || !objects.contains(object))
         {
             return self.clone();
         }
@@ -156,7 +161,7 @@ impl State3 {
         let mut next = self.clone();
         for index in 0..next.slots.len() {
             let object = next.slots[index];
-            if object.is_empty() || !game.is_visual_object(object) {
+            if object.is_empty() || !objects.contains(&object) {
                 continue;
             }
             next.set_slot_index_unchecked(index, ObjectId::EMPTY);
@@ -396,7 +401,7 @@ impl State3 {
             hash = fnv_mix(hash, u64::from(object.0));
         }
         hash = self.mark.hash_into(hash, |mark| u64::from(mark.0));
-        for value in self.visible_globals.as_slice() {
+        for value in self.visible_variables.as_slice() {
             hash = fnv_mix(hash, *value as u64);
         }
         hash = fnv_mix(hash, self.level_fired_rules.len() as u64);
@@ -470,11 +475,15 @@ fn checked_object_layer(game: &Game3, object: ObjectId) -> Result<LayerId, State
         .ok_or(StateError3::UnknownObject { object })
 }
 
-fn map_global_error(error: GlobalValueError<GlobalId3>) -> StateError3 {
+fn map_variable_error(error: VariableValueError<VariableId>) -> StateError3 {
     match error {
-        GlobalValueError::OutOfBounds { global } => StateError3::GlobalOutOfBounds { global },
-        GlobalValueError::Overflow { global } => StateError3::GlobalOverflow { global },
-        GlobalValueError::DivisionByZero { global } => StateError3::GlobalDivisionByZero { global },
+        VariableValueError::OutOfBounds { variable } => {
+            StateError3::VariableOutOfBounds { variable }
+        }
+        VariableValueError::Overflow { variable } => StateError3::VariableOverflow { variable },
+        VariableValueError::DivisionByZero { variable } => {
+            StateError3::VariableDivisionByZero { variable }
+        }
     }
 }
 
@@ -484,7 +493,7 @@ impl PartialEq for State3 {
             && self.layer_count == other.layer_count
             && self.slots == other.slots
             && self.mark == other.mark
-            && self.visible_globals == other.visible_globals
+            && self.visible_variables == other.visible_variables
             && self.level_fired_rules == other.level_fired_rules
     }
 }

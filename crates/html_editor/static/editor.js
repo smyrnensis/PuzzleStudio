@@ -7820,8 +7820,8 @@ function levelStateData(exportData) {
   });
 
   const levelIndex = currentEditableLevelIndex(exportData);
-  const globalsLength = exportData.levels?.[levelIndex]?.initialState?.globals?.length
-    || exportData.levels?.[0]?.initialState?.globals?.length
+  const variablesLength = exportData.levels?.[levelIndex]?.initialState?.variables?.length
+    || exportData.levels?.[0]?.initialState?.variables?.length
     || 0;
 
   return {
@@ -7830,7 +7830,7 @@ function levelStateData(exportData) {
     layerCount,
     levelIndex,
     slots,
-    globals: Array.from({ length: globalsLength }, () => 0),
+    variables: Array.from({ length: variablesLength }, () => 0),
   };
 }
 
@@ -7858,8 +7858,8 @@ function stateDataFromScene(scene, exportData, levelIndex = currentEditableLevel
     }
   });
 
-  const globalsLength = exportData.levels?.[levelIndex]?.initialState?.globals?.length
-    || exportData.levels?.[0]?.initialState?.globals?.length
+  const variablesLength = exportData.levels?.[levelIndex]?.initialState?.variables?.length
+    || exportData.levels?.[0]?.initialState?.variables?.length
     || 0;
 
   return {
@@ -7868,7 +7868,7 @@ function stateDataFromScene(scene, exportData, levelIndex = currentEditableLevel
     layerCount,
     levelIndex,
     slots,
-    globals: Array.from({ length: globalsLength }, () => 0),
+    variables: Array.from({ length: variablesLength }, () => 0),
   };
 }
 
@@ -8041,11 +8041,11 @@ function inspectPreviewExport(html) {
     }
   }
   for (const candidate of [
-    { kind: "puzzle3d", globalName: "Puzzle3DFrameFixture" },
-    { kind: "puzzle3d", globalName: "Puzzle3DFixture" },
-    { kind: "puzzle2d", globalName: "PuzzleExport" },
+    { kind: "puzzle3d", windowName: "Puzzle3DFrameFixture" },
+    { kind: "puzzle3d", windowName: "Puzzle3DFixture" },
+    { kind: "puzzle2d", windowName: "PuzzleExport" },
   ]) {
-    const literal = extractJsonParseStringLiteral(source, candidate.globalName);
+    const literal = extractJsonParseStringLiteral(source, candidate.windowName);
     if (!literal) {
       continue;
     }
@@ -8071,8 +8071,8 @@ function inspectPreviewExport(html) {
   return { exportData: null, diagnostics };
 }
 
-function extractAssignedStringLiteral(source, globalName) {
-  const assignmentPattern = new RegExp(`window\\.${globalName}\\s*=\\s*`, "g");
+function extractAssignedStringLiteral(source, windowName) {
+  const assignmentPattern = new RegExp(`window\\.${windowName}\\s*=\\s*`, "g");
   const match = assignmentPattern.exec(source);
   if (!match) {
     return null;
@@ -8084,8 +8084,8 @@ function extractAssignedStringLiteral(source, globalName) {
   return source[index] === "\"" ? extractStringLiteralAt(source, index) : null;
 }
 
-function extractJsonParseStringLiteral(source, globalName) {
-  const assignmentPattern = new RegExp(`window\\.${globalName}\\s*=\\s*JSON\\.parse\\s*\\(`, "g");
+function extractJsonParseStringLiteral(source, windowName) {
+  const assignmentPattern = new RegExp(`window\\.${windowName}\\s*=\\s*JSON\\.parse\\s*\\(`, "g");
   const match = assignmentPattern.exec(source);
   if (!match) {
     return null;
@@ -8126,8 +8126,8 @@ function replacePreviewExport(html, exportData) {
   const pattern = exportData?.__kind === "puzzle3d"
     ? /window\.Puzzle3DFrameFixture\s*=\s*JSON\.parse\("(?:(?:\\.)|[^"\\])*"\);|window\.Puzzle3DFixture\s*=\s*JSON\.parse\("(?:(?:\\.)|[^"\\])*"\);/
     : /window\.PuzzleExport\s*=\s*JSON\.parse\("(?:(?:\\.)|[^"\\])*"\);/;
-  const globalName = exportData?.__kind === "puzzle3d" ? "Puzzle3DFrameFixture" : "PuzzleExport";
-  const nextHtml = html.replace(pattern, `window.${globalName} = JSON.parse(${encoded});`);
+  const windowName = exportData?.__kind === "puzzle3d" ? "Puzzle3DFrameFixture" : "PuzzleExport";
+  const nextHtml = html.replace(pattern, `window.${windowName} = JSON.parse(${encoded});`);
   return nextHtml === html ? "" : nextHtml;
 }
 

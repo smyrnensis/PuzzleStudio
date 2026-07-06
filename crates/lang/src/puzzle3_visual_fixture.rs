@@ -2,11 +2,13 @@ use std::collections::BTreeMap;
 use std::fmt::Write;
 
 use crate::{
-    Direction3, ObjectId, ObjectSelector3, ParsedPuzzle3, SelectorCatalog3, SelectorTag3, Size3,
-    SpriteColor3, SpriteSet3, ViewportFollow3, ViewportHeight3, ViewportMode3,
+    ParsedPuzzle3, SpriteColor3, SpriteSet3, ViewportFollow3, ViewportHeight3, ViewportMode3,
 };
+use puzzle_grid3d::{Direction3, LevelBundle3, LevelCell3, ObjectId, Size3};
+use puzzle_grid3d_authoring::{ObjectSelector3, SelectorCatalog3, SelectorTag3};
 use puzzle_runtime_contract::{
-    PUZZLE3_RUNTIME_CONTRACT_VERSION, Puzzle3RuntimeContract, puzzle3_runtime_contract_json,
+    Puzzle3RuntimeModel, RUNTIME_CONTRACT_VERSION, RuntimeContract, RuntimeModelContract,
+    runtime_contract_json,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -81,7 +83,7 @@ pub fn export_visual_fixture_json_with_title_scenes_and_animation(
     let _ = writeln!(
         out,
         "  \"runtimeContractVersion\": {},",
-        PUZZLE3_RUNTIME_CONTRACT_VERSION
+        RUNTIME_CONTRACT_VERSION
     );
     write_runtime_contract(&mut out, parsed, bundle)?;
     let _ = writeln!(out, "  \"layerCount\": {},", parsed.game.layer_count);
@@ -105,18 +107,23 @@ pub fn export_visual_fixture_json_with_title_scenes_and_animation(
 fn write_runtime_contract(
     out: &mut String,
     parsed: &ParsedPuzzle3,
-    bundle: &crate::LevelBundle3,
+    bundle: &LevelBundle3,
 ) -> Result<(), VisualFixtureExportError3> {
-    let contract = Puzzle3RuntimeContract::checked_new(
+    let model = Puzzle3RuntimeModel::checked_new(
         parsed.game.clone(),
         parsed.local_frame.clone(),
         parsed.rules.clone(),
+        parsed.display_objects.clone(),
+        parsed.rule_camera_effects.clone(),
         bundle.clone(),
         parsed.win_condition.clone(),
         parsed.lifecycle.clone(),
+        parsed.on_level_start_camera_effects.clone(),
     )
     .map_err(|error| VisualFixtureExportError3::RuntimeContract(error.to_string()))?;
-    let contract_json = puzzle3_runtime_contract_json(&contract)
+    let contract = RuntimeContract::checked_new(RuntimeModelContract::Puzzle3(model))
+        .map_err(|error| VisualFixtureExportError3::RuntimeContract(error.to_string()))?;
+    let contract_json = runtime_contract_json(&contract)
         .map_err(|error| VisualFixtureExportError3::RuntimeContract(error.to_string()))?;
     out.push_str("  \"runtimeContract\": ");
     out.push_str(&contract_json);
@@ -551,7 +558,7 @@ fn write_cells_field(
     out: &mut String,
     indent: usize,
     name: &str,
-    cells: &[crate::LevelCell3],
+    cells: &[LevelCell3],
     names: &BTreeMap<ObjectId, String>,
     sprite_set: Option<&SpriteSet3>,
 ) -> Result<(), VisualFixtureExportError3> {

@@ -7,8 +7,10 @@ license.workspace = true
 [dependencies]
 puzzle-authoring = { path = "../authoring" }
 puzzle-core = { path = "../core" }
+puzzle-grid3d = { path = "../grid3d" }
+puzzle-grid3d-authoring = { path = "../grid3d_authoring" }
 puzzle-kernel = { path = "../kernel" }
+puzzle-runtime-contract = { path = "../runtime_contract" }
 puzzle-scene = { path = "../scene" }
-puzzle-3d = { path = "../puzzle_3d" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

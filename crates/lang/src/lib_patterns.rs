@@ -276,7 +276,7 @@ fn parse_inline_rewrite(
     value_sets: &HashMap<String, Vec<String>>,
     maps: &HashMap<String, ValueMap>,
     object_groups: &HashMap<String, Vec<ObjectId>>,
-    global_names: &HashMap<String, GlobalId>,
+    variable_names: &HashMap<String, VariableId>,
 ) -> Result<
     (
         PatternBlock,
@@ -297,7 +297,7 @@ fn parse_inline_rewrite(
         value_sets,
         maps,
         object_groups,
-        global_names,
+        variable_names,
         false,
     )?;
     let (after, effects, after_effects, after_call) = split_rewrite_suffix(after.trim(), line)?;
@@ -311,7 +311,7 @@ fn parse_inline_rewrite(
             value_sets,
             maps,
             object_groups,
-            global_names,
+            variable_names,
             true,
         )?;
         normalize_rhs_keep_cells(&before, after, line)?
@@ -509,14 +509,14 @@ fn parse_rewrite_effect_value(
                 name: Some((*name).to_string()),
             }])
         }
-        [name, op, value] if is_global_update_operator(op) => Ok(vec![EffectAst::UpdateGlobal {
+        [name, op, value] if is_variable_update_operator(op) => Ok(vec![EffectAst::UpdateVariable {
             name: (*name).to_string(),
-            op: parse_global_update_op(op, line)?,
-            value: parse_global_update_value(value, line)?,
+            op: parse_variable_update_op(op, line)?,
+            value: parse_variable_update_value(value, line)?,
         }]),
         _ => Err(parse_error(
             line,
-            "rewrite effect must be: cancel, win, restart, next_level, again, checkpoint, clear_checkpoint, sfx <name>, play_music <name>, pause_music [name], resume_music [name], stop_music [name], wait [duration], message <text>, or <global> <op> <value>",
+            "rewrite effect must be: cancel, win, restart, next_level, again, checkpoint, clear_checkpoint, sfx <name>, play_music <name>, pause_music [name], resume_music [name], stop_music [name], wait [duration], message <text>, or <variable> <op> <value>",
         )),
     }
 }
@@ -530,7 +530,7 @@ fn parse_puzzle_scene_effect(value: &str, line: &str) -> Result<SceneEffect, Dia
 fn validate_puzzle_scene_effect(effect: &SceneEffect, line: &str) -> Result<(), DiagnosticReport> {
     match effect {
         SceneEffect::Goto { .. } | SceneEffect::Reset { .. } => Ok(()),
-        SceneEffect::Sequence(effects) => {
+        SceneEffect::Sequence { effects } => {
             for effect in effects {
                 validate_puzzle_scene_effect(effect, line)?;
             }
@@ -656,18 +656,18 @@ fn parse_simple_rewrite_effects(
                 };
                 effects.push(EffectAst::StopMusic { name });
             }
-            name if index + 2 < tokens.len() && is_global_update_operator(tokens[index + 1]) => {
-                effects.push(EffectAst::UpdateGlobal {
+            name if index + 2 < tokens.len() && is_variable_update_operator(tokens[index + 1]) => {
+                effects.push(EffectAst::UpdateVariable {
                     name: name.to_string(),
-                    op: parse_global_update_op(tokens[index + 1], line)?,
-                    value: parse_global_update_value(tokens[index + 2], line)?,
+                    op: parse_variable_update_op(tokens[index + 1], line)?,
+                    value: parse_variable_update_value(tokens[index + 2], line)?,
                 });
                 index += 3;
             }
             _ => {
                 return Err(parse_error(
                     line,
-                    "rewrite effect must be: cancel, win, restart, next_level, again, checkpoint, clear_checkpoint, sfx <name>, play_music <name>, pause_music [name], resume_music [name], stop_music [name], wait [duration], message <text>, or <global> <op> <value>",
+                    "rewrite effect must be: cancel, win, restart, next_level, again, checkpoint, clear_checkpoint, sfx <name>, play_music <name>, pause_music [name], resume_music [name], stop_music [name], wait [duration], message <text>, or <variable> <op> <value>",
                 ));
             }
         }
@@ -716,31 +716,31 @@ fn is_builtin_rewrite_effect_text(suffix: &str) -> bool {
                 | ["wait"]
                 | ["wait", _]
         )
-        || matches!(tokens.as_slice(), [_, op, _] if is_global_update_operator(op))
+        || matches!(tokens.as_slice(), [_, op, _] if is_variable_update_operator(op))
 }
 
-fn is_global_update_operator(op: &str) -> bool {
+fn is_variable_update_operator(op: &str) -> bool {
     matches!(op, "=" | "+=" | "-=" | "*=" | "/=" | "%=")
 }
 
-fn parse_global_update_op(op: &str, line: &str) -> Result<GlobalUpdateOp, DiagnosticReport> {
+fn parse_variable_update_op(op: &str, line: &str) -> Result<VariableUpdateOp, DiagnosticReport> {
     match op {
-        "=" => Ok(GlobalUpdateOp::Set),
-        "+=" => Ok(GlobalUpdateOp::Add),
-        "-=" => Ok(GlobalUpdateOp::Subtract),
-        "*=" => Ok(GlobalUpdateOp::Multiply),
-        "/=" => Ok(GlobalUpdateOp::Divide),
-        "%=" => Ok(GlobalUpdateOp::Remainder),
-        _ => Err(parse_error(line, "unknown global update operator")),
+        "=" => Ok(VariableUpdateOp::Set),
+        "+=" => Ok(VariableUpdateOp::Add),
+        "-=" => Ok(VariableUpdateOp::Subtract),
+        "*=" => Ok(VariableUpdateOp::Multiply),
+        "/=" => Ok(VariableUpdateOp::Divide),
+        "%=" => Ok(VariableUpdateOp::Remainder),
+        _ => Err(parse_error(line, "unknown variable update operator")),
     }
 }
 
-fn parse_global_update_value(token: &str, line: &str) -> Result<GlobalValueAst, DiagnosticReport> {
-    if let Ok(value) = parse_global_value(token, line) {
-        return Ok(GlobalValueAst::Literal(value));
+fn parse_variable_update_value(token: &str, line: &str) -> Result<VariableValueAst, DiagnosticReport> {
+    if let Ok(value) = parse_variable_value(token, line) {
+        return Ok(VariableValueAst::Literal(value));
     }
     validate_tag_capture_reference(token, line)?;
-    Ok(GlobalValueAst::TagCapture(token.to_string()))
+    Ok(VariableValueAst::TagCapture(token.to_string()))
 }
 
 fn validate_tag_capture_reference(token: &str, line: &str) -> Result<(), DiagnosticReport> {
@@ -764,7 +764,7 @@ fn validate_tag_capture_reference(token: &str, line: &str) -> Result<(), Diagnos
     }
     Err(parse_error(
         line,
-        "global update value must be true, false, integer, or tag capture reference",
+        "variable update value must be true, false, integer, or tag capture reference",
     ))
 }
 
@@ -1084,7 +1084,7 @@ impl TagCaptureValues {
                 &format!("tag capture reference `{key}` is ambiguous"),
             ));
         }
-        parse_global_value(&value.value, line).map_err(|_| {
+        parse_variable_value(&value.value, line).map_err(|_| {
             parse_error(
                 line,
                 "tag capture values used in var updates must be true, false, or integers",
@@ -1102,7 +1102,7 @@ struct RelativeSelectorConstraint {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct DynamicSelectorGuard {
     name: String,
-    global: GlobalId,
+    variable: VariableId,
     value: i64,
 }
 
@@ -1202,7 +1202,7 @@ fn parse_pattern_side(
     value_sets: &HashMap<String, Vec<String>>,
     maps: &HashMap<String, ValueMap>,
     object_groups: &HashMap<String, Vec<ObjectId>>,
-    global_names: &HashMap<String, GlobalId>,
+    variable_names: &HashMap<String, VariableId>,
     allow_keep_marker: bool,
 ) -> Result<PatternBlock, DiagnosticReport> {
     let mut components = Vec::new();
@@ -1228,7 +1228,7 @@ fn parse_pattern_side(
                 value_sets,
                 maps,
                 object_groups,
-                global_names,
+                variable_names,
                 allow_keep_marker,
             )?,
         });
@@ -1253,7 +1253,7 @@ fn parse_block_rows(
     value_sets: &HashMap<String, Vec<String>>,
     maps: &HashMap<String, ValueMap>,
     object_groups: &HashMap<String, Vec<ObjectId>>,
-    global_names: &HashMap<String, GlobalId>,
+    variable_names: &HashMap<String, VariableId>,
     allow_keep_marker: bool,
 ) -> Result<Vec<Vec<BlockPart>>, DiagnosticReport> {
     let rows = inner
@@ -1268,7 +1268,7 @@ fn parse_block_rows(
                 value_sets,
                 maps,
                 object_groups,
-                global_names,
+                variable_names,
                 allow_keep_marker,
             )
         })
@@ -1329,7 +1329,7 @@ fn parse_block_parts(
     value_sets: &HashMap<String, Vec<String>>,
     maps: &HashMap<String, ValueMap>,
     object_groups: &HashMap<String, Vec<ObjectId>>,
-    global_names: &HashMap<String, GlobalId>,
+    variable_names: &HashMap<String, VariableId>,
     allow_keep_marker: bool,
 ) -> Result<Vec<BlockPart>, DiagnosticReport> {
     let parts = inner
@@ -1347,7 +1347,7 @@ fn parse_block_parts(
                     value_sets,
                     maps,
                     object_groups,
-                    global_names,
+                    variable_names,
                     allow_keep_marker,
                 )?))
             }
@@ -1372,7 +1372,7 @@ fn parse_block_cell(
     value_sets: &HashMap<String, Vec<String>>,
     maps: &HashMap<String, ValueMap>,
     object_groups: &HashMap<String, Vec<ObjectId>>,
-    global_names: &HashMap<String, GlobalId>,
+    variable_names: &HashMap<String, VariableId>,
     allow_keep_marker: bool,
 ) -> Result<BlockCell, DiagnosticReport> {
     let mut parsed = BlockCell::default();
@@ -1420,7 +1420,7 @@ fn parse_block_cell(
                 value_sets,
                 maps,
                 object_groups,
-                global_names,
+                variable_names,
             )?;
             selector
                 .mark
@@ -1453,7 +1453,7 @@ fn parse_block_cell(
                 value_sets,
                 maps,
                 object_groups,
-                global_names,
+                variable_names,
             )?);
         } else {
             if token == "null" {
@@ -1482,7 +1482,7 @@ fn parse_block_cell(
                 value_sets,
                 maps,
                 object_groups,
-                global_names,
+                variable_names,
             )?);
         }
     }
@@ -1536,7 +1536,7 @@ fn resolve_object_selector(
     value_sets: &HashMap<String, Vec<String>>,
     maps: &HashMap<String, ValueMap>,
     object_groups: &HashMap<String, Vec<ObjectId>>,
-    global_names: &HashMap<String, GlobalId>,
+    variable_names: &HashMap<String, VariableId>,
 ) -> Result<ObjectSelector, DiagnosticReport> {
     let (selector, mark) = split_selector_mark(selector, line)?;
     let (selector, occurrence_label) = split_selector_occurrence_label(selector, line)?;
@@ -1581,7 +1581,7 @@ fn resolve_object_selector(
             line,
             object_schemas,
             value_sets,
-            global_names,
+            variable_names,
         );
     }
     let Some(schema) = object_schemas.get(parts[0]) else {
@@ -1597,7 +1597,7 @@ fn resolve_object_selector(
                 value_sets,
                 maps,
                 object_groups,
-                global_names,
+                variable_names,
             );
         }
         return Err(parse_error(line, "unknown object selector"));
@@ -1659,7 +1659,7 @@ fn resolve_object_selector(
             }
             let expr = parse_value_expr(value, line)?;
             if expr == ValueExpr::Binding(axis.clone()) {
-                if global_names.contains_key(axis) {
+                if variable_names.contains_key(axis) {
                     return Err(ambiguous_selector_tag_error(axis, parts[0], axis, line));
                 }
                 source_token_parts.push(axis.clone());
@@ -1692,9 +1692,9 @@ fn resolve_object_selector(
                 let axis_values = schema_axis_values(schema, index)?;
                 let names_axis_value = axis_values.contains(name);
                 let names_value_set = value_sets.contains_key(name);
-                let global = global_names.get(name).copied();
+                let variable = variable_names.get(name).copied();
                 if (names_axis_value && names_value_set)
-                    || (global.is_some() && (names_axis_value || names_value_set))
+                    || (variable.is_some() && (names_axis_value || names_value_set))
                 {
                     return Err(ambiguous_selector_tag_error(name, parts[0], axis, line));
                 }
@@ -1706,12 +1706,12 @@ fn resolve_object_selector(
                     let value = normalize_axis_literal(name, schema, index, line)?;
                     source_token_parts.push(value.clone());
                     Ok(Some(SelectorConstraint::Fixed(value)))
-                } else if let Some(global) = global {
+                } else if let Some(variable) = variable {
                     source_token_parts.push(name.clone());
-                    Ok(Some(SelectorConstraint::DynamicGlobal {
+                    Ok(Some(SelectorConstraint::DynamicVariable {
                         axis_index: index,
                         name: name.clone(),
-                        global,
+                        variable,
                     }))
                 } else {
                     let value = normalize_axis_literal(name, schema, index, line)?;
@@ -1744,7 +1744,7 @@ fn resolve_object_selector(
                     Some(SelectorConstraint::Capture { .. }) => true,
                     Some(SelectorConstraint::Mapped { .. })
                     | Some(SelectorConstraint::AxisComputed { .. })
-                    | Some(SelectorConstraint::DynamicGlobal { .. })
+                    | Some(SelectorConstraint::DynamicVariable { .. })
                     | None => true,
                 })
         })
@@ -1843,7 +1843,7 @@ fn resolve_qualified_value_set_selector(
     value_sets: &HashMap<String, Vec<String>>,
     maps: &HashMap<String, ValueMap>,
     object_groups: &HashMap<String, Vec<ObjectId>>,
-    global_names: &HashMap<String, GlobalId>,
+    variable_names: &HashMap<String, VariableId>,
 ) -> Result<ObjectSelector, DiagnosticReport> {
     let (name, suffix) = selector
         .split_once(':')
@@ -1873,7 +1873,7 @@ fn resolve_qualified_value_set_selector(
             value_sets,
             maps,
             object_groups,
-            global_names,
+            variable_names,
         )?;
         if resolved.transform.is_some() || resolved.family_wildcard.is_some() {
             return Err(parse_error(
@@ -1970,7 +1970,7 @@ fn resolve_schema_family_wildcard_selector(
     line: &str,
     object_schemas: &HashMap<String, ObjectSchema>,
     value_sets: &HashMap<String, Vec<String>>,
-    global_names: &HashMap<String, GlobalId>,
+    variable_names: &HashMap<String, VariableId>,
 ) -> Result<ObjectSelector, DiagnosticReport> {
     if parts.len() != 2 {
         return Err(parse_error(
@@ -2001,15 +2001,15 @@ fn resolve_schema_family_wildcard_selector(
         };
         let names_schema_tag = schema_wildcard_tag_value_exists(object_schemas, &name);
         let value_set = value_sets.get(&name);
-        if global_names.contains_key(&name) && (names_schema_tag || value_set.is_some()) {
+        if variable_names.contains_key(&name) && (names_schema_tag || value_set.is_some()) {
             return Err(parse_error(
                 line,
                 &format!(
-                    "selector tag {name} is ambiguous for family wildcard selector: it is both a schema tag and a global"
+                    "selector tag {name} is ambiguous for family wildcard selector: it is both a schema tag and a variable"
                 ),
             ));
         }
-        if global_names.contains_key(&name) {
+        if variable_names.contains_key(&name) {
             return Err(parse_error(
                 line,
                 "family wildcard object selector cannot use dynamic var tags",
@@ -2351,10 +2351,10 @@ enum SelectorConstraint {
         axis_index: usize,
         expr: AxisComputedExpr,
     },
-    DynamicGlobal {
+    DynamicVariable {
         axis_index: usize,
         name: String,
-        global: GlobalId,
+        variable: VariableId,
     },
 }
 
@@ -2392,7 +2392,7 @@ fn dynamic_selector_guards(
 ) -> Result<HashMap<ObjectId, Vec<DynamicSelectorGuard>>, DiagnosticReport> {
     if !constraints
         .iter()
-        .any(|constraint| matches!(constraint, Some(SelectorConstraint::DynamicGlobal { .. })))
+        .any(|constraint| matches!(constraint, Some(SelectorConstraint::DynamicVariable { .. })))
     {
         return Ok(HashMap::new());
     }
@@ -2401,10 +2401,10 @@ fn dynamic_selector_guards(
     for variant in &schema.variants {
         let mut variant_guards = Vec::new();
         for constraint in constraints.iter().flatten() {
-            let SelectorConstraint::DynamicGlobal {
+            let SelectorConstraint::DynamicVariable {
                 axis_index,
                 name,
-                global,
+                variable,
             } = constraint
             else {
                 continue;
@@ -2414,8 +2414,8 @@ fn dynamic_selector_guards(
             })?;
             variant_guards.push(DynamicSelectorGuard {
                 name: name.clone(),
-                global: *global,
-                value: parse_global_value(value, line).map_err(|_| {
+                variable: *variable,
+                value: parse_variable_value(value, line).map_err(|_| {
                     parse_error(
                         line,
                         "dynamic selector tag slot values must be true, false, or integers",
@@ -3533,8 +3533,8 @@ fn expand_dynamic_selector_branch(
     for object in &selector.alternatives {
         let mut guards = guards.clone();
         if let Some(dynamic_guards) = selector.dynamic_guards.get(object) {
-            guards.extend(dynamic_guards.iter().map(|guard| Guard::GlobalEquals {
-                global: guard.global,
+            guards.extend(dynamic_guards.iter().map(|guard| Guard::VariableEquals {
+                variable: guard.variable,
                 value: guard.value,
             }));
         }
@@ -5494,7 +5494,7 @@ fn parse_u16(token: Option<&&str>, line: &str, message: &str) -> Result<u16, Dia
         .map_err(|_| parse_error(line, "expected u16"))
 }
 
-fn parse_global_value(token: &str, line: &str) -> Result<i64, DiagnosticReport> {
+fn parse_variable_value(token: &str, line: &str) -> Result<i64, DiagnosticReport> {
     match token {
         "true" => Ok(1),
         "false" => Ok(0),

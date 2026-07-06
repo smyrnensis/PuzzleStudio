@@ -38,6 +38,7 @@ if win_conditions -> next_level
 
 on_last_level_clear {
 message "END"
+goto title
 }
 }
 

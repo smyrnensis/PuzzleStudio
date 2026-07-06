@@ -140,7 +140,7 @@ fn parse_tag_set_directive(
         return parse_typed_axis_directive(name, values, line, catalog);
     }
     let expanded_values =
-        expand_numeric_ranges_in_value_list(values, &catalog.numeric_global_defaults, line)?;
+        expand_numeric_ranges_in_value_list(values, &catalog.numeric_variable_defaults, line)?;
     if expanded_values.is_empty() {
         return Err(parse_error(line, "tag set must have at least one value"));
     }
@@ -450,7 +450,7 @@ fn parse_assignment_directive(
             expr,
             line,
             &catalog.input_names,
-            &catalog.global_names,
+            &catalog.variable_names,
             &catalog.condition_names,
             &catalog.object_names,
             &catalog.object_schemas,
@@ -687,7 +687,7 @@ fn parse_layers_block(
                 let values = for_expansion_values(
                     sources,
                     &value_sets,
-                    &catalog.numeric_global_defaults,
+                    &catalog.numeric_variable_defaults,
                     &lines[i],
                 )?;
                 validate_identifier(binding, &lines[i], "expansion binding")?;
@@ -1272,8 +1272,8 @@ fn collect_implicit_inputs_from_condition(condition: &ConditionAst, names: &mut 
             names.insert(name.clone());
         }
         ConditionAst::InputIn(_)
-        | ConditionAst::GlobalEquals { .. }
-        | ConditionAst::GlobalCompare { .. }
+        | ConditionAst::VariableEquals { .. }
+        | ConditionAst::VariableCompare { .. }
         | ConditionAst::ConditionEquals { .. }
         | ConditionAst::ConditionNonZero(_)
         | ConditionAst::ConditionCompare { .. }

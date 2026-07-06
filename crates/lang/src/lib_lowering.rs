@@ -2,8 +2,8 @@ struct ProgramLowerer<'a> {
     definitions: HashMap<String, RuleDefinitionAst>,
     object_layers: &'a HashMap<ObjectId, LayerId>,
     input_names: &'a HashMap<String, InputId>,
-    global_names: &'a HashMap<String, GlobalId>,
-    constant_globals: &'a [GlobalId],
+    variable_names: &'a HashMap<String, VariableId>,
+    constant_variables: &'a [VariableId],
     condition_names: &'a HashMap<String, ConditionId>,
     visual_condition_reads: &'a HashSet<ConditionId>,
     mark_names: &'a HashMap<String, MarkDef>,
@@ -77,8 +77,8 @@ fn lower_programs(
     object_layers: &HashMap<ObjectId, LayerId>,
     visual_objects: &[ObjectId],
     input_names: &HashMap<String, InputId>,
-    global_names: &HashMap<String, GlobalId>,
-    constant_globals: &[GlobalId],
+    variable_names: &HashMap<String, VariableId>,
+    constant_variables: &[VariableId],
     condition_names: &HashMap<String, ConditionId>,
     visual_condition_reads: &HashSet<ConditionId>,
     mark_names: &HashMap<String, MarkDef>,
@@ -119,8 +119,8 @@ fn lower_programs(
         definitions: definitions_by_name,
         object_layers,
         input_names,
-        global_names,
-        constant_globals,
+        variable_names,
+        constant_variables,
         condition_names,
         visual_condition_reads,
         mark_names,
@@ -924,7 +924,7 @@ fn lower_goal_condition(
     description: String,
     condition: &ConditionAst,
     object_layers: &HashMap<ObjectId, LayerId>,
-    global_names: &HashMap<String, GlobalId>,
+    variable_names: &HashMap<String, VariableId>,
     condition_names: &HashMap<String, ConditionId>,
     visual_condition_reads: &HashSet<ConditionId>,
     mark_names: &HashMap<String, MarkDef>,
@@ -938,7 +938,7 @@ fn lower_goal_condition(
         expr: lower_goal_expr(
             condition,
             object_layers,
-            global_names,
+            variable_names,
             condition_names,
             visual_condition_reads,
             mark_names,
@@ -953,7 +953,7 @@ fn lower_goal_condition(
 fn lower_goal_expr(
     condition: &ConditionAst,
     object_layers: &HashMap<ObjectId, LayerId>,
-    global_names: &HashMap<String, GlobalId>,
+    variable_names: &HashMap<String, VariableId>,
     condition_names: &HashMap<String, ConditionId>,
     visual_condition_reads: &HashSet<ConditionId>,
     mark_names: &HashMap<String, MarkDef>,
@@ -970,7 +970,7 @@ fn lower_goal_expr(
                     lower_goal_expr(
                         condition,
                         object_layers,
-                        global_names,
+                        variable_names,
                         condition_names,
                         visual_condition_reads,
                         mark_names,
@@ -989,7 +989,7 @@ fn lower_goal_expr(
                     lower_goal_expr(
                         condition,
                         object_layers,
-                        global_names,
+                        variable_names,
                         condition_names,
                         visual_condition_reads,
                         mark_names,
@@ -1001,13 +1001,13 @@ fn lower_goal_expr(
                 })
                 .collect::<Result<Vec<_>, DiagnosticReport>>()?,
         )),
-        ConditionAst::GlobalEquals { name, value } => Ok(GoalExpr::Clause(GoalClause {
-            value: GoalValue::Global(resolve_global_for_goal(name, global_names)?),
+        ConditionAst::VariableEquals { name, value } => Ok(GoalExpr::Clause(GoalClause {
+            value: GoalValue::Variable(resolve_variable_for_goal(name, variable_names)?),
             op: ComparisonOp::Eq,
             expected: *value,
         })),
-        ConditionAst::GlobalCompare { name, op, value } => Ok(GoalExpr::Clause(GoalClause {
-            value: GoalValue::Global(resolve_global_for_goal(name, global_names)?),
+        ConditionAst::VariableCompare { name, op, value } => Ok(GoalExpr::Clause(GoalClause {
+            value: GoalValue::Variable(resolve_variable_for_goal(name, variable_names)?),
             op: *op,
             expected: *value,
         })),
@@ -1092,14 +1092,14 @@ fn lower_goal_expr(
     }
 }
 
-fn resolve_global_for_goal(
+fn resolve_variable_for_goal(
     name: &str,
-    global_names: &HashMap<String, GlobalId>,
-) -> Result<GlobalId, DiagnosticReport> {
-    global_names
+    variable_names: &HashMap<String, VariableId>,
+) -> Result<VariableId, DiagnosticReport> {
+    variable_names
         .get(name)
         .copied()
-        .ok_or_else(|| DiagnosticReport::error(format!("unknown global in goal: {name}")))
+        .ok_or_else(|| DiagnosticReport::error(format!("unknown variable in goal: {name}")))
 }
 
 fn resolve_non_visual_condition_for_goal(
@@ -2080,29 +2080,29 @@ impl<'a> ProgramLowerer<'a> {
                 source_line,
                 source_line_number,
             )),
-            ConditionAst::GlobalEquals { name, value } => {
-                let global = *self.global_names.get(name).ok_or_else(|| {
+            ConditionAst::VariableEquals { name, value } => {
+                let variable = *self.variable_names.get(name).ok_or_else(|| {
                     report_at_source_line_number(
-                        format!("unknown global: {name}"),
+                        format!("unknown variable: {name}"),
                         source_line,
                         source_line_number,
                     )
                 })?;
-                Ok(Guard::GlobalEquals {
-                    global,
+                Ok(Guard::VariableEquals {
+                    variable,
                     value: *value,
                 })
             }
-            ConditionAst::GlobalCompare { name, op, value } => {
-                let global = *self.global_names.get(name).ok_or_else(|| {
+            ConditionAst::VariableCompare { name, op, value } => {
+                let variable = *self.variable_names.get(name).ok_or_else(|| {
                     report_at_source_line_number(
-                        format!("unknown global: {name}"),
+                        format!("unknown variable: {name}"),
                         source_line,
                         source_line_number,
                     )
                 })?;
-                Ok(Guard::GlobalCompare {
-                    global,
+                Ok(Guard::VariableCompare {
+                    variable,
                     op: *op,
                     value: *value,
                 })
@@ -2534,18 +2534,18 @@ impl<'a> ProgramLowerer<'a> {
                 EffectAst::Scene(effect) => {
                     lowered.ordered.push(RuleEffect::Scene(effect.clone()));
                 }
-                EffectAst::UpdateGlobal { name, op, value } => {
-                    let global = *self.global_names.get(name).ok_or_else(|| {
-                        DiagnosticReport::error(format!("unknown global in effect: {name}"))
+                EffectAst::UpdateVariable { name, op, value } => {
+                    let variable = *self.variable_names.get(name).ok_or_else(|| {
+                        DiagnosticReport::error(format!("unknown variable in effect: {name}"))
                     })?;
-                    if self.constant_globals.contains(&global) {
+                    if self.constant_variables.contains(&variable) {
                         return Err(DiagnosticReport::error(format!(
                             "cannot update const: {name}"
                         )));
                     }
                     let value = match value {
-                        GlobalValueAst::Literal(value) => *value,
-                        GlobalValueAst::TagCapture(key) => {
+                        VariableValueAst::Literal(value) => *value,
+                        VariableValueAst::TagCapture(key) => {
                             let captures = tag_captures.ok_or_else(|| {
                                 DiagnosticReport::error(format!(
                                     "tag capture reference `{key}` can only be used in rewrite effects"
@@ -2554,8 +2554,8 @@ impl<'a> ProgramLowerer<'a> {
                             captures.resolve(key, "rewrite effect")?
                         }
                     };
-                    lowered.core.push(Effect::UpdateGlobal {
-                        global,
+                    lowered.core.push(Effect::UpdateVariable {
+                        variable,
                         op: *op,
                         value,
                     });

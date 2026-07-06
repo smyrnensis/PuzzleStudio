@@ -17,11 +17,13 @@ read the more specific crate `AGENTS.md` when present.
 - `scene`: shared presentation/flow metadata and layout/component contracts.
 - `html_play`, `ascii_play`, `html_editor`, `cli`, `wasm`: adapters or facades.
   They should not own parser/compiler semantics.
-- `puzzle_3d`: temporary 3D authoring/runtime facade while parser, play/session,
-  and export responsibilities are split into their normal owners. Keep shared
-  scene and document contracts aligned with the 2D language path. 3D must not
-  independently reinterpret non-spatial authoring syntax; share the 2D/authoring
-  helpers and branch only for spatial concerns.
+- 3D authoring/runtime responsibilities are split across their normal owners:
+  `grid3d` for deterministic spatial mechanics, `grid3d_authoring` for spatial
+  authoring helpers, `lang` for `.puzzle3` syntax/lowering, `play` for session
+  flow, `runtime_contract` for source-free runtime schemas, and adapters for
+  export/presentation behavior. 3D must not independently reinterpret
+  non-spatial authoring syntax; share the 2D/authoring helpers and branch only
+  for spatial concerns.
 
 ## 2D / 3D Drift Guard
 

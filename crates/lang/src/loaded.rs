@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
-use puzzle_3d::ParsedPuzzle3;
+use crate::ParsedPuzzle3;
 use puzzle_core::{
-    ComparisonOp, CompiledGame, ConditionId, ConditionValueKind, GlobalId, InputId, ObjectId,
-    RuleId, RuleStep, State,
+    ComparisonOp, CompiledGame, ConditionId, ConditionValueKind, InputId, ObjectId, RuleId,
+    RuleStep, State, VariableId,
 };
 pub use puzzle_scene::{
     LevelMenuLocked, SceneAlign as SceneAlignDef, SceneAlignX as SceneAlignXDef,
@@ -67,6 +67,10 @@ pub struct LoadedGame {
     pub last_level_clear_program: Option<Vec<RuleStep>>,
     pub display_level_clear_program: Option<Vec<RuleStep>>,
     pub display_program: Option<Vec<RuleStep>>,
+    #[serde(default)]
+    pub display_objects: Vec<ObjectId>,
+    #[serde(default)]
+    pub display_rules: Vec<RuleId>,
     pub levels: Vec<Level>,
     pub run_rules_on_level_start: bool,
     pub legend: AsciiLegend,
@@ -76,8 +80,8 @@ pub struct LoadedGame {
     pub object_labels: HashMap<ObjectId, String>,
     pub object_groups: HashMap<String, Vec<ObjectId>>,
     pub input_labels: HashMap<InputId, String>,
-    pub global_labels: HashMap<GlobalId, String>,
-    pub persistent_vars: Vec<GlobalId>,
+    pub variable_labels: HashMap<VariableId, String>,
+    pub persistent_vars: Vec<VariableId>,
     pub condition_labels: HashMap<ConditionId, String>,
     pub conditions: HashMap<String, GoalCondition>,
     pub goal: Option<GoalCondition>,
@@ -120,6 +124,8 @@ impl LoadedGame {
             last_level_clear_program: None,
             display_level_clear_program: None,
             display_program: None,
+            display_objects: Vec::new(),
+            display_rules: Vec::new(),
             levels: vec![Level {
                 name: level_name.into(),
                 pack: None,
@@ -137,7 +143,7 @@ impl LoadedGame {
             object_labels: HashMap::new(),
             object_groups: HashMap::new(),
             input_labels: HashMap::new(),
-            global_labels: HashMap::new(),
+            variable_labels: HashMap::new(),
             persistent_vars: Vec::new(),
             condition_labels: HashMap::new(),
             conditions: HashMap::new(),
@@ -150,6 +156,87 @@ impl LoadedGame {
             visuals: VisualsDef::default(),
             render: PuzzleRenderDef::default(),
             screen: PuzzleScreenDef::default(),
+        }
+    }
+
+    pub fn is_display_object(&self, object: ObjectId) -> bool {
+        self.display_objects.contains(&object)
+    }
+
+    pub fn solver_game(&self) -> CompiledGame {
+        let program = filter_display_steps(self.game.program(), &self.display_rules);
+        CompiledGame::new_with_mark_condition_defs_and_program(
+            self.game.layer_count,
+            self.game.objects().to_vec(),
+            self.game.mark().to_vec(),
+            self.game.condition_defs().to_vec(),
+            program,
+        )
+    }
+
+    pub fn solver_state(&self, state: &State) -> State {
+        state.without_objects(&self.display_objects)
+    }
+}
+
+fn filter_display_steps(program: &[RuleStep], display_rules: &[RuleId]) -> Vec<RuleStep> {
+    program
+        .iter()
+        .filter_map(|step| filter_display_step(step, display_rules))
+        .collect()
+}
+
+fn filter_display_step(step: &RuleStep, display_rules: &[RuleId]) -> Option<RuleStep> {
+    match step {
+        RuleStep::Rule(rule) => display_rules
+            .binary_search(&rule.id)
+            .is_err()
+            .then(|| RuleStep::Rule(rule.clone())),
+        RuleStep::ConditionalBlock { condition, steps } => {
+            let steps = filter_display_steps(steps, display_rules);
+            (!steps.is_empty()).then(|| RuleStep::ConditionalBlock {
+                condition: condition.clone(),
+                steps,
+            })
+        }
+        RuleStep::ConditionalBranch {
+            condition,
+            then_steps,
+            else_steps,
+        } => {
+            let then_steps = filter_display_steps(then_steps, display_rules);
+            let else_steps = filter_display_steps(else_steps, display_rules);
+            (!then_steps.is_empty() || !else_steps.is_empty()).then(|| {
+                RuleStep::ConditionalBranch {
+                    condition: condition.clone(),
+                    then_steps,
+                    else_steps,
+                }
+            })
+        }
+        RuleStep::Block {
+            application,
+            stop_condition,
+            steps,
+        } => {
+            let steps = filter_display_steps(steps, display_rules);
+            (!steps.is_empty()).then(|| RuleStep::Block {
+                application: *application,
+                stop_condition: stop_condition.clone(),
+                steps,
+            })
+        }
+        RuleStep::AfterTriggered { steps, then_steps } => {
+            let steps = filter_display_steps(steps, display_rules);
+            let then_steps = filter_display_steps(then_steps, display_rules);
+            (!steps.is_empty()).then(|| RuleStep::AfterTriggered { steps, then_steps })
+        }
+        RuleStep::LocalFrame { frame, steps } => {
+            let steps = filter_display_steps(steps, display_rules);
+            (!steps.is_empty()).then(|| RuleStep::LocalFrame {
+                frame: frame.clone(),
+                steps,
+            })
         }
     }
 }
@@ -442,7 +529,7 @@ pub struct GoalClause {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum GoalValue {
-    Global(GlobalId),
+    Variable(VariableId),
     Condition(ConditionId),
     InlineConditionValue(ConditionValueKind),
 }
@@ -609,18 +696,18 @@ impl LoadedGame {
         eval_goal_expr(&self.game, state, &condition.expr)
     }
 
-    pub fn is_global_truthy(&self, name: &str, state: &State) -> bool {
-        let Some(global) = self.global_id(name) else {
+    pub fn is_variable_truthy(&self, name: &str, state: &State) -> bool {
+        let Some(variable) = self.variable_id(name) else {
             return false;
         };
 
-        state.global_value(global).unwrap_or(0) != 0
+        state.variable_value(variable).unwrap_or(0) != 0
     }
 
-    fn global_id(&self, name: &str) -> Option<GlobalId> {
-        self.global_labels
+    fn variable_id(&self, name: &str) -> Option<VariableId> {
+        self.variable_labels
             .iter()
-            .find_map(|(global, label)| (label == name).then_some(*global))
+            .find_map(|(variable, label)| (label == name).then_some(*variable))
     }
 }
 
@@ -638,7 +725,7 @@ fn eval_goal_expr(game: &CompiledGame, state: &State, expr: &GoalExpr) -> bool {
 
 fn eval_goal_value(game: &CompiledGame, state: &State, value: &GoalValue) -> i64 {
     match value {
-        GoalValue::Global(global) => state.global_value(*global).unwrap_or(0),
+        GoalValue::Variable(variable) => state.variable_value(*variable).unwrap_or(0),
         GoalValue::Condition(condition) => game
             .condition_def(*condition)
             .map(|condition| eval_goal_condition_value_kind(game, state, &condition.kind))

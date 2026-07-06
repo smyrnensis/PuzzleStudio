@@ -1,5 +1,5 @@
-use crate::compiled_game::{CompiledGame, GlobalUpdateOp, MarkValueMatch};
-use crate::ids::{GlobalId, LayerId, MarkId, ObjectId};
+use crate::compiled_game::{CompiledGame, MarkValueMatch, VariableUpdateOp};
+use crate::ids::{LayerId, MarkId, ObjectId, VariableId};
 use crate::state::{State, StateError};
 use puzzle_kernel::{GridCoord, GridPatchOp};
 
@@ -9,7 +9,7 @@ pub struct Patch {
     ops: Vec<PatchOp>,
 }
 
-pub(crate) type CorePatchOp = GridPatchOp<GridCoord<2>, ObjectId, GlobalId, MarkId>;
+pub(crate) type CorePatchOp = GridPatchOp<GridCoord<2>, ObjectId, VariableId, MarkId>;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct CorePatch {
@@ -54,8 +54,12 @@ impl CorePatch {
                     apply_remove(game, state, x, y, remove)?;
                     apply_add(game, state, x, y, add)?;
                 }
-                CorePatchOp::UpdateGlobal { global, op, value } => {
-                    state.update_visible_global(global, op, value)?;
+                CorePatchOp::UpdateVariable {
+                    variable,
+                    op,
+                    value,
+                } => {
+                    state.update_visible_variable(variable, op, value)?;
                 }
                 CorePatchOp::SetMark {
                     position,
@@ -170,9 +174,13 @@ impl CorePatch {
                     slots.set(x, y, add_layer, add);
                     changed = true;
                 }
-                CorePatchOp::UpdateGlobal { global, op, value } => {
-                    let next = validate_global_update(state, global, op, value)?;
-                    changed |= state.global_value(global) != Some(next);
+                CorePatchOp::UpdateVariable {
+                    variable,
+                    op,
+                    value,
+                } => {
+                    let next = validate_variable_update(state, variable, op, value)?;
+                    changed |= state.variable_value(variable) != Some(next);
                 }
                 CorePatchOp::SetMark {
                     position,
@@ -280,9 +288,9 @@ pub enum PatchOp {
         remove: ObjectId,
         add: ObjectId,
     },
-    UpdateGlobal {
-        global: GlobalId,
-        op: GlobalUpdateOp,
+    UpdateVariable {
+        variable: VariableId,
+        op: VariableUpdateOp,
         value: i64,
     },
     SetMark {
@@ -407,9 +415,15 @@ impl From<CorePatchOp> for PatchOp {
                 let [x, y] = position.axes();
                 Self::Replace { x, y, remove, add }
             }
-            CorePatchOp::UpdateGlobal { global, op, value } => {
-                Self::UpdateGlobal { global, op, value }
-            }
+            CorePatchOp::UpdateVariable {
+                variable,
+                op,
+                value,
+            } => Self::UpdateVariable {
+                variable,
+                op,
+                value,
+            },
             CorePatchOp::SetMark {
                 position,
                 object,
@@ -473,7 +487,15 @@ impl From<PatchOp> for CorePatchOp {
                 remove,
                 add,
             },
-            PatchOp::UpdateGlobal { global, op, value } => Self::UpdateGlobal { global, op, value },
+            PatchOp::UpdateVariable {
+                variable,
+                op,
+                value,
+            } => Self::UpdateVariable {
+                variable,
+                op,
+                value,
+            },
             PatchOp::SetMark {
                 x,
                 y,
@@ -844,34 +866,34 @@ fn expect_object_in_overlay(
     Ok(layer)
 }
 
-fn validate_global_update(
+fn validate_variable_update(
     state: &State,
-    global: GlobalId,
-    op: GlobalUpdateOp,
+    variable: VariableId,
+    op: VariableUpdateOp,
     value: i64,
 ) -> Result<i64, PatchError> {
     let current = state
-        .global_value(global)
-        .ok_or(StateError::GlobalOutOfBounds { global })?;
+        .variable_value(variable)
+        .ok_or(StateError::VariableOutOfBounds { variable })?;
     let next = match op {
-        GlobalUpdateOp::Set => Some(value),
-        GlobalUpdateOp::Add => current.checked_add(value),
-        GlobalUpdateOp::Subtract => current.checked_sub(value),
-        GlobalUpdateOp::Multiply => current.checked_mul(value),
-        GlobalUpdateOp::Divide => {
+        VariableUpdateOp::Set => Some(value),
+        VariableUpdateOp::Add => current.checked_add(value),
+        VariableUpdateOp::Subtract => current.checked_sub(value),
+        VariableUpdateOp::Multiply => current.checked_mul(value),
+        VariableUpdateOp::Divide => {
             if value == 0 {
-                return Err(StateError::GlobalDivisionByZero { global }.into());
+                return Err(StateError::VariableDivisionByZero { variable }.into());
             }
             current.checked_div(value)
         }
-        GlobalUpdateOp::Remainder => {
+        VariableUpdateOp::Remainder => {
             if value == 0 {
-                return Err(StateError::GlobalDivisionByZero { global }.into());
+                return Err(StateError::VariableDivisionByZero { variable }.into());
             }
             current.checked_rem(value)
         }
     }
-    .ok_or(StateError::GlobalOverflow { global })?;
+    .ok_or(StateError::VariableOverflow { variable })?;
     Ok(next)
 }
 
@@ -898,9 +920,9 @@ mod tests {
                 value: Some(10),
                 match_value: MarkValueMatch::Exact,
             },
-            PatchOp::UpdateGlobal {
-                global: GlobalId(11),
-                op: GlobalUpdateOp::Add,
+            PatchOp::UpdateVariable {
+                variable: VariableId(11),
+                op: VariableUpdateOp::Add,
                 value: 12,
             },
         ]);

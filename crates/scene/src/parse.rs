@@ -81,7 +81,7 @@ fn parse_scene_effect_value(value: &str, line: &str) -> Result<SceneEffect, Scen
         return match effects.len() {
             0 => unreachable!("scene effect sequence splitter returned no effects"),
             1 => Ok(effects.remove(0)),
-            _ => Ok(SceneEffect::Sequence(effects)),
+            _ => Ok(SceneEffect::Sequence { effects }),
         };
     }
 
@@ -124,12 +124,14 @@ fn parse_scene_effect_value(value: &str, line: &str) -> Result<SceneEffect, Scen
             return Err(legacy_start_levels_error(line));
         }
         let (scene, params) = parse_scene_target_params(rest, line)?;
-        return Ok(SceneEffect::Sequence(vec![
-            SceneEffect::Reset {
-                scene: scene.clone(),
-            },
-            SceneEffect::Goto { scene, params },
-        ]));
+        return Ok(SceneEffect::Sequence {
+            effects: vec![
+                SceneEffect::Reset {
+                    scene: scene.clone(),
+                },
+                SceneEffect::Goto { scene, params },
+            ],
+        });
     }
 
     let tokens = split_header_tokens(value);

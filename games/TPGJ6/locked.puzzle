@@ -2,7 +2,7 @@ title "Stuck Room"
 
 default_wait_time = 100ms
 
-theme clean {
+theme puzzlescript {
 accent_color #c4d0cb
 background_color #454545
 text_color #c4d0cb

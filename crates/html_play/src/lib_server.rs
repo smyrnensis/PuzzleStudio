@@ -227,7 +227,7 @@ fn input_id_by_name(loaded: &LoadedGame, input_name: &str) -> Option<InputId> {
 
 #[cfg(feature = "solver")]
 fn solver_inputs(loaded: &LoadedGame) -> Vec<InputId> {
-    let solver_game = loaded.game.solver_core();
+    let solver_game = loaded.solver_game();
     let mut inputs = BTreeSet::new();
     collect_solver_inputs(solver_game.program(), &mut inputs);
 
@@ -319,7 +319,7 @@ fn is_solver_control_input(name: &str) -> bool {
 }
 
 #[cfg(feature = "solver")]
-fn solver_inputs3(game: &Game3) -> Vec<InputId3> {
+fn solver_inputs3(game: &Game3) -> Vec<InputId> {
     let mut inputs = game
         .inputs
         .iter()
@@ -366,7 +366,7 @@ fn push_solution_steps(out: &mut String, loaded: &LoadedGame, steps: &[PuzzleSol
 }
 
 #[cfg(feature = "solver")]
-fn push_solution_moves3(out: &mut String, parsed: &ParsedPuzzle3, inputs: &[InputId3]) {
+fn push_solution_moves3(out: &mut String, parsed: &ParsedPuzzle3, inputs: &[InputId]) {
     out.push_str("\"moves\":[");
     for (index, input) in inputs.iter().enumerate() {
         if index > 0 {
@@ -432,7 +432,7 @@ fn push_input_move(out: &mut String, loaded: &LoadedGame, input: InputId) {
     out.push('}');
 }
 
-fn push_input_move3(out: &mut String, parsed: &ParsedPuzzle3, input: InputId3) {
+fn push_input_move3(out: &mut String, parsed: &ParsedPuzzle3, input: InputId) {
     out.push('{');
     let input_def = parsed.game.input(input);
     let name = input_def.map(|input| input.name.as_str()).unwrap_or("?");
@@ -450,7 +450,7 @@ fn push_input_move3(out: &mut String, parsed: &ParsedPuzzle3, input: InputId3) {
     out.push('}');
 }
 
-fn push_lifecycle_commands3(out: &mut String, commands: &[LifecycleCommand3]) {
+fn push_lifecycle_commands3(out: &mut String, commands: &[LifecycleCommand]) {
     out.push('[');
     for (index, command) in commands.iter().enumerate() {
         if index > 0 {
@@ -1538,523 +1538,48 @@ fn push_scene_layout(out: &mut String, layout: &SceneLayoutDef) {
 }
 
 fn push_scene_component(out: &mut String, component: &SceneComponent) {
-    out.push('{');
-    match component {
-        SceneComponent::Frame(frame) => {
-            push_json_pair(out, "kind", &frame.kind);
-            out.push(',');
-            push_json_pair(out, "source", &frame.source);
-            out.push(',');
-            push_scene_layout(out, &frame.layout);
-        }
-        SceneComponent::Title(title) => {
-            push_json_pair(out, "kind", "title");
-            out.push(',');
-            push_json_expr_named(out, "content", &title.content);
-        }
-        SceneComponent::Subtitle(subtitle) => {
-            push_json_pair(out, "kind", "subtitle");
-            out.push(',');
-            push_json_expr_named(out, "content", &subtitle.content);
-        }
-        SceneComponent::Text(text) => {
-            push_json_pair(out, "kind", "text");
-            out.push(',');
-            match &text.content {
-                SceneTextContent::Literal(value) => {
-                    push_json_pair(out, "source", "literal");
-                    out.push(',');
-                    push_json_pair(out, "value", value);
-                }
-                SceneTextContent::Path(path) => {
-                    push_json_pair(out, "source", "path");
-                    out.push(',');
-                    push_json_pair(out, "path", &path.join("."));
-                }
-                SceneTextContent::Expr(expr) => {
-                    push_json_pair(out, "source", "expr");
-                    out.push(',');
-                    push_json_expr_named(out, "content", expr);
-                }
-            }
-        }
-        SceneComponent::Button(button) => {
-            push_json_pair(out, "kind", "button");
-            out.push(',');
-            push_json_expr_named(out, "label", &button.label);
-            out.push(',');
-            push_json_effect(out, &button.effect);
-        }
-        SceneComponent::Choice(choice) => {
-            push_json_pair(out, "kind", "choice");
-            out.push(',');
-            push_json_expr_named(out, "label", &choice.label);
-            out.push(',');
-            push_json_effect(out, &choice.effect);
-        }
-        SceneComponent::Row(container) => {
-            push_json_pair(out, "kind", "row");
-            out.push(',');
-            push_scene_layout(out, &container.layout);
-            out.push(',');
-            push_scene_children(out, &container.children);
-        }
-        SceneComponent::Column(container) => {
-            push_json_pair(out, "kind", "column");
-            out.push(',');
-            push_scene_layout(out, &container.layout);
-            out.push(',');
-            push_scene_children(out, &container.children);
-        }
-        SceneComponent::Box(container) => {
-            push_json_pair(out, "kind", "box");
-            out.push(',');
-            push_scene_layout(out, &container.layout);
-            out.push(',');
-            push_scene_children(out, &container.children);
-        }
-        SceneComponent::Conditional(conditional) => {
-            push_json_pair(out, "kind", "conditional");
-            out.push(',');
-            push_json_expr_named(out, "condition", &conditional.condition);
-            out.push(',');
-            push_scene_children(out, &conditional.children);
-            out.push(',');
-            out.push_str("\"elseChildren\":");
-            push_scene_component_list(out, &conditional.else_children);
-        }
-        SceneComponent::For(for_view) => {
-            push_json_pair(out, "kind", "for");
-            out.push(',');
-            push_json_pair(out, "binding", &for_view.binding);
-            out.push(',');
-            push_json_pair(out, "source", for_view.source.as_str());
-            out.push(',');
-            push_scene_children(out, &for_view.children);
-        }
-        SceneComponent::LevelMenu(menu) => {
-            push_json_pair(out, "kind", "level_menu");
-            out.push(',');
-            push_json_bool(out, "showIndex", menu.show_index);
-            out.push(',');
-            push_json_bool(out, "showCleared", menu.show_cleared);
-            out.push(',');
-            match menu.columns {
-                Some(columns) => push_json_number(out, "columns", columns as u64),
-                None => out.push_str("\"columns\":null"),
-            }
-            out.push(',');
-            push_json_bool(out, "wrap", menu.wrap);
-            out.push(',');
-            out.push_str("\"source\":");
-            if let Some(source) = &menu.source {
-                push_json_string(out, source);
-            } else {
-                out.push_str("null");
-            }
-            out.push(',');
-            out.push_str("\"action\":");
-            if let Some(effect) = &menu.action {
-                out.push('{');
-                push_json_effect(out, effect);
-                out.push('}');
-            } else {
-                out.push_str("null");
-            }
-            out.push(',');
-            out.push_str("\"buttons\":[");
-            for (index, button) in menu.buttons.iter().enumerate() {
-                if index > 0 {
-                    out.push(',');
-                }
-                out.push('{');
-                push_json_expr_named(out, "label", &button.label);
-                out.push(',');
-                push_json_effect(out, &button.effect);
-                out.push('}');
-            }
-            out.push(']');
-        }
-    }
-    out.push('}');
+    let mut note_level_source: fn(&str) = ignore_scene_level_source;
+    puzzle_scene::write_scene_component_fixture_json(
+        out,
+        component,
+        puzzle_scene::SceneFixtureJsonOptions::default(),
+        push_scene_text_content_fields,
+        &mut note_level_source,
+    );
 }
 
 fn push_json_effect(out: &mut String, effect: &SceneEffect) {
-    out.push_str("\"effect\":{");
-    push_json_effect_fields(out, effect);
-    out.push('}');
+    out.push_str("\"effect\":");
+    puzzle_scene::write_scene_effect_json(out, effect);
 }
 
 fn push_json_effect_fields(out: &mut String, effect: &SceneEffect) {
-    match effect {
-        SceneEffect::Input(input) => {
-            push_json_pair(out, "kind", "input");
-            out.push(',');
-            push_json_pair(out, "name", input);
-        }
-        SceneEffect::ComponentEffect(effect) => {
-            push_json_pair(out, "kind", "component_effect");
-            out.push(',');
-            push_json_pair(out, "name", effect);
-        }
-        SceneEffect::RoutineCall(name) => {
-            push_json_pair(out, "kind", "routine_call");
-            out.push(',');
-            push_json_pair(out, "name", name);
-        }
-        SceneEffect::Message { text } => {
-            push_json_pair(out, "kind", "message");
-            out.push(',');
-            push_json_expr_named(out, "text", text);
-        }
-        SceneEffect::Wait { milliseconds } => {
-            push_json_pair(out, "kind", "wait");
-            out.push(',');
-            push_json_number(out, "milliseconds", milliseconds.unwrap_or(200));
-        }
-        SceneEffect::Conditional { condition, effect } => {
-            push_json_pair(out, "kind", "conditional");
-            out.push(',');
-            push_json_expr_named(out, "condition", condition);
-            out.push(',');
-            out.push_str("\"effect\":{");
-            push_json_effect_fields(out, effect);
-            out.push('}');
-        }
-        SceneEffect::PlaySfx { name } => {
-            push_json_pair(out, "kind", "play_sfx");
-            out.push(',');
-            push_json_pair(out, "name", name);
-        }
-        SceneEffect::PlayMusic { name } => {
-            push_json_pair(out, "kind", "play_music");
-            out.push(',');
-            push_json_pair(out, "name", name);
-        }
-        SceneEffect::PauseMusic { name } => {
-            push_json_pair(out, "kind", "pause_music");
-            out.push(',');
-            out.push_str("\"name\":");
-            if let Some(name) = name {
-                push_json_string(out, name);
-            } else {
-                out.push_str("null");
-            }
-        }
-        SceneEffect::ResumeMusic { name } => {
-            push_json_pair(out, "kind", "resume_music");
-            out.push(',');
-            out.push_str("\"name\":");
-            if let Some(name) = name {
-                push_json_string(out, name);
-            } else {
-                out.push_str("null");
-            }
-        }
-        SceneEffect::StopMusic { name } => {
-            push_json_pair(out, "kind", "stop_music");
-            out.push(',');
-            out.push_str("\"name\":");
-            if let Some(name) = name {
-                push_json_string(out, name);
-            } else {
-                out.push_str("null");
-            }
-        }
-        SceneEffect::Goto { scene, params } => {
-            push_json_pair(out, "kind", "goto");
-            out.push(',');
-            push_json_pair(out, "screen", scene);
-            out.push(',');
-            push_json_pair(out, "scene", scene);
-            out.push(',');
-            push_json_params(out, params);
-        }
-        SceneEffect::Enter { scene, params } => {
-            push_json_pair(out, "kind", "enter");
-            out.push(',');
-            push_json_pair(out, "screen", scene);
-            out.push(',');
-            push_json_pair(out, "scene", scene);
-            out.push(',');
-            push_json_params(out, params);
-        }
-        SceneEffect::Back => {
-            push_json_pair(out, "kind", "back");
-        }
-        SceneEffect::Create { scene } => {
-            push_json_pair(out, "kind", "create");
-            out.push(',');
-            push_json_pair(out, "screen", scene);
-            out.push(',');
-            push_json_pair(out, "scene", scene);
-        }
-        SceneEffect::Reset { scene } => {
-            push_json_pair(out, "kind", "reset");
-            out.push(',');
-            push_json_pair(out, "screen", scene);
-            out.push(',');
-            push_json_pair(out, "scene", scene);
-        }
-        SceneEffect::Delete { scene } => {
-            push_json_pair(out, "kind", "delete");
-            out.push(',');
-            push_json_pair(out, "screen", scene);
-            out.push(',');
-            push_json_pair(out, "scene", scene);
-        }
-        SceneEffect::Show { scene } => {
-            push_json_pair(out, "kind", "show");
-            out.push(',');
-            push_json_pair(out, "screen", scene);
-            out.push(',');
-            push_json_pair(out, "scene", scene);
-        }
-        SceneEffect::Hide { scene } => {
-            push_json_pair(out, "kind", "hide");
-            out.push(',');
-            push_json_pair(out, "screen", scene);
-            out.push(',');
-            push_json_pair(out, "scene", scene);
-        }
-        SceneEffect::Toggle { scene } => {
-            push_json_pair(out, "kind", "toggle");
-            out.push(',');
-            push_json_pair(out, "screen", scene);
-            out.push(',');
-            push_json_pair(out, "scene", scene);
-        }
-        SceneEffect::Focus { scene } => {
-            push_json_pair(out, "kind", "focus");
-            out.push(',');
-            push_json_pair(out, "screen", scene);
-            out.push(',');
-            push_json_pair(out, "scene", scene);
-        }
-        SceneEffect::PuzzleNextLevel { target } => {
-            push_json_pair(out, "kind", "puzzle_next_level");
-            out.push(',');
-            push_json_pair(out, "target", target);
-        }
-        SceneEffect::PuzzlePreviousLevel { target } => {
-            push_json_pair(out, "kind", "puzzle_previous_level");
-            out.push(',');
-            push_json_pair(out, "target", target);
-        }
-        SceneEffect::GotoLevel { target, level } => {
-            push_json_pair(out, "kind", "puzzle_goto_level");
-            out.push(',');
-            push_json_pair(out, "target", target);
-            out.push(',');
-            push_json_expr_named(out, "level", level);
-        }
-        SceneEffect::ResetPuzzle { target } => {
-            push_json_pair(out, "kind", "puzzle_reset");
-            out.push(',');
-            push_json_pair(out, "target", target);
-        }
-        SceneEffect::LoadPuzzle { target, source } => {
-            push_json_pair(out, "kind", "puzzle_load");
-            out.push(',');
-            push_json_pair(out, "target", target);
-            out.push(',');
-            push_json_pair(out, "source", source);
-        }
-        SceneEffect::Apply { rule, args, target } => {
-            push_json_pair(out, "kind", "apply");
-            out.push(',');
-            push_json_pair(out, "rule", rule);
-            out.push(',');
-            out.push_str("\"args\":[");
-            for (index, arg) in args.iter().enumerate() {
-                if index > 0 {
-                    out.push(',');
-                }
-                push_json_expr_object(out, arg);
-            }
-            out.push(']');
-            if let Some(target) = target {
-                out.push(',');
-                push_json_pair(out, "target", target);
-            }
-        }
-        SceneEffect::Copy { source, target } => {
-            push_json_pair(out, "kind", "copy");
-            out.push(',');
-            push_json_pair(out, "source", source);
-            out.push(',');
-            push_json_pair(out, "target", target);
-        }
-        SceneEffect::SetVariable { name, value } => {
-            push_json_pair(out, "kind", "set_variable");
-            out.push(',');
-            push_json_pair(out, "name", name);
-            out.push(',');
-            push_json_expr_named(out, "value", value);
-        }
-        SceneEffect::ClearUndoHistory => {
-            push_json_pair(out, "kind", "clear_undo_history");
-        }
-        SceneEffect::ClearGameProgress => {
-            push_json_pair(out, "kind", "clear_game_progress");
-        }
-        SceneEffect::SetCurrentLevel { level } => {
-            push_json_pair(out, "kind", "set_current_level");
-            out.push(',');
-            push_json_expr_named(out, "level", level);
-        }
-        SceneEffect::ClearCurrentLevel => {
-            push_json_pair(out, "kind", "clear_current_level");
-        }
-        SceneEffect::SetLevelCleared { level, cleared } => {
-            push_json_pair(out, "kind", "set_level_cleared");
-            out.push(',');
-            push_json_bool(out, "cleared", *cleared);
-            if let Some(level) = level {
-                out.push(',');
-                push_json_expr_named(out, "level", level);
-            }
-        }
-        SceneEffect::ResetPersistentVars => {
-            push_json_pair(out, "kind", "reset_persistent_vars");
-        }
-        SceneEffect::Sequence(effects) => {
-            push_json_pair(out, "kind", "sequence");
-            out.push(',');
-            out.push_str("\"effects\":[");
-            for (index, effect) in effects.iter().enumerate() {
-                if index > 0 {
-                    out.push(',');
-                }
-                out.push('{');
-                push_json_effect(out, effect);
-                out.push('}');
-            }
-            out.push(']');
-        }
-    }
-}
-
-fn push_json_params(out: &mut String, params: &[puzzle_lang::SceneEffectParam]) {
-    out.push_str("\"params\":[");
-    for (index, param) in params.iter().enumerate() {
-        if index > 0 {
-            out.push(',');
-        }
-        out.push('{');
-        match param {
-            puzzle_lang::SceneEffectParam::Level(value) => {
-                push_json_pair(out, "kind", "level");
-                out.push(',');
-                push_json_expr_named(out, "value", value);
-            }
-            puzzle_lang::SceneEffectParam::Named { name, value } => {
-                push_json_pair(out, "kind", "named");
-                out.push(',');
-                push_json_pair(out, "name", name);
-                out.push(',');
-                push_json_expr_named(out, "value", value);
-            }
-        }
-        out.push('}');
-    }
-    out.push(']');
-}
-
-fn push_json_expr_object(out: &mut String, expr: &SceneExpr) {
-    out.push('{');
-    push_json_expr_fields(out, expr);
-    out.push('}');
+    puzzle_scene::write_scene_effect_json_fields(out, effect);
 }
 
 fn push_json_expr_named(out: &mut String, name: &str, expr: &SceneExpr) {
     push_json_string(out, name);
-    out.push_str(":{");
-    push_json_expr_fields(out, expr);
-    out.push('}');
+    out.push(':');
+    puzzle_scene::write_scene_expr_json(out, expr);
 }
 
-fn push_json_expr_fields(out: &mut String, expr: &SceneExpr) {
-    match expr {
-        SceneExpr::Bool(value) => {
-            push_json_pair(out, "kind", "bool");
-            out.push(',');
-            push_json_bool(out, "value", *value);
+fn ignore_scene_level_source(_: &str) {}
+
+fn push_scene_text_content_fields(out: &mut String, content: &SceneTextContent) {
+    match content {
+        SceneTextContent::Literal(value) => {
+            out.push_str("\"source\": \"literal\", \"value\": ");
+            push_json_string(out, value);
         }
-        SceneExpr::Int(value) => {
-            push_json_pair(out, "kind", "int");
-            out.push(',');
-            out.push_str("\"value\":");
-            out.push_str(&value.to_string());
+        SceneTextContent::Path(path) => {
+            out.push_str("\"source\": \"path\", \"path\": ");
+            push_json_string(out, &path.join("."));
         }
-        SceneExpr::Text(value) => {
-            push_json_pair(out, "kind", "text");
-            out.push(',');
-            push_json_pair(out, "value", value);
-        }
-        SceneExpr::Path(path) => {
-            push_json_pair(out, "kind", "path");
-            out.push(',');
-            push_json_pair(out, "path", &path.join("."));
-        }
-        SceneExpr::Call { name, args } => {
-            push_json_pair(out, "kind", "call");
-            out.push(',');
-            push_json_pair(out, "name", name);
-            out.push(',');
-            out.push_str("\"args\":[");
-            for (index, arg) in args.iter().enumerate() {
-                if index > 0 {
-                    out.push(',');
-                }
-                push_json_expr_object(out, arg);
-            }
-            out.push(']');
-        }
-        SceneExpr::Binary { op, left, right } => {
-            push_json_pair(out, "kind", "binary");
-            out.push(',');
-            let op = match op {
-                SceneBinaryOp::And => "and",
-                SceneBinaryOp::Eq => "eq",
-                SceneBinaryOp::NotEq => "neq",
-            };
-            push_json_pair(out, "op", op);
-            out.push(',');
-            push_json_expr_named(out, "left", left);
-            out.push(',');
-            push_json_expr_named(out, "right", right);
-        }
-        SceneExpr::If {
-            condition,
-            then_branch,
-            else_branch,
-        } => {
-            push_json_pair(out, "kind", "if");
-            out.push(',');
-            push_json_expr_named(out, "condition", condition);
-            out.push(',');
-            push_json_expr_named(out, "then", then_branch);
-            out.push(',');
-            push_json_expr_named(out, "else", else_branch);
+        SceneTextContent::Expr(expr) => {
+            out.push_str("\"source\": \"expr\", \"content\": ");
+            puzzle_scene::write_scene_expr_json(out, expr);
         }
     }
-}
-
-fn push_scene_children(out: &mut String, children: &[SceneComponent]) {
-    out.push_str("\"children\":");
-    push_scene_component_list(out, children);
-}
-
-fn push_scene_component_list(out: &mut String, children: &[SceneComponent]) {
-    out.push('[');
-    for (index, child) in children.iter().enumerate() {
-        if index > 0 {
-            out.push(',');
-        }
-        push_scene_component(out, child);
-    }
-    out.push(']');
 }
 
 fn key_trigger_name(key: &KeyTrigger) -> String {
@@ -2136,19 +1661,7 @@ fn push_json_bool(out: &mut String, key: &str, value: bool) {
 }
 
 fn push_json_string(out: &mut String, value: &str) {
-    out.push('"');
-    for ch in value.chars() {
-        match ch {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            ch if ch.is_control() => out.push_str(&format!("\\u{:04x}", ch as u32)),
-            ch => out.push(ch),
-        }
-    }
-    out.push('"');
+    puzzle_scene::write_json_string(out, value);
 }
 
 fn escape_script_json(value: &str) -> String {

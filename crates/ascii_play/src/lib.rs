@@ -5,12 +5,13 @@ use std::io::{self, IsTerminal, Read, Write};
 use std::path::PathBuf;
 use std::process::Command;
 
-use puzzle_3d::{Coord3, InputDef3, ObjectId as ObjectId3, ParsedPuzzle3, State3};
 use puzzle_core::{InputId, State as PuzzleState, transition_program};
+use puzzle_grid3d::{Coord3, InputDef3, ObjectId as ObjectId3, State3};
 use puzzle_lang::{
     ArrowKey, DiagnosticReport, ForSource, KeyTrigger, LoadedDocumentModel, LoadedGame,
-    ResourceSelection, SceneBinaryOp, SceneComponent, SceneEffect, SceneExpr, SceneTextContent,
-    SceneValue, VisualSpriteKind, discover_game_entries, parse_game_file, resolve_game_entry,
+    ParsedPuzzle3, ResourceSelection, SceneBinaryOp, SceneComponent, SceneEffect, SceneExpr,
+    SceneTextContent, SceneValue, VisualSpriteKind, discover_game_entries, parse_game_file,
+    resolve_game_entry,
 };
 use puzzle_play::{
     GameSession, GameSession3, GameSessionError3, MessageEvent, SessionLifecycleResult3,
@@ -470,11 +471,7 @@ impl Puzzle3TerminalSession {
         }
     }
 
-    fn apply_input(
-        &mut self,
-        parsed: &ParsedPuzzle3,
-        input: puzzle_3d::InputId3,
-    ) -> Result<(), AppError> {
+    fn apply_input(&mut self, parsed: &ParsedPuzzle3, input: InputId) -> Result<(), AppError> {
         let bundle = parsed
             .level_bundle
             .as_ref()
@@ -1606,7 +1603,7 @@ fn effect_to_command(
             .first()
             .map(|arg| eval_expr(loaded, session, arg, scope))
             .filter(|value| !value.is_empty()),
-        SceneEffect::Sequence(_) => None,
+        SceneEffect::Sequence { .. } => None,
     }
 }
 
@@ -2030,7 +2027,7 @@ level "start"
 
     #[test]
     fn puzzle3_ascii_renders_z_slices_from_top_to_bottom() {
-        let parsed = puzzle_3d::parse_puzzle3d(
+        let parsed = puzzle_lang::parse_puzzle3d(
             r#"
 layers {
 actor = Top Bottom

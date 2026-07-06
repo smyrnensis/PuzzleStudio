@@ -496,7 +496,7 @@ P
     assert!(title_scene.routines.iter().any(|routine| {
         matches!(
             &routine.effect,
-            SceneEffect::Sequence(effects)
+            SceneEffect::Sequence { effects }
                 if matches!(
                     effects.as_slice(),
                     [
@@ -509,7 +509,7 @@ P
     assert!(title_scene.routines.iter().any(|routine| {
         matches!(
             &routine.effect,
-            SceneEffect::Sequence(effects)
+            SceneEffect::Sequence { effects }
                 if matches!(
                     effects.as_slice(),
                     [

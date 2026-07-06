@@ -1,10 +1,12 @@
 use crate::session_history::SessionHistory;
-use puzzle_3d::{
-    Direction3, InputId3, LevelBundle3, LevelBundleError3, LocalFrame, ObjectId, Rule3, State3,
+use puzzle_grid3d::{
+    Direction3, InputId, LevelBundle3, LevelBundleError3, LocalFrame, ObjectId, Rule3, State3,
     TransitionError3, WinCondition3, transition_program, transition_program_with_local_frame,
     transition_program_without_input_with_local_frame,
 };
-use puzzle_runtime_contract::{Lifecycle3, LifecycleCommand3};
+use puzzle_runtime_contract::{LifecycleCommand, RuntimeLifecycle};
+
+type SessionLifecycle = RuntimeLifecycle<Rule3, LocalFrame<ObjectId>>;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct SessionLifecycleResult3 {
@@ -30,6 +32,10 @@ struct SessionHistoryEntry3 {
     completed: bool,
 }
 
+fn empty_lifecycle() -> SessionLifecycle {
+    RuntimeLifecycle::<Rule3, LocalFrame<ObjectId>>::new(Vec::new(), Vec::new())
+}
+
 impl GameSession3 {
     pub fn new(bundle: &LevelBundle3) -> Result<Self, GameSessionError3> {
         Self::with_level(bundle, 0)
@@ -39,12 +45,12 @@ impl GameSession3 {
         bundle: &LevelBundle3,
         level_index: usize,
     ) -> Result<Self, GameSessionError3> {
-        Self::with_level_and_lifecycle(bundle, level_index, &Lifecycle3::default())
+        Self::with_level_and_lifecycle(bundle, level_index, &empty_lifecycle())
     }
 
     pub fn new_with_lifecycle(
         bundle: &LevelBundle3,
-        lifecycle: &Lifecycle3,
+        lifecycle: &SessionLifecycle,
     ) -> Result<Self, GameSessionError3> {
         Self::with_level_and_lifecycle(bundle, 0, lifecycle)
     }
@@ -52,7 +58,7 @@ impl GameSession3 {
     pub fn with_level_and_lifecycle(
         bundle: &LevelBundle3,
         level_index: usize,
-        lifecycle: &Lifecycle3,
+        lifecycle: &SessionLifecycle,
     ) -> Result<Self, GameSessionError3> {
         bundle.validate()?;
         let initial_state = build_level_state_with_lifecycle(bundle, level_index, lifecycle)?;
@@ -122,7 +128,7 @@ impl GameSession3 {
         &mut self,
         bundle: &LevelBundle3,
         rules: &[Rule3],
-        input: InputId3,
+        input: InputId,
     ) -> Result<bool, GameSessionError3> {
         let next = transition_program(&bundle.game, &self.current_state, rules, input)?;
         Ok(self.apply_next_state(next))
@@ -132,7 +138,7 @@ impl GameSession3 {
         &mut self,
         bundle: &LevelBundle3,
         rules: &[Rule3],
-        input: InputId3,
+        input: InputId,
         local_frame: Option<&LocalFrame<ObjectId>>,
     ) -> Result<bool, GameSessionError3> {
         let next = transition_program_with_local_frame(
@@ -164,7 +170,7 @@ impl GameSession3 {
     pub fn run_level_start_lifecycle_on_current_state(
         &mut self,
         bundle: &LevelBundle3,
-        lifecycle: &Lifecycle3,
+        lifecycle: &SessionLifecycle,
     ) -> Result<bool, GameSessionError3> {
         let next = transition_program_without_input_with_local_frame(
             &bundle.game,
@@ -184,7 +190,7 @@ impl GameSession3 {
         &mut self,
         bundle: &LevelBundle3,
         rules: &[Rule3],
-        input: InputId3,
+        input: InputId,
         win_condition: &WinCondition3,
     ) -> Result<bool, GameSessionError3> {
         let changed = self.apply_input(bundle, rules, input)?;
@@ -198,9 +204,9 @@ impl GameSession3 {
         &mut self,
         bundle: &LevelBundle3,
         rules: &[Rule3],
-        input: InputId3,
+        input: InputId,
         win_condition: &WinCondition3,
-        lifecycle: &Lifecycle3,
+        lifecycle: &SessionLifecycle,
     ) -> Result<SessionLifecycleResult3, GameSessionError3> {
         let was_completed = self.completed;
         let changed = self.apply_input_with_win_condition(bundle, rules, input, win_condition)?;
@@ -282,7 +288,7 @@ impl GameSession3 {
     pub fn restart_with_lifecycle(
         &mut self,
         bundle: &LevelBundle3,
-        lifecycle: &Lifecycle3,
+        lifecycle: &SessionLifecycle,
     ) -> Result<bool, GameSessionError3> {
         let initial_state =
             build_level_state_with_lifecycle(bundle, self.current_level_index, lifecycle)?;
@@ -303,14 +309,14 @@ impl GameSession3 {
         bundle: &LevelBundle3,
         level_index: usize,
     ) -> Result<bool, GameSessionError3> {
-        self.goto_level_with_lifecycle(bundle, level_index, &Lifecycle3::default())
+        self.goto_level_with_lifecycle(bundle, level_index, &empty_lifecycle())
     }
 
     pub fn goto_level_with_lifecycle(
         &mut self,
         bundle: &LevelBundle3,
         level_index: usize,
-        lifecycle: &Lifecycle3,
+        lifecycle: &SessionLifecycle,
     ) -> Result<bool, GameSessionError3> {
         bundle.validate()?;
         let initial_state = build_level_state_with_lifecycle(bundle, level_index, lifecycle)?;
@@ -329,13 +335,13 @@ impl GameSession3 {
     }
 
     pub fn next_level(&mut self, bundle: &LevelBundle3) -> Result<bool, GameSessionError3> {
-        self.next_level_with_lifecycle(bundle, &Lifecycle3::default())
+        self.next_level_with_lifecycle(bundle, &empty_lifecycle())
     }
 
     pub fn next_level_with_lifecycle(
         &mut self,
         bundle: &LevelBundle3,
-        lifecycle: &Lifecycle3,
+        lifecycle: &SessionLifecycle,
     ) -> Result<bool, GameSessionError3> {
         if !self.has_next_level(bundle) {
             return Ok(false);
@@ -344,13 +350,13 @@ impl GameSession3 {
     }
 
     pub fn previous_level(&mut self, bundle: &LevelBundle3) -> Result<bool, GameSessionError3> {
-        self.previous_level_with_lifecycle(bundle, &Lifecycle3::default())
+        self.previous_level_with_lifecycle(bundle, &empty_lifecycle())
     }
 
     pub fn previous_level_with_lifecycle(
         &mut self,
         bundle: &LevelBundle3,
-        lifecycle: &Lifecycle3,
+        lifecycle: &SessionLifecycle,
     ) -> Result<bool, GameSessionError3> {
         if !self.has_previous_level() {
             return Ok(false);
@@ -361,7 +367,7 @@ impl GameSession3 {
     fn run_level_clear_lifecycle(
         &mut self,
         bundle: &LevelBundle3,
-        lifecycle: &Lifecycle3,
+        lifecycle: &SessionLifecycle,
     ) -> Result<bool, GameSessionError3> {
         let mut level_changed = false;
         let commands = if self.current_level_index + 1 >= bundle.level_count() {
@@ -374,7 +380,7 @@ impl GameSession3 {
         };
         for command in commands {
             match command {
-                LifecycleCommand3::PuzzleNextLevel { target } if target.is_empty() => {
+                LifecycleCommand::PuzzleNextLevel { target } if target.is_empty() => {
                     if self.next_level_with_lifecycle(bundle, lifecycle)? {
                         level_changed = true;
                     }
@@ -393,7 +399,7 @@ impl GameSession3 {
 fn build_level_state_with_lifecycle(
     bundle: &LevelBundle3,
     level_index: usize,
-    lifecycle: &Lifecycle3,
+    lifecycle: &SessionLifecycle,
 ) -> Result<State3, GameSessionError3> {
     let state = bundle.build_level_state(level_index)?;
     Ok(transition_program_without_input_with_local_frame(
@@ -427,7 +433,7 @@ impl From<TransitionError3> for GameSessionError3 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use puzzle_3d::{
+    use puzzle_grid3d::{
         Coord3, Direction3, Game3, InputDef3, LayerId, Level3, LevelCell3, LevelEntry3, MatchCell3,
         ObjectDef3, ObjectId, Offset3, Pattern3, Size3, WriteOp3,
     };
@@ -438,8 +444,8 @@ mod tests {
     const GOAL: ObjectId = ObjectId(4);
     const ACTOR: LayerId = LayerId(0);
     const FLOOR: LayerId = LayerId(1);
-    const INPUT_LEFT: InputId3 = InputId3(0);
-    const INPUT_RIGHT: InputId3 = InputId3(1);
+    const INPUT_LEFT: InputId = InputId(0);
+    const INPUT_RIGHT: InputId = InputId(1);
 
     fn session_game() -> Game3 {
         Game3::new_with_inputs(

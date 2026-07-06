@@ -1,7 +1,7 @@
-use crate::compiled_game::{CompiledGame, GlobalUpdateOp};
-use crate::ids::{GlobalId, LayerId, MarkId, ObjectId, RuleId};
+use crate::compiled_game::{CompiledGame, VariableUpdateOp};
+use crate::ids::{LayerId, MarkId, ObjectId, RuleId, VariableId};
 use puzzle_kernel::{
-    GlobalValueError, GridCoord, GridShape, MarkSpace, ObjectCellMask, VisibleGlobals, fnv_mix,
+    GridCoord, GridShape, MarkSpace, ObjectCellMask, VariableValueError, VisibleVariables, fnv_mix,
 };
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::BTreeMap;
@@ -13,7 +13,7 @@ pub struct State {
     pub layer_count: u16,
     slots: Vec<ObjectId>,
     mark: MarkSpace<MarkId>,
-    visible_globals: VisibleGlobals<GlobalId>,
+    visible_variables: VisibleVariables<VariableId>,
     level_fired_rules: Vec<RuleId>,
     #[serde(skip)]
     derived_cache: DerivedCache,
@@ -51,7 +51,7 @@ impl<'de> Deserialize<'de> for State {
             layer_count: u16,
             slots: Vec<ObjectId>,
             mark: MarkSpace<MarkId>,
-            visible_globals: VisibleGlobals<GlobalId>,
+            visible_variables: VisibleVariables<VariableId>,
             level_fired_rules: Vec<RuleId>,
         }
 
@@ -62,7 +62,7 @@ impl<'de> Deserialize<'de> for State {
             layer_count: data.layer_count,
             slots: data.slots,
             mark: data.mark,
-            visible_globals: data.visible_globals,
+            visible_variables: data.visible_variables,
             level_fired_rules: data.level_fired_rules,
             derived_cache: DerivedCache::default(),
             hash: 0,
@@ -93,14 +93,14 @@ pub enum StateError {
         existing: ObjectId,
         attempted: ObjectId,
     },
-    GlobalOutOfBounds {
-        global: GlobalId,
+    VariableOutOfBounds {
+        variable: VariableId,
     },
-    GlobalOverflow {
-        global: GlobalId,
+    VariableOverflow {
+        variable: VariableId,
     },
-    GlobalDivisionByZero {
-        global: GlobalId,
+    VariableDivisionByZero {
+        variable: VariableId,
     },
 }
 
@@ -116,15 +116,15 @@ impl State {
         layer_count: u16,
         object_count: usize,
     ) -> Result<Self, StateError> {
-        Self::empty_with_globals(width, height, layer_count, object_count, Vec::new())
+        Self::empty_with_variables(width, height, layer_count, object_count, Vec::new())
     }
 
-    pub fn empty_with_globals(
+    pub fn empty_with_variables(
         width: u16,
         height: u16,
         layer_count: u16,
         object_count: usize,
-        visible_globals: Vec<i64>,
+        visible_variables: Vec<i64>,
     ) -> Result<Self, StateError> {
         let shape = GridShape::<2>::new([width, height], layer_count)
             .ok_or(StateError::InvalidDimensions)?;
@@ -140,7 +140,7 @@ impl State {
             layer_count,
             slots: vec![ObjectId::EMPTY; slot_count],
             mark: MarkSpace::new(cell_count, slot_count),
-            visible_globals: VisibleGlobals::new(visible_globals),
+            visible_variables: VisibleVariables::new(visible_variables),
             level_fired_rules: Vec::new(),
             derived_cache: DerivedCache {
                 object_counts: vec![0; object_count + 1],
@@ -183,8 +183,8 @@ impl State {
     }
 
     #[inline]
-    pub fn visible_globals(&self) -> &[i64] {
-        self.visible_globals.as_slice()
+    pub fn visible_variables(&self) -> &[i64] {
+        self.visible_variables.as_slice()
     }
 
     #[inline]
@@ -205,14 +205,14 @@ impl State {
         self.recompute_hash();
     }
 
-    pub fn without_visual_objects(&self, game: &CompiledGame) -> Self {
-        if game.visual_objects().is_empty() {
+    pub fn without_objects(&self, objects: &[ObjectId]) -> Self {
+        if objects.is_empty() {
             return self.clone();
         }
         if self
             .slots
             .iter()
-            .all(|object| object.is_empty() || !game.is_visual_object(*object))
+            .all(|object| object.is_empty() || !objects.contains(object))
         {
             return self.clone();
         }
@@ -220,7 +220,7 @@ impl State {
         let mut next = self.clone();
         for index in 0..next.slots.len() {
             let object = next.slots[index];
-            if object.is_empty() || !game.is_visual_object(object) {
+            if object.is_empty() || !objects.contains(&object) {
                 continue;
             }
             next.set_slot_index_unchecked(index, ObjectId::EMPTY);
@@ -231,27 +231,31 @@ impl State {
     }
 
     #[inline]
-    pub fn global_value(&self, global: GlobalId) -> Option<i64> {
-        self.visible_globals.get(global)
+    pub fn variable_value(&self, variable: VariableId) -> Option<i64> {
+        self.visible_variables.get(variable)
     }
 
-    pub fn set_visible_global(&mut self, global: GlobalId, value: i64) -> Result<(), StateError> {
-        self.visible_globals
-            .set(global, value)
-            .map_err(map_global_error)?;
+    pub fn set_visible_variable(
+        &mut self,
+        variable: VariableId,
+        value: i64,
+    ) -> Result<(), StateError> {
+        self.visible_variables
+            .set(variable, value)
+            .map_err(map_variable_error)?;
         self.recompute_hash();
         Ok(())
     }
 
-    pub fn update_visible_global(
+    pub fn update_visible_variable(
         &mut self,
-        global: GlobalId,
-        op: GlobalUpdateOp,
+        variable: VariableId,
+        op: VariableUpdateOp,
         value: i64,
     ) -> Result<(), StateError> {
-        self.visible_globals
-            .update(global, op, value)
-            .map_err(map_global_error)?;
+        self.visible_variables
+            .update(variable, op, value)
+            .map_err(map_variable_error)?;
         self.recompute_hash();
         Ok(())
     }
@@ -737,7 +741,7 @@ impl State {
             hash = fnv_mix(hash, u64::from(object.0));
         }
         hash = self.mark.hash_into(hash, |mark| u64::from(mark.0));
-        for value in self.visible_globals.as_slice() {
+        for value in self.visible_variables.as_slice() {
             hash = fnv_mix(hash, *value as u64);
         }
         hash = fnv_mix(hash, self.level_fired_rules.len() as u64);
@@ -786,11 +790,15 @@ impl State {
     }
 }
 
-fn map_global_error(error: GlobalValueError<GlobalId>) -> StateError {
+fn map_variable_error(error: VariableValueError<VariableId>) -> StateError {
     match error {
-        GlobalValueError::OutOfBounds { global } => StateError::GlobalOutOfBounds { global },
-        GlobalValueError::Overflow { global } => StateError::GlobalOverflow { global },
-        GlobalValueError::DivisionByZero { global } => StateError::GlobalDivisionByZero { global },
+        VariableValueError::OutOfBounds { variable } => {
+            StateError::VariableOutOfBounds { variable }
+        }
+        VariableValueError::Overflow { variable } => StateError::VariableOverflow { variable },
+        VariableValueError::DivisionByZero { variable } => {
+            StateError::VariableDivisionByZero { variable }
+        }
     }
 }
 
@@ -801,7 +809,7 @@ impl PartialEq for State {
             && self.layer_count == other.layer_count
             && self.slots == other.slots
             && self.mark == other.mark
-            && self.visible_globals == other.visible_globals
+            && self.visible_variables == other.visible_variables
             && self.level_fired_rules == other.level_fired_rules
     }
 }

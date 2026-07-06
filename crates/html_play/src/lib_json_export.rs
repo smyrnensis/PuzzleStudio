@@ -578,12 +578,12 @@ fn push_export_engine(out: &mut String, loaded: &LoadedGame) {
     out.push(',');
     push_export_objects(out, loaded);
     out.push(',');
-    push_export_globals(out, loaded);
+    push_export_model_variables(out, loaded);
     out.push(',');
     push_export_queries(out, &loaded.game);
     out.push(',');
     out.push_str("\"visualObjects\":[");
-    for (index, object) in loaded.game.visual_objects().iter().enumerate() {
+    for (index, object) in loaded.display_objects.iter().enumerate() {
         if index > 0 {
             out.push(',');
         }
@@ -645,7 +645,7 @@ fn push_compiled_play_bundle(out: &mut String, loaded: &LoadedGame) {
     push_compact_queries(out, &loaded.game);
     out.push(',');
     out.push('[');
-    for (index, object) in loaded.game.visual_objects().iter().enumerate() {
+    for (index, object) in loaded.display_objects.iter().enumerate() {
         if index > 0 {
             out.push(',');
         }
@@ -885,16 +885,16 @@ fn push_compact_level_programs(out: &mut String, loaded: &LoadedGame) {
     out.push(']');
 }
 
-fn push_export_globals(out: &mut String, loaded: &LoadedGame) {
-    out.push_str("\"globals\":[");
-    let mut entries = loaded.global_labels.iter().collect::<Vec<_>>();
-    entries.sort_by_key(|(global, _)| global.0);
-    for (index, (global, name)) in entries.into_iter().enumerate() {
+fn push_export_model_variables(out: &mut String, loaded: &LoadedGame) {
+    out.push_str("\"variables\":[");
+    let mut entries = loaded.variable_labels.iter().collect::<Vec<_>>();
+    entries.sort_by_key(|(variable, _)| variable.0);
+    for (index, (variable, name)) in entries.into_iter().enumerate() {
         if index > 0 {
             out.push(',');
         }
         out.push('{');
-        push_json_number(out, "id", global.0 as u64);
+        push_json_number(out, "id", variable.0 as u64);
         out.push(',');
         push_json_pair(out, "name", name);
         out.push('}');
@@ -1019,8 +1019,8 @@ fn push_state_data(out: &mut String, state: &State) {
     }
     out.push(']');
     out.push(',');
-    out.push_str("\"globals\":[");
-    for (index, value) in state.visible_globals().iter().enumerate() {
+    out.push_str("\"variables\":[");
+    for (index, value) in state.visible_variables().iter().enumerate() {
         if index > 0 {
             out.push(',');
         }
@@ -1462,19 +1462,19 @@ fn push_compact_guard(out: &mut String, guard: &Guard) {
             out.push(',');
             out.push_str(&input.0.to_string());
         }
-        Guard::GlobalEquals { global, value } => {
+        Guard::VariableEquals { variable, value } => {
             out.push('1');
             out.push(',');
-            out.push_str(&global.0.to_string());
+            out.push_str(&variable.0.to_string());
             out.push(',');
             push_compact_comparison(out, ComparisonOp::Eq);
             out.push(',');
             out.push_str(&value.to_string());
         }
-        Guard::GlobalCompare { global, op, value } => {
+        Guard::VariableCompare { variable, op, value } => {
             out.push('1');
             out.push(',');
-            out.push_str(&global.0.to_string());
+            out.push_str(&variable.0.to_string());
             out.push(',');
             push_compact_comparison(out, *op);
             out.push(',');
@@ -1952,12 +1952,12 @@ fn push_compact_effect(out: &mut String, effect: &Effect) {
         Effect::Again => out.push('4'),
         Effect::Checkpoint => out.push('5'),
         Effect::ClearCheckpoint => out.push('6'),
-        Effect::UpdateGlobal { global, op, value } => {
+        Effect::UpdateVariable { variable, op, value } => {
             out.push('7');
             out.push(',');
-            out.push_str(&global.0.to_string());
+            out.push_str(&variable.0.to_string());
             out.push(',');
-            push_compact_global_update(out, *op);
+            push_compact_variable_update(out, *op);
             out.push(',');
             out.push_str(&value.to_string());
         }
@@ -2013,14 +2013,14 @@ fn push_compact_comparison(out: &mut String, op: ComparisonOp) {
     });
 }
 
-fn push_compact_global_update(out: &mut String, op: GlobalUpdateOp) {
+fn push_compact_variable_update(out: &mut String, op: VariableUpdateOp) {
     out.push_str(match op {
-        GlobalUpdateOp::Set => "0",
-        GlobalUpdateOp::Add => "1",
-        GlobalUpdateOp::Subtract => "2",
-        GlobalUpdateOp::Multiply => "3",
-        GlobalUpdateOp::Divide => "4",
-        GlobalUpdateOp::Remainder => "5",
+        VariableUpdateOp::Set => "0",
+        VariableUpdateOp::Add => "1",
+        VariableUpdateOp::Subtract => "2",
+        VariableUpdateOp::Multiply => "3",
+        VariableUpdateOp::Divide => "4",
+        VariableUpdateOp::Remainder => "5",
     });
 }
 
@@ -2255,10 +2255,10 @@ fn push_goal_exprs(out: &mut String, exprs: &[GoalExpr]) {
 fn push_goal_value(out: &mut String, value: &GoalValue) {
     out.push('{');
     match value {
-        GoalValue::Global(global) => {
-            push_json_pair(out, "kind", "global");
+        GoalValue::Variable(variable) => {
+            push_json_pair(out, "kind", "variable");
             out.push(',');
-            push_json_number(out, "global", global.0 as u64);
+            push_json_number(out, "variable", variable.0 as u64);
         }
         GoalValue::Condition(condition) => {
             push_json_pair(out, "kind", "condition");

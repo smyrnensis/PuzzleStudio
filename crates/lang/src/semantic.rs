@@ -449,14 +449,14 @@ fn option_completion_slots(
     let first = tokens_before.first().copied();
 
     let option_names = match (block, first) {
-        (Some(SurfaceOptionBlock::Render3), Some("camera")) => puzzle_3d::CAMERA_OPTIONS3,
-        (Some(SurfaceOptionBlock::Render3), Some("grid")) => puzzle_3d::GRID_BARE_OPTIONS3,
-        (Some(SurfaceOptionBlock::Render3), Some("pixelate")) => puzzle_3d::PIXELATE_OPTIONS3,
+        (Some(SurfaceOptionBlock::Render3), Some("camera")) => crate::CAMERA_OPTIONS3,
+        (Some(SurfaceOptionBlock::Render3), Some("grid")) => crate::GRID_BARE_OPTIONS3,
+        (Some(SurfaceOptionBlock::Render3), Some("pixelate")) => crate::PIXELATE_OPTIONS3,
         (Some(SurfaceOptionBlock::Render2), Some("grid")) => PUZZLE_RENDER_GRID_OPTIONS,
         (Some(SurfaceOptionBlock::Animation), Some("tween")) => ANIMATION_TWEEN_OPTIONS,
-        (Some(SurfaceOptionBlock::Camera3), _) => puzzle_3d::CAMERA_OPTIONS3,
-        (Some(SurfaceOptionBlock::Grid3), _) => puzzle_3d::GRID_BARE_OPTIONS3,
-        (Some(SurfaceOptionBlock::Pixelate3), _) => puzzle_3d::PIXELATE_OPTIONS3,
+        (Some(SurfaceOptionBlock::Camera3), _) => crate::CAMERA_OPTIONS3,
+        (Some(SurfaceOptionBlock::Grid3), _) => crate::GRID_BARE_OPTIONS3,
+        (Some(SurfaceOptionBlock::Pixelate3), _) => crate::PIXELATE_OPTIONS3,
         (Some(SurfaceOptionBlock::Grid2), _) => PUZZLE_RENDER_GRID_OPTIONS,
         (Some(SurfaceOptionBlock::Tween), _) => ANIMATION_TWEEN_OPTIONS,
         (Some(SurfaceOptionBlock::LevelMenu), _) => LEVEL_MENU_OPTIONS,
@@ -468,7 +468,7 @@ fn option_completion_slots(
                 SettingCompletionSet::Theme,
             )]);
         }
-        (Some(SurfaceOptionBlock::Render3), _) => puzzle_3d::RENDER_OPTIONS3,
+        (Some(SurfaceOptionBlock::Render3), _) => crate::RENDER_OPTIONS3,
         (Some(SurfaceOptionBlock::Render2), _) => PUZZLE_RENDER_BLOCK_OPTIONS,
         (Some(SurfaceOptionBlock::Animation), _) => ANIMATION_BLOCK_OPTIONS,
         _ => return None,

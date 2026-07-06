@@ -1,23 +1,34 @@
 use puzzle_grid3d::{
     ConditionValueKind3, Game3, LevelBundle3, LocalFrame, ObjectId, Pattern3, Rule3, WinCondition3,
 };
-pub use puzzle_scene::SceneEffect as LifecycleCommand3;
+pub use puzzle_scene::SceneEffect as LifecycleCommand;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub const PUZZLE3_RUNTIME_CONTRACT_VERSION: u16 = 2;
+pub const RUNTIME_CONTRACT_VERSION: u16 = 4;
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct Lifecycle3 {
-    pub on_level_start: Vec<Rule3>,
-    pub on_level_start_local_frame: Option<LocalFrame<ObjectId>>,
-    pub on_level_clear: Vec<LifecycleCommand3>,
-    pub on_last_level_clear: Option<Vec<LifecycleCommand3>>,
+pub struct RuntimeLifecycle<Rule, Frame> {
+    pub on_level_start: Vec<Rule>,
+    pub on_level_start_local_frame: Option<Frame>,
+    pub on_level_clear: Vec<LifecycleCommand>,
+    pub on_last_level_clear: Option<Vec<LifecycleCommand>>,
 }
 
-impl Lifecycle3 {
-    pub fn new(on_level_start: Vec<Rule3>, on_level_clear: Vec<LifecycleCommand3>) -> Self {
+impl<Rule, Frame> Default for RuntimeLifecycle<Rule, Frame> {
+    fn default() -> Self {
+        Self {
+            on_level_start: Vec::new(),
+            on_level_start_local_frame: None,
+            on_level_clear: Vec::new(),
+            on_last_level_clear: None,
+        }
+    }
+}
+
+impl<Rule, Frame> RuntimeLifecycle<Rule, Frame> {
+    pub fn new(on_level_start: Vec<Rule>, on_level_clear: Vec<LifecycleCommand>) -> Self {
         Self {
             on_level_start,
             on_level_start_local_frame: None,
@@ -29,57 +40,134 @@ impl Lifecycle3 {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct Puzzle3RuntimeContract {
+pub struct RuntimeContract {
     pub version: u16,
-    pub game: Game3,
-    pub local_frame: Option<LocalFrame<ObjectId>>,
-    pub rules: Vec<Rule3>,
-    pub level_bundle: LevelBundle3,
-    pub win_condition: Option<WinCondition3>,
-    pub lifecycle: Lifecycle3,
+    pub model: RuntimeModelContract,
 }
 
-impl Puzzle3RuntimeContract {
-    pub fn checked_new(
-        game: Game3,
-        local_frame: Option<LocalFrame<ObjectId>>,
-        rules: Vec<Rule3>,
-        level_bundle: LevelBundle3,
-        win_condition: Option<WinCondition3>,
-        lifecycle: Lifecycle3,
-    ) -> Result<Self, Puzzle3RuntimeContractError> {
+impl RuntimeContract {
+    pub fn checked_new(model: RuntimeModelContract) -> Result<Self, RuntimeContractError> {
         let contract = Self {
-            version: PUZZLE3_RUNTIME_CONTRACT_VERSION,
-            game,
-            local_frame,
-            rules,
-            level_bundle,
-            win_condition,
-            lifecycle,
+            version: RUNTIME_CONTRACT_VERSION,
+            model,
         };
         contract.validate()?;
         Ok(contract)
     }
 
-    pub fn validate(&self) -> Result<(), Puzzle3RuntimeContractError> {
-        if self.version != PUZZLE3_RUNTIME_CONTRACT_VERSION {
-            return Err(Puzzle3RuntimeContractError::UnsupportedVersion {
+    pub fn validate(&self) -> Result<(), RuntimeContractError> {
+        if self.version != RUNTIME_CONTRACT_VERSION {
+            return Err(RuntimeContractError::UnsupportedVersion {
                 version: self.version,
             });
         }
+        self.model.validate()
+    }
+
+    pub fn into_puzzle3_model(self) -> Result<Puzzle3RuntimeModel, RuntimeContractError> {
+        match self.model {
+            RuntimeModelContract::Puzzle3(model) => Ok(model),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum RuntimeModelContract {
+    #[serde(rename = "puzzle3")]
+    Puzzle3(Puzzle3RuntimeModel),
+}
+
+impl RuntimeModelContract {
+    fn validate(&self) -> Result<(), RuntimeContractError> {
+        match self {
+            Self::Puzzle3(model) => model.validate(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Puzzle3RuntimeModel {
+    pub game: Game3,
+    pub local_frame: Option<LocalFrame<ObjectId>>,
+    pub rules: Vec<Rule3>,
+    pub display_objects: Vec<ObjectId>,
+    pub rule_camera_effects: Vec<Vec<Puzzle3CameraEffect>>,
+    pub level_bundle: LevelBundle3,
+    pub win_condition: Option<WinCondition3>,
+    pub lifecycle: RuntimeLifecycle<Rule3, LocalFrame<ObjectId>>,
+    pub on_level_start_camera_effects: Vec<Vec<Puzzle3CameraEffect>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Puzzle3CameraEffect {
+    SetYaw(i16),
+    SetPitch(i16),
+    SetZoom(u16),
+    Reset,
+}
+
+impl Puzzle3RuntimeModel {
+    pub fn checked_new(
+        game: Game3,
+        local_frame: Option<LocalFrame<ObjectId>>,
+        rules: Vec<Rule3>,
+        display_objects: Vec<ObjectId>,
+        rule_camera_effects: Vec<Vec<Puzzle3CameraEffect>>,
+        level_bundle: LevelBundle3,
+        win_condition: Option<WinCondition3>,
+        lifecycle: RuntimeLifecycle<Rule3, LocalFrame<ObjectId>>,
+        on_level_start_camera_effects: Vec<Vec<Puzzle3CameraEffect>>,
+    ) -> Result<Self, RuntimeContractError> {
+        let model = Self {
+            game,
+            local_frame,
+            rules,
+            display_objects,
+            rule_camera_effects,
+            level_bundle,
+            win_condition,
+            lifecycle,
+            on_level_start_camera_effects,
+        };
+        model.validate()?;
+        Ok(model)
+    }
+
+    pub fn validate(&self) -> Result<(), RuntimeContractError> {
         self.game
             .validate()
-            .map_err(|error| Puzzle3RuntimeContractError::InvalidGame(format!("{error:?}")))?;
+            .map_err(|error| RuntimeContractError::InvalidGame(format!("{error:?}")))?;
         if self.level_bundle.game != self.game {
-            return Err(Puzzle3RuntimeContractError::InvalidLevelBundle(
+            return Err(RuntimeContractError::InvalidLevelBundle(
                 "level bundle game does not match runtime contract game".to_string(),
             ));
         }
-        self.level_bundle.validate().map_err(|error| {
-            Puzzle3RuntimeContractError::InvalidLevelBundle(format!("{error:?}"))
-        })?;
+        self.level_bundle
+            .validate()
+            .map_err(|error| RuntimeContractError::InvalidLevelBundle(format!("{error:?}")))?;
         validate_rules("rules", &self.rules)?;
+        for object in &self.display_objects {
+            if self.game.object_layer(*object).is_none() {
+                return Err(RuntimeContractError::InvalidGame(format!(
+                    "display object {} is not defined in game",
+                    object.0
+                )));
+            }
+        }
         validate_rules("lifecycle.onLevelStart", &self.lifecycle.on_level_start)?;
+        if self.rule_camera_effects.len() != self.rules.len() {
+            return Err(RuntimeContractError::InvalidPresentationEffects {
+                owner: "ruleCameraEffects".to_string(),
+            });
+        }
+        if self.on_level_start_camera_effects.len() != self.lifecycle.on_level_start.len() {
+            return Err(RuntimeContractError::InvalidPresentationEffects {
+                owner: "onLevelStartCameraEffects".to_string(),
+            });
+        }
         for condition in self.game.condition_defs() {
             validate_condition_kind(
                 &format!("conditionDefs[{}]", condition.id.0),
@@ -94,74 +182,89 @@ impl Puzzle3RuntimeContract {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Puzzle3RuntimeContractError {
+pub enum RuntimeContractError {
     MissingRuntimeContract,
     InvalidJson(String),
     UnsupportedVersion { version: u16 },
+    UnsupportedModelKind(String),
     InvalidGame(String),
     InvalidLevelBundle(String),
     InvalidPatternCache { owner: String },
+    InvalidPresentationEffects { owner: String },
 }
 
-impl std::fmt::Display for Puzzle3RuntimeContractError {
+impl std::fmt::Display for RuntimeContractError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::MissingRuntimeContract => {
-                write!(f, "Puzzle3 fixture is missing runtimeContract")
+                write!(f, "runtime fixture is missing runtimeContract")
             }
             Self::InvalidJson(error) => {
-                write!(f, "invalid Puzzle3 runtimeContract: {error}")
+                write!(f, "invalid runtimeContract: {error}")
             }
             Self::UnsupportedVersion { version } => {
-                write!(f, "unsupported Puzzle3 runtimeContract version: {version}")
+                write!(f, "unsupported runtimeContract version: {version}")
+            }
+            Self::UnsupportedModelKind(kind) => {
+                write!(f, "unsupported runtimeContract model kind: {kind}")
             }
             Self::InvalidGame(error) => {
-                write!(f, "invalid Puzzle3 runtimeContract game: {error}")
+                write!(f, "invalid runtimeContract model game: {error}")
             }
             Self::InvalidLevelBundle(error) => {
-                write!(f, "invalid Puzzle3 runtimeContract level bundle: {error}")
+                write!(f, "invalid runtimeContract model level bundle: {error}")
             }
             Self::InvalidPatternCache { owner } => {
-                write!(
-                    f,
-                    "invalid Puzzle3 runtimeContract pattern cache at {owner}"
-                )
+                write!(f, "invalid runtimeContract pattern cache at {owner}")
+            }
+            Self::InvalidPresentationEffects { owner } => {
+                write!(f, "invalid runtimeContract presentation effects at {owner}")
             }
         }
     }
 }
 
-impl std::error::Error for Puzzle3RuntimeContractError {}
+impl std::error::Error for RuntimeContractError {}
 
-pub fn puzzle3_runtime_contract_json(
-    contract: &Puzzle3RuntimeContract,
-) -> Result<String, Puzzle3RuntimeContractError> {
+pub fn runtime_contract_json(contract: &RuntimeContract) -> Result<String, RuntimeContractError> {
     contract.validate()?;
     serde_json::to_string(contract)
-        .map_err(|error| Puzzle3RuntimeContractError::InvalidJson(error.to_string()))
+        .map_err(|error| RuntimeContractError::InvalidJson(error.to_string()))
 }
 
-pub fn puzzle3_runtime_contract_from_fixture_value(
+pub fn runtime_contract_from_fixture_value(
     value: &Value,
-) -> Result<Puzzle3RuntimeContract, Puzzle3RuntimeContractError> {
+) -> Result<RuntimeContract, RuntimeContractError> {
     let contract_value = value
         .get("runtimeContract")
-        .ok_or(Puzzle3RuntimeContractError::MissingRuntimeContract)?;
-    let contract: Puzzle3RuntimeContract = serde_json::from_value(contract_value.clone())
-        .map_err(|error| Puzzle3RuntimeContractError::InvalidJson(error.to_string()))?;
+        .ok_or(RuntimeContractError::MissingRuntimeContract)?;
+    let contract: RuntimeContract = serde_json::from_value(contract_value.clone())
+        .map_err(|error| RuntimeContractError::InvalidJson(error.to_string()))?;
     contract.validate()?;
     Ok(contract)
 }
 
-pub fn puzzle3_runtime_contract_from_fixture_json(
+pub fn runtime_contract_from_fixture_json(
     fixture_json: &str,
-) -> Result<Puzzle3RuntimeContract, Puzzle3RuntimeContractError> {
+) -> Result<RuntimeContract, RuntimeContractError> {
     let value: Value = serde_json::from_str(fixture_json)
-        .map_err(|error| Puzzle3RuntimeContractError::InvalidJson(error.to_string()))?;
-    puzzle3_runtime_contract_from_fixture_value(&value)
+        .map_err(|error| RuntimeContractError::InvalidJson(error.to_string()))?;
+    runtime_contract_from_fixture_value(&value)
 }
 
-fn validate_rules(owner: &str, rules: &[Rule3]) -> Result<(), Puzzle3RuntimeContractError> {
+pub fn puzzle3_runtime_model_from_fixture_value(
+    value: &Value,
+) -> Result<Puzzle3RuntimeModel, RuntimeContractError> {
+    runtime_contract_from_fixture_value(value)?.into_puzzle3_model()
+}
+
+pub fn puzzle3_runtime_model_from_fixture_json(
+    fixture_json: &str,
+) -> Result<Puzzle3RuntimeModel, RuntimeContractError> {
+    runtime_contract_from_fixture_json(fixture_json)?.into_puzzle3_model()
+}
+
+fn validate_rules(owner: &str, rules: &[Rule3]) -> Result<(), RuntimeContractError> {
     for rule in rules {
         validate_pattern(&format!("{owner}[{}].pattern", rule.id.0), &rule.pattern)?;
         for (index, guard) in rule.guards.iter().enumerate() {
@@ -180,8 +283,8 @@ fn validate_rules(owner: &str, rules: &[Rule3]) -> Result<(), Puzzle3RuntimeCont
                     )?;
                 }
                 puzzle_grid3d::Guard3::InputIs(_)
-                | puzzle_grid3d::Guard3::GlobalEquals { .. }
-                | puzzle_grid3d::Guard3::GlobalCompare { .. }
+                | puzzle_grid3d::Guard3::VariableEquals { .. }
+                | puzzle_grid3d::Guard3::VariableCompare { .. }
                 | puzzle_grid3d::Guard3::ConditionEquals { .. }
                 | puzzle_grid3d::Guard3::ConditionNonZero(_)
                 | puzzle_grid3d::Guard3::ConditionCompare { .. } => {}
@@ -194,7 +297,7 @@ fn validate_rules(owner: &str, rules: &[Rule3]) -> Result<(), Puzzle3RuntimeCont
 fn validate_condition_kind(
     owner: &str,
     kind: &ConditionValueKind3,
-) -> Result<(), Puzzle3RuntimeContractError> {
+) -> Result<(), RuntimeContractError> {
     match kind {
         ConditionValueKind3::CountMatches(patterns)
         | ConditionValueKind3::ExistsMatches(patterns)
@@ -220,7 +323,7 @@ fn validate_condition_kind(
 fn validate_win_condition(
     owner: &str,
     condition: &WinCondition3,
-) -> Result<(), Puzzle3RuntimeContractError> {
+) -> Result<(), RuntimeContractError> {
     match condition {
         WinCondition3::All(conditions) | WinCondition3::Any(conditions) => {
             for (index, condition) in conditions.iter().enumerate() {
@@ -238,14 +341,14 @@ fn validate_win_condition(
     Ok(())
 }
 
-fn validate_pattern(owner: &str, pattern: &Pattern3) -> Result<(), Puzzle3RuntimeContractError> {
+fn validate_pattern(owner: &str, pattern: &Pattern3) -> Result<(), RuntimeContractError> {
     let cells = pattern
         .components
         .iter()
         .flat_map(|component| component.cells.iter().cloned())
         .collect::<Vec<_>>();
     if cells != pattern.cells {
-        return Err(Puzzle3RuntimeContractError::InvalidPatternCache {
+        return Err(RuntimeContractError::InvalidPatternCache {
             owner: owner.to_string(),
         });
     }
@@ -256,7 +359,7 @@ fn validate_pattern(owner: &str, pattern: &Pattern3) -> Result<(), Puzzle3Runtim
 mod tests {
     use super::*;
     use puzzle_grid3d::{
-        ConditionDef3, ConditionId3, ConditionValueKind3, Coord3, Guard3, InputDef3, InputId3,
+        ConditionDef3, ConditionId3, ConditionValueKind3, Coord3, Guard3, InputDef3, InputId,
         LayerId, Level3, LevelCell3, LevelEntry3, MatchCell3, ObjectDef3, Offset3,
         RuleApplication3, RuleId3, Size3,
     };
@@ -271,7 +374,7 @@ mod tests {
                 id: PLAYER,
                 layer_id: LayerId(0),
             }],
-            vec![InputDef3::action(InputId3(0), "wait")],
+            vec![InputDef3::action(InputId(0), "wait")],
             vec![ConditionDef3 {
                 id: ConditionId3(0),
                 kind: ConditionValueKind3::ExistsObjects(vec![PLAYER]),
@@ -295,9 +398,9 @@ mod tests {
 
     #[test]
     fn fixture_requires_runtime_contract_field() {
-        let error = puzzle3_runtime_contract_from_fixture_value(&json!({})).unwrap_err();
+        let error = runtime_contract_from_fixture_value(&json!({})).unwrap_err();
 
-        assert_eq!(error, Puzzle3RuntimeContractError::MissingRuntimeContract);
+        assert_eq!(error, RuntimeContractError::MissingRuntimeContract);
     }
 
     #[test]
@@ -311,21 +414,26 @@ mod tests {
             writes: Vec::new(),
             effects: Vec::new(),
         };
-        let contract = Puzzle3RuntimeContract::checked_new(
+        let model = Puzzle3RuntimeModel::checked_new(
             game.clone(),
             None,
             vec![rule.clone()],
+            Vec::new(),
+            vec![Vec::new()],
             support_level_bundle(&game),
             None,
-            Lifecycle3::default(),
+            RuntimeLifecycle::default(),
+            Vec::new(),
         )
-        .expect("runtime contract is valid");
+        .expect("runtime model is valid");
+        let contract = RuntimeContract::checked_new(RuntimeModelContract::Puzzle3(model))
+            .expect("runtime contract is valid");
         let fixture = json!({
             "runtimeContract": serde_json::to_value(&contract).expect("contract serializes"),
         });
 
-        let decoded = puzzle3_runtime_contract_from_fixture_value(&fixture)
-            .expect("runtime contract decodes");
+        let decoded =
+            puzzle3_runtime_model_from_fixture_value(&fixture).expect("runtime contract decodes");
 
         assert_eq!(decoded.rules[0].guards, rule.guards);
     }

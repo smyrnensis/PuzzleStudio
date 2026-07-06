@@ -13,5 +13,4 @@ puzzle-core = { path = "../core" }
 puzzle-grid3d = { path = "../grid3d" }
 
 [dev-dependencies]
-puzzle-3d = { path = "../puzzle_3d" }
 puzzle-lang = { path = "../lang" }

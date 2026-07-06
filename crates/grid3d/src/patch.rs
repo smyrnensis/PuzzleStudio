@@ -1,5 +1,5 @@
-use crate::{Coord3, Game3, GlobalId3, LayerId, MarkId3, ObjectId, State3, StateError3};
-use puzzle_kernel::{GlobalUpdateOp, GridPatchOp, MarkValueMatch};
+use crate::{Coord3, Game3, LayerId, MarkId3, ObjectId, State3, StateError3, VariableId};
+use puzzle_kernel::{GridPatchOp, MarkValueMatch, VariableUpdateOp};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Patch3 {
@@ -108,9 +108,13 @@ impl Patch3 {
                     changed = true;
                 }
                 PatchOp3::Move { .. } => {}
-                PatchOp3::UpdateGlobal { global, op, value } => {
-                    let next = validate_global_update(state, global, op, value)?;
-                    changed |= state.global_value(global) != Some(next);
+                PatchOp3::UpdateVariable {
+                    variable,
+                    op,
+                    value,
+                } => {
+                    let next = validate_variable_update(state, variable, op, value)?;
+                    changed |= state.variable_value(variable) != Some(next);
                 }
                 PatchOp3::SetMark {
                     position,
@@ -226,7 +230,7 @@ impl SlotOverlay3 {
     }
 }
 
-pub type PatchOp3 = GridPatchOp<Coord3, ObjectId, GlobalId3, MarkId3>;
+pub type PatchOp3 = GridPatchOp<Coord3, ObjectId, VariableId, MarkId3>;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PatchError3 {
@@ -243,7 +247,7 @@ fn apply_remove_phase(game: &Game3, state: &mut State3, op: &PatchOp3) -> Result
     match *op {
         PatchOp3::Add { .. }
         | PatchOp3::Move { .. }
-        | PatchOp3::UpdateGlobal { .. }
+        | PatchOp3::UpdateVariable { .. }
         | PatchOp3::SetMark { .. }
         | PatchOp3::RemoveMark { .. } => {}
         PatchOp3::Remove { position, object } => {
@@ -268,8 +272,12 @@ fn apply_add_phase(game: &Game3, state: &mut State3, op: &PatchOp3) -> Result<()
         PatchOp3::Replace { position, add, .. } => {
             state.place_object(game, position, add)?;
         }
-        PatchOp3::UpdateGlobal { global, op, value } => {
-            state.update_visible_global(global, op, value)?;
+        PatchOp3::UpdateVariable {
+            variable,
+            op,
+            value,
+        } => {
+            state.update_visible_variable(variable, op, value)?;
         }
         PatchOp3::SetMark {
             position,
@@ -474,33 +482,33 @@ fn expect_object_in_overlay(
     Ok(layer)
 }
 
-fn validate_global_update(
+fn validate_variable_update(
     state: &State3,
-    global: GlobalId3,
-    op: GlobalUpdateOp,
+    variable: VariableId,
+    op: VariableUpdateOp,
     value: i64,
 ) -> Result<i64, PatchError3> {
     let current = state
-        .global_value(global)
-        .ok_or(StateError3::GlobalOutOfBounds { global })?;
+        .variable_value(variable)
+        .ok_or(StateError3::VariableOutOfBounds { variable })?;
     let next = match op {
-        GlobalUpdateOp::Set => Some(value),
-        GlobalUpdateOp::Add => current.checked_add(value),
-        GlobalUpdateOp::Subtract => current.checked_sub(value),
-        GlobalUpdateOp::Multiply => current.checked_mul(value),
-        GlobalUpdateOp::Divide => {
+        VariableUpdateOp::Set => Some(value),
+        VariableUpdateOp::Add => current.checked_add(value),
+        VariableUpdateOp::Subtract => current.checked_sub(value),
+        VariableUpdateOp::Multiply => current.checked_mul(value),
+        VariableUpdateOp::Divide => {
             if value == 0 {
-                return Err(StateError3::GlobalDivisionByZero { global }.into());
+                return Err(StateError3::VariableDivisionByZero { variable }.into());
             }
             current.checked_div(value)
         }
-        GlobalUpdateOp::Remainder => {
+        VariableUpdateOp::Remainder => {
             if value == 0 {
-                return Err(StateError3::GlobalDivisionByZero { global }.into());
+                return Err(StateError3::VariableDivisionByZero { variable }.into());
             }
             current.checked_rem(value)
         }
     }
-    .ok_or(StateError3::GlobalOverflow { global })?;
+    .ok_or(StateError3::VariableOverflow { variable })?;
     Ok(next)
 }

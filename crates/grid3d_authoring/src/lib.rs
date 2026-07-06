@@ -1,6 +1,7 @@
-use crate::{
-    Direction3, DirectionSet3, Frame3, FrameSet3, Guard3, LayerId, MarkId3, MatchCell3, ObjectId,
-    Offset3, Pattern3, Rule3, RuleApplication3, RuleId3, WriteOp3,
+use puzzle_grid3d::{
+    Direction3, DirectionSet3, Frame3, FrameSet3, Guard3, InputId, LayerId, MarkId3, MarkPattern3,
+    MatchCell3, ObjectId, ObjectSetMarkPattern3, Offset3, Pattern3, Rule3, RuleApplication3,
+    RuleId3, WriteOp3,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -414,7 +415,7 @@ impl RuleTemplate3 {
         self
     }
 
-    pub fn when_input(mut self, input: crate::InputId3) -> Self {
+    pub fn when_input(mut self, input: InputId) -> Self {
         self.guards.push(Guard3::InputIs(input));
         self
     }
@@ -493,7 +494,7 @@ impl LineRuleTemplate3 {
         self
     }
 
-    pub fn when_input(mut self, input: crate::InputId3) -> Self {
+    pub fn when_input(mut self, input: InputId) -> Self {
         self.guards.push(Guard3::InputIs(input));
         self
     }
@@ -689,7 +690,7 @@ impl DenseRuleTemplate3 {
         self
     }
 
-    pub fn when_input(mut self, input: crate::InputId3) -> Self {
+    pub fn when_input(mut self, input: InputId) -> Self {
         self.guards.push(Guard3::InputIs(input));
         self
     }
@@ -1025,31 +1026,25 @@ fn apply_selector_mark_to_cell(
         let (mark, value, match_value) = lower_selector_mark_for_pattern(attr)?;
         let negated = force_forbid || attr.negated;
         match (binding, negated) {
-            (Some(binding), false) => {
-                cell.require_object_set_mark
-                    .push(crate::ObjectSetMarkPattern3 {
-                        binding,
-                        mark,
-                        value,
-                        match_value,
-                    })
-            }
-            (Some(binding), true) => {
-                cell.forbid_object_set_mark
-                    .push(crate::ObjectSetMarkPattern3 {
-                        binding,
-                        mark,
-                        value,
-                        match_value,
-                    })
-            }
-            (None, false) => cell.require_mark.push(crate::MarkPattern3 {
+            (Some(binding), false) => cell.require_object_set_mark.push(ObjectSetMarkPattern3 {
+                binding,
+                mark,
+                value,
+                match_value,
+            }),
+            (Some(binding), true) => cell.forbid_object_set_mark.push(ObjectSetMarkPattern3 {
+                binding,
+                mark,
+                value,
+                match_value,
+            }),
+            (None, false) => cell.require_mark.push(MarkPattern3 {
                 object,
                 mark,
                 value,
                 match_value,
             }),
-            (None, true) => cell.forbid_mark.push(crate::MarkPattern3 {
+            (None, true) => cell.forbid_mark.push(MarkPattern3 {
                 object,
                 mark,
                 value,
@@ -1810,4 +1805,868 @@ fn direction_values(set: DirectionSet3) -> Vec<String> {
         .into_iter()
         .map(|direction| direction.name.to_string())
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const PLAYER: ObjectId = ObjectId(1);
+    const BOX: ObjectId = ObjectId(2);
+    const WALL: ObjectId = ObjectId(3);
+    const MARKER_LEFT: ObjectId = ObjectId(10);
+    const MARKER_RIGHT: ObjectId = ObjectId(11);
+    const MARKER_FORWARD: ObjectId = ObjectId(12);
+    const MARKER_BACKWARD: ObjectId = ObjectId(13);
+    const MARKER_UP: ObjectId = ObjectId(14);
+    const MARKER_DOWN: ObjectId = ObjectId(15);
+    const INPUT_RIGHT: InputId = InputId(1);
+
+    fn selector_catalog() -> SelectorCatalog3 {
+        SelectorCatalog3::new(
+            vec![
+                ConcreteObject3::new(PLAYER, "Player"),
+                ConcreteObject3::new(BOX, "Box"),
+                ConcreteObject3::new(WALL, "Wall"),
+            ],
+            vec![ObjectFamily3::new(
+                "Marker",
+                vec![VariantAxis3::directions(
+                    "direction",
+                    DirectionSet3::Directions,
+                )],
+                vec![
+                    ObjectVariant3::new(MARKER_LEFT, vec!["left"]),
+                    ObjectVariant3::new(MARKER_RIGHT, vec!["right"]),
+                    ObjectVariant3::new(MARKER_FORWARD, vec!["front"]),
+                    ObjectVariant3::new(MARKER_BACKWARD, vec!["back"]),
+                    ObjectVariant3::new(MARKER_UP, vec!["up"]),
+                    ObjectVariant3::new(MARKER_DOWN, vec!["down"]),
+                ],
+            )],
+            vec![SelectorGroup3::new(
+                "solid",
+                vec![
+                    ObjectSelector3::object("Player"),
+                    ObjectSelector3::object("Box"),
+                    ObjectSelector3::object("Wall"),
+                    ObjectSelector3::object("Box"),
+                ],
+            )],
+        )
+    }
+
+    #[test]
+    fn object_selector_resolves_concrete_object_names() {
+        let catalog = selector_catalog();
+        let resolved = catalog.resolve(&ObjectSelector3::object("Player")).unwrap();
+
+        assert_eq!(resolved.token, "Player");
+        assert_eq!(resolved.alternatives, vec![PLAYER]);
+        assert_eq!(resolved.transform, None);
+        assert_eq!(resolved.mark, Vec::<SelectorMark3>::new());
+    }
+
+    #[test]
+    fn group_selector_expands_members_and_deduplicates_in_order() {
+        let catalog = selector_catalog();
+
+        assert_eq!(
+            catalog.resolve(&ObjectSelector3::group("solid")).unwrap(),
+            ResolvedSelector3 {
+                token: "solid".to_string(),
+                alternatives: vec![PLAYER, BOX, WALL],
+                transform: None,
+                mark: Vec::new(),
+            }
+        );
+    }
+
+    #[test]
+    fn group_selector_can_expand_nested_selectors() {
+        let catalog = SelectorCatalog3::new(
+            vec![ConcreteObject3::new(WALL, "Wall")],
+            vec![ObjectFamily3::new(
+                "Marker",
+                vec![VariantAxis3::directions(
+                    "direction",
+                    DirectionSet3::Directions,
+                )],
+                vec![
+                    ObjectVariant3::new(MARKER_LEFT, vec!["left"]),
+                    ObjectVariant3::new(MARKER_RIGHT, vec!["right"]),
+                    ObjectVariant3::new(MARKER_UP, vec!["up"]),
+                ],
+            )],
+            vec![SelectorGroup3::new(
+                "blocked",
+                vec![
+                    ObjectSelector3::variant("Marker", vec![SelectorTag3::value("horizontal")]),
+                    ObjectSelector3::object("Wall"),
+                ],
+            )],
+        );
+
+        assert_eq!(
+            catalog
+                .resolve(&ObjectSelector3::group("blocked"))
+                .unwrap()
+                .alternatives,
+            vec![MARKER_LEFT, MARKER_RIGHT, WALL]
+        );
+    }
+
+    #[test]
+    fn direction_variant_selector_matches_single_direction_value() {
+        let catalog = selector_catalog();
+
+        assert_eq!(
+            catalog
+                .resolve(&ObjectSelector3::variant(
+                    "Marker",
+                    vec![SelectorTag3::value("right")]
+                ))
+                .unwrap()
+                .alternatives,
+            vec![MARKER_RIGHT]
+        );
+    }
+
+    #[test]
+    fn direction_set_selector_matches_direction_subset() {
+        let catalog = selector_catalog();
+
+        assert_eq!(
+            catalog
+                .resolve(&ObjectSelector3::variant(
+                    "Marker",
+                    vec![SelectorTag3::value("horizontal")]
+                ))
+                .unwrap()
+                .alternatives,
+            vec![MARKER_LEFT, MARKER_RIGHT, MARKER_FORWARD, MARKER_BACKWARD]
+        );
+        assert_eq!(
+            catalog
+                .resolve(&ObjectSelector3::variant(
+                    "Marker",
+                    vec![SelectorTag3::value("vertical")]
+                ))
+                .unwrap()
+                .alternatives,
+            vec![MARKER_UP, MARKER_DOWN]
+        );
+    }
+
+    #[test]
+    fn explicit_any_selector_matches_all_variants() {
+        let catalog = selector_catalog();
+        let resolved = catalog
+            .resolve(&ObjectSelector3::variant(
+                "Marker",
+                vec![SelectorTag3::any()],
+            ))
+            .unwrap();
+
+        assert_eq!(resolved.token, "Marker:*");
+        assert_eq!(
+            resolved.alternatives,
+            vec![
+                MARKER_LEFT,
+                MARKER_RIGHT,
+                MARKER_FORWARD,
+                MARKER_BACKWARD,
+                MARKER_UP,
+                MARKER_DOWN,
+            ]
+        );
+    }
+
+    #[test]
+    fn any_selector_fills_all_variant_slots_for_multi_axis_family() {
+        let target_a_on = ObjectId(20);
+        let target_b_on = ObjectId(21);
+        let target_a_off = ObjectId(22);
+        let catalog = SelectorCatalog3::new(
+            Vec::new(),
+            vec![ObjectFamily3::new(
+                "Target",
+                vec![
+                    VariantAxis3::named("kind", vec!["A", "B"]),
+                    VariantAxis3::named("state", vec!["on", "off"]),
+                ],
+                vec![
+                    ObjectVariant3::new(target_a_on, vec!["A", "on"]),
+                    ObjectVariant3::new(target_b_on, vec!["B", "on"]),
+                    ObjectVariant3::new(target_a_off, vec!["A", "off"]),
+                ],
+            )],
+            Vec::new(),
+        );
+
+        assert_eq!(
+            catalog
+                .resolve(&ObjectSelector3::variant(
+                    "Target",
+                    vec![SelectorTag3::any()]
+                ))
+                .unwrap()
+                .alternatives,
+            vec![target_a_on, target_b_on, target_a_off]
+        );
+        assert_eq!(
+            catalog
+                .resolve(&ObjectSelector3::variant(
+                    "Target",
+                    vec![SelectorTag3::value("A"), SelectorTag3::any()]
+                ))
+                .unwrap()
+                .alternatives,
+            vec![target_a_on, target_a_off]
+        );
+    }
+
+    #[test]
+    fn partial_multi_axis_variant_selector_is_rejected() {
+        let catalog = SelectorCatalog3::new(
+            Vec::new(),
+            vec![ObjectFamily3::new(
+                "Target",
+                vec![
+                    VariantAxis3::named("kind", vec!["A", "B"]),
+                    VariantAxis3::named("state", vec!["on", "off"]),
+                ],
+                vec![ObjectVariant3::new(ObjectId(20), vec!["A", "on"])],
+            )],
+            Vec::new(),
+        );
+
+        assert_eq!(
+            catalog
+                .resolve(&ObjectSelector3::variant(
+                    "Target",
+                    vec![SelectorTag3::value("A")]
+                ))
+                .unwrap_err(),
+            SelectorError3::PartialVariantSelector {
+                family: "Target".to_string(),
+                expected: 2,
+                actual: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn bare_variant_family_selector_is_rejected() {
+        let catalog = selector_catalog();
+
+        assert_eq!(
+            catalog
+                .resolve(&ObjectSelector3::object("Marker"))
+                .unwrap_err(),
+            SelectorError3::BareVariantFamily {
+                family: "Marker".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn frame_set_names_are_not_direction_selector_tags() {
+        let catalog = selector_catalog();
+
+        assert_eq!(
+            catalog
+                .resolve(&ObjectSelector3::variant(
+                    "Marker",
+                    vec![SelectorTag3::value("canonical")]
+                ))
+                .unwrap_err(),
+            SelectorError3::UnknownVariantTag {
+                family: "Marker".to_string(),
+                axis: "direction".to_string(),
+                tag: "canonical".to_string(),
+            }
+        );
+        assert_eq!(
+            catalog
+                .resolve(&ObjectSelector3::variant(
+                    "Marker",
+                    vec![SelectorTag3::value("mirrored")]
+                ))
+                .unwrap_err(),
+            SelectorError3::UnknownVariantTag {
+                family: "Marker".to_string(),
+                axis: "direction".to_string(),
+                tag: "mirrored".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn direction_selector_respects_axis_subset() {
+        let catalog = SelectorCatalog3::new(
+            Vec::new(),
+            vec![ObjectFamily3::new(
+                "HorizontalMarker",
+                vec![VariantAxis3::directions(
+                    "direction",
+                    DirectionSet3::Horizontal,
+                )],
+                vec![
+                    ObjectVariant3::new(MARKER_LEFT, vec!["left"]),
+                    ObjectVariant3::new(MARKER_FORWARD, vec!["front"]),
+                ],
+            )],
+            Vec::new(),
+        );
+
+        assert_eq!(
+            catalog
+                .resolve(&ObjectSelector3::variant(
+                    "HorizontalMarker",
+                    vec![SelectorTag3::value("directions")]
+                ))
+                .unwrap()
+                .alternatives,
+            vec![MARKER_LEFT, MARKER_FORWARD]
+        );
+        assert_eq!(
+            catalog
+                .resolve(&ObjectSelector3::variant(
+                    "HorizontalMarker",
+                    vec![SelectorTag3::value("vertical")]
+                ))
+                .unwrap_err(),
+            SelectorError3::UnknownVariantTag {
+                family: "HorizontalMarker".to_string(),
+                axis: "direction".to_string(),
+                tag: "vertical".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn checked_selector_catalog_rejects_shadowed_selector_names() {
+        assert_eq!(
+            SelectorCatalog3::checked_new(
+                vec![ConcreteObject3::new(PLAYER, "Marker")],
+                vec![ObjectFamily3::new(
+                    "Marker",
+                    vec![VariantAxis3::directions(
+                        "direction",
+                        DirectionSet3::Directions
+                    )],
+                    vec![ObjectVariant3::new(MARKER_LEFT, vec!["left"])],
+                )],
+                Vec::new(),
+            )
+            .unwrap_err(),
+            SelectorCatalogError3::FamilyNameShadowsObject {
+                name: "Marker".to_string(),
+            }
+        );
+
+        assert_eq!(
+            SelectorCatalog3::checked_new(
+                vec![ConcreteObject3::new(PLAYER, "Player")],
+                Vec::new(),
+                vec![SelectorGroup3::new(
+                    "Player",
+                    vec![ObjectSelector3::object("Player")]
+                )],
+            )
+            .unwrap_err(),
+            SelectorCatalogError3::GroupNameShadowsSelector {
+                name: "Player".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn recursive_group_selector_is_rejected() {
+        let catalog = SelectorCatalog3::new(
+            Vec::new(),
+            Vec::new(),
+            vec![SelectorGroup3::new(
+                "loop",
+                vec![ObjectSelector3::group("loop")],
+            )],
+        );
+
+        assert_eq!(
+            catalog
+                .resolve(&ObjectSelector3::group("loop"))
+                .unwrap_err(),
+            SelectorError3::RecursiveGroup {
+                name: "loop".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn pattern_template_expands_required_selector_alternatives() {
+        let catalog = selector_catalog();
+        let template = PatternTemplate3::new(vec![MatchCellTemplate3::new(Offset3::ZERO).require(
+            ObjectSelector3::variant("Marker", vec![SelectorTag3::value("horizontal")]),
+        )]);
+
+        let patterns = lower_pattern_template(&catalog, &template).unwrap();
+
+        assert_eq!(patterns.len(), 4);
+        assert_eq!(
+            patterns
+                .iter()
+                .map(|pattern| pattern.cells[0].require_objects.clone())
+                .collect::<Vec<_>>(),
+            vec![
+                vec![MARKER_LEFT],
+                vec![MARKER_RIGHT],
+                vec![MARKER_FORWARD],
+                vec![MARKER_BACKWARD],
+            ]
+        );
+    }
+
+    #[test]
+    fn pattern_template_collects_forbidden_selector_alternatives() {
+        let catalog = selector_catalog();
+        let template = PatternTemplate3::new(vec![
+            MatchCellTemplate3::new(Direction3::RIGHT.offset)
+                .forbid(ObjectSelector3::group("solid")),
+        ]);
+
+        let patterns = lower_pattern_template(&catalog, &template).unwrap();
+
+        assert_eq!(patterns.len(), 1);
+        assert_eq!(patterns[0].cells[0].offset, Direction3::RIGHT.offset);
+        assert_eq!(patterns[0].cells[0].forbid_objects, vec![PLAYER, BOX, WALL]);
+    }
+
+    #[test]
+    fn pattern_template_expands_required_selectors_as_cartesian_product() {
+        let catalog = selector_catalog();
+        let template = PatternTemplate3::new(vec![
+            MatchCellTemplate3::new(Offset3::ZERO).require(ObjectSelector3::variant(
+                "Marker",
+                vec![SelectorTag3::value("horizontal")],
+            )),
+            MatchCellTemplate3::new(Direction3::UP.offset).require(ObjectSelector3::variant(
+                "Marker",
+                vec![SelectorTag3::value("vertical")],
+            )),
+        ]);
+
+        let patterns = lower_pattern_template(&catalog, &template).unwrap();
+
+        assert_eq!(patterns.len(), 8);
+        assert_eq!(patterns[0].cells[0].require_objects, vec![MARKER_LEFT]);
+        assert_eq!(patterns[0].cells[1].require_objects, vec![MARKER_UP]);
+        assert_eq!(patterns[1].cells[0].require_objects, vec![MARKER_LEFT]);
+        assert_eq!(patterns[1].cells[1].require_objects, vec![MARKER_DOWN]);
+    }
+
+    #[test]
+    fn repeated_required_selector_token_preserves_assignment() {
+        let catalog = selector_catalog();
+        let template = PatternTemplate3::new(vec![
+            MatchCellTemplate3::new(Offset3::ZERO).require(ObjectSelector3::variant(
+                "Marker",
+                vec![SelectorTag3::any()],
+            )),
+            MatchCellTemplate3::new(Direction3::RIGHT.offset).require(ObjectSelector3::variant(
+                "Marker",
+                vec![SelectorTag3::any()],
+            )),
+        ]);
+
+        let patterns = lower_pattern_template(&catalog, &template).unwrap();
+
+        assert_eq!(patterns.len(), 6);
+        assert!(patterns.iter().all(|pattern| {
+            pattern.cells[0].require_objects[0] == pattern.cells[1].require_objects[0]
+        }));
+        assert_eq!(
+            patterns
+                .iter()
+                .map(|pattern| pattern.cells[0].require_objects[0])
+                .collect::<Vec<_>>(),
+            vec![
+                MARKER_LEFT,
+                MARKER_RIGHT,
+                MARKER_FORWARD,
+                MARKER_BACKWARD,
+                MARKER_UP,
+                MARKER_DOWN,
+            ]
+        );
+    }
+
+    #[test]
+    fn pattern_template_reports_selector_errors() {
+        let catalog = selector_catalog();
+        let template = PatternTemplate3::new(vec![MatchCellTemplate3::new(Offset3::ZERO).require(
+            ObjectSelector3::variant("Marker", vec![SelectorTag3::value("frames")]),
+        )]);
+
+        assert_eq!(
+            lower_pattern_template(&catalog, &template).unwrap_err(),
+            PatternLoweringError3::Selector(SelectorError3::UnknownVariantTag {
+                family: "Marker".to_string(),
+                axis: "direction".to_string(),
+                tag: "frames".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn rule_template_lowers_selector_assignments_into_move_writes() {
+        let catalog = selector_catalog();
+        let pattern = PatternTemplate3::new(vec![MatchCellTemplate3::new(Offset3::ZERO).require(
+            ObjectSelector3::variant("Marker", vec![SelectorTag3::value("horizontal")]),
+        )]);
+        let rule = RuleTemplate3::once(
+            pattern,
+            vec![WriteOpTemplate3::Move {
+                from_offset: Offset3::ZERO,
+                to_offset: Direction3::RIGHT.offset,
+                object: ObjectSelector3::variant("Marker", vec![SelectorTag3::value("horizontal")]),
+            }],
+        )
+        .with_id(RuleId3(42))
+        .when_input(INPUT_RIGHT);
+
+        let rules = lower_rule_template(&catalog, &rule).unwrap();
+
+        assert_eq!(rules.len(), 4);
+        assert_eq!(rules[0].id, RuleId3(42));
+        assert_eq!(rules[0].guards, vec![Guard3::InputIs(INPUT_RIGHT)]);
+        assert_eq!(rules[0].application, RuleApplication3::Once);
+        for rule in &rules {
+            let required = rule.pattern.cells[0].require_objects[0];
+            assert_eq!(
+                rule.writes,
+                vec![WriteOp3::Move {
+                    component: 0,
+                    from_offset: Offset3::ZERO,
+                    to_offset: Direction3::RIGHT.offset,
+                    object: required,
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn rule_template_allows_unassigned_singleton_write_selector() {
+        let catalog = selector_catalog();
+        let pattern = PatternTemplate3::new(vec![
+            MatchCellTemplate3::new(Offset3::ZERO).require(ObjectSelector3::object("Player")),
+        ]);
+        let rule = RuleTemplate3::once(
+            pattern,
+            vec![WriteOpTemplate3::Add {
+                offset: Direction3::UP.offset,
+                object: ObjectSelector3::object("Wall"),
+            }],
+        );
+
+        let rules = lower_rule_template(&catalog, &rule).unwrap();
+
+        assert_eq!(rules.len(), 1);
+        assert_eq!(
+            rules[0].writes,
+            vec![WriteOp3::Add {
+                component: 0,
+                offset: Direction3::UP.offset,
+                object: WALL,
+            }]
+        );
+    }
+
+    #[test]
+    fn rule_template_rejects_ambiguous_unassigned_write_selector() {
+        let catalog = selector_catalog();
+        let pattern = PatternTemplate3::new(vec![
+            MatchCellTemplate3::new(Offset3::ZERO).require(ObjectSelector3::object("Player")),
+        ]);
+        let rule = RuleTemplate3::once(
+            pattern,
+            vec![WriteOpTemplate3::Add {
+                offset: Direction3::UP.offset,
+                object: ObjectSelector3::variant("Marker", vec![SelectorTag3::value("horizontal")]),
+            }],
+        );
+
+        assert_eq!(
+            lower_rule_template(&catalog, &rule).unwrap_err(),
+            RuleLoweringError3::AmbiguousWriteSelector {
+                token: "Marker:horizontal".to_string(),
+                alternatives: vec![MARKER_LEFT, MARKER_RIGHT, MARKER_FORWARD, MARKER_BACKWARD],
+            }
+        );
+    }
+
+    #[test]
+    fn rule_template_lowers_replace_with_bound_remove_and_singleton_add() {
+        let catalog = selector_catalog();
+        let pattern = PatternTemplate3::new(vec![MatchCellTemplate3::new(Offset3::ZERO).require(
+            ObjectSelector3::variant("Marker", vec![SelectorTag3::value("vertical")]),
+        )]);
+        let rule = RuleTemplate3::once(
+            pattern,
+            vec![WriteOpTemplate3::Replace {
+                offset: Offset3::ZERO,
+                remove: ObjectSelector3::variant("Marker", vec![SelectorTag3::value("vertical")]),
+                add: ObjectSelector3::object("Wall"),
+            }],
+        );
+
+        let rules = lower_rule_template(&catalog, &rule).unwrap();
+
+        assert_eq!(rules.len(), 2);
+        assert_eq!(
+            rules[0].writes,
+            vec![WriteOp3::Replace {
+                component: 0,
+                offset: Offset3::ZERO,
+                remove: MARKER_UP,
+                add: WALL,
+            }]
+        );
+        assert_eq!(
+            rules[1].writes,
+            vec![WriteOp3::Replace {
+                component: 0,
+                offset: Offset3::ZERO,
+                remove: MARKER_DOWN,
+                add: WALL,
+            }]
+        );
+    }
+
+    #[test]
+    fn dense_pattern_lowers_columns_rows_and_slices_through_frame() {
+        let dense = DensePattern3::new(vec![
+            DenseSlice3::new(vec![
+                DenseRow3::new(vec![
+                    DenseCell3::require(ObjectSelector3::object("Player")),
+                    DenseCell3::require(ObjectSelector3::object("Box")),
+                ]),
+                DenseRow3::new(vec![
+                    DenseCell3::empty(),
+                    DenseCell3::forbid(ObjectSelector3::group("solid")),
+                ]),
+            ]),
+            DenseSlice3::new(vec![DenseRow3::new(vec![DenseCell3::require(
+                ObjectSelector3::object("Wall"),
+            )])]),
+        ]);
+
+        let template = lower_dense_pattern(Frame3::DEFAULT, &dense);
+
+        assert_eq!(
+            template
+                .cells
+                .iter()
+                .map(|cell| cell.offset)
+                .collect::<Vec<_>>(),
+            vec![
+                Offset3::ZERO,
+                Direction3::RIGHT.offset,
+                Direction3::RIGHT.offset.add(Direction3::BACKWARD.offset),
+                Direction3::DOWN.offset,
+            ]
+        );
+        assert_eq!(
+            template.cells[0].require,
+            vec![ObjectSelector3::object("Player")]
+        );
+        assert_eq!(
+            template.cells[2].forbid,
+            vec![ObjectSelector3::group("solid")]
+        );
+    }
+
+    #[test]
+    fn dense_pattern_uses_frame_orientation_for_world_offsets() {
+        let frame = Frame3::canonical(Direction3::FORWARD, Direction3::UP).unwrap();
+        let dense = DensePattern3::new(vec![DenseSlice3::new(vec![
+            DenseRow3::new(vec![
+                DenseCell3::require(ObjectSelector3::object("Player")),
+                DenseCell3::require(ObjectSelector3::object("Box")),
+            ]),
+            DenseRow3::new(vec![DenseCell3::require(ObjectSelector3::object("Wall"))]),
+        ])]);
+
+        let template = lower_dense_pattern(frame, &dense);
+
+        assert_eq!(
+            template
+                .cells
+                .iter()
+                .map(|cell| cell.offset)
+                .collect::<Vec<_>>(),
+            vec![
+                Offset3::ZERO,
+                Direction3::FORWARD.offset,
+                Direction3::UP.offset,
+            ]
+        );
+    }
+
+    #[test]
+    fn dense_pattern_connects_to_selector_pattern_lowering() {
+        let catalog = selector_catalog();
+        let dense = DensePattern3::new(vec![DenseSlice3::new(vec![DenseRow3::new(vec![
+            DenseCell3::require(ObjectSelector3::variant(
+                "Marker",
+                vec![SelectorTag3::value("horizontal")],
+            )),
+            DenseCell3::forbid(ObjectSelector3::group("solid")),
+        ])])]);
+
+        let patterns = lower_dense_pattern_to_patterns(&catalog, Frame3::DEFAULT, &dense).unwrap();
+
+        assert_eq!(patterns.len(), 4);
+        assert_eq!(patterns[0].cells[0].offset, Offset3::ZERO);
+        assert_eq!(patterns[0].cells[0].require_objects, vec![MARKER_LEFT]);
+        assert_eq!(patterns[0].cells[1].offset, Direction3::RIGHT.offset);
+        assert_eq!(patterns[0].cells[1].forbid_objects, vec![PLAYER, BOX, WALL]);
+    }
+
+    #[test]
+    fn dense_pattern_set_expands_all_frames_before_selector_lowering() {
+        let catalog = selector_catalog();
+        let dense = DensePattern3::new(vec![DenseSlice3::new(vec![DenseRow3::new(vec![
+            DenseCell3::require(ObjectSelector3::object("Player")),
+            DenseCell3::require(ObjectSelector3::object("Box")),
+        ])])]);
+
+        let patterns =
+            lower_dense_pattern_set_to_patterns(&catalog, FrameSet3::Canonical, &dense).unwrap();
+
+        assert_eq!(patterns.len(), 24);
+        assert!(patterns.iter().any(|pattern| {
+            pattern.cells[0].offset == Offset3::ZERO
+                && pattern.cells[1].offset == Direction3::RIGHT.offset
+        }));
+        assert!(patterns.iter().any(|pattern| {
+            pattern.cells[0].offset == Offset3::ZERO
+                && pattern.cells[1].offset == Direction3::UP.offset
+        }));
+    }
+
+    #[test]
+    fn line_rule_template_expands_direction_set_sugar_to_concrete_rules() {
+        let catalog = selector_catalog();
+        let rule = LineRuleTemplate3::once(
+            LineOrientation3::DirectionSet(DirectionSet3::Horizontal),
+            LinePatternTemplate3::new(vec![
+                LineMatchCellTemplate3::new(0).require(ObjectSelector3::object("Player")),
+                LineMatchCellTemplate3::new(1).forbid(ObjectSelector3::group("solid")),
+            ]),
+            vec![LineWriteOpTemplate3::Move {
+                from_step: 0,
+                to_step: 1,
+                object: ObjectSelector3::object("Player"),
+            }],
+        );
+
+        let rules = lower_line_rule_template(&catalog, &rule).unwrap();
+
+        assert_eq!(rules.len(), 4);
+        assert_eq!(
+            rules
+                .iter()
+                .map(|rule| rule.pattern.cells[1].offset)
+                .collect::<Vec<_>>(),
+            vec![
+                Direction3::LEFT.offset,
+                Direction3::RIGHT.offset,
+                Direction3::FORWARD.offset,
+                Direction3::BACKWARD.offset,
+            ]
+        );
+        assert_eq!(
+            rules[1].writes,
+            vec![WriteOp3::Move {
+                component: 0,
+                from_offset: Offset3::ZERO,
+                to_offset: Direction3::RIGHT.offset,
+                object: PLAYER,
+            }]
+        );
+    }
+
+    #[test]
+    fn dense_rule_template_transforms_local_writes_through_frame() {
+        let catalog = selector_catalog();
+        let frame = Frame3::canonical(Direction3::FORWARD, Direction3::UP).unwrap();
+        let rule = DenseRuleTemplate3::once(
+            FrameOrientation3::Frame(frame),
+            DensePattern3::new(vec![DenseSlice3::new(vec![DenseRow3::new(vec![
+                DenseCell3::require(ObjectSelector3::object("Player")),
+                DenseCell3::require(ObjectSelector3::object("Box")),
+            ])])]),
+            vec![LocalWriteOpTemplate3::Move {
+                from_offset: Offset3::new(1, 0, 0),
+                to_offset: Offset3::new(2, 0, 0),
+                object: ObjectSelector3::object("Box"),
+            }],
+        );
+
+        let rules = lower_dense_rule_template(&catalog, &rule).unwrap();
+
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].pattern.cells[1].offset, Direction3::FORWARD.offset);
+        assert_eq!(
+            rules[0].writes,
+            vec![WriteOp3::Move {
+                component: 0,
+                from_offset: Direction3::FORWARD.offset,
+                to_offset: Direction3::FORWARD.offset.scale(2),
+                object: BOX,
+            }]
+        );
+    }
+
+    #[test]
+    fn dense_rule_template_expands_frame_set_sugar_to_concrete_rules() {
+        let catalog = selector_catalog();
+        let rule = DenseRuleTemplate3::once(
+            FrameOrientation3::FrameSet(FrameSet3::Canonical),
+            DensePattern3::new(vec![DenseSlice3::new(vec![DenseRow3::new(vec![
+                DenseCell3::require(ObjectSelector3::object("Player")),
+                DenseCell3::require(ObjectSelector3::object("Box")),
+            ])])]),
+            vec![LocalWriteOpTemplate3::Move {
+                from_offset: Offset3::ZERO,
+                to_offset: Offset3::new(1, 0, 0),
+                object: ObjectSelector3::object("Player"),
+            }],
+        );
+
+        let rules = lower_dense_rule_template(&catalog, &rule).unwrap();
+
+        assert_eq!(rules.len(), 24);
+        assert!(rules.iter().any(|rule| {
+            rule.pattern.cells[1].offset == Direction3::RIGHT.offset
+                && rule.writes
+                    == vec![WriteOp3::Move {
+                        component: 0,
+                        from_offset: Offset3::ZERO,
+                        to_offset: Direction3::RIGHT.offset,
+                        object: PLAYER,
+                    }]
+        }));
+        assert!(rules.iter().any(|rule| {
+            rule.pattern.cells[1].offset == Direction3::UP.offset
+                && rule.writes
+                    == vec![WriteOp3::Move {
+                        component: 0,
+                        from_offset: Offset3::ZERO,
+                        to_offset: Direction3::UP.offset,
+                        object: PLAYER,
+                    }]
+        }));
+    }
 }

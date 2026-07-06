@@ -1,9 +1,9 @@
 use puzzle_core::{
     ComparisonOp, CompiledGame, ConditionDef, ConditionId, ConditionValueKind, Effect, GapTerm,
-    GlobalId, GlobalUpdateOp, Guard, InputId, LayerId, LocalFrame, LocalFrameExtent, MarkId,
-    MarkPattern, MarkValueMatch, MatchCell, ObjectDef, ObjectId, ObjectSetMarkPattern,
-    ObjectSetMatcher, Offset, Pattern, PatternComponent, Rule, RuleApplication, RuleCondition,
-    RuleId, RuleStep, State, TransitionCommand, WriteOp,
+    Guard, InputId, LayerId, LocalFrame, LocalFrameExtent, MarkId, MarkPattern, MarkValueMatch,
+    MatchCell, ObjectDef, ObjectId, ObjectSetMarkPattern, ObjectSetMatcher, Offset, Pattern,
+    PatternComponent, Rule, RuleApplication, RuleCondition, RuleId, RuleStep, State,
+    TransitionCommand, VariableId, VariableUpdateOp, WriteOp,
 };
 use serde_json::Value;
 use wasm_bindgen::prelude::*;
@@ -100,6 +100,7 @@ impl WasmCompiledCoreRuntime {
 
 pub struct CompiledEngine {
     game: CompiledGame,
+    display_objects: Vec<ObjectId>,
     level_start_program: Vec<RuleStep>,
     level_clear_program: Vec<RuleStep>,
     display_level_start_program: Vec<RuleStep>,
@@ -112,6 +113,10 @@ pub struct CompiledEngine {
 impl CompiledEngine {
     pub fn game(&self) -> &CompiledGame {
         &self.game
+    }
+
+    pub fn display_objects(&self) -> &[ObjectId] {
+        &self.display_objects
     }
 
     pub fn program(&self, key: &str, level_index: i32) -> Option<&[RuleStep]> {
@@ -182,14 +187,12 @@ pub fn decode_compiled_play(value: &Value) -> Result<CompiledEngine, String> {
         .collect::<Result<Vec<_>, String>>()?;
     let programs = array_at(data, 4, "transition programs")?;
     let program = decode_compact_program(value_at(programs, 0, "main program")?)?;
-    let game = CompiledGame::new_with_mark_condition_defs_program_roles(
+    let game = CompiledGame::new_with_mark_condition_defs_and_program(
         layer_count,
         objects,
         Vec::new(),
         queries,
         program,
-        visual_objects,
-        Vec::new(),
     );
     let level_programs = array_at(data, 5, "transition level programs")?;
     let mut level_start_programs = Vec::with_capacity(level_programs.len());
@@ -209,6 +212,7 @@ pub fn decode_compiled_play(value: &Value) -> Result<CompiledEngine, String> {
     }
     Ok(CompiledEngine {
         game,
+        display_objects: visual_objects,
         level_start_program: decode_compact_program(value_at(programs, 1, "level start program")?)?,
         level_clear_program: decode_compact_program(value_at(programs, 2, "level clear program")?)?,
         display_level_start_program: decode_compact_program(value_at(
@@ -351,8 +355,8 @@ fn decode_compact_guard(value: &Value) -> Result<Guard, String> {
     let items = value_array(value, "compact guard")?;
     match tag_at(items, 0, "guard tag")? {
         0 => Ok(Guard::InputIs(InputId(u16_at(items, 1, "input")?))),
-        1 => Ok(Guard::GlobalCompare {
-            global: GlobalId(u16_at(items, 1, "global")?),
+        1 => Ok(Guard::VariableCompare {
+            variable: VariableId(u16_at(items, 1, "variable")?),
             op: decode_compact_comparison(u16_at(items, 2, "comparison")?)?,
             value: i64_at(items, 3, "value")?,
         }),
@@ -598,9 +602,9 @@ fn decode_compact_effect(value: &Value) -> Result<Effect, String> {
         4 => Ok(Effect::Again),
         5 => Ok(Effect::Checkpoint),
         6 => Ok(Effect::ClearCheckpoint),
-        7 => Ok(Effect::UpdateGlobal {
-            global: GlobalId(u16_at(items, 1, "global")?),
-            op: decode_compact_global_update(u16_at(items, 2, "global update")?)?,
+        7 => Ok(Effect::UpdateVariable {
+            variable: VariableId(u16_at(items, 1, "variable")?),
+            op: decode_compact_variable_update(u16_at(items, 2, "variable update")?)?,
             value: i64_at(items, 3, "value")?,
         }),
         tag => Err(format!("unknown compact effect tag: {tag}")),
@@ -689,15 +693,15 @@ fn decode_compact_comparison(value: u16) -> Result<ComparisonOp, String> {
     }
 }
 
-fn decode_compact_global_update(value: u16) -> Result<GlobalUpdateOp, String> {
+fn decode_compact_variable_update(value: u16) -> Result<VariableUpdateOp, String> {
     match value {
-        0 => Ok(GlobalUpdateOp::Set),
-        1 => Ok(GlobalUpdateOp::Add),
-        2 => Ok(GlobalUpdateOp::Subtract),
-        3 => Ok(GlobalUpdateOp::Multiply),
-        4 => Ok(GlobalUpdateOp::Divide),
-        5 => Ok(GlobalUpdateOp::Remainder),
-        other => Err(format!("unknown compact global update op: {other}")),
+        0 => Ok(VariableUpdateOp::Set),
+        1 => Ok(VariableUpdateOp::Add),
+        2 => Ok(VariableUpdateOp::Subtract),
+        3 => Ok(VariableUpdateOp::Multiply),
+        4 => Ok(VariableUpdateOp::Divide),
+        5 => Ok(VariableUpdateOp::Remainder),
+        other => Err(format!("unknown compact variable update op: {other}")),
     }
 }
 
@@ -714,22 +718,22 @@ pub fn decode_state(game: &CompiledGame, source: &str) -> Result<State, String> 
     let width = u16_field(&value, "width")?;
     let height = u16_field(&value, "height")?;
     let layer_count = u16_field(&value, "layerCount")?;
-    let globals = value
-        .get("globals")
+    let variables = value
+        .get("variables")
         .and_then(Value::as_array)
         .map(|items| {
             items
                 .iter()
                 .map(|item| {
                     item.as_i64()
-                        .ok_or_else(|| "global must be an integer".to_string())
+                        .ok_or_else(|| "variable must be an integer".to_string())
                 })
                 .collect::<Result<Vec<_>, _>>()
         })
         .transpose()?
         .unwrap_or_default();
     let mut state =
-        State::empty_with_globals(width, height, layer_count, game.object_count(), globals)
+        State::empty_with_variables(width, height, layer_count, game.object_count(), variables)
             .map_err(|error| format!("{error:?}"))?;
     for (index, item) in array_field(&value, "slots")?.iter().enumerate() {
         let object = ObjectId(u16_value(item, "slot")?);
@@ -766,8 +770,8 @@ fn encode_state(state: &State) -> String {
         }
         out.push_str(&object.0.to_string());
     }
-    out.push_str("],\"mark\":[],\"globals\":[");
-    for (index, value) in state.visible_globals().iter().enumerate() {
+    out.push_str("],\"mark\":[],\"variables\":[");
+    for (index, value) in state.visible_variables().iter().enumerate() {
         if index > 0 {
             out.push(',');
         }
@@ -810,8 +814,8 @@ fn encode_outcome(
     string(&mut out, &state.hash().to_string());
     out.push_str(",\"changedCells\":");
     encode_changed_cells(&mut out, state, before);
-    out.push_str(",\"globals\":[");
-    for (index, value) in state.visible_globals().iter().enumerate() {
+    out.push_str(",\"variables\":[");
+    for (index, value) in state.visible_variables().iter().enumerate() {
         if index > 0 {
             out.push(',');
         }
@@ -1025,7 +1029,7 @@ mod tests {
 
     #[test]
     fn transition_outcome_includes_state_payload() {
-        let state = State::empty_with_globals(2, 1, 1, 2, vec![7]).expect("state");
+        let state = State::empty_with_variables(2, 1, 1, 2, vec![7]).expect("state");
         let outcome = encode_outcome(&state, None, None, false, &[], &[]);
         let parsed: Value = serde_json::from_str(&outcome).expect("outcome json");
 
@@ -1033,6 +1037,6 @@ mod tests {
         assert_eq!(parsed["state"]["height"], 1);
         assert_eq!(parsed["state"]["layerCount"], 1);
         assert_eq!(parsed["state"]["slots"].as_array().expect("slots").len(), 2);
-        assert_eq!(parsed["state"]["globals"][0], 7);
+        assert_eq!(parsed["state"]["variables"][0], 7);
     }
 }

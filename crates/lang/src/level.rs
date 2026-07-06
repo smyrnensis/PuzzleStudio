@@ -22,7 +22,7 @@ pub(crate) fn parse_level(
     lines: &[String],
     empty: char,
     char_objects: &HashMap<char, Vec<ObjectId>>,
-    global_defaults: &[i64],
+    variable_defaults: &[i64],
 ) -> Result<ParsedLevel, DiagnosticReport> {
     let regions = split_regions(lines)?;
     let (lowered_lines, region_defs) = lower_regions(&regions, empty);
@@ -32,12 +32,12 @@ pub(crate) fn parse_level(
         .map(|line| line.chars().count())
         .max()
         .unwrap_or(0) as u16;
-    let mut state = State::empty_with_globals(
+    let mut state = State::empty_with_variables(
         width,
         height,
         game.layer_count,
         game.object_count(),
-        global_defaults.to_vec(),
+        variable_defaults.to_vec(),
     )?;
 
     for (y, line) in lowered_lines.iter().enumerate() {

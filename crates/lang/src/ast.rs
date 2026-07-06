@@ -1,4 +1,4 @@
-use puzzle_core::{ComparisonOp, ConditionId, GlobalUpdateOp, ObjectId, RuleApplication};
+use puzzle_core::{ComparisonOp, ConditionId, ObjectId, RuleApplication, VariableUpdateOp};
 
 use crate::{PatternBlock, loaded::SceneEffect};
 
@@ -106,11 +106,11 @@ pub(crate) enum ConditionAst {
     Any(Vec<ConditionAst>),
     InputIs(String),
     InputIn(String),
-    GlobalEquals {
+    VariableEquals {
         name: String,
         value: i64,
     },
-    GlobalCompare {
+    VariableCompare {
         name: String,
         op: ComparisonOp,
         value: i64,
@@ -170,15 +170,15 @@ pub(crate) enum EffectAst {
         literal: bool,
     },
     Scene(SceneEffect),
-    UpdateGlobal {
+    UpdateVariable {
         name: String,
-        op: GlobalUpdateOp,
-        value: GlobalValueAst,
+        op: VariableUpdateOp,
+        value: VariableValueAst,
     },
 }
 
 #[derive(Clone, Debug)]
-pub(crate) enum GlobalValueAst {
+pub(crate) enum VariableValueAst {
     Literal(i64),
     TagCapture(String),
 }

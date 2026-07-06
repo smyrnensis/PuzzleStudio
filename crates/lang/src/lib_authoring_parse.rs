@@ -358,21 +358,21 @@ fn parse_puzzle_definition(
                 i = parse_model_keys_block(lines, i, catalog, controls)?;
             }
             "var" | "const" | "persistent" => {
-                parse_global_directive(
+                parse_variable_directive(
                     &tokens,
                     line,
-                    &mut catalog.global_names,
-                    &mut catalog.global_labels,
-                    &mut catalog.global_defaults,
-                    &mut catalog.numeric_global_defaults,
+                    &mut catalog.variable_names,
+                    &mut catalog.variable_labels,
+                    &mut catalog.variable_defaults,
+                    &mut catalog.numeric_variable_defaults,
                     &mut catalog.persistent_vars,
-                    &mut catalog.constant_globals,
+                    &mut catalog.constant_variables,
                 )?;
                 i += 1;
             }
-            "global" => {
+            "variable" => {
                 diagnostics.extend(
-                    parse_error(line, "`global` was removed; use `var`").into_diagnostics(),
+                    parse_error(line, "`variable` was removed; use `var`").into_diagnostics(),
                 );
                 i += 1;
             }
@@ -491,8 +491,8 @@ fn parse_puzzle_definition(
                     &catalog.maps,
                     &catalog.object_groups,
                     &catalog.input_names,
-                    &catalog.global_names,
-                    &catalog.numeric_global_defaults,
+                    &catalog.variable_names,
+                    &catalog.numeric_variable_defaults,
                     &catalog.condition_names,
                     named_conditions,
                 ) {
@@ -533,8 +533,8 @@ fn parse_puzzle_definition(
                     &catalog.maps,
                     &catalog.object_groups,
                     &catalog.input_names,
-                    &catalog.global_names,
-                    &catalog.numeric_global_defaults,
+                    &catalog.variable_names,
+                    &catalog.numeric_variable_defaults,
                     &catalog.condition_names,
                     named_conditions,
                     &[],
@@ -580,8 +580,8 @@ fn parse_puzzle_definition(
                     &catalog.maps,
                     &catalog.object_groups,
                     &catalog.input_names,
-                    &catalog.global_names,
-                    &catalog.numeric_global_defaults,
+                    &catalog.variable_names,
+                    &catalog.numeric_variable_defaults,
                     &catalog.condition_names,
                     named_conditions,
                     &[],

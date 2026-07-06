@@ -237,7 +237,7 @@ fn resolve_scene_effect_action(
         SceneEffect::Conditional { effect, .. } => {
             resolve_scene_effect_action(effect, input_names, routine_names)
         }
-        SceneEffect::Sequence(effects) => {
+        SceneEffect::Sequence { effects } => {
             for effect in effects {
                 resolve_scene_effect_action(effect, input_names, routine_names)?;
             }
@@ -421,7 +421,7 @@ fn validate_scene_effect_routine_calls(
         SceneEffect::Conditional { effect, .. } => {
             validate_scene_effect_routine_calls(effect, routine_names)
         }
-        SceneEffect::Sequence(effects) => {
+        SceneEffect::Sequence { effects } => {
             for effect in effects {
                 validate_scene_effect_routine_calls(effect, routine_names)?;
             }
@@ -505,7 +505,7 @@ fn collect_scene_effect_routine_calls<'a>(effect: &'a SceneEffect, calls: &mut V
         SceneEffect::Conditional { effect, .. } => {
             collect_scene_effect_routine_calls(effect, calls);
         }
-        SceneEffect::Sequence(effects) => {
+        SceneEffect::Sequence { effects } => {
             for effect in effects {
                 collect_scene_effect_routine_calls(effect, calls);
             }
@@ -578,6 +578,7 @@ impl puzzle_scene::SceneBlockHandler for Scene2dBlockHandler<'_> {
         if let Some(puzzle_rule) = block.puzzle_rule {
             self.scene.puzzle_rule = Some(puzzle_rule);
         }
+        self.scene.transitions.extend(block.transitions);
         Ok(next_i)
     }
 
