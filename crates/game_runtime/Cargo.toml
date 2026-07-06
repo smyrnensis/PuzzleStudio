@@ -9,4 +9,5 @@ puzzle-core = { path = "../core" }
 puzzle-lang = { path = "../lang" }
 puzzle-play = { path = "../play" }
 puzzle-3d = { path = "../puzzle_3d" }
+puzzle-runtime-contract = { path = "../runtime_contract" }
 serde_json = "1"

@@ -143,14 +143,6 @@ pub struct Puzzle3RuntimeBridge {
 
 impl Puzzle3RuntimeBridge {
     pub fn from_source(source: &str) -> Result<Self, String> {
-        if let Ok(parsed) = puzzle_3d::parse_puzzle3d(source) {
-            return Ok(Self {
-                parsed,
-                animation: AnimationDef::default(),
-                current_state: None,
-                saved_states: SavedStateStore::new(),
-            });
-        }
         let document = puzzle_lang::parse_game(source).map_err(|error| error.to_string())?;
         let animation = document.animation.clone();
         let parsed = document
@@ -1551,21 +1543,15 @@ fn solve_state3_json_from_source_inner(
 
 #[cfg(feature = "solver")]
 fn parse_puzzle3d_for_solver(source: &str) -> Result<ParsedPuzzle3, AppError> {
-    match puzzle_3d::parse_puzzle3d(source) {
-        Ok(parsed) => Ok(parsed),
-        Err(raw_error) => {
-            let document = puzzle_lang::parse_game(source)
-                .map_err(|_| AppError::Config(format!("{raw_error:?}")))?;
-            document
-                .models
-                .into_iter()
-                .find_map(|model| match model {
-                    LoadedDocumentModel::Puzzle3d { puzzle, .. } => Some(puzzle),
-                    LoadedDocumentModel::Puzzle2d { .. } => None,
-                })
-                .ok_or_else(|| AppError::Config(format!("{raw_error:?}")))
-        }
-    }
+    let document = puzzle_lang::parse_game(source)?;
+    document
+        .models
+        .into_iter()
+        .find_map(|model| match model {
+            LoadedDocumentModel::Puzzle3d { puzzle, .. } => Some(puzzle),
+            LoadedDocumentModel::Puzzle2d { .. } => None,
+        })
+        .ok_or_else(|| AppError::Config("3D solver source does not contain a puzzle3 model".into()))
 }
 
 fn state_from_json(loaded: &LoadedGame, state_json: &str) -> Result<State, AppError> {

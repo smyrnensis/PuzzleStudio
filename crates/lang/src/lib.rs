@@ -175,7 +175,18 @@ pub(crate) const THEME_SETTING_SPECS: &[ThemeSettingSpec] = &[
 
 include!("lib_surface_doc.rs");
 include!("lib_document.rs");
+include!("lib_authoring_parse_syntax.rs");
 include!("lib_authoring_parse.rs");
+include!("lib_authoring_parse_audio.rs");
+include!("lib_authoring_parse_metadata.rs");
+include!("lib_authoring_parse_levels.rs");
+include!("lib_authoring_parse_catalog.rs");
+include!("lib_authoring_parse_scene.rs");
+include!("lib_authoring_parse_effects.rs");
+include!("lib_authoring_parse_scene_state.rs");
+include!("lib_authoring_parse_visuals.rs");
+include!("lib_authoring_parse_rules.rs");
+include!("lib_authoring_parse_statements.rs");
 include!("lib_lowering.rs");
 include!("lib_patterns.rs");
 

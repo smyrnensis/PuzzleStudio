@@ -2,8 +2,9 @@ use crate::{
     Game3, MatchCell3, ObjectId, Offset3, Pattern3, State3, count_pattern_matches,
     has_pattern_match,
 };
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WinCondition3 {
     All(Vec<WinCondition3>),
     Any(Vec<WinCondition3>),

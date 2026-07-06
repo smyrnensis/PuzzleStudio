@@ -3411,7 +3411,7 @@ rules {
     }
 
     #[test]
-    fn puzzle3_source_free_export_rejects_local_frame_until_fixture_contract_supports_it() {
+    fn puzzle3_source_free_export_embeds_local_frame_runtime_contract() {
         let source = r#"title "Local Frame"
 
 puzzle3 cube {
@@ -3439,12 +3439,12 @@ levels3 default of cube {
   }
 }
 "#;
-        let error = export_html_from_source(source, "games/local_frame.puzzle3", "", "")
-            .unwrap_err()
-            .to_string();
+        let html = export_html_from_source(source, "games/local_frame.puzzle3", "", "")
+            .expect("local_frame should be part of the source-free runtime contract");
 
-        assert!(error.contains("local_frame"));
-        assert!(error.contains("source-free fixture runtime contract"));
+        assert!(html.contains("runtimeContract"));
+        assert!(html.contains("localFrame"));
+        assert!(!html.contains("\\npuzzle3 cube"));
     }
 
     #[test]

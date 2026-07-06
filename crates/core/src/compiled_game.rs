@@ -1,12 +1,16 @@
 use crate::ids::{ConditionId, GlobalId, InputId, LayerId, MarkId, ObjectId, RuleId};
 pub use puzzle_kernel::{
-    GlobalUpdateOp, LocalFrame, LocalFrameExtent, MarkKind, MarkValueMatch, RuleApplication,
+    ComparisonOp, GlobalUpdateOp, LocalFrame, LocalFrameExtent, MarkKind, MarkValueMatch,
+    RuleApplication,
 };
 use serde::{Deserialize, Serialize};
+pub type ConditionDef = puzzle_kernel::RuleConditionDef<ConditionId, ConditionValueKind>;
+pub type Guard = puzzle_kernel::RuleGuard<GlobalId, ConditionId, ConditionValueKind, InputId>;
 pub type MarkPattern = puzzle_kernel::RuleMarkPattern<ObjectId, MarkId>;
 pub type ObjectSetMatcher = puzzle_kernel::ObjectSetMatcher<ObjectId, LayerId>;
 pub type ObjectSetMarkPattern = puzzle_kernel::ObjectSetMarkPattern<MarkId>;
 pub type PatternComponent = puzzle_kernel::RulePatternComponent<MatchCell>;
+pub type Rule = puzzle_kernel::RuleModel<RuleId, Guard, Pattern, WriteOp, Effect>;
 pub type WriteOp = puzzle_kernel::RuleWriteOp<Offset, ObjectId, MarkId>;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -292,16 +296,6 @@ pub struct MarkDef {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Rule {
-    pub id: RuleId,
-    pub guards: Vec<Guard>,
-    pub application: RuleApplication,
-    pub pattern: Pattern,
-    pub writes: Vec<WriteOp>,
-    pub effects: Vec<Effect>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum RuleStep {
     Rule(Rule),
     ConditionalBlock {
@@ -337,50 +331,6 @@ pub enum RuleCondition {
     GuardBranches(Vec<Vec<Guard>>),
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum Guard {
-    InputIs(InputId),
-    GlobalEquals {
-        global: GlobalId,
-        value: i64,
-    },
-    GlobalCompare {
-        global: GlobalId,
-        op: ComparisonOp,
-        value: i64,
-    },
-    ConditionEquals {
-        condition: ConditionId,
-        value: i64,
-    },
-    ConditionNonZero(ConditionId),
-    ConditionCompare {
-        condition: ConditionId,
-        op: ComparisonOp,
-        value: i64,
-    },
-    InlineConditionValue {
-        kind: ConditionValueKind,
-        value: i64,
-    },
-    InlineConditionNonZero(ConditionValueKind),
-    InlineConditionCompare {
-        kind: ConditionValueKind,
-        op: ComparisonOp,
-        value: i64,
-    },
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ComparisonOp {
-    Eq,
-    NotEq,
-    Greater,
-    GreaterEq,
-    Less,
-    LessEq,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Effect {
     Cancel,
@@ -395,12 +345,6 @@ pub enum Effect {
         op: GlobalUpdateOp,
         value: i64,
     },
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ConditionDef {
-    pub id: ConditionId,
-    pub kind: ConditionValueKind,
 }
 
 pub type ConditionValueKind = puzzle_kernel::ConditionValueKind<ObjectId, Pattern, InputId>;

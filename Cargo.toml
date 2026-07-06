@@ -4,6 +4,7 @@ members = [
     "crates/authoring",
     "crates/core",
     "crates/grid3d",
+    "crates/runtime_contract",
     "crates/scene",
     "crates/puzzle_3d",
     "crates/lang",
