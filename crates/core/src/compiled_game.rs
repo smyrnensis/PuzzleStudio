@@ -1,11 +1,11 @@
-use crate::ids::{ConditionId, GlobalId, InputId, LayerId, MarkId, ObjectId, RuleId};
+use crate::ids::{ConditionId, InputId, LayerId, MarkId, ObjectId, RuleId, VariableId};
 pub use puzzle_kernel::{
-    ComparisonOp, GlobalUpdateOp, LocalFrame, LocalFrameExtent, MarkKind, MarkValueMatch,
-    RuleApplication,
+    ComparisonOp, LocalFrame, LocalFrameExtent, MarkKind, MarkValueMatch, RuleApplication,
+    VariableUpdateOp,
 };
 use serde::{Deserialize, Serialize};
 pub type ConditionDef = puzzle_kernel::RuleConditionDef<ConditionId, ConditionValueKind>;
-pub type Guard = puzzle_kernel::RuleGuard<GlobalId, ConditionId, ConditionValueKind, InputId>;
+pub type Guard = puzzle_kernel::RuleGuard<VariableId, ConditionId, ConditionValueKind, InputId>;
 pub type MarkPattern = puzzle_kernel::RuleMarkPattern<ObjectId, MarkId>;
 pub type ObjectSetMatcher = puzzle_kernel::ObjectSetMatcher<ObjectId, LayerId>;
 pub type ObjectSetMarkPattern = puzzle_kernel::ObjectSetMarkPattern<MarkId>;
@@ -21,8 +21,6 @@ pub struct CompiledGame {
     condition_defs: Vec<ConditionDef>,
     rules: Vec<Rule>,
     program: Vec<RuleStep>,
-    visual_objects: Vec<ObjectId>,
-    visual_rules: Vec<RuleId>,
 }
 
 impl CompiledGame {
@@ -35,8 +33,6 @@ impl CompiledGame {
             condition_defs: Vec::new(),
             rules,
             program,
-            visual_objects: Vec::new(),
-            visual_rules: Vec::new(),
         }
     }
 
@@ -70,32 +66,8 @@ impl CompiledGame {
         condition_defs: Vec<ConditionDef>,
         program: Vec<RuleStep>,
     ) -> Self {
-        Self::new_with_mark_condition_defs_program_roles(
-            layer_count,
-            objects,
-            mark,
-            condition_defs,
-            program,
-            Vec::new(),
-            Vec::new(),
-        )
-    }
-
-    pub fn new_with_mark_condition_defs_program_roles(
-        layer_count: u16,
-        objects: Vec<ObjectDef>,
-        mark: Vec<MarkDef>,
-        condition_defs: Vec<ConditionDef>,
-        program: Vec<RuleStep>,
-        mut visual_objects: Vec<ObjectId>,
-        mut visual_rules: Vec<RuleId>,
-    ) -> Self {
         let mut rules = Vec::new();
         collect_rules(&program, &mut rules);
-        visual_objects.sort();
-        visual_objects.dedup();
-        visual_rules.sort();
-        visual_rules.dedup();
         Self {
             layer_count,
             objects,
@@ -103,8 +75,6 @@ impl CompiledGame {
             condition_defs,
             rules,
             program,
-            visual_objects,
-            visual_rules,
         }
     }
 
@@ -129,6 +99,11 @@ impl CompiledGame {
     }
 
     #[inline]
+    pub fn objects(&self) -> &[ObjectDef] {
+        &self.objects
+    }
+
+    #[inline]
     pub fn condition_def(&self, condition: ConditionId) -> Option<&ConditionDef> {
         self.condition_defs.get(usize::from(condition.0))
     }
@@ -148,23 +123,8 @@ impl CompiledGame {
     }
 
     #[inline]
-    pub fn is_visual_object(&self, object: ObjectId) -> bool {
-        self.visual_objects.binary_search(&object).is_ok()
-    }
-
-    #[inline]
-    pub fn visual_objects(&self) -> &[ObjectId] {
-        &self.visual_objects
-    }
-
-    #[inline]
     pub fn is_main_object(&self, object: ObjectId) -> bool {
-        !object.is_empty() && !self.is_visual_object(object)
-    }
-
-    #[inline]
-    pub fn is_visual_rule(&self, rule: RuleId) -> bool {
-        self.visual_rules.binary_search(&rule).is_ok()
+        !object.is_empty()
     }
 
     pub fn main_layers(&self) -> Vec<LayerId> {
@@ -181,19 +141,6 @@ impl CompiledGame {
     #[inline]
     pub fn object_layer(&self, object: ObjectId) -> Option<LayerId> {
         self.object(object).map(|def| def.layer_id)
-    }
-
-    pub fn solver_core(&self) -> Self {
-        let program = filter_visual_steps(&self.program, &self.visual_rules);
-        Self::new_with_mark_condition_defs_program_roles(
-            self.layer_count,
-            self.objects.clone(),
-            self.mark.clone(),
-            self.condition_defs.clone(),
-            program,
-            self.visual_objects.clone(),
-            Vec::new(),
-        )
     }
 }
 
@@ -216,68 +163,6 @@ fn collect_rules(program: &[RuleStep], rules: &mut Vec<Rule>) {
                 collect_rules(then_steps, rules);
             }
             RuleStep::LocalFrame { steps, .. } => collect_rules(steps, rules),
-        }
-    }
-}
-
-fn filter_visual_steps(program: &[RuleStep], visual_rules: &[RuleId]) -> Vec<RuleStep> {
-    program
-        .iter()
-        .filter_map(|step| filter_visual_step(step, visual_rules))
-        .collect()
-}
-
-fn filter_visual_step(step: &RuleStep, visual_rules: &[RuleId]) -> Option<RuleStep> {
-    match step {
-        RuleStep::Rule(rule) => visual_rules
-            .binary_search(&rule.id)
-            .is_err()
-            .then(|| RuleStep::Rule(rule.clone())),
-        RuleStep::ConditionalBlock { condition, steps } => {
-            let steps = filter_visual_steps(steps, visual_rules);
-            (!steps.is_empty()).then(|| RuleStep::ConditionalBlock {
-                condition: condition.clone(),
-                steps,
-            })
-        }
-        RuleStep::ConditionalBranch {
-            condition,
-            then_steps,
-            else_steps,
-        } => {
-            let then_steps = filter_visual_steps(then_steps, visual_rules);
-            let else_steps = filter_visual_steps(else_steps, visual_rules);
-            (!then_steps.is_empty() || !else_steps.is_empty()).then(|| {
-                RuleStep::ConditionalBranch {
-                    condition: condition.clone(),
-                    then_steps,
-                    else_steps,
-                }
-            })
-        }
-        RuleStep::Block {
-            application,
-            stop_condition,
-            steps,
-        } => {
-            let steps = filter_visual_steps(steps, visual_rules);
-            (!steps.is_empty()).then(|| RuleStep::Block {
-                application: *application,
-                stop_condition: stop_condition.clone(),
-                steps,
-            })
-        }
-        RuleStep::AfterTriggered { steps, then_steps } => {
-            let steps = filter_visual_steps(steps, visual_rules);
-            let then_steps = filter_visual_steps(then_steps, visual_rules);
-            (!steps.is_empty()).then(|| RuleStep::AfterTriggered { steps, then_steps })
-        }
-        RuleStep::LocalFrame { frame, steps } => {
-            let steps = filter_visual_steps(steps, visual_rules);
-            (!steps.is_empty()).then(|| RuleStep::LocalFrame {
-                frame: frame.clone(),
-                steps,
-            })
         }
     }
 }
@@ -340,9 +225,9 @@ pub enum Effect {
     Again,
     Checkpoint,
     ClearCheckpoint,
-    UpdateGlobal {
-        global: GlobalId,
-        op: GlobalUpdateOp,
+    UpdateVariable {
+        variable: VariableId,
+        op: VariableUpdateOp,
         value: i64,
     },
 }

@@ -323,6 +323,7 @@ fn parse_quoted_text(value: &str) -> Option<String> {
 
 struct ParsedSceneRulesBlock {
     puzzle_rule: Option<ScenePuzzleRule>,
+    transitions: Vec<SceneTransition>,
 }
 
 fn parse_scene_rules_block(
@@ -330,6 +331,7 @@ fn parse_scene_rules_block(
     start: usize,
 ) -> Result<(ParsedSceneRulesBlock, usize), DiagnosticReport> {
     let mut puzzle_rule = None;
+    let mut transitions = Vec::new();
     let mut i = start + 1;
     while i < lines.len() && !is_block_close_line(&lines[i]) {
         let tokens = split_header_tokens(&lines[i]);
@@ -348,16 +350,16 @@ fn parse_scene_rules_block(
                 ));
             }
             ["if", ..] => {
-                return Err(parse_error(
-                    &lines[i],
-                    "scene transition rows were removed; use scene-level `if <condition> { ... }`",
-                ));
+                let (transition, next_i) = parse_scene_transition_row(lines, i)?;
+                transitions.push(transition);
+                i = next_i;
+                continue;
             }
             _ if lines[i].contains("->") => {
-                return Err(parse_error(
-                    &lines[i],
-                    "scene transition rows were removed; use `keys`, `routine`, or scene-level `if <condition> { ... }`",
-                ));
+                let (transition, next_i) = parse_scene_transition_row(lines, i)?;
+                transitions.push(transition);
+                i = next_i;
+                continue;
             }
             _ => {
                 return Err(parse_error(
@@ -372,7 +374,35 @@ fn parse_scene_rules_block(
         return Err(parse_error(&lines[start], "scene rules missing closing brace"));
     }
 
-    Ok((ParsedSceneRulesBlock { puzzle_rule }, i + 1))
+    Ok((
+        ParsedSceneRulesBlock {
+            puzzle_rule,
+            transitions,
+        },
+        i + 1,
+    ))
+}
+
+fn parse_scene_transition_row(
+    lines: &[String],
+    start: usize,
+) -> Result<(SceneTransition, usize), DiagnosticReport> {
+    let line = &lines[start];
+    let Some((condition, effect)) = line.trim().strip_prefix("if ").and_then(|row| row.split_once("->")) else {
+        return Err(parse_error(
+            line,
+            "scene rules row must be: step <puzzle> or if <condition> -> <effect>",
+        ));
+    };
+    let condition = parse_scene_condition_expr(condition.trim(), line)?;
+    let (effect, next_i) = parse_scene_effect_with_optional_block(effect.trim(), lines, start)?;
+    Ok((
+        SceneTransition {
+            trigger: SceneTransitionTrigger::Condition(condition),
+            effect,
+        },
+        next_i,
+    ))
 }
 
 fn parse_scene_condition_block(
@@ -510,7 +540,7 @@ fn parse_scene_handler_effects_range(
             "handler requires at least one effect",
         )),
         1 => Ok(effects.remove(0)),
-        _ => Ok(SceneEffect::Sequence(effects)),
+        _ => Ok(SceneEffect::Sequence { effects }),
     }
 }
 

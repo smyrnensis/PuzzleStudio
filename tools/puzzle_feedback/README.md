@@ -18,5 +18,5 @@ Useful options:
 ```
 
 The tool starts the requested level, runs level-start logic, applies any inputs,
-then prints the active scene, level, globals, ASCII board, watched object/group
+then prints the active scene, level, variables, ASCII board, watched object/group
 positions, and optionally all non-empty cells.

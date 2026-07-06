@@ -1,10 +1,12 @@
 use crate::{
-    ConditionId3, Coord3, Game3, GlobalId3, InputId3, LayerId, MarkId3, ObjectId, Offset3, Patch3,
-    PatchError3, PatchOp3, RuleId3, State3, StateError3,
+    ConditionId3, Coord3, Game3, InputId, LayerId, MarkId3, ObjectId, Offset3, Patch3, PatchError3,
+    PatchOp3, RuleId3, State3, StateError3, VariableId,
 };
+#[cfg(test)]
+use puzzle_kernel::VariableUpdateOp;
 use puzzle_kernel::{
-    ComparisonOp, ComponentPlacement, FnvBuilder, GlobalUpdateOp, GridOffset, LocalFrame,
-    MarkValueMatch, MatchPlacement, ObjectBinding, RuleApplication, bind_object,
+    ComparisonOp, ComponentPlacement, FnvBuilder, GridOffset, LocalFrame, MarkValueMatch,
+    MatchPlacement, ObjectBinding, RuleApplication, bind_object,
     bound_object as bound_object_in_bindings,
     collect_component_placements as collect_component_placements_shared,
     complete_component_placements as complete_component_placements_shared, fnv_mix,
@@ -13,15 +15,16 @@ use puzzle_kernel::{
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
-pub type ConditionValueKind3 = puzzle_kernel::ConditionValueKind<ObjectId, Pattern3, InputId3>;
+pub type ConditionValueKind3 = puzzle_kernel::ConditionValueKind<ObjectId, Pattern3, InputId>;
 pub type ConditionDef3 = puzzle_kernel::RuleConditionDef<ConditionId3, ConditionValueKind3>;
-pub type Guard3 = puzzle_kernel::RuleGuard<GlobalId3, ConditionId3, ConditionValueKind3, InputId3>;
+pub type Guard3 = puzzle_kernel::RuleGuard<VariableId, ConditionId3, ConditionValueKind3, InputId>;
 pub type MarkPattern3 = puzzle_kernel::RuleMarkPattern<ObjectId, MarkId3>;
 pub type ObjectSetMatcher3 = puzzle_kernel::ObjectSetMatcher<ObjectId, LayerId>;
 pub type ObjectSetMarkPattern3 = puzzle_kernel::ObjectSetMarkPattern<MarkId3>;
 pub type PatternComponent3 = puzzle_kernel::RulePatternComponent<MatchCell3>;
 pub type Rule3 = puzzle_kernel::RuleModel<RuleId3, Guard3, Pattern3, WriteOp3, RuleEffect3>;
 pub type RuleApplication3 = RuleApplication;
+pub type RuleEffect3 = puzzle_kernel::VariableEffect<VariableId>;
 pub type WriteOp3 = puzzle_kernel::RuleWriteOp<Offset3, ObjectId, MarkId3>;
 
 const UNTIL_STABLE_REPEAT_LIMIT3: usize = 200;
@@ -131,19 +134,6 @@ impl Pattern3 {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum RuleEffect3 {
-    UpdateGlobal {
-        global: GlobalId3,
-        op: GlobalUpdateOp,
-        value: i64,
-    },
-    SetCameraYaw(i16),
-    SetCameraPitch(i16),
-    SetCameraZoom(u16),
-    ResetCamera,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TransitionError3 {
     Patch(PatchError3),
@@ -173,7 +163,7 @@ pub fn transition_once_with_input(
     game: &Game3,
     state: &State3,
     rule: &Rule3,
-    input: InputId3,
+    input: InputId,
 ) -> Result<State3, TransitionError3> {
     let mut scoped = state.clone();
     scoped.clear_mark();
@@ -186,7 +176,7 @@ pub fn transition_program(
     game: &Game3,
     state: &State3,
     rules: &[Rule3],
-    input: InputId3,
+    input: InputId,
 ) -> Result<State3, TransitionError3> {
     transition_program_with_local_frame(game, state, rules, input, None)
 }
@@ -195,7 +185,7 @@ pub fn transition_program_with_local_frame(
     game: &Game3,
     state: &State3,
     rules: &[Rule3],
-    input: InputId3,
+    input: InputId,
     local_frame: Option<&LocalFrame<ObjectId>>,
 ) -> Result<State3, TransitionError3> {
     let mut current = state.clone();
@@ -224,22 +214,6 @@ pub fn transition_program_with_local_frame(
     }
     current.clear_mark();
     Ok(current)
-}
-
-pub fn transition_solver_program(
-    game: &Game3,
-    state: &State3,
-    rules: &[Rule3],
-    input: InputId3,
-) -> Result<State3, TransitionError3> {
-    let state = state.without_visual_objects(game);
-    let visible_rules = rules
-        .iter()
-        .filter(|rule| !game.is_visual_rule(rule.id))
-        .cloned()
-        .collect::<Vec<_>>();
-    transition_program(game, &state, &visible_rules, input)
-        .map(|state| state.without_visual_objects(game))
 }
 
 pub fn transition_program_without_input(
@@ -288,7 +262,7 @@ fn transition_rule_once(
     game: &Game3,
     state: &State3,
     rule: &Rule3,
-    input: Option<InputId3>,
+    input: Option<InputId>,
     local_frame: Option<&LocalFrame<ObjectId>>,
 ) -> Result<State3, TransitionError3> {
     let mut next = state.clone();
@@ -311,7 +285,7 @@ fn transition_rule_random(
     game: &Game3,
     state: &State3,
     rule: &Rule3,
-    input: Option<InputId3>,
+    input: Option<InputId>,
     local_frame: Option<&LocalFrame<ObjectId>>,
 ) -> Result<State3, TransitionError3> {
     let mut next = state.clone();
@@ -323,7 +297,7 @@ fn transition_rule_random(
     if placements.is_empty() {
         return Ok(next);
     }
-    let index = random_choice_index(game, state, input, rule.id, placements.len());
+    let index = random_choice_index(state, input, rule.id, placements.len());
     let placement = &placements[index];
     if !writes_within_local_frame(placement, &rule.writes, &scope)? {
         return Ok(next);
@@ -361,7 +335,7 @@ fn transition_rule_once_all(
     game: &Game3,
     state: &State3,
     rule: &Rule3,
-    input: Option<InputId3>,
+    input: Option<InputId>,
     local_frame: Option<&LocalFrame<ObjectId>>,
 ) -> Result<State3, TransitionError3> {
     if !guards_accept(rule, game, state, input) {
@@ -400,7 +374,7 @@ fn transition_rule_once_per_level(
     game: &Game3,
     state: &State3,
     rule: &Rule3,
-    input: Option<InputId3>,
+    input: Option<InputId>,
     local_frame: Option<&LocalFrame<ObjectId>>,
 ) -> Result<State3, TransitionError3> {
     let mut next = state.clone();
@@ -446,7 +420,7 @@ pub fn eval_condition_kind(
     game: &Game3,
     state: &State3,
     kind: &ConditionValueKind3,
-    input: Option<InputId3>,
+    input: Option<InputId>,
 ) -> i64 {
     match kind {
         ConditionValueKind3::CountObjects(objects) => objects
@@ -500,7 +474,7 @@ fn transition_rule_repeated(
     game: &Game3,
     state: &State3,
     rule: &Rule3,
-    input: Option<InputId3>,
+    input: Option<InputId>,
     local_frame: Option<&LocalFrame<ObjectId>>,
 ) -> Result<State3, TransitionError3> {
     let mut current = state.clone();
@@ -524,13 +498,12 @@ fn transition_rule_repeated(
 }
 
 fn random_choice_index(
-    game: &Game3,
     state: &State3,
-    input: Option<InputId3>,
+    input: Option<InputId>,
     rule: RuleId3,
     candidate_count: usize,
 ) -> usize {
-    let mut hash = random_state_projection_hash(game, state);
+    let mut hash = random_state_projection_hash(state);
     match input {
         Some(input) => {
             hash = fnv_mix(hash, 1);
@@ -545,22 +518,17 @@ fn random_choice_index(
     (hash as usize) % candidate_count
 }
 
-fn random_state_projection_hash(game: &Game3, state: &State3) -> u64 {
+fn random_state_projection_hash(state: &State3) -> u64 {
     let mut hash = FnvBuilder::OFFSET;
     hash = fnv_mix(hash, u64::from(state.size.width));
     hash = fnv_mix(hash, u64::from(state.size.depth));
     hash = fnv_mix(hash, u64::from(state.size.height));
     hash = fnv_mix(hash, u64::from(state.layer_count));
     for object in state.slots() {
-        let object = if object.is_empty() || game.is_visual_object(*object) {
-            ObjectId::EMPTY
-        } else {
-            *object
-        };
         hash = fnv_mix(hash, u64::from(object.0));
     }
-    hash = fnv_mix(hash, state.visible_globals().len() as u64);
-    for value in state.visible_globals() {
+    hash = fnv_mix(hash, state.visible_variables().len() as u64);
+    for value in state.visible_variables() {
         hash = fnv_mix(hash, *value as u64);
     }
     hash = fnv_mix(hash, state.level_fired_rules().len() as u64);
@@ -570,18 +538,24 @@ fn random_state_projection_hash(game: &Game3, state: &State3) -> u64 {
     hash
 }
 
-fn guards_accept(rule: &Rule3, game: &Game3, state: &State3, input: Option<InputId3>) -> bool {
+fn guards_accept(rule: &Rule3, game: &Game3, state: &State3, input: Option<InputId>) -> bool {
     rule.guards
         .iter()
         .all(|guard| guard_accepts(guard, game, state, input))
 }
 
-fn guard_accepts(guard: &Guard3, game: &Game3, state: &State3, input: Option<InputId3>) -> bool {
+fn guard_accepts(guard: &Guard3, game: &Game3, state: &State3, input: Option<InputId>) -> bool {
     match guard {
         Guard3::InputIs(expected) => input.is_some_and(|actual| actual == *expected),
-        Guard3::GlobalEquals { global, value } => state.global_value(*global) == Some(*value),
-        Guard3::GlobalCompare { global, op, value } => state
-            .global_value(*global)
+        Guard3::VariableEquals { variable, value } => {
+            state.variable_value(*variable) == Some(*value)
+        }
+        Guard3::VariableCompare {
+            variable,
+            op,
+            value,
+        } => state
+            .variable_value(*variable)
             .is_some_and(|found| compare_i64(found, *op, *value)),
         Guard3::ConditionEquals { condition, value } => {
             eval_condition_def(game, state, *condition, input) == Some(*value)
@@ -609,7 +583,7 @@ fn eval_condition_def(
     game: &Game3,
     state: &State3,
     condition: ConditionId3,
-    input: Option<InputId3>,
+    input: Option<InputId>,
 ) -> Option<i64> {
     let condition = game.condition_def(condition)?;
     Some(eval_condition_kind(game, state, &condition.kind, input))
@@ -1235,17 +1209,17 @@ fn build_patch(rule: &Rule3, placement: &MatchPlacement3) -> Result<Patch3, Tran
     }
     for effect in &rule.effects {
         match effect {
-            RuleEffect3::UpdateGlobal { global, op, value } => {
-                patch.push(PatchOp3::UpdateGlobal {
-                    global: *global,
+            RuleEffect3::UpdateVariable {
+                variable,
+                op,
+                value,
+            } => {
+                patch.push(PatchOp3::UpdateVariable {
+                    variable: *variable,
                     op: *op,
                     value: *value,
                 });
             }
-            RuleEffect3::SetCameraYaw(_)
-            | RuleEffect3::SetCameraPitch(_)
-            | RuleEffect3::SetCameraZoom(_)
-            | RuleEffect3::ResetCamera => {}
         }
     }
     Ok(patch)
@@ -1320,9 +1294,9 @@ mod tests {
         .with_id(RuleId3(7));
         rule.application = RuleApplication3::Random;
 
-        let next = transition_program(&game, &state, &[rule.clone()], InputId3(0))
+        let next = transition_program(&game, &state, &[rule.clone()], InputId(0))
             .expect("random transition succeeds");
-        let repeated = transition_program(&game, &state, &[rule], InputId3(0))
+        let repeated = transition_program(&game, &state, &[rule], InputId(0))
             .expect("random transition is deterministic for the same state");
 
         assert_eq!(next, repeated);
@@ -1347,26 +1321,26 @@ mod tests {
     }
 
     #[test]
-    fn transition_accepts_shared_global_guard() {
+    fn transition_accepts_shared_variable_guard() {
         let game = Game3::checked_new(1, Vec::new()).expect("valid empty game");
-        let state =
-            State3::empty_with_globals(Size3::new(1, 1, 1), 1, vec![2]).expect("valid empty state");
+        let state = State3::empty_with_variables(Size3::new(1, 1, 1), 1, vec![2])
+            .expect("valid empty state");
         let mut rule = Rule3::once(Pattern3::new(Vec::new()), Vec::new()).with_effects(vec![
-            RuleEffect3::UpdateGlobal {
-                global: GlobalId3(0),
-                op: GlobalUpdateOp::Set,
+            RuleEffect3::UpdateVariable {
+                variable: VariableId(0),
+                op: VariableUpdateOp::Set,
                 value: 7,
             },
         ]);
-        rule.guards.push(Guard3::GlobalEquals {
-            global: GlobalId3(0),
+        rule.guards.push(Guard3::VariableEquals {
+            variable: VariableId(0),
             value: 2,
         });
 
         let next =
             transition_program_without_input(&game, &state, &[rule]).expect("transition succeeds");
 
-        assert_eq!(next.global_value(GlobalId3(0)), Some(7));
+        assert_eq!(next.variable_value(VariableId(0)), Some(7));
     }
 
     #[test]
@@ -1381,12 +1355,12 @@ mod tests {
                 kind: ConditionValueKind3::NoneObjects(vec![ObjectId(1)]),
             }],
         );
-        let state =
-            State3::empty_with_globals(Size3::new(1, 1, 1), 1, vec![0]).expect("valid empty state");
+        let state = State3::empty_with_variables(Size3::new(1, 1, 1), 1, vec![0])
+            .expect("valid empty state");
         let mut rule = Rule3::once(Pattern3::new(Vec::new()), Vec::new()).with_effects(vec![
-            RuleEffect3::UpdateGlobal {
-                global: GlobalId3(0),
-                op: GlobalUpdateOp::Set,
+            RuleEffect3::UpdateVariable {
+                variable: VariableId(0),
+                op: VariableUpdateOp::Set,
                 value: 3,
             },
         ]);
@@ -1398,6 +1372,6 @@ mod tests {
         let next =
             transition_program_without_input(&game, &state, &[rule]).expect("transition succeeds");
 
-        assert_eq!(next.global_value(GlobalId3(0)), Some(3));
+        assert_eq!(next.variable_value(VariableId(0)), Some(3));
     }
 }

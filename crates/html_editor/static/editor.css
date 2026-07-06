@@ -478,20 +478,20 @@ button:disabled {
   grid-row: 2;
   min-height: 0;
   display: grid;
-  grid-template-rows: minmax(88px, calc(100% - var(--source-outline-height) - 5px)) 5px minmax(88px, var(--source-outline-height));
+  grid-template-rows: minmax(88px, calc(100% - var(--source-outline-height) - 6px)) 6px minmax(88px, var(--source-outline-height));
   overflow: hidden;
 }
 
 .explorer-sections.is-files-collapsed {
-  grid-template-rows: 24px 0 minmax(0, 1fr);
+  grid-template-rows: 26px 0 minmax(0, 1fr);
 }
 
 .explorer-sections.is-outline-collapsed {
-  grid-template-rows: minmax(0, 1fr) 0 24px;
+  grid-template-rows: minmax(0, 1fr) 0 26px;
 }
 
 .explorer-sections.is-files-collapsed.is-outline-collapsed {
-  grid-template-rows: 24px 0 24px;
+  grid-template-rows: 26px 0 26px;
 }
 
 .explorer-section {
@@ -514,7 +514,7 @@ button:disabled {
 }
 
 .explorer-section.is-collapsed {
-  min-height: 24px;
+  min-height: 26px;
   grid-template-rows: auto;
 }
 
@@ -524,15 +524,15 @@ button:disabled {
 
 .explorer-section-header {
   width: 100%;
-  min-height: 24px;
-  padding: 0 8px;
+  min-height: 26px;
+  padding: 0 10px 0 8px;
   display: flex;
   align-items: center;
   gap: 5px;
-  border-top: 1px solid var(--line);
-  border-bottom: 1px solid var(--line);
-  background: color-mix(in srgb, var(--side-bg) 86%, var(--bar-bg));
-  color: var(--muted);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: color-mix(in srgb, var(--ink) 78%, var(--muted));
   font-size: 10px;
   font-weight: 850;
   letter-spacing: 0;
@@ -540,13 +540,9 @@ button:disabled {
   text-transform: uppercase;
 }
 
-.explorer-files-section .explorer-section-header {
-  border-top: 0;
-}
-
 .explorer-section-header:hover,
 .explorer-section-header:focus-visible {
-  background: var(--hover-bg);
+  background: color-mix(in srgb, var(--tree-hover-bg) 72%, transparent);
   color: var(--ink);
 }
 
@@ -566,16 +562,34 @@ button:disabled {
 }
 
 .outline-splitter {
-  min-height: 5px;
-  background: var(--splitter-bg);
-  border-top: 1px solid var(--splitter-line);
-  border-bottom: 1px solid var(--splitter-line);
+  min-height: 6px;
+  position: relative;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
   cursor: row-resize;
   touch-action: none;
 }
 
+.outline-splitter::before {
+  content: "";
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  top: 2px;
+  height: 1px;
+  background: color-mix(in srgb, var(--line) 38%, transparent);
+}
+
 .outline-splitter:hover,
 .outline-splitter.is-active-splitter {
+  background: transparent;
+}
+
+.outline-splitter:hover::before,
+.outline-splitter.is-active-splitter::before {
+  top: 2px;
+  height: 2px;
   background: var(--accent);
 }
 
@@ -4093,8 +4107,10 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   width: 100%;
   min-width: 0;
   display: grid;
-  grid-template-columns: minmax(140px, 240px) max-content minmax(126px, 168px) max-content;
-  grid-template-areas: "name transform shape actions";
+  grid-template-columns: minmax(0, 1fr) max-content;
+  grid-template-areas:
+    "name actions"
+    "transform shape";
   align-items: start;
   gap: 6px;
 }
@@ -4220,21 +4236,73 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
 
 #spriteBuilder .sprite-controls .sprite-source-actions {
   grid-area: actions;
-  align-self: end;
+  width: auto;
+  min-width: 0;
+  justify-self: end;
+  align-self: start;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.sprite-update-source-button {
+  width: var(--icon-button-size);
+  min-width: var(--icon-button-size);
+  flex: 0 0 var(--icon-button-size);
+  height: var(--icon-button-size);
+  min-height: var(--icon-button-size);
+  padding: 0;
+  display: inline-grid;
+  align-items: center;
+  place-items: center;
+  justify-content: center;
+  border: 1px solid color-mix(in srgb, var(--accent) 48%, var(--line));
+  background: color-mix(in srgb, var(--accent) 18%, var(--button-bg));
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.sprite-update-source-button:hover:not(:disabled),
+.sprite-update-source-button:focus-visible:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 68%, var(--line));
+  background: color-mix(in srgb, var(--accent) 28%, var(--button-bg-hover));
+  color: var(--ink);
+}
+
+.sprite-update-source-button:disabled {
+  border-color: var(--line);
+  background: transparent;
+  color: var(--muted);
+  opacity: 0.55;
+}
+
+.sprite-update-source-button .source-action-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sprite-secondary-source-actions {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
 }
 
 @container (max-width: 620px) {
   .sprite-source-fields {
-    grid-template-columns: max-content minmax(126px, 168px) max-content;
+    grid-template-columns: minmax(0, 1fr) max-content;
     grid-template-areas:
-      "name name name"
-      "transform shape actions";
-    width: max-content;
+      "name actions"
+      "transform shape";
+    width: 100%;
     max-width: 100%;
   }
 
   #spriteBuilder .sprite-controls .sprite-name-control {
-    width: min(280px, 100%);
+    width: 100%;
   }
 
   #spriteBuilder .sprite-controls .sprite-transform-bar {
@@ -4569,7 +4637,21 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 4px;
+  gap: 6px;
+  padding-top: 2px;
+}
+
+.sprite-paint-tool-group {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 3px;
+}
+
+.sprite-paint-tool-group + .sprite-paint-tool-group {
+  padding-left: 6px;
+  border-left: 1px solid var(--line);
 }
 
 .sprite-paint-transform-actions {
@@ -4904,7 +4986,8 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
 
 .sprite-current-color-wrap {
   position: relative;
-  flex: 1 0 100%;
+  width: min(100%, var(--sprite3d-slice-size, 320px));
+  min-width: 0;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -5231,6 +5314,12 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   stroke-linejoin: round;
 }
 
+.sprite-token-erase.is-selected {
+  border-color: var(--ink);
+  color: var(--ink);
+  box-shadow: 0 0 0 1px var(--ink);
+}
+
 .sprite-palette-fill-button,
 .sprite-paint-tool-button {
   border: 0;
@@ -5306,7 +5395,7 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
 .sprite-board {
   --sprite-size: 5;
   --sprite-cell: clamp(14px, calc((100cqw - 2px) / var(--sprite-size)), 34px);
-  --sprite-puzzle-line: rgba(10, 14, 18, 0.62);
+  --sprite-puzzle-line: color-mix(in srgb, var(--ink) 28%, transparent);
   position: relative;
   display: grid;
   grid-template-columns: repeat(var(--sprite-size), var(--sprite-cell));
@@ -5634,9 +5723,7 @@ html.is-sprite3d-slice-scrubbing * {
 }
 
 .sprite-cell.is-clip-selected {
-  box-shadow:
-    inset 0 0 0 2px color-mix(in srgb, var(--accent) 78%, transparent),
-    inset 0 0 0 1px color-mix(in srgb, var(--accent-ink) 70%, transparent);
+  box-shadow: none;
 }
 
 .sprite-clip-floating-preview {
@@ -5694,48 +5781,38 @@ html.is-sprite3d-slice-scrubbing * {
   box-sizing: border-box;
   z-index: 5;
   pointer-events: none;
-  border: 2px solid var(--accent-ink);
+  border: 1px solid color-mix(in srgb, var(--accent-ink) 64%, var(--accent));
   background: transparent;
-  box-shadow:
-    0 0 0 1px var(--accent),
-    inset 0 0 0 1px var(--accent),
-    0 4px 14px rgb(0 0 0 / 30%);
-}
-
-.sprite-clip-selection-frame::before {
-  position: absolute;
-  inset: 3px;
-  border: 1px dashed color-mix(in srgb, var(--accent-ink) 70%, transparent);
-  content: "";
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 68%, transparent);
 }
 
 .sprite-clip-selection-handle {
   position: absolute;
-  width: 9px;
-  height: 9px;
-  border: 2px solid var(--accent);
-  background: var(--accent-ink);
-  box-shadow: 0 1px 4px rgb(0 0 0 / 36%);
+  width: 7px;
+  height: 7px;
+  border: 1px solid color-mix(in srgb, var(--accent-ink) 74%, var(--accent));
+  background: var(--accent);
+  box-shadow: none;
 }
 
 .sprite-clip-selection-handle-nw {
-  left: -6px;
-  top: -6px;
+  left: -4px;
+  top: -4px;
 }
 
 .sprite-clip-selection-handle-ne {
-  right: -6px;
-  top: -6px;
+  right: -4px;
+  top: -4px;
 }
 
 .sprite-clip-selection-handle-sw {
-  left: -6px;
-  bottom: -6px;
+  left: -4px;
+  bottom: -4px;
 }
 
 .sprite-clip-selection-handle-se {
-  right: -6px;
-  bottom: -6px;
+  right: -4px;
+  bottom: -4px;
 }
 
 .sprite-toolbar {
@@ -5954,7 +6031,7 @@ html.is-sprite3d-slice-scrubbing * {
   grid-template-rows: repeat(2, auto);
   align-content: start;
   gap: 14px;
-  padding: 12px;
+  padding: 0 12px 12px;
   overflow: auto;
   background: var(--workspace-bg);
   color: var(--ink);
@@ -5990,12 +6067,25 @@ html.is-sprite3d-slice-scrubbing * {
 }
 
 .sounds-section + .sounds-section {
-  margin-top: 2px;
-  padding-top: 18px;
-  border-top: 1px solid var(--line-strong);
+  margin-top: 16px;
+  padding-top: 0;
+  border-top: 0;
 }
 
 .sounds-section-header {
+  min-width: 0;
+  margin: 0 -12px;
+  min-height: 34px;
+  padding: 0 12px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--active-bg) 64%, var(--bar-bg));
+}
+
+.sounds-section-actions {
   min-width: 0;
   display: flex;
   flex-wrap: wrap;
@@ -6005,11 +6095,11 @@ html.is-sprite3d-slice-scrubbing * {
 
 .sounds-section-header h2 {
   margin: 0;
-  min-width: 96px;
-  color: var(--muted);
-  font-size: 18px;
+  min-width: 88px;
+  color: var(--ink);
+  font-size: 14px;
   font-weight: 900;
-  line-height: 1;
+  line-height: 1.2;
   text-transform: uppercase;
 }
 

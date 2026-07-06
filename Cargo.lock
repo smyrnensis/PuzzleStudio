@@ -51,8 +51,8 @@ checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 name = "ascii-play"
 version = "0.1.0"
 dependencies = [
- "puzzle-3d",
  "puzzle-core",
+ "puzzle-grid3d",
  "puzzle-lang",
  "puzzle-play",
 ]
@@ -1240,10 +1240,11 @@ dependencies = [
 name = "html-play"
 version = "0.1.0"
 dependencies = [
- "puzzle-3d",
  "puzzle-core",
+ "puzzle-grid3d",
  "puzzle-lang",
  "puzzle-play",
+ "puzzle-runtime-contract",
  "puzzle-scene",
  "puzzle-solver",
  "puzzle-wasm-core",
@@ -2333,17 +2334,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "puzzle-3d"
-version = "0.1.0"
-dependencies = [
- "puzzle-authoring",
- "puzzle-grid3d",
- "puzzle-kernel",
- "puzzle-runtime-contract",
- "puzzle-scene",
-]
-
-[[package]]
 name = "puzzle-authoring"
 version = "0.1.0"
 
@@ -2359,8 +2349,9 @@ dependencies = [
 name = "puzzle-game-runtime"
 version = "0.1.0"
 dependencies = [
- "puzzle-3d",
  "puzzle-core",
+ "puzzle-grid3d",
+ "puzzle-grid3d-authoring",
  "puzzle-lang",
  "puzzle-play",
  "puzzle-runtime-contract",
@@ -2376,6 +2367,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "puzzle-grid3d-authoring"
+version = "0.1.0"
+dependencies = [
+ "puzzle-authoring",
+ "puzzle-grid3d",
+ "puzzle-kernel",
+]
+
+[[package]]
 name = "puzzle-kernel"
 version = "0.1.0"
 dependencies = [
@@ -2386,10 +2386,12 @@ dependencies = [
 name = "puzzle-lang"
 version = "0.1.0"
 dependencies = [
- "puzzle-3d",
  "puzzle-authoring",
  "puzzle-core",
+ "puzzle-grid3d",
+ "puzzle-grid3d-authoring",
  "puzzle-kernel",
+ "puzzle-runtime-contract",
  "puzzle-scene",
  "serde",
  "serde_json",
@@ -2399,8 +2401,8 @@ dependencies = [
 name = "puzzle-play"
 version = "0.1.0"
 dependencies = [
- "puzzle-3d",
  "puzzle-core",
+ "puzzle-grid3d",
  "puzzle-lang",
  "puzzle-runtime-contract",
  "serde",
@@ -2429,7 +2431,6 @@ dependencies = [
 name = "puzzle-solver"
 version = "0.1.0"
 dependencies = [
- "puzzle-3d",
  "puzzle-core",
  "puzzle-grid3d",
  "puzzle-lang",

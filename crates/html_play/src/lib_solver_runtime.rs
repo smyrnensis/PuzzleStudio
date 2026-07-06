@@ -345,17 +345,7 @@ impl StandaloneSessionBridge {
     pub fn from_source(source: &str, puzzle_path: &str) -> Result<Self, String> {
         let document = puzzle_lang::parse_game_for_path(source, puzzle_path)
             .map_err(|error| error.to_string())?;
-        let loaded = if document.models.len() > 1 {
-            mixed_document_loaded_game(&document)?
-        } else {
-            match document.single_model() {
-                Some(LoadedDocumentModel::Puzzle2d { game, .. }) => game.clone(),
-                Some(LoadedDocumentModel::Puzzle3d { .. }) => {
-                    puzzle3_document_scene_host_loaded_game(&document)?
-                }
-                None => return Err("standalone session bridge requires a puzzle model".to_string()),
-            }
-        };
+        let loaded = loaded_document_scene_host_loaded_game(&document)?;
         Ok(Self {
             state: ServerState::new(
                 loaded,
@@ -548,9 +538,9 @@ type PuzzleSolutionStep = SolutionStep<State, InputId>;
 #[cfg(feature = "solver")]
 type PuzzleSearchObservation = SearchObservation<State>;
 #[cfg(feature = "solver")]
-type Puzzle3SolutionResponse = SolutionResponse<State3, InputId3>;
+type Puzzle3SolutionResponse = SolutionResponse<State3, InputId>;
 #[cfg(feature = "solver")]
-type Puzzle3SolutionStep = SolutionStep<State3, InputId3>;
+type Puzzle3SolutionStep = SolutionStep<State3, InputId>;
 #[cfg(feature = "solver")]
 type Puzzle3SearchObservation = SearchObservation<State3>;
 
@@ -597,15 +587,17 @@ where
         return Err(AppError::Config("no model inputs available".to_string()));
     }
 
+    let ignored_objects = engine.display_objects().to_vec();
     let game = Arc::new(game.clone());
     let goal_game = game.clone();
     let goal_for_domain = goal.clone();
-    let mut domain = PuzzleDomain::new(game.clone(), inputs, move |state: &State| {
-        goal_for_domain
-            .as_ref()
-            .is_some_and(|goal| eval_goal_expr(&goal_game, state, goal))
-    });
-    let solver_initial = PuzzleSearchState::new(initial.without_visual_objects(domain.game()));
+    let mut domain =
+        PuzzleDomain::with_ignored_objects(game.clone(), inputs, ignored_objects.clone(), move |state: &State| {
+            goal_for_domain
+                .as_ref()
+                .is_some_and(|goal| eval_goal_expr(&goal_game, state, goal))
+        });
+    let solver_initial = PuzzleSearchState::new(initial.without_objects(&ignored_objects));
     let score_game = game.clone();
     let score_goal = goal.clone();
     let lose_game = game.clone();
@@ -693,12 +685,15 @@ where
         return Err(AppError::Config("no model inputs available".to_string()));
     }
 
-    let game = Arc::new(loaded.game.clone());
+    let solver_game = loaded.solver_game();
+    let game = Arc::new(solver_game);
     let goal_game = loaded.clone();
-    let mut domain = PuzzleDomain::new(game.clone(), inputs, move |state: &State| {
-        goal_game.is_goal_complete(state)
-    });
-    let solver_initial = PuzzleSearchState::new(initial.without_visual_objects(domain.game()));
+    let ignored_objects = loaded.display_objects.clone();
+    let mut domain =
+        PuzzleDomain::with_ignored_objects(game.clone(), inputs, ignored_objects.clone(), move |state: &State| {
+            goal_game.is_goal_complete(state)
+        });
+    let solver_initial = PuzzleSearchState::new(initial.without_objects(&ignored_objects));
     let score_game = loaded.clone();
     let lose_game = loaded.clone();
     let mut observations = SearchObservationSampler::new(96);
@@ -834,17 +829,20 @@ where
 
     let game = Arc::new(parsed.game.clone());
     let rules = parsed.rules.clone();
+    let ignored_objects = parsed.display_objects.clone();
     let goal_game = Arc::clone(&game);
-    let mut domain = Puzzle3Domain::new(
+    let mut domain = Puzzle3Domain::with_ignored_objects(
         Arc::clone(&game),
         rules.clone(),
         inputs,
+        ignored_objects.clone(),
         move |state: &State3| win_condition.is_met(&goal_game, state),
     );
+    let solver_initial = initial.without_objects(&ignored_objects);
     let mut observations = SearchObservationSampler::new(96);
     let outcome = best_first_with_dead_states_and_progress(
         &mut domain,
-        initial.clone(),
+        solver_initial.clone(),
         budget,
         |_| 0,
         |_| false,
@@ -867,7 +865,7 @@ where
                     &game,
                     &rules,
                     parsed.win_condition.as_ref(),
-                    initial,
+                    solver_initial,
                     &solution_inputs,
                 )?,
                 moves: solution_inputs,
@@ -897,7 +895,7 @@ fn solution_steps3(
     rules: &[Rule3],
     win_condition: Option<&WinCondition3>,
     mut state: State3,
-    inputs: &[InputId3],
+    inputs: &[InputId],
 ) -> Result<Vec<Puzzle3SolutionStep>, AppError> {
     let mut steps = Vec::with_capacity(inputs.len() + 1);
     steps.push(SolutionStep {
@@ -975,7 +973,7 @@ fn goal_clause_score(
     expected: i64,
 ) -> i64 {
     match value {
-        GoalValue::Global(_) => current.abs_diff(expected) as i64,
+        GoalValue::Variable(_) => current.abs_diff(expected) as i64,
         GoalValue::Condition(condition) => game
             .condition_def(*condition)
             .map(|condition| {
@@ -1103,7 +1101,7 @@ fn compare_i64(left: i64, op: ComparisonOp, right: i64) -> bool {
 #[cfg(feature = "solver")]
 fn goal_value(game: &CompiledGame, state: &State, value: &GoalValue) -> i64 {
     match value {
-        GoalValue::Global(global) => state.global_value(*global).unwrap_or(0),
+        GoalValue::Variable(variable) => state.variable_value(*variable).unwrap_or(0),
         GoalValue::Condition(condition) => game
             .condition_def(*condition)
             .map(|condition| goal_condition_value_kind(game, state, &condition.kind))

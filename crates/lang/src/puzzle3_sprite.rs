@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use crate::Size3;
+use puzzle_grid3d::Size3;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SpriteSet3 {

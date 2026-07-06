@@ -43,8 +43,8 @@ fn parse_lifecycle_block(
         &catalog.maps,
         &catalog.object_groups,
         &catalog.input_names,
-        &catalog.global_names,
-        &catalog.numeric_global_defaults,
+        &catalog.variable_names,
+        &catalog.numeric_variable_defaults,
         &catalog.condition_names,
         &HashMap::new(),
         &[],
@@ -217,7 +217,7 @@ fn parse_statement_condition_block(
     start: usize,
     combinator: ConditionBlockCombinator,
     input_names: &HashMap<String, InputId>,
-    global_names: &HashMap<String, GlobalId>,
+    variable_names: &HashMap<String, VariableId>,
     condition_names: &HashMap<String, ConditionId>,
     named_conditions: &HashMap<String, (String, ConditionAst)>,
     object_names: &HashMap<String, ObjectId>,
@@ -233,7 +233,7 @@ fn parse_statement_condition_block(
             &lines[i],
             &lines[i],
             input_names,
-            global_names,
+            variable_names,
             condition_names,
             named_conditions,
             object_names,
@@ -277,8 +277,8 @@ fn parse_statement_arrow_consequence(
     maps: &HashMap<String, ValueMap>,
     object_groups: &HashMap<String, Vec<ObjectId>>,
     input_names: &HashMap<String, InputId>,
-    global_names: &HashMap<String, GlobalId>,
-    numeric_globals: &HashMap<String, i64>,
+    variable_names: &HashMap<String, VariableId>,
+    numeric_variables: &HashMap<String, i64>,
     condition_names: &HashMap<String, ConditionId>,
     named_conditions: &HashMap<String, (String, ConditionAst)>,
     rule_params: &[String],
@@ -313,8 +313,8 @@ fn parse_statement_arrow_consequence(
             maps,
             object_groups,
             input_names,
-            global_names,
-            numeric_globals,
+            variable_names,
+            numeric_variables,
             condition_names,
             named_conditions,
             rule_params,
@@ -361,8 +361,8 @@ fn parse_optional_else_statement_block(
     maps: &HashMap<String, ValueMap>,
     object_groups: &HashMap<String, Vec<ObjectId>>,
     input_names: &HashMap<String, InputId>,
-    global_names: &HashMap<String, GlobalId>,
-    numeric_globals: &HashMap<String, i64>,
+    variable_names: &HashMap<String, VariableId>,
+    numeric_variables: &HashMap<String, i64>,
     condition_names: &HashMap<String, ConditionId>,
     named_conditions: &HashMap<String, (String, ConditionAst)>,
     rule_params: &[String],
@@ -381,8 +381,8 @@ fn parse_optional_else_statement_block(
         maps,
         object_groups,
         input_names,
-        global_names,
-        numeric_globals,
+        variable_names,
+        numeric_variables,
         condition_names,
         named_conditions,
         rule_params,
@@ -633,7 +633,7 @@ struct ForExpansionValue {
 fn for_expansion_values(
     sources: &[&str],
     value_sets: &HashMap<String, Vec<String>>,
-    numeric_globals: &HashMap<String, i64>,
+    numeric_variables: &HashMap<String, i64>,
     line: &str,
 ) -> Result<Vec<ForExpansionValue>, DiagnosticReport> {
     if sources.is_empty() {
@@ -653,7 +653,7 @@ fn for_expansion_values(
                 })
                 .collect());
         }
-        if let Some(values) = numeric_range_values(source, numeric_globals, line)? {
+        if let Some(values) = numeric_range_values(source, numeric_variables, line)? {
             return Ok(values
                 .into_iter()
                 .map(|value| ForExpansionValue { value, axis: None })
@@ -679,7 +679,7 @@ fn for_expansion_values(
                     })
                     .collect::<Vec<_>>();
             }
-            match numeric_range_values(source, numeric_globals, line) {
+            match numeric_range_values(source, numeric_variables, line) {
                 Ok(Some(values)) => values
                     .into_iter()
                     .map(|value| Ok(ForExpansionValue { value, axis: None }))
@@ -696,7 +696,7 @@ fn for_expansion_values(
 
 fn expand_numeric_ranges_in_value_list(
     values: &[&str],
-    numeric_globals: &HashMap<String, i64>,
+    numeric_variables: &HashMap<String, i64>,
     line: &str,
 ) -> Result<Vec<String>, DiagnosticReport> {
     let mut expanded = Vec::new();
@@ -704,7 +704,7 @@ fn expand_numeric_ranges_in_value_list(
         if value.trim().is_empty() {
             return Err(parse_error(line, "tag value must not be empty"));
         }
-        if let Some(range_values) = numeric_range_values(value, numeric_globals, line)? {
+        if let Some(range_values) = numeric_range_values(value, numeric_variables, line)? {
             expanded.extend(range_values);
         } else {
             expanded.push((*value).to_string());
@@ -715,7 +715,7 @@ fn expand_numeric_ranges_in_value_list(
 
 fn numeric_range_values(
     source: &str,
-    numeric_globals: &HashMap<String, i64>,
+    numeric_variables: &HashMap<String, i64>,
     line: &str,
 ) -> Result<Option<Vec<String>>, DiagnosticReport> {
     let (start, end, inclusive) = if let Some((start, end)) = source.split_once("..<") {
@@ -731,8 +731,8 @@ fn numeric_range_values(
             "numeric range must be: <integer>...<integer> or <integer>..<integer>",
         ));
     }
-    let start = parse_numeric_range_endpoint(start, numeric_globals, line)?;
-    let end = parse_numeric_range_endpoint(end, numeric_globals, line)?;
+    let start = parse_numeric_range_endpoint(start, numeric_variables, line)?;
+    let end = parse_numeric_range_endpoint(end, numeric_variables, line)?;
     if start > end || (!inclusive && start == end) {
         return Err(parse_error(
             line,
@@ -749,13 +749,13 @@ fn numeric_range_values(
 
 fn parse_numeric_range_endpoint(
     value: &str,
-    numeric_globals: &HashMap<String, i64>,
+    numeric_variables: &HashMap<String, i64>,
     line: &str,
 ) -> Result<i64, DiagnosticReport> {
     if let Ok(parsed) = value.parse::<i64>() {
         return Ok(parsed);
     }
-    numeric_globals.get(value).copied().ok_or_else(|| {
+    numeric_variables.get(value).copied().ok_or_else(|| {
         parse_error(
             line,
             "numeric range endpoints must be integer literals or integer vars",
@@ -979,8 +979,8 @@ fn parse_statement_block(
     maps: &HashMap<String, ValueMap>,
     object_groups: &HashMap<String, Vec<ObjectId>>,
     input_names: &HashMap<String, InputId>,
-    global_names: &HashMap<String, GlobalId>,
-    numeric_globals: &HashMap<String, i64>,
+    variable_names: &HashMap<String, VariableId>,
+    numeric_variables: &HashMap<String, i64>,
     condition_names: &HashMap<String, ConditionId>,
     named_conditions: &HashMap<String, (String, ConditionAst)>,
     rule_params: &[String],
@@ -1062,8 +1062,8 @@ fn parse_statement_block(
                     maps,
                     object_groups,
                     input_names,
-                    global_names,
-                    numeric_globals,
+                    variable_names,
+                    numeric_variables,
                     condition_names,
                     named_conditions,
                 ));
@@ -1108,7 +1108,7 @@ fn parse_statement_block(
                 let values = recover_current_statement!(for_expansion_values(
                     sources,
                     value_sets,
-                    numeric_globals,
+                    numeric_variables,
                     line
                 ));
                 recover_current_statement!(validate_identifier(binding, line, "expansion binding"));
@@ -1159,8 +1159,8 @@ fn parse_statement_block(
                         maps,
                         object_groups,
                         input_names,
-                        global_names,
-                        numeric_globals,
+                        variable_names,
+                        numeric_variables,
                         condition_names,
                         named_conditions,
                         rule_params,
@@ -1199,8 +1199,8 @@ fn parse_statement_block(
                     maps,
                     object_groups,
                     input_names,
-                    global_names,
-                    numeric_globals,
+                    variable_names,
+                    numeric_variables,
                     condition_names,
                     named_conditions,
                     rule_params,
@@ -1221,7 +1221,7 @@ fn parse_statement_block(
                             i,
                             combinator,
                             input_names,
-                            global_names,
+                            variable_names,
                             condition_names,
                             named_conditions,
                             object_names,
@@ -1242,8 +1242,8 @@ fn parse_statement_block(
                             maps,
                             object_groups,
                             input_names,
-                            global_names,
-                            numeric_globals,
+                            variable_names,
+                            numeric_variables,
                             condition_names,
                             named_conditions,
                             rule_params,
@@ -1259,8 +1259,8 @@ fn parse_statement_block(
                             maps,
                             object_groups,
                             input_names,
-                            global_names,
-                            numeric_globals,
+                            variable_names,
+                            numeric_variables,
                             condition_names,
                             named_conditions,
                             rule_params,
@@ -1283,7 +1283,7 @@ fn parse_statement_block(
                         value_sets,
                         maps,
                         object_groups,
-                        global_names,
+                        variable_names,
                     ))
                 {
                     if trailing.is_empty() {
@@ -1298,8 +1298,8 @@ fn parse_statement_block(
                             maps,
                             object_groups,
                             input_names,
-                            global_names,
-                            numeric_globals,
+                            variable_names,
+                            numeric_variables,
                             condition_names,
                             named_conditions,
                             rule_params,
@@ -1318,8 +1318,8 @@ fn parse_statement_block(
                                         maps,
                                         object_groups,
                                         input_names,
-                                        global_names,
-                                        numeric_globals,
+                                        variable_names,
+                                        numeric_variables,
                                         condition_names,
                                         named_conditions,
                                         rule_params,
@@ -1367,7 +1367,7 @@ fn parse_statement_block(
                         condition_text.trim(),
                         line,
                         input_names,
-                        global_names,
+                        variable_names,
                         condition_names,
                         named_conditions,
                         object_names,
@@ -1388,8 +1388,8 @@ fn parse_statement_block(
                             maps,
                             object_groups,
                             input_names,
-                            global_names,
-                            numeric_globals,
+                            variable_names,
+                            numeric_variables,
                             condition_names,
                             named_conditions,
                             rule_params,
@@ -1405,8 +1405,8 @@ fn parse_statement_block(
                             maps,
                             object_groups,
                             input_names,
-                            global_names,
-                            numeric_globals,
+                            variable_names,
+                            numeric_variables,
                             condition_names,
                             named_conditions,
                             rule_params,
@@ -1425,7 +1425,7 @@ fn parse_statement_block(
                     line.strip_prefix("if ").map(str::trim).unwrap_or(""),
                     line,
                     input_names,
-                    global_names,
+                    variable_names,
                     condition_names,
                     named_conditions,
                     object_names,
@@ -1445,8 +1445,8 @@ fn parse_statement_block(
                     maps,
                     object_groups,
                     input_names,
-                    global_names,
-                    numeric_globals,
+                    variable_names,
+                    numeric_variables,
                     condition_names,
                     named_conditions,
                     rule_params,
@@ -1472,8 +1472,8 @@ fn parse_statement_block(
                         maps,
                         object_groups,
                         input_names,
-                        global_names,
-                        numeric_globals,
+                        variable_names,
+                        numeric_variables,
                         condition_names,
                         named_conditions,
                         rule_params,
@@ -1566,8 +1566,8 @@ fn parse_statement_block(
                             maps,
                             object_groups,
                             input_names,
-                            global_names,
-                            numeric_globals,
+                            variable_names,
+                            numeric_variables,
                             condition_names,
                             named_conditions,
                             rule_params,
@@ -1630,7 +1630,7 @@ fn parse_statement_block(
                     value_sets,
                     maps,
                     object_groups,
-                    global_names,
+                    variable_names,
                 ) {
                     Ok(statement) => statement,
                     Err(report) => {
@@ -1654,7 +1654,7 @@ fn parse_statement_block(
                         value_sets,
                         maps,
                         object_groups,
-                        global_names,
+                        variable_names,
                     ) {
                         Ok(rewrite) => statements.push(StatementAst::Rewrite(
                             rewrite_with_source_line_number(rewrite, source_line_number),
@@ -1682,8 +1682,8 @@ fn parse_statement_block(
                         maps,
                         object_groups,
                         input_names,
-                        global_names,
-                        numeric_globals,
+                        variable_names,
+                        numeric_variables,
                         condition_names,
                         named_conditions,
                         rule_params,
@@ -1704,7 +1704,7 @@ fn parse_statement_block(
                         value_sets,
                         maps,
                         object_groups,
-                        global_names,
+                        variable_names,
                     ) {
                         Ok(rewrite) => statements.push(StatementAst::Rewrite(
                             rewrite_with_source_line_number(rewrite, source_line_number),
@@ -1732,8 +1732,8 @@ fn parse_statement_block(
                         maps,
                         object_groups,
                         input_names,
-                        global_names,
-                        numeric_globals,
+                        variable_names,
+                        numeric_variables,
                         condition_names,
                         named_conditions,
                         rule_params,
@@ -1754,7 +1754,7 @@ fn parse_statement_block(
                         value_sets,
                         maps,
                         object_groups,
-                        global_names,
+                        variable_names,
                     ) {
                         Ok(rewrite) => statements.push(StatementAst::Rewrite(
                             rewrite_with_source_line_number(rewrite, source_line_number),
@@ -1782,8 +1782,8 @@ fn parse_statement_block(
                         maps,
                         object_groups,
                         input_names,
-                        global_names,
-                        numeric_globals,
+                        variable_names,
+                        numeric_variables,
                         condition_names,
                         named_conditions,
                         rule_params,
@@ -1804,7 +1804,7 @@ fn parse_statement_block(
                         value_sets,
                         maps,
                         object_groups,
-                        global_names,
+                        variable_names,
                     ) {
                         Ok(rewrite) => statements.push(StatementAst::Rewrite(
                             rewrite_with_source_line_number(rewrite, source_line_number),
@@ -1832,8 +1832,8 @@ fn parse_statement_block(
                         maps,
                         object_groups,
                         input_names,
-                        global_names,
-                        numeric_globals,
+                        variable_names,
+                        numeric_variables,
                         condition_names,
                         named_conditions,
                         rule_params,
@@ -1854,7 +1854,7 @@ fn parse_statement_block(
                         value_sets,
                         maps,
                         object_groups,
-                        global_names,
+                        variable_names,
                     ) {
                         Ok(rewrite) => statements.push(StatementAst::Rewrite(
                             rewrite_with_source_line_number(rewrite, source_line_number),
@@ -1882,8 +1882,8 @@ fn parse_statement_block(
                         maps,
                         object_groups,
                         input_names,
-                        global_names,
-                        numeric_globals,
+                        variable_names,
+                        numeric_variables,
                         condition_names,
                         named_conditions,
                         rule_params,
@@ -1916,7 +1916,7 @@ fn parse_statement_block(
                         condition_text,
                         line,
                         input_names,
-                        global_names,
+                        variable_names,
                         condition_names,
                         named_conditions,
                         object_names,
@@ -1936,8 +1936,8 @@ fn parse_statement_block(
                         maps,
                         object_groups,
                         input_names,
-                        global_names,
-                        numeric_globals,
+                        variable_names,
+                        numeric_variables,
                         condition_names,
                         named_conditions,
                         rule_params,
@@ -1960,7 +1960,7 @@ fn parse_statement_block(
                         value_sets,
                         maps,
                         object_groups,
-                        global_names,
+                        variable_names,
                     ) {
                         Ok(rewrite) => statements.push(StatementAst::Rewrite(
                             rewrite_with_source_line_number(rewrite, source_line_number),
@@ -1986,7 +1986,7 @@ fn parse_statement_block(
                     value_sets,
                     maps,
                     object_groups,
-                    global_names,
+                    variable_names,
                 ) {
                     Ok(statement) => statement,
                     Err(report) => {
@@ -2010,7 +2010,7 @@ fn parse_statement_block(
                         value_sets,
                         maps,
                         object_groups,
-                        global_names,
+                        variable_names,
                     ) {
                         Ok(rewrite) => statements.push(StatementAst::Rewrite(
                             rewrite_with_source_line_number(rewrite, source_line_number),
@@ -2038,8 +2038,8 @@ fn parse_statement_block(
                         maps,
                         object_groups,
                         input_names,
-                        global_names,
-                        numeric_globals,
+                        variable_names,
+                        numeric_variables,
                         condition_names,
                         named_conditions,
                         rule_params,
@@ -2078,7 +2078,7 @@ fn parse_statement_block(
                     value_sets,
                     maps,
                     object_groups,
-                    global_names,
+                    variable_names,
                 ) {
                     Ok(statement) => statement,
                     Err(report) => {
@@ -2104,7 +2104,7 @@ fn parse_statement_block(
                         value_sets,
                         maps,
                         object_groups,
-                        global_names,
+                        variable_names,
                     ) {
                         Ok(rewrite) => statements.push(StatementAst::Rewrite(
                             rewrite_with_source_line_number(rewrite, source_line_number),
@@ -2261,7 +2261,7 @@ fn parse_conditional_call_statement(
     value_sets: &HashMap<String, Vec<String>>,
     maps: &HashMap<String, ValueMap>,
     object_groups: &HashMap<String, Vec<ObjectId>>,
-    global_names: &HashMap<String, GlobalId>,
+    variable_names: &HashMap<String, VariableId>,
 ) -> Result<Option<StatementAst>, DiagnosticReport> {
     let Some((left, right)) = line.split_once("->") else {
         return Ok(None);
@@ -2291,7 +2291,7 @@ fn parse_conditional_call_statement(
         value_sets,
         maps,
         object_groups,
-        global_names,
+        variable_names,
     )?;
 
     Ok(Some(StatementAst::Conditional {
@@ -2315,7 +2315,7 @@ fn parse_pattern_if_header<'a>(
     value_sets: &HashMap<String, Vec<String>>,
     maps: &HashMap<String, ValueMap>,
     object_groups: &HashMap<String, Vec<ObjectId>>,
-    global_names: &HashMap<String, GlobalId>,
+    variable_names: &HashMap<String, VariableId>,
 ) -> Result<Option<(PatternConditionAst, &'a str)>, DiagnosticReport> {
     let Some(rest) = line.strip_prefix("if") else {
         return Ok(None);
@@ -2342,7 +2342,7 @@ fn parse_pattern_if_header<'a>(
         value_sets,
         maps,
         object_groups,
-        global_names,
+        variable_names,
     )?;
     Ok(Some((condition, trailing)))
 }
@@ -2385,7 +2385,7 @@ fn parse_pattern_condition(
     value_sets: &HashMap<String, Vec<String>>,
     maps: &HashMap<String, ValueMap>,
     object_groups: &HashMap<String, Vec<ObjectId>>,
-    _global_names: &HashMap<String, GlobalId>,
+    _variable_names: &HashMap<String, VariableId>,
 ) -> Result<PatternConditionAst, DiagnosticReport> {
     let Some((pattern_orientation, pattern)) = split_oriented_pattern_arg(pattern, line)? else {
         return Err(parse_error(
@@ -2477,7 +2477,7 @@ fn parse_oriented_rewrite_statement(
     value_sets: &HashMap<String, Vec<String>>,
     maps: &HashMap<String, ValueMap>,
     object_groups: &HashMap<String, Vec<ObjectId>>,
-    global_names: &HashMap<String, GlobalId>,
+    variable_names: &HashMap<String, VariableId>,
 ) -> Result<OrientedRewriteAst, DiagnosticReport> {
     if !line.trim_start().starts_with(orientation_token) {
         return Err(parse_error(line, "missing oriented rewrite"));
@@ -2493,7 +2493,7 @@ fn parse_oriented_rewrite_statement(
         value_sets,
         maps,
         object_groups,
-        global_names,
+        variable_names,
     )?;
     if parsed.application.is_some() {
         return Err(parse_error(line, "unexpected application-prefixed rewrite"));
@@ -2512,7 +2512,7 @@ fn parse_neutral_rewrite_statement(
     value_sets: &HashMap<String, Vec<String>>,
     maps: &HashMap<String, ValueMap>,
     object_groups: &HashMap<String, Vec<ObjectId>>,
-    global_names: &HashMap<String, GlobalId>,
+    variable_names: &HashMap<String, VariableId>,
 ) -> Result<OrientedRewriteAst, DiagnosticReport> {
     let surface = puzzle_authoring::rule_line_surface(line)
         .map_err(|error| parse_error(line, error.message()))?;
@@ -2525,7 +2525,7 @@ fn parse_neutral_rewrite_statement(
         value_sets,
         maps,
         object_groups,
-        global_names,
+        variable_names,
     )?;
     if !matches!(parsed.orientation, OrientationExpr::Neutral) || parsed.application.is_some() {
         return Err(parse_error(line, "expected a neutral rewrite"));
@@ -2546,7 +2546,7 @@ fn parse_application_prefixed_rewrite_statement(
     value_sets: &HashMap<String, Vec<String>>,
     maps: &HashMap<String, ValueMap>,
     object_groups: &HashMap<String, Vec<ObjectId>>,
-    global_names: &HashMap<String, GlobalId>,
+    variable_names: &HashMap<String, VariableId>,
 ) -> Result<OrientedRewriteAst, DiagnosticReport> {
     line.strip_prefix(prefix)
         .ok_or_else(|| parse_error(line, "missing application-prefixed rewrite"))?;
@@ -2561,7 +2561,7 @@ fn parse_application_prefixed_rewrite_statement(
         value_sets,
         maps,
         object_groups,
-        global_names,
+        variable_names,
     )?;
     if parsed.application != Some(application) {
         return Err(parse_error(
@@ -2582,7 +2582,7 @@ fn parse_rule_line_rewrite_statement(
     value_sets: &HashMap<String, Vec<String>>,
     maps: &HashMap<String, ValueMap>,
     object_groups: &HashMap<String, Vec<ObjectId>>,
-    global_names: &HashMap<String, GlobalId>,
+    variable_names: &HashMap<String, VariableId>,
 ) -> Result<OrientedRewriteAst, DiagnosticReport> {
     let (orientation, application, rewrite) = match surface {
         puzzle_authoring::RuleLineSurface::InputRewrite {
@@ -2626,7 +2626,7 @@ fn parse_rule_line_rewrite_statement(
         value_sets,
         maps,
         object_groups,
-        global_names,
+        variable_names,
     )?;
 
     Ok(OrientedRewriteAst {
@@ -2697,7 +2697,7 @@ fn parse_statement_condition(
     condition: &str,
     line: &str,
     input_names: &HashMap<String, InputId>,
-    global_names: &HashMap<String, GlobalId>,
+    variable_names: &HashMap<String, VariableId>,
     condition_names: &HashMap<String, ConditionId>,
     named_conditions: &HashMap<String, (String, ConditionAst)>,
     object_names: &HashMap<String, ObjectId>,
@@ -2714,7 +2714,7 @@ fn parse_statement_condition(
         condition,
         line,
         input_names,
-        global_names,
+        variable_names,
         condition_names,
         object_names,
         object_schemas,
@@ -2728,7 +2728,7 @@ fn parse_condition_expr(
     condition: &str,
     line: &str,
     input_names: &HashMap<String, InputId>,
-    global_names: &HashMap<String, GlobalId>,
+    variable_names: &HashMap<String, VariableId>,
     condition_names: &HashMap<String, ConditionId>,
     object_names: &HashMap<String, ObjectId>,
     object_schemas: &HashMap<String, ObjectSchema>,
@@ -2746,7 +2746,7 @@ fn parse_condition_expr(
                         &part,
                         line,
                         input_names,
-                        global_names,
+                        variable_names,
                         condition_names,
                         object_names,
                         object_schemas,
@@ -2769,7 +2769,7 @@ fn parse_condition_expr(
                         &part,
                         line,
                         input_names,
-                        global_names,
+                        variable_names,
                         condition_names,
                         object_names,
                         object_schemas,
@@ -2786,7 +2786,7 @@ fn parse_condition_expr(
         condition.trim(),
         line,
         input_names,
-        global_names,
+        variable_names,
         condition_names,
         object_names,
         object_schemas,
@@ -2810,7 +2810,7 @@ fn parse_condition_atom(
     condition: &str,
     line: &str,
     input_names: &HashMap<String, InputId>,
-    global_names: &HashMap<String, GlobalId>,
+    variable_names: &HashMap<String, VariableId>,
     condition_names: &HashMap<String, ConditionId>,
     object_names: &HashMap<String, ObjectId>,
     object_schemas: &HashMap<String, ObjectSchema>,
@@ -2867,14 +2867,14 @@ fn parse_condition_atom(
             return Err(parse_error(line, "unknown input in condition"));
         }
 
-        let value = parse_global_value(right, line)?;
-        if global_names.contains_key(left) {
+        let value = parse_variable_value(right, line)?;
+        if variable_names.contains_key(left) {
             return Ok(match op {
-                ComparisonOp::Eq => ConditionAst::GlobalEquals {
+                ComparisonOp::Eq => ConditionAst::VariableEquals {
                     name: left.to_string(),
                     value,
                 },
-                op => ConditionAst::GlobalCompare {
+                op => ConditionAst::VariableCompare {
                     name: left.to_string(),
                     op,
                     value,
@@ -2929,8 +2929,8 @@ fn parse_condition_atom(
     if condition_names.contains_key(condition) {
         return Ok(ConditionAst::ConditionNonZero(condition.to_string()));
     }
-    if global_names.contains_key(condition) {
-        return Ok(ConditionAst::GlobalCompare {
+    if variable_names.contains_key(condition) {
+        return Ok(ConditionAst::VariableCompare {
             name: condition.to_string(),
             op: ComparisonOp::NotEq,
             value: 0,

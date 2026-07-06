@@ -220,7 +220,7 @@ pub fn run_cli_with_args(args: impl IntoIterator<Item = String>) -> Result<(), A
 fn run(args: impl IntoIterator<Item = String>) -> Result<(), AppError> {
     let config = Config::from_args(args)?;
     let service = if let Some(puzzle_path) = &config.puzzle_path {
-        EditorService::open(puzzle_path)?
+        EditorService::open_game_entry(puzzle_path)?
     } else if config.serve {
         let puzzle_path = puzzle_lang::resolve_game_entry(&PathBuf::from("games/spec_2d.puzzle"))
             .map_err(|error| AppError::Config(error.to_string()))?;
@@ -300,13 +300,6 @@ impl Config {
                 value => puzzle_path = Some(PathBuf::from(value)),
             }
         }
-
-        let puzzle_path = puzzle_path
-            .map(|path| {
-                puzzle_lang::resolve_game_entry(&path)
-                    .map_err(|error| AppError::Config(error.to_string()))
-            })
-            .transpose()?;
 
         Ok(Self {
             puzzle_path,
@@ -3106,6 +3099,21 @@ step board
     }
 
     #[test]
+    fn cli_config_preserves_requested_project_folder() {
+        let config = Config::from_args(vec![
+            "games/microban".to_string(),
+            "--serve".to_string(),
+            "--port".to_string(),
+            "8906".to_string(),
+        ])
+        .expect("parse editor config");
+
+        assert_eq!(config.puzzle_path, Some(PathBuf::from("games/microban")));
+        assert!(config.serve);
+        assert_eq!(config.port, 8906);
+    }
+
+    #[test]
     fn pages_example_compiles_as_playable_sokoban() {
         let workspace = TestWorkspace::new();
         let example_path = workspace.write(PAGES_EXAMPLE_PUZZLE_PATH, PAGES_EXAMPLE_PUZZLE_SOURCE);
@@ -4718,7 +4726,7 @@ levels3 demo of push3 {
         assert!(EDITOR_JS.contains(
             "const runtimeExportLiteral = extractAssignedStringLiteral(source, \"PuzzleRuntimeExportJson\");"
         ));
-        assert!(EDITOR_JS.contains("function extractAssignedStringLiteral(source, globalName)"));
+        assert!(EDITOR_JS.contains("function extractAssignedStringLiteral(source, variableName)"));
         assert!(EDITOR_JS.contains("function extractStringLiteralAt(source, start)"));
         assert!(
             level_editor_compile_source.contains("const exportData = exportInspection.exportData;")
@@ -5412,7 +5420,7 @@ levels3 demo of push3 {
             frame_fixture < puzzle_export,
             "3D editor previews must extract the 3D frame fixture before the outer scene export"
         );
-        assert!(EDITOR_JS.contains("const globalName = exportData?.__kind === \"puzzle3d\" ? \"Puzzle3DFrameFixture\" : \"PuzzleExport\";"));
+        assert!(EDITOR_JS.contains("const variableName = exportData?.__kind === \"puzzle3d\" ? \"Puzzle3DFrameFixture\" : \"PuzzleExport\";"));
         assert!(EDITOR_LEVEL3D_JS.contains("function level3dRuntimePreviewUpdate()"));
         assert!(EDITOR_JS.contains("function ensureLevel3dRuntimePreviewForOpenPane()"));
         assert!(EDITOR_JS.contains("requireFresh: true,"));

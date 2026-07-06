@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use puzzle_core::{
-    ConditionId, GlobalId, InputId, LayerId, MarkDef, MarkId, MarkKind, ObjectDef, ObjectId,
+    ConditionId, InputId, LayerId, MarkDef, MarkId, MarkKind, ObjectDef, ObjectId, VariableId,
 };
 
 #[derive(Clone, Debug)]
@@ -23,12 +23,12 @@ pub(crate) struct Catalog {
     pub(crate) char_objects: HashMap<char, Vec<ObjectId>>,
     pub(crate) input_names: HashMap<String, InputId>,
     pub(crate) input_labels: HashMap<InputId, String>,
-    pub(crate) global_names: HashMap<String, GlobalId>,
-    pub(crate) global_labels: HashMap<GlobalId, String>,
-    pub(crate) global_defaults: Vec<i64>,
-    pub(crate) numeric_global_defaults: HashMap<String, i64>,
-    pub(crate) persistent_vars: Vec<GlobalId>,
-    pub(crate) constant_globals: Vec<GlobalId>,
+    pub(crate) variable_names: HashMap<String, VariableId>,
+    pub(crate) variable_labels: HashMap<VariableId, String>,
+    pub(crate) variable_defaults: Vec<i64>,
+    pub(crate) numeric_variable_defaults: HashMap<String, i64>,
+    pub(crate) persistent_vars: Vec<VariableId>,
+    pub(crate) constant_variables: Vec<VariableId>,
     pub(crate) condition_names: HashMap<String, ConditionId>,
     pub(crate) condition_labels: HashMap<ConditionId, String>,
 }
@@ -110,12 +110,12 @@ impl Default for Catalog {
             char_objects: HashMap::new(),
             input_names: HashMap::new(),
             input_labels: HashMap::new(),
-            global_names: HashMap::new(),
-            global_labels: HashMap::new(),
-            global_defaults: Vec::new(),
-            numeric_global_defaults: HashMap::new(),
+            variable_names: HashMap::new(),
+            variable_labels: HashMap::new(),
+            variable_defaults: Vec::new(),
+            numeric_variable_defaults: HashMap::new(),
             persistent_vars: Vec::new(),
-            constant_globals: Vec::new(),
+            constant_variables: Vec::new(),
             condition_names: HashMap::new(),
             condition_labels: HashMap::new(),
         }

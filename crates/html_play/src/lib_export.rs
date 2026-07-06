@@ -413,7 +413,7 @@ fn export_puzzle3_document_html_with_runtime_wasm(
     } else {
         None
     };
-    let loaded = puzzle3_document_scene_host_loaded_game(document)?;
+    let loaded = loaded_document_scene_host_loaded_game(document)?;
     let state_source = if host_mode == StandaloneHostMode::EditorPreview {
         source.to_string()
     } else {
@@ -691,10 +691,23 @@ fn export_html_from_source_with_runtime_wasm(
     runtime_wasm: StandaloneRuntimeWasm<'_>,
 ) -> Result<String, DiagnosticReport> {
     let document = puzzle_lang::parse_game_for_path(source, puzzle_path)?;
+    if matches!(document.single_model(), Some(LoadedDocumentModel::Puzzle3d { .. })) {
+        return export_puzzle3_document_html_with_runtime_wasm(
+            &document,
+            source,
+            puzzle_path,
+            game_css,
+            game_visuals_js,
+            host_mode,
+            runtime_wasm,
+        )
+        .map_err(DiagnosticReport::error);
+    }
+    let loaded =
+        loaded_document_scene_host_loaded_game(&document).map_err(DiagnosticReport::error)?;
+    let game_visuals_js = join_visuals_js(game_visuals_js, &generated_visuals_js(&loaded));
     if document.models.len() > 1 {
-        let loaded = mixed_document_loaded_game(&document).map_err(DiagnosticReport::error)?;
-        let game_visuals_js = join_visuals_js(game_visuals_js, &generated_visuals_js(&loaded));
-        return export_mixed_document_html(
+        export_mixed_document_html(
             &document,
             loaded,
             source.to_string(),
@@ -705,36 +718,17 @@ fn export_html_from_source_with_runtime_wasm(
             host_mode,
             runtime_wasm,
         )
-        .map_err(DiagnosticReport::error);
-    }
-    match document.single_model() {
-        Some(LoadedDocumentModel::Puzzle2d { game, .. }) => {
-            let game_visuals_js = join_visuals_js(game_visuals_js, &generated_visuals_js(game));
-            let state = ServerState::new(
-                game.clone(),
-                source.to_string(),
-                puzzle_path.to_string(),
-                game_css.to_string(),
-                game_visuals_js,
-                SolverConfig::default(),
-            );
-            Ok(export_html_with_runtime_wasm(&state, host_mode, runtime_wasm))
-        }
-        Some(LoadedDocumentModel::Puzzle3d { .. }) => {
-            export_puzzle3_document_html_with_runtime_wasm(
-                &document,
-                source,
-                puzzle_path,
-                game_css,
-                game_visuals_js,
-                host_mode,
-                runtime_wasm,
-            )
-            .map_err(DiagnosticReport::error)
-        }
-        None => Err(DiagnosticReport::error(
-            "HTML export requires a single puzzle model",
-        )),
+        .map_err(DiagnosticReport::error)
+    } else {
+        let state = ServerState::new(
+            loaded,
+            source.to_string(),
+            puzzle_path.to_string(),
+            game_css.to_string(),
+            game_visuals_js,
+            SolverConfig::default(),
+        );
+        Ok(export_html_with_runtime_wasm(&state, host_mode, runtime_wasm))
     }
 }
 
@@ -751,11 +745,21 @@ pub fn export_html_file(path: impl AsRef<Path>) -> Result<String, String> {
     let game_css =
         load_asset_css(&puzzle_path, &document.assets).map_err(|error| error.to_string())?;
 
+    if matches!(document.single_model(), Some(LoadedDocumentModel::Puzzle3d { .. })) {
+        return export_puzzle3_document_html(
+            &document,
+            &source,
+            &puzzle_path.display().to_string(),
+            &game_css,
+            VISUALS_JS,
+        );
+    }
+
+    let loaded = loaded_document_scene_host_loaded_game(&document)?;
+    let game_visuals_js =
+        load_game_visuals_js(&puzzle_path, &loaded).map_err(|error| error.to_string())?;
     if document.models.len() > 1 {
-        let loaded = mixed_document_loaded_game(&document)?;
-        let game_visuals_js =
-            load_game_visuals_js(&puzzle_path, &loaded).map_err(|error| error.to_string())?;
-        return export_mixed_document_html(
+        export_mixed_document_html(
             &document,
             loaded,
             source,
@@ -765,31 +769,17 @@ pub fn export_html_file(path: impl AsRef<Path>) -> Result<String, String> {
             SolverConfig::default(),
             StandaloneHostMode::Export,
             StandaloneRuntimeWasm::HostDefault,
+        )
+    } else {
+        let state = ServerState::new(
+            loaded,
+            source,
+            puzzle_path.display().to_string(),
+            game_css,
+            game_visuals_js,
+            SolverConfig::default(),
         );
-    }
-
-    match document.single_model() {
-        Some(LoadedDocumentModel::Puzzle2d { game, .. }) => {
-            let game_visuals_js =
-                load_game_visuals_js(&puzzle_path, game).map_err(|error| error.to_string())?;
-            let state = ServerState::new(
-                game.clone(),
-                source,
-                puzzle_path.display().to_string(),
-                game_css,
-                game_visuals_js,
-                SolverConfig::default(),
-            );
-            Ok(export_html(&state))
-        }
-        Some(LoadedDocumentModel::Puzzle3d { .. }) => export_puzzle3_document_html(
-            &document,
-            &source,
-            &puzzle_path.display().to_string(),
-            &game_css,
-            VISUALS_JS,
-        ),
-        None => Err("HTML export requires a single puzzle model".to_string()),
+        Ok(export_html(&state))
     }
 }
 
@@ -798,19 +788,13 @@ pub fn export_visuals_js_from_source(
     base_visuals_js: &str,
 ) -> Result<String, String> {
     let document = puzzle_lang::parse_game(source).map_err(|error| error.to_string())?;
-    if document.models.len() > 1 {
-        let loaded = mixed_document_loaded_game(&document)?;
-        return Ok(join_visuals_js(
+    if matches!(document.single_model(), Some(LoadedDocumentModel::Puzzle3d { .. })) {
+        Ok(base_visuals_js.to_string())
+    } else {
+        let loaded = loaded_document_scene_host_loaded_game(&document)?;
+        Ok(join_visuals_js(
             base_visuals_js,
             &generated_visuals_js(&loaded),
-        ));
-    }
-    match document.single_model() {
-        Some(LoadedDocumentModel::Puzzle2d { game, .. }) => Ok(join_visuals_js(
-            base_visuals_js,
-            &generated_visuals_js(game),
-        )),
-        Some(LoadedDocumentModel::Puzzle3d { .. }) => Ok(base_visuals_js.to_string()),
-        None => Err("visual export requires a single puzzle model".to_string()),
+        ))
     }
 }

@@ -171,7 +171,7 @@ impl Puzzle3RuntimeBridge {
             &self.parsed,
             program_key,
             state_json,
-            InputId3(input),
+            InputId(input),
         )
         .map_err(|error| error.to_string())
     }
@@ -237,7 +237,7 @@ impl Puzzle3RuntimeBridge {
             .ok_or_else(|| "3D runtime current state has not been initialized".to_string())?;
         let before = state.clone();
         let next_state =
-            transition_selected_program3(&self.parsed, program_key, state, InputId3(input))
+            transition_selected_program3(&self.parsed, program_key, state, InputId(input))
                 .map_err(|error| error.to_string())?;
         let completed = self
             .parsed
@@ -321,7 +321,7 @@ fn transition_program3_outcome_json_inner(
     parsed: &ParsedPuzzle3,
     program_key: &str,
     state_json: &str,
-    input: InputId3,
+    input: InputId,
 ) -> Result<String, AppError> {
     let state = state3_from_json(&parsed.game, state_json)?;
     let next_state = transition_selected_program3(parsed, program_key, &state, input)?;
@@ -343,7 +343,7 @@ fn transition_selected_program3(
     parsed: &ParsedPuzzle3,
     program_key: &str,
     state: &State3,
-    input: InputId3,
+    input: InputId,
 ) -> Result<State3, AppError> {
     match program_key {
         "main" => transition_program_with_local_frame3(
@@ -549,8 +549,8 @@ fn push_transition_current_outcome_json(
     }
     out.push_str(",\"changedCells\":");
     push_state2_cells(out, state, before);
-    out.push_str(",\"globals\":[");
-    for (index, value) in state.visible_globals().iter().enumerate() {
+    out.push_str(",\"variables\":[");
+    for (index, value) in state.visible_variables().iter().enumerate() {
         if index > 0 {
             out.push(',');
         }
@@ -661,10 +661,10 @@ fn push_transition_patches(out: &mut String, patches: &[Patch]) {
                     out.push(',');
                     push_json_number(out, "mark", mark.0 as u64);
                 }
-                PatchOp::UpdateGlobal { global, .. } => {
-                    push_json_pair(out, "kind", "update_global");
+                PatchOp::UpdateVariable { variable, .. } => {
+                    push_json_pair(out, "kind", "update_variable");
                     out.push(',');
-                    push_json_number(out, "global", global.0 as u64);
+                    push_json_number(out, "variable", variable.0 as u64);
                 }
             }
             out.push('}');
@@ -997,9 +997,9 @@ fn decode_goal_exprs(value: &serde_json::Value) -> Result<Vec<GoalExpr>, AppErro
 fn decode_goal_value(value: &serde_json::Value) -> Result<GoalValue, AppError> {
     let object = json_object(value, "goal value")?;
     match required_json_string(object, "kind")? {
-        "global" => Ok(GoalValue::Global(GlobalId(json_u16_value(
-            required_json_value(object, "global")?,
-            "goal global",
+        "variable" => Ok(GoalValue::Variable(VariableId(json_u16_value(
+            required_json_value(object, "variable")?,
+            "goal variable",
         )?))),
         "condition" => Ok(GoalValue::Condition(ConditionId(json_u16_value(
             required_json_value(object, "condition")?,
@@ -1569,7 +1569,7 @@ fn state_from_json(loaded: &LoadedGame, state_json: &str) -> Result<State, AppEr
         .map_err(|_| AppError::Config("solver state layerCount out of range".to_string()))?;
     let slots = json_u64_array_field(state_json, "slots")
         .ok_or_else(|| AppError::Config("solver state missing slots".to_string()))?;
-    let globals = json_i64_array_field(state_json, "globals").unwrap_or_default();
+    let variables = json_i64_array_field(state_json, "variables").unwrap_or_default();
     let fired_rules = json_u64_array_field(state_json, "levelFiredRules").unwrap_or_default();
     let expected_slots = usize::from(width) * usize::from(height) * usize::from(layer_count);
     if slots.len() != expected_slots {
@@ -1579,12 +1579,12 @@ fn state_from_json(loaded: &LoadedGame, state_json: &str) -> Result<State, AppEr
         )));
     }
 
-    let mut state = State::empty_with_globals(
+    let mut state = State::empty_with_variables(
         width,
         height,
         layer_count,
         loaded.game.object_count(),
-        globals,
+        variables,
     )
     .map_err(|error| AppError::Config(format!("{error:?}")))?;
     for (index, object) in slots.into_iter().enumerate() {

@@ -156,10 +156,12 @@ workspace_sources=(
 authoring_sources=(crates/authoring/Cargo.toml crates/authoring/src)
 core_sources=(crates/core/Cargo.toml crates/core/src)
 grid3d_sources=(crates/grid3d/Cargo.toml crates/grid3d/src)
+grid3d_authoring_sources=(crates/grid3d_authoring/Cargo.toml crates/grid3d_authoring/src)
 kernel_sources=(crates/kernel/Cargo.toml crates/kernel/src)
 lang_sources=(crates/lang/Cargo.toml crates/lang/src)
 play_sources=(crates/play/Cargo.toml crates/play/src)
-puzzle3_sources=(crates/puzzle_3d/Cargo.toml crates/puzzle_3d/src)
+runtime_contract_sources=(crates/runtime_contract/Cargo.toml crates/runtime_contract/src)
+puzzle3_sources=("${grid3d_sources[@]}" "${grid3d_authoring_sources[@]}" "${lang_sources[@]}" "${runtime_contract_sources[@]}")
 scene_sources=(crates/scene/Cargo.toml crates/scene/src)
 solver_sources=(crates/solver/Cargo.toml crates/solver/src)
 

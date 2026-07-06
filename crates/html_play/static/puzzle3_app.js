@@ -30,11 +30,10 @@ const puzzle3RendererMode = resolvePuzzle3RendererMode(
     || new URLSearchParams(window.location.search).get("renderer"),
 );
 const ctx = puzzle3RendererMode === "three" ? null : canvas.getContext("2d", { alpha: true });
+const PUZZLE3_RUNTIME_CONTRACT_VERSION = 4;
 const PUZZLE3_RENDERER_CONTRACT_VERSION = 1;
 const PUZZLE3_APP_CAMERA_MIN_PITCH_DEGREES = -90;
 const PUZZLE3_APP_CAMERA_MAX_PITCH_DEGREES = 90;
-const puzzle3MessageQueue = [];
-let puzzle3MessagePopup = null;
 
 function ensurePuzzle3ComponentFrame() {
   let existing = controllerOptions.canvas || document.querySelector("#view");
@@ -403,10 +402,11 @@ class Puzzle3SessionRuntime {
     this.moveCount += 1;
     const wasCompleted = this.completed;
     this.completed = outcome.completed === true;
+    let lifecycleEffects = [];
     if (!wasCompleted && this.completed) {
-      this.runLevelClearLifecycle();
+      lifecycleEffects = this.levelClearLifecycleEffects();
     }
-    return true;
+    return { changed: true, lifecycleEffects };
   }
 
   setCamera(camera) {
@@ -501,13 +501,11 @@ class Puzzle3SessionRuntime {
     return this.levels[this.levelIndex];
   }
 
-  runLevelClearLifecycle() {
+  levelClearLifecycleEffects() {
     const commands = this.levelIndex + 1 >= this.levels.length
       ? (this.base.lifecycle?.onLastLevelClear || this.base.lifecycle?.onLevelClear || [])
       : (this.base.lifecycle?.onLevelClear || []);
-    for (const effect of commands) {
-      applyPuzzle3LifecycleEffect(this, effect);
-    }
+    return JSON.parse(JSON.stringify(commands));
   }
 
   transitionCurrent(programKey, inputId) {
@@ -553,7 +551,7 @@ class Puzzle3SessionRuntime {
     if (!input) {
       throw new Error(`Unknown Puzzle3 runtime input: ${inputName}`);
     }
-    return runtimeInputId(input, `runtimeContract.game.inputs.${input.name || canonicalName}`);
+    return runtimeInputId(input, `runtimeContract.model.game.inputs.${input.name || canonicalName}`);
   }
 
   objectForId(objectId) {
@@ -595,76 +593,6 @@ function applyPuzzle3PreviewUpdate(update = {}) {
     scene: update.scene,
     preferPuzzleScene: update.preferPuzzleScene !== false,
   });
-}
-
-function applyPuzzle3LifecycleEffect(runtime, effect) {
-  if (!effect || typeof effect !== "object") {
-    throw new Error("Puzzle3 lifecycle effect is missing or invalid.");
-  }
-  if (effect.kind === "puzzle_next_level") {
-    if (effect.target) {
-      throw new Error(`Puzzle3 lifecycle next_level target is unsupported: ${effect.target}`);
-    }
-    runtime.nextLevel();
-    return;
-  }
-  if (effect.kind === "message") {
-    showPuzzle3Message(sceneExprText(effect.text));
-    return;
-  }
-  if (effect.kind === "sequence") {
-    for (const child of effect.effects || []) {
-      applyPuzzle3LifecycleEffect(runtime, child.effect || child);
-    }
-    return;
-  }
-  throw new Error(`Unsupported Puzzle3 lifecycle effect: ${effect.kind || "(missing kind)"}`);
-}
-
-function sceneExprText(expr) {
-  if (!expr || typeof expr !== "object") {
-    throw new Error("Puzzle3 lifecycle message text is missing or invalid.");
-  }
-  if (expr.kind === "text") {
-    return String(expr.value || "");
-  }
-  throw new Error(`Unsupported Puzzle3 lifecycle message expression: ${expr.kind || "(missing kind)"}`);
-}
-
-function showPuzzle3Message(text) {
-  puzzle3MessageQueue.push(String(text || ""));
-  showNextPuzzle3Message();
-}
-
-function showNextPuzzle3Message() {
-  if (puzzle3MessagePopup || puzzle3MessageQueue.length === 0) {
-    return;
-  }
-  const backdrop = document.createElement("div");
-  backdrop.className = "message-popup-backdrop";
-  backdrop.setAttribute("role", "dialog");
-  backdrop.setAttribute("aria-modal", "true");
-
-  const panel = document.createElement("div");
-  panel.className = "message-popup";
-  const body = document.createElement("p");
-  body.className = "message-popup-text";
-  body.textContent = puzzle3MessageQueue.shift();
-  panel.append(body);
-  backdrop.append(panel);
-  backdrop.tabIndex = -1;
-  screenView.append(backdrop);
-  puzzle3MessagePopup = backdrop;
-  backdrop.focus({ preventScroll: true });
-}
-
-function closePuzzle3Message() {
-  if (!puzzle3MessagePopup) {
-    return;
-  }
-  puzzle3MessagePopup.remove();
-  puzzle3MessagePopup = null;
-  showNextPuzzle3Message();
 }
 
 function applyPuzzle3ModelComponentPreviewUpdate(update = {}) {
@@ -921,6 +849,7 @@ function createPuzzle3Component() {
     applyInput(input) {
       runtime.setCamera(snapshot.camera);
       const beforeLevelIndex = snapshot.levelIndex || 0;
+      let lifecycleEffects = [];
       if (input === "undo") {
         if (!runtime.undo()) {
           return false;
@@ -930,8 +859,12 @@ function createPuzzle3Component() {
           return false;
         }
         resetViewportMotion();
-      } else if (!runtime.applyInput(input)) {
-        return false;
+      } else {
+        const result = runtime.applyInput(input);
+        if (!result.changed) {
+          return false;
+        }
+        lifecycleEffects = result.lifecycleEffects || [];
       }
       snapshot = runtime.snapshot();
       if ((snapshot.levelIndex || 0) !== beforeLevelIndex) {
@@ -939,6 +872,7 @@ function createPuzzle3Component() {
       }
       requestSceneViewportDraw();
       notifyPuzzle3StateChange();
+      emitPuzzle3LifecycleEffects(lifecycleEffects);
       return true;
     },
     nextLevel() {
@@ -989,6 +923,19 @@ function createPuzzle3Component() {
   };
 }
 
+function emitPuzzle3LifecycleEffects(effects) {
+  if (!Array.isArray(effects) || effects.length === 0) {
+    return;
+  }
+  if (typeof controllerOptions.onLifecycleEffects !== "function") {
+    throw new Error("Puzzle3 lifecycle effects require a scene host.");
+  }
+  controllerOptions.onLifecycleEffects(JSON.parse(JSON.stringify(effects)), {
+    scene: currentSceneName,
+    source: mountedPuzzle3Component?.source || "board",
+  });
+}
+
 function resetProjection(rect = canvasLayoutFrame()) {
   updateProjectionFit(rect);
 }
@@ -1018,7 +965,7 @@ function levelIndexesForBundle(levelsName) {
   return levels.map((_, index) => index);
 }
 
-function globalLevelIndexForBundle(levelsName, relativeIndex) {
+function absoluteLevelIndexForBundle(levelsName, relativeIndex) {
   const indexes = levelIndexesForBundle(levelsName);
   return indexes[clamp(relativeIndex || 0, 0, Math.max(0, indexes.length - 1))] ?? 0;
 }
@@ -1058,9 +1005,9 @@ function applyStartupPuzzle3UrlCommands() {
   }
 }
 
-function relativeLevelIndexForBundle(levelsName, globalIndex) {
+function relativeLevelIndexForBundle(levelsName, absoluteIndex) {
   const indexes = levelIndexesForBundle(levelsName);
-  const relative = indexes.indexOf(globalIndex);
+  const relative = indexes.indexOf(absoluteIndex);
   return relative >= 0 ? relative : 0;
 }
 
@@ -3422,13 +3369,6 @@ if (window.ResizeObserver) {
 }
 
 function handleStandaloneKeydown(event) {
-  if (puzzle3MessagePopup) {
-    event.preventDefault();
-    if (isPuzzle3MessageDismissKey(event)) {
-      closePuzzle3Message();
-    }
-    return;
-  }
   const control = sceneControlForEvent(event);
   if (control) {
     event.preventDefault();
@@ -3445,13 +3385,6 @@ function handleStandaloneKeydown(event) {
 }
 
 function handleComponentEmbedKeydown(event) {
-  if (puzzle3MessagePopup) {
-    event.preventDefault();
-    if (isPuzzle3MessageDismissKey(event)) {
-      closePuzzle3Message();
-    }
-    return;
-  }
   if (!puzzle3ComponentFor(currentScene())) {
     return;
   }
@@ -3464,10 +3397,6 @@ function handleComponentEmbedKeydown(event) {
   }
   event.preventDefault();
   startHeldSceneInput(rawInputHoldId({ key: event.key, code: event.code }), input);
-}
-
-function isPuzzle3MessageDismissKey(event) {
-  return ["Enter", " ", "Spacebar", "Escape", "z", "x", "c", "v"].includes(event.key);
 }
 
 function handleStandaloneKeyup(event) {
@@ -3880,6 +3809,7 @@ controllerApi.ready = loadPuzzle3ControllerSnapshot();
 
 function cloneRuntimeSnapshot(source) {
   const runtimeContract = requireRuntimeContract(source);
+  const runtimeModel = requireRuntimeContractPuzzle3Model(runtimeContract);
   const runtimeGame = requireRuntimeContractGame(runtimeContract);
   const runtimeLevelBundle = requireRuntimeContractLevelBundle(runtimeContract);
   const lifecycle = requireRuntimeContractLifecycle(runtimeContract);
@@ -3895,9 +3825,9 @@ function cloneRuntimeSnapshot(source) {
     },
     layerCount: runtimeLayerCount(runtimeGame),
     inputs: cloneRuntimeInputs(runtimeGame.inputs),
-    rules: cloneRequiredJsonArray(runtimeContract.rules, "runtimeContract.rules"),
-    winCondition: runtimeContract.winCondition
-      ? JSON.parse(JSON.stringify(runtimeContract.winCondition))
+    rules: cloneRequiredJsonArray(runtimeModel.rules, "runtimeContract.model.rules"),
+    winCondition: runtimeModel.winCondition
+      ? JSON.parse(JSON.stringify(runtimeModel.winCondition))
       : null,
     runtimeContract: JSON.parse(JSON.stringify(runtimeContract)),
     lifecycle: {
@@ -3920,57 +3850,69 @@ function requireRuntimeContract(source) {
   if (!contract || typeof contract !== "object") {
     throw new Error("Puzzle3 runtime fixture is missing runtimeContract.");
   }
-  if (Number(contract.version) !== 2) {
+  if (Number(contract.version) !== PUZZLE3_RUNTIME_CONTRACT_VERSION) {
     throw new Error(`Unsupported Puzzle3 runtimeContract version: ${contract.version}`);
   }
+  requireRuntimeContractPuzzle3Model(contract);
   requireRuntimeContractGame(contract);
   requireRuntimeContractLevelBundle(contract);
   requireRuntimeContractLifecycle(contract);
   return contract;
 }
 
+function requireRuntimeContractPuzzle3Model(contract) {
+  const model = contract?.model;
+  if (!model || typeof model !== "object" || Array.isArray(model)) {
+    throw new Error("Puzzle3 runtimeContract.model is missing or invalid.");
+  }
+  if (model.kind !== "puzzle3") {
+    throw new Error(`Unsupported runtimeContract model kind: ${model.kind}`);
+  }
+  return model;
+}
+
 function requireRuntimeContractGame(contract) {
-  const game = contract?.game;
+  const game = requireRuntimeContractPuzzle3Model(contract).game;
   if (!game || typeof game !== "object" || Array.isArray(game)) {
-    throw new Error("Puzzle3 runtimeContract.game is missing or invalid.");
+    throw new Error("Puzzle3 runtimeContract.model.game is missing or invalid.");
   }
   runtimeLayerCount(game);
   if (!Array.isArray(game.objects)) {
-    throw new Error("Puzzle3 runtimeContract.game.objects is missing or invalid.");
+    throw new Error("Puzzle3 runtimeContract.model.game.objects is missing or invalid.");
   }
   if (!Array.isArray(game.inputs)) {
-    throw new Error("Puzzle3 runtimeContract.game.inputs is missing or invalid.");
+    throw new Error("Puzzle3 runtimeContract.model.game.inputs is missing or invalid.");
   }
   return game;
 }
 
 function requireRuntimeContractLevelBundle(contract) {
-  const levelBundle = contract?.levelBundle;
+  const levelBundle = requireRuntimeContractPuzzle3Model(contract).levelBundle;
   if (!levelBundle || typeof levelBundle !== "object" || Array.isArray(levelBundle)) {
-    throw new Error("Puzzle3 runtimeContract.levelBundle is missing or invalid.");
+    throw new Error("Puzzle3 runtimeContract.model.levelBundle is missing or invalid.");
   }
   if (!Array.isArray(levelBundle.levels) || levelBundle.levels.length === 0) {
-    throw new Error("Puzzle3 runtimeContract.levelBundle.levels is missing or empty.");
+    throw new Error("Puzzle3 runtimeContract.model.levelBundle.levels is missing or empty.");
   }
   return levelBundle;
 }
 
 function requireRuntimeContractLifecycle(contract) {
-  const lifecycle = contract?.lifecycle;
+  const lifecycle = requireRuntimeContractPuzzle3Model(contract).lifecycle;
   if (!lifecycle || typeof lifecycle !== "object" || Array.isArray(lifecycle)) {
-    throw new Error("Puzzle3 runtimeContract.lifecycle is missing or invalid.");
+    throw new Error("Puzzle3 runtimeContract.model.lifecycle is missing or invalid.");
   }
   if (!Array.isArray(lifecycle.onLevelStart)) {
-    throw new Error("Puzzle3 runtimeContract.lifecycle.onLevelStart is missing or invalid.");
+    throw new Error("Puzzle3 runtimeContract.model.lifecycle.onLevelStart is missing or invalid.");
   }
   if (!Array.isArray(lifecycle.onLevelClear)) {
-    throw new Error("Puzzle3 runtimeContract.lifecycle.onLevelClear is missing or invalid.");
+    throw new Error("Puzzle3 runtimeContract.model.lifecycle.onLevelClear is missing or invalid.");
   }
   if (lifecycle.onLastLevelClear !== null
     && lifecycle.onLastLevelClear !== undefined
     && !Array.isArray(lifecycle.onLastLevelClear)
   ) {
-    throw new Error("Puzzle3 runtimeContract.lifecycle.onLastLevelClear is invalid.");
+    throw new Error("Puzzle3 runtimeContract.model.lifecycle.onLastLevelClear is invalid.");
   }
   return lifecycle;
 }
@@ -4015,8 +3957,8 @@ function cloneRuntimeCells(cells) {
 function cloneRuntimeInputs(inputs) {
   return inputs.map((input, index) => ({
     ...input,
-    id: runtimeInputId(input, `runtimeContract.game.inputs[${index}]`),
-    name: runtimeInputName(input, `runtimeContract.game.inputs[${index}]`),
+    id: runtimeInputId(input, `runtimeContract.model.game.inputs[${index}]`),
+    name: runtimeInputName(input, `runtimeContract.model.game.inputs[${index}]`),
     keys: Array.isArray(input.keys) ? [...input.keys] : [],
   }));
 }
@@ -4030,7 +3972,7 @@ function cloneRequiredJsonArray(value, label) {
 
 function cloneRuntimeContractLevels(levelBundle, presentationLevels = []) {
   const levels = levelBundle.levels.map((entry, index) => {
-    const label = `runtimeContract.levelBundle.levels[${index}]`;
+    const label = `runtimeContract.model.levelBundle.levels[${index}]`;
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
       throw new Error(`Puzzle3 ${label} is missing or invalid.`);
     }
@@ -4066,7 +4008,7 @@ function cloneRuntimeContractLevels(levelBundle, presentationLevels = []) {
     };
   });
   if (levels.length === 0) {
-    throw new Error("Puzzle3 runtimeContract.levelBundle.levels is empty.");
+    throw new Error("Puzzle3 runtimeContract.model.levelBundle.levels is empty.");
   }
   return levels;
 }
@@ -4081,14 +4023,14 @@ function cloneRuntimeLevelBundles(levelBundles) {
 }
 
 function runtimeLayerCount(game) {
-  return runtimePositiveInteger(game.layer_count, "runtimeContract.game.layer_count");
+  return runtimePositiveInteger(game.layer_count, "runtimeContract.model.game.layer_count");
 }
 
 function runtimeSemanticObjectsById(game) {
   const layerCount = runtimeLayerCount(game);
   const objects = new Map();
   for (const [index, object] of game.objects.entries()) {
-    const label = `runtimeContract.game.objects[${index}]`;
+    const label = `runtimeContract.model.game.objects[${index}]`;
     if (!object || typeof object !== "object" || Array.isArray(object)) {
       throw new Error(`Puzzle3 ${label} is missing or invalid.`);
     }
@@ -4098,7 +4040,7 @@ function runtimeSemanticObjectsById(game) {
       throw new Error(`Puzzle3 ${label}.layer_id ${layerId} is outside layer count ${layerCount}.`);
     }
     if (objects.has(id)) {
-      throw new Error(`Puzzle3 runtimeContract.game.objects contains duplicate object id ${id}.`);
+      throw new Error(`Puzzle3 runtimeContract.model.game.objects contains duplicate object id ${id}.`);
     }
     objects.set(id, { id, layerId });
   }

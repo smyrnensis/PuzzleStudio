@@ -399,7 +399,7 @@ impl EffectAst {
             | EffectAst::Again
             | EffectAst::Checkpoint
             | EffectAst::ClearCheckpoint
-            | EffectAst::UpdateGlobal { .. } => RewriteEffectCommandSyntax::Effect,
+            | EffectAst::UpdateVariable { .. } => RewriteEffectCommandSyntax::Effect,
         }
     }
 }
@@ -499,7 +499,7 @@ fn add_rewrite_effect_semantic_tokens(tokens: &[SourceToken], sink: &mut Surface
             add_scene_effect_token_range(sink, asset, SurfaceSemanticKind::Asset);
             true
         }
-        [name, op, value] if is_global_update_operator(&op.text) => {
+        [name, op, value] if is_variable_update_operator(&op.text) => {
             add_scene_effect_token_range(sink, name, SurfaceSemanticKind::State);
             add_scene_effect_token_range(sink, value, SurfaceSemanticKind::Number);
             true
@@ -574,7 +574,7 @@ fn add_simple_rewrite_effect_semantic_tokens(
                 }
                 parsed_any = true;
             }
-            _ if index + 2 < tokens.len() && is_global_update_operator(&tokens[index + 1].text) => {
+            _ if index + 2 < tokens.len() && is_variable_update_operator(&tokens[index + 1].text) => {
                 add_scene_effect_token_range(sink, &tokens[index], SurfaceSemanticKind::State);
                 add_scene_effect_token_range(sink, &tokens[index + 2], SurfaceSemanticKind::Number);
                 index += 3;
@@ -907,7 +907,7 @@ fn resolve_default_wait_in_effect(effect: &mut SceneEffect, default_wait_ms: u64
         SceneEffect::Conditional { effect, .. } => {
             resolve_default_wait_in_effect(effect, default_wait_ms);
         }
-        SceneEffect::Sequence(effects) => {
+        SceneEffect::Sequence { effects } => {
             for effect in effects {
                 resolve_default_wait_in_effect(effect, default_wait_ms);
             }

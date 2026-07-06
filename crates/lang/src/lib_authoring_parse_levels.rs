@@ -337,7 +337,7 @@ fn parse_condition_block_entry(
         };
         let value_sets = catalog_value_sets(catalog);
         let values =
-            for_expansion_values(sources, &value_sets, &catalog.numeric_global_defaults, line)?;
+            for_expansion_values(sources, &value_sets, &catalog.numeric_variable_defaults, line)?;
         validate_identifier(binding, line, "expansion binding")?;
         let (body_lines, next_i) = collect_statement_block_lines(lines, start + 1, line)?;
         for value in values {
@@ -808,7 +808,7 @@ fn parse_condition_block_row(
         line,
         line,
         &catalog.input_names,
-        &catalog.global_names,
+        &catalog.variable_names,
         &catalog.condition_names,
         &catalog.object_names,
         &catalog.object_schemas,
@@ -860,7 +860,7 @@ fn parse_condition_block_row(
                 &expr,
                 line,
                 &catalog.input_names,
-                &catalog.global_names,
+                &catalog.variable_names,
                 &catalog.condition_names,
                 &catalog.object_names,
                 &catalog.object_schemas,
@@ -875,7 +875,7 @@ fn parse_condition_block_row(
                 &expr,
                 line,
                 &catalog.input_names,
-                &catalog.global_names,
+                &catalog.variable_names,
                 &catalog.condition_names,
                 &catalog.object_names,
                 &catalog.object_schemas,
@@ -890,7 +890,7 @@ fn parse_condition_block_row(
                 &expr,
                 line,
                 &catalog.input_names,
-                &catalog.global_names,
+                &catalog.variable_names,
                 &catalog.condition_names,
                 &catalog.object_names,
                 &catalog.object_schemas,
@@ -905,7 +905,7 @@ fn parse_condition_block_row(
                 &expr,
                 line,
                 &catalog.input_names,
-                &catalog.global_names,
+                &catalog.variable_names,
                 &catalog.condition_names,
                 &catalog.object_names,
                 &catalog.object_schemas,
@@ -1073,8 +1073,8 @@ fn parse_level_body(
                 &catalog.maps,
                 &catalog.object_groups,
                 &catalog.input_names,
-                &catalog.global_names,
-                &catalog.numeric_global_defaults,
+                &catalog.variable_names,
+                &catalog.numeric_variable_defaults,
                 &catalog.condition_names,
                 named_conditions,
                 &[],

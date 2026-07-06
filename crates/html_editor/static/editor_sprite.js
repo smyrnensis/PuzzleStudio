@@ -368,20 +368,12 @@ function renderSpritePalette() {
     }
   }
 
-  const paintToolRow = document.createElement("span");
-  paintToolRow.className = "sprite-paint-tool-row";
-  paintToolRow.append(spriteMarkerTool);
-
-  if (spriteFillButton) {
-    paintToolRow.append(spriteFillButton);
-  }
-  if (spriteGridButton) {
-    paintToolRow.append(spriteGridButton);
-  }
+  const paletteGrid = document.createElement("span");
+  paletteGrid.className = "sprite-palette-grid";
 
   const eraseButton = document.createElement("button");
   eraseButton.type = "button";
-  eraseButton.className = "sprite-token sprite-token-erase sprite-icon-button sprite-paint-tool-button";
+  eraseButton.className = "sprite-token sprite-token-erase sprite-icon-button";
   eraseButton.classList.toggle("is-selected", sprite.selectedColorIndex === null && !spriteBucketActive);
   eraseButton.dataset.colorIndex = "erase";
   eraseButton.style.setProperty("--sprite-swatch-color", "#00000000");
@@ -398,68 +390,7 @@ function renderSpritePalette() {
     spriteBucketActive = false;
     selectSpriteColor(null);
   });
-  paintToolRow.append(eraseButton);
-
-  const clipActions = document.createElement("span");
-  clipActions.className = "sprite-clip-actions";
-  clipActions.append(
-    renderSpriteClipButton({
-      title: spriteClipActive ? "Exit clip mode" : "Clip",
-      ariaLabel: "Clip sprite area",
-      active: spriteClipActive,
-      onClick: toggleSpriteClipMode,
-      icon: spriteLucideIconSvg("mouse-pointer-2"),
-    }),
-    renderSpriteClipButton({
-      title: "Copy clip",
-      ariaLabel: "Copy selected sprite area",
-      disabled: !spriteClipSelection,
-      onClick: copySpriteClipSelection,
-      icon: spriteLucideIconSvg("copy"),
-    }),
-    renderSpriteClipButton({
-      title: "Cut clip",
-      ariaLabel: "Cut selected sprite area",
-      disabled: !spriteClipSelection,
-      onClick: cutSpriteClipSelection,
-      icon: spriteLucideIconSvg("scissors"),
-    }),
-    renderSpriteClipButton({
-      title: "Paste clip",
-      ariaLabel: "Paste copied sprite area",
-      disabled: !spriteClipClipboard,
-      onClick: pasteSpriteClipClipboard,
-      icon: spriteLucideIconSvg("clipboard-paste"),
-    }),
-    renderSpriteClipButton({
-      title: spriteClipFloating ? "Discard clip preview" : "Clear clip",
-      ariaLabel: spriteClipFloating ? "Discard clipped sprite preview" : "Clear selected sprite area",
-      disabled: !spriteClipSelection && !spriteClipFloating,
-      danger: true,
-      onClick: clearSpriteClipSelection,
-      icon: spriteLucideIconSvg("trash-2"),
-    }),
-  );
-  paintToolRow.append(clipActions);
-
-  const transformActions = document.createElement("span");
-  transformActions.className = "sprite-paint-transform-actions";
-  for (const button of [
-    spriteRotateLeftButton,
-    spriteRotateRightButton,
-    spriteFlipHorizontalButton,
-    spriteFlipVerticalButton,
-    spriteClearButton,
-  ]) {
-    if (button) {
-      transformActions.append(button);
-    }
-  }
-  paintToolRow.append(transformActions);
-  spritePalette.append(paintToolRow);
-
-  const paletteGrid = document.createElement("span");
-  paletteGrid.className = "sprite-palette-grid";
+  paletteGrid.append(eraseButton);
 
   for (const [index, entry] of sprite.palette.entries()) {
     const item = document.createElement("span");
@@ -527,6 +458,82 @@ function renderSpritePalette() {
     spritePalette.append(addMenu);
     positionSpriteColorMenu(addMenu, paletteGrid, { side: "left" });
   }
+
+  const paintToolRow = document.createElement("span");
+  paintToolRow.className = "sprite-paint-tool-row";
+
+  const brushActions = document.createElement("span");
+  brushActions.className = "sprite-paint-tool-group sprite-brush-actions";
+  brushActions.append(spriteMarkerTool);
+  if (spriteFillButton) {
+    brushActions.append(spriteFillButton);
+  }
+  paintToolRow.append(brushActions);
+
+  if (spriteGridButton) {
+    const viewActions = document.createElement("span");
+    viewActions.className = "sprite-paint-tool-group sprite-view-actions";
+    viewActions.append(spriteGridButton);
+    paintToolRow.append(viewActions);
+  }
+
+  const clipActions = document.createElement("span");
+  clipActions.className = "sprite-paint-tool-group sprite-clip-actions";
+  clipActions.append(
+    renderSpriteClipButton({
+      title: spriteClipActive ? "Exit clip mode" : "Clip",
+      ariaLabel: "Clip sprite area",
+      active: spriteClipActive,
+      onClick: toggleSpriteClipMode,
+      icon: spriteLucideIconSvg("mouse-pointer-2"),
+    }),
+    renderSpriteClipButton({
+      title: "Copy clip",
+      ariaLabel: "Copy selected sprite area",
+      disabled: !spriteClipSelection,
+      onClick: copySpriteClipSelection,
+      icon: spriteLucideIconSvg("copy"),
+    }),
+    renderSpriteClipButton({
+      title: "Cut clip",
+      ariaLabel: "Cut selected sprite area",
+      disabled: !spriteClipSelection,
+      onClick: cutSpriteClipSelection,
+      icon: spriteLucideIconSvg("scissors"),
+    }),
+    renderSpriteClipButton({
+      title: "Paste clip",
+      ariaLabel: "Paste copied sprite area",
+      disabled: !spriteClipClipboard,
+      onClick: pasteSpriteClipClipboard,
+      icon: spriteLucideIconSvg("clipboard-paste"),
+    }),
+    renderSpriteClipButton({
+      title: spriteClipFloating ? "Discard clip preview" : "Clear clip",
+      ariaLabel: spriteClipFloating ? "Discard clipped sprite preview" : "Clear selected sprite area",
+      disabled: !spriteClipSelection && !spriteClipFloating,
+      danger: true,
+      onClick: clearSpriteClipSelection,
+      icon: spriteLucideIconSvg("trash-2"),
+    }),
+  );
+  paintToolRow.append(clipActions);
+
+  const transformActions = document.createElement("span");
+  transformActions.className = "sprite-paint-tool-group sprite-paint-transform-actions";
+  for (const button of [
+    spriteRotateLeftButton,
+    spriteRotateRightButton,
+    spriteFlipHorizontalButton,
+    spriteFlipVerticalButton,
+    spriteClearButton,
+  ]) {
+    if (button) {
+      transformActions.append(button);
+    }
+  }
+  paintToolRow.append(transformActions);
+  spritePalette.append(paintToolRow);
 }
 
 function spritePaletteEntryBindInfo(entry) {

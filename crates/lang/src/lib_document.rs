@@ -8,7 +8,9 @@ pub fn export_loaded_document_visual_fixture_json(
     };
     let (document_fields, level_bundle_names) =
         puzzle3_document_fixture_fields(document).map_err(|error| {
-            DiagnosticReport::error(format!("failed to serialize puzzle3 document fields: {error}"))
+            DiagnosticReport::error(format!(
+                "failed to serialize puzzle3 document fields: {error}"
+            ))
         })?;
     export_visual_fixture_json_with_title_scenes_and_animation(
         puzzle,
@@ -155,9 +157,9 @@ fn parse_mixed_game_document(source: &str) -> Result<LoadedDocument, DiagnosticR
     let game_2d = parse_game2d_expanded_with_shell(&game_2d_source, &parts.shell)?;
     let model_3d_name =
         first_model_name(&sources.puzzle3d, "puzzle3").unwrap_or_else(|| "default".to_string());
-    let puzzle_3d_source = strip_document_shell_source_raw(&sources.puzzle3d);
-    let puzzle_3d = parse_puzzle3d(&puzzle_3d_source)
-        .map_err(|error| puzzle3_parse_error_report(error, &[]))?;
+    let puzzle3_source = strip_document_shell_source_raw(&sources.puzzle3d);
+    let puzzle3 =
+        parse_puzzle3d(&puzzle3_source).map_err(|error| puzzle3_parse_error_report(error, &[]))?;
     let mut scenes = parts.scenes;
     resolve_inferred_scene_puzzle_slots(
         &mut scenes,
@@ -190,7 +192,7 @@ fn parse_mixed_game_document(source: &str) -> Result<LoadedDocument, DiagnosticR
             },
             LoadedDocumentModel::Puzzle3d {
                 name: model_3d_name,
-                puzzle: puzzle_3d,
+                puzzle: puzzle3,
             },
         ],
     })
@@ -549,9 +551,8 @@ fn push_puzzle3_scene_json(
     out.push_str("],\n      \"keys\": {");
     let mut wrote_key = false;
     for binding in &scene.key_bindings {
-        let Some(action) = puzzle3_scene_action_json(&binding.effect, level_bundle_names) else {
-            continue;
-        };
+        let mut action = String::new();
+        puzzle_scene::write_scene_effect_json(&mut action, &binding.effect);
         for key in &binding.keys {
             if wrote_key {
                 out.push_str(", ");
@@ -564,8 +565,26 @@ fn push_puzzle3_scene_json(
     }
     out.push_str("},\n      \"components\": [");
     let mut wrote_component = false;
+    let default_level_menu_action = SceneEffect::Goto {
+        scene: "playing".to_string(),
+        params: vec![SceneEffectParam::Level(SceneExpr::Path(vec![
+            "level".to_string(),
+        ]))],
+    };
+    let options = puzzle_scene::SceneFixtureJsonOptions {
+        frame_kind: Some("puzzle3"),
+        default_level_menu_action: Some(&default_level_menu_action),
+    };
     for component in &scene.components {
-        if let Some(component_json) = puzzle3_scene_component_json(component, level_bundle_names) {
+        let mut component_json = String::new();
+        let mut note_level_source = |levels: &str| push_unique_string(level_bundle_names, levels);
+        if puzzle_scene::write_scene_component_fixture_json(
+            &mut component_json,
+            component,
+            options,
+            push_scene_text_content_fixture_fields,
+            &mut note_level_source,
+        ) {
             if wrote_component {
                 out.push_str(", ");
             }
@@ -576,268 +595,21 @@ fn push_puzzle3_scene_json(
     out.push_str("]\n    }");
 }
 
-fn puzzle3_scene_component_json(
-    component: &SceneComponent,
-    level_bundle_names: &mut Vec<String>,
-) -> Option<String> {
-    match component {
-        SceneComponent::Frame(frame) if frame.kind == "puzzle3" => {
-            let mut out = format!(
-                "{{ \"kind\": \"puzzle3\", \"source\": {}",
-                json_string(&frame.source)
-            );
-            push_puzzle3_inline_layout_json(&mut out, &frame.layout);
-            out.push_str(" }");
-            Some(out)
+fn push_scene_text_content_fixture_fields(out: &mut String, content: &SceneTextContent) {
+    match content {
+        SceneTextContent::Literal(value) => {
+            out.push_str("\"source\": \"literal\", \"value\": ");
+            puzzle_scene::write_json_string(out, value);
         }
-        SceneComponent::Title(title) => {
-            let mut out = format!(
-                "{{ \"kind\": \"title\", \"text\": {}",
-                json_string(&scene_expr_fixture_text(&title.content))
-            );
-            push_puzzle3_inline_layout_json(&mut out, &title.layout);
-            out.push_str(" }");
-            Some(out)
+        SceneTextContent::Path(path) => {
+            out.push_str("\"source\": \"path\", \"path\": ");
+            puzzle_scene::write_json_string(out, &path.join("."));
         }
-        SceneComponent::Button(button) | SceneComponent::Choice(button) => {
-            let action = puzzle3_scene_action_json(&button.effect, level_bundle_names)?;
-            let kind = match component {
-                SceneComponent::Choice(_) => "choice",
-                _ => "button",
-            };
-            let mut out = format!(
-                "{{ \"kind\": {}, \"label\": {}, \"action\": {}",
-                json_string(kind),
-                puzzle3_scene_expr_json(&button.label),
-                action
-            );
-            push_puzzle3_inline_layout_json(&mut out, &button.layout);
-            out.push_str(" }");
-            Some(out)
-        }
-        SceneComponent::LevelMenu(menu) => {
-            let levels = menu.source.as_deref().unwrap_or("levels");
-            push_unique_string(level_bundle_names, levels);
-            let action = menu
-                .action
-                .as_ref()
-                .and_then(|effect| puzzle3_scene_action_json(effect, level_bundle_names))
-                .unwrap_or_else(|| {
-                    "{ \"kind\": \"goto\", \"scene\": \"playing\", \"params\": [{ \"kind\": \"level\", \"value\": { \"kind\": \"path\", \"path\": \"level\" } }] }".to_string()
-                });
-            let mut out = format!(
-                "{{ \"kind\": \"level_menu\", \"levels\": {}, \"action\": {}",
-                json_string(levels),
-                action
-            );
-            push_puzzle3_inline_layout_json(&mut out, &menu.layout);
-            out.push_str(" }");
-            Some(out)
-        }
-        SceneComponent::Row(container) => puzzle3_container_json(
-            "row",
-            &container.children,
-            &container.layout,
-            level_bundle_names,
-        ),
-        SceneComponent::Column(container) => puzzle3_container_json(
-            "column",
-            &container.children,
-            &container.layout,
-            level_bundle_names,
-        ),
-        SceneComponent::Box(container) => puzzle3_container_json(
-            "box",
-            &container.children,
-            &container.layout,
-            level_bundle_names,
-        ),
-        SceneComponent::Conditional(conditional) => {
-            let mut out = format!(
-                "{{ \"kind\": \"conditional\", \"condition\": {}, \"children\": [",
-                puzzle3_scene_expr_json(&conditional.condition)
-            );
-            let mut wrote = false;
-            for child in &conditional.children {
-                if let Some(child_json) = puzzle3_scene_component_json(child, level_bundle_names) {
-                    if wrote {
-                        out.push_str(", ");
-                    }
-                    wrote = true;
-                    out.push_str(&child_json);
-                }
-            }
-            out.push_str("], \"elseChildren\": [");
-            wrote = false;
-            for child in &conditional.else_children {
-                if let Some(child_json) = puzzle3_scene_component_json(child, level_bundle_names) {
-                    if wrote {
-                        out.push_str(", ");
-                    }
-                    wrote = true;
-                    out.push_str(&child_json);
-                }
-            }
-            out.push_str("] }");
-            Some(out)
-        }
-        SceneComponent::For(for_view) => {
-            let mut out = format!(
-                "{{ \"kind\": \"for\", \"binding\": {}, \"source\": {}, \"children\": [",
-                json_string(&for_view.binding),
-                json_string(for_view.source.as_str())
-            );
-            let mut wrote = false;
-            for child in &for_view.children {
-                if let Some(child_json) = puzzle3_scene_component_json(child, level_bundle_names) {
-                    if wrote {
-                        out.push_str(", ");
-                    }
-                    wrote = true;
-                    out.push_str(&child_json);
-                }
-            }
-            out.push_str("] }");
-            Some(out)
-        }
-        _ => None,
-    }
-}
-
-fn puzzle3_container_json(
-    kind: &str,
-    children: &[SceneComponent],
-    layout: &SceneLayoutDef,
-    level_bundle_names: &mut Vec<String>,
-) -> Option<String> {
-    let mut out = format!("{{ \"kind\": {}, \"children\": [", json_string(kind));
-    let mut wrote = false;
-    for child in children {
-        if let Some(child_json) = puzzle3_scene_component_json(child, level_bundle_names) {
-            if wrote {
-                out.push_str(", ");
-            }
-            wrote = true;
-            out.push_str(&child_json);
+        SceneTextContent::Expr(expr) => {
+            out.push_str("\"source\": \"expr\", \"content\": ");
+            puzzle_scene::write_scene_expr_json(out, expr);
         }
     }
-    out.push(']');
-    push_puzzle3_inline_layout_json(&mut out, layout);
-    out.push_str(" }");
-    Some(out)
-}
-
-fn puzzle3_scene_action_json(
-    effect: &SceneEffect,
-    _level_bundle_names: &mut Vec<String>,
-) -> Option<String> {
-    match effect {
-        SceneEffect::Goto { scene, params } => {
-            let mut out = format!("{{ \"kind\": \"goto\", \"scene\": {}", json_string(scene));
-            if !params.is_empty() {
-                out.push_str(", \"params\": [");
-                for (index, param) in params.iter().enumerate() {
-                    if index > 0 {
-                        out.push_str(", ");
-                    }
-                    match param {
-                        SceneEffectParam::Level(value) => {
-                            out.push_str("{ \"kind\": \"level\", \"value\": ");
-                            out.push_str(&puzzle3_scene_expr_json(value));
-                            out.push_str(" }");
-                        }
-                        SceneEffectParam::Named { name, value } => {
-                            out.push_str("{ \"kind\": \"named\", \"name\": ");
-                            out.push_str(&json_string(name));
-                            out.push_str(", \"value\": ");
-                            out.push_str(&puzzle3_scene_expr_json(value));
-                            out.push_str(" }");
-                        }
-                    }
-                }
-                out.push(']');
-            }
-            out.push_str(" }");
-            Some(out)
-        }
-        _ => None,
-    }
-}
-
-fn puzzle3_scene_expr_json(expr: &SceneExpr) -> String {
-    match expr {
-        SceneExpr::Bool(value) => format!("{{ \"kind\": \"bool\", \"value\": {value} }}"),
-        SceneExpr::Int(value) => format!("{{ \"kind\": \"int\", \"value\": {value} }}"),
-        SceneExpr::Text(value) => format!(
-            "{{ \"kind\": \"text\", \"value\": {} }}",
-            json_string(value)
-        ),
-        SceneExpr::Path(path) => {
-            format!(
-                "{{ \"kind\": \"path\", \"path\": {} }}",
-                json_string(&path.join("."))
-            )
-        }
-        SceneExpr::Call { name, args } => {
-            let mut out = format!(
-                "{{ \"kind\": \"call\", \"name\": {}, \"args\": [",
-                json_string(name)
-            );
-            for (index, arg) in args.iter().enumerate() {
-                if index > 0 {
-                    out.push_str(", ");
-                }
-                out.push_str(&puzzle3_scene_expr_json(arg));
-            }
-            out.push_str("] }");
-            out
-        }
-        SceneExpr::Binary { op, left, right } => {
-            let op = match op {
-                SceneBinaryOp::And => "and",
-                SceneBinaryOp::Eq => "eq",
-                SceneBinaryOp::NotEq => "neq",
-            };
-            format!(
-                "{{ \"kind\": \"binary\", \"op\": {}, \"left\": {}, \"right\": {} }}",
-                json_string(op),
-                puzzle3_scene_expr_json(left),
-                puzzle3_scene_expr_json(right)
-            )
-        }
-        SceneExpr::If {
-            condition,
-            then_branch,
-            else_branch,
-        } => {
-            format!(
-                "{{ \"kind\": \"if\", \"condition\": {}, \"then\": {}, \"else\": {} }}",
-                puzzle3_scene_expr_json(condition),
-                puzzle3_scene_expr_json(then_branch),
-                puzzle3_scene_expr_json(else_branch)
-            )
-        }
-    }
-}
-
-fn scene_expr_fixture_text(expr: &SceneExpr) -> String {
-    match expr {
-        SceneExpr::Text(value) => value.clone(),
-        SceneExpr::Path(path) => path.join("."),
-        SceneExpr::Int(value) => value.to_string(),
-        SceneExpr::Bool(value) => value.to_string(),
-        SceneExpr::Call { name, .. } => name.clone(),
-        SceneExpr::Binary { .. } => "<binary>".to_string(),
-        SceneExpr::If { .. } => "<if>".to_string(),
-    }
-}
-
-fn push_puzzle3_inline_layout_json(out: &mut String, layout: &SceneLayoutDef) {
-    if puzzle_scene::scene_layout_is_default(layout) {
-        return;
-    }
-    out.push_str(", \"layout\": ");
-    puzzle_scene::write_scene_layout_json(out, layout);
 }
 
 fn json_string(value: &str) -> String {
@@ -1483,7 +1255,11 @@ fn strip_document_shell_source_raw(source: &str) -> String {
                     index += 1;
                     continue;
                 }
-                ["input_buffer", ..] | ["animation"] | ["animation", ..] | ["sounds"] | ["assets"] => {
+                ["input_buffer", ..]
+                | ["animation"]
+                | ["animation", ..]
+                | ["sounds"]
+                | ["assets"] => {
                     index = skip_raw_top_level_block(&raw_lines, index);
                     continue;
                 }
@@ -2425,12 +2201,7 @@ fn parse_game2d_expanded_lines_with_shell_inner(
                 .puzzle
                 .clone()
                 .expect("level puzzle was resolved before preparation");
-            let body = parse_level_body(
-                &level,
-                &catalog,
-                empty_char,
-                &named_conditions,
-            )?;
+            let body = parse_level_body(&level, &catalog, empty_char, &named_conditions)?;
             let mut char_objects = catalog.char_objects.clone();
             char_objects.extend(body.local_char_objects.clone());
             Ok(PreparedLevelBody {
@@ -2486,7 +2257,7 @@ fn parse_game2d_expanded_lines_with_shell_inner(
                 description,
                 &condition,
                 &catalog.object_layers,
-                &catalog.global_names,
+                &catalog.variable_names,
                 &catalog.condition_names,
                 &visual_condition_reads,
                 &catalog.mark_names,
@@ -2524,7 +2295,7 @@ fn parse_game2d_expanded_lines_with_shell_inner(
         &catalog.maps,
         &catalog.object_groups,
         &catalog.input_names,
-        &catalog.global_names,
+        &catalog.variable_names,
         &catalog.condition_names,
     )?;
     let visual_objects = catalog.visual_objects.clone();
@@ -2538,7 +2309,7 @@ fn parse_game2d_expanded_lines_with_shell_inner(
         last_level_clear_statements.as_deref(),
         display_statements.as_deref(),
         &prepared_level_bodies,
-        &catalog.constant_globals,
+        &catalog.constant_variables,
     );
     warnings.extend(collect_visual_overwrite_warnings(&visuals));
     warnings.extend(collect_visual_sprite_grid_warnings(&visuals));
@@ -2557,8 +2328,8 @@ fn parse_game2d_expanded_lines_with_shell_inner(
         &catalog.object_layers,
         &visual_objects,
         &catalog.input_names,
-        &catalog.global_names,
-        &catalog.constant_globals,
+        &catalog.variable_names,
+        &catalog.constant_variables,
         &catalog.condition_names,
         &visual_condition_reads,
         &catalog.mark_names,
@@ -2567,14 +2338,15 @@ fn parse_game2d_expanded_lines_with_shell_inner(
         &value_sets,
         &effective_directions,
     )?;
-    let game = CompiledGame::new_with_mark_condition_defs_program_roles(
+    let mut display_rules = programs.visual_rules.clone();
+    display_rules.sort();
+    display_rules.dedup();
+    let game = CompiledGame::new_with_mark_condition_defs_and_program(
         layer_count,
         catalog.object_defs,
         catalog.mark_defs,
         condition_defs,
         programs.main,
-        visual_objects.clone(),
-        programs.visual_rules.clone(),
     );
     let mut legend = AsciiLegend::new(game.object_count(), empty_char);
     for (object, ch) in &catalog.render_chars {
@@ -2595,7 +2367,7 @@ fn parse_game2d_expanded_lines_with_shell_inner(
                 &prepared.lines,
                 empty_char,
                 &prepared.char_objects,
-                &catalog.global_defaults,
+                &catalog.variable_defaults,
             )?;
             Ok(Level {
                 name: prepared.name,
@@ -2630,6 +2402,8 @@ fn parse_game2d_expanded_lines_with_shell_inner(
         last_level_clear_program: programs.last_level_clear,
         display_level_clear_program: None,
         display_program: programs.display,
+        display_objects: visual_objects,
+        display_rules,
         levels,
         run_rules_on_level_start,
         legend,
@@ -2639,7 +2413,7 @@ fn parse_game2d_expanded_lines_with_shell_inner(
         object_labels: catalog.object_labels,
         object_groups: catalog.object_groups,
         input_labels: catalog.input_labels,
-        global_labels: catalog.global_labels,
+        variable_labels: catalog.variable_labels,
         persistent_vars: catalog.persistent_vars,
         condition_labels: catalog.condition_labels,
         conditions,
@@ -2711,13 +2485,13 @@ fn collect_dynamic_selector_warnings(
     last_level_clear_statements: Option<&[StatementAst]>,
     display_statements: Option<&[StatementAst]>,
     level_bodies: &[PreparedLevelBody],
-    constant_globals: &[GlobalId],
+    constant_variables: &[VariableId],
 ) -> Vec<String> {
     let mut warnings = Vec::new();
     for definition in definitions {
         collect_dynamic_selector_statement_warnings(
             &definition.statements,
-            constant_globals,
+            constant_variables,
             &mut warnings,
         );
     }
@@ -2731,17 +2505,17 @@ fn collect_dynamic_selector_warnings(
     .into_iter()
     .flatten()
     {
-        collect_dynamic_selector_statement_warnings(statements, constant_globals, &mut warnings);
+        collect_dynamic_selector_statement_warnings(statements, constant_variables, &mut warnings);
     }
     for body in level_bodies {
         collect_dynamic_selector_statement_warnings(
             &body.level_start_statements,
-            constant_globals,
+            constant_variables,
             &mut warnings,
         );
         collect_dynamic_selector_statement_warnings(
             &body.level_clear_statements,
-            constant_globals,
+            constant_variables,
             &mut warnings,
         );
     }
@@ -2750,7 +2524,7 @@ fn collect_dynamic_selector_warnings(
 
 fn collect_dynamic_selector_statement_warnings(
     statements: &[StatementAst],
-    constant_globals: &[GlobalId],
+    constant_variables: &[VariableId],
     warnings: &mut Vec<String>,
 ) {
     for statement in statements {
@@ -2758,14 +2532,14 @@ fn collect_dynamic_selector_statement_warnings(
             StatementAst::LocalRoutine { definition, .. } => {
                 collect_dynamic_selector_statement_warnings(
                     &definition.statements,
-                    constant_globals,
+                    constant_variables,
                     warnings,
                 );
             }
             StatementAst::Rewrite(rewrite) => {
                 collect_dynamic_selector_block_warnings(
                     &rewrite.before,
-                    constant_globals,
+                    constant_variables,
                     warnings,
                 );
             }
@@ -2777,24 +2551,28 @@ fn collect_dynamic_selector_statement_warnings(
             } => {
                 collect_dynamic_selector_block_warnings(
                     &condition.pattern,
-                    constant_globals,
+                    constant_variables,
                     warnings,
                 );
                 collect_dynamic_selector_statement_warnings(
                     then_statements,
-                    constant_globals,
+                    constant_variables,
                     warnings,
                 );
                 collect_dynamic_selector_statement_warnings(
                     else_statements,
-                    constant_globals,
+                    constant_variables,
                     warnings,
                 );
             }
             StatementAst::Block { statements, .. }
             | StatementAst::Fix { statements, .. }
             | StatementAst::RepeatUntil { statements, .. } => {
-                collect_dynamic_selector_statement_warnings(statements, constant_globals, warnings);
+                collect_dynamic_selector_statement_warnings(
+                    statements,
+                    constant_variables,
+                    warnings,
+                );
             }
             StatementAst::If {
                 then_statements,
@@ -2803,12 +2581,12 @@ fn collect_dynamic_selector_statement_warnings(
             } => {
                 collect_dynamic_selector_statement_warnings(
                     then_statements,
-                    constant_globals,
+                    constant_variables,
                     warnings,
                 );
                 collect_dynamic_selector_statement_warnings(
                     else_statements,
-                    constant_globals,
+                    constant_variables,
                     warnings,
                 );
             }
@@ -2821,7 +2599,7 @@ fn collect_dynamic_selector_statement_warnings(
 
 fn collect_dynamic_selector_block_warnings(
     block: &PatternBlock,
-    constant_globals: &[GlobalId],
+    constant_variables: &[VariableId],
     warnings: &mut Vec<String>,
 ) {
     for component in &block.components {
@@ -2832,7 +2610,7 @@ fn collect_dynamic_selector_block_warnings(
                 };
                 for selector in cell.require.iter().chain(&cell.forbid) {
                     for guard in selector.dynamic_guards.values().flatten() {
-                        if constant_globals.contains(&guard.global) {
+                        if constant_variables.contains(&guard.variable) {
                             continue;
                         }
                         push_unique_warning(
@@ -2926,9 +2704,7 @@ fn collect_mark_warnings(
 
 fn write_mark_target(write: &WriteOp) -> Option<(ObjectId, MarkId)> {
     match write {
-        WriteOp::SetMark {
-            object, mark, ..
-        } => Some((*object, *mark)),
+        WriteOp::SetMark { object, mark, .. } => Some((*object, *mark)),
         _ => None,
     }
 }

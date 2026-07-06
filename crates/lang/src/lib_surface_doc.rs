@@ -454,7 +454,7 @@ fn record_option_surface_line(
     match block {
         Some(SurfaceOptionBlock::Puzzle3) if first.text == "render" => {
             add_scene_effect_token_range(sink, first, SurfaceSemanticKind::Keyword);
-            mark_option_surface_tokens(&tokens[1..], puzzle_3d::RENDER_OPTIONS3, sink);
+            mark_option_surface_tokens(&tokens[1..], crate::RENDER_OPTIONS3, sink);
             true
         }
         Some(SurfaceOptionBlock::Puzzle2) if first.text == "render" => {
@@ -479,18 +479,18 @@ fn record_option_surface_line(
             true
         }
         Some(SurfaceOptionBlock::Render3)
-            if puzzle_3d::RENDER_OPTIONS3.contains(&first.text.as_str()) =>
+            if crate::RENDER_OPTIONS3.contains(&first.text.as_str()) =>
         {
             add_scene_effect_token_range(sink, first, SurfaceSemanticKind::Setting);
             match first.text.as_str() {
                 "camera" => {
-                    mark_option_surface_tokens(&tokens[1..], puzzle_3d::CAMERA_OPTIONS3, sink);
+                    mark_option_surface_tokens(&tokens[1..], crate::CAMERA_OPTIONS3, sink);
                 }
                 "grid" => {
-                    mark_option_surface_tokens(&tokens[1..], puzzle_3d::GRID_BARE_OPTIONS3, sink);
+                    mark_option_surface_tokens(&tokens[1..], crate::GRID_BARE_OPTIONS3, sink);
                 }
                 "pixelate" => {
-                    mark_option_surface_tokens(&tokens[1..], puzzle_3d::PIXELATE_OPTIONS3, sink);
+                    mark_option_surface_tokens(&tokens[1..], crate::PIXELATE_OPTIONS3, sink);
                 }
                 _ => {}
             }
@@ -506,13 +506,13 @@ fn record_option_surface_line(
             true
         }
         Some(SurfaceOptionBlock::Camera3) => {
-            mark_option_surface_tokens(tokens, puzzle_3d::CAMERA_OPTIONS3, sink)
+            mark_option_surface_tokens(tokens, crate::CAMERA_OPTIONS3, sink)
         }
         Some(SurfaceOptionBlock::Grid3) => {
-            mark_option_surface_tokens(tokens, puzzle_3d::GRID_BARE_OPTIONS3, sink)
+            mark_option_surface_tokens(tokens, crate::GRID_BARE_OPTIONS3, sink)
         }
         Some(SurfaceOptionBlock::Pixelate3) => {
-            mark_option_surface_tokens(tokens, puzzle_3d::PIXELATE_OPTIONS3, sink)
+            mark_option_surface_tokens(tokens, crate::PIXELATE_OPTIONS3, sink)
         }
         Some(SurfaceOptionBlock::Grid2) => {
             mark_option_surface_tokens(tokens, PUZZLE_RENDER_GRID_OPTIONS, sink)

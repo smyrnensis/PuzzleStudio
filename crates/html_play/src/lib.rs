@@ -26,33 +26,34 @@ use std::time::Instant;
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::SystemTime;
 
-use puzzle_3d::{
-    Coord3, Game3, InputId3, LifecycleCommand3, ObjectId as ObjectId3, ParsedPuzzle3, RuleId3,
-    Size3, State3, transition_program_with_local_frame as transition_program_with_local_frame3,
-    transition_program_without_input_with_local_frame,
-};
-#[cfg(feature = "solver")]
-use puzzle_3d::{Rule3, WinCondition3, transition_program as transition_program3};
 #[cfg(feature = "solver")]
 use puzzle_core::transition_state;
 use puzzle_core::{
-    ComparisonOp, CompiledGame, ConditionValueKind, Effect, GlobalUpdateOp, Guard, InputId,
-    LayerId, MarkPattern, MarkValueMatch, ObjectId, Offset, Patch, PatchOp, Pattern, Rule,
-    RuleApplication, RuleCondition, RuleId, RuleStep, State, TransitionCommand, TransitionError,
+    ComparisonOp, CompiledGame, ConditionValueKind, Effect, Guard, InputId, LayerId, MarkPattern,
+    MarkValueMatch, ObjectId, Offset, Patch, PatchOp, Pattern, Rule, RuleApplication,
+    RuleCondition, RuleId, RuleStep, State, TransitionCommand, TransitionError, VariableUpdateOp,
     WriteOp, transition_program, transition_program_outcome, transition_program_trace,
 };
 #[cfg(feature = "solver")]
-use puzzle_core::{ConditionId, GlobalId, MarkId, MatchCell, PatternComponent};
+use puzzle_core::{ConditionId, MarkId, MatchCell, PatternComponent, VariableId};
+use puzzle_grid3d::{
+    Coord3, Game3, ObjectId as ObjectId3, RuleId3, Size3, State3,
+    transition_program_with_local_frame as transition_program_with_local_frame3,
+    transition_program_without_input_with_local_frame,
+};
+#[cfg(feature = "solver")]
+use puzzle_grid3d::{Rule3, WinCondition3, transition_program as transition_program3};
 #[cfg(not(target_arch = "wasm32"))]
 use puzzle_lang::AssetsDef;
 #[cfg(feature = "solver")]
 use puzzle_lang::GoalClause;
+use puzzle_lang::ParsedPuzzle3;
 use puzzle_lang::{
     AnimationDef, ArrowKey, GoalCondition, GoalExpr, GoalValue, KeyTrigger, Level,
     LoadedDocumentModel, LoadedGame, ResourceSelection, RuleAnimation, RuleAnimationTrigger,
-    RuleEffect, SceneBinaryOp, SceneComponent, SceneEffect, SceneExpr, SceneLayoutDef,
-    ScenePuzzleInitializer, SceneTextContent, SceneTransitionTrigger, SceneValue, SoundsDef,
-    ThemeDef, VisualSpriteDef, VisualSpriteKind, parse_game2d as parse_game,
+    RuleEffect, SceneComponent, SceneEffect, SceneExpr, SceneLayoutDef, ScenePuzzleInitializer,
+    SceneTextContent, SceneTransitionTrigger, SceneValue, SoundsDef, ThemeDef, VisualSpriteDef,
+    VisualSpriteKind, parse_game2d as parse_game,
 };
 use puzzle_lang::{AssetKind, DiagnosticReport};
 #[cfg(not(target_arch = "wasm32"))]
@@ -60,8 +61,9 @@ use puzzle_lang::{discover_game_entries, expand_game_imports_for_file, resolve_g
 use puzzle_play::{
     AnimationEvent, GameSession, LevelProgressSaveData, MessageEvent, PersistentVarSaveData,
     ProgressSaveData, SoundEvent, WaitEvent, animation_events_for_trace,
-    mixed_document_loaded_game, puzzle3_document_scene_host_loaded_game, runtime_sounds_def,
+    loaded_document_scene_host_loaded_game, runtime_sounds_def,
 };
+use puzzle_runtime_contract::LifecycleCommand;
 #[cfg(feature = "solver")]
 use puzzle_solver::{
     Puzzle3Domain, PuzzleDomain, PuzzleSearchState, SearchBudget, SearchOutcome, SearchProgress,
@@ -303,7 +305,7 @@ levels default of board {
         );
         assert!(outcome_json.get("state").is_none());
         assert!(outcome_json["previousStateHandle"].is_u64());
-        assert_eq!(outcome_json["globals"], json!([]));
+        assert_eq!(outcome_json["variables"], json!([]));
         assert!(outcome_json["levelFiredRules"].is_array());
         runtime
             .restore_saved_state(saved)
@@ -815,6 +817,14 @@ P
         assert!(!APP_JS.contains("--ps-confirm-before"));
         assert!(!APP_JS.contains("--ps-confirm-after"));
         assert!(THEME_PRESETS_CSS.contains("--ps-terminal-control-width: 36ch;"));
+        assert!(THEME_PRESETS_CSS.contains("--ps-title-font-size: 40px;"));
+        assert!(THEME_PRESETS_CSS.contains("--ps-body-font-size: 24px;"));
+        assert!(THEME_PRESETS_CSS.contains("--ps-control-font-size: 26px;"));
+        assert!(THEME_PRESETS_CSS.contains("--ps-line-height: 1.25;"));
+        assert!(THEME_PRESETS_CSS.contains("font-size: var(--ps-title-font-size);"));
+        assert!(THEME_PRESETS_CSS.contains("font-size: var(--ps-body-font-size);"));
+        assert!(THEME_PRESETS_CSS.contains("font-size: var(--ps-control-font-size);"));
+        assert!(THEME_PRESETS_CSS.contains(".theme-puzzlescript .screen-view .view-text {"));
         assert!(
             !THEME_PRESETS_CSS
                 .contains("--ps-confirm-fill: \"####################################\";")
@@ -850,6 +860,12 @@ P
         assert!(THEME_PRESETS_CSS.contains("width: min(100%, var(--ps-terminal-control-width));"));
         assert!(THEME_PRESETS_CSS.contains(".theme-puzzlescript .view-list > li {"));
         assert!(THEME_PRESETS_CSS.contains("justify-items: center;"));
+        assert!(THEME_PRESETS_CSS.contains("scrollbar-width: none;"));
+        assert!(
+            THEME_PRESETS_CSS.contains(
+                ".theme-puzzlescript .level-menu::-webkit-scrollbar {\n  display: none;\n}"
+            )
+        );
     }
 
     #[test]
@@ -992,7 +1008,7 @@ scene playing {
     }
 
     #[test]
-    fn html_play_does_not_fallback_scene_definitions_to_global_export() {
+    fn html_play_does_not_fallback_scene_definitions_to_variable_export() {
         assert!(APP_JS.contains(
             "return nonEmptyArray(source?.scenes) || nonEmptyArray(source?.screens) || [];"
         ));
@@ -1021,6 +1037,20 @@ scene playing {
         assert!(!PUZZLE3_APP_JS.contains("normalizeSnapshot(source || fallbackSnapshot)"));
         assert!(!PUZZLE3_APP_JS.contains("snapshot || fallbackSnapshot"));
         assert!(!PUZZLE3_APP_JS.contains("source || fallbackSnapshot"));
+    }
+
+    #[test]
+    fn puzzle3_app_requires_current_runtime_contract_version() {
+        let expected = format!(
+            "const PUZZLE3_RUNTIME_CONTRACT_VERSION = {};",
+            puzzle_runtime_contract::RUNTIME_CONTRACT_VERSION
+        );
+        assert!(PUZZLE3_APP_JS.contains(&expected));
+        assert!(
+            PUZZLE3_APP_JS
+                .contains("Number(contract.version) !== PUZZLE3_RUNTIME_CONTRACT_VERSION")
+        );
+        assert!(!PUZZLE3_APP_JS.contains("Number(contract.version) !== 2"));
     }
 
     #[test]
@@ -1442,7 +1472,7 @@ scene mixed_play {
 }
 "#;
         let document = puzzle_lang::parse_game(source).unwrap();
-        let loaded = mixed_document_loaded_game(&document).unwrap();
+        let loaded = loaded_document_scene_host_loaded_game(&document).unwrap();
         let mixed_scene = loaded
             .scenes
             .iter()
@@ -1604,7 +1634,7 @@ text level.title
             )
         ));
 
-        let loaded = mixed_document_loaded_game(&document).unwrap();
+        let loaded = loaded_document_scene_host_loaded_game(&document).unwrap();
         assert_eq!(
             loaded
                 .levels
@@ -1678,6 +1708,19 @@ text level.title
         assert!(!PUZZLE3_APP_JS.contains("scene-component-"));
         assert!(!PUZZLE3_APP_JS.contains("component.kind === \"button\""));
         assert!(!PUZZLE3_APP_JS.contains("component.kind === \"choice\""));
+    }
+
+    #[test]
+    fn puzzle3_lifecycle_effect_semantics_are_host_owned() {
+        assert!(PUZZLE3_APP_JS.contains("function emitPuzzle3LifecycleEffects("));
+        assert!(PUZZLE3_APP_JS.contains("controllerOptions.onLifecycleEffects"));
+        assert!(APP_JS.contains("function sendPuzzle3LifecycleEffects("));
+        assert!(APP_JS.contains("await sendEffect(effect?.effect || effect, scope);"));
+        assert!(APP_JS.contains("function puzzleEffectCommand("));
+        assert!(!PUZZLE3_APP_JS.contains("function applyRuntimeLifecycleEffect("));
+        assert!(!PUZZLE3_APP_JS.contains("Unsupported Puzzle3 lifecycle effect"));
+        assert!(!PUZZLE3_APP_JS.contains("effect.kind === \"message\""));
+        assert!(!PUZZLE3_APP_JS.contains("message-popup"));
     }
 
     #[test]
@@ -2908,7 +2951,7 @@ rules {
 
         assert!(data.contains(r#""saveKey":"Progress Export:"#));
         assert!(data.contains(r#""progressSaveVersion":1"#));
-        assert!(data.contains(r#""globals":[{"id":0,"name":"bonus"}]"#));
+        assert!(data.contains(r#""variables":[{"id":0,"name":"bonus"}]"#));
         assert!(data.contains(r#""persistentVars":[0]"#));
         assert!(STANDALONE_JS.contains("WasmStandaloneSession"));
         assert!(STANDALONE_JS.contains("this.sessionRuntime.request_json(method, url)"));
@@ -3419,6 +3462,9 @@ rules {
         assert!(html.contains("WasmPuzzle3Runtime"));
         assert!(html.contains("fromFixture"));
         assert!(html.contains("WasmStandaloneSession"));
+        assert!(html.contains("onLifecycleEffects(effects)"));
+        assert!(html.contains("function sendPuzzle3LifecycleEffects("));
+        assert!(!html.contains("Unsupported Puzzle3 lifecycle effect"));
         assert!(!html.contains("puzzle_wasm_game_bg.wasm"));
         assert!(!html.contains("\\npuzzle3 microban3d"));
 
@@ -3433,6 +3479,9 @@ rules {
         assert!(preview_html.contains("window.Puzzle3DFixture"));
         assert!(preview_html.contains("WasmPuzzle3Runtime"));
         assert!(preview_html.contains("WasmStandaloneSession"));
+        assert!(preview_html.contains("onLifecycleEffects(effects)"));
+        assert!(preview_html.contains("function sendPuzzle3LifecycleEffects("));
+        assert!(!preview_html.contains("Unsupported Puzzle3 lifecycle effect"));
         assert!(!preview_html.contains("Puzzle3DTestRuntime"));
         assert!(html.contains("Microban 3D"));
         assert!(html.contains("--accent: #123456"));

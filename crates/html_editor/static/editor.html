@@ -544,21 +544,7 @@
                 </div>
                 <div id="spriteShapeField" class="sprite-source-field sprite-shape-field"></div>
                 <div class="source-action-group source-preview-actions sprite-source-actions sprite-header-actions" role="group" aria-label="Sprite source actions">
-                  <button id="duplicateSpriteButton" class="source-action-button" type="button" aria-label="Duplicate sprite" title="Duplicate sprite" disabled>
-                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="lucide lucide-copy-plus-icon lucide-copy-plus">
-                      <line x1="15" x2="15" y1="12" y2="18"></line>
-                      <line x1="12" x2="18" y1="15" y2="15"></line>
-                      <rect width="14" height="14" x="8" y="8" rx="2" ry="2"></rect>
-                      <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path>
-                    </svg>
-                  </button>
-                  <button id="spriteExportButton" class="source-action-button source-copy-button" type="button" aria-label="Copy" title="Copy">
-                    <svg viewBox="0 0 24 24" aria-hidden="true">
-                      <rect x="8" y="8" width="14" height="14" rx="2"></rect>
-                      <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path>
-                    </svg>
-                  </button>
-                  <button id="spriteUpdateButton" class="source-action-button is-primary" type="button" aria-label="Update source" title="Update source">
+                  <button id="spriteUpdateButton" class="source-action-button sprite-update-source-button is-primary" type="button" aria-label="Update source" title="Update source">
                     <svg viewBox="0 0 24 24" aria-hidden="true" class="lucide lucide-file-pen-line-icon lucide-file-pen-line">
                       <path d="M14.364 13.634a2 2 0 0 0-.506.854l-.837 2.87a.5.5 0 0 0 .62.62l2.87-.837a2 2 0 0 0 .854-.506l4.013-4.009a1 1 0 0 0-3.004-3.004z"></path>
                       <path d="M14.487 7.858A1 1 0 0 1 14 7V2"></path>
@@ -566,6 +552,22 @@
                       <path d="M8 18h1"></path>
                     </svg>
                   </button>
+                  <span class="sprite-secondary-source-actions" role="group" aria-label="Sprite utility actions">
+                    <button id="duplicateSpriteButton" class="source-action-button" type="button" aria-label="Duplicate sprite" title="Duplicate sprite" disabled>
+                      <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="lucide lucide-copy-plus-icon lucide-copy-plus">
+                        <line x1="15" x2="15" y1="12" y2="18"></line>
+                        <line x1="12" x2="18" y1="15" y2="15"></line>
+                        <rect width="14" height="14" x="8" y="8" rx="2" ry="2"></rect>
+                        <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path>
+                      </svg>
+                    </button>
+                    <button id="spriteExportButton" class="source-action-button source-copy-button" type="button" aria-label="Copy" title="Copy">
+                      <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <rect x="8" y="8" width="14" height="14" rx="2"></rect>
+                        <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path>
+                      </svg>
+                    </button>
+                  </span>
                 </div>
               </div>
               </div>
@@ -1040,6 +1042,8 @@
             <section id="soundsSfxPanel" class="sounds-panel sounds-section" aria-label="SFX generator">
               <div class="sounds-section-header">
                 <h2>SFX</h2>
+              </div>
+              <div class="sounds-section-actions">
                 <div id="soundsSfxTransport" class="sounds-transport" role="group" aria-label="SFX transport">
                   <button id="soundsSfxPlayButton" class="sounds-icon-button" type="button" aria-label="Play SFX" title="Play SFX">
                     <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -1109,6 +1113,8 @@
             <section id="soundsMusicPanel" class="sounds-panel sounds-section" aria-label="Music generator">
               <div class="sounds-section-header">
                 <h2>Music</h2>
+              </div>
+              <div class="sounds-section-actions">
                 <div id="soundsMusicTransport" class="sounds-transport" role="group" aria-label="Music transport">
                   <button id="soundsMusicPlayButton" class="sounds-icon-button" type="button" aria-label="Play music" title="Play music">
                     <svg viewBox="0 0 24 24" aria-hidden="true">

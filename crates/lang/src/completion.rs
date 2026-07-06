@@ -246,7 +246,9 @@ fn collect_completion_symbols(source: &str) -> CompletionSymbols {
     if let Ok(game) = crate::parse_game2d(source) {
         symbols.objects.extend(game.object_labels.values().cloned());
         symbols.inputs.extend(game.input_labels.values().cloned());
-        symbols.states.extend(game.global_labels.values().cloned());
+        symbols
+            .states
+            .extend(game.variable_labels.values().cloned());
         symbols
             .condition_defs
             .extend(game.condition_labels.values().cloned());
@@ -2231,18 +2233,18 @@ co
     }
 
     #[test]
-    fn does_not_suggest_removed_global_keyword() {
+    fn does_not_suggest_removed_variable_keyword() {
         let top_level = "g";
         let top_level_list = suggest_source_completions(top_level, top_level.len());
         assert!(
             !top_level_list
                 .items
                 .iter()
-                .any(|item| item.label == "global" && item.kind == CompletionKind::Keyword)
+                .any(|item| item.label == "variable" && item.kind == CompletionKind::Keyword)
         );
 
         let puzzle_source = r#"
-title complete_removed_global
+title complete_removed_variable
 puzzle board {
 g
 }
@@ -2253,7 +2255,7 @@ g
             !puzzle_list
                 .items
                 .iter()
-                .any(|item| item.label == "global" && item.kind == CompletionKind::Keyword)
+                .any(|item| item.label == "variable" && item.kind == CompletionKind::Keyword)
         );
     }
 

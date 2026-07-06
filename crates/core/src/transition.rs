@@ -132,7 +132,7 @@ pub fn transition_state(
     state: &State,
     input: InputId,
 ) -> TransitionResult<State> {
-    run_program_transition(game, game.program(), state, input, false, false)
+    run_program_transition(game, game.program(), state, input, false)
         .map(|result| result.next_state)
 }
 
@@ -149,11 +149,10 @@ pub fn transition_solver_outcome(
     state: &State,
     input: InputId,
 ) -> TransitionResult<TransitionOutcome> {
-    let state = state.without_visual_objects(game);
-    run_program_transition(game, game.program(), &state, input, false, true).map(|trace| {
+    run_program_transition(game, game.program(), state, input, false).map(|trace| {
         TransitionOutcome {
             input: trace.input,
-            next_state: trace.next_state.without_visual_objects(game),
+            next_state: trace.next_state,
             cancelled: trace.cancelled,
             commands: trace.commands,
             fired_rules: trace.fired_rules,
@@ -166,7 +165,7 @@ pub fn transition_outcome(
     state: &State,
     input: InputId,
 ) -> TransitionResult<TransitionOutcome> {
-    run_program_transition(game, game.program(), state, input, false, false).map(|trace| {
+    run_program_transition(game, game.program(), state, input, false).map(|trace| {
         TransitionOutcome {
             input: trace.input,
             next_state: trace.next_state,
@@ -182,7 +181,7 @@ pub fn transition_trace(
     state: &State,
     input: InputId,
 ) -> TransitionResult<StepTrace> {
-    run_program_transition(game, game.program(), state, input, true, false)
+    run_program_transition(game, game.program(), state, input, true)
 }
 
 pub fn transition_program(
@@ -191,8 +190,7 @@ pub fn transition_program(
     state: &State,
     input: InputId,
 ) -> TransitionResult<State> {
-    run_program_transition(game, program, state, input, false, false)
-        .map(|result| result.next_state)
+    run_program_transition(game, program, state, input, false).map(|result| result.next_state)
 }
 
 pub fn transition_program_outcome(
@@ -201,14 +199,12 @@ pub fn transition_program_outcome(
     state: &State,
     input: InputId,
 ) -> TransitionResult<TransitionOutcome> {
-    run_program_transition(game, program, state, input, false, false).map(|trace| {
-        TransitionOutcome {
-            input: trace.input,
-            next_state: trace.next_state,
-            cancelled: trace.cancelled,
-            commands: trace.commands,
-            fired_rules: trace.fired_rules,
-        }
+    run_program_transition(game, program, state, input, false).map(|trace| TransitionOutcome {
+        input: trace.input,
+        next_state: trace.next_state,
+        cancelled: trace.cancelled,
+        commands: trace.commands,
+        fired_rules: trace.fired_rules,
     })
 }
 
@@ -218,7 +214,7 @@ pub fn transition_program_trace(
     state: &State,
     input: InputId,
 ) -> TransitionResult<StepTrace> {
-    run_program_transition(game, program, state, input, true, false)
+    run_program_transition(game, program, state, input, true)
 }
 
 pub fn transition_program_segment_trace<F>(
@@ -253,7 +249,6 @@ fn run_program_transition(
     state: &State,
     input: InputId,
     collect_trace: bool,
-    skip_visual_rules: bool,
 ) -> TransitionResult<StepTrace> {
     let mut original = state.clone();
     original.clear_mark();
@@ -277,7 +272,6 @@ fn run_program_transition(
             &mut patches,
             &mut commands,
             collect_trace,
-            skip_visual_rules,
         )?;
         if outcome.cancelled {
             return Ok(StepTrace {
@@ -335,7 +329,6 @@ where
             &mut patches,
             &mut commands,
             true,
-            false,
             should_stop,
         )?;
         if let Some(mut remaining_program) = outcome.remaining_program {
@@ -414,7 +407,6 @@ where
         &mut patches,
         &mut commands,
         true,
-        false,
         should_stop,
     )?;
     if let Some(remaining_program) = outcome.remaining_program {
@@ -469,24 +461,18 @@ fn apply_step(
     patches: &mut Vec<Patch>,
     commands: &mut Vec<TransitionCommand>,
     collect_trace: bool,
-    skip_visual_rules: bool,
 ) -> TransitionResult<ApplyOutcome> {
     match step {
-        RuleStep::Rule(rule) => {
-            if skip_visual_rules && game.is_visual_rule(rule.id) {
-                return Ok(ApplyOutcome::idle());
-            }
-            apply_rule_step(
-                game,
-                rule,
-                context,
-                current,
-                fired_rules,
-                patches,
-                commands,
-                collect_trace,
-            )
-        }
+        RuleStep::Rule(rule) => apply_rule_step(
+            game,
+            rule,
+            context,
+            current,
+            fired_rules,
+            patches,
+            commands,
+            collect_trace,
+        ),
         RuleStep::ConditionalBlock { condition, steps } => {
             if condition_accepts(game, condition, context, current) {
                 apply_block_once(
@@ -498,7 +484,6 @@ fn apply_step(
                     patches,
                     commands,
                     collect_trace,
-                    skip_visual_rules,
                 )
             } else {
                 Ok(ApplyOutcome::idle())
@@ -523,7 +508,6 @@ fn apply_step(
                 patches,
                 commands,
                 collect_trace,
-                skip_visual_rules,
             )
         }
         RuleStep::Block {
@@ -541,7 +525,6 @@ fn apply_step(
                     patches,
                     commands,
                     collect_trace,
-                    skip_visual_rules,
                 )
             }
             RuleApplication::Random => apply_block_random(
@@ -553,7 +536,6 @@ fn apply_step(
                 patches,
                 commands,
                 collect_trace,
-                skip_visual_rules,
             ),
             RuleApplication::UntilStable => apply_block_until_stable(
                 game,
@@ -565,7 +547,6 @@ fn apply_step(
                 patches,
                 commands,
                 collect_trace,
-                skip_visual_rules,
             ),
         },
         RuleStep::AfterTriggered { steps, then_steps } => {
@@ -578,7 +559,6 @@ fn apply_step(
                 patches,
                 commands,
                 collect_trace,
-                skip_visual_rules,
             )?;
             if outcome.fired && !outcome.cancelled {
                 let then_outcome = apply_block_once(
@@ -590,7 +570,6 @@ fn apply_step(
                     patches,
                     commands,
                     collect_trace,
-                    skip_visual_rules,
                 )?;
                 outcome.merge(then_outcome);
             }
@@ -610,7 +589,6 @@ fn apply_step(
                 patches,
                 commands,
                 collect_trace,
-                skip_visual_rules,
             )
         }
     }
@@ -625,7 +603,6 @@ fn apply_step_segment<F>(
     patches: &mut Vec<Patch>,
     commands: &mut Vec<TransitionCommand>,
     collect_trace: bool,
-    skip_visual_rules: bool,
     should_stop: &mut F,
 ) -> TransitionResult<SegmentApplyOutcome>
 where
@@ -633,9 +610,6 @@ where
 {
     match step {
         RuleStep::Rule(rule) => {
-            if skip_visual_rules && game.is_visual_rule(rule.id) {
-                return Ok(SegmentApplyOutcome::idle());
-            }
             let before_fired_len = fired_rules.len();
             let outcome = apply_rule_step(
                 game,
@@ -678,7 +652,6 @@ where
                     patches,
                     commands,
                     collect_trace,
-                    skip_visual_rules,
                     should_stop,
                 )
             } else {
@@ -704,7 +677,6 @@ where
                 patches,
                 commands,
                 collect_trace,
-                skip_visual_rules,
                 should_stop,
             )
         }
@@ -723,7 +695,6 @@ where
                     patches,
                     commands,
                     collect_trace,
-                    skip_visual_rules,
                     should_stop,
                 )
             }
@@ -738,7 +709,6 @@ where
                     patches,
                     commands,
                     collect_trace,
-                    skip_visual_rules,
                 )?;
                 if outcome.fired
                     && !outcome.cancelled
@@ -770,7 +740,6 @@ where
                 patches,
                 commands,
                 collect_trace,
-                skip_visual_rules,
                 should_stop,
             ),
         },
@@ -784,7 +753,6 @@ where
                 patches,
                 commands,
                 collect_trace,
-                skip_visual_rules,
                 should_stop,
             )?;
             if let Some(mut remaining_program) = outcome.remaining_program.take() {
@@ -802,7 +770,6 @@ where
                     patches,
                     commands,
                     collect_trace,
-                    skip_visual_rules,
                     should_stop,
                 )?;
                 outcome.merge(then_outcome);
@@ -823,7 +790,6 @@ where
                 patches,
                 commands,
                 collect_trace,
-                skip_visual_rules,
                 should_stop,
             )?;
             if let Some(remaining_steps) = outcome.remaining_program.take() {
@@ -949,7 +915,6 @@ fn apply_block_once(
     patches: &mut Vec<Patch>,
     commands: &mut Vec<TransitionCommand>,
     collect_trace: bool,
-    skip_visual_rules: bool,
 ) -> TransitionResult<ApplyOutcome> {
     let mut outcome = ApplyOutcome::idle();
     for step in steps {
@@ -962,7 +927,6 @@ fn apply_block_once(
             patches,
             commands,
             collect_trace,
-            skip_visual_rules,
         )?;
         outcome.merge(step_outcome);
         if outcome.cancelled {
@@ -981,7 +945,6 @@ fn apply_block_once_segment<F>(
     patches: &mut Vec<Patch>,
     commands: &mut Vec<TransitionCommand>,
     collect_trace: bool,
-    skip_visual_rules: bool,
     should_stop: &mut F,
 ) -> TransitionResult<SegmentApplyOutcome>
 where
@@ -998,7 +961,6 @@ where
             patches,
             commands,
             collect_trace,
-            skip_visual_rules,
             should_stop,
         )?;
         if let Some(mut remaining_program) = step_outcome.remaining_program.take() {
@@ -1024,7 +986,6 @@ fn apply_continuation_segment<F>(
     patches: &mut Vec<Patch>,
     commands: &mut Vec<TransitionCommand>,
     collect_trace: bool,
-    skip_visual_rules: bool,
     should_stop: &mut F,
 ) -> TransitionResult<SegmentApplyOutcome>
 where
@@ -1041,7 +1002,6 @@ where
             patches,
             commands,
             collect_trace,
-            skip_visual_rules,
             should_stop,
         )?;
         if let Some(mut remaining_program) = step_outcome.remaining_program.take() {
@@ -1067,7 +1027,6 @@ fn apply_continuation_step_segment<F>(
     patches: &mut Vec<Patch>,
     commands: &mut Vec<TransitionCommand>,
     collect_trace: bool,
-    skip_visual_rules: bool,
     should_stop: &mut F,
 ) -> TransitionResult<SegmentApplyOutcome>
 where
@@ -1083,7 +1042,6 @@ where
             patches,
             commands,
             collect_trace,
-            skip_visual_rules,
             should_stop,
         ),
         ContinuationStep::LocalFrame {
@@ -1103,7 +1061,6 @@ where
                 patches,
                 commands,
                 collect_trace,
-                skip_visual_rules,
                 should_stop,
             )?;
             if let Some(remaining) = outcome.remaining_program.take() {
@@ -1147,7 +1104,6 @@ where
             patches,
             commands,
             collect_trace,
-            skip_visual_rules,
             should_stop,
         ),
     }
@@ -1171,7 +1127,6 @@ fn apply_block_random(
     patches: &mut Vec<Patch>,
     commands: &mut Vec<TransitionCommand>,
     collect_trace: bool,
-    skip_visual_rules: bool,
 ) -> TransitionResult<ApplyOutcome> {
     let mut candidates = Vec::new();
     for step in steps {
@@ -1188,7 +1143,6 @@ fn apply_block_random(
             &mut candidate_patches,
             &mut candidate_commands,
             true,
-            skip_visual_rules,
         )?;
         if outcome.fired {
             candidates.push(RandomBlockCandidate {
@@ -1230,7 +1184,6 @@ fn apply_block_until_stable(
     patches: &mut Vec<Patch>,
     commands: &mut Vec<TransitionCommand>,
     collect_trace: bool,
-    skip_visual_rules: bool,
 ) -> TransitionResult<ApplyOutcome> {
     let mut seen_states = StateHistory::from_current(current);
     let mut fired_any = false;
@@ -1253,7 +1206,6 @@ fn apply_block_until_stable(
             patches,
             commands,
             collect_trace,
-            skip_visual_rules,
         )?;
         if pass_outcome.cancelled {
             return Ok(pass_outcome);
@@ -1290,7 +1242,6 @@ fn apply_block_until_stable_segment<F>(
     patches: &mut Vec<Patch>,
     commands: &mut Vec<TransitionCommand>,
     collect_trace: bool,
-    skip_visual_rules: bool,
     should_stop: &mut F,
 ) -> TransitionResult<SegmentApplyOutcome>
 where
@@ -1317,7 +1268,6 @@ where
             patches,
             commands,
             collect_trace,
-            skip_visual_rules,
             should_stop,
         )?;
         if let Some(remaining_pass) = pass_outcome.remaining_program {
@@ -1383,7 +1333,6 @@ fn apply_until_stable_continuation_segment<F>(
     patches: &mut Vec<Patch>,
     commands: &mut Vec<TransitionCommand>,
     collect_trace: bool,
-    skip_visual_rules: bool,
     should_stop: &mut F,
 ) -> TransitionResult<SegmentApplyOutcome>
 where
@@ -1398,7 +1347,6 @@ where
         patches,
         commands,
         collect_trace,
-        skip_visual_rules,
         should_stop,
     )?;
     if let Some(remaining_pass) = remaining_outcome.remaining_program {
@@ -1473,7 +1421,6 @@ where
             patches,
             commands,
             collect_trace,
-            skip_visual_rules,
             should_stop,
         )?;
         if let Some(remaining_pass) = pass_outcome.remaining_program {
@@ -1577,8 +1524,8 @@ fn random_state_projection_hash(game: &CompiledGame, state: &State) -> u64 {
             }
         }
     }
-    hash = deterministic_mix(hash, state.visible_globals().len() as u64);
-    for value in state.visible_globals() {
+    hash = deterministic_mix(hash, state.visible_variables().len() as u64);
+    for value in state.visible_variables() {
         hash = deterministic_mix(hash, *value as u64);
     }
     hash = deterministic_mix(hash, state.level_fired_rules().len() as u64);
@@ -1856,7 +1803,7 @@ fn push_rule_commands(rule: &Rule, commands: &mut Vec<TransitionCommand>) {
             Effect::Again => commands.push(TransitionCommand::Again),
             Effect::Checkpoint => commands.push(TransitionCommand::Checkpoint),
             Effect::ClearCheckpoint => commands.push(TransitionCommand::ClearCheckpoint),
-            Effect::Cancel | Effect::UpdateGlobal { .. } => {}
+            Effect::Cancel | Effect::UpdateVariable { .. } => {}
         }
     }
 }
@@ -1877,9 +1824,15 @@ fn guards_accept(rule: &Rule, context: &TransitionContext, state: &State) -> boo
 fn guard_accepts(guard: &Guard, context: &TransitionContext, state: &State) -> bool {
     match guard {
         Guard::InputIs(expected) => context.input == *expected,
-        Guard::GlobalEquals { global, value } => state.global_value(*global) == Some(*value),
-        Guard::GlobalCompare { global, op, value } => state
-            .global_value(*global)
+        Guard::VariableEquals { variable, value } => {
+            state.variable_value(*variable) == Some(*value)
+        }
+        Guard::VariableCompare {
+            variable,
+            op,
+            value,
+        } => state
+            .variable_value(*variable)
             .is_some_and(|found| compare_i64(found, *op, *value)),
         Guard::ConditionEquals { condition, value } => {
             eval_condition_def(context, state, *condition) == Some(*value)
@@ -3145,9 +3098,13 @@ fn build_patch(rule: &Rule, placement: &MatchPlacement) -> TransitionResult<Patc
             | Effect::Again
             | Effect::Checkpoint
             | Effect::ClearCheckpoint => {}
-            Effect::UpdateGlobal { global, op, value } => {
-                patch.push(CorePatchOp::UpdateGlobal {
-                    global: *global,
+            Effect::UpdateVariable {
+                variable,
+                op,
+                value,
+            } => {
+                patch.push(CorePatchOp::UpdateVariable {
+                    variable: *variable,
                     op: *op,
                     value: *value,
                 });
@@ -3242,10 +3199,10 @@ fn offset_pos(x: u16, y: u16, dx: i16, dy: i16) -> Option<(u16, u16)> {
 mod tests {
     use super::*;
     use crate::compiled_game::{
-        GlobalUpdateOp, Guard, MarkDef, MarkKind, MarkPattern, MatchCell, ObjectDef, Offset,
-        Pattern, PatternComponent, Rule, RuleApplication, WriteOp,
+        Guard, MarkDef, MarkKind, MarkPattern, MatchCell, ObjectDef, Offset, Pattern,
+        PatternComponent, Rule, RuleApplication, VariableUpdateOp, WriteOp,
     };
-    use crate::ids::{GlobalId, InputId, LayerId, ObjectId, RuleId};
+    use crate::ids::{InputId, LayerId, ObjectId, RuleId, VariableId};
 
     const PLAYER: ObjectId = ObjectId(1);
     const BOX: ObjectId = ObjectId(2);
@@ -3335,7 +3292,7 @@ mod tests {
         }
     }
 
-    fn global_rule(
+    fn variable_rule(
         id: u16,
         guards: Vec<Guard>,
         effects: Vec<Effect>,
@@ -3353,18 +3310,18 @@ mod tests {
         }
     }
 
-    fn set_global(global: u16, value: i64) -> Effect {
-        Effect::UpdateGlobal {
-            global: GlobalId(global),
-            op: GlobalUpdateOp::Set,
+    fn set_variable(variable: u16, value: i64) -> Effect {
+        Effect::UpdateVariable {
+            variable: VariableId(variable),
+            op: VariableUpdateOp::Set,
             value,
         }
     }
 
-    fn add_global(global: u16, value: i64) -> Effect {
-        Effect::UpdateGlobal {
-            global: GlobalId(global),
-            op: GlobalUpdateOp::Add,
+    fn add_variable(variable: u16, value: i64) -> Effect {
+        Effect::UpdateVariable {
+            variable: VariableId(variable),
+            op: VariableUpdateOp::Add,
             value,
         }
     }
@@ -3407,7 +3364,7 @@ mod tests {
     }
 
     #[test]
-    fn random_rule_is_deterministic_and_uses_solver_visible_state_projection() {
+    fn random_rule_is_deterministic_for_same_state() {
         let objects = vec![
             ObjectDef {
                 id: PLAYER,
@@ -3430,29 +3387,16 @@ mod tests {
             writes: vec![replace(0, 0, PLAYER, BOX)],
             effects: Vec::new(),
         };
-        let game = CompiledGame::new_with_mark_condition_defs_program_roles(
-            3,
-            objects,
-            Vec::new(),
-            Vec::new(),
-            vec![RuleStep::Rule(random_player_to_box)],
-            vec![WALL],
-            Vec::new(),
-        );
+        let game =
+            CompiledGame::new_with_program(3, objects, vec![RuleStep::Rule(random_player_to_box)]);
         let mut plain = State::empty(3, 1, game.layer_count, game.object_count()).unwrap();
         plain.place_object(&game, 0, 0, PLAYER).unwrap();
         plain.place_object(&game, 2, 0, PLAYER).unwrap();
-        let mut with_visual = plain.clone();
-        with_visual.place_object(&game, 1, 0, WALL).unwrap();
 
         let first = transition_state(&game, &plain, RIGHT).unwrap();
         let repeated = transition_state(&game, &plain, RIGHT).unwrap();
-        let visual = transition_state(&game, &with_visual, RIGHT)
-            .unwrap()
-            .without_visual_objects(&game);
 
         assert_eq!(first, repeated);
-        assert_eq!(first, visual);
         assert_eq!(first.object_count(BOX), 1);
         assert_eq!(first.object_count(PLAYER), 1);
     }
@@ -3865,8 +3809,8 @@ mod tests {
     fn until_stable_block_skips_when_state_cycles() {
         let zero_to_one = Rule {
             id: RuleId(7),
-            guards: vec![Guard::GlobalEquals {
-                global: GlobalId(0),
+            guards: vec![Guard::VariableEquals {
+                variable: VariableId(0),
                 value: 0,
             }],
             application: RuleApplication::Once,
@@ -3874,16 +3818,16 @@ mod tests {
                 components: Vec::new(),
             },
             writes: Vec::new(),
-            effects: vec![Effect::UpdateGlobal {
-                global: GlobalId(0),
-                op: GlobalUpdateOp::Set,
+            effects: vec![Effect::UpdateVariable {
+                variable: VariableId(0),
+                op: VariableUpdateOp::Set,
                 value: 1,
             }],
         };
         let one_to_two = Rule {
             id: RuleId(8),
-            guards: vec![Guard::GlobalEquals {
-                global: GlobalId(0),
+            guards: vec![Guard::VariableEquals {
+                variable: VariableId(0),
                 value: 1,
             }],
             application: RuleApplication::Once,
@@ -3891,16 +3835,16 @@ mod tests {
                 components: Vec::new(),
             },
             writes: Vec::new(),
-            effects: vec![Effect::UpdateGlobal {
-                global: GlobalId(0),
-                op: GlobalUpdateOp::Set,
+            effects: vec![Effect::UpdateVariable {
+                variable: VariableId(0),
+                op: VariableUpdateOp::Set,
                 value: 2,
             }],
         };
         let two_to_zero = Rule {
             id: RuleId(9),
-            guards: vec![Guard::GlobalEquals {
-                global: GlobalId(0),
+            guards: vec![Guard::VariableEquals {
+                variable: VariableId(0),
                 value: 2,
             }],
             application: RuleApplication::Once,
@@ -3908,9 +3852,9 @@ mod tests {
                 components: Vec::new(),
             },
             writes: Vec::new(),
-            effects: vec![Effect::UpdateGlobal {
-                global: GlobalId(0),
-                op: GlobalUpdateOp::Set,
+            effects: vec![Effect::UpdateVariable {
+                variable: VariableId(0),
+                op: VariableUpdateOp::Set,
                 value: 0,
             }],
         };
@@ -3927,8 +3871,9 @@ mod tests {
                 ],
             }],
         );
-        let state = State::empty_with_globals(1, 1, game.layer_count, game.object_count(), vec![0])
-            .unwrap();
+        let state =
+            State::empty_with_variables(1, 1, game.layer_count, game.object_count(), vec![0])
+                .unwrap();
 
         let next = transition_state(&game, &state, RIGHT).unwrap();
 
@@ -3937,57 +3882,57 @@ mod tests {
 
     #[test]
     fn until_stable_block_keeps_revisited_non_initial_state() {
-        let value = GlobalId(0);
-        let changed = GlobalId(1);
-        let reset_changed = global_rule(
+        let value = VariableId(0);
+        let changed = VariableId(1);
+        let reset_changed = variable_rule(
             20,
             Vec::new(),
-            vec![set_global(1, 0)],
+            vec![set_variable(1, 0)],
             RuleApplication::Once,
         );
-        let two_to_one = global_rule(
+        let two_to_one = variable_rule(
             21,
             vec![
-                Guard::GlobalEquals {
-                    global: value,
+                Guard::VariableEquals {
+                    variable: value,
                     value: 2,
                 },
-                Guard::GlobalEquals {
-                    global: changed,
+                Guard::VariableEquals {
+                    variable: changed,
                     value: 0,
                 },
             ],
-            vec![set_global(0, 1), set_global(1, 1)],
+            vec![set_variable(0, 1), set_variable(1, 1)],
             RuleApplication::Once,
         );
-        let one_to_two = global_rule(
+        let one_to_two = variable_rule(
             22,
             vec![
-                Guard::GlobalEquals {
-                    global: value,
+                Guard::VariableEquals {
+                    variable: value,
                     value: 1,
                 },
-                Guard::GlobalEquals {
-                    global: changed,
+                Guard::VariableEquals {
+                    variable: changed,
                     value: 0,
                 },
             ],
-            vec![set_global(0, 2), set_global(1, 1)],
+            vec![set_variable(0, 2), set_variable(1, 1)],
             RuleApplication::Once,
         );
-        let zero_to_one = global_rule(
+        let zero_to_one = variable_rule(
             23,
             vec![
-                Guard::GlobalEquals {
-                    global: value,
+                Guard::VariableEquals {
+                    variable: value,
                     value: 0,
                 },
-                Guard::GlobalEquals {
-                    global: changed,
+                Guard::VariableEquals {
+                    variable: changed,
                     value: 0,
                 },
             ],
-            vec![set_global(0, 1), set_global(1, 1)],
+            vec![set_variable(0, 1), set_variable(1, 1)],
             RuleApplication::Once,
         );
         let game = CompiledGame::new_with_program(
@@ -4005,22 +3950,22 @@ mod tests {
             }],
         );
         let state =
-            State::empty_with_globals(1, 1, game.layer_count, game.object_count(), vec![0, 0])
+            State::empty_with_variables(1, 1, game.layer_count, game.object_count(), vec![0, 0])
                 .unwrap();
 
         let next = transition_state(&game, &state, RIGHT).unwrap();
 
-        assert_eq!(next.global_value(value), Some(1));
-        assert_eq!(next.global_value(changed), Some(1));
+        assert_eq!(next.variable_value(value), Some(1));
+        assert_eq!(next.variable_value(changed), Some(1));
     }
 
     #[test]
     fn until_stable_block_budget_keeps_last_state_for_divergent_updates() {
-        let counter = GlobalId(0);
-        let increment = global_rule(
+        let counter = VariableId(0);
+        let increment = variable_rule(
             24,
             Vec::new(),
-            vec![add_global(0, 1)],
+            vec![add_variable(0, 1)],
             RuleApplication::Once,
         );
         let game = CompiledGame::new_with_program(
@@ -4032,13 +3977,14 @@ mod tests {
                 steps: vec![RuleStep::Rule(increment)],
             }],
         );
-        let state = State::empty_with_globals(1, 1, game.layer_count, game.object_count(), vec![0])
-            .unwrap();
+        let state =
+            State::empty_with_variables(1, 1, game.layer_count, game.object_count(), vec![0])
+                .unwrap();
 
         let next = transition_state(&game, &state, RIGHT).unwrap();
 
         assert_eq!(
-            next.global_value(counter),
+            next.variable_value(counter),
             Some(UNTIL_STABLE_REPEAT_LIMIT as i64)
         );
     }
@@ -4060,9 +4006,9 @@ mod tests {
                             components: Vec::new(),
                         },
                         writes: Vec::new(),
-                        effects: vec![Effect::UpdateGlobal {
-                            global: GlobalId(0),
-                            op: GlobalUpdateOp::Set,
+                        effects: vec![Effect::UpdateVariable {
+                            variable: VariableId(0),
+                            op: VariableUpdateOp::Set,
                             value: 1,
                         }],
                     }),
@@ -4074,17 +4020,18 @@ mod tests {
                             components: Vec::new(),
                         },
                         writes: Vec::new(),
-                        effects: vec![Effect::UpdateGlobal {
-                            global: GlobalId(0),
-                            op: GlobalUpdateOp::Set,
+                        effects: vec![Effect::UpdateVariable {
+                            variable: VariableId(0),
+                            op: VariableUpdateOp::Set,
                             value: 0,
                         }],
                     }),
                 ],
             }],
         );
-        let state = State::empty_with_globals(1, 1, game.layer_count, game.object_count(), vec![0])
-            .unwrap();
+        let state =
+            State::empty_with_variables(1, 1, game.layer_count, game.object_count(), vec![0])
+                .unwrap();
 
         let next = transition_state(&game, &state, RIGHT).unwrap();
 
@@ -4092,7 +4039,7 @@ mod tests {
     }
 
     #[test]
-    fn until_stable_rule_treats_idempotent_global_update_as_stable() {
+    fn until_stable_rule_treats_idempotent_variable_update_as_stable() {
         let objects = vec![ObjectDef {
             id: PLAYER,
             layer_id: LayerId(1),
@@ -4103,21 +4050,21 @@ mod tests {
             application: RuleApplication::UntilStable,
             pattern: pattern(vec![cell(0, 0, vec![PLAYER], vec![])]),
             writes: Vec::new(),
-            effects: vec![Effect::UpdateGlobal {
-                global: GlobalId(0),
-                op: GlobalUpdateOp::Set,
+            effects: vec![Effect::UpdateVariable {
+                variable: VariableId(0),
+                op: VariableUpdateOp::Set,
                 value: 1,
             }],
         };
         let game = CompiledGame::new_with_program(2, objects, vec![RuleStep::Rule(rule)]);
         let mut state =
-            State::empty_with_globals(1, 1, game.layer_count, game.object_count(), vec![0])
+            State::empty_with_variables(1, 1, game.layer_count, game.object_count(), vec![0])
                 .unwrap();
         state.place_object(&game, 0, 0, PLAYER).unwrap();
 
         let next = transition_state(&game, &state, RIGHT).unwrap();
 
-        assert_eq!(next.global_value(GlobalId(0)), Some(1));
+        assert_eq!(next.variable_value(VariableId(0)), Some(1));
         assert!(next.has_object(&game, 0, 0, PLAYER));
     }
 

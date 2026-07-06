@@ -5,6 +5,10 @@ mod error;
 mod highlight;
 mod level;
 mod loaded;
+mod puzzle3_model;
+mod puzzle3_parse;
+mod puzzle3_sprite;
+mod puzzle3_visual_fixture;
 mod puzzlescript;
 mod semantic;
 mod source;
@@ -22,8 +26,9 @@ use std::path::PathBuf;
 
 use ast::{
     ConditionAst, ConditionDefinitionAst, ConditionPatternAst, ConditionValueAst, Direction,
-    DirectionName, EffectAst, FixDefaults, GlobalValueAst, OrientationExpr, OrientedRewriteAst,
+    DirectionName, EffectAst, FixDefaults, OrientationExpr, OrientedRewriteAst,
     PatternConditionAst, PatternPredicateAst, RuleDefinitionAst, RuleRole, StatementAst,
+    VariableValueAst,
 };
 use catalog::{AxisKind, Catalog, ObjectSchema, ObjectVariant, Rational, ValueMap};
 pub use completion::{
@@ -69,18 +74,28 @@ fn block_header_text(line: &str) -> &str {
 fn is_block_header_line(line: &str) -> bool {
     line.trim_end().ends_with('{')
 }
-pub use puzzle_3d::{
-    ParseError3, ParsedPuzzle3, VisualFixtureAnimation3, VisualFixtureExportError3,
-    export_visual_fixture_json, export_visual_fixture_json_with_title,
-    export_visual_fixture_json_with_title_and_scenes,
-    export_visual_fixture_json_with_title_scenes_and_animation, parse_puzzle3d,
-};
 use puzzle_core::{
     ComparisonOp, CompiledGame, ConditionDef, ConditionId, ConditionValueKind, Effect, GapTerm,
-    GlobalId, GlobalUpdateOp, Guard, InputId, LayerId, LocalFrame, LocalFrameExtent, MarkDef,
-    MarkId, MarkKind, MarkPattern, MarkValueMatch, MatchCell, ObjectDef, ObjectId,
-    ObjectSetMarkPattern, ObjectSetMatcher, Offset, Pattern, PatternComponent, Rule,
-    RuleApplication, RuleCondition, RuleId, RuleStep, WriteOp,
+    Guard, InputId, LayerId, LocalFrame, LocalFrameExtent, MarkDef, MarkId, MarkKind, MarkPattern,
+    MarkValueMatch, MatchCell, ObjectDef, ObjectId, ObjectSetMarkPattern, ObjectSetMatcher, Offset,
+    Pattern, PatternComponent, Rule, RuleApplication, RuleCondition, RuleId, RuleStep, VariableId,
+    VariableUpdateOp, WriteOp,
+};
+pub use puzzle3_model::{
+    CameraSettings3, GridSettings3, ModelSettings3, ParsedPuzzle3, PixelateRenderSettings3,
+    SpriteRenderSettings3, ViewportFollow3, ViewportFraming3, ViewportHeight3, ViewportMode3,
+    ViewportSettings3,
+};
+pub use puzzle3_parse::{
+    CAMERA_ASSIGNMENT_OPTIONS3, CAMERA_BARE_OPTIONS3, CAMERA_OPTIONS3, GRID_BARE_OPTIONS3,
+    PIXELATE_ASSIGNMENT_OPTIONS3, PIXELATE_BARE_OPTIONS3, PIXELATE_OPTIONS3, ParseError3,
+    RENDER_BARE_OPTIONS3, RENDER_BLOCK_OPTIONS3, RENDER_OPTIONS3, parse_puzzle3d,
+};
+pub use puzzle3_sprite::{Sprite3, SpriteColor3, SpriteSet3, SpriteVoxels3};
+pub use puzzle3_visual_fixture::{
+    VisualFixtureAnimation3, VisualFixtureExportError3, export_visual_fixture_json,
+    export_visual_fixture_json_with_title, export_visual_fixture_json_with_title_and_scenes,
+    export_visual_fixture_json_with_title_scenes_and_animation,
 };
 pub use puzzlescript::translate_puzzlescript_to_canonical;
 pub use semantic::{SemanticKind, SemanticToken, semantic_tokens};

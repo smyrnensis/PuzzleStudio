@@ -1,6 +1,8 @@
 use crate::domain::SearchDomain;
 use crate::stable_hash::{fnv_mix, fnv_seed};
-use puzzle_grid3d::{Game3, InputId3, Rule3, State3, TransitionError3, transition_program};
+use puzzle_grid3d::{
+    Game3, InputId, ObjectId, Rule3, State3, TransitionError3, transition_program,
+};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
@@ -55,7 +57,8 @@ impl Hash for Puzzle3StateKey {
 pub struct Puzzle3Domain {
     game: Arc<Game3>,
     rules: Arc<Vec<Rule3>>,
-    inputs: Vec<InputId3>,
+    inputs: Vec<InputId>,
+    ignored_objects: Vec<ObjectId>,
     is_goal: Box<dyn Fn(&State3) -> bool>,
 }
 
@@ -63,13 +66,24 @@ impl Puzzle3Domain {
     pub fn new(
         game: Arc<Game3>,
         rules: Vec<Rule3>,
-        inputs: Vec<InputId3>,
+        inputs: Vec<InputId>,
+        is_goal: impl Fn(&State3) -> bool + 'static,
+    ) -> Self {
+        Self::with_ignored_objects(game, rules, inputs, Vec::new(), is_goal)
+    }
+
+    pub fn with_ignored_objects(
+        game: Arc<Game3>,
+        rules: Vec<Rule3>,
+        inputs: Vec<InputId>,
+        ignored_objects: Vec<ObjectId>,
         is_goal: impl Fn(&State3) -> bool + 'static,
     ) -> Self {
         Self {
             game,
             rules: Arc::new(rules),
             inputs,
+            ignored_objects,
             is_goal: Box::new(is_goal),
         }
     }
@@ -85,7 +99,7 @@ impl Puzzle3Domain {
 
 impl SearchDomain for Puzzle3Domain {
     type State = State3;
-    type Action = InputId3;
+    type Action = InputId;
     type Key = Puzzle3StateKey;
     type Error = TransitionError3;
 
@@ -102,7 +116,9 @@ impl SearchDomain for Puzzle3Domain {
         state: &Self::State,
         action: &Self::Action,
     ) -> Result<Self::State, Self::Error> {
-        transition_program(&self.game, state, &self.rules, *action)
+        let solver_state = state.without_objects(&self.ignored_objects);
+        transition_program(&self.game, &solver_state, &self.rules, *action)
+            .map(|state| state.without_objects(&self.ignored_objects))
     }
 
     fn is_goal(&self, state: &Self::State) -> bool {
@@ -113,9 +129,10 @@ impl SearchDomain for Puzzle3Domain {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::SearchDomain;
     use crate::{SearchBudget, SearchOutcome, exact_bfs};
-    use puzzle_3d::parse_puzzle3d;
-    use puzzle_grid3d::{ObjectId, Size3, transition_program};
+    use puzzle_grid3d::{Coord3, ObjectId, Size3, transition_program};
+    use puzzle_lang::parse_puzzle3d;
     use std::sync::Arc;
     use std::time::Duration;
 
@@ -184,6 +201,64 @@ PB.
             state = transition_program(&game, &state, &rules, action).unwrap();
         }
         assert!(parsed.win_condition.unwrap().is_met(&game, &state));
+    }
+
+    #[test]
+    fn solver_projects_display_objects_from_3d_states() {
+        let source = r#"
+puzzle3 display3 {
+layers {
+actor = Player
+fx = @Dust
+}
+
+keys {
+ArrowRight -> right
+}
+
+rules {
+input right [ Player | no Player ] -> [ | Player ]
+}
+}
+
+levels3 tiny of display3 {
+legend {
+. = empty
+P = Player
+D = @Dust
+}
+
+level "one" {
+PD
+}
+}
+"#;
+        let parsed = parse_puzzle3d(source).unwrap();
+        let bundle = parsed.level_bundle.clone().unwrap();
+        let initial = bundle.build_level_state(0).unwrap();
+        let right = parsed.game.input_by_name("right").unwrap().id;
+        let player = parsed
+            .catalog
+            .objects
+            .iter()
+            .find_map(|object| (object.name == "Player").then_some(object.id))
+            .unwrap();
+        let dust = parsed.display_objects[0];
+        assert!(initial.has_object(&parsed.game, Coord3::new(1, 0, 0), dust));
+
+        let game = Arc::new(parsed.game.clone());
+        let mut domain = Puzzle3Domain::with_ignored_objects(
+            game.clone(),
+            parsed.rules.clone(),
+            vec![right],
+            parsed.display_objects.clone(),
+            move |state| state.has_object(&game, Coord3::new(1, 0, 0), player),
+        );
+
+        let next = domain.step(&initial, &right).unwrap();
+
+        assert!(next.has_object(&parsed.game, Coord3::new(1, 0, 0), player));
+        assert!(!next.has_object(&parsed.game, Coord3::new(1, 0, 0), dust));
     }
 
     #[test]

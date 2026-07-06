@@ -12,7 +12,7 @@ pub struct PuzzleStateKey {
     hash: u64,
     won: bool,
     slots: Vec<u16>,
-    visible_globals: Vec<i64>,
+    visible_variables: Vec<i64>,
     level_fired_rules: Vec<u16>,
 }
 
@@ -47,7 +47,7 @@ impl PuzzleStateKey {
                 }
             }
         }
-        for value in state.visible_globals() {
+        for value in state.visible_variables() {
             hash = fnv_mix(hash, *value as u64);
         }
         hash = fnv_mix(hash, state.level_fired_rules().len() as u64);
@@ -59,7 +59,7 @@ impl PuzzleStateKey {
             hash,
             won,
             slots,
-            visible_globals: state.visible_globals().to_vec(),
+            visible_variables: state.visible_variables().to_vec(),
             level_fired_rules: state
                 .level_fired_rules()
                 .iter()
@@ -107,6 +107,7 @@ fn source_slot_index(state: &State, x: u16, y: u16, layer: LayerId) -> usize {
 pub struct PuzzleDomain {
     game: Arc<CompiledGame>,
     inputs: Vec<InputId>,
+    ignored_objects: Vec<ObjectId>,
     is_goal: Box<dyn Fn(&State) -> bool>,
 }
 
@@ -116,10 +117,19 @@ impl PuzzleDomain {
         inputs: Vec<InputId>,
         is_goal: impl Fn(&State) -> bool + 'static,
     ) -> Self {
-        let game = Arc::new(game.solver_core());
+        Self::with_ignored_objects(game, inputs, Vec::new(), is_goal)
+    }
+
+    pub fn with_ignored_objects(
+        game: Arc<CompiledGame>,
+        inputs: Vec<InputId>,
+        ignored_objects: Vec<ObjectId>,
+        is_goal: impl Fn(&State) -> bool + 'static,
+    ) -> Self {
         Self {
             game,
             inputs,
+            ignored_objects,
             is_goal: Box::new(is_goal),
         }
     }
@@ -149,8 +159,9 @@ impl SearchDomain for PuzzleDomain {
         action: &Self::Action,
     ) -> Result<Self::State, Self::Error> {
         let outcome = transition_solver_outcome(&self.game, &state.state, *action)?;
+        let next_state = outcome.next_state.without_objects(&self.ignored_objects);
         Ok(PuzzleSearchState {
-            state: outcome.next_state,
+            state: next_state,
             won: state.won
                 || outcome
                     .commands

@@ -184,7 +184,7 @@ fn collect_loaded_game_symbols(
     for name in game.input_labels.values() {
         symbols.insert(name.clone(), HighlightKind::Input);
     }
-    for name in game.global_labels.values() {
+    for name in game.variable_labels.values() {
         symbols.insert(name.clone(), HighlightKind::State);
     }
     for name in game.condition_labels.values() {
@@ -228,7 +228,7 @@ fn collect_puzzle3_symbols(
         for axis in &family.axes {
             family_axis_names.insert(axis.name.clone());
             symbols.insert(axis.name.clone(), HighlightKind::Group);
-            if let puzzle_3d::VariantValueSet3::Named(values) = &axis.values {
+            if let puzzle_grid3d_authoring::VariantValueSet3::Named(values) = &axis.values {
                 for value in values {
                     symbols.insert(value.clone(), HighlightKind::Object);
                 }
@@ -1546,7 +1546,7 @@ fn next_raw_embedded_highlight_start(
 
 #[derive(Clone, Debug)]
 struct LevelAsciiScanLevel {
-    global_chars: HashSet<char>,
+    variable_chars: HashSet<char>,
     local_chars: HashSet<char>,
     braced: bool,
     is_2d: bool,
@@ -1554,13 +1554,13 @@ struct LevelAsciiScanLevel {
 
 #[derive(Clone, Copy, Debug)]
 enum LevelLegendTarget {
-    Global { enabled: bool },
+    Variable { enabled: bool },
     Local(usize),
 }
 
 fn scan_level_ascii_ranges(context: &crate::source::SourceContext) -> Vec<LevelAsciiRange> {
     let mut ranges = Vec::new();
-    let mut global_chars = HashSet::<char>::new();
+    let mut variable_chars = HashSet::<char>::new();
     let mut levels = Vec::<LevelAsciiScanLevel>::new();
     let mut line_levels = vec![None::<usize>; context.lines.len()];
     let mut current_level = None::<usize>;
@@ -1591,7 +1591,7 @@ fn scan_level_ascii_ranges(context: &crate::source::SourceContext) -> Vec<LevelA
             let braced = trimmed.ends_with('{') || matches!(tokens.as_slice(), ["{"]);
             let level_index = levels.len();
             levels.push(LevelAsciiScanLevel {
-                global_chars: global_chars.clone(),
+                variable_chars: variable_chars.clone(),
                 local_chars: HashSet::new(),
                 braced,
                 is_2d: levels_is_2d,
@@ -1608,14 +1608,14 @@ fn scan_level_ascii_ranges(context: &crate::source::SourceContext) -> Vec<LevelA
             {
                 levels[level_index].local_chars.insert(ch);
             } else if levels_is_2d {
-                global_chars.insert(ch);
+                variable_chars.insert(ch);
             }
         } else if let Some(target) = level_legend_stack.last().copied()
             && let Some(ch) = legend_row_char(&tokens)
         {
             match target {
-                LevelLegendTarget::Global { enabled } if enabled => {
-                    global_chars.insert(ch);
+                LevelLegendTarget::Variable { enabled } if enabled => {
+                    variable_chars.insert(ch);
                 }
                 LevelLegendTarget::Local(level_index) => {
                     levels[level_index].local_chars.insert(ch);
@@ -1639,12 +1639,12 @@ fn scan_level_ascii_ranges(context: &crate::source::SourceContext) -> Vec<LevelA
                 ) {
                     LevelLegendTarget::Local(level_index)
                 } else {
-                    LevelLegendTarget::Global {
+                    LevelLegendTarget::Variable {
                         enabled: levels_is_2d,
                     }
                 }
             } else {
-                LevelLegendTarget::Global {
+                LevelLegendTarget::Variable {
                     enabled: levels_is_2d,
                 }
             };
@@ -1670,7 +1670,7 @@ fn scan_level_ascii_ranges(context: &crate::source::SourceContext) -> Vec<LevelA
         let Some(level_index) = level_index else {
             continue;
         };
-        let mut known_chars = levels[level_index].global_chars.clone();
+        let mut known_chars = levels[level_index].variable_chars.clone();
         known_chars.extend(levels[level_index].local_chars.iter().copied());
         add_level_ascii_line_ranges(&mut ranges, line, &known_chars);
     }
@@ -3058,17 +3058,17 @@ accent_color #abcdef
     }
 
     #[test]
-    fn removed_global_syntax_is_not_highlighted_as_keyword_or_state() {
+    fn removed_variable_syntax_is_not_highlighted_as_keyword_or_state() {
         let highlighted = highlight_source(
             r#"
-title no_global_highlight
+title no_variable_highlight
 puzzle board {
-global moved = false
+variable moved = false
 }
 "#,
         );
 
-        assert!(!highlighted.html.contains("syntax-keyword\">global"));
+        assert!(!highlighted.html.contains("syntax-keyword\">variable"));
         assert!(!highlighted.html.contains("syntax-state\">moved"));
     }
 

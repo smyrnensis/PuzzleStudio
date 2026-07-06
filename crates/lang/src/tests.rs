@@ -1,8 +1,5 @@
 use super::*;
-use puzzle_core::{
-    LocalFrameExtent, RuleStep, State, transition_program, transition_solver_state,
-    transition_state,
-};
+use puzzle_core::{LocalFrameExtent, RuleStep, State, transition_program, transition_state};
 
 fn parse_game(source: &str) -> Result<LoadedGame, DiagnosticReport> {
     super::parse_game2d(&modernize_test_source(source))
@@ -477,8 +474,8 @@ P
     let hint = object_named(&loaded, "@Hint");
     let initial = &loaded.levels[0].initial_state;
 
-    assert!(loaded.game.is_visual_object(cursor));
-    assert!(loaded.game.is_visual_object(hint));
+    assert!(loaded.is_display_object(cursor));
+    assert!(loaded.is_display_object(hint));
     assert!(!initial.has_object(&loaded.game, 0, 0, cursor));
 
     let displayed = transition_program(
@@ -1139,7 +1136,7 @@ message hint
         .iter()
         .find(|transition| transition.trigger == SceneTransitionTrigger::SceneStart)
         .unwrap();
-    let SceneEffect::Sequence(effects) = &scene_start.effect else {
+    let SceneEffect::Sequence { effects } = &scene_start.effect else {
         panic!("expected message effects to lower to a sequence");
     };
     assert!(matches!(
@@ -1818,7 +1815,7 @@ P
     assert!(
         effects
             .iter()
-            .filter(|effect| matches!(effect, puzzle_core::Effect::UpdateGlobal { .. }))
+            .filter(|effect| matches!(effect, puzzle_core::Effect::UpdateVariable { .. }))
             .count()
             >= 2
     );
@@ -2006,7 +2003,7 @@ goto level_select
 }
 
 #[test]
-fn scene_rejects_old_condition_arrow_rules() {
+fn scene_rules_accept_condition_arrow_effect_rows() {
     let source = r#"
 title scene_condition_block_arrow
 
@@ -2031,12 +2028,7 @@ keys {
 Enter -> input confirm
 }
 rules {
-if {
-input == confirm
-has_progress_save == false
-} -> {
-goto playing
-}
+if has_progress_save == false -> goto playing
 }
 }
 
@@ -2046,11 +2038,24 @@ text "Playing"
 }
 }
 "#;
-    let error = parse_game(source).unwrap_err().to_string();
-    assert!(
-        error.contains("scene transition rows were removed"),
-        "{error}"
-    );
+    let loaded = parse_game(source).unwrap();
+    let scene = &loaded.scenes[0];
+    let SceneTransitionTrigger::Condition(condition) = &scene.transitions[0].trigger else {
+        panic!("expected rules row to lower to condition transition");
+    };
+    assert!(matches!(
+        condition,
+        SceneExpr::Binary {
+            op: SceneBinaryOp::Eq,
+            left,
+            right,
+        } if matches!(left.as_ref(), SceneExpr::Path(path) if path == &vec!["has_progress_save".to_string()])
+            && matches!(right.as_ref(), SceneExpr::Bool(false))
+    ));
+    assert!(matches!(
+        &scene.transitions[0].effect,
+        SceneEffect::Goto { scene, .. } if scene == "playing"
+    ));
 }
 
 #[test]
@@ -2236,7 +2241,7 @@ goto playing
     let scene = &loaded.scenes[0];
     assert!(matches!(
         &scene.key_bindings[0].effect,
-        SceneEffect::Sequence(effects)
+        SceneEffect::Sequence { effects }
             if matches!(
                 effects.as_slice(),
                 [
@@ -2281,7 +2286,7 @@ goto title
 "#;
     let loaded = parse_game(source).unwrap();
     let scene = &loaded.scenes[0];
-    let SceneEffect::Sequence(effects) = &scene.key_bindings[0].effect else {
+    let SceneEffect::Sequence { effects } = &scene.key_bindings[0].effect else {
         panic!("expected key effect block to parse as sequence");
     };
     assert!(matches!(
@@ -4710,7 +4715,7 @@ S
 }
 
 #[test]
-fn global_routine_does_not_capture_caller_local_routine() {
+fn variable_routine_does_not_capture_caller_local_routine() {
     let source = r#"
 title local_routine_lexical_scope
 
@@ -4723,12 +4728,12 @@ empty .
 
 legend S = Source
 
-routine global_mark {
+routine variable_mark {
 mark_initial
 }
 
 rules {
-global_mark
+variable_mark
 
 routine mark_initial {
 [ Source no Marker ] -> [ Source Marker ]
@@ -4857,7 +4862,7 @@ S
     let loaded = parse_game(source).unwrap();
     let marker = object_named(&loaded, "Marker");
 
-    assert!(loaded.game.is_visual_object(marker));
+    assert!(loaded.is_display_object(marker));
     assert!(
         !loaded.levels[0]
             .initial_state
@@ -10093,8 +10098,8 @@ A
         transition_state(&loaded.game, &loaded.levels[0].initial_state, InputId(0)).unwrap();
     let second = transition_state(&loaded.game, &first, InputId(0)).unwrap();
 
-    assert_eq!(first.visible_globals(), &[1]);
-    assert_eq!(second.visible_globals(), &[1]);
+    assert_eq!(first.visible_variables(), &[1]);
+    assert_eq!(second.visible_variables(), &[1]);
     assert_eq!(
         loaded.game.rules()[0].application,
         RuleApplication::OncePerLevel
@@ -10132,7 +10137,7 @@ A
     let loaded = parse_game(source).unwrap();
     let next = transition_state(&loaded.game, &loaded.levels[0].initial_state, InputId(0)).unwrap();
 
-    assert_eq!(next.visible_globals(), &[1]);
+    assert_eq!(next.visible_variables(), &[1]);
 }
 
 #[test]
@@ -10278,7 +10283,7 @@ A
     let loaded = parse_game(source).unwrap();
     let next = transition_state(&loaded.game, &loaded.levels[0].initial_state, InputId(0)).unwrap();
 
-    assert_eq!(next.visible_globals(), &[1]);
+    assert_eq!(next.visible_variables(), &[1]);
 }
 
 #[test]
@@ -10697,7 +10702,7 @@ puzzle board = default
     };
     assert!(matches!(
         &new_game.effect,
-        SceneEffect::Sequence(effects)
+        SceneEffect::Sequence { effects }
             if matches!(effects.as_slice(), [
                 SceneEffect::Goto { scene, .. },
                 SceneEffect::PlayMusic { name },
@@ -10709,7 +10714,7 @@ puzzle board = default
     };
     assert!(matches!(
         &continue_button.effect,
-        SceneEffect::Sequence(effects)
+        SceneEffect::Sequence { effects }
             if matches!(effects.as_slice(), [
                 SceneEffect::PlaySfx { name: sfx },
                 SceneEffect::Wait { milliseconds: Some(100) },
@@ -10719,7 +10724,7 @@ puzzle board = default
 
     assert!(matches!(
         &loaded.scenes[0].routines[0].effect,
-        SceneEffect::Sequence(effects)
+        SceneEffect::Sequence { effects }
             if matches!(effects.as_slice(), [
                 SceneEffect::Goto { scene, .. },
                 SceneEffect::PlayMusic { name },
@@ -10924,7 +10929,7 @@ fn scene_effect_sequence_parser_retains_semantic_tokens() {
     let parsed = parse_scene_effect_with_semantic_tokens(line, line).unwrap();
     assert!(matches!(
         parsed.surface.effect,
-        SceneEffect::Sequence(ref effects)
+        SceneEffect::Sequence { effects }
             if matches!(effects.as_slice(), [
                 SceneEffect::Goto { scene, .. },
                 SceneEffect::PlayMusic { name },
@@ -10959,7 +10964,7 @@ fn scene_navigation_words_parse_by_state_semantics() {
     let start = parse_scene_effect("start playing(first)", "").unwrap();
     assert!(matches!(
         start,
-        SceneEffect::Sequence(ref effects)
+        SceneEffect::Sequence { effects }
             if matches!(effects.as_slice(), [
                 SceneEffect::Reset { scene: reset_scene },
                 SceneEffect::Goto { scene: goto_scene, params }
@@ -11158,9 +11163,14 @@ puzzle board = default
         SceneValue::Text("Session Label".to_string())
     );
     assert_eq!(loaded.variables[1].lifetime, SceneStateLifetime::Persistent);
-    assert_eq!(loaded.global_labels.len(), 2);
-    assert!(loaded.global_labels.values().any(|name| name == "moved"));
-    assert!(loaded.global_labels.values().any(|name| name == "cleared"));
+    assert_eq!(loaded.variable_labels.len(), 2);
+    assert!(loaded.variable_labels.values().any(|name| name == "moved"));
+    assert!(
+        loaded
+            .variable_labels
+            .values()
+            .any(|name| name == "cleared")
+    );
     assert_eq!(loaded.persistent_vars.len(), 1);
     assert_eq!(loaded.scenes[0].state.variables.len(), 2);
     assert_eq!(loaded.scenes[0].state.variables[1].name, "last_tab");
@@ -12030,7 +12040,7 @@ level "start" {
     let next = transition_state(&loaded.game, &loaded.levels[0].initial_state, InputId(0)).unwrap();
     let gate = object_named(&loaded, "Gate:1");
 
-    assert_eq!(next.visible_globals(), &[0]);
+    assert_eq!(next.visible_variables(), &[0]);
     assert!(!next.has_object(&loaded.game, 0, 0, gate));
 }
 
@@ -12089,13 +12099,13 @@ c
     let gate = object_named(&loaded, "Gate:1");
     let count_zero = object_named(&loaded, "@Count:0");
 
-    assert_eq!(next.visible_globals(), &[0]);
+    assert_eq!(next.visible_variables(), &[0]);
     assert!(!next.has_object(&loaded.game, 0, 0, gate));
     assert!(next.has_object(&loaded.game, 0, 1, count_zero));
 }
 
 #[test]
-fn routine_if_without_else_uses_updated_global_for_later_dynamic_display_write() {
+fn routine_if_without_else_uses_updated_variable_for_later_dynamic_display_write() {
     let source = r#"
 title routine_if_without_else_dynamic_display_update
 
@@ -12149,7 +12159,7 @@ c
     let gate = object_named(&loaded, "Gate:1");
     let count_one = object_named(&loaded, "@Count:1");
 
-    assert_eq!(next.visible_globals(), &[1]);
+    assert_eq!(next.visible_variables(), &[1]);
     assert!(!next.has_object(&loaded.game, 0, 0, gate));
     assert!(next.has_object(&loaded.game, 0, 1, count_one));
 }
@@ -12209,7 +12219,7 @@ level "start" {
     let next = transition_state(&loaded.game, &loaded.levels[0].initial_state, InputId(0)).unwrap();
     let gate = object_named(&loaded, "Gate:1");
 
-    assert_eq!(next.visible_globals(), &[0]);
+    assert_eq!(next.visible_variables(), &[0]);
     assert!(next.has_object(&loaded.game, 0, 0, gate));
     assert!(next.slot_mark().iter().all(Vec::is_empty));
 }
@@ -12292,7 +12302,7 @@ X
     let loaded = parse_game(source).unwrap();
     let next = transition_state(&loaded.game, &loaded.levels[0].initial_state, InputId(0)).unwrap();
 
-    assert_eq!(next.visible_globals(), &[2]);
+    assert_eq!(next.visible_variables(), &[2]);
 }
 
 #[test]
@@ -12329,7 +12339,7 @@ X
     let loaded = parse_game(source).unwrap();
     let next = transition_state(&loaded.game, &loaded.levels[0].initial_state, InputId(0)).unwrap();
 
-    assert_eq!(next.visible_globals(), &[3]);
+    assert_eq!(next.visible_variables(), &[3]);
 }
 
 #[test]
@@ -12366,7 +12376,7 @@ X
     let loaded = parse_game(source).unwrap();
     let next = transition_state(&loaded.game, &loaded.levels[0].initial_state, InputId(0)).unwrap();
 
-    assert_eq!(next.visible_globals(), &[1]);
+    assert_eq!(next.visible_variables(), &[1]);
 }
 
 #[test]
@@ -12403,7 +12413,7 @@ X
     let loaded = parse_game(source).unwrap();
     let next = transition_state(&loaded.game, &loaded.levels[0].initial_state, InputId(0)).unwrap();
 
-    assert_eq!(next.visible_globals(), &[2]);
+    assert_eq!(next.visible_variables(), &[2]);
 }
 
 #[test]
@@ -12603,7 +12613,7 @@ level "start" {
     let count_0 = object_named(&loaded, "Count:0");
     let count_1 = object_named(&loaded, "Count:1");
 
-    assert_eq!(next.visible_globals(), &[1]);
+    assert_eq!(next.visible_variables(), &[1]);
     assert!(!next.has_object(&loaded.game, 0, 0, count_0));
     assert!(next.has_object(&loaded.game, 0, 0, count_1));
 }
@@ -12645,7 +12655,7 @@ level "start" {
     let count_0 = object_named(&loaded, "Count:0");
     let count_1 = object_named(&loaded, "Count:1");
 
-    assert_eq!(next.visible_globals(), &[1]);
+    assert_eq!(next.visible_variables(), &[1]);
     assert!(!next.has_object(&loaded.game, 0, 0, count_0));
     assert!(next.has_object(&loaded.game, 0, 0, count_1));
 }
@@ -12686,7 +12696,7 @@ level "start" {
     let count_0 = object_named(&loaded, "Count:0");
     let count_1 = object_named(&loaded, "Count:1");
 
-    assert_eq!(next.visible_globals(), &[1]);
+    assert_eq!(next.visible_variables(), &[1]);
     assert!(!next.has_object(&loaded.game, 0, 0, count_0));
     assert!(next.has_object(&loaded.game, 0, 0, count_1));
 }
@@ -12764,10 +12774,10 @@ level "start" {
 }
 "#;
     let loaded = parse_game(source).unwrap();
-    let count_global = loaded
-        .global_labels
+    let count_variable = loaded
+        .variable_labels
         .iter()
-        .find_map(|(global, label)| (label == "count").then_some(*global))
+        .find_map(|(variable, label)| (label == "count").then_some(*variable))
         .unwrap();
     let count_1 = object_named(&loaded, "Count:1");
 
@@ -12776,10 +12786,10 @@ level "start" {
         rule.guards.iter().any(|guard| {
             matches!(
                 guard,
-                Guard::GlobalEquals {
-                    global,
+                Guard::VariableEquals {
+                    variable,
                     value: 1
-                } if *global == count_global
+                } if *variable == count_variable
             )
         }) && rule.writes.iter().any(|write| {
             matches!(
@@ -12829,7 +12839,7 @@ level "start" {
     let count_0 = object_named(&loaded, "Count:0");
     let count_1 = object_named(&loaded, "Count:1");
 
-    assert_eq!(next.visible_globals(), &[1]);
+    assert_eq!(next.visible_variables(), &[1]);
     assert!(next.has_object(&loaded.game, 0, 0, count_0));
     assert!(!next.has_object(&loaded.game, 0, 0, count_1));
 }
@@ -14761,7 +14771,7 @@ once [ Button ] -> [ Button ] count = 9
     let moved =
         transition_state(&loaded.game, &loaded.levels[0].initial_state, InputId(0)).unwrap();
 
-    assert_eq!(moved.visible_globals(), &[9]);
+    assert_eq!(moved.visible_variables(), &[9]);
 }
 
 #[test]
@@ -14920,12 +14930,12 @@ P.
     assert!(played.has_object(&loaded.game, 1, 0, player));
     assert!(played.has_object(&loaded.game, 1, 0, trail));
 
-    let solved = transition_solver_state(&loaded.game, initial, right).unwrap();
+    let solver_game = loaded.solver_game();
+    let solved = transition_state(&solver_game, &loaded.solver_state(initial), right).unwrap();
     assert!(solved.has_object(&loaded.game, 1, 0, player));
     assert!(!solved.has_object(&loaded.game, 1, 0, trail));
 
-    let solver_core = loaded.game.solver_core();
-    let core_solved = transition_state(&solver_core, initial, right).unwrap();
+    let core_solved = transition_state(&solver_game, &loaded.solver_state(initial), right).unwrap();
     assert!(core_solved.has_object(&loaded.game, 1, 0, player));
     assert!(!core_solved.has_object(&loaded.game, 1, 0, trail));
 }
@@ -14961,8 +14971,8 @@ rules {
     let player = object_named(&loaded, "Player");
     let trail = object_named(&loaded, "Trail");
 
-    assert!(!loaded.game.is_visual_object(player));
-    assert!(loaded.game.is_visual_object(trail));
+    assert!(!loaded.is_display_object(player));
+    assert!(loaded.is_display_object(trail));
 }
 
 #[test]
@@ -15199,7 +15209,8 @@ P
     let played = transition_state(&loaded.game, initial, right).unwrap();
     assert!(played.has_object(&loaded.game, 0, 0, trail));
 
-    let solved = transition_solver_state(&loaded.game, initial, right).unwrap();
+    let solver_game = loaded.solver_game();
+    let solved = transition_state(&solver_game, &loaded.solver_state(initial), right).unwrap();
     assert!(!solved.has_object(&loaded.game, 0, 0, trail));
 }
 
@@ -15483,7 +15494,8 @@ P
     let played = transition_state(&loaded.game, initial, right).unwrap();
     assert!(played.has_object(&loaded.game, 0, 0, trail));
 
-    let solved = transition_solver_state(&loaded.game, initial, right).unwrap();
+    let solver_game = loaded.solver_game();
+    let solved = transition_state(&solver_game, &loaded.solver_state(initial), right).unwrap();
     assert!(!solved.has_object(&loaded.game, 0, 0, trail));
 }
 
@@ -15534,7 +15546,8 @@ P.
     assert!(played.has_object(&loaded.game, 1, 0, player));
     assert!(played.has_object(&loaded.game, 1, 0, trail));
 
-    let solved = transition_solver_state(&loaded.game, initial, right).unwrap();
+    let solver_game = loaded.solver_game();
+    let solved = transition_state(&solver_game, &loaded.solver_state(initial), right).unwrap();
     assert!(solved.has_object(&loaded.game, 1, 0, player));
     assert!(!solved.has_object(&loaded.game, 1, 0, trail));
 }
@@ -16103,7 +16116,8 @@ levels3 demo of push3 {
     assert_eq!(parsed.rules.len(), 8);
     assert_eq!(parsed.level_bundle.as_ref().unwrap().level_count(), 1);
     let fixture_json = crate::export_visual_fixture_json(&parsed).unwrap();
-    let contract = puzzle_3d::puzzle3_runtime_contract_from_fixture_json(&fixture_json).unwrap();
+    let contract =
+        puzzle_runtime_contract::puzzle3_runtime_model_from_fixture_json(&fixture_json).unwrap();
     assert_eq!(contract.rules.len(), parsed.rules.len());
     assert!(!fixture_json.contains("pushableObjectIds"));
     assert!(!fixture_json.contains("blocksMovement"));
@@ -16819,6 +16833,52 @@ P
     assert!(fixture_json.contains("\"kind\": \"level\""));
     assert!(fixture_json.contains("\"path\": \"level\""));
     assert!(!fixture_json.contains("start_levels"));
+}
+
+#[test]
+fn puzzle3_fixture_serializes_shared_scene_effects() {
+    let document = super::parse_game(
+        r#"
+title Shared Effects 3D
+
+puzzle3 demo {
+layers {
+  actor = Player
+}
+
+rules {
+}
+}
+
+scene title {
+  layout {
+    button "Inspect" -> sfx click wait 100ms goto title
+  }
+}
+
+levels3 test of demo {
+legend {
+  P = Player
+}
+
+level "first" {
+P
+}
+}
+"#,
+    )
+    .unwrap();
+    let fixture_json = crate::export_loaded_document_visual_fixture_json(&document).unwrap();
+
+    assert!(fixture_json.contains("\"kind\": \"button\""));
+    assert!(fixture_json.contains("\"effect\":"));
+    assert!(fixture_json.contains("\"kind\": \"sequence\""));
+    assert!(fixture_json.contains("\"kind\": \"play_sfx\""));
+    assert!(fixture_json.contains("\"name\": \"click\""));
+    assert!(fixture_json.contains("\"kind\": \"wait\""));
+    assert!(fixture_json.contains("\"milliseconds\": 100"));
+    assert!(fixture_json.contains("\"kind\": \"goto\""));
+    assert!(!fixture_json.contains("\"action\""));
 }
 
 #[test]

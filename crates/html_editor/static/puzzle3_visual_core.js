@@ -1,4 +1,4 @@
-(function attachPuzzle3VisualCore(global) {
+(function attachPuzzle3VisualCore(root) {
   function projectOrthographic(position, view) {
     const yaw = degreesToRadians(view.camera?.yawDegrees ?? 0);
     const pitch = degreesToRadians(view.camera?.pitchDegrees ?? 35);
@@ -303,7 +303,7 @@
     return rects;
   }
 
-  global.Puzzle3VisualCore = {
+  root.Puzzle3VisualCore = {
     cameraOrderKey,
     compareGridOrder,
     comparePrimitiveOrder,

@@ -5,12 +5,12 @@ pub mod state;
 pub mod transition;
 
 pub use compiled_game::{
-    ComparisonOp, CompiledGame, ConditionDef, ConditionValueKind, Effect, GapTerm, GlobalUpdateOp,
-    Guard, LocalFrame, LocalFrameExtent, MarkDef, MarkKind, MarkPattern, MarkValueMatch, MatchCell,
+    ComparisonOp, CompiledGame, ConditionDef, ConditionValueKind, Effect, GapTerm, Guard,
+    LocalFrame, LocalFrameExtent, MarkDef, MarkKind, MarkPattern, MarkValueMatch, MatchCell,
     ObjectDef, ObjectSetMarkPattern, ObjectSetMatcher, Offset, Pattern, PatternComponent, Rule,
-    RuleApplication, RuleCondition, RuleStep, WriteOp,
+    RuleApplication, RuleCondition, RuleStep, VariableUpdateOp, WriteOp,
 };
-pub use ids::{ConditionId, GlobalId, InputId, LayerId, MarkId, ObjectId, RuleId};
+pub use ids::{ConditionId, InputId, LayerId, MarkId, ObjectId, RuleId, VariableId};
 pub use patch::{Patch, PatchError, PatchOp};
 pub use state::{CellView, State, StateError};
 pub use transition::{

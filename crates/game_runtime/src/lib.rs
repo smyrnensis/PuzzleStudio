@@ -1,22 +1,20 @@
-use puzzle_3d::{
-    Coord3, Game3, InputId3, LevelBundle3, ModelSettings3, ObjectId as ObjectId3, ParsedPuzzle3,
-    RuleId3, SelectorCatalog3, Size3, State3,
-};
 use puzzle_core::{
     CompiledGame, InputId, ObjectId, RuleId, State as PuzzleState, TransitionError,
     transition_program,
 };
+use puzzle_grid3d::{Coord3, Game3, LevelBundle3, ObjectId as ObjectId3, RuleId3, Size3, State3};
+use puzzle_grid3d_authoring::SelectorCatalog3;
 use puzzle_lang::{
-    ArrowKey, KeyTrigger, Level, LoadedDocumentModel, LoadedGame, ResourceSelection,
-    SceneAlignXDef, SceneAlignYDef, SceneBinaryOp, SceneComponent, SceneDef, SceneEffect,
-    SceneEffectParam, SceneExpr, SceneLayoutDef, ScenePuzzleInitializer, SceneStateLifetime,
-    SceneTextContent, SceneTransitionTrigger, SceneValue, ThemeDef, ViewportModeDef,
-    ViewportSizeDef,
+    ArrowKey, KeyTrigger, Level, LoadedDocumentModel, LoadedGame, ModelSettings3, ParsedPuzzle3,
+    ResourceSelection, SceneAlignXDef, SceneAlignYDef, SceneBinaryOp, SceneComponent, SceneDef,
+    SceneEffect, SceneEffectParam, SceneExpr, SceneLayoutDef, ScenePuzzleInitializer,
+    SceneStateLifetime, SceneTextContent, SceneTransitionTrigger, SceneValue, ThemeDef,
+    ViewportModeDef, ViewportSizeDef,
 };
 use puzzle_play::{
     AnimationEvent, GameSession, GameSession3, LevelProgressSaveData, MessageEvent,
-    PersistentVarSaveData, ProgressSaveData, SoundEvent, WaitEvent, mixed_document_loaded_game,
-    puzzle3_document_scene_host_loaded_game, runtime_sounds_def,
+    PersistentVarSaveData, ProgressSaveData, SoundEvent, WaitEvent,
+    loaded_document_scene_host_loaded_game, runtime_sounds_def,
 };
 use serde_json::{Value, json};
 
@@ -30,17 +28,7 @@ impl StandaloneSessionBridge {
     pub fn from_source(source: &str, puzzle_path: &str) -> Result<Self, String> {
         let document = puzzle_lang::parse_game_for_path(source, puzzle_path)
             .map_err(|error| error.to_string())?;
-        let loaded = if document.models.len() > 1 {
-            mixed_document_loaded_game(&document)?
-        } else {
-            match document.single_model() {
-                Some(LoadedDocumentModel::Puzzle2d { game, .. }) => game.clone(),
-                Some(LoadedDocumentModel::Puzzle3d { .. }) => {
-                    puzzle3_document_scene_host_loaded_game(&document)?
-                }
-                None => return Err("standalone session bridge requires a puzzle model".to_string()),
-            }
-        };
+        let loaded = loaded_document_scene_host_loaded_game(&document)?;
         Ok(Self {
             session: GameSession::new(&loaded),
             loaded,
@@ -225,23 +213,28 @@ fn decode_state_value(game: &CompiledGame, value: &Value) -> Result<PuzzleState,
     let width = u16_field(value, "width")?;
     let height = u16_field(value, "height")?;
     let layer_count = u16_field(value, "layerCount")?;
-    let globals = value
-        .get("globals")
+    let variables = value
+        .get("variables")
         .and_then(Value::as_array)
         .map(|items| {
             items
                 .iter()
                 .map(|item| {
                     item.as_i64()
-                        .ok_or_else(|| "global must be an integer".to_string())
+                        .ok_or_else(|| "variable must be an integer".to_string())
                 })
                 .collect::<Result<Vec<_>, _>>()
         })
         .transpose()?
         .unwrap_or_default();
-    let mut state =
-        PuzzleState::empty_with_globals(width, height, layer_count, game.object_count(), globals)
-            .map_err(|error| format!("{error:?}"))?;
+    let mut state = PuzzleState::empty_with_variables(
+        width,
+        height,
+        layer_count,
+        game.object_count(),
+        variables,
+    )
+    .map_err(|error| format!("{error:?}"))?;
     for (index, item) in array_field(value, "slots")?.iter().enumerate() {
         let object = ObjectId(u16_value(item, "slot")?);
         if object.is_empty() {
@@ -270,7 +263,7 @@ fn compiled_state_value(state: &PuzzleState) -> Value {
         "layerCount": state.layer_count,
         "slots": state.slots().iter().map(|object| object.0).collect::<Vec<_>>(),
         "mark": [],
-        "globals": state.visible_globals(),
+        "variables": state.visible_variables(),
         "levelFiredRules": state.level_fired_rules().iter().map(|rule| rule.0).collect::<Vec<_>>(),
     })
 }
@@ -388,7 +381,7 @@ impl Puzzle3RuntimeBridge {
                     .apply_input_with_local_frame(
                         &bundle,
                         &rules,
-                        InputId3(input),
+                        InputId(input),
                         local_frame.as_ref(),
                     )
                     .map_err(|error| format!("{error:?}"))?;
@@ -444,9 +437,9 @@ impl Puzzle3RuntimeBridge {
 }
 
 fn parsed_puzzle3_from_fixture(value: &Value) -> Result<ParsedPuzzle3, String> {
-    let contract = puzzle_runtime_contract::puzzle3_runtime_contract_from_fixture_value(value)
+    let model = puzzle_runtime_contract::puzzle3_runtime_model_from_fixture_value(value)
         .map_err(|error| error.to_string())?;
-    let game = contract.game;
+    let game = model.game;
     let object_layers = game
         .objects
         .iter()
@@ -461,12 +454,15 @@ fn parsed_puzzle3_from_fixture(value: &Value) -> Result<ParsedPuzzle3, String> {
             object_layers,
         ),
         settings: ModelSettings3::default(),
-        local_frame: contract.local_frame,
-        rules: contract.rules,
-        level_bundle: Some(contract.level_bundle),
+        local_frame: model.local_frame,
+        rules: model.rules,
+        display_objects: model.display_objects,
+        rule_camera_effects: model.rule_camera_effects,
+        level_bundle: Some(model.level_bundle),
         level_packs: Vec::new(),
-        win_condition: contract.win_condition,
-        lifecycle: contract.lifecycle,
+        win_condition: model.win_condition,
+        lifecycle: model.lifecycle,
+        on_level_start_camera_effects: model.on_level_start_camera_effects,
         sprite_set: None,
     })
 }
@@ -1011,7 +1007,7 @@ fn scene_effect_value(effect: &SceneEffect) -> Value {
             Value::Object(value)
         }
         SceneEffect::ResetPersistentVars => json!({ "kind": "reset_persistent_vars" }),
-        SceneEffect::Sequence(effects) => json!({
+        SceneEffect::Sequence { effects } => json!({
             "kind": "sequence",
             "effects": effects.iter().map(scene_effect_value).collect::<Vec<_>>(),
         }),
@@ -1865,13 +1861,7 @@ mod tests {
 
     fn standalone_export(source: &str) -> Value {
         let document = puzzle_lang::parse_game_for_path(source, "export_test.puzzle").unwrap();
-        let loaded = match document.single_model() {
-            Some(LoadedDocumentModel::Puzzle2d { game, .. }) => game.clone(),
-            Some(LoadedDocumentModel::Puzzle3d { .. }) => {
-                puzzle3_document_scene_host_loaded_game(&document).unwrap()
-            }
-            None => panic!("test export requires a puzzle model"),
-        };
+        let loaded = loaded_document_scene_host_loaded_game(&document).unwrap();
         json!({
             "runtimeLoadedGame": {
                 "version": 1,

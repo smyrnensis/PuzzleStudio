@@ -264,15 +264,15 @@ fn add_direction_alias(
     Ok(())
 }
 
-fn parse_global_directive(
+fn parse_variable_directive(
     tokens: &[&str],
     line: &str,
-    global_names: &mut HashMap<String, GlobalId>,
-    global_labels: &mut HashMap<GlobalId, String>,
-    global_defaults: &mut Vec<i64>,
-    numeric_global_defaults: &mut HashMap<String, i64>,
-    persistent_vars: &mut Vec<GlobalId>,
-    constant_globals: &mut Vec<GlobalId>,
+    variable_names: &mut HashMap<String, VariableId>,
+    variable_labels: &mut HashMap<VariableId, String>,
+    variable_defaults: &mut Vec<i64>,
+    numeric_variable_defaults: &mut HashMap<String, i64>,
+    persistent_vars: &mut Vec<VariableId>,
+    constant_variables: &mut Vec<VariableId>,
 ) -> Result<(), DiagnosticReport> {
     let parsed = match tokens {
         ["var", name, "=", value] => Some((*name, *value, false, false)),
@@ -286,22 +286,22 @@ fn parse_global_directive(
             if !is_identifier(name) {
                 return Err(parse_error(line, "var or const name must be an identifier"));
             }
-            if global_names.contains_key(name) {
+            if variable_names.contains_key(name) {
                 return Err(parse_error(line, "duplicate var or const"));
             }
-            let id = GlobalId(global_defaults.len() as u16);
-            let default = parse_global_value(value, line)?;
-            global_names.insert(name.to_string(), id);
-            global_labels.insert(id, name.to_string());
-            global_defaults.push(default);
+            let id = VariableId(variable_defaults.len() as u16);
+            let default = parse_variable_value(value, line)?;
+            variable_names.insert(name.to_string(), id);
+            variable_labels.insert(id, name.to_string());
+            variable_defaults.push(default);
             if value.parse::<i64>().is_ok() {
-                numeric_global_defaults.insert(name.to_string(), default);
+                numeric_variable_defaults.insert(name.to_string(), default);
             }
             if persistent {
                 persistent_vars.push(id);
             }
             if constant {
-                constant_globals.push(id);
+                constant_variables.push(id);
             }
             Ok(())
         }
@@ -719,8 +719,8 @@ fn parse_rule_definition(
     maps: &HashMap<String, ValueMap>,
     object_groups: &HashMap<String, Vec<ObjectId>>,
     input_names: &HashMap<String, InputId>,
-    global_names: &HashMap<String, GlobalId>,
-    numeric_globals: &HashMap<String, i64>,
+    variable_names: &HashMap<String, VariableId>,
+    numeric_variables: &HashMap<String, i64>,
     condition_names: &HashMap<String, ConditionId>,
     named_conditions: &HashMap<String, (String, ConditionAst)>,
 ) -> Result<(RuleDefinitionAst, usize), DiagnosticReport> {
@@ -754,8 +754,8 @@ fn parse_rule_definition(
         maps,
         object_groups,
         input_names,
-        global_names,
-        numeric_globals,
+        variable_names,
+        numeric_variables,
         condition_names,
         named_conditions,
         &params,
@@ -784,7 +784,7 @@ fn add_standard_move_rule_if_missing(
     maps: &HashMap<String, ValueMap>,
     object_groups: &HashMap<String, Vec<ObjectId>>,
     input_names: &HashMap<String, InputId>,
-    global_names: &HashMap<String, GlobalId>,
+    variable_names: &HashMap<String, VariableId>,
     condition_names: &HashMap<String, ConditionId>,
 ) -> Result<(), DiagnosticReport> {
     if definitions
@@ -850,7 +850,7 @@ fn add_standard_move_rule_if_missing(
         maps,
         &generated_groups,
         input_names,
-        global_names,
+        variable_names,
         &HashMap::new(),
         condition_names,
         &HashMap::new(),

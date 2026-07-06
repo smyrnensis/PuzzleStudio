@@ -58,9 +58,6 @@ Read the corresponding folder `AGENTS.md` before editing these areas:
   highlighting, workspace behavior, and editor-owned layout.
 - `crates/ascii_play/`: terminal adapter behavior.
 - `crates/cli/`: product/automation facade and command routing.
-- `crates/puzzle_3d/`: temporary 3D authoring/runtime facade. Its deterministic
-  core has moved to `crates/grid3d/`; remaining parser/lowering/session/export
-  responsibilities should continue migrating to `lang`, `play`, and adapters.
 - `src-tauri/`: desktop shell and host filesystem boundary.
 - `games/`: sample authoring inputs and generated standalone game exports.
 - `docs/`: generated web documentation exports and documentation source policy.

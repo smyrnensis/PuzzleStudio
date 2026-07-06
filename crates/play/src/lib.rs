@@ -28,43 +28,42 @@ pub use session3::{GameSession3, GameSessionError3, SessionLifecycleResult3};
 
 use session_history::SessionHistory;
 
-pub fn mixed_document_loaded_game(document: &LoadedDocument) -> Result<LoadedGame, String> {
-    let Some(LoadedDocumentModel::Puzzle2d { game, .. }) = document
+pub fn loaded_document_scene_host_loaded_game(
+    document: &LoadedDocument,
+) -> Result<LoadedGame, String> {
+    if let Some(LoadedDocumentModel::Puzzle2d { game, .. }) = document
         .models
         .iter()
         .find(|model| matches!(model, LoadedDocumentModel::Puzzle2d { .. }))
-    else {
-        return Err("mixed document runtime requires a 2D puzzle model host".to_string());
-    };
-    let mut loaded = game.clone();
-    copy_document_shell_to_loaded_game(document, &mut loaded);
-    loaded.scenes = document
-        .scenes
-        .iter()
-        .cloned()
-        .map(scene_with_only_2d_puzzle_state)
-        .collect();
-    Ok(loaded)
-}
+    {
+        let mut loaded = game.clone();
+        copy_document_shell_to_loaded_game(document, &mut loaded);
+        if document.models.len() > 1 {
+            loaded.scenes = document
+                .scenes
+                .iter()
+                .cloned()
+                .map(scene_with_only_2d_puzzle_state)
+                .collect();
+        }
+        return Ok(loaded);
+    }
 
-pub fn puzzle3_document_scene_host_loaded_game(
-    document: &LoadedDocument,
-) -> Result<LoadedGame, String> {
     let mut loaded = LoadedGame::empty_scene_host(&document.title, "scene_host", "scene_host");
     let prototype_level = loaded
         .levels
         .first()
         .cloned()
-        .ok_or_else(|| "puzzle3 scene host must contain a prototype level".to_string())?;
+        .ok_or_else(|| "document scene host must contain a prototype level".to_string())?;
     let Some(LoadedDocumentModel::Puzzle3d { name, puzzle }) = document
         .models
         .iter()
         .find(|model| matches!(model, LoadedDocumentModel::Puzzle3d { .. }))
     else {
-        return Err("puzzle3 scene host requires a 3D puzzle model".to_string());
+        return Err("document scene host requires a puzzle model".to_string());
     };
     let Some(bundle) = puzzle.level_bundle.as_ref() else {
-        return Err("puzzle3 scene host requires 3D levels".to_string());
+        return Err("document scene host requires levels for a non-2D puzzle model".to_string());
     };
 
     copy_document_shell_to_loaded_game(document, &mut loaded);
@@ -446,7 +445,7 @@ impl GameSession {
                 .iter()
                 .enumerate()
                 .filter_map(|(index, var)| {
-                    let name = game.global_labels.get(var)?;
+                    let name = game.variable_labels.get(var)?;
                     let value = self.persistent_vars.get(index).copied().unwrap_or(0);
                     Some(PersistentVarSaveData {
                         name: name.clone(),
@@ -486,7 +485,7 @@ impl GameSession {
             if let Some(index) = game
                 .persistent_vars
                 .iter()
-                .position(|var| game.global_labels.get(var) == Some(&saved_var.name))
+                .position(|var| game.variable_labels.get(var) == Some(&saved_var.name))
             {
                 if let Some(value) = self.persistent_vars.get_mut(index) {
                     *value = saved_var.value;
@@ -608,7 +607,7 @@ impl GameSession {
     fn apply_persistent_vars(&self, game: &LoadedGame, state: &mut PuzzleState) {
         for (index, var) in game.persistent_vars.iter().enumerate() {
             if let Some(value) = self.persistent_vars.get(index) {
-                let _ = state.set_visible_global(*var, *value);
+                let _ = state.set_visible_variable(*var, *value);
             }
         }
     }
@@ -1554,7 +1553,7 @@ impl GameSession {
                 }
                 Ok(())
             }
-            SceneEffect::Sequence(effects) => {
+            SceneEffect::Sequence { effects } => {
                 for effect in effects {
                     self.apply_screen_effect_during_turn(
                         game,
@@ -1696,7 +1695,7 @@ impl GameSession {
                 }) {
                     return Some(
                         game.is_condition_true(condition_name, state)
-                            || game.is_global_truthy(condition_name, state),
+                            || game.is_variable_truthy(condition_name, state),
                     );
                 }
                 self.screen_condition_value(game, &SceneExpr::Path(path.clone()))
@@ -2000,7 +1999,7 @@ impl GameSession {
                 self.reset_persistent_vars(game);
                 Ok(())
             }
-            SceneEffect::Sequence(effects) => {
+            SceneEffect::Sequence { effects } => {
                 for effect in effects {
                     self.apply_screen_effect(game, effect, bindings)?;
                 }
@@ -3202,7 +3201,7 @@ fn game_has_scene_level_owner(game: &LoadedGame) -> bool {
 fn persistent_var_values(game: &LoadedGame, state: &PuzzleState) -> Vec<i64> {
     game.persistent_vars
         .iter()
-        .map(|var| state.global_value(*var).unwrap_or(0))
+        .map(|var| state.variable_value(*var).unwrap_or(0))
         .collect()
 }
 
@@ -3212,7 +3211,7 @@ fn persistent_var_default_values(game: &LoadedGame) -> Vec<i64> {
         .map(|var| {
             game.levels
                 .first()
-                .and_then(|level| level.initial_state.global_value(*var))
+                .and_then(|level| level.initial_state.variable_value(*var))
                 .unwrap_or(0)
         })
         .collect()
@@ -3220,7 +3219,7 @@ fn persistent_var_default_values(game: &LoadedGame) -> Vec<i64> {
 
 fn persistent_var_index_by_name(game: &LoadedGame, name: &str) -> Option<usize> {
     game.persistent_vars.iter().position(|var| {
-        game.global_labels
+        game.variable_labels
             .get(var)
             .is_some_and(|label| label == name)
     })
@@ -3229,7 +3228,7 @@ fn persistent_var_index_by_name(game: &LoadedGame, name: &str) -> Option<usize> 
 fn apply_persistent_var_values(game: &LoadedGame, values: &[i64], state: &mut PuzzleState) {
     for (index, var) in game.persistent_vars.iter().enumerate() {
         if let Some(value) = values.get(index) {
-            let _ = state.set_visible_global(*var, *value);
+            let _ = state.set_visible_variable(*var, *value);
         }
     }
 }
@@ -3242,8 +3241,8 @@ fn states_equal_ignoring_persistent_vars(
     let mut left = left.clone();
     let mut right = right.clone();
     for var in &game.persistent_vars {
-        let _ = left.set_visible_global(*var, 0);
-        let _ = right.set_visible_global(*var, 0);
+        let _ = left.set_visible_variable(*var, 0);
+        let _ = right.set_visible_variable(*var, 0);
     }
     left == right
 }
@@ -3497,15 +3496,17 @@ fn parse_runtime_command(command_text: &str, default_wait_ms: u64) -> Option<Sce
             scene: screen.to_string(),
             params,
         }),
-        "start" => Some(SceneEffect::Sequence(vec![
-            SceneEffect::Reset {
-                scene: screen.to_string(),
-            },
-            SceneEffect::Goto {
-                scene: screen.to_string(),
-                params,
-            },
-        ])),
+        "start" => Some(SceneEffect::Sequence {
+            effects: vec![
+                SceneEffect::Reset {
+                    scene: screen.to_string(),
+                },
+                SceneEffect::Goto {
+                    scene: screen.to_string(),
+                    params,
+                },
+            ],
+        }),
         _ => None,
     }
 }
@@ -4198,10 +4199,10 @@ mod tests {
     }
 
     #[test]
-    fn puzzle3_scene_host_loaded_game_uses_shared_level_header_syntax() {
+    fn loaded_document_scene_host_loaded_game_uses_shared_3d_level_header_syntax() {
         let source = include_str!("../../../games/spec_3d.puzzle3");
         let document = puzzle_lang::parse_game_for_path(source, "games/spec_3d.puzzle3").unwrap();
-        let loaded = puzzle3_document_scene_host_loaded_game(&document).unwrap();
+        let loaded = loaded_document_scene_host_loaded_game(&document).unwrap();
 
         assert_eq!(loaded.title, "Microban 3D");
         assert_eq!(loaded.game.object_count(), 0);
@@ -7377,12 +7378,12 @@ step board
         let player = object_named(&loaded, "Player");
 
         session.apply_command(&loaded, "right").unwrap();
-        assert_eq!(session.state().visible_globals(), &[1]);
+        assert_eq!(session.state().visible_variables(), &[1]);
         assert!(session.state().has_object(&loaded.game, 1, 0, player));
         assert!(session.can_undo());
 
         session.apply_command(&loaded, "undo").unwrap();
-        assert_eq!(session.state().visible_globals(), &[1]);
+        assert_eq!(session.state().visible_variables(), &[1]);
         assert!(session.state().has_object(&loaded.game, 0, 0, player));
 
         session.apply_command(&loaded, "right").unwrap();
@@ -7392,7 +7393,7 @@ step board
             .unwrap();
         assert!(!session.can_undo());
         assert!(!session.can_redo());
-        assert_eq!(session.state().visible_globals(), &[1]);
+        assert_eq!(session.state().visible_variables(), &[1]);
     }
 
     #[test]
@@ -7854,7 +7855,7 @@ goto hub
 
         let hub_board = session.scene_state().unwrap().puzzles.get("board").unwrap();
         assert_eq!(session.screen(), "hub");
-        assert_eq!(hub_board.visible_globals(), &[1]);
+        assert_eq!(hub_board.visible_variables(), &[1]);
     }
 
     #[test]
@@ -9419,6 +9420,6 @@ if board.win_conditions -> message "clear"
                 text: "clear".to_string()
             }]
         );
-        assert_eq!(session.state().visible_globals(), &[1]);
+        assert_eq!(session.state().visible_variables(), &[1]);
     }
 }

@@ -1,153 +1,27 @@
 use std::collections::{BTreeMap, HashMap};
 
-use crate::{
-    DenseCell3, DensePattern3, DenseRow3, DenseRuleTemplate3, DenseSlice3, Direction3,
-    DirectionSet3, FrameOrientation3, FrameSlot3, Game3, InputDef3, InputId3, LayerId, Level3,
-    LevelBundle3, LevelCell3, LevelEntry3, Lifecycle3, LifecycleCommand3, LineMatchCellTemplate3,
-    LineOrientation3, LinePatternTemplate3, LineRuleTemplate3, LineWriteOpTemplate3,
-    LocalWriteOpTemplate3, MarkId3, MatchCell3, ObjectDef3, ObjectFamily3, ObjectId,
-    ObjectSelector3, ObjectSetMatcher3, ObjectVariant3, Offset3, Pattern3, Rule3, RuleEffect3,
-    SelectorCatalog3, SelectorGroup3, SelectorMark3, SelectorTag3, Size3, Sprite3, SpriteColor3,
-    SpriteSet3, SpriteVoxels3, VariantAxis3, WinCondition3, WriteOp3, lower_dense_rule_template,
-    lower_line_rule_template,
+use puzzle_grid3d::{
+    Coord3, Direction3, DirectionSet3, FrameExpr3, FrameSet3, FrameSlot3, Game3, Guard3, InputDef3,
+    InputId, LayerId, Level3, LevelBundle3, LevelCell3, LevelEntry3, MarkId3, MatchCell3,
+    ObjectDef3, ObjectId, ObjectSetMarkPattern3, ObjectSetMatcher3, Offset3, Pattern3, Rule3,
+    RuleApplication3, Size3, WinCondition3, WriteOp3,
+};
+use puzzle_grid3d_authoring::{
+    ConcreteObject3, DenseCell3, DensePattern3, DenseRow3, DenseRuleTemplate3, DenseSlice3,
+    FrameOrientation3, LineMatchCellTemplate3, LineOrientation3, LinePatternTemplate3,
+    LineRuleTemplate3, LineWriteOpTemplate3, LocalWriteOpTemplate3, ObjectFamily3, ObjectSelector3,
+    ObjectVariant3, SelectorCatalog3, SelectorGroup3, SelectorMark3, SelectorTag3, VariantAxis3,
+    lower_dense_rule_template, lower_line_rule_template,
 };
 use puzzle_kernel::{LocalFrame, LocalFrameExtent};
+use puzzle_runtime_contract::{LifecycleCommand, Puzzle3CameraEffect, RuntimeLifecycle};
+
+use crate::{
+    ModelSettings3, ParsedPuzzle3, Sprite3, SpriteColor3, SpriteSet3, SpriteVoxels3,
+    ViewportFollow3, ViewportFraming3, ViewportHeight3, ViewportMode3, ViewportSettings3,
+};
 
 const DEFAULT_LINE_GAP_LIMIT3: u16 = 64;
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ParsedPuzzle3 {
-    pub game: Game3,
-    pub catalog: SelectorCatalog3,
-    pub settings: ModelSettings3,
-    pub local_frame: Option<LocalFrame<ObjectId>>,
-    pub rules: Vec<Rule3>,
-    pub level_bundle: Option<LevelBundle3>,
-    pub level_packs: Vec<Option<String>>,
-    pub win_condition: Option<WinCondition3>,
-    pub lifecycle: Lifecycle3,
-    pub sprite_set: Option<SpriteSet3>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ModelSettings3 {
-    pub camera: CameraSettings3,
-    pub grid: GridSettings3,
-    pub sprite: SpriteRenderSettings3,
-    pub viewport: ViewportSettings3,
-    pub pixelate: PixelateRenderSettings3,
-}
-
-impl Default for ModelSettings3 {
-    fn default() -> Self {
-        Self {
-            camera: CameraSettings3::default(),
-            grid: GridSettings3::default(),
-            sprite: SpriteRenderSettings3::default(),
-            viewport: ViewportSettings3::default(),
-            pixelate: PixelateRenderSettings3::default(),
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CameraSettings3 {
-    pub yaw_degrees: i16,
-    pub pitch_degrees: i16,
-    pub zoom_milli: u16,
-    pub interactive_look: bool,
-    pub interactive_zoom: bool,
-}
-
-impl Default for CameraSettings3 {
-    fn default() -> Self {
-        Self {
-            yaw_degrees: 34,
-            pitch_degrees: 38,
-            zoom_milli: 1100,
-            interactive_look: false,
-            interactive_zoom: false,
-        }
-    }
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct GridSettings3 {
-    pub occupied_cells: bool,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SpriteRenderSettings3 {
-    pub shade: bool,
-}
-
-impl Default for SpriteRenderSettings3 {
-    fn default() -> Self {
-        Self { shade: true }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PixelateRenderSettings3 {
-    pub enabled: bool,
-    pub scale: u16,
-    pub smoothing: bool,
-}
-
-impl Default for PixelateRenderSettings3 {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            scale: 4,
-            smoothing: true,
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ViewportSettings3 {
-    pub mode: ViewportMode3,
-    pub follow: ViewportFollow3,
-    pub framing: Option<ViewportFraming3>,
-    pub focus: String,
-}
-
-impl Default for ViewportSettings3 {
-    fn default() -> Self {
-        Self {
-            mode: ViewportMode3::Full,
-            follow: ViewportFollow3::Snap,
-            framing: None,
-            focus: "Player".to_string(),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ViewportMode3 {
-    Full,
-    Centered,
-    Paged,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ViewportFollow3 {
-    Snap,
-    Smooth,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ViewportFraming3 {
-    pub width: u16,
-    pub depth: u16,
-    pub height: ViewportHeight3,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ViewportHeight3 {
-    Full,
-    Size(u16),
-}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ParseError3 {
@@ -286,14 +160,12 @@ impl Parser3 {
             build.add_object_spec(spec)?;
         }
         let object_defs = build.object_defs.clone();
-        let visual_objects = build.visual_objects.clone();
+        let display_objects = build.display_objects.clone();
         let catalog = build.catalog_with_groups(self.group_specs)?;
-        let game = Game3::new_with_inputs_and_roles(
+        let game = Game3::new_with_inputs(
             layer_count,
             object_defs,
             inputs_from_specs(self.input_specs)?,
-            visual_objects,
-            Vec::new(),
         );
         let local_frame =
             parse_optional_program_local_frame(self.local_frame_modifier.as_deref(), &catalog)?;
@@ -304,12 +176,18 @@ impl Parser3 {
 
         let line_gap_limit = line_gap_limit_from_levels(&self.level_specs);
         let mut rules = Vec::new();
+        let mut rule_camera_effects = Vec::new();
         for line in &self.rule_lines {
-            rules.extend(parse_rule_line(line, &catalog, &game, line_gap_limit)?);
+            let parsed = parse_rule_line(line, &catalog, &game, line_gap_limit)?;
+            rules.extend(parsed.rules);
+            rule_camera_effects.extend(parsed.camera_effects);
         }
         let mut on_level_start = Vec::new();
+        let mut on_level_start_camera_effects = Vec::new();
         for line in &self.on_level_start_lines {
-            on_level_start.extend(parse_rule_line(line, &catalog, &game, line_gap_limit)?);
+            let parsed = parse_rule_line(line, &catalog, &game, line_gap_limit)?;
+            on_level_start.extend(parsed.rules);
+            on_level_start_camera_effects.extend(parsed.camera_effects);
         }
         let on_level_clear = self
             .on_level_clear_lines
@@ -326,7 +204,7 @@ impl Parser3 {
                     .collect::<Result<Vec<_>, ParseError3>>()
             })
             .transpose()?;
-        let mut lifecycle = Lifecycle3::new(on_level_start, on_level_clear);
+        let mut lifecycle = RuntimeLifecycle::new(on_level_start, on_level_clear);
         lifecycle.on_level_start_local_frame = on_level_start_local_frame;
         lifecycle.on_last_level_clear = on_last_level_clear;
         let win_condition = if self.win_condition_lines.is_empty() {
@@ -355,6 +233,8 @@ impl Parser3 {
             settings: self.settings,
             local_frame,
             rules,
+            display_objects,
+            rule_camera_effects,
             level_bundle,
             level_packs: self
                 .level_specs
@@ -363,6 +243,7 @@ impl Parser3 {
                 .collect(),
             win_condition,
             lifecycle,
+            on_level_start_camera_effects,
             sprite_set: self.sprite_set,
         })
     }
@@ -941,7 +822,7 @@ struct ObjectSpec3 {
     name: String,
     axes: Vec<String>,
     layer: String,
-    visual: bool,
+    display: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -988,10 +869,10 @@ struct CatalogBuild3 {
     value_sets: Vec<(String, Vec<String>)>,
     layers: Vec<String>,
     next_object: u16,
-    concrete: Vec<crate::ConcreteObject3>,
+    concrete: Vec<ConcreteObject3>,
     families: Vec<ObjectFamily3>,
     object_defs: Vec<ObjectDef3>,
-    visual_objects: Vec<ObjectId>,
+    display_objects: Vec<ObjectId>,
 }
 
 impl CatalogBuild3 {
@@ -1003,7 +884,7 @@ impl CatalogBuild3 {
             concrete: Vec::new(),
             families: Vec::new(),
             object_defs: Vec::new(),
-            visual_objects: Vec::new(),
+            display_objects: Vec::new(),
         }
     }
 
@@ -1011,14 +892,13 @@ impl CatalogBuild3 {
         let layer = self.layer_id(&spec.layer)?;
         if spec.axes.is_empty() {
             let id = self.alloc_object();
-            self.concrete
-                .push(crate::ConcreteObject3::new(id, spec.name));
+            self.concrete.push(ConcreteObject3::new(id, spec.name));
             self.object_defs.push(ObjectDef3 {
                 id,
                 layer_id: layer,
             });
-            if spec.visual {
-                push_unique_object(&mut self.visual_objects, id);
+            if spec.display {
+                push_unique_object(&mut self.display_objects, id);
             }
             return Ok(());
         }
@@ -1039,8 +919,8 @@ impl CatalogBuild3 {
                 id,
                 layer_id: layer,
             });
-            if spec.visual {
-                push_unique_object(&mut self.visual_objects, id);
+            if spec.display {
+                push_unique_object(&mut self.display_objects, id);
             }
         }
         self.families
@@ -1465,7 +1345,7 @@ fn parse_object_spec(line: &str) -> Result<ObjectSpec3, ParseError3> {
         name: base.to_string(),
         axes: axes.map(str::to_string).collect(),
         layer: layer.to_string(),
-        visual: puzzle_authoring::is_display_object_token(name),
+        display: puzzle_authoring::is_display_object_token(name),
     })
 }
 
@@ -1489,7 +1369,7 @@ fn parse_layer_object_spec(token: &str, layer: &str) -> Result<ObjectSpec3, Pars
         name: base.to_string(),
         axes: axes.map(str::to_string).collect(),
         layer: layer.to_string(),
-        visual: puzzle_authoring::is_display_object_token(token),
+        display: puzzle_authoring::is_display_object_token(token),
     })
 }
 
@@ -1784,7 +1664,7 @@ fn lower_level_spec(
                     continue;
                 }
                 cells.push(LevelCell3::new(
-                    crate::Coord3::from_standard_text_position(size, x as u16, y as u16, z as u16),
+                    Coord3::from_standard_text_position(size, x as u16, y as u16, z as u16),
                     objects.clone(),
                 ));
             }
@@ -1917,7 +1797,7 @@ fn push_unique_object(objects: &mut Vec<ObjectId>, object: ObjectId) {
     }
 }
 
-fn parse_lifecycle_command_line(line: &str) -> Result<LifecycleCommand3, ParseError3> {
+fn parse_lifecycle_command_line(line: &str) -> Result<LifecycleCommand, ParseError3> {
     puzzle_scene::parse_scene_effect_at(line, line)
         .map_err(|error| message_at_source_line(error.message(), error.source_line()))
 }
@@ -2116,16 +1996,32 @@ fn default_local_frame_focus_objects(
     ))
 }
 
+struct ParsedRuleLine3 {
+    rules: Vec<Rule3>,
+    camera_effects: Vec<Vec<Puzzle3CameraEffect>>,
+}
+
+impl ParsedRuleLine3 {
+    fn new(rules: Vec<Rule3>, camera_effects: Vec<Vec<Puzzle3CameraEffect>>) -> Self {
+        debug_assert_eq!(rules.len(), camera_effects.len());
+        Self {
+            rules,
+            camera_effects,
+        }
+    }
+}
+
 fn parse_rule_line(
     line: &str,
     catalog: &SelectorCatalog3,
     game: &Game3,
     line_gap_limit: u16,
-) -> Result<Vec<Rule3>, ParseError3> {
+) -> Result<ParsedRuleLine3, ParseError3> {
     if let Some(effect) = parse_camera_rule_effect_line(line)? {
-        return Ok(vec![
-            Rule3::once(Pattern3::new(Vec::new()), Vec::new()).with_effects(vec![effect]),
-        ]);
+        return Ok(ParsedRuleLine3::new(
+            vec![Rule3::once(Pattern3::new(Vec::new()), Vec::new())],
+            vec![vec![effect]],
+        ));
     }
 
     let surface =
@@ -2144,7 +2040,11 @@ fn parse_rule_line(
     let (application, prefix, rest) = match surface {
         puzzle_authoring::RuleLineSurface::StandardStep(
             puzzle_authoring::StandardRuleStepSurface::Move,
-        ) => return Ok(standard_move_rules3(game)),
+        ) => {
+            return Ok(parsed_rules_without_camera_effects(standard_move_rules3(
+                game,
+            )));
+        }
         puzzle_authoring::RuleLineSurface::InputRewrite {
             application,
             surface,
@@ -2159,8 +2059,7 @@ fn parse_rule_line(
                     |error| message(format!("failed to lower input line rule: {error}")),
                 )?;
             apply_rule_application(&mut rules, application)?;
-            attach_rule_effects(&mut rules, &effects);
-            return Ok(rules);
+            return Ok(parsed_rules_with_camera_effects(rules, &effects));
         }
         puzzle_authoring::RuleLineSurface::NeutralRewrite {
             application,
@@ -2176,8 +2075,7 @@ fn parse_rule_line(
             )
             .map_err(|error| message(format!("failed to lower line rule: {error}")))?;
             apply_rule_application(&mut rules, application)?;
-            attach_rule_effects(&mut rules, &effects);
-            return Ok(rules);
+            return Ok(parsed_rules_with_camera_effects(rules, &effects));
         }
         puzzle_authoring::RuleLineSurface::OrientedRewrite {
             application,
@@ -2196,16 +2094,14 @@ fn parse_rule_line(
         let mut rules = lower_dense_rule_template(catalog, &rule)
             .map_err(|error| message(format!("failed to lower dense rule: {error:?}")))?;
         apply_rule_application(&mut rules, application)?;
-        attach_rule_effects(&mut rules, &effects);
-        return Ok(rules);
+        return Ok(parsed_rules_with_camera_effects(rules, &effects));
     }
 
     let orientation = parse_line_orientation(prefix)?;
     let mut rules = lower_line_rewrite(catalog, orientation, lhs, rhs, line_gap_limit)
         .map_err(|error| message(format!("failed to lower line rule: {error}")))?;
     apply_rule_application(&mut rules, application)?;
-    attach_rule_effects(&mut rules, &effects);
-    Ok(rules)
+    Ok(parsed_rules_with_camera_effects(rules, &effects))
 }
 
 fn apply_rule_application(
@@ -2216,13 +2112,11 @@ fn apply_rule_application(
         return Ok(());
     };
     let application = match application {
-        puzzle_authoring::RuleApplicationSurface::Once => crate::RuleApplication3::Once,
-        puzzle_authoring::RuleApplicationSurface::OnceAll => crate::RuleApplication3::OnceAll,
-        puzzle_authoring::RuleApplicationSurface::OncePerLevel => {
-            crate::RuleApplication3::OncePerLevel
-        }
-        puzzle_authoring::RuleApplicationSurface::Random => crate::RuleApplication3::Random,
-        puzzle_authoring::RuleApplicationSurface::Repeat => crate::RuleApplication3::UntilStable,
+        puzzle_authoring::RuleApplicationSurface::Once => RuleApplication3::Once,
+        puzzle_authoring::RuleApplicationSurface::OnceAll => RuleApplication3::OnceAll,
+        puzzle_authoring::RuleApplicationSurface::OncePerLevel => RuleApplication3::OncePerLevel,
+        puzzle_authoring::RuleApplicationSurface::Random => RuleApplication3::Random,
+        puzzle_authoring::RuleApplicationSurface::Repeat => RuleApplication3::UntilStable,
     };
     for rule in rules {
         rule.application = application;
@@ -2252,13 +2146,12 @@ fn standard_move_rules3(game: &Game3) -> Vec<Rule3> {
                 layer,
                 objects: objects.clone(),
             });
-            cell.require_object_set_mark
-                .push(crate::ObjectSetMarkPattern3 {
-                    binding,
-                    mark: MarkId3(puzzle_authoring::ANONYMOUS_MOVEMENT_MARK_INDEX),
-                    value: Some(direction_index as i64),
-                    match_value: puzzle_kernel::MarkValueMatch::Exact,
-                });
+            cell.require_object_set_mark.push(ObjectSetMarkPattern3 {
+                binding,
+                mark: MarkId3(puzzle_authoring::ANONYMOUS_MOVEMENT_MARK_INDEX),
+                value: Some(direction_index as i64),
+                match_value: puzzle_kernel::MarkValueMatch::Exact,
+            });
             let mut destination = MatchCell3::new(direction.offset);
             for layer_object in &objects {
                 destination = destination.forbid(*layer_object);
@@ -2287,23 +2180,30 @@ fn standard_move_rules3(game: &Game3) -> Vec<Rule3> {
     rules
 }
 
-fn attach_rule_effects(rules: &mut [Rule3], effects: &[RuleEffect3]) {
-    if effects.is_empty() {
-        return;
-    }
-    for rule in rules {
-        rule.effects.extend(effects.iter().cloned());
-    }
+fn parsed_rules_without_camera_effects(rules: Vec<Rule3>) -> ParsedRuleLine3 {
+    let camera_effects = vec![Vec::new(); rules.len()];
+    ParsedRuleLine3::new(rules, camera_effects)
 }
 
-fn input_for_direction(direction: Direction3) -> InputId3 {
+fn parsed_rules_with_camera_effects(
+    rules: Vec<Rule3>,
+    effects: &[Puzzle3CameraEffect],
+) -> ParsedRuleLine3 {
+    if effects.is_empty() {
+        return parsed_rules_without_camera_effects(rules);
+    }
+    let camera_effects = vec![effects.to_vec(); rules.len()];
+    ParsedRuleLine3::new(rules, camera_effects)
+}
+
+fn input_for_direction(direction: Direction3) -> InputId {
     match direction.name {
-        "left" => InputId3(0),
-        "right" => InputId3(1),
-        "up" => InputId3(2),
-        "down" => InputId3(3),
-        "front" => InputId3(4),
-        "back" => InputId3(5),
+        "left" => InputId(0),
+        "right" => InputId(1),
+        "up" => InputId(2),
+        "down" => InputId(3),
+        "front" => InputId(4),
+        "back" => InputId(5),
         _ => unreachable!("built-in directions are exhaustive"),
     }
 }
@@ -2502,7 +2402,7 @@ fn parse_oriented_patterns(
         .map_err(|error| message(format!("failed to lower win pattern: {error}")))
 }
 
-fn parse_rewrite(rest: &str) -> Result<(&str, &str, Vec<RuleEffect3>), ParseError3> {
+fn parse_rewrite(rest: &str) -> Result<(&str, &str, Vec<Puzzle3CameraEffect>), ParseError3> {
     let (lhs, rhs) = rest
         .split_once("->")
         .ok_or_else(|| message("rewrite missing ->"))?;
@@ -2530,7 +2430,7 @@ fn parse_bracketed_with_suffix(value: &str) -> Result<(&str, &str), ParseError3>
     Ok((rest[..end].trim(), rest[end + 1..].trim()))
 }
 
-fn parse_rule_effect_suffix(suffix: &str) -> Result<Vec<RuleEffect3>, ParseError3> {
+fn parse_rule_effect_suffix(suffix: &str) -> Result<Vec<Puzzle3CameraEffect>, ParseError3> {
     if suffix.is_empty() {
         return Ok(Vec::new());
     }
@@ -2540,24 +2440,24 @@ fn parse_rule_effect_suffix(suffix: &str) -> Result<Vec<RuleEffect3>, ParseError
     Ok(vec![effect])
 }
 
-fn parse_camera_rule_effect_line(line: &str) -> Result<Option<RuleEffect3>, ParseError3> {
+fn parse_camera_rule_effect_line(line: &str) -> Result<Option<Puzzle3CameraEffect>, ParseError3> {
     if line.trim() == "reset_camera" {
-        return Ok(Some(RuleEffect3::ResetCamera));
+        return Ok(Some(Puzzle3CameraEffect::Reset));
     }
     let tokens = line.split_whitespace().collect::<Vec<_>>();
     let ["set", name, "=", value] = tokens.as_slice() else {
         return Ok(None);
     };
     match *name {
-        "yaw" => Ok(Some(RuleEffect3::SetCameraYaw(parse_degrees_setting(
+        "yaw" => Ok(Some(Puzzle3CameraEffect::SetYaw(parse_degrees_setting(
             value, name,
         )?))),
-        "pitch" => Ok(Some(RuleEffect3::SetCameraPitch(parse_degrees_setting(
+        "pitch" => Ok(Some(Puzzle3CameraEffect::SetPitch(parse_degrees_setting(
             value, name,
         )?))),
-        "zoom" => Ok(Some(RuleEffect3::SetCameraZoom(parse_zoom_milli_setting(
-            value, name,
-        )?))),
+        "zoom" => Ok(Some(Puzzle3CameraEffect::SetZoom(
+            parse_zoom_milli_setting(value, name)?,
+        ))),
         _ => Err(message(format!("unknown 3D view variable: {name}"))),
     }
 }
@@ -2572,9 +2472,9 @@ fn parse_line_orientation(prefix: &str) -> Result<LineOrientation3, ParseError3>
 
 fn parse_frame_orientation(prefix: &str) -> Result<FrameOrientation3, ParseError3> {
     match prefix {
-        "frames" => return Ok(FrameOrientation3::FrameSet(crate::FrameSet3::Frames)),
-        "canonical" => return Ok(FrameOrientation3::FrameSet(crate::FrameSet3::Canonical)),
-        "mirrored" => return Ok(FrameOrientation3::FrameSet(crate::FrameSet3::Mirrored)),
+        "frames" => return Ok(FrameOrientation3::FrameSet(FrameSet3::Frames)),
+        "canonical" => return Ok(FrameOrientation3::FrameSet(FrameSet3::Canonical)),
+        "mirrored" => return Ok(FrameOrientation3::FrameSet(FrameSet3::Mirrored)),
         _ => {}
     }
     let parts = prefix.split(':').collect::<Vec<_>>();
@@ -2582,9 +2482,9 @@ fn parse_frame_orientation(prefix: &str) -> Result<FrameOrientation3, ParseError
         return Err(message("frame orientation must be A:B or A:B:C"));
     }
     let expr = if parts.len() == 2 {
-        crate::FrameExpr3::from_two(parse_frame_slot(parts[0])?, parse_frame_slot(parts[1])?)
+        FrameExpr3::from_two(parse_frame_slot(parts[0])?, parse_frame_slot(parts[1])?)
     } else {
-        crate::FrameExpr3::new(
+        FrameExpr3::new(
             parse_frame_slot(parts[0])?,
             parse_frame_slot(parts[1])?,
             parse_frame_slot(parts[2])?,
@@ -2700,7 +2600,7 @@ fn lower_input_line_rewrite(
                 let mut lowered = lower_line_rule_template(catalog, &rule)
                     .map_err(|error| format!("{error:?}"))?;
                 for rule in &mut lowered {
-                    rule.guards.push(crate::Guard3::InputIs(input));
+                    rule.guards.push(Guard3::InputIs(input));
                 }
                 rules.extend(lowered);
             }
@@ -3465,12 +3365,12 @@ fn direction_names(set: DirectionSet3) -> Vec<String> {
 
 fn default_inputs() -> Vec<InputDef3> {
     vec![
-        InputDef3::directional(InputId3(0), "left", Direction3::LEFT),
-        InputDef3::directional(InputId3(1), "right", Direction3::RIGHT),
-        InputDef3::directional(InputId3(2), "up", Direction3::UP),
-        InputDef3::directional(InputId3(3), "down", Direction3::DOWN),
-        InputDef3::directional(InputId3(4), "front", Direction3::FORWARD),
-        InputDef3::directional(InputId3(5), "back", Direction3::BACKWARD),
+        InputDef3::directional(InputId(0), "left", Direction3::LEFT),
+        InputDef3::directional(InputId(1), "right", Direction3::RIGHT),
+        InputDef3::directional(InputId(2), "up", Direction3::UP),
+        InputDef3::directional(InputId(3), "down", Direction3::DOWN),
+        InputDef3::directional(InputId(4), "front", Direction3::FORWARD),
+        InputDef3::directional(InputId(5), "back", Direction3::BACKWARD),
     ]
 }
 
@@ -3503,7 +3403,7 @@ fn inputs_from_specs(specs: Vec<InputSpec3>) -> Result<Vec<InputDef3>, ParseErro
             if let Some(default) = defaults.iter().find(|input| input.name == canonical_name) {
                 default.clone().with_keys(spec.keys)
             } else {
-                let id = InputId3(next_id);
+                let id = InputId(next_id);
                 next_id = next_id.saturating_add(1);
                 InputDef3::action(id, spec.name).with_keys(spec.keys)
             };
