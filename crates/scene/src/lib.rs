@@ -1,5 +1,14 @@
 use serde::{Deserialize, Serialize};
 
+mod parse;
+
+pub use parse::{
+    SceneParseError, parse_scene_effect, parse_scene_effect_at, parse_scene_effect_params,
+    parse_scene_expression, parse_scene_expression_args, parse_scene_expression_at,
+    parse_seconds_duration_ms, parse_seconds_duration_ms_at, parse_wait_duration_ms,
+    parse_wait_duration_ms_at,
+};
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SceneLayout {
     pub size: Option<SceneSize>,
@@ -47,6 +56,60 @@ pub enum SceneAlignY {
     Top,
     Center,
     Bottom,
+}
+
+pub fn scene_layout_is_default(layout: &SceneLayout) -> bool {
+    layout.size.is_none()
+        && layout.gap.is_none()
+        && layout.align == SceneLayout::default().align
+        && !layout.scroll
+}
+
+pub fn write_scene_layout_json(out: &mut String, layout: &SceneLayout) {
+    out.push('{');
+    let mut wrote = false;
+    if let Some(size) = layout.size {
+        out.push_str("\"size\": { \"width\": ");
+        out.push_str(&size.width.to_string());
+        out.push_str(", \"height\": ");
+        out.push_str(&size.height.to_string());
+        out.push_str(" }");
+        wrote = true;
+    }
+    if let Some(gap) = layout.gap {
+        if wrote {
+            out.push_str(", ");
+        }
+        out.push_str("\"gap\": ");
+        out.push_str(&gap.to_string());
+        wrote = true;
+    }
+    if layout.align != SceneLayout::default().align {
+        if wrote {
+            out.push_str(", ");
+        }
+        out.push_str("\"align\": { \"x\": \"");
+        out.push_str(match layout.align.x {
+            SceneAlignX::Left => "left",
+            SceneAlignX::Center => "center",
+            SceneAlignX::Right => "right",
+        });
+        out.push_str("\", \"y\": \"");
+        out.push_str(match layout.align.y {
+            SceneAlignY::Top => "top",
+            SceneAlignY::Center => "center",
+            SceneAlignY::Bottom => "bottom",
+        });
+        out.push_str("\" }");
+        wrote = true;
+    }
+    if layout.scroll {
+        if wrote {
+            out.push_str(", ");
+        }
+        out.push_str("\"scroll\": true");
+    }
+    out.push('}');
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -474,6 +537,148 @@ pub struct SceneCommand {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SceneAction {
     Goto { scene: String },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SceneEffect {
+    Input(String),
+    ComponentEffect(String),
+    RoutineCall(String),
+    Message {
+        text: SceneExpr,
+    },
+    Wait {
+        milliseconds: Option<u64>,
+    },
+    Conditional {
+        condition: SceneExpr,
+        effect: Box<SceneEffect>,
+    },
+    PlaySfx {
+        name: String,
+    },
+    PlayMusic {
+        name: String,
+    },
+    PauseMusic {
+        name: Option<String>,
+    },
+    ResumeMusic {
+        name: Option<String>,
+    },
+    StopMusic {
+        name: Option<String>,
+    },
+    Goto {
+        scene: String,
+        params: Vec<SceneEffectParam>,
+    },
+    Enter {
+        scene: String,
+        params: Vec<SceneEffectParam>,
+    },
+    Back,
+    Create {
+        scene: String,
+    },
+    Reset {
+        scene: String,
+    },
+    Delete {
+        scene: String,
+    },
+    Show {
+        scene: String,
+    },
+    Hide {
+        scene: String,
+    },
+    Toggle {
+        scene: String,
+    },
+    Focus {
+        scene: String,
+    },
+    PuzzleNextLevel {
+        target: String,
+    },
+    PuzzlePreviousLevel {
+        target: String,
+    },
+    GotoLevel {
+        target: String,
+        level: SceneExpr,
+    },
+    ResetPuzzle {
+        target: String,
+    },
+    LoadPuzzle {
+        target: String,
+        source: String,
+    },
+    Apply {
+        rule: String,
+        args: Vec<SceneExpr>,
+        target: Option<String>,
+    },
+    Copy {
+        source: String,
+        target: String,
+    },
+    SetVariable {
+        name: String,
+        value: SceneExpr,
+    },
+    ClearUndoHistory,
+    ClearGameProgress,
+    SetCurrentLevel {
+        level: SceneExpr,
+    },
+    ClearCurrentLevel,
+    SetLevelCleared {
+        level: Option<SceneExpr>,
+        cleared: bool,
+    },
+    ResetPersistentVars,
+    Sequence(Vec<SceneEffect>),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
+pub enum SceneEffectParam {
+    Level(SceneExpr),
+    Named { name: String, value: SceneExpr },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
+pub enum SceneExpr {
+    Bool(bool),
+    Int(i64),
+    Text(String),
+    Path(Vec<String>),
+    Call {
+        name: String,
+        args: Vec<SceneExpr>,
+    },
+    Binary {
+        op: SceneBinaryOp,
+        left: Box<SceneExpr>,
+        right: Box<SceneExpr>,
+    },
+    If {
+        condition: Box<SceneExpr>,
+        then_branch: Box<SceneExpr>,
+        else_branch: Box<SceneExpr>,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SceneBinaryOp {
+    And,
+    Eq,
+    NotEq,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

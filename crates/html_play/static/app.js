@@ -1184,7 +1184,7 @@ function currentSceneHasLevelMenu() {
 
 function sceneInteractionProfile(scene = currentSceneDef(), options = {}) {
   const state = options.state || currentState || {};
-  const hasMenuController = sceneHasComponent(scene, "level_menu") || sceneHasComponent(scene, "choice");
+  const hasMenuController = sceneHasComponent(scene, "level_menu");
   const menuFocusCells = hasMenuController ? sceneMenuFocusCells(scene) : [];
   const standardChoices = scene ? standardChoiceFocusCells(scene) : [];
   return {
@@ -2035,38 +2035,72 @@ function renderFor(component, scope = {}) {
 }
 
 function viewItems(component, scope = {}) {
-  if (component.source === "levels") {
-    return sceneLevelEntries(scope.__sceneDef).map(({ level, index }, position) => ({
-      kind: "level",
-      index,
-      position,
-      num: position + 1,
-      number: position + 1,
-      title: level.title || level.label || level.name || `Level ${index + 1}`,
-      name: level.name || `Level ${index + 1}`,
-      label: level.label || level.name || `Level ${index + 1}`,
-      cleared: level.cleared === true,
-      solved: level.cleared === true,
-      current: index === currentState.levelIndex,
-      selected: index === currentState.selectedLevelIndex,
-    }));
-  }
-  return [];
+  return sceneLevelEntries(scope.__sceneDef, component.source).map(({ level, index }, position) => ({
+    kind: "level",
+    index,
+    position,
+    num: position + 1,
+    number: position + 1,
+    title: level.title || level.label || level.name || `Level ${index + 1}`,
+    name: level.name || `Level ${index + 1}`,
+    label: level.label || level.name || `Level ${index + 1}`,
+    cleared: level.cleared === true,
+    solved: level.cleared === true,
+    current: index === currentState.levelIndex,
+    selected: index === currentState.selectedLevelIndex,
+  }));
 }
 
-function sceneLevelEntries(scene = currentSceneDef()) {
-  return (currentState?.levels || [])
+function sceneLevelEntries(scene = currentSceneDef(), source = "levels") {
+  const entries = (currentState?.levels || [])
     .map((level, index) => ({ level, index }))
-    .filter(({ level }) => sceneAcceptsResource(scene, "levels", level?.name || ""));
+    .filter(({ level }) => sceneAcceptsLevelResource(scene, level));
+  const collection = resolveLevelCollectionSource(source || "levels", entries);
+  return entries.filter(({ level }) => levelCollectionContains(collection, level));
 }
 
-function sceneAcceptsResource(scene, kind, name) {
+function sceneAcceptsLevelResource(scene, level) {
   const resources = scene?.resources || {};
-  const mode = resources[`${kind}Mode`] || "all";
+  const mode = resources.levelsMode || "all";
   if (mode !== "named") {
     return true;
   }
-  return (resources[kind] || []).some((resource) => resourceMatches(resource, name));
+  return (resources.levels || []).some((resource) => levelMatchesResource(resource, level));
+}
+
+function resolveLevelCollectionSource(source, entries) {
+  if (source === "levels") {
+    const keys = [...new Set(entries.map(({ level }) => levelCollectionKey(level)))];
+    if (keys.length === 0) {
+      throw new Error("for source `levels` requires a level collection");
+    }
+    if (keys.length > 1) {
+      throw new Error("for source `levels` is ambiguous; use a level collection name");
+    }
+    return { kind: "collection", key: keys[0] };
+  }
+  if (entries.some(({ level }) => levelMatchesResource(source, level))) {
+    return { kind: "resource", resource: source };
+  }
+  throw new Error(`Unknown level collection: ${source}`);
+}
+
+function levelCollectionContains(collection, level) {
+  if (collection.kind === "collection") {
+    return levelCollectionKey(level) === collection.key;
+  }
+  return levelMatchesResource(collection.resource, level);
+}
+
+function levelCollectionKey(level) {
+  const pack = level?.pack || "";
+  return pack ? `pack:${pack}` : "implicit";
+}
+
+function levelMatchesResource(resource, level) {
+  const name = level?.name || "";
+  const pack = level?.pack || "";
+  return pack === resource || resourceMatches(resource, name);
 }
 
 function resourceMatches(resource, name) {
@@ -2237,7 +2271,7 @@ function renderLevelMenu(state, component = {}, scope = {}) {
     list.classList.add("is-matrix");
     list.style.gridTemplateColumns = `repeat(${columns}, minmax(0, 1fr))`;
   }
-  const levels = sceneLevelEntries(scope.__sceneDef);
+  const levels = sceneLevelEntries(scope.__sceneDef, component.source || "levels");
   const cursorPosition = levelMenuCursorPosition(state, levels);
   for (const [position, { level, index }] of levels.entries()) {
     const item = document.createElement("li");
@@ -2806,7 +2840,7 @@ function componentFootprint(component, context = {}) {
     return emptyFootprint();
   }
   const focusKind = context.focusKind || "choice";
-  if (component.kind === "choice" || (focusKind === "menu" && component.kind === "button")) {
+  if (focusKind === "choice" && component.kind === "choice") {
     return {
       width: 1,
       height: 1,
@@ -2849,7 +2883,7 @@ function componentFootprint(component, context = {}) {
 }
 
 function levelMenuFocusFootprint(component, context = {}) {
-  const levels = sceneLevelEntries(context.scope?.__sceneDef);
+  const levels = sceneLevelEntries(context.scope?.__sceneDef, component.source || "levels");
   const itemCount = levels.length + (component.buttons || []).length;
   if (itemCount === 0) {
     return emptyCellFootprint();
@@ -3255,7 +3289,7 @@ function exprSource(expr, scope = {}) {
 
 function exprValueSource(value) {
   if (typeof value === "object" && value?.kind === "level" && value.name !== undefined) {
-    return String(value.name);
+    return JSON.stringify(String(value.name));
   }
   return commandPayload(value);
 }

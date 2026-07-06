@@ -33,6 +33,8 @@ const ctx = puzzle3RendererMode === "three" ? null : canvas.getContext("2d", { a
 const PUZZLE3_RENDERER_CONTRACT_VERSION = 1;
 const PUZZLE3_APP_CAMERA_MIN_PITCH_DEGREES = -90;
 const PUZZLE3_APP_CAMERA_MAX_PITCH_DEGREES = 90;
+const puzzle3MessageQueue = [];
+let puzzle3MessagePopup = null;
 
 function ensurePuzzle3ComponentFrame() {
   let existing = controllerOptions.canvas || document.querySelector("#view");
@@ -500,10 +502,11 @@ class Puzzle3SessionRuntime {
   }
 
   runLevelClearLifecycle() {
-    for (const command of this.base.lifecycle?.onLevelClear || []) {
-      if (command === "next_level") {
-        this.nextLevel();
-      }
+    const commands = this.levelIndex + 1 >= this.levels.length
+      ? (this.base.lifecycle?.onLastLevelClear || this.base.lifecycle?.onLevelClear || [])
+      : (this.base.lifecycle?.onLevelClear || []);
+    for (const effect of commands) {
+      applyPuzzle3LifecycleEffect(this, effect);
     }
   }
 
@@ -592,6 +595,76 @@ function applyPuzzle3PreviewUpdate(update = {}) {
     scene: update.scene,
     preferPuzzleScene: update.preferPuzzleScene !== false,
   });
+}
+
+function applyPuzzle3LifecycleEffect(runtime, effect) {
+  if (!effect || typeof effect !== "object") {
+    throw new Error("Puzzle3 lifecycle effect is missing or invalid.");
+  }
+  if (effect.kind === "puzzle_next_level") {
+    if (effect.target) {
+      throw new Error(`Puzzle3 lifecycle next_level target is unsupported: ${effect.target}`);
+    }
+    runtime.nextLevel();
+    return;
+  }
+  if (effect.kind === "message") {
+    showPuzzle3Message(sceneExprText(effect.text));
+    return;
+  }
+  if (effect.kind === "sequence") {
+    for (const child of effect.effects || []) {
+      applyPuzzle3LifecycleEffect(runtime, child.effect || child);
+    }
+    return;
+  }
+  throw new Error(`Unsupported Puzzle3 lifecycle effect: ${effect.kind || "(missing kind)"}`);
+}
+
+function sceneExprText(expr) {
+  if (!expr || typeof expr !== "object") {
+    throw new Error("Puzzle3 lifecycle message text is missing or invalid.");
+  }
+  if (expr.kind === "text") {
+    return String(expr.value || "");
+  }
+  throw new Error(`Unsupported Puzzle3 lifecycle message expression: ${expr.kind || "(missing kind)"}`);
+}
+
+function showPuzzle3Message(text) {
+  puzzle3MessageQueue.push(String(text || ""));
+  showNextPuzzle3Message();
+}
+
+function showNextPuzzle3Message() {
+  if (puzzle3MessagePopup || puzzle3MessageQueue.length === 0) {
+    return;
+  }
+  const backdrop = document.createElement("div");
+  backdrop.className = "message-popup-backdrop";
+  backdrop.setAttribute("role", "dialog");
+  backdrop.setAttribute("aria-modal", "true");
+
+  const panel = document.createElement("div");
+  panel.className = "message-popup";
+  const body = document.createElement("p");
+  body.className = "message-popup-text";
+  body.textContent = puzzle3MessageQueue.shift();
+  panel.append(body);
+  backdrop.append(panel);
+  backdrop.tabIndex = -1;
+  screenView.append(backdrop);
+  puzzle3MessagePopup = backdrop;
+  backdrop.focus({ preventScroll: true });
+}
+
+function closePuzzle3Message() {
+  if (!puzzle3MessagePopup) {
+    return;
+  }
+  puzzle3MessagePopup.remove();
+  puzzle3MessagePopup = null;
+  showNextPuzzle3Message();
 }
 
 function applyPuzzle3ModelComponentPreviewUpdate(update = {}) {
@@ -3349,6 +3422,13 @@ if (window.ResizeObserver) {
 }
 
 function handleStandaloneKeydown(event) {
+  if (puzzle3MessagePopup) {
+    event.preventDefault();
+    if (isPuzzle3MessageDismissKey(event)) {
+      closePuzzle3Message();
+    }
+    return;
+  }
   const control = sceneControlForEvent(event);
   if (control) {
     event.preventDefault();
@@ -3365,6 +3445,13 @@ function handleStandaloneKeydown(event) {
 }
 
 function handleComponentEmbedKeydown(event) {
+  if (puzzle3MessagePopup) {
+    event.preventDefault();
+    if (isPuzzle3MessageDismissKey(event)) {
+      closePuzzle3Message();
+    }
+    return;
+  }
   if (!puzzle3ComponentFor(currentScene())) {
     return;
   }
@@ -3377,6 +3464,10 @@ function handleComponentEmbedKeydown(event) {
   }
   event.preventDefault();
   startHeldSceneInput(rawInputHoldId({ key: event.key, code: event.code }), input);
+}
+
+function isPuzzle3MessageDismissKey(event) {
+  return ["Enter", " ", "Spacebar", "Escape", "z", "x", "c", "v"].includes(event.key);
 }
 
 function handleStandaloneKeyup(event) {
@@ -3829,7 +3920,7 @@ function requireRuntimeContract(source) {
   if (!contract || typeof contract !== "object") {
     throw new Error("Puzzle3 runtime fixture is missing runtimeContract.");
   }
-  if (Number(contract.version) !== 1) {
+  if (Number(contract.version) !== 2) {
     throw new Error(`Unsupported Puzzle3 runtimeContract version: ${contract.version}`);
   }
   requireRuntimeContractGame(contract);

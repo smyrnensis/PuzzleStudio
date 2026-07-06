@@ -117,7 +117,7 @@ scene playing {
     row {
       title "Multiple Patterns"
     }
-    board = puzzle main
+    puzzle board = main
   }
   keys {
     Escape q -> back

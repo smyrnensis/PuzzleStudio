@@ -1,10 +1,11 @@
 use puzzle_grid3d::{
     ConditionValueKind3, Game3, LevelBundle3, LocalFrame, ObjectId, Pattern3, Rule3, WinCondition3,
 };
+pub use puzzle_scene::SceneEffect as LifecycleCommand3;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub const PUZZLE3_RUNTIME_CONTRACT_VERSION: u16 = 1;
+pub const PUZZLE3_RUNTIME_CONTRACT_VERSION: u16 = 2;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -24,12 +25,6 @@ impl Lifecycle3 {
             on_last_level_clear: None,
         }
     }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum LifecycleCommand3 {
-    NextLevel,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

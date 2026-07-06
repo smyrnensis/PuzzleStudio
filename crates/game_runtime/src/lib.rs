@@ -1,8 +1,6 @@
 use puzzle_3d::{
-    Coord3, Game3, InputId3, ModelSettings3, ObjectId as ObjectId3, ParsedPuzzle3, RuleId3,
-    SelectorCatalog3, Size3, State3,
-    transition_program_with_local_frame as transition_program_with_local_frame3,
-    transition_program_without_input_with_local_frame,
+    Coord3, Game3, InputId3, LevelBundle3, ModelSettings3, ObjectId as ObjectId3, ParsedPuzzle3,
+    RuleId3, SelectorCatalog3, Size3, State3,
 };
 use puzzle_core::{
     CompiledGame, InputId, ObjectId, RuleId, State as PuzzleState, TransitionError,
@@ -16,8 +14,8 @@ use puzzle_lang::{
     ViewportSizeDef,
 };
 use puzzle_play::{
-    AnimationEvent, GameSession, LevelProgressSaveData, MessageEvent, PersistentVarSaveData,
-    ProgressSaveData, SoundEvent, WaitEvent, mixed_document_loaded_game,
+    AnimationEvent, GameSession, GameSession3, LevelProgressSaveData, MessageEvent,
+    PersistentVarSaveData, ProgressSaveData, SoundEvent, WaitEvent, mixed_document_loaded_game,
     puzzle3_document_scene_host_loaded_game, runtime_sounds_def,
 };
 use serde_json::{Value, json};
@@ -304,7 +302,7 @@ fn u16_value(value: &Value, name: &str) -> Result<u16, String> {
 pub struct Puzzle3RuntimeBridge {
     parsed: ParsedPuzzle3,
     animation: puzzle_lang::AnimationDef,
-    current_state: Option<State3>,
+    session: Option<GameSession3>,
     saved_states: SavedStateStore<State3>,
 }
 
@@ -323,7 +321,7 @@ impl Puzzle3RuntimeBridge {
         Ok(Self {
             parsed,
             animation,
-            current_state: None,
+            session: None,
             saved_states: SavedStateStore::new(),
         })
     }
@@ -335,29 +333,28 @@ impl Puzzle3RuntimeBridge {
         Ok(Self {
             parsed,
             animation,
-            current_state: None,
+            session: None,
             saved_states: SavedStateStore::new(),
         })
     }
 
     pub fn set_state_json(&mut self, state_json: &str) -> Result<(), String> {
-        self.current_state = Some(state3_from_json(&self.parsed.game, state_json)?);
+        let state = state3_from_json(&self.parsed.game, state_json)?;
+        if self.session.is_none() {
+            let bundle = self.level_bundle()?.clone();
+            self.session = Some(GameSession3::new(&bundle).map_err(|error| format!("{error:?}"))?);
+        }
+        self.session_mut()?.replace_current_state(state);
         Ok(())
     }
 
     pub fn current_cells_json(&self) -> Result<String, String> {
-        let state = self
-            .current_state
-            .as_ref()
-            .ok_or_else(|| "3D runtime current state has not been initialized".to_string())?;
+        let state = self.current_state()?;
         Ok(state3_cells_value(state, None).to_string())
     }
 
     pub fn is_current_complete(&self) -> Result<bool, String> {
-        let state = self
-            .current_state
-            .as_ref()
-            .ok_or_else(|| "3D runtime current state has not been initialized".to_string())?;
+        let state = self.current_state()?;
         Ok(self
             .parsed
             .win_condition
@@ -366,15 +363,13 @@ impl Puzzle3RuntimeBridge {
     }
 
     pub fn save_current_state(&mut self) -> Result<u32, String> {
-        let state = self
-            .current_state
-            .as_ref()
-            .ok_or_else(|| "3D runtime current state has not been initialized".to_string())?;
-        Ok(self.saved_states.save(state.clone()))
+        let state = self.current_state()?.clone();
+        Ok(self.saved_states.save(state))
     }
 
     pub fn restore_saved_state(&mut self, handle: u32) -> Result<(), String> {
-        self.current_state = Some(self.saved_states.restore(handle)?.clone());
+        let state = self.saved_states.restore(handle)?.clone();
+        self.session_mut()?.replace_current_state(state);
         Ok(())
     }
 
@@ -383,19 +378,36 @@ impl Puzzle3RuntimeBridge {
         program_key: &str,
         input: u16,
     ) -> Result<String, String> {
-        let state = self
-            .current_state
-            .as_ref()
-            .ok_or_else(|| "3D runtime current state has not been initialized".to_string())?;
-        let before = state.clone();
-        let next_state =
-            transition_selected_program3(&self.parsed, program_key, state, InputId3(input))?;
+        let before = self.current_state()?.clone();
+        match program_key {
+            "main" => {
+                let bundle = self.level_bundle()?.clone();
+                let rules = self.parsed.rules.clone();
+                let local_frame = self.parsed.local_frame.clone();
+                self.session_mut()?
+                    .apply_input_with_local_frame(
+                        &bundle,
+                        &rules,
+                        InputId3(input),
+                        local_frame.as_ref(),
+                    )
+                    .map_err(|error| format!("{error:?}"))?;
+            }
+            "level_start" => {
+                let bundle = self.level_bundle()?.clone();
+                let lifecycle = self.parsed.lifecycle.clone();
+                self.session_mut()?
+                    .run_level_start_lifecycle_on_current_state(&bundle, &lifecycle)
+                    .map_err(|error| format!("{error:?}"))?;
+            }
+            other => return Err(format!("unknown 3D transition program selector: {other}")),
+        }
+        let next_state = self.current_state()?.clone();
         let completed = self
             .parsed
             .win_condition
             .as_ref()
             .is_some_and(|condition| condition.is_met(&self.parsed.game, &next_state));
-        self.current_state = Some(next_state.clone());
         Ok(json!({
             "changed": before != next_state,
             "completed": completed,
@@ -405,6 +417,29 @@ impl Puzzle3RuntimeBridge {
             "commands": [],
         })
         .to_string())
+    }
+
+    fn level_bundle(&self) -> Result<&LevelBundle3, String> {
+        self.parsed
+            .level_bundle
+            .as_ref()
+            .ok_or_else(|| "3D runtime requires levels".to_string())
+    }
+
+    fn session(&self) -> Result<&GameSession3, String> {
+        self.session
+            .as_ref()
+            .ok_or_else(|| "3D runtime current state has not been initialized".to_string())
+    }
+
+    fn session_mut(&mut self) -> Result<&mut GameSession3, String> {
+        self.session
+            .as_mut()
+            .ok_or_else(|| "3D runtime current state has not been initialized".to_string())
+    }
+
+    fn current_state(&self) -> Result<&State3, String> {
+        Ok(self.session()?.state())
     }
 }
 
@@ -429,6 +464,7 @@ fn parsed_puzzle3_from_fixture(value: &Value) -> Result<ParsedPuzzle3, String> {
         local_frame: contract.local_frame,
         rules: contract.rules,
         level_bundle: Some(contract.level_bundle),
+        level_packs: Vec::new(),
         win_condition: contract.win_condition,
         lifecycle: contract.lifecycle,
         sprite_set: None,
@@ -1655,31 +1691,6 @@ fn json_u16(value: &Value, key: &str) -> Result<u16, String> {
         .map_err(|_| format!("3D state {key} out of range"))
 }
 
-fn transition_selected_program3(
-    parsed: &ParsedPuzzle3,
-    program_key: &str,
-    state: &State3,
-    input: InputId3,
-) -> Result<State3, String> {
-    match program_key {
-        "main" => transition_program_with_local_frame3(
-            &parsed.game,
-            state,
-            &parsed.rules,
-            input,
-            parsed.local_frame.as_ref(),
-        ),
-        "level_start" => transition_program_without_input_with_local_frame(
-            &parsed.game,
-            state,
-            &parsed.lifecycle.on_level_start,
-            parsed.lifecycle.on_level_start_local_frame.as_ref(),
-        ),
-        other => return Err(format!("unknown 3D transition program selector: {other}")),
-    }
-    .map_err(|error| format!("{error:?}"))
-}
-
 fn state3_cells_value(state: &State3, before: Option<&State3>) -> Value {
     let mut cells = Vec::new();
     for z in 0..state.size.height {
@@ -2085,7 +2096,7 @@ P
 
 scene playing {
 layout {
-board = puzzle default
+puzzle board = default
 }
 rules {
 step board
@@ -2148,7 +2159,7 @@ P.
 
 scene playing {
 layout {
-board = puzzle board
+puzzle board = board
 }
 rules {
 step board
@@ -2346,7 +2357,7 @@ scene playing {
     step board
   }
   layout {
-    board = puzzle mover
+    puzzle board = mover
   }
 }
 "#;

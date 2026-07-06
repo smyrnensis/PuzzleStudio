@@ -710,6 +710,13 @@ fn record_scene_layout_attr_surface_tokens(tokens: &[SourceToken], sink: &mut Su
     };
     let attr_start = match first.text.as_str() {
         "layout" | "row" | "column" | "box" => 1,
+        "puzzle" | "puzzle3" if tokens.get(2).is_some_and(|token| token.text == "=") => {
+            if tokens.get(4).is_some_and(|token| token.text == "level") {
+                6
+            } else {
+                4
+            }
+        }
         "puzzle" | "puzzle3" | "frame" => 2,
         _ => return,
     };

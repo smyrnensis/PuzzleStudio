@@ -5,35 +5,39 @@ theme puzzlescript
 
 puzzle3 sokoban {
 render {
-  camera {
-    yaw = 0
-    pitch = 90
-    zoom = 1
-  }
+camera {
+	yaw = 0
+	pitch = 90
+	zoom = 1
+}
 }
 
 layers {
-  floor = Floor
-  target = Goal
-  solid = Player Box Wall
+floor = Floor
+target = Goal
+solid = Player Box Wall
 }
 
 groups {
-  solid = Player Box Wall
+solid = Player Box Wall
 }
 
 rules {
-  input horizontal [ Player | Box | no solid ] -> [ | Player | Box ]
-  input horizontal [ Player | no solid ] -> [ | Player ]
+input horizontal [ Player | Box | no solid ] -> [ | Player | Box ]
+input horizontal [ Player | no solid ] -> [ | Player ]
 }
 
 win_conditions {
-  some Goal
-  no down [ no Box | Goal ]
+some Goal
+no down [ no Box | Goal ]
 }
 
 on_level_clear {
-  if win_conditions -> next_level
+if win_conditions -> next_level
+}
+
+on_last_level_clear {
+message "END"
 }
 }
 
@@ -49,15 +53,12 @@ scene playing {
 keys {
 q Escape -> goto level_select	
 }
-rules {
-  step sokoban
-}
-
 layout {
-  row {
-    title "Microban 3D"
-  }
-  sokoban = puzzle3 sokoban size 8 8
+title "Microban 3D"
+sokoban
+}
+rules {
+step sokoban
 }
 }
 
@@ -65,8 +66,8 @@ scene level_select {
 layout {
   title "Select Level"
   column scroll=true {
-    for level in levels {
-      choice join(level.num, ". ", level.title) -> goto sokoban(level)
+    for level in microban {
+      choice join("microban ", level.num) -> goto sokoban(level)
     }
   }
   button "Exit" -> goto title
@@ -286,9 +287,9 @@ Wall
 00010
 
 11111
-00010
 11111
-01000
+11111
+11111
 11111
 
 00010

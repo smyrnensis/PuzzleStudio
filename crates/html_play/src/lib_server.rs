@@ -323,12 +323,7 @@ fn solver_inputs3(game: &Game3) -> Vec<InputId3> {
     let mut inputs = game
         .inputs
         .iter()
-        .filter(|input| {
-            !matches!(
-                input.name.as_str(),
-                "undo" | "restart" | "next_level" | "previous_level"
-            )
-        })
+        .filter(|input| !is_solver_control_input(&input.name))
         .map(|input| input.id)
         .collect::<Vec<_>>();
     inputs.sort();
@@ -348,7 +343,7 @@ fn push_solution_moves(out: &mut String, loaded: &LoadedGame, inputs: &[InputId]
 }
 
 #[cfg(feature = "solver")]
-fn push_solution_steps(out: &mut String, loaded: &LoadedGame, steps: &[SolutionStep]) {
+fn push_solution_steps(out: &mut String, loaded: &LoadedGame, steps: &[PuzzleSolutionStep]) {
     out.push_str("\"steps\":[");
     for (index, step) in steps.iter().enumerate() {
         if index > 0 {
@@ -383,7 +378,7 @@ fn push_solution_moves3(out: &mut String, parsed: &ParsedPuzzle3, inputs: &[Inpu
 }
 
 #[cfg(feature = "solver")]
-fn push_solution_steps3(out: &mut String, parsed: &ParsedPuzzle3, steps: &[SolutionStep3]) {
+fn push_solution_steps3(out: &mut String, parsed: &ParsedPuzzle3, steps: &[Puzzle3SolutionStep]) {
     out.push_str("\"steps\":[");
     for (index, step) in steps.iter().enumerate() {
         if index > 0 {
@@ -461,9 +456,9 @@ fn push_lifecycle_commands3(out: &mut String, commands: &[LifecycleCommand3]) {
         if index > 0 {
             out.push(',');
         }
-        match command {
-            LifecycleCommand3::NextLevel => push_json_string(out, "next_level"),
-        }
+        out.push('{');
+        push_json_effect_fields(out, command);
+        out.push('}');
     }
     out.push(']');
 }
@@ -1538,57 +1533,8 @@ fn push_scene_default_value(out: &mut String, value: &SceneValue) {
 }
 
 fn push_scene_layout(out: &mut String, layout: &SceneLayoutDef) {
-    out.push_str("\"layout\":{");
-    let mut wrote = false;
-    if let Some(size) = layout.size {
-        out.push_str("\"size\":{");
-        push_json_number(out, "width", size.width as u64);
-        out.push(',');
-        push_json_number(out, "height", size.height as u64);
-        out.push('}');
-        wrote = true;
-    }
-    if let Some(gap) = layout.gap {
-        if wrote {
-            out.push(',');
-        }
-        push_json_number(out, "gap", gap as u64);
-        wrote = true;
-    }
-    if layout.align != SceneLayoutDef::default().align {
-        if wrote {
-            out.push(',');
-        }
-        out.push_str("\"align\":{");
-        push_json_pair(
-            out,
-            "x",
-            match layout.align.x {
-                SceneAlignXDef::Left => "left",
-                SceneAlignXDef::Center => "center",
-                SceneAlignXDef::Right => "right",
-            },
-        );
-        out.push(',');
-        push_json_pair(
-            out,
-            "y",
-            match layout.align.y {
-                SceneAlignYDef::Top => "top",
-                SceneAlignYDef::Center => "center",
-                SceneAlignYDef::Bottom => "bottom",
-            },
-        );
-        out.push('}');
-        wrote = true;
-    }
-    if layout.scroll {
-        if wrote {
-            out.push(',');
-        }
-        push_json_bool(out, "scroll", true);
-    }
-    out.push('}');
+    out.push_str("\"layout\":");
+    puzzle_scene::write_scene_layout_json(out, layout);
 }
 
 fn push_scene_component(out: &mut String, component: &SceneComponent) {

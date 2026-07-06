@@ -232,7 +232,7 @@ The root scene size is written with the same layout header as 2D:
 ```txt
 scene playing3d {
   state {
-    board = puzzle3 push3d
+    puzzle3 board = push3d
   }
 
   view size 720 540 {
@@ -260,7 +260,7 @@ semantic input on the right:
 ```txt
 scene playing {
   state {
-    board = puzzle3 push3d
+    puzzle3 board = push3d
   }
 
   rules {

@@ -501,7 +501,7 @@ step sokoban
 ```txt
 scene playing3d {
 state {
-board = puzzle3 push3d
+puzzle3 board = push3d
 }
 layout {
 puzzle3 board

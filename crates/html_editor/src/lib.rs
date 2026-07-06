@@ -2952,7 +2952,9 @@ mod tests {
 
     fn source_outline_icon_names() -> HashSet<String> {
         let marker = "  const icons = {\n";
-        let start = EDITOR_SOURCE_JS.find(marker).expect("find outline icon registry")
+        let start = EDITOR_SOURCE_JS
+            .find(marker)
+            .expect("find outline icon registry")
             + marker.len();
         let end = EDITOR_SOURCE_JS[start..]
             .find("\n  };\n  const paths")
@@ -3047,11 +3049,8 @@ P
 }}
 
 scene playing {{
-state {{
-board = puzzle default
-}}
 layout {{
-puzzle board
+puzzle board = default
 }}
 rules {{
 step board
@@ -3574,6 +3573,22 @@ step board
         assert!(
             html.contains("#123456"),
             "request CSS should flow into the generated preview"
+        );
+        assert!(
+            html.contains("window.PuzzleRuntimeExportJson = "),
+            "editor preview HTML must expose the runtime export metadata consumed by the level editor"
+        );
+        assert!(
+            html.contains(r#"\"engine\""#),
+            "editor preview metadata must include engine data for level editing"
+        );
+        assert!(
+            html.contains(r#"\"compiledPlay\""#),
+            "editor preview metadata must include compiled play data for solver and playtest actions"
+        );
+        assert!(
+            EDITOR_JS.contains("extractAssignedStringLiteral(source, \"PuzzleRuntimeExportJson\")"),
+            "editor metadata extraction must read the same preview export contract"
         );
         assert!(!html.contains("Preview Before"));
     }
@@ -4699,6 +4714,12 @@ levels3 demo of push3 {
             level_editor_compile_source
                 .contains("const exportInspection = inspectPreviewExport(html);")
         );
+        assert!(EDITOR_JS.contains("window.PuzzleRuntimeExportJson"));
+        assert!(EDITOR_JS.contains(
+            "const runtimeExportLiteral = extractAssignedStringLiteral(source, \"PuzzleRuntimeExportJson\");"
+        ));
+        assert!(EDITOR_JS.contains("function extractAssignedStringLiteral(source, globalName)"));
+        assert!(EDITOR_JS.contains("function extractStringLiteralAt(source, start)"));
         assert!(
             level_editor_compile_source.contains("const exportData = exportInspection.exportData;")
         );
@@ -4790,9 +4811,25 @@ levels3 demo of push3 {
             "sourcePuzzleLevelHeaderSource(levelName, levelIndent, { openBlock: true })"
         ));
         assert!(EDITOR_JS.contains("sourcePuzzleLevelHeaderSource(levelName, levelIndent)"));
-        assert!(EDITOR_LEVEL3D_JS.contains("sourcePuzzleLevelHeaderSource(levelName, indent, { defaultName: \"level 1\", openBlock: true })"));
+        assert!(EDITOR_LEVEL3D_JS.contains(
+            "sourcePuzzleLevelHeaderSource(levelName, indent, { defaultName: \"level 1\", openBlock: true })"
+        ));
         assert!(EDITOR_HTML.contains(r#"id="level3dNameInput" type="text" value="level 1""#));
         assert!(!EDITOR_LEVEL3D_JS.contains("level ${sanitizeLevel3dName(name)}"));
+    }
+
+    #[test]
+    fn level_name_picker_uses_parsed_level_definitions_only() {
+        assert!(EDITOR_JS.contains("function findLevelSourceEntries(source, document)"));
+        assert!(
+            EDITOR_JS.contains("for (const entry of findLevelDefinitions(source, range) || [])")
+        );
+        assert!(EDITOR_JS.contains(
+            "sourceName: Object.prototype.hasOwnProperty.call(entry, \"sourceName\") ? entry.sourceName : entry.name || \"\","
+        ));
+        assert!(!EDITOR_JS.contains("code.match(/^level(?:\\\\s+(.+?))?\\\\s*(?:\\\\{|$)/)"));
+        assert!(!EDITOR_JS.contains("const rawName = String(match[1] || \"\").trim();"));
+        assert!(!EDITOR_JS.contains("name: rawName.replace"));
     }
 
     #[test]
@@ -4963,7 +5000,16 @@ levels3 demo of push3 {
         let open_solver_source = &EDITOR_JS[open_solver..open_solver_end];
         assert!(!open_solver_source.contains("ensurePreviewTargetsActiveDocument();"));
         assert!(!open_solver_source.contains("syncSourceFromPreviewPane(\"solver\")"));
+        assert!(open_solver_source.contains("await ensurePreviewSolverExportData();"));
+        assert!(EDITOR_JS.contains("async function ensurePreviewSolverExportData()"));
+        assert!(EDITOR_JS.contains("exportData = await compileLevelEditorPreviewData();"));
+        assert!(EDITOR_JS.contains(
+            "setLevelSolveStatus(`Solver metadata compile failed: ${userFacingRuntimeError(error)}`, \"is-error\");"
+        ));
+        assert!(open_solver_source.contains("return Boolean(activeSolverTask);"));
         assert!(EDITOR_JS.contains("async function solvePreviewPaneCurrentLevel()"));
+        assert!(EDITOR_JS.contains("const ready = await openSolverPaneForCurrentLevel();"));
+        assert!(EDITOR_JS.contains("if (!ready) {"));
         assert!(
             !EDITOR_JS
                 .contains("const target = await resolveSourceTargetFromWasm(source, position);")
@@ -4980,8 +5026,8 @@ levels3 demo of push3 {
         assert!(EDITOR_JS.contains("async function solveEditedLevelFromEditor()"));
         assert!(EDITOR_JS.contains("function compiledLevelStateData("));
         assert!(EDITOR_JS.contains("function solverPuzzle3dPreviewSnapshot("));
-        assert!(EDITOR_JS.contains("const solve = module.solve_solver_task_json;"));
-        assert!(EDITOR_JS.contains("const solutionJson = solve(JSON.stringify(data.request));"));
+        assert!(EDITOR_JS.contains("const solve = module.solve_solver_task_json_with_progress;"));
+        assert!(EDITOR_JS.contains("const solutionJson = solve(JSON.stringify(data.request),"));
         assert!(EDITOR_JS.contains("function solverRequestForTask(task)"));
         assert!(EDITOR_JS.contains("if (isSolverTaskComplete(task))"));
         assert!(
@@ -5038,6 +5084,9 @@ levels3 demo of push3 {
     #[test]
     fn explorer_keeps_files_and_outline_in_one_visible_column() {
         assert!(EDITOR_HTML.contains(r#"class="explorer-sections""#));
+        assert!(EDITOR_HTML.contains(r#"<aside class="explorer-pane" aria-label="Explorer">"#));
+        assert!(EDITOR_HTML.contains("<span>Explorer</span>"));
+        assert!(!EDITOR_HTML.contains(r#"<aside class="explorer-pane" aria-label="Files">"#));
         assert!(EDITOR_HTML.contains(r#"data-explorer-section="files""#));
         assert!(EDITOR_HTML.contains(r#"id="sourceOutlineList""#));
         assert!(EDITOR_CSS.contains(".explorer-sections {\n  grid-row: 2;"));
@@ -5045,6 +5094,9 @@ levels3 demo of push3 {
             "grid-template-rows: minmax(88px, calc(100% - var(--source-outline-height) - 5px)) 5px minmax(88px, var(--source-outline-height));"
         ));
         assert!(EDITOR_CSS.contains("grid-template-rows: minmax(0, 1fr) 0 24px;"));
+        assert!(EDITOR_CSS.contains(".explorer-files-section {\n  grid-row: 1;"));
+        assert!(EDITOR_CSS.contains(".outline-splitter {\n  grid-row: 2;"));
+        assert!(EDITOR_CSS.contains(".explorer-outline-section {\n  grid-row: 3;"));
         assert!(EDITOR_CSS.contains(".explorer-section.is-collapsed {\n  min-height: 24px;"));
         assert!(EDITOR_CSS.contains(".source-outline-chevron"));
         assert!(EDITOR_SOURCE_JS.contains("const SOURCE_OUTLINE_KIND_ICON_NAMES"));
@@ -5077,6 +5129,11 @@ levels3 demo of push3 {
         assert!(
             EDITOR_WORKSPACE_JS.contains("scheduleSourceOutlineRefresh(true, { force: true });")
         );
+        assert!(
+            EDITOR_WORKSPACE_JS.contains(
+                "&& (outlineWasCollapsed || (id === \"files\" && explorerFilesCollapsed));"
+            )
+        );
         assert!(EDITOR_WORKSPACE_JS.contains(
             "document.querySelectorAll(\"[data-explorer-section-toggle]\").forEach((toggle) => {"
         ));
@@ -5085,7 +5142,8 @@ levels3 demo of push3 {
     #[test]
     fn source_outline_icon_mapping_matches_lucide_registry() {
         let kind_icons = js_object_string_map(EDITOR_SOURCE_JS, "SOURCE_OUTLINE_KIND_ICON_NAMES");
-        let lifecycle_icon = js_const_string(EDITOR_SOURCE_JS, "SOURCE_OUTLINE_LIFECYCLE_ICON_NAME");
+        let lifecycle_icon =
+            js_const_string(EDITOR_SOURCE_JS, "SOURCE_OUTLINE_LIFECYCLE_ICON_NAME");
         let default_icon = js_const_string(EDITOR_SOURCE_JS, "SOURCE_OUTLINE_DEFAULT_ICON_NAME");
         let icon_names = source_outline_icon_names();
         let used_icons = kind_icons
@@ -5113,9 +5171,13 @@ levels3 demo of push3 {
         );
 
         assert_eq!(kind_icons.get("puzzle").map(String::as_str), Some("puzzle"));
-        assert_eq!(kind_icons.get("puzzle3").map(String::as_str), Some("puzzle"));
-        assert_eq!(kind_icons.get("levels").map(String::as_str), Some("puzzle"));
-        assert_eq!(kind_icons.get("level").map(String::as_str), Some("puzzle"));
+        assert_eq!(
+            kind_icons.get("puzzle3").map(String::as_str),
+            Some("puzzle")
+        );
+        assert_eq!(kind_icons.get("levels").map(String::as_str), Some("map"));
+        assert_eq!(kind_icons.get("levels3").map(String::as_str), Some("map"));
+        assert_eq!(kind_icons.get("level").map(String::as_str), Some("map"));
         assert_eq!(kind_icons.get("tags").map(String::as_str), Some("tag"));
         assert_eq!(kind_icons.get("groups").map(String::as_str), Some("group"));
         assert_eq!(
@@ -5126,7 +5188,10 @@ levels3 demo of push3 {
             kind_icons.get("lose_conditions").map(String::as_str),
             Some("flag-off")
         );
-        assert_eq!(kind_icons.get("theme").map(String::as_str), Some("swatch-book"));
+        assert_eq!(
+            kind_icons.get("theme").map(String::as_str),
+            Some("swatch-book")
+        );
         assert_eq!(kind_icons.get("shapes").map(String::as_str), Some("shapes"));
         assert_eq!(
             kind_icons.get("animation").map(String::as_str),
@@ -5136,7 +5201,18 @@ levels3 demo of push3 {
             kind_icons.get("tween").map(String::as_str),
             Some("chart-spline")
         );
-        assert_eq!(kind_icons.get("routine").map(String::as_str), Some("workflow"));
+        assert_eq!(
+            kind_icons.get("routine").map(String::as_str),
+            Some("workflow")
+        );
+        assert_eq!(
+            kind_icons.get("scene").map(String::as_str),
+            Some("clapperboard")
+        );
+        assert_eq!(
+            kind_icons.get("screen").map(String::as_str),
+            Some("panels-top-left")
+        );
     }
 
     #[test]
@@ -5213,8 +5289,12 @@ levels3 demo of push3 {
             .expect("close tab handler end")
             + close_start;
         let close_handler = &EDITOR_WORKSPACE_JS[close_start..close_end];
-        assert!(close_handler.contains("const nextId = openTabIds[openTabIds.length - 1] || \"\";"));
-        assert!(!close_handler.contains("documents.find((document) => document.id !== documentId)"));
+        assert!(
+            close_handler.contains("const nextId = openTabIds[openTabIds.length - 1] || \"\";")
+        );
+        assert!(
+            !close_handler.contains("documents.find((document) => document.id !== documentId)")
+        );
     }
 
     #[test]
@@ -6273,17 +6353,40 @@ levels3 demo of push3 {
     }
 
     #[test]
-    fn source_overlay_layers_share_highlight_scroll_transform() {
-        assert!(EDITOR_SOURCE_JS.contains("function syncSourceOverlayLayerMetrics(clientWidth, scrollHeight)"));
-        assert!(EDITOR_SOURCE_JS.contains("const transform = `translate(${-sourceEditor.scrollLeft}px, ${-sourceEditor.scrollTop}px)`;"));
-        assert!(EDITOR_SOURCE_JS.contains("sourceHighlight.style.transform = transform;"));
-        assert!(EDITOR_SOURCE_JS.contains("sourceBlockSelectionLayer.style.transform = transform;"));
-        assert!(EDITOR_SOURCE_JS.contains("sourceFindMatchLayer.style.transform = transform;"));
-        assert!(EDITOR_SOURCE_JS.contains("caret.style.left = `${rect.left + sourceEditor.scrollLeft}px`;"));
-        assert!(EDITOR_SOURCE_JS.contains("caret.style.top = `${rect.top + sourceEditor.scrollTop}px`;"));
-        assert!(EDITOR_SOURCE_JS.contains("left: rect.left - wrapRect.left + sourceEditor.scrollLeft,"));
-        assert!(EDITOR_SOURCE_JS.contains("top: rect.top - wrapRect.top + sourceEditor.scrollTop"));
-        assert!(!EDITOR_SOURCE_JS.contains("sourceEditor.addEventListener(\"scroll\", syncSourceEditorScrollCursor);"));
+    fn source_layers_share_native_scroll_container() {
+        assert!(EDITOR_CSS.contains(".source-editor-wrap {\n  min-width: 0;\n  min-height: 0;\n  position: relative;\n  overflow: auto;"));
+        assert!(
+            EDITOR_CSS.contains(
+                "#sourceEditor,\n.source-highlight {\n  width: 100%;\n  min-height: 100%;"
+            )
+        );
+        assert!(EDITOR_CSS.contains("  overflow: hidden;\n  border: 0;"));
+        assert!(
+            EDITOR_SOURCE_JS
+                .contains("function syncSourceOverlayLayerMetrics(clientWidth, scrollHeight)")
+        );
+        assert!(EDITOR_SOURCE_JS.contains("return sourceEditorWrap.scrollTop || 0;"));
+        assert!(EDITOR_SOURCE_JS.contains("sourceEditorWrap.scrollTop = Math.max(0, value || 0);"));
+        assert!(EDITOR_SOURCE_JS.contains("sourceHighlight.style.transform = \"\";"));
+        assert!(EDITOR_SOURCE_JS.contains("sourceBlockSelectionLayer.style.transform = \"\";"));
+        assert!(EDITOR_SOURCE_JS.contains("sourceFindMatchLayer.style.transform = \"\";"));
+        assert!(
+            EDITOR_SOURCE_JS.contains("caret.style.left = `${rect.left + sourceScrollLeft()}px`;")
+        );
+        assert!(
+            EDITOR_SOURCE_JS.contains("caret.style.top = `${rect.top + sourceScrollTop()}px`;")
+        );
+        assert!(EDITOR_SOURCE_JS.contains("left: rect.left - wrapRect.left + sourceScrollLeft(),"));
+        assert!(EDITOR_SOURCE_JS.contains("top: rect.top - wrapRect.top + sourceScrollTop()"));
+        assert!(
+            !EDITOR_SOURCE_JS
+                .contains("sourceEditor.addEventListener(\"scroll\", syncSourceHighlightScroll);")
+        );
+        assert!(
+            !EDITOR_SOURCE_JS.contains(
+                "sourceEditor.addEventListener(\"scroll\", syncSourceEditorScrollCursor);"
+            )
+        );
     }
 
     #[test]

@@ -1057,6 +1057,49 @@ stop_music music_name
 }
 
 #[test]
+fn scene_lifecycle_accepts_bare_next_level_effect() {
+    let source = r#"
+title scene_next_level_effect
+
+puzzle default {
+layers {
+__legacy_layer_0 = Player
+}
+legend P = Player
+legend {
+. = empty
+P = Player
+}
+rules {
+}
+level "start" {
+P
+}
+}
+
+scene playing {
+layout {
+text "Playing"
+}
+on_scene_start {
+next_level
+}
+}
+"#;
+
+    let loaded = parse_game(source).unwrap();
+    let scene_start = loaded.scenes[0]
+        .transitions
+        .iter()
+        .find(|transition| transition.trigger == SceneTransitionTrigger::SceneStart)
+        .unwrap();
+    assert!(matches!(
+        &scene_start.effect,
+        SceneEffect::PuzzleNextLevel { target } if target.is_empty()
+    ));
+}
+
+#[test]
 fn scene_message_effect_parses_literal_and_path() {
     let source = r#"
 title scene_message_effect
@@ -1371,7 +1414,7 @@ P
 
 scene playing {
 layout {
-board = puzzle current_level
+puzzle board = current_level
 }
 }
 "#;
@@ -2551,7 +2594,7 @@ P
 
 scene playing {
 layout {
-board = puzzle board
+puzzle board = board
 frame board
 }
 }
@@ -2561,6 +2604,39 @@ frame board
         &loaded.scenes[0].components[1],
         SceneComponent::Frame(frame) if frame.kind == "frame" && frame.source == "board"
     ));
+}
+
+#[test]
+fn scene_rejects_old_rhs_puzzle_slot_declaration() {
+    let source = r#"
+title old_rhs_puzzle_slot
+
+puzzle default {
+layers {
+actor = Player
+}
+legend {
+. = empty
+P = Player
+}
+rules {
+}
+level "start" {
+P
+}
+}
+
+scene playing {
+layout {
+board = puzzle default
+}
+}
+"#;
+    let error = parse_game(source).unwrap_err().to_string();
+    assert!(
+        error.contains("scene puzzle declaration must be: puzzle <slot> = <model>"),
+        "{error}"
+    );
 }
 
 #[test]
@@ -2586,8 +2662,8 @@ P
 
 scene playing {
 layout {
-sokoban1 = puzzle sokoban
-sokoban2 = puzzle sokoban
+puzzle sokoban1 = sokoban
+puzzle sokoban2 = sokoban
 }
 rules {
 step sokoban1
@@ -3225,7 +3301,7 @@ button "Levels" -> goto level_select
 
 scene playing {
 layout {
-board = puzzle default
+puzzle board = default
 }
 }
 "#;
@@ -10379,7 +10455,7 @@ P.
 
 scene playing {
 layout {
-board = puzzle default
+puzzle board = default
 message_visible = false
 moves = 0
 message = "Push the box"
@@ -10464,7 +10540,7 @@ P
 
 scene select {
 layout {
-board = puzzle default
+puzzle board = default
 column {
 button board.level.label -> playing.goto board.level.name
 button "Block" -> playing.goto board.level.index
@@ -10480,7 +10556,7 @@ playing.goto board.level.name
 
 scene playing {
 layout {
-board = puzzle default
+puzzle board = default
 }
 }
 "#;
@@ -10549,7 +10625,7 @@ P
 
 scene playing {
 layout {
-board = puzzle default
+puzzle board = default
 button "Restart Scene" -> playing.restart
 button "Restart Board" -> board.restart
 }
@@ -10611,7 +10687,7 @@ goto playing play_music music
 
 scene playing {
 layout {
-board = puzzle default
+puzzle board = default
 }
 }
 "#;
@@ -10667,7 +10743,7 @@ end
 
 scene playing {
 layout {
-board = puzzle default
+puzzle board = default
 }
 }
 
@@ -10727,7 +10803,7 @@ scene title {
 
 scene playing {
 layout {
-board = puzzle default
+puzzle board = default
 }
 }
 "#;
@@ -11069,7 +11145,7 @@ scene playing {
 var message = "Ready"
 persistent var last_tab = levels
 layout {
-board = puzzle default
+puzzle board = default
 }
 }
 "#;
@@ -11130,7 +11206,7 @@ level "start" {
 
 scene playing {
 layout {
-board = puzzle default
+puzzle board = default
 }
 keys {
 d ArrowRight -> input right
@@ -16459,8 +16535,8 @@ P
 scene mixed_play {
 layout {
 row {
-flat_board = puzzle flat
-cube_board = puzzle3 cube
+puzzle flat_board = flat
+puzzle3 cube_board = cube
 }
 }
 }
@@ -16553,6 +16629,44 @@ fn spec_3d_exports_playable_puzzle_scene() {
     assert!(fixture_json.contains("\"scroll\": true"));
     assert!(fixture_json.contains("\"levels\": [0, 1, 2]"));
     assert!(!fixture_json.contains("\"kind\": \"level_menu\""));
+}
+
+#[test]
+fn puzzle3_lifecycle_diagnostic_uses_shared_source_line_mapping() {
+    let source = r#"title "Line Probe"
+
+puzzle3 lifecycle {
+layers {
+actor = Player
+}
+
+on_last_level_clear {
+messag "END"
+}
+}
+"#;
+    let report = super::parse_game(source).unwrap_err();
+    let diagnostic = report
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.message.contains("effect must be"))
+        .expect("shared scene effect diagnostic");
+    let expected_line = source
+        .lines()
+        .position(|line| line.trim() == r#"messag "END""#)
+        .map(|line| line + 1);
+
+    assert_eq!(
+        diagnostic
+            .primary_span
+            .as_ref()
+            .and_then(|span| span.source_line.as_deref()),
+        Some(r#"messag "END""#)
+    );
+    assert_eq!(
+        diagnostic.primary_span.as_ref().and_then(|span| span.line),
+        expected_line
+    );
 }
 
 #[test]
@@ -16677,7 +16791,7 @@ scene level_select {
 
 scene playing {
   layout {
-    board = puzzle3 demo
+    puzzle3 board = demo
   }
 }
 
@@ -16807,8 +16921,8 @@ levels3 cube_levels of cube {
 scene mixed_play {
   layout {
     row {
-      flat_board = puzzle flat
-      cube_board = puzzle3 cube
+      puzzle flat_board = flat
+      puzzle3 cube_board = cube
     }
   }
 }

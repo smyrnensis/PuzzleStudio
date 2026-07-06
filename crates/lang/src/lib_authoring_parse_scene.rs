@@ -995,13 +995,13 @@ fn parse_scene_leaf_component(
     match tokens.as_slice() {
         ["puzzle", "current_level"] => Err(parse_error(
             &lines[start],
-            "current_level is not scene syntax; declare a puzzle slot with `board = puzzle <name>`",
+            "current_level is not scene syntax; declare a puzzle slot with `puzzle board = <model>`",
         )),
         ["puzzle", state_name, attrs @ ..] => {
             if *state_name == "current_level" {
                 return Err(parse_error(
                     &lines[start],
-                    "current_level is not scene syntax; declare a puzzle slot with `board = puzzle <name>`",
+                    "current_level is not scene syntax; declare a puzzle slot with `puzzle board = <model>`",
                 ));
             }
             if !is_identifier(state_name) {

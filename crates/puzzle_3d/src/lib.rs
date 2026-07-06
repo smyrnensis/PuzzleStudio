@@ -1,6 +1,5 @@
 mod parser;
 mod selector;
-mod session;
 mod snapshot;
 mod sprite;
 mod visual;
@@ -47,7 +46,6 @@ pub use selector::{
     lower_dense_rule_template, lower_line_rule_template, lower_pattern_template,
     lower_rule_template,
 };
-pub use session::{GameSession3, GameSessionError3, SessionLifecycleResult3};
 pub use snapshot::{BoardCell3, BoardSnapshot3};
 pub use sprite::{Sprite3, SpriteColor3, SpriteSet3, SpriteVoxels3};
 pub use visual::{ObjectVisual3, VisualCell3, VisualObject3, VisualSnapshot3};
@@ -92,6 +90,19 @@ mod tests {
             source_block(source, "sprites3 basic").as_str(),
         ]
         .join("\n\n")
+    }
+
+    fn next_level_effect3() -> LifecycleCommand3 {
+        LifecycleCommand3::PuzzleNextLevel {
+            target: String::new(),
+        }
+    }
+
+    fn conditional_win_next_level_effect3() -> LifecycleCommand3 {
+        LifecycleCommand3::Conditional {
+            condition: puzzle_scene::SceneExpr::Path(vec!["win_conditions".to_string()]),
+            effect: Box::new(next_level_effect3()),
+        }
     }
 
     fn source_block(source: &str, marker: &str) -> String {
@@ -3030,6 +3041,10 @@ level "unsolved" {
         let win = parsed.win_condition.as_ref().expect("win condition exists");
 
         assert_eq!(bundle.level_count(), 2);
+        assert_eq!(
+            parsed.level_packs,
+            vec![Some("basic".to_string()), Some("basic".to_string())]
+        );
 
         let solved = bundle.build_level_state(0).unwrap();
         let unsolved = bundle.build_level_state(1).unwrap();
@@ -3144,11 +3159,33 @@ on_last_level_clear {
         )
         .unwrap();
 
-        assert_eq!(
-            parsed.lifecycle.on_level_clear,
-            vec![LifecycleCommand3::NextLevel]
-        );
+        assert_eq!(parsed.lifecycle.on_level_clear, vec![next_level_effect3()]);
         assert_eq!(parsed.lifecycle.on_last_level_clear, Some(Vec::new()));
+    }
+
+    #[test]
+    fn parser_uses_shared_scene_effect_for_last_level_message() {
+        let parsed = parse_puzzle3d(
+            r#"
+puzzle3 lifecycle {
+layers {
+actor = Player
+}
+
+on_last_level_clear {
+message "END"
+}
+}
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            parsed.lifecycle.on_last_level_clear,
+            Some(vec![LifecycleCommand3::Message {
+                text: puzzle_scene::SceneExpr::Text("END".to_string())
+            }])
+        );
     }
 
     #[test]
@@ -3167,7 +3204,7 @@ on_last_level_clear {
         assert_eq!(bundle.level(2).unwrap().level.size, Size3::new(9, 6, 2));
         assert_eq!(
             parsed.lifecycle.on_level_clear,
-            vec![LifecycleCommand3::NextLevel]
+            vec![conditional_win_next_level_effect3()]
         );
         let sprites = parsed.sprite_set.as_ref().expect("sprite set exists");
         assert_eq!(sprites.name, "basic");
@@ -3196,7 +3233,7 @@ on_last_level_clear {
         assert!(!contract.rules.is_empty());
         assert_eq!(
             contract.lifecycle.on_level_clear,
-            vec![LifecycleCommand3::NextLevel]
+            vec![conditional_win_next_level_effect3()]
         );
         assert!(contract.win_condition.is_some());
         assert!(fixture_json.contains("\"Box\": {"));
@@ -3229,102 +3266,7 @@ on_last_level_clear {
         assert!(second_initial.has_object(&bundle.game, Coord3::new(2, 2, 0), ObjectId(2)));
         assert!(second_initial.has_object(&bundle.game, Coord3::new(3, 2, 0), ObjectId(2)));
 
-        let mut session = GameSession3::new(bundle).unwrap();
-        let solution = [
-            Direction3::BACKWARD,
-            Direction3::LEFT,
-            Direction3::FORWARD,
-            Direction3::RIGHT,
-            Direction3::RIGHT,
-            Direction3::RIGHT,
-            Direction3::BACKWARD,
-            Direction3::LEFT,
-            Direction3::FORWARD,
-            Direction3::LEFT,
-            Direction3::LEFT,
-            Direction3::BACKWARD,
-            Direction3::BACKWARD,
-            Direction3::RIGHT,
-            Direction3::FORWARD,
-            Direction3::LEFT,
-            Direction3::FORWARD,
-            Direction3::RIGHT,
-            Direction3::FORWARD,
-            Direction3::FORWARD,
-            Direction3::LEFT,
-            Direction3::BACKWARD,
-            Direction3::RIGHT,
-            Direction3::BACKWARD,
-            Direction3::BACKWARD,
-            Direction3::RIGHT,
-            Direction3::RIGHT,
-            Direction3::FORWARD,
-            Direction3::LEFT,
-            Direction3::BACKWARD,
-            Direction3::LEFT,
-            Direction3::FORWARD,
-            Direction3::FORWARD,
-        ];
-        for direction in solution {
-            assert!(
-                session
-                    .move_direction_with_win_condition(bundle, &parsed.rules, direction, win)
-                    .unwrap()
-            );
-        }
-
-        assert!(session.completed());
-        assert_eq!(session.move_count(), 33);
-        assert!(
-            session
-                .state()
-                .has_object(&bundle.game, Coord3::new(2, 5, 1), ObjectId(4))
-        );
-        assert!(
-            session
-                .state()
-                .has_object(&bundle.game, Coord3::new(1, 3, 1), ObjectId(4))
-        );
-
-        assert!(session.has_next_level(bundle));
-        assert!(session.next_level(bundle).unwrap());
-        assert_eq!(session.current_level_index(), 1);
-        assert_eq!(session.move_count(), 0);
-        assert!(!session.completed());
-        assert!(
-            session
-                .state()
-                .has_object(&bundle.game, Coord3::new(3, 4, 1), ObjectId(3))
-        );
-        assert!(session.has_next_level(bundle));
-        assert!(session.next_level(bundle).unwrap());
-        assert_eq!(session.current_level_index(), 2);
-        assert!(
-            session
-                .state()
-                .has_object(&bundle.game, Coord3::new(6, 1, 1), ObjectId(3))
-        );
-        assert!(!session.has_next_level(bundle));
-
-        let mut lifecycle_session = GameSession3::new_with_lifecycle(bundle, &parsed.lifecycle)
-            .expect("lifecycle session starts");
-        let mut last_result = SessionLifecycleResult3::default();
-        for direction in solution {
-            last_result = lifecycle_session
-                .apply_input_with_lifecycle(
-                    bundle,
-                    &parsed.rules,
-                    input_for_microban_offset(direction.offset),
-                    win,
-                    &parsed.lifecycle,
-                )
-                .unwrap();
-        }
-        assert!(last_result.cleared);
-        assert!(last_result.level_changed);
-        assert_eq!(lifecycle_session.current_level_index(), 1);
-        assert_eq!(lifecycle_session.move_count(), 0);
-        assert!(!lifecycle_session.completed());
+        assert!(!parsed.rules.is_empty());
     }
 
     #[test]
@@ -3352,7 +3294,10 @@ on_last_level_clear {
         assert!(fixture_json.contains("\"kind\": \"puzzle3\""));
         assert!(fixture_json.contains("\"levels\""));
 
-        GameSession3::new_with_lifecycle(bundle, &parsed.lifecycle).expect("session starts");
+        assert_eq!(
+            parsed.lifecycle.on_level_clear,
+            vec![conditional_win_next_level_effect3()]
+        );
     }
 
     #[test]

@@ -223,7 +223,7 @@ scene playing(level) {
 			title
 			subtitle level.label
 		}
-			board = puzzle sokoban
+			puzzle board = sokoban
 	}
 	keys {
 		q Escape -> {

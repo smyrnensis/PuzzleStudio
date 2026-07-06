@@ -304,7 +304,7 @@ fn collect_line_symbols(
         return;
     }
     match tokens {
-        ["puzzle", name, ..] => {
+        ["puzzle", name, ..] if scope.is_none() => {
             insert_identifier(&mut symbols.puzzles, name);
         }
         ["scene", name, ..] => {
@@ -366,6 +366,14 @@ fn collect_line_symbols(
         ["var" | "const", name, ..]
         | ["persistent", "var" | "const", name, ..]
         | ["persistent", name, ..] => {
+            insert_identifier(&mut symbols.states, name);
+        }
+        ["puzzle" | "puzzle3", name, "=", ..]
+            if matches!(
+                scope,
+                Some(SourceScope::SceneLayout | SourceScope::SceneState)
+            ) =>
+        {
             insert_identifier(&mut symbols.states, name);
         }
         [name, "=", ..]
@@ -2342,7 +2350,7 @@ for k in ki
 }
 scene playing {
 layout {
-board = puzzle so
+puzzle board = so
 }
 }
 "#;

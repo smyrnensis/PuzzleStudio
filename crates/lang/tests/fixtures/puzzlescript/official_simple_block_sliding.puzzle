@@ -517,7 +517,7 @@ scene playing {
     row {
       title "Simple Block Sliding Game"
     }
-    board = puzzle main
+    puzzle board = main
   }
   keys {
     Escape q -> back

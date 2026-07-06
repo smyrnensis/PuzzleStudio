@@ -338,7 +338,7 @@ row {
 title
 subtitle level.label
 }
-board = puzzle fixban
+puzzle board = fixban
 }
 keys {
 Escape -> open_menu

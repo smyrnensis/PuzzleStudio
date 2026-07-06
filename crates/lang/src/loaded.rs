@@ -7,11 +7,11 @@ use puzzle_core::{
 };
 pub use puzzle_scene::{
     LevelMenuLocked, SceneAlign as SceneAlignDef, SceneAlignX as SceneAlignXDef,
-    SceneAlignY as SceneAlignYDef, SceneButton as SharedSceneButton,
+    SceneAlignY as SceneAlignYDef, SceneBinaryOp, SceneButton as SharedSceneButton,
     SceneComponent as SharedSceneComponent, SceneConditional as SharedSceneConditional,
-    SceneContainer as SharedSceneContainer, SceneFor as SharedSceneFor,
-    SceneForSource as ForSource, SceneLayout as SceneLayoutDef, SceneSize as SceneSizeDef,
-    SceneTextComponent as SharedSceneTextComponent,
+    SceneContainer as SharedSceneContainer, SceneEffect, SceneEffectParam, SceneExpr,
+    SceneFor as SharedSceneFor, SceneForSource as ForSource, SceneLayout as SceneLayoutDef,
+    SceneSize as SceneSizeDef, SceneTextComponent as SharedSceneTextComponent,
 };
 use serde::{Deserialize, Serialize};
 
@@ -90,6 +90,68 @@ pub struct LoadedGame {
     pub visuals: VisualsDef,
     pub render: PuzzleRenderDef,
     pub screen: PuzzleScreenDef,
+}
+
+impl LoadedGame {
+    pub fn empty_scene_host(
+        title: impl Into<String>,
+        puzzle_name: impl Into<String>,
+        level_name: impl Into<String>,
+    ) -> Self {
+        let puzzle_name = puzzle_name.into();
+        let initial_state = State::empty(1, 1, 1, 0)
+            .expect("empty scene host state uses valid non-zero dimensions");
+        Self {
+            title: title.into(),
+            subtitle: None,
+            author: None,
+            homepage: None,
+            game: CompiledGame::new(1, Vec::new(), Vec::new()),
+            warnings: Vec::new(),
+            default_wait_ms: 250,
+            default_again_ms: 150,
+            input_buffer: InputBufferDef::default(),
+            animation: AnimationDef::default(),
+            rule_animations: HashMap::new(),
+            rule_effects: HashMap::new(),
+            level_start_program: None,
+            display_level_start_program: None,
+            level_clear_program: None,
+            last_level_clear_program: None,
+            display_level_clear_program: None,
+            display_program: None,
+            levels: vec![Level {
+                name: level_name.into(),
+                pack: None,
+                puzzle: puzzle_name,
+                initial_state,
+                regions: Vec::new(),
+                level_start_program: None,
+                level_clear_program: None,
+            }],
+            run_rules_on_level_start: false,
+            legend: AsciiLegend::new(0, '.'),
+            controls: Controls::default(),
+            variables: Vec::new(),
+            scenes: Vec::new(),
+            object_labels: HashMap::new(),
+            object_groups: HashMap::new(),
+            input_labels: HashMap::new(),
+            global_labels: HashMap::new(),
+            persistent_vars: Vec::new(),
+            condition_labels: HashMap::new(),
+            conditions: HashMap::new(),
+            goal: None,
+            lose: None,
+            sounds: SoundsDef::default(),
+            model_operation_sounds: Vec::new(),
+            theme: ThemeDef::default(),
+            assets: AssetsDef::default(),
+            visuals: VisualsDef::default(),
+            render: PuzzleRenderDef::default(),
+            screen: PuzzleScreenDef::default(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -486,145 +548,6 @@ pub type SceneButtonDef = SharedSceneButton<SceneEffect, SceneExpr>;
 
 pub type SceneConditionalDef =
     SharedSceneConditional<SceneEffect, SceneExpr, SceneTextContent, SceneExpr>;
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum SceneEffect {
-    Input(String),
-    ComponentEffect(String),
-    RoutineCall(String),
-    Message {
-        text: SceneExpr,
-    },
-    Wait {
-        milliseconds: Option<u64>,
-    },
-    Conditional {
-        condition: SceneExpr,
-        effect: Box<SceneEffect>,
-    },
-    PlaySfx {
-        name: String,
-    },
-    PlayMusic {
-        name: String,
-    },
-    PauseMusic {
-        name: Option<String>,
-    },
-    ResumeMusic {
-        name: Option<String>,
-    },
-    StopMusic {
-        name: Option<String>,
-    },
-    Goto {
-        scene: String,
-        params: Vec<SceneEffectParam>,
-    },
-    Enter {
-        scene: String,
-        params: Vec<SceneEffectParam>,
-    },
-    Back,
-    Create {
-        scene: String,
-    },
-    Reset {
-        scene: String,
-    },
-    Delete {
-        scene: String,
-    },
-    Show {
-        scene: String,
-    },
-    Hide {
-        scene: String,
-    },
-    Toggle {
-        scene: String,
-    },
-    Focus {
-        scene: String,
-    },
-    PuzzleNextLevel {
-        target: String,
-    },
-    PuzzlePreviousLevel {
-        target: String,
-    },
-    GotoLevel {
-        target: String,
-        level: SceneExpr,
-    },
-    ResetPuzzle {
-        target: String,
-    },
-    LoadPuzzle {
-        target: String,
-        source: String,
-    },
-    Apply {
-        rule: String,
-        args: Vec<SceneExpr>,
-        target: Option<String>,
-    },
-    Copy {
-        source: String,
-        target: String,
-    },
-    SetVariable {
-        name: String,
-        value: SceneExpr,
-    },
-    ClearUndoHistory,
-    ClearGameProgress,
-    SetCurrentLevel {
-        level: SceneExpr,
-    },
-    ClearCurrentLevel,
-    SetLevelCleared {
-        level: Option<SceneExpr>,
-        cleared: bool,
-    },
-    ResetPersistentVars,
-    Sequence(Vec<SceneEffect>),
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum SceneEffectParam {
-    Level(SceneExpr),
-    Named { name: String, value: SceneExpr },
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum SceneExpr {
-    Bool(bool),
-    Int(i64),
-    Text(String),
-    Path(Vec<String>),
-    Call {
-        name: String,
-        args: Vec<SceneExpr>,
-    },
-    Binary {
-        op: SceneBinaryOp,
-        left: Box<SceneExpr>,
-        right: Box<SceneExpr>,
-    },
-    If {
-        condition: Box<SceneExpr>,
-        then_branch: Box<SceneExpr>,
-        else_branch: Box<SceneExpr>,
-    },
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum SceneBinaryOp {
-    And,
-    Eq,
-    NotEq,
-}
 
 pub type SceneContainerDef =
     SharedSceneContainer<SceneEffect, SceneExpr, SceneTextContent, SceneExpr>;

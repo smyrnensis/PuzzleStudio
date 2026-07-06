@@ -5,4 +5,5 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+puzzle-authoring = { path = "../authoring" }
 serde = { version = "1", features = ["derive"] }

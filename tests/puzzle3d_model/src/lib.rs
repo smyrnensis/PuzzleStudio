@@ -2163,7 +2163,7 @@ scene playing {
 layout {
 row gap 1 align center {
 box size 8 8 align right bottom {
-board = puzzle3 layout_test size 7 4 align left top
+puzzle3 board = layout_test size 7 4 align left top
 }
 column gap 2 scroll=true {
 title "Stats" size 5 1
@@ -2251,7 +2251,7 @@ scene playing {
   }
 
   layout {
-    board = puzzle3 control_test {
+    puzzle3 board = control_test {
       inputs {
         forward = w arrow_up
         backward = s arrow_down

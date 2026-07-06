@@ -1144,8 +1144,10 @@ function syncSourceHighlightMetrics() {
   if (!sourceHighlight || !sourceEditor) {
     return;
   }
-  const clientWidth = sourceEditor.clientWidth;
-  const scrollHeight = sourceEditor.scrollHeight;
+  sourceEditor.style.height = "auto";
+  const clientWidth = sourceEditorWrap.clientWidth;
+  const scrollHeight = Math.max(sourceEditorWrap.clientHeight, sourceEditor.scrollHeight);
+  sourceEditor.style.height = `${scrollHeight}px`;
   if (sourceHighlightClientWidth !== clientWidth) {
     sourceHighlightClientWidth = clientWidth;
     sourceHighlight.style.width = `${clientWidth}px`;
@@ -1179,15 +1181,38 @@ function syncSourceHighlightTransform() {
   if (!sourceHighlight) {
     return;
   }
-  const transform = `translate(${-sourceEditor.scrollLeft}px, ${-sourceEditor.scrollTop}px)`;
-  sourceHighlight.style.transform = transform;
+  sourceHighlight.style.transform = "";
   if (sourceBlockSelectionLayer) {
-    sourceBlockSelectionLayer.style.transform = transform;
+    sourceBlockSelectionLayer.style.transform = "";
   }
   if (sourceFindMatchLayer) {
-    sourceFindMatchLayer.style.transform = transform;
+    sourceFindMatchLayer.style.transform = "";
   }
   syncSourceLineNumberScroll();
+}
+
+function sourceScrollTop() {
+  return sourceEditorWrap.scrollTop || 0;
+}
+
+function sourceScrollLeft() {
+  return sourceEditorWrap.scrollLeft || 0;
+}
+
+function setSourceScrollTop(value) {
+  sourceEditorWrap.scrollTop = Math.max(0, value || 0);
+}
+
+function setSourceScrollLeft(value) {
+  sourceEditorWrap.scrollLeft = Math.max(0, value || 0);
+}
+
+function sourceViewportHeight() {
+  return sourceEditorWrap.clientHeight;
+}
+
+function sourceViewportWidth() {
+  return sourceEditorWrap.clientWidth;
 }
 
 function scheduleSourceEditorLayoutSync(frameCount = 1) {
@@ -1542,9 +1567,9 @@ function sourceOutlineChevronSvg(expanded) {
 const SOURCE_OUTLINE_KIND_ICON_NAMES = Object.freeze({
   "puzzle": "puzzle",
   "puzzle3": "puzzle",
-  "levels": "puzzle",
-  "levels3": "puzzle",
-  "level": "puzzle",
+  "levels": "map",
+  "levels3": "map",
+  "level": "map",
   "sprites": "image",
   "sprites3": "image",
   "sprite": "image",
@@ -1573,7 +1598,7 @@ const SOURCE_OUTLINE_KIND_ICON_NAMES = Object.freeze({
   "routine": "workflow",
   "win_conditions": "flag",
   "lose_conditions": "flag-off",
-  "scene": "panels-top-left",
+  "scene": "clapperboard",
   "screen": "panels-top-left",
   "layout": "panels-top-left",
   "level_menu": "panels-top-left",
@@ -1611,6 +1636,11 @@ function sourceOutlineKindIconSvg(kind) {
   const icons = {
     puzzle: `
       <path d="M15.39 4.39a1 1 0 0 0 1.68-.474 2.5 2.5 0 1 1 3.014 3.015 1 1 0 0 0-.474 1.68l1.683 1.682a2.414 2.414 0 0 1 0 3.414L19.61 15.39a1 1 0 0 1-1.68-.474 2.5 2.5 0 1 0-3.014 3.015 1 1 0 0 1 .474 1.68l-1.683 1.682a2.414 2.414 0 0 1-3.414 0L8.61 19.61a1 1 0 0 0-1.68.474 2.5 2.5 0 1 1-3.014-3.015 1 1 0 0 0 .474-1.68l-1.683-1.682a2.414 2.414 0 0 1 0-3.414L4.39 8.61a1 1 0 0 1 1.68.474 2.5 2.5 0 1 0 3.014-3.015 1 1 0 0 1-.474-1.68l1.683-1.682a2.414 2.414 0 0 1 3.414 0z"></path>
+    `,
+    map: `
+      <path d="M14.106 5.553a2 2 0 0 0 1.788 0l3.659-1.83A1 1 0 0 1 21 4.619v12.764a1 1 0 0 1-.553.894l-4.553 2.277a2 2 0 0 1-1.788 0l-4.212-2.106a2 2 0 0 0-1.788 0l-3.659 1.83A1 1 0 0 1 3 19.381V6.618a1 1 0 0 1 .553-.894l4.553-2.277a2 2 0 0 1 1.788 0z"></path>
+      <path d="M15 5.764v15"></path>
+      <path d="M9 3.236v15"></path>
     `,
     box: `
       <path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"></path>
@@ -1732,6 +1762,12 @@ function sourceOutlineKindIconSvg(kind) {
       <rect width="18" height="18" x="3" y="3" rx="2"></rect>
       <path d="M3 9h18"></path>
       <path d="M9 21V9"></path>
+    `,
+    clapperboard: `
+      <path d="m12.296 3.464 3.02 3.956"></path>
+      <path d="M20.2 6 3 11l-.9-2.4c-.3-1.1.3-2.2 1.3-2.5l13.5-4c1.1-.3 2.2.3 2.5 1.3z"></path>
+      <path d="M3 11h18v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
+      <path d="m6.18 5.276 3.1 3.899"></path>
     `,
     package: `
       <path d="m7.5 4.27 9 5.15"></path>
@@ -2244,6 +2280,10 @@ function hideSourceCompletions() {
   }
 }
 
+function keepSourceCompletionsVisibleDuringEdit() {
+  return Boolean(sourceCompletionPopover && !sourceCompletionPopover.hidden && sourceCompletionState);
+}
+
 function renderSourceCompletionItems() {
   if (!sourceCompletionPopover || !sourceCompletionState) {
     return;
@@ -2301,7 +2341,7 @@ function sourceCursorInLineLeadingWhitespace() {
 }
 
 function acceptSourceCompletion(index = sourceCompletionState?.selectedIndex ?? 0) {
-  if (!sourceCompletionState) {
+  if (!sourceCompletionState || !sourceCompletionMatchesCurrentCursor()) {
     return false;
   }
   const item = sourceCompletionState.items[index];
@@ -2647,14 +2687,14 @@ function scrollSourceOffsetIntoView(offset) {
   }
   const margin = 32;
   if (rect.top < margin) {
-    sourceEditor.scrollTop = Math.max(0, sourceEditor.scrollTop + rect.top - margin);
-  } else if (rect.top + rect.height > sourceEditor.clientHeight - margin) {
-    sourceEditor.scrollTop += rect.top + rect.height - sourceEditor.clientHeight + margin;
+    setSourceScrollTop(sourceScrollTop() + rect.top - margin);
+  } else if (rect.top + rect.height > sourceViewportHeight() - margin) {
+    setSourceScrollTop(sourceScrollTop() + rect.top + rect.height - sourceViewportHeight() + margin);
   }
   if (rect.left < margin) {
-    sourceEditor.scrollLeft = Math.max(0, sourceEditor.scrollLeft + rect.left - margin);
-  } else if (rect.left > sourceEditor.clientWidth - margin) {
-    sourceEditor.scrollLeft += rect.left - sourceEditor.clientWidth + margin;
+    setSourceScrollLeft(sourceScrollLeft() + rect.left - margin);
+  } else if (rect.left > sourceViewportWidth() - margin) {
+    setSourceScrollLeft(sourceScrollLeft() + rect.left - sourceViewportWidth() + margin);
   }
   syncSourceHighlightScroll();
 }
@@ -2672,7 +2712,7 @@ function sourceEditorCaretPoint(offset) {
   mirror.style.visibility = "hidden";
   mirror.style.pointerEvents = "none";
   mirror.style.boxSizing = "border-box";
-  mirror.style.width = `${sourceEditor.clientWidth}px`;
+  mirror.style.width = `${sourceViewportWidth()}px`;
   mirror.style.minHeight = "0";
   mirror.style.padding = style.padding;
   mirror.style.border = style.border;
@@ -2688,8 +2728,8 @@ function sourceEditorCaretPoint(offset) {
   mirror.append(marker);
   document.body.append(mirror);
   const point = {
-    left: marker.offsetLeft - sourceEditor.scrollLeft,
-    top: marker.offsetTop - sourceEditor.scrollTop,
+    left: marker.offsetLeft - sourceScrollLeft(),
+    top: marker.offsetTop - sourceScrollTop(),
   };
   mirror.remove();
   return point;
@@ -3616,7 +3656,7 @@ function sourceVerticalPosition(delta) {
 
 function sourcePagePosition(delta) {
   const lineHeight = sourceEditorLineHeight();
-  const lines = Math.max(1, Math.floor(sourceEditor.clientHeight / lineHeight) - 1);
+  const lines = Math.max(1, Math.floor(sourceViewportHeight() / lineHeight) - 1);
   let position = sourceSelectionFocus();
   for (let step = 0; step < lines; step += 1) {
     const next = sourceVerticalPositionFrom(position, delta);
@@ -3739,19 +3779,19 @@ function syncSourceLineNumberScroll() {
   if (!sourceLineNumbers || !sourceEditor) {
     return;
   }
-  const scrollHeight = sourceEditor.scrollHeight;
+  const scrollHeight = Math.max(sourceEditor.scrollHeight, sourceEditorWrap?.clientHeight || 0);
   if (sourceLineNumberScrollHeight !== scrollHeight) {
     sourceLineNumberScrollHeight = scrollHeight;
     sourceLineNumbers.style.height = `${scrollHeight}px`;
   }
-  sourceLineNumbers.style.transform = `translateY(${-sourceEditor.scrollTop}px)`;
+  sourceLineNumbers.style.transform = "";
 }
 
 function sourceEditorTextColumnCapacity() {
   const style = window.getComputedStyle(sourceEditor);
   const paddingLeft = Number.parseFloat(style.paddingLeft) || 0;
   const paddingRight = Number.parseFloat(style.paddingRight) || 0;
-  const contentWidth = Math.max(1, sourceEditor.clientWidth - paddingLeft - paddingRight);
+  const contentWidth = Math.max(1, sourceViewportWidth() - paddingLeft - paddingRight);
   return Math.max(1, Math.floor(contentWidth / sourceEditorCharWidth()));
 }
 
@@ -4362,7 +4402,8 @@ function handleSourceRewritePatternTab(event) {
   return true;
 }
 
-function sourceEditorContentChanged() {
+function sourceEditorContentChanged(options = {}) {
+  const preserveCompletions = Boolean(options.preserveSourceCompletions && keepSourceCompletionsVisibleDuringEdit());
   if (sourceFoldsActive()) {
     const changed = commitSourceFoldedDisplayEdit();
     if (!changed) {
@@ -4371,7 +4412,11 @@ function sourceEditorContentChanged() {
       refreshSourceColorEditor();
       refreshSourceFindAfterSourceChange();
       scheduleLocalSave();
-      hideSourceCompletions();
+      if (preserveCompletions) {
+        positionSourceCompletionPopover();
+      } else {
+        hideSourceCompletions();
+      }
       return;
     }
   }
@@ -4387,7 +4432,24 @@ function sourceEditorContentChanged() {
   scheduleLocalSave();
   scheduleLevelBuilderResetFromSource(false);
   schedulePreview();
-  hideSourceCompletions();
+  if (preserveCompletions) {
+    positionSourceCompletionPopover();
+  } else {
+    hideSourceCompletions();
+  }
+}
+
+function sourceCompletionCanStayVisibleForKeydownEdit(event) {
+  return Boolean(
+    event
+    && !event.defaultPrevented
+    && !event.isComposing
+    && !event.altKey
+    && !event.ctrlKey
+    && !event.metaKey
+    && !sourceEditorBlockSelection?.ranges?.length
+    && (event.key.length === 1 || event.key === "Backspace" || event.key === "Delete")
+  );
 }
 
 function sourcePrintableKeydownEdit(event) {
@@ -4439,7 +4501,7 @@ function handleSourcePrintableKeydownInput(event) {
     "end",
   );
   sourceEditor.setSelectionRange(edit.selectionStart, edit.selectionEnd);
-  sourceEditorContentChanged();
+  sourceEditorContentChanged({ preserveSourceCompletions: true });
   scheduleSourceCompletion();
   syncPreviewModeFromSourceCursor();
   return true;
@@ -4849,7 +4911,7 @@ function sourceFrameRectForOffsets(start, end) {
   mirror.style.visibility = "hidden";
   mirror.style.pointerEvents = "none";
   mirror.style.boxSizing = "border-box";
-  mirror.style.width = `${sourceEditor.clientWidth}px`;
+  mirror.style.width = `${sourceViewportWidth()}px`;
   mirror.style.minHeight = "0";
   mirror.style.padding = style.padding;
   mirror.style.border = style.border;
@@ -4866,8 +4928,8 @@ function sourceFrameRectForOffsets(start, end) {
   const rangeRect = range.getBoundingClientRect();
   const lineHeight = sourceEditorLineHeight();
   const rect = {
-    left: rangeRect.left - mirrorRect.left - sourceEditor.scrollLeft - 2,
-    top: rangeRect.top - mirrorRect.top - sourceEditor.scrollTop,
+    left: rangeRect.left - mirrorRect.left - sourceScrollLeft() - 2,
+    top: rangeRect.top - mirrorRect.top - sourceScrollTop(),
     width: Math.max(8, rangeRect.width + 4),
     height: Math.max(lineHeight, rangeRect.height || lineHeight),
   };
@@ -5216,8 +5278,8 @@ function sourceEditorRawPositionFromPoint(clientX, clientY, lines) {
   const paddingTop = Number.parseFloat(style.paddingTop) || 0;
   const lineHeight = sourceEditorLineHeight();
   const charWidth = sourceEditorCharWidth();
-  const x = clientX - rect.left + sourceEditor.scrollLeft - paddingLeft;
-  const y = clientY - rect.top + sourceEditor.scrollTop - paddingTop;
+  const x = clientX - rect.left + sourceScrollLeft() - paddingLeft;
+  const y = clientY - rect.top + sourceScrollTop() - paddingTop;
   return {
     lineIndex: Math.max(0, Math.min(lines.length - 1, Math.floor(y / lineHeight))),
     column: Math.max(0, Math.round(x / charWidth)),
@@ -5290,8 +5352,8 @@ function appendSourceBlockRange(range) {
   }
   const caret = document.createElement("div");
   caret.className = "source-block-selection-caret";
-  caret.style.left = `${rect.left + sourceEditor.scrollLeft}px`;
-  caret.style.top = `${rect.top + sourceEditor.scrollTop}px`;
+  caret.style.left = `${rect.left + sourceScrollLeft()}px`;
+  caret.style.top = `${rect.top + sourceScrollTop()}px`;
   caret.style.height = `${rect.height}px`;
   sourceBlockSelectionLayer.append(caret);
 }
@@ -5335,9 +5397,9 @@ function sourceSelectionRectsForOffsets(start, end) {
       const rectHeight = rect.height || lineHeight;
       const height = Math.max(lineHeight, rectHeight);
       return {
-        left: rect.left - wrapRect.left + sourceEditor.scrollLeft,
-        right: rect.right - wrapRect.left + sourceEditor.scrollLeft,
-        top: rect.top - wrapRect.top + sourceEditor.scrollTop - Math.max(0, (lineHeight - rectHeight) / 2),
+        left: rect.left - wrapRect.left + sourceScrollLeft(),
+        right: rect.right - wrapRect.left + sourceScrollLeft(),
+        top: rect.top - wrapRect.top + sourceScrollTop() - Math.max(0, (lineHeight - rectHeight) / 2),
         height,
       };
     });
@@ -5640,7 +5702,9 @@ sourceEditor.addEventListener("keydown", (event) => {
   }
   if (sourceCompletionState && !sourceCompletionPopover?.hidden) {
     if (!sourceCompletionMatchesCurrentCursor()) {
-      hideSourceCompletions();
+      if (!sourceCompletionCanStayVisibleForKeydownEdit(event)) {
+        hideSourceCompletions();
+      }
     } else {
       if (event.key === "Escape") {
         event.preventDefault();
@@ -5800,10 +5864,9 @@ function setSourceEditorText(value, selectionStart = null, selectionEnd = select
 }
 
 function bindSourceEditorPopoverEvents() {
-sourceEditor.addEventListener("scroll", syncSourceHighlightScroll);
-sourceEditor.addEventListener("scroll", hideSourceColorEditor);
-sourceEditor.addEventListener("scroll", hideSourceCompletions);
-sourceEditor.addEventListener("scroll", hideSourceImportLinkFrame);
+sourceEditorWrap?.addEventListener("scroll", hideSourceColorEditor);
+sourceEditorWrap?.addEventListener("scroll", hideSourceCompletions);
+sourceEditorWrap?.addEventListener("scroll", hideSourceImportLinkFrame);
 sourceEditor.addEventListener("click", syncSourceOutlineActiveItem);
 sourceEditor.addEventListener("keyup", syncSourceOutlineActiveItem);
 sourceLineNumbers?.addEventListener("click", handleSourceFoldGutterClick);

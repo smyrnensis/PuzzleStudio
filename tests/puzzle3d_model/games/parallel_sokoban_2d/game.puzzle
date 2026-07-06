@@ -109,7 +109,7 @@ puzzle sokoban_2d {
 
 scene playing {
   layout {
-    board = puzzle sokoban_2d
+    puzzle board = sokoban_2d
   }
 
   rules {

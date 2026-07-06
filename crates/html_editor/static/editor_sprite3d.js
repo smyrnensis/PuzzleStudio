@@ -31,57 +31,110 @@ function clampSprite3dSize(value) {
   return Math.max(1, Math.min(SPRITE3D_EDITOR_MAX_SIZE, size));
 }
 
+function sprite3dPaneScrollElement() {
+  return sprite3dBuilder?.querySelector(":scope > .tool-pane-scroll") || null;
+}
+
+function shouldPreserveSprite3dPaneScroll() {
+  if (!sprite3dBuilder || sprite3dBuilder.hidden) {
+    return false;
+  }
+  const active = document.activeElement;
+  return Boolean(
+    (active && sprite3dBuilder.contains(active))
+    || sprite3dPaintDrag
+    || sprite3dPreviewDrag
+    || sprite3dCameraScrubDrag
+    || sprite3dSliceScrubDrag
+  );
+}
+
+function captureSprite3dPaneScroll() {
+  if (!shouldPreserveSprite3dPaneScroll()) {
+    return null;
+  }
+  const scroll = sprite3dPaneScrollElement();
+  return scroll ? { top: scroll.scrollTop, left: scroll.scrollLeft } : null;
+}
+
+function restoreSprite3dPaneScroll(state) {
+  if (!state) {
+    return;
+  }
+  const apply = () => {
+    const scroll = sprite3dPaneScrollElement();
+    if (!scroll) {
+      return;
+    }
+    scroll.scrollTop = Math.max(0, Math.min(state.top, scroll.scrollHeight - scroll.clientHeight));
+    scroll.scrollLeft = Math.max(0, Math.min(state.left, scroll.scrollWidth - scroll.clientWidth));
+  };
+  apply();
+  window.requestAnimationFrame?.(apply);
+}
+
+function withSprite3dPaneScrollPreserved(render) {
+  const scroll = captureSprite3dPaneScroll();
+  const result = render();
+  restoreSprite3dPaneScroll(scroll);
+  return result;
+}
+
 function renderSprite3dBuilder() {
   if (!sprite3dBuilder || !sprite3dSliceBoard || !sprite3dPalette || !sprite3dPreviewCanvas) {
     return;
   }
-  renderSprite3dControls();
-  renderSprite3dPalette();
-  renderSprite3dSliceBoard();
-  renderSprite3dPreview();
-  renderSprite3dTextPreview();
+  withSprite3dPaneScrollPreserved(() => {
+    renderSprite3dControls();
+    renderSprite3dPalette();
+    renderSprite3dSliceBoard();
+    renderSprite3dPreview();
+    renderSprite3dTextPreview();
+  });
 }
 
 function renderSprite3dControls() {
-  sprite3dNameInput.value = sprite3dNameInput.value || "VoxelSprite";
-  sprite3dSizeInput.value = String(sprite3d.size);
-  syncSprite3dBucketButton();
-  renderSprite3dScopeControl();
-  renderSprite3dCameraControls();
-  renderSpriteScaleControl({
-    size: sprite3d.size,
-    maxSize: SPRITE3D_EDITOR_MAX_SIZE,
-    scaleInput: sprite3dScaleInput,
-    scaleUpButton: sprite3dScaleUpButton,
-    scaleDownButton: sprite3dScaleDownButton,
-    canScaleDown: canScaleDownSprite3d,
-    noun: "3D sprite",
+  withSprite3dPaneScrollPreserved(() => {
+    sprite3dNameInput.value = sprite3dNameInput.value || "VoxelSprite";
+    sprite3dSizeInput.value = String(sprite3d.size);
+    syncSprite3dBucketButton();
+    renderSprite3dScopeControl();
+    renderSprite3dCameraControls();
+    renderSpriteScaleControl({
+      size: sprite3d.size,
+      maxSize: SPRITE3D_EDITOR_MAX_SIZE,
+      scaleInput: sprite3dScaleInput,
+      scaleUpButton: sprite3dScaleUpButton,
+      scaleDownButton: sprite3dScaleDownButton,
+      canScaleDown: canScaleDownSprite3d,
+      noun: "3D sprite",
+    });
+    if (sprite3dSliceValue instanceof HTMLInputElement) {
+      sprite3dSliceValue.min = "1";
+      sprite3dSliceValue.max = String(sprite3d.size);
+      sprite3dSliceValue.value = String(sprite3d.slice + 1);
+    } else if (sprite3dSliceValue) {
+      sprite3dSliceValue.textContent = `${sprite3d.slice + 1} / ${sprite3d.size}`;
+    }
+    const sliceTotal = document.querySelector("#sprite3dSliceTotal");
+    if (sliceTotal) {
+      sliceTotal.textContent = String(sprite3d.size);
+    }
+    if (sprite3dPasteSliceButton) {
+      sprite3dPasteSliceButton.disabled = !sprite3d.sliceClipboard;
+    }
+    if (sprite3dPreviousSliceButton) {
+      sprite3dPreviousSliceButton.disabled = sprite3d.slice <= 0;
+    }
+    if (sprite3dNextSliceButton) {
+      sprite3dNextSliceButton.disabled = sprite3d.slice >= sprite3d.size - 1;
+    }
+    for (const button of sprite3dAxisButtons) {
+      const active = button.dataset.sprite3dAxis === sprite3d.axis;
+      button.classList.toggle("is-active", active);
+      button.setAttribute("aria-pressed", String(active));
+    }
   });
-  if (sprite3dSliceValue instanceof HTMLInputElement) {
-    sprite3dSliceValue.min = "1";
-    sprite3dSliceValue.max = String(sprite3d.size);
-    sprite3dSliceValue.value = String(sprite3d.slice + 1);
-  } else if (sprite3dSliceValue) {
-    sprite3dSliceValue.textContent = `${sprite3d.slice + 1} / ${sprite3d.size}`;
-  }
-  const sliceTotal = document.querySelector("#sprite3dSliceTotal");
-  if (sliceTotal) {
-    sliceTotal.textContent = String(sprite3d.size);
-  }
-  if (sprite3dPasteSliceButton) {
-    sprite3dPasteSliceButton.disabled = !sprite3d.sliceClipboard;
-  }
-  if (sprite3dPreviousSliceButton) {
-    sprite3dPreviousSliceButton.disabled = sprite3d.slice <= 0;
-  }
-  if (sprite3dNextSliceButton) {
-    sprite3dNextSliceButton.disabled = sprite3d.slice >= sprite3d.size - 1;
-  }
-  for (const button of sprite3dAxisButtons) {
-    const active = button.dataset.sprite3dAxis === sprite3d.axis;
-    button.classList.toggle("is-active", active);
-    button.setAttribute("aria-pressed", String(active));
-  }
 }
 
 function sprite3dEditScope() {
@@ -198,6 +251,10 @@ function deactivateSprite3dBucketModeAfterUse() {
 }
 
 function renderSprite3dPalette() {
+  withSprite3dPaneScrollPreserved(() => renderSprite3dPaletteContent());
+}
+
+function renderSprite3dPaletteContent() {
   ensureSprite3dPalette();
   sprite3dPalette.replaceChildren();
   const selectedIsTransparent = sprite3d.selectedColorIndex === null;
@@ -393,24 +450,26 @@ function renderSprite3dPalette() {
 }
 
 function renderSprite3dSliceBoard() {
-  sprite3dSliceBoard.replaceChildren();
-  sprite3dSliceBoard.style.setProperty("--sprite-size", sprite3d.size);
-  const cellCount = sprite3d.size * sprite3d.size;
-  for (let index = 0; index < cellCount; index += 1) {
-    const coords = sprite3dCoordsFromSliceCell(index);
-    const voxelIndex = sprite3dCellIndex(coords.x, coords.y, coords.z);
-    const colorIndex = validSprite3dColorIndex(sprite3d.cells[voxelIndex]) ? sprite3d.cells[voxelIndex] : null;
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "sprite-cell sprite-color-swatch";
-    button.dataset.index = String(index);
-    button.dataset.voxelIndex = String(voxelIndex);
-    button.dataset.colorIndex = colorIndex === null ? "erase" : String(colorIndex);
-    button.style.setProperty("--sprite-swatch-color", sprite3dColorForColorIndex(colorIndex));
-    button.style.setProperty("--sprite-cell-ink", sprite3dInkForColorIndex(colorIndex));
-    button.setAttribute("aria-label", `Voxel ${coords.x + 1}, ${coords.y + 1}, ${coords.z + 1}`);
-    sprite3dSliceBoard.append(button);
-  }
+  withSprite3dPaneScrollPreserved(() => {
+    sprite3dSliceBoard.replaceChildren();
+    sprite3dSliceBoard.style.setProperty("--sprite-size", sprite3d.size);
+    const cellCount = sprite3d.size * sprite3d.size;
+    for (let index = 0; index < cellCount; index += 1) {
+      const coords = sprite3dCoordsFromSliceCell(index);
+      const voxelIndex = sprite3dCellIndex(coords.x, coords.y, coords.z);
+      const colorIndex = validSprite3dColorIndex(sprite3d.cells[voxelIndex]) ? sprite3d.cells[voxelIndex] : null;
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "sprite-cell sprite-color-swatch";
+      button.dataset.index = String(index);
+      button.dataset.voxelIndex = String(voxelIndex);
+      button.dataset.colorIndex = colorIndex === null ? "erase" : String(colorIndex);
+      button.style.setProperty("--sprite-swatch-color", sprite3dColorForColorIndex(colorIndex));
+      button.style.setProperty("--sprite-cell-ink", sprite3dInkForColorIndex(colorIndex));
+      button.setAttribute("aria-label", `Voxel ${coords.x + 1}, ${coords.y + 1}, ${coords.z + 1}`);
+      sprite3dSliceBoard.append(button);
+    }
+  });
 }
 
 function renderSprite3dPreview() {
@@ -2382,7 +2441,7 @@ function applySprite3dSourceChange(document, source, statusText) {
   }
   scheduleLocalSave();
   schedulePreview();
-  sourceEditor.focus();
+  sourceEditor.focus({ preventScroll: true });
   setSprite3dActionStatus(statusText, "is-ok");
   setStatus(statusText, "is-ok");
 }

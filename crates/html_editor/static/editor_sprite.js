@@ -1298,22 +1298,34 @@ function renderSpriteClipButton({ title, ariaLabel, icon, active = false, disabl
 
 function toggleSpriteClipMode() {
   if (spriteClipActive) {
-    deactivateSpriteClipMode();
-    setSpriteActionStatus(spritePaintToolStatusText(), "is-ok");
+    deactivateSpriteClipMode({ clearSelection: false });
+    const rect = normalizeSpriteClipRect(spriteClipSelection);
+    setSpriteActionStatus(
+      rect ? `Clip selection kept ${rect.width}x${rect.height}` : spritePaintToolStatusText(),
+      "is-ok",
+    );
     return;
   }
   spriteBucketActive = false;
   spriteClipActive = true;
-  spriteClipSelection = null;
+  spriteClipSelection = normalizeSpriteClipRect(spriteClipSelection);
   spriteClipDrag = null;
   renderSpriteBuilder();
-  setSpriteActionStatus("Clip: drag to select sprite area", "is-ok");
+  setSpriteActionStatus(
+    spriteClipSelection ? "Clip: drag selection to move it" : "Clip: drag to select sprite area",
+    "is-ok",
+  );
 }
 
 function deactivateSpriteClipMode(options = {}) {
   const wasActive = spriteClipActive || spriteClipSelection || spriteClipDrag || spriteClipFloating;
+  const clearSelection = options.clearSelection !== false;
   spriteClipActive = false;
-  spriteClipSelection = null;
+  if (clearSelection) {
+    spriteClipSelection = null;
+  } else {
+    spriteClipSelection = normalizeSpriteClipRect(spriteClipSelection);
+  }
   spriteClipDrag = null;
   spriteClipFloating = null;
   if (options.render === false || !wasActive) {
@@ -1616,7 +1628,7 @@ function toggleSpriteGrid() {
 }
 
 function renderSpriteClipSelectionFrame(target = spriteBoard) {
-  const rect = spriteClipActive ? normalizeSpriteClipRect(spriteClipSelection) : null;
+  const rect = normalizeSpriteClipRect(spriteClipSelection);
   if (!rect) {
     return;
   }
@@ -1664,7 +1676,7 @@ function renderSpriteClipFloatingPreview(rect, target = spriteBoard) {
 function syncSpriteCellElement(button, index) {
   const colorIndex = validSpriteColorIndex(sprite.cells[index]) ? sprite.cells[index] : null;
   const char = spriteExportCharForColorIndex(colorIndex);
-  const isClipSelected = spriteClipActive && spriteClipRectContainsIndex(spriteClipSelection, index);
+  const isClipSelected = spriteClipRectContainsIndex(spriteClipSelection, index);
   button.dataset.index = String(index);
   button.dataset.colorIndex = colorIndex === null ? "erase" : String(colorIndex);
   button.classList.toggle("is-clip-selected", isClipSelected);

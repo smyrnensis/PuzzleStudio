@@ -256,7 +256,7 @@ function compactEditorTooltipText(text) {
     ["Discard new color", "Discard"],
     ["Generate .puzzle translation", "Generate"],
     ["Hide current tool pane", "Hide pane"],
-    ["Hide file pane", "Hide files"],
+    ["Hide explorer pane", "Hide explorer"],
     ["Maximize Preview pane", "Maximize"],
     ["Maximize Source pane", "Maximize"],
     ["More file actions", "File actions"],
@@ -268,7 +268,7 @@ function compactEditorTooltipText(text) {
     ["Reset 3D preview camera", "Reset camera"],
     ["Reset solution preview", "Reset"],
     ["Screen color picker is not available in this browser", "Unavailable"],
-    ["Show file pane", "Show files"],
+    ["Show explorer pane", "Show explorer"],
     ["Show game pane", "Show game"],
     ["Tag selected color", "Tag color"],
     ["Tag shape by name", "Tag shape"],
@@ -4012,11 +4012,37 @@ function refreshVisiblePreviewSolverTask(exportData = previewExport || extractPr
   return false;
 }
 
+async function ensurePreviewSolverExportData() {
+  ensurePreviewTargetsActiveDocument();
+  let exportData = previewExport || extractPreviewExport(latestHtml);
+  if (exportData && !compiledPreviewStale) {
+    return exportData;
+  }
+  setLevelSolveStatus("Compiling solver metadata", "");
+  try {
+    exportData = await compileLevelEditorPreviewData();
+  } catch (error) {
+    setLevelSolveStatus(`Solver metadata compile failed: ${userFacingRuntimeError(error)}`, "is-error");
+    return null;
+  }
+  if (!exportData) {
+    setLevelSolveStatus("Solver metadata compile cancelled", "");
+    return null;
+  }
+  return exportData;
+}
+
 async function openSolverPaneForCurrentLevel() {
-  const exportData = previewExport || extractPreviewExport(latestHtml);
   openPreviewModePane("solver");
+  const exportData = await ensurePreviewSolverExportData();
+  if (!exportData) {
+    clearSolverTask();
+    renderSolverBoard();
+    return false;
+  }
   refreshVisiblePreviewSolverTask(exportData);
   renderSolverBoard();
+  return Boolean(activeSolverTask);
 }
 
 async function solvePreviewPaneCurrentLevel() {
@@ -4024,7 +4050,13 @@ async function solvePreviewPaneCurrentLevel() {
     await solveLevel();
     return;
   }
-  await openSolverPaneForCurrentLevel();
+  const ready = await openSolverPaneForCurrentLevel();
+  if (!ready) {
+    if (!levelSolveStatus?.textContent?.trim()) {
+      setLevelSolveStatus("No preview solver task", "is-error");
+    }
+    return;
+  }
   await solveLevel();
 }
 
@@ -4701,8 +4733,8 @@ function scrollSourceEditorToPosition(position) {
   const lineHeight = Number.parseFloat(style.lineHeight) || 20;
   const paddingTop = Number.parseFloat(style.paddingTop) || 0;
   const targetTop = paddingTop + lineIndex * lineHeight;
-  sourceEditor.scrollTop = Math.max(0, targetTop - sourceEditor.clientHeight * 0.28);
-  sourceEditor.scrollLeft = 0;
+  setSourceScrollTop(targetTop - sourceViewportHeight() * 0.28);
+  setSourceScrollLeft(0);
   if (typeof syncSourceHighlightScroll === "function") {
     syncSourceHighlightScroll();
   }
@@ -4764,28 +4796,6 @@ function findLevelSourceEntries(source, document) {
         });
       }
     }
-  }
-
-  const lines = editorSourceLinesWithOffsets(source);
-  for (const line of lines) {
-    const code = stripLineCommentForWasm(line.raw).trim();
-    const match = code.match(/^level(?:\s+(.+?))?\s*(?:\{|$)/);
-    if (!match) {
-      continue;
-    }
-    const start = firstEditorSourceCodeIndex(line);
-    const key = `${start}:${line.absoluteEnd}`;
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    const rawName = String(match[1] || "").trim();
-    entries.push({
-      document,
-      name: rawName.replace(/\s*\{\s*$/, ""),
-      start,
-      end: line.absoluteEnd,
-    });
   }
   return entries;
 }
@@ -8009,6 +8019,27 @@ function inspectPreviewExport(html) {
   if (source.includes("window.PuzzleExport")) {
     diagnostics.markers.push("PuzzleExport");
   }
+  if (source.includes("window.PuzzleRuntimeExportJson")) {
+    diagnostics.markers.push("PuzzleRuntimeExportJson");
+  }
+  const runtimeExportLiteral = extractAssignedStringLiteral(source, "PuzzleRuntimeExportJson");
+  if (runtimeExportLiteral) {
+    try {
+      const parsed = JSON.parse(JSON.parse(runtimeExportLiteral));
+      if (parsed && typeof parsed === "object" && !parsed.__kind) {
+        parsed.__kind = parsed?.kind === "puzzle3d" ? "puzzle3d" : "puzzle2d";
+      }
+      diagnostics.kind = parsed?.__kind || "";
+      diagnostics.levelCount = Array.isArray(parsed?.levels) ? parsed.levels.length : null;
+      diagnostics.hasEngineObjects = Array.isArray(parsed?.engine?.objects);
+      diagnostics.hasCompiledPlay = Boolean(parsed?.compiledPlay);
+      return { exportData: parsed, diagnostics };
+    } catch (error) {
+      diagnostics.parseError = error instanceof Error ? error.message : String(error);
+      console.error(error);
+      return { exportData: null, diagnostics };
+    }
+  }
   for (const candidate of [
     { kind: "puzzle3d", globalName: "Puzzle3DFrameFixture" },
     { kind: "puzzle3d", globalName: "Puzzle3DFixture" },
@@ -8040,6 +8071,19 @@ function inspectPreviewExport(html) {
   return { exportData: null, diagnostics };
 }
 
+function extractAssignedStringLiteral(source, globalName) {
+  const assignmentPattern = new RegExp(`window\\.${globalName}\\s*=\\s*`, "g");
+  const match = assignmentPattern.exec(source);
+  if (!match) {
+    return null;
+  }
+  let index = match.index + match[0].length;
+  while (/\s/.test(source[index] || "")) {
+    index += 1;
+  }
+  return source[index] === "\"" ? extractStringLiteralAt(source, index) : null;
+}
+
 function extractJsonParseStringLiteral(source, globalName) {
   const assignmentPattern = new RegExp(`window\\.${globalName}\\s*=\\s*JSON\\.parse\\s*\\(`, "g");
   const match = assignmentPattern.exec(source);
@@ -8053,8 +8097,11 @@ function extractJsonParseStringLiteral(source, globalName) {
   if (source[index] !== "\"") {
     return null;
   }
-  const start = index;
-  index += 1;
+  return extractStringLiteralAt(source, index);
+}
+
+function extractStringLiteralAt(source, start) {
+  let index = start + 1;
   let escaped = false;
   while (index < source.length) {
     const char = source[index];

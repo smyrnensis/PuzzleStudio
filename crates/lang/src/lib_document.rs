@@ -122,11 +122,8 @@ fn parse_game_document(source: &str) -> Result<LoadedDocument, DiagnosticReport>
                 .unwrap_or_else(|| "default".to_string());
             let mut scenes = parts.scenes;
             resolve_inferred_scene_puzzle_slots(&mut scenes, std::iter::once(("puzzle3", &name)))?;
-            let puzzle = parse_puzzle3d(&parts.raw_model_source_without_shell).map_err(
-                |error| match error {
-                    ParseError3::Message(message) => DiagnosticReport::error(message),
-                },
-            )?;
+            let puzzle = parse_puzzle3d(&parts.raw_model_source_without_shell)
+                .map_err(|error| puzzle3_parse_error_report(error, &parts.model_lines))?;
             let mut scenes = add_implicit_model_scenes(scenes, std::iter::once(("puzzle3", &name)));
             resolve_scene_actions(&mut scenes, &HashMap::new())?;
             Ok(LoadedDocument {
@@ -159,9 +156,8 @@ fn parse_mixed_game_document(source: &str) -> Result<LoadedDocument, DiagnosticR
     let model_3d_name =
         first_model_name(&sources.puzzle3d, "puzzle3").unwrap_or_else(|| "default".to_string());
     let puzzle_3d_source = strip_document_shell_source_raw(&sources.puzzle3d);
-    let puzzle_3d = parse_puzzle3d(&puzzle_3d_source).map_err(|error| match error {
-        ParseError3::Message(message) => DiagnosticReport::error(message),
-    })?;
+    let puzzle_3d = parse_puzzle3d(&puzzle_3d_source)
+        .map_err(|error| puzzle3_parse_error_report(error, &[]))?;
     let mut scenes = parts.scenes;
     resolve_inferred_scene_puzzle_slots(
         &mut scenes,
@@ -198,6 +194,25 @@ fn parse_mixed_game_document(source: &str) -> Result<LoadedDocument, DiagnosticR
             },
         ],
     })
+}
+
+fn puzzle3_parse_error_report(
+    error: ParseError3,
+    model_lines: &[source::LogicalLine],
+) -> DiagnosticReport {
+    let report = match error {
+        ParseError3::Message(message) => DiagnosticReport::error(message),
+        ParseError3::MessageAtSourceLine {
+            message,
+            source_line,
+        } => DiagnosticReport::error_at_line(message, source_line),
+    };
+    let lines = model_lines
+        .iter()
+        .map(|line| line.text.clone())
+        .collect::<Vec<_>>();
+    let line_numbers = model_lines.iter().map(|line| line.line).collect::<Vec<_>>();
+    report_with_source_line_numbers(report, &lines, &line_numbers)
 }
 
 #[derive(Default)]
@@ -514,7 +529,7 @@ fn push_puzzle3_scene_json(
     out.push_str("      \"name\": ");
     out.push_str(&json_string(&scene.name));
     out.push_str(",\n      \"layout\": ");
-    push_puzzle3_layout_json(out, &scene.layout);
+    puzzle_scene::write_scene_layout_json(out, &scene.layout);
     out.push_str(",\n      \"puzzles\": [");
     let mut wrote_puzzle = false;
     for puzzle in &scene.state.puzzles {
@@ -818,62 +833,11 @@ fn scene_expr_fixture_text(expr: &SceneExpr) -> String {
 }
 
 fn push_puzzle3_inline_layout_json(out: &mut String, layout: &SceneLayoutDef) {
-    if layout.size.is_none()
-        && layout.gap.is_none()
-        && layout.align == SceneLayoutDef::default().align
-        && !layout.scroll
-    {
+    if puzzle_scene::scene_layout_is_default(layout) {
         return;
     }
     out.push_str(", \"layout\": ");
-    push_puzzle3_layout_json(out, layout);
-}
-
-fn push_puzzle3_layout_json(out: &mut String, layout: &SceneLayoutDef) {
-    out.push('{');
-    let mut wrote = false;
-    if let Some(size) = layout.size {
-        out.push_str("\"size\": { \"width\": ");
-        out.push_str(&size.width.to_string());
-        out.push_str(", \"height\": ");
-        out.push_str(&size.height.to_string());
-        out.push_str(" }");
-        wrote = true;
-    }
-    if let Some(gap) = layout.gap {
-        if wrote {
-            out.push_str(", ");
-        }
-        out.push_str("\"gap\": ");
-        out.push_str(&gap.to_string());
-        wrote = true;
-    }
-    if layout.align != SceneLayoutDef::default().align {
-        if wrote {
-            out.push_str(", ");
-        }
-        out.push_str("\"align\": { \"x\": ");
-        out.push_str(&json_string(match layout.align.x {
-            SceneAlignXDef::Left => "left",
-            SceneAlignXDef::Center => "center",
-            SceneAlignXDef::Right => "right",
-        }));
-        out.push_str(", \"y\": ");
-        out.push_str(&json_string(match layout.align.y {
-            SceneAlignYDef::Top => "top",
-            SceneAlignYDef::Center => "center",
-            SceneAlignYDef::Bottom => "bottom",
-        }));
-        out.push_str(" }");
-        wrote = true;
-    }
-    if layout.scroll {
-        if wrote {
-            out.push_str(", ");
-        }
-        out.push_str("\"scroll\": true");
-    }
-    out.push('}');
+    puzzle_scene::write_scene_layout_json(out, layout);
 }
 
 fn json_string(value: &str) -> String {

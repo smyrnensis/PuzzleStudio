@@ -113,6 +113,6 @@ scene level_select {
 
 scene playing {
   layout {
-    board = puzzle3 from_puzzle_sokoban_3d
+    puzzle3 board = from_puzzle_sokoban_3d
   }
 }

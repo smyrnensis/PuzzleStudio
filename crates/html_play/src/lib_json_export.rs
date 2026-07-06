@@ -2344,7 +2344,11 @@ fn push_comparison_op(out: &mut String, key: &str, op: ComparisonOp) {
 }
 
 #[cfg(feature = "solver")]
-fn push_solution_response(out: &mut String, loaded: &LoadedGame, response: &SolutionResponse) {
+fn push_solution_response(
+    out: &mut String,
+    loaded: &LoadedGame,
+    response: &PuzzleSolutionResponse,
+) {
     out.push('{');
     match response {
         SolutionResponse::Solved {
@@ -2403,7 +2407,7 @@ fn push_solution_response(out: &mut String, loaded: &LoadedGame, response: &Solu
 #[cfg(feature = "solver")]
 fn push_compiled_solution_response(
     out: &mut String,
-    response: &SolutionResponse,
+    response: &PuzzleSolutionResponse,
     input_labels: &[(InputId, String)],
 ) -> Result<(), AppError> {
     out.push('{');
@@ -2463,7 +2467,7 @@ fn push_compiled_solution_response(
 }
 
 #[cfg(feature = "solver")]
-fn push_search_observations(out: &mut String, observations: &[SearchObservation]) {
+fn push_search_observations(out: &mut String, observations: &[PuzzleSearchObservation]) {
     out.push_str("\"observations\":[");
     for (index, observation) in observations.iter().enumerate() {
         if index > 0 {
@@ -2518,7 +2522,7 @@ fn push_compiled_solution_moves(
 #[cfg(feature = "solver")]
 fn push_compiled_solution_steps(
     out: &mut String,
-    steps: &[SolutionStep],
+    steps: &[PuzzleSolutionStep],
     input_labels: &[(InputId, String)],
 ) -> Result<(), AppError> {
     out.push_str("\"steps\":[");
@@ -2567,12 +2571,16 @@ fn push_compiled_input_move(
 }
 
 #[cfg(feature = "solver")]
-fn push_solution_response3(out: &mut String, parsed: &ParsedPuzzle3, response: &SolutionResponse3) {
+fn push_solution_response3(
+    out: &mut String,
+    parsed: &ParsedPuzzle3,
+    response: &Puzzle3SolutionResponse,
+) {
     out.push('{');
     push_json_pair(out, "model", "puzzle3d");
     out.push(',');
     match response {
-        SolutionResponse3::Solved {
+        SolutionResponse::Solved {
             depth,
             moves,
             steps,
@@ -2588,7 +2596,7 @@ fn push_solution_response3(out: &mut String, parsed: &ParsedPuzzle3, response: &
             out.push(',');
             push_search_observations3(out, observations);
         }
-        SolutionResponse3::Exhausted {
+        SolutionResponse::Exhausted {
             stats,
             observations,
         } => {
@@ -2598,7 +2606,7 @@ fn push_solution_response3(out: &mut String, parsed: &ParsedPuzzle3, response: &
             out.push(',');
             push_search_observations3(out, observations);
         }
-        SolutionResponse3::BudgetExceeded {
+        SolutionResponse::BudgetExceeded {
             stats,
             observations,
         } => {
@@ -2608,7 +2616,7 @@ fn push_solution_response3(out: &mut String, parsed: &ParsedPuzzle3, response: &
             out.push(',');
             push_search_observations3(out, observations);
         }
-        SolutionResponse3::Failed {
+        SolutionResponse::Failed {
             depth,
             error,
             observations,
@@ -2626,7 +2634,7 @@ fn push_solution_response3(out: &mut String, parsed: &ParsedPuzzle3, response: &
 }
 
 #[cfg(feature = "solver")]
-fn push_search_observations3(out: &mut String, observations: &[SearchObservation3]) {
+fn push_search_observations3(out: &mut String, observations: &[Puzzle3SearchObservation]) {
     out.push_str("\"observations\":[");
     for (index, observation) in observations.iter().enumerate() {
         if index > 0 {

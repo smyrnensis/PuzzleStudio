@@ -453,24 +453,18 @@ impl StandaloneSessionBridge {
 
 #[cfg(feature = "solver")]
 #[derive(Clone, Debug)]
-struct SolutionStep {
+struct SolutionStep<State, Input> {
     index: usize,
-    input: Option<InputId>,
+    input: Option<Input>,
     state: State,
+    completed: bool,
 }
 
 #[cfg(feature = "solver")]
 #[derive(Clone, Debug)]
-struct SearchObservation {
+struct SearchObservation<State> {
     progress: SearchProgress,
     state: State,
-}
-
-#[cfg(feature = "solver")]
-#[derive(Clone, Debug)]
-struct SearchObservation3 {
-    progress: SearchProgress,
-    state: State3,
 }
 
 #[cfg(feature = "solver")]
@@ -514,8 +508,8 @@ impl<State: Clone> SearchObservationSampler<State> {
 }
 
 #[cfg(feature = "solver")]
-impl SearchObservationSampler<State> {
-    fn into_2d(self) -> Vec<SearchObservation> {
+impl<State> SearchObservationSampler<State> {
+    fn into_observations(self) -> Vec<SearchObservation<State>> {
         self.observations
             .into_iter()
             .map(|(progress, state)| SearchObservation { progress, state })
@@ -524,78 +518,48 @@ impl SearchObservationSampler<State> {
 }
 
 #[cfg(feature = "solver")]
-impl SearchObservationSampler<State3> {
-    fn into_3d(self) -> Vec<SearchObservation3> {
-        self.observations
-            .into_iter()
-            .map(|(progress, state)| SearchObservation3 { progress, state })
-            .collect()
-    }
-}
-
-#[cfg(feature = "solver")]
 #[derive(Clone, Debug)]
-enum SolutionResponse {
+enum SolutionResponse<State, Input> {
     Solved {
         depth: u32,
-        moves: Vec<InputId>,
-        steps: Vec<SolutionStep>,
-        observations: Vec<SearchObservation>,
+        moves: Vec<Input>,
+        steps: Vec<SolutionStep<State, Input>>,
+        observations: Vec<SearchObservation<State>>,
     },
     Exhausted {
         stats: SearchStats,
-        observations: Vec<SearchObservation>,
+        observations: Vec<SearchObservation<State>>,
     },
     BudgetExceeded {
         stats: SearchStats,
-        observations: Vec<SearchObservation>,
+        observations: Vec<SearchObservation<State>>,
     },
     Failed {
         depth: u32,
         error: String,
-        observations: Vec<SearchObservation>,
+        observations: Vec<SearchObservation<State>>,
     },
 }
 
 #[cfg(feature = "solver")]
-#[derive(Clone, Debug)]
-struct SolutionStep3 {
-    index: usize,
-    input: Option<InputId3>,
-    state: State3,
-    completed: bool,
-}
-
+type PuzzleSolutionResponse = SolutionResponse<State, InputId>;
 #[cfg(feature = "solver")]
-#[derive(Clone, Debug)]
-enum SolutionResponse3 {
-    Solved {
-        depth: u32,
-        moves: Vec<InputId3>,
-        steps: Vec<SolutionStep3>,
-        observations: Vec<SearchObservation3>,
-    },
-    Exhausted {
-        stats: SearchStats,
-        observations: Vec<SearchObservation3>,
-    },
-    BudgetExceeded {
-        stats: SearchStats,
-        observations: Vec<SearchObservation3>,
-    },
-    Failed {
-        depth: u32,
-        error: String,
-        observations: Vec<SearchObservation3>,
-    },
-}
+type PuzzleSolutionStep = SolutionStep<State, InputId>;
+#[cfg(feature = "solver")]
+type PuzzleSearchObservation = SearchObservation<State>;
+#[cfg(feature = "solver")]
+type Puzzle3SolutionResponse = SolutionResponse<State3, InputId3>;
+#[cfg(feature = "solver")]
+type Puzzle3SolutionStep = SolutionStep<State3, InputId3>;
+#[cfg(feature = "solver")]
+type Puzzle3SearchObservation = SearchObservation<State3>;
 
 #[cfg(feature = "solver")]
 fn solve_current_state(
     loaded: &LoadedGame,
     initial: State,
     solver: SolverConfig,
-) -> Result<SolutionResponse, AppError> {
+) -> Result<PuzzleSolutionResponse, AppError> {
     solve_current_state_with_budget(loaded, initial, solver.budget())
 }
 
@@ -604,7 +568,7 @@ fn solve_current_state_with_budget(
     loaded: &LoadedGame,
     initial: State,
     budget: SearchBudget,
-) -> Result<SolutionResponse, AppError> {
+) -> Result<PuzzleSolutionResponse, AppError> {
     solve_current_state_with_budget_inner(
         loaded,
         initial,
@@ -621,7 +585,7 @@ fn solve_compiled_state_with_budget_and_progress<O>(
     initial: State,
     budget: SearchBudget,
     mut on_observation: Option<O>,
-) -> Result<SolutionResponse, AppError>
+) -> Result<PuzzleSolutionResponse, AppError>
 where
     O: FnMut(&State, SearchProgress),
 {
@@ -669,7 +633,7 @@ where
             }
         },
     );
-    let observations = observations.into_2d();
+    let observations = observations.into_observations();
 
     let response = match outcome {
         SearchOutcome::Solved(witness) => {
@@ -720,7 +684,7 @@ fn solve_current_state_with_budget_inner<O>(
     initial: State,
     budget: SearchBudget,
     mut on_progress: Option<O>,
-) -> Result<SolutionResponse, AppError>
+) -> Result<PuzzleSolutionResponse, AppError>
 where
     O: FnMut(&State, SearchProgress),
 {
@@ -751,7 +715,7 @@ where
             }
         },
     );
-    let observations = observations.into_2d();
+    let observations = observations.into_observations();
 
     let response = match outcome {
         SearchOutcome::Solved(witness) => {
@@ -786,12 +750,13 @@ fn solution_steps(
     game: &puzzle_core::CompiledGame,
     mut state: State,
     inputs: &[InputId],
-) -> Result<Vec<SolutionStep>, AppError> {
+) -> Result<Vec<PuzzleSolutionStep>, AppError> {
     let mut steps = Vec::with_capacity(inputs.len() + 1);
     steps.push(SolutionStep {
         index: 0,
         input: None,
         state: state.clone(),
+        completed: false,
     });
 
     for (index, input) in inputs.iter().enumerate() {
@@ -800,6 +765,7 @@ fn solution_steps(
             index: index + 1,
             input: Some(*input),
             state: state.clone(),
+            completed: false,
         });
     }
 
@@ -811,12 +777,13 @@ fn compiled_solution_steps(
     engine: &puzzle_core_wasm::CompiledEngine,
     mut state: State,
     inputs: &[InputId],
-) -> Result<Vec<SolutionStep>, AppError> {
+) -> Result<Vec<PuzzleSolutionStep>, AppError> {
     let mut steps = Vec::with_capacity(inputs.len() + 1);
     steps.push(SolutionStep {
         index: 0,
         input: None,
         state: materialize_compiled_display_state(engine, &state),
+        completed: false,
     });
 
     for (index, input) in inputs.iter().enumerate() {
@@ -825,6 +792,7 @@ fn compiled_solution_steps(
             index: index + 1,
             input: Some(*input),
             state: materialize_compiled_display_state(engine, &state),
+            completed: false,
         });
     }
 
@@ -836,7 +804,7 @@ fn solve_current_state3_with_budget(
     parsed: &ParsedPuzzle3,
     initial: State3,
     budget: SearchBudget,
-) -> Result<SolutionResponse3, AppError> {
+) -> Result<Puzzle3SolutionResponse, AppError> {
     solve_current_state3_with_budget_inner(
         parsed,
         initial,
@@ -851,7 +819,7 @@ fn solve_current_state3_with_budget_inner<O>(
     initial: State3,
     budget: SearchBudget,
     mut on_progress: Option<O>,
-) -> Result<SolutionResponse3, AppError>
+) -> Result<Puzzle3SolutionResponse, AppError>
 where
     O: FnMut(&State3, SearchProgress),
 {
@@ -887,13 +855,13 @@ where
             }
         },
     );
-    let observations = observations.into_3d();
+    let observations = observations.into_observations();
 
     let response = match outcome {
         SearchOutcome::Solved(witness) => {
             let depth = witness.depth;
             let solution_inputs = witness.actions;
-            SolutionResponse3::Solved {
+            SolutionResponse::Solved {
                 depth,
                 steps: solution_steps3(
                     &game,
@@ -906,15 +874,15 @@ where
                 observations,
             }
         }
-        SearchOutcome::Exhausted(stats) => SolutionResponse3::Exhausted {
+        SearchOutcome::Exhausted(stats) => SolutionResponse::Exhausted {
             stats,
             observations,
         },
-        SearchOutcome::BudgetExceeded(stats) => SolutionResponse3::BudgetExceeded {
+        SearchOutcome::BudgetExceeded(stats) => SolutionResponse::BudgetExceeded {
             stats,
             observations,
         },
-        SearchOutcome::Failed(failure) => SolutionResponse3::Failed {
+        SearchOutcome::Failed(failure) => SolutionResponse::Failed {
             depth: failure.depth,
             error: format!("{:?}", failure.error),
             observations,
@@ -930,9 +898,9 @@ fn solution_steps3(
     win_condition: Option<&WinCondition3>,
     mut state: State3,
     inputs: &[InputId3],
-) -> Result<Vec<SolutionStep3>, AppError> {
+) -> Result<Vec<Puzzle3SolutionStep>, AppError> {
     let mut steps = Vec::with_capacity(inputs.len() + 1);
-    steps.push(SolutionStep3 {
+    steps.push(SolutionStep {
         index: 0,
         input: None,
         completed: win_condition.is_some_and(|condition| condition.is_met(game, &state)),
@@ -942,7 +910,7 @@ fn solution_steps3(
     for (index, input) in inputs.iter().enumerate() {
         state = transition_program3(game, &state, rules, *input)
             .map_err(|error| AppError::Config(format!("{error:?}")))?;
-        steps.push(SolutionStep3 {
+        steps.push(SolutionStep {
             index: index + 1,
             input: Some(*input),
             completed: win_condition.is_some_and(|condition| condition.is_met(game, &state)),
