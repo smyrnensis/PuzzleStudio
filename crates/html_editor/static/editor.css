@@ -89,8 +89,6 @@ html[data-theme="light"] {
   --panel: #ffffff;
   --line: #d6dde3;
   --line-strong: #aeb9c3;
-  --accent: #276b8f;
-  --accent-ink: #ffffff;
   --danger: #b32634;
   --ok: #1d7a50;
   --shadow: none;
@@ -1752,6 +1750,14 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   background: transparent;
   color: transparent;
   caret-color: var(--code-ink);
+}
+
+.source-editor-wrap.is-plain-source .source-highlight {
+  display: none;
+}
+
+.source-editor-wrap.is-plain-source #sourceEditor {
+  color: var(--code-ink);
 }
 
 #sourceEditor.has-source-block-selection {
@@ -4322,11 +4328,8 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
 .sprite-source-fields {
   width: 100%;
   min-width: 0;
-  display: grid;
-  grid-template-columns: minmax(160px, 220px) max-content minmax(0, 1fr);
-  grid-template-areas:
-    "name . ."
-    "transform shape .";
+  display: flex;
+  flex-wrap: wrap;
   align-items: start;
   gap: 6px;
 }
@@ -4431,19 +4434,21 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
 }
 
 #spriteBuilder .sprite-controls .sprite-name-control {
-  grid-area: name;
-  width: 100%;
-  max-width: 220px;
+  flex: 1 1 168px;
+  width: auto;
+  min-width: 132px;
+  max-width: min(320px, 100%);
 }
 
 #spriteBuilder .sprite-controls .sprite-shape-field {
-  grid-area: shape;
+  flex: 0 1 auto;
   width: auto;
+  min-width: 0;
   max-width: none;
 }
 
 #spriteBuilder .sprite-controls .sprite-transform-bar {
-  grid-area: transform;
+  flex: 0 0 auto;
   width: max-content;
   max-width: 100%;
   flex-wrap: nowrap;
@@ -4507,18 +4512,8 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
 }
 
 @container (max-width: 620px) {
-  .sprite-source-fields {
-    grid-template-columns: minmax(160px, 220px) max-content minmax(0, 1fr);
-    grid-template-areas:
-      "name . ."
-      "transform shape .";
-    width: 100%;
-    max-width: 100%;
-  }
-
   #spriteBuilder .sprite-controls .sprite-name-control {
-    width: 100%;
-    max-width: 220px;
+    max-width: min(320px, 100%);
   }
 
   #spriteBuilder .sprite-controls .sprite-transform-bar {
@@ -4930,23 +4925,17 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
 }
 
 .sprite-palette-grid {
-  width: min(100%, var(--sprite3d-slice-size, 320px));
+  width: 100%;
   min-width: 0;
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(var(--icon-button-size), var(--icon-button-size)));
-  grid-auto-rows: var(--icon-button-size);
-  grid-auto-flow: row dense;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
   gap: 3px;
 }
 
 .sprite-palette-grid > .sprite-token,
 .sprite-palette-grid > .sprite-add-wrap {
-  justify-self: center;
-}
-
-.sprite-palette-grid > .sprite-clip-actions {
-  grid-column: 1 / -1;
-  justify-self: end;
+  flex: 0 0 auto;
 }
 
 .sprite-marker-tool {
@@ -5660,13 +5649,13 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
 
 .sprite-board {
   --sprite-size: 5;
-  --sprite-cell: clamp(14px, calc((100cqw - 2px) / var(--sprite-size)), 34px);
+  --sprite-cell: clamp(14px, calc(100cqw / var(--sprite-size)), 34px);
   --sprite-puzzle-line: #1d242b;
   position: relative;
   display: grid;
   grid-template-columns: repeat(var(--sprite-size), var(--sprite-cell));
   width: max-content;
-  border: 1px solid var(--line);
+  border: 0;
   background-color: var(--sprite-swatch-bg);
   background-image: var(--sprite-swatch-checker);
   background-size: 8px 8px;
@@ -5698,7 +5687,7 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
 }
 
 #spriteBuilder .sprite-board {
-  --sprite-cell: clamp(8px, calc((100cqw - 2px) / var(--sprite-size)), 64px);
+  --sprite-cell: clamp(8px, calc(100cqw / var(--sprite-size)), 64px);
 }
 
 .sprite3d-workspace {
@@ -6620,11 +6609,6 @@ html.is-sprite3d-slice-scrubbing * {
   background: var(--hover-bg);
   color: var(--ink);
   box-shadow: inset 0 0 0 1px var(--line-strong);
-}
-
-.ps-import-actions .source-action-button.is-primary:not(:disabled) {
-  color: var(--ink);
-  background: color-mix(in srgb, var(--ok) 18%, transparent);
 }
 
 .ps-import-status {

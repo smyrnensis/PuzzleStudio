@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::ast::EffectAst;
 use crate::loaded::SceneEffect;
-use crate::source::{SourceScope, SourceToken};
+use crate::source::{LogicalLine, SourceScope, SourceToken};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct SourceSpan {
@@ -52,6 +52,7 @@ pub(crate) struct SurfaceNode {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct SurfaceDocument {
+    pub(crate) logical_lines: Vec<LogicalLine>,
     pub(crate) lines: Vec<SurfaceLine>,
     pub(crate) structural_blocks: Vec<SurfaceStructuralBlock>,
     pub(crate) nodes: Vec<SurfaceNode>,
@@ -67,6 +68,7 @@ pub(crate) struct SurfaceLine {
     pub(crate) token_spans: Vec<SourceToken>,
     pub(crate) scope: Option<SourceScope>,
     pub(crate) start: usize,
+    pub(crate) line: usize,
     pub(crate) content: String,
     pub(crate) option_block: Option<SurfaceOptionBlock>,
 }
@@ -216,6 +218,7 @@ impl SurfaceSink {
         token_spans: Vec<SourceToken>,
         scope: Option<SourceScope>,
         start: usize,
+        line: usize,
         content: String,
         option_block: Option<SurfaceOptionBlock>,
     ) {
@@ -224,6 +227,7 @@ impl SurfaceSink {
             token_spans,
             scope,
             start,
+            line,
             content,
             option_block,
         });

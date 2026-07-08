@@ -1867,7 +1867,8 @@ function renderDocumentSelect() {
   treeRowByNodeId = new Map();
   clearDropTargets();
   documentList.replaceChildren();
-  renderTreeNode(fileTree, documentList, 0);
+  const importTitleIndex = buildTreeImportTitleIndex();
+  renderTreeNode(fileTree, documentList, 0, importTitleIndex);
   renderExplorerEmptyState();
   updateFileCreationAvailability();
   focusDraftInput();
@@ -2069,7 +2070,7 @@ document.addEventListener("pointerup", stopExplorerOutlineResize);
 document.addEventListener("pointercancel", stopExplorerOutlineResize);
 loadExplorerSectionState();
 
-function renderTreeNode(node, parent, depth) {
+function renderTreeNode(node, parent, depth, importTitleIndex) {
   if (!node) {
     return;
   }
@@ -2095,7 +2096,7 @@ function renderTreeNode(node, parent, depth) {
     }
     if (node === fileTree || node.expanded !== false) {
       for (const child of node.children || []) {
-        renderTreeNode(child, parent, node === fileTree ? depth : depth + 1);
+        renderTreeNode(child, parent, node === fileTree ? depth : depth + 1, importTitleIndex);
       }
       renderDraftEntry(node, parent, node === fileTree ? depth : depth + 1);
     }
@@ -2117,7 +2118,7 @@ function renderTreeNode(node, parent, depth) {
   row.classList.toggle("is-renaming", renameEntry?.nodeId === node.id);
   row.innerHTML = `${fileIconSvg(node)}${treeNameHtml(node)}${treeActionsHtml("file")}`;
   setTreeName(row, node);
-  setTreeImportTitle(row, node);
+  setTreeImportTitle(row, node, importTitleIndex);
   parent.append(row);
 }
 
@@ -2176,12 +2177,78 @@ function setTreeName(row, node) {
   row.querySelector(".tree-label").textContent = node.name || fileName(node.puzzlePath);
 }
 
-function setTreeImportTitle(row, node) {
+function buildTreeImportTitleIndex() {
+  const parentGamesById = new Map();
+  const directImportersById = new Map();
+  const puzzleDocuments = documents.filter((document) => isPuzzleDocument(document) && isTextDocument(document));
+  const gameEntries = puzzleDocuments.filter((document) => documentDeclaresGameEntry(document));
+  const pathsByDocumentId = new Map();
+
+  for (const document of puzzleDocuments) {
+    pathsByDocumentId.set(document.id, puzzleImportPathsForDocument(document));
+  }
+
+  const importedDocumentsFor = (document) => {
+    const root = document.workspaceRoot || workspaceRoot || "";
+    return (pathsByDocumentId.get(document.id) || [])
+      .map((importPath) => documentByPathForWorkspace(importPath, root))
+      .filter((imported) => imported && isPuzzleDocument(imported) && isTextDocument(imported));
+  };
+
+  for (const document of puzzleDocuments) {
+    if (documentDeclaresGameEntry(document)) {
+      parentGamesById.set(document.id, [document]);
+    }
+    const directImportedIds = new Set();
+    for (const imported of importedDocumentsFor(document)) {
+      if (imported.id === document.id || directImportedIds.has(imported.id)) {
+        continue;
+      }
+      directImportedIds.add(imported.id);
+      if (!directImportersById.has(imported.id)) {
+        directImportersById.set(imported.id, []);
+      }
+      directImportersById.get(imported.id).push(document);
+    }
+  }
+
+  for (const gameEntry of gameEntries) {
+    const visited = new Set();
+    const stack = importedDocumentsFor(gameEntry);
+    while (stack.length) {
+      const imported = stack.pop();
+      if (!imported || visited.has(imported.id)) {
+        continue;
+      }
+      visited.add(imported.id);
+      if (documentDeclaresGameEntry(imported)) {
+        stack.push(...importedDocumentsFor(imported));
+        continue;
+      }
+      if (!parentGamesById.has(imported.id)) {
+        parentGamesById.set(imported.id, []);
+      }
+      parentGamesById.get(imported.id).push(gameEntry);
+      stack.push(...importedDocumentsFor(imported));
+    }
+  }
+
+  for (const values of parentGamesById.values()) {
+    values.sort(comparePuzzleEntryDocuments);
+  }
+  for (const values of directImportersById.values()) {
+    values.sort(comparePuzzleEntryDocuments);
+  }
+
+  return { parentGamesById, directImportersById };
+}
+
+function setTreeImportTitle(row, node, importTitleIndex) {
   if (!isPuzzleDocument(node) || !isTextDocument(node)) {
     return;
   }
   const lines = [];
-  const parentGames = parentGameCandidatesForDocument(node);
+  const parentGames = importTitleIndex.parentGamesById.get(node.id) || [];
   if (parentGames.length > 1) {
     lines.push(`Parent games: ${parentGames.map((item) => item.puzzlePath || item.name || "game").join(", ")}`);
     lines.push(`Preview uses: ${parentGames[0].puzzlePath || parentGames[0].name || "game"}`);
@@ -2190,7 +2257,7 @@ function setTreeImportTitle(row, node) {
   } else if (parentGames.length === 1) {
     lines.push("Game entry");
   }
-  const importers = directImportersForDocument(node);
+  const importers = importTitleIndex.directImportersById.get(node.id) || [];
   if (importers.length) {
     lines.push(`Imported by: ${importers.map((item) => item.puzzlePath || item.name).join(", ")}`);
   } else if (!parentGames.length) {
@@ -3422,28 +3489,6 @@ function installDesktopExitGuards() {
   }).catch((error) => {
     console.error(error);
     setEditorStatus("Close guard unavailable", "is-error");
-  });
-
-  window.PuzzleStudioHost.listenAppExitRequested(async () => {
-    if (desktopExitConfirmationOpen) {
-      return;
-    }
-    desktopExitConfirmationOpen = true;
-    try {
-      if (!confirmDesktopExitWithUnsavedChanges("Quit PuzzleStudio")) {
-        setEditorStatus("Quit canceled: unsaved changes", "is-error");
-        return;
-      }
-      await window.PuzzleStudioHost.confirmAppExit();
-    } catch (error) {
-      console.error(error);
-      setEditorStatus("Quit blocked: unsaved state unavailable", "is-error");
-    } finally {
-      desktopExitConfirmationOpen = false;
-    }
-  }).catch((error) => {
-    console.error(error);
-    setEditorStatus("Quit guard unavailable", "is-error");
   });
 }
 

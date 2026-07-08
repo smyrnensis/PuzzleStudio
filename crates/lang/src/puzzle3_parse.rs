@@ -40,7 +40,9 @@ impl From<puzzle_scene::SceneBlockParseError> for ParseError3 {
 }
 
 pub fn parse_puzzle3d(source: &str) -> Result<ParsedPuzzle3, ParseError3> {
-    Parser3::new(source).parse()
+    let document =
+        crate::parse_surface_compile_document(source).map_err(diagnostic_report_error3)?;
+    parse_puzzle3d_logical_lines(&document.logical_lines)
 }
 
 pub(crate) fn parse_puzzle3d_logical_lines(
@@ -73,10 +75,6 @@ struct Parser3 {
 }
 
 impl Parser3 {
-    fn new(source: &str) -> Self {
-        Self::from_lines(preprocess_source_lines3(source))
-    }
-
     fn from_lines(lines: Vec<String>) -> Self {
         Self {
             lines,
@@ -1738,12 +1736,12 @@ fn is_canonical_sprite_name(line: &str) -> bool {
             .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | ':' | '@'))
 }
 
-fn is_canonical_sprite_palette_line(line: &str) -> bool {
+pub(crate) fn is_canonical_sprite_palette_line(line: &str) -> bool {
     let mut tokens = line.split_whitespace().peekable();
     tokens.peek().is_some() && tokens.all(|token| token == "transparent" || is_hex_color(token))
 }
 
-fn parse_canonical_sprite_palette_line(
+pub(crate) fn parse_canonical_sprite_palette_line(
     line: &str,
 ) -> Result<BTreeMap<char, SpriteColor3>, ParseError3> {
     if !is_canonical_sprite_palette_line(line) {
@@ -1777,7 +1775,7 @@ fn is_hex_color(value: &str) -> bool {
         && value[1..].chars().all(|ch| ch.is_ascii_hexdigit())
 }
 
-fn parse_sprite_voxels(
+pub(crate) fn parse_sprite_voxels(
     sprite_name: &str,
     rows: &[String],
     palette: &BTreeMap<char, SpriteColor3>,
@@ -1883,143 +1881,6 @@ fn parse_optional_program_local_frame(
             "transition block header must use local_radius <n> or local_frame <x> <y> <z>",
         )),
     }
-}
-
-fn preprocess_source_lines3(source: &str) -> Vec<String> {
-    let raw_lines = source
-        .lines()
-        .map(strip_comment)
-        .map(str::trim)
-        .map(str::to_string)
-        .collect::<Vec<_>>();
-    let mut lines = Vec::new();
-    let mut block_stack = Vec::<String>::new();
-    for line in raw_lines {
-        if line.is_empty() {
-            lines.push(String::new());
-            continue;
-        }
-        let split_semicolons = !block_stack
-            .iter()
-            .any(|block| matches!(block.as_str(), "levels3" | "sprites3"));
-        for piece in split_structural_line3(&line, split_semicolons) {
-            update_structural_block_stack3(&piece, &mut block_stack);
-            lines.push(piece);
-        }
-    }
-    lines
-}
-
-fn update_structural_block_stack3(line: &str, stack: &mut Vec<String>) {
-    if line == "}" {
-        stack.pop();
-        return;
-    }
-    if !line.ends_with('{') {
-        return;
-    }
-    if let Some(first) = line.split_whitespace().next() {
-        stack.push(first.to_string());
-    }
-}
-
-fn split_structural_line3(line: &str, split_semicolons: bool) -> Vec<String> {
-    let mut pieces = Vec::new();
-    let mut current = String::new();
-    let mut in_string = false;
-    let mut escaped = false;
-    let mut square_depth = 0usize;
-    let mut paren_depth = 0usize;
-    let mut inline_brace_depth = 0usize;
-
-    for (index, ch) in line.char_indices() {
-        if in_string {
-            current.push(ch);
-            if escaped {
-                escaped = false;
-            } else if ch == '\\' {
-                escaped = true;
-            } else if ch == '"' {
-                in_string = false;
-            }
-            continue;
-        }
-        if ch == '"' {
-            in_string = true;
-            current.push(ch);
-            continue;
-        }
-        if inline_brace_depth > 0 {
-            current.push(ch);
-            if ch == '{' {
-                inline_brace_depth += 1;
-            } else if ch == '}' {
-                inline_brace_depth = inline_brace_depth.saturating_sub(1);
-            }
-            continue;
-        }
-        match ch {
-            '[' => {
-                square_depth += 1;
-                current.push(ch);
-            }
-            ']' => {
-                square_depth = square_depth.saturating_sub(1);
-                current.push(ch);
-            }
-            '(' => {
-                paren_depth += 1;
-                current.push(ch);
-            }
-            ')' => {
-                paren_depth = paren_depth.saturating_sub(1);
-                current.push(ch);
-            }
-            '{' if square_depth == 0 && paren_depth == 0 => {
-                if is_inline_selector_brace3(line, index) {
-                    inline_brace_depth = 1;
-                    current.push(ch);
-                    continue;
-                }
-                push_trimmed_piece3(&mut pieces, &current);
-                current.clear();
-                if let Some(last) = pieces.last_mut() {
-                    last.push_str(" {");
-                } else {
-                    pieces.push("{".to_string());
-                }
-            }
-            '}' if square_depth == 0 && paren_depth == 0 => {
-                push_trimmed_piece3(&mut pieces, &current);
-                current.clear();
-                pieces.push("}".to_string());
-            }
-            ';' if split_semicolons && square_depth == 0 && paren_depth == 0 => {
-                push_trimmed_piece3(&mut pieces, &current);
-                current.clear();
-            }
-            _ => current.push(ch),
-        }
-    }
-    push_trimmed_piece3(&mut pieces, &current);
-    pieces
-}
-
-fn push_trimmed_piece3(pieces: &mut Vec<String>, piece: &str) {
-    let trimmed = piece.trim();
-    if !trimmed.is_empty() {
-        pieces.push(trimmed.to_string());
-    }
-}
-
-fn is_inline_selector_brace3(line: &str, index: usize) -> bool {
-    let before = line[..index].chars().next_back();
-    let after = line[index + 1..].chars().next();
-    before.is_some_and(is_selector_token_char3) && after.is_some_and(|ch| !ch.is_whitespace())
-}
-
-fn is_selector_token_char3(ch: char) -> bool {
-    ch.is_ascii_alphanumeric() || matches!(ch, '_' | '@' | ':' | '*')
 }
 
 fn parse_local_frame_extent3(token: &str) -> Result<LocalFrameExtent, ParseError3> {
@@ -3664,10 +3525,6 @@ fn inputs_from_specs(specs: Vec<InputSpec3>) -> Result<Vec<InputDef3>, ParseErro
         inputs.push(input);
     }
     Ok(inputs)
-}
-
-fn strip_comment(line: &str) -> &str {
-    line.split_once("//").map_or(line, |(head, _)| head)
 }
 
 fn message(message: impl Into<String>) -> ParseError3 {

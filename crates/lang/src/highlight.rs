@@ -848,7 +848,7 @@ fn escape_char_into(out: &mut String, ch: char) {
 
 #[cfg(test)]
 mod tests {
-    use super::highlight_source;
+    use super::{highlight_source, highlight_source_with_document};
 
     #[test]
     fn renders_parser_semantic_tokens_without_local_symbol_classification() {
@@ -916,6 +916,79 @@ level "start" {
         assert!(highlighted.html.contains("syntax-group\">directions"));
         assert!(highlighted.html.contains("syntax-variant\">left"));
         assert!(!highlighted.html.contains("syntax-object\">directions"));
+    }
+
+    #[test]
+    fn teneten_group_rhs_flows_from_surface_document_to_highlight_html() {
+        let source = include_str!("../../../games/TPGJ6/TENETEN.puzzle");
+        crate::parse_game2d(source).unwrap();
+        let document = crate::parse_surface_document(source);
+        let tokens = crate::surface_document_semantic_tokens(&document);
+        let object_line_start = source
+            .find("object = player Crate Ball Wall Fly Headlong TimeMachine:D")
+            .unwrap();
+        let structural_keyword_starts = [
+            ("layers", source.find("layers {").unwrap()),
+            ("groups", source.find("groups {").unwrap()),
+            ("rules", source.find("rules {").unwrap()),
+            ("on_level_start", source.find("on_level_start {").unwrap()),
+            ("levels", source.find("levels {").unwrap()),
+            ("legend", source.find("legend {").unwrap()),
+        ];
+
+        for (text, kind) in [
+            ("layers", crate::SemanticKind::Keyword),
+            ("groups", crate::SemanticKind::Keyword),
+            ("rules", crate::SemanticKind::Keyword),
+            ("on_level_start", crate::SemanticKind::Keyword),
+            ("levels", crate::SemanticKind::Keyword),
+            ("legend", crate::SemanticKind::Keyword),
+            ("object", crate::SemanticKind::Group),
+            ("player", crate::SemanticKind::Group),
+            ("Crate", crate::SemanticKind::Object),
+            ("Ball", crate::SemanticKind::Object),
+            ("Wall", crate::SemanticKind::Object),
+            ("Fly", crate::SemanticKind::Object),
+            ("Headlong", crate::SemanticKind::Object),
+            ("TimeMachine", crate::SemanticKind::Object),
+            ("D", crate::SemanticKind::Group),
+        ] {
+            let search_start = structural_keyword_starts
+                .iter()
+                .find_map(|(keyword, start)| (*keyword == text).then_some(*start))
+                .unwrap_or(object_line_start);
+            let start = search_start + source[search_start..].find(text).unwrap();
+            assert!(
+                tokens.iter().any(|token| {
+                    token.start == start && token.end == start + text.len() && token.kind == kind
+                }),
+                "missing parser surface semantic token for {text} as {kind:?}"
+            );
+        }
+
+        let highlighted = highlight_source_with_document(source, &document);
+        assert!(highlighted.parsed);
+        assert!(highlighted.html.contains(
+            "<span class=\"syntax-group\">object</span> <span class=\"syntax-operator\">=</span> <span class=\"syntax-group\">player</span> <span class=\"syntax-object\">Crate</span>"
+        ));
+        assert!(highlighted.html.contains(
+            "<span class=\"syntax-object\">TimeMachine</span><span class=\"syntax-operator\">:</span><span class=\"syntax-group\">D</span>"
+        ));
+        for keyword in [
+            "layers",
+            "groups",
+            "rules",
+            "on_level_start",
+            "levels",
+            "legend",
+        ] {
+            assert!(
+                highlighted
+                    .html
+                    .contains(&format!("<span class=\"syntax-keyword\">{keyword}</span>")),
+                "missing highlighted structural keyword {keyword}"
+            );
+        }
     }
 
     #[test]

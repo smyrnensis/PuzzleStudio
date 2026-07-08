@@ -155,26 +155,6 @@
       }
       return currentWindow.onCloseRequested(handler);
     },
-    async listenAppExitRequested(handler) {
-      const invoke = tauriInvoke();
-      if (!invoke) {
-        return () => {};
-      }
-      const listen = tauriListen("puzzlestudio-app-exit-requested", (event) => {
-        handler(event?.payload || {});
-      });
-      if (!listen) {
-        throw new Error("Desktop app exit events are unavailable.");
-      }
-      return listen;
-    },
-    async confirmAppExit() {
-      const invoke = tauriInvoke();
-      if (!invoke) {
-        throw new Error("Confirm app exit is only available in the desktop app.");
-      }
-      return invoke("confirm_app_exit");
-    },
     async listenWorkspaceChanged(handler) {
       const listen = tauriListen("puzzlestudio-workspace-changed", (event) => {
         handler(event?.payload || {});

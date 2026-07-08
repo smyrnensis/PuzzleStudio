@@ -179,15 +179,9 @@ fn parse_puzzle_definition(
     pending_level_blocks: &mut Vec<PendingLevelBlock>,
 ) -> Result<(usize, String), DiagnosticReport> {
     let header = split_header_tokens(&lines[start]);
-    let name = match header.as_slice() {
-        ["puzzle", name] => *name,
-        _ => {
-            return Err(parse_error(
-                &lines[start],
-                "puzzle header must be: puzzle <name>",
-            ));
-        }
-    };
+    let name = crate::syntax::named_block_declaration_syntax(&header, "puzzle")
+        .ok_or_else(|| parse_error(&lines[start], "puzzle header must be: puzzle <name>"))?
+        .name;
     validate_qualified_identifier(name, &lines[start], "puzzle name")?;
 
     collect_puzzle_tag_declarations(lines, start + 1, catalog)?;

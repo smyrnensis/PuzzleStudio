@@ -1053,7 +1053,7 @@ message "Thank you for playing!"
 }
 }
 
-scene = title {
+scene title {
 layout {
 title = "TENETEN"
 subtitle = "by smyrnensis"
@@ -1061,6 +1061,7 @@ if has_progress_save {
 choice "Continue" -> continue_game
 }
 choice "New Game" -> new_game
+choice "Level Select" -> goto level_select
 }
 routine continue_game {
 goto playing
@@ -1071,7 +1072,9 @@ goto playing(0)
 }
 }
 
-scene = playing {
+
+
+scene playing {
 layout {
 row {
 title = "TENETEN"
@@ -1086,5 +1089,15 @@ step board
 }
 routine back {
 goto title
+}
+}
+
+scene level_select {
+layout {
+level_menu {
+show_index = true
+show_solved = true
+button "Back" -> goto title
+}
 }
 }

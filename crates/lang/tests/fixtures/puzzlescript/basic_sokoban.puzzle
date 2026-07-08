@@ -88,7 +88,7 @@ _ = empty
 }
 }
 
-scene = title {
+scene title {
 layout {
 title = "Basic PS Sokoban"
 if has_progress_save {
@@ -105,7 +105,7 @@ goto playing(0)
 }
 }
 
-scene = playing {
+scene playing {
 layout {
 row {
 title = "Basic PS Sokoban"

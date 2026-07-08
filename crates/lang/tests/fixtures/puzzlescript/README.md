@@ -24,7 +24,7 @@ Current vanilla PuzzleScript import scope:
 - PS `moving` / `stationary` qualifiers become anonymous movement mark predicates such as `directions Crate` and `Crate{no directions}` on LHS; RHS `stationary` is emitted as the bare object.
 - Simple PS `SOUNDS` rows such as `sfx0 12345` become canonical `sounds { sfx sfx0 seed=12345 type=puzzlescript }`; PS rule suffixes such as `SFX0` become `sfx sfx0`.
 - `LEVELS` splits blank-line-separated PS levels into canonical unnamed levels.
-- Default `scene = title` and `scene = playing` entries are generated. Title
+- Default `scene title` and `scene playing` entries are generated. Title
   choices call scene-local routines directly, while the playing scene mounts the
   imported `main` puzzle as `puzzle board = main` and steps `board`.
 - Generated sprite entries and level bodies use brace-less canonical forms. Generated output uses spaces, not tabs.

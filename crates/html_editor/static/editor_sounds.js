@@ -1084,7 +1084,6 @@ soundsMusicProgress.addEventListener("keydown", (event) => {
   }
 });
 registerSourceEditableTarget?.("sounds", {
-  find: findSoundsDefinitionAtPosition,
   load: loadSoundFromSourcePosition,
 });
 

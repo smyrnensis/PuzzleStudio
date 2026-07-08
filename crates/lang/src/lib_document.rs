@@ -69,7 +69,7 @@ pub fn parse_document_assets(source: &str) -> Result<AssetsDef, DiagnosticReport
 }
 
 fn parse_game2d_document(source: &str) -> Result<LoadedGame, DiagnosticReport> {
-    let parts = parse_document_source_parts(source)?;
+    let parts = parse_document_source_parts_from_surface_source(source)?;
     parse_game2d_from_document_parts(parts)
 }
 
@@ -92,111 +92,87 @@ fn parse_game2d_from_document_parts(
 }
 
 fn parse_game_document(source: &str) -> Result<LoadedDocument, DiagnosticReport> {
-    match detect_game_document_kind(source)? {
-        GameDocumentKind::Puzzle2d => {
-            let parts = parse_document_source_parts(source)?;
-            let name = first_model_name(&parts.model_source, "puzzle")
-                .unwrap_or_else(|| "default".to_string());
-            let shell = parts.shell.clone();
-            let game = parse_game2d_from_document_parts(parts)?;
-            Ok(LoadedDocument {
-                title: shell.title,
-                subtitle: shell.subtitle,
-                author: shell.author,
-                homepage: shell.homepage,
-                default_wait_ms: shell.default_wait_ms,
-                default_again_ms: shell.default_again_ms,
-                input_buffer: shell.input_buffer,
-                animation: shell.animation,
-                sounds: shell.sounds,
-                theme: shell.theme,
-                assets: shell.assets,
-                scenes: game.scenes.clone(),
-                models: vec![LoadedDocumentModel::Puzzle2d {
-                    name,
-                    game: game.clone(),
-                }],
-            })
+    let kind = detect_game_document_kind(source)?;
+    match kind {
+        GameDocumentKind::Puzzle2d | GameDocumentKind::Puzzle3d => {
+            parse_single_model_game_document(source, kind)
         }
-        GameDocumentKind::Puzzle3d => {
-            let parts = parse_document_source_parts(source)?;
-            let name = first_model_name(&parts.model_source, "puzzle3")
-                .unwrap_or_else(|| "default".to_string());
-            let mut scenes = parts.scenes;
-            resolve_inferred_scene_puzzle_slots(&mut scenes, std::iter::once(("puzzle3", &name)))?;
-            let puzzle = crate::puzzle3_parse::parse_puzzle3d_logical_lines(&parts.model_lines)
-                .map_err(|error| puzzle3_parse_error_report(error, &parts.model_lines))?;
-            let mut scenes = add_implicit_model_scenes(scenes, std::iter::once(("puzzle3", &name)));
-            resolve_scene_actions(&mut scenes, &HashMap::new())?;
-            Ok(LoadedDocument {
-                title: parts.shell.title,
-                subtitle: parts.shell.subtitle,
-                author: parts.shell.author,
-                homepage: parts.shell.homepage,
-                default_wait_ms: parts.shell.default_wait_ms,
-                default_again_ms: parts.shell.default_again_ms,
-                input_buffer: parts.shell.input_buffer,
-                animation: parts.shell.animation,
-                sounds: parts.shell.sounds,
-                theme: parts.shell.theme,
-                assets: parts.shell.assets,
-                scenes,
-                models: vec![LoadedDocumentModel::Puzzle3d { name, puzzle }],
-            })
-        }
-        GameDocumentKind::Mixed => parse_mixed_game_document(source),
+        GameDocumentKind::Mixed => Err(DiagnosticReport::error(
+            "mixed 2D/3D documents are no longer supported; split 2D .puzzle and 3D .puzzle3 sources"
+                .to_string(),
+        )),
     }
 }
 
-fn parse_mixed_game_document(source: &str) -> Result<LoadedDocument, DiagnosticReport> {
-    let parts = parse_document_source_parts(source)?;
-    let sources = split_mixed_game_document_source(source)?;
-    let model_2d_name =
-        first_model_name(&sources.puzzle2d, "puzzle").unwrap_or_else(|| "default".to_string());
-    let game_2d_source = strip_document_shell_source(&sources.puzzle2d)?;
-    let game_2d = parse_game2d_expanded_with_shell(&game_2d_source, &parts.shell)?;
-    let model_3d_name =
-        first_model_name(&sources.puzzle3d, "puzzle3").unwrap_or_else(|| "default".to_string());
-    let puzzle3_lines = source::logical_lines_with_locations(&sources.puzzle3d)?;
-    let puzzle3_lines = strip_document_shell_lines(&puzzle3_lines);
-    let puzzle3 = crate::puzzle3_parse::parse_puzzle3d_logical_lines(&puzzle3_lines)
-        .map_err(|error| puzzle3_parse_error_report(error, &puzzle3_lines))?;
+fn parse_single_model_game_document(
+    source: &str,
+    kind: GameDocumentKind,
+) -> Result<LoadedDocument, DiagnosticReport> {
+    let parts = parse_document_source_parts_from_surface_source(source)?;
+    match kind {
+        GameDocumentKind::Puzzle2d => parse_puzzle2d_loaded_document(parts),
+        GameDocumentKind::Puzzle3d => parse_puzzle3d_loaded_document(parts),
+        GameDocumentKind::Mixed => Err(DiagnosticReport::error(
+            "single-model document parser received a mixed 2D/3D document".to_string(),
+        )),
+    }
+}
+
+fn parse_puzzle2d_loaded_document(
+    parts: DocumentSourceParts,
+) -> Result<LoadedDocument, DiagnosticReport> {
+    let name =
+        first_model_name(&parts.model_source, "puzzle").unwrap_or_else(|| "default".to_string());
+    let shell = parts.shell.clone();
+    let game = parse_game2d_from_document_parts(parts)?;
+    Ok(loaded_document_from_shell(
+        shell,
+        game.scenes.clone(),
+        vec![LoadedDocumentModel::Puzzle2d {
+            name,
+            game: game.clone(),
+        }],
+    ))
+}
+
+fn parse_puzzle3d_loaded_document(
+    parts: DocumentSourceParts,
+) -> Result<LoadedDocument, DiagnosticReport> {
+    let name =
+        first_model_name(&parts.model_source, "puzzle3").unwrap_or_else(|| "default".to_string());
     let mut scenes = parts.scenes;
-    resolve_inferred_scene_puzzle_slots(
-        &mut scenes,
-        [("puzzle", &model_2d_name), ("puzzle3", &model_3d_name)].into_iter(),
-    )?;
-
-    let mut scenes = add_implicit_model_scenes(
+    resolve_inferred_scene_puzzle_slots(&mut scenes, std::iter::once(("puzzle3", &name)))?;
+    let puzzle = crate::puzzle3_parse::parse_puzzle3d_logical_lines(&parts.model_lines)
+        .map_err(|error| puzzle3_parse_error_report(error, &parts.model_lines))?;
+    let mut scenes = add_implicit_model_scenes(scenes, std::iter::once(("puzzle3", &name)));
+    resolve_scene_actions(&mut scenes, &HashMap::new())?;
+    Ok(loaded_document_from_shell(
+        parts.shell,
         scenes,
-        [("puzzle", &model_2d_name), ("puzzle3", &model_3d_name)].into_iter(),
-    );
-    resolve_scene_actions(&mut scenes, &game_2d.input_labels)?;
+        vec![LoadedDocumentModel::Puzzle3d { name, puzzle }],
+    ))
+}
 
-    Ok(LoadedDocument {
-        title: parts.shell.title,
-        subtitle: parts.shell.subtitle,
-        author: parts.shell.author,
-        homepage: parts.shell.homepage,
-        default_wait_ms: parts.shell.default_wait_ms,
-        default_again_ms: parts.shell.default_again_ms,
-        input_buffer: parts.shell.input_buffer,
-        animation: parts.shell.animation,
-        sounds: parts.shell.sounds,
-        theme: parts.shell.theme,
-        assets: parts.shell.assets,
+fn loaded_document_from_shell(
+    shell: DocumentShell,
+    scenes: Vec<SceneDef>,
+    models: Vec<LoadedDocumentModel>,
+) -> LoadedDocument {
+    LoadedDocument {
+        title: shell.title,
+        subtitle: shell.subtitle,
+        author: shell.author,
+        homepage: shell.homepage,
+        default_wait_ms: shell.default_wait_ms,
+        default_again_ms: shell.default_again_ms,
+        input_buffer: shell.input_buffer,
+        animation: shell.animation,
+        sounds: shell.sounds,
+        theme: shell.theme,
+        assets: shell.assets,
         scenes,
-        models: vec![
-            LoadedDocumentModel::Puzzle2d {
-                name: model_2d_name,
-                game: game_2d,
-            },
-            LoadedDocumentModel::Puzzle3d {
-                name: model_3d_name,
-                puzzle: puzzle3,
-            },
-        ],
-    })
+        models,
+    }
 }
 
 fn puzzle3_parse_error_report(
@@ -964,8 +940,33 @@ fn misplaced_puzzle_lifecycle_message(lifecycle_block: &str) -> String {
 }
 
 fn parse_document_source_parts(source: &str) -> Result<DocumentSourceParts, DiagnosticReport> {
-    let shell = parse_document_shell(source)?;
-    let (model_lines, scenes) = split_document_scene_lines(source)?;
+    let logical_lines = logical_lines_with_locations(source)?;
+    parse_document_source_parts_from_logical_lines(logical_lines)
+}
+
+fn parse_document_source_parts_from_surface_source(
+    source: &str,
+) -> Result<DocumentSourceParts, DiagnosticReport> {
+    let surface = parse_surface_compile_document(source)?;
+    parse_document_source_parts_from_surface_document(&surface)
+}
+
+fn parse_document_source_parts_from_surface_document(
+    document: &SurfaceDocument,
+) -> Result<DocumentSourceParts, DiagnosticReport> {
+    if document.logical_lines.is_empty() {
+        return Err(DiagnosticReport::error(
+            "surface document missing compile logical lines".to_string(),
+        ));
+    }
+    parse_document_source_parts_from_logical_lines(document.logical_lines.clone())
+}
+
+fn parse_document_source_parts_from_logical_lines(
+    logical_lines: Vec<source::LogicalLine>,
+) -> Result<DocumentSourceParts, DiagnosticReport> {
+    let shell = parse_document_shell_lines(&logical_lines)?;
+    let (model_lines, scenes) = split_document_scene_logical_lines(logical_lines)?;
     let model_lines = strip_document_shell_lines(&model_lines);
     let model_source = model_lines
         .iter()
@@ -981,61 +982,73 @@ fn parse_document_source_parts(source: &str) -> Result<DocumentSourceParts, Diag
 }
 
 fn parse_document_shell(source: &str) -> Result<DocumentShell, DiagnosticReport> {
+    let lines = logical_lines_with_locations(source)?;
+    parse_document_shell_lines(&lines)
+}
+
+fn parse_document_shell_lines(
+    lines: &[source::LogicalLine],
+) -> Result<DocumentShell, DiagnosticReport> {
+    let line_texts = lines
+        .iter()
+        .map(|line| line.text.clone())
+        .collect::<Vec<_>>();
     let mut shell = DocumentShell::default();
-    let lines = logical_lines(source)?;
     let mut index = 0;
     while index < lines.len() {
-        let tokens = split_header_tokens(&lines[index]);
+        let tokens = split_header_tokens(&line_texts[index]);
         match tokens.as_slice() {
             ["title", ..] => {
-                shell.title = parse_metadata_text(&lines[index], "title")?;
+                shell.title = parse_metadata_text(&line_texts[index], "title")?;
                 index += 1;
             }
             ["subtitle", ..] => {
-                shell.subtitle = Some(parse_metadata_text(&lines[index], "subtitle")?);
+                shell.subtitle = Some(parse_metadata_text(&line_texts[index], "subtitle")?);
                 index += 1;
             }
             ["author", ..] => {
-                shell.author = Some(parse_metadata_text(&lines[index], "author")?);
+                shell.author = Some(parse_metadata_text(&line_texts[index], "author")?);
                 index += 1;
             }
             ["homepage", ..] => {
-                shell.homepage = Some(parse_metadata_text(&lines[index], "homepage")?);
+                shell.homepage = Some(parse_metadata_text(&line_texts[index], "homepage")?);
                 index += 1;
             }
             ["default_wait_time", ..] => {
-                shell.default_wait_ms = parse_default_wait_time_directive(&tokens, &lines[index])?;
+                shell.default_wait_ms =
+                    parse_default_wait_time_directive(&tokens, &line_texts[index])?;
                 index += 1;
             }
             ["again_interval", ..] => {
-                shell.default_again_ms = parse_again_interval_directive(&tokens, &lines[index])?;
+                shell.default_again_ms =
+                    parse_again_interval_directive(&tokens, &line_texts[index])?;
                 index += 1;
             }
             ["input_buffer", ..] => {
-                index = parse_input_buffer_block(&lines, index, &mut shell.input_buffer)?;
+                index = parse_input_buffer_block(&line_texts, index, &mut shell.input_buffer)?;
             }
             ["animation", ..] => {
-                index = parse_animation_block(&lines, index, &mut shell.animation)?;
+                index = parse_animation_block(&line_texts, index, &mut shell.animation)?;
             }
             ["sounds"] => {
-                if model_sounds_block_starts(&lines, index) {
-                    index = skip_logical_block(&lines, index);
+                if model_sounds_block_starts(&line_texts, index) {
+                    index = skip_logical_block(&line_texts, index);
                 } else {
-                    index = parse_sounds_block(&lines, index, &mut shell.sounds)?;
+                    index = parse_sounds_block(&line_texts, index, &mut shell.sounds)?;
                 }
             }
-            ["theme", name] if next_line_is_not_block_body(&lines, index) => {
-                parse_theme_name_directive(&lines[index], name, &mut shell.theme)?;
+            ["theme", name] if next_line_is_not_block_body(&line_texts, index) => {
+                parse_theme_name_directive(&line_texts[index], name, &mut shell.theme)?;
                 index += 1;
             }
             ["theme"] | ["theme", ..] => {
-                index = parse_theme_statement(&lines, index, &mut shell.theme)?;
+                index = parse_theme_statement(&line_texts, index, &mut shell.theme)?;
             }
             ["assets"] => {
-                index = parse_assets_block(&lines, index, &mut shell.assets)?;
+                index = parse_assets_block(&line_texts, index, &mut shell.assets)?;
             }
-            _ if is_block_header_line(&lines[index]) => {
-                index = skip_logical_block(&lines, index);
+            _ if is_block_header_line(&line_texts[index]) => {
+                index = skip_logical_block(&line_texts, index);
             }
             _ => {
                 index += 1;
@@ -1317,10 +1330,9 @@ fn push_raw_model_without_default_scene_layouts<'a>(
     index
 }
 
-fn split_document_scene_lines(
-    source: &str,
+fn split_document_scene_logical_lines(
+    logical_lines: Vec<source::LogicalLine>,
 ) -> Result<(Vec<source::LogicalLine>, Vec<SceneDef>), DiagnosticReport> {
-    let logical_lines = logical_lines_with_locations(source)?;
     let lines = logical_lines
         .iter()
         .map(|line| line.text.clone())
@@ -1840,6 +1852,48 @@ mod document_surface_flow_tests {
             );
         }
     }
+
+    #[test]
+    fn document_compile_entrypoints_use_surface_compile_product() {
+        let source = include_str!("lib_document.rs");
+        assert!(
+            source.contains("fn parse_document_source_parts_from_surface_source("),
+            "document compile must share one surface-source to document-parts entrypoint"
+        );
+        assert!(
+            source.contains("let surface = parse_surface_compile_document(source)?;"),
+            "document parts construction must build the checked surface product before model-specific parsing"
+        );
+        assert!(
+            source.contains("parse_document_source_parts_from_surface_source(source)?"),
+            "2D/3D document compile must derive shell, scenes, and model lines from the shared surface product helper"
+        );
+        let forbidden = "fn parse_game2d_document(source: &str) -> Result<LoadedGame, DiagnosticReport> {\n    let parts = parse_document_source_parts(source)?;";
+        assert!(
+            !source.contains(forbidden),
+            "parse_game2d_document must not bypass the surface product"
+        );
+    }
+
+    #[test]
+    fn standalone_puzzle3_parser_uses_surface_compile_product() {
+        let source = include_str!("puzzle3_parse.rs");
+        assert!(
+            source.contains("crate::parse_surface_compile_document(source)"),
+            "public parse_puzzle3d must consume the shared surface compile product"
+        );
+        for forbidden in [
+            "Parser3::new",
+            "preprocess_source_lines3",
+            "split_structural_line3",
+            "update_structural_block_stack3",
+        ] {
+            assert!(
+                !source.contains(forbidden),
+                "standalone puzzle3 parsing must not reintroduce raw source preprocessing via {forbidden}"
+            );
+        }
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1915,10 +1969,10 @@ pub fn source_declares_game_entry(source: &str) -> bool {
 #[cfg(not(target_arch = "wasm32"))]
 pub fn game_import_paths(source: &str) -> Result<Vec<PathBuf>, DiagnosticReport> {
     let mut paths = Vec::new();
-    for line in logical_lines(source)? {
-        let tokens = split_header_tokens(&line);
+    for line in logical_lines_with_locations(source)? {
+        let tokens = split_header_tokens(&line.text);
         if matches!(tokens.as_slice(), ["import", _]) {
-            paths.push(import_path(tokens[1], &line)?);
+            paths.push(import_path(tokens[1], &line.text)?);
         }
     }
     Ok(paths)
@@ -2051,14 +2105,6 @@ pub fn expand_game_imports_for_file_under_root(
     let base_dir = path.parent().unwrap_or_else(|| Path::new("."));
     let mut import_stack = vec![canonical_path];
     expand_game_imports(source, base_dir, &mut import_stack, Some(&root))
-}
-
-fn parse_game2d_expanded_with_shell(
-    source: &str,
-    shell: &DocumentShell,
-) -> Result<LoadedGame, DiagnosticReport> {
-    let logical_lines = logical_lines_with_locations(source)?;
-    parse_game2d_expanded_lines_with_shell(logical_lines, shell)
 }
 
 fn parse_game2d_expanded_lines_with_shell(

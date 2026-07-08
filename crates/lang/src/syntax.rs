@@ -109,6 +109,11 @@ pub(crate) struct AssignmentSyntax {
     pub(crate) expected_completion_values: &'static [ExpectedCompletionValue],
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct NamedBlockDeclarationSyntax<'a> {
+    pub(crate) name: &'a str,
+}
+
 const SELECTOR_EXPECTED: &[ExpectedCompletionValue] = &[ExpectedCompletionValue::Selector];
 const LEGEND_EXPECTED: &[ExpectedCompletionValue] = &[
     ExpectedCompletionValue::LegendEmpty,
@@ -121,6 +126,16 @@ const VISUAL_LINE_HEAD_EXPECTED: &[ExpectedCompletionValue] = &[
 
 pub(crate) fn visual_line_head_expected_completion_values() -> &'static [ExpectedCompletionValue] {
     VISUAL_LINE_HEAD_EXPECTED
+}
+
+pub(crate) fn named_block_declaration_syntax<'a>(
+    tokens: &'a [&'a str],
+    keyword: &str,
+) -> Option<NamedBlockDeclarationSyntax<'a>> {
+    match tokens {
+        [head, name] if *head == keyword => Some(NamedBlockDeclarationSyntax { name }),
+        _ => None,
+    }
 }
 
 pub(crate) fn legend_block_row_syntax(

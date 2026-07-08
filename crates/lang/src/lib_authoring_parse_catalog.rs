@@ -657,10 +657,34 @@ fn record_parser_resolved_surface_tokens(
     catalog: &Catalog,
     sink: &mut SurfaceSink,
 ) {
+    let value_sets = catalog_value_sets(catalog);
+    let mut current_map_axis = None::<String>;
     for line in &scan.lines {
+        if let Some(axis) = parser_surface_map_axis(line) {
+            current_map_axis = Some(axis);
+        }
         record_parser_resolved_layer_surface_tokens(line, catalog, sink);
+        record_parser_resolved_group_surface_tokens(line, catalog, sink);
+        record_parser_resolved_legend_surface_tokens(line, catalog, sink);
+        record_parser_resolved_map_surface_tokens(line, current_map_axis.as_deref(), &value_sets, sink);
         record_parser_resolved_rule_surface_tokens(line, catalog, sink);
+        if line.scope == Some(SourceScope::Map)
+            && line
+                .structural_token_spans
+                .first()
+                .is_some_and(|token| token.text == "}")
+        {
+            current_map_axis = None;
+        }
     }
+}
+
+fn parser_surface_map_axis(line: &SurfaceScanLine) -> Option<String> {
+    let tokens = &line.structural_token_spans;
+    let [keyword, _name, axis, ..] = tokens.as_slice() else {
+        return None;
+    };
+    (keyword.text == "map").then(|| axis.text.clone())
 }
 
 fn parser_surface_catalog(source: &str) -> Option<Catalog> {
@@ -785,6 +809,82 @@ fn record_parser_resolved_layer_surface_tokens(
     };
     for token in selector_tokens {
         record_resolved_object_selector_surface_token(token, &line.content, catalog, sink);
+    }
+}
+
+fn record_parser_resolved_group_surface_tokens(
+    line: &SurfaceScanLine,
+    catalog: &Catalog,
+    sink: &mut SurfaceSink,
+) {
+    if line.scope != Some(SourceScope::Group) {
+        return;
+    }
+    let tokens = &line.structural_token_spans;
+    let Some(separator) = tokens.iter().position(|token| token.text == "=") else {
+        return;
+    };
+    for token in &tokens[separator + 1..] {
+        record_resolved_object_selector_surface_token(token, &line.content, catalog, sink);
+    }
+}
+
+fn record_parser_resolved_legend_surface_tokens(
+    line: &SurfaceScanLine,
+    catalog: &Catalog,
+    sink: &mut SurfaceSink,
+) {
+    let tokens = &line.structural_token_spans;
+    let selector_start = match line.scope {
+        Some(SourceScope::Legend) => tokens
+            .iter()
+            .position(|token| token.text == "=")
+            .map(|separator| separator + 1),
+        Some(SourceScope::Level | SourceScope::UnbracedLevel)
+            if tokens.first().is_some_and(|token| token.text == "legend") =>
+        {
+            tokens
+                .iter()
+                .position(|token| token.text == "=")
+                .map(|separator| separator + 1)
+        }
+        _ => None,
+    };
+    let Some(selector_start) = selector_start else {
+        return;
+    };
+    for token in &tokens[selector_start..] {
+        record_resolved_object_selector_surface_token(token, &line.content, catalog, sink);
+    }
+}
+
+fn record_parser_resolved_map_surface_tokens(
+    line: &SurfaceScanLine,
+    axis: Option<&str>,
+    value_sets: &HashMap<String, Vec<String>>,
+    sink: &mut SurfaceSink,
+) {
+    if line.scope != Some(SourceScope::Map) {
+        return;
+    }
+    let Some(axis) = axis else {
+        return;
+    };
+    let Some(values) = value_sets.get(axis) else {
+        return;
+    };
+    let tokens = &line.structural_token_spans;
+    let [from, arrow, to] = tokens.as_slice() else {
+        return;
+    };
+    if arrow.text != "->" {
+        return;
+    }
+    if values.iter().any(|value| value == &from.text) {
+        add_surface_symbol(sink, from, SurfaceSemanticKind::Variant);
+    }
+    if values.iter().any(|value| value == &to.text) {
+        add_surface_symbol(sink, to, SurfaceSemanticKind::Variant);
     }
 }
 

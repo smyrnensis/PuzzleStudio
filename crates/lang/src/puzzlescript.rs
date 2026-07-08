@@ -2,6 +2,12 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{Diagnostic, DiagnosticReport, source::strip_line_comment};
 
+const PS_MAIN_ROUTINE: &str = "main";
+const PS_SOUND_MARK_EXISTING_ROUTINE: &str = "sound_mark_existing";
+const PS_SOUND_EMIT_EVENTS_ROUTINE: &str = "sound_emit_events";
+const PS_SOUND_EXISTING_MARK_PREFIX: &str = "sound_existing_";
+const PS_COPY_SHAPE_PREFIX: &str = "shape_";
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PsSection {
     Prelude,
@@ -89,7 +95,14 @@ struct PsViewportSize {
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum PsSoundTrigger {
     Named,
+    Operation { operation: PsSoundOperation },
     Event { target: String, event: PsSoundEvent },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PsSoundOperation {
+    Undo,
+    Restart,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -134,6 +147,7 @@ pub fn translate_puzzlescript_to_canonical(source: &str) -> Result<String, Diagn
     let author = parse_author(&sections.prelude)?;
     let homepage = parse_homepage(&sections.prelude)?;
     let run_rules_on_level_start = parse_run_rules_on_level_start(&sections.prelude);
+    let level_select = parse_level_select(&sections.prelude);
     let case_sensitive = parse_case_sensitive(&sections.prelude);
     let again_interval = parse_again_interval(&sections.prelude);
     let theme_colors = parse_theme_colors(&sections.prelude);
@@ -141,6 +155,8 @@ pub fn translate_puzzlescript_to_canonical(source: &str) -> Result<String, Diagn
     let sounds = parse_sound_defs(&sections.sounds);
     let startgame_sfx = ps_sound_name(&sounds, "startgame");
     let uses_action_input = ps_rules_use_action_input(&sections.rules);
+    let rule_sections = parse_ps_rule_sections(&sections.rules);
+    reject_generated_routine_conflicts(&rule_sections, &sounds, run_rules_on_level_start)?;
     let tags = parse_tag_defs(&sections.tags);
     let maps = parse_map_defs(&sections.mappings);
     let object_defs = parse_object_defs(&sections.objects);
@@ -181,6 +197,15 @@ pub fn translate_puzzlescript_to_canonical(source: &str) -> Result<String, Diagn
     push_default_inputs(&mut out, uses_action_input);
     push_groups(&mut out, &aliases);
     push_sprites(&mut out, &object_defs);
+    push_ps_model_sounds(
+        &mut out,
+        &sounds,
+        &object_defs,
+        &aliases,
+        &tags,
+        &maps,
+        case_sensitive,
+    );
     push_win_conditions(
         &mut out,
         &sections.win_conditions,
@@ -202,7 +227,6 @@ pub fn translate_puzzlescript_to_canonical(source: &str) -> Result<String, Diagn
     );
     push_rules(
         &mut out,
-        &sections.rules,
         &object_defs,
         &aliases,
         &tags,
@@ -212,6 +236,7 @@ pub fn translate_puzzlescript_to_canonical(source: &str) -> Result<String, Diagn
         background_object.as_deref(),
         &sounds,
         uses_action_input,
+        &rule_sections,
     );
     push_ps_level_clear(&mut out);
     push_levels(
@@ -232,6 +257,7 @@ pub fn translate_puzzlescript_to_canonical(source: &str) -> Result<String, Diagn
         author.as_deref(),
         startgame_sfx.as_deref(),
         viewport_size,
+        level_select,
     );
     Ok(canonical_without_line_indents(&out.join("\n")))
 }
@@ -412,6 +438,12 @@ fn parse_run_rules_on_level_start(prelude: &[String]) -> bool {
         .any(|line| line.trim().eq_ignore_ascii_case("run_rules_on_level_start"))
 }
 
+fn parse_level_select(prelude: &[String]) -> bool {
+    prelude
+        .iter()
+        .any(|line| line.trim().eq_ignore_ascii_case("level_select"))
+}
+
 fn parse_case_sensitive(prelude: &[String]) -> bool {
     prelude
         .iter()
@@ -540,6 +572,14 @@ fn parse_sound_defs(lines: &[String]) -> Vec<PsSoundDef> {
 
 fn parse_sound_def_tokens(tokens: &[&str]) -> Option<PsSoundDef> {
     match tokens {
+        [operation, seed] if is_sound_atom(seed) && parse_sound_operation(operation).is_some() => {
+            let operation = parse_sound_operation(operation)?;
+            Some(PsSoundDef {
+                name: ps_operation_sound_name(operation).to_string(),
+                seed: (*seed).to_string(),
+                trigger: PsSoundTrigger::Operation { operation },
+            })
+        }
         [name, seed] if is_identifier(name) && is_sound_atom(seed) => Some(PsSoundDef {
             name: (*name).to_string(),
             seed: (*seed).to_string(),
@@ -564,6 +604,14 @@ fn parse_sound_def_tokens(tokens: &[&str]) -> Option<PsSoundDef> {
     }
 }
 
+fn parse_sound_operation(token: &str) -> Option<PsSoundOperation> {
+    match token.to_ascii_lowercase().as_str() {
+        "undo" => Some(PsSoundOperation::Undo),
+        "restart" => Some(PsSoundOperation::Restart),
+        _ => None,
+    }
+}
+
 fn parse_sound_event(token: &str) -> Option<PsSoundEvent> {
     match token.to_ascii_lowercase().as_str() {
         "create" => Some(PsSoundEvent::Create),
@@ -578,6 +626,13 @@ fn ps_event_sound_name(target: &str, event: PsSoundEvent) -> String {
         PsSoundEvent::Move => "move",
     };
     format!("{}_{}", target.to_ascii_lowercase(), event)
+}
+
+fn ps_operation_sound_name(operation: PsSoundOperation) -> &'static str {
+    match operation {
+        PsSoundOperation::Undo => "undo",
+        PsSoundOperation::Restart => "restart",
+    }
 }
 
 fn push_sounds(out: &mut Vec<String>, sounds: &[PsSoundDef]) {
@@ -691,6 +746,40 @@ fn push_maps(out: &mut Vec<String>, maps: &[PsMapDef]) {
     }
 }
 
+fn push_ps_model_sounds(
+    out: &mut Vec<String>,
+    sounds: &[PsSoundDef],
+    objects: &[PsObjectDef],
+    aliases: &[PsAliasDef],
+    tags: &[PsTagDef],
+    maps: &[PsMapDef],
+    case_sensitive: bool,
+) {
+    if !has_model_sounds(sounds) {
+        return;
+    }
+    out.push("sounds {".to_string());
+    for sound in sounds {
+        match &sound.trigger {
+            PsSoundTrigger::Event {
+                target,
+                event: PsSoundEvent::Move,
+            } => {
+                let target =
+                    ps_sound_target_selector(target, objects, aliases, tags, maps, case_sensitive);
+                out.push(format!("  move {target} -> sfx {}", sound.name));
+            }
+            PsSoundTrigger::Operation { operation } => {
+                let operation = ps_operation_sound_name(*operation);
+                out.push(format!("  {operation} -> sfx {}", sound.name));
+            }
+            PsSoundTrigger::Named | PsSoundTrigger::Event { .. } => {}
+        }
+    }
+    out.push("}".to_string());
+    out.push(String::new());
+}
+
 fn push_ps_sound_mark(out: &mut Vec<String>, sounds: &[PsSoundDef]) {
     if !has_event_sounds(sounds) {
         return;
@@ -703,9 +792,11 @@ fn push_ps_sound_mark(out: &mut Vec<String>, sounds: &[PsSoundDef]) {
         };
         let key = ps_sound_mark_key(target);
         match event {
-            PsSoundEvent::Create => {
-                push_unique_mark(out, &mut emitted, format!("__ps_sound_existing_{key}"))
-            }
+            PsSoundEvent::Create => push_unique_mark(
+                out,
+                &mut emitted,
+                format!("{PS_SOUND_EXISTING_MARK_PREFIX}{key}"),
+            ),
             PsSoundEvent::Move => {}
         }
     }
@@ -726,7 +817,7 @@ fn push_ps_sound_routines(
         return;
     }
 
-    out.push("routine __ps_sound_mark_existing once {".to_string());
+    out.push(format!("routine {PS_SOUND_MARK_EXISTING_ROUTINE} once {{"));
     for sound in sounds {
         let PsSoundTrigger::Event {
             target,
@@ -737,14 +828,14 @@ fn push_ps_sound_routines(
         };
         let target = ps_sound_target_selector(target, objects, aliases, tags, maps, case_sensitive);
         out.push(format!(
-            "  once_all [ {target} ] -> [ {target}{{__ps_sound_existing_{}}} ]",
+            "  once_all [ {target} ] -> [ {target}{{{PS_SOUND_EXISTING_MARK_PREFIX}{}}} ]",
             ps_sound_mark_key(&target)
         ));
     }
     out.push("}".to_string());
     out.push(String::new());
 
-    out.push("routine __ps_sound_emit_events once {".to_string());
+    out.push(format!("routine {PS_SOUND_EMIT_EVENTS_ROUTINE} once {{"));
     for sound in sounds {
         let PsSoundTrigger::Event { target, event } = &sound.trigger else {
             continue;
@@ -753,7 +844,7 @@ fn push_ps_sound_routines(
         let key = ps_sound_mark_key(&target);
         match event {
             PsSoundEvent::Create => out.push(format!(
-                "  once [ {target}{{no __ps_sound_existing_{key}}} ] -> sfx {}",
+                "  once [ {target}{{no {PS_SOUND_EXISTING_MARK_PREFIX}{key}}} ] -> sfx {}",
                 sound.name
             )),
             PsSoundEvent::Move => {}
@@ -785,6 +876,19 @@ fn has_event_sounds(sounds: &[PsSoundDef]) -> bool {
                 event: PsSoundEvent::Create,
                 ..
             }
+        )
+    })
+}
+
+fn has_model_sounds(sounds: &[PsSoundDef]) -> bool {
+    sounds.iter().any(|sound| {
+        matches!(
+            sound.trigger,
+            PsSoundTrigger::Operation { .. }
+                | PsSoundTrigger::Event {
+                    event: PsSoundEvent::Move,
+                    ..
+                }
         )
     })
 }
@@ -1348,7 +1452,7 @@ fn ps_copy_shape_for_object(
 }
 
 fn ps_copy_shape_name(source: &str) -> String {
-    let mut name = String::from("__ps_shape_");
+    let mut name = String::from(PS_COPY_SHAPE_PREFIX);
     for ch in source.chars() {
         if ch == '_' || ch.is_ascii_alphanumeric() {
             name.push(ch);
@@ -1604,7 +1708,6 @@ fn canonical_condition_row(
 
 fn push_rules(
     out: &mut Vec<String>,
-    lines: &[String],
     objects: &[PsObjectDef],
     aliases: &[PsAliasDef],
     tags: &[PsTagDef],
@@ -1614,8 +1717,8 @@ fn push_rules(
     background_object: Option<&str>,
     sounds: &[PsSoundDef],
     uses_action_input: bool,
+    rule_sections: &PsRuleSections,
 ) {
-    let rule_sections = parse_ps_rule_sections(lines);
     let player_selector = ps_player_selector(objects, aliases, tags, maps, case_sensitive);
     push_ps_subroutines(
         out,
@@ -1627,7 +1730,7 @@ fn push_rules(
         case_sensitive,
     );
     if run_rules_on_level_start {
-        out.push("routine __ps_main once {".to_string());
+        out.push(format!("routine {PS_MAIN_ROUTINE} once {{"));
         push_ps_main_rule_body(
             out,
             &rule_sections.main,
@@ -1644,7 +1747,7 @@ fn push_rules(
 
         out.push("on_level_start {".to_string());
         push_ps_background_fill(out, background_object, "  ");
-        out.push("  __ps_main".to_string());
+        out.push(format!("  {PS_MAIN_ROUTINE}"));
         out.push("}".to_string());
         out.push(String::new());
 
@@ -1653,7 +1756,7 @@ fn push_rules(
             "  input directions [ {player_selector} ] -> [ > {player_selector} ]"
         ));
         push_ps_action_bridge(out, uses_action_input, &player_selector, "  ");
-        out.push("  __ps_main".to_string());
+        out.push(format!("  {PS_MAIN_ROUTINE}"));
         out.push("}".to_string());
         out.push(String::new());
         return;
@@ -1716,6 +1819,35 @@ fn parse_ps_rule_sections(lines: &[String]) -> PsRuleSections {
         sections.routines.push(routine);
     }
     sections
+}
+
+fn reject_generated_routine_conflicts(
+    rule_sections: &PsRuleSections,
+    sounds: &[PsSoundDef],
+    run_rules_on_level_start: bool,
+) -> Result<(), DiagnosticReport> {
+    let mut generated = BTreeSet::new();
+    if run_rules_on_level_start {
+        generated.insert(PS_MAIN_ROUTINE);
+    }
+    if has_event_sounds(sounds) {
+        generated.insert(PS_SOUND_MARK_EXISTING_ROUTINE);
+        generated.insert(PS_SOUND_EMIT_EVENTS_ROUTINE);
+    }
+    if generated.is_empty() {
+        return Ok(());
+    }
+    for routine in &rule_sections.routines {
+        if generated.contains(routine.name.as_str()) {
+            return Err(DiagnosticReport::from_diagnostic(Diagnostic::error(
+                format!(
+                    "PuzzleScript subroutine `{}` conflicts with importer-generated routine `{}`",
+                    routine.name, routine.name
+                ),
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn push_ps_subroutines(
@@ -1815,7 +1947,7 @@ fn push_ps_main_rule_body_steps(
     sounds: &[PsSoundDef],
     indent: &str,
 ) {
-    push_ps_sound_call(out, sounds, indent, "__ps_sound_mark_existing");
+    push_ps_sound_call(out, sounds, indent, PS_SOUND_MARK_EXISTING_ROUTINE);
     push_canonical_rule_rows(
         out,
         lines
@@ -1845,7 +1977,7 @@ fn push_ps_main_rule_body_steps(
         case_sensitive,
         indent,
     );
-    push_ps_sound_call(out, sounds, indent, "__ps_sound_emit_events");
+    push_ps_sound_call(out, sounds, indent, PS_SOUND_EMIT_EVENTS_ROUTINE);
 }
 
 fn push_canonical_rule_rows<'a>(
@@ -2509,8 +2641,9 @@ fn push_playing_scene(
     author: Option<&str>,
     startgame_sfx: Option<&str>,
     viewport_size: Option<PsViewportSize>,
+    level_select: bool,
 ) {
-    out.push("scene = title {".to_string());
+    out.push("scene title {".to_string());
     out.push("  layout {".to_string());
     out.push(format!("    title = \"{}\"", escape_scene_text(title)));
     if let Some(author) = author {
@@ -2523,6 +2656,9 @@ fn push_playing_scene(
     out.push("      choice \"Continue\" -> continue_game".to_string());
     out.push("    }".to_string());
     out.push("    choice \"New Game\" -> new_game".to_string());
+    if level_select {
+        out.push("    choice \"Level Select\" -> goto level_select".to_string());
+    }
     out.push("  }".to_string());
     push_scene_routine(out, "continue_game", &["goto playing"], startgame_sfx);
     push_scene_routine(
@@ -2534,7 +2670,7 @@ fn push_playing_scene(
     out.push("}".to_string());
     out.push(String::new());
 
-    out.push("scene = playing {".to_string());
+    out.push("scene playing {".to_string());
     if viewport_size.is_some() {
         out.push("  layout {".to_string());
         out.push("    puzzle board = main".to_string());
@@ -2556,6 +2692,19 @@ fn push_playing_scene(
     push_scene_routine(out, "back", &["goto title"], None);
     out.push("}".to_string());
     out.push(String::new());
+
+    if level_select {
+        out.push("scene level_select {".to_string());
+        out.push("  layout {".to_string());
+        out.push("    level_menu {".to_string());
+        out.push("      show_index = true".to_string());
+        out.push("      show_solved = true".to_string());
+        out.push("      button \"Back\" -> goto title".to_string());
+        out.push("    }".to_string());
+        out.push("  }".to_string());
+        out.push("}".to_string());
+        out.push(String::new());
+    }
 }
 
 fn push_scene_routine(
