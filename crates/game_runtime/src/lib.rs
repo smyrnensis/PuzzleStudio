@@ -11,9 +11,9 @@ use puzzle_grid3d_authoring::SelectorCatalog3;
 use puzzle_lang::{
     ArrowKey, KeyTrigger, Level, LoadedDocumentModel, LoadedGame, ModelSettings3, ParsedPuzzle3,
     ResourceSelection, SceneAlignXDef, SceneAlignYDef, SceneBinaryOp, SceneComponent, SceneDef,
-    SceneEffect, SceneEffectParam, SceneExpr, SceneLayoutDef, ScenePuzzleInitializer,
-    SceneStateLifetime, SceneTextContent, SceneTransitionTrigger, SceneValue, SolverStrategy3,
-    ThemeDef, ViewportModeDef, ViewportSizeDef,
+    SceneEffect, SceneEffectParam, SceneExpr, SceneLayoutDef, SceneLevelKey,
+    ScenePuzzleInitializer, SceneStateLifetime, SceneTextContent, SceneTransitionTrigger,
+    SceneValue, SolverStrategy3, ThemeDef, ViewportModeDef, ViewportSizeDef,
 };
 use puzzle_play::{
     AnimationEvent, DebugTransition, GameSession, GameSession3, LevelProgressSaveData,
@@ -1191,6 +1191,16 @@ fn scene_expr_value(expr: &SceneExpr) -> Value {
         SceneExpr::Int(value) => json!({ "kind": "int", "value": value }),
         SceneExpr::Text(value) => json!({ "kind": "text", "value": value }),
         SceneExpr::Path(path) => json!({ "kind": "path", "path": path.join(".") }),
+        SceneExpr::LevelSelector {
+            collection,
+            key,
+            property,
+        } => json!({
+            "kind": "level_selector",
+            "collection": collection,
+            "key": scene_level_key_value(key),
+            "property": property,
+        }),
         SceneExpr::Call { name, args } => json!({
             "kind": "call",
             "name": name,
@@ -1212,6 +1222,13 @@ fn scene_expr_value(expr: &SceneExpr) -> Value {
             "then": scene_expr_value(then_branch),
             "else": scene_expr_value(else_branch),
         }),
+    }
+}
+
+fn scene_level_key_value(key: &SceneLevelKey) -> Value {
+    match key {
+        SceneLevelKey::Index(value) => json!({ "kind": "index", "value": value }),
+        SceneLevelKey::Id(value) => json!({ "kind": "id", "value": value }),
     }
 }
 

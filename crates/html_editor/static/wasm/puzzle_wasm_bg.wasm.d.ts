@@ -12,6 +12,7 @@ export const solve_solver_task_json: (a: number, b: number) => [number, number, 
 export const solve_solver_task_json_with_progress: (a: number, b: number, c: any) => [number, number, number, number];
 export const solve_state: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => [number, number, number, number];
 export const solver_task_initial_display_state_json: (a: number, b: number) => [number, number, number, number];
+export const source_entries_json: (a: number, b: number) => [number, number];
 export const source_outline_json: (a: number, b: number) => [number, number];
 export const suggest_source_completions: (a: number, b: number, c: number) => [number, number];
 export const translate_puzzlescript: (a: number, b: number) => [number, number, number, number];

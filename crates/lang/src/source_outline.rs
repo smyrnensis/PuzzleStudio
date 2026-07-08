@@ -29,9 +29,11 @@ pub(crate) fn source_outline_from_document(document: &SurfaceDocument) -> Vec<So
     let mut ids_by_item_key = HashMap::<(usize, String, String), String>::new();
     let mut next_id = 0usize;
 
-    for block in document.structural_blocks.iter().filter(|block| {
-        matches!(block.role, SurfaceStructuralBlockRole::SourceTree)
-    }) {
+    for block in document
+        .structural_blocks
+        .iter()
+        .filter(|block| matches!(block.role, SurfaceStructuralBlockRole::SourceTree))
+    {
         while stack.len() > block.depth {
             stack.pop();
         }

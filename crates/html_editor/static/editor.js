@@ -446,6 +446,7 @@ let editorStatusClearTimer = 0;
 let activePreviewRequest = null;
 let wasmCompiler = null;
 let wasmCompilerPromise = null;
+let surfaceEntriesCache = null;
 let previewLogEntries = [];
 let latestPreviewState = null;
 let latestPreviewRuntimeStatus = null;
@@ -555,6 +556,12 @@ let sprite = {
 };
 let sprite3d = {
   size: 5,
+  editDocumentId: null,
+  editSourceStart: null,
+  editSourceEnd: null,
+  editSourceBodyStart: null,
+  editSourceBodyEnd: null,
+  editSourceName: "",
   axis: "z",
   slice: 0,
   editScope: "slice",
@@ -668,6 +675,12 @@ function visualEditSnapshot(kind) {
       ...base,
       state: {
         size: sprite3d.size,
+        editDocumentId: sprite3d.editDocumentId,
+        editSourceStart: sprite3d.editSourceStart,
+        editSourceEnd: sprite3d.editSourceEnd,
+        editSourceBodyStart: sprite3d.editSourceBodyStart,
+        editSourceBodyEnd: sprite3d.editSourceBodyEnd,
+        editSourceName: sprite3d.editSourceName,
         axis: sprite3d.axis,
         slice: sprite3d.slice,
         editScope: sprite3d.editScope,
@@ -771,6 +784,12 @@ function restoreVisualEditSnapshot(snapshot) {
     renderSpriteBuilder();
   } else if (snapshot.kind === "sprite3d") {
     sprite3d.size = clampSprite3dSize(state.size);
+    sprite3d.editDocumentId = state.editDocumentId || null;
+    sprite3d.editSourceStart = Number.isInteger(state.editSourceStart) ? state.editSourceStart : null;
+    sprite3d.editSourceEnd = Number.isInteger(state.editSourceEnd) ? state.editSourceEnd : null;
+    sprite3d.editSourceBodyStart = Number.isInteger(state.editSourceBodyStart) ? state.editSourceBodyStart : null;
+    sprite3d.editSourceBodyEnd = Number.isInteger(state.editSourceBodyEnd) ? state.editSourceBodyEnd : null;
+    sprite3d.editSourceName = state.editSourceName || "";
     sprite3d.axis = ["x", "y", "z"].includes(state.axis) ? state.axis : "z";
     sprite3d.slice = Math.max(0, Math.min(sprite3d.size - 1, Math.trunc(Number(state.slice) || 0)));
     sprite3d.editScope = state.editScope === "all" ? "all" : "slice";
@@ -3654,14 +3673,39 @@ function syncPaneModesFromFocusedPuzzleSource(options = {}) {
   return nextMode || null;
 }
 
-function sourcePositionInsideRanges(position, ranges) {
-  return ranges.some((range) => (
-    Number.isFinite(position)
-    && Number.isFinite(range?.start)
-    && Number.isFinite(range?.end)
-    && position >= range.start
-    && position <= range.end
-  ));
+function surfaceEntriesForSource(source, options = {}) {
+  const text = String(source || "");
+  if (!text) {
+    return [];
+  }
+  if (surfaceEntriesCache?.source === text) {
+    return surfaceEntriesCache.entries;
+  }
+  const compiler = wasmCompiler;
+  if (typeof compiler?.source_entries_json !== "function") {
+    if (options.reportUnavailable) {
+      setStatus("Source entries unavailable: editor WASM parser is not loaded.", "is-error");
+    }
+    return [];
+  }
+  const raw = compiler.source_entries_json(text);
+  const payload = JSON.parse(raw || "{}");
+  const entries = Array.isArray(payload.entries)
+    ? payload.entries
+      .map((entry) => normalizeResolvedSourceTarget(text, entry))
+      .filter(Boolean)
+    : [];
+  surfaceEntriesCache = { source: text, entries };
+  return entries;
+}
+
+function focusedPuzzleSurfaceEntries(context = focusedPuzzleSourceContext()) {
+  return surfaceEntriesForSource(context?.source || "", { reportUnavailable: true });
+}
+
+function focusedPuzzleSurfaceEntriesByKind(kind, context = focusedPuzzleSourceContext()) {
+  return focusedPuzzleSurfaceEntries(context)
+    .filter((entry) => entry?.kind === kind);
 }
 
 function firstFocusedPuzzleLevel2dEntry(source, document) {
@@ -3669,25 +3713,9 @@ function firstFocusedPuzzleLevel2dEntry(source, document) {
 }
 
 function focusedPuzzleLevel2dEntries(source, document) {
-  const entries = [];
-  const level3dRanges = typeof findLevels3Ranges === "function" ? findLevels3Ranges(source) || [] : [];
-  if (typeof findLevelsRanges === "function" && typeof findLevelDefinitions === "function") {
-    for (const range of findLevelsRanges(source) || []) {
-      if (sourcePositionInsideRanges(range.start, level3dRanges)) {
-        continue;
-      }
-      entries.push(...(findLevelDefinitions(source, range) || []).map((entry) => ({
-        ...entry,
-        namespace: range?.namespace || "",
-      })));
-    }
-  }
-  if (typeof findLevelSourceEntries === "function") {
-    entries.push(...findLevelSourceEntries(source, document)
-      .filter((entry) => !sourcePositionInsideRanges(entry.start, level3dRanges))
-    );
-  }
-  return uniqueFocusedPuzzleEntries(entries);
+  return uniqueFocusedPuzzleEntries(
+    focusedPuzzleSurfaceEntriesByKind("level", { document, source })
+  );
 }
 
 function firstFocusedPuzzleLevel2dStart(source, document) {
@@ -3699,18 +3727,9 @@ function firstFocusedPuzzleLevel3dEntry(source) {
 }
 
 function focusedPuzzleLevel3dEntries(source) {
-  if (typeof findLevels3Ranges !== "function" || typeof findLevel3dDefinitions !== "function") {
-    return [];
-  }
-  const entries = [];
-  for (const range of findLevels3Ranges(source) || []) {
-    entries.push(...(findLevel3dDefinitions(source, range) || []).map((entry) => ({
-      ...entry,
-      bundle: range?.bundle || "",
-      model: range?.model || "",
-    })));
-  }
-  return uniqueFocusedPuzzleEntries(entries);
+  return uniqueFocusedPuzzleEntries(
+    focusedPuzzleSurfaceEntriesByKind("level3d", { document: activeDocument(), source })
+  );
 }
 
 function firstFocusedPuzzleLevel3dStart(source) {
@@ -3722,8 +3741,9 @@ function firstFocusedPuzzleSprite2dEntry(source) {
 }
 
 function focusedPuzzleSprite2dEntries(source) {
-  void source;
-  return [];
+  return uniqueFocusedPuzzleEntries(
+    focusedPuzzleSurfaceEntriesByKind("sprite", { document: activeDocument(), source })
+  );
 }
 
 function firstFocusedPuzzleSprite2dStart(source) {
@@ -3735,17 +3755,9 @@ function firstFocusedPuzzleSprite3dEntry(source) {
 }
 
 function focusedPuzzleSprite3dEntries(source) {
-  if (typeof findSprite3dDefinitions !== "function") {
-    return [];
-  }
-  const blocks = typeof findSprites3dBlocks === "function"
-    ? findSprites3dBlocks(source)
-    : (typeof findSprites3dBlock === "function" ? [findSprites3dBlock(source)].filter(Boolean) : []);
-  const entries = [];
-  for (const block of blocks) {
-    entries.push(...(findSprite3dDefinitions(source, block) || []));
-  }
-  return uniqueFocusedPuzzleEntries(entries);
+  return uniqueFocusedPuzzleEntries(
+    focusedPuzzleSurfaceEntriesByKind("sprite3d", { document: activeDocument(), source })
+  );
 }
 
 function firstFocusedPuzzleSprite3dStart(source) {
@@ -4992,10 +5004,6 @@ function loadLevelFromSourceClick(event = null) {
   const position = clickOffset ?? (
     sourceViewOffsetToDocumentOffset(sourceEditor.selectionStart, "start")
   );
-  if (findLevelDefinitionAtPosition(source, position)) {
-    openPreviewModePane("edit");
-    setPaneStatus("level", "Locating level metadata", "");
-  }
   syncPreviewModeFromSourceCursor({
     force: true,
     recordHistory: true,
@@ -5004,16 +5012,19 @@ function loadLevelFromSourceClick(event = null) {
   });
 }
 
-function loadLevelFromSourcePosition(position, options = {}) {
+async function loadLevelFromSourcePosition(position, options = {}) {
   if (!isPuzzleDocument(activeDocument()) || !isTextDocument(activeDocument())) {
     return null;
   }
   const source = sourceEditorDocumentValue();
-  const entry = findLevelDefinitionAtPosition(source, position);
-  if (!entry) {
+  if (typeof resolveSourceTargetFromWasm !== "function") {
     return null;
   }
-  return loadLevelSourceEntry(source, entry, options);
+  const target = await resolveSourceTargetFromWasm(source, position);
+  if (target?.kind !== "level") {
+    return null;
+  }
+  return loadLevelSourceTarget(target, options);
 }
 
 async function resolveSourceTargetFromWasm(source, position) {
@@ -5028,6 +5039,7 @@ async function resolveSourceTargetFromWasm(source, position) {
 }
 
 function normalizeResolvedSourceTarget(source, target, position = null) {
+  void position;
   if (!target || typeof target !== "object") {
     return null;
   }
@@ -5037,34 +5049,7 @@ function normalizeResolvedSourceTarget(source, target, position = null) {
       normalized[key] = sourceUtf16OffsetFromByteOffset(source, normalized[key]);
     }
   }
-  if (normalized.kind === "sprite") {
-    const sprite3dTarget = sourceSprite3dTargetAtPosition(
-      source,
-      Number.isInteger(position) ? position : normalized.start,
-    );
-    if (sprite3dTarget) {
-      return sprite3dTarget;
-    }
-  }
   return normalized;
-}
-
-function sourceSprite3dTargetAtPosition(source, position) {
-  if (typeof findSprite3dDefinitionAtPosition !== "function") {
-    return null;
-  }
-  const entry = findSprite3dDefinitionAtPosition(source, position);
-  if (!entry) {
-    return null;
-  }
-  return {
-    kind: "sprite3d",
-    name: entry.name,
-    start: entry.start,
-    end: entry.end,
-    bodyStart: entry.bodyStart,
-    bodyEnd: entry.bodyEnd,
-  };
 }
 
 function loadLevelSourceTarget(target, options = {}) {
@@ -5074,10 +5059,7 @@ function loadLevelSourceTarget(target, options = {}) {
   ensurePreviewTargetsActiveDocument();
   const document = activeDocument();
   const source = sourceEditorDocumentValue();
-  const sourceEntry = sourceEditableEntryFromTarget(source, target, {
-    find: findLevelDefinitionAtPosition,
-    defaultName: "",
-  });
+  const sourceEntry = sourceEditableEntryFromTarget(source, target, { defaultName: "" });
   return loadLevelSourceEntry(source, sourceEntry, { ...options, document });
 }
 
@@ -5678,33 +5660,28 @@ function currentLevelSourceLocation() {
 }
 
 function currentLevel3dSourceLocationForIndex(levelIndex, exportData = currentPreviewExportData()) {
-  if (typeof findLevels3Ranges !== "function" || typeof findLevel3dDefinitions !== "function") {
-    return null;
-  }
   const targetIndex = normalizedLevelIndex(levelIndex, exportData);
   const levelName = exportData?.levels?.[targetIndex]?.name || "";
   const allEntries = [];
   for (const document of puzzleTextDocuments()) {
     const source = sourceForDocument(document);
-    for (const range of findLevels3Ranges(source) || []) {
-      for (const entry of findLevel3dDefinitions(source, range) || []) {
-        const entryIndex = allEntries.length;
-        const target = {
-          document,
-          start: entry.start,
-          end: entry.end,
-          bodyStart: entry.bodyStart,
-          bodyEnd: entry.bodyEnd,
-          name: entry.name || "",
-          bundle: range.bundle || "",
-          model: range.model || "",
-          levelIndex: entryIndex,
-          key: `${document.id}:level3d:${entryIndex}:${entry.name || ""}:${entry.start}`,
-        };
-        allEntries.push(target);
-        if (levelName && sourceTitleMatches(entry.name, levelName)) {
-          return target;
-        }
+    for (const entry of surfaceEntriesForSource(source).filter((candidate) => candidate.kind === "level3d")) {
+      const entryIndex = allEntries.length;
+      const target = {
+        document,
+        start: entry.start,
+        end: entry.end,
+        bodyStart: entry.bodyStart,
+        bodyEnd: entry.bodyEnd,
+        name: entry.name || "",
+        bundle: entry.params?.bundle || "",
+        model: entry.params?.model || "",
+        levelIndex: entryIndex,
+        key: `${document.id}:level3d:${entryIndex}:${entry.name || ""}:${entry.start}`,
+      };
+      allEntries.push(target);
+      if (levelName && sourceTitleMatches(entry.name, levelName)) {
+        return target;
       }
     }
   }
@@ -5717,25 +5694,21 @@ function currentLevel3dSourceLocationForIndex(levelIndex, exportData = currentPr
 function findLevelSourceEntries(source, document) {
   const entries = [];
   const seen = new Set();
-  if (typeof findLevelsRanges === "function" && typeof findLevelDefinitions === "function") {
-    for (const range of findLevelsRanges(source) || []) {
-      for (const entry of findLevelDefinitions(source, range) || []) {
-        const key = `${entry.start}:${entry.end}`;
-        if (seen.has(key)) {
-          continue;
-        }
-        seen.add(key);
-        entries.push({
-          document,
-          name: entry.name || "",
-          sourceName: Object.prototype.hasOwnProperty.call(entry, "sourceName") ? entry.sourceName : entry.name || "",
-          namespace: entry.namespace || "",
-          start: entry.start,
-          end: entry.end,
-          levelIndex: entry.levelIndex,
-        });
-      }
+  for (const entry of surfaceEntriesForSource(source).filter((candidate) => candidate.kind === "level")) {
+    const key = `${entry.start}:${entry.end}`;
+    if (seen.has(key)) {
+      continue;
     }
+    seen.add(key);
+    entries.push({
+      document,
+      name: entry.name || "",
+      sourceName: Object.prototype.hasOwnProperty.call(entry, "sourceName") ? entry.sourceName : entry.name || "",
+      namespace: entry.params?.namespace || "",
+      start: entry.start,
+      end: entry.end,
+      levelIndex: entry.levelIndex,
+    });
   }
   return entries;
 }
@@ -5758,27 +5731,16 @@ function currentSpriteSourceLocation() {
 }
 
 function currentSprite3dSourceLocation() {
-  if (typeof findSprites3dBlock !== "function" || typeof findSprite3dDefinitionBlock !== "function") {
-    return null;
-  }
-  const name = typeof sprite3dObjectName === "function" ? sprite3dObjectName() : "";
-  if (!name) {
+  if (!Number.isInteger(sprite3d.editSourceStart) || !Number.isInteger(sprite3d.editSourceEnd)) {
     return null;
   }
   for (const document of puzzleTextDocuments()) {
-    const source = sourceForDocument(document);
-    const entry = typeof findSprite3dDefinitionByName === "function"
-      ? findSprite3dDefinitionByName(source, name)
-      : (() => {
-        const block = findSprites3dBlock(source);
-        return block ? findSprite3dDefinitionBlock(source, block, name) : null;
-      })();
-    if (entry) {
+    if (document.id === sprite3d.editDocumentId) {
       return {
         document,
-        start: entry.start,
-        end: entry.end,
-        key: `${document.id}:sprite3d:${name}:${entry.start}`,
+        start: sprite3d.editSourceStart,
+        end: sprite3d.editSourceEnd,
+        key: `${document.id}:sprite3d:${sprite3d.editSourceName || ""}:${sprite3d.editSourceStart}`,
       };
     }
   }
@@ -8737,10 +8699,7 @@ function currentLevelEditSourceRange(source) {
     bodyStart: level.editSourceBodyStart,
     bodyEnd: level.editSourceBodyEnd,
     name: level.editSourceName,
-  }, {
-    find: findLevelDefinitionAtPosition,
-    defaultName: "",
-  });
+  }, { defaultName: "" });
   return entry && Number.isInteger(entry.start) && Number.isInteger(entry.end) ? entry : null;
 }
 
@@ -11039,7 +10998,6 @@ sourceEditor.addEventListener("input", () => {
   invalidateLevelEditSourceForDocument(activeDocument());
 });
 registerSourceEditableTarget?.("level", {
-  find: findLevelDefinitionAtPosition,
   load: loadLevelFromSourcePosition,
 });
 

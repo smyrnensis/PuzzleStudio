@@ -33,7 +33,7 @@ const SOURCE_EDITABLE_TARGETS = [
   },
   {
     kind: "sounds",
-    label: (entry) => entry?.kind || "sound",
+    label: (entry) => entry?.soundKind || "sound",
     openOptions: { switchMode: true },
   },
 ];
@@ -67,6 +67,7 @@ let sourceHighlightHtml = "";
 let sourceHighlightMode = "";
 let sourceHighlightRuns = [];
 let sourceHighlightUnavailableStatusShown = false;
+let sourcePlainTextModeActive = false;
 let sourceLayoutSyncFrame = 0;
 let sourceCompositionPreviewSource = "";
 let sourceCompositionRange = null;
@@ -768,7 +769,11 @@ function setSourceEditorValue(value, options = {}) {
   const sameUnfoldedValue = sourceFoldBaseSource === null && currentValue === nextValue;
   if (sameUnfoldedValue && preserveCurrentHighlight && sourceHighlightSource === nextValue) {
     updateSourceMeta();
-    scheduleSourceOutlineRefresh(true, { force: true });
+    if (sourceDocumentSupportsEditableTargets()) {
+      scheduleSourceOutlineRefresh(true, { force: true });
+    } else {
+      resetSourcePuzzleAnalysisState();
+    }
     if (preservesUndo) {
       ensureSourceUndoHistory();
     } else if (options.resetUndo === false) {
@@ -781,8 +786,12 @@ function setSourceEditorValue(value, options = {}) {
   resetSourceFoldingState();
   sourceEditor.value = nextValue;
   updateSourceMeta();
-  scheduleSourceHighlight(true, { preserveCurrent: preserveCurrentHighlight });
-  scheduleSourceOutlineRefresh(true, { force: true });
+  if (sourceDocumentSupportsEditableTargets()) {
+    scheduleSourceHighlight(true, { preserveCurrent: preserveCurrentHighlight });
+    scheduleSourceOutlineRefresh(true, { force: true });
+  } else {
+    resetSourcePuzzleAnalysisState();
+  }
   if (preservesUndo) {
     ensureSourceUndoHistory();
   } else if (options.resetUndo === false) {
@@ -793,6 +802,11 @@ function setSourceEditorValue(value, options = {}) {
 }
 
 function scheduleSourceHighlight(immediate = false, options = {}) {
+  if (!sourceDocumentSupportsEditableTargets()) {
+    resetSourcePuzzleAnalysisState();
+    return;
+  }
+  setSourcePlainTextMode(false);
   const preserveCurrent = options.preserveCurrent !== false;
   if (preserveCurrent && sourceHighlightMode) {
     if (!renderOptimisticSourceHighlight()) {
@@ -806,6 +820,51 @@ function scheduleSourceHighlight(immediate = false, options = {}) {
     sourceHighlightTimer = 0;
     refreshSourceHighlight();
   }, immediate ? 0 : 140);
+}
+
+function resetSourcePuzzleAnalysisState() {
+  const plainModeChanged = setSourcePlainTextMode(true);
+  window.clearTimeout(sourceHighlightTimer);
+  sourceHighlightTimer = 0;
+  window.clearTimeout(sourceOutlineTimer);
+  sourceOutlineTimer = 0;
+  window.clearTimeout(sourceCompletionTimer);
+  sourceCompletionTimer = 0;
+  if (activeHighlightRequest) {
+    activeHighlightRequest.abort();
+    activeHighlightRequest = null;
+  }
+  sourceHighlightRequestId += 1;
+  sourceOutlineRequestId += 1;
+  sourceCompletionRequestId += 1;
+  sourceOutlineItems = [];
+  sourceOutlineDirty = true;
+  sourceOutlineSignature = "";
+  sourceCursorPreviewKey = "";
+  sourceCursorResolveSignature = null;
+  sourceCursorResolveRegion = null;
+  hideSourceCompletions();
+  if (plainModeChanged && sourceHighlight) {
+    sourceHighlight.innerHTML = "";
+    sourceHighlightSource = "";
+    sourceHighlightHtml = "";
+    sourceHighlightRuns = [];
+    sourceHighlightMode = "plain-text";
+    syncSourceHighlightScroll();
+  }
+  if (plainModeChanged) {
+    renderSourceOutlineEmpty("No outline");
+  }
+}
+
+function setSourcePlainTextMode(enabled) {
+  const next = Boolean(enabled);
+  if (sourcePlainTextModeActive === next) {
+    return false;
+  }
+  sourcePlainTextModeActive = next;
+  sourceEditorWrap?.classList.toggle("is-plain-source", next);
+  return true;
 }
 
 function renderOptimisticSourceHighlight(source = sourceEditor.value) {
@@ -1396,6 +1455,10 @@ async function refreshSourceHighlight() {
 }
 
 function scheduleSourceOutlineRefresh(immediate = false, options = {}) {
+  if (!sourceDocumentSupportsEditableTargets()) {
+    resetSourcePuzzleAnalysisState();
+    return;
+  }
   const source = sourceEditorDocumentValue();
   if (!sourceOutlineShouldRefreshForSource(source, options)) {
     return;
@@ -2018,6 +2081,10 @@ function createSourceFindPanel() {
 }
 
 function scheduleSourceCompletion(immediate = false) {
+  if (!sourceDocumentSupportsEditableTargets()) {
+    hideSourceCompletions();
+    return;
+  }
   window.clearTimeout(sourceCompletionTimer);
   sourceCompletionTimer = window.setTimeout(() => {
     showSourceCompletions({ manual: false });
@@ -2341,6 +2408,10 @@ function sourceCursorInLineLeadingWhitespace() {
 }
 
 function acceptSourceCompletion(index = sourceCompletionState?.selectedIndex ?? 0) {
+  if (!sourceDocumentSupportsEditableTargets()) {
+    hideSourceCompletions();
+    return false;
+  }
   if (!sourceCompletionState || !sourceCompletionMatchesCurrentCursor()) {
     return false;
   }
@@ -3153,6 +3224,11 @@ function applySourceColorRgb(rgb) {
   if (documents[currentDocumentIndex]) {
     documents[currentDocumentIndex].source = sourceEditorDocumentValue();
   }
+  if (!sourceDocumentSupportsEditableTargets()) {
+    resetSourcePuzzleAnalysisState();
+    scheduleLocalSave();
+    return;
+  }
   scheduleSourceHighlight(true);
   scheduleLocalSave();
   resetLevelBuilderFromSource(false);
@@ -3238,7 +3314,9 @@ function handleSourceBeforeInputTextInsert(event) {
     }
     return;
   }
-  const predicted = sourcePredictedBeforeInputValue(event);
+  const predicted = sourceDocumentSupportsEditableTargets()
+    ? sourcePredictedBeforeInputValue(event)
+    : null;
   if (predicted !== null) {
     if (event.isComposing || event.inputType === "insertCompositionText") {
       beginSourceCompositionPreview(predicted);
@@ -3260,6 +3338,9 @@ sourceEditor.addEventListener("compositionupdate", (event) => {
   if (!isTextDocument(documents[currentDocumentIndex])) {
     return;
   }
+  if (!sourceDocumentSupportsEditableTargets()) {
+    return;
+  }
   beginSourceCompositionPreview(sourceCompositionPreviewValue(event.data));
 });
 sourceEditor.addEventListener("input", () => {
@@ -3270,33 +3351,50 @@ sourceEditor.addEventListener("input", () => {
     const changed = commitSourceFoldedDisplayEdit();
     if (!changed) {
       clearSourceCompositionPreview();
-      scheduleSourceHighlight(true, { preserveCurrent: false });
+      if (sourceDocumentSupportsEditableTargets()) {
+        scheduleSourceHighlight(true, { preserveCurrent: false });
+      } else {
+        resetSourcePuzzleAnalysisState();
+      }
       updateSourceMeta();
       return;
     }
   }
   clearSourceCompositionPreview();
-  scheduleSourceHighlight();
-  scheduleSourceOutlineRefresh();
+  const puzzleSource = sourceDocumentSupportsEditableTargets();
+  if (puzzleSource) {
+    scheduleSourceHighlight();
+    scheduleSourceOutlineRefresh();
+  } else {
+    resetSourcePuzzleAnalysisState();
+  }
   hideSourceImportLinkFrame();
   clearSourceBlockSelection();
   sourceEditorPreferredCaretX = null;
   recordSourceUndoSnapshot();
   updateSourceMeta();
-  refreshSourceColorEditor();
+  if (puzzleSource) {
+    refreshSourceColorEditor();
+  }
   refreshSourceFindAfterSourceChange();
-  scheduleSourceCompletion();
   if (documents[currentDocumentIndex]) {
     documents[currentDocumentIndex].source = sourceEditorDocumentValue();
   }
   scheduleLocalSave();
-  scheduleLevelBuilderResetFromSource(false);
-  scheduleSourceCursorPreviewSync();
-  schedulePreview();
+  if (puzzleSource) {
+    scheduleSourceCompletion();
+    scheduleLevelBuilderResetFromSource(false);
+    scheduleSourceCursorPreviewSync();
+    schedulePreview();
+  }
 });
 sourceEditor.addEventListener("compositionend", () => {
   const previewSource = sourceCompositionPreviewSource;
   sourceCompositionRange = null;
+  if (!sourceDocumentSupportsEditableTargets()) {
+    clearSourceCompositionPreview();
+    return;
+  }
   window.requestAnimationFrame(() => {
     if (sourceCompositionPreviewSource === previewSource) {
       clearSourceCompositionPreview();
@@ -3309,9 +3407,11 @@ sourceEditor.addEventListener("click", (event) => {
   if (openSourceImportLinkFromPointer(event)) {
     return;
   }
-  showSourceColorEditor(event);
-  window.setTimeout(() => showSourceCompletions({ manual: false }), 0);
-  syncPreviewModeFromSourcePointer(event);
+  if (sourceDocumentSupportsEditableTargets()) {
+    showSourceColorEditor(event);
+    window.setTimeout(() => showSourceCompletions({ manual: false }), 0);
+    syncPreviewModeFromSourcePointer(event);
+  }
 });
 sourceEditor.addEventListener("pointerdown", handleSourceBlockSelectionPointerDown);
 sourceEditor.addEventListener("mouseleave", handleSourceImportEditorMouseLeave);
@@ -3336,15 +3436,19 @@ sourceEditor.addEventListener("keyup", (event) => {
     return;
   }
   if (event.key.startsWith("Arrow") || event.key === "Home" || event.key === "End") {
-    showSourceColorEditor();
-    showSourceCompletions({ manual: false });
-    scheduleSourceCursorPreviewSync();
+    if (sourceDocumentSupportsEditableTargets()) {
+      showSourceColorEditor();
+      showSourceCompletions({ manual: false });
+      scheduleSourceCursorPreviewSync();
+    }
   }
   renderSourceBlockSelection();
 });
 sourceEditor.addEventListener("focus", () => {
   renderSourceBlockSelection();
-  syncPreviewModeFromSourceCursor({ force: true });
+  if (sourceDocumentSupportsEditableTargets()) {
+    syncPreviewModeFromSourceCursor({ force: true });
+  }
 });
 sourceEditor.addEventListener("blur", () => {
   clearSourceCompositionPreview();
@@ -3356,8 +3460,10 @@ document.addEventListener("selectionchange", () => {
     renderSourceBlockSelection();
     return;
   }
-  scheduleSourceCursorPreviewSync();
-  syncSourceOutlineActiveItem();
+  if (sourceDocumentSupportsEditableTargets()) {
+    scheduleSourceCursorPreviewSync();
+    syncSourceOutlineActiveItem();
+  }
   syncSourceFindIndexFromSelection();
   renderSourceBlockSelection();
 });
@@ -4406,12 +4512,19 @@ function handleSourceRewritePatternTab(event) {
 
 function sourceEditorContentChanged(options = {}) {
   const preserveCompletions = Boolean(options.preserveSourceCompletions && keepSourceCompletionsVisibleDuringEdit());
+  const puzzleSource = sourceDocumentSupportsEditableTargets();
   if (sourceFoldsActive()) {
     const changed = commitSourceFoldedDisplayEdit();
     if (!changed) {
-      scheduleSourceHighlight(true, { preserveCurrent: false });
+      if (puzzleSource) {
+        scheduleSourceHighlight(true, { preserveCurrent: false });
+      } else {
+        resetSourcePuzzleAnalysisState();
+      }
       updateSourceMeta();
-      refreshSourceColorEditor();
+      if (puzzleSource) {
+        refreshSourceColorEditor();
+      }
       refreshSourceFindAfterSourceChange();
       scheduleLocalSave();
       if (preserveCompletions) {
@@ -4422,18 +4535,26 @@ function sourceEditorContentChanged(options = {}) {
       return;
     }
   }
-  scheduleSourceHighlight();
-  scheduleSourceOutlineRefresh();
+  if (puzzleSource) {
+    scheduleSourceHighlight();
+    scheduleSourceOutlineRefresh();
+  } else {
+    resetSourcePuzzleAnalysisState();
+  }
   recordSourceUndoSnapshot();
   updateSourceMeta();
-  refreshSourceColorEditor();
+  if (puzzleSource) {
+    refreshSourceColorEditor();
+  }
   refreshSourceFindAfterSourceChange();
   if (documents[currentDocumentIndex]) {
     documents[currentDocumentIndex].source = sourceEditorDocumentValue();
   }
   scheduleLocalSave();
-  scheduleLevelBuilderResetFromSource(false);
-  schedulePreview();
+  if (puzzleSource) {
+    scheduleLevelBuilderResetFromSource(false);
+    schedulePreview();
+  }
   if (preserveCompletions) {
     positionSourceCompletionPopover();
   } else {
@@ -4856,10 +4977,18 @@ function sourceImportLinkAtPointer(event) {
 }
 
 function sourceEditableTargetAtOffset(source, offset) {
-  for (const config of SOURCE_EDITABLE_TARGETS) {
-    const finder = sourceEditableTargetFinder(config);
-    const entry = finder ? finder(source, offset) : null;
-    if (!entry) {
+  if (typeof surfaceEntriesForSource !== "function") {
+    return null;
+  }
+  for (const entry of surfaceEntriesForSource(source)) {
+    if (!Number.isInteger(entry?.start) || !Number.isInteger(entry?.end)) {
+      continue;
+    }
+    if (offset < entry.start || offset > entry.end) {
+      continue;
+    }
+    const config = SOURCE_EDITABLE_TARGETS.find((item) => item.kind === entry.kind);
+    if (!config) {
       continue;
     }
     return {
@@ -4870,11 +4999,6 @@ function sourceEditableTargetAtOffset(source, offset) {
     };
   }
   return null;
-}
-
-function sourceEditableTargetFinder(config) {
-  const finder = sourceEditableTargetHandlers.get(config.kind)?.find;
-  return typeof finder === "function" ? finder : null;
 }
 
 function sourceEditableTargetLoader(config) {
@@ -4892,7 +5016,6 @@ function registerSourceEditableTarget(kind, handlers = {}) {
     return;
   }
   sourceEditableTargetHandlers.set(kind, {
-    find: typeof handlers.find === "function" ? handlers.find : null,
     load: typeof handlers.load === "function" ? handlers.load : null,
   });
 }
@@ -5839,10 +5962,14 @@ function insertAtSelection(value) {
   if (documents[currentDocumentIndex]) {
     documents[currentDocumentIndex].source = sourceEditorDocumentValue();
   }
-  scheduleSourceHighlight();
-  scheduleSourceOutlineRefresh();
+  if (sourceDocumentSupportsEditableTargets()) {
+    scheduleSourceHighlight();
+    scheduleSourceOutlineRefresh();
+    schedulePreview();
+  } else {
+    resetSourcePuzzleAnalysisState();
+  }
   scheduleLocalSave();
-  schedulePreview();
   hideSourceCompletions();
 }
 
@@ -5860,9 +5987,13 @@ function setSourceEditorText(value, selectionStart = null, selectionEnd = select
   if (documents[currentDocumentIndex]) {
     documents[currentDocumentIndex].source = sourceEditorDocumentValue();
   }
-  scheduleSourceHighlight();
-  scheduleSourceOutlineRefresh(true);
-  resetLevelBuilderFromSource(false);
+  if (sourceDocumentSupportsEditableTargets()) {
+    scheduleSourceHighlight();
+    scheduleSourceOutlineRefresh(true);
+    resetLevelBuilderFromSource(false);
+  } else {
+    resetSourcePuzzleAnalysisState();
+  }
 }
 
 function bindSourceEditorPopoverEvents() {

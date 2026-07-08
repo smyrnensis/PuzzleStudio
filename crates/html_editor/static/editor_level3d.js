@@ -2907,7 +2907,6 @@ function loadLevel3dSourceTarget(target, options = {}) {
   const source = sourceEditorDocumentValue();
   const entry = Number.isInteger(target?.bodyStart) && Number.isInteger(target?.bodyEnd)
     ? sourceEditableEntryFromTarget(source, target, {
-      find: findLevel3dDefinitionAtPosition,
       defaultName: "level 1",
       body: (_source, entry) => ({
         bundle: entry.bundle || entry.params?.bundle || "",
@@ -2915,7 +2914,7 @@ function loadLevel3dSourceTarget(target, options = {}) {
         rows: rowsForLevel3dDefinition(_source, entry),
       }),
     })
-    : findLevel3dDefinitionAtPosition(source, target?.start ?? 0);
+    : null;
   if (!entry) {
     return null;
   }
@@ -6372,6 +6371,5 @@ copyLevel3dButton?.addEventListener("click", () => {
 addLevel3dButton?.addEventListener("click", addLevel3dToSource);
 updateLevel3dButton?.addEventListener("click", updateLevel3dInSource);
 registerSourceEditableTarget?.("level3d", {
-  find: findLevel3dDefinitionAtPosition,
   load: loadLevel3dFromSourcePosition,
 });

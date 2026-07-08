@@ -4876,12 +4876,15 @@ levels3 demo of push3 {
     #[test]
     fn level_name_picker_uses_parsed_level_definitions_only() {
         assert!(EDITOR_JS.contains("function findLevelSourceEntries(source, document)"));
-        assert!(
-            EDITOR_JS.contains("for (const entry of findLevelDefinitions(source, range) || [])")
-        );
+        assert!(EDITOR_JS.contains(
+            "for (const entry of surfaceEntriesForSource(source).filter((candidate) => candidate.kind === \"level\"))"
+        ));
         assert!(EDITOR_JS.contains(
             "sourceName: Object.prototype.hasOwnProperty.call(entry, \"sourceName\") ? entry.sourceName : entry.name || \"\","
         ));
+        assert!(
+            !EDITOR_JS.contains("for (const entry of findLevelDefinitions(source, range) || [])")
+        );
         assert!(!EDITOR_JS.contains("code.match(/^level(?:\\\\s+(.+?))?\\\\s*(?:\\\\{|$)/)"));
         assert!(!EDITOR_JS.contains("const rawName = String(match[1] || \"\").trim();"));
         assert!(!EDITOR_JS.contains("name: rawName.replace"));
@@ -4916,6 +4919,23 @@ levels3 demo of push3 {
             )
         );
         assert!(EDITOR_JS.contains("const loadedSourceLevel = loadLevelPaneEntryForMode(\"edit\", focusedPuzzleSourceContext(), {"));
+    }
+
+    #[test]
+    fn focused_puzzle_entries_consume_wasm_surface_entries() {
+        assert!(EDITOR_JS.contains("function focusedPuzzleSurfaceEntries("));
+        assert!(EDITOR_JS.contains("compiler.source_entries_json(context.source)"));
+        assert!(EDITOR_JS.contains("focusedPuzzleSurfaceEntriesByKind(\"level\""));
+        assert!(EDITOR_JS.contains("focusedPuzzleSurfaceEntriesByKind(\"level3d\""));
+        assert!(EDITOR_JS.contains("focusedPuzzleSurfaceEntriesByKind(\"sprite\""));
+        assert!(EDITOR_JS.contains("focusedPuzzleSurfaceEntriesByKind(\"sprite3d\""));
+        assert!(!EDITOR_JS.contains("sourceSprite3dTargetAtPosition("));
+        assert!(!EDITOR_JS.contains("const sprite3dTarget = sourceSprite3dTargetAtPosition"));
+        assert!(!EDITOR_JS.contains("for (const range of findLevelsRanges(source) || []) {\n      if (sourcePositionInsideRanges(range.start, level3dRanges))"));
+        assert!(!EDITOR_JS.contains("for (const range of findLevels3Ranges(source) || []) {\n    entries.push(...(findLevel3dDefinitions(source, range)"));
+        assert!(
+            !EDITOR_JS.contains("entries.push(...(findSprite3dDefinitions(source, block) || []));")
+        );
     }
 
     #[test]
@@ -5876,9 +5896,7 @@ levels3 demo of push3 {
         assert!(click.contains("syncPreviewModeFromSourceCursor({"));
         assert!(click.contains("allowInactiveMode: true,"));
         assert!(click.contains("const position = clickOffset ?? ("));
-        assert!(click.contains("if (findLevelDefinitionAtPosition(source, position)) {"));
-        assert!(click.contains("openPreviewModePane(\"edit\");"));
-        assert!(click.contains("setPaneStatus(\"level\", \"Locating level metadata\", \"\");"));
+        assert!(!click.contains("findLevelDefinitionAtPosition(source, position)"));
         assert!(click.contains("position,"));
         assert!(
             click.contains(
@@ -5924,14 +5942,20 @@ levels3 demo of push3 {
     }
 
     #[test]
-    fn sprite3d_source_focus_scans_all_sprites3_blocks() {
+    fn sprite3d_source_tools_scan_all_sprites3_blocks() {
         assert!(EDITOR_SPRITE3D_JS.contains("function findSprites3dBlocks(source)"));
         assert!(EDITOR_SPRITE3D_JS.contains("while ((match = pattern.exec(source)))"));
         assert!(EDITOR_SPRITE3D_JS.contains("pattern.lastIndex = closeIndex + 1;"));
-        assert!(EDITOR_SPRITE3D_JS.contains("function findSprite3dDefinitionByName(source, name)"));
-        assert!(EDITOR_SPRITE3D_JS.contains("for (const block of findSprites3dBlocks(source))"));
-        assert!(EDITOR_JS.contains("const blocks = typeof findSprites3dBlocks === \"function\""));
-        assert!(EDITOR_JS.contains("findSprite3dDefinitionByName(source, name)"));
+        assert!(!EDITOR_SPRITE3D_JS.contains("function findSprite3dDefinitionByName"));
+        assert!(!EDITOR_SPRITE3D_JS.contains("function findSprite3dDefinitionAtPosition"));
+        assert!(!EDITOR_SPRITE3D_JS.contains("function findSprite3dDefinitions"));
+        assert!(EDITOR_JS.contains("focusedPuzzleSurfaceEntriesByKind(\"sprite3d\""));
+        assert!(EDITOR_JS.contains("compiler.source_entries_json(text)"));
+        assert!(!EDITOR_JS.contains("findSprite3dDefinitionByName(source, name)"));
+        assert!(EDITOR_SPRITE3D_JS.contains("function sprite3dTargetPayload(target)"));
+        assert!(EDITOR_SPRITE3D_JS.contains("target?.sourceSprite3d?.status === \"incomplete\""));
+        assert!(!EDITOR_SPRITE3D_JS.contains("function parseSprite3dDefinitionSource"));
+        assert!(!EDITOR_SPRITE3D_JS.contains("function parseSprite3dRows"));
         assert!(!EDITOR_SPRITE3D_JS.contains("typeof spriteSourceCursorPosition"));
         assert!(!EDITOR_SPRITE3D_JS.contains("typeof spriteSourceTargetAtCursor"));
         assert!(!EDITOR_SPRITE3D_JS.contains(": source.length"));

@@ -108,14 +108,14 @@ pub use puzzle3_visual_fixture::{
 pub use puzzlescript::translate_puzzlescript_to_canonical;
 pub use semantic::{SemanticKind, SemanticToken, semantic_tokens};
 use source::{
-    SourceScope, SourceToken, logical_lines, logical_lines_with_locations, source_line_tokens,
+    SourceScope, SourceToken, logical_lines_with_locations, source_line_tokens,
     split_header_tokens, strip_line_comment,
 };
 pub use source_outline::{SourceOutlineItem, source_outline, source_outline_json};
 pub use source_target::{
-    SoundSourceTargetKind, SourceSpriteColorAsset, SourceSpritePaletteEntry,
-    SourceSpriteShapeAsset, SourceSpriteTarget, SourceTarget, SourceTargetKind,
-    resolve_source_target, source_target_json,
+    SoundSourceTargetKind, SourceSprite3dStatus, SourceSprite3dTarget, SourceSpriteColorAsset,
+    SourceSpritePaletteEntry, SourceSpriteShapeAsset, SourceSpriteTarget, SourceTarget,
+    SourceTargetKind, resolve_source_target, source_entries_json, source_target_json,
 };
 use surface::{
     SourceSpan, SurfaceAsciiRange, SurfaceDocument, SurfaceHighlightRanges, SurfaceNodeKind,

@@ -1,5 +1,9 @@
+use crate::puzzle3_parse::{
+    is_canonical_sprite_palette_line, parse_canonical_sprite_palette_line, parse_sprite_voxels,
+};
 use crate::source::{SourceScope, split_header_tokens, strip_line_comment};
 use crate::surface::{SurfaceDocument, SurfaceLine, SurfaceVisualSpriteRefs};
+use crate::{SpriteColor3, SpriteVoxels3};
 use std::collections::HashSet;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -50,6 +54,7 @@ pub struct SourceTarget {
     pub sound_kind: Option<SoundSourceTargetKind>,
     pub params: Vec<(String, String)>,
     pub source_sprite: Option<SourceSpriteTarget>,
+    pub source_sprite3d: Option<SourceSprite3dTarget>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -83,10 +88,44 @@ pub struct SourceSpriteShapeAsset {
     pub rows: Vec<String>,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SourceSprite3dTarget {
+    pub status: SourceSprite3dStatus,
+    pub palette_tokens: Vec<String>,
+    pub palette: Vec<String>,
+    pub rows: Vec<String>,
+    pub size: Option<usize>,
+    pub cells: Vec<Option<usize>>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum SourceSprite3dStatus {
+    Complete,
+    #[default]
+    Incomplete,
+    Invalid,
+}
+
+impl SourceSprite3dStatus {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::Complete => "complete",
+            Self::Incomplete => "incomplete",
+            Self::Invalid => "invalid",
+        }
+    }
+}
+
 pub fn resolve_source_target(source: &str, cursor_offset: usize) -> Option<SourceTarget> {
     let cursor = cursor_offset.min(source.len());
-    let document = crate::parse_surface_document(source);
+    let document = crate::parse_surface_source_target_document(source);
     resolve_source_target_from_document(source, &document, cursor)
+}
+
+pub fn source_entries_json(source: &str) -> String {
+    let document = crate::parse_surface_source_target_document(source);
+    let entries = resolve_source_entries_from_document(source, &document);
+    source_entries_json_from_entries(&entries)
 }
 
 pub(crate) fn resolve_source_target_from_document(
@@ -94,11 +133,31 @@ pub(crate) fn resolve_source_target_from_document(
     document: &SurfaceDocument,
     cursor: usize,
 ) -> Option<SourceTarget> {
-    resolve_sounds_target(document, cursor)
-        .or_else(|| resolve_level3d_target(source, document, cursor))
-        .or_else(|| resolve_level_target(source, document, cursor))
-        .or_else(|| resolve_sprite3d_target(source, document, cursor))
-        .or_else(|| resolve_sprite_target(source, document, cursor, &document.visual_sprite_refs))
+    let mut target = resolve_source_entries_from_document(source, document)
+        .into_iter()
+        .find(|entry| cursor >= entry.start && cursor <= entry.end)?;
+    if target.kind == SourceTargetKind::Sprite {
+        target.source_sprite = source_sprite_for_target(source, document, &target);
+    }
+    Some(target)
+}
+
+fn resolve_source_entries_from_document(
+    source: &str,
+    document: &SurfaceDocument,
+) -> Vec<SourceTarget> {
+    let mut entries = Vec::new();
+    entries.extend(resolve_sound_entries(document));
+    entries.extend(resolve_level3d_entries(source, document));
+    entries.extend(resolve_level_entries(source, document));
+    entries.extend(resolve_sprite3d_entries(source, document));
+    entries.extend(resolve_sprite_entries(
+        source,
+        document,
+        &document.visual_sprite_refs,
+    ));
+    entries.sort_by_key(|entry| entry.start);
+    entries
 }
 
 pub fn source_target_json(target: Option<&SourceTarget>) -> String {
@@ -109,6 +168,18 @@ pub fn source_target_json(target: Option<&SourceTarget>) -> String {
         None => out.push_str("null"),
     }
     out.push('}');
+    out
+}
+
+fn source_entries_json_from_entries(entries: &[SourceTarget]) -> String {
+    let mut out = String::from("{\"entries\":[");
+    for (index, entry) in entries.iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        push_target_json(&mut out, entry);
+    }
+    out.push_str("]}");
     out
 }
 
@@ -152,6 +223,10 @@ fn push_target_json(out: &mut String, target: &SourceTarget) {
     if let Some(sprite) = &target.source_sprite {
         out.push_str(",\"sourceSprite\":");
         push_source_sprite_json(out, sprite);
+    }
+    if let Some(sprite3d) = &target.source_sprite3d {
+        out.push_str(",\"sourceSprite3d\":");
+        push_source_sprite3d_json(out, sprite3d);
     }
     out.push('}');
 }
@@ -226,27 +301,61 @@ fn push_source_sprite_shape_assets_json(out: &mut String, entries: &[SourceSprit
     out.push(']');
 }
 
-fn resolve_sounds_target(context: &SurfaceDocument, cursor: usize) -> Option<SourceTarget> {
-    for line in &context.lines {
-        let line_end = line_end(line);
-        if cursor < line.start || cursor > line_end || line.scope != Some(SourceScope::Sounds) {
-            continue;
-        }
-        let (sound_kind, name, params) = parse_sound_definition(line)?;
-        return Some(SourceTarget {
-            kind: SourceTargetKind::Sounds,
-            name,
-            start: line.start,
-            end: line_end,
-            body_start: None,
-            body_end: None,
-            level_index: None,
-            sound_kind: Some(sound_kind),
-            params,
-            source_sprite: None,
-        });
+fn push_source_sprite3d_json(out: &mut String, sprite: &SourceSprite3dTarget) {
+    out.push('{');
+    push_json_string(out, "status", sprite.status.as_str());
+    out.push(',');
+    push_json_string_array(out, "paletteTokens", &sprite.palette_tokens);
+    out.push(',');
+    push_json_string_array(out, "palette", &sprite.palette);
+    out.push(',');
+    push_json_string_array(out, "rows", &sprite.rows);
+    out.push_str(",\"size\":");
+    match sprite.size {
+        Some(size) => out.push_str(&size.to_string()),
+        None => out.push_str("null"),
     }
-    None
+    out.push_str(",\"cells\":");
+    push_source_sprite3d_cells_json(out, &sprite.cells);
+    out.push('}');
+}
+
+fn push_source_sprite3d_cells_json(out: &mut String, cells: &[Option<usize>]) {
+    out.push('[');
+    for (index, cell) in cells.iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        match cell {
+            Some(value) => out.push_str(&value.to_string()),
+            None => out.push_str("null"),
+        }
+    }
+    out.push(']');
+}
+
+fn resolve_sound_entries(context: &SurfaceDocument) -> Vec<SourceTarget> {
+    context
+        .lines
+        .iter()
+        .filter(|line| line.scope == Some(SourceScope::Sounds))
+        .filter_map(|line| {
+            let (sound_kind, name, params) = parse_sound_definition(line)?;
+            Some(SourceTarget {
+                kind: SourceTargetKind::Sounds,
+                name,
+                start: line.start,
+                end: line_end(line),
+                body_start: None,
+                body_end: None,
+                level_index: None,
+                sound_kind: Some(sound_kind),
+                params,
+                source_sprite: None,
+                source_sprite3d: None,
+            })
+        })
+        .collect()
 }
 
 fn parse_sound_definition(
@@ -285,12 +394,9 @@ fn trim_quotes(value: &str) -> &str {
         .unwrap_or(value)
 }
 
-fn resolve_level_target(
-    source: &str,
-    context: &SurfaceDocument,
-    cursor: usize,
-) -> Option<SourceTarget> {
+fn resolve_level_entries(source: &str, context: &SurfaceDocument) -> Vec<SourceTarget> {
     let level3d_blocks = level3d_blocks(source, context);
+    let mut entries = Vec::new();
     let mut level_index = 0usize;
     let mut index = 0usize;
     while index < context.lines.len() {
@@ -302,57 +408,36 @@ fn resolve_level_target(
             index += 1;
             continue;
         }
-
         let target = if let Some(name) = level_name(line) {
-            let start = line.start;
             let (end, body_start, body_end) = level_range(source, context, index);
-            Some((
-                name,
-                start,
-                end,
-                body_start,
-                body_end,
-                next_level_scan_index(context, index, end),
-            ))
+            Some((name, line.start, end, body_start, body_end))
         } else if is_unnamed_level_start(line) {
-            let start = line.start;
             let (end, body_start, body_end) = unnamed_level_range(source, context, index);
-            Some((
-                String::new(),
-                start,
-                end,
-                body_start,
-                body_end,
-                next_level_scan_index(context, index, end),
-            ))
+            Some((String::new(), line.start, end, body_start, body_end))
         } else {
             None
         };
-
-        let Some((name, start, end, body_start, body_end, next_index)) = target else {
+        let Some((name, start, end, body_start, body_end)) = target else {
             index += 1;
             continue;
         };
-        let current_index = level_index;
-        level_index += 1;
-        if cursor < start || cursor > end {
-            index = next_index;
-            continue;
-        }
-        return Some(SourceTarget {
+        entries.push(SourceTarget {
             kind: SourceTargetKind::Level,
             name,
             start,
             end,
             body_start: Some(body_start),
             body_end: Some(body_end),
-            level_index: Some(current_index),
+            level_index: Some(level_index),
             sound_kind: None,
             params: Vec::new(),
             source_sprite: None,
+            source_sprite3d: None,
         });
+        level_index += 1;
+        index = next_level_scan_index(context, index, end);
     }
-    None
+    entries
 }
 
 fn is_unnamed_level_start(line: &SurfaceLine) -> bool {
@@ -422,24 +507,12 @@ fn next_level_scan_index(context: &SurfaceDocument, start_index: usize, end: usi
         .unwrap_or(context.lines.len())
 }
 
-fn resolve_level3d_target(
-    source: &str,
-    context: &SurfaceDocument,
-    cursor: usize,
-) -> Option<SourceTarget> {
+fn resolve_level3d_entries(source: &str, context: &SurfaceDocument) -> Vec<SourceTarget> {
+    let mut entries = Vec::new();
     let mut level_index = 0usize;
     for block in level3d_blocks(source, context) {
         let bundle = block.bundle.clone();
         let model = block.model.clone();
-        if cursor <= block.open_index || cursor >= block.close_index {
-            level_index += context
-                .lines
-                .iter()
-                .filter(|line| line.start > block.open_index && line.start < block.close_index)
-                .filter(|line| level_name(line).is_some())
-                .count();
-            continue;
-        }
         for (index, line) in context.lines.iter().enumerate() {
             if line.start <= block.open_index || line.start >= block.close_index {
                 continue;
@@ -447,28 +520,27 @@ fn resolve_level3d_target(
             let Some(name) = level_name(line) else {
                 continue;
             };
-            let start = line.start;
             let (end, body_start, body_end) = level_range(source, context, index);
-            let current_index = level_index;
-            level_index += 1;
-            if cursor < start || cursor > end {
-                continue;
-            }
-            return Some(SourceTarget {
+            entries.push(SourceTarget {
                 kind: SourceTargetKind::Level3d,
                 name,
-                start,
+                start: line.start,
                 end,
                 body_start: Some(body_start),
                 body_end: Some(body_end),
-                level_index: Some(current_index),
+                level_index: Some(level_index),
                 sound_kind: None,
-                params: vec![("bundle".to_string(), bundle), ("model".to_string(), model)],
+                params: vec![
+                    ("bundle".to_string(), bundle.clone()),
+                    ("model".to_string(), model.clone()),
+                ],
                 source_sprite: None,
+                source_sprite3d: None,
             });
+            level_index += 1;
         }
     }
-    None
+    entries
 }
 
 fn level_name(line: &SurfaceLine) -> Option<String> {
@@ -521,14 +593,14 @@ fn level_range(
     (end, body_start, body_end)
 }
 
-fn resolve_sprite_target(
+fn resolve_sprite_entries(
     source: &str,
     context: &SurfaceDocument,
-    cursor: usize,
     visual_refs: &SurfaceVisualSpriteRefs,
-) -> Option<SourceTarget> {
+) -> Vec<SourceTarget> {
     let sprite3d_blocks = sprite3d_blocks(source, context);
     let visual_shape_blocks = visual_shape_table_blocks(source, context);
+    let mut entries = Vec::new();
     let mut covered_until = 0usize;
     for (index, line) in context.lines.iter().enumerate() {
         if line.start < covered_until {
@@ -551,12 +623,7 @@ fn resolve_sprite_target(
         }
         let line_end = line_end(line);
         if let Some((name, body_start)) = line_style_sprite_header(line, visual_refs) {
-            if cursor < line.start || cursor > line_end {
-                continue;
-            }
-            let source_sprite =
-                source_sprite_target(source, &name, body_start, line_end, visual_refs);
-            return Some(SourceTarget {
+            entries.push(SourceTarget {
                 kind: SourceTargetKind::Sprite,
                 name,
                 start: line.start,
@@ -566,8 +633,11 @@ fn resolve_sprite_target(
                 level_index: None,
                 sound_kind: None,
                 params: Vec::new(),
-                source_sprite,
+                source_sprite: None,
+                source_sprite3d: None,
             });
+            covered_until = line_end;
+            continue;
         }
         let Some(name) = sprite_name(line) else {
             continue;
@@ -576,47 +646,29 @@ fn resolve_sprite_target(
             .find('{')
             .map(|offset| line.start + offset)
         {
-            let end = find_matching_brace(source, open_index)? + 1;
-            if cursor < line.start {
-                continue;
-            }
-            if cursor > end {
+            if let Some(end) = find_matching_brace(source, open_index).map(|index| index + 1) {
+                entries.push(SourceTarget {
+                    kind: SourceTargetKind::Sprite,
+                    name,
+                    start: line.start,
+                    end,
+                    body_start: Some(open_index + 1),
+                    body_end: Some(end.saturating_sub(1)),
+                    level_index: None,
+                    sound_kind: None,
+                    params: Vec::new(),
+                    source_sprite: None,
+                    source_sprite3d: None,
+                });
                 covered_until = end;
-                continue;
             }
-            let source_sprite = source_sprite_target(
-                source,
-                &name,
-                open_index + 1,
-                end.saturating_sub(1),
-                visual_refs,
-            );
-            return Some(SourceTarget {
-                kind: SourceTargetKind::Sprite,
-                name,
-                start: line.start,
-                end,
-                body_start: Some(open_index + 1),
-                body_end: Some(end.saturating_sub(1)),
-                level_index: None,
-                sound_kind: None,
-                params: Vec::new(),
-                source_sprite,
-            });
+            continue;
         }
         let Some((end, body_start, body_end)) = unbraced_sprite_range(context, index, visual_refs)
         else {
             continue;
         };
-        if cursor < line.start {
-            continue;
-        }
-        if cursor > end {
-            covered_until = end;
-            continue;
-        }
-        let source_sprite = source_sprite_target(source, &name, body_start, body_end, visual_refs);
-        return Some(SourceTarget {
+        entries.push(SourceTarget {
             kind: SourceTargetKind::Sprite,
             name,
             start: line.start,
@@ -626,10 +678,28 @@ fn resolve_sprite_target(
             level_index: None,
             sound_kind: None,
             params: Vec::new(),
-            source_sprite,
+            source_sprite: None,
+            source_sprite3d: None,
         });
+        covered_until = end;
     }
-    None
+    entries
+}
+
+fn source_sprite_for_target(
+    source: &str,
+    document: &SurfaceDocument,
+    target: &SourceTarget,
+) -> Option<SourceSpriteTarget> {
+    let body_start = target.body_start?;
+    let body_end = target.body_end?;
+    source_sprite_target(
+        source,
+        &target.name,
+        body_start,
+        body_end,
+        &document.visual_sprite_refs,
+    )
 }
 
 fn visual_shape_table_blocks(source: &str, context: &SurfaceDocument) -> Vec<Sprite3dBlock> {
@@ -881,15 +951,9 @@ fn parse_levels3_tokens(tokens: &[String]) -> (String, String) {
     (clean_name_token(&bundle), clean_name_token(&model))
 }
 
-fn resolve_sprite3d_target(
-    source: &str,
-    context: &SurfaceDocument,
-    cursor: usize,
-) -> Option<SourceTarget> {
+fn resolve_sprite3d_entries(source: &str, context: &SurfaceDocument) -> Vec<SourceTarget> {
+    let mut entries = Vec::new();
     for block in sprite3d_blocks(source, context) {
-        if cursor <= block.open_index || cursor >= block.close_index {
-            continue;
-        }
         for (index, line) in context.lines.iter().enumerate() {
             if line.start <= block.open_index || line.start >= block.close_index {
                 continue;
@@ -897,7 +961,6 @@ fn resolve_sprite3d_target(
             let Some(name) = sprite3d_name(line) else {
                 continue;
             };
-            let start = line.start;
             let body_start = line_end(line);
             let mut end = body_start;
             let mut body_end = body_start;
@@ -928,13 +991,10 @@ fn resolve_sprite3d_target(
                     break;
                 }
             }
-            if cursor < start || cursor > end {
-                continue;
-            }
-            return Some(SourceTarget {
+            entries.push(SourceTarget {
                 kind: SourceTargetKind::Sprite3d,
                 name,
-                start,
+                start: line.start,
                 end,
                 body_start: Some(body_start),
                 body_end: Some(body_end),
@@ -942,11 +1002,114 @@ fn resolve_sprite3d_target(
                 sound_kind: None,
                 params: Vec::new(),
                 source_sprite: None,
+                source_sprite3d: Some(source_sprite3d_for_range(source, body_start, body_end)),
             });
         }
     }
-    None
+    entries
 }
+
+fn source_sprite3d_for_range(
+    source: &str,
+    body_start: usize,
+    body_end: usize,
+) -> SourceSprite3dTarget {
+    let rows = source[body_start..body_end]
+        .lines()
+        .map(|line| code_trim(line).to_string())
+        .collect::<Vec<_>>();
+    let Some(palette_index) = rows
+        .iter()
+        .position(|row| !row.is_empty() && is_canonical_sprite_palette_line(row))
+    else {
+        return SourceSprite3dTarget {
+            status: SourceSprite3dStatus::Incomplete,
+            ..SourceSprite3dTarget::default()
+        };
+    };
+    let palette_tokens = rows[palette_index]
+        .split_whitespace()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    let Ok(palette_map) = parse_canonical_sprite_palette_line(&rows[palette_index]) else {
+        return SourceSprite3dTarget {
+            status: SourceSprite3dStatus::Invalid,
+            palette_tokens,
+            ..SourceSprite3dTarget::default()
+        };
+    };
+    let palette = palette_map
+        .values()
+        .map(source_sprite3d_color_string)
+        .collect::<Vec<_>>();
+    let voxel_rows = rows
+        .iter()
+        .skip(palette_index + 1)
+        .cloned()
+        .collect::<Vec<_>>();
+    let parse_rows = if voxel_rows.iter().any(|row| !row.is_empty()) {
+        voxel_rows.clone()
+    } else {
+        vec!["0".to_string()]
+    };
+    let Ok(voxels) = parse_sprite_voxels("source sprite3d", &parse_rows, &palette_map) else {
+        return SourceSprite3dTarget {
+            status: SourceSprite3dStatus::Invalid,
+            palette_tokens,
+            palette,
+            rows: voxel_rows,
+            ..SourceSprite3dTarget::default()
+        };
+    };
+    let (size, cells) = source_sprite3d_cells_from_voxels(&voxels, palette_tokens.len());
+    SourceSprite3dTarget {
+        status: SourceSprite3dStatus::Complete,
+        palette_tokens,
+        palette,
+        rows: voxel_rows,
+        size: Some(size),
+        cells,
+    }
+}
+
+fn source_sprite3d_color_string(color: &SpriteColor3) -> String {
+    match color {
+        SpriteColor3::Transparent => "#00000000".to_string(),
+        SpriteColor3::Hex(value) => value.clone(),
+    }
+}
+
+fn source_sprite3d_cells_from_voxels(
+    voxels: &SpriteVoxels3,
+    palette_len: usize,
+) -> (usize, Vec<Option<usize>>) {
+    let size = usize::from(voxels.width())
+        .max(usize::from(voxels.height()))
+        .max(usize::from(voxels.depth()));
+    let mut cells = vec![None; size * size * size];
+    let keys = SOURCE_SPRITE3D_PALETTE_KEYS
+        .chars()
+        .take(palette_len)
+        .collect::<Vec<_>>();
+    for (z, slice) in voxels.slices.iter().enumerate() {
+        for (y, row) in slice.iter().enumerate() {
+            for (x, ch) in row.chars().enumerate() {
+                if ch == '.' || ch == ' ' {
+                    continue;
+                }
+                let Some(color_index) = keys.iter().position(|key| *key == ch) else {
+                    continue;
+                };
+                let cell_index = (z * size + y) * size + x;
+                cells[cell_index] = Some(color_index);
+            }
+        }
+    }
+    (size, cells)
+}
+
+const SOURCE_SPRITE3D_PALETTE_KEYS: &str =
+    "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
 fn sprite3d_blocks(source: &str, context: &SurfaceDocument) -> Vec<Sprite3dBlock> {
     context
@@ -1374,7 +1537,8 @@ fn escape_json_string(out: &mut String, value: &str) {
 #[cfg(test)]
 mod tests {
     use super::{
-        SoundSourceTargetKind, SourceSpritePaletteEntry, SourceTargetKind, resolve_source_target,
+        SoundSourceTargetKind, SourceSprite3dStatus, SourceSpritePaletteEntry, SourceTargetKind,
+        resolve_source_entries_from_document, resolve_source_target,
     };
 
     #[test]
@@ -1414,6 +1578,78 @@ mod tests {
                 "source_target must query parser-owned SurfaceDocument ranges, not source scanner products via {forbidden}"
             );
         }
+    }
+
+    #[test]
+    fn source_entries_are_built_from_surface_document_product() {
+        let source = r#"
+title = source_entries
+
+puzzle board {
+layers {
+Player
+}
+sprites {
+Player {
+#fff
+0
+}
+}
+levels {
+level "one" {
+.
+}
+level "two" {
+.
+}
+}
+}
+
+puzzle3 board3 {
+sprites3 {
+Cube
+#fff
+0
+}
+levels3 pack of board3 {
+level "three" {
+0
+}
+}
+}
+"#;
+        let document = crate::parse_surface_document(source);
+        let entries = resolve_source_entries_from_document(source, &document);
+
+        assert!(entries.iter().any(|entry| {
+            entry.kind == SourceTargetKind::Level
+                && entry.name == "one"
+                && entry.level_index == Some(0)
+        }));
+        assert!(entries.iter().any(|entry| {
+            entry.kind == SourceTargetKind::Level
+                && entry.name == "two"
+                && entry.level_index == Some(1)
+        }));
+        assert!(
+            entries
+                .iter()
+                .any(|entry| { entry.kind == SourceTargetKind::Sprite && entry.name == "Player" })
+        );
+        assert!(entries.iter().any(|entry| {
+            entry.kind == SourceTargetKind::Level3d
+                && entry.name == "three"
+                && entry.params
+                    == vec![
+                        ("bundle".to_string(), "pack".to_string()),
+                        ("model".to_string(), "board3".to_string()),
+                    ]
+        }));
+        assert!(
+            entries
+                .iter()
+                .any(|entry| { entry.kind == SourceTargetKind::Sprite3d && entry.name == "Cube" })
+        );
     }
 
     #[test]
@@ -2194,6 +2430,7 @@ Floor
 ..0..
 
 11111
+.....
 
 Goal
 #00008b
@@ -2210,6 +2447,13 @@ Goal
         assert!(body.contains("#90ee90"));
         assert!(body.contains("11111"));
         assert!(!body.contains("Goal"));
+        let sprite3d = target.source_sprite3d.as_ref().unwrap();
+        assert_eq!(sprite3d.status, SourceSprite3dStatus::Complete);
+        assert_eq!(sprite3d.size, Some(5));
+        assert_eq!(sprite3d.palette, vec!["#90ee90", "#008000"]);
+        assert_eq!(sprite3d.cells.len(), 125);
+        assert!(sprite3d.cells.iter().any(|cell| *cell == Some(0)));
+        assert!(sprite3d.cells.iter().any(|cell| *cell == Some(1)));
     }
 
     #[test]
@@ -2245,6 +2489,10 @@ Floor
         assert_eq!(target.kind, SourceTargetKind::Sprite3d);
         assert_eq!(target.name, "Floor");
         assert_eq!(target.body_start, target.body_end);
+        assert_eq!(
+            target.source_sprite3d.as_ref().unwrap().status,
+            SourceSprite3dStatus::Incomplete
+        );
     }
 
     #[test]

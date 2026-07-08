@@ -165,6 +165,19 @@ solver は、反復的な authoring loop に最適化する。
 
 想定 workload は、巨大な1ステージを完璧に解くことではない。ルール編集、ステージ variation、生成された test arena に対して、小中規模の probe を大量に走らせることである。
 
+## Solver State Slicing
+
+solver の state key は、authoring syntax や object 名の prefix から直接決めない。
+target contract は `STATE_VIEW_AND_SOLVER_SLICING_SPEC.md` に置く。
+
+重要な方針:
+
+- play/editor が扱う通常 state と、solver の duplicate detection / cache key に使う state は分ける。
+- solver key から落とせる object は、見た目用だからではなく、future gameplay observation に影響しないと compiled rule analysis で分かるから落とす。
+- `@Name` は最終的には display semantics の根にしない。移行中は互換上の名前として残っても、solver relevance の真実の源泉にしない。
+- `on_display` は removal target であり、silent fallback として残さない。
+- random は deterministic でなければならない。pruned rule が gameplay random stream を変える可能性があるなら、その依存は solver-visible として扱う。
+
 ## Level Perturbation Analysis
 
 level perturbation は solver の一級の仕事である。

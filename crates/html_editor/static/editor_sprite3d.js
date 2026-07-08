@@ -2356,6 +2356,13 @@ function addSprite3dToSource() {
 
   const result = insertSprite3dDefinition(activeSprite3dEditSource());
   applySprite3dSourceChange(document, result.source, "Added 3D sprite");
+  setSprite3dEditSource({
+    start: result.start,
+    end: result.end,
+    bodyStart: result.start,
+    bodyEnd: result.end,
+    name: sprite3dObjectName(),
+  }, document);
 }
 
 async function addEmptySprite3dToSource() {
@@ -2461,19 +2468,35 @@ function insertSprite3dDefinition(source) {
   if (!block) {
     const puzzle3Block = findPuzzle3Block(source);
     if (puzzle3Block) {
+      const before = source.slice(0, puzzle3Block.end).trimEnd();
+      const prefix = `${before}\n\nsprites3 generated of ${puzzle3Block.name} {\n`;
+      const body = sprite3dObjectDefinitionText(SPRITE3D_SOURCE_INDENT);
+      const suffix = `\n}\n${source.slice(puzzle3Block.end)}`;
       return {
-        source: `${source.slice(0, puzzle3Block.end).trimEnd()}\n\nsprites3 generated of ${puzzle3Block.name} {\n${sprite3dObjectDefinitionText(SPRITE3D_SOURCE_INDENT)}\n}\n${source.slice(puzzle3Block.end)}`,
+        source: `${prefix}${body}${suffix}`,
+        start: prefix.length,
+        end: prefix.length + body.length,
       };
     }
     const prefix = source.trimEnd() ? `${source.trimEnd()}\n\n` : "";
+    const header = "sprites3 {\n";
+    const body = sprite3dObjectDefinitionText(SPRITE3D_SOURCE_INDENT);
+    const footer = "\n}\n";
     return {
-      source: `${prefix}sprites3 {\n${sprite3dObjectDefinitionText(SPRITE3D_SOURCE_INDENT)}\n}\n`,
+      source: `${prefix}${header}${body}${footer}`,
+      start: prefix.length + header.length,
+      end: prefix.length + header.length + body.length,
     };
   }
 
   const indent = sprite3dSourceChildIndent(block.indent);
+  const before = source.slice(0, block.bodyEnd).trimEnd();
+  const body = sprite3dObjectDefinitionText(indent);
+  const prefix = `${before}\n\n`;
   return {
-    source: `${source.slice(0, block.bodyEnd).trimEnd()}\n\n${sprite3dObjectDefinitionText(indent)}\n${source.slice(block.bodyEnd)}`,
+    source: `${prefix}${body}\n${source.slice(block.bodyEnd)}`,
+    start: prefix.length,
+    end: prefix.length + body.length,
   };
 }
 
@@ -2498,7 +2521,7 @@ function insertEmptySprite3dDefinition(source, options = {}) {
 }
 
 function replaceSprite3dDefinition(source) {
-  const entry = findSprite3dDefinitionByName(source, sprite3dObjectName());
+  const entry = currentSprite3dEditSourceRange(source);
   if (!entry) {
     return null;
   }
@@ -2508,51 +2531,31 @@ function replaceSprite3dDefinition(source) {
   };
 }
 
-function loadSprite3dFromSourcePosition(position, options = {}) {
+async function loadSprite3dFromSourcePosition(position, options = {}) {
   if (!isPuzzleDocument(activeDocument()) || !isTextDocument(activeDocument())) {
     return null;
   }
   const source = sourceEditor.value || "";
-  const entry = findSprite3dDefinitionAtPosition(source, position);
-  if (!entry) {
+  if (typeof resolveSourceTargetFromWasm !== "function") {
     return null;
   }
-  const loaded = parseSprite3dDefinitionSource(source, entry);
-  if (!loaded) {
-    if (!options.silent) {
-      setSprite3dActionStatus("No editable 3D sprite here", "is-error");
-    }
+  const target = await resolveSourceTargetFromWasm(source, position);
+  if (target?.kind !== "sprite3d") {
     return null;
   }
-  if (options.recordHistory && typeof pushSourceNavigationHistory === "function") {
-    pushSourceNavigationHistory();
-  }
-  if (options.switchMode && currentPreviewMode !== "sprite3d") {
-    setPreviewMode("sprite3d");
-  }
-  applyLoadedSprite3d(entry.name, loaded);
-  if (!options.silent) {
-    setSprite3dActionStatus(`Loaded ${entry.name}`, "is-ok");
-    setStatus(`Loaded 3D sprite ${entry.name}`, "is-ok");
-  }
-  return `sprite3d:${entry.name}:${entry.start}`;
+  return loadSprite3dSourceTarget(target, options);
 }
 
 function loadSprite3dSourceTarget(target, options = {}) {
   if (!isPuzzleDocument(activeDocument()) || !isTextDocument(activeDocument())) {
     return null;
   }
-  const source = sourceEditor.value || "";
   if (!Number.isInteger(target?.bodyStart) || !Number.isInteger(target?.bodyEnd)) {
     return null;
   }
-  const loaded = parseSprite3dDefinitionSource(source, {
-    name: target.name || "VoxelSprite",
-    bodyStart: target.bodyStart,
-    bodyEnd: target.bodyEnd,
-  });
+  const loaded = sprite3dTargetPayload(target);
   if (!loaded) {
-    if (isIncompleteSprite3dSourceTarget(source, target)) {
+    if (target?.sourceSprite3d?.status === "incomplete") {
       applyIncompleteSprite3dSourceTarget(target.name || "", target);
       if (!options.silent) {
         setSprite3dActionStatus(`Loaded unfinished ${sprite3dNameInput.value || "3D sprite"}`, "is-ok");
@@ -2570,6 +2573,7 @@ function loadSprite3dSourceTarget(target, options = {}) {
   if (options.switchMode && currentPreviewMode !== "sprite3d") {
     setPreviewMode("sprite3d");
   }
+  setSprite3dEditSource(target, activeDocument());
   applyLoadedSprite3d(target.name || "VoxelSprite", loaded);
   if (!options.silent) {
     setSprite3dActionStatus(`Loaded ${sprite3dNameInput.value}`, "is-ok");
@@ -2578,19 +2582,56 @@ function loadSprite3dSourceTarget(target, options = {}) {
   return `sprite3d:${target.name}:${target.start ?? target.bodyStart}`;
 }
 
-function isIncompleteSprite3dSourceTarget(source, target) {
-  if (!Number.isInteger(target?.bodyStart) || !Number.isInteger(target?.bodyEnd)) {
-    return false;
+function sprite3dTargetPayload(target) {
+  const payload = target?.sourceSprite3d;
+  if (!payload || payload.status !== "complete") {
+    return null;
   }
-  const body = String(source || "").slice(target.bodyStart, target.bodyEnd);
-  const rows = body
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean);
-  return !rows.length || !isSprite3dPaletteRow(rows[0]);
+  const size = Math.trunc(Number(payload.size) || 0);
+  const palette = Array.isArray(payload.palette)
+    ? payload.palette.map((color) => ({ color: normalizeSpriteColor(color) }))
+    : [];
+  const cells = Array.isArray(payload.cells)
+    ? payload.cells.map((cell) => Number.isInteger(cell) ? cell : null)
+    : [];
+  if (size < 1 || !palette.length || cells.length !== size * size * size) {
+    return null;
+  }
+  return { size, palette, cells };
+}
+
+function setSprite3dEditSource(target, document = activeDocument()) {
+  sprite3d.editDocumentId = document?.id || null;
+  sprite3d.editSourceStart = Number.isInteger(target?.start) ? target.start : null;
+  sprite3d.editSourceEnd = Number.isInteger(target?.end) ? target.end : null;
+  sprite3d.editSourceBodyStart = Number.isInteger(target?.bodyStart) ? target.bodyStart : null;
+  sprite3d.editSourceBodyEnd = Number.isInteger(target?.bodyEnd) ? target.bodyEnd : null;
+  sprite3d.editSourceName = target?.name || "";
+}
+
+function currentSprite3dEditSourceRange(source) {
+  const start = sprite3d.editSourceStart;
+  const end = sprite3d.editSourceEnd;
+  if (
+    !Number.isInteger(start)
+    || !Number.isInteger(end)
+    || start < 0
+    || end < start
+    || end > String(source || "").length
+  ) {
+    return null;
+  }
+  return {
+    start,
+    end,
+    indent: sprite3dSourceIndent(source.slice(source.lastIndexOf("\n", start - 1) + 1, start)),
+  };
 }
 
 function applyIncompleteSprite3dSourceTarget(name, target) {
+  if (target && typeof target === "object") {
+    setSprite3dEditSource(target, activeDocument());
+  }
   sprite3dNameInput.value = name || "";
   sprite3d.size = clampSprite3dSize(sprite3d.size);
   sprite3d.axis = "z";
@@ -2648,181 +2689,6 @@ function findSprites3dBlocks(source) {
     pattern.lastIndex = closeIndex + 1;
   }
   return blocks;
-}
-
-function findSprite3dDefinitionAtPosition(source, position) {
-  for (const block of findSprites3dBlocks(source)) {
-    if (position < block.bodyStart || position > block.bodyEnd) {
-      continue;
-    }
-    const entry = findSprite3dDefinitions(source, block)
-      .find((candidate) => position >= candidate.start && position <= candidate.end);
-    if (entry) {
-      return entry;
-    }
-  }
-  return null;
-}
-
-function findSprite3dDefinitionByName(source, name) {
-  for (const block of findSprites3dBlocks(source)) {
-    const entry = findSprite3dDefinitionBlock(source, block, name);
-    if (entry) {
-      return entry;
-    }
-  }
-  return null;
-}
-
-function findSprite3dDefinitionBlock(source, block, name) {
-  return findSprite3dDefinitions(source, block)
-    .find((entry) => entry.name === name) || null;
-}
-
-function findSprite3dDefinitions(source, block) {
-  return findCanonicalSprite3dDefinitions(source, block).sort((a, b) => a.start - b.start);
-}
-
-function findCanonicalSprite3dDefinitions(source, block) {
-  const lines = editorSourceLinesWithOffsets(source)
-    .filter((line) => line.start >= block.bodyStart && line.start < block.bodyEnd);
-  const entries = [];
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index];
-    const code = stripLineCommentForWasm(line.raw).trim();
-    if (!isCanonicalSprite3dName(code) || !nextSprite3dPaletteLine(lines, index)) {
-      continue;
-    }
-    const start = firstEditorSourceCodeIndex(line);
-    let end = line.absoluteEnd;
-    for (let next = index + 1; next < lines.length; next += 1) {
-      const nextCode = stripLineCommentForWasm(lines[next].raw).trim();
-      if (
-        nextCode.startsWith("sprite ")
-        || (isCanonicalSprite3dName(nextCode) && nextSprite3dPaletteLine(lines, next))
-      ) {
-        break;
-      }
-      end = lines[next].absoluteEnd;
-    }
-    entries.push({
-      name: code,
-      start,
-      end,
-      indent: line.raw.match(/^[\t ]*/)?.[0] || sprite3dSourceChildIndent(block.indent),
-      bodyStart: line.absoluteEnd,
-      bodyEnd: end,
-      format: "canonical",
-    });
-  }
-  return entries;
-}
-
-function nextSprite3dPaletteLine(lines, index) {
-  for (const line of lines.slice(index + 1)) {
-    const code = stripLineCommentForWasm(line.raw).trim();
-    if (!code) {
-      continue;
-    }
-    return isSprite3dPaletteRow(code);
-  }
-  return false;
-}
-
-function isCanonicalSprite3dName(value) {
-  return /^@?[A-Za-z_][\w:]*$/.test(value || "") && !isSprite3dPaletteRow(value);
-}
-
-function parseSprite3dDefinitionSource(source, entry) {
-  const body = source.slice(entry.bodyStart, entry.bodyEnd);
-  const rows = body.split("\n").map((row) => row.trim());
-  const firstPaletteIndex = rows.findIndex((row) => row && isSprite3dPaletteRow(row));
-  if (firstPaletteIndex < 0) {
-    return null;
-  }
-  return parseSprite3dRows(
-    parseSprite3dPaletteTokens(rows[firstPaletteIndex].split(/\s+/).filter(Boolean)),
-    rows.slice(firstPaletteIndex + 1),
-  );
-}
-
-function parseSprite3dPaletteTokens(tokens) {
-  const entries = [];
-  for (const [index, token] of tokens.entries()) {
-    const color = parseSprite3dColorToken(token);
-    if (!color || !SPRITE_COLOR_TOKENS[index]) {
-      return null;
-    }
-    entries.push({ key: SPRITE_COLOR_TOKENS[index], color });
-  }
-  return entries.length ? entries : null;
-}
-
-function parseSprite3dColorToken(token) {
-  if (String(token || "").toLowerCase() === "transparent") {
-    return "#00000000";
-  }
-  return parseSpriteHexColor(token);
-}
-
-function isSprite3dPaletteRow(line) {
-  const tokens = String(line || "").split(/\s+/).filter(Boolean);
-  return tokens.length > 0 && tokens.every((token) => Boolean(parseSprite3dColorToken(token)));
-}
-
-function parseSprite3dRows(paletteEntries, rawRows) {
-  if (!paletteEntries?.length) {
-    return null;
-  }
-  const slices = [];
-  let current = [];
-  for (const row of rawRows) {
-    if (!row) {
-      if (current.length) {
-        slices.push(current);
-        current = [];
-      }
-      continue;
-    }
-    current.push(row);
-  }
-  if (current.length) {
-    slices.push(current);
-  }
-  if (!slices.length || !slices[0].length || !slices[0][0].length) {
-    return null;
-  }
-  const depth = slices.length;
-  const height = slices[0].length;
-  const width = slices[0][0].length;
-  for (const slice of slices) {
-    if (slice.length !== height || slice.some((row) => row.length !== width)) {
-      return null;
-    }
-  }
-  const size = clampSprite3dSize(Math.max(width, height, depth));
-  if (size !== Math.max(width, height, depth)) {
-    return null;
-  }
-  const palette = paletteEntries.map((entry) => ({ color: normalizeSpriteColor(entry.color) }));
-  const keyToIndex = new Map(paletteEntries.map((entry, index) => [entry.key, index]));
-  const cells = Array.from({ length: size * size * size }, () => null);
-  for (let z = 0; z < depth; z += 1) {
-    for (let y = 0; y < height; y += 1) {
-      for (let x = 0; x < width; x += 1) {
-        const char = slices[z][y][x];
-        if (char === "." || char === " ") {
-          continue;
-        }
-        if (!keyToIndex.has(char)) {
-          return null;
-        }
-        const target = sprite3dCoordsFromPlaneForSize(size, "z", z, x, y);
-        cells[((target.z * size + target.y) * size) + target.x] = keyToIndex.get(char);
-      }
-    }
-  }
-  return { size, palette, cells };
 }
 
 function findPuzzle3Block(source) {
@@ -3391,7 +3257,6 @@ window.addEventListener("resize", () => {
   }
 });
 registerSourceEditableTarget?.("sprite3d", {
-  find: findSprite3dDefinitionAtPosition,
   load: loadSprite3dFromSourcePosition,
 });
 

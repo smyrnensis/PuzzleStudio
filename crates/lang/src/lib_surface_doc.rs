@@ -27,7 +27,6 @@ pub fn split_document_runtime_sources(
 }
 
 pub fn parse_game2d(source: &str) -> Result<LoadedGame, DiagnosticReport> {
-    let _surface = parse_surface_document(source);
     parse_game2d_document(source)
 }
 
@@ -48,6 +47,7 @@ struct SurfaceScanLine {
     visual_scope: Option<SurfaceVisualScope>,
     scope: Option<SourceScope>,
     start: usize,
+    line: usize,
     content: String,
 }
 
@@ -83,6 +83,13 @@ impl SurfaceDocumentProducts {
         visual_sprite_refs: false,
     };
 
+    const SOURCE_TARGET: Self = Self {
+        semantic_tokens: false,
+        completion_symbols: false,
+        highlight_ranges: false,
+        visual_sprite_refs: true,
+    };
+
     fn needs_parser_catalog(self) -> bool {
         self.semantic_tokens || self.completion_symbols
     }
@@ -92,8 +99,18 @@ pub(crate) fn parse_surface_document(source: &str) -> SurfaceDocument {
     build_surface_document(source, SurfaceDocumentProducts::FULL)
 }
 
+fn parse_surface_compile_document(source: &str) -> Result<SurfaceDocument, DiagnosticReport> {
+    let mut document = parse_surface_document(source);
+    document.logical_lines = logical_lines_with_locations(source)?;
+    Ok(document)
+}
+
 pub(crate) fn parse_surface_structure_document(source: &str) -> SurfaceDocument {
     build_surface_document(source, SurfaceDocumentProducts::STRUCTURE_ONLY)
+}
+
+fn parse_surface_source_target_document(source: &str) -> SurfaceDocument {
+    build_surface_document(source, SurfaceDocumentProducts::SOURCE_TARGET)
 }
 
 fn build_surface_document(source: &str, products: SurfaceDocumentProducts) -> SurfaceDocument {
@@ -116,6 +133,7 @@ fn build_surface_document(source: &str, products: SurfaceDocumentProducts) -> Su
             line.token_spans.clone(),
             line.scope,
             line.start,
+            line.line,
             line.content.clone(),
             option_block,
         );
@@ -126,6 +144,7 @@ fn build_surface_document(source: &str, products: SurfaceDocumentProducts) -> Su
                 line.start,
                 &line.content,
                 &line.structural_token_spans,
+                &line.structural_events,
                 &mut sink,
             );
         }
@@ -186,6 +205,7 @@ fn scan_surface_document_source(source: &str) -> SurfaceScan {
                 visual_scope: None,
                 scope: line.scope,
                 start: line.start,
+                line: line.line,
                 content: line.content,
             })
             .collect(),
@@ -1258,8 +1278,10 @@ fn record_surface_document_line(
     line_start: usize,
     line: &str,
     tokens: &[SourceToken],
+    structural_events: &[source::SourceStructureEvent],
     sink: &mut SurfaceSink,
 ) {
+    record_structural_header_surface_tokens(structural_events, tokens, sink);
     record_authoring_declaration_surface_tokens(scope, tokens, sink);
     record_general_surface_tokens(scope, tokens, sink);
     record_visual_surface_line(scope, tokens, sink);
@@ -1289,6 +1311,34 @@ fn record_surface_document_line(
     record_rule_line_surface_tokens(scope, line_start, line, sink);
     record_oriented_pattern_arg_surface_line(scope, line_start, line, sink);
     record_rewrite_surface_line(scope, line, tokens, sink);
+}
+
+fn record_structural_header_surface_tokens(
+    structural_events: &[source::SourceStructureEvent],
+    tokens: &[SourceToken],
+    sink: &mut SurfaceSink,
+) {
+    for event in structural_events {
+        let source::SourceStructureEvent::Open {
+            header,
+            scope,
+            role,
+            ..
+        } = event
+        else {
+            continue;
+        };
+        let Some(first_header_token) = source::source_tree_header_keyword(header, *scope, *role)
+        else {
+            continue;
+        };
+        if let Some(token) = tokens
+            .iter()
+            .find(|token| token.text.as_str() == first_header_token)
+        {
+            add_scene_effect_token_range(sink, token, SurfaceSemanticKind::Keyword);
+        }
+    }
 }
 
 fn record_general_surface_tokens(
@@ -2692,6 +2742,7 @@ puzzle board {
         let required = [
             "build_surface_document(source, SurfaceDocumentProducts::FULL)",
             "build_surface_document(source, SurfaceDocumentProducts::STRUCTURE_ONLY)",
+            "build_surface_document(source, SurfaceDocumentProducts::SOURCE_TARGET)",
         ];
         for required in required {
             assert!(

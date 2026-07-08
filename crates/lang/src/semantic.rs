@@ -640,6 +640,261 @@ level "start" {
     }
 
     #[test]
+    fn classifies_map_row_values_from_parser_resolved_surface_tokens() {
+        let source = r#"
+title = map_row_semantics
+
+puzzle board {
+tags {
+N = 0 1
+D = F B
+}
+map Nm N {
+0 -> 1
+1 -> 0
+}
+map D_rev D {
+F -> B
+B -> F
+}
+layers {
+You:D Count:N
+}
+rules {
+}
+levels {
+legend {
+. = empty
+Y = You:F Count:0
+}
+level "start" {
+.
+}
+}
+}
+"#;
+        crate::parse_game2d(source).unwrap();
+        let tokens = semantic_tokens(source);
+        let nm_start = source.find("map Nm N").unwrap();
+        let zero_from_start = source[nm_start..].find("0 -> 1").unwrap() + nm_start;
+        let one_to_start = zero_from_start + "0 -> ".len();
+        let d_rev_start = source.find("map D_rev D").unwrap();
+        let f_from_start = source[d_rev_start..].find("F -> B").unwrap() + d_rev_start;
+        let b_to_start = f_from_start + "F -> ".len();
+
+        assert_semantic_token(source, &tokens, zero_from_start, "0", SemanticKind::Variant);
+        assert_semantic_token(source, &tokens, one_to_start, "1", SemanticKind::Variant);
+        assert_semantic_token(source, &tokens, f_from_start, "F", SemanticKind::Variant);
+        assert_semantic_token(source, &tokens, b_to_start, "B", SemanticKind::Variant);
+    }
+
+    #[test]
+    fn classifies_group_rhs_selectors_from_parser_resolved_surface_tokens() {
+        let source = r#"
+title = group_rhs_selector_semantics
+
+puzzle board {
+tags {
+D = F B
+}
+layers {
+You:D Crate
+}
+groups {
+player = You:D
+object = player Crate
+}
+rules {
+}
+levels {
+legend {
+. = empty
+P = You:F
+}
+level "start" {
+.
+}
+}
+}
+"#;
+        crate::parse_game2d(source).unwrap();
+        let tokens = semantic_tokens(source);
+        let groups_start = source.find("groups {").unwrap();
+        let you_rhs_start = source[groups_start..].find("You:D").unwrap() + groups_start;
+        let d_rhs_start = you_rhs_start + "You:".len();
+        let player_rhs_start = source[groups_start..].find("player Crate").unwrap() + groups_start;
+        let crate_rhs_start = source[player_rhs_start..].find("Crate").unwrap() + player_rhs_start;
+
+        assert_semantic_token(source, &tokens, you_rhs_start, "You", SemanticKind::Object);
+        assert_semantic_token(source, &tokens, d_rhs_start, "D", SemanticKind::Group);
+        assert_semantic_token(
+            source,
+            &tokens,
+            player_rhs_start,
+            "player",
+            SemanticKind::Group,
+        );
+        assert_semantic_token(
+            source,
+            &tokens,
+            crate_rhs_start,
+            "Crate",
+            SemanticKind::Object,
+        );
+    }
+
+    #[test]
+    fn classifies_legend_rhs_selectors_from_parser_resolved_surface_tokens() {
+        let source = r#"
+title = legend_rhs_selector_semantics
+
+puzzle board {
+tags {
+D = F B
+}
+layers {
+You:D Crate
+}
+groups {
+actors = You:D
+}
+rules {
+}
+levels {
+legend {
+. = empty
+P = You:F
+C = Crate
+A = actors
+}
+level "start" {
+.
+}
+}
+}
+"#;
+        crate::parse_game2d(source).unwrap();
+        let tokens = semantic_tokens(source);
+        let legend_start = source.find("legend {").unwrap();
+        let you_rhs_start = source[legend_start..].find("You:F").unwrap() + legend_start;
+        let f_rhs_start = you_rhs_start + "You:".len();
+        let crate_rhs_start = source[legend_start..].find("Crate").unwrap() + legend_start;
+        let actors_rhs_start = source[legend_start..].find("actors").unwrap() + legend_start;
+
+        assert_semantic_token(source, &tokens, you_rhs_start, "You", SemanticKind::Object);
+        assert_semantic_token(source, &tokens, f_rhs_start, "F", SemanticKind::Variant);
+        assert_semantic_token(
+            source,
+            &tokens,
+            crate_rhs_start,
+            "Crate",
+            SemanticKind::Object,
+        );
+        assert_semantic_token(
+            source,
+            &tokens,
+            actors_rhs_start,
+            "actors",
+            SemanticKind::Group,
+        );
+    }
+
+    #[test]
+    fn classifies_teneten_group_rhs_selectors_from_parser_resolved_surface_tokens() {
+        let source = include_str!("../../../games/TPGJ6/TENETEN.puzzle");
+        let tokens = semantic_tokens(source);
+        let groups_start = source.find("groups {").unwrap();
+        let object_rhs_start =
+            source[groups_start..].find("player Crate Ball").unwrap() + groups_start;
+        let crate_rhs_start = source[object_rhs_start..].find("Crate").unwrap() + object_rhs_start;
+        let time_machine_rhs_start =
+            source[object_rhs_start..].find("TimeMachine:D").unwrap() + object_rhs_start;
+        let d_rhs_start = time_machine_rhs_start + "TimeMachine:".len();
+
+        assert_semantic_token(
+            source,
+            &tokens,
+            object_rhs_start,
+            "player",
+            SemanticKind::Group,
+        );
+        assert_semantic_token(
+            source,
+            &tokens,
+            crate_rhs_start,
+            "Crate",
+            SemanticKind::Object,
+        );
+        assert_semantic_token(
+            source,
+            &tokens,
+            time_machine_rhs_start,
+            "TimeMachine",
+            SemanticKind::Object,
+        );
+        assert_semantic_token(source, &tokens, d_rhs_start, "D", SemanticKind::Group);
+    }
+
+    #[test]
+    fn classifies_structural_headers_from_parser_surface_events() {
+        let source = r#"
+title = structural_header_semantics
+
+puzzle board {
+tags {
+T = A
+}
+layers {
+Player
+}
+groups {
+movers = Player
+}
+rules {
+on_level_start {
+once [ Player ] -> [ Player ]
+}
+}
+levels {
+legend {
+P = Player
+}
+level "start" {
+P
+}
+}
+}
+
+scene title {
+layout {
+row {
+title = "Title"
+}
+}
+}
+"#;
+        let tokens = semantic_tokens(source);
+
+        for (needle, text) in [
+            ("puzzle board", "puzzle"),
+            ("tags {", "tags"),
+            ("layers {", "layers"),
+            ("groups {", "groups"),
+            ("rules {", "rules"),
+            ("on_level_start {", "on_level_start"),
+            ("levels {", "levels"),
+            ("legend {", "legend"),
+            ("level \"start\"", "level"),
+            ("scene title", "scene"),
+            ("layout {", "layout"),
+            ("row {", "row"),
+        ] {
+            let start = source.find(needle).unwrap();
+            assert_semantic_token(source, &tokens, start, text, SemanticKind::Keyword);
+        }
+    }
+
+    #[test]
     fn classifies_marks_from_parser_resolved_surface_tokens() {
         let source = r#"
 title = mark_parser_resolved_surface_tokens
@@ -805,7 +1060,10 @@ level "start" {
             ("lib.rs", include_str!("lib.rs")),
             ("highlight.rs", include_str!("highlight.rs")),
             ("completion.rs", include_str!("completion.rs")),
-            ("surface_completion.rs", include_str!("surface_completion.rs")),
+            (
+                "surface_completion.rs",
+                include_str!("surface_completion.rs"),
+            ),
             ("source_target.rs", include_str!("source_target.rs")),
             ("source_outline.rs", include_str!("source_outline.rs")),
             ("lib_document.rs", include_str!("lib_document.rs")),

@@ -482,7 +482,7 @@ _ = empty
 }
 }
 
-scene = title {
+scene title {
 layout {
 title = "Simple Block Sliding Game"
 subtitle = "by increpare"
@@ -500,7 +500,7 @@ goto playing(0)
 }
 }
 
-scene = playing {
+scene playing {
 layout {
 row {
 title = "Simple Block Sliding Game"

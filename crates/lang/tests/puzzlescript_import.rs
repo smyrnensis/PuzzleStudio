@@ -1,7 +1,7 @@
 use puzzle_core::{InputId, ObjectId, transition_program, transition_state};
 use puzzle_lang::{
-    LoadedGame, SceneComponent, SceneEffect, VisualSpriteKind, parse_game2d as parse_game,
-    translate_puzzlescript_to_canonical,
+    LoadedGame, ModelOperationSound, ModelOperationSoundDef, SceneComponent, SceneEffect,
+    VisualSpriteKind, parse_game2d as parse_game, translate_puzzlescript_to_canonical,
 };
 
 fn find_choice_by_label<'a>(
@@ -93,6 +93,8 @@ fn assert_imported_output_uses_current_canonical_surface(source: &str) {
         "Enter Space x -> continue_game",
         "n -> new_game",
         "layer_1 =",
+        "\nscene =",
+        "__ps_",
     ] {
         let forbidden_lowercase = forbidden.to_ascii_lowercase();
         assert!(
@@ -226,6 +228,83 @@ fn translated_basic_vanilla_puzzlescript_parses_as_loaded_game() {
     assert_eq!(
         loaded.goal.as_ref().map(|goal| goal.description.as_str()),
         Some("no [ Target no Crate ]")
+    );
+}
+
+#[test]
+fn puzzlescript_level_select_prelude_generates_level_menu_scene() {
+    let source = r#"
+title Level Menu Import
+level_select
+
+OBJECTS
+Background
+#000000
+.....
+.....
+.....
+.....
+.....
+
+Player
+#ffffff
+00000
+00000
+00000
+00000
+00000
+
+Goal
+#00ff00
+.....
+.....
+.....
+.....
+.....
+
+LEGEND
+. = Background
+P = Player
+G = Goal
+
+COLLISIONLAYERS
+Background
+Player
+Goal
+
+RULES
+
+WINCONDITIONS
+all Goal on Player
+
+LEVELS
+P
+
+G
+"#;
+
+    let translated = translate_puzzlescript_to_canonical(source).unwrap();
+
+    assert!(translated.contains("choice \"Level Select\" -> goto level_select"));
+    assert!(translated.contains("scene level_select {\nlayout {\nlevel_menu {"));
+    assert!(translated.contains("show_index = true"));
+    assert!(translated.contains("show_solved = true"));
+    assert_imported_output_uses_current_canonical_surface(&translated);
+
+    let loaded = parse_game(&translated).unwrap();
+    let title_scene = scene_by_name(&loaded, "title");
+    let level_select_scene = scene_by_name(&loaded, "level_select");
+    let level_select_choice = find_choice_by_label(&title_scene.components, "Level Select")
+        .expect("expected level select choice");
+    assert!(matches!(
+        &level_select_choice.effect,
+        SceneEffect::Goto { scene, params } if scene == "level_select" && params.is_empty()
+    ));
+    assert!(
+        level_select_scene
+            .components
+            .iter()
+            .any(|component| matches!(component, SceneComponent::LevelMenu(_)))
     );
 }
 
@@ -553,6 +632,83 @@ P
                 )
         )
     }));
+}
+
+#[test]
+fn puzzlescript_move_undo_and_restart_sounds_lower_to_model_sounds() {
+    let source = r##"
+title Sound Operations
+
+OBJECTS
+Background
+#000000
+.....
+.....
+.....
+.....
+.....
+
+Player
+#ffffff
+00000
+00000
+00000
+00000
+00000
+
+Wall
+#888888
+00000
+00000
+00000
+00000
+00000
+
+SOUNDS
+player move 111
+undo 222
+restart 333
+
+LEGEND
+. = Background
+P = Player
+
+COLLISIONLAYERS
+Background
+Player, Wall
+
+RULES
+[ > Player | no Wall ] -> [ > Player | ]
+
+LEVELS
+P..
+...
+...
+"##;
+
+    let translated = translate_puzzlescript_to_canonical(source).unwrap();
+
+    assert!(translated.contains("sfx player_move seed=111 type=puzzlescript"));
+    assert!(translated.contains("sfx undo seed=222 type=puzzlescript"));
+    assert!(translated.contains("sfx restart seed=333 type=puzzlescript"));
+    assert!(translated.contains(
+        "sounds {\nmove Player -> sfx player_move\nundo -> sfx undo\nrestart -> sfx restart\n}"
+    ));
+
+    let loaded = parse_game(&translated).unwrap();
+    assert_eq!(
+        loaded.model_operation_sounds,
+        vec![
+            ModelOperationSoundDef {
+                operation: ModelOperationSound::Undo,
+                sfx_name: "undo".to_string(),
+            },
+            ModelOperationSoundDef {
+                operation: ModelOperationSound::Restart,
+                sfx_name: "restart".to_string(),
+            },
+        ]
+    );
 }
 
 #[test]
@@ -1057,15 +1213,23 @@ fn imports_puzzlescript_next_teneten_sample_as_current_canonical_syntax() {
         )
     );
     assert!(!translated.contains("[ You:F Count:0 no Checked ] -> [ You:B Count:3 Checked ]"));
-    assert!(translated.contains("__ps_shape_You_F {"));
-    assert!(translated.contains("You:B\ncolors #000 #fff #00000015\nshape __ps_shape_You_F"));
+    assert!(translated.contains("shape_You_F {"));
+    assert!(translated.contains("You:B\ncolors #000 #fff #00000015\nshape shape_You_F"));
     assert!(!translated.contains("You:B {"));
+    assert!(translated.contains("choice \"Level Select\" -> goto level_select"));
+    assert!(translated.contains("scene level_select {\nlayout {\nlevel_menu {"));
     assert_imported_output_uses_current_canonical_surface(&translated);
 
     let loaded = parse_game(&translated).expect("translated TENETEN should parse as canonical");
     assert_eq!(loaded.title, "TENETEN");
     assert_eq!(loaded.author.as_deref(), Some("smyrnensis"));
     assert_eq!(loaded.homepage.as_deref(), Some("smyrnensis.itch.io"));
+    assert!(
+        loaded
+            .scenes
+            .iter()
+            .any(|scene| scene.name == "level_select")
+    );
 }
 
 #[test]
@@ -1141,12 +1305,10 @@ LEVELS
 
     let translated = translate_puzzlescript_to_canonical(source).unwrap();
 
-    assert!(translated.contains("routine __ps_main once {\n[ Wall ] -> [ Player ]\nmove\n}"));
+    assert!(translated.contains("routine main once {\n[ Wall ] -> [ Player ]\nmove\n}"));
     assert!(translated.contains("on_level_start {\n"));
-    assert!(translated.contains("__ps_main\n}"));
-    assert!(
-        translated.contains("rules {\ninput directions [ Player ] -> [ > Player ]\n__ps_main\n}")
-    );
+    assert!(translated.contains("main\n}"));
+    assert!(translated.contains("rules {\ninput directions [ Player ] -> [ > Player ]\nmain\n}"));
     assert!(!translated.contains("run_rules_on_level_start"));
 
     let loaded = parse_game(&translated).unwrap();
@@ -1162,6 +1324,50 @@ LEVELS
 
     assert!(started.has_object(&loaded.game, 0, 0, player));
     assert!(!started.has_object(&loaded.game, 0, 0, wall));
+}
+
+#[test]
+fn puzzlescript_import_rejects_subroutine_conflict_with_generated_main() {
+    let source = r#"
+title Generated Routine Conflict
+run_rules_on_level_start
+
+OBJECTS
+
+Background
+black
+
+Player
+blue
+
+LEGEND
+
+. = Background
+P = Player
+
+COLLISIONLAYERS
+
+Background
+Player
+
+RULES
+
+subroutine main
+[ Player ] -> [ Player ]
+
+LEVELS
+
+P
+"#;
+
+    let error = translate_puzzlescript_to_canonical(source)
+        .expect_err("generated main routine conflict should be rejected")
+        .to_string();
+
+    assert!(
+        error.contains("PuzzleScript subroutine `main` conflicts with importer-generated routine"),
+        "{error}"
+    );
 }
 
 #[test]
@@ -1219,7 +1425,7 @@ E..
 
     let translated = translate_puzzlescript_to_canonical(source).unwrap();
 
-    assert!(translated.contains("routine __ps_main once {\nmove\nright [ Emitter | no Beam ]"));
+    assert!(translated.contains("routine main once {\nmove\nright [ Emitter | no Beam ]"));
     let loaded = parse_game(&translated).unwrap();
     let beam = object_named(&loaded, "Beam");
     let started = transition_program(

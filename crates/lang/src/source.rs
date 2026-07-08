@@ -1,6 +1,7 @@
 use crate::DiagnosticReport;
 use crate::syntax::puzzle_lifecycle_event;
 
+#[cfg(test)]
 pub(crate) fn logical_lines(source: &str) -> Result<Vec<String>, DiagnosticReport> {
     logical_lines_with_locations(source)
         .map(|lines| lines.into_iter().map(|line| line.text).collect())
@@ -57,8 +58,10 @@ pub(crate) fn logical_lines_with_locations(
         }
 
         let tokens = split_header_tokens(line);
-        if matches!(tokens.as_slice(), ["sprites"] | ["sprites", ..])
-            && line.ends_with('{')
+        if matches!(
+            tokens.as_slice(),
+            ["sprites"] | ["sprites", ..] | ["sprites3"] | ["sprites3", ..]
+        ) && line.ends_with('{')
             && !preserve_level_blanks
         {
             preserve_sprite_blanks = true;
@@ -438,7 +441,12 @@ fn normalize_brace_block_line(
 fn is_levels_header(tokens: &[&str]) -> bool {
     matches!(
         tokens,
-        ["levels"] | ["levels", "of", _] | ["levels", _, "of", _]
+        ["levels"]
+            | ["levels", "of", _]
+            | ["levels", _, "of", _]
+            | ["levels3"]
+            | ["levels3", "of", _]
+            | ["levels3", _, "of", _]
     )
 }
 
@@ -457,9 +465,17 @@ fn starts_inline_block(tokens: &[&str], line: &str) -> bool {
             | ["legend"]
             | ["win_conditions", ..]
             | ["lose_conditions", ..]
+            | ["puzzle3", ..]
             | ["sprites", ..]
+            | ["sprites3", ..]
             | ["colors"]
             | ["shapes"]
+            | ["objects"]
+            | ["display_objects"]
+            | ["render", ..]
+            | ["camera", ..]
+            | ["grid", ..]
+            | ["pixelate", ..]
             | ["theme", ..]
             | ["assets"]
             | ["screen"]
@@ -468,6 +484,7 @@ fn starts_inline_block(tokens: &[&str], line: &str) -> bool {
             | ["rules"]
             | ["main"]
             | ["levels", ..]
+            | ["levels3", ..]
             | ["level", ..]
             | ["state"]
             | ["keys"]
@@ -601,6 +618,7 @@ pub(crate) struct SurfaceSourceLine {
     pub(crate) structural_events: Vec<SourceStructureEvent>,
     pub(crate) scope: Option<SourceScope>,
     pub(crate) start: usize,
+    pub(crate) line: usize,
     pub(crate) content: String,
 }
 
@@ -652,7 +670,7 @@ pub(crate) fn scan_surface_source(source: &str) -> SurfaceSourceScan {
     let mut unbraced_visual_shape_body = false;
     let mut offset = 0usize;
 
-    for line in source.split_inclusive('\n') {
+    for (line_index, line) in source.split_inclusive('\n').enumerate() {
         let line_end = offset + line.len();
         let content_end = line_end - usize::from(line.ends_with('\n'));
         let content = &source[offset..content_end];
@@ -741,6 +759,7 @@ pub(crate) fn scan_surface_source(source: &str) -> SurfaceSourceScan {
             structural_events,
             scope: current,
             start: offset,
+            line: line_index + 1,
             content: content.to_string(),
         });
 
@@ -1144,6 +1163,63 @@ fn source_scope_for_name(name: &str) -> Option<SourceScope> {
         "render" | "camera" => Some(SourceScope::Other),
         "rules" => Some(SourceScope::Other),
         _ => None,
+    }
+}
+
+pub(crate) fn source_tree_header_keyword<'a>(
+    header: &'a str,
+    scope: SourceScope,
+    role: SourceBlockRole,
+) -> Option<&'a str> {
+    if role != SourceBlockRole::SourceTree {
+        return None;
+    }
+    let first = split_header_tokens(header).first().copied()?;
+    source_tree_scope_accepts_header_keyword(scope, first).then_some(first)
+}
+
+fn source_tree_scope_accepts_header_keyword(scope: SourceScope, first: &str) -> bool {
+    match scope {
+        SourceScope::Sounds
+        | SourceScope::Assets
+        | SourceScope::Puzzle
+        | SourceScope::Tags
+        | SourceScope::Group
+        | SourceScope::Layers
+        | SourceScope::Mark
+        | SourceScope::Map
+        | SourceScope::Keys
+        | SourceScope::Legend
+        | SourceScope::Levels
+        | SourceScope::Visuals
+        | SourceScope::VisualShapeTable
+        | SourceScope::VisualColorTable => {
+            source_scope_for_name(first).is_some()
+                || matches!(
+                    first,
+                    "sounds" | "assets" | "puzzle" | "puzzle3" | "level" | "shapes" | "colors"
+                )
+        }
+        SourceScope::Scene => first == "scene",
+        SourceScope::SceneLayout => {
+            matches!(
+                first,
+                "layout" | "row" | "column" | "box" | "puzzle" | "puzzle3"
+            )
+        }
+        SourceScope::SceneState => first == "state",
+        SourceScope::SceneKeys => matches!(first, "keys" | "inputs"),
+        SourceScope::SceneTransitions => {
+            matches!(first, "rules" | "routine" | "input" | "action" | "if")
+                || first == "on_scene_start"
+        }
+        SourceScope::LevelMenu => first == "level_menu",
+        SourceScope::Level => first == "level",
+        SourceScope::Other => {
+            matches!(first, "resources" | "render" | "camera" | "rules")
+                || puzzle_lifecycle_event(first).is_some()
+        }
+        SourceScope::UnbracedLevel | SourceScope::VisualShapeEntry => false,
     }
 }
 

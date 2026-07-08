@@ -2025,6 +2025,27 @@ scene menu using menu {
 }
 
 #[test]
+fn scene_header_rejects_assignment_form() {
+    let source = r#"
+title = scene_assignment_header
+
+puzzle board {
+layers {
+actor = Player
+}
+rules {
+}
+}
+
+scene = title {
+}
+"#;
+    let error = parse_game(source).unwrap_err().to_string();
+
+    assert!(error.contains("scene header must be: scene <name>"));
+}
+
+#[test]
 fn scene_key_command_assignment_can_feed_input_rule() {
     let source = r#"
 title = scene_key_command_assignment
@@ -17107,7 +17128,7 @@ scene title {
     assert!(!parts.model_source.contains("title \"Two Dee\""));
     assert!(!parts.model_source.contains("sfx push"));
     let model_game =
-        super::parse_game2d_expanded_with_shell(&parts.model_source, &parts.shell).unwrap();
+        super::parse_game2d_expanded_lines_with_shell(parts.model_lines, &parts.shell).unwrap();
     assert!(model_game.scenes.is_empty());
 }
 
@@ -17810,8 +17831,8 @@ model puzzle3 push3 {
 }
 
 #[test]
-fn parse_game_returns_document_for_mixed_2d_and_3d_models() {
-    let document = super::parse_game(
+fn parse_game_rejects_mixed_2d_and_3d_models() {
+    let error = super::parse_game(
         r#"
 title = Mixed Game
 
@@ -17867,55 +17888,10 @@ scene mixed_play {
 }
 "#,
     )
-    .unwrap();
+    .unwrap_err()
+    .to_string();
 
-    assert_eq!(document.title, "Mixed Game");
-    assert_eq!(document.models.len(), 2);
-    assert!(matches!(
-        &document.models[0],
-        LoadedDocumentModel::Puzzle2d { name, game } if name == "flat" && game.levels.len() == 1
-    ));
-    assert!(matches!(
-        &document.models[1],
-        LoadedDocumentModel::Puzzle3d { name, puzzle }
-            if name == "cube" && puzzle.level_bundle.as_ref().unwrap().level_count() == 1
-    ));
-    assert!(matches!(
-        document.scenes.as_slice(),
-        [mixed_play, flat, cube]
-            if mixed_play.name == "mixed_play"
-                && mixed_play.state.puzzles.len() == 2
-                && mixed_play.state.puzzles[0].name == "flat_board"
-                && mixed_play.state.puzzles[0].kind == "puzzle"
-                && mixed_play.state.puzzles[1].name == "cube_board"
-                && mixed_play.state.puzzles[1].kind == "puzzle3"
-                && flat.name == "flat"
-                && matches!(
-                    flat.state.puzzles.as_slice(),
-                    [puzzle] if puzzle.name == "flat" && puzzle.kind == "puzzle" && puzzle.model == "flat"
-                )
-                && matches!(
-                    flat.components.as_slice(),
-                    [SceneComponent::Frame(frame)] if frame.kind == "puzzle" && frame.source == "flat"
-                )
-                && matches!(
-                    &flat.puzzle_rule,
-                    Some(ScenePuzzleRule { target, rule }) if target == "flat" && rule == "rules"
-                )
-                && cube.name == "cube"
-                && matches!(
-                    cube.state.puzzles.as_slice(),
-                    [puzzle] if puzzle.name == "cube" && puzzle.kind == "puzzle3" && puzzle.model == "cube"
-                )
-                && matches!(
-                    cube.components.as_slice(),
-                    [SceneComponent::Frame(frame)] if frame.kind == "puzzle3" && frame.source == "cube"
-                )
-                && matches!(
-                    &cube.puzzle_rule,
-                    Some(ScenePuzzleRule { target, rule }) if target == "cube" && rule == "rules"
-                )
-    ));
+    assert!(error.contains("mixed 2D/3D documents are no longer supported"));
 }
 
 #[test]

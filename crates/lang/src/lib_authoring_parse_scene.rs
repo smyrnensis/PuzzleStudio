@@ -115,28 +115,20 @@ fn parse_scene_definition(
     level_entries: &[LevelExpansionEntry],
 ) -> Result<(SceneDef, usize), DiagnosticReport> {
     let header = split_header_tokens(&lines[start]);
-    let name = match header.as_slice() {
-        ["scene", "=", "level_menu", ..] => {
-            return Err(parse_error(
+    if matches!(header.as_slice(), ["scene", "level_menu", ..]) {
+        return Err(parse_error(
+            &lines[start],
+            "scene level_menu template is not supported; use scene <name> with layout { level_menu { ... } }",
+        ));
+    }
+    let name = crate::syntax::named_block_declaration_syntax(&header, "scene")
+        .ok_or_else(|| {
+            parse_error(
                 &lines[start],
-                "scene level_menu template is not supported; use scene = <name> with layout { level_menu { ... } }",
-            ));
-        }
-        ["scene", "=", name] => *name,
-        ["scene", "level_menu", ..] => {
-            return Err(parse_error(
-                &lines[start],
-                "scene level_menu template is not supported; use scene = <name> with layout { level_menu { ... } }",
-            ));
-        }
-        ["scene", name] => *name,
-        _ => {
-            return Err(parse_error(
-                &lines[start],
-                "scene header must be: scene = <name>[(param...)]",
-            ));
-        }
-    };
+                "scene header must be: scene <name>[(param...)]",
+            )
+        })?
+        .name;
     let (name, _params) = parse_scene_name_and_params(name, &lines[start])?;
 
     let resources = collect_scene_resources(lines, start)?;

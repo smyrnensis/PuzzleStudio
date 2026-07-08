@@ -114,6 +114,11 @@ pub fn resolve_source_target(source: &str, cursor_offset: usize) -> String {
 }
 
 #[wasm_bindgen]
+pub fn source_entries_json(source: &str) -> String {
+    puzzle_lang::source_entries_json(source)
+}
+
+#[wasm_bindgen]
 pub fn solve_state(
     source: &str,
     puzzle_path: &str,
