@@ -2294,7 +2294,7 @@ scene playing {
     fn parser_rejects_scene_component_rules_path() {
         let error = parse_puzzle3d(
             r#"
-title old_scene_rule_path
+title = old_scene_rule_path
 
 puzzle3 control_test {
 layers {
@@ -2333,7 +2333,7 @@ scene playing {
     fn parser_accepts_multiple_scene_keys_per_row() {
         let parsed = parse_puzzle3d(
             r#"
-title multiple_scene_keys
+title = multiple_scene_keys
 
 puzzle3 control_test {
 layers {

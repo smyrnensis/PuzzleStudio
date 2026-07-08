@@ -6,7 +6,8 @@ use crate::ids::{ConditionId, InputId, MarkId, ObjectId, RuleId};
 use crate::patch::{CorePatch, CorePatchOp, Patch, PatchError};
 use crate::state::State;
 use puzzle_kernel::{
-    GridCoord, GridOffset, bind_object as bind_object_shared, bound_object as bound_object_shared,
+    GridCoord, GridOffset, TransitionOutcome as KernelTransitionOutcome,
+    bind_object as bind_object_shared, bound_object as bound_object_shared,
     collect_component_placements as collect_component_placements_shared,
     complete_component_placements as complete_component_placements_shared,
     placement_object_binding as placement_object_binding_shared,
@@ -35,15 +36,7 @@ impl From<PatchError> for TransitionError {
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct StepTrace {
-    pub input: InputId,
-    pub next_state: State,
-    pub cancelled: bool,
-    pub commands: Vec<TransitionCommand>,
-    pub fired_rules: Vec<RuleId>,
-    pub patches: Vec<Patch>,
-}
+pub type StepTrace = KernelTransitionOutcome<InputId, State, TransitionCommand, RuleId, Patch>;
 
 pub struct ProgramBoundarySnapshot<'a> {
     pub input: InputId,
@@ -71,6 +64,11 @@ enum ContinuationStep {
     LocalFrame {
         frame: LocalFrame<ObjectId>,
         continuation: ProgramContinuation,
+    },
+    AfterTriggered {
+        continuation: ProgramContinuation,
+        then_steps: Vec<RuleStep>,
+        fired_so_far: bool,
     },
     UntilStable {
         stop_condition: Option<RuleCondition>,
@@ -108,14 +106,7 @@ impl ProgramContinuation {
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct TransitionOutcome {
-    pub input: InputId,
-    pub next_state: State,
-    pub cancelled: bool,
-    pub commands: Vec<TransitionCommand>,
-    pub fired_rules: Vec<RuleId>,
-}
+pub type TransitionOutcome = StepTrace;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TransitionCommand {
@@ -149,15 +140,7 @@ pub fn transition_solver_outcome(
     state: &State,
     input: InputId,
 ) -> TransitionResult<TransitionOutcome> {
-    run_program_transition(game, game.program(), state, input, false).map(|trace| {
-        TransitionOutcome {
-            input: trace.input,
-            next_state: trace.next_state,
-            cancelled: trace.cancelled,
-            commands: trace.commands,
-            fired_rules: trace.fired_rules,
-        }
-    })
+    run_program_transition(game, game.program(), state, input, true)
 }
 
 pub fn transition_outcome(
@@ -165,15 +148,7 @@ pub fn transition_outcome(
     state: &State,
     input: InputId,
 ) -> TransitionResult<TransitionOutcome> {
-    run_program_transition(game, game.program(), state, input, false).map(|trace| {
-        TransitionOutcome {
-            input: trace.input,
-            next_state: trace.next_state,
-            cancelled: trace.cancelled,
-            commands: trace.commands,
-            fired_rules: trace.fired_rules,
-        }
-    })
+    run_program_transition(game, game.program(), state, input, true)
 }
 
 pub fn transition_trace(
@@ -199,13 +174,7 @@ pub fn transition_program_outcome(
     state: &State,
     input: InputId,
 ) -> TransitionResult<TransitionOutcome> {
-    run_program_transition(game, program, state, input, false).map(|trace| TransitionOutcome {
-        input: trace.input,
-        next_state: trace.next_state,
-        cancelled: trace.cancelled,
-        commands: trace.commands,
-        fired_rules: trace.fired_rules,
-    })
+    run_program_transition(game, program, state, input, true)
 }
 
 pub fn transition_program_trace(
@@ -755,9 +724,14 @@ where
                 collect_trace,
                 should_stop,
             )?;
-            if let Some(mut remaining_program) = outcome.remaining_program.take() {
-                remaining_program.extend_rule_steps(then_steps);
-                outcome.remaining_program = Some(remaining_program);
+            if let Some(remaining_program) = outcome.remaining_program.take() {
+                outcome.remaining_program = Some(ProgramContinuation::from_step(
+                    ContinuationStep::AfterTriggered {
+                        continuation: remaining_program,
+                        then_steps: then_steps.clone(),
+                        fired_so_far: outcome.fired,
+                    },
+                ));
                 return Ok(outcome);
             }
             if outcome.fired && !outcome.cancelled {
@@ -1074,6 +1048,49 @@ where
                         },
                     ))
                 };
+            }
+            Ok(outcome)
+        }
+        ContinuationStep::AfterTriggered {
+            continuation,
+            then_steps,
+            fired_so_far,
+        } => {
+            let mut outcome = apply_continuation_segment(
+                game,
+                continuation,
+                context,
+                current,
+                fired_rules,
+                patches,
+                commands,
+                collect_trace,
+                should_stop,
+            )?;
+            let fired = *fired_so_far || outcome.fired;
+            if let Some(remaining) = outcome.remaining_program.take() {
+                outcome.remaining_program = Some(ProgramContinuation::from_step(
+                    ContinuationStep::AfterTriggered {
+                        continuation: remaining,
+                        then_steps: then_steps.clone(),
+                        fired_so_far: fired,
+                    },
+                ));
+                return Ok(outcome);
+            }
+            if fired && !outcome.cancelled {
+                let then_outcome = apply_block_once_segment(
+                    game,
+                    then_steps,
+                    context,
+                    current,
+                    fired_rules,
+                    patches,
+                    commands,
+                    collect_trace,
+                    should_stop,
+                )?;
+                outcome.merge(then_outcome);
             }
             Ok(outcome)
         }

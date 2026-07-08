@@ -173,6 +173,21 @@ function discardSpriteColorEditHistory(kind) {
   spriteColorEditSessions[kind] = null;
 }
 
+function clearSpriteColorEditorState({ commitHistory = true } = {}) {
+  if (commitHistory) {
+    commitSpriteColorEditHistory("sprite");
+  }
+  sprite.addPaletteOpen = false;
+  sprite.editPaletteOpen = false;
+  sprite.customColorOpen = false;
+  sprite.addDraftColorIndex = null;
+}
+
+function clearSpriteTagPickerState() {
+  sprite.colorTagPickerOpen = false;
+  sprite.shapeTagPickerOpen = false;
+}
+
 function renderSpriteColorAdjuster({ color, ariaLabel, onChange }) {
   const editor = window.PuzzleStudioColorEditor.create({
     color,
@@ -299,6 +314,10 @@ function renderSpritePalette() {
         sprite.addPaletteOpen = false;
         sprite.addDraftColorIndex = null;
         sprite.customColorOpen = opening;
+        if (opening) {
+          clearSpriteTagPickerState();
+          renderSpriteControls();
+        }
         renderSpritePalette();
       });
       currentHexInput.addEventListener("input", () => {
@@ -325,6 +344,7 @@ function renderSpritePalette() {
       currentWrap.append(currentTagUnlinkButton);
     }
     if (!selectedIsTransparent && sprite.colorTagPickerOpen) {
+      const colorAssets = spriteSourceColorAssets();
       const tagPicker = renderSpriteAssetNamePicker({
         className: "sprite-color-tag-picker",
         names: colorNames,
@@ -332,14 +352,18 @@ function renderSpritePalette() {
         placeholder: "color_name",
         ariaLabel: "Color tag name",
         emptyText: "No named colors yet",
+        optionMeta: (name) => ({ color: colorAssets.get(name) }),
         onCommit: (name) => {
           const wasOpen = sprite.colorTagPickerOpen;
           sprite.colorTagPickerOpen = false;
           const ok = applyCurrentColorName(sprite.selectedColorIndex, name, { reportError: true });
           if (!ok) {
             sprite.colorTagPickerOpen = wasOpen;
+            return false;
           }
-          return ok;
+          clearSpriteColorEditorState();
+          renderSpriteBuilder();
+          return true;
         },
         onCancel: () => {
           sprite.colorTagPickerOpen = false;
@@ -365,7 +389,7 @@ function renderSpritePalette() {
     }
     spritePalette.append(currentWrap);
     if (pendingEditMenu) {
-      positionSpriteColorMenu(pendingEditMenu, currentButton, { side: "right" });
+      positionSpriteColorMenu(pendingEditMenu, currentButton, { side: "left" });
     }
   }
 
@@ -578,7 +602,13 @@ function renderSpriteCurrentColorTagButton(entry) {
   button.setAttribute("aria-expanded", String(Boolean(sprite.colorTagPickerOpen)));
   button.innerHTML = spriteTagIconSvg();
   button.addEventListener("click", () => {
-    sprite.colorTagPickerOpen = !sprite.colorTagPickerOpen;
+    const opening = !sprite.colorTagPickerOpen;
+    if (opening) {
+      clearSpriteColorEditorState();
+      sprite.shapeTagPickerOpen = false;
+      renderSpriteControls();
+    }
+    sprite.colorTagPickerOpen = opening;
     renderSpritePalette();
   });
   return button;
@@ -595,12 +625,13 @@ function renderSpriteCurrentColorUnlinkButton(index, bind) {
     event.preventDefault();
     event.stopPropagation();
     sprite.colorTagPickerOpen = false;
+    clearSpriteColorEditorState();
     toggleSpritePaletteEntryBinding(index);
   });
   return button;
 }
 
-function renderSpriteAssetNamePicker({ className, names, value, placeholder, ariaLabel, emptyText, onCommit, onCancel }) {
+function renderSpriteAssetNamePicker({ className, names, value, placeholder, ariaLabel, emptyText, optionMeta, onCommit, onCancel }) {
   const picker = document.createElement("form");
   picker.className = ["sprite-tag-picker", className || ""].filter(Boolean).join(" ");
   picker.noValidate = true;
@@ -647,8 +678,36 @@ function renderSpriteAssetNamePicker({ className, names, value, placeholder, ari
       const option = document.createElement("button");
       option.type = "button";
       option.className = "sprite-tag-option";
-      option.textContent = name;
       option.setAttribute("role", "option");
+      const meta = typeof optionMeta === "function" ? optionMeta(name) : null;
+      if (meta && Object.prototype.hasOwnProperty.call(meta, "color")) {
+        const color = parseSpriteHexColor(meta.color);
+        if (color) {
+          option.classList.add("has-color");
+          option.style.setProperty("--sprite-tag-option-color", color);
+          option.style.setProperty("--sprite-tag-option-ink", readableInkForColor(color));
+          option.title = `${name} ${color}`;
+          option.setAttribute("aria-label", `Use color tag ${name} ${color}`);
+          const swatch = document.createElement("span");
+          swatch.className = "sprite-tag-option-swatch";
+          swatch.setAttribute("aria-hidden", "true");
+          const label = document.createElement("span");
+          label.className = "sprite-tag-option-name";
+          label.textContent = name;
+          const hexLabel = document.createElement("span");
+          hexLabel.className = "sprite-tag-option-value";
+          hexLabel.textContent = color;
+          option.append(swatch, label, hexLabel);
+        } else {
+          option.classList.add("has-invalid-color");
+          option.disabled = true;
+          option.textContent = name;
+          option.title = `Invalid color tag ${name}`;
+          option.setAttribute("aria-label", `Invalid color tag ${name}`);
+        }
+      } else {
+        option.textContent = name;
+      }
       option.addEventListener("mousedown", (event) => event.preventDefault());
       option.addEventListener("click", () => commit(name));
       options.append(option);
@@ -928,7 +987,7 @@ function toggleSpriteShapeBinding() {
 }
 
 function linkSpriteShapeToNewShape() {
-  const name = promptSpriteAssetName("Shape name", defaultSpriteAssetName("shape"));
+  const name = promptSpriteShapeAssetName("Shape name", defaultSpriteAssetName("shape"));
   if (!name) {
     return;
   }
@@ -980,6 +1039,24 @@ function promptSpriteAssetName(label, defaultValue) {
   return name;
 }
 
+function promptSpriteShapeAssetName(label, defaultValue) {
+  let raw = defaultValue;
+  try {
+    raw = window.prompt(label, defaultValue);
+  } catch {
+    raw = defaultValue;
+  }
+  if (raw === null) {
+    return null;
+  }
+  const name = sanitizeSpriteShapeRef(raw);
+  if (!name) {
+    setSpriteActionStatus("Use a shape name like wall-shape or shape:tag", "is-error");
+    return null;
+  }
+  return name;
+}
+
 function sanitizeSpriteAssetName(value) {
   const cleaned = String(value || "")
     .trim()
@@ -1003,6 +1080,30 @@ function sanitizeSpriteColorAssetRef(value) {
   const tableName = sanitizeSpriteAssetName(parts[0]);
   const rowName = sanitizeSpriteAssetName(parts[1]);
   return tableName && rowName ? `${tableName}:${rowName}` : "";
+}
+
+function sanitizeSpriteShapeRef(value) {
+  const raw = String(value || "").trim();
+  if (!raw || /[\s{}#]/.test(raw)) {
+    return "";
+  }
+  if (!raw.includes(":")) {
+    return isSpritePlainShapeName(raw) ? raw : "";
+  }
+  const parts = raw.split(":");
+  if (parts.length !== 2) {
+    return "";
+  }
+  return isSpriteShapeTableRef(parts[0], parts[1]) ? raw : "";
+}
+
+function isSpritePlainShapeName(value) {
+  return /^[A-Za-z_][A-Za-z0-9_+*()/-]*$/.test(String(value || ""));
+}
+
+function isSpriteShapeTableRef(tableName, valueName) {
+  return /^[A-Za-z_]\w*$/.test(String(tableName || ""))
+    && /^[A-Za-z0-9_+*()/-]+$/.test(String(valueName || ""));
 }
 
 function defaultSpriteAssetName(kind, index = 0) {
@@ -1856,11 +1957,7 @@ function previewNewSpriteColor(color, options = {}) {
 }
 
 function closeSpriteColorEditor() {
-  commitSpriteColorEditHistory("sprite");
-  sprite.addPaletteOpen = false;
-  sprite.editPaletteOpen = false;
-  sprite.customColorOpen = false;
-  sprite.addDraftColorIndex = null;
+  clearSpriteColorEditorState();
   renderSpritePalette();
 }
 
@@ -1892,17 +1989,25 @@ function cancelSpriteColorAdd() {
 }
 
 function closeSpriteColorEditorFromOutside(event) {
-  if (!sprite.addPaletteOpen && !sprite.editPaletteOpen && !sprite3d.addPaletteOpen && !sprite3d.editPaletteOpen) {
-    return;
+  const target = event.target;
+  const spritePopupOpen = Boolean(
+    sprite.addPaletteOpen
+    || sprite.editPaletteOpen
+    || sprite.colorTagPickerOpen
+    || sprite.shapeTagPickerOpen
+  );
+  const sprite3dPopupOpen = Boolean(sprite3d.addPaletteOpen || sprite3d.editPaletteOpen);
+  if (spritePopupOpen && !spritePalette.contains(target) && !spriteShapeField?.contains(target)) {
+    clearSpriteColorEditorState();
+    clearSpriteTagPickerState();
+    renderSpriteControls();
+    renderSpritePalette();
   }
-  if (spritePalette.contains(event.target)) {
-    return;
-  }
-  if (sprite3dPalette?.contains(event.target)) {
-    return;
-  }
-  closeSpriteColorEditor();
-  if (typeof closeSprite3dColorEditor === "function") {
+  if (
+    sprite3dPopupOpen
+    && !sprite3dPalette?.contains(target)
+    && typeof closeSprite3dColorEditor === "function"
+  ) {
     closeSprite3dColorEditor();
   }
 }
@@ -2854,7 +2959,13 @@ function renderSpriteShapeBindRow(target) {
     commitName({ reportError: true });
   });
   tagButton.addEventListener("click", () => {
-    sprite.shapeTagPickerOpen = !sprite.shapeTagPickerOpen;
+    const opening = !sprite.shapeTagPickerOpen;
+    if (opening) {
+      clearSpriteColorEditorState();
+      sprite.colorTagPickerOpen = false;
+      renderSpritePalette();
+    }
+    sprite.shapeTagPickerOpen = opening;
     renderSpriteControls();
   });
   row.append(label, input, tagButton);
@@ -2875,8 +2986,11 @@ function renderSpriteShapeBindRow(target) {
         const ok = setSpriteShapeSync(true, name);
         if (!ok) {
           sprite.shapeTagPickerOpen = wasOpen;
+          return false;
         }
-        return ok;
+        clearSpriteColorEditorState();
+        renderSpriteBuilder();
+        return true;
       },
       onCancel: () => {
         sprite.shapeTagPickerOpen = false;
@@ -2902,13 +3016,14 @@ function renderSpriteShapeUnlinkButton(info) {
     event.preventDefault();
     event.stopPropagation();
     sprite.shapeTagPickerOpen = false;
+    clearSpriteColorEditorState();
     toggleSpriteShapeBinding();
   });
   return button;
 }
 
 function commitSpriteShapeName(rawName, options = {}) {
-  const name = sanitizeSpriteAssetName(rawName);
+  const name = sanitizeSpriteShapeRef(rawName);
   const info = spriteAssetBindInfo(sprite.shapeBind, "shape");
   if (!name) {
     if (info.name) {
@@ -2929,7 +3044,7 @@ function commitSpriteShapeName(rawName, options = {}) {
 }
 
 function setSpriteShapeSync(sync, rawName) {
-  const name = sanitizeSpriteAssetName(rawName || spriteAssetBindInfo(sprite.shapeBind, "shape").name);
+  const name = sanitizeSpriteShapeRef(rawName || spriteAssetBindInfo(sprite.shapeBind, "shape").name);
   if (!sync) {
     sprite.shapeBind = name ? { type: "shape", name, linked: false } : null;
     renderSpriteBuilder();
@@ -2950,8 +3065,7 @@ function setSpriteShapeSync(sync, rawName) {
     sprite.size = parsed.size;
     sprite.cells = parsed.cells;
   } else {
-    setSpriteActionStatus(`Cannot resolve shape ${name}`, "is-error");
-    return false;
+    status = `Tagged shape ${name}`;
   }
   sprite.shapeBind = { type: "shape", name, linked: true };
   setSpriteActionStatus(status, "is-ok");
@@ -3172,7 +3286,7 @@ function collectSpriteUnbracedShapeDefinitions(source, shapesBlock, callback) {
     const line = lines[index];
     const bodyLineStart = line.start - shapesBlock.bodyStart;
     const name = stripSpriteAssetComment(line.text).trim();
-    const nameMatch = /^([A-Za-z_][\w]*)$/.exec(name);
+    const nameMatch = /^([A-Za-z_][A-Za-z0-9_+*()/-]*)$/.exec(name);
     if (!nameMatch || topLevelDepthAt(body, bodyLineStart) !== 0) {
       index += 1;
       continue;
@@ -3228,7 +3342,7 @@ function spriteUnbracedShapeRowIsBoundary(lines, rowIndex, rows, body, shapesBlo
   }
   const width = spriteAsciiRowWidth(rows[0]);
   const rowWidth = spriteAsciiRowWidth(row);
-  if (!/^([A-Za-z_][\w]*)$/.test(row)) {
+  if (!/^([A-Za-z_][A-Za-z0-9_+*()/-]*)$/.test(row)) {
     return false;
   }
   if (rowWidth !== width) {
@@ -3931,12 +4045,6 @@ function findSpriteShapeDefinitionRange(source, name) {
   if (!shapesBlock) {
     return null;
   }
-  const tableSeparator = name.indexOf(":");
-  if (tableSeparator > 0) {
-    const tableName = name.slice(0, tableSeparator);
-    const value = spriteSelectorSingleTagValue(spriteObjectName(), name.slice(tableSeparator + 1));
-    return findSpriteShapeTableRowRange(source, shapesBlock, tableName, value);
-  }
   const body = source.slice(shapesBlock.bodyStart, shapesBlock.bodyEnd);
   const pattern = new RegExp(`(^|\\n)([\\t ]*)${escapeRegExp(name)}\\s*\\{`, "g");
   let match = null;
@@ -3969,6 +4077,12 @@ function findSpriteShapeDefinitionRange(source, name) {
   });
   if (unbracedRange) {
     return unbracedRange;
+  }
+  const tableSeparator = name.indexOf(":");
+  if (tableSeparator > 0) {
+    const tableName = name.slice(0, tableSeparator);
+    const value = spriteSelectorSingleTagValue(spriteObjectName(), name.slice(tableSeparator + 1));
+    return findSpriteShapeTableRowRange(source, shapesBlock, tableName, value);
   }
   return null;
 }

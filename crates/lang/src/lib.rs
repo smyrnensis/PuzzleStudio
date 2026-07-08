@@ -11,12 +11,18 @@ mod puzzle3_sprite;
 mod puzzle3_visual_fixture;
 mod puzzlescript;
 mod semantic;
+mod solver_surface;
 mod source;
 mod source_outline;
 mod source_target;
 mod surface;
+mod surface_completion;
 mod syntax;
 
+use solver_surface::{
+    OrientedPatternArgOrientationSurface, SolverSurfacePatternArg, SolverSurfaceQueryArg,
+    oriented_pattern_arg_surface,
+};
 use std::collections::{BTreeSet, HashMap, HashSet};
 #[cfg(not(target_arch = "wasm32"))]
 use std::fs;
@@ -27,8 +33,8 @@ use std::path::PathBuf;
 use ast::{
     ConditionAst, ConditionDefinitionAst, ConditionPatternAst, ConditionValueAst, Direction,
     DirectionName, EffectAst, FixDefaults, OrientationExpr, OrientedRewriteAst,
-    PatternConditionAst, PatternPredicateAst, RuleDefinitionAst, RuleRole, StatementAst,
-    VariableValueAst,
+    PatternConditionAst, PatternPredicateAst, QueryDefinitionAst, RuleDefinitionAst, RuleRole,
+    SolverStrategyAst, StatementAst, VariableValueAst,
 };
 use catalog::{AxisKind, Catalog, ObjectSchema, ObjectVariant, Rational, ValueMap};
 pub use completion::{
@@ -46,16 +52,18 @@ pub use loaded::{
     GoalClause, GoalCondition, GoalExpr, GoalValue, InputBufferDef, KeyBinding, KeyTrigger, Level,
     LevelMenuDef, LevelMenuLocked, LevelRegionDef, LoadedDocument, LoadedDocumentModel, LoadedGame,
     ModelOperationSound, ModelOperationSoundDef, MusicSoundDef, PuzzleGridRenderDef,
-    PuzzleRenderDef, PuzzleScreenDef, PuzzleViewDef, ResourceSelection, RuleAnimation,
-    RuleAnimationTrigger, RuleEffect, SceneAlignDef, SceneAlignXDef, SceneAlignYDef, SceneBinaryOp,
-    SceneButtonDef, SceneComponent, SceneConditionalDef, SceneContainerDef, SceneDef, SceneEffect,
-    SceneEffectParam, SceneExpr, SceneForDef, SceneLayoutDef, ScenePuzzleDef,
-    ScenePuzzleInitializer, ScenePuzzleRule, SceneResources, SceneRoutineDef, SceneSizeDef,
-    SceneStateDef, SceneStateLifetime, SceneTextContent, SceneTextDef, SceneTitleDef,
-    SceneTransition, SceneTransitionTrigger, SceneValue, SceneVarDef, SfxSoundDef, SoundsDef,
-    ThemeDef, ThemeVariableDef, TweenAnimationDef, ViewportModeDef, ViewportSizeDef,
-    VisualAliasDef, VisualColorDef, VisualSpriteDef, VisualSpriteKind, VisualSpriteOffset,
-    VisualSpritePixelsPerCell, VisualsDef,
+    PuzzleRenderDef, PuzzleScreenDef, PuzzleViewDef, QueryExpr, QueryExpr3, QueryExprOf,
+    ResourceSelection, RuleAnimation, RuleAnimationTrigger, RuleDebugInfo, RuleEffect,
+    SceneAlignDef, SceneAlignXDef, SceneAlignYDef, SceneBinaryOp, SceneButtonDef, SceneComponent,
+    SceneConditionalDef, SceneContainerDef, SceneDef, SceneEffect, SceneEffectParam, SceneExpr,
+    SceneForDef, SceneLayoutDef, SceneLevelKey, ScenePuzzleDef, ScenePuzzleInitializer,
+    ScenePuzzleRule, SceneResources, SceneRoutineDef, SceneSizeDef, SceneStateDef,
+    SceneStateLifetime, SceneTextContent, SceneTextDef, SceneTitleDef, SceneTransition,
+    SceneTransitionTrigger, SceneValue, SceneVarDef, SceneVarKind, SfxSoundDef, SolverStrategy,
+    SolverStrategy3, SolverStrategyDirection, SolverStrategyOf, SolverStrategyTerm,
+    SolverStrategyTerm3, SolverStrategyTermOf, SoundsDef, ThemeDef, ThemeVariableDef,
+    TweenAnimationDef, ViewportModeDef, ViewportSizeDef, VisualAliasDef, VisualColorDef,
+    VisualSpriteDef, VisualSpriteKind, VisualSpriteOffset, VisualSpritePixelsPerCell, VisualsDef,
 };
 
 const BLOCK_CLOSE: &str = "}";
@@ -100,8 +108,8 @@ pub use puzzle3_visual_fixture::{
 pub use puzzlescript::translate_puzzlescript_to_canonical;
 pub use semantic::{SemanticKind, SemanticToken, semantic_tokens};
 use source::{
-    SourceScope, SourceToken, logical_lines, logical_lines_with_locations, scan_source_context,
-    source_line_tokens, split_header_tokens, strip_line_comment,
+    SourceScope, SourceToken, logical_lines, logical_lines_with_locations, source_line_tokens,
+    split_header_tokens, strip_line_comment,
 };
 pub use source_outline::{SourceOutlineItem, source_outline, source_outline_json};
 pub use source_target::{
@@ -110,8 +118,10 @@ pub use source_target::{
     resolve_source_target, source_target_json,
 };
 use surface::{
-    SourceSpan, SurfaceDocument, SurfaceNodeKind, SurfaceRewriteEffect, SurfaceSceneEffect,
-    SurfaceSemanticKind, SurfaceSemanticToken, SurfaceSink,
+    SourceSpan, SurfaceAsciiRange, SurfaceDocument, SurfaceHighlightRanges, SurfaceNodeKind,
+    SurfaceOptionBlock, SurfaceRewriteEffect, SurfaceSceneEffect, SurfaceSemanticKind,
+    SurfaceSemanticToken, SurfaceSink, SurfaceStructuralBlock, SurfaceStructuralBlockRole,
+    SurfaceVisualAsciiColorRange, SurfaceVisualNamedColorRange, SurfaceVisualSpriteRefs,
 };
 use syntax::puzzle_lifecycle_event;
 

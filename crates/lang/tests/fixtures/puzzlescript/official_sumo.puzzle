@@ -1,6 +1,6 @@
-title "Multiple Patterns"
-author increpare
-homepage "www.puzzlescript.net"
+title = "Multiple Patterns"
+author = "increpare"
+homepage = "www.puzzlescript.net"
 
 theme puzzlescript
 
@@ -10,8 +10,8 @@ sfx sumo_move seed=48878907 type=puzzlescript
 
 puzzle main {
 layers {
-layer_1 = Background
-layer_2 = Player Wall Sumo
+Background
+Player Wall Sumo
 }
 
 sprites {
@@ -82,10 +82,10 @@ _ = empty
 }
 }
 
-scene title {
+scene = title {
 layout {
-title "Multiple Patterns"
-subtitle "by increpare"
+title = "Multiple Patterns"
+subtitle = "by increpare"
 if has_progress_save {
 choice "Continue" -> continue_game
 }
@@ -100,18 +100,18 @@ goto playing(0)
 }
 }
 
-scene playing {
+scene = playing {
 layout {
 row {
-title "Multiple Patterns"
+title = "Multiple Patterns"
 }
-main
+puzzle board = main
 }
 keys {
 Escape q -> back
 }
 rules {
-step main
+step board
 }
 routine back {
 goto title

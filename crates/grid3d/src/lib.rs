@@ -18,9 +18,13 @@ pub use state::{CellView3, SlotMark3, State3, StateError3};
 pub use transition::{
     ConditionDef3, ConditionValueKind3, Guard3, MarkPattern3, MatchCell3, ObjectSetMarkPattern3,
     ObjectSetMatcher3, Pattern3, PatternComponent3, Rule3, RuleApplication3, RuleEffect3,
-    TransitionError3, WriteOp3, count_pattern_matches, eval_condition_kind, has_pattern_match,
-    transition_once, transition_once_all, transition_once_per_level, transition_once_with_input,
-    transition_program, transition_program_with_local_frame, transition_program_without_input,
+    TransitionCommand3, TransitionError3, TransitionOutcome3, WriteOp3, count_pattern_matches,
+    eval_condition_kind, has_pattern_match, transition_once, transition_once_all,
+    transition_once_per_level, transition_once_with_input, transition_program,
+    transition_program_outcome, transition_program_outcome_with_local_frame,
+    transition_program_with_local_frame, transition_program_without_input,
+    transition_program_without_input_outcome,
+    transition_program_without_input_outcome_with_local_frame,
     transition_program_without_input_with_local_frame, transition_repeated,
 };
 pub use win::WinCondition3;
@@ -143,6 +147,39 @@ mod tests {
     fn once_all_move_rule(direction: Direction3) -> Rule3 {
         let rule = move_rule(direction);
         Rule3::once_all(rule.pattern, rule.writes)
+    }
+
+    #[test]
+    fn transition_program_outcome_reports_fired_rules_and_patches() {
+        let game = game();
+        let mut state = empty_state(2, 1, 1);
+        state
+            .place_object(&game, Coord3::new(0, 0, 0), PLAYER)
+            .unwrap();
+        let rule = move_rule(Direction3::RIGHT);
+
+        let outcome = transition_program_outcome(&game, &state, &[rule], INPUT_RIGHT).unwrap();
+
+        assert_eq!(outcome.input, Some(INPUT_RIGHT));
+        assert_eq!(outcome.fired_rules, vec![RuleId3(0)]);
+        assert_eq!(outcome.commands, Vec::<TransitionCommand3>::new());
+        assert_eq!(outcome.patches.len(), 1);
+        assert_eq!(
+            outcome.patches[0].ops,
+            vec![PatchOp3::Move {
+                from: Coord3::new(0, 0, 0),
+                to: Coord3::new(1, 0, 0),
+                object: PLAYER,
+            }]
+        );
+        assert_eq!(
+            outcome
+                .next_state
+                .cell_view(Coord3::new(1, 0, 0))
+                .unwrap()
+                .objects,
+            vec![PLAYER]
+        );
     }
 
     #[test]

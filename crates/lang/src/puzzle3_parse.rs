@@ -1,10 +1,10 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use puzzle_grid3d::{
-    Coord3, Direction3, DirectionSet3, FrameExpr3, FrameSet3, FrameSlot3, Game3, Guard3, InputDef3,
-    InputId, LayerId, Level3, LevelBundle3, LevelCell3, LevelEntry3, MarkId3, MatchCell3,
-    ObjectDef3, ObjectId, ObjectSetMarkPattern3, ObjectSetMatcher3, Offset3, Pattern3, Rule3,
-    RuleApplication3, Size3, WinCondition3, WriteOp3,
+    ConditionValueKind3, Coord3, Direction3, DirectionSet3, FrameExpr3, FrameSet3, FrameSlot3,
+    Game3, Guard3, InputDef3, InputId, LayerId, Level3, LevelBundle3, LevelCell3, LevelEntry3,
+    MarkId3, MatchCell3, ObjectDef3, ObjectId, ObjectSetMarkPattern3, ObjectSetMatcher3, Offset3,
+    Pattern3, Rule3, RuleApplication3, Size3, WinCondition3, WriteOp3,
 };
 use puzzle_grid3d_authoring::{
     ConcreteObject3, DenseCell3, DensePattern3, DenseRow3, DenseRuleTemplate3, DenseSlice3,
@@ -17,8 +17,9 @@ use puzzle_kernel::{LocalFrame, LocalFrameExtent};
 use puzzle_runtime_contract::{LifecycleCommand, Puzzle3CameraEffect, RuntimeLifecycle};
 
 use crate::{
-    ModelSettings3, ParsedPuzzle3, Sprite3, SpriteColor3, SpriteSet3, SpriteVoxels3,
-    ViewportFollow3, ViewportFraming3, ViewportHeight3, ViewportMode3, ViewportSettings3,
+    ModelSettings3, ParsedPuzzle3, SolverStrategy3, SolverSurfacePatternArg, SolverSurfaceQueryArg,
+    Sprite3, SpriteColor3, SpriteSet3, SpriteVoxels3, ViewportFollow3, ViewportFraming3,
+    ViewportHeight3, ViewportMode3, ViewportSettings3,
 };
 
 const DEFAULT_LINE_GAP_LIMIT3: u16 = 64;
@@ -42,6 +43,12 @@ pub fn parse_puzzle3d(source: &str) -> Result<ParsedPuzzle3, ParseError3> {
     Parser3::new(source).parse()
 }
 
+pub(crate) fn parse_puzzle3d_logical_lines(
+    lines: &[crate::source::LogicalLine],
+) -> Result<ParsedPuzzle3, ParseError3> {
+    Parser3::from_lines(lines.iter().map(|line| line.text.clone()).collect()).parse()
+}
+
 struct Parser3 {
     lines: Vec<String>,
     value_sets: Vec<(String, Vec<String>)>,
@@ -58,14 +65,21 @@ struct Parser3 {
     on_level_clear_lines: Vec<String>,
     on_last_level_clear_lines: Option<Vec<String>>,
     win_condition_lines: Vec<String>,
+    query_definitions: Vec<crate::solver_surface::SolverSurfaceQueryDefinition>,
+    query_names: HashSet<String>,
+    solver_strategy: Option<crate::solver_surface::SolverSurfaceStrategy>,
     settings: ModelSettings3,
     sprite_set: Option<SpriteSet3>,
 }
 
 impl Parser3 {
     fn new(source: &str) -> Self {
+        Self::from_lines(preprocess_source_lines3(source))
+    }
+
+    fn from_lines(lines: Vec<String>) -> Self {
         Self {
-            lines: preprocess_source_lines3(source),
+            lines,
             value_sets: Vec::new(),
             input_specs: Vec::new(),
             layers: Vec::new(),
@@ -80,6 +94,9 @@ impl Parser3 {
             on_level_clear_lines: Vec::new(),
             on_last_level_clear_lines: None,
             win_condition_lines: Vec::new(),
+            query_definitions: Vec::new(),
+            query_names: HashSet::new(),
+            solver_strategy: None,
             settings: ModelSettings3::default(),
             sprite_set: None,
         }
@@ -133,6 +150,11 @@ impl Parser3 {
                 index = self.parse_rule_program_block(block, index + 1)?;
             } else if line == "win_conditions {" {
                 index = self.parse_win_conditions_block(index + 1)?;
+            } else if line.starts_with("query ") {
+                self.parse_query_line(&line)?;
+                index += 1;
+            } else if line == "solver {" {
+                index = self.parse_solver_block(index)?;
             } else if line == "render {" {
                 index = self.parse_render_block(index + 1)?;
             } else if let Some(rest) = line.strip_prefix("group ") {
@@ -226,6 +248,13 @@ impl Parser3 {
                 &self.level_specs,
             )?)
         };
+        validate_query_definitions3(&self.query_definitions, &catalog, line_gap_limit)?;
+        let solver_strategy = lower_solver_strategy3(
+            self.solver_strategy.clone(),
+            &self.query_definitions,
+            &catalog,
+            line_gap_limit,
+        )?;
 
         Ok(ParsedPuzzle3 {
             game,
@@ -242,6 +271,7 @@ impl Parser3 {
                 .map(|spec| spec.pack.clone())
                 .collect(),
             win_condition,
+            solver_strategy,
             lifecycle,
             on_level_start_camera_effects,
             sprite_set: self.sprite_set,
@@ -278,6 +308,11 @@ impl Parser3 {
                 index = self.parse_rule_program_block(block, index + 1)?;
             } else if line == "win_conditions {" {
                 index = self.parse_win_conditions_block(index + 1)?;
+            } else if line.starts_with("query ") {
+                self.parse_query_line(&line)?;
+                index += 1;
+            } else if line == "solver {" {
+                index = self.parse_solver_block(index)?;
             } else if line == "render {" {
                 index = self.parse_render_block(index + 1)?;
             } else if is_sprites3_header(&line) {
@@ -815,6 +850,29 @@ impl Parser3 {
         }
         Err(message("win_conditions block missing }"))
     }
+
+    fn parse_query_line(&mut self, line: &str) -> Result<(), ParseError3> {
+        let definition = crate::solver_surface::parse_query_definition(line)
+            .map_err(diagnostic_report_error3)?;
+        if !self.query_names.insert(definition.name.clone()) {
+            return Err(message_at_line("duplicate query", line));
+        }
+        self.query_definitions.push(definition);
+        Ok(())
+    }
+
+    fn parse_solver_block(&mut self, index: usize) -> Result<usize, ParseError3> {
+        if self.solver_strategy.is_some() {
+            return Err(message_at_line(
+                "duplicate solver block",
+                &self.lines[index],
+            ));
+        }
+        let (next_index, strategy) = crate::solver_surface::parse_solver_block(&self.lines, index)
+            .map_err(diagnostic_report_error3)?;
+        self.solver_strategy = Some(strategy);
+        Ok(next_index)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -946,13 +1004,8 @@ impl CatalogBuild3 {
             .iter()
             .map(|def| (def.id, def.layer_id))
             .collect();
-        SelectorCatalog3::checked_new_with_object_layers(
-            self.concrete,
-            self.families,
-            groups,
-            object_layers,
-        )
-        .map_err(|error| message(format!("invalid selector catalog: {error:?}")))
+        SelectorCatalog3::checked_new(self.concrete, self.families, groups, object_layers)
+            .map_err(|error| message(format!("invalid selector catalog: {error:?}")))
     }
 
     fn alloc_object(&mut self) -> ObjectId {
@@ -1287,7 +1340,6 @@ fn parse_setting_assignment<'a>(
 ) -> Result<(&'a str, &'a str), ParseError3> {
     let tokens = line.split_whitespace().collect::<Vec<_>>();
     match tokens.as_slice() {
-        [name, value] => Ok((*name, *value)),
         [name, "=", value] => Ok((*name, *value)),
         _ => Err(message(format!("{context} must be: <name> = <value>"))),
     }
@@ -2208,6 +2260,128 @@ fn input_for_direction(direction: Direction3) -> InputId {
     }
 }
 
+struct QueryLoweringContext3d<'a> {
+    catalog: &'a SelectorCatalog3,
+    line_gap_limit: u16,
+}
+
+fn validate_query_definitions3(
+    definitions: &[crate::solver_surface::SolverSurfaceQueryDefinition],
+    catalog: &SelectorCatalog3,
+    line_gap_limit: u16,
+) -> Result<(), ParseError3> {
+    let context = QueryLoweringContext3d {
+        catalog,
+        line_gap_limit,
+    };
+    crate::solver_surface::lower_query_definitions_with::<QueryLoweringAdapter3d, _>(
+        definitions,
+        &context,
+    )
+    .map(|_| ())
+}
+
+fn lower_solver_strategy3(
+    strategy: Option<crate::solver_surface::SolverSurfaceStrategy>,
+    query_definitions: &[crate::solver_surface::SolverSurfaceQueryDefinition],
+    catalog: &SelectorCatalog3,
+    line_gap_limit: u16,
+) -> Result<SolverStrategy3, ParseError3> {
+    let context = QueryLoweringContext3d {
+        catalog,
+        line_gap_limit,
+    };
+    crate::solver_surface::lower_solver_strategy_with::<QueryLoweringAdapter3d, _>(
+        strategy,
+        query_definitions,
+        &context,
+    )
+}
+
+struct QueryLoweringAdapter3d;
+
+impl<'a> crate::solver_surface::SolverQueryLoweringAdapter<QueryLoweringContext3d<'a>>
+    for QueryLoweringAdapter3d
+{
+    type Object = ObjectId;
+    type Value = ConditionValueKind3;
+    type Variable = puzzle_grid3d::VariableId;
+    type Error = ParseError3;
+
+    fn lower_distance_selector(
+        selector: &SolverSurfaceQueryArg,
+        source_line: &str,
+        context: &QueryLoweringContext3d<'a>,
+    ) -> Result<Vec<Self::Object>, Self::Error> {
+        let SolverSurfaceQueryArg::Selector(selector) = selector else {
+            return Err(message_at_source_line(
+                "distance query must be: distance(<selector>, <selector>)",
+                source_line,
+            ));
+        };
+        resolve_query_selector_objects(context.catalog, selector, source_line)
+    }
+
+    fn lower_selector_query_value(
+        kind: crate::solver_surface::SolverQueryCallKind,
+        selector: &str,
+        source_line: &str,
+        context: &QueryLoweringContext3d<'a>,
+    ) -> Result<Self::Value, Self::Error> {
+        let objects = resolve_query_selector_objects(context.catalog, selector, source_line)?;
+        Ok(match kind {
+            crate::solver_surface::SolverQueryCallKind::Count => {
+                ConditionValueKind3::CountObjects(objects)
+            }
+            crate::solver_surface::SolverQueryCallKind::Exists => {
+                ConditionValueKind3::ExistsObjects(objects)
+            }
+            crate::solver_surface::SolverQueryCallKind::None => {
+                ConditionValueKind3::NoneObjects(objects)
+            }
+        })
+    }
+
+    fn lower_pattern_query_value(
+        kind: crate::solver_surface::SolverQueryCallKind,
+        pattern: &SolverSurfacePatternArg,
+        _source_line: &str,
+        context: &QueryLoweringContext3d<'a>,
+    ) -> Result<Self::Value, Self::Error> {
+        let patterns =
+            lower_surface_pattern_arg3d(pattern, context.catalog, context.line_gap_limit)?;
+        Ok(match kind {
+            crate::solver_surface::SolverQueryCallKind::Count => {
+                ConditionValueKind3::CountMatches(patterns)
+            }
+            crate::solver_surface::SolverQueryCallKind::Exists => {
+                ConditionValueKind3::ExistsMatches(patterns)
+            }
+            crate::solver_surface::SolverQueryCallKind::None => {
+                ConditionValueKind3::NoneMatches(patterns)
+            }
+        })
+    }
+
+    fn query_call_error(message: &'static str, source_line: &str) -> Self::Error {
+        message_at_source_line(message, source_line)
+    }
+
+    fn cycle_error(cycle: Vec<String>, source_line: &str) -> Self::Error {
+        message_at_source_line(
+            format!("query definitions contain a cycle: {}", cycle.join(" -> ")),
+            source_line,
+        )
+    }
+
+    fn unknown_query_error(name: &str, source_line: &str) -> Self::Error {
+        message_at_source_line(
+            format!("unknown query in query expression: {name}"),
+            source_line,
+        )
+    }
+}
+
 fn lower_win_conditions(
     catalog: &SelectorCatalog3,
     lines: &[String],
@@ -2363,6 +2537,27 @@ fn resolve_selector_objects(
         .map_err(|error| message(format!("invalid win selector: {error:?}")))
 }
 
+fn resolve_query_selector_objects(
+    catalog: &SelectorCatalog3,
+    token: &str,
+    source_line: &str,
+) -> Result<Vec<ObjectId>, ParseError3> {
+    let selector = parse_selector(token, &catalog.families, &catalog.groups)
+        .map_err(|error| message_at_source_line(parse_error3_message(error), source_line))?;
+    catalog
+        .resolve(&selector)
+        .map(|resolved| resolved.alternatives)
+        .map_err(|error| {
+            message_at_source_line(format!("invalid query selector: {error:?}"), source_line)
+        })
+}
+
+fn parse_error3_message(error: ParseError3) -> String {
+    match error {
+        ParseError3::Message(message) | ParseError3::MessageAtSourceLine { message, .. } => message,
+    }
+}
+
 fn resolve_single_selector_object(
     catalog: &SelectorCatalog3,
     token: &str,
@@ -2381,12 +2576,53 @@ fn parse_oriented_patterns(
     catalog: &SelectorCatalog3,
     line_gap_limit: u16,
 ) -> Result<Vec<Pattern3>, ParseError3> {
-    let (prefix, rest) = value
-        .split_once(' ')
-        .ok_or_else(|| message("pattern condition must be: <orientation> [ ... ]"))?;
-    let inner = parse_bracketed(rest.trim())?;
-    if prefix.contains(':') || matches!(prefix, "frames" | "canonical" | "mirrored") {
-        let orientation = parse_frame_orientation(prefix)?;
+    let Some(surface) = crate::solver_surface::oriented_pattern_arg_surface(value, value)
+        .map_err(diagnostic_report_error3)?
+    else {
+        return Err(message("pattern condition must be: <orientation> [ ... ]"));
+    };
+    let pattern = SolverSurfacePatternArg {
+        source: value.to_string(),
+        orientation: match surface.orientation {
+            crate::solver_surface::OrientedPatternArgOrientationSurface::Neutral => {
+                crate::solver_surface::SolverSurfacePatternOrientation::Neutral
+            }
+            crate::solver_surface::OrientedPatternArgOrientationSurface::Input { axis, .. } => {
+                crate::solver_surface::SolverSurfacePatternOrientation::Input {
+                    axis: axis.map(|axis| value[axis].to_string()),
+                }
+            }
+            crate::solver_surface::OrientedPatternArgOrientationSurface::Orientation {
+                orientation,
+            } => crate::solver_surface::SolverSurfacePatternOrientation::Orientation(
+                value[orientation].to_string(),
+            ),
+        },
+        pattern: value[surface.pattern].to_string(),
+    };
+    lower_surface_pattern_arg3d(&pattern, catalog, line_gap_limit)
+}
+
+fn lower_surface_pattern_arg3d(
+    pattern: &SolverSurfacePatternArg,
+    catalog: &SelectorCatalog3,
+    line_gap_limit: u16,
+) -> Result<Vec<Pattern3>, ParseError3> {
+    let inner = parse_bracketed(pattern.pattern.trim())?;
+    let Some(orientation) = surface_pattern_orientation3d(pattern)? else {
+        return lower_line_patterns(
+            catalog,
+            LineOrientation3::DirectionSet(DirectionSet3::Directions),
+            inner,
+            line_gap_limit,
+        )
+        .map(|rules| rules.into_iter().map(|rule| rule.pattern).collect())
+        .map_err(|error| message(format!("failed to lower pattern: {error}")));
+    };
+    if orientation.contains(':')
+        || matches!(orientation.as_str(), "frames" | "canonical" | "mirrored")
+    {
+        let orientation = parse_frame_orientation(&orientation)?;
         let rule = DenseRuleTemplate3::once(
             orientation,
             parse_dense_pattern(inner, catalog)?,
@@ -2394,12 +2630,26 @@ fn parse_oriented_patterns(
         );
         return lower_dense_rule_template(catalog, &rule)
             .map(|rules| rules.into_iter().map(|rule| rule.pattern).collect())
-            .map_err(|error| message(format!("failed to lower win pattern: {error:?}")));
+            .map_err(|error| message(format!("failed to lower pattern: {error:?}")));
     }
-    let orientation = parse_line_orientation(prefix)?;
+    let orientation = parse_line_orientation(&orientation)?;
     lower_line_patterns(catalog, orientation, inner, line_gap_limit)
         .map(|rules| rules.into_iter().map(|rule| rule.pattern).collect())
-        .map_err(|error| message(format!("failed to lower win pattern: {error}")))
+        .map_err(|error| message(format!("failed to lower pattern: {error}")))
+}
+
+fn surface_pattern_orientation3d(
+    pattern: &SolverSurfacePatternArg,
+) -> Result<Option<String>, ParseError3> {
+    match &pattern.orientation {
+        crate::solver_surface::SolverSurfacePatternOrientation::Neutral => Ok(None),
+        crate::solver_surface::SolverSurfacePatternOrientation::Input { axis } => Ok(Some(
+            axis.clone().unwrap_or_else(|| "directions".to_string()),
+        )),
+        crate::solver_surface::SolverSurfacePatternOrientation::Orientation(orientation) => {
+            Ok(Some(orientation.clone()))
+        }
+    }
 }
 
 fn parse_rewrite(rest: &str) -> Result<(&str, &str, Vec<Puzzle3CameraEffect>), ParseError3> {
@@ -2701,6 +2951,7 @@ fn collect_selector_mark_set_bindings3(
         }
         ObjectSelector3::Object(_)
         | ObjectSelector3::Group(_)
+        | ObjectSelector3::Any
         | ObjectSelector3::Variant { .. } => {}
     }
 }
@@ -2793,6 +3044,7 @@ fn apply_selector_mark_set_assignment3(
         }
         ObjectSelector3::Object(_)
         | ObjectSelector3::Group(_)
+        | ObjectSelector3::Any
         | ObjectSelector3::Variant { .. } => {}
     }
 }
@@ -3232,7 +3484,9 @@ fn parse_selector(
     let (selector, mark) = split_selector_mark3(token)?;
     let (selector, occurrence_label) = split_selector_occurrence_label3(selector)?;
     let parts = selector.split(':').collect::<Vec<_>>();
-    let parsed = if parts.len() > 1 {
+    let parsed = if selector == "*" {
+        ObjectSelector3::any()
+    } else if parts.len() > 1 {
         ObjectSelector3::variant(
             parts[0],
             parts[1..]
@@ -3418,6 +3672,25 @@ fn strip_comment(line: &str) -> &str {
 
 fn message(message: impl Into<String>) -> ParseError3 {
     ParseError3::Message(message.into())
+}
+
+fn diagnostic_report_error3(report: crate::DiagnosticReport) -> ParseError3 {
+    let Some(diagnostic) = report.diagnostics().first() else {
+        return message("3D parser received an empty diagnostic report");
+    };
+    if let Some(source_line) = diagnostic
+        .primary_span
+        .as_ref()
+        .and_then(|span| span.source_line.as_deref())
+    {
+        message_at_source_line(diagnostic.message.clone(), source_line)
+    } else {
+        message(diagnostic.message.clone())
+    }
+}
+
+fn message_at_line(message: impl Into<String>, source_line: &str) -> ParseError3 {
+    message_at_source_line(message, source_line)
 }
 
 fn message_at_source_line(message: impl Into<String>, source_line: &str) -> ParseError3 {

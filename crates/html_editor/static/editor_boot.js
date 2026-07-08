@@ -139,6 +139,42 @@
       }
       return invoke("remove_workspace", { request: payload });
     },
+    async listenDesktopCloseRequested(handler) {
+      const invoke = tauriInvoke();
+      if (!invoke) {
+        return () => {};
+      }
+      const getCurrentWindow = window.__TAURI__?.window?.getCurrentWindow
+        || window.__TAURI__?.window?.Window?.getCurrent;
+      if (!getCurrentWindow) {
+        throw new Error("Desktop close events are unavailable.");
+      }
+      const currentWindow = getCurrentWindow();
+      if (!currentWindow?.onCloseRequested) {
+        throw new Error("Desktop close events are unavailable.");
+      }
+      return currentWindow.onCloseRequested(handler);
+    },
+    async listenAppExitRequested(handler) {
+      const invoke = tauriInvoke();
+      if (!invoke) {
+        return () => {};
+      }
+      const listen = tauriListen("puzzlestudio-app-exit-requested", (event) => {
+        handler(event?.payload || {});
+      });
+      if (!listen) {
+        throw new Error("Desktop app exit events are unavailable.");
+      }
+      return listen;
+    },
+    async confirmAppExit() {
+      const invoke = tauriInvoke();
+      if (!invoke) {
+        throw new Error("Confirm app exit is only available in the desktop app.");
+      }
+      return invoke("confirm_app_exit");
+    },
     async listenWorkspaceChanged(handler) {
       const listen = tauriListen("puzzlestudio-workspace-changed", (event) => {
         handler(event?.payload || {});

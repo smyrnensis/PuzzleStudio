@@ -1,20 +1,30 @@
 use puzzle_core::{
-    CompiledGame, InputId, ObjectId, RuleId, State as PuzzleState, TransitionError,
+    CompiledGame, InputId, MarkId, MarkValueMatch as CoreMarkValueMatch, ObjectId, Patch, PatchOp,
+    RuleId, State as PuzzleState, TransitionCommand, TransitionError, VariableId, VariableUpdateOp,
     transition_program,
 };
-use puzzle_grid3d::{Coord3, Game3, LevelBundle3, ObjectId as ObjectId3, RuleId3, Size3, State3};
+use puzzle_grid3d::{
+    Coord3, Game3, LevelBundle3, MarkValueMatch, ObjectId as ObjectId3, Patch3, PatchOp3, RuleId3,
+    Size3, State3, TransitionCommand3, TransitionOutcome3,
+};
 use puzzle_grid3d_authoring::SelectorCatalog3;
 use puzzle_lang::{
     ArrowKey, KeyTrigger, Level, LoadedDocumentModel, LoadedGame, ModelSettings3, ParsedPuzzle3,
     ResourceSelection, SceneAlignXDef, SceneAlignYDef, SceneBinaryOp, SceneComponent, SceneDef,
     SceneEffect, SceneEffectParam, SceneExpr, SceneLayoutDef, ScenePuzzleInitializer,
-    SceneStateLifetime, SceneTextContent, SceneTransitionTrigger, SceneValue, ThemeDef,
-    ViewportModeDef, ViewportSizeDef,
+    SceneStateLifetime, SceneTextContent, SceneTransitionTrigger, SceneValue, SolverStrategy3,
+    ThemeDef, ViewportModeDef, ViewportSizeDef,
 };
 use puzzle_play::{
-    AnimationEvent, GameSession, GameSession3, LevelProgressSaveData, MessageEvent,
-    PersistentVarSaveData, ProgressSaveData, SoundEvent, WaitEvent,
+    AnimationEvent, DebugTransition, GameSession, GameSession3, LevelProgressSaveData,
+    MessageEvent, PersistentVarSaveData, ProgressSaveData, SoundEvent, WaitEvent,
     loaded_document_scene_host_loaded_game, runtime_sounds_def,
+};
+use puzzle_runtime_contract::{
+    RuntimeAnimationEvent, RuntimeChangedCell, RuntimeCoord, RuntimeMarkValue,
+    RuntimeMarkValueMatch, RuntimeModelKind, RuntimePatchOp, RuntimeStateSnapshot,
+    RuntimeStateSnapshot3d, RuntimeTransitionCommand, RuntimeTransitionCurrentOutcome,
+    RuntimeTransitionProgramOutcome,
 };
 use serde_json::{Value, json};
 
@@ -22,6 +32,43 @@ pub struct StandaloneSessionBridge {
     loaded: LoadedGame,
     session: GameSession,
     has_progress_save: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum StandaloneSessionRequest {
+    State,
+    Undo,
+    Redo,
+    Restart,
+    Next,
+    Input(String),
+    DebugInput(String),
+    Command(String),
+}
+
+pub fn standalone_session_request(
+    method: &str,
+    url: &str,
+) -> Result<StandaloneSessionRequest, String> {
+    match (method, url) {
+        ("GET", "/api/state") => Ok(StandaloneSessionRequest::State),
+        ("POST", "/api/command/undo") => Ok(StandaloneSessionRequest::Undo),
+        ("POST", "/api/command/redo") => Ok(StandaloneSessionRequest::Redo),
+        ("POST", "/api/command/restart") => Ok(StandaloneSessionRequest::Restart),
+        ("POST", "/api/command/next") => Ok(StandaloneSessionRequest::Next),
+        ("POST", path) if path.starts_with("/api/debug/input/") => {
+            Ok(StandaloneSessionRequest::DebugInput(percent_decode(
+                &path["/api/debug/input/".len()..],
+            )))
+        }
+        ("POST", path) if path.starts_with("/api/input/") => Ok(StandaloneSessionRequest::Input(
+            percent_decode(&path["/api/input/".len()..]),
+        )),
+        ("POST", path) if path.starts_with("/api/command/") => Ok(
+            StandaloneSessionRequest::Command(percent_decode(&path["/api/command/".len()..])),
+        ),
+        _ => Err(format!("Unsupported exported HTML request: {method} {url}")),
+    }
 }
 
 impl StandaloneSessionBridge {
@@ -75,33 +122,35 @@ impl StandaloneSessionBridge {
     }
 
     pub fn request_json(&mut self, method: &str, url: &str) -> Result<String, String> {
-        match (method, url) {
-            ("GET", "/api/state") => Ok(self.snapshot_json()),
-            ("POST", "/api/command/undo") => {
+        match standalone_session_request(method, url)? {
+            StandaloneSessionRequest::State => Ok(self.snapshot_json()),
+            StandaloneSessionRequest::Undo => {
                 self.session.undo(&self.loaded);
                 Ok(self.snapshot_json())
             }
-            ("POST", "/api/command/redo") => {
+            StandaloneSessionRequest::Redo => {
                 self.session.redo(&self.loaded);
                 Ok(self.snapshot_json())
             }
-            ("POST", "/api/command/restart") => {
+            StandaloneSessionRequest::Restart => {
                 self.session.restart_level(&self.loaded);
                 Ok(self.snapshot_json())
             }
-            ("POST", "/api/command/next") => {
+            StandaloneSessionRequest::Next => {
                 self.session.advance_level(&self.loaded);
                 Ok(self.snapshot_json())
             }
-            ("POST", path) if path.starts_with("/api/input/") => {
-                self.apply_input_name(&percent_decode(&path["/api/input/".len()..]))?;
+            StandaloneSessionRequest::Input(input_name) => {
+                self.apply_input_name(&input_name)?;
                 Ok(self.snapshot_json())
             }
-            ("POST", path) if path.starts_with("/api/command/") => {
-                self.apply_command_name(&percent_decode(&path["/api/command/".len()..]))?;
+            StandaloneSessionRequest::DebugInput(input_name) => {
+                self.apply_debug_input_name_json(&input_name)
+            }
+            StandaloneSessionRequest::Command(command_name) => {
+                self.apply_command_name(&command_name)?;
                 Ok(self.snapshot_json())
             }
-            _ => Err(format!("Unsupported exported HTML request: {method} {url}")),
         }
     }
 
@@ -111,6 +160,25 @@ impl StandaloneSessionBridge {
         self.session
             .apply_input(&self.loaded, input)
             .map_err(|error| format!("{error:?}"))
+    }
+
+    pub fn apply_debug_input_name_json(&mut self, input_name: &str) -> Result<String, String> {
+        self.apply_input_name(input_name)?;
+        let debug = self.session.last_debug_transition().cloned();
+        let sound_events = self.session.take_sound_events();
+        let message_events = self.session.take_message_events();
+        let wait_events = self.session.take_wait_events();
+        let animation_events = self.session.take_animation_events();
+        Ok(json!({
+            "snapshot": self.snapshot_value(
+                &sound_events,
+                &message_events,
+                &wait_events,
+                &animation_events,
+            ),
+            "debug": debug_transition_value(&self.loaded, debug.as_ref()),
+        })
+        .to_string())
     }
 
     pub fn apply_command_name(&mut self, command_name: &str) -> Result<(), String> {
@@ -341,6 +409,47 @@ impl Puzzle3RuntimeBridge {
         Ok(())
     }
 
+    pub fn transition_program_outcome_json(
+        &self,
+        program_key: &str,
+        state_json: &str,
+        input: u16,
+    ) -> Result<String, String> {
+        let state = state3_from_json(&self.parsed.game, state_json)?;
+        let outcome =
+            transition_selected_program3(&self.parsed, program_key, &state, InputId(input))?;
+        let next_state = &outcome.next_state;
+        let completed = self
+            .parsed
+            .win_condition
+            .as_ref()
+            .is_some_and(|condition| condition.is_met(&self.parsed.game, next_state));
+        RuntimeTransitionProgramOutcome {
+            state: state3_contract(next_state),
+            cancelled: false,
+            completed,
+            commands: commands3_contract(&outcome.commands),
+            fired_rules: outcome.fired_rules.iter().map(|rule| rule.0).collect(),
+            patches: patches3_contract(&outcome.patches),
+            animation_events: animation_events3_contract(&self.animation, &state, next_state),
+        }
+        .to_json_string()
+        .map_err(|error| error.to_string())
+    }
+
+    pub fn is_complete_json(&self, state_json: &str) -> Result<bool, String> {
+        let state = state3_from_json(&self.parsed.game, state_json)?;
+        Ok(self
+            .parsed
+            .win_condition
+            .as_ref()
+            .is_some_and(|condition| condition.is_met(&self.parsed.game, &state)))
+    }
+
+    pub fn current_state_json(&self) -> Result<String, String> {
+        Ok(state3_value(self.current_state()?).to_string())
+    }
+
     pub fn current_cells_json(&self) -> Result<String, String> {
         let state = self.current_state()?;
         Ok(state3_cells_value(state, None).to_string())
@@ -372,44 +481,43 @@ impl Puzzle3RuntimeBridge {
         input: u16,
     ) -> Result<String, String> {
         let before = self.current_state()?.clone();
-        match program_key {
-            "main" => {
-                let bundle = self.level_bundle()?.clone();
-                let rules = self.parsed.rules.clone();
-                let local_frame = self.parsed.local_frame.clone();
-                self.session_mut()?
-                    .apply_input_with_local_frame(
-                        &bundle,
-                        &rules,
-                        InputId(input),
-                        local_frame.as_ref(),
-                    )
-                    .map_err(|error| format!("{error:?}"))?;
-            }
-            "level_start" => {
-                let bundle = self.level_bundle()?.clone();
-                let lifecycle = self.parsed.lifecycle.clone();
-                self.session_mut()?
-                    .run_level_start_lifecycle_on_current_state(&bundle, &lifecycle)
-                    .map_err(|error| format!("{error:?}"))?;
-            }
-            other => return Err(format!("unknown 3D transition program selector: {other}")),
-        }
-        let next_state = self.current_state()?.clone();
+        let outcome =
+            transition_selected_program3(&self.parsed, program_key, &before, InputId(input))?;
+        let next_state = outcome.next_state.clone();
+        self.session_mut()?
+            .replace_current_state(next_state.clone());
+        let previous_state_handle = if program_key == "main" && before != next_state {
+            Some(self.saved_states.save(before.clone()))
+        } else {
+            None
+        };
         let completed = self
             .parsed
             .win_condition
             .as_ref()
             .is_some_and(|condition| condition.is_met(&self.parsed.game, &next_state));
-        Ok(json!({
-            "changed": before != next_state,
-            "completed": completed,
-            "stateHash": next_state.hash(),
-            "changedCells": state3_cells_value(&next_state, Some(&before)),
-            "animationEvents": animation_events3_value(&self.animation, &before, &next_state),
-            "commands": [],
-        })
-        .to_string())
+        RuntimeTransitionCurrentOutcome {
+            cancelled: false,
+            changed: before != next_state,
+            completed,
+            state: None,
+            commands: commands3_contract(&outcome.commands),
+            fired_rules: outcome.fired_rules.iter().map(|rule| rule.0).collect(),
+            patches: patches3_contract(&outcome.patches),
+            animation_events: animation_events3_contract(&self.animation, &before, &next_state),
+            state_hash: next_state.hash(),
+            state_hash_key: next_state.hash().to_string(),
+            previous_state_handle,
+            changed_cells: changed_cells3_contract(&next_state, Some(&before)),
+            variables: next_state.visible_variables().to_vec(),
+            level_fired_rules: next_state
+                .level_fired_rules()
+                .iter()
+                .map(|rule| rule.0)
+                .collect(),
+        }
+        .to_json_string()
+        .map_err(|error| error.to_string())
     }
 
     fn level_bundle(&self) -> Result<&LevelBundle3, String> {
@@ -436,6 +544,31 @@ impl Puzzle3RuntimeBridge {
     }
 }
 
+fn transition_selected_program3(
+    parsed: &ParsedPuzzle3,
+    program_key: &str,
+    state: &State3,
+    input: InputId,
+) -> Result<TransitionOutcome3, String> {
+    match program_key {
+        "main" => puzzle_grid3d::transition_program_outcome_with_local_frame(
+            &parsed.game,
+            state,
+            &parsed.rules,
+            input,
+            parsed.local_frame.as_ref(),
+        ),
+        "level_start" => puzzle_grid3d::transition_program_without_input_outcome_with_local_frame(
+            &parsed.game,
+            state,
+            &parsed.lifecycle.on_level_start,
+            parsed.lifecycle.on_level_start_local_frame.as_ref(),
+        ),
+        other => return Err(format!("unknown 3D transition program selector: {other}")),
+    }
+    .map_err(|error| format!("{error:?}"))
+}
+
 fn parsed_puzzle3_from_fixture(value: &Value) -> Result<ParsedPuzzle3, String> {
     let model = puzzle_runtime_contract::puzzle3_runtime_model_from_fixture_value(value)
         .map_err(|error| error.to_string())?;
@@ -447,12 +580,8 @@ fn parsed_puzzle3_from_fixture(value: &Value) -> Result<ParsedPuzzle3, String> {
         .collect::<Vec<_>>();
     Ok(ParsedPuzzle3 {
         game,
-        catalog: SelectorCatalog3::new_with_object_layers(
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            object_layers,
-        ),
+        catalog: SelectorCatalog3::checked_new(Vec::new(), Vec::new(), Vec::new(), object_layers)
+            .map_err(|error| format!("{error:?}"))?,
         settings: ModelSettings3::default(),
         local_frame: model.local_frame,
         rules: model.rules,
@@ -461,6 +590,7 @@ fn parsed_puzzle3_from_fixture(value: &Value) -> Result<ParsedPuzzle3, String> {
         level_bundle: Some(model.level_bundle),
         level_packs: Vec::new(),
         win_condition: model.win_condition,
+        solver_strategy: SolverStrategy3::default(),
         lifecycle: model.lifecycle,
         on_level_start_camera_effects: model.on_level_start_camera_effects,
         sprite_set: None,
@@ -670,14 +800,29 @@ fn scene_puzzle_state_value(loaded: &LoadedGame, session: &GameSession) -> Value
     let mut names = state.puzzles.keys().collect::<Vec<_>>();
     names.sort();
     for name in names {
-        let level = state
-            .puzzles
-            .get(name)
-            .and_then(|puzzle| puzzle.level_index)
-            .map(|level_index| {
-                level_ref_value(loaded, session, session.focused_scene(), level_index)
-            });
-        entries.insert(name.clone(), json!({ "level": level }));
+        let Some(puzzle) = state.puzzles.get(name) else {
+            continue;
+        };
+        let level_index = puzzle.level_index;
+        let level = level_index.and_then(|index| loaded.levels.get(index));
+        let mut entry = match scene_value_for_state(
+            loaded,
+            &puzzle.state,
+            level,
+            scene_resources(loaded, session.focused_scene()),
+        ) {
+            Value::Object(object) => object,
+            _ => serde_json::Map::new(),
+        };
+        entry.insert(
+            "level".to_string(),
+            level_index
+                .map(|level_index| {
+                    level_ref_value(loaded, session, session.focused_scene(), level_index)
+                })
+                .unwrap_or(Value::Null),
+        );
+        entries.insert(name.clone(), Value::Object(entry));
     }
     Value::Object(entries)
 }
@@ -710,6 +855,9 @@ fn scene_def_value(scene: &SceneDef) -> Value {
             match &transition.trigger {
                 SceneTransitionTrigger::Condition(condition) => {
                     value.insert("condition".to_string(), scene_expr_value(condition));
+                }
+                SceneTransitionTrigger::Signal(condition) => {
+                    value.insert("signal".to_string(), scene_expr_value(condition));
                 }
                 SceneTransitionTrigger::SceneStart => {
                     value.insert("lifecycle".to_string(), Value::String("scene_start".to_string()));
@@ -1071,6 +1219,7 @@ fn scene_binary_op_value(op: SceneBinaryOp) -> &'static str {
     match op {
         SceneBinaryOp::And => "and",
         SceneBinaryOp::Eq => "eq",
+        SceneBinaryOp::In => "in",
         SceneBinaryOp::NotEq => "neq",
     }
 }
@@ -1146,12 +1295,182 @@ fn input_id_by_name(loaded: &LoadedGame, input_name: &str) -> Option<InputId> {
         .find_map(|(id, label)| (label == input_name).then_some(*id))
 }
 
+pub fn debug_transition_value(loaded: &LoadedGame, debug: Option<&DebugTransition>) -> Value {
+    let Some(debug) = debug else {
+        return Value::Null;
+    };
+    json!({
+        "kind": "model_input",
+        "inputId": debug.input.0,
+        "input": loaded.input_labels.get(&debug.input).map(String::as_str).unwrap_or(""),
+        "cancelled": debug.cancelled,
+        "target": debug.target,
+        "commands": debug.commands.iter().map(debug_command_value).collect::<Vec<_>>(),
+        "executions": debug.fired_rules.iter().enumerate().map(|(index, rule)| {
+            json!({
+                "index": index,
+                "ruleId": rule.0,
+                "rule": debug_rule_value(loaded, *rule),
+                "patch": debug
+                    .patches
+                    .get(index)
+                    .map(|patch| debug_patch_value(loaded, patch))
+                    .unwrap_or_else(Vec::new),
+            })
+        }).collect::<Vec<_>>(),
+    })
+}
+
+fn debug_rule_value(loaded: &LoadedGame, rule: RuleId) -> Value {
+    let Some(info) = loaded.rule_debug_info.get(&rule) else {
+        return json!({ "id": rule.0 });
+    };
+    json!({
+        "id": rule.0,
+        "sourceLine": info.source_line,
+        "sourceLineNumber": info.source_line_number,
+        "routineStack": info.routine_stack,
+    })
+}
+
+fn debug_command_value(command: &TransitionCommand) -> Value {
+    json!({
+        "kind": match command {
+            TransitionCommand::Win => "win",
+            TransitionCommand::Restart => "restart",
+            TransitionCommand::NextLevel => "next_level",
+            TransitionCommand::Again => "again",
+            TransitionCommand::Checkpoint => "checkpoint",
+            TransitionCommand::ClearCheckpoint => "clear_checkpoint",
+        }
+    })
+}
+
+fn debug_patch_value(loaded: &LoadedGame, patch: &Patch) -> Vec<Value> {
+    patch
+        .ops()
+        .iter()
+        .map(|op| debug_patch_op_value(loaded, op))
+        .collect()
+}
+
+fn debug_patch_op_value(loaded: &LoadedGame, op: &PatchOp) -> Value {
+    match op {
+        PatchOp::Add { x, y, object } => json!({
+            "kind": "add",
+            "position": position2_value(*x, *y),
+            "objectId": object.0,
+            "object": object_name(loaded, *object),
+        }),
+        PatchOp::Remove { x, y, object } => json!({
+            "kind": "remove",
+            "position": position2_value(*x, *y),
+            "objectId": object.0,
+            "object": object_name(loaded, *object),
+        }),
+        PatchOp::Move {
+            from_x,
+            from_y,
+            to_x,
+            to_y,
+            object,
+        } => json!({
+            "kind": "move",
+            "from": position2_value(*from_x, *from_y),
+            "to": position2_value(*to_x, *to_y),
+            "objectId": object.0,
+            "object": object_name(loaded, *object),
+        }),
+        PatchOp::Replace { x, y, remove, add } => json!({
+            "kind": "replace",
+            "position": position2_value(*x, *y),
+            "remove": remove.0,
+            "add": add.0,
+            "removeObject": object_name(loaded, *remove),
+            "addObject": object_name(loaded, *add),
+        }),
+        PatchOp::UpdateVariable {
+            variable,
+            op,
+            value,
+        } => json!({
+            "kind": "update_variable",
+            "variableId": variable.0,
+            "variable": variable_name(loaded, *variable),
+            "op": match op {
+                VariableUpdateOp::Set => "set",
+                VariableUpdateOp::Add => "add",
+                VariableUpdateOp::Subtract => "subtract",
+                VariableUpdateOp::Multiply => "multiply",
+                VariableUpdateOp::Divide => "divide",
+                VariableUpdateOp::Remainder => "remainder",
+            },
+            "value": value,
+        }),
+        PatchOp::SetMark {
+            x,
+            y,
+            object,
+            mark,
+            value,
+        } => json!({
+            "kind": "set_mark",
+            "position": position2_value(*x, *y),
+            "objectId": object.0,
+            "object": object_name(loaded, *object),
+            "mark": mark.0,
+            "markName": mark_name(loaded, *mark),
+            "value": value,
+        }),
+        PatchOp::RemoveMark {
+            x,
+            y,
+            object,
+            mark,
+            value,
+            match_value,
+        } => json!({
+            "kind": "remove_mark",
+            "position": position2_value(*x, *y),
+            "objectId": object.0,
+            "object": object_name(loaded, *object),
+            "mark": mark.0,
+            "markName": mark_name(loaded, *mark),
+            "value": value,
+            "match": match match_value {
+                CoreMarkValueMatch::Any => "any",
+                CoreMarkValueMatch::Exact => "exact",
+            },
+        }),
+    }
+}
+
+fn position2_value(x: u16, y: u16) -> Value {
+    json!({ "x": x, "y": y })
+}
+
 fn object_name(loaded: &LoadedGame, object: ObjectId) -> String {
     loaded
         .object_labels
         .get(&object)
         .cloned()
         .unwrap_or_else(|| "?".to_string())
+}
+
+fn mark_name(loaded: &LoadedGame, mark: MarkId) -> String {
+    loaded
+        .mark_labels
+        .get(&mark)
+        .cloned()
+        .unwrap_or_else(|| format!("mark#{}", mark.0))
+}
+
+fn variable_name(loaded: &LoadedGame, variable: VariableId) -> String {
+    loaded
+        .variable_labels
+        .get(&variable)
+        .cloned()
+        .unwrap_or_else(|| format!("var#{}", variable.0))
 }
 
 fn object_id_by_name(loaded: &LoadedGame, object_name: &str) -> Option<ObjectId> {
@@ -1272,7 +1591,7 @@ fn wait_events_value(events: &[WaitEvent]) -> Vec<Value> {
         .collect()
 }
 
-fn animation_events_value(events: &[AnimationEvent]) -> Vec<Value> {
+fn animation_events_value(events: &[AnimationEvent]) -> Vec<RuntimeAnimationEvent> {
     events
         .iter()
         .map(|event| match event {
@@ -1281,28 +1600,32 @@ fn animation_events_value(events: &[AnimationEvent]) -> Vec<Value> {
                 object,
                 from_x,
                 from_y,
-                from_z,
                 to_x,
                 to_y,
-                to_z,
-            } => json!({
-                "kind": "move",
-                "name": name,
-                "objectId": object.0,
-                "fromX": from_x,
-                "fromY": from_y,
-                "fromZ": from_z,
-                "toX": to_x,
-                "toY": to_y,
-                "toZ": to_z,
-            }),
-            AnimationEvent::CantMove { name, object, x, y } => json!({
-                "kind": "cant_move",
-                "name": name,
-                "objectId": object.0,
-                "x": x,
-                "y": y,
-            }),
+                ..
+            } => RuntimeAnimationEvent::Move {
+                name: name.clone(),
+                object_id: object.0,
+                from: RuntimeCoord {
+                    x: *from_x,
+                    y: *from_y,
+                    z: None,
+                },
+                to: RuntimeCoord {
+                    x: *to_x,
+                    y: *to_y,
+                    z: None,
+                },
+            },
+            AnimationEvent::CantMove { name, object, x, y } => RuntimeAnimationEvent::CantMove {
+                name: name.clone(),
+                object_id: object.0,
+                position: RuntimeCoord {
+                    x: *x,
+                    y: *y,
+                    z: None,
+                },
+            },
         })
         .collect()
 }
@@ -1632,8 +1955,23 @@ fn state3_from_json(game: &Game3, state_json: &str) -> Result<State3, String> {
             slots.len()
         ));
     }
-    let mut state = State3::empty(Size3::new(width, depth, height), layer_count)
-        .map_err(|error| format!("{error:?}"))?;
+    let variables = value
+        .get("variables")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .map(|item| {
+                    item.as_i64()
+                        .ok_or_else(|| "3D state variable is not an integer".to_string())
+                })
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .transpose()?
+        .unwrap_or_default();
+    let mut state =
+        State3::empty_with_variables(Size3::new(width, depth, height), layer_count, variables)
+            .map_err(|error| format!("{error:?}"))?;
     for (index, object) in slots.iter().enumerate() {
         let object = object
             .as_u64()
@@ -1687,6 +2025,57 @@ fn json_u16(value: &Value, key: &str) -> Result<u16, String> {
         .map_err(|_| format!("3D state {key} out of range"))
 }
 
+fn state3_value(state: &State3) -> Value {
+    json!({
+        "kind": "puzzle3d",
+        "width": state.size.width,
+        "depth": state.size.depth,
+        "height": state.size.height,
+        "layerCount": state.layer_count,
+        "slots": state.slots().iter().map(|object| object.0).collect::<Vec<_>>(),
+        "variables": state.visible_variables(),
+        "levelFiredRules": state
+            .level_fired_rules()
+            .iter()
+            .map(|rule| rule.0)
+            .collect::<Vec<_>>(),
+    })
+}
+
+fn commands3_contract(commands: &[TransitionCommand3]) -> Vec<RuntimeTransitionCommand> {
+    commands.iter().map(|command| match *command {}).collect()
+}
+
+fn state3_contract(state: &State3) -> RuntimeStateSnapshot {
+    RuntimeStateSnapshot::ThreeD(RuntimeStateSnapshot3d {
+        kind: RuntimeModelKind::ThreeD,
+        width: state.size.width,
+        depth: state.size.depth,
+        height: state.size.height,
+        layer_count: state.layer_count,
+        slots: state.slots().iter().map(|object| object.0).collect(),
+        slot_marks: state
+            .slot_mark()
+            .into_iter()
+            .map(|marks| {
+                marks
+                    .into_iter()
+                    .map(|mark| RuntimeMarkValue {
+                        mark: mark.mark.0,
+                        value: mark.value,
+                    })
+                    .collect()
+            })
+            .collect(),
+        variables: state.visible_variables().to_vec(),
+        level_fired_rules: state
+            .level_fired_rules()
+            .iter()
+            .map(|rule| rule.0)
+            .collect(),
+    })
+}
+
 fn state3_cells_value(state: &State3, before: Option<&State3>) -> Value {
     let mut cells = Vec::new();
     for z in 0..state.size.height {
@@ -1719,6 +2108,112 @@ fn state3_cells_value(state: &State3, before: Option<&State3>) -> Value {
     Value::Array(cells)
 }
 
+fn changed_cells3_contract(state: &State3, before: Option<&State3>) -> Vec<RuntimeChangedCell> {
+    let mut cells = Vec::new();
+    for z in 0..state.size.height {
+        for y in 0..state.size.depth {
+            for x in 0..state.size.width {
+                let cell = ((usize::from(z) * usize::from(state.size.depth)) + usize::from(y))
+                    * usize::from(state.size.width)
+                    + usize::from(x);
+                if before.is_some_and(|before| state3_cell_slots_equal(before, state, cell)) {
+                    continue;
+                }
+                let mut objects = Vec::new();
+                for layer in 0..state.layer_count {
+                    let slot = (cell * usize::from(state.layer_count)) + usize::from(layer);
+                    let object = state.slots()[slot];
+                    if !object.is_empty() {
+                        objects.push(object.0);
+                    }
+                }
+                if before.is_none() && objects.is_empty() {
+                    continue;
+                }
+                cells.push(RuntimeChangedCell {
+                    position: RuntimeCoord { x, y, z: Some(z) },
+                    objects,
+                });
+            }
+        }
+    }
+    cells
+}
+
+fn patches3_contract(patches: &[Patch3]) -> Vec<Vec<RuntimePatchOp>> {
+    patches
+        .iter()
+        .map(|patch| patch.ops.iter().map(patch_op3_contract).collect())
+        .collect()
+}
+
+fn patch_op3_contract(op: &PatchOp3) -> RuntimePatchOp {
+    match *op {
+        PatchOp3::Add { position, object } => RuntimePatchOp::Add {
+            position: runtime_coord3(position),
+            object_id: object.0,
+        },
+        PatchOp3::Remove { position, object } => RuntimePatchOp::Remove {
+            position: runtime_coord3(position),
+            object_id: object.0,
+        },
+        PatchOp3::Move { from, to, object } => RuntimePatchOp::Move {
+            from: runtime_coord3(from),
+            to: runtime_coord3(to),
+            object_id: object.0,
+        },
+        PatchOp3::Replace {
+            position,
+            remove,
+            add,
+        } => RuntimePatchOp::Replace {
+            position: runtime_coord3(position),
+            remove: remove.0,
+            add: add.0,
+        },
+        PatchOp3::UpdateVariable { variable, .. } => RuntimePatchOp::UpdateVariable {
+            variable: variable.0,
+        },
+        PatchOp3::SetMark {
+            position,
+            object,
+            mark,
+            ..
+        } => RuntimePatchOp::SetMark {
+            position: runtime_coord3(position),
+            object_id: object.0,
+            mark: mark.0,
+        },
+        PatchOp3::RemoveMark {
+            position,
+            object,
+            mark,
+            match_value,
+            ..
+        } => RuntimePatchOp::RemoveMark {
+            position: runtime_coord3(position),
+            object_id: object.0,
+            mark: mark.0,
+            match_value: runtime_mark_value_match3(match_value),
+        },
+    }
+}
+
+fn runtime_coord3(position: Coord3) -> RuntimeCoord {
+    RuntimeCoord {
+        x: position.x,
+        y: position.y,
+        z: Some(position.z),
+    }
+}
+
+fn runtime_mark_value_match3(match_value: MarkValueMatch) -> RuntimeMarkValueMatch {
+    match match_value {
+        MarkValueMatch::Any => RuntimeMarkValueMatch::Any,
+        MarkValueMatch::Exact => RuntimeMarkValueMatch::Exact,
+    }
+}
+
 fn state3_cell_slots_equal(before: &State3, after: &State3, cell: usize) -> bool {
     if before.size != after.size || before.layer_count != after.layer_count {
         return false;
@@ -1728,16 +2223,16 @@ fn state3_cell_slots_equal(before: &State3, after: &State3, cell: usize) -> bool
     before.slots()[start..start + layer_count] == after.slots()[start..start + layer_count]
 }
 
-fn animation_events3_value(
+fn animation_events3_contract(
     animation: &puzzle_lang::AnimationDef,
     before: &State3,
     after: &State3,
-) -> Value {
+) -> Vec<RuntimeAnimationEvent> {
     if !animation.tween.enabled
         || before.size != after.size
         || before.layer_count != after.layer_count
     {
-        return json!([]);
+        return Vec::new();
     }
     let mut events = Vec::new();
     for object in changed_object_ids3(before, after) {
@@ -1749,21 +2244,16 @@ fn animation_events3_value(
                 .position(|source| adjacent_coord3(*source, target))
             {
                 let source = sources.remove(source_index);
-                events.push(json!({
-                    "kind": "move",
-                    "name": "tween",
-                    "objectId": object.0,
-                    "fromX": source.x,
-                    "fromY": source.y,
-                    "fromZ": source.z,
-                    "toX": target.x,
-                    "toY": target.y,
-                    "toZ": target.z,
-                }));
+                events.push(RuntimeAnimationEvent::Move {
+                    name: "tween".to_string(),
+                    object_id: object.0,
+                    from: runtime_coord3(source),
+                    to: runtime_coord3(target),
+                });
             }
         }
     }
-    Value::Array(events)
+    events
 }
 
 fn changed_object_ids3(before: &State3, after: &State3) -> Vec<ObjectId3> {
@@ -1870,11 +2360,75 @@ mod tests {
         })
     }
 
+    fn runtime_scene_fixture_source() -> &'static str {
+        r#"
+title = "Runtime Scene Fixture"
+
+puzzle board {
+layers {
+@Floor
+solid = Player Box Wall
+}
+input up
+input down
+input left
+input right
+rules {
+input right [ Player | no solid ] -> [ | Player ]
+input left [ no solid | Player ] -> [ Player | ]
+input down [ Player ; no solid ] -> [ ; Player ]
+input up [ no solid ; Player ] -> [ Player ; ]
+}
+}
+
+levels microban of board {
+legend {
+. = empty
+P = Player @Floor
+B = Box @Floor
+# = Wall
+}
+level "microban.1" {
+#######
+#P...B#
+#.....#
+#.....#
+#.....#
+#######
+}
+level "microban.2" {
+#######
+#.P..B#
+#.....#
+#.....#
+#.....#
+#######
+}
+}
+
+scene = title {
+layout {
+title = title
+choice "New Game" -> goto playing("microban.1")
+}
+}
+
+scene = playing {
+layout {
+puzzle board = board
+}
+rules {
+step board
+}
+}
+"#
+    }
+
     #[test]
     fn scene_value_reports_display_program_errors_without_raw_cells() {
         let mut loaded = puzzle_lang::parse_game2d(
             r#"
-title display_error
+title = display_error
 
 puzzle default {
 layers {
@@ -1932,7 +2486,7 @@ P
     #[test]
     fn standalone_session_from_export_does_not_parse_embedded_source() {
         let source = r#"
-title export_runtime_bundle
+title = export_runtime_bundle
 puzzle default {
 layers {
 __legacy_layer_0 = Player
@@ -1963,7 +2517,7 @@ P
     #[test]
     fn standalone_session_from_export_uses_game_session_wait_continuation() {
         let source = r#"
-title export_wait_segments
+title = export_wait_segments
 puzzle default {
 layers {
 __legacy_layer_0 = A B C
@@ -2028,19 +2582,56 @@ A
     }
 
     #[test]
-    fn standalone_session_bridge_uses_rust_session_for_requests() {
-        let source =
-            include_str!("../../../crates/lang/tests/fixtures/spec_2d_microban_basic.puzzle");
-        let mut bridge = StandaloneSessionBridge::from_source(
-            source,
-            "crates/lang/tests/fixtures/spec_2d_microban_basic.puzzle",
+    fn standalone_session_debug_input_reports_rule_trace() {
+        let source = r#"
+title = "Debug Trace"
+
+puzzle main {
+  layers {
+    actor = Player
+  }
+
+  rules {
+    [ Player ] -> [ ]
+  }
+}
+
+levels main of main {
+  legend {
+    . = empty
+    P = Player
+  }
+
+  level "one"
+  P
+}
+"#;
+        let export = standalone_export(source);
+        let mut bridge = StandaloneSessionBridge::from_export_json(&export.to_string()).unwrap();
+
+        let body: Value = serde_json::from_str(
+            &bridge
+                .request_json("POST", "/api/debug/input/right")
+                .unwrap(),
         )
         .unwrap();
+
+        assert_eq!(body["snapshot"]["currentScene"], "main");
+        assert_eq!(body["debug"]["input"], "right");
+        assert_eq!(body["debug"]["executions"].as_array().unwrap().len(), 1);
+        assert_eq!(body["debug"]["executions"][0]["patch"][0]["kind"], "remove");
+    }
+
+    #[test]
+    fn standalone_session_bridge_uses_rust_session_for_requests() {
+        let source = runtime_scene_fixture_source();
+        let mut bridge =
+            StandaloneSessionBridge::from_source(source, "runtime_scene_fixture.puzzle").unwrap();
 
         let title: Value =
             serde_json::from_str(&bridge.request_json("GET", "/api/state").unwrap()).unwrap();
         assert_eq!(title["currentScene"], "title");
-        assert_eq!(title["title"], "Microban Basic");
+        assert_eq!(title["title"], "Runtime Scene Fixture");
         assert_eq!(title["scenes"][0]["name"], "title");
         assert_eq!(title["scenes"][0]["components"][0]["kind"], "title");
 
@@ -2060,7 +2651,7 @@ A
     #[test]
     fn standalone_session_bridge_reports_no_scene_for_non_model_focus() {
         let source = r#"
-title runtime_focus
+title = runtime_focus
 sounds {
 sfx step seed=step type=jump
 }
@@ -2084,7 +2675,7 @@ P
 }
 }
 
-scene playing {
+scene = playing {
 layout {
 puzzle board = default
 }
@@ -2093,7 +2684,7 @@ step board
 }
 }
 
-scene level_select {
+scene = level_select {
 layout {
 level_menu
 }
@@ -2122,7 +2713,7 @@ level_menu
     #[test]
     fn standalone_session_bridge_starts_from_editor_state() {
         let source = r#"
-title editor_state_start
+title = editor_state_start
 
 puzzle board {
 layers {
@@ -2147,7 +2738,7 @@ P.
 }
 }
 
-scene playing {
+scene = playing {
 layout {
 puzzle board = board
 }
@@ -2190,13 +2781,9 @@ step board
 
     #[test]
     fn spec_2d_new_game_uses_scene_input_and_scene_puzzle_state() {
-        let source =
-            include_str!("../../../crates/lang/tests/fixtures/spec_2d_microban_basic.puzzle");
-        let mut bridge = StandaloneSessionBridge::from_source(
-            source,
-            "crates/lang/tests/fixtures/spec_2d_microban_basic.puzzle",
-        )
-        .unwrap();
+        let source = runtime_scene_fixture_source();
+        let mut bridge =
+            StandaloneSessionBridge::from_source(source, "runtime_scene_fixture.puzzle").unwrap();
 
         let title: Value =
             serde_json::from_str(&bridge.request_json("GET", "/api/state").unwrap()).unwrap();
@@ -2244,7 +2831,7 @@ step board
 
         let playing: Value = serde_json::from_str(
             &bridge
-                .request_json("POST", "/api/command/new_game")
+                .request_json("POST", "/api/command/goto%20playing(0)")
                 .unwrap(),
         )
         .unwrap();
@@ -2272,16 +2859,13 @@ step board
 
     #[test]
     fn spec_2d_direction_input_changes_state_after_new_game() {
-        let source =
-            include_str!("../../../crates/lang/tests/fixtures/spec_2d_microban_basic.puzzle");
+        let source = runtime_scene_fixture_source();
         let mut changed_input = None;
 
         for input in ["up", "down", "left", "right"] {
-            let mut bridge = StandaloneSessionBridge::from_source(
-                source,
-                "crates/lang/tests/fixtures/spec_2d_microban_basic.puzzle",
-            )
-            .unwrap();
+            let mut bridge =
+                StandaloneSessionBridge::from_source(source, "runtime_scene_fixture.puzzle")
+                    .unwrap();
             let before = start_spec_2d_new_game(&mut bridge);
             let after: Value = serde_json::from_str(
                 &bridge
@@ -2305,7 +2889,7 @@ step board
             .unwrap();
         serde_json::from_str(
             &bridge
-                .request_json("POST", "/api/command/goto%20playing(microban.1)")
+                .request_json("POST", "/api/command/goto%20playing(%22microban.1%22)")
                 .unwrap(),
         )
         .unwrap()
@@ -2314,7 +2898,7 @@ step board
     #[test]
     fn standalone_session_bridge_emits_tween_on_first_input() {
         let source = r#"
-title "Runtime Tween Fixture"
+title = "Runtime Tween Fixture"
 
 animation {
   tween {
@@ -2342,7 +2926,7 @@ levels default of mover {
   }
 }
 
-scene playing {
+scene = playing {
   rules {
     step board
   }
@@ -2373,12 +2957,8 @@ scene playing {
                     "kind": "move",
                     "name": "tween",
                     "objectId": 1,
-                    "fromX": 0,
-                    "fromY": 0,
-                    "fromZ": 0,
-                    "toX": 1,
-                    "toY": 0,
-                    "toZ": 0
+                    "from": { "x": 0, "y": 0 },
+                    "to": { "x": 1, "y": 0 }
                 }
             ]),
             "unexpected moved snapshot: {moved}"
@@ -2388,7 +2968,7 @@ scene playing {
     #[test]
     fn puzzle3_runtime_bridge_emits_tween_move_events() {
         let source = r#"
-title "3D Tween"
+title = "3D Tween"
 
 animation {
   tween {
@@ -2403,6 +2983,16 @@ layers {
 
 rules {
   input horizontal [ Player | no Player ] -> [ | Player ]
+}
+}
+
+levels3 default of sokoban {
+legend {
+P = Player
+. = empty
+}
+level "one" {
+P.
 }
 }
 "#;
@@ -2424,21 +3014,30 @@ rules {
                     "kind": "move",
                     "name": "tween",
                     "objectId": 1,
-                    "fromX": 0,
-                    "fromY": 0,
-                    "fromZ": 0,
-                    "toX": 1,
-                    "toY": 0,
-                    "toZ": 0
+                    "from": { "x": 0, "y": 0, "z": 0 },
+                    "to": { "x": 1, "y": 0, "z": 0 }
                 }
             ])
         );
+
+        let program_outcome = bridge
+            .transition_program_outcome_json(
+                "main",
+                r#"{"kind":"puzzle3d","width":2,"depth":1,"height":1,"layerCount":1,"slots":[1,0],"levelFiredRules":[]}"#,
+                1,
+            )
+            .unwrap();
+        let program_outcome: RuntimeTransitionProgramOutcome =
+            serde_json::from_str(&program_outcome).unwrap();
+        assert!(!program_outcome.completed);
+        assert_eq!(program_outcome.fired_rules, vec![0]);
+        assert_eq!(program_outcome.patches.len(), 1);
     }
 
     #[test]
     fn puzzle3_runtime_bridge_runs_from_visual_fixture_json() {
         let source = r#"
-title "3D Fixture Runtime"
+title = "3D Fixture Runtime"
 
 animation {
   tween {
@@ -2496,12 +3095,8 @@ P.
                     "kind": "move",
                     "name": "tween",
                     "objectId": 1,
-                    "fromX": 0,
-                    "fromY": 0,
-                    "fromZ": 0,
-                    "toX": 1,
-                    "toY": 0,
-                    "toZ": 0
+                    "from": { "x": 0, "y": 0, "z": 0 },
+                    "to": { "x": 1, "y": 0, "z": 0 }
                 }
             ])
         );
@@ -2509,13 +3104,9 @@ P.
 
     #[test]
     fn standalone_session_bridge_restores_progress_save() {
-        let source =
-            include_str!("../../../crates/lang/tests/fixtures/spec_2d_microban_basic.puzzle");
-        let mut bridge = StandaloneSessionBridge::from_source(
-            source,
-            "crates/lang/tests/fixtures/spec_2d_microban_basic.puzzle",
-        )
-        .unwrap();
+        let source = runtime_scene_fixture_source();
+        let mut bridge =
+            StandaloneSessionBridge::from_source(source, "runtime_scene_fixture.puzzle").unwrap();
         bridge
             .restore_progress_save_json(
                 r#"{"version":1,"levels":[{"name":"microban.2","cleared":true}],"currentLevel":"microban.2","persistentVars":[]}"#,
@@ -2532,7 +3123,7 @@ P.
     #[test]
     fn standalone_session_bridge_supports_single_puzzle3_document() {
         let source = r#"
-title "Inline 3D"
+title = "Inline 3D"
 
 puzzle3 sokoban {
 layers {
@@ -2542,9 +3133,9 @@ rules {
 }
 }
 
-scene title {
+scene = title {
 layout {
-  title "Inline 3D"
+  title = "Inline 3D"
 }
 }
 

@@ -50,10 +50,46 @@ fn parse_group_definition(
     Ok(())
 }
 
-fn parse_group_block(
+#[derive(Clone, Debug)]
+struct PendingGroupDefinition {
+    name: String,
+    selectors: Vec<String>,
+    line: String,
+}
+
+fn collect_puzzle_group_declarations(
     lines: &[String],
     start: usize,
-    catalog: &mut Catalog,
+) -> Result<Vec<PendingGroupDefinition>, DiagnosticReport> {
+    let mut groups = Vec::new();
+    let mut names = HashSet::<String>::new();
+    let mut i = start;
+    let mut depth = 1i32;
+    while i < lines.len() && depth > 0 {
+        let tokens = split_header_tokens(&lines[i]);
+        if depth == 1 {
+            match tokens.as_slice() {
+                ["groups"] => {
+                    i = collect_pending_group_block(lines, i, &mut groups, &mut names)?;
+                    continue;
+                }
+                ["groups", ..] => {
+                    return Err(parse_error(&lines[i], "groups block must be: groups { ... }"));
+                }
+                _ => {}
+            }
+        }
+        depth += raw_brace_delta(&lines[i]);
+        i += 1;
+    }
+    Ok(groups)
+}
+
+fn collect_pending_group_block(
+    lines: &[String],
+    start: usize,
+    groups: &mut Vec<PendingGroupDefinition>,
+    names: &mut HashSet<String>,
 ) -> Result<usize, DiagnosticReport> {
     let mut i = start + 1;
     while i < lines.len() && !is_block_close_line(&lines[i]) {
@@ -62,30 +98,111 @@ fn parse_group_block(
             i += 1;
             continue;
         }
-        let Some(_) = crate::syntax::named_selector_assignment_syntax(&tokens, true) else {
+        let Some(syntax) = crate::syntax::named_selector_assignment_syntax(&tokens, true) else {
             return Err(parse_error(
                 &lines[i],
                 "group row must be: <name> = <selector...>",
             ));
         };
-
-        parse_group_definition(
-            &tokens,
-            &lines[i],
-            &catalog.object_names,
-            &catalog.object_schemas,
-            &catalog_value_sets(catalog),
-            &catalog.maps,
-            &catalog.visual_objects,
-            &mut catalog.object_groups,
-        )?;
+        let name = tokens[0];
+        validate_selector_alias_name(name, &lines[i], "group name")?;
+        if !names.insert(name.to_string()) {
+            return Err(parse_error(&lines[i], "duplicate group"));
+        }
+        groups.push(PendingGroupDefinition {
+            name: name.to_string(),
+            selectors: tokens[syntax.rhs_start..]
+                .iter()
+                .map(|selector| (*selector).to_string())
+                .collect(),
+            line: lines[i].clone(),
+        });
         i += 1;
     }
     if i >= lines.len() {
         return Err(parse_error(&lines[start], "groups missing closing brace"));
     }
-
     Ok(i + 1)
+}
+fn resolve_pending_group_definitions(
+    pending_groups: &[PendingGroupDefinition],
+    only_names: Option<&[String]>,
+    resolved_groups: &mut HashSet<String>,
+    catalog: &mut Catalog,
+) -> Result<(), DiagnosticReport> {
+    let names = only_names
+        .map(|names| names.to_vec())
+        .unwrap_or_else(|| pending_groups.iter().map(|group| group.name.clone()).collect());
+    let mut resolving = Vec::<String>::new();
+    for name in names {
+        resolve_pending_group_definition(
+            &name,
+            pending_groups,
+            resolved_groups,
+            &mut resolving,
+            catalog,
+        )?;
+    }
+    Ok(())
+}
+
+fn resolve_pending_group_definition(
+    name: &str,
+    pending_groups: &[PendingGroupDefinition],
+    resolved_groups: &mut HashSet<String>,
+    resolving: &mut Vec<String>,
+    catalog: &mut Catalog,
+) -> Result<(), DiagnosticReport> {
+    if resolved_groups.contains(name) {
+        return Ok(());
+    }
+    let Some(group) = pending_group_definition(name, pending_groups) else {
+        return Ok(());
+    };
+    if catalog.object_groups.contains_key(name) {
+        return Err(parse_error(
+            &group.line,
+            "group name must not shadow another selector",
+        ));
+    }
+    if resolving.iter().any(|candidate| candidate == name) {
+        return Err(parse_error(&group.line, "group definitions cannot be cyclic"));
+    }
+    resolving.push(name.to_string());
+    for selector in &group.selectors {
+        if pending_group_definition(selector, pending_groups).is_some() {
+            resolve_pending_group_definition(
+                selector,
+                pending_groups,
+                resolved_groups,
+                resolving,
+                catalog,
+            )?;
+        }
+    }
+    resolving.pop();
+
+    let mut tokens = vec![group.name.as_str(), "="];
+    tokens.extend(group.selectors.iter().map(String::as_str));
+    parse_group_definition(
+        &tokens,
+        &group.line,
+        &catalog.object_names,
+        &catalog.object_schemas,
+        &catalog_value_sets(catalog),
+        &catalog.maps,
+        &catalog.visual_objects,
+        &mut catalog.object_groups,
+    )?;
+    resolved_groups.insert(name.to_string());
+    Ok(())
+}
+
+fn pending_group_definition<'a>(
+    name: &str,
+    pending_groups: &'a [PendingGroupDefinition],
+) -> Option<&'a PendingGroupDefinition> {
+    pending_groups.iter().find(|group| group.name == name)
 }
 
 fn parse_legend_directive(
@@ -312,7 +429,7 @@ fn parse_variable_directive(
     }
 }
 
-fn parse_condition_directive(
+fn parse_query_directive(
     _tokens: &[&str],
     line: &str,
     object_names: &HashMap<String, ObjectId>,
@@ -320,36 +437,46 @@ fn parse_condition_directive(
     value_sets: &HashMap<String, Vec<String>>,
     maps: &HashMap<String, ValueMap>,
     object_groups: &HashMap<String, Vec<ObjectId>>,
+    variable_names: &HashMap<String, VariableId>,
+    query_names: &mut HashSet<String>,
     condition_names: &mut HashMap<String, ConditionId>,
     condition_labels: &mut HashMap<ConditionId, String>,
-) -> Result<ConditionDefinitionAst, DiagnosticReport> {
-    let Some(rest) = line.strip_prefix("condition ") else {
-        return Err(parse_error(
-            line,
-            "condition must be: condition <name> = <condition_expr>",
-        ));
-    };
-    let (name, value) = require_assignment_row(
-        rest,
-        "condition must be: condition <name> = <condition_expr>",
-    )?;
-    validate_qualified_identifier(name, line, "condition name")?;
-    if condition_names.contains_key(name) {
-        return Err(parse_error(line, "duplicate condition"));
+) -> Result<(QueryDefinitionAst, Option<ConditionDefinitionAst>), DiagnosticReport> {
+    let surface = crate::solver_surface::parse_query_definition(line)?;
+    let name = surface.name.as_str();
+    if query_names.contains(name) || variable_names.contains_key(name) {
+        return Err(parse_error(line, "duplicate query"));
     }
-    let id = ConditionId(condition_names.len() as u16);
-    let kind = parse_condition_value_expr(
-        value,
-        line,
-        object_names,
-        object_schemas,
-        value_sets,
-        maps,
-        object_groups,
-    )?;
-    condition_names.insert(name.to_string(), id);
-    condition_labels.insert(id, name.to_string());
-    Ok(ConditionDefinitionAst { id, kind })
+    query_names.insert(name.to_string());
+    let core_definition = match &surface.expr {
+        crate::solver_surface::SolverSurfaceQueryExpr::Call { name: call, args }
+            if call != "distance" =>
+        {
+            let kind = parse_condition_value_surface_call(
+                call,
+                args,
+                &surface.source_line,
+                object_names,
+                object_schemas,
+                value_sets,
+                maps,
+                object_groups,
+            )?;
+            let id = ConditionId(condition_names.len() as u16);
+            condition_names.insert(name.to_string(), id);
+            condition_labels.insert(id, name.to_string());
+            Some(ConditionDefinitionAst { id, kind })
+        }
+        _ => None,
+    };
+    Ok((surface, core_definition))
+}
+
+fn parse_solver_block(
+    lines: &[String],
+    start: usize,
+) -> Result<(usize, SolverStrategyAst), DiagnosticReport> {
+    crate::solver_surface::parse_solver_block(lines, start)
 }
 
 fn parse_condition_value_expr(
@@ -362,6 +489,159 @@ fn parse_condition_value_expr(
     object_groups: &HashMap<String, Vec<ObjectId>>,
 ) -> Result<ConditionValueAst, DiagnosticReport> {
     let (name, arg) = parse_call_expr(expr, line)?;
+    lower_condition_value_call_2d(
+        name,
+        arg,
+        line,
+        object_names,
+        object_schemas,
+        value_sets,
+        maps,
+        object_groups,
+    )
+}
+
+fn parse_condition_value_surface_call(
+    name: &str,
+    args: &[SolverSurfaceQueryArg],
+    line: &str,
+    object_names: &HashMap<String, ObjectId>,
+    object_schemas: &HashMap<String, ObjectSchema>,
+    value_sets: &HashMap<String, Vec<String>>,
+    maps: &HashMap<String, ValueMap>,
+    object_groups: &HashMap<String, Vec<ObjectId>>,
+) -> Result<ConditionValueAst, DiagnosticReport> {
+    let [arg] = args else {
+        return Err(parse_error(
+            line,
+            "query expression must have exactly one argument",
+        ));
+    };
+    match arg {
+        SolverSurfaceQueryArg::Selector(selector) => lower_condition_value_selector_call_2d(
+            name,
+            selector,
+            line,
+            object_names,
+            object_schemas,
+            value_sets,
+            maps,
+            object_groups,
+        ),
+        SolverSurfaceQueryArg::Pattern(pattern) => lower_condition_value_pattern_call_2d(
+            name,
+            pattern,
+            line,
+            object_names,
+            object_schemas,
+            value_sets,
+            maps,
+            object_groups,
+        ),
+    }
+}
+
+fn lower_condition_value_selector_call_2d(
+    name: &str,
+    selector: &str,
+    line: &str,
+    object_names: &HashMap<String, ObjectId>,
+    object_schemas: &HashMap<String, ObjectSchema>,
+    value_sets: &HashMap<String, Vec<String>>,
+    maps: &HashMap<String, ValueMap>,
+    object_groups: &HashMap<String, Vec<ObjectId>>,
+) -> Result<ConditionValueAst, DiagnosticReport> {
+    let objects = resolve_object_selector(
+        selector,
+        line,
+        object_names,
+        object_schemas,
+        value_sets,
+        maps,
+        object_groups,
+        &HashMap::new(),
+    )?
+    .alternatives;
+    match name {
+        "count" => Ok(ConditionValueAst::CountObjects(objects)),
+        "exists" | "some" => Ok(ConditionValueAst::ExistsObjects(objects)),
+        "none" | "no" => Ok(ConditionValueAst::NoneObjects(objects)),
+        _ => Err(parse_error(line, "unknown query function")),
+    }
+}
+
+fn lower_condition_value_pattern_call_2d(
+    name: &str,
+    pattern: &SolverSurfacePatternArg,
+    line: &str,
+    object_names: &HashMap<String, ObjectId>,
+    object_schemas: &HashMap<String, ObjectSchema>,
+    value_sets: &HashMap<String, Vec<String>>,
+    maps: &HashMap<String, ValueMap>,
+    object_groups: &HashMap<String, Vec<ObjectId>>,
+) -> Result<ConditionValueAst, DiagnosticReport> {
+    let pattern = parse_condition_pattern_surface_arg(
+        pattern,
+        object_names,
+        object_schemas,
+        value_sets,
+        maps,
+        object_groups,
+    )?;
+    match name {
+        "count" => Ok(ConditionValueAst::CountMatches(pattern)),
+        "exists" | "some" => Ok(ConditionValueAst::ExistsMatches(pattern)),
+        "none" | "no" => Ok(ConditionValueAst::NoneMatches(pattern)),
+        _ => Err(parse_error(line, "unknown query function")),
+    }
+}
+
+fn parse_condition_pattern_surface_arg(
+    pattern: &SolverSurfacePatternArg,
+    object_names: &HashMap<String, ObjectId>,
+    object_schemas: &HashMap<String, ObjectSchema>,
+    value_sets: &HashMap<String, Vec<String>>,
+    maps: &HashMap<String, ValueMap>,
+    object_groups: &HashMap<String, Vec<ObjectId>>,
+) -> Result<ConditionPatternAst, DiagnosticReport> {
+    let (orientation, pattern_source) = match &pattern.orientation {
+        crate::solver_surface::SolverSurfacePatternOrientation::Neutral => {
+            (OrientationExpr::Neutral, pattern.pattern.clone())
+        }
+        crate::solver_surface::SolverSurfacePatternOrientation::Input { axis } => {
+            let axis = axis.as_deref().unwrap_or("directions");
+            (OrientationExpr::InputSet(axis.to_string()), pattern.pattern.clone())
+        }
+        crate::solver_surface::SolverSurfacePatternOrientation::Orientation(orientation) => (
+            parse_statement_orientation_expr(orientation, &[]),
+            pattern.pattern.clone(),
+        ),
+    };
+    Ok(ConditionPatternAst {
+        orientation,
+        pattern: parse_pattern_side(
+            &pattern_source,
+            object_names,
+            object_schemas,
+            value_sets,
+            maps,
+            object_groups,
+            &HashMap::new(),
+            false,
+        )?,
+    })
+}
+
+fn lower_condition_value_call_2d(
+    name: &str,
+    arg: &str,
+    line: &str,
+    object_names: &HashMap<String, ObjectId>,
+    object_schemas: &HashMap<String, ObjectSchema>,
+    value_sets: &HashMap<String, Vec<String>>,
+    maps: &HashMap<String, ValueMap>,
+    object_groups: &HashMap<String, Vec<ObjectId>>,
+) -> Result<ConditionValueAst, DiagnosticReport> {
     let pattern_arg = parse_condition_pattern_arg(
         arg,
         line,
@@ -433,7 +713,7 @@ fn parse_condition_value_expr(
             )?
             .alternatives,
         )),
-        _ => Err(parse_error(line, "unknown condition function")),
+        _ => Err(parse_error(line, "unknown query function")),
     }
 }
 
@@ -464,208 +744,61 @@ fn parse_condition_pattern_arg(
     }))
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct OrientedPatternArgSurface {
-    pub(crate) orientation: OrientedPatternArgOrientationSurface,
-    pub(crate) pattern: std::ops::Range<usize>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum OrientedPatternArgOrientationSurface {
-    Neutral,
-    Input {
-        input: std::ops::Range<usize>,
-        axis: Option<std::ops::Range<usize>>,
-    },
-    Orientation {
-        orientation: std::ops::Range<usize>,
-    },
-}
-
-pub(crate) fn oriented_pattern_arg_surface(
-    arg: &str,
-    line: &str,
-) -> Result<Option<OrientedPatternArgSurface>, DiagnosticReport> {
-    let trimmed = strip_wrapping_pattern_parens_range(arg, trim_arg_range(arg, 0..arg.len()));
-    if arg[trimmed.clone()].starts_with('[') {
-        return Ok(Some(OrientedPatternArgSurface {
-            orientation: OrientedPatternArgOrientationSurface::Neutral,
-            pattern: trimmed,
-        }));
-    }
-
-    let Some(open_offset) = arg[trimmed.clone()].find('[') else {
-        return Ok(None);
-    };
-    let open_index = trimmed.start + open_offset;
-    let orientation = trim_arg_range(arg, trimmed.start..open_index);
-    let pattern = trim_arg_range(arg, open_index..trimmed.end);
-    if orientation.is_empty() {
-        return Ok(Some(OrientedPatternArgSurface {
-            orientation: OrientedPatternArgOrientationSurface::Neutral,
-            pattern,
-        }));
-    }
-    let orientation_tokens = pattern_arg_token_spans(arg, orientation.clone());
-    let orientation = match orientation_tokens.as_slice() {
-        [input] if input.text == "input" => OrientedPatternArgOrientationSurface::Input {
-            input: input.range.clone(),
-            axis: None,
-        },
-        [input, axis] if input.text == "input" => {
-            if !is_identifier(axis.text) {
-                return Err(parse_error(
-                    line,
-                    "input orientation set must be a single identifier",
-                ));
-            }
-            OrientedPatternArgOrientationSurface::Input {
-                input: input.range.clone(),
-                axis: Some(axis.range.clone()),
-            }
-        }
-        _ => {
-            let orientation_text = &arg[orientation.clone()];
-            if !is_identifier(orientation_text) {
-                return Err(parse_error(
-                    line,
-                    "pattern orientation must be a single identifier or input <set>",
-                ));
-            }
-            OrientedPatternArgOrientationSurface::Orientation { orientation }
-        }
-    };
-    if normalize_embedded_direction_marker(&arg[pattern.clone()])
-        .0
-        .is_some()
-    {
-        return Err(parse_error(
-            line,
-            "pattern cannot combine orientation prefix and embedded direction marker",
-        ));
-    }
-    Ok(Some(OrientedPatternArgSurface {
-        orientation,
-        pattern,
-    }))
-}
-
 fn split_oriented_pattern_arg(
     arg: &str,
     line: &str,
 ) -> Result<Option<(OrientationExpr, String)>, DiagnosticReport> {
-    let Some(surface) = oriented_pattern_arg_surface(arg, line)? else {
+    let Some(surface) = crate::solver_surface::oriented_pattern_arg_surface(arg, line)? else {
         return Ok(None);
     };
     let pattern = &arg[surface.pattern.clone()];
     if matches!(
         surface.orientation,
-        OrientedPatternArgOrientationSurface::Neutral
+        crate::solver_surface::OrientedPatternArgOrientationSurface::Neutral
     ) {
-        let (embedded_orientation, pattern) = normalize_embedded_direction_marker(pattern);
-        return Ok(Some((
-            embedded_orientation.unwrap_or(OrientationExpr::Neutral),
-            pattern,
-        )));
+        return Ok(Some((OrientationExpr::Neutral, pattern.to_string())));
     }
 
     let orientation = match surface.orientation {
-        OrientedPatternArgOrientationSurface::Neutral => unreachable!("handled above"),
-        OrientedPatternArgOrientationSurface::Input { axis, .. } => {
+        crate::solver_surface::OrientedPatternArgOrientationSurface::Neutral => {
+            unreachable!("handled above")
+        }
+        crate::solver_surface::OrientedPatternArgOrientationSurface::Input { axis, .. } => {
             let axis = axis.map(|axis| &arg[axis]).unwrap_or("directions");
             OrientationExpr::InputSet(axis.to_string())
         }
-        OrientedPatternArgOrientationSurface::Orientation { orientation } => {
+        crate::solver_surface::OrientedPatternArgOrientationSurface::Orientation {
+            orientation,
+        } => {
             parse_statement_orientation_expr(&arg[orientation], &[])
         }
     };
     Ok(Some((orientation, pattern.to_string())))
 }
 
-fn strip_wrapping_pattern_parens_range(
-    value: &str,
-    range: std::ops::Range<usize>,
-) -> std::ops::Range<usize> {
-    if !value[range.clone()].starts_with('(') {
-        return range;
-    }
-    let after_open_start = range.start + 1;
-    let after_open = &value[after_open_start..range.end];
-    let Some(close_index) = matching_close_paren(after_open) else {
-        return range;
-    };
-    if close_index + 1 != after_open.len() {
-        return range;
-    }
-    trim_arg_range(value, after_open_start..after_open_start + close_index)
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct PatternArgTokenSpan<'a> {
-    text: &'a str,
-    range: std::ops::Range<usize>,
-}
-
-fn pattern_arg_token_spans(
-    arg: &str,
-    range: std::ops::Range<usize>,
-) -> Vec<PatternArgTokenSpan<'_>> {
-    let mut tokens = Vec::new();
-    let mut index = range.start;
-    while index < range.end {
-        let Some(start_offset) = arg[index..range.end].find(|ch: char| !ch.is_whitespace()) else {
-            break;
-        };
-        let start = index + start_offset;
-        let end = arg[start..range.end]
-            .find(char::is_whitespace)
-            .map_or(range.end, |offset| start + offset);
-        tokens.push(PatternArgTokenSpan {
-            text: &arg[start..end],
-            range: start..end,
-        });
-        index = end;
-    }
-    tokens
-}
-
-fn trim_arg_range(arg: &str, range: std::ops::Range<usize>) -> std::ops::Range<usize> {
-    let start = arg[range.clone()]
-        .find(|ch: char| !ch.is_whitespace())
-        .map_or(range.end, |offset| range.start + offset);
-    let end = arg[start..range.end]
-        .rfind(|ch: char| !ch.is_whitespace())
-        .map(|offset| {
-            let index = start + offset;
-            index + arg[index..].chars().next().map(char::len_utf8).unwrap_or(0)
-        })
-        .unwrap_or(start);
-    start..end
-}
-
 fn parse_call_expr<'a>(expr: &'a str, line: &str) -> Result<(&'a str, &'a str), DiagnosticReport> {
     let (call, suffix) = require_call_surface_with_suffix(
         expr,
         line,
-        "condition expression must be a function call",
-        "condition expression missing closing )",
+        "query expression must be a function call",
+        "query expression missing closing )",
     )?;
     if !suffix.is_empty() {
         return Err(parse_error(
             line,
-            "condition expression must not have trailing text",
+            "query expression must not have trailing text",
         ));
     }
     if !is_identifier(call.name) {
         return Err(parse_error(
             line,
-            "condition function name must be an identifier",
+            "query function name must be an identifier",
         ));
     }
     let [arg] = call.args.as_slice() else {
         return Err(parse_error(
             line,
-            "condition expression must have exactly one argument",
+            "query expression must have exactly one argument",
         ));
     };
     Ok((call.name, arg))

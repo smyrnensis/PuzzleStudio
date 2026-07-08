@@ -1,0 +1,1090 @@
+title = "TENETEN"
+author = "smyrnensis"
+homepage = "smyrnensis.itch.io"
+again_interval = 0.10s
+
+theme puzzlescript {
+background_color = #243
+}
+
+sounds {
+sfx sfx0 seed=17551700 type=puzzlescript
+sfx sfx1 seed=75011107 type=puzzlescript
+sfx sfx2 seed=85372903 type=puzzlescript
+sfx sfx3 seed=47068304 type=puzzlescript
+sfx sfx4 seed=59023902 type=puzzlescript
+sfx sfx5 seed=18102904 type=puzzlescript
+sfx sfx6 seed=75615703 type=puzzlescript
+sfx sfx10 seed=84421108 type=puzzlescript
+sfx player_move seed=9405707 type=puzzlescript
+sfx crate_move seed=64059507 type=puzzlescript
+sfx restart seed=24001300 type=puzzlescript
+sfx undo seed=84443307 type=puzzlescript
+sfx endlevel seed=91940500 type=puzzlescript
+}
+
+puzzle main {
+tags {
+N = 0 1 2 3 Inf
+D = F B
+}
+
+map Nm N {
+0 -> 3
+1 -> 0
+2 -> 1
+3 -> 2
+Inf -> Inf
+}
+
+map D_rev D {
+F -> B
+B -> F
+}
+
+layers {
+Background
+Pond Puddle Crack Hole
+Background2
+TargetYou TargetCrate TargetBall TargetFly TargetHeadlong
+CrateW BallW Button GateO
+Satisfied
+Count:N Ink:D
+You:D Crate Ball Wall Fly Headlong TimeMachine:D GateC
+each Boundary:directions
+each Corner:directions
+WallShadow
+Star
+NoGo
+Checked
+Time:D
+Start
+Computer
+each NotEdge:directions
+each Marker:directions
+StopFlag
+CrackFlag
+CancelTurn
+OpenFlag
+OnlyOneButton
+Moment:directions
+FallFlag
+}
+
+groups {
+player = You:D
+object = player Crate Ball Wall Fly Headlong TimeMachine:D
+stopper = player Crate Ball Wall Fly Headlong TimeMachine:D GateC
+cantpush = Wall Fly GateC
+push = Crate TimeMachine:D
+objectW = CrateW BallW
+water = Pond Puddle
+nogoF = Wall Fly GateC Hole Headlong
+nogoB = Wall Crate Crack Hole Headlong
+crate = Crate CrateW
+ball = Ball BallW
+heavy = player Crate Ball
+counts = Count:N
+targets = TargetYou TargetCrate TargetBall TargetFly TargetHeadlong
+}
+
+sprites {
+shapes {
+__ps_shape_Ball {
+..............
+..............
+....000000....
+....000000....
+..0000001100..
+..0000001100..
+..0000000000..
+..0000000000..
+..0000000000..
+..0000000000..
+..2200000022..
+..2200000022..
+....222222....
+....222222....
+}
+__ps_shape_Ink_F {
+..............
+..............
+..............
+..............
+....000000....
+....000000....
+....000000....
+....000000....
+....000000....
+....000000....
+..............
+..............
+..............
+..............
+}
+__ps_shape_TimeMachine_F {
+..............
+..............
+..............
+..............
+....111111....
+....111111....
+....110011....
+....110011....
+....111111....
+....111111....
+....222222....
+....222222....
+..............
+..............
+}
+__ps_shape_You_F {
+..............
+..............
+....00..00....
+....00..00....
+....110011....
+....110011....
+....000000....
+....000000....
+....000000....
+....000000....
+....002200....
+....002200....
+....22..22....
+....22..22....
+}
+}
+
+Background
+#8fcf6f
+
+Background2
+#0000000a
+
+You:F
+colors #fff #000 #00000015
+shape __ps_shape_You_F
+
+You:B
+colors #000 #fff #00000015
+shape __ps_shape_You_F
+
+TargetYou
+colors #0003 #0003 #0000
+shape __ps_shape_You_F
+
+Crate
+#b85 #a74 #00000015
+..............
+..............
+..0000000000..
+..0000000000..
+..0022222200..
+..0022222200..
+..00......00..
+..00......00..
+..00......00..
+..00......00..
+..0000000000..
+..0000000000..
+..2222222222..
+..2222222222..
+
+CrateW
+#88c
+..............
+..............
+..0000000000..
+..0000000000..
+..00......00..
+..00......00..
+..00......00..
+..00......00..
+..00......00..
+..00......00..
+..0000000000..
+..0000000000..
+..............
+..............
+
+TargetCrate
+#0003
+..............
+..............
+..0000000000..
+..0000000000..
+..00......00..
+..00......00..
+..00......00..
+..00......00..
+..00......00..
+..00......00..
+..0000000000..
+..0000000000..
+..............
+..............
+
+Ball
+colors #83d #a7f #00000015
+shape __ps_shape_Ball
+
+BallW
+colors #43d #65d #0000
+shape __ps_shape_Ball
+
+TargetBall
+#0003
+..............
+..............
+....000000....
+....000000....
+..0000000000..
+..0000000000..
+..0000000000..
+..0000000000..
+..0000000000..
+..0000000000..
+....000000....
+....000000....
+..............
+..............
+
+Fly
+#fd0 #220 #6cf #00000015
+..............
+..............
+..............
+..............
+....000000....
+....000000....
+..2211001122..
+..2211001122..
+....000000....
+....000000....
+....333333....
+....333333....
+..............
+..............
+
+TargetFly
+#0003
+..............
+..............
+..............
+..............
+....000000....
+....000000....
+..0000000000..
+..0000000000..
+....000000....
+....000000....
+..............
+..............
+..............
+..............
+
+Headlong
+#f82 #201a00 #00000015
+..............
+..............
+....000000....
+....000000....
+....110011....
+....110011....
+....000000....
+....000000....
+....002200....
+....002200....
+....00..00....
+....00..00....
+....22..22....
+....22..22....
+
+TargetHeadlong
+#0003
+..............
+..............
+....000000....
+....000000....
+....000000....
+....000000....
+....000000....
+....000000....
+....00..00....
+....00..00....
+....00..00....
+....00..00....
+..............
+..............
+
+NoGo
+#b44
+..............
+..............
+..00......00..
+..00......00..
+....00..00....
+....00..00....
+......00......
+......00......
+....00..00....
+....00..00....
+..00......00..
+..00......00..
+..............
+..............
+
+Pond
+#3373d3 #3575d5
+00000000000000
+11111111111111
+00000000000000
+11111111111111
+00000000000000
+11111111111111
+00000000000000
+11111111111111
+00000000000000
+11111111111111
+00000000000000
+11111111111111
+00000000000000
+11111111111111
+
+Crack
+#037
+..............
+..............
+..............
+..............
+....00..00....
+....00..00....
+......00......
+......00......
+....00..00....
+....00..00....
+..............
+..............
+..............
+..............
+
+Puddle
+#3373d3 #3575d5 #8fcf6f
+22000000000022
+22111111111122
+00000000000000
+11111111111111
+00000000000000
+11111111111111
+00000000000000
+11111111111111
+00000000000000
+11111111111111
+00000000000000
+11111111111111
+22000000000022
+22111111111122
+
+CrackFlag
+transparent
+
+Hole
+#332a11 #3a2f1a
+00000000000000
+01111111111110
+01000000000010
+01011111111010
+01010000001010
+01010111101010
+01010100101010
+01010100101010
+01010111101010
+01010000001010
+01011111111010
+01000000000010
+01111111111110
+00000000000000
+
+Button
+#777 #b44 #6a6a6a
+..............
+..............
+..0000000000..
+..0000000000..
+..0011111100..
+..0011111100..
+..0011111100..
+..0011111100..
+..0011111100..
+..0011111100..
+..0022222200..
+..0022222200..
+..............
+..............
+
+GateC
+#b44 #00000015
+..............
+..............
+......00......
+......00......
+......00......
+......00......
+..0000000000..
+..0000000000..
+..1111001111..
+..1111001111..
+......00......
+......00......
+......11......
+......11......
+
+GateO
+#b443
+..............
+..............
+......00......
+......00......
+......00......
+......00......
+..0000000000..
+..0000000000..
+......00......
+......00......
+......00......
+......00......
+..............
+..............
+
+Wall
+#224433 #234534
+00000000010000
+01101000111011
+01011101111110
+00001111110100
+00000111100000
+00010010000000
+01111000010000
+01111100111010
+11011101111111
+00001111111110
+00100111101100
+01110011001000
+00110000110000
+00000000100000
+
+Boundary:directions
+rotate from up
+#447755 #477a58
+01110011101101
+00101001000100
+..............
+..............
+..............
+..............
+..............
+..............
+..............
+..............
+..............
+..............
+..............
+..............
+
+Corner:directions
+rotate from up
+#475
+............00
+............00
+..............
+..............
+..............
+..............
+..............
+..............
+..............
+..............
+..............
+..............
+..............
+..............
+
+WallShadow
+#00000015
+00000000000000
+00000000000000
+..............
+..............
+..............
+..............
+..............
+..............
+..............
+..............
+..............
+..............
+..............
+..............
+
+Count:0
+transparent
+
+Count:1
+#000 #fff #888
+..............
+..............
+..............
+..............
+..............
+.....0011.....
+.....0011.....
+.....1100.....
+.....1100.....
+..............
+..............
+..............
+..............
+..............
+
+Count:2
+#000 #fff #888
+..............
+..............
+..............
+..............
+..............
+..0011..0011..
+..0011..0011..
+..1100..1100..
+..1100..1100..
+..............
+..............
+..............
+..............
+..............
+
+Count:3
+#000 #fff #888
+..............
+..............
+.....0011.....
+.....0011.....
+.....1100.....
+.....1100.....
+..............
+..............
+..0011..0011..
+..0011..0011..
+..1100..1100..
+..1100..1100..
+..............
+..............
+
+Count:Inf
+#000 #fff
+..............
+..............
+..............
+.....0000.....
+.....0000.....
+...11001111...
+...11001111...
+...11110011...
+...11110011...
+.....0000.....
+.....0000.....
+..............
+..............
+..............
+
+Ink:F
+colors #fff
+shape __ps_shape_Ink_F
+
+Ink:B
+colors #000
+shape __ps_shape_Ink_F
+
+TimeMachine:F
+colors #fff #888 #00000015
+shape __ps_shape_TimeMachine_F
+
+TimeMachine:B
+colors #000 #888 #00000015
+shape __ps_shape_TimeMachine_F
+
+Star
+#dd33 #000
+..............
+..............
+..............
+..............
+......00......
+......00......
+....000000....
+....000000....
+......00......
+......00......
+..............
+..............
+..............
+..............
+
+Satisfied
+#ff04
+
+Checked
+transparent
+
+Computer
+transparent
+
+Start
+transparent
+
+NotEdge:directions
+transparent
+
+Marker:directions
+transparent
+
+StopFlag
+transparent
+
+CancelTurn
+transparent
+
+OpenFlag
+transparent
+
+OnlyOneButton
+transparent
+
+Time:D
+transparent
+
+Moment:directions
+transparent
+
+FallFlag
+transparent
+}
+
+win_conditions {
+no [ TargetCrate no Crate ]
+no [ TargetBall no Ball ]
+no [ TargetYou no You:D ]
+no [ TargetFly no Fly ]
+no [ TargetHeadlong no Headlong ]
+}
+
+routine BallPush once {
+[ > object | Ball | no stopper ] -> [ > object | | Ball Moment:> ] sfx sfx1
+[ Ball Moment:> | no stopper ] -> [ | Ball Moment:> ]
+[ Ball Moment:> | stopper ] -> [ Ball | stopper ]
+[ Moment:> ] -> [ ]
+}
+
+routine BallPull once {
+[ < object | no stopper ] -> [ < object | Marker:< ]
+[ Marker:< | no stopper ] -> [ Marker:< | Marker:< ]
+[ Marker:< | Ball | stopper ] -> [ Marker:< | Ball Moment:< | stopper ]
+[ Marker:< | Ball Moment:< ] -> [ Ball Moment:< | ]
+[ < object | Ball Moment:< ] -> [ < object | < Ball ] sfx sfx1
+[ < object | Ball | stopper ] -> [ < object | < Ball | stopper ] sfx sfx1
+[ Moment:> ] -> [ ]
+[ Marker:> ] -> [ ]
+[ Computer ] -> [ Computer OnlyOneButton ]
+[ Computer ] [ Button heavy ] -> [ Computer ] [ Button heavy Checked ]
+[ OnlyOneButton ] [ Button heavy Checked ] [ Button heavy no Checked ] -> [ ] [ Button heavy ] [ Button heavy ]
+[ Checked ] -> [ ]
+[ < object | no stopper ] -> [ < object | Marker:< ]
+[ Marker:< | no stopper ] -> [ Marker:< | Marker:< ]
+[ OnlyOneButton ] [ Marker:< | Ball Button | GateO ] -> [ OnlyOneButton ] [ Marker:< | Ball Moment:< Button | GateO ]
+[ Marker:< | Ball Moment:< ] -> [ Ball Moment:< | ]
+[ < object | Ball Moment:< ] -> [ < object | < Ball ] sfx sfx1
+[ OnlyOneButton ] [ < object | Ball Button | GateO ] -> [ OnlyOneButton ] [ < object | < Ball Button | GateO ] sfx sfx1
+[ OnlyOneButton ] -> [ ]
+[ Marker:> ] -> [ ]
+[ Moment:> ] -> [ ]
+}
+
+routine HeadlongCome once {
+[ stopper | Headlong | no stopper ] -> [ stopper | Headlong | Marker:> ]
+[ Marker:> | no stopper ] -> [ Marker:> | Marker:> ]
+[ ^ You:B | Marker:< | ... | Headlong ] -> [ ^ You:B | Headlong | ... | ] sfx sfx1
+[ v You:B | Marker:< | ... | Headlong ] -> [ v You:B | Headlong | ... | ] sfx sfx1
+[ < You:B | Marker:< | ... | Headlong ] -> [ < You:B | Headlong | ... | ] sfx sfx1
+[ Marker:> ] -> [ ]
+}
+
+routine CancelTurn once {
+[ Computer ] -> [ Computer CancelTurn ] sfx sfx3
+[ > You:D | ] -> [ You:D | NoGo ]
+[ > object ] -> [ object ]
+}
+
+routine Start once {
+[ Start ] [ no Start ] -> [ Start ] [ Start ]
+[ Start | Start ] -> [ Start NotEdge:> | Start NotEdge:< ]
+[ Start no NotEdge:up no NotEdge:left ] -> [ Start Computer ]
+[ NotEdge:directions ] -> [ ]
+[ Start no Computer ] -> [ ]
+repeat {
+[ Start Background no Background2 | no Start Background ] -> [ Start Background | Start Background Background2 ]
+[ Start Background2 | no Start Background ] -> [ Start Background2 | Start Background ]
+}
+[ Start no Computer ] -> [ ]
+[ Boundary:> ] -> [ ]
+[ Corner:> ] -> [ ]
+[ Wall no Boundary:> | no Wall ] -> [ Wall Boundary:> | ]
+[ Wall no Boundary:^ | Boundary:^ ] -> [ Wall Corner:^ | Boundary:^ ]
+[ Wall no Boundary:v | Boundary:v ] -> [ Wall Corner:> | Boundary:v ]
+down [ Wall | no Wall ] -> [ Wall | WallShadow ]
+[ Computer ] [ You:D#1 ] -> [ Computer Time:D#1 ] [ You:D#1 ]
+[ Start ] -> [ ]
+}
+
+routine FlipTimeDirection once {
+[ You:D#1 Ink:D_rev(D#1) ] -> [ You:D_rev(D#1) Ink:D_rev(D#1) ] sfx sfx0
+[ You:D#1 Count:N#2 no Checked ] -> [ You:D_rev(D#1) Count:Nm(N#2) Checked ] sfx sfx0
+[ Count:0 ] -> [ ]
+[ Checked ] -> [ ]
+[ Computer ] [ You:D#1 ] -> [ Computer Time:D#1 ] [ You:D#1 ]
+}
+
+routine __ps_main once {
+[ Start ] -> Start
+[ NoGo ] -> [ ]
+[ > You:F | nogoF ] -> CancelTurn
+[ > You:B | nogoB ] -> CancelTurn
+[ > You:F | water no objectW ] -> CancelTurn
+[ > You:B | Pond no objectW ] -> CancelTurn
+[ ^ You:B | Headlong | no stopper ] -> CancelTurn
+[ v You:B | Headlong | no stopper ] -> CancelTurn
+[ < You:B | Headlong | no stopper ] -> CancelTurn
+[ Computer no CancelTurn ] -> HeadlongCome
+[ > You:F | push ] -> [ > You:F | > push ]
+[ < You:B | push ] -> [ < You:B | < push ]
+[ > push | push ] -> [ > push | > push ]
+[ < push | push ] -> [ < push | < push ]
+[ > push | Fly ] -> [ > push | Fly ] CancelTurn
+[ < You:F | Fly ] -> [ < You:F | < Fly ]
+[ > You:B | Fly ] -> [ > You:B | > Fly ]
+[ > You:B | | Fly ] -> CancelTurn
+[ > Fly | Crate ] -> CancelTurn
+[ > Fly | Fly ] -> CancelTurn
+[ > Fly | Ball ] -> CancelTurn
+[ Time:F ] -> BallPush
+[ Time:B ] -> BallPull
+[ > You:B | GateC ] -> [ > You:B | GateO ]
+[ > You:B | ... | > Fly | GateC ] -> [ > You:B | ... | > Fly | GateO ]
+[ > heavy | Button ] [ Computer ] -> [ > heavy | Button ] [ Computer OpenFlag ]
+[ Computer no OpenFlag ] [ no push no Ball no objectW | > You:B GateO ] -> CancelTurn
+[ Computer no OpenFlag ] [ push{no directions} | > You:B GateO ] -> CancelTurn
+[ Computer no OpenFlag ] [ Ball{no directions} | > You:B GateO ] -> CancelTurn
+[ Computer no OpenFlag ] [ objectW{no directions} | > You:B GateO ] -> CancelTurn
+[ Computer no OpenFlag ] [ no Crate no Ball no objectW | > object GateO | ... | > You:B ] -> [ Computer ] [ | object GateO | ... | > You:B ]
+[ Computer no OpenFlag ] [ Ball{no directions} | > object GateO | ... | > You:B ] -> [ Computer ] [ | object GateO | ... | > You:B ]
+[ > You:D#1 | TimeMachine:D_rev(D#1) | cantpush ] -> [ > You:D_rev(D#1) | | cantpush ] sfx sfx0
+[ > You:D#1 | TimeMachine:D#1 | cantpush ] -> [ > You:D#1 | | cantpush ] sfx sfx4
+[ > object | Wall ] -> CancelTurn
+[ > object | GateC ] -> CancelTurn
+[ Crack > You:F ] -> [ Puddle > You:F ] sfx sfx4
+[ > You:B | Puddle no objectW ] -> [ > You:B | Crack ] sfx sfx4
+[ CrateW no object | > You:B ] -> [ > Crate | > You:B ]
+[ CrateW no object | > Crate no water | ... | > You:B ] -> [ > Crate | > Crate | ... | > You:B ]
+move
+[ You:F | Headlong | no stopper ] -> [ You:F | Headlong Moment:> | ] sfx sfx1
+[ Headlong Moment:> | no stopper ] -> [ | Headlong Moment:> ] sfx sfx1
+[ Moment:directions ] -> [ ]
+[ Computer no CancelTurn ] -> FlipTimeDirection
+[ CancelTurn ] -> [ ]
+[ Crate water no objectW ] -> [ CrateW water ] sfx sfx5
+[ Ball water no objectW ] -> [ BallW water ] sfx sfx5
+[ Crate FallFlag ] -> [ ] sfx sfx5
+[ Ball FallFlag ] -> [ ] sfx sfx5
+[ Crate Hole ] -> [ Crate Hole FallFlag ] again
+[ Ball Hole ] -> [ Ball Hole FallFlag ] again
+[ OpenFlag ] -> [ ]
+[ GateO no object ] -> [ GateC ]
+[ Button heavy ] [ GateC ] -> [ Button heavy ] [ GateO ]
+[ Button heavy ] [ Computer ] -> [ Button heavy ] [ Computer OpenFlag ]
+[ TargetYou You:D ] -> [ TargetYou You:D Satisfied ]
+[ TargetYou no You:D Satisfied ] -> [ TargetYou ]
+[ TargetCrate Crate ] -> [ TargetCrate Crate Satisfied ]
+[ TargetCrate no Crate Satisfied ] -> [ TargetCrate ]
+[ TargetBall Ball ] -> [ TargetBall Ball Satisfied ]
+[ TargetBall no Ball Satisfied ] -> [ TargetBall ]
+[ TargetFly Fly ] -> [ TargetFly Fly Satisfied ]
+[ TargetFly no Fly Satisfied ] -> [ TargetFly ]
+[ TargetHeadlong Headlong ] -> [ TargetHeadlong Headlong Satisfied ]
+[ TargetHeadlong no Headlong Satisfied ] -> [ TargetHeadlong ]
+}
+
+on_level_start {
+once_all [ no Background ] -> [ Background ]
+__ps_main
+}
+
+rules {
+input directions [ player ] -> [ > player ]
+__ps_main
+}
+
+on_level_clear {
+wait 0.3s
+next_level
+}
+
+levels {
+legend {
+. = Background
+p = TargetYou
+C = Crate
+𝒞 = CrateW
+c = TargetCrate
+B = Ball
+b = TargetBall
+X = Fly
+x = TargetFly
+H = Headlong
+h = TargetHeadlong
+~ = Pond
+* = Crack
+≃ = Puddle
+o = Hole
+! = Button
++ = GateC
+O = GateO
+$ = TimeMachine:F
+% = TimeMachine:B
+P = You:F Start
+Q = You:B Start
+β = Ball TargetBall
+χ = Crate TargetCrate
+: = Crack TargetCrate
+; = Pond TargetCrate
+& = Ball TargetCrate
+1 = Count:1
+2 = Count:2
+3 = Count:3
+∞ = Count:Inf
+∘ = Ink:F
+• = Ink:B
+@ = Crate TargetCrate
+# = Wall
+⋆ = Wall Star
+_ = empty
+}
+
+level "1"
+#####
+#∘•c#
+#.#.#
+#PC.#
+#####
+
+level "2"
+######
+#.c###
+#∘.###
+#c.•.#
+#C.C.#
+#P.###
+######
+
+level "3"
+#######
+##c.•.#
+#.P.∘C#
+#...χ##
+#######
+
+level "4"
+#######
+#..∘•##
+#P#C.c#
+#.•C.c#
+#######
+
+level "5"
+######
+#•P.##
+#•Bb##
+#....#
+##.∘.#
+######
+
+level "6"
+###########
+#ooooooooo#
+#o2..ooooo#
+#oo.Pob.oo#
+#oo..Bo..o#
+#oo....C.o#
+#ooooo...o#
+#ooooooooo#
+###########
+
+level "7"
+#########
+#ooooooo#
+#o•...∘o#
+#o.b#B.o#
+#o.bβB.o#
+#o.P...o#
+#o∘...•o#
+#ooooooo#
+#########
+
+level "8"
+#######
+#...•##
+#.#Bc##
+#..∘b.#
+###.CP#
+#######
+
+level "9"
+######
+##..##
+#.C..#
+#.xXP#
+#.c.##
+######
+
+level "10"
+######
+#.Qx##
+#.XpX#
+#.X.##
+##.x##
+######
+
+level "11"
+######
+#..Q##
+#2Xx.#
+#....#
+###xX#
+######
+
+level "12"
+#########
+###c.≃.1#
+######..#
+######.##
+######*##
+#1C.*.P##
+#...#..##
+#########
+
+level "13"
+#######
+#.P.2##
+#.CC###
+#.C.###
+#.~≃###
+#.~~~p#
+#######
+
+level "14"
+#########
+#...###c#
+#CP•≃≃..#
+#..∘**..#
+#########
+
+level "15"
+###########
+#ooooooooo#
+#o.&~.bc.o#
+#o.##CC..o#
+#o...Poooo#
+#ooo•∘oooo#
+#ooooooooo#
+###########
+
+level "16"
+########
+###....#
+#c*•P.C#
+#**∘..C#
+#:*#####
+########
+
+level "17"
+#########
+#pP.+C..#
+#...+C..#
+#.!.++..#
+#.C.++.c#
+#...++.c#
+#########
+
+level "18"
+##########
+#...++X###
+#..•######
+#...+!..##
+#χ.∘##.x.#
+######P.∘#
+##########
+
+level "19"
+########
+#B..P•##
+#+#..c##
+#!+..C##
+#~~..∘##
+#...++p#
+########
+
+level "20"
+########
+#c.c####
+##.+C..#
+##..C+.#
+####∘P•#
+########
+message "Thank you for playing!"
+}
+}
+
+scene = title {
+layout {
+title = "TENETEN"
+subtitle = "by smyrnensis"
+if has_progress_save {
+choice "Continue" -> continue_game
+}
+choice "New Game" -> new_game
+}
+routine continue_game {
+goto playing
+}
+routine new_game {
+clear_game_progress
+goto playing(0)
+}
+}
+
+scene = playing {
+layout {
+row {
+title = "TENETEN"
+}
+puzzle board = main
+}
+keys {
+Escape q -> back
+}
+rules {
+step board
+}
+routine back {
+goto title
+}
+}

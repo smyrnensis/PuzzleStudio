@@ -11,7 +11,7 @@ Current vanilla PuzzleScript import scope:
 - A PuzzleScript object named `Background` is treated as PS's special background object: it remains a normal canonical object/sprite, and the importer adds `on_level_start { once_all [ no Background ] -> [ Background ] }` so every level cell gets background on load.
 - `COLLISIONLAYERS` rows become canonical `layers`; generated output does not use `objects {}`.
 - `COLLISIONLAYERS` property aliases are expanded to their concrete objects.
-- `WINCONDITIONS` rows are copied when they match canonical condition forms such as `all Target on Crate`.
+- `WINCONDITIONS` rows are lowered into canonical condition expressions; PuzzleScript `all Target on Crate` becomes `no [ Target no Crate ]`.
 - Empty PS `WINCONDITIONS` sections are omitted from canonical output.
 - `RULES` rows are copied as canonical rules. Prefixless rules containing PS movement markers (`>`, `<`, `^`, `v`) rely on canonical implicit cardinal expansion.
 - PS's special `Player` movement is represented by inserting `input directions [ Player ] -> [ > Player ]`.
@@ -24,7 +24,9 @@ Current vanilla PuzzleScript import scope:
 - PS `moving` / `stationary` qualifiers become anonymous movement mark predicates such as `directions Crate` and `Crate{no directions}` on LHS; RHS `stationary` is emitted as the bare object.
 - Simple PS `SOUNDS` rows such as `sfx0 12345` become canonical `sounds { sfx sfx0 seed=12345 type=puzzlescript }`; PS rule suffixes such as `SFX0` become `sfx sfx0`.
 - `LEVELS` splits blank-line-separated PS levels into canonical unnamed levels.
-- A default `scene title` and `scene playing` are generated. Title choices call scene-local routines directly, while the playing scene uses the imported `main` puzzle slot without an extra `board` alias.
+- Default `scene = title` and `scene = playing` entries are generated. Title
+  choices call scene-local routines directly, while the playing scene mounts the
+  imported `main` puzzle as `puzzle board = main` and steps `board`.
 - Generated sprite entries and level bodies use brace-less canonical forms. Generated output uses spaces, not tabs.
 
 Pinned samples:

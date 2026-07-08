@@ -2719,6 +2719,8 @@ function sourceEditorCaretPoint(offset) {
   mirror.style.font = style.font;
   mirror.style.lineHeight = style.lineHeight;
   mirror.style.letterSpacing = style.letterSpacing;
+  mirror.style.fontVariantLigatures = style.fontVariantLigatures;
+  mirror.style.fontFeatureSettings = style.fontFeatureSettings;
   mirror.style.tabSize = style.tabSize;
   mirror.style.whiteSpace = "pre-wrap";
   mirror.style.overflowWrap = "break-word";

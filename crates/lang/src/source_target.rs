@@ -1,8 +1,6 @@
-use crate::source::{
-    SourceContext, SourceContextLine, SourceScope, scan_source_context, split_header_tokens,
-    strip_line_comment,
-};
-use std::collections::{HashMap, HashSet};
+use crate::source::{SourceScope, split_header_tokens, strip_line_comment};
+use crate::surface::{SurfaceDocument, SurfaceLine, SurfaceVisualSpriteRefs};
+use std::collections::HashSet;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SourceTargetKind {
@@ -87,21 +85,20 @@ pub struct SourceSpriteShapeAsset {
 
 pub fn resolve_source_target(source: &str, cursor_offset: usize) -> Option<SourceTarget> {
     let cursor = cursor_offset.min(source.len());
-    let context = scan_source_context(source);
-    resolve_source_target_from_context(source, &context, cursor)
+    let document = crate::parse_surface_document(source);
+    resolve_source_target_from_document(source, &document, cursor)
 }
 
-pub(crate) fn resolve_source_target_from_context(
+pub(crate) fn resolve_source_target_from_document(
     source: &str,
-    context: &SourceContext,
+    document: &SurfaceDocument,
     cursor: usize,
 ) -> Option<SourceTarget> {
-    let visual_refs = collect_visual_sprite_refs(source, context);
-    resolve_sounds_target(context, cursor)
-        .or_else(|| resolve_level3d_target(source, context, cursor))
-        .or_else(|| resolve_level_target(source, context, cursor))
-        .or_else(|| resolve_sprite3d_target(source, context, cursor))
-        .or_else(|| resolve_sprite_target(source, context, cursor, &visual_refs))
+    resolve_sounds_target(document, cursor)
+        .or_else(|| resolve_level3d_target(source, document, cursor))
+        .or_else(|| resolve_level_target(source, document, cursor))
+        .or_else(|| resolve_sprite3d_target(source, document, cursor))
+        .or_else(|| resolve_sprite_target(source, document, cursor, &document.visual_sprite_refs))
 }
 
 pub fn source_target_json(target: Option<&SourceTarget>) -> String {
@@ -229,7 +226,7 @@ fn push_source_sprite_shape_assets_json(out: &mut String, entries: &[SourceSprit
     out.push(']');
 }
 
-fn resolve_sounds_target(context: &SourceContext, cursor: usize) -> Option<SourceTarget> {
+fn resolve_sounds_target(context: &SurfaceDocument, cursor: usize) -> Option<SourceTarget> {
     for line in &context.lines {
         let line_end = line_end(line);
         if cursor < line.start || cursor > line_end || line.scope != Some(SourceScope::Sounds) {
@@ -253,7 +250,7 @@ fn resolve_sounds_target(context: &SourceContext, cursor: usize) -> Option<Sourc
 }
 
 fn parse_sound_definition(
-    line: &SourceContextLine,
+    line: &SurfaceLine,
 ) -> Option<(SoundSourceTargetKind, String, Vec<(String, String)>)> {
     let [kind, name, rest @ ..] = line.tokens.as_slice() else {
         return None;
@@ -290,7 +287,7 @@ fn trim_quotes(value: &str) -> &str {
 
 fn resolve_level_target(
     source: &str,
-    context: &SourceContext,
+    context: &SurfaceDocument,
     cursor: usize,
 ) -> Option<SourceTarget> {
     let level3d_blocks = level3d_blocks(source, context);
@@ -358,7 +355,7 @@ fn resolve_level_target(
     None
 }
 
-fn is_unnamed_level_start(line: &SourceContextLine) -> bool {
+fn is_unnamed_level_start(line: &SurfaceLine) -> bool {
     if line.scope != Some(SourceScope::Levels) {
         return false;
     }
@@ -370,7 +367,7 @@ fn is_unnamed_level_start(line: &SourceContextLine) -> bool {
 
 fn unnamed_level_range(
     source: &str,
-    context: &SourceContext,
+    context: &SurfaceDocument,
     start_index: usize,
 ) -> (usize, usize, usize) {
     let line = &context.lines[start_index];
@@ -415,7 +412,7 @@ fn unnamed_level_range(
     (end, body_start, body_end)
 }
 
-fn next_level_scan_index(context: &SourceContext, start_index: usize, end: usize) -> usize {
+fn next_level_scan_index(context: &SurfaceDocument, start_index: usize, end: usize) -> usize {
     context
         .lines
         .iter()
@@ -427,7 +424,7 @@ fn next_level_scan_index(context: &SourceContext, start_index: usize, end: usize
 
 fn resolve_level3d_target(
     source: &str,
-    context: &SourceContext,
+    context: &SurfaceDocument,
     cursor: usize,
 ) -> Option<SourceTarget> {
     let mut level_index = 0usize;
@@ -474,14 +471,18 @@ fn resolve_level3d_target(
     None
 }
 
-fn level_name(line: &SourceContextLine) -> Option<String> {
+fn level_name(line: &SurfaceLine) -> Option<String> {
     match line.tokens.as_slice() {
         [keyword, name, ..] if keyword == "level" => Some(clean_name_token(name)),
         _ => None,
     }
 }
 
-fn level_range(source: &str, context: &SourceContext, start_index: usize) -> (usize, usize, usize) {
+fn level_range(
+    source: &str,
+    context: &SurfaceDocument,
+    start_index: usize,
+) -> (usize, usize, usize) {
     let line = &context.lines[start_index];
     let header_end = line_end(line);
     if let Some(open_index) = source[line.start..header_end]
@@ -522,11 +523,12 @@ fn level_range(source: &str, context: &SourceContext, start_index: usize) -> (us
 
 fn resolve_sprite_target(
     source: &str,
-    context: &SourceContext,
+    context: &SurfaceDocument,
     cursor: usize,
-    visual_refs: &VisualSpriteRefs,
+    visual_refs: &SurfaceVisualSpriteRefs,
 ) -> Option<SourceTarget> {
     let sprite3d_blocks = sprite3d_blocks(source, context);
+    let visual_shape_blocks = visual_shape_table_blocks(source, context);
     let mut covered_until = 0usize;
     for (index, line) in context.lines.iter().enumerate() {
         if line.start < covered_until {
@@ -536,6 +538,12 @@ fn resolve_sprite_target(
             continue;
         }
         if sprite3d_blocks
+            .iter()
+            .any(|block| line.start > block.open_index && line.start < block.close_index)
+        {
+            continue;
+        }
+        if visual_shape_blocks
             .iter()
             .any(|block| line.start > block.open_index && line.start < block.close_index)
         {
@@ -624,12 +632,37 @@ fn resolve_sprite_target(
     None
 }
 
+fn visual_shape_table_blocks(source: &str, context: &SurfaceDocument) -> Vec<Sprite3dBlock> {
+    context
+        .lines
+        .iter()
+        .filter_map(|line| {
+            if !matches!(
+                line.scope,
+                Some(SourceScope::Visuals | SourceScope::VisualShapeTable)
+            ) || !line.tokens.first().is_some_and(|token| token == "shapes")
+            {
+                return None;
+            }
+            let line_end = line_end(line);
+            let open_index = source[line.start..line_end]
+                .find('{')
+                .map(|offset| line.start + offset)?;
+            let close_index = find_matching_brace(source, open_index)?;
+            Some(Sprite3dBlock {
+                open_index,
+                close_index,
+            })
+        })
+        .collect()
+}
+
 fn source_sprite_target(
     source: &str,
     target_name: &str,
     body_start: usize,
     body_end: usize,
-    visual_refs: &VisualSpriteRefs,
+    visual_refs: &SurfaceVisualSpriteRefs,
 ) -> Option<SourceSpriteTarget> {
     let body = source.get(body_start..body_end)?;
     let mut target = SourceSpriteTarget::default();
@@ -692,6 +725,17 @@ fn source_sprite_target(
         .shape_assets
         .sort_by(|left, right| left.name.cmp(&right.name));
     enrich_source_sprite_target_from_loaded_visual(source, target_name, &mut target);
+    if target.resolved_shape_rows.is_empty() {
+        if let Some(shape_ref) = &target.shape_ref {
+            if let Some(asset) = target
+                .shape_assets
+                .iter()
+                .find(|asset| asset.name == *shape_ref)
+            {
+                target.resolved_shape_rows = asset.rows.clone();
+            }
+        }
+    }
     if target.resolved_palette.is_empty() {
         target.resolved_palette = direct_source_sprite_palette(&target.palette_tokens);
     }
@@ -802,7 +846,7 @@ struct Level3dBlock {
     model: String,
 }
 
-fn level3d_blocks(source: &str, context: &SourceContext) -> Vec<Level3dBlock> {
+fn level3d_blocks(source: &str, context: &SurfaceDocument) -> Vec<Level3dBlock> {
     context
         .lines
         .iter()
@@ -839,7 +883,7 @@ fn parse_levels3_tokens(tokens: &[String]) -> (String, String) {
 
 fn resolve_sprite3d_target(
     source: &str,
-    context: &SourceContext,
+    context: &SurfaceDocument,
     cursor: usize,
 ) -> Option<SourceTarget> {
     for block in sprite3d_blocks(source, context) {
@@ -904,7 +948,7 @@ fn resolve_sprite3d_target(
     None
 }
 
-fn sprite3d_blocks(source: &str, context: &SourceContext) -> Vec<Sprite3dBlock> {
+fn sprite3d_blocks(source: &str, context: &SurfaceDocument) -> Vec<Sprite3dBlock> {
     context
         .lines
         .iter()
@@ -923,7 +967,7 @@ fn sprite3d_blocks(source: &str, context: &SourceContext) -> Vec<Sprite3dBlock> 
         .collect()
 }
 
-fn sprite3d_name(line: &SourceContextLine) -> Option<String> {
+fn sprite3d_name(line: &SurfaceLine) -> Option<String> {
     let [name] = line.tokens.as_slice() else {
         return None;
     };
@@ -934,7 +978,7 @@ fn sprite3d_name(line: &SourceContextLine) -> Option<String> {
 }
 
 fn next_sprite3d_palette_line(
-    context: &SourceContext,
+    context: &SurfaceDocument,
     start_index: usize,
     block: Sprite3dBlock,
 ) -> bool {
@@ -945,196 +989,21 @@ fn next_sprite3d_palette_line(
         .take_while(|line| line.start < block.close_index)
         .find_map(|line| {
             let trimmed = code_trim(&line.content);
-            (!trimmed.is_empty())
-                .then(|| is_sprite_entry_start_color_row(trimmed, &VisualSpriteRefs::default()))
+            (!trimmed.is_empty()).then(|| {
+                is_sprite_entry_start_color_row(trimmed, &SurfaceVisualSpriteRefs::default())
+            })
         })
         .unwrap_or(false)
 }
 
 fn sprite_header_scope(scope: Option<SourceScope>) -> bool {
-    matches!(scope, Some(SourceScope::Visuals))
+    matches!(
+        scope,
+        Some(SourceScope::Visuals | SourceScope::VisualShapeEntry)
+    )
 }
 
-#[derive(Default)]
-struct VisualSpriteRefs {
-    color_names: HashSet<String>,
-    shape_names: HashSet<String>,
-    color_assets: HashMap<String, String>,
-    shape_assets: HashMap<String, Vec<String>>,
-}
-
-impl VisualSpriteRefs {
-    fn contains(&self, value: &str) -> bool {
-        self.color_names.contains(value)
-    }
-
-    fn contains_shape(&self, value: &str) -> bool {
-        self.shape_names.contains(value)
-    }
-}
-
-fn collect_visual_sprite_refs(source: &str, context: &SourceContext) -> VisualSpriteRefs {
-    let mut refs = VisualSpriteRefs::default();
-    for line in &context.lines {
-        let Some(kind) = line.tokens.first().map(String::as_str) else {
-            continue;
-        };
-        if !matches!(
-            (kind, line.scope),
-            (
-                "colors",
-                Some(SourceScope::Visuals | SourceScope::VisualColorTable)
-            ) | (
-                "shapes",
-                Some(SourceScope::Visuals | SourceScope::VisualShapeTable)
-            )
-        ) {
-            continue;
-        }
-        let line_end = line_end(line);
-        let Some(open_index) = source[line.start..line_end]
-            .find('{')
-            .map(|offset| line.start + offset)
-        else {
-            continue;
-        };
-        let Some(close_index) = find_matching_brace(source, open_index) else {
-            continue;
-        };
-        match kind {
-            "colors" => {
-                collect_visual_flat_asset_names(context, open_index, close_index, &mut refs)
-            }
-            "shapes" => collect_visual_shape_names(context, open_index, close_index, &mut refs),
-            _ => {}
-        }
-    }
-    refs
-}
-
-fn collect_visual_flat_asset_names(
-    context: &SourceContext,
-    open_index: usize,
-    close_index: usize,
-    refs: &mut VisualSpriteRefs,
-) {
-    for line in &context.lines {
-        if line.start <= open_index || line.start >= close_index {
-            continue;
-        }
-        if visual_asset_depth_at_line(context, open_index, line.start) != 0 {
-            continue;
-        }
-        match line.tokens.as_slice() {
-            [name, equals, ..] if equals == "=" && is_identifier_token(name) => {
-                refs.color_names.insert(name.clone());
-                if let Some(color) = visual_color_assignment_value(&line.content) {
-                    refs.color_assets.insert(name.clone(), color);
-                }
-            }
-            [name]
-                if line.scope == Some(SourceScope::VisualColorTable)
-                    && is_identifier_token(name) =>
-            {
-                refs.color_names.insert(name.clone());
-                if let Some(color) = visual_color_assignment_value(&line.content) {
-                    refs.color_assets.insert(name.clone(), color);
-                }
-            }
-            _ => {}
-        }
-    }
-}
-
-fn collect_visual_shape_names(
-    context: &SourceContext,
-    open_index: usize,
-    close_index: usize,
-    refs: &mut VisualSpriteRefs,
-) {
-    for line in &context.lines {
-        if line.start <= open_index || line.start >= close_index {
-            continue;
-        }
-        if visual_asset_depth_at_line(context, open_index, line.start) != 0 {
-            continue;
-        }
-        let Some(first) = line.tokens.first() else {
-            continue;
-        };
-        if first == "shape" {
-            if let Some(name) = line.tokens.get(1) {
-                refs.shape_names.insert(name.clone());
-                if let Some(rows) = visual_plain_shape_rows(context, line, close_index) {
-                    refs.shape_assets.insert(name.clone(), rows);
-                }
-            }
-        } else if sprite_definition_name_token(first) {
-            refs.shape_names.insert(first.clone());
-            if let Some(rows) = visual_plain_shape_rows(context, line, close_index) {
-                refs.shape_assets.insert(first.clone(), rows);
-            }
-        }
-    }
-}
-
-fn visual_color_assignment_value(line: &str) -> Option<String> {
-    let (_, value) = strip_line_comment(line).split_once('=')?;
-    let value = value.trim().split_whitespace().next()?.trim();
-    (!value.is_empty()).then(|| value.to_string())
-}
-
-fn visual_plain_shape_rows(
-    context: &SourceContext,
-    header: &SourceContextLine,
-    close_index: usize,
-) -> Option<Vec<String>> {
-    let mut rows = Vec::new();
-    for line in context
-        .lines
-        .iter()
-        .filter(|line| line.start > header.start && line.start < close_index)
-    {
-        let row = code_trim(&line.content);
-        if row.is_empty() {
-            if rows.is_empty() {
-                continue;
-            }
-            break;
-        }
-        if row == "}" {
-            break;
-        }
-        if !rows.is_empty() && sprite_definition_name_token(row) {
-            break;
-        }
-        rows.push(row.to_string());
-    }
-    (!rows.is_empty()).then_some(rows)
-}
-
-fn visual_asset_depth_at_line(
-    context: &SourceContext,
-    open_index: usize,
-    line_start: usize,
-) -> usize {
-    let mut depth = 0usize;
-    for line in &context.lines {
-        if line.start <= open_index || line.start >= line_start {
-            continue;
-        }
-        let trimmed = code_trim(&line.content);
-        if trimmed == "}" {
-            depth = depth.saturating_sub(1);
-        }
-        if trimmed.ends_with('{') {
-            depth += 1;
-        }
-    }
-    depth
-}
-
-fn sprite_name(line: &SourceContextLine) -> Option<String> {
+fn sprite_name(line: &SurfaceLine) -> Option<String> {
     match line.tokens.as_slice() {
         [first, ..]
             if first != "}"
@@ -1150,10 +1019,13 @@ fn sprite_name(line: &SourceContextLine) -> Option<String> {
 }
 
 fn line_style_sprite_header(
-    line: &SourceContextLine,
-    visual_refs: &VisualSpriteRefs,
+    line: &SurfaceLine,
+    visual_refs: &SurfaceVisualSpriteRefs,
 ) -> Option<(String, usize)> {
-    if !matches!(line.scope, Some(SourceScope::Visuals)) {
+    if !matches!(
+        line.scope,
+        Some(SourceScope::Visuals | SourceScope::VisualShapeEntry)
+    ) {
         return None;
     }
     let [selector, source] = line.tokens.as_slice() else {
@@ -1180,9 +1052,9 @@ fn clean_name_token(value: &str) -> String {
 }
 
 fn unbraced_sprite_range(
-    context: &SourceContext,
+    context: &SurfaceDocument,
     start_index: usize,
-    visual_refs: &VisualSpriteRefs,
+    visual_refs: &SurfaceVisualSpriteRefs,
 ) -> Option<(usize, usize, usize)> {
     let line = &context.lines[start_index];
     if !is_unbraced_sprite_header(line) {
@@ -1193,7 +1065,10 @@ fn unbraced_sprite_range(
     let mut body_end = body_start;
     let mut saw_color_row = false;
     for (next_index, next) in context.lines.iter().enumerate().skip(start_index + 1) {
-        if next.scope != Some(SourceScope::Visuals) {
+        if !matches!(
+            next.scope,
+            Some(SourceScope::Visuals | SourceScope::VisualShapeEntry)
+        ) {
             break;
         }
         let trimmed = code_trim(&next.content);
@@ -1216,19 +1091,24 @@ fn unbraced_sprite_range(
     Some((end, body_start, body_end))
 }
 
-fn is_unbraced_sprite_header(line: &SourceContextLine) -> bool {
-    matches!(line.scope, Some(SourceScope::Visuals))
-        && matches!(line.tokens.as_slice(), [name] if sprite_definition_name_token(name))
+fn is_unbraced_sprite_header(line: &SurfaceLine) -> bool {
+    matches!(
+        line.scope,
+        Some(SourceScope::Visuals | SourceScope::VisualShapeEntry)
+    ) && matches!(line.tokens.as_slice(), [name] if sprite_definition_name_token(name))
         && !line.content.trim_end().ends_with('{')
 }
 
 fn is_visual_sprite_entry_boundary<'a>(
-    line: &SourceContextLine,
-    following: impl Iterator<Item = &'a SourceContextLine>,
+    line: &SurfaceLine,
+    following: impl Iterator<Item = &'a SurfaceLine>,
     current_saw_color_row: bool,
-    visual_refs: &VisualSpriteRefs,
+    visual_refs: &SurfaceVisualSpriteRefs,
 ) -> bool {
-    if !matches!(line.scope, Some(SourceScope::Visuals)) {
+    if !matches!(
+        line.scope,
+        Some(SourceScope::Visuals | SourceScope::VisualShapeEntry)
+    ) {
         return false;
     }
     match line.tokens.as_slice() {
@@ -1249,7 +1129,10 @@ fn is_visual_sprite_entry_boundary<'a>(
         [selector] if current_saw_color_row && sprite_definition_name_token(selector) => following
             .skip(1)
             .find(|next| {
-                next.scope == Some(SourceScope::Visuals) && !code_trim(&next.content).is_empty()
+                matches!(
+                    next.scope,
+                    Some(SourceScope::Visuals | SourceScope::VisualShapeEntry)
+                ) && !code_trim(&next.content).is_empty()
             })
             .is_some_and(|next| {
                 let next_trimmed = code_trim(&next.content);
@@ -1260,15 +1143,18 @@ fn is_visual_sprite_entry_boundary<'a>(
 }
 
 fn starts_next_sprite_entry(
-    context: &SourceContext,
+    context: &SurfaceDocument,
     line_index: usize,
     current_saw_color_row: bool,
-    visual_refs: &VisualSpriteRefs,
+    visual_refs: &SurfaceVisualSpriteRefs,
 ) -> bool {
     let Some(line) = context.lines.get(line_index) else {
         return false;
     };
-    if !matches!(line.scope, Some(SourceScope::Visuals)) {
+    if !matches!(
+        line.scope,
+        Some(SourceScope::Visuals | SourceScope::VisualShapeEntry)
+    ) {
         return false;
     }
     if is_visual_sprite_entry_boundary(
@@ -1307,14 +1193,14 @@ fn is_sprite_color_row(line: &str) -> bool {
     !colors.is_empty() && colors.iter().all(|color| is_sprite_color_expr(color))
 }
 
-fn is_sprite_entry_start_color_row(line: &str, visual_refs: &VisualSpriteRefs) -> bool {
+fn is_sprite_entry_start_color_row(line: &str, visual_refs: &SurfaceVisualSpriteRefs) -> bool {
     let colors = sprite_color_row_tokens(line);
     if colors.is_empty() || !colors.iter().all(|color| is_sprite_color_expr(color)) {
         return false;
     }
     colors.len() > 1
         || colors.first().is_some_and(|color| {
-            is_sprite_color(color) || color.contains(':') || visual_refs.contains(color)
+            is_sprite_color(color) || color.contains(':') || visual_refs.contains_color(color)
         })
 }
 
@@ -1326,8 +1212,8 @@ fn sprite_color_row_tokens(line: &str) -> Vec<&str> {
     tokens
 }
 
-fn is_sprite_entry_start_color_token(token: &str, visual_refs: &VisualSpriteRefs) -> bool {
-    is_sprite_color(token) || token.contains(':') || visual_refs.contains(token)
+fn is_sprite_entry_start_color_token(token: &str, visual_refs: &SurfaceVisualSpriteRefs) -> bool {
+    is_sprite_color(token) || token.contains(':') || visual_refs.contains_color(token)
 }
 
 fn is_sprite_color_expr(value: &str) -> bool {
@@ -1382,7 +1268,7 @@ fn is_visual_image_source(value: &str) -> bool {
         || lower.ends_with(".avif")
 }
 
-fn line_end(line: &SourceContextLine) -> usize {
+fn line_end(line: &SurfaceLine) -> usize {
     line.start + line.content.len()
 }
 
@@ -1490,6 +1376,45 @@ mod tests {
     use super::{
         SoundSourceTargetKind, SourceSpritePaletteEntry, SourceTargetKind, resolve_source_target,
     };
+
+    #[test]
+    fn source_target_consumes_surface_visual_refs_instead_of_collecting_assets() {
+        let source = include_str!("source_target.rs");
+        let forbidden_fragments = [
+            ["struct ", "VisualSpriteRefs"],
+            ["collect_visual", "_sprite_refs"],
+            ["collect_visual", "_flat_asset_names"],
+            ["collect_visual", "_shape_names"],
+            ["visual_asset", "_depth_at_line"],
+            ["visual_plain", "_shape_rows"],
+            ["visual_color", "_assignment_value"],
+        ];
+        for parts in forbidden_fragments {
+            let forbidden = parts.concat();
+            assert!(
+                !source.contains(&forbidden),
+                "source_target must consume parser surface visual refs, not collect visual assets via {forbidden}"
+            );
+        }
+    }
+
+    #[test]
+    fn source_target_consumes_surface_document_instead_of_source_scanner() {
+        let source = include_str!("source_target.rs");
+        let forbidden_fragments = [
+            ["scan_source", "_context"],
+            ["Source", "Context"],
+            ["Source", "ContextLine"],
+            ["resolve_source_target", "_from_context"],
+        ];
+        for parts in forbidden_fragments {
+            let forbidden = parts.concat();
+            assert!(
+                !source.contains(&forbidden),
+                "source_target must query parser-owned SurfaceDocument ranges, not source scanner products via {forbidden}"
+            );
+        }
+    }
 
     #[test]
     fn resolves_level_body_to_named_level() {
@@ -2100,6 +2025,80 @@ Next
         let body = &source[target.body_start.unwrap()..target.body_end.unwrap()];
         assert!(body.contains("shape box_shape"));
         assert!(!body.contains("Next"));
+    }
+
+    #[test]
+    fn source_sprite_contract_preserves_hyphenated_shape_refs() {
+        let source = r##"
+sprites {
+shapes {
+box-shape
+010
+111
+010
+}
+Box
+#111 #eee
+shape box-shape
+}
+"##;
+        let cursor = source.find("shape box-shape").unwrap();
+        let target = resolve_source_target(source, cursor).unwrap();
+
+        assert_eq!(target.kind, SourceTargetKind::Sprite);
+        assert_eq!(target.name, "Box");
+        let source_sprite = target
+            .source_sprite
+            .as_ref()
+            .expect("source sprite contract");
+        assert_eq!(source_sprite.shape_ref.as_deref(), Some("box-shape"));
+        assert!(
+            source_sprite
+                .shape_assets
+                .iter()
+                .any(|asset| asset.name == "box-shape")
+        );
+        assert_eq!(
+            source_sprite.resolved_shape_rows,
+            vec!["010".to_string(), "111".to_string(), "010".to_string()]
+        );
+    }
+
+    #[test]
+    fn source_sprite_contract_preserves_tagged_shape_refs() {
+        let source = r##"
+sprites {
+shapes {
+foo:bar
+010
+111
+010
+}
+Box
+#111 #eee
+shape foo:bar
+}
+"##;
+        let cursor = source.find("shape foo:bar").unwrap();
+        let target = resolve_source_target(source, cursor).unwrap();
+
+        assert_eq!(target.kind, SourceTargetKind::Sprite);
+        assert_eq!(target.name, "Box");
+        let source_sprite = target
+            .source_sprite
+            .as_ref()
+            .expect("source sprite contract");
+        assert_eq!(source_sprite.shape_ref.as_deref(), Some("foo:bar"));
+        assert!(
+            source_sprite
+                .shape_assets
+                .iter()
+                .any(|asset| asset.name == "foo:bar")
+        );
+        assert_eq!(
+            source_sprite.resolved_shape_rows,
+            vec!["010".to_string(), "111".to_string(), "010".to_string()]
+        );
     }
 
     #[test]

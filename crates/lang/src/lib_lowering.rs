@@ -10,12 +10,14 @@ struct ProgramLowerer<'a> {
     model_sound_triggers: &'a [ModelSoundTrigger],
     animation: &'a AnimationDef,
     value_sets: &'a HashMap<String, Vec<String>>,
+    maps: &'a HashMap<String, ValueMap>,
     directions: &'a [Direction],
     visual_objects: &'a [ObjectId],
     next_rule_id: u16,
     visual_rules: Vec<RuleId>,
     rule_animations: HashMap<RuleId, Vec<RuleAnimation>>,
     rule_effects: HashMap<RuleId, Vec<RuleEffect>>,
+    rule_debug_info: HashMap<RuleId, RuleDebugInfo>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -48,6 +50,7 @@ struct LoweredPrograms {
     visual_rules: Vec<RuleId>,
     rule_animations: HashMap<RuleId, Vec<RuleAnimation>>,
     rule_effects: HashMap<RuleId, Vec<RuleEffect>>,
+    rule_debug_info: HashMap<RuleId, RuleDebugInfo>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -85,6 +88,7 @@ fn lower_programs(
     model_sound_triggers: &[ModelSoundTrigger],
     animation: &AnimationDef,
     value_sets: &HashMap<String, Vec<String>>,
+    maps: &HashMap<String, ValueMap>,
     directions: &[Direction],
 ) -> Result<LoweredPrograms, DiagnosticReport> {
     let mut definitions_by_name = HashMap::new();
@@ -127,12 +131,14 @@ fn lower_programs(
         model_sound_triggers,
         animation,
         value_sets,
+        maps,
         directions,
         visual_objects,
         next_rule_id: 1,
         visual_rules: Vec::new(),
         rule_animations: HashMap::new(),
         rule_effects: HashMap::new(),
+        rule_debug_info: HashMap::new(),
     };
     let mut diagnostics = Vec::new();
     let mut context = StatementLoweringContext::default();
@@ -253,6 +259,7 @@ fn lower_programs(
         visual_rules: lowerer.visual_rules,
         rule_animations: lowerer.rule_animations,
         rule_effects: lowerer.rule_effects,
+        rule_debug_info: lowerer.rule_debug_info,
     })
 }
 
@@ -535,6 +542,7 @@ fn lower_condition_defs(
     object_layers: &HashMap<ObjectId, LayerId>,
     mark_names: &HashMap<String, MarkDef>,
     value_sets: &HashMap<String, Vec<String>>,
+    maps: &HashMap<String, ValueMap>,
     input_names: &HashMap<String, InputId>,
     directions: &[Direction],
 ) -> Result<Vec<ConditionDef>, DiagnosticReport> {
@@ -547,6 +555,7 @@ fn lower_condition_defs(
                 object_layers,
                 mark_names,
                 value_sets,
+                maps,
                 directions,
             )?;
             Ok(ConditionDef {
@@ -563,6 +572,7 @@ fn lower_condition_value_kind(
     object_layers: &HashMap<ObjectId, LayerId>,
     mark_names: &HashMap<String, MarkDef>,
     value_sets: &HashMap<String, Vec<String>>,
+    maps: &HashMap<String, ValueMap>,
     directions: &[Direction],
 ) -> Result<ConditionValueKind, DiagnosticReport> {
     match kind {
@@ -582,6 +592,7 @@ fn lower_condition_value_kind(
             object_layers,
             mark_names,
             value_sets,
+            maps,
             directions,
         ),
         ConditionValueAst::ExistsMatches(pattern) => lower_condition_match_kind(
@@ -591,6 +602,7 @@ fn lower_condition_value_kind(
             object_layers,
             mark_names,
             value_sets,
+            maps,
             directions,
         ),
         ConditionValueAst::NoneMatches(pattern) => lower_condition_match_kind(
@@ -600,6 +612,7 @@ fn lower_condition_value_kind(
             object_layers,
             mark_names,
             value_sets,
+            maps,
             directions,
         ),
     }
@@ -619,6 +632,7 @@ fn lower_condition_match_kind(
     object_layers: &HashMap<ObjectId, LayerId>,
     mark_names: &HashMap<String, MarkDef>,
     value_sets: &HashMap<String, Vec<String>>,
+    maps: &HashMap<String, ValueMap>,
     directions: &[Direction],
 ) -> Result<ConditionValueKind, DiagnosticReport> {
     if matches!(
@@ -631,6 +645,7 @@ fn lower_condition_match_kind(
             object_layers,
             mark_names,
             value_sets,
+            maps,
             directions,
         )?;
         return Ok(match kind {
@@ -644,6 +659,7 @@ fn lower_condition_match_kind(
         object_layers,
         mark_names,
         value_sets,
+        maps,
         input_names,
         directions,
     )?;
@@ -659,6 +675,7 @@ fn lower_condition_patterns(
     object_layers: &HashMap<ObjectId, LayerId>,
     mark_names: &HashMap<String, MarkDef>,
     value_sets: &HashMap<String, Vec<String>>,
+    maps: &HashMap<String, ValueMap>,
     input_names: &HashMap<String, InputId>,
     directions: &[Direction],
 ) -> Result<Vec<Pattern>, DiagnosticReport> {
@@ -671,6 +688,7 @@ fn lower_condition_patterns(
                     object_layers,
                     mark_names,
                     value_sets,
+                    maps,
                     directions,
                     true,
                 );
@@ -680,6 +698,7 @@ fn lower_condition_patterns(
                 object_layers,
                 mark_names,
                 value_sets,
+                maps,
                 &[neutral_direction()],
                 false,
             )
@@ -689,6 +708,7 @@ fn lower_condition_patterns(
             object_layers,
             mark_names,
             value_sets,
+            maps,
             directions,
             true,
         ),
@@ -703,6 +723,7 @@ fn lower_condition_patterns(
                 object_layers,
                 mark_names,
                 value_sets,
+                maps,
                 &directions,
                 true,
             )
@@ -725,6 +746,7 @@ fn lower_condition_patterns(
                 object_layers,
                 mark_names,
                 value_sets,
+                maps,
                 &directions,
                 true,
             )
@@ -737,6 +759,7 @@ fn lower_condition_patterns_for_directions(
     object_layers: &HashMap<ObjectId, LayerId>,
     mark_names: &HashMap<String, MarkDef>,
     value_sets: &HashMap<String, Vec<String>>,
+    maps: &HashMap<String, ValueMap>,
     directions: &[Direction],
     direction_expanded: bool,
 ) -> Result<Vec<Pattern>, DiagnosticReport> {
@@ -748,6 +771,7 @@ fn lower_condition_patterns_for_directions(
             object_layers,
             mark_names,
             value_sets,
+            maps,
             *direction,
             direction_expanded,
             "condition pattern",
@@ -769,6 +793,7 @@ fn lower_condition_input_patterns(
     object_layers: &HashMap<ObjectId, LayerId>,
     mark_names: &HashMap<String, MarkDef>,
     value_sets: &HashMap<String, Vec<String>>,
+    maps: &HashMap<String, ValueMap>,
     directions: &[Direction],
 ) -> Result<Vec<(InputId, Pattern)>, DiagnosticReport> {
     let block = &condition_pattern.pattern;
@@ -789,6 +814,7 @@ fn lower_condition_input_patterns(
             object_layers,
             mark_names,
             value_sets,
+            maps,
             *direction,
             true,
             "condition pattern",
@@ -930,6 +956,7 @@ fn lower_goal_condition(
     mark_names: &HashMap<String, MarkDef>,
     visual_objects: &[ObjectId],
     value_sets: &HashMap<String, Vec<String>>,
+    maps: &HashMap<String, ValueMap>,
     input_names: &HashMap<String, InputId>,
     directions: &[Direction],
 ) -> Result<GoalCondition, DiagnosticReport> {
@@ -944,10 +971,235 @@ fn lower_goal_condition(
             mark_names,
             visual_objects,
             value_sets,
+            maps,
             input_names,
             directions,
         )?,
     })
+}
+
+fn lower_query_definitions(
+    definitions: &[QueryDefinitionAst],
+    object_names: &HashMap<String, ObjectId>,
+    object_schemas: &HashMap<String, ObjectSchema>,
+    maps: &HashMap<String, ValueMap>,
+    object_groups: &HashMap<String, Vec<ObjectId>>,
+    variable_names: &HashMap<String, VariableId>,
+    object_layers: &HashMap<ObjectId, LayerId>,
+    mark_names: &HashMap<String, MarkDef>,
+    visual_objects: &[ObjectId],
+    value_sets: &HashMap<String, Vec<String>>,
+    input_names: &HashMap<String, InputId>,
+    directions: &[Direction],
+) -> Result<HashMap<String, QueryExpr>, DiagnosticReport> {
+    let context = QueryLoweringContext {
+        object_names,
+        object_schemas,
+        maps,
+        object_groups,
+        variable_names,
+        object_layers,
+        mark_names,
+        visual_objects,
+        value_sets,
+        input_names,
+        directions,
+    };
+    crate::solver_surface::lower_query_definitions_with::<QueryLoweringAdapter2d, _>(
+        definitions,
+        &context,
+    )
+}
+
+struct QueryLoweringContext<'a> {
+    object_names: &'a HashMap<String, ObjectId>,
+    object_schemas: &'a HashMap<String, ObjectSchema>,
+    maps: &'a HashMap<String, ValueMap>,
+    object_groups: &'a HashMap<String, Vec<ObjectId>>,
+    variable_names: &'a HashMap<String, VariableId>,
+    object_layers: &'a HashMap<ObjectId, LayerId>,
+    mark_names: &'a HashMap<String, MarkDef>,
+    visual_objects: &'a [ObjectId],
+    value_sets: &'a HashMap<String, Vec<String>>,
+    input_names: &'a HashMap<String, InputId>,
+    directions: &'a [Direction],
+}
+
+struct QueryLoweringAdapter2d;
+
+impl<'a> crate::solver_surface::SolverQueryLoweringAdapter<QueryLoweringContext<'a>>
+    for QueryLoweringAdapter2d
+{
+    type Object = ObjectId;
+    type Value = ConditionValueKind;
+    type Variable = VariableId;
+    type Error = DiagnosticReport;
+
+    fn lower_variable(
+        name: &str,
+        _source_line: &str,
+        context: &QueryLoweringContext<'a>,
+    ) -> Result<Option<Self::Variable>, Self::Error> {
+        Ok(context.variable_names.get(name).copied())
+    }
+
+    fn lower_distance_selector(
+        selector: &SolverSurfaceQueryArg,
+        source_line: &str,
+        context: &QueryLoweringContext<'a>,
+    ) -> Result<Vec<Self::Object>, Self::Error> {
+        let SolverSurfaceQueryArg::Selector(selector) = selector else {
+            return Err(DiagnosticReport::error_at_line(
+                "distance query must be: distance(<selector>, <selector>)",
+                source_line,
+            ));
+        };
+        lower_query_selector2d(selector, source_line, context)
+    }
+
+    fn lower_selector_query_value(
+        kind: crate::solver_surface::SolverQueryCallKind,
+        selector: &str,
+        source_line: &str,
+        context: &QueryLoweringContext<'a>,
+    ) -> Result<Self::Value, Self::Error> {
+        let objects = lower_query_selector2d(selector, source_line, context)?;
+        Ok(match kind {
+            crate::solver_surface::SolverQueryCallKind::Count => {
+                ConditionValueKind::CountObjects(objects)
+            }
+            crate::solver_surface::SolverQueryCallKind::Exists => {
+                ConditionValueKind::ExistsObjects(objects)
+            }
+            crate::solver_surface::SolverQueryCallKind::None => {
+                ConditionValueKind::NoneObjects(objects)
+            }
+        })
+    }
+
+    fn lower_pattern_query_value(
+        kind: crate::solver_surface::SolverQueryCallKind,
+        pattern: &SolverSurfacePatternArg,
+        source_line: &str,
+        context: &QueryLoweringContext<'a>,
+    ) -> Result<Self::Value, Self::Error> {
+        let pattern = lower_condition_pattern_arg2d(pattern, context)?;
+        let kind = match kind {
+            crate::solver_surface::SolverQueryCallKind::Count => {
+                ConditionValueAst::CountMatches(pattern)
+            }
+            crate::solver_surface::SolverQueryCallKind::Exists => {
+                ConditionValueAst::ExistsMatches(pattern)
+            }
+            crate::solver_surface::SolverQueryCallKind::None => {
+                ConditionValueAst::NoneMatches(pattern)
+            }
+        };
+        if condition_value_reads_visual_object(&kind, context.visual_objects) {
+            return Err(main_visual_object_error("query", Some(source_line)));
+        }
+        lower_condition_value_kind(
+            &kind,
+            context.input_names,
+            context.object_layers,
+            context.mark_names,
+            context.value_sets,
+            context.maps,
+            context.directions,
+        )
+    }
+
+    fn query_call_error(message: &'static str, source_line: &str) -> Self::Error {
+        DiagnosticReport::error_at_line(message, source_line)
+    }
+
+    fn cycle_error(cycle: Vec<String>, source_line: &str) -> Self::Error {
+        DiagnosticReport::error_at_line(
+            format!("query definitions contain a cycle: {}", cycle.join(" -> ")),
+            source_line,
+        )
+    }
+
+    fn unknown_query_error(name: &str, source_line: &str) -> Self::Error {
+        DiagnosticReport::error_at_line(
+            format!("unknown query or variable in query expression: {name}"),
+            source_line,
+        )
+    }
+}
+
+fn lower_condition_pattern_arg2d(
+    pattern: &SolverSurfacePatternArg,
+    context: &QueryLoweringContext<'_>,
+) -> Result<ConditionPatternAst, DiagnosticReport> {
+    parse_condition_pattern_surface_arg(
+        pattern,
+        context.object_names,
+        context.object_schemas,
+        context.value_sets,
+        context.maps,
+        context.object_groups,
+    )
+}
+
+fn lower_query_selector2d(
+    selector: &str,
+    source_line: &str,
+    context: &QueryLoweringContext<'_>,
+) -> Result<Vec<ObjectId>, DiagnosticReport> {
+    let objects = resolve_object_selector(
+        selector,
+        source_line,
+        context.object_names,
+        context.object_schemas,
+        context.value_sets,
+        context.maps,
+        context.object_groups,
+        &HashMap::new(),
+    )?
+    .alternatives;
+    if objects
+        .iter()
+        .any(|object| object_is_visual(*object, context.visual_objects))
+    {
+        return Err(main_visual_object_error("query", Some(source_line)));
+    }
+    Ok(objects)
+}
+
+fn lower_solver_strategy(
+    strategy: Option<SolverStrategyAst>,
+    query_definitions: &[QueryDefinitionAst],
+    object_names: &HashMap<String, ObjectId>,
+    object_schemas: &HashMap<String, ObjectSchema>,
+    maps: &HashMap<String, ValueMap>,
+    object_groups: &HashMap<String, Vec<ObjectId>>,
+    variable_names: &HashMap<String, VariableId>,
+    object_layers: &HashMap<ObjectId, LayerId>,
+    mark_names: &HashMap<String, MarkDef>,
+    visual_objects: &[ObjectId],
+    value_sets: &HashMap<String, Vec<String>>,
+    input_names: &HashMap<String, InputId>,
+    directions: &[Direction],
+) -> Result<SolverStrategy, DiagnosticReport> {
+    let context = QueryLoweringContext {
+        object_names,
+        object_schemas,
+        maps,
+        object_groups,
+        variable_names,
+        object_layers,
+        mark_names,
+        visual_objects,
+        value_sets,
+        input_names,
+        directions,
+    };
+    crate::solver_surface::lower_solver_strategy_with::<QueryLoweringAdapter2d, _>(
+        strategy,
+        query_definitions,
+        &context,
+    )
 }
 
 fn lower_goal_expr(
@@ -959,6 +1211,7 @@ fn lower_goal_expr(
     mark_names: &HashMap<String, MarkDef>,
     visual_objects: &[ObjectId],
     value_sets: &HashMap<String, Vec<String>>,
+    maps: &HashMap<String, ValueMap>,
     input_names: &HashMap<String, InputId>,
     directions: &[Direction],
 ) -> Result<GoalExpr, DiagnosticReport> {
@@ -976,6 +1229,7 @@ fn lower_goal_expr(
                         mark_names,
                         visual_objects,
                         value_sets,
+                        maps,
                         input_names,
                         directions,
                     )
@@ -995,6 +1249,7 @@ fn lower_goal_expr(
                         mark_names,
                         visual_objects,
                         value_sets,
+                        maps,
                         input_names,
                         directions,
                     )
@@ -1046,6 +1301,7 @@ fn lower_goal_expr(
                 object_layers,
                 mark_names,
                 value_sets,
+                maps,
                 directions,
             )?;
             Ok(GoalExpr::Clause(GoalClause {
@@ -1062,6 +1318,7 @@ fn lower_goal_expr(
                 object_layers,
                 mark_names,
                 value_sets,
+                maps,
                 directions,
             )?;
             Ok(GoalExpr::Clause(GoalClause {
@@ -1078,6 +1335,7 @@ fn lower_goal_expr(
                 object_layers,
                 mark_names,
                 value_sets,
+                maps,
                 directions,
             )?;
             Ok(GoalExpr::Clause(GoalClause {
@@ -1302,8 +1560,7 @@ fn write_template_touches_visual_object(
         | WriteOpTemplate::RemoveObjectSetMark { binding, .. } => {
             object_set_binding_touches_visual_object(*binding, alternative, visual_objects)
         }
-        WriteOpTemplate::SetMark { object, .. }
-        | WriteOpTemplate::RemoveMark { object, .. } => {
+        WriteOpTemplate::SetMark { object, .. } | WriteOpTemplate::RemoveMark { object, .. } => {
             !object.is_empty() && object_is_visual(*object, visual_objects)
         }
     }
@@ -1329,8 +1586,7 @@ fn write_template_touches_main_state(
         | WriteOpTemplate::RemoveObjectSetMark { binding, .. } => {
             object_set_binding_touches_main_state(*binding, alternative, visual_objects)
         }
-        WriteOpTemplate::SetMark { object, .. }
-        | WriteOpTemplate::RemoveMark { object, .. } => {
+        WriteOpTemplate::SetMark { object, .. } | WriteOpTemplate::RemoveMark { object, .. } => {
             object.is_empty() || !object_is_visual(*object, visual_objects)
         }
     }
@@ -1478,7 +1734,7 @@ impl<'a> ProgramLowerer<'a> {
     fn lower_effect_statement(
         &mut self,
         source_line: &str,
-        _source_line_number: Option<usize>,
+        source_line_number: Option<usize>,
         effects: &[EffectAst],
         context: &StatementLoweringContext,
     ) -> Result<Vec<RuleStep>, DiagnosticReport> {
@@ -1494,6 +1750,7 @@ impl<'a> ProgramLowerer<'a> {
         if !effects.ordered.is_empty() {
             self.rule_effects.insert(id, effects.ordered.clone());
         }
+        self.record_rule_debug_info(id, source_line, source_line_number, context);
         Ok(vec![RuleStep::Rule(Rule {
             id,
             guards: context.guards.clone(),
@@ -1653,8 +1910,12 @@ impl<'a> ProgramLowerer<'a> {
                 source_line_number,
             ));
         }
-        let resolved =
-            self.resolve_display_routine_definition(name, source_line, source_line_number, context)?;
+        let resolved = self.resolve_display_routine_definition(
+            name,
+            source_line,
+            source_line_number,
+            context,
+        )?;
         let definition = resolved.definition;
         let mut nested_context = context.clone();
         if !resolved.is_local {
@@ -1888,6 +2149,7 @@ impl<'a> ProgramLowerer<'a> {
             self.object_layers,
             self.mark_names,
             self.value_sets,
+            self.maps,
             line,
             None,
         )?;
@@ -1901,16 +2163,28 @@ impl<'a> ProgramLowerer<'a> {
         direction_expanded: bool,
         line: &str,
     ) -> Result<Vec<Pattern>, DiagnosticReport> {
-        let alternatives = compile_before_after_blocks(
-            pattern,
-            pattern,
-            self.object_layers,
-            self.mark_names,
-            self.value_sets,
-            line,
-            None,
-        )?;
-        patterns_from_alternatives(&alternatives, directions, direction_expanded, line)
+        let mut patterns = Vec::new();
+        for direction in directions {
+            let (_, alternatives) = compile_before_after_blocks_for_direction(
+                pattern,
+                pattern,
+                self.object_layers,
+                self.mark_names,
+                self.value_sets,
+                self.maps,
+                *direction,
+                direction_expanded,
+                line,
+                None,
+            )?;
+            patterns.extend(patterns_from_alternatives(
+                &alternatives,
+                &[*direction],
+                direction_expanded,
+                line,
+            )?);
+        }
+        Ok(patterns)
     }
 
     fn lower_if(
@@ -2179,6 +2453,7 @@ impl<'a> ProgramLowerer<'a> {
                     self.object_layers,
                     self.mark_names,
                     self.value_sets,
+                    self.maps,
                     self.directions,
                 )?;
                 Ok(Guard::InlineConditionValue {
@@ -2200,6 +2475,7 @@ impl<'a> ProgramLowerer<'a> {
                     self.object_layers,
                     self.mark_names,
                     self.value_sets,
+                    self.maps,
                     self.directions,
                 )?;
                 Ok(Guard::InlineConditionNonZero(kind))
@@ -2218,6 +2494,7 @@ impl<'a> ProgramLowerer<'a> {
                     self.object_layers,
                     self.mark_names,
                     self.value_sets,
+                    self.maps,
                     self.directions,
                 )?;
                 Ok(Guard::InlineConditionCompare {
@@ -2409,6 +2686,7 @@ impl<'a> ProgramLowerer<'a> {
             self.object_layers,
             self.mark_names,
             self.value_sets,
+            self.maps,
             direction,
             direction_expanded,
             &rewrite.source_line,
@@ -2440,7 +2718,27 @@ impl<'a> ProgramLowerer<'a> {
             effects,
             application,
             role,
+            &rewrite.source_line,
+            rewrite.source_line_number,
+            context,
         )
+    }
+
+    fn record_rule_debug_info(
+        &mut self,
+        id: RuleId,
+        source_line: &str,
+        source_line_number: Option<usize>,
+        context: &StatementLoweringContext,
+    ) {
+        self.rule_debug_info.insert(
+            id,
+            RuleDebugInfo {
+                source_line: source_line.trim().to_string(),
+                source_line_number,
+                routine_stack: context.call_stack.clone(),
+            },
+        );
     }
 
     fn lower_effects(&self, effects: &[EffectAst]) -> Result<LoweredEffects, DiagnosticReport> {
@@ -2574,6 +2872,9 @@ impl<'a> ProgramLowerer<'a> {
         effects: &[EffectAst],
         application: RuleApplication,
         role: ClassifiedRuleRole,
+        source_line: &str,
+        source_line_number: Option<usize>,
+        context: &StatementLoweringContext,
     ) -> Result<Vec<RuleStep>, DiagnosticReport> {
         let preserve_once_group = application == RuleApplication::Once
             && alternatives.len() > 1
@@ -2694,6 +2995,7 @@ impl<'a> ProgramLowerer<'a> {
             if !rule_effects.is_empty() {
                 self.rule_effects.insert(id, rule_effects);
             }
+            self.record_rule_debug_info(id, source_line, source_line_number, context);
             rules.push(RuleStep::Rule(Rule {
                 id,
                 guards,

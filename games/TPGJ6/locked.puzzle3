@@ -1,5 +1,5 @@
-title "Microban 3D"
-author "Levels by David Skinner"
+title = "Microban 3D"
+author = "Levels by David Skinner"
 
 theme puzzlescript
 
@@ -39,7 +39,7 @@ on_level_clear {
 
 scene title {
 layout {
-  title "Microban 3D"
+  title = "Microban 3D"
   choice "New Game" -> goto playing
   choice "Level Select" -> goto level_select
 }
@@ -55,7 +55,7 @@ rules {
 
 layout {
   row {
-    title "Microban 3D"
+    title = "Microban 3D"
   }
   puzzle3 sokoban = sokoban size 8 8
 }
@@ -63,7 +63,7 @@ layout {
 
 scene level_select {
 layout {
-  title "Select Level"
+  title = "Select Level"
   column scroll=true {
     for level in levels {
       choice join(level.num, ". ", level.title) -> goto sokoban(level)

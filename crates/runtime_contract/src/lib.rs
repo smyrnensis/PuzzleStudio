@@ -7,6 +7,198 @@ use serde_json::Value;
 
 pub const RUNTIME_CONTRACT_VERSION: u16 = 4;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RuntimeModelKind {
+    #[serde(rename = "2d")]
+    TwoD,
+    #[serde(rename = "3d")]
+    ThreeD,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeCoord {
+    pub x: u16,
+    pub y: u16,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub z: Option<u16>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeMarkValue {
+    pub mark: u16,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value: Option<i64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum RuntimeStateSnapshot {
+    TwoD(RuntimeStateSnapshot2d),
+    ThreeD(RuntimeStateSnapshot3d),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeStateSnapshot2d {
+    pub kind: RuntimeModelKind,
+    pub width: u16,
+    pub height: u16,
+    pub layer_count: u16,
+    pub slots: Vec<u16>,
+    pub slot_marks: Vec<Vec<RuntimeMarkValue>>,
+    pub variables: Vec<i64>,
+    pub level_fired_rules: Vec<u16>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeStateSnapshot3d {
+    pub kind: RuntimeModelKind,
+    pub width: u16,
+    pub depth: u16,
+    pub height: u16,
+    pub layer_count: u16,
+    pub slots: Vec<u16>,
+    pub slot_marks: Vec<Vec<RuntimeMarkValue>>,
+    pub variables: Vec<i64>,
+    pub level_fired_rules: Vec<u16>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeChangedCell {
+    pub position: RuntimeCoord,
+    pub objects: Vec<u16>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeMarkValueMatch {
+    Any,
+    Exact,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RuntimePatchOp {
+    Add {
+        position: RuntimeCoord,
+        #[serde(rename = "objectId")]
+        object_id: u16,
+    },
+    Remove {
+        position: RuntimeCoord,
+        #[serde(rename = "objectId")]
+        object_id: u16,
+    },
+    Move {
+        from: RuntimeCoord,
+        to: RuntimeCoord,
+        #[serde(rename = "objectId")]
+        object_id: u16,
+    },
+    Replace {
+        position: RuntimeCoord,
+        remove: u16,
+        add: u16,
+    },
+    UpdateVariable {
+        variable: u16,
+    },
+    SetMark {
+        position: RuntimeCoord,
+        #[serde(rename = "objectId")]
+        object_id: u16,
+        mark: u16,
+    },
+    RemoveMark {
+        position: RuntimeCoord,
+        #[serde(rename = "objectId")]
+        object_id: u16,
+        mark: u16,
+        #[serde(rename = "matchValue")]
+        match_value: RuntimeMarkValueMatch,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RuntimeAnimationEvent {
+    Move {
+        name: String,
+        #[serde(rename = "objectId")]
+        object_id: u16,
+        from: RuntimeCoord,
+        to: RuntimeCoord,
+    },
+    CantMove {
+        name: String,
+        #[serde(rename = "objectId")]
+        object_id: u16,
+        position: RuntimeCoord,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RuntimeTransitionCommand {
+    Win,
+    Restart,
+    NextLevel,
+    Again,
+    Checkpoint,
+    ClearCheckpoint,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeTransitionProgramOutcome {
+    pub state: RuntimeStateSnapshot,
+    pub cancelled: bool,
+    pub completed: bool,
+    pub commands: Vec<RuntimeTransitionCommand>,
+    pub fired_rules: Vec<u16>,
+    pub patches: Vec<Vec<RuntimePatchOp>>,
+    pub animation_events: Vec<RuntimeAnimationEvent>,
+}
+
+impl RuntimeTransitionProgramOutcome {
+    pub fn to_json_string(&self) -> Result<String, RuntimeContractError> {
+        serde_json::to_string(self)
+            .map_err(|error| RuntimeContractError::InvalidJson(error.to_string()))
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeTransitionCurrentOutcome {
+    pub cancelled: bool,
+    pub changed: bool,
+    pub completed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state: Option<RuntimeStateSnapshot>,
+    pub commands: Vec<RuntimeTransitionCommand>,
+    pub fired_rules: Vec<u16>,
+    pub patches: Vec<Vec<RuntimePatchOp>>,
+    pub animation_events: Vec<RuntimeAnimationEvent>,
+    pub state_hash: u64,
+    pub state_hash_key: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub previous_state_handle: Option<u32>,
+    pub changed_cells: Vec<RuntimeChangedCell>,
+    pub variables: Vec<i64>,
+    pub level_fired_rules: Vec<u16>,
+}
+
+impl RuntimeTransitionCurrentOutcome {
+    pub fn to_json_string(&self) -> Result<String, RuntimeContractError> {
+        serde_json::to_string(self)
+            .map_err(|error| RuntimeContractError::InvalidJson(error.to_string()))
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeLifecycle<Rule, Frame> {
@@ -436,5 +628,130 @@ mod tests {
             puzzle3_runtime_model_from_fixture_value(&fixture).expect("runtime contract decodes");
 
         assert_eq!(decoded.rules[0].guards, rule.guards);
+    }
+
+    #[test]
+    fn transition_program_outcome_serializes_owned_outer_schema() {
+        let outcome = RuntimeTransitionProgramOutcome {
+            state: RuntimeStateSnapshot::TwoD(RuntimeStateSnapshot2d {
+                kind: RuntimeModelKind::TwoD,
+                width: 2,
+                height: 1,
+                layer_count: 1,
+                slots: vec![0, 1],
+                slot_marks: vec![Vec::new(), Vec::new()],
+                variables: Vec::new(),
+                level_fired_rules: Vec::new(),
+            }),
+            cancelled: false,
+            completed: true,
+            commands: vec![RuntimeTransitionCommand::Win],
+            fired_rules: vec![3],
+            patches: vec![vec![RuntimePatchOp::Remove {
+                position: RuntimeCoord {
+                    x: 0,
+                    y: 0,
+                    z: None,
+                },
+                object_id: 1,
+            }]],
+            animation_events: vec![RuntimeAnimationEvent::Move {
+                name: "tween".to_string(),
+                object_id: 1,
+                from: RuntimeCoord {
+                    x: 0,
+                    y: 0,
+                    z: None,
+                },
+                to: RuntimeCoord {
+                    x: 1,
+                    y: 0,
+                    z: None,
+                },
+            }],
+        };
+
+        let value: serde_json::Value =
+            serde_json::from_str(&outcome.to_json_string().expect("outcome serializes"))
+                .expect("outcome JSON parses");
+
+        let mut keys = value
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        keys.sort();
+        assert_eq!(
+            keys,
+            [
+                "animationEvents",
+                "cancelled",
+                "commands",
+                "completed",
+                "firedRules",
+                "patches",
+                "state"
+            ]
+        );
+    }
+
+    #[test]
+    fn transition_current_outcome_serializes_owned_outer_schema() {
+        let outcome = RuntimeTransitionCurrentOutcome {
+            cancelled: false,
+            changed: true,
+            completed: false,
+            state: None,
+            commands: Vec::new(),
+            fired_rules: Vec::new(),
+            patches: Vec::new(),
+            animation_events: Vec::new(),
+            state_hash: 12,
+            state_hash_key: "12".to_string(),
+            previous_state_handle: Some(4),
+            changed_cells: vec![RuntimeChangedCell {
+                position: RuntimeCoord {
+                    x: 0,
+                    y: 0,
+                    z: None,
+                },
+                objects: vec![1],
+            }],
+            variables: vec![9],
+            level_fired_rules: vec![2],
+        };
+
+        let value: serde_json::Value =
+            serde_json::from_str(&outcome.to_json_string().expect("outcome serializes"))
+                .expect("outcome JSON parses");
+
+        let mut keys = value
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        keys.sort();
+        assert_eq!(
+            keys,
+            [
+                "animationEvents",
+                "cancelled",
+                "changed",
+                "changedCells",
+                "commands",
+                "completed",
+                "firedRules",
+                "levelFiredRules",
+                "patches",
+                "previousStateHandle",
+                "stateHash",
+                "stateHashKey",
+                "variables"
+            ]
+        );
+        assert!(value.get("state").is_none());
+        assert!(value["changedCells"][0]["position"].get("z").is_none());
     }
 }

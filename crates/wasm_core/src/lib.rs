@@ -5,6 +5,7 @@ use puzzle_core::{
     PatternComponent, Rule, RuleApplication, RuleCondition, RuleId, RuleStep, State,
     TransitionCommand, VariableId, VariableUpdateOp, WriteOp,
 };
+use puzzle_runtime_contract::{RuntimeChangedCell, RuntimeCoord, RuntimeTransitionCommand};
 use serde_json::Value;
 use wasm_bindgen::prelude::*;
 
@@ -87,14 +88,15 @@ impl WasmCompiledCoreRuntime {
             None
         };
         self.current_state = Some(outcome.next_state.clone());
-        Ok(encode_outcome(
+        encode_outcome(
             &outcome.next_state,
             Some(&before),
             previous_state_handle,
             outcome.cancelled,
             &outcome.commands,
             &outcome.fired_rules,
-        ))
+        )
+        .map_err(|error| JsValue::from_str(&error))
     }
 }
 
@@ -795,7 +797,7 @@ fn encode_outcome(
     cancelled: bool,
     commands: &[TransitionCommand],
     fired_rules: &[RuleId],
-) -> String {
+) -> Result<String, String> {
     let mut out = String::new();
     out.push('{');
     bool_field(
@@ -813,7 +815,10 @@ fn encode_outcome(
     out.push_str(",\"stateHashKey\":");
     string(&mut out, &state.hash().to_string());
     out.push_str(",\"changedCells\":");
-    encode_changed_cells(&mut out, state, before);
+    out.push_str(
+        &serde_json::to_string(&changed_cells_contract_2d(state, before))
+            .map_err(|error| format!("failed to encode changedCells: {error}"))?,
+    );
     out.push_str(",\"variables\":[");
     for (index, value) in state.visible_variables().iter().enumerate() {
         if index > 0 {
@@ -835,25 +840,22 @@ fn encode_outcome(
         }
         out.push_str(&rule.0.to_string());
     }
-    out.push_str("],\"commands\":[");
-    for (index, command) in commands.iter().enumerate() {
-        if index > 0 {
-            out.push(',');
-        }
-        encode_command(&mut out, command);
-    }
-    out.push_str("],\"animationEvents\":[]");
+    out.push_str("],\"commands\":");
+    out.push_str(
+        &serde_json::to_string(&transition_commands_contract(commands))
+            .map_err(|error| format!("failed to encode commands: {error}"))?,
+    );
+    out.push_str(",\"animationEvents\":[]");
     if let Some(handle) = previous_state_handle {
         out.push(',');
         number(&mut out, "previousStateHandle", handle as u64);
     }
     out.push('}');
-    out
+    Ok(out)
 }
 
-fn encode_changed_cells(out: &mut String, state: &State, before: Option<&State>) {
-    out.push('[');
-    let mut first = true;
+fn changed_cells_contract_2d(state: &State, before: Option<&State>) -> Vec<RuntimeChangedCell> {
+    let mut changed_cells = Vec::new();
     for y in 0..state.height {
         for x in 0..state.width {
             let cell = usize::from(y) * usize::from(state.width) + usize::from(x);
@@ -863,44 +865,34 @@ fn encode_changed_cells(out: &mut String, state: &State, before: Option<&State>)
             {
                 continue;
             }
-            if !first {
-                out.push(',');
-            }
-            first = false;
-            out.push('{');
-            number(out, "x", x as u64);
-            out.push(',');
-            number(out, "y", y as u64);
-            out.push_str(",\"objects\":[");
-            let mut first_object = true;
+            let mut objects = Vec::new();
             for object in &state.slots()[start..end] {
                 if object.is_empty() {
                     continue;
                 }
-                if !first_object {
-                    out.push(',');
-                }
-                first_object = false;
-                out.push_str(&object.0.to_string());
+                objects.push(object.0);
             }
-            out.push_str("]}");
+            changed_cells.push(RuntimeChangedCell {
+                position: RuntimeCoord { x, y, z: None },
+                objects,
+            });
         }
     }
-    out.push(']');
+    changed_cells
 }
 
-fn encode_command(out: &mut String, command: &TransitionCommand) {
-    out.push('{');
-    let kind = match command {
-        TransitionCommand::Win => "win",
-        TransitionCommand::Restart => "restart",
-        TransitionCommand::NextLevel => "next_level",
-        TransitionCommand::Again => "again",
-        TransitionCommand::Checkpoint => "checkpoint",
-        TransitionCommand::ClearCheckpoint => "clear_checkpoint",
-    };
-    json_string_field(out, "kind", kind);
-    out.push('}');
+fn transition_commands_contract(commands: &[TransitionCommand]) -> Vec<RuntimeTransitionCommand> {
+    commands
+        .iter()
+        .map(|command| match command {
+            TransitionCommand::Win => RuntimeTransitionCommand::Win,
+            TransitionCommand::Restart => RuntimeTransitionCommand::Restart,
+            TransitionCommand::NextLevel => RuntimeTransitionCommand::NextLevel,
+            TransitionCommand::Again => RuntimeTransitionCommand::Again,
+            TransitionCommand::Checkpoint => RuntimeTransitionCommand::Checkpoint,
+            TransitionCommand::ClearCheckpoint => RuntimeTransitionCommand::ClearCheckpoint,
+        })
+        .collect()
 }
 
 fn object_field<'a>(value: &'a Value, key: &str) -> Result<&'a Value, String> {
@@ -1001,13 +993,6 @@ fn bool_field(out: &mut String, key: &str, value: bool) {
     out.push_str(if value { "true" } else { "false" });
 }
 
-fn json_string_field(out: &mut String, key: &str, value: &str) {
-    out.push('"');
-    out.push_str(key);
-    out.push_str("\":");
-    string(out, value);
-}
-
 fn string(out: &mut String, value: &str) {
     out.push('"');
     for ch in value.chars() {
@@ -1030,7 +1015,7 @@ mod tests {
     #[test]
     fn transition_outcome_includes_state_payload() {
         let state = State::empty_with_variables(2, 1, 1, 2, vec![7]).expect("state");
-        let outcome = encode_outcome(&state, None, None, false, &[], &[]);
+        let outcome = encode_outcome(&state, None, None, false, &[], &[]).expect("outcome json");
         let parsed: Value = serde_json::from_str(&outcome).expect("outcome json");
 
         assert_eq!(parsed["state"]["width"], 2);
@@ -1038,5 +1023,8 @@ mod tests {
         assert_eq!(parsed["state"]["layerCount"], 1);
         assert_eq!(parsed["state"]["slots"].as_array().expect("slots").len(), 2);
         assert_eq!(parsed["state"]["variables"][0], 7);
+        assert_eq!(parsed["changedCells"][0]["position"]["x"], 0);
+        assert_eq!(parsed["changedCells"][0]["position"]["y"], 0);
+        assert!(parsed["changedCells"][0]["position"].get("z").is_none());
     }
 }

@@ -289,6 +289,22 @@ impl ServerState {
         Ok(())
     }
 
+    fn apply_debug_input_name_json(&mut self, input_name: &str) -> Result<String, AppError> {
+        self.apply_input_name(input_name)?;
+        let debug = self.session.last_debug_transition().cloned();
+        let snapshot = self.snapshot_json();
+        let mut out = String::new();
+        out.push('{');
+        out.push_str("\"snapshot\":");
+        out.push_str(&snapshot);
+        out.push_str(",\"debug\":");
+        out.push_str(
+            &puzzle_game_runtime::debug_transition_value(&self.loaded, debug.as_ref()).to_string(),
+        );
+        out.push('}');
+        Ok(out)
+    }
+
     fn apply_command_name(&mut self, command_name: &str) -> Result<(), AppError> {
         self.session.apply_command(&self.loaded, command_name)?;
         Ok(())
@@ -363,45 +379,52 @@ impl StandaloneSessionBridge {
     }
 
     pub fn request_json(&mut self, method: &str, url: &str) -> Result<String, String> {
-        match (method, url) {
-            ("GET", "/api/state") => Ok(self.snapshot_json()),
-            ("POST", "/api/command/undo") => {
+        match puzzle_game_runtime::standalone_session_request(method, url)? {
+            puzzle_game_runtime::StandaloneSessionRequest::State => Ok(self.snapshot_json()),
+            puzzle_game_runtime::StandaloneSessionRequest::Undo => {
                 self.state.session.undo(&self.state.loaded);
                 Ok(self.snapshot_json())
             }
-            ("POST", "/api/command/redo") => {
+            puzzle_game_runtime::StandaloneSessionRequest::Redo => {
                 self.state.session.redo(&self.state.loaded);
                 Ok(self.snapshot_json())
             }
-            ("POST", "/api/command/restart") => {
+            puzzle_game_runtime::StandaloneSessionRequest::Restart => {
                 self.state.session.restart_level(&self.state.loaded);
                 Ok(self.snapshot_json())
             }
-            ("POST", "/api/command/next") => {
+            puzzle_game_runtime::StandaloneSessionRequest::Next => {
                 self.state.session.advance_level(&self.state.loaded);
                 Ok(self.snapshot_json())
             }
-            ("POST", path) if path.starts_with("/api/input/") => {
-                let input_name = percent_decode(&path["/api/input/".len()..]);
+            puzzle_game_runtime::StandaloneSessionRequest::Input(input_name) => {
                 self.state
                     .apply_input_name(&input_name)
                     .map_err(|error| error.to_string())?;
                 Ok(self.snapshot_json())
             }
-            ("POST", path) if path.starts_with("/api/command/") => {
-                let command_name = percent_decode(&path["/api/command/".len()..]);
+            puzzle_game_runtime::StandaloneSessionRequest::DebugInput(input_name) => self
+                .state
+                .apply_debug_input_name_json(&input_name)
+                .map_err(|error| error.to_string()),
+            puzzle_game_runtime::StandaloneSessionRequest::Command(command_name) => {
                 self.state
                     .apply_command_name(&command_name)
                     .map_err(|error| error.to_string())?;
                 Ok(self.snapshot_json())
             }
-            _ => Err(format!("Unsupported exported HTML request: {method} {url}")),
         }
     }
 
     pub fn apply_input_name(&mut self, input_name: &str) -> Result<(), String> {
         self.state
             .apply_input_name(input_name)
+            .map_err(|error| error.to_string())
+    }
+
+    pub fn apply_debug_input_name_json(&mut self, input_name: &str) -> Result<String, String> {
+        self.state
+            .apply_debug_input_name_json(input_name)
             .map_err(|error| error.to_string())
     }
 
@@ -477,10 +500,19 @@ impl<State: Clone> SearchObservationSampler<State> {
         }
     }
 
+    fn wants(&self, progress: SearchProgress) -> bool {
+        progress.expanded >= self.next_expanded
+    }
+
     fn observe(&mut self, state: &State, progress: SearchProgress) -> bool {
-        if progress.expanded < self.next_expanded {
+        if !self.wants(progress) {
             return false;
         }
+        self.record(state, progress);
+        true
+    }
+
+    fn record(&mut self, state: &State, progress: SearchProgress) {
         self.observations.push((progress, state.clone()));
         self.next_expanded = progress.expanded.saturating_add(self.stride);
         if self.observations.len() > self.max_samples {
@@ -493,7 +525,6 @@ impl<State: Clone> SearchObservationSampler<State> {
             self.stride = self.stride.saturating_mul(2).max(1);
             self.next_expanded = progress.expanded.saturating_add(self.stride);
         }
-        true
     }
 }
 
@@ -545,6 +576,71 @@ type Puzzle3SolutionStep = SolutionStep<State3, InputId>;
 type Puzzle3SearchObservation = SearchObservation<State3>;
 
 #[cfg(feature = "solver")]
+fn solve_domain_with_observations<D, ObservationState, Score, IsDead, Observe, OnProgress, Steps>(
+    domain: &mut D,
+    initial: D::State,
+    budget: SearchBudget,
+    score: Score,
+    is_dead: IsDead,
+    mut observe: Observe,
+    mut on_progress: Option<OnProgress>,
+    steps: Steps,
+) -> Result<SolutionResponse<ObservationState, D::Action>, AppError>
+where
+    D: puzzle_solver::SearchDomain,
+    D::Action: Clone,
+    D::Error: std::fmt::Debug,
+    ObservationState: Clone,
+    Score: FnMut(&D::State) -> i64,
+    IsDead: FnMut(&D::State) -> bool,
+    Observe: FnMut(&D::State) -> ObservationState,
+    OnProgress: FnMut(&ObservationState, SearchProgress),
+    Steps: FnOnce(&[D::Action]) -> Result<Vec<SolutionStep<ObservationState, D::Action>>, AppError>,
+{
+    let mut observations = SearchObservationSampler::new(96);
+    let outcome = best_first_with_dead_states_and_progress(
+        domain,
+        initial,
+        budget,
+        score,
+        is_dead,
+        |state, progress| {
+            let observation = observe(state);
+            observations.observe(&observation, progress);
+            if let Some(on_progress) = on_progress.as_mut() {
+                on_progress(&observation, progress);
+            }
+        },
+    );
+    let observations = observations.into_observations();
+
+    match outcome {
+        SearchOutcome::Solved(witness) => {
+            let steps = steps(&witness.actions)?;
+            Ok(SolutionResponse::Solved {
+                depth: witness.depth,
+                moves: witness.actions,
+                steps,
+                observations,
+            })
+        }
+        SearchOutcome::Exhausted(stats) => Ok(SolutionResponse::Exhausted {
+            stats,
+            observations,
+        }),
+        SearchOutcome::BudgetExceeded(stats) => Ok(SolutionResponse::BudgetExceeded {
+            stats,
+            observations,
+        }),
+        SearchOutcome::Failed(failure) => Ok(SolutionResponse::Failed {
+            depth: failure.depth,
+            error: format!("{:?}", failure.error),
+            observations,
+        }),
+    }
+}
+
+#[cfg(feature = "solver")]
 fn solve_current_state(
     loaded: &LoadedGame,
     initial: State,
@@ -591,17 +687,23 @@ where
     let game = Arc::new(game.clone());
     let goal_game = game.clone();
     let goal_for_domain = goal.clone();
-    let mut domain =
-        PuzzleDomain::with_ignored_objects(game.clone(), inputs, ignored_objects.clone(), move |state: &State| {
+    let mut domain = PuzzleDomain::with_ignored_objects(
+        game.clone(),
+        inputs,
+        ignored_objects.clone(),
+        move |state: &State| {
             goal_for_domain
                 .as_ref()
                 .is_some_and(|goal| eval_goal_expr(&goal_game, state, goal))
-        });
+        },
+    );
     let solver_initial = PuzzleSearchState::new(initial.without_objects(&ignored_objects));
+    let display_initial = initial.clone();
     let score_game = game.clone();
     let score_goal = goal.clone();
     let lose_game = game.clone();
     let mut observations = SearchObservationSampler::new(96);
+    let mut observation_error = None::<AppError>;
     let outcome = best_first_with_dead_states_and_progress(
         &mut domain,
         solver_initial,
@@ -617,14 +719,31 @@ where
                 .is_some_and(|lose| eval_goal_expr(&lose_game, state.state(), lose))
         },
         |state, progress| {
-            let display_state = materialize_compiled_display_state(engine, state.state());
-            if observations.observe(&display_state, progress) {
-                if let Some(on_observation) = on_observation.as_mut() {
-                    on_observation(&display_state, progress);
+            if observation_error.is_some() {
+                return;
+            }
+            if observations.wants(progress) {
+                match compiled_display_state_after_inputs(
+                    engine,
+                    &display_initial,
+                    state.input_history(),
+                ) {
+                    Ok(display_state) => {
+                        observations.record(&display_state, progress);
+                        if let Some(on_observation) = on_observation.as_mut() {
+                            on_observation(&display_state, progress);
+                        }
+                    }
+                    Err(error) => {
+                        observation_error = Some(error);
+                    }
                 }
             }
         },
     );
+    if let Some(error) = observation_error {
+        return Err(error);
+    }
     let observations = observations.into_observations();
 
     let response = match outcome {
@@ -659,15 +778,32 @@ where
 fn materialize_compiled_display_state(
     engine: &puzzle_core_wasm::CompiledEngine,
     state: &State,
-) -> State {
+) -> Result<State, AppError> {
     let Some(program) = engine.program("display", -1) else {
-        return state.clone();
+        return Ok(state.clone());
     };
     if program.is_empty() {
-        return state.clone();
+        return Ok(state.clone());
     }
-    transition_program(engine.game(), program, state, InputId(0))
-        .unwrap_or_else(|_| state.clone())
+    Ok(transition_program(
+        engine.game(),
+        program,
+        state,
+        InputId(0),
+    )?)
+}
+
+#[cfg(feature = "solver")]
+fn compiled_display_state_after_inputs(
+    engine: &puzzle_core_wasm::CompiledEngine,
+    initial: &State,
+    inputs: &[InputId],
+) -> Result<State, AppError> {
+    let mut state = initial.clone();
+    for input in inputs {
+        state = transition_state(engine.game(), &state, *input)?;
+    }
+    materialize_compiled_display_state(engine, &state)
 }
 
 #[cfg(feature = "solver")]
@@ -675,7 +811,7 @@ fn solve_current_state_with_budget_inner<O>(
     loaded: &LoadedGame,
     initial: State,
     budget: SearchBudget,
-    mut on_progress: Option<O>,
+    on_progress: Option<O>,
 ) -> Result<PuzzleSolutionResponse, AppError>
 where
     O: FnMut(&State, SearchProgress),
@@ -689,55 +825,29 @@ where
     let game = Arc::new(solver_game);
     let goal_game = loaded.clone();
     let ignored_objects = loaded.display_objects.clone();
-    let mut domain =
-        PuzzleDomain::with_ignored_objects(game.clone(), inputs, ignored_objects.clone(), move |state: &State| {
-            goal_game.is_goal_complete(state)
-        });
+    let mut domain = PuzzleDomain::with_ignored_objects(
+        game.clone(),
+        inputs,
+        ignored_objects.clone(),
+        move |state: &State| goal_game.is_goal_complete(state),
+    );
     let solver_initial = PuzzleSearchState::new(initial.without_objects(&ignored_objects));
     let score_game = loaded.clone();
     let lose_game = loaded.clone();
-    let mut observations = SearchObservationSampler::new(96);
-    let outcome = best_first_with_dead_states_and_progress(
+    let replay_game = loaded.game.clone();
+    solve_domain_with_observations(
         &mut domain,
         solver_initial,
         budget,
-        move |state| goal_score(&score_game, state.state()),
+        move |state| {
+            goal_score(&score_game, state.state())
+                + solver_strategy_score(&score_game, state.state())
+        },
         move |state| lose_game.is_lose_complete(state.state()),
-        |state, progress| {
-            observations.observe(state.state(), progress);
-            if let Some(on_progress) = on_progress.as_mut() {
-                on_progress(state.state(), progress);
-            }
-        },
-    );
-    let observations = observations.into_observations();
-
-    let response = match outcome {
-        SearchOutcome::Solved(witness) => {
-            let depth = witness.depth;
-            let solution_inputs = witness.actions;
-            SolutionResponse::Solved {
-                depth,
-                steps: solution_steps(&loaded.game, initial, &solution_inputs)?,
-                moves: solution_inputs,
-                observations,
-            }
-        }
-        SearchOutcome::Exhausted(stats) => SolutionResponse::Exhausted {
-            stats,
-            observations,
-        },
-        SearchOutcome::BudgetExceeded(stats) => SolutionResponse::BudgetExceeded {
-            stats,
-            observations,
-        },
-        SearchOutcome::Failed(failure) => SolutionResponse::Failed {
-            depth: failure.depth,
-            error: format!("{:?}", failure.error),
-            observations,
-        },
-    };
-    Ok(response)
+        |state| state.state().clone(),
+        on_progress,
+        move |solution_inputs| solution_steps(&replay_game, initial, solution_inputs),
+    )
 }
 
 #[cfg(feature = "solver")]
@@ -777,7 +887,7 @@ fn compiled_solution_steps(
     steps.push(SolutionStep {
         index: 0,
         input: None,
-        state: materialize_compiled_display_state(engine, &state),
+        state: materialize_compiled_display_state(engine, &state)?,
         completed: false,
     });
 
@@ -786,7 +896,7 @@ fn compiled_solution_steps(
         steps.push(SolutionStep {
             index: index + 1,
             input: Some(*input),
-            state: materialize_compiled_display_state(engine, &state),
+            state: materialize_compiled_display_state(engine, &state)?,
             completed: false,
         });
     }
@@ -813,7 +923,7 @@ fn solve_current_state3_with_budget_inner<O>(
     parsed: &ParsedPuzzle3,
     initial: State3,
     budget: SearchBudget,
-    mut on_progress: Option<O>,
+    on_progress: Option<O>,
 ) -> Result<Puzzle3SolutionResponse, AppError>
 where
     O: FnMut(&State3, SearchProgress),
@@ -839,54 +949,27 @@ where
         move |state: &State3| win_condition.is_met(&goal_game, state),
     );
     let solver_initial = initial.without_objects(&ignored_objects);
-    let mut observations = SearchObservationSampler::new(96);
-    let outcome = best_first_with_dead_states_and_progress(
+    let replay_initial = solver_initial.clone();
+    let score_game = Arc::clone(&game);
+    let score_strategy = parsed.solver_strategy.clone();
+    solve_domain_with_observations(
         &mut domain,
-        solver_initial.clone(),
+        solver_initial,
         budget,
-        |_| 0,
+        move |state| solver_strategy_score3(&score_game, &score_strategy, state),
         |_| false,
-        |state, progress| {
-            observations.observe(state, progress);
-            if let Some(on_progress) = on_progress.as_mut() {
-                on_progress(state, progress);
-            }
+        |state| state.clone(),
+        on_progress,
+        move |solution_inputs| {
+            solution_steps3(
+                &game,
+                &rules,
+                parsed.win_condition.as_ref(),
+                replay_initial,
+                solution_inputs,
+            )
         },
-    );
-    let observations = observations.into_observations();
-
-    let response = match outcome {
-        SearchOutcome::Solved(witness) => {
-            let depth = witness.depth;
-            let solution_inputs = witness.actions;
-            SolutionResponse::Solved {
-                depth,
-                steps: solution_steps3(
-                    &game,
-                    &rules,
-                    parsed.win_condition.as_ref(),
-                    solver_initial,
-                    &solution_inputs,
-                )?,
-                moves: solution_inputs,
-                observations,
-            }
-        }
-        SearchOutcome::Exhausted(stats) => SolutionResponse::Exhausted {
-            stats,
-            observations,
-        },
-        SearchOutcome::BudgetExceeded(stats) => SolutionResponse::BudgetExceeded {
-            stats,
-            observations,
-        },
-        SearchOutcome::Failed(failure) => SolutionResponse::Failed {
-            depth: failure.depth,
-            error: format!("{:?}", failure.error),
-            observations,
-        },
-    };
-    Ok(response)
+    )
 }
 
 #[cfg(feature = "solver")]
@@ -926,6 +1009,202 @@ fn goal_score(loaded: &LoadedGame, state: &State) -> i64 {
         .as_ref()
         .map(|goal| goal_expr_score(&loaded.game, state, &goal.expr))
         .unwrap_or(0)
+}
+
+#[cfg(feature = "solver")]
+fn solver_strategy_score(loaded: &LoadedGame, state: &State) -> i64 {
+    solver_strategy_score_with(&loaded.solver_strategy, |value| {
+        solver_query_expr_value(loaded, state, value)
+    })
+}
+
+#[cfg(feature = "solver")]
+fn solver_query_expr_value(loaded: &LoadedGame, state: &State, value: &QueryExpr) -> i64 {
+    solver_query_expr_value_with(
+        value,
+        &mut |variable| {
+            state
+                .variable_value(variable)
+                .expect("query variable was resolved during lowering")
+        },
+        &mut |kind| goal_condition_value_kind(&loaded.game, state, kind),
+        &mut |from, to| solver_strategy_distance(&loaded.game, state, from, to),
+    )
+}
+
+#[cfg(feature = "solver")]
+fn solver_strategy_distance(
+    game: &CompiledGame,
+    state: &State,
+    from: &[ObjectId],
+    to: &[ObjectId],
+) -> i64 {
+    let from_positions = selector_object_positions(game, state, from);
+    let to_positions = selector_object_positions(game, state, to);
+    let fallback = i64::from(state.width) + i64::from(state.height);
+    from_positions
+        .iter()
+        .flat_map(|(ax, ay)| {
+            to_positions
+                .iter()
+                .map(move |(bx, by)| manhattan(*ax, *ay, *bx, *by))
+        })
+        .min()
+        .unwrap_or(fallback)
+}
+
+#[cfg(feature = "solver")]
+fn selector_object_positions(
+    game: &CompiledGame,
+    state: &State,
+    objects: &[ObjectId],
+) -> Vec<(u16, u16)> {
+    let mut positions = Vec::new();
+    for object in objects {
+        for slot in state.object_positions(*object) {
+            let Some(position) = state.slot_position(*slot) else {
+                continue;
+            };
+            if !positions.contains(&position)
+                && state.has_object(game, position.0, position.1, *object)
+            {
+                positions.push(position);
+            }
+        }
+    }
+    positions
+}
+
+#[cfg(feature = "solver")]
+fn solver_strategy_score3(game: &Game3, strategy: &SolverStrategy3, state: &State3) -> i64 {
+    solver_strategy_score_with(strategy, |value| {
+        solver_query_expr_value3(game, state, value)
+    })
+}
+
+#[cfg(feature = "solver")]
+fn solver_strategy_score_with<Query, Eval>(
+    strategy: &puzzle_lang::SolverStrategyOf<Query>,
+    mut eval: Eval,
+) -> i64
+where
+    Eval: FnMut(&Query) -> i64,
+{
+    strategy
+        .terms
+        .iter()
+        .map(|term| {
+            let value = eval(&term.value);
+            solver_strategy_term_score(term.direction, term.weight, value)
+        })
+        .sum()
+}
+
+#[cfg(feature = "solver")]
+fn solver_strategy_term_score(direction: SolverStrategyDirection, weight: i64, value: i64) -> i64 {
+    match direction {
+        SolverStrategyDirection::Maximize => value.saturating_mul(-weight),
+        SolverStrategyDirection::Minimize => value.saturating_mul(weight),
+        SolverStrategyDirection::Prefer => {
+            if value != 0 {
+                0
+            } else {
+                weight
+            }
+        }
+        SolverStrategyDirection::Avoid => {
+            if value == 0 {
+                0
+            } else {
+                weight
+            }
+        }
+    }
+}
+
+#[cfg(feature = "solver")]
+fn solver_query_expr_value3(game: &Game3, state: &State3, value: &QueryExpr3) -> i64 {
+    solver_query_expr_value_with(
+        value,
+        &mut |variable| {
+            state
+                .variable_value(variable)
+                .expect("query variable was resolved during lowering")
+        },
+        &mut |kind| eval_condition_kind(game, state, kind, None),
+        &mut |from, to| solver_strategy_distance3(game, state, from, to),
+    )
+}
+
+#[cfg(feature = "solver")]
+fn solver_query_expr_value_with<Object, Value, Variable, EvalVariable, EvalValue, EvalDistance>(
+    value: &QueryExprOf<Object, Value, Variable>,
+    eval_variable: &mut EvalVariable,
+    eval_value: &mut EvalValue,
+    eval_distance: &mut EvalDistance,
+) -> i64
+where
+    Variable: Copy,
+    EvalVariable: FnMut(Variable) -> i64,
+    EvalValue: FnMut(&Value) -> i64,
+    EvalDistance: FnMut(&[Object], &[Object]) -> i64,
+{
+    match value {
+        QueryExprOf::Variable(variable) => eval_variable(*variable),
+        QueryExprOf::Value(kind) => eval_value(kind),
+        QueryExprOf::Distance { from, to } => eval_distance(from, to),
+        QueryExprOf::Compare { left, op, right } => {
+            let left = solver_query_expr_value_with(left, eval_variable, eval_value, eval_distance);
+            if compare_i64(left, *op, *right) {
+                1
+            } else {
+                0
+            }
+        }
+    }
+}
+
+#[cfg(feature = "solver")]
+fn solver_strategy_distance3(
+    game: &Game3,
+    state: &State3,
+    from: &[ObjectId3],
+    to: &[ObjectId3],
+) -> i64 {
+    let from_positions = selector_object_positions3(game, state, from);
+    let to_positions = selector_object_positions3(game, state, to);
+    let fallback =
+        i64::from(state.size.width) + i64::from(state.size.depth) + i64::from(state.size.height);
+    from_positions
+        .iter()
+        .flat_map(|a| to_positions.iter().map(move |b| manhattan3(*a, *b)))
+        .min()
+        .unwrap_or(fallback)
+}
+
+#[cfg(feature = "solver")]
+fn selector_object_positions3(game: &Game3, state: &State3, objects: &[ObjectId3]) -> Vec<Coord3> {
+    let mut positions = Vec::new();
+    for z in 0..state.size.height {
+        for y in 0..state.size.depth {
+            for x in 0..state.size.width {
+                let position = Coord3::new(x, y, z);
+                if objects
+                    .iter()
+                    .any(|object| state.has_object(game, position, *object))
+                    && !positions.contains(&position)
+                {
+                    positions.push(position);
+                }
+            }
+        }
+    }
+    positions
+}
+
+#[cfg(feature = "solver")]
+fn manhattan3(a: Coord3, b: Coord3) -> i64 {
+    i64::from(a.x.abs_diff(b.x)) + i64::from(a.y.abs_diff(b.y)) + i64::from(a.z.abs_diff(b.z))
 }
 
 #[cfg(feature = "solver")]

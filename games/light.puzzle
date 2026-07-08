@@ -1,4 +1,4 @@
-title "light"
+title = "light"
 
 theme puzzlescript {
 background_color = #fff
@@ -100,7 +100,7 @@ Escape q -> goto title
 
 scene title {
 layout {
-title
+title = title
 choice "Start" -> goto main
 choice "Levels" -> goto level_select
 }
@@ -122,4 +122,3 @@ keys {
 Escape q -> goto title
 }
 }
-

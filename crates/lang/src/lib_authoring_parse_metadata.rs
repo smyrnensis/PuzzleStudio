@@ -39,20 +39,12 @@ fn parse_theme_setting_tokens(
     line: &str,
 ) -> Result<Option<(String, String)>, DiagnosticReport> {
     match tokens {
-        [name, value] => {
-            let name = normalize_theme_setting_name(name, line)?;
-            validate_theme_value(value, line)?;
-            Ok(Some((name, (*value).to_string())))
-        }
         [name, "=", value] => {
             let name = normalize_theme_setting_name(name, line)?;
             validate_theme_value(value, line)?;
             Ok(Some((name, (*value).to_string())))
         }
-        _ => Err(parse_error(
-            line,
-            "theme entry must be: <setting> <value> or <setting> = <value>",
-        )),
+        _ => Err(parse_error(line, "theme entry must be: <setting> = <value>")),
     }
 }
 
@@ -154,13 +146,18 @@ fn parse_asset_path(token: &str, line: &str) -> Result<String, DiagnosticReport>
 }
 
 fn parse_metadata_text(line: &str, keyword: &str) -> Result<String, DiagnosticReport> {
-    let Some(rest) = line.strip_prefix(keyword) else {
+    let Some((name, value)) = parse_assignment_row(line) else {
+        return Err(parse_error(
+            line,
+            &format!("{keyword} metadata must be: {keyword} = <text>"),
+        ));
+    };
+    if name != keyword {
         return Err(parse_error(
             line,
             "metadata directive has the wrong keyword",
         ));
-    };
-    let value = rest.trim();
+    }
     if value.is_empty() {
         return Err(parse_error(line, "metadata value must not be empty"));
     }

@@ -3,6 +3,16 @@ use std::num::NonZeroU32;
 
 use serde::{Deserialize, Serialize};
 
+#[derive(Clone, Debug)]
+pub struct TransitionOutcome<Input, State, Command, RuleId, Patch> {
+    pub input: Input,
+    pub next_state: State,
+    pub cancelled: bool,
+    pub commands: Vec<Command>,
+    pub fired_rules: Vec<RuleId>,
+    pub patches: Vec<Patch>,
+}
+
 pub trait KernelId: Copy {
     fn raw(self) -> u16;
 

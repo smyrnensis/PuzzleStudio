@@ -1035,6 +1035,7 @@ struct ObjectSelector {
     transform: Option<SelectorTransform>,
     family_wildcard: Option<FamilyWildcardSelector>,
     relative_constraints: Vec<RelativeSelectorConstraint>,
+    capture_requirements: HashMap<ObjectId, Vec<CaptureSelectorRequirement>>,
     dynamic_guards: HashMap<ObjectId, Vec<DynamicSelectorGuard>>,
     tag_captures: HashMap<ObjectId, Vec<TagCapture>>,
     mark: Vec<ParsedMark>,
@@ -1054,8 +1055,9 @@ struct TagCaptureValues {
 
 #[derive(Clone, Debug)]
 struct TagCaptureValue {
-    count: usize,
     value: String,
+    duplicate: bool,
+    conflict: bool,
 }
 
 impl TagCaptureValues {
@@ -1063,33 +1065,55 @@ impl TagCaptureValues {
         self.values
             .entry(capture.key.clone())
             .and_modify(|existing| {
-                existing.count += 1;
+                if capture.key.contains('#') {
+                    if existing.value != capture.value {
+                        existing.conflict = true;
+                    }
+                } else {
+                    existing.duplicate = true;
+                }
             })
             .or_insert_with(|| TagCaptureValue {
-                count: 1,
                 value: capture.value.clone(),
+                duplicate: false,
+                conflict: false,
             });
     }
 
+    fn has_conflict(&self) -> bool {
+        self.values.values().any(|value| value.conflict)
+    }
+
     fn resolve(&self, key: &str, line: &str) -> Result<i64, DiagnosticReport> {
+        let value = self.resolve_text(key, line)?;
+        parse_variable_value(&value, line).map_err(|_| {
+            parse_error(
+                line,
+                "tag capture values used in var updates must be true, false, or integers",
+            )
+        })
+    }
+
+    fn resolve_text(&self, key: &str, line: &str) -> Result<String, DiagnosticReport> {
         let Some(value) = self.values.get(key) else {
             return Err(parse_error(
                 line,
                 &format!("unknown tag capture reference: {key}"),
             ));
         };
-        if value.count != 1 {
+        if value.conflict {
+            return Err(parse_error(
+                line,
+                &format!("tag capture reference `{key}` is conflicting"),
+            ));
+        }
+        if value.duplicate {
             return Err(parse_error(
                 line,
                 &format!("tag capture reference `{key}` is ambiguous"),
             ));
         }
-        parse_variable_value(&value.value, line).map_err(|_| {
-            parse_error(
-                line,
-                "tag capture values used in var updates must be true, false, or integers",
-            )
-        })
+        Ok(value.value.clone())
     }
 }
 
@@ -1097,6 +1121,19 @@ impl TagCaptureValues {
 struct RelativeSelectorConstraint {
     relative: RelativeDirection,
     alternatives_by_direction: HashMap<String, Vec<ObjectId>>,
+}
+
+#[derive(Clone, Debug)]
+enum CaptureSelectorRequirement {
+    Direct {
+        key: String,
+        value: String,
+    },
+    Mapped {
+        key: String,
+        map_name: String,
+        value: String,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1539,7 +1576,8 @@ fn resolve_object_selector(
     variable_names: &HashMap<String, VariableId>,
 ) -> Result<ObjectSelector, DiagnosticReport> {
     let (selector, mark) = split_selector_mark(selector, line)?;
-    let (selector, occurrence_label) = split_selector_occurrence_label(selector, line)?;
+    let (selector_text, occurrence_label) = split_selector_occurrence_label(selector, line)?;
+    let selector = selector_text.as_ref();
     let token = labeled_selector_token(selector, occurrence_label.as_deref());
     if !selector.contains(':')
         && let Some(object) = object_names.get(selector).copied()
@@ -1550,6 +1588,7 @@ fn resolve_object_selector(
             transform: None,
             family_wildcard: None,
             relative_constraints: Vec::new(),
+            capture_requirements: HashMap::new(),
             dynamic_guards: HashMap::new(),
             tag_captures: HashMap::new(),
             mark,
@@ -1564,6 +1603,7 @@ fn resolve_object_selector(
             transform: None,
             family_wildcard: None,
             relative_constraints: Vec::new(),
+            capture_requirements: HashMap::new(),
             dynamic_guards: HashMap::new(),
             tag_captures: HashMap::new(),
             mark,
@@ -1572,6 +1612,16 @@ fn resolve_object_selector(
     }
 
     let parts = selector.split(':').collect::<Vec<_>>();
+    if parts.as_slice() == ["*"] {
+        return resolve_any_object_selector(
+            token,
+            mark,
+            occurrence_label,
+            line,
+            object_names,
+            object_schemas,
+        );
+    }
     if parts.first().copied() == Some("*") {
         return resolve_schema_family_wildcard_selector(
             &parts,
@@ -1668,11 +1718,16 @@ fn resolve_object_selector(
                     key: tag_capture_key.unwrap_or_else(|| axis.clone()),
                 }))
             } else if let ValueExpr::MapCall { arg, .. } = &expr {
-                if arg != axis {
-                    return Err(parse_error(
-                        line,
-                        "map argument must match selector tag set",
-                    ));
+                let arg_axis = map_argument_axis(arg);
+                let axis_values = schema_axis_values(schema, index)?;
+                if arg_axis != axis {
+                    let Some(values) = value_sets.get(arg_axis) else {
+                        return Err(parse_error(
+                            line,
+                            "map argument must match selector tag set",
+                        ));
+                    };
+                    validate_selector_subset(arg_axis, values, &axis_values, parts[0], axis, line)?;
                 }
                 let ValueExpr::MapCall { name, .. } = &expr else {
                     unreachable!("map call branch only handles map calls");
@@ -1683,7 +1738,7 @@ fn resolve_object_selector(
                 if map.axis != *axis {
                     return Err(parse_error(line, "map tag set must match argument tag set"));
                 }
-                source_token_parts.push(axis.clone());
+                source_token_parts.push(arg.clone());
                 Ok(Some(SelectorConstraint::Mapped {
                     axis_index: index,
                     expr,
@@ -1755,13 +1810,12 @@ fn resolve_object_selector(
         return Err(parse_error(line, "object selector matched no objects"));
     }
     let relative_constraints = relative_selector_constraints(&constraints, schema, &alternatives)?;
+    let capture_requirements =
+        capture_selector_requirements(&constraints, schema, &alternatives)?;
 
-    if constraints.iter().any(|constraint| {
-        matches!(
-            constraint,
-            Some(SelectorConstraint::Mapped { .. } | SelectorConstraint::AxisComputed { .. })
-        )
-    })
+    if constraints
+        .iter()
+        .any(selector_constraint_needs_occurrence_transform)
     {
         let source_token = labeled_selector_token(
             &format!("{}:{}", parts[0], source_token_parts.join(":")),
@@ -1777,9 +1831,11 @@ fn resolve_object_selector(
             for constraint in constraints.iter().flatten() {
                 match constraint {
                     SelectorConstraint::Mapped { axis_index, expr } => {
-                        let axis = &schema.axes[*axis_index];
+                        let ValueExpr::MapCall { arg, .. } = expr else {
+                            unreachable!("mapped selector constraint must contain a map call");
+                        };
                         let mut env = ValueEnv::default();
-                        env.bind(axis, axis, &source.values[*axis_index]);
+                        env.bind(arg, &schema.axes[*axis_index], &source.values[*axis_index]);
                         values[*axis_index] = eval_bound_value_expr(expr, &env, maps, line)?;
                     }
                     SelectorConstraint::AxisComputed { axis_index, expr } => {
@@ -1810,6 +1866,7 @@ fn resolve_object_selector(
             }),
             family_wildcard: None,
             relative_constraints,
+            capture_requirements: capture_requirements.clone(),
             dynamic_guards: HashMap::new(),
             tag_captures: HashMap::new(),
             mark,
@@ -1825,8 +1882,212 @@ fn resolve_object_selector(
         transform: None,
         family_wildcard: None,
         relative_constraints,
+        capture_requirements,
         dynamic_guards,
         tag_captures,
+        mark,
+        occurrence_label,
+    })
+}
+
+fn record_resolved_object_selector_surface_token(
+    token: &SourceToken,
+    line: &str,
+    catalog: &Catalog,
+    sink: &mut SurfaceSink,
+) {
+    if matches!(
+        token.text.as_str(),
+        "no" | "all" | "any" | "empty" | "..." | "and" | "or" | "="
+    ) {
+        return;
+    }
+    if resolve_object_selector(
+        &token.text,
+        line,
+        &catalog.object_names,
+        &catalog.object_schemas,
+        &catalog_value_sets(catalog),
+        &catalog.maps,
+        &catalog.object_groups,
+        &catalog.variable_names,
+    )
+    .is_err()
+    {
+        return;
+    }
+    record_resolved_selector_surface_parts(token, line, catalog, sink);
+}
+
+fn record_resolved_selector_surface_parts(
+    token: &SourceToken,
+    line: &str,
+    catalog: &Catalog,
+    sink: &mut SurfaceSink,
+) {
+    let Ok((selector, marks)) = split_selector_mark(&token.text, line) else {
+        return;
+    };
+    let Ok((selector, _occurrence_label)) = split_selector_occurrence_label(selector, line) else {
+        return;
+    };
+    let selector = selector.as_ref();
+    let selector_offset = token.text.find(selector).unwrap_or(0);
+    if !selector.contains(':') {
+        if catalog.object_names.contains_key(selector) || catalog.object_schemas.contains_key(selector) {
+            mark_surface_token_part(
+                token,
+                selector_offset,
+                selector,
+                selector,
+                SurfaceSemanticKind::Object,
+                sink,
+            );
+        } else if catalog.object_groups.contains_key(selector) {
+            mark_surface_token_part(
+                token,
+                selector_offset,
+                selector,
+                selector,
+                SurfaceSemanticKind::Group,
+                sink,
+            );
+        }
+        record_selector_mark_surface_parts(token, &marks, catalog, sink);
+        return;
+    }
+
+    let parts = selector.split(':').collect::<Vec<_>>();
+    let Some(base) = parts.first().copied() else {
+        return;
+    };
+    if catalog.object_schemas.contains_key(base) || catalog.object_names.contains_key(base) {
+        mark_surface_token_part(
+            token,
+            selector_offset,
+            selector,
+            base,
+            SurfaceSemanticKind::Object,
+            sink,
+        );
+        record_schema_selector_suffix_surface_parts(token, selector_offset, selector, &parts, catalog, sink);
+    } else if catalog.value_sets.contains_key(base) || catalog.object_axes.contains_key(base) {
+        mark_surface_token_part(
+            token,
+            selector_offset,
+            selector,
+            base,
+            SurfaceSemanticKind::Group,
+            sink,
+        );
+        for suffix in parts.iter().skip(1) {
+            mark_surface_token_part(
+                token,
+                selector_offset,
+                selector,
+                suffix,
+                SurfaceSemanticKind::Object,
+                sink,
+            );
+        }
+    }
+    record_selector_mark_surface_parts(token, &marks, catalog, sink);
+}
+
+fn record_schema_selector_suffix_surface_parts(
+    token: &SourceToken,
+    selector_offset: usize,
+    selector: &str,
+    parts: &[&str],
+    catalog: &Catalog,
+    sink: &mut SurfaceSink,
+) {
+    let Some(schema) = catalog.object_schemas.get(parts[0]) else {
+        return;
+    };
+    for (axis_index, axis) in schema.axes.iter().enumerate() {
+        let Some(raw_value) = schema_selector_part(parts, schema, axis_index) else {
+            continue;
+        };
+        let value = raw_value
+            .split_once('#')
+            .map_or(raw_value, |(base, _)| base);
+        if value == "*" {
+            continue;
+        }
+        let kind = if value == axis
+            || catalog.value_sets.contains_key(value)
+            || catalog.object_axes.contains_key(value)
+        {
+            SurfaceSemanticKind::Group
+        } else if catalog.variable_names.contains_key(value) {
+            SurfaceSemanticKind::State
+        } else {
+            SurfaceSemanticKind::Variant
+        };
+        mark_surface_token_part(token, selector_offset, selector, value, kind, sink);
+    }
+}
+
+fn record_selector_mark_surface_parts(
+    token: &SourceToken,
+    marks: &[ParsedMark],
+    catalog: &Catalog,
+    sink: &mut SurfaceSink,
+) {
+    for mark in marks {
+        if catalog.mark_names.contains_key(&mark.name) {
+            mark_surface_token_part(token, 0, &token.text, &mark.name, SurfaceSemanticKind::Mark, sink);
+        }
+        if let Some(value) = &mark.value {
+            mark_surface_token_part(token, 0, &token.text, value, SurfaceSemanticKind::Variant, sink);
+        }
+    }
+}
+
+fn mark_surface_token_part(
+    token: &SourceToken,
+    haystack_offset: usize,
+    haystack: &str,
+    needle: &str,
+    kind: SurfaceSemanticKind,
+    sink: &mut SurfaceSink,
+) {
+    if needle.is_empty() {
+        return;
+    }
+    let Some(relative) = haystack.find(needle) else {
+        return;
+    };
+    let start = token.start + haystack_offset + relative;
+    let end = start + needle.len();
+    sink.mark(SourceSpan { start, end }, kind);
+}
+
+fn resolve_any_object_selector(
+    token: String,
+    mark: Vec<ParsedMark>,
+    occurrence_label: Option<String>,
+    line: &str,
+    object_names: &HashMap<String, ObjectId>,
+    object_schemas: &HashMap<String, ObjectSchema>,
+) -> Result<ObjectSelector, DiagnosticReport> {
+    let mut alternatives = object_names.values().copied().collect::<Vec<_>>();
+    alternatives.extend(schema_wildcard_alternatives(object_schemas, |_, _| true));
+    alternatives.sort_by_key(|object| object.0);
+    alternatives.dedup();
+    if alternatives.is_empty() {
+        return Err(parse_error(line, "object selector matched no objects"));
+    }
+    Ok(ObjectSelector {
+        token,
+        alternatives,
+        transform: None,
+        family_wildcard: None,
+        relative_constraints: Vec::new(),
+        capture_requirements: HashMap::new(),
+        dynamic_guards: HashMap::new(),
+        tag_captures: HashMap::new(),
         mark,
         occurrence_label,
     })
@@ -1911,6 +2172,7 @@ fn resolve_qualified_value_set_selector(
         family_wildcard: (can_map && !mapped_objects.is_empty())
             .then_some(FamilyWildcardSelector { mapped_objects }),
         relative_constraints: Vec::new(),
+        capture_requirements: HashMap::new(),
         dynamic_guards,
         tag_captures: HashMap::new(),
         mark,
@@ -2057,6 +2319,7 @@ fn resolve_schema_family_wildcard_selector(
         transform: None,
         family_wildcard,
         relative_constraints: Vec::new(),
+        capture_requirements: HashMap::new(),
         dynamic_guards: HashMap::new(),
         tag_captures: HashMap::new(),
         mark,
@@ -2153,13 +2416,31 @@ fn schema_wildcard_target_set_map(
 fn split_selector_occurrence_label<'a>(
     selector: &'a str,
     line: &str,
-) -> Result<(&'a str, Option<String>), DiagnosticReport> {
-    if selector.contains(':') {
-        return Ok((selector, None));
+) -> Result<(std::borrow::Cow<'a, str>, Option<String>), DiagnosticReport> {
+    if let Some(colon) = selector.find(':') {
+        let head = &selector[..colon];
+        let suffix = &selector[colon..];
+        let Some((base, label)) = head.split_once('#') else {
+            return Ok((std::borrow::Cow::Borrowed(selector), None));
+        };
+        validate_selector_occurrence_label_parts(base, label, line)?;
+        return Ok((
+            std::borrow::Cow::Owned(format!("{base}{suffix}")),
+            Some(label.to_string()),
+        ));
     }
     let Some((base, label)) = selector.split_once('#') else {
-        return Ok((selector, None));
+        return Ok((std::borrow::Cow::Borrowed(selector), None));
     };
+    validate_selector_occurrence_label_parts(base, label, line)?;
+    Ok((std::borrow::Cow::Borrowed(base), Some(label.to_string())))
+}
+
+fn validate_selector_occurrence_label_parts(
+    base: &str,
+    label: &str,
+    line: &str,
+) -> Result<(), DiagnosticReport> {
     if base.is_empty() || label.is_empty() || label.contains('#') {
         return Err(parse_error(
             line,
@@ -2175,7 +2456,7 @@ fn split_selector_occurrence_label<'a>(
             "selector occurrence label may only contain letters, numbers, and _",
         ));
     }
-    Ok((base, Some(label.to_string())))
+    Ok(())
 }
 
 fn selector_tag_capture_key<'a>(
@@ -2184,6 +2465,9 @@ fn selector_tag_capture_key<'a>(
     axis_count: usize,
     line: &str,
 ) -> Result<(&'a str, Option<String>), DiagnosticReport> {
+    if parse_map_call(value).is_some() {
+        return Ok((value, None));
+    }
     let Some((base, label)) = value.split_once('#') else {
         if value == axis {
             return Ok((value, Some(axis.to_string())));
@@ -2426,6 +2710,75 @@ fn dynamic_selector_guards(
         guards.insert(variant.object, variant_guards);
     }
     Ok(guards)
+}
+
+fn map_argument_axis(arg: &str) -> &str {
+    arg.split_once('#').map_or(arg, |(axis, _)| axis)
+}
+
+fn selector_constraint_needs_occurrence_transform(
+    constraint: &Option<SelectorConstraint>,
+) -> bool {
+    match constraint {
+        Some(SelectorConstraint::AxisComputed { .. }) => true,
+        Some(SelectorConstraint::Mapped { expr, .. }) => !value_expr_uses_tag_capture_ref(expr),
+        _ => false,
+    }
+}
+
+fn value_expr_uses_tag_capture_ref(expr: &ValueExpr) -> bool {
+    match expr {
+        ValueExpr::Binding(value) => value.contains('#'),
+        ValueExpr::MapCall { arg, .. } => arg.contains('#'),
+    }
+}
+
+fn capture_selector_requirements(
+    constraints: &[Option<SelectorConstraint>],
+    schema: &ObjectSchema,
+    alternatives: &[ObjectId],
+) -> Result<HashMap<ObjectId, Vec<CaptureSelectorRequirement>>, DiagnosticReport> {
+    let mut requirements = HashMap::new();
+    for variant in schema
+        .variants
+        .iter()
+        .filter(|variant| alternatives.contains(&variant.object))
+    {
+        let mut object_requirements = Vec::new();
+        for constraint in constraints.iter().flatten() {
+            match constraint {
+                SelectorConstraint::Capture { axis_index, key } if key.contains('#') => {
+                    let value = variant.values.get(*axis_index).ok_or_else(|| {
+                        DiagnosticReport::error("internal schema variant missing tag value")
+                    })?;
+                    object_requirements.push(CaptureSelectorRequirement::Direct {
+                        key: key.clone(),
+                        value: value.clone(),
+                    });
+                }
+                SelectorConstraint::Mapped { axis_index, expr }
+                    if value_expr_uses_tag_capture_ref(expr) =>
+                {
+                    let ValueExpr::MapCall { name, arg } = expr else {
+                        unreachable!("mapped selector constraint must contain a map call");
+                    };
+                    let value = variant.values.get(*axis_index).ok_or_else(|| {
+                        DiagnosticReport::error("internal schema variant missing tag value")
+                    })?;
+                    object_requirements.push(CaptureSelectorRequirement::Mapped {
+                        key: arg.clone(),
+                        map_name: name.clone(),
+                        value: value.clone(),
+                    });
+                }
+                _ => {}
+            }
+        }
+        if !object_requirements.is_empty() {
+            requirements.insert(variant.object, object_requirements);
+        }
+    }
+    Ok(requirements)
 }
 
 fn validate_schema_selector_arity(
@@ -2974,6 +3327,7 @@ fn compile_before_after_blocks_for_direction(
     object_layers: &HashMap<ObjectId, LayerId>,
     mark_names: &HashMap<String, MarkDef>,
     value_sets: &HashMap<String, Vec<String>>,
+    maps: &HashMap<String, ValueMap>,
     direction: Direction,
     direction_expanded: bool,
     line: &str,
@@ -2987,6 +3341,7 @@ fn compile_before_after_blocks_for_direction(
         object_layers,
         mark_names,
         value_sets,
+        maps,
         line,
         source_line_number,
     )?;
@@ -2999,6 +3354,7 @@ fn compile_before_after_blocks(
     object_layers: &HashMap<ObjectId, LayerId>,
     mark_names: &HashMap<String, MarkDef>,
     _value_sets: &HashMap<String, Vec<String>>,
+    maps: &HashMap<String, ValueMap>,
     line: &str,
     source_line_number: Option<usize>,
 ) -> Result<Vec<RuleBodyAlternative>, DiagnosticReport> {
@@ -3044,6 +3400,18 @@ fn compile_before_after_blocks(
             'assignment_loop: for assignment in assignments {
                 let all_before_occurrences = &before_occurrences;
                 let tag_captures = tag_captures_for_assignment(&before_occurrences, &assignment);
+                if tag_captures.has_conflict() {
+                    continue 'assignment_loop;
+                }
+                if !assignment_matches_capture_requirements(
+                    &before_occurrences,
+                    &assignment,
+                    &tag_captures,
+                    maps,
+                    line,
+                )? {
+                    continue 'assignment_loop;
+                }
                 let mut components = Vec::new();
                 let mut writes = Vec::new();
                 let mut before_token_counts = HashMap::<String, usize>::new();
@@ -3105,6 +3473,8 @@ fn compile_before_after_blocks(
                                 all_before_occurrences,
                                 &before_by_token,
                                 &mut before_token_counts,
+                                &tag_captures,
+                                maps,
                                 line,
                                 source_line_number,
                             )?;
@@ -3114,6 +3484,8 @@ fn compile_before_after_blocks(
                                 all_before_occurrences,
                                 &before_by_token,
                                 &mut after_token_counts,
+                                &tag_captures,
+                                maps,
                                 line,
                                 source_line_number,
                             )?;
@@ -4485,6 +4857,7 @@ struct SelectorOccurrence {
     alternatives: Vec<ObjectId>,
     occurrence_label: Option<String>,
     tag_captures: HashMap<ObjectId, Vec<TagCapture>>,
+    capture_requirements: HashMap<ObjectId, Vec<CaptureSelectorRequirement>>,
     cell_index: usize,
     binding: u16,
 }
@@ -4513,6 +4886,7 @@ fn collect_before_occurrences(block: &PatternBlock) -> Vec<SelectorOccurrence> {
                             alternatives: selector.alternatives.clone(),
                             occurrence_label: selector.occurrence_label.clone(),
                             tag_captures: selector.tag_captures.clone(),
+                            capture_requirements: selector.capture_requirements.clone(),
                             cell_index,
                             binding: next_binding,
                         });
@@ -4752,12 +5126,94 @@ fn tag_captures_for_assignment(
     captures
 }
 
+fn assignment_matches_capture_requirements(
+    occurrences: &[SelectorOccurrence],
+    assignment: &[SelectorAssignmentValue],
+    tag_captures: &TagCaptureValues,
+    maps: &HashMap<String, ValueMap>,
+    line: &str,
+) -> Result<bool, DiagnosticReport> {
+    for (occurrence, value) in occurrences.iter().zip(assignment) {
+        let Some(object) = assignment_concrete_object(value) else {
+            continue;
+        };
+        let selector = SelectorRequirementView {
+            capture_requirements: &occurrence.capture_requirements,
+        };
+        if !selector_object_matches_capture_requirements(&selector, object, tag_captures, maps, line)?
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+struct SelectorRequirementView<'a> {
+    capture_requirements: &'a HashMap<ObjectId, Vec<CaptureSelectorRequirement>>,
+}
+
+trait SelectorRequirementSource {
+    fn capture_requirements(&self) -> &HashMap<ObjectId, Vec<CaptureSelectorRequirement>>;
+}
+
+impl SelectorRequirementSource for ObjectSelector {
+    fn capture_requirements(&self) -> &HashMap<ObjectId, Vec<CaptureSelectorRequirement>> {
+        &self.capture_requirements
+    }
+}
+
+impl SelectorRequirementSource for SelectorRequirementView<'_> {
+    fn capture_requirements(&self) -> &HashMap<ObjectId, Vec<CaptureSelectorRequirement>> {
+        self.capture_requirements
+    }
+}
+
+fn selector_object_matches_capture_requirements(
+    selector: &impl SelectorRequirementSource,
+    object: ObjectId,
+    tag_captures: &TagCaptureValues,
+    maps: &HashMap<String, ValueMap>,
+    line: &str,
+) -> Result<bool, DiagnosticReport> {
+    let Some(requirements) = selector.capture_requirements().get(&object) else {
+        return Ok(selector.capture_requirements().is_empty());
+    };
+    for requirement in requirements {
+        match requirement {
+            CaptureSelectorRequirement::Direct { key, value } => {
+                if tag_captures.resolve_text(key, line)? != *value {
+                    return Ok(false);
+                }
+            }
+            CaptureSelectorRequirement::Mapped {
+                key,
+                map_name,
+                value,
+            } => {
+                let captured = tag_captures.resolve_text(key, line)?;
+                let map = maps
+                    .get(map_name)
+                    .ok_or_else(|| parse_error(line, "unknown map"))?;
+                let Some(mapped) = map.values.get(&captured) else {
+                    return Err(parse_error(line, "map missing input value"));
+                };
+                if mapped != value {
+                    return Ok(false);
+                }
+            }
+        }
+    }
+    Ok(true)
+}
+
 fn block_cell_object_occurrences(
     cell: &BlockCell,
     assignment: &[SelectorAssignmentValue],
     before_occurrences: &[SelectorOccurrence],
     before_by_token: &HashMap<String, Vec<usize>>,
     token_counts: &mut HashMap<String, usize>,
+    tag_captures: &TagCaptureValues,
+    maps: &HashMap<String, ValueMap>,
     line: &str,
     source_line_number: Option<usize>,
 ) -> Result<Vec<ResolvedObjectOccurrence>, DiagnosticReport> {
@@ -4860,6 +5316,44 @@ fn block_cell_object_occurrences(
                                 "internal selector assignment missing",
                             )
                         });
+                }
+            }
+            if !selector.capture_requirements.is_empty() {
+                let mut candidates = Vec::new();
+                for object in &selector.alternatives {
+                    if selector_object_matches_capture_requirements(
+                        selector,
+                        *object,
+                        tag_captures,
+                        maps,
+                        line,
+                    )? {
+                        candidates.push(*object);
+                    }
+                }
+                match candidates.as_slice() {
+                    [object] => {
+                        return Ok(ResolvedObjectOccurrence {
+                            token: selector.token.clone(),
+                            matched: ResolvedObjectMatch::Object(*object),
+                            key: None,
+                            from_multi_selector: selector.alternatives.len() > 1,
+                        });
+                    }
+                    [] => {
+                        return Err(parse_error_at_source_line_number(
+                            line,
+                            source_line_number,
+                            "capture-dependent selector matched no objects",
+                        ));
+                    }
+                    _ => {
+                        return Err(parse_error_at_source_line_number(
+                            line,
+                            source_line_number,
+                            "capture-dependent selector is ambiguous",
+                        ));
+                    }
                 }
             }
             if let Some(family_wildcard) = &selector.family_wildcard {

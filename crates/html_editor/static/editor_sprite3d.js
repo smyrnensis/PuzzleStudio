@@ -362,7 +362,7 @@ function renderSprite3dPaletteContent() {
     }
     sprite3dPalette.append(currentWrap);
     if (pendingEditMenu) {
-      positionSpriteColorMenu(pendingEditMenu, currentButton, { side: "right" });
+      positionSpriteColorMenu(pendingEditMenu, currentButton, { side: "left" });
     }
   }
 

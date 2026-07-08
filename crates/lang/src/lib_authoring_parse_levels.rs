@@ -344,8 +344,7 @@ fn parse_condition_block_entry(
             let expanded_lines = expand_for_binding_lines(
                 &body_lines,
                 binding,
-                value.axis.as_deref(),
-                &value.value,
+                &value,
                 &catalog.maps,
             )?;
             parse_condition_rows(
@@ -456,14 +455,14 @@ fn parse_puzzle_render_block(
                 parse_puzzle_render_grid_options(options, line, &mut parsed.grid)?;
                 i += 1;
             }
-            [name, value] if *name == PUZZLE_RENDER_BLOCK_OPTIONS[1] => {
+            [name, "=", value] if *name == PUZZLE_RENDER_BLOCK_OPTIONS[1] => {
                 parsed.cell_size = Some(parse_puzzle_render_cell_size(value, line)?);
                 i += 1;
             }
             [name, ..] if *name == PUZZLE_RENDER_BLOCK_OPTIONS[1] => {
                 return Err(parse_error(
                     line,
-                    "cell_size directive must be: cell_size <pixels>",
+                    "cell_size directive must be: cell_size = <pixels>",
                 ));
             }
             [other, ..] => {
@@ -568,7 +567,7 @@ fn parse_animation_tween_block(
         let tokens = split_header_tokens(line);
         match tokens.as_slice() {
             [] => i += 1,
-            [name, "=", value] | [name, value] if *name == ANIMATION_TWEEN_OPTIONS[0] => {
+            [name, "=", value] if *name == ANIMATION_TWEEN_OPTIONS[0] => {
                 parsed.interval_ms = parse_animation_duration_ms(value, line)?;
                 i += 1;
             }

@@ -88,6 +88,20 @@ class PuzzleSoundRuntime {
     }
     const api = window.PuzzleSoundGenerator || window.PuzzleSoundTools || null;
     const volume = Number(def.volume ?? 1);
+    if (def.type === "puzzlescript" && api?.generatePuzzleScriptSoundEffect && api?.createPuzzleScriptSfxPlayer) {
+      try {
+        const effect = this.puzzleScriptSfxEffect(api, def);
+        const player = api.createPuzzleScriptSfxPlayer(context, effect, { volume });
+        player.start(context.currentTime);
+      } catch (error) {
+        this.warnSoundIssue(`sfx:${name}:puzzlescript`, `Sound effect "${name}" was skipped: ${error?.message || error}`);
+      }
+      return;
+    }
+    if (def.type === "puzzlescript") {
+      this.warnSoundIssue(`sfx:${name}:puzzlescript`, `Sound effect "${name}" was skipped because the PuzzleScript sound generator is unavailable.`);
+      return;
+    }
     if (api?.generateSoundEffect && api?.createSfxPlayer) {
       try {
         const effect = this.sfxEffect(api, def);
@@ -115,6 +129,20 @@ class PuzzleSoundRuntime {
     let effect = this.sfxEffectCache.get(key);
     if (!effect) {
       effect = api.generateSoundEffect(def.seed, { type });
+      this.sfxEffectCache.set(key, effect);
+    }
+    return effect;
+  }
+
+  puzzleScriptSfxEffect(api, def) {
+    if (this.sfxEffectApi !== api) {
+      this.sfxEffectApi = api;
+      this.sfxEffectCache.clear();
+    }
+    const key = `${String(def.seed)}\u0000puzzlescript`;
+    let effect = this.sfxEffectCache.get(key);
+    if (!effect) {
+      effect = api.generatePuzzleScriptSoundEffect(def.seed);
       this.sfxEffectCache.set(key, effect);
     }
     return effect;
@@ -267,6 +295,10 @@ let pendingModelInput = null;
 const activeWaitTimers = new Set();
 let drainingQueuedModelInput = false;
 let sceneEditorPreview = null;
+
+function sendHostModelInput(_input) {
+  return false;
+}
 
 async function requestJson(url, options = {}) {
   if (standaloneRuntime) {
@@ -2389,12 +2421,18 @@ function isMessageDismissKey(event) {
   const rawKey = String(event.key || "");
   const rawCode = String(event.code || "");
   const key = normalizedKeyName(rawKey, rawCode);
-  return rawKey === "Enter"
+  if (rawKey === "Enter"
     || rawKey === " "
     || rawCode === "Enter"
     || rawCode === "Space"
     || key === "x"
-    || rawCode === "KeyX";
+    || rawCode === "KeyX") {
+    return true;
+  }
+  if (event.altKey || event.ctrlKey || event.metaKey) {
+    return false;
+  }
+  return effectsForKey(event).length > 0;
 }
 
 function effectsForKey(event) {
@@ -2638,7 +2676,7 @@ function applyWaitEvents(events) {
       }
     };
     activeWaitTimers.add(waitTimer);
-    requestAnimationFrame(() => {
+    window.setTimeout(() => {
       if (waitTimer.done) {
         return;
       }
@@ -2650,7 +2688,7 @@ function applyWaitEvents(events) {
       if (waitTimer.fastForwardRequested) {
         fastForwardWaitTimer(waitTimer);
       }
-    });
+    }, 0);
   }
 }
 
@@ -2713,6 +2751,9 @@ function sendModelInput(input) {
 
 function sendModelInputNow(input) {
   if (!input) {
+    return undefined;
+  }
+  if (sendHostModelInput(input)) {
     return undefined;
   }
   return post(`/api/input/${encodeURIComponent(input)}`);
@@ -3427,7 +3468,52 @@ if (standaloneRuntime) {
 }
 
 /* puzzle-host:optional:studio-bridge:start */
+let studioPreviewDebugMode = false;
+
+function notifyPreviewDebugTrace(debug, snapshot) {
+  if (window.parent === window) {
+    return;
+  }
+  window.parent.postMessage({
+    type: "PuzzleStudioPreviewDebugTrace",
+    debug: debug || null,
+    snapshot: snapshot || null,
+    levelIndex: snapshot?.levelIndex ?? null,
+    scene: snapshot?.scene || snapshot?.currentScene || "",
+  }, "*");
+}
+
+async function postStudioPreviewDebugInput(input) {
+  try {
+    if (!standaloneRuntime) {
+      throw new Error("Debug input requires the embedded WASM game runtime.");
+    }
+    const response = await requestJson(`/api/debug/input/${encodeURIComponent(input)}`, { method: "POST" });
+    const snapshot = response?.snapshot;
+    if (!snapshot) {
+      throw new Error("Debug input response did not include a snapshot.");
+    }
+    render(snapshot);
+    notifyPreviewDebugTrace(response.debug || null, snapshot);
+  } catch (error) {
+    showError(error);
+  }
+}
+
+sendHostModelInput = (input) => {
+  if (!studioPreviewDebugMode) {
+    return false;
+  }
+  postStudioPreviewDebugInput(input);
+  return true;
+};
+
 window.addEventListener("message", async (event) => {
+  if (event.data?.type === "PuzzleStudioSetPreviewDebugMode") {
+    studioPreviewDebugMode = event.data.enabled === true;
+    return;
+  }
+
   if (event.data?.type === "PuzzleStudioSetScenePreview") {
     renderSceneEditorPreview(event.data || {});
     return;
@@ -3537,13 +3623,19 @@ window.addEventListener("message", async (event) => {
 
   if (event.data?.type === "PuzzleStudioKey") {
     soundRuntime.primePlayback();
-    if (currentState?.busy) {
-      return;
-    }
     const keyEvent = {
       key: String(event.data.key || ""),
       code: String(event.data.code || ""),
     };
+    if (messagePopup) {
+      if (isMessageDismissKey(keyEvent)) {
+        closeMessagePopup();
+      }
+      return;
+    }
+    if (currentState?.busy) {
+      return;
+    }
     /* puzzle-host:optional:puzzle3:start */
     broadcastPuzzle3Key(keyEvent);
     /* puzzle-host:optional:puzzle3:end */

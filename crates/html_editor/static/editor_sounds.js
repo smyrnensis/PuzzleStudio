@@ -49,8 +49,16 @@ function renderSoundsBuilder() {
   renderSoundMusic();
 }
 
+function soundSfxType() {
+  return soundsSfxTypeSelect.value || "random";
+}
+
 function soundSfxEffect() {
-  return soundsApi().generateSoundEffect(soundsSfxSeedInput.value, { type: soundsSfxTypeSelect.value });
+  const api = soundsApi();
+  if (soundSfxType() === "puzzlescript" && api?.generatePuzzleScriptSoundEffect) {
+    return api.generatePuzzleScriptSoundEffect(soundsSfxSeedInput.value);
+  }
+  return api.generateSoundEffect(soundsSfxSeedInput.value, { type: soundSfxType() });
 }
 
 function soundSfxVolume() {
@@ -134,7 +142,11 @@ async function playSoundSfx() {
   }
   await ensureAudioContext();
   sounds.sfxPlayer?.stop();
-  sounds.sfxPlayer = api.createSfxPlayer(sounds.context, soundSfxEffect(), { volume: soundSfxVolume() });
+  if (soundSfxType() === "puzzlescript" && api?.createPuzzleScriptSfxPlayer) {
+    sounds.sfxPlayer = api.createPuzzleScriptSfxPlayer(sounds.context, soundSfxEffect(), { volume: soundSfxVolume() });
+  } else {
+    sounds.sfxPlayer = api.createSfxPlayer(sounds.context, soundSfxEffect(), { volume: soundSfxVolume() });
+  }
   sounds.sfxPlayer.start(sounds.context.currentTime);
   renderSoundSfx();
 }

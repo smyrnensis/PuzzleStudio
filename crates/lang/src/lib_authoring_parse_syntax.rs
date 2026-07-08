@@ -28,14 +28,14 @@ fn parse_keys_surface_row<'a>(
     target: &str,
     reject_equals: bool,
 ) -> Result<KeysSurfaceRow<'a>, DiagnosticReport> {
-    if reject_equals && parse_assignment_row(line).is_some() {
+    let (keys_text, target_text) =
+        require_arrow_row(line, &format!("keys row must be: <key...> -> <{target}>"))?;
+    if reject_equals && parse_assignment_row(keys_text).is_some() {
         return Err(parse_error(
             line,
             &format!("keys row must use `->`: <key...> -> <{target}>"),
         ));
     }
-    let (keys_text, target_text) =
-        require_arrow_row(line, &format!("keys row must be: <key...> -> <{target}>"))?;
     let keys = keys_text.split_whitespace().collect::<Vec<_>>();
     if keys.is_empty() {
         return Err(parse_error(line, "keys row must name at least one key"));

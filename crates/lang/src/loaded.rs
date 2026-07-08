@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::ParsedPuzzle3;
 use puzzle_core::{
-    ComparisonOp, CompiledGame, ConditionId, ConditionValueKind, InputId, ObjectId, RuleId,
+    ComparisonOp, CompiledGame, ConditionId, ConditionValueKind, InputId, MarkId, ObjectId, RuleId,
     RuleStep, State, VariableId,
 };
 pub use puzzle_scene::{
@@ -11,7 +11,7 @@ pub use puzzle_scene::{
     SceneComponent as SharedSceneComponent, SceneConditional as SharedSceneConditional,
     SceneContainer as SharedSceneContainer, SceneEffect, SceneEffectParam, SceneExpr,
     SceneFor as SharedSceneFor, SceneForSource as ForSource, SceneLayout as SceneLayoutDef,
-    SceneSize as SceneSizeDef, SceneTextComponent as SharedSceneTextComponent,
+    SceneLevelKey, SceneSize as SceneSizeDef, SceneTextComponent as SharedSceneTextComponent,
 };
 use serde::{Deserialize, Serialize};
 
@@ -48,6 +48,13 @@ pub enum LoadedDocumentModel {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RuleDebugInfo {
+    pub source_line: String,
+    pub source_line_number: Option<usize>,
+    pub routine_stack: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LoadedGame {
     pub title: String,
     pub subtitle: Option<String>,
@@ -61,6 +68,8 @@ pub struct LoadedGame {
     pub animation: AnimationDef,
     pub rule_animations: HashMap<RuleId, Vec<RuleAnimation>>,
     pub rule_effects: HashMap<RuleId, Vec<RuleEffect>>,
+    #[serde(default)]
+    pub rule_debug_info: HashMap<RuleId, RuleDebugInfo>,
     pub level_start_program: Option<Vec<RuleStep>>,
     pub display_level_start_program: Option<Vec<RuleStep>>,
     pub level_clear_program: Option<Vec<RuleStep>>,
@@ -81,11 +90,17 @@ pub struct LoadedGame {
     pub object_groups: HashMap<String, Vec<ObjectId>>,
     pub input_labels: HashMap<InputId, String>,
     pub variable_labels: HashMap<VariableId, String>,
+    #[serde(default)]
+    pub mark_labels: HashMap<MarkId, String>,
     pub persistent_vars: Vec<VariableId>,
     pub condition_labels: HashMap<ConditionId, String>,
+    #[serde(default)]
+    pub queries: HashMap<String, QueryExpr>,
     pub conditions: HashMap<String, GoalCondition>,
     pub goal: Option<GoalCondition>,
     pub lose: Option<GoalCondition>,
+    #[serde(default)]
+    pub solver_strategy: SolverStrategy,
     pub sounds: SoundsDef,
     #[serde(default)]
     pub model_operation_sounds: Vec<ModelOperationSoundDef>,
@@ -118,6 +133,7 @@ impl LoadedGame {
             animation: AnimationDef::default(),
             rule_animations: HashMap::new(),
             rule_effects: HashMap::new(),
+            rule_debug_info: HashMap::new(),
             level_start_program: None,
             display_level_start_program: None,
             level_clear_program: None,
@@ -144,11 +160,14 @@ impl LoadedGame {
             object_groups: HashMap::new(),
             input_labels: HashMap::new(),
             variable_labels: HashMap::new(),
+            mark_labels: HashMap::new(),
             persistent_vars: Vec::new(),
             condition_labels: HashMap::new(),
+            queries: HashMap::new(),
             conditions: HashMap::new(),
             goal: None,
             lose: None,
+            solver_strategy: SolverStrategy::default(),
             sounds: SoundsDef::default(),
             model_operation_sounds: Vec::new(),
             theme: ThemeDef::default(),
@@ -534,6 +553,58 @@ pub enum GoalValue {
     InlineConditionValue(ConditionValueKind),
 }
 
+pub type SolverStrategy = SolverStrategyOf<QueryExpr>;
+pub type SolverStrategyTerm = SolverStrategyTermOf<QueryExpr>;
+pub type QueryExpr = QueryExprOf<ObjectId, ConditionValueKind, VariableId>;
+pub type SolverStrategy3 = SolverStrategyOf<QueryExpr3>;
+pub type SolverStrategyTerm3 = SolverStrategyTermOf<QueryExpr3>;
+pub type QueryExpr3 = QueryExprOf<
+    puzzle_grid3d::ObjectId,
+    puzzle_grid3d::ConditionValueKind3,
+    puzzle_grid3d::VariableId,
+>;
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SolverStrategyOf<Query> {
+    pub terms: Vec<SolverStrategyTermOf<Query>>,
+}
+
+impl<Query> Default for SolverStrategyOf<Query> {
+    fn default() -> Self {
+        Self { terms: Vec::new() }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SolverStrategyTermOf<Query> {
+    pub direction: SolverStrategyDirection,
+    pub value: Query,
+    pub weight: i64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SolverStrategyDirection {
+    Maximize,
+    Minimize,
+    Prefer,
+    Avoid,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum QueryExprOf<Object, Value, Variable> {
+    Variable(Variable),
+    Value(Value),
+    Distance {
+        from: Vec<Object>,
+        to: Vec<Object>,
+    },
+    Compare {
+        left: Box<QueryExprOf<Object, Value, Variable>>,
+        op: ComparisonOp,
+        right: i64,
+    },
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SceneDef {
     pub name: String,
@@ -581,9 +652,18 @@ pub struct SceneStateDef {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SceneVarDef {
     pub name: String,
+    #[serde(default)]
+    pub kind: SceneVarKind,
     pub default: SceneValue,
     pub lifetime: SceneStateLifetime,
     pub mutable: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SceneVarKind {
+    #[default]
+    Value,
+    Signal,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -658,6 +738,7 @@ pub struct SceneTransition {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SceneTransitionTrigger {
     Condition(SceneExpr),
+    Signal(SceneExpr),
     SceneStart,
     LevelStart,
 }

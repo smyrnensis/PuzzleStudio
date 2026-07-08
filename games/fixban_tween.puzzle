@@ -1,9 +1,9 @@
-title "Fixban Tween"
-subtitle "Canonical Fixban with movement tween"
-author "PuzzleStudio"
+title = "Fixban Tween"
+subtitle = "Canonical Fixban with movement tween"
+author = "PuzzleStudio"
 
 theme puzzlescript {
-background_color #444
+background_color = #444
 }
 
 default_wait_time = 100ms
@@ -322,8 +322,8 @@ level level_8
 }
 
 scene title {
-title
-subtitle
+title = title
+subtitle = subtitle
 choice "Continue" -> goto playing
 choice "New Game" -> {
 clear_game_progress
@@ -335,8 +335,8 @@ choice "Level Select" -> goto level_select
 scene playing {
 layout {
 row {
-title
-subtitle level.label
+title = title
+subtitle = level.label
 }
 puzzle board = fixban
 }

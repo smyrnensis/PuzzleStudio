@@ -129,6 +129,11 @@
       );
     },
 
+    async solverTaskInitialDisplayState(requestJson) {
+      const materialize = await requireWasmFunction("solver_task_initial_display_state_json");
+      return materialize(asString(requestJson));
+    },
+
     wasmCompilerConfig() {
       return {
         moduleUrl: new URL(wasmModuleUrl("./wasm/puzzle_wasm.js"), document.baseURI).href,

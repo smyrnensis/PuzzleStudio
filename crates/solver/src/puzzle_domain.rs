@@ -78,16 +78,25 @@ impl Hash for PuzzleStateKey {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PuzzleSearchState {
     state: State,
+    input_history: Vec<InputId>,
     won: bool,
 }
 
 impl PuzzleSearchState {
     pub fn new(state: State) -> Self {
-        Self { state, won: false }
+        Self {
+            state,
+            input_history: Vec::new(),
+            won: false,
+        }
     }
 
     pub fn state(&self) -> &State {
         &self.state
+    }
+
+    pub fn input_history(&self) -> &[InputId] {
+        &self.input_history
     }
 
     pub fn into_state(self) -> State {
@@ -160,8 +169,11 @@ impl SearchDomain for PuzzleDomain {
     ) -> Result<Self::State, Self::Error> {
         let outcome = transition_solver_outcome(&self.game, &state.state, *action)?;
         let next_state = outcome.next_state.without_objects(&self.ignored_objects);
+        let mut input_history = state.input_history.clone();
+        input_history.push(*action);
         Ok(PuzzleSearchState {
             state: next_state,
+            input_history,
             won: state.won
                 || outcome
                     .commands
@@ -187,7 +199,7 @@ mod tests {
     #[test]
     fn solves_first_sokoban_level_and_replays_to_goal() {
         let source = r#"
-title solver_push_goal
+title = solver_push_goal
 
 puzzle default {
 layers {
@@ -255,7 +267,7 @@ PBG
     #[test]
     fn reports_depth_budget() {
         let source = r#"
-title solver_depth_budget
+title = solver_depth_budget
 
 puzzle default {
 layers {
@@ -315,7 +327,7 @@ PBG
     #[test]
     fn solver_handles_transition_local_mark_rules() {
         let source = r#"
-title mark_solver
+title = mark_solver
 
 puzzle default {
 layers {
@@ -388,7 +400,7 @@ PBG
     #[test]
     fn solver_treats_win_command_as_goal() {
         let source = r#"
-title win_solver
+title = win_solver
 
 puzzle board {
 layers {
@@ -445,7 +457,7 @@ PE
     #[test]
     fn solver_handles_deterministic_random_rules() {
         let source = r#"
-title random_solver
+title = random_solver
 
 puzzle default {
 layers {

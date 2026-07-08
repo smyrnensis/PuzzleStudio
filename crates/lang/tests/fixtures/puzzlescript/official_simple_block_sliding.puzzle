@@ -1,6 +1,6 @@
-title "Simple Block Sliding Game"
-author increpare
-homepage "www.increpare.com"
+title = "Simple Block Sliding Game"
+author = "increpare"
+homepage = "www.increpare.com"
 
 theme puzzlescript
 
@@ -482,10 +482,10 @@ _ = empty
 }
 }
 
-scene title {
+scene = title {
 layout {
-title "Simple Block Sliding Game"
-subtitle "by increpare"
+title = "Simple Block Sliding Game"
+subtitle = "by increpare"
 if has_progress_save {
 choice "Continue" -> continue_game
 }
@@ -500,18 +500,18 @@ goto playing(0)
 }
 }
 
-scene playing {
+scene = playing {
 layout {
 row {
-title "Simple Block Sliding Game"
+title = "Simple Block Sliding Game"
 }
-main
+puzzle board = main
 }
 keys {
 Escape q -> back
 }
 rules {
-step main
+step board
 }
 routine back {
 goto title

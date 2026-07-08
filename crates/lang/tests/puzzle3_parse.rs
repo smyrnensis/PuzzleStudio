@@ -441,6 +441,31 @@ Player actor
 }
 
 #[test]
+fn parser_rejects_old_camera_setting_value_syntax() {
+    let parsed = parse_puzzle3d(
+        r#"
+puzzle3 camera_test {
+render {
+  camera {
+yaw 90
+  }
+}
+
+layers {
+actor
+}
+
+objects {
+Player actor
+}
+}
+"#,
+    );
+
+    assert!(parsed.is_err());
+}
+
+#[test]
 fn parser_defaults_render_settings() {
     let parsed = parse_puzzle3d(
         r#"
@@ -1189,6 +1214,54 @@ directions [ Marker:* | ] -> [ | Marker:* ]
                 _ => ObjectId::EMPTY,
             }
     }));
+}
+
+#[test]
+fn parser_lowers_bare_star_selector_assignment() {
+    let parsed = parse_puzzle3d(
+        r#"
+puzzle3 bare_star {
+layers {
+actor
+}
+
+objects {
+Player actor
+Box actor
+}
+
+rules {
+right [ * | no * ] -> [ | * ]
+}
+}
+
+levels3 basic of bare_star {
+legend {
+. = empty
+P = Player
+B = Box
+}
+
+level "start" {
+PB.
+}
+}
+"#,
+    )
+    .unwrap();
+
+    assert_eq!(parsed.rules.len(), 2);
+    let state = parsed
+        .level_bundle
+        .as_ref()
+        .unwrap()
+        .build_level_state(0)
+        .unwrap();
+    let next = transition_program_without_input(&parsed.game, &state, &parsed.rules).unwrap();
+
+    assert!(next.has_object(&parsed.game, Coord3::new(0, 0, 0), ObjectId(1)));
+    assert!(!next.has_object(&parsed.game, Coord3::new(1, 0, 0), ObjectId(2)));
+    assert!(next.has_object(&parsed.game, Coord3::new(2, 0, 0), ObjectId(2)));
 }
 
 #[test]

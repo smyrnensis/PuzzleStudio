@@ -120,11 +120,11 @@ fn parse_game_document(source: &str) -> Result<LoadedDocument, DiagnosticReport>
         }
         GameDocumentKind::Puzzle3d => {
             let parts = parse_document_source_parts(source)?;
-            let name = first_model_name(&parts.raw_model_source_without_shell, "puzzle3")
+            let name = first_model_name(&parts.model_source, "puzzle3")
                 .unwrap_or_else(|| "default".to_string());
             let mut scenes = parts.scenes;
             resolve_inferred_scene_puzzle_slots(&mut scenes, std::iter::once(("puzzle3", &name)))?;
-            let puzzle = parse_puzzle3d(&parts.raw_model_source_without_shell)
+            let puzzle = crate::puzzle3_parse::parse_puzzle3d_logical_lines(&parts.model_lines)
                 .map_err(|error| puzzle3_parse_error_report(error, &parts.model_lines))?;
             let mut scenes = add_implicit_model_scenes(scenes, std::iter::once(("puzzle3", &name)));
             resolve_scene_actions(&mut scenes, &HashMap::new())?;
@@ -157,9 +157,10 @@ fn parse_mixed_game_document(source: &str) -> Result<LoadedDocument, DiagnosticR
     let game_2d = parse_game2d_expanded_with_shell(&game_2d_source, &parts.shell)?;
     let model_3d_name =
         first_model_name(&sources.puzzle3d, "puzzle3").unwrap_or_else(|| "default".to_string());
-    let puzzle3_source = strip_document_shell_source_raw(&sources.puzzle3d);
-    let puzzle3 =
-        parse_puzzle3d(&puzzle3_source).map_err(|error| puzzle3_parse_error_report(error, &[]))?;
+    let puzzle3_lines = source::logical_lines_with_locations(&sources.puzzle3d)?;
+    let puzzle3_lines = strip_document_shell_lines(&puzzle3_lines);
+    let puzzle3 = crate::puzzle3_parse::parse_puzzle3d_logical_lines(&puzzle3_lines)
+        .map_err(|error| puzzle3_parse_error_report(error, &puzzle3_lines))?;
     let mut scenes = parts.scenes;
     resolve_inferred_scene_puzzle_slots(
         &mut scenes,
@@ -661,7 +662,6 @@ struct DocumentSourceParts {
     shell: DocumentShell,
     model_source: String,
     model_lines: Vec<source::LogicalLine>,
-    raw_model_source_without_shell: String,
     scenes: Vec<SceneDef>,
 }
 
@@ -972,13 +972,10 @@ fn parse_document_source_parts(source: &str) -> Result<DocumentSourceParts, Diag
         .map(|line| line.text.as_str())
         .collect::<Vec<_>>()
         .join("\n");
-    let raw_model_source_without_shell =
-        strip_document_scene_source_raw(&strip_document_shell_source_raw(source));
     Ok(DocumentSourceParts {
         shell,
         model_source,
         model_lines,
-        raw_model_source_without_shell,
         scenes,
     })
 }
@@ -1037,7 +1034,7 @@ fn parse_document_shell(source: &str) -> Result<DocumentShell, DiagnosticReport>
             ["assets"] => {
                 index = parse_assets_block(&lines, index, &mut shell.assets)?;
             }
-            _ if logical_line_opens_block(tokens.as_slice()) => {
+            _ if is_block_header_line(&lines[index]) => {
                 index = skip_logical_block(&lines, index);
             }
             _ => {
@@ -1049,12 +1046,12 @@ fn parse_document_shell(source: &str) -> Result<DocumentShell, DiagnosticReport>
 }
 
 fn strip_document_shell_source(source: &str) -> Result<String, DiagnosticReport> {
-    let context = scan_source_context(source);
+    let document = parse_surface_structure_document(source);
     let mut out = Vec::new();
     let mut index = 0;
     let mut shell_prefix = true;
-    while index < context.lines.len() {
-        let line = &context.lines[index];
+    while index < document.lines.len() {
+        let line = &document.lines[index];
         let tokens = line.tokens.iter().map(String::as_str).collect::<Vec<_>>();
         if shell_prefix && line.scope.is_none() {
             match tokens.as_slice() {
@@ -1068,12 +1065,12 @@ fn strip_document_shell_source(source: &str) -> Result<String, DiagnosticReport>
                     continue;
                 }
                 ["input_buffer", ..] | ["animation", ..] | ["sounds", ..] | ["assets", ..] => {
-                    index = skip_context_shell_block_by_syntax(&context, index);
+                    index = skip_surface_shell_block_by_syntax(&document, index);
                     continue;
                 }
                 ["theme", ..] => {
-                    index = if context_theme_line_is_block(&context, index) {
-                        skip_context_shell_block_by_syntax(&context, index)
+                    index = if surface_theme_line_is_block(&document, index) {
+                        skip_surface_shell_block_by_syntax(&document, index)
                     } else {
                         index + 1
                     };
@@ -1190,21 +1187,21 @@ fn skip_shell_logical_block_by_syntax(lines: &[source::LogicalLine], index: usiz
     next
 }
 
-fn skip_context_shell_block_by_syntax(context: &source::SourceContext, index: usize) -> usize {
-    let trimmed = strip_line_comment(&context.lines[index].content).trim();
+fn skip_surface_shell_block_by_syntax(document: &SurfaceDocument, index: usize) -> usize {
+    let trimmed = strip_line_comment(&document.lines[index].content).trim();
     let mut next = index + 1;
     let mut brace_depth = raw_brace_delta(trimmed);
     if brace_depth > 0 {
-        while next < context.lines.len() && brace_depth > 0 {
-            let trimmed = strip_line_comment(&context.lines[next].content).trim();
+        while next < document.lines.len() && brace_depth > 0 {
+            let trimmed = strip_line_comment(&document.lines[next].content).trim();
             brace_depth += raw_brace_delta(trimmed);
             next += 1;
         }
         return next;
     }
 
-    while next < context.lines.len() {
-        let trimmed = strip_line_comment(&context.lines[next].content).trim();
+    while next < document.lines.len() {
+        let trimmed = strip_line_comment(&document.lines[next].content).trim();
         next += 1;
         if trimmed == BLOCK_CLOSE {
             break;
@@ -1213,12 +1210,12 @@ fn skip_context_shell_block_by_syntax(context: &source::SourceContext, index: us
     next
 }
 
-fn context_theme_line_is_block(context: &source::SourceContext, index: usize) -> bool {
-    let trimmed = strip_line_comment(&context.lines[index].content).trim();
+fn surface_theme_line_is_block(document: &SurfaceDocument, index: usize) -> bool {
+    let trimmed = strip_line_comment(&document.lines[index].content).trim();
     if raw_brace_delta(trimmed) > 0 {
         return true;
     }
-    context.lines.get(index + 1).is_some_and(|next| {
+    document.lines.get(index + 1).is_some_and(|next| {
         let trimmed = strip_line_comment(&next.content).trim();
         trimmed == BLOCK_CLOSE || is_theme_setting_line(trimmed)
     })
@@ -1233,53 +1230,6 @@ fn logical_theme_line_is_block(lines: &[source::LogicalLine], index: usize) -> b
         let trimmed = strip_line_comment(&next.text).trim();
         trimmed == BLOCK_CLOSE || is_theme_setting_line(trimmed)
     })
-}
-
-fn strip_document_shell_source_raw(source: &str) -> String {
-    let raw_lines = source.lines().collect::<Vec<_>>();
-    let mut out = Vec::new();
-    let mut index = 0;
-    let mut brace_depth = 0i32;
-    while index < raw_lines.len() {
-        let line = raw_lines[index];
-        let trimmed = strip_line_comment(line).trim();
-        if brace_depth == 0 {
-            let tokens = split_header_tokens(trimmed);
-            match tokens.as_slice() {
-                ["title", ..]
-                | ["subtitle", ..]
-                | ["author", ..]
-                | ["homepage", ..]
-                | ["default_wait_time", ..]
-                | ["again_interval", ..] => {
-                    index += 1;
-                    continue;
-                }
-                ["input_buffer", ..]
-                | ["animation"]
-                | ["animation", ..]
-                | ["sounds"]
-                | ["assets"] => {
-                    index = skip_raw_top_level_block(&raw_lines, index);
-                    continue;
-                }
-                ["theme", _] if !trimmed.ends_with('{') => {
-                    index += 1;
-                    continue;
-                }
-                ["theme"] | ["theme", ..] => {
-                    index = skip_raw_top_level_block(&raw_lines, index);
-                    continue;
-                }
-                _ => {}
-            }
-        }
-        out.push(line);
-        brace_depth += raw_brace_delta(trimmed);
-        brace_depth = brace_depth.max(0);
-        index += 1;
-    }
-    out.join("\n")
 }
 
 fn next_line_is_not_block_body(lines: &[String], index: usize) -> bool {
@@ -1316,118 +1266,33 @@ fn logical_line_starts_document_boundary(tokens: &[&str]) -> bool {
     )
 }
 
-fn logical_line_opens_block(tokens: &[&str]) -> bool {
-    matches!(
-        tokens,
-        ["puzzle", ..]
-            | ["puzzle3", ..]
-            | ["levels", ..]
-            | ["levels3", ..]
-            | ["sprites", ..]
-            | ["sprites3", ..]
-            | ["scene", ..]
-            | ["state", ..]
-            | ["layout", ..]
-            | ["row", ..]
-            | ["column", ..]
-            | ["box", ..]
-            | ["layers", ..]
-            | ["tags", ..]
-            | ["map", ..]
-            | ["marks", ..]
-            | ["groups", ..]
-            | ["legend", ..]
-            | ["win_conditions", ..]
-            | ["lose_conditions", ..]
-            | ["routine", ..]
-            | ["rules", ..]
-            | ["on_display", ..]
-            | ["on_level_start", ..]
-            | ["on_level_clear", ..]
-            | ["on_last_level_clear", ..]
-            | ["keys", ..]
-            | ["inputs", ..]
-            | ["on_scene_start", ..]
-            | ["if", ..]
-            | ["for", ..]
-            | ["fix", ..]
-            | ["once"]
-            | ["once_all"]
-            | ["once_per_level"]
-            | ["repeat", ..]
-            | ["->"]
-            | ["sounds"]
-            | ["theme", ..]
-            | ["assets"]
-    )
-}
-
 fn skip_logical_block(lines: &[String], start: usize) -> usize {
-    let mut depth = 1usize;
+    let mut depth = authoring_line_brace_delta(&lines[start]);
+    if depth <= 0 {
+        return start + 1;
+    }
     let mut index = start + 1;
     while index < lines.len() {
-        let tokens = split_header_tokens(&lines[index]);
-        if is_block_close_line(&lines[index]) {
-            depth = depth.saturating_sub(1);
-            index += 1;
-            if depth == 0 {
-                break;
-            }
-            continue;
+        let next_depth = depth + authoring_line_brace_delta(&lines[index]);
+        if next_depth <= 0 {
+            return index + 1;
         }
-        if line_opens_recovery_block(&lines[index], tokens.as_slice()) {
-            depth += 1;
-        }
+        depth = next_depth;
         index += 1;
     }
     index
 }
 
 fn recover_after_directive_error(lines: &[String], index: usize) -> usize {
-    let tokens = split_header_tokens(&lines[index]);
-    if line_opens_recovery_block(&lines[index], tokens.as_slice()) {
+    if line_opens_recovery_block(&lines[index]) {
         skip_logical_block(lines, index)
     } else {
         index + 1
     }
 }
 
-fn line_opens_recovery_block(line: &str, tokens: &[&str]) -> bool {
-    (is_block_header_line(line) || logical_line_opens_block(tokens))
-        && !logical_line_is_inline_if(line)
-}
-
-fn logical_line_is_inline_if(line: &str) -> bool {
-    split_header_tokens(line).first().copied() == Some("if") && line.contains("->")
-}
-
-fn strip_document_scene_source_raw(source: &str) -> String {
-    let raw_lines = source.lines().collect::<Vec<_>>();
-    let mut out = Vec::new();
-    let mut index = 0;
-    let mut brace_depth = 0i32;
-    while index < raw_lines.len() {
-        let line = raw_lines[index];
-        let trimmed = strip_line_comment(line).trim();
-        if brace_depth == 0 {
-            let tokens = split_header_tokens(trimmed);
-            if matches!(tokens.as_slice(), ["scene", ..]) {
-                index = skip_raw_top_level_block(&raw_lines, index);
-                continue;
-            }
-            if matches!(tokens.as_slice(), ["puzzle", ..] | ["puzzle3", ..])
-                && trimmed.ends_with('{')
-            {
-                index = push_raw_model_without_default_scene_layouts(&raw_lines, index, &mut out);
-                continue;
-            }
-        }
-        out.push(line);
-        brace_depth += raw_brace_delta(trimmed);
-        brace_depth = brace_depth.max(0);
-        index += 1;
-    }
-    out.join("\n")
+fn line_opens_recovery_block(line: &str) -> bool {
+    authoring_line_brace_delta(line) > 0
 }
 
 fn push_raw_model_without_default_scene_layouts<'a>(
@@ -1460,13 +1325,14 @@ fn split_document_scene_lines(
         .iter()
         .map(|line| line.text.clone())
         .collect::<Vec<_>>();
+    let level_entries = collect_level_expansion_entries(&lines)?;
     let mut model_lines = Vec::new();
     let mut scenes = Vec::new();
     let mut i = 0;
     while i < lines.len() {
         let tokens = split_header_tokens(&lines[i]);
         if matches!(tokens.as_slice(), ["scene", ..]) {
-            let (scene, next_i) = parse_scene_definition(&lines, i)?;
+            let (scene, next_i) = parse_scene_definition(&lines, i, &level_entries)?;
             scenes.push(scene);
             i = next_i;
         } else if let Some((kind, name)) = model_header_name(tokens.as_slice()) {
@@ -1485,6 +1351,252 @@ fn split_document_scene_lines(
     Ok((model_lines, scenes))
 }
 
+fn collect_level_expansion_entries(
+    lines: &[String],
+) -> Result<Vec<LevelExpansionEntry>, DiagnosticReport> {
+    let mut entries = Vec::new();
+    let mut i = 0;
+    while i < lines.len() {
+        let tokens = split_header_tokens(&lines[i]);
+        match tokens.as_slice() {
+            ["scene", ..] => {
+                i = skip_logical_owner_block(lines, i, "scene")?;
+            }
+            ["puzzle", ..] => {
+                i = collect_nested_level_expansion_entries(lines, i + 1, &mut entries)?;
+            }
+            ["levels", ..] => {
+                i = collect_levels2_expansion_entries(lines, i, None, &mut entries)?;
+            }
+            ["level", ..] => {
+                let (level, next_i) = parse_level_block(lines, i, entries.len())?;
+                entries.push(LevelExpansionEntry {
+                    name: level.name,
+                    pack: level.pack,
+                });
+                i = next_i;
+            }
+            _ if is_levels3_header_line(&lines[i]) => {
+                i = collect_levels3_expansion_entries(lines, i, &mut entries)?;
+            }
+            _ => i += 1,
+        }
+    }
+    Ok(entries)
+}
+
+fn skip_logical_owner_block(
+    lines: &[String],
+    start: usize,
+    block_name: &str,
+) -> Result<usize, DiagnosticReport> {
+    let mut depth = raw_brace_delta(strip_line_comment(&lines[start]));
+    if depth <= 0 {
+        depth = 1;
+    }
+    let mut i = start + 1;
+    while i < lines.len() {
+        depth += raw_brace_delta(strip_line_comment(&lines[i]));
+        i += 1;
+        if depth == 0 {
+            return Ok(i);
+        }
+    }
+    Err(parse_error(
+        &lines[start],
+        &format!("{block_name} block missing closing brace"),
+    ))
+}
+
+fn collect_nested_level_expansion_entries(
+    lines: &[String],
+    start: usize,
+    entries: &mut Vec<LevelExpansionEntry>,
+) -> Result<usize, DiagnosticReport> {
+    let mut i = start;
+    while i < lines.len() && !is_block_close_line(&lines[i]) {
+        let tokens = split_header_tokens(&lines[i]);
+        match tokens.as_slice() {
+            ["levels", ..] => {
+                i = collect_levels2_expansion_entries(lines, i, None, entries)?;
+            }
+            ["level", ..] => {
+                let (level, next_i) = parse_level_block(lines, i, entries.len())?;
+                entries.push(LevelExpansionEntry {
+                    name: level.name,
+                    pack: level.pack,
+                });
+                i = next_i;
+            }
+            _ if lines[i].trim_end().ends_with('{') => {
+                let (entry, next_i) =
+                    collect_authoring_entry(lines, i, AuthoringEntryOwner::GenericBlock)?;
+                drop(entry);
+                i = next_i;
+            }
+            _ => i += 1,
+        }
+    }
+    if i >= lines.len() {
+        return Err(parse_error(
+            &lines[start.saturating_sub(1)],
+            "puzzle missing closing brace",
+        ));
+    }
+    Ok(i + 1)
+}
+
+fn collect_levels2_expansion_entries(
+    lines: &[String],
+    start: usize,
+    default_puzzle: Option<&str>,
+    entries: &mut Vec<LevelExpansionEntry>,
+) -> Result<usize, DiagnosticReport> {
+    let header = parse_levels_header(&lines[start], default_puzzle)?;
+    let mut namespace_count = 0usize;
+    let mut i = start + 1;
+    while i < lines.len() && !is_block_close_line(&lines[i]) {
+        let tokens = split_header_tokens(&lines[i]);
+        match tokens.as_slice() {
+            ["legend"] => {
+                let (_, next_i) =
+                    collect_authoring_entry(lines, i, AuthoringEntryOwner::GenericBlock)?;
+                i = next_i;
+            }
+            ["level", ..] | ["{"] => {
+                namespace_count += 1;
+                let auto_name = puzzle_authoring::namespaced_unnamed_level_name(
+                    header.pack.as_deref(),
+                    entries.len(),
+                    namespace_count,
+                );
+                let name = if matches!(tokens.as_slice(), ["{"]) {
+                    auto_name
+                } else {
+                    parse_level_header_name_or_auto(&lines[i], auto_name)?
+                };
+                entries.push(LevelExpansionEntry {
+                    name,
+                    pack: header.pack.clone(),
+                });
+                let (_, next_i) = if puzzle_authoring::is_braced_level_header(&lines[i])
+                    || matches!(tokens.as_slice(), ["{"])
+                {
+                    collect_authoring_entry(lines, i, AuthoringEntryOwner::GenericBlock)?
+                } else {
+                    collect_unbraced_level_entry(lines, i + 1)
+                };
+                i = next_i;
+            }
+            [] | ["legend", ..] => i += 1,
+            _ => {
+                namespace_count += 1;
+                let name = puzzle_authoring::namespaced_unnamed_level_name(
+                    header.pack.as_deref(),
+                    entries.len(),
+                    namespace_count,
+                );
+                entries.push(LevelExpansionEntry {
+                    name,
+                    pack: header.pack.clone(),
+                });
+                let (_, next_i) = collect_unbraced_level_entry(lines, i);
+                i = next_i;
+            }
+        }
+    }
+    if i >= lines.len() {
+        return Err(parse_error(&lines[start], "levels missing closing brace"));
+    }
+    Ok(i + 1)
+}
+
+fn collect_levels3_expansion_entries(
+    lines: &[String],
+    start: usize,
+    entries: &mut Vec<LevelExpansionEntry>,
+) -> Result<usize, DiagnosticReport> {
+    let pack = parse_levels3_expansion_pack(&lines[start])?;
+    let mut namespace_count = 0usize;
+    let mut i = start + 1;
+    while i < lines.len() && !is_block_close_line(&lines[i]) {
+        let line = &lines[i];
+        if line == "legend {" {
+            let (_, next_i) = collect_authoring_entry(lines, i, AuthoringEntryOwner::GenericBlock)?;
+            i = next_i;
+            continue;
+        }
+        if puzzle_authoring::is_braced_level_header(line) || line == "{" {
+            namespace_count += 1;
+            let auto_name = puzzle_authoring::namespaced_unnamed_level_name(
+                pack.as_deref(),
+                entries.len(),
+                namespace_count,
+            );
+            let name = if line == "{" {
+                auto_name
+            } else {
+                parse_level_header_name_or_auto(line, auto_name)?
+            };
+            entries.push(LevelExpansionEntry {
+                name,
+                pack: pack.clone(),
+            });
+            let (_, next_i) = collect_authoring_entry(lines, i, AuthoringEntryOwner::GenericBlock)?;
+            i = next_i;
+            continue;
+        }
+        i += 1;
+    }
+    if i >= lines.len() {
+        return Err(parse_error(
+            &lines[start],
+            "levels3 block missing closing brace",
+        ));
+    }
+    Ok(i + 1)
+}
+
+fn collect_unbraced_level_entry(lines: &[String], start: usize) -> (Vec<String>, usize) {
+    let mut body = Vec::new();
+    let mut i = start;
+    while i < lines.len() {
+        let tokens = split_header_tokens(&lines[i]);
+        if is_block_close_line(&lines[i]) || matches!(tokens.as_slice(), ["level", ..] | ["{"]) {
+            break;
+        }
+        body.push(lines[i].clone());
+        i += 1;
+    }
+    (body, i)
+}
+
+fn is_levels3_header_line(line: &str) -> bool {
+    line == "levels3 {"
+        || line
+            .strip_prefix("levels3 ")
+            .is_some_and(|rest| rest.ends_with('{'))
+}
+
+fn parse_levels3_expansion_pack(line: &str) -> Result<Option<String>, DiagnosticReport> {
+    let header = line
+        .strip_prefix("levels3")
+        .and_then(|rest| rest.strip_suffix('{'))
+        .ok_or_else(|| parse_error(line, "levels3 block must end with {"))?
+        .trim();
+    if header.is_empty() {
+        return Ok(None);
+    }
+    let parts = header.split_whitespace().collect::<Vec<_>>();
+    match parts.as_slice() {
+        [name] | [name, "of", _] => Ok(Some((*name).to_string())),
+        _ => Err(parse_error(
+            line,
+            "levels3 header must be: levels3 [name [of model]] {",
+        )),
+    }
+}
+
 fn model_header_name<'a>(tokens: &'a [&'a str]) -> Option<(&'a str, &'a str)> {
     match tokens {
         ["puzzle", name, ..] | ["puzzle3", name, ..] => Some((tokens[0], *name)),
@@ -1501,19 +1613,22 @@ fn extract_default_model_scene(
 ) -> Result<(Vec<source::LogicalLine>, Option<SceneDef>, usize), DiagnosticReport> {
     let mut entry = vec![logical_lines[start].clone()];
     let mut default_scene = None;
-    let mut depth = 1usize;
+    let mut depth = authoring_line_brace_delta(&lines[start]);
+    if depth <= 0 {
+        return Ok((entry, default_scene, start + 1));
+    }
     let mut i = start + 1;
     while i < lines.len() {
         let line = &lines[i];
         let tokens = split_header_tokens(line);
-        if tokens.first().copied() == Some(BLOCK_CLOSE) || line == "}" {
-            depth = depth.saturating_sub(1);
+        let next_depth = depth + authoring_line_brace_delta(line);
+        if next_depth < 0 {
+            return Err(parse_error(line, "closing brace without block"));
+        }
+        if next_depth == 0 {
             entry.push(logical_lines[i].clone());
             i += 1;
-            if depth == 0 {
-                return Ok((entry, default_scene, i));
-            }
-            continue;
+            return Ok((entry, default_scene, i));
         }
         if depth == 1 && matches!(tokens.as_slice(), ["layout", ..]) {
             if default_scene.is_some() {
@@ -1536,39 +1651,32 @@ fn extract_default_model_scene(
             i = next_i;
             continue;
         }
-        if starts_model_nested_block(tokens.as_slice(), line) {
-            depth += 1;
-        }
         entry.push(logical_lines[i].clone());
+        depth = next_depth;
         i += 1;
     }
     Ok((vec![logical_lines[start].clone()], None, start + 1))
 }
 
 fn skip_scene_layout_block(lines: &[String], start: usize) -> Result<usize, DiagnosticReport> {
-    let mut depth = 1usize;
+    let mut depth = authoring_line_brace_delta(&lines[start]);
+    if depth <= 0 {
+        return Ok(start + 1);
+    }
     let mut i = start + 1;
     while i < lines.len() {
         let line = &lines[i];
-        let tokens = split_header_tokens(line);
-        if tokens.first().copied() == Some(BLOCK_CLOSE) {
-            depth = depth.saturating_sub(1);
-            i += 1;
-            if depth == 0 {
-                return Ok(i);
-            }
-            continue;
-        }
-        if starts_authoring_block(tokens.as_slice(), line) || line.trim_end().ends_with("->") {
-            depth += 1;
+        let next_depth = depth + authoring_line_brace_delta(line);
+        if next_depth < 0 {
+            return Err(parse_error(line, "closing brace without block"));
         }
         i += 1;
+        if next_depth == 0 {
+            return Ok(i);
+        }
+        depth = next_depth;
     }
     Err(parse_error(&lines[start], "layout missing closing brace"))
-}
-
-fn starts_model_nested_block(tokens: &[&str], line: &str) -> bool {
-    logical_line_opens_block(tokens) && !logical_line_is_inline_if(line)
 }
 
 fn parse_default_model_scene(
@@ -1580,7 +1688,7 @@ fn parse_default_model_scene(
 ) -> Result<SceneDef, DiagnosticReport> {
     let mut layout_lines = lines[start..end].to_vec();
     rewrite_default_model_layout_components(&mut layout_lines, kind, name);
-    let (layout_block, next_i) = parse_scene_layout_block(&layout_lines, 0)?;
+    let (layout_block, next_i) = parse_scene_layout_block(&layout_lines, 0, &HashMap::new())?;
     debug_assert_eq!(next_i, layout_lines.len());
     let mut scene = implicit_model_scene(kind, name);
     scene.layout = layout_block.layout;
@@ -1637,8 +1745,8 @@ enum GameDocumentKind {
 fn detect_game_document_kind(source: &str) -> Result<GameDocumentKind, DiagnosticReport> {
     let mut has_2d = false;
     let mut has_3d = false;
-    let context = scan_source_context(source);
-    for line in &context.lines {
+    let document = parse_surface_structure_document(source);
+    for line in &document.lines {
         let tokens = line.tokens.iter().map(String::as_str).collect::<Vec<_>>();
         match (line.scope, tokens.as_slice()) {
             (None, ["puzzle", ..]) => has_2d = true,
@@ -1695,9 +1803,9 @@ fn first_model_name(source: &str, kind: &str) -> Option<String> {
 }
 
 fn all_model_names(source: &str, kind: &str) -> Vec<String> {
-    let context = scan_source_context(source);
+    let document = parse_surface_structure_document(source);
     let mut names = Vec::new();
-    for line in &context.lines {
+    for line in &document.lines {
         if line.scope.is_some() {
             continue;
         }
@@ -1710,6 +1818,28 @@ fn all_model_names(source: &str, kind: &str) -> Vec<String> {
         }
     }
     names
+}
+
+#[cfg(test)]
+mod document_surface_flow_tests {
+    #[test]
+    fn document_compile_consumes_surface_document_not_source_scanner() {
+        let source = include_str!("lib_document.rs");
+        let forbidden_fragments: &[&[&str]] = &[
+            &["scan_source", "_context"],
+            &["Source", "Context"],
+            &["Source", "ContextLine"],
+            &["skip_", "context", "_shell_block_by_syntax"],
+            &["context", "_theme", "_line_is_block"],
+        ];
+        for parts in forbidden_fragments {
+            let forbidden = parts.concat();
+            assert!(
+                !source.contains(&forbidden),
+                "document compile flow must query parser-owned surface products, not source scanner products via {forbidden}"
+            );
+        }
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1960,6 +2090,8 @@ fn parse_game2d_expanded_lines_with_shell_inner(
     let mut empty_char = None;
     let mut named_layers = HashMap::<String, u16>::new();
     let mut catalog = Catalog::default();
+    let mut query_definitions = Vec::<QueryDefinitionAst>::new();
+    let mut query_names = HashSet::<String>::new();
     let mut condition_definitions = Vec::<ConditionDefinitionAst>::new();
     let mut controls = Controls::default();
     let mut directions = Vec::<Direction>::new();
@@ -1979,6 +2111,7 @@ fn parse_game2d_expanded_lines_with_shell_inner(
     let mut render_overlays = Vec::<(Vec<ObjectId>, char)>::new();
     let mut model_sound_triggers = Vec::<ModelSoundTriggerSpec>::new();
     let mut model_operation_sounds = Vec::<ModelOperationSoundSpec>::new();
+    let mut solver_strategy = None::<SolverStrategyAst>;
     let mut named_conditions = HashMap::<String, (String, ConditionAst)>::new();
     let mut run_rules_on_level_start = false;
     let mut visuals = VisualsDef::default();
@@ -2013,6 +2146,8 @@ fn parse_game2d_expanded_lines_with_shell_inner(
                 &mut empty_char,
                 &mut named_layers,
                 &mut catalog,
+                &mut query_definitions,
+                &mut query_names,
                 &mut condition_definitions,
                 &mut controls,
                 &mut directions,
@@ -2029,6 +2164,7 @@ fn parse_game2d_expanded_lines_with_shell_inner(
                 &mut render_overlays,
                 &mut model_sound_triggers,
                 &mut model_operation_sounds,
+                &mut solver_strategy,
                 &mut named_conditions,
                 &mut run_rules_on_level_start,
                 &mut visuals,
@@ -2060,7 +2196,7 @@ fn parse_game2d_expanded_lines_with_shell_inner(
                 diagnostics.extend(
                     parse_error(
                         line,
-                        "top-level `name` metadata was removed; use `title <text>`",
+                        "top-level `name` metadata was removed; use `title = <text>`",
                     )
                     .into_diagnostics(),
                 );
@@ -2131,7 +2267,8 @@ fn parse_game2d_expanded_lines_with_shell_inner(
             }
             ModelTopLevelDirective::Sprites => {
                 pending_visual_blocks.push(i);
-                let (_, next_i) = collect_authoring_entry(&lines, i)?;
+                let (_, next_i) =
+                    collect_authoring_entry(&lines, i, AuthoringEntryOwner::DocumentVisuals)?;
                 i = next_i;
             }
             ModelTopLevelDirective::Levels => {
@@ -2242,11 +2379,41 @@ fn parse_game2d_expanded_lines_with_shell_inner(
     let value_sets = catalog_value_sets(&catalog);
     let visual_condition_reads =
         visual_condition_reads(&condition_definitions, &catalog.visual_objects);
+    let queries = lower_query_definitions(
+        &query_definitions,
+        &catalog.object_names,
+        &catalog.object_schemas,
+        &catalog.maps,
+        &catalog.object_groups,
+        &catalog.variable_names,
+        &catalog.object_layers,
+        &catalog.mark_names,
+        &catalog.visual_objects,
+        &value_sets,
+        &catalog.input_names,
+        &effective_directions,
+    )?;
+    let solver_strategy = lower_solver_strategy(
+        solver_strategy,
+        &query_definitions,
+        &catalog.object_names,
+        &catalog.object_schemas,
+        &catalog.maps,
+        &catalog.object_groups,
+        &catalog.variable_names,
+        &catalog.object_layers,
+        &catalog.mark_names,
+        &catalog.visual_objects,
+        &value_sets,
+        &catalog.input_names,
+        &effective_directions,
+    )?;
     let condition_defs = lower_condition_defs(
         condition_definitions,
         &catalog.object_layers,
         &catalog.mark_names,
         &value_sets,
+        &catalog.maps,
         &catalog.input_names,
         &effective_directions,
     )?;
@@ -2263,6 +2430,7 @@ fn parse_game2d_expanded_lines_with_shell_inner(
                 &catalog.mark_names,
                 &catalog.visual_objects,
                 &value_sets,
+                &catalog.maps,
                 &catalog.input_names,
                 &effective_directions,
             )
@@ -2336,6 +2504,7 @@ fn parse_game2d_expanded_lines_with_shell_inner(
         &model_sound_triggers,
         &animation,
         &value_sets,
+        &catalog.maps,
         &effective_directions,
     )?;
     let mut display_rules = programs.visual_rules.clone();
@@ -2382,6 +2551,11 @@ fn parse_game2d_expanded_lines_with_shell_inner(
         .collect::<Result<Vec<_>, DiagnosticReport>>()?;
 
     warnings.extend(collect_mark_warnings(&game, &catalog.mark_names));
+    let mark_labels = catalog
+        .mark_names
+        .iter()
+        .map(|(name, def)| (def.id, name.clone()))
+        .collect::<HashMap<_, _>>();
 
     Ok(LoadedGame {
         title,
@@ -2396,6 +2570,7 @@ fn parse_game2d_expanded_lines_with_shell_inner(
         animation: animation.clone(),
         rule_animations: programs.rule_animations,
         rule_effects: programs.rule_effects,
+        rule_debug_info: programs.rule_debug_info,
         level_start_program: programs.level_start,
         display_level_start_program: None,
         level_clear_program: programs.level_clear,
@@ -2414,11 +2589,14 @@ fn parse_game2d_expanded_lines_with_shell_inner(
         object_groups: catalog.object_groups,
         input_labels: catalog.input_labels,
         variable_labels: catalog.variable_labels,
+        mark_labels,
         persistent_vars: catalog.persistent_vars,
         condition_labels: catalog.condition_labels,
+        queries,
         conditions,
         goal,
         lose,
+        solver_strategy,
         sounds,
         model_operation_sounds,
         theme,

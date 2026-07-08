@@ -992,6 +992,7 @@ fn eval_bool_expr(
             SceneBinaryOp::Eq => Some(
                 eval_expr(loaded, session, left, scope) == eval_expr(loaded, session, right, scope),
             ),
+            SceneBinaryOp::In => None,
             SceneBinaryOp::NotEq => Some(
                 eval_expr(loaded, session, left, scope) != eval_expr(loaded, session, right, scope),
             ),
@@ -1705,6 +1706,7 @@ fn scene_binary_op_source(op: SceneBinaryOp) -> &'static str {
     match op {
         SceneBinaryOp::And => "and",
         SceneBinaryOp::Eq => "==",
+        SceneBinaryOp::In => "in",
         SceneBinaryOp::NotEq => "!=",
     }
 }

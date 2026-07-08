@@ -1,11 +1,8 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
-use crate::semantic::{
-    SemanticCompletionSlot, SemanticKind, SettingCompletionSet, is_completion_keyword,
-    semantic_builtin_effect_commands, semantic_completion_context, semantic_model_effect_commands,
-    semantic_scene_effect_commands,
-};
-use crate::source::{SourceScope, scan_source_context};
+use crate::semantic::{SemanticCompletionSlot, SettingCompletionSet};
+use crate::surface::SurfaceCompletionSymbols;
+use crate::surface_completion::surface_completion_context_for_document;
 use crate::syntax::VISUAL_COLOR_NAMES;
 use crate::{THEME_PRESET_NAMES, THEME_SETTING_SPECS};
 
@@ -71,7 +68,7 @@ impl CompletionKind {
             CompletionKind::Effect => "effect",
             CompletionKind::Emission => "emission",
             CompletionKind::Routine => "routine",
-            CompletionKind::Condition => "condition",
+            CompletionKind::Condition => "query",
             CompletionKind::Puzzle => "puzzle",
             CompletionKind::Scene => "scene",
             CompletionKind::Level => "level",
@@ -88,8 +85,9 @@ impl CompletionKind {
 }
 
 pub fn suggest_source_completions(source: &str, cursor_offset: usize) -> CompletionList {
-    let context = semantic_completion_context(source, cursor_offset);
-    let mut symbols = collect_completion_symbols(source);
+    let document = crate::parse_surface_document(source);
+    let context = surface_completion_context_for_document(source, cursor_offset, &document);
+    let mut symbols = document.completion_symbols.clone();
     remove_current_token_symbols(&mut symbols, &context.token_text);
 
     let mut items = Vec::<CompletionItem>::new();
@@ -168,339 +166,10 @@ pub fn completion_list_json(list: &CompletionList) -> String {
     out
 }
 
-#[derive(Default)]
-struct CompletionSymbols {
-    objects: BTreeSet<String>,
-    groups: BTreeSet<String>,
-    states: BTreeSet<String>,
-    markes: BTreeSet<String>,
-    value_set_names: BTreeSet<String>,
-    object_name_atoms: BTreeSet<String>,
-    directions: BTreeSet<String>,
-    direction_sets: BTreeSet<String>,
-    inputs: BTreeSet<String>,
-    commands: BTreeSet<String>,
-    effects: BTreeSet<String>,
-    model_effects: BTreeSet<String>,
-    scene_effects: BTreeSet<String>,
-    emissions: BTreeSet<String>,
-    routines: BTreeSet<String>,
-    condition_defs: BTreeSet<String>,
-    puzzles: BTreeSet<String>,
-    scenes: BTreeSet<String>,
-    levels: BTreeSet<String>,
-    sfx: BTreeSet<String>,
-    music: BTreeSet<String>,
-    sprites: BTreeSet<String>,
-    assets: BTreeSet<String>,
-    shapes: BTreeSet<String>,
-    colors: BTreeSet<String>,
-    value_sets: BTreeMap<String, Vec<String>>,
-    object_axes: BTreeMap<String, Vec<String>>,
-}
-
-fn collect_completion_symbols(source: &str) -> CompletionSymbols {
-    let mut symbols = CompletionSymbols::default();
-    symbols.value_sets.insert(
-        "directions".to_string(),
-        ["up", "down", "left", "right"]
-            .into_iter()
-            .map(str::to_string)
-            .collect(),
-    );
-    symbols.value_sets.insert(
-        "horizontal".to_string(),
-        ["left", "right"].into_iter().map(str::to_string).collect(),
-    );
-    symbols.value_sets.insert(
-        "vertical".to_string(),
-        ["up", "down"].into_iter().map(str::to_string).collect(),
-    );
-    symbols.directions.extend(
-        ["up", "down", "left", "right"]
-            .into_iter()
-            .map(str::to_string),
-    );
-    symbols.direction_sets.extend(
-        ["directions", "horizontal", "vertical"]
-            .into_iter()
-            .map(str::to_string),
-    );
-    symbols.value_set_names.extend(
-        ["directions", "horizontal", "vertical"]
-            .into_iter()
-            .map(str::to_string),
-    );
-    add_builtin_effect_commands(&mut symbols.effects, &mut symbols.emissions);
-    add_effect_commands(
-        semantic_model_effect_commands(),
-        &mut symbols.model_effects,
-        &mut symbols.emissions,
-    );
-    add_effect_commands(
-        semantic_scene_effect_commands(),
-        &mut symbols.scene_effects,
-        &mut symbols.emissions,
-    );
-
-    if let Ok(game) = crate::parse_game2d(source) {
-        symbols.objects.extend(game.object_labels.values().cloned());
-        symbols.inputs.extend(game.input_labels.values().cloned());
-        symbols
-            .states
-            .extend(game.variable_labels.values().cloned());
-        symbols
-            .condition_defs
-            .extend(game.condition_labels.values().cloned());
-        symbols
-            .condition_defs
-            .extend(game.conditions.keys().cloned());
-        symbols
-            .scenes
-            .extend(game.scenes.iter().map(|scene| scene.name.clone()));
-        symbols
-            .levels
-            .extend(game.levels.iter().map(|level| level.name.clone()));
-        symbols
-            .sfx
-            .extend(game.sounds.sfx.iter().map(|sfx| sfx.name.clone()));
-        symbols
-            .music
-            .extend(game.sounds.music.iter().map(|music| music.name.clone()));
-        symbols.sprites.extend(
-            game.visuals
-                .sprites
-                .iter()
-                .map(|sprite| sprite.name.clone()),
-        );
-    }
-
-    let context = scan_source_context(source);
-    for line in &context.lines {
-        let tokens = line.tokens.iter().map(String::as_str).collect::<Vec<_>>();
-        if tokens.is_empty() {
-            continue;
-        }
-        collect_tag_set_symbols(&tokens, line.scope, &mut symbols);
-    }
-    for line in context.lines {
-        let tokens = line.tokens.iter().map(String::as_str).collect::<Vec<_>>();
-        if tokens.is_empty() {
-            continue;
-        }
-        collect_line_symbols(&tokens, line.scope, &mut symbols);
-    }
-    for name in symbols.value_set_names.clone() {
-        symbols.object_name_atoms.remove(&name);
-    }
-
-    symbols
-}
-
-fn collect_line_symbols(
-    tokens: &[&str],
-    scope: Option<SourceScope>,
-    symbols: &mut CompletionSymbols,
-) {
-    if collect_tag_set_symbols(tokens, scope, symbols) {
-        return;
-    }
-    match tokens {
-        ["puzzle", name, ..] if scope.is_none() => {
-            insert_identifier(&mut symbols.puzzles, name);
-        }
-        ["scene", name, ..] => {
-            insert_identifier(&mut symbols.scenes, name);
-        }
-        ["level", name, ..] => {
-            insert_identifier(&mut symbols.levels, name);
-        }
-        ["routine", name, ..] | ["rule", name, ..] => {
-            insert_identifier(&mut symbols.routines, name);
-        }
-        ["input", name, ..] | ["direction", name, ..] => {
-            insert_identifier(&mut symbols.inputs, name);
-        }
-        ["condition", name, ..] => {
-            insert_identifier(&mut symbols.condition_defs, name);
-        }
-        ["sfx", name, ..] if scope == Some(SourceScope::Sounds) => {
-            insert_identifier(&mut symbols.sfx, name);
-        }
-        ["music", name, ..] if scope == Some(SourceScope::Sounds) => {
-            insert_identifier(&mut symbols.music, name);
-        }
-        ["css" | "script" | "file", path, ..] if scope == Some(SourceScope::Assets) => {
-            insert_path_like(&mut symbols.assets, path);
-        }
-        ["shape", table, ..] if scope == Some(SourceScope::Visuals) => {
-            if let Some((name, axis)) = table.split_once(':') {
-                insert_identifier(&mut symbols.shapes, name);
-                insert_identifier(&mut symbols.object_name_atoms, axis);
-            } else {
-                insert_identifier(&mut symbols.shapes, table);
-            }
-        }
-        ["colors", table, ..] if scope == Some(SourceScope::Visuals) => {
-            if let Some((name, axis)) = table.split_once(':') {
-                insert_identifier(&mut symbols.colors, name);
-                insert_identifier(&mut symbols.object_name_atoms, axis);
-            }
-        }
-        [name, "=", ..] if scope == Some(SourceScope::VisualColorTable) => {
-            insert_identifier(&mut symbols.colors, name);
-        }
-        [table_ref] if scope == Some(SourceScope::VisualColorTable) => {
-            if let Some((name, axis)) = table_ref.split_once(':') {
-                insert_identifier(&mut symbols.colors, name);
-                insert_identifier(&mut symbols.object_name_atoms, axis);
-            }
-        }
-        [name] if scope == Some(SourceScope::VisualShapeTable) => {
-            if let Some((name, axis)) = name.split_once(':') {
-                insert_identifier(&mut symbols.shapes, name);
-                insert_identifier(&mut symbols.object_name_atoms, axis);
-            } else {
-                insert_identifier(&mut symbols.shapes, name);
-            }
-        }
-        ["object", spec, ..] if *spec != "=" => collect_object_spec(spec, symbols),
-        ["var" | "const", name, ..]
-        | ["persistent", "var" | "const", name, ..]
-        | ["persistent", name, ..] => {
-            insert_identifier(&mut symbols.states, name);
-        }
-        ["puzzle" | "puzzle3", name, "=", ..]
-            if matches!(
-                scope,
-                Some(SourceScope::SceneLayout | SourceScope::SceneState)
-            ) =>
-        {
-            insert_identifier(&mut symbols.states, name);
-        }
-        [name, "=", ..]
-            if matches!(
-                scope,
-                Some(SourceScope::SceneLayout | SourceScope::SceneState)
-            ) =>
-        {
-            insert_identifier(&mut symbols.states, name);
-        }
-        [name, "=", selectors @ ..] if scope == Some(SourceScope::Group) => {
-            insert_identifier(&mut symbols.groups, name);
-            collect_selector_specs(selectors, symbols);
-        }
-        [..] if scope == Some(SourceScope::Layers) => collect_layer_row_symbols(tokens, symbols),
-        [name, "=", ty] if scope == Some(SourceScope::Mark) => {
-            collect_mark_spec(name, Some(*ty), symbols)
-        }
-        [spec] if scope == Some(SourceScope::Mark) => {
-            let cleaned = clean_spec(spec);
-            let (name, ty) = cleaned
-                .split_once('=')
-                .map_or((cleaned, None), |(name, ty)| (name, Some(ty)));
-            collect_mark_spec(name, ty, symbols);
-        }
-        [..] if scope == Some(SourceScope::Keys) => collect_keys(tokens, symbols),
-        _ => {}
-    }
-}
-
-fn collect_tag_set_symbols(
-    tokens: &[&str],
-    scope: Option<SourceScope>,
-    symbols: &mut CompletionSymbols,
-) -> bool {
-    let [name, "=", values @ ..] = tokens else {
-        return false;
-    };
-    if scope != Some(SourceScope::Tags) || !tag_set_tokens(name, values) {
-        return false;
-    }
-    insert_identifier(&mut symbols.value_set_names, name);
-    let values = values
-        .iter()
-        .filter(|value| is_identifier(value))
-        .map(|value| (*value).to_string())
-        .collect::<Vec<_>>();
-    symbols
-        .value_sets
-        .insert((*name).to_string(), values.clone());
-    if values.iter().all(|value| is_direction_value(value)) {
-        symbols.direction_sets.insert((*name).to_string());
-    }
-    symbols.object_name_atoms.extend(values);
-    true
-}
-
-fn collect_layer_row_symbols(tokens: &[&str], symbols: &mut CompletionSymbols) {
-    match tokens {
-        [] => {}
-        [name, "=", selectors @ ..] => {
-            insert_identifier(&mut symbols.groups, name);
-            collect_selector_specs(selectors, symbols);
-        }
-        ["each", selectors @ ..] => {
-            collect_selector_specs(selectors, symbols);
-        }
-        ["for", ..] => {}
-        [selectors @ ..] => {
-            collect_selector_specs(selectors, symbols);
-        }
-    }
-}
-
-fn collect_selector_specs(specs: &[&str], symbols: &mut CompletionSymbols) {
-    for spec in specs {
-        if matches!(*spec, "=" | "each") || is_completion_keyword(spec) {
-            continue;
-        }
-        collect_object_spec(spec, symbols);
-    }
-}
-
-fn collect_object_spec(spec: &str, symbols: &mut CompletionSymbols) {
-    let cleaned = clean_spec(spec);
-    let parts = cleaned.split(':').collect::<Vec<_>>();
-    let Some(base) = parts.first().copied() else {
-        return;
-    };
-    insert_identifier(&mut symbols.objects, base);
-    if parts.len() > 1
-        && parts[1..]
-            .iter()
-            .all(|part| symbols.value_set_names.contains(*part))
-    {
-        symbols
-            .object_axes
-            .entry(base.to_string())
-            .or_insert_with(|| parts[1..].iter().map(|part| (*part).to_string()).collect());
-    }
-    for part in &parts[1..] {
-        insert_identifier(&mut symbols.object_name_atoms, part);
-    }
-}
-
-fn collect_mark_spec(name: &str, ty: Option<&str>, symbols: &mut CompletionSymbols) {
-    insert_identifier(&mut symbols.markes, name);
-    if let Some(ty) = ty.filter(|ty| !matches!(*ty, "bool" | "int")) {
-        insert_identifier(&mut symbols.object_name_atoms, ty);
-    }
-}
-
-fn collect_keys(tokens: &[&str], symbols: &mut CompletionSymbols) {
-    let Some(separator) = tokens.iter().position(|token| matches!(*token, "=" | "->")) else {
-        return;
-    };
-    for token in &tokens[..separator] {
-        insert_identifier(&mut symbols.inputs, token);
-    }
-    if let Some(command) = tokens.get(separator + 1) {
-        insert_identifier(&mut symbols.commands, command);
-    }
-}
-
-fn selector_axis_items(symbols: &CompletionSymbols, token: &str) -> Option<Vec<CompletionItem>> {
+fn selector_axis_items(
+    symbols: &SurfaceCompletionSymbols,
+    token: &str,
+) -> Option<Vec<CompletionItem>> {
     let (base, partial) = token.split_once(':')?;
     let axes = symbols.object_axes.get(base)?;
     let supplied = partial.split(':').count();
@@ -575,7 +244,7 @@ fn selector_object_replace_end(
 
 fn add_slot_items(
     items: &mut Vec<CompletionItem>,
-    symbols: &CompletionSymbols,
+    symbols: &SurfaceCompletionSymbols,
     slot: SemanticCompletionSlot,
 ) {
     match slot {
@@ -692,7 +361,7 @@ fn add_slot_items(
             items,
             symbols.condition_defs.iter(),
             CompletionKind::Condition,
-            "condition",
+            "query",
         ),
         SemanticCompletionSlot::Scenes => {
             add_named_items(items, symbols.scenes.iter(), CompletionKind::Scene, "scene")
@@ -778,7 +447,7 @@ fn add_named_items<'a>(
     }
 }
 
-fn remove_current_token_symbols(symbols: &mut CompletionSymbols, token: &str) {
+fn remove_current_token_symbols(symbols: &mut SurfaceCompletionSymbols, token: &str) {
     let name = clean_spec(token);
     if !is_identifier(name) {
         return;
@@ -831,52 +500,9 @@ fn keyword_insert_text(keyword: &str) -> &str {
     }
 }
 
-fn add_builtin_effect_commands(effects: &mut BTreeSet<String>, emissions: &mut BTreeSet<String>) {
-    add_effect_commands(semantic_builtin_effect_commands(), effects, emissions);
-}
-
-fn add_effect_commands(
-    commands: Vec<(&'static str, SemanticKind)>,
-    effects: &mut BTreeSet<String>,
-    emissions: &mut BTreeSet<String>,
-) {
-    for (command, kind) in commands {
-        match kind {
-            SemanticKind::Emission => {
-                emissions.insert(command.to_string());
-            }
-            SemanticKind::Effect => {
-                effects.insert(command.to_string());
-            }
-            _ => {}
-        }
-    }
-}
-
-fn tag_set_tokens(name: &str, values: &[&str]) -> bool {
-    is_identifier(name) && !values.is_empty() && values.iter().all(|value| is_identifier(value))
-}
-
-fn is_direction_value(value: &str) -> bool {
-    matches!(value, "up" | "down" | "left" | "right")
-}
-
 fn clean_spec(spec: &str) -> &str {
     let spec = spec.trim_matches(|ch: char| matches!(ch, '[' | ']' | '(' | ')' | '|'));
     spec.split_once('{').map_or(spec, |(head, _)| head)
-}
-
-fn insert_identifier(target: &mut BTreeSet<String>, value: &str) {
-    if is_identifier(value) && !is_completion_keyword(value) {
-        target.insert(value.to_string());
-    }
-}
-
-fn insert_path_like(target: &mut BTreeSet<String>, value: &str) {
-    let cleaned = value.trim_matches('"');
-    if !cleaned.is_empty() {
-        target.insert(cleaned.to_string());
-    }
 }
 
 fn is_identifier(value: &str) -> bool {
@@ -926,7 +552,7 @@ mod tests {
     #[test]
     fn suggests_objects_by_prefix() {
         let source = r#"
-title complete_objects
+title = complete_objects
 puzzle board {
 tags {
 kind = A B
@@ -949,7 +575,7 @@ rules {
     #[test]
     fn suggests_selector_rhs_objects_after_assignment() {
         let source = r#"
-title complete_selector_rhs
+title = complete_selector_rhs
 puzzle board {
 layers {
 __legacy_layer_0 = Player
@@ -1015,7 +641,7 @@ B = Pl
     #[test]
     fn suggests_display_objects_from_unparsed_layer_rows() {
         let source = r#"
-title complete_display_objects
+title = complete_display_objects
 puzzle board {
 layers {
 @Count
@@ -1045,7 +671,7 @@ rules {
     #[test]
     fn does_not_suggest_current_group_selector_token_as_object() {
         let source = r#"
-title complete_group_objects
+title = complete_group_objects
 puzzle board {
 layers {
 __legacy_layer_0 = Player
@@ -1070,7 +696,7 @@ Actors = Pl
     #[test]
     fn does_not_suggest_current_object_definition_token() {
         let source = r#"
-title complete_object_definitions
+title = complete_object_definitions
 puzzle board {
 layers {
 __legacy_layer_0 = Player
@@ -1093,7 +719,7 @@ __legacy_layer_1 = Pl
     #[test]
     fn does_not_suggest_current_layer_definition_token() {
         let source = r#"
-title complete_layer_definitions
+title = complete_layer_definitions
 puzzle board {
 layers {
 actor = Player
@@ -1116,7 +742,7 @@ Pl
     #[test]
     fn suggests_selector_axis_values_after_colon() {
         let source = r#"
-title complete_variants
+title = complete_variants
 puzzle board {
 tags {
 kind = A B
@@ -1140,7 +766,7 @@ rules {
     #[test]
     fn selector_tag_completion_replaces_only_tag_segment() {
         let source = r#"
-title complete_variants
+title = complete_variants
 puzzle board {
 tags {
 kind = Alpha Beta
@@ -1166,7 +792,7 @@ rules {
     #[test]
     fn selector_object_completion_preserves_existing_tag_suffix() {
         let source = r#"
-title complete_selector_object
+title = complete_selector_object
 puzzle board {
 tags {
 kind = tag other
@@ -1203,7 +829,7 @@ rules {
     #[test]
     fn selector_tag_completion_excludes_current_tag_segment() {
         let source = r#"
-title complete_current_variant
+title = complete_current_variant
 puzzle board {
 layers {
 actor = Box:state
@@ -1269,7 +895,7 @@ rules {
     #[test]
     fn selector_tag_completion_does_not_suggest_current_untyped_axis() {
         let source = r#"
-title complete_current_axis
+title = complete_current_axis
 puzzle board {
 layers {
 actor = obj:dir
@@ -1296,7 +922,7 @@ rules {
     #[test]
     fn labels_tag_axes_and_values_without_duplicate_axis_values() {
         let source = r#"
-title complete_tags
+title = complete_tags
 puzzle board {
 tags {
 color = red blue
@@ -1338,7 +964,7 @@ for c in co
     #[test]
     fn labels_builtin_axes_by_completion_context() {
         let source = r#"
-title complete_contextual_axes
+title = complete_contextual_axes
 puzzle board {
 layers {
 __legacy_layer_0 = Player
@@ -1408,7 +1034,7 @@ once hori [
     #[test]
     fn suggests_scene_names_after_goto() {
         let source = r#"
-title complete_goto
+title = complete_goto
 scene title {
 rules {
 input start -> goto 
@@ -1426,7 +1052,7 @@ scene playing {
     #[test]
     fn suggests_level_flow_effect_commands() {
         let source = r#"
-title complete_level_flow_effects
+title = complete_level_flow_effects
 scene title {
 layout {
 button "Play" -> st
@@ -1456,7 +1082,7 @@ button "New Game" -> go
     #[test]
     fn line_head_suggests_scope_words_not_every_symbol() {
         let source = r#"
-title complete_line_head
+title = complete_line_head
 puzzle board {
 layers {
 __legacy_layer_0 = Player
@@ -1526,7 +1152,7 @@ rules {
     #[test]
     fn line_head_suggests_rule_heads_in_statement_blocks() {
         let source = r#"
-title complete_statement_blocks
+title = complete_statement_blocks
 puzzle board {
 routine setup once {
 once_
@@ -1581,7 +1207,7 @@ once_
     #[test]
     fn arrow_position_suggests_effect_words_only() {
         let source = r#"
-title complete_arrow_position
+title = complete_arrow_position
 puzzle board {
 layers {
 __legacy_layer_0 = Player
@@ -1610,7 +1236,7 @@ rules {
     #[test]
     fn scene_for_source_suggestions_are_scene_owned() {
         let source = r#"
-title complete_scene_for_source
+title = complete_scene_for_source
 scene menu {
 layout {
 items = 0
@@ -1642,7 +1268,7 @@ for item in
     #[test]
     fn effect_suggestions_follow_owner_scope() {
         let source = r#"
-title complete_effect_scope
+title = complete_effect_scope
 puzzle board {
 layers {
 __legacy_layer_0 = Player
@@ -1724,7 +1350,7 @@ goto menu
     #[test]
     fn suggests_sfx_with_specific_kind_after_sfx() {
         let source = r#"
-title complete_sfx
+title = complete_sfx
 sounds {
 sfx clear seed=clear01 type=jump
 music music_name seed=bgm01
@@ -1747,7 +1373,7 @@ win -> sfx c
     #[test]
     fn sfx_definition_does_not_suggest_sfx_assets_after_sfx_keyword() {
         let source = r#"
-title complete_sounds_sfx
+title = complete_sounds_sfx
 sounds {
 sfx clear seed=clear01 type=jump
 sfx c
@@ -1767,7 +1393,7 @@ sfx c
     #[test]
     fn suggests_3d_render_options_from_parser_names() {
         let source = r#"
-title complete_3d_render_options
+title = complete_3d_render_options
 puzzle3 board {
 layers {
 actor
@@ -1803,7 +1429,7 @@ rules {
     #[test]
     fn suggests_contextual_option_names_only_in_owned_blocks() {
         let source = r#"
-title complete_contextual_options
+title = complete_contextual_options
 sounds {
 sfx click se
 music bgm he
@@ -1874,7 +1500,7 @@ show_
     #[test]
     fn suggests_all_asset_entry_keywords() {
         let source = r#"
-title complete_asset_keywords
+title = complete_asset_keywords
 assets {
 s
 }
@@ -1892,7 +1518,7 @@ s
     #[test]
     fn suggests_theme_names_after_theme_keyword() {
         let source = r#"
-title complete_theme_names
+title = complete_theme_names
 theme p
 "#;
         let cursor = source.find("theme p").unwrap() + "theme p".len();
@@ -1913,7 +1539,7 @@ theme p
     #[test]
     fn suggests_theme_settings_inside_theme_block() {
         let source = r#"
-title complete_theme_settings
+title = complete_theme_settings
 theme clean {
 
 }
@@ -1941,7 +1567,7 @@ theme clean {
     #[test]
     fn suggests_visual_color_names_in_sprite_color_rows() {
         let source = r#"
-title complete_sprite_colors
+title = complete_sprite_colors
 puzzle board {
 layers {
 __legacy_layer_0 = Box
@@ -1969,7 +1595,7 @@ Box li
     #[test]
     fn suggests_visual_shape_names_in_sprite_entries() {
         let source = r#"
-title complete_visual_resource_refs
+title = complete_visual_resource_refs
 puzzle board {
 tags {
 kind = A B
@@ -2002,7 +1628,7 @@ shape box_
     #[test]
     fn suggests_declared_assets_after_visual_selector() {
         let source = r#"
-title complete_visual_assets
+title = complete_visual_assets
 assets {
 css sprites/box.png
 }
@@ -2028,7 +1654,7 @@ Box spr
     #[test]
     fn suggests_sprite_selector_objects_at_visual_line_head() {
         let source = r#"
-title complete_sprite_selector_line_head
+title = complete_sprite_selector_line_head
 puzzle board {
 tags {
 kind = Red Blue
@@ -2083,7 +1709,7 @@ sprites {
     #[test]
     fn suggests_color_names_for_theme_setting_values() {
         let source = r#"
-title complete_theme_color_values
+title = complete_theme_color_values
 theme clean {
 background_color li
 }
@@ -2104,7 +1730,7 @@ background_color li
     #[test]
     fn sounds_scope_suggests_sfx_as_sounds_keyword() {
         let source = r#"
-title complete_sounds_keyword
+title = complete_sounds_keyword
 sounds {
 s
 }
@@ -2128,7 +1754,7 @@ s
     #[test]
     fn builtin_presentation_commands_are_effects_not_commands() {
         let source = r#"
-title complete_emissions
+title = complete_emissions
 sounds {
 sfx clear seed=clear01 type=jump
 }
@@ -2161,7 +1787,7 @@ win -> s
     #[test]
     fn builtin_model_commands_are_effects_not_commands() {
         let source = r#"
-title complete_effects
+title = complete_effects
 puzzle board {
 layers {
 __legacy_layer_0 = Player
@@ -2190,7 +1816,7 @@ rules {
     #[test]
     fn suggests_boolean_literals() {
         let source = r#"
-title complete_boolean_literals
+title = complete_boolean_literals
 puzzle board {
 var enabled = tr
 rules {
@@ -2216,7 +1842,7 @@ if enabled == fa
     #[test]
     fn does_not_suggest_removed_command_keyword() {
         let source = r#"
-title complete_removed_command
+title = complete_removed_command
 puzzle board {
 co
 }
@@ -2244,7 +1870,7 @@ co
         );
 
         let puzzle_source = r#"
-title complete_removed_variable
+title = complete_removed_variable
 puzzle board {
 g
 }
@@ -2262,7 +1888,7 @@ g
     #[test]
     fn suggests_layer_named_object_as_object() {
         let source = r#"
-title complete_layer_object
+title = complete_layer_object
 puzzle board {
 layers {
 floor = layer
@@ -2285,7 +1911,7 @@ rules {
     #[test]
     fn suggests_all_puzzle_lifecycle_blocks() {
         let source = r#"
-title complete_lifecycle
+title = complete_lifecycle
 puzzle board {
 on_
 }
@@ -2338,7 +1964,7 @@ on_
     #[test]
     fn distinguishes_value_sets_and_puzzles() {
         let source = r#"
-title complete_kinds
+title = complete_kinds
 puzzle sokoban {
 tags {
 kind = A B
@@ -2378,7 +2004,7 @@ puzzle board = so
     #[test]
     fn layer_names_are_single_selector_completions() {
         let source = r#"
-title complete_layer_selectors
+title = complete_layer_selectors
 puzzle board {
 layers {
 floor = Goal
@@ -2400,5 +2026,24 @@ rules {
         assert_eq!(floor_items.len(), 1);
         assert_eq!(floor_items[0].kind, CompletionKind::Group);
         assert_eq!(floor_items[0].detail, "selector");
+    }
+
+    #[test]
+    fn completion_renderer_does_not_reparse_source_for_context() {
+        let source = include_str!("completion.rs");
+        let forbidden_fragments = [
+            ["scan_source", "_context"],
+            ["parse_game", "2d"],
+            ["SourceScope", "::"],
+            ["collect_line", "_symbols"],
+            ["collect_completion", "_symbols"],
+        ];
+        for parts in forbidden_fragments {
+            let forbidden = parts.concat();
+            assert!(
+                !source.contains(&forbidden),
+                "completion.rs must consume surface completion products, not rebuild parser context via {forbidden}"
+            );
+        }
     }
 }

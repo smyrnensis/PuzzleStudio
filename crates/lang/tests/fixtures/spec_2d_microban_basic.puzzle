@@ -1,20 +1,223 @@
-title "Ascii Click Smoke"
+title = "Microban"
+author = "Levels by David Skinner"
 
-puzzle main {
-  layers {
-    actor = Player
-  }
+theme puzzlescript
 
-  rules {
-  }
+puzzle sokoban {
+layers {
+Background
+Goal
+solid = Player Box Wall
 }
 
-levels main of main {
-  legend {
-    . = empty
-    P = Player
-  }
+win_conditions {
+some Goal
+no [ Box no Goal ]
+}
 
-  level "ascii"
-  P
+on_level_start {
+once_all [ no Background ] -> [ Background ]
+}
+
+rules {
+input [ Player ] -> [ > Player ]
+[ > Player | Box ] -> [ > Player | > Box ]
+move
+}
+
+on_level_clear {
+wait 0.30s
+next_level
+}
+}
+
+sprites {
+Background
+#90ee90 #008000
+11111
+01111
+11101
+11111
+10111
+
+Wall
+#a46322 #493c2b
+00010
+11111
+01000
+11111
+00010
+
+Goal
+#00008b
+.....
+.000.
+.0.0.
+.000.
+.....
+
+Box
+#ffa500 #ffff00
+00000
+0...0
+0...0
+0...0
+00000
+
+Player
+#000000 #ffa500 #ffffff #0000ff
+.000.
+.111.
+22222
+.333.
+.3.3.
+}
+
+levels microban of sokoban {
+legend {
+. = empty
+G = Goal
+P = Player
+B = Box
+# = Wall
+* = Goal Box
++ = Goal Player
+}
+
+level "microban_01"
+####..
+#.G#..
+#..###
+#*P..#
+#..B.#
+#..###
+####..
+
+level "microban_02"
+######
+#....#
+#.#P.#
+#.B*.#
+#.G*.#
+#....#
+######
+
+level "microban_03"
+..####...
+###..####
+#.....B.#
+#.#..#B.#
+#.G.G#P.#
+#########
+
+level "microban_04"
+########
+#......#
+#.G**BP#
+#......#
+#####..#
+....####
+
+level "microban_05"
+.#######
+.#.....#
+.#.GBG.#
+##.BPB.#
+#..GBG.#
+#......#
+########
+
+level "microban_06"
+######.#####
+#....###...#
+#.BB.....#P#
+#.B.#GGG...#
+#...########
+#####.......
+
+level "microban_07"
+#######
+#.....#
+#.GBG.#
+#.BGB.#
+#.GBG.#
+#.BGB.#
+#..P..#
+#######
+
+level "microban_08"
+..######
+..#.GGP#
+..#.BB.#
+..##.###
+...#.#..
+...#.#..
+####.#..
+#....##.
+#.#...#.
+#...#.#.
+###...#.
+..#####.
+
+level "microban_09"
+#####.
+#G..##
+#PBB.#
+##...#
+.##..#
+..##G#
+...###
+
+level "microban_10"
+......#####
+......#G..#
+......#G#.#
+#######G#.#
+#.P.B.B.B.#
+#.#.#.#.###
+#.......#..
+#########..
+}
+
+scene title {
+layout {
+title = "Microban"
+subtitle = "Levels by David Skinner"
+choice "Continue" -> goto playing
+choice "New Game" -> {
+clear_game_progress
+start playing
+}
+choice "Level Select" -> goto level_select
+}
+}
+
+scene playing {
+layout {
+row {
+title = "Microban"
+subtitle = level.label
+}
+sokoban
+}
+
+keys {
+q Escape -> goto level_select
+}
+
+rules {
+step sokoban
+}
+}
+
+scene level_select {
+layout {
+text "Select a level"
+level_menu
+button "Back" -> goto title
+}
+
+keys {
+q Escape -> goto title
+}
 }

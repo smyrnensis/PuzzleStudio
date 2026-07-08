@@ -131,7 +131,10 @@ fn parse_scene_puzzle_initializer_rhs<'a>(
     }
 }
 
-fn reject_old_scene_puzzle_initializer(tokens: &[&str], line: &str) -> Result<(), DiagnosticReport> {
+fn reject_old_scene_puzzle_initializer(
+    tokens: &[&str],
+    line: &str,
+) -> Result<(), DiagnosticReport> {
     match tokens {
         ["puzzle", ..] => Err(parse_error(
             line,
@@ -186,9 +189,11 @@ fn parse_scene_state_entry(
         return Err(parse_error(line, "scene state name must be an identifier"));
     }
     reject_old_scene_puzzle_initializer(split_header_tokens(value).as_slice(), line)?;
+    let (kind, default) = parse_scene_var_default(value, line)?;
     Ok(ParsedSceneStateEntry::Variable(SceneVarDef {
         name: name.to_string(),
-        default: parse_scene_value(value, line)?,
+        kind,
+        default,
         lifetime,
         mutable,
     }))
@@ -218,9 +223,11 @@ fn parse_top_level_var_directive(
         "top-level variable must be: var <name> = <literal> or const <name> = <literal>",
     )?;
     validate_identifier(name, line, "variable name")?;
+    let (kind, default) = parse_scene_var_default(value, line)?;
     Ok(SceneVarDef {
         name: name.to_string(),
-        default: parse_scene_value(value, line)?,
+        kind,
+        default,
         lifetime,
         mutable,
     })
@@ -287,10 +294,9 @@ fn parse_input_buffer_block(
 fn parse_again_interval_directive(tokens: &[&str], line: &str) -> Result<u64, DiagnosticReport> {
     match tokens {
         ["again_interval", "=", duration] => parse_wait_duration_ms(duration, line),
-        ["again_interval", seconds] => parse_seconds_duration_ms(seconds, line),
         _ => Err(parse_error(
             line,
-            "again_interval must be: again_interval = <duration> or again_interval <seconds>",
+            "again_interval must be: again_interval = <duration>",
         )),
     }
 }
@@ -315,6 +321,20 @@ fn parse_scene_value(value: &str, line: &str) -> Result<SceneValue, DiagnosticRe
         line,
         "scene state value must be true, false, integer, symbol, or quoted text",
     ))
+}
+
+fn parse_scene_var_default(
+    value: &str,
+    line: &str,
+) -> Result<(SceneVarKind, SceneValue), DiagnosticReport> {
+    if let Some(default) = value.strip_prefix("signal ") {
+        let default = default.trim();
+        if default.is_empty() {
+            return Err(parse_error(line, "signal variable must name a default value"));
+        }
+        return Ok((SceneVarKind::Signal, parse_scene_value(default, line)?));
+    }
+    Ok((SceneVarKind::Value, parse_scene_value(value, line)?))
 }
 
 fn parse_quoted_text(value: &str) -> Option<String> {
@@ -371,7 +391,10 @@ fn parse_scene_rules_block(
         i += 1;
     }
     if i >= lines.len() {
-        return Err(parse_error(&lines[start], "scene rules missing closing brace"));
+        return Err(parse_error(
+            &lines[start],
+            "scene rules missing closing brace",
+        ));
     }
 
     Ok((
@@ -388,7 +411,11 @@ fn parse_scene_transition_row(
     start: usize,
 ) -> Result<(SceneTransition, usize), DiagnosticReport> {
     let line = &lines[start];
-    let Some((condition, effect)) = line.trim().strip_prefix("if ").and_then(|row| row.split_once("->")) else {
+    let Some((condition, effect)) = line
+        .trim()
+        .strip_prefix("if ")
+        .and_then(|row| row.split_once("->"))
+    else {
         return Err(parse_error(
             line,
             "scene rules row must be: step <puzzle> or if <condition> -> <effect>",
@@ -415,7 +442,8 @@ fn parse_scene_condition_block(
         .ok_or_else(|| parse_error(line, "condition block must be: if <condition>"))?
         .trim();
     let condition = parse_scene_condition_expr(condition, line)?;
-    let (body, next_i) = collect_authoring_entry(lines, start)?;
+    let (body, next_i) =
+        collect_authoring_entry(lines, start, AuthoringEntryOwner::SceneCondition)?;
     let body = &body[1..body.len().saturating_sub(1)];
     if body.is_empty() {
         return Err(parse_error(
@@ -426,6 +454,34 @@ fn parse_scene_condition_block(
     Ok((
         SceneTransition {
             trigger: SceneTransitionTrigger::Condition(condition),
+            effect: parse_scene_handler_effects(body, line)?,
+        },
+        next_i,
+    ))
+}
+
+fn parse_scene_on_block(
+    lines: &[String],
+    start: usize,
+) -> Result<(SceneTransition, usize), DiagnosticReport> {
+    let line = &lines[start];
+    let condition = block_header_text(line)
+        .strip_prefix("on ")
+        .ok_or_else(|| parse_error(line, "scene handler block must be: on <signal condition>"))?
+        .trim();
+    let condition = parse_scene_condition_expr(condition, line)?;
+    let (body, next_i) =
+        collect_authoring_entry(lines, start, AuthoringEntryOwner::SceneCondition)?;
+    let body = &body[1..body.len().saturating_sub(1)];
+    if body.is_empty() {
+        return Err(parse_error(
+            line,
+            "scene handler block requires at least one effect",
+        ));
+    }
+    Ok((
+        SceneTransition {
+            trigger: SceneTransitionTrigger::Signal(condition),
             effect: parse_scene_handler_effects(body, line)?,
         },
         next_i,
@@ -443,7 +499,8 @@ fn parse_scene_lifecycle_block(
             "scene lifecycle block must be: on_scene_start",
         ));
     };
-    let (body, next_i) = collect_authoring_entry(lines, start)?;
+    let (body, next_i) =
+        collect_authoring_entry(lines, start, AuthoringEntryOwner::SceneLifecycle)?;
     let body = &body[1..body.len().saturating_sub(1)];
     if body.is_empty() {
         return Err(parse_error(
@@ -476,7 +533,7 @@ fn parse_scene_routine_block(
         ));
     };
     validate_identifier(name, &lines[start], "scene routine name")?;
-    let (body, next_i) = collect_authoring_entry(lines, start)?;
+    let (body, next_i) = collect_authoring_entry(lines, start, AuthoringEntryOwner::SceneRoutine)?;
     let body = &body[1..body.len().saturating_sub(1)];
     if body.is_empty() {
         return Err(parse_error(

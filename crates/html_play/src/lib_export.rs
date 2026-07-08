@@ -158,7 +158,7 @@ fn standalone_runtime_wasm_script(
         return embedded_base64_wasm_loader_script(module_source, wasm_base64);
     }
     match host_mode {
-        StandaloneHostMode::Export => embedded_player_wasm_script(),
+        StandaloneHostMode::Export => embedded_game_wasm_script(),
         StandaloneHostMode::EditorPreview => editor_preview_runtime_wasm_script(),
     }
 }
@@ -183,19 +183,6 @@ fn embedded_game_wasm_script() -> String {
     {
         missing_embedded_wasm_loader_script(
             "Standalone HTML export requires embedded puzzle_wasm_game assets; the browser editor preview compiler cannot embed them.",
-        )
-    }
-}
-
-fn embedded_player_wasm_script() -> String {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        embedded_wasm_loader_script(PUZZLE_PLAYER_WASM_JS, PUZZLE_PLAYER_WASM_BG)
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-        missing_embedded_wasm_loader_script(
-            "Standalone HTML export requires embedded puzzle_wasm_player assets; the browser editor preview compiler cannot embed them.",
         )
     }
 }
@@ -594,7 +581,9 @@ fn sound_tools_js() -> String {
             &[
                 "SFX_TYPE_OPTIONS",
                 "createSfxPlayer",
+                "createPuzzleScriptSfxPlayer",
                 "generateSoundEffect",
+                "generatePuzzleScriptSoundEffect",
                 "randomSfxPreset",
             ],
         ),
